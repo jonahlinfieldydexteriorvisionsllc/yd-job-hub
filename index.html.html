@@ -1,0 +1,1785 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YD Job Hub — Quote · Track · Manage</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background: #f4f1ec;
+    font-family: 'DM Sans', sans-serif;
+    color: #2c2c2c;
+  }
+
+  .page { max-width: 940px; margin: 0 auto; padding: 20px 20px 80px; }
+
+  /* ---- Header ---- */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 0 14px; border-bottom: 3px solid #2c2c2c; margin-bottom: 0;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .logo { font-family: 'Playfair Display', serif; font-size: 28px; font-weight: 800; letter-spacing: -0.5px; line-height: 1; }
+  .logo-sub { font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 2.5px; color: #8b7e6a; margin-top: 3px; }
+  .header-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* ---- Buttons ---- */
+  .btn {
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1px; padding: 8px 16px;
+    border: 2px solid #2c2c2c; background: transparent; color: #2c2c2c;
+    cursor: pointer; transition: all 0.15s;
+  }
+  .btn:hover { background: #2c2c2c; color: #f4f1ec; }
+  .btn-filled { background: #2c2c2c; color: #f4f1ec; }
+  .btn-filled:hover { background: #444; }
+  .btn-danger { border-color: #a0522d; color: #a0522d; }
+  .btn-danger:hover { background: #a0522d; color: #fff; }
+  .btn-save { border-color: #4a7c59; color: #4a7c59; }
+  .btn-save:hover { background: #4a7c59; color: #fff; }
+  .btn-sm { padding: 5px 10px; font-size: 11px; }
+  .btn-change { border-color: #c0792a; color: #c0792a; font-size: 10px; padding: 3px 8px; }
+  .btn-change:hover { background: #c0792a; color: #fff; }
+
+  .remove-btn {
+    background: none; border: none; cursor: pointer;
+    color: #b89a7a; font-size: 18px; padding: 2px 6px; line-height: 1;
+  }
+  .remove-btn:hover { color: #a0522d; }
+
+  .dup-btn {
+    background: none; border: none; cursor: pointer;
+    color: #8b7e6a; font-size: 12px; padding: 2px 6px; line-height: 1;
+    font-family: 'DM Sans', sans-serif; font-weight: 600; letter-spacing: 0.5px;
+  }
+  .dup-btn:hover { color: #4a7c59; }
+
+  .row-actions { display: flex; gap: 0; align-items: center; white-space: nowrap; }
+
+  td .inline-edit {
+    font-family: 'DM Sans', sans-serif; font-size: 13px; padding: 4px 6px;
+    border: 1px solid transparent; background: transparent; color: #2c2c2c;
+    width: 100%; outline: none; border-radius: 0;
+  }
+  td .inline-edit:hover { border-color: #ddd5c8; background: #fafaf7; }
+  td .inline-edit:focus { border-color: #8b7e6a; background: #fafaf7; }
+
+  /* ---- Tab Bar ---- */
+  .tab-bar {
+    display: flex; background: #2c2c2c; margin-bottom: 24px;
+  }
+  .tab-btn {
+    flex: 1; padding: 14px 10px; text-align: center;
+    font-family: 'DM Sans', sans-serif; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px; color: #8b8580;
+    background: none; border: none; cursor: pointer;
+    border-bottom: 3px solid transparent; transition: all 0.15s;
+  }
+  .tab-btn:hover { color: #d0c8be; }
+  .tab-btn.active { color: #f4f1ec; border-bottom-color: #f4f1ec; }
+  .tab-btn .tab-icon { display: block; font-size: 16px; margin-bottom: 3px; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ---- Sections ---- */
+  .section {
+    background: #fffdf9; border: 1px solid #ddd5c8;
+    margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 20px; background: #2c2c2c; color: #f4f1ec;
+  }
+  .section-title { font-family: 'Playfair Display', serif; font-size: 16px; font-weight: 700; }
+  .section-badge {
+    font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 600;
+    letter-spacing: 1px; text-transform: uppercase;
+    background: rgba(255,255,255,0.12); padding: 4px 10px;
+  }
+  .section-body { padding: 20px; }
+
+  /* ---- Form fields ---- */
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #8b7e6a;
+  }
+  input, textarea, select {
+    font-family: 'DM Sans', sans-serif; font-size: 14px; padding: 9px 12px;
+    border: 1px solid #cdc5b8; background: #fafaf7; color: #2c2c2c;
+    outline: none; width: 100%; border-radius: 0; -webkit-appearance: none; appearance: none;
+  }
+  select {
+    background: #fafaf7 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238b7e6a' fill='none' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center;
+    padding-right: 32px;
+  }
+  input:focus, textarea:focus, select:focus { border-color: #8b7e6a; }
+  textarea { resize: vertical; }
+
+  .service-tag {
+    display: inline-block; font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; padding: 2px 8px; margin-right: 6px;
+    background: #e8e2d8; color: #6b6155;
+  }
+  .change-tag {
+    display: inline-block; font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; padding: 2px 7px; margin-left: 6px;
+    background: #f5e6d0; color: #c0792a; border: 1px solid #e0c9a0;
+  }
+
+  /* ---- Grids ---- */
+  .grid { display: grid; gap: 14px; }
+  .g2 { grid-template-columns: 1fr 1fr; }
+  .g3 { grid-template-columns: 1fr 1fr 1fr; }
+  .g4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+  .g-addr { grid-template-columns: 2fr 1fr 0.6fr 0.8fr; }
+  .g-labor-add { grid-template-columns: 1fr 1.2fr 0.8fr 0.8fr; }
+  .g-mat-add { grid-template-columns: 0.8fr 1.5fr 1fr 0.7fr; }
+  .mt { margin-top: 14px; }
+
+  @media (max-width: 640px) {
+    .g2, .g3, .g4, .g-addr, .g-labor-add, .g-mat-add { grid-template-columns: 1fr; }
+    .header { flex-direction: column; align-items: flex-start; }
+    .summary-grid { grid-template-columns: 1fr 1fr !important; }
+    .fin-grid { grid-template-columns: 1fr 1fr !important; }
+    .tab-btn { font-size: 10px; letter-spacing: 1px; padding: 12px 4px; }
+    .dash-table-wrap { font-size: 12px; }
+  }
+
+  /* ---- Tables ---- */
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left; padding: 10px 12px; font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1.5px; color: #8b7e6a;
+    border-bottom: 2px solid #ddd5c8;
+  }
+  td {
+    padding: 10px 12px; font-size: 14px; border-bottom: 1px solid #eae5dc;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .bold { font-weight: 600; }
+  .muted { color: #6b6155; }
+
+  .add-area {
+    background: #f7f4ee; border: 1px dashed #d5cfc4;
+    padding: 16px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .add-label {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #8b7e6a;
+  }
+  .empty-msg { color: #b0a694; font-size: 13px; font-style: italic; margin-bottom: 16px; }
+
+  /* ---- Summary & Financials ---- */
+  .summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+  .fin-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .summary-card { background: #2c2c2c; color: #f4f1ec; padding: 18px 20px; text-align: center; }
+  .summary-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 2px; color: #a09888; margin-bottom: 6px; }
+  .summary-value { font-family: 'Playfair Display', serif; font-size: 22px; font-weight: 700; }
+  .summary-sub { font-size: 12px; color: #7a7265; margin-top: 4px; }
+
+  .fin-card { background: #fffdf9; border: 1px solid #ddd5c8; padding: 14px 16px; text-align: center; }
+  .fin-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; color: #8b7e6a; margin-bottom: 4px; }
+  .fin-value { font-family: 'Playfair Display', serif; font-size: 18px; font-weight: 700; }
+  .fin-value.positive { color: #4a7c59; }
+  .fin-value.negative { color: #a0522d; }
+
+  /* ---- Quote Notes specifics ---- */
+  .chip-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .chip {
+    font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 600;
+    padding: 6px 12px; border: 1px solid #cdc5b8; background: #f7f4ee;
+    color: #6b6155; cursor: pointer; transition: all 0.12s;
+  }
+  .chip:hover { background: #2c2c2c; color: #f4f1ec; border-color: #2c2c2c; }
+  .bullet-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: #fafaf7; border: 1px solid #eae5dc;
+    margin-bottom: 4px; font-size: 13px;
+  }
+  .meas-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: #fafaf7; border: 1px solid #eae5dc;
+    margin-bottom: 4px; font-size: 13px;
+  }
+  .meas-tag {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.8px; padding: 2px 8px; margin-left: 8px;
+  }
+  .meas-tag.lf { background: #dbe8df; color: #3a6b45; }
+  .meas-tag.sf { background: #d8e0f0; color: #3a4f7a; }
+
+  /* Measurement sections */
+  .meas-section {
+    border: 1px solid #ddd5c8; margin-bottom: 12px; background: #fafaf7;
+  }
+  .meas-section-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: #e8e2d8; cursor: pointer; user-select: none;
+  }
+  .meas-section-head:hover { background: #ddd5c8; }
+  .meas-section-name {
+    font-family: 'Playfair Display', serif; font-size: 14px; font-weight: 700;
+    color: #2c2c2c;
+  }
+  .meas-section-summary {
+    font-size: 11px; font-weight: 600; color: #8b7e6a; letter-spacing: 0.5px;
+  }
+  .meas-section-body { padding: 12px 14px; }
+  .meas-section-body.shut { display: none; }
+  .meas-section-actions { display: flex; gap: 4px; align-items: center; }
+  .meas-add-row {
+    display: flex; gap: 6px; align-items: flex-end; flex-wrap: wrap; margin-top: 8px;
+    padding-top: 8px; border-top: 1px dashed #ddd5c8;
+  }
+  .meas-add-row .field { flex: 1; min-width: 80px; }
+  .meas-add-row select, .meas-add-row input { font-size: 13px; padding: 7px 10px; }
+  .meas-sf-preview {
+    font-size: 12px; color: #4a7c59; font-weight: 600; margin-top: 4px;
+  }
+
+  /* ---- Proposal checklist ---- */
+  .proposal-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px; background: #fafaf7; border: 1px solid #eae5dc;
+    margin-bottom: 4px; font-size: 13px;
+  }
+  .proposal-item.ordered { background: #eef5ef; border-color: #c8deca; }
+  .proposal-item input[type="checkbox"] {
+    width: 18px; height: 18px; accent-color: #4a7c59; flex-shrink: 0;
+    padding: 0; border: 2px solid #cdc5b8;
+  }
+  .proposal-item .item-name { flex: 1; }
+  .proposal-item .item-name.checked { text-decoration: line-through; color: #8b7e6a; }
+
+  /* ---- Upload zone ---- */
+  .upload-zone {
+    border: 2px dashed #cdc5b8; padding: 30px 20px; text-align: center;
+    background: #f7f4ee; cursor: pointer; transition: all 0.15s;
+  }
+  .upload-zone:hover { border-color: #8b7e6a; background: #f0ece4; }
+  .upload-zone .uz-icon { font-size: 32px; margin-bottom: 8px; }
+  .upload-zone .uz-text { font-size: 13px; color: #8b7e6a; font-weight: 600; }
+  .upload-zone .uz-sub { font-size: 11px; color: #b0a694; margin-top: 4px; }
+
+  /* ---- Dashboard table ---- */
+  .dash-table-wrap { overflow-x: auto; }
+  .dash-table-wrap table th { cursor: pointer; user-select: none; white-space: nowrap; }
+  .dash-table-wrap table th:hover { color: #2c2c2c; }
+  .dash-table-wrap td { font-size: 13px; white-space: nowrap; }
+  .dash-totals {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px;
+  }
+  .dash-card {
+    background: #2c2c2c; color: #f4f1ec; padding: 16px; text-align: center;
+  }
+  .dash-card .dc-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 1.5px; color: #a09888; margin-bottom: 4px; }
+  .dash-card .dc-value { font-family: 'Playfair Display', serif; font-size: 20px; font-weight: 700; }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.quoting { background: #c0792a; }
+  .status-dot.active { background: #4a7c59; }
+  .status-dot.complete { background: #2c2c2c; }
+
+  /* Status select color coding */
+  select#jobStatusSelect { font-weight: 600; }
+  select#jobStatusSelect.st-quoting { border-color: #c0792a; color: #c0792a; }
+  select#jobStatusSelect.st-active { border-color: #4a7c59; color: #4a7c59; }
+  select#jobStatusSelect.st-complete { border-color: #2c2c2c; color: #2c2c2c; }
+
+  /* ---- Modal ---- */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+    z-index: 1000; justify-content: center; align-items: center;
+  }
+  .modal-overlay.active { display: flex; }
+  .modal {
+    background: #fffdf9; border: 1px solid #ddd5c8; width: 90%; max-width: 620px;
+    max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+  }
+  .modal-head {
+    padding: 16px 20px; background: #2c2c2c; color: #f4f1ec;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .modal-head h2 { font-family: 'Playfair Display', serif; font-size: 18px; font-weight: 700; margin: 0; }
+  .modal-close { background: none; border: none; color: #f4f1ec; font-size: 22px; cursor: pointer; padding: 0 4px; }
+  .modal-body { padding: 20px; overflow-y: auto; flex: 1; }
+
+  .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .filter-bar select { max-width: 180px; font-size: 13px; padding: 7px 10px; }
+  .filter-bar input { max-width: 200px; font-size: 13px; padding: 7px 10px; }
+
+  .month-folder { margin-bottom: 12px; }
+  .month-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: #e8e2d8; cursor: pointer;
+    font-weight: 700; font-size: 13px; text-transform: uppercase;
+    letter-spacing: 1.5px; color: #4a4035; user-select: none;
+  }
+  .month-header:hover { background: #ddd5c8; }
+  .month-arrow { transition: transform 0.2s; display: inline-block; font-size: 10px; margin-right: 6px; }
+  .month-arrow.shut { transform: rotate(-90deg); }
+  .month-count {
+    font-size: 11px; font-weight: 600; color: #8b7e6a;
+    background: rgba(0,0,0,0.06); padding: 2px 8px; margin-left: auto;
+  }
+  .month-jobs.shut { display: none; }
+  .job-list-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border: 1px solid #ddd5c8; border-top: none;
+    background: #fafaf7; cursor: pointer; transition: background 0.1s;
+  }
+  .job-list-item:hover { background: #f0ece4; }
+  .job-list-item.active { border-color: #2c2c2c; border-width: 2px; }
+  .job-list-name { font-weight: 600; font-size: 14px; }
+  .job-list-meta { font-size: 12px; color: #8b7e6a; margin-top: 2px; }
+  .job-list-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+  /* ---- Print ---- */
+  @media print {
+    .header-actions, .add-area, .remove-btn, .dup-btn, .modal-overlay, .tab-bar, .upload-zone, .chip-bar { display: none !important; }
+    body { background: #fff; }
+    .section { box-shadow: none; break-inside: avoid; }
+    .summary-card, .section-head, .dash-card { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    td .inline-edit { border: none !important; background: transparent !important; padding: 0; }
+    .tab-panel { display: block !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="page" id="app">
+  <div class="header">
+    <div>
+      <div class="logo">YD Job Hub</div>
+      <div class="logo-sub">Quote · Track · Manage</div>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-save" onclick="saveJob()">&#10003; Save</button>
+      <button class="btn" onclick="openManager()">My Jobs</button>
+      <button class="btn" onclick="newJob()">+ New</button>
+      <button class="btn" onclick="window.print()">Print</button>
+    </div>
+  </div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('quote')"><span class="tab-icon">📋</span>Quote Notes</button>
+    <button class="tab-btn" onclick="switchTab('proposal')"><span class="tab-icon">📄</span>Proposal</button>
+    <button class="tab-btn" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Job Tracking</button>
+    <button class="tab-btn" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>Dashboard</button>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB 1: QUOTE NOTES -->
+  <!-- ============================================================ -->
+  <div class="tab-panel active" id="panel-quote">
+
+    <!-- Client Info -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Client & Job Info</span>
+        <span class="section-badge" id="estBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="grid g4">
+          <div class="field"><span class="label">Customer Name</span><input id="customerName" oninput="markDirty()"></div>
+          <div class="field"><span class="label">Estimate #</span><input id="estimateNumber" oninput="updateEstBadge(); markDirty()"></div>
+          <div class="field">
+            <span class="label">Service Type</span>
+            <select id="serviceType" onchange="onServiceChange(); markDirty()">
+              <option value="">— Select —</option>
+              <option value="Artificial Turf">Artificial Turf</option>
+              <option value="Raised Garden Bed">Raised Garden Bed</option>
+              <option value="Stone Edging">Stone Edging</option>
+              <option value="Retaining Wall">Retaining Wall</option>
+              <option value="Maintenance">Maintenance</option>
+              <option value="Landscaping">Landscaping</option>
+              <option value="Hardscaping">Hardscaping</option>
+              <option value="Patio / Walkway">Patio / Walkway</option>
+              <option value="Grading / Drainage">Grading / Drainage</option>
+              <option value="Planting">Planting</option>
+              <option value="Mulching">Mulching</option>
+              <option value="Cleanup">Cleanup</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <span class="label">Job Status</span>
+            <select id="jobStatusSelect" onchange="onStatusChange(); markDirty()">
+              <option value="quoting">Quoting</option>
+              <option value="active">Active</option>
+              <option value="complete">Complete</option>
+            </select>
+          </div>
+        </div>
+        <div id="customServiceWrap" class="mt" style="display:none">
+          <div class="field"><span class="label">Custom Service Type</span><input id="customService" placeholder="Enter your service type…" oninput="markDirty()"></div>
+        </div>
+        <div class="grid g-addr mt">
+          <div class="field"><span class="label">Street Address</span><input id="address" oninput="markDirty()"></div>
+          <div class="field"><span class="label">City</span><input id="city" oninput="markDirty()"></div>
+          <div class="field"><span class="label">State</span><input id="state" oninput="markDirty()"></div>
+          <div class="field"><span class="label">Zip</span><input id="zip" oninput="markDirty()"></div>
+        </div>
+        <div class="grid g3 mt">
+          <div class="field"><span class="label">Phone</span><input id="phone" type="tel" placeholder="(555) 123-4567" oninput="markDirty()"></div>
+          <div class="field"><span class="label">Email</span><input id="email" type="email" placeholder="client@email.com" oninput="markDirty()"></div>
+          <div class="field"><span class="label">Job Price</span><input id="jobPrice" placeholder="$0.00" oninput="updateSummary(); markDirty()"></div>
+        </div>
+        <div class="grid g2 mt">
+          <div class="field"><span class="label">Date</span><input type="date" id="quoteDate" oninput="markDirty()"></div>
+          <div class="field"><span class="label">Referral Source</span><input id="referral" placeholder="How they found you" oninput="markDirty()"></div>
+        </div>
+        <div class="mt">
+          <div class="field"><span class="label">Job Notes</span><textarea id="notes" rows="2" placeholder="Any general notes about the job…" oninput="markDirty()"></textarea></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Measurements -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Measurements</span>
+        <span class="section-badge" id="measBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="measSectionsWrap"></div>
+        <div class="add-area" style="margin-top:8px">
+          <div class="add-label">Add Measurement Section</div>
+          <div style="display:flex;gap:8px">
+            <input id="newSectionName" placeholder="e.g. Patio, Front yard, Retaining wall…" style="flex:1" onkeydown="if(event.key==='Enter')addMeasSection()">
+            <button class="btn btn-filled" onclick="addMeasSection()">+ Add Section</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Site Conditions -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Site Conditions</span>
+      </div>
+      <div class="section-body">
+        <div id="condWrap"></div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="condInput" placeholder="Note a condition…" onkeydown="if(event.key==='Enter')addCond()" style="flex:1">
+          <button class="btn btn-filled" onclick="addCond()" style="padding:9px 14px">+</button>
+        </div>
+        <div class="chip-bar">
+          <button class="chip" onclick="quickCond('Slope / Grade issue')">Slope</button>
+          <button class="chip" onclick="quickCond('Drainage needed')">Drainage</button>
+          <button class="chip" onclick="quickCond('Root removal')">Roots</button>
+          <button class="chip" onclick="quickCond('Sprinkler lines present')">Sprinklers</button>
+          <button class="chip" onclick="quickCond('Utility lines — call 811')">Utilities</button>
+          <button class="chip" onclick="quickCond('Limited access')">Access</button>
+          <button class="chip" onclick="quickCond('HOA approval needed')">HOA</button>
+          <button class="chip" onclick="quickCond('Pets on property')">Pets</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Scope -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Scope of Work</span>
+        <span class="section-badge" id="scopeBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="scopeWrap"></div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="scopeInput" placeholder="Add scope item…" onkeydown="if(event.key==='Enter')addScope()" style="flex:1">
+          <button class="btn btn-filled" onclick="addScope()" style="padding:9px 14px">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Materials Notes -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Material Notes</span>
+      </div>
+      <div class="section-body">
+        <div id="matNotesWrap"></div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="matNoteInput" placeholder="Note a material…" onkeydown="if(event.key==='Enter')addMatNote()" style="flex:1">
+          <button class="btn btn-filled" onclick="addMatNote()" style="padding:9px 14px">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pricing Notes -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Pricing Notes</span>
+      </div>
+      <div class="section-body">
+        <div class="grid g2">
+          <div class="field"><span class="label">Low Estimate</span><input id="priceLow" placeholder="$0.00" oninput="markDirty()"></div>
+          <div class="field"><span class="label">High Estimate</span><input id="priceHigh" placeholder="$0.00" oninput="markDirty()"></div>
+        </div>
+        <div class="mt">
+          <div class="field"><span class="label">Pricing Notes</span><textarea id="pricingNotes" rows="3" placeholder="Factors affecting price, competitive notes, etc." oninput="markDirty()"></textarea></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB 2: PROPOSAL DATA -->
+  <!-- ============================================================ -->
+  <div class="tab-panel" id="panel-proposal">
+
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Proposal Data</span>
+        <span class="section-badge" id="proposalStatus"></span>
+      </div>
+      <div class="section-body">
+        <div id="proposalContent">
+          <div class="upload-zone" onclick="document.getElementById('proposalFileInput').click()">
+            <div class="uz-icon">📄</div>
+            <div class="uz-text">Upload Proposal JSON</div>
+            <div class="uz-sub">The JSON file exported alongside your PDF proposal</div>
+          </div>
+          <input type="file" id="proposalFileInput" accept=".json" style="display:none" onchange="loadProposalFile(event)">
+        </div>
+      </div>
+    </div>
+
+    <!-- Quoted Materials Checklist (shown after upload) -->
+    <div class="section" id="quotedMaterialsSection" style="display:none">
+      <div class="section-head">
+        <span class="section-title">Quoted Materials</span>
+        <span class="section-badge" id="quotedMatBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="quotedMatWrap"></div>
+      </div>
+    </div>
+
+    <!-- Quoted Scope (shown after upload) -->
+    <div class="section" id="quotedScopeSection" style="display:none">
+      <div class="section-head">
+        <span class="section-title">Quoted Scope of Work</span>
+      </div>
+      <div class="section-body">
+        <div id="quotedScopeWrap"></div>
+      </div>
+    </div>
+
+    <!-- Proposal Summary (shown after upload) -->
+    <div class="section" id="quotedPricingSection" style="display:none">
+      <div class="section-head">
+        <span class="section-title">Proposal Pricing</span>
+      </div>
+      <div class="section-body">
+        <div id="quotedPricingWrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB 3: JOB TRACKING -->
+  <!-- ============================================================ -->
+  <div class="tab-panel" id="panel-tracking">
+
+    <!-- Labor -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Labor Hours</span>
+        <span class="section-badge" id="laborBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="laborTableWrap"></div>
+        <div class="add-area">
+          <div class="add-label">Add Labor Entry</div>
+          <div class="grid g-labor-add">
+            <div class="field"><span class="label">Date</span><input type="date" id="labDate"></div>
+            <div class="field"><span class="label">Worker Name</span><input id="labWorker" placeholder="Name"></div>
+            <div class="field"><span class="label">Start Time</span><input type="time" id="labStart"></div>
+            <div class="field"><span class="label">End Time</span><input type="time" id="labEnd"></div>
+          </div>
+          <div class="field"><span class="label">Description (optional)</span><input id="labDesc" placeholder="What was done?"></div>
+          <div><button class="btn btn-filled" onclick="addLabor()">+ Add Entry</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Materials & Purchases -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Materials & Purchases</span>
+        <span class="section-badge" id="matBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="matTableWrap"></div>
+        <div class="add-area">
+          <div class="add-label">Add Material Purchase</div>
+          <div class="grid g-mat-add">
+            <div class="field"><span class="label">Date</span><input type="date" id="matDate"></div>
+            <div class="field"><span class="label">Item / Description</span><input id="matItem" placeholder="e.g. 2x4 lumber"></div>
+            <div class="field"><span class="label">Purchased From</span><input id="matLoc" placeholder="e.g. Home Depot"></div>
+            <div class="field"><span class="label">Price</span><input type="number" step="0.01" id="matPrice" placeholder="0.00"></div>
+          </div>
+          <div><button class="btn btn-filled" onclick="addMaterial()">+ Add Purchase</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Financials -->
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Job Financials</span>
+        <span class="section-badge">@ $25/hr</span>
+      </div>
+      <div class="section-body">
+        <div class="fin-grid" id="financialsGrid"></div>
+      </div>
+    </div>
+
+    <!-- Summary -->
+    <div class="summary-grid" id="summaryGrid"></div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB 4: DASHBOARD -->
+  <!-- ============================================================ -->
+  <div class="tab-panel" id="panel-dashboard">
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">All Jobs Overview</span>
+        <span class="section-badge" id="dashCount"></span>
+      </div>
+      <div class="section-body">
+        <div class="dash-totals" id="dashTotals"></div>
+        <div class="filter-bar">
+          <select id="dashFilter" onchange="renderDashboard()">
+            <option value="">All Services</option>
+          </select>
+          <select id="dashStatus" onchange="renderDashboard()">
+            <option value="">All Statuses</option>
+            <option value="quoting">Quoting</option>
+            <option value="active">Active</option>
+            <option value="complete">Complete</option>
+          </select>
+          <input id="dashSearch" placeholder="Search…" oninput="renderDashboard()" style="max-width:200px">
+        </div>
+        <div class="dash-table-wrap" id="dashTableWrap"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Job Manager Modal -->
+<div class="modal-overlay" id="managerModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>My Jobs</h2>
+      <button class="modal-close" onclick="closeManager()">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="filter-bar">
+        <select id="filterService" onchange="renderJobList()">
+          <option value="">All Services</option>
+        </select>
+        <input id="filterSearch" placeholder="Search jobs…" oninput="renderJobList()">
+        <button class="btn btn-sm btn-save" onclick="exportAllJobs()" title="Export all jobs to a backup file">↓ Export</button>
+        <button class="btn btn-sm" onclick="document.getElementById('importFileInput').click()" title="Import jobs from a backup file">↑ Import</button>
+        <input type="file" id="importFileInput" accept=".json" style="display:none" onchange="importAllJobs(event)">
+      </div>
+      <div id="jobListBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════
+// CONFIG & STATE
+// ═══════════════════════════════════════════════════════════
+const LABOR_RATE = 25;
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const STORAGE_PREFIX = 'ydjobhub_';
+
+let currentJobId = null;
+let labor = [];
+let materials = [];
+let measurements = [];
+let conditions = [];
+let scope = [];
+let matNotes = [];
+let proposalData = null; // parsed proposal JSON
+let quotedMaterials = []; // {name, ordered: bool}
+let jobStatus = 'quoting'; // quoting | active | complete
+let dirty = false;
+let collapsedMonths = {};
+let dashSort = { col: 'name', asc: true };
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+
+// ═══════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════
+function calcHours(s, e) {
+  if (!s || !e) return 0;
+  const [sh,sm] = s.split(':').map(Number);
+  const [eh,em] = e.split(':').map(Number);
+  const d = (eh*60+em-(sh*60+sm))/60;
+  return d > 0 ? d : 0;
+}
+function fmtHrs(h) { return h > 0 ? h.toFixed(1) : '—'; }
+function fmtMoney(v) { const n = parseFloat(v); return isNaN(n) || n === 0 ? '$0.00' : '$' + n.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+function parseMoney(s) { return parseFloat(String(s).replace(/[$,]/g,'')) || 0; }
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function onServiceChange() {
+  document.getElementById('customServiceWrap').style.display =
+    document.getElementById('serviceType').value === 'Other' ? '' : 'none';
+}
+function getServiceLabel() {
+  const v = document.getElementById('serviceType').value;
+  if (v === 'Other') return document.getElementById('customService').value.trim() || 'Other';
+  return v;
+}
+
+function onStatusChange() {
+  const sel = document.getElementById('jobStatusSelect');
+  jobStatus = sel.value;
+  sel.className = 'st-' + jobStatus;
+}
+
+function syncStatusSelect() {
+  const sel = document.getElementById('jobStatusSelect');
+  sel.value = jobStatus;
+  sel.className = 'st-' + jobStatus;
+}
+
+// ═══════════════════════════════════════════════════════════
+// TAB SWITCHING
+// ═══════════════════════════════════════════════════════════
+function switchTab(name) {
+  document.querySelectorAll('.tab-btn').forEach((b, i) => {
+    const tabs = ['quote','proposal','tracking','dashboard'];
+    b.classList.toggle('active', tabs[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('panel-' + name).classList.add('active');
+  if (name === 'dashboard') renderDashboard();
+}
+
+// ═══════════════════════════════════════════════════════════
+// QUOTE NOTES — MEASUREMENT SECTIONS
+// ═══════════════════════════════════════════════════════════
+// measurements is now an array of sections: [{id, name, collapsed, items: [{id, label, type, value, display}]}]
+
+function addMeasSection() {
+  const name = document.getElementById('newSectionName').value.trim();
+  if (!name) return;
+  measurements.push({ id: uid(), name, collapsed: false, items: [] });
+  document.getElementById('newSectionName').value = '';
+  renderMeas(); markDirty();
+}
+
+function rmMeasSection(secId) {
+  if (!confirm('Delete this entire section and all its measurements?')) return;
+  measurements = measurements.filter(s => s.id !== secId);
+  renderMeas(); markDirty();
+}
+
+function toggleMeasSection(secId) {
+  const sec = measurements.find(s => s.id === secId);
+  if (sec) { sec.collapsed = !sec.collapsed; renderMeas(); }
+}
+
+function addMeasToSection(secId) {
+  const sec = measurements.find(s => s.id === secId);
+  if (!sec) return;
+  const labelEl = document.getElementById('measLabel_' + secId);
+  const typeEl = document.getElementById('measType_' + secId);
+  const label = labelEl.value.trim();
+  const type = typeEl.value;
+  if (!label) { labelEl.focus(); return; }
+
+  let value, display;
+  if (type === 'sf') {
+    const l = parseFloat(document.getElementById('measSfL_' + secId).value) || 0;
+    const w = parseFloat(document.getElementById('measSfW_' + secId).value) || 0;
+    if (l <= 0 || w <= 0) return;
+    value = l * w;
+    display = l + ' × ' + w + ' = ' + value.toFixed(1) + ' sq ft';
+  } else {
+    const len = parseFloat(document.getElementById('measLf_' + secId).value) || 0;
+    if (len <= 0) return;
+    value = len;
+    display = value + ' LF';
+  }
+
+  sec.items.push({ id: uid(), label, type, value, display });
+  renderMeas(); markDirty();
+}
+
+function rmMeasItem(secId, itemId) {
+  const sec = measurements.find(s => s.id === secId);
+  if (sec) { sec.items = sec.items.filter(m => m.id !== itemId); renderMeas(); markDirty(); }
+}
+
+function onMeasTypeChange(secId) {
+  const type = document.getElementById('measType_' + secId).value;
+  const lfField = document.getElementById('measLfWrap_' + secId);
+  const sfFields = document.getElementById('measSfWrap_' + secId);
+  const preview = document.getElementById('measPrev_' + secId);
+  if (type === 'sf') {
+    lfField.style.display = 'none';
+    sfFields.style.display = '';
+  } else {
+    lfField.style.display = '';
+    sfFields.style.display = 'none';
+  }
+  if (preview) preview.textContent = '';
+}
+
+function updateSfPreview(secId) {
+  const l = parseFloat(document.getElementById('measSfL_' + secId).value) || 0;
+  const w = parseFloat(document.getElementById('measSfW_' + secId).value) || 0;
+  const prev = document.getElementById('measPrev_' + secId);
+  if (prev) prev.textContent = (l > 0 && w > 0) ? (l + ' × ' + w + ' = ' + (l*w).toFixed(1) + ' sq ft') : '';
+}
+
+function renderMeas() {
+  const wrap = document.getElementById('measSectionsWrap');
+  if (!measurements.length) {
+    wrap.innerHTML = '<p class="empty-msg">No measurement sections yet — add one below.</p>';
+    document.getElementById('measBadge').textContent = '';
+    return;
+  }
+
+  let allLf = 0, allSf = 0;
+
+  wrap.innerHTML = measurements.map(sec => {
+    const secLf = sec.items.filter(m=>m.type==='lf').reduce((s,m)=>s+m.value,0);
+    const secSf = sec.items.filter(m=>m.type==='sf').reduce((s,m)=>s+m.value,0);
+    allLf += secLf; allSf += secSf;
+    const parts = [];
+    if (secLf > 0) parts.push(secLf.toFixed(1) + ' LF');
+    if (secSf > 0) parts.push(secSf.toFixed(1) + ' SF');
+    const summary = parts.length ? parts.join(' · ') : 'No measurements';
+
+    let itemsHtml = '';
+    if (sec.items.length) {
+      itemsHtml = sec.items.map(m =>
+        '<div class="meas-item"><span><strong>' + esc(m.label) + '</strong> — ' + esc(m.display) + '</span>' +
+        '<span><span class="meas-tag ' + m.type + '">' + m.type.toUpperCase() + '</span>' +
+        '<button class="remove-btn" onclick="rmMeasItem(\'' + sec.id + '\',\'' + m.id + '\')">×</button></span></div>'
+      ).join('');
+    }
+
+    const addRow = '<div class="meas-add-row">' +
+      '<div class="field" style="min-width:100px"><span class="label">Label</span><input id="measLabel_'+sec.id+'" placeholder="e.g. North edge" onkeydown="if(event.key===\'Enter\')addMeasToSection(\''+sec.id+'\')"></div>' +
+      '<div class="field" style="min-width:80px;max-width:120px"><span class="label">Type</span>' +
+        '<select id="measType_'+sec.id+'" onchange="onMeasTypeChange(\''+sec.id+'\')">' +
+          '<option value="lf">Linear Ft</option><option value="sf">Square Ft</option></select></div>' +
+      '<div class="field" style="min-width:70px;max-width:90px" id="measLfWrap_'+sec.id+'"><span class="label">Length</span><input type="number" step="0.1" id="measLf_'+sec.id+'" placeholder="0"></div>' +
+      '<div style="display:none" id="measSfWrap_'+sec.id+'">' +
+        '<div style="display:flex;gap:6px">' +
+          '<div class="field" style="min-width:60px"><span class="label">Length</span><input type="number" step="0.1" id="measSfL_'+sec.id+'" placeholder="0" oninput="updateSfPreview(\''+sec.id+'\')"></div>' +
+          '<div class="field" style="min-width:60px"><span class="label">Width</span><input type="number" step="0.1" id="measSfW_'+sec.id+'" placeholder="0" oninput="updateSfPreview(\''+sec.id+'\')"></div>' +
+        '</div>' +
+        '<div class="meas-sf-preview" id="measPrev_'+sec.id+'"></div>' +
+      '</div>' +
+      '<div style="padding-top:18px"><button class="btn btn-filled btn-sm" onclick="addMeasToSection(\''+sec.id+'\')">+</button></div>' +
+    '</div>';
+
+    return '<div class="meas-section">' +
+      '<div class="meas-section-head" onclick="toggleMeasSection(\'' + sec.id + '\')">' +
+        '<div><span class="month-arrow' + (sec.collapsed ? ' shut' : '') + '">▼</span> ' +
+          '<span class="meas-section-name">' + esc(sec.name) + '</span></div>' +
+        '<div class="meas-section-actions" onclick="event.stopPropagation()">' +
+          '<span class="meas-section-summary">' + summary + ' · ' + sec.items.length + ' item' + (sec.items.length!==1?'s':'') + '</span>' +
+          '<button class="remove-btn" onclick="rmMeasSection(\'' + sec.id + '\')" title="Delete section">×</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="meas-section-body' + (sec.collapsed ? ' shut' : '') + '">' +
+        itemsHtml + addRow +
+      '</div></div>';
+  }).join('');
+
+  // Totals badge
+  const badgeParts = [];
+  if (allLf > 0) badgeParts.push(allLf.toFixed(1) + ' LF');
+  if (allSf > 0) badgeParts.push(allSf.toFixed(1) + ' SF');
+  document.getElementById('measBadge').textContent = badgeParts.join(' · ') || '';
+}
+
+// ═══════════════════════════════════════════════════════════
+// QUOTE NOTES — BULLET LISTS (conditions, scope, mat notes)
+// ═══════════════════════════════════════════════════════════
+function renderBullets(arr, wrapId) {
+  const w = document.getElementById(wrapId);
+  if (!arr.length) { w.innerHTML = ''; return; }
+  w.innerHTML = arr.map((item, i) =>
+    '<div class="bullet-item"><span>' + esc(item) + '</span>' +
+    '<button class="remove-btn" onclick="rmBullet(\'' + wrapId + '\',' + i + ')">×</button></div>'
+  ).join('');
+}
+
+function rmBullet(wrapId, i) {
+  if (wrapId === 'condWrap') conditions.splice(i, 1);
+  else if (wrapId === 'scopeWrap') scope.splice(i, 1);
+  else if (wrapId === 'matNotesWrap') matNotes.splice(i, 1);
+  renderBullets(wrapId === 'condWrap' ? conditions : wrapId === 'scopeWrap' ? scope : matNotes, wrapId);
+  updateScopeBadge(); markDirty();
+}
+
+function addCond() {
+  const v = document.getElementById('condInput').value.trim();
+  if (!v) return;
+  conditions.push(v);
+  document.getElementById('condInput').value = '';
+  renderBullets(conditions, 'condWrap'); markDirty();
+}
+function quickCond(text) { conditions.push(text); renderBullets(conditions, 'condWrap'); markDirty(); }
+
+function addScope() {
+  const v = document.getElementById('scopeInput').value.trim();
+  if (!v) return;
+  scope.push(v);
+  document.getElementById('scopeInput').value = '';
+  renderBullets(scope, 'scopeWrap'); updateScopeBadge(); markDirty();
+}
+function updateScopeBadge() {
+  document.getElementById('scopeBadge').textContent = scope.length ? scope.length + ' items' : '';
+}
+
+function addMatNote() {
+  const v = document.getElementById('matNoteInput').value.trim();
+  if (!v) return;
+  matNotes.push(v);
+  document.getElementById('matNoteInput').value = '';
+  renderBullets(matNotes, 'matNotesWrap'); markDirty();
+}
+
+// ═══════════════════════════════════════════════════════════
+// PROPOSAL DATA — UPLOAD & CHECKLIST
+// ═══════════════════════════════════════════════════════════
+function loadProposalFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      proposalData = JSON.parse(e.target.result);
+      // Build quoted materials checklist
+      if (proposalData.materials && Array.isArray(proposalData.materials)) {
+        quotedMaterials = proposalData.materials.map(m => ({
+          id: uid(),
+          name: typeof m === 'string' ? m : (m.name || m.item || m.description || JSON.stringify(m)),
+          quantity: m.quantity || '',
+          ordered: false
+        }));
+      }
+      // Auto-fill job price if present
+      if (proposalData.totalPrice || proposalData.total || proposalData.jobPrice) {
+        const price = proposalData.totalPrice || proposalData.total || proposalData.jobPrice;
+        document.getElementById('jobPrice').value = price;
+      }
+      // Auto-fill client info from proposal
+      if (proposalData.clientName && !document.getElementById('customerName').value.trim()) {
+        document.getElementById('customerName').value = proposalData.clientName;
+      }
+      if (proposalData.address) {
+        // Try to parse "street, city, state zip" format
+        const addrParts = proposalData.address.split(',').map(s => s.trim());
+        if (addrParts.length >= 2 && !document.getElementById('address').value.trim()) {
+          document.getElementById('address').value = addrParts[0];
+          // Parse "City, ST 12345" or "City, State 12345"
+          if (addrParts.length >= 2) {
+            const cityStateZip = addrParts.slice(1).join(',').trim();
+            const match = cityStateZip.match(/^(.+?),?\s+([A-Z]{2})\s+(\d{5}(-\d{4})?)$/i);
+            if (match) {
+              document.getElementById('city').value = match[1].trim();
+              document.getElementById('state').value = match[2].trim();
+              document.getElementById('zip').value = match[3].trim();
+            } else {
+              // Simpler: "City, ST ZIP" without second comma
+              const simple = addrParts[1].trim();
+              const sMatch = simple.match(/^(.+?)\s+([A-Z]{2})\s+(\d{5}(-\d{4})?)$/i);
+              if (sMatch) {
+                document.getElementById('city').value = sMatch[1].trim();
+                document.getElementById('state').value = sMatch[2].trim();
+                document.getElementById('zip').value = sMatch[3].trim();
+              } else {
+                document.getElementById('city').value = simple;
+              }
+            }
+          }
+        }
+      }
+      if (proposalData.serviceType && !document.getElementById('serviceType').value) {
+        const sel = document.getElementById('serviceType');
+        const opts = [...sel.options].map(o => o.value);
+        if (opts.includes(proposalData.serviceType)) {
+          sel.value = proposalData.serviceType;
+        } else {
+          sel.value = 'Other';
+          document.getElementById('customService').value = proposalData.serviceType;
+          document.getElementById('customServiceWrap').style.display = '';
+        }
+      }
+      if (proposalData.estimateNumber && !document.getElementById('estimateNumber').value.trim()) {
+        document.getElementById('estimateNumber').value = proposalData.estimateNumber;
+        updateEstBadge();
+      }
+      // Auto-fill scope if present
+      if (proposalData.scope && Array.isArray(proposalData.scope) && scope.length === 0) {
+        scope = [...proposalData.scope];
+        renderBullets(scope, 'scopeWrap');
+        updateScopeBadge();
+      }
+      renderProposal();
+      markDirty();
+      showToast('Proposal loaded!');
+    } catch (err) {
+      showToast('Error reading JSON file');
+      console.error(err);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function renderProposal() {
+  if (!proposalData) return;
+
+  // Show sections
+  document.getElementById('quotedMaterialsSection').style.display = '';
+  document.getElementById('quotedScopeSection').style.display = proposalData.scope ? '' : 'none';
+  document.getElementById('quotedPricingSection').style.display = '';
+
+  // Status
+  const ordered = quotedMaterials.filter(m => m.ordered).length;
+  document.getElementById('proposalStatus').textContent = ordered + '/' + quotedMaterials.length + ' ordered';
+
+  // Replace upload zone with loaded info
+  const clientLine = proposalData.clientName ? esc(proposalData.clientName) : '';
+  const addrLine = proposalData.address ? esc(proposalData.address) : '';
+  const projLine = esc(proposalData.projectName || proposalData.title || 'Proposal');
+
+  document.getElementById('proposalContent').innerHTML =
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:#eef5ef;border:1px solid #c8deca">' +
+    '<div>' +
+      '<strong style="font-size:15px">' + projLine + '</strong>' +
+      (clientLine ? '<div style="font-size:13px;color:#2c2c2c;margin-top:3px;font-weight:600">' + clientLine + '</div>' : '') +
+      (addrLine ? '<div style="font-size:12px;color:#6b6155;margin-top:1px">' + addrLine + '</div>' : '') +
+    '</div>' +
+    '<button class="btn btn-sm btn-danger" onclick="clearProposal()">Remove</button></div>';
+
+  // Quoted materials checklist
+  renderQuotedMaterials();
+
+  // Quoted scope
+  if (proposalData.scope && Array.isArray(proposalData.scope)) {
+    document.getElementById('quotedScopeWrap').innerHTML = proposalData.scope.map(s =>
+      '<div class="bullet-item"><span>' + esc(s) + '</span></div>'
+    ).join('');
+  }
+
+  // Pricing
+  const pricing = [];
+  if (proposalData.totalPrice || proposalData.total || proposalData.jobPrice)
+    pricing.push({ label: 'Total Price', value: fmtMoney(proposalData.totalPrice || proposalData.total || proposalData.jobPrice) });
+  if (proposalData.materialTotal) pricing.push({ label: 'Materials Total', value: fmtMoney(proposalData.materialTotal) });
+  if (proposalData.laborTotal) pricing.push({ label: 'Labor Total', value: fmtMoney(proposalData.laborTotal) });
+  if (proposalData.paymentTerms) pricing.push({ label: 'Payment Terms', value: esc(proposalData.paymentTerms) });
+
+  document.getElementById('quotedPricingWrap').innerHTML = pricing.length ?
+    '<div class="grid g2">' + pricing.map(p =>
+      '<div style="padding:12px;background:#fafaf7;border:1px solid #eae5dc"><div class="label" style="margin-bottom:4px">' + p.label + '</div><div style="font-weight:600;font-size:16px">' + p.value + '</div></div>'
+    ).join('') + '</div>' : '<p class="empty-msg">No pricing data in proposal.</p>';
+}
+
+function renderQuotedMaterials() {
+  const w = document.getElementById('quotedMatWrap');
+  if (!quotedMaterials.length) { w.innerHTML = '<p class="empty-msg">No materials in proposal.</p>'; return; }
+  w.innerHTML = quotedMaterials.map(m =>
+    '<div class="proposal-item' + (m.ordered ? ' ordered' : '') + '">' +
+    '<input type="checkbox" ' + (m.ordered ? 'checked' : '') + ' onchange="toggleQuotedMat(\'' + m.id + '\')">' +
+    '<span class="item-name' + (m.ordered ? ' checked' : '') + '">' + esc(m.name) +
+    (m.quantity ? ' <span style="color:#8b7e6a;font-size:12px">(' + esc(String(m.quantity)) + ')</span>' : '') +
+    '</span>' +
+    (m.ordered ? '<span style="color:#4a7c59;font-size:11px;font-weight:700">ORDERED</span>' : '') +
+    '</div>'
+  ).join('');
+
+  const ordered = quotedMaterials.filter(m => m.ordered).length;
+  document.getElementById('quotedMatBadge').textContent = ordered + '/' + quotedMaterials.length + ' ordered';
+  document.getElementById('proposalStatus').textContent = ordered + '/' + quotedMaterials.length + ' ordered';
+}
+
+function toggleQuotedMat(id) {
+  const m = quotedMaterials.find(x => x.id === id);
+  if (m) { m.ordered = !m.ordered; renderQuotedMaterials(); markDirty(); }
+}
+
+function clearProposal() {
+  if (!confirm('Remove proposal data? Material tracking will be cleared.')) return;
+  proposalData = null;
+  quotedMaterials = [];
+  document.getElementById('quotedMaterialsSection').style.display = 'none';
+  document.getElementById('quotedScopeSection').style.display = 'none';
+  document.getElementById('quotedPricingSection').style.display = 'none';
+  document.getElementById('proposalStatus').textContent = '';
+  document.getElementById('proposalContent').innerHTML =
+    '<div class="upload-zone" onclick="document.getElementById(\'proposalFileInput\').click()">' +
+    '<div class="uz-icon">📄</div><div class="uz-text">Upload Proposal JSON</div>' +
+    '<div class="uz-sub">The JSON file exported alongside your PDF proposal</div></div>' +
+    '<input type="file" id="proposalFileInput" accept=".json" style="display:none" onchange="loadProposalFile(event)">';
+  markDirty();
+}
+
+// ═══════════════════════════════════════════════════════════
+// JOB TRACKING — LABOR
+// ═══════════════════════════════════════════════════════════
+function renderLabor() {
+  const w = document.getElementById('laborTableWrap');
+  if (!labor.length) {
+    w.innerHTML = '<p class="empty-msg">No labor entries yet — add one below.</p>';
+  } else {
+    let h = '<div style="overflow-x:auto;margin-bottom:16px"><table><thead><tr>';
+    ['Date','Worker','Start','End','Hours','Description',''].forEach(t =>
+      h += '<th' + (t==='' ? ' style="width:72px"' : '') + '>' + t + '</th>');
+    h += '</tr></thead><tbody>';
+    labor.forEach((e, i) => {
+      const hrs = calcHours(e.start, e.end);
+      h += '<tr>' +
+        '<td><input class="inline-edit" type="date" value="'+(e.date||'')+'" onchange="editLabor('+i+',\'date\',this.value)"></td>' +
+        '<td><input class="inline-edit" style="font-weight:600" value="'+esc(e.worker)+'" onchange="editLabor('+i+',\'worker\',this.value)"></td>' +
+        '<td><input class="inline-edit" type="time" value="'+(e.start||'')+'" onchange="editLabor('+i+',\'start\',this.value)"></td>' +
+        '<td><input class="inline-edit" type="time" value="'+(e.end||'')+'" onchange="editLabor('+i+',\'end\',this.value)"></td>' +
+        '<td class="bold">'+fmtHrs(hrs)+'</td>' +
+        '<td><input class="inline-edit" value="'+esc(e.desc||'')+'" placeholder="—" onchange="editLabor('+i+',\'desc\',this.value)"></td>' +
+        '<td><div class="row-actions">' +
+          '<button class="dup-btn" onclick="dupLabor('+i+')" title="Duplicate">DUP</button>' +
+          '<button class="remove-btn" onclick="rmLabor(\''+e.id+'\')" title="Remove">×</button>' +
+        '</div></td></tr>';
+    });
+    h += '</tbody></table></div>';
+    w.innerHTML = h;
+  }
+  updateBadges(); updateSummary();
+}
+
+function editLabor(i, f, v) {
+  labor[i][f] = v;
+  if (f === 'start' || f === 'end') renderLabor();
+  markDirty();
+}
+function dupLabor(i) {
+  labor.splice(i+1, 0, { ...labor[i], id: uid() });
+  renderLabor(); markDirty();
+  showToast('Labor entry duplicated');
+}
+
+function addLabor() {
+  const date = document.getElementById('labDate').value;
+  const worker = document.getElementById('labWorker').value.trim();
+  if (!date || !worker) return;
+  labor.push({ id: uid(), date, worker,
+    start: document.getElementById('labStart').value,
+    end: document.getElementById('labEnd').value,
+    desc: document.getElementById('labDesc').value.trim()
+  });
+  ['labDate','labWorker','labStart','labEnd','labDesc'].forEach(id => document.getElementById(id).value = '');
+  renderLabor(); markDirty();
+}
+function rmLabor(id) { labor = labor.filter(e => e.id !== id); renderLabor(); markDirty(); }
+
+// ═══════════════════════════════════════════════════════════
+// JOB TRACKING — MATERIALS (with change order detection)
+// ═══════════════════════════════════════════════════════════
+function isChangeOrder(itemName) {
+  if (!proposalData || !quotedMaterials.length) return false;
+  const lower = itemName.toLowerCase().trim();
+  return !quotedMaterials.some(qm => {
+    const qLower = qm.name.toLowerCase().trim();
+    // Fuzzy: check if either contains the other, or they share significant words
+    if (qLower.includes(lower) || lower.includes(qLower)) return true;
+    const qWords = qLower.split(/\s+/).filter(w => w.length > 3);
+    const iWords = lower.split(/\s+/).filter(w => w.length > 3);
+    const shared = qWords.filter(w => iWords.includes(w));
+    return shared.length >= 2 || (shared.length >= 1 && (qWords.length <= 2 || iWords.length <= 2));
+  });
+}
+
+function renderMaterials() {
+  const w = document.getElementById('matTableWrap');
+  if (!materials.length) {
+    w.innerHTML = '<p class="empty-msg">No materials yet — add one below.</p>';
+  } else {
+    let h = '<div style="overflow-x:auto;margin-bottom:16px"><table><thead><tr>';
+    ['Date','Item / Description','Purchased From','Price',''].forEach(t =>
+      h += '<th' + (t==='' ? ' style="width:36px"' : '') + '>' + t + '</th>');
+    h += '</tr></thead><tbody>';
+    materials.forEach(e => {
+      const co = isChangeOrder(e.item);
+      h += '<tr' + (co ? ' style="background:#fef8f0"' : '') + '>' +
+        '<td>'+(e.date||'—')+'</td>' +
+        '<td class="bold">'+esc(e.item) + (co ? '<span class="change-tag">Change Order</span>' : '') + '</td>' +
+        '<td>'+esc(e.location||'—')+'</td>' +
+        '<td class="bold">'+(e.price ? fmtMoney(e.price) : '—')+'</td>' +
+        '<td><button class="remove-btn" onclick="rmMaterial(\''+e.id+'\')">×</button></td>' +
+        '</tr>';
+    });
+    h += '</tbody></table></div>';
+    w.innerHTML = h;
+  }
+  updateBadges(); updateSummary();
+}
+
+function addMaterial() {
+  const item = document.getElementById('matItem').value.trim();
+  if (!item) return;
+  materials.push({ id: uid(), item,
+    date: document.getElementById('matDate').value,
+    location: document.getElementById('matLoc').value.trim(),
+    price: document.getElementById('matPrice').value
+  });
+  ['matDate','matItem','matLoc','matPrice'].forEach(id => document.getElementById(id).value = '');
+  renderMaterials(); markDirty();
+}
+function rmMaterial(id) { materials = materials.filter(e => e.id !== id); renderMaterials(); markDirty(); }
+
+// ═══════════════════════════════════════════════════════════
+// BADGES, SUMMARY & FINANCIALS
+// ═══════════════════════════════════════════════════════════
+function updateEstBadge() {
+  const e = document.getElementById('estimateNumber').value.trim();
+  document.getElementById('estBadge').textContent = e ? 'Est #'+e : '';
+}
+
+function updateBadges() {
+  const th = labor.reduce((s,e) => s + calcHours(e.start, e.end), 0);
+  const tm = materials.reduce((s,e) => s + (parseFloat(e.price)||0), 0);
+  document.getElementById('laborBadge').textContent = th > 0 ? th.toFixed(1)+' hrs total' : '';
+  document.getElementById('matBadge').textContent = tm > 0 ? fmtMoney(tm)+' total' : '';
+}
+
+function updateSummary() {
+  const totalHrs = labor.reduce((s,e) => s + calcHours(e.start, e.end), 0);
+  const totalMat = materials.reduce((s,e) => s + (parseFloat(e.price)||0), 0);
+  const jp = document.getElementById('jobPrice').value.trim();
+  const est = document.getElementById('estimateNumber').value.trim();
+  const jobPrice = parseMoney(jp);
+
+  // Change order total
+  const coTotal = materials.filter(e => isChangeOrder(e.item)).reduce((s,e) => s + (parseFloat(e.price)||0), 0);
+
+  document.getElementById('summaryGrid').innerHTML = [
+    { label:'Total Labor', value: totalHrs.toFixed(1)+' hours', sub: labor.length+' entries' },
+    { label:'Total Materials', value: fmtMoney(totalMat), sub: coTotal > 0 ? fmtMoney(coTotal)+' in change orders' : materials.length+' purchases' },
+    { label:'Job Price', value: jobPrice > 0 ? fmtMoney(jobPrice) : '—', sub: est ? 'Est #'+est : 'No estimate #' },
+  ].map(c => '<div class="summary-card"><div class="summary-label">'+c.label+'</div><div class="summary-value">'+c.value+'</div><div class="summary-sub">'+c.sub+'</div></div>').join('');
+
+  const laborCost = totalHrs * LABOR_RATE;
+  const overhead = laborCost + totalMat;
+  const net = jobPrice - overhead;
+  const perHr = totalHrs > 0 ? net / totalHrs : 0;
+  const hasPrice = jobPrice > 0;
+  const hasHrs = totalHrs > 0;
+
+  document.getElementById('financialsGrid').innerHTML = [
+    { label:'Labor Cost', value: fmtMoney(laborCost), cls:'', sub: totalHrs.toFixed(1)+' hrs × $'+LABOR_RATE },
+    { label:'Total Overhead', value: fmtMoney(overhead), cls:'', sub: 'Labor + Materials' },
+    { label:'Net Profit', value: (net<0?'-':'')+fmtMoney(Math.abs(net)), cls: hasPrice?(net>=0?'positive':'negative'):'', sub: hasPrice ? (net/jobPrice*100).toFixed(1)+'% margin' : 'Set job price' },
+    { label:'Profit / Labor Hr', value: hasHrs ? ((perHr<0?'-':'')+fmtMoney(Math.abs(perHr))) : '—', cls: hasHrs?(perHr>=0?'positive':'negative'):'', sub: hasHrs ? 'Per hour worked' : 'Add labor entries' },
+  ].map(c => '<div class="fin-card"><div class="fin-label">'+c.label+'</div><div class="fin-value '+c.cls+'">'+c.value+'</div><div style="font-size:11px;color:#8b7e6a;margin-top:3px">'+c.sub+'</div></div>').join('');
+}
+
+// ═══════════════════════════════════════════════════════════
+// SAVE / LOAD
+// ═══════════════════════════════════════════════════════════
+const FIELDS = ['customerName','address','city','state','zip','phone','email','jobPrice','estimateNumber','notes','quoteDate','referral','priceLow','priceHigh','pricingNotes'];
+
+function getJobData() {
+  const d = {};
+  FIELDS.forEach(f => { const el = document.getElementById(f); if (el) d[f] = el.value; });
+  d.serviceType = document.getElementById('serviceType').value;
+  d.customService = document.getElementById('customService').value;
+  d.labor = labor;
+  d.materials = materials;
+  d.measurements = measurements;
+  d.conditions = conditions;
+  d.scope = scope;
+  d.matNotes = matNotes;
+  d.proposalData = proposalData;
+  d.quotedMaterials = quotedMaterials;
+  d.jobStatus = jobStatus;
+  d.lastModified = new Date().toISOString();
+  return d;
+}
+
+function loadJobData(d) {
+  FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = d[f] || ''; });
+  document.getElementById('serviceType').value = d.serviceType || '';
+  document.getElementById('customService').value = d.customService || '';
+  document.getElementById('customServiceWrap').style.display = d.serviceType === 'Other' ? '' : 'none';
+  labor = (d.labor||[]).map(e => ({...e, id: e.id||uid()}));
+  materials = (d.materials||[]).map(e => ({...e, id: e.id||uid()}));
+  measurements = (d.measurements||[]).map(sec => ({
+    ...sec, id: sec.id||uid(),
+    items: (sec.items||[]).map(m => ({...m, id: m.id||uid()}))
+  }));
+  conditions = d.conditions || [];
+  scope = d.scope || [];
+  matNotes = d.matNotes || [];
+  proposalData = d.proposalData || null;
+  quotedMaterials = (d.quotedMaterials||[]).map(e => ({...e, id: e.id||uid()}));
+  jobStatus = d.jobStatus || 'quoting';
+  syncStatusSelect();
+
+  updateEstBadge();
+  renderLabor(); renderMaterials(); renderMeas();
+  renderBullets(conditions, 'condWrap');
+  renderBullets(scope, 'scopeWrap');
+  renderBullets(matNotes, 'matNotesWrap');
+  updateScopeBadge();
+  if (proposalData) renderProposal();
+  else {
+    document.getElementById('quotedMaterialsSection').style.display = 'none';
+    document.getElementById('quotedScopeSection').style.display = 'none';
+    document.getElementById('quotedPricingSection').style.display = 'none';
+    document.getElementById('proposalStatus').textContent = '';
+    document.getElementById('proposalContent').innerHTML =
+      '<div class="upload-zone" onclick="document.getElementById(\'proposalFileInput\').click()">' +
+      '<div class="uz-icon">📄</div><div class="uz-text">Upload Proposal JSON</div>' +
+      '<div class="uz-sub">The JSON file exported alongside your PDF proposal</div></div>' +
+      '<input type="file" id="proposalFileInput" accept=".json" style="display:none" onchange="loadProposalFile(event)">';
+  }
+  dirty = false;
+}
+
+function getJobIndex() { try { return JSON.parse(localStorage.getItem(STORAGE_PREFIX+'index')||'[]'); } catch { return []; } }
+function saveJobIndex(idx) { localStorage.setItem(STORAGE_PREFIX+'index', JSON.stringify(idx)); }
+
+function saveJob() {
+  if (!currentJobId) currentJobId = 'ydjob_' + uid();
+  const d = getJobData();
+  const name = d.customerName || 'Untitled Job';
+  localStorage.setItem(currentJobId, JSON.stringify(d));
+  let idx = getJobIndex();
+  const meta = { id: currentJobId, name, lastModified: d.lastModified, estimate: d.estimateNumber, serviceType: getServiceLabel(), jobStatus: jobStatus };
+  const ex = idx.find(j => j.id === currentJobId);
+  if (ex) Object.assign(ex, meta); else idx.push(meta);
+  saveJobIndex(idx);
+  dirty = false;
+  showToast('Job saved!');
+}
+
+function loadJob(id) {
+  if (dirty && !confirm('You have unsaved changes. Load a different job?')) return;
+  try {
+    const d = JSON.parse(localStorage.getItem(id));
+    if (d) { currentJobId = id; loadJobData(d); closeManager(); }
+  } catch { showToast('Error loading job'); }
+}
+
+function duplicateJob(id) {
+  try {
+    const d = JSON.parse(localStorage.getItem(id));
+    if (d) {
+      const nid = 'ydjob_' + uid();
+      d.customerName = (d.customerName||'Untitled') + ' (Copy)';
+      d.lastModified = new Date().toISOString();
+      localStorage.setItem(nid, JSON.stringify(d));
+      const svc = d.serviceType === 'Other' ? (d.customService||'Other') : (d.serviceType||'');
+      let idx = getJobIndex();
+      idx.push({ id: nid, name: d.customerName, lastModified: d.lastModified, estimate: d.estimateNumber, serviceType: svc, jobStatus: d.jobStatus || 'quoting' });
+      saveJobIndex(idx);
+      renderJobList();
+      showToast('Job duplicated!');
+    }
+  } catch { showToast('Error duplicating'); }
+}
+
+function deleteJob(id) {
+  if (!confirm('Delete this job permanently?')) return;
+  localStorage.removeItem(id);
+  saveJobIndex(getJobIndex().filter(j => j.id !== id));
+  if (currentJobId === id) { currentJobId = null; clearForm(); }
+  renderJobList();
+  showToast('Job deleted');
+}
+
+function newJob() {
+  if (dirty && !confirm('You have unsaved changes. Start a new job?')) return;
+  currentJobId = null; clearForm();
+  switchTab('quote');
+}
+
+function clearForm() {
+  FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = ''; });
+  document.getElementById('serviceType').value = '';
+  document.getElementById('customService').value = '';
+  document.getElementById('customServiceWrap').style.display = 'none';
+  labor = []; materials = []; measurements = []; conditions = []; scope = []; matNotes = [];
+  proposalData = null; quotedMaterials = []; jobStatus = 'quoting';
+  syncStatusSelect();
+  updateEstBadge(); renderLabor(); renderMaterials(); renderMeas();
+  renderBullets(conditions, 'condWrap');
+  renderBullets(scope, 'scopeWrap');
+  renderBullets(matNotes, 'matNotesWrap');
+  updateScopeBadge();
+  clearProposalUI();
+  dirty = false;
+}
+
+function clearProposalUI() {
+  document.getElementById('quotedMaterialsSection').style.display = 'none';
+  document.getElementById('quotedScopeSection').style.display = 'none';
+  document.getElementById('quotedPricingSection').style.display = 'none';
+  document.getElementById('proposalStatus').textContent = '';
+  document.getElementById('proposalContent').innerHTML =
+    '<div class="upload-zone" onclick="document.getElementById(\'proposalFileInput\').click()">' +
+    '<div class="uz-icon">📄</div><div class="uz-text">Upload Proposal JSON</div>' +
+    '<div class="uz-sub">The JSON file exported alongside your PDF proposal</div></div>' +
+    '<input type="file" id="proposalFileInput" accept=".json" style="display:none" onchange="loadProposalFile(event)">';
+}
+
+function markDirty() { dirty = true; }
+
+// ═══════════════════════════════════════════════════════════
+// JOB MANAGER MODAL
+// ═══════════════════════════════════════════════════════════
+function openManager() {
+  populateServiceFilter();
+  renderJobList();
+  document.getElementById('managerModal').classList.add('active');
+}
+function closeManager() { document.getElementById('managerModal').classList.remove('active'); }
+function toggleMonth(key) { collapsedMonths[key] = !collapsedMonths[key]; renderJobList(); }
+
+function populateServiceFilter() {
+  const services = [...new Set(getJobIndex().map(j=>j.serviceType).filter(Boolean))].sort();
+  const sel = document.getElementById('filterService');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All Services</option>' + services.map(s => '<option value="'+esc(s)+'">'+esc(s)+'</option>').join('');
+  sel.value = cur;
+}
+
+function renderJobList() {
+  const idx = getJobIndex();
+  const body = document.getElementById('jobListBody');
+  const fSvc = document.getElementById('filterService').value;
+  const fSearch = document.getElementById('filterSearch').value.toLowerCase().trim();
+
+  let filtered = idx.filter(j => {
+    if (fSvc && j.serviceType !== fSvc) return false;
+    if (fSearch && !((j.name||'')+' '+(j.estimate||'')+' '+(j.serviceType||'')).toLowerCase().includes(fSearch)) return false;
+    return true;
+  });
+
+  if (!filtered.length) {
+    body.innerHTML = '<p class="empty-msg">'+(idx.length===0 ? 'No saved jobs yet. Fill out a sheet and hit Save!' : 'No jobs match your filters.')+'</p>';
+    return;
+  }
+
+  const groups = {};
+  filtered.forEach(j => {
+    let key = 'Unknown';
+    if (j.lastModified) { const d = new Date(j.lastModified); key = MONTHS[d.getMonth()]+' '+d.getFullYear(); }
+    (groups[key] = groups[key]||[]).push(j);
+  });
+
+  const keys = Object.keys(groups).sort((a,b) => {
+    if (a==='Unknown') return 1; if (b==='Unknown') return -1;
+    return new Date(groups[b][0].lastModified) - new Date(groups[a][0].lastModified);
+  });
+
+  let html = '';
+  keys.forEach(mk => {
+    const jobs = groups[mk].sort((a,b) => (b.lastModified||'').localeCompare(a.lastModified||''));
+    const shut = collapsedMonths[mk] || false;
+    html += '<div class="month-folder"><div class="month-header" onclick="toggleMonth(\''+esc(mk)+'\')">' +
+      '<span><span class="month-arrow'+(shut?' shut':'')+'">▼</span> '+esc(mk)+'</span>' +
+      '<span class="month-count">'+jobs.length+' job'+(jobs.length!==1?'s':'')+'</span></div>' +
+      '<div class="month-jobs'+(shut?' shut':'')+'">';
+    jobs.forEach(j => {
+      const d = j.lastModified ? new Date(j.lastModified).toLocaleDateString() : '';
+      const active = j.id === currentJobId;
+      const tag = j.serviceType ? '<span class="service-tag">'+esc(j.serviceType)+'</span>' : '';
+      const statusDot = '<span class="status-dot ' + (j.jobStatus||'quoting') + '"></span>';
+      html += '<div class="job-list-item'+(active?' active':'')+'" onclick="loadJob(\''+j.id+'\')">' +
+        '<div>' +
+          '<div class="job-list-name">'+statusDot+tag+esc(j.name||'Untitled')+(j.estimate?' — Est #'+esc(j.estimate):'')+'</div>' +
+          '<div class="job-list-meta">'+d+(active?' · Currently open':'')+'</div>' +
+        '</div>' +
+        '<div class="job-list-actions" onclick="event.stopPropagation()">' +
+          '<button class="btn btn-sm" onclick="duplicateJob(\''+j.id+'\')">Copy</button>' +
+          '<button class="btn btn-sm btn-danger" onclick="deleteJob(\''+j.id+'\')">Delete</button>' +
+        '</div></div>';
+    });
+    html += '</div></div>';
+  });
+  body.innerHTML = html;
+}
+
+// ═══════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════
+function renderDashboard() {
+  const idx = getJobIndex();
+  const fSvc = document.getElementById('dashFilter').value;
+  const fStatus = document.getElementById('dashStatus').value;
+  const fSearch = document.getElementById('dashSearch').value.toLowerCase().trim();
+
+  // Populate service filter
+  const services = [...new Set(idx.map(j=>j.serviceType).filter(Boolean))].sort();
+  const dSel = document.getElementById('dashFilter');
+  const cur = dSel.value;
+  dSel.innerHTML = '<option value="">All Services</option>' + services.map(s => '<option value="'+esc(s)+'">'+esc(s)+'</option>').join('');
+  dSel.value = cur;
+
+  // Load all job data
+  let jobs = idx.map(j => {
+    try {
+      const d = JSON.parse(localStorage.getItem(j.id));
+      if (!d) return null;
+      const totalHrs = (d.labor||[]).reduce((s,e) => s + calcHours(e.start, e.end), 0);
+      const totalMat = (d.materials||[]).reduce((s,e) => s + (parseFloat(e.price)||0), 0);
+      const jobPrice = parseMoney(d.jobPrice);
+      const laborCost = totalHrs * LABOR_RATE;
+      const profit = jobPrice - laborCost - totalMat;
+      // Change order total
+      const coTotal = (d.materials||[]).filter(e => {
+        if (!d.quotedMaterials || !d.quotedMaterials.length) return false;
+        const lower = (e.item||'').toLowerCase().trim();
+        return !d.quotedMaterials.some(qm => {
+          const qLower = (qm.name||'').toLowerCase().trim();
+          if (qLower.includes(lower) || lower.includes(qLower)) return true;
+          const qW = qLower.split(/\s+/).filter(w=>w.length>3);
+          const iW = lower.split(/\s+/).filter(w=>w.length>3);
+          const shared = qW.filter(w=>iW.includes(w));
+          return shared.length >= 2 || (shared.length >= 1 && (qW.length <= 2 || iW.length <= 2));
+        });
+      }).reduce((s,e) => s + (parseFloat(e.price)||0), 0);
+
+      return {
+        id: j.id, name: d.customerName || 'Untitled',
+        service: j.serviceType || '', status: d.jobStatus || 'quoting',
+        jobPrice, totalHrs, totalMat, laborCost, profit, coTotal,
+        lastModified: d.lastModified
+      };
+    } catch { return null; }
+  }).filter(Boolean);
+
+  // Apply filters
+  if (fSvc) jobs = jobs.filter(j => j.service === fSvc);
+  if (fStatus) jobs = jobs.filter(j => j.status === fStatus);
+  if (fSearch) jobs = jobs.filter(j => (j.name+' '+j.service).toLowerCase().includes(fSearch));
+
+  document.getElementById('dashCount').textContent = jobs.length + ' job' + (jobs.length !== 1 ? 's' : '');
+
+  // Totals
+  const totRevenue = jobs.reduce((s,j) => s + j.jobPrice, 0);
+  const totProfit = jobs.reduce((s,j) => s + j.profit, 0);
+  const totHrs = jobs.reduce((s,j) => s + j.totalHrs, 0);
+  const totCO = jobs.reduce((s,j) => s + j.coTotal, 0);
+
+  document.getElementById('dashTotals').innerHTML = [
+    { label: 'Total Revenue', value: fmtMoney(totRevenue) },
+    { label: 'Total Profit', value: fmtMoney(totProfit) },
+    { label: 'Total Labor Hours', value: totHrs.toFixed(1) + ' hrs' },
+    { label: 'Change Orders', value: fmtMoney(totCO) },
+  ].map(c => '<div class="dash-card"><div class="dc-label">'+c.label+'</div><div class="dc-value">'+c.value+'</div></div>').join('');
+
+  // Sort
+  jobs.sort((a,b) => {
+    let va = a[dashSort.col], vb = b[dashSort.col];
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb||'').toLowerCase(); }
+    if (va < vb) return dashSort.asc ? -1 : 1;
+    if (va > vb) return dashSort.asc ? 1 : -1;
+    return 0;
+  });
+
+  // Table
+  const cols = [
+    { key: 'name', label: 'Client' },
+    { key: 'service', label: 'Service' },
+    { key: 'status', label: 'Status' },
+    { key: 'jobPrice', label: 'Job Price' },
+    { key: 'totalMat', label: 'Materials' },
+    { key: 'coTotal', label: 'Change Orders' },
+    { key: 'totalHrs', label: 'Labor Hrs' },
+    { key: 'profit', label: 'Profit' },
+  ];
+
+  let h = '<table><thead><tr>';
+  cols.forEach(c => {
+    const arrow = dashSort.col === c.key ? (dashSort.asc ? ' ▲' : ' ▼') : '';
+    h += '<th onclick="sortDash(\''+c.key+'\')">'+c.label+arrow+'</th>';
+  });
+  h += '</tr></thead><tbody>';
+
+  if (!jobs.length) {
+    h += '<tr><td colspan="'+cols.length+'" style="text-align:center;color:#b0a694;font-style:italic;padding:30px">No jobs to display</td></tr>';
+  } else {
+    jobs.forEach(j => {
+      const statusLabel = j.status.charAt(0).toUpperCase() + j.status.slice(1);
+      h += '<tr style="cursor:pointer" onclick="loadJob(\''+j.id+'\');switchTab(\'tracking\')">' +
+        '<td class="bold">'+esc(j.name)+'</td>' +
+        '<td>'+(j.service ? '<span class="service-tag">'+esc(j.service)+'</span>' : '—')+'</td>' +
+        '<td><span class="status-dot '+j.status+'"></span>'+statusLabel+'</td>' +
+        '<td class="bold">'+fmtMoney(j.jobPrice)+'</td>' +
+        '<td>'+fmtMoney(j.totalMat)+'</td>' +
+        '<td>'+(j.coTotal > 0 ? '<span style="color:#c0792a;font-weight:600">'+fmtMoney(j.coTotal)+'</span>' : '—')+'</td>' +
+        '<td>'+j.totalHrs.toFixed(1)+'</td>' +
+        '<td class="bold" style="color:'+(j.profit>=0?'#4a7c59':'#a0522d')+'">'+fmtMoney(j.profit)+'</td>' +
+        '</tr>';
+    });
+  }
+  h += '</tbody></table>';
+  document.getElementById('dashTableWrap').innerHTML = h;
+}
+
+function sortDash(col) {
+  if (dashSort.col === col) dashSort.asc = !dashSort.asc;
+  else { dashSort.col = col; dashSort.asc = true; }
+  renderDashboard();
+}
+
+// ═══════════════════════════════════════════════════════════
+// EXPORT / IMPORT — MIGRATE DATA BETWEEN VERSIONS
+// ═══════════════════════════════════════════════════════════
+function exportAllJobs() {
+  const idx = getJobIndex();
+  if (!idx.length) { showToast('No jobs to export'); return; }
+
+  // Save current job first if dirty
+  if (dirty && currentJobId) saveJob();
+
+  const backup = {
+    version: 1,
+    exportDate: new Date().toISOString(),
+    appName: 'YD Job Hub',
+    jobs: []
+  };
+
+  idx.forEach(meta => {
+    try {
+      const data = JSON.parse(localStorage.getItem(meta.id));
+      if (data) {
+        backup.jobs.push({ id: meta.id, meta, data });
+      }
+    } catch {}
+  });
+
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const date = new Date().toISOString().split('T')[0];
+  a.download = 'yd-job-hub-backup-' + date + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  showToast(backup.jobs.length + ' job' + (backup.jobs.length !== 1 ? 's' : '') + ' exported!');
+}
+
+function importAllJobs(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const backup = JSON.parse(e.target.result);
+
+      // Validate structure
+      if (!backup.jobs || !Array.isArray(backup.jobs)) {
+        showToast('Invalid backup file');
+        return;
+      }
+
+      let imported = 0, skipped = 0;
+      const existingIdx = getJobIndex();
+      const existingIds = new Set(existingIdx.map(j => j.id));
+
+      backup.jobs.forEach(job => {
+        if (!job.data) return;
+
+        // Check for duplicate by ID — if exists, ask to overwrite on first conflict
+        let jobId = job.id;
+        if (existingIds.has(jobId)) {
+          // Generate new ID to avoid overwriting
+          jobId = 'ydjob_' + uid();
+        }
+
+        // Save job data
+        localStorage.setItem(jobId, JSON.stringify(job.data));
+
+        // Update index
+        const svc = job.data.serviceType === 'Other' ? (job.data.customService || 'Other') : (job.data.serviceType || '');
+        const meta = {
+          id: jobId,
+          name: job.data.customerName || 'Untitled',
+          lastModified: job.data.lastModified || new Date().toISOString(),
+          estimate: job.data.estimateNumber || '',
+          serviceType: svc,
+          jobStatus: job.data.jobStatus || 'quoting'
+        };
+
+        const idx = getJobIndex();
+        const existing = idx.find(j => j.id === jobId);
+        if (existing) Object.assign(existing, meta);
+        else idx.push(meta);
+        saveJobIndex(idx);
+
+        imported++;
+      });
+
+      renderJobList();
+      showToast(imported + ' job' + (imported !== 1 ? 's' : '') + ' imported!');
+    } catch (err) {
+      showToast('Error reading backup file');
+      console.error(err);
+    }
+  };
+  reader.readAsText(file);
+  // Reset input so same file can be imported again
+  event.target.value = '';
+}
+
+// ═══════════════════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════════════════
+function showToast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#2c2c2c;color:#f4f1ec;padding:12px 20px;font-family:"DM Sans",sans-serif;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity 0.3s;'; document.body.appendChild(t); }
+  t.textContent = msg; t.style.opacity = '1';
+  setTimeout(() => t.style.opacity = '0', 2000);
+}
+
+// ═══════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════
+window.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('quoteDate').value = new Date().toISOString().split('T')[0];
+  renderLabor(); renderMaterials(); renderMeas();
+  syncStatusSelect();
+  renderBullets(conditions, 'condWrap');
+  renderBullets(scope, 'scopeWrap');
+  renderBullets(matNotes, 'matNotesWrap');
+  updateSummary();
+
+  const idx = getJobIndex();
+  if (idx.length > 0) {
+    idx.sort((a,b) => (b.lastModified||'').localeCompare(a.lastModified||''));
+    loadJob(idx[0].id);
+  }
+});
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+</script>
+</body>
+</html>
