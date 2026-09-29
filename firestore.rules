@@ -1,0 +1,257 @@
+rules_version = '2';
+
+// YD Job Hub security rules.
+//
+// These are the real enforcement. The checks in firebase-init.js only decide
+// what to draw -- anyone can bypass those from the browser console, so nothing
+// here may depend on them.
+//
+// Default posture is DENY: every collection opts in explicitly, so a collection
+// added later is locked until someone writes a rule for it.
+//
+// ---------------------------------------------------------------------------
+// THE FIELD-VISIBILITY PROBLEM
+//
+// Firestore grants access per DOCUMENT, never per field. There is no way to let
+// crew read a snow account while hiding its pricing -- they get the whole record
+// or nothing. So anything crew must not see lives in a separate 'private'
+// subcollection that they simply cannot read:
+//
+//   snowAccounts/{id}              name, address, lat/lng, area notes,
+//                                  trigger inches, service window   -> crew CAN read
+//   snowAccounts/{id}/private/*    tier rates, labour rate, salt rates,
+//                                  phone, email                     -> owner only
+//
+//   storms/{id}                    date, accumulation, crew, route  -> crew CAN read
+//   storms/{id}/stops/*            arrive/depart, inches, salt      -> crew CAN write
+//   storms/{id}/private/*          billing and totals               -> owner only
+//
+// Crew get the address (they have to drive there) but not the phone number, the
+// email, or a single price.
+//
+// To install: Firebase console -> Firestore Database -> Rules -> paste -> Publish.
+// ---------------------------------------------------------------------------
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The one account allowed to bootstrap itself as owner.
+    function OWNER() {
+      return 'jonahlinfield@ydexteriorvisions.com';
+    }
+
+    function signedIn()       { return request.auth != null; }
+    function myUserDocExists(){ return exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function myUserDoc()      { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+
+    function isOwner() {
+      return signedIn() && myUserDocExists()
+        && myUserDoc().role == 'owner' && myUserDoc().active == true;
+    }
+
+    function isCrew() {
+      return signedIn() && myUserDocExists()
+        && myUserDoc().role == 'crew' && myUserDoc().active == true;
+    }
+
+    function isStaff() { return isOwner() || isCrew(); }
+
+    // ===================================================================
+    // users -- roles and pending access requests
+    // ===================================================================
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isOwner());
+
+      // Two self-creates are permitted, both only for your OWN uid:
+      //  1. owner bootstrap -- the first sign-in by the owner email mints the
+      //     owner record. Without it nobody could ever approve anybody, since
+      //     approving requires already being an owner.
+      //  2. a pending request -- grants nothing until an owner changes the role.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && (
+             (request.auth.token.email == OWNER()
+               && request.resource.data.role == 'owner'
+               && request.resource.data.active == true)
+             ||
+             (request.resource.data.role == 'pending'
+               && request.resource.data.active == false)
+           );
+
+      // Only an owner promotes, demotes or deactivates. A user cannot edit
+      // their own record -- otherwise 'pending' could simply self-promote.
+      allow update: if isOwner();
+
+      // Never delete; deactivate, so the audit trail survives.
+      allow delete: if false;
+    }
+
+    // ===================================================================
+    // Owner only -- the admin side of the business
+    // Client names, phone numbers, pricing, costs, margins, estimates.
+    // ===================================================================
+    match /jobs/{docId}      { allow read, write: if isOwner(); }
+    match /contacts/{docId}  { allow read, write: if isOwner(); }
+    match /expenses/{docId}  { allow read, write: if isOwner(); }
+    match /estimates/{docId} { allow read, write: if isOwner(); }
+    match /equipment/{docId} { allow read, write: if isOwner(); }
+
+    // settings/public holds harmless shared values (rounding rules, company
+    // name). Everything else in settings is owner-only.
+    match /settings/{docId} {
+      allow read:  if isOwner() || (isCrew() && docId == 'public');
+      allow write: if isOwner();
+    }
+
+    // ===================================================================
+    // Snow -- crew need the route, never the money
+    // ===================================================================
+    match /snowAccounts/{accountId} {
+      allow read:  if isStaff();
+      allow write: if isOwner();
+
+      // Pricing and client contact details. Crew cannot read this at all.
+      match /private/{docId} {
+        allow read, write: if isOwner();
+      }
+    }
+
+    match /storms/{stormId} {
+      allow read:  if isStaff();
+      allow write: if isOwner();
+
+      // Per stop: arrive, depart, inches measured, salt used, skipped + reason.
+      // A subcollection rather than fields on the storm so two crew tapping
+      // different stops at the same moment cannot overwrite each other.
+      match /stops/{stopId} {
+        allow read: if isStaff();
+
+        // Crew may record work on a storm that is still running. Once the owner
+        // closes the storm the billing is locked and only they can touch it.
+        allow create, update: if isOwner()
+          || (isCrew()
+              && get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open');
+
+        allow delete: if isOwner();
+      }
+
+      // Computed billing and totals.
+      match /private/{docId} {
+        allow read, write: if isOwner();
+      }
+    }
+
+    // ===================================================================
+    // timeEntries -- crew clock themselves in, owner approves
+    // ===================================================================
+    match /timeEntries/{entryId} {
+      allow read: if isOwner()
+        || (isCrew() && resource.data.uid == request.auth.uid);
+
+      // Crew submit only their own time, and always unapproved.
+      allow create: if isOwner()
+        || (isCrew()
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.status == 'pending');
+
+      // Crew may amend their own entry only while it is still pending, and can
+      // neither reassign it nor approve it. Approved time is frozen to everyone
+      // but an owner -- these become payroll records.
+      allow update: if isOwner()
+        || (isCrew()
+            && resource.data.uid == request.auth.uid
+            && resource.data.status == 'pending'
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.status == 'pending');
+
+      allow delete: if isOwner();
+    }
+
+    // ===================================================================
+    // changeRequests -- ONE approval queue for everything
+    //
+    // Deliberately generic. Rather than a bespoke approval flow per feature,
+    // any record type files into this one collection:
+    //
+    //   { type:        'timeEntry' | 'stormStop' | ... ,
+    //     targetPath:  'storms/abc/stops/xyz',
+    //     requestedBy: uid,
+    //     before:      {...},   // what it says now
+    //     after:       {...},   // what they are asking for
+    //     reason:      'clocked out late',
+    //     status:      'pending' | 'approved' | 'rejected' | 'withdrawn',
+    //     decidedBy, decidedAt }
+    //
+    // Approving does NOT let the requester write to the target -- the owner
+    // applies the change. That is what keeps a locked storm or an approved
+    // timesheet genuinely locked, and it means adding a new approvable thing
+    // later needs no new rules.
+    // ===================================================================
+    match /changeRequests/{reqId} {
+      allow read: if isOwner()
+        || (isCrew() && resource.data.requestedBy == request.auth.uid);
+
+      // Crew file only for themselves, and always as pending.
+      allow create: if isOwner()
+        || (isCrew()
+            && request.resource.data.requestedBy == request.auth.uid
+            && request.resource.data.status == 'pending');
+
+      // Crew may amend or withdraw their own request while it is still pending.
+      // They can never decide one -- not even their own.
+      allow update: if isOwner()
+        || (isCrew()
+            && resource.data.requestedBy == request.auth.uid
+            && resource.data.status == 'pending'
+            && request.resource.data.requestedBy == resource.data.requestedBy
+            && request.resource.data.status in ['pending', 'withdrawn']);
+
+      // Kept, not deleted -- the point is the audit trail.
+      allow delete: if false;
+    }
+
+    // ===================================================================
+    // Calendars and boards -- shared per person, chosen by the owner
+    //
+    // Each document carries a 'visibleTo' array of uids. The owner decides who
+    // is on it; a crew member not listed cannot read the calendar at all.
+    // ===================================================================
+    match /calendars/{calId} {
+      allow read: if isOwner()
+        || (isCrew() && request.auth.uid in resource.data.visibleTo);
+      allow write: if isOwner();
+
+      match /events/{eventId} {
+        allow read: if isOwner()
+          || (isCrew() && request.auth.uid in
+              get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo);
+        allow write: if isOwner();
+      }
+    }
+
+    match /boards/{boardId} {
+      allow read: if isOwner()
+        || (isCrew() && request.auth.uid in resource.data.visibleTo);
+      allow write: if isOwner();
+
+      match /cards/{cardId} {
+        allow read: if isOwner()
+          || (isCrew() && request.auth.uid in
+              get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo);
+        // Crew can move a card they can see; only the owner creates or deletes.
+        allow update: if isOwner()
+          || (isCrew() && request.auth.uid in
+              get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo);
+        allow create, delete: if isOwner();
+      }
+    }
+
+    // ===================================================================
+    // Anything not matched above is denied.
+    // ===================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

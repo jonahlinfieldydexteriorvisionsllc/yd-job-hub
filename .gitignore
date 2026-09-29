@@ -1,0 +1,29 @@
+# This repository is PUBLIC (free GitHub Pages requires it).
+# Nothing that identifies a customer may be committed.
+
+# Job backups -- 21 clients' names, addresses, phone numbers and prices.
+yd-job-hub-backup-*.json
+*-backup-*.json
+
+# The build plan quotes real client names and a street address.
+# It stays on Jonah's machine only.
+JOBHUB_BUILD_SPEC.md
+
+# The snow spreadsheet, if it is ever copied in here.
+*Snow*Removal*.xlsx
+*.xlsx
+
+# Local safety copies made before edits.
+*.bak
+*.bak-*
+*.bak-precolor
+
+# OS and editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# NOTE: config.js IS committed on purpose. The Firebase web config is public by
+# design -- it ships in the JavaScript of every Firebase web app. Security comes
+# from firestore.rules and the authorized-domains list, not from hiding it.
+# The Trello token in a later phase is a real secret and must never be added.
