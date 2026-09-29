@@ -90,8 +90,11 @@ async function start() {
 
   await setPersistence(auth, browserLocalPersistence);
 
-  // An installed PWA on iOS cannot reliably open an auth popup, so use a
-  // redirect there and a popup everywhere else.
+  // Sign-in method. A popup is tried first everywhere, including an installed
+  // app on the home screen. Redirect is the fallback, not the default: on iOS
+  // a redirect can carry the user out of the installed app into Safari and
+  // never come back, because iOS keeps those two storage areas separate --
+  // which looks to the user like sign-in simply not working.
   const standalone = window.matchMedia('(display-mode: standalone)').matches
     || window.navigator.standalone === true;
 
@@ -105,8 +108,7 @@ async function start() {
   async function doSignIn() {
     gate.show('loading', { title: 'YD Job Hub', msg: 'Opening Google…', spinner: true });
     try {
-      if (standalone) await signInWithRedirect(auth, provider);
-      else await signInWithPopup(auth, provider);
+      await signInWithPopup(auth, provider);
     } catch (e) {
       // A popup that is blocked or unsupported is worth one retry as a redirect.
       if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment',

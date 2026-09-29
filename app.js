@@ -96,26 +96,52 @@ function resetDateInputs() { ['matDate','addCostDate','payDate'].forEach(id => {
 
 
 // ---- Auth failsafe ----------------------------------------------------------
-// If firebase-init.js never reports in -- CDN blocked, no network on a first
-// ever load, a syntax error -- the user must not be stranded behind the
-// sign-in overlay looking at a spinner forever. Drop to local-only instead.
-setTimeout(() => {
-  if (window.YDAuth) return;
-  const g = document.getElementById('authGate');
-  // Only rescue a gate that is still starting up. If it is showing a real
-  // message -- sign in, waiting for approval, access removed, or an error --
-  // that message is the truth and hiding it would strand the user in an app
-  // that silently is not syncing.
-  if (g && ['signin', 'pending', 'denied', 'error'].includes(g.dataset.state)) return;
-  console.warn('[auth] no response from the Firebase module; falling back to local-only');
-  if (g) g.hidden = true;
-  const b = document.getElementById('localOnlyBanner');
-  if (b) {
-    b.hidden = false;
-    const t = document.getElementById('localOnlyText');
-    if (t) t.textContent = 'Offline \u2014 saving to this device only.';
+// If firebase-init.js never reports in, the user must not be stranded behind
+// the sign-in overlay staring at a spinner. But the first version of this gave
+// Firebase only 8 seconds and then declared the app offline -- fine on a
+// desktop, far too short on a phone downloading the SDK over cell service for
+// the first time, which made a perfectly healthy app claim it had no signal.
+//
+// So: wait properly, say so while waiting, and give up early ONLY when the
+// module genuinely failed to load (index.html sets YDModuleFailed for that).
+(function () {
+  const startedAt = Date.now();
+  const GIVE_UP_AFTER = 30000;   // generous: a cold phone on cell service
+  const SAY_SO_AFTER  = 6000;
+
+  function goLocalOnly(why) {
+    console.warn('[auth] falling back to local-only:', why);
+    const g = document.getElementById('authGate');
+    if (g) g.hidden = true;
+    const b = document.getElementById('localOnlyBanner');
+    if (b) {
+      b.hidden = false;
+      const t = document.getElementById('localOnlyText');
+      if (t) t.textContent = 'Not connected \u2014 saving to this device only. Tap to retry.';
+      b.style.cursor = 'pointer';
+      b.onclick = () => location.reload();
+    }
   }
-}, 8000);
+
+  function check() {
+    if (window.YDAuth) return;                       // the module reported in
+    const g = document.getElementById('authGate');
+    // A gate showing a real message is the truth; never hide it.
+    if (g && ['signin', 'pending', 'denied', 'error'].includes(g.dataset.state)) return;
+
+    if (window.YDModuleFailed) return goLocalOnly('module failed to load');
+    if (Date.now() - startedAt > GIVE_UP_AFTER) return goLocalOnly('timed out');
+
+    // Still loading. Reassure rather than showing a silent spinner.
+    if (Date.now() - startedAt > SAY_SO_AFTER) {
+      const m = document.getElementById('gateMsg');
+      if (m) m.textContent = 'Still connecting\u2026 this can take a moment on a phone.';
+    }
+    setTimeout(check, 1500);
+  }
+
+  setTimeout(check, 3000);
+})();
 
 
 // ---- Account: who is signed in, and signing out ----------------------------
