@@ -117,6 +117,44 @@ setTimeout(() => {
   }
 }, 8000);
 
+
+// ---- Account: who is signed in, and signing out ----------------------------
+// Signing out deliberately clears this device's cached jobs. Firestore holds
+// the real copy, so nothing is lost -- but a crew member handing back a shared
+// phone must not leave client names and prices sitting in it.
+function ydSignOut() {
+  if (typeof dirty !== 'undefined' && dirty
+      && !confirm('You have unsaved changes on this job.\n\nSign out anyway?')) return;
+  if (!confirm('Sign out of YD Job Hub?\n\nYour jobs stay safe in the cloud. '
+             + 'This device will need to sign in again.')) return;
+
+  closeHeaderMenu();
+  try {
+    Object.keys(localStorage)
+      .filter(k => k.indexOf(STORAGE_PREFIX) === 0)
+      .forEach(k => localStorage.removeItem(k));
+  } catch (e) { console.warn('could not clear local cache', e); }
+
+  if (window.YDSignOut) window.YDSignOut();
+  setTimeout(() => location.reload(), 400);
+}
+
+// Fill the menu in once we know who is signed in. Stays hidden entirely when
+// running without Firebase, where there is no account to show.
+document.addEventListener('yd-auth', e => {
+  const a = e.detail || {};
+  const who = document.getElementById('menuWho');
+  const out = document.getElementById('menuSignOut');
+  const sep = document.getElementById('menuAccountSep');
+  const on = !!(a.user && a.mode === 'cloud');
+  if (who) {
+    who.hidden = !on;
+    if (on) who.textContent = (a.role === 'owner' ? 'Owner · ' : 'Crew · ') + a.user.email;
+  }
+  if (out) out.hidden = !on;
+  if (sep) sep.hidden = !on;
+});
+
 // ---- Header overflow menu (Backup / Restore / Print) ----
 function toggleHeaderMenu() {
   const m = document.getElementById('headerMenu');
@@ -702,7 +740,28 @@ function persistJob(announce) {
   return true;
 }
 
-function saveJob() { if (persistJob(true)) { dirty = false; updateCtxBar(); } else showStorageError(); }
+// Is this form genuinely blank? Used to stop a brand-new record being created
+// with nothing in it. The Save button used to do exactly that, which is where
+// stray "Untitled" jobs in the list came from.
+function jobIsEmpty() {
+  const val = id => (document.getElementById(id) || {}).value || '';
+  return !val('customerName').trim()
+      && !val('address').trim()
+      && !val('estimateNumber').trim()
+      && !val('notes').trim()
+      && !parseMoney(val('jobPrice'))
+      && !serviceTypes.length && !proposals.length && !labor.length
+      && !materials.length && !orderItems.length
+      && !additionalCosts.length && !payments.length;
+}
+
+function saveJob() {
+  if (!currentJobId && jobIsEmpty()) {
+    showToast('Nothing to save yet — add a customer name first');
+    return;
+  }
+  if (persistJob(true)) { dirty = false; updateCtxBar(); } else showStorageError();
+}
 
 // Debounced silent autosave — fires shortly after any change.
 function scheduleAutosave() {
@@ -712,8 +771,7 @@ function scheduleAutosave() {
 }
 function autosave() {
   // Don't create a phantom job from an empty form
-  const name = (document.getElementById('customerName').value || '').trim();
-  if (!currentJobId && !name && !proposals.length && !labor.length && !materials.length && !orderItems.length && !additionalCosts.length && !payments.length) return;
+  if (!currentJobId && jobIsEmpty()) return;
   if (persistJob(false)) { dirty = false; updateCtxBar(); }
   else if (!storageWarned) { storageWarned = true; showStorageError(); }  // warn once, then rely on the red dot
 }

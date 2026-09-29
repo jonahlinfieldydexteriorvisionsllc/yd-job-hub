@@ -33,6 +33,9 @@
           <button onclick="closeHeaderMenu(); exportAllJobs()">Backup</button>
           <button onclick="closeHeaderMenu(); document.getElementById('restoreInput').click()">Restore</button>
           <button onclick="closeHeaderMenu(); window.print()">Print</button>
+          <div class="menu-sep" id="menuAccountSep" hidden></div>
+          <div class="menu-who" id="menuWho" hidden></div>
+          <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
         </div>
       </div>
       <input type="file" id="restoreInput" accept=".json" style="display:none" onchange="importAllJobs(event)">

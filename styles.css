@@ -247,6 +247,14 @@
   }
 
 
+
+  /* account block at the foot of the overflow menu */
+  .menu-sep { height:1px; background:var(--border); margin:6px 4px; }
+  .menu-who { padding:7px 12px 3px; font-size:10px; font-weight:700; letter-spacing:.8px;
+              text-transform:uppercase; color:var(--muted); word-break:break-all; line-height:1.5; }
+  .menu button.menu-danger { color:var(--neg); }
+  .menu button.menu-danger:hover { background:var(--neg-soft); color:var(--neg); }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);
