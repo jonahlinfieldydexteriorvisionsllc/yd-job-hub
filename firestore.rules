@@ -169,6 +169,20 @@ service cloud.firestore {
     }
 
     // ===================================================================
+    // claudeUsage -- what the Claude features are costing, per day
+    //
+    // Written only by the server function, which uses the Admin SDK and so
+    // bypasses these rules entirely. Readable by the owner so spend can be
+    // shown in the app instead of discovered on a statement. No client may
+    // write here: a client that could edit the counter could erase its own
+    // spending, which defeats the point of having a daily ceiling.
+    // ===================================================================
+    match /claudeUsage/{day} {
+      allow read: if isOwner();
+      allow write: if false;
+    }
+
+    // ===================================================================
     // changeRequests -- ONE approval queue for everything
     //
     // Deliberately generic. Rather than a bespoke approval flow per feature,
