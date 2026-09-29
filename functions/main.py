@@ -36,7 +36,26 @@ from firebase_admin import firestore
 
 firebase_admin.initialize_app()
 _db = firestore.client()
-_claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+# Built on first use, not at import. Reading the key at import means a missing or
+# not-yet-set key stops the container from starting at all, which surfaces as an
+# opaque deployment failure rather than "the key isn't set". This way the service
+# deploys and starts fine, and says plainly what is wrong if the key is absent.
+_claude_client = None
+
+
+def _claude():
+    global _claude_client
+    if _claude_client is None:
+        key = os.environ.get("ANTHROPIC_API_KEY")
+        if not key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY is not set on this service. Add it under "
+                "Cloud Run -> yd-claude -> Edit & deploy new revision -> "
+                "Variables & Secrets."
+            )
+        _claude_client = anthropic.Anthropic(api_key=key)
+    return _claude_client
 
 MODEL = "claude-opus-5-5"
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
@@ -206,7 +225,13 @@ def claude(request):
         return (json.dumps({"error": str(e)}), 429, headers)
 
     try:
-        response = _claude.beta.messages.create(
+        _claude()
+    except RuntimeError as e:
+        print("configuration problem:", e)
+        return (json.dumps({"error": str(e)}), 500, headers)
+
+    try:
+        response = _claude().beta.messages.create(
             model=MODEL,
             max_tokens=spec["max_tokens"],
             system=spec["system"],
