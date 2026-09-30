@@ -234,7 +234,10 @@
 
   function render() {
     renderClockCard();
-    if (workerUid && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
+    // Not while the name and rate are being typed into: the clock redraws
+    // every second, and rebuilding the form would clear the fields mid-word.
+    if (workerUid && !editingWorker
+        && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
     if (isOwner()) { renderOnNow(); renderApprovals(); renderCrew(); renderTotals(); }
     manageTicker();
   }
@@ -715,6 +718,7 @@
   window.openWorker = function (uid) {
     workerUid = uid || ((me() || {}).uid);
     workerRange = 'week';
+    editingWorker = false;
     const m = el('workerModal');
     if (m) m.classList.add('active');
     renderWorker();
@@ -751,14 +755,30 @@
       : costOf(paidMs(e), e.rateCents || rateOf(e.uid))), 0);
 
     body.innerHTML =
-      '<div class="wk-top">' +
-        '<div><div class="wk-name">' + esc(name) + '</div>' +
-        (u.email ? '<div class="wk-mail">' + esc(u.email) + '</div>' : '') + '</div>' +
-        (isOwner()
-          ? '<button class="btn btn-sm" onclick="setWorkerRate(\'' + workerUid + '\')">' +
-            money(rateOf(workerUid)) + '/hr</button>'
-          : '<span class="wk-rate">' + money(rateOf(workerUid)) + '/hr</span>') +
-      '</div>' +
+      (editingWorker && isOwner()
+        ? '<div class="wk-edit">' +
+            '<div class="grid g2">' +
+              '<div class="field"><span class="label">Name</span>' +
+                '<input id="wkName" value="' + esc(u.name || '') + '" placeholder="What they go by"></div>' +
+              '<div class="field"><span class="label">Hourly rate</span>' +
+                '<input id="wkRate" inputmode="decimal" value="' +
+                  (rateOf(workerUid) / 100).toFixed(2) + '"></div>' +
+            '</div>' +
+            '<div class="hint">A new rate applies to shifts approved from now on. ' +
+              'Shifts already approved keep the rate they were approved at.</div>' +
+            '<div class="field-actions">' +
+              '<button class="btn btn-filled" onclick="saveWorkerEdit()">Save</button>' +
+              '<button class="btn" onclick="cancelWorkerEdit()">Cancel</button>' +
+            '</div>' +
+          '</div>'
+        : '<div class="wk-top">' +
+            '<div><div class="wk-name">' + esc(name) + '</div>' +
+            (u.email ? '<div class="wk-mail">' + esc(u.email) + '</div>' : '') + '</div>' +
+            (isOwner()
+              ? '<button class="btn btn-sm" onclick="editWorker()">' +
+                money(rateOf(workerUid)) + '/hr · Edit</button>'
+              : '<span class="wk-rate">' + money(rateOf(workerUid)) + '/hr</span>') +
+          '</div>') +
 
       (live
         ? '<div class="wk-live">On the clock now — <strong>' + esc(live.targetName) +
@@ -822,19 +842,54 @@
     '</tr>';
   }
 
-  window.setWorkerRate = function (uid) {
-    if (!isOwner()) return;
-    const cur = rateOf(uid);
-    const v = prompt('Hourly rate for ' + ((people[uid] || {}).name || 'this worker') +
-                     '\n\nThis applies to shifts approved from now on. Already-approved shifts keep the rate they were approved at.',
-                     (cur / 100).toString());
-    if (v === null) return;
-    const cents = Math.round(parseFloat(v.replace(/[^0-9.]/g, '')) * 100);
-    if (!(cents > 0)) { showToast('That is not a rate'); return; }
-    people[uid] = Object.assign({}, people[uid], { rateCents: cents });
+  // Name and rate are edited on the worker's own page, in real fields.
+  //
+  // The name matters because Google hands over whatever the person happens to
+  // have on their account -- an email prefix, a nickname, sometimes nothing --
+  // and that string is what ends up beside their hours on every screen. It has
+  // to be changeable to whatever they are actually called.
+
+  let editingWorker = false;
+
+  window.editWorker = function () { editingWorker = true; renderWorker(); };
+  window.cancelWorkerEdit = function () { editingWorker = false; renderWorker(); };
+
+  window.saveWorkerEdit = function () {
+    if (!isOwner() || !workerUid) return;
+    const name = ((el('wkName') || {}).value || '').trim();
+    const raw = ((el('wkRate') || {}).value || '').replace(/[^0-9.]/g, '');
+    const cents = Math.round(parseFloat(raw) * 100);
+
+    if (!name) { showToast('Give them a name'); return; }
+    if (!(cents > 0)) { showToast('That hourly rate does not look right'); return; }
+
+    const patch = { name: name, rateCents: cents };
+    people[workerUid] = Object.assign({}, people[workerUid], patch);
+
+    // The name is copied onto each shift when it is created, so changing it
+    // here would otherwise leave every past shift showing the old one. Only
+    // unapproved shifts are touched: an approved shift is a payroll record and
+    // is left exactly as it was agreed.
+    Object.keys(entries).forEach(id => {
+      const e = entries[id];
+      if (e.uid !== workerUid || e.status === 'approved') return;
+      e.workerName = name;
+      write(id, { workerName: name }, 'renaming shift');
+    });
+
+    editingWorker = false;
     render();
-    Promise.resolve(window.YDDb.put('users', uid, { rateCents: cents }))
-      .catch(e => console.warn('[clock] rate not saved:', e.code || e.message));
+    Promise.resolve(window.YDDb.put('users', workerUid, patch))
+      .catch(e => console.warn('[clock] worker not saved:', e.code || e.message));
+    showToast('Saved — ' + name + ' at ' + money(cents) + '/hr');
+  };
+
+  // Kept so the rate button in the weekly totals still works; it opens the
+  // page rather than a browser prompt.
+  window.setWorkerRate = function (uid) {
+    openWorker(uid);
+    editingWorker = true;
+    renderWorker();
   };
 
   // ------------------------------------------------- what other screens ask

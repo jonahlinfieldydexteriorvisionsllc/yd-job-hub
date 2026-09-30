@@ -224,12 +224,47 @@ document.addEventListener('yd-auth', e => {
   });
   const ctx = document.getElementById('ctxBar');
   if (ctx) ctx.style.display = crewOnly ? 'none' : '';
+
+  // Crew see both their screens on the bar, so More would open on nothing.
+  const more = document.getElementById('tabMore');
+  if (more) more.hidden = crewOnly;
   if (crewOnly) {
     const openTab = document.querySelector('.tab-panel.active');
     if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard', 'panel-matdash']
         .indexOf(openTab.id) !== -1) switchTab('clock');
   }
 });
+
+// ---- The More sheet ----
+//
+// Built each time it opens rather than written into the markup, so it lists
+// exactly the screens this person is allowed to see. A crew member has no
+// hidden screens at all, which is why they never get a More button.
+function openMore() {
+  const wrap = document.getElementById('moreItems');
+  const sheet = document.getElementById('moreSheet');
+  if (!wrap || !sheet) return;
+  const hidden = TABS.filter(n => PHONE_TABS.indexOf(n) === -1)
+    .filter(n => {
+      const b = document.getElementById(tabButtonId(n));
+      return b && !b.hidden;
+    });
+  wrap.innerHTML = hidden.length
+    ? hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
+        '<span class="sheet-item-name">' + TAB_LABEL[n] + '</span>' +
+        (TAB_HINT[n] ? '<span class="sheet-item-hint">' + TAB_HINT[n] + '</span>' : '') +
+      '</button>').join('')
+    : '<p class="empty-msg">Nothing else here.</p>';
+  sheet.classList.add('active');
+}
+function closeMore() {
+  const s = document.getElementById('moreSheet');
+  if (s) s.classList.remove('active');
+}
+function tabButtonId(name) {
+  return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
+    dashboard: 'tabDashboard', matdash: 'tabMatdash', contacts: 'tabContacts' }[name] || '';
+}
 
 // ---- Header overflow menu (Backup / Restore / Print) ----
 function toggleHeaderMenu() {
@@ -252,11 +287,28 @@ document.addEventListener('keydown', e => {
 // ═══════════════════════════════════════════════════════════
 // TABS + CONTEXT BAR
 // ═══════════════════════════════════════════════════════════
+// The bar on a phone holds only what gets used in the field. The rest is one
+// tap away behind More, which is what stops every new screen making the bar
+// more crowded than the last.
+const TABS = ['job', 'snow', 'clock', 'tracking', 'dashboard', 'matdash', 'contacts'];
+const PHONE_TABS = ['job', 'snow', 'clock', 'dashboard'];
+const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
+  tracking: '🔨 Tracking', dashboard: '📊 All Jobs', matdash: '📦 Materials',
+  contacts: '📇 Contacts' };
+const TAB_HINT = { tracking: 'Hours and materials on the job you have open',
+  matdash: 'What you have bought across every job',
+  contacts: 'People to ring later' };
+
 function switchTab(name) {
+  closeMore();
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    const tabs = ['job','snow','clock','tracking','dashboard','matdash','contacts'];
-    b.classList.toggle('active', tabs[i] === name);
+    b.classList.toggle('active', TABS[i] === name);
   });
+  // On a phone, a screen reached through More has no button of its own, so
+  // More itself carries the highlight -- otherwise nothing on the bar would
+  // look selected and the app would seem to have lost its place.
+  const more = document.getElementById('tabMore');
+  if (more) more.classList.toggle('active', PHONE_TABS.indexOf(name) === -1);
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   if (name === 'dashboard') renderDashboard();

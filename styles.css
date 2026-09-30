@@ -316,8 +316,24 @@
     .g4, .g5, .g3, .g-addr, .g-mat-add, .g-cost-add { grid-template-columns:1fr 1fr; }
     .summary-grid, .fin-grid { grid-template-columns:1fr 1fr; }
     .tab-btn { font-size:10px; letter-spacing:.8px; padding:12px 4px; }
-    .header-actions { width:100%; }
-    .logo { font-size:27px; }
+    /* The header and the job bar were taking more than half a phone screen
+       before a single field appeared. Everything below shrinks them to a
+       strip: the wordmark sits on one line beside the buttons, the tagline
+       goes, and the job bar becomes a single row. */
+    .header { padding:12px 0 10px; border-bottom-width:2px; gap:8px;
+              flex-wrap:nowrap; align-items:center; }
+    .logo { font-size:19px; white-space:nowrap; }
+    .logo-sub { display:none; }
+    .header-actions { width:auto; margin-left:auto; flex-wrap:nowrap; gap:5px; }
+    .header-actions .btn { padding:9px 9px; font-size:10px; letter-spacing:.4px;
+                           white-space:nowrap; }
+
+    .ctx-bar { margin-top:10px; padding:7px 12px; gap:7px; flex-wrap:nowrap; }
+    .ctx-label { display:none; }
+    .ctx-name { font-size:14px; white-space:nowrap; overflow:hidden;
+                text-overflow:ellipsis; min-width:0; }
+    .ctx-dot { font-size:10px; flex-shrink:0; }
+    .pill { font-size:9px; padding:2px 7px; flex-shrink:0; }
   }
   /* Snow / Labor / Receipts -- the three things that are not a job. Sized to
      be hit first, because most clock-ins are one of these or an active job. */
@@ -340,7 +356,7 @@
               font-variant-numeric:tabular-nums; }
   .went-row span:nth-child(2) { margin-left:auto; color:var(--muted); }
   .went-cost { font-weight:700; min-width:76px; text-align:right; }
-  .went-row.overhead span:first-child::after { content:' 4 not billable';
+  .went-row.overhead span:first-child::after { content:' (not billable)';
               font-size:10px; color:var(--muted); font-weight:400; text-transform:none; }
   .went-note { font-size:11.5px; color:var(--muted); margin-top:8px; }
 
@@ -350,6 +366,8 @@
   .linkish:hover { text-decoration:underline; }
   .wk-mine { margin-top:14px; }
 
+  .wk-edit { border:1.5px dashed var(--border-strong); border-radius:10px;
+             padding:15px; background:var(--surface-2); }
   .wk-top { display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
   .wk-name { font-family:'Playfair Display',serif; font-size:21px; font-weight:700; }
   .wk-mail { font-size:12px; color:var(--muted); margin-top:2px; }
@@ -379,6 +397,28 @@
   .shift-flag.approved { background:var(--pos-soft); color:#2f6b3f; border-color:#bcdcc6; }
   .shift-flag.rejected { background:var(--neg-soft); color:var(--neg); border-color:transparent; }
   tr.shift-rejected { opacity:.6; }
+
+  /* ---- The More sheet --------------------------------------------------- */
+  /* Slides up from the bar it belongs to, rather than appearing in the middle
+     of the screen, so it reads as an extension of the tabs. */
+  .tab-more { display:none; }
+  .sheet-overlay { position:fixed; inset:0; background:rgba(40,26,56,.5); z-index:1100;
+                   display:none; align-items:flex-end; justify-content:center; }
+  .sheet-overlay.active { display:flex; }
+  .sheet { background:var(--bg); width:100%; max-width:560px; border-radius:16px 16px 0 0;
+           padding:10px 18px calc(18px + env(safe-area-inset-bottom)); }
+  .sheet-grip { width:40px; height:4px; border-radius:4px; background:var(--border-strong);
+                margin:0 auto 14px; }
+  .sheet-title { font-family:'Playfair Display',serif; font-size:17px; font-weight:700;
+                 margin-bottom:12px; }
+  .sheet-items { display:flex; flex-direction:column; gap:8px; }
+  .sheet-item { display:block; width:100%; text-align:left; background:var(--surface);
+                border:1.5px solid var(--border); border-radius:10px; padding:14px 16px;
+                cursor:pointer; min-height:56px; }
+  .sheet-item:hover { border-color:var(--brand); }
+  .sheet-item-name { display:block; font-size:15px; font-weight:700; }
+  .sheet-item-hint { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
+  .sheet-close { width:100%; margin-top:14px; padding:13px; }
 
   @media (max-width:520px) {
     .g4, .g5, .g3, .g2, .g-addr, .g-labor-add, .g-mat-add, .g-cost-add { grid-template-columns:1fr; }
@@ -416,6 +456,19 @@
                box-shadow:0 -3px 16px rgba(43,36,51,.24);
                padding-bottom:env(safe-area-inset-bottom, 0px); }
     .tab-btn { min-height:58px; padding:9px 4px 8px; border-bottom:none; border-top:4px solid transparent; }
+    /* Nothing tappable is under 44px on a phone. These get used outdoors, in
+       the cold, with a glove on, and a 30px button is a button you miss. The
+       header keeps its own smaller sizing -- those are deliberate and sit far
+       from anything destructive. */
+    .btn { min-height:44px; }
+    .btn-sm { min-height:40px; padding:9px 13px; }
+    .remove-btn { min-width:40px; min-height:40px; font-size:20px; }
+    .chk { min-height:40px; display:inline-flex; align-items:center; gap:9px; }
+    .chk input[type="checkbox"] { width:20px; height:20px; }
+    .filter-bar select, .filter-bar input { min-height:44px; }
+    .field input, .field select, .field textarea { min-height:44px; }
+    /* the header bar is exempt: its buttons are sized to fit on one line */
+    .header-actions .btn { min-height:38px; }
     .tab-btn.active { border-top-color:var(--accent); border-bottom-color:transparent; }
     .ctx-bar { border-radius:0; margin-left:-14px; margin-right:-14px; }
   }
@@ -465,8 +518,12 @@
 
   /* five tabs need to fit a 375px phone */
   @media (max-width:720px) {
-    .tab-bar { flex-wrap:wrap; }
-    .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; flex:1 0 25%; }
+    .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; }
+    /* Tracking, Materials and Contacts move into the More sheet. They stay
+       in the DOM -- switchTab identifies tabs by position -- they are just
+       not on the bar. */
+    #tabTracking, #tabMatdash, #tabContacts { display:none; }
+    .tab-more { display:block; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
   }
 
@@ -579,6 +636,8 @@
   html[data-night] .linkish { color:var(--brand-2); }
   html[data-night] .wk-card { background:var(--surface); border-color:var(--border); }
   html[data-night] .shift-flag.approved { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
+  html[data-night] .sheet { background:var(--bg); }
+  html[data-night] .sheet-item { background:var(--surface); border-color:var(--border); }
   html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
   html[data-night] .section-head { background:var(--brand-dark); }
   html[data-night] input, html[data-night] textarea, html[data-night] select {
