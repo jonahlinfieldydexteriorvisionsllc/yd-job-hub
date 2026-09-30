@@ -204,8 +204,20 @@
   // The Census one is more precise for US addresses but refuses browser calls;
   // checked against it on four real addresses, this agreed to within 8 metres
   // on three and 46 on the fourth -- far inside what routing and weather need.
-  async function geocodeAddress(street, townHint) {
-    const towns = townHint ? [townHint] : ['Madison', 'Middleton', 'Verona', 'Fitchburg', 'Waunakee', 'Monroe'];
+  async function geocodeAddress(input, townHint) {
+    // People type addresses whole -- "7009 Harvest Hill Rd, Madison, WI 53717".
+    // The geocoder wants the street on its own, with the town as a separate
+    // field, and quietly returns nothing when the town appears in both. So
+    // split it here rather than asking anyone to type it in pieces.
+    const parts = String(input).split(',').map(s => s.trim()).filter(Boolean);
+    const street = parts[0];
+    let hint = townHint;
+    if (!hint && parts.length > 1 && !/^(WI|Wisconsin)/i.test(parts[1]) && !/^\d{5}/.test(parts[1])) {
+      hint = parts[1];
+    }
+    const KNOWN = ['Madison', 'Middleton', 'Verona', 'Fitchburg', 'Waunakee', 'Monroe'];
+    // Try any town they gave first, then the towns YD actually works.
+    const towns = hint ? [hint].concat(KNOWN.filter(t => t.toLowerCase() !== hint.toLowerCase())) : KNOWN;
     for (const town of towns) {
       const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
         street: street, city: town, state: 'WI', country: 'USA', format: 'json', limit: '1',
@@ -229,6 +241,9 @@
   };
 
   let editingId = null;
+
+  // Shared, so the yard address in Settings is looked up the same way.
+  window.YDSnowGeocode = geocodeAddress;
 
   window.openSnowForm = function (id) {
     editingId = id || null;

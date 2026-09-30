@@ -22,10 +22,22 @@
   let unsubStorms = null;
   let unsubStops = null;
 
-  // Where the truck sets out from. Used to order the route. Until it is set in
-  // Settings this is the middle of Madison, which gets the order roughly right
-  // and never blocks a storm from starting.
-  const DEFAULT_START = { lat: 43.0731, lng: -89.4012, label: 'Madison (set your yard in Settings)' };
+  // Where the truck sets out from -- the first leg of every route is measured
+  // from here, so it changes the whole order. Read from settings; the middle
+  // of Madison is the fallback so a storm can always be started.
+  const FALLBACK_START = { lat: 43.0731, lng: -89.4012, label: 'Madison (yard not set)' };
+  let startPoint = FALLBACK_START;
+
+  async function loadStartPoint() {
+    try {
+      const s = await window.YDDb.get('settings', 'snow');
+      if (s && s.startLat != null) {
+        startPoint = { lat: s.startLat, lng: s.startLng, label: s.startAddress || 'yard' };
+      }
+    } catch (e) { /* keep the fallback */ }
+    const el = document.getElementById('snowStartPoint');
+    if (el) el.textContent = 'Route starts from ' + startPoint.label;
+  }
 
   // ---------------------------------------------------------------- geometry
 
@@ -332,7 +344,7 @@
     const crewSize = parseInt(crewRaw, 10) || 1;
     const crewNames = (prompt('Who is working? (optional)') || '').trim();
 
-    const start = DEFAULT_START;
+    const start = startPoint;
     const route = buildRoute(accounts, inches, start);
     if (!route.length) {
       showToast('No accounts trigger at ' + inches + '" — nothing to do tonight');
@@ -448,6 +460,7 @@
 
   function start() {
     if (unsubStorms || !window.YDDb) return;
+    loadStartPoint();
     unsubStorms = window.YDDb.watch('storms', changes => {
       let openOne = storm;
       changes.forEach(c => {
@@ -464,7 +477,24 @@
     });
   }
 
-  window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render };
+  window.setStartPoint = async function () {
+    const addr = prompt('Where does the route start from?\n\n(your yard or wherever the truck leaves)',
+                        startPoint.label === 'Madison (yard not set)' ? '' : startPoint.label);
+    if (addr === null || !addr.trim()) return;
+    showToast('Finding that address…');
+    const geo = await window.YDSnowGeocode(addr.trim());
+    if (!geo) { showToast('Could not find that address'); return; }
+    await window.YDDb.put('settings', 'snow', {
+      startAddress: addr.trim(), startLat: geo.lat, startLng: geo.lng, startTown: geo.town,
+    });
+    startPoint = { lat: geo.lat, lng: geo.lng, label: addr.trim() };
+    const el = document.getElementById('snowStartPoint');
+    if (el) el.textContent = 'Route starts from ' + startPoint.label;
+    showToast('Route will start from ' + geo.town);
+  };
+
+  window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render,
+                     startPoint: () => startPoint };
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
