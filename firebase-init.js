@@ -13,7 +13,7 @@
 import { initializeApp }
   from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
-  getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect,
+  getAuth, GoogleAuthProvider, signInWithPopup,
   getRedirectResult, onAuthStateChanged, signOut, setPersistence,
   browserLocalPersistence,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
@@ -105,17 +105,67 @@ async function start() {
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
 
+  // A browser embedded inside another app -- the one that opens when a link is
+  // tapped in Messages, Gmail, Facebook or Instagram.
+  //
+  // These are where sign-in goes wrong. They block the popup, and the redirect
+  // that used to be tried instead cannot work either: the app is served from
+  // github.io while Google hands the sign-in back through firebaseapp.com, and
+  // an embedded browser walls off storage between the two. Firebase then shows
+  // its own page reading "missing initial state", which is where this check
+  // came from. Nothing in the code can fix that from inside such a browser, so
+  // the only honest thing is to say so and give them the address to open.
+  function inAppBrowser() {
+    const ua = navigator.userAgent || '';
+    if (/FBAN|FBAV|FB_IAB|Instagram|Line\/|MicroMessenger|Twitter|LinkedInApp|Snapchat|Pinterest|GSA\//i.test(ua)) return true;
+    const iOS = /iPhone|iPad|iPod/.test(ua);
+    // On iOS every browser is Safari underneath, so the giveaway for an
+    // embedded one is the absence of Safari's own marker -- except in an
+    // installed home-screen app, where it is legitimately absent.
+    if (iOS && !standalone && !/Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS/.test(ua)) return true;
+    return false;
+  }
+
+  // Kept reachable so a sign-in problem on somebody else's phone can be
+  // diagnosed by asking them to read one line back, rather than guessing.
+  window.YDSignInDiag = () => ({
+    inAppBrowser: inAppBrowser(),
+    standalone: standalone,
+    ua: navigator.userAgent,
+    origin: location.origin,
+    authDomain: (window.YD_CONFIG && window.YD_CONFIG.firebase && window.YD_CONFIG.firebase.authDomain) || '',
+  });
+
+  function openInBrowserMessage() {
+    showSignIn('Open this page in Safari or Chrome to sign in — signing in does ' +
+      'not work inside another app’s browser.\n\n' + location.href);
+  }
+
   async function doSignIn() {
+    if (inAppBrowser()) { openInBrowserMessage(); return; }
+
     gate.show('loading', { title: 'YD Job Hub', msg: 'Opening Google…', spinner: true });
     try {
       await signInWithPopup(auth, provider);
     } catch (e) {
-      // A popup that is blocked or unsupported is worth one retry as a redirect.
-      if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment',
-           'auth/cancelled-popup-request'].includes(e.code)) {
-        try { await signInWithRedirect(auth, provider); return; } catch (e2) { e = e2; }
-      }
       if (e.code === 'auth/popup-closed-by-user') { showSignIn(); return; }
+
+      // Deliberately NOT falling back to signInWithRedirect. The redirect comes
+      // back through firebaseapp.com, which cannot reach the state it stored on
+      // this origin, and the person lands on a Firebase error page saying
+      // "missing initial state" with no way forward. A blocked popup is nearly
+      // always an embedded browser, and the way out of that is to open the page
+      // properly -- so say that instead of bouncing them somewhere broken.
+      if (['auth/popup-blocked', 'auth/cancelled-popup-request',
+           'auth/operation-not-supported-in-this-environment'].includes(e.code)) {
+        openInBrowserMessage();
+        return;
+      }
+      if (e.code === 'auth/unauthorized-domain') {
+        showSignIn('This address is not allowed to sign in yet. It needs adding ' +
+          'to the Firebase authorised domains.');
+        return;
+      }
       showSignIn('Sign-in failed: ' + (e.code || e.message));
     }
   }
@@ -184,7 +234,10 @@ async function start() {
   onAuthStateChanged(auth, async user => {
     if (!user) {
       localStorage.removeItem(ROLE_CACHE);
-      showSignIn();
+      // Say it before they tap, not after. Inside another app's browser the
+      // sign-in cannot succeed, and offering the button first only produces a
+      // failure they have to interpret.
+      if (inAppBrowser()) openInBrowserMessage(); else showSignIn();
       window.YDAuth = { ready: true, mode: 'cloud', user: null, role: null, signIn: doSignIn };
       document.dispatchEvent(new CustomEvent('yd-auth', { detail: window.YDAuth }));
       return;

@@ -169,13 +169,28 @@
     const s = storms[id], b = await billingFor(id);
     if (!b) { showToast('No billing recorded for that storm'); return; }
 
-    const date = usDate(s.closedAt || s.startedAt);
-    const due = plusDays(s.closedAt || s.startedAt, DUE_DAYS);
-    // Build the stamp from the same date shown on the invoice, so an invoice
-    // number never disagrees with the date printed beside it.
-    const d0 = new Date(s.closedAt || s.startedAt);
-    const stamp = '' + d0.getFullYear() + String(d0.getMonth() + 1).padStart(2, '0') +
-                  String(d0.getDate()).padStart(2, '0');
+    // The invoice is dated when the storm STARTED, not when it was closed.
+    //
+    // Those differ more often than they sound like they should. A storm begun
+    // at 11pm and finished at 4am closes on the following date, so the invoice
+    // disagreed with what the app itself calls that storm and with what the
+    // customer remembers. Worse, a storm closed out days later -- because
+    // closing it was forgotten -- was invoiced with the date it was finally
+    // tidied up rather than the night the work happened.
+    //
+    // The start is when the service happened, and that is what a customer is
+    // being billed for.
+    const service = s.startedAt || s.closedAt;
+    const date = usDate(service);
+    const due = plusDays(service, DUE_DAYS);
+
+    const d0 = new Date(service);
+    const two = n => String(n).padStart(2, '0');
+    const stamp = '' + d0.getFullYear() + two(d0.getMonth() + 1) + two(d0.getDate());
+    // Two storms in one day is an ordinary Wisconsin week, and without the
+    // time in it both would export the same invoice number for the same
+    // customer -- which QuickBooks would treat as one invoice.
+    const ref = stamp + '-' + two(d0.getHours()) + two(d0.getMinutes());
 
     // Quote for CSV, and flatten line breaks. A site note typed across two
     // lines would otherwise split the row in half and corrupt every invoice
@@ -193,7 +208,7 @@
 
     Object.keys(byAccount).sort((x, y) => accountName(x).localeCompare(accountName(y))).forEach(aid => {
       const name = accountName(aid);
-      const invoiceNo = 'SNOW-' + stamp + '-' + aid.toUpperCase().slice(0, 12);
+      const invoiceNo = 'SNOW-' + ref + '-' + aid.toUpperCase().slice(0, 12);
       byAccount[aid].sort((a, c) => a.pass - c.pass).forEach(l => {
         const visit = 'Snow removal ' + s.label + (l.pass > 1 ? ' (pass ' + l.pass + ')' : '') +
                       ' — ' + l.inches + '" cleared';

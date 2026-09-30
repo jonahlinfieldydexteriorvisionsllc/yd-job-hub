@@ -407,7 +407,11 @@
     // minute produced the same id and the second silently overwrote the
     // first -- which is exactly how a night's billing would disappear
     // without anything appearing to go wrong.
-    const id = now.toISOString().slice(0, 10) + '-' +
+    // Every part of this is LOCAL time. toISOString() is UTC, and Madison is
+    // six hours behind it in winter -- so a storm started at 6pm on the 14th
+    // came out as '2026-01-15-180000': tomorrow's date beside this evening's
+    // time. Snow work is mostly done in the evening, so that was most storms.
+    const id = now.getFullYear() + '-' + two(now.getMonth() + 1) + '-' + two(now.getDate()) + '-' +
                two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
     const rec = {
       id: id,

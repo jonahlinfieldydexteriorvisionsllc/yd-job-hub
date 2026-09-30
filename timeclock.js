@@ -35,6 +35,7 @@
   let board = {};        // jobId -> { name, address, status }
   let people = {};       // uid -> user record (owner only)
   let unsub = [];
+  let watchKey = null;   // uid + role the current watches were built for
   let ticker = null;     // redraws the running clock every second
   let picking = false;   // job picker open
   let pausingId = null;  // shift whose reason buttons are showing
@@ -76,6 +77,12 @@
 
   function billableMs(e) { return Math.max(0, paidMs(e) - pausedMs(e)); }
 
+  // What a customer could actually be charged for. Labor and receipts are the
+  // business's own time, so however long they ran, none of it is billable --
+  // counting it would inflate every "billable hours" figure with work nobody
+  // is ever invoiced for.
+  function chargeableMs(e) { return canPause(e) ? billableMs(e) : 0; }
+
   const hours = milli => Math.round(milli / 36000) / 100;   // 2dp, for display
 
   // Wages are worked out from the milliseconds, never from the rounded hours.
@@ -96,6 +103,14 @@
   }
 
   const running = e => !e.endedAt;
+
+  // Snow (with a storm running) and jobs are work a customer pays for. Labor,
+  // receipts and snow with no storm are the business's own time: every minute
+  // is paid and none of it is billable to anybody, so there is nothing for a
+  // pause to withhold and the button is not offered.
+  const BILLABLE_KINDS = ['job', 'storm'];
+  const canPause = e => BILLABLE_KINDS.indexOf(e.kind) !== -1;
+  const OVERHEAD_LABEL = { snow: 'Snow', labor: 'Labor', receipts: 'Receipts' };
   const openPause = e => (e.pauses || []).find(p => !p.endedAt) || null;
   const rateOf = uid => ((people[uid] || {}).rateCents) || DEFAULT_RATE_CENTS;
 
@@ -219,6 +234,7 @@
 
   function render() {
     renderClockCard();
+    if (workerUid && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
     if (isOwner()) { renderOnNow(); renderApprovals(); renderCrew(); renderTotals(); }
     manageTicker();
   }
@@ -242,11 +258,23 @@
     if (badge) badge.textContent = shift ? (openPause(shift) ? 'Paused' : 'On the clock') : '';
 
     if (picking) {
-      // The running clock redraws every second. If the picker is already up,
-      // only its list may be touched -- redrawing the whole thing would
-      // replace the search box mid-word, once a second.
-      if (el('clockSearch')) filterJobPicker();
-      else wrap.innerHTML = pickerHtml();
+      // The running clock redraws every second, and rebuilding the picker
+      // replaces the search box. While somebody is actually typing in it, only
+      // the list may be touched -- otherwise the field would be swapped out
+      // from under them once a second, mid-word.
+      //
+      // The rest of the time the whole picker is rebuilt, so that a storm
+      // starting while this screen is open turns the Snow button into tonight's
+      // storm instead of leaving it stale. Anything already typed is carried
+      // across.
+      const box = el('clockSearch');
+      if (box && document.activeElement === box) { filterJobPicker(); return; }
+      const typed = box ? box.value : '';
+      wrap.innerHTML = pickerHtml();
+      if (typed) {
+        const fresh = el('clockSearch');
+        if (fresh) { fresh.value = typed; filterJobPicker(); }
+      }
       return;
     }
     wrap.innerHTML = shift ? liveHtml(shift) : idleHtml();
@@ -257,6 +285,7 @@
       '<p class="clock-lead">Not on the clock.</p>' +
       '<button class="btn btn-filled clock-big" onclick="openJobPicker()">Clock in</button>' +
       recentHtml() +
+      '<button class="btn btn-sm wk-mine" onclick="openWorker()">My hours</button>' +
     '</div>';
   }
 
@@ -265,7 +294,8 @@
     const paid = paidMs(e), bill = billableMs(e);
     return '<div class="clock-live' + (p ? ' paused' : '') + '">' +
       '<div class="clock-where">' + esc(e.targetName) +
-        (e.kind === 'storm' ? ' <span class="clock-kind">storm</span>' : '') + '</div>' +
+        (e.kind === 'storm' ? ' <span class="clock-kind">storm</span>' : '') +
+        (OVERHEAD_LABEL[e.kind] ? ' <span class="clock-kind">not a job</span>' : '') + '</div>' +
       '<div class="clock-elapsed">' + fmtDur(paid) + '</div>' +
       '<div class="clock-sub">in at ' + clockTime(e.startedAt) +
         (pausedMs(e) ? ' · ' + fmtDur(pausedMs(e)) + ' paused · ' + fmtDur(bill) + ' billable' : '') +
@@ -280,11 +310,14 @@
             '<button class="btn btn-sm" onclick="cancelPause()">Never mind</button>' +
           '</div>'
         : '<div class="clock-actions">' +
-            (p
-              ? '<button class="btn btn-filled clock-big" onclick="resumeClock(\'' + e.id + '\')">Back on</button>'
-              : '<button class="btn btn-accent clock-big" onclick="askPause(\'' + e.id + '\')">Pause</button>') +
+            (canPause(e)
+              ? (p
+                  ? '<button class="btn btn-filled clock-big" onclick="resumeClock(\'' + e.id + '\')">Back on</button>'
+                  : '<button class="btn btn-accent clock-big" onclick="askPause(\'' + e.id + '\')">Pause</button>')
+              : '') +
             '<button class="btn clock-big" onclick="clockOut(\'' + e.id + '\')">Clock out</button>' +
-            '<button class="btn btn-sm" onclick="openJobPicker()">Switch to another job</button>' +
+            '<button class="btn btn-sm" onclick="openJobPicker()">Switch to something else</button>' +
+            '<button class="btn btn-sm" onclick="openWorker()">My hours</button>' +
           '</div>') +
     '</div>';
   }
@@ -309,17 +342,32 @@
 
   function pickerHtml() {
     const storm = window.YDStorm && YDStorm.current();
+    const stormOpen = storm && storm.status === 'open';
 
+    // Snow points at the open storm when there is one, so its pauses land on
+    // the right customer's invoice. With no storm running it is still snow
+    // work -- loading salt, fixing a plow -- but it belongs to no customer, so
+    // it is booked as the business's own time like the other two.
     return '<div class="picker">' +
       '<p class="clock-lead">What are you working on?</p>' +
-      (storm && storm.status === 'open'
-        ? '<button class="btn btn-accent clock-big" onclick="clockInTo(\'storm\', \'' + storm.id +
-          '\', \'Tonight\\u2019s storm\')">❄️ Tonight’s storm</button>'
-        : '') +
-      '<input id="clockSearch" class="picker-search" placeholder="Search jobs…" oninput="filterJobPicker()">' +
-      '<div id="pickerList">' + pickerList(jobList()) + '</div>' +
+      '<div class="picker-kinds">' +
+        (stormOpen
+          ? kindBtn('storm', storm.id, 'Tonight’s storm', '❄️', 'kind-snow')
+          : kindBtn('snow', 'snow', 'Snow', '❄️', 'kind-snow')) +
+        kindBtn('labor', 'labor', 'Labor', '🛠️', 'kind-labor') +
+        kindBtn('receipts', 'receipts', 'Receipts', '🧾', 'kind-receipts') +
+      '</div>' +
+      '<p class="clock-lead picker-or">… or a job</p>' +
+      '<input id="clockSearch" class="picker-search" placeholder="Search every job…" oninput="filterJobPicker()">' +
+      '<div id="pickerList">' + pickerList() + '</div>' +
       '<button class="btn btn-sm" onclick="cancelJobPicker()">Cancel</button>' +
     '</div>';
+  }
+
+  function kindBtn(kind, id, label, icon, cls) {
+    return '<button class="picker-kind ' + cls + '" onclick="clockInTo(\'' + kind + '\', \'' +
+      id + '\', \'' + label.replace(/'/g, "\\'") + '\')">' +
+      '<span class="kind-icon">' + icon + '</span>' + label + '</button>';
   }
 
   // Only the list is redrawn, never the whole picker. Rebuilding the picker
@@ -327,29 +375,36 @@
   // every single character typed.
   window.filterJobPicker = function () {
     const list = el('pickerList');
-    if (list) list.innerHTML = pickerList(jobList());
+    if (list) list.innerHTML = pickerList();
   };
 
-  function jobList() {
-    return Object.keys(board).map(id => Object.assign({ id: id }, board[id]))
-      .filter(j => j.status !== 'complete')
-      .sort((a, b) =>
-        (a.status === 'active' ? 0 : 1) - (b.status === 'active' ? 0 : 1) ||
-        String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-  }
+  const rank = j => j.status === 'active' ? 0 : j.status === 'complete' ? 2 : 1;
 
-  function pickerList(jobs) {
+  // With nothing typed this is EVERY active job, however many there are. The
+  // usual case is clocking in to work already under way, and having to search
+  // for that would be the wrong way round. Typing searches the lot, finished
+  // jobs included, because a callback on a closed job still needs somewhere to
+  // put the hours.
+  function pickerList() {
     const search = ((el('clockSearch') || {}).value || '').trim().toLowerCase();
+    const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]));
+
     const list = search
       ? jobs.filter(j => (j.name + ' ' + (j.address || '')).toLowerCase().indexOf(search) !== -1)
-      : jobs.slice(0, 12);
-    if (!list.length) return '<p class="empty-msg">No jobs match.</p>';
+            .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(b.name))
+      : jobs.filter(j => j.status === 'active')
+            .sort((a, b) => String(a.name).localeCompare(b.name));
+
+    if (!list.length) {
+      return '<p class="empty-msg">' + (search ? 'No job matches that.'
+        : 'No active jobs. Search above for a quoted or finished one.') + '</p>';
+    }
     return list.map(j =>
       '<button class="picker-job" onclick="clockInTo(\'job\', \'' + j.id + '\', \'' +
         esc(j.name).replace(/'/g, '&#39;') + '\')">' +
         '<span class="picker-name">' + esc(j.name) + '</span>' +
         (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
-        (j.status === 'active' ? '<span class="picker-flag">active</span>' : '') +
+        '<span class="picker-flag ' + esc(j.status || '') + '">' + esc(j.status || 'job') + '</span>' +
       '</button>').join('');
   }
 
@@ -367,7 +422,8 @@
       ? live.map(e => {
           const p = openPause(e);
           return '<div class="on-now' + (p ? ' paused' : '') + '">' +
-            '<span class="on-who">' + esc(e.workerName) + '</span>' +
+            '<button class="on-who linkish" onclick="openWorker(\'' + e.uid + '\')">' +
+              esc(e.workerName) + '</button>' +
             '<span class="on-where">' + esc(e.targetName) + '</span>' +
             '<span class="on-time">' + fmtDur(paidMs(e)) + (p ? ' · paused (' + esc(p.reason) + ')' : '') + '</span>' +
             '<button class="btn btn-sm" onclick="clockOut(\'' + e.id + '\')">Clock out</button>' +
@@ -519,7 +575,8 @@
         : '') +
       (active.length
         ? active.map(u => '<div class="crew-row">' +
-            '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
+            '<button class="crew-name linkish" onclick="openWorker(\'' + u.uid + '\')">' +
+              esc(u.name || u.email) + '</button>' +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
             '<button class="btn btn-sm" onclick="setWorkerRate(\'' + u.uid + '\')">' +
               money(rateOf(u.uid)) + '/hr</button>' +
@@ -576,7 +633,7 @@
     done.forEach(e => {
       const w = byWorker[e.uid] = byWorker[e.uid] ||
         { name: e.workerName, uid: e.uid, paid: 0, bill: 0, cost: 0 };
-      w.paid += paidMs(e); w.bill += billableMs(e);
+      w.paid += paidMs(e); w.bill += chargeableMs(e);
       w.cost += e.costCents != null ? e.costCents
         : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
     });
@@ -599,10 +656,170 @@
         '</tbody><tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Total</td>' +
         '<td style="font-weight:700">' + money(totalCost) + '</td></tr></tfoot></table></div>'
       : '<p class="empty-msg">No approved hours in this range.</p>') +
+      whereItWentHtml(done) +
       (pending.length
         ? '<p class="hint">' + pending.length + ' shift' + (pending.length === 1 ? '' : 's') +
           ' still waiting for approval. Those are not counted above, or on any job.</p>'
         : '');
+  }
+
+  // Hours on a job show up on that job. Labor, receipts and snow-with-no-storm
+  // show up nowhere else at all, so without this the money spent on them would
+  // be invisible -- which is the part of a wage bill worth watching, because
+  // none of it is charged to anyone.
+  function whereItWentHtml(done) {
+    if (!done.length) return '';
+    const bucket = {};
+    done.forEach(e => {
+      const key = e.kind === 'job' ? 'Jobs'
+        : e.kind === 'storm' ? 'Snow (storms)'
+        : (OVERHEAD_LABEL[e.kind] || 'Other');
+      const b = bucket[key] = bucket[key] || { ms: 0, cents: 0, billable: false };
+      b.ms += paidMs(e);
+      b.cents += e.costCents != null ? e.costCents
+        : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
+      if (BILLABLE_KINDS.indexOf(e.kind) !== -1) b.billable = true;
+    });
+
+    const rows = Object.keys(bucket).sort((a, b) => bucket[b].cents - bucket[a].cents);
+    const overhead = rows.filter(k => !bucket[k].billable)
+      .reduce((s, k) => s + bucket[k].cents, 0);
+
+    return '<div class="went"><div class="went-head">Where the hours went</div>' +
+      rows.map(k => '<div class="went-row' + (bucket[k].billable ? '' : ' overhead') + '">' +
+        '<span>' + esc(k) + '</span>' +
+        '<span>' + fmtDur(bucket[k].ms) + '</span>' +
+        '<span class="went-cost">' + money(bucket[k].cents) + '</span>' +
+      '</div>').join('') +
+      (overhead
+        ? '<div class="went-note">' + money(overhead) +
+          ' of this is not charged to any customer.</div>'
+        : '') +
+    '</div>';
+  }
+
+  // --------------------------------------------------------- a worker's page
+  //
+  // Everything about one person in one place: what they are on right now, what
+  // they have worked this week and this season, where those hours went, what
+  // they are owed, and every shift behind the numbers. The totals table answers
+  // "what do I owe everyone"; this answers "what has Marco actually been doing",
+  // which is the question asked when somebody queries their pay.
+  //
+  // A crew member opening it sees their own page and nobody else's -- the rules
+  // only ever gave them their own shifts to read.
+
+  let workerUid = null;
+  let workerRange = 'week';
+
+  window.openWorker = function (uid) {
+    workerUid = uid || ((me() || {}).uid);
+    workerRange = 'week';
+    const m = el('workerModal');
+    if (m) m.classList.add('active');
+    renderWorker();
+  };
+  window.closeWorker = function () {
+    const m = el('workerModal');
+    if (m) m.classList.remove('active');
+    workerUid = null;
+  };
+  window.setWorkerRange = function (r) { workerRange = r; renderWorker(); };
+
+  function renderWorker() {
+    const body = el('workerBody');
+    if (!body || !workerUid) return;
+    const u = people[workerUid] || {};
+    const isMe = workerUid === ((me() || {}).uid);
+    const name = u.name || u.email || (isMe ? 'My hours' : 'Worker');
+
+    const title = el('workerTitle');
+    if (title) title.textContent = name;
+
+    const all = Object.values(entries).filter(e => e.uid === workerUid);
+    const from = rangeStart(workerRange);
+    const to = workerRange === 'lastweek' ? from + 7 * 864e5 : Infinity;
+    const inRange = all.filter(e => ms(e.startedAt) >= from && ms(e.startedAt) < to);
+
+    const approved = inRange.filter(e => e.status === 'approved');
+    const waiting = inRange.filter(e => e.status === 'pending' && e.endedAt);
+    const live = all.find(running);
+
+    const paid = approved.reduce((s, e) => s + paidMs(e), 0);
+    const bill = approved.reduce((s, e) => s + chargeableMs(e), 0);
+    const owed = approved.reduce((s, e) => s + (e.costCents != null ? e.costCents
+      : costOf(paidMs(e), e.rateCents || rateOf(e.uid))), 0);
+
+    body.innerHTML =
+      '<div class="wk-top">' +
+        '<div><div class="wk-name">' + esc(name) + '</div>' +
+        (u.email ? '<div class="wk-mail">' + esc(u.email) + '</div>' : '') + '</div>' +
+        (isOwner()
+          ? '<button class="btn btn-sm" onclick="setWorkerRate(\'' + workerUid + '\')">' +
+            money(rateOf(workerUid)) + '/hr</button>'
+          : '<span class="wk-rate">' + money(rateOf(workerUid)) + '/hr</span>') +
+      '</div>' +
+
+      (live
+        ? '<div class="wk-live">On the clock now — <strong>' + esc(live.targetName) +
+          '</strong>, ' + fmtDur(paidMs(live)) +
+          (openPause(live) ? ' · paused for ' + esc(openPause(live).reason) : '') + '</div>'
+        : '') +
+
+      '<div class="filter-bar wk-range">' +
+        ['week', 'lastweek', 'month', 'all'].map(r =>
+          '<button class="btn btn-sm' + (workerRange === r ? ' btn-filled' : '') +
+          '" onclick="setWorkerRange(\'' + r + '\')">' +
+          ({ week: 'This week', lastweek: 'Last week', month: 'This month', all: 'All time' })[r] +
+          '</button>').join('') +
+      '</div>' +
+
+      '<div class="wk-cards">' +
+        wkCard('Paid', fmtDur(paid), 'what they worked') +
+        wkCard('Billable', fmtDur(bill), 'chargeable to customers') +
+        wkCard('Wages', money(owed), 'approved only', 'accent-top') +
+      '</div>' +
+
+      whereItWentHtml(approved) +
+
+      (waiting.length
+        ? '<div class="wk-waiting">' + waiting.length + ' shift' + (waiting.length === 1 ? '' : 's') +
+          ' waiting for approval — ' + fmtDur(waiting.reduce((s, e) => s + paidMs(e), 0)) +
+          ', not counted above.</div>'
+        : '') +
+
+      '<div class="wk-head">Every shift</div>' +
+      (inRange.length
+        ? '<div class="table-wrap"><table><thead><tr><th>When</th><th>What</th>' +
+          '<th>Paid</th><th>Billable</th><th></th></tr></thead><tbody>' +
+          inRange.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
+            .map(e => shiftRow(e)).join('') +
+          '</tbody></table></div>'
+        : '<p class="empty-msg">Nothing in this range.</p>');
+  }
+
+  function wkCard(label, value, sub, cls) {
+    return '<div class="wk-card ' + (cls || '') + '">' +
+      '<div class="wk-card-label">' + label + '</div>' +
+      '<div class="wk-card-value">' + value + '</div>' +
+      '<div class="wk-card-sub">' + sub + '</div></div>';
+  }
+
+  function shiftRow(e) {
+    const pause = pausedMs(e);
+    const when = new Date(e.startedAt);
+    return '<tr class="shift-' + e.status + '">' +
+      '<td>' + when.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
+        '<span class="shift-time">' + clockTime(e.startedAt) +
+        (e.endedAt ? '–' + clockTime(e.endedAt) : ' — still on') + '</span></td>' +
+      '<td class="bold">' + esc(e.targetName) +
+        (pause ? '<span class="shift-pause">' + fmtDur(pause) + ' paused</span>' : '') + '</td>' +
+      '<td>' + fmtDur(paidMs(e)) + '</td>' +
+      '<td>' + (canPause(e) ? fmtDur(billableMs(e)) : '—') + '</td>' +
+      '<td><span class="shift-flag ' + e.status + '">' +
+        (e.status === 'approved' ? 'approved' : e.status === 'rejected' ? 'rejected'
+          : running(e) ? 'running' : 'waiting') + '</span></td>' +
+    '</tr>';
   }
 
   window.setWorkerRate = function (uid) {
@@ -673,9 +890,22 @@
   // ---------------------------------------------------------------- loading
 
   function start(owner) {
-    if (unsub.length || !window.YDDb) return;
+    if (!window.YDDb) return;
 
     const u = me();
+    if (!u) return;
+
+    // Rebuild whenever the account or the role changes, rather than only on a
+    // first run. A crew member reads their shifts through a filtered query and
+    // an owner reads the whole collection; keeping the first set of watches
+    // after a promotion would leave an owner looking at one person's hours and
+    // wondering where everyone else went.
+    const key = u.uid + ':' + (owner ? 'owner' : 'crew');
+    if (watchKey === key) return;
+    unsub.forEach(fn => { try { fn(); } catch (e) {} });
+    unsub = [];
+    entries = {}; board = {}; people = {};
+    watchKey = key;
 
     const onEntries = changes => {
       changes.forEach(c => {
@@ -727,7 +957,16 @@
     });
     const tab = el('tabClock');
     if (tab) tab.hidden = !(a.mode === 'cloud' && a.user);
-    if (a.mode === 'cloud' && a.user) start(owner);
+    if (a.mode === 'cloud' && a.user) {
+      start(owner);
+    } else if (watchKey) {
+      // Signed out. Drop the watches and the data with them, so nothing of one
+      // person's is still on screen when the next one signs in.
+      unsub.forEach(fn => { try { fn(); } catch (e) {} });
+      unsub = []; watchKey = null;
+      entries = {}; board = {}; people = {};
+      render();
+    }
   });
 
   function boot() { render(); }
