@@ -180,7 +180,12 @@
     const el = document.getElementById('st-' + kind + '-' + stopId);
     if (!el) return fallback;
     const n = parseFloat(el.value);
-    return isNaN(n) ? fallback : n;
+    if (isNaN(n)) return fallback;
+    // The field accepts typing, which means it accepts nonsense. Negative snow
+    // does not exist, and a mistyped 1e9 would bill a fortune -- clamp rather
+    // than trust, since these numbers go straight onto an invoice.
+    const cap = kind === 'inches' ? 60 : 200;
+    return Math.max(0, Math.min(cap, n));
   }
 
   function renderStop(s) {

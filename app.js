@@ -45,6 +45,11 @@ let baseJobPrice = 0;
 let dirty = false;
 let collapsedMonths = {};
 let dashSort = { col: 'name', asc: true };
+// The date field shows M/D with no year, so saving re-stamps it with the
+// CURRENT year. Opening a December 2025 job in 2026 and saving it silently
+// moved the job a year forward. Keeping the stored date lets an untouched
+// field stay exactly as it was.
+let loadedQuoteDate = '';
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
@@ -664,7 +669,12 @@ const FIELDS = ['customerName','address','city','state','zip','phone','email','j
 function getJobData() {
   const d = {};
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) d[f] = el.value; });
-  d.quoteDate = readMD('quoteDate');
+  // If the field still reads exactly as the stored date did, nothing was
+  // edited -- so keep the stored value, year and all.
+  const shownDate = (document.getElementById('quoteDate').value || '').trim();
+  d.quoteDate = (loadedQuoteDate && shownDate === fmtDateMD(loadedQuoteDate))
+    ? loadedQuoteDate
+    : readMD('quoteDate');
   d.qbInvoiced = document.getElementById('qbInvoiced').checked;
   d.taxable = document.getElementById('taxable').checked;
   d.serviceTypes = serviceTypes.slice();
@@ -676,6 +686,7 @@ function getJobData() {
 }
 function loadJobData(d) {
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = d[f] || ''; });
+  loadedQuoteDate = d.quoteDate || '';
   document.getElementById('quoteDate').value = d.quoteDate ? fmtDateMD(d.quoteDate) : todayMD();
   document.getElementById('qbInvoiced').checked = !!d.qbInvoiced;
   document.getElementById('taxable').checked = !!d.taxable;
@@ -864,6 +875,7 @@ function newJob() {
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = ''; });
   document.getElementById('qbInvoiced').checked = false;
   document.getElementById('taxable').checked = false;
+  loadedQuoteDate = '';
   document.getElementById('quoteDate').value = todayMD();
   syncStatusSelect(); updateJobHeadBadge();
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();

@@ -177,7 +177,13 @@
     const stamp = '' + d0.getFullYear() + String(d0.getMonth() + 1).padStart(2, '0') +
                   String(d0.getDate()).padStart(2, '0');
 
-    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    // Quote for CSV, and flatten line breaks. A site note typed across two
+    // lines would otherwise split the row in half and corrupt every invoice
+    // after it in the file.
+    const q = v => '"' + String(v == null ? '' : v)
+      .replace(/[
+]+/g, ' ')
+      .replace(/"/g, '""') + '"';
     const rows = [[
       'InvoiceNo', 'Customer', 'InvoiceDate', 'DueDate', 'Item',
       'ItemDescription', 'ItemQuantity', 'ItemRate', 'ItemAmount',

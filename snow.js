@@ -123,6 +123,7 @@
           (a.type === 'commercial' ? '<span class="snow-tag commercial">commercial</span>' : '') +
           (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
           (a.minTriggerInches > 1 ? '<span class="snow-tag trigger">' + a.minTriggerInches + '"+ only</span>' : '') +
+          (a.lat == null ? '<span class="snow-tag nolocation">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
         '</div>' +
         '<a class="snow-addr" href="' + mapsLink(a) + '" target="_blank" rel="noopener">' +
@@ -218,17 +219,48 @@
     const KNOWN = ['Madison', 'Middleton', 'Verona', 'Fitchburg', 'Waunakee', 'Monroe'];
     // Try any town they gave first, then the towns YD actually works.
     const towns = hint ? [hint].concat(KNOWN.filter(t => t.toLowerCase() !== hint.toLowerCase())) : KNOWN;
+
+    // Street types get abbreviated on a spreadsheet and the geocoder does not
+    // always understand them. "5914 High Tower Tr" finds nothing; "…Trail"
+    // finds it immediately. Jonah's own sheet writes Angel B as "cimarron tr",
+    // so without this an address typed the way he writes it saves with no
+    // location and then quietly never appears on a route.
+    //
+    // Only a TRAILING abbreviation is expanded: "4918 St Annes Dr" must keep
+    // its "St" as Saint rather than becoming "Street Annes Drive".
+    const STREET_TYPES = {
+      tr: 'Trail', trl: 'Trail', cir: 'Circle', crcl: 'Circle', rd: 'Road',
+      dr: 'Drive', st: 'Street', ave: 'Avenue', av: 'Avenue', ln: 'Lane',
+      ct: 'Court', blvd: 'Boulevard', pl: 'Place', ter: 'Terrace',
+      terr: 'Terrace', pkwy: 'Parkway', pky: 'Parkway', hwy: 'Highway',
+      sq: 'Square', cres: 'Crescent', pt: 'Point', hts: 'Heights',
+    };
+    function expandStreetType(s) {
+      const words = s.trim().split(/\s+/);
+      if (words.length < 2) return null;
+      const last = words[words.length - 1].replace(/\.$/, '').toLowerCase();
+      const full = STREET_TYPES[last];
+      if (!full || full.toLowerCase() === last) return null;
+      return words.slice(0, -1).join(' ') + ' ' + full;
+    }
+
+    // Try it as typed first, then with the street type spelled out.
+    const expanded = expandStreetType(street);
+    const spellings = expanded ? [street, expanded] : [street];
+
     for (const town of towns) {
-      const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
-        street: street, city: town, state: 'WI', country: 'USA', format: 'json', limit: '1',
-      });
-      try {
-        const j = await fetch(url).then(r => r.json());
-        if (j && j.length) {
-          return { lat: +j[0].lat, lng: +j[0].lon, town: town, matched: j[0].display_name };
-        }
-      } catch (e) { /* try the next town */ }
-      await new Promise(r => setTimeout(r, 1100));   // their policy: 1 request/sec
+      for (const spelling of spellings) {
+        const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
+          street: spelling, city: town, state: 'WI', country: 'USA', format: 'json', limit: '1',
+        });
+        try {
+          const j = await fetch(url).then(r => r.json());
+          if (j && j.length) {
+            return { lat: +j[0].lat, lng: +j[0].lon, town: town, matched: j[0].display_name };
+          }
+        } catch (e) { /* try the next spelling or town */ }
+        await new Promise(r => setTimeout(r, 1100));   // their policy: 1 request/sec
+      }
     }
     return null;
   }
@@ -304,7 +336,18 @@
     btn.disabled = true;
     btn.textContent = 'Finding the address…';
 
-    const id = editingId || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+    // Two accounts named the same thing produced the same id, and the second
+    // silently replaced the first. Jonah's own sheet has two Baxter properties
+    // at different addresses, so this is not hypothetical -- adding the second
+    // would have erased the first with no warning at all.
+    let id = editingId;
+    if (!id) {
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'account';
+      id = base;
+      let n = 2;
+      while (accounts[id]) id = base + '-' + (n++);
+      if (id !== base) console.info('[snow] "' + name + '" already exists; saving as ' + id);
+    }
     const existing = editingId ? accounts[editingId] : null;
 
     // Only look the address up when it is new or has changed -- no point
