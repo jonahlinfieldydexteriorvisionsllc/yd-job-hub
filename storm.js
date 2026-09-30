@@ -374,6 +374,14 @@
   // ---------------------------------------------------------------- lifecycle
 
   window.startStorm = async function () {
+    // A second storm started while one is open orphans the first: it stays
+    // open forever, its stops unreachable from the interface, and it is never
+    // billed. The realistic way in is tapping Start Storm, seeing nothing
+    // obvious happen, and tapping again.
+    if (storm) {
+      showToast('A storm is already running — close it before starting another');
+      return;
+    }
     const accounts = window.YDSnow ? YDSnow.accounts() : {};
     if (!Object.keys(accounts).length) { showToast('No snow accounts yet'); return; }
 
@@ -498,17 +506,26 @@
     });
   }
 
+  const known = {};        // every storm seen, so an orphan can be spotted
+
   function start() {
     if (unsubStorms || !window.YDDb) return;
     loadStartPoint();
     unsubStorms = window.YDDb.watch('storms', changes => {
-      let openOne = storm;
       changes.forEach(c => {
-        if (c.type === 'removed') { if (openOne && openOne.id === c.id) openOne = null; return; }
-        const rec = Object.assign({ id: c.id }, c.data);
-        if (rec.status === 'open') openOne = rec;
-        else if (openOne && openOne.id === rec.id) openOne = null;
+        if (c.type === 'removed') delete known[c.id];
+        else known[c.id] = Object.assign({ id: c.id }, c.data);
       });
+      // Pick the most recently started open storm rather than whichever
+      // happened to arrive last, and say so if more than one is open -- an
+      // orphan should be visible, not quietly ignored.
+      const open = Object.values(known).filter(s => s.status === 'open')
+        .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')));
+      if (open.length > 1) {
+        console.warn('[storm] %d storms are open at once', open.length);
+        showToast(open.length + ' storms are open — working the most recent');
+      }
+      const openOne = open[0] || null;
       const changedStorm = (openOne && openOne.id) !== (storm && storm.id);
       storm = openOne;
       if (storm && changedStorm) watchStops(storm.id);
