@@ -65,11 +65,20 @@
 
     // Labour is per man-hour, so crew size multiplies it. Accounts with no
     // labour rate bill the flat tier however long the night takes.
-    const labor = p.laborRateCents
-      ? Math.round((minutesOnSite || 0) / 60 * p.laborRateCents * (crewSize || 1))
+    //
+    // The hours are rounded to two decimals BEFORE being multiplied, because
+    // that rounded figure is what gets printed on the customer's invoice. Work
+    // it out the other way and the line does not add up on its face: 95 minutes
+    // with two crew shows as 3.17 hours at $25, which a customer reads as
+    // $79.25, while the exact arithmetic gives $79.17. The eight pence does not
+    // matter; an invoice whose own multiplication is wrong does.
+    const manHours = p.laborRateCents
+      ? Math.round((minutesOnSite || 0) / 60 * (crewSize || 1) * 100) / 100
       : 0;
+    const labor = p.laborRateCents ? Math.round(manHours * p.laborRateCents) : 0;
 
-    return { plowCents: base - salt, saltCents: salt, laborCents: labor, totalCents: base + labor };
+    return { plowCents: base - salt, saltCents: salt, laborCents: labor,
+             manHours: manHours, totalCents: base + labor };
   }
 
   // ---------------------------------------------------------------- render

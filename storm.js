@@ -481,6 +481,9 @@
       lines.push({
         accountId: s.accountId, pass: s.pass || 1, inches: inches, minutes: mins,
         onSiteMinutes: onSite, pausedMinutes: paused,
+        // Stored rather than recomputed at invoice time, so the hours printed
+        // on the customer's invoice are the ones the charge was worked out from.
+        manHours: p.manHours,
         saltBags: s.saltBags, plowCents: p.plowCents, saltCents: p.saltCents,
         laborCents: p.laborCents, totalCents: p.totalCents,
       });

@@ -14,7 +14,12 @@
   let billingCache = {};    // id -> billing record (owner only)
   let unsub = null;
 
-  const money = c => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // A missing figure prints as a dash, never as "$NaN". This goes in front of
+  // customers: a storm closed by an older version of the app, or a record that
+  // only half arrived, should look incomplete rather than broken.
+  const money = c => (typeof c === 'number' && isFinite(c))
+    ? '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    : '—';
   const accountName = id => ((window.YDSnow && YDSnow.accounts()[id]) || {}).name || id;
 
   function usDate(iso) {
@@ -190,7 +195,13 @@
     // Two storms in one day is an ordinary Wisconsin week, and without the
     // time in it both would export the same invoice number for the same
     // customer -- which QuickBooks would treat as one invoice.
-    const ref = stamp + '-' + two(d0.getHours()) + two(d0.getMinutes());
+    // QuickBooks limits how long an invoice number can be, and
+    // 'SNOW-20270114-2340-ANGEL-B' is past it. The number only has to be
+    // unique; the Customer column already says who it is for. So: the storm,
+    // then a sequence within it.
+    const ref = 'SNOW-' + String(d0.getFullYear()).slice(2) +
+      two(d0.getMonth() + 1) + two(d0.getDate()) + '-' +
+      two(d0.getHours()) + two(d0.getMinutes());
 
     // Quote for CSV, and flatten line breaks. A site note typed across two
     // lines would otherwise split the row in half and corrupt every invoice
@@ -206,11 +217,17 @@
     const byAccount = {};
     b.lines.forEach(l => { (byAccount[l.accountId] = byAccount[l.accountId] || []).push(l); });
 
+    let seq = 0;
     Object.keys(byAccount).sort((x, y) => accountName(x).localeCompare(accountName(y))).forEach(aid => {
       const name = accountName(aid);
-      const invoiceNo = 'SNOW-' + ref + '-' + aid.toUpperCase().slice(0, 12);
+      seq++;
+      const invoiceNo = ref + '-' + two(seq);
       byAccount[aid].sort((a, c) => a.pass - c.pass).forEach(l => {
-        const visit = 'Snow removal ' + s.label + (l.pass > 1 ? ' (pass ' + l.pass + ')' : '') +
+        // The storm's label is 'Thu, Jan 14 - 14"'. Printing that whole thing
+        // and then the depth cleared gives '14" ... 14" cleared', which reads
+        // like a mistake, so only the date part is used.
+        const day = String(s.label || '').split(' · ')[0];
+        const visit = 'Snow removal ' + day + (l.pass > 1 ? ' (pass ' + l.pass + ')' : '') +
                       ' — ' + l.inches + '" cleared';
         // Plowing, salt and labour are separate lines because a customer
         // querying a bill asks about one of them, not the total.
@@ -227,7 +244,12 @@
           // same total, but only one matches the rate the customer agreed --
           // and the rate is what gets queried when a bill is questioned.
           const crew = (storms[id] && storms[id].crewSize) || 1;
-          const manHours = Math.round((l.minutes / 60) * crew * 100) / 100;
+          // The hours the charge was worked out from, so quantity times rate
+          // equals the amount on the face of the invoice. Older storms, closed
+          // before this was stored, fall back to the same calculation.
+          const manHours = l.manHours != null
+            ? l.manHours
+            : Math.round((l.minutes / 60) * crew * 100) / 100;
           // Take the rate from the account rather than dividing the total by
           // rounded hours -- that produced $25.03 on a $25 rate, which looks
           // like a mistake on a customer's invoice even though the total was
@@ -242,7 +264,17 @@
       });
     });
 
-    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    // Two details that decide whether this imports cleanly anywhere else.
+    //
+    // The byte-order mark tells Excel and QuickBooks the file is UTF-8.
+    // Without it they assume the local Windows encoding, and every dash in a
+    // description arrives as mojibake. The invoice still imports; the
+    // customer's description just reads as rubbish.
+    //
+    // CRLF is what the CSV convention specifies. Most things cope with bare
+    // newlines, not everything does, and it costs nothing to be correct.
+    const blob = new Blob(['﻿' + rows.join('\r\n') + '\r\n'],
+      { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -263,9 +295,13 @@
       lines.push(accountName(aid) + ' — ' + ls.length + ' visit' + (ls.length > 1 ? 's' : '') +
                  ' — ' + money(ls.reduce((t, l) => t + l.totalCents, 0)));
     });
-    lines.push('', 'Total: ' + money(b.totalCents),
-               'Crew hours: ' + b.crewHours,
-               'Per crew-hour: ' + money(b.revenuePerCrewHourCents));
+    // Worked out here when it was not stored, rather than shown as a gap.
+    const perHour = b.revenuePerCrewHourCents != null ? b.revenuePerCrewHourCents
+      : (b.crewHours > 0 ? Math.round(b.totalCents / b.crewHours) : null);
+    lines.push('', 'Total: ' + money(b.totalCents));
+    if (b.crewHours) {
+      lines.push('Crew hours: ' + b.crewHours, 'Per crew-hour: ' + money(perHour));
+    }
     const text = lines.join('\n');
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => showToast('Summary copied'));
     else showToast('Copy not supported here');
