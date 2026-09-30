@@ -261,6 +261,13 @@
   .field-actions .btn:disabled { opacity:.6; cursor:default; }
 
 
+
+  .form-section-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1.3px;
+                        color:var(--accent-dark); margin:20px 0 10px; padding-top:14px;
+                        border-top:1px solid var(--border); }
+  .hint { font-size:11px; color:var(--muted); margin-top:5px; line-height:1.5; }
+  .snow-card-actions { display:flex; gap:6px; margin-left:auto; }
+
   /* ---- Snow accounts ---- */
   .snow-card { border:1px solid var(--border); border-radius:10px; padding:14px 15px;
                background:var(--surface); margin-bottom:10px; }

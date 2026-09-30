@@ -179,7 +179,10 @@
     <div class="section">
       <div class="section-head">
         <span class="section-title">Snow Accounts</span>
-        <span class="section-badge" id="snowCountBadge"></span>
+        <span style="display:flex;align-items:center;gap:10px">
+          <span class="section-badge" id="snowCountBadge"></span>
+          <button class="btn btn-accent btn-sm" id="snowAddBtn" onclick="openSnowForm()">+ Add account</button>
+        </span>
       </div>
       <div class="section-body">
         <div id="snowAccountsWrap"></div>
@@ -389,6 +392,96 @@
   </div>
 </div>
 
+
+
+<!-- Snow account form -->
+<div class="modal-overlay" id="snowFormModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="snowFormTitle">Add Snow Account</h2>
+      <button class="modal-close" onclick="closeSnowForm()">&times;</button>
+    </div>
+    <div class="modal-body">
+
+      <div class="grid g2">
+        <div class="field"><span class="label">Name</span>
+          <input id="sfName" placeholder="Customer or property name"></div>
+        <div class="field"><span class="label">Type</span>
+          <select id="sfType"><option value="residential">Residential</option><option value="commercial">Commercial</option></select></div>
+      </div>
+
+      <div class="field mt"><span class="label">Street address</span>
+        <input id="sfAddress" placeholder="e.g. 308 William Cir">
+        <div class="hint" id="sfGeoHint">The town and map location are worked out for you when you save.</div>
+      </div>
+
+      <div class="grid g2 mt">
+        <div class="field"><span class="label">Phone</span><input id="sfPhone" type="tel" placeholder="(608) 555-0123"></div>
+        <div class="field"><span class="label">Email</span><input id="sfEmail" type="email" placeholder="client@email.com"></div>
+      </div>
+
+      <div class="form-section-label">Pricing</div>
+      <div class="grid g4">
+        <div class="field"><span class="label">1-3 in</span><input id="sfT13" inputmode="decimal" placeholder="$"></div>
+        <div class="field"><span class="label">4-6 in</span><input id="sfT46" inputmode="decimal" placeholder="$"></div>
+        <div class="field"><span class="label">6+ in</span><input id="sfT6" inputmode="decimal" placeholder="blank = same as 4-6"></div>
+        <div class="field"><span class="label">9+ in</span><input id="sfT9" inputmode="decimal" placeholder="blank = same as 6+"></div>
+      </div>
+      <div class="hint">Leave a tier blank and it bills at the next one down.</div>
+
+      <label class="chk mt"><input type="checkbox" id="sfPerInchOn" onchange="snowFormToggle()"> Charge per inch above a depth instead of tiers</label>
+      <div class="grid g2" id="sfPerInchRow" hidden>
+        <div class="field"><span class="label">Per inch</span><input id="sfPerInchAmt" inputmode="decimal" placeholder="$75"></div>
+        <div class="field"><span class="label">Above how many inches</span><input id="sfPerInchAbove" inputmode="numeric" placeholder="3"></div>
+      </div>
+
+      <div class="grid g2 mt">
+        <div class="field"><span class="label">Labour, per man-hour</span><input id="sfLabor" inputmode="decimal" placeholder="$25"></div>
+        <div class="field" style="justify-content:flex-end">
+          <label class="chk"><input type="checkbox" id="sfNoLabor" onchange="snowFormToggle()"> No hourly charge</label>
+        </div>
+      </div>
+      <div class="hint" id="sfNoLaborHint" hidden>This account pays the flat rate however long the night takes.</div>
+
+      <label class="chk mt"><input type="checkbox" id="sfSaltOn" onchange="snowFormToggle()"> Part of the rate is salt</label>
+      <div class="field" id="sfSaltRow" hidden><span class="label">How much of it is salt</span>
+        <input id="sfSaltAmt" inputmode="decimal" placeholder="$100">
+        <div class="hint">Shown as its own line on every visit, so salt revenue is visible.</div>
+      </div>
+
+      <div class="form-section-label">Service</div>
+      <div class="grid g2">
+        <div class="field"><span class="label">Only clear at or above</span>
+          <select id="sfTrigger">
+            <option value="1">1 inch (any snow)</option>
+            <option value="2">2 inches</option>
+            <option value="3">3 inches</option>
+            <option value="4">4 inches</option>
+            <option value="6">6 inches</option>
+          </select></div>
+        <div class="field"><span class="label">Timing</span>
+          <select id="sfWindow">
+            <option value="standard">Standard</option>
+            <option value="morning">Done by morning</option>
+            <option value="no-rush">No rush</option>
+          </select></div>
+      </div>
+
+      <div class="field mt"><span class="label">Site notes</span>
+        <textarea id="sfNotes" rows="2" placeholder="e.g. 2 ft behind car · walks by hand · back deck"></textarea></div>
+
+      <div class="grid g2 mt">
+        <div class="field"><span class="label">Drive area (sq ft)</span><input id="sfDrive" inputmode="numeric"></div>
+        <div class="field"><span class="label">Walk area (sq ft)</span><input id="sfWalk" inputmode="numeric"></div>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">
+        <button class="btn btn-filled" id="sfSaveBtn" onclick="saveSnowForm()">Save account</button>
+        <button class="btn" onclick="closeSnowForm()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ===== Sign-in gate =====
      Visible by default so the app is never briefly shown to someone who is not
