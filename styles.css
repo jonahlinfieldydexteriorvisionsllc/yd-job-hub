@@ -325,6 +325,18 @@
   .btn-stop.depart { background:var(--accent-dark); }
   .btn-stop.depart:active { background:#8a6018; }
 
+
+  /* Number entry on a stop: nudge with gloves, or type it. */
+  .stepper { display:flex; align-items:center; gap:8px; width:100%; margin-bottom:10px; }
+  .stepper-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.9px;
+                   color:var(--muted); flex:1; }
+  .stepper-btn { width:48px; height:48px; flex:none; border:2px solid var(--border-strong);
+                 background:var(--surface-2); color:var(--brand); font-size:24px; font-weight:700;
+                 line-height:1; border-radius:10px; cursor:pointer; }
+  .stepper-btn:active { background:var(--brand); color:#fff; }
+  .stepper-input { width:74px; flex:none; text-align:center; font-size:19px; font-weight:700;
+                   padding:11px 4px; }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);

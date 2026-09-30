@@ -137,10 +137,38 @@
           '</div>' +
           list.map(renderStop).join('') +
           (isOwner ? '<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">' +
+            (done === list.length && list.length
+              ? '<button class="btn btn-accent" onclick="anotherRound()">Run the route again</button>' : '') +
             '<button class="btn btn-filled" onclick="closeStorm()">Close storm &amp; work out billing</button>' +
             '<button class="btn btn-danger btn-sm" onclick="abandonStorm()">Abandon</button></div>' : '') +
         '</div>' +
       '</div>';
+  }
+
+  // A number that can be nudged or typed. The buttons are for gloves; the
+  // field is for the times a stepper would take ten taps.
+  function stepper(stopId, kind, label, value, step) {
+    const inputId = 'st-' + kind + '-' + stopId;
+    return '<div class="stepper">' +
+      '<span class="stepper-label">' + label + '</span>' +
+      '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + (-step) + ')">&minus;</button>' +
+      '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + value + '">' +
+      '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + step + ')">+</button>' +
+    '</div>';
+  }
+
+  window.nudge = function (inputId, by) {
+    const el = document.getElementById(inputId);
+    if (!el) return;
+    const n = (parseFloat(el.value) || 0) + by;
+    el.value = Math.max(0, Math.round(n * 10) / 10);
+  };
+
+  function readStepper(stopId, kind, fallback) {
+    const el = document.getElementById('st-' + kind + '-' + stopId);
+    if (!el) return fallback;
+    const n = parseFloat(el.value);
+    return isNaN(n) ? fallback : n;
   }
 
   function renderStop(s) {
@@ -155,9 +183,16 @@
       actions = '<button class="btn-stop arrive" onclick="arriveStop(\'' + s.id + '\')">Arrive</button>' +
                 '<button class="btn btn-sm" onclick="skipStop(\'' + s.id + '\')">Skip</button>';
     } else if (!s.departedAt) {
-      actions = '<button class="btn-stop depart" onclick="departStop(\'' + s.id + '\')">Depart</button>';
+      // Numbers are captured here, on the card, at the moment they are known --
+      // steppers for gloved hands, and the field itself accepts typing for
+      // anything the steppers make slow (13.5 inches, 11 bags).
+      actions =
+        stepper(s.id, 'inches', 'Inches cleared',
+                s.inchesCleared != null ? s.inchesCleared : storm.accumulationInches, 0.5) +
+        (a.saltApplies ? stepper(s.id, 'salt', 'Salt bags', s.saltBags || 0, 1) : '') +
+        '<button class="btn-stop depart" onclick="departStop(\'' + s.id + '\')">Depart</button>';
     } else {
-      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + s.id + '\')">Second pass</button>';
+      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + s.id + '\')">Another pass here</button>';
     }
 
     return '<div class="stop ' + state + '">' +
@@ -202,21 +237,10 @@
   window.departStop = function (id) {
     const s = stops[id];
     const a = accountFor(s);
-    // Asked once, at the moment it is known, rather than reconstructed later.
-    let inches = prompt('Inches cleared at ' + (a.name || 'this stop') + '?\n\nLeave blank to use the storm total (' + storm.accumulationInches + '").');
-    if (inches === null) return;                  // cancelled -- do not depart
-    inches = inches.trim() === '' ? storm.accumulationInches : parseFloat(inches);
-    if (isNaN(inches)) inches = storm.accumulationInches;
-
-    let bags = null;
-    if (a.saltApplies) {
-      const b = prompt('Salt bags used at ' + (a.name || 'this stop') + '? (blank if none)');
-      if (b !== null && b.trim() !== '') bags = parseFloat(b) || 0;
-    }
     writeStop(id, {
       departedAt: new Date().toISOString(),
-      inchesCleared: inches,
-      saltBags: bags,
+      inchesCleared: readStepper(id, 'inches', storm.accumulationInches),
+      saltBags: a.saltApplies ? readStepper(id, 'salt', 0) : null,
     });
     locate(id, 'depart');
   };
@@ -231,7 +255,35 @@
     writeStop(id, { skipped: false, skipReason: null });
   };
 
-  // A second pass on the same storm is a separate billable visit, per the spec.
+  // Every pass is a separate billed visit -- that is how a long storm pays.
+  // A 14-inch night is not one four-hour visit, it is the route run several
+  // times, each one billed at the account's rate. So running the whole route
+  // again is a first-class action, not a per-stop afterthought.
+  window.anotherRound = async function () {
+    const list = Object.values(stops).sort((a, b) => a.order - b.order);
+    const worked = list.filter(s => s.departedAt && !s.skipped);
+    if (!worked.length) { showToast('Nothing to run again yet'); return; }
+    if (!confirm('Run the route again?\n\nThis adds another billed visit for each of the ' +
+                 worked.length + ' stops done so far.')) return;
+
+    const seen = {};
+    list.forEach(s => { seen[s.accountId] = Math.max(seen[s.accountId] || 0, s.pass || 1); });
+
+    let order = list.length;
+    const writes = [];
+    worked.forEach(s => {
+      if ((s.pass || 1) !== seen[s.accountId]) return;     // only the latest pass spawns the next
+      const next = seen[s.accountId] + 1;
+      writes.push(['storms/' + storm.id + '/stops', s.accountId + '-p' + next, {
+        accountId: s.accountId, order: order++, pass: next, driveMiles: s.driveMiles,
+        arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, skipped: false,
+      }]);
+    });
+    await window.YDDb.putMany(writes);
+    showToast('Route added again — ' + writes.length + ' more stops');
+  };
+
+  // A single stop can also be run again on its own.
   window.secondPass = async function (id) {
     const s = stops[id];
     const newId = s.accountId + '-p' + ((s.pass || 1) + 1);
