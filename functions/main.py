@@ -132,7 +132,7 @@ def _cors(origin):
     if origin in ALLOWED_ORIGINS:
         headers["Access-Control-Allow-Origin"] = origin
         headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-        headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
         headers["Access-Control-Max-Age"] = "3600"
     return headers
 
@@ -189,6 +189,94 @@ def _record_spend(day, task, usage):
         print("could not record usage:", e)
 
 
+# ---------------------------------------------------------------- quickbooks
+#
+# The routing and the guards live here; what each one actually does is in
+# quickbooks.py. Two of these are deliberately not owner-authenticated, and the
+# reasons matter:
+#
+#   /qb/callback  is where Intuit sends the owner's browser back. A redirect
+#                 cannot carry an Authorization header, so it is tied to the
+#                 person who started it by a one-use state value instead.
+#
+#   /qb/keepalive is called by a scheduler, not a person. It is protected by a
+#                 shared secret in a header, and it can only refresh a token --
+#                 it cannot read a customer, raise an invoice, or disconnect.
+
+
+def _quickbooks(request, path, headers):
+    # Imported here rather than at the top so a problem in the QuickBooks half
+    # -- a missing dependency, a bad deploy -- cannot stop the container
+    # starting and take the Claude features down with it.
+    import quickbooks as qb
+
+    json_headers = {**headers, "Content-Type": "application/json"}
+
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+
+    # The browser lands here from Intuit, so it answers with a page, not JSON.
+    if path == "/qb/callback":
+        try:
+            html, status = qb.callback(request)
+        except Exception as e:                          # noqa: BLE001
+            print("quickbooks callback error:", e)
+            html, status = ("<p>Something went wrong connecting QuickBooks.</p>", 500)
+        return (html, status, {"Content-Type": "text/html; charset=utf-8"})
+
+    if path == "/qb/keepalive":
+        expected = os.environ.get("QB_KEEPALIVE_SECRET", "")
+        given = request.headers.get("X-Keepalive-Secret", "")
+        # A missing secret refuses rather than waves everything through: an
+        # endpoint that stops being protected when a variable goes missing is
+        # worse than one that stops working.
+        if not expected or given != expected:
+            return (json.dumps({"error": "not allowed"}), 403, json_headers)
+        try:
+            return (json.dumps(qb.keepalive()), 200, json_headers)
+        except Exception as e:                          # noqa: BLE001
+            print("keepalive failed:", e)
+            return (json.dumps({"error": str(e)}), 500, json_headers)
+
+    # Everything else is the owner, from the app.
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request)
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+
+    body = request.get_json(silent=True) or {}
+    try:
+        if path == "/qb/connect-url":
+            result = qb.connect_url(uid)
+        elif path == "/qb/status":
+            result = qb.status()
+        elif path == "/qb/disconnect":
+            result = qb.disconnect()
+        elif path == "/qb/customers":
+            result = qb.customers()
+        elif path == "/qb/items":
+            result = qb.items()
+        elif path == "/qb/invoice":
+            result = qb.create_invoice(body)
+        else:
+            return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    except PermissionError as e:
+        # QuickBooks itself refused -- the connection needs remaking.
+        return (json.dumps({"error": str(e), "reconnect": True}), 409, json_headers)
+    except Exception as e:                              # noqa: BLE001
+        print("quickbooks %s failed: %s" % (path, e))
+        return (json.dumps({"error": str(e)}), 502, json_headers)
+
+    return (json.dumps(result), 200, json_headers)
+
+
+def origin_blocked(request):
+    origin = request.headers.get("Origin", "")
+    return bool(origin) and origin not in ALLOWED_ORIGINS
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -196,6 +284,14 @@ def _record_spend(day, task, usage):
 def claude(request):
     origin = request.headers.get("Origin", "")
     headers = _cors(origin)
+
+    # One Cloud Run service, two jobs. The entry point keeps its original name
+    # so the existing deployment configuration still points at it; what it does
+    # is decided by the path. Anything under /qb/ is QuickBooks, everything else
+    # is the Claude behaviour this service started as.
+    path = (request.path or "/").rstrip("/")
+    if path.startswith("/qb"):
+        return _quickbooks(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)
