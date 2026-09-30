@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QuickBooks disconnected — YD Job Hub</title>
+<link rel="icon" href="./icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --brand:#66418f; --brand-dark:#472c64; --accent-dark:#a8761f; --bg:#f1edf6;
+          --surface:#fff; --text:#2b2433; --muted:#7b7188; --border:#e2dbec; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#0c0a0e; --surface:#171320; --text:#efe9f5;
+      --muted:#9a8ea6; --border:#2b2436; --brand:#8a5fb8; }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'DM Sans',system-ui,sans-serif; background:var(--bg); color:var(--text);
+         line-height:1.6; min-height:100vh; display:flex; align-items:center;
+         justify-content:center; padding:24px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:14px;
+          box-shadow:0 14px 44px rgba(43,36,51,.14); padding:34px 28px; max-width:430px;
+          width:100%; text-align:center; }
+  img { width:72px; height:72px; border-radius:18px; border:1px solid var(--border);
+        margin-bottom:16px; }
+  h1 { font-family:'Playfair Display',serif; font-size:24px; font-weight:800; color:var(--brand);
+       line-height:1.2; }
+  p { font-size:14.5px; color:var(--muted); margin-top:12px; }
+  .btn { display:inline-block; margin-top:22px; padding:14px 22px; border-radius:8px;
+         background:var(--brand); color:#fff; text-decoration:none; font-weight:700;
+         font-size:13px; letter-spacing:.8px; text-transform:uppercase; }
+  .btn:hover { background:var(--brand-dark); }
+  .note { font-size:12.5px; margin-top:20px; padding-top:16px; border-top:1px solid var(--border); }
+</style>
+</head>
+<body>
+  <div class="card">
+    <img src="./icon-192.png" alt="">
+    <h1>QuickBooks has been disconnected</h1>
+    <p>YD Job Hub can no longer read from or write to your QuickBooks company. Nothing already
+    in QuickBooks has changed, and nothing recorded in Job Hub has been lost.</p>
+    <p>Snow billing can still be exported as a file and imported into QuickBooks by hand, the
+    way it worked before the two were connected.</p>
+    <a class="btn" href="./">Back to Job Hub</a>
+    <p class="note">To connect again, open Job Hub and choose <strong>QuickBooks</strong> from
+    the menu.</p>
+  </div>
+</body>
+</html>
