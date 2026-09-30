@@ -344,6 +344,7 @@
     if (!e) return;
     const p = openPause(e);
     if (!p) return;
+    e.pauses = e.pauses || [];
     p.endedAt = nowIso();
     render();
     write(id, { pauses: e.pauses }, 'resuming');
@@ -360,6 +361,10 @@
     // its billable time would be wrong.
     const p = openPause(e);
     if (p) p.endedAt = stamp;
+    // Always an array. Firestore refuses a write containing undefined and
+    // fails the whole thing with it, so a shift that somehow had no pauses
+    // list could not be clocked out at all.
+    e.pauses = e.pauses || [];
     e.endedAt = stamp;
     e.endedMs = stampMs;
 
