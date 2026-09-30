@@ -190,6 +190,14 @@
         <div id="snowAccountsWrap"></div>
       </div>
     </div>
+
+    <div class="section" hidden>
+      <div class="section-head">
+        <span class="section-title">Storms</span>
+        <span class="section-badge">closed &amp; billable</span>
+      </div>
+      <div class="section-body"><div id="stormHistoryWrap"></div></div>
+    </div>
   </div>
 
   <!-- ============ TAB 2: TRACKING ============ -->
@@ -396,6 +404,18 @@
 
 
 
+
+<!-- Storm detail -->
+<div class="modal-overlay" id="stormDetailModal">
+  <div class="modal" style="max-width:980px">
+    <div class="modal-head">
+      <h2 id="stormDetailTitle">Storm</h2>
+      <button class="modal-close" onclick="closeStormDetail()">&times;</button>
+    </div>
+    <div class="modal-body" id="stormDetailBody"></div>
+  </div>
+</div>
+
 <!-- Snow account form -->
 <div class="modal-overlay" id="snowFormModal">
   <div class="modal">
@@ -508,6 +528,7 @@
 <script src="./claude.js"></script>
 <script src="./snow.js"></script>
 <script src="./storm.js"></script>
+<script src="./billing.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

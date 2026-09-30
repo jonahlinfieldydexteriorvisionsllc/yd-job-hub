@@ -337,6 +337,15 @@
   .stepper-input { width:74px; flex:none; text-align:center; font-size:19px; font-weight:700;
                    padding:11px 4px; }
 
+
+  /* ---- Closed storms ---- */
+  .storm-row { display:flex; align-items:center; gap:12px; padding:13px 15px; border:1px solid var(--border);
+               border-radius:9px; background:var(--surface); margin-bottom:8px; flex-wrap:wrap; }
+  .storm-row-main { flex:1; min-width:180px; }
+  .storm-row-name { font-weight:700; font-size:14px; }
+  .storm-row-sub { font-size:12px; color:var(--muted); margin-top:3px; }
+  .storm-row-actions { display:flex; gap:6px; flex-wrap:wrap; }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);
