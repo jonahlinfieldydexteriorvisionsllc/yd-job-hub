@@ -415,6 +415,9 @@
   html[data-night] .stepper-input { background:var(--surface-2); color:var(--text); font-size:21px; }
   html[data-night] .stop-name { font-size:18px; }
 
+  tr.weak-earner td { background:rgba(200,73,43,.05); }
+  html[data-night] tr.weak-earner td { background:rgba(255,122,92,.08); }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);

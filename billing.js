@@ -94,6 +94,8 @@
           '</div>' +
         '</div>';
       }).join('');
+
+    if (window.renderSeason) renderSeason();
   }
 
   function card(label, value, cls) {
@@ -249,7 +251,99 @@
     else showToast('Copy not supported here');
   };
 
-  window.YDBilling = { storms: () => storms, render };
+  // ---------------------------------------------------------------- season
+
+  // Which accounts actually earn. A big invoice is not the same as a good
+  // account: a property that bills $815 and eats an hour of two people is
+  // worth less per crew-hour than one that bills $95 in fourteen minutes.
+  // That comparison is the reason this view exists.
+  function seasonByAccount() {
+    const acc = {};
+    Object.keys(storms).forEach(id => {
+      const b = billingCache[id];
+      if (!b) return;
+      const crew = storms[id].crewSize || 1;
+      b.lines.forEach(l => {
+        const a = acc[l.accountId] = acc[l.accountId] || {
+          visits: 0, minutes: 0, crewMinutes: 0, plow: 0, salt: 0, labor: 0, total: 0,
+          bags: 0, storms: {},
+        };
+        a.visits++;
+        a.minutes += l.minutes;
+        a.crewMinutes += l.minutes * crew;
+        a.plow += l.plowCents; a.salt += l.saltCents;
+        a.labor += l.laborCents; a.total += l.totalCents;
+        a.bags += l.saltBags || 0;
+        a.storms[id] = true;
+      });
+      (b.skipped || []).forEach(s => {
+        const a = acc[s.accountId] = acc[s.accountId] || {
+          visits: 0, minutes: 0, crewMinutes: 0, plow: 0, salt: 0, labor: 0, total: 0,
+          bags: 0, storms: {}, skips: 0,
+        };
+        a.skips = (a.skips || 0) + 1;
+      });
+    });
+    return acc;
+  }
+
+  window.renderSeason = function () {
+    const wrap = document.getElementById('seasonWrap');
+    if (!wrap) return;
+    const acc = seasonByAccount();
+    const ids = Object.keys(acc);
+    const section = wrap.closest('.section');
+    if (section) section.hidden = !ids.length;
+    if (!ids.length) { wrap.innerHTML = ''; return; }
+
+    // Ordered by what each returns per crew-hour, worst last -- the question
+    // being answered is "which of these is worth keeping".
+    const perHour = id => acc[id].crewMinutes ? acc[id].total / (acc[id].crewMinutes / 60) : 0;
+    ids.sort((x, y) => perHour(y) - perHour(x));
+
+    const best = perHour(ids[0]);
+    const rows = ids.map(id => {
+      const a = acc[id];
+      const ph = perHour(id);
+      const weak = ph > 0 && ph < best * 0.5;      // less than half the best earner
+      return '<tr' + (weak ? ' class="weak-earner"' : '') + '>' +
+        '<td class="bold">' + esc(accountName(id)) + '</td>' +
+        '<td>' + a.visits + (a.skips ? ' <span class="muted">(' + a.skips + ' skipped)</span>' : '') + '</td>' +
+        '<td>' + Object.keys(a.storms).length + '</td>' +
+        '<td>' + Math.round(a.minutes) + ' min</td>' +
+        '<td>' + (a.crewMinutes / 60).toFixed(1) + '</td>' +
+        '<td>' + money(a.plow) + '</td>' +
+        '<td>' + (a.salt ? money(a.salt) + (a.bags ? ' <span class="muted">' + a.bags + ' bags</span>' : '') : '—') + '</td>' +
+        '<td>' + (a.labor ? money(a.labor) : '—') + '</td>' +
+        '<td class="bold">' + money(a.total) + '</td>' +
+        '<td class="bold" style="color:' + (weak ? 'var(--neg)' : 'var(--pos)') + '">' +
+          (ph ? money(Math.round(ph)) : '—') + '</td>' +
+      '</tr>';
+    }).join('');
+
+    const totals = ids.reduce((t, id) => {
+      const a = acc[id];
+      t.visits += a.visits; t.crewMin += a.crewMinutes; t.total += a.total; t.salt += a.salt;
+      return t;
+    }, { visits: 0, crewMin: 0, total: 0, salt: 0 });
+
+    wrap.innerHTML =
+      '<div class="table-wrap"><table><thead><tr>' +
+        '<th>Account</th><th>Visits</th><th>Storms</th><th>On site</th><th>Crew hrs</th>' +
+        '<th>Plowing</th><th>Salt</th><th>Labour</th><th>Billed</th><th>Per crew-hr</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody>' +
+      '<tfoot><tr style="font-weight:700">' +
+        '<td>All accounts</td><td>' + totals.visits + '</td><td></td><td></td>' +
+        '<td>' + (totals.crewMin / 60).toFixed(1) + '</td><td></td>' +
+        '<td>' + (totals.salt ? money(totals.salt) : '—') + '</td><td></td>' +
+        '<td>' + money(totals.total) + '</td>' +
+        '<td>' + (totals.crewMin ? money(Math.round(totals.total / (totals.crewMin / 60))) : '—') + '</td>' +
+      '</tr></tfoot></table></div>' +
+      '<div class="hint">Sorted by what each returns per crew-hour. Anything earning less than half ' +
+      'the best is flagged — worth a look at the rate, not necessarily worth dropping.</div>';
+  };
+
+  window.YDBilling = { storms: () => storms, render, seasonByAccount };
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};

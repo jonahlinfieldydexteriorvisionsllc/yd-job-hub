@@ -352,7 +352,12 @@
     }
 
     const now = new Date();
-    const id = now.toISOString().slice(0, 10) + '-' + two(now.getHours()) + two(now.getMinutes());
+    // Seconds, not just hours and minutes. Two storms started in the same
+    // minute produced the same id and the second silently overwrote the
+    // first -- which is exactly how a night's billing would disappear
+    // without anything appearing to go wrong.
+    const id = now.toISOString().slice(0, 10) + '-' +
+               two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
     const rec = {
       id: id,
       label: now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) +
