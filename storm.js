@@ -210,6 +210,11 @@
     return '<div class="stop ' + state + '">' +
       '<div class="stop-head">' +
         '<span class="stop-num">' + (s.order + 1) + '</span>' +
+        (!s.arrivedAt && !s.skipped
+          ? '<span class="stop-move">' +
+              '<button onclick="moveStop(\'' + s.id + '\',-1)" title="Earlier">&#9650;</button>' +
+              '<button onclick="moveStop(\'' + s.id + '\',1)" title="Later">&#9660;</button>' +
+            '</span>' : '') +
         '<span class="stop-name">' + esc(a.name || s.accountId) + '</span>' +
         (s.pass > 1 ? '<span class="snow-tag trigger">pass ' + s.pass + '</span>' : '') +
         (a.serviceWindow === 'morning' ? '<span class="snow-tag hold">by morning</span>' : '') +
@@ -265,6 +270,34 @@
 
   window.unskipStop = function (id) {
     writeStop(id, { skipped: false, skipReason: null });
+  };
+
+  // Reordering uses arrows rather than dragging. The spec said drag, and on a
+  // desktop drag is nicer -- but this list is worked on a phone, one-handed,
+  // with gloves, and a drag that needs a precise press-hold-move is the wrong
+  // gesture for that. Two taps always work.
+  //
+  // Only stops not yet started can move. Once someone has arrived, the order
+  // is a record of what happened rather than a plan.
+  window.moveStop = async function (id, delta) {
+    const list = Object.values(stops).sort((a, b) => a.order - b.order);
+    const i = list.findIndex(s => s.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    if (list[j].arrivedAt || list[j].skipped) { showToast('That stop is already done'); return; }
+
+    const a = list[i], b = list[j];
+    const ao = a.order, bo = b.order;
+    a.order = bo; b.order = ao;                      // show it at once
+    render();
+    try {
+      await window.YDDb.putMany([
+        ['storms/' + storm.id + '/stops', a.id, { order: bo }],
+        ['storms/' + storm.id + '/stops', b.id, { order: ao }],
+      ]);
+    } catch (e) {
+      console.warn('[storm] reorder queued or failed', e.code || e.message);
+    }
   };
 
   // Every pass is a separate billed visit -- that is how a long storm pays.

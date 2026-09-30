@@ -418,6 +418,14 @@
   tr.weak-earner td { background:rgba(200,73,43,.05); }
   html[data-night] tr.weak-earner td { background:rgba(255,122,92,.08); }
 
+  .stop-move { display:inline-flex; gap:3px; margin-left:auto; }
+  .stop-move button { width:34px; height:34px; border:1px solid var(--border-strong);
+                      background:var(--surface-2); color:var(--muted); border-radius:7px;
+                      font-size:11px; line-height:1; cursor:pointer; }
+  .stop-move button:active { background:var(--brand); color:#fff; }
+  html[data-night] .stop-move button { background:var(--surface-2); color:var(--text);
+                                       border-color:var(--border-strong); width:38px; height:38px; }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);
