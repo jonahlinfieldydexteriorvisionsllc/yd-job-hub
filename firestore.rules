@@ -62,12 +62,18 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if signedIn() && (request.auth.uid == uid || isOwner());
 
-      // Two self-creates are permitted, both only for your OWN uid:
+      // Three creates are permitted:
       //  1. owner bootstrap -- the first sign-in by the owner email mints the
       //     owner record. Without it nobody could ever approve anybody, since
       //     approving requires already being an owner.
-      //  2. a pending request -- grants nothing until an owner changes the role.
-      allow create: if signedIn()
+      //  2. a pending request for your OWN uid -- grants nothing until an
+      //     owner changes the role.
+      //  3. an owner creating a record for someone else. Without this the
+      //     owner could update a crew record but never create one, so a record
+      //     that got into a bad state could only be repaired by that person
+      //     signing in again. It grants nothing new: an owner already controls
+      //     every role.
+      allow create: if isOwner() || (signedIn()
         && request.auth.uid == uid
         && request.resource.data.email == request.auth.token.email
         && (
@@ -77,7 +83,7 @@ service cloud.firestore {
              ||
              (request.resource.data.role == 'pending'
                && request.resource.data.active == false)
-           );
+           ));
 
       // Only an owner promotes, demotes or deactivates. A user cannot edit
       // their own record -- otherwise 'pending' could simply self-promote.
