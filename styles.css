@@ -460,9 +460,33 @@
                  background:var(--surface-2); border:1px solid var(--border); }
   .invoice-bar .btn { margin-left:auto; }
 
+  /* ---- QuickBooks ------------------------------------------------------- */
+  .qb-intro p { font-size:14px; line-height:1.6; margin-bottom:14px; }
+  .qb-note { font-size:12.5px; padding:11px 14px; border-radius:8px; margin-bottom:14px;
+             background:rgba(201,146,47,.16); line-height:1.5; }
+  .qb-warn { font-size:12.5px; padding:11px 14px; border-radius:8px; margin-bottom:14px;
+             background:var(--neg-soft); color:var(--neg); line-height:1.5; }
+  .qb-top { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  .qb-co { font-family:'Playfair Display',serif; font-size:19px; font-weight:700; }
+  .qb-sub { font-size:12px; color:var(--muted); margin-top:2px; }
+  .qb-top .btn { margin-left:auto; }
+  .qb-head { font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
+             color:var(--muted); margin:22px 0 10px; display:flex; align-items:center; gap:9px; }
+  .qb-todo { font-size:9.5px; background:var(--accent); color:#3a2a08; padding:3px 8px;
+             border-radius:20px; letter-spacing:.5px; }
+  .qb-rows { border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .qb-row { display:flex; align-items:center; gap:12px; padding:11px 14px;
+            border-bottom:1px solid var(--border); flex-wrap:wrap; }
+  .qb-row:last-child { border-bottom:none; }
+  .qb-row.unset { background:rgba(201,146,47,.09); }
+  .qb-name { display:block; font-weight:700; font-size:13.5px; }
+  .qb-hint { display:block; font-size:11.5px; color:var(--muted); margin-top:2px; }
+  .qb-row select { margin-left:auto; max-width:260px; min-width:170px; }
+
   @media (max-width:520px) {
     .g4, .g5, .g3, .g2, .g-addr, .g-labor-add, .g-mat-add, .g-cost-add { grid-template-columns:1fr; }
     .wk-cards, .picker-kinds { grid-template-columns:1fr 1fr 1fr; }
+    .qb-row select { margin-left:0; width:100%; max-width:none; }
     .wk-cards { grid-template-columns:1fr; }
     .summary-grid, .fin-grid { grid-template-columns:1fr 1fr; }
   }
@@ -679,6 +703,7 @@
   html[data-night] .sheet { background:var(--bg); }
   html[data-night] .sheet-item { background:var(--surface); border-color:var(--border); }
   html[data-night] .shift-flag.ok { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
+  html[data-night] .qb-rows { border-color:var(--border); }
   html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
   html[data-night] .section-head { background:var(--brand-dark); }
   html[data-night] input, html[data-night] textarea, html[data-night] select {

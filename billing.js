@@ -213,6 +213,9 @@
           '<div class="storm-row-actions">' +
             '<button class="btn btn-sm" onclick="stormDetail(\'' + id + '\')">Detail</button>' +
             '<button class="btn btn-sm btn-accent" onclick="exportStormCsv(\'' + id + '\')">QuickBooks CSV</button>' +
+            (window.YDQuickBooks && YDQuickBooks.connected()
+              ? '<button class="btn btn-sm btn-filled" onclick="sendStormToQuickBooks(\'' + id + '\')">Send to QuickBooks</button>'
+              : '') +
           '</div>' +
         '</div>';
       }).join('');
@@ -269,6 +272,9 @@
         : '') +
       '<div style="display:flex;gap:8px;margin-top:20px;flex-wrap:wrap">' +
         '<button class="btn btn-accent" onclick="exportStormCsv(\'' + id + '\')">Download QuickBooks CSV</button>' +
+        (window.YDQuickBooks && YDQuickBooks.connected()
+          ? '<button class="btn btn-filled" onclick="sendStormToQuickBooks(\'' + id + '\')">Send to QuickBooks</button>'
+          : '') +
         '<button class="btn" onclick="copyStormSummary(\'' + id + '\')">Copy summary</button>' +
       '</div>';
     document.getElementById('stormDetailModal').classList.add('active');
