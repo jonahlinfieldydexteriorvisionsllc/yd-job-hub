@@ -27,3 +27,8 @@ desktop.ini
 # design -- it ships in the JavaScript of every Firebase web app. Security comes
 # from firestore.rules and the authorized-domains list, not from hiding it.
 # The Trello token in a later phase is a real secret and must never be added.
+
+# Snow account data staged for import -- client emails, phones and prices.
+snow_public.json
+snow_private.json
+snow_accounts.json

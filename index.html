@@ -55,6 +55,7 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
+    <button class="tab-btn" onclick="switchTab('snow')"><span class="tab-icon">❄️</span>Snow</button>
     <button class="tab-btn" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
@@ -168,6 +169,20 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ============ TAB: SNOW ============ -->
+  <div class="tab-panel" id="panel-snow">
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Snow Accounts</span>
+        <span class="section-badge" id="snowCountBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="snowAccountsWrap"></div>
       </div>
     </div>
   </div>
@@ -396,6 +411,7 @@
 <script src="./app.js"></script>
 <script src="./sync.js"></script>
 <script src="./claude.js"></script>
+<script src="./snow.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

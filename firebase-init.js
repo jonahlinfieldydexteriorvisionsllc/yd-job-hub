@@ -280,6 +280,60 @@ async function start() {
         const snap = await getDocs(collection(db, 'jobs'));
         return snap.size;
       },
+
+      // ---- general collection access -------------------------------------
+      // The job methods above came first and are kept as they are. Everything
+      // from Snow onwards uses these instead, so a new record type needs no
+      // new database code -- only rules, which are the part that must be
+      // thought about.
+      //
+      // `path` may be nested: 'snowAccounts/angel-b/private' addresses the
+      // owner-only half of an account. That nesting is what enforces crew
+      // seeing the route but not the money.
+
+      watch(path, onChange, onError) {
+        const parts = path.split('/');
+        return onSnapshot(collection(db, ...parts),
+          snap => onChange(
+            snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() })),
+            { size: snap.size, fromCache: snap.metadata.fromCache }
+          ),
+          err => { console.error('[db] watch failed on', path, err); if (onError) onError(err); });
+      },
+
+      async list(path) {
+        const snap = await getDocs(collection(db, ...path.split('/')));
+        const out = {};
+        snap.forEach(d => { out[d.id] = d.data(); });
+        return out;
+      },
+
+      async get(path, id) {
+        const snap = await getDoc(doc(db, ...path.split('/'), id));
+        return snap.exists() ? snap.data() : null;
+      },
+
+      async put(path, id, data) {
+        await setDoc(doc(db, ...path.split('/'), id), data, { merge: true });
+      },
+
+      async remove(path, id) {
+        await deleteDoc(doc(db, ...path.split('/'), id));
+      },
+
+      // Several writes as one unit. Used by imports, where half-landed data is
+      // worse than none: an account whose pricing arrived but whose address
+      // did not would quietly bill wrong.
+      async putMany(entries) {
+        const CHUNK = 400;
+        for (let i = 0; i < entries.length; i += CHUNK) {
+          const batch = writeBatch(db);
+          entries.slice(i, i + CHUNK).forEach(([path, id, data]) => {
+            batch.set(doc(db, ...path.split('/'), id), data, { merge: true });
+          });
+          await batch.commit();
+        }
+      },
     };
 
     window.YDAuth = {

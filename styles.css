@@ -260,6 +260,34 @@
   .field-actions { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
   .field-actions .btn:disabled { opacity:.6; cursor:default; }
 
+
+  /* ---- Snow accounts ---- */
+  .snow-card { border:1px solid var(--border); border-radius:10px; padding:14px 15px;
+               background:var(--surface); margin-bottom:10px; }
+  .snow-card.inactive { opacity:.55; }
+  .snow-card-head { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .snow-name { font-weight:700; font-size:15px; }
+  .snow-tag { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
+              padding:3px 8px; border-radius:20px; }
+  .snow-tag.commercial { background:#dbe4f0; color:#3a5878; }
+  .snow-tag.salt       { background:var(--surface-2); color:var(--brand); border:1px solid var(--border-strong); }
+  .snow-tag.trigger    { background:#fbeaca; color:#9a6a12; }
+  .snow-tag.hold       { background:var(--neg-soft); color:var(--neg); }
+  .snow-addr { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-top:7px;
+               font-size:13px; color:var(--brand); text-decoration:none; }
+  .snow-addr:hover { text-decoration:underline; }
+  .snow-go { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.7px;
+             color:var(--muted); }
+  .snow-notes { margin-top:6px; font-size:13px; color:var(--text); }
+  .snow-price { margin-top:8px; font-size:12px; font-weight:600; color:var(--accent-dark); }
+  .snow-sq    { margin-top:4px; font-size:11px; color:var(--muted); }
+
+  /* five tabs need to fit a 375px phone */
+  @media (max-width:720px) {
+    .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; }
+    .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
+  }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);
