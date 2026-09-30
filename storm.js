@@ -415,7 +415,11 @@
                two(now.getHours()) + two(now.getMinutes()) + two(now.getSeconds());
     const rec = {
       id: id,
-      label: now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) +
+      // The year is part of the label. Two Januarys from now a storm called
+      // 'Thu, Jan 14' with no year is ambiguous in every list it appears in,
+      // and these records are what invoices are raised from.
+      label: now.toLocaleDateString('en-US', { weekday: 'short', month: 'short',
+                                               day: 'numeric', year: 'numeric' }) +
              ' · ' + inches + '"',
       startedAt: now.toISOString(),
       accumulationInches: inches,

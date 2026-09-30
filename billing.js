@@ -22,6 +22,41 @@
     : '—';
   const accountName = id => ((window.YDSnow && YDSnow.accounts()[id]) || {}).name || id;
 
+  // ------------------------------------------------------- dates and seasons
+  //
+  // Always worked out from the storm's timestamp rather than read off its
+  // stored label, so a storm recorded before the label carried a year still
+  // shows one. Two Januarys from now, 'Thu, Jan 14' on an invoice line is
+  // ambiguous, and these records are what invoices are raised from.
+
+  const stormStart = s => new Date((s && (s.startedAt || s.closedAt)) || 0);
+
+  function stormDay(s) {
+    const d = stormStart(s);
+    if (!d.getTime()) return '';
+    return d.toLocaleDateString('en-US',
+      { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  }
+
+  function stormTitle(s, id) {
+    const day = stormDay(s);
+    if (!day) return (s && s.label) || id;
+    const inches = s.accumulationInches;
+    return day + (inches != null ? ' · ' + inches + '"' : '');
+  }
+
+  // A snow season runs across the turn of the year, so the calendar year is
+  // the wrong bucket: December and the January after it are one winter's work.
+  // Anything from July onwards starts that year's season; anything before it
+  // belongs to the season that began the previous year.
+  function seasonOf(s) {
+    const d = stormStart(s);
+    if (!d.getTime()) return 'Undated';
+    const y = d.getFullYear();
+    const startYear = d.getMonth() >= 6 ? y : y - 1;
+    return startYear + '–' + String(startYear + 1).slice(2);
+  }
+
   function usDate(iso) {
     const d = new Date(iso);
     return (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear();
@@ -31,6 +66,88 @@
     d.setDate(d.getDate() + n);
     return usDate(d.toISOString());
   }
+
+  // ------------------------------------------------------- invoice numbers
+  //
+  // QuickBooks keeps its own running number and expects the next invoice to
+  // continue it. There is no connection to QuickBooks to read that number
+  // from, so the owner tells the app once where the sequence is up to and the
+  // app carries on from there.
+  //
+  // The important part is that a number, once given out, is WRITTEN DOWN
+  // AGAINST THE STORM. Exporting the same storm a second time -- to redo a
+  // failed import, or because a file was lost -- must produce the same numbers
+  // it produced the first time. If it invented new ones, a re-import would
+  // land as a second set of invoices for work already billed.
+  //
+  // Only a storm that has never been exported consumes new numbers.
+
+  const INVOICE_DOC = 'invoicing';
+  let invoiceSettings = null;
+
+  async function invoicing() {
+    if (invoiceSettings) return invoiceSettings;
+    try {
+      invoiceSettings = (await window.YDDb.get('settings', INVOICE_DOC)) || {};
+    } catch (e) { invoiceSettings = {}; }
+    return invoiceSettings;
+  }
+
+  // Returns { accountId: 'number' } for this storm, assigning and saving any
+  // that have not been given out yet.
+  async function invoiceNumbersFor(id, b, accountIds) {
+    const existing = Object.assign({}, b.invoiceNos || {});
+    const missing = accountIds.filter(a => !existing[a]);
+    if (!missing.length) return existing;
+
+    const cfg = await invoicing();
+    // No starting point set yet: fall back to a storm-based reference, which
+    // is unique but does not pretend to continue anybody's sequence.
+    if (cfg.nextInvoiceNo == null) {
+      const d = stormStart(storms[id]);
+      const stamp = String(d.getFullYear()).slice(2) +
+        two(d.getMonth() + 1) + two(d.getDate()) + '-' + two(d.getHours()) + two(d.getMinutes());
+      missing.forEach((a, i) => { existing[a] = 'SNOW-' + stamp + '-' + two(i + 1); });
+      return existing;
+    }
+
+    let next = parseInt(cfg.nextInvoiceNo, 10) || 1;
+    const prefix = cfg.invoicePrefix || '';
+    missing.forEach(a => { existing[a] = prefix + next; next++; });
+
+    // Written before the file is handed over, so a number is never given out
+    // twice even if the download itself goes wrong.
+    invoiceSettings = Object.assign({}, cfg, { nextInvoiceNo: next });
+    try {
+      await window.YDDb.put('settings', INVOICE_DOC, { nextInvoiceNo: next });
+      await window.YDDb.put('storms/' + id + '/private', 'billing', { invoiceNos: existing });
+      b.invoiceNos = existing;
+    } catch (e) {
+      console.warn('[billing] invoice numbers not saved:', e.code || e.message);
+    }
+    return existing;
+  }
+
+  const two = n => String(n).padStart(2, '0');
+
+  // Set from the season report, so the sequence can be pointed at whatever
+  // QuickBooks is actually up to.
+  window.setInvoiceStart = async function () {
+    const cfg = await invoicing();
+    const v = prompt('What is the next invoice number in QuickBooks?\n\n' +
+      'Each exported invoice takes the next number from here, so they carry on ' +
+      'in order. Storms already exported keep the numbers they were given.',
+      cfg.nextInvoiceNo != null ? String(cfg.nextInvoiceNo) : '');
+    if (v === null) return;
+    const n = parseInt(String(v).replace(/[^0-9]/g, ''), 10);
+    if (!(n > 0)) { showToast('That is not a number'); return; }
+    invoiceSettings = Object.assign({}, cfg, { nextInvoiceNo: n });
+    try {
+      await window.YDDb.put('settings', INVOICE_DOC, { nextInvoiceNo: n });
+      showToast('Next invoice will be ' + n);
+      renderSeason();
+    } catch (e) { showToast('Could not save that'); }
+  };
 
   // ---------------------------------------------------------------- loading
 
@@ -85,7 +202,7 @@
         const s = storms[id], b = billingCache[id];
         return '<div class="storm-row">' +
           '<div class="storm-row-main">' +
-            '<div class="storm-row-name">' + esc(s.label || id) + '</div>' +
+            '<div class="storm-row-name">' + esc(stormTitle(s, id)) + '</div>' +
             '<div class="storm-row-sub">' +
               (b ? b.lines.length + ' visits · ' + b.crewHours + ' crew hrs · ' +
                    money(b.totalCents) + (b.saltCents ? ' (salt ' + money(b.saltCents) + ')' : '')
@@ -133,7 +250,7 @@
           '<td class="bold">' + money(total) + '</td></tr>';
       }).join('');
 
-    document.getElementById('stormDetailTitle').textContent = s.label || id;
+    document.getElementById('stormDetailTitle').textContent = stormTitle(s, id);
     document.getElementById('stormDetailBody').innerHTML =
       '<div class="dash-totals" style="margin-bottom:16px">' +
         card('Revenue', money(b.totalCents), 'accent-top') +
@@ -190,18 +307,9 @@
     const due = plusDays(service, DUE_DAYS);
 
     const d0 = new Date(service);
-    const two = n => String(n).padStart(2, '0');
+    // Only for naming the downloaded file; the invoice numbers themselves come
+    // from the running sequence.
     const stamp = '' + d0.getFullYear() + two(d0.getMonth() + 1) + two(d0.getDate());
-    // Two storms in one day is an ordinary Wisconsin week, and without the
-    // time in it both would export the same invoice number for the same
-    // customer -- which QuickBooks would treat as one invoice.
-    // QuickBooks limits how long an invoice number can be, and
-    // 'SNOW-20270114-2340-ANGEL-B' is past it. The number only has to be
-    // unique; the Customer column already says who it is for. So: the storm,
-    // then a sequence within it.
-    const ref = 'SNOW-' + String(d0.getFullYear()).slice(2) +
-      two(d0.getMonth() + 1) + two(d0.getDate()) + '-' +
-      two(d0.getHours()) + two(d0.getMinutes());
 
     // Quote for CSV, and flatten line breaks. A site note typed across two
     // lines would otherwise split the row in half and corrupt every invoice
@@ -217,16 +325,18 @@
     const byAccount = {};
     b.lines.forEach(l => { (byAccount[l.accountId] = byAccount[l.accountId] || []).push(l); });
 
-    let seq = 0;
-    Object.keys(byAccount).sort((x, y) => accountName(x).localeCompare(accountName(y))).forEach(aid => {
+    const order = Object.keys(byAccount)
+      .sort((x, y) => accountName(x).localeCompare(accountName(y)));
+    const numbers = await invoiceNumbersFor(id, b, order);
+
+    order.forEach(aid => {
       const name = accountName(aid);
-      seq++;
-      const invoiceNo = ref + '-' + two(seq);
+      const invoiceNo = numbers[aid];
       byAccount[aid].sort((a, c) => a.pass - c.pass).forEach(l => {
-        // The storm's label is 'Thu, Jan 14 - 14"'. Printing that whole thing
-        // and then the depth cleared gives '14" ... 14" cleared', which reads
-        // like a mistake, so only the date part is used.
-        const day = String(s.label || '').split(' · ')[0];
+        // The date with its year, taken from the storm rather than its label,
+        // and without the accumulation -- the depth cleared follows, and
+        // printing both reads like a mistake.
+        const day = stormDay(s);
         const visit = 'Snow removal ' + day + (l.pass > 1 ? ' (pass ' + l.pass + ')' : '') +
                       ' — ' + l.inches + '" cleared';
         // Plowing, salt and labour are separate lines because a customer
@@ -287,7 +397,7 @@
   window.copyStormSummary = async function (id) {
     const s = storms[id], b = await billingFor(id);
     if (!b) return;
-    const lines = ['YD Exterior Visions — ' + (s.label || id), ''];
+    const lines = ['YD Exterior Visions — ' + stormTitle(s, id), ''];
     const byAccount = {};
     b.lines.forEach(l => { (byAccount[l.accountId] = byAccount[l.accountId] || []).push(l); });
     Object.keys(byAccount).sort((x, y) => accountName(x).localeCompare(accountName(y))).forEach(aid => {
@@ -313,11 +423,15 @@
   // account: a property that bills $815 and eats an hour of two people is
   // worth less per crew-hour than one that bills $95 in fourteen minutes.
   // That comparison is the reason this view exists.
-  function seasonByAccount() {
+  function seasonByAccount(season) {
     const acc = {};
     Object.keys(storms).forEach(id => {
       const b = billingCache[id];
       if (!b) return;
+      // One winter at a time. Totalling every storm ever recorded together
+      // would compare this season's accounts against last season's rates and
+      // make both meaningless.
+      if (season && seasonOf(storms[id]) !== season) return;
       const crew = storms[id].crewSize || 1;
       b.lines.forEach(l => {
         const a = acc[l.accountId] = acc[l.accountId] || {
@@ -343,14 +457,47 @@
     return acc;
   }
 
+  // Which season is on screen. Defaults to the most recent one with storms in
+  // it, so opening the app mid-winter shows this winter.
+  let shownSeason = null;
+
+  function seasonsWithStorms() {
+    const set = {};
+    Object.keys(storms).forEach(id => { if (billingCache[id]) set[seasonOf(storms[id])] = true; });
+    return Object.keys(set).sort().reverse();
+  }
+
+  window.showSeason = function (s) { shownSeason = s; renderSeason(); };
+
   window.renderSeason = function () {
     const wrap = document.getElementById('seasonWrap');
     if (!wrap) return;
-    const acc = seasonByAccount();
-    const ids = Object.keys(acc);
+
+    const seasons = seasonsWithStorms();
     const section = wrap.closest('.section');
-    if (section) section.hidden = !ids.length;
-    if (!ids.length) { wrap.innerHTML = ''; return; }
+    if (!seasons.length) { if (section) section.hidden = true; wrap.innerHTML = ''; return; }
+    if (section) section.hidden = false;
+    if (!shownSeason || seasons.indexOf(shownSeason) === -1) shownSeason = seasons[0];
+
+    const picker = seasons.length > 1
+      ? '<div class="filter-bar season-pick">' + seasons.map(s =>
+          '<button class="btn btn-sm' + (s === shownSeason ? ' btn-filled' : '') +
+          '" onclick="showSeason(\'' + s + '\')">' + s + '</button>').join('') + '</div>'
+      : '<div class="season-one">' + esc(shownSeason) + ' season</div>';
+
+    const nextNo = invoiceSettings && invoiceSettings.nextInvoiceNo;
+    const invoiceBar = '<div class="invoice-bar">' +
+      '<span>' + (nextNo != null
+        ? 'Next invoice number: <strong>' + nextNo + '</strong>'
+        : 'Invoice numbers are not following QuickBooks yet') + '</span>' +
+      '<button class="btn btn-sm" onclick="setInvoiceStart()">' +
+        (nextNo != null ? 'Change' : 'Set it') + '</button>' +
+    '</div>';
+
+    const acc = seasonByAccount(shownSeason);
+    const ids = Object.keys(acc);
+    if (!ids.length) { wrap.innerHTML = picker + invoiceBar +
+      '<p class="empty-msg">Nothing billed in this season yet.</p>'; return; }
 
     // Ordered by what each returns per crew-hour, worst last -- the question
     // being answered is "which of these is worth keeping".
@@ -383,7 +530,7 @@
       return t;
     }, { visits: 0, crewMin: 0, total: 0, salt: 0 });
 
-    wrap.innerHTML =
+    wrap.innerHTML = picker + invoiceBar +
       '<div class="table-wrap"><table><thead><tr>' +
         '<th>Account</th><th>Visits</th><th>Storms</th><th>On site</th><th>Crew hrs</th>' +
         '<th>Plowing</th><th>Salt</th><th>Labour</th><th>Billed</th><th>Per crew-hr</th>' +
