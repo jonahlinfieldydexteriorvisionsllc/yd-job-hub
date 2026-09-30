@@ -430,6 +430,28 @@
   .shift-flag.running { background:rgba(201,146,47,.18); color:var(--accent-dark);
                         border-color:transparent; }
 
+  /* ---- Problems --------------------------------------------------------- */
+  .menu-count { display:inline-block; min-width:18px; margin-left:7px; padding:1px 6px;
+                border-radius:20px; background:var(--neg); color:#fff; font-size:10px;
+                font-weight:700; text-align:center; }
+  .prob { border:1px solid var(--border); border-radius:8px; padding:13px 15px;
+          margin-bottom:10px; }
+  .prob.done { opacity:.55; }
+  .prob-top { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
+  .prob-kind { font-size:9.5px; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
+               padding:3px 8px; border-radius:20px; background:var(--neg-soft); color:var(--neg); }
+  .prob-kind.reported { background:rgba(201,146,47,.18); color:var(--accent-dark); }
+  .prob-who { font-weight:700; font-size:13.5px; }
+  .prob-when { margin-left:auto; font-size:11.5px; color:var(--muted); }
+  .prob-msg { font-size:13.5px; margin-top:8px; line-height:1.5; }
+  .prob-meta { font-size:11.5px; color:var(--muted); margin-top:5px; }
+  .prob-trail { font-size:11.5px; color:var(--muted); margin-top:6px; font-style:italic; }
+  .prob-detail { font-size:10.5px; line-height:1.45; margin-top:9px; padding:9px 11px;
+                 background:var(--surface-2); border-radius:6px; overflow-x:auto;
+                 white-space:pre-wrap; overflow-wrap:anywhere; max-height:150px; }
+  .prob-act { display:flex; gap:8px; align-items:center; margin-top:11px; }
+  .prob-act .remove-btn { margin-left:auto; }
+
   @media (max-width:520px) {
     .g4, .g5, .g3, .g2, .g-addr, .g-labor-add, .g-mat-add, .g-cost-add { grid-template-columns:1fr; }
     .wk-cards, .picker-kinds { grid-template-columns:1fr 1fr 1fr; }

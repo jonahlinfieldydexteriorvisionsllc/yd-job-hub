@@ -36,6 +36,8 @@
           <button onclick="closeHeaderMenu(); exportAllJobs()">Backup</button>
           <button onclick="closeHeaderMenu(); document.getElementById('restoreInput').click()">Restore</button>
           <button onclick="closeHeaderMenu(); window.print()">Print</button>
+          <button id="menuReport" hidden onclick="closeHeaderMenu(); reportProblem()">Something went wrong</button>
+          <button id="menuProblems" hidden onclick="closeHeaderMenu(); openProblems()">Problems<span class="menu-count" id="problemsCount" hidden></span></button>
           <div class="menu-sep" id="menuAccountSep" hidden></div>
           <div class="menu-who" id="menuWho" hidden></div>
           <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
@@ -547,6 +549,17 @@
 
 <!-- Storm detail -->
 <!-- A worker's own page: their hours, what they worked on, what they are owed -->
+<!-- What has gone wrong, on anybody's phone -->
+<div class="modal-overlay" id="problemsModal">
+  <div class="modal" style="max-width:860px">
+    <div class="modal-head">
+      <h2>Problems</h2>
+      <button class="modal-close" onclick="closeProblems()">&times;</button>
+    </div>
+    <div class="modal-body" id="problemsBody"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="workerModal">
   <div class="modal" style="max-width:860px">
     <div class="modal-head">
@@ -683,6 +696,7 @@
 <script src="./weather.js"></script>
 <script src="./prospects.js"></script>
 <script src="./timeclock.js"></script>
+<script src="./problems.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

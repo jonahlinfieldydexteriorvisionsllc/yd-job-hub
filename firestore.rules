@@ -223,6 +223,24 @@ service cloud.firestore {
     }
 
     // ===================================================================
+    // problems -- what broke, on whose phone
+    //
+    // Anyone signed in may file one, because the whole point is to hear about
+    // a failure on a phone the owner cannot reach. Only the owner may read
+    // them: a report carries a stack trace and the screen someone was on, and
+    // that is the owner's diagnostic pile, not something crew should browse.
+    //
+    // Nobody may edit a filed report -- a record of what happened that can be
+    // rewritten afterwards is worth nothing. The owner marks one sorted, which
+    // is a status change and nothing else.
+    // ===================================================================
+    match /problems/{docId} {
+      allow read:   if isOwner();
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if isOwner();
+    }
+
+    // ===================================================================
     // jobBoard -- the crew-visible half of a job
     //
     // Same field-visibility problem as the snow accounts, same answer. A job
