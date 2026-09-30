@@ -181,8 +181,7 @@
     // lines would otherwise split the row in half and corrupt every invoice
     // after it in the file.
     const q = v => '"' + String(v == null ? '' : v)
-      .replace(/[
-]+/g, ' ')
+      .replace(/[\r\n]+/g, ' ')
       .replace(/"/g, '""') + '"';
     const rows = [[
       'InvoiceNo', 'Customer', 'InvoiceDate', 'DueDate', 'Item',
