@@ -362,7 +362,13 @@
   .wx-alert { margin-top:7px; font-size:12px; font-weight:700; color:var(--neg); }
   .wx-figures { display:flex; gap:16px; flex-wrap:wrap; margin-top:11px; }
   .wx-fig { min-width:52px; }
-  .wx-val { font-family:'Playfair Display',serif; font-size:21px; font-weight:700; line-height:1; }
+  /* Measurements, not display type. Playfair's numerals have varying
+     heights, which reads as decorative on a temperature and makes a
+     column of figures look uneven. DM Sans with tabular figures keeps
+     every digit the same width, so numbers line up and can be compared
+     at a glance. */
+  .wx-val { font-family:'DM Sans',sans-serif; font-size:22px; font-weight:700;
+            line-height:1; font-variant-numeric:tabular-nums; letter-spacing:-0.4px; }
   .wx-lab { font-size:9px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-top:3px; }
   .wx-note { margin-top:9px; font-size:12px; font-weight:600; color:var(--accent-dark); }
   .wx-fail { margin-top:7px; font-size:12px; color:var(--muted); }
