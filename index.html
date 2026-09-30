@@ -63,6 +63,7 @@
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn" id="tabMatdash" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
+    <button class="tab-btn" id="tabEquipment" hidden onclick="switchTab('equipment')"><span class="tab-icon">🚜</span>Equipment</button>
     <button class="tab-btn" id="tabContacts" hidden onclick="switchTab('contacts')"><span class="tab-icon">📇</span>Contacts</button>
     <button class="tab-btn tab-more" id="tabMore" onclick="openMore()"><span class="tab-icon">☰</span>More</button>
   </div>
@@ -470,6 +471,17 @@
     </div>
   </div>
 
+  <!-- ============ TAB: EQUIPMENT ============ -->
+  <div class="tab-panel" id="panel-equipment">
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Machines &amp; Vehicles</span>
+        <span class="section-badge" id="eqBadge"></span>
+      </div>
+      <div class="section-body" id="eqWrap"></div>
+    </div>
+  </div>
+
   <!-- ============ TAB 5: CONTACTS ============ -->
   <div class="tab-panel" id="panel-contacts">
 
@@ -552,6 +564,17 @@
 <!-- A worker's own page: their hours, what they worked on, what they are owed -->
 <!-- What has gone wrong, on anybody's phone -->
 <!-- QuickBooks: connect, match accounts to customers, and nothing secret -->
+<!-- One machine: what is due, what has been done, and logging more -->
+<div class="modal-overlay" id="eqModal">
+  <div class="modal" style="max-width:880px">
+    <div class="modal-head">
+      <h2 id="eqTitle">Machine</h2>
+      <button class="modal-close" onclick="closeEquipment()">&times;</button>
+    </div>
+    <div class="modal-body" id="eqBody"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="qbModal">
   <div class="modal" style="max-width:760px">
     <div class="modal-head">
@@ -710,6 +733,7 @@
 <script src="./timeclock.js"></script>
 <script src="./problems.js"></script>
 <script src="./quickbooks.js"></script>
+<script src="./equipment.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

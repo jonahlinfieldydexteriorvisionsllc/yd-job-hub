@@ -263,7 +263,8 @@ function closeMore() {
 }
 function tabButtonId(name) {
   return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
-    dashboard: 'tabDashboard', matdash: 'tabMatdash', contacts: 'tabContacts' }[name] || '';
+    dashboard: 'tabDashboard', matdash: 'tabMatdash', contacts: 'tabContacts',
+    equipment: 'tabEquipment' }[name] || '';
 }
 
 // ---- Header overflow menu (Backup / Restore / Print) ----
@@ -290,12 +291,14 @@ document.addEventListener('keydown', e => {
 // The bar on a phone holds only what gets used in the field. The rest is one
 // tap away behind More, which is what stops every new screen making the bar
 // more crowded than the last.
-const TABS = ['job', 'snow', 'clock', 'tracking', 'dashboard', 'matdash', 'contacts'];
+const TABS = ['job', 'snow', 'clock', 'equipment', 'tracking', 'dashboard', 'matdash', 'contacts'];
 const PHONE_TABS = ['job', 'snow', 'clock', 'dashboard'];
 const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
-  tracking: '🔨 Tracking', dashboard: '📊 All Jobs', matdash: '📦 Materials',
+  equipment: '🚜 Equipment', tracking: '🔨 Tracking',
+  dashboard: '📊 All Jobs', matdash: '📦 Materials',
   contacts: '📇 Contacts' };
-const TAB_HINT = { tracking: 'Hours and materials on the job you have open',
+const TAB_HINT = { equipment: 'What each machine and truck is due for',
+  tracking: 'Hours and materials on the job you have open',
   matdash: 'What you have bought across every job',
   contacts: 'People to ring later' };
 
@@ -316,6 +319,7 @@ function switchTab(name) {
   if (name === 'snow' && window.YDSnow) YDSnow.render();
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
   if (name === 'clock' && window.YDClock) YDClock.render();
+  if (name === 'equipment' && window.YDEquipment) YDEquipment.render();
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();

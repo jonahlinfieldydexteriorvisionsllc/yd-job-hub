@@ -483,9 +483,54 @@
   .qb-hint { display:block; font-size:11.5px; color:var(--muted); margin-top:2px; }
   .qb-row select { margin-left:auto; max-width:260px; min-width:170px; }
 
+  /* ---- Machines and vehicles -------------------------------------------- */
+  /* The border colour is the whole point of the list: overdue reads before
+     anything is consciously looked at. */
+  .eq { border:1px solid var(--border); border-left:4px solid var(--border);
+        border-radius:8px; padding:13px 15px; margin-bottom:10px; cursor:pointer;
+        background:var(--surface); }
+  .eq:hover { border-color:var(--brand); }
+  .eq-overdue { border-left-color:var(--neg); }
+  .eq-soon { border-left-color:var(--accent); }
+  .eq-ok { border-left-color:var(--pos); }
+  .eq-top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .eq-name { font-family:'Playfair Display',serif; font-size:16px; font-weight:700; }
+  .eq-kind { font-size:9.5px; font-weight:700; letter-spacing:.7px; text-transform:uppercase;
+             color:var(--muted); border:1px solid var(--border); padding:2px 7px; border-radius:20px; }
+  .eq-due { margin-left:auto; font-size:11px; font-weight:700; letter-spacing:.4px;
+            padding:3px 9px; border-radius:20px; background:var(--surface-2); color:var(--muted); }
+  .eq-due.overdue { background:var(--neg-soft); color:var(--neg); }
+  .eq-due.soon { background:rgba(201,146,47,.18); color:var(--accent-dark); }
+  .eq-due.ok { background:var(--pos-soft); color:#2f6b3f; }
+  .eq-what { font-size:12.5px; color:var(--muted); margin-top:5px; }
+  .eq-last { font-size:13px; margin-top:7px; }
+  .eq-reading { font-size:11.5px; color:var(--muted); margin-top:4px;
+                font-variant-numeric:tabular-nums; }
+
+  .eq-head { display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
+  .eq-head .btn { margin-left:auto; }
+  .eq-sub { font-size:13px; color:var(--muted); }
+  .eq-serial { font-size:11.5px; color:var(--muted); margin-top:3px;
+               font-variant-numeric:tabular-nums; }
+  .eq-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0; }
+  .eq-card { border:1px solid var(--border); border-radius:8px; padding:11px 13px; }
+  .eq-card.overdue { border-color:var(--neg); background:var(--neg-soft); }
+  .eq-card.soon { border-color:var(--accent); background:rgba(201,146,47,.12); }
+  .eq-card-label { font-size:9.5px; font-weight:700; letter-spacing:.7px;
+                   text-transform:uppercase; color:var(--muted); }
+  .eq-card-value { font-family:'Playfair Display',serif; font-size:19px; font-weight:700;
+                   margin-top:3px; font-variant-numeric:tabular-nums; line-height:1.2; }
+  .eq-notes { font-size:13px; line-height:1.55; padding:11px 14px; border-radius:8px;
+              background:var(--surface-2); white-space:pre-wrap; margin-bottom:16px; }
+  .eq-loghead { display:flex; align-items:center; gap:10px; font-size:11px; font-weight:700;
+                letter-spacing:.8px; text-transform:uppercase; color:var(--muted);
+                margin:20px 0 10px; }
+  .eq-loghead .btn { margin-left:auto; }
+
   @media (max-width:520px) {
     .g4, .g5, .g3, .g2, .g-addr, .g-labor-add, .g-mat-add, .g-cost-add { grid-template-columns:1fr; }
     .wk-cards, .picker-kinds { grid-template-columns:1fr 1fr 1fr; }
+    .eq-cards { grid-template-columns:1fr 1fr; }
     .qb-row select { margin-left:0; width:100%; max-width:none; }
     .wk-cards { grid-template-columns:1fr; }
     .summary-grid, .fin-grid { grid-template-columns:1fr 1fr; }
@@ -586,7 +631,7 @@
     /* Tracking, Materials and Contacts move into the More sheet. They stay
        in the DOM -- switchTab identifies tabs by position -- they are just
        not on the bar. */
-    #tabTracking, #tabMatdash, #tabContacts { display:none; }
+    #tabTracking, #tabMatdash, #tabContacts, #tabEquipment { display:none; }
     .tab-more { display:block; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
   }
@@ -704,6 +749,8 @@
   html[data-night] .sheet-item { background:var(--surface); border-color:var(--border); }
   html[data-night] .shift-flag.ok { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
   html[data-night] .qb-rows { border-color:var(--border); }
+  html[data-night] .eq { background:var(--surface); border-color:var(--border); }
+  html[data-night] .eq-card.overdue { background:rgba(200,73,43,.16); }
   html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
   html[data-night] .section-head { background:var(--brand-dark); }
   html[data-night] input, html[data-night] textarea, html[data-night] select {
