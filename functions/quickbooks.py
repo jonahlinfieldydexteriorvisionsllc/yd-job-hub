@@ -170,6 +170,24 @@ def _access_token(force_refresh=False):
     if not tokens or not tokens.get("refreshToken"):
         raise RuntimeError("QuickBooks is not connected")
 
+    # The hundred-day clock, kept away from the edge.
+    #
+    # Refreshing rotates the refresh token and starts its hundred days again,
+    # so any refresh keeps the connection alive. The app asks for status every
+    # time the owner signs in, which means ordinary use maintains it by itself
+    # -- but only while the access token has actually expired, and two visits
+    # in one hour would not trigger one. So when the refresh token is within a
+    # month of running out, refresh regardless. Job Hub is used all year for
+    # landscaping, so this alone keeps a winter-only QuickBooks connection from
+    # quietly dying over the summer.
+    if not force_refresh:
+        try:
+            refresh_expires = datetime.datetime.fromisoformat(tokens["refreshExpiresAt"])
+            if refresh_expires - datetime.timedelta(days=30) < _now():
+                force_refresh = True
+        except (KeyError, ValueError):
+            pass
+
     if not force_refresh:
         try:
             expires = datetime.datetime.fromisoformat(tokens["accessExpiresAt"])
