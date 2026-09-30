@@ -219,7 +219,7 @@
 
   function render() {
     renderClockCard();
-    if (isOwner()) { renderOnNow(); renderApprovals(); renderTotals(); }
+    if (isOwner()) { renderOnNow(); renderApprovals(); renderCrew(); renderTotals(); }
     manageTicker();
   }
   window.renderClock = render;
@@ -485,6 +485,81 @@
     return d.getTime();
   }
 
+  // ------------------------------------------------------------- your crew
+  //
+  // Signing in creates a 'pending' record that grants nothing until the owner
+  // changes the role. Until this screen existed there was no way to make that
+  // change except by editing the database by hand, which meant the first step
+  // of using the clock at all was a trip to the Firebase console.
+
+  function renderCrew() {
+    const wrap = el('crewWrap');
+    if (!wrap) return;
+    const all = Object.keys(people).map(uid => people[uid])
+      .filter(u => u.uid !== ((me() || {}).uid));
+
+    const waiting = all.filter(u => u.role === 'pending' || u.active === false);
+    const active = all.filter(u => u.role === 'crew' && u.active);
+
+    const badge = el('crewBadge');
+    if (badge) badge.textContent = waiting.filter(u => u.role === 'pending').length
+      ? waiting.filter(u => u.role === 'pending').length + ' asking to join' : '';
+
+    wrap.innerHTML =
+      (waiting.length
+        ? waiting.map(u => '<div class="crew-row waiting">' +
+            '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
+            '<span class="crew-mail">' + esc(u.email) + '</span>' +
+            '<span class="crew-state">' + (u.role === 'pending' ? 'wants access' : 'switched off') + '</span>' +
+            '<button class="btn btn-sm btn-filled" onclick="approveCrew(\'' + u.uid + '\')">' +
+              (u.role === 'pending' ? 'Let them in' : 'Switch back on') + '</button>' +
+            (u.role === 'pending'
+              ? '<button class="btn btn-sm" onclick="denyCrew(\'' + u.uid + '\')">Not them</button>' : '') +
+          '</div>').join('')
+        : '') +
+      (active.length
+        ? active.map(u => '<div class="crew-row">' +
+            '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
+            '<span class="crew-mail">' + esc(u.email) + '</span>' +
+            '<button class="btn btn-sm" onclick="setWorkerRate(\'' + u.uid + '\')">' +
+              money(rateOf(u.uid)) + '/hr</button>' +
+            '<button class="remove-btn" onclick="removeCrew(\'' + u.uid + '\')" title="Switch off">&times;</button>' +
+          '</div>').join('')
+        : '<p class="empty-msg">No crew yet. Send them the app link and ask them to ' +
+          'sign in with Google — they will show up here to let in.</p>');
+  }
+
+  function setRole(uid, patch, msg) {
+    if (!isOwner() || !people[uid]) return;
+    people[uid] = Object.assign({}, people[uid], patch);
+    render();
+    Promise.resolve(window.YDDb.put('users', uid, patch))
+      .catch(e => console.warn('[clock] role change not saved:', e.code || e.message));
+    if (msg) showToast(msg);
+  }
+
+  window.approveCrew = function (uid) {
+    const u = people[uid];
+    if (!u) return;
+    setRole(uid, { role: 'crew', active: true },
+      (u.name || u.email) + ' can now clock in');
+  };
+
+  // Denied, not deleted: the record is the audit trail of who asked, and the
+  // rules forbid deleting user records outright.
+  window.denyCrew = function (uid) {
+    const u = people[uid];
+    if (!u || !confirm('Refuse access for ' + (u.email) + '?')) return;
+    setRole(uid, { role: 'denied', active: false }, 'Refused');
+  };
+
+  window.removeCrew = function (uid) {
+    const u = people[uid];
+    if (!u || !confirm('Switch off access for ' + (u.name || u.email) +
+        '?\n\nTheir hours are kept. You can switch them back on any time.')) return;
+    setRole(uid, { active: false }, (u.name || u.email) + ' switched off');
+  };
+
   function renderTotals() {
     const wrap = el('totalsWrap');
     if (!wrap) return;
@@ -647,7 +722,7 @@
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     const owner = a.isOwner === true;
-    ['clockOnNowSection', 'clockApproveSection', 'clockTotalsSection'].forEach(id => {
+    ['clockOnNowSection', 'clockApproveSection', 'clockCrewSection', 'clockTotalsSection'].forEach(id => {
       const s = el(id); if (s) s.hidden = !owner;
     });
     const tab = el('tabClock');
