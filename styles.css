@@ -367,6 +367,54 @@
   .wx-note { margin-top:9px; font-size:12px; font-weight:600; color:var(--accent-dark); }
   .wx-fail { margin-top:7px; font-size:12px; color:var(--muted); }
 
+
+  /* ============================================================
+     Night mode — for the truck, at 3am.
+
+     Not simply "dark". Three things are different from a normal dark theme:
+     backgrounds go near-black so the screen does not light the cab; the
+     accent shifts to amber, which costs night vision far less than blue or
+     white; and contrast is pushed past what looks tasteful in daylight,
+     because the competition is a headlamp and a windscreen full of snow.
+     ============================================================ */
+  html[data-night] {
+    --bg:#0c0a0e; --surface:#171319; --surface-2:#211b26;
+    --brand:#3a2f42; --brand-dark:#2a2130; --brand-2:#a882d8;
+    --accent:#f0b04a; --accent-dark:#c98a1f;
+    --text:#f4f0f7; --muted:#a79cb2;
+    --border:#2e2634; --border-strong:#463c4f;
+    --pos:#4fd68a; --pos-soft:#14301f; --neg:#ff7a5c; --neg-soft:#3a1a14;
+    color-scheme: dark;
+  }
+  html[data-night] body { background:var(--bg); color:var(--text); }
+  html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
+  html[data-night] .section-head { background:var(--brand-dark); }
+  html[data-night] input, html[data-night] textarea, html[data-night] select {
+    background:var(--surface-2); color:var(--text); border-color:var(--border-strong); }
+  html[data-night] .logo { color:#c9a9ec; }
+  html[data-night] .tab-bar { background:var(--brand-dark); }
+  html[data-night] .tab-btn { color:#9a8ea6; }
+  html[data-night] .tab-btn.active { color:#fff; background:rgba(240,176,74,.18); border-top-color:var(--accent); }
+  html[data-night] .snow-card, html[data-night] .stop, html[data-night] .wx-card,
+  html[data-night] .storm-row { background:var(--surface); border-color:var(--border); }
+  html[data-night] .stop.onsite { background:#241c14; }
+  html[data-night] .snow-addr { color:#b79ae0; }
+  html[data-night] .snow-price { color:#f0b04a; }
+  html[data-night] .stop-notes { color:#f0b04a; }
+  html[data-night] .summary-card, html[data-night] .fin-card { background:var(--surface); border-color:var(--border); }
+  html[data-night] .modal { background:var(--bg); }
+  html[data-night] .btn { color:#cdbcdc; border-color:var(--border-strong); }
+  html[data-night] .btn-filled { background:var(--brand-2); color:#14101a; border-color:var(--brand-2); }
+
+  /* The two that get pressed with gloves on. Bigger and louder at night. */
+  html[data-night] .btn-stop { min-height:64px; font-size:17px; }
+  html[data-night] .btn-stop.arrive { background:#6f4fa8; color:#fff; }
+  html[data-night] .btn-stop.depart { background:#f0b04a; color:#1a1208; }
+  html[data-night] .stepper-btn { background:var(--surface-2); color:var(--text);
+                                  border-color:var(--border-strong); width:54px; height:54px; }
+  html[data-night] .stepper-input { background:var(--surface-2); color:var(--text); font-size:21px; }
+  html[data-night] .stop-name { font-size:18px; }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);

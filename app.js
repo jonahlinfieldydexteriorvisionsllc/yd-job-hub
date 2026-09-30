@@ -144,6 +144,24 @@ function resetDateInputs() { ['matDate','addCostDate','payDate'].forEach(id => {
 })();
 
 
+
+// ---- Night mode -------------------------------------------------------------
+// Remembered per device: the phone that rides in the truck should stay dark
+// without being asked every storm, while the desktop stays light.
+function applyNight(on) {
+  const r = document.documentElement;
+  if (on) r.setAttribute('data-night', ''); else r.removeAttribute('data-night');
+  const meta = document.querySelector('meta[name=theme-color]');
+  if (meta) meta.content = on ? '#0c0a0e' : '#472c64';
+  const btn = document.getElementById('nightBtn');
+  if (btn) btn.textContent = on ? '◐ Day' : '◑ Night';
+  try { localStorage.setItem(STORAGE_PREFIX + 'night', on ? '1' : ''); } catch (e) {}
+}
+function toggleNight() {
+  applyNight(!document.documentElement.hasAttribute('data-night'));
+}
+try { if (localStorage.getItem(STORAGE_PREFIX + 'night')) applyNight(true); } catch (e) {}
+
 // ---- Account: who is signed in, and signing out ----------------------------
 // Signing out deliberately clears this device's cached jobs. Firestore holds
 // the real copy, so nothing is lost -- but a crew member handing back a shared
