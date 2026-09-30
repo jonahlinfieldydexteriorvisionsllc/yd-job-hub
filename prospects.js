@@ -287,8 +287,7 @@
     if (editingId === id) clearForm();
     render();
     if (!window.YDDb) { warnNoDb(); return; }
-    Promise.resolve(window.YDDb.remove('prospects', id))
-      .catch(e => console.warn('[prospects] removal not yet on the server:', e.code || e.message));
+    Promise.resolve(window.YDDb.remove('prospects', id)).catch(e => failed('removing ' + p.name, e));
   };
 
   // Writes are not awaited. Firestore applies them locally at once but settles
@@ -302,8 +301,21 @@
   // get no warning at all.
   function write(id, data, what) {
     if (!window.YDDb) { warnNoDb(); return; }
-    Promise.resolve(window.YDDb.put('prospects', id, data))
-      .catch(e => console.warn('[prospects] ' + what + ' not yet on the server:', e.code || e.message));
+    Promise.resolve(window.YDDb.put('prospects', id, data)).catch(e => failed(what, e));
+  }
+
+  // No signal is normal and needs no fuss -- the write is already applied on
+  // the phone and goes up later. Being refused is not: the record is on screen
+  // but will be gone on the next reload, and saying nothing would let someone
+  // type in a whole list and lose it.
+  function failed(what, e) {
+    const code = e && e.code;
+    if (code === 'permission-denied') {
+      console.error('[prospects] ' + what + ' was refused by the security rules');
+      showToast('Not saved — this account is not allowed to write here');
+    } else {
+      console.warn('[prospects] ' + what + ' not yet on the server:', code || (e && e.message));
+    }
   }
 
   function warnNoDb() {
@@ -372,7 +384,12 @@
         people[c.id] = rec;
       });
       render();
-    }, () => render());
+    }, err => {
+      render();
+      if (err && err.code === 'permission-denied') {
+        showToast('Contacts could not be loaded — security rules need publishing');
+      }
+    });
   }
 
   window.YDProspects = { all: () => people, render: render, whenKey: whenKey };
