@@ -176,11 +176,13 @@
 
   <!-- ============ TAB: SNOW ============ -->
   <div class="tab-panel" id="panel-snow">
+    <div id="stormWrap" hidden></div>
     <div class="section">
       <div class="section-head">
         <span class="section-title">Snow Accounts</span>
         <span style="display:flex;align-items:center;gap:10px">
           <span class="section-badge" id="snowCountBadge"></span>
+          <button class="btn btn-filled btn-sm" id="stormStartBtn" onclick="startStorm()">❄ Start storm</button>
           <button class="btn btn-accent btn-sm" id="snowAddBtn" onclick="openSnowForm()">+ Add account</button>
         </span>
       </div>
@@ -505,6 +507,7 @@
 <script src="./sync.js"></script>
 <script src="./claude.js"></script>
 <script src="./snow.js"></script>
+<script src="./storm.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

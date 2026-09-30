@@ -295,6 +295,36 @@
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
   }
 
+
+  /* ---- Storm night ---- */
+  .storm-meta { display:flex; gap:16px; flex-wrap:wrap; font-size:13px; color:var(--muted);
+                padding-bottom:14px; margin-bottom:6px; border-bottom:1px solid var(--border); }
+  .storm-meta strong { color:var(--text); font-size:15px; }
+  .storm-onsite { color:var(--accent-dark); font-weight:700; }
+
+  .stop { border:1px solid var(--border); border-left:5px solid var(--border-strong);
+          border-radius:10px; padding:13px 14px; margin-bottom:10px; background:var(--surface); }
+  .stop.onsite  { border-left-color:var(--accent); background:#fdfaf4; }
+  .stop.done    { border-left-color:var(--pos); opacity:.75; }
+  .stop.skipped { border-left-color:var(--muted); opacity:.6; }
+  .stop-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .stop-num { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px;
+              border-radius:50%; background:var(--brand); color:#fff; font-size:11px; font-weight:700; flex:none; }
+  .stop.done .stop-num { background:var(--pos); }
+  .stop-name { font-weight:700; font-size:16px; }
+  .stop-notes { margin-top:7px; font-size:14px; font-weight:600; color:var(--accent-dark); }
+  .stop-times { margin-top:7px; font-size:12px; color:var(--muted); }
+  .stop-actions { display:flex; gap:8px; margin-top:12px; align-items:center; flex-wrap:wrap; }
+
+  /* Deliberately large. These get pressed with gloves on, in the dark. */
+  .btn-stop { flex:1; min-height:56px; min-width:130px; border:none; border-radius:10px;
+              font-family:'DM Sans',sans-serif; font-size:15px; font-weight:700; letter-spacing:1px;
+              text-transform:uppercase; color:#fff; cursor:pointer; }
+  .btn-stop.arrive { background:var(--brand); }
+  .btn-stop.arrive:active { background:var(--brand-dark); }
+  .btn-stop.depart { background:var(--accent-dark); }
+  .btn-stop.depart:active { background:#8a6018; }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);
