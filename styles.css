@@ -198,6 +198,38 @@
   .cat-body { border:1px solid var(--border); padding:4px 14px; background:var(--surface); }
   .cat-body.shut { display:none; }
 
+  /* ---- People to contact ------------------------------------------------ */
+  /* The tag box matches the Job tab's service tags so the two fields read as
+     the same control in both places. */
+  .tag-box { display:flex; flex-wrap:wrap; gap:4px; min-height:40px; padding:6px;
+             border:1.5px solid var(--border-strong); background:var(--surface-2);
+             align-items:flex-start; border-radius:6px; }
+  .tag-pick { margin-top:6px; }
+  .tag-none { color:#a096ad; font-size:12px; padding:4px; }
+
+  .pp { border:1px solid var(--border); border-radius:8px; padding:12px 14px;
+        margin-bottom:10px; background:var(--surface); }
+  /* Closed leads stay legible but stop competing for attention. */
+  .pp-closed { opacity:.62; }
+  .pp-top { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .pp-name { font-family:'Playfair Display',serif; font-size:16px; font-weight:700; }
+  .pp-when { font-size:11px; font-weight:700; letter-spacing:.5px; text-transform:uppercase;
+             color:var(--accent-dark); background:rgba(201,146,47,.14);
+             padding:3px 9px; border-radius:20px; }
+  .pp-stat { font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase;
+             padding:3px 9px; border-radius:20px; margin-left:auto;
+             background:var(--surface-2); color:var(--muted); border:1px solid var(--border); }
+  .pp-stat.s-won { background:var(--pos-soft); color:#2f6b3f; border-color:#bcdcc6; }
+  .pp-stat.s-no  { background:var(--neg-soft); color:var(--neg); border-color:transparent; }
+  .pp-svc { display:flex; flex-wrap:wrap; gap:4px; margin-top:9px; }
+  .pp-note { font-size:13px; line-height:1.55; margin-top:9px; white-space:pre-wrap; }
+  .pp-contact { font-size:12px; color:var(--muted); margin-top:7px; }
+  .pp-contact a { color:var(--brand); text-decoration:none; }
+  .pp-contact a:hover { text-decoration:underline; }
+  .pp-act { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:11px; }
+  .pp-act select { max-width:150px; font-size:12px; padding:5px 8px; }
+  .pp-act .remove-btn { margin-left:auto; }
+
   @media (max-width:860px) {
     .page { padding:0 14px 80px; }
     .cols2 { grid-template-columns:1fr; }
@@ -393,6 +425,9 @@
     color-scheme: dark;
   }
   html[data-night] body { background:var(--bg); color:var(--text); }
+  html[data-night] .pp { background:var(--surface); border-color:var(--border); }
+  html[data-night] .pp-stat.s-won { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
+  html[data-night] .pp-contact a { color:var(--brand-2); }
   html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
   html[data-night] .section-head { background:var(--brand-dark); }
   html[data-night] input, html[data-night] textarea, html[data-night] select {

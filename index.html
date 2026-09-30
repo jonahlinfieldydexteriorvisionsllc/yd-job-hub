@@ -59,6 +59,7 @@
     <button class="tab-btn" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
+    <button class="tab-btn" id="tabContacts" hidden onclick="switchTab('contacts')"><span class="tab-icon">📇</span>Contacts</button>
   </div>
 
   <!-- ============ TAB 1: JOB ============ -->
@@ -395,6 +396,63 @@
       </div>
     </div>
   </div>
+
+  <!-- ============ TAB 5: CONTACTS ============ -->
+  <div class="tab-panel" id="panel-contacts">
+
+    <!-- People to contact later. Typed in by hand on purpose -- nothing here
+         is imported from the snow accounts or anywhere else. Everyone gets
+         tagged with the work they are being contacted about, using the same
+         service list as the Job tab. -->
+    <div class="section" id="ppSection" hidden>
+      <div class="section-head">
+        <span class="section-title">People to Contact</span>
+        <span class="section-badge accent" id="ppBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="add-area">
+          <div class="grid g3">
+            <div class="field"><span class="label">Name</span>
+              <input id="ppName" placeholder="Who it is" onkeydown="if (event.key === 'Enter') saveProspect()"></div>
+            <div class="field"><span class="label">When to contact</span>
+              <input id="ppWhen" placeholder="e.g. Sept 2027, early spring"></div>
+            <div class="field"><span class="label">What for</span>
+              <div id="ppTags" class="tag-box"></div>
+              <select id="ppTagSelect" onchange="addProspectTag()" class="tag-pick">
+                <option value="">+ Add a service…</option>
+              </select>
+            </div>
+          </div>
+          <div class="grid g3">
+            <div class="field"><span class="label">Address</span><input id="ppAddress" placeholder="Optional"></div>
+            <div class="field"><span class="label">Phone</span><input id="ppPhone" type="tel" placeholder="Optional"></div>
+            <div class="field"><span class="label">Email</span><input id="ppEmail" type="email" placeholder="Optional"></div>
+          </div>
+          <div class="field"><span class="label">Note</span>
+            <textarea id="ppNote" rows="2" placeholder="What they want, what you talked about, anything to remember"></textarea></div>
+          <div class="field-actions">
+            <button class="btn btn-filled" id="ppSaveBtn" onclick="saveProspect()">Add to the list</button>
+            <button class="btn btn-sm" id="ppCancelBtn" hidden onclick="cancelProspectEdit()">Cancel</button>
+          </div>
+          <div class="hint">Only the name is required. Everything else can wait until you know it.</div>
+        </div>
+        <div class="filter-bar mt">
+          <select id="ppFilterSvc" onchange="renderProspects()"><option value="">Any service</option></select>
+          <select id="ppFilterStatus" onchange="renderProspects()">
+            <option value="open">Still open</option>
+            <option value="">Everyone</option>
+            <option value="to-contact">To contact</option>
+            <option value="contacted">Contacted</option>
+            <option value="quoted">Quoted</option>
+            <option value="won">Won</option>
+            <option value="no">Not interested</option>
+          </select>
+          <input id="ppSearch" placeholder="Search…" oninput="renderProspects()">
+        </div>
+        <div id="ppWrap"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Job Manager Modal -->
@@ -542,6 +600,7 @@
 <script src="./storm.js"></script>
 <script src="./billing.js"></script>
 <script src="./weather.js"></script>
+<script src="./prospects.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

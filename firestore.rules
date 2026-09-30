@@ -99,6 +99,7 @@ service cloud.firestore {
     // ===================================================================
     match /jobs/{docId}      { allow read, write: if isOwner(); }
     match /contacts/{docId}  { allow read, write: if isOwner(); }
+    match /prospects/{docId} { allow read, write: if isOwner(); }
     match /expenses/{docId}  { allow read, write: if isOwner(); }
     match /estimates/{docId} { allow read, write: if isOwner(); }
     match /equipment/{docId} { allow read, write: if isOwner(); }

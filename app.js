@@ -227,7 +227,7 @@ document.addEventListener('keydown', e => {
 // ═══════════════════════════════════════════════════════════
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    const tabs = ['job','snow','tracking','dashboard','matdash'];
+    const tabs = ['job','snow','tracking','dashboard','matdash','contacts'];
     b.classList.toggle('active', tabs[i] === name);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -235,6 +235,7 @@ function switchTab(name) {
   if (name === 'dashboard') renderDashboard();
   if (name === 'matdash') renderMatDash();
   if (name === 'snow' && window.YDSnow) YDSnow.render();
+  if (name === 'contacts' && window.YDProspects) YDProspects.render();
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();
