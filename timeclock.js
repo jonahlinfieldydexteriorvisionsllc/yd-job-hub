@@ -53,10 +53,14 @@
   // card, the approval queue, the job's labour cost and the snow invoice can
   // never disagree about the same shift.
 
+  const startMsOf = e => (typeof e.startedMs === 'number' ? e.startedMs : ms(e.startedAt));
+  const endMsOf = e => (typeof e.endedMs === 'number' ? e.endedMs
+    : (e.endedAt ? ms(e.endedAt) : null));
+
   function paidMs(e) {
-    const start = ms(e.startedAt);
+    const start = startMsOf(e);
     if (!start) return 0;
-    const end = e.endedAt ? ms(e.endedAt) : Date.now();
+    const end = endMsOf(e) != null ? endMsOf(e) : Date.now();
     return Math.max(0, end - start);
   }
 
@@ -64,8 +68,8 @@
   // shift; the snow side passes a single stop's arrive/depart instead, which
   // is what makes a pause land on the right client's invoice or on none.
   function pausedMs(e, from, to) {
-    const lo = from == null ? ms(e.startedAt) : from;
-    const hi = to == null ? (e.endedAt ? ms(e.endedAt) : Date.now()) : to;
+    const lo = from == null ? startMsOf(e) : from;
+    const hi = to == null ? (endMsOf(e) != null ? endMsOf(e) : Date.now()) : to;
     if (!(hi > lo)) return 0;
     return (e.pauses || []).reduce((sum, p) => {
       const ps = ms(p.startedAt);
@@ -103,6 +107,39 @@
   }
 
   const running = e => !e.endedAt;
+
+  // ----------------------------------------------------- what needs a look
+  //
+  // An ordinary clocked shift is trusted. Somebody tapped Clock in when they
+  // started and Clock out when they stopped, and making the owner confirm each
+  // one turns approval into a rubber stamp -- which is worse than no approval
+  // at all, because a rubber stamp still looks like oversight.
+  //
+  // Two things do get stopped:
+  //
+  //   a shift TYPED IN by hand, because nobody watched the clock run; the
+  //   times are a recollection, and that is exactly where a mistake lands
+  //
+  //   any shift longer than LONG_SHIFT_HOURS, however it was made, because at
+  //   that length a forgotten clock-out and a genuinely long day look
+  //   identical, and the difference is hours of wages
+  //
+  // The rules enforce the same two conditions, so this is not merely what the
+  // app chooses to show.
+  const LONG_SHIFT_HOURS = 8;
+  const LONG_SHIFT_MS = LONG_SHIFT_HOURS * 3600000;
+
+  function needsReview(paid, source) {
+    return source === 'manual' || paid > LONG_SHIFT_MS;
+  }
+
+  // 'ok' is a finished shift that stands on its own; 'approved' is one the
+  // owner decided. Both are real hours and both count.
+  const counts = e => e.status === 'ok' || e.status === 'approved';
+  const awaitingOwner = e => e.status === 'pending' && !running(e);
+  const whyFlagged = e => e.source === 'manual'
+    ? 'typed in by hand'
+    : 'longer than ' + LONG_SHIFT_HOURS + ' hours';
 
   // Snow (with a storm running) and jobs are work a customer pays for. Labor,
   // receipts and snow with no storm are the business's own time: every minute
@@ -163,9 +200,15 @@
       targetName: targetName,     // kept as it read then; jobs get renamed
       startedAt: nowIso(),
       endedAt: null,
+      // The milliseconds are what the security rules read. Rules cannot do
+      // arithmetic on a date written as text, and the eight-hour check has to
+      // be enforced there rather than only here.
+      startedMs: Date.now(),
+      endedMs: null,
       pauses: [],
       note: '',
-      status: 'pending',
+      source: 'clock',
+      status: 'running',
       createdBy: u.uid,
     };
     entries[id] = Object.assign({ id: id }, rec);
@@ -179,6 +222,105 @@
     clockingFor = forUid || null;
     picking = true;
     render();
+  };
+
+  // ------------------------------------------------- a shift they forgot
+  //
+  // Phone dead, hands full, simply forgot. Without this the hours are either
+  // lost or invented later by the owner, so the honest thing is to let the
+  // person who did the work write down when they did it -- and then have the
+  // owner agree, because unlike a clocked shift nobody watched the clock run.
+
+  let addingShift = false;
+  let addFor = null;          // set when the owner is filing one for somebody
+
+  window.openAddShift = function (forUid) {
+    addFor = forUid || null;
+    addingShift = true;
+    picking = false;
+    render();
+  };
+  window.cancelAddShift = function () { addingShift = false; addFor = null; render(); };
+
+  function addShiftHtml() {
+    const today = new Date();
+    const iso = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+    const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]))
+      .filter(j => j.status !== 'complete')
+      .sort((a, b) => String(a.name).localeCompare(b.name));
+
+    return '<div class="addshift">' +
+      '<p class="clock-lead">A shift you forgot to clock in for</p>' +
+      '<div class="field"><span class="label">What were you on?</span>' +
+        '<select id="asTarget">' +
+          '<option value="labor|labor|Labor">Labor</option>' +
+          '<option value="snow|snow|Snow">Snow</option>' +
+          '<option value="receipts|receipts|Receipts">Receipts</option>' +
+          jobs.map(j => '<option value="job|' + esc(j.id) + '|' + esc(j.name) + '">' +
+            esc(j.name) + '</option>').join('') +
+        '</select></div>' +
+      '<div class="field"><span class="label">Day</span>' +
+        '<input type="date" id="asDate" value="' + iso(today) + '" max="' + iso(today) + '"></div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Started</span><input type="time" id="asFrom"></div>' +
+        '<div class="field"><span class="label">Finished</span><input type="time" id="asTo"></div>' +
+      '</div>' +
+      '<div class="field"><span class="label">What happened?</span>' +
+        '<textarea id="asWhy" rows="2" placeholder="e.g. phone died, forgot to clock in"></textarea></div>' +
+      '<div class="hint">This one goes to the office to approve, because the clock ' +
+        'was not running.</div>' +
+      '<div class="field-actions">' +
+        '<button class="btn btn-filled clock-big" onclick="submitAddShift()">Send it in</button>' +
+        '<button class="btn btn-sm" onclick="cancelAddShift()">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  const two = n => String(n).padStart(2, '0');
+
+  window.submitAddShift = function () {
+    const u = me();
+    if (!u) return;
+    const forUid = addFor || u.uid;
+
+    const parts = ((el('asTarget') || {}).value || '').split('|');
+    const day = (el('asDate') || {}).value;
+    const from = (el('asFrom') || {}).value;
+    const to = (el('asTo') || {}).value;
+    const why = ((el('asWhy') || {}).value || '').trim();
+
+    if (!day || !from || !to) { showToast('Fill in the day and both times'); return; }
+
+    const startMs = new Date(day + 'T' + from).getTime();
+    let endMs = new Date(day + 'T' + to).getTime();
+    if (!startMs || !endMs) { showToast('Those times did not make sense'); return; }
+    // Finished before it started means it ran past midnight.
+    if (endMs <= startMs) endMs += 24 * 3600000;
+
+    if (endMs - startMs > 24 * 3600000) { showToast('That is longer than a day'); return; }
+    if (startMs > Date.now() + 60000) { showToast('That is in the future'); return; }
+
+    const id = 'te' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
+    const rec = {
+      uid: forUid,
+      workerName: forUid === u.uid
+        ? ((people[forUid] || {}).name || u.displayName || u.email || 'Me')
+        : ((people[forUid] || {}).name || (people[forUid] || {}).email || 'Worker'),
+      kind: parts[0], targetId: parts[1], targetName: parts[2],
+      startedAt: new Date(startMs).toISOString(),
+      endedAt: new Date(endMs).toISOString(),
+      startedMs: startMs, endedMs: endMs,
+      pauses: [],
+      note: why,
+      source: 'manual',
+      status: 'pending',       // always: nobody watched the clock run
+      createdBy: u.uid,
+    };
+    entries[id] = Object.assign({ id: id }, rec);
+    addingShift = false; addFor = null;
+    render();
+    write(id, rec, 'submitting a shift');
+    showToast('Sent in — ' + fmtDur(endMs - startMs) + ' on ' + parts[2]);
   };
   window.cancelJobPicker = function () { picking = false; clockingFor = null; render(); };
 
@@ -213,21 +355,33 @@
   function endShift(id, why) {
     const e = entries[id];
     if (!e || !running(e)) return;
-    const stamp = nowIso();
+    const stamp = nowIso(), stampMs = Date.now();
     // An open pause is closed too, or the shift would look paused forever and
     // its billable time would be wrong.
     const p = openPause(e);
     if (p) p.endedAt = stamp;
     e.endedAt = stamp;
+    e.endedMs = stampMs;
+
+    // A normal day settles itself. Only a shift past the eight-hour mark goes
+    // to the owner, because that is where a forgotten clock-out hides.
+    e.status = needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
+
     render();
-    write(id, { endedAt: stamp, pauses: e.pauses }, why || 'clocking out');
+    write(id, { endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status },
+      why || 'clocking out');
+    return e.status;
   }
 
   window.clockOut = function (id) {
     const e = entries[id];
     if (!e) return;
-    endShift(id);
-    showToast('Clocked out — ' + fmtDur(paidMs(e)) + ', waiting for approval');
+    const dur = fmtDur(paidMs(e));
+    const status = endShift(id);
+    showToast(status === 'pending'
+      ? 'Clocked out — ' + dur + '. Over ' + LONG_SHIFT_HOURS +
+        ' hours, so it goes to the office to check.'
+      : 'Clocked out — ' + dur);
   };
 
   // ------------------------------------------------------------- the display
@@ -260,6 +414,7 @@
     const badge = el('clockBadge');
     if (badge) badge.textContent = shift ? (openPause(shift) ? 'Paused' : 'On the clock') : '';
 
+    if (addingShift) { wrap.innerHTML = addShiftHtml(); return; }
     if (picking) {
       // The running clock redraws every second, and rebuilding the picker
       // replaces the search box. While somebody is actually typing in it, only
@@ -288,6 +443,7 @@
       '<p class="clock-lead">Not on the clock.</p>' +
       '<button class="btn btn-filled clock-big" onclick="openJobPicker()">Clock in</button>' +
       recentHtml() +
+      '<button class="btn btn-sm" onclick="openAddShift()">Forgot to clock in?</button>' +
       '<button class="btn btn-sm wk-mine" onclick="openWorker()">My hours</button>' +
     '</div>';
   }
@@ -452,8 +608,7 @@
   function renderApprovals() {
     const wrap = el('approveWrap');
     if (!wrap) return;
-    const waiting = Object.values(entries)
-      .filter(e => e.status === 'pending' && e.endedAt)
+    const waiting = Object.values(entries).filter(awaitingOwner)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
     const badge = el('approveBadge');
     if (badge) badge.textContent = waiting.length ? waiting.length + ' waiting' : '';
@@ -461,16 +616,21 @@
     if (sec) sec.hidden = false;
 
     if (!waiting.length) {
-      wrap.innerHTML = '<p class="empty-msg">Nothing waiting. Finished shifts show up here to approve.</p>';
+      wrap.innerHTML = '<p class="empty-msg">Nothing waiting. Ordinary clocked shifts ' +
+        'go through on their own — only shifts typed in by hand, or longer than ' +
+        LONG_SHIFT_HOURS + ' hours, land here.</p>';
       return;
     }
     wrap.innerHTML = waiting.map(e => {
       const paid = paidMs(e), bill = billableMs(e), pause = pausedMs(e);
       return '<div class="appr">' +
         '<div class="appr-top">' +
-          '<span class="appr-who">' + esc(e.workerName) + '</span>' +
+          '<button class="appr-who linkish" onclick="openWorker(\'' + e.uid + '\')">' +
+            esc(e.workerName) + '</button>' +
           '<span class="appr-where">' + esc(e.targetName) + '</span>' +
+          '<span class="appr-why">' + whyFlagged(e) + '</span>' +
         '</div>' +
+        (e.note ? '<div class="appr-note">“' + esc(e.note) + '”</div>' : '') +
         '<div class="appr-times">' +
           new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
           ' · ' + clockTime(e.startedAt) + ' – ' + clockTime(e.endedAt) +
@@ -500,6 +660,27 @@
   // Approval is where the money is decided. The rate is read from the worker's
   // record and written onto the shift, so raising someone's rate next year
   // does not quietly re-value every shift they have ever worked.
+  // A shift that settled itself has no rate on it -- the rules forbid crew
+  // from writing one, and rightly so. The owner's app stamps it the first time
+  // it sees it, which is what stops a later change of rate quietly re-valuing
+  // work already done. Until then the figures use the worker's current rate,
+  // so nothing is ever blank; the stamp just freezes it.
+  function stampUnpriced() {
+    if (!isOwner() || !window.YDDb) return;
+    Object.keys(entries).forEach(id => {
+      const e = entries[id];
+      if (!counts(e) || running(e) || e.rateCents != null) return;
+      const patch = {
+        rateCents: rateOf(e.uid),
+        costCents: costOf(paidMs(e), rateOf(e.uid)),
+        paidHours: hours(paidMs(e)),
+        billableHours: hours(chargeableMs(e)),
+      };
+      Object.assign(e, patch);
+      write(id, patch, 'pricing a settled shift');
+    });
+  }
+
   window.approveShift = function (id) {
     const e = entries[id];
     if (!e || !isOwner()) return;
@@ -627,10 +808,9 @@
     const from = rangeStart(which);
     const to = which === 'lastweek' ? from + 7 * 864e5 : Infinity;
 
-    const done = Object.values(entries).filter(e =>
-      e.status === 'approved' && ms(e.startedAt) >= from && ms(e.startedAt) < to);
-    const pending = Object.values(entries).filter(e =>
-      e.status === 'pending' && e.endedAt && ms(e.startedAt) >= from && ms(e.startedAt) < to);
+    const inRange = e => startMsOf(e) >= from && startMsOf(e) < to;
+    const done = Object.values(entries).filter(e => counts(e) && inRange(e));
+    const pending = Object.values(entries).filter(e => awaitingOwner(e) && inRange(e));
 
     const byWorker = {};
     done.forEach(e => {
@@ -743,10 +923,10 @@
     const all = Object.values(entries).filter(e => e.uid === workerUid);
     const from = rangeStart(workerRange);
     const to = workerRange === 'lastweek' ? from + 7 * 864e5 : Infinity;
-    const inRange = all.filter(e => ms(e.startedAt) >= from && ms(e.startedAt) < to);
+    const inRange = all.filter(e => startMsOf(e) >= from && startMsOf(e) < to);
 
-    const approved = inRange.filter(e => e.status === 'approved');
-    const waiting = inRange.filter(e => e.status === 'pending' && e.endedAt);
+    const approved = inRange.filter(counts);
+    const waiting = inRange.filter(awaitingOwner);
     const live = all.find(running);
 
     const paid = approved.reduce((s, e) => s + paidMs(e), 0);
@@ -837,8 +1017,11 @@
       '<td>' + fmtDur(paidMs(e)) + '</td>' +
       '<td>' + (canPause(e) ? fmtDur(billableMs(e)) : '—') + '</td>' +
       '<td><span class="shift-flag ' + e.status + '">' +
-        (e.status === 'approved' ? 'approved' : e.status === 'rejected' ? 'rejected'
-          : running(e) ? 'running' : 'waiting') + '</span></td>' +
+        (running(e) ? 'on the clock'
+          : e.status === 'ok' ? 'counted'
+          : e.status === 'approved' ? 'approved'
+          : e.status === 'rejected' ? 'rejected'
+          : 'waiting') + '</span></td>' +
     '</tr>';
   }
 
@@ -902,8 +1085,8 @@
     if (!jobId) return out;
     Object.values(entries).forEach(e => {
       if (e.kind !== 'job' || e.targetId !== jobId) return;
-      if (e.status === 'pending' && e.endedAt) { out.pendingHours += hours(paidMs(e)); return; }
-      if (e.status !== 'approved') return;
+      if (awaitingOwner(e)) { out.pendingHours += hours(paidMs(e)); return; }
+      if (!counts(e)) return;
       const p = e.paidHours != null ? e.paidHours : hours(paidMs(e));
       const b = e.billableHours != null ? e.billableHours : hours(billableMs(e));
       const w = out.byWorker[e.workerName] = out.byWorker[e.workerName] || { paid: 0, billable: 0 };
@@ -967,6 +1150,7 @@
         if (c.type === 'removed') delete entries[c.id];
         else entries[c.id] = Object.assign({ id: c.id }, c.data);
       });
+      stampUnpriced();
       render();
       if (typeof refreshJobLabour === 'function') refreshJobLabour();
     };

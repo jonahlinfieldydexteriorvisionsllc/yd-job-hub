@@ -420,6 +420,16 @@
   .sheet-item-hint { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
   .sheet-close { width:100%; margin-top:14px; padding:13px; }
 
+  .addshift .field, .addshift .grid { margin-bottom:12px; }
+  .addshift .clock-big { margin-bottom:0; }
+  .appr-why { font-size:9.5px; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
+              color:var(--accent-dark); background:rgba(201,146,47,.16);
+              padding:3px 8px; border-radius:20px; }
+  .appr-note { font-size:12.5px; font-style:italic; color:var(--muted); margin-top:6px; }
+  .shift-flag.ok { background:var(--pos-soft); color:#2f6b3f; border-color:#bcdcc6; }
+  .shift-flag.running { background:rgba(201,146,47,.18); color:var(--accent-dark);
+                        border-color:transparent; }
+
   @media (max-width:520px) {
     .g4, .g5, .g3, .g2, .g-addr, .g-labor-add, .g-mat-add, .g-cost-add { grid-template-columns:1fr; }
     .wk-cards, .picker-kinds { grid-template-columns:1fr 1fr 1fr; }
@@ -638,6 +648,7 @@
   html[data-night] .shift-flag.approved { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
   html[data-night] .sheet { background:var(--bg); }
   html[data-night] .sheet-item { background:var(--surface); border-color:var(--border); }
+  html[data-night] .shift-flag.ok { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
   html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
   html[data-night] .section-head { background:var(--brand-dark); }
   html[data-night] input, html[data-night] textarea, html[data-night] select {

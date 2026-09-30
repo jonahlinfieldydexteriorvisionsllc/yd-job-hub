@@ -167,22 +167,56 @@ service cloud.firestore {
           ['rateCents', 'costCents', 'approvedBy', 'approvedAt', 'paidHours', 'billableHours']);
       }
 
-      // Crew submit only their own time, and always unapproved.
+      // An ordinary clocked shift settles itself; making the owner confirm
+      // every one turns approval into a rubber stamp. Two kinds do not settle:
+      //
+      //   'manual'  -- typed in afterwards because somebody forgot to clock
+      //                in. Nobody watched the clock run, so the times are a
+      //                recollection.
+      //   over 8h   -- however it was made. At that length a forgotten
+      //                clock-out and a genuinely long day look the same, and
+      //                the difference is hours of wages.
+      //
+      // Both are enforced here and not merely in the app, which is why the
+      // times are stored as numbers as well as text: rules cannot do
+      // arithmetic on a date written as text.
+      function durationMs() {
+        return request.resource.data.endedMs - request.resource.data.startedMs;
+      }
+      function shortEnough() {
+        return request.resource.data.endedMs is number
+          && request.resource.data.startedMs is number
+          && durationMs() > 0
+          && durationMs() <= 8 * 60 * 60 * 1000;
+      }
+      function clocked() { return request.resource.data.source == 'clock'; }
+
+      // A crew member may write only these four states, and 'ok' only for a
+      // shift the clock itself timed and kept under eight hours. 'approved' is
+      // never theirs to write.
+      function crewMayClaim() {
+        let s = request.resource.data.status;
+        return s == 'running'
+          || s == 'pending'
+          || (s == 'ok' && clocked() && shortEnough());
+      }
+
       allow create: if isOwner()
         || (isCrew()
             && request.resource.data.uid == request.auth.uid
-            && request.resource.data.status == 'pending'
+            && crewMayClaim()
             && crewFieldsOnly());
 
-      // Crew may amend their own entry only while it is still pending, and can
-      // neither reassign it nor approve it. Approved time is frozen to everyone
-      // but an owner -- these become payroll records.
+      // Crew may amend a shift of their own that has not yet been settled or
+      // decided. Once it is 'ok', 'approved' or 'rejected' it is a payroll
+      // record and only an owner may touch it -- otherwise a shift could be
+      // clocked out short, settle itself, and then be edited longer.
       allow update: if isOwner()
         || (isCrew()
             && resource.data.uid == request.auth.uid
-            && resource.data.status == 'pending'
+            && resource.data.status in ['running', 'pending']
             && request.resource.data.uid == resource.data.uid
-            && request.resource.data.status == 'pending'
+            && crewMayClaim()
             && crewFieldsOnly());
 
       allow delete: if isOwner();
