@@ -20,7 +20,7 @@ import {
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
-  getDocs, writeBatch,
+  getDocs, writeBatch, disableNetwork, enableNetwork,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
@@ -280,6 +280,13 @@ async function start() {
         const snap = await getDocs(collection(db, 'jobs'));
         return snap.size;
       },
+
+      // Cut and restore the connection on purpose. The app's central promise is
+      // that a storm can be worked with no signal, and the only honest way to
+      // check that is to actually take the signal away rather than assume the
+      // offline layer does what the documentation says.
+      goOffline: () => disableNetwork(db),
+      goOnline: () => enableNetwork(db),
 
       // ---- general collection access -------------------------------------
       // The job methods above came first and are kept as they are. Everything

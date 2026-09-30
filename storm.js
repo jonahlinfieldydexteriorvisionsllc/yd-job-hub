@@ -234,16 +234,25 @@
     '</div>';
   }
 
+  // Firestore applies a write to the local cache immediately, but the promise
+  // it hands back only settles when the SERVER acknowledges it. Awaiting that
+  // means the interface waits for signal -- so with no bars, Start Storm built
+  // the route locally and then sat there looking broken until a connection
+  // came back. On a snow night that is the whole app appearing dead.
+  //
+  // So: send the write, never block the interface on it, and let the local
+  // listener redraw. The queued write reaches the server on its own later.
+  function writeSoon(promise, what) {
+    Promise.resolve(promise).catch(e =>
+      console.warn('[storm] ' + what + ' not yet on the server:', e.code || e.message));
+  }
+
   // ---------------------------------------------------------------- actions
 
   async function writeStop(id, patch) {
     Object.assign(stops[id], patch);              // show it immediately
     render();
-    try {
-      await window.YDDb.put('storms/' + storm.id + '/stops', id, patch);
-    } catch (e) {
-      console.warn('[storm] stop write queued or failed', e.code || e.message);
-    }
+    writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', id, patch), 'stop update');
   }
 
   window.arriveStop = function (id) {
@@ -290,14 +299,10 @@
     const ao = a.order, bo = b.order;
     a.order = bo; b.order = ao;                      // show it at once
     render();
-    try {
-      await window.YDDb.putMany([
-        ['storms/' + storm.id + '/stops', a.id, { order: bo }],
-        ['storms/' + storm.id + '/stops', b.id, { order: ao }],
-      ]);
-    } catch (e) {
-      console.warn('[storm] reorder queued or failed', e.code || e.message);
-    }
+    writeSoon(window.YDDb.putMany([
+      ['storms/' + storm.id + '/stops', a.id, { order: bo }],
+      ['storms/' + storm.id + '/stops', b.id, { order: ao }],
+    ]), 'reorder');
   };
 
   // Every pass is a separate billed visit -- that is how a long storm pays.
@@ -324,7 +329,7 @@
         arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, skipped: false,
       }]);
     });
-    await window.YDDb.putMany(writes);
+    writeSoon(window.YDDb.putMany(writes), 'extra round');
     showToast('Route added again — ' + writes.length + ' more stops');
   };
 
@@ -343,7 +348,7 @@
     };
     stops[newId] = Object.assign({ id: newId }, rec);
     render();
-    await window.YDDb.put('storms/' + storm.id + '/stops', newId, rec);
+    writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', newId, rec), 'second pass');
     showToast('Second pass added for ' + (accountFor(s).name || ''));
   };
 
@@ -414,19 +419,14 @@
       }]);
     });
 
-    try {
-      await window.YDDb.putMany(writes);
-      showToast('Storm started — ' + route.length + ' stops');
-    } catch (e) {
-      console.error('[storm] could not start', e);
-      showToast('Could not start the storm: ' + (e.message || ''));
-    }
+    writeSoon(window.YDDb.putMany(writes), 'storm start');
+    showToast('Storm started — ' + route.length + ' stops');
   };
 
   window.abandonStorm = async function () {
     if (!storm) return;
     if (!confirm('Abandon this storm?\n\nThe record stays, but it will not be billed.')) return;
-    await window.YDDb.put('storms', storm.id, { status: 'abandoned', closedAt: new Date().toISOString() });
+    writeSoon(window.YDDb.put('storms', storm.id, { status: 'abandoned', closedAt: new Date().toISOString() }), 'abandon');
   };
 
   window.closeStorm = async function () {
@@ -465,20 +465,17 @@
       computedAt: new Date().toISOString(),
     };
 
-    try {
-      await window.YDDb.putMany([
-        ['storms/' + storm.id + '/private', 'billing', billing],
-        ['storms', storm.id, { status: 'closed', closedAt: new Date().toISOString() }],
-      ]);
+    writeSoon(window.YDDb.putMany([
+      ['storms/' + storm.id + '/private', 'billing', billing],
+      ['storms', storm.id, { status: 'closed', closedAt: new Date().toISOString() }],
+    ]), 'storm close');
+    {
       alert('Storm closed.\n\n' +
         lines.length + ' billable visits\n' +
         'Revenue: $' + (revenue / 100).toFixed(2) + '\n' +
         (salt ? 'of which salt: $' + (salt / 100).toFixed(2) + '\n' : '') +
         'Crew hours: ' + billing.crewHours + '\n' +
         'Per crew-hour: $' + (billing.revenuePerCrewHourCents / 100).toFixed(2));
-    } catch (e) {
-      console.error('[storm] close failed', e);
-      showToast('Could not close the storm: ' + (e.message || ''));
     }
   };
 

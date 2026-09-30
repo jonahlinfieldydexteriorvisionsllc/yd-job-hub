@@ -367,23 +367,20 @@
       },
     };
 
-    try {
-      // Both halves together: an account with an address but no pricing would
-      // quietly bill nothing.
-      await window.YDDb.putMany([
-        ['snowAccounts', id, pub],
-        ['snowAccounts/' + id + '/private', PRICING_DOC, priv],
-      ]);
-      pricing[id] = priv;
-      closeSnowForm();
-      showToast(geo ? (name + ' added — located in ' + geo.town) : (name + ' saved'));
-    } catch (e) {
-      console.error('[snow] save failed', e);
-      showToast('Could not save: ' + (e.message || 'unknown error'));
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Save account';
-    }
+    // Both halves together: an account with an address but no pricing would
+    // quietly bill nothing. Not awaited -- the write lands locally at once and
+    // reaches the server when there is signal, so saving never hangs.
+    Promise.resolve(window.YDDb.putMany([
+      ['snowAccounts', id, pub],
+      ['snowAccounts/' + id + '/private', PRICING_DOC, priv],
+    ])).catch(e => console.warn('[snow] account not yet on the server:', e.code || e.message));
+    pricing[id] = priv;
+    accounts[id] = pub;
+    render();
+    closeSnowForm();
+    showToast(geo ? (name + ' added — located in ' + geo.town) : (name + ' saved'));
+    btn.disabled = false;
+    btn.textContent = 'Save account';
   };
 
   document.addEventListener('yd-auth', e => {
