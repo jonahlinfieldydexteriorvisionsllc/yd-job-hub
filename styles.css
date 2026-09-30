@@ -255,6 +255,11 @@
   .menu button.menu-danger { color:var(--neg); }
   .menu button.menu-danger:hover { background:var(--neg-soft); color:var(--neg); }
 
+
+  /* a row of small actions hanging under a field */
+  .field-actions { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
+  .field-actions .btn:disabled { opacity:.6; cursor:default; }
+
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
   .auth-gate { position:fixed; inset:0; z-index:3000; background:var(--bg);

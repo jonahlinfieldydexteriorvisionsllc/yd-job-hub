@@ -17,4 +17,9 @@ window.YD_CONFIG = {
   // Bootstraps as owner on first sign-in. Must match OWNER in firestore.rules.
   // Use the ydexteriorvisions.com address, not the older gmail one.
   ownerEmail: 'jonahlinfield@ydexteriorvisions.com',
+
+  // The service that holds the Anthropic API key and talks to Claude. Safe to
+  // publish -- it refuses anyone who is not signed in as the owner. The key
+  // itself lives only on Google's servers, never here.
+  claudeEndpoint: 'https://yd-claude-147632184660.us-central1.run.app',
 };

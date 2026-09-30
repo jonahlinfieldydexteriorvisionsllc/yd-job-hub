@@ -134,7 +134,7 @@
         </div>
 
         <div class="mt">
-          <div class="field"><span class="label">Job Notes</span><textarea id="notes" rows="2" placeholder="Any general notes about the job…" oninput="markDirty()"></textarea></div>
+          <div class="field"><span class="label">Job Notes</span><textarea id="notes" rows="2" placeholder="Any general notes about the job…" oninput="markDirty()"></textarea><div class="field-actions"><button class="btn btn-sm" id="draftScopeBtn" hidden onclick="draftScopeWithClaude()">✨ Draft scope with Claude</button></div></div>
         </div>
       </div>
     </div>
@@ -395,6 +395,7 @@
 <script src="./config.js"></script>
 <script src="./app.js"></script>
 <script src="./sync.js"></script>
+<script src="./claude.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

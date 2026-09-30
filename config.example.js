@@ -25,4 +25,8 @@ window.YD_CONFIG = {
   // Must match the OWNER constant in firestore.rules exactly -- the rules file
   // is the real enforcement; this copy only drives the client.
   ownerEmail: 'you@example.com',
+
+  // Cloud Run service holding the Anthropic API key (see functions/main.py).
+  // Leave empty to run without any Claude features.
+  claudeEndpoint: '',
 };
