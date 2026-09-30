@@ -230,6 +230,73 @@
   .pp-act select { max-width:150px; font-size:12px; padding:5px 8px; }
   .pp-act .remove-btn { margin-left:auto; }
 
+  /* ---- Time clock ------------------------------------------------------- */
+  /* Everything here is sized to be hit with a glove on, in the dark, one
+     handed. That is why the buttons are oversized and the elapsed time is set
+     in the display face at a size that reads from arm's length. */
+  .clock-lead { font-size:13px; color:var(--muted); margin-bottom:10px; }
+  .clock-big { min-height:58px; font-size:15px; padding:16px 22px; width:100%; margin-bottom:10px; }
+  .clock-actions { display:flex; flex-direction:column; gap:0; margin-top:18px; }
+  .clock-actions .btn-sm { min-height:auto; width:auto; align-self:center; margin-top:4px; }
+
+  .clock-live { text-align:center; padding:8px 0 4px; }
+  .clock-live.paused { opacity:.92; }
+  .clock-where { font-family:'Playfair Display',serif; font-size:19px; font-weight:700; }
+  .clock-kind { font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase;
+                background:var(--brand); color:#fff; padding:3px 8px; border-radius:20px;
+                vertical-align:middle; margin-left:4px; }
+  .clock-elapsed { font-family:'Playfair Display',serif; font-size:52px; font-weight:700;
+                   line-height:1.1; margin:10px 0 4px; font-variant-numeric:tabular-nums; }
+  .clock-live.paused .clock-elapsed { color:var(--muted); }
+  .clock-sub { font-size:12px; color:var(--muted); }
+  .clock-pausenote { margin-top:14px; font-size:12.5px; line-height:1.5; padding:11px 14px;
+                     background:rgba(201,146,47,.14); border-radius:8px; }
+
+  .pause-reasons { margin-top:18px; display:flex; flex-direction:column; gap:8px; }
+  .pause-reasons .btn { min-height:50px; font-size:14px; }
+
+  .clock-idle { text-align:center; padding:6px 0; }
+  .clock-recent { margin-top:22px; }
+  .clock-recent .btn { display:block; width:100%; margin-bottom:8px; min-height:46px; }
+
+  .picker-search { margin:12px 0; }
+  .picker-job { display:block; width:100%; text-align:left; background:var(--surface-2);
+                border:1.5px solid var(--border); border-radius:8px; padding:13px 15px;
+                margin-bottom:8px; cursor:pointer; min-height:54px; }
+  .picker-job:hover { border-color:var(--brand); background:var(--surface); }
+  .picker-name { display:block; font-weight:700; font-size:14px; }
+  .picker-addr { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
+  .picker-flag { display:inline-block; font-size:9px; font-weight:700; letter-spacing:.7px;
+                 text-transform:uppercase; background:var(--accent); color:#3a2a08;
+                 padding:2px 7px; border-radius:20px; margin-top:6px; }
+
+  .on-now { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:11px 0;
+            border-bottom:1px solid var(--border); }
+  .on-now:last-of-type { border-bottom:none; }
+  .on-now.paused { opacity:.7; }
+  .on-who { font-weight:700; font-size:14px; }
+  .on-where { font-size:12.5px; color:var(--muted); }
+  .on-time { margin-left:auto; font-variant-numeric:tabular-nums; font-size:13px; font-weight:700; }
+
+  .appr { border:1px solid var(--border); border-radius:8px; padding:13px 15px; margin-bottom:10px; }
+  .appr-top { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+  .appr-who { font-weight:700; font-size:14.5px; }
+  .appr-where { font-size:12.5px; color:var(--muted); }
+  .appr-times { font-size:12px; color:var(--muted); margin-top:4px; }
+  .appr-nums { display:flex; gap:14px; flex-wrap:wrap; margin-top:9px; font-size:12.5px;
+               font-variant-numeric:tabular-nums; }
+  .appr-cost { margin-left:auto; font-weight:700; }
+  .appr-pauses { margin-top:7px; font-size:11.5px; color:var(--muted); }
+  .appr-act { display:flex; gap:8px; margin-top:11px; }
+
+  .clocked-block { border:1.5px solid var(--brand); border-radius:8px; padding:12px 14px;
+                   margin-bottom:14px; background:var(--surface-2); }
+  .clocked-head { font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
+                  color:var(--brand); margin-bottom:9px; }
+  .clocked-note { font-size:11.5px; color:var(--muted); margin-top:8px; line-height:1.5; }
+  .clocked-pending { font-size:11.5px; margin-top:8px; padding:8px 11px; border-radius:6px;
+                     background:rgba(201,146,47,.16); line-height:1.5; }
+
   @media (max-width:860px) {
     .page { padding:0 14px 80px; }
     .cols2 { grid-template-columns:1fr; }
@@ -323,7 +390,8 @@
 
   /* five tabs need to fit a 375px phone */
   @media (max-width:720px) {
-    .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; }
+    .tab-bar { flex-wrap:wrap; }
+    .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; flex:1 0 25%; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
   }
 
@@ -428,6 +496,9 @@
   html[data-night] .pp { background:var(--surface); border-color:var(--border); }
   html[data-night] .pp-stat.s-won { background:rgba(80,180,110,.16); color:#7fd79a; border-color:transparent; }
   html[data-night] .pp-contact a { color:var(--brand-2); }
+  html[data-night] .picker-job { background:var(--surface-2); border-color:var(--border); }
+  html[data-night] .clocked-block { background:var(--surface-2); border-color:var(--brand-2); }
+  html[data-night] .clocked-head { color:var(--brand-2); }
   html[data-night] .section { background:var(--surface); border-color:var(--border); box-shadow:none; }
   html[data-night] .section-head { background:var(--brand-dark); }
   html[data-night] input, html[data-night] textarea, html[data-night] select {

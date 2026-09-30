@@ -156,11 +156,23 @@ service cloud.firestore {
       allow read: if isOwner()
         || (isCrew() && resource.data.uid == request.auth.uid);
 
+      // Nobody sets their own wage. Crew record WHEN they worked; what that is
+      // worth is stamped by the owner at approval, from the rate on the
+      // worker's user record. Without this a crew member could clock in at any
+      // rate they liked, and the entry would read as authoritative payroll.
+      // The approval fields are barred for the same reason: an entry that
+      // arrived already marked approved would skip the queue entirely.
+      function crewFieldsOnly() {
+        return !request.resource.data.keys().hasAny(
+          ['rateCents', 'costCents', 'approvedBy', 'approvedAt', 'paidHours', 'billableHours']);
+      }
+
       // Crew submit only their own time, and always unapproved.
       allow create: if isOwner()
         || (isCrew()
             && request.resource.data.uid == request.auth.uid
-            && request.resource.data.status == 'pending');
+            && request.resource.data.status == 'pending'
+            && crewFieldsOnly());
 
       // Crew may amend their own entry only while it is still pending, and can
       // neither reassign it nor approve it. Approved time is frozen to everyone
@@ -170,9 +182,30 @@ service cloud.firestore {
             && resource.data.uid == request.auth.uid
             && resource.data.status == 'pending'
             && request.resource.data.uid == resource.data.uid
-            && request.resource.data.status == 'pending');
+            && request.resource.data.status == 'pending'
+            && crewFieldsOnly());
 
       allow delete: if isOwner();
+    }
+
+    // ===================================================================
+    // jobBoard -- the crew-visible half of a job
+    //
+    // Same field-visibility problem as the snow accounts, same answer. A job
+    // record holds the quote, the costs and the margin in one document, and
+    // Firestore cannot hide a field, so crew cannot be given the job itself.
+    // This is a companion record carrying only what someone needs in order to
+    // clock in to the right work and drive to it:
+    //
+    //   name, address, city, status
+    //
+    // No price, no phone number, no email, no margin. It is written by the
+    // owner's app every time a job is saved, so the list maintains itself and
+    // a new job becomes a clock-in option with nothing to remember.
+    // ===================================================================
+    match /jobBoard/{jobId} {
+      allow read:  if isStaff();
+      allow write: if isOwner();
     }
 
     // ===================================================================

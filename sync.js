@@ -66,11 +66,44 @@
     pushTimers[id] = setTimeout(() => pushNow(id), PUSH_DELAY);
   }
 
+  // ------------------------------------------------------------- job board
+  //
+  // Crew cannot be given a job record -- the quote, the costs and the margin
+  // all live in it, and Firestore cannot hide a field. So every job also gets
+  // a stripped companion record they CAN read, carrying only what is needed to
+  // clock in to the right work and drive to it.
+  //
+  // It is written here rather than anywhere else because this is the one place
+  // every job save already passes through. That is what makes a new job appear
+  // on the crew's clock by itself, with nothing for the owner to remember.
+
+  function boardEntry(id, d) {
+    return {
+      name: (d.customerName || '').trim() || 'Untitled job',
+      address: [d.address, d.city, d.state].filter(Boolean).join(', '),
+      status: d.jobStatus || 'quoting',
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function pushBoard(id, data) {
+    // Owner only: the rules refuse this write from a crew account, and their
+    // app has no business maintaining the list anyway.
+    if (!window.YDAuth || !window.YDAuth.isOwner) return;
+    Promise.resolve(window.YDDb.put('jobBoard', id, boardEntry(id, data)))
+      .catch(err => console.warn('[sync] job board not yet updated for', id,
+        err.code || err.message));
+  }
+
   async function pushNow(id) {
     const raw = readJobBlob(id);
     if (!raw) return;
     let data;
     try { data = JSON.parse(raw); } catch { return; }
+    // Not awaited, and deliberately before the job push: if the signal dies
+    // between the two, the clock having an extra job on it is harmless, while
+    // a saved job the crew cannot clock into is the failure that matters.
+    pushBoard(id, data);
     try {
       await window.YDDb.putJob(id, data);
       setCloudState('synced');
@@ -79,6 +112,40 @@
       // write and sends it when the signal comes back. Anything else is.
       console.warn('[sync] push failed for', id, err.code || err.message);
       setCloudState('offline');
+    }
+  }
+
+  // Bring the board in line with the jobs that already exist -- the 21 from
+  // before the clock was built, and anything edited on another device while
+  // this one was shut. Only what is actually missing or stale is written, so
+  // the usual case costs nothing.
+  async function reconcileBoard() {
+    if (!window.YDAuth || !window.YDAuth.isOwner) return;
+    try {
+      const board = await window.YDDb.list('jobBoard');
+      const writes = [];
+      getJobIndex().forEach(j => {
+        const raw = readJobBlob(j.id);
+        if (!raw) return;
+        let d; try { d = JSON.parse(raw); } catch { return; }
+        const want = boardEntry(j.id, d), have = board[j.id];
+        if (!have || have.name !== want.name || have.address !== want.address
+            || have.status !== want.status) {
+          writes.push(['jobBoard', j.id, want]);
+        }
+      });
+
+      // A board entry whose job is gone would leave crew able to clock in to
+      // work that no longer exists.
+      const gone = Object.keys(board).filter(id => !readJobBlob(id));
+
+      if (writes.length) await window.YDDb.putMany(writes);
+      for (const id of gone) await window.YDDb.remove('jobBoard', id);
+      if (writes.length || gone.length) {
+        console.info('[sync] job board: ' + writes.length + ' updated, ' + gone.length + ' removed');
+      }
+    } catch (err) {
+      console.warn('[sync] job board reconcile failed', err.code || err.message);
     }
   }
 
@@ -170,6 +237,8 @@
     // means we are genuinely connected.
     setCloudState('synced');
 
+    reconcileBoard();
+
     unsubscribe = window.YDDb.watchJobs(
       (changes, meta) => {
         applyRemote(changes);
@@ -205,6 +274,9 @@
     if (existed && !readJobBlob(id) && watching) {
       window.YDDb.removeJob(id).catch(err =>
         console.warn('[sync] delete failed', err.code || err.message));
+      // Otherwise the crew's clock would keep offering a job that is gone.
+      window.YDDb.remove('jobBoard', id).catch(err =>
+        console.warn('[sync] job board delete failed', err.code || err.message));
     }
   };
 
@@ -246,7 +318,10 @@
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     if (a.mode !== 'cloud' || !a.user) { setCloudState('off'); return; }
-    if (a.role !== 'owner') { setCloudState('off'); return; }  // crew screens come later
+    // Crew have their own screens now, but none of them read jobs -- the
+    // clock reads jobBoard and the route reads storms, both of which watch
+    // themselves. Mirroring jobs into a crew phone would only be refused.
+    if (a.role !== 'owner') { setCloudState('off'); return; }
     if (!window.YDDb) { setCloudState('off'); return; }
     startSync();
   });

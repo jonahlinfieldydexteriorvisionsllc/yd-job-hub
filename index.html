@@ -27,9 +27,9 @@
       <div class="logo-sub">Track · Manage</div>
     </div>
     <div class="header-actions">
-      <button class="btn btn-save" onclick="saveJob()">&#10003; Save</button>
-      <button class="btn btn-accent" onclick="newJob()">+ New</button>
-      <button class="btn" onclick="openManager()">My Jobs</button>
+      <button class="btn btn-save" id="btnSave" onclick="saveJob()">&#10003; Save</button>
+      <button class="btn btn-accent" id="btnNew" onclick="newJob()">+ New</button>
+      <button class="btn" id="btnMyJobs" onclick="openManager()">My Jobs</button>
       <div class="menu-wrap">
         <button class="btn btn-menu" onclick="toggleHeaderMenu()" aria-haspopup="true" aria-label="More actions">&#8943;</button>
         <div class="menu" id="headerMenu" hidden>
@@ -54,11 +54,12 @@
   </div>
 
   <div class="tab-bar">
-    <button class="tab-btn active" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
+    <button class="tab-btn active" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
     <button class="tab-btn" onclick="switchTab('snow')"><span class="tab-icon">❄️</span>Snow</button>
-    <button class="tab-btn" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
-    <button class="tab-btn" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
-    <button class="tab-btn" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
+    <button class="tab-btn" id="tabClock" hidden onclick="switchTab('clock')"><span class="tab-icon">⏱️</span>Clock</button>
+    <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
+    <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
+    <button class="tab-btn" id="tabMatdash" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
     <button class="tab-btn" id="tabContacts" hidden onclick="switchTab('contacts')"><span class="tab-icon">📇</span>Contacts</button>
   </div>
 
@@ -211,6 +212,55 @@
       <div class="section-body"><div id="seasonWrap"></div></div>
     </div>
 
+  </div>
+
+  <!-- ============ TAB: CLOCK ============ -->
+  <!-- Crew see this and the snow route; nothing else on the tab bar is theirs.
+       Paused time is still paid -- it only stops counting toward a customer's
+       labour line. -->
+  <div class="tab-panel" id="panel-clock">
+
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Time Clock</span>
+        <span class="section-badge accent" id="clockBadge"></span>
+      </div>
+      <div class="section-body" id="clockWrap"></div>
+    </div>
+
+    <div class="section" id="clockOnNowSection" hidden>
+      <div class="section-head">
+        <span class="section-title">On the Clock Now</span>
+        <span class="section-badge" id="onNowBadge"></span>
+      </div>
+      <div class="section-body" id="onNowWrap"></div>
+    </div>
+
+    <div class="section" id="clockApproveSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Waiting for You</span>
+        <span class="section-badge accent" id="approveBadge"></span>
+      </div>
+      <div class="section-body" id="approveWrap"></div>
+    </div>
+
+    <div class="section" id="clockTotalsSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Hours &amp; Wages</span>
+        <span class="section-badge" id="totalsBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="filter-bar">
+          <select id="clockRange" onchange="renderClock()">
+            <option value="week">This week</option>
+            <option value="lastweek">Last week</option>
+            <option value="month">This month</option>
+            <option value="all">All time</option>
+          </select>
+        </div>
+        <div id="totalsWrap"></div>
+      </div>
+    </div>
   </div>
 
   <!-- ============ TAB 2: TRACKING ============ -->
@@ -601,6 +651,7 @@
 <script src="./billing.js"></script>
 <script src="./weather.js"></script>
 <script src="./prospects.js"></script>
+<script src="./timeclock.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

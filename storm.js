@@ -449,18 +449,34 @@
     if (openOnes.length && !confirm(openOnes.length + ' stop(s) are still open — nobody has departed.\n\nClose the storm anyway?')) return;
 
     const lines = [];
-    let revenue = 0, salt = 0, minutes = 0;
+    let revenue = 0, salt = 0, minutes = 0, pausedTotal = 0;
     list.forEach(s => {
       if (s.skipped || !s.departedAt) return;
-      const mins = minutesBetween(s.arrivedAt, s.departedAt) || 0;
+      const onSite = minutesBetween(s.arrivedAt, s.departedAt) || 0;
+
+      // Time the crew were paused while standing on this property comes off
+      // this customer's labour line -- a run for fuel or salt is paid work but
+      // is not this customer's service. A pause taken BETWEEN two properties
+      // falls outside every stop's window and so comes off nobody's bill,
+      // which is the correct answer for driving time.
+      //
+      // With no clock running this is zero and the figure is the arrive-to-
+      // depart time exactly as before, so nothing changes for a storm worked
+      // without the clock.
+      const paused = window.YDClock
+        ? YDClock.pausedMinutesAt(storm.id, s.arrivedAt, s.departedAt) : 0;
+      const mins = Math.max(0, onSite - paused);
+
       const inches = s.inchesCleared != null ? s.inchesCleared : storm.accumulationInches;
       const p = YDSnow.priceVisit(s.accountId, inches, mins, storm.crewSize);
       if (!p) return;
       minutes += mins;
+      pausedTotal += paused;
       revenue += p.totalCents;
       salt += p.saltCents;
       lines.push({
         accountId: s.accountId, pass: s.pass || 1, inches: inches, minutes: mins,
+        onSiteMinutes: onSite, pausedMinutes: paused,
         saltBags: s.saltBags, plowCents: p.plowCents, saltCents: p.saltCents,
         laborCents: p.laborCents, totalCents: p.totalCents,
       });
@@ -472,6 +488,7 @@
       totalCents: revenue,
       saltCents: salt,
       onSiteMinutes: minutes,
+      pausedMinutes: pausedTotal,
       crewHours: Math.round(crewHours * 100) / 100,
       revenuePerCrewHourCents: crewHours > 0 ? Math.round(revenue / crewHours) : 0,
       skipped: list.filter(s => s.skipped).map(s => ({ accountId: s.accountId, reason: s.skipReason })),

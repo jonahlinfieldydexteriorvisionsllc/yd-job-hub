@@ -202,6 +202,33 @@ document.addEventListener('yd-auth', e => {
   }
   if (out) out.hidden = !on;
   if (sep) sep.hidden = !on;
+
+  // Crew get the clock and the snow route, and nothing else. Every other tab
+  // reads jobs, prices or client details, which the rules deny them outright --
+  // so leaving the tabs visible would hand them a row of screens that load
+  // empty and look broken. This is presentation only; the rules are the
+  // enforcement.
+  const crewOnly = on && a.role === 'crew';
+  ['tabJob', 'tabTracking', 'tabDashboard', 'tabMatdash'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.hidden = crewOnly;
+  });
+
+  // Save, New and My Jobs all act on jobs, which the rules deny crew -- the
+  // buttons could only ever produce an error. The context bar goes too: it
+  // names whichever client's job happens to be open, and a client's name has
+  // no business on a crew phone.
+  ['btnSave', 'btnNew', 'btnMyJobs'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.hidden = crewOnly;
+  });
+  const ctx = document.getElementById('ctxBar');
+  if (ctx) ctx.style.display = crewOnly ? 'none' : '';
+  if (crewOnly) {
+    const openTab = document.querySelector('.tab-panel.active');
+    if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard', 'panel-matdash']
+        .indexOf(openTab.id) !== -1) switchTab('clock');
+  }
 });
 
 // ---- Header overflow menu (Backup / Restore / Print) ----
@@ -227,7 +254,7 @@ document.addEventListener('keydown', e => {
 // ═══════════════════════════════════════════════════════════
 function switchTab(name) {
   document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    const tabs = ['job','snow','tracking','dashboard','matdash','contacts'];
+    const tabs = ['job','snow','clock','tracking','dashboard','matdash','contacts'];
     b.classList.toggle('active', tabs[i] === name);
   });
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
@@ -236,6 +263,7 @@ function switchTab(name) {
   if (name === 'matdash') renderMatDash();
   if (name === 'snow' && window.YDSnow) YDSnow.render();
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
+  if (name === 'clock' && window.YDClock) YDClock.render();
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();
@@ -458,9 +486,58 @@ function renderOrderList() {
 // ═══════════════════════════════════════════════════════════
 // LABOR  (worker · hours · minutes — total per worker, no date)
 // ═══════════════════════════════════════════════════════════
+// How many distinct people worked this job, counting both the rows typed in
+// by hand and the crew who clocked into it.
+function laborWorkerCount() {
+  const names = {};
+  labor.forEach(e => { if (e.worker) names[e.worker.trim().toLowerCase()] = 1; });
+  Object.keys(clockedLabor().byWorker).forEach(n => { names[n.trim().toLowerCase()] = 1; });
+  return Object.keys(names).length || labor.length;
+}
+
+// The old caption read "8.0 hrs x $25", which stops being true the moment any
+// of those hours came from a clocked shift approved at a different rate.
+function laborCostSub(totalHrs) {
+  const c = clockedLabor();
+  if (!c.paidHours) return totalHrs.toFixed(1) + ' hrs × $' + LABOR_RATE;
+  if (!manualLaborHours()) return totalHrs.toFixed(1) + ' hrs from the clock';
+  return totalHrs.toFixed(1) + ' hrs · ' + c.paidHours.toFixed(1) + ' from the clock';
+}
+
+// Hours the crew clocked into this job, shown above the hand-entered rows.
+// Pending shifts appear here too, marked, so they are not invisible while they
+// wait -- but they are not in any total that touches money.
+function clockedLaborHtml() {
+  const c = clockedLabor();
+  const names = Object.keys(c.byWorker);
+  if (!names.length && !c.pendingHours) return '';
+
+  let h = '<div class="clocked-block"><div class="clocked-head">From the time clock</div>';
+  if (names.length) {
+    h += '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Paid</th><th>Billable</th></tr></thead><tbody>';
+    names.sort().forEach(n => {
+      const w = c.byWorker[n];
+      h += '<tr><td class="bold">' + esc(n) + '</td><td>' + fmtHrsMin(w.paid) +
+           '</td><td>' + fmtHrsMin(w.billable) + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+    h += '<div class="clocked-note">Billable leaves out paused time — fuel, salt, driving. ' +
+         'Paid is what the work cost you: ' + fmtMoney(c.costCents / 100) + '.</div>';
+  }
+  if (c.pendingHours) {
+    h += '<div class="clocked-pending">' + fmtHrsMin(c.pendingHours) +
+         ' waiting for your approval on the Clock tab. Not counted above.</div>';
+  }
+  return h + '</div>';
+}
+
 function renderLabor() {
   const w = document.getElementById('laborTableWrap');
-  if (!labor.length) { w.innerHTML = '<p class="empty-msg">No workers logged yet.</p>'; }
+  const clocked = clockedLaborHtml();
+  if (!labor.length) {
+    w.innerHTML = clocked +
+      '<p class="empty-msg">' + (clocked ? 'No hand-entered hours.' : 'No workers logged yet.') + '</p>';
+  }
   else {
     let h = '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Time</th><th></th></tr></thead><tbody>';
     labor.forEach(e => {
@@ -469,7 +546,7 @@ function renderLabor() {
     });
     const totH = labor.reduce((s, e) => s + entryHours(e), 0);
     h += '</tbody><tfoot><tr style="font-weight:700"><td style="text-align:right">Total:</td><td>' + fmtHrsMin(totH) + '</td><td></td></tr></tfoot></table></div>';
-    w.innerHTML = h;
+    w.innerHTML = clocked + h;
   }
   updateBadges(); updateSummary();
 }
@@ -623,8 +700,38 @@ function rmPayment(id) { payments = payments.filter(p => p.id !== id); renderPay
 // ═══════════════════════════════════════════════════════════
 // BADGES + FINANCIAL SUMMARY
 // ═══════════════════════════════════════════════════════════
+// Labour on a job now comes from two places: rows typed in by hand, and shifts
+// the crew clocked and the owner approved. Both are real hours and both must
+// count, so every screen asks through here rather than summing `labor` itself.
+//
+// Only APPROVED clock time is included. Pending time is shown on the Labor
+// Hours panel, clearly marked, but kept out of every number that touches money
+// -- otherwise a job's profit would move on its own when a shift is later
+// rejected, and the figures would stop being worth trusting.
+function manualLaborHours() {
+  return labor.reduce((s, e) => s + entryHours(e), 0);
+}
+function clockedLabor() {
+  return (window.YDClock && currentJobId)
+    ? YDClock.forJob(currentJobId)
+    : { byWorker: {}, paidHours: 0, billableHours: 0, costCents: 0, pendingHours: 0 };
+}
+function totalLaborHours() {
+  return round2(manualLaborHours() + clockedLabor().paidHours);
+}
+// Manual rows are costed at the standing rate; clocked shifts carry the rate
+// they were approved at, which is why they are not simply hours times a number.
+function totalLaborCost() {
+  return round2(manualLaborHours() * LABOR_RATE + clockedLabor().costCents / 100);
+}
+// Called by the clock when a shift is approved, so the open job updates without
+// being reloaded.
+function refreshJobLabour() {
+  if (document.getElementById('laborTableWrap')) renderLabor();
+}
+
 function updateBadges() {
-  const th = labor.reduce((s, e) => s + entryHours(e), 0);
+  const th = totalLaborHours();
   const tm = materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
   const tac = getAdditionalCostsTotal();
   document.getElementById('laborBadge').textContent = th > 0 ? fmtHrsMin(th) + ' total' : '';
@@ -632,7 +739,7 @@ function updateBadges() {
   document.getElementById('addCostBadge').textContent = tac > 0 ? fmtMoney(tac) + ' total' : '';
 }
 function updateSummary() {
-  const totalHrs = labor.reduce((s, e) => s + entryHours(e), 0);
+  const totalHrs = totalLaborHours();
   const totalMat = materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
   const totalAddCost = getAdditionalCostsTotal();
   const jobPrice = parseMoney(document.getElementById('jobPrice').value);
@@ -640,20 +747,20 @@ function updateSummary() {
   const coTotal = materials.filter(e => isChangeOrder(e.item)).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
 
   document.getElementById('summaryGrid').innerHTML = [
-    { label: 'Total Labor', value: fmtHrsMin(totalHrs), sub: labor.length + ' worker' + (labor.length !== 1 ? 's' : ''), cls: '' },
+    { label: 'Total Labor', value: fmtHrsMin(totalHrs), sub: laborWorkerCount() + ' worker' + (laborWorkerCount() !== 1 ? 's' : ''), cls: '' },
     { label: 'Total Materials', value: fmtMoney(totalMat), sub: coTotal > 0 ? fmtMoney(coTotal) + ' unquoted' : materials.length + ' purchases', cls: '' },
     { label: 'Add-ons Billed', value: fmtMoney(totalAddCost), sub: additionalCosts.length + ' line' + (additionalCosts.length !== 1 ? 's' : ''), cls: '' },
     { label: 'Job Price', value: jobPrice > 0 ? fmtMoney(jobPrice) : '—', sub: est ? 'Est #' + est : 'No estimate #', cls: 'accent-top' },
   ].map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.label + '</div><div class="summary-value">' + c.value + '</div><div class="summary-sub">' + c.sub + '</div></div>').join('');
 
-  const laborCost = round2(totalHrs * LABOR_RATE);
+  const laborCost = totalLaborCost();
   const overhead = round2(laborCost + totalMat);
   const net = round2(jobPrice - overhead);
   const perHr = totalHrs > 0 ? net / totalHrs : 0;
   const hasPrice = jobPrice > 0, hasHrs = totalHrs > 0;
 
   document.getElementById('financialsGrid').innerHTML = [
-    { label: 'Labor Cost', value: fmtMoney(laborCost), cls: '', top: '', sub: totalHrs.toFixed(1) + ' hrs × $' + LABOR_RATE },
+    { label: 'Labor Cost', value: fmtMoney(laborCost), cls: '', top: '', sub: laborCostSub(totalHrs) },
     { label: 'Total Cost', value: fmtMoney(overhead), cls: '', top: '', sub: 'Labor + Materials' },
     { label: 'Net Profit', value: (net < 0 ? '-' : '') + fmtMoney(Math.abs(net)), cls: hasPrice ? (net >= 0 ? 'positive' : 'negative') : '', top: hasPrice ? (net >= 0 ? 'pos-top' : 'neg-top') : '', sub: hasPrice ? (net / jobPrice * 100).toFixed(1) + '% margin' : 'Set job price' },
     { label: 'Profit / Hr', value: hasHrs ? ((perHr < 0 ? '-' : '') + fmtMoney(Math.abs(perHr))) : '—', cls: hasHrs ? (perHr >= 0 ? 'positive' : 'negative') : '', top: '', sub: hasHrs ? 'Per labor hour' : 'Add labor' },
@@ -1076,8 +1183,8 @@ function copyCostSummary() {
   const name = document.getElementById('customerName').value.trim() || 'Untitled';
   const est = document.getElementById('estimateNumber').value.trim();
   const qb = document.getElementById('qbInvoice').value.trim();
-  const totalHrs = labor.reduce((s, e) => s + entryHours(e), 0);
-  const laborCost = round2(totalHrs * LABOR_RATE);
+  const totalHrs = totalLaborHours();
+  const laborCost = totalLaborCost();
   const totalMat = round2(materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0));
   const addCost = round2(getAdditionalCostsTotal());
   const jobPrice = parseMoney(document.getElementById('jobPrice').value);
@@ -1095,7 +1202,7 @@ function copyCostSummary() {
     taxable ? 'Invoice Total: ' + fmtMoney(jobPrice + tax) : null,
     '',
     'Materials purchased: ' + fmtMoney(totalMat),
-    'Labor cost: ' + fmtMoney(laborCost) + ' (' + totalHrs.toFixed(1) + ' hrs @ $' + LABOR_RATE + ')',
+    'Labor cost: ' + fmtMoney(laborCost) + ' (' + totalHrs.toFixed(1) + ' hrs)',
     'Additional costs: ' + fmtMoney(addCost),
     'Est. net profit: ' + fmtMoney(net),
   ].filter(l => l !== null).join('\n');
@@ -1149,8 +1256,25 @@ window.addEventListener('DOMContentLoaded', () => {
   if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }
 
   // Register the service worker so the app works offline once hosted (GitHub Pages, etc.)
-  if ('serviceWorker' in navigator) {
+  //
+  // Not on localhost. The worker's whole job is to serve files from a cache,
+  // which during development means serving the version of a file from before
+  // the last edit -- and it does that silently, so a fix appears not to have
+  // worked. Hours were lost to exactly that. Offline behaviour is still
+  // testable on the deployed site, and Firestore's own offline persistence,
+  // which is what actually protects a storm with no signal, runs either way.
+  const LOCAL_DEV = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) !== -1
+    || /\.localhost$/.test(location.hostname);
+  if ('serviceWorker' in navigator && !LOCAL_DEV) {
     window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration skipped:', err.message)); });
+  }
+  // Clear out a worker registered by an earlier visit, or it keeps serving the
+  // cache long after registration stopped.
+  if ('serviceWorker' in navigator && LOCAL_DEV) {
+    navigator.serviceWorker.getRegistrations()
+      .then(rs => rs.forEach(r => r.unregister()))
+      .then(() => caches && caches.keys().then(ks => ks.forEach(k => caches.delete(k))))
+      .catch(() => {});
   }
 
   // Gentle backup reminder if it's been a while (or never)

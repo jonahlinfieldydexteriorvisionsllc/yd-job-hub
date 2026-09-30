@@ -20,7 +20,7 @@ import {
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
-  getDocs, writeBatch, disableNetwork, enableNetwork,
+  getDocs, writeBatch, disableNetwork, enableNetwork, query, where,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
@@ -306,6 +306,26 @@ async function start() {
             { size: snap.size, fromCache: snap.metadata.fromCache }
           ),
           err => { console.error('[db] watch failed on', path, err); if (onError) onError(err); });
+      },
+
+      // Watch only the documents where `field` equals `value`.
+      //
+      // This is not an optimisation, it is the only way a restricted account
+      // can read at all. Firestore checks a query against the rules as a
+      // whole: if the rules say a crew member may read a time entry only when
+      // it is theirs, then asking for the entire collection is refused outright
+      // -- not filtered down, refused -- because the query could have returned
+      // something they are not allowed. Asking a question whose answer is
+      // provably all-theirs is what makes it legal.
+      watchWhere(path, field, value, onChange, onError) {
+        const parts = path.split('/');
+        const q = query(collection(db, ...parts), where(field, '==', value));
+        return onSnapshot(q,
+          snap => onChange(
+            snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() })),
+            { size: snap.size, fromCache: snap.metadata.fromCache }
+          ),
+          err => { console.error('[db] filtered watch failed on', path, err); if (onError) onError(err); });
       },
 
       async list(path) {
