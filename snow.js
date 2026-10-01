@@ -31,15 +31,29 @@
 
   // A blank tier inherits the next lower one, per the build spec: an account
   // priced only at 1-3 and 4-6 bills the 4-6 rate for anything deeper.
+  //
+  // An 'inherit' tier never carries a price of its own, even if the stored
+  // record still has one. Saves are merged into the stored record, so clearing
+  // the 1-3" price used to leave the old figure sitting beside 'inherit' --
+  // and with nothing below 1-3 to inherit from, that stale figure was what got
+  // billed while the form showed the field blank.
   function resolveTier(tiers, label) {
+    const all = tiers || {};
     const seen = new Set();
-    let node = tiers[label];
+    let node = all[label];
     while (node && node.mode === 'inherit' && node.from && !seen.has(label)) {
       seen.add(label);
       label = node.from;
-      node = tiers[label];
+      node = all[label];
     }
-    return node || { mode: 'unset' };
+    if (!node || node.mode === 'inherit') return { mode: 'unset' };
+    return node;
+  }
+
+  // The price typed against one tier, or null when it inherits -- what the
+  // form shows, so it matches what resolveTier will bill.
+  function ownCents(node) {
+    return node && node.mode !== 'inherit' && node.cents != null ? node.cents : null;
   }
 
   // What one visit bills. The single place this is worked out -- storm billing,
@@ -50,9 +64,13 @@
     const pr = p.pricing;
 
     let base = 0;
-    if (pr.mode === 'tieredPlusPerInch' && inches > pr.perInch.aboveInches) {
+    if (pr.mode === 'tieredPlusPerInch' && pr.perInch && inches > pr.perInch.aboveInches) {
       const first = resolveTier(pr.tiers, '1-3');
-      base = (first.cents || 0) + pr.perInch.cents * (inches - pr.perInch.aboveInches);
+      // Rounded to whole cents: depths come in half inches, and $12.25 an inch
+      // over half an inch is 612.5 cents -- a total no invoice line can show,
+      // so the printed lines stopped adding up to the stored total.
+      base = (first.cents || 0) +
+             Math.round((pr.perInch.cents || 0) * (inches - pr.perInch.aboveInches));
     } else {
       const label = inches <= 3 ? '1-3' : inches <= 6 ? '4-6' : inches <= 9 ? '6+' : '9+';
       base = resolveTier(pr.tiers, label).cents || 0;
@@ -72,10 +90,16 @@
     // with two crew shows as 3.17 hours at $25, which a customer reads as
     // $79.25, while the exact arithmetic gives $79.17. The eight pence does not
     // matter; an invoice whose own multiplication is wrong does.
-    const manHours = p.laborRateCents
-      ? Math.round((minutesOnSite || 0) / 60 * (crewSize || 1) * 100) / 100
+    //
+    // The multiplying is done in whole hundredths of an hour. 0.57 x 2550 in
+    // floating point is 1453.4999..., which rounded to $14.53 where the
+    // invoice's own 0.57 hours at $25.50 reads $14.54; 57 x 2550 / 100 is
+    // exactly 1453.5 and rounds the way the printed line does.
+    const hundredths = p.laborRateCents
+      ? Math.round((minutesOnSite || 0) / 60 * (crewSize || 1) * 100)
       : 0;
-    const labor = p.laborRateCents ? Math.round(manHours * p.laborRateCents) : 0;
+    const manHours = hundredths / 100;
+    const labor = p.laborRateCents ? Math.round(hundredths * p.laborRateCents / 100) : 0;
 
     return { plowCents: base - salt, saltCents: salt, laborCents: labor,
              manHours: manHours, totalCents: base + labor };
@@ -322,10 +346,10 @@
 
     const pr = p && p.pricing;
     const t = pr && pr.tiers;
-    set('sfT13', t && t['1-3'] && dollars(t['1-3'].cents));
-    set('sfT46', t && t['4-6'] && dollars(t['4-6'].cents));
-    set('sfT6',  t && t['6+']  && dollars(t['6+'].cents));
-    set('sfT9',  t && t['9+']  && dollars(t['9+'].cents));
+    set('sfT13', t && dollars(ownCents(t['1-3'])));
+    set('sfT46', t && dollars(ownCents(t['4-6'])));
+    set('sfT6',  t && dollars(ownCents(t['6+'])));
+    set('sfT9',  t && dollars(ownCents(t['9+'])));
     tick('sfPerInchOn', pr && pr.mode === 'tieredPlusPerInch');
     set('sfPerInchAmt', pr && pr.perInch && dollars(pr.perInch.cents));
     set('sfPerInchAbove', pr && pr.perInch && pr.perInch.aboveInches);
@@ -407,9 +431,11 @@
       saltApplies: checked('sfSaltOn'),
     };
 
+    // cents is written as null on an inheriting tier, not left out: the save
+    // is merged into the stored record, so leaving it out kept the old price.
     const tierOrInherit = (id, below) => {
       const c = money(id);
-      return c === null ? { mode: 'inherit', from: below } : { mode: 'flat', cents: c };
+      return c === null ? { mode: 'inherit', from: below, cents: null } : { mode: 'flat', cents: c };
     };
     const perInchOn = checked('sfPerInchOn');
     const priv = {

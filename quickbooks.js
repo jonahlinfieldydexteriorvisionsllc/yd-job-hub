@@ -315,9 +315,17 @@
         if (l.laborCents) {
           const hours = l.manHours != null ? l.manHours
             : Math.round((l.minutes / 60) * (storm.crewSize || 1) * 100) / 100;
+          // The rate stored when the storm closed -- the one the customer
+          // agreed. Dividing the total back by the hours printed $25.53 on a
+          // $25.50 rate for a short visit, on the customer's own invoice. The
+          // CSV export already works this way. Storms closed before the rate
+          // was stored fall back to the division, which at least keeps
+          // quantity times rate equal to the amount.
+          const rateCents = l.laborRateCents != null ? l.laborRateCents
+            : (hours ? Math.round(l.laborCents / hours) : 0);
           lines.push({ description: 'Labor — ' + l.minutes + ' min on site, ' +
                          (storm.crewSize || 1) + ' crew',
-                       qty: hours, rate: hours ? Math.round(l.laborCents / hours) / 100 : 0,
+                       qty: hours, rate: rateCents / 100,
                        amount: l.laborCents / 100, itemId: map.items.labor || '' });
         }
       });

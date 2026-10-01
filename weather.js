@@ -70,22 +70,54 @@
 
   function inchesFromMm(v) { return v == null ? 0 : v / 25.4; }
 
-  // Sum a gridpoint series over the next N hours. The API returns ISO
-  // intervals like "2026-11-29T06:00:00+00:00/PT6H", so each entry covers a
-  // span rather than an instant.
+  // The API returns ISO intervals like "2026-11-29T06:00:00+00:00/PT6H", so
+  // each entry covers a span rather than an instant. "PT6H", "P1D",
+  // "P1DT12H" -> milliseconds; 0 for anything not in that shape.
+  function durationMs(iso) {
+    const m = /^P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(iso || '');
+    if (!m) return 0;
+    const [w, d, h, min, s] = m.slice(1).map(x => +x || 0);
+    return ((((w * 7 + d) * 24 + h) * 60 + min) * 60 + s) * 1000;
+  }
+  function spanOf(v) {
+    const parts = String((v && v.validTime) || '').split('/');
+    const start = new Date(parts[0]).getTime();
+    return { start: start, end: start + durationMs(parts[1]) };
+  }
+
+  // Sum a gridpoint series over the next N hours. Each entry is the amount
+  // for its whole span, so a span only partly inside the window counts for
+  // that part. Counting by start time alone dropped the six-hour block that
+  // began two hours ago and is still falling.
   function sumNext(series, hours) {
     if (!series || !series.values) return 0;
     const now = Date.now(), until = now + hours * 3600 * 1000;
     let total = 0;
     series.values.forEach(v => {
-      const start = new Date(v.validTime.split('/')[0]).getTime();
-      if (start >= now - 3600e3 && start <= until) total += (v.value || 0);
+      const t = spanOf(v);
+      if (!isFinite(t.start) || !v.value) return;
+      if (t.end <= t.start) {                       // no usable length
+        if (t.start >= now && t.start <= until) total += v.value;
+        return;
+      }
+      const overlap = Math.min(t.end, until) - Math.max(t.start, now);
+      if (overlap > 0) total += v.value * overlap / (t.end - t.start);
     });
     return total;
   }
-  function firstValue(series) {
-    if (!series || !series.values || !series.values.length) return null;
-    return series.values[0].value;
+
+  // The value in force NOW. A series starts when the forecast was issued,
+  // often many hours earlier, so its first entry was the temperature at
+  // perhaps 1 am -- shown as "now" in the afternoon. Nothing covering this
+  // moment means no figure, rather than an old one passed off as current.
+  function valueNow(series) {
+    if (!series || !series.values) return null;
+    const now = Date.now();
+    const hit = series.values.find(v => {
+      const t = spanOf(v);
+      return t.start <= now && now < t.end;
+    });
+    return hit ? hit.value : null;
   }
 
   async function pointWeather(lat, lng) {
@@ -97,14 +129,14 @@
     const p = j.properties;
     return put(key, {
       city: g.city,
-      tempF: cToF(firstValue(p.temperature)),
-      windMph: kmhToMph(firstValue(p.windSpeed)),
-      gustMph: kmhToMph(firstValue(p.windGust)),
-      heatIndexF: cToF(firstValue(p.heatIndex)),
+      tempF: cToF(valueNow(p.temperature)),
+      windMph: kmhToMph(valueNow(p.windSpeed)),
+      gustMph: kmhToMph(valueNow(p.windGust)),
+      heatIndexF: cToF(valueNow(p.heatIndex)),
       snow24: inchesFromMm(sumNext(p.snowfallAmount, 24)),
       snow48: inchesFromMm(sumNext(p.snowfallAmount, 48)),
       rain24: sumNext(p.quantitativePrecipitation, 24) / 25.4,
-      rainChance: firstValue(p.probabilityOfPrecipitation),
+      rainChance: valueNow(p.probabilityOfPrecipitation),
       cacheKey: key,
     });
   }

@@ -58,6 +58,10 @@
   const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun',
                   'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
   const SEASONS = { spring: 3, summer: 6, fall: 9, autumn: 9, winter: 12 };
+  // Whole words only. Looked for anywhere in the text, "maybe" read as May,
+  // "decide" as December and "after the first snowfall" as autumn.
+  const MONTH_WORD = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/;
+  const SEASON_WORD = /\b(spring|summer|fall|autumn|winter)\b/;
 
   function whenKey(text) {
     const s = (text || '').toLowerCase();
@@ -67,19 +71,19 @@
     if (!year) return NO_DATE;
 
     let month = 0;
-    // 2027-04, 2027/4
+    // 2027-04, 2027/4, 2027-04-15
     const iso = s.match(/\b(?:19|20)\d{2}[-\/](\d{1,2})\b/);
-    // 4/2027
-    const slash = s.match(/\b(\d{1,2})[-\/](?:19|20)\d{2}\b/);
+    // 4/2027, and a whole date written 4/15/2027 -- the month comes first.
+    // Without the day allowed for, "9/15/2026" read as month 15 and sank to
+    // the end of the year.
+    const slash = s.match(/\b(\d{1,2})[-\/](?:\d{1,2}[-\/])?(?:19|20)\d{2}\b/);
     if (iso) month = +iso[1];
     else if (slash) month = +slash[1];
     else {
-      for (let i = 0; i < MONTHS.length; i++) {
-        if (s.indexOf(MONTHS[i]) !== -1) { month = i + 1; break; }
-      }
-      if (!month) {
-        Object.keys(SEASONS).some(k => s.indexOf(k) !== -1 && (month = SEASONS[k]));
-      }
+      const name = s.match(MONTH_WORD);
+      const season = s.match(SEASON_WORD);
+      if (name) month = MONTHS.indexOf(name[1].slice(0, 3)) + 1;
+      else if (season) month = SEASONS[season[1]];
     }
     // A year with no month sorts to the end of that year, not the start, so
     // "2027" does not jump ahead of "March 2027".

@@ -196,6 +196,10 @@ def weather():
             "snow": round((d["snowfall_sum"][i] or 0) / 2.54, 1),
             "wind": d["wind_speed_10m_max"][i], "gust": d["wind_gusts_10m_max"][i],
         } for i in range(len(d["time"]))]
+        # A day with no high or low is dropped, as if it had not arrived, and
+        # reads "forecast unavailable". Kept, the summary's round(None) failed
+        # for every person at once.
+        out["days"] = [x for x in out["days"] if x["hi"] is not None and x["lo"] is not None]
         c = j.get("current") or {}
         out["now"] = {"temp": c.get("temperature_2m"), "code": c.get("weather_code"), "wind": c.get("wind_speed_10m")}
         # Snow over the next 48 hours, and when it falls.
@@ -280,10 +284,17 @@ def _calendar_items(start, end):
         cal["id"] = c.id
         for e in db.collection("calendars").document(c.id).collection("events").stream():
             ev = e.to_dict() or {}
-            for day in _dates_of(ev, start, end):
+            # One event with a date that will not parse is left out and
+            # logged. Unguarded, it stopped the whole run: nobody got a summary.
+            try:
+                days = _dates_of(ev, start, end)
+            except (TypeError, ValueError) as err:
+                print("digest: skipped event", c.id, e.id, "-", err)
+                continue
+            for day in days:
                 items.append({"day": day, "cal": cal, "ev": ev})
     items.sort(key=lambda x: (x["day"], 1 if (x["ev"].get("time") and not x["ev"].get("allDay")) else 0,
-                              x["ev"].get("time") or ""))
+                              str(x["ev"].get("time") or "")))
     return items
 
 
@@ -303,6 +314,12 @@ def _bids():
     for s in _db().collection("jobs").stream():
         j = s.to_dict() or {}
         if (j.get("jobStatus") or "quoting") != "quoting":
+            continue
+        # A lost bid stays 'quoting' (boards.js keeps it there in case the
+        # customer rings back), so without this it fell through to "Bid to
+        # send" below and was chased in every summary for ever. The Bids board
+        # files it under Lost; this agrees with it.
+        if j.get("bidStage") == "lost":
             continue
         stage = j.get("bidStage") if j.get("bidStage") in BID_STAGE_NAME else "toSend"
         if stage == "siteVisit":
@@ -324,21 +341,39 @@ def _bids():
     return out
 
 
-def _shifts_today():
-    """Today's shifts: who worked where and for how long (paid minutes)."""
-    start = _now().replace(hour=0, minute=0, second=0, microsecond=0)
-    start_ms = int(start.timestamp() * 1000)
-    now_ms = int(_now().timestamp() * 1000)
+def _shifts():
+    """Yesterday's and today's shifts, and any still running however old:
+    who worked where and for how long (paid minutes).
+
+    Each is filed under the day it STARTED, as the work log files it. That is
+    why yesterday's are fetched: a storm shift begins after the evening
+    summary has gone out -- most snow work does -- and is filed under that
+    day, so asked for "today" only it appeared in no summary at all. The
+    morning summary reports yesterday's once they are finished. Running ones
+    are fetched whatever their age, because a shift still open from two days
+    ago is a forgotten clock-out, which is exactly what the owner should see."""
+    now = _now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    yday_start = today_start - datetime.timedelta(days=1)
+    today_ms = int(today_start.timestamp() * 1000)
+    yday_ms = int(yday_start.timestamp() * 1000)
+    now_ms = int(now.timestamp() * 1000)
+    entries = {}
+    for q in (_db().collection("timeEntries").where("startedMs", ">=", yday_ms),
+              _db().collection("timeEntries").where("status", "==", "running")):
+        for s in q.stream():
+            entries[s.id] = s.to_dict() or {}
     out = []
-    for s in _db().collection("timeEntries").where("startedMs", ">=", start_ms).stream():
-        e = s.to_dict() or {}
-        if e.get("status") == "rejected":
+    for e in entries.values():
+        started = e.get("startedMs")
+        if e.get("status") == "rejected" or not isinstance(started, (int, float)):
             continue
         end = e.get("endedMs") or now_ms
-        mins = max(0, (end - (e.get("startedMs") or end)) / 60000)
+        mins = max(0, (end - started) / 60000)
         out.append({"uid": e.get("uid"), "who": e.get("workerName") or "", "where": e.get("targetName") or
                     {"snow": "Snow", "labor": "Labor", "receipts": "Receipts"}.get(e.get("kind"), "Other"),
-                    "mins": mins, "running": not e.get("endedMs"), "status": e.get("status")})
+                    "mins": mins, "running": not e.get("endedMs"), "status": e.get("status"),
+                    "day": "today" if started >= today_ms else "yesterday" if started >= yday_ms else "earlier"})
     return out
 
 
@@ -358,6 +393,20 @@ def _event_line(it, people, show_cal=True):
         bits.append("crew: " + ", ".join(crew))
     return {"when": when, "text": " · ".join(bits), "cal": it["cal"].get("name", "") if show_cal else "",
             "color": it["cal"].get("color", "#6b7a8f"), "personal": it["cal"].get("kind") == "personal"}
+
+
+def _hours_lines(shifts, who_of):
+    """One line per person: their total, then where it went, biggest first."""
+    by = {}
+    for s in shifts:
+        where = by.setdefault(who_of(s), {})
+        where[s["where"]] = where.get(s["where"], 0) + s["mins"]
+    lines = []
+    for who in sorted(by):
+        total = sum(by[who].values())
+        lines.append({"text": "%s — %s: %s" % (who, _fmt_dur(total), ", ".join(
+            "%s %s" % (w, _fmt_dur(m)) for w, m in sorted(by[who].items(), key=lambda x: -x[1])))})
+    return lines
 
 
 def build(slot, user, people, wx, cache):
@@ -457,38 +506,36 @@ def build(slot, user, people, wx, cache):
             push_bits.append("%d on tomorrow" % len(tm))
 
     # ---- hours
+    # Each shift is filed under the day it started (see _shifts). The evening
+    # reports today's so far; the morning reports yesterday's in full, which
+    # is where a night's storm work lands once it is finished. Anything still
+    # running is named whatever day it began.
     shifts = cache["shifts"]
-    if slot in ("midday", "evening"):
-        if owner:
-            if slot == "midday":
-                live = [s for s in shifts if s["running"]]
-                if live:
-                    sections.append(("On the clock now", [{"text": "%s — %s (%s so far)" % (
-                        _name(people.get(s["uid"])) if people.get(s["uid"]) else s["who"], s["where"],
-                        _fmt_dur(s["mins"]))} for s in live]))
-            else:
-                if shifts:
-                    by = {}
-                    for s in shifts:
-                        who = _name(people.get(s["uid"])) if people.get(s["uid"]) else s["who"]
-                        by.setdefault(who, {}).setdefault(s["where"], 0)
-                        by[who][s["where"]] += s["mins"]
-                    lines = []
-                    for who in sorted(by):
-                        total = sum(by[who].values())
-                        lines.append({"text": "%s — %s: %s" % (who, _fmt_dur(total), ", ".join(
-                            "%s %s" % (w, _fmt_dur(m)) for w, m in sorted(by[who].items(), key=lambda x: -x[1])))})
-                    still = [s for s in shifts if s["running"]]
-                    if still:
-                        lines.append({"text": "Still clocked in: " + ", ".join(
-                            _name(people.get(s["uid"])) if people.get(s["uid"]) else s["who"] for s in still)})
-                    sections.append(("Today's hours", lines))
+    running = [s for s in shifts if s["running"]]
+
+    def who_of(s):
+        return str(_name(people.get(s["uid"])) if people.get(s["uid"]) else s["who"])
+
+    hours_day = {"evening": "today", "morning": "yesterday"}.get(slot)
+    if owner:
+        if slot == "midday":
+            if running:
+                sections.append(("On the clock now", [{"text": "%s — %s (%s so far)" % (
+                    who_of(s), s["where"], _fmt_dur(s["mins"]))} for s in running]))
         else:
-            mine_s = [s for s in shifts if s["uid"] == uid]
-            if mine_s and slot == "evening":
-                sections.append(("Your hours today", [{"text": "%s — %s" % (s["where"], _fmt_dur(s["mins"])) +
-                                                       (" (still clocked in)" if s["running"] else "")}
-                                                      for s in mine_s]))
+            lines = _hours_lines([s for s in shifts if s["day"] == hours_day], who_of)
+            if running:
+                # Each name once: an old forgotten shift and tonight's would
+                # otherwise list the same person twice.
+                lines.append({"text": "Still clocked in: " + ", ".join(dict.fromkeys(who_of(s) for s in running))})
+            if lines:
+                sections.append(("Today's hours" if slot == "evening" else "Yesterday's hours", lines))
+    elif hours_day:
+        mine_s = [s for s in shifts if s["uid"] == uid and s["day"] == hours_day]
+        if mine_s:
+            sections.append(("Your hours today" if slot == "evening" else "Your hours yesterday",
+                             [{"text": "%s — %s" % (s["where"], _fmt_dur(s["mins"])) +
+                               (" (still clocked in)" if s["running"] else "")} for s in mine_s]))
 
     # ---- bids (owner only)
     if owner and slot in ("morning", "evening") or (owner and slot == "midday" and cache["bids"]):
@@ -650,7 +697,7 @@ def _cache():
         "items": _calendar_items(today, today + datetime.timedelta(days=1)),
         "storms": _storms(),
         "bids": _bids(),
-        "shifts": _shifts_today(),
+        "shifts": _shifts(),
     }
 
 
@@ -666,16 +713,26 @@ def run(slot, only_uid=None, dry=False):
     for uid, u in people.items():
         if only_uid and uid != only_uid:
             continue
-        p = _prefs(u)
-        if not only_uid and not p.get(slot):
-            continue
-        d = build(slot, u, people, wx, cache)
-        if not d:
-            report.append({"uid": uid, "skipped": "nothing to say"})
-            continue
-        if dry:
-            report.append({"uid": uid, "subject": d["subject"], "text": to_text(d), "html": to_html(d),
-                           "push": d["push"]})
+        # Each person on their own. One odd record or setting used to raise
+        # straight out of this loop, and everybody after that person got no
+        # summary at all; now only that person's fails, and it is reported.
+        try:
+            p = _prefs(u)
+            if not only_uid and not p.get(slot):
+                continue
+            d = build(slot, u, people, wx, cache)
+            if not d:
+                report.append({"uid": uid, "skipped": "nothing to say"})
+                continue
+            if dry:
+                report.append({"uid": uid, "subject": d["subject"], "text": to_text(d), "html": to_html(d),
+                               "push": d["push"]})
+                continue
+        except Exception as e:          # noqa: BLE001
+            print("digest: could not build the summary for", uid, e)
+            if only_uid:
+                raise               # a preview shows the owner the real reason
+            report.append({"uid": uid, "error": "could not build: %s" % e})
             continue
         r = {"uid": uid}
         if p.get("email") and u.get("email"):

@@ -59,12 +59,35 @@
     return 'ps' + Array.from(new Uint8Array(h)).slice(0, 16).map(b => b.toString(16).padStart(2, '0')).join('');
   }
 
+  // Gives up on a promise that may never settle, with a reason to show.
+  function within(promise, ms, why) {
+    return Promise.race([promise, new Promise((_, no) => setTimeout(() => no(new Error(why)), ms))]);
+  }
+
+  async function currentSub() {
+    const reg = await navigator.serviceWorker.getRegistration();
+    return (reg && await reg.pushManager.getSubscription()) || null;
+  }
+
+  // A browser's push subscription belongs to the phone, not to whoever is
+  // signed in. On a shared phone it was reported as "on" to the next person
+  // while every summary still went to the one who switched it on -- so it only
+  // counts as on when the record of it says it is this person's. A record that
+  // cannot be read (somebody else's, or none yet) counts as not theirs.
+  async function mineOnThisDevice(sub) {
+    const u = me();
+    if (!u || !window.YDDb) return false;
+    try {
+      const rec = await window.YDDb.get('pushSubs', await subId(sub));
+      return !!(rec && rec.uid === u.uid);
+    } catch (e) { return false; }
+  }
+
   async function deviceState() {
     if (!pushSupported()) return isIOS() && !standalone() ? 'needs-home-screen' : 'unsupported';
     if (Notification.permission === 'denied') return 'blocked';
-    const reg = await navigator.serviceWorker.getRegistration();
-    const sub = reg && await reg.pushManager.getSubscription();
-    return sub ? 'on' : 'off';
+    const sub = await currentSub();
+    return sub && await mineOnThisDevice(sub) ? 'on' : 'off';
   }
 
   window.ntfTurnOn = async function () {
@@ -73,7 +96,11 @@
     try {
       const perm = await Notification.requestPermission();
       if (perm !== 'granted') { showToast('Notifications were not allowed on this device'); return; }
-      const reg = await navigator.serviceWorker.ready;
+      // `ready` never settles when no service worker is registered (the local
+      // dev server deliberately has none), which left this button stuck on
+      // "Turning on…" for good.
+      const reg = await within(navigator.serviceWorker.ready, 8000,
+        'the app is not fully installed on this device yet — reload Job Hub and try again');
       const { key } = await server('/digest/pushkey');
       const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
       const id = await subId(sub);
@@ -203,6 +230,28 @@
   };
 
   // --------------------------------------------------------------- wiring
+
+  // Signing out switches this phone's notifications off. They belong to the
+  // person, not the phone: left on, whoever signs in next on a shared phone
+  // would go on receiving the last person's summaries -- and the owner's has
+  // his personal calendar in it. Run just before sign-out, while still signed
+  // in, so the record can still be deleted under this person's name.
+  async function forgetThisDevice() {
+    try {
+      if (!pushSupported()) return;
+      // Both waits together stay inside the two seconds sign-out allows.
+      const sub = await within(currentSub(), 600, 'no answer');
+      if (!sub) return;
+      const id = await subId(sub);
+      // Not awaited: with no signal it goes when the signal returns. Pushes to
+      // a subscription that no longer exists are simply refused anyway.
+      if (window.YDDb) Promise.resolve(window.YDDb.remove('pushSubs', id)).catch(() => {});
+      await within(sub.unsubscribe(), 1200, 'no answer');
+    } catch (e) {
+      console.warn('[notify] could not switch this device off at sign-out', e && e.message);
+    }
+  }
+  (window.YDSignOutHooks = window.YDSignOutHooks || []).push(forgetThisDevice);
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};

@@ -89,7 +89,14 @@ function entryHours(e) {
   return 0;
 }
 function fmtHrsMin(d) { if (!d || d <= 0) return '0h 0m'; const h = Math.floor(d); let m = Math.round((d-h)*60); if (m===60) return (h+1)+'h 0m'; return h+'h '+m+'m'; }
-function fmtMoney(v) { const n = parseFloat(v); return isNaN(n)||n===0 ? '$0.00' : '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+// The minus goes in front of the dollar sign: an overpaid balance used to
+// read "$-50.00". A value that rounds to nothing stays "$0.00", never "-$0.00".
+function fmtMoney(v) {
+  const n = parseFloat(v);
+  if (isNaN(n) || n === 0) return '$0.00';
+  const s = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (n < 0 && s !== '0.00' ? '-$' : '$') + s;
+}
 function parseMoney(s) { return parseFloat(String(s).replace(/[$,]/g,'')) || 0; }
 function round2(n) { return Math.round(((parseFloat(n)||0) + Number.EPSILON) * 100) / 100; }
 // Safe for text AND for quoted attribute values. The old version (textContent
@@ -121,6 +128,19 @@ function fmtDateMD(iso) {
   const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (m) return parseInt(m[2],10) + '/' + parseInt(m[3],10);
   return iso;
+}
+// M/D/YYYY, for anything that leaves the app. On screen the year goes without
+// saying; in a spreadsheet opened next spring it does not.
+function fmtDateMDY(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return m ? parseInt(m[2], 10) + '/' + parseInt(m[3], 10) + '/' + m[1] : String(iso || '');
+}
+// A calendar date (today, if none is given) as YYYY-MM-DD from LOCAL date
+// parts. toISOString() gives the UTC date, which after 7 pm in Wisconsin is
+// already tomorrow.
+function localYMD(d) {
+  d = d || new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 function readMD(id) { return parseMD(document.getElementById(id).value); }
 function resetDateInputs() { ['matDate','addCostDate','payDate'].forEach(id => { const el = document.getElementById(id); if (el) el.value = todayMD(); }); }
@@ -174,6 +194,14 @@ function resetDateInputs() { ['matDate','addCostDate','payDate'].forEach(id => {
 
   setTimeout(check, 3000);
 })();
+
+function hideLocalOnlyBanner() {
+  const b = document.getElementById('localOnlyBanner');
+  if (!b || b.hidden) return;
+  b.hidden = true;
+  b.onclick = null;
+  b.style.cursor = '';
+}
 
 
 
@@ -247,27 +275,39 @@ function openAppearance() {
 // Signing out deliberately clears this device's cached jobs. Firestore holds
 // the real copy, so nothing is lost -- but a crew member handing back a shared
 // phone must not leave client names and prices sitting in it.
-function ydSignOut() {
+async function ydSignOut() {
   if (typeof dirty !== 'undefined' && dirty
       && !confirm('You have unsaved changes on this job.\n\nSign out anyway?')) return;
   if (!confirm('Sign out of YD Job Hub?\n\nYour jobs stay safe in the cloud. '
              + 'This device will need to sign in again.')) return;
 
   closeHeaderMenu();
+  // The full sign-out can stop to ask about changes that have not reached
+  // the cloud yet; if the answer is "stay", nothing below may happen.
+  if (window.YDSignOut && !(await window.YDSignOut())) return;
   try {
+    // Light or dark is how this phone looks, not whose it is -- keep it.
     Object.keys(localStorage)
-      .filter(k => k.indexOf(STORAGE_PREFIX) === 0)
+      .filter(k => k.indexOf(STORAGE_PREFIX) === 0 && k !== THEME_KEY)
       .forEach(k => localStorage.removeItem(k));
   } catch (e) { console.warn('could not clear local cache', e); }
 
-  if (window.YDSignOut) window.YDSignOut();
-  setTimeout(() => location.reload(), 400);
+  // Already confirmed above; without this the browser's own "leave site?"
+  // prompt asked the same question a second time.
+  if (typeof dirty !== 'undefined') dirty = false;
+  location.reload();
 }
 
 // Fill the menu in once we know who is signed in. Stays hidden entirely when
 // running without Firebase, where there is no account to show.
 document.addEventListener('yd-auth', e => {
   const a = e.detail || {};
+  // The failsafe above gives up after 30 seconds and puts up "Not connected".
+  // A slow phone can still finish connecting after that, and the banner then
+  // sat there for the rest of the session contradicting a working app. Only
+  // a cloud answer clears it: firebase-init's own local-only mode sets the
+  // banner itself, with mode 'local', and that one is true.
+  if (a.mode === 'cloud') hideLocalOnlyBanner();
   const who = document.getElementById('menuWho');
   const out = document.getElementById('menuSignOut');
   const sep = document.getElementById('menuAccountSep');
@@ -279,8 +319,9 @@ document.addEventListener('yd-auth', e => {
   if (out) out.hidden = !on;
   if (sep) sep.hidden = !on;
 
-  // Crew get the clock and the snow route, and nothing else. Every other tab
-  // reads jobs, prices or client details, which the rules deny them outright --
+  // Crew get the screens built for them -- the clock, the snow route, the
+  // calendar, boards and supplies -- and not these four. Each of these reads
+  // jobs, prices or client details, which the rules deny them outright --
   // so leaving the tabs visible would hand them a row of screens that load
   // empty and look broken. This is presentation only; the rules are the
   // enforcement.
@@ -317,8 +358,9 @@ document.addEventListener('yd-auth', e => {
 // ---- The More sheet ----
 //
 // Built each time it opens rather than written into the markup, so it lists
-// exactly the screens this person is allowed to see. A crew member has no
-// hidden screens at all, which is why they never get a More button.
+// exactly the screens this person is allowed to see. Crew get More too: their
+// screens all fit on the bar, but it is where Notifications and Appearance
+// live.
 function openMore() {
   const wrap = document.getElementById('moreItems');
   const sheet = document.getElementById('moreSheet');
@@ -373,9 +415,53 @@ function closeHeaderMenu() {
 document.addEventListener('click', e => {
   if (!e.target.closest('.menu-wrap')) closeHeaderMenu();
 });
+// Escape closes whatever is in front: the header menu if it is open,
+// otherwise the top-most modal or the More sheet. It presses that window's
+// own close button rather than hiding it directly, so whatever the window
+// does on closing -- a redraw, a question about unsaved changes -- still runs.
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closeHeaderMenu();
+  if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return;
+  const menu = document.getElementById('headerMenu');
+  if (menu && !menu.hidden) { closeHeaderMenu(); return; }
+  const top = topOverlay();
+  const close = top && top.querySelector('.modal-close, .sheet-close');
+  if (close) close.click();
 });
+
+// The open modal or sheet that is actually in front. Several can be open at
+// once (a worker's page over the clock, say), and which one shows is decided
+// by the stylesheet's stacking, not by the order they were opened in -- so
+// ask the page what sits at the middle of the screen. Every overlay covers
+// the whole screen, so the one in front is the one found there.
+const OPEN_OVERLAY = '.modal-overlay.active, .sheet-overlay.active';
+function topOverlay() {
+  const open = document.querySelectorAll(OPEN_OVERLAY);
+  if (!open.length) return null;
+  const hit = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+  if (!hit) return open[open.length - 1];
+  // Something that is not an overlay in front of them all -- the sign-in
+  // screen -- means none of them is what the person is looking at.
+  return hit.closest(OPEN_OVERLAY);
+}
+
+// Windows that only show things can close with a tap outside them. Ones with
+// fields to fill in cannot: a stray tap beside a half-finished form would
+// throw away everything typed into it. The press has to start on the backdrop
+// as well as end there, so dragging to select text in a list and letting go
+// outside it does not count as a tap outside.
+const TAP_OUTSIDE_CLOSES = ['managerModal', 'problemsModal', 'stormDetailModal'];
+function closeOnTapOutside(id) {
+  const m = document.getElementById(id);
+  if (!m) return;
+  // A browser too old for pointer events just closes on the click itself.
+  let pressedOutside = !window.PointerEvent;
+  m.addEventListener('pointerdown', e => { pressedOutside = e.target === m; });
+  m.addEventListener('click', e => {
+    if (e.target !== m || !pressedOutside) return;
+    const close = m.querySelector('.modal-close');
+    if (close) close.click();
+  });
+}
 
 // ═══════════════════════════════════════════════════════════
 // TABS + CONTEXT BAR
@@ -420,8 +506,8 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   if (name === 'dashboard') renderDashboard();
-  // Labour is not redrawn while the Job tab is hidden, so catch up on arrival.
-  if (name === 'job' && typeof renderLabor === 'function') renderLabor();
+  // Labour is not redrawn while Tracking is hidden, so catch up on arrival.
+  if (name === 'tracking' && typeof renderLabor === 'function') renderLabor();
   if (name === 'matdash') renderMatDash();
   if (name === 'snow' && window.YDSnow) YDSnow.render();
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
@@ -431,6 +517,33 @@ function switchTab(name) {
   if (name === 'calendar' && window.YDCalendar) YDCalendar.render();
   if (name === 'boards' && window.YDBoards) YDBoards.render();
   if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
+}
+
+// A notification tapped while Job Hub is already open. The service worker
+// used to reload the open window at the notification's address, which threw
+// away whatever was on screen with no "leave page?" question. Now it brings
+// the window forward and passes the address here instead.
+//
+// notify.js only reads the address's #tab when sign-in completes, so a
+// window that is already signed in is moved to that screen directly; one
+// still at the sign-in screen gets the #tab put in its address, for notify.js
+// to act on once sign-in finishes.
+function openFromNotification(url) {
+  let want = '';
+  try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
+  if (TABS.indexOf(want) === -1) return;
+  if (!(window.YDAuth && window.YDAuth.user)) {
+    history.replaceState(null, '', location.pathname + location.search + '#' + want);
+    return;
+  }
+  const btn = document.getElementById(tabButtonId(want));
+  if (btn && !btn.hidden) switchTab(want);
+}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', e => {
+    const d = e.data || {};
+    if (d.type === 'yd-notification-open') openFromNotification(d.url);
+  });
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();
@@ -453,9 +566,13 @@ function addServiceType() {
   let val = sel.value;
   if (!val) return;
   if (val === '__custom') { val = prompt('Custom service type:'); if (!val || !val.trim()) { sel.value = ''; return; } val = val.trim(); }
-  if (!serviceTypes.includes(val)) serviceTypes.push(val);
   sel.value = '';
+  // Only a real change marks the job unsaved -- a cancelled custom type or a
+  // type already on the job used to trigger an autosave of nothing.
+  if (serviceTypes.includes(val)) return;
+  serviceTypes.push(val);
   renderServiceTypes();
+  markDirty();
 }
 function removeServiceType(idx) { serviceTypes.splice(idx, 1); renderServiceTypes(); markDirty(); }
 function renderServiceTypes() {
@@ -902,7 +1019,23 @@ function clockedLabor() {
   _clockedCache = { job: currentJobId, value: YDClock.forJob(currentJobId) };
   return _clockedCache.value;
 }
-document.addEventListener('yd-clock-changed', () => { _clockedCache = null; });
+document.addEventListener('yd-clock-changed', () => {
+  _clockedCache = null;
+  // All Jobs counts clock time too, so an approved shift moves its figures.
+  const dash = document.getElementById('panel-dashboard');
+  if (dash && dash.classList.contains('active')) renderDashboard();
+});
+// The same labour sums for ANY job, not just the one open in the form: the
+// hand-entered rows at the standing rate, plus approved clock time at the rate
+// it was approved at. All Jobs used to count only the hand-entered rows, so a
+// job worked entirely on the clock showed its whole price as profit.
+function jobLabour(jobId, laborRows) {
+  const manual = (laborRows || []).reduce((s, e) => s + entryHours(e), 0);
+  const c = (jobId && window.YDClock && typeof YDClock.forJob === 'function') ? YDClock.forJob(jobId) : null;
+  const clockHours = c && isFinite(c.paidHours) ? c.paidHours : 0;
+  const clockCents = c && isFinite(c.costCents) ? c.costCents : 0;
+  return { hours: round2(manual + clockHours), cost: round2(manual * LABOR_RATE + clockCents / 100) };
+}
 function totalLaborHours() {
   return round2(manualLaborHours() + clockedLabor().paidHours);
 }
@@ -915,9 +1048,11 @@ function totalLaborCost() {
 // being reloaded.
 function refreshJobLabour() {
   _clockedCache = null;
-  // Only worth redrawing while the job is on screen; switching back to the
-  // Job tab redraws it anyway.
-  const p = document.getElementById('panel-job');
+  // Only worth redrawing while the job's labour is on screen; switching to
+  // Tracking redraws it anyway. (This used to look for the Job tab, but the
+  // labour table and the financials live on Tracking, so an approval never
+  // showed until something else happened to redraw them.)
+  const p = document.getElementById('panel-tracking');
   if (p && p.classList.contains('active') && document.getElementById('laborTableWrap')) renderLabor();
 }
 
@@ -1156,15 +1291,25 @@ function deleteJob(id) {
   localStorage.removeItem(id);   // also drop legacy-key copy if present
   saveJobIndex(getJobIndex().filter(j => j.id !== id));
   invalidateJobsCache();
-  if (currentJobId === id) newJob();
+  // Not newJob(): its "unsaved changes will be lost?" question, answered
+  // Cancel, left the deleted job in the form, and the next autosave quietly
+  // brought it back to life.
+  if (currentJobId === id) clearJobForm();
   renderJobList(); showToast('Job deleted');
 }
 function duplicateJob(id) {
   const raw = readJobBlob(id);
   if (!raw) return;
-  const data = JSON.parse(raw);
+  let data;
+  try { data = JSON.parse(raw); } catch (e) { showToast('Could not copy that job'); return; }
   data.customerName = (data.customerName || 'Untitled') + ' (copy)';
-  data.qbInvoice = ''; data.qbInvoiced = false;   // a copy hasn't been invoiced
+  // A copy is new work: nothing invoiced, nothing paid, not yet won. Carrying
+  // those over put a second "Paid in full" job on the books, and a second
+  // card at the original's place on the Bids and Jobs boards.
+  data.qbInvoice = ''; data.qbInvoiced = false;
+  data.payments = [];
+  data.jobStatus = 'quoting';
+  BOARD_FIELDS.forEach(f => { delete data[f]; });
   const newId = uid(); data.lastModified = new Date().toISOString();
   try { localStorage.setItem(STORAGE_PREFIX + newId, JSON.stringify(data)); }
   catch (err) { showStorageError(); return; }
@@ -1174,6 +1319,14 @@ function duplicateJob(id) {
 }
 function newJob() {
   if (dirty && !confirm('Start a new job? Unsaved changes will be lost.')) return;
+  clearJobForm();
+  switchTab('job'); showToast('New job started');
+}
+// Empties the form without asking anything or moving anyone. newJob() puts
+// the unsaved-changes question in front of it; a delete does not need that
+// question (the person has just confirmed the delete), and sync uses it when
+// the job on screen was deleted on another device.
+function clearJobForm() {
   currentJobId = null;
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
   serviceTypes = []; jobStatus = 'quoting'; boardFields = {}; manualJobPrice = false; baseJobPrice = 0;
@@ -1186,7 +1339,7 @@ function newJob() {
   syncStatusSelect(); updateJobHeadBadge();
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   renderProposal(); renderOrderList(); updateSummary();
-  dirty = false; updateCtxBar(); switchTab('job'); showToast('New job started');
+  dirty = false; updateCtxBar();
 }
 function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); }
 
@@ -1247,10 +1400,12 @@ function renderDashboard() {
   svcSel.value = prevSvc;
   const fSvc = svcSel.value, fStatus = document.getElementById('dashStatus').value, fSearch = (document.getElementById('dashSearch').value || '').toLowerCase().trim();
   let rows = jobsAll.map(d => {
-    const hrs = (d.labor || []).reduce((s, e) => s + entryHours(e), 0);
+    // Clocked shifts included, exactly as the job's own Tracking figures do.
+    const lab = jobLabour(d._id, d.labor);
+    const hrs = lab.hours;
     const matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
     const price = parseMoney(d.jobPrice || '');
-    const net = round2(price - (hrs * LABOR_RATE + matCost));
+    const net = round2(price - (lab.cost + matCost));
     return { id: d._id, name: d.customerName || 'Untitled', city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
   });
   if (fSvc) rows = rows.filter(r => r.services.includes(fSvc));
@@ -1290,24 +1445,37 @@ function renderDashboard() {
 // ═══════════════════════════════════════════════════════════
 function categorizeMaterialItem(desc) { const l = (desc || '').toLowerCase(); for (const cat of MATERIAL_CATEGORIES) if (cat.keywords.some(k => l.includes(k))) return cat.name; return 'Other'; }
 function getCategoryUnit(name) { const c = MATERIAL_CATEGORIES.find(c => c.name === name); return c ? c.unit : 'ea'; }
-function getDateRangeStart(range) {
+// The window a Materials range covers: { start, end }, with `end` the first
+// moment NOT included (null = up to now). null for All Time.
+function getDateRange(range) {
   const now = new Date();
-  if (range === 'month') return new Date(now.getFullYear(), now.getMonth(), 1);
-  if (range === 'year') return new Date(now.getFullYear(), 0, 1);
-  if (range === 'season') return new Date(now.getFullYear(), 3, 1);
-  if (range === '30') return new Date(now.getTime() - 30 * 864e5);
-  if (range === '90') return new Date(now.getTime() - 90 * 864e5);
+  if (range === 'month') return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: null };
+  if (range === 'year') return { start: new Date(now.getFullYear(), 0, 1), end: null };
+  if (range === 'season') return seasonRange(now);
+  if (range === '30') return { start: new Date(now.getTime() - 30 * 864e5), end: null };
+  if (range === '90') return { start: new Date(now.getTime() - 90 * 864e5), end: null };
   return null;
+}
+// The landscaping season is 1 April to 31 October. From January to March the
+// season that means anything is the one that ended last autumn: the old
+// version started at April of THIS year, so all winter the screen was empty,
+// and in November and December it carried on counting off-season purchases.
+function seasonRange(now) {
+  const y = now.getMonth() < 3 ? now.getFullYear() - 1 : now.getFullYear();
+  return { start: new Date(y, 3, 1), end: new Date(y, 10, 1) };
 }
 function renderMatDash() {
   const range = document.getElementById('matDashRange').value;
   const search = (document.getElementById('matDashSearch').value || '').toLowerCase().trim();
-  const start = getDateRangeStart(range);
+  const win = getDateRange(range);
   const jobs = loadAllJobs();
   const cats = {}; let grandTotal = 0, purchaseCount = 0;
   jobs.forEach(d => {
     (d.materials || []).forEach(m => {
-      if (start && m.date) { const md = new Date(m.date + 'T00:00:00'); if (md < start) return; }
+      if (win && m.date) {
+        const md = new Date(m.date + 'T00:00:00');
+        if (md < win.start || (win.end && md >= win.end)) return;
+      }
       const price = parseFloat(m.price) || 0, qty = parseFloat(m.qty) || 0;
       const cat = categorizeMaterialItem(m.item);
       const c = cats[cat] = cats[cat] || { name: cat, unit: getCategoryUnit(cat), total: 0, qty: 0, count: 0, items: [] };
@@ -1350,7 +1518,7 @@ function exportAllJobs() {
   const backup = { app: 'yd-job-hub', version: 2, exported: new Date().toISOString(), index: idx, jobs };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob); const a = document.createElement('a');
-  a.href = url; a.download = 'yd-job-hub-backup-' + new Date().toISOString().split('T')[0] + '.json'; a.click(); URL.revokeObjectURL(url);
+  a.href = url; a.download = 'yd-job-hub-backup-' + localYMD() + '.json'; a.click(); URL.revokeObjectURL(url);
   localStorage.setItem(STORAGE_PREFIX + 'lastBackup', new Date().toISOString());
   showToast('Backup downloaded (' + idx.length + ' jobs)');
 }
@@ -1437,12 +1605,18 @@ function fallbackCopy(text, done) {
 function exportPurchasesCsv() {
   if (!materials.length) { showToast('No purchases to export'); return; }
   const name = (document.getElementById('customerName').value.trim() || 'job').replace(/[^a-z0-9]+/gi, '-').toLowerCase();
-  const esc = s => '"' + String(s == null ? '' : s).replace(/"/g, '""') + '"';
-  let csv = 'Date,Item,Quantity,Unit,Vendor,Price\n';
+  // Quoted, with line breaks flattened, as the snow billing export does: a
+  // vendor typed with a comma or a new line would otherwise split the row.
+  const cell = s => '"' + String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').replace(/"/g, '""') + '"';
+  const rows = ['Date,Item,Quantity,Unit,Vendor,Price'];
   materials.forEach(m => {
-    csv += [fmtDateMD(m.date), esc(m.item), m.qty || '', m.unit || '', esc(m.location || ''), (parseFloat(m.price) || 0).toFixed(2)].map(String).join(',') + '\n';
+    rows.push([cell(fmtDateMDY(m.date)), cell(m.item), cell(m.qty || ''), cell(m.unit || ''),
+      cell(m.location || ''), (parseFloat(m.price) || 0).toFixed(2)].join(','));
   });
-  const blob = new Blob([csv], { type: 'text/csv' });
+  // The same two details as the snow billing export. The byte-order mark tells
+  // Excel the file is UTF-8 (without it a dash or an accent in a vendor's name
+  // arrives as rubbish), and CRLF is what the CSV convention specifies.
+  const blob = new Blob([String.fromCharCode(0xFEFF) + rows.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob); const a = document.createElement('a');
   a.href = url; a.download = 'purchases-' + name + '.csv'; a.click(); URL.revokeObjectURL(url);
   showToast('Purchases CSV downloaded');
@@ -1451,11 +1625,16 @@ function exportPurchasesCsv() {
 // ═══════════════════════════════════════════════════════════
 // TOAST + INIT
 // ═══════════════════════════════════════════════════════════
+// One hide-timer for the toast, restarted by every message. Each call used to
+// start its own, so a second message arriving while the first was showing was
+// hidden by the FIRST one's timer, sometimes after a fraction of a second.
+let toastTimer = null;
 function showToast(msg) {
   let t = document.getElementById('toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--brand);color:#fff;padding:13px 22px;font-family:"DM Sans",sans-serif;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity .3s;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.25);'; document.body.appendChild(t); }
   t.textContent = msg; t.style.opacity = '1';
-  setTimeout(() => t.style.opacity = '0', 2000);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 2000);
 }
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -1464,6 +1643,7 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('laborRateBadge').textContent = '@ $' + LABOR_RATE + '/hr';
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   syncStatusSelect(); renderProposal(); renderOrderList(); updateSummary(); updateCtxBar();
+  TAP_OUTSIDE_CLOSES.forEach(closeOnTapOutside);
 
   migrateJobIndex();   // repair index entries from older versions (prices, fields, key scheme)
 
@@ -1504,3 +1684,45 @@ window.addEventListener('DOMContentLoaded', () => {
   }, 3500);
 });
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ---- Windows with something typed in them do not close on a stray tap ----
+//
+// Most windows close when the dark backdrop around them is tapped, which is
+// handy for ones that only show things -- and costly for a half-filled form:
+// a thumb landing just beside it threw away everything typed. Dragging to
+// select text in a box and letting go outside the window did the same,
+// because the browser counts that as a tap on the backdrop.
+//
+// So, for every window: a tap on the backdrop is ignored once anything has
+// been typed in it since it opened, or when the press began inside the
+// window. The × and Escape still close it, deliberately.
+(function guardWindows() {
+  let pressedOn = null;
+  document.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
+  document.addEventListener('input', e => {
+    const o = e.target && e.target.closest && e.target.closest('.modal-overlay');
+    if (o) o.dataset.typed = '1';
+  }, true);
+  // Captured on the way down, so it runs before the backdrop's own handler
+  // and can stop it.
+  document.addEventListener('click', e => {
+    const o = e.target;
+    if (!o || !o.classList || !o.classList.contains('modal-overlay')) return;
+    const startedInside = pressedOn && pressedOn !== o && o.contains(pressedOn);
+    if (!o.dataset.typed && !startedInside) return;
+    e.stopPropagation();
+    e.preventDefault();
+    if (o.dataset.typed && !startedInside) showToast('Still open — Save, or close it with ×');
+  }, true);
+  // Each time a window opens it starts untouched.
+  const fresh = new MutationObserver(list => list.forEach(m => {
+    const o = m.target;
+    if (o.classList.contains('active') && !String(m.oldValue || '').includes('active')) delete o.dataset.typed;
+  }));
+  function watch() {
+    document.querySelectorAll('.modal-overlay').forEach(o =>
+      fresh.observe(o, { attributes: true, attributeFilter: ['class'], attributeOldValue: true }));
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
+  else watch();
+})();

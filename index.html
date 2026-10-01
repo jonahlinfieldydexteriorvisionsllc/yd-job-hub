@@ -78,8 +78,9 @@
     <button class="tab-btn tab-more" id="tabMore" onclick="openMore()"><span class="tab-icon">☰</span>More</button>
   </div>
 
-  <!-- On a phone the bar holds the four screens used in the field; everything
-       else lives in here, so adding a screen later never crowds the bar. -->
+  <!-- On a phone the bar holds the five screens used in the field; everything
+       else lives in here (plus Notifications and Appearance), so adding a
+       screen later never crowds the bar. -->
   <div class="sheet-overlay" id="moreSheet" onclick="if(event.target===this)closeMore()">
     <div class="sheet">
       <div class="sheet-grip"></div>
@@ -104,7 +105,7 @@
           <div class="field">
             <span class="label">Service Type(s)</span>
             <div id="serviceTypeTags" style="display:flex;flex-wrap:wrap;gap:4px;min-height:40px;padding:6px;border:1.5px solid var(--border-strong);background:var(--surface-2);align-items:flex-start;border-radius:6px"></div>
-            <select id="serviceTypeSelect" onchange="addServiceType(); markDirty()" style="margin-top:6px">
+            <select id="serviceTypeSelect" onchange="addServiceType()" style="margin-top:6px">
               <option value="">+ Add service type…</option>
               <option>Artificial Turf</option>
               <option>Raised Garden Bed</option>
@@ -149,7 +150,7 @@
           <div class="field"><span class="label">Zip</span><input id="zip" oninput="markDirty()"></div>
         </div>
 
-        <div class="grid g4 mt">
+        <div class="grid g4 g-contact mt">
           <div class="field"><span class="label">Phone</span><input id="phone" type="tel" placeholder="(555) 123-4567" oninput="markDirty()"></div>
           <div class="field"><span class="label">Email</span><input id="email" type="email" placeholder="client@email.com" oninput="markDirty()"></div>
           <div class="field"><span class="label">Date</span><input id="quoteDate" class="date-md" placeholder="M/D" oninput="markDirty()"></div>
@@ -804,6 +805,7 @@
     <p class="auth-msg" id="gateMsg">Starting&hellip;</p>
     <div class="auth-spinner" id="gateSpinner"></div>
     <button class="btn btn-filled auth-btn" id="gateSignIn" hidden>Sign in with Google</button>
+    <button class="btn btn-filled auth-btn" id="gateRetry" hidden onclick="location.reload()">Try again</button>
     <button class="btn auth-btn" id="gateSignOut" hidden>Sign out</button>
   </div>
 </div>

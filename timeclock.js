@@ -152,6 +152,17 @@
   const openPause = e => (e.pauses || []).find(p => !p.endedAt) || null;
   const rateOf = uid => ((people[uid] || {}).rateCents) || DEFAULT_RATE_CENTS;
 
+  // The name a person goes by. The owner renames people on Your Crew and on
+  // their own page, and both write it to the person's user record -- so it is
+  // read from there whenever it is known, and the name stamped on a shift when
+  // it was made is only the fallback. A rename then shows on every shift at
+  // once, both ways of renaming agree, and no shift is rewritten to do it.
+  function whoIs(uid, stamped) {
+    const p = people[uid];
+    return (p && p.name) || stamped || (p && p.email) || 'Worker';
+  }
+  const workerOf = e => whoIs(e.uid, e.workerName);
+
   // --------------------------------------------------------------- the list
 
   function mine() {
@@ -194,9 +205,8 @@
     const id = 'te' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
     const rec = {
       uid: forUid,
-      workerName: forUid === u.uid
-        ? (u.displayName || u.email || 'Me')
-        : ((people[forUid] || {}).name || (people[forUid] || {}).email || 'Worker'),
+      // The name the owner gave them, not whatever their Google account says.
+      workerName: whoIs(forUid, forUid === u.uid ? (u.displayName || u.email || 'Me') : ''),
       kind: kind,                 // 'job' or 'storm'
       targetId: targetId,
       targetName: targetName,     // kept as it read then; jobs get renamed
@@ -223,6 +233,9 @@
   window.openJobPicker = function (forUid) {
     clockingFor = forUid || null;
     picking = true;
+    // The forgotten-shift form is drawn in the same place and takes priority,
+    // so left open it would hide the picker that was just asked for.
+    addingShift = false; addFor = null;
     render();
   };
 
@@ -244,23 +257,27 @@
   };
   window.cancelAddShift = function () { addingShift = false; addFor = null; render(); };
 
-  function addShiftHtml() {
-    const today = new Date();
-    const iso = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+  // Each choice carries only its kind and id; the name is looked up when the
+  // shift is sent. Carrying the name too, split on '|', cut short any job whose
+  // name had a '|' in it.
+  function targetOptions() {
     const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]))
       .filter(j => j.status !== 'complete')
       .sort((a, b) => String(a.name).localeCompare(b.name));
+    return '<option value="labor|labor">Labor</option>' +
+      '<option value="snow|snow">Snow</option>' +
+      '<option value="receipts|receipts">Receipts</option>' +
+      jobs.map(j => '<option value="job|' + esc(j.id) + '">' + esc(j.name) + '</option>').join('');
+  }
+
+  function addShiftHtml() {
+    const today = new Date();
+    const iso = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
 
     return '<div class="addshift">' +
       '<p class="clock-lead">A shift you forgot to clock in for</p>' +
       '<div class="field"><span class="label">What were you on?</span>' +
-        '<select id="asTarget">' +
-          '<option value="labor|labor|Labor">Labor</option>' +
-          '<option value="snow|snow|Snow">Snow</option>' +
-          '<option value="receipts|receipts|Receipts">Receipts</option>' +
-          jobs.map(j => '<option value="job|' + esc(j.id) + '|' + esc(j.name) + '">' +
-            esc(j.name) + '</option>').join('') +
-        '</select></div>' +
+        '<select id="asTarget">' + targetOptions() + '</select></div>' +
       '<div class="field"><span class="label">Day</span>' +
         '<input type="date" id="asDate" value="' + iso(today) + '" max="' + iso(today) + '"></div>' +
       '<div class="grid g2">' +
@@ -285,17 +302,25 @@
     if (!u) return;
     const forUid = addFor || u.uid;
 
-    const parts = ((el('asTarget') || {}).value || '').split('|');
+    // Split at the first '|' only: everything after it is the id.
+    const target = (el('asTarget') || {}).value || '';
+    const cut = target.indexOf('|');
+    const kind = cut > 0 ? target.slice(0, cut) : '';
+    const targetId = cut > 0 ? target.slice(cut + 1) : '';
     const day = (el('asDate') || {}).value;
     const from = (el('asFrom') || {}).value;
     const to = (el('asTo') || {}).value;
     const why = ((el('asWhy') || {}).value || '').trim();
 
+    if (!kind || !targetId) { showToast('Pick what you were working on'); return; }
     if (!day || !from || !to) { showToast('Fill in the day and both times'); return; }
 
     const startMs = new Date(day + 'T' + from).getTime();
     let endMs = new Date(day + 'T' + to).getTime();
     if (!startMs || !endMs) { showToast('Those times did not make sense'); return; }
+    // The same time twice is a slip, not a shift. Read as running past
+    // midnight it became a 24-hour day sent to the office as a real one.
+    if (endMs === startMs) { showToast('It finished the minute it started? Check the times'); return; }
     // Finished before it started means it ran past midnight. The next day is
     // worked out on the calendar, not by adding 24 hours, which is an hour out
     // on the two nights a year the clocks change.
@@ -312,13 +337,12 @@
       showToast('That is in the future'); return;
     }
 
+    const targetName = nameFor(kind, targetId);
     const id = 'te' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
     const rec = {
       uid: forUid,
-      workerName: forUid === u.uid
-        ? ((people[forUid] || {}).name || u.displayName || u.email || 'Me')
-        : ((people[forUid] || {}).name || (people[forUid] || {}).email || 'Worker'),
-      kind: parts[0], targetId: parts[1], targetName: parts[2],
+      workerName: whoIs(forUid, forUid === u.uid ? (u.displayName || u.email || 'Me') : ''),
+      kind: kind, targetId: targetId, targetName: targetName,
       startedAt: new Date(startMs).toISOString(),
       endedAt: new Date(endMs).toISOString(),
       startedMs: startMs, endedMs: endMs,
@@ -332,7 +356,7 @@
     addingShift = false; addFor = null;
     render();
     write(id, rec, 'submitting a shift');
-    showToast('Sent in — ' + fmtDur(endMs - startMs) + ' on ' + parts[2]);
+    showToast('Sent in — ' + fmtDur(endMs - startMs) + ' on ' + targetName);
   };
   window.cancelJobPicker = function () { picking = false; clockingFor = null; render(); };
 
@@ -445,7 +469,23 @@
     const badge = el('clockBadge');
     if (badge) badge.textContent = shift ? (openPause(shift) ? 'Paused' : 'On the clock') : '';
 
-    if (addingShift) { wrap.innerHTML = addShiftHtml(); return; }
+    if (addingShift) {
+      // Built once, then left alone. The clock redraws on every change from
+      // the database -- another crew member pausing, a job being saved -- and
+      // rebuilding this form each time wiped the times and the reason while
+      // they were being typed. Only the list of jobs is brought up to date,
+      // and not while it is open, so a job that arrives after the form was
+      // opened can still be picked.
+      const sel = el('asTarget');
+      if (!sel) { wrap.innerHTML = addShiftHtml(); return; }
+      if (document.activeElement !== sel) {
+        const keep = sel.value;
+        sel.innerHTML = targetOptions();
+        sel.value = keep;
+        if (sel.selectedIndex < 0) sel.selectedIndex = 0;   // that job has gone
+      }
+      return;
+    }
     if (picking) {
       // The running clock redraws every second, and rebuilding the picker
       // replaces the search box. While somebody is actually typing in it, only
@@ -557,8 +597,13 @@
     // the right customer's invoice. With no storm running it is still snow
     // work -- loading salt, fixing a plow -- but it belongs to no customer, so
     // it is booked as the business's own time like the other two.
+    // Says whose clock this is when the owner is starting somebody else's, so
+    // it cannot be mistaken for clocking himself in.
+    const lead = clockingFor && clockingFor !== ((me() || {}).uid)
+      ? 'What is ' + esc(whoIs(clockingFor)) + ' working on?'
+      : 'What are you working on?';
     return '<div class="picker">' +
-      '<p class="clock-lead">What are you working on?</p>' +
+      '<p class="clock-lead">' + lead + '</p>' +
       '<div class="picker-kinds">' +
         (stormOpen
           ? kindBtn('storm', storm.id, 'Tonight’s storm', '❄️', 'kind-snow')
@@ -635,7 +680,7 @@
           const p = openPause(e);
           return '<div class="on-now' + (p ? ' paused' : '') + '">' +
             '<button class="on-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
-              esc(e.workerName) + '</button>' +
+              esc(workerOf(e)) + '</button>' +
             '<span class="on-where">' + esc(e.targetName) + '</span>' +
             '<span class="on-time"><span data-live-entry="' + safeId(e.id) + '">' + fmtDur(paidMs(e)) + '</span>' +
               (p ? ' · paused (' + esc(p.reason) + ')' : '') + '</span>' +
@@ -643,20 +688,56 @@
           '</div>';
         }).join('')
       : '<p class="empty-msg">Nobody is on the clock.</p>') +
-      '<div class="field-actions"><button class="btn btn-sm" onclick="pickWorkerToClockIn()">Clock somebody in</button></div>';
+      (choosingWorker ? workerChooserHtml()
+        : '<div class="field-actions"><button class="btn btn-sm" onclick="pickWorkerToClockIn()">Clock somebody in</button></div>');
   }
 
   // Their phone is dead, or they forgot. The entry records who actually
   // created it, so this is never mistaken for the person's own clock-in.
+  //
+  // A list of names to tap, drawn where the button was. It used to be a
+  // browser prompt asking for a number from a numbered list, which on a phone
+  // meant reading the list, closing it in your head and typing a digit.
+  let choosingWorker = false;
+
+  function crewToClockIn() {
+    return Object.keys(people)
+      .filter(uid => people[uid].role === 'crew' && people[uid].active)
+      .sort((a, b) => whoIs(a).localeCompare(whoIs(b)));
+  }
+
+  function workerChooserHtml() {
+    const crew = crewToClockIn();
+    return '<div class="picker">' +
+      '<p class="clock-lead">Clock in who?</p>' +
+      crew.map(uid => {
+        const on = Object.values(entries).find(e => e.uid === uid && running(e));
+        return '<button class="picker-job" onclick="clockInWorker(\'' + safeId(uid) + '\')">' +
+          '<span class="picker-name">' + esc(whoIs(uid)) + '</span>' +
+          '<span class="picker-addr">' + (on
+            ? 'On the clock at ' + esc(on.targetName) + ' — this moves them'
+            : esc(people[uid].email || '')) + '</span>' +
+        '</button>';
+      }).join('') +
+      '<button class="btn btn-sm" onclick="cancelPickWorker()">Cancel</button>' +
+    '</div>';
+  }
+
   window.pickWorkerToClockIn = function () {
-    const crew = Object.keys(people)
-      .filter(uid => people[uid].role === 'crew' && people[uid].active);
-    if (!crew.length) { showToast('No crew members approved yet'); return; }
-    const names = crew.map((uid, i) => (i + 1) + '. ' + (people[uid].name || people[uid].email));
-    const pick = prompt('Clock in who?\n\n' + names.join('\n'), '1');
-    const i = parseInt(pick, 10) - 1;
-    if (!(i >= 0 && i < crew.length)) return;
-    openJobPicker(crew[i]);
+    if (!crewToClockIn().length) { showToast('No crew members approved yet'); return; }
+    choosingWorker = true;
+    renderOnNow();
+  };
+  window.cancelPickWorker = function () { choosingWorker = false; renderOnNow(); };
+
+  // The job picker opens in the clock card at the top of the screen, which on
+  // a phone is out of sight from here -- so it is brought into view.
+  window.clockInWorker = function (uid) {
+    if (!people[uid]) return;
+    choosingWorker = false;
+    openJobPicker(uid);
+    const card = el('clockWrap');
+    if (card && card.scrollIntoView) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
 
   function renderApprovals() {
@@ -676,11 +757,13 @@
       return;
     }
     wrap.innerHTML = waiting.map(e => {
-      const paid = paidMs(e), bill = billableMs(e), pause = pausedMs(e);
+      // Chargeable, not merely unpaused: a long Labor day is not billable to
+      // anybody, however few pauses it had.
+      const paid = paidMs(e), bill = chargeableMs(e), pause = pausedMs(e);
       return '<div class="appr">' +
         '<div class="appr-top">' +
           '<button class="appr-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
-            esc(e.workerName) + '</button>' +
+            esc(workerOf(e)) + '</button>' +
           '<span class="appr-where">' + esc(e.targetName) + '</span>' +
           '<span class="appr-why">' + whyFlagged(e) + '</span>' +
         '</div>' +
@@ -692,7 +775,9 @@
         '<div class="appr-nums">' +
           '<span><strong>' + fmtDur(paid) + '</strong> paid</span>' +
           (pause ? '<span>' + fmtDur(pause) + ' paused</span>' : '') +
-          '<span><strong>' + fmtDur(bill) + '</strong> billable</span>' +
+          (canPause(e)
+            ? '<span><strong>' + fmtDur(bill) + '</strong> billable</span>'
+            : '<span>not billable</span>') +
           '<span class="appr-cost">' + money(costOf(paid, rateOf(e.uid))) + '</span>' +
         '</div>' +
         ((e.pauses || []).length
@@ -745,7 +830,9 @@
       status: 'approved',
       rateCents: rateOf(e.uid),
       paidHours: hours(paidMs(e)),
-      billableHours: hours(billableMs(e)),
+      // Chargeable, the same figure a self-settled shift is stamped with: a
+      // Labor or Receipts shift is never billable, however it was approved.
+      billableHours: hours(chargeableMs(e)),
       // Stamped, not recalculated later, so the wage bill for a shift can
       // never drift from what was approved.
       costCents: costOf(paidMs(e), rateOf(e.uid)),
@@ -756,7 +843,7 @@
     render();
     write(id, patch, 'approving');
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
-    showToast('Approved — ' + fmtDur(paidMs(e)) + ' for ' + e.workerName);
+    showToast('Approved — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
   };
 
   window.rejectShift = function (id) {
@@ -816,9 +903,15 @@
         ? waiting.map(u => '<div class="crew-row waiting">' +
             '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
-            '<span class="crew-state">' + (u.role === 'pending' ? 'wants access' : 'switched off') + '</span>' +
-            '<button class="btn btn-sm btn-filled" onclick="approveCrew(\'' + safeId(u.uid) + '\')">' +
-              (u.role === 'pending' ? 'Let them in' : 'Switch back on') + '</button>' +
+            '<span class="crew-state">' + (u.role === 'pending' ? 'wants access'
+              : u.role === 'denied' ? 'refused' : 'switched off') + '</span>' +
+            // Somebody refused is not offered the same filled-in button as a
+            // crew member switched off for the winter: theirs is plain, and
+            // asks before letting them in.
+            '<button class="btn btn-sm' + (u.role === 'denied' ? '' : ' btn-filled') +
+              '" onclick="approveCrew(\'' + safeId(u.uid) + '\')">' +
+              (u.role === 'pending' ? 'Let them in'
+                : u.role === 'denied' ? 'Let them in after all…' : 'Switch back on') + '</button>' +
             (u.role === 'pending'
               ? '<button class="btn btn-sm" onclick="denyCrew(\'' + safeId(u.uid) + '\')">Not them</button>' : '') +
           '</div>').join('')
@@ -863,8 +956,14 @@
   window.approveCrew = function (uid) {
     const u = people[uid];
     if (!u) return;
-    setRole(uid, { role: 'crew', active: true },
-      (u.name || u.email) + ' can now clock in');
+    const who = u.name || u.email;
+    // Letting in somebody already turned away is done on purpose or not at
+    // all. Their row sits among people asking to join, and one stray tap on
+    // it used to hand crew access to the very person who had been refused.
+    if (u.role === 'denied' && !confirm('Let ' + who + (u.name && u.email ? ' (' + u.email + ')' : '') +
+        ' in after all?\n\nYou refused them before. They will be able to sign in, ' +
+        'clock in and see the crew side of Job Hub.')) return;
+    setRole(uid, { role: 'crew', active: true }, who + ' can now clock in');
   };
 
   // Denied, not deleted: the record is the audit trail of who asked, and the
@@ -896,7 +995,7 @@
     const byWorker = {};
     done.forEach(e => {
       const w = byWorker[e.uid] = byWorker[e.uid] ||
-        { name: e.workerName, uid: e.uid, paid: 0, bill: 0, cost: 0 };
+        { name: workerOf(e), uid: e.uid, paid: 0, bill: 0, cost: 0 };
       w.paid += paidMs(e); w.bill += chargeableMs(e);
       w.cost += e.costCents != null ? e.costCents
         : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
@@ -983,6 +1082,10 @@
     const m = el('workerModal');
     if (m) m.classList.add('active');
     renderWorker();
+    // A crew member's own page shows their rate, so their record is read
+    // again here: a raise given since they signed in shows the next time they
+    // look, not the next time they sign in.
+    if (!isOwner()) loadMyRecord();
   };
   window.closeWorker = function () {
     const m = el('workerModal');
@@ -1120,7 +1223,8 @@
 
   window.saveWorkerEdit = function () {
     if (!isOwner() || !workerUid) return;
-    const name = ((el('wkName') || {}).value || '').trim();
+    // Same limit as Rename on Your Crew, so the two ways of naming agree.
+    const name = ((el('wkName') || {}).value || '').trim().slice(0, 60);
     const raw = ((el('wkRate') || {}).value || '').replace(/[^0-9.]/g, '');
     const cents = Math.round(parseFloat(raw) * 100);
 
@@ -1130,16 +1234,11 @@
     const patch = { name: name, rateCents: cents };
     people[workerUid] = Object.assign({}, people[workerUid], patch);
 
-    // The name is copied onto each shift when it is created, so changing it
-    // here would otherwise leave every past shift showing the old one. Only
-    // unapproved shifts are touched: an approved shift is a payroll record and
-    // is left exactly as it was agreed.
-    Object.keys(entries).forEach(id => {
-      const e = entries[id];
-      if (e.uid !== workerUid || e.status === 'approved') return;
-      e.workerName = name;
-      write(id, { workerName: name }, 'renaming shift');
-    });
+    // No shift is rewritten. Every screen reads the name from this record
+    // (whoIs), so past shifts show the new name at once -- and Save here and
+    // Rename on Your Crew can no longer leave them disagreeing. Rewriting
+    // used to cost one database write per shift the person had ever worked,
+    // on every save, even when only the rate had changed.
 
     editingWorker = false;
     render();
@@ -1170,7 +1269,10 @@
       if (!counts(e)) return;
       const p = e.paidHours != null ? e.paidHours : hours(paidMs(e));
       const b = e.billableHours != null ? e.billableHours : hours(billableMs(e));
-      const w = out.byWorker[e.workerName] = out.byWorker[e.workerName] || { paid: 0, billable: 0 };
+      // By the name they go by now, so one person renamed part-way through a
+      // job is one row on its labour, not two.
+      const who = workerOf(e);
+      const w = out.byWorker[who] = out.byWorker[who] || { paid: 0, billable: 0 };
       w.paid += p; w.billable += b;
       out.paidHours += p; out.billableHours += b;
       out.costCents += e.costCents != null ? e.costCents
@@ -1215,10 +1317,35 @@
     counts: counts,
     awaitingOwner: awaitingOwner,
     fmtDur: fmtDur,
-    label: e => e.targetName || OVERHEAD_LABEL[e.kind] || 'Other',
+    who: workerOf,
+    // A job's name as it reads today when the job is still listed: jobs get
+    // renamed, and the work log should not show one job under two names.
+    label: e => (e.kind === 'job' && board[e.targetId] && board[e.targetId].name) ||
+      e.targetName || OVERHEAD_LABEL[e.kind] || 'Other',
   };
 
   // ---------------------------------------------------------------- loading
+
+  // The work log listens for this. It is sent when names change as well as
+  // shifts, because the log shows the name a person goes by now.
+  function announce() { document.dispatchEvent(new CustomEvent('yd-clock-changed')); }
+
+  // Crew cannot watch the users collection -- only the owner may read anyone
+  // else's record -- but each person may read their own. Without it a crew
+  // phone knew neither the name the owner gave them, so every new shift was
+  // stamped with their Google name, nor their rate, so "My hours" priced
+  // every shift the owner's app had not yet stamped at the standing $25.
+  // A read, not a write, so it cannot freeze anything when there is no signal.
+  function loadMyRecord() {
+    const u = me(), key = watchKey;
+    if (!u || !window.YDDb || !key) return;
+    Promise.resolve(window.YDDb.get('users', u.uid)).then(d => {
+      if (!d || watchKey !== key) return;    // signed out or switched meanwhile
+      people[u.uid] = Object.assign({ uid: u.uid }, d);
+      render();
+      announce();
+    }).catch(() => { /* offline with nothing cached: the Google name and the default rate stand */ });
+  }
 
   function start(owner) {
     if (!window.YDDb) return;
@@ -1246,7 +1373,7 @@
       stampUnpriced();
       render();
       if (typeof refreshJobLabour === 'function') refreshJobLabour();
-      document.dispatchEvent(new CustomEvent('yd-clock-changed'));
+      announce();
     };
     const onEntriesError = err => {
       if (err && err.code === 'permission-denied') {
@@ -1269,6 +1396,7 @@
         else board[c.id] = Object.assign({ id: c.id }, c.data);
       });
       render();
+      announce();          // a renamed job reads under its new name in the log
     }, () => render()));
 
     if (owner) {
@@ -1280,7 +1408,12 @@
         usersLoaded = true;
         stampUnpriced();
         render();
+        // A rename shows on the open job's labour and in the work log too.
+        if (typeof refreshJobLabour === 'function') refreshJobLabour();
+        announce();
       }, () => render()));
+    } else {
+      loadMyRecord();
     }
   }
 
@@ -1299,7 +1432,13 @@
       // person's is still on screen when the next one signs in.
       unsub.forEach(fn => { try { fn(); } catch (e) {} });
       unsub = []; watchKey = null;
-      entries = {}; board = {}; people = {};
+      entries = {}; board = {}; people = {}; usersLoaded = false;
+      // Half-done screens go too. A form the owner opened to file a shift for
+      // somebody else, left open, would otherwise file the next person's
+      // shift under that somebody.
+      picking = false; clockingFor = null; pausingId = null; choosingWorker = false;
+      addingShift = false; addFor = null; editingWorker = false;
+      closeWorker();
       render();
     }
   });

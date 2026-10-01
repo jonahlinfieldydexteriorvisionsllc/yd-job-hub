@@ -43,6 +43,14 @@
   // Hours as a plain decimal for the spreadsheet: 7.75, not "7h 45m".
   const decHours = milli => (Math.round(milli / 36000) / 100).toFixed(2);
 
+  // Where a shift was, as something two places cannot share. Two jobs can
+  // both be called "Smith patio"; they never have the same id. Grouping and
+  // filtering by the name merged them into one, with one total for both.
+  const placeKey = e => e.kind + ':' + (e.targetId || '');
+
+  // The name a person goes by now, from their record where the clock knows it.
+  const nameOf = e => (C().who ? C().who(e) : (e.workerName || 'Worker'));
+
   // [from, to) in milliseconds for the chosen range.
   function bounds() {
     const d = new Date(); d.setHours(0, 0, 0, 0);
@@ -74,7 +82,6 @@
     const c = C();
     if (!c) return [];
     const [from, to] = bounds();
-    const people = c.people();
     const out = [];
     Object.values(c.entries()).forEach(e => {
       if (e.status === 'rejected') return;
@@ -83,15 +90,14 @@
       const live = !e.endedAt;
       const counted = c.counts(e);
       const pending = !live && !counted;
-      const name = (people[e.uid] && people[e.uid].name) || e.workerName || 'Worker';
       out.push({
-        e: e, uid: e.uid, name: name, where: c.label(e), kind: e.kind,
+        e: e, uid: e.uid, name: nameOf(e), where: c.label(e), placeKey: placeKey(e), kind: e.kind,
         day: dayOf(new Date(s)), start: s, end: c.endMsOf(e),
         paid: c.paidMs(e), billable: c.chargeableMs(e), paused: c.pausedMs(e),
         live: live, pending: pending, counted: counted,
       });
     });
-    return out.filter(r => (!who || r.uid === who) && (!where || r.where === where))
+    return out.filter(r => (!who || r.uid === who) && (!where || r.placeKey === where))
       .sort((a, b) => b.start - a.start);
   }
 
@@ -109,10 +115,12 @@
     // Filter choices come from every shift on record, not just this range, so
     // picking a person does not make the other names disappear from the list.
     const all = Object.values(c.entries()).filter(e => e.status !== 'rejected');
-    const people = c.people();
     const names = {};
-    all.forEach(e => { names[e.uid] = (people[e.uid] && people[e.uid].name) || e.workerName || 'Worker'; });
-    const places = Array.from(new Set(all.map(e => c.label(e)))).sort((a, b) => a.localeCompare(b));
+    all.forEach(e => { names[e.uid] = nameOf(e); });
+    // Keyed by place, labelled by name: two jobs with one name are two choices.
+    const places = {};
+    all.forEach(e => { places[placeKey(e)] = c.label(e); });
+    const placeKeys = Object.keys(places).sort((a, b) => places[a].localeCompare(places[b]));
 
     const list = rows();
     const totals = list.filter(r => r.counted).reduce((t, r) => {
@@ -138,7 +146,8 @@
               '<option value="' + esc(uid) + '"' + (who === uid ? ' selected' : '') + '>' + esc(names[uid]) + '</option>').join('') +
             '</select>' : '') +
         '<select onchange="wlSet(\'where\', this.value)"><option value="">Every job &amp; place</option>' +
-          places.map(p => '<option value="' + esc(p) + '"' + (where === p ? ' selected' : '') + '>' + esc(p) + '</option>').join('') +
+          placeKeys.map(k => '<option value="' + esc(k) + '"' + (where === k ? ' selected' : '') + '>' +
+            esc(places[k]) + '</option>').join('') +
         '</select>' +
       '</div>' +
       '<div class="wl-views">' +
@@ -157,7 +166,9 @@
           (notCounted.length
             ? '<div class="hint">' + notCounted.length + ' shift' + (notCounted.length === 1 ? ' is' : 's are') +
               ' still running or waiting for approval — shown, but not in the totals.</div>' : '') +
-          (view === 'day' ? byDay(list) : view === 'job' ? byGroup(list, 'where', 'name') : byGroup(list, 'name', 'where'))
+          (view === 'day' ? byDay(list)
+            : view === 'job' ? byGroup(list, 'placeKey', 'where', 'uid', 'name')
+            : byGroup(list, 'uid', 'name', 'placeKey', 'where'))
         : '<p class="empty-msg">No shifts in this range' + (who || where ? ' for this filter' : '') + '.</p>');
   }
 
@@ -192,24 +203,28 @@
 
   // One block per job (or person), with the other side broken out under it:
   // a job lists who worked it; a person lists where they went.
-  function byGroup(list, key, sub) {
+  //
+  // Grouped by id (`key`, `subKey`) and only labelled by name (`label`,
+  // `subLabel`), so two jobs or two people sharing a name stay apart. The
+  // list arrives newest first, so each label is the most recent one.
+  function byGroup(list, key, label, subKey, subLabel) {
     const c = C();
     const groups = {};
     list.forEach(r => {
       const g = groups[r[key]] = groups[r[key]] ||
-        { paid: 0, billable: 0, waiting: 0, days: new Set(), parts: {}, live: false };
+        { label: r[label], paid: 0, billable: 0, waiting: 0, days: new Set(), parts: {}, live: false };
       if (r.live) g.live = true;
       if (r.pending) g.waiting += r.paid;
       if (!r.counted) return;
       g.paid += r.paid; g.billable += r.billable; g.days.add(r.day);
-      const p = g.parts[r[sub]] = g.parts[r[sub]] || { paid: 0, days: new Set() };
+      const p = g.parts[r[subKey]] = g.parts[r[subKey]] || { label: r[subLabel], paid: 0, days: new Set() };
       p.paid += r.paid; p.days.add(r.day);
     });
-    return Object.keys(groups).sort((a, b) => groups[b].paid - groups[a].paid).map(name => {
-      const g = groups[name];
+    return Object.keys(groups).sort((a, b) => groups[b].paid - groups[a].paid).map(k => {
+      const g = groups[k];
       const parts = Object.keys(g.parts).sort((a, b) => g.parts[b].paid - g.parts[a].paid);
       return '<div class="wl-day">' +
-        '<div class="wl-day-head"><span>' + esc(name) + (g.live ? ' <span class="wl-tag live">on the clock</span>' : '') +
+        '<div class="wl-day-head"><span>' + esc(g.label) + (g.live ? ' <span class="wl-tag live">on the clock</span>' : '') +
           '</span><span>' + c.fmtDur(g.paid) + '</span></div>' +
         '<div class="wl-group-sub">' +
           (g.days.size ? g.days.size + ' day' + (g.days.size === 1 ? '' : 's') : '') +
@@ -218,7 +233,7 @@
             ' waiting approval</span>' : '') +
         '</div>' +
         (parts.length ? parts.map(p => '<div class="wl-row wl-part">' +
-          '<div class="wl-where">' + esc(p) + '</div>' +
+          '<div class="wl-where">' + esc(g.parts[p].label) + '</div>' +
           '<div class="wl-time">' + g.parts[p].days.size + ' day' + (g.parts[p].days.size === 1 ? '' : 's') + '</div>' +
           '<div class="wl-hrs">' + c.fmtDur(g.parts[p].paid) + '</div>' +
         '</div>').join('') : '<div class="cal-none">' + (g.live && !g.waiting ? 'On the clock now' : 'Not approved yet') + '</div>') +
@@ -238,13 +253,23 @@
     render();
   };
 
+  // Excel runs any cell that starts with = + - or @ as a formula, quotes or
+  // not. Names come from Google accounts and job names from whoever typed
+  // them, so one beginning "=HYPERLINK(" would be live in the owner's
+  // spreadsheet. A leading apostrophe makes Excel show it as plain text. None
+  // of the numbers here is ever negative, so no figure is touched by this.
+  function cellSafe(v) {
+    const s = String(v == null ? '' : v);
+    return /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+  }
+
   // A spreadsheet with one line per shift. BOM and CRLF so Excel opens it with
   // the right characters and the right line breaks, same as the billing export.
   window.wlExport = function () {
     const c = C();
     const list = rows().slice().sort((a, b) => a.start - b.start);
     if (!list.length) return;
-    const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const q = v => '"' + cellSafe(v).replace(/"/g, '""') + '"';
     const head = ['Date', 'Worker', 'Where', 'Type', 'Start', 'End', 'Hours worked', 'Billable hours',
                   'Paused minutes', 'Status'];
     const lines = [head.map(q).join(',')].concat(list.map(r => [

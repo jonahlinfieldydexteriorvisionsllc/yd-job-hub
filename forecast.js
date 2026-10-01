@@ -39,7 +39,12 @@
   const codeOf = c => CODES[c] || ['🌡️', '—'];
 
   let open = false;
-  let place = (() => { try { return localStorage.getItem(STORE + 'place') || 'madison'; } catch (e) { return 'madison'; } })();
+  // Only a town that is still in the list: one saved by an older version that
+  // has since been taken out would otherwise break every redraw.
+  let place = (() => {
+    try { const p = localStorage.getItem(STORE + 'place'); return PLACES[p] ? p : 'madison'; }
+    catch (e) { return 'madison'; }
+  })();
   let data = null;          // { at, now, days, alerts }
   let loading = false;
   let timer = null;
@@ -116,20 +121,28 @@
   }
 
   async function refresh(force) {
-    const have = saved(place);
+    // The town this fetch is for, held on to. Changing town while it was on
+    // its way used to file Madison's forecast under Monroe and show it as
+    // Monroe's for the next half hour.
+    const p = place;
+    const have = saved(p);
     if (have) data = have;
     // A copy saved before the hourly view existed has no hours: fetch anew.
     if (!force && have && have.hours && Date.now() - have.at < FRESH_MS) { draw(); return; }
     if (loading) return;
     loading = true; draw();
     try {
-      data = await fetchWeek(place);
-      keep(place, data);
+      const got = await fetchWeek(p);
+      keep(p, got);
+      if (p === place) data = got;
     } catch (e) {
       console.warn('[forecast]', e.message);
     } finally {
       loading = false;
       draw();
+      // The town was changed meanwhile, and its own fetch was turned away
+      // because this one was running: fetch it now.
+      if (p !== place) refresh(false);
     }
   }
 
@@ -141,9 +154,13 @@
     return h < 48 ? h + ' hr ago' : Math.round(h / 24) + ' days ago';
   }
 
-  function dayName(iso, i) {
-    if (i === 0) return 'Today';
-    if (i === 1) return 'Tomorrow';
+  // Named from the date itself, never from its place in the list. A copy
+  // saved on Monday and opened on Wednesday with no signal used to call
+  // Monday "Today".
+  function dayName(iso) {
+    const now = new Date();
+    if (iso === dayKey(now)) return 'Today';
+    if (iso === dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1))) return 'Tomorrow';
     return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
   }
 
@@ -155,9 +172,29 @@
   }
 
   const two = n => (n < 10 ? '0' : '') + n;
-  // This hour as Open-Meteo writes it, from local date parts (never toISOString).
-  function hourKey(dt) {
-    return dt.getFullYear() + '-' + two(dt.getMonth() + 1) + '-' + two(dt.getDate()) + 'T' + two(dt.getHours());
+  // A day and an hour as Open-Meteo writes them, from local date parts (never
+  // toISOString). Both sort as text in time order.
+  function dayKey(dt) {
+    return dt.getFullYear() + '-' + two(dt.getMonth() + 1) + '-' + two(dt.getDate());
+  }
+  function hourKey(dt) { return dayKey(dt) + 'T' + two(dt.getHours()); }
+
+  // Days already over are left out. A saved copy is kept for when there is no
+  // signal, and its first days may be gone by the time it is read.
+  function daysAhead() {
+    const today = dayKey(new Date());
+    return (data.days || []).filter(d => d.date >= today);
+  }
+
+  // What it is like now. The reading saved with the forecast is only "now"
+  // while it is fresh; from a copy hours old, the forecast for this hour is
+  // the better guess -- the chip said 54° at six in the morning in a truck at
+  // 20° because it was yesterday afternoon's reading.
+  function nowReading() {
+    if (Date.now() - data.at < 90 * 60000 || !data.hours) return data.now;
+    const key = hourKey(new Date());
+    const h = data.hours.find(x => x.t.slice(0, 13) === key);
+    return h ? { temp: h.temp, code: h.code, wind: h.wind, feels: null, forecast: true } : data.now;
   }
   function hourLabel(t) {
     const hr = Number(t.slice(11, 13));
@@ -166,16 +203,18 @@
 
   // Today shows the next 24 hours from now (so at 9 pm it runs into tomorrow
   // morning); any other day shows that day midnight to midnight.
-  function hoursFor(i) {
+  //
+  // "From now" is the first hour at or after this one. It used to fall back
+  // to the copy's very first hour when this exact hour was missing, which
+  // showed an old copy's hours from days ago with the first marked "Now".
+  function hoursFor(day) {
     const all = data.hours || [];
-    if (i === 0) {
+    if (day && day.date === dayKey(new Date())) {
       const now = hourKey(new Date());
-      let from = all.findIndex(x => x.t.slice(0, 13) === now);
-      if (from < 0) from = 0;
-      return all.slice(from, from + 24);
+      const from = all.findIndex(x => x.t.slice(0, 13) >= now);
+      return from < 0 ? [] : all.slice(from, from + 24);
     }
-    const date = data.days[i] && data.days[i].date;
-    return all.filter(x => x.t.slice(0, 10) === date);
+    return all.filter(x => day && x.t.slice(0, 10) === day.date);
   }
 
   function hourCell(x, isNow) {
@@ -197,9 +236,10 @@
     const chip = el('wxChip');
     if (chip) {
       if (data && data.now) {
-        const [icon] = codeOf(data.now.code);
+        const cur = nowReading();
+        const [icon] = codeOf(cur.code);
         chip.innerHTML = '<span class="wxc-icon">' + icon + '</span><span class="wxc-temp">' +
-          Math.round(data.now.temp) + '°</span>' + (data.alerts && data.alerts.length ? '<span class="wxc-alert">!</span>' : '') +
+          Math.round(cur.temp) + '°</span>' + (data.alerts && data.alerts.length ? '<span class="wxc-alert">!</span>' : '') +
           '<span class="wxc-caret">' + (open ? '▴' : '▾') + '</span>';
       } else {
         chip.innerHTML = '<span class="wxc-icon">🌡️</span><span class="wxc-temp">' + (loading ? '…' : '—') + '</span>' +
@@ -215,17 +255,28 @@
       panel.innerHTML = '<div class="wxp-msg">' + (loading ? 'Getting the forecast…' : 'The forecast could not be reached.') + '</div>';
       return;
     }
-    const n = data.now;
-    if (sel >= data.days.length) sel = 0;
-    const hours = hoursFor(sel);
-    const selDate = data.days[sel].date;
-    const said = (data.text || []).filter(p => p.date === selDate);
-    const dayTitle = sel === 0 ? 'Next 24 hours' :
-      new Date(selDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) + ', hour by hour';
+    const days = daysAhead();
+    if (!days.length || !data.now) {
+      panel.innerHTML = '<div class="wxp-msg">The saved forecast is out of date and a new one could not be ' +
+        'reached. ' + (loading ? 'Trying now…' : '<button class="wxp-refresh" onclick="wxRefresh()">↻ Try again</button>') + '</div>';
+      return;
+    }
+    const n = nowReading();
+    if (sel >= days.length) sel = 0;
+    const selDay = days[sel];
+    const isToday = selDay.date === dayKey(new Date());
+    const hours = hoursFor(selDay);
+    const thisHour = hourKey(new Date());
+    const said = (data.text || []).filter(p => p.date === selDay.date);
+    const dayTitle = isToday ? 'Next 24 hours' :
+      new Date(selDay.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) + ', hour by hour';
     panel.innerHTML =
       '<div class="wxp-top">' +
         '<div class="wxp-now"><span class="wxp-big">' + codeOf(n.code)[0] + ' ' + Math.round(n.temp) + '°</span>' +
-          '<span class="wxp-sub">' + codeOf(n.code)[1] + ' · feels ' + Math.round(n.feels) + '° · wind ' + Math.round(n.wind) + ' mph</span></div>' +
+          '<span class="wxp-sub">' + codeOf(n.code)[1] +
+            (n.feels != null ? ' · feels ' + Math.round(n.feels) + '°' : '') +
+            ' · wind ' + Math.round(n.wind) + ' mph' +
+            (n.forecast ? ' · forecast for this hour' : '') + '</span></div>' +
         '<div class="wxp-places">' + Object.keys(PLACES).map(k =>
           '<button class="wxp-place' + (k === place ? ' on' : '') + '" onclick="wxPlace(\'' + k + '\')">' + PLACES[k].name + '</button>').join('') +
         '</div>' +
@@ -233,20 +284,21 @@
       (data.alerts && data.alerts.length ? '<div class="wxp-alert">⚠️ ' + data.alerts.map(esc).join(' · ') + '</div>' : '') +
       '<div class="wxp-head">' + esc(dayTitle) + '<span>°F · 💧 chance · wind mph</span></div>' +
       (hours.length
-        ? '<div class="wxp-hours">' + hours.map((x, k) => hourCell(x, sel === 0 && k === 0)).join('') + '</div>'
+        ? '<div class="wxp-hours">' + hours.map((x, k) => hourCell(x, isToday && k === 0 && x.t.slice(0, 13) === thisHour)).join('') + '</div>'
         : '<div class="wxp-msg">No hourly figures for this day yet — refresh with ↻.</div>') +
       (said.length
         ? '<div class="wxp-text">' + said.map(p => '<p><b>' + esc(p.name) + ':</b> ' + esc(p.words) + '</p>').join('') +
             '<div class="wxp-src">National Weather Service forecast</div></div>'
         : '') +
-      '<div class="wxp-head">7 days<span>tap a day for its hours</span></div>' +
-      '<div class="wxp-days">' + data.days.map((d, i) => {
+      '<div class="wxp-head">' + days.length + ' day' + (days.length === 1 ? '' : 's') +
+        '<span>tap a day for its hours</span></div>' +
+      '<div class="wxp-days">' + days.map((d, i) => {
         const [icon, words] = codeOf(d.code);
         const snowy = d.snow >= 0.1;
         const wind = '💨 ' + Math.round(d.wind) + (d.gust && d.gust > d.wind + 8 ? '–' + Math.round(d.gust) : '') + ' mph';
         return '<button type="button" class="wxp-day' + (snowy ? ' snow' : '') + (i === sel ? ' on' : '') +
           '" onclick="wxDay(' + i + ')" aria-pressed="' + (i === sel) + '">' +
-          '<div class="wxp-name">' + dayName(d.date, i) + '</div>' +
+          '<div class="wxp-name">' + dayName(d.date) + '</div>' +
           '<div class="wxp-icon" title="' + esc(words) + '">' + icon + '</div>' +
           '<div class="wxp-words">' + esc(words) + '</div>' +
           '<div class="wxp-temps"><b>' + Math.round(d.hi) + '°</b> <span>' + Math.round(d.lo) + '°</span></div>' +

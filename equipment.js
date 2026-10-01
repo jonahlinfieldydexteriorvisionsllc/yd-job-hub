@@ -63,6 +63,38 @@
   const last = g => (g.service || []).slice().sort((a, b) =>
     String(b.at || '').localeCompare(String(a.at || '')))[0] || null;
 
+  // The newest service that recorded a reading ('hours' or 'miles'), or the
+  // newest of all when no reading is named. Two on the same day count in the
+  // order they were logged.
+  function newestWith(service, field) {
+    let best = null;
+    (service || []).forEach(e => {
+      if (field && e[field] == null) return;
+      if (!best || String(e.at || '') >= String(best.at || '')) best = e;
+    });
+    return best;
+  }
+
+  // Where the next service falls, counted from the newest service that
+  // recorded each measure -- not from whichever entry happened to be typed
+  // last. Back-filling last spring's oil change used to drag the next service
+  // back to last spring. A measure with nothing to count from is left out, so
+  // the machine keeps what it has.
+  function dueFromHistory(g, service) {
+    const out = {};
+    const h = newestWith(service, 'hours');
+    if (g.intervalHours && h) out.dueHours = round1(h.hours + g.intervalHours);
+    const m = newestWith(service, 'miles');
+    if (g.intervalMiles && m) out.dueMiles = Math.round(m.miles + g.intervalMiles);
+    const d = newestWith(service);
+    if (g.intervalDays && d && d.at) {
+      const base = new Date(d.at + 'T00:00:00');
+      base.setDate(base.getDate() + g.intervalDays);
+      out.dueDate = localDay(base);
+    }
+    return out;
+  }
+
   // Returns { state, text } where state is overdue | soon | ok | none.
   // Whichever measure is closest to running out is the one reported, because
   // that is the one that decides whether the machine gets serviced.
@@ -399,6 +431,9 @@
   window.addService = function () {
     const g = gear[openId];
     if (!g) return;
+    // Already open: a second tap used to add a second form with the same
+    // field ids, and Save then read whichever one came first.
+    if (el('eqServiceForm')) { const w = el('svWhat'); if (w) w.focus(); return; }
     const body = el('eqBody');
     const today = new Date();
     const iso = today.getFullYear() + '-' + two(today.getMonth() + 1) + '-' + two(today.getDate());
@@ -457,20 +492,15 @@
 
     // A reading taken during a service is the machine's current reading, and
     // moves the next service along with it. Without this the hours would have
-    // to be typed twice and would drift apart.
-    if (entry.hours != null) {
-      patch.hours = entry.hours;
-      if (g.intervalHours) patch.dueHours = round1(entry.hours + g.intervalHours);
-    }
-    if (entry.miles != null) {
-      patch.miles = entry.miles;
-      if (g.intervalMiles) patch.dueMiles = Math.round(entry.miles + g.intervalMiles);
-    }
-    if (g.intervalDays) {
-      const base = new Date(entry.at + 'T00:00:00');
-      base.setDate(base.getDate() + g.intervalDays);
-      patch.dueDate = base.getFullYear() + '-' + two(base.getMonth() + 1) + '-' + two(base.getDate());
-    }
+    // to be typed twice and would drift apart. But meters only go forward: a
+    // reading below the one on the machine belongs to an older service being
+    // written up late, and goes into the history without winding it back.
+    if (entry.hours != null && (g.hours == null || entry.hours >= g.hours)) patch.hours = entry.hours;
+    if (entry.miles != null && (g.miles == null || entry.miles >= g.miles)) patch.miles = entry.miles;
+    const next = dueFromHistory(g, service);
+    if (entry.hours != null && next.dueHours != null) patch.dueHours = next.dueHours;
+    if (entry.miles != null && next.dueMiles != null) patch.dueMiles = next.dueMiles;
+    if (next.dueDate) patch.dueDate = next.dueDate;
 
     Object.assign(g, patch);
     renderDetail(); renderEquipment();
@@ -483,9 +513,23 @@
     if (!g) return;
     const entry = (g.service || []).find(e => e.id === entryId);
     if (!entry || !confirm('Remove "' + entry.what + '" from the history?')) return;
-    g.service = (g.service || []).filter(e => e.id !== entryId);
+    const service = (g.service || []).filter(e => e.id !== entryId);
+    const patch = { service: service };
+    // If this entry is where the machine's reading came from, the reading
+    // goes back to the newest one left. Otherwise a mistaken 300-hour entry,
+    // once removed, would leave the mower reading 300 against a next service
+    // counted from 100 -- and showing it 150 hours past due.
+    const h = newestWith(service, 'hours'), m = newestWith(service, 'miles');
+    if (entry.hours != null && entry.hours === g.hours && h) patch.hours = h.hours;
+    if (entry.miles != null && entry.miles === g.miles && m) patch.miles = m.miles;
+    // The next service goes back to where the newest remaining one puts it.
+    const next = dueFromHistory(g, service);
+    if (entry.hours != null && next.dueHours != null) patch.dueHours = next.dueHours;
+    if (entry.miles != null && next.dueMiles != null) patch.dueMiles = next.dueMiles;
+    if (next.dueDate) patch.dueDate = next.dueDate;
+    Object.assign(g, patch);
     renderDetail(); renderEquipment();
-    write(g.id, { service: g.service }, 'removing a service entry');
+    write(g.id, patch, 'removing a service entry');
   };
 
   // ------------------------------------------------------------- the record
@@ -605,7 +649,11 @@
       base.setDate(base.getDate() + rec.intervalDays);
       rec.dueDate = localDay(base);
     } else if (was.dueDate && rec.intervalDays) rec.dueDate = was.dueDate;
-    else rec.dueDate = was.dueDate || null;
+    // No interval in days any more, so no date to be due by. Keeping the old
+    // one left a truck switched over to miles "overdue" by date for good, with
+    // no field anywhere to clear it -- a due date only ever comes from this
+    // interval, the same way the hours and miles ones above do.
+    else rec.dueDate = null;
 
     gear[id] = Object.assign({ id: id }, rec);
     editingId = null; openId = id;
@@ -642,11 +690,12 @@
 
   function start() {
     if (unsub || !window.YDDb) return;
-    unsub = window.YDDb.watch('equipment', changes => {
+    unsub = window.YDDb.watch('equipment', (changes, meta) => {
       changes.forEach(c => {
         if (c.type === 'removed') delete gear[c.id];
         else gear[c.id] = Object.assign({ id: c.id }, c.data);
       });
+      if (meta && !meta.fromCache) gearLoaded = true;
       renderEquipment();
       // Not while something is being typed into the detail -- a change from
       // another device would otherwise wipe the half-written problem.
@@ -671,6 +720,10 @@
 
   const MAINT = 'maintenance';
   let maintTimer = null;
+  // The machines have come from the server at least once. On a fresh phone
+  // the first answer is the empty local cache, and a sync run on that would
+  // take every card for a machine "no longer there" off the board.
+  let gearLoaded = false;
 
   function dueKey(g) { return [g.dueDate || '', g.dueHours != null ? g.dueHours : '', g.dueMiles != null ? g.dueMiles : ''].join('|'); }
   function hasDue(g) { return !!(g.dueDate || g.dueHours != null || g.dueMiles != null); }
@@ -694,24 +747,48 @@
     // Only once the boards have actually loaded from the server -- deciding
     // "there is no Maintenance board" from an empty first read would make one
     // over the top of the real one.
-    if (!isOwner() || !window.YDDb || !window.YDBoards || !YDBoards.ready()) return;
-    let board = YDBoards.boards()[MAINT];
+    if (!isOwner() || !window.YDDb || !window.YDBoards || !YDBoards.ready() || !gearLoaded) return;
+    const board = YDBoards.boards()[MAINT];
     if (!board) {
-      board = {
+      const rec = {
         name: 'Maintenance', color: '#8a6d3b', order: 3, visibleTo: [],
         columns: [{ id: 'm0', name: 'Due' }, { id: 'm1', name: 'Booked in' }, { id: 'm2', name: 'Done' }],
         labels: [{ id: 'overdue', name: 'Overdue', color: '#d64545' },
                  { id: 'soon', name: 'Due soon', color: '#e0a526' }],
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
       };
-      Promise.resolve(window.YDDb.put('boards', MAINT, board))
+      Promise.resolve(window.YDDb.put('boards', MAINT, rec))
         .catch(e => console.warn('[equipment] maintenance board not yet saved:', e.code || e.message));
-      board = Object.assign({ id: MAINT }, board);
+      // The cards are made once its card list has answered, which the new
+      // board's arrival sets going -- and which runs this again.
+      return;
     }
+    // The same for the cards: until the server has answered, a missing card
+    // may only be missing from the cache. Taking that as "no card" put every
+    // problem back in the first column -- including one the crew had just
+    // moved to Done, so it was never recorded as fixed.
+    if (!YDBoards.cardsReady || !YDBoards.cardsReady(MAINT)) return;
     const first = board.columns[0].id;
     const lastCol = board.columns[board.columns.length - 1].id;
     const have = (YDBoards.cards()[MAINT]) || {};
     const path = 'boards/' + MAINT + '/cards';
+
+    // Cards made here, and cards this sync moves, go to the bottom of the
+    // column they land in. With no order at all they tied at 0 and sat in
+    // whatever order the database handed them back.
+    const tail = {};
+    const endOf = col => {
+      if (tail[col] == null) {
+        const inCol = Object.values(have).filter(k => (k.column || first) === col);
+        tail[col] = inCol.length ? Math.max.apply(null, inCol.map(k => k.order || 0)) : 0;
+      }
+      tail[col] += 1000;
+      return tail[col];
+    };
+    const placed = (k, patch) => {
+      if (patch.column && (!k || k.column !== patch.column)) patch.order = endOf(patch.column);
+      return patch;
+    };
 
     // The urgency labels have to exist on the board for its cards to show
     // them. Added if missing; any the owner already renamed or recoloured
@@ -758,7 +835,7 @@
         if (doneNow && (!k || k.column !== lastCol)) { patch.column = lastCol; patch.doneAt = i.doneAt; }
         // Reopened on the machine: back out of Done.
         if (!doneNow && k && k.column === lastCol) { patch.column = first; patch.doneAt = null; }
-        Promise.resolve(window.YDDb.put(path, id, patch))
+        Promise.resolve(window.YDDb.put(path, id, placed(k, patch)))
           .catch(e => console.warn('[equipment] card not yet saved:', e.code || e.message));
       });
     });
@@ -795,8 +872,8 @@
       const patch = Object.assign({}, want, { updatedAt: new Date().toISOString(), updatedBy: 'Equipment' });
       // A known card whose due point moved has been serviced: back to the start.
       if (k && newCycle) { patch.column = first; patch.doneAt = null; }
-      if (!k) patch.createdAt = new Date().toISOString();
-      Promise.resolve(window.YDDb.put(path, id, patch))
+      if (!k) { patch.createdAt = new Date().toISOString(); patch.column = first; }
+      Promise.resolve(window.YDDb.put(path, id, placed(k, patch)))
         .catch(e => console.warn('[equipment] card not yet saved:', e.code || e.message));
     });
 

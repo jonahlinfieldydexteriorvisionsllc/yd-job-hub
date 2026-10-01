@@ -134,6 +134,21 @@ service cloud.firestore {
       match /stops/{stopId} {
         allow read: if isStaff();
 
+        // The figures on a stop are printed on the owner's storm and billing
+        // screens, so a crew write may only put a number (or nothing) in them
+        // -- text there would be drawn as HTML on the owner's screen. Absent
+        // and null both pass: a new stop or pass carries null depth, salt and
+        // miles until the work is done, and older stops may lack a field.
+        function numberOrNull(key) {
+          return request.resource.data.get(key, null) == null
+            || request.resource.data.get(key, null) is number;
+        }
+        function stopFiguresAreNumbers() {
+          return numberOrNull('order') && numberOrNull('pass')
+            && numberOrNull('driveMiles') && numberOrNull('inchesCleared')
+            && numberOrNull('saltBags');
+        }
+
         // Crew may record work on a storm that is still running. Once the owner
         // closes the storm the billing is locked and only they can touch it.
         // The stop id must look like one of ours (account id, maybe '-p2'): it
@@ -141,6 +156,7 @@ service cloud.firestore {
         allow create, update: if isOwner()
           || (isCrew()
               && stopId.matches('[A-Za-z0-9_-]+')
+              && stopFiguresAreNumbers()
               && get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open');
 
         allow delete: if isOwner();
@@ -419,6 +435,12 @@ service cloud.firestore {
     match /vendors/{docId} {
       allow read:  if isStaff();
       allow write: if isOwner();
+    }
+    // What each supply costs. A separate collection, not fields on the
+    // supply, because the crew can read every supply and Firestore cannot
+    // hide one field of a document from them.
+    match /supplyPrices/{supplyId} {
+      allow read, write: if isOwner();
     }
 
     match /boards/{boardId} {

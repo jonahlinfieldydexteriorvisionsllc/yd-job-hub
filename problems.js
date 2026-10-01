@@ -123,14 +123,32 @@
 
   // Sends whatever is waiting. Anything that fails stays on the phone and goes
   // next time -- which is the whole point of writing it down first.
+  //
+  // The rules only accept a report filed under the uid of whoever is signed in
+  // NOW. A fault from before sign-in was written down with no uid at all (and
+  // one from a phone somebody else used since, under theirs), so it was
+  // refused, put back, refused again on every flush, and never arrived --
+  // which lost exactly the sign-in failures this exists to catch. The sender
+  // is stamped at sending time; `who` still says who it happened to.
   function flush() {
-    if (!window.YDDb || !me()) return;
+    const u = me();
+    if (!window.YDDb || !u) return;
     const q = readQueue();
     if (!q.length) return;
     writeQueue([]);
     q.forEach(rec => {
-      const id = 'p' + rec.atMs.toString(36) + Math.floor(Math.random() * 1000);
-      Promise.resolve(window.YDDb.put('problems', id, rec)).catch(e => {
+      const out = Object.assign({}, rec, {
+        uid: u.uid,
+        sentBy: u.displayName || u.email || '',
+      });
+      const id = 'p' + (rec.atMs || Date.now()).toString(36) + Math.floor(Math.random() * 1000);
+      Promise.resolve(window.YDDb.put('problems', id, out)).catch(e => {
+        // Refused by the rules means it will be refused every time; keeping it
+        // would only loop. Anything else is the connection, so it waits.
+        if (e && e.code === 'permission-denied') {
+          console.warn('[problems] refused, dropped:', rec.message);
+          return;
+        }
         console.warn('[problems] not sent yet:', (e && e.code) || e);
         queueIt(rec);
       });
@@ -216,6 +234,7 @@
           (p.screen ? 'on the ' + esc(p.screen) + ' screen' : '') +
           (p.online === false ? ' · no signal' : '') +
           (p.version && p.version !== 'unknown' ? ' · ' + esc(p.version) : '') +
+          (p.sentBy && p.sentBy !== p.who ? ' · sent later by ' + esc(p.sentBy) : '') +
         '</div>' +
         (Array.isArray(p.trail) && p.trail.length
           ? '<div class="prob-trail">Just before: ' +
@@ -273,9 +292,21 @@
     }).catch(() => {});
   }
 
+  // Dropped at sign-out, not left running. A listener outlives the account it
+  // was opened for only to be refused and die, and while `unsub` still held it
+  // the next sign-in thought a watch was running and never opened one -- the
+  // owner's Problems list sat frozen until the app was reloaded.
+  function stopWatching() {
+    if (unsub) { try { unsub(); } catch (e) {} }
+    unsub = null;
+    problems = {};
+    renderProblems();
+  }
+
   function start(owner) {
     flush();
-    if (!owner || unsub || !window.YDDb) return;
+    if (!owner) { stopWatching(); return; }
+    if (unsub || !window.YDDb) return;
     unsub = window.YDDb.watch('problems', changes => {
       changes.forEach(c => {
         if (c.type === 'removed') delete problems[c.id];
@@ -295,6 +326,7 @@
     const report = el('menuReport');
     if (report) report.hidden = !(a.mode === 'cloud' && a.user);
     if (a.mode === 'cloud' && a.user) start(owner);
+    else stopWatching();
   });
 
   function boot() { wrapToast(); findVersion(); flush(); }

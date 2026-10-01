@@ -636,9 +636,9 @@
   /* five tabs need to fit a 375px phone */
   @media (max-width:720px) {
     .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; }
-    /* Tracking, Materials and Contacts move into the More sheet. They stay
-       in the DOM -- switchTab identifies tabs by position -- they are just
-       not on the bar. */
+    /* Tracking, Materials, Contacts and Equipment move into the More sheet.
+       They stay in the DOM -- switchTab finds a tab's button by its id, and
+       More lists them from there -- they are just not on the bar. */
     #tabTracking, #tabMatdash, #tabContacts, #tabEquipment { display:none; }
     .tab-more { display:block; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
@@ -843,7 +843,7 @@
      ============================================================ */
 
   /* phones: Calendar sits on the bar; Boards is behind More for the owner but
-     on the bar for crew, who have no More button */
+     on the bar for crew (whose More holds only their settings) */
   @media (max-width:720px) {
     #tabBoards { display:none; }
     html[data-crew] #tabBoards:not([hidden]) { display:block; }
@@ -1307,3 +1307,163 @@
   button.wxp-day { font:inherit; color:inherit; cursor:pointer; width:100%; }
   .wxp-day.on { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
   @media (hover:hover) { button.wxp-day:hover { border-color:var(--brand); } }
+
+  /* ---- Supplies: suppliers, grouping, prices, price-list import ---- */
+  .sup-chips { display:flex; gap:6px; overflow-x:auto; padding:2px 0 10px; margin-bottom:4px;
+    -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
+  .sup-chip { flex:none; min-height:36px; padding:6px 13px; border-radius:18px; border:1.5px solid var(--border-strong);
+    background:var(--surface); color:var(--text); font:600 13px 'DM Sans',sans-serif; cursor:pointer; white-space:nowrap; }
+  .sup-chip span { color:var(--muted); font-weight:500; margin-left:2px; }
+  .sup-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .sup-chip.on span { color:rgba(255,255,255,.75); }
+  html[data-night] .sup-chip.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
+  html[data-night] .sup-chip.on span { color:rgba(20,15,24,.7); }
+  @media (hover:hover) { .sup-chip:hover { border-color:var(--brand-2); } }
+  .sup-group { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:18px 0 8px; padding-bottom:6px;
+    border-bottom:2px solid var(--border); }
+  .sup-group:first-child { margin-top:4px; }
+  .sup-group-name { font:700 17px 'Playfair Display',serif; color:var(--brand); background:none; border:none; padding:0;
+    cursor:pointer; text-align:left; }
+  html[data-night] .sup-group-name { color:var(--brand-2); }
+  .sup-group-count { font-size:11px; font-weight:700; color:var(--muted); background:var(--surface-2);
+    border:1px solid var(--border); border-radius:10px; padding:1px 8px; }
+  .sup-group-links { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
+  .sup-group-links a.btn { text-decoration:none; }
+  .sup-vcard { border:1.5px solid var(--brand-2); border-radius:12px; background:var(--surface-2); padding:14px 16px; margin-bottom:12px; }
+  .sup-vname { font:700 20px 'Playfair Display',serif; color:var(--brand); }
+  html[data-night] .sup-vname { color:var(--brand-2); }
+  .sup-price { margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:15px; }
+  .sup-price b { font-size:17px; }
+  .sup-price.none { font-size:12px; color:var(--muted); font-style:italic; }
+  .sup-per, .sup-year { font-size:12px; color:var(--muted); }
+  .sup-pnotes { font-size:12px; color:var(--muted); margin-top:3px; white-space:pre-wrap; }
+  .sup-chg { display:inline-block; font-size:11px; font-weight:700; padding:1px 7px; border-radius:10px; margin-left:4px; }
+  .sup-chg.up { background:var(--neg-soft); color:var(--neg); }
+  .sup-chg.down { background:var(--pos-soft); color:var(--pos); }
+  .sup-chg.same { background:var(--surface-2); color:var(--muted); border:1px solid var(--border); }
+  .sup-pricebox { border:1.5px solid var(--accent); border-radius:10px; padding:10px 14px 12px; margin:6px 0 4px;
+    background:var(--surface); display:flex; flex-direction:column; gap:10px; }
+  .sup-pricebox legend { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+    color:var(--accent-dark); padding:0 6px; }
+  html[data-night] .sup-pricebox legend { color:var(--accent); }
+  .sup-hist { display:flex; gap:6px; flex-wrap:wrap; font-size:12px; color:var(--muted); align-items:center; }
+  .sup-hist span { background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:2px 8px; color:var(--text); }
+  #supModalBody .field + .field, #supModalBody .grid + .field, #supModalBody .field + .grid,
+  #supModalBody .grid + .grid, #supModalBody .field + fieldset { margin-top:12px; }
+  .sup-delete { margin-left:auto; border-color:var(--neg); color:var(--neg); }
+  .sup-delete:hover { background:var(--neg); color:#fff; }
+  .sup-stat { font-size:14px; line-height:1.6; padding:10px 14px; background:var(--surface); border:1px solid var(--border);
+    border-radius:10px; margin-bottom:10px; }
+  .sup-h { font:700 17px 'Playfair Display',serif; color:var(--brand); margin:18px 0 4px; }
+  html[data-night] .sup-h { color:var(--brand-2); }
+  .sup-csv { font-family:ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size:12.5px; margin-top:10px; white-space:pre; }
+  .sup-plan { display:flex; gap:6px; flex-wrap:wrap; margin:14px 0 8px; }
+  .sup-pill { font-size:12px; padding:4px 10px; border-radius:14px; background:var(--surface); border:1px solid var(--border); }
+  .sup-pill.up { background:var(--neg-soft); border-color:transparent; color:var(--neg); }
+  .sup-pill.down { background:var(--pos-soft); border-color:transparent; color:var(--pos); }
+  .sup-pill.warn { background:#fbeccd; border-color:transparent; color:#7a5410; }
+  html[data-night] .sup-pill.warn { background:#3a2c10; color:var(--accent); }
+  .sup-skip { font-size:12px; color:var(--neg); background:var(--neg-soft); border-radius:8px; padding:8px 10px; margin:8px 0; }
+  .sup-table-wrap { max-height:360px; overflow:auto; border:1px solid var(--border); border-radius:10px; margin-top:8px; background:var(--surface); }
+  .sup-table th { position:sticky; top:0; background:var(--surface); z-index:1; }
+  .sup-table td { padding:7px 10px; font-size:13px; }
+  .sup-table small { color:var(--muted); }
+  .sup-new { font-size:10px; font-weight:700; text-transform:uppercase; color:var(--accent-dark); }
+  @media (max-width:720px) {
+    .sup-group-links { margin-left:0; width:100%; }
+    .sup-pricebox .g3 { grid-template-columns:1fr 1fr; }
+  }
+
+  /* Eleven screens do not fit across a small laptop or a tablet at full size:
+     between phone width and a wide desktop the bar used to cut the last tabs
+     off (Contacts vanished at 800px). It now scrolls sideways instead, with a
+     thin scrollbar so a mouse can see there is more, and the labels tighten
+     up first so most screens never need to scroll at all. */
+  @media (min-width:721px) {
+    .tab-bar { overflow-x:auto; scrollbar-width:thin; scrollbar-color:rgba(255,255,255,.35) transparent; }
+    .tab-bar::-webkit-scrollbar { height:5px; }
+    .tab-bar::-webkit-scrollbar-thumb { background:rgba(255,255,255,.3); border-radius:3px; }
+    .tab-btn { flex:1 0 auto; min-width:74px; white-space:nowrap; }
+  }
+  @media (min-width:721px) and (max-width:1300px) {
+    .tab-btn { font-size:10.5px; letter-spacing:.5px; padding:13px 8px; }
+    .tab-btn .tab-icon { font-size:17px; }
+  }
+
+  /* On a phone the job form was one field per line, so State, Zip and the
+     date each took a whole row. Short fields now pair up: street and city
+     full width, state and zip side by side; phone and email full width, the
+     date beside where they heard of us. */
+  @media (max-width:520px) {
+    .g-addr { grid-template-columns:1fr 1fr; }
+    .g-addr > :nth-child(-n+2) { grid-column:1 / -1; }
+    .g-contact { grid-template-columns:1fr 1fr; }
+    .g-contact > :nth-child(-n+2) { grid-column:1 / -1; }
+    .g-contact .date-md { max-width:none; }
+  }
+  /* Fields side by side in a grid are spaced by the grid itself; the
+     stacking margin above would push the second one down out of line. */
+  #supModalBody .grid > .field { margin-top:0; }
+
+  /* ---- Polish, app-wide ---------------------------------------------------- */
+
+  /* iPhones zoom the whole page in whenever a box with text under 16px is
+     tapped, and do not zoom back out -- so every field on a crew phone
+     left the screen half off the side. 16px on phones stops it. */
+  @media (max-width:720px) {
+    input, select, textarea { font-size:16px; }
+  }
+
+  /* The grey flash iOS paints over anything tapped; the buttons have their
+     own pressed look. */
+  button, a, .tab-btn, .sheet-item, label.chk { -webkit-tap-highlight-color:transparent; }
+
+  /* Keyboard users can see where they are. Only for the keyboard, so a
+     mouse click or a tap does not leave a ring behind. */
+  button:focus-visible, a:focus-visible, .tab-btn:focus-visible {
+    outline:3px solid var(--accent); outline-offset:2px; }
+
+  /* Pressed feedback on touch: the button dips, so a gloved tap that landed
+     can be seen to have landed. */
+  @media (hover:none) {
+    .btn:active, .sup-chip:active, .wxp-day:active, .picker-job:active, .sheet-item:active {
+      transform:scale(.97); }
+  }
+
+  /* Windows open with a short rise rather than appearing from nowhere. */
+  @keyframes yd-rise { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:none; } }
+  .modal-overlay.active .modal { animation:yd-rise .18s ease-out; }
+  @media (prefers-reduced-motion:reduce) {
+    .modal-overlay.active .modal { animation:none; }
+    .btn:active { transform:none; }
+  }
+
+  /* On a phone the windows use the screen: the 40px margin above them was a
+     strip of nothing over every form. */
+  @media (max-width:720px) {
+    .modal-overlay { padding:calc(env(safe-area-inset-top, 0px) + 10px) 8px calc(env(safe-area-inset-bottom, 0px) + 24px); }
+    .modal-head { padding:14px 16px; }
+    .modal-head h2 { font-size:19px; }
+    .modal-body { padding:16px 14px; }
+  }
+
+  /* Figures line up in columns. */
+  td, .fin-value, .sup-price, .wxp-temps, .wxh-deg { font-variant-numeric:tabular-nums; }
+
+  /* The message that pops up at the bottom fades out but stays where it was,
+     invisible -- and on a phone that is on top of the tab bar, where it
+     swallowed taps meant for More. It never takes a tap now; and on a phone
+     it sits above the tab bar instead of over it. (The element is styled
+     inline in showToast, hence the !important.) */
+  #toast { pointer-events:none; max-width:min(560px, calc(100vw - 24px)); }
+  @media (max-width:720px) {
+    #toast { left:12px !important; right:12px !important; text-align:center;
+             bottom:calc(70px + env(safe-area-inset-bottom, 0px)) !important; }
+  }
+
+  /* Section headers with several buttons (Snow: Start storm, Add account)
+     ran off the side of a phone. They wrap onto a second line instead. */
+  @media (max-width:720px) {
+    .section-head { flex-wrap:wrap; row-gap:10px; }
+    .section-head > span[style*="display:flex"] { flex-wrap:wrap; justify-content:flex-end; margin-left:auto; flex-basis:100%; }
+  }

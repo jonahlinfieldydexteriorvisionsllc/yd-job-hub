@@ -334,7 +334,7 @@
         '<div class="cal-num">' + parseDay(day).getDate() + '</div>' +
         '<div class="cal-bars">' +
           list.slice(0, 3).map(o => '<div class="cal-bar' + (o.done ? ' done' : '') + '" style="--c:' + safeColor(o.layer.color) + '">' +
-            (o.time ? '<b>' + esc(o.time) + '</b> ' : '') + esc(o.title) + '</div>').join('') +
+            (o.time ? '<b>' + esc(fmtTimeRange(o.time)) + '</b> ' : '') + esc(o.title) + '</div>').join('') +
           (list.length > 3 ? '<div class="cal-more">+' + (list.length - 3) + ' more</div>' : '') +
         '</div>' +
         '<div class="cal-dots">' + list.slice(0, 5).map(o =>
@@ -495,7 +495,10 @@
 
   window.calOpenJob = function (jobId) {
     closeCalModal();
-    if (typeof dirty !== 'undefined' && dirty && currentJobId !== jobId &&
+    // Already the job in the form: just go to it. Loading it again would read
+    // the saved copy over whatever has been typed and not yet saved.
+    if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
+    if (typeof dirty !== 'undefined' && dirty &&
         !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
     if (typeof loadJob === 'function') loadJob(jobId);
     switchTab('job');
@@ -505,9 +508,23 @@
 
   window.calAdd = function (day) {
     if (!isOwner()) return;
-    editing = { calId: '', eventId: '', date: day || (view === 'month' ? selected : today()) };
+    editing = { calId: '', eventId: '', date: day || dayForNew() };
     renderEditor();
   };
+
+  // The day a new entry starts on when no particular day was tapped: the one
+  // picked in month view, and in week view the week on screen -- today if it
+  // is in that week, otherwise its first day. Always using today put entries
+  // meant for next week into this one.
+  function dayForNew() {
+    const t = today();
+    if (view === 'month') return selected || t;
+    if (view === 'week') {
+      const s = weekStart(cursor);
+      return t >= s && t <= addDays(s, 6) ? t : s;
+    }
+    return t;
+  }
   window.calEdit = function (calId, eventId) {
     editing = { calId: calId, eventId: eventId };
     renderEditor();
@@ -614,6 +631,20 @@
     let end = val('evEnd');
     if (end && end < date) { showToast('"Until" is before the start date'); return; }
     const allDay = el('evAllDay').checked;
+    // A repeat that stops before it starts would save and then never show
+    // up anywhere, which looks exactly like the entry being lost.
+    const repeat = val('evRepeat') || 'none';
+    const until = val('evUntil');
+    if (repeat !== 'none' && until && until < date) {
+      showToast('"Repeat until" is before the start date'); return;
+    }
+    // Times are on the same day unless "Until" says otherwise, so work that
+    // runs past midnight is entered with an end date rather than refused.
+    const startT = allDay ? '' : val('evTime');
+    const endT = allDay ? '' : val('evEndTime');
+    if (startT && endT && endT < startT && !(end && end > date)) {
+      showToast('"Ends" is before "Starts" — for work past midnight, set "Until" to the next day'); return;
+    }
     const crew = crewPeople();
 
     const rec = {
@@ -621,10 +652,10 @@
       date: date,
       endDate: end && end > date ? end : null,
       allDay: allDay,
-      time: allDay ? null : (val('evTime') || null),
-      endTime: allDay ? null : (val('evEndTime') || null),
-      repeat: val('evRepeat') || 'none',
-      repeatUntil: val('evUntil') || null,
+      time: startT || null,
+      endTime: endT || null,
+      repeat: repeat,
+      repeatUntil: until || null,
       jobId: job ? job._id : null,
       jobName: job ? (job.customerName || 'Untitled job') : null,
       address: val('evAddr'),

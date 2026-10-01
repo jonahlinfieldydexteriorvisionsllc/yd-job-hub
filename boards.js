@@ -84,9 +84,18 @@
   let editingBoard = null;  // board id being edited, '' for a new one
   let unsubBoards = null, unsubPeople = null;
   let cardUnsubs = {};
+  // Boards whose cards have arrived from the server at least once. The first
+  // answer can come from the local cache, and on a fresh phone that is empty:
+  // anything deciding "this card does not exist" has to wait for this.
+  let cardsLoaded = {};
   let seeded = false;
   let ready = false;        // boards have arrived from the server at least once
   let dragging = null;      // { boardId, cardId } while a card is dragged
+
+  // The Maintenance board is made and kept in step by equipment.js, one card
+  // per machine and per problem noted on it. Deleting it would only see it
+  // made again the next time Job Hub opened, so it cannot be deleted.
+  const MAINTENANCE = 'maintenance';
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -118,6 +127,16 @@
     const u = me();
     if (!u) return '';
     return (people[u.uid] && people[u.uid].name) || u.displayName || u.email || '';
+  }
+  // A card with no column shows in the first one, so everything that works
+  // out where a card sits has to read it the same way.
+  function colOf(board, k) {
+    return k.column || (board && board.columns && board.columns[0] ? board.columns[0].id : '');
+  }
+  // Phones and tablets do not drag reliably, so there a card is moved from
+  // the sheet that opens when it is tapped -- and the screen should say so.
+  function touchScreen() {
+    return !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
   }
 
   // ------------------------------------------------------------ job columns
@@ -175,6 +194,10 @@
   function moveJob(jobId, boardId, col) {
     const j = jobsList().find(x => x._id === jobId);
     if (!j) return;
+    // A card dropped back where it was (a drag that changed its mind) is not
+    // a move. Treating it as one restamped the job, which reset its age and
+    // cleared the "untouched for a fortnight" warning on a bid going cold.
+    if ((boardId === 'bids' ? bidColumn(j) : workColumn(j)) === col) return;
     const at = nowIso();
     let patch;
     if (boardId === 'bids') {
@@ -263,12 +286,16 @@
   }
 
   function boardSubtitle(b) {
-    if (b.id === 'bids') return 'Every bid, from site visit to won or lost. Drag a card, or tap it, to move the job along.';
-    if (b.id === 'jobs') return 'Every job you have won, until it is paid. Moving a card changes the job’s status.';
+    const touch = touchScreen();
+    if (b.id === 'bids') return 'Every bid, from site visit to won or lost. ' +
+      (touch ? 'Tap a card to move the job along.' : 'Drag a card, or tap it, to move the job along.');
+    if (b.id === 'jobs') return 'Every job you have won, until it is paid. Moving a card changes the job’s status.' +
+      (touch ? ' Tap a card to move it.' : '');
     const shared = (b.visibleTo || []).map(uid => personName(uid)).filter(Boolean);
-    return isOwner()
+    return (isOwner()
       ? (shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Only you can see this board')
-      : 'Shared with you';
+      : 'Shared with you') +
+      (touch && canMove(b.id) ? '. Tap a card to move it.' : '');
   }
 
   function columnsHtml(board) {
@@ -278,7 +305,7 @@
     }
     const mine = Object.values(cards[board.id] || {});
     return board.columns.map((c, i) => {
-      const inCol = mine.filter(k => (k.column || board.columns[0].id) === c.id)
+      const inCol = mine.filter(k => colOf(board, k) === c.id)
         .sort((a, b) => (a.order || 0) - (b.order || 0));
       const last = i === board.columns.length - 1;
       return column(board, c, inCol.map(k => storedCardHtml(board, k, last)));
@@ -420,8 +447,12 @@
     if (boardId === 'bids' || boardId === 'jobs') { moveJob(cardId, boardId, col); return; }
     const set = cards[boardId] || {};
     const k = set[cardId];
-    if (!k) return;
-    const inCol = Object.values(set).filter(x => x.id !== cardId && (x.column || '') === col)
+    const board = boards[boardId];
+    if (!k || !board) return;
+    // Cards with no column sit in the first one on screen, so they count
+    // there too -- otherwise a card dropped among them was placed as if the
+    // column were empty.
+    const inCol = Object.values(set).filter(x => x.id !== cardId && colOf(board, x) === col)
       .sort((a, b) => (a.order || 0) - (b.order || 0));
     let order;
     const idx = beforeId ? inCol.findIndex(x => x.id === beforeId) : -1;
@@ -430,7 +461,6 @@
     else order = ((inCol[idx - 1].order || 0) + (inCol[idx].order || 0)) / 2;
     if (k.column === col && k.order === order) return;
 
-    const board = boards[boardId];
     const last = board.columns[board.columns.length - 1].id;
     const patch = { column: col, order: order, updatedAt: nowIso(), updatedBy: myName() };
     // Reaching the last column is "done"; leaving it is "not done any more".
@@ -468,7 +498,10 @@
   };
   window.openJobFromBoard = function (jobId) {
     closeBoardModal();
-    if (typeof dirty !== 'undefined' && dirty && currentJobId !== jobId &&
+    // Already the job in the form: just go to it. Loading it again would read
+    // the saved copy over whatever has been typed and not yet saved.
+    if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
+    if (typeof dirty !== 'undefined' && dirty &&
         !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
     if (typeof loadJob === 'function') loadJob(jobId);
     switchTab('job');
@@ -493,6 +526,7 @@
     if (!k) { closeBoardModal(); return; }
     const labels = (k.labels || []).map(id => (board.labels || []).find(l => l.id === id)).filter(Boolean);
     const list = k.checklist || [];
+    const here = colOf(board, k);
     openModal(esc(k.title || 'Card'),
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
@@ -509,8 +543,8 @@
           esc(i.text) + '</span></label>').join('') + '</div>' : '') +
       '<div class="bd-move-label">Move to</div>' +
       '<div class="bd-move">' + board.columns.map(c =>
-        '<button class="bd-move-btn' + (c.id === k.column ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
-        (c.id === k.column ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
+        '<button class="bd-move-btn' + (c.id === here ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
+        (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       '<div class="field-actions">' +
@@ -651,7 +685,8 @@
   };
 
   function endOrder(boardId, col) {
-    const inCol = Object.values(cards[boardId] || {}).filter(k => k.column === col);
+    const board = boards[boardId];
+    const inCol = Object.values(cards[boardId] || {}).filter(k => board ? colOf(board, k) === col : k.column === col);
     return inCol.length ? Math.max.apply(null, inCol.map(k => k.order || 0)) + 1000 : 1000;
   }
 
@@ -721,10 +756,15 @@
             'checklists. They cannot add, edit or delete cards. Leave everyone unticked to keep it to yourself.</div>'
           : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
       '</div>' +
+      (id === MAINTENANCE
+        ? '<div class="hint">This board is kept in step with the Equipment tab — a card for every machine ' +
+          'with a service coming up and every problem noted on one — so it cannot be deleted. ' +
+          'Rename it, recolour it or share it as you like.</div>'
+        : '') +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveBoard()">Save</button>' +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Cancel</button>' +
-        (id ? '<button class="btn btn-sm" onclick="removeBoard(\'' + id + '\')">Delete board</button>' : '') +
+        (id && id !== MAINTENANCE ? '<button class="btn btn-sm" onclick="removeBoard(\'' + id + '\')">Delete board</button>' : '') +
       '</div>');
     drawDrafts();
     const n = el('bdName'); if (n && !id) n.focus();
@@ -833,13 +873,29 @@
     write('boards', id, rec, 'saving the board');
 
     // Cards in a column that no longer exists go to the first column rather
-    // than vanishing from view.
+    // than vanishing from view. And "done" follows the last column wherever
+    // it now is: reordering can make a different column last, and the cards
+    // in it are done from now on, while those left behind in the old last
+    // column are not done any more.
     const live = new Set(columns.map(c => c.id));
+    const lastId = columns[columns.length - 1].id;
     Object.values(cards[id] || {}).forEach(k => {
-      if (!live.has(k.column)) {
-        k.column = columns[0].id;
-        writeCard(id, k.id, { column: columns[0].id, updatedAt: nowIso(), updatedBy: myName() });
+      const patch = {};
+      if (!live.has(k.column)) patch.column = columns[0].id;
+      // Except the Equipment tab's own cards: whether a machine's problem is
+      // fixed is on the machine, and Equipment files those cards by it.
+      // Stamping them done here would record every open problem that ended
+      // up in the new last column as fixed, when nobody had touched it.
+      if (!k.auto) {
+        const done = (patch.column || k.column) === lastId;
+        if (done && !k.doneAt) patch.doneAt = nowIso();
+        if (!done && k.doneAt) patch.doneAt = null;
       }
+      if (!Object.keys(patch).length) return;
+      patch.updatedAt = nowIso();
+      patch.updatedBy = myName();
+      Object.assign(k, patch);
+      writeCard(id, k.id, patch);
     });
 
     if (!cardUnsubs[id]) watchCards(id);
@@ -851,13 +907,13 @@
 
   window.removeBoard = function (id) {
     const b = boards[id];
-    if (!b) return;
+    if (!b || !isOwner() || id === MAINTENANCE) return;
     const n = Object.keys(cards[id] || {}).length;
     if (!confirm('Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') +
                  '? This cannot be undone.')) return;
     const ids = Object.keys(cards[id] || {});
     if (cardUnsubs[id]) { cardUnsubs[id](); delete cardUnsubs[id]; }
-    delete boards[id]; delete cards[id];
+    delete boards[id]; delete cards[id]; delete cardsLoaded[id];
     current = null;
     closeBoardModal(); render();
     // Cards first: a card left behind under a deleted board would be
@@ -904,12 +960,14 @@
 
   function watchCards(boardId) {
     if (cardUnsubs[boardId] || !window.YDDb) return;
-    cardUnsubs[boardId] = window.YDDb.watch('boards/' + boardId + '/cards', changes => {
+    cardUnsubs[boardId] = window.YDDb.watch('boards/' + boardId + '/cards', (changes, meta) => {
       const set = cards[boardId] = cards[boardId] || {};
       changes.forEach(c => {
         if (c.type === 'removed') delete set[c.id];
         else set[c.id] = Object.assign({ id: c.id }, c.data);
       });
+      // Set before the event below goes out, so whoever is listening sees it.
+      if (meta && !meta.fromCache) cardsLoaded[boardId] = true;
       redrawIfVisible();
       // The calendar shows cards with due dates.
       document.dispatchEvent(new CustomEvent('yd-cards-changed'));
@@ -924,7 +982,7 @@
       if (c.type === 'removed') {
         delete boards[c.id];
         if (cardUnsubs[c.id]) { cardUnsubs[c.id](); delete cardUnsubs[c.id]; }
-        delete cards[c.id];
+        delete cards[c.id]; delete cardsLoaded[c.id];
       } else {
         boards[c.id] = Object.assign({ id: c.id }, c.data);
         watchCards(c.id);
@@ -984,7 +1042,7 @@
     if (unsubBoards) { unsubBoards(); unsubBoards = null; }
     if (unsubPeople) { unsubPeople(); unsubPeople = null; }
     Object.values(cardUnsubs).forEach(u => u());
-    cardUnsubs = {}; boards = {}; cards = {}; people = {}; seeded = false; current = null; ready = false;
+    cardUnsubs = {}; cardsLoaded = {}; boards = {}; cards = {}; people = {}; seeded = false; current = null; ready = false;
   }
 
   function start(a) {
@@ -1009,6 +1067,8 @@
   window.YDBoards = {
     render: render,
     ready: () => ready,
+    // Whether a board's cards have come from the server, not just the cache.
+    cardsReady: id => !!cardsLoaded[id],
     boards: () => boards,
     cards: () => cards,
     people: () => people,
@@ -1020,7 +1080,7 @@
         if (!b) return;
         const last = b.columns[b.columns.length - 1].id;
         Object.values(cards[bid]).forEach(k => {
-          if (k.due) out.push({ board: b, card: k, done: k.column === last });
+          if (k.due) out.push({ board: b, card: k, done: colOf(b, k) === last });
         });
       });
       return out;

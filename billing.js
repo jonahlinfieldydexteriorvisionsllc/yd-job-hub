@@ -21,6 +21,11 @@
     ? '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     : '—';
   const accountName = id => ((window.YDSnow && YDSnow.accounts()[id]) || {}).name || id;
+  // A count that came from a crew phone (salt bags, depth), or 0. Storms
+  // closed before the stop figures were checked could hold text there, and
+  // adding text to a total turns the total into text -- which this screen
+  // then drew as HTML.
+  const count = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
 
   // ------------------------------------------------------- dates and seasons
   //
@@ -96,20 +101,34 @@
   }
 
   // Returns { accountId: 'number' } for this storm, assigning and saving any
-  // that have not been given out yet.
+  // that have not been given out yet. `b` must be the server's copy of the
+  // storm's billing (see exportStormCsv).
+  //
+  // The "next number" is read from the SERVER too, not from this device's
+  // copy -- which is exactly the copy the laptop and the phone each kept, and
+  // both handed out. With no signal that read fails, and nothing is numbered.
   async function invoiceNumbersFor(id, b, accountIds) {
     const existing = Object.assign({}, b.invoiceNos || {});
     const missing = accountIds.filter(a => !existing[a]);
     if (!missing.length) return existing;
 
-    const cfg = await invoicing();
+    const cfg = (await window.YDDb.getFresh('settings', INVOICE_DOC)) || {};
+    invoiceSettings = cfg;
     // No starting point set yet: fall back to a storm-based reference, which
     // is unique but does not pretend to continue anybody's sequence.
     if (cfg.nextInvoiceNo == null) {
       const d = stormStart(storms[id]);
       const stamp = String(d.getFullYear()).slice(2) +
         two(d.getMonth() + 1) + two(d.getDate()) + '-' + two(d.getHours()) + two(d.getMinutes());
-      missing.forEach((a, i) => { existing[a] = 'SNOW-' + stamp + '-' + two(i + 1); });
+      const taken = Object.keys(existing).length;
+      missing.forEach((a, i) => { existing[a] = 'SNOW-' + stamp + '-' + two(taken + i + 1); });
+      // Written against the storm like a sequence number. These used to be
+      // worked out afresh on every export, so once a starting number was set
+      // the same storm came out with a second set -- and re-importing it
+      // raised every invoice again.
+      b.invoiceNos = existing;
+      Promise.resolve(window.YDDb.put('storms/' + id + '/private', 'billing', { invoiceNos: existing }))
+        .catch(e => console.warn('[billing] invoice numbers not yet saved:', e.code || e.message));
       return existing;
     }
 
@@ -131,6 +150,24 @@
 
   const two = n => String(n).padStart(2, '0');
 
+  // Numbering is done one storm at a time. Each export reads what the server
+  // holds and then records what it handed out; two side by side -- a double
+  // tap, or two storms exported in quick succession -- could both read before
+  // either had recorded, and give out the same numbers twice.
+  let numberingTurn = Promise.resolve();
+  function oneAtATime(task) {
+    const turn = numberingTurn.then(task);
+    numberingTurn = turn.catch(() => {});
+    return turn;
+  }
+
+  // The accounts on a storm's bill, in the order their invoices are numbered.
+  function accountOrder(b) {
+    const ids = {};
+    b.lines.forEach(l => { ids[l.accountId] = true; });
+    return Object.keys(ids).sort((x, y) => accountName(x).localeCompare(accountName(y)));
+  }
+
   // Set from the season report, so the sequence can be pointed at whatever
   // QuickBooks is actually up to.
   window.setInvoiceStart = async function () {
@@ -143,11 +180,16 @@
     const n = parseInt(String(v).replace(/[^0-9]/g, ''), 10);
     if (!(n > 0)) { showToast('That is not a number'); return; }
     invoiceSettings = Object.assign({}, cfg, { nextInvoiceNo: n });
-    try {
-      await window.YDDb.put('settings', INVOICE_DOC, { nextInvoiceNo: n });
-      showToast('Next invoice will be ' + n);
-      renderSeason();
-    } catch (e) { showToast('Could not save that'); }
+    // Not awaited: the promise waits for the server, so with a weak signal the
+    // screen hung here. The number is in place locally at once and the next
+    // export's server read sees it; a refusal still says so.
+    Promise.resolve(window.YDDb.put('settings', INVOICE_DOC, { nextInvoiceNo: n }))
+      .catch(e => {
+        console.warn('[billing] next invoice number not saved:', e.code || e.message);
+        showToast('Could not save that');
+      });
+    showToast('Next invoice will be ' + n);
+    renderSeason();
   };
 
   // ---------------------------------------------------------------- loading
@@ -246,7 +288,8 @@
         const total = ls.reduce((t, l) => t + l.totalCents, 0);
         return '<tr><td class="bold">' + esc(accountName(aid)) + '</td>' +
           '<td>' + ls.length + '</td>' +
-          '<td>' + ls.map(l => l.inches + '"').join(', ') + '</td>' +
+          // Escaped: depths come from crew phones (see count() above).
+          '<td>' + ls.map(l => esc(l.inches) + '"').join(', ') + '</td>' +
           '<td>' + ls.reduce((t, l) => t + l.minutes, 0) + ' min</td>' +
           '<td>' + money(ls.reduce((t, l) => t + l.plowCents, 0)) + '</td>' +
           '<td>' + (ls.some(l => l.saltCents) ? money(ls.reduce((t, l) => t + l.saltCents, 0)) : '—') + '</td>' +
@@ -295,8 +338,28 @@
   // deliberately plain and readable: check one invoice after the first import
   // rather than trusting a whole night blind.
   window.exportStormCsv = async function (id) {
-    const s = storms[id], b = await billingFor(id);
-    if (!b) { showToast('No billing recorded for that storm'); return; }
+    const s = storms[id];
+
+    // The storm's billing is read from the SERVER here, never from the copy
+    // cached when the app opened. A cached copy is stale the moment another
+    // device exports: the laptop, still holding the version from the morning,
+    // saw no numbers on a storm the phone had already numbered, handed out a
+    // fresh set and wrote them over the first -- and re-importing billed every
+    // customer twice. With no signal there is no knowing what has been handed
+    // out, so nothing is numbered rather than guessed.
+    let b = null, numbers = null;
+    try {
+      await oneAtATime(async () => {
+        b = await window.YDDb.getFresh('storms/' + id + '/private', 'billing');
+        if (b && Array.isArray(b.lines)) numbers = await invoiceNumbersFor(id, b, accountOrder(b));
+      });
+    } catch (e) {
+      console.warn('[billing] could not number invoices from the server:', e && (e.code || e.message));
+      showToast('Needs signal — invoice numbers are only given out from the server’s copy. Try again with a connection.');
+      return;
+    }
+    if (!b || !Array.isArray(b.lines)) { showToast('No billing recorded for that storm'); return; }
+    billingCache[id] = b;
 
     // The invoice is dated when the storm STARTED, not when it was closed.
     //
@@ -331,10 +394,7 @@
 
     const byAccount = {};
     b.lines.forEach(l => { (byAccount[l.accountId] = byAccount[l.accountId] || []).push(l); });
-
-    const order = Object.keys(byAccount)
-      .sort((x, y) => accountName(x).localeCompare(accountName(y)));
-    const numbers = await invoiceNumbersFor(id, b, order);
+    const order = accountOrder(b);
 
     order.forEach(aid => {
       const name = accountName(aid);
@@ -454,7 +514,7 @@
         a.crewMinutes += l.minutes * crew;
         a.plow += l.plowCents; a.salt += l.saltCents;
         a.labor += l.laborCents; a.total += l.totalCents;
-        a.bags += l.saltBags || 0;
+        a.bags += count(l.saltBags);
         a.storms[id] = true;
       });
       (b.skipped || []).forEach(s => {

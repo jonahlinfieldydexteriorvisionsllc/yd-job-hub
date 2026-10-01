@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v61';
+const CACHE = 'ydjobhub-v62';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -142,19 +142,26 @@ self.addEventListener('fetch', event => {
   // saying "sign in" to someone who was signed in.
   if (url.origin === self.location.origin && /\.(js|css|json)$/.test(url.pathname)) {
     event.respondWith(new Promise(resolve => {
-      let settled = false;
-      const fallback = () => caches.match(req).then(r => {
-        if (!settled) { settled = true; resolve(r || Response.error()); }
+      let settled = false, networkFailed = false;
+      const settle = r => { if (!settled) { settled = true; resolve(r); } };
+      // The saved copy, if there is one. If there is not -- a first visit, or
+      // a file that failed to precache -- a slow network is still the only
+      // hope, so keep waiting for it: giving up at the 4-second mark used to
+      // fail the script outright when it would have arrived a moment later.
+      // Only once the network has actually failed is there nothing to wait for.
+      const fromCache = () => caches.match(req).catch(() => null).then(r => {
+        if (r) settle(r);
+        else if (networkFailed) settle(Response.error());
       });
-      const timer = setTimeout(fallback, 4000);      // one bar of signal: do not hang
+      const timer = setTimeout(fromCache, 4000);     // one bar of signal: do not hang
       fetch(req, { cache: 'no-cache' }).then(res => {
         clearTimeout(timer);
         if (res && res.ok) {
           const copy = res.clone();
           caches.open(CACHE).then(c => c.put(req, copy));
         }
-        if (!settled) { settled = true; resolve(res); }
-      }).catch(() => { clearTimeout(timer); fallback(); });
+        settle(res);
+      }).catch(() => { clearTimeout(timer); networkFailed = true; fromCache(); });
     }));
     return;
   }
@@ -196,12 +203,25 @@ self.addEventListener('push', event => {
 });
 
 // Tapping it opens Job Hub -- the window already open if there is one.
+//
+// An open window is brought forward and TOLD where to go (app.js listens),
+// not navigated there. Navigating reloaded it, which threw away whatever was
+// on screen -- a half-typed job included -- with no "leave page?" question.
+// Only the app itself can act on the message: the privacy and terms pages
+// share the address, so an open one of those gets a fresh app window instead.
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   const url = (event.notification.data && event.notification.data.url) || './';
+  const home = new URL(self.registration.scope).pathname;
+  const isApp = c => {
+    const path = new URL(c.url).pathname;
+    return 'focus' in c && (path === home || path === home + 'index.html');
+  };
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
-    for (const c of list) {
-      if ('focus' in c) { c.navigate(url).catch(() => {}); return c.focus(); }
+    const open = list.find(isApp);
+    if (open) {
+      open.postMessage({ type: 'yd-notification-open', url: url });
+      return open.focus();
     }
     return self.clients.openWindow(url);
   }));

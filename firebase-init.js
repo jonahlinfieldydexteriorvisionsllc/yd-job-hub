@@ -18,9 +18,10 @@ import {
   browserLocalPersistence,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
-  initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
-  doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
+  initializeFirestore, persistentLocalCache, persistentSingleTabManager,
+  doc, getDoc, getDocFromServer, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
   getDocs, getDocsFromServer, writeBatch, disableNetwork, enableNetwork, query, where,
+  terminate, clearIndexedDbPersistence, waitForPendingWrites,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
@@ -43,6 +44,8 @@ const gate = {
     if (btn) btn.hidden = !opts.signIn;
     const out = document.getElementById('gateSignOut');
     if (out) out.hidden = !opts.signOut;
+    const again = document.getElementById('gateRetry');
+    if (again) again.hidden = !opts.retry;
     const spin = document.getElementById('gateSpinner');
     if (spin) spin.hidden = !opts.spinner;
   },
@@ -82,10 +85,20 @@ async function start() {
   const app = initializeApp(cfg.firebase);
   const auth = getAuth(app);
 
-  // Offline-first. persistentMultipleTabManager keeps desktop tabs from
-  // fighting over the same local cache.
+  // Offline-first: the first Job Hub tab or window keeps the cache on disk.
+  //
+  // Deliberately the SINGLE-tab manager. With the multi-tab one, only one tab
+  // (the "primary") talks to the server and every other tab's reads go through
+  // it, under ITS sign-in. When that tab is stale -- left open in another
+  // window, still running yesterday's code -- every new tab is refused, and
+  // a freshly signed-in owner got "Cannot check access" (seen 1 Oct 2026: the
+  // same read straight to Firestore with the same token succeeded). Now each
+  // tab talks to the server as itself. A second tab cannot share the disk
+  // cache, so Firestore quietly gives it a memory cache instead -- it works
+  // normally online, it just does not keep data across restarts. Phones run
+  // one copy of the app, so the crew keep full offline storage.
   const db = initializeFirestore(app, {
-    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+    localCache: persistentLocalCache({ tabManager: persistentSingleTabManager() }),
   });
 
   await setPersistence(auth, browserLocalPersistence);
@@ -253,6 +266,7 @@ async function start() {
         title: 'Cannot check access',
         msg: 'You are signed in, but your permissions could not be loaded. '
            + 'Check your connection and try again.',
+        retry: true,
         signOut: true,
       });
       return;
@@ -424,6 +438,16 @@ async function start() {
         return snap.exists() ? snap.data() : null;
       },
 
+      // The SERVER's copy, never the cache -- and it fails with no signal
+      // rather than answering from an old copy. For the few decisions that
+      // must not be made on stale data, like handing out invoice numbers:
+      // a cached record missing numbers another device already assigned
+      // would assign them twice.
+      async getFresh(path, id) {
+        const snap = await getDocFromServer(doc(db, ...path.split('/'), id));
+        return snap.exists() ? snap.data() : null;
+      },
+
       async put(path, id, data) {
         await setDoc(doc(db, ...path.split('/'), id), data, { merge: true });
       },
@@ -444,15 +468,21 @@ async function start() {
         return batch.commit();
       },
 
-      async putMany(entries) {
+      // Every chunk is committed at once rather than one after another. A
+      // commit only settles when the SERVER answers, so waiting for chunk one
+      // before starting chunk two meant that with no signal the second half
+      // of a big price list was never even saved on the device.
+      putMany(entries) {
         const CHUNK = 400;
+        const commits = [];
         for (let i = 0; i < entries.length; i += CHUNK) {
           const batch = writeBatch(db);
           entries.slice(i, i + CHUNK).forEach(([path, id, data]) => {
             batch.set(doc(db, ...path.split('/'), id), data, { merge: true });
           });
-          await batch.commit();
+          commits.push(batch.commit());
         }
+        return Promise.all(commits);
       },
     };
 
@@ -466,11 +496,41 @@ async function start() {
     console.info('[auth] signed in as', user.email, 'role', role);
   });
 
+  // Signing out, done properly. Resolves true once signed out, false if the
+  // person chose to stay signed in.
+  //
+  // 1. Changes not yet on the server would be destroyed with the cache, so
+  //    give them a few seconds to land, and ask before throwing them away.
+  // 2. Other parts of the app tidy up while still signed in (this phone's
+  //    notification subscription, say) -- each gets two seconds at most, so
+  //    a dead connection cannot trap anyone in the app.
+  // 3. Then the Firestore cache on this device is wiped. Without that, the
+  //    jobs, prices and phone numbers the last person could see stayed on a
+  //    shared phone after they signed out.
+  const pause = ms => new Promise(r => setTimeout(() => r(false), ms));
+  async function signOutFully() {
+    const landed = await Promise.race([waitForPendingWrites(db).then(() => true, () => false), pause(4000)]);
+    if (!landed && !confirm('Some changes on this device have not reached the cloud yet ' +
+        '(no signal?).\n\nSigning out now will lose them. Sign out anyway?')) return false;
+    for (const hook of (window.YDSignOutHooks || [])) {
+      try { await Promise.race([Promise.resolve().then(hook), pause(2000)]); }
+      catch (e) { console.warn('[auth] sign-out tidy-up failed', e); }
+    }
+    await signOut(auth);
+    try {
+      await terminate(db);
+      await clearIndexedDbPersistence(db);
+    } catch (e) { console.warn('[auth] could not clear the offline cache', e); }
+    return true;
+  }
+
   // Wire the gate's buttons.
   const inBtn = document.getElementById('gateSignIn');
   if (inBtn) inBtn.addEventListener('click', doSignIn);
   const outBtn = document.getElementById('gateSignOut');
-  if (outBtn) outBtn.addEventListener('click', () => signOut(auth));
+  if (outBtn) outBtn.addEventListener('click', async () => {
+    if (await signOutFully()) location.reload();
+  });
 
-  window.YDSignOut = () => signOut(auth);
+  window.YDSignOut = signOutFully;
 }

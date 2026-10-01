@@ -86,10 +86,21 @@
     }
 
     const original = btn.textContent;
+    // A job not yet saved has no id, and the autosave gives it one a moment
+    // later -- usually while Claude is still answering, so the check below
+    // saw "a different job" and threw the draft away. And with no id, opening
+    // a blank new job meanwhile looked like the same job, so the draft landed
+    // in that one. Saved first, the job has an id that means only itself.
+    // (A customer name is required above, so this never saves an empty job.)
+    if (!currentJobId && typeof autosave === 'function') autosave();
+
     // Which job this draft is for. The answer takes a few seconds, and if a
     // different job was opened meanwhile the draft would have landed in its
     // notes and been autosaved there.
     const forJob = currentJobId;
+    // What the notes said when the draft was asked for. Replacing them was
+    // agreed to above; anything typed while waiting was not.
+    const asked = notes.value.trim();
     btn.disabled = true;
     btn.textContent = 'Drafting…';
 
@@ -102,7 +113,7 @@
         location: [document.getElementById('address').value, city]
                     .filter(Boolean).join(', '),
         services: serviceTypes.slice(),
-        notes: notes.value.trim(),
+        notes: asked,
         price: document.getElementById('jobPrice').value,
       });
 
@@ -110,7 +121,18 @@
         showToast('A different job is open now — the draft was not put in it');
         return;
       }
-      notes.value = (result.text || '').trim();
+      // An empty answer must not wipe what was there.
+      const text = String((result && result.text) || '').trim();
+      if (!text) {
+        showToast('Claude sent back nothing — Job Notes were left as they were');
+        return;
+      }
+      if (notes.value.trim() !== asked &&
+          !confirm('Job Notes were changed while the draft was being written.\n\n' +
+                   'Replace them with the draft anyway?')) {
+        return;
+      }
+      notes.value = text;
       markDirty();
       showToast('Scope drafted — read it before sending');
     } catch (err) {

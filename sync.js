@@ -27,6 +27,10 @@
   let pushTimers = {};
   let cloudState = 'connecting'; // connecting | synced | offline | off
   let unsubscribe = null;
+  // Every job the cloud listener currently reports. The board tidy-up uses it
+  // to tell a job that is gone from one this device has not stored yet.
+  const cloudJobIds = new Set();
+  let boardReconciled = false;
 
   // ---------------------------------------------------------------- helpers
 
@@ -118,9 +122,56 @@
   const unsent = new Set();
   function queuePush(id) {
     if (!id || applyingRemote) return;
+    // Saved again after being deleted -- restored from a backup, say. The
+    // save is the newer wish, so a delete still waiting to go out is dropped.
+    if (pendingDeletes.delete(id)) savePendingDeletes();
     if (!watching) { unsent.add(id); return; }
     clearTimeout(pushTimers[id]);
     pushTimers[id] = setTimeout(() => pushNow(id), PUSH_DELAY);
+  }
+
+  // ---------------------------------------------------------------- delete
+  //
+  // A job deleted before sync had started -- in the first seconds after the
+  // app opened, or on a device that could not reach Firebase at all -- used
+  // to be deleted on that device only, and the cloud's copy came straight
+  // back with the next snapshot as if the delete had never happened. So a
+  // delete is written down here, kept across a reload, sent once sync is
+  // running, and forgotten only when the server has confirmed it. Until then
+  // applyRemote refuses to write the job back.
+  const DELETES_KEY = STORAGE_PREFIX + 'pendingDeletes';
+  const pendingDeletes = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem(DELETES_KEY) || '[]')); }
+    catch (e) { return new Set(); }
+  })();
+  function savePendingDeletes() {
+    try {
+      if (pendingDeletes.size) localStorage.setItem(DELETES_KEY, JSON.stringify([...pendingDeletes]));
+      else localStorage.removeItem(DELETES_KEY);
+    } catch (e) { console.warn('[sync] could not note a pending delete', e); }
+  }
+  function forgetDelete(id) {
+    if (pendingDeletes.delete(id)) savePendingDeletes();
+  }
+  function queueDelete(id) {
+    pendingDeletes.add(id);
+    savePendingDeletes();
+    if (watching) sendDelete(id);
+  }
+  function sendDelete(id) {
+    // Not awaited: with no signal the promise only settles when the signal
+    // returns, and Firestore holds the delete in its own queue until then.
+    window.YDDb.removeJob(id)
+      .then(() => forgetDelete(id))
+      .catch(err => {
+        // Refused, not merely offline. Forget it, so the job is not hidden
+        // on this device while it carries on existing everywhere else.
+        console.warn('[sync] delete failed', err.code || err.message);
+        forgetDelete(id);
+      });
+    // Otherwise the crew's clock would keep offering a job that is gone.
+    window.YDDb.remove('jobBoard', id).catch(err =>
+      console.warn('[sync] job board delete failed', err.code || err.message));
   }
 
   // ------------------------------------------------------------- job board
@@ -195,11 +246,21 @@
       });
 
       // A board entry whose job is gone would leave crew able to clock in to
-      // work that no longer exists.
-      const gone = Object.keys(board).filter(id => !readJobBlob(id));
+      // work that no longer exists. Gone means gone from the cloud as well as
+      // from this device: a job the cloud still has but this phone could not
+      // store (no room left on it, say) is not gone.
+      const gone = Object.keys(board).filter(id => !readJobBlob(id) && !cloudJobIds.has(id));
 
-      if (writes.length) await window.YDDb.putMany(writes);
-      for (const id of gone) await window.YDDb.remove('jobBoard', id);
+      // Handed to Firestore, not awaited, like every other write here: it
+      // sends them whenever the signal allows.
+      if (writes.length) {
+        window.YDDb.putMany(writes).catch(err =>
+          console.warn('[sync] job board update failed', err.code || err.message));
+      }
+      if (gone.length) {
+        window.YDDb.removeMany(gone.map(id => ['jobBoard', id])).catch(err =>
+          console.warn('[sync] job board tidy-up failed', err.code || err.message));
+      }
       if (writes.length || gone.length) {
         console.info('[sync] job board: ' + writes.length + ' updated, ' + gone.length + ' removed');
       }
@@ -236,6 +297,9 @@
           if (c.id === currentJobId) openJobChanged = true;
           return;
         }
+        // Deleted on this device, the delete not yet confirmed by the server:
+        // the cloud's copy is on its way out and must not be written back.
+        if (pendingDeletes.has(c.id)) return;
         let local = null;
         try { local = JSON.parse(readJobBlob(c.id) || 'null'); } catch (e) {}
         const mine = local && local.lastModified, theirs = c.data && c.data.lastModified;
@@ -263,10 +327,25 @@
       // edits here, do NOT overwrite them -- losing what someone just typed is
       // far worse than showing a slightly stale record. Say so instead.
       if (openJobChanged) {
-        if (dirty) {
+        const stillHere = !!readJobBlob(currentJobId);
+        if (stillHere && dirty) {
           showToast('This job was changed on another device — your edits here are kept');
-        } else if (readJobBlob(currentJobId)) {
+        } else if (stillHere) {
           loadJob(currentJobId, true);
+        } else if (dirty) {
+          // Deleted elsewhere while being edited here. The edits win, as
+          // above: the autosave already on its way puts the job back.
+          showToast('This job was deleted on another device — your edits here will keep it');
+        } else {
+          // Deleted elsewhere with nothing typed here. Left in the form, the
+          // next keystroke autosaved the deleted job back to life. Emptied
+          // quietly -- nobody is moved off the screen they are on, and only
+          // someone looking at the job is told why it went blank.
+          clearJobForm();
+          const onScreen = document.querySelector('.tab-panel.active');
+          if (onScreen && (onScreen.id === 'panel-job' || onScreen.id === 'panel-tracking')) {
+            showToast('This job was deleted on another device');
+          }
         }
       }
 
@@ -279,56 +358,94 @@
 
   // ---------------------------------------------------------------- startup
 
+  // This device has seen the cloud holding jobs, so it must never act as the
+  // seed for an empty one.
+  function markMigrated() {
+    try {
+      if (!localStorage.getItem(MIGRATED_KEY)) localStorage.setItem(MIGRATED_KEY, new Date().toISOString());
+    } catch (e) {}
+  }
+
+  function noteCloudIds(changes) {
+    changes.forEach(c => {
+      if (c.type === 'removed') cloudJobIds.delete(c.id); else cloudJobIds.add(c.id);
+    });
+  }
+
   async function startSync() {
     if (watching) return;
 
-    let cloudCount = 0;
-    try {
-      cloudCount = await window.YDDb.countJobs();
-    } catch (err) {
-      console.warn('[sync] could not count cloud jobs', err.code || err.message);
-      setCloudState('offline');
-    }
-
     const localCount = getJobIndex().length;
-    const alreadyMigrated = !!localStorage.getItem(MIGRATED_KEY);
+    let alreadyMigrated = false;
+    try { alreadyMigrated = !!localStorage.getItem(MIGRATED_KEY); } catch (e) {}
 
-    // First run with jobs here but nothing in the cloud: this device's data is
-    // the only copy, so it becomes the seed. Backup to Downloads FIRST -- the
-    // build spec requires it, and an automatic backup before a one-way data
-    // move is cheap insurance.
-    if (cloudCount === 0 && localCount > 0 && !alreadyMigrated) {
+    // The count is only there to decide whether this device must seed an
+    // empty cloud, so it is only asked when that could be the answer. Every
+    // other launch starts syncing at once -- with no signal included, where
+    // the count could only fail after keeping sync waiting.
+    if (localCount > 0 && !alreadyMigrated) {
+      let cloudCount = null;     // stays null when the server could not be asked
       try {
-        exportAllJobs();
-        const n = await pushAllLocal();
-        localStorage.setItem(MIGRATED_KEY, new Date().toISOString());
-        showToast(n + ' job' + (n === 1 ? '' : 's') + ' moved to the cloud');
+        cloudCount = await window.YDDb.countJobs();
+        // countJobs() goes to the server, so an answer means we are genuinely
+        // connected.
+        setCloudState('synced');
       } catch (err) {
-        console.error('[sync] migration failed', err);
-        showToast('Could not move jobs to the cloud — your jobs are still safe on this device');
+        console.warn('[sync] could not count cloud jobs', err.code || err.message);
+        setCloudState('offline');
       }
+
+      if (cloudCount > 0) {
+        markMigrated();
+      } else if (cloudCount === 0) {
+        // First run with jobs here but nothing in the cloud: this device's
+        // data is the only copy, so it becomes the seed. Backup to Downloads
+        // FIRST -- the build spec requires it, and an automatic backup before
+        // a one-way data move is cheap insurance.
+        try {
+          exportAllJobs();
+          const n = await pushAllLocal();
+          markMigrated();
+          showToast(n + ' job' + (n === 1 ? '' : 's') + ' moved to the cloud');
+        } catch (err) {
+          console.error('[sync] migration failed', err);
+          showToast('Could not move jobs to the cloud — your jobs are still safe on this device');
+        }
+      }
+      // A count that failed says nothing about the cloud. It used to be read
+      // as "the cloud is empty", so every launch with no signal downloaded a
+      // backup, then copied this device's jobs over the cloud's -- newer edits
+      // from other devices included -- and stalled sync until the signal came
+      // back. Now nothing is seeded, and the question is asked again next time.
     }
 
     watching = true;
     unsent.forEach(id => queuePush(id));
     unsent.clear();
+    // Deletes made before sync was running, this session or an earlier one.
+    pendingDeletes.forEach(sendDelete);
     migrateStatuses();
 
-    // countJobs() above went to the server, so reaching here without throwing
-    // means we are genuinely connected.
-    setCloudState('synced');
-
-    reconcileBoard();
-
-    unsubscribe = window.YDDb.watchJobs(
+    // The general watcher rather than watchJobs: it also reports the moment
+    // the server first confirms the cached copy, even when nothing changed,
+    // which the board tidy-up below has to wait for.
+    unsubscribe = window.YDDb.watch('jobs',
       (changes, meta) => {
+        noteCloudIds(changes);
         applyRemote(changes);
         // Firestore always delivers a cached snapshot FIRST, even when online,
         // so fromCache alone does not mean offline -- reading it that way made
         // a healthy connection report as "saved on this device". Only a server
         // snapshot is positive proof of being connected; a cached one just
         // tells us nothing new, so leave the state alone.
-        if (!meta.fromCache) setCloudState('synced');
+        if (meta.fromCache) return;
+        setCloudState('synced');
+        if (meta.size > 0) markMigrated();
+        // The crew's job board is tidied only once this device holds what the
+        // cloud holds. Run at startup, it compared the board against a phone
+        // that had not received its jobs yet -- on a fresh phone, every job --
+        // and deleted the lot, leaving the crew nothing to clock in to.
+        if (!boardReconciled) { boardReconciled = true; reconcileBoard(); }
       },
       () => setCloudState('offline')
     );
@@ -351,14 +468,9 @@
     const existed = !!readJobBlob(id);
     _deleteJob.apply(this, arguments);
     // Only reaches the cloud if the local delete actually happened (the user
-    // may have cancelled the confirm).
-    if (existed && !readJobBlob(id) && watching) {
-      window.YDDb.removeJob(id).catch(err =>
-        console.warn('[sync] delete failed', err.code || err.message));
-      // Otherwise the crew's clock would keep offering a job that is gone.
-      window.YDDb.remove('jobBoard', id).catch(err =>
-        console.warn('[sync] job board delete failed', err.code || err.message));
-    }
+    // may have cancelled the confirm). Before sync is running it waits in
+    // pendingDeletes rather than being dropped.
+    if (existed && !readJobBlob(id)) queueDelete(id);
   };
 
   const _duplicateJob = window.duplicateJob;

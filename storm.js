@@ -100,6 +100,12 @@
   // Ids go into onclick handlers, and stop ids are written from crew phones.
   // Only the characters our own ids use get through.
   function safeId(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, ''); }
+  // A figure from a stop record, or the fallback. Stops are written from crew
+  // phones, so 'inches' or 'miles' is whatever was sent -- and this screen and
+  // the bill print them. Text in a number's place was drawn as HTML on the
+  // owner's screen, where it could run as the owner. Only a real number gets
+  // through.
+  function num(v, fallback) { return typeof v === 'number' && isFinite(v) ? v : fallback; }
   function clockTime(iso) {
     if (!iso) return '';
     const d = new Date(iso);
@@ -171,7 +177,7 @@
     return '<div class="stepper">' +
       '<span class="stepper-label">' + label + '</span>' +
       '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + (-step) + ')">&minus;</button>' +
-      '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + value + '">' +
+      '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + esc(value) + '">' +
       '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + step + ')">+</button>' +
     '</div>';
   }
@@ -211,31 +217,34 @@
       // steppers for gloved hands, and the field itself accepts typing for
       // anything the steppers make slow (13.5 inches, 11 bags).
       actions =
-        stepper(s.id, 'inches', 'Inches cleared',
-                s.inchesCleared != null ? s.inchesCleared : storm.accumulationInches, 0.5) +
-        (a.saltApplies ? stepper(s.id, 'salt', 'Salt bags', s.saltBags || 0, 1) : '') +
+        stepper(safeId(s.id), 'inches', 'Inches cleared',
+                num(s.inchesCleared, storm.accumulationInches), 0.5) +
+        (a.saltApplies ? stepper(safeId(s.id), 'salt', 'Salt bags', num(s.saltBags, 0), 1) : '') +
         '<button class="btn-stop depart" onclick="departStop(\'' + safeId(s.id) + '\')">Depart</button>';
     } else {
       actions = '<button class="btn btn-sm" onclick="secondPass(\'' + safeId(s.id) + '\')">Another pass here</button>';
     }
 
+    const miles = num(s.driveMiles, null);
+    const pass = num(s.pass, 1);
+
     return '<div class="stop ' + state + '">' +
       '<div class="stop-head">' +
-        '<span class="stop-num">' + (s.order + 1) + '</span>' +
+        '<span class="stop-num">' + (num(s.order, 0) + 1) + '</span>' +
         (!s.arrivedAt && !s.skipped
           ? '<span class="stop-move">' +
               '<button onclick="moveStop(\'' + safeId(s.id) + '\',-1)" title="Earlier">&#9650;</button>' +
               '<button onclick="moveStop(\'' + safeId(s.id) + '\',1)" title="Later">&#9660;</button>' +
             '</span>' : '') +
         '<span class="stop-name">' + esc(a.name || s.accountId) + '</span>' +
-        (s.pass > 1 ? '<span class="snow-tag trigger">pass ' + s.pass + '</span>' : '') +
+        (pass > 1 ? '<span class="snow-tag trigger">pass ' + pass + '</span>' : '') +
         (a.serviceWindow === 'morning' ? '<span class="snow-tag hold">by morning</span>' : '') +
         (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
       '</div>' +
       '<a class="snow-addr" href="https://maps.google.com/?q=' +
         encodeURIComponent(a.lat ? a.lat + ',' + a.lng : (a.address || '')) +
         '" target="_blank" rel="noopener">' + esc(a.address || '') +
-        (s.driveMiles != null ? ' · ' + s.driveMiles + ' mi' : '') +
+        (miles != null ? ' · ' + miles + ' mi' : '') +
         '<span class="snow-go">maps</span></a>' +
       (a.areaNotes ? '<div class="stop-notes">' + esc(a.areaNotes) + '</div>' : '') +
       (s.arrivedAt ? '<div class="stop-times">in ' + clockTime(s.arrivedAt) +
@@ -346,7 +355,7 @@
       if ((s.pass || 1) !== seen[s.accountId]) return;     // only the latest pass spawns the next
       const next = seen[s.accountId] + 1;
       writes.push(['storms/' + storm.id + '/stops', s.accountId + '-p' + next, {
-        accountId: s.accountId, order: order++, pass: next, driveMiles: s.driveMiles,
+        accountId: s.accountId, order: order++, pass: next, driveMiles: num(s.driveMiles, null),
         arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, skipped: false,
       }]);
     });
@@ -514,7 +523,9 @@
         ? YDClock.pausedMinutesAt(storm.id, s.arrivedAt, s.departedAt) : 0;
       const mins = Math.max(0, onSite - paused);
 
-      const inches = s.inchesCleared != null ? s.inchesCleared : storm.accumulationInches;
+      // Numbers only, as on the stop card: these are frozen into the bill, and
+      // the billing screens print them.
+      const inches = num(s.inchesCleared, storm.accumulationInches);
       const p = YDSnow.priceVisit(s.accountId, inches, mins, storm.crewSize);
       if (!p) return;
       minutes += mins;
@@ -529,7 +540,7 @@
         manHours: p.manHours,
         laborRateCents: ((YDSnow.pricing()[s.accountId] || {}).laborRateCents) != null
           ? YDSnow.pricing()[s.accountId].laborRateCents : null,
-        saltBags: s.saltBags, plowCents: p.plowCents, saltCents: p.saltCents,
+        saltBags: num(s.saltBags, null), plowCents: p.plowCents, saltCents: p.saltCents,
         laborCents: p.laborCents, totalCents: p.totalCents,
       });
     });
@@ -610,8 +621,14 @@
     showToast('Finding that address…');
     const geo = await window.YDSnowGeocode(addr.trim());
     if (!geo) { showToast('Could not find that address'); return; }
-    await window.YDDb.put('settings', 'snow', {
+    // Not awaited, like every other write here: the promise waits for the
+    // server, so on a weak signal the screen sat on "Finding that address…"
+    // long after the address had been found.
+    Promise.resolve(window.YDDb.put('settings', 'snow', {
       startAddress: addr.trim(), startLat: geo.lat, startLng: geo.lng, startTown: geo.town,
+    })).catch(e => {
+      console.warn('[storm] route start not yet on the server:', e && (e.code || e.message));
+      if (e && e.code === 'permission-denied') showToast('Not saved — only the owner can set this');
     });
     startPoint = { lat: geo.lat, lng: geo.lng, label: addr.trim() };
     const el = document.getElementById('snowStartPoint');

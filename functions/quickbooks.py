@@ -45,6 +45,7 @@ import secrets
 import time
 import urllib.parse
 import uuid
+from html import escape as html_escape
 
 import requests
 from firebase_admin import firestore
@@ -451,7 +452,12 @@ def callback(request):
 
 
 def _closing_page(message, ok):
-    """A plain page that sends them back to the app."""
+    """A plain page that sends them back to the app.
+
+    The message is escaped because part of it can come from the address bar:
+    the `error` Intuit sends back is just a query parameter, so a link to
+    /qb/callback?error=<script>... ran that script on this service's page.
+    """
     colour = "#2f8f5b" if ok else "#c8492b"
     html = (
         "<!doctype html><meta charset='utf-8'>"
@@ -466,7 +472,7 @@ def _closing_page(message, ok):
         "border-radius:8px;font-size:13px;font-weight:700;letter-spacing:.6px}</style>"
         "<div><h1>%s</h1><p>You can close this and go back to Job Hub.</p>"
         "<a href='%s'>Back to Job Hub</a></div>"
-    ) % (colour, message, _app_url())
+    ) % (colour, html_escape(str(message)), html_escape(_app_url(), quote=True))
     return html, (200 if ok else 400)
 
 
