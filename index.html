@@ -39,6 +39,7 @@
           <button id="menuReport" hidden onclick="closeHeaderMenu(); reportProblem()">Something went wrong</button>
           <button id="menuProblems" hidden onclick="closeHeaderMenu(); openProblems()">Problems<span class="menu-count" id="problemsCount" hidden></span></button>
           <button id="menuQuickBooks" hidden onclick="closeHeaderMenu(); openQuickBooks()">QuickBooks</button>
+          <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">Notifications &amp; summaries</button>
           <div class="menu-sep" id="menuAccountSep" hidden></div>
           <div class="menu-who" id="menuWho" hidden></div>
           <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
@@ -615,6 +616,16 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="ntfModal" onclick="if(event.target===this)closeNotifications()">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-head">
+      <h2>Notifications &amp; summaries</h2>
+      <button class="modal-close" onclick="closeNotifications()">&times;</button>
+    </div>
+    <div class="modal-body" id="ntfBody"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="supModal" onclick="if(event.target===this)closeSupModal()">
   <div class="modal" style="max-width:560px">
     <div class="modal-head">
@@ -808,6 +819,7 @@
 <script src="./boards.js"></script>
 <script src="./calendar.js"></script>
 <script src="./supplies.js"></script>
+<script src="./notify.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

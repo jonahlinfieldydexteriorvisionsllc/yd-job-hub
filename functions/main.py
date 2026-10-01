@@ -277,6 +277,79 @@ def origin_blocked(request):
     return bool(origin) and origin not in ALLOWED_ORIGINS
 
 
+# ---------------------------------------------------------------- summaries
+#
+#   /digest/run      called by Cloud Scheduler three times a day. Proven to be
+#                    the scheduler by a Google-signed identity token for this
+#                    service's own account -- no shared secret to keep.
+#   /digest/preview  the owner, from the app: see a summary now, or have one
+#                    sent to themselves to check it arrives.
+
+
+def _from_scheduler(request):
+    from google.auth.transport.requests import Request
+    from google.oauth2 import id_token
+    import digest
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        return False
+    try:
+        claims = id_token.verify_oauth2_token(header[7:], Request(), audience="https://" + request.host)
+    except Exception as e:                              # noqa: BLE001
+        print("digest: scheduler token refused:", e)
+        return False
+    return claims.get("email") == digest._service_account_email() and claims.get("email_verified")
+
+
+def _digest(request, path, headers):
+    import digest
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    body = request.get_json(silent=True) or {}
+    slot = body.get("slot") or request.args.get("slot") or "morning"
+
+    # The PUBLIC half of the notification key, which a phone needs in order to
+    # sign up. Worked out from the private key in Secret Manager rather than
+    # copied anywhere by hand, so the two can never disagree.
+    if path == "/digest/pushkey":
+        import base64
+        from cryptography.hazmat.primitives.serialization import (Encoding, PublicFormat,
+                                                                  load_der_private_key)
+        key = os.environ.get("VAPID_PRIVATE", "").strip()
+        if not key:
+            return (json.dumps({"error": "phone notifications are not set up yet"}), 503, json_headers)
+        der = base64.urlsafe_b64decode(key + "=" * (-len(key) % 4))
+        pub = load_der_private_key(der, None).public_key().public_bytes(
+            Encoding.X962, PublicFormat.UncompressedPoint)
+        return (json.dumps({"key": base64.urlsafe_b64encode(pub).rstrip(b"=").decode()}), 200, json_headers)
+
+    if path == "/digest/run":
+        if not _from_scheduler(request):
+            return (json.dumps({"error": "not allowed"}), 403, json_headers)
+        try:
+            return (json.dumps({"slot": slot, "report": digest.run(slot)}), 200, json_headers)
+        except Exception as e:                          # noqa: BLE001
+            print("digest run failed:", e)
+            return (json.dumps({"error": str(e)}), 500, json_headers)
+
+    if path == "/digest/preview":
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            uid = _caller(request)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        try:
+            report = digest.run(slot, only_uid=uid, dry=not body.get("send"))
+            return (json.dumps({"slot": slot, "report": report}), 200, json_headers)
+        except Exception as e:                          # noqa: BLE001
+            print("digest preview failed:", e)
+            return (json.dumps({"error": str(e)}), 500, json_headers)
+
+    return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -292,6 +365,8 @@ def claude(request):
     path = (request.path or "/").rstrip("/")
     if path.startswith("/qb"):
         return _quickbooks(request, path, headers)
+    if path.startswith("/digest"):
+        return _digest(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

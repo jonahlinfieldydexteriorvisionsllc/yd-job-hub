@@ -397,6 +397,21 @@ service cloud.firestore {
     // signed in reads them (that is the point); only the owner edits. No
     // prices are kept here, because crew can read every field.
     // ===================================================================
+    // ===================================================================
+    // Daily summaries -- each person chooses their own, and switches phone
+    // notifications on per device. The server (Admin SDK) does the sending
+    // and is not bound by these rules.
+    // ===================================================================
+    match /digestPrefs/{uid} {
+      allow read, write: if isOwner() || (isStaff() && request.auth.uid == uid);
+    }
+    match /pushSubs/{subId} {
+      allow read: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
+      allow create, update: if isStaff() && request.resource.data.uid == request.auth.uid
+        && subId.matches('ps[a-f0-9]+');
+      allow delete: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
+    }
+
     match /supplies/{docId} {
       allow read:  if isStaff();
       allow write: if isOwner();

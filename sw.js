@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v55';
+const CACHE = 'ydjobhub-v56';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -35,6 +35,7 @@ const SHELL = [
   './calendar.js',
   './worklog.js',
   './supplies.js',
+  './notify.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -176,6 +177,33 @@ self.addEventListener('fetch', event => {
       return cached || network.then(res => res || Response.error());
     })
   );
+});
+
+// A summary arriving from the server: show it. The payload is a title, a
+// one-line body and where tapping it should take you.
+self.addEventListener('push', event => {
+  let d = {};
+  try { d = event.data ? event.data.json() : {}; } catch (e) { d = { body: event.data && event.data.text() }; }
+  event.waitUntil(self.registration.showNotification(d.title || 'YD Job Hub', {
+    body: d.body || '',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    data: { url: d.url || './' },
+    tag: 'yd-summary',          // a newer summary replaces an older one rather than stacking
+    renotify: true,
+  }));
+});
+
+// Tapping it opens Job Hub -- the window already open if there is one.
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || './';
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    for (const c of list) {
+      if ('focus' in c) { c.navigate(url).catch(() => {}); return c.focus(); }
+    }
+    return self.clients.openWindow(url);
+  }));
 });
 
 // Lets the page tell a waiting worker to take over immediately, so an update

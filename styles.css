@@ -1175,3 +1175,17 @@
   .eq-urg-opt input:checked + span { border-color:var(--c); background:var(--surface-2);
     background:color-mix(in srgb, var(--c) 16%, var(--surface)); }
   @media (max-width:520px) { .eq-urg-pick { grid-template-columns:1fr; } }
+
+  /* ---- notifications & summaries ---- */
+  .ntf-block { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:12px 14px; margin-bottom:12px; }
+  .ntf-head { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; color:var(--accent-dark); margin-bottom:8px; }
+  .ntf-ok { color:var(--pos); font-weight:700; margin-bottom:8px; }
+  .ntf-warn { color:var(--neg); font-size:13px; }
+  .ntf-toggle { display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--border); cursor:pointer; }
+  .ntf-toggle:last-of-type { border-bottom:none; }
+  .ntf-toggle input { width:22px; height:22px; flex:none; accent-color:var(--brand); }
+  html[data-night] .ntf-toggle input { accent-color:var(--brand-2); }
+  .ntf-toggle span { display:flex; flex-direction:column; }
+  .ntf-toggle small { color:var(--muted); font-size:12px; }
+  .ntf-push-preview { margin-top:12px; padding:10px 12px; border-radius:12px; background:var(--surface-2); font-size:13px; }
+  .ntf-frame { width:100%; height:420px; border:1px solid var(--border); border-radius:8px; margin-top:10px; background:#fff; }
