@@ -288,6 +288,23 @@ async function start() {
     // script and cannot import any of this itself. Keeping Firestore specifics
     // behind these four functions means the sync code stays readable and the
     // SDK version can change without touching the app.
+    // Passes a snapshot on when documents changed, or when it first comes
+    // from the server rather than the local cache. Without the second case,
+    // a server answer identical to the cache never arrived at all -- so
+    // anything waiting to hear "the server has spoken" (creating the starter
+    // boards, the Maintenance board) waited forever. Metadata-only snapshots
+    // that change nothing else are dropped, so screens do not redraw for them.
+    function relay(onChange) {
+      let wasCache = null;
+      return snap => {
+        const changes = snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() }));
+        const fromCache = snap.metadata.fromCache;
+        if (!changes.length && fromCache === wasCache) return;
+        wasCache = fromCache;
+        onChange(changes, { size: snap.size, fromCache: fromCache });
+      };
+    }
+
     window.YDDb = {
       // Live subscription to every job. Fires immediately with what is cached
       // locally, then again whenever anything changes anywhere.
@@ -358,11 +375,8 @@ async function start() {
 
       watch(path, onChange, onError) {
         const parts = path.split('/');
-        return onSnapshot(collection(db, ...parts),
-          snap => onChange(
-            snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() })),
-            { size: snap.size, fromCache: snap.metadata.fromCache }
-          ),
+        return onSnapshot(collection(db, ...parts), { includeMetadataChanges: true },
+          relay(onChange),
           err => { console.error('[db] watch failed on', path, err); if (onError) onError(err); });
       },
 
@@ -393,11 +407,8 @@ async function start() {
       watchContains(path, field, value, onChange, onError) {
         const parts = path.split('/');
         const q = query(collection(db, ...parts), where(field, 'array-contains', value));
-        return onSnapshot(q,
-          snap => onChange(
-            snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() })),
-            { size: snap.size, fromCache: snap.metadata.fromCache }
-          ),
+        return onSnapshot(q, { includeMetadataChanges: true },
+          relay(onChange),
           err => { console.error('[db] shared-with watch failed on', path, err); if (onError) onError(err); });
       },
 

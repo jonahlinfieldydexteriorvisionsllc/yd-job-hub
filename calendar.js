@@ -176,6 +176,9 @@
     if (!hidden.has('auto:cards') && window.YDBoards) {
       YDBoards.dueCards().forEach(x => {
         if (x.card.due < from || x.card.due > to) return;
+        // A Maintenance card is the machine's own due date, which the
+        // Equipment layer already shows -- listing both put it on the day twice.
+        if (x.card.auto && x.card.equipmentId && isOwner()) return;
         if (onlyMine && !(x.card.assignees || []).some(a => a.uid === uid)) return;
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done,
