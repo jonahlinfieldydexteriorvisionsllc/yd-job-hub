@@ -38,10 +38,13 @@ started it through a one-use state value stored before they were sent to Intuit.
 """
 
 import datetime
+import hashlib
 import json
 import os
 import secrets
+import time
 import urllib.parse
+import uuid
 
 import requests
 from firebase_admin import firestore
@@ -67,6 +70,21 @@ API_BASE = {
 STATE_MINUTES = 15          # how long a half-finished connection stays valid
 TOKEN_DOC = ("integrations", "quickbooks")
 STATE_COLLECTION = "integrationState"
+
+# Failures that are Intuit's and usually pass: throttling and their own server
+# trouble. These are tried again after a growing pause; anything else is a real
+# answer and goes straight back to the owner.
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+RETRY_WAITS = (1, 3, 8)     # seconds before each further try; three, then give up
+MAX_RETRY_AFTER = 30        # never sit longer than this on Intuit's say-so
+
+
+class ReconnectNeeded(PermissionError):
+    """QuickBooks will not accept this connection any more; it must be remade.
+
+    A PermissionError so the web layer turns it into {"reconnect": true}, which
+    is what makes the app show the Connect button instead of a vague failure.
+    """
 
 
 def _env(name, default=""):
@@ -122,12 +140,69 @@ def _now():
 # ---------------------------------------------------------------- the dance
 
 
+def _tid(resp):
+    """Intuit's own id for a request -- the first thing their support asks for."""
+    return resp.headers.get("intuit_tid", "") or "none"
+
+
+def _retry_wait(resp, default):
+    """Intuit's Retry-After when it gives one, within reason; ours otherwise."""
+    try:
+        return min(int(resp.headers.get("Retry-After", "")), MAX_RETRY_AFTER)
+    except ValueError:
+        return default
+
+
+def _send(method, url, **kwargs):
+    """One request to Intuit, tried again when the failure is theirs and passing.
+
+    Only throttling, Intuit server errors and a dropped connection are retried.
+    A request that changes something (an invoice) must carry a requestid, which
+    makes Intuit answer a repeat with the original result rather than doing the
+    work twice -- otherwise a retry after a timeout could raise a second invoice.
+    """
+    for wait in RETRY_WAITS + (None,):
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            if wait is None:
+                raise RuntimeError("Could not reach QuickBooks: %s" % e)
+            print("quickbooks %s unreachable (%s), retrying in %ds" % (method, e.__class__.__name__, wait))
+            time.sleep(wait)
+            continue
+        if resp.status_code in RETRY_STATUSES and wait is not None:
+            pause = _retry_wait(resp, wait)
+            print("quickbooks %s -> %d intuit_tid=%s, retrying in %ds"
+                  % (method, resp.status_code, _tid(resp), pause))
+            time.sleep(pause)
+            continue
+        return resp
+
+
+def _token_error(resp):
+    """The OAuth error code, e.g. invalid_grant, or the raw text if there is none."""
+    try:
+        return resp.json().get("error", "") or resp.text[:300]
+    except ValueError:
+        return resp.text[:300]
+
+
+def _fault_message(resp):
+    """The human sentence out of an accounting API fault, not the whole envelope."""
+    try:
+        err = resp.json()["Fault"]["Error"][0]
+        return err.get("Detail") or err.get("Message") or resp.text[:400]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return resp.text[:400]
+
+
 def _exchange(grant_type, **extra):
     """Swap a code or a refresh token for a fresh pair. Never logs either."""
     cid, secret = _client()
     body = {"grant_type": grant_type}
     body.update(extra)
-    resp = requests.post(
+    resp = _send(
+        "POST",
         TOKEN_URL,
         auth=(cid, secret),
         data=body,
@@ -137,7 +212,19 @@ def _exchange(grant_type, **extra):
     if resp.status_code != 200:
         # Intuit puts the reason in the body; the body cannot contain our secret
         # because we sent that as a header, so it is safe to surface.
-        raise RuntimeError("QuickBooks refused the token request: %s" % resp.text[:300])
+        reason = _token_error(resp)
+        print("quickbooks token %s failed (%d) intuit_tid=%s: %s"
+              % (grant_type, resp.status_code, _tid(resp), reason))
+        if reason == "invalid_grant":
+            # The refresh token has expired or the owner revoked access in
+            # QuickBooks. Nothing on this side can mend that; only connecting
+            # again can, so say exactly that.
+            raise ReconnectNeeded(
+                "QuickBooks needs connecting again -- its permission has expired "
+                "or been withdrawn (Intuit ref %s)" % _tid(resp)
+            )
+        raise RuntimeError("QuickBooks refused the token request: %s (Intuit ref %s)"
+                           % (reason, _tid(resp)))
     return resp.json()
 
 
@@ -198,41 +285,65 @@ def _access_token(force_refresh=False):
         except (KeyError, ValueError):
             pass
 
-    payload = _exchange("refresh_token", refresh_token=tokens["refreshToken"])
+    try:
+        payload = _exchange("refresh_token", refresh_token=tokens["refreshToken"])
+    except ReconnectNeeded:
+        # Two requests can arrive together and both decide to refresh. The first
+        # rotates the refresh token, so the second is holding a used one and is
+        # refused. If the stored token has moved on since we read it, that is
+        # what happened -- use the new pair rather than declaring the connection
+        # dead.
+        latest = _load_tokens() or {}
+        if latest.get("refreshToken") and latest["refreshToken"] != tokens["refreshToken"]:
+            return latest["accessToken"], latest
+        raise
     fresh = _store_from_response(payload, tokens.get("realmId"))
     return fresh["accessToken"], fresh
 
 
-def _call(method, path, token, realm_id, params=None, body=None):
-    url = "%s/v3/company/%s/%s" % (_api_base(), realm_id, path.lstrip("/"))
-    params = dict(params or {})
-    params["minorversion"] = MINOR_VERSION
-    resp = requests.request(
-        method,
-        url,
-        params=params,
-        json=body,
-        headers={
-            "Authorization": "Bearer %s" % token,
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        timeout=40,
-    )
-    if resp.status_code in (401, 403):
-        raise PermissionError("QuickBooks rejected the connection")
-    if resp.status_code >= 400:
-        raise RuntimeError("QuickBooks said no (%d): %s" % (resp.status_code, resp.text[:400]))
-    return resp.json() if resp.content else {}
+def _call(method, path, params=None, body=None, request_id=None):
+    """One accounting API call against the connected company.
 
-
-def _company():
-    """Token plus realm, refreshing once if QuickBooks rejects the first try."""
-    token, tokens = _access_token()
-    realm = tokens.get("realmId")
-    if not realm:
-        raise RuntimeError("QuickBooks is connected but no company was recorded")
-    return token, realm, tokens
+    It fetches its own token rather than being handed one, so that a 401 can be
+    answered properly: an access token can be revoked or invalidated before its
+    hour is up, and the right response is to refresh once and try again. Only a
+    second refusal means the connection itself needs remaking.
+    """
+    for second_try in (False, True):
+        token, tokens = _access_token(force_refresh=second_try)
+        realm = tokens.get("realmId")
+        if not realm:
+            raise RuntimeError("QuickBooks is connected but no company was recorded")
+        url = "%s/v3/company/%s/%s" % (_api_base(), realm, path.lstrip("/"))
+        query = dict(params or {})
+        query["minorversion"] = MINOR_VERSION
+        if request_id:
+            query["requestid"] = request_id
+        resp = _send(
+            method,
+            url,
+            params=query,
+            json=body,
+            headers={
+                "Authorization": "Bearer %s" % token,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            },
+            timeout=40,
+        )
+        if resp.status_code == 401 and not second_try:
+            print("quickbooks %s %s -> 401 intuit_tid=%s, refreshing and trying once more"
+                  % (method, path, _tid(resp)))
+            continue
+        if resp.status_code in (401, 403):
+            print("quickbooks %s %s -> %d intuit_tid=%s" % (method, path, resp.status_code, _tid(resp)))
+            raise ReconnectNeeded("QuickBooks rejected the connection (Intuit ref %s)" % _tid(resp))
+        if resp.status_code >= 400:
+            reason = _fault_message(resp)
+            print("quickbooks %s %s -> %d intuit_tid=%s: %s"
+                  % (method, path, resp.status_code, _tid(resp), reason))
+            raise RuntimeError("QuickBooks said no: %s (Intuit ref %s)" % (reason, _tid(resp)))
+        return resp.json() if resp.content else {}
 
 
 # ---------------------------------------------------------------- endpoints
@@ -335,9 +446,12 @@ def status():
         "refreshExpiresAt": tokens.get("refreshExpiresAt", ""),
     }
     try:
-        token, realm, _ = _company()
-        info = _call("GET", "companyinfo/%s" % realm, token, realm)
+        info = _call("GET", "companyinfo/%s" % tokens.get("realmId", ""))
         out["company"] = (info.get("CompanyInfo") or {}).get("CompanyName", "")
+    except ReconnectNeeded as e:
+        # Tokens on file but QuickBooks will not honour them: show it as not
+        # connected, with the reason, so the Connect button is right there.
+        return {"connected": False, "reconnect": True, "env": out["env"], "error": str(e)}
     except Exception as e:                  # noqa: BLE001
         # Connected on paper but not actually working is worth saying plainly.
         out["warning"] = str(e)
@@ -364,14 +478,13 @@ def disconnect():
 
 def customers():
     """Every active customer, so snow accounts can be matched to them."""
-    token, realm, _ = _company()
     out, start = [], 1
     while True:
         query = (
             "select Id, DisplayName, PrimaryEmailAddr from Customer "
             "where Active = true startposition %d maxresults 100" % start
         )
-        data = _call("GET", "query", token, realm, params={"query": query})
+        data = _call("GET", "query", params={"query": query})
         rows = (data.get("QueryResponse") or {}).get("Customer") or []
         for c in rows:
             out.append(
@@ -389,9 +502,8 @@ def customers():
 
 def items():
     """Products and services, so invoice lines can point at the right one."""
-    token, realm, _ = _company()
     query = "select Id, Name, Type from Item where Active = true maxresults 200"
-    data = _call("GET", "query", token, realm, params={"query": query})
+    data = _call("GET", "query", params={"query": query})
     rows = (data.get("QueryResponse") or {}).get("Item") or []
     return {
         "items": [
@@ -407,9 +519,13 @@ def create_invoice(body):
     DocNumber is deliberately NOT sent. QuickBooks keeps its own sequence, and
     letting it assign the number is what makes the two systems incapable of
     disagreeing -- the app records what came back rather than predicting it.
-    """
-    token, realm, _ = _company()
 
+    The requestid makes a repeat of the same invoice harmless: Intuit answers it
+    with the invoice it already made instead of making another. It is built from
+    the app's requestKey (storm + account) AND the invoice itself, so retrying
+    the identical invoice is deduplicated, while an invoice that was corrected
+    after a refusal is treated as new rather than handed the old refusal back.
+    """
     customer_id = str(body.get("customerId") or "").strip()
     lines = body.get("lines") or []
     if not customer_id:
@@ -446,7 +562,14 @@ def create_invoice(body):
     if body.get("privateNote"):
         invoice["PrivateNote"] = str(body["privateNote"])[:4000]
 
-    created = _call("POST", "invoice", token, realm, body=invoice)
+    key = str(body.get("requestKey") or "").strip()
+    if key:
+        fingerprint = key + "|" + json.dumps(invoice, sort_keys=True)
+        request_id = hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()   # 40 chars; Intuit allows 50
+    else:
+        request_id = uuid.uuid4().hex          # still protects this request's own retries
+
+    created = _call("POST", "invoice", body=invoice, request_id=request_id)
     inv = created.get("Invoice") or {}
     return {
         "id": inv.get("Id"),

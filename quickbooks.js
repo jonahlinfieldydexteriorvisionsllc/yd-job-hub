@@ -87,7 +87,7 @@
         autoMatch();
       }
     } catch (e) {
-      state = { connected: false, error: e.message };
+      state = { connected: false, error: e.message, env: state && state.env };
     }
     busy = false;
     render();
@@ -325,6 +325,10 @@
           memo: 'Snow removal ' + label,
           privateNote: 'Raised from YD Job Hub, storm ' + stormId,
           lines: lines,
+          // The same storm and account always send the same key, so if the
+          // answer is lost on the way back and this is pressed again, QuickBooks
+          // hands back the invoice it already made instead of raising another.
+          requestKey: stormId + '/' + accountId,
         });
         // Written immediately, one at a time. If the next one fails, the ones
         // already raised are recorded and will not be raised twice.
@@ -335,7 +339,13 @@
         failed++;
         console.warn('[qb] invoice failed for', accountId, e.message);
         showToast((accounts[accountId] || {}).name + ': ' + e.message);
-        if (e.reconnect) { state = null; break; }
+        // A dead connection: stop, and show the Connect screen with the reason
+        // rather than failing every remaining account one by one.
+        if (e.reconnect) {
+          state = { connected: false, reconnect: true, error: e.message, env: state.env };
+          openQuickBooks();
+          break;
+        }
       }
     }
 
