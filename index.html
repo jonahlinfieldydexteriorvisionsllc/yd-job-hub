@@ -62,6 +62,7 @@
     <button class="tab-btn" id="tabClock" hidden onclick="switchTab('clock')"><span class="tab-icon">⏱️</span>Clock</button>
     <button class="tab-btn" id="tabCalendar" hidden onclick="switchTab('calendar')"><span class="tab-icon">📅</span>Calendar</button>
     <button class="tab-btn" id="tabBoards" hidden onclick="switchTab('boards')"><span class="tab-icon">📌</span>Boards</button>
+    <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn" id="tabMatdash" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
@@ -500,6 +501,16 @@
     </div>
   </div>
 
+  <!-- ============ TAB: SUPPLIES ============ -->
+  <div class="tab-panel" id="panel-supplies">
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Supplies — where to get it</span>
+      </div>
+      <div class="section-body" id="suppliesWrap"></div>
+    </div>
+  </div>
+
   <!-- ============ TAB: EQUIPMENT ============ -->
   <div class="tab-panel" id="panel-equipment">
     <div class="section">
@@ -601,6 +612,16 @@
       <button class="modal-close" onclick="closeBoardModal()">&times;</button>
     </div>
     <div class="modal-body" id="boardModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="supModal" onclick="if(event.target===this)closeSupModal()">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-head">
+      <h2 id="supModalTitle">Supplies</h2>
+      <button class="modal-close" onclick="closeSupModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="supModalBody"></div>
   </div>
 </div>
 
@@ -786,6 +807,7 @@
 <script src="./equipment.js"></script>
 <script src="./boards.js"></script>
 <script src="./calendar.js"></script>
+<script src="./supplies.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

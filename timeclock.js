@@ -798,7 +798,16 @@
     if (badge) badge.textContent = waiting.filter(u => u.role === 'pending').length
       ? waiting.filter(u => u.role === 'pending').length + ' asking to join' : '';
 
+    // The owner's own row comes first, so their name can be changed too.
+    const meRec = people[(me() || {}).uid];
     wrap.innerHTML =
+      (meRec
+        ? '<div class="crew-row">' +
+            '<span class="crew-name">' + esc(meRec.name || meRec.email) + ' <span class="crew-mail">(you)</span></span>' +
+            '<span class="crew-mail">' + esc(meRec.email || '') + '</span>' +
+            '<button class="btn btn-sm" onclick="renameWorker(\'' + safeId(meRec.uid) + '\')">Rename</button>' +
+          '</div>'
+        : '') +
       (waiting.length
         ? waiting.map(u => '<div class="crew-row waiting">' +
             '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
@@ -815,6 +824,7 @@
             '<button class="crew-name linkish" onclick="openWorker(\'' + safeId(u.uid) + '\')">' +
               esc(u.name || u.email) + '</button>' +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
+            '<button class="btn btn-sm" onclick="renameWorker(\'' + safeId(u.uid) + '\')">Rename</button>' +
             '<button class="btn btn-sm" onclick="setWorkerRate(\'' + safeId(u.uid) + '\')">' +
               money(rateOf(u.uid)) + '/hr</button>' +
             '<button class="remove-btn" onclick="removeCrew(\'' + safeId(u.uid) + '\')" title="Switch off">&times;</button>' +
@@ -831,6 +841,20 @@
       .catch(e => console.warn('[clock] role change not saved:', e.code || e.message));
     if (msg) showToast(msg);
   }
+
+  // The name shown everywhere -- the clock, the work log, boards, calendars.
+  // It starts as whatever the person's Google account is called, which is
+  // often a nickname or an email address.
+  window.renameWorker = function (uid) {
+    const u = people[uid];
+    if (!u || !isOwner()) return;
+    const now = u.name || u.email || '';
+    const name = prompt('What should ' + (now || 'this person') + ' be called in Job Hub?', now);
+    if (name === null) return;
+    const clean = name.trim().slice(0, 60);
+    if (!clean) { showToast('A name cannot be blank'); return; }
+    setRole(uid, { name: clean }, 'Renamed to ' + clean);
+  };
 
   window.approveCrew = function (uid) {
     const u = people[uid];

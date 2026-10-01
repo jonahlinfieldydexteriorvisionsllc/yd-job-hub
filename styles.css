@@ -1108,3 +1108,44 @@
   html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnNew,
   html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnMyJobs,
   html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #ctxBar { display:none !important; }
+
+  /* ---- board settings: one row per column and per label ---- */
+  .bd-edit-list { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
+  .bd-edit-row { display:flex; align-items:center; gap:6px; }
+  .bd-edit-row input { flex:1; min-width:0; }
+  .bd-edit-num { flex:none; width:24px; height:24px; border-radius:50%; background:var(--surface-2);
+    border:1px solid var(--border); font-size:11px; font-weight:700; color:var(--muted);
+    display:inline-flex; align-items:center; justify-content:center; }
+  .bd-edit-btn { flex:none; width:40px; height:40px; border-radius:8px; border:1.5px solid var(--border-strong);
+    background:var(--surface); color:var(--text); font-size:15px; cursor:pointer; }
+  .bd-edit-btn:disabled { opacity:.35; cursor:default; }
+  .bd-edit-btn.del { color:var(--neg); }
+  .bd-edit-label { padding:9px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
+  .bd-edit-label .bd-label { flex:none; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bd-swatches.small { gap:6px; margin-top:8px; }
+  .bd-dotpick { width:26px; height:26px; border-radius:50%; background:var(--c); cursor:pointer;
+    border:3px solid var(--surface); box-shadow:0 0 0 1.5px var(--border-strong); padding:0; }
+  .bd-dotpick.on { box-shadow:0 0 0 3px var(--text); }
+
+  /* ---- supplies ---- */
+  @media (max-width:720px) {
+    #tabSupplies { display:none; }
+    html[data-crew] #tabSupplies:not([hidden]) { display:block; }
+  }
+  .sup-search { font-size:17px; min-height:52px; margin-bottom:10px; }
+  .sup-actions { margin:0 0 12px; }
+  .sup-item { border:1px solid var(--border); border-radius:10px; background:var(--surface);
+    padding:12px 14px; margin-bottom:10px; }
+  .sup-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .sup-name { font-weight:700; font-size:16px; }
+  .sup-unit { font-size:11px; color:var(--muted); padding:2px 8px; border:1px solid var(--border); border-radius:10px; }
+  .sup-edit { margin-left:auto; }
+  .sup-where { margin-top:6px; font-size:15px; color:var(--text); }
+  .sup-where b { color:var(--accent-dark); }
+  html[data-night] .sup-where b { color:var(--accent); }
+  .sup-notes { margin-top:5px; font-size:13px; color:var(--muted); white-space:pre-wrap; }
+  .sup-links { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .sup-links a.btn { text-decoration:none; }
+  .sup-hours { font-size:12px; color:var(--muted); }
+  .sup-vendor { display:flex; justify-content:space-between; align-items:center; gap:10px;
+    padding:10px 0; border-bottom:1px solid var(--border); }

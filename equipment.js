@@ -288,7 +288,7 @@
 
     const entry = {
       id: 'sv' + Date.now().toString(36),
-      at: val('svAt') || new Date().toISOString().slice(0, 10),
+      at: val('svAt') || localDay(),   // the LOCAL date; toISOString() is tomorrow after 7 pm
       what: what,
       costCents: num('svCost') != null ? Math.round(num('svCost') * 100) : null,
       hours: num('svHours'),
@@ -425,11 +425,31 @@
     // A machine added with a reading and an interval already knows when it is
     // next due, rather than looking like nothing is scheduled until the first
     // service is logged.
-    if (rec.hours != null && rec.intervalHours) rec.dueHours = round1(rec.hours + rec.intervalHours);
-    else if (was.dueHours != null) rec.dueHours = was.dueHours;
-    if (rec.miles != null && rec.intervalMiles) rec.dueMiles = Math.round(rec.miles + rec.intervalMiles);
-    else if (was.dueMiles != null) rec.dueMiles = was.dueMiles;
-    if (was.dueDate) rec.dueDate = was.dueDate;
+    //
+    // Only worked out when there is nothing to keep, or the interval itself was
+    // changed. Re-working it on every save meant that editing the notes on a
+    // mower due at 50 hours quietly moved it to "due at 98" -- hiding the very
+    // service this screen exists to remind about.
+    const hoursChanged = rec.intervalHours !== (was.intervalHours != null ? was.intervalHours : null);
+    const milesChanged = rec.intervalMiles !== (was.intervalMiles != null ? was.intervalMiles : null);
+    const daysChanged = rec.intervalDays !== (was.intervalDays != null ? was.intervalDays : null);
+    if (rec.hours != null && rec.intervalHours && (was.dueHours == null || hoursChanged)) {
+      rec.dueHours = round1(rec.hours + rec.intervalHours);
+    } else if (was.dueHours != null && rec.intervalHours) rec.dueHours = was.dueHours;
+    else rec.dueHours = null;
+    if (rec.miles != null && rec.intervalMiles && (was.dueMiles == null || milesChanged)) {
+      rec.dueMiles = Math.round(rec.miles + rec.intervalMiles);
+    } else if (was.dueMiles != null && rec.intervalMiles) rec.dueMiles = was.dueMiles;
+    else rec.dueMiles = null;
+    // A machine that goes by date gets a first due date counted from today
+    // (or from its last service), so it lands on the calendar straight away.
+    if (rec.intervalDays && (!was.dueDate || daysChanged)) {
+      const l = last(was);
+      const base = new Date(((l && l.at) || localDay()) + 'T00:00:00');
+      base.setDate(base.getDate() + rec.intervalDays);
+      rec.dueDate = localDay(base);
+    } else if (was.dueDate && rec.intervalDays) rec.dueDate = was.dueDate;
+    else rec.dueDate = was.dueDate || null;
 
     gear[id] = Object.assign({ id: id }, rec);
     editingId = null; openId = id;
@@ -448,7 +468,11 @@
       .catch(e => console.warn('[equipment] not removed:', e.code || e.message));
   };
 
-  const two = n => String(n).padStart(2, '0');
+  function two(n) { return String(n).padStart(2, '0'); }
+  function localDay(d) {
+    d = d || new Date();
+    return d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+  }
 
   function write(id, data, what) {
     if (!window.YDDb) { showToast('Not saved — still connecting'); return; }
@@ -469,8 +493,111 @@
       });
       renderEquipment();
       if (openId && gear[openId] && !editingId) renderDetail();
+      scheduleMaintSync();
     }, () => renderEquipment());
   }
+
+  // ------------------------------------------------- the maintenance board
+  //
+  // Every machine with a next service gets one card on the Maintenance board,
+  // kept in step from here: made when an interval is set, updated when a
+  // service is logged or the due point changes, removed with the machine. The
+  // calendar needs nothing from here -- it reads the due dates straight off
+  // these records, so it can never show a date the machine no longer has.
+  //
+  // The card is the machine's NEXT service. Logging a service starts a new
+  // cycle, so the card goes back to the first column with its new due point;
+  // anything else (a rename, a label turning from "due soon" to "overdue")
+  // updates the card where it sits. The card's column is only ever written at
+  // the start of a cycle, so a card someone moved to "Booked in" stays put.
+
+  const MAINT = 'maintenance';
+  let maintTimer = null;
+
+  function dueKey(g) { return [g.dueDate || '', g.dueHours != null ? g.dueHours : '', g.dueMiles != null ? g.dueMiles : ''].join('|'); }
+  function hasDue(g) { return !!(g.dueDate || g.dueHours != null || g.dueMiles != null); }
+
+  // Absolute wording ("by Oct 15", "at 250 hours") rather than "due in 5 days",
+  // which would change every day and rewrite every card daily for nothing.
+  function dueWords(g) {
+    const bits = [];
+    if (g.dueDate) bits.push('by ' + shortDate(g.dueDate));
+    if (g.dueHours != null) bits.push('at ' + round1(g.dueHours) + ' hours');
+    if (g.dueMiles != null) bits.push('at ' + fmtNum(g.dueMiles) + ' miles');
+    return bits.join(' or ');
+  }
+
+  function scheduleMaintSync() {
+    clearTimeout(maintTimer);
+    maintTimer = setTimeout(syncMaintenance, 400);
+  }
+
+  function syncMaintenance() {
+    // Only once the boards have actually loaded from the server -- deciding
+    // "there is no Maintenance board" from an empty first read would make one
+    // over the top of the real one.
+    if (!isOwner() || !window.YDDb || !window.YDBoards || !YDBoards.ready()) return;
+    let board = YDBoards.boards()[MAINT];
+    if (!board) {
+      board = {
+        name: 'Maintenance', color: '#8a6d3b', order: 3, visibleTo: [],
+        columns: [{ id: 'm0', name: 'Due' }, { id: 'm1', name: 'Booked in' }, { id: 'm2', name: 'Done' }],
+        labels: [{ id: 'overdue', name: 'Overdue', color: '#d64545' },
+                 { id: 'soon', name: 'Due soon', color: '#e0a526' }],
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      };
+      Promise.resolve(window.YDDb.put('boards', MAINT, board))
+        .catch(e => console.warn('[equipment] maintenance board not yet saved:', e.code || e.message));
+      board = Object.assign({ id: MAINT }, board);
+    }
+    const first = board.columns[0].id;
+    const have = (YDBoards.cards()[MAINT]) || {};
+    const path = 'boards/' + MAINT + '/cards';
+
+    Object.values(gear).forEach(g => {
+      const id = 'eq-' + g.id;
+      const k = have[id];
+      if (!hasDue(g)) {
+        if (k) Promise.resolve(window.YDDb.remove(path, id)).catch(() => {});
+        return;
+      }
+      const state = due(g).state;
+      const want = {
+        title: (g.name || 'Machine') + ' — service due',
+        due: g.dueDate || null,
+        notes: 'Next service ' + dueWords(g) + '.' +
+          (g.notes ? '\n\n' + g.notes : '') +
+          '\n\nLog the service on the Equipment tab and this card resets itself for the next one.',
+        labels: state === 'overdue' ? ['overdue'] : state === 'soon' ? ['soon'] : [],
+        equipmentId: g.id,
+        dueKey: dueKey(g),
+        auto: true,
+      };
+      const newCycle = !k || k.dueKey !== want.dueKey;
+      const same = k && !newCycle && k.title === want.title && k.due === want.due &&
+        k.notes === want.notes && JSON.stringify(k.labels || []) === JSON.stringify(want.labels);
+      if (same) return;
+      const patch = Object.assign({}, want, { updatedAt: new Date().toISOString(), updatedBy: 'Equipment' });
+      // A known card whose due point moved has been serviced: back to the start.
+      if (k && newCycle) { patch.column = first; patch.doneAt = null; }
+      if (!k) patch.createdAt = new Date().toISOString();
+      Promise.resolve(window.YDDb.put(path, id, patch))
+        .catch(e => console.warn('[equipment] card not yet saved:', e.code || e.message));
+    });
+
+    // Cards for machines that have been removed.
+    Object.keys(have).forEach(id => {
+      const k = have[id];
+      if (k.auto && k.equipmentId && !gear[k.equipmentId]) {
+        Promise.resolve(window.YDDb.remove(path, id)).catch(() => {});
+      }
+    });
+  }
+
+  document.addEventListener('yd-boards-ready', scheduleMaintSync);
+  // The Maintenance cards themselves arrive a moment after the boards do;
+  // checking again then is what lets a removed machine's card be cleared.
+  document.addEventListener('yd-cards-changed', () => { if (YDBoards.boards()[MAINT]) scheduleMaintSync(); });
 
   window.YDEquipment = {
     all: () => gear,

@@ -392,6 +392,20 @@ service cloud.firestore {
       }
     }
 
+    // ===================================================================
+    // Supplies and suppliers -- what we use and where to buy it. Everyone
+    // signed in reads them (that is the point); only the owner edits. No
+    // prices are kept here, because crew can read every field.
+    // ===================================================================
+    match /supplies/{docId} {
+      allow read:  if isStaff();
+      allow write: if isOwner();
+    }
+    match /vendors/{docId} {
+      allow read:  if isStaff();
+      allow write: if isOwner();
+    }
+
     match /boards/{boardId} {
       allow read: if isOwner()
         || (isCrew() && request.auth.uid in resource.data.visibleTo);

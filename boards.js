@@ -85,6 +85,7 @@
   let unsubBoards = null, unsubPeople = null;
   let cardUnsubs = {};
   let seeded = false;
+  let ready = false;        // boards have arrived from the server at least once
   let dragging = null;      // { boardId, cardId } while a card is dragged
 
   const el = id => document.getElementById(id);
@@ -672,6 +673,12 @@
 
   // ------------------------------------------------------- board settings
 
+  // The columns and labels being edited, kept here while the form is open so
+  // adding, removing and reordering can redraw the lists without losing what
+  // has been typed. Each keeps its id from when it was made: renaming a column
+  // keeps its cards, and deleting the middle one moves only ITS cards.
+  let draftCols = [], draftLabels = [];
+
   window.editBoard = function (id) {
     if (!isOwner()) return;
     editingBoard = id;
@@ -679,6 +686,9 @@
     const crew = crewPeople().filter(p => p.role === 'crew');
     const shared = new Set(b.visibleTo || []);
     const color = b.color || PALETTE[Object.keys(boards).length % PALETTE.length];
+    draftCols = (b.columns || TEMPLATES.crew.columns.map(n => ({ name: n })))
+      .map(c => ({ id: c.id || null, name: c.name }));
+    draftLabels = (b.labels || DEFAULT_LABELS).map(l => ({ id: l.id, name: l.name, color: l.color }));
 
     openModal(id ? 'Board settings' : 'New board',
       '<div class="field"><span class="label">Name</span>' +
@@ -688,20 +698,22 @@
           (c === color ? ' checked' : '') + '><span></span></label>').join('') + '</div></div>' +
       (id ? '' :
         '<div class="field"><span class="label">Start from</span><select id="bdTemplate" onchange="bdTemplateChanged()">' +
-          Object.keys(TEMPLATES).map(t => '<option value="' + t + '">' + TEMPLATES[t].label + '</option>').join('') +
+          Object.keys(TEMPLATES).map(t => '<option value="' + t + '"' + (t === 'crew' ? ' selected' : '') + '>' +
+            TEMPLATES[t].label + '</option>').join('') +
         '</select></div>') +
-      '<div class="field"><span class="label">Columns — one per line, left to right</span>' +
-        '<textarea id="bdCols" rows="4">' + esc((b.columns || TEMPLATES.crew.columns.map(n => ({ name: n })))
-          .map(c => c.name).join('\n')) + '</textarea>' +
-        '<div class="hint">The last column counts as done. Renaming a column keeps its cards; ' +
-        'deleting one moves its cards to the first column.</div></div>' +
-      '<div class="field"><span class="label">Labels — one per line, as Name #colour (colour optional)</span>' +
-        '<textarea id="bdLabels" rows="4">' + esc((b.labels || DEFAULT_LABELS)
-          .map(l => l.name + ' ' + l.color).join('\n')) + '</textarea></div>' +
+      '<div class="field"><span class="label">Columns, left to right</span>' +
+        '<div id="bdColList" class="bd-edit-list"></div>' +
+        '<button class="btn btn-sm" onclick="bdColAdd()">+ Add a column</button>' +
+        '<div class="hint">The last column counts as done. Cards in a column you delete move to the first column.</div>' +
+      '</div>' +
+      '<div class="field"><span class="label">Labels</span>' +
+        '<div id="bdLabelList" class="bd-edit-list"></div>' +
+        '<button class="btn btn-sm" onclick="bdLabelAdd()">+ Add a label</button>' +
+      '</div>' +
       '<div class="field"><span class="label">Who can see it</span>' +
         (crew.length
           ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdShare" value="' +
-              p.uid + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
+              esc(p.uid) + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
             '<div class="hint">Anyone ticked sees this board and its cards, can move cards and tick ' +
             'checklists. They cannot add, edit or delete cards. Leave everyone unticked to keep it to yourself.</div>'
           : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
@@ -711,43 +723,104 @@
         '<button class="btn btn-sm" onclick="closeBoardModal()">Cancel</button>' +
         (id ? '<button class="btn btn-sm" onclick="removeBoard(\'' + id + '\')">Delete board</button>' : '') +
       '</div>');
-    const n = el('bdName'); if (n) n.focus();
+    drawDrafts();
+    const n = el('bdName'); if (n && !id) n.focus();
+  };
+
+  // Read whatever has been typed back into the drafts before a redraw.
+  function readDrafts() {
+    document.querySelectorAll('.bdColName').forEach((inp, i) => { if (draftCols[i]) draftCols[i].name = inp.value; });
+    document.querySelectorAll('.bdLabelName').forEach((inp, i) => { if (draftLabels[i]) draftLabels[i].name = inp.value; });
+  }
+
+  function drawDrafts() {
+    const cl = el('bdColList'), ll = el('bdLabelList');
+    if (cl) cl.innerHTML = draftCols.map((c, i) =>
+      '<div class="bd-edit-row">' +
+        '<span class="bd-edit-num">' + (i + 1) + '</span>' +
+        '<input class="bdColName" value="' + esc(c.name) + '" placeholder="Column name" aria-label="Column ' + (i + 1) + '">' +
+        '<button class="bd-edit-btn" onclick="bdColMove(' + i + ', -1)"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move earlier">↑</button>' +
+        '<button class="bd-edit-btn" onclick="bdColMove(' + i + ', 1)"' + (i === draftCols.length - 1 ? ' disabled' : '') + ' aria-label="Move later">↓</button>' +
+        '<button class="bd-edit-btn del" onclick="bdColRemove(' + i + ')"' + (draftCols.length === 1 ? ' disabled' : '') + ' aria-label="Delete column">✕</button>' +
+      '</div>').join('');
+    if (ll) ll.innerHTML = draftLabels.length ? draftLabels.map((l, i) =>
+      '<div class="bd-edit-label">' +
+        '<div class="bd-edit-row">' +
+          '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name || 'Label') + '</span>' +
+          '<input class="bdLabelName" value="' + esc(l.name) + '" placeholder="Label name" ' +
+            'oninput="this.previousElementSibling.textContent = this.value || \'Label\'" aria-label="Label name">' +
+          '<button class="bd-edit-btn del" onclick="bdLabelRemove(' + i + ')" aria-label="Delete label">✕</button>' +
+        '</div>' +
+        '<div class="bd-swatches small">' + PALETTE.map(c =>
+          '<button class="bd-dotpick' + (c === l.color ? ' on' : '') + '" style="--c:' + c + '" ' +
+          'onclick="bdLabelColor(' + i + ', \'' + c + '\')" aria-label="Colour"></button>').join('') + '</div>' +
+      '</div>').join('') : '<div class="hint">No labels.</div>';
+  }
+
+  window.bdColAdd = function () {
+    readDrafts();
+    // New columns go in just before the last (done) column, which is nearly
+    // always where a new step belongs.
+    draftCols.splice(Math.max(0, draftCols.length - 1), 0, { id: null, name: '' });
+    drawDrafts();
+    const inputs = document.querySelectorAll('.bdColName');
+    const box = inputs[Math.max(0, draftCols.length - 2)];
+    if (box) box.focus();
+  };
+  window.bdColMove = function (i, d) {
+    readDrafts();
+    const j = i + d;
+    if (j < 0 || j >= draftCols.length) return;
+    const t = draftCols[i]; draftCols[i] = draftCols[j]; draftCols[j] = t;
+    drawDrafts();
+  };
+  window.bdColRemove = function (i) {
+    readDrafts();
+    if (draftCols.length <= 1) return;
+    draftCols.splice(i, 1);
+    drawDrafts();
+  };
+  window.bdLabelAdd = function () {
+    readDrafts();
+    draftLabels.push({ id: null, name: '', color: PALETTE[draftLabels.length % PALETTE.length] });
+    drawDrafts();
+    const inputs = document.querySelectorAll('.bdLabelName');
+    if (inputs.length) inputs[inputs.length - 1].focus();
+  };
+  window.bdLabelRemove = function (i) { readDrafts(); draftLabels.splice(i, 1); drawDrafts(); };
+  window.bdLabelColor = function (i, c) {
+    readDrafts();
+    if (draftLabels[i] && /^#[0-9a-fA-F]{6}$/.test(c)) draftLabels[i].color = c;
+    drawDrafts();
   };
 
   window.bdTemplateChanged = function () {
     const t = TEMPLATES[val('bdTemplate')] || TEMPLATES.blank;
-    el('bdCols').value = t.columns.join('\n');
+    draftCols = t.columns.map(n => ({ id: null, name: n }));
+    drawDrafts();
   };
-
-  function parseLabels(text, old) {
-    return text.split(/\r?\n/).map(s => s.trim()).filter(Boolean).map((line, i) => {
-      const m = line.match(/^(.*?)\s*(#[0-9a-fA-F]{6})?$/);
-      const name = (m ? m[1] : line).trim() || 'Label';
-      const prev = (old || []).find(l => l.name.toLowerCase() === name.toLowerCase());
-      return { id: prev ? prev.id : 'lb' + i + Date.now().toString(36),
-               name: name, color: (m && m[2]) || (prev && prev.color) || PALETTE[i % PALETTE.length] };
-    });
-  }
 
   window.saveBoard = function () {
     if (!isOwner()) return;
+    readDrafts();
     const name = val('bdName');
     if (!name) { showToast('Give the board a name'); return; }
+    const cols = draftCols.map(c => ({ id: c.id, name: String(c.name || '').trim() })).filter(c => c.name);
+    if (!cols.length) { showToast('A board needs at least one column'); return; }
     const id = editingBoard || newId('bd');
     const was = boards[id] || {};
-    const oldCols = was.columns || [];
-    const names = el('bdCols').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (!names.length) { showToast('A board needs at least one column'); return; }
-    // Columns keep their id by position, so renaming "Doing" to "In progress"
-    // leaves its cards where they are.
-    const columns = names.map((n, i) => ({ id: oldCols[i] ? oldCols[i].id : 'col' + i + Date.now().toString(36), name: n }));
+    const stamp = Date.now().toString(36);
+    const columns = cols.map((c, i) => ({ id: c.id || 'col' + i + stamp, name: c.name }));
+    const labels = draftLabels.filter(l => String(l.name || '').trim()).map((l, i) => ({
+      id: l.id || 'lb' + i + stamp, name: String(l.name).trim(), color: safeColor(l.color),
+    }));
     const colorInput = document.querySelector('input[name="bdColor"]:checked');
 
     const rec = {
       name: name,
       color: colorInput ? colorInput.value : PALETTE[0],
       columns: columns,
-      labels: parseLabels(el('bdLabels').value, was.labels),
+      labels: labels,
       visibleTo: Array.from(document.querySelectorAll('.bdShare:checked')).map(i => i.value),
       order: was.order != null ? was.order : Object.keys(boards).length + 1,
       createdAt: was.createdAt || nowIso(),
@@ -857,6 +930,12 @@
     // Only seed once the server has actually answered. An empty answer from the
     // local cache on a fresh phone would otherwise create the starter boards a
     // second time.
+    // The first answer from the server, as opposed to the local cache: only
+    // now is "this board does not exist" actually true.
+    if (meta && !meta.fromCache && !ready) {
+      ready = true;
+      document.dispatchEvent(new CustomEvent('yd-boards-ready'));
+    }
     if (isOwner() && !seeded && meta && !meta.fromCache) {
       seeded = true;
       if (!Object.keys(boards).length) seedOnce();
@@ -902,7 +981,7 @@
     if (unsubBoards) { unsubBoards(); unsubBoards = null; }
     if (unsubPeople) { unsubPeople(); unsubPeople = null; }
     Object.values(cardUnsubs).forEach(u => u());
-    cardUnsubs = {}; boards = {}; cards = {}; people = {}; seeded = false; current = null;
+    cardUnsubs = {}; boards = {}; cards = {}; people = {}; seeded = false; current = null; ready = false;
   }
 
   function start(a) {
@@ -926,6 +1005,7 @@
 
   window.YDBoards = {
     render: render,
+    ready: () => ready,
     boards: () => boards,
     cards: () => cards,
     people: () => people,

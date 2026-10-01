@@ -279,7 +279,8 @@ function closeMore() {
 function tabButtonId(name) {
   return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
     dashboard: 'tabDashboard', matdash: 'tabMatdash', contacts: 'tabContacts',
-    equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards' }[name] || '';
+    equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
+    supplies: 'tabSupplies' }[name] || '';
 }
 
 // ---- Header overflow menu (Backup / Restore / Print) ----
@@ -306,14 +307,15 @@ document.addEventListener('keydown', e => {
 // The bar on a phone holds only what gets used in the field. The rest is one
 // tap away behind More, which is what stops every new screen making the bar
 // more crowded than the last.
-const TABS = ['job', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'tracking', 'dashboard', 'matdash', 'contacts'];
+const TABS = ['job', 'snow', 'clock', 'calendar', 'boards', 'supplies', 'equipment', 'tracking', 'dashboard', 'matdash', 'contacts'];
 const PHONE_TABS = ['job', 'snow', 'clock', 'calendar', 'dashboard'];
 const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
-  calendar: '📅 Calendar', boards: '📌 Boards',
+  calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies',
   equipment: '🚜 Equipment', tracking: '🔨 Tracking',
   dashboard: '📊 All Jobs', matdash: '📦 Materials',
   contacts: '📇 Contacts' };
 const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
+  supplies: 'What we use and where to buy it',
   equipment: 'What each machine and truck is due for',
   tracking: 'Hours and materials on the job you have open',
   matdash: 'What you have bought across every job',
@@ -347,6 +349,7 @@ function switchTab(name) {
   if (name === 'equipment' && window.YDEquipment) YDEquipment.render();
   if (name === 'calendar' && window.YDCalendar) YDCalendar.render();
   if (name === 'boards' && window.YDBoards) YDBoards.render();
+  if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();

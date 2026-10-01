@@ -393,7 +393,7 @@
           (o.note ? ' · ' + esc(o.note) : '') +
         '</div>' +
         ((o.crew || []).length ? '<div class="cal-crew">' + o.crew.map(c =>
-          '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(firstName(c.name)) + '</span>').join('') + '</div>' : '') +
+          '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(firstName(nameOf(c))) + '</span>').join('') + '</div>' : '') +
       '</div>' +
     '</div>';
   }
@@ -402,6 +402,9 @@
     const x = /^\d/.test(a) && a.indexOf(':') !== -1 && !/[ap]m$/.test(a) ? fmtTime(a) : a;
     return b ? x + '–' + fmtTime(b) : x;
   }
+  // A person's CURRENT name where it is known (the owner's phone), so a rename
+  // shows on events made before it; otherwise the name saved on the event.
+  function nameOf(c) { return (people[c.uid] && people[c.uid].name) || c.name; }
   function firstName(n) { return String(n || '').split(/[\s@]/)[0] || 'Crew'; }
 
   // Each person keeps the same colour everywhere, worked out from their uid so
@@ -477,7 +480,7 @@
         (ev.address ? '<a class="snow-addr" href="' + mapUrl + '" target="_blank" rel="noopener">📍 ' + esc(ev.address) +
           '<span class="snow-go">Directions</span></a>' : '') +
         ((ev.crew || []).length ? '<div class="cal-detail-line">👷 ' + ev.crew.map(c =>
-          '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(c.name) + '</span>').join(' ') + '</div>' : '') +
+          '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(nameOf(c)) + '</span>').join(' ') + '</div>' : '') +
         (ev.notes ? '<div class="bd-notes">' + esc(ev.notes) + '</div>' : '') +
       '</div>' +
       '<div class="field-actions">' +
