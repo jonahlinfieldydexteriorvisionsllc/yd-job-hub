@@ -27,7 +27,27 @@
   // How close to due counts as "coming up". Different units, same idea.
   const SOON = { days: 30, hours: 10, miles: 500 };
 
+  // How urgent a noted problem is, most urgent first. Worded the way it gets
+  // said in the yard, because the point is that anyone picking up the keys
+  // knows at a glance whether they can use the thing.
+  const URGENCY = [
+    { id: 'down', label: 'Out of service', hint: 'do not use it until it is fixed', color: '#d64545' },
+    { id: 'before', label: 'Before next use', hint: 'fix it before it goes out again', color: '#e07b24' },
+    { id: 'soon', label: 'Soon', hint: 'this week', color: '#e0a526' },
+    { id: 'whenever', label: 'When you have time', hint: 'not holding anything up', color: '#6b7a8f' },
+  ];
+  const urgencyOf = id => URGENCY.find(u => u.id === id) || URGENCY[URGENCY.length - 1];
+  const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
+
+  // Problems are kept on the machine's record beside its service history, for
+  // the same reason: a machine has a handful, and one document means one read
+  // and a history that cannot half-load.
+  const openIssues = g => (g.issues || []).filter(i => !i.doneAt)
+    .sort((a, b) => rankOf(a.urgency) - rankOf(b.urgency) || String(a.at).localeCompare(String(b.at)));
+  const worstIssue = g => openIssues(g)[0] || null;
+
   let gear = {};
+  let notingIssue = false;   // the "note a problem" form is open
   let unsub = null;
   let openId = null;      // the machine whose history is on screen
   let editingId = null;   // the machine being edited, '' for a new one
@@ -107,18 +127,24 @@
     const overdue = all.filter(g => due(g).state === 'overdue');
     const soon = all.filter(g => due(g).state === 'soon');
 
+    const down = all.filter(g => (worstIssue(g) || {}).urgency === 'down');
     const badge = el('eqBadge');
     if (badge) {
-      badge.textContent = overdue.length ? overdue.length + ' overdue'
+      badge.textContent = down.length ? down.length + ' out of service'
+        : overdue.length ? overdue.length + ' overdue'
         : soon.length ? soon.length + ' coming up' : '';
-      badge.className = 'section-badge' + (overdue.length ? ' accent' : '');
+      badge.className = 'section-badge' + (down.length || overdue.length ? ' accent' : '');
     }
 
+    // Anything out of service first, then whatever must be fixed before it is
+    // used, then by service due.
+    const issueRank = g => { const w = worstIssue(g); return w ? rankOf(w.urgency) : URGENCY.length; };
     const list = all
       .filter(g => filter === 'all' || g.kind === filter)
       .sort((a, b) => {
         const order = { overdue: 0, soon: 1, ok: 2, none: 3 };
-        return order[due(a).state] - order[due(b).state] ||
+        return Math.min(issueRank(a), 2) - Math.min(issueRank(b), 2) ||
+               order[due(a).state] - order[due(b).state] ||
                String(a.name || '').localeCompare(b.name || '');
       });
 
@@ -150,6 +176,7 @@
       (g.make || g.model || g.year
         ? '<div class="eq-what">' + esc([g.year, g.make, g.model].filter(Boolean).join(' ')) + '</div>'
         : '') +
+      issueLine(g) +
       '<div class="eq-last">' +
         (l ? 'Last: ' + shortDate(l.at) + ' — ' + esc(l.what)
            : 'Nothing logged yet') +
@@ -164,16 +191,29 @@
     '</div>';
   }
 
+  // The one line on a machine's card about what is wrong with it: the most
+  // urgent problem, and how many more.
+  function issueLine(g) {
+    const open = openIssues(g);
+    if (!open.length) return '';
+    const u = urgencyOf(open[0].urgency);
+    return '<div class="eq-issue" style="--c:' + u.color + '">' +
+      '<span class="eq-urg">' + esc(u.label) + '</span> ' + esc(open[0].what) +
+      (open.length > 1 ? ' <span class="eq-more">+' + (open.length - 1) + ' more</span>' : '') +
+    '</div>';
+  }
+
   // -------------------------------------------------------------- the detail
 
   window.openEquipment = function (id) {
     openId = id;
+    notingIssue = false;
     const m = el('eqModal');
     if (m) m.classList.add('active');
     renderDetail();
   };
   window.closeEquipment = function () {
-    openId = null; editingId = null;
+    openId = null; editingId = null; notingIssue = false;
     const m = el('eqModal');
     if (m) m.classList.remove('active');
   };
@@ -212,6 +252,8 @@
 
       (g.notes ? '<div class="eq-notes">' + esc(g.notes) + '</div>' : '') +
 
+      issuesHtml(g) +
+
       '<div class="eq-loghead">Service history' +
         '<button class="btn btn-sm btn-filled" onclick="addService()">+ Log a service</button>' +
       '</div>' +
@@ -237,6 +279,120 @@
       '<div class="eq-card-label">' + label + '</div>' +
       '<div class="eq-card-value">' + esc(String(value)) + '</div></div>';
   }
+
+  // ------------------------------------------------------ what needs doing
+  //
+  // A part to order or a job to do on this machine, with how urgent it is.
+  // Different from the service schedule: that is routine and predictable, this
+  // is whatever someone noticed -- a cracked hose, a tyre going soft, a blade
+  // to sharpen. Each one also becomes a card on the Maintenance board.
+
+  function issuesHtml(g) {
+    const open = openIssues(g);
+    const fixed = (g.issues || []).filter(i => i.doneAt)
+      .sort((a, b) => String(b.doneAt).localeCompare(String(a.doneAt))).slice(0, 5);
+    return '<div class="eq-loghead">Needs doing' +
+        (notingIssue ? '' : '<button class="btn btn-sm btn-accent" onclick="noteIssue()">+ Note a part or service</button>') +
+      '</div>' +
+      (notingIssue ? issueFormHtml() : '') +
+      (open.length
+        ? '<div class="eq-issues">' + open.map(i => {
+            const u = urgencyOf(i.urgency);
+            return '<div class="eq-issue-row" style="--c:' + u.color + '">' +
+              '<div class="eq-issue-main">' +
+                '<span class="eq-urg">' + esc(u.label) + '</span>' +
+                '<div class="eq-issue-what">' + esc(i.what) + '</div>' +
+                (i.note ? '<div class="eq-issue-note">' + esc(i.note) + '</div>' : '') +
+                '<div class="eq-issue-meta">Noted ' + shortDate(i.at) + (i.by ? ' by ' + esc(i.by) : '') + '</div>' +
+              '</div>' +
+              '<div class="eq-issue-act">' +
+                '<button class="btn btn-sm btn-filled" onclick="fixIssue(\'' + i.id + '\')">Fixed</button>' +
+                '<button class="remove-btn" onclick="removeIssue(\'' + i.id + '\')" title="Delete">&times;</button>' +
+              '</div>' +
+            '</div>';
+          }).join('') + '</div>'
+        : (notingIssue ? '' : '<p class="empty-msg">Nothing noted. If something is wrong with it, note it here so it does not get forgotten.</p>')) +
+      (fixed.length
+        ? '<div class="eq-fixed">Fixed recently: ' + fixed.map(i =>
+            esc(i.what) + ' <span class="muted">(' + shortDate(i.doneAt) + ')</span>').join(' · ') + '</div>'
+        : '');
+  }
+
+  function issueFormHtml() {
+    return '<div class="add-area" id="eqIssueForm">' +
+      '<div class="field"><span class="label">What needs doing</span>' +
+        '<input id="isWhat" placeholder="e.g. hydraulic hose leaking, new blades, front tyre soft"></div>' +
+      '<div class="field"><span class="label">How urgent</span><div class="eq-urg-pick">' +
+        URGENCY.map((u, n) => '<label class="eq-urg-opt" style="--c:' + u.color + '">' +
+          '<input type="radio" name="isUrg" value="' + u.id + '"' + (u.id === 'soon' ? ' checked' : '') + '>' +
+          '<span><b>' + esc(u.label) + '</b><small>' + esc(u.hint) + '</small></span></label>').join('') +
+      '</div></div>' +
+      '<div class="field"><span class="label">Notes (optional)</span>' +
+        '<input id="isNote" placeholder="part number, where to get it, who noticed"></div>' +
+      '<div class="field-actions">' +
+        '<button class="btn btn-filled" onclick="saveIssue()">Save</button>' +
+        '<button class="btn btn-sm" onclick="cancelIssue()">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  window.noteIssue = function () {
+    notingIssue = true;
+    renderDetail();
+    const w = el('isWhat'); if (w) w.focus();
+  };
+  window.cancelIssue = function () { notingIssue = false; renderDetail(); };
+
+  function whoAmI() {
+    const u = window.YDAuth && window.YDAuth.user;
+    return (u && (u.displayName || u.email)) || '';
+  }
+
+  window.saveIssue = function () {
+    const g = gear[openId];
+    if (!g) return;
+    const what = val('isWhat');
+    if (!what) { showToast('Say what needs doing'); return; }
+    const pick = document.querySelector('input[name="isUrg"]:checked');
+    const issue = {
+      id: 'is' + Date.now().toString(36),
+      what: what,
+      urgency: pick ? pick.value : 'soon',
+      note: val('isNote'),
+      at: new Date().toISOString(),
+      by: whoAmI(),
+      doneAt: null,
+    };
+    g.issues = (g.issues || []).concat([issue]);
+    notingIssue = false;
+    renderDetail(); renderEquipment();
+    write(g.id, { issues: g.issues }, 'noting a problem');
+    showToast(urgencyOf(issue.urgency).label + ' — ' + what);
+  };
+
+  function setIssueDone(g, issueId, done) {
+    g.issues = (g.issues || []).map(i => i.id === issueId
+      ? Object.assign({}, i, { doneAt: done ? new Date().toISOString() : null, doneBy: done ? whoAmI() : null }) : i);
+    write(g.id, { issues: g.issues }, done ? 'marking a problem fixed' : 'reopening a problem');
+  }
+
+  window.fixIssue = function (issueId) {
+    const g = gear[openId];
+    if (!g) return;
+    setIssueDone(g, issueId, true);
+    renderDetail(); renderEquipment();
+    showToast('Marked fixed');
+  };
+
+  window.removeIssue = function (issueId) {
+    const g = gear[openId];
+    if (!g) return;
+    const i = (g.issues || []).find(x => x.id === issueId);
+    if (!i || !confirm('Delete "' + i.what + '"? (Use Fixed instead if it was done — that keeps a record.)')) return;
+    g.issues = (g.issues || []).filter(x => x.id !== issueId);
+    renderDetail(); renderEquipment();
+    write(g.id, { issues: g.issues }, 'deleting a problem');
+  };
 
   // ------------------------------------------------------------ logging work
 
@@ -492,7 +648,9 @@
         else gear[c.id] = Object.assign({ id: c.id }, c.data);
       });
       renderEquipment();
-      if (openId && gear[openId] && !editingId) renderDetail();
+      // Not while something is being typed into the detail -- a change from
+      // another device would otherwise wipe the half-written problem.
+      if (openId && gear[openId] && !editingId && !notingIssue && !el('svWhat')) renderDetail();
       scheduleMaintSync();
     }, () => renderEquipment());
   }
@@ -551,8 +709,65 @@
       board = Object.assign({ id: MAINT }, board);
     }
     const first = board.columns[0].id;
+    const lastCol = board.columns[board.columns.length - 1].id;
     const have = (YDBoards.cards()[MAINT]) || {};
     const path = 'boards/' + MAINT + '/cards';
+
+    // The urgency labels have to exist on the board for its cards to show
+    // them. Added if missing; any the owner already renamed or recoloured
+    // are left alone.
+    const labelIds = new Set((board.labels || []).map(l => l.id));
+    const missing = URGENCY.filter(u => !labelIds.has('u-' + u.id))
+      .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }));
+    if (missing.length) {
+      board.labels = (board.labels || []).concat(missing);
+      Promise.resolve(window.YDDb.put('boards', MAINT, { labels: board.labels }))
+        .catch(e => console.warn('[equipment] labels not yet saved:', e.code || e.message));
+    }
+
+    // Problems noted on machines: one card each.
+    const wanted = new Set();
+    Object.values(gear).forEach(g => {
+      (g.issues || []).forEach(i => {
+        const id = 'eqi-' + g.id + '-' + i.id;
+        wanted.add(id);
+        const k = have[id];
+        // Moved to the last column on the board (by anyone it is shared with)
+        // while still open on the machine: someone fixed it. Record that on
+        // the machine, which is the record that counts.
+        if (k && !i.doneAt && k.column === lastCol && k.doneAt) {
+          setIssueDone(g, i.id, true);
+          return;
+        }
+        const u = urgencyOf(i.urgency);
+        const want = {
+          title: (g.name || 'Machine') + ' — ' + i.what,
+          due: null,
+          notes: u.label + ' (' + u.hint + ').' + (i.note ? '\n\n' + i.note : '') +
+            '\n\nNoted ' + shortDate(i.at) + (i.by ? ' by ' + i.by : '') + '.',
+          labels: ['u-' + u.id],
+          equipmentId: g.id, issueId: i.id, auto: true,
+        };
+        const doneNow = !!i.doneAt;
+        const same = k && k.title === want.title && k.notes === want.notes &&
+          JSON.stringify(k.labels || []) === JSON.stringify(want.labels) &&
+          (doneNow ? k.column === lastCol : k.column !== lastCol);
+        if (same) return;
+        const patch = Object.assign({}, want, { updatedAt: new Date().toISOString(), updatedBy: 'Equipment' });
+        if (!k) { patch.createdAt = new Date().toISOString(); patch.column = doneNow ? lastCol : first; }
+        if (doneNow && (!k || k.column !== lastCol)) { patch.column = lastCol; patch.doneAt = i.doneAt; }
+        // Reopened on the machine: back out of Done.
+        if (!doneNow && k && k.column === lastCol) { patch.column = first; patch.doneAt = null; }
+        Promise.resolve(window.YDDb.put(path, id, patch))
+          .catch(e => console.warn('[equipment] card not yet saved:', e.code || e.message));
+      });
+    });
+    // A problem deleted from the machine takes its card with it.
+    Object.keys(have).forEach(id => {
+      if (id.indexOf('eqi-') === 0 && !wanted.has(id)) {
+        Promise.resolve(window.YDDb.remove(path, id)).catch(() => {});
+      }
+    });
 
     Object.values(gear).forEach(g => {
       const id = 'eq-' + g.id;
