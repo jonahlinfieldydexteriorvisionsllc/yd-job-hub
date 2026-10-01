@@ -237,12 +237,12 @@ document.addEventListener('yd-auth', e => {
   const ctx = document.getElementById('ctxBar');
   if (ctx) ctx.style.display = crewOnly ? 'none' : '';
 
-  // Crew see all their screens on the bar, so More would open on nothing. The
-  // attribute lets the stylesheet put Boards on a crew phone's bar, where the
-  // owner's phone keeps it behind More.
+  // The attribute lets the stylesheet put Boards and Supplies on a crew
+  // phone's bar, where the owner's phone keeps them behind More.
   document.documentElement.toggleAttribute('data-crew', crewOnly);
   const more = document.getElementById('tabMore');
-  if (more) more.hidden = crewOnly;
+  // Crew get More too now: it holds their notification settings.
+  if (more) more.hidden = false;
   if (crewOnly) {
     const openTab = document.querySelector('.tab-panel.active');
     if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard', 'panel-matdash']
@@ -259,16 +259,27 @@ function openMore() {
   const wrap = document.getElementById('moreItems');
   const sheet = document.getElementById('moreSheet');
   if (!wrap || !sheet) return;
-  const hidden = TABS.filter(n => PHONE_TABS.indexOf(n) === -1)
+  // A crew phone already has Boards and Supplies on its bar.
+  const onCrewBar = document.documentElement.hasAttribute('data-crew') ? ['boards', 'supplies'] : [];
+  const hidden = TABS.filter(n => PHONE_TABS.indexOf(n) === -1 && onCrewBar.indexOf(n) === -1)
     .filter(n => {
       const b = document.getElementById(tabButtonId(n));
       return b && !b.hidden;
     });
-  wrap.innerHTML = hidden.length
+  // Settings that are not screens of their own live here too, so they are
+  // found where everything else is rather than up in the header.
+  const extras = (window.YDAuth && window.YDAuth.user)
+    ? [{ label: '🔔 Notifications & summaries', hint: 'Daily updates by email and on your phone',
+         call: 'closeMore(); openNotifications()' }]
+    : [];
+  wrap.innerHTML = (hidden.length || extras.length)
     ? hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
         '<span class="sheet-item-name">' + TAB_LABEL[n] + '</span>' +
         (TAB_HINT[n] ? '<span class="sheet-item-hint">' + TAB_HINT[n] + '</span>' : '') +
-      '</button>').join('')
+      '</button>').join('') +
+      extras.map(x => '<button class="sheet-item" onclick="' + x.call + '">' +
+        '<span class="sheet-item-name">' + x.label + '</span>' +
+        '<span class="sheet-item-hint">' + x.hint + '</span></button>').join('')
     : '<p class="empty-msg">Nothing else here.</p>';
   sheet.classList.add('active');
 }

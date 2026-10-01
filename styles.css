@@ -1189,3 +1189,7 @@
   .ntf-toggle small { color:var(--muted); font-size:12px; }
   .ntf-push-preview { margin-top:12px; padding:10px 12px; border-radius:12px; background:var(--surface-2); font-size:13px; }
   .ntf-frame { width:100%; height:420px; border:1px solid var(--border); border-radius:8px; margin-top:10px; background:#fff; }
+
+  /* On a phone, Notifications & summaries lives in the More sheet; the header
+     menu keeps it only on a laptop, which has no More button. */
+  @media (max-width:720px) { #menuNotify { display:none !important; } }
