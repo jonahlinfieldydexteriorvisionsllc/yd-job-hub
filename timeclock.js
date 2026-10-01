@@ -40,6 +40,7 @@
   let picking = false;   // job picker open
   let pausingId = null;  // shift whose reason buttons are showing
   let clockingFor = null; // owner clocking somebody else in
+  let usersLoaded = false; // owner: worker list (and so their rates) has arrived
 
   const el = id => document.getElementById(id);
   const nowIso = () => new Date().toISOString();
@@ -181,6 +182,7 @@
   window.clockInTo = function (kind, targetId, targetName) {
     const u = me();
     if (!u) return;
+    if (!targetName) targetName = nameFor(kind, targetId);
     const forUid = clockingFor || u.uid;
     const already = Object.values(entries).find(e => e.uid === forUid && running(e));
     if (already) {
@@ -294,11 +296,21 @@
     const startMs = new Date(day + 'T' + from).getTime();
     let endMs = new Date(day + 'T' + to).getTime();
     if (!startMs || !endMs) { showToast('Those times did not make sense'); return; }
-    // Finished before it started means it ran past midnight.
-    if (endMs <= startMs) endMs += 24 * 3600000;
+    // Finished before it started means it ran past midnight. The next day is
+    // worked out on the calendar, not by adding 24 hours, which is an hour out
+    // on the two nights a year the clocks change.
+    if (endMs <= startMs) {
+      const next = new Date(day + 'T' + to);
+      next.setDate(next.getDate() + 1);
+      endMs = next.getTime();
+    }
 
-    if (endMs - startMs > 24 * 3600000) { showToast('That is longer than a day'); return; }
-    if (startMs > Date.now() + 60000) { showToast('That is in the future'); return; }
+    if (endMs - startMs > 25 * 3600000) { showToast('That is longer than a day'); return; }
+    // The END has to be in the past too -- a shift typed in at noon cannot
+    // finish at five tonight.
+    if (startMs > Date.now() + 60000 || endMs > Date.now() + 60000) {
+      showToast('That is in the future'); return;
+    }
 
     const id = 'te' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
     const rec = {
@@ -403,12 +415,26 @@
   window.renderClock = render;
 
   // A running clock only needs redrawing while it is actually on screen and
-  // actually running.
+  // actually running -- and only the parts with a running time in them. The
+  // approvals, the crew list and the wages table do not change from one second
+  // to the next, and rebuilding all of them every second made the owner's
+  // screen sluggish on a phone for no visible gain.
   function manageTicker() {
     const visible = el('panel-clock') && el('panel-clock').classList.contains('active');
     const live = Object.values(entries).some(running);
-    if (visible && live && !ticker) ticker = setInterval(render, 1000);
+    if (visible && live && !ticker) ticker = setInterval(tick, 1000);
     if ((!visible || !live) && ticker) { clearInterval(ticker); ticker = null; }
+  }
+  // Each second only the running times change, so only their text is touched.
+  // Rebuilding the cards instead wiped the "forgot to clock in" form a second
+  // after it was opened, and swapped the Pause and Clock out buttons out from
+  // under a gloved thumb mid-tap.
+  function tick() {
+    document.querySelectorAll('[data-live-entry]').forEach(n => {
+      const e = entries[n.dataset.liveEntry];
+      if (e && running(e)) n.textContent = fmtDur(paidMs(e));
+    });
+    manageTicker();
   }
 
   function renderClockCard() {
@@ -460,7 +486,7 @@
       '<div class="clock-where">' + esc(e.targetName) +
         (e.kind === 'storm' ? ' <span class="clock-kind">storm</span>' : '') +
         (OVERHEAD_LABEL[e.kind] ? ' <span class="clock-kind">not a job</span>' : '') + '</div>' +
-      '<div class="clock-elapsed">' + fmtDur(paid) + '</div>' +
+      '<div class="clock-elapsed" data-live-entry="' + safeId(e.id) + '">' + fmtDur(paid) + '</div>' +
       '<div class="clock-sub">in at ' + clockTime(e.startedAt) +
         (pausedMs(e) ? ' · ' + fmtDur(pausedMs(e)) + ' paused · ' + fmtDur(bill) + ' billable' : '') +
       '</div>' +
@@ -469,17 +495,17 @@
       (pausingId === e.id
         ? '<div class="pause-reasons"><p class="clock-lead">What for?</p>' +
             PAUSE_REASONS.map(r =>
-              '<button class="btn" onclick="pauseClock(\'' + e.id + '\', \'' + r.replace(/'/g, "\\'") + '\')">' +
+              '<button class="btn" onclick="pauseClock(\'' + safeId(e.id) + '\', \'' + r.replace(/'/g, "\\'") + '\')">' +
               r + '</button>').join('') +
             '<button class="btn btn-sm" onclick="cancelPause()">Never mind</button>' +
           '</div>'
         : '<div class="clock-actions">' +
             (canPause(e)
               ? (p
-                  ? '<button class="btn btn-filled clock-big" onclick="resumeClock(\'' + e.id + '\')">Back on</button>'
-                  : '<button class="btn btn-accent clock-big" onclick="askPause(\'' + e.id + '\')">Pause</button>')
+                  ? '<button class="btn btn-filled clock-big" onclick="resumeClock(\'' + safeId(e.id) + '\')">Back on</button>'
+                  : '<button class="btn btn-accent clock-big" onclick="askPause(\'' + safeId(e.id) + '\')">Pause</button>')
               : '') +
-            '<button class="btn clock-big" onclick="clockOut(\'' + e.id + '\')">Clock out</button>' +
+            '<button class="btn clock-big" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' +
             '<button class="btn btn-sm" onclick="openJobPicker()">Switch to something else</button>' +
             '<button class="btn btn-sm" onclick="openWorker()">My hours</button>' +
           '</div>') +
@@ -495,13 +521,32 @@
         const key = e.kind + ':' + e.targetId;
         if (seen[key] || out.length >= 3) return;
         if (e.kind === 'job' && !board[e.targetId]) return;   // job is gone
+        // A storm is only somewhere to go back to while it is still running;
+        // otherwise this would clock someone into last week's storm.
+        if (e.kind === 'storm') {
+          const s = window.YDStorm && YDStorm.current();
+          if (!s || s.id !== e.targetId || s.status !== 'open') return;
+        }
         seen[key] = 1; out.push(e);
       });
     if (!out.length) return '';
     return '<div class="clock-recent"><p class="clock-lead">Back to where you were</p>' +
-      out.map(e => '<button class="btn" onclick="clockInTo(\'' + e.kind + '\', \'' +
-        e.targetId + '\', \'' + esc(e.targetName).replace(/'/g, '&#39;') + '\')">' +
-        esc(e.targetName) + '</button>').join('') + '</div>';
+      out.map(e => '<button class="btn" onclick="clockInTo(\'' + safeId(e.kind) + '\', \'' +
+        safeId(e.targetId) + '\')">' + esc(e.targetName) + '</button>').join('') + '</div>';
+  }
+
+  // Ids go into onclick handlers, and some of them come from crew phones. Only
+  // the characters our own ids are made of get through; anything else could
+  // close the string and run as code on the owner's screen.
+  function safeId(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, ''); }
+
+  // The name shown on a shift, looked up from the id when the button is tapped
+  // rather than written into the button -- a job called O'Brien used to end the
+  // handler's text at the apostrophe and the button did nothing.
+  function nameFor(kind, id) {
+    if (kind === 'job') return (board[id] && board[id].name) || 'Job';
+    if (kind === 'storm') return 'Tonight’s storm';
+    return OVERHEAD_LABEL[kind] || 'Other';
   }
 
   function pickerHtml() {
@@ -529,8 +574,8 @@
   }
 
   function kindBtn(kind, id, label, icon, cls) {
-    return '<button class="picker-kind ' + cls + '" onclick="clockInTo(\'' + kind + '\', \'' +
-      id + '\', \'' + label.replace(/'/g, "\\'") + '\')">' +
+    return '<button class="picker-kind ' + cls + '" onclick="clockInTo(\'' + safeId(kind) + '\', \'' +
+      safeId(id) + '\')">' +
       '<span class="kind-icon">' + icon + '</span>' + label + '</button>';
   }
 
@@ -564,8 +609,7 @@
         : 'No active jobs. Search above for a quoted or finished one.') + '</p>';
     }
     return list.map(j =>
-      '<button class="picker-job" onclick="clockInTo(\'job\', \'' + j.id + '\', \'' +
-        esc(j.name).replace(/'/g, '&#39;') + '\')">' +
+      '<button class="picker-job" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
         '<span class="picker-name">' + esc(j.name) + '</span>' +
         (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
         '<span class="picker-flag ' + esc(j.status || '') + '">' + esc(j.status || 'job') + '</span>' +
@@ -586,11 +630,12 @@
       ? live.map(e => {
           const p = openPause(e);
           return '<div class="on-now' + (p ? ' paused' : '') + '">' +
-            '<button class="on-who linkish" onclick="openWorker(\'' + e.uid + '\')">' +
+            '<button class="on-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
               esc(e.workerName) + '</button>' +
             '<span class="on-where">' + esc(e.targetName) + '</span>' +
-            '<span class="on-time">' + fmtDur(paidMs(e)) + (p ? ' · paused (' + esc(p.reason) + ')' : '') + '</span>' +
-            '<button class="btn btn-sm" onclick="clockOut(\'' + e.id + '\')">Clock out</button>' +
+            '<span class="on-time"><span data-live-entry="' + safeId(e.id) + '">' + fmtDur(paidMs(e)) + '</span>' +
+              (p ? ' · paused (' + esc(p.reason) + ')' : '') + '</span>' +
+            '<button class="btn btn-sm" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' +
           '</div>';
         }).join('')
       : '<p class="empty-msg">Nobody is on the clock.</p>') +
@@ -630,7 +675,7 @@
       const paid = paidMs(e), bill = billableMs(e), pause = pausedMs(e);
       return '<div class="appr">' +
         '<div class="appr-top">' +
-          '<button class="appr-who linkish" onclick="openWorker(\'' + e.uid + '\')">' +
+          '<button class="appr-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
             esc(e.workerName) + '</button>' +
           '<span class="appr-where">' + esc(e.targetName) + '</span>' +
           '<span class="appr-why">' + whyFlagged(e) + '</span>' +
@@ -652,8 +697,8 @@
             ).join(' · ') + '</div>'
           : '') +
         '<div class="appr-act">' +
-          '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + e.id + '\')">Approve</button>' +
-          '<button class="btn btn-sm" onclick="rejectShift(\'' + e.id + '\')">Reject</button>' +
+          '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
+          '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
         '</div>' +
       '</div>';
     }).join('');
@@ -671,7 +716,10 @@
   // work already done. Until then the figures use the worker's current rate,
   // so nothing is ever blank; the stamp just freezes it.
   function stampUnpriced() {
-    if (!isOwner() || !window.YDDb) return;
+    // Not until the worker list has arrived. The shifts often load first, and
+    // stamping then froze every settled shift at the default rate for good --
+    // a $30/hr worker's night recorded at $25.
+    if (!isOwner() || !window.YDDb || !usersLoaded) return;
     Object.keys(entries).forEach(id => {
       const e = entries[id];
       if (!counts(e) || running(e) || e.rateCents != null) return;
@@ -756,20 +804,20 @@
             '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
             '<span class="crew-state">' + (u.role === 'pending' ? 'wants access' : 'switched off') + '</span>' +
-            '<button class="btn btn-sm btn-filled" onclick="approveCrew(\'' + u.uid + '\')">' +
+            '<button class="btn btn-sm btn-filled" onclick="approveCrew(\'' + safeId(u.uid) + '\')">' +
               (u.role === 'pending' ? 'Let them in' : 'Switch back on') + '</button>' +
             (u.role === 'pending'
-              ? '<button class="btn btn-sm" onclick="denyCrew(\'' + u.uid + '\')">Not them</button>' : '') +
+              ? '<button class="btn btn-sm" onclick="denyCrew(\'' + safeId(u.uid) + '\')">Not them</button>' : '') +
           '</div>').join('')
         : '') +
       (active.length
         ? active.map(u => '<div class="crew-row">' +
-            '<button class="crew-name linkish" onclick="openWorker(\'' + u.uid + '\')">' +
+            '<button class="crew-name linkish" onclick="openWorker(\'' + safeId(u.uid) + '\')">' +
               esc(u.name || u.email) + '</button>' +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
-            '<button class="btn btn-sm" onclick="setWorkerRate(\'' + u.uid + '\')">' +
+            '<button class="btn btn-sm" onclick="setWorkerRate(\'' + safeId(u.uid) + '\')">' +
               money(rateOf(u.uid)) + '/hr</button>' +
-            '<button class="remove-btn" onclick="removeCrew(\'' + u.uid + '\')" title="Switch off">&times;</button>' +
+            '<button class="remove-btn" onclick="removeCrew(\'' + safeId(u.uid) + '\')" title="Switch off">&times;</button>' +
           '</div>').join('')
         : '<p class="empty-msg">No crew yet. Send them the app link and ask them to ' +
           'sign in with Google — they will show up here to let in.</p>');
@@ -811,7 +859,7 @@
     if (!wrap) return;
     const which = (el('clockRange') || {}).value || 'week';
     const from = rangeStart(which);
-    const to = which === 'lastweek' ? from + 7 * 864e5 : Infinity;
+    const to = which === 'lastweek' ? rangeStart('week') : Infinity;
 
     const inRange = e => startMsOf(e) >= from && startMsOf(e) < to;
     const done = Object.values(entries).filter(e => counts(e) && inRange(e));
@@ -838,7 +886,7 @@
           '<tr><td class="bold">' + esc(w.name) + '</td>' +
           '<td>' + fmtDur(w.paid) + '</td>' +
           '<td>' + fmtDur(w.bill) + '</td>' +
-          '<td><button class="btn btn-sm" onclick="setWorkerRate(\'' + w.uid + '\')">' +
+          '<td><button class="btn btn-sm" onclick="setWorkerRate(\'' + safeId(w.uid) + '\')">' +
             money(rateOf(w.uid)) + '/hr</button></td>' +
           '<td class="bold">' + money(w.cost) + '</td></tr>').join('') +
         '</tbody><tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Total</td>' +
@@ -927,7 +975,7 @@
 
     const all = Object.values(entries).filter(e => e.uid === workerUid);
     const from = rangeStart(workerRange);
-    const to = workerRange === 'lastweek' ? from + 7 * 864e5 : Infinity;
+    const to = workerRange === 'lastweek' ? rangeStart('week') : Infinity;
     const inRange = all.filter(e => startMsOf(e) >= from && startMsOf(e) < to);
 
     const approved = inRange.filter(counts);
@@ -967,7 +1015,7 @@
 
       (live
         ? '<div class="wk-live">On the clock now — <strong>' + esc(live.targetName) +
-          '</strong>, ' + fmtDur(paidMs(live)) +
+          '</strong>, <span data-live-entry="' + safeId(live.id) + '">' + fmtDur(paidMs(live)) + '</span>' +
           (openPause(live) ? ' · paused for ' + esc(openPause(live).reason) : '') + '</div>'
         : '') +
 
@@ -1127,7 +1175,19 @@
     forJob: forJob,
     pausedMinutesAt: pausedMinutesAt,
     entries: () => entries,
+    people: () => people,
     render: render,
+    // The work log uses these rather than its own arithmetic, so a shift is
+    // the same length in the log as on the pay sheet.
+    paidMs: paidMs,
+    chargeableMs: chargeableMs,
+    pausedMs: pausedMs,
+    startMsOf: startMsOf,
+    endMsOf: endMsOf,
+    counts: counts,
+    awaitingOwner: awaitingOwner,
+    fmtDur: fmtDur,
+    label: e => e.targetName || OVERHEAD_LABEL[e.kind] || 'Other',
   };
 
   // ---------------------------------------------------------------- loading
@@ -1147,7 +1207,7 @@
     if (watchKey === key) return;
     unsub.forEach(fn => { try { fn(); } catch (e) {} });
     unsub = [];
-    entries = {}; board = {}; people = {};
+    entries = {}; board = {}; people = {}; usersLoaded = false;
     watchKey = key;
 
     const onEntries = changes => {
@@ -1158,6 +1218,7 @@
       stampUnpriced();
       render();
       if (typeof refreshJobLabour === 'function') refreshJobLabour();
+      document.dispatchEvent(new CustomEvent('yd-clock-changed'));
     };
     const onEntriesError = err => {
       if (err && err.code === 'permission-denied') {
@@ -1188,6 +1249,8 @@
           if (c.type === 'removed') delete people[c.id];
           else people[c.id] = Object.assign({ uid: c.id }, c.data);
         });
+        usersLoaded = true;
+        stampUnpriced();
         render();
       }, () => render()));
     }

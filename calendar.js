@@ -258,7 +258,13 @@
     const wrap = el('calWrap');
     if (!wrap) return;
     if (!me() || !window.YDDb) {
-      wrap.innerHTML = '<p class="empty-msg">The calendar needs you to be signed in.</p>';
+      // Before sign-in has finished this is the normal state for a second or
+      // two, not an instruction -- saying "sign in" here sent a signed-in
+      // person looking for a button that does not exist.
+      const local = window.YDAuth && window.YDAuth.mode === 'local';
+      wrap.innerHTML = '<p class="empty-msg">' + (local
+        ? 'The calendar needs a connection. It will appear once Job Hub can reach the internet.'
+        : 'Loading…') + '</p>';
       return;
     }
     if (!view) view = window.matchMedia('(max-width:720px)').matches ? 'week' : 'month';
@@ -736,9 +742,9 @@
     if (eventUnsubs[id]) { eventUnsubs[id](); delete eventUnsubs[id]; }
     delete cals[id]; delete events[id];
     closeCalModal(); render();
-    Promise.all(ids.map(e => window.YDDb.remove('calendars/' + id + '/events', e)))
-      .then(() => window.YDDb.remove('calendars', id))
-      .catch(e => console.warn('[calendar] not fully removed:', e.code || e.message));
+    Promise.resolve(window.YDDb.removeMany(
+      ids.map(e => ['calendars/' + id + '/events', e]).concat([['calendars', id]])
+    )).catch(e => console.warn('[calendar] not yet removed:', e.code || e.message));
   };
 
   // --------------------------------------------------------------- people
@@ -826,7 +832,8 @@
     const p = el('panel-calendar');
     if (!p || !p.classList.contains('active')) return;
     // Do not redraw under someone filling in the editor.
-    if (el('evTitle') || el('ccName')) return;
+    const m = el('calModal');
+    if (m && m.classList.contains('active') && (el('evTitle') || el('ccName'))) return;
     render();
   }
 
@@ -868,6 +875,7 @@
     const tab = el('tabCalendar');
     if (tab) tab.hidden = !on;
     if (on) start(a); else stop();
+    render();
   });
   document.addEventListener('yd-jobs-changed', redrawIfVisible);
   document.addEventListener('yd-cards-changed', redrawIfVisible);

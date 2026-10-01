@@ -85,11 +85,13 @@
   const INVOICE_DOC = 'invoicing';
   let invoiceSettings = null;
 
+  // Read fresh every time rather than once per session: the laptop and the
+  // phone each kept their own copy of "next number" and would both hand out
+  // the same one. Falls back to the last known copy with no signal.
   async function invoicing() {
-    if (invoiceSettings) return invoiceSettings;
     try {
-      invoiceSettings = (await window.YDDb.get('settings', INVOICE_DOC)) || {};
-    } catch (e) { invoiceSettings = {}; }
+      invoiceSettings = (await window.YDDb.get('settings', INVOICE_DOC)) || invoiceSettings || {};
+    } catch (e) { invoiceSettings = invoiceSettings || {}; }
     return invoiceSettings;
   }
 
@@ -115,16 +117,15 @@
     const prefix = cfg.invoicePrefix || '';
     missing.forEach(a => { existing[a] = prefix + next; next++; });
 
-    // Written before the file is handed over, so a number is never given out
-    // twice even if the download itself goes wrong.
+    // Recorded HERE first, then written without waiting. Waiting for the
+    // server meant a second tap during the wait handed out a second set of
+    // numbers, and with no signal the export never finished at all.
     invoiceSettings = Object.assign({}, cfg, { nextInvoiceNo: next });
-    try {
-      await window.YDDb.put('settings', INVOICE_DOC, { nextInvoiceNo: next });
-      await window.YDDb.put('storms/' + id + '/private', 'billing', { invoiceNos: existing });
-      b.invoiceNos = existing;
-    } catch (e) {
-      console.warn('[billing] invoice numbers not saved:', e.code || e.message);
-    }
+    b.invoiceNos = existing;
+    Promise.resolve(window.YDDb.putMany([
+      ['settings', INVOICE_DOC, { nextInvoiceNo: next }],
+      ['storms/' + id + '/private', 'billing', { invoiceNos: existing }],
+    ])).catch(e => console.warn('[billing] invoice numbers not yet saved:', e.code || e.message));
     return existing;
   }
 
@@ -370,7 +371,11 @@
           // rounded hours -- that produced $25.03 on a $25 rate, which looks
           // like a mistake on a customer's invoice even though the total was
           // right. The amount still carries the exact figure.
-          const rateCents = ((window.YDSnow && YDSnow.pricing()[l.accountId]) || {}).laborRateCents;
+          // The rate stored when the storm closed, so an old storm still shows
+          // the rate it was billed at after a price rise. Storms closed before
+          // that was stored fall back to the account's current rate.
+          const rateCents = l.laborRateCents != null ? l.laborRateCents
+            : ((window.YDSnow && YDSnow.pricing()[l.accountId]) || {}).laborRateCents;
           const rate = rateCents != null ? (rateCents / 100) : ((l.laborCents / 100) / (manHours || 1));
           rows.push([invoiceNo, q(name), date, due, q('Labor'),
                      q('Labor — ' + l.minutes + ' min on site, ' + crew + ' crew'),
@@ -554,8 +559,17 @@
 
   window.YDBilling = { storms: () => storms, render, seasonByAccount };
 
+  // Dropped on sign-out (the page does not reload), so the next person on the
+  // same device neither inherits these figures nor misses a fresh watch.
+  let authKey = null;
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    if (a.mode === 'cloud' && a.user && a.isOwner) start();
+    const key = a.mode === 'cloud' && a.user && a.isOwner ? a.user.uid : null;
+    if (key !== authKey) {
+      if (unsub) { try { unsub(); } catch (err) {} unsub = null; }
+      storms = {};
+      authKey = key;
+    }
+    if (key) start();
   });
 })();

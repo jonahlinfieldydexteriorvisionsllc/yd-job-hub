@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v51';
+const CACHE = 'ydjobhub-v52';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -33,6 +33,7 @@ const SHELL = [
   './equipment.js',
   './boards.js',
   './calendar.js',
+  './worklog.js',
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
@@ -59,6 +60,13 @@ const BYPASS = [
   'apis.google.com',
   'firebaseio.com',
   'firebaseapp.com',
+  // Forecasts. Cache-first meant the snowfall on screen was always the one
+  // fetched LAST time -- possibly yesterday's -- labelled as just now.
+  // weather.js keeps its own copy for when there is no signal.
+  'api.weather.gov',
+  'api.open-meteo.com',
+  // The Cloud Run server: live answers only (QuickBooks, Claude).
+  'run.app',
 ];
 
 self.addEventListener('install', event => {
@@ -108,19 +116,48 @@ self.addEventListener('fetch', event => {
     event.respondWith(
       fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' })
         .then(res => {
+          // Each page is kept under its own address. Storing every page as
+          // index.html meant that opening the privacy page once made the app
+          // open AS the privacy page the next time there was no signal.
           if (res && res.ok) {
             const copy = res.clone();
-            caches.open(CACHE).then(c => c.put('./index.html', copy));
+            caches.open(CACHE).then(c => c.put(req, copy));
           }
           return res;
         })
-        .catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
+        .catch(() => caches.match(req, { ignoreSearch: true })
+          .then(r => r || caches.match('./index.html'))
+          .then(r => r || caches.match('./')))
     );
     return;
   }
 
-  // Everything else (same-origin assets, web fonts): serve from cache at once,
-  // and refresh the copy in the background for next launch.
+  // The app's own code and styles: fresh from the network whenever there is
+  // signal, the saved copy only when there is not (or the network is too slow
+  // to wait for). Serving these cache-first meant a phone opened the NEW page
+  // with the OLD code behind it -- a mismatch that left Calendar and Boards
+  // saying "sign in" to someone who was signed in.
+  if (url.origin === self.location.origin && /\.(js|css|json)$/.test(url.pathname)) {
+    event.respondWith(new Promise(resolve => {
+      let settled = false;
+      const fallback = () => caches.match(req).then(r => {
+        if (!settled) { settled = true; resolve(r || Response.error()); }
+      });
+      const timer = setTimeout(fallback, 4000);      // one bar of signal: do not hang
+      fetch(req, { cache: 'no-cache' }).then(res => {
+        clearTimeout(timer);
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then(c => c.put(req, copy));
+        }
+        if (!settled) { settled = true; resolve(res); }
+      }).catch(() => { clearTimeout(timer); fallback(); });
+    }));
+    return;
+  }
+
+  // Everything else (icons, web fonts, the Firebase SDK): serve from cache at
+  // once, and refresh the copy in the background for next launch.
   event.respondWith(
     caches.match(req).then(cached => {
       const network = fetch(req)

@@ -86,6 +86,10 @@
     }
 
     const original = btn.textContent;
+    // Which job this draft is for. The answer takes a few seconds, and if a
+    // different job was opened meanwhile the draft would have landed in its
+    // notes and been autosaved there.
+    const forJob = currentJobId;
     btn.disabled = true;
     btn.textContent = 'Drafting…';
 
@@ -102,6 +106,10 @@
         price: document.getElementById('jobPrice').value,
       });
 
+      if (currentJobId !== forJob) {
+        showToast('A different job is open now — the draft was not put in it');
+        return;
+      }
       notes.value = (result.text || '').trim();
       markDirty();
       showToast('Scope drafted — read it before sending');

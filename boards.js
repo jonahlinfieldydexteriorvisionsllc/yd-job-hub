@@ -127,9 +127,13 @@
 
   function bidColumn(j) {
     const stage = j.bidStage;
-    if (stage === 'won') return (daysSince(j.bidStageAt) || 0) <= SHOW_WON_DAYS ? 'won' : null;
-    if (stage === 'lost') return (daysSince(j.bidStageAt) || 0) <= SHOW_LOST_DAYS ? 'lost' : null;
-    if ((j.jobStatus || 'quoting') !== 'quoting') return null;
+    const quoting = (j.jobStatus || 'quoting') === 'quoting';
+    // Won and Lost only count while the job's status agrees. A lost bid whose
+    // customer rang back and was set Active in the form used to sit in Lost on
+    // this board AND in Scheduled on the Jobs board.
+    if (stage === 'won' && !quoting) return (daysSince(j.bidStageAt) || 0) <= SHOW_WON_DAYS ? 'won' : null;
+    if (stage === 'lost' && quoting) return (daysSince(j.bidStageAt) || 0) <= SHOW_LOST_DAYS ? 'lost' : null;
+    if (!quoting) return null;
     return QUOTING_STAGES.indexOf(stage) !== -1 ? stage : 'toSend';
   }
 
@@ -216,7 +220,10 @@
     const list = visibleBoards();
 
     if (!me() || !window.YDDb) {
-      wrap.innerHTML = '<p class="empty-msg">Boards need you to be signed in.</p>';
+      const local = window.YDAuth && window.YDAuth.mode === 'local';
+      wrap.innerHTML = '<p class="empty-msg">' + (local
+        ? 'Boards need a connection. They will appear once Job Hub can reach the internet.'
+        : 'Loading…') + '</p>';
       return;
     }
     if (!list.length) {
@@ -592,13 +599,16 @@
     const id = openCard.cardId || newId('cd');
     const was = (cards[board.id] || {})[id] || {};
 
-    const oldList = was.checklist || [];
+    // A copy, used up as lines are matched, so two lines that both say
+    // "Sweep" keep two different ids and ticking one does not tick both.
+    const oldList = (was.checklist || []).slice();
     const checklist = (el('cdList').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
       .map((line, i) => {
         const done = /^\[x\]\s*/i.test(line);
         const text = line.replace(/^\[x\]\s*/i, '');
         // Keep an item's id (and who ticked it) if the same line was there before.
-        const prev = oldList.find(o => o.text === text);
+        const at = oldList.findIndex(o => o.text === text);
+        const prev = at === -1 ? null : oldList.splice(at, 1)[0];
         return { id: prev ? prev.id : 'ck' + i + Date.now().toString(36), text: text, done: done,
                  doneBy: done ? ((prev && prev.doneBy) || myName()) : null };
       });
@@ -776,9 +786,9 @@
     closeBoardModal(); render();
     // Cards first: a card left behind under a deleted board would be
     // unreachable, since the rules check the board to decide who may read it.
-    Promise.all(ids.map(cid => window.YDDb.remove('boards/' + id + '/cards', cid)))
-      .then(() => window.YDDb.remove('boards', id))
-      .catch(e => console.warn('[boards] board not fully removed:', e.code || e.message));
+    Promise.resolve(window.YDDb.removeMany(
+      ids.map(cid => ['boards/' + id + '/cards', cid]).concat([['boards', id]])
+    )).catch(e => console.warn('[boards] board not yet removed:', e.code || e.message));
   };
 
   // ---------------------------------------------------------------- modal
@@ -849,13 +859,25 @@
     // second time.
     if (isOwner() && !seeded && meta && !meta.fromCache) {
       seeded = true;
-      if (!Object.keys(boards).length) seedBoards();
+      if (!Object.keys(boards).length) seedOnce();
     }
     redrawIfVisible();
   }
 
   // Two boards to start with, so the screen is not empty on day one. Fixed ids
   // mean two devices seeding at once write the same two boards, not four.
+  // Only ever once. Seeding whenever there were no boards brought the two
+  // starters back every time the owner deleted them.
+  async function seedOnce() {
+    let flags = null;
+    try { flags = await window.YDDb.get('settings', 'seeds'); } catch (e) { return; }
+    if (flags && flags.boards) return;
+    if (Object.keys(boards).length) return;
+    seedBoards();
+    write('settings', 'seeds', { boards: true }, 'seed marker');
+    redrawIfVisible();
+  }
+
   function seedBoards() {
     const mk = (id, name, color, tpl, order) => ({
       name: name, color: color, order: order, visibleTo: [],
@@ -928,6 +950,7 @@
     const on = a.mode === 'cloud' && !!a.user;
     if (tab) tab.hidden = !on;
     if (on) start(a); else stop();
+    render();
   });
   document.addEventListener('yd-jobs-changed', redrawIfVisible);
 

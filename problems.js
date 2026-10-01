@@ -200,10 +200,13 @@
       return;
     }
 
+    // Reports are written from any phone, so the id is trimmed to the
+    // characters our own ids use before it goes into a button.
+    const pid = p => String(p.id || '').replace(/[^A-Za-z0-9_-]/g, '');
     wrap.innerHTML = list.map(p =>
       '<div class="prob' + (p.status === 'done' ? ' done' : '') + '">' +
         '<div class="prob-top">' +
-          '<span class="prob-kind ' + p.kind + '">' +
+          '<span class="prob-kind ' + esc(p.kind) + '">' +
             (p.kind === 'reported' ? 'reported' : 'error') + '</span>' +
           '<span class="prob-who">' + esc(p.who || 'unknown') + '</span>' +
           '<span class="prob-when">' + when(p.atMs) + '</span>' +
@@ -214,16 +217,16 @@
           (p.online === false ? ' · no signal' : '') +
           (p.version && p.version !== 'unknown' ? ' · ' + esc(p.version) : '') +
         '</div>' +
-        ((p.trail || []).length
+        (Array.isArray(p.trail) && p.trail.length
           ? '<div class="prob-trail">Just before: ' +
-            p.trail.map(t => esc(t.what)).join(' → ') + '</div>'
+            p.trail.map(t => esc(t && t.what)).join(' → ') + '</div>'
           : '') +
         (p.detail ? '<pre class="prob-detail">' + esc(p.detail) + '</pre>' : '') +
         '<div class="prob-act">' +
           (p.status === 'done'
-            ? '<button class="btn btn-sm" onclick="reopenProblem(\'' + p.id + '\')">Not fixed</button>'
-            : '<button class="btn btn-sm btn-filled" onclick="closeProblem(\'' + p.id + '\')">Sorted</button>') +
-          '<button class="remove-btn" onclick="deleteProblem(\'' + p.id + '\')" title="Delete">&times;</button>' +
+            ? '<button class="btn btn-sm" onclick="reopenProblem(\'' + pid(p) + '\')">Not fixed</button>'
+            : '<button class="btn btn-sm btn-filled" onclick="closeProblem(\'' + pid(p) + '\')">Sorted</button>') +
+          '<button class="remove-btn" onclick="deleteProblem(\'' + pid(p) + '\')" title="Delete">&times;</button>' +
         '</div>' +
       '</div>').join('');
   }

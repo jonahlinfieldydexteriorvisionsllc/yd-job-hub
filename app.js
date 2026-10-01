@@ -77,7 +77,13 @@ function fmtHrsMin(d) { if (!d || d <= 0) return '0h 0m'; const h = Math.floor(d
 function fmtMoney(v) { const n = parseFloat(v); return isNaN(n)||n===0 ? '$0.00' : '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); }
 function parseMoney(s) { return parseFloat(String(s).replace(/[$,]/g,'')) || 0; }
 function round2(n) { return Math.round(((parseFloat(n)||0) + Number.EPSILON) * 100) / 100; }
-function esc(s) { const d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+// Safe for text AND for quoted attribute values. The old version (textContent
+// -> innerHTML) left quotes alone, so a card titled `6" drain pipe` came back
+// into its edit box as `6`, and a name containing a quote could break out of
+// an attribute and run script. A lookup table is also far cheaper than making
+// a DOM element for every string on every redraw.
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function esc(s) { return s == null ? '' : String(s).replace(/[&<>"']/g, c => ESC_MAP[c]); }
 
 // ---- Dates: user types M/D, app supplies the current year ----
 function currentYear() { return new Date().getFullYear(); }
@@ -315,6 +321,8 @@ const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
 
 function switchTab(name) {
   closeMore();
+  // The stylesheet uses this to show the job controls only on job screens.
+  document.documentElement.dataset.tab = name;
   // Matched by id, not by position: the buttons are not in the same order as
   // TABS, and matching by position lit up the wrong button on a laptop.
   const activeBtn = tabButtonId(name);
@@ -329,10 +337,13 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   if (name === 'dashboard') renderDashboard();
+  // Labour is not redrawn while the Job tab is hidden, so catch up on arrival.
+  if (name === 'job' && typeof renderLabor === 'function') renderLabor();
   if (name === 'matdash') renderMatDash();
   if (name === 'snow' && window.YDSnow) YDSnow.render();
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
   if (name === 'clock' && window.YDClock) YDClock.render();
+  if (name === 'clock' && window.YDWorkLog) YDWorkLog.render();
   if (name === 'equipment' && window.YDEquipment) YDEquipment.render();
   if (name === 'calendar' && window.YDCalendar) YDCalendar.render();
   if (name === 'boards' && window.YDBoards) YDBoards.render();
@@ -649,7 +660,7 @@ function renderMaterials() {
     let h = '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Item</th><th>Qty</th><th>From</th><th>Price</th><th></th></tr></thead><tbody>';
     materials.forEach(e => {
       const co = isChangeOrder(e.item);
-      h += '<tr' + (co ? ' style="background:#fdf3ea"' : '') + '><td>' + fmtDateMD(e.date) + '</td>' +
+      h += '<tr' + (co ? ' class="row-unquoted"' : '') + '><td>' + fmtDateMD(e.date) + '</td>' +
         '<td class="bold">' + esc(e.item) + (co ? '<span class="change-tag" title="Advisory — this purchase didn\'t match a quoted item. Verify before treating as a change order.">not quoted?</span>' : '') + '</td>' +
         '<td>' + (e.qty ? esc(String(e.qty)) + (e.unit ? ' ' + esc(e.unit) : '') : '—') + '</td>' +
         '<td>' + esc(e.location || '—') + '</td>' +
@@ -783,11 +794,19 @@ function rmPayment(id) { payments = payments.filter(p => p.id !== id); renderPay
 function manualLaborHours() {
   return labor.reduce((s, e) => s + entryHours(e), 0);
 }
+// Scans every shift on record, and the summary asks for it several times per
+// redraw -- about two dozen full scans each time a job opened, and more on
+// every keystroke in the price box. Kept until the job or the shifts change.
+let _clockedCache = null;
 function clockedLabor() {
-  return (window.YDClock && currentJobId)
-    ? YDClock.forJob(currentJobId)
-    : { byWorker: {}, paidHours: 0, billableHours: 0, costCents: 0, pendingHours: 0 };
+  if (!(window.YDClock && currentJobId)) {
+    return { byWorker: {}, paidHours: 0, billableHours: 0, costCents: 0, pendingHours: 0 };
+  }
+  if (_clockedCache && _clockedCache.job === currentJobId) return _clockedCache.value;
+  _clockedCache = { job: currentJobId, value: YDClock.forJob(currentJobId) };
+  return _clockedCache.value;
 }
+document.addEventListener('yd-clock-changed', () => { _clockedCache = null; });
 function totalLaborHours() {
   return round2(manualLaborHours() + clockedLabor().paidHours);
 }
@@ -799,7 +818,11 @@ function totalLaborCost() {
 // Called by the clock when a shift is approved, so the open job updates without
 // being reloaded.
 function refreshJobLabour() {
-  if (document.getElementById('laborTableWrap')) renderLabor();
+  _clockedCache = null;
+  // Only worth redrawing while the job is on screen; switching back to the
+  // Job tab redraws it anyway.
+  const p = document.getElementById('panel-job');
+  if (p && p.classList.contains('active') && document.getElementById('laborTableWrap')) renderLabor();
 }
 
 function updateBadges() {
@@ -1018,14 +1041,18 @@ function showStorageError() {
   showToast('⚠ Save failed — storage may be full. Export a backup, then delete old jobs.');
 }
 
-function loadJob(id) {
+// `quiet` refreshes the form in place without moving the person anywhere. Sync
+// and the boards use it: a change arriving from another device, or a card
+// moved on the Bids board, used to yank whoever was looking at Boards or All
+// Jobs back to the Job tab.
+function loadJob(id, quiet) {
   const raw = readJobBlob(id);
   if (!raw) return;
   currentJobId = id;
   loadingJob = true;
   try { loadJobData(JSON.parse(raw)); } catch (e) { console.error(e); showToast('Could not load job'); }
   loadingJob = false;
-  closeManager(); switchTab('job');
+  if (!quiet) { closeManager(); switchTab('job'); }
 }
 function deleteJob(id) {
   if (!confirm('Delete this job permanently?')) return;
@@ -1240,12 +1267,32 @@ function importAllJobs(event) {
       const backup = JSON.parse(e.target.result);
       if (!backup.jobs || !backup.index) throw new Error('bad file');
       if (!confirm('Restore ' + backup.index.length + ' jobs? This merges into your current jobs.')) { event.target.value = ''; return; }
-      Object.keys(backup.jobs).forEach(id => localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(backup.jobs[id])));
-      const existing = getJobIndex(); const byId = {};
-      [...existing, ...backup.index].forEach(j => { byId[j.id] = j; });
+      // A real merge: a job is taken from the backup only if this device does
+      // not have it, or has an OLDER copy. Restoring a week-old backup used to
+      // overwrite this week's edits, and sync then sent the old copies to
+      // every other device too.
+      const byId = {};
+      getJobIndex().forEach(j => { byId[j.id] = j; });
+      const taken = [];
+      for (const id of Object.keys(backup.jobs)) {
+        const theirs = backup.jobs[id];
+        let ours = null;
+        try { ours = JSON.parse(readJobBlob(id) || 'null'); } catch (err) {}
+        if (ours && String(ours.lastModified || '') >= String(theirs.lastModified || '')) continue;
+        try { localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(theirs)); }
+        catch (err) { showToast('This device ran out of room — restored ' + taken.length + ' jobs'); break; }
+        byId[id] = buildIndexEntry(id, theirs);
+        taken.push(id);
+      }
       saveJobIndex(Object.values(byId));
       invalidateJobsCache();
-      event.target.value = ''; showToast('Restored ' + backup.index.length + ' jobs'); renderDashboard();
+      window._restoredIds = taken;
+      event.target.value = '';
+      showToast(taken.length ? 'Restored ' + taken.length + ' job' + (taken.length === 1 ? '' : 's') +
+        (taken.length < Object.keys(backup.jobs).length ? ' — the rest were already up to date here' : '')
+        : 'Nothing to restore — every job here is already as new as the backup');
+      renderDashboard();
+      document.dispatchEvent(new CustomEvent('yd-jobs-restored', { detail: taken }));
     } catch (err) { showToast('Not a valid backup file'); console.error(err); }
   };
   reader.readAsText(file);

@@ -85,7 +85,7 @@
         if (patch.jobStatus) { jobStatus = patch.jobStatus; syncStatusSelect(); updateCtxBar(); }
         BOARD_FIELDS.forEach(f => { if (f in patch) boardFields[f] = patch[f]; });
       } else {
-        loadJob(id);
+        loadJob(id, true);
       }
     }
     queuePush(id);
@@ -100,8 +100,13 @@
 
   // ---------------------------------------------------------------- push
 
+  // Saves made before sync has started (the first connection can take a while
+  // in a truck) are remembered and sent once it does, rather than dropped --
+  // a dropped push is how a newer edit lost to an older cloud copy.
+  const unsent = new Set();
   function queuePush(id) {
-    if (!watching || applyingRemote || !id) return;
+    if (!id || applyingRemote) return;
+    if (!watching) { unsent.add(id); return; }
     clearTimeout(pushTimers[id]);
     pushTimers[id] = setTimeout(() => pushNow(id), PUSH_DELAY);
   }
@@ -205,6 +210,7 @@
   function applyRemote(changes) {
     if (!changes.length) return;
     applyingRemote = true;
+    const keepOurs = [];
     try {
       const map = indexById();
       let openJobChanged = false;
@@ -213,10 +219,27 @@
         if (c.type === 'removed') {
           localStorage.removeItem(STORAGE_PREFIX + c.id);
           delete map[c.id];
-        } else {
-          localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(c.data));
-          map[c.id] = buildIndexEntry(c.id, c.data);
+          if (c.id === currentJobId) openJobChanged = true;
+          return;
         }
+        let local = null;
+        try { local = JSON.parse(readJobBlob(c.id) || 'null'); } catch (e) {}
+        const mine = local && local.lastModified, theirs = c.data && c.data.lastModified;
+        // Our own save coming back round. Every autosave used to reload the
+        // whole form from it -- the cursor jumped, and anyone who had moved to
+        // another tab was pulled back to the Job tab.
+        if (mine && theirs && mine === theirs) return;
+        // Older than what this device already has: an edit made here before
+        // sync had started, about to be overwritten by the stale cloud copy.
+        // Keep ours and send it up instead.
+        if (mine && theirs && mine > theirs) { keepOurs.push(c.id); return; }
+        try {
+          localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(c.data));
+        } catch (e) {
+          console.warn('[sync] no room on this device for', c.id);
+          return;
+        }
+        map[c.id] = buildIndexEntry(c.id, c.data);
         if (c.id === currentJobId) openJobChanged = true;
       });
 
@@ -229,7 +252,7 @@
         if (dirty) {
           showToast('This job was changed on another device — your edits here are kept');
         } else if (readJobBlob(currentJobId)) {
-          loadJob(currentJobId);
+          loadJob(currentJobId, true);
         }
       }
 
@@ -237,6 +260,7 @@
     } finally {
       applyingRemote = false;
     }
+    keepOurs.forEach(queuePush);
   }
 
   // ---------------------------------------------------------------- startup
@@ -272,6 +296,8 @@
     }
 
     watching = true;
+    unsent.forEach(id => queuePush(id));
+    unsent.clear();
 
     // countJobs() above went to the server, so reaching here without throwing
     // means we are genuinely connected.
@@ -327,19 +353,12 @@
     getJobIndex().forEach(j => { if (!before.has(j.id)) queuePush(j.id); });
   };
 
-  // Restore-from-backup is how the existing 21 jobs get into the cloud: the
-  // original writes them to localStorage, and this pushes the lot up.
-  const _importAllJobs = window.importAllJobs;
-  window.importAllJobs = function (event) {
-    _importAllJobs.apply(this, arguments);
-    if (!watching) return;
-    // The original parses the file asynchronously, so wait for it to land.
-    setTimeout(() => {
-      pushAllLocal()
-        .then(n => { if (n) showToast(n + ' jobs synced to the cloud'); })
-        .catch(err => console.warn('[sync] bulk push failed', err));
-    }, 1200);
-  };
+  // Restore announces exactly which jobs it took once the file has been read,
+  // and only those go up -- not every job on the device after a fixed wait
+  // that a slow file read could outlast.
+  document.addEventListener('yd-jobs-restored', e => {
+    (e.detail || []).forEach(id => queuePush(id));
+  });
 
   // Show cloud state alongside the existing saved/unsaved dot.
   const _updateCtxBar = window.updateCtxBar;

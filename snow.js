@@ -183,9 +183,25 @@
 
   // ---------------------------------------------------------------- exports
 
+  // Fetch these accounts' pricing again, fresh. Closing a storm calls this so
+  // the bill is worked out from the prices as they stand now -- not from
+  // whatever happened to be loaded when the app opened, which might be
+  // nothing yet, or a price since changed on another device. A read (unlike a
+  // write) settles from the local cache when there is no signal.
+  async function refreshPricing(ids) {
+    if (!window.YDAuth || !window.YDAuth.isOwner || !window.YDDb) return;
+    await Promise.all(ids.map(async id => {
+      try {
+        const d = await window.YDDb.get('snowAccounts/' + id + '/private', PRICING_DOC);
+        if (d) pricing[id] = d;
+      } catch (e) { /* offline with nothing cached -- reported by the caller */ }
+    }));
+  }
+
   window.YDSnow = {
     accounts: () => accounts,
     pricing: () => pricing,
+    refreshPricing,
     priceVisit,
     resolveTier,
     render,
@@ -435,9 +451,19 @@
     btn.textContent = 'Save account';
   };
 
+  // Signing out does not reload the page. Without dropping the watch and the
+  // data, the next person to sign in on the same phone would never get a
+  // fresh listener -- and would still have the owner's pricing in memory.
+  let authKey = null;
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    if (a.mode === 'cloud' && a.user) start();
+    const key = a.mode === 'cloud' && a.user ? a.user.uid + ':' + a.role : null;
+    if (key !== authKey) {
+      if (unsubAccounts) { try { unsubAccounts(); } catch (err) {} unsubAccounts = null; }
+      accounts = {}; pricing = {}; loaded = false;
+      authKey = key;
+    }
+    if (key) start(); else render();
     const add = document.getElementById('snowAddBtn');
     if (add) add.hidden = !(a.isOwner === true);
   });

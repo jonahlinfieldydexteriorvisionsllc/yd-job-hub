@@ -261,6 +261,10 @@
   window.sendStormToQuickBooks = async function (stormId) {
     if (!isOwner()) return;
     if (!state || !state.connected) { openQuickBooks(); return; }
+    // The customer matches load when the QuickBooks screen opens, which may
+    // not have happened yet this session.
+    if (!customers.length) await refresh();
+    if (!state || !state.connected) { openQuickBooks(); return; }
 
     const b = await window.YDDb.get('storms/' + stormId + '/private', 'billing');
     if (!b || !b.lines || !b.lines.length) { showToast('No billing recorded for that storm'); return; }
@@ -362,6 +366,15 @@
 
   const two = n => String(n).padStart(2, '0');
 
+  // At sign-in only the status is asked for. That call is what keeps the
+  // QuickBooks connection from expiring over a quiet summer, so it has to run;
+  // the full customer and item lists are three more round trips over a phone
+  // signal and are only needed once the QuickBooks screen is opened.
+  async function checkStatus() {
+    try { state = await ask('/qb/status'); }
+    catch (e) { state = { connected: false, error: e.message }; }
+  }
+
   window.YDQuickBooks = {
     state: () => state,
     connected: () => !!(state && state.connected),
@@ -374,7 +387,7 @@
     if (entry) entry.hidden = !(a.isOwner === true);
     // Coming back from Intuit: the page reloads, so look at the connection.
     if (a.isOwner === true && a.mode === 'cloud') {
-      refresh();
+      checkStatus();
     }
   });
 })();

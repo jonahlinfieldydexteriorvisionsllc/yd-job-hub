@@ -86,13 +86,20 @@
 
   function onHold(a) {
     if (!Array.isArray(a.vacationHolds) || !a.vacationHolds.length) return false;
-    const today = new Date().toISOString().slice(0, 10);
+    // The LOCAL date. toISOString() is UTC, which in Wisconsin rolls over to
+    // tomorrow at 6 or 7 pm -- exactly when storms start -- so a hold ending
+    // today was ignored and one starting tomorrow already skipped tonight.
+    const n = new Date();
+    const today = n.getFullYear() + '-' + two(n.getMonth() + 1) + '-' + two(n.getDate());
     return a.vacationHolds.some(h => h.from <= today && today <= h.to);
   }
 
   // ---------------------------------------------------------------- helpers
 
-  const two = n => String(n).padStart(2, '0');
+  function two(n) { return String(n).padStart(2, '0'); }
+  // Ids go into onclick handlers, and stop ids are written from crew phones.
+  // Only the characters our own ids use get through.
+  function safeId(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, ''); }
   function clockTime(iso) {
     if (!iso) return '';
     const d = new Date(iso);
@@ -195,10 +202,10 @@
 
     let actions;
     if (s.skipped) {
-      actions = '<button class="btn btn-sm" onclick="unskipStop(\'' + s.id + '\')">Undo skip</button>';
+      actions = '<button class="btn btn-sm" onclick="unskipStop(\'' + safeId(s.id) + '\')">Undo skip</button>';
     } else if (!s.arrivedAt) {
-      actions = '<button class="btn-stop arrive" onclick="arriveStop(\'' + s.id + '\')">Arrive</button>' +
-                '<button class="btn btn-sm" onclick="skipStop(\'' + s.id + '\')">Skip</button>';
+      actions = '<button class="btn-stop arrive" onclick="arriveStop(\'' + safeId(s.id) + '\')">Arrive</button>' +
+                '<button class="btn btn-sm" onclick="skipStop(\'' + safeId(s.id) + '\')">Skip</button>';
     } else if (!s.departedAt) {
       // Numbers are captured here, on the card, at the moment they are known --
       // steppers for gloved hands, and the field itself accepts typing for
@@ -207,9 +214,9 @@
         stepper(s.id, 'inches', 'Inches cleared',
                 s.inchesCleared != null ? s.inchesCleared : storm.accumulationInches, 0.5) +
         (a.saltApplies ? stepper(s.id, 'salt', 'Salt bags', s.saltBags || 0, 1) : '') +
-        '<button class="btn-stop depart" onclick="departStop(\'' + s.id + '\')">Depart</button>';
+        '<button class="btn-stop depart" onclick="departStop(\'' + safeId(s.id) + '\')">Depart</button>';
     } else {
-      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + s.id + '\')">Another pass here</button>';
+      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + safeId(s.id) + '\')">Another pass here</button>';
     }
 
     return '<div class="stop ' + state + '">' +
@@ -217,8 +224,8 @@
         '<span class="stop-num">' + (s.order + 1) + '</span>' +
         (!s.arrivedAt && !s.skipped
           ? '<span class="stop-move">' +
-              '<button onclick="moveStop(\'' + s.id + '\',-1)" title="Earlier">&#9650;</button>' +
-              '<button onclick="moveStop(\'' + s.id + '\',1)" title="Later">&#9660;</button>' +
+              '<button onclick="moveStop(\'' + safeId(s.id) + '\',-1)" title="Earlier">&#9650;</button>' +
+              '<button onclick="moveStop(\'' + safeId(s.id) + '\',1)" title="Later">&#9660;</button>' +
             '</span>' : '') +
         '<span class="stop-name">' + esc(a.name || s.accountId) + '</span>' +
         (s.pass > 1 ? '<span class="snow-tag trigger">pass ' + s.pass + '</span>' : '') +
@@ -248,8 +255,17 @@
   // So: send the write, never block the interface on it, and let the local
   // listener redraw. The queued write reaches the server on its own later.
   function writeSoon(promise, what) {
-    Promise.resolve(promise).catch(e =>
-      console.warn('[storm] ' + what + ' not yet on the server:', e.code || e.message));
+    Promise.resolve(promise).catch(e => {
+      // Refused is not the same as "not sent yet". The usual case is a crew
+      // member departing a stop after the owner has already closed the storm:
+      // the phone showed the stop as done while the server kept the old one.
+      if (e && e.code === 'permission-denied') {
+        showToast('Not saved — this storm has been closed');
+        console.error('[storm] ' + what + ' refused by the rules');
+      } else {
+        console.warn('[storm] ' + what + ' not yet on the server:', (e && (e.code || e.message)));
+      }
+    });
   }
 
   // ---------------------------------------------------------------- actions
@@ -341,11 +357,22 @@
   // A single stop can also be run again on its own.
   window.secondPass = async function (id) {
     const s = stops[id];
-    const newId = s.accountId + '-p' + ((s.pass || 1) + 1);
+    if (!s) return;
+    // The next pass for this customer is one past the HIGHEST pass they have,
+    // not one past the card that was tapped. Tapping it on a pass-1 card after
+    // "Run the route again" had already made pass 2 used to write a blank
+    // visit over that pass 2 -- erasing a finished, billable visit.
+    let pass = 1;
+    Object.values(stops).forEach(x => {
+      if (x.accountId === s.accountId) pass = Math.max(pass, x.pass || 1);
+    });
+    pass += 1;
+    while (stops[s.accountId + '-p' + pass]) pass += 1;
+    const newId = s.accountId + '-p' + pass;
     const rec = {
       accountId: s.accountId,
       order: Object.keys(stops).length,
-      pass: (s.pass || 1) + 1,
+      pass: pass,
       driveMiles: null,
       arrivedAt: null, departedAt: null,
       inchesCleared: null, saltBags: null,
@@ -456,6 +483,18 @@
     const openOnes = list.filter(s => s.arrivedAt && !s.departedAt);
     if (openOnes.length && !confirm(openOnes.length + ' stop(s) are still open — nobody has departed.\n\nClose the storm anyway?')) return;
 
+    // Every customer visited must have a price before the bill is frozen. A
+    // visit with no pricing loaded used to be left off the bill without a
+    // word -- and closing is final, so that customer was simply never charged.
+    const worked = list.filter(s => !s.skipped && s.departedAt);
+    await YDSnow.refreshPricing(Array.from(new Set(worked.map(s => s.accountId))));
+    const unpriced = Array.from(new Set(worked
+      .filter(s => !YDSnow.priceVisit(s.accountId, storm.accumulationInches, 0, storm.crewSize))
+      .map(s => (accountFor(s).name || s.accountId))));
+    if (unpriced.length && !confirm('No price could be found for:\n\n' + unpriced.join('\n') +
+        '\n\nThey would be left off this storm’s bill. Close anyway?\n\n' +
+        '(Cancel, check their pricing on the Snow tab, then close again.)')) return;
+
     const lines = [];
     let revenue = 0, salt = 0, minutes = 0, pausedTotal = 0;
     list.forEach(s => {
@@ -488,6 +527,8 @@
         // Stored rather than recomputed at invoice time, so the hours printed
         // on the customer's invoice are the ones the charge was worked out from.
         manHours: p.manHours,
+        laborRateCents: ((YDSnow.pricing()[s.accountId] || {}).laborRateCents) != null
+          ? YDSnow.pricing()[s.accountId].laborRateCents : null,
         saltBags: s.saltBags, plowCents: p.plowCents, saltCents: p.saltCents,
         laborCents: p.laborCents, totalCents: p.totalCents,
       });
@@ -581,8 +622,20 @@
   window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render,
                      startPoint: () => startPoint };
 
+  // Signing out does not reload the page, so the watches and the data are
+  // dropped here; otherwise the next person on the same phone would never get
+  // fresh ones and would be looking at the last person's storm.
+  let authKey = null;
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    if (a.mode === 'cloud' && a.user) start();
+    const key = a.mode === 'cloud' && a.user ? a.user.uid + ':' + a.role : null;
+    if (key !== authKey) {
+      [unsubStorms, unsubStops].forEach(u => { if (u) { try { u(); } catch (err) {} } });
+      unsubStorms = unsubStops = null;
+      storm = null; stops = {};
+      Object.keys(known).forEach(k => delete known[k]);
+      authKey = key;
+    }
+    if (key) start(); else render();
   });
 })();

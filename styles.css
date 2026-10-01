@@ -1038,3 +1038,73 @@
     .cal-views .btn { flex:1; }
     .cal-entry-time { flex-basis:60px; }
   }
+
+  /* ---- work log ---- */
+  .wl-filters { flex-wrap:wrap; gap:8px; }
+  .wl-filters select, .wl-filters input { width:auto; flex:1 1 150px; }
+  .wl-views { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 12px; }
+  .wl-sum { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:8px; margin-bottom:10px; }
+  .wl-card { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
+  .wl-card-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px; color:var(--muted); }
+  .wl-card-value { font-size:18px; font-weight:700; margin-top:3px; }
+  .wl-day { border:1px solid var(--border); border-radius:10px; background:var(--surface);
+    overflow:hidden; margin-top:10px; }
+  .wl-day-head { display:flex; justify-content:space-between; gap:10px; padding:9px 13px;
+    font-size:13px; font-weight:700; background:var(--surface-2); border-bottom:1px solid var(--border); }
+  .wl-group-sub { font-size:12px; color:var(--muted); padding:7px 13px 0; }
+  .wl-row { display:grid; grid-template-columns:minmax(90px, 1.1fr) minmax(0, 2fr) auto auto;
+    align-items:center; gap:4px 12px; padding:9px 13px; border-bottom:1px solid var(--border); font-size:13px; }
+  .wl-row:last-child { border-bottom:none; }
+  .wl-part { grid-template-columns:minmax(0, 1fr) auto auto; }
+  .wl-who { font-weight:700; }
+  .wl-where { min-width:0; overflow-wrap:anywhere; }
+  .wl-time { color:var(--muted); white-space:nowrap; font-size:12px; }
+  .wl-hrs { font-weight:700; white-space:nowrap; text-align:right; min-width:58px; }
+  .wl-tag { display:inline-block; margin-left:6px; font-size:10px; font-weight:700; padding:1px 7px;
+    border-radius:10px; background:var(--surface-2); border:1px solid var(--border); color:var(--muted); }
+  .wl-tag.live { background:var(--pos-soft); color:var(--pos); border-color:transparent; }
+  .wl-tag.wait { background:#fbeaca; color:#9a6a12; border-color:transparent; }
+  html[data-night] .wl-tag.wait { background:#3a2c10; color:#f0b04a; }
+
+  @media (max-width:720px) {
+    .wl-sum { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    /* who and hours on the top line, where and when underneath */
+    .wl-row { grid-template-columns:minmax(0, 1fr) auto; }
+    .wl-who { grid-column:1; grid-row:1; }
+    .wl-hrs { grid-column:2; grid-row:1; }
+    .wl-where { grid-column:1 / -1; grid-row:2; }
+    .wl-time { grid-column:1 / -1; grid-row:3; }
+    .wl-part { grid-template-columns:minmax(0, 1fr) auto; }
+    .wl-part .wl-where { grid-column:1; grid-row:1; }
+    .wl-part .wl-time { grid-column:1; grid-row:2; }
+    .wl-part .wl-hrs { grid-column:2; grid-row:1 / span 2; }
+  }
+
+  /* ---- night-mode contrast ----
+     These used the brand purple for text, which at night is nearly black on a
+     nearly black background. The light purple reads; the dark one did not. */
+  html[data-night] .month-head, html[data-night] .uz-text, html[data-night] .snow-tag.salt,
+  html[data-night] .menu button:hover, html[data-night] .cal-plus, html[data-night] .auth-title,
+  html[data-night] .linkish, html[data-night] .pp-contact a, html[data-night] .snow-addr,
+  html[data-night] .bd-add-card:hover { color:var(--brand-2); }
+  /* a purchase that was never quoted: a warm tint that works in both themes */
+  .row-unquoted { background:#fdf3ea; }
+  html[data-night] .row-unquoted { background:#2e2214; }
+
+  /* ---- iPhone status bar ----
+     The app runs edge to edge on an iPhone (viewport-fit=cover with a
+     translucent status bar), so the top of the page sat UNDER the clock and
+     the battery -- and the menu with Sign out in it could not be tapped. The
+     safe-area inset is the status bar's height; it is zero everywhere else. */
+  .page { padding-top:env(safe-area-inset-top, 0px); }
+  .ctx-bar { top:env(safe-area-inset-top, 0px); }
+
+  /* ---- job controls only where there is a job ----
+     Save, New, My Jobs and the "Editing ..." bar all act on the open job.
+     On Snow, the calendar or the boards they were just in the way. Tracking
+     is about the open job too, so it keeps them. The logo and the menu (with
+     Sign out) stay on every screen. */
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnSave,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnNew,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnMyJobs,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #ctxBar { display:none !important; }

@@ -14,13 +14,13 @@ import { initializeApp }
   from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js';
 import {
   getAuth, GoogleAuthProvider, signInWithPopup,
-  getRedirectResult, onAuthStateChanged, signOut, setPersistence,
+  onAuthStateChanged, signOut, setPersistence,
   browserLocalPersistence,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentMultipleTabManager,
   doc, getDoc, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
-  getDocs, writeBatch, disableNetwork, enableNetwork, query, where,
+  getDocs, getDocsFromServer, writeBatch, disableNetwork, enableNetwork, query, where,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
@@ -98,9 +98,8 @@ async function start() {
   const standalone = window.matchMedia('(display-mode: standalone)').matches
     || window.navigator.standalone === true;
 
-  try { await getRedirectResult(auth); } catch (e) {
-    console.warn('[auth] redirect result:', e.code || e.message);
-  }
+  // Redirect sign-in was removed, so there is never a redirect result to
+  // collect; asking for one still cost a network round trip on every launch.
 
   const provider = new GoogleAuthProvider();
   provider.setCustomParameters({ prompt: 'select_account' });
@@ -259,7 +258,9 @@ async function start() {
       return;
     }
 
-    localStorage.setItem(ROLE_CACHE, role);
+    // A full localStorage must not stop sign-in -- this used to throw inside
+    // the auth listener and leave the gate stuck on "Checking access".
+    try { localStorage.setItem(ROLE_CACHE, role); } catch (e) {}
 
     if (role === 'pending') {
       gate.show('pending', {
@@ -329,8 +330,12 @@ async function start() {
         }
       },
 
+      // From the SERVER, deliberately. getDocs answers from the local cache
+      // when there is no signal, so "connected" was being reported while
+      // offline -- and an empty cache read as "the cloud has no jobs", which
+      // is the one answer that lets this device push its copies over it.
       async countJobs() {
-        const snap = await getDocs(collection(db, 'jobs'));
+        const snap = await getDocsFromServer(collection(db, 'jobs'));
         return snap.size;
       },
 
@@ -419,6 +424,15 @@ async function start() {
       // Several writes as one unit. Used by imports, where half-landed data is
       // worse than none: an account whose pricing arrived but whose address
       // did not would quietly bill wrong.
+      // Several deletes as one unit -- a board and all its cards, say. Chaining
+      // them (cards, then the board once the server confirms) never deleted
+      // the board at all with no signal, because "confirmed" never came.
+      removeMany(entries) {
+        const batch = writeBatch(db);
+        entries.forEach(([path, id]) => batch.delete(doc(db, ...path.split('/'), id)));
+        return batch.commit();
+      },
+
       async putMany(entries) {
         const CHUNK = 400;
         for (let i = 0; i < entries.length; i += CHUNK) {

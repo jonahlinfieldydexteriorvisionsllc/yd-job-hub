@@ -409,7 +409,7 @@
     // A crew member who was somehow left on this tab gets moved off it.
     if (!owner) {
       const panel = el('panel-contacts');
-      if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('job');
+      if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('clock');
     }
 
     if (a.mode === 'cloud' && a.user && owner) start();

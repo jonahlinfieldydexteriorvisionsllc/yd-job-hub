@@ -136,8 +136,11 @@ service cloud.firestore {
 
         // Crew may record work on a storm that is still running. Once the owner
         // closes the storm the billing is locked and only they can touch it.
+        // The stop id must look like one of ours (account id, maybe '-p2'): it
+        // goes into buttons on the owner's screen.
         allow create, update: if isOwner()
           || (isCrew()
+              && stopId.matches('[A-Za-z0-9_-]+')
               && get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open');
 
         allow delete: if isOwner();
@@ -191,32 +194,81 @@ service cloud.firestore {
       }
       function clocked() { return request.resource.data.source == 'clock'; }
 
-      // A crew member may write only these four states, and 'ok' only for a
-      // shift the clock itself timed and kept under eight hours. 'approved' is
-      // never theirs to write.
-      function crewMayClaim() {
-        let s = request.resource.data.status;
-        return s == 'running'
-          || s == 'pending'
-          || (s == 'ok' && clocked() && shortEnough());
+      // Our own ids only: 'te' and letters/digits. The id is put into buttons
+      // on the owner's screen, and an id chosen to break out of one would run
+      // as the owner.
+      function goodId() { return entryId.matches('te[a-z0-9]+'); }
+
+      // Nothing ends in the future. Two minutes' slack for a phone clock that
+      // runs a little fast.
+      function endedInPast() {
+        return request.resource.data.endedMs is number
+          && request.resource.data.endedMs <= request.time.toMillis() + 2 * 60 * 1000;
+      }
+
+      // A crew member creates exactly two kinds of shift:
+      //
+      //   clocking in    'running', timed by the clock, no end yet. The start
+      //                  may be up to 12 hours old, because a phone with no
+      //                  signal sends the clock-in when the signal returns.
+      //   typed in       'pending' and 'manual' -- always waits for the owner.
+      //
+      // Nothing is created already settled. A shift written straight in as
+      // 'ok' would never have been timed by anything, and it would count as
+      // payroll without the owner ever seeing it.
+      function crewMayCreate() {
+        let d = request.resource.data;
+        return (d.status == 'running' && d.source == 'clock'
+                && d.endedMs == null
+                && d.startedMs is number
+                && d.startedMs <= request.time.toMillis() + 2 * 60 * 1000
+                && d.startedMs >= request.time.toMillis() - 12 * 60 * 60 * 1000)
+          || (d.status == 'pending' && d.source == 'manual'
+                && d.startedMs is number && endedInPast()
+                && durationMs() > 0 && durationMs() <= 25 * 60 * 60 * 1000);
+      }
+
+      // And changes it in exactly these ways. The source and the start can
+      // never change on a clocked shift -- otherwise a typed-in shift could be
+      // relabelled as clocked, or a clocked one moved earlier, and settle
+      // itself as payroll.
+      //
+      //   running -> running   pausing and resuming
+      //   running -> ok        clocking out, if the clock timed it and it is
+      //                        under eight hours
+      //   running -> pending   clocking out a longer shift
+      //   pending -> pending   correcting a typed-in shift before the owner
+      //                        decides it -- it stays waiting
+      function crewMayChange() {
+        let d = request.resource.data;
+        let was = resource.data;
+        return d.source == was.source && (
+          (was.source == 'manual' && was.status == 'pending'
+             && d.status == 'pending' && endedInPast()
+             && durationMs() > 0 && durationMs() <= 25 * 60 * 60 * 1000)
+          || (was.source == 'clock' && was.status == 'running'
+             && d.startedMs == was.startedMs
+             && ((d.status == 'running' && d.endedMs == null)
+                 || (d.status == 'ok' && endedInPast() && shortEnough())
+                 || (d.status == 'pending' && endedInPast() && durationMs() > 0)))
+        );
       }
 
       allow create: if isOwner()
         || (isCrew()
+            && goodId()
             && request.resource.data.uid == request.auth.uid
-            && crewMayClaim()
+            && crewMayCreate()
             && crewFieldsOnly());
 
-      // Crew may amend a shift of their own that has not yet been settled or
-      // decided. Once it is 'ok', 'approved' or 'rejected' it is a payroll
-      // record and only an owner may touch it -- otherwise a shift could be
-      // clocked out short, settle itself, and then be edited longer.
+      // Once a shift is 'ok', 'approved' or 'rejected' it is a payroll record
+      // and only an owner may touch it -- otherwise a shift could be clocked
+      // out short, settle itself, and then be edited longer.
       allow update: if isOwner()
         || (isCrew()
             && resource.data.uid == request.auth.uid
-            && resource.data.status in ['running', 'pending']
             && request.resource.data.uid == resource.data.uid
-            && crewMayClaim()
+            && crewMayChange()
             && crewFieldsOnly());
 
       allow delete: if isOwner();
@@ -236,7 +288,11 @@ service cloud.firestore {
     // ===================================================================
     match /problems/{docId} {
       allow read:   if isOwner();
-      allow create: if isStaff() && request.resource.data.uid == request.auth.uid;
+      // Id and kind are checked because both are drawn on the owner's
+      // Problems screen; anything else could carry script onto it.
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid
+        && docId.matches('p[a-z0-9]+')
+        && request.resource.data.kind in ['error', 'promise', 'reported'];
       allow update, delete: if isOwner();
     }
 
