@@ -1467,3 +1467,11 @@
     .section-head { flex-wrap:wrap; row-gap:10px; }
     .section-head > span[style*="display:flex"] { flex-wrap:wrap; justify-content:flex-end; margin-left:auto; flex-basis:100%; }
   }
+
+  /* A count badge with nothing to count drew as a small blank pill at the
+     end of the header -- on the Clock, Equipment and job sections it looked
+     like a button that did nothing. Empty, it is simply not shown. */
+  .section-badge:empty { display:none; }
+
+  /* "Forgot to clock in?" and "My hours" sat touching each other. */
+  .clock-idle > .btn-sm { margin:4px 3px 0; }

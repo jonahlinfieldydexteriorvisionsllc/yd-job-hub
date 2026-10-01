@@ -213,7 +213,13 @@
       html += '<p class="empty-msg">' + (words.length
         ? 'Nothing matches “' + esc(search) + '”' + (v ? ' at ' + esc(v.name) : '') + '.' +
           (isOwner() ? ' Add it with “+ Add an item”.' : ' Ask Jonah where to get it, and he can add it here.')
-        : (v ? 'Nothing listed for ' + esc(v.name) + ' yet.' : 'Nothing here yet.')) + '</p>';
+        : (v ? 'Nothing listed for ' + esc(v.name) + ' yet.' : 'Nothing here yet.') +
+          // The first visit: suppliers in, nothing bought from them yet. Say
+          // how the list gets filled rather than just that it is empty.
+          (isOwner() && !Object.keys(items).length
+            ? ' Add things one at a time with “+ Add an item”, or paste a whole price list ' +
+              'in at once with “💲 Price list”.'
+            : '')) + '</p>';
       box.innerHTML = html;
       return;
     }
