@@ -51,9 +51,20 @@ from firebase_admin import firestore
 
 # ---------------------------------------------------------------- config
 
-AUTHORIZE_URL = "https://appcenter.intuit.com/connect/oauth2"
-TOKEN_URL = "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer"
-REVOKE_URL = "https://developer.api.intuit.com/v2/oauth2/tokens/revoke"
+# Intuit publishes its OAuth endpoints in a discovery document and asks apps
+# to read them from there, so that a moved endpoint does not silently break the
+# connection. The addresses below are only the fallback for when the document
+# itself cannot be fetched -- a connection should not fail because of that.
+DISCOVERY_URL = {
+    "sandbox": "https://developer.api.intuit.com/.well-known/openid_sandbox_configuration",
+    "production": "https://developer.api.intuit.com/.well-known/openid_configuration",
+}
+FALLBACK_ENDPOINTS = {
+    "authorization_endpoint": "https://appcenter.intuit.com/connect/oauth2",
+    "token_endpoint": "https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer",
+    "revocation_endpoint": "https://developer.api.intuit.com/v2/oauth2/tokens/revoke",
+}
+DISCOVERY_HOURS = 24        # re-read once a day; endpoints rarely move
 SCOPE = "com.intuit.quickbooks.accounting"
 
 # The accounting API's shape changes between minor versions; pinning one means
@@ -93,6 +104,34 @@ def _env(name, default=""):
 
 def _api_base():
     return API_BASE.get(_env("QB_ENV", "sandbox"), API_BASE["sandbox"])
+
+
+_discovered = {"at": None, "env": None, "endpoints": None}
+
+
+def _endpoint(name):
+    """One OAuth endpoint, from Intuit's discovery document, cached for a day."""
+    env = _env("QB_ENV", "sandbox")
+    now = _now()
+    fresh = (
+        _discovered["endpoints"]
+        and _discovered["env"] == env
+        and now - _discovered["at"] < datetime.timedelta(hours=DISCOVERY_HOURS)
+    )
+    if not fresh:
+        try:
+            resp = requests.get(DISCOVERY_URL.get(env, DISCOVERY_URL["sandbox"]), timeout=10)
+            doc = resp.json() if resp.status_code == 200 else {}
+            found = {k: doc[k] for k in FALLBACK_ENDPOINTS if doc.get(k)}
+            if len(found) == len(FALLBACK_ENDPOINTS):
+                _discovered.update(at=now, env=env, endpoints=found)
+            else:
+                print("quickbooks discovery document incomplete (%d), using fallback" % resp.status_code)
+        except Exception as e:              # noqa: BLE001 -- fallback below
+            print("quickbooks discovery document unavailable, using fallback:", e)
+    if _discovered["endpoints"] and _discovered["env"] == env:
+        return _discovered["endpoints"][name]
+    return FALLBACK_ENDPOINTS[name]
 
 
 def _redirect_uri():
@@ -203,7 +242,7 @@ def _exchange(grant_type, **extra):
     body.update(extra)
     resp = _send(
         "POST",
-        TOKEN_URL,
+        _endpoint("token_endpoint"),
         auth=(cid, secret),
         data=body,
         headers={"Accept": "application/json"},
@@ -368,7 +407,7 @@ def connect_url(uid):
             "state": state,
         }
     )
-    return {"url": "%s?%s" % (AUTHORIZE_URL, query)}
+    return {"url": "%s?%s" % (_endpoint("authorization_endpoint"), query)}
 
 
 def callback(request):
@@ -464,7 +503,7 @@ def disconnect():
         try:
             cid, secret = _client()
             requests.post(
-                REVOKE_URL,
+                _endpoint("revocation_endpoint"),
                 auth=(cid, secret),
                 json={"token": tokens["refreshToken"]},
                 headers={"Accept": "application/json"},
