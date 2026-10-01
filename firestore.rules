@@ -345,10 +345,15 @@ service cloud.firestore {
         allow read: if isOwner()
           || (isCrew() && request.auth.uid in
               get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo);
-        // Crew can move a card they can see; only the owner creates or deletes.
+        // Crew can move a card they can see and tick its checklist -- and
+        // nothing else. Without the field list, "can move a card" would also
+        // mean "can rewrite what it says or who it is assigned to". Only the
+        // owner creates or deletes.
         allow update: if isOwner()
           || (isCrew() && request.auth.uid in
-              get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo);
+                get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo
+              && request.resource.data.diff(resource.data).affectedKeys()
+                   .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']));
         allow create, delete: if isOwner();
       }
     }

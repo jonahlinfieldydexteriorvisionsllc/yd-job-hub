@@ -40,6 +40,12 @@ let payments = [];
 let additionalCosts = [];
 let serviceTypes = [];
 let jobStatus = 'quoting';
+// Where the job sits on the Bids and Jobs boards. The form does not edit these,
+// but it must carry them: getJobData() rebuilds the record from scratch, so a
+// field it does not know about would be silently dropped by the next save, and
+// a card dragged on the board would jump back.
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt'];
+let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
 let dirty = false;
@@ -225,7 +231,10 @@ document.addEventListener('yd-auth', e => {
   const ctx = document.getElementById('ctxBar');
   if (ctx) ctx.style.display = crewOnly ? 'none' : '';
 
-  // Crew see both their screens on the bar, so More would open on nothing.
+  // Crew see all their screens on the bar, so More would open on nothing. The
+  // attribute lets the stylesheet put Boards on a crew phone's bar, where the
+  // owner's phone keeps it behind More.
+  document.documentElement.toggleAttribute('data-crew', crewOnly);
   const more = document.getElementById('tabMore');
   if (more) more.hidden = crewOnly;
   if (crewOnly) {
@@ -264,7 +273,7 @@ function closeMore() {
 function tabButtonId(name) {
   return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
     dashboard: 'tabDashboard', matdash: 'tabMatdash', contacts: 'tabContacts',
-    equipment: 'tabEquipment' }[name] || '';
+    equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards' }[name] || '';
 }
 
 // ---- Header overflow menu (Backup / Restore / Print) ----
@@ -291,21 +300,26 @@ document.addEventListener('keydown', e => {
 // The bar on a phone holds only what gets used in the field. The rest is one
 // tap away behind More, which is what stops every new screen making the bar
 // more crowded than the last.
-const TABS = ['job', 'snow', 'clock', 'equipment', 'tracking', 'dashboard', 'matdash', 'contacts'];
-const PHONE_TABS = ['job', 'snow', 'clock', 'dashboard'];
+const TABS = ['job', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'tracking', 'dashboard', 'matdash', 'contacts'];
+const PHONE_TABS = ['job', 'snow', 'clock', 'calendar', 'dashboard'];
 const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
+  calendar: '📅 Calendar', boards: '📌 Boards',
   equipment: '🚜 Equipment', tracking: '🔨 Tracking',
   dashboard: '📊 All Jobs', matdash: '📦 Materials',
   contacts: '📇 Contacts' };
-const TAB_HINT = { equipment: 'What each machine and truck is due for',
+const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
+  equipment: 'What each machine and truck is due for',
   tracking: 'Hours and materials on the job you have open',
   matdash: 'What you have bought across every job',
   contacts: 'People to ring later' };
 
 function switchTab(name) {
   closeMore();
-  document.querySelectorAll('.tab-btn').forEach((b, i) => {
-    b.classList.toggle('active', TABS[i] === name);
+  // Matched by id, not by position: the buttons are not in the same order as
+  // TABS, and matching by position lit up the wrong button on a laptop.
+  const activeBtn = tabButtonId(name);
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.id === activeBtn);
   });
   // On a phone, a screen reached through More has no button of its own, so
   // More itself carries the highlight -- otherwise nothing on the bar would
@@ -320,6 +334,8 @@ function switchTab(name) {
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
   if (name === 'clock' && window.YDClock) YDClock.render();
   if (name === 'equipment' && window.YDEquipment) YDEquipment.render();
+  if (name === 'calendar' && window.YDCalendar) YDCalendar.render();
+  if (name === 'boards' && window.YDBoards) YDBoards.render();
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();
@@ -845,6 +861,7 @@ function getJobData() {
   d.labor = labor; d.materials = materials; d.orderItems = orderItems;
   d.proposals = proposals; d.payments = payments; d.additionalCosts = additionalCosts;
   d.manualJobPrice = manualJobPrice; d.baseJobPrice = baseJobPrice; d.jobStatus = jobStatus;
+  BOARD_FIELDS.forEach(f => { if (boardFields[f] != null) d[f] = boardFields[f]; });
   d.lastModified = new Date().toISOString();
   return d;
 }
@@ -868,6 +885,8 @@ function loadJobData(d) {
   if (d.baseJobPrice !== undefined && d.baseJobPrice !== null && d.baseJobPrice !== '') baseJobPrice = parseFloat(d.baseJobPrice) || 0;
   else baseJobPrice = parseMoney(d.jobPrice || '') - additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0);
   jobStatus = d.jobStatus || 'quoting';
+  boardFields = {};
+  BOARD_FIELDS.forEach(f => { if (d[f] != null) boardFields[f] = d[f]; });
 
   syncStatusSelect(); updateJobHeadBadge();
   renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
@@ -1034,7 +1053,7 @@ function newJob() {
   if (dirty && !confirm('Start a new job? Unsaved changes will be lost.')) return;
   currentJobId = null;
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
-  serviceTypes = []; jobStatus = 'quoting'; manualJobPrice = false; baseJobPrice = 0;
+  serviceTypes = []; jobStatus = 'quoting'; boardFields = {}; manualJobPrice = false; baseJobPrice = 0;
   storageBroken = false; storageWarned = false;
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = ''; });
   document.getElementById('qbInvoiced').checked = false;

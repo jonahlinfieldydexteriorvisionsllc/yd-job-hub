@@ -60,6 +60,8 @@
     <button class="tab-btn active" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
     <button class="tab-btn" id="tabSnow" onclick="switchTab('snow')"><span class="tab-icon">❄️</span>Snow</button>
     <button class="tab-btn" id="tabClock" hidden onclick="switchTab('clock')"><span class="tab-icon">⏱️</span>Clock</button>
+    <button class="tab-btn" id="tabCalendar" hidden onclick="switchTab('calendar')"><span class="tab-icon">📅</span>Calendar</button>
+    <button class="tab-btn" id="tabBoards" hidden onclick="switchTab('boards')"><span class="tab-icon">📌</span>Boards</button>
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn" id="tabMatdash" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
@@ -471,6 +473,26 @@
     </div>
   </div>
 
+  <!-- ============ TAB: CALENDAR ============ -->
+  <div class="tab-panel" id="panel-calendar">
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Calendar</span>
+      </div>
+      <div class="section-body" id="calWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ TAB: BOARDS ============ -->
+  <div class="tab-panel" id="panel-boards">
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Boards</span>
+      </div>
+      <div class="section-body" id="boardsWrap"></div>
+    </div>
+  </div>
+
   <!-- ============ TAB: EQUIPMENT ============ -->
   <div class="tab-panel" id="panel-equipment">
     <div class="section">
@@ -565,6 +587,26 @@
 <!-- What has gone wrong, on anybody's phone -->
 <!-- QuickBooks: connect, match accounts to customers, and nothing secret -->
 <!-- One machine: what is due, what has been done, and logging more -->
+<div class="modal-overlay" id="boardModal" onclick="if(event.target===this)closeBoardModal()">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-head">
+      <h2 id="boardModalTitle">Card</h2>
+      <button class="modal-close" onclick="closeBoardModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="boardModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="calModal" onclick="if(event.target===this)closeCalModal()">
+  <div class="modal" style="max-width:620px">
+    <div class="modal-head">
+      <h2 id="calModalTitle">Event</h2>
+      <button class="modal-close" onclick="closeCalModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="calModalBody"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="eqModal">
   <div class="modal" style="max-width:880px">
     <div class="modal-head">
@@ -734,6 +776,8 @@
 <script src="./problems.js"></script>
 <script src="./quickbooks.js"></script>
 <script src="./equipment.js"></script>
+<script src="./boards.js"></script>
+<script src="./calendar.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

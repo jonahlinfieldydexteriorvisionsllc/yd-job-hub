@@ -51,6 +51,46 @@
     if (id === 'panel-dashboard') renderDashboard();
     if (id === 'panel-matdash') renderMatDash();
     if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+    // The boards and the calendar draw from jobs too; they decide for
+    // themselves whether they are on screen.
+    document.dispatchEvent(new CustomEvent('yd-jobs-changed'));
+  }
+
+  // ------------------------------------------------------------ patch a job
+  //
+  // The Bids and Jobs boards move a job without opening it. That has to go
+  // through the same path as a save from the form -- local copy, index, cloud,
+  // crew job board -- or the job would be in one place on this device and
+  // another everywhere else. If that job happens to be open in the form, the
+  // form is brought along too, so its next save does not put the card back.
+  function patchJob(id, patch) {
+    const raw = readJobBlob(id);
+    if (!raw) return false;
+    let data;
+    try { data = JSON.parse(raw); } catch { return false; }
+    Object.assign(data, patch, { lastModified: new Date().toISOString() });
+    try {
+      localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(data));
+    } catch (err) {
+      showToast('Could not save that move on this device');
+      return false;
+    }
+    const map = indexById();
+    map[id] = buildIndexEntry(id, data);
+    writeIndex(map);
+
+    if (id === currentJobId) {
+      if (dirty) {
+        // Keep what is being typed; just carry the move into it.
+        if (patch.jobStatus) { jobStatus = patch.jobStatus; syncStatusSelect(); updateCtxBar(); }
+        BOARD_FIELDS.forEach(f => { if (f in patch) boardFields[f] = patch[f]; });
+      } else {
+        loadJob(id);
+      }
+    }
+    queuePush(id);
+    refreshVisible();
+    return true;
   }
 
   function setCloudState(s) {
@@ -330,6 +370,7 @@
   window.YDSync = {
     status: () => ({ watching, cloudState, applyingRemote }),
     pushAll: pushAllLocal,
+    patchJob: patchJob,
     stop: () => { if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },
   };
 })();

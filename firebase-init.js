@@ -381,6 +381,21 @@ async function start() {
           err => { console.error('[db] filtered watch failed on', path, err); if (onError) onError(err); });
       },
 
+      // Watch only the documents whose array `field` contains `value`. Same
+      // reason as watchWhere: a crew member may read a board or a calendar
+      // only when their uid is in its visibleTo list, so the question has to
+      // be "the ones listing me", never "all of them".
+      watchContains(path, field, value, onChange, onError) {
+        const parts = path.split('/');
+        const q = query(collection(db, ...parts), where(field, 'array-contains', value));
+        return onSnapshot(q,
+          snap => onChange(
+            snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() })),
+            { size: snap.size, fromCache: snap.metadata.fromCache }
+          ),
+          err => { console.error('[db] shared-with watch failed on', path, err); if (onError) onError(err); });
+      },
+
       async list(path) {
         const snap = await getDocs(collection(db, ...path.split('/')));
         const out = {};
