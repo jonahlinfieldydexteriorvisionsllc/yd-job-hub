@@ -29,7 +29,8 @@
     <div class="header-actions">
       <button class="btn btn-save" id="btnSave" onclick="saveJob()">&#10003; Save</button>
       <button class="btn btn-accent" id="btnNew" onclick="newJob()">+ New</button>
-      <button class="btn" id="btnMyJobs" onclick="openManager()">My Jobs</button>
+      <button class="btn" id="btnMyJobs" onclick="openManager()"><span class="hide-phone">My </span>Jobs</button>
+      <button class="wx-chip" id="wxChip" onclick="toggleWeek()" aria-expanded="false" aria-controls="wxPanel" title="This week's weather"><span class="wxc-icon">🌡️</span><span class="wxc-temp">—</span></button>
       <div class="menu-wrap">
         <button class="btn btn-menu" onclick="toggleHeaderMenu()" aria-haspopup="true" aria-label="More actions">&#8943;</button>
         <div class="menu" id="headerMenu" hidden>
@@ -49,6 +50,10 @@
       <input type="file" id="restoreInput" accept=".json" style="display:none" onchange="importAllJobs(event)">
     </div>
   </div>
+
+  <!-- The week's weather: drops down from the header button, stays put while
+       the rest of the app is used. -->
+  <div class="wx-panel" id="wxPanel" hidden></div>
 
   <!-- Current job context bar -->
   <div class="ctx-bar" id="ctxBar">
@@ -823,6 +828,7 @@
 <script src="./calendar.js"></script>
 <script src="./supplies.js"></script>
 <script src="./notify.js"></script>
+<script src="./forecast.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

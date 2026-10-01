@@ -1219,3 +1219,66 @@
     .bd-col { flex:1 1 0; min-width:175px; }
     .bd-cols { align-items:stretch; }
   }
+
+  /* ---- the week's weather: header button + floating panel ---- */
+  .wx-chip { display:inline-flex; align-items:center; gap:5px; min-height:38px; padding:5px 11px;
+    border:2px solid var(--brand); border-radius:6px; background:transparent; color:var(--brand);
+    font:700 14px 'DM Sans',sans-serif; cursor:pointer; }
+  html[data-night] .wx-chip { border-color:var(--brand-2); color:var(--brand-2); }
+  .wxc-icon { font-size:16px; line-height:1; }
+  .wxc-caret { font-size:10px; opacity:.7; }
+  .wxc-alert { background:var(--neg); color:#fff; border-radius:50%; width:16px; height:16px; font-size:11px;
+    display:inline-flex; align-items:center; justify-content:center; }
+  .wx-panel { position:fixed; z-index:950; right:max(16px, calc((100vw - 1400px) / 2 + 28px));
+    top:calc(env(safe-area-inset-top, 0px) + 70px); width:min(640px, calc(100vw - 32px));
+    max-height:calc(100vh - 160px); overflow:auto; background:var(--surface); color:var(--text);
+    border:1px solid var(--border-strong); border-radius:12px; box-shadow:0 14px 40px rgba(43,36,51,.28); padding:14px; }
+  .wxp-top { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; flex-wrap:wrap; }
+  .wxp-now { display:flex; flex-direction:column; }
+  .wxp-big { font:700 26px 'DM Sans',sans-serif; }
+  .wxp-sub { font-size:12px; color:var(--muted); }
+  .wxp-places { display:flex; gap:6px; }
+  .wxp-place { min-height:36px; padding:5px 12px; border-radius:18px; border:1.5px solid var(--border-strong);
+    background:var(--surface); color:var(--text); font:600 12px 'DM Sans',sans-serif; cursor:pointer; }
+  .wxp-place.on { border-color:var(--accent); background:var(--surface-2); }
+  .wxp-alert { margin-top:10px; padding:8px 10px; border-radius:8px; background:var(--neg-soft); color:var(--neg);
+    font-size:13px; font-weight:700; }
+  .wxp-days { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:6px; margin-top:12px; }
+  .wxp-day { text-align:center; padding:9px 4px; border-radius:9px; background:var(--surface-2); border:1px solid var(--border); }
+  .wxp-day.snow { border-color:#3fb6d8; background:rgba(63,182,216,.12); }
+  .wxp-name { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.4px; color:var(--muted); }
+  .wxp-icon { font-size:26px; margin:4px 0 2px; }
+  .wxp-words { font-size:10px; color:var(--muted); min-height:26px; line-height:1.25; }
+  .wxp-temps { font-size:14px; margin-top:2px; }
+  .wxp-temps span { color:var(--muted); }
+  .wxp-extra .wxp-w { display:none; }
+  .wxp-extra, .wxp-wind { font-size:11px; color:var(--muted); margin-top:3px; white-space:nowrap; }
+  .wxp-foot { margin-top:10px; font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .wxp-refresh { border:none; background:none; color:var(--brand); font-size:16px; cursor:pointer; min-width:32px; min-height:32px; }
+  .wxp-msg { font-size:13px; color:var(--muted); padding:8px 0; }
+  /* A phone is too narrow for seven columns: one row per day instead. */
+  @media (max-width:720px) {
+    .wx-chip { min-height:38px; padding:4px 5px; gap:3px; font-size:13px; }
+    .wx-chip .wxc-caret { display:none; }
+    .wx-panel { left:16px; right:16px; width:auto; top:calc(env(safe-area-inset-top, 0px) + 58px); max-height:calc(100vh - 150px); padding:12px; }
+    .wxp-days { grid-template-columns:1fr; gap:4px; }
+    .wxp-day { display:grid; grid-template-columns:78px 30px minmax(0,1fr) auto;
+      grid-template-areas:"name icon words temps" "name icon extra temps"; align-items:center; text-align:left;
+      column-gap:6px; padding:6px 10px; }
+    .wxp-name { grid-area:name; font-size:11px; }
+    .wxp-icon { grid-area:icon; font-size:22px; margin:0; }
+    .wxp-words { grid-area:words; min-height:0; font-size:12px; color:var(--text); }
+    .wxp-temps { grid-area:temps; text-align:right; margin:0; white-space:nowrap; }
+    .wxp-extra { grid-area:extra; margin:0; white-space:normal; }
+    .wxp-wind { display:none; }
+    .wxp-extra .wxp-w { display:inline; }
+  }
+  /* With the weather button in the header the Job tab's row is one button
+     longer, so on a phone the buttons give up a little padding and "My Jobs"
+     becomes "Jobs". */
+  @media (max-width:720px) {
+    .hide-phone { display:none; }
+    .header-actions { gap:4px; }
+    .header-actions .btn { padding:9px 7px; }
+  }
+  html[data-night] .wxp-refresh { color:var(--brand-2); }
