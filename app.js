@@ -40,6 +40,21 @@ let payments = [];
 let additionalCosts = [];
 let serviceTypes = [];
 let jobStatus = 'quoting';
+
+// The four stages a job goes through. 'active' was the old single status for
+// everything between a won bid and a finished job; it is read as Booked or In
+// progress by where the job sat on the Jobs board, so nothing has to be
+// re-entered and old copies on other devices still show correctly.
+const JOB_STATUS = { quoting: 'Quoting', booked: 'Booked', inprogress: 'In progress', complete: 'Complete' };
+function normStatus(s, d) {
+  if (s === 'active') {
+    const stage = d && d.workStage;
+    return stage === 'inProgress' || stage === 'punchList' ? 'inprogress' : 'booked';
+  }
+  return JOB_STATUS[s] ? s : 'quoting';
+}
+function statusLabel(s) { return JOB_STATUS[s] || (s === 'active' ? 'Booked' : 'Quoting'); }
+function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s) + '</span>'; }
 // Where the job sits on the Bids and Jobs boards. The form does not edit these,
 // but it must carry them: getJobData() rebuilds the record from scratch, so a
 // field it does not know about would be silently dropped by the next save, and
@@ -165,6 +180,19 @@ function resetDateInputs() { ['matDate','addCostDate','payDate'].forEach(id => {
 // ---- Night mode -------------------------------------------------------------
 // Remembered per device: the phone that rides in the truck should stay dark
 // without being asked every storm, while the desktop stays light.
+//
+// Three choices, each device its own: Light, Dark, or Automatic (whatever the
+// phone or computer itself is set to, switching when it does).
+const THEME_KEY = STORAGE_PREFIX + 'theme';
+const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function themeChoice() {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    if (t === 'light' || t === 'dark' || t === 'auto') return t;
+    // Devices that only ever had the old Night button keep what they had.
+    return localStorage.getItem(STORAGE_PREFIX + 'night') ? 'dark' : 'light';
+  } catch (e) { return 'light'; }
+}
 function applyNight(on) {
   const r = document.documentElement;
   if (on) r.setAttribute('data-night', ''); else r.removeAttribute('data-night');
@@ -172,12 +200,48 @@ function applyNight(on) {
   if (meta) meta.content = on ? '#0c0a0e' : '#472c64';
   const btn = document.getElementById('nightBtn');
   if (btn) btn.textContent = on ? '◐ Day' : '◑ Night';
-  try { localStorage.setItem(STORAGE_PREFIX + 'night', on ? '1' : ''); } catch (e) {}
 }
+function applyTheme() {
+  const t = themeChoice();
+  applyNight(t === 'dark' || (t === 'auto' && !!(darkQuery && darkQuery.matches)));
+}
+function setTheme(t) {
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  applyTheme();
+  const m = document.getElementById('themeModal');
+  if (m && m.classList.contains('active')) openAppearance();
+}
+// The Night button on the Snow screen still works: one tap for dark or light.
 function toggleNight() {
-  applyNight(!document.documentElement.hasAttribute('data-night'));
+  setTheme(document.documentElement.hasAttribute('data-night') ? 'light' : 'dark');
 }
-try { if (localStorage.getItem(STORAGE_PREFIX + 'night')) applyNight(true); } catch (e) {}
+if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', applyTheme);
+applyTheme();
+
+// The Appearance picker, opened from More (phone) or the menu (laptop).
+function openAppearance() {
+  let m = document.getElementById('themeModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modal-overlay';
+    m.id = 'themeModal';
+    m.onclick = e => { if (e.target === m) m.classList.remove('active'); };
+    document.body.appendChild(m);
+  }
+  const t = themeChoice();
+  const opt = (id, icon, label, hint) =>
+    '<button class="theme-opt' + (t === id ? ' on' : '') + '" onclick="setTheme(\'' + id + '\')">' +
+      '<span class="theme-icon">' + icon + '</span><span><b>' + label + '</b><small>' + hint + '</small></span></button>';
+  m.innerHTML = '<div class="modal" style="max-width:440px"><div class="modal-head"><h2>Appearance</h2>' +
+    '<button class="modal-close" onclick="document.getElementById(\'themeModal\').classList.remove(\'active\')">&times;</button></div>' +
+    '<div class="modal-body">' +
+      opt('light', '☀️', 'Light', 'Bright, for daytime and the office') +
+      opt('dark', '🌙', 'Dark', 'Easy on the eyes at night and in the truck') +
+      opt('auto', '🌓', 'Automatic', 'Follows this ' + (/iPhone|Android/.test(navigator.userAgent) ? 'phone' : 'computer') + '’s own setting') +
+      '<div class="hint">Each phone and computer remembers its own choice.</div>' +
+    '</div></div>';
+  m.classList.add('active');
+}
 
 // ---- Account: who is signed in, and signing out ----------------------------
 // Signing out deliberately clears this device's cached jobs. Firestore holds
@@ -268,10 +332,11 @@ function openMore() {
     });
   // Settings that are not screens of their own live here too, so they are
   // found where everything else is rather than up in the header.
-  const extras = (window.YDAuth && window.YDAuth.user)
+  const extras = ((window.YDAuth && window.YDAuth.user)
     ? [{ label: '🔔 Notifications & summaries', hint: 'Daily updates by email and on your phone',
          call: 'closeMore(); openNotifications()' }]
-    : [];
+    : []).concat([{ label: '🌓 Appearance', hint: 'Light, dark, or match this phone',
+         call: 'closeMore(); openAppearance()' }]);
   wrap.innerHTML = (hidden.length || extras.length)
     ? hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
         '<span class="sheet-item-name">' + TAB_LABEL[n] + '</span>' +
@@ -345,8 +410,13 @@ function switchTab(name) {
   // On a phone, a screen reached through More has no button of its own, so
   // More itself carries the highlight -- otherwise nothing on the bar would
   // look selected and the app would seem to have lost its place.
+  // Lit only when the screen has no button of its own showing on the bar.
+  // Going by the list of phone tabs was wrong on a crew phone, where Boards
+  // and Supplies are on the bar: tapping one lit up that button AND More.
   const more = document.getElementById('tabMore');
-  if (more) more.classList.toggle('active', PHONE_TABS.indexOf(name) === -1);
+  const own = document.getElementById(activeBtn);
+  const ownShowing = !!(own && !own.hidden && getComputedStyle(own).display !== 'none');
+  if (more) more.classList.toggle('active', !ownShowing);
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   if (name === 'dashboard') renderDashboard();
@@ -367,7 +437,7 @@ function updateCtxBar() {
   const invoiced = document.getElementById('qbInvoiced') && document.getElementById('qbInvoiced').checked;
   document.getElementById('ctxName').innerHTML = esc(name || (currentJobId ? 'Untitled Job' : 'New Job')) + (invoiced ? '<span class="qb-chip">QB Invoiced</span>' : '');
   const st = document.getElementById('ctxStatus');
-  st.textContent = jobStatus; st.className = 'pill ' + jobStatus;
+  st.textContent = statusLabel(jobStatus); st.className = 'pill ' + jobStatus;
   const dot = document.getElementById('ctxDot');
   dot.classList.remove('unsaved', 'error');
   if (storageBroken) { dot.classList.add('error'); document.getElementById('ctxDotText').textContent = 'Save failed'; }
@@ -397,7 +467,19 @@ function renderServiceTypes() {
 // ═══════════════════════════════════════════════════════════
 // STATUS
 // ═══════════════════════════════════════════════════════════
-function onStatusChange() { jobStatus = document.getElementById('jobStatusSelect').value; updateCtxBar(); }
+// Changing the status in the form moves the job's card on the Jobs board to
+// match -- Booked to Scheduled, In progress to In progress -- so the two never
+// disagree. A job already in Punch list stays there when set to In progress.
+function onStatusChange() {
+  const was = jobStatus;
+  jobStatus = document.getElementById('jobStatusSelect').value;
+  const at = new Date().toISOString();
+  if (jobStatus === 'booked' && was !== 'booked') { boardFields.workStage = 'scheduled'; boardFields.workStageAt = at; }
+  if (jobStatus === 'inprogress' && boardFields.workStage !== 'punchList' && was !== 'inprogress') {
+    boardFields.workStage = 'inProgress'; boardFields.workStageAt = at;
+  }
+  updateCtxBar();
+}
 function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; }
 function updateJobHeadBadge() {
   const e = document.getElementById('estimateNumber').value.trim();
@@ -921,7 +1003,7 @@ function loadJobData(d) {
   manualJobPrice = !!d.manualJobPrice;
   if (d.baseJobPrice !== undefined && d.baseJobPrice !== null && d.baseJobPrice !== '') baseJobPrice = parseFloat(d.baseJobPrice) || 0;
   else baseJobPrice = parseMoney(d.jobPrice || '') - additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0);
-  jobStatus = d.jobStatus || 'quoting';
+  jobStatus = normStatus(d.jobStatus, d);
   boardFields = {};
   BOARD_FIELDS.forEach(f => { if (d[f] != null) boardFields[f] = d[f]; });
 
@@ -1136,7 +1218,7 @@ function renderJobList() {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
-        '<div class="job-row-name">' + esc(j.name) + ' <span class="pill ' + (j.status || 'quoting') + '">' + (j.status || 'quoting') + '</span></div>' +
+        '<div class="job-row-name">' + esc(j.name) + ' ' + statusPill(normStatus(j.status)) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') + fmtMoney(j.price) + '</div></div>' +
       '<div style="display:flex;gap:4px"><button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')">DUP</button>' +
       '<button class="remove-btn" onclick="deleteJob(\'' + j.id + '\')">×</button></div></div>'
@@ -1169,7 +1251,7 @@ function renderDashboard() {
     const matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
     const price = parseMoney(d.jobPrice || '');
     const net = round2(price - (hrs * LABOR_RATE + matCost));
-    return { id: d._id, name: d.customerName || 'Untitled', city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: d.jobStatus || 'quoting', price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
+    return { id: d._id, name: d.customerName || 'Untitled', city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
   });
   if (fSvc) rows = rows.filter(r => r.services.includes(fSvc));
   if (fStatus) rows = rows.filter(r => r.status === fStatus);
@@ -1195,7 +1277,7 @@ function renderDashboard() {
   rows.forEach(r => {
     h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + esc(r.name) + '</td>' +
       '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
-      '<td><span class="pill ' + r.status + '">' + r.status + '</span>' + (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + '</td>' +
+      '<td>' + statusPill(r.status) + (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + '</td>' +
       '<td class="bold">' + fmtMoney(r.price) + '</td>' +
       '<td class="bold" style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '">' + (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + '</td></tr>';
   });

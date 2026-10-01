@@ -142,9 +142,12 @@
   // the status in the job form, the board follows the form rather than showing
   // a complete job sitting in "In progress".
   function workColumn(j) {
-    const st = j.jobStatus;
+    const st = typeof normStatus === 'function' ? normStatus(j.jobStatus, j) : j.jobStatus;
     const stage = j.workStage;
-    if (st === 'active') return ACTIVE_STAGES.indexOf(stage) !== -1 ? stage : 'scheduled';
+    // Booked jobs are Scheduled; In progress jobs are In progress or on the
+    // Punch list. A stage that disagrees with the status follows the status.
+    if (st === 'booked') return 'scheduled';
+    if (st === 'inprogress') return stage === 'punchList' ? 'punchList' : 'inProgress';
     if (st === 'complete') {
       const col = COMPLETE_STAGES.indexOf(stage) !== -1 ? stage
         : (j.qbInvoiced ? 'invoiced' : 'toInvoice');
@@ -178,7 +181,7 @@
       if (col === 'won') {
         patch = { bidStage: 'won', bidStageAt: at };
         if ((j.jobStatus || 'quoting') === 'quoting') {
-          patch.jobStatus = 'active'; patch.workStage = 'scheduled'; patch.workStageAt = at;
+          patch.jobStatus = 'booked'; patch.workStage = 'scheduled'; patch.workStageAt = at;
         }
       } else if (col === 'lost') {
         patch = { bidStage: 'lost', bidStageAt: at, jobStatus: 'quoting' };
@@ -187,7 +190,7 @@
       }
     } else {
       patch = { workStage: col, workStageAt: at,
-                jobStatus: ACTIVE_STAGES.indexOf(col) !== -1 ? 'active' : 'complete' };
+                jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' };
     }
     if (!window.YDSync || !window.YDSync.patchJob(jobId, patch)) {
       showToast('Could not move that job');
@@ -195,7 +198,7 @@
     }
     const name = (j.customerName || 'Job').trim();
     const colName = (boardId === 'bids' ? BIDS : JOBS).columns.find(c => c.id === col).name;
-    showToast(name + ' → ' + colName + (col === 'won' && patch.jobStatus === 'active'
+    showToast(name + ' → ' + colName + (col === 'won' && patch.jobStatus === 'booked'
       ? ' (now on the Jobs board)' : ''));
     render();
   }

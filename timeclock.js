@@ -587,7 +587,10 @@
     if (list) list.innerHTML = pickerList();
   };
 
-  const rank = j => j.status === 'active' ? 0 : j.status === 'complete' ? 2 : 1;
+  // Jobs being worked on come first: in progress, then booked.
+  const isLive = s => s === 'inprogress' || s === 'booked' || s === 'active';
+  const rank = j => j.status === 'inprogress' || j.status === 'active' ? 0 : j.status === 'booked' ? 1
+    : j.status === 'complete' ? 3 : 2;
 
   // With nothing typed this is EVERY active job, however many there are. The
   // usual case is clocking in to work already under way, and having to search
@@ -601,18 +604,19 @@
     const list = search
       ? jobs.filter(j => (j.name + ' ' + (j.address || '')).toLowerCase().indexOf(search) !== -1)
             .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(b.name))
-      : jobs.filter(j => j.status === 'active')
+      : jobs.filter(j => isLive(j.status))
             .sort((a, b) => String(a.name).localeCompare(b.name));
 
     if (!list.length) {
       return '<p class="empty-msg">' + (search ? 'No job matches that.'
-        : 'No active jobs. Search above for a quoted or finished one.') + '</p>';
+        : 'No booked or in-progress jobs. Search above for a quoted or finished one.') + '</p>';
     }
     return list.map(j =>
       '<button class="picker-job" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
         '<span class="picker-name">' + esc(j.name) + '</span>' +
         (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
-        '<span class="picker-flag ' + esc(j.status || '') + '">' + esc(j.status || 'job') + '</span>' +
+        '<span class="picker-flag ' + esc(j.status || '') + '">' +
+          esc(typeof statusLabel === 'function' ? statusLabel(j.status) : (j.status || 'job')) + '</span>' +
       '</button>').join('');
   }
 

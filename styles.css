@@ -64,7 +64,9 @@
   /* ---- Tab Bar ---- */
   .tab-bar { display:flex; background:var(--brand); margin:14px 0 24px; border-radius:10px; overflow:hidden; box-shadow:0 3px 10px rgba(71,44,100,.20); }
   .tab-btn { flex:1; padding:15px 10px; text-align:center; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; color:#c0a9db; background:none; border:none; cursor:pointer; border-bottom:4px solid transparent; transition:all .15s; }
-  .tab-btn:hover { color:#f4eefb; background:rgba(255,255,255,.05); }
+  /* Only with a real mouse. On a phone a tapped button keeps its hover look
+     after the finger lifts, so the last tab touched looked selected too. */
+  @media (hover:hover) { .tab-btn:hover { color:#f4eefb; background:rgba(255,255,255,.05); } }
   .tab-btn.active { color:#fff; border-bottom-color:var(--accent); background:rgba(201,146,47,.16); }
   .tab-btn .tab-icon { display:block; font-size:18px; margin-bottom:4px; }
   .tab-panel { display:none; }
@@ -1193,3 +1195,27 @@
   /* On a phone, Notifications & summaries lives in the More sheet; the header
      menu keeps it only on a laptop, which has no More button. */
   @media (max-width:720px) { #menuNotify { display:none !important; } }
+
+  /* job statuses: booked (won, on the schedule) and in progress replace active */
+  .pill.booked { background:#dbe9fb; color:#2556a3; }
+  .pill.inprogress { background:var(--pos-soft); color:#1f6b43; }
+  .pill.active { background:var(--pos-soft); color:#1f6b43; }   /* old copies, until they sync */
+  html[data-night] .pill.booked { background:#16273f; color:#8db8f5; }
+  html[data-night] .pill.inprogress, html[data-night] .pill.active { color:var(--pos); }
+
+  /* ---- appearance picker ---- */
+  .theme-opt { display:flex; align-items:center; gap:14px; width:100%; text-align:left; cursor:pointer;
+    padding:13px 14px; margin-bottom:10px; border-radius:10px; border:2px solid var(--border-strong);
+    background:var(--surface); color:var(--text); font:14px 'DM Sans',sans-serif; min-height:60px; }
+  .theme-opt span:last-child { display:flex; flex-direction:column; gap:2px; }
+  .theme-opt small { color:var(--muted); font-size:12px; }
+  .theme-opt.on { border-color:var(--accent); background:var(--surface-2); }
+  .theme-icon { font-size:24px; }
+  @media (max-width:720px) { #menuTheme { display:none !important; } }
+
+  /* On a laptop every column fits side by side instead of the last ones being
+     cut off at the edge; narrower screens still scroll sideways. */
+  @media (min-width:721px) {
+    .bd-col { flex:1 1 0; min-width:175px; }
+    .bd-cols { align-items:stretch; }
+  }

@@ -56,6 +56,18 @@
     document.dispatchEvent(new CustomEvent('yd-jobs-changed'));
   }
 
+  // Once, on the owner's device: jobs still marked with the old 'active' are
+  // rewritten as Booked or In progress, by where they sat on the Jobs board.
+  // Done through patchJob, so the cloud copy and the crew's job list follow.
+  function migrateStatuses() {
+    if (!window.YDAuth || !window.YDAuth.isOwner || typeof normStatus !== 'function') return;
+    getJobIndex().forEach(j => {
+      let d = null;
+      try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (e) {}
+      if (d && d.jobStatus === 'active') patchJob(j.id, { jobStatus: normStatus('active', d) });
+    });
+  }
+
   // ------------------------------------------------------------ patch a job
   //
   // The Bids and Jobs boards move a job without opening it. That has to go
@@ -126,7 +138,9 @@
     return {
       name: (d.customerName || '').trim() || 'Untitled job',
       address: [d.address, d.city, d.state].filter(Boolean).join(', '),
-      status: d.jobStatus || 'quoting',
+      // The crew's clock lists booked and in-progress jobs first; the old
+      // 'active' is translated so a job not yet re-saved still shows.
+      status: typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting'),
       updatedAt: new Date().toISOString(),
     };
   }
@@ -298,6 +312,7 @@
     watching = true;
     unsent.forEach(id => queuePush(id));
     unsent.clear();
+    migrateStatuses();
 
     // countJobs() above went to the server, so reaching here without throwing
     // means we are genuinely connected.

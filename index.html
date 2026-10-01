@@ -40,6 +40,7 @@
           <button id="menuProblems" hidden onclick="closeHeaderMenu(); openProblems()">Problems<span class="menu-count" id="problemsCount" hidden></span></button>
           <button id="menuQuickBooks" hidden onclick="closeHeaderMenu(); openQuickBooks()">QuickBooks</button>
           <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">Notifications &amp; summaries</button>
+          <button id="menuTheme" onclick="closeHeaderMenu(); openAppearance()">Appearance</button>
           <div class="menu-sep" id="menuAccountSep" hidden></div>
           <div class="menu-who" id="menuWho" hidden></div>
           <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
@@ -125,7 +126,8 @@
             <span class="label">Job Status</span>
             <select id="jobStatusSelect" onchange="onStatusChange(); markDirty()">
               <option value="quoting">Quoting</option>
-              <option value="active">Active</option>
+              <option value="booked">Booked</option>
+              <option value="inprogress">In progress</option>
               <option value="complete">Complete</option>
             </select>
           </div>
@@ -447,7 +449,8 @@
           <select id="dashStatus" onchange="renderDashboard()">
             <option value="">All Statuses</option>
             <option value="quoting">Quoting</option>
-            <option value="active">Active</option>
+            <option value="booked">Booked</option>
+            <option value="inprogress">In progress</option>
             <option value="complete">Complete</option>
           </select>
           <input id="dashSearch" placeholder="Search…" oninput="renderDashboard()">
