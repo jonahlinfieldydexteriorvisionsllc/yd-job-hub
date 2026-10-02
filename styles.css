@@ -1601,3 +1601,15 @@
   .sup-missing { margin:8px 0; padding:8px 11px; border-radius:8px; background:var(--surface-2);
     border:1px solid var(--border); font-size:13px; line-height:1.55; }
   .sup-missing summary { cursor:pointer; font-weight:600; color:var(--muted); }
+
+  /* ---- Claude on the cards ---- */
+  .bd-claude { padding:1px 6px; border-radius:10px; background:#efe7f8; border:1px solid #d9c9ee; font-size:11px; }
+  .bd-claude.ask { background:#fbeaca; border-color:#efd59c; }
+  .cl-box { border:1px solid var(--border); border-radius:10px; padding:10px 12px; background:var(--surface-2); font-size:14px; }
+  .cl-box.done { border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 7%, var(--surface)); }
+  .cl-box.needs_info { border-color:#efd59c; background:color-mix(in srgb, #e0a526 9%, var(--surface)); }
+  .cl-box.muted, .cl-box.not_mine { color:var(--muted); }
+  .cl-title { font-weight:700; }
+  .cl-summary { margin-top:4px; font-weight:600; }
+  .cl-result { margin-top:8px; white-space:pre-wrap; line-height:1.5; max-height:340px; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 11px; }
+  .cl-drafts { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; }

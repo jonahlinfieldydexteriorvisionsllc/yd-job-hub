@@ -60,6 +60,30 @@
       }
       return payload;
     },
+
+    // Another route on the same service (e.g. '/cards/now'), with the same
+    // proof of who is asking.
+    async post(path, body) {
+      const base = endpoint().replace(/\/+$/, '');
+      if (!base) throw new Error('Claude is not set up for this app yet.');
+      const auth = window.YDAuth;
+      if (!auth || !auth.user) throw new Error('Sign in first.');
+      const token = await auth.user.getIdToken();
+      let res;
+      try {
+        res = await fetch(base + path, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body || {}),
+        });
+      } catch (e) {
+        throw new Error('No connection — this needs signal.');
+      }
+      let payload = {};
+      try { payload = await res.json(); } catch (e) {}
+      if (!res.ok) throw new Error(payload.error || ('Request failed (' + res.status + ')'));
+      return payload;
+    },
   };
 
   // ---------------------------------------------------------------- one feature

@@ -386,6 +386,8 @@
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
+        (isOwner() && k.claude && k.claude.status === 'done' ? '<span class="bd-claude" title="Claude did this — check it">🤖</span>' : '') +
+        (isOwner() && k.claude && k.claude.status === 'needs_info' ? '<span class="bd-claude ask" title="Claude needs something from you">🤖?</span>' : '') +
         '<span class="bd-people">' + (k.assignees || []).map(a =>
           '<span class="bd-face" title="' + esc(nameOn(a)) + '">' + esc(initials(nameOn(a))) + '</span>').join('') + '</span>' +
       '</div>' +
@@ -607,11 +609,96 @@
         (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
+      claudeHtml(board, k) +
       '<div class="field-actions">' +
         (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
   }
+
+  // ------------------------------------------------- Claude on the cards
+  //
+  // Every hour from 7 am to 7 pm the server has Claude look at new cards and do
+  // the ones it can by itself (research, writing, emails left in Gmail Drafts
+  // -- never sent). What it did is kept on the card as `claude`. Only the
+  // owner sees this and steers it: the work can name customers and prices.
+  const MACHINE_BOARD = 'maintenance';
+
+  function claudeHtml(board, k) {
+    if (!isOwner() || board.virtual || board.id === MACHINE_BOARD || k.auto) return '';
+    const c = k.claude || null;
+    const last = board.columns[board.columns.length - 1].id;
+    const finished = colOf(board, k) === last;
+    const head = '<div class="bd-move-label">Claude</div>';
+    if (k.noClaude) {
+      return head + '<div class="cl-box muted">Claude leaves this card alone.' +
+        '<div class="field-actions"><button class="btn btn-sm" onclick="claudeAllow(true)">Let Claude look at it</button></div></div>';
+    }
+    if (!c) {
+      return head + '<div class="cl-box muted">' + (finished ? 'Done — Claude does not look at finished cards.'
+        : 'Claude looks at new cards every hour from 7 am to 7 pm and does the ones it can by itself.') +
+        '<div class="field-actions">' +
+          (finished ? '' : '<button class="btn btn-sm btn-filled" onclick="claudeNow()">🤖 Ask Claude now</button>') +
+          '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button>' +
+        '</div></div>';
+    }
+    const when = c.at ? new Date(c.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    const title = c.status === 'done' ? '🤖 Claude did this — check it'
+      : c.status === 'needs_info' ? '🤖 Claude needs something from you'
+      : '🤖 Not one Claude can do';
+    return head + '<div class="cl-box ' + esc(c.status || '') + '">' +
+      '<div class="cl-title">' + title + (when ? ' <span class="muted">· ' + esc(when) + '</span>' : '') + '</div>' +
+      (c.summary ? '<div class="cl-summary">' + esc(c.summary) + '</div>' : '') +
+      (c.result ? '<div class="cl-result">' + esc(c.result) + '</div>' : '') +
+      ((c.drafts || []).length ? '<div class="cl-drafts">' + c.drafts.map(d =>
+        '<a class="btn btn-sm" href="' + esc(safeLink(d.link)) + '" target="_blank" rel="noopener">✉️ Draft to ' +
+        esc(d.to || '') + '</a>').join('') + '</div>' : '') +
+      (c.status === 'needs_info' ? '<div class="hint">Add what it needs to the card (Edit → Notes) and it looks again within the hour.</div>' : '') +
+      '<div class="field-actions">' +
+        '<button class="btn btn-sm" onclick="claudeAgain()">Ask Claude again</button>' +
+        '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button>' +
+      '</div></div>';
+  }
+
+  // Only links into Gmail are drawn as links -- the text comes from the server,
+  // but a link is where a stray address would do harm.
+  function safeLink(u) {
+    return /^https:\/\/mail\.google\.com\//.test(String(u || '')) ? u : 'https://mail.google.com/mail/#drafts';
+  }
+
+  function claudePatch(patch) {
+    const k = openCard && (cards[openCard.boardId] || {})[openCard.cardId];
+    if (!k || !isOwner()) return null;
+    Object.assign(k, patch);
+    render(); renderCardDetail();
+    writeCard(openCard.boardId, openCard.cardId, patch);
+    return k;
+  }
+  window.claudeAllow = function (yes) {
+    claudePatch({ noClaude: !yes });
+    showToast(yes ? 'Claude will look at this card' : 'Claude will leave this card alone');
+  };
+  // Forgets what Claude did, so the next run (or Ask now) does it afresh.
+  window.claudeAgain = function () {
+    if (!confirm('Have Claude do this card again? What it did before is replaced (drafts already in Gmail stay there).')) return;
+    claudePatch({ claude: null });
+    showToast('Claude will look at it again within the hour');
+  };
+  window.claudeNow = async function () {
+    if (!openCard || !isOwner() || !window.YDClaude) return;
+    const ids = { boardId: openCard.boardId, cardId: openCard.cardId };
+    showToast('Claude is on it — this can take a minute');
+    try {
+      const r = await window.YDClaude.post('/cards/now', ids);
+      const got = (r.report || [])[0] || {};
+      showToast(got.status === 'done' ? 'Claude did it — have a look'
+        : got.status === 'needs_info' ? 'Claude needs something from you'
+        : got.status === 'not_mine' ? 'Not one Claude can do'
+        : got.skipped ? 'Not now — ' + got.skipped : 'Claude could not finish this one');
+    } catch (e) {
+      showToast(e.message || 'Claude could not be reached');
+    }
+  };
 
   window.moveCardFromSheet = function (col) {
     if (!openCard) return;

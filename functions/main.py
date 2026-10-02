@@ -376,6 +376,43 @@ def _digest(request, path, headers):
     return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
 
 
+# ---------------------------------------------------------------- board cards
+#
+# Claude working the cards it can do by itself (cards.py). The hourly run comes
+# from Cloud Scheduler only; "Ask Claude now" on one card comes from the owner.
+
+
+def _cards(request, path, headers):
+    import cards
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path == "/cards/run":
+        if not _from_scheduler(request):
+            return (json.dumps({"error": "not allowed"}), 403, json_headers)
+        only = None
+    elif path == "/cards/now":
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            _caller(request)            # the owner only: it spends Claude credit
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        body = request.get_json(silent=True) or {}
+        board_id, card_id = str(body.get("boardId") or ""), str(body.get("cardId") or "")
+        if not board_id or not card_id:
+            return (json.dumps({"error": "which card?"}), 400, json_headers)
+        only = (board_id, card_id)
+    else:
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    try:
+        report = cards.run(_claude(), only)
+        return (json.dumps({"report": report}), 200, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("cards run failed:", e)
+        return (json.dumps({"error": str(e)}), 500, json_headers)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -393,6 +430,8 @@ def claude(request):
         return _quickbooks(request, path, headers)
     if path.startswith("/digest"):
         return _digest(request, path, headers)
+    if path.startswith("/cards"):
+        return _cards(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

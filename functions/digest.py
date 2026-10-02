@@ -955,16 +955,20 @@ def _service_account_email():
     return r.text.strip()
 
 
-_gmail_token = {"token": None, "exp": 0}
+GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
+_gmail_tokens = {}      # scope -> {"token", "exp"}
 
 
-def _gmail_access_token():
-    """An access token to send mail AS the owner, from this service's own
-    identity via domain-wide delegation. The JWT is signed by Google's IAM
-    service (signJwt) -- no private key exists anywhere to leak."""
+def _gmail_access_token(scope=GMAIL_SEND):
+    """An access token to act in the owner's Gmail -- send (the summaries) or
+    compose (Claude's drafts) -- from this service's own identity via
+    domain-wide delegation. The JWT is signed by Google's IAM service
+    (signJwt): no private key exists anywhere to leak. Each scope must be
+    listed for this service in the Workspace Admin console."""
     import time
-    if _gmail_token["token"] and _gmail_token["exp"] > time.time() + 60:
-        return _gmail_token["token"]
+    held = _gmail_tokens.get(scope)
+    if held and held["exp"] > time.time() + 60:
+        return held["token"]
     import google.auth
     from google.auth import iam
     from google.auth.transport.requests import Request
@@ -973,11 +977,10 @@ def _gmail_access_token():
     sa = _service_account_email()
     signer = iam.Signer(Request(), creds, sa)
     dwd = service_account.Credentials(signer, sa, "https://oauth2.googleapis.com/token",
-                                      scopes=["https://www.googleapis.com/auth/gmail.send"],
-                                      subject=OWNER_EMAIL)
+                                      scopes=[scope], subject=OWNER_EMAIL)
     dwd.refresh(Request())
-    _gmail_token["token"] = dwd.token
-    _gmail_token["exp"] = dwd.expiry.timestamp() if dwd.expiry else time.time() + 3000
+    _gmail_tokens[scope] = {"token": dwd.token,
+                            "exp": dwd.expiry.timestamp() if dwd.expiry else time.time() + 3000}
     return dwd.token
 
 
