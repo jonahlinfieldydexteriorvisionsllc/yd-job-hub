@@ -33,6 +33,7 @@
   let shown = '';           // supplier filter: '' everyone, '-' no supplier, else a vendor id
   let editing = null;       // { kind: 'item' | 'vendor', id, priceShown }
   let plan = null;          // a checked import waiting for "Save these changes"
+  let planVendor = null;    // the supplier a price list is for, when opened from its card
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -277,6 +278,9 @@
       (v.notes ? '<div class="sup-notes">' + esc(v.notes) + '</div>' : '') +
       '<div class="sup-links">' + linksHtml(v) +
         (edits() ? '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\', \'' + safeId(v.id) + '\')">+ Add an item here</button>' : '') +
+        // Their own price sheet, as it comes: an Excel file or a CSV, with no
+        // Supplier column needed.
+        (edits() ? '<button class="btn btn-sm btn-accent" onclick="supPriceList(\'' + safeId(v.id) + '\')">💲 Price list</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -469,13 +473,19 @@
 
   // Columns a pasted sheet may use. Matching ignores case and punctuation,
   // so "Item #", "item#" and "ITEM #" are all the item number.
+  // Suppliers' own sheets name their columns every which way, so the common
+  // ones are all here.
   const COLUMNS = {
     id: ['id'],
     vendor: ['supplier', 'vendor', 'store', 'bought from'],
-    name: ['item', 'name', 'what it is', 'product', 'description', 'material'],
-    sku: ['item #', 'item#', 'item no', 'item number', 'sku', 'part #', 'part#', 'part number', 'product #', 'code'],
-    unit: ['comes in', 'unit', 'size', 'uom', 'pack'],
-    price: ['price', 'cost', 'unit price', 'price each', 'each', 'new price'],
+    name: ['item', 'name', 'what it is', 'product', 'description', 'material', 'item description',
+           'product description', 'item name', 'product name', 'desc'],
+    sku: ['item #', 'item#', 'item no', 'item number', 'sku', 'part #', 'part#', 'part number', 'product #', 'code',
+          'item code', 'product code', 'part', 'part no', 'catalog #', 'cat #', 'model', 'model #', 'style', 'style #'],
+    unit: ['comes in', 'unit', 'size', 'uom', 'pack', 'u m', 'unit of measure', 'pkg', 'package'],
+    price: ['price', 'cost', 'unit price', 'price each', 'each', 'new price', 'list price', 'net price', 'your price',
+            'contractor price', 'dealer price', 'sale price', 'unit cost', 'cost each', 'price ea', 'price unit',
+            'price per unit', 'retail', 'retail price'],
     per: ['per', 'price per', 'price is per'],
     year: ['year', 'price year', 'for year'],
     notes: ['notes', 'crew notes', 'notes for the crew'],
@@ -493,9 +503,11 @@
   // of a spreadsheet. Quoted cells may hold commas, quotes and line breaks.
   function parseTable(text) {
     text = String(text || '').replace(/^﻿/, '');
-    const first = text.split(/\r?\n/, 1)[0] || '';
-    const delim = first.indexOf('\t') !== -1 ? '\t'
-      : (first.split(';').length > first.split(',').length ? ';' : ',');
+    // Judged on the first thirty lines, not the first: a supplier's sheet
+    // opens with a title line that has no separators in it at all.
+    const sample = text.split(/\r?\n/, 30).join('\n');
+    const count = ch => sample.split(ch).length - 1;
+    const delim = count('\t') ? '\t' : (count(';') > count(',') ? ';' : ',');
     const rows = [];
     let row = [], cell = '', quoted = false;
     for (let i = 0; i < text.length; i++) {
@@ -521,13 +533,34 @@
       .filter(r => r.some(c => c !== ''));
   }
 
-  // Work out what an import would do, without doing any of it.
-  function buildPlan(table, defaultYear) {
+  // A supplier's sheet often opens with its name, address and "Prices
+  // effective…" before the column names. The line with the column names is
+  // the first that has an item (or item number) column -- preferably one with
+  // a price column too -- within the first 25.
+  function findHeader(table) {
+    let firstNamed = -1;
+    for (let i = 0; i < Math.min(table.length, 25); i++) {
+      const keys = table[i].map(headerKey);
+      const named = keys.indexOf('name') !== -1 || keys.indexOf('id') !== -1 || keys.indexOf('sku') !== -1;
+      if (named && keys.indexOf('price') !== -1) return i;
+      if (named && firstNamed < 0) firstNamed = i;
+    }
+    return firstNamed < 0 ? 0 : firstNamed;
+  }
+
+  // Work out what an import would do, without doing any of it. With a
+  // supplier given (the price list opened from its card), every row is that
+  // supplier's: no Supplier column is needed, and rows are matched only
+  // against what is already bought there.
+  function buildPlan(table, defaultYear, forcedVendor) {
+    // Line numbers in messages are the sheet's own, title lines included.
+    const skippedLines = findHeader(table);
+    table = table.slice(skippedLines);
     if (table.length < 2) return { error: 'Paste the column names on the first line and at least one item below them.' };
     const head = table[0].map(headerKey);
-    if (head.indexOf('name') === -1 && head.indexOf('id') === -1) {
-      return { error: 'The first line needs an “Item” column (or the “id” column from a downloaded list). ' +
-        'It reads: ' + table[0].slice(0, 6).join(', ') };
+    if (head.indexOf('name') === -1 && head.indexOf('id') === -1 && !(forcedVendor && head.indexOf('sku') !== -1)) {
+      return { error: 'No line with an “Item” (or “Description”) column was found. ' +
+        'The first line reads: ' + table[0].slice(0, 6).join(', ') };
     }
     const vendorByKey = {};
     Object.values(vendors).forEach(v => { vendorByKey[key(v.name)] = v.id; });
@@ -542,13 +575,25 @@
     const newVendors = {};
     const rowAt = {};
     for (let r = 1; r < table.length; r++) {
-      const line = r + 1;
+      const line = r + 1 + skippedLines;
       const c = {};
       head.forEach((k, i) => { if (k && c[k] == null) c[k] = table[r][i] || ''; });
+      // On a supplier's sheet "Unit" is what the price is per ("sq ft",
+      // "bag"), unless the sheet says that separately.
+      if (forcedVendor && !c.per && c.unit) c.per = c.unit;
 
       const existingById = c.id && items[c.id] ? items[c.id] : null;
       let vendorId = existingById ? existingById.vendorId || null : null;
-      if (c.vendor) {
+      if (forcedVendor) {
+        // A row from our own downloaded list that belongs to someone else
+        // is not this supplier's to change.
+        if (existingById && existingById.vendorId && existingById.vendorId !== forcedVendor) {
+          out.skipped.push('Line ' + line + ': “' + existingById.name + '” is bought from ' +
+            ((vendors[existingById.vendorId] || {}).name || 'another supplier'));
+          continue;
+        }
+        vendorId = forcedVendor;
+      } else if (c.vendor) {
         const vk = key(c.vendor);
         vendorId = vendorByKey[vk] || null;
         if (!vendorId) {
@@ -561,6 +606,10 @@
       if (!id && c.sku) id = itemByKey[(vendorId || '') + '#' + key(c.sku)] || null;
       if (!id && c.name) id = itemByKey[(vendorId || '') + '|' + key(c.name)] || null;
       const isNew = !id;
+      // A sheet's section headings ("PAVERS") and filler rows carry no price.
+      // On a supplier's own sheet a line we do not know with no price is not
+      // an item to add -- there is nothing on it worth saving.
+      if (isNew && forcedVendor && !c.price) continue;
       if (isNew && !c.name) { out.skipped.push('Line ' + line + ': no item name'); continue; }
 
       const cents = parseCents(c.price);
@@ -584,12 +633,22 @@
       else { rowAt[id] = out.rows.length; out.rows.push(row); }
     }
     out.newVendors = Object.values(newVendors);
+    // What this supplier sells that the sheet left out -- discontinued, or
+    // just on another page. Their prices stay as they are.
+    if (forcedVendor) {
+      const inSheet = new Set(out.rows.map(r => r.id));
+      out.missing = Object.values(items).filter(it => it.vendorId === forcedVendor && !inSheet.has(it.id))
+        .sort(byName);
+    }
     return out;
   }
 
-  window.supPriceList = function () {
+  window.supPriceList = function (vendorId) {
     if (!edits()) return;
     plan = null;
+    const v = vendorId && vendors[vendorId] ? vendors[vendorId] : null;
+    planVendor = v ? v.id : null;
+    if (v) { vendorPriceList(v); return; }
     const priced = Object.keys(items).filter(id => prices[id] && typeof prices[id].cents === 'number');
     const years = {};
     priced.forEach(id => { years[prices[id].year] = (years[prices[id].year] || 0) + 1; });
@@ -605,6 +664,7 @@
         (avg != null ? '<br>Compared with the year before: ' + changeHtml(avg) + ' on average, across ' + moves.length + ' items.' : '') +
       '</div>' +
       '<div class="field-actions"><button class="btn btn-filled" onclick="supExportCsv()">⬇ Download the price list</button></div>' +
+      '<div class="hint">For one supplier’s own price sheet, open that supplier and use its 💲 Price list button — no Supplier column needed.</div>' +
       '<h3 class="sup-h">Update prices</h3>' +
       '<div class="hint">Paste a spreadsheet below: copied straight out of Excel or Google Sheets, or a CSV file. ' +
         'The first line must be the column names. Understood: <b>Supplier, Item, Price</b>, and optionally ' +
@@ -614,7 +674,7 @@
       '<div class="grid g2">' +
         field('These prices are for year (a Year column wins)', 'supImpYear', String(thisYear()), String(thisYear()), 'numeric') +
         '<div class="field"><span class="label">Or open a file</span>' +
-          '<input type="file" id="supFile" accept=".csv,.tsv,.txt,text/csv,text/plain" onchange="supLoadFile(this)"></div>' +
+          '<input type="file" id="supFile" accept="' + FILE_TYPES + '" onchange="supLoadFile(this)"></div>' +
       '</div>' +
       '<textarea id="supCsv" class="sup-csv" rows="7" spellcheck="false" ' +
         'placeholder="Supplier,Item,Price,Per&#10;MDS,Grass seed — sun &amp; shade,89.99,50 lb bag"></textarea>' +
@@ -625,11 +685,88 @@
       '<div id="supPreview"></div>');
   };
 
+  const FILE_TYPES = '.csv,.tsv,.txt,.xlsx,.xls,.xlsm,.ods,text/csv,text/plain,' +
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+
+  // One supplier's own price sheet, from that supplier's card.
+  function vendorPriceList(v) {
+    const mine = Object.values(items).filter(it => it.vendorId === v.id);
+    const priced = mine.filter(it => prices[it.id] && typeof prices[it.id].cents === 'number');
+    openModal('Price list — ' + v.name,
+      '<div class="sup-stat"><b>' + priced.length + '</b> of ' + mine.length + ' ' + esc(v.name) +
+        ' item' + (mine.length === 1 ? '' : 's') + ' have a price.</div>' +
+      '<div class="hint">Upload ' + esc(v.name) + '’s price sheet as it comes — their Excel file or a CSV — or ' +
+        'paste it straight out of a spreadsheet. No Supplier column needed: everything in it is taken as ' +
+        esc(v.name) + '’s. Title lines at the top are skipped; the line with the column names is found by itself ' +
+        '(an Item or Description column, and Price — optionally Item #, Per, Comes in, Year). ' +
+        'Rows are matched to what you already buy here by item number, then by name; anything new is listed ' +
+        'before anything is saved.</div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Their file</span>' +
+          '<input type="file" id="supFile" accept="' + FILE_TYPES + '" onchange="supLoadFile(this)"></div>' +
+        field('These prices are for year (a Year column wins)', 'supImpYear', String(thisYear()), String(thisYear()), 'numeric') +
+      '</div>' +
+      '<textarea id="supCsv" class="sup-csv" rows="7" spellcheck="false" ' +
+        'placeholder="Item #,Description,Price,Unit&#10;HP-60,Holland paver 60mm charcoal,4.15,sq ft"></textarea>' +
+      '<div class="field-actions">' +
+        '<button class="btn btn-filled" onclick="supCheckImport()">Check it</button>' +
+        '<button class="btn btn-sm" onclick="supExportCsv(\'' + safeId(v.id) + '\')">⬇ Download ' + esc(v.name) + '’s list</button>' +
+        '<button class="btn btn-sm" onclick="closeSupModal()">Close</button>' +
+      '</div>' +
+      '<div id="supPreview"></div>');
+  }
+
+  // Excel files are read with SheetJS, fetched only when one is opened. The
+  // copy is pinned to one version and checked against the hash cdnjs
+  // publishes for it, so a changed file is refused rather than run.
+  const XLSX_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  const XLSX_SRI = 'sha512-r22gChDnGvBylk90+2e/ycr3RVrDi8DIOkIGNhJlKfuyQM4tIRAI062MaV8sfjQKYVGjOBaZBOA87z+IhZE9DA==';
+  let xlsxLoading = null;
+  function loadXlsx() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (xlsxLoading) return xlsxLoading;
+    xlsxLoading = new Promise((ok, fail) => {
+      const s = document.createElement('script');
+      s.src = XLSX_SRC;
+      s.integrity = XLSX_SRI;
+      s.crossOrigin = 'anonymous';
+      s.onload = () => (window.XLSX ? ok(window.XLSX) : fail(new Error('not loaded')));
+      s.onerror = () => { xlsxLoading = null; fail(new Error('could not load')); };
+      document.head.appendChild(s);
+    });
+    return xlsxLoading;
+  }
+
   window.supLoadFile = function (input) {
     const f = input && input.files && input.files[0];
     if (!f) return;
+    const put = text => { const t = el('supCsv'); if (t) t.value = text; };
+    if (/\.(xlsx|xlsm|xls|ods)$/i.test(f.name)) {
+      showToast('Reading ' + f.name + '…');
+      const r = new FileReader();
+      r.onerror = () => showToast('That file could not be read');
+      r.onload = () => {
+        loadXlsx().then(XLSX => {
+          const wb = XLSX.read(new Uint8Array(r.result), { type: 'array' });
+          // The sheet with the most rows is the price list; a workbook often
+          // has a cover sheet or a notes sheet besides.
+          let best = null, bestRows = -1;
+          wb.SheetNames.forEach(n => {
+            const ws = wb.Sheets[n];
+            const rows = ws && ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']).e.r + 1 : 0;
+            if (rows > bestRows) { best = n; bestRows = rows; }
+          });
+          // Tab-separated, so commas inside names and prices stay put.
+          put(XLSX.utils.sheet_to_csv(wb.Sheets[best], { FS: '\t', blankrows: false }));
+          showToast('Read “' + best + '”' + (wb.SheetNames.length > 1 ? ' (the biggest of ' + wb.SheetNames.length + ' sheets)' : '') +
+            ' — now press Check it');
+        }).catch(() => showToast('Excel files need a connection the first time — or save it as CSV and open that'));
+      };
+      r.readAsArrayBuffer(f);
+      return;
+    }
     const r = new FileReader();
-    r.onload = () => { const t = el('supCsv'); if (t) t.value = String(r.result || ''); };
+    r.onload = () => put(String(r.result || ''));
     r.onerror = () => showToast('That file could not be read');
     r.readAsText(f);
   };
@@ -647,7 +784,7 @@
     }
     const year = validYear(val('supImpYear'));
     if (!year) { showToast('The year should look like ' + thisYear()); return; }
-    plan = buildPlan(parseTable(el('supCsv').value), year);
+    plan = buildPlan(parseTable(el('supCsv').value), year, planVendor);
     if (plan.error) { box.innerHTML = '<p class="empty-msg">' + esc(plan.error) + '</p>'; plan = null; return; }
 
     const n = k => plan.rows.filter(r => r.kind === k).length;
@@ -669,6 +806,13 @@
         '. If one is a supplier you already have under another name, change the name in the sheet to match and check again.</div>' : '') +
       (plan.skipped.length ? '<div class="sup-skip">' + plan.skipped.map(esc).join('<br>') + '</div>' : '') +
       (plan.dupes ? '<div class="hint">' + plan.dupes + ' item(s) appear twice; the lower line wins.</div>' : '') +
+      (plan.missing && plan.missing.length
+        ? '<details class="sup-missing"><summary>' + plan.missing.length + ' of your ' +
+            esc((vendors[planVendor] || {}).name || '') + ' items ' + (plan.missing.length === 1 ? 'is' : 'are') +
+            ' not in this sheet — ' + (plan.missing.length === 1 ? 'its price stays' : 'their prices stay') +
+            ' as ' + (plan.missing.length === 1 ? 'it is' : 'they are') + '</summary>' +
+            plan.missing.map(it => esc(it.name) + (it.sku ? ' <small>#' + esc(it.sku) + '</small>' : '')).join('<br>') +
+          '</details>' : '') +
       (listed.length ? '<div class="sup-table-wrap"><table class="sup-table"><thead><tr>' +
           '<th>Supplier</th><th>Item</th><th>Was</th><th>Now</th><th></th></tr></thead><tbody>' +
           listed.slice(0, 400).map(r => '<tr>' +
@@ -683,7 +827,7 @@
       (same ? '<div class="hint">' + same + ' row(s) with no price change are not listed (any other details in them are still saved).</div>' : '') +
       (plan.rows.length
         ? '<div class="field-actions"><button class="btn btn-filled" onclick="supApplyImport()">Save these changes</button>' +
-          '<button class="btn btn-sm" onclick="supPriceList()">Start over</button></div>'
+          '<button class="btn btn-sm" onclick="supPriceList(\'' + safeId(planVendor || '') + '\')">Start over</button></div>'
         : '<p class="empty-msg">Nothing to save.</p>');
   };
 
@@ -737,8 +881,9 @@
 
   // The whole list as a spreadsheet, one row per item, with the id that
   // brings each row back to its item when the sheet is pasted in again.
-  window.supExportCsv = function () {
+  window.supExportCsv = function (vendorId) {
     if (!seesPrices()) return;
+    const only = vendorId && vendors[vendorId] ? vendors[vendorId] : null;
     const cell = (s, isText) => {
       let t = s == null ? '' : String(s);
       if (isText && /^[=+\-@]/.test(t)) t = "'" + t;   // never a formula in Excel
@@ -748,6 +893,7 @@
                   'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes'];
     const vName = it => (vendors[it.vendorId] || {}).name || '';
     const rows = Object.values(items)
+      .filter(it => !only || it.vendorId === only.id)
       .sort((a, b) => vName(a).localeCompare(vName(b)) || byName(a, b))
       .map(it => {
         const p = prices[it.id] || {};
@@ -766,7 +912,8 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'YD supplies price list ' + localToday() + '.csv';
+    a.download = (only ? only.name.replace(/[\\/:*?"<>|]+/g, ' ').trim() + ' price list ' : 'YD supplies price list ') +
+      localToday() + '.csv';
     document.body.appendChild(a);
     a.click();
     a.remove();

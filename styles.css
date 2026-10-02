@@ -1596,3 +1596,8 @@
   html[data-night] .ssel-new { color:var(--brand-2); }
   .ssel-empty { padding:10px 12px; font-size:13px; color:var(--muted); }
   .filter-bar .ssel { flex:1 1 170px; }
+
+  /* a supplier's items that their uploaded sheet left out */
+  .sup-missing { margin:8px 0; padding:8px 11px; border-radius:8px; background:var(--surface-2);
+    border:1px solid var(--border); font-size:13px; line-height:1.55; }
+  .sup-missing summary { cursor:pointer; font-weight:600; color:var(--muted); }
