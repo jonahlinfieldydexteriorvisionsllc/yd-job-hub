@@ -406,6 +406,7 @@ def job_sites(day, items, jobs):
         j = jobs[jid]
         pt = _job_point(jid, j)
         out.append(dict(s, name=(j.get("customerName") or "Job").strip(),
+                        noAddress=not (j.get("address") or "").strip(),
                         num=str(j.get("estimateNumber") or "").strip(),
                         where=", ".join(x for x in [(j.get("address") or "").strip(), (j.get("city") or "").strip()] if x),
                         point=pt))
@@ -822,6 +823,7 @@ def _tables_text(d):
             w = x.get("w")
             work = (" · work hours: %d%% rain" % w["workPop"]) if w and w["workPop"] else ""
             out.append("  " + _site_label(x) + ": " + (_wx_bits(w) + work if w else
+                       "no address on the job yet" if x.get("noAddress") else
                        ("address not found on the map" if not x.get("point") else "forecast unavailable")))
         out.append("")
     if d.get("areas"):
@@ -897,7 +899,9 @@ def _tables_html(d):
                               w["workPop"],
                               (" · about %.2f&quot;" % w["workRain"]) if w["workRain"] >= 0.01 else ""))
             if not x.get("point"):
-                cells = '<td colspan="4" style="%s;color:#9a90a6">Address not found on the map</td>' % _TD
+                cells = '<td colspan="4" style="%s;color:#9a90a6">%s</td>' % (
+                    _TD, "No address on the job yet — add one for its weather" if x.get("noAddress")
+                    else "Address not found on the map")
             else:
                 cells = _wx_cells(w)
             rows.append('<tr style="%s"><td style="%s">%s</td>%s</tr>' % (_row_bg(w), _TD, label, cells))
