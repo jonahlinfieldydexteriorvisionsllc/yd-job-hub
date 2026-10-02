@@ -38,6 +38,8 @@
   ];
   const urgencyOf = id => URGENCY.find(u => u.id === id) || URGENCY[URGENCY.length - 1];
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
+  // On the Maintenance board, a problem whose part has arrived says so.
+  const PART_LABEL = { id: 'part-at-shop', name: 'Part at shop', color: '#2f8f5b' };
 
   // Problems are kept on the machine's record beside its service history, for
   // the same reason: a machine has a handful, and one document means one read
@@ -81,7 +83,11 @@
   // last. Back-filling last spring's oil change used to drag the next service
   // back to last spring. A measure with nothing to count from is left out, so
   // the machine keeps what it has.
-  function dueFromHistory(g, service) {
+  //
+  // Repairs (logged by pressing Fixed on a problem) do not count: a new
+  // hydraulic hose is not an oil change, and must not restart its countdown.
+  function dueFromHistory(g, all) {
+    const service = (all || []).filter(e => e.kind !== 'repair');
     const out = {};
     const h = newestWith(service, 'hours');
     if (g.intervalHours && h) out.dueHours = round1(h.hours + g.intervalHours);
@@ -232,6 +238,7 @@
     const u = urgencyOf(open[0].urgency);
     return '<div class="eq-issue" style="--c:' + u.color + '">' +
       '<span class="eq-urg">' + esc(u.label) + '</span> ' + esc(open[0].what) +
+      (open[0].partAtShop ? ' <span class="eq-part-chip">part at shop</span>' : '') +
       (open.length > 1 ? ' <span class="eq-more">+' + (open.length - 1) + ' more</span>' : '') +
     '</div>';
   }
@@ -295,7 +302,8 @@
           '<th>Reading</th><th>Cost</th><th>By</th><th></th></tr></thead><tbody>' +
           log.map(e =>
             '<tr><td>' + shortDate(e.at) + '</td>' +
-            '<td class="bold">' + esc(e.what) + '</td>' +
+            '<td class="bold">' + esc(e.what) +
+              (e.kind === 'repair' ? ' <span class="eq-repair">repair</span>' : '') + '</td>' +
             '<td>' + [e.hours != null ? round1(e.hours) + ' hrs' : '',
                       e.miles != null ? fmtNum(e.miles) + ' mi' : '']
                       .filter(Boolean).join(' · ') + '</td>' +
@@ -338,6 +346,10 @@
                 '<div class="eq-issue-what">' + esc(i.what) + '</div>' +
                 (i.note ? '<div class="eq-issue-note">' + esc(i.note) + '</div>' : '') +
                 '<div class="eq-issue-meta">Noted ' + shortDate(i.at) + (i.by ? ' by ' + esc(i.by) : '') + '</div>' +
+                // Ticked when the part turns up, so nobody orders it twice
+                // and the job can be booked in.
+                '<label class="chk eq-part"><input type="checkbox"' + (i.partAtShop ? ' checked' : '') +
+                  ' onchange="togglePart(\'' + safeId(i.id) + '\', this.checked)"> Part at shop</label>' +
               '</div>' +
               '<div class="eq-issue-act">' +
                 '<button class="btn btn-sm btn-filled" onclick="fixIssue(\'' + i.id + '\')">Fixed</button>' +
@@ -363,6 +375,7 @@
       '</div></div>' +
       '<div class="field"><span class="label">Notes (optional)</span>' +
         '<input id="isNote" placeholder="part number, where to get it, who noticed"></div>' +
+      '<label class="chk"><input type="checkbox" id="isPart"> Part is already at the shop</label>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveIssue()">Save</button>' +
         '<button class="btn btn-sm" onclick="cancelIssue()">Cancel</button>' +
@@ -393,6 +406,7 @@
       what: what,
       urgency: pick ? pick.value : 'soon',
       note: val('isNote'),
+      partAtShop: !!(el('isPart') && el('isPart').checked),
       at: new Date().toISOString(),
       by: whoAmI(),
       doneAt: null,
@@ -410,12 +424,24 @@
     write(g.id, { issues: g.issues }, done ? 'marking a problem fixed' : 'reopening a problem');
   }
 
-  window.fixIssue = function (issueId) {
+  window.togglePart = function (issueId, on) {
     const g = gear[openId];
     if (!g) return;
-    setIssueDone(g, issueId, true);
+    g.issues = (g.issues || []).map(i => i.id === issueId ? Object.assign({}, i, { partAtShop: !!on }) : i);
     renderDetail(); renderEquipment();
-    showToast('Marked fixed');
+    write(g.id, { issues: g.issues }, on ? 'marking a part at the shop' : 'unmarking a part at the shop');
+    showToast(on ? 'Part at the shop' : 'Part not at the shop');
+  };
+
+  // "Fixed" used to tick the problem off and keep nothing of the repair. It
+  // now opens the service log already filled in with the problem, so the
+  // date, the reading, who did it and the cost go into the history -- and
+  // the problem is marked fixed only when that is saved.
+  window.fixIssue = function (issueId) {
+    const g = gear[openId];
+    const i = g && (g.issues || []).find(x => x.id === issueId);
+    if (!i) return;
+    serviceForm(null, i);
   };
 
   window.removeIssue = function (issueId) {
@@ -432,32 +458,41 @@
 
   // The logged service being changed, or null while logging a new one.
   let editingEntry = null;
+  // The problem being fixed by the service on the form, if any.
+  let fixingIssue = null;
 
   window.addService = function () { serviceForm(null); };
   // A service logged with the wrong date, cost or reading used to have to be
   // deleted and typed in again from scratch.
   window.editService = function (entryId) { serviceForm(entryId); };
 
-  function serviceForm(entryId) {
+  function serviceForm(entryId, issue) {
     const g = gear[openId];
     if (!g) return;
     const e = entryId ? (g.service || []).find(x => x.id === entryId) : null;
     if (entryId && !e) return;
+    const fixing = !e && issue ? issue : null;
     // Already open: a second tap used to add a second form with the same
     // field ids, and Save then read whichever one came first. Asking for a
     // different entry swaps the form over instead.
     if (el('eqServiceForm')) {
-      if (editingEntry === (e ? e.id : null)) { const w = el('svWhat'); if (w) w.focus(); return; }
+      if (editingEntry === (e ? e.id : null) && fixingIssue === (fixing ? fixing.id : null)) {
+        const w = el('svWhat'); if (w) w.focus(); return;
+      }
       el('eqServiceForm').remove();
     }
     editingEntry = e ? e.id : null;
+    fixingIssue = fixing ? fixing.id : null;
     const body = el('eqBody');
     const iso = localDay();
     const has = v => (v == null ? '' : esc(String(v)));
+    const what = e ? e.what : (fixing ? fixing.what : '');
 
     body.insertAdjacentHTML('afterbegin',
       '<div class="add-area" id="eqServiceForm">' +
-        '<div class="add-label">' + (e ? 'Change this service on ' : 'What was done to ') + esc(g.name) + '</div>' +
+        '<div class="add-label">' + (e ? 'Change this service on ' + esc(g.name)
+          : fixing ? 'Fixed: ' + esc(fixing.what) + ' — log the repair'
+          : 'What was done to ' + esc(g.name)) + '</div>' +
         '<div class="grid g2">' +
           '<div class="field"><span class="label">When</span>' +
             '<input type="date" id="svAt" value="' + (e ? has(e.at) : iso) + '" max="' + iso + '"></div>' +
@@ -466,7 +501,7 @@
             (e && e.costCents != null ? has(e.costCents / 100) : '') + '"></div>' +
         '</div>' +
         '<div class="field"><span class="label">What was done</span>' +
-          '<input id="svWhat" placeholder="e.g. oil and filter, new blades" value="' + (e ? has(e.what) : '') + '"></div>' +
+          '<input id="svWhat" placeholder="e.g. oil and filter, new blades" value="' + has(what) + '"></div>' +
         '<div class="grid g3">' +
           '<div class="field"><span class="label">' + (e ? 'Hours then' : 'Hours now') + '</span>' +
             '<input id="svHours" inputmode="decimal" value="' + (e ? has(e.hours) : '') + '" placeholder="' +
@@ -480,7 +515,8 @@
         '<div class="hint">Putting the hours or miles in is what lets the next service ' +
           'be worked out. Leave them blank if this machine goes by date.</div>' +
         '<div class="field-actions">' +
-          '<button class="btn btn-filled" onclick="saveService()">' + (e ? 'Save changes' : 'Save') + '</button>' +
+          '<button class="btn btn-filled" onclick="saveService()">' +
+            (e ? 'Save changes' : fixing ? 'Save — mark it fixed' : 'Save') + '</button>' +
           '<button class="btn btn-sm" onclick="renderDetail2()">Cancel</button>' +
         '</div>' +
       '</div>');
@@ -489,7 +525,7 @@
     const w = el('svWhat'); if (w) w.focus();
   }
 
-  window.renderDetail2 = function () { editingEntry = null; renderDetail(); };
+  window.renderDetail2 = function () { editingEntry = null; fixingIssue = null; renderDetail(); };
 
   window.saveService = function () {
     const g = gear[openId];
@@ -507,9 +543,18 @@
       miles: num('svMiles'),
       by: val('svBy'),
     };
+    const fixed = fixingIssue ? (g.issues || []).find(i => i.id === fixingIssue) : null;
+    fixingIssue = null;
+    if (fixed) { entry.kind = 'repair'; entry.issueId = fixed.id; }
 
     const service = (g.service || []).concat([entry]);
     const patch = { service: service };
+    if (fixed) {
+      // Fixed on the day the repair was done, which may be before today.
+      const doneAt = entry.at === localDay() ? new Date().toISOString() : entry.at + 'T12:00:00';
+      patch.issues = (g.issues || []).map(i => i.id === fixed.id
+        ? Object.assign({}, i, { doneAt: doneAt, doneBy: entry.by || whoAmI(), serviceId: entry.id }) : i);
+    }
 
     // A reading taken during a service is the machine's current reading, and
     // moves the next service along with it. Without this the hours would have
@@ -525,8 +570,8 @@
 
     Object.assign(g, patch);
     renderDetail(); renderEquipment();
-    write(g.id, patch, 'logging a service');
-    showToast('Logged — ' + what);
+    write(g.id, patch, fixed ? 'logging a repair' : 'logging a service');
+    showToast((fixed ? 'Fixed and logged — ' : 'Logged — ') + what);
   };
 
   // A changed entry keeps its id and its place in the history. The machine's
@@ -855,7 +900,8 @@
     // are left alone.
     const labelIds = new Set((board.labels || []).map(l => l.id));
     const missing = URGENCY.filter(u => !labelIds.has('u-' + u.id))
-      .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }));
+      .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }))
+      .concat(labelIds.has(PART_LABEL.id) ? [] : [PART_LABEL]);
     if (missing.length) {
       board.labels = (board.labels || []).concat(missing);
       Promise.resolve(window.YDDb.put('boards', MAINT, { labels: board.labels }))
@@ -880,9 +926,10 @@
         const want = {
           title: (g.name || 'Machine') + ' — ' + i.what,
           due: null,
-          notes: u.label + ' (' + u.hint + ').' + (i.note ? '\n\n' + i.note : '') +
+          notes: u.label + ' (' + u.hint + ').' + (i.partAtShop ? ' The part is at the shop.' : '') +
+            (i.note ? '\n\n' + i.note : '') +
             '\n\nNoted ' + shortDate(i.at) + (i.by ? ' by ' + i.by : '') + '.',
-          labels: ['u-' + u.id],
+          labels: ['u-' + u.id].concat(i.partAtShop ? [PART_LABEL.id] : []),
           equipmentId: g.id, issueId: i.id, auto: true,
         };
         const doneNow = !!i.doneAt;

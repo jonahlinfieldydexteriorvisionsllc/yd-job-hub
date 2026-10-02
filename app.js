@@ -59,7 +59,10 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // but it must carry them: getJobData() rebuilds the record from scratch, so a
 // field it does not know about would be silently dropped by the next save, and
 // a card dragged on the board would jump back.
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt'];
+// cardColor is the colour its card is given on the Bids and Jobs boards
+// ('' for none, never null -- a null is left out of the save, and the cloud
+// copy, which merges, would keep the old colour).
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -1193,10 +1196,11 @@ function migrateJobIndex() {
       status: data.jobStatus || entry.status || entry.jobStatus || 'quoting',
       price: parseMoney(data.jobPrice || ''),
       services: svc,
+      est: String(data.estimateNumber || '').trim(),
       invoiced: !!data.qbInvoiced,
       lastModified: data.lastModified || entry.lastModified || ''
     };
-    if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name) changed = true;
+    if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est) changed = true;
     return fresh;
   });
   if (changed) { saveJobIndex(idx); invalidateJobsCache(); }
@@ -1217,7 +1221,13 @@ function buildIndexEntry(id, data) {
     city: [data.city, data.state].filter(Boolean).join(', '),
     status: data.jobStatus, price: parseMoney(data.jobPrice),
     services: (data.serviceTypes || []).join(', '),
+    // The job's number, shown beside the name wherever jobs are listed.
+    est: String(data.estimateNumber || '').trim(),
     invoiced: !!data.qbInvoiced, lastModified: data.lastModified };
+}
+// "Smith #1042": the name with the job's number beside it, escaped for HTML.
+function jobNameHtml(name, est) {
+  return esc(name || 'Untitled') + (est ? ' <span class="job-num">#' + esc(est) + '</span>' : '');
 }
 
 // Shared writer. Returns true on success, false on failure.
@@ -1375,7 +1385,7 @@ function renderJobList() {
   const fSearch = (document.getElementById('filterSearch').value || '').toLowerCase().trim();
   let idx = getJobIndex();
   if (fSvc) idx = idx.filter(j => (j.services || '').includes(fSvc));
-  if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '')).toLowerCase().includes(fSearch));
+  if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '') + ' ' + (j.est || '')).toLowerCase().includes(fSearch));
   if (!idx.length) { body.innerHTML = '<p class="empty-msg">No jobs found. Import a proposal or start a new job.</p>'; return; }
 
   const groups = {};
@@ -1385,7 +1395,7 @@ function renderJobList() {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
-        '<div class="job-row-name">' + esc(j.name) + ' ' + statusPill(normStatus(j.status)) + '</div>' +
+        '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' + statusPill(normStatus(j.status)) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') + fmtMoney(j.price) + '</div></div>' +
       '<div style="display:flex;gap:4px"><button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')">DUP</button>' +
       '<button class="remove-btn" onclick="deleteJob(\'' + j.id + '\')">×</button></div></div>'
@@ -1420,11 +1430,11 @@ function renderDashboard() {
     const matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
     const price = parseMoney(d.jobPrice || '');
     const net = round2(price - (lab.cost + matCost));
-    return { id: d._id, name: d.customerName || 'Untitled', city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
+    return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
   });
   if (fSvc) rows = rows.filter(r => r.services.includes(fSvc));
   if (fStatus) rows = rows.filter(r => r.status === fStatus);
-  if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services).toLowerCase().includes(fSearch));
+  if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services + ' ' + r.est).toLowerCase().includes(fSearch));
   rows.sort((a, b) => { let va = a[dashSort.col], vb = b[dashSort.col]; if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); } if (va < vb) return dashSort.asc ? -1 : 1; if (va > vb) return dashSort.asc ? 1 : -1; return 0; });
 
   document.getElementById('dashCount').textContent = rows.length + ' job' + (rows.length !== 1 ? 's' : '');
@@ -1444,7 +1454,7 @@ function renderDashboard() {
     '<th style="cursor:pointer" onclick="sortDash(\'price\')">Price' + arrow('price') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'net\')">Est. Net' + arrow('net') + '</th></tr></thead><tbody>';
   rows.forEach(r => {
-    h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + esc(r.name) + '</td>' +
+    h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
       '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
       '<td>' + statusPill(r.status) + (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + '</td>' +
       '<td class="bold">' + fmtMoney(r.price) + '</td>' +

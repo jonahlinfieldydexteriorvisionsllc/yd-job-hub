@@ -956,6 +956,55 @@
     .bd-actions .btn { flex:1; }
   }
 
+  /* ---- the board itself: dark, with white cards (Jonah's ask, the Trello
+     look he is used to). The cards keep the light theme's colours in night
+     mode as well -- white cards with night-mode text would be unreadable --
+     so the card's own variables are pinned to the light values here. */
+  .bd-cols { background:#2b2433; border-radius:12px; padding:12px; }
+  .bd-col { background:rgba(255,255,255,.07); border-color:rgba(255,255,255,.08); }
+  .bd-col.over { border-color:var(--accent); }
+  .bd-col-head, html[data-night] .bd-col-head { color:#fff; border-bottom-color:rgba(255,255,255,.1); }
+  .bd-count { background:rgba(255,255,255,.12); border-color:transparent; color:rgba(255,255,255,.8); }
+  .bd-empty { color:rgba(255,255,255,.55); }
+  .bd-add-card, html[data-night] .bd-add-card { color:rgba(255,255,255,.7); border-color:rgba(255,255,255,.28); }
+  .bd-add-card:hover, html[data-night] .bd-add-card:hover { color:#fff; border-color:#fff; }
+  .bd-card { --surface:#ffffff; --surface-2:#f4f1f8; --text:#2b2433; --muted:#6f6480;
+    --border:#e4dfeb; --border-strong:#cfc5dc; --pos:#2f8f5b; --pos-soft:#d8ecdf;
+    --neg:#c8492b; --neg-soft:#f6ddd3;
+    background:#fff; color:var(--text); border-color:transparent;
+    box-shadow:0 1px 2px rgba(0,0,0,.35); }
+  .bd-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.45); }
+  html[data-night] .bd-card .bd-due.today { background:#fbeaca; color:#9a6a12; }
+  /* A colour-coded card: a band of its colour across the top. */
+  .bd-card.covered { border-top:8px solid var(--cover); padding-top:8px; }
+  .bd-swatch.none span { background:var(--surface);
+    background-image:linear-gradient(135deg, transparent 45%, var(--neg) 45%, var(--neg) 55%, transparent 55%); }
+  .job-num { font-weight:600; font-size:.85em; color:var(--muted); white-space:nowrap; }
+
+  /* ---- a card's linked job: search, then pick ---- */
+  .jobpick { position:relative; }
+  .jobpick input { padding-right:44px; }
+  .jobpick-clear { position:absolute; right:2px; top:50%; transform:translateY(-50%); width:40px; height:40px;
+    border:none; background:none; color:var(--muted); font-size:20px; cursor:pointer; border-radius:6px; }
+  .jobpick-clear:hover { color:var(--neg); }
+  .jobpick-list { margin-top:4px; max-height:280px; overflow-y:auto; border:1.5px solid var(--border-strong);
+    border-radius:8px; background:var(--surface); }
+  .jobpick-item { display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:8px; align-items:center;
+    width:100%; min-height:48px; padding:7px 10px; border:none; border-bottom:1px solid var(--border);
+    background:none; color:var(--text); font:inherit; text-align:left; cursor:pointer; }
+  .jobpick-item:last-child { border-bottom:none; }
+  .jobpick-item.on, .jobpick-item:hover { background:var(--surface-2); }
+  .jobpick-name { font-weight:700; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .jobpick-where { grid-column:1; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .jobpick-item .pill { grid-column:2; grid-row:1 / span 2; }
+  .jobpick-more { padding:9px 10px; font-size:12px; color:var(--muted); }
+
+  /* ---- equipment: part at the shop, repairs in the history ---- */
+  .eq-part { padding:4px 0 0; font-size:12px; min-height:0; }
+  .eq-part-chip, .eq-repair { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.4px;
+    padding:1px 7px; border-radius:9px; background:var(--pos-soft); color:var(--pos); white-space:nowrap; }
+  .eq-repair { background:var(--surface-2); color:var(--muted); border:1px solid var(--border); }
+
   /* ---- calendar ---- */
   .cal-top { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center;
     gap:10px; margin-bottom:12px; }
@@ -1091,8 +1140,7 @@
      nearly black background. The light purple reads; the dark one did not. */
   html[data-night] .month-head, html[data-night] .uz-text, html[data-night] .snow-tag.salt,
   html[data-night] .menu button:hover, html[data-night] .cal-plus, html[data-night] .auth-title,
-  html[data-night] .linkish, html[data-night] .pp-contact a, html[data-night] .snow-addr,
-  html[data-night] .bd-add-card:hover { color:var(--brand-2); }
+  html[data-night] .linkish, html[data-night] .pp-contact a, html[data-night] .snow-addr { color:var(--brand-2); }
   /* a purchase that was never quoted: a warm tint that works in both themes */
   .row-unquoted { background:#fdf3ea; }
   html[data-night] .row-unquoted { background:#2e2214; }

@@ -100,6 +100,7 @@
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const two = n => String(n).padStart(2, '0');
   const nowIso = () => new Date().toISOString();
@@ -333,10 +334,12 @@
     const services = (j.serviceTypes || []).join(', ');
     // A bid nobody has touched in a fortnight is the one about to be lost.
     const stale = board.id === 'bids' && ['sent', 'followUp'].indexOf(bidColumn(j)) !== -1 && days >= 14;
-    return '<div class="bd-card" draggable="true" data-board="' + board.id + '" data-card="' + j._id + '" ' +
+    return '<div class="bd-card' + coverClass(j.cardColor) + '" draggable="true" data-board="' + board.id + '" data-card="' + j._id + '" ' +
+        coverStyle(j.cardColor) +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openJobCard(\'' + board.id + '\', \'' + j._id + '\')">' +
-      '<div class="bd-card-title">' + esc(j.customerName || 'Untitled job') + '</div>' +
+      '<div class="bd-card-title">' + esc(j.customerName || 'Untitled job') +
+        (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') + '</div>' +
       (where ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
       '<div class="bd-card-foot">' +
@@ -347,20 +350,31 @@
     '</div>';
   }
 
+  // The linked job's number. Saved on the card since 2 Oct; older cards get it
+  // from the job itself, which only the owner's device has.
+  function jobNumOf(k) {
+    if (k.jobNum) return k.jobNum;
+    if (!k.jobId || !isOwner()) return '';
+    const j = jobsList().find(x => x._id === k.jobId);
+    return j ? String(j.estimateNumber || '').trim() : '';
+  }
+
   function storedCardHtml(board, k, inLastColumn) {
     const labels = (k.labels || []).map(id => (board.labels || []).find(l => l.id === id)).filter(Boolean);
     const list = k.checklist || [];
     const done = list.filter(i => i.done).length;
     const today = localDay();
     const dueState = !k.due || inLastColumn ? '' : k.due < today ? ' late' : k.due === today ? ' today' : '';
-    return '<div class="bd-card' + (inLastColumn ? ' done' : '') + '" draggable="true" ' +
+    return '<div class="bd-card' + (inLastColumn ? ' done' : '') + coverClass(k.color) + '" draggable="true" ' +
+        coverStyle(k.color) +
         'data-board="' + board.id + '" data-card="' + k.id + '" ' +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openCardDetail(\'' + board.id + '\', \'' + k.id + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-card-title">' + esc(k.title || 'Untitled') + '</div>' +
-      (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) + '</div>' : '') +
+      (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
+        (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
       '<div class="bd-card-foot">' +
         (k.due ? '<span class="bd-due' + dueState + '">📅 ' + shortDay(k.due) + '</span>' : '') +
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
@@ -382,6 +396,27 @@
   // plain hex colour is refused rather than trusted.
   function safeColor(c) {
     return /^#[0-9a-fA-F]{3,8}$/.test(String(c || '')) ? c : '#6b7a8f';
+  }
+
+  // A card can be colour-coded: a band of colour across its top, the way
+  // Trello does it, so a list can be read by colour at a glance.
+  const hasCover = c => /^#[0-9a-fA-F]{3,8}$/.test(String(c || ''));
+  const coverClass = c => (hasCover(c) ? ' covered' : '');
+  const coverStyle = c => (hasCover(c) ? 'style="--cover:' + c + '" ' : '');
+
+  // The colour choice in the card editor and on a job's card: none, or one of
+  // the board palette.
+  function colorPickHtml(name, current) {
+    return '<div class="bd-swatches">' +
+      '<label class="bd-swatch none" title="No colour"><input type="radio" name="' + name + '" value=""' +
+        (hasCover(current) ? '' : ' checked') + '><span></span></label>' +
+      PALETTE.map(c => '<label class="bd-swatch" style="--c:' + c + '"><input type="radio" name="' + name +
+        '" value="' + c + '"' + (current === c ? ' checked' : '') + '><span></span></label>').join('') +
+    '</div>';
+  }
+  function pickedColor(name) {
+    const r = document.querySelector('input[name="' + name + '"]:checked');
+    return r && hasCover(r.value) ? r.value : '';
   }
 
   // Each device remembers which board it was last looking at.
@@ -487,10 +522,22 @@
         '<button class="bd-move-btn' + (c.id === col ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
         (c.id === col ? 'disabled' : 'onclick="moveJobFromSheet(\'' + jobId + '\', \'' + boardId + '\', \'' + c.id + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
+      '<div class="bd-move-label">Card colour</div>' +
+      '<div onchange="setJobCardColor(\'' + safeId(jobId) + '\')">' + colorPickHtml('jcColor', j.cardColor) + '</div>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="openJobFromBoard(\'' + jobId + '\')">Open the job</button>' +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
+  };
+  // Kept on the job itself, through the same path as a move, so the colour
+  // shows on every device and survives the next save of the job form.
+  window.setJobCardColor = function (jobId) {
+    if (!isOwner() || !window.YDSync) return;
+    if (!window.YDSync.patchJob(jobId, { cardColor: pickedColor('jcColor') })) {
+      showToast('Could not change that card');
+      return;
+    }
+    render();
   };
   window.moveJobFromSheet = function (jobId, boardId, col) {
     closeBoardModal();
@@ -534,7 +581,7 @@
         '<span>📌 ' + esc(board.name) + '</span>' +
         (k.due ? '<span>📅 ' + shortDay(k.due) + '</span>' : '') +
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(a.name)).join(', ') + '</span>' : '') +
-        (k.jobName ? '<span>📋 ' + esc(k.jobName) + '</span>' : '') +
+        (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
       (k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +
       (list.length ? '<div class="bd-move-label">Checklist</div><div class="bd-checklist">' +
@@ -579,8 +626,8 @@
     if (!board) return;
     const k = openCard.cardId ? (cards[board.id] || {})[openCard.cardId] : {};
     const crew = crewPeople();
-    const jobs = jobsList().filter(j => (j.jobStatus || 'quoting') !== 'complete')
-      .sort((a, b) => String(a.customerName || '').localeCompare(b.customerName || ''));
+    pickJobs = jobsList();
+    const linked = k.jobId ? pickJobs.find(j => j._id === k.jobId) : null;
     const chosen = new Set((k.assignees || []).map(a => a.uid));
     const labelsOn = new Set(k.labels || []);
 
@@ -600,6 +647,7 @@
           '<input type="checkbox" class="cdLabel" value="' + l.id + '"' + (labelsOn.has(l.id) ? ' checked' : '') + '>' +
           '<span class="bd-label">' + esc(l.name) + '</span></label>').join('') +
       '</div></div>' +
+      '<div class="field"><span class="label">Card colour</span>' + colorPickHtml('cdColor', k.color) + '</div>' +
       (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +
         crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="cdWho" value="' + p.uid + '"' +
           (chosen.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') +
@@ -608,11 +656,19 @@
           '<div class="hint">This board is not shared with anyone yet, so the people you pick ' +
           'here will not see it until you share it in Board settings.</div>') +
       '</div>' : '') +
-      '<div class="field"><span class="label">Linked job</span><select id="cdJob">' +
-        '<option value="">— none —</option>' +
-        jobs.map(j => '<option value="' + j._id + '"' + (j._id === k.jobId ? ' selected' : '') + '>' +
-          esc(j.customerName || 'Untitled job') + '</option>').join('') +
-      '</select><div class="hint">Crew see only the job’s name, never its price.</div></div>' +
+      // A search box rather than a list of every customer's name, which grew
+      // too long to scroll. A job not on this device keeps its link as it was.
+      '<div class="field"><span class="label">Linked job</span>' +
+        '<input type="hidden" id="cdJob" value="' + esc(k.jobId || '') + '">' +
+        '<div class="jobpick">' +
+          '<input id="cdJobSearch" autocomplete="off" placeholder="Search by name, address, town or estimate #" ' +
+            'value="' + esc(linked ? jobLine(linked) : (k.jobName || '')) + '" ' +
+            'oninput="cardJobFilter()" onfocus="cardJobFilter(true)" onkeydown="cardJobKey(event)" onblur="cardJobBlur()">' +
+          '<button type="button" class="jobpick-clear" onclick="cardJobPick(\'\')" ' +
+            'title="Unlink the job" aria-label="Unlink the job">&times;</button>' +
+        '</div>' +
+        '<div class="jobpick-list" id="cdJobList" role="listbox" hidden></div>' +
+        '<div class="hint">Crew see only the job’s name, never its price.</div></div>' +
       '<div class="field"><span class="label">Notes</span>' +
         '<textarea id="cdNotes" rows="3" placeholder="Details, measurements, where to find things">' +
         esc(k.notes || '') + '</textarea></div>' +
@@ -628,6 +684,104 @@
     const t = el('cdTitle'); if (t) t.focus();
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
+
+  // ---------------------------------------------------- the linked-job search
+
+  let pickJobs = [];     // every job on this device, read when the editor opens
+  let pickShown = [];    // the matches on screen, in order
+  let pickAt = -1;       // the one the arrow keys are on
+
+  // How a job is named in the box: who, and where -- two jobs for the same
+  // customer are told apart by the address.
+  function jobLine(j) {
+    return (j.customerName || 'Untitled job') + (j.estimateNumber ? ' #' + j.estimateNumber : '') +
+      (j.address ? ' — ' + j.address : '');
+  }
+  const isDone = j => normStatusOf(j) === 'complete';
+  function normStatusOf(j) {
+    return typeof normStatus === 'function' ? normStatus(j.jobStatus, j) : (j.jobStatus || 'quoting');
+  }
+
+  // Every word typed must appear somewhere in the job: "smith oak" finds the
+  // Smith job on Oak Street; an estimate number or a ZIP works on its own.
+  function jobMatches(q) {
+    const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+    return pickJobs.filter(j => {
+      if (!words.length) return true;
+      const hay = [j.customerName, j.address, j.city, j.zip, j.estimateNumber,
+        (j.serviceTypes || []).join(' ')].join(' ').toLowerCase();
+      return words.every(w => hay.indexOf(w) !== -1);
+    }).sort((a, b) => (isDone(a) - isDone(b)) ||
+      String(a.customerName || '').localeCompare(String(b.customerName || '')));
+  }
+
+  // On focus the whole list shows, open jobs first; typing narrows it. The
+  // box still holding the linked job's name is not a search for it.
+  window.cardJobFilter = function (focusing) {
+    const box = el('cdJobSearch'), list = el('cdJobList');
+    if (!box || !list) return;
+    const linked = pickJobs.find(j => j._id === val('cdJob'));
+    const q = focusing && linked && box.value === jobLine(linked) ? '' : box.value;
+    const all = jobMatches(q);
+    pickShown = all.slice(0, 40);
+    pickAt = pickShown.length ? 0 : -1;
+    list.innerHTML = pickShown.length
+      ? pickShown.map((j, i) => {
+          const st = normStatusOf(j);
+          return '<button type="button" class="jobpick-item' + (i === pickAt ? ' on' : '') + '" role="option" ' +
+            'onmousedown="event.preventDefault()" onclick="cardJobPick(\'' + safeId(j._id) + '\')">' +
+            '<span class="jobpick-name">' + esc(j.customerName || 'Untitled job') +
+              (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') + '</span>' +
+            '<span class="jobpick-where">' + esc([j.address, j.city].filter(Boolean).join(', ') || '—') + '</span>' +
+            (typeof statusPill === 'function' ? statusPill(st) : '') +
+          '</button>';
+        }).join('') +
+        (all.length > pickShown.length ? '<div class="jobpick-more">' + (all.length - pickShown.length) +
+          ' more — keep typing to narrow it down</div>' : '')
+      : '<div class="jobpick-more">No job matches “' + esc(q) + '”</div>';
+    list.hidden = false;
+  };
+
+  window.cardJobPick = function (id) {
+    const j = id ? pickJobs.find(x => x._id === id) : null;
+    el('cdJob').value = j ? j._id : '';
+    el('cdJobSearch').value = j ? jobLine(j) : '';
+    el('cdJobList').hidden = true;
+    if (!j) el('cdJobSearch').focus();
+  };
+
+  window.cardJobKey = function (e) {
+    const list = el('cdJobList');
+    if (!list || list.hidden) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!pickShown.length) return;
+      pickAt = (pickAt + (e.key === 'ArrowDown' ? 1 : -1) + pickShown.length) % pickShown.length;
+      list.querySelectorAll('.jobpick-item').forEach((b, i) => {
+        b.classList.toggle('on', i === pickAt);
+        if (i === pickAt) b.scrollIntoView({ block: 'nearest' });
+      });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (pickShown[pickAt]) cardJobPick(pickShown[pickAt]._id);
+    } else if (e.key === 'Escape') {
+      // Closes the list only, not the whole card editor behind it.
+      e.preventDefault();
+      cardJobBlur();
+    }
+  };
+
+  // Leaving the box without picking puts back what is actually linked, so
+  // half-typed words never look like a link that is not there.
+  window.cardJobBlur = function () {
+    const list = el('cdJobList'), box = el('cdJobSearch');
+    if (list) list.hidden = true;
+    if (!box) return;
+    const id = val('cdJob');
+    const j = pickJobs.find(x => x._id === id);
+    const k = openCard && openCard.cardId ? (cards[openCard.boardId] || {})[openCard.cardId] : null;
+    box.value = j ? jobLine(j) : (id && k && k.jobId === id ? (k.jobName || '') : '');
+  };
 
   window.saveCard = function () {
     if (!openCard || !isOwner()) return;
@@ -657,6 +811,8 @@
       .map(p => ({ uid: p.uid, name: p.name }));
     const jobId = val('cdJob');
     const job = jobId ? jobsList().find(j => j._id === jobId) : null;
+    // Linked to a job this device does not have: leave the link as it was.
+    const keepLink = !job && jobId && jobId === was.jobId;
     const col = val('cdCol') || board.columns[0].id;
     const last = board.columns[board.columns.length - 1].id;
 
@@ -666,9 +822,11 @@
       order: was.column === col && was.order != null ? was.order : endOrder(board.id, col),
       due: val('cdDue') || null,
       labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value),
+      color: pickedColor('cdColor'),
       assignees: assignees,
-      jobId: job ? job._id : null,
-      jobName: job ? (job.customerName || 'Untitled job') : null,
+      jobId: job ? job._id : (keepLink ? was.jobId : null),
+      jobName: job ? (job.customerName || 'Untitled job') : (keepLink ? (was.jobName || null) : null),
+      jobNum: job ? (String(job.estimateNumber || '').trim() || null) : (keepLink ? (was.jobNum || null) : null),
       notes: el('cdNotes').value.trim(),
       checklist: checklist,
       doneAt: col === last ? (was.doneAt || nowIso()) : null,
