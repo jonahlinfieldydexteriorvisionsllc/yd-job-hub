@@ -53,7 +53,7 @@
     const active = document.querySelector('.tab-panel.active');
     const id = active ? active.id : '';
     if (id === 'panel-dashboard') renderDashboard();
-    if (id === 'panel-matdash') renderMatDash();
+    if (id === 'panel-supplies' && typeof matSectionHidden === 'function' && !matSectionHidden()) renderMatDash();
     if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
     // The boards and the calendar draw from jobs too; they decide for
     // themselves whether they are on screen.

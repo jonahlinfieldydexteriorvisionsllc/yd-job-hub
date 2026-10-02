@@ -57,6 +57,7 @@
   const val = id => ((el(id) || {}).value || '').trim();
   const num = id => { const n = parseFloat(val(id).replace(/[^0-9.]/g, '')); return isFinite(n) ? n : null; };
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
 
   // ------------------------------------------------------------ what is due
 
@@ -300,7 +301,8 @@
                       .filter(Boolean).join(' · ') + '</td>' +
             '<td>' + (e.costCents ? money(e.costCents) : '—') + '</td>' +
             '<td>' + esc(e.by || '') + '</td>' +
-            '<td><button class="remove-btn" onclick="removeService(\'' + e.id + '\')" ' +
+            '<td class="eq-log-act"><button class="btn btn-sm" onclick="editService(\'' + safeId(e.id) + '\')">Edit</button>' +
+              '<button class="remove-btn" onclick="removeService(\'' + safeId(e.id) + '\')" ' +
               'title="Remove">&times;</button></td></tr>').join('') +
           '</tbody></table></div>'
         : '<p class="empty-msg">Nothing logged yet.</p>');
@@ -428,54 +430,73 @@
 
   // ------------------------------------------------------------ logging work
 
-  window.addService = function () {
+  // The logged service being changed, or null while logging a new one.
+  let editingEntry = null;
+
+  window.addService = function () { serviceForm(null); };
+  // A service logged with the wrong date, cost or reading used to have to be
+  // deleted and typed in again from scratch.
+  window.editService = function (entryId) { serviceForm(entryId); };
+
+  function serviceForm(entryId) {
     const g = gear[openId];
     if (!g) return;
+    const e = entryId ? (g.service || []).find(x => x.id === entryId) : null;
+    if (entryId && !e) return;
     // Already open: a second tap used to add a second form with the same
-    // field ids, and Save then read whichever one came first.
-    if (el('eqServiceForm')) { const w = el('svWhat'); if (w) w.focus(); return; }
+    // field ids, and Save then read whichever one came first. Asking for a
+    // different entry swaps the form over instead.
+    if (el('eqServiceForm')) {
+      if (editingEntry === (e ? e.id : null)) { const w = el('svWhat'); if (w) w.focus(); return; }
+      el('eqServiceForm').remove();
+    }
+    editingEntry = e ? e.id : null;
     const body = el('eqBody');
-    const today = new Date();
-    const iso = today.getFullYear() + '-' + two(today.getMonth() + 1) + '-' + two(today.getDate());
+    const iso = localDay();
+    const has = v => (v == null ? '' : esc(String(v)));
 
     body.insertAdjacentHTML('afterbegin',
       '<div class="add-area" id="eqServiceForm">' +
-        '<div class="add-label">What was done to ' + esc(g.name) + '</div>' +
+        '<div class="add-label">' + (e ? 'Change this service on ' : 'What was done to ') + esc(g.name) + '</div>' +
         '<div class="grid g2">' +
           '<div class="field"><span class="label">When</span>' +
-            '<input type="date" id="svAt" value="' + iso + '" max="' + iso + '"></div>' +
+            '<input type="date" id="svAt" value="' + (e ? has(e.at) : iso) + '" max="' + iso + '"></div>' +
           '<div class="field"><span class="label">Cost</span>' +
-            '<input id="svCost" inputmode="decimal" placeholder="$"></div>' +
+            '<input id="svCost" inputmode="decimal" placeholder="$" value="' +
+            (e && e.costCents != null ? has(e.costCents / 100) : '') + '"></div>' +
         '</div>' +
         '<div class="field"><span class="label">What was done</span>' +
-          '<input id="svWhat" placeholder="e.g. oil and filter, new blades"></div>' +
+          '<input id="svWhat" placeholder="e.g. oil and filter, new blades" value="' + (e ? has(e.what) : '') + '"></div>' +
         '<div class="grid g3">' +
-          '<div class="field"><span class="label">Hours now</span>' +
-            '<input id="svHours" inputmode="decimal" placeholder="' +
+          '<div class="field"><span class="label">' + (e ? 'Hours then' : 'Hours now') + '</span>' +
+            '<input id="svHours" inputmode="decimal" value="' + (e ? has(e.hours) : '') + '" placeholder="' +
             (g.hours != null ? round1(g.hours) : 'optional') + '"></div>' +
-          '<div class="field"><span class="label">Miles now</span>' +
-            '<input id="svMiles" inputmode="numeric" placeholder="' +
+          '<div class="field"><span class="label">' + (e ? 'Miles then' : 'Miles now') + '</span>' +
+            '<input id="svMiles" inputmode="numeric" value="' + (e ? has(e.miles) : '') + '" placeholder="' +
             (g.miles != null ? fmtNum(g.miles) : 'optional') + '"></div>' +
           '<div class="field"><span class="label">Who did it</span>' +
-            '<input id="svBy" placeholder="you, or the shop"></div>' +
+            '<input id="svBy" placeholder="you, or the shop" value="' + (e ? has(e.by) : '') + '"></div>' +
         '</div>' +
         '<div class="hint">Putting the hours or miles in is what lets the next service ' +
           'be worked out. Leave them blank if this machine goes by date.</div>' +
         '<div class="field-actions">' +
-          '<button class="btn btn-filled" onclick="saveService()">Save</button>' +
+          '<button class="btn btn-filled" onclick="saveService()">' + (e ? 'Save changes' : 'Save') + '</button>' +
           '<button class="btn btn-sm" onclick="renderDetail2()">Cancel</button>' +
         '</div>' +
       '</div>');
+    const form = el('eqServiceForm');
+    if (form && form.scrollIntoView) form.scrollIntoView({ block: 'nearest' });
     const w = el('svWhat'); if (w) w.focus();
-  };
+  }
 
-  window.renderDetail2 = function () { renderDetail(); };
+  window.renderDetail2 = function () { editingEntry = null; renderDetail(); };
 
   window.saveService = function () {
     const g = gear[openId];
     if (!g) return;
     const what = val('svWhat');
     if (!what) { showToast('Say what was done'); return; }
+    if (editingEntry) { saveServiceChange(g, what); return; }
 
     const entry = {
       id: 'sv' + Date.now().toString(36),
@@ -507,6 +528,45 @@
     write(g.id, patch, 'logging a service');
     showToast('Logged — ' + what);
   };
+
+  // A changed entry keeps its id and its place in the history. The machine's
+  // reading and the next service are then worked out the same way as when an
+  // entry is logged or removed: if this entry is where the reading came from,
+  // the reading follows the corrected history (a 300 typed for 100 comes back
+  // down to 100); otherwise meters only go forward.
+  function saveServiceChange(g, what) {
+    const old = (g.service || []).find(e => e.id === editingEntry);
+    editingEntry = null;
+    if (!old) { renderDetail(); return; }
+    const entry = Object.assign({}, old, {
+      at: val('svAt') || old.at,
+      what: what,
+      costCents: num('svCost') != null ? Math.round(num('svCost') * 100) : null,
+      hours: num('svHours'),
+      miles: num('svMiles'),
+      by: val('svBy'),
+    });
+    const service = (g.service || []).map(e => (e.id === entry.id ? entry : e));
+    const patch = { service: service };
+
+    ['hours', 'miles'].forEach(k => {
+      const newest = newestWith(service, k);
+      if (old[k] != null && old[k] === g[k]) {
+        if (newest) patch[k] = newest[k];
+      } else if (entry[k] != null && (g[k] == null || entry[k] > g[k])) {
+        patch[k] = entry[k];
+      }
+    });
+    const next = dueFromHistory(g, service);
+    if ((old.hours != null || entry.hours != null) && next.dueHours != null) patch.dueHours = next.dueHours;
+    if ((old.miles != null || entry.miles != null) && next.dueMiles != null) patch.dueMiles = next.dueMiles;
+    if (next.dueDate) patch.dueDate = next.dueDate;
+
+    Object.assign(g, patch);
+    renderDetail(); renderEquipment();
+    write(g.id, patch, 'changing a service entry');
+    showToast('Changed — ' + what);
+  }
 
   window.removeService = function (entryId) {
     const g = gear[openId];

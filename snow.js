@@ -123,6 +123,8 @@
     return s;
   }
 
+  function safeId(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, ''); }
+
   function mapsLink(a) {
     const q = encodeURIComponent(
       (a.lat && a.lng) ? (a.lat + ',' + a.lng) : (a.address + ', ' + (a.town || '') + ' WI'));
@@ -156,8 +158,10 @@
           (a.type === 'commercial' ? '<span class="snow-tag commercial">commercial</span>' : '') +
           (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
           (a.minTriggerInches > 1 ? '<span class="snow-tag trigger">' + a.minTriggerInches + '"+ only</span>' : '') +
-          (a.lat == null ? '<span class="snow-tag nolocation">no location</span>' : '') +
+          (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map, so it is left off routes">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
+          // There was no way to change an account once it was added.
+          (isOwner ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
         '</div>' +
         '<a class="snow-addr" href="' + mapsLink(a) + '" target="_blank" rel="noopener">' +
           esc(a.address) + (a.town ? ', ' + esc(a.town) : '') +
@@ -178,7 +182,7 @@
     const db = window.YDDb;
     if (!db || !db.watch) return;
 
-    unsubAccounts = db.watch('snowAccounts', changes => {
+    unsubAccounts = db.watch('snowAccounts', (changes, meta) => {
       changes.forEach(c => {
         if (c.type === 'removed') delete accounts[c.id];
         else accounts[c.id] = c.data;
@@ -186,6 +190,9 @@
       loaded = true;
       render();
       loadPricing();          // only the owner will get anything back
+      // Only once the server's copy is in: a stale cached one might list as
+      // unlocated an account another device has already found.
+      if (meta && meta.fromCache === false) setTimeout(locateMissing, 1500);
     }, () => { loaded = true; render(); });
   }
 
@@ -254,64 +261,165 @@
   // The Census one is more precise for US addresses but refuses browser calls;
   // checked against it on four real addresses, this agreed to within 8 metres
   // on three and 46 on the fourth -- far inside what routing and weather need.
-  async function geocodeAddress(input, townHint) {
-    // People type addresses whole -- "7009 Harvest Hill Rd, Madison, WI 53717".
-    // The geocoder wants the street on its own, with the town as a separate
-    // field, and quietly returns nothing when the town appears in both. So
-    // split it here rather than asking anyone to type it in pieces.
-    const parts = String(input).split(',').map(s => s.trim()).filter(Boolean);
-    const street = parts[0];
-    let hint = townHint;
-    if (!hint && parts.length > 1 && !/^(WI|Wisconsin)/i.test(parts[1]) && !/^\d{5}/.test(parts[1])) {
-      hint = parts[1];
-    }
-    const KNOWN = ['Madison', 'Middleton', 'Verona', 'Fitchburg', 'Waunakee', 'Monroe'];
-    // Try any town they gave first, then the towns YD actually works.
-    const towns = hint ? [hint].concat(KNOWN.filter(t => t.toLowerCase() !== hint.toLowerCase())) : KNOWN;
+  // Street types get abbreviated on a spreadsheet and the geocoder does not
+  // always understand them. "123 Oak Tr" can find nothing where "…Trail"
+  // finds it immediately, and Jonah's own sheet writes street types short,
+  // so without this an address typed the way he writes it saves with no
+  // location and then quietly never appears on a route.
+  const STREET_TYPES = {
+    tr: 'Trail', trl: 'Trail', trail: 'Trail', cir: 'Circle', crcl: 'Circle', circle: 'Circle',
+    rd: 'Road', road: 'Road', dr: 'Drive', drive: 'Drive', st: 'Street', street: 'Street',
+    ave: 'Avenue', av: 'Avenue', avenue: 'Avenue', ln: 'Lane', lane: 'Lane',
+    ct: 'Court', court: 'Court', blvd: 'Boulevard', boulevard: 'Boulevard',
+    pl: 'Place', place: 'Place', ter: 'Terrace', terr: 'Terrace', terrace: 'Terrace',
+    pkwy: 'Parkway', pky: 'Parkway', parkway: 'Parkway', hwy: 'Highway', highway: 'Highway',
+    sq: 'Square', cres: 'Crescent', pt: 'Point', hts: 'Heights', way: 'Way', pass: 'Pass',
+    run: 'Run', path: 'Path', xing: 'Crossing', cv: 'Cove', loop: 'Loop',
+  };
+  const streetType = w => STREET_TYPES[String(w || '').replace(/\.$/, '').toLowerCase()] || null;
 
-    // Street types get abbreviated on a spreadsheet and the geocoder does not
-    // always understand them. "5914 High Tower Tr" finds nothing; "…Trail"
-    // finds it immediately. Jonah's own sheet writes Angel B as "cimarron tr",
-    // so without this an address typed the way he writes it saves with no
-    // location and then quietly never appears on a route.
-    //
-    // Only a TRAILING abbreviation is expanded: "4918 St Annes Dr" must keep
-    // its "St" as Saint rather than becoming "Street Annes Drive".
-    const STREET_TYPES = {
-      tr: 'Trail', trl: 'Trail', cir: 'Circle', crcl: 'Circle', rd: 'Road',
-      dr: 'Drive', st: 'Street', ave: 'Avenue', av: 'Avenue', ln: 'Lane',
-      ct: 'Court', blvd: 'Boulevard', pl: 'Place', ter: 'Terrace',
-      terr: 'Terrace', pkwy: 'Parkway', pky: 'Parkway', hwy: 'Highway',
-      sq: 'Square', cres: 'Crescent', pt: 'Point', hts: 'Heights',
-    };
-    function expandStreetType(s) {
-      const words = s.trim().split(/\s+/);
-      if (words.length < 2) return null;
-      const last = words[words.length - 1].replace(/\.$/, '').toLowerCase();
-      const full = STREET_TYPES[last];
-      if (!full || full.toLowerCase() === last) return null;
-      return words.slice(0, -1).join(' ') + ' ' + full;
-    }
+  // Towns around Madison and Monroe, longest first so "Sun Prairie" is
+  // matched whole. Used to spot a town typed straight after the street with
+  // no comma.
+  const AREA_TOWNS = ['Shorewood Hills', 'Cottage Grove', 'Maple Bluff', 'Cross Plains', 'Mount Horeb',
+    'Mt Horeb', 'New Glarus', 'Black Earth', 'Sun Prairie', 'Belleville', 'Evansville', 'Mazomanie',
+    'Monticello', 'Middleton', 'Fitchburg', 'Stoughton', 'McFarland', 'Deerfield', 'Waunakee',
+    'Brodhead', 'Brooklyn', 'DeForest', 'Madison', 'Marshall', 'Windsor', 'Monona', 'Oregon',
+    'Verona', 'Albany', 'Monroe', 'Paoli', 'Juda'];
 
-    // Try it as typed first, then with the street type spelled out.
-    const expanded = expandStreetType(street);
-    const spellings = expanded ? [street, expanded] : [street];
+  // Splits a typed address into street, town and ZIP. People type them every
+  // which way. A real one typed as "123 Oak Tr Madison, WI  53713" (no comma
+  // between the street and the town) was saved with no location, because all
+  // of "Oak Tr Madison" was searched for as the street name.
+  function splitAddress(input) {
+    let s = String(input || '').replace(/\s+/g, ' ').trim();
+    let zip = null;
+    const z = s.match(/\b(\d{5})(?:-\d{4})?\s*$/);
+    if (z) { zip = z[1]; s = s.slice(0, z.index); }
+    s = s.replace(/[,\s]*\b(WI|Wis|Wisc|Wisconsin)\.?[,\s]*$/i, '').replace(/[,\s]+$/, '');
+    // An apartment or unit number only confuses the map search.
+    s = s.replace(/[,\s]+(apt|unit|ste|suite|#)\.?\s*[\w-]+/i, '');
 
-    for (const town of towns) {
-      for (const spelling of spellings) {
-        const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
-          street: spelling, city: town, state: 'WI', country: 'USA', format: 'json', limit: '1',
-        });
-        try {
-          const j = await fetch(url).then(r => r.json());
-          if (j && j.length) {
-            return { lat: +j[0].lat, lng: +j[0].lon, town: town, matched: j[0].display_name };
-          }
-        } catch (e) { /* try the next spelling or town */ }
-        await new Promise(r => setTimeout(r, 1100));   // their policy: 1 request/sec
+    const parts = s.split(',').map(p => p.trim()).filter(Boolean);
+    let street = parts[0] || '';
+    let town = parts.length > 1 ? parts[parts.length - 1] : null;
+    if (!town) {
+      // A known town on the end -- as long as what is left still looks like
+      // a street ("N1234 County Rd X Monroe" yes; "456 W Monroe" is a street).
+      const low = street.toLowerCase();
+      const known = AREA_TOWNS.find(t => low.endsWith(' ' + t.toLowerCase()));
+      const left = known ? street.slice(0, street.length - known.length).trim() : '';
+      const leftWords = left.split(' ');
+      if (known && (leftWords.length >= 3 || (leftWords.length === 2 && streetType(leftWords[1])))) {
+        town = known;
+        street = left;
       }
     }
-    return null;
+    if (!town) {
+      // Otherwise the town is whatever follows the last street type: in
+      // "123 Main St Lodi", everything after "St". Never when what follows
+      // holds a number or another street type ("123 Ridge Rd"), or starts
+      // with a county highway letter ("N1234 County Rd PB").
+      const words = street.split(' ');
+      for (let i = words.length - 2; i >= 1; i--) {
+        const rest = words.slice(i + 1);
+        if (streetType(words[i]) && !/^[A-Z]{1,2}$/.test(rest[0]) &&
+            !rest.some(w => /\d/.test(w) || streetType(w))) {
+          street = words.slice(0, i + 1).join(' ');
+          town = rest.join(' ');
+          break;
+        }
+      }
+    }
+    return { street: street, town: town, zip: zip };
+  }
+
+  // Only a TRAILING abbreviation is expanded: "45 St Marys Dr" must keep
+  // its "St" as Saint rather than becoming "Street Annes Drive".
+  function expandStreetType(s) {
+    const words = s.trim().split(/\s+/);
+    if (words.length < 2) return null;
+    const last = words[words.length - 1];
+    const full = streetType(last);
+    if (!full || full.toLowerCase() === last.toLowerCase()) return null;
+    return words.slice(0, -1).join(' ') + ' ' + full;
+  }
+
+  const WORK_TOWNS = ['Madison', 'Middleton', 'Verona', 'Fitchburg', 'Waunakee', 'Monroe'];
+
+  // Returns { geo, reached }: geo is null when nothing matched, and reached
+  // says whether the map service answered at all -- "no signal" and "no such
+  // address" need different words on the form.
+  async function locate(input, townHint) {
+    const a = splitAddress(input);
+    const hint = townHint || a.town;
+    const expanded = expandStreetType(a.street);
+    // Spelled out first: the geocoder knows "Trail" far better than "Tr".
+    const spellings = expanded ? [expanded, a.street] : [a.street];
+
+    // The ZIP first -- it is on every mailing address and, unlike the town,
+    // does not trip over a "Madison" mailing address that sits in Fitchburg.
+    // Then any town given. Only with no ZIP is it worth guessing among the
+    // towns YD actually works, and then only the spelled-out street: each
+    // try costs a second, and a miss used to take twenty.
+    const places = [];
+    if (a.zip) places.push({ postalcode: a.zip });
+    if (hint) places.push({ city: hint });
+    if (!a.zip) {
+      WORK_TOWNS.filter(t => !hint || t.toLowerCase() !== hint.toLowerCase())
+        .forEach(t => places.push({ city: t, guess: true }));
+    }
+
+    let reached = false;
+    let first = true;
+    for (const p of places) {
+      const where = Object.assign({}, p);
+      delete where.guess;
+      for (const spelling of (p.guess ? spellings.slice(0, 1) : spellings)) {
+        if (!first) await new Promise(r => setTimeout(r, 1100));   // their policy: 1 request/sec
+        first = false;
+        const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams(Object.assign({
+          street: spelling, state: 'WI', country: 'USA', format: 'json', limit: '1', addressdetails: '1',
+        }, where));
+        try {
+          const j = await fetch(url).then(r => r.json());
+          reached = true;
+          if (j && j.length) {
+            const ad = j[0].address || {};
+            return { reached: true, geo: {
+              lat: +j[0].lat, lng: +j[0].lon,
+              town: ad.city || ad.town || ad.village || ad.hamlet || where.city || hint || null,
+              matched: j[0].display_name,
+            } };
+          }
+        } catch (e) { /* try the next spelling or town */ }
+      }
+    }
+    // Last, the whole thing as one line of text, the way a person would
+    // type it into a map -- it copes with a few things the itemised search
+    // does not, such as a town the map files under another name.
+    if (reached) {
+      await new Promise(r => setTimeout(r, 1100));
+      const line = [spellings[0], hint, 'WI ' + (a.zip || '')].filter(Boolean).join(', ').trim();
+      try {
+        const j = await fetch('https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
+          q: line, countrycodes: 'us', format: 'json', limit: '1', addressdetails: '1',
+        })).then(r => r.json());
+        const ad = (j && j[0] && j[0].address) || {};
+        if (j && j.length && /wisconsin/i.test(ad.state || '')) {
+          return { reached: true, geo: {
+            lat: +j[0].lat, lng: +j[0].lon,
+            town: ad.city || ad.town || ad.village || ad.hamlet || hint || null,
+            matched: j[0].display_name,
+          } };
+        }
+      } catch (e) { /* nothing more to try */ }
+    }
+    return { reached: reached, geo: null };
+  }
+
+  async function geocodeAddress(input, townHint) {
+    return (await locate(input, townHint)).geo;
   }
 
   const val = id => (document.getElementById(id) || {}).value || '';
@@ -322,15 +430,28 @@
   };
 
   let editingId = null;
+  // The address the form last failed to find. Pressing Save again with the
+  // same address keeps it without a location; changing it looks again.
+  let unfound = null;
+  const GEO_HINT = 'The town and map location are worked out for you when you save.';
 
   // Shared, so the yard address in Settings is looked up the same way.
   window.YDSnowGeocode = geocodeAddress;
 
   window.openSnowForm = function (id) {
     editingId = id || null;
+    unfound = null;
     const a = id ? accounts[id] : null;
     const p = id ? pricing[id] : null;
     document.getElementById('snowFormTitle').textContent = a ? 'Edit Snow Account' : 'Add Snow Account';
+    const hint = document.getElementById('sfGeoHint');
+    hint.classList.remove('bad');
+    hint.textContent = a && a.lat == null
+      ? 'This address has not been found on the map yet. Check the street name and house number, then save.'
+      : (a && a.geocodedAs ? 'On the map as: ' + a.geocodedAs : GEO_HINT);
+    const btn = document.getElementById('sfSaveBtn');
+    btn.disabled = false;
+    btn.textContent = 'Save account';
 
     const set = (el, v) => { const n = document.getElementById(el); if (n) n.value = v == null ? '' : v; };
     const tick = (el, v) => { const n = document.getElementById(el); if (n) n.checked = !!v; };
@@ -362,6 +483,24 @@
     document.getElementById('snowFormModal').classList.add('active');
   };
 
+  // The prices are fetched apart from the account, and saving writes whatever
+  // the form's price boxes hold. Opened before they arrived, a save would
+  // blank the customer's prices -- so they are fetched first, and with no
+  // copy to be had (no signal, nothing cached) the form is not opened.
+  window.editSnowAccount = async function (id) {
+    if (!accounts[id]) return;
+    if (!pricing[id]) {
+      try {
+        const d = await window.YDDb.get('snowAccounts/' + id + '/private', PRICING_DOC);
+        if (d) pricing[id] = d;      // none at all: the form starts blank, nothing to lose
+      } catch (e) {
+        showToast('This account\'s prices have not loaded yet — try again with signal');
+        return;
+      }
+    }
+    openSnowForm(id);
+  };
+
   window.closeSnowForm = function () {
     document.getElementById('snowFormModal').classList.remove('active');
     editingId = null;
@@ -386,8 +525,8 @@
     btn.textContent = 'Finding the address…';
 
     // Two accounts named the same thing produced the same id, and the second
-    // silently replaced the first. Jonah's own sheet has two Baxter properties
-    // at different addresses, so this is not hypothetical -- adding the second
+    // silently replaced the first. Jonah's own sheet has one customer with two
+    // properties at different addresses, so this is not hypothetical -- adding the second
     // would have erased the first with no warning at all.
     let id = editingId;
     if (!id) {
@@ -401,27 +540,44 @@
 
     // Only look the address up when it is new or has changed -- no point
     // hitting the geocoder to re-confirm something already known.
+    const moved = !existing || existing.address !== address;
     let geo = null;
-    if (!existing || existing.address !== address || !existing.lat) {
-      geo = await geocodeAddress(address);
+    if ((moved || existing.lat == null) && unfound !== address) {
+      const found = await locate(address);
+      geo = found.geo;
       if (!geo) {
-        document.getElementById('sfGeoHint').textContent =
-          'Could not find that address. Check the spelling — it can be saved anyway, but it will not appear on a route until it can be located.';
+        // The form used to close at once and say only "saved", so the warning
+        // written here was never seen -- the first anyone knew was a "no
+        // location" tag on the card. Stay open and say what happened.
+        unfound = address;
+        const hint = document.getElementById('sfGeoHint');
+        hint.classList.add('bad');
+        hint.textContent = found.reached
+          ? 'That address could not be found on the map. Check the street name and house number. ' +
+            'Press Save again to keep it anyway — it will not appear on a route until it is found.'
+          : 'No signal, so the address could not be looked up. Press Save again to keep it for now — ' +
+            'it is looked up again the next time the app is open with signal.';
+        btn.disabled = false;
+        btn.textContent = 'Save without a location';
+        return;
       }
     }
 
     btn.textContent = 'Saving…';
 
+    // A changed address that could not be found must not keep the OLD
+    // address's map position: the route would send the crew to the old house.
+    const kept = k => (!moved && existing[k] != null ? existing[k] : null);
     const pub = {
       name: name,
       address: address,
-      town: geo ? geo.town : (existing && existing.town) || null,
-      lat: geo ? geo.lat : (existing && existing.lat) || null,
-      lng: geo ? geo.lng : (existing && existing.lng) || null,
-      geocodedAs: geo ? geo.matched : (existing && existing.geocodedAs) || null,
+      town: geo ? geo.town : kept('town'),
+      lat: geo ? geo.lat : kept('lat'),
+      lng: geo ? geo.lng : kept('lng'),
+      geocodedAs: geo ? geo.matched : kept('geocodedAs'),
       type: val('sfType'),
       active: existing ? existing.active !== false : true,
-      season: '2026-27',
+      season: (existing && existing.season) || seasonNow(),
       minTriggerInches: parseInt(val('sfTrigger'), 10) || 1,
       serviceWindow: val('sfWindow'),
       areaNotes: val('sfNotes').trim(),
@@ -472,10 +628,53 @@
     accounts[id] = pub;
     render();
     closeSnowForm();
-    showToast(geo ? (name + ' added — located in ' + geo.town) : (name + ' saved'));
+    showToast(geo ? (name + ' saved — on the map in ' + (geo.town || 'Wisconsin'))
+      : (pub.lat == null ? name + ' saved without a location' : name + ' saved'));
     btn.disabled = false;
     btn.textContent = 'Save account';
   };
+
+  // A snow season runs through the winter, so it is named for both years:
+  // from July on it is this year's, before July last year's.
+  function seasonNow() {
+    const d = new Date();
+    const y = d.getMonth() >= 6 ? d.getFullYear() : d.getFullYear() - 1;
+    return y + '-' + String(y + 1).slice(2);
+  }
+
+  // An account saved with no location -- no signal at the time, or an address
+  // the map could not read -- is looked up again when the owner has the app
+  // open, so it finds its way onto the route without anyone remembering to.
+  // Each address is tried once per visit; no signal leaves it for next time.
+  const triedAddress = {};
+  let locating = false;
+  async function locateMissing() {
+    if (locating || !window.YDAuth || !window.YDAuth.isOwner || !window.YDDb) return;
+    const todo = Object.keys(accounts).filter(id =>
+      accounts[id].lat == null && accounts[id].address && triedAddress[id] !== accounts[id].address);
+    if (!todo.length) return;
+    locating = true;
+    try {
+      for (const id of todo) {
+        const address = accounts[id].address;
+        triedAddress[id] = address;
+        const found = await locate(address);
+        if (!found.reached) { delete triedAddress[id]; break; }
+        // Edited while it was being looked up: the new address is its own job.
+        if (found.geo && accounts[id] && accounts[id].address === address && accounts[id].lat == null) {
+          const fix = { town: found.geo.town, lat: found.geo.lat, lng: found.geo.lng, geocodedAs: found.geo.matched };
+          Object.assign(accounts[id], fix);
+          Promise.resolve(window.YDDb.put('snowAccounts', id, fix))
+            .catch(e => console.warn('[snow] location not yet on the server:', e.code || e.message));
+          render();
+        }
+        await new Promise(r => setTimeout(r, 1100));
+      }
+    } finally {
+      locating = false;
+    }
+  }
+  window.addEventListener('online', () => setTimeout(locateMissing, 2000));
 
   // Signing out does not reload the page. Without dropping the watch and the
   // data, the next person to sign in on the same phone would never get a

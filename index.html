@@ -65,14 +65,13 @@
 
   <div class="tab-bar">
     <button class="tab-btn active" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
+    <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
+    <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
     <button class="tab-btn" id="tabSnow" onclick="switchTab('snow')"><span class="tab-icon">❄️</span>Snow</button>
     <button class="tab-btn" id="tabClock" hidden onclick="switchTab('clock')"><span class="tab-icon">⏱️</span>Clock</button>
     <button class="tab-btn" id="tabCalendar" hidden onclick="switchTab('calendar')"><span class="tab-icon">📅</span>Calendar</button>
     <button class="tab-btn" id="tabBoards" hidden onclick="switchTab('boards')"><span class="tab-icon">📌</span>Boards</button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
-    <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
-    <button class="tab-btn" id="tabDashboard" onclick="switchTab('dashboard')"><span class="tab-icon">📊</span>All Jobs</button>
-    <button class="tab-btn" id="tabMatdash" onclick="switchTab('matdash')"><span class="tab-icon">📦</span>Materials</button>
     <button class="tab-btn" id="tabEquipment" hidden onclick="switchTab('equipment')"><span class="tab-icon">🚜</span>Equipment</button>
     <button class="tab-btn" id="tabContacts" hidden onclick="switchTab('contacts')"><span class="tab-icon">📇</span>Contacts</button>
     <button class="tab-btn tab-more" id="tabMore" onclick="openMore()"><span class="tab-icon">☰</span>More</button>
@@ -466,31 +465,6 @@
     </div>
   </div>
 
-  <!-- ============ TAB 4: MATERIALS ============ -->
-  <div class="tab-panel" id="panel-matdash">
-    <div class="section">
-      <div class="section-head">
-        <span class="section-title">Materials Across All Jobs</span>
-        <span class="section-badge" id="matDashBadge"></span>
-      </div>
-      <div class="section-body">
-        <div class="filter-bar">
-          <select id="matDashRange" onchange="renderMatDash()">
-            <option value="all">All Time</option>
-            <option value="month">This Month</option>
-            <option value="season">This Season (Apr–Oct)</option>
-            <option value="year">This Year</option>
-            <option value="30">Last 30 Days</option>
-            <option value="90">Last 90 Days</option>
-          </select>
-          <input id="matDashSearch" placeholder="Search category…" oninput="renderMatDash()">
-        </div>
-        <div class="dash-totals" id="matDashTotals"></div>
-        <div id="matDashCategoriesWrap"></div>
-      </div>
-    </div>
-  </div>
-
   <!-- ============ TAB: CALENDAR ============ -->
   <div class="tab-panel" id="panel-calendar">
     <div class="section">
@@ -518,6 +492,31 @@
         <span class="section-title">Supplies — where to get it</span>
       </div>
       <div class="section-body" id="suppliesWrap"></div>
+    </div>
+
+    <!-- What has been bought across every job: the old Materials tab, now
+         with the supplies it is bought from. Owner only -- it reads the jobs,
+         which crew cannot. -->
+    <div class="section" id="matSeasonSection">
+      <div class="section-head">
+        <span class="section-title">Materials bought — across every job</span>
+        <span class="section-badge" id="matDashBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="filter-bar">
+          <select id="matDashRange" onchange="renderMatDash()">
+            <option value="season" selected>This Season (Apr–Oct)</option>
+            <option value="month">This Month</option>
+            <option value="year">This Year</option>
+            <option value="30">Last 30 Days</option>
+            <option value="90">Last 90 Days</option>
+            <option value="all">All Time</option>
+          </select>
+          <input id="matDashSearch" placeholder="Search category…" oninput="renderMatDash()">
+        </div>
+        <div class="dash-totals" id="matDashTotals"></div>
+        <div id="matDashCategoriesWrap"></div>
+      </div>
     </div>
   </div>
 
@@ -722,7 +721,7 @@
       </div>
 
       <div class="field mt"><span class="label">Street address</span>
-        <input id="sfAddress" placeholder="e.g. 308 William Cir">
+        <input id="sfAddress" placeholder="e.g. 123 Oak St, Madison, WI 53711">
         <div class="hint" id="sfGeoHint">The town and map location are worked out for you when you save.</div>
       </div>
 

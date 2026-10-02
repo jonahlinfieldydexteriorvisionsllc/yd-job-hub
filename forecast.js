@@ -217,19 +217,47 @@
     return all.filter(x => day && x.t.slice(0, 10) === day.date);
   }
 
+  // Gusts are worth a mention only when they are well above the steady wind.
+  // Written out ("gusts 16"): the old "10g16" and "10–16" left Jonah guessing.
+  const gusty = (w, g) => g != null && w != null && g >= w + 5;
+
+  // Rain in an hour, in inches. Under a hundredth is a trace -- damp
+  // pavement, not a washed-out afternoon.
+  function rainAmount(inches) {
+    if (!(inches > 0)) return '';
+    return inches < 0.01 ? 'trace' : inches.toFixed(2) + '"';
+  }
+
   function hourCell(x, isNow) {
     const pop = x.pop || 0;
-    const wet = x.snow >= 0.1 ? '❄️' + x.snow + '"' : (pop >= 10 ? '💧' + pop + '%' : '');
-    return '<div class="wxh' + (isNow ? ' now' : '') + (x.snow >= 0.1 ? ' snow' : '') + '">' +
+    const snowy = x.snow >= 0.1;
+    const amount = snowy ? '❄️' + x.snow + '"' : rainAmount(x.rain);
+    return '<div class="wxh' + (isNow ? ' now' : '') + (snowy ? ' snow' : '') + '">' +
       '<div class="wxh-t">' + (isNow ? 'Now' : hourLabel(x.t)) + '</div>' +
       '<div class="wxh-i">' + iconFor(x.code, x.day) + '</div>' +
       '<div class="wxh-deg">' + Math.round(x.temp) + '°</div>' +
       // A bar whose height is the chance of rain or snow, so a wet afternoon
       // can be seen at a glance across the strip.
       '<div class="wxh-bar"><span style="height:' + Math.min(100, pop) + '%"></span></div>' +
-      '<div class="wxh-wet">' + wet + '</div>' +
-      '<div class="wxh-w">' + Math.round(x.wind) + (x.gust > x.wind + 8 ? '–' + Math.round(x.gust) : '') + '</div>' +
+      '<div class="wxh-wet">' + (pop >= 10 ? '💧' + pop + '%' : '') + '</div>' +
+      // How much is expected to fall in this hour, beside how likely it is.
+      '<div class="wxh-amt">' + amount + '</div>' +
+      '<div class="wxh-w">' + Math.round(x.wind) + ' mph' +
+        (gusty(x.wind, x.gust) ? '<br>gusts ' + Math.round(x.gust) : '') + '</div>' +
     '</div>';
+  }
+
+  // The hours on show, added up: "about 0.42 in of rain over the next 24 hours".
+  function hoursTotal(hours, isToday) {
+    const rain = hours.reduce((s, x) => s + (x.snow >= 0.1 ? 0 : (x.rain || 0)), 0);
+    const snow = Math.round(hours.reduce((s, x) => s + (x.snow || 0), 0) * 10) / 10;
+    const span = isToday ? 'over the next 24 hours' : 'over the day';
+    const bits = [];
+    if (rain >= 0.01) bits.push('about ' + rain.toFixed(2) + '" of rain');
+    if (snow >= 0.1) bits.push('about ' + snow + '" of snow');
+    return bits.length
+      ? '<div class="wxp-total">💧 ' + bits.join(' and ') + ' ' + span + '</div>'
+      : '<div class="wxp-total dry">No rain or snow expected ' + span + '</div>';
   }
 
   function draw() {
@@ -282,9 +310,10 @@
         '</div>' +
       '</div>' +
       (data.alerts && data.alerts.length ? '<div class="wxp-alert">⚠️ ' + data.alerts.map(esc).join(' · ') + '</div>' : '') +
-      '<div class="wxp-head">' + esc(dayTitle) + '<span>°F · 💧 chance · wind mph</span></div>' +
+      '<div class="wxp-head">' + esc(dayTitle) + '<span>°F · 💧 chance · inches · wind</span></div>' +
       (hours.length
-        ? '<div class="wxp-hours">' + hours.map((x, k) => hourCell(x, isToday && k === 0 && x.t.slice(0, 13) === thisHour)).join('') + '</div>'
+        ? '<div class="wxp-hours">' + hours.map((x, k) => hourCell(x, isToday && k === 0 && x.t.slice(0, 13) === thisHour)).join('') + '</div>' +
+          hoursTotal(hours, isToday)
         : '<div class="wxp-msg">No hourly figures for this day yet — refresh with ↻.</div>') +
       (said.length
         ? '<div class="wxp-text">' + said.map(p => '<p><b>' + esc(p.name) + ':</b> ' + esc(p.words) + '</p>').join('') +
@@ -295,7 +324,8 @@
       '<div class="wxp-days">' + days.map((d, i) => {
         const [icon, words] = codeOf(d.code);
         const snowy = d.snow >= 0.1;
-        const wind = '💨 ' + Math.round(d.wind) + (d.gust && d.gust > d.wind + 8 ? '–' + Math.round(d.gust) : '') + ' mph';
+        const gust = gusty(d.wind, d.gust) ? 'gusts ' + Math.round(d.gust) : '';
+        const wind = '💨 ' + Math.round(d.wind) + ' mph';
         return '<button type="button" class="wxp-day' + (snowy ? ' snow' : '') + (i === sel ? ' on' : '') +
           '" onclick="wxDay(' + i + ')" aria-pressed="' + (i === sel) + '">' +
           '<div class="wxp-name">' + dayName(d.date) + '</div>' +
@@ -306,9 +336,9 @@
             (d.pop ? '💧' + d.pop + '%' : '') +
             (snowy ? ' ❄️' + d.snow + '"' : (d.rain >= 0.05 ? ' ' + d.rain.toFixed(2) + '"' : '')) +
             // On a phone each day is one row, so the wind joins this line.
-            '<span class="wxp-w"> ' + wind + '</span>' +
+            '<span class="wxp-w"> ' + wind + (gust ? ', ' + gust : '') + '</span>' +
           '</div>' +
-          '<div class="wxp-wind">' + wind + '</div>' +
+          '<div class="wxp-wind">' + wind + (gust ? '<br>' + gust : '') + '</div>' +
         '</button>';
       }).join('') + '</div>' +
       '<div class="wxp-foot">' + PLACES[place].name + ' · updated ' + ago(data.at) + (loading ? ' · refreshing…' : '') +

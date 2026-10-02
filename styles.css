@@ -534,6 +534,8 @@
                 letter-spacing:.8px; text-transform:uppercase; color:var(--muted);
                 margin:20px 0 10px; }
   .eq-loghead .btn { margin-left:auto; }
+  .eq-log-act { white-space:nowrap; text-align:right; }
+  .eq-log-act .btn { margin-right:4px; }
 
   @media (max-width:520px) {
     .g4, .g5, .g3, .g2, .g-addr, .g-labor-add, .g-mat-add, .g-cost-add { grid-template-columns:1fr; }
@@ -610,6 +612,7 @@
                         color:var(--accent-dark); margin:20px 0 10px; padding-top:14px;
                         border-top:1px solid var(--border); }
   .hint { font-size:11px; color:var(--muted); margin-top:5px; line-height:1.5; }
+  .hint.bad { color:var(--neg); font-weight:600; font-size:12px; }
   .snow-card-actions { display:flex; gap:6px; margin-left:auto; }
 
   /* ---- Snow accounts ---- */
@@ -636,10 +639,10 @@
   /* five tabs need to fit a 375px phone */
   @media (max-width:720px) {
     .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; }
-    /* Tracking, Materials, Contacts and Equipment move into the More sheet.
+    /* Tracking, Contacts and Equipment move into the More sheet.
        They stay in the DOM -- switchTab finds a tab's button by its id, and
        More lists them from there -- they are just not on the bar. */
-    #tabTracking, #tabMatdash, #tabContacts, #tabEquipment { display:none; }
+    #tabTracking, #tabContacts, #tabEquipment { display:none; }
     .tab-more { display:block; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
   }
@@ -799,6 +802,7 @@
                                        border-color:var(--border-strong); width:38px; height:38px; }
 
   .snow-tag.nolocation { background:var(--neg-soft); color:var(--neg); }
+  .snow-edit { margin-left:auto; }
 
   /* ---- Sign-in gate ---- */
   [hidden] { display:none !important; }
@@ -1103,13 +1107,14 @@
 
   /* ---- job controls only where there is a job ----
      Save, New, My Jobs and the "Editing ..." bar all act on the open job.
-     On Snow, the calendar or the boards they were just in the way. Tracking
-     is about the open job too, so it keeps them. The logo and the menu (with
-     Sign out) stay on every screen. */
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnSave,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnNew,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnMyJobs,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #ctxBar { display:none !important; }
+     On Snow, the calendar or the boards they were just in the way. The three
+     job screens keep them -- Job, Tracking and All Jobs -- since picking
+     another job from All Jobs is exactly what Jobs is for (Jonah missed them
+     there). The logo and the menu (with Sign out) stay on every screen. */
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnSave,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnNew,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnMyJobs,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #ctxBar { display:none !important; }
 
   /* ---- board settings: one row per column and per label ---- */
   .bd-edit-list { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
@@ -1299,7 +1304,12 @@
     display:flex; align-items:flex-end; overflow:hidden; }
   .wxh-bar span { display:block; width:100%; background:#3f8fd8; border-radius:4px; }
   .wxh-wet { font-size:10px; min-height:13px; white-space:nowrap; color:var(--muted); }
-  .wxh-w { font-size:10px; color:var(--muted); }
+  .wxh-amt { font-size:10px; min-height:13px; white-space:nowrap; font-weight:700; color:#2f7fc8; }
+  html[data-night] .wxh-amt { color:#7fb8ee; }
+  .wxh-w { font-size:10px; color:var(--muted); line-height:1.25; min-height:25px; }
+  .wxp-total { margin-top:4px; font-size:12px; font-weight:600; color:#2f7fc8; }
+  .wxp-total.dry { font-weight:500; color:var(--muted); }
+  html[data-night] .wxp-total:not(.dry) { color:#7fb8ee; }
   .wxp-text { margin-top:8px; padding:9px 11px; border-radius:9px; background:var(--surface-2); border:1px solid var(--border);
     font-size:13px; line-height:1.45; }
   .wxp-text p { margin:0 0 6px; }

@@ -112,7 +112,7 @@
   function tidy(s) {
     return String(s || '').toLowerCase()
       // Dashes of every kind become spaces. The same customer is written
-      // "LCEC - O'Brien" in QuickBooks and "LCEC — O'Brien" here, and treating
+      // "Acme - O'Brien" in QuickBooks and "Acme — O'Brien" here, and treating
       // those as different names would leave an obvious match unmade.
       .replace(/[‐-―−-]/g, ' ')
       .replace(/[.,'‘’“”]/g, '')

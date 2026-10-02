@@ -320,13 +320,13 @@ document.addEventListener('yd-auth', e => {
   if (sep) sep.hidden = !on;
 
   // Crew get the screens built for them -- the clock, the snow route, the
-  // calendar, boards and supplies -- and not these four. Each of these reads
-  // jobs, prices or client details, which the rules deny them outright --
-  // so leaving the tabs visible would hand them a row of screens that load
-  // empty and look broken. This is presentation only; the rules are the
-  // enforcement.
+  // calendar, boards and supplies -- and not these three, nor the materials
+  // half of Supplies. Each of these reads jobs, prices or client details,
+  // which the rules deny them outright -- so leaving them visible would hand
+  // them screens that load empty and look broken. This is presentation only;
+  // the rules are the enforcement.
   const crewOnly = on && a.role === 'crew';
-  ['tabJob', 'tabTracking', 'tabDashboard', 'tabMatdash'].forEach(id => {
+  ['tabJob', 'tabTracking', 'tabDashboard', 'matSeasonSection'].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.hidden = crewOnly;
   });
@@ -350,7 +350,7 @@ document.addEventListener('yd-auth', e => {
   if (more) more.hidden = false;
   if (crewOnly) {
     const openTab = document.querySelector('.tab-panel.active');
-    if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard', 'panel-matdash']
+    if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard']
         .indexOf(openTab.id) !== -1) switchTab('clock');
   }
 });
@@ -396,9 +396,14 @@ function closeMore() {
 }
 function tabButtonId(name) {
   return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
-    dashboard: 'tabDashboard', matdash: 'tabMatdash', contacts: 'tabContacts',
+    dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
-    supplies: 'tabSupplies' }[name] || '';
+    supplies: 'tabSupplies', matdash: 'tabSupplies' }[name] || '';
+}
+// The materials half of Supplies, hidden from crew.
+function matSectionHidden() {
+  const m = document.getElementById('matSeasonSection');
+  return !m || m.hidden;
 }
 
 // ---- Header overflow menu (Backup / Restore / Print) ----
@@ -469,21 +474,26 @@ function closeOnTapOutside(id) {
 // The bar on a phone holds only what gets used in the field. The rest is one
 // tap away behind More, which is what stops every new screen making the bar
 // more crowded than the last.
-const TABS = ['job', 'snow', 'clock', 'calendar', 'boards', 'supplies', 'equipment', 'tracking', 'dashboard', 'matdash', 'contacts'];
+// In the order they sit on the bar, the job screens together. Materials used
+// to be a tab of its own; it is now the second half of Supplies, beside the
+// suppliers it is bought from.
+const TABS = ['job', 'tracking', 'dashboard', 'snow', 'clock', 'calendar', 'boards', 'supplies', 'equipment', 'contacts'];
 const PHONE_TABS = ['job', 'snow', 'clock', 'calendar', 'dashboard'];
 const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies',
   equipment: '🚜 Equipment', tracking: '🔨 Tracking',
-  dashboard: '📊 All Jobs', matdash: '📦 Materials',
-  contacts: '📇 Contacts' };
+  dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
 const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
-  supplies: 'What we use and where to buy it',
+  supplies: 'What we use, where to buy it, and what the season has cost',
   equipment: 'What each machine and truck is due for',
   tracking: 'Hours and materials on the job you have open',
-  matdash: 'What you have bought across every job',
   contacts: 'People to ring later' };
 
 function switchTab(name) {
+  // An old notification link, or a habit, may still ask for Materials: it
+  // lives at the foot of Supplies now.
+  const toMaterials = name === 'matdash';
+  if (toMaterials) name = 'supplies';
   closeMore();
   // The stylesheet uses this to show the job controls only on job screens.
   document.documentElement.dataset.tab = name;
@@ -508,7 +518,11 @@ function switchTab(name) {
   if (name === 'dashboard') renderDashboard();
   // Labour is not redrawn while Tracking is hidden, so catch up on arrival.
   if (name === 'tracking' && typeof renderLabor === 'function') renderLabor();
-  if (name === 'matdash') renderMatDash();
+  if (name === 'supplies' && !matSectionHidden()) renderMatDash();
+  if (toMaterials) {
+    const m = document.getElementById('matSeasonSection');
+    if (m && !m.hidden) m.scrollIntoView({ block: 'start' });
+  }
   if (name === 'snow' && window.YDSnow) YDSnow.render();
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
   if (name === 'clock' && window.YDClock) YDClock.render();

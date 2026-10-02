@@ -49,7 +49,7 @@
   //
   // The app already narrates itself: nearly every action ends in a toast. That
   // makes showToast a free record of what somebody just did, which turns "it
-  // crashed" into "it crashed right after clocking out of the Baxter job".
+  // crashed" into "it crashed right after clocking out of the Smith job".
 
   function crumb(text) {
     trail.push({ at: Date.now(), what: String(text).slice(0, 80) });

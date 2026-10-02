@@ -219,7 +219,10 @@
       '<div class="wx-figures">' +
         fig(w.tempF != null ? w.tempF + '&deg;' : '—', 'now') +
         fig(w.snow24 >= 0.05 ? w.snow24.toFixed(1) + '"' : '—', 'snow 24h') +
-        fig(w.windMph != null ? w.windMph + (w.gustMph && w.gustMph > w.windMph + 5 ? 'g' + w.gustMph : '') : '—', 'wind mph') +
+        fig(w.windMph != null ? w.windMph : '—', 'wind mph') +
+        // Gusts as a figure of their own: "10g16" (pilot shorthand for 10 mph
+        // gusting to 16) meant nothing to anyone reading it.
+        (w.gustMph != null && w.windMph != null && w.gustMph >= w.windMph + 5 ? fig(w.gustMph, 'gusts mph') : '') +
         fig(w.rain24 >= 0.01 ? w.rain24.toFixed(2) + '"' : '—', 'rain 24h') +
         (soil ? fig(soil.surfaceF + '&deg;', 'ground') : '') +
         (w.heatIndexF != null ? fig(w.heatIndexF + '&deg;', 'feels') : '') +
