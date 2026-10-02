@@ -1578,3 +1578,21 @@
     .acc-seg { display:flex; }
     .acc-opt { flex:1; }
   }
+
+  /* ---- a dropdown you can type into (makeSearchable in app.js) ---- */
+  .ssel { position:relative; min-width:170px; }
+  .ssel-native { display:none !important; }
+  .ssel-box { width:100%; padding-right:32px;
+    background:var(--surface-2) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14'%3E%3Ccircle cx='6' cy='6' r='4.5' stroke='%237b7188' fill='none' stroke-width='1.6'/%3E%3Cpath d='M9.5 9.5l3 3' stroke='%237b7188' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 11px center; }
+  .ssel-list { position:absolute; z-index:60; left:0; right:0; top:calc(100% + 3px); max-height:280px; overflow-y:auto;
+    background:var(--surface); border:1.5px solid var(--border-strong); border-radius:8px;
+    box-shadow:0 10px 26px rgba(43,36,51,.18); }
+  .ssel-item { padding:10px 12px; min-height:42px; font-size:14px; cursor:pointer; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; }
+  .ssel-item:last-child { border-bottom:none; }
+  .ssel-item.on, .ssel-item:hover { background:var(--surface-2); }
+  .ssel-none { color:var(--muted); font-style:italic; }
+  .ssel-new { color:var(--brand); font-weight:700; }
+  html[data-night] .ssel-new { color:var(--brand-2); }
+  .ssel-empty { padding:10px 12px; font-size:13px; color:var(--muted); }
+  .filter-bar .ssel { flex:1 1 170px; }

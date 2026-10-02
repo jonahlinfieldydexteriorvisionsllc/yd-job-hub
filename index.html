@@ -104,7 +104,7 @@
           <div class="field">
             <span class="label">Service Type(s)</span>
             <div id="serviceTypeTags" style="display:flex;flex-wrap:wrap;gap:4px;min-height:40px;padding:6px;border:1.5px solid var(--border-strong);background:var(--surface-2);align-items:flex-start;border-radius:6px"></div>
-            <select id="serviceTypeSelect" onchange="addServiceType()" style="margin-top:6px">
+            <select id="serviceTypeSelect" class="searchable" onchange="addServiceType()" style="margin-top:6px">
               <option value="">+ Add service type…</option>
               <option>Artificial Turf</option>
               <option>Raised Garden Bed</option>
@@ -450,7 +450,7 @@
       <div class="section-body">
         <div class="dash-totals" id="dashTotals"></div>
         <div class="filter-bar">
-          <select id="dashFilter" onchange="renderDashboard()"><option value="">All Services</option></select>
+          <select id="dashFilter" class="searchable" onchange="renderDashboard()"><option value="">All Services</option></select>
           <select id="dashStatus" onchange="renderDashboard()">
             <option value="">All Statuses</option>
             <option value="quoting">Quoting</option>
@@ -552,7 +552,7 @@
               <input id="ppWhen" placeholder="e.g. Sept 2027, early spring"></div>
             <div class="field"><span class="label">What for</span>
               <div id="ppTags" class="tag-box"></div>
-              <select id="ppTagSelect" onchange="addProspectTag()" class="tag-pick">
+              <select id="ppTagSelect" onchange="addProspectTag()" class="tag-pick searchable">
                 <option value="">+ Add a service…</option>
               </select>
             </div>
@@ -571,7 +571,7 @@
           <div class="hint">Only the name is required. Everything else can wait until you know it.</div>
         </div>
         <div class="filter-bar mt">
-          <select id="ppFilterSvc" onchange="renderProspects()"><option value="">Any service</option></select>
+          <select id="ppFilterSvc" class="searchable" onchange="renderProspects()"><option value="">Any service</option></select>
           <select id="ppFilterStatus" onchange="renderProspects()">
             <option value="open">Still open</option>
             <option value="">Everyone</option>
@@ -598,7 +598,7 @@
     </div>
     <div class="modal-body">
       <div class="filter-bar">
-        <select id="filterService" onchange="renderJobList()"><option value="">All Services</option></select>
+        <select id="filterService" class="searchable" onchange="renderJobList()"><option value="">All Services</option></select>
         <input id="filterSearch" placeholder="Search jobs…" oninput="renderJobList()">
       </div>
       <div id="jobListBody"></div>

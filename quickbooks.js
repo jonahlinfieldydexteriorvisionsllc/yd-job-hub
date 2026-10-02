@@ -244,7 +244,7 @@
   }
 
   function pick(list, chosen, handler) {
-    return '<select onchange="' + handler + '">' +
+    return '<select class="searchable" onchange="' + handler + '">' +
       '<option value="">— not set —</option>' +
       list.map(o => '<option value="' + esc(o.id) + '"' +
         (String(o.id) === String(chosen) ? ' selected' : '') + '>' +

@@ -147,7 +147,7 @@
             Object.keys(names).sort((a, b) => names[a].localeCompare(names[b])).map(uid =>
               '<option value="' + esc(uid) + '"' + (who === uid ? ' selected' : '') + '>' + esc(names[uid]) + '</option>').join('') +
             '</select>' : '') +
-        '<select onchange="wlSet(\'where\', this.value)"><option value="">Every job &amp; place</option>' +
+        '<select class="searchable" onchange="wlSet(\'where\', this.value)"><option value="">Every job &amp; place</option>' +
           placeKeys.map(k => '<option value="' + esc(k) + '"' + (where === k ? ' selected' : '') + '>' +
             esc(places[k]) + '</option>').join('') +
         '</select>' +

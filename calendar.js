@@ -555,7 +555,7 @@
           '<input type="radio" name="evCal" value="' + c.id + '"' + (c.id === calId ? ' checked' : '') +
           ' onchange="calCalChanged()"><span><span class="cal-dot"></span>' + esc(c.name) + '</span></label>').join('') +
       '</div></div>' +
-      '<div class="field"><span class="label">Job</span><select id="evJob" onchange="calJobChanged()">' +
+      '<div class="field"><span class="label">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
         '<option value="">— not about a job —</option>' +
         jobs.map(j => '<option value="' + j._id + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
           esc(j.customerName || 'Untitled job') + '</option>').join('') +

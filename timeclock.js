@@ -292,7 +292,7 @@
     return '<div class="addshift">' +
       '<p class="clock-lead">A shift you forgot to clock in for</p>' +
       '<div class="field"><span class="label">What were you on?</span>' +
-        '<select id="asTarget">' + targetOptions() + '</select></div>' +
+        '<select id="asTarget" class="searchable">' + targetOptions() + '</select></div>' +
       '<div class="field"><span class="label">Day</span>' +
         '<input type="date" id="asDate" value="' + iso(today) + '" max="' + iso(today) + '"></div>' +
       '<div class="grid g2">' +

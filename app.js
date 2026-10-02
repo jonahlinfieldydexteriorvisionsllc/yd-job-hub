@@ -1780,3 +1780,155 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
   else watch();
 })();
+
+// ═══════════════════════════════════════════════════════════
+// SEARCHABLE DROPDOWNS
+// ═══════════════════════════════════════════════════════════
+// Long lists -- the services, the jobs -- had to be scrolled through. Any
+// <select class="searchable"> gets a box in front of it to type into: every
+// word typed must appear in an option, so "ret wall" finds Retaining Wall.
+//
+// The real <select> stays in the page, hidden, with its id, value and
+// onchange. Picking sets its value and fires its own change event, so every
+// handler that already reads it carries on unchanged.
+function makeSearchable(sel) {
+  if (!sel || sel.dataset.ssel) return;
+  sel.dataset.ssel = '1';
+  const wrap = document.createElement('div');
+  wrap.className = 'ssel';
+  // A margin set on the select belongs to the whole control now.
+  if (sel.getAttribute('style')) wrap.setAttribute('style', sel.getAttribute('style'));
+  if (sel.className) wrap.className += ' ' + sel.className.replace(/\bsearchable\b/, '').trim();
+  const box = document.createElement('input');
+  box.type = 'text';
+  box.className = 'ssel-box';
+  box.autocomplete = 'off';
+  box.setAttribute('role', 'combobox');
+  box.setAttribute('aria-expanded', 'false');
+  if (sel.title) box.title = sel.title;
+  const list = document.createElement('div');
+  list.className = 'ssel-list';
+  list.setAttribute('role', 'listbox');
+  list.hidden = true;
+  sel.parentNode.insertBefore(wrap, sel);
+  wrap.appendChild(box);
+  wrap.appendChild(list);
+  wrap.appendChild(sel);
+  sel.classList.add('ssel-native');
+  sel.tabIndex = -1;
+
+  let shown = [];     // [{ opt, typed }] on screen, in order
+  let at = -1;        // the one the arrow keys are on
+  const label = o => (o ? o.textContent.trim() : '');
+  // An empty first option ("+ Add service type…", "All Services") is the
+  // placeholder: it is what the empty box says, and in a filter it is the
+  // way back to everything.
+  const blank = () => { const o = sel.options[0]; return o && o.value === '' ? o : null; };
+  // "Custom…" means "something not on the list": typing it straight into the
+  // box is quicker than picking Custom and typing it again into a prompt.
+  const custom = () => Array.prototype.find.call(sel.options, o => o.value === '__custom') || null;
+
+  function sync() {
+    const o = sel.options[sel.selectedIndex];
+    box.value = o && o.value !== '' ? label(o) : '';
+    box.placeholder = blank() ? label(blank()) : 'Search…';
+    box.disabled = sel.disabled;
+  }
+
+  function open(q) {
+    const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    shown = Array.prototype.filter.call(sel.options, o => !o.disabled && o.value !== '__custom' &&
+      words.every(w => label(o).toLowerCase().indexOf(w) !== -1)).map(o => ({ opt: o }));
+    const typed = String(q || '').trim();
+    if (typed && custom() && !shown.some(s => label(s.opt).toLowerCase() === typed.toLowerCase())) {
+      shown.push({ typed: typed });
+    } else if (!typed && custom()) {
+      shown.push({ opt: custom() });
+    }
+    at = shown.findIndex(s => s.typed || s.opt.value !== '');
+    if (at < 0) at = 0;
+    list.innerHTML = shown.length
+      ? shown.map((s, i) => '<div class="ssel-item' + (i === at ? ' on' : '') +
+          (s.opt && s.opt.value === '' ? ' ssel-none' : '') + (s.typed ? ' ssel-new' : '') +
+          '" role="option" data-i="' + i + '">' +
+          (s.typed ? '+ Add “' + esc(s.typed) + '”' : esc(label(s.opt))) + '</div>').join('')
+      : '<div class="ssel-empty">Nothing matches “' + esc(typed) + '”</div>';
+    list.hidden = false;
+    box.setAttribute('aria-expanded', 'true');
+  }
+
+  function close() {
+    list.hidden = true;
+    box.setAttribute('aria-expanded', 'false');
+    sync();
+  }
+
+  function pick(s) {
+    if (!s) return;
+    let temp = null;
+    if (s.typed) {
+      // Put the typed name in as an option for the moment, so the handler
+      // reads it exactly as if it had been on the list all along.
+      temp = new Option(s.typed, s.typed);
+      sel.appendChild(temp);
+      sel.value = s.typed;
+    } else {
+      sel.value = s.opt.value;
+    }
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+    if (temp && temp.parentNode) temp.parentNode.removeChild(temp);
+    close();
+  }
+
+  box.addEventListener('focus', () => { box.select(); open(''); });
+  box.addEventListener('click', () => { if (list.hidden) open(''); });
+  box.addEventListener('input', () => open(box.value));
+  box.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (list.hidden) { open(box.value); return; }
+      if (!shown.length) return;
+      at = (at + (e.key === 'ArrowDown' ? 1 : -1) + shown.length) % shown.length;
+      list.querySelectorAll('.ssel-item').forEach((n, i) => {
+        n.classList.toggle('on', i === at);
+        if (i === at) n.scrollIntoView({ block: 'nearest' });
+      });
+    } else if (e.key === 'Enter') {
+      if (list.hidden) return;
+      e.preventDefault();
+      pick(shown[at]);
+    } else if (e.key === 'Escape' && !list.hidden) {
+      // Closes the list only, not the window it sits in.
+      e.preventDefault();
+      close();
+    }
+  });
+  box.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== box) close(); }, 0));
+  // Pressing an item must not take the focus away from the box first.
+  list.addEventListener('mousedown', e => e.preventDefault());
+  list.addEventListener('click', e => {
+    const n = e.target.closest('.ssel-item');
+    if (n) pick(shown[+n.dataset.i]);
+  });
+  // Handlers often put the select back to its placeholder once they have
+  // read it (adding a service), and filters rebuild their options.
+  sel.addEventListener('change', () => setTimeout(sync, 0));
+  new MutationObserver(sync).observe(sel, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+  sync();
+}
+
+// Every searchable dropdown, including those drawn later by a screen.
+(function () {
+  function all(root) {
+    if (root.matches && root.matches('select.searchable')) makeSearchable(root);
+    if (root.querySelectorAll) root.querySelectorAll('select.searchable').forEach(makeSearchable);
+  }
+  function go() {
+    all(document);
+    new MutationObserver(list => list.forEach(m => m.addedNodes.forEach(n => {
+      if (n.nodeType === 1) all(n);
+    }))).observe(document.body, { childList: true, subtree: true });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
+  else go();
+})();
