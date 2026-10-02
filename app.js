@@ -477,10 +477,11 @@ function closeOnTapOutside(id) {
 // The bar on a phone holds only what gets used in the field. The rest is one
 // tap away behind More, which is what stops every new screen making the bar
 // more crowded than the last.
-// In the order they sit on the bar, the job screens together. Materials used
-// to be a tab of its own; it is now the second half of Supplies, beside the
-// suppliers it is bought from.
-const TABS = ['job', 'tracking', 'dashboard', 'snow', 'clock', 'calendar', 'boards', 'supplies', 'equipment', 'contacts'];
+// In the order they sit on the bar, as Jonah laid it out: Job, then Tracking
+// and Supplies beside it, All Jobs on the far right. Materials used to be a
+// tab of its own; it is now the second half of Supplies, beside the suppliers
+// it is bought from.
+const TABS = ['job', 'tracking', 'supplies', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
 const PHONE_TABS = ['job', 'snow', 'clock', 'calendar', 'dashboard'];
 const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies',
