@@ -137,8 +137,16 @@ def _cors(origin):
     return headers
 
 
-def _caller(req):
-    """Return the uid of a signed-in owner, or raise PermissionError."""
+LEVELS = {"none": 0, "see": 1, "change": 2}
+
+
+def _caller(req, area=None, level="change"):
+    """Return the uid of the signed-in caller, or raise PermissionError.
+
+    The owner may do everything here. An admin may only when an `area` is
+    named and the owner gave them at least `level` in it (users/{uid}.access,
+    the same table firestore.rules enforces). Nothing else gets through.
+    """
     header = req.headers.get("Authorization", "")
     if not header.startswith("Bearer "):
         raise PermissionError("not signed in")
@@ -152,11 +160,15 @@ def _caller(req):
     if not snap.exists:
         raise PermissionError("no access")
     user = snap.to_dict()
-    # Deliberately owner-only for now. When crew get a Claude-powered feature,
-    # widen this per task rather than globally.
-    if user.get("role") != "owner" or user.get("active") is not True:
-        raise PermissionError("owner access required")
-    return uid
+    if user.get("active") is not True:
+        raise PermissionError("no access")
+    if user.get("role") == "owner":
+        return uid
+    if area and user.get("role") == "admin":
+        have = (user.get("access") or {}).get(area, "none")
+        if LEVELS.get(have, 0) >= LEVELS.get(level, 2):
+            return uid
+    raise PermissionError("owner access required")
 
 
 def _check_and_count_usage(uid):
@@ -238,11 +250,14 @@ def _quickbooks(request, path, headers):
             print("keepalive failed:", e)
             return (json.dumps({"error": str(e)}), 500, json_headers)
 
-    # Everything else is the owner, from the app.
+    # Everything else is from the app. Connecting and disconnecting are the
+    # owner's alone; using the connection to send storms is Billing, which the
+    # owner can give an admin.
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice")
     try:
-        uid = _caller(request)
+        uid = _caller(request, "billing", "change") if billing else _caller(request)
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
 
@@ -375,8 +390,10 @@ def claude(request):
     if origin and origin not in ALLOWED_ORIGINS:
         return (json.dumps({"error": "origin not allowed"}), 403, headers)
 
+    # Every Claude task so far writes into a job (the scope of work), so it
+    # is for whoever may change jobs.
     try:
-        uid = _caller(request)
+        uid = _caller(request, "jobs", "change")
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, headers)
 

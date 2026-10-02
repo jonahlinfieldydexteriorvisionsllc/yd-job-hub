@@ -197,15 +197,18 @@
   }
 
   function pushBoard(id, data) {
-    // Owner only: the rules refuse this write from a crew account, and their
-    // app has no business maintaining the list anyway.
-    if (!window.YDAuth || !window.YDAuth.isOwner) return;
+    // Whoever may change jobs: the owner, or an admin given that. The rules
+    // refuse it from anyone else, whose app has no business maintaining the
+    // list anyway.
+    if (!ydCan('jobs', 'change')) return;
     Promise.resolve(window.YDDb.put('jobBoard', id, boardEntry(id, data)))
       .catch(err => console.warn('[sync] job board not yet updated for', id,
         err.code || err.message));
   }
 
   async function pushNow(id) {
+    // Someone allowed only to look at jobs never sends one up.
+    if (!ydCan('jobs', 'change')) return;
     const raw = readJobBlob(id);
     if (!raw) return;
     let data;
@@ -230,7 +233,7 @@
   // this one was shut. Only what is actually missing or stale is written, so
   // the usual case costs nothing.
   async function reconcileBoard() {
-    if (!window.YDAuth || !window.YDAuth.isOwner) return;
+    if (!ydCan('jobs', 'change')) return;
     try {
       const board = await window.YDDb.list('jobBoard');
       const writes = [];
@@ -383,7 +386,8 @@
     // empty cloud, so it is only asked when that could be the answer. Every
     // other launch starts syncing at once -- with no signal included, where
     // the count could only fail after keeping sync waiting.
-    if (localCount > 0 && !alreadyMigrated) {
+    // Only ever the owner's device: an admin's phone is never the seed.
+    if (localCount > 0 && !alreadyMigrated && window.YDAuth && window.YDAuth.isOwner) {
       let cloudCount = null;     // stays null when the server could not be asked
       try {
         cloudCount = await window.YDDb.countJobs();
@@ -504,10 +508,15 @@
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     if (a.mode !== 'cloud' || !a.user) { setCloudState('off'); return; }
-    // Crew have their own screens now, but none of them read jobs -- the
-    // clock reads jobBoard and the route reads storms, both of which watch
+    // Jobs come down to whoever may see them: the owner, and an admin given
+    // Jobs. Crew have their own screens, none of which read jobs -- the clock
+    // reads jobBoard and the route reads storms, both of which watch
     // themselves. Mirroring jobs into a crew phone would only be refused.
-    if (a.role !== 'owner') { setCloudState('off'); return; }
+    if (!ydCan('jobs', 'see')) {
+      if (watching && unsubscribe) { unsubscribe(); watching = false; }
+      setCloudState('off');
+      return;
+    }
     if (!window.YDDb) { setCloudState('off'); return; }
     startSync();
   });

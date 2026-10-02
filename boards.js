@@ -100,6 +100,12 @@
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  // The Bids and Jobs boards are the jobs themselves, so they follow Jobs.
+  const seesJobs = () => ydCan('jobs', 'see');
+  const movesJobs = () => ydCan('jobs', 'change');
+  // Every stored board, not only the ones shared with you; and running them.
+  const seesAllBoards = () => ydCan('boards', 'see');
+  const editsBoards = () => ydCan('boards', 'change');
   const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const two = n => String(n).padStart(2, '0');
@@ -232,11 +238,11 @@
   function visibleBoards() {
     const stored = Object.values(boards).sort((a, b) =>
       (a.order || 0) - (b.order || 0) || String(a.name || '').localeCompare(b.name || ''));
-    return isOwner() ? [BIDS, JOBS].concat(stored) : stored;
+    return seesJobs() ? [BIDS, JOBS].concat(stored) : stored;
   }
   function boardById(id) {
-    if (id === 'bids') return isOwner() ? BIDS : null;
-    if (id === 'jobs') return isOwner() ? JOBS : null;
+    if (id === 'bids') return seesJobs() ? BIDS : null;
+    if (id === 'jobs') return seesJobs() ? JOBS : null;
     return boards[id] || null;
   }
 
@@ -255,7 +261,7 @@
       return;
     }
     if (!list.length) {
-      wrap.innerHTML = '<p class="empty-msg">' + (isOwner()
+      wrap.innerHTML = '<p class="empty-msg">' + (editsBoards()
         ? 'No boards yet.' : 'No boards have been shared with you yet.') + '</p>';
       return;
     }
@@ -267,18 +273,18 @@
         list.map(b => '<button class="bd-chip' + (b.id === current ? ' on' : '') +
           '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + b.id + '\')">' +
           '<span class="bd-dot"></span>' + esc(b.name || 'Board') +
-          (b.visibleTo && b.visibleTo.length && isOwner()
+          (b.visibleTo && b.visibleTo.length && editsBoards()
             ? '<span class="bd-shared" title="Shared with crew">👥 ' + b.visibleTo.length + '</span>' : '') +
           '</button>').join('') +
-        (isOwner() ? '<button class="bd-chip bd-add" onclick="editBoard(\'\')">+ New board</button>' : '') +
+        (editsBoards() ? '<button class="bd-chip bd-add" onclick="editBoard(\'\')">+ New board</button>' : '') +
       '</div>' +
       '<div class="bd-head" style="--c:' + safeColor(board.color) + '">' +
         '<div class="bd-title">' + esc(board.name) + '</div>' +
         '<div class="bd-sub">' + boardSubtitle(board) + '</div>' +
         '<div class="bd-actions">' +
-          (!board.virtual && isOwner()
+          (!board.virtual && editsBoards()
             ? '<button class="btn btn-sm" onclick="editBoard(\'' + board.id + '\')">Board settings</button>' : '') +
-          (!board.virtual && isOwner()
+          (!board.virtual && editsBoards()
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">+ Add card</button>' : '') +
         '</div>' +
@@ -293,7 +299,7 @@
     if (b.id === 'jobs') return 'Every job you have won, until it is paid. Moving a card changes the job’s status.' +
       (touch ? ' Tap a card to move it.' : '');
     const shared = (b.visibleTo || []).map(uid => personName(uid)).filter(Boolean);
-    return (isOwner()
+    return (editsBoards()
       ? (shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Only you can see this board')
       : 'Shared with you') +
       (touch && canMove(b.id) ? '. Tap a card to move it.' : '');
@@ -320,7 +326,7 @@
         '<span class="bd-count">' + cardHtml.length + '</span></div>' +
       '<div class="bd-col-body">' +
         (cardHtml.join('') || '<div class="bd-empty">Nothing here</div>') +
-        (!board.virtual && isOwner()
+        (!board.virtual && editsBoards()
           ? '<button class="bd-add-card" onclick="addCard(\'' + board.id + '\', \'' + c.id + '\')">+ Add a card</button>' : '') +
       '</div>' +
     '</div>';
@@ -354,7 +360,7 @@
   // from the job itself, which only the owner's device has.
   function jobNumOf(k) {
     if (k.jobNum) return k.jobNum;
-    if (!k.jobId || !isOwner()) return '';
+    if (!k.jobId || !seesJobs()) return '';
     const j = jobsList().find(x => x._id === k.jobId);
     return j ? String(j.estimateNumber || '').trim() : '';
   }
@@ -474,8 +480,11 @@
   };
 
   function canMove(boardId) {
-    if (boardId === 'bids' || boardId === 'jobs') return isOwner();
-    return isOwner() || !!boards[boardId];
+    if (boardId === 'bids' || boardId === 'jobs') return movesJobs();
+    // Anyone a board is shared with moves its cards. Seeing every board (an
+    // admin's "Boards: see") is not the same as being on one.
+    const b = boards[boardId], mine = (me() || {}).uid;
+    return editsBoards() || !!(b && (b.visibleTo || []).indexOf(mine) !== -1);
   }
 
   function moveCard(boardId, cardId, col, beforeId) {
@@ -532,7 +541,7 @@
   // Kept on the job itself, through the same path as a move, so the colour
   // shows on every device and survives the next save of the job form.
   window.setJobCardColor = function (jobId) {
-    if (!isOwner() || !window.YDSync) return;
+    if (!movesJobs() || !window.YDSync) return;
     if (!window.YDSync.patchJob(jobId, { cardColor: pickedColor('jcColor') })) {
       showToast('Could not change that card');
       return;
@@ -557,7 +566,7 @@
   // ----------------------------------------------------------- stored cards
 
   window.addCard = function (boardId, col) {
-    if (!isOwner()) return;
+    if (!editsBoards()) return;
     openCard = { boardId: boardId, cardId: '', column: col };
     renderCardEditor();
   };
@@ -595,7 +604,7 @@
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       '<div class="field-actions">' +
-        (isOwner() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
+        (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
   }
@@ -617,7 +626,7 @@
   };
 
   window.editCard = function () {
-    if (!openCard || !isOwner()) return;
+    if (!openCard || !editsBoards()) return;
     renderCardEditor();
   };
 
@@ -658,6 +667,8 @@
       '</div>' : '') +
       // A search box rather than a list of every customer's name, which grew
       // too long to scroll. A job not on this device keeps its link as it was.
+      // Someone without Jobs has no jobs to pick from; whatever is linked stays.
+      (!seesJobs() ? '<input type="hidden" id="cdJob" value="' + esc(k.jobId || '') + '">' :
       '<div class="field"><span class="label">Linked job</span>' +
         '<input type="hidden" id="cdJob" value="' + esc(k.jobId || '') + '">' +
         '<div class="jobpick">' +
@@ -668,7 +679,7 @@
             'title="Unlink the job" aria-label="Unlink the job">&times;</button>' +
         '</div>' +
         '<div class="jobpick-list" id="cdJobList" role="listbox" hidden></div>' +
-        '<div class="hint">Crew see only the job’s name, never its price.</div></div>' +
+        '<div class="hint">Crew see only the job’s name, never its price.</div></div>') +
       '<div class="field"><span class="label">Notes</span>' +
         '<textarea id="cdNotes" rows="3" placeholder="Details, measurements, where to find things">' +
         esc(k.notes || '') + '</textarea></div>' +
@@ -784,7 +795,7 @@
   };
 
   window.saveCard = function () {
-    if (!openCard || !isOwner()) return;
+    if (!openCard || !editsBoards()) return;
     const board = boards[openCard.boardId];
     const title = val('cdTitle');
     if (!title) { showToast('Say what needs doing'); return; }
@@ -849,7 +860,7 @@
   }
 
   window.removeCard = function () {
-    if (!openCard || !isOwner()) return;
+    if (!openCard || !editsBoards()) return;
     const k = (cards[openCard.boardId] || {})[openCard.cardId];
     if (!k || !confirm('Delete "' + k.title + '"?')) return;
     delete cards[openCard.boardId][openCard.cardId];
@@ -862,7 +873,7 @@
 
   function crewPeople() {
     return Object.keys(people)
-      .filter(uid => people[uid].active && (people[uid].role === 'crew' || people[uid].role === 'owner'))
+      .filter(uid => people[uid].active && ['crew', 'admin', 'owner'].indexOf(people[uid].role) !== -1)
       .map(uid => ({ uid: uid, name: people[uid].name || people[uid].email || 'Worker', role: people[uid].role }))
       .sort((a, b) => (a.role === 'owner' ? -1 : 0) - (b.role === 'owner' ? -1 : 0) || a.name.localeCompare(b.name));
   }
@@ -876,10 +887,10 @@
   let draftCols = [], draftLabels = [];
 
   window.editBoard = function (id) {
-    if (!isOwner()) return;
+    if (!editsBoards()) return;
     editingBoard = id;
     const b = id ? boards[id] : {};
-    const crew = crewPeople().filter(p => p.role === 'crew');
+    const crew = crewPeople().filter(p => p.role !== 'owner');
     const shared = new Set(b.visibleTo || []);
     const color = b.color || PALETTE[Object.keys(boards).length % PALETTE.length];
     draftCols = (b.columns || TEMPLATES.crew.columns.map(n => ({ name: n })))
@@ -1002,7 +1013,7 @@
   };
 
   window.saveBoard = function () {
-    if (!isOwner()) return;
+    if (!editsBoards()) return;
     readDrafts();
     const name = val('bdName');
     if (!name) { showToast('Give the board a name'); return; }
@@ -1065,7 +1076,7 @@
 
   window.removeBoard = function (id) {
     const b = boards[id];
-    if (!b || !isOwner() || id === MAINTENANCE) return;
+    if (!b || !editsBoards() || id === MAINTENANCE) return;
     const n = Object.keys(cards[id] || {}).length;
     if (!confirm('Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') +
                  '? This cannot be undone.')) return;
@@ -1206,19 +1217,22 @@
   function start(a) {
     stop();
     if (!window.YDDb || !a.user) return;
-    if (a.isOwner) {
+    if (seesAllBoards()) {
       unsubBoards = window.YDDb.watch('boards', onBoards);
+    } else {
+      // Crew may only ask for the boards that list them.
+      unsubBoards = window.YDDb.watchContains('boards', 'visibleTo', a.user.uid, onBoards,
+        () => redrawIfVisible());
+    }
+    // Names for the people on cards, and who a board can be shared with.
+    if (a.isOwner || a.isAdmin) {
       unsubPeople = window.YDDb.watch('users', changes => {
         changes.forEach(c => {
           if (c.type === 'removed') delete people[c.id];
           else people[c.id] = c.data;
         });
         redrawIfVisible();
-      });
-    } else {
-      // Crew may only ask for the boards that list them.
-      unsubBoards = window.YDDb.watchContains('boards', 'visibleTo', a.user.uid, onBoards,
-        () => redrawIfVisible());
+      }, () => {});
     }
   }
 

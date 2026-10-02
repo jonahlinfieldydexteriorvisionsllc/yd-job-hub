@@ -1533,3 +1533,48 @@
 
   /* "Forgot to clock in?" and "My hours" sat touching each other. */
   .clock-idle > .btn-sm { margin:4px 3px 0; }
+
+  /* ---- an admin who may look at jobs but not change them ----
+     Every control on the Job and Tracking screens is inert (rows drawn later
+     included); app.js refuses to save as the backstop. */
+  html[data-jobs-readonly] #panel-job :is(input, select, textarea, button),
+  html[data-jobs-readonly] #panel-tracking :is(input, select, textarea, button) {
+    pointer-events:none; }
+  html[data-jobs-readonly] #panel-job :is(input, select, textarea),
+  html[data-jobs-readonly] #panel-tracking :is(input, select, textarea) { background:var(--surface-2); }
+  html[data-jobs-readonly] #panel-job button, html[data-jobs-readonly] #panel-tracking button { opacity:.45; }
+
+  /* ---- an admin who may look at equipment or contacts but not change them:
+     the editing controls are not offered at all (write() refuses as well) */
+  html[data-equipment-readonly] #eqWrap .btn,
+  html[data-equipment-readonly] #eqModal .modal-body .btn,
+  html[data-equipment-readonly] #eqModal .remove-btn,
+  html[data-equipment-readonly] #eqModal .eq-part,
+  html[data-contacts-readonly] #ppSection .add-area,
+  html[data-contacts-readonly] #ppSection .remove-btn,
+  html[data-contacts-readonly] #ppSection .pp-act .btn { display:none !important; }
+
+  /* ---- an admin's access, area by area (Your Crew → Access) ---- */
+  .crew-admin { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.5px;
+    padding:2px 8px; border-radius:9px; background:var(--brand); color:#fff; }
+  .acc-lead { font-size:14px; color:var(--text); margin-bottom:12px; line-height:1.45; }
+  .acc-list { display:flex; flex-direction:column; border:1px solid var(--border); border-radius:10px; overflow:hidden; }
+  .acc-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 12px;
+    border-bottom:1px solid var(--border); background:var(--surface); }
+  .acc-row:last-child { border-bottom:none; }
+  .acc-area { min-width:0; }
+  .acc-area b { display:block; font-size:14px; }
+  .acc-area small { display:block; font-size:12px; color:var(--muted); line-height:1.35; margin-top:2px; }
+  .acc-seg { display:inline-flex; flex:none; border:1.5px solid var(--border-strong); border-radius:9px; overflow:hidden; }
+  .acc-opt { position:relative; min-width:64px; min-height:40px; display:flex; align-items:center; justify-content:center;
+    padding:0 10px; font:600 13px 'DM Sans',sans-serif; cursor:pointer; color:var(--muted); background:var(--surface); }
+  .acc-opt + .acc-opt { border-left:1.5px solid var(--border-strong); }
+  .acc-opt input { position:absolute; opacity:0; pointer-events:none; }
+  .acc-opt.on { background:var(--brand); color:#fff; }
+  .acc-opt:has(input:focus-visible) { outline:2px solid var(--accent); outline-offset:-2px; }
+  .acc-never { margin-top:12px; font-size:12px; color:var(--muted); line-height:1.45; }
+  @media (max-width:720px) {
+    .acc-row { flex-direction:column; align-items:stretch; }
+    .acc-seg { display:flex; }
+    .acc-opt { flex:1; }
+  }

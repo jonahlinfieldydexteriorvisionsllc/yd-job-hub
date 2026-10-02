@@ -200,7 +200,8 @@
             STATUSES[s] + '</option>').join('') +
         '</select>' +
         '<button class="btn btn-sm" onclick="editProspect(\'' + p.id + '\')">Edit</button>' +
-        '<button class="btn btn-sm" onclick="prospectToJob(\'' + p.id + '\')">Start a job</button>' +
+        (ydCan('jobs', 'change')
+          ? '<button class="btn btn-sm" onclick="prospectToJob(\'' + p.id + '\')">Start a job</button>' : '') +
         (svc.indexOf('Snow Removal') !== -1
           ? '<button class="btn btn-sm btn-accent" onclick="prospectToSnow(\'' + p.id + '\')">Snow account</button>'
           : '') +
@@ -284,6 +285,7 @@
   };
 
   window.removeProspect = function (id) {
+    if (!ydCan('contacts', 'change')) return;
     const p = people[id];
     if (!p) return;
     if (!confirm('Take ' + p.name + ' off the list? This cannot be undone.')) return;
@@ -305,6 +307,7 @@
   // get no warning at all.
   function write(id, data, what) {
     if (!window.YDDb) { warnNoDb(); return; }
+    if (!ydCan('contacts', 'change')) { showToast('You can look at contacts but not change them'); return; }
     Promise.resolve(window.YDDb.put('prospects', id, data)).catch(e => failed(what, e));
   }
 
@@ -400,11 +403,12 @@
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const owner = a.isOwner === true;
-
     // Client names, phone numbers and notes about people who are not customers
-    // yet: owner only, matching what the rules already enforce. The tab itself
-    // is hidden too, so crew are not left tapping an empty panel.
+    // yet: the owner, and an admin given Contacts -- matching what the rules
+    // enforce. The tab itself is hidden too, so crew are not left tapping an
+    // empty panel.
+    const owner = a.mode === 'cloud' && !!a.user && ydCan('contacts', 'see');
+    document.documentElement.toggleAttribute('data-contacts-readonly', owner && !ydCan('contacts', 'change'));
     const sec = el('ppSection');
     if (sec) sec.hidden = !owner;
     const tab = el('tabContacts');

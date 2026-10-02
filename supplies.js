@@ -36,7 +36,10 @@
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
-  const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  // Prices: the owner, or an admin given Supplies. Adding and editing:
+  // Supplies "change". Everyone signed in sees what we use and where.
+  const seesPrices = () => ydCan('supplies', 'see');
+  const edits = () => ydCan('supplies', 'change');
   const signedIn = () => !!(window.YDAuth && window.YDAuth.user && window.YDDb);
   const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const norm = s => String(s || '').toLowerCase();
@@ -153,7 +156,7 @@
       wrap.innerHTML =
         '<input id="supSearch" class="sup-search" type="search" placeholder="What do you need? e.g. seed, pavers, salt" ' +
           'oninput="supSearch(this.value)" autocomplete="off">' +
-        (isOwner() ? '<div class="field-actions sup-actions">' +
+        (edits() ? '<div class="field-actions sup-actions">' +
           '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\')">+ Add an item</button>' +
           '<button class="btn btn-sm" onclick="supEdit(\'vendor\', \'\')">+ Add a supplier</button>' +
           '<button class="btn btn-sm" onclick="supPriceList()">💲 Price list</button>' +
@@ -196,7 +199,7 @@
       .sort(byName);
 
     if (!Object.keys(items).length && !Object.keys(vendors).length) {
-      box.innerHTML = '<p class="empty-msg">' + (isOwner()
+      box.innerHTML = '<p class="empty-msg">' + (edits()
         ? 'Nothing here yet. Add your suppliers first, then the things you buy from each — ' +
           'and where they are once you get there.'
         : 'Nothing has been added here yet.') + '</p>';
@@ -212,11 +215,11 @@
     if (!list.length) {
       html += '<p class="empty-msg">' + (words.length
         ? 'Nothing matches “' + esc(search) + '”' + (v ? ' at ' + esc(v.name) : '') + '.' +
-          (isOwner() ? ' Add it with “+ Add an item”.' : ' Ask Jonah where to get it, and he can add it here.')
+          (edits() ? ' Add it with “+ Add an item”.' : ' Ask Jonah where to get it, and he can add it here.')
         : (v ? 'Nothing listed for ' + esc(v.name) + ' yet.' : 'Nothing here yet.') +
           // The first visit: suppliers in, nothing bought from them yet. Say
           // how the list gets filled rather than just that it is empty.
-          (isOwner() && !Object.keys(items).length
+          (edits() && !Object.keys(items).length
             ? ' Add things one at a time with “+ Add an item”, or paste a whole price list ' +
               'in at once with “💲 Price list”.'
             : '')) + '</p>';
@@ -267,19 +270,19 @@
     return '<div class="sup-vcard">' +
       '<div class="sup-top"><span class="sup-vname">' + esc(v.name) + '</span>' +
         '<span class="sup-unit">' + n + ' item' + (n === 1 ? '' : 's') + '</span>' +
-        (isOwner() ? '<button class="btn btn-sm sup-edit" onclick="supEdit(\'vendor\', \'' + safeId(v.id) + '\')">Edit supplier</button>' : '') +
+        (edits() ? '<button class="btn btn-sm sup-edit" onclick="supEdit(\'vendor\', \'' + safeId(v.id) + '\')">Edit supplier</button>' : '') +
       '</div>' +
       ([v.address, v.hours].filter(Boolean).length
         ? '<div class="sup-where">' + esc([v.address, v.hours].filter(Boolean).join(' · ')) + '</div>' : '') +
       (v.notes ? '<div class="sup-notes">' + esc(v.notes) + '</div>' : '') +
       '<div class="sup-links">' + linksHtml(v) +
-        (isOwner() ? '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\', \'' + safeId(v.id) + '\')">+ Add an item here</button>' : '') +
+        (edits() ? '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\', \'' + safeId(v.id) + '\')">+ Add an item here</button>' : '') +
       '</div>' +
     '</div>';
   }
 
   function priceHtml(id) {
-    if (!isOwner()) return '';
+    if (!seesPrices()) return '';
     const p = prices[id];
     if (!p || typeof p.cents !== 'number') return '<div class="sup-price none">No price yet</div>';
     const prev = lastYears(p);
@@ -298,7 +301,7 @@
         '<span class="sup-name">' + esc(it.name) + '</span>' +
         (it.unit ? '<span class="sup-unit">' + esc(it.unit) + '</span>' : '') +
         (it.sku ? '<span class="sup-unit">#' + esc(it.sku) + '</span>' : '') +
-        (isOwner() ? '<button class="btn btn-sm sup-edit" onclick="supEdit(\'item\', \'' + safeId(it.id) + '\')">Edit</button>' : '') +
+        (edits() ? '<button class="btn btn-sm sup-edit" onclick="supEdit(\'item\', \'' + safeId(it.id) + '\')">Edit</button>' : '') +
       '</div>' +
       (withVendor || it.where
         ? '<div class="sup-where">' + (withVendor ? '<b>' + esc(v ? v.name : 'No supplier set') + '</b>' : '') +
@@ -323,7 +326,7 @@
   // ----------------------------------------------------------------- editing
 
   window.supEdit = function (kind, id, vendorId) {
-    if (!isOwner()) return;
+    if (!edits()) return;
     editing = { kind: kind, id: id };
     if (kind === 'vendor') {
       const v = id ? vendors[id] || {} : {};
@@ -395,7 +398,7 @@
   }
 
   window.supSave = function () {
-    if (!isOwner() || !editing) return;
+    if (!edits() || !editing) return;
     const now = new Date().toISOString();
     if (editing.kind === 'vendor') {
       const name = val('svName');
@@ -585,7 +588,7 @@
   }
 
   window.supPriceList = function () {
-    if (!isOwner()) return;
+    if (!edits()) return;
     plan = null;
     const priced = Object.keys(items).filter(id => prices[id] && typeof prices[id].cents === 'number');
     const years = {};
@@ -685,7 +688,7 @@
   };
 
   window.supApplyImport = function () {
-    if (!isOwner() || !plan || !plan.rows.length) return;
+    if (!edits() || !plan || !plan.rows.length) return;
     const now = new Date().toISOString();
     const writes = [];
     plan.newVendors.forEach(v => {
@@ -735,7 +738,7 @@
   // The whole list as a spreadsheet, one row per item, with the id that
   // brings each row back to its item when the sheet is pasted in again.
   window.supExportCsv = function () {
-    if (!isOwner()) return;
+    if (!seesPrices()) return;
     const cell = (s, isText) => {
       let t = s == null ? '' : String(s);
       if (isText && /^[=+\-@]/.test(t)) t = "'" + t;   // never a formula in Excel
@@ -822,7 +825,7 @@
     unsubs.push(window.YDDb.watch('supplies', take(items, true), () => redrawIfVisible()));
     unsubs.push(window.YDDb.watch('vendors', take(vendors, true), () => redrawIfVisible()));
     // Crew are refused the prices outright, so they never ask.
-    if (isOwner()) unsubs.push(window.YDDb.watch('supplyPrices', take(prices, false), () => redrawIfVisible()));
+    if (seesPrices()) unsubs.push(window.YDDb.watch('supplyPrices', take(prices, false), () => redrawIfVisible()));
   }
 
   window.YDSupplies = { render: render };
@@ -833,7 +836,7 @@
     const on = a.mode === 'cloud' && !!a.user;
     const tab = el('tabSupplies');
     if (tab) tab.hidden = !on;
-    const k = on ? a.user.uid + ':' + a.role : null;
+    const k = on ? (a.key || a.user.uid + ':' + a.role) : null;
     if (k !== authKey) {
       authKey = k;
       if (on) start(); else stop();

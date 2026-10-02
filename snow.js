@@ -125,6 +125,10 @@
 
   function safeId(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, ''); }
 
+  // Customer prices and contact details: Snow, or Billing -- a storm cannot
+  // be billed without the prices. The rules allow exactly the same.
+  const seesSnowPrices = () => ydCan('snow', 'see') || ydCan('billing', 'see');
+
   function mapsLink(a) {
     const q = encodeURIComponent(
       (a.lat && a.lng) ? (a.lat + ',' + a.lng) : (a.address + ', ' + (a.town || '') + ' WI'));
@@ -147,7 +151,9 @@
       return;
     }
 
-    const isOwner = !!(window.YDAuth && window.YDAuth.isOwner);
+    // Prices are for whoever may see Snow (or bill it); editing is Snow: change.
+    const seesPrices = seesSnowPrices();
+    const edits = ydCan('snow', 'change');
 
     wrap.innerHTML = ids.map(id => {
       const a = accounts[id];
@@ -161,14 +167,14 @@
           (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map, so it is left off routes">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
           // There was no way to change an account once it was added.
-          (isOwner ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
+          (edits ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
         '</div>' +
         '<a class="snow-addr" href="' + mapsLink(a) + '" target="_blank" rel="noopener">' +
           esc(a.address) + (a.town ? ', ' + esc(a.town) : '') +
           '<span class="snow-go">open in maps</span>' +
         '</a>' +
         (a.areaNotes ? '<div class="snow-notes">' + esc(a.areaNotes) + '</div>' : '') +
-        (isOwner ? '<div class="snow-price">' + esc(priceSummary(id)) + '</div>' : '') +
+        (seesPrices ? '<div class="snow-price">' + esc(priceSummary(id)) + '</div>' : '') +
         (a.driveSqFt ? '<div class="snow-sq">' + a.driveSqFt + ' sq ft drive' +
           (a.walkSqFt ? ' · ' + a.walkSqFt + ' sq ft walks' : '') + '</div>' : '') +
       '</div>';
@@ -200,7 +206,7 @@
   // rather than watched. Crew are refused by the rules and simply see no
   // prices -- which is the intended outcome, not an error.
   async function loadPricing() {
-    if (!window.YDAuth || !window.YDAuth.isOwner) return;
+    if (!seesSnowPrices()) return;
     const ids = Object.keys(accounts).filter(id => !pricing[id]);
     if (!ids.length) return;
     for (const id of ids) {
@@ -220,7 +226,7 @@
   // nothing yet, or a price since changed on another device. A read (unlike a
   // write) settles from the local cache when there is no signal.
   async function refreshPricing(ids) {
-    if (!window.YDAuth || !window.YDAuth.isOwner || !window.YDDb) return;
+    if (!seesSnowPrices() || !window.YDDb) return;
     await Promise.all(ids.map(async id => {
       try {
         const d = await window.YDDb.get('snowAccounts/' + id + '/private', PRICING_DOC);
@@ -649,7 +655,7 @@
   const triedAddress = {};
   let locating = false;
   async function locateMissing() {
-    if (locating || !window.YDAuth || !window.YDAuth.isOwner || !window.YDDb) return;
+    if (locating || !ydCan('snow', 'change') || !window.YDDb) return;
     const todo = Object.keys(accounts).filter(id =>
       accounts[id].lat == null && accounts[id].address && triedAddress[id] !== accounts[id].address);
     if (!todo.length) return;
@@ -682,7 +688,7 @@
   let authKey = null;
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const key = a.mode === 'cloud' && a.user ? a.user.uid + ':' + a.role : null;
+    const key = a.mode === 'cloud' && a.user ? (a.key || a.user.uid + ':' + a.role) : null;
     if (key !== authKey) {
       if (unsubAccounts) { try { unsubAccounts(); } catch (err) {} unsubAccounts = null; }
       accounts = {}; pricing = {}; loaded = false;
@@ -690,6 +696,6 @@
     }
     if (key) start(); else render();
     const add = document.getElementById('snowAddBtn');
-    if (add) add.hidden = !(a.isOwner === true);
+    if (add) add.hidden = !ydCan('snow', 'change');
   });
 })();

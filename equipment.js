@@ -768,6 +768,7 @@
   };
 
   window.removeEquipment = function (id) {
+    if (!ydCan('equipment', 'change')) return;
     const g = gear[id];
     if (!g || !confirm('Remove ' + g.name + ' and its whole service history?')) return;
     delete gear[id];
@@ -785,6 +786,8 @@
 
   function write(id, data, what) {
     if (!window.YDDb) { showToast('Not saved — still connecting'); return; }
+    // The backstop: someone who may only look has no buttons to get here.
+    if (!ydCan('equipment', 'change')) { showToast('You can look at equipment but not change it'); return; }
     Promise.resolve(window.YDDb.put('equipment', id, data)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
       else console.warn('[equipment] ' + what + ' not yet on the server:', (e && e.code) || e);
@@ -852,7 +855,11 @@
     // Only once the boards have actually loaded from the server -- deciding
     // "there is no Maintenance board" from an empty first read would make one
     // over the top of the real one.
-    if (!isOwner() || !window.YDDb || !window.YDBoards || !YDBoards.ready() || !gearLoaded) return;
+    // Whoever runs both the machines and the boards keeps the Maintenance
+    // board in step: the owner, or an admin who may change both. Card ids are
+    // fixed, so two devices doing it at once write the same cards.
+    const runs = isOwner() || (ydCan('equipment', 'change') && ydCan('boards', 'change'));
+    if (!runs || !window.YDDb || !window.YDBoards || !YDBoards.ready() || !gearLoaded) return;
     const board = YDBoards.boards()[MAINT];
     if (!board) {
       const rec = {
@@ -1006,10 +1013,13 @@
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const owner = a.isOwner === true;
+    const on = a.mode === 'cloud' && !!a.user;
+    const sees = on && ydCan('equipment', 'see');
     const tab = el('tabEquipment');
-    if (tab) tab.hidden = !owner;
-    if (a.mode === 'cloud' && a.user && owner) start();
+    if (tab) tab.hidden = !sees;
+    // Looking without changing: every editing control is hidden.
+    document.documentElement.toggleAttribute('data-equipment-readonly', sees && !ydCan('equipment', 'change'));
+    if (sees) start();
   });
 
   function boot() { renderEquipment(); }

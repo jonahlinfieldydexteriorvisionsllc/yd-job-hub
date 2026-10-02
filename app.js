@@ -317,46 +317,69 @@ document.addEventListener('yd-auth', e => {
   const on = !!(a.user && a.mode === 'cloud');
   if (who) {
     who.hidden = !on;
-    if (on) who.textContent = (a.role === 'owner' ? 'Owner · ' : 'Crew · ') + a.user.email;
+    if (on) who.textContent = ({ owner: 'Owner · ', admin: 'Admin · ' }[a.role] || 'Crew · ') + a.user.email;
   }
   if (out) out.hidden = !on;
   if (sep) sep.hidden = !on;
 
-  // Crew get the screens built for them -- the clock, the snow route, the
-  // calendar, boards and supplies -- and not these three, nor the materials
-  // half of Supplies. Each of these reads jobs, prices or client details,
-  // which the rules deny them outright -- so leaving them visible would hand
-  // them screens that load empty and look broken. This is presentation only;
-  // the rules are the enforcement.
-  const crewOnly = on && a.role === 'crew';
+  // The job screens -- Job, Tracking, All Jobs, and the materials half of
+  // Supplies -- are for whoever may see jobs: the owner, and an admin given
+  // Jobs. Crew get the screens built for them instead (the clock, the snow
+  // route, the calendar, boards and supplies). The job screens read prices
+  // and client details the rules deny them outright, so showing them would
+  // hand over screens that load empty and look broken. This is presentation
+  // only; the rules are the enforcement.
+  const noJobs = on && !ydCan('jobs', 'see');
   ['tabJob', 'tabTracking', 'tabDashboard', 'matSeasonSection'].forEach(id => {
     const b = document.getElementById(id);
-    if (b) b.hidden = crewOnly;
+    if (b) b.hidden = noJobs;
   });
 
-  // Save, New and My Jobs all act on jobs, which the rules deny crew -- the
-  // buttons could only ever produce an error. The context bar goes too: it
-  // names whichever client's job happens to be open, and a client's name has
-  // no business on a crew phone.
-  ['btnSave', 'btnNew', 'btnMyJobs'].forEach(id => {
-    const b = document.getElementById(id);
-    if (b) b.hidden = crewOnly;
-  });
+  // Save and New change jobs; My Jobs opens them. The context bar names
+  // whichever client's job is open, which has no business on a crew phone.
+  const b = id => document.getElementById(id) || {};
+  b('btnMyJobs').hidden = noJobs;
+  b('btnSave').hidden = b('btnNew').hidden = on && !ydCan('jobs', 'change');
   const ctx = document.getElementById('ctxBar');
-  if (ctx) ctx.style.display = crewOnly ? 'none' : '';
+  if (ctx) ctx.style.display = noJobs ? 'none' : '';
+  // An admin who may look at jobs but not change them gets the form locked.
+  applyJobsReadOnly();
 
-  // The attribute lets the stylesheet put Boards and Supplies on a crew
-  // phone's bar, where the owner's phone keeps them behind More.
-  document.documentElement.toggleAttribute('data-crew', crewOnly);
+  // The attribute lets the stylesheet put Boards and Supplies on the phone's
+  // bar for anyone without the job screens, where the owner's phone keeps
+  // them behind More.
+  document.documentElement.toggleAttribute('data-crew', noJobs);
   const more = document.getElementById('tabMore');
   // Crew get More too now: it holds their notification settings.
   if (more) more.hidden = false;
-  if (crewOnly) {
+  if (noJobs) {
     const openTab = document.querySelector('.tab-panel.active');
     if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard']
         .indexOf(openTab.id) !== -1) switchTab('clock');
   }
 });
+
+// What the signed-in person may do in one area of the business: 'see' or
+// 'change'. Always true for the owner and false for crew; an admin has what
+// the owner gave them on Your Crew. Not security -- firestore.rules is.
+function ydCan(area, level) {
+  const a = window.YDAuth;
+  return !!(a && typeof a.can === 'function' && a.can(area, level || 'see'));
+}
+
+// Someone who may see jobs but not change them: every field on the Job and
+// Tracking screens is locked, and nothing is saved. Without this they could
+// type into a job, have it "save" on their phone, and never learn that the
+// server refused it.
+function jobsReadOnly() {
+  const a = window.YDAuth;
+  return !!(a && a.mode === 'cloud' && a.user && ydCan('jobs', 'see') && !ydCan('jobs', 'change'));
+}
+// The stylesheet makes the two screens untouchable (rows added later
+// included); persistJob refuses to save as the backstop.
+function applyJobsReadOnly() {
+  document.documentElement.toggleAttribute('data-jobs-readonly', jobsReadOnly());
+}
 
 // ---- The More sheet ----
 //
@@ -1233,6 +1256,7 @@ function jobNameHtml(name, est) {
 
 // Shared writer. Returns true on success, false on failure.
 function persistJob(announce) {
+  if (jobsReadOnly()) { if (announce) showToast('You can look at jobs but not change them'); return false; }
   const data = getJobData();
   if (!currentJobId) currentJobId = uid();
   try {
@@ -1274,6 +1298,7 @@ function jobIsEmpty() {
 }
 
 function saveJob() {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   if (!currentJobId && jobIsEmpty()) {
     showToast('Nothing to save yet — add a customer name first');
     return;
@@ -1288,6 +1313,7 @@ function scheduleAutosave() {
   autosaveTimer = setTimeout(autosave, 900);
 }
 function autosave() {
+  if (jobsReadOnly()) return;
   // Don't create a phantom job from an empty form
   if (!currentJobId && jobIsEmpty()) return;
   if (persistJob(false)) { dirty = false; updateCtxBar(); }
@@ -1311,6 +1337,7 @@ function loadJob(id, quiet) {
   if (!quiet) { closeManager(); switchTab('job'); }
 }
 function deleteJob(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   if (!confirm('Delete this job permanently?')) return;
   localStorage.removeItem(STORAGE_PREFIX + id);
   localStorage.removeItem(id);   // also drop legacy-key copy if present
@@ -1323,6 +1350,7 @@ function deleteJob(id) {
   renderJobList(); showToast('Job deleted');
 }
 function duplicateJob(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   const raw = readJobBlob(id);
   if (!raw) return;
   let data;
@@ -1548,6 +1576,7 @@ function exportAllJobs() {
   showToast('Backup downloaded (' + idx.length + ' jobs)');
 }
 function importAllJobs(event) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();

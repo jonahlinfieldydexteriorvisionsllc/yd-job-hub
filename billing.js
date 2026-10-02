@@ -171,6 +171,7 @@
   // Set from the season report, so the sequence can be pointed at whatever
   // QuickBooks is actually up to.
   window.setInvoiceStart = async function () {
+    if (!ydCan('billing', 'change')) { showToast('Only someone who can change billing can set this'); return; }
     const cfg = await invoicing();
     const v = prompt('What is the next invoice number in QuickBooks?\n\n' +
       'Each exported invoice takes the next number from here, so they carry on ' +
@@ -337,7 +338,10 @@
   // QuickBooks' import columns have varied between versions, so this is
   // deliberately plain and readable: check one invoice after the first import
   // rather than trusting a whole night blind.
+  // Exporting hands out invoice numbers, which is changing the billing --
+  // someone who may only look at it would number invoices nobody records.
   window.exportStormCsv = async function (id) {
+    if (!ydCan('billing', 'change')) { showToast('Exporting gives out invoice numbers — ask the owner'); return; }
     const s = storms[id];
 
     // The storm's billing is read from the SERVER here, never from the copy
@@ -624,12 +628,13 @@
   let authKey = null;
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const key = a.mode === 'cloud' && a.user && a.isOwner ? a.user.uid : null;
+    const key = a.mode === 'cloud' && a.user && ydCan('billing', 'see') ? (a.key || a.user.uid) : null;
     if (key !== authKey) {
       if (unsub) { try { unsub(); } catch (err) {} unsub = null; }
       storms = {};
       authKey = key;
     }
-    if (key) start();
+    // No longer allowed: the bills on screen go too.
+    if (key) start(); else render();
   });
 })();

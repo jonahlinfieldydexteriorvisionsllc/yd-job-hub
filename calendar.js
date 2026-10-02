@@ -75,6 +75,13 @@
   const val = id => ((el(id) || {}).value || '').trim();
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
+  // An admin given Calendars sees every calendar except the owner's own ones
+  // (ownerOnly: Personal, and any other the owner marks private) -- and with
+  // "change" adds and edits events on them. Making, sharing and deleting
+  // calendars stays the owner's.
+  const seesAllCals = () => ydCan('calendars', 'see');
+  const editsCal = cal => !!cal && (isOwner() || (ydCan('calendars', 'change') && cal.ownerOnly === false));
+  const editableCals = () => storedCals().filter(editsCal);
   const two = n => String(n).padStart(2, '0');
   const nowIso = () => new Date().toISOString();
   const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -120,7 +127,7 @@
       String(a.name || '').localeCompare(b.name || ''));
   }
   function layers() {
-    const auto = Object.values(AUTO).filter(l => !l.ownerOnly || isOwner());
+    const auto = Object.values(AUTO).filter(l => !l.ownerOnly || ydCan('equipment', 'see'));
     return storedCals().concat(auto);
   }
   function layerOf(id) { return cals[id] || AUTO[id] || null; }
@@ -165,7 +172,7 @@
       });
     }
 
-    if (isOwner() && !hidden.has('auto:equipment') && !onlyMine && window.YDEquipment) {
+    if (ydCan('equipment', 'see') && !hidden.has('auto:equipment') && !onlyMine && window.YDEquipment) {
       Object.values(YDEquipment.all()).forEach(g => {
         if (!g.dueDate || g.dueDate < from || g.dueDate > to) return;
         out.push({ day: g.dueDate, layer: AUTO['auto:equipment'], auto: 'equipment', id: g.id,
@@ -178,7 +185,7 @@
         if (x.card.due < from || x.card.due > to) return;
         // A Maintenance card is the machine's own due date, which the
         // Equipment layer already shows -- listing both put it on the day twice.
-        if (x.card.auto && x.card.equipmentId && isOwner()) return;
+        if (x.card.auto && x.card.equipmentId && ydCan('equipment', 'see')) return;
         if (onlyMine && !(x.card.assignees || []).some(a => a.uid === uid)) return;
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done,
@@ -287,7 +294,7 @@
         '<div class="cal-views">' +
           ['month', 'week', 'list'].map(v => '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') +
             '" onclick="calView(\'' + v + '\')">' + { month: 'Month', week: 'Week', list: 'List' }[v] + '</button>').join('') +
-          (isOwner() ? '<button class="btn btn-sm btn-accent" onclick="calAdd()">+ Add</button>' : '') +
+          ((isOwner() || ydCan('calendars', 'change')) ? '<button class="btn btn-sm btn-accent" onclick="calAdd()">+ Add</button>' : '') +
         '</div>' +
       '</div>' +
       '<div class="cal-layers">' +
@@ -373,7 +380,7 @@
     if (!list.length && !showEmpty) return '';
     return '<div class="cal-day' + (day === t ? ' today' : '') + '">' +
       '<div class="cal-day-head"><span>' + label + '</span>' +
-        (isOwner() ? '<button class="cal-plus" onclick="calAdd(\'' + day + '\')" aria-label="Add on this day">+</button>' : '') +
+        ((isOwner() || ydCan('calendars', 'change')) ? '<button class="cal-plus" onclick="calAdd(\'' + day + '\')" aria-label="Add on this day">+</button>' : '') +
       '</div>' +
       (list.length ? list.map(entryHtml).join('') : '<div class="cal-none">Nothing scheduled</div>') +
     '</div>';
@@ -487,8 +494,8 @@
         (ev.notes ? '<div class="bd-notes">' + esc(ev.notes) + '</div>' : '') +
       '</div>' +
       '<div class="field-actions">' +
-        (isOwner() ? '<button class="btn btn-filled" onclick="calEdit(\'' + calId + '\', \'' + eventId + '\')">Edit</button>' : '') +
-        (isOwner() && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + ev.jobId + '\')">Open the job</button>' : '') +
+        (editsCal(cals[calId]) ? '<button class="btn btn-filled" onclick="calEdit(\'' + calId + '\', \'' + eventId + '\')">Edit</button>' : '') +
+        (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + ev.jobId + '\')">Open the job</button>' : '') +
         '<button class="btn btn-sm" onclick="closeCalModal()">Close</button>' +
       '</div>');
   };
@@ -507,7 +514,7 @@
   // --------------------------------------------------------------- editor
 
   window.calAdd = function (day) {
-    if (!isOwner()) return;
+    if (!isOwner() && !ydCan('calendars', 'change')) return;
     editing = { calId: '', eventId: '', date: day || dayForNew() };
     renderEditor();
   };
@@ -531,7 +538,7 @@
   };
 
   function renderEditor() {
-    const list = storedCals();
+    const list = editableCals();
     if (!list.length) { showToast('Calendars are still loading'); return; }
     const ev = editing.eventId ? (events[editing.calId] || {})[editing.eventId] || {} : {};
     const calId = editing.calId || (lastCal && cals[lastCal] ? lastCal : list[0].id);
@@ -618,10 +625,15 @@
   };
 
   window.calSave = function () {
-    if (!isOwner() || !editing) return;
+    if (!editing) return;
     const c = document.querySelector('input[name="evCal"]:checked');
     if (!c) { showToast('Pick a calendar'); return; }
     const calId = c.value;
+    // Both ends of a move: the calendar it is going to, and the one it leaves.
+    if (!editsCal(cals[calId]) || (editing.calId && !editsCal(cals[editing.calId]))) {
+      showToast('You cannot change that calendar');
+      return;
+    }
     const jobId = val('evJob');
     const job = jobId ? (loadAllJobs() || []).find(j => j._id === jobId) : null;
     const title = val('evTitle') || (job ? (job.customerName || 'Job') : '');
@@ -686,7 +698,7 @@
   };
 
   window.calRemove = function () {
-    if (!editing || !editing.eventId) return;
+    if (!editing || !editing.eventId || !editsCal(cals[editing.calId])) return;
     const ev = (events[editing.calId] || {})[editing.eventId];
     if (!ev) return;
     const many = ev.repeat && ev.repeat !== 'none';
@@ -724,8 +736,9 @@
   };
 
   window.calEditCal = function (id) {
+    if (!isOwner()) return;
     const c = id ? cals[id] : {};
-    const crew = crewPeople().filter(p => p.role === 'crew');
+    const crew = crewPeople().filter(p => p.role !== 'owner');
     const shared = new Set(c.visibleTo || []);
     const color = c.color || PALETTE[(Object.keys(cals).length + 3) % PALETTE.length];
     openModal(id ? 'Edit ' + esc(c.name) : 'New calendar',
@@ -741,7 +754,9 @@
             '<div class="hint">Anyone ticked sees every event on this calendar, including the address. ' +
             'They cannot add or change anything.</div>'
             : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
-        '</div>') +
+        '</div>' +
+        '<label class="chk"><input type="checkbox" id="ccPrivate"' + (c.ownerOnly ? ' checked' : '') +
+          '> Private — admins never see it, whatever their access</label>') +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="calSaveCal(\'' + (id || '') + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="calManage()">Back</button>' +
@@ -750,6 +765,7 @@
   };
 
   window.calSaveCal = function (id) {
+    if (!isOwner()) return;
     const name = val('ccName');
     if (!name) { showToast('Give it a name'); return; }
     const was = id ? cals[id] : null;
@@ -762,6 +778,10 @@
       // Personal is never shared, whatever was ticked.
       visibleTo: was && was.kind === 'personal' ? []
         : Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value),
+      // Always written, true or false: an admin's calendars are fetched by
+      // asking for ownerOnly == false, and a calendar without the field at
+      // all would be missing from their screen.
+      ownerOnly: was && was.kind === 'personal' ? true : !!(el('ccPrivate') && el('ccPrivate').checked),
       order: was && was.order != null ? was.order : Object.keys(cals).length + 1,
       updatedAt: nowIso(),
     };
@@ -772,6 +792,7 @@
   };
 
   window.calRemoveCal = function (id) {
+    if (!isOwner()) return;
     const c = cals[id];
     const ids = Object.keys(events[id] || {});
     if (!c || !confirm('Delete the calendar "' + c.name + '"' + (ids.length ? ' and its ' + ids.length + ' events' : '') +
@@ -788,7 +809,7 @@
 
   function crewPeople() {
     return Object.keys(people)
-      .filter(uid => people[uid].active && (people[uid].role === 'crew' || people[uid].role === 'owner'))
+      .filter(uid => people[uid].active && ['crew', 'admin', 'owner'].indexOf(people[uid].role) !== -1)
       .map(uid => ({ uid: uid, name: people[uid].name || people[uid].email || 'Worker', role: people[uid].role }))
       .sort((a, b) => (a.role === 'owner' ? -1 : 0) - (b.role === 'owner' ? -1 : 0) || a.name.localeCompare(b.name));
   }
@@ -856,10 +877,20 @@
       seeded = true;
       SEED.forEach(s => {
         if (cals[s.id]) return;
-        const rec = { name: s.name, color: s.color, kind: s.kind, order: s.order, visibleTo: [], updatedAt: nowIso() };
+        const rec = { name: s.name, color: s.color, kind: s.kind, order: s.order, visibleTo: [],
+                      ownerOnly: s.kind === 'personal', updatedAt: nowIso() };
         cals[s.id] = Object.assign({ id: s.id }, rec);
         write('calendars', s.id, rec, 'seeding');
         watchEvents(s.id);
+      });
+      // Calendars made before admins existed have no ownerOnly at all. Each
+      // is marked once: Personal private, the rest not. Until then an admin
+      // given Calendars would see none of them, since they are fetched by
+      // asking for ownerOnly == false.
+      Object.values(cals).forEach(c => {
+        if (typeof c.ownerOnly === 'boolean') return;
+        c.ownerOnly = c.kind === 'personal';
+        write('calendars', c.id, { ownerOnly: c.ownerOnly }, 'marking private or not');
       });
     }
     redrawIfVisible();
@@ -886,12 +917,19 @@
     if (!window.YDDb || !a.user) return;
     if (a.isOwner) {
       unsubCals = window.YDDb.watch('calendars', onCals);
+    } else if (seesAllCals()) {
+      // Never the whole collection: the rules refuse a question whose answer
+      // could include the owner's Personal calendar.
+      unsubCals = window.YDDb.watchWhere('calendars', 'ownerOnly', false, onCals, () => redrawIfVisible());
+    } else {
+      unsubCals = window.YDDb.watchContains('calendars', 'visibleTo', a.user.uid, onCals, () => redrawIfVisible());
+    }
+    // Names for the people on events, and who a calendar can be shared with.
+    if (a.isOwner || a.isAdmin) {
       unsubPeople = window.YDDb.watch('users', changes => {
         changes.forEach(c => { if (c.type === 'removed') delete people[c.id]; else people[c.id] = c.data; });
         redrawIfVisible();
-      });
-    } else {
-      unsubCals = window.YDDb.watchContains('calendars', 'visibleTo', a.user.uid, onCals, () => redrawIfVisible());
+      }, () => {});
     }
     // Crew can read storms, so both see storm nights.
     unsubStorms = window.YDDb.watch('storms', changes => {

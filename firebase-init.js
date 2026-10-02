@@ -25,6 +25,27 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
+const ACCESS_CACHE = 'ydjobhub_cachedAccess';
+
+// What an admin may do, area by area, as the owner set it on their user
+// record: users/{uid}.access = { jobs: 'see', hours: 'change', ... }. Anything
+// missing or misspelt is 'none'. The owner can do everything; crew nothing
+// beyond their own work. firestore.rules enforces exactly the same table.
+const LEVELS = { none: 0, see: 1, change: 2 };
+function cleanAccess(raw) {
+  const out = {};
+  if (raw && typeof raw === 'object') {
+    Object.keys(raw).forEach(k => { if (LEVELS[raw[k]]) out[k] = raw[k]; });
+  }
+  return out;
+}
+function canFor(role, access) {
+  return (area, level) => {
+    if (role === 'owner') return true;
+    if (role !== 'admin') return false;
+    return (LEVELS[access[area]] || 0) >= (LEVELS[level || 'see'] || 1);
+  };
+}
 
 // ---------------------------------------------------------------- gate UI
 const gate = {
@@ -190,8 +211,11 @@ async function start() {
     });
   }
 
+  // An admin's areas, read alongside the role.
+  let myAccess = {};
+
   // Work out what this account is allowed to do, creating the record if this is
-  // a first sign-in. Returns 'owner' | 'crew' | 'pending' | 'inactive'.
+  // a first sign-in. Returns 'owner' | 'admin' | 'crew' | 'pending' | 'inactive'.
   async function resolveRole(user) {
     const ref = doc(db, 'users', user.uid);
     let snap;
@@ -221,15 +245,15 @@ async function start() {
       // Almost always "offline with nothing cached". Trust the last known role
       // so the app still opens in a truck; the rules still gate the real data.
       const cached = localStorage.getItem(ROLE_CACHE);
-      if (cached) { console.warn('[auth] offline, using cached role', cached); return cached; }
+      if (cached) {
+        console.warn('[auth] offline, using cached role', cached);
+        try { myAccess = cleanAccess(JSON.parse(localStorage.getItem(ACCESS_CACHE) || '{}')); } catch (err) { myAccess = {}; }
+        return cached;
+      }
       throw e;
     }
 
-    if (snap.exists()) {
-      const d = snap.data();
-      if (d.active === false) return d.role === 'pending' ? 'pending' : 'inactive';
-      return d.role || 'pending';
-    }
+    if (snap.exists()) return roleOf(snap.data());
 
     // No record yet. The owner email mints itself; everyone else files a request.
     const isOwner = (user.email || '').toLowerCase() === String(cfg.ownerEmail).toLowerCase();
@@ -243,9 +267,21 @@ async function start() {
     return isOwner ? 'owner' : 'pending';
   }
 
+  // The role a user record grants, and (for an admin) their areas. Someone
+  // refused stays out even if their record somehow says active -- the gate
+  // used to let any role through that was not literally 'pending'.
+  function roleOf(d) {
+    myAccess = d.role === 'admin' ? cleanAccess(d.access) : {};
+    if (d.active === false) return d.role === 'pending' ? 'pending' : 'inactive';
+    if (['owner', 'admin', 'crew'].indexOf(d.role) === -1) return d.role === 'pending' ? 'pending' : 'inactive';
+    return d.role;
+  }
+
   onAuthStateChanged(auth, async user => {
     if (!user) {
+      if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
       localStorage.removeItem(ROLE_CACHE);
+      localStorage.removeItem(ACCESS_CACHE);
       // Say it before they tap, not after. Inside another app's browser the
       // sign-in cannot succeed, and offering the button first only produces a
       // failure they have to interpret.
@@ -274,7 +310,10 @@ async function start() {
 
     // A full localStorage must not stop sign-in -- this used to throw inside
     // the auth listener and leave the gate stuck on "Checking access".
-    try { localStorage.setItem(ROLE_CACHE, role); } catch (e) {}
+    try {
+      localStorage.setItem(ROLE_CACHE, role);
+      localStorage.setItem(ACCESS_CACHE, JSON.stringify(myAccess));
+    } catch (e) {}
 
     if (role === 'pending') {
       gate.show('pending', {
@@ -486,15 +525,59 @@ async function start() {
       },
     };
 
+    publish(user, role);
+    console.info('[auth] signed in as', user.email, 'role', role);
+    watchMyRecord(user, role);
+  });
+
+  // Tell the rest of the app who is signed in and what they may do.
+  // `key` changes whenever any of that does, so a screen can tell "the same
+  // person with different access" from "nothing changed" and re-subscribe.
+  function publish(user, role) {
+    const access = Object.assign({}, myAccess);
     window.YDAuth = {
       ready: true, mode: 'cloud', user, role, db, auth,
       signIn: doSignIn,
       signOut: () => signOut(auth),
       isOwner: role === 'owner',
+      isAdmin: role === 'admin',
+      access: access,
+      can: canFor(role, access),
+      key: user.uid + ':' + role + ':' + JSON.stringify(access),
     };
     document.dispatchEvent(new CustomEvent('yd-auth', { detail: window.YDAuth }));
-    console.info('[auth] signed in as', user.email, 'role', role);
-  });
+  }
+
+  // The owner can change someone's access while they have the app open.
+  // Their own record is watched, so the screens they may see follow at once
+  // -- and someone switched off is shown the door rather than left looking
+  // at screens the rules now refuse.
+  let unwatchMe = null;
+  function watchMyRecord(user, role) {
+    if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
+    let was = role + JSON.stringify(myAccess);
+    unwatchMe = onSnapshot(doc(db, 'users', user.uid), snap => {
+      if (!snap.exists() || snap.metadata.fromCache || auth.currentUser !== user) return;
+      const now = roleOf(snap.data());
+      const sig = now + JSON.stringify(myAccess);
+      if (sig === was) return;
+      was = sig;
+      try {
+        localStorage.setItem(ROLE_CACHE, now);
+        localStorage.setItem(ACCESS_CACHE, JSON.stringify(myAccess));
+      } catch (e) {}
+      if (now === 'pending' || now === 'inactive') {
+        gate.show('denied', {
+          title: 'Access removed',
+          msg: `The account ${user.email} no longer has access.`,
+          signOut: true,
+        });
+        return;
+      }
+      console.info('[auth] access changed to', now, myAccess);
+      publish(user, now);
+    }, () => { /* offline or refused: the rules still decide */ });
+  }
 
   // Signing out, done properly. Resolves true once signed out, false if the
   // person chose to stay signed in.

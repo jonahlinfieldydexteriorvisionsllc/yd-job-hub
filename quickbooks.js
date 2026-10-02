@@ -35,6 +35,9 @@
 
   const el = id => document.getElementById(id);
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  // Sending storms to QuickBooks is billing: the owner, or an admin who may
+  // change billing. Connecting and disconnecting stay the owner's alone.
+  const sends = () => ydCan('billing', 'change');
   const endpoint = () => ((window.YD_CONFIG || {}).claudeEndpoint || '').replace(/\/+$/, '');
 
   // ------------------------------------------------------------ the server
@@ -72,7 +75,7 @@
   };
 
   async function refresh() {
-    if (!isOwner()) return;
+    if (!sends()) return;
     busy = true; render();
     try {
       state = await ask('/qb/status');
@@ -259,7 +262,7 @@
   // Turns a storm's billing into invoices, one per account, and writes back the
   // number QuickBooks gave each one.
   window.sendStormToQuickBooks = async function (stormId) {
-    if (!isOwner()) return;
+    if (!sends()) return;
     if (!state || !state.connected) { openQuickBooks(); return; }
     // The customer matches load when the QuickBooks screen opens, which may
     // not have happened yet this session.
@@ -394,7 +397,7 @@
     const entry = el('menuQuickBooks');
     if (entry) entry.hidden = !(a.isOwner === true);
     // Coming back from Intuit: the page reloads, so look at the connection.
-    if (a.isOwner === true && a.mode === 'cloud') {
+    if (a.mode === 'cloud' && a.user && ydCan('billing', 'change')) {
       checkStatus();
     }
   });

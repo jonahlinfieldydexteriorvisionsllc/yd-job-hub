@@ -130,8 +130,11 @@
     const startBtn = document.getElementById('stormStartBtn');
     if (!wrap) return;
 
-    const isOwner = !!(window.YDAuth && window.YDAuth.isOwner);
-    if (startBtn) startBtn.hidden = !isOwner || !!storm;
+    // Running storms is Snow; closing one and working out the bills is
+    // Billing. The owner has both; an admin has whichever they were given.
+    const runs = ydCan('snow', 'change');
+    const bills = ydCan('billing', 'change');
+    if (startBtn) startBtn.hidden = !runs || !!storm;
 
     if (!storm) {
       wrap.innerHTML = '';
@@ -161,11 +164,12 @@
             (openStop ? '<span class="storm-onsite">on site at ' + esc(accountFor(openStop).name) + '</span>' : '') +
           '</div>' +
           list.map(renderStop).join('') +
-          (isOwner ? '<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">' +
-            (done === list.length && list.length
+          (runs || bills ? '<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">' +
+            (runs && done === list.length && list.length
               ? '<button class="btn btn-accent" onclick="anotherRound()">Run the route again</button>' : '') +
-            '<button class="btn btn-filled" onclick="closeStorm()">Close storm &amp; work out billing</button>' +
-            '<button class="btn btn-danger btn-sm" onclick="abandonStorm()">Abandon</button></div>' : '') +
+            (bills ? '<button class="btn btn-filled" onclick="closeStorm()">Close storm &amp; work out billing</button>' : '') +
+            (runs ? '<button class="btn btn-danger btn-sm" onclick="abandonStorm()">Abandon</button>' : '') +
+            '</div>' : '') +
         '</div>' +
       '</div>';
   }
@@ -340,6 +344,7 @@
   // times, each one billed at the account's rate. So running the whole route
   // again is a first-class action, not a per-stop afterthought.
   window.anotherRound = async function () {
+    if (!ydCan('snow', 'change')) return;
     const list = Object.values(stops).sort((a, b) => a.order - b.order);
     const worked = list.filter(s => s.departedAt && !s.skipped);
     if (!worked.length) { showToast('Nothing to run again yet'); return; }
@@ -410,6 +415,7 @@
   // ---------------------------------------------------------------- lifecycle
 
   window.startStorm = async function () {
+    if (!ydCan('snow', 'change')) return;
     // A second storm started while one is open orphans the first: it stays
     // open forever, its stops unreachable from the interface, and it is never
     // billed. The realistic way in is tapping Start Storm, seeing nothing
@@ -481,12 +487,14 @@
   };
 
   window.abandonStorm = async function () {
+    if (!ydCan('snow', 'change')) return;
     if (!storm) return;
     if (!confirm('Abandon this storm?\n\nThe record stays, but it will not be billed.')) return;
     writeSoon(window.YDDb.put('storms', storm.id, { status: 'abandoned', closedAt: new Date().toISOString() }), 'abandon');
   };
 
   window.closeStorm = async function () {
+    if (!ydCan('billing', 'change')) return;
     if (!storm) return;
     const list = Object.values(stops).sort((a, b) => a.order - b.order);
     const openOnes = list.filter(s => s.arrivedAt && !s.departedAt);
@@ -615,6 +623,7 @@
   }
 
   window.setStartPoint = async function () {
+    if (!ydCan('snow', 'change')) { showToast('Only the owner can set this'); return; }
     const addr = prompt('Where does the route start from?\n\n(your yard or wherever the truck leaves)',
                         startPoint.label === 'Madison (yard not set)' ? '' : startPoint.label);
     if (addr === null || !addr.trim()) return;
@@ -645,7 +654,7 @@
   let authKey = null;
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const key = a.mode === 'cloud' && a.user ? a.user.uid + ':' + a.role : null;
+    const key = a.mode === 'cloud' && a.user ? (a.key || a.user.uid + ':' + a.role) : null;
     if (key !== authKey) {
       [unsubStorms, unsubStops].forEach(u => { if (u) { try { u(); } catch (err) {} } });
       unsubStorms = unsubStops = null;

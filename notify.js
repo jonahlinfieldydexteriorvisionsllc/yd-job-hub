@@ -189,6 +189,9 @@
         '<div class="hint">' + (isOwner()
           ? 'Yours has the weather, everything on today’s calendar (personal events included), bids to chase, ' +
             'and at the end of the day who worked where and for how long.'
+          : window.YDAuth && window.YDAuth.isAdmin
+          ? 'Yours has the weather, where you are working, storm news and your own hours — plus the calendars, ' +
+            'bids and crew hours you have been given access to.'
           : 'Yours has the weather, where you are working, storm news, and your own hours.') + '</div>' +
       '</div>' +
       (isOwner() ? '<div class="ntf-block"><div class="ntf-head">Try it</div>' +

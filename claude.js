@@ -17,7 +17,9 @@
 
   window.YDClaude = {
     available() {
-      return !!(endpoint() && window.YDAuth && window.YDAuth.user);
+      // Drafting a scope writes into a job: the owner, or an admin who may
+      // change jobs. The server checks the same.
+      return !!(endpoint() && window.YDAuth && window.YDAuth.user && ydCan('jobs', 'change'));
     },
 
     async ask(task, data) {

@@ -265,7 +265,7 @@ def _people():
     out = {}
     for s in _db().collection("users").stream():
         u = s.to_dict() or {}
-        if u.get("active") is True and u.get("role") in ("owner", "crew"):
+        if u.get("active") is True and u.get("role") in ("owner", "admin", "crew"):
             u["uid"] = s.id
             out[s.id] = u
     return out
@@ -415,6 +415,13 @@ def build(slot, user, people, wx, cache):
     and calm weather does not need three notifications a day)."""
     owner = user.get("role") == "owner"
     uid = user["uid"]
+    # An admin's summary is crew's plus the areas the owner gave them -- the
+    # same access table the app and the rules use. Never the owner's own
+    # (ownerOnly) calendars, whatever they were given.
+    access = (user.get("access") or {}) if user.get("role") == "admin" else {}
+
+    def sees(area):
+        return owner or access.get(area) in ("see", "change")
     now = _now()
     today = now.date()
     tomorrow = today + datetime.timedelta(days=1)
@@ -464,6 +471,10 @@ def build(slot, user, people, wx, cache):
     # ---- calendar
     def mine(it):
         if owner:
+            return True
+        # An admin given Calendars: every calendar the owner has not kept
+        # private -- exactly what the app shows them.
+        if sees("calendars") and it["cal"].get("ownerOnly") is False:
             return True
         # Crew: only calendars shared with them, and on the Work schedule
         # only the days they are actually on.
@@ -517,7 +528,7 @@ def build(slot, user, people, wx, cache):
         return str(_name(people.get(s["uid"])) if people.get(s["uid"]) else s["who"])
 
     hours_day = {"evening": "today", "morning": "yesterday"}.get(slot)
-    if owner:
+    if sees("hours"):
         if slot == "midday":
             if running:
                 sections.append(("On the clock now", [{"text": "%s — %s (%s so far)" % (
@@ -537,8 +548,8 @@ def build(slot, user, people, wx, cache):
                              [{"text": "%s — %s" % (s["where"], _fmt_dur(s["mins"])) +
                                (" (still clocked in)" if s["running"] else "")} for s in mine_s]))
 
-    # ---- bids (owner only)
-    if owner and slot in ("morning", "evening") or (owner and slot == "midday" and cache["bids"]):
+    # ---- bids (the owner, and an admin given Jobs)
+    if sees("jobs") and (slot in ("morning", "evening") or (slot == "midday" and cache["bids"])):
         bids = cache["bids"]
         if bids:
             sections.append(("Bids to chase", [{"text": "%s — %s, %d day%s%s" % (

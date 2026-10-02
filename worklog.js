@@ -28,7 +28,9 @@
 
   const el = id => document.getElementById(id);
   const two = n => String(n).padStart(2, '0');
-  const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  // Everyone's hours: the owner, or an admin given Crew hours & pay. Crew
+  // see their own (theirs is all the clock loads for them anyway).
+  const isOwner = () => ydCan('hours', 'see');
   const C = () => window.YDClock;
 
   function dayOf(d) { return d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate()); }

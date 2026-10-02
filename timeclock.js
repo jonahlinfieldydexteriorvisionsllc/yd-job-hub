@@ -33,7 +33,13 @@
 
   let entries = {};      // id -> shift. Crew see only their own; owner sees all.
   let board = {};        // jobId -> { name, address, status }
-  let people = {};       // uid -> user record (owner only)
+  let people = {};       // uid -> user record (owner and admins; crew get their own)
+  // uid -> hourly rate in cents, from payRates/{uid}. Kept apart from the user
+  // record because admins read user records (for names) and Firestore cannot
+  // hide one field of a document -- so a rate there was readable by anyone
+  // allowed to see the crew list.
+  let rates = {};
+  let ratesLoaded = false;
   let unsub = [];
   let watchKey = null;   // uid + role the current watches were built for
   let ticker = null;     // redraws the running clock every second
@@ -47,6 +53,13 @@
   const ms = iso => (iso ? new Date(iso).getTime() : 0);
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  // Everyone's hours and pay are for the owner and for an admin given "Crew
+  // hours & pay"; crew see only their own.
+  const seesAll = () => ydCan('hours', 'see');
+  const decides = () => ydCan('hours', 'change');
+  // Nobody settles their own pay: an admin may approve other people's shifts
+  // but never their own. firestore.rules says the same.
+  const mayDecide = e => !!e && decides() && (isOwner() || e.uid !== (me() || {}).uid);
 
   // ------------------------------------------------------------ the numbers
   //
@@ -150,7 +163,9 @@
   const canPause = e => BILLABLE_KINDS.indexOf(e.kind) !== -1;
   const OVERHEAD_LABEL = { snow: 'Snow', labor: 'Labor', receipts: 'Receipts' };
   const openPause = e => (e.pauses || []).find(p => !p.endedAt) || null;
-  const rateOf = uid => ((people[uid] || {}).rateCents) || DEFAULT_RATE_CENTS;
+  // The rate on the user record is the old place for it, read until the move
+  // to payRates has happened (see moveRates).
+  const rateOf = uid => rates[uid] || ((people[uid] || {}).rateCents) || DEFAULT_RATE_CENTS;
 
   // The name a person goes by. The owner renames people on Your Crew and on
   // their own page, and both write it to the person's user record -- so it is
@@ -433,7 +448,8 @@
     // every second, and rebuilding the form would clear the fields mid-word.
     if (workerUid && !editingWorker
         && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
-    if (isOwner()) { renderOnNow(); renderApprovals(); renderCrew(); renderTotals(); }
+    if (seesAll()) { renderOnNow(); renderApprovals(); renderTotals(); }
+    if (isOwner()) renderCrew();
     manageTicker();
   }
   window.renderClock = render;
@@ -684,11 +700,14 @@
             '<span class="on-where">' + esc(e.targetName) + '</span>' +
             '<span class="on-time"><span data-live-entry="' + safeId(e.id) + '">' + fmtDur(paidMs(e)) + '</span>' +
               (p ? ' · paused (' + esc(p.reason) + ')' : '') + '</span>' +
-            '<button class="btn btn-sm" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' +
+            (mayDecide(e) || e.uid === (me() || {}).uid
+              ? '<button class="btn btn-sm" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' : '') +
           '</div>';
         }).join('')
       : '<p class="empty-msg">Nobody is on the clock.</p>') +
-      (choosingWorker ? workerChooserHtml()
+      // Clocking other people in and out is changing their hours.
+      (!decides() ? ''
+        : choosingWorker ? workerChooserHtml()
         : '<div class="field-actions"><button class="btn btn-sm" onclick="pickWorkerToClockIn()">Clock somebody in</button></div>');
   }
 
@@ -700,9 +719,14 @@
   // meant reading the list, closing it in your head and typing a digit.
   let choosingWorker = false;
 
+  // Anyone who works: crew, and admins (who clock in like everyone else).
+  // Not the person doing the clocking -- an admin may not set their own hours
+  // this way, and the owner clocks themself in from the card at the top.
   function crewToClockIn() {
+    const mine = (me() || {}).uid;
     return Object.keys(people)
-      .filter(uid => people[uid].role === 'crew' && people[uid].active)
+      .filter(uid => (people[uid].role === 'crew' || people[uid].role === 'admin') &&
+        people[uid].active && uid !== mine)
       .sort((a, b) => whoIs(a).localeCompare(whoIs(b)));
   }
 
@@ -785,10 +809,12 @@
               esc(p.reason) + ' ' + fmtDur(Math.max(0, (p.endedAt ? ms(p.endedAt) : Date.now()) - ms(p.startedAt)))
             ).join(' · ') + '</div>'
           : '') +
-        '<div class="appr-act">' +
-          '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
-          '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
-        '</div>' +
+        (mayDecide(e)
+          ? '<div class="appr-act">' +
+              '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
+              '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
+            '</div>'
+          : '<div class="appr-act muted">' + (decides() ? 'Your own shift — the owner approves it' : 'Waiting for the owner') + '</div>') +
       '</div>';
     }).join('');
   }
@@ -808,10 +834,12 @@
     // Not until the worker list has arrived. The shifts often load first, and
     // stamping then froze every settled shift at the default rate for good --
     // a $30/hr worker's night recorded at $25.
-    if (!isOwner() || !window.YDDb || !usersLoaded) return;
+    if (!decides() || !window.YDDb || !usersLoaded || !ratesLoaded) return;
     Object.keys(entries).forEach(id => {
       const e = entries[id];
       if (!counts(e) || running(e) || e.rateCents != null) return;
+      // An admin never prices their own shifts; the owner's device does.
+      if (!mayDecide(e)) return;
       const patch = {
         rateCents: rateOf(e.uid),
         costCents: costOf(paidMs(e), rateOf(e.uid)),
@@ -825,7 +853,7 @@
 
   window.approveShift = function (id) {
     const e = entries[id];
-    if (!e || !isOwner()) return;
+    if (!mayDecide(e)) return;
     const patch = {
       status: 'approved',
       rateCents: rateOf(e.uid),
@@ -848,7 +876,7 @@
 
   window.rejectShift = function (id) {
     const e = entries[id];
-    if (!e || !isOwner()) return;
+    if (!mayDecide(e)) return;
     const why = prompt('Why is this being rejected? The crew member sees this.');
     if (why === null) return;
     const patch = { status: 'rejected', rejectedReason: why.trim(),
@@ -883,7 +911,7 @@
       .filter(u => u.uid !== ((me() || {}).uid));
 
     const waiting = all.filter(u => u.role === 'pending' || u.active === false);
-    const active = all.filter(u => u.role === 'crew' && u.active);
+    const active = all.filter(u => (u.role === 'crew' || u.role === 'admin') && u.active);
 
     const badge = el('crewBadge');
     if (badge) badge.textContent = waiting.filter(u => u.role === 'pending').length
@@ -920,7 +948,10 @@
         ? active.map(u => '<div class="crew-row">' +
             '<button class="crew-name linkish" onclick="openWorker(\'' + safeId(u.uid) + '\')">' +
               esc(u.name || u.email) + '</button>' +
+            (u.role === 'admin' ? '<span class="crew-admin">admin</span>' : '') +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
+            '<button class="btn btn-sm" onclick="openAccess(\'' + safeId(u.uid) + '\')">' +
+              (u.role === 'admin' ? 'Access' : 'Make admin…') + '</button>' +
             '<button class="btn btn-sm" onclick="renameWorker(\'' + safeId(u.uid) + '\')">Rename</button>' +
             '<button class="btn btn-sm" onclick="setWorkerRate(\'' + safeId(u.uid) + '\')">' +
               money(rateOf(u.uid)) + '/hr</button>' +
@@ -963,7 +994,10 @@
     if (u.role === 'denied' && !confirm('Let ' + who + (u.name && u.email ? ' (' + u.email + ')' : '') +
         ' in after all?\n\nYou refused them before. They will be able to sign in, ' +
         'clock in and see the crew side of Job Hub.')) return;
-    setRole(uid, { role: 'crew', active: true }, who + ' can now clock in');
+    // Switching someone back on keeps what they were: an admin switched off
+    // for the winter comes back an admin, with the same access.
+    if (u.role === 'admin' || u.role === 'crew') setRole(uid, { active: true }, who + ' switched back on');
+    else setRole(uid, { role: 'crew', active: true }, who + ' can now clock in');
   };
 
   // Denied, not deleted: the record is the audit trail of who asked, and the
@@ -972,6 +1006,115 @@
     const u = people[uid];
     if (!u || !confirm('Refuse access for ' + (u.email) + '?')) return;
     setRole(uid, { role: 'denied', active: false }, 'Refused');
+  };
+
+  // ------------------------------------------------------- admins and access
+  //
+  // An admin is someone who helps run the business: they clock in like crew,
+  // and the owner picks, area by area, whether they see nothing, can look, or
+  // can change things. The same table is enforced in firestore.rules; this
+  // is only the form for setting it.
+  //
+  // Never shared with anyone, whatever is ticked here: who gets in and what
+  // they may do, the owner's Personal calendar, the QuickBooks connection,
+  // and the Problems screen.
+  const AREAS = [
+    { id: 'jobs', label: 'Jobs & bids', hint: 'Job, Tracking and All Jobs; the Bids and Jobs boards; materials bought' },
+    { id: 'snow', label: 'Snow', hint: 'Snow accounts and their prices; starting and running storms' },
+    { id: 'billing', label: 'Billing', hint: 'Storm bills, invoices, season reports; sending to QuickBooks' },
+    { id: 'hours', label: 'Crew hours & pay', hint: 'Everyone’s shifts and pay rates; approving shifts (never their own)' },
+    { id: 'calendars', label: 'Calendars', hint: 'Every shared calendar — never your Personal one' },
+    { id: 'boards', label: 'Boards', hint: 'Every board and card, not only those shared with them' },
+    { id: 'supplies', label: 'Supplies & prices', hint: 'What things cost; adding and editing supplies' },
+    { id: 'equipment', label: 'Equipment', hint: 'Machines, services and problems' },
+    { id: 'contacts', label: 'Contacts', hint: 'People to call next season' },
+  ];
+  const LEVEL_WORDS = { none: 'Off', see: 'See', change: 'Change' };
+  let accessUid = null;
+
+  window.openAccess = function (uid) {
+    if (!isOwner() || !people[uid]) return;
+    accessUid = uid;
+    renderAccess();
+    const m = el('accessModal');
+    if (m) m.classList.add('active');
+  };
+  window.closeAccess = function () {
+    const m = el('accessModal');
+    if (m) m.classList.remove('active');
+    accessUid = null;
+  };
+
+  function renderAccess() {
+    const body = el('accessBody'), u = people[accessUid];
+    if (!body || !u) return;
+    const isAdmin = u.role === 'admin';
+    const acc = (isAdmin && u.access) || {};
+    const title = el('accessTitle');
+    if (title) title.textContent = (u.name || u.email) + (isAdmin ? ' — admin' : '');
+    body.innerHTML =
+      '<p class="acc-lead">' + (isAdmin
+        ? 'Pick what ' + esc(u.name || u.email) + ' can do in each part of Job Hub. They always keep their own clock and the crew screens.'
+        : esc(u.name || u.email) + ' is crew. As an admin they can also see — or change — the parts of the business you pick below.') + '</p>' +
+      '<div class="acc-list">' + AREAS.map(a => {
+        const lv = acc[a.id] || 'none';
+        return '<div class="acc-row">' +
+          '<div class="acc-area"><b>' + esc(a.label) + '</b><small>' + esc(a.hint) + '</small></div>' +
+          '<div class="acc-seg" role="radiogroup" aria-label="' + esc(a.label) + '">' +
+            ['none', 'see', 'change'].map(l =>
+              '<label class="acc-opt' + (l === lv ? ' on' : '') + '"><input type="radio" name="acc-' + a.id + '" value="' + l + '"' +
+                (l === lv ? ' checked' : '') + ' onchange="accessPicked(this)">' + LEVEL_WORDS[l] + '</label>').join('') +
+          '</div></div>';
+      }).join('') + '</div>' +
+      '<div class="acc-never">Only you, always: letting people in and setting their access, your Personal calendar, ' +
+        'the QuickBooks connection, and the Problems screen.</div>' +
+      '<div class="field-actions">' +
+        '<button class="btn btn-filled" onclick="saveAccess()">' + (isAdmin ? 'Save access' : 'Make them an admin') + '</button>' +
+        (isAdmin ? '<button class="btn" onclick="makeCrew()">Back to crew</button>' : '') +
+        '<button class="btn btn-sm" onclick="closeAccess()">Cancel</button>' +
+      '</div>';
+  }
+
+  window.accessPicked = function (input) {
+    const seg = input.closest('.acc-seg');
+    if (seg) seg.querySelectorAll('.acc-opt').forEach(o => o.classList.toggle('on', o.contains(input)));
+  };
+
+  // Every area is written out, 'none' included. The save merges into the
+  // stored record, and a map merges key by key -- an area left out would keep
+  // whatever it was set to before.
+  function accessFromForm() {
+    const out = {};
+    AREAS.forEach(a => {
+      const r = document.querySelector('input[name="acc-' + a.id + '"]:checked');
+      out[a.id] = r ? r.value : 'none';
+    });
+    return out;
+  }
+
+  window.saveAccess = function () {
+    const u = people[accessUid];
+    if (!isOwner() || !u) return;
+    const access = accessFromForm();
+    const wasAdmin = u.role === 'admin';
+    const any = Object.values(access).some(l => l !== 'none');
+    if (!wasAdmin && !confirm('Make ' + (u.name || u.email) + ' an admin?\n\n' +
+        (any ? 'They will be able to ' + AREAS.filter(a => access[a.id] !== 'none')
+          .map(a => (access[a.id] === 'change' ? 'change ' : 'see ') + a.label.toLowerCase()).join(', ') + '.'
+          : 'Nothing is ticked yet, so for now they will have the same screens as crew.'))) return;
+    setRole(accessUid, { role: 'admin', access: access },
+      (u.name || u.email) + (wasAdmin ? '’s access saved' : ' is now an admin'));
+    closeAccess();
+  };
+
+  window.makeCrew = function () {
+    const u = people[accessUid];
+    if (!isOwner() || !u || !confirm('Make ' + (u.name || u.email) + ' crew again?\n\n' +
+        'They lose every admin area and keep only their own clock and the crew screens.')) return;
+    const none = {};
+    AREAS.forEach(a => { none[a.id] = 'none'; });
+    setRole(accessUid, { role: 'crew', access: none }, (u.name || u.email) + ' is crew again');
+    closeAccess();
   };
 
   window.removeCrew = function (uid) {
@@ -1085,7 +1228,7 @@
     // A crew member's own page shows their rate, so their record is read
     // again here: a raise given since they signed in shows the next time they
     // look, not the next time they sign in.
-    if (!isOwner()) loadMyRecord();
+    if (!seesAll()) loadMyRecord();
   };
   window.closeWorker = function () {
     const m = el('workerModal');
@@ -1118,15 +1261,19 @@
     const owed = approved.reduce((s, e) => s + (e.costCents != null ? e.costCents
       : costOf(paidMs(e), e.rateCents || rateOf(e.uid))), 0);
 
+    // The owner names people; the owner, or an admin with Crew hours & pay,
+    // sets their rate -- though never an admin their own.
+    const canName = isOwner();
+    const canRate = decides() && (isOwner() || !isMe);
     body.innerHTML =
-      (editingWorker && isOwner()
+      (editingWorker && (canName || canRate)
         ? '<div class="wk-edit">' +
             '<div class="grid g2">' +
-              '<div class="field"><span class="label">Name</span>' +
-                '<input id="wkName" value="' + esc(u.name || '') + '" placeholder="What they go by"></div>' +
-              '<div class="field"><span class="label">Hourly rate</span>' +
+              (canName ? '<div class="field"><span class="label">Name</span>' +
+                '<input id="wkName" value="' + esc(u.name || '') + '" placeholder="What they go by"></div>' : '') +
+              (canRate ? '<div class="field"><span class="label">Hourly rate</span>' +
                 '<input id="wkRate" inputmode="decimal" value="' +
-                  (rateOf(workerUid) / 100).toFixed(2) + '"></div>' +
+                  (rateOf(workerUid) / 100).toFixed(2) + '"></div>' : '') +
             '</div>' +
             '<div class="hint">A new rate applies to shifts approved from now on. ' +
               'Shifts already approved keep the rate they were approved at.</div>' +
@@ -1138,7 +1285,7 @@
         : '<div class="wk-top">' +
             '<div><div class="wk-name">' + esc(name) + '</div>' +
             (u.email ? '<div class="wk-mail">' + esc(u.email) + '</div>' : '') + '</div>' +
-            (isOwner()
+            (canName || canRate
               ? '<button class="btn btn-sm" onclick="editWorker()">' +
                 money(rateOf(workerUid)) + '/hr · Edit</button>'
               : '<span class="wk-rate">' + money(rateOf(workerUid)) + '/hr</span>') +
@@ -1222,30 +1369,70 @@
   window.cancelWorkerEdit = function () { editingWorker = false; renderWorker(); };
 
   window.saveWorkerEdit = function () {
-    if (!isOwner() || !workerUid) return;
+    if (!workerUid) return;
+    const isMe = workerUid === ((me() || {}).uid);
+    const canName = isOwner();
+    const canRate = decides() && (isOwner() || !isMe);
+    if (!canName && !canRate) return;
     // Same limit as Rename on Your Crew, so the two ways of naming agree.
-    const name = ((el('wkName') || {}).value || '').trim().slice(0, 60);
+    const name = canName ? ((el('wkName') || {}).value || '').trim().slice(0, 60) : null;
     const raw = ((el('wkRate') || {}).value || '').replace(/[^0-9.]/g, '');
-    const cents = Math.round(parseFloat(raw) * 100);
+    const cents = canRate ? Math.round(parseFloat(raw) * 100) : null;
 
-    if (!name) { showToast('Give them a name'); return; }
-    if (!(cents > 0)) { showToast('That hourly rate does not look right'); return; }
+    if (canName && !name) { showToast('Give them a name'); return; }
+    if (canRate && !(cents > 0)) { showToast('That hourly rate does not look right'); return; }
 
-    const patch = { name: name, rateCents: cents };
-    people[workerUid] = Object.assign({}, people[workerUid], patch);
-
-    // No shift is rewritten. Every screen reads the name from this record
-    // (whoIs), so past shifts show the new name at once -- and Save here and
-    // Rename on Your Crew can no longer leave them disagreeing. Rewriting
-    // used to cost one database write per shift the person had ever worked,
-    // on every save, even when only the rate had changed.
+    // No shift is rewritten. Every screen reads the name from the user
+    // record (whoIs), so past shifts show the new name at once -- and Save
+    // here and Rename on Your Crew can no longer leave them disagreeing.
+    // Rewriting used to cost one database write per shift the person had
+    // ever worked, on every save, even when only the rate had changed.
+    if (canName) {
+      people[workerUid] = Object.assign({}, people[workerUid], { name: name });
+      Promise.resolve(window.YDDb.put('users', workerUid, { name: name }))
+        .catch(e => console.warn('[clock] name not saved:', e.code || e.message));
+    }
+    if (canRate) {
+      rates[workerUid] = cents;
+      Promise.resolve(window.YDDb.put('payRates', workerUid, { rateCents: cents, updatedAt: nowIso() }))
+        .catch(e => {
+          console.warn('[clock] rate not saved:', e.code || e.message);
+          if (e && e.code === 'permission-denied') showToast('Rate not saved — not allowed');
+        });
+    }
 
     editingWorker = false;
     render();
-    Promise.resolve(window.YDDb.put('users', workerUid, patch))
-      .catch(e => console.warn('[clock] worker not saved:', e.code || e.message));
-    showToast('Saved — ' + name + ' at ' + money(cents) + '/hr');
+    showToast('Saved — ' + (name || whoIs(workerUid)) + (canRate ? ' at ' + money(cents) + '/hr' : ''));
   };
+
+  // Rates used to live on each person's user record, where anyone allowed
+  // to read that record (an admin, for names) could read the rate too. Once,
+  // on the owner's device, each one is copied to payRates/{uid} -- and only
+  // after the server has taken that copy is it cleared from the user record,
+  // so a rate is never lost to a refused or half-done move.
+  let movingRates = false;
+  async function moveRates() {
+    if (!isOwner() || !usersLoaded || !ratesLoaded || movingRates || !window.YDDb) return;
+    const todo = Object.keys(people).filter(uid =>
+      typeof people[uid].rateCents === 'number' && rates[uid] == null);
+    if (!todo.length) return;
+    movingRates = true;
+    try {
+      for (const uid of todo) {
+        const cents = people[uid].rateCents;
+        await window.YDDb.put('payRates', uid, { rateCents: cents, updatedAt: nowIso() });
+        rates[uid] = cents;
+        await window.YDDb.put('users', uid, { rateCents: null });
+      }
+    } catch (e) {
+      // Most likely the rules for payRates are not published yet. Nothing is
+      // lost: the rate stays on the user record and is still read from there.
+      console.warn('[clock] pay rates not moved yet:', e.code || e.message);
+    } finally {
+      movingRates = false;
+    }
+  }
 
   // Kept so the rate button in the weekly totals still works; it opens the
   // page rather than a browser prompt.
@@ -1345,24 +1532,33 @@
       render();
       announce();
     }).catch(() => { /* offline with nothing cached: the Google name and the default rate stand */ });
+    // Their own rate, from where rates live now.
+    Promise.resolve(window.YDDb.get('payRates', u.uid)).then(d => {
+      if (!d || watchKey !== key || !(d.rateCents > 0)) return;
+      rates[u.uid] = d.rateCents;
+      render();
+    }).catch(() => { /* not published yet, or offline: the old record's rate stands */ });
   }
 
-  function start(owner) {
+  function start() {
     if (!window.YDDb) return;
 
     const u = me();
     if (!u) return;
+    const all = seesAll();
+    // Admins read the user records too (names on every list), never the rates.
+    const readsPeople = isOwner() || !!(window.YDAuth && window.YDAuth.isAdmin);
 
-    // Rebuild whenever the account or the role changes, rather than only on a
-    // first run. A crew member reads their shifts through a filtered query and
-    // an owner reads the whole collection; keeping the first set of watches
-    // after a promotion would leave an owner looking at one person's hours and
-    // wondering where everyone else went.
-    const key = u.uid + ':' + (owner ? 'owner' : 'crew');
+    // Rebuild whenever the account, the role or the access changes, rather
+    // than only on a first run. A crew member reads their shifts through a
+    // filtered query and the owner reads the whole collection; keeping the
+    // first set of watches after a promotion would leave someone looking at
+    // one person's hours and wondering where everyone else went.
+    const key = (window.YDAuth && window.YDAuth.key) || u.uid;
     if (watchKey === key) return;
     unsub.forEach(fn => { try { fn(); } catch (e) {} });
     unsub = [];
-    entries = {}; board = {}; people = {}; usersLoaded = false;
+    entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
     watchKey = key;
 
     const onEntries = changes => {
@@ -1386,7 +1582,7 @@
     // A crew member may read only their own shifts, so they must ask only for
     // their own -- Firestore refuses a whole-collection read outright when the
     // rules could not have permitted every row in it.
-    unsub.push(owner
+    unsub.push(all
       ? window.YDDb.watch('timeEntries', onEntries, onEntriesError)
       : window.YDDb.watchWhere('timeEntries', 'uid', u.uid, onEntries, onEntriesError));
 
@@ -1399,7 +1595,7 @@
       announce();          // a renamed job reads under its new name in the log
     }, () => render()));
 
-    if (owner) {
+    if (readsPeople) {
       unsub.push(window.YDDb.watch('users', changes => {
         changes.forEach(c => {
           if (c.type === 'removed') delete people[c.id];
@@ -1407,32 +1603,56 @@
         });
         usersLoaded = true;
         stampUnpriced();
+        moveRates();
         render();
         // A rename shows on the open job's labour and in the work log too.
         if (typeof refreshJobLabour === 'function') refreshJobLabour();
         announce();
       }, () => render()));
-    } else {
-      loadMyRecord();
     }
+    if (all) {
+      // Rates arrive apart from the people; nothing is priced until both have
+      // (a shift stamped before its worker's rate came would be frozen at the
+      // default). If the rates cannot be read at all -- the rules for them not
+      // published yet -- the old rate on the user record is used instead.
+      unsub.push(window.YDDb.watch('payRates', (changes, meta) => {
+        changes.forEach(c => {
+          if (c.type === 'removed' || !(c.data && c.data.rateCents > 0)) delete rates[c.id];
+          else rates[c.id] = c.data.rateCents;
+        });
+        // Only the server's answer counts as "the rates are in": a new phone's
+        // empty cache would otherwise price every settled shift at $25.
+        if (meta && meta.fromCache === false) ratesLoaded = true;
+        stampUnpriced();
+        moveRates();
+        render();
+        if (typeof refreshJobLabour === 'function') refreshJobLabour();
+      }, () => { ratesLoaded = true; stampUnpriced(); moveRates(); render(); }));
+    }
+    if (!readsPeople || !all) loadMyRecord();
   }
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const owner = a.isOwner === true;
-    ['clockOnNowSection', 'clockApproveSection', 'clockCrewSection', 'clockTotalsSection'].forEach(id => {
-      const s = el(id); if (s) s.hidden = !owner;
+    const signedIn = a.mode === 'cloud' && a.user;
+    // Who is on the clock, the approvals and the wage totals: everyone's
+    // hours. Your Crew -- who gets in, and what they may do -- is the owner's.
+    ['clockOnNowSection', 'clockApproveSection', 'clockTotalsSection'].forEach(id => {
+      const s = el(id); if (s) s.hidden = !(signedIn && seesAll());
     });
+    const crewSec = el('clockCrewSection');
+    if (crewSec) crewSec.hidden = !(signedIn && a.isOwner === true);
     const tab = el('tabClock');
-    if (tab) tab.hidden = !(a.mode === 'cloud' && a.user);
-    if (a.mode === 'cloud' && a.user) {
-      start(owner);
+    if (tab) tab.hidden = !signedIn;
+    if (signedIn) {
+      start();
     } else if (watchKey) {
       // Signed out. Drop the watches and the data with them, so nothing of one
       // person's is still on screen when the next one signs in.
       unsub.forEach(fn => { try { fn(); } catch (e) {} });
       unsub = []; watchKey = null;
-      entries = {}; board = {}; people = {}; usersLoaded = false;
+      entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
+      closeAccess();
       // Half-done screens go too. A form the owner opened to file a shift for
       // somebody else, left open, would otherwise file the next person's
       // shift under that somebody.

@@ -54,13 +54,39 @@ service cloud.firestore {
         && myUserDoc().role == 'crew' && myUserDoc().active == true;
     }
 
-    function isStaff() { return isOwner() || isCrew(); }
+    // An admin helps run the business. They work like crew (their own clock,
+    // the route, boards shared with them), and the owner gives them, area by
+    // area, 'see' or 'change' on the rest:
+    //
+    //   users/{uid}.access = { jobs, snow, billing, hours, calendars,
+    //                          boards, supplies, equipment, contacts }
+    //
+    // Never theirs, whatever is set: changing anyone's role or access, the
+    // owner's Personal calendar (ownerOnly), the QuickBooks tokens, the
+    // Problems screen, settling their own shifts or setting their own rate.
+    function isAdmin() {
+      return signedIn() && myUserDocExists()
+        && myUserDoc().role == 'admin' && myUserDoc().active == true;
+    }
+    function areaLevel(area) { return myUserDoc().get('access', {}).get(area, 'none'); }
+    function canSee(area) {
+      return isOwner() || (isAdmin() && areaLevel(area) in ['see', 'change']);
+    }
+    function canChange(area) {
+      return isOwner() || (isAdmin() && areaLevel(area) == 'change');
+    }
+
+    // Someone who clocks in and works: crew, and admins.
+    function isWorker() { return isCrew() || isAdmin(); }
+    function isStaff()  { return isOwner() || isWorker(); }
 
     // ===================================================================
     // users -- roles and pending access requests
     // ===================================================================
     match /users/{uid} {
-      allow read: if signedIn() && (request.auth.uid == uid || isOwner());
+      // Admins read everyone's record for names (the clock, boards, calendars).
+      // Pay rates are not kept here for that reason -- see payRates.
+      allow read: if signedIn() && (request.auth.uid == uid || isOwner() || isAdmin());
 
       // Three creates are permitted:
       //  1. owner bootstrap -- the first sign-in by the owner email mints the
@@ -85,30 +111,45 @@ service cloud.firestore {
                && request.resource.data.active == false)
            ));
 
-      // Only an owner promotes, demotes or deactivates. A user cannot edit
-      // their own record -- otherwise 'pending' could simply self-promote.
+      // Only an owner promotes, demotes or deactivates -- and sets an admin's
+      // access. A user cannot edit their own record, or 'pending' could
+      // simply self-promote and an admin could widen their own access.
       allow update: if isOwner();
 
       // Never delete; deactivate, so the audit trail survives.
       allow delete: if false;
     }
 
+    // What each worker is paid, per hour, in cents. Apart from the user
+    // record because admins read those for names, and Firestore cannot hide
+    // one field of a document. Each worker reads their own.
+    match /payRates/{uid} {
+      allow read:  if canSee('hours') || (isWorker() && request.auth.uid == uid);
+      // An admin never sets their own rate.
+      allow write: if isOwner() || (canChange('hours') && request.auth.uid != uid);
+    }
+
     // ===================================================================
-    // Owner only -- the admin side of the business
+    // The business side -- the owner, and admins by area
     // Client names, phone numbers, pricing, costs, margins, estimates.
     // ===================================================================
-    match /jobs/{docId}      { allow read, write: if isOwner(); }
-    match /contacts/{docId}  { allow read, write: if isOwner(); }
-    match /prospects/{docId} { allow read, write: if isOwner(); }
-    match /expenses/{docId}  { allow read, write: if isOwner(); }
-    match /estimates/{docId} { allow read, write: if isOwner(); }
-    match /equipment/{docId} { allow read, write: if isOwner(); }
+    match /jobs/{docId}      { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    match /expenses/{docId}  { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    match /estimates/{docId} { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    match /contacts/{docId}  { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
+    match /prospects/{docId} { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
+    match /equipment/{docId} { allow read: if canSee('equipment'); allow write: if canChange('equipment'); }
 
     // settings/public holds harmless shared values (rounding rules, company
-    // name). Everything else in settings is owner-only.
+    // name). 'snow' is the yard the route starts from; 'invoicing' and
+    // 'quickbooksMap' are billing's. Everything else is the owner's.
     match /settings/{docId} {
-      allow read:  if isOwner() || (isCrew() && docId == 'public');
-      allow write: if isOwner();
+      allow read:  if isOwner() || (isStaff() && docId == 'public')
+        || (docId == 'snow' && canSee('snow'))
+        || (docId in ['invoicing', 'quickbooksMap'] && canSee('billing'));
+      allow write: if isOwner()
+        || (docId == 'snow' && canChange('snow'))
+        || (docId in ['invoicing', 'quickbooksMap'] && canChange('billing'));
     }
 
     // ===================================================================
@@ -116,17 +157,20 @@ service cloud.firestore {
     // ===================================================================
     match /snowAccounts/{accountId} {
       allow read:  if isStaff();
-      allow write: if isOwner();
+      allow write: if canChange('snow');
 
       // Pricing and client contact details. Crew cannot read this at all.
+      // Billing reads it too: a storm cannot be billed without the prices.
       match /private/{docId} {
-        allow read, write: if isOwner();
+        allow read:  if canSee('snow') || canSee('billing');
+        allow write: if canChange('snow');
       }
     }
 
     match /storms/{stormId} {
       allow read:  if isStaff();
-      allow write: if isOwner();
+      // Starting and running a storm is Snow; closing it for billing, Billing.
+      allow write: if canChange('snow') || canChange('billing');
 
       // Per stop: arrive, depart, inches measured, salt used, skipped + reason.
       // A subcollection rather than fields on the storm so two crew tapping
@@ -153,18 +197,19 @@ service cloud.firestore {
         // closes the storm the billing is locked and only they can touch it.
         // The stop id must look like one of ours (account id, maybe '-p2'): it
         // goes into buttons on the owner's screen.
-        allow create, update: if isOwner()
-          || (isCrew()
+        allow create, update: if canChange('snow')
+          || (isWorker()
               && stopId.matches('[A-Za-z0-9_-]+')
               && stopFiguresAreNumbers()
               && get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open');
 
-        allow delete: if isOwner();
+        allow delete: if canChange('snow');
       }
 
       // Computed billing and totals.
       match /private/{docId} {
-        allow read, write: if isOwner();
+        allow read:  if canSee('billing');
+        allow write: if canChange('billing');
       }
     }
 
@@ -172,8 +217,15 @@ service cloud.firestore {
     // timeEntries -- crew clock themselves in, owner approves
     // ===================================================================
     match /timeEntries/{entryId} {
-      allow read: if isOwner()
-        || (isCrew() && resource.data.uid == request.auth.uid);
+      allow read: if canSee('hours')
+        || (isWorker() && resource.data.uid == request.auth.uid);
+
+      // Settling, pricing or editing someone else's shift: the owner, or an
+      // admin given "Crew hours & pay" -- but an admin never their own. Their
+      // own shifts go through exactly the same checks as crew.
+      function decidesFor(uid) {
+        return isOwner() || (canChange('hours') && uid != request.auth.uid);
+      }
 
       // Nobody sets their own wage. Crew record WHEN they worked; what that is
       // worth is stamped by the owner at approval, from the rate on the
@@ -270,8 +322,8 @@ service cloud.firestore {
         );
       }
 
-      allow create: if isOwner()
-        || (isCrew()
+      allow create: if decidesFor(request.resource.data.uid)
+        || (isWorker()
             && goodId()
             && request.resource.data.uid == request.auth.uid
             && crewMayCreate()
@@ -280,14 +332,15 @@ service cloud.firestore {
       // Once a shift is 'ok', 'approved' or 'rejected' it is a payroll record
       // and only an owner may touch it -- otherwise a shift could be clocked
       // out short, settle itself, and then be edited longer.
-      allow update: if isOwner()
-        || (isCrew()
+      allow update: if (decidesFor(resource.data.uid)
+            && request.resource.data.uid == resource.data.uid)
+        || (isWorker()
             && resource.data.uid == request.auth.uid
             && request.resource.data.uid == resource.data.uid
             && crewMayChange()
             && crewFieldsOnly());
 
-      allow delete: if isOwner();
+      allow delete: if decidesFor(resource.data.uid);
     }
 
     // ===================================================================
@@ -329,7 +382,7 @@ service cloud.firestore {
     // ===================================================================
     match /jobBoard/{jobId} {
       allow read:  if isStaff();
-      allow write: if isOwner();
+      allow write: if canChange('jobs');
     }
 
     // ===================================================================
@@ -368,18 +421,18 @@ service cloud.firestore {
     // ===================================================================
     match /changeRequests/{reqId} {
       allow read: if isOwner()
-        || (isCrew() && resource.data.requestedBy == request.auth.uid);
+        || (isWorker() && resource.data.requestedBy == request.auth.uid);
 
       // Crew file only for themselves, and always as pending.
       allow create: if isOwner()
-        || (isCrew()
+        || (isWorker()
             && request.resource.data.requestedBy == request.auth.uid
             && request.resource.data.status == 'pending');
 
       // Crew may amend or withdraw their own request while it is still pending.
       // They can never decide one -- not even their own.
       allow update: if isOwner()
-        || (isCrew()
+        || (isWorker()
             && resource.data.requestedBy == request.auth.uid
             && resource.data.status == 'pending'
             && request.resource.data.requestedBy == resource.data.requestedBy
@@ -395,16 +448,28 @@ service cloud.firestore {
     // Each document carries a 'visibleTo' array of uids. The owner decides who
     // is on it; a crew member not listed cannot read the calendar at all.
     // ===================================================================
+    //
+    // An admin given Calendars reads every calendar marked ownerOnly == false
+    // (the app asks exactly that question, so the rules can prove it) and,
+    // with 'change', adds and edits events on them. Personal is ownerOnly,
+    // and so is any calendar the owner marks private. Making, sharing and
+    // deleting calendars stays the owner's.
     match /calendars/{calId} {
       allow read: if isOwner()
-        || (isCrew() && request.auth.uid in resource.data.visibleTo);
+        || (canSee('calendars') && resource.data.ownerOnly == false)
+        || (isWorker() && request.auth.uid in resource.data.visibleTo);
       allow write: if isOwner();
+
+      function sharedCal() {
+        return get(/databases/$(database)/documents/calendars/$(calId)).data.get('ownerOnly', true) == false;
+      }
 
       match /events/{eventId} {
         allow read: if isOwner()
-          || (isCrew() && request.auth.uid in
+          || (canSee('calendars') && sharedCal())
+          || (isWorker() && request.auth.uid in
               get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo);
-        allow write: if isOwner();
+        allow write: if isOwner() || (canChange('calendars') && sharedCal());
       }
     }
 
@@ -430,38 +495,39 @@ service cloud.firestore {
 
     match /supplies/{docId} {
       allow read:  if isStaff();
-      allow write: if isOwner();
+      allow write: if canChange('supplies');
     }
     match /vendors/{docId} {
       allow read:  if isStaff();
-      allow write: if isOwner();
+      allow write: if canChange('supplies');
     }
     // What each supply costs. A separate collection, not fields on the
     // supply, because the crew can read every supply and Firestore cannot
     // hide one field of a document from them.
     match /supplyPrices/{supplyId} {
-      allow read, write: if isOwner();
+      allow read:  if canSee('supplies');
+      allow write: if canChange('supplies');
     }
 
     match /boards/{boardId} {
-      allow read: if isOwner()
-        || (isCrew() && request.auth.uid in resource.data.visibleTo);
-      allow write: if isOwner();
+      allow read: if canSee('boards')
+        || (isWorker() && request.auth.uid in resource.data.visibleTo);
+      allow write: if canChange('boards');
 
       match /cards/{cardId} {
-        allow read: if isOwner()
-          || (isCrew() && request.auth.uid in
+        allow read: if canSee('boards')
+          || (isWorker() && request.auth.uid in
               get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo);
         // Crew can move a card they can see and tick its checklist -- and
         // nothing else. Without the field list, "can move a card" would also
         // mean "can rewrite what it says or who it is assigned to". Only the
-        // owner creates or deletes.
-        allow update: if isOwner()
-          || (isCrew() && request.auth.uid in
+        // owner (or an admin who may change boards) creates or deletes.
+        allow update: if canChange('boards')
+          || (isWorker() && request.auth.uid in
                 get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo
               && request.resource.data.diff(resource.data).affectedKeys()
                    .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']));
-        allow create, delete: if isOwner();
+        allow create, delete: if canChange('boards');
       }
     }
 
