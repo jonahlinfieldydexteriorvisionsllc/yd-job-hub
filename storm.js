@@ -133,7 +133,9 @@
     // Running storms is Snow; closing one and working out the bills is
     // Billing. The owner has both; an admin has whichever they were given.
     const runs = ydCan('snow', 'change');
-    const bills = ydCan('billing', 'change');
+    // Closing works out the bill, which takes each crew member's pauses off
+    // the time on site -- so it needs everyone's hours as well as Billing.
+    const bills = ydCan('billing', 'change') && ydCan('hours', 'see');
     if (startBtn) startBtn.hidden = !runs || !!storm;
 
     if (!storm) {
@@ -494,7 +496,7 @@
   };
 
   window.closeStorm = async function () {
-    if (!ydCan('billing', 'change')) return;
+    if (!ydCan('billing', 'change') || !ydCan('hours', 'see')) return;
     if (!storm) return;
     const list = Object.values(stops).sort((a, b) => a.order - b.order);
     const openOnes = list.filter(s => s.arrivedAt && !s.departedAt);

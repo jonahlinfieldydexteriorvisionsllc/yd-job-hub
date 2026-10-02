@@ -420,7 +420,13 @@
       if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('clock');
     }
 
-    if (a.mode === 'cloud' && a.user && owner) start();
+    if (owner) start();
+    else if (unsub) {
+      // Access taken away (or signed out): stop listening and drop the list.
+      try { unsub(); } catch (err) {}
+      unsub = null; people = {};
+      render();
+    }
   });
 
   function boot() { fillTagOptions(); renderTags(); render(); }

@@ -756,7 +756,7 @@
             : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
         '</div>' +
         '<label class="chk"><input type="checkbox" id="ccPrivate"' + (c.ownerOnly ? ' checked' : '') +
-          '> Private — admins never see it, whatever their access</label>') +
+          '> Private — admins with Calendars access do not see it (anyone ticked above still does)</label>') +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="calSaveCal(\'' + (id || '') + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="calManage()">Back</button>' +
@@ -919,8 +919,24 @@
       unsubCals = window.YDDb.watch('calendars', onCals);
     } else if (seesAllCals()) {
       // Never the whole collection: the rules refuse a question whose answer
-      // could include the owner's Personal calendar.
-      unsubCals = window.YDDb.watchWhere('calendars', 'ownerOnly', false, onCals, () => redrawIfVisible());
+      // could include the owner's Personal calendar. Two questions instead --
+      // every calendar not kept private, and any shared with them by name --
+      // and a calendar goes only when neither still returns it.
+      const from = {};
+      const tagged = name => (changes, meta) => {
+        const pass = [];
+        changes.forEach(c => {
+          const s = from[c.id] || (from[c.id] = new Set());
+          if (c.type === 'removed') {
+            s.delete(name);
+            if (!s.size) { delete from[c.id]; pass.push(c); }
+          } else { s.add(name); pass.push(c); }
+        });
+        if (pass.length || meta) onCals(pass, meta);
+      };
+      const open = window.YDDb.watchWhere('calendars', 'ownerOnly', false, tagged('open'), () => redrawIfVisible());
+      const mine = window.YDDb.watchContains('calendars', 'visibleTo', a.user.uid, tagged('mine'), () => redrawIfVisible());
+      unsubCals = () => { open(); mine(); };
     } else {
       unsubCals = window.YDDb.watchContains('calendars', 'visibleTo', a.user.uid, onCals, () => redrawIfVisible());
     }

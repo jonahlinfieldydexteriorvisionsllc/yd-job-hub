@@ -1020,6 +1020,13 @@
     // Looking without changing: every editing control is hidden.
     document.documentElement.toggleAttribute('data-equipment-readonly', sees && !ydCan('equipment', 'change'));
     if (sees) start();
+    else if (unsub) {
+      // Access taken away (or signed out): stop listening, and nothing of
+      // the machines stays on this device's screen.
+      try { unsub(); } catch (err) {}
+      unsub = null; gear = {}; gearLoaded = false;
+      renderEquipment();
+    }
   });
 
   function boot() { renderEquipment(); }

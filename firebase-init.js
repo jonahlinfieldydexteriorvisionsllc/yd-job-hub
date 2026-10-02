@@ -272,7 +272,8 @@ async function start() {
   // used to let any role through that was not literally 'pending'.
   function roleOf(d) {
     myAccess = d.role === 'admin' ? cleanAccess(d.access) : {};
-    if (d.active === false) return d.role === 'pending' ? 'pending' : 'inactive';
+    // The rules need active == true; anything else (false, or missing) is out.
+    if (d.active !== true) return d.role === 'pending' ? 'pending' : 'inactive';
     if (['owner', 'admin', 'crew'].indexOf(d.role) === -1) return d.role === 'pending' ? 'pending' : 'inactive';
     return d.role;
   }

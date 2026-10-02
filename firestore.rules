@@ -68,7 +68,8 @@ service cloud.firestore {
       return signedIn() && myUserDocExists()
         && myUserDoc().role == 'admin' && myUserDoc().active == true;
     }
-    function areaLevel(area) { return myUserDoc().get('access', {}).get(area, 'none'); }
+    // A nested lookup with a default: copes with no access map at all.
+    function areaLevel(area) { return myUserDoc().get(['access', area], 'none'); }
     function canSee(area) {
       return isOwner() || (isAdmin() && areaLevel(area) in ['see', 'change']);
     }
@@ -169,8 +170,14 @@ service cloud.firestore {
 
     match /storms/{stormId} {
       allow read:  if isStaff();
-      // Starting and running a storm is Snow; closing it for billing, Billing.
-      allow write: if canChange('snow') || canChange('billing');
+      // Starting and running a storm is Snow; closing it for billing, and
+      // anything on it once closed, is Billing. Snow cannot close a storm or
+      // touch (or reopen) one that is closed.
+      allow create: if canChange('snow');
+      allow update: if canChange('billing')
+        || (canChange('snow') && resource.data.status != 'closed' && request.resource.data.status != 'closed');
+      allow delete: if canChange('billing')
+        || (canChange('snow') && resource.data.status != 'closed');
 
       // Per stop: arrive, depart, inches measured, salt used, skipped + reason.
       // A subcollection rather than fields on the storm so two crew tapping
@@ -197,13 +204,17 @@ service cloud.firestore {
         // closes the storm the billing is locked and only they can touch it.
         // The stop id must look like one of ours (account id, maybe '-p2'): it
         // goes into buttons on the owner's screen.
-        allow create, update: if canChange('snow')
+        function stormOpen() {
+          return get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open';
+        }
+        allow create, update: if canChange('billing')
+          || (canChange('snow') && stormOpen())
           || (isWorker()
               && stopId.matches('[A-Za-z0-9_-]+')
               && stopFiguresAreNumbers()
               && get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open');
 
-        allow delete: if canChange('snow');
+        allow delete: if canChange('billing') || (canChange('snow') && stormOpen());
       }
 
       // Computed billing and totals.

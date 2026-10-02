@@ -40,6 +40,11 @@
   // allowed to see the crew list.
   let rates = {};
   let ratesLoaded = false;
+  // Whether the server answered for payRates at all: true once the security
+  // rules that know about rates (and admins) are published. Until then rates
+  // are saved where they always were, and nobody can be made an admin -- the
+  // old rules would lock an admin out of everything.
+  let newRulesLive = false;
   let unsub = [];
   let watchKey = null;   // uid + role the current watches were built for
   let ticker = null;     // redraws the running clock every second
@@ -1021,7 +1026,7 @@
   const AREAS = [
     { id: 'jobs', label: 'Jobs & bids', hint: 'Job, Tracking and All Jobs; the Bids and Jobs boards; materials bought' },
     { id: 'snow', label: 'Snow', hint: 'Snow accounts and their prices; starting and running storms' },
-    { id: 'billing', label: 'Billing', hint: 'Storm bills, invoices, season reports; sending to QuickBooks' },
+    { id: 'billing', label: 'Billing', hint: 'Storm bills, invoices, season reports; sending to QuickBooks. Closing a storm also needs Crew hours & pay: See' },
     { id: 'hours', label: 'Crew hours & pay', hint: 'Everyone’s shifts and pay rates; approving shifts (never their own)' },
     { id: 'calendars', label: 'Calendars', hint: 'Every shared calendar — never your Personal one' },
     { id: 'boards', label: 'Boards', hint: 'Every board and card, not only those shared with them' },
@@ -1095,6 +1100,10 @@
   window.saveAccess = function () {
     const u = people[accessUid];
     if (!isOwner() || !u) return;
+    if (!newRulesLive) {
+      showToast('Not yet — the new security rules have to be published first, or an admin would be locked out of everything');
+      return;
+    }
     const access = accessFromForm();
     const wasAdmin = u.role === 'admin';
     const any = Object.values(access).some(l => l !== 'none');
@@ -1394,11 +1403,20 @@
     }
     if (canRate) {
       rates[workerUid] = cents;
-      Promise.resolve(window.YDDb.put('payRates', workerUid, { rateCents: cents, updatedAt: nowIso() }))
-        .catch(e => {
-          console.warn('[clock] rate not saved:', e.code || e.message);
-          if (e && e.code === 'permission-denied') showToast('Rate not saved — not allowed');
-        });
+      const uid = workerUid;
+      if (!newRulesLive && isOwner()) {
+        // The rules that know about payRates are not published yet: keep the
+        // rate where it has always been. It moves across by itself later.
+        people[uid] = Object.assign({}, people[uid], { rateCents: cents });
+        Promise.resolve(window.YDDb.put('users', uid, { rateCents: cents }))
+          .catch(e => console.warn('[clock] rate not saved:', e.code || e.message));
+      } else {
+        Promise.resolve(window.YDDb.put('payRates', uid, { rateCents: cents, updatedAt: nowIso() }))
+          .catch(e => {
+            console.warn('[clock] rate not saved:', e.code || e.message);
+            if (e && e.code === 'permission-denied') showToast('Rate not saved — not allowed');
+          });
+      }
     }
 
     editingWorker = false;
@@ -1413,17 +1431,22 @@
   // so a rate is never lost to a refused or half-done move.
   let movingRates = false;
   async function moveRates() {
-    if (!isOwner() || !usersLoaded || !ratesLoaded || movingRates || !window.YDDb) return;
-    const todo = Object.keys(people).filter(uid =>
-      typeof people[uid].rateCents === 'number' && rates[uid] == null);
+    if (!isOwner() || !usersLoaded || !ratesLoaded || !newRulesLive || movingRates || !window.YDDb) return;
+    // Everyone whose user record still holds a rate -- including anyone whose
+    // copy landed last time but whose old rate was never cleared (the app
+    // closed between the two). Only the copy is skipped when it already exists.
+    const todo = Object.keys(people).filter(uid => typeof people[uid].rateCents === 'number');
     if (!todo.length) return;
     movingRates = true;
     try {
       for (const uid of todo) {
         const cents = people[uid].rateCents;
-        await window.YDDb.put('payRates', uid, { rateCents: cents, updatedAt: nowIso() });
-        rates[uid] = cents;
+        if (rates[uid] == null) {
+          await window.YDDb.put('payRates', uid, { rateCents: cents, updatedAt: nowIso() });
+          rates[uid] = cents;
+        }
         await window.YDDb.put('users', uid, { rateCents: null });
+        people[uid] = Object.assign({}, people[uid], { rateCents: null });
       }
     } catch (e) {
       // Most likely the rules for payRates are not published yet. Nothing is
@@ -1622,12 +1645,12 @@
         });
         // Only the server's answer counts as "the rates are in": a new phone's
         // empty cache would otherwise price every settled shift at $25.
-        if (meta && meta.fromCache === false) ratesLoaded = true;
+        if (meta && meta.fromCache === false) { ratesLoaded = true; newRulesLive = true; }
         stampUnpriced();
         moveRates();
         render();
         if (typeof refreshJobLabour === 'function') refreshJobLabour();
-      }, () => { ratesLoaded = true; stampUnpriced(); moveRates(); render(); }));
+      }, () => { ratesLoaded = true; newRulesLive = false; stampUnpriced(); render(); }));
     }
     if (!readsPeople || !all) loadMyRecord();
   }
