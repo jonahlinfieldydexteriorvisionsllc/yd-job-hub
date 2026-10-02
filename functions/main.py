@@ -339,6 +339,17 @@ def _digest(request, path, headers):
             Encoding.X962, PublicFormat.UncompressedPoint)
         return (json.dumps({"key": base64.urlsafe_b64encode(pub).rstrip(b"=").decode()}), 200, json_headers)
 
+    # Calendar reminders, every five minutes, from Cloud Scheduler only.
+    if path == "/digest/reminders":
+        if not _from_scheduler(request):
+            return (json.dumps({"error": "not allowed"}), 403, json_headers)
+        try:
+            import reminders
+            return (json.dumps({"sent": reminders.run()}), 200, json_headers)
+        except Exception as e:                          # noqa: BLE001
+            print("reminders run failed:", e)
+            return (json.dumps({"error": str(e)}), 500, json_headers)
+
     if path == "/digest/run":
         if not _from_scheduler(request):
             return (json.dumps({"error": "not allowed"}), 403, json_headers)

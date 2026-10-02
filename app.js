@@ -321,6 +321,8 @@ document.addEventListener('yd-auth', e => {
   }
   if (out) out.hidden = !on;
   if (sep) sep.hidden = !on;
+  const people = document.getElementById('menuPeople');
+  if (people) people.hidden = !(on && a.isOwner);
 
   // The job screens -- Job, Tracking, All Jobs, and the materials half of
   // Supplies -- are for whoever may see jobs: the owner, and an admin given
@@ -358,6 +360,15 @@ document.addEventListener('yd-auth', e => {
         .indexOf(openTab.id) !== -1) switchTab('clock');
   }
 });
+
+// Your Crew lives on the Clock tab, below the clock and the approvals --
+// easy to miss. This goes straight to it: renaming, letting people in,
+// making an admin.
+function openPeople() {
+  switchTab('clock');
+  const sec = document.getElementById('clockCrewSection');
+  if (sec && !sec.hidden) setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+}
 
 // What the signed-in person may do in one area of the business: 'see' or
 // 'change'. Always true for the owner and false for crew; an admin has what
@@ -400,7 +411,10 @@ function openMore() {
     });
   // Settings that are not screens of their own live here too, so they are
   // found where everything else is rather than up in the header.
-  const extras = ((window.YDAuth && window.YDAuth.user)
+  const extras = ((window.YDAuth && window.YDAuth.isOwner)
+    ? [{ label: '👥 People & names', hint: 'Rename people, let them in, make an admin',
+         call: 'closeMore(); openPeople()' }]
+    : []).concat((window.YDAuth && window.YDAuth.user)
     ? [{ label: '🔔 Notifications & summaries', hint: 'Daily updates by email and on your phone',
          call: 'closeMore(); openNotifications()' }]
     : []).concat([{ label: '🌓 Appearance', hint: 'Light, dark, or match this phone',

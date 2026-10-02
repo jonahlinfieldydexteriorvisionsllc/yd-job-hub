@@ -387,7 +387,7 @@
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
         '<span class="bd-people">' + (k.assignees || []).map(a =>
-          '<span class="bd-face" title="' + esc(a.name) + '">' + esc(initials(a.name)) + '</span>').join('') + '</span>' +
+          '<span class="bd-face" title="' + esc(nameOn(a)) + '">' + esc(initials(nameOn(a))) + '</span>').join('') + '</span>' +
       '</div>' +
     '</div>';
   }
@@ -396,6 +396,10 @@
     const p = people[uid];
     return p ? (p.name || p.email || 'Worker') : '';
   }
+  // The name someone goes by now. A card keeps the name it was given when
+  // they were put on it, which is only the fallback (a crew phone cannot read
+  // other people's records) -- so a rename on Your Crew shows on every card.
+  const nameOn = a => personName(a.uid) || a.name || 'Worker';
 
   // Colours come from a fixed palette, but they are also read back out of the
   // database and dropped into a style attribute -- so anything that is not a
@@ -589,7 +593,7 @@
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
         (k.due ? '<span>📅 ' + shortDay(k.due) + '</span>' : '') +
-        ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(a.name)).join(', ') + '</span>' : '') +
+        ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
       (k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +

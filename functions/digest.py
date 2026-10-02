@@ -228,6 +228,204 @@ def weather():
     return out
 
 
+# ---------------------------------------------------------------- every town, every job site
+#
+# Jonah's ask: the weather for each city in Dane and Green County, and at the
+# exact spot of each job being worked that day. Every city in both counties,
+# and the bigger villages, in the order they are read down the email.
+AREAS = [
+    ("Dane", "Madison", 43.0731, -89.4012), ("Dane", "Middleton", 43.0972, -89.5043),
+    ("Dane", "Fitchburg", 42.9608, -89.4698), ("Dane", "Verona", 42.9908, -89.5332),
+    ("Dane", "Monona", 43.0622, -89.3340), ("Dane", "Sun Prairie", 43.1836, -89.2137),
+    ("Dane", "Stoughton", 42.9167, -89.2179), ("Dane", "Waunakee", 43.1919, -89.4557),
+    ("Dane", "DeForest", 43.2478, -89.3437), ("Dane", "McFarland", 43.0125, -89.2898),
+    ("Dane", "Oregon", 42.9261, -89.3843), ("Dane", "Cottage Grove", 43.0761, -89.1993),
+    ("Dane", "Mount Horeb", 43.0086, -89.7385),
+    ("Green", "Monroe", 42.6011, -89.6385), ("Green", "Brodhead", 42.6183, -89.3762),
+    ("Green", "New Glarus", 42.8144, -89.6354),
+]
+ZONES = {"Dane": "WIZ063", "Green": "WIZ068"}
+
+WMO_ICON = {
+    0: "☀️", 1: "🌤️", 2: "⛅", 3: "☁️", 45: "🌫️", 48: "🌫️", 51: "🌦️", 53: "🌦️", 55: "🌧️", 56: "🌧️", 57: "🌧️",
+    61: "🌦️", 63: "🌧️", 65: "🌧️", 66: "🧊", 67: "🧊", 71: "🌨️", 73: "🌨️", 75: "❄️", 77: "🌨️",
+    80: "🌦️", 81: "🌧️", 82: "⛈️", 85: "🌨️", 86: "❄️", 95: "⛈️", 96: "⛈️", 99: "⛈️",
+}
+WORK_HOURS = (7, 17)        # "during work hours" on a job site: 7 am to 5 pm
+
+
+def forecast_points(points, days=3):
+    """Daily forecasts -- and the work-hours rain -- for many places in ONE
+    Open-Meteo call. `points` is a list of (lat, lng); the answer is a list in
+    the same order of {date: {...}}, or None for a place that did not come
+    back. Coordinates only: no address is ever sent to a weather service."""
+    if not points:
+        return []
+    try:
+        r = requests.get("https://api.open-meteo.com/v1/forecast", timeout=25, params={
+            "latitude": ",".join("%.4f" % p[0] for p in points),
+            "longitude": ",".join("%.4f" % p[1] for p in points),
+            "timezone": "America/Chicago", "forecast_days": days,
+            "temperature_unit": "fahrenheit", "wind_speed_unit": "mph", "precipitation_unit": "inch",
+            "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,"
+                     "precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max",
+            "hourly": "precipitation_probability,precipitation",
+        })
+        j = r.json()
+    except Exception as e:      # noqa: BLE001
+        print("digest: area forecast failed:", e)
+        return [None] * len(points)
+    if isinstance(j, dict):
+        if j.get("error"):
+            print("digest: area forecast refused:", j.get("reason"))
+            return [None] * len(points)
+        j = [j]                 # one place comes back as an object, not a list
+    out = []
+    for loc in j:
+        d, h = loc.get("daily") or {}, loc.get("hourly") or {}
+        days_out = {}
+        for i, t in enumerate(d.get("time") or []):
+            hi, lo = d["temperature_2m_max"][i], d["temperature_2m_min"][i]
+            if hi is None or lo is None:
+                continue
+            days_out[t] = {
+                "code": d["weather_code"][i], "hi": hi, "lo": lo,
+                "pop": d["precipitation_probability_max"][i] or 0, "precip": d["precipitation_sum"][i] or 0,
+                "snow": round((d["snowfall_sum"][i] or 0) / 2.54, 1),     # cm -> inches
+                "wind": d["wind_speed_10m_max"][i] or 0, "gust": d["wind_gusts_10m_max"][i] or 0,
+                "workPop": 0, "workRain": 0.0,
+            }
+        for t, pop, mm in zip(h.get("time") or [], h.get("precipitation_probability") or [],
+                              h.get("precipitation") or []):
+            day, hour = t[:10], int(t[11:13])
+            if day in days_out and WORK_HOURS[0] <= hour < WORK_HOURS[1]:
+                days_out[day]["workPop"] = max(days_out[day]["workPop"], pop or 0)
+                days_out[day]["workRain"] += mm or 0
+        out.append(days_out)
+    while len(out) < len(points):
+        out.append(None)
+    return out
+
+
+def county_alerts():
+    """Active Weather Service warnings, watches and advisories, per county."""
+    out = {}
+    for county, zone in ZONES.items():
+        try:
+            r = requests.get("https://api.weather.gov/alerts/active/zone/" + zone, timeout=15,
+                             headers={"User-Agent": UA, "Accept": "application/geo+json"})
+            events = []
+            for f in r.json().get("features") or []:
+                ev = (f.get("properties") or {}).get("event")
+                if ev and ev not in events:
+                    events.append(ev)
+            out[county] = events
+        except Exception as e:      # noqa: BLE001
+            print("digest: alerts failed for", county, e)
+            out[county] = []
+    return out
+
+
+# A job's address becomes a map point once, kept in jobGeo/{jobId} (server
+# only), and looked up again only when the address changes -- OpenStreetMap
+# asks for no more than one lookup a second, and the same answer every day
+# would be wasted on them.
+STREET_TYPES = {"tr": "Trail", "trl": "Trail", "cir": "Circle", "rd": "Road", "dr": "Drive", "st": "Street",
+                "ave": "Avenue", "av": "Avenue", "ln": "Lane", "ct": "Court", "blvd": "Boulevard", "pl": "Place",
+                "ter": "Terrace", "pkwy": "Parkway", "hwy": "Highway", "pt": "Point", "cv": "Cove"}
+
+
+def _spelled_out(street):
+    words = (street or "").split()
+    if len(words) < 2:
+        return None
+    full = STREET_TYPES.get(words[-1].rstrip(".").lower())
+    return " ".join(words[:-1] + [full]) if full else None
+
+
+def _job_point(job_id, j):
+    import time
+    street = (j.get("address") or "").strip()
+    city = (j.get("city") or "").strip()
+    zip_ = (j.get("zip") or "").strip()
+    if not street:
+        return None
+    key = "|".join([street.lower(), city.lower(), zip_])
+    ref = _db().collection("jobGeo").document(job_id)
+    snap = ref.get()
+    if snap.exists:
+        g = snap.to_dict() or {}
+        if g.get("key") == key:
+            return (g["lat"], g["lng"]) if g.get("found") else None
+    tries = []
+    for s in [_spelled_out(street), street]:
+        if not s:
+            continue
+        if zip_:
+            tries.append({"street": s, "postalcode": zip_})
+        if city:
+            tries.append({"street": s, "city": city})
+    found = None
+    for params in tries:
+        try:
+            r = requests.get("https://nominatim.openstreetmap.org/search", timeout=15,
+                             headers={"User-Agent": UA},
+                             params=dict(params, state="WI", country="USA", format="json", limit=1))
+            hit = r.json()
+            time.sleep(1.1)             # their policy: one request a second
+            if hit:
+                found = (float(hit[0]["lat"]), float(hit[0]["lon"]))
+                break
+        except Exception as e:          # noqa: BLE001
+            print("digest: job address lookup failed:", job_id, e)
+            return None                 # no answer is not "not found": try again next time
+    ref.set({"key": key, "found": bool(found), "lat": found[0] if found else None,
+             "lng": found[1] if found else None, "at": _now().isoformat()})
+    return found
+
+
+def job_sites(day, items, jobs):
+    """The jobs being worked on `day`: an entry on the calendar that day linked
+    to the job, or a job in progress. Each with who is on it (None = anyone
+    who may see jobs) and its map point."""
+    sites = {}
+    for it in items:
+        ev = it["ev"]
+        jid = ev.get("jobId")
+        if it["day"] != day or not jid or jid not in jobs:
+            continue
+        s = sites.setdefault(jid, {"jobId": jid, "uids": set(), "scheduled": True})
+        for c in ev.get("crew") or []:
+            if c.get("uid"):
+                s["uids"].add(c["uid"])
+    for jid, j in jobs.items():
+        if jid not in sites and (j.get("workStage") == "inProgress" or j.get("jobStatus") == "inprogress"):
+            sites[jid] = {"jobId": jid, "uids": set(), "scheduled": False}
+    out = []
+    for jid, s in sites.items():
+        j = jobs[jid]
+        pt = _job_point(jid, j)
+        out.append(dict(s, name=(j.get("customerName") or "Job").strip(),
+                        num=str(j.get("estimateNumber") or "").strip(),
+                        where=", ".join(x for x in [(j.get("address") or "").strip(), (j.get("city") or "").strip()] if x),
+                        point=pt))
+    out.sort(key=lambda s: s["name"].lower())
+    return out
+
+
+def _wx_bits(w):
+    """One place's day in short words, for the plain-text email and pushes."""
+    if not w:
+        return "forecast unavailable"
+    bits = ["%s %s %d°/%d°" % (WMO_ICON.get(w["code"], ""), WMO.get(w["code"], ""), round(w["hi"]), round(w["lo"]))]
+    if w["snow"] >= 0.1:
+        bits.append('%.1f" snow' % w["snow"])
+    elif w["pop"] >= 10:
+        bits.append("%d%% rain" % w["pop"] + ((" (%.2f in)" % w["precip"]) if w["precip"] >= 0.01 else ""))
+    bits.append("wind %d" % round(w["wind"]) + ((", gusts %d" % round(w["gust"])) if w["gust"] >= w["wind"] + 5 else "") + " mph")
+    return " · ".join(bits)
+
+
 def _day_words(w):
     if not w:
         return "Forecast unavailable"
@@ -307,12 +505,15 @@ def _storms():
     return open_
 
 
-def _bids():
+def _jobs():
+    return {s.id: (s.to_dict() or {}) for s in _db().collection("jobs").stream()}
+
+
+def _bids(jobs=None):
     """Bids that need chasing: quoting jobs whose stage has sat long enough."""
     now = datetime.datetime.now(datetime.timezone.utc)
     out = []
-    for s in _db().collection("jobs").stream():
-        j = s.to_dict() or {}
+    for j in (jobs if jobs is not None else _jobs()).values():
         if (j.get("jobStatus") or "quoting") != "quoting":
             continue
         # A lost bid stays 'quoting' (boards.js keeps it there in case the
@@ -432,6 +633,13 @@ def build(slot, user, people, wx, cache):
     days = wx.get("days") or []
     wtoday = next((d for d in days if d["date"] == _day(today)), None)
     wtom = next((d for d in days if d["date"] == _day(tomorrow)), None)
+    # The headline uses the same forecast as the Madison row of the table
+    # below, so the two never disagree by a degree.
+    mad = next((a["w"] for a in cache.get("areas") or [] if a["name"] == HOME["name"] and a.get("w")), None)
+    if mad and cache.get("wxday") == today and wtoday:
+        wtoday = dict(wtoday, **{k: mad[k] for k in ("code", "hi", "lo", "pop", "snow", "wind", "gust")})
+    if mad and cache.get("wxday") == tomorrow and wtom:
+        wtom = dict(wtom, **{k: mad[k] for k in ("code", "hi", "lo", "pop", "snow", "wind", "gust")})
     wlines = []
     if slot == "evening":
         if wtom:
@@ -559,6 +767,18 @@ def build(slot, user, people, wx, cache):
             if slot != "midday":
                 push_bits.append("%d bid%s to chase" % (len(bids), "" if len(bids) == 1 else "s"))
 
+    # ---- the weather tables: every town, and each job site being worked.
+    # Crew see the sites they are on; whoever may see jobs sees them all.
+    sites = [x for x in cache.get("sites") or [] if sees("jobs") or uid in x["uids"]]
+    wet = [x for x in sites if x.get("w") and x["w"]["workPop"] >= 50]
+    if wet:
+        push_bits.append("rain likely at " + ", ".join(x["name"] for x in wet[:2]) +
+                         (" +%d" % (len(wet) - 2) if len(wet) > 2 else ""))
+    else:
+        rainy = [a["name"] for a in cache.get("areas") or [] if a.get("w") and a["w"]["pop"] >= 60]
+        if rainy:
+            push_bits.append("rain likely: " + ", ".join(rainy[:3]) + (" +%d" % (len(rainy) - 3) if len(rainy) > 3 else ""))
+
     # A crew member with nothing but weather does not need a midday ping.
     if not owner and slot == "midday" and len(sections) == 1 and not (wx.get("snow48") or 0) >= 0.5 \
             and not wx.get("alerts"):
@@ -567,6 +787,8 @@ def build(slot, user, people, wx, cache):
     meta = SLOTS[slot]
     subject = "%s %s — %s" % (meta["icon"], meta["label"], now.strftime("%a %b ") + str(now.day))
     return {"subject": subject, "sections": sections,
+            "areas": cache.get("areas") or [], "alerts": cache.get("alerts") or {},
+            "sites": sites, "wxday": cache.get("wxday"),
             "push": {"title": "%s %s" % (meta["icon"], meta["label"]),
                      "body": " · ".join(push_bits) or "Your %s update" % meta["label"].lower()}}
 
@@ -574,21 +796,134 @@ def build(slot, user, people, wx, cache):
 # ---------------------------------------------------------------- rendering
 
 
+def _site_label(x):
+    return x["name"] + ((" #" + x["num"]) if x.get("num") else "") + ((" — " + x["where"]) if x.get("where") else "")
+
+
 def to_text(d):
     out = [d["subject"], ""]
-    for title, lines in d["sections"]:
+    for i, (title, lines) in enumerate(d["sections"]):
         out.append(title.upper())
         for l in lines:
             out.append("  " + ((l["when"] + "  ") if l.get("when") else "") + l["text"] +
                        ((" [" + l["cal"] + "]") if l.get("cal") else ""))
         out.append("")
+        if i == 0:
+            out.extend(_tables_text(d))
     out.append("Open Job Hub: " + _app_url())
     return "\n".join(out)
 
 
+def _tables_text(d):
+    out = []
+    if d.get("sites"):
+        out.append("JOB SITES — " + _long_day(d["wxday"]).upper())
+        for x in d["sites"]:
+            w = x.get("w")
+            work = (" · work hours: %d%% rain" % w["workPop"]) if w and w["workPop"] else ""
+            out.append("  " + _site_label(x) + ": " + (_wx_bits(w) + work if w else
+                       ("address not found on the map" if not x.get("point") else "forecast unavailable")))
+        out.append("")
+    if d.get("areas"):
+        out.append("AROUND DANE & GREEN COUNTY — " + _long_day(d["wxday"]).upper())
+        county = None
+        for a in d["areas"]:
+            if a["county"] != county:
+                county = a["county"]
+                warn = (d.get("alerts") or {}).get(county) or []
+                out.append("  %s County%s" % (county, (" — ⚠️ " + ", ".join(warn)) if warn else ""))
+            out.append("    %s: %s" % (a["name"], _wx_bits(a["w"])))
+        out.append("")
+    return out
+
+
+# Inline styles and tables only: Gmail throws away <style> blocks.
+_TD = "padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top"
+
+
+def _wx_cells(w):
+    if not w:
+        return '<td colspan="4" style="%s;color:#9a90a6">Forecast unavailable</td>' % _TD
+    if w["snow"] >= 0.1:
+        wet = '<b style="color:#2a7fa8">❄️ %.1f&quot;</b>' % w["snow"]
+    elif w["pop"] >= 10:
+        wet = "💧 %d%%" % w["pop"] + ((' <span style="color:#7b7188">%.2f&quot;</span>' % w["precip"])
+                                      if w["precip"] >= 0.01 else "")
+    else:
+        wet = '<span style="color:#9a90a6">—</span>'
+    wind = "%d" % round(w["wind"]) + ((' <span style="color:#7b7188">gusts %d</span>' % round(w["gust"]))
+                                      if w["gust"] >= w["wind"] + 5 else "")
+    return ('<td style="%s;white-space:nowrap">%s %s</td>'
+            '<td style="%s;white-space:nowrap"><b>%d°</b> <span style="color:#7b7188">%d°</span></td>'
+            '<td style="%s;white-space:nowrap">%s</td>'
+            '<td style="%s;white-space:nowrap">%s</td>') % (
+        _TD, WMO_ICON.get(w["code"], ""), escape(WMO.get(w["code"], "")), _TD, round(w["hi"]), round(w["lo"]),
+        _TD, wet, _TD, wind)
+
+
+def _row_bg(w):
+    if not w:
+        return ""
+    if w["snow"] >= 0.1:
+        return "background:#e6f4fa;"
+    if w["pop"] >= 50:
+        return "background:#eef4fc;"
+    return ""
+
+
+def _tables_html(d):
+    head = ('<tr style="background:#f4f1f8;color:#7b7188;font-size:11px;text-transform:uppercase;letter-spacing:.5px">'
+            '<th align="left" style="padding:6px 8px">%s</th><th align="left" style="padding:6px 8px">Sky</th>'
+            '<th align="left" style="padding:6px 8px">High / low</th>'
+            '<th align="left" style="padding:6px 8px">Rain / snow</th>'
+            '<th align="left" style="padding:6px 8px">Wind mph</th></tr>')
+    table = ('<table role="presentation" cellspacing="0" cellpadding="0" '
+             'style="width:100%%;border-collapse:collapse;font:13px/1.4 Arial,sans-serif;color:#2b2433;'
+             'margin:4px 0 6px">%s</table>')
+    h3 = ('<h3 style="font:700 13px Arial,sans-serif;letter-spacing:1px;text-transform:uppercase;'
+          'color:#66418f;margin:22px 0 8px">%s</h3>')
+    out = []
+    if d.get("sites"):
+        rows = [head % "Job site"]
+        for x in d["sites"]:
+            w = x.get("w")
+            label = '<b>%s</b>%s<br><span style="color:#7b7188;font-size:12px">%s</span>' % (
+                escape(x["name"]),
+                (' <span style="color:#7b7188">#%s</span>' % escape(x["num"])) if x.get("num") else "",
+                escape(x.get("where") or ""))
+            if w and w["workPop"]:
+                label += ('<br><span style="color:#2f7fc8;font-size:12px;font-weight:700">'
+                          '%d%% chance of rain 7 am–5 pm%s</span>' % (
+                              w["workPop"],
+                              (" · about %.2f&quot;" % w["workRain"]) if w["workRain"] >= 0.01 else ""))
+            if not x.get("point"):
+                cells = '<td colspan="4" style="%s;color:#9a90a6">Address not found on the map</td>' % _TD
+            else:
+                cells = _wx_cells(w)
+            rows.append('<tr style="%s"><td style="%s">%s</td>%s</tr>' % (_row_bg(w), _TD, label, cells))
+        out.append(h3 % escape("Job sites — " + _long_day(d["wxday"])))
+        out.append(table % "".join(rows))
+    if d.get("areas"):
+        rows = [head % "Town"]
+        county = None
+        for a in d["areas"]:
+            if a["county"] != county:
+                county = a["county"]
+                warn = (d.get("alerts") or {}).get(county) or []
+                rows.append('<tr><td colspan="5" style="padding:10px 8px 4px;font-weight:700;color:#66418f">'
+                            '%s County%s</td></tr>' % (
+                                escape(county),
+                                (' <span style="color:#c8492b">⚠️ %s</span>' % escape(", ".join(warn))) if warn else ""))
+            rows.append('<tr style="%s"><td style="%s"><b>%s</b></td>%s</tr>' % (
+                _row_bg(a["w"]), _TD, escape(a["name"]), _wx_cells(a["w"])))
+        out.append(h3 % escape("Around Dane & Green County — " + _long_day(d["wxday"])))
+        out.append(table % "".join(rows))
+    return "".join(out)
+
+
 def to_html(d):
     rows = []
-    for title, lines in d["sections"]:
+    for i, (title, lines) in enumerate(d["sections"]):
         rows.append('<h3 style="font:700 13px Arial,sans-serif;letter-spacing:1px;text-transform:uppercase;'
                     'color:#66418f;margin:22px 0 8px">%s</h3>' % escape(title))
         for l in lines:
@@ -599,7 +934,10 @@ def to_html(d):
             cal = (' <span style="color:#7b7188;font-size:12px">· %s</span>' % escape(l["cal"])) if l.get("cal") else ""
             rows.append('<div style="font:14px/1.5 Arial,sans-serif;color:#2b2433;padding:5px 0;'
                         'border-bottom:1px solid #eee">%s%s%s%s</div>' % (dot, when, escape(l["text"]), cal))
-    return ('<div style="max-width:560px;margin:0 auto;padding:18px">'
+        # The tables come straight after the weather headline.
+        if i == 0:
+            rows.append(_tables_html(d))
+    return ('<div style="max-width:640px;margin:0 auto;padding:18px">'
             '<div style="font:800 22px Georgia,serif;color:#66418f">YD Job Hub</div>'
             '<div style="font:700 15px Arial,sans-serif;color:#c9922f;margin-top:2px">%s</div>%s'
             '<p style="margin-top:26px"><a href="%s" style="background:#66418f;color:#fff;text-decoration:none;'
@@ -658,24 +996,28 @@ def send_email(to, d):
         raise RuntimeError("Gmail said %d: %s" % (r.status_code, r.text[:300]))
 
 
-def send_push(uid, d):
+def send_push(uid, d, tag=None, ttl=6 * 3600):
     """To every phone this person has switched notifications on for. A phone
-    that has since said no (404/410) is forgotten."""
+    that has since said no (404/410) is forgotten. `tag` keeps one kind of
+    notification from replacing another on the phone (a reminder must not
+    wipe out the morning summary)."""
     from pywebpush import WebPushException, webpush
     key = os.environ.get("VAPID_PRIVATE")
     if not key:
         raise RuntimeError("phone notifications are not configured (no VAPID key)")
     db = _db()
     sent = 0
-    payload = json.dumps({"title": d["push"]["title"], "body": d["push"]["body"][:180],
-                          "url": _app_url() + "#calendar"})
+    body = {"title": d["push"]["title"], "body": d["push"]["body"][:180], "url": _app_url() + "#calendar"}
+    if tag:
+        body["tag"] = tag
+    payload = json.dumps(body)
     for s in db.collection("pushSubs").where("uid", "==", uid).stream():
         sub = (s.to_dict() or {}).get("sub")
         if not sub:
             continue
         try:
             webpush(subscription_info=sub, data=payload, vapid_private_key=key,
-                    vapid_claims={"sub": "mailto:" + OWNER_EMAIL}, ttl=6 * 3600)
+                    vapid_claims={"sub": "mailto:" + OWNER_EMAIL}, ttl=ttl)
             sent += 1
         except WebPushException as e:
             code = getattr(e.response, "status_code", None)
@@ -702,14 +1044,35 @@ def _prefs(user):
     return p
 
 
-def _cache():
+def _cache(slot="morning"):
     today = _now().date()
-    return {
+    jobs = _jobs()
+    cache = {
         "items": _calendar_items(today, today + datetime.timedelta(days=1)),
         "storms": _storms(),
-        "bids": _bids(),
+        "bids": _bids(jobs),
         "shifts": _shifts(),
     }
+    # The day the weather tables are for: tomorrow in the evening summary,
+    # today otherwise. Every town and every job site in one forecast call.
+    day = today + datetime.timedelta(days=1) if slot == "evening" else today
+    key = _day(day)
+    try:
+        sites = job_sites(day, cache["items"], jobs)
+    except Exception as e:      # noqa: BLE001
+        print("digest: job sites failed:", e)
+        sites = []
+    with_point = [x for x in sites if x.get("point")]
+    fc = forecast_points([(a[2], a[3]) for a in AREAS] + [x["point"] for x in with_point])
+    cache["wxday"] = day
+    cache["areas"] = [{"county": a[0], "name": a[1], "w": (fc[i] or {}).get(key) if fc[i] else None}
+                      for i, a in enumerate(AREAS)]
+    for i, x in enumerate(with_point):
+        got = fc[len(AREAS) + i]
+        x["w"] = got.get(key) if got else None
+    cache["sites"] = sites
+    cache["alerts"] = county_alerts()
+    return cache
 
 
 def run(slot, only_uid=None, dry=False):
@@ -719,7 +1082,7 @@ def run(slot, only_uid=None, dry=False):
         raise ValueError("unknown slot")
     people = _people()
     wx = weather()
-    cache = _cache()
+    cache = _cache(slot)
     report = []
     for uid, u in people.items():
         if only_uid and uid != only_uid:

@@ -38,6 +38,18 @@
       about: 'Yours only' },
   ];
 
+  // How long before an entry its phone reminder pops up, in minutes. For an
+  // all-day entry the time counts back from 7 am that day.
+  const REMIND = [
+    [null, 'No reminder'], [0, 'At the time'], [10, '10 minutes before'], [30, '30 minutes before'],
+    [60, '1 hour before'], [120, '2 hours before'], [1440, 'The day before'], [2880, 'Two days before'],
+  ];
+  function remindWords(ev) {
+    if (!ev.hasReminder || ev.remindMins == null) return '';
+    const hit = REMIND.find(r => r[0] === ev.remindMins);
+    return hit ? hit[1] : ev.remindMins + ' minutes before';
+  }
+
   const AUTO = {
     'auto:storms': { id: 'auto:storms', name: 'Storm nights', color: '#3fb6d8', auto: true,
                      about: 'From the Snow tab' },
@@ -491,6 +503,7 @@
           '<span class="snow-go">Directions</span></a>' : '') +
         ((ev.crew || []).length ? '<div class="cal-detail-line">👷 ' + ev.crew.map(c =>
           '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(nameOf(c)) + '</span>').join(' ') + '</div>' : '') +
+        (remindWords(ev) ? '<div class="cal-detail-line">🔔 Reminder: ' + esc(remindWords(ev).toLowerCase()) + '</div>' : '') +
         (ev.notes ? '<div class="bd-notes">' + esc(ev.notes) + '</div>' : '') +
       '</div>' +
       '<div class="field-actions">' +
@@ -583,6 +596,14 @@
         '<div class="field"><span class="label">Repeat until (optional)</span>' +
           '<input type="date" id="evUntil" value="' + esc(ev.repeatUntil || '') + '"></div>' +
       '</div>' +
+      // A pop-up on the phone, like Google Calendar's: to whoever sets it and
+      // to the crew on it, on every phone with notifications switched on.
+      '<div class="field"><span class="label">Remind</span><select id="evRemind">' +
+        REMIND.map(([m, words]) => '<option value="' + (m == null ? '' : m) + '"' +
+          ((ev.hasReminder ? ev.remindMins : null) === m ? ' selected' : '') + '>' + words + '</option>').join('') +
+        '</select>' +
+        '<div class="hint">A pop-up on your phone (and on the phones of anyone on it). All-day entries remind ' +
+          'from 7 am. Phones need notifications switched on: ⋯ → Notifications &amp; summaries.</div></div>' +
       '<div class="field" id="evCrewField"><span class="label">Who is on it</span>' +
         (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item" style="--c:' + personColor(p.uid) + '">' +
           '<input type="checkbox" class="evWho" value="' + p.uid + '"' + (chosen.has(p.uid) ? ' checked' : '') + '>' +
@@ -677,6 +698,14 @@
       notes: el('evNotes').value.trim(),
       updatedAt: nowIso(),
     };
+    // The reminder, and who asked for it. Whoever set one before keeps theirs
+    // when someone else edits the entry.
+    const remind = val('evRemind');
+    const wasRec = editing.eventId ? (events[editing.calId] || {})[editing.eventId] : null;
+    rec.hasReminder = remind !== '';
+    rec.remindMins = remind === '' ? null : parseInt(remind, 10);
+    rec.remindUids = remind === '' ? [] : Array.from(new Set(
+      ((wasRec && wasRec.remindUids) || []).concat([(me() || {}).uid]).filter(Boolean)));
 
     // Moving an event to a different calendar is a delete and a create, since
     // the calendar is part of where it is stored.

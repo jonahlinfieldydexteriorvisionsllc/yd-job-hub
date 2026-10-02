@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v70';
+const CACHE = 'ydjobhub-v71';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -197,7 +197,10 @@ self.addEventListener('push', event => {
     icon: './icon-192.png',
     badge: './icon-192.png',
     data: { url: d.url || './' },
-    tag: 'yd-summary',          // a newer summary replaces an older one rather than stacking
+    // A newer summary replaces an older one rather than stacking. Calendar
+    // reminders carry their own tag, one per entry, so a reminder never
+    // replaces the summary (or another reminder) still waiting to be read.
+    tag: typeof d.tag === 'string' && d.tag ? d.tag : 'yd-summary',
     renotify: true,
   }));
 });
