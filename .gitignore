@@ -37,3 +37,7 @@ snow_accounts.json
 # Kept on this machine only.
 CLAUDE.md
 WISHLIST.md
+
+# Copies of the code the computer at home builds changes in, one per card or
+# wish-list item. Never part of the repository.
+.claude/worktrees/

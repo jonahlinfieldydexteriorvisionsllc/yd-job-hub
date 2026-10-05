@@ -426,12 +426,57 @@ def _candidates(db, only=None):
             if k.get("column") == last or k.get("doneAt"):
                 continue
             prev = k.get("claude") or {}
-            if not only and prev:
+            if not only and prev.get("by") == "computer":
+                if not _computer_card_is_free(k, prev):
+                    continue
+            elif not only and prev:
                 if prev.get("status") != "needs_info" or prev.get("seenKey") == _content_key(k):
                     continue
             out.append((b, board, c, k))
     out.sort(key=lambda x: str(x[3].get("createdAt") or ""))
     return out
+
+
+# ---------------------------------------------------------------- the computer at home
+#
+# When the owner leaves the computer at home on, Claude there works the cards
+# every 20 minutes and can do more than this run can (websites, documents,
+# changes to Job Hub). It says it is awake in settings/homeComputer. While it
+# is, this run stands aside; when it is off, this run picks up only what the
+# computer is not in the middle of.
+
+COMPUTER_AWAKE = datetime.timedelta(minutes=45)
+COMPUTER_STUCK = datetime.timedelta(hours=2)
+
+
+def _parse_time(s):
+    """An ISO time from the app ('...Z') or from here ('...-05:00'), always
+    with a zone, so the two can be compared."""
+    try:
+        t = datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+
+
+def computer_awake(db):
+    snap = db.collection("settings").document("homeComputer").get()
+    seen = _parse_time((snap.to_dict() or {}).get("lastSeenAt")) if snap.exists else None
+    return bool(seen) and dg._now() - seen < COMPUTER_AWAKE
+
+
+def _computer_card_is_free(k, prev):
+    """A card the computer has touched, looked at while the computer is off.
+    Free for this run only if the computer started it and never came back
+    (stuck "working"), or asked for something and the card has been changed
+    since. Built-and-waiting changes are the computer's alone to put live."""
+    at = _parse_time(prev.get("at"))
+    if prev.get("status") == "working":
+        return not at or dg._now() - at > COMPUTER_STUCK
+    if prev.get("status") == "needs_info":
+        changed = _parse_time(k.get("updatedAt"))
+        return bool(changed and at and changed > at)
+    return False
 
 
 def _budget_left(db):
@@ -445,6 +490,10 @@ def run(client, only=None):
     """Work through up to MAX_PER_RUN cards (or just the one in `only`, a
     (boardId, cardId) pair). Returns what happened, card by card."""
     db = dg._db()
+    # "Ask Claude now" on one card is always answered here; the hourly run
+    # leaves the cards to the computer at home while it is on.
+    if not only and computer_awake(db):
+        return [{"skipped": "the computer at home is on and working the cards"}]
     records = Records(db)
     report = []
     day, left = _budget_left(db)

@@ -1654,3 +1654,10 @@
     .rc-line { font-size:15px; padding:9px 0; }
     .rc-assign .btn, .rc-foot .btn, .rc-skip { min-height:44px; }
   }
+
+  /* ---- Claude on the computer at home (boards.js) ---- */
+  .bd-computer { margin:0 0 10px; padding:7px 11px; border-radius:8px; font-size:13px; color:var(--muted);
+    background:var(--surface-2); border:1px solid var(--border); }
+  .bd-computer.on { color:var(--text); border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 7%, var(--surface)); }
+  .cl-box.working { border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 5%, var(--surface)); }
+  .cl-box.waiting_ok { border-color:#efd59c; background:color-mix(in srgb, #e0a526 9%, var(--surface)); }

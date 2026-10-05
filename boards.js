@@ -267,8 +267,10 @@
     }
     if (!current || !boardById(current)) current = rememberedBoard(list);
     const board = boardById(current);
+    refreshComputer();
 
     wrap.innerHTML =
+      computerLine() +
       '<div class="bd-picker">' +
         list.map(b => '<button class="bd-chip' + (b.id === current ? ' on' : '') +
           '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + b.id + '\')">' +
@@ -388,6 +390,8 @@
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
         (isOwner() && k.claude && k.claude.status === 'done' ? '<span class="bd-claude" title="Claude did this — check it">🤖</span>' : '') +
         (isOwner() && k.claude && k.claude.status === 'needs_info' ? '<span class="bd-claude ask" title="Claude needs something from you">🤖?</span>' : '') +
+        (isOwner() && k.claude && k.claude.status === 'working' ? '<span class="bd-claude" title="Claude at home is working on this">🖥…</span>' : '') +
+        (isOwner() && k.claude && k.claude.status === 'waiting_ok' && !k.claude.approvedAt ? '<span class="bd-claude ask" title="Built — waiting for your OK">🖥 OK?</span>' : '') +
         '<span class="bd-people">' + (k.assignees || []).map(a =>
           '<span class="bd-face" title="' + esc(nameOn(a)) + '">' + esc(initials(nameOn(a))) + '</span>').join('') + '</span>' +
       '</div>' +
@@ -618,11 +622,40 @@
 
   // ------------------------------------------------- Claude on the cards
   //
-  // Every hour from 7 am to 7 pm the server has Claude look at new cards and do
-  // the ones it can by itself (research, writing, emails left in Gmail Drafts
-  // -- never sent). What it did is kept on the card as `claude`. Only the
-  // owner sees this and steers it: the work can name customers and prices.
+  // Two Claudes work the cards. The server does it every hour from 7 am to
+  // 7 pm (research, writing, emails left in Gmail Drafts -- never sent). When
+  // the owner leaves the computer at home on, Claude there checks every 20
+  // minutes instead and can do more: websites, documents, and changes to Job
+  // Hub itself -- which it builds and then waits for "Put it live". The
+  // computer says it is awake in settings/homeComputer; while it is, the
+  // server leaves the cards to it. What either did is kept on the card as
+  // `claude` (`by: 'computer'` for the one at home). Only the owner sees this
+  // and steers it: the work can name customers and prices.
   const MACHINE_BOARD = 'maintenance';
+  const COMPUTER_AWAKE_MIN = 45;
+
+  // When the computer at home last checked in. Read now and then rather than
+  // watched: it changes every 20 minutes and only the owner's screen shows it.
+  let homeComputer = null, homeComputerAt = 0;
+  function computerAwake() {
+    const t = homeComputer && Date.parse(homeComputer.lastSeenAt || '');
+    return !!t && Date.now() - t < COMPUTER_AWAKE_MIN * 60000;
+  }
+  function refreshComputer() {
+    if (!isOwner() || !window.YDDb || Date.now() - homeComputerAt < 60000) return;
+    homeComputerAt = Date.now();
+    Promise.resolve(window.YDDb.get('settings', 'homeComputer'))
+      .then(d => { homeComputer = d; redrawIfVisible(); })
+      .catch(() => {});
+  }
+  function computerLine() {
+    if (!isOwner() || !homeComputer || !homeComputer.lastSeenAt) return '';
+    const t = new Date(homeComputer.lastSeenAt);
+    const when = t.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return '<div class="bd-computer' + (computerAwake() ? ' on' : '') + '">🖥 ' +
+      (computerAwake() ? 'Computer at home is on — last checked the cards ' : 'Computer at home is off — last on ') +
+      esc(when) + '</div>';
+  }
 
   function claudeHtml(board, k) {
     if (!isOwner() || board.virtual || board.id === MACHINE_BOARD || k.auto) return '';
@@ -636,6 +669,7 @@
     }
     if (!c) {
       return head + '<div class="cl-box muted">' + (finished ? 'Done — Claude does not look at finished cards.'
+        : computerAwake() ? 'Claude on the computer at home looks at new cards every 20 minutes and does the ones it can.'
         : 'Claude looks at new cards every hour from 7 am to 7 pm and does the ones it can by itself.') +
         '<div class="field-actions">' +
           (finished ? '' : '<button class="btn btn-sm btn-filled" onclick="claudeNow()">🤖 Ask Claude now</button>') +
@@ -643,8 +677,16 @@
         '</div></div>';
     }
     const when = c.at ? new Date(c.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
-    const title = c.status === 'done' ? '🤖 Claude did this — check it'
-      : c.status === 'needs_info' ? '🤖 Claude needs something from you'
+    const who = c.by === 'computer' ? '🖥 Claude at home' : '🤖 Claude';
+    if (c.status === 'working') {
+      return head + '<div class="cl-box working"><div class="cl-title">' + who + ' is working on this' +
+        (when ? ' <span class="muted">· since ' + esc(when) + '</span>' : '') + '</div>' +
+        '<div class="hint">What it did shows here when it has finished.</div></div>';
+    }
+    const title = c.status === 'done' ? who + ' did this — check it'
+      : c.status === 'needs_info' ? who + ' needs something from you'
+      : c.status === 'waiting_ok' ? (c.approvedAt ? '🖥 Going live on the next check (within 20 minutes)'
+        : '🖥 Built — waiting for your OK to put it live')
       : '🤖 Not one Claude can do';
     return head + '<div class="cl-box ' + esc(c.status || '') + '">' +
       '<div class="cl-title">' + title + (when ? ' <span class="muted">· ' + esc(when) + '</span>' : '') + '</div>' +
@@ -653,8 +695,11 @@
       ((c.drafts || []).length ? '<div class="cl-drafts">' + c.drafts.map(d =>
         '<a class="btn btn-sm" href="' + esc(safeLink(d.link)) + '" target="_blank" rel="noopener">✉️ Draft to ' +
         esc(d.to || '') + '</a>').join('') + '</div>' : '') +
-      (c.status === 'needs_info' ? '<div class="hint">Add what it needs to the card (Edit → Notes) and it looks again within the hour.</div>' : '') +
+      (c.status === 'needs_info' ? '<div class="hint">Add what it needs to the card (Edit → Notes) and it looks again ' +
+        (computerAwake() ? 'within 20 minutes' : 'within the hour') + '.</div>' : '') +
       '<div class="field-actions">' +
+        (c.status === 'waiting_ok' && !c.approvedAt
+          ? '<button class="btn btn-sm btn-filled" onclick="claudeApprove()">✅ Put it live</button>' : '') +
         '<button class="btn btn-sm" onclick="claudeAgain()">Ask Claude again</button>' +
         '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button>' +
       '</div></div>';
@@ -674,6 +719,16 @@
     writeCard(openCard.boardId, openCard.cardId, patch);
     return k;
   }
+  // A change Claude at home built goes live only on the owner's say-so. The
+  // whole record is written back, approval added: the save merges, and a
+  // record written in pieces could keep a stale field.
+  window.claudeApprove = function () {
+    const k = openCard && (cards[openCard.boardId] || {})[openCard.cardId];
+    if (!k || !k.claude || k.claude.status !== 'waiting_ok') return;
+    if (!confirm('Put this change live for everyone using Job Hub?')) return;
+    claudePatch({ claude: Object.assign({}, k.claude, { approvedAt: nowIso(), approvedBy: myName() }) });
+    showToast('It goes live on the next check — within 20 minutes');
+  };
   window.claudeAllow = function (yes) {
     claudePatch({ noClaude: !yes });
     showToast(yes ? 'Claude will look at this card' : 'Claude will leave this card alone');
