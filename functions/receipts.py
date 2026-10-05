@@ -63,6 +63,8 @@ LOCK_SECONDS = 15 * 60      # a run older than this is assumed to have died
 # arrived after `since` (settings/receipts): Jonah had already entered every
 # purchase in his inbox when this started, so it reads new mail only.
 SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
+          "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+card@") + " "
+          "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+crew@") + " "
           "{category:purchases filename:pdf "
           "subject:(receipt OR invoice OR order OR purchase OR payment OR paid OR bill OR "
           "\"your order\" OR confirmation OR delivered OR shipped)}")
@@ -135,6 +137,10 @@ the bank's own) from the business's bank account (Heartland Bank). Those are pay
 Jonah's crew: payee is the person's name exactly as shown, vendor is the bank, total is the \
 amount sent, order_number is the confirmation number, whose is "business", items stay empty.
 - payee: for person_payment only, the person paid; "" for everything else.
+- ready_for_pickup: doc_type for an order waiting at a store to be picked up, including \
+"still waiting" reminders. pickup_location: the store (branch name and address if shown); \
+pickup_by: the last day to collect it, YYYY-MM-DD, or "". Both "" for everything else. List the \
+order's items as usual if the email shows them.
 - paid: true when it says paid, charged or receipt; false for an invoice or bill still owed.
 - deliver_to: the delivery or job-site address if one is given, else "". job_hint: any job \
 name, PO, customer name or note on the order that says what it is for, else "".
@@ -147,13 +153,17 @@ RECEIPT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": ["is_purchase", "whose", "doc_type", "kind", "vendor", "order_number", "date",
-                 "items", "tax", "total", "paid", "deliver_to", "job_hint", "summary", "payee"],
+                 "items", "tax", "total", "paid", "deliver_to", "job_hint", "summary", "payee",
+                 "pickup_location", "pickup_by"],
     "properties": {
         "is_purchase": {"type": "boolean"},
         "whose": {"type": "string", "enum": ["business", "personal", "unsure"]},
         "doc_type": {"type": "string", "enum": ["receipt", "invoice", "order_confirmation",
-                                                "shipping_notice", "refund", "person_payment", "other"]},
+                                                "shipping_notice", "ready_for_pickup", "refund",
+                                                "person_payment", "other"]},
         "payee": {"type": "string"},
+        "pickup_location": {"type": "string"},
+        "pickup_by": {"type": "string"},
         "kind": {"type": "string", "enum": KINDS},
         "vendor": {"type": "string"},
         "order_number": {"type": "string"},
@@ -648,6 +658,139 @@ def _same_bill(db, f):
     return None
 
 
+# ---------------------------------------------------------------- cards from email
+#
+# Two kinds, both plain code (no Claude call of their own):
+#   - an order READY FOR PICKUP at a store becomes a card on the Pickups
+#     board. The pickup facts come from the read the receipt already gets.
+#     One card per store + order number: the store's reminders add to it.
+#   - an email Jonah FORWARDS to jonahlinfield+card@ (My to-dos) or
+#     jonahlinfield+crew@ (Crew tasks) becomes a card with the email's text,
+#     the way Trello does it.
+
+PICKUPS = "pickups"
+DEFAULT_LABELS = [
+    {"id": "crew", "name": "Crew", "color": "#2f8f5b"},
+    {"id": "urgent", "name": "Urgent", "color": "#d64545"},
+    {"id": "waiting", "name": "Waiting", "color": "#e0a526"},
+    {"id": "materials", "name": "Materials", "color": "#e07b24"},
+    {"id": "equipment", "name": "Equipment", "color": "#2f6fd6"},
+    {"id": "office", "name": "Office", "color": "#8e5bc7"},
+]
+
+
+def _board(db, board_id):
+    """A board's record, making the Pickups board the first time it is
+    needed. Other boards are never made here: a card for one that is gone
+    goes to the owner's own board instead."""
+    ref = db.collection("boards").document(board_id)
+    snap = ref.get()
+    if snap.exists:
+        return board_id, snap.to_dict() or {}
+    if board_id == PICKUPS:
+        now = dg._now().isoformat()
+        board = {"name": "Pickups", "color": "#e07b24", "order": 3, "visibleTo": [],
+                 "columns": [{"id": "pk0", "name": "Ready to pick up"}, {"id": "pk1", "name": "Picked up"}],
+                 "labels": DEFAULT_LABELS, "createdAt": now, "updatedAt": now}
+        ref.set(board)
+        return board_id, board
+    if board_id != "todo":
+        return _board(db, "todo")
+    return None, None
+
+
+def _new_card(board, title, notes, **more):
+    now = dg._now().isoformat()
+    col = (board.get("columns") or [{"id": ""}])[0]["id"]
+    card = {"title": title[:200], "column": col, "order": int(time.time() * 1000), "due": None,
+            "labels": [], "color": None, "assignees": [], "jobId": None, "jobName": None, "jobNum": None,
+            "notes": notes[:5000], "checklist": [], "doneAt": None,
+            "createdAt": now, "createdBy": "Job Hub (email)", "updatedAt": now, "updatedBy": "Job Hub (email)"}
+    card.update(more)
+    return card
+
+
+def pickup_card(db, m, got, jobs):
+    """Make (or add a reminder to) the Pickups card for an order waiting at a
+    store. Returns the card id, or None when there is nowhere to put it."""
+    board_id, board = _board(db, PICKUPS)
+    if not board_id:
+        return None
+    vendor = (got.get("vendor") or "").strip() or "Store"
+    order = (got.get("order_number") or "").strip()
+    key = "%s|%s" % (vendor_key(vendor), re.sub(r"[^a-z0-9]", "", order.lower()) or "msg " + m["id"])
+    cid = "pk" + hashlib.sha1(key.encode()).hexdigest()[:18]
+    ref = db.collection("boards").document(board_id).collection("cards").document(cid)
+    if ref.get().exists:
+        # A reminder for an order already on the board: noted, nothing new.
+        ref.update({"pickupReminders": firestore.Increment(1), "pickupMail": firestore.ArrayUnion([m["id"]])})
+        return cid
+    where = (got.get("pickup_location") or "").strip()
+    by = got.get("pickup_by") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("pickup_by") or "") else None
+    items = [it for it in (got.get("items") or []) if (it.get("name") or "").strip()]
+    total = _cents(got.get("total"))
+    notes = ["Store: " + (where or vendor)]
+    if order:
+        notes.append("Order #: " + order)
+    if by:
+        notes.append("Pick up by: " + by)
+    if total:
+        notes.append("Total: $%.2f" % (total / 100))
+    notes = "\n".join(notes + ["", "Email: " + gmail_link(m["threadId"])])
+    sug = suggest_job(jobs, got.get("deliver_to") or "", got.get("job_hint") or "")
+    job = jobs.get(sug["jobId"]) if sug else None
+    card = _new_card(
+        board, "Pick up %s order%s" % (vendor, (" #" + order) if order else ""), notes,
+        due=by, labels=["crew", "materials"], noClaude=True,
+        checklist=[{"id": "ckp%d" % i, "text": ("%s × %s" % (_qty(it.get("qty")), it["name"].strip())
+                                                  if it.get("qty") else it["name"].strip())[:200],
+                    "done": False, "doneBy": None} for i, it in enumerate(items[:40])],
+        jobId=sug["jobId"] if job else None,
+        jobName=(job.get("customerName") or "Untitled job") if job else None,
+        jobNum=(str(job.get("estimateNumber") or "").strip() or None) if job else None,
+        pickupMail=[m["id"]], pickupReminders=0, source="pickup")
+    ref.set(card)
+    return cid
+
+
+def _qty(q):
+    return ("%g" % q) if isinstance(q, (int, float)) else str(q)
+
+
+FWD_PREFIX = re.compile(r"^\s*((fwd?|fw)\s*:\s*)+", re.I)
+
+
+def forward_query(since_epoch):
+    card = dg.OWNER_EMAIL.replace("@", "+card@")
+    crew = dg.OWNER_EMAIL.replace("@", "+crew@")
+    floor = int(time.time()) - LOOK_BACK_DAYS * 86400
+    return "after:%d {deliveredto:%s deliveredto:%s to:%s to:%s}" % (
+        max(int(since_epoch or 0), floor), card, crew, card, crew)
+
+
+def forwarded_cards(db, since_epoch):
+    """Every email forwarded to +card / +crew since the start date becomes a
+    card, once. Returns how many were made this run."""
+    ids = _list_ids(forward_query(since_epoch))
+    if not ids:
+        return 0
+    seen = {s.id for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
+    made = 0
+    for m in _open_all([i for i in ids if i not in seen]):
+        to = (m["to"] or "").lower()
+        board_id, board = _board(db, "crew" if "+crew@" in to else "todo")
+        if not board_id:
+            continue
+        title = FWD_PREFIX.sub("", m["subject"] or "").strip() or "Forwarded email"
+        notes = (m["text"] or "").strip()[:4000] + "\n\nEmail: " + gmail_link(m["threadId"])
+        cid = "em" + hashlib.sha1(m["id"].encode()).hexdigest()[:18]
+        db.collection("boards").document(board_id).collection("cards").document(cid).set(
+            _new_card(board, title, notes, source="email"))
+        _seen(db, m["id"], "card", cardId=cid, boardId=board_id)
+        made += 1
+    return made
+
+
 def _jobs(db):
     return {s.id: (s.to_dict() or {}) for s in db.collection("jobs").stream()}
 
@@ -675,8 +818,8 @@ def run(client, manual=False):
     state = db.collection("settings").document("receipts")
     if not _claim(db):
         return {"busy": True}
-    report = {"looked": 0, "new": 0, "added": 0, "paychecks": 0, "personal": 0, "notReceipts": 0,
-              "waiting": 0, "errors": 0}
+    report = {"looked": 0, "new": 0, "added": 0, "paychecks": 0, "personal": 0, "pickups": 0, "cards": 0,
+              "notReceipts": 0, "waiting": 0, "errors": 0}
     people = None      # user records, read only if a paycheck turns up
     needs_permission = False
     try:
@@ -691,6 +834,13 @@ def run(client, manual=False):
         if since_epoch is None:
             since_epoch = time.time()
             state.set({"since": dg._now().isoformat()}, merge=True)
+        # Emails Jonah forwarded to make cards: plain code, no Claude.
+        try:
+            report["cards"] = forwarded_cards(db, since_epoch)
+        except NeedsPermission:
+            raise
+        except Exception as e:      # noqa: BLE001 -- receipts still run
+            print("receipts: forwarded cards failed:", e)
         ids = _list_ids(search_for(since_epoch))
         done = {s.id: (s.to_dict() or {})
                 for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
@@ -755,6 +905,12 @@ def run(client, manual=False):
                     report["errors"] += 1
                     continue
                 try:
+                    if got.get("doc_type") == "ready_for_pickup":
+                        # A card for whoever goes to get it. The order itself
+                        # still counts as a receipt below (same order #, so
+                        # it joins the receipt the order already made).
+                        if pickup_card(db, m, got, jobs):
+                            report["pickups"] += 1
                     if got.get("doc_type") == "person_payment":
                         # A paycheck, not a receipt: filed for the Clock tab.
                         if people is None:
