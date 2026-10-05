@@ -1,4 +1,4 @@
-// Receipts to sort -- at the top of Supplies.
+// Receipts -- a tab of its own: the ones to sort, then every one so far.
 //
 // The server reads the owner's email every half hour (functions/receipts.py)
 // and writes each purchase it finds to receipts/{id}: the store, the date,
@@ -244,11 +244,6 @@
     redraw(true);
   };
 
-  window.rcToggle = function (which) {
-    const d = el(which);
-    if (d) d.hidden = !d.hidden;
-  };
-
   async function ask(path) {
     const user = me();
     if (!user) throw new Error('Not signed in');
@@ -369,10 +364,22 @@
     '</div>';
   }
 
-  function rowHtml(r, extra) {
+  // One line in All receipts: what it was, when, what it came to, and where
+  // it went -- the jobs it was put on, or why it was set aside.
+  function rowHtml(r) {
+    const rid = safeId(r.id);
+    const where = r.status === 'skipped'
+      ? '<span class="rc-tag">' + esc(r.skippedBy === 'claude' ? 'Personal (Claude)' : (WHY[r.skipWhy] || 'Set aside')) + '</span>'
+      : r.status === 'new' ? '<span class="rc-tag rc-owed">To sort</span>' : '';
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
-      '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
-      esc(r.summary || '') + '</span><span class="rc-row-amt">' + money(r.totalCents) + '</span>' + extra + '</div>';
+        '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
+        esc(r.summary || '') + '</span>' + where +
+        '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
+        (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
+        (r.status === 'skipped' && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
+        (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')" title="Delete">🗑</button>' : '') +
+      '</div>' +
+      ((r.splits || []).length ? '<div class="rc-row-splits">' + splitsHtml(rid, r) + '</div>' : '');
   }
 
   function stateHtml() {
@@ -387,21 +394,37 @@
     return when ? '<span class="muted">Email last checked ' + esc(when) + '</span>' : '';
   }
 
+  const byNewest = (a, b) => String(b.date || '').localeCompare(String(a.date || '')) ||
+    String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  function allReceipts() {
+    return Object.keys(receipts).map(id => Object.assign({ id }, receipts[id]));
+  }
+
+  // The count on the tab, and a dot on More for a phone, where Receipts sits
+  // behind More.
+  function badges(open) {
+    const c = el('rcTabCount');
+    if (c) c.textContent = open ? String(open) : '';
+    const more = el('tabMore');
+    if (more) more.toggleAttribute('data-dot', open > 0);
+    // What More says under "Receipts" when it is opened.
+    if (typeof TAB_HINT === 'object') {
+      TAB_HINT.receipts = open ? '🟡 ' + open + ' to sort' : 'Purchases from your email — put each on its job';
+    }
+  }
+
   function render() {
-    const sec = el('rcSection');
+    const sec = el('rcSection'), hist = el('rcHistorySection'), tab = el('tabReceipts');
     if (!sec) return;
     const on = !!(window.YDAuth && window.YDAuth.mode === 'cloud' && window.YDAuth.user) && sees();
-    sec.hidden = !on;
-    if (!on) return;
+    sec.hidden = hist.hidden = !on;
+    if (tab) tab.hidden = !on;
+    if (!on) { badges(0); return; }
 
-    const all = Object.keys(receipts).map(id => Object.assign({ id }, receipts[id]));
-    const byNewest = (a, b) => String(b.date || '').localeCompare(String(a.date || '')) ||
-      String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    const all = allReceipts();
     const open = all.filter(r => r.status === 'new').sort(byNewest);
-    const aside = all.filter(r => r.status === 'skipped').sort(byNewest);
-    const cutoff = localYMD(new Date(Date.now() - 45 * 864e5));
-    const sorted = all.filter(r => r.status === 'done' && String(r.date || '') >= cutoff).sort(byNewest);
     const jobs = jobsList();
+    badges(open.length);
 
     el('rcBadge').textContent = open.length ? open.length + ' to sort' : '';
     el('rcBar').innerHTML =
@@ -410,38 +433,80 @@
     el('rcList').innerHTML = !loaded ? '<p class="empty-msg">Loading receipts…</p>'
       : open.length ? open.map(r => cardHtml(r, jobs)).join('')
       : '<p class="empty-msg">Nothing to sort. Receipts that arrive by email show up here by themselves.</p>';
+    renderHistory();
+  }
 
-    el('rcMore').innerHTML =
-      (sorted.length ? '<button class="rc-more-btn" onclick="rcToggle(\'rcSorted\')">Sorted lately (' + sorted.length + ')</button>' +
-        '<div id="rcSorted" hidden>' + sorted.map(r => rowHtml(r, '') +
-          '<div class="rc-row-splits">' + splitsHtml(safeId(r.id), r) + '</div>').join('') + '</div>' : '') +
-      (aside.length ? '<button class="rc-more-btn" onclick="rcToggle(\'rcAside\')">Set aside (' + aside.length + ')</button>' +
-        '<div id="rcAside" hidden>' +
-          (owner() ? '<div class="rc-bar"><button class="btn btn-sm rc-del" onclick="rcDeleteAside()">🗑 Delete all ' +
-            aside.length + ' set aside</button></div>' : '') +
-          aside.map(r => rowHtml(r,
-          '<span class="rc-tag">' + esc(r.skippedBy === 'claude' ? 'Personal (Claude)' : (WHY[r.skipWhy] || 'Set aside')) + '</span>' +
-          (sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + safeId(r.id) + '\')">Put back</button>' : '') +
-          (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + safeId(r.id) + '\')" title="Delete">🗑</button>' : '')) +
-          ((r.splits || []).length ? '<div class="rc-row-splits">' + splitsHtml(safeId(r.id), r) + '</div>' : '')).join('') +
-        '</div>' : '');
+  // ------------------------------------------------------------ All receipts
+
+  const VIEWS = { all: 'All', done: 'Sorted', skipped: 'Set aside' };
+  let view = 'all';
+  window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
+  // Typing in the search box redraws only the list under it, so the box keeps
+  // its focus and what was typed.
+  window.rcSearchNow = function () { renderHistory(); };
+
+  function matches(r, words) {
+    if (!words.length) return true;
+    const hay = [r.vendor, r.orderNo, r.summary, r.date,
+      (r.lines || []).map(l => l.name + ' ' + (l.itemNo || '')).join(' '),
+      (r.splits || []).map(x => x.jobName + ' ' + (x.est || '')).join(' ')].join(' ').toLowerCase();
+    return words.every(w => hay.indexOf(w) !== -1);
+  }
+
+  function renderHistory() {
+    const wrap = el('rcHistory');
+    if (!wrap) return;
+    const words = String((el('rcSearch') || {}).value || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const every = allReceipts().filter(r => r.status !== 'new');
+    const shown = every.filter(r => (view === 'all' || r.status === view) && matches(r, words)).sort(byNewest);
+    const aside = every.filter(r => r.status === 'skipped');
+    el('rcHistBadge').textContent = every.length ? String(every.length) : '';
+    el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
+      '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') + '" onclick="rcView(\'' + v + '\')">' +
+      VIEWS[v] + '</button>').join('') +
+      (view === 'skipped' && aside.length && owner()
+        ? '<button class="btn btn-sm rc-del" onclick="rcDeleteAside()">🗑 Delete all ' + aside.length + ' set aside</button>' : '');
+
+    if (!shown.length) {
+      wrap.innerHTML = '<p class="empty-msg">' + (words.length ? 'Nothing matches.' : 'Nothing here yet.') + '</p>';
+      return;
+    }
+    // By month, newest first, each with what it came to.
+    const months = [];
+    shown.slice(0, 300).forEach(r => {
+      const key = String(r.date || '').slice(0, 7);
+      let m = months[months.length - 1];
+      if (!m || m.key !== key) { m = { key, rows: [], cents: 0 }; months.push(m); }
+      m.rows.push(r); m.cents += r.totalCents || 0;
+    });
+    const label = key => {
+      const d = new Date(key + '-01T12:00:00');
+      return isNaN(d) ? 'No date' : d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    };
+    wrap.innerHTML = months.map(m =>
+      '<div class="rc-month"><span>' + esc(label(m.key)) + '</span><span>' + m.rows.length + ' · ' +
+        money(m.cents) + '</span></div>' + m.rows.map(rowHtml).join('')).join('') +
+      (shown.length > 300 ? '<p class="empty-msg">Showing the newest 300 — search to find older ones.</p>' : '');
   }
 
   // A snapshot arriving while a job is being chosen would rebuild the list
   // under the person's finger and lose what they typed into the picker. Hold
   // it until they move on.
   function redraw(force) {
-    const p = el('panel-supplies');
-    if (!p || !p.classList.contains('active')) { deferred = true; return; }
+    const p = el('panel-receipts');
+    if (!p || !p.classList.contains('active')) {
+      // Off screen, only the counts on the tab and on More need to be right.
+      deferred = true;
+      badges(Object.values(receipts).filter(r => r.status === 'new').length);
+      return;
+    }
     const sec = el('rcSection');
     if (!force && sec && sec.contains(document.activeElement) && document.activeElement !== document.body) {
       deferred = true;
       return;
     }
     deferred = false;
-    const keep = ['rcSorted', 'rcAside'].filter(id => el(id) && !el(id).hidden);
     render();
-    keep.forEach(id => { if (el(id)) el(id).hidden = false; });
   }
   document.addEventListener('focusout', () => {
     if (deferred) setTimeout(() => {
@@ -476,7 +541,7 @@
     if (window.YDAuth && window.YDAuth.isOwner) loadState().then(() => redraw());
   }
 
-  // Opening Supplies also re-reads when email was last checked: the half-
+  // Opening Receipts also re-reads when email was last checked: the half-
   // hourly run may have changed it (switched on, say) since the app opened.
   window.YDReceipts = {
     render: () => {

@@ -68,6 +68,7 @@
     <button class="tab-btn active" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
+    <button class="tab-btn" id="tabReceipts" hidden onclick="switchTab('receipts')"><span class="tab-icon">🧾</span>Receipts<span class="tab-count" id="rcTabCount"></span></button>
     <button class="tab-btn" id="tabSnow" onclick="switchTab('snow')"><span class="tab-icon">❄️</span>Snow</button>
     <button class="tab-btn" id="tabClock" hidden onclick="switchTab('clock')"><span class="tab-icon">⏱️</span>Clock</button>
     <button class="tab-btn" id="tabCalendar" hidden onclick="switchTab('calendar')"><span class="tab-icon">📅</span>Calendar</button>
@@ -498,20 +499,6 @@
 
   <!-- ============ TAB: SUPPLIES ============ -->
   <div class="tab-panel" id="panel-supplies">
-    <!-- Purchases read out of the owner's email, waiting to be put against a
-         job (receipts.js). Hidden from anyone who cannot see jobs. -->
-    <div class="section" id="rcSection" hidden>
-      <div class="section-head">
-        <span class="section-title">Receipts to sort</span>
-        <span class="section-badge accent" id="rcBadge"></span>
-      </div>
-      <div class="section-body">
-        <div class="rc-bar" id="rcBar"></div>
-        <div id="rcList"></div>
-        <div class="rc-more" id="rcMore"></div>
-      </div>
-    </div>
-
     <div class="section">
       <div class="section-head">
         <span class="section-title">Supplies — where to get it</span>
@@ -541,6 +528,37 @@
         </div>
         <div class="dash-totals" id="matDashTotals"></div>
         <div id="matDashCategoriesWrap"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ TAB: RECEIPTS ============ -->
+  <!-- Purchases the server reads out of the owner's email (receipts.js):
+       the ones waiting to be put against a job, then every one so far.
+       Hidden from anyone who cannot see jobs. -->
+  <div class="tab-panel" id="panel-receipts">
+    <div class="section" id="rcSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Receipts to sort</span>
+        <span class="section-badge accent" id="rcBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="rc-bar" id="rcBar"></div>
+        <div id="rcList"></div>
+      </div>
+    </div>
+
+    <div class="section" id="rcHistorySection" hidden>
+      <div class="section-head">
+        <span class="section-title">All receipts</span>
+        <span class="section-badge" id="rcHistBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="filter-bar">
+          <input id="rcSearch" placeholder="Search store, order #, item, job…" oninput="rcSearchNow()">
+        </div>
+        <div class="rc-bar" id="rcHistBar"></div>
+        <div id="rcHistory"></div>
       </div>
     </div>
   </div>

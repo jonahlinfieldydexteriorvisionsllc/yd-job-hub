@@ -1663,3 +1663,18 @@
   .cl-box.waiting_ok { border-color:#efd59c; background:color-mix(in srgb, #e0a526 9%, var(--surface)); }
   .rc-del { color:var(--neg); border-color:var(--neg-soft); }
   .rc-del:hover { background:var(--neg-soft); }
+
+  /* ---- the Receipts tab ---- */
+  .tab-count:empty { display:none; }
+  .tab-count { display:inline-block; margin-left:5px; min-width:17px; padding:1px 5px; border-radius:9px;
+    background:var(--accent); color:#3a2a08; font-size:10px; letter-spacing:0; vertical-align:1px; }
+  .tab-more { position:relative; }
+  .tab-more[data-dot]::after { content:""; position:absolute; top:8px; right:calc(50% - 16px); width:9px; height:9px;
+    border-radius:50%; background:var(--accent); box-shadow:0 0 0 2px var(--brand); }
+  .rc-month { display:flex; justify-content:space-between; margin:16px 0 4px; padding-bottom:4px;
+    border-bottom:2px solid var(--border); font-weight:700; font-size:13px; color:var(--muted); }
+  .rc-month:first-child { margin-top:4px; }
+  @media (max-width:720px) {
+    #tabReceipts { display:none; }
+  }
+  #rcSearch { flex:1 1 100%; }

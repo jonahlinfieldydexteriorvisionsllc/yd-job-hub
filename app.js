@@ -438,7 +438,7 @@ function tabButtonId(name) {
   return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
     dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
-    supplies: 'tabSupplies', matdash: 'tabSupplies' }[name] || '';
+    supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts' }[name] || '';
 }
 // The materials half of Supplies, hidden from crew.
 function matSectionHidden() {
@@ -518,14 +518,15 @@ function closeOnTapOutside(id) {
 // and Supplies beside it, All Jobs on the far right. Materials used to be a
 // tab of its own; it is now the second half of Supplies, beside the suppliers
 // it is bought from.
-const TABS = ['job', 'tracking', 'supplies', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
+const TABS = ['job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
 const PHONE_TABS = ['job', 'snow', 'clock', 'calendar', 'dashboard'];
 const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
-  calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies',
+  calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
   equipment: '🚜 Equipment', tracking: '🔨 Tracking',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
 const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
   supplies: 'What we use, where to buy it, and what the season has cost',
+  receipts: 'Purchases from your email — put each on its job',
   equipment: 'What each machine and truck is due for',
   tracking: 'Hours and materials on the job you have open',
   contacts: 'People to ring later' };
@@ -572,7 +573,7 @@ function switchTab(name) {
   if (name === 'calendar' && window.YDCalendar) YDCalendar.render();
   if (name === 'boards' && window.YDBoards) YDBoards.render();
   if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
-  if (name === 'supplies' && window.YDReceipts) YDReceipts.render();
+  if (name === 'receipts' && window.YDReceipts) YDReceipts.render();
 }
 
 // A notification tapped while Job Hub is already open. The service worker
