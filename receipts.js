@@ -442,7 +442,14 @@
     if (window.YDAuth && window.YDAuth.isOwner) loadState().then(() => redraw());
   }
 
-  window.YDReceipts = { render: () => redraw(true) };
+  // Opening Supplies also re-reads when email was last checked: the half-
+  // hourly run may have changed it (switched on, say) since the app opened.
+  window.YDReceipts = {
+    render: () => {
+      redraw(true);
+      if (window.YDAuth && window.YDAuth.isOwner && window.YDDb) loadState().then(() => redraw(true));
+    },
+  };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

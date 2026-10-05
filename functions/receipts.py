@@ -110,7 +110,8 @@ printed: ton, yd, bag, ea, pallet, sq ft, gal.
 ("Holland paver 6x9 charcoal", "Washed 3/4 stone"). Leave out SKU noise; item_number holds it.
 - tax: the sales tax in dollars, 0 if none is shown. total: what was charged in all.
 - date: the purchase or invoice date, YYYY-MM-DD, or "" if none is shown.
-- order_number: the order, invoice or receipt number exactly as printed, or "".
+- order_number: the order, invoice or receipt number exactly as printed, or "". For a \
+payment confirmation, the number of the invoice it pays.
 - vendor: the business that sold it ("Home Depot", "Menards", "the stone yard").
 - whose: "personal" for things clearly for a household (groceries, clothes, entertainment, \
 personal care, a service at Jonah's own home); "business" for anything a landscaping company \
@@ -375,6 +376,10 @@ def _norm(s):
     return re.sub(r"[^a-z0-9]+", " ", (s or "").lower()).strip()
 
 
+def vendor_key(vendor):
+    return next((w for w in _norm(vendor).split() if w not in ("the", "a", "an")), "")
+
+
 def receipt_id(vendor, order_number, mid):
     """The same order is the same receipt, however many emails say so. With
     no order number there is nothing to join on, so the email is the key.
@@ -382,7 +387,7 @@ def receipt_id(vendor, order_number, mid):
     The store is only the first real word of its name: one store's emails
     call it "The Home Depot", "Home Depot" and "Home Depot Pro", and an order
     number already tells two stores' orders apart."""
-    v = next((w for w in _norm(vendor).split() if w not in ("the", "a", "an")), "")
+    v = vendor_key(vendor)
     o = re.sub(r"[^a-z0-9]", "", (order_number or "").lower())
     key = ("%s|%s" % (v, o)) if v and o else "msg|" + mid
     return "rc" + hashlib.sha1(key.encode()).hexdigest()[:20]
@@ -523,19 +528,29 @@ def _save(db, m, got, jobs):
         "updatedAt": dg._now().isoformat(),
     }
     snap = ref.get()
+    if not snap.exists:
+        twin = _same_bill(db, fields)
+        if twin is not None:
+            ref, snap = twin.reference, twin
     if snap.exists:
         have = snap.to_dict() or {}
         patch = {"mail": firestore.ArrayUnion([mail]), "updatedAt": fields["updatedAt"]}
+        # The bill said what is owed; the payment says it is paid and often
+        # carries the invoice number the bill left out.
+        if fields["orderNo"] and not have.get("orderNo"):
+            patch["orderNo"] = fields["orderNo"]
+        if fields["paid"] and not have.get("paid"):
+            patch["paid"] = True
         # A later email about the same order replaces what we had only while
         # nothing has been sorted, and only when it says more: the delivered
         # notice must not wipe the prices the confirmation carried.
         says_more = (total and not have.get("totalCents")) or \
             (len(lines) > len(have.get("lines") or []) and fields["docType"] != "shipping_notice")
         if not (have.get("splits") or []) and have.get("status") == "new" and says_more:
-            patch.update({k: v for k, v in fields.items() if k != "whose"})
+            patch.update({k: v for k, v in fields.items() if k not in ("whose", "orderNo", "paid")})
             patch["link"] = gmail_link(m["threadId"])
         ref.update(patch)
-        return rid, "added to"
+        return ref.id, "added to"
     personal = fields["whose"] == "personal"
     ref.set(dict(fields, **{
         "status": "skipped" if personal else "new",
@@ -545,6 +560,37 @@ def _save(db, m, got, jobs):
         "createdAt": dg._now().isoformat(), "model": MODEL,
     }))
     return rid, "set aside (personal)" if personal else "new"
+
+
+def _same_bill(db, f):
+    """The unsorted receipt this one is the same cost as, or None.
+
+    A bill and then the receipt for paying it are one cost, but they rarely
+    share an order number: the bill often has none, the payment names the
+    invoice. Same store, same amount, within ten days, and no order numbers
+    that disagree, is the same bill. A monthly bill a month later is not.
+    """
+    if not f["totalCents"]:
+        return None
+    key = vendor_key(f["vendor"])
+    try:
+        day = datetime.date.fromisoformat(f["date"])
+    except ValueError:
+        return None
+    for s in db.collection("receipts").where("status", "==", "new").stream():
+        r = s.to_dict() or {}
+        if vendor_key(r.get("vendor")) != key or r.get("totalCents") != f["totalCents"]:
+            continue
+        if r.get("orderNo") and f["orderNo"] and _norm(r["orderNo"]) != _norm(f["orderNo"]):
+            continue
+        if r.get("splits"):
+            continue
+        try:
+            if abs((datetime.date.fromisoformat(r.get("date") or "") - day).days) <= 10:
+                return s
+        except ValueError:
+            continue
+    return None
 
 
 def _jobs(db):
