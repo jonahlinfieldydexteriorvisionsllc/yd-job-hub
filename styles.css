@@ -1613,3 +1613,44 @@
   .cl-summary { margin-top:4px; font-weight:600; }
   .cl-result { margin-top:8px; white-space:pre-wrap; line-height:1.5; max-height:340px; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 11px; }
   .cl-drafts { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; }
+
+  /* ---- Receipts to sort (receipts.js) ---- */
+  .rc-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; font-size:13px; }
+  .rc-card { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:12px 14px; margin-bottom:12px; }
+  .rc-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .rc-vendor { font-weight:700; font-size:16px; }
+  .rc-tag { font-size:11px; color:var(--muted); padding:2px 8px; border:1px solid var(--border); border-radius:10px; white-space:nowrap; }
+  .rc-owed { color:var(--neg); border-color:var(--neg); }
+  .rc-total { margin-left:auto; font-weight:700; font-size:16px; }
+  .rc-sum { margin-top:4px; font-size:14px; }
+  .rc-note { margin:8px 0; padding:7px 10px; border-radius:8px; font-size:13px; background:color-mix(in srgb, #e0a526 12%, var(--surface)); border:1px solid #efd59c; }
+  html[data-night] .rc-note { border-color:var(--accent-dark); }
+  .rc-suggest { margin-top:8px; font-size:13px; color:var(--muted); }
+  .rc-suggest b { color:var(--text); }
+  .rc-lines { margin-top:8px; border-top:1px solid var(--border); }
+  .rc-line { display:grid; grid-template-columns:28px 1fr auto; align-items:center; gap:6px; padding:7px 0; border-bottom:1px solid var(--border); font-size:14px; cursor:pointer; }
+  .rc-line input { width:18px; height:18px; margin:0; }
+  .rc-line.rc-on-job { color:var(--muted); cursor:default; }
+  .rc-taxrow { cursor:default; color:var(--muted); }
+  .rc-line.rc-plain { grid-template-columns:1fr auto; cursor:default; }
+  .rc-hint { margin-top:8px; font-size:13px; color:var(--muted); }
+  .rc-link { background:none; border:none; padding:6px 0; font:inherit; font-size:13px; font-weight:600; color:var(--brand); text-decoration:underline; cursor:pointer; }
+  html[data-night] .rc-link { color:var(--brand-2); }
+  .rc-lamt { font-weight:600; white-space:nowrap; text-align:right; }
+  .rc-ljob { font-size:12px; color:var(--pos); white-space:nowrap; }
+  .rc-split { display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-top:8px; padding:6px 10px; border-radius:8px; background:var(--pos-soft); font-size:13px; }
+  .rc-assign { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .rc-assign .ssel { flex:1 1 220px; }
+  .rc-foot { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:10px; }
+  .rc-foot a.btn { text-decoration:none; }
+  .rc-skip { width:auto; font-size:13px; }
+  .rc-more { margin-top:4px; }
+  .rc-more-btn { display:block; background:none; border:none; padding:8px 0; font:inherit; font-size:13px; font-weight:700; color:var(--muted); cursor:pointer; }
+  .rc-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid var(--border); font-size:13px; }
+  .rc-row-main { flex:1 1 220px; }
+  .rc-row-amt { font-weight:700; }
+  .rc-row-splits .rc-split { margin:4px 0 8px; }
+  @media (max-width:720px) {
+    .rc-line { font-size:15px; padding:9px 0; }
+    .rc-assign .btn, .rc-foot .btn, .rc-skip { min-height:44px; }
+  }

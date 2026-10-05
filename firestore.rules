@@ -543,6 +543,25 @@ service cloud.firestore {
     }
 
     // ===================================================================
+    // Receipts -- purchases the server reads out of the owner's email
+    // (Admin SDK, not bound by these rules). Whoever may change jobs sorts
+    // them, since sorting writes their lines into jobs -- and may change only
+    // how a receipt is sorted, never what it says it cost.
+    //
+    // receiptMail (which emails have already been read) is the server's
+    // alone and falls to the deny-all below.
+    // ===================================================================
+    match /receipts/{docId} {
+      allow read: if canSee('jobs');
+      allow update: if canChange('jobs')
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['splits', 'status', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy'])
+        && request.resource.data.status in ['new', 'done', 'skipped'];
+      allow create: if false;
+      allow delete: if isOwner();
+    }
+
+    // ===================================================================
     // Anything not matched above is denied.
     // ===================================================================
     match /{document=**} {

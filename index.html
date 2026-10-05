@@ -488,6 +488,20 @@
 
   <!-- ============ TAB: SUPPLIES ============ -->
   <div class="tab-panel" id="panel-supplies">
+    <!-- Purchases read out of the owner's email, waiting to be put against a
+         job (receipts.js). Hidden from anyone who cannot see jobs. -->
+    <div class="section" id="rcSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Receipts to sort</span>
+        <span class="section-badge accent" id="rcBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="rc-bar" id="rcBar"></div>
+        <div id="rcList"></div>
+        <div class="rc-more" id="rcMore"></div>
+      </div>
+    </div>
+
     <div class="section">
       <div class="section-head">
         <span class="section-title">Supplies — where to get it</span>
@@ -840,6 +854,7 @@
 <script src="./boards.js"></script>
 <script src="./calendar.js"></script>
 <script src="./supplies.js"></script>
+<script src="./receipts.js"></script>
 <script src="./notify.js"></script>
 <script src="./forecast.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>

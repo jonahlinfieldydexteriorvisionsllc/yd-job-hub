@@ -572,6 +572,7 @@ function switchTab(name) {
   if (name === 'calendar' && window.YDCalendar) YDCalendar.render();
   if (name === 'boards' && window.YDBoards) YDBoards.render();
   if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
+  if (name === 'supplies' && window.YDReceipts) YDReceipts.render();
 }
 
 // A notification tapped while Job Hub is already open. The service worker

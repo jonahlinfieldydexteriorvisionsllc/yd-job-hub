@@ -413,6 +413,39 @@ def _cards(request, path, headers):
         return (json.dumps({"error": str(e)}), 500, json_headers)
 
 
+# ---------------------------------------------------------------- receipts
+#
+# Receipts read out of the owner's email (receipts.py). The half-hourly look
+# comes from Cloud Scheduler only; "Check email now" comes from the owner, or
+# an admin who may change jobs (sorting receipts writes into jobs).
+
+
+def _receipts(request, path, headers):
+    import receipts
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path == "/receipts/run":
+        if not _from_scheduler(request):
+            return (json.dumps({"error": "not allowed"}), 403, json_headers)
+        manual = False
+    elif path == "/receipts/now":
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            _caller(request, "jobs", "change")
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        manual = True
+    else:
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    try:
+        return (json.dumps({"report": receipts.run(_claude(), manual)}), 200, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("receipts run failed:", e)
+        return (json.dumps({"error": str(e)}), 500, json_headers)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -432,6 +465,8 @@ def claude(request):
         return _digest(request, path, headers)
     if path.startswith("/cards"):
         return _cards(request, path, headers)
+    if path.startswith("/receipts"):
+        return _receipts(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)
