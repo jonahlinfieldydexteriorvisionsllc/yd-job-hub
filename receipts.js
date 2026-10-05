@@ -45,7 +45,8 @@
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', other: 'Other',
   };
-  const WHY = { overhead: 'Shop / overhead', personal: 'Personal', notPurchase: 'Not a purchase' };
+  const WHY = { overhead: 'Shop / overhead', personal: 'Personal', notPurchase: 'Not a purchase',
+    alreadyEntered: 'Already entered' };
 
   const sees = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
   const sorts = () => typeof ydCan === 'function' && ydCan('jobs', 'change');

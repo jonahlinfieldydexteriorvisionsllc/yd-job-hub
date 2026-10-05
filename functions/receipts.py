@@ -7,8 +7,9 @@ Every half hour through the working day (Cloud Scheduler -> /receipts/run),
 and whenever he taps "Check email now" (/receipts/now), this:
 
   1. asks Gmail -- READ-ONLY, through the same domain-wide delegation the
-     summaries are sent with -- for the last two weeks of mail that could be a
-     purchase: receipts, invoices, orders, bills, anything with a PDF;
+     summaries are sent with -- for mail that could be a purchase (receipts,
+     invoices, orders, bills, anything with a PDF) that arrived after the
+     start date in settings/receipts.since -- new mail only;
   2. skips every message it has looked at before (receiptMail/{messageId});
   3. shows Claude the senders and subjects of the new ones all at once and
      keeps those that are a record of buying something -- one cheap call;
@@ -58,11 +59,20 @@ WORKERS = 4                 # emails read at once
 LOCK_SECONDS = 15 * 60      # a run older than this is assumed to have died
 
 # What Gmail is asked for. Deliberately wide -- Claude does the sorting -- but
-# only mail that says it is about money, or carries a PDF.
-SEARCH = ("newer_than:%dd -in:sent -in:drafts -in:chats "
+# only mail that says it is about money, or carries a PDF, and only mail that
+# arrived after `since` (settings/receipts): Jonah had already entered every
+# purchase in his inbox when this started, so it reads new mail only.
+SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
           "{category:purchases filename:pdf "
           "subject:(receipt OR invoice OR order OR purchase OR payment OR paid OR bill OR "
-          "\"your order\" OR confirmation OR delivered OR shipped)}") % LOOK_BACK_DAYS
+          "\"your order\" OR confirmation OR delivered OR shipped)}")
+
+
+def search_for(since_epoch):
+    """The Gmail search for mail since `since_epoch`, never more than
+    LOOK_BACK_DAYS back however long the service was off."""
+    floor = int(time.time()) - LOOK_BACK_DAYS * 86400
+    return SEARCH % max(int(since_epoch or 0), floor)
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
@@ -182,10 +192,10 @@ def _gmail(path, params=None):
     return r.json()
 
 
-def _list_ids():
+def _list_ids(query):
     ids, page = [], None
     while len(ids) < MAX_LIST:
-        params = {"q": SEARCH, "maxResults": 100}
+        params = {"q": query, "maxResults": 100}
         if page:
             params["pageToken"] = page
         d = _gmail("/messages", params)
@@ -623,7 +633,18 @@ def run(client, manual=False):
     report = {"looked": 0, "new": 0, "added": 0, "aside": 0, "notReceipts": 0, "waiting": 0, "errors": 0}
     needs_permission = False
     try:
-        ids = _list_ids()
+        # Where reading starts. Set once -- the first run after it is missing
+        # starts from that moment -- and moved only by hand.
+        st = state.get()
+        since = (st.to_dict() or {}).get("since") if st.exists else None
+        try:
+            since_epoch = datetime.datetime.fromisoformat(str(since)).timestamp() if since else None
+        except ValueError:
+            since_epoch = None
+        if since_epoch is None:
+            since_epoch = time.time()
+            state.set({"since": dg._now().isoformat()}, merge=True)
+        ids = _list_ids(search_for(since_epoch))
         done = {s.id: (s.to_dict() or {})
                 for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
         # Already judged to be a purchase, but not yet read (the run's limit),
