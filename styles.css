@@ -1661,3 +1661,5 @@
   .bd-computer.on { color:var(--text); border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 7%, var(--surface)); }
   .cl-box.working { border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 5%, var(--surface)); }
   .cl-box.waiting_ok { border-color:#efd59c; background:color-mix(in srgb, #e0a526 9%, var(--surface)); }
+  .rc-del { color:var(--neg); border-color:var(--neg-soft); }
+  .rc-del:hover { background:var(--neg-soft); }

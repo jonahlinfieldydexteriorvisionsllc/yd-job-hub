@@ -86,7 +86,8 @@ hardscaping and snow-removal company near Madison, Wisconsin, owned by Jonah Lin
 You are given a numbered list of messages: sender, subject, date, the first words, and \
 attachment names. Keep the ones that are a record of buying or paying for something: a \
 receipt, an invoice or bill from a supplier or service, an order confirmation, a shipped or \
-delivered notice for an order, a payment confirmation, a refund.
+delivered notice for an order, a payment confirmation, a refund — and money sent from the \
+business's bank to a person (a person-to-person payment, Zelle or similar: these are paychecks).
 
 Do not keep: marketing and sales offers, newsletters, quotes or estimates for something not \
 yet bought, statements that only list balances, failed or declined payment notices, review \
@@ -128,7 +129,12 @@ personal care, a service at Jonah's own home); "business" for anything a landsca
 buys or pays for; "unsure" otherwise.
 - is_purchase: false for marketing, quotes or estimates not yet bought, statements of account, \
 failed-payment notices, and anything sent BY YD Exterior Visions to its own customers.
-- doc_type: shipping_notice for "shipped" or "delivered" messages about an order.
+- doc_type: shipping_notice for "shipped" or "delivered" messages about an order. \
+person_payment for money the business SENT to a person — a person-to-person payment (Zelle or \
+the bank's own) from the business's bank account (Heartland Bank). Those are paychecks to \
+Jonah's crew: payee is the person's name exactly as shown, vendor is the bank, total is the \
+amount sent, order_number is the confirmation number, whose is "business", items stay empty.
+- payee: for person_payment only, the person paid; "" for everything else.
 - paid: true when it says paid, charged or receipt; false for an invoice or bill still owed.
 - deliver_to: the delivery or job-site address if one is given, else "". job_hint: any job \
 name, PO, customer name or note on the order that says what it is for, else "".
@@ -141,12 +147,13 @@ RECEIPT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "required": ["is_purchase", "whose", "doc_type", "kind", "vendor", "order_number", "date",
-                 "items", "tax", "total", "paid", "deliver_to", "job_hint", "summary"],
+                 "items", "tax", "total", "paid", "deliver_to", "job_hint", "summary", "payee"],
     "properties": {
         "is_purchase": {"type": "boolean"},
         "whose": {"type": "string", "enum": ["business", "personal", "unsure"]},
         "doc_type": {"type": "string", "enum": ["receipt", "invoice", "order_confirmation",
-                                                "shipping_notice", "refund", "other"]},
+                                                "shipping_notice", "refund", "person_payment", "other"]},
+        "payee": {"type": "string"},
         "kind": {"type": "string", "enum": KINDS},
         "vendor": {"type": "string"},
         "order_number": {"type": "string"},
@@ -514,6 +521,47 @@ def _seen(db, mid, outcome, **extra):
     db.collection("receiptMail").document(mid).set(data, merge=True)
 
 
+def match_crew(people, payee):
+    """The user a payment went to, by name, or "" when it is not clear:
+    the whole name, else first and last name, and only if one person fits."""
+    want = _norm(payee).split()
+    if not want:
+        return ""
+    def fits(name):
+        have = _norm(name).split()
+        return have == want or (len(want) >= 2 and len(have) >= 2
+                                and have[0] == want[0] and have[-1] == want[-1])
+    hits = [uid for uid, u in people.items() if u.get("name") and fits(u["name"])]
+    return hits[0] if len(hits) == 1 else ""
+
+
+def _save_paycheck(db, m, got, people):
+    """Money sent from the business's bank to a person: a paycheck, kept in
+    paychecks/{id} for the Clock tab rather than among the receipts. The
+    bank's confirmation number makes the same payment one record however
+    many emails mention it."""
+    bank = (got.get("vendor") or "").strip()[:80] or "Bank"
+    conf = (got.get("order_number") or "").strip()[:60]
+    pid = "pc" + hashlib.sha1(("%s|%s" % (vendor_key(bank), _norm(conf) or "msg " + m["id"]))
+                              .encode()).hexdigest()[:20]
+    ref = db.collection("paychecks").document(pid)
+    mail = {"id": m["id"], "threadId": m["threadId"], "subject": m["subject"][:300], "at": m["internalDate"]}
+    if ref.get().exists:
+        ref.update({"mail": firestore.ArrayUnion([mail])})
+        return pid
+    payee = (got.get("payee") or "").strip()[:120]
+    date = got.get("date") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("date") or "") else \
+        datetime.datetime.fromtimestamp(m["internalDate"] / 1000, dg.TZ).strftime("%Y-%m-%d")
+    ref.set({
+        "payee": payee, "uid": match_crew(people, payee), "cents": _cents(got.get("total")),
+        "date": date, "bank": bank, "confirmation": conf,
+        "memo": (got.get("job_hint") or got.get("summary") or "").strip()[:200],
+        "mail": [mail], "link": gmail_link(m["threadId"]), "status": "new",
+        "createdAt": dg._now().isoformat(), "model": MODEL,
+    })
+    return pid
+
+
 def _save(db, m, got, jobs):
     """Write (or add to) the receipt for one email. Returns what happened."""
     rid = receipt_id(got.get("vendor"), got.get("order_number"), m["id"])
@@ -561,15 +609,12 @@ def _save(db, m, got, jobs):
             patch["link"] = gmail_link(m["threadId"])
         ref.update(patch)
         return ref.id, "added to"
-    personal = fields["whose"] == "personal"
     ref.set(dict(fields, **{
-        "status": "skipped" if personal else "new",
-        "skipWhy": "personal" if personal else "",
-        "skippedBy": "claude" if personal else "",
+        "status": "new", "skipWhy": "", "skippedBy": "",
         "splits": [], "mail": [mail], "link": gmail_link(m["threadId"]),
         "createdAt": dg._now().isoformat(), "model": MODEL,
     }))
-    return rid, "set aside (personal)" if personal else "new"
+    return rid, "new"
 
 
 def _same_bill(db, f):
@@ -630,7 +675,9 @@ def run(client, manual=False):
     state = db.collection("settings").document("receipts")
     if not _claim(db):
         return {"busy": True}
-    report = {"looked": 0, "new": 0, "added": 0, "aside": 0, "notReceipts": 0, "waiting": 0, "errors": 0}
+    report = {"looked": 0, "new": 0, "added": 0, "paychecks": 0, "personal": 0, "notReceipts": 0,
+              "waiting": 0, "errors": 0}
+    people = None      # user records, read only if a paycheck turns up
     needs_permission = False
     try:
         # Where reading starts. Set once -- the first run after it is missing
@@ -707,11 +754,25 @@ def run(client, manual=False):
                     _seen(db, m["id"], "error", why=err, tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
-                if not got.get("is_purchase"):
-                    _seen(db, m["id"], "not_purchase", subject=m["subject"][:200])
-                    report["notReceipts"] += 1
-                    continue
                 try:
+                    if got.get("doc_type") == "person_payment":
+                        # A paycheck, not a receipt: filed for the Clock tab.
+                        if people is None:
+                            people = {s.id: (s.to_dict() or {}) for s in db.collection("users").stream()}
+                        pid = _save_paycheck(db, m, got, people)
+                        _seen(db, m["id"], "paycheck", paycheckId=pid)
+                        report["paychecks"] += 1
+                        continue
+                    if not got.get("is_purchase"):
+                        _seen(db, m["id"], "not_purchase", subject=m["subject"][:200])
+                        report["notReceipts"] += 1
+                        continue
+                    # Jonah's call: personal purchases take up room in the
+                    # hub for nothing. Noted as read, never written.
+                    if got.get("whose") == "personal":
+                        _seen(db, m["id"], "personal")
+                        report["personal"] += 1
+                        continue
                     rid, what = _save(db, m, got, jobs)
                 except Exception as e:      # noqa: BLE001
                     print("receipts: could not save", m["id"], e)
@@ -719,7 +780,7 @@ def run(client, manual=False):
                     report["errors"] += 1
                     continue
                 _seen(db, m["id"], "receipt", receiptId=rid)
-                report[{"new": "new", "added to": "added"}.get(what, "aside")] += 1
+                report["added" if what == "added to" else "new"] += 1
         return report
     except NeedsPermission as e:
         print("receipts: gmail read not allowed:", e)

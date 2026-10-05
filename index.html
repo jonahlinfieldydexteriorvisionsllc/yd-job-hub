@@ -298,6 +298,16 @@
       </div>
     </div>
 
+    <!-- Paychecks: money sent from the bank to the crew, read out of the
+         owner's email (paychecks.js). Hours, like pay rates. -->
+    <div class="section" id="paySection" hidden>
+      <div class="section-head">
+        <span class="section-title">Paychecks</span>
+        <span class="section-badge" id="payBadge"></span>
+      </div>
+      <div class="section-body" id="payWrap"></div>
+    </div>
+
     <div class="section" id="worklogSection" hidden>
       <div class="section-head">
         <span class="section-title">Work Log</span>
@@ -855,6 +865,7 @@
 <script src="./calendar.js"></script>
 <script src="./supplies.js"></script>
 <script src="./receipts.js"></script>
+<script src="./paychecks.js"></script>
 <script src="./notify.js"></script>
 <script src="./forecast.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>

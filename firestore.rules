@@ -561,6 +561,19 @@ service cloud.firestore {
       allow delete: if isOwner();
     }
 
+    // Paychecks -- money sent from the business's bank to a crew member,
+    // read out of the owner's email by the same server run. Pay is Hours,
+    // like payRates. Only who it was for (and a note) can be changed here;
+    // the amount and date are what the bank said.
+    match /paychecks/{docId} {
+      allow read: if canSee('hours');
+      allow update: if canChange('hours')
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['uid', 'status', 'note', 'updatedAt', 'updatedBy']);
+      allow create: if false;
+      allow delete: if isOwner();
+    }
+
     // ===================================================================
     // Anything not matched above is denied.
     // ===================================================================

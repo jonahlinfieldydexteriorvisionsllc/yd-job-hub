@@ -45,7 +45,7 @@
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', other: 'Other',
   };
-  const WHY = { overhead: 'Shop / overhead', personal: 'Personal', notPurchase: 'Not a purchase',
+  const WHY = { overhead: 'Shop / overhead', personal: 'Personal (deletes it)', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered' };
 
   const sees = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
@@ -197,9 +197,37 @@
     redraw(true);
   };
 
+  // Deleting a receipt only removes it from the hub: the email stays in Gmail,
+  // and the server remembers it has read that email, so it never comes back.
+  // Lines already put on a job stay on the job. The owner's alone (rules).
+  const owner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  function drop(ids) {
+    ids.forEach(id => { delete receipts[id]; delete ticked[id]; delete chosen[id]; delete splitting[id]; });
+    Promise.resolve(window.YDDb.removeMany(ids.map(id => ['receipts', id])))
+      .catch(e => console.warn('[receipts] not deleted:', (e && e.code) || e));
+    redraw(true);
+  }
+  window.rcDelete = function (rid) {
+    const r = receipts[rid];
+    if (!r || !owner()) return;
+    if (!confirm('Delete this ' + (r.vendor || '') + ' receipt from the hub?' +
+      ((r.splits || []).length ? ' Lines already added to jobs stay on the jobs.' : ''))) return;
+    drop([rid]);
+    showToast('Deleted');
+  };
+  window.rcDeleteAside = function () {
+    const ids = Object.keys(receipts).filter(id => receipts[id].status === 'skipped');
+    if (!ids.length || !owner()) return;
+    if (!confirm('Delete all ' + ids.length + ' set-aside receipts from the hub?')) return;
+    drop(ids);
+    showToast(ids.length + ' deleted');
+  };
+
   window.rcSkip = function (rid, why) {
     if (!why || !receipts[rid]) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); redraw(true); return; }
+    // Personal purchases have no business in the hub at all.
+    if (why === 'personal' && owner()) { drop([rid]); showToast('Personal — deleted from the hub'); return; }
     receipts[rid] = Object.assign({}, receipts[rid], { status: 'skipped', skipWhy: why });
     write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
     showToast('Set aside — find it under "Set aside" if that was wrong');
@@ -336,6 +364,7 @@
           '<option value="">' + ((r.splits || []).length ? 'The rest is not a job cost…' : 'Not a job cost…') + '</option>' +
           Object.keys(WHY).map(k => '<option value="' + k + '">' + WHY[k] + '</option>').join('') +
         '</select>' : '') +
+        (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')">🗑 Delete</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -387,9 +416,13 @@
         '<div id="rcSorted" hidden>' + sorted.map(r => rowHtml(r, '') +
           '<div class="rc-row-splits">' + splitsHtml(safeId(r.id), r) + '</div>').join('') + '</div>' : '') +
       (aside.length ? '<button class="rc-more-btn" onclick="rcToggle(\'rcAside\')">Set aside (' + aside.length + ')</button>' +
-        '<div id="rcAside" hidden>' + aside.map(r => rowHtml(r,
+        '<div id="rcAside" hidden>' +
+          (owner() ? '<div class="rc-bar"><button class="btn btn-sm rc-del" onclick="rcDeleteAside()">🗑 Delete all ' +
+            aside.length + ' set aside</button></div>' : '') +
+          aside.map(r => rowHtml(r,
           '<span class="rc-tag">' + esc(r.skippedBy === 'claude' ? 'Personal (Claude)' : (WHY[r.skipWhy] || 'Set aside')) + '</span>' +
-          (sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + safeId(r.id) + '\')">Put back</button>' : '')) +
+          (sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + safeId(r.id) + '\')">Put back</button>' : '') +
+          (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + safeId(r.id) + '\')" title="Delete">🗑</button>' : '')) +
           ((r.splits || []).length ? '<div class="rc-row-splits">' + splitsHtml(safeId(r.id), r) + '</div>' : '')).join('') +
         '</div>' : '');
   }
