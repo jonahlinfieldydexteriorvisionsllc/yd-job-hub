@@ -791,6 +791,69 @@ def forwarded_cards(db, since_epoch):
     return made
 
 
+# ---------------------------------------------------------------- sorting by code
+#
+# Jonah's rule: what code can do is not paid for as a Claude call. Every
+# sender's track record is kept in receiptSenders/{sender}: how many of its
+# emails turned out to be purchases and how many did not. A sender that has
+# only ever sent non-purchases is skipped; one that has only ever sent
+# purchases goes straight to being read; new and mixed senders (a store that
+# sends receipts and adverts) are still sorted by Claude. YD's own estimates
+# and invoices to its customers are skipped by a plain rule.
+
+FREE_MAIL = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com",
+             "me.com", "live.com", "msn.com", "comcast.net", "att.net", "charter.net"}
+OWN_SALES = re.compile(r"\bfrom YD Exterior Visions\b", re.I)
+SKIP_AFTER = 2          # non-purchases, with no purchase ever, before a sender is skipped
+TRUST_AFTER = 2         # purchases, with no non-purchase ever, before skipping the sort
+
+
+def sender_key(from_header):
+    """The sender, as the business behind it: its domain (the last two parts,
+    so order.menards.com and menards.com are one), or the whole address for
+    free mail, where the domain says nothing about who it is."""
+    m = re.search(r"<([^>]+)>", from_header or "")
+    addr = (m.group(1) if m else (from_header or "")).strip().lower()
+    if "@" not in addr:
+        return ""
+    domain = addr.rsplit("@", 1)[1]
+    if domain in FREE_MAIL:
+        return addr.replace("/", "_")[:200]
+    return ".".join(domain.split(".")[-2:]).replace("/", "_")
+
+
+def by_code(m, record):
+    """'skip', 'read', or '' (Claude sorts it)."""
+    if OWN_SALES.search(m.get("subject") or ""):
+        return "skip"
+    r = record or {}
+    yes, no = r.get("purchase", 0), r.get("notPurchase", 0)
+    if no >= SKIP_AFTER and not yes:
+        return "skip"
+    if yes >= TRUST_AFTER and not no:
+        return "read"
+    return ""
+
+
+def _sender_records(db, msgs):
+    keys = sorted({sender_key(m["from"]) for m in msgs} - {""})
+    refs = [db.collection("receiptSenders").document(k) for k in keys]
+    return {s.id: (s.to_dict() or {}) for s in db.get_all(refs) if s.exists} if refs else {}
+
+
+def _tally(db, m, purchase):
+    key = sender_key(m["from"])
+    if not key:
+        return
+    try:
+        db.collection("receiptSenders").document(key).set({
+            ("purchase" if purchase else "notPurchase"): firestore.Increment(1),
+            "lastAt": dg._now().isoformat(), "lastSubject": (m["subject"] or "")[:120],
+        }, merge=True)
+    except Exception as e:      # noqa: BLE001 -- bookkeeping never stops a receipt
+        print("receipts: could not note the sender:", e)
+
+
 def _jobs(db):
     return {s.id: (s.to_dict() or {}) for s in db.collection("jobs").stream()}
 
@@ -819,7 +882,7 @@ def run(client, manual=False):
     if not _claim(db):
         return {"busy": True}
     report = {"looked": 0, "new": 0, "added": 0, "paychecks": 0, "personal": 0, "pickups": 0, "cards": 0,
-              "notReceipts": 0, "waiting": 0, "errors": 0}
+              "notReceipts": 0, "waiting": 0, "errors": 0, "byCode": 0}
     people = None      # user records, read only if a paycheck turns up
     needs_permission = False
     try:
@@ -856,21 +919,36 @@ def run(client, manual=False):
         to_read = _open_all(pending[:allowed])
 
         msgs = _open_all(fresh)
-        if msgs:
+        # Sorted by code first: known senders need no Claude call.
+        records = _sender_records(db, msgs) if msgs else {}
+        ask = []
+        for m in msgs:
+            verdict = by_code(m, records.get(sender_key(m["from"])))
+            if verdict == "skip":
+                _seen(db, m["id"], "not_purchase", subject=m["subject"][:200], byCode=True)
+                report["notReceipts"] += 1
+                report["byCode"] += 1
+            elif verdict == "read":
+                to_read.append(m)
+                report["byCode"] += 1
+            else:
+                ask.append(m)
+        if ask:
             try:
-                keep, used = triage(client, msgs)
+                keep, used = triage(client, ask)
                 _spend(db, day, used, "receiptTriage")
             except (anthropic.APIStatusError, anthropic.APIConnectionError, RuntimeError) as e:
                 # Nothing is marked as looked at, so these are sorted next run;
                 # what was already waiting is still read now.
                 print("receipts: sorting failed:", e)
                 report["errors"] += 1
-                msgs = []
-            for i, m in enumerate(msgs):
+                ask = []
+            for i, m in enumerate(ask):
                 if i in keep:
                     to_read.append(m)
                 else:
                     _seen(db, m["id"], "not_purchase", subject=m["subject"][:200])
+                    _tally(db, m, False)
                     report["notReceipts"] += 1
 
         # Over the limit: remembered as purchases to read, first thing next run.
@@ -904,6 +982,9 @@ def run(client, manual=False):
                     _seen(db, m["id"], "error", why=err, tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
+                # The sender's track record, for sorting its next email by code.
+                _tally(db, m, bool(got.get("is_purchase"))
+                       or got.get("doc_type") in ("person_payment", "ready_for_pickup"))
                 try:
                     if got.get("doc_type") == "ready_for_pickup":
                         # A card for whoever goes to get it. The order itself

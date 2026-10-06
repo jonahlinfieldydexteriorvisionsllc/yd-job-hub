@@ -269,9 +269,10 @@
       else if (rep.needsPermission) showToast('Reading email is not switched on yet');
       else {
         const found = (rep.new || 0) + (rep.added || 0);
-        showToast(found ? found + ' receipt' + (found === 1 ? '' : 's') + ' found'
+        showToast((found ? found + ' receipt' + (found === 1 ? '' : 's') + ' found'
           + (rep.waiting ? ' — ' + rep.waiting + ' more on the next check' : '')
-          : 'No new receipts' + (rep.waiting ? ' yet — ' + rep.waiting + ' waiting for the next check' : ''));
+          : 'No new receipts' + (rep.waiting ? ' yet — ' + rep.waiting + ' waiting for the next check' : ''))
+          + (rep.byCode ? ' · ' + rep.byCode + ' sorted by the app, no Claude' : ''));
       }
     } catch (e) {
       showToast('Could not check email: ' + e.message);
