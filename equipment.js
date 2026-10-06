@@ -297,22 +297,27 @@
       '<div class="eq-loghead">Service history' +
         '<button class="btn btn-sm btn-filled" onclick="addService()">+ Log a service</button>' +
       '</div>' +
+      // A list, not a table: on a phone the table scrolled sideways and its
+      // Edit button sat off the right edge, so Jonah never found it. Now the
+      // whole row is the button.
       (log.length
-        ? '<div class="table-wrap"><table><thead><tr><th>When</th><th>What was done</th>' +
-          '<th>Reading</th><th>Cost</th><th>By</th><th></th></tr></thead><tbody>' +
-          log.map(e =>
-            '<tr><td>' + shortDate(e.at) + '</td>' +
-            '<td class="bold">' + esc(e.what) +
-              (e.kind === 'repair' ? ' <span class="eq-repair">repair</span>' : '') + '</td>' +
-            '<td>' + [e.hours != null ? round1(e.hours) + ' hrs' : '',
-                      e.miles != null ? fmtNum(e.miles) + ' mi' : '']
-                      .filter(Boolean).join(' · ') + '</td>' +
-            '<td>' + (e.costCents ? money(e.costCents) : '—') + '</td>' +
-            '<td>' + esc(e.by || '') + '</td>' +
-            '<td class="eq-log-act"><button class="btn btn-sm" onclick="editService(\'' + safeId(e.id) + '\')">Edit</button>' +
-              '<button class="remove-btn" onclick="removeService(\'' + safeId(e.id) + '\')" ' +
-              'title="Remove">&times;</button></td></tr>').join('') +
-          '</tbody></table></div>'
+        ? '<div class="eq-log">' + log.map(e => {
+            const reading = [e.hours != null ? round1(e.hours) + ' hrs' : '',
+                             e.miles != null ? fmtNum(e.miles) + ' mi' : ''].filter(Boolean).join(' · ');
+            return '<div class="eq-log-row" role="button" tabindex="0" title="Tap to change" ' +
+                'onclick="editService(\'' + safeId(e.id) + '\')" ' +
+                'onkeydown="if(event.key===\'Enter\')editService(\'' + safeId(e.id) + '\')">' +
+              '<span class="eq-log-when">' + shortDate(e.at) + '</span>' +
+              '<span class="eq-log-what"><b>' + esc(e.what) + '</b>' +
+                (e.kind === 'repair' ? ' <span class="eq-repair">repair</span>' : '') +
+                '<span class="eq-log-sub">' + [reading, e.by ? esc(e.by) : ''].filter(Boolean).join(' · ') + '</span>' +
+              '</span>' +
+              '<span class="eq-log-cost">' + (e.costCents ? money(e.costCents) : '') + '</span>' +
+              '<span class="eq-log-edit">Edit ›</span>' +
+              '<button class="remove-btn" onclick="event.stopPropagation();removeService(\'' + safeId(e.id) + '\')" ' +
+                'title="Remove">&times;</button>' +
+            '</div>';
+          }).join('') + '</div>'
         : '<p class="empty-msg">Nothing logged yet.</p>');
   }
 
@@ -503,12 +508,14 @@
         '<div class="field"><span class="label">What was done</span>' +
           '<input id="svWhat" placeholder="e.g. oil and filter, new blades" value="' + has(what) + '"></div>' +
         '<div class="grid g3">' +
-          '<div class="field"><span class="label">' + (e ? 'Hours then' : 'Hours now') + '</span>' +
+          '<div class="field"><span class="label">' + (e ? 'Hours then' : 'Hours now') +
+            (!e && readingWanted(g) === 'hours' ? ' <b class="eq-need">*</b>' : '') + '</span>' +
             '<input id="svHours" inputmode="decimal" value="' + (e ? has(e.hours) : '') + '" placeholder="' +
-            (g.hours != null ? round1(g.hours) : 'optional') + '"></div>' +
-          '<div class="field"><span class="label">' + (e ? 'Miles then' : 'Miles now') + '</span>' +
+            (g.hours != null ? 'last ' + round1(g.hours) : 'optional') + '"></div>' +
+          '<div class="field"><span class="label">' + (e ? 'Miles then' : 'Miles now') +
+            (!e && readingWanted(g) === 'miles' ? ' <b class="eq-need">*</b>' : '') + '</span>' +
             '<input id="svMiles" inputmode="numeric" value="' + (e ? has(e.miles) : '') + '" placeholder="' +
-            (g.miles != null ? fmtNum(g.miles) : 'optional') + '"></div>' +
+            (g.miles != null ? 'last ' + fmtNum(g.miles) : 'optional') + '"></div>' +
           '<div class="field"><span class="label">Who did it</span>' +
             '<input id="svBy" placeholder="you, or the shop" value="' + (e ? has(e.by) : '') + '"></div>' +
         '</div>' +
@@ -527,12 +534,28 @@
 
   window.renderDetail2 = function () { editingEntry = null; fixingIssue = null; renderDetail(); };
 
+  // The reading a new service should come with: miles for a vehicle, hours
+  // for a machine on an hours interval. Jonah wants the count every time a
+  // service is entered -- it is what keeps "next service" right.
+  function readingWanted(g) {
+    if (g.kind === 'vehicle') return 'miles';
+    if (g.intervalHours || g.hours != null) return 'hours';
+    return '';
+  }
+
   window.saveService = function () {
     const g = gear[openId];
     if (!g) return;
     const what = val('svWhat');
     if (!what) { showToast('Say what was done'); return; }
     if (editingEntry) { saveServiceChange(g, what); return; }
+    const want = readingWanted(g);
+    const box = want === 'miles' ? 'svMiles' : want === 'hours' ? 'svHours' : '';
+    if (box && num(box) == null && !confirm('No ' + want + ' reading this time? The next service is worked out from the ' +
+        want + ' — OK to save without it, Cancel to type it in.')) {
+      const b = el(box); if (b) b.focus();
+      return;
+    }
 
     const entry = {
       id: 'sv' + Date.now().toString(36),

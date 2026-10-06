@@ -1680,3 +1680,21 @@
   #rcSearch { flex:1 1 100%; }
   .mat-itemno { font-weight:400; font-size:.85em; white-space:nowrap; }
   .mat-mail { text-decoration:none; margin-left:3px; }
+
+  /* ---- equipment service history as tappable rows (equipment.js) ---- */
+  .eq-log { border-top:1px solid var(--border); }
+  .eq-log-row { display:grid; grid-template-columns:96px 1fr auto auto 32px; align-items:center; gap:8px;
+    padding:10px 4px; border-bottom:1px solid var(--border); cursor:pointer; font-size:14px; }
+  .eq-log-row:hover, .eq-log-row:focus-visible { background:var(--surface-2); }
+  .eq-log-when { color:var(--muted); font-size:13px; white-space:nowrap; }
+  .eq-log-what { min-width:0; }
+  .eq-log-sub { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+  .eq-log-cost { font-weight:700; white-space:nowrap; }
+  .eq-log-edit { color:var(--brand); font-size:12px; font-weight:700; white-space:nowrap; }
+  html[data-night] .eq-log-edit { color:var(--brand-2); }
+  .eq-need { color:var(--neg); }
+  @media (max-width:720px) {
+    .eq-log-row { grid-template-columns:1fr auto 32px; row-gap:2px; min-height:56px; }
+    .eq-log-when { grid-column:1 / -1; font-size:12px; }
+    .eq-log-edit { display:none; }
+  }
