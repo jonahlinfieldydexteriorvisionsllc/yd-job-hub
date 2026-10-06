@@ -427,6 +427,18 @@ def callback(request):
     ref = _db().collection(STATE_COLLECTION).document(state)
     snap = ref.get()
     if not snap.exists:
+        # The same return loaded a second time -- a reload, the back button, or
+        # a browser that fetched the page twice. The first load used the state
+        # up and connected; this one used to say "not recognised", and on
+        # 6 Oct that read as a failed connection when QuickBooks was connected.
+        held = _load_tokens() or {}
+        try:
+            just = _now() - datetime.datetime.fromisoformat(held.get("connectedAt") or "") \
+                < datetime.timedelta(minutes=STATE_MINUTES)
+        except (TypeError, ValueError):
+            just = False
+        if just and held.get("realmId") == realm_id and held.get("refreshToken"):
+            return _closing_page("QuickBooks is connected.", ok=True)
         return _closing_page("That connection attempt was not recognised.", ok=False)
     started = snap.to_dict()
     ref.delete()                            # one use only
