@@ -62,7 +62,9 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // cardColor is the colour its card is given on the Bids and Jobs boards
 // ('' for none, never null -- a null is left out of the save, and the cloud
 // copy, which merges, would keep the old colour).
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor'];
+// followUps (the follow-up emails drafted for a bid) is written from the Bids
+// board the same way, so it rides along with the form too.
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;

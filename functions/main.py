@@ -446,6 +446,46 @@ def _receipts(request, path, headers):
         return (json.dumps({"error": str(e)}), 500, json_headers)
 
 
+# ---------------------------------------------------------------- follow-ups
+#
+# "Write the email" on a bid waiting for an answer (followup.py). The app says
+# which job; the job, and the address the draft goes to, are read here. It
+# writes into nothing but the owner's Drafts, so it is for whoever may change
+# jobs -- the same as the scope of work -- and counts against the daily cap.
+
+
+def _followup(request, path, headers):
+    import followup
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/followup/draft":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request, "jobs", "change")
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    job_id = str((request.get_json(silent=True) or {}).get("jobId") or "")
+    if not job_id or "/" in job_id:
+        return (json.dumps({"error": "which job?"}), 400, json_headers)
+    try:
+        day = _check_and_count_usage(uid)
+    except RuntimeError as e:
+        return (json.dumps({"error": str(e)}), 429, json_headers)
+    try:
+        result, usage = followup.draft(_claude(), job_id)
+    except anthropic.RateLimitError:
+        return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("followup draft failed:", e)
+        return (json.dumps({"error": "The email could not be written. Try again."}), 502, json_headers)
+    if usage is not None:
+        _record_spend(day, "followup", usage)
+    return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -467,6 +507,8 @@ def claude(request):
         return _cards(request, path, headers)
     if path.startswith("/receipts"):
         return _receipts(request, path, headers)
+    if path.startswith("/followup"):
+        return _followup(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

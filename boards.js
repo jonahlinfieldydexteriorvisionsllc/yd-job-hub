@@ -291,8 +291,105 @@
               board.columns[0].id + '\')">+ Add card</button>' : '') +
         '</div>' +
       '</div>' +
+      (board.id === 'bids' ? followUpHtml() : '') +
       '<div class="bd-cols">' + columnsHtml(board) + '</div>';
   }
+
+  // ------------------------------------------------------------- follow up
+  //
+  // Bids waiting on an answer long enough to chase, oldest first, at the top
+  // of the Bids board. Same rule as the summaries (digest.py CHASE_AFTER_DAYS):
+  // Sent for 5 days, or moved to Follow up. "Write the email" has Claude draft
+  // a follow-up from the job into Gmail Drafts -- never sent -- and the draft
+  // is noted on the job (followUps) so the list says when the last one was.
+  const CHASE_AFTER_DAYS = { sent: 5, followUp: 0 };
+  const drafting = {};      // job id -> true while its email is being written
+
+  function toChase() {
+    return jobsList().map(j => {
+      const col = bidColumn(j);
+      const days = daysSince(j.bidStageAt || j.lastModified);
+      return { j, col, days: days || 0 };
+    }).filter(b => b.col in CHASE_AFTER_DAYS && b.days >= CHASE_AFTER_DAYS[b.col])
+      .sort((a, b) => b.days - a.days);
+  }
+
+  const looksLikeEmail = s => /^[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}$/i.test(String(s || '').trim());
+  const agoText = d => d === 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago';
+
+  function followUpHtml() {
+    if (!movesJobs()) return '';
+    const list = toChase();
+    if (!list.length) return '';
+    return '<div class="bd-chase">' +
+      '<div class="bd-chase-head">📨 Follow up <span class="bd-count">' + list.length + '</span>' +
+        '<span class="bd-chase-sub">Bids waiting on an answer, oldest first. The email is saved in Gmail Drafts for you to read and send.</span></div>' +
+      list.map(({ j, col, days }) => {
+        const price = parseMoney(j.jobPrice);
+        const ups = (Array.isArray(j.followUps) ? j.followUps : []).filter(f => f && f.at);
+        const last = ups[ups.length - 1];
+        const lastDays = last ? daysSince(last.at) : null;
+        const busy = !!drafting[j._id];
+        const email = looksLikeEmail(j.email);
+        return '<div class="bd-chase-row">' +
+          '<div class="bd-chase-main" onclick="openJobCard(\'bids\', \'' + safeId(j._id) + '\')">' +
+            '<div class="bd-chase-name">' + esc((j.customerName || 'Untitled job').trim()) +
+              (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') +
+              (price ? ' · <span class="bd-money">' + fmtMoney(price) + '</span>' : '') + '</div>' +
+            '<div class="bd-chase-line">' + (col === 'followUp' ? 'In Follow up' : 'Sent') + ' ' + agoText(days) +
+              (j.bidStageAt ? ' (' + shortDay(localDay(new Date(j.bidStageAt))) + ')' : '') +
+              (last ? ' · follow-up drafted ' + agoText(lastDays || 0) +
+                (ups.length > 1 ? ' (' + ups.length + ' so far)' : '') : '') + '</div>' +
+          '</div>' +
+          '<div class="bd-chase-act">' +
+            (last && /^https:\/\/mail\.google\.com\//.test(String(last.link || ''))
+              ? '<a class="btn btn-sm" href="' + esc(last.link) + '" target="_blank" rel="noopener">Open draft</a>' : '') +
+            (email
+              ? '<button class="btn btn-sm btn-filled" ' + (busy ? 'disabled' : '') +
+                ' onclick="writeFollowUp(\'' + safeId(j._id) + '\')">' +
+                (busy ? 'Writing…' : last ? 'Write another' : 'Write the email') + '</button>'
+              : '<span class="bd-chase-none" title="Add the customer’s email on the job first">No email on the job</span>') +
+          '</div>' +
+        '</div>';
+      }).join('') +
+    '</div>';
+  }
+
+  window.writeFollowUp = async function (jobId) {
+    if (!movesJobs() || drafting[jobId]) return;
+    const j = jobsList().find(x => x._id === jobId);
+    const user = me();
+    const base = ((window.YD_CONFIG || {}).claudeEndpoint || '').replace(/\/+$/, '');
+    if (!j || !user) return;
+    if (!base) { showToast('The server address is not configured'); return; }
+    drafting[jobId] = true;
+    render();
+    try {
+      const res = await fetch(base + '/followup/draft', {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + await user.getIdToken(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: jobId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || ('failed (' + res.status + ')'));
+      // Read the job again: it may have changed while Claude was writing.
+      const now = jobsList().find(x => x._id === jobId) || j;
+      const ups = (Array.isArray(now.followUps) ? now.followUps : []).concat([{
+        at: nowIso(), draftId: data.draftId || null, link: data.link || null,
+        subject: data.subject || '', by: myName() || null,
+      }]);
+      if (!window.YDSync || !window.YDSync.patchJob(jobId, { followUps: ups })) {
+        showToast('Draft saved in Gmail, but this device could not note it on the job');
+      } else {
+        showToast('Follow-up saved in Gmail Drafts — read it and send it from there');
+      }
+    } catch (e) {
+      showToast('Could not write the email: ' + e.message);
+    } finally {
+      delete drafting[jobId];
+      render();
+    }
+  };
 
   function boardSubtitle(b) {
     const touch = touchScreen();
