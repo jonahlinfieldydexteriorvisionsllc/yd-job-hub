@@ -98,20 +98,41 @@
     });
   }
 
-  // Change one job's materials by a function, wherever that job is: through
-  // patchJob for the stored copy, and -- when it is open in the form with
-  // unsaved typing -- in the form too, so its next save keeps the change.
-  function changeJobMaterials(jobId, fn) {
+  // Change one job's materials (and its Materials to Order list) by a
+  // function, wherever that job is: through patchJob for the stored copy,
+  // and -- when it is open in the form with unsaved typing -- in the form too,
+  // so its next save keeps the change.
+  function changeJob(jobId, matFn, orderFn) {
     let job;
     try { job = JSON.parse(readJobBlob(jobId) || 'null'); } catch (e) { job = null; }
     if (!job) { showToast('That job is not on this device yet'); return null; }
     const openWithEdits = jobId === currentJobId && dirty;
-    if (!window.YDSync || !YDSync.patchJob(jobId, { materials: fn(job.materials || []) })) {
+    const patch = { materials: matFn(job.materials || []) };
+    if (orderFn) patch.orderItems = orderFn(job.orderItems || []);
+    if (!window.YDSync || !YDSync.patchJob(jobId, patch)) {
       showToast('Could not change that job');
       return null;
     }
-    if (openWithEdits) { materials = fn(materials); renderMaterials(); }
-    return job;
+    if (openWithEdits) {
+      materials = matFn(materials); renderMaterials();
+      if (orderFn) { orderItems = orderFn(orderItems); renderOrderList(); }
+    }
+    return Object.assign(job, patch);
+  }
+
+  // Ticks "ordered" on the Materials to Order items this split's lines are
+  // (app.js sameMaterial: plain word matching, no Claude), noting the order;
+  // Undo takes back only the ticks it made.
+  function tickOrdered(list, lineNames, info) {
+    return list.map(it => (!it.ordered && lineNames.some(n => sameMaterial(it.name, n)))
+      ? Object.assign({}, it, { ordered: true, orderNo: info.orderNo, orderedFrom: info.vendor,
+        orderReceiptId: info.rid, orderSplitId: info.sid })
+      : it);
+  }
+  function untickOrdered(list, sid) {
+    return list.map(it => it.orderSplitId === sid
+      ? Object.assign({}, it, { ordered: false, orderNo: null, orderedFrom: null, orderReceiptId: null, orderSplitId: null })
+      : it);
   }
 
   // ------------------------------------------------------------ actions
@@ -154,16 +175,25 @@
     const sid = 'sp' + Date.now().toString(36) + uid();
     const from = (r.vendor || 'Receipt') + (r.orderNo ? ' #' + r.orderNo : '');
     const date = /^\d{4}-\d{2}-\d{2}$/.test(r.date || '') ? r.date : localYMD();
+    // Every detail the receipt has goes with the line: the order, the
+    // supplier's item number, the unit price, and the email it came from.
+    const more = { vendor: r.vendor || '', orderNo: r.orderNo || '', link: r.link || '',
+      receiptId: rid, splitId: sid };
     const add = idxs.map(i => {
       const l = lines[i];
-      return { id: uid(), item: l.name || 'Item', date, location: from,
+      return Object.assign({ id: uid(), item: l.name || 'Item', date, location: from,
         price: ((l.cents || 0) / 100).toFixed(2), qty: l.qty ? String(l.qty) : '', unit: l.unit || '',
-        receiptId: rid, splitId: sid };
+        itemNo: l.itemNo || '', unitPrice: l.unitCents ? (l.unitCents / 100).toFixed(2) : '' }, more);
     });
-    if (tax) add.push({ id: uid(), item: 'Sales tax', date, location: from, price: (tax / 100).toFixed(2),
-      qty: '', unit: '', receiptId: rid, splitId: sid });
+    if (tax) add.push(Object.assign({ id: uid(), item: 'Sales tax', date, location: from,
+      price: (tax / 100).toFixed(2), qty: '', unit: '', itemNo: '', unitPrice: '' }, more));
 
-    const job = changeJobMaterials(jobId, list => list.concat(add));
+    let ticks = 0;
+    const job = changeJob(jobId, list => list.concat(add), list => {
+      const out = tickOrdered(list, idxs.map(i => lines[i].name), { orderNo: r.orderNo || '', vendor: r.vendor || '', rid, sid });
+      ticks = out.filter((it, i) => it !== list[i]).length;
+      return out;
+    });
     if (!job) return;
     const splits = (r.splits || []).concat([{
       id: sid, jobId, jobName: (job.customerName || '').trim() || 'Untitled job',
@@ -176,7 +206,7 @@
     delete ticked[rid]; delete chosen[rid];
     write(rid, { splits, status });
     showToast(add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
-      splits[splits.length - 1].jobName);
+      splits[splits.length - 1].jobName + (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : ''));
     redraw(true);
   };
 
@@ -188,7 +218,8 @@
     if (!confirm('Take these lines back off ' + s.jobName + '?')) return;
     // A job deleted since has nothing left to take back.
     if (readJobBlob(s.jobId)) {
-      if (!changeJobMaterials(s.jobId, list => list.filter(m => !(m.receiptId === rid && m.splitId === sid)))) return;
+      if (!changeJob(s.jobId, list => list.filter(m => !(m.receiptId === rid && m.splitId === sid)),
+        list => untickOrdered(list, sid))) return;
     }
     const splits = (r.splits || []).filter(x => x.id !== sid);
     const status = r.status === 'skipped' ? 'skipped' : 'new';

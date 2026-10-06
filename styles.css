@@ -1678,3 +1678,5 @@
     #tabReceipts { display:none; }
   }
   #rcSearch { flex:1 1 100%; }
+  .mat-itemno { font-weight:400; font-size:.85em; white-space:nowrap; }
+  .mat-mail { text-decoration:none; margin-left:3px; }

@@ -121,7 +121,11 @@ dollars (quantity times unit price), not the unit price. qty is 0 when not shown
 printed: ton, yd, bag, ea, pallet, sq ft, gal.
 - name: what the item is, as a person would say it, with the size or colour if printed \
 ("Holland paver 6x9 charcoal", "Washed 3/4 stone"). Leave out SKU noise; item_number holds it.
+- unit_price: the price of one unit as printed, in dollars; 0 when not shown.
 - tax: the sales tax in dollars, 0 if none is shown. total: what was charged in all.
+- fulfilment: "delivery" or "pickup" when the email says which, else "". delivery_date: the \
+delivery (or pickup) date, YYYY-MM-DD, or "". due_date: when an invoice must be paid, \
+YYYY-MM-DD, or "". po: a PO number or job name written on the order, exactly as printed, or "".
 - date: the purchase or invoice date, YYYY-MM-DD, or "" if none is shown.
 - order_number: the order, invoice or receipt number exactly as printed, or "". For a \
 payment confirmation, the number of the invoice it pays.
@@ -154,7 +158,7 @@ RECEIPT_SCHEMA = {
     "additionalProperties": False,
     "required": ["is_purchase", "whose", "doc_type", "kind", "vendor", "order_number", "date",
                  "items", "tax", "total", "paid", "deliver_to", "job_hint", "summary", "payee",
-                 "pickup_location", "pickup_by"],
+                 "pickup_location", "pickup_by", "fulfilment", "delivery_date", "due_date", "po"],
     "properties": {
         "is_purchase": {"type": "boolean"},
         "whose": {"type": "string", "enum": ["business", "personal", "unsure"]},
@@ -170,10 +174,14 @@ RECEIPT_SCHEMA = {
         "date": {"type": "string"},
         "items": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
-            "required": ["name", "item_number", "qty", "unit", "amount"],
+            "required": ["name", "item_number", "qty", "unit", "unit_price", "amount"],
             "properties": {"name": {"type": "string"}, "item_number": {"type": "string"},
                            "qty": {"type": "number"}, "unit": {"type": "string"},
-                           "amount": {"type": "number"}}}},
+                           "unit_price": {"type": "number"}, "amount": {"type": "number"}}}},
+        "fulfilment": {"type": "string", "enum": ["delivery", "pickup", ""]},
+        "delivery_date": {"type": "string"},
+        "due_date": {"type": "string"},
+        "po": {"type": "string"},
         "tax": {"type": "number"},
         "total": {"type": "number"},
         "paid": {"type": "boolean"},
@@ -434,16 +442,17 @@ def lines_from(got):
         qty = it.get("qty")
         lines.append({"name": name or "Item", "itemNo": str(it.get("item_number") or "")[:60],
                       "qty": qty if isinstance(qty, (int, float)) and qty else 0,
-                      "unit": str(it.get("unit") or "")[:20], "cents": c})
+                      "unit": str(it.get("unit") or "")[:20], "unitCents": _cents(it.get("unit_price")),
+                      "cents": c})
     tax, total = _cents(got.get("tax")), _cents(got.get("total"))
     if total:
         gap = total - tax - sum(l["cents"] for l in lines)
         if not lines:
             lines.append({"name": (got.get("summary") or "Purchase")[:160], "itemNo": "", "qty": 0,
-                          "unit": "", "cents": total - tax})
+                          "unit": "", "unitCents": 0, "cents": total - tax})
         elif abs(gap) > 2:
             lines.append({"name": "Not itemised in the email (difference to the total)", "itemNo": "",
-                          "qty": 0, "unit": "", "cents": gap})
+                          "qty": 0, "unit": "", "unitCents": 0, "cents": gap})
     return lines, tax, total
 
 
@@ -592,7 +601,12 @@ def _save(db, m, got, jobs):
         "deliverTo": (got.get("deliver_to") or "").strip()[:200],
         "jobHint": (got.get("job_hint") or "").strip()[:200],
         "summary": (got.get("summary") or "").strip()[:200],
-        "suggest": suggest_job(jobs, got.get("deliver_to") or "", got.get("job_hint") or ""),
+        "fulfilment": got.get("fulfilment") if got.get("fulfilment") in ("delivery", "pickup") else "",
+        "deliveryDate": got.get("delivery_date") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("delivery_date") or "") else "",
+        "dueDate": got.get("due_date") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("due_date") or "") else "",
+        "po": (got.get("po") or "").strip()[:80],
+        "suggest": suggest_job(jobs, got.get("deliver_to") or "",
+                               " ".join(x for x in [got.get("job_hint") or "", got.get("po") or ""] if x)),
         "updatedAt": dg._now().isoformat(),
     }
     snap = ref.get()

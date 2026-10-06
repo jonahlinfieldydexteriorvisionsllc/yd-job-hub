@@ -829,7 +829,10 @@ function renderOrderList() {
   wrap.innerHTML = orderItems.map(it =>
     '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + it.id + '\')">' +
-      '<span class="cr-name">' + esc(it.name) + '</span>' +
+      '<span class="cr-name">' + esc(it.name) +
+        // Ticked by a receipt sorted onto this job: which order it was.
+        (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
+      '</span>' +
       (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '') +
       '<button class="remove-btn" onclick="rmOrderItem(\'' + it.id + '\')">×</button></div>'
   ).join('');
@@ -921,7 +924,18 @@ function rmLabor(id) { labor = labor.filter(e => e.id !== id); renderLabor(); ma
 function isChangeOrder(itemName) {
   if (!orderItems.length) return false;
   const lower = (itemName || '').toLowerCase().trim();
-  return !orderItems.some(qm => { const q = (qm.name || '').toLowerCase().trim(); return q && (q.includes(lower) || lower.includes(q)); });
+  return !orderItems.some(qm => { const q = (qm.name || '').toLowerCase().trim(); return q && (q.includes(lower) || lower.includes(q) || sameMaterial(q, lower)); });
+}
+// Whether two names are the same material written two ways: most of the
+// first's words (3+ letters) are in the second, plurals included -- "Holland
+// pavers charcoal" is "Holland paver 6x9 charcoal". A receipt's wording never
+// matches the quote's exactly, and it was flagging bought items "not quoted?".
+function sameMaterial(a, b) {
+  const words = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w.length >= 3);
+  const want = words(a), have = words(b);
+  if (!want.length || !have.length) return false;
+  const hits = want.filter(w => have.some(h => h === w || h.startsWith(w) || w.startsWith(h))).length;
+  return hits / want.length >= 0.6;
 }
 function renderMaterials() {
   const w = document.getElementById('matTableWrap');
@@ -930,10 +944,16 @@ function renderMaterials() {
     let h = '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Item</th><th>Qty</th><th>From</th><th>Price</th><th></th></tr></thead><tbody>';
     materials.forEach(e => {
       const co = isChangeOrder(e.item);
+      // Lines that came from a receipt carry its details: the supplier's item
+      // number, the unit price, and a way back to the email.
+      const mail = /^https:\/\/mail\.google\.com\//.test(String(e.link || '')) ? e.link : '';
       h += '<tr' + (co ? ' class="row-unquoted"' : '') + '><td>' + fmtDateMD(e.date) + '</td>' +
-        '<td class="bold">' + esc(e.item) + (co ? '<span class="change-tag" title="Advisory — this purchase didn\'t match a quoted item. Verify before treating as a change order.">not quoted?</span>' : '') + '</td>' +
-        '<td>' + (e.qty ? esc(String(e.qty)) + (e.unit ? ' ' + esc(e.unit) : '') : '—') + '</td>' +
-        '<td>' + esc(e.location || '—') + '</td>' +
+        '<td class="bold">' + esc(e.item) + (co ? '<span class="change-tag" title="Advisory — this purchase didn\'t match a quoted item. Verify before treating as a change order.">not quoted?</span>' : '') +
+          (e.itemNo ? ' <span class="muted mat-itemno">#' + esc(e.itemNo) + '</span>' : '') + '</td>' +
+        '<td>' + (e.qty ? esc(String(e.qty)) + (e.unit ? ' ' + esc(e.unit) : '') : '—') +
+          (e.unitPrice ? ' <span class="muted">@ ' + fmtMoney(e.unitPrice) + '</span>' : '') + '</td>' +
+        '<td>' + esc(e.location || '—') +
+          (mail ? ' <a class="mat-mail" href="' + esc(mail) + '" target="_blank" rel="noopener" title="Open the receipt email">✉️</a>' : '') + '</td>' +
         '<td class="bold">' + (e.price ? fmtMoney(e.price) : '—') + '</td>' +
         '<td><button class="remove-btn" onclick="rmMaterial(\'' + e.id + '\')">×</button></td></tr>';
     });
@@ -1187,7 +1207,8 @@ function loadJobData(d) {
   labor = (d.labor || []).map(e => ({ ...e, id: e.id || uid() }));
   materials = (d.materials || []).map(e => ({ ...e, id: e.id || uid() }));
   const rawOrder = d.orderItems || d.quotedMaterials || [];
-  orderItems = rawOrder.map(e => ({ id: e.id || uid(), proposalId: e.proposalId || null, name: e.name || '', quantity: e.quantity || '', ordered: !!e.ordered }));
+  // Kept whole: a receipt that ticked an item notes which order it was on it.
+  orderItems = rawOrder.map(e => ({ ...e, id: e.id || uid(), proposalId: e.proposalId || null, name: e.name || '', quantity: e.quantity || '', ordered: !!e.ordered }));
   proposals = Array.isArray(d.proposals) ? d.proposals
             : (d.proposalData ? [{ id: uid(), label: d.proposalData.projectName || d.proposalData.title || 'Proposal', data: d.proposalData }] : []);
   payments = (d.payments || []).map(p => ({ ...p, id: p.id || uid() }));
