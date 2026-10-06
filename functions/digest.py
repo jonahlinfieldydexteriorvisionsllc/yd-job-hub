@@ -768,6 +768,13 @@ def build(slot, user, people, wx, cache):
             if slot != "midday":
                 push_bits.append("%d bid%s to chase" % (len(bids), "" if len(bids) == 1 else "s"))
 
+    # ---- receipts waiting to be put on a job (whoever may change jobs sorts them)
+    waiting = cache.get("receipts") or 0
+    if (owner or access.get("jobs") == "change") and waiting:
+        sections.append(("Receipts", [{"text": "🧾 %d receipt%s to sort — open the Receipts tab" % (
+            waiting, "" if waiting == 1 else "s")}]))
+        push_bits.append("%d receipt%s to sort" % (waiting, "" if waiting == 1 else "s"))
+
     # ---- the weather tables: every town, and each job site being worked.
     # Crew see the sites they are on; whoever may see jobs sees them all.
     sites = [x for x in cache.get("sites") or [] if sees("jobs") or uid in x["uids"]]
@@ -1051,6 +1058,15 @@ def _prefs(user):
     return p
 
 
+def _receipts_to_sort():
+    """How many purchases read out of email are waiting to be put on a job."""
+    try:
+        return sum(1 for _ in _db().collection("receipts").where("status", "==", "new").stream())
+    except Exception as e:      # noqa: BLE001 -- a summary without the count beats none
+        print("digest: could not count receipts:", e)
+        return 0
+
+
 def _cache(slot="morning"):
     today = _now().date()
     jobs = _jobs()
@@ -1059,6 +1075,7 @@ def _cache(slot="morning"):
         "storms": _storms(),
         "bids": _bids(jobs),
         "shifts": _shifts(),
+        "receipts": _receipts_to_sort(),
     }
     # The day the weather tables are for: tomorrow in the evening summary,
     # today otherwise. Every town and every job site in one forecast call.
