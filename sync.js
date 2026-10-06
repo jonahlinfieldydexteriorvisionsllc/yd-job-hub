@@ -119,13 +119,33 @@
   // Saves made before sync has started (the first connection can take a while
   // in a truck) are remembered and sent once it does, rather than dropped --
   // a dropped push is how a newer edit lost to an older cloud copy.
-  const unsent = new Set();
+  //
+  // Remembered on the device, not just in memory, and forgotten only once the
+  // job has been handed to Firestore (whose own queue then survives a
+  // restart). Held in memory alone, a brand-new job saved in the first seconds
+  // and the app then closed never reached the cloud: next time, the cloud's
+  // snapshot had nothing to say about a job it had never had, so nothing sent
+  // it up until it was edited again.
+  const UNSENT_KEY = STORAGE_PREFIX + 'unsentPushes';
+  const unsent = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem(UNSENT_KEY) || '[]')); }
+    catch (e) { return new Set(); }
+  })();
+  function saveUnsent() {
+    try {
+      if (unsent.size) localStorage.setItem(UNSENT_KEY, JSON.stringify([...unsent]));
+      else localStorage.removeItem(UNSENT_KEY);
+    } catch (e) { console.warn('[sync] could not note an unsent save', e); }
+  }
+  function forgetUnsent(id) {
+    if (unsent.delete(id)) saveUnsent();
+  }
   function queuePush(id) {
     if (!id || applyingRemote) return;
     // Saved again after being deleted -- restored from a backup, say. The
     // save is the newer wish, so a delete still waiting to go out is dropped.
     if (pendingDeletes.delete(id)) savePendingDeletes();
-    if (!watching) { unsent.add(id); return; }
+    if (!watching) { unsent.add(id); saveUnsent(); return; }
     clearTimeout(pushTimers[id]);
     pushTimers[id] = setTimeout(() => pushNow(id), PUSH_DELAY);
   }
@@ -154,6 +174,8 @@
     if (pendingDeletes.delete(id)) savePendingDeletes();
   }
   function queueDelete(id) {
+    // Deleted before its first save got out: there is nothing to send.
+    forgetUnsent(id);
     pendingDeletes.add(id);
     savePendingDeletes();
     if (watching) sendDelete(id);
@@ -208,17 +230,20 @@
 
   async function pushNow(id) {
     // Someone allowed only to look at jobs never sends one up.
-    if (!ydCan('jobs', 'change')) return;
+    if (!ydCan('jobs', 'change')) { forgetUnsent(id); return; }
     const raw = readJobBlob(id);
-    if (!raw) return;
+    if (!raw) { forgetUnsent(id); return; }
     let data;
-    try { data = JSON.parse(raw); } catch { return; }
+    try { data = JSON.parse(raw); } catch { forgetUnsent(id); return; }
     // Not awaited, and deliberately before the job push: if the signal dies
     // between the two, the clock having an extra job on it is harmless, while
     // a saved job the crew cannot clock into is the failure that matters.
     pushBoard(id, data);
     try {
-      await window.YDDb.putJob(id, data);
+      const sent = window.YDDb.putJob(id, data);
+      // In Firestore's hands now; its queue keeps it until the server has it.
+      forgetUnsent(id);
+      await sent;
       setCloudState('synced');
     } catch (err) {
       // Offline is not an error worth shouting about -- Firestore queues the
@@ -424,8 +449,10 @@
     }
 
     watching = true;
-    unsent.forEach(id => queuePush(id));
-    unsent.clear();
+    // Saves made before sync was running, this session or an earlier one.
+    // Each stays on the list until pushNow has handed it to Firestore, so
+    // closing the app in the moment before that still loses nothing.
+    [...unsent].forEach(id => queuePush(id));
     // Deletes made before sync was running, this session or an earlier one.
     pendingDeletes.forEach(sendDelete);
     migrateStatuses();
