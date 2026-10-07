@@ -184,12 +184,20 @@
     Green: { lat: 42.6011, lng: -89.6385 },   // Monroe
   };
 
+  // Kept fresh while the app is open -- a phone left on the Snow tab all
+  // storm night used to show the first figures, labelled "just now", for
+  // hours -- and the last good cards are kept on the phone, so a launch with
+  // no signal shows them with their time rather than "unavailable".
+  const SAVED = 'ydjobhub_wxCounties';
+  let drawnAt = 0, on = false;
   async function renderCounties() {
     const wrap = document.getElementById('weatherWrap');
     if (!wrap) return;
-    wrap.innerHTML = '<div class="wx-loading">Checking the weather…</div>';
+    if (!wrap.innerHTML.trim()) wrap.innerHTML = '<div class="wx-loading">Checking the weather…</div>';
+    drawnAt = Date.now();
 
     const out = [];
+    let good = 0;
     for (const county of Object.keys(ZONES)) {
       const pt = COUNTY_POINTS[county];
       try {
@@ -199,13 +207,28 @@
           alertsFor(ZONES[county]).catch(() => []),
         ]);
         out.push(countyCard(county, w, soil, alerts));
+        good++;
       } catch (e) {
         out.push('<div class="wx-card"><div class="wx-county">' + county + ' County</div>' +
                  '<div class="wx-fail">Weather unavailable — ' + esc(e.message) + '</div></div>');
       }
     }
-    wrap.innerHTML = out.join('');
+    if (good) {
+      wrap.innerHTML = out.join('');
+      try { localStorage.setItem(SAVED, JSON.stringify({ at: Date.now(), html: wrap.innerHTML })); } catch (e) {}
+      return;
+    }
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(SAVED) || 'null'); } catch (e) {}
+    wrap.innerHTML = saved && saved.html
+      ? '<div class="wx-loading">No signal — the weather as of ' +
+          esc(new Date(saved.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '</div>' + saved.html
+      : out.join('');
   }
+  setInterval(() => { if (on && document.visibilityState === 'visible') renderCounties(); }, 15 * 60000);
+  document.addEventListener('visibilitychange', () => {
+    if (on && document.visibilityState === 'visible' && Date.now() - drawnAt > 10 * 60000) renderCounties();
+  });
 
   function countyCard(county, w, soil, alerts) {
     const bad = (alerts || []).filter(a => /warning|watch|advisory/i.test(a.event));
@@ -258,6 +281,7 @@
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    if (a.mode === 'cloud' && a.user) setTimeout(renderCounties, 1200);
+    on = a.mode === 'cloud' && !!a.user;
+    if (on) setTimeout(renderCounties, 1200);
   });
 })();

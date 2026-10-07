@@ -37,6 +37,10 @@
     } catch (e) { /* keep the fallback */ }
     const el = document.getElementById('snowStartPoint');
     if (el) el.textContent = 'Route starts from ' + startPoint.label;
+    // The crew see where the route starts; only someone who can change Snow
+    // gets the button that changes it.
+    const btn = el && el.parentElement && el.parentElement.querySelector('button');
+    if (btn) btn.hidden = !ydCan('snow', 'change');
   }
 
   // ---------------------------------------------------------------- geometry
@@ -68,8 +72,13 @@
 
     const ordered = [];
     let here = start;
+    const onMap = id => accounts[id].lat != null && accounts[id].lng != null;
     [deadline, rest].forEach(group => {
-      const pool = group.slice();
+      // An account the map has not found still gets plowed, but it cannot be
+      // measured from: it goes at the end of its group, and the next leg is
+      // still measured from the last place that is on the map.
+      const pool = group.filter(onMap);
+      const lost = group.filter(id => !onMap(id));
       while (pool.length) {
         let best = 0, bestD = Infinity;
         pool.forEach((id, i) => {
@@ -80,6 +89,7 @@
         ordered.push({ accountId: id, driveMiles: isFinite(bestD) ? Math.round(bestD * 10) / 10 : null });
         here = accounts[id];
       }
+      lost.forEach(id => ordered.push({ accountId: id, driveMiles: null }));
     });
     return ordered;
   }
@@ -147,6 +157,8 @@
 
     wrap.hidden = false;
     if (accountsWrap) accountsWrap.closest('.section').hidden = true;
+    // Whoever is typing in a box keeps their place through the redraw.
+    const typing = document.activeElement && wrap.contains(document.activeElement) ? document.activeElement.id : null;
 
     const list = Object.values(stops).sort((a, b) => a.order - b.order);
     const done = list.filter(s => s.departedAt || s.skipped).length;
@@ -156,7 +168,12 @@
       '<div class="section">' +
         '<div class="section-head">' +
           '<span class="section-title">' + esc(storm.label || 'Storm') + '</span>' +
-          '<span class="section-badge accent">' + done + ' / ' + list.length + ' done</span>' +
+          '<span style="display:flex;align-items:center;gap:10px">' +
+            '<span class="section-badge accent">' + done + ' / ' + list.length + ' done</span>' +
+            // Night mode lives on the accounts section, which is hidden while a
+            // storm is open -- the one time it is wanted most.
+            '<button class="btn btn-sm" onclick="toggleNight()" title="Night mode">◑ Night</button>' +
+          '</span>' +
         '</div>' +
         '<div class="section-body">' +
           '<div class="storm-meta">' +
@@ -174,25 +191,40 @@
             '</div>' : '') +
         '</div>' +
       '</div>';
+    if (typing) {
+      const el = document.getElementById(typing);
+      if (el && el.tagName === 'INPUT') { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
+    }
   }
 
   // A number that can be nudged or typed. The buttons are for gloves; the
   // field is for the times a stepper would take ten taps.
+  //
+  // What has been stepped or typed is kept here until Depart. The list is
+  // redrawn whenever any stop changes -- another phone departing, this
+  // phone's own location arriving a few seconds after Arrive -- and the boxes
+  // used to go back to the storm's expected depth each time, so a stop could
+  // be billed at the wrong tier.
+  const drafts = {};          // input id -> what is in the box
   function stepper(stopId, kind, label, value, step) {
     const inputId = 'st-' + kind + '-' + stopId;
+    const shown = drafts[inputId] != null ? drafts[inputId] : value;
     return '<div class="stepper">' +
       '<span class="stepper-label">' + label + '</span>' +
       '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + (-step) + ')">&minus;</button>' +
-      '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + esc(value) + '">' +
+      '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + esc(shown) + '" ' +
+        'oninput="stepperTyped(this)">' +
       '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + step + ')">+</button>' +
     '</div>';
   }
 
+  window.stepperTyped = function (el) { drafts[el.id] = el.value; };
   window.nudge = function (inputId, by) {
     const el = document.getElementById(inputId);
     if (!el) return;
     const n = (parseFloat(el.value) || 0) + by;
     el.value = Math.max(0, Math.round(n * 10) / 10);
+    drafts[inputId] = el.value;
   };
 
   function readStepper(stopId, kind, fallback) {
@@ -286,6 +318,8 @@
   // ---------------------------------------------------------------- actions
 
   async function writeStop(id, patch) {
+    // A location fix can land seconds after the storm was closed or changed.
+    if (!storm || !stops[id]) return;
     Object.assign(stops[id], patch);              // show it immediately
     render();
     writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', id, patch), 'stop update');
@@ -299,11 +333,10 @@
   window.departStop = function (id) {
     const s = stops[id];
     const a = accountFor(s);
-    writeStop(id, {
-      departedAt: new Date().toISOString(),
-      inchesCleared: readStepper(id, 'inches', storm.accumulationInches),
-      saltBags: a.saltApplies ? readStepper(id, 'salt', 0) : null,
-    });
+    const inches = readStepper(id, 'inches', storm.accumulationInches);
+    const salt = a.saltApplies ? readStepper(id, 'salt', 0) : null;
+    delete drafts['st-inches-' + id]; delete drafts['st-salt-' + id];
+    writeStop(id, { departedAt: new Date().toISOString(), inchesCleared: inches, saltBags: salt });
     locate(id, 'depart');
   };
 
@@ -404,11 +437,13 @@
   // it does not. It is evidence for a billing dispute, not a requirement.
   function locate(id, which) {
     if (!navigator.geolocation) return;
+    const sid = storm && storm.id;
     navigator.geolocation.getCurrentPosition(
-      pos => writeStop(id, {
-        [which + 'Lat']: pos.coords.latitude,
-        [which + 'Lng']: pos.coords.longitude,
-      }),
+      pos => {
+        // Only onto the storm it was asked for.
+        if (!storm || storm.id !== sid) return;
+        writeStop(id, { [which + 'Lat']: pos.coords.latitude, [which + 'Lng']: pos.coords.longitude });
+      },
       () => {},
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
     );
@@ -436,7 +471,8 @@
 
     const crewRaw = prompt('How many people are working?', '2');
     if (crewRaw === null) return;
-    const crewSize = parseInt(crewRaw, 10) || 1;
+    // At least one: a typed "-2" made every labour line negative.
+    const crewSize = Math.max(1, parseInt(crewRaw, 10) || 1);
     const crewNames = (prompt('Who is working? (optional)') || '').trim();
 
     const start = startPoint;
@@ -507,9 +543,14 @@
     // word -- and closing is final, so that customer was simply never charged.
     const worked = list.filter(s => !s.skipped && s.departedAt);
     await YDSnow.refreshPricing(Array.from(new Set(worked.map(s => s.accountId))));
-    const unpriced = Array.from(new Set(worked
-      .filter(s => !YDSnow.priceVisit(s.accountId, storm.accumulationInches, 0, storm.crewSize))
-      .map(s => (accountFor(s).name || s.accountId))));
+    // A pricing record with every box blank counts as no price: it would
+    // bill $0 -- unless the account is charged by the hour alone.
+    const noPrice = s => {
+      const p = YDSnow.priceVisit(s.accountId, num(s.inchesCleared, storm.accumulationInches), 0, storm.crewSize);
+      const hourly = ((YDSnow.pricing()[s.accountId] || {}).laborRateCents || 0) > 0;
+      return !p || (!(p.plowCents + p.saltCents > 0) && !hourly);
+    };
+    const unpriced = Array.from(new Set(worked.filter(noPrice).map(s => (accountFor(s).name || s.accountId))));
     if (unpriced.length && !confirm('No price could be found for:\n\n' + unpriced.join('\n') +
         '\n\nThey would be left off this storm’s bill. Close anyway?\n\n' +
         '(Cancel, check their pricing on the Snow tab, then close again.)')) return;
@@ -537,7 +578,8 @@
       // the billing screens print them.
       const inches = num(s.inchesCleared, storm.accumulationInches);
       const p = YDSnow.priceVisit(s.accountId, inches, mins, storm.crewSize);
-      if (!p) return;
+      // Left off, as the question before closing said: no $0 lines on a bill.
+      if (!p || !(p.totalCents > 0)) return;
       minutes += mins;
       pausedTotal += paused;
       revenue += p.totalCents;
@@ -572,14 +614,12 @@
       ['storms/' + storm.id + '/private', 'billing', billing],
       ['storms', storm.id, { status: 'closed', closedAt: new Date().toISOString() }],
     ]), 'storm close');
-    {
-      alert('Storm closed.\n\n' +
-        lines.length + ' billable visits\n' +
-        'Revenue: $' + (revenue / 100).toFixed(2) + '\n' +
-        (salt ? 'of which salt: $' + (salt / 100).toFixed(2) + '\n' : '') +
-        'Crew hours: ' + billing.crewHours + '\n' +
-        'Per crew-hour: $' + (billing.revenuePerCrewHourCents / 100).toFixed(2));
-    }
+    alert('Storm closed.\n\n' +
+      lines.length + ' billable visits\n' +
+      'Revenue: $' + (revenue / 100).toFixed(2) + '\n' +
+      (salt ? 'of which salt: $' + (salt / 100).toFixed(2) + '\n' : '') +
+      'Crew hours: ' + billing.crewHours + '\n' +
+      'Per crew-hour: $' + (billing.revenuePerCrewHourCents / 100).toFixed(2));
   };
 
   // ---------------------------------------------------------------- watching
@@ -625,7 +665,7 @@
   }
 
   window.setStartPoint = async function () {
-    if (!ydCan('snow', 'change')) { showToast('Only the owner can set this'); return; }
+    if (!ydCan('snow', 'change')) { showToast('Changing this needs Snow access'); return; }
     const addr = prompt('Where does the route start from?\n\n(your yard or wherever the truck leaves)',
                         startPoint.label === 'Madison (yard not set)' ? '' : startPoint.label);
     if (addr === null || !addr.trim()) return;
@@ -644,7 +684,7 @@
     startPoint = { lat: geo.lat, lng: geo.lng, label: addr.trim() };
     const el = document.getElementById('snowStartPoint');
     if (el) el.textContent = 'Route starts from ' + startPoint.label;
-    showToast('Route will start from ' + geo.town);
+    showToast('Route will start from ' + (geo.town || addr.trim()));
   };
 
   window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render,

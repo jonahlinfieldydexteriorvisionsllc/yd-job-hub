@@ -25,7 +25,7 @@
   // ---------------------------------------------------------------- money
 
   function cents(c) {
-    if (c === null || c === undefined) return '—';
+    if (typeof c !== 'number' || !isFinite(c)) return '—';
     return '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
   }
 
@@ -113,7 +113,9 @@
     const pr = p.pricing;
     const first = resolveTier(pr.tiers, '1-3');
     let s = cents(first.cents);
-    if (pr.mode === 'tieredPlusPerInch') {
+    // An imported record can say per-inch with no per-inch amount; one such
+    // record used to stop the whole account list drawing.
+    if (pr.mode === 'tieredPlusPerInch' && pr.perInch) {
       s += ' + ' + cents(pr.perInch.cents) + '/in over ' + pr.perInch.aboveInches + '"';
     } else {
       const second = resolveTier(pr.tiers, '4-6');
@@ -164,7 +166,7 @@
           (a.type === 'commercial' ? '<span class="snow-tag commercial">commercial</span>' : '') +
           (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
           (a.minTriggerInches > 1 ? '<span class="snow-tag trigger">' + a.minTriggerInches + '"+ only</span>' : '') +
-          (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map, so it is left off routes">no location</span>' : '') +
+          (a.lat == null ? '<span class="snow-tag nolocation" title="Not found on the map yet, so it goes at the end of the route">no location</span>' : '') +
           (held ? '<span class="snow-tag hold">on hold</span>' : '') +
           // There was no way to change an account once it was added.
           (edits ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
@@ -425,10 +427,6 @@
     return { reached: reached, geo: null };
   }
 
-  async function geocodeAddress(input, townHint) {
-    return (await locate(input, townHint)).geo;
-  }
-
   // A contact turned into a snow account (prospects.js): the form filled from
   // a name and a one-line address, split into the boxes.
   window.fillSnowFormFrom = function (p) {
@@ -498,12 +496,25 @@
   // The address the form last failed to find. Pressing Save again with the
   // same address keeps it without a location; changing it looks again.
   let unfound = null;
+  // Goes up every time the form opens or closes, so a save still waiting on
+  // the address lookup can tell it is no longer the form on screen.
+  let formSeq = 0;
+  // An address as words, punctuation and the state aside, for "has it moved?"
+  const placeKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ')
+    .filter(w => w && w !== 'wi' && w !== 'wisconsin').join(' ');
   const GEO_HINT = 'The town and map location are worked out for you when you save.';
 
-  // Shared, so the yard address in Settings is looked up the same way.
-  window.YDSnowGeocode = geocodeAddress;
+  // Shared: an address typed as one line, looked up the way accounts are --
+  // the server's Census lookup first (rural fire numbers), then the browser's
+  // own OpenStreetMap search. The route's starting yard uses it (storm.js).
+  window.YDSnowGeocode = async function (line, townHint) {
+    const p = partsOf({ address: line || '' });
+    if (!p.city && townHint) p.city = townHint;
+    return (await locateParts(p)).geo;
+  };
 
   window.openSnowForm = function (id) {
+    formSeq++;
     editingId = id || null;
     unfound = null;
     const a = id ? accounts[id] : null;
@@ -569,6 +580,7 @@
   };
 
   window.closeSnowForm = function () {
+    formSeq++;
     document.getElementById('snowFormModal').classList.remove('active');
     editingId = null;
   };
@@ -593,6 +605,19 @@
     if (!parts.street) { showToast('A street address is needed — the route and weather depend on it'); return; }
     if (!parts.city && !parts.zip) { showToast('Add the city or the ZIP so the address can be found'); return; }
 
+    // Everything else on the form is read now, before the address lookup:
+    // the lookup can take ten seconds, and the form can be closed -- or
+    // opened on another account -- in the meantime (see formSeq below).
+    const form = {
+      type: val('sfType'), trigger: parseInt(val('sfTrigger'), 10) || 1, window: val('sfWindow'),
+      notes: val('sfNotes').trim(), drive: parseInt(val('sfDrive'), 10) || null, walk: parseInt(val('sfWalk'), 10) || null,
+      saltOn: checked('sfSaltOn'), phone: val('sfPhone').trim(), email: val('sfEmail').trim().toLowerCase(),
+      labor: checked('sfNoLabor') ? null : money('sfLabor'), perInchOn: checked('sfPerInchOn'),
+      t13: money('sfT13'), t46: money('sfT46'), t6: money('sfT6'), t9: money('sfT9'),
+      perInchAmt: money('sfPerInchAmt'), perInchAbove: parseInt(val('sfPerInchAbove'), 10) || 3, saltAmt: money('sfSaltAmt'),
+    };
+    const mySeq = formSeq;
+
     btn.disabled = true;
     btn.textContent = 'Finding the address…';
 
@@ -603,7 +628,10 @@
     let id = editingId;
     if (!id) {
       const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'account';
-      id = base;
+      // Before the accounts have loaded (an offline cold start) there is no
+      // telling whether the name is taken, and a merge onto a same-named
+      // customer would overwrite their address and prices: a unique tail then.
+      id = loaded ? base : base + '-' + Date.now().toString(36);
       let n = 2;
       while (accounts[id]) id = base + '-' + (n++);
       if (id !== base) console.info('[snow] "' + name + '" already exists; saving as ' + id);
@@ -611,11 +639,19 @@
     const existing = editingId ? accounts[editingId] : null;
 
     // Only look the address up when it is new or has changed -- no point
-    // hitting the geocoder to re-confirm something already known.
-    const moved = !existing || existing.address !== address;
+    // hitting the geocoder to re-confirm something already known. Compared
+    // word by word: an account saved before the address had boxes reads
+    // "123 Oak Tr Madison, WI 53713" and comes back from the boxes as
+    // "123 Oak Tr, Madison, WI 53713" -- the same place, and treating it as a
+    // move threw away its map position whenever the lookup then failed.
+    const moved = !existing || placeKey(existing.address) !== placeKey(address);
     let geo = null;
     if ((moved || existing.lat == null) && unfound !== address) {
       const found = await locateParts(parts);
+      if (formSeq !== mySeq) {
+        showToast('Not saved — the form was closed while the address was being looked up');
+        return;
+      }
       geo = found.geo;
       if (!geo) {
         // The form used to close at once and say only "saved", so the warning
@@ -649,43 +685,38 @@
       lat: geo ? geo.lat : kept('lat'),
       lng: geo ? geo.lng : kept('lng'),
       geocodedAs: geo ? geo.matched : kept('geocodedAs'),
-      type: val('sfType'),
+      type: form.type,
       active: existing ? existing.active !== false : true,
       season: (existing && existing.season) || seasonNow(),
-      minTriggerInches: parseInt(val('sfTrigger'), 10) || 1,
-      serviceWindow: val('sfWindow'),
-      areaNotes: val('sfNotes').trim(),
+      minTriggerInches: form.trigger,
+      serviceWindow: form.window,
+      areaNotes: form.notes,
       vacationHolds: (existing && existing.vacationHolds) || [],
-      driveSqFt: parseInt(val('sfDrive'), 10) || null,
-      walkSqFt: parseInt(val('sfWalk'), 10) || null,
-      saltApplies: checked('sfSaltOn'),
+      driveSqFt: form.drive,
+      walkSqFt: form.walk,
+      saltApplies: form.saltOn,
     };
 
     // cents is written as null on an inheriting tier, not left out: the save
     // is merged into the stored record, so leaving it out kept the old price.
-    const tierOrInherit = (id, below) => {
-      const c = money(id);
-      return c === null ? { mode: 'inherit', from: below, cents: null } : { mode: 'flat', cents: c };
-    };
-    const perInchOn = checked('sfPerInchOn');
+    const tierOrInherit = (c, below) =>
+      c === null ? { mode: 'inherit', from: below, cents: null } : { mode: 'flat', cents: c };
     const priv = {
-      phone: val('sfPhone').trim(),
-      email: val('sfEmail').trim().toLowerCase(),
-      laborRateCents: checked('sfNoLabor') ? null : money('sfLabor'),
+      phone: form.phone,
+      email: form.email,
+      laborRateCents: form.labor,
       pricing: {
-        mode: perInchOn ? 'tieredPlusPerInch' : 'tiered',
+        mode: form.perInchOn ? 'tieredPlusPerInch' : 'tiered',
         tiers: {
-          '1-3': tierOrInherit('sfT13', null),
-          '4-6': tierOrInherit('sfT46', '1-3'),
-          '6+':  tierOrInherit('sfT6', '4-6'),
-          '9+':  tierOrInherit('sfT9', '6+'),
+          '1-3': tierOrInherit(form.t13, null),
+          '4-6': tierOrInherit(form.t46, '1-3'),
+          '6+':  tierOrInherit(form.t6, '4-6'),
+          '9+':  tierOrInherit(form.t9, '6+'),
         },
-        perInch: perInchOn
-          ? { cents: money('sfPerInchAmt') || 0, aboveInches: parseInt(val('sfPerInchAbove'), 10) || 3 }
-          : null,
+        perInch: form.perInchOn ? { cents: form.perInchAmt || 0, aboveInches: form.perInchAbove } : null,
         salt: {
-          included: checked('sfSaltOn'),
-          portionCents: checked('sfSaltOn') ? (money('sfSaltAmt') || 0) : 0,
+          included: form.saltOn,
+          portionCents: form.saltOn ? (form.saltAmt || 0) : 0,
           perBagCents: null,
         },
       },

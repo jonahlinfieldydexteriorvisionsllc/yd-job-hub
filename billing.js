@@ -206,6 +206,9 @@
 
   function start() {
     if (unsub || !window.YDDb) return;
+    // The next invoice number, for the season screen: otherwise it said "not
+    // following QuickBooks yet" after every load until something was exported.
+    invoicing().then(() => { if (window.renderSeason) renderSeason(); });
     unsub = window.YDDb.watch('storms', changes => {
       changes.forEach(c => {
         if (c.type === 'removed') { delete storms[c.id]; delete billingCache[c.id]; return; }
@@ -228,8 +231,13 @@
 
     for (const id of ids) await billingFor(id);
 
+    // The cards are for the season on screen (the newest by default), not
+    // every storm ever closed -- by the second winter those were all-time
+    // totals that disagreed with the season table below them.
+    const season = shownSeason && seasonsWithStorms().indexOf(shownSeason) !== -1 ? shownSeason : seasonsWithStorms()[0];
+    const inSeason = ids.filter(id => seasonOf(storms[id]) === season);
     let seasonTotal = 0, seasonVisits = 0, seasonHours = 0;
-    ids.forEach(id => {
+    inSeason.forEach(id => {
       const b = billingCache[id];
       if (!b) return;
       seasonTotal += b.totalCents; seasonVisits += b.lines.length; seasonHours += b.crewHours;
@@ -237,7 +245,7 @@
 
     wrap.innerHTML =
       '<div class="dash-totals" style="margin-bottom:16px">' +
-        card('Storms', ids.length) +
+        card('Storms' + (season ? ' ' + esc(season) : ''), inSeason.length) +
         card('Billable visits', seasonVisits) +
         card('Season revenue', money(seasonTotal), 'accent-top') +
         card('Per crew-hour', seasonHours ? money(Math.round(seasonTotal / seasonHours)) : '—', 'pos-top') +
@@ -256,8 +264,10 @@
           '</div>' +
           '<div class="storm-row-actions">' +
             '<button class="btn btn-sm" onclick="stormDetail(\'' + id + '\')">Detail</button>' +
-            '<button class="btn btn-sm btn-accent" onclick="exportStormCsv(\'' + id + '\')">QuickBooks CSV</button>' +
-            (window.YDQuickBooks && YDQuickBooks.connected()
+            // Exporting hands out invoice numbers, so it is Billing "change".
+            (ydCan('billing', 'change')
+              ? '<button class="btn btn-sm btn-accent" onclick="exportStormCsv(\'' + id + '\')">QuickBooks CSV</button>' : '') +
+            (window.YDQuickBooks && YDQuickBooks.connected() && ydCan('billing', 'change')
               ? '<button class="btn btn-sm btn-filled" onclick="sendStormToQuickBooks(\'' + id + '\')">Send to QuickBooks</button>'
               : '') +
           '</div>' +
@@ -465,7 +475,8 @@
     a.href = url;
     a.download = 'snow-billing-' + stamp + '.csv';
     a.click();
-    URL.revokeObjectURL(url);
+    // Not at once: Safari on an iPhone can still be reading the file.
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
     showToast(Object.keys(byAccount).length + ' invoices · ' + (rows.length - 1) + ' lines downloaded');
   };
 
@@ -542,7 +553,8 @@
     return Object.keys(set).sort().reverse();
   }
 
-  window.showSeason = function (s) { shownSeason = s; renderSeason(); };
+  // render() draws the season's cards as well, then the table.
+  window.showSeason = function (s) { shownSeason = s; render(); };
 
   window.renderSeason = function () {
     const wrap = document.getElementById('seasonWrap');
@@ -553,6 +565,8 @@
     if (!seasons.length) { if (section) section.hidden = true; wrap.innerHTML = ''; return; }
     if (section) section.hidden = false;
     if (!shownSeason || seasons.indexOf(shownSeason) === -1) shownSeason = seasons[0];
+    const badge = document.getElementById('seasonBadge');
+    if (badge) badge.textContent = shownSeason;
 
     const picker = seasons.length > 1
       ? '<div class="filter-bar season-pick">' + seasons.map(s =>
@@ -565,8 +579,8 @@
       '<span>' + (nextNo != null
         ? 'Next invoice number: <strong>' + nextNo + '</strong>'
         : 'Invoice numbers are not following QuickBooks yet') + '</span>' +
-      '<button class="btn btn-sm" onclick="setInvoiceStart()">' +
-        (nextNo != null ? 'Change' : 'Set it') + '</button>' +
+      (ydCan('billing', 'change') ? '<button class="btn btn-sm" onclick="setInvoiceStart()">' +
+        (nextNo != null ? 'Change' : 'Set it') + '</button>' : '') +
     '</div>';
 
     const acc = seasonByAccount(shownSeason);

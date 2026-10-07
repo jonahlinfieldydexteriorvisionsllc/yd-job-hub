@@ -123,34 +123,43 @@
       .replace(/\s+/g, ' ').trim();
   }
 
+  // A name two QuickBooks customers share is no match at all: which of them
+  // is not obvious. A match Jonah cleared by hand is stored as false and never
+  // guessed again; one never set is missing (or null).
+  function byTidyName(list) {
+    const out = {}, twice = {};
+    list.forEach(o => { const k = tidy(o.name); if (k in out) twice[k] = true; else out[k] = o.id; });
+    Object.keys(twice).forEach(k => { delete out[k]; });
+    return out;
+  }
+  const unset = v => v === undefined || v === null;
   function autoMatch() {
     const accounts = (window.YDSnow && YDSnow.accounts()) || {};
-    const byName = {};
-    customers.forEach(c => { byName[tidy(c.name)] = c.id; });
+    const byName = byTidyName(customers);
     let added = 0;
     Object.keys(accounts).forEach(id => {
-      if (map.customers[id]) return;
+      if (!unset(map.customers[id])) return;
       const hit = byName[tidy(accounts[id].name)];
       if (hit) { map.customers[id] = hit; added++; }
     });
-    const byItem = {};
-    items.forEach(i => { byItem[tidy(i.name)] = i.id; });
+    const byItem = byTidyName(items);
     LINE_KINDS.forEach(([key, label]) => {
-      if (map.items[key]) return;
+      if (!unset(map.items[key])) return;
       const hit = byItem[tidy(label)] || byItem[tidy(key)];
       if (hit) { map.items[key] = hit; added++; }
     });
     if (added) saveMap();
   }
 
+  // Cleared is written as false, not left out: the map is saved by merging,
+  // so a key left out kept the old match -- and the next send raised the
+  // invoice against the customer that had just been unpicked.
   window.setQbCustomer = function (accountId, customerId) {
-    if (customerId) map.customers[accountId] = customerId;
-    else delete map.customers[accountId];
+    map.customers[accountId] = customerId || false;
     saveMap(); render();
   };
   window.setQbItem = function (key, itemId) {
-    if (itemId) map.items[key] = itemId;
-    else delete map.items[key];
+    map.items[key] = itemId || false;
     saveMap(); render();
   };
 
@@ -191,8 +200,10 @@
             ? '<div class="qb-note">This is pointed at a <strong>practice company</strong>, ' +
               'not your real books. Nothing here can touch your accounts.</div>' : '') +
           (state.error ? '<div class="qb-warn">' + esc(state.error) + '</div>' : '') +
-          '<button class="btn btn-filled clock-big" onclick="connectQuickBooks()">' +
-            'Connect to QuickBooks</button>' +
+          // Connecting is the owner's alone (the server refuses anyone else).
+          (window.YDAuth && YDAuth.isOwner
+            ? '<button class="btn btn-filled clock-big" onclick="connectQuickBooks()">Connect to QuickBooks</button>'
+            : '<p class="hint">Only the owner can connect QuickBooks.</p>') +
         '</div>';
       return;
     }
@@ -209,7 +220,7 @@
           (state.env === 'sandbox' ? 'Practice company' : 'Live company') +
           (state.refreshedAt ? ' · last checked ' + niceDate(state.refreshedAt) : '') +
         '</div></div>' +
-        '<button class="btn btn-sm" onclick="disconnectQuickBooks()">Disconnect</button>' +
+        (window.YDAuth && YDAuth.isOwner ? '<button class="btn btn-sm" onclick="disconnectQuickBooks()">Disconnect</button>' : '') +
       '</div>' +
       (state.warning ? '<div class="qb-warn">' + esc(state.warning) + '</div>' : '') +
       (state.env === 'sandbox'
@@ -345,15 +356,22 @@
           // hands back the invoice it already made instead of raising another.
           requestKey: stormId + '/' + accountId,
         });
-        // Written immediately, one at a time. If the next one fails, the ones
-        // already raised are recorded and will not be raised twice.
+        // Recorded at once, one at a time, so if the next one fails the ones
+        // already raised are not raised twice. Not awaited: the write lands on
+        // this device straight away, and waiting for the server stalled the
+        // send between invoices on a weak signal -- and a refused write counted
+        // an invoice QuickBooks had already made as failed.
         done[accountId] = { id: res.id, number: res.docNumber, at: new Date().toISOString() };
-        await window.YDDb.put('storms/' + stormId + '/private', 'billing', { quickbooks: done });
         made++;
+        Promise.resolve(window.YDDb.put('storms/' + stormId + '/private', 'billing', { quickbooks: Object.assign({}, done) }))
+          .catch(e => {
+            console.warn('[qb] invoice record not saved:', e.code || e.message);
+            if (e && e.code === 'permission-denied') showToast('Invoice raised, but not recorded on the storm — note its number');
+          });
       } catch (e) {
         failed++;
         console.warn('[qb] invoice failed for', accountId, e.message);
-        showToast((accounts[accountId] || {}).name + ': ' + e.message);
+        showToast(((accounts[accountId] || {}).name || accountId) + ': ' + e.message);
         // A dead connection: stop, and show the Connect screen with the reason
         // rather than failing every remaining account one by one.
         if (e.reconnect) {
@@ -384,6 +402,9 @@
   async function checkStatus() {
     try { state = await ask('/qb/status'); }
     catch (e) { state = { connected: false, error: e.message }; }
+    // The storm list usually draws before this answers; its "Send to
+    // QuickBooks" buttons depend on the answer.
+    if (window.YDBilling && YDBilling.render) YDBilling.render();
   }
 
   window.YDQuickBooks = {
