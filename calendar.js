@@ -104,6 +104,7 @@
   let pending = null;       // waiting for "this date / the ones after / every date"
   let drag = null;          // an entry being dragged
   let justDragged = 0;      // a drag ends in a click; that click opens nothing
+  let gridScroll = null;     // where the hours were scrolled to (null: not yet)
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -380,13 +381,17 @@
       return;
     }
     if (drag && drag.live) return;      // not under someone's finger
+    // A finger still holding (not yet dragging) would be left holding an
+    // entry no longer on the page: it lets go instead.
+    if (drag) stopDrag();
     if (!view) view = isPhone() ? '3day' : 'week';
     if (!cursor) { cursor = today(); selected = cursor; }
     if (!miniMonth) miniMonth = cursor.slice(0, 8) + '01';
-    // Redrawn because something changed: the hours stay where they were
-    // scrolled to.
+    // Where the hours are scrolled to, read off the grid -- only one that
+    // was on screen when it was placed: one drawn hidden reads 0, which is
+    // not where it was.
     const old = wrap.querySelector('.cg-scroll');
-    const keep = old ? old.scrollTop : null;
+    if (old && old.clientHeight && old.dataset.placed) gridScroll = old.scrollTop;
     drawn = {};
     wrap.innerHTML = '<div class="cal-shell">' +
         '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml() + '</aside>' +
@@ -396,7 +401,7 @@
           '</div>' +
         '</div>' +
       '</div>';
-    if (isGrid()) placeScroll(keep);
+    if (isGrid()) placeScroll();
     wireSlots();
   }
 
@@ -466,9 +471,10 @@
   // ------------------------------------------------------------ time grid
 
   // Where a timed entry sits on its day, in minutes [start, end). An entry
-  // with no end time takes an hour. Work past midnight (an end before the
-  // start, ending the next day) runs to midnight on the first day and from
-  // midnight on the second.
+  // with no end time takes an hour; one ending at 12:00 am ends at midnight.
+  // Work past midnight (an end before the start, ending the next day) runs to
+  // midnight on the first day and from midnight on the second -- and one
+  // ending exactly at midnight has nothing on the second day ([0, 0]).
   function segOf(o) {
     if (!o.time) return null;
     let a = minutesOf(o.time);
@@ -476,8 +482,9 @@
     let b = o.endTime ? minutesOf(o.endTime) : null;
     const e = o.ev;
     if (e && e.endDate && b != null && b <= a && daysBetween(e.date, e.endDate) === 1) {
-      if (o.day === e.date) b = 1440; else a = 0;
+      if (o.day === e.date) b = 1440; else { a = 0; if (b === 0) return [0, 0]; }
     }
+    if (b === 0 && a > 0) b = 1440;
     if (b == null || b <= a) b = Math.min(1440, a + 60);
     return [a, b];
   }
@@ -516,7 +523,7 @@
     const cols = days.map(d => {
       const items = layout(occ.filter(o => o.day === d).map(o => {
         const s = segOf(o);
-        return s && { o: o, a: s[0], b: s[1] };
+        return s && s[1] > s[0] && { o: o, a: s[0], b: s[1] };
       }).filter(Boolean));
       return '<div class="cg-col' + (d === t ? ' today' : '') + '" data-day="' + d + '">' +
         items.map(blockHtml).join('') +
@@ -550,17 +557,26 @@
         'left:calc(' + (it.col * w) + '% + 1px);width:calc(' + w + '% - 3px)" onclick="calClick(\'' + k + '\')">' +
         '<div class="cg-ev-t">' + esc(o.title) + '</div>' +
         '<div class="cg-ev-s">' + esc(fmtMin(it.a) + '–' + fmtMin(it.b)) + (o.address ? ' · ' + esc(o.address) : '') + '</div>' +
+        // Who is on it, as the old list showed on every entry.
+        ((o.crew || []).length ? '<div class="cg-ev-s">👷 ' + o.crew.map(c => esc(firstName(nameOf(c)))).join(', ') + '</div>' : '') +
         (mv ? '<div class="cg-rs" aria-hidden="true"></div>' : '') +
       '</div>';
   }
 
-  // The hours open at the morning -- or around now, when today is on screen.
-  function placeScroll(keep) {
+  // The hours open at the morning -- or around now, when today is on screen
+  // -- and after that stay where they were scrolled to. Kept here, not read
+  // off the page: a grid drawn while the tab is hidden cannot be scrolled,
+  // and reading its 0 back opened the next visit at midnight.
+  function placeScroll() {
     const s = document.querySelector('#calBody .cg-scroll');
     if (!s) return;
-    if (keep != null) { s.scrollTop = keep; return; }
-    const onToday = gridDays().indexOf(today()) !== -1;
-    s.scrollTop = (onToday ? Math.max(0, new Date().getHours() - 2) : 6) * HOUR;
+    if (gridScroll != null) s.scrollTop = gridScroll;
+    else {
+      const onToday = gridDays().indexOf(today()) !== -1;
+      s.scrollTop = (onToday ? Math.max(0, new Date().getHours() - 2) : 6) * HOUR;
+    }
+    if (s.clientHeight) s.dataset.placed = '1';
+    s.addEventListener('scroll', () => { if (s.clientHeight) { gridScroll = s.scrollTop; s.dataset.placed = '1'; } }, { passive: true });
   }
 
   // A tap on an empty hour adds an entry at that half hour.
@@ -676,6 +692,8 @@
 
   window.calView = function (v) {
     if (!VIEWS.some(x => x[0] === v)) return;
+    // Leaving the month for days: the day picked in it is where they start.
+    if (view === 'month' && v !== 'month' && selected) cursor = selected;
     view = v;
     if (v === 'month') selected = cursor;
     try { localStorage.setItem('ydjobhub_calView', v); } catch (e) {}
@@ -691,13 +709,13 @@
   };
   // The small month: a day picked goes to it in the view on screen.
   window.calGo = function (day) {
-    cursor = day; selected = day;
+    cursor = day; selected = day; miniMonth = day.slice(0, 8) + '01';
     if (isPhone()) sideOpen = false;
     render();
   };
   window.calMini = function (n) { miniMonth = addMonths(miniMonth, n).slice(0, 8) + '01'; render(); };
   // A day's heading, or "+3 more": that day on its own.
-  window.calGoDay = function (day) { cursor = day; selected = day; view = 'day'; render(); };
+  window.calGoDay = function (day) { cursor = day; selected = day; miniMonth = day.slice(0, 8) + '01'; view = 'day'; render(); };
   window.calSide = function () { sideOpen = !sideOpen; render(); };
   window.calPick = function (day) {
     if (Date.now() - justDragged < 400) return;
@@ -906,42 +924,43 @@
       : cal.name + ' is not shared with anyone yet. Share it under ⚙ Calendars so the crew see it.';
   };
 
-  window.calSave = function () {
-    const ed = editing;
-    if (!ed) return;
+  // What the editor says, checked; null (with a word why) when it cannot be
+  // saved as it is. Read again when "which dates?" is answered, so anything
+  // typed while that question was showing is kept.
+  function readEditor(ed) {
     const c = document.querySelector('input[name="evCal"]:checked');
-    if (!c) { showToast('Pick a calendar'); return; }
+    if (!c) { showToast('Pick a calendar'); return null; }
     const calId = c.value;
     // Both ends of a move: the calendar it is going to, and the one it leaves.
     if (!editsCal(cals[calId]) || (ed.calId && !editsCal(cals[ed.calId]))) {
       showToast('You cannot change that calendar');
-      return;
+      return null;
     }
     const jobId = val('evJob');
     const job = jobId ? (loadAllJobs() || []).find(j => j._id === jobId) : null;
     const title = val('evTitle') || (job ? (job.customerName || 'Job') : '');
-    if (!title) { showToast('Give it a title'); return; }
+    if (!title) { showToast('Give it a title'); return null; }
     const date = val('evDate');
-    if (!date) { showToast('Pick a date'); return; }
-    let end = val('evEnd');
-    if (end && end < date) { showToast('"Until" is before the start date'); return; }
+    if (!date) { showToast('Pick a date'); return null; }
+    const end = val('evEnd');
+    if (end && end < date) { showToast('"Until" is before the start date'); return null; }
     const allDay = el('evAllDay').checked;
     // A repeat that stops before it starts would save and then never show
     // up anywhere, which looks exactly like the entry being lost.
     const repeat = val('evRepeat') || 'none';
     const until = val('evUntil');
     if (repeat !== 'none' && until && until < date) {
-      showToast('"Repeat until" is before the start date'); return;
+      showToast('"Repeat until" is before the start date'); return null;
     }
     // Times are on the same day unless "Until" says otherwise, so work that
     // runs past midnight is entered with an end date rather than refused.
+    // Ending at 12:00 am is ending at midnight, the same day.
     const startT = allDay ? '' : val('evTime');
     const endT = allDay ? '' : val('evEndTime');
-    if (startT && endT && endT < startT && !(end && end > date)) {
-      showToast('"Ends" is before "Starts" — for work past midnight, set "Until" to the next day'); return;
+    if (startT && endT && endT < startT && endT !== '00:00' && !(end && end > date)) {
+      showToast('"Ends" is before "Starts" — for work past midnight, set "Until" to the next day'); return null;
     }
     const crew = crewPeople();
-
     const rec = {
       title: title,
       date: date,
@@ -968,37 +987,49 @@
     rec.remindMins = remind === '' ? null : parseInt(remind, 10);
     rec.remindUids = remind === '' ? [] : Array.from(new Set(
       ((base && base.remindUids) || []).concat([(me() || {}).uid]).filter(Boolean)));
+    return { rec: rec, calId: calId, base: base };
+  }
 
-    const done = () => {
+  window.calSave = function () {
+    const ed = editing;
+    if (!ed) return;
+    const first = readEditor(ed);
+    if (!first) return;
+    const done = (rec, calId) => {
       lastCal = calId;
       closeCalModal();
-      cursor = rec.date; selected = rec.date;
+      cursor = rec.date; selected = rec.date; miniMonth = rec.date.slice(0, 8) + '01';
       render();
       showToast('Saved to ' + cals[calId].name);
     };
+    const base = first.base;
     if (!base) {
-      const id = newId('ev');
+      const rec = first.rec, id = newId('ev');
       rec.createdAt = nowIso();
-      events[calId] = events[calId] || {};
-      events[calId][id] = Object.assign({ id: id }, rec);
-      write('calendars/' + calId + '/events', id, rec, 'saving ' + title);
-      done();
+      events[first.calId] = events[first.calId] || {};
+      events[first.calId][id] = Object.assign({ id: id }, rec);
+      write('calendars/' + first.calId + '/events', id, rec, 'saving ' + rec.title);
+      done(rec, first.calId);
       return;
     }
     const o = ed.occ || { ev: base, orig: base.date, day: base.date };
     if (isRepeating(base) && ed.occ) {
-      // A different calendar or a different repeat is about the series, not
+      // A different calendar, repeat or reminder is about the series, not
       // one date of it.
-      const ruleChanged = calId !== ed.calId || repeat !== (base.repeat || 'none') ||
-        (until || null) !== (base.repeatUntil || null);
+      const r = first.rec;
+      const ruleChanged = first.calId !== ed.calId || r.repeat !== (base.repeat || 'none') ||
+        (r.repeatUntil || null) !== (base.repeatUntil || null) ||
+        r.hasReminder !== !!base.hasReminder || (r.remindMins == null ? null : r.remindMins) !== (base.remindMins == null ? null : base.remindMins);
       askScope('Save the change to', ruleChanged ? ['following', 'all'] : ['one', 'following', 'all'], scope => {
-        applyChange(ed.calId, base, o, rec, scope, calId);
-        done();
+        const now = readEditor(ed);
+        if (!now) { calScope(''); return; }
+        applyChange(ed.calId, base, o, now.rec, scope, now.calId);
+        done(now.rec, now.calId);
       }, true);
       return;
     }
-    applyChange(ed.calId, base, o, rec, 'all', calId);
-    done();
+    applyChange(ed.calId, base, o, first.rec, 'all', first.calId);
+    done(first.rec, first.calId);
   };
 
   window.calRemove = function () {
@@ -1073,39 +1104,88 @@
   const nulled = ex => { const out = {}; Object.keys(ex || {}).forEach(k => { out[k] = null; }); return out; };
   const live = ex => { const out = {}; Object.keys(ex || {}).forEach(k => { if (ex[k]) out[k] = ex[k]; }); return Object.keys(out).length ? out : null; };
 
+  const same = (x, y) => JSON.stringify(x == null ? null : x) === JSON.stringify(y == null ? null : y);
+  const isStep = ev => ev.repeat === 'weekly' || ev.repeat === 'biweekly';
+
+  // A single date's own change, with what was just changed for more dates
+  // than that. The date acted on takes every change; another date changed on
+  // its own keeps its own time, unless it had the series' time anyway.
+  function withFields(x, fields, isThis, base) {
+    if (!x || typeof x !== 'object') return x;
+    const upd = Object.assign({}, x);
+    Object.keys(fields).forEach(f => {
+      if (OCC_FIELDS.indexOf(f) === -1 || f === 'date' || f === 'endDate') return;
+      if (isThis || ['time', 'endTime', 'allDay'].indexOf(f) === -1 || same(x[f], base[f])) upd[f] = fields[f];
+    });
+    return upd;
+  }
+  // The single-date changes from `from` on, moved with a series that moved
+  // by `delta` days: a weekly repeat's changes (cancelled ones too) move by
+  // the same days; a monthly or yearly one's dates do not move by days, so
+  // theirs go. The date the move was made from is an ordinary date of the
+  // moved series now.
+  function movedExceptions(ex, from, delta, step, origKey) {
+    const out = {};
+    Object.keys(ex).forEach(k => {
+      const x = ex[k];
+      if (!x || k < from || k === origKey || !step) return;
+      out[addDays(k, delta)] = typeof x === 'object'
+        ? Object.assign({}, x, { date: addDays(x.date || k, delta), endDate: x.endDate ? addDays(x.endDate, delta) : null })
+        : x;
+    });
+    return out;
+  }
+
   // A change to the date `o` of the entry `base` (from the editor, or a
-  // drag): `next` is that date as it should now be. A date moved by some days
-  // moves every date it applies to by the same.
+  // drag): `next` is that date as it should now be. Only what this change
+  // made different from the date as shown is applied to other dates -- a
+  // date changed on its own earlier carries its own title or time, which
+  // must not spread to every date (review, 7 Oct). A date moved re-anchors
+  // the repeat on its new day, counted from the day the repeat fell on, and
+  // "Repeat until" moves with it -- left behind, a series dragged past its
+  // last date vanished.
   function applyChange(calId, base, o, next, scope, toCal) {
     toCal = toCal || calId;
     const path = 'calendars/' + calId + '/events';
     const repeating = isRepeating(base);
+    const ex = (repeating && base.exceptions) || {};
     if (repeating && scope === 'one') {
       setException(calId, base, o.orig, pick(Object.assign({}, o.ev, next), OCC_FIELDS));
       return;
     }
-    const delta = daysBetween(o.ev.date, next.date);
-    const span = next.endDate && next.endDate > next.date ? daysBetween(next.date, next.endDate) : 0;
+    const diff = {};
+    Object.keys(next).forEach(k => { if (k !== 'updatedAt' && !same(next[k], o.ev[k])) diff[k] = next[k]; });
+    const moved = 'date' in diff;
+    const delta = moved ? daysBetween(o.orig, next.date) : 0;
+    const reSpan = moved || 'endDate' in diff;
+    const span = reSpan ? (next.endDate && next.endDate > next.date ? daysBetween(next.date, next.endDate) : 0) : spanOf(base);
+    const fields = Object.assign({}, diff);
+    delete fields.date; delete fields.endDate;
+    // Never a repeat that stops before it starts.
+    const untilFor = (start, given) => {
+      let u = given !== undefined ? given : (base.repeatUntil && delta ? addDays(base.repeatUntil, delta) : base.repeatUntil || null);
+      if (u && u < start) u = start;
+      return u || null;
+    };
     const series = Object.assign({}, base);
     delete series.id; delete series.exceptions;
 
     if (repeating && scope === 'following' && o.orig > base.date) {
       // The series stops the day before; a new one carries on from this date
-      // with the change. Single-date changes from here on go with it (when
-      // its dates have not moved), and come off the old one.
-      const ex = base.exceptions || {}, cleared = {}, carried = {};
-      Object.keys(ex).forEach(k => {
-        if (k < o.orig) return;
-        cleared[k] = null;
-        if (ex[k] && k !== o.orig && !delta) carried[k] = ex[k];
-      });
+      // with the change, taking the single-date changes from here on.
+      const cleared = {};
+      let carried = {};
+      Object.keys(ex).forEach(k => { if (k >= o.orig) cleared[k] = null; });
+      if (delta) carried = movedExceptions(ex, o.orig, delta, isStep(base), o.orig);
+      else Object.keys(ex).forEach(k => { if (k >= o.orig && ex[k]) carried[k] = withFields(ex[k], fields, k === o.orig, base); });
       const stop = { repeatUntil: addDays(o.orig, -1), updatedAt: nowIso() };
       if (Object.keys(cleared).length) stop.exceptions = cleared;
       applyLocal(calId, base.id, stop);
       write(path, base.id, stop, 'ending a repeat');
-      const rec = Object.assign(series, next);
+      const rec = Object.assign(series, fields);
       rec.date = addDays(o.orig, delta);
       rec.endDate = span ? addDays(rec.date, span) : null;
+      rec.repeatUntil = untilFor(rec.date, 'repeatUntil' in diff ? diff.repeatUntil : undefined);
       rec.exceptions = Object.keys(carried).length ? carried : null;
       rec.createdAt = nowIso(); rec.updatedAt = nowIso();
       const nid = newId('ev');
@@ -1115,14 +1195,27 @@
     }
 
     // The whole entry -- every date of a repeat.
-    const rec = Object.assign({}, next);
-    rec.date = addDays(base.date, delta);
-    rec.endDate = span ? addDays(rec.date, span) : null;
-    rec.updatedAt = nowIso();
+    const rec = Object.assign({}, fields, { updatedAt: nowIso() });
+    const start = reSpan ? addDays(base.date, delta) : base.date;
+    if (reSpan) { rec.date = start; rec.endDate = span ? addDays(start, span) : null; }
+    if (repeating) {
+      const u = untilFor(start, 'repeatUntil' in diff ? diff.repeatUntil : undefined);
+      if (!same(u, base.repeatUntil)) rec.repeatUntil = u;
+    }
+    let exPatch = null;
+    if (Object.keys(ex).length) {
+      exPatch = {};
+      if (delta) Object.assign(exPatch, nulled(ex), movedExceptions(ex, '', delta, isStep(base), o.orig));
+      else Object.keys(ex).forEach(k => {
+        const upd = withFields(ex[k], fields, k === o.orig, base);
+        if (ex[k] && !same(upd, ex[k])) exPatch[k] = upd;
+      });
+      if (!Object.keys(exPatch).length) exPatch = null;
+    }
     if (toCal !== calId) {
       // Another calendar is another place: written new there, taken away here.
       const full = Object.assign(series, rec, { createdAt: base.createdAt || nowIso() });
-      full.exceptions = delta ? null : live(base.exceptions);
+      full.exceptions = live(Object.assign({}, ex, exPatch || {}));
       const nid = newId('ev');
       delete events[calId][base.id];
       removeEvent(calId, base.id);
@@ -1130,9 +1223,7 @@
       write('calendars/' + toCal + '/events', nid, full, 'moving it');
       return;
     }
-    // Single-date changes are named by the dates the repeat fell on; moved
-    // to other days, those names mean nothing, so they go.
-    if (repeating && delta && base.exceptions) rec.exceptions = nulled(base.exceptions);
+    if (exPatch) rec.exceptions = exPatch;
     applyLocal(calId, base.id, rec);
     write(path, base.id, rec, 'saving ' + (rec.title || base.title || ''));
   }
@@ -1173,18 +1264,28 @@
     }
   }
   function goLive() {
+    // Redrawn since it was pressed: the entry held is no longer on the page.
+    if (!drag.el.isConnected) { stopDrag(); return false; }
     drag.live = true;
     drag.el.classList.add('dragging');
+    // A month square (or an all-day box) hides what spills out of it; while
+    // dragging, it may.
+    const body = el('calBody');
+    if (body) body.classList.add('dragging');
     try { drag.el.setPointerCapture(drag.id); } catch (err) {}
     if (drag.block) { const s = segOf(drag.o); drag.s0 = s; drag.a = s[0]; drag.b = s[1]; }
+    return true;
   }
   function onMove(e) {
     if (!drag || e.pointerId !== drag.id) return;
+    // The mouse button let go somewhere the page never heard about (another
+    // window): the drag is over, not carried on with no button held.
+    if (!drag.touch && !(e.buttons & 1)) { const was = drag.live; stopDrag(); if (was) render(); return; }
     const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
     if (!drag.live) {
       if (drag.touch) { if (Math.abs(dx) + Math.abs(dy) > 10) stopDrag(); return; }
       if (Math.abs(dx) + Math.abs(dy) < 6) return;
-      goLive();
+      if (!goLive()) return;
     }
     if (e.cancelable) e.preventDefault();
     if (drag.block) moveBlock(e); else moveChip(e, dx, dy);
@@ -1258,6 +1359,8 @@
     it.classList.remove('dragging');
     it.style.transform = ''; it.style.pointerEvents = '';
     document.querySelectorAll('#calBody .drop-on').forEach(c => c.classList.remove('drop-on'));
+    const body = el('calBody');
+    if (body) body.classList.remove('dragging');
     drag = null;
   }
   function moveOcc(o, patch) {

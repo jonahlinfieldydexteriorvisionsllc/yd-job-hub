@@ -1099,7 +1099,7 @@
      time grid; Month; List. Narrower than 900 px the left side folds away
      behind ☰. */
   .cal-shell { display:grid; grid-template-columns:200px minmax(0, 1fr); gap:18px; align-items:start; }
-  .cal-side { position:sticky; top:12px; display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .cal-side { display:flex; flex-direction:column; gap:8px; min-width:0; }
   .cal-main { min-width:0; }
   .cal-side-btn { display:none; }
   .cal-arrow { width:34px; height:34px; border-radius:50%; border:none; background:transparent; color:var(--text);
@@ -1157,7 +1157,9 @@
   html[data-night] .cg-dh.today .cg-dn { background:var(--brand-2); color:#0c0a0e; }
   .cg-all { border-top:1px solid var(--border); min-height:26px; }
   .cg-all-l { font-size:10px; color:var(--muted); text-align:right; padding:6px 6px 0 0; }
-  .cg-allcell { border-left:1px solid var(--border); padding:2px; display:flex; flex-direction:column; gap:2px; min-width:0; }
+  /* A day with many all-day things scrolls in its own box rather than pushing the hours off the screen. */
+  .cg-allcell { border-left:1px solid var(--border); padding:2px; display:flex; flex-direction:column; gap:2px; min-width:0;
+                max-height:76px; overflow-y:auto; }
   .cg-chip { --c:#6b7a8f; font-size:11.5px; font-weight:600; line-height:1.35; color:#fff; background:var(--c);
              border-radius:4px; padding:2px 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   .cg-chip.done { opacity:.5; text-decoration:line-through; }
@@ -1178,6 +1180,7 @@
   .cg-ev.done { opacity:.55; }
   .cg-ev.dragging, .cg-chip.dragging, .cal-bar.dragging { opacity:.88; z-index:6; box-shadow:0 6px 18px rgba(0,0,0,.28); cursor:grabbing; }
   .cg-chip.dragging, .cal-bar.dragging { position:relative; }
+  #calBody.dragging .cal-month, #calBody.dragging .cal-cell, #calBody.dragging .cg-allcell { overflow:visible; }
   .cg-rs { position:absolute; left:0; right:0; bottom:0; height:9px; cursor:ns-resize; }
   .cg-now { position:absolute; left:-1px; right:0; height:2px; background:#e0412f; z-index:3; pointer-events:none; }
   .cg-now::before { content:''; position:absolute; left:-5px; top:-4px; width:10px; height:10px; border-radius:50%; background:#e0412f; }
