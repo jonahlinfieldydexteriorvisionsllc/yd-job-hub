@@ -116,4 +116,41 @@ def run():
                         sent.append({"uid": uid, "event": key, "phones": n})
                     except Exception as err:      # noqa: BLE001
                         print("reminders: push failed for", uid, key, err)
+    sent.extend(_urgent_cards(db, people, now))
     return sent
+
+
+def _urgent_cards(db, people, now):
+    """A card marked 🔴 Urgent (boards.js) pings the owner's phone, once
+    (WISHLIST #1: "a new Urgent card pings Jonah's phone"). Not one he made
+    himself, and not one already done."""
+    out = []
+    owners = {uid: u for uid, u in people.items() if u.get("role") == "owner"}
+    if not owners:
+        return out
+    names = {str(u.get("name") or "").strip().lower() for u in owners.values()} - {""}
+    try:
+        for b in db.collection("boards").stream():
+            board = b.to_dict() or {}
+            for s in b.reference.collection("cards").where("urgency", "==", "urgent").stream():
+                k = s.to_dict() or {}
+                if k.get("doneAt"):
+                    continue
+                key = "urgent_%s_%s" % (b.id, s.id)
+                try:
+                    db.collection("reminderLog").document(key).create({"board": b.id, "card": s.id, "at": now.isoformat()})
+                except AlreadyExists:
+                    continue
+                if str(k.get("createdBy") or "").strip().lower() in names:
+                    continue
+                note = {"push": {"title": "🔴 Urgent: " + str(k.get("title") or "a card")[:80],
+                                 "body": (board.get("name") or "Boards") +
+                                         ((" — from " + str(k.get("createdBy"))) if k.get("createdBy") else "")}}
+                for uid in owners:
+                    try:
+                        out.append({"uid": uid, "card": key, "phones": dg.send_push(uid, note, tag="yd-" + key)})
+                    except Exception as err:      # noqa: BLE001
+                        print("reminders: urgent push failed:", err)
+    except Exception as err:          # noqa: BLE001
+        print("reminders: urgent cards not read:", err)
+    return out
