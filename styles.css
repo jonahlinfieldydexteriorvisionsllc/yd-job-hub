@@ -1756,3 +1756,15 @@
     .est-amt { flex:1; }
     .est-moves .bd-edit-btn { min-width:40px; min-height:40px; }
   }
+  /* The conversation with Claude about an estimate */
+  .est-chat { max-height:420px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:4px 2px; }
+  .est-hello { font-size:13px; color:var(--muted); padding:10px 12px; border:1px dashed var(--border-strong); border-radius:10px; }
+  .est-msg { max-width:88%; padding:8px 11px; border-radius:12px; font-size:14px; line-height:1.4; }
+  .est-msg.me { align-self:flex-end; background:color-mix(in srgb, var(--brand) 12%, var(--surface)); border:1px solid color-mix(in srgb, var(--brand) 25%, transparent); }
+  .est-msg.claude { align-self:flex-start; background:var(--surface-2); border:1px solid var(--border); }
+  .est-who { font-size:11px; font-weight:700; color:var(--muted); margin-bottom:2px; }
+  .est-text { white-space:pre-wrap; }
+  .est-did { font-size:12px; color:var(--pos); margin-top:4px; }
+  .est-did .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-weight:700; text-decoration:underline; cursor:pointer; }
+  .est-send { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
+  .est-send textarea { flex:1; }

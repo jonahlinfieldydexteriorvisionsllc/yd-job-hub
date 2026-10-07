@@ -35,8 +35,13 @@
   let unsub = null;
   let building = false, saving = false, checking = false;
   const checkedAt = {};       // job id -> when its QuickBooks status was last asked for
+  let draftMsg = '';          // what is typed in the chat box, not sent yet
+  let undo = null;            // {jobId, lines, memo} from before Claude's last change
 
-  function blank() { return { ask: '', lines: [], memo: '', questions: [] }; }
+  // chat: the conversation with Claude about this estimate, [{role, text, at,
+  // changed}] -- kept with the job so it can be picked up again later.
+  function blank() { return { ask: '', lines: [], memo: '', questions: [], chat: [] }; }
+  const CHAT_KEEP = 60;
 
   // ------------------------------------------------------------- the money
 
@@ -54,7 +59,8 @@
   window.YDEstimate = {
     get() {
       return { ask: est.ask || '', memo: est.memo || '', questions: (est.questions || []).slice(),
-               lines: est.lines.map(l => Object.assign({}, l)) };
+               lines: est.lines.map(l => Object.assign({}, l)),
+               chat: est.chat.slice(-CHAT_KEEP).map(m => ({ role: m.role, text: m.text, at: m.at || null, changed: !!m.changed })) };
     },
     load(e) {
       est = blank();
@@ -62,7 +68,12 @@
         est.ask = String(e.ask || ''); est.memo = String(e.memo || '');
         est.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
         est.lines = (Array.isArray(e.lines) ? e.lines : []).map(l => Object.assign({ id: newId('el') }, l));
+        est.chat = (Array.isArray(e.chat) ? e.chat : []).filter(m => m && m.text)
+          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed }));
+        // Notes written before the conversation existed start it.
+        if (!est.chat.length && est.ask.trim()) est.chat.push({ role: 'user', text: est.ask.trim(), at: null, changed: false });
       }
+      draftMsg = ''; undo = null;
       render();
       autoCheck();
     },
@@ -93,19 +104,32 @@
       .sort((a, b) => String(a[1].category || '').localeCompare(String(b[1].category || '')) ||
         String(a[1].name || '').localeCompare(String(b[1].name || '')));
 
+    const last = est.chat.length - 1;
     wrap.innerHTML =
-      '<div class="field"><span class="label">What to price — your notes, the way you\'d tell someone</span>' +
-        '<textarea id="estAsk" rows="3" ' + (ro ? 'readonly ' : '') +
-        'placeholder="e.g. 16x20 paver patio, Unilock Brussels in Sandstone, 2 steps off the back door, 40 ft steel edging, remove old deck and haul away" ' +
-        'oninput="estAskInput(this.value)">' + esc(est.ask) + '</textarea>' +
-        '<div class="field-actions">' +
-          (ro ? '' : '<button class="btn btn-sm btn-filled" id="estBuildBtn" onclick="estBuild()"' + (building ? ' disabled' : '') + '>' +
-            (building ? 'Claude is pricing it…' : '✨ Build with Claude') + '</button>') +
-          '<button class="btn btn-sm" onclick="openPriceBook()">💲 Price book (' + Object.keys(book).length + ')</button>' +
-        '</div></div>' +
+      '<div class="est-chat" id="estChat">' +
+        (est.chat.length ? est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + '">' +
+            '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
+            '<div class="est-text">' + esc(m.text) + '</div>' +
+            (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate below' +
+              (i === last && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
+              '</div>' : '') +
+          '</div>').join('')
+          : '<div class="est-hello">Tell Claude what to price, the way you’d tell someone — “16x20 paver patio, Brussels in Sandstone, 2 steps off the back door, 40 ft steel edging, tear out the old deck.” ' +
+            'Then keep talking: “make it 18x20”, “add a fire pit”, “why is the base so much?”. It prices from your price book.</div>') +
+        (building ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">Working on it…</div></div>' : '') +
+      '</div>' +
+      (ro ? '' : '<div class="est-send">' +
+        '<textarea id="estMsg" rows="2" placeholder="' + (est.chat.length ? 'Message Claude about this estimate' : 'What to price…') + '" ' +
+          'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
+        '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (building ? '…' : 'Send') + '</button>' +
+      '</div>') +
+      '<div class="field-actions">' +
+        '<button class="btn btn-sm" onclick="openPriceBook()">💲 Price book (' + Object.keys(book).length + ')</button>' +
+        (!ro && est.chat.length ? '<button class="btn btn-sm" onclick="estNewChat()">Start the conversation over</button>' : '') +
+      '</div>' +
       ((est.questions || []).length ? '<div class="est-questions"><b>Claude needs to know:</b><ul>' +
         est.questions.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul>' +
-        '<div class="hint">Add the answers to your notes above and build it again, or fix the lines by hand.</div></div>' : '') +
+        '<div class="hint">Answer in the chat above, or fix the lines by hand.</div></div>' : '') +
       '<div class="est-lines">' +
         (est.lines.length ? est.lines.map((l, i) => lineHtml(l, i, names, ro)).join('')
           : '<div class="empty-msg">No lines yet. Write what to price and press Build with Claude, or add lines yourself.</div>') +
@@ -123,6 +147,7 @@
       '<div class="est-qb" id="estQb"></div>';
 
     wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
+    const log = el('estChat'); if (log) log.scrollTop = log.scrollHeight;
     renderTotals();
   }
 
@@ -219,7 +244,6 @@
 
   function line(id) { return est.lines.find(l => safeId(l.id) === id); }
 
-  window.estAskInput = function (v) { est.ask = v; if (typeof markDirty === 'function') markDirty(); };
   window.estMemoInput = function (v) { est.memo = v; if (typeof markDirty === 'function') markDirty(); };
 
   window.estField = function (id, field, v) {
@@ -282,44 +306,91 @@
   // A tax change moves the estimate's tax line.
   document.addEventListener('change', e => { if (e.target && e.target.id === 'taxable') renderTotals(); });
 
-  // ------------------------------------------------------ Claude builds it
+  // ------------------------------------------------ talking to Claude
+  //
+  // Each message goes with the whole conversation and the estimate as it is
+  // on screen (lines changed by hand included). Claude answers in words and,
+  // when asked for a change, with the whole estimate as it should now be,
+  // which replaces the lines -- with one Undo, because a conversation
+  // changes things in steps and the last step is the one most often wrong.
 
-  window.estBuild = async function () {
+  window.estMsgInput = function (v) { draftMsg = v; };
+  window.estMsgKey = function (e) {
+    // Enter sends on a keyboard; on a phone Enter is a new line and Send is the button.
+    if (e.key === 'Enter' && !e.shiftKey && !(window.matchMedia && matchMedia('(pointer: coarse)').matches)) {
+      e.preventDefault(); window.estSend();
+    }
+  };
+
+  window.estSend = async function () {
     if (building || !changes()) return;
     if (!window.YDClaude || !window.YDClaude.available()) { showToast('Sign in to use Claude'); return; }
-    const ask = String(est.ask || '').trim();
-    if (!ask) { showToast('Write what to price first'); el('estAsk') && el('estAsk').focus(); return; }
+    const text = String(draftMsg || '').trim();
+    if (!text) { const b = el('estMsg'); if (b) b.focus(); return; }
     const customer = (el('customerName').value || '').trim();
     if (!customer) { showToast('Add a customer name first'); return; }
-    if (!Object.keys(book).length && !confirm('The price book is empty, so Claude can only lay out the lines — every price will be blank.\n\nBuild it anyway?')) return;
-    if (items().length && !confirm('Replace the lines on this estimate with what Claude builds?')) return;
+    if (!Object.keys(book).length && !est.chat.length &&
+        !confirm('The price book is empty, so Claude can only lay out the lines — every price will be blank.\n\nCarry on?')) return;
     // Saved first so the job has an id that means only itself (see claude.js).
     if (!currentJobId && typeof autosave === 'function') autosave();
     const forJob = currentJobId;
-    building = true; render();
+    est.chat.push({ role: 'user', text: text, at: new Date().toISOString(), changed: false });
+    if (!est.ask.trim()) est.ask = text;
+    draftMsg = '';
+    building = true;
+    changed(true);
     try {
       const city = [el('city').value, el('state').value].filter(Boolean).join(', ');
       const r = await window.YDClaude.post('/estimate/draft', {
-        ask: ask, customer: customer,
+        customer: customer,
         location: [el('address').value, city].filter(Boolean).join(', '),
         services: (typeof serviceTypes !== 'undefined' ? serviceTypes.slice() : []),
         notes: (el('notes').value || '').trim(),
+        chat: est.chat.slice(-30).map(m => ({ role: m.role, text: m.text })),
+        current: { memo: est.memo || '', lines: est.lines.map(l => ({ kind: l.kind, priceId: l.priceId || null,
+          name: l.name || '', description: l.description || '', qty: l.qty, unit: l.unit || '', rateCents: Number(l.rateCents) || 0 })) },
       });
-      if (currentJobId !== forJob) { showToast('A different job is open now — the estimate was not put in it'); return; }
+      if (currentJobId !== forJob) { showToast('A different job is open now — Claude’s answer was not put in it'); return; }
       const lines = (r.lines || []).map(l => Object.assign({ id: newId('el') }, l));
-      if (!lines.length) { showToast('Claude sent back no lines — nothing was changed'); return; }
-      est.lines = lines;
+      const apply = r.updated !== false && lines.length > 0;
+      if (apply) {
+        undo = { jobId: forJob, lines: est.lines, memo: est.memo, questions: est.questions };
+        est.lines = lines;
+        const msg = String(r.message || '').trim();
+        if (msg) est.memo = msg;
+      } else {
+        // Undo only ever undoes the change it is shown beside.
+        undo = null;
+      }
       est.questions = (r.questions || []).map(String);
-      const msg = String(r.message || '').trim();
-      if (msg && (!String(est.memo || '').trim() || confirm('Replace the message on the estimate with the scope Claude wrote?'))) est.memo = msg;
+      est.chat.push({ role: 'assistant', text: String(r.reply || (apply ? 'Updated the estimate.' : 'No change.')),
+                      at: new Date().toISOString(), changed: apply });
       changed(true);
-      const holes = lines.filter(l => l.needsPrice).length;
-      showToast('Estimate built — check every line' + (holes ? ' (' + holes + ' need a price)' : ''));
     } catch (e) {
-      showToast('Could not build the estimate: ' + (e.message || e));
+      // The message stays in the box to send again.
+      est.chat.pop();
+      draftMsg = text;
+      showToast('Claude: ' + (e.message || e));
     } finally {
       building = false; render();
     }
+  };
+
+  window.estUndo = function () {
+    if (!undo || undo.jobId !== currentJobId || !changes()) return;
+    est.lines = undo.lines; est.memo = undo.memo; est.questions = undo.questions || [];
+    const lastMsg = est.chat[est.chat.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant') lastMsg.changed = false;
+    est.chat.push({ role: 'user', text: '(Undid that change.)', at: new Date().toISOString(), changed: false });
+    undo = null;
+    changed(true);
+    showToast('Put back as it was');
+  };
+
+  window.estNewChat = function () {
+    if (!confirm('Start the conversation over? The estimate lines stay as they are.')) return;
+    est.chat = []; est.questions = []; undo = null;
+    changed(true);
   };
 
   // ------------------------------------------------------- QuickBooks

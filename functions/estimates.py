@@ -13,13 +13,23 @@ into estimate lines. The split between Claude and plain code is deliberate:
 
 Anything the price book does not cover comes back as a line with no price and
 a question, rather than a guess.
+
+It is a conversation because that is how Jonah works with Claude: "make the
+patio 18x20", "add a fire pit", "why is the base so much?". Each call carries
+the whole conversation so far and the estimate as it stands on screen (he may
+have changed lines by hand), and Claude answers in words and, when he asked
+for a change, with the whole estimate as it should now be. Nothing is kept on
+the server; the conversation is saved with the job.
 """
 
 import json
 
 import digest as dg
 
-MODEL = "claude-opus-5-5"
+# Jonah's choice (6 Oct): the most capable model for estimates -- they need the
+# most judgement of anything in the app, and he is used to working with it.
+# About 25 cents a message; the rest of the app stays on Opus 5.5.
+MODEL = "claude-fable-5-1"
 
 SYSTEM = (
     "You build estimates for YD Exterior Visions LLC, a landscaping, hardscaping and snow "
@@ -43,7 +53,13 @@ SYSTEM = (
     "- The message is the scope of work for the customer: what will be done and what they end "
     "up with, short paragraphs, no prices, no marketing language. Mention exclusions only if "
     "the notes give them.\n"
-    "- Questions are for Jonah, short, only what actually blocks a right price."
+    "- Questions are for Jonah, short, only what actually blocks a right price.\n\n"
+    "You are talking with Jonah. `reply` is your answer to his latest message: short and "
+    "plain, like a colleague -- say what you changed, or answer what he asked. When he asks "
+    "for a change, or there is no estimate yet, set updated to true and give the WHOLE "
+    "estimate as it should now be (every line, not just the changed ones), keeping lines he "
+    "did not mention exactly as they are -- including ones he edited by hand. When he only "
+    "asks a question, set updated to false and give the lines unchanged."
 )
 
 SCHEMA = {
@@ -65,8 +81,10 @@ SCHEMA = {
         }},
         "message": {"type": "string"},
         "questions": {"type": "array", "items": {"type": "string"}},
+        "reply": {"type": "string"},
+        "updated": {"type": "boolean"},
     },
-    "required": ["lines", "message", "questions"],
+    "required": ["reply", "updated", "lines", "message", "questions"],
     "additionalProperties": False,
 }
 
@@ -97,7 +115,56 @@ def _book_text(book):
     return "\n".join(rows) or "(the price book is empty)"
 
 
+def _current_text(cur, book):
+    """The estimate as it stands on screen, for Claude to change."""
+    rows = []
+    for ln in (cur or {}).get("lines") or []:
+        if ln.get("kind") == "section":
+            rows.append("SECTION: %s" % str(ln.get("description") or "")[:200])
+            continue
+        try:
+            rate = "$%.2f" % (int(ln.get("rateCents") or 0) / 100)
+        except (TypeError, ValueError):
+            rate = "$0.00"
+        pid = str(ln.get("priceId") or "")
+        rows.append("- priceId %s | %s | qty %s %s | rate %s" % (
+            pid if pid in book else "(none)", str(ln.get("description") or ln.get("name") or "")[:300],
+            ln.get("qty"), str(ln.get("unit") or "")[:20], rate))
+    memo = str((cur or {}).get("memo") or "").strip()
+    return ("\n".join(rows) or "(no lines yet)") + "\n\nMessage on the estimate now:\n" + (memo[:3000] or "(none)")
+
+
+def _chat_text(chat):
+    out = []
+    for m in (chat or [])[-30:]:
+        who = "Jonah" if m.get("role") == "user" else "You"
+        out.append("%s: %s" % (who, str(m.get("text") or "")[:2000]))
+    return "\n\n".join(out)
+
+
 def _prompt(d, book):
+    chat = [m for m in (d.get("chat") or []) if isinstance(m, dict) and str(m.get("text") or "").strip()]
+    if chat:
+        return "\n".join([
+            "Today is %s." % dg._long_day(dg._now().date()),
+            "Customer: %s" % (str(d.get("customer") or "").strip() or "(no name)"),
+            "Where: %s" % (str(d.get("location") or "").strip() or "(not given)"),
+            "Services: %s" % (", ".join(d.get("services") or []) or "(not given)"),
+            "His other notes on the job (context):",
+            str(d.get("notes") or "").strip()[:3000] or "(none)",
+            "",
+            "PRICE BOOK:",
+            _book_text(book),
+            "",
+            "THE ESTIMATE AS IT STANDS (rates shown are what is on it now):",
+            _current_text(d.get("current"), book),
+            "",
+            "THE CONVERSATION SO FAR:",
+            _chat_text(chat[:-1]) or "(this is the first message)",
+            "",
+            "JONAH'S LATEST MESSAGE:",
+            str(chat[-1].get("text") or "")[:6000],
+        ])
     return "\n".join([
         "Today is %s." % dg._long_day(dg._now().date()),
         "Customer: %s" % (str(d.get("customer") or "").strip() or "(no name)"),
@@ -118,14 +185,17 @@ def _prompt(d, book):
 def draft(client, d):
     """Returns (result, usage). result: {lines, message, questions} with every
     price-book line priced from the book; or {error}."""
-    if not str(d.get("ask") or "").strip():
+    if not str(d.get("ask") or "").strip() and not (d.get("chat") or []):
         return {"error": "Write what to price first"}, None
     book = price_book()
     resp = client.beta.messages.create(
         model=MODEL, max_tokens=16000, system=SYSTEM,
         messages=[{"role": "user", "content": _prompt(d, book)}],
         thinking={"type": "adaptive"},
-        output_config={"effort": "high", "format": {"type": "json_schema", "schema": SCHEMA}},
+        # The first build is the careful one; a follow-up ("make it 18x20")
+        # should come back while he is still looking at the screen.
+        output_config={"effort": "high" if len(d.get("chat") or []) <= 1 else "medium",
+                       "format": {"type": "json_schema", "schema": SCHEMA}},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
     )
     if resp.stop_reason == "refusal":
@@ -165,4 +235,5 @@ def draft(client, d):
                           "qty": qty, "unit": str(ln.get("unit") or "")[:20],
                           "rateCents": cents, "needsPrice": cents == 0})
     return {"lines": lines, "message": str(got.get("message") or "").strip(),
-            "questions": questions, "bookSize": len(book)}, resp.usage
+            "questions": questions, "reply": str(got.get("reply") or "").strip(),
+            "updated": bool(got.get("updated", True)), "bookSize": len(book)}, resp.usage
