@@ -223,7 +223,9 @@
     const me = (window.YDAuth && window.YDAuth.user) || {};
     let miles = null;
     const g = k.machineId && window.YDEquipment ? YDEquipment.all()[k.machineId] : null;
-    if (g && g.kind === 'vehicle') {
+    // Anything serviced by the mile (a vehicle, or one of Jonah's own types
+    // with miles on it -- equipment.js countsMiles).
+    if (g && (YDEquipment.countsMiles ? YDEquipment.countsMiles(g) : g.kind === 'vehicle')) {
       const a = prompt('Miles on ' + (g.name || 'it') + ' now? (blank if you don’t know)', g.miles != null ? String(g.miles) : '');
       if (a === null) return;
       const n = parseInt(String(a).replace(/[^0-9]/g, ''), 10);

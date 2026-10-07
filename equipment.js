@@ -23,6 +23,33 @@
   'use strict';
 
   const KINDS = { machine: 'Machine', vehicle: 'Vehicle' };
+  // Jonah's own types (Trailer, Attachment, ATV...) are stored on the machine
+  // itself as the name he typed; the list is whatever the machines carry, so
+  // a type exists as long as something has it and needs no list of its own.
+  // Nothing hangs on the type but grouping: miles or hours comes from the
+  // machine's own readings (countsMiles).
+  const RESERVED_TYPES = ['all', 'everything', 'warranty', 'under warranty'];
+  let newTypes = [];                // typed in the edit form, not yet on a saved machine
+  const kindName = k => KINDS[k] || String(k || '');
+  function typeList() {
+    const seen = {}, out = [];
+    Object.keys(KINDS).concat(Object.values(gear).map(g => g.kind), newTypes).forEach(k => {
+      const key = String(k || '').trim().toLowerCase();
+      if (!key || seen[key]) return;
+      seen[key] = true;
+      out.push(KINDS[key] ? key : String(k).trim());
+    });
+    return out.slice(0, 2).concat(out.slice(2).sort((a, b) => a.localeCompare(b)));
+  }
+  // "Trailer" -> "Trailers", "Battery" -> "Batteries"; a phrase is left alone.
+  const plural = k => {
+    const n = kindName(k);
+    if (/\s/.test(n) || /s$/i.test(n)) return n;
+    return /[^aeiou]y$/i.test(n) ? n.slice(0, -1) + 'ies' : n + 's';
+  };
+  // Serviced by the mile: a vehicle, or anything with miles on it and no
+  // hour meter, or a miles interval.
+  const countsMiles = g => !!g && (g.kind === 'vehicle' || g.intervalMiles != null || (g.miles != null && g.hours == null));
 
   // How close to due counts as "coming up". Different units, same idea.
   const SOON = { days: 30, hours: 10, miles: 500 };
@@ -182,6 +209,9 @@
     // Anything out of service first, then whatever must be fixed before it is
     // used, then by service due.
     const issueRank = g => { const w = worstIssue(g); return w ? rankOf(w.urgency) : URGENCY.length; };
+    const types = typeList();
+    // A type whose last machine was changed or removed: back to everything.
+    if (filter !== 'all' && filter !== 'warranty' && types.indexOf(filter) === -1) filter = 'all';
     const list = all
       .filter(g => filter === 'all' || g.kind === filter)
       .sort((a, b) => {
@@ -193,10 +223,10 @@
 
     wrap.innerHTML =
       '<div class="filter-bar">' +
-        ['all', 'machine', 'vehicle', 'warranty'].map(f =>
+        ['all'].concat(types, ['warranty']).map(f =>
           '<button class="btn btn-sm' + (filter === f ? ' btn-filled' : '') +
-          '" onclick="filterEquipment(\'' + f + '\')">' +
-          (f === 'all' ? 'Everything' : f === 'warranty' ? '🛡 Under warranty' : KINDS[f] + 's') + '</button>').join('') +
+          '" onclick="filterEquipment(' + esc(JSON.stringify(f)) + ')">' +
+          (f === 'all' ? 'Everything' : f === 'warranty' ? '🛡 Under warranty' : esc(plural(f))) + '</button>').join('') +
         '<button class="btn btn-sm btn-accent" onclick="editEquipment(\'\')">+ Add</button>' +
       '</div>' +
       (filter === 'warranty' ? warrantyHtml()
@@ -223,7 +253,7 @@
     return '<div class="eq eq-' + d.state + '" onclick="openEquipment(\'' + g.id + '\')">' +
       '<div class="eq-top">' +
         '<span class="eq-name">' + esc(g.name) + '</span>' +
-        '<span class="eq-kind">' + (KINDS[g.kind] || '') + '</span>' +
+        '<span class="eq-kind">' + esc(kindName(g.kind)) + '</span>' +
         '<span class="eq-due ' + d.state + '">' + d.text + '</span>' +
       '</div>' +
       (g.make || g.model || g.year
@@ -288,7 +318,7 @@
     body.innerHTML =
       '<div class="eq-head">' +
         '<div>' +
-          '<div class="eq-sub">' + (KINDS[g.kind] || '') +
+          '<div class="eq-sub">' + esc(kindName(g.kind)) +
             (g.year || g.make || g.model
               ? ' · ' + esc([g.year, g.make, g.model].filter(Boolean).join(' ')) : '') +
           '</div>' +
@@ -671,7 +701,7 @@
   // for a machine on an hours interval. Jonah wants the count every time a
   // service is entered -- it is what keeps "next service" right.
   function readingWanted(g) {
-    if (g.kind === 'vehicle') return 'miles';
+    if (countsMiles(g)) return 'miles';
     if (g.intervalHours || g.hours != null) return 'hours';
     return '';
   }
@@ -812,10 +842,7 @@
         '<div class="field"><span class="label">Name</span>' +
           '<input id="eqName" value="' + esc(g.name || '') + '" placeholder="e.g. Toro 60\" or the F-250"></div>' +
         '<div class="field"><span class="label">What is it</span>' +
-          '<select id="eqKind">' +
-            Object.keys(KINDS).map(k => '<option value="' + k + '"' +
-              ((g.kind || 'machine') === k ? ' selected' : '') + '>' + KINDS[k] + '</option>').join('') +
-          '</select></div>' +
+          '<select id="eqKind" onchange="eqKindPicked(this)">' + kindOptions(g.kind || 'machine') + '</select></div>' +
       '</div>' +
       '<div class="grid g3">' +
         '<div class="field"><span class="label">Year</span><input id="eqYear" inputmode="numeric" value="' + esc(g.year || '') + '"></div>' +
@@ -859,6 +886,29 @@
     const n = el('eqName'); if (n) n.focus();
   };
 
+  function kindOptions(selected) {
+    const sel = String(selected || '').toLowerCase();
+    return typeList().map(k => '<option value="' + esc(k) + '"' + (String(k).toLowerCase() === sel ? ' selected' : '') + '>' +
+      esc(kindName(k)) + '</option>').join('') +
+      '<option value="__new">＋ A new type…</option>';
+  }
+  // "＋ A new type…": named here, kept on this machine when it is saved.
+  window.eqKindPicked = function (box) {
+    if (!box || box.value !== '__new') return;
+    const a = prompt('Name the new type — e.g. Trailer, Attachment, ATV, Snow plow', '');
+    const name = String(a || '').trim().replace(/\s+/g, ' ').slice(0, 30);
+    let pick = (gear[editingId] || {}).kind || 'machine';     // cancelled: as it was
+    if (name) {
+      const key = name.toLowerCase();
+      const builtIn = Object.keys(KINDS).find(k => k === key || KINDS[k].toLowerCase() === key);
+      const have = typeList().find(k => String(k).toLowerCase() === key);
+      if (RESERVED_TYPES.indexOf(key) !== -1) showToast('Pick another name — “' + name + '” is already a filter');
+      else if (builtIn || have) pick = builtIn || have;
+      else { newTypes.push(name); pick = name; }
+    }
+    box.innerHTML = kindOptions(pick);
+  };
+
   window.cancelEquipmentEdit = function () {
     editingId = null;
     if (openId && gear[openId]) renderDetail();
@@ -873,7 +923,7 @@
 
     const rec = {
       name: name,
-      kind: val('eqKind') || 'machine',
+      kind: (val('eqKind') && val('eqKind') !== '__new') ? val('eqKind') : 'machine',
       year: val('eqYear'), make: val('eqMake'), model: val('eqModel'),
       serial: val('eqSerial'),
       priceCents: num('eqPrice') != null ? Math.round(num('eqPrice') * 100) : null,
@@ -1220,6 +1270,7 @@
 
   window.YDEquipment = {
     all: () => gear,
+    countsMiles: countsMiles,
     // A recurring task confirmed done (recurring.js): in the history as a
     // task, with the miles if given -- it does not move the next service.
     logTask: (id, what, miles, by) => {
