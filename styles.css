@@ -1869,3 +1869,12 @@
   /* A button that reads as a link, wherever one has no styling of its own
      ("Start the conversation over" drew as a bare grey button). */
   .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:13px; font-weight:600; text-decoration:underline; cursor:pointer; }
+  /* The estimate as the customer reads it (estimate.js renderCustomer) */
+  .cv { margin:10px 0; padding:14px 16px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface); }
+  .cv-head { font-size:15px; margin-bottom:8px; }
+  .cv-line { display:flex; gap:12px; justify-content:space-between; padding:10px 0; border-top:1px solid var(--border); }
+  .cv-text { flex:1; font-size:13.5px; min-width:0; }
+  .cv-scope { white-space:pre-wrap; margin-top:4px; color:var(--text); }
+  .cv-amt { font-weight:700; white-space:nowrap; }
+  .cv-total { display:flex; justify-content:space-between; padding:10px 0 4px; border-top:2px solid var(--text); font-size:16px; }
+  .cv-memo { white-space:pre-wrap; font-size:12.5px; color:var(--muted); margin:8px 0; }

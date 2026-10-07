@@ -235,6 +235,9 @@
       '<div class="est-auto" id="estAuto"></div>' +
 
       '<div class="est-totals" id="estTotals"></div>' +
+      (hasLines() ? '<div class="field-actions"><button class="btn btn-sm" onclick="estToggleCustomer()">' +
+        (showCustomer ? 'Hide what the customer sees' : '👁 What the customer sees') + '</button></div>' : '') +
+      '<div id="estCustomer"></div>' +
 
       '<div class="field mt"><span class="label">Message on the estimate (payment terms and warranty) — blank uses the one in Pricing rules</span>' +
         '<textarea id="estMemo" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estMemoInput(this.value)" placeholder="' +
@@ -397,6 +400,7 @@
       }
     });
     renderAuto(r);
+    renderCustomer(r);
     const pays = r.payments;
     t.innerHTML = (r.work.length || r.takeoff.length)
       ? '<div><span>Materials</span><b>' + cents(r.materialsCents) + '</b></div>' +
@@ -410,6 +414,47 @@
     renderQb();
   }
   const fmtQ = q => String(Math.round(q * 100) / 100);
+
+  // The estimate as the customer will read it in QuickBooks -- the same lines
+  // estToQB sends and quickbooks.py lays out: each piece of labour with its
+  // heading (the site address on the first) and scope, one materials line
+  // listing everything with one price, the total and the message. No unit
+  // prices anywhere, as on the real thing.
+  let showCustomer = false;
+  window.estToggleCustomer = function () { showCustomer = !showCustomer; render(); };
+  function siteLine() {
+    const f = id => (el(id) && el(id).value || '').trim();
+    return [f('address'), [f('city'), f('state')].filter(Boolean).join(', ') + (f('zip') ? ' ' + f('zip') : '')]
+      .filter(s => s.trim()).join(', ');
+  }
+  function renderCustomer(r) {
+    const box = el('estCustomer');
+    if (!box) return;
+    if (!showCustomer || !r) { box.innerHTML = ''; return; }
+    const site = siteLine();
+    const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents }))
+      .filter(w => w.cents > 0 || w.scope.trim());
+    const rows = work.map((w, i) => '<div class="cv-line"><div class="cv-text">' +
+        (w.title ? '<b>' + esc(w.title.toUpperCase()) + '</b>' : '') +
+        (i === 0 && site ? '<div>' + esc(site) + '</div>' : '') +
+        (w.scope.trim() ? '<div class="cv-scope">' + esc(w.scope.trim()) + '</div>' : '') +
+      '</div><div class="cv-amt">' + cents(w.cents) + '</div></div>');
+    if (r.materialsCents > 0) {
+      const head = work.length === 1 && work[0].title ? 'Materials: ' + work[0].title : 'Materials';
+      rows.push('<div class="cv-line"><div class="cv-text"><b>' + esc(head) + '</b>' +
+        '<div class="cv-scope">' + P().materialsList(r).map(esc).join('<br>') + '</div></div>' +
+        '<div class="cv-amt">' + cents(r.materialsCents) + '</div></div>');
+    }
+    const memo = String(est.memo || '').trim() || defaultMemo(r.totalCents);
+    box.innerHTML = '<div class="cv">' +
+      '<div class="cv-head"><b>' + esc((el('customerName') && el('customerName').value) || 'Customer') + '</b>' +
+        (qb() && qb().docNumber ? ' · Estimate #' + esc(qb().docNumber) : '') + '</div>' +
+      rows.join('') +
+      '<div class="cv-total"><span>Total</span><b>' + cents(r.totalCents) + '</b></div>' +
+      (memo ? '<div class="cv-memo">' + esc(memo) + '</div>' : '') +
+      '<div class="hint">Laid out the way QuickBooks shows it; their page adds your logo, the date and the Accept button.</div>' +
+    '</div>';
+  }
 
   function renderAuto(r) {
     const box = el('estAuto');
@@ -1070,8 +1115,7 @@
     if (typeof autosave === 'function') autosave();
     const jobId = currentJobId;
     if (!jobId) { showToast('Save the job first'); return; }
-    const site = [f('address'), [f('city'), f('state')].filter(Boolean).join(', ') + (f('zip') ? ' ' + f('zip') : '')]
-      .filter(s => s.trim()).join(', ');
+    const site = siteLine();
     saving = true; renderQb();
     try {
       const out = await askQb('/qb/estimate', {
