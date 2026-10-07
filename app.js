@@ -939,12 +939,25 @@ function bookedOrderItems(id, data) {
 // price is used, and says so. Never counted in the job's numbers -- it is the
 // cost of the order, to check against the receipts.
 let linkingOrder = null;     // the order line whose supply is being picked
+// Names from an imported proposal carry notes -- "Screened Topsoil (1") --
+// finish grading -- 1,235 sq ft" -- so the name is also tried without what
+// follows a dash and without anything in brackets. Exact matches only: a
+// near miss would price the wrong thing.
 function orderSupply(it, cat) {
   if (it.supplyId) return cat.items[it.supplyId] ? it.supplyId : null;
-  const k = String(it.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  if (!k) return null;
-  const hit = Object.keys(cat.items).find(id => String(cat.items[id].name || '').toLowerCase().replace(/[^a-z0-9]+/g, '') === k);
-  return hit || null;
+  const key = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const full = String(it.name || '');
+  const short = full.split(/\s[—–-]\s/)[0].replace(/\([^)]*\)/g, ' ');
+  const want = [key(full), key(short)].filter(Boolean);
+  if (!want.length) return null;
+  if (!cat._byKey || cat._byKey.n !== Object.keys(cat.items).length) {
+    // The supplies by name, built once per catalogue rather than once per line.
+    const m = {};
+    Object.keys(cat.items).forEach(id => { const k = key(cat.items[id].name); if (k && !m[k]) m[k] = id; });
+    cat._byKey = { n: Object.keys(cat.items).length, map: m };
+  }
+  for (const k of want) if (cat._byKey.map[k]) return cat._byKey.map[k];
+  return null;
 }
 function orderQtyOf(it) {
   if (typeof it.qty === 'number' && isFinite(it.qty)) return it.qty;
@@ -959,9 +972,11 @@ function orderCost(it, cat) {
   const per = String(pr.per || cat.items[sid].unit || '').trim();
   // A unit typed by hand that is not the one the price is per ("2 pallets"
   // of something priced by the sq ft) would make a wrong number: say so.
-  const typed = String(it.quantity || '').replace(/[\d.,\s]+/g, ' ').trim().toLowerCase();
-  const sing = s => s.replace(/(es|s)$/, '');
-  const unitOff = !it.fromEstimate && typed && per && sing(typed) !== sing(per.toLowerCase());
+  // Word by word, plurals and full stops aside: "approx. 1.10 tons" is in tons.
+  const words = s => ' ' + String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ')
+    .map(w => /(x|ch|sh|ss)es$/.test(w) ? w.slice(0, -2) : /[^s]s$/.test(w) ? w.slice(0, -1) : w).join(' ') + ' ';
+  const typed = words(it.quantity);
+  const unitOff = !it.fromEstimate && typed.trim() !== '' && per !== '' && typed.indexOf(words(per)) === -1;
   return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: unitOff,
            cents: q === null || unitOff ? null : Math.round(q * pr.cents) };
 }
