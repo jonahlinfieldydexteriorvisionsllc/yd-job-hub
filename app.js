@@ -764,17 +764,21 @@ function onCustomerNamePart() { customerNameFromParts(); markDirty(); updateCtxB
 // Jobs saved before the boxes existed, imports and contacts turned into jobs
 // carry one name: it is split into the boxes. Two or three words read as a
 // person's name; anything else is a business name.
+function splitName(full) {
+  full = String(full || '').trim();
+  const words = full.split(/\s+/).filter(Boolean);
+  if (words.length >= 2 && words.length <= 3 && !/[&\d,]|\b(llc|inc|co|company|corp|apartments?|church|school|resort|hoa|association|services?|landscaping|properties|management)\b/i.test(full)) {
+    return { first: words[0], last: words.slice(1).join(' '), business: '' };
+  }
+  return { first: '', last: '', business: full };
+}
 function namePartsFromCustomer() {
   const f = document.getElementById('firstName'), l = document.getElementById('lastName'), b = document.getElementById('business');
   if (!f || f.value.trim() || l.value.trim() || b.value.trim()) return;
   const full = (document.getElementById('customerName').value || '').trim();
   if (!full) return;
-  const words = full.split(/\s+/);
-  if (words.length >= 2 && words.length <= 3 && !/[&\d,]|\b(llc|inc|co|company|corp|apartments?|church|school|resort|hoa|association|services?|landscaping|properties|management)\b/i.test(full)) {
-    f.value = words[0]; l.value = words.slice(1).join(' ');
-  } else {
-    b.value = full;
-  }
+  const s = splitName(full);
+  f.value = s.first; l.value = s.last; b.value = s.business;
 }
 
 function applyClientBlock(data) {

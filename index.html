@@ -613,8 +613,14 @@
       <div class="section-body">
         <div class="add-area">
           <div class="grid g3">
-            <div class="field"><span class="label">Name</span>
-              <input id="ppName" placeholder="Who it is" onkeydown="if (event.key === 'Enter') saveProspect()"></div>
+            <div class="field"><span class="label">First name</span>
+              <input id="ppFirst" autocomplete="off" onkeydown="if (event.key === 'Enter') saveProspect()"></div>
+            <div class="field"><span class="label">Last name</span>
+              <input id="ppLast" autocomplete="off" onkeydown="if (event.key === 'Enter') saveProspect()"></div>
+            <div class="field"><span class="label">Business name (if any)</span>
+              <input id="ppBusiness" autocomplete="off" onkeydown="if (event.key === 'Enter') saveProspect()"></div>
+          </div>
+          <div class="grid g3">
             <div class="field"><span class="label">When to contact</span>
               <input id="ppWhen" placeholder="e.g. Sept 2027, early spring"></div>
             <div class="field"><span class="label">What for</span>

@@ -223,7 +223,9 @@
 
   // ----------------------------------------------------------------- the form
 
-  const FORM = ['ppName', 'ppWhen', 'ppNote', 'ppAddress', 'ppPhone', 'ppEmail'];
+  // The name in parts (Jonah, 6 Oct 2026); `name` -- the business, or
+  // "First Last" -- is still what the list shows and searches.
+  const FORM = ['ppFirst', 'ppLast', 'ppBusiness', 'ppWhen', 'ppNote', 'ppAddress', 'ppPhone', 'ppEmail'];
 
   function clearForm() {
     FORM.forEach(f => { const n = el(f); if (n) n.value = ''; });
@@ -236,13 +238,15 @@
   window.cancelProspectEdit = function () { clearForm(); };
 
   window.saveProspect = function () {
-    const name = val('ppName');
-    if (!name) { showToast('Give them a name first'); if (el('ppName')) el('ppName').focus(); return; }
+    const firstName = val('ppFirst'), lastName = val('ppLast'), business = val('ppBusiness');
+    const name = business || [firstName, lastName].filter(Boolean).join(' ');
+    if (!name) { showToast('Give them a name first'); if (el('ppFirst')) el('ppFirst').focus(); return; }
 
     const id = editingId || 'p' + Date.now().toString(36);
     const was = people[id];
     const rec = {
       name: name,
+      firstName: firstName, lastName: lastName, business: business,
       services: tags.slice(),
       contactWhen: val('ppWhen'),
       note: val('ppNote'),
@@ -259,7 +263,7 @@
     render();
     write(id, rec, 'saving ' + name);
     showToast(wasEdit ? name + ' updated' : name + ' added');
-    if (el('ppName')) el('ppName').focus();
+    if (el('ppFirst')) el('ppFirst').focus();
   };
 
   window.editProspect = function (id) {
@@ -267,13 +271,17 @@
     if (!p) return;
     editingId = id;
     const set = (f, v) => { const n = el(f); if (n) n.value = v || ''; };
-    set('ppName', p.name); set('ppWhen', p.contactWhen); set('ppNote', p.note);
+    // Saved before the name had parts: split it into the boxes.
+    const nm = (p.firstName || p.lastName || p.business) ? { first: p.firstName, last: p.lastName, business: p.business }
+      : (typeof splitName === 'function' ? splitName(p.name) : { first: '', last: '', business: p.name });
+    set('ppFirst', nm.first); set('ppLast', nm.last); set('ppBusiness', nm.business);
+    set('ppWhen', p.contactWhen); set('ppNote', p.note);
     set('ppAddress', p.address); set('ppPhone', p.phone); set('ppEmail', p.email);
     tags = (p.services || []).slice();
     renderTags();
     const b = el('ppSaveBtn'); if (b) b.textContent = 'Save changes';
     const c = el('ppCancelBtn'); if (c) c.hidden = false;
-    const n = el('ppName');
+    const n = el('ppFirst');
     if (n) { n.scrollIntoView({ block: 'center', behavior: 'smooth' }); n.focus(); }
   };
 
@@ -350,6 +358,7 @@
 
     const set = (f, v) => { const n = el(f); if (n && v) n.value = v; };
     set('customerName', p.name);
+    set('firstName', p.firstName); set('lastName', p.lastName); set('business', p.business);
     if (typeof namePartsFromCustomer === 'function') namePartsFromCustomer();
     set('address', p.address);
     set('phone', p.phone);
@@ -369,12 +378,7 @@
     const p = people[id];
     if (!p || typeof openSnowForm !== 'function') return;
     openSnowForm();
-    const set = (f, v) => { const n = el(f); if (n && v) n.value = v; };
-    set('sfName', p.name);
-    set('sfAddress', p.address);
-    set('sfPhone', p.phone);
-    set('sfEmail', p.email);
-    set('sfNotes', p.note);
+    if (typeof fillSnowFormFrom === 'function') fillSnowFormFrom(p);
     showToast('Fill in the rates and save');
   };
 

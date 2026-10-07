@@ -429,6 +429,17 @@
     return (await locate(input, townHint)).geo;
   }
 
+  // A contact turned into a snow account (prospects.js): the form filled from
+  // a name and a one-line address, split into the boxes.
+  window.fillSnowFormFrom = function (p) {
+    const set = (f, v) => { const n = document.getElementById(f); if (n && v) n.value = v; };
+    const nm = (p.firstName || p.lastName || p.business) ? { first: p.firstName, last: p.lastName, business: p.business } : splitName(p.name);
+    set('sfFirst', nm.first); set('sfLast', nm.last); set('sfBusiness', nm.business);
+    const ad = partsOf({ address: p.address || '' });
+    set('sfStreet', ad.street); set('sfCity', ad.city); set('sfZip', ad.zip);
+    set('sfPhone', p.phone); set('sfEmail', p.email); set('sfNotes', p.note);
+  };
+
   // An address typed in its parts. The server looks it up (geo.py): the US
   // Census geocoder there finds Wisconsin's rural fire numbers -- "W5883
   // County Rd X" -- that OpenStreetMap has only the road for, and it cannot
@@ -467,13 +478,10 @@
   function namesOf(a) {
     if (!a) return { first: '', last: '', business: '' };
     if (a.firstName || a.lastName || a.business) return { first: a.firstName || '', last: a.lastName || '', business: a.business || '' };
-    const words = String(a.name || '').trim().split(/\s+/).filter(Boolean);
-    // A person's name is two or three words; anything else, or a commercial
-    // account, is a business name.
-    if (a.type !== 'commercial' && words.length >= 2 && words.length <= 3 && !/[&\d]|\b(llc|inc|co|apartments?|church|school|resort|hoa|association)\b/i.test(a.name)) {
-      return { first: words[0], last: words.slice(1).join(' '), business: '' };
-    }
-    return { first: '', last: '', business: String(a.name || '') };
+    // A commercial account is a business; otherwise app.js splitName decides
+    // (two or three words read as a person's name).
+    if (a.type === 'commercial') return { first: '', last: '', business: String(a.name || '') };
+    return splitName(a.name);
   }
 
   const val = id => (document.getElementById(id) || {}).value || '';
