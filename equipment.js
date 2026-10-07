@@ -952,6 +952,22 @@
         .catch(e => console.warn('[equipment] labels not yet saved:', e.code || e.message));
     }
 
+    // Every crew member sees the Maintenance board (Jonah, 6 Oct 2026): it is
+    // shared with each active crew member and admin, a newcomer added here the
+    // next time this runs. Nobody is taken off (someone switched off cannot
+    // sign in anyway).
+    const ppl = YDBoards.people ? YDBoards.people() : {};
+    if (Object.keys(ppl).length) {
+      const crew = Object.keys(ppl).filter(uid => ppl[uid].active && ['crew', 'admin'].indexOf(ppl[uid].role) !== -1);
+      const vis = Array.isArray(board.visibleTo) ? board.visibleTo : [];
+      const add = crew.filter(uid => vis.indexOf(uid) === -1);
+      if (add.length) {
+        board.visibleTo = vis.concat(add);
+        Promise.resolve(window.YDDb.put('boards', MAINT, { visibleTo: board.visibleTo }))
+          .catch(e => console.warn('[equipment] sharing not yet saved:', e.code || e.message));
+      }
+    }
+
     // Problems noted on machines: one card each.
     const wanted = new Set();
     Object.values(gear).forEach(g => {
@@ -1063,6 +1079,18 @@
     all: () => gear,
     overdue: () => Object.values(gear).filter(g => due(g).state === 'overdue'),
     render: () => renderEquipment(),
+    // The Maintenance board's machine card moved to Done (boards.js): the
+    // machine opens with its service form, the hours or miles asked for as on
+    // the Equipment tab. Saving it starts the next cycle, which puts the card
+    // back in Due with its new due point.
+    serviceFromBoard: id => {
+      if (!gear[id]) return;
+      if (!ydCan('equipment', 'change')) { showToast('Moved — the service gets logged on the Equipment tab'); return; }
+      if (typeof switchTab === 'function') switchTab('equipment');
+      window.openEquipment(id);
+      setTimeout(() => window.addService(), 50);
+      showToast('Log the service for ' + (gear[id].name || 'the machine') + ' — with its ' + (readingWanted(gear[id]) || 'reading'));
+    },
   };
 
   document.addEventListener('yd-auth', e => {

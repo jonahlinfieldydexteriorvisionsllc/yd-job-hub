@@ -632,11 +632,18 @@
     const last = board.columns[board.columns.length - 1].id;
     const patch = { column: col, order: order, updatedAt: nowIso(), updatedBy: myName() };
     // Reaching the last column is "done"; leaving it is "not done any more".
+    const toDone = col === last && k.column !== last;
     patch.doneAt = col === last ? (k.doneAt || nowIso()) : null;
     Object.assign(k, patch);
     render();
     if (openCard && openCard.cardId === cardId) renderCardDetail();
     writeCard(boardId, cardId, patch);
+    // A machine's "service due" card moved to Done: the service is logged on
+    // the machine, with its hours or miles, so nothing is typed twice
+    // (WISHLIST #2). Problem cards record themselves (equipment.js).
+    if (toDone && boardId === MAINTENANCE && k.equipmentId && !k.issueId && window.YDEquipment && YDEquipment.serviceFromBoard) {
+      YDEquipment.serviceFromBoard(k.equipmentId);
+    }
   }
 
   // ------------------------------------------------------------- job cards
