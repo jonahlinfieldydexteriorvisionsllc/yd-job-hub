@@ -490,7 +490,7 @@ def _office(jobs):
     """Estimate work waiting on Jonah: drafts Claude built that he hasn't
     checked and sent, estimates a customer accepted that aren't booked yet,
     and money still owed on invoices made from estimates."""
-    drafts, accepted, owed = [], [], []
+    drafts, accepted, owed, to_order = [], [], [], []
     for j in jobs.values():
         name = str(j.get("customerName") or "A bid")
         e = j.get("estimate") or {}
@@ -507,7 +507,13 @@ def _office(jobs):
             bal = 0
         if inv.get("id") and bal > 0:
             owed.append((name, bal, inv.get("docNumber")))
-    return {"drafts": sorted(drafts), "accepted": sorted(accepted), "owed": sorted(owed, key=lambda x: -x[1])}
+        # Booked or under way with materials still to order (Materials to Order).
+        if (j.get("jobStatus") or "quoting") in ("booked", "inprogress"):
+            left = [o for o in (j.get("orderItems") or []) if isinstance(o, dict) and not o.get("ordered")]
+            if left:
+                to_order.append((name, len(left)))
+    return {"drafts": sorted(drafts), "accepted": sorted(accepted), "owed": sorted(owed, key=lambda x: -x[1]),
+            "toOrder": sorted(to_order)}
 
 
 def _bids(jobs=None):
@@ -770,7 +776,7 @@ def build(slot, user, people, wx, cache):
 
     # ---- estimates: drafts to check, yeses to book, money still owed
     office = cache.get("office") or {}
-    if sees("jobs") and slot in ("morning", "evening") and any(office.get(k) for k in ("drafts", "accepted", "owed")):
+    if sees("jobs") and slot in ("morning", "evening") and any(office.get(k) for k in ("drafts", "accepted", "owed", "toOrder")):
         lines = []
         for n in office.get("accepted") or []:
             lines.append({"text": "✅ %s accepted the estimate — book it and make the invoice" % n})
@@ -780,6 +786,10 @@ def build(slot, user, people, wx, cache):
                 len(d), "" if len(d) == 1 else "s", ", ".join(d[:6]) + (" +%d more" % (len(d) - 6) if len(d) > 6 else ""))})
         for n, bal, num in (office.get("owed") or [])[:6]:
             lines.append({"text": "💵 %s owes $%s%s" % (n, format(round(bal, 2), ",.2f"), (" on invoice #%s" % num) if num else "")})
+        if office.get("toOrder"):
+            t = office["toOrder"]
+            lines.append({"text": "🛒 Materials still to order: %s" % ", ".join(
+                "%s (%d)" % (n, c) for n, c in t[:6]) + (" +%d more" % (len(t) - 6) if len(t) > 6 else "")})
         sections.append(("Estimates & invoices", lines))
         if office.get("accepted"):
             push_bits.append("%d estimate%s accepted" % (len(office["accepted"]), "" if len(office["accepted"]) == 1 else "s"))
