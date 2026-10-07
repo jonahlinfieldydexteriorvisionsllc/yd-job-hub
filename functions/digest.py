@@ -89,48 +89,103 @@ def _add_months(day, n):
     return datetime.date(y, m, min(day.day, last))
 
 
-def _dates_of(ev, start, end):
-    """The days an event lands on between start and end (dates, inclusive).
-    Same rules as datesOf() in calendar.js: multi-day events land on each of
-    their days, repeating ones on each repeat; monthly and yearly repeats are
-    counted from the original date so the 31st does not drift to the 28th."""
+def _starts_of(ev, start, end):
+    """The days each repeat of an event starts on, up to `end` (the jump
+    ahead for long-running weekly repeats uses `start`). Same rules as
+    startsOf() in calendar.js: monthly and yearly repeats are counted from the
+    original date so the 31st does not drift to the 28th."""
     if not ev.get("date"):
         return []
     first = _parse_day(ev["date"])
-    span = 0
-    if ev.get("endDate") and ev["endDate"] > ev["date"]:
-        span = (_parse_day(ev["endDate"]) - first).days
     rep = ev.get("repeat") or "none"
+    if rep == "none":
+        return [first] if first <= end else []
     until = _parse_day(ev["repeatUntil"]) if ev.get("repeatUntil") else end
     starts = []
-    if rep == "none":
-        starts.append(first)
-    else:
-        step = {"weekly": 7, "biweekly": 14}.get(rep, 0)
-        months = {"monthly": 1, "yearly": 12}.get(rep, 0)
-        k, d = 0, first
-        if step and d < start:
-            jumps = (start - d).days // step - 1
-            if jumps > 0:
-                k = jumps
-                d = first + datetime.timedelta(days=k * step)
-        guard = 0
-        while d <= end and d <= until and guard < 1000:
-            starts.append(d)
-            k += 1
-            guard += 1
-            if step:
-                d = first + datetime.timedelta(days=k * step)
-            elif months:
-                d = _add_months(first, k * months)
-            else:
-                break
+    step = {"weekly": 7, "biweekly": 14}.get(rep, 0)
+    months = {"monthly": 1, "yearly": 12}.get(rep, 0)
+    k, d = 0, first
+    if step and d < start:
+        jumps = (start - d).days // step - 1
+        if jumps > 0:
+            k = jumps
+            d = first + datetime.timedelta(days=k * step)
+    guard = 0
+    while d <= end and d <= until and guard < 1000:
+        starts.append(d)
+        k += 1
+        guard += 1
+        if step:
+            d = first + datetime.timedelta(days=k * step)
+        elif months:
+            d = _add_months(first, k * months)
+        else:
+            break
+    return starts
+
+
+def _span(ev):
+    if ev.get("endDate") and ev.get("date") and ev["endDate"] > ev["date"]:
+        return (_parse_day(ev["endDate"]) - _parse_day(ev["date"])).days
+    return 0
+
+
+def _expand(ev, start, end):
+    """[(day, the day its repeat started)] for every day the event covers
+    between start and end: multi-day events land on each of their days."""
+    span = _span(ev)
     out = []
-    for s in starts:
+    for s in _starts_of(ev, start - datetime.timedelta(days=span), end):
         for i in range(span + 1):
             day = s + datetime.timedelta(days=i)
             if start <= day <= end:
-                out.append(day)
+                out.append((day, s))
+    return out
+
+
+def _dates_of(ev, start, end):
+    """The days an event lands on between start and end (dates, inclusive)."""
+    return [d for d, _ in _expand(ev, start, end)]
+
+
+def _occurrences(ev, start, end):
+    """[(day, the event as it is on that date)] between start and end.
+
+    A repeating entry can have single dates changed or cancelled on their own
+    (the calendar's "This date only"), kept on the entry as
+    exceptions = {'YYYY-MM-DD' (the date the repeat fell on): 'cancelled' |
+    {date, time, endTime, title, ...}}, null meaning none. calendar.js
+    occurrencesOf() reads them the same way, so the summaries and reminders
+    agree with the screen. Each date comes with its own `date`, so the first
+    day of an occurrence is the one whose day equals it."""
+    repeating = (ev.get("repeat") or "none") != "none"
+    ex = (ev.get("exceptions") or {}) if repeating else {}
+    span = _span(ev)
+    copies = {}
+
+    def at(s):
+        if s not in copies:
+            copies[s] = ev if s.isoformat() == ev.get("date") else dict(
+                ev, date=s.isoformat(),
+                endDate=(s + datetime.timedelta(days=span)).isoformat() if span else None)
+        return copies[s]
+
+    out = [(d, at(s)) for d, s in _expand(ev, start, end) if not ex.get(s.isoformat())]
+    for k, x in ex.items():
+        if not isinstance(x, dict):
+            continue                    # cancelled, or cleared
+        try:
+            kd = _parse_day(k)
+        except (TypeError, ValueError):
+            continue
+        if kd not in _starts_of(ev, kd, kd):
+            continue                    # no longer a date the repeat falls on
+        one = dict(ev)
+        one.update(x)
+        one["repeat"], one["exceptions"] = "none", None
+        one["date"] = x.get("date") or k
+        out.extend((d, one) for d in _dates_of(one, start, end))
+    out.sort(key=lambda t: t[0])
     return out
 
 
@@ -462,12 +517,12 @@ def _calendar_items(start, end):
             # One event with a date that will not parse is left out and
             # logged. Unguarded, it stopped the whole run: nobody got a summary.
             try:
-                days = _dates_of(ev, start, end)
+                days = _occurrences(ev, start, end)
             except (TypeError, ValueError) as err:
                 print("digest: skipped event", c.id, e.id, "-", err)
                 continue
-            for day in days:
-                items.append({"day": day, "cal": cal, "ev": ev})
+            for day, one in days:
+                items.append({"day": day, "cal": cal, "ev": one})
     items.sort(key=lambda x: (x["day"], 1 if (x["ev"].get("time") and not x["ev"].get("allDay")) else 0,
                               str(x["ev"].get("time") or "")))
     return items

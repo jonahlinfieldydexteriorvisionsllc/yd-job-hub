@@ -88,12 +88,16 @@ def run():
             first = (since + datetime.timedelta(minutes=mins)).date() - datetime.timedelta(days=1)
             last = (now + datetime.timedelta(minutes=mins)).date() + datetime.timedelta(days=1)
             try:
-                days = dg._dates_of(starts_only, first, last)
+                days = dg._occurrences(starts_only, first, last)
             except (TypeError, ValueError) as err:
                 print("reminders: skipped", c.id, e.id, "-", err)
                 continue
-            for day in days:
-                start = _start_of(ev, day)
+            # A single date changed on its own (calendar.js) reminds at its own
+            # time; a cancelled one not at all.
+            for day, one in days:
+                if day.isoformat() != str(one.get("date")):
+                    continue
+                start = _start_of(one, day)
                 due = start - datetime.timedelta(minutes=mins)
                 if not (since < due <= now):
                     continue
@@ -104,9 +108,9 @@ def run():
                 except AlreadyExists:
                     continue        # an earlier or overlapping run sent it
                 uids = set(ev.get("remindUids") or [])
-                uids.update(cr.get("uid") for cr in (ev.get("crew") or []) if cr.get("uid"))
-                title = ev.get("title") or ev.get("jobName") or "Calendar"
-                note = {"push": {"title": "🔔 " + title, "body": _words(ev, cal, start)}}
+                uids.update(cr.get("uid") for cr in (one.get("crew") or []) if cr.get("uid"))
+                title = one.get("title") or one.get("jobName") or "Calendar"
+                note = {"push": {"title": "🔔 " + title, "body": _words(one, cal, start)}}
                 for uid in uids:
                     u = people.get(uid)
                     if not u or not _can_see(u, cal):
