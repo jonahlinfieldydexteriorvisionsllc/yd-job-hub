@@ -201,7 +201,7 @@
         '</select>' +
         '<button class="btn btn-sm" onclick="editProspect(\'' + p.id + '\')">Edit</button>' +
         (ydCan('jobs', 'change')
-          ? '<button class="btn btn-sm" onclick="prospectToJob(\'' + p.id + '\')">Start a job</button>' : '') +
+          ? '<button class="btn btn-sm" onclick="prospectToJob(\'' + p.id + '\')">Start a bid</button>' : '') +
         (svc.indexOf('Snow Removal') !== -1
           ? '<button class="btn btn-sm btn-accent" onclick="prospectToSnow(\'' + p.id + '\')">Snow account</button>'
           : '') +
@@ -360,7 +360,11 @@
     set('customerName', p.name);
     set('firstName', p.firstName); set('lastName', p.lastName); set('business', p.business);
     if (typeof namePartsFromCustomer === 'function') namePartsFromCustomer();
-    set('address', p.address);
+    // The contact's address is one line; the job has a box for each part.
+    if (typeof addressParts === 'function' && p.address) {
+      const ad = addressParts(p.address);
+      set('address', ad.street || p.address); set('city', ad.city); set('state', ad.state); set('zip', ad.zip);
+    } else set('address', p.address);
     set('phone', p.phone);
     set('email', p.email);
     set('notes', p.note);
@@ -371,7 +375,9 @@
       if (typeof renderServiceTypes === 'function') renderServiceTypes();
     }
     if (typeof markDirty === 'function') markDirty();
-    showToast(p.name + ' started as a job — still on the contact list until you remove them');
+    // A new job starts as a bid (app.js isBidStatus): on the Bids board, not
+    // in the job list, until it is booked.
+    showToast(p.name + ' started as a bid — write your site-visit notes under Estimate. Still on the contact list until you remove them');
   };
 
   window.prospectToSnow = function (id) {

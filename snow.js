@@ -475,6 +475,9 @@
     const s = splitAddress(a.address || '');
     return { street: s.street || '', city: s.town || a.town || '', state: 'WI', zip: s.zip || '' };
   }
+  // A one-line address in its boxes, for whatever else is filled from one
+  // (a contact started as a bid, prospects.js).
+  window.addressParts = line => partsOf({ address: line || '' });
   function namesOf(a) {
     if (!a) return { first: '', last: '', business: '' };
     if (a.firstName || a.lastName || a.business) return { first: a.firstName || '', last: a.lastName || '', business: a.business || '' };
