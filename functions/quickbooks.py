@@ -858,16 +858,20 @@ def _invoice_record(inv):
     }
 
 
-def _invoice_lines(e):
-    """The estimate's lines as they are, for its invoice."""
+def _invoice_lines(e, link_lines=False):
+    """The estimate's lines as they are, for its invoice; with link_lines,
+    each one names the estimate line it came from."""
     out = []
     for ln in e.get("Line") or []:
         kind = ln.get("DetailType")
         if kind == "SalesItemLineDetail":
             d = ln.get("SalesItemLineDetail") or {}
             detail = {k: d[k] for k in ("ItemRef", "Qty", "UnitPrice", "TaxCodeRef", "ServiceDate") if d.get(k) is not None}
-            out.append({"DetailType": kind, "Amount": ln.get("Amount"), "Description": ln.get("Description") or "",
-                        "SalesItemLineDetail": detail})
+            line = {"DetailType": kind, "Amount": ln.get("Amount"), "Description": ln.get("Description") or "",
+                    "SalesItemLineDetail": detail}
+            if link_lines and ln.get("Id"):
+                line["LinkedTxn"] = [{"TxnId": e["Id"], "TxnType": "Estimate", "TxnLineId": ln["Id"]}]
+            out.append(line)
         elif kind == "DescriptionOnly":
             out.append({"DetailType": kind, "Description": ln.get("Description") or "", "DescriptionLineDetail": {}})
     return out
@@ -908,22 +912,42 @@ def invoice_from_estimate(body):
     if not inv:
         if e.get("TxnStatus") == "Rejected":
             raise RuntimeError("The customer turned this estimate down in QuickBooks")
-        lines = _invoice_lines(e)
-        if not any(ln["DetailType"] == "SalesItemLineDetail" for ln in lines):
+        if not any(ln["DetailType"] == "SalesItemLineDetail" for ln in _invoice_lines(e)):
             raise RuntimeError("The estimate has nothing on it to invoice")
-        new = {"CustomerRef": e["CustomerRef"], "Line": lines,
-               "LinkedTxn": [{"TxnId": e["Id"], "TxnType": "Estimate"}],
-               "PrivateNote": _job_note(job_id)}
+        base = {"CustomerRef": e["CustomerRef"], "PrivateNote": _job_note(job_id)}
         for k in ("BillEmail", "ShipAddr"):
             if e.get(k):
-                new[k] = e[k]
+                base[k] = e[k]
         memo = str(body.get("memo") or "").strip()
         if memo:
-            new["CustomerMemo"] = {"value": memo[:MEMO_MAX]}
-        # One estimate, one invoice: a repeat of this request is answered
-        # with the invoice already made.
-        inv = _call("POST", "invoice", body=new,
-                    request_id=hashlib.sha1(("inv|est|" + e["Id"]).encode()).hexdigest()).get("Invoice") or {}
+            base["CustomerMemo"] = {"value": memo[:MEMO_MAX]}
+        # Linked to the estimate, which is what closes it in QuickBooks: on
+        # the invoice as a whole first; if QuickBooks will not take that, line
+        # by line; failing both, unlinked with the estimate named -- an
+        # invoice made matters more than the link. One estimate, one invoice:
+        # each way has its own request id, so pressing again is answered with
+        # the invoice already made.
+        ways = [
+            ("whole", dict(base, Line=_invoice_lines(e), LinkedTxn=[{"TxnId": e["Id"], "TxnType": "Estimate"}])),
+            ("lines", dict(base, Line=_invoice_lines(e, link_lines=True))),
+            ("none", dict(base, Line=_invoice_lines(e),
+                          PrivateNote=_job_note(job_id) + " · from estimate #%s" % (e.get("DocNumber") or e["Id"]))),
+        ]
+        first_error = None
+        for way, new in ways:
+            try:
+                rid = hashlib.sha1(("inv|est|" + e["Id"] + ("" if way == "whole" else "|" + way)).encode()).hexdigest()
+                inv = _call("POST", "invoice", body=new, request_id=rid).get("Invoice") or {}
+                if way != "whole":
+                    print("quickbooks: invoice for estimate %s made with link '%s' after: %s" % (e["Id"], way, first_error))
+                break
+            except ReconnectNeeded:
+                raise
+            except RuntimeError as err:
+                first_error = first_error or err
+                inv = None
+        if not inv:
+            raise first_error
 
     sent_to = ""
     if body.get("email"):
