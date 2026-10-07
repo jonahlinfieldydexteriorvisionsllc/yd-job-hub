@@ -140,6 +140,11 @@ service cloud.firestore {
     // What the business charges, one entry per priced thing (estimate.js).
     // Prices -- so whoever deals with jobs, never crew.
     match /priceBook/{docId} { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    // How estimates are priced (pricing.js): markups, the crew-day rate,
+    // profit targets, delivery rates; pricing/claude is the owner's takeoff
+    // rules for Claude. Whoever builds estimates reads them; only the owner
+    // changes them. pricing/fuel is written by the server (trip.py).
+    match /pricing/{docId}   { allow read: if canSee('jobs');      allow write: if isOwner(); }
     match /contacts/{docId}  { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
     match /prospects/{docId} { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
     match /equipment/{docId} { allow read: if canSee('equipment'); allow write: if canChange('equipment'); }

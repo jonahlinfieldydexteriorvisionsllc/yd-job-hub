@@ -14,6 +14,14 @@
 //   supplyPrices/{id}  (same id as the item) cents, per, year, asOf,
 //                      priceNotes, history [{year, cents, per, asOf}] owner only
 //
+// Estimates are priced from these (pricing.js). For that an item also says
+// what kind of material it is (category -- which carries the default markup
+// and waste), how a takeoff becomes a purchase (a roll of fabric "covers" 750
+// sq ft: takeoffUnit 'sq ft', coverage 750), whether it comes on a pallet
+// (a delivery surcharge) and whether it is a special order (non-returnable).
+// Its price record may carry its own markupPct / wastePct, and clientCents
+// for the odd thing sold to the customer at a fixed price each.
+//
 // Prices go up every year. A price entered for a NEW year moves the old one
 // into the history, so "up 6% on last year" can be shown; a price changed
 // within the same year is a correction and simply replaces it. The whole
@@ -95,8 +103,16 @@
   // overwrites it (a correction); an OLDER year only fills in the history.
   // Every field is always written -- Firestore refuses a write containing
   // undefined anywhere.
+  // The estimate's numbers on a price record ride along untouched unless e
+  // gives them (null clears one).
+  const PRICING_KEYS = ['markupPct', 'wastePct', 'clientCents'];
   function applyPrice(old, e) {
     const cur = Object.assign({ cents: null, per: '', year: null, asOf: '', priceNotes: '' }, old || {});
+    const extra = {};
+    PRICING_KEYS.forEach(k => {
+      const v = e[k] !== undefined ? e[k] : cur[k];
+      extra[k] = typeof v === 'number' && isFinite(v) ? v : null;
+    });
     let history = Array.isArray(cur.history) ? cur.history.slice() : [];
     const file = h => {
       history = history.filter(x => x.year !== h.year);
@@ -121,7 +137,7 @@
       cur.per = e.per;
     }
     if (e.priceNotes != null) cur.priceNotes = e.priceNotes;
-    return {
+    return Object.assign(extra, {
       cents: typeof cur.cents === 'number' ? cur.cents : null,
       per: cur.per || '',
       year: cur.year || e.year || thisYear(),
@@ -130,7 +146,30 @@
       history: history.sort((a, b) => b.year - a.year).slice(0, 15)
         .map(h => ({ year: h.year, cents: h.cents, per: h.per || '', asOf: h.asOf || '' })),
       updatedAt: new Date().toISOString(),
-    };
+    });
+  }
+
+  // The estimate fields, typed: '' -> null (use the category's), else a number.
+  // NaN for something that is not a number, so it can be refused.
+  function parsePct(s) {
+    const t = String(s == null ? '' : s).replace(/[%\s]/g, '');
+    if (!t) return null;
+    return /^-?(\d+\.?\d*|\.\d+)$/.test(t) ? parseFloat(t) : NaN;
+  }
+  const categories = () => (window.YDPricing ? window.YDPricing.CATEGORIES : []);
+  // "Pavers", "pavers", "PAVERS" and the id all name the same category.
+  function categoryId(s) {
+    const k = key(s);
+    if (!k) return null;
+    const hit = categories().find(([id, name]) => key(id) === k || key(name) === k);
+    return hit ? hit[0] : undefined;
+  }
+  function yesNo(s) {
+    const t = norm(s).trim();
+    if (!t) return null;
+    if (/^(y|yes|true|1|x|✓)$/.test(t)) return true;
+    if (/^(n|no|false|0)$/.test(t)) return false;
+    return undefined;
   }
 
   // ---------------------------------------------------------------- render
@@ -349,10 +388,14 @@
       const p = (id && prices[id]) || {};
       const pick = it.vendorId || vendorId || (shown && shown !== '-' ? shown : '');
       const vs = Object.values(vendors).sort(byName);
+      const show = v => (typeof v === 'number' ? String(v) : '');
       const priceShown = {
         price: typeof p.cents === 'number' ? (p.cents / 100).toFixed(2) : '',
         per: p.per || '', year: String(p.year || thisYear()), notes: p.priceNotes || '',
+        markup: show(p.markupPct), waste: show(p.wastePct),
+        client: typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
       };
+      const catRule = ((window.YDPricing && window.YDPricing.rules().categories) || {})[it.category] || {};
       editing.priceShown = priceShown;
       const hist = Array.isArray(p.history) ? p.history : [];
       openModal(id ? 'Edit item' : 'Add an item',
@@ -369,11 +412,28 @@
         field('Also called (helps the search)', 'siAlso', it.also, 'e.g. seed, lawn seed, overseed') +
         '<div class="field"><span class="label">Notes for the crew</span><textarea id="siNotes" rows="2" ' +
           'placeholder="Which one to get, how much per job, anything to watch for">' + esc(it.notes || '') + '</textarea></div>' +
+        '<fieldset class="sup-pricebox"><legend>For estimates</legend>' +
+          '<div class="field"><span class="label">Kind of material</span><select id="siCat">' +
+            '<option value="">— pick one —</option>' +
+            categories().map(([cid, cname]) => '<option value="' + cid + '"' + (cid === it.category ? ' selected' : '') + '>' + esc(cname) + '</option>').join('') +
+          '</select></div>' +
+          '<div class="grid g2">' +
+            field('One of these covers', 'siCover', show(it.coverage), 'e.g. 750 — blank if bought as measured', 'decimal') +
+            field('…of what (the takeoff unit)', 'siTakeoff', it.takeoffUnit, 'e.g. sq ft, LF, plants') +
+          '</div>' +
+          '<label class="chk"><input type="checkbox" id="siPallet"' + (it.pallet ? ' checked' : '') + '> Comes on a pallet (forklift delivery surcharge)</label>' +
+          '<label class="chk"><input type="checkbox" id="siSpecial"' + (it.specialOrder ? ' checked' : '') + '> Special order (non-returnable — the estimate says so)</label>' +
+        '</fieldset>' +
         '<fieldset class="sup-pricebox"><legend>Price — only you see this</legend>' +
           '<div class="grid g3">' +
             field('Price ($)', 'spPrice', priceShown.price, 'e.g. 89.99', 'decimal') +
             field('Per', 'spPer', priceShown.per, it.unit || 'bag, yard, each') +
             field('For year', 'spYear', priceShown.year, String(thisYear()), 'numeric') +
+          '</div>' +
+          '<div class="grid g3">' +
+            field('Markup %', 'spMarkup', priceShown.markup, catRule.markupPct != null ? catRule.markupPct + ' (its kind)' : 'its kind’s', 'decimal') +
+            field('Waste %', 'spWaste', priceShown.waste, catRule.wastePct != null ? catRule.wastePct + ' (its kind)' : 'its kind’s', 'decimal') +
+            field('Or: customer price each ($)', 'spClient', priceShown.client, 'only for fixed-price items', 'decimal') +
           '</div>' +
           '<div class="field"><span class="label">Price notes</span><textarea id="spNotes" rows="2" ' +
             'placeholder="Contractor price, 10+ bags $79, delivery $65">' + esc(priceShown.notes) + '</textarea></div>' +
@@ -422,26 +482,35 @@
     // The price is checked before anything is saved, so a typo in it does not
     // leave the item saved and the price silently dropped.
     const s = editing.priceShown || {};
-    const typed = { price: val('spPrice'), per: val('spPer'), year: val('spYear'), notes: (el('spNotes').value || '').trim() };
-    const priceTouched = typed.price !== s.price || typed.per !== s.per || typed.year !== s.year || typed.notes !== s.notes;
+    const typed = { price: val('spPrice'), per: val('spPer'), year: val('spYear'), notes: (el('spNotes').value || '').trim(),
+                    markup: val('spMarkup'), waste: val('spWaste'), client: val('spClient') };
+    const pricingTouched = typed.markup !== s.markup || typed.waste !== s.waste || typed.client !== s.client;
+    const priceTouched = typed.price !== s.price || typed.per !== s.per || typed.year !== s.year || typed.notes !== s.notes || pricingTouched;
     const cents = parseCents(typed.price);
     if (priceTouched && Number.isNaN(cents)) { showToast('The price should look like 89.99'); return; }
     const year = validYear(typed.year);
     if (priceTouched && !year) { showToast('The year should look like ' + thisYear()); return; }
+    const markupPct = parsePct(typed.markup), wastePct = parsePct(typed.waste), clientCents = parseCents(typed.client);
+    if ([markupPct, wastePct, clientCents].some(n => Number.isNaN(n))) { showToast('Markup, waste and customer price should be numbers'); return; }
+    const coverage = parsePct(val('siCover'));
+    if (Number.isNaN(coverage) || coverage !== null && !(coverage > 0)) { showToast('“Covers” should be a number above 0, or blank'); return; }
 
     const id = editing.id || newId('s');
     const rec = { name: name, also: val('siAlso'), vendorId: val('siVendor') || null, sku: val('siSku'),
-                  where: val('siWhere'), unit: val('siUnit'), notes: (el('siNotes').value || '').trim(), updatedAt: now };
+                  where: val('siWhere'), unit: val('siUnit'), notes: (el('siNotes').value || '').trim(),
+                  category: val('siCat') || null, coverage: coverage, takeoffUnit: val('siTakeoff'),
+                  pallet: !!(el('siPallet') && el('siPallet').checked),
+                  specialOrder: !!(el('siSpecial') && el('siSpecial').checked), updatedAt: now };
     items[id] = Object.assign({ id: id }, rec);
     write('supplies', id, rec);
     // Written only when the price box was actually changed. If this device
     // had not received the prices yet, an untouched (blank-looking) box must
     // not wipe the real price.
     if (priceTouched) {
-      const next = applyPrice(prices[id], {
+      const next = applyPrice(prices[id], Object.assign({
         cents: typed.price !== s.price || typed.year !== s.year ? cents : undefined,
         per: typed.per, year: year, priceNotes: typed.notes,
-      });
+      }, pricingTouched ? { markupPct: markupPct, wastePct: wastePct, clientCents: clientCents } : {}));
       prices[id] = next;
       write('supplyPrices', id, next);
     }
@@ -492,6 +561,16 @@
     priceNotes: ['price notes', 'pricing notes', 'owner notes'],
     where: ['where', 'where at the supplier', 'location', 'aisle'],
     also: ['also called', 'also', 'other names', 'aka'],
+    // For estimates (pricing.js). Names as they read once "%" and the like
+    // are taken out of the header.
+    category: ['category', 'kind of material'],
+    coverage: ['covers', 'one covers', 'coverage'],
+    takeoffUnit: ['takeoff unit', 'covers what', 'of what'],
+    pallet: ['pallet', 'on a pallet', 'palletized', 'comes on a pallet'],
+    specialOrder: ['special order'],
+    markupPct: ['markup', 'markup pct'],
+    wastePct: ['waste', 'waste pct'],
+    clientEach: ['customer price each', 'customer price', 'client price each'],
   };
   function headerKey(h) {
     const t = norm(h).replace(/[^a-z0-9#]+/g, ' ').trim();
@@ -616,6 +695,27 @@
       if (Number.isNaN(cents)) { out.skipped.push('Line ' + line + ': the price “' + c.price + '” is not a number'); continue; }
       if (c.year && !validYear(c.year)) { out.skipped.push('Line ' + line + ': the year “' + c.year + '” is not a year'); continue; }
       const year = validYear(c.year) || defaultYear;
+      // The estimate columns: blank leaves a value as it is.
+      const extra = {}, pricing = {};
+      let bad = null;
+      if (c.category) { const cat = categoryId(c.category); if (cat === undefined) bad = 'the kind “' + c.category + '” is not one Job Hub knows'; else extra.category = cat; }
+      if (c.coverage) { const n = parsePct(c.coverage); if (!(n > 0)) bad = '“covers” should be a number above 0'; else extra.coverage = n; }
+      if (c.takeoffUnit) extra.takeoffUnit = c.takeoffUnit;
+      [['pallet', 'pallet'], ['specialOrder', 'special order']].forEach(([k, label]) => {
+        if (!c[k]) return;
+        const yn = yesNo(c[k]);
+        if (yn === undefined) bad = label + ' should be yes or no'; else extra[k] = yn;
+      });
+      [['markupPct', 'markup'], ['wastePct', 'waste']].forEach(([k, label]) => {
+        if (!c[k]) return;
+        const n = parsePct(c[k]);
+        if (Number.isNaN(n)) bad = 'the ' + label + ' “' + c[k] + '” is not a number'; else pricing[k] = n;
+      });
+      if (c.clientEach) {
+        const n = parseCents(c.clientEach);
+        if (Number.isNaN(n)) bad = 'the customer price “' + c.clientEach + '” is not a number'; else pricing.clientCents = n;
+      }
+      if (bad) { out.skipped.push('Line ' + line + ': ' + bad); continue; }
 
       if (isNew) {
         id = newId('s');
@@ -625,6 +725,7 @@
       const oldCents = old && typeof old.cents === 'number' ? old.cents : null;
       const row = {
         line: line, id: id, isNew: isNew, byId: byId, vendorId: vendorId, cells: c, cents: cents, year: year,
+        extra: extra, pricing: pricing,
         oldCents: oldCents, oldYear: old ? old.year || null : null,
         kind: cents == null ? 'noprice' : oldCents == null ? 'first'
           : cents > oldCents ? 'up' : cents < oldCents ? 'down' : 'same',
@@ -668,7 +769,8 @@
       '<h3 class="sup-h">Update prices</h3>' +
       '<div class="hint">Paste a spreadsheet below: copied straight out of Excel or Google Sheets, or a CSV file. ' +
         'The first line must be the column names. Understood: <b>Supplier, Item, Price</b>, and optionally ' +
-        'Per, Year, Comes in, Item #, Where, Also called, Notes, Price notes, id. ' +
+        'Per, Year, Comes in, Item #, Where, Also called, Notes, Price notes, id — and for estimates ' +
+        'Category, Covers, Takeoff unit, Pallet, Special order, Markup %, Waste %, Customer price each. ' +
         'Only the columns you include change; blank cells leave things as they are. ' +
         'A downloaded list keeps its id column, so each row goes back to exactly the item it came from.</div>' +
       '<div class="grid g2">' +
@@ -851,6 +953,7 @@
       // every year; only our own downloaded list (matched by id) renames.
       if (!r.isNew && !r.byId) delete rec.name;
       if (c.vendor && r.vendorId) rec.vendorId = r.vendorId;
+      Object.assign(rec, r.extra || {});
       if (r.isNew) {
         ['name', 'also', 'sku', 'where', 'unit', 'notes'].forEach(k => { if (rec[k] == null) rec[k] = ''; });
         if (rec.vendorId == null) rec.vendorId = r.vendorId || null;
@@ -860,11 +963,12 @@
         items[r.id] = Object.assign({ id: r.id }, items[r.id] || {}, rec);
         writes.push(['supplies', r.id, rec]);
       }
-      if (r.cents != null || c.per || c.priceNotes) {
-        const next = applyPrice(prices[r.id], {
+      const pricing = r.pricing || {};
+      if (r.cents != null || c.per || c.priceNotes || Object.keys(pricing).length) {
+        const next = applyPrice(prices[r.id], Object.assign({
           cents: r.cents != null ? r.cents : undefined,
           per: c.per || null, year: r.year, priceNotes: c.priceNotes || null,
-        });
+        }, pricing));
         prices[r.id] = next;
         writes.push(['supplyPrices', r.id, next]);
       }
@@ -890,7 +994,11 @@
       return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
     };
     const head = ['id', 'Supplier', 'Item', 'Item #', 'Comes in', 'Price', 'Per', 'Year',
-                  'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes'];
+                  'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes',
+                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each'];
+    const catName = id => ((categories().find(c => c[0] === id) || [])[1]) || '';
+    const yn = b => (b ? 'yes' : '');
+    const n = v => (typeof v === 'number' ? String(v) : '');
     const vName = it => (vendors[it.vendorId] || {}).name || '';
     const rows = Object.values(items)
       .filter(it => !only || it.vendorId === only.id)
@@ -903,7 +1011,9 @@
           typeof p.cents === 'number' ? (p.cents / 100).toFixed(2) : '', cell(p.per, true), p.year || '',
           prev ? (prev.cents / 100).toFixed(2) : '', prev ? prev.year : '',
           pct != null ? (pct > 0 ? '+' : '') + pct.toFixed(1) + '%' : '',
-          cell(it.where, true), cell(it.also, true), cell(it.notes, true), cell(p.priceNotes, true)].join(',');
+          cell(it.where, true), cell(it.also, true), cell(it.notes, true), cell(p.priceNotes, true),
+          cell(catName(it.category), true), n(it.coverage), cell(it.takeoffUnit, true), yn(it.pallet), yn(it.specialOrder),
+          n(p.markupPct), n(p.wastePct), typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : ''].join(',');
       });
     // A byte-order mark and CRLF line endings, so Excel opens it with the
     // dashes and accents intact.
@@ -955,6 +1065,14 @@
     if (p && p.classList.contains('active')) renderResults();
   }
 
+  // Estimates re-price when Supplies changes; a burst of snapshots (the
+  // first load) is told once.
+  let announceTimer = null;
+  function announce() {
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => document.dispatchEvent(new CustomEvent('yd-supplies')), 150);
+  }
+
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
     unsubs = []; items = {}; vendors = {}; prices = {}; pricesReady = false; shown = '';
@@ -968,6 +1086,7 @@
       });
       if (store === prices && meta && meta.fromCache === false) pricesReady = true;
       redrawIfVisible();
+      announce();
     };
     unsubs.push(window.YDDb.watch('supplies', take(items, true), () => redrawIfVisible()));
     unsubs.push(window.YDDb.watch('vendors', take(vendors, true), () => redrawIfVisible()));
@@ -976,8 +1095,12 @@
   }
 
   // parseTable is shared with the estimate price book (estimate.js), which
-  // takes the same pasted-from-Excel sheets.
-  window.YDSupplies = { render: render, parseTable: parseTable, parseCents: parseCents };
+  // takes the same pasted-from-Excel sheets. catalog() is what estimates are
+  // priced from (pricing.js); 'yd-supplies' says it changed.
+  window.YDSupplies = {
+    render: render, parseTable: parseTable, parseCents: parseCents,
+    catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
+  };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

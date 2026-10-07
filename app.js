@@ -326,6 +326,8 @@ document.addEventListener('yd-auth', e => {
   if (sep) sep.hidden = !on;
   const people = document.getElementById('menuPeople');
   if (people) people.hidden = !(on && a.isOwner);
+  const pricing = document.getElementById('menuPricing');
+  if (pricing) pricing.hidden = !(on && a.isOwner);
 
   // The job screens -- Job, Tracking, All Jobs, and the materials half of
   // Supplies -- are for whoever may see jobs: the owner, and an admin given

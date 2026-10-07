@@ -1,23 +1,36 @@
-// Estimates: built on the Job tab, sent to the customer through QuickBooks.
+// Estimates: built on the Job tab, priced by Jonah's rules, sent to the
+// customer through QuickBooks.
 //
-// How Jonah works: he writes what the job is, in his own words ("16x20 paver
-// patio, two steps, 40 ft of steel edging"), presses Build with Claude, checks
-// the lines, and sends it. QuickBooks numbers it, emails it, and records the
-// customer's answer; invoicing and payment then happen in QuickBooks.
+// How Jonah works: he writes his notes from the site visit (what he saw and
+// measured, what they want), Claude reads them and lays out the estimate --
+// the labour, and a takeoff of every material in the quantities the job needs
+// -- and he keeps talking to it ("make it 18x20", "add a fire pit", "Belgian
+// edging, we'll pick it up"). The crew-days are his call. Every dollar is
+// worked out by pricing.js from Supplies' costs and his pricing rules; Claude
+// never does sums and never sets a price.
 //
-// THE PRICE BOOK is what the business charges -- priceBook/{id}: name, unit,
-// priceCents, category, description (what the customer reads), notes (his
-// pricing rules, read by Claude), qbItemId (the matching QuickBooks product,
-// filled in by the server the first time it is used). Claude chooses entries
-// and quantities; the rate on a price-book line always comes from the book
-// (the server copies it, and so does this file), so an estimate cannot go out
-// at a price he did not set unless he types it himself.
+// What the customer gets (Jonah, 6 Oct 2026): one line per piece of labour
+// -- the heading, the address, and the scope of work -- and ONE materials line
+// listing every material and how much, with one price for all of it. No unit
+// prices, no tax line. QuickBooks numbers it, emails it and records the answer;
+// invoicing and payment then happen in QuickBooks.
 //
-// THE ESTIMATE lives on the job as `estimate` {ask, lines, memo, questions},
+// THE ESTIMATE lives on the job as `estimate`:
+//   { v: 2, notes, chat, questions, flags,
+//     work:      [{id, title, scope, kind: crew|flat|amount, crewDays, profit,
+//                  priceId, qty, unit, rateCents, amountCents, qbItem}],
+//     materials: [{id, supplyId, name, qty, unit, plant, tree, costCents,
+//                  category, delivery: auto|pickup|rides}],
+//     spoilCuYd, fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
+//     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo }
 // saved with the form like the materials list. What QuickBooks has is
-// `qbEstimate` {id, docNumber, customerId, status, sentAt, link…}, written by
-// the server and patched in here, carried through form saves (BOARD_FIELDS).
-// When the estimate has lines, the job price follows its total.
+// `qbEstimate`, written by the server and patched in here, carried through
+// form saves (BOARD_FIELDS). When the estimate has lines, the job price
+// follows its total.
+//
+// THE PRICE BOOK (priceBook/{id}) is for flat-rate services -- gutters by the
+// foot, a snow visit, a maintenance package: name, unit, priceCents. A labour
+// line can be one of those instead of crew-days.
 
 (function () {
   'use strict';
@@ -29,58 +42,93 @@
   const sees = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
   const changes = () => typeof ydCan === 'function' && ydCan('jobs', 'change');
   const sends = () => typeof ydCan === 'function' && ydCan('billing', 'change');
+  const P = () => window.YDPricing;
+  const num = v => (P() ? P().num(v) : (isFinite(parseFloat(v)) ? parseFloat(v) : null));
+  const dollarsIn = c => (num(c) === null ? '' : (num(c) / 100).toFixed(2));
+  const toCents = v => { const n = num(v); return n === null ? null : Math.round(n * 100); };
 
   let est = blank();
   let book = {};              // price book, id -> entry
   let unsub = null;
-  let building = false, saving = false, checking = false;
+  let building = false, saving = false, checking = false, tripping = false;
   const checkedAt = {};       // job id -> when its QuickBooks status was last asked for
+  const trippedFor = {};      // job id -> the address the miles were last looked up for
   let draftMsg = '';          // what is typed in the chat box, not sent yet
-  let undo = null;            // {jobId, lines, memo} from before Claude's last change
+  let undo = null;            // the estimate before Claude's last change
+  let qbItems = null;         // QuickBooks product names, fetched when first wanted
 
-  // chat: the conversation with Claude about this estimate, [{role, text, at,
-  // changed}] -- kept with the job so it can be picked up again later.
-  function blank() { return { ask: '', lines: [], memo: '', questions: [], chat: [] }; }
   const CHAT_KEEP = 60;
+  function blank() {
+    return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
+             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '' };
+  }
+  const clone = o => JSON.parse(JSON.stringify(o));
 
   // ------------------------------------------------------------- the money
 
-  // A line's amount in cents, from quantity and rate; never NaN.
-  function lineCents(l) {
-    if (l.kind === 'section') return 0;
-    const q = Number(l.qty), r = Number(l.rateCents);
-    return isFinite(q) && isFinite(r) ? Math.round(q * r) : 0;
+  function catalog() {
+    const c = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : null;
+    return c || { items: {}, prices: {}, vendors: {}, pricesReady: false };
   }
-  function subtotalCents() { return est.lines.reduce((s, l) => s + lineCents(l), 0); }
-  const items = () => est.lines.filter(l => l.kind !== 'section');
+  function ctx() {
+    const c = catalog();
+    return { rules: P().rules(), items: c.items, prices: c.prices, fuel: P().fuelPrices(),
+             city: (el('city') && el('city').value || '').trim() };
+  }
+  let last = null;            // the last worked-out price, for the totals and QuickBooks
+  function priced() { last = P() ? P().price(est, ctx()) : null; return last; }
+
+  const hasLines = () => est.work.length > 0 || est.materials.length > 0;
 
   // ------------------------------------------------------- the job's record
 
   window.YDEstimate = {
     get() {
-      return { ask: est.ask || '', memo: est.memo || '', questions: (est.questions || []).slice(),
-               lines: est.lines.map(l => Object.assign({}, l)),
-               chat: est.chat.slice(-CHAT_KEEP).map(m => ({ role: m.role, text: m.text, at: m.at || null, changed: !!m.changed })) };
+      const o = clone(est);
+      o.chat = o.chat.slice(-CHAT_KEEP);
+      return o;
     },
     load(e) {
       est = blank();
-      if (e && typeof e === 'object') {
-        est.ask = String(e.ask || ''); est.memo = String(e.memo || '');
-        est.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
-        est.lines = (Array.isArray(e.lines) ? e.lines : []).map(l => Object.assign({ id: newId('el') }, l));
-        est.chat = (Array.isArray(e.chat) ? e.chat : []).filter(m => m && m.text)
-          .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed }));
-        // Notes written before the conversation existed start it.
-        if (!est.chat.length && est.ask.trim()) est.chat.push({ role: 'user', text: est.ask.trim(), at: null, changed: false });
-      }
+      if (e && typeof e === 'object') est = fromSaved(e);
       draftMsg = ''; undo = null;
       render();
       autoCheck();
     },
-    hasLines: () => items().length > 0,
-    totalDollars: () => subtotalCents() / 100,
+    hasLines: () => hasLines(),
+    totalDollars: () => { const r = priced(); return r ? r.totalCents / 100 : 0; },
     book: () => book,
   };
+
+  // An estimate saved by the first version (price-book lines and one message)
+  // comes in as flat labour lines, so nothing typed is lost.
+  function fromSaved(e) {
+    const o = blank();
+    o.notes = String(e.notes || '');
+    o.chat = (Array.isArray(e.chat) ? e.chat : []).filter(m => m && m.text)
+      .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed }));
+    o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
+    o.flags = Array.isArray(e.flags) ? e.flags.map(String) : [];
+    o.memo = String(e.memo || '');
+    if (e.v === 2) {
+      o.work = (Array.isArray(e.work) ? e.work : []).map(w => Object.assign({ id: newId('ew'), kind: 'crew' }, w));
+      o.materials = (Array.isArray(e.materials) ? e.materials : []).map(m => Object.assign({ id: newId('em') }, m));
+      o.spoilCuYd = num(e.spoilCuYd);
+      o.fuel = Object.assign({}, e.fuel || {});
+      o.deliveryTown = String(e.deliveryTown || '');
+      o.off = Object.assign({}, e.off || {});
+    } else {
+      if (!o.notes && e.ask) o.notes = String(e.ask);
+      let heading = '';
+      (Array.isArray(e.lines) ? e.lines : []).forEach(l => {
+        if (l.kind === 'section') { heading = String(l.description || ''); return; }
+        o.work.push({ id: newId('ew'), kind: 'flat', title: heading || l.name || 'Work', scope: String(l.description || ''),
+          priceId: l.priceId || null, qty: num(l.qty), unit: l.unit || '', rateCents: num(l.rateCents) });
+      });
+      if (o.work.length && o.memo) { o.work[0].scope = o.memo + (o.work[0].scope ? '\n\n' + o.work[0].scope : ''); o.memo = ''; }
+    }
+    return o;
+  }
 
   function changed(redraw) {
     if (typeof syncJobPriceFromProposals === 'function') syncJobPriceFromProposals();
@@ -99,117 +147,262 @@
     if (!wrap || !sec) return;
     sec.hidden = !sees();
     if (!sees()) return;
+    if (!P()) { wrap.innerHTML = '<p class="empty-msg">Loading…</p>'; return; }
     const ro = !changes();
-    const names = Object.keys(book).map(id => [id, book[id]])
-      .sort((a, b) => String(a[1].category || '').localeCompare(String(b[1].category || '')) ||
-        String(a[1].name || '').localeCompare(String(b[1].name || '')));
+    const r = priced();
+    const rules = P().rules();
+    const notReady = num(rules.crewDayCents) === null || num(rules.taxPct) === null;
 
-    const last = est.chat.length - 1;
     wrap.innerHTML =
-      '<div class="est-chat" id="estChat">' +
-        (est.chat.length ? est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + '">' +
-            '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
-            '<div class="est-text">' + esc(m.text) + '</div>' +
-            (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate below' +
-              (i === last && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
-              '</div>' : '') +
-          '</div>').join('')
-          : '<div class="est-hello">Tell Claude what to price, the way you’d tell someone — “16x20 paver patio, Brussels in Sandstone, 2 steps off the back door, 40 ft steel edging, tear out the old deck.” ' +
-            'Then keep talking: “make it 18x20”, “add a fire pit”, “why is the base so much?”. It prices from your price book.</div>') +
-        (building ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">Working on it…</div></div>' : '') +
-      '</div>' +
-      (ro ? '' : '<div class="est-send">' +
-        '<textarea id="estMsg" rows="2" placeholder="' + (est.chat.length ? 'Message Claude about this estimate' : 'What to price…') + '" ' +
-          'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
-        '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (building ? '…' : 'Send') + '</button>' +
-      '</div>') +
-      '<div class="field-actions">' +
-        '<button class="btn btn-sm" onclick="openPriceBook()">💲 Price book (' + Object.keys(book).length + ')</button>' +
-        (!ro && est.chat.length ? '<button class="btn btn-sm" onclick="estNewChat()">Start the conversation over</button>' : '') +
-      '</div>' +
+      (notReady ? '<div class="est-warnbox">Your pricing rules aren’t set up yet, so nothing can be priced. ' +
+        (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : 'Ask Jonah to set them.') + '</div>' : '') +
+
+      '<div class="field"><span class="label">Notes from the site visit — what you saw and measured, what they want. Claude builds the estimate from these.</span>' +
+        '<textarea id="estNotes" rows="5" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" ' +
+        'placeholder="16x20 patio off the back door, Tahoe in Cascade, 2 steps down. 40 ft of Belgian edging along the beds (we pick it up). Tear out the old deck, ~12x14. Clay soil.">' +
+        esc(est.notes) + '</textarea></div>' +
+      (!ro && !hasLines() && !est.chat.length
+        ? '<div class="field-actions"><button class="btn btn-filled" onclick="estDraftFromNotes()"' + (building ? ' disabled' : '') + '>' +
+            (building ? 'Claude is working…' : '✨ Build the estimate from my notes') + '</button></div>' : '') +
+
+      chatHtml(ro) +
+
       ((est.questions || []).length ? '<div class="est-questions"><b>Claude needs to know:</b><ul>' +
         est.questions.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul>' +
-        '<div class="hint">Answer in the chat above, or fix the lines by hand.</div></div>' : '') +
-      '<div class="est-lines">' +
-        (est.lines.length ? est.lines.map((l, i) => lineHtml(l, i, names, ro)).join('')
-          : '<div class="empty-msg">No lines yet. Write what to price and press Build with Claude, or add lines yourself.</div>') +
-      '</div>' +
-      (ro ? '' : '<div class="field-actions est-add">' +
-        '<button class="btn btn-sm" onclick="estAdd(\'item\')">+ Line</button>' +
-        '<button class="btn btn-sm" onclick="estAdd(\'section\')">+ Section heading</button>' +
-        (est.lines.length ? '<button class="btn btn-sm" onclick="estClear()">Clear all lines</button>' : '') +
+        '<div class="hint">Answer in the chat, or fix the lines by hand.</div></div>' : '') +
+      ((est.flags || []).length ? '<div class="est-flags"><b>Flags:</b><ul>' +
+        est.flags.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
+
+      '<h4 class="est-h">Labour <span class="muted">— each line is a line on the estimate, with its scope of work</span></h4>' +
+      '<div class="est-work">' + (est.work.length ? est.work.map((w, i) => workHtml(w, i, ro)).join('')
+        : '<div class="empty-msg">No labour yet.</div>') + '</div>' +
+      (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estAddWork()">+ Labour line</button></div>') +
+
+      '<h4 class="est-h">Materials <span class="muted">— the takeoff; the customer sees the list and one total</span></h4>' +
+      '<div class="est-mats">' + (est.materials.length ? est.materials.map((m, i) => matHtml(m, i, ro, r)).join('')
+        : '<div class="empty-msg">No materials yet.</div>') + '</div>' +
+      (ro ? '' : '<div class="field-actions">' +
+        '<button class="btn btn-sm" onclick="estAddMat(false)">+ Material</button>' +
+        '<button class="btn btn-sm" onclick="estAddMat(true)">+ Plant</button>' +
+        '<label class="est-inline">Spoil to haul away <input inputmode="decimal" value="' + esc(est.spoilCuYd == null ? '' : est.spoilCuYd) + '" ' +
+          'oninput="estSet(\'spoilCuYd\', this.value)"> cu yd</label>' +
       '</div>') +
+
+      '<h4 class="est-h">Added by your rules</h4>' +
+      '<div class="est-auto" id="estAuto"></div>' +
+
       '<div class="est-totals" id="estTotals"></div>' +
-      '<div class="field mt"><span class="label">Message on the estimate — the scope of work the customer reads</span>' +
-        '<textarea id="estMemo" rows="4" ' + (ro ? 'readonly ' : '') + 'oninput="estMemoInput(this.value)" ' +
-        'placeholder="What will be done and what they end up with. Claude writes this when it builds the estimate.">' +
-        esc(est.memo) + '</textarea></div>' +
+
+      '<div class="field mt"><span class="label">Message on the estimate (payment terms and warranty) — blank uses the one in Pricing rules</span>' +
+        '<textarea id="estMemo" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estMemoInput(this.value)" placeholder="' +
+        esc(defaultMemo(r ? r.totalCents : 0)) + '">' + esc(est.memo) + '</textarea></div>' +
+      '<div class="field-actions"><button class="btn btn-sm" onclick="openPriceBook()">💲 Price book (' + Object.keys(book).length + ')</button>' +
+        (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">⚙ Pricing rules</button>' : '') + '</div>' +
       '<div class="est-qb" id="estQb"></div>';
 
     wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
     const log = el('estChat'); if (log) log.scrollTop = log.scrollHeight;
     renderTotals();
+    autoTrip();
   }
 
-  function lineHtml(l, i, names, ro) {
-    const id = safeId(l.id);
-    const dis = ro ? ' disabled' : '';
-    const moves = ro ? '' : '<span class="est-moves">' +
-      '<button class="bd-edit-btn" onclick="estMove(\'' + id + '\', -1)"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move up">↑</button>' +
-      '<button class="bd-edit-btn" onclick="estMove(\'' + id + '\', 1)"' + (i === est.lines.length - 1 ? ' disabled' : '') + ' aria-label="Move down">↓</button>' +
-      '<button class="bd-edit-btn del" onclick="estRemove(\'' + id + '\')" aria-label="Remove line">✕</button></span>';
-    if (l.kind === 'section') {
-      return '<div class="est-row est-section">' +
-        '<input value="' + esc(l.description || '') + '" placeholder="Section heading, e.g. Back patio"' + dis +
-          ' oninput="estField(\'' + id + '\', \'description\', this.value)">' + moves + '</div>';
+  function chatHtml(ro) {
+    if (!est.chat.length && !building) return '';
+    const lastI = est.chat.length - 1;
+    return '<div class="est-chat" id="estChat">' +
+        est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + '">' +
+          '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
+          '<div class="est-text">' + esc(m.text) + '</div>' +
+          (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate' +
+            (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
+            '</div>' : '') +
+        '</div>').join('') +
+        (building ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">Working on it — a first build can take a minute or two…</div></div>' : '') +
+      '</div>' +
+      (ro ? '' : '<div class="est-send">' +
+        '<textarea id="estMsg" rows="2" placeholder="Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “4 crew-days”" ' +
+          'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
+        '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (building ? '…' : 'Send') + '</button>' +
+      '</div>' +
+      '<div class="field-actions"><button class="link-btn" onclick="estNewChat()">Start the conversation over</button></div>');
+  }
+
+  function moves(kind, id, i, n, ro) {
+    if (ro) return '';
+    return '<span class="est-moves">' +
+      '<button class="bd-edit-btn" onclick="estMove(\'' + kind + '\', \'' + id + '\', -1)"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move up">↑</button>' +
+      '<button class="bd-edit-btn" onclick="estMove(\'' + kind + '\', \'' + id + '\', 1)"' + (i === n - 1 ? ' disabled' : '') + ' aria-label="Move down">↓</button>' +
+      '<button class="bd-edit-btn del" onclick="estRemove(\'' + kind + '\', \'' + id + '\')" aria-label="Remove">✕</button></span>';
+  }
+
+  function workHtml(w, i, ro) {
+    const id = safeId(w.id), dis = ro ? ' disabled' : '';
+    const kind = w.kind || 'crew';
+    const tiers = P().PROFIT_TIERS;
+    const rules = P().rules();
+    const on = (f, v, ph, cls, mode) => '<input class="' + (cls || '') + '"' + (mode ? ' inputmode="' + mode + '"' : '') +
+      ' value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph || '') + '"' + dis +
+      ' oninput="estWork(\'' + id + '\', \'' + f + '\', this.value)">';
+    let nums = '';
+    if (kind === 'crew') {
+      nums = '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'your call', '', 'decimal') + '</label>' +
+        '<label><span>Profit</span><select' + dis + ' onchange="estWork(\'' + id + '\', \'profit\', this.value)">' +
+          tiers.map(([t, name]) => '<option value="' + t + '"' + ((w.profit || rules.defaultProfit || 'aim') === t ? ' selected' : '') + '>' + name + '</option>').join('') +
+        '</select></label>';
+    } else if (kind === 'flat') {
+      const names = Object.keys(book).map(pid => [pid, book[pid]]).sort((a, b) => String(a[1].name || '').localeCompare(String(b[1].name || '')));
+      nums = '<label class="est-grow"><span>From the price book</span><select class="searchable"' + dis + ' onchange="estPickPrice(\'' + id + '\', this.value)">' +
+          '<option value="">—</option>' + names.map(([pid, e]) => '<option value="' + esc(pid) + '"' + (pid === w.priceId ? ' selected' : '') + '>' +
+            esc(e.name) + (Number.isInteger(e.priceCents) ? ' — ' + cents(e.priceCents) + '/' + esc(e.unit || 'each') : '') + '</option>').join('') +
+        '</select></label>' +
+        '<label><span>Qty' + (w.unit ? ' (' + esc(w.unit) + ')' : '') + '</span>' + on('qty', w.qty, '', '', 'decimal') + '</label>' +
+        '<label><span>Rate</span>' + on('rate', dollarsIn(w.rateCents), '0.00', '', 'decimal') + '</label>';
+    } else {
+      nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', '', 'decimal') + '</label>';
     }
-    const p = l.priceId ? book[l.priceId] : null;
-    const bookRate = p && Number.isInteger(p.priceCents) ? p.priceCents : null;
-    const off = bookRate != null && bookRate !== Number(l.rateCents);
-    const missing = l.priceId && !p;
-    return '<div class="est-row' + (l.needsPrice && !Number(l.rateCents) ? ' needs' : '') + '">' +
-      '<div class="est-item">' +
-        '<select class="searchable" title="From the price book"' + dis + ' onchange="estPick(\'' + id + '\', this.value)">' +
-          '<option value="">' + (l.priceId && missing ? 'Removed from the price book' : 'Not in the price book') + '</option>' +
-          names.map(([pid, e]) => '<option value="' + esc(pid) + '"' + (pid === l.priceId ? ' selected' : '') + '>' +
-            esc(e.name) + (Number.isInteger(e.priceCents) ? ' — ' + cents(e.priceCents) + '/' + esc(e.unit || 'each') : '') +
-            '</option>').join('') +
-        '</select>' +
-        '<input class="est-desc" value="' + esc(l.description || '') + '" placeholder="What the customer reads"' + dis +
-          ' oninput="estField(\'' + id + '\', \'description\', this.value)">' +
-      '</div>' +
-      '<div class="est-nums">' +
-        '<label><span>Qty</span><input inputmode="decimal" value="' + esc(fmtQty(l.qty)) + '"' + dis +
-          ' oninput="estField(\'' + id + '\', \'qty\', this.value)"></label>' +
-        '<label><span>Unit</span><input value="' + esc(l.unit || '') + '" placeholder="each"' + dis +
-          ' oninput="estField(\'' + id + '\', \'unit\', this.value)"></label>' +
-        '<label><span>Rate' + (off ? ' <i title="Price book says ' + esc(cents(bookRate)) + '">✎</i>' : '') + '</span>' +
-          '<input inputmode="decimal" value="' + esc(l.rateCents != null && l.rateCents !== '' ? (Number(l.rateCents) / 100).toFixed(2) : '') + '"' + dis +
-          ' placeholder="0.00" oninput="estField(\'' + id + '\', \'rate\', this.value)"></label>' +
-        '<div class="est-amt" id="estAmt_' + id + '">' + cents(lineCents(l)) + '</div>' +
-        moves +
-      '</div>' +
+    return '<div class="est-wrow">' +
+      '<div class="est-wtop">' + on('title', w.title, 'Heading, e.g. Paver patio & steps', 'est-title') +
+        '<select' + dis + ' onchange="estWork(\'' + id + '\', \'kind\', this.value)">' +
+          [['crew', 'Crew-days'], ['flat', 'Price book'], ['amount', 'Fixed amount']].map(([k, n]) =>
+            '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + n + '</option>').join('') +
+        '</select>' + moves('work', id, i, est.work.length, ro) + '</div>' +
+      '<div class="est-nums">' + nums + '<div class="est-amt" id="estWA_' + id + '"></div></div>' +
+      '<textarea rows="4" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
+        ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>' +
+      '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
+        ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>' +
+      '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
   }
 
-  function fmtQty(q) {
-    const n = Number(q);
-    return q === '' || q == null || !isFinite(n) ? '' : String(Math.round(n * 100) / 100);
+  function supplyOptions(selected) {
+    const c = catalog();
+    const names = P().CATEGORY_NAME;
+    const list = Object.values(c.items).sort((a, b) =>
+      String(names[a.category] || 'zz').localeCompare(String(names[b.category] || 'zz')) || String(a.name).localeCompare(String(b.name)));
+    return '<option value="">— not in Supplies —</option>' + list.map(it => {
+      const v = c.vendors[it.vendorId];
+      const unit = num(it.coverage) > 0 ? it.takeoffUnit : ((c.prices[it.id] || {}).per || it.unit || '');
+      return '<option value="' + esc(it.id) + '"' + (it.id === selected ? ' selected' : '') + '>' + esc(it.name) +
+        (unit ? ' (' + esc(unit) + ')' : '') + (v ? ' — ' + esc(v.name) : '') + '</option>';
+    }).join('');
   }
 
+  function matHtml(m, i, ro, r) {
+    const id = safeId(m.id), dis = ro ? ' disabled' : '';
+    const c = catalog();
+    const it = m.supplyId ? c.items[m.supplyId] : null;
+    const on = (f, v, ph, cls, mode) => '<input class="' + (cls || '') + '"' + (mode ? ' inputmode="' + mode + '"' : '') +
+      ' value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph || '') + '"' + dis +
+      ' oninput="estMat(\'' + id + '\', \'' + f + '\', this.value)">';
+    const line = r ? r.takeoff.find(l => l.id === m.id) : null;
+    const unit = line ? line.takeoffUnit : (m.unit || '');
+    const vRule = it && it.vendorId ? (P().rules().vendors || {})[it.vendorId] || {} : {};
+    let head;
+    if (m.plant) {
+      head = '<span class="est-plant">🌱</span>' + on('name', m.name, 'Plant, size — e.g. Autumn Blaze maple, 2" cal', 'est-title') +
+        '<label><span>How many</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>' +
+        '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', '', 'decimal') + '</label>' +
+        '<label><span>Tree?</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'tree\', this.value)">' +
+          [['', 'No'], ['single', 'Single-trunk'], ['multi', 'Multi-trunk / evergreen']].map(([k, n]) =>
+            '<option value="' + k + '"' + ((m.tree || '') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
+        '</select></label>';
+    } else {
+      head = '<select class="searchable est-supply"' + dis + ' onchange="estPickSupply(\'' + id + '\', this.value)">' + supplyOptions(m.supplyId) + '</select>' +
+        on('name', m.name, 'What the customer reads, e.g. Screened topsoil', 'est-title') +
+        '<label><span>Qty' + (unit ? ' (' + esc(unit) + ')' : '') + '</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>' +
+        (it ? '' : '<label><span>Unit</span>' + on('unit', m.unit, 'each', '') + '</label>' +
+          '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', '', 'decimal') + '</label>' +
+          '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
+            P().CATEGORIES.filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + k + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
+          '</select></label>') +
+        (vRule.cityDelivery ? '<label><span>Delivery</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'delivery\', this.value)">' +
+          [['auto', 'Delivered'], ['pickup', 'We pick it up'], ['rides', 'Rides on another load']].map(([k, n]) =>
+            '<option value="' + k + '"' + ((m.delivery || 'auto') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
+          '</select></label>' : '');
+    }
+    return '<div class="est-mrow">' +
+      '<div class="est-mtop">' + head + '<div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div>' +
+      '<div class="est-order" id="estMO_' + id + '"></div>' +
+    '</div>';
+  }
+
+  // Everything that depends on the numbers, redrawn without touching what is
+  // being typed in.
   function renderTotals() {
     const t = el('estTotals');
-    if (!t) return;
-    est.lines.forEach(l => { const a = el('estAmt_' + safeId(l.id)); if (a) a.textContent = cents(lineCents(l)); });
-    const sub = subtotalCents();
-    const unpriced = items().filter(l => !Number(l.rateCents)).length;
-    const taxable = !!(el('taxable') && el('taxable').checked);
-    t.innerHTML = items().length
-      ? '<div><span>Subtotal</span><b>' + cents(sub) + '</b></div>' +
-        (taxable ? '<div class="muted"><span>Sales tax (QuickBooks works out the exact tax)</span><span>about ' + cents(Math.round(sub * 0.055)) + '</span></div>' : '') +
-        (unpriced ? '<div class="warn">' + unpriced + ' line' + (unpriced === 1 ? ' has' : 's have') + ' no price yet</div>' : '')
+    if (!t || !P()) return;
+    const r = priced();
+    r.work.forEach(w => {
+      const a = el('estWA_' + safeId(w.id)); if (a) a.textContent = w.cents ? cents(w.cents) : '';
+      const p = el('estWP_' + safeId(w.id)); if (p) p.textContent = w.problems.join(' · ');
+    });
+    r.takeoff.forEach(l => {
+      const a = el('estMA_' + safeId(l.id)); if (a) a.textContent = l.clientCents ? cents(l.clientCents) : '';
+      const o = el('estMO_' + safeId(l.id));
+      if (o) {
+        o.className = 'est-order' + (l.problems.length ? ' bad' : '');
+        o.textContent = l.problems.length ? '⚠ ' + l.problems.join(' · ')
+          : l.orderQty ? 'Order ' + P().qtyText(l.orderQty, l.per) +
+            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + (l.specialOrder ? ' · special order' : '') : '';
+      }
+    });
+    renderAuto(r);
+    const pays = r.payments;
+    t.innerHTML = (r.work.length || r.takeoff.length)
+      ? '<div><span>Materials</span><b>' + cents(r.materialsCents) + '</b></div>' +
+        '<div><span>Labour & installation</span><b>' + cents(r.laborCents) + '</b></div>' +
+        '<div class="est-grand"><span>Project total</span><b>' + cents(r.totalCents) + '</b></div>' +
+        (pays.length ? '<div class="muted">' + pays.map(p => esc(p.label) + ' ' + cents(p.cents)).join(' · ') + '</div>' : '') +
+        (r.crewDays ? '<div class="muted">' + fmtQ(r.crewDays) + ' crew-day' + (r.crewDays === 1 ? '' : 's') + ' — only you see this</div>' : '') +
+        (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul></div>' : '') +
+        (r.specialOrder.length ? '<div class="warn">Special order (non-returnable — lock their selections first): ' + r.specialOrder.map(esc).join(', ') + '</div>' : '')
       : '';
     renderQb();
+  }
+  const fmtQ = q => String(Math.round(q * 100) / 100);
+
+  function renderAuto(r) {
+    const box = el('estAuto');
+    if (!box) return;
+    const ro = !changes(), off = est.off || {};
+    const sw = (k, label) => '<label class="est-switch"><input type="checkbox"' + (off[k] ? '' : ' checked') + (ro ? ' disabled' : '') +
+      ' onchange="estOff(\'' + k + '\', !this.checked)"> ' + label + '</label>';
+    const rows = [];
+    // Delivery
+    const d = r.delivery;
+    const rates = (P().rules().delivery || {}).rates || {};
+    const towns = Object.keys(rates).filter(k => num(rates[k]) !== null).sort();
+    const needTown = d.problems.some(p => /town|rate/.test(p)) || est.deliveryTown;
+    rows.push('<div class="est-arow">' + sw('delivery', 'Delivery') + '<span class="est-adesc">' +
+      (off.delivery ? 'off' : d.lines.length ? d.lines.map(l => esc(l.name) + ' — ' + l.loads + ' load' + (l.loads === 1 ? '' : 's') + (l.pallet ? ' + pallet' : '')).join('; ')
+        : 'nothing delivered') + '</span>' +
+      (needTown && !off.delivery ? '<select' + (ro ? ' disabled' : '') + ' onchange="estSet(\'deliveryTown\', this.value)"><option value="">Town: from the job</option>' +
+        towns.map(t => '<option' + (t === est.deliveryTown ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' : '') +
+      '<b>' + (d.clientCents ? cents(d.clientCents) : '') + '</b></div>');
+    // Fuel
+    const f = r.fuel, fu = est.fuel || {};
+    const fp = P().fuelPrices() || {};
+    rows.push('<div class="est-arow">' + sw('fuel', 'Fuel') + '<span class="est-adesc">' + (off.fuel ? 'off' :
+        '<label>Miles each way <input inputmode="decimal" value="' + esc(fu.miles == null ? '' : fu.miles) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'miles\', this.value)"></label>' +
+        '<button class="btn btn-sm" onclick="estFindMiles(true)"' + (tripping ? ' disabled' : '') + '>' + (tripping ? 'Looking…' : 'Find miles') + '</button>' +
+        '<label>Days <input inputmode="decimal" placeholder="' + esc(f.days == null ? '' : f.days) + '" value="' + esc(fu.jobDays == null ? '' : fu.jobDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'jobDays\', this.value)"></label>' +
+        '<label>Loader days <input inputmode="decimal" placeholder="' + esc(f.bobcatDays == null ? '' : f.bobcatDays) + '" value="' + esc(fu.bobcatDays == null ? '' : fu.bobcatDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'bobcatDays\', this.value)"></label>' +
+        '<label>Gas $/gal <input inputmode="decimal" placeholder="' + esc(num(fp.gasCents) !== null ? (fp.gasCents / 100).toFixed(2) : '') + '" value="' + esc(fu.gasCents == null ? '' : (fu.gasCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'gasCents\', this.value)"></label>' +
+        '<label>Diesel <input inputmode="decimal" placeholder="' + esc(num(fp.dieselCents) !== null ? (fp.dieselCents / 100).toFixed(2) : '') + '" value="' + esc(fu.dieselCents == null ? '' : (fu.dieselCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'dieselCents\', this.value)"></label>' +
+        (fp.asOf ? '<small class="muted">prices week of ' + esc(fp.asOf) + '</small>' : '')) +
+      '</span><b>' + (f.clientCents ? cents(f.clientCents) : '') + '</b></div>');
+    // Dumpsters, planting package, markers: lines the rules added.
+    [['dumpsters', 'Dumpsters'], ['planting', 'Planting package'], ['markers', 'Layout markers']].forEach(([k, label]) => {
+      const ls = r.added.filter(l => l.auto === k);
+      const sum = ls.reduce((s, l) => s + l.clientCents, 0);
+      const probs = [].concat.apply([], ls.map(l => l.problems));
+      if (!ls.length && !off[k]) return;
+      rows.push('<div class="est-arow">' + sw(k, label) + '<span class="est-adesc">' + (off[k] ? 'off' :
+        ls.map(l => esc(l.name) + ' — ' + esc(P().qtyText(l.orderQty, l.per))).join('; ') +
+        (probs.length ? ' <span class="bad">⚠ ' + esc(probs.join(' · ')) + '</span>' : '')) + '</span><b>' + (sum ? cents(sum) : '') + '</b></div>');
+    });
+    box.innerHTML = rows.join('');
   }
 
   function renderQb() {
@@ -217,7 +410,8 @@
     if (!box) return;
     const q = qb();
     const can = sends() && changes();
-    const n = items().length;
+    const r = last;
+    const ready = r && r.totalCents > 0;
     const when = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const status = q ? ({ Pending: 'Waiting on the customer', Accepted: '✅ Accepted', Closed: 'Made into an invoice',
       Rejected: 'Turned down' }[q.status] || q.status || '') : '';
@@ -229,9 +423,9 @@
         (q.acceptedBy ? ' · accepted by ' + esc(q.acceptedBy) : '') +
         (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</div>' : '') +
       (can ? '<div class="field-actions">' +
-        '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || !n ? ' disabled' : '') + '>' +
+        '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || !ready ? ' disabled' : '') + '>' +
           (saving ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
-        '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || !n ? ' disabled' : '') + '>' +
+        '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || !ready ? ' disabled' : '') + '>' +
           (q && q.id ? 'Update in QuickBooks only' : 'Put in QuickBooks, don’t email yet') + '</button>' +
         (q && q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open in QuickBooks</a>' : '') +
@@ -240,79 +434,121 @@
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>'));
   }
 
+  // The message on the estimate: what was typed for this one, or the rules'
+  // payment terms for its size, then the warranty.
+  function defaultMemo(totalCents) {
+    const p = (P() && P().rules().payments) || {};
+    const above = num(p.splitAboveCents);
+    const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
+    return [terms, p.warranty].map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
+  }
+
   // --------------------------------------------------------------- editing
 
-  function line(id) { return est.lines.find(l => safeId(l.id) === id); }
+  const find = (list, id) => list.find(x => safeId(x.id) === id);
 
+  window.estNotesInput = function (v) { est.notes = v; if (typeof markDirty === 'function') markDirty(); };
   window.estMemoInput = function (v) { est.memo = v; if (typeof markDirty === 'function') markDirty(); };
 
-  window.estField = function (id, field, v) {
-    const l = line(id);
-    if (!l || !changes()) return;
-    if (field === 'qty') {
-      const n = parseFloat(String(v).replace(/,/g, ''));
-      l.qty = isFinite(n) ? n : '';
-    } else if (field === 'rate') {
-      const c = window.YDSupplies && window.YDSupplies.parseCents ? window.YDSupplies.parseCents(v)
-        : Math.round(parseFloat(String(v).replace(/[$,]/g, '')) * 100);
-      l.rateCents = typeof c === 'number' && isFinite(c) ? c : '';
-      if (l.rateCents) l.needsPrice = false;
-    } else {
-      l[field] = String(v);
-    }
+  window.estSet = function (field, v) {
+    if (!changes()) return;
+    if (field === 'spoilCuYd') est.spoilCuYd = num(v);
+    else if (field === 'deliveryTown') est.deliveryTown = String(v || '');
+    changed(field === 'deliveryTown');
+  };
+  window.estOff = function (k, isOff) {
+    if (!changes()) return;
+    est.off = Object.assign({}, est.off, { [k]: !!isOff });
+    changed(true);
+  };
+  window.estFuel = function (field, v) {
+    if (!changes()) return;
+    est.fuel = Object.assign({}, est.fuel);
+    est.fuel[field] = /Cents$/.test(field) ? toCents(v) : num(v);
     changed(false);
   };
 
-  // Picking from the price book takes its unit, its rate and (if the line
-  // says nothing yet) its wording.
-  window.estPick = function (id, pid) {
-    const l = line(id);
-    if (!l || !changes()) return;
+  window.estWork = function (id, field, v) {
+    const w = find(est.work, id);
+    if (!w || !changes()) return;
+    if (field === 'crewDays' || field === 'qty') w[field] = num(v);
+    else if (field === 'rate') w.rateCents = toCents(v);
+    else if (field === 'amount') w.amountCents = toCents(v);
+    else if (field === 'profit') w.profit = v;
+    else if (field === 'kind') { w.kind = v; changed(true); return; }
+    else w[field] = String(v);
+    changed(false);
+  };
+  window.estPickPrice = function (id, pid) {
+    const w = find(est.work, id);
+    if (!w || !changes()) return;
     const p = pid ? book[pid] : null;
-    l.priceId = p ? pid : null;
+    w.priceId = p ? pid : null;
     if (p) {
-      l.name = p.name || '';
-      l.unit = p.unit || 'each';
-      if (Number.isInteger(p.priceCents)) { l.rateCents = p.priceCents; l.needsPrice = false; }
-      if (!String(l.description || '').trim()) l.description = p.description || p.name || '';
-      if (l.qty === '' || l.qty == null) l.qty = 1;
+      w.unit = p.unit || 'each';
+      if (Number.isInteger(p.priceCents)) w.rateCents = p.priceCents;
+      if (!String(w.title || '').trim()) w.title = p.name || '';
+      if (!String(w.scope || '').trim()) w.scope = p.description || '';
+      if (w.qty == null) w.qty = 1;
     }
     changed(true);
   };
 
-  window.estAdd = function (kind) {
-    if (!changes()) return;
-    est.lines.push(kind === 'section' ? { id: newId('el'), kind: 'section', description: '' }
-      : { id: newId('el'), kind: 'item', priceId: null, name: '', description: '', qty: 1, unit: '', rateCents: '' });
-    changed(true);
+  window.estMat = function (id, field, v) {
+    const m = find(est.materials, id);
+    if (!m || !changes()) return;
+    if (field === 'qty') m.qty = num(v);
+    else if (field === 'cost') m.costCents = toCents(v);
+    else if (field === 'tree') m.tree = v || null;
+    else if (field === 'delivery' || field === 'category') { m[field] = v; changed(true); return; }
+    else m[field] = String(v);
+    changed(false);
   };
-  window.estRemove = function (id) {
-    if (!changes()) return;
-    est.lines = est.lines.filter(l => safeId(l.id) !== id);
-    changed(true);
-  };
-  window.estMove = function (id, dir) {
-    const i = est.lines.findIndex(l => safeId(l.id) === id), j = i + dir;
-    if (i < 0 || j < 0 || j >= est.lines.length) return;
-    const t = est.lines[i]; est.lines[i] = est.lines[j]; est.lines[j] = t;
-    changed(true);
-  };
-  window.estClear = function () {
-    if (!confirm('Take every line off this estimate?')) return;
-    est.lines = []; est.questions = [];
+  // Picking from Supplies takes its name for what the customer reads, unless
+  // something is written there already.
+  window.estPickSupply = function (id, sid) {
+    const m = find(est.materials, id);
+    if (!m || !changes()) return;
+    const it = sid ? catalog().items[sid] : null;
+    m.supplyId = it ? sid : null;
+    if (it && !String(m.name || '').trim()) m.name = it.name || '';
     changed(true);
   };
 
-  // A tax change moves the estimate's tax line.
-  document.addEventListener('change', e => { if (e.target && e.target.id === 'taxable') renderTotals(); });
+  window.estAddWork = function () {
+    if (!changes()) return;
+    est.work.push({ id: newId('ew'), kind: 'crew', title: '', scope: '', crewDays: null, profit: null, qbItem: '' });
+    changed(true);
+  };
+  window.estAddMat = function (plant) {
+    if (!changes()) return;
+    est.materials.push(plant ? { id: newId('em'), plant: true, name: '', qty: null, costCents: null, tree: null }
+      : { id: newId('em'), supplyId: null, name: '', qty: null, delivery: 'auto' });
+    changed(true);
+  };
+  window.estRemove = function (kind, id) {
+    if (!changes()) return;
+    if (kind === 'work') est.work = est.work.filter(x => safeId(x.id) !== id);
+    else est.materials = est.materials.filter(x => safeId(x.id) !== id);
+    changed(true);
+  };
+  window.estMove = function (kind, id, dir) {
+    const list = kind === 'work' ? est.work : est.materials;
+    const i = list.findIndex(x => safeId(x.id) === id), j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return;
+    const t = list[i]; list[i] = list[j]; list[j] = t;
+    changed(true);
+  };
 
   // ------------------------------------------------ talking to Claude
   //
-  // Each message goes with the whole conversation and the estimate as it is
-  // on screen (lines changed by hand included). Claude answers in words and,
-  // when asked for a change, with the whole estimate as it should now be,
-  // which replaces the lines -- with one Undo, because a conversation
-  // changes things in steps and the last step is the one most often wrong.
+  // Each message goes with the whole conversation, the site-visit notes and
+  // the estimate as it is on screen (hand changes included), with what it
+  // comes to. Claude answers in words and, when asked for a change, with the
+  // whole estimate as it should now be. Lines keep their ids, so whatever
+  // Claude does not set -- crew-days it was not told, a cost typed in, how a
+  // material is delivered -- stays as it was. One Undo, because the last step
+  // of a conversation is the one most often wrong.
 
   window.estMsgInput = function (v) { draftMsg = v; };
   window.estMsgKey = function (e) {
@@ -321,6 +557,64 @@
       e.preventDefault(); window.estSend();
     }
   };
+  window.estDraftFromNotes = function () {
+    if (!String(est.notes || '').trim()) { showToast('Write your notes from the site visit first'); const n = el('estNotes'); if (n) n.focus(); return; }
+    draftMsg = 'Build the estimate from my site-visit notes.';
+    window.estSend();
+  };
+
+  function currentForClaude() {
+    const r = priced();
+    return {
+      work: est.work.map(w => ({ id: w.id, title: w.title || '', scope: w.scope || '', kind: w.kind || 'crew',
+        crewDays: num(w.crewDays), priceId: w.priceId || null, qty: num(w.qty),
+        amountDollars: num(w.amountCents) === null ? null : w.amountCents / 100 })),
+      materials: est.materials.map(m => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
+        unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
+        costEachDollars: num(m.costCents) === null ? null : m.costCents / 100, delivery: m.delivery || 'auto' })),
+      spoilCuYd: num(est.spoilCuYd),
+      totals: r ? { materials: r.materialsCents / 100, labour: r.laborCents / 100, total: r.totalCents / 100,
+                    crewDays: r.crewDays, notPriced: r.problems.slice(0, 20) } : null,
+    };
+  }
+
+  // Claude's estimate onto ours, line by line by id.
+  function mergeWork(got) {
+    return (got || []).map(g => {
+      const was = g.id ? est.work.find(w => w.id === g.id) : null;
+      const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
+      w.title = String(g.title || '');
+      w.scope = String(g.scope || '');
+      w.kind = ['crew', 'flat', 'amount'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
+      if (w.kind === 'crew' && num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
+      if (w.kind === 'flat') {
+        const p = g.priceId && book[g.priceId] ? book[g.priceId] : null;
+        if (p) {
+          if (w.priceId !== g.priceId || num(w.rateCents) === null) w.rateCents = Number.isInteger(p.priceCents) ? p.priceCents : null;
+          w.priceId = g.priceId; w.unit = p.unit || 'each';
+        }
+        if (num(g.qty) !== null) w.qty = num(g.qty);
+      }
+      if (w.kind === 'amount' && num(g.amountDollars) > 0) w.amountCents = Math.round(num(g.amountDollars) * 100);
+      return w;
+    });
+  }
+  function mergeMaterials(got) {
+    const items = catalog().items;
+    return (got || []).map(g => {
+      const was = g.id ? est.materials.find(m => m.id === g.id) : null;
+      const m = was ? clone(was) : { id: newId('em'), delivery: 'auto' };
+      m.plant = !!g.plant;
+      m.supplyId = !m.plant && g.supplyId && items[g.supplyId] ? g.supplyId : null;
+      m.name = String(g.name || (m.supplyId ? items[m.supplyId].name : '') || '');
+      m.qty = num(g.qty);
+      if (!m.supplyId) m.unit = String(g.unit || m.unit || '');
+      if (m.plant) m.tree = g.tree === 'single' || g.tree === 'multi' ? g.tree : null;
+      if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
+      if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
+      return m;
+    });
+  }
 
   window.estSend = async function () {
     if (building || !changes()) return;
@@ -329,42 +623,41 @@
     if (!text) { const b = el('estMsg'); if (b) b.focus(); return; }
     const customer = (el('customerName').value || '').trim();
     if (!customer) { showToast('Add a customer name first'); return; }
-    if (!Object.keys(book).length && !est.chat.length &&
-        !confirm('The price book is empty, so Claude can only lay out the lines — every price will be blank.\n\nCarry on?')) return;
     // Saved first so the job has an id that means only itself (see claude.js).
     if (!currentJobId && typeof autosave === 'function') autosave();
     const forJob = currentJobId;
     est.chat.push({ role: 'user', text: text, at: new Date().toISOString(), changed: false });
-    if (!est.ask.trim()) est.ask = text;
     draftMsg = '';
     building = true;
     changed(true);
     try {
       const city = [el('city').value, el('state').value].filter(Boolean).join(', ');
       const r = await window.YDClaude.post('/estimate/draft', {
+        jobId: forJob,
         customer: customer,
         location: [el('address').value, city].filter(Boolean).join(', '),
         services: (typeof serviceTypes !== 'undefined' ? serviceTypes.slice() : []),
-        notes: (el('notes').value || '').trim(),
+        jobNotes: (el('notes').value || '').trim(),
+        siteNotes: String(est.notes || '').trim(),
         chat: est.chat.slice(-30).map(m => ({ role: m.role, text: m.text })),
-        current: { memo: est.memo || '', lines: est.lines.map(l => ({ kind: l.kind, priceId: l.priceId || null,
-          name: l.name || '', description: l.description || '', qty: l.qty, unit: l.unit || '', rateCents: Number(l.rateCents) || 0 })) },
+        current: currentForClaude(),
       });
       if (currentJobId !== forJob) { showToast('A different job is open now — Claude’s answer was not put in it'); return; }
-      const lines = (r.lines || []).map(l => Object.assign({ id: newId('el') }, l));
-      const apply = r.updated !== false && lines.length > 0;
+      const apply = r.updated !== false && ((r.work || []).length || (r.materials || []).length);
       if (apply) {
-        undo = { jobId: forJob, lines: est.lines, memo: est.memo, questions: est.questions };
-        est.lines = lines;
-        const msg = String(r.message || '').trim();
-        if (msg) est.memo = msg;
+        undo = { jobId: forJob, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd,
+                 questions: est.questions.slice(), flags: est.flags.slice() };
+        est.work = mergeWork(r.work);
+        est.materials = mergeMaterials(r.materials);
+        if (num(r.spoilCuYd) !== null) est.spoilCuYd = num(r.spoilCuYd) || null;
       } else {
         // Undo only ever undoes the change it is shown beside.
         undo = null;
       }
       est.questions = (r.questions || []).map(String);
+      est.flags = (r.flags || []).map(String);
       est.chat.push({ role: 'assistant', text: String(r.reply || (apply ? 'Updated the estimate.' : 'No change.')),
-                      at: new Date().toISOString(), changed: apply });
+                      at: new Date().toISOString(), changed: !!apply });
       changed(true);
     } catch (e) {
       // The message stays in the box to send again.
@@ -378,7 +671,8 @@
 
   window.estUndo = function () {
     if (!undo || undo.jobId !== currentJobId || !changes()) return;
-    est.lines = undo.lines; est.memo = undo.memo; est.questions = undo.questions || [];
+    est.work = undo.work; est.materials = undo.materials; est.spoilCuYd = undo.spoilCuYd;
+    est.questions = undo.questions || []; est.flags = undo.flags || [];
     const lastMsg = est.chat[est.chat.length - 1];
     if (lastMsg && lastMsg.role === 'assistant') lastMsg.changed = false;
     est.chat.push({ role: 'user', text: '(Undid that change.)', at: new Date().toISOString(), changed: false });
@@ -388,9 +682,52 @@
   };
 
   window.estNewChat = function () {
-    if (!confirm('Start the conversation over? The estimate lines stay as they are.')) return;
-    est.chat = []; est.questions = []; undo = null;
+    if (!confirm('Start the conversation over? The estimate stays as it is.')) return;
+    est.chat = []; est.questions = []; est.flags = []; undo = null;
     changed(true);
+  };
+
+  // ------------------------------------------------------------ miles & fuel
+  //
+  // The server works out road miles from the shop to the job (and, while it
+  // is at it, keeps the week's gas and diesel prices fresh). Asked once per
+  // address, by itself, when an estimate has lines and no miles.
+
+  function siteKey() {
+    return ['address', 'city', 'zip'].map(f => (el(f) && el(f).value || '').trim().toLowerCase()).join('|');
+  }
+  function autoTrip() {
+    if (!hasLines() || num((est.fuel || {}).miles) !== null || (est.off || {}).fuel) return;
+    if (!currentJobId || !(el('address') && el('address').value.trim()) || !navigator.onLine) return;
+    if (trippedFor[currentJobId] === siteKey()) return;
+    setTimeout(() => window.estFindMiles(false), 800);
+  }
+  window.estFindMiles = async function (asked) {
+    if (tripping || !changes() || !window.YDClaude) return;
+    const addr = (el('address').value || '').trim();
+    if (!addr) { if (asked) showToast('Add the job’s address first'); return; }
+    // The job's map point is kept under its id, so it needs one.
+    if (!currentJobId && typeof autosave === 'function') autosave();
+    const jobId = currentJobId, key = siteKey();
+    trippedFor[jobId] = key;
+    tripping = true; renderTotals();
+    try {
+      const r = await window.YDClaude.post('/estimate/trip', {
+        jobId: jobId, address: addr, city: (el('city').value || '').trim(), state: (el('state').value || '').trim(),
+        zip: (el('zip').value || '').trim(),
+      });
+      if (currentJobId !== jobId) return;
+      if (num(r.miles) !== null) {
+        est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10 });
+        changed(true);
+        // A rural address the map does not know is measured to the town.
+        if (asked || r.approx) showToast(est.fuel.miles + ' miles each way' + (r.approx ? ' — to the middle of town; check it' : ''));
+      } else if (asked) showToast(r.error || 'Could not find that address');
+    } catch (e) {
+      if (asked) showToast('Miles: ' + (e.message || e));
+    } finally {
+      tripping = false; renderTotals();
+    }
   };
 
   // ------------------------------------------------------- QuickBooks
@@ -400,12 +737,24 @@
     throw new Error('The server is not set up');
   }
 
+  window.estLoadQbItems = async function () {
+    if (qbItems || !sends()) return;
+    qbItems = [];
+    try {
+      const r = await askQb('/qb/items', {});
+      qbItems = (r.items || []).filter(i => i.name && i.type !== 'Category').map(i => i.name).sort();
+      let dl = el('estQbItems');
+      if (!dl) { dl = document.createElement('datalist'); dl.id = 'estQbItems'; document.body.appendChild(dl); }
+      dl.innerHTML = qbItems.map(n => '<option value="' + esc(n) + '">').join('');
+    } catch (e) { qbItems = null; }
+  };
+
   window.estToQB = async function (email) {
     if (saving || !sends() || !changes()) return;
-    const its = items();
-    if (!its.length) return;
-    const unpriced = its.filter(l => !Number(l.rateCents)).length;
-    if (unpriced && !confirm(unpriced + ' line' + (unpriced === 1 ? ' has' : 's have') + ' no price and will show as $0.00. Carry on?')) return;
+    const r = priced();
+    if (!r || !(r.totalCents > 0)) return;
+    if (r.problems.length && !confirm('Some of this isn’t priced yet:\n\n• ' + r.problems.slice(0, 8).join('\n• ') +
+      '\n\nSend it anyway?')) return;
     const f = id => (el(id).value || '').trim();
     if (!f('customerName')) { showToast('Add a customer name first'); return; }
     const to = f('email');
@@ -413,28 +762,32 @@
     if (email) {
       if (!to) { showToast('Add the customer’s email on the job first'); return; }
       if (!confirm((q.sentAt ? 'Email the updated estimate' : 'Email this estimate') + ' to ' + to +
-        ' from QuickBooks?\n\nTotal ' + cents(subtotalCents()) + (el('taxable').checked ? ' plus tax' : ''))) return;
+        ' from QuickBooks?\n\nTotal ' + cents(r.totalCents))) return;
     }
     // The job is saved first so it has an id, and so what is on screen is
     // what is kept with the job.
     if (typeof autosave === 'function') autosave();
     const jobId = currentJobId;
     if (!jobId) { showToast('Save the job first'); return; }
+    const site = [f('address'), [f('city'), f('state')].filter(Boolean).join(', ') + (f('zip') ? ' ' + f('zip') : '')]
+      .filter(s => s.trim()).join(', ');
     saving = true; renderQb();
     try {
-      const r = await askQb('/qb/estimate', {
-        jobId: jobId, email: !!email, taxable: !!el('taxable').checked,
-        estimateId: q.id || null, customerId: q.customerId || null,
+      const out = await askQb('/qb/estimate', {
+        jobId: jobId, email: !!email,
+        estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
         customer: { name: f('customerName'), email: to, phone: f('phone'), address: f('address'),
                     city: f('city'), state: f('state'), zip: f('zip') },
-        memo: est.memo || '',
-        lines: est.lines.map(l => ({ kind: l.kind, priceId: l.priceId || null, name: l.name || '',
-          description: l.description || '', qty: Number(l.qty) || 0, unit: l.unit || '',
-          rateCents: Number(l.rateCents) || 0 })),
+        site: site,
+        work: est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '' }))
+          .filter(w => w.cents > 0 || w.scope.trim()),
+        materials: { list: P().materialsList(r), cents: r.materialsCents },
+        memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
+        totalCents: r.totalCents,
       });
-      afterQb(jobId, r, email);
-      showToast(email ? 'Emailed from QuickBooks' + (r.docNumber ? ' — estimate #' + r.docNumber : '')
-        : 'Saved in QuickBooks' + (r.docNumber ? ' as estimate #' + r.docNumber : ''));
+      afterQb(jobId, out, email);
+      showToast(email ? 'Emailed from QuickBooks' + (out.docNumber ? ' — estimate #' + out.docNumber : '')
+        : 'Saved in QuickBooks' + (out.docNumber ? ' as estimate #' + out.docNumber : ''));
     } catch (e) {
       showToast('QuickBooks: ' + (e.message || e));
     } finally {
@@ -471,9 +824,9 @@
     checking = true; if (!quiet) renderQb();
     checkedAt[jobId] = Date.now();
     try {
-      const r = await askQb('/qb/estimate-status', { estimateId: q.id });
+      const r = await askQb('/qb/estimate-status', { estimateId: q.id, jobId: jobId, env: q.env || null });
       if (currentJobId !== jobId) return;
-      if (r.missing) { if (!quiet) showToast('That estimate is no longer in QuickBooks'); return; }
+      if (r.missing) { if (!quiet) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
       const before = q.status;
       afterQb(jobId, r, false);
       if (r.status === 'Accepted' && before !== 'Accepted' && boardFields.bidStage !== 'won' &&
@@ -501,6 +854,8 @@
   }
 
   // ------------------------------------------------------------ price book
+  //
+  // Flat-rate services: what a labour line can be instead of crew-days.
 
   function bookList() {
     return Object.keys(book).map(id => Object.assign({ id }, book[id]))
@@ -532,8 +887,8 @@
     const list = bookList().filter(p => !f || [p.name, p.category, p.description, p.notes].join(' ').toLowerCase().indexOf(f) !== -1);
     let lastCat = null;
     body.innerHTML =
-      '<p class="hint">What you charge. Claude prices estimates only from this list, and each entry becomes a product in QuickBooks the first time it is used. ' +
-        '“Notes for Claude” are your pricing rules — minimums, what’s included, waste — Claude reads them; customers never see them.</p>' +
+      '<p class="hint">Flat-rate services — gutters by the foot, a snow visit, a maintenance package. A labour line on an estimate can be one of these instead of crew-days. ' +
+        'Materials are priced from Supplies and your pricing rules, not from here. “Notes for Claude” are rules Claude reads; customers never see them.</p>' +
       (ro ? '' : '<div class="field-actions">' +
         '<button class="btn btn-sm btn-filled" onclick="pbAdd()">+ Add a price</button>' +
         (sends() ? '<button class="btn btn-sm" onclick="pbFromQb()">Bring in from QuickBooks</button>' : '') +
@@ -552,9 +907,9 @@
         const on = (field, v, ph, cls) => '<input class="' + (cls || '') + '" value="' + esc(v == null ? '' : v) + '" placeholder="' + ph + '"' + dis +
           ' onchange="pbField(\'' + id + '\', \'' + field + '\', this.value)">';
         return head + '<div class="pb-row">' +
-          '<div class="pb-top">' + on('name', p.name, 'Name, e.g. Paver patio — standard', 'pb-name') +
+          '<div class="pb-top">' + on('name', p.name, 'Name, e.g. Gutter cleaning — 1st story', 'pb-name') +
             on('price', Number.isInteger(p.priceCents) ? (p.priceCents / 100).toFixed(2) : '', 'Price', 'pb-price') +
-            '<span class="pb-per">per</span>' + on('unit', p.unit, 'sq ft', 'pb-unit') +
+            '<span class="pb-per">per</span>' + on('unit', p.unit, 'LF', 'pb-unit') +
             on('category', p.category, 'Category', 'pb-catin') +
             (ro ? '' : '<button class="bd-edit-btn del" onclick="pbRemove(\'' + id + '\')" aria-label="Remove">✕</button>') + '</div>' +
           '<div class="pb-more">' + on('description', p.description, 'What the customer reads on the estimate', 'pb-desc') +
@@ -562,7 +917,7 @@
             (p.qbItemName ? '<span class="pb-qb" title="QuickBooks product">QB: ' + esc(p.qbItemName) + '</span>' : '') + '</div>' +
         '</div>';
       }).join('') + '</div>'
-        : '<div class="empty-msg">' + (f ? 'Nothing matches.' : 'No prices yet. Add them, paste your sheet, or bring them in from QuickBooks.') + '</div>');
+        : '<div class="empty-msg">' + (f ? 'Nothing matches.' : 'No flat-rate services yet. Add them, paste your sheet, or bring them in from QuickBooks.') + '</div>');
   }
   window.pbFilterInput = function (v) {
     renderBook(v);
@@ -577,8 +932,6 @@
       writeBook(id, { priceCents: c == null ? null : c });
     } else if (field === 'name') {
       if (!String(v).trim()) { showToast('A price needs a name'); renderBook(); return; }
-      // A renamed entry gets its own QuickBooks product next time; the old
-      // one is left alone in QuickBooks.
       writeBook(id, { name: String(v).trim(), qbItemId: null, qbItemName: null });
     } else {
       writeBook(id, { [field]: String(v).trim() });
@@ -586,7 +939,7 @@
     renderBook();
   };
   window.pbAdd = function () {
-    const name = prompt('What is it? (e.g. Paver patio — standard install)');
+    const name = prompt('What is it? (e.g. Gutter cleaning — 1st story)');
     if (!name || !name.trim()) return;
     const id = newId('pb');
     writeBook(id, { name: name.trim(), unit: 'each', priceCents: null, category: '', description: '', notes: '',
@@ -612,22 +965,18 @@
     showToast('Asking QuickBooks for its products…');
     try {
       const r = await askQb('/qb/items', {});
-      let added = 0, linked = 0;
+      let added = 0;
       (r.items || []).forEach(it => {
         if (!it.name || it.type === 'Category') return;
-        const have = Object.keys(book).find(id => book[id].qbItemId === it.id) || byName(it.name);
         const price = typeof it.price === 'number' && it.price > 0 ? Math.round(it.price * 100) : null;
-        if (have) {
-          if (!book[have].qbItemId) { writeBook(have, { qbItemId: it.id, qbItemName: it.name }); linked++; }
-          return;
-        }
+        // Only products with a set price are flat-rate services.
+        if (price === null || byName(it.name)) return;
         writeBook(newId('pb'), { name: it.name, unit: 'each', priceCents: price, category: '', description: it.description || '',
-                                 notes: '', qbItemId: it.id, qbItemName: it.name, active: true, createdAt: new Date().toISOString() });
+                                 notes: '', qbItemId: null, qbItemName: it.name, active: true, createdAt: new Date().toISOString() });
         added++;
       });
       renderBook();
-      showToast(added + ' added from QuickBooks' + (linked ? ', ' + linked + ' matched to what was here' : '') +
-        (added ? ' — set the unit on each' : ''));
+      showToast(added + ' added from QuickBooks' + (added ? ' — set the unit on each' : ''));
     } catch (e) {
       showToast('QuickBooks: ' + (e.message || e));
     }
@@ -685,16 +1034,29 @@
   function start() {
     stop();
     if (!sees() || !window.YDDb) return;
-    unsub = window.YDDb.watch('priceBook', changes => {
-      changes.forEach(c => { if (c.type === 'removed') delete book[c.id]; else book[c.id] = c.data; });
+    unsub = window.YDDb.watch('priceBook', list => {
+      list.forEach(c => { if (c.type === 'removed') delete book[c.id]; else book[c.id] = c.data; });
       const m = el('pbModal');
       if (m && m.classList.contains('active')) {
         // Not redrawn under someone typing in it.
         const a = document.activeElement;
         if (!(a && m.contains(a) && /INPUT|TEXTAREA/.test(a.tagName))) renderBook();
-      } else render();
+      } else repaint();
     }, () => {});
   }
+
+  // Supplies, the pricing rules and the price book arrive after the job is
+  // on screen; the estimate is re-priced as they do. Redrawn whole only when
+  // nobody is typing in it, otherwise just the numbers.
+  function repaint() {
+    const w = el('estimateWrap');
+    const a = document.activeElement;
+    if (w && a && w.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) renderTotals();
+    else render();
+    if (typeof syncJobPriceFromProposals === 'function') syncJobPriceFromProposals();
+  }
+  document.addEventListener('yd-supplies', repaint);
+  document.addEventListener('yd-pricing', repaint);
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

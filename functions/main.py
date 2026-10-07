@@ -493,9 +493,11 @@ def _followup(request, path, headers):
 
 # ---------------------------------------------------------------- estimates
 #
-# "Build with Claude" on the Job tab (estimates.py): the owner's notes and the
-# price book in, estimate lines out. Writes nothing -- the lines go back to the
-# form to be checked -- so it is for whoever may change jobs, under the cap.
+# The estimate on the Job tab (estimates.py): the site-visit notes and the
+# conversation in, labour and takeoff lines out (the app prices them). Writes
+# nothing -- the lines go back to the form to be checked -- so it is for
+# whoever may change jobs, under the cap. /estimate/trip (trip.py) gives the
+# road miles to the job and the week's fuel prices.
 
 
 def _estimate(request, path, headers):
@@ -503,7 +505,7 @@ def _estimate(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path != "/estimate/draft":
+    if path not in ("/estimate/draft", "/estimate/trip"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
@@ -511,6 +513,15 @@ def _estimate(request, path, headers):
         uid = _caller(request, "jobs", "change")
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
+    # Miles to the job and the week's fuel prices: lookups, not Claude, so not
+    # counted against the day's Claude allowance.
+    if path == "/estimate/trip":
+        import trip
+        try:
+            return (json.dumps(trip.trip(request.get_json(silent=True) or {})), 200, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("estimate trip failed:", e)
+            return (json.dumps({"error": "The miles could not be worked out just now"}), 502, json_headers)
     try:
         day = _check_and_count_usage(uid)
     except RuntimeError as e:

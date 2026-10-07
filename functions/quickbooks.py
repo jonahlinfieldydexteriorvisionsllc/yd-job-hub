@@ -582,10 +582,16 @@ def items():
 
 # ---------------------------------------------------------------- estimates
 #
-# An estimate is built in Job Hub (estimate.js, priced from the price book) and
+# An estimate is built in Job Hub (estimate.js, priced by pricing.js) and
 # QuickBooks is what the customer gets: it numbers the estimate, emails it, and
 # records whether they accepted. Invoicing and payment then happen in
 # QuickBooks from that estimate.
+#
+# What the customer reads (Jonah, 6 Oct 2026): one line per piece of labour --
+# the heading, the job's address, the scope of work -- and ONE line of
+# materials listing everything with its quantity and one price for all of it.
+# No unit prices and no tax line: tax is recovered inside the materials, so
+# every line is marked non-taxable.
 #
 # The app sends the estimate as it is on screen -- the form may not have
 # reached the database yet -- and this side finds or makes the customer and
@@ -593,10 +599,18 @@ def items():
 # back (estimate id, number, customer) is written onto the job here AND by the
 # app, so a dropped connection on the way back cannot lose it and send a
 # second estimate next time.
+#
+# Ids are only good in the company they came from. While Job Hub is on the
+# test (sandbox) company every id it keeps is a test-company id, and the same
+# number in the real company is somebody else's customer or estimate. So an id
+# is used only when the record says it came from the company connected now,
+# and an estimate is changed only if it says it was made for this very job.
 
 QB_APP = {"sandbox": "https://app.sandbox.qbo.intuit.com", "production": "https://qbo.intuit.com"}
-GENERIC_ITEM = "Services"       # for lines that are not in the price book
+LABOR_ITEM = "Labor"            # a labour line with no product chosen
+MATERIALS_ITEM = "Material Fee"  # the one materials line
 MEMO_MAX = 1000                 # Intuit's limit on the message to the customer
+LINE_MAX = 4000                 # and on one line's description
 
 
 def _quote(s):
@@ -604,15 +618,28 @@ def _quote(s):
     return str(s).replace("\\", "\\\\").replace("'", "\\'")
 
 
-def _query_one(entity, where):
+def _query(entity, where):
     data = _call("GET", "query", params={"query": "select * from %s where %s" % (entity, where)})
-    rows = (data.get("QueryResponse") or {}).get(entity) or []
+    return (data.get("QueryResponse") or {}).get(entity) or []
+
+
+def _query_one(entity, where):
+    rows = _query(entity, where)
     return rows[0] if rows else None
 
 
 def _qb_name(s, limit=100):
     # QuickBooks names may not contain a colon (it means "sub-item of") or tab.
     return " ".join(str(s or "").replace(":", "-").replace("\t", " ").split())[:limit]
+
+
+def _same_company(body):
+    """True when the ids in the request came from the company connected now."""
+    return (str(body.get("env") or "") or _env("QB_ENV", "sandbox")) == _env("QB_ENV", "sandbox")
+
+
+def _job_note(job_id):
+    return "Job Hub job %s" % job_id
 
 
 def _customer_for(c, known_id=""):
@@ -667,96 +694,85 @@ def _income_account():
     return pick["Id"]
 
 
-def _item_named(name, price=None, description=""):
-    """The QuickBooks product called this, made as a service if it is missing."""
+_items = {}
+
+
+def _item_named(name):
+    """The QuickBooks product called this, made as a service if it is missing.
+    A category of the same name is not a product (Jonah's company has a
+    "Labor" category with a "Labor" service inside it), so it is passed over."""
     name = _qb_name(name)
-    found = _query_one("Item", "Name = '%s'" % _quote(name))
-    if found:
-        return found["Id"], found.get("Name", name)
-    new = {"Name": name, "Type": "Service", "IncomeAccountRef": {"value": _income_account()}}
-    if price is not None:
-        new["UnitPrice"] = price
-    if description:
-        new["Description"] = str(description)[:4000]
-    made = (_call("POST", "item", body=new, request_id=hashlib.sha1(("item|" + name).encode()).hexdigest())
-            .get("Item") or {})
-    return made["Id"], made.get("Name", name)
+    if name in _items:
+        return _items[name]
+    hit = next((i for i in _query("Item", "Name = '%s'" % _quote(name))
+                if i.get("Type") != "Category" and i.get("Active", True)), None)
+    if not hit:
+        new = {"Name": name, "Type": "Service", "IncomeAccountRef": {"value": _income_account()}}
+        hit = _call("POST", "item", body=new, request_id=hashlib.sha1(("item|" + name).encode()).hexdigest()).get("Item") or {}
+    _items[name] = hit["Id"]
+    return hit["Id"]
 
 
-def _price_item(price_id, cache):
-    """A price-book entry's QuickBooks product, remembered on the entry."""
-    if price_id in cache:
-        return cache[price_id]
-    ref = _db().collection("priceBook").document(price_id)
-    snap = ref.get()
-    entry = snap.to_dict() if snap.exists else None
-    if not entry:
-        cache[price_id] = None
-        return None
-    item_id = entry.get("qbItemId")
-    if item_id and _query_one("Item", "Id = '%s'" % _quote(item_id)):
-        cache[price_id] = item_id
-        return item_id
-    cents = entry.get("priceCents")
-    item_id, item_name = _item_named(entry.get("name"), round(cents / 100, 2) if isinstance(cents, int) else None,
-                                     entry.get("description", ""))
-    ref.set({"qbItemId": item_id, "qbItemName": item_name}, merge=True)
-    cache[price_id] = item_id
-    return item_id
+def _line(item_id, cents, description):
+    amount = round(int(cents) / 100, 2)
+    text = description if len(description) <= LINE_MAX else description[:LINE_MAX - 1] + "…"
+    return {"DetailType": "SalesItemLineDetail", "Amount": amount, "Description": text,
+            "SalesItemLineDetail": {"ItemRef": {"value": item_id}, "Qty": 1, "UnitPrice": amount,
+                                    "TaxCodeRef": {"value": "NON"}}}
 
 
-def _estimate_lines(lines, taxable):
-    out, cache, generic = [], {}, None
-    for ln in lines:
-        if ln.get("kind") == "section":
-            title = str(ln.get("description") or "").strip()
-            if title:
-                out.append({"DetailType": "DescriptionOnly", "Description": title.upper()[:4000],
-                            "DescriptionLineDetail": {}})
-            continue
-        qty = round(float(ln.get("qty") or 0), 4)
-        rate = round(int(ln.get("rateCents") or 0) / 100, 2)
-        item_id = _price_item(str(ln["priceId"]), cache) if ln.get("priceId") else None
-        if not item_id:
-            if generic is None:
-                generic = _item_named(GENERIC_ITEM)[0]
-            item_id = generic
-        desc = str(ln.get("description") or ln.get("name") or "").strip()
-        unit = str(ln.get("unit") or "").strip()
-        if unit and unit.lower() not in ("each", "ea", "lump sum", "ls", "job"):
-            desc += " (%s %s)" % (("%g" % qty), unit)
-        detail = {"ItemRef": {"value": item_id}, "Qty": qty, "UnitPrice": rate}
-        if taxable:
-            detail["TaxCodeRef"] = {"value": "TAX"}
-        out.append({"DetailType": "SalesItemLineDetail", "Amount": round(qty * rate, 2),
-                    "Description": desc[:4000], "SalesItemLineDetail": detail})
-    if not any(l["DetailType"] == "SalesItemLineDetail" for l in out):
-        raise RuntimeError("The estimate has no priced lines")
+def _estimate_lines(body):
+    """Labour lines -- heading, the address on the first, the scope -- then
+    the one materials line."""
+    out, site = [], str(body.get("site") or "").strip()
+    work = [w for w in body.get("work") or [] if int(w.get("cents") or 0) > 0 or str(w.get("scope") or "").strip()]
+    for i, w in enumerate(work):
+        head = [str(w.get("title") or "").strip().upper()]
+        if i == 0 and site:
+            head.append(site)
+        text = "\n".join(h for h in head if h)
+        scope = str(w.get("scope") or "").strip()
+        if scope:
+            text += ("\n\n" if text else "") + scope
+        out.append(_line(_item_named(str(w.get("qbItem") or "").strip() or LABOR_ITEM), int(w.get("cents") or 0), text))
+    m = body.get("materials") or {}
+    if int(m.get("cents") or 0) > 0:
+        listed = [str(x).strip() for x in m.get("list") or [] if str(x).strip()]
+        head = "Materials: " + str(work[0].get("title") or "").strip() if len(work) == 1 and work[0].get("title") else "Materials"
+        out.append(_line(_item_named(MATERIALS_ITEM), int(m["cents"]), head + ("\n\n" + "\n".join(listed) if listed else "")))
+    if not out:
+        raise RuntimeError("The estimate has nothing on it yet")
     return out
+
+
+def _ours(e, job_id):
+    """Whether a QuickBooks estimate is the one made for this job."""
+    return str((e or {}).get("PrivateNote") or "").strip() == _job_note(job_id)
 
 
 def save_estimate(body):
     """Create or update the job's estimate in QuickBooks; email it when asked.
 
     body: jobId, customer {name, email, phone, address, city, state, zip},
-    lines [{kind, priceId, name, description, qty, unit, rateCents}], memo,
-    taxable, estimateId / customerId (from last time), email (true to send).
+    site (the address line), work [{title, scope, cents, qbItem}],
+    materials {list, cents}, memo, estimateId / customerId / env (from last
+    time), email (true to send).
     """
     job_id = str(body.get("jobId") or "").strip()
     if not job_id or "/" in job_id:
         raise RuntimeError("Save the job first")
     c = body.get("customer") or {}
-    customer_id = _customer_for(c, str(body.get("customerId") or ""))
-    lines = _estimate_lines(body.get("lines") or [], bool(body.get("taxable")))
+    same = _same_company(body)
+    customer_id = _customer_for(c, str(body.get("customerId") or "") if same else "")
+    lines = _estimate_lines(body)
 
     memo = str(body.get("memo") or "").strip()
     if len(memo) > MEMO_MAX:
-        # Too long for the message box: it goes in as the estimate's first
+        # Too long for the message box: it goes in as the estimate's last
         # line instead, where the full text fits.
-        lines.insert(0, {"DetailType": "DescriptionOnly", "Description": memo[:4000], "DescriptionLineDetail": {}})
+        lines.append({"DetailType": "DescriptionOnly", "Description": memo[:LINE_MAX], "DescriptionLineDetail": {}})
         memo = ""
-    est = {"CustomerRef": {"value": customer_id}, "Line": lines,
-           "PrivateNote": "Job Hub job %s" % job_id}
+    est = {"CustomerRef": {"value": customer_id}, "Line": lines, "PrivateNote": _job_note(job_id)}
     if memo:
         est["CustomerMemo"] = {"value": memo}
     email = str(c.get("email") or "").strip()
@@ -767,8 +783,11 @@ def save_estimate(body):
         est["ShipAddr"] = site
 
     existing = None
-    if body.get("estimateId"):
+    if body.get("estimateId") and same:
         existing = _query_one("Estimate", "Id = '%s'" % _quote(body["estimateId"]))
+        if existing and not _ours(existing, job_id):
+            print("quickbooks: estimate %s is not job %s's; making a new one" % (body["estimateId"], job_id))
+            existing = None
     if existing and existing.get("TxnStatus") in ("Closed", "Converted"):
         raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
                            % existing["TxnStatus"].lower())
@@ -814,9 +833,14 @@ def estimate_status(body):
     est_id = str(body.get("estimateId") or "").strip()
     if not est_id:
         raise RuntimeError("Which estimate?")
+    if not _same_company(body):
+        return {"missing": True, "error": "That estimate is in the QuickBooks test company, not the one connected now"}
     e = _query_one("Estimate", "Id = '%s'" % _quote(est_id))
     if not e:
         return {"missing": True}
+    job_id = str(body.get("jobId") or "").strip()
+    if job_id and not _ours(e, job_id):
+        return {"missing": True, "error": "That QuickBooks estimate belongs to another job"}
     out = _estimate_record(e)
     out["acceptedBy"] = e.get("AcceptedBy")
     out["acceptedDate"] = e.get("AcceptedDate")

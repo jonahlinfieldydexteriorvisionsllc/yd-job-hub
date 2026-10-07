@@ -1719,13 +1719,6 @@
   }
 
   /* ---- Estimate on the Job tab, and the price book (estimate.js) ---- */
-  .est-lines { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
-  .est-row { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:flex-end; padding:8px;
-    border:1px solid var(--border); border-radius:8px; background:var(--surface); }
-  .est-row.needs { border-color:var(--neg); background:var(--neg-soft); }
-  .est-section { background:var(--surface-2); align-items:center; }
-  .est-section input { flex:1; font-weight:700; }
-  .est-item { flex:1 1 320px; display:flex; flex-direction:column; gap:4px; min-width:0; }
   .est-nums { display:flex; gap:6px; align-items:flex-end; flex:0 1 auto; }
   .est-nums label { display:flex; flex-direction:column; font-size:11px; color:var(--muted); }
   .est-nums label input { width:76px; }
@@ -1758,7 +1751,6 @@
   }
   /* The conversation with Claude about an estimate */
   .est-chat { max-height:420px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:4px 2px; }
-  .est-hello { font-size:13px; color:var(--muted); padding:10px 12px; border:1px dashed var(--border-strong); border-radius:10px; }
   .est-msg { max-width:88%; padding:8px 11px; border-radius:12px; font-size:14px; line-height:1.4; }
   .est-msg.me { align-self:flex-end; background:color-mix(in srgb, var(--brand) 12%, var(--surface)); border:1px solid color-mix(in srgb, var(--brand) 25%, transparent); }
   .est-msg.claude { align-self:flex-start; background:var(--surface-2); border:1px solid var(--border); }
@@ -1769,3 +1761,63 @@
   .est-send { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
   .est-send textarea { flex:1; }
   .eq-fixed .link-btn { background:none; border:0; padding:0 2px; color:var(--brand); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
+
+  /* ---- Estimate v2: labour, takeoff, what the rules add (estimate.js) ---- */
+  .est-warnbox { margin-bottom:10px; padding:9px 12px; border-radius:8px; border:1px solid var(--neg); background:var(--neg-soft); font-size:13px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .est-h { margin:16px 0 6px; font-size:14px; }
+  .est-h .muted { font-weight:400; font-size:12px; }
+  .est-work, .est-mats { display:flex; flex-direction:column; gap:8px; }
+  .est-wrow, .est-mrow { border:1px solid var(--border); border-radius:8px; padding:8px; background:var(--surface); display:flex; flex-direction:column; gap:6px; }
+  .est-wtop, .est-mtop { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:flex-end; }
+  .est-title { flex:2 1 220px; font-weight:600; width:auto !important; min-width:0; }
+  .est-wtop > select { flex:0 0 150px; width:auto; }
+  .est-mtop select, .est-nums select { width:auto; }
+  .est-supply { flex:2 1 220px; max-width:100%; }
+  .est-grow { flex:1 1 220px; }
+  .est-grow select { width:100%; }
+  .est-mtop label, .est-nums label { display:flex; flex-direction:column; font-size:11px; color:var(--muted); }
+  .est-mtop label input { width:84px; }
+  .est-scope { width:100%; font-size:14px; }
+  .est-qbitem { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--muted); }
+  .est-qbitem input { flex:1 1 auto; max-width:280px; font-size:13px; }
+  .est-probs:empty, .est-order:empty { display:none; }
+  .est-probs, .est-order { font-size:12px; color:var(--muted); }
+  .est-order.bad, .est-probs { color:var(--neg); }
+  .est-plant { font-size:20px; padding-bottom:6px; }
+  .est-inline { display:inline-flex; gap:6px; align-items:center; font-size:13px; }
+  .est-inline input { width:70px; }
+  .est-auto { display:flex; flex-direction:column; gap:4px; }
+  .est-arow { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; padding:6px 8px; border:1px dashed var(--border-strong); border-radius:8px; font-size:13px; }
+  .est-arow > b { margin-left:auto; }
+  .est-switch { display:inline-flex; gap:5px; align-items:center; font-weight:600; min-width:150px; }
+  .est-adesc { display:flex; flex-wrap:wrap; gap:6px 10px; align-items:center; color:var(--muted); flex:1 1 300px; }
+  .est-adesc label { display:inline-flex; gap:4px; align-items:center; }
+  .est-adesc input { width:70px; }
+  .est-adesc .bad { color:var(--neg); }
+  .est-totals .est-grand { font-size:17px; border-top:1px solid var(--border); padding-top:4px; }
+  .est-problems { align-self:stretch; margin-top:6px; padding:8px 12px; border-radius:8px; border:1px solid var(--neg); background:var(--neg-soft); color:var(--text); font-size:13px; }
+  .est-problems ul, .est-flags ul { margin:4px 0 0 18px; padding:0; }
+  .est-flags { margin-top:10px; padding:9px 12px; border-radius:8px; border:1px solid var(--border-strong); background:var(--surface-2); font-size:13px; }
+  @media (max-width:720px) {
+    .est-mtop label input { width:70px; }
+    .est-arow > b { margin-left:0; }
+  }
+
+  /* ---- Pricing rules (pricing.js) ---- */
+  .pr-h { margin:18px 0 8px; font-size:15px; }
+  .pr-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px; }
+  .pr-field { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  .pr-field.wide { grid-column:1 / -1; margin-top:8px; }
+  .pr-field input, .pr-field select, .pr-field textarea { font-size:14px; color:var(--text); }
+  .pr-field small { font-size:11px; }
+  .pr-table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
+  .pr-table th, .pr-table td { border-bottom:1px solid var(--border); padding:4px 6px; text-align:left; }
+  .pr-table input[inputmode] { width:80px; }
+  .pr-towns { margin-top:10px; }
+  .pr-towns summary { cursor:pointer; font-weight:600; font-size:13px; }
+  .pr-town-list { display:grid; grid-template-columns:repeat(auto-fill, minmax(190px, 1fr)); gap:4px 12px; margin-top:8px; }
+  .pr-town-list label { display:flex; justify-content:space-between; gap:6px; align-items:center; font-size:13px; }
+  .pr-town-list input { width:80px; }
+  .pr-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; color:var(--text); }
+  .pr-chip { padding:3px 8px; border-radius:12px; background:var(--surface-2); border:1px solid var(--border); font-size:13px; }
+  .pr-chip .link-btn { background:none; border:0; padding:0; color:var(--neg); cursor:pointer; }
