@@ -46,7 +46,7 @@
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', other: 'Other',
   };
   const WHY = { overhead: 'Shop / overhead', personal: 'Personal (deletes it)', notPurchase: 'Not a purchase',
-    alreadyEntered: 'Already entered' };
+    alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
 
   const sees = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
   const sorts = () => typeof ydCan === 'function' && ydCan('jobs', 'change');
@@ -620,6 +620,8 @@
       });
       if (meta && meta.fromCache === false) loaded = true;
       if (changes.length || loaded) redraw();
+      // Subcontractors (subs.js) file their own bills out of this list.
+      document.dispatchEvent(new CustomEvent('yd-receipts'));
     }, () => { loaded = true; redraw(); }));
     if (window.YDAuth && window.YDAuth.isOwner) loadState().then(() => redraw());
   }
@@ -627,6 +629,8 @@
   // Opening Receipts also re-reads when email was last checked: the half-
   // hourly run may have changed it (switched on, say) since the app opened.
   window.YDReceipts = {
+    all: () => receipts,
+    loaded: () => loaded,
     render: () => {
       redraw(true);
       if (window.YDAuth && window.YDAuth.isOwner && window.YDDb) loadState().then(() => redraw(true));

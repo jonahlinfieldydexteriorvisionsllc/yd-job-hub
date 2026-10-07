@@ -1222,6 +1222,33 @@
   .ls-main .muted { font-size:12.5px; margin-top:2px; }
   .ls-ask { flex:1 1 100%; }
 
+  /* ---- subcontractors (All Jobs tab) ---- */
+  .sub-card { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:12px 14px; margin-bottom:12px; }
+  .sub-head { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; font-size:15px; }
+  .sub-head b { margin-right:auto; }
+  .sub-figs { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:8px; margin-top:10px; }
+  .sub-fig { background:var(--surface-2); border-radius:8px; padding:8px 10px; display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .sub-fig-l { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  .sub-fig-v { font-size:13.5px; font-weight:600; }
+  .sub-warn { margin-top:8px; font-size:13px; font-weight:600; color:var(--accent-dark); }
+  .sub-warn.late { color:var(--neg); }
+  .sub-more { margin-top:10px; }
+  .sub-more summary { cursor:pointer; font-size:13px; font-weight:700; color:var(--brand); padding:4px 0; }
+  html[data-night] .sub-more summary { color:var(--brand-2); }
+  .sub-table td .muted { font-size:12px; }
+  .sub-off { opacity:.55; }
+  .sub-form { margin:10px 0; }
+  .sub-price, .sub-season { display:flex; align-items:center; gap:6px; }
+  .sub-price input { flex:1; min-width:0; }
+  .sub-price select { width:auto; }
+  .sub-season input { width:5.5em; }
+  .sub-bills { margin-top:12px; }
+  .sub-bills-h { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin-bottom:4px; }
+  .sub-bill { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; padding:7px 0;
+              border-bottom:1px solid var(--border); font-size:13px; }
+  .sub-bill:last-child { border-bottom:none; }
+  .sub-sugg { font-size:13px; margin-bottom:10px; }
+
   /* ---- work log ---- */
   .wl-filters { flex-wrap:wrap; gap:8px; }
   .wl-filters select, .wl-filters input { width:auto; flex:1 1 150px; }
