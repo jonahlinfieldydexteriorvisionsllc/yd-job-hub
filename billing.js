@@ -358,7 +358,11 @@
   // Stop ids are the account id, with "-p2" and so on for later passes.
   const stopIdOf = (accountId, pass) => (pass > 1 ? accountId + '-p' + pass : accountId);
 
-  async function fixVisit(id, stopId, inches, saltBags, by) {
+  // `expect` (a crew request being approved): the customer it names and the
+  // figures it says the stop has now. The request is the crew's own writing,
+  // so it is checked against the stop itself -- a visit fixed by the office
+  // since, or a request pointing at a different customer's stop, is refused.
+  async function fixVisit(id, stopId, inches, saltBags, by, expect) {
     if (!ydCan('billing', 'change')) throw new Error('Changing a bill needs Billing access');
     const s = storms[id];
     if (!s) throw new Error('That storm is not closed');
@@ -366,70 +370,104 @@
     if (saltBags != null && !(typeof saltBags === 'number' && isFinite(saltBags) && saltBags >= 0 && saltBags <= 200)) {
       throw new Error('That salt figure is not a number the bill can use');
     }
-    // The server's copies: a bill worked out again from a stale copy would
-    // quietly put back anything changed on another device since.
-    let b, stop;
-    try {
-      b = await window.YDDb.getFresh('storms/' + id + '/private', 'billing');
-      stop = await window.YDDb.getFresh('storms/' + id + '/stops', stopId);
-    } catch (e) { throw new Error('This needs a signal — try again when there is one'); }
-    if (!b || !Array.isArray(b.lines)) throw new Error('No bill recorded for that storm');
-    if (!stop || !stop.accountId) throw new Error('That visit is not on the storm');
-    const accountId = stop.accountId, pass = count(stop.pass) || 1;
-    await YDSnow.refreshPricing([accountId]);
-    const lines = b.lines.slice();
-    const i = lines.findIndex(l => l.accountId === accountId && (count(l.pass) || 1) === pass);
-    const old = i === -1 ? null : lines[i];
-    // The time on site is the bill's own (pauses already taken off). A visit
-    // that was left off the bill gets it worked out the way closing does.
-    let mins = old ? count(old.minutes) : null;
-    const extra = {};
-    if (mins == null) {
-      const onSite = minutesBetween(stop.arrivedAt, stop.departedAt);
-      const paused = window.YDClock ? YDClock.pausedMinutesAt(id, stop.arrivedAt, stop.departedAt) : 0;
-      mins = Math.max(0, onSite - paused);
-      const rate = (YDSnow.pricing()[accountId] || {}).laborRateCents;
-      Object.assign(extra, { accountId: accountId, pass: pass, minutes: mins, onSiteMinutes: onSite, pausedMinutes: paused,
-                             laborRateCents: rate != null ? rate : null });
-    }
-    const p = YDSnow.priceVisit(accountId, inches, mins, s.crewSize);
-    if (!p) throw new Error('No price for ' + accountName(accountId) + ' — check their pricing on the Snow tab');
-    const at = new Date().toISOString();
+    const needSignal = () => new Error('This needs a signal — try again when there is one');
+    // The customer's pricing is loaded first: the step on the server below
+    // must work everything out from what it reads, without waiting on more.
+    let first;
+    try { first = await window.YDDb.getFresh('storms/' + id + '/stops', stopId); } catch (e) { throw needSignal(); }
+    if (!first || !first.accountId) throw new Error('That visit is not on the storm');
+    await YDSnow.refreshPricing([first.accountId]);
+
+    // Read and written as ONE step on the server, so two devices fixing the
+    // same storm cannot each put back the other's lines (YDDb.transact). It
+    // may be run again on fresh data, so it only works things out.
+    let result = null;
     const salt = saltBags == null ? null : saltBags;
-    const was = old ? { inches: old.inches, saltBags: old.saltBags == null ? null : old.saltBags, totalCents: count(old.totalCents) } : null;
-    const line = Object.assign({}, old || extra, {
-      inches: inches, saltBags: salt,
-      manHours: p.manHours, plowCents: p.plowCents, saltCents: p.saltCents, laborCents: p.laborCents, totalCents: p.totalCents,
-      fixedAt: at, fixedBy: by || '', was: was,
-    });
-    // As when closing: no $0 lines on a bill.
-    if (p.totalCents > 0) { if (i === -1) lines.push(line); else lines[i] = line; }
-    else if (i !== -1) lines.splice(i, 1);
-    const totalCents = lines.reduce((t, l) => t + count(l.totalCents), 0);
-    const minutes = lines.reduce((t, l) => t + count(l.minutes), 0);
-    const crewHours = Math.round(minutes * count(s.crewSize) / 60 * 100) / 100;
-    // Through JSON, so a field missing on an old line cannot reach the write
-    // as undefined (which would refuse the whole thing).
-    const patch = JSON.parse(JSON.stringify({
-      lines: lines, totalCents: totalCents,
-      saltCents: lines.reduce((t, l) => t + count(l.saltCents), 0),
-      onSiteMinutes: minutes, crewHours: crewHours,
-      revenuePerCrewHourCents: crewHours > 0 ? Math.round(totalCents / crewHours) : 0,
-      fixes: (Array.isArray(b.fixes) ? b.fixes : []).concat([{ at: at, by: by || '', stopId: stopId, accountId: accountId,
-        inches: inches, saltBags: salt, totalCents: p.totalCents, was: was }]),
-    }));
-    billingCache[id] = Object.assign({}, b, patch);
-    Promise.resolve(window.YDDb.putMany([
-      ['storms/' + id + '/private', 'billing', patch],
-      ['storms/' + id + '/stops', stopId, { inchesCleared: inches, saltBags: salt, fixedAt: at, fixedBy: by || '' }],
-    ])).catch(e => {
-      console.warn('[billing] fixed visit not yet on the server:', (e && e.code) || e);
-      if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
-    });
+    try {
+      await window.YDDb.transact([['storms/' + id + '/private', 'billing'], ['storms/' + id + '/stops', stopId]], ([b, stop]) => {
+        result = null;
+        if (!b || !Array.isArray(b.lines)) throw new Error('No bill recorded for that storm');
+        if (!stop || !stop.accountId) throw new Error('That visit is not on the storm');
+        if (expect) {
+          const bf = expect.before || {};
+          const fig = v => (typeof v === 'number' && isFinite(v) ? v : null);
+          if (expect.accountId && expect.accountId !== stop.accountId) {
+            throw new Error('That request names a different customer than its stop — reject it');
+          }
+          if (fig(stop.inchesCleared) !== fig(bf.inchesCleared) || fig(stop.saltBags) !== fig(bf.saltBags)) {
+            throw new Error('That visit has been changed since they asked — reject it, and they can ask again');
+          }
+        }
+        const accountId = stop.accountId, pass = count(stop.pass) || 1;
+        const lines = b.lines.slice();
+        const i = lines.findIndex(l => l.accountId === accountId && (count(l.pass) || 1) === pass);
+        const old = i === -1 ? null : lines[i];
+        const at = new Date().toISOString();
+        const was = old ? { inches: old.inches, saltBags: old.saltBags == null ? null : old.saltBags, totalCents: count(old.totalCents) } : null;
+        let line;
+        if (old && count(old.inches) === inches) {
+          // Only the salt bags changed. A visit is not charged by them, so the
+          // money stays as it was billed -- re-pricing would also move the
+          // plowing to whatever the customer's price is today.
+          line = Object.assign({}, old, { saltBags: salt, fixedAt: at, fixedBy: by || '', was: was });
+        } else {
+          // The time on site is the bill's own (pauses already taken off). A
+          // visit that was left off the bill gets it worked out the way
+          // closing does.
+          const extra = {};
+          let mins = old ? count(old.minutes) : null;
+          if (mins == null) {
+            const onSite = minutesBetween(stop.arrivedAt, stop.departedAt);
+            const paused = window.YDClock ? YDClock.pausedMinutesAt(id, stop.arrivedAt, stop.departedAt) : 0;
+            mins = Math.max(0, onSite - paused);
+            Object.assign(extra, { accountId: accountId, pass: pass, minutes: mins, onSiteMinutes: onSite, pausedMinutes: paused });
+          }
+          const p = YDSnow.priceVisit(accountId, inches, mins, s.crewSize);
+          if (!p) throw new Error('No price for ' + accountName(accountId) + ' — check their pricing on the Snow tab');
+          // Worked out at the customer's price today, so the rate printed
+          // beside the labour line is today's too.
+          const rate = (YDSnow.pricing()[accountId] || {}).laborRateCents;
+          line = Object.assign({}, old || extra, {
+            inches: inches, saltBags: salt, laborRateCents: rate != null ? rate : null,
+            manHours: p.manHours, plowCents: p.plowCents, saltCents: p.saltCents, laborCents: p.laborCents, totalCents: p.totalCents,
+            fixedAt: at, fixedBy: by || '', was: was,
+          });
+        }
+        // As when closing: no $0 lines on a bill.
+        if (count(line.totalCents) > 0) { if (i === -1) lines.push(line); else lines[i] = line; }
+        else if (i !== -1) lines.splice(i, 1);
+        // The totals the way closing works them out.
+        const totalCents = lines.reduce((t, l) => t + count(l.totalCents), 0);
+        const minutes = lines.reduce((t, l) => t + count(l.minutes), 0);
+        const crewHours = minutes * count(s.crewSize) / 60;
+        // Through JSON, so a field missing on an old line cannot reach the
+        // write as undefined (which would refuse the whole thing).
+        const patch = JSON.parse(JSON.stringify({
+          lines: lines, totalCents: totalCents,
+          saltCents: lines.reduce((t, l) => t + count(l.saltCents), 0),
+          onSiteMinutes: minutes,
+          pausedMinutes: lines.reduce((t, l) => t + count(l.pausedMinutes), 0),
+          crewHours: Math.round(crewHours * 100) / 100,
+          revenuePerCrewHourCents: crewHours > 0 ? Math.round(totalCents / crewHours) : 0,
+          fixes: (Array.isArray(b.fixes) ? b.fixes : []).concat([{ at: at, by: by || '', stopId: stopId, accountId: accountId,
+            inches: inches, saltBags: salt, totalCents: count(line.totalCents), was: was }]),
+        }));
+        const sent = (b.quickbooks || {})[accountId];
+        result = { bill: Object.assign({}, b, patch), name: accountName(accountId), totalCents: count(line.totalCents),
+                   wasCents: was ? was.totalCents : 0, inQuickBooks: sent ? (sent.number || sent.id || 'yes') : null,
+                   numbered: (b.invoiceNos || {})[accountId] || null };
+        return [patch, { inchesCleared: inches, saltBags: salt, fixedAt: at, fixedBy: by || '' }];
+      });
+    } catch (e) {
+      if (e && e.message && !e.code) throw e;          // our own refusal, said as it is
+      console.warn('[billing] visit fix not saved:', (e && e.code) || e);
+      if (e && e.code === 'permission-denied') throw new Error('Not saved — not allowed');
+      throw needSignal();
+    }
+    billingCache[id] = result.bill;
     render();
-    const sent = (b.quickbooks || {})[accountId];
-    return { name: accountName(accountId), totalCents: p.totalCents, wasCents: was ? was.totalCents : 0,
-             inQuickBooks: sent ? (sent.number || sent.id || 'yes') : null, numbered: (b.invoiceNos || {})[accountId] || null };
+    delete result.bill;
+    return result;
   }
 
   // What the office is told after a fix: the new charge, and what still needs
@@ -466,9 +504,13 @@
       const me = (window.YDAuth && window.YDAuth.user) || {};
       const r = await fixVisit(id, stopIdOf(accountId, pass), Math.round(inches * 10) / 10,
                                salt == null ? null : Math.round(salt * 10) / 10, me.uid || '');
-      showToast(fixedWords(r));
-      stormDetail(id);
-    } catch (e) { showToast(e.message || String(e)); }
+      await stormDetail(id);
+      // Kept on screen, not only in a passing message: an invoice already in
+      // QuickBooks has to be changed there by hand.
+      const area = document.getElementById('stormFixArea');
+      if (area) area.innerHTML = '<div class="hint fix-done">✔ ' + esc(fixedWords(r)) + '</div>';
+      showToast(fixedWords(r), r.inQuickBooks || r.numbered ? 9000 : 3000);
+    } catch (e) { showToast(e.message || String(e), 6000); }
   };
 
   // ---------------------------------------------------------------- export

@@ -29,7 +29,7 @@
   const SEASON = { from: '04-15', to: '10-31' };    // mowing, by default
   const DUE_SOON_DAYS = 5;
 
-  let data = { subs: {}, paid: {} };
+  let data = { subs: {}, paid: {}, filed: {} };
   let fresh = false;          // from the server, not just this device's copy
   let unsub = null;
   let open = {};              // subId -> its details are open
@@ -137,10 +137,26 @@
       .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   }
   const isPayment = r => r.docType === 'receipt' || r.docType === 'person_payment';
-  const isPaid = r => !!(r.paid || (data.paid || {})[r.id]);
+  const isBill = r => r.docType === 'invoice';
+  // Invoices a later payment of the same amount paid. The email reader puts a
+  // payment with its bill only while the bill is still waiting to be sorted,
+  // and theirs are filed here at once -- so a payment can arrive as a
+  // receipt of its own.
+  function paidByPayment(bills) {
+    const done = new Set(), used = new Set();
+    const pays = bills.filter(isPayment);
+    bills.filter(r => isBill(r) && !r.paid).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+      .forEach(inv => {
+        const p = pays.find(x => !used.has(x.id) && x.totalCents === inv.totalCents && String(x.date || '') >= String(inv.date || ''));
+        if (p) { used.add(p.id); done.add(inv.id); }
+      });
+    return done;
+  }
+  const isPaid = (r, matched) => !!(r.paid || (data.paid || {})[r.id] || (matched && matched.has(r.id)));
   function owed(s) {
     const t = ymd(new Date());
-    const list = billsOf(s).filter(r => !isPayment(r) && !isPaid(r));
+    const bills = billsOf(s), matched = paidByPayment(bills);
+    const list = bills.filter(r => isBill(r) && !isPaid(r, matched));
     const soon = ymd(new Date(Date.now() + DUE_SOON_DAYS * 864e5));
     return {
       cents: list.reduce((n, r) => n + (r.totalCents || 0), 0),
@@ -152,22 +168,22 @@
 
   // Their bills leave "Receipts to sort" by themselves -- only on the
   // owner's device, and only once both lists have come from the server.
+  // Only what the reader called a subcontractor's bill: a subcontractor who
+  // also sells materials keeps those receipts in To sort, for the jobs. Each
+  // one is filed once (kept in `filed`), so "Put back" in Receipts sticks.
   function fileBills() {
     if (!owner() || !fresh || !window.YDReceipts || !YDReceipts.loaded || !YDReceipts.loaded() || !window.YDDb) return;
-    const all = receiptsAll();
+    const all = receiptsAll(), filed = data.filed || {}, now = {};
     Object.keys(all).forEach(id => {
       const r = all[id];
-      if (r.status !== 'new' || (r.splits || []).length) return;
-      const s = subFor(r);
-      // A one-word match ("Lawn") could catch a supplier's receipts too, so
-      // those are taken off the list only when the reader also called them a
-      // subcontractor's bill.
-      if (!s || (r.kind !== 'subcontractor' && words(s.match || s.name).length < 2)) return;
+      if (r.status !== 'new' || (r.splits || []).length || filed[id] || r.kind !== 'subcontractor' || !subFor(r)) return;
       const patch = { status: 'skipped', skipWhy: 'subcontractor', skippedBy: 'Job Hub', updatedAt: new Date().toISOString() };
       Object.assign(r, patch);
+      now[id] = true;
       Promise.resolve(window.YDDb.put('receipts', id, patch))
         .catch(e => console.warn('[subs] bill not yet filed:', (e && e.code) || e));
     });
+    if (Object.keys(now).length) { applyLocal({ filed: now }); save({ filed: now }, 'noting filed bills'); }
   }
 
   // Stores the email reader called subcontractors that are not set up here.
@@ -233,9 +249,13 @@
   const fig = (label, value) => '<div class="sub-fig"><span class="sub-fig-l">' + esc(label) + '</span><span class="sub-fig-v">' + value + '</span></div>';
 
   function propsHtml(s, props, y, m) {
+    // The property being edited gets its form under the table, not inside
+    // it: the table scrolls sideways on a phone, and a form in it did too.
+    const editing = form && form.kind === 'prop' && form.subId === s.id && form.propId
+      ? props.find(p => p.id === form.propId) : null;
     const rows = props.map(p => {
       const x = monthOf(p, y, m);
-      return (form && form.kind === 'prop' && form.propId === p.id ? '<tr><td colspan="6">' + propFormHtml(s, p) + '</td></tr>' :
+      return (editing === p ? '<tr class="sub-editing"><td colspan="6"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
         '<tr' + (p.off ? ' class="sub-off"' : '') + '><td><b>' + esc(p.client || 'Client') + '</b>' + (p.address ? '<div class="muted">' + esc(p.address) + '</div>' : '') + '</td>' +
         '<td>' + esc(EVERY[p.every] || '') + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
         '<td>' + money(p.theirCents) + ' ' + esc(PER[p.theirPer] || '') + '</td>' +
@@ -246,22 +266,24 @@
     return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Client</th><th>How often</th><th>They charge</th>' +
         '<th>You charge</th><th>Margin this month</th><th></th></tr></thead><tbody>' +
         (rows || '<tr><td colspan="6" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
-      (form && form.kind === 'prop' && form.subId === s.id && !form.propId ? propFormHtml(s, {}) :
-        '<button class="btn btn-sm" onclick="subProp(\'' + sid(s.id) + '\', \'\')">+ Add a property</button>');
+      (editing ? propFormHtml(s, editing)
+        : form && form.kind === 'prop' && form.subId === s.id && !form.propId ? propFormHtml(s, {})
+        : '<button class="btn btn-sm" onclick="subProp(\'' + sid(s.id) + '\', \'\')">+ Add a property</button>');
   }
 
   function billsHtml(bills) {
     if (!bills.length) return '<p class="muted" style="margin:12px 0 0">No bills from them in Receipts yet.</p>';
-    const t = ymd(new Date());
+    const t = ymd(new Date()), matched = paidByPayment(bills);
     return '<div class="sub-bills"><div class="sub-bills-h">Their bills</div>' + bills.slice(0, 24).map(r => {
-      const pay = isPayment(r), paid = isPaid(r);
-      const state = pay ? '<span class="rc-tag">Payment</span>'
+      const pay = isPayment(r), bill = isBill(r), paid = isPaid(r, matched);
+      const state = pay ? '<span class="rc-tag">Receipt</span>'
+        : !bill ? '<span class="rc-tag">' + esc(String(r.docType || 'other').replace(/_/g, ' ')) + '</span>'
         : paid ? '<span class="rc-tag">Paid</span>'
         : r.dueDate && r.dueDate < t ? '<span class="rc-tag rc-owed">Past due</span>'
         : '<span class="rc-tag rc-owed">Owed' + (r.dueDate ? ' · due ' + fmtDateMD(r.dueDate) : '') + '</span>';
       return '<div class="sub-bill"><span>' + fmtDateMD(r.date) + ' · ' + esc(r.summary || r.orderNo || r.vendor || '') + '</span>' +
         '<span><b>' + money(r.totalCents) + '</b> ' + state +
-        (!pay ? ' <button class="link-btn" onclick="subPaid(\'' + sid(r.id) + '\', ' + (paid ? 'false' : 'true') + ')">' + (paid ? 'Not paid' : 'Mark paid') + '</button>' : '') +
+        (bill && !(matched.has(r.id) || r.paid) ? ' <button class="link-btn" onclick="subPaid(\'' + sid(r.id) + '\', ' + (paid ? 'false' : 'true') + ')">' + (paid ? 'Not paid' : 'Mark paid') + '</button>' : '') +
         (r.link ? ' <a class="link-btn" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') + '</span></div>';
     }).join('') + '</div>';
   }
@@ -377,7 +399,7 @@
 
   // ---------------------------------------------------------------- loading
 
-  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; data = { subs: {}, paid: {} }; fresh = false; form = null; }
+  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; data = { subs: {}, paid: {}, filed: {} }; fresh = false; form = null; }
   function start() {
     stop();
     if (!owner() || !window.YDDb) { render(); return; }
@@ -385,7 +407,7 @@
       changes.forEach(c => {
         if (c.id !== 'subcontractors') return;
         const d = c.type === 'removed' ? {} : (c.data || {});
-        data = { subs: d.subs || {}, paid: d.paid || {} };
+        data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {} };
       });
       if (meta && meta.fromCache === false) fresh = true;
       fileBills();

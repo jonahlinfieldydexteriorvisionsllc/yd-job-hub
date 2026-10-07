@@ -1534,18 +1534,27 @@
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
     showToast('Changed — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
   };
+  // One at a time: the bill is worked out on the server, which takes a
+  // moment, and a second tap meanwhile fixed it twice.
+  const deciding = new Set();
   function approveStopRequest(r) {
     const a = r.after || {};
+    if (deciding.has(r.id)) return;
     if (!window.YDBilling || !YDBilling.fixVisit) { showToast('Storm billing is still loading — try again'); return; }
     if (figure(a.inchesCleared) == null) { showToast('That request has no depth in it — reject it'); return; }
-    YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), figure(a.saltBags), (me() || {}).uid || '')
+    deciding.add(r.id);
+    // What the crew said the stop has now, and whose stop: checked against
+    // the stop itself before anything changes (billing.js fixVisit).
+    YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), figure(a.saltBags), (me() || {}).uid || '',
+                       { accountId: r.accountId || null, before: r.before || {} })
       .then(res => {
         r.status = 'approved';
         writeRequest(r.id, { status: 'approved', decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'approving a change');
         render();
-        showToast('Changed — ' + YDBilling.fixedWords(res));
+        showToast('Changed — ' + YDBilling.fixedWords(res), res.inQuickBooks || res.numbered ? 9000 : 3000);
       })
-      .catch(err => showToast((err && err.message) || 'Not changed'));
+      .catch(err => showToast((err && err.message) || 'Not changed', 6000))
+      .then(() => deciding.delete(r.id));
   }
   window.rejectRequest = function (id) {
     const r = requests[id];

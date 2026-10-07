@@ -24,7 +24,8 @@
   let fixing = null;         // the departed stop whose figures are being put right
   // The last closed storm, for the crew's "ask for a change" (see below).
   let lastId = null, lastStops = {}, unsubLast = null, askingStop = null;
-  const askedHere = {};      // stop id -> asked from this phone (before the request comes back)
+  const askedHere = {};      // 'stormId/stopId' -> asked from this phone (before the request comes back)
+  let lastLoaded = false;    // the last storm's stops have answered (an empty list is not "loading")
 
   // Where the truck sets out from -- the first leg of every route is measured
   // from here, so it changes the whole order. Read from settings; the middle
@@ -774,6 +775,9 @@
       const openOne = open[0] || null;
       const changedStorm = (openOne && openOne.id) !== (storm && storm.id);
       storm = openOne;
+      // A stop being fixed belongs to the storm it was on (stop ids repeat
+      // from storm to storm).
+      if (changedStorm) fixing = null;
       if (storm && changedStorm) watchStops(storm.id);
       if (!storm && unsubStops) { unsubStops(); unsubStops = null; stops = {}; }
       render();
@@ -822,7 +826,7 @@
   };
   function dropLast() {
     if (unsubLast) { try { unsubLast(); } catch (e) {} }
-    unsubLast = null; lastId = null; lastStops = {}; askingStop = null;
+    unsubLast = null; lastId = null; lastStops = {}; askingStop = null; lastLoaded = false;
   }
   function renderLast(force) {
     const wrap = document.getElementById('lastStormWrap');
@@ -833,13 +837,14 @@
     if (s.id !== lastId) {
       dropLast();
       lastId = s.id;
-      unsubLast = window.YDDb.watch('storms/' + s.id + '/stops', changes => {
+      unsubLast = window.YDDb.watch('storms/' + s.id + '/stops', (changes, meta) => {
         changes.forEach(c => {
           if (c.type === 'removed') delete lastStops[c.id];
           else lastStops[c.id] = Object.assign({ id: c.id }, c.data);
         });
+        if (!meta || meta.fromCache === false || changes.length) lastLoaded = true;
         renderLast();
-      }, () => {});
+      }, () => { lastLoaded = true; renderLast(); });
     }
     // Typing in the form is not interrupted by a redraw.
     if (!force && askingStop && document.activeElement && wrap.contains(document.activeElement)) return;
@@ -850,7 +855,8 @@
         '<span class="section-title">Last storm — ' + esc(stormDay(s)) + '</span></div>' +
       '<div class="section-body">' +
         '<p class="hint" style="margin-top:0">Closed and billed. If a number is wrong, ask for a change — the office checks it.</p>' +
-        (list.length ? list.map(x => lastRow(s, x)).join('') : '<p class="empty-msg">Loading…</p>') +
+        (list.length ? list.map(x => lastRow(s, x)).join('')
+          : '<p class="empty-msg">' + (lastLoaded ? 'No visits were recorded on it.' : 'Loading…') + '</p>') +
       '</div></div>';
   }
   function latestRequest(stormId, stopId) {
@@ -862,10 +868,11 @@
     const a = accountFor(x);
     const inches = num(x.inchesCleared, null), salt = num(x.saltBags, null);
     const r = latestRequest(s.id, x.id);
-    const status = r && r.status === 'pending' || (!r && askedHere[x.id]) ? '<span class="muted">change asked</span>'
+    const asked = !!askedHere[s.id + '/' + x.id];
+    const status = r && r.status === 'pending' || (!r && asked) ? '<span class="muted">change asked</span>'
       : r && r.status === 'approved' ? '<span class="muted">changed ✔</span>'
       : r && r.status === 'rejected' ? '<span class="muted">turned down' + (r.decidedReason ? ' — ' + esc(r.decidedReason) : '') + '</span>' : '';
-    const canAsk = !(r && r.status === 'pending') && !(!r && askedHere[x.id]);
+    const canAsk = !(r && r.status === 'pending') && !(!r && asked);
     return '<div class="ls-row">' +
       '<div class="ls-main"><b>' + esc(a.name || x.accountId) + '</b>' + (num(x.pass, 1) > 1 ? ' <span class="muted">pass ' + num(x.pass, 1) + '</span>' : '') +
         '<div class="muted">' + (inches != null ? inches + '"' : 'no depth') + (a.saltApplies ? ' · ' + (salt != null ? salt : 0) + ' bags' : '') +
@@ -909,7 +916,7 @@
       after: { inchesCleared: inches, saltBags: salt == null ? null : salt },
       createdAt: new Date().toISOString(),
     };
-    askedHere[x.id] = true;
+    askedHere[s.id + '/' + x.id] = true;
     askingStop = null;
     Promise.resolve(window.YDDb.put('changeRequests', rid, rec)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not sent — not allowed');

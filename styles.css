@@ -1224,6 +1224,11 @@
   .ls-main { min-width:0; font-size:14px; }
   .ls-main .muted { font-size:12.5px; margin-top:2px; }
   .ls-ask { flex:1 1 100%; }
+  /* Tapped with gloves on: these links get a full-size target. */
+  .ls-row .link-btn, #stormDetailBody td .link-btn, .sub-bill .link-btn, .sub-head .link-btn {
+    display:inline-flex; align-items:center; min-height:40px; padding:0 8px; }
+  .fix-done { color:var(--pos); font-weight:600; margin:0 0 10px; }
+  .sub-editing td { color:var(--muted); }
 
   /* ---- subcontractors (All Jobs tab) ---- */
   .sub-card { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:12px 14px; margin-bottom:12px; }

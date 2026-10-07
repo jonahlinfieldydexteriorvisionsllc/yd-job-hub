@@ -298,7 +298,9 @@
     showToast('Deleted');
   };
   window.rcDeleteAside = function () {
-    const ids = Object.keys(receipts).filter(id => receipts[id].status === 'skipped');
+    // Not a subcontractor's bills: they are set aside only to be kept on the
+    // subcontractor's card (subs.js), where what is owed is worked out.
+    const ids = Object.keys(receipts).filter(id => receipts[id].status === 'skipped' && receipts[id].skipWhy !== 'subcontractor');
     if (!ids.length || !owner()) return;
     if (!confirm('Delete all ' + ids.length + ' set-aside receipts from the hub?')) return;
     drop(ids);
@@ -542,7 +544,7 @@
     const words = String((el('rcSearch') || {}).value || '').toLowerCase().split(/\s+/).filter(Boolean);
     const every = allReceipts().filter(r => r.status !== 'new');
     const shown = every.filter(r => (view === 'all' || r.status === view) && matches(r, words)).sort(byNewest);
-    const aside = every.filter(r => r.status === 'skipped');
+    const aside = every.filter(r => r.status === 'skipped' && r.skipWhy !== 'subcontractor');
     el('rcHistBadge').textContent = every.length ? String(every.length) : '';
     el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
       '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') + '" onclick="rcView(\'' + v + '\')">' +

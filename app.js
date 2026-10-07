@@ -2074,12 +2074,13 @@ function exportPurchasesCsv() {
 // start its own, so a second message arriving while the first was showing was
 // hidden by the FIRST one's timer, sometimes after a fraction of a second.
 let toastTimer = null;
-function showToast(msg) {
+// `ms`: how long it stays -- longer for something that must not be missed.
+function showToast(msg, ms) {
   let t = document.getElementById('toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--brand);color:#fff;padding:13px 22px;font-family:"DM Sans",sans-serif;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity .3s;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.25);'; document.body.appendChild(t); }
   t.textContent = msg; t.style.opacity = '1';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.style.opacity = '0'; }, 2000);
+  toastTimer = setTimeout(() => { t.style.opacity = '0'; }, ms || 2000);
 }
 
 window.addEventListener('DOMContentLoaded', () => {
