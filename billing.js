@@ -104,48 +104,46 @@
   // that have not been given out yet. `b` must be the server's copy of the
   // storm's billing (see exportStormCsv).
   //
-  // The "next number" is read from the SERVER too, not from this device's
-  // copy -- which is exactly the copy the laptop and the phone each kept, and
-  // both handed out. With no signal that read fails, and nothing is numbered.
+  // The "next number" and the storm's numbers are read and written in ONE
+  // step on the server (YDDb.transact). Read separately -- even both from the
+  // server -- two devices exporting at the same moment could each read the
+  // same "next" and give out the same numbers (review B11, 6 Oct 2026); in a
+  // transaction the second is run again on what the first wrote. With no
+  // signal it fails, and nothing is numbered.
   async function invoiceNumbersFor(id, b, accountIds) {
-    const existing = Object.assign({}, b.invoiceNos || {});
-    const missing = accountIds.filter(a => !existing[a]);
-    if (!missing.length) return existing;
+    const known = Object.assign({}, b.invoiceNos || {});
+    if (!accountIds.some(a => !known[a])) return known;
 
-    const cfg = (await window.YDDb.getFresh('settings', INVOICE_DOC)) || {};
-    invoiceSettings = cfg;
-    // No starting point set yet: fall back to a storm-based reference, which
-    // is unique but does not pretend to continue anybody's sequence.
-    if (cfg.nextInvoiceNo == null) {
-      const d = stormStart(storms[id]);
-      const stamp = String(d.getFullYear()).slice(2) +
-        two(d.getMonth() + 1) + two(d.getDate()) + '-' + two(d.getHours()) + two(d.getMinutes());
-      const taken = Object.keys(existing).length;
-      missing.forEach((a, i) => { existing[a] = 'SNOW-' + stamp + '-' + two(taken + i + 1); });
-      // Written against the storm like a sequence number. These used to be
-      // worked out afresh on every export, so once a starting number was set
-      // the same storm came out with a second set -- and re-importing it
-      // raised every invoice again.
-      b.invoiceNos = existing;
-      Promise.resolve(window.YDDb.put('storms/' + id + '/private', 'billing', { invoiceNos: existing }))
-        .catch(e => console.warn('[billing] invoice numbers not yet saved:', e.code || e.message));
-      return existing;
-    }
-
-    let next = parseInt(cfg.nextInvoiceNo, 10) || 1;
-    const prefix = cfg.invoicePrefix || '';
-    missing.forEach(a => { existing[a] = prefix + next; next++; });
-
-    // Recorded HERE first, then written without waiting. Waiting for the
-    // server meant a second tap during the wait handed out a second set of
-    // numbers, and with no signal the export never finished at all.
-    invoiceSettings = Object.assign({}, cfg, { nextInvoiceNo: next });
-    b.invoiceNos = existing;
-    Promise.resolve(window.YDDb.putMany([
-      ['settings', INVOICE_DOC, { nextInvoiceNo: next }],
-      ['storms/' + id + '/private', 'billing', { invoiceNos: existing }],
-    ])).catch(e => console.warn('[billing] invoice numbers not yet saved:', e.code || e.message));
-    return existing;
+    let out = null, cfgOut = null;
+    await window.YDDb.transact([['settings', INVOICE_DOC], ['storms/' + id + '/private', 'billing']], ([cfg, bill]) => {
+      cfg = cfg || {};
+      const existing = Object.assign({}, (bill && bill.invoiceNos) || {});
+      const missing = accountIds.filter(a => !existing[a]);
+      out = existing; cfgOut = cfg;
+      if (!missing.length) return [null, null];       // another device has just numbered them
+      // No starting point set yet: fall back to a storm-based reference, which
+      // is unique but does not pretend to continue anybody's sequence.
+      if (cfg.nextInvoiceNo == null) {
+        const d = stormStart(storms[id]);
+        const stamp = String(d.getFullYear()).slice(2) +
+          two(d.getMonth() + 1) + two(d.getDate()) + '-' + two(d.getHours()) + two(d.getMinutes());
+        const taken = Object.keys(existing).length;
+        missing.forEach((a, i) => { existing[a] = 'SNOW-' + stamp + '-' + two(taken + i + 1); });
+        // Written against the storm like a sequence number. These used to be
+        // worked out afresh on every export, so once a starting number was set
+        // the same storm came out with a second set -- and re-importing it
+        // raised every invoice again.
+        return [null, { invoiceNos: existing }];
+      }
+      let next = parseInt(cfg.nextInvoiceNo, 10) || 1;
+      const prefix = cfg.invoicePrefix || '';
+      missing.forEach(a => { existing[a] = prefix + next; next++; });
+      cfgOut = Object.assign({}, cfg, { nextInvoiceNo: next });
+      return [{ nextInvoiceNo: next }, { invoiceNos: existing }];
+    });
+    invoiceSettings = cfgOut;
+    b.invoiceNos = out;
+    return out;
   }
 
   const two = n => String(n).padStart(2, '0');

@@ -21,7 +21,7 @@ import {
   initializeFirestore, persistentLocalCache, persistentSingleTabManager,
   doc, getDoc, getDocFromServer, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
   getDocs, getDocsFromServer, writeBatch, disableNetwork, enableNetwork, query, where,
-  terminate, clearIndexedDbPersistence, waitForPendingWrites,
+  terminate, clearIndexedDbPersistence, waitForPendingWrites, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
@@ -486,6 +486,27 @@ async function start() {
       async getFresh(path, id) {
         const snap = await getDocFromServer(doc(db, ...path.split('/'), id));
         return snap.exists() ? snap.data() : null;
+      },
+
+      // Read some documents and write them back as ONE step on the server:
+      // no other device can slip a write in between, and if one did, the step
+      // is run again on the new data. For handing out numbers -- two devices
+      // reading the same "next invoice number" at the same moment gave out the
+      // same numbers (review B11, 6 Oct 2026). `docs` is [[path, id], ...];
+      // `change(datas)` gets each one's data (null when missing) and returns a
+      // fields-to-merge object (or null) for each; it may run more than once,
+      // so it must only work things out, not do them. Needs a signal: a
+      // transaction is never queued offline, so this one IS awaited by its
+      // caller, which says so when there is none.
+      async transact(docs, change) {
+        const refs = docs.map(([p, id]) => doc(db, ...p.split('/'), id));
+        return runTransaction(db, async t => {
+          const snaps = [];
+          for (const r of refs) snaps.push(await t.get(r));
+          const patches = change(snaps.map(s => (s.exists() ? s.data() : null))) || [];
+          patches.forEach((p, i) => { if (p) t.set(refs[i], p, { merge: true }); });
+          return patches;
+        });
       },
 
       async put(path, id, data) {
