@@ -70,7 +70,7 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // followUps (the follow-up emails drafted for a bid) is written from the Bids
 // board the same way, and qbEstimate (what QuickBooks holds of the estimate)
 // by the server and estimate.js, so both ride along with the form too.
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate'];
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;

@@ -256,7 +256,7 @@ def _quickbooks(request, path, headers):
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
-                       "/qb/estimate", "/qb/estimate-status")
+                       "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status")
     try:
         uid = _caller(request, "billing", "change") if billing else _caller(request)
     except PermissionError as e:
@@ -280,6 +280,10 @@ def _quickbooks(request, path, headers):
             result = qb.save_estimate(body)
         elif path == "/qb/estimate-status":
             result = qb.estimate_status(body)
+        elif path == "/qb/estimate-invoice":
+            result = qb.invoice_from_estimate(body)
+        elif path == "/qb/invoice-status":
+            result = qb.invoice_status(body)
         else:
             return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     except PermissionError as e:
@@ -412,10 +416,54 @@ def _cards(request, path, headers):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     try:
         report = cards.run(_claude(), only)
-        return (json.dumps({"report": report}), 200, json_headers)
     except Exception as e:                          # noqa: BLE001
         print("cards run failed:", e)
         return (json.dumps({"error": str(e)}), 500, json_headers)
+    # The hourly run also asks QuickBooks about estimates out with customers
+    # and invoices not yet paid off (quickbooks.sweep): a "yes" or a payment
+    # reaches the job, and Jonah's phone, without him looking.
+    if only is None:
+        try:
+            _tell_owner(qb_sweep_news())
+        except Exception as e:                      # noqa: BLE001
+            print("quickbooks sweep failed:", e)
+    return (json.dumps({"report": report}), 200, json_headers)
+
+
+def qb_sweep_news():
+    import quickbooks
+    return quickbooks.sweep()
+
+
+def _money(v):
+    try:
+        return "${:,.2f}".format(float(v))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _tell_owner(news):
+    """One phone notification per thing that happened in QuickBooks."""
+    if not news:
+        return
+    import digest
+    owners = [s.id for s in digest._db().collection("users").where("role", "==", "owner").stream()]
+    for n in news:
+        num = (" #" + str(n["docNumber"])) if n.get("docNumber") else ""
+        if n["kind"] == "estimate":
+            title = {"Accepted": "✅ Estimate accepted", "Rejected": "Estimate turned down",
+                     "Closed": "Estimate made into an invoice"}.get(n["status"], "Estimate " + str(n["status"]).lower())
+            body = "%s — estimate%s %s" % (n["name"], num, _money(n.get("total")))
+            if n["status"] == "Accepted":
+                body += ". Open the job to book it and make the invoice."
+        else:
+            title = "💵 Payment received"
+            body = "%s paid %s on invoice%s — %s still owed" % (n["name"], _money(n.get("paid")), num, _money(n.get("balance")))
+        for uid in owners:
+            try:
+                digest.send_push(uid, {"push": {"title": title, "body": body}}, tag="qb-" + str(n["jobId"]))
+            except Exception as e:                  # noqa: BLE001
+                print("quickbooks sweep: push failed:", e)
 
 
 # ---------------------------------------------------------------- receipts

@@ -461,6 +461,9 @@
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
       (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
+      // The customer said yes in QuickBooks (seen by the hourly check, quickbooks.sweep).
+      (board.id === 'bids' && j.qbEstimate && j.qbEstimate.status === 'Accepted' && bidColumn(j) !== 'won'
+        ? '<div class="bd-card-line bd-draft">✅ Accepted in QuickBooks — book it</div>' : '') +
       '<div class="bd-card-foot">' +
         (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>' : '') +
         (days != null ? '<span class="bd-age' + (stale ? ' late' : '') + '">' +

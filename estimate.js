@@ -166,6 +166,9 @@
   }
 
   const qb = () => (typeof boardFields !== 'undefined' && boardFields.qbEstimate) || null;
+  // The job's invoice, made from the estimate (quickbooks.py invoice_from_estimate).
+  const qbInv = () => (typeof boardFields !== 'undefined' && boardFields.qbInvoiceRef) || null;
+  let invoicing = false;
 
   // ---------------------------------------------------------------- drawing
 
@@ -445,7 +448,7 @@
   function renderQb() {
     const box = el('estQb');
     if (!box) return;
-    const q = qb();
+    const q = qb(), inv = qbInv();
     const can = sends() && changes();
     const r = last;
     const ready = r && r.totalCents > 0;
@@ -459,17 +462,129 @@
         (q.sentAt ? ' · emailed ' + esc(when(q.sentAt)) + (q.sentTo ? ' to ' + esc(q.sentTo) : '') : ' · not emailed yet') +
         (q.acceptedBy ? ' · accepted by ' + esc(q.acceptedBy) : '') +
         (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</div>' : '') +
-      (can ? '<div class="field-actions">' +
+      // Once invoiced the estimate is closed in QuickBooks and can't change.
+      (can && q && q.id && (q.status === 'Closed' || (inv && inv.id))
+        ? (q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
+          ? '<div class="field-actions"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
+      : can ? '<div class="field-actions">' +
         '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || !ready ? ' disabled' : '') + '>' +
           (saving ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
         '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || !ready ? ' disabled' : '') + '>' +
           (q && q.id ? 'Update in QuickBooks only' : 'Put in QuickBooks, don’t email yet') + '</button>' +
         (q && q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open in QuickBooks</a>' : '') +
-        (q && q.id ? '<button class="btn btn-sm" onclick="estCheck(false)"' + (checking ? ' disabled' : '') + '>' +
+        (q && q.id && !(inv && inv.id) ? '<button class="btn btn-sm" onclick="estCheck(false)"' + (checking ? ' disabled' : '') + '>' +
           (checking ? 'Checking…' : 'Check for an answer') + '</button>' : '') +
-      '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>'));
+      '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
+      invoiceHtml(q, inv, can, when);
   }
+
+  // The invoice, once the customer says yes: one for the whole job, made from
+  // the estimate in QuickBooks; the deposit is paid against it (Jonah's way,
+  // 7 Oct 2026). Its balance is checked every hour by the server.
+  function invoiceHtml(q, inv, can, when) {
+    if (!q || !q.id) return '';
+    if (inv && inv.env && q.env && inv.env !== q.env) inv = null;   // made in the other company
+    const owed = inv && inv.balance != null ? Number(inv.balance) : null;
+    const line = inv && inv.id
+      ? '<div class="est-qb-line"><b>QuickBooks invoice' + (inv.docNumber ? ' #' + esc(inv.docNumber) : '') + '</b>' +
+        (inv.total != null ? ' · ' + fmtMoney(Number(inv.total) || 0) : '') +
+        (owed === null ? '' : owed > 0 ? ' · ' + fmtMoney(owed) + ' still owed' : ' · ✅ paid in full') +
+        (inv.sentAt ? ' · emailed ' + esc(when(inv.sentAt)) : ' · not emailed yet') + '</div>'
+      : '';
+    if (!can) return line;
+    if (inv && inv.id) {
+      return line + '<div class="field-actions">' +
+        (!inv.sentAt ? '<button class="btn btn-sm btn-filled" onclick="estInvoice(true)"' + (invoicing ? ' disabled' : '') + '>✉️ Email the invoice</button>' : '') +
+        (inv.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(inv.link)
+          ? '<a class="btn btn-sm" href="' + esc(inv.link) + '" target="_blank" rel="noopener">Open the invoice</a>' : '') +
+        (owed === null || owed > 0 ? '<button class="btn btn-sm" onclick="estInvoiceCheck(false)"' + (checking ? ' disabled' : '') + '>' +
+          (checking ? 'Checking…' : 'Check for a payment') + '</button>' : '') +
+      '</div>';
+    }
+    if (['Pending', 'Accepted'].indexOf(q.status || 'Pending') === -1) return line;
+    const yes = q.status === 'Accepted';
+    return '<div class="est-invoice">' +
+      '<div class="hint">' + (yes ? 'They said yes. Make' : 'When they say yes, make') +
+        ' one invoice for the whole job from this estimate — the deposit is paid against it.</div>' +
+      '<div class="field-actions">' +
+        '<button class="btn btn-sm' + (yes ? ' btn-filled' : '') + '" onclick="estInvoice(true)"' + (invoicing ? ' disabled' : '') + '>' +
+          (invoicing ? 'Working…' : '🧾 Make the invoice & email it') + '</button>' +
+        '<button class="btn btn-sm" onclick="estInvoice(false)"' + (invoicing ? ' disabled' : '') + '>Make it, don’t email yet</button>' +
+      '</div></div>';
+  }
+
+  // What the invoice says about paying: the schedule for its total, then the
+  // payment terms from Pricing rules.
+  function invoiceMemo(totalCents) {
+    const rules = P() ? P().rules() : {};
+    const p = rules.payments || {};
+    const above = num(p.splitAboveCents);
+    const terms = String((above !== null && totalCents > above ? p.threeText : p.twoText) || '').trim();
+    const pays = P() ? P().payments(totalCents, rules) : [];
+    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms].filter(Boolean).join('\n\n');
+  }
+
+  window.estInvoice = async function (email) {
+    const q = qb(), inv = qbInv() || {};
+    if (!q || !q.id || invoicing || !sends() || !changes()) return;
+    const total = Math.round((Number(q.total) || 0) * 100);
+    const to = (el('email').value || '').trim();
+    const what = inv.id ? 'invoice #' + (inv.docNumber || '') : 'the invoice for the whole job (' + cents(total) + ') from estimate #' + (q.docNumber || '');
+    if (email && !to && !inv.id) { showToast('Add the customer’s email on the job first'); return; }
+    if (!confirm((email ? 'Email ' + what + ' to ' + (to || 'the customer') + ' from QuickBooks?' : 'Make ' + what + ' in QuickBooks?') +
+      (inv.id ? '' : '\n\nIt closes the estimate in QuickBooks.'))) return;
+    if (typeof autosave === 'function') autosave();
+    const jobId = currentJobId;
+    if (!jobId) return;
+    invoicing = true; renderQb();
+    try {
+      const out = await askQb('/qb/estimate-invoice', { jobId: jobId, estimateId: q.id, env: q.env || null,
+        invoiceId: inv.id || null, email: !!email, memo: invoiceMemo(total) });
+      afterInvoice(jobId, out);
+      showToast((email ? 'Emailed from QuickBooks' : 'Made in QuickBooks') + (out.docNumber ? ' — invoice #' + out.docNumber : ''));
+      // A yes from the customer: a bid still waiting to be booked is offered it.
+      if (currentJobId === jobId && typeof isBidStatus === 'function' && isBidStatus(jobStatus) &&
+          confirm('They said yes — book it as a job now?') && typeof makeItAJob === 'function') makeItAJob(jobId);
+    } catch (e) {
+      showToast('QuickBooks: ' + (e.message || e));
+    } finally {
+      invoicing = false; renderQb();
+    }
+  };
+
+  // The invoice onto the job, and its number into the form's invoice box.
+  function afterInvoice(jobId, r) {
+    const was = (currentJobId === jobId ? qbInv() : null) || {};
+    const merged = Object.assign({}, was, r);
+    Object.keys(merged).forEach(k => { if (merged[k] === undefined) merged[k] = null; });
+    if (window.YDSync) window.YDSync.patchJob(jobId, { qbInvoiceRef: merged });
+    if (currentJobId === jobId && r.docNumber &&
+        (el('qbInvoice').value.trim() !== String(r.docNumber) || !el('qbInvoiced').checked)) {
+      el('qbInvoice').value = r.docNumber;
+      el('qbInvoiced').checked = true;
+      if (typeof updateCtxBar === 'function') updateCtxBar();
+      if (typeof markDirty === 'function') markDirty();
+    }
+    renderQb();
+  }
+
+  window.estInvoiceCheck = async function (quiet) {
+    const inv = qbInv(), jobId = currentJobId;
+    if (!inv || !inv.id || checking || !sends()) return;
+    checking = true; if (!quiet) renderQb();
+    try {
+      const r = await askQb('/qb/invoice-status', { invoiceId: inv.id, env: inv.env || null });
+      if (currentJobId !== jobId) return;
+      if (r.missing) { if (!quiet) showToast(r.error || 'That invoice is no longer in QuickBooks'); return; }
+      afterInvoice(jobId, r);
+      if (!quiet) showToast(Number(r.balance) > 0 ? fmtMoney(Number(r.balance)) + ' still owed' : 'Paid in full');
+    } catch (e) {
+      if (!quiet) showToast('QuickBooks: ' + (e.message || e));
+    } finally {
+      checking = false; renderQb();
+    }
+  };
 
   // The message on the estimate: what was typed for this one, or the rules'
   // payment terms for its size, then the warranty.

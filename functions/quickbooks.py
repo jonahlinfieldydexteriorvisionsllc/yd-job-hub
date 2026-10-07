@@ -847,6 +847,157 @@ def estimate_status(body):
     return out
 
 
+def _invoice_record(inv):
+    env = _env("QB_ENV", "sandbox")
+    return {
+        "id": inv.get("Id"), "docNumber": inv.get("DocNumber"),
+        "total": inv.get("TotalAmt"), "balance": inv.get("Balance"), "dueDate": inv.get("DueDate"),
+        "emailStatus": inv.get("EmailStatus"), "env": env,
+        "link": "%s/app/invoice?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), inv.get("Id")),
+        "syncedAt": _now().isoformat(),
+    }
+
+
+def _invoice_lines(e):
+    """The estimate's lines as they are, for its invoice."""
+    out = []
+    for ln in e.get("Line") or []:
+        kind = ln.get("DetailType")
+        if kind == "SalesItemLineDetail":
+            d = ln.get("SalesItemLineDetail") or {}
+            detail = {k: d[k] for k in ("ItemRef", "Qty", "UnitPrice", "TaxCodeRef", "ServiceDate") if d.get(k) is not None}
+            out.append({"DetailType": kind, "Amount": ln.get("Amount"), "Description": ln.get("Description") or "",
+                        "SalesItemLineDetail": detail})
+        elif kind == "DescriptionOnly":
+            out.append({"DetailType": kind, "Description": ln.get("Description") or "", "DescriptionLineDetail": {}})
+    return out
+
+
+def invoice_from_estimate(body):
+    """The job's invoice, made from its estimate the way Jonah does it in
+    QuickBooks: one invoice for the whole job with every line of the estimate,
+    linked to it (which closes the estimate); the customer pays the deposit
+    against it and the rest at the end. Emailed when asked. Asking again finds
+    the invoice already made -- from here or in QuickBooks -- and never makes
+    a second.
+
+    body: jobId, estimateId, env, memo (the payment terms), email (true to
+    send), invoiceId (from last time).
+    """
+    job_id = str(body.get("jobId") or "").strip()
+    est_id = str(body.get("estimateId") or "").strip()
+    if not job_id or "/" in job_id or not est_id:
+        raise RuntimeError("Put the estimate in QuickBooks first")
+    if not _same_company(body):
+        raise RuntimeError("That estimate is in the QuickBooks test company, not the one connected now")
+    e = _query_one("Estimate", "Id = '%s'" % _quote(est_id))
+    if not e or not _ours(e, job_id):
+        raise RuntimeError("That estimate isn't in QuickBooks any more")
+
+    inv = None
+    known = str(body.get("invoiceId") or "").strip()
+    if known:
+        inv = _query_one("Invoice", "Id = '%s'" % _quote(known))
+    if not inv:
+        # Made into an invoice in QuickBooks itself: the estimate names it.
+        for t in e.get("LinkedTxn") or []:
+            if t.get("TxnType") == "Invoice" and t.get("TxnId"):
+                inv = _query_one("Invoice", "Id = '%s'" % _quote(t["TxnId"]))
+                if inv:
+                    break
+    if not inv:
+        if e.get("TxnStatus") == "Rejected":
+            raise RuntimeError("The customer turned this estimate down in QuickBooks")
+        lines = _invoice_lines(e)
+        if not any(ln["DetailType"] == "SalesItemLineDetail" for ln in lines):
+            raise RuntimeError("The estimate has nothing on it to invoice")
+        new = {"CustomerRef": e["CustomerRef"], "Line": lines,
+               "LinkedTxn": [{"TxnId": e["Id"], "TxnType": "Estimate"}],
+               "PrivateNote": _job_note(job_id)}
+        for k in ("BillEmail", "ShipAddr"):
+            if e.get(k):
+                new[k] = e[k]
+        memo = str(body.get("memo") or "").strip()
+        if memo:
+            new["CustomerMemo"] = {"value": memo[:MEMO_MAX]}
+        # One estimate, one invoice: a repeat of this request is answered
+        # with the invoice already made.
+        inv = _call("POST", "invoice", body=new,
+                    request_id=hashlib.sha1(("inv|est|" + e["Id"]).encode()).hexdigest()).get("Invoice") or {}
+
+    sent_to = ""
+    if body.get("email"):
+        to = str(((inv.get("BillEmail") or e.get("BillEmail") or {}).get("Address")) or "").strip()
+        if not to:
+            raise RuntimeError("Made in QuickBooks, but the customer has no email to send it to")
+        sent = _call("POST", "invoice/%s/send" % inv["Id"], params={"sendTo": to}, empty_body=True)
+        inv = sent.get("Invoice") or inv
+        sent_to = to
+
+    out = _invoice_record(inv)
+    out["estimateId"] = e["Id"]
+    if sent_to:
+        out.update(sentAt=_now().isoformat(), sentTo=sent_to)
+    _db().collection("jobs").document(job_id).set({"qbInvoiceRef": out}, merge=True)
+    return out
+
+
+def invoice_status(body):
+    """What the job's invoice has had paid against it."""
+    inv_id = str(body.get("invoiceId") or "").strip()
+    if not inv_id:
+        raise RuntimeError("Which invoice?")
+    if not _same_company(body):
+        return {"missing": True, "error": "That invoice is in the QuickBooks test company, not the one connected now"}
+    inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
+    if not inv:
+        return {"missing": True}
+    return _invoice_record(inv)
+
+
+def sweep():
+    """Once an hour (the card run): every estimate out with a customer and
+    every invoice not yet paid off is asked about in QuickBooks, so a "yes" or
+    a payment shows on the job without Jonah opening it. Returns what changed,
+    for his phone."""
+    tokens = _load_tokens()
+    if not tokens or not tokens.get("refreshToken"):
+        return []
+    env = _env("QB_ENV", "sandbox")
+    db = _db()
+    news = []
+    for snap in db.collection("jobs").stream():
+        j = snap.to_dict() or {}
+        name = str(j.get("customerName") or "a customer")
+        q = j.get("qbEstimate") or {}
+        if q.get("id") and q.get("env") == env and (q.get("status") or "Pending") == "Pending":
+            try:
+                e = _query_one("Estimate", "Id = '%s'" % _quote(q["id"]))
+            except Exception as err:                    # noqa: BLE001
+                print("quickbooks sweep: estimate %s: %s" % (q["id"], err))
+                e = None
+            if e and _ours(e, snap.id) and (e.get("TxnStatus") or "Pending") != "Pending":
+                rec = _estimate_record(e)
+                rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"))
+                db.collection("jobs").document(snap.id).set({"qbEstimate": rec}, merge=True)
+                news.append({"jobId": snap.id, "kind": "estimate", "status": rec["status"], "name": name,
+                             "docNumber": rec.get("docNumber"), "total": rec.get("total")})
+        r = j.get("qbInvoiceRef") or {}
+        if r.get("id") and r.get("env") == env and float(r.get("balance") or 0) > 0:
+            try:
+                inv = _query_one("Invoice", "Id = '%s'" % _quote(r["id"]))
+            except Exception as err:                    # noqa: BLE001
+                print("quickbooks sweep: invoice %s: %s" % (r["id"], err))
+                inv = None
+            if inv and float(inv.get("Balance") or 0) != float(r.get("balance") or 0):
+                paid = round(float(r.get("balance") or 0) - float(inv.get("Balance") or 0), 2)
+                rec = _invoice_record(inv)
+                db.collection("jobs").document(snap.id).set({"qbInvoiceRef": rec}, merge=True)
+                news.append({"jobId": snap.id, "kind": "payment", "name": name, "paid": paid,
+                             "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
+    return news
+
+
 def create_invoice(body):
     """Create one invoice and hand back the number QuickBooks gave it.
 

@@ -1847,3 +1847,5 @@
   .order-cost .muted { font-size:11.5px; margin-top:2px; }
   .bd-draft { font-size:11px; font-weight:700; color:var(--brand); }
   .cr-cost .link-btn, .order-vendor .link-btn, .cr-link .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
+  .est-invoice { margin-top:10px; padding:10px 12px; border-radius:8px; border:1px dashed var(--border-strong); }
+  .est-invoice .hint { margin:0 0 4px; }
