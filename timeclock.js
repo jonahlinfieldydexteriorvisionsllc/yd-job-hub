@@ -451,7 +451,8 @@
     renderClockCard();
     // Not while the name and rate are being typed into: the clock redraws
     // every second, and rebuilding the form would clear the fields mid-word.
-    if (workerUid && !editingWorker
+    // Nor while a change is being asked for (the same reason).
+    if (workerUid && !editingWorker && !asking
         && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
     if (seesAll()) { renderOnNow(); renderApprovals(); renderTotals(); }
     if (isOwner()) renderCrew();
@@ -774,18 +775,20 @@
     if (!wrap) return;
     const waiting = Object.values(entries).filter(awaitingOwner)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
+    const asked = requestsHtml();
+    const nAsked = isOwner() ? Object.values(requests).filter(r => r.status === 'pending' && r.type === 'timeEntry').length : 0;
     const badge = el('approveBadge');
-    if (badge) badge.textContent = waiting.length ? waiting.length + ' waiting' : '';
+    if (badge) badge.textContent = waiting.length + nAsked ? (waiting.length + nAsked) + ' waiting' : '';
     const sec = el('clockApproveSection');
     if (sec) sec.hidden = false;
 
-    if (!waiting.length) {
+    if (!waiting.length && !nAsked) {
       wrap.innerHTML = '<p class="empty-msg">Nothing waiting. Ordinary clocked shifts ' +
         'go through on their own — only shifts typed in by hand, or longer than ' +
-        LONG_SHIFT_HOURS + ' hours, land here.</p>';
+        LONG_SHIFT_HOURS + ' hours, land here, and changes the crew ask for.</p>';
       return;
     }
-    wrap.innerHTML = waiting.map(e => {
+    wrap.innerHTML = asked + waiting.map(e => {
       // Chargeable, not merely unpaused: a long Labor day is not billable to
       // anybody, however few pauses it had.
       const paid = paidMs(e), bill = chargeableMs(e), pause = pausedMs(e);
@@ -1274,6 +1277,8 @@
     // sets their rate -- though never an admin their own.
     const canName = isOwner();
     const canRate = decides() && (isOwner() || !isMe);
+    // Your own page, unless you are the owner: a locked shift can be asked about.
+    const askable = isMe && !isOwner();
     body.innerHTML =
       (editingWorker && (canName || canRate)
         ? '<div class="wk-edit">' +
@@ -1328,15 +1333,159 @@
           ', not counted above.</div>'
         : '') +
 
+      (askable && asking && entries[asking] ? askHtml(entries[asking]) : '') +
       '<div class="wk-head">Every shift</div>' +
       (inRange.length
         ? '<div class="table-wrap"><table><thead><tr><th>When</th><th>What</th>' +
-          '<th>Paid</th><th>Billable</th><th></th></tr></thead><tbody>' +
+          '<th>Paid</th><th>Billable</th><th></th>' + (askable ? '<th></th>' : '') + '</tr></thead><tbody>' +
           inRange.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
-            .map(e => shiftRow(e)).join('') +
+            .map(e => shiftRow(e, askable)).join('') +
           '</tbody></table></div>'
-        : '<p class="empty-msg">Nothing in this range.</p>');
+        : '<p class="empty-msg">Nothing in this range.</p>') +
+      (askable ? myRequestsHtml(workerUid) : '');
   }
+
+  // ------------------------------------------------------- change requests
+  //
+  // A shift that has gone through (counted or approved) is locked to the crew.
+  // When one is wrong -- clocked out late, forgot to clock in at the shop --
+  // they ask for a change (Jonah, 6 Oct 2026: clock times and storm figures;
+  // clock times first). It lands in the owner's Waiting for You; approving
+  // applies it to the shift, hours and pay worked out again. The requests
+  // are kept, not deleted (changeRequests in firestore.rules: crew file and
+  // withdraw their own, only the owner decides).
+  let requests = {};          // id -> request (the owner's queue, or a crew member's own)
+  let asking = null;          // the shift a change is being asked for, on My hours
+  const pendingFor = id => Object.values(requests).find(r => r.targetId === id && r.status === 'pending');
+
+  function writeRequest(id, data, what) {
+    Promise.resolve(window.YDDb.put('changeRequests', id, data)).catch(err => {
+      if (err && err.code === 'permission-denied') showToast('Not saved — not allowed');
+      else console.warn('[clock] ' + what + ' not yet on the server:', (err && err.code) || err);
+    });
+  }
+  const hm = iso => { const d = new Date(iso); return isNaN(d) ? '' : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  // A time typed for a shift: on the shift's own day (an end before the start
+  // is the next morning).
+  function onShiftDay(e, time, after) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(time || ''));
+    if (!m) return null;
+    const d = new Date(e.startedAt);
+    d.setHours(+m[1], +m[2], 0, 0);
+    if (after && d.getTime() <= ms(after)) d.setDate(d.getDate() + 1);
+    return d.toISOString();
+  }
+
+  function askHtml(e) {
+    return '<div class="add-area wk-ask">' +
+      '<div class="add-label">Ask for a change to ' + new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
+        ' · ' + esc(e.targetName || '') + ' (' + clockTime(e.startedAt) + '–' + clockTime(e.endedAt) + ')</div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Should have started</span><input type="time" id="crStart" value="' + hm(e.startedAt) + '"></div>' +
+        '<div class="field"><span class="label">Should have ended</span><input type="time" id="crEnd" value="' + hm(e.endedAt) + '"></div>' +
+      '</div>' +
+      '<div class="field"><span class="label">Why</span><input id="crWhy" placeholder="e.g. forgot to clock out at the shop"></div>' +
+      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="sendRequest()">Send to the office</button>' +
+        '<button class="btn btn-sm" onclick="cancelRequest()">Cancel</button></div>' +
+    '</div>';
+  }
+  function myRequestsHtml(uid) {
+    const mineR = Object.values(requests).filter(r => r.requestedBy === uid && r.type === 'timeEntry')
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 8);
+    if (!mineR.length) return '';
+    return '<div class="wk-head">Changes you asked for</div>' + mineR.map(r => '<div class="wk-req ' + esc(r.status) + '">' +
+      new Date((r.before || {}).startedAt || r.createdAt).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) + ': ' +
+      clockTime((r.before || {}).startedAt) + '–' + clockTime((r.before || {}).endedAt) + ' → ' +
+      clockTime((r.after || {}).startedAt) + '–' + clockTime((r.after || {}).endedAt) + ' · <b>' +
+      ({ pending: 'waiting', approved: 'changed', rejected: 'turned down', withdrawn: 'withdrawn' }[r.status] || esc(r.status)) + '</b>' +
+      (r.status === 'rejected' && r.decidedReason ? ' — ' + esc(r.decidedReason) : '') +
+      (r.status === 'pending' ? ' <button class="link-btn" onclick="withdrawRequest(\'' + safeId(r.id) + '\')">withdraw</button>' : '') +
+    '</div>').join('');
+  }
+  window.askChange = function (id) { asking = id; renderWorker(); };
+  window.cancelRequest = function () { asking = null; renderWorker(); };
+  window.sendRequest = function () {
+    const e = entries[asking], u = me();
+    if (!e || !u || e.uid !== u.uid) return;
+    const start = onShiftDay(e, (el('crStart') || {}).value);
+    const end = start && onShiftDay(e, (el('crEnd') || {}).value, start);
+    const why = ((el('crWhy') || {}).value || '').trim();
+    if (!start || !end) { showToast('Put in both times'); return; }
+    if (!why) { showToast('Say why, so the office knows'); return; }
+    if (start === e.startedAt && end === e.endedAt) { showToast('Those are the times it has now'); return; }
+    if (ms(end) - ms(start) > 20 * 3600000) { showToast('That is longer than a day — check the times'); return; }
+    const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const rec = { type: 'timeEntry', targetPath: 'timeEntries/' + e.id, targetId: e.id,
+      requestedBy: u.uid, requestedByName: whoIs(u.uid), reason: why.slice(0, 300), status: 'pending',
+      before: { startedAt: e.startedAt, endedAt: e.endedAt || null },
+      after: { startedAt: start, endedAt: end }, createdAt: nowIso() };
+    requests[id] = Object.assign({ id: id }, rec);
+    asking = null;
+    writeRequest(id, rec, 'asking for a change');
+    renderWorker();
+    showToast('Sent — the office will look at it');
+  };
+  window.withdrawRequest = function (id) {
+    const r = requests[id];
+    if (!r || r.status !== 'pending') return;
+    r.status = 'withdrawn';
+    writeRequest(id, { status: 'withdrawn' }, 'withdrawing a request');
+    renderWorker();
+  };
+
+  // The owner's side, at the top of Waiting for You.
+  function requestsHtml() {
+    if (!isOwner()) return '';
+    const list = Object.values(requests).filter(r => r.status === 'pending' && r.type === 'timeEntry')
+      .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+    return list.map(r => {
+      const b = r.before || {}, a = r.after || {};
+      return '<div class="appr appr-req">' +
+        '<div class="appr-top"><b>' + esc(whoIs(r.requestedBy, r.requestedByName)) + '</b> asks to change a shift</div>' +
+        '<div class="appr-times">' + new Date(b.startedAt || r.createdAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
+          ' · ' + clockTime(b.startedAt) + ' – ' + clockTime(b.endedAt) + ' → <b>' + clockTime(a.startedAt) + ' – ' + clockTime(a.endedAt) + '</b></div>' +
+        (r.reason ? '<div class="appr-note">“' + esc(r.reason) + '”</div>' : '') +
+        '<div class="appr-act"><button class="btn btn-filled btn-sm" onclick="approveRequest(\'' + safeId(r.id) + '\')">Approve</button>' +
+          '<button class="btn btn-sm" onclick="rejectRequest(\'' + safeId(r.id) + '\')">Reject</button></div>' +
+      '</div>';
+    }).join('');
+  }
+  window.approveRequest = function (id) {
+    const r = requests[id];
+    if (!r || r.status !== 'pending' || !isOwner()) return;
+    const e = entries[r.targetId];
+    if (!e) { showToast('That shift is no longer there'); return; }
+    const a = r.after || {};
+    const patch = {};
+    if (a.startedAt) { patch.startedAt = a.startedAt; patch.startedMs = ms(a.startedAt); }
+    if (a.endedAt) { patch.endedAt = a.endedAt; patch.endedMs = ms(a.endedAt); }
+    const next = Object.assign({}, e, patch);
+    if (!(ms(next.endedAt) > ms(next.startedAt))) { showToast('Those times end before they start'); return; }
+    // The hours and pay stamped on it are worked out again, at the rate it
+    // was settled at (or theirs now, if it never was).
+    if (e.rateCents != null || e.status === 'approved' || e.status === 'ok') {
+      const rate = e.rateCents != null ? e.rateCents : rateOf(e.uid);
+      Object.assign(patch, { rateCents: rate, paidHours: hours(paidMs(next)), billableHours: hours(chargeableMs(next)),
+                             costCents: costOf(paidMs(next), rate) });
+    }
+    Object.assign(patch, { changedBy: (me() || {}).uid || '', changedAt: nowIso(), changeRequestId: id });
+    Object.assign(e, patch);
+    write(e.id, patch, 'applying a change');
+    r.status = 'approved';
+    writeRequest(id, { status: 'approved', decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'approving a change');
+    render();
+    if (typeof refreshJobLabour === 'function') refreshJobLabour();
+    showToast('Changed — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
+  };
+  window.rejectRequest = function (id) {
+    const r = requests[id];
+    if (!r || r.status !== 'pending' || !isOwner()) return;
+    const why = prompt('Why not? They see this.');
+    if (why === null) return;
+    r.status = 'rejected';
+    writeRequest(id, { status: 'rejected', decidedReason: why.trim().slice(0, 300), decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'turning down a change');
+    render();
+  };
 
   function wkCard(label, value, sub, cls) {
     return '<div class="wk-card ' + (cls || '') + '">' +
@@ -1345,7 +1494,7 @@
       '<div class="wk-card-sub">' + sub + '</div></div>';
   }
 
-  function shiftRow(e) {
+  function shiftRow(e, askable) {
     const pause = pausedMs(e);
     const when = new Date(e.startedAt);
     return '<tr class="shift-' + e.status + '">' +
@@ -1362,6 +1511,9 @@
           : e.status === 'approved' ? 'approved'
           : e.status === 'rejected' ? 'rejected'
           : 'waiting') + '</span></td>' +
+      (askable ? '<td>' + (running(e) || !e.endedAt ? ''
+        : pendingFor(e.id) ? '<span class="muted">change asked</span>'
+        : '<button class="link-btn" onclick="askChange(\'' + safeId(e.id) + '\')">Ask for a change</button>') + '</td>' : '') +
     '</tr>';
   }
 
@@ -1582,7 +1734,22 @@
     unsub.forEach(fn => { try { fn(); } catch (e) {} });
     unsub = [];
     entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
+    requests = {}; asking = null;
     watchKey = key;
+
+    // Change requests: the owner reads them all (the queue); anyone else only
+    // their own, asked for by name -- the rules refuse a wider read.
+    const onRequests = changes => {
+      changes.forEach(c => {
+        if (c.type === 'removed') delete requests[c.id];
+        else requests[c.id] = Object.assign({ id: c.id }, c.data);
+      });
+      render();
+      if (workerUid && !asking && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
+    };
+    unsub.push(isOwner()
+      ? window.YDDb.watch('changeRequests', onRequests, () => {})
+      : window.YDDb.watchWhere('changeRequests', 'requestedBy', u.uid, onRequests, () => {}));
 
     const onEntries = changes => {
       changes.forEach(c => {

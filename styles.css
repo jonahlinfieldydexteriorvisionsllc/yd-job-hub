@@ -1893,3 +1893,9 @@
   .eq-warranty { display:flex; flex-direction:column; gap:8px; }
   .eq-war-row { padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); cursor:pointer; font-size:14px; }
   .eq-war-row .muted { font-size:12.5px; margin-top:2px; }
+  /* Crew change requests (timeclock.js) */
+  .wk-ask { margin:10px 0; }
+  .wk-req { font-size:13px; padding:6px 0; border-top:1px solid var(--border); }
+  .wk-req.approved b { color:var(--pos); }
+  .wk-req.rejected b { color:var(--neg); }
+  .appr-req { border-left:4px solid var(--accent); }
