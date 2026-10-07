@@ -104,6 +104,14 @@
     },
     hasLines: () => hasLines(),
     hasMaterials: () => est.materials.length > 0,
+    // Notes brought in from elsewhere (a contact's meeting notes, prospects.js);
+    // `auto` lets Claude start the estimate from them as if they had been typed.
+    setNotes(text, auto) {
+      est.notes = String(text || '');
+      render();
+      if (typeof markDirty === 'function') markDirty();
+      if (auto) window.estNotesDone();
+    },
     totalDollars: () => { const r = priced(); return r ? r.totalCents / 100 : 0; },
     book: () => book,
     orderLines: orderLines,
@@ -188,7 +196,8 @@
       (notReady ? '<div class="est-warnbox">Your pricing rules aren’t set up yet, so nothing can be priced. ' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : 'Ask Jonah to set them.') + '</div>' : '') +
 
-      '<div class="field"><span class="label">Notes from the site visit — what you saw and measured, what they want. Claude builds the estimate from these.</span>' +
+      '<div class="field"><span class="label">Notes from the site visit — what you saw and measured, what they want. Claude builds the estimate from these.' +
+        (ro ? '' : ' <button class="link-btn est-today" onclick="estNoteToday()">+ today’s date</button>') + '</span>' +
         '<textarea id="estNotes" rows="5" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" onblur="estNotesDone()" ' +
         'placeholder="16x20 patio off the back door, Tahoe in Cascade, 2 steps down. 40 ft of Belgian edging along the beds (we pick it up). Tear out the old deck, ~12x14. Clay soil.">' +
         esc(est.notes) + '</textarea></div>' +
@@ -600,6 +609,17 @@
   const find = (list, id) => list.find(x => safeId(x.id) === id);
 
   window.estNotesInput = function (v) { est.notes = v; if (typeof markDirty === 'function') markDirty(); };
+  // A later meeting's notes start on a line of their own, dated, so the notes
+  // read as a record of each visit -- and Claude can tell the latest word.
+  window.estNoteToday = function () {
+    const n = el('estNotes');
+    if (!n || n.readOnly) return;
+    const day = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    n.value = (n.value.trim() ? n.value.replace(/\s+$/, '') + '\n\n' : '') + day + ': ';
+    window.estNotesInput(n.value);
+    n.focus();
+    try { n.setSelectionRange(n.value.length, n.value.length); } catch (e) {}
+  };
   window.estMemoInput = function (v) { est.memo = v; if (typeof markDirty === 'function') markDirty(); };
 
   window.estSet = function (field, v) {

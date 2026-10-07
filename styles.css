@@ -1856,3 +1856,13 @@
   .ss-person { min-height:48px; padding:0 16px; border-radius:24px; border:2px solid var(--border-strong); background:var(--surface); color:var(--text); font:inherit; font-size:15px; font-weight:600; cursor:pointer; }
   .ss-person.on { background:var(--brand); border-color:var(--brand); color:#fff; }
   .ss-count { margin:14px 0 4px; font-size:14px; font-weight:600; }
+  /* Site-visit notes: start a dated entry (estimate.js estNoteToday) */
+  .est-today { background:none; border:0; padding:0 0 0 6px; color:var(--brand); font:inherit; font-size:12px; font-weight:700; text-transform:none; letter-spacing:0; text-decoration:underline; cursor:pointer; }
+  /* Contacts: meeting notes (prospects.js) */
+  .pp-meet { margin:8px 0; padding:10px; border-radius:8px; background:var(--surface-2); }
+  .pp-meet textarea { width:100%; font-size:16px; }
+  .pp-meet-item { padding:8px 0; border-top:1px solid var(--border); }
+  .pp-meet-item:first-of-type { border-top:0; }
+  .pp-meet-when { font-size:12px; font-weight:700; color:var(--muted); }
+  .pp-meet-when .link-btn { background:none; border:0; padding:0 0 0 6px; color:var(--neg); font:inherit; font-size:11px; cursor:pointer; text-decoration:underline; }
+  .pp-meet-text { white-space:pre-wrap; font-size:14px; margin-top:2px; }

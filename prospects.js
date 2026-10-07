@@ -162,7 +162,8 @@
       if (wantSvc && (p.services || []).indexOf(wantSvc) === -1) return false;
       if (q) {
         const hay = [p.name, p.note, p.address, p.phone, p.email,
-                     (p.services || []).join(' '), p.contactWhen].join(' ').toLowerCase();
+                     (p.services || []).join(' '), p.contactWhen,
+                     (p.meetings || []).map(m => m.text).join(' ')].join(' ').toLowerCase();
         if (hay.indexOf(q) === -1) return false;
       }
       return true;
@@ -170,11 +171,15 @@
       whenKey(a.contactWhen) - whenKey(b.contactWhen) ||
       (a.name || '').localeCompare(b.name || ''));
 
+    // A note being written keeps its place when the list redraws.
+    const typing = document.activeElement && wrap.contains(document.activeElement) ? document.activeElement.id : null;
     wrap.innerHTML = list.length
       ? list.map(card).join('')
       : '<p class="empty-msg">' + (all.length
           ? 'Nobody matches that.'
           : 'Nobody on the list yet — add the first person above.') + '</p>';
+    const back = typing && el(typing);
+    if (back) { back.focus(); try { back.setSelectionRange(back.value.length, back.value.length); } catch (e) {} }
   }
 
   function card(p) {
@@ -193,7 +198,10 @@
         : '') +
       (p.note ? '<div class="pp-note">' + esc(p.note) + '</div>' : '') +
       contactLine(p) +
+      meetingsHtml(p) +
       '<div class="pp-act">' +
+        '<button class="btn btn-sm" onclick="toggleProspectNotes(\'' + p.id + '\')">📝 Notes' +
+          ((p.meetings || []).length ? ' (' + p.meetings.length + ')' : '') + '</button>' +
         '<select onchange="setProspectStatus(\'' + p.id + '\', this.value)" title="Where this stands">' +
           Object.keys(STATUSES).map(s =>
             '<option value="' + s + '"' + (status === s ? ' selected' : '') + '>' +
@@ -208,6 +216,66 @@
         '<button class="remove-btn" onclick="removeProspect(\'' + p.id + '\')" title="Take off the list">&times;</button>' +
       '</div>' +
     '</div>';
+  }
+
+  // ------------------------------------------------------------ meeting notes
+  //
+  // Jonah (5 Oct 2026): notes from meeting a client go on the iPad now, not
+  // paper. Each is dated, newest first; on an iPad the Pencil writes straight
+  // into the box (Scribble). "Start a bid" takes them along as the bid's
+  // site-visit notes, which Claude builds the estimate from.
+  const notesOpen = {};       // contact id -> its notes are open on its card
+  const drafts = {};          // contact id -> a note being written, not saved yet
+  function meetingsHtml(p) {
+    if (!notesOpen[p.id]) return '';
+    const list = (p.meetings || []).slice().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    const edits = ydCan('contacts', 'change');
+    return '<div class="pp-meet">' +
+      (edits ? '<textarea rows="4" id="ppMeet_' + p.id + '" placeholder="What you talked about, what they want, what you measured…" ' +
+          'oninput="prospectNoteDraft(\'' + p.id + '\', this.value)">' + esc(drafts[p.id] || '') + '</textarea>' +
+        '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="saveProspectNote(\'' + p.id + '\')">Save note</button></div>' : '') +
+      (list.length ? list.map((m, i) => '<div class="pp-meet-item"><div class="pp-meet-when">' + esc(niceDay(m.at)) +
+          (edits ? ' <button class="link-btn" onclick="removeProspectNote(\'' + p.id + '\', \'' + esc(m.at) + '\')">remove</button>' : '') +
+          '</div><div class="pp-meet-text">' + esc(m.text) + '</div></div>').join('')
+        : '<div class="muted">No notes yet.</div>') +
+    '</div>';
+  }
+  function niceDay(iso) {
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  window.toggleProspectNotes = function (id) {
+    notesOpen[id] = !notesOpen[id];
+    render();
+    const box = el('ppMeet_' + id);
+    if (box && notesOpen[id]) box.focus();
+  };
+  window.prospectNoteDraft = function (id, v) { drafts[id] = v; };
+  window.saveProspectNote = function (id) {
+    const p = people[id];
+    const text = String(drafts[id] || '').trim();
+    if (!p || !text) { showToast('Write the note first'); return; }
+    const meetings = (p.meetings || []).concat([{ at: new Date().toISOString(), text: text }]);
+    p.meetings = meetings;
+    delete drafts[id];
+    // A note means they were talked to.
+    const patch = { meetings: meetings };
+    if ((p.status || 'to-contact') === 'to-contact') { p.status = 'contacted'; patch.status = 'contacted'; }
+    render();
+    write(id, patch, 'a note for ' + p.name);
+    showToast('Note saved');
+  };
+  window.removeProspectNote = function (id, at) {
+    const p = people[id];
+    if (!p || !confirm('Remove this note?')) return;
+    p.meetings = (p.meetings || []).filter(m => m.at !== at);
+    render();
+    write(id, { meetings: p.meetings }, 'a note for ' + p.name);
+  };
+  // The notes as the bid's site-visit notes: oldest first, each with its day.
+  function notesForBid(p) {
+    return (p.meetings || []).slice().sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))
+      .map(m => new Date(m.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ': ' + m.text).join('\n\n');
   }
 
   // Phone and email are tappable -- the point of the list is making the call.
@@ -375,9 +443,14 @@
       if (typeof renderServiceTypes === 'function') renderServiceTypes();
     }
     if (typeof markDirty === 'function') markDirty();
+    // The meeting notes become the bid's site-visit notes, and Claude starts
+    // the estimate from them by itself (estimate.js, if switched on).
+    const notes = notesForBid(p);
+    if (notes && window.YDEstimate && window.YDEstimate.setNotes) window.YDEstimate.setNotes(notes, true);
     // A new job starts as a bid (app.js isBidStatus): on the Bids board, not
     // in the job list, until it is booked.
-    showToast(p.name + ' started as a bid — write your site-visit notes under Estimate. Still on the contact list until you remove them');
+    showToast(p.name + ' started as a bid — ' + (notes ? 'your notes are on its estimate' : 'write your site-visit notes under Estimate') +
+      '. Still on the contact list until you remove them');
   };
 
   window.prospectToSnow = function (id) {
