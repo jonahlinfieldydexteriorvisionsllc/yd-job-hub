@@ -255,7 +255,8 @@ def _quickbooks(request, path, headers):
     # owner can give an admin.
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
-    billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice")
+    billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
+                       "/qb/estimate", "/qb/estimate-status")
     try:
         uid = _caller(request, "billing", "change") if billing else _caller(request)
     except PermissionError as e:
@@ -275,6 +276,10 @@ def _quickbooks(request, path, headers):
             result = qb.items()
         elif path == "/qb/invoice":
             result = qb.create_invoice(body)
+        elif path == "/qb/estimate":
+            result = qb.save_estimate(body)
+        elif path == "/qb/estimate-status":
+            result = qb.estimate_status(body)
         else:
             return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     except PermissionError as e:
@@ -486,6 +491,42 @@ def _followup(request, path, headers):
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
+# ---------------------------------------------------------------- estimates
+#
+# "Build with Claude" on the Job tab (estimates.py): the owner's notes and the
+# price book in, estimate lines out. Writes nothing -- the lines go back to the
+# form to be checked -- so it is for whoever may change jobs, under the cap.
+
+
+def _estimate(request, path, headers):
+    import estimates
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/estimate/draft":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request, "jobs", "change")
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    try:
+        day = _check_and_count_usage(uid)
+    except RuntimeError as e:
+        return (json.dumps({"error": str(e)}), 429, json_headers)
+    try:
+        result, usage = estimates.draft(_claude(), request.get_json(silent=True) or {})
+    except anthropic.RateLimitError:
+        return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("estimate draft failed:", e)
+        return (json.dumps({"error": "The estimate could not be built. Try again."}), 502, json_headers)
+    if usage is not None:
+        _record_spend(day, "estimate", usage)
+    return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -509,6 +550,8 @@ def claude(request):
         return _receipts(request, path, headers)
     if path.startswith("/followup"):
         return _followup(request, path, headers)
+    if path.startswith("/estimate"):
+        return _estimate(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

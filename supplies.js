@@ -975,7 +975,9 @@
     if (seesPrices()) unsubs.push(window.YDDb.watch('supplyPrices', take(prices, false), () => redrawIfVisible()));
   }
 
-  window.YDSupplies = { render: render };
+  // parseTable is shared with the estimate price book (estimate.js), which
+  // takes the same pasted-from-Excel sheets.
+  window.YDSupplies = { render: render, parseTable: parseTable, parseCents: parseCents };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

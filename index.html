@@ -171,6 +171,15 @@
       </div>
     </div>
 
+    <!-- The estimate: built here (Claude prices it from the price book) and
+         sent to the customer through QuickBooks. estimate.js -->
+    <div class="section" id="estimateSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Estimate</span>
+      </div>
+      <div class="section-body" id="estimateWrap"></div>
+    </div>
+
     <div class="cols2">
       <div class="section">
         <div class="section-head">
@@ -707,6 +716,16 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="pbModal">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-head">
+      <h2>Price book</h2>
+      <button class="modal-close" onclick="closePriceBook()">&times;</button>
+    </div>
+    <div class="modal-body" id="pbBody"></div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="qbModal">
   <div class="modal" style="max-width:760px">
     <div class="modal-head">
@@ -882,6 +901,7 @@
 <script src="./boards.js"></script>
 <script src="./calendar.js"></script>
 <script src="./supplies.js"></script>
+<script src="./estimate.js"></script>
 <script src="./receipts.js"></script>
 <script src="./paychecks.js"></script>
 <script src="./notify.js"></script>

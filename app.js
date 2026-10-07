@@ -63,8 +63,9 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // ('' for none, never null -- a null is left out of the save, and the cloud
 // copy, which merges, would keep the old colour).
 // followUps (the follow-up emails drafted for a bid) is written from the Bids
-// board the same way, so it rides along with the form too.
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps'];
+// board the same way, and qbEstimate (what QuickBooks holds of the estimate)
+// by the server and estimate.js, so both ride along with the form too.
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -753,19 +754,22 @@ function applyClientBlock(data) {
 
 function getProposalTotal(d) { return parseMoney(d.totalPrice || d.total || d.jobPrice || 0); }
 function getCombinedProposalTotal() { return proposals.reduce((s, p) => s + getProposalTotal(p.data), 0); }
+// An estimate built in Job Hub sets the price when it has lines; an imported
+// proposal does otherwise.
+const hasEstimate = () => !!(window.YDEstimate && window.YDEstimate.hasLines());
 function syncJobPriceFromProposals() {
   if (manualJobPrice) return;
-  const total = getCombinedProposalTotal();
+  const total = hasEstimate() ? window.YDEstimate.totalDollars() : getCombinedProposalTotal();
   if (total > 0) { baseJobPrice = total; document.getElementById('jobPrice').value = (baseJobPrice + getAdditionalCostsTotal()).toFixed(2); updateJobPriceSourceTag(); updateSummary(); }
 }
 function onJobPriceManualEdit() { manualJobPrice = true; baseJobPrice = parseMoney(document.getElementById('jobPrice').value) - getAdditionalCostsTotal(); updateJobPriceSourceTag(); }
 function updateJobPriceSourceTag() {
   const tag = document.getElementById('jobPriceSourceTag');
   if (manualJobPrice) { tag.textContent = '(manual)'; tag.style.color = 'var(--accent-dark)'; }
-  else if (proposals.length) { tag.textContent = '(auto)'; tag.style.color = 'var(--pos)'; }
+  else if (proposals.length || hasEstimate()) { tag.textContent = hasEstimate() ? '(from estimate)' : '(auto)'; tag.style.color = 'var(--pos)'; }
   else tag.textContent = '';
 }
-function resetJobPriceToAuto() { if (!proposals.length) return; manualJobPrice = false; syncJobPriceFromProposals(); markDirty(); }
+function resetJobPriceToAuto() { if (!proposals.length && !hasEstimate()) return; manualJobPrice = false; syncJobPriceFromProposals(); markDirty(); }
 function removeProposal(propId) {
   if (!confirm('Remove this proposal? Its imported order items will also be removed.')) return;
   proposals = proposals.filter(p => p.id !== propId);
@@ -1195,6 +1199,8 @@ function getJobData() {
   d.proposals = proposals; d.payments = payments; d.additionalCosts = additionalCosts;
   d.manualJobPrice = manualJobPrice; d.baseJobPrice = baseJobPrice; d.jobStatus = jobStatus;
   BOARD_FIELDS.forEach(f => { if (boardFields[f] != null) d[f] = boardFields[f]; });
+  // The estimate being built on this job (estimate.js), kept with it like the materials.
+  if (window.YDEstimate) d.estimate = window.YDEstimate.get();
   d.lastModified = new Date().toISOString();
   return d;
 }
@@ -1221,6 +1227,7 @@ function loadJobData(d) {
   jobStatus = normStatus(d.jobStatus, d);
   boardFields = {};
   BOARD_FIELDS.forEach(f => { if (d[f] != null) boardFields[f] = d[f]; });
+  if (window.YDEstimate) window.YDEstimate.load(d.estimate || null);
 
   syncStatusSelect(); updateJobHeadBadge();
   renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
@@ -1428,6 +1435,7 @@ function clearJobForm() {
   document.getElementById('taxable').checked = false;
   loadedQuoteDate = '';
   document.getElementById('quoteDate').value = todayMD();
+  if (window.YDEstimate) window.YDEstimate.load(null);
   syncStatusSelect(); updateJobHeadBadge();
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   renderProposal(); renderOrderList(); updateSummary();

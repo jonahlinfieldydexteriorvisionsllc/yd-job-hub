@@ -341,13 +341,16 @@ def _access_token(force_refresh=False):
     return fresh["accessToken"], fresh
 
 
-def _call(method, path, params=None, body=None, request_id=None):
+def _call(method, path, params=None, body=None, request_id=None, empty_body=False):
     """One accounting API call against the connected company.
 
     It fetches its own token rather than being handed one, so that a 401 can be
     answered properly: an access token can be revoked or invalidated before its
     hour is up, and the right response is to refresh once and try again. Only a
     second refusal means the connection itself needs remaking.
+
+    empty_body is for the "send" calls (email an estimate), which Intuit wants
+    as an empty octet-stream POST rather than JSON.
     """
     for second_try in (False, True):
         token, tokens = _access_token(force_refresh=second_try)
@@ -359,17 +362,18 @@ def _call(method, path, params=None, body=None, request_id=None):
         query["minorversion"] = MINOR_VERSION
         if request_id:
             query["requestid"] = request_id
+        payload = {"data": b""} if empty_body else {"json": body}
         resp = _send(
             method,
             url,
             params=query,
-            json=body,
             headers={
                 "Authorization": "Bearer %s" % token,
                 "Accept": "application/json",
-                "Content-Type": "application/json",
+                "Content-Type": "application/octet-stream" if empty_body else "application/json",
             },
             timeout=40,
+            **payload,
         )
         if resp.status_code == 401 and not second_try:
             print("quickbooks %s %s -> 401 intuit_tid=%s, refreshing and trying once more"
@@ -558,16 +562,265 @@ def customers():
 
 
 def items():
-    """Products and services, so invoice lines can point at the right one."""
-    query = "select Id, Name, Type from Item where Active = true maxresults 200"
-    data = _call("GET", "query", params={"query": query})
-    rows = (data.get("QueryResponse") or {}).get("Item") or []
+    """Products and services, so invoice lines can point at the right one --
+    and, with their prices, so the estimate price book can be started from
+    them."""
+    out, start = [], 1
+    while True:
+        query = ("select Id, Name, Type, UnitPrice, Description from Item "
+                 "where Active = true startposition %d maxresults 200" % start)
+        data = _call("GET", "query", params={"query": query})
+        rows = (data.get("QueryResponse") or {}).get("Item") or []
+        out += [{"id": i.get("Id"), "name": i.get("Name", ""), "type": i.get("Type", ""),
+                 "price": i.get("UnitPrice"), "description": i.get("Description", "")}
+                for i in rows]
+        if len(rows) < 200:
+            break
+        start += 200
+    return {"items": out}
+
+
+# ---------------------------------------------------------------- estimates
+#
+# An estimate is built in Job Hub (estimate.js, priced from the price book) and
+# QuickBooks is what the customer gets: it numbers the estimate, emails it, and
+# records whether they accepted. Invoicing and payment then happen in
+# QuickBooks from that estimate.
+#
+# The app sends the estimate as it is on screen -- the form may not have
+# reached the database yet -- and this side finds or makes the customer and
+# the products, so nothing has to be set up in QuickBooks first. What comes
+# back (estimate id, number, customer) is written onto the job here AND by the
+# app, so a dropped connection on the way back cannot lose it and send a
+# second estimate next time.
+
+QB_APP = {"sandbox": "https://app.sandbox.qbo.intuit.com", "production": "https://qbo.intuit.com"}
+GENERIC_ITEM = "Services"       # for lines that are not in the price book
+MEMO_MAX = 1000                 # Intuit's limit on the message to the customer
+
+
+def _quote(s):
+    """A value inside a QuickBooks query: backslash and apostrophe escaped."""
+    return str(s).replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _query_one(entity, where):
+    data = _call("GET", "query", params={"query": "select * from %s where %s" % (entity, where)})
+    rows = (data.get("QueryResponse") or {}).get(entity) or []
+    return rows[0] if rows else None
+
+
+def _qb_name(s, limit=100):
+    # QuickBooks names may not contain a colon (it means "sub-item of") or tab.
+    return " ".join(str(s or "").replace(":", "-").replace("\t", " ").split())[:limit]
+
+
+def _customer_for(c, known_id=""):
+    """The QuickBooks customer for this job: the one used last time, one with
+    exactly this name, or a new one made from the job's details."""
+    if known_id:
+        found = _query_one("Customer", "Id = '%s'" % _quote(known_id))
+        if found and found.get("Active", True):
+            return found["Id"]
+    name = _qb_name(c.get("name"), 500)
+    if not name:
+        raise RuntimeError("The job has no customer name")
+    found = _query_one("Customer", "DisplayName = '%s'" % _quote(name))
+    if found:
+        return found["Id"]
+    parts = name.split()
+    new = {"DisplayName": name}
+    if len(parts) >= 2:
+        new["GivenName"], new["FamilyName"] = _qb_name(parts[0], 25), _qb_name(" ".join(parts[1:]), 25)
+    if c.get("email"):
+        new["PrimaryEmailAddr"] = {"Address": str(c["email"]).strip()[:100]}
+    if c.get("phone"):
+        new["PrimaryPhone"] = {"FreeFormNumber": str(c["phone"]).strip()[:30]}
+    addr = _address(c)
+    if addr:
+        new["BillAddr"] = addr
+    made = _call("POST", "customer", body=new, request_id=hashlib.sha1(("cust|" + name).encode()).hexdigest())
+    return (made.get("Customer") or {})["Id"]
+
+
+def _address(c):
+    addr = {k: str(c.get(f) or "").strip()[:500] for k, f in
+            (("Line1", "address"), ("City", "city"), ("CountrySubDivisionCode", "state"), ("PostalCode", "zip"))}
+    return {k: v for k, v in addr.items() if v} or None
+
+
+_income = {"id": None}
+
+
+def _income_account():
+    """Where new service products book their income: an income account named
+    for services if there is one, otherwise the first income account."""
+    if _income["id"]:
+        return _income["id"]
+    data = _call("GET", "query", params={"query":
+                 "select Id, Name from Account where AccountType = 'Income' and Active = true"})
+    rows = (data.get("QueryResponse") or {}).get("Account") or []
+    if not rows:
+        raise RuntimeError("QuickBooks has no income account to put new products in")
+    pick = next((a for a in rows if "service" in a.get("Name", "").lower()), rows[0])
+    _income["id"] = pick["Id"]
+    return pick["Id"]
+
+
+def _item_named(name, price=None, description=""):
+    """The QuickBooks product called this, made as a service if it is missing."""
+    name = _qb_name(name)
+    found = _query_one("Item", "Name = '%s'" % _quote(name))
+    if found:
+        return found["Id"], found.get("Name", name)
+    new = {"Name": name, "Type": "Service", "IncomeAccountRef": {"value": _income_account()}}
+    if price is not None:
+        new["UnitPrice"] = price
+    if description:
+        new["Description"] = str(description)[:4000]
+    made = (_call("POST", "item", body=new, request_id=hashlib.sha1(("item|" + name).encode()).hexdigest())
+            .get("Item") or {})
+    return made["Id"], made.get("Name", name)
+
+
+def _price_item(price_id, cache):
+    """A price-book entry's QuickBooks product, remembered on the entry."""
+    if price_id in cache:
+        return cache[price_id]
+    ref = _db().collection("priceBook").document(price_id)
+    snap = ref.get()
+    entry = snap.to_dict() if snap.exists else None
+    if not entry:
+        cache[price_id] = None
+        return None
+    item_id = entry.get("qbItemId")
+    if item_id and _query_one("Item", "Id = '%s'" % _quote(item_id)):
+        cache[price_id] = item_id
+        return item_id
+    cents = entry.get("priceCents")
+    item_id, item_name = _item_named(entry.get("name"), round(cents / 100, 2) if isinstance(cents, int) else None,
+                                     entry.get("description", ""))
+    ref.set({"qbItemId": item_id, "qbItemName": item_name}, merge=True)
+    cache[price_id] = item_id
+    return item_id
+
+
+def _estimate_lines(lines, taxable):
+    out, cache, generic = [], {}, None
+    for ln in lines:
+        if ln.get("kind") == "section":
+            title = str(ln.get("description") or "").strip()
+            if title:
+                out.append({"DetailType": "DescriptionOnly", "Description": title.upper()[:4000],
+                            "DescriptionLineDetail": {}})
+            continue
+        qty = round(float(ln.get("qty") or 0), 4)
+        rate = round(int(ln.get("rateCents") or 0) / 100, 2)
+        item_id = _price_item(str(ln["priceId"]), cache) if ln.get("priceId") else None
+        if not item_id:
+            if generic is None:
+                generic = _item_named(GENERIC_ITEM)[0]
+            item_id = generic
+        desc = str(ln.get("description") or ln.get("name") or "").strip()
+        unit = str(ln.get("unit") or "").strip()
+        if unit and unit.lower() not in ("each", "ea", "lump sum", "ls", "job"):
+            desc += " (%s %s)" % (("%g" % qty), unit)
+        detail = {"ItemRef": {"value": item_id}, "Qty": qty, "UnitPrice": rate}
+        if taxable:
+            detail["TaxCodeRef"] = {"value": "TAX"}
+        out.append({"DetailType": "SalesItemLineDetail", "Amount": round(qty * rate, 2),
+                    "Description": desc[:4000], "SalesItemLineDetail": detail})
+    if not any(l["DetailType"] == "SalesItemLineDetail" for l in out):
+        raise RuntimeError("The estimate has no priced lines")
+    return out
+
+
+def save_estimate(body):
+    """Create or update the job's estimate in QuickBooks; email it when asked.
+
+    body: jobId, customer {name, email, phone, address, city, state, zip},
+    lines [{kind, priceId, name, description, qty, unit, rateCents}], memo,
+    taxable, estimateId / customerId (from last time), email (true to send).
+    """
+    job_id = str(body.get("jobId") or "").strip()
+    if not job_id or "/" in job_id:
+        raise RuntimeError("Save the job first")
+    c = body.get("customer") or {}
+    customer_id = _customer_for(c, str(body.get("customerId") or ""))
+    lines = _estimate_lines(body.get("lines") or [], bool(body.get("taxable")))
+
+    memo = str(body.get("memo") or "").strip()
+    if len(memo) > MEMO_MAX:
+        # Too long for the message box: it goes in as the estimate's first
+        # line instead, where the full text fits.
+        lines.insert(0, {"DetailType": "DescriptionOnly", "Description": memo[:4000], "DescriptionLineDetail": {}})
+        memo = ""
+    est = {"CustomerRef": {"value": customer_id}, "Line": lines,
+           "PrivateNote": "Job Hub job %s" % job_id}
+    if memo:
+        est["CustomerMemo"] = {"value": memo}
+    email = str(c.get("email") or "").strip()
+    if email:
+        est["BillEmail"] = {"Address": email[:100]}
+    site = _address(c)
+    if site:
+        est["ShipAddr"] = site
+
+    existing = None
+    if body.get("estimateId"):
+        existing = _query_one("Estimate", "Id = '%s'" % _quote(body["estimateId"]))
+    if existing and existing.get("TxnStatus") in ("Closed", "Converted"):
+        raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
+                           % existing["TxnStatus"].lower())
+    if existing:
+        est.update({"Id": existing["Id"], "SyncToken": existing["SyncToken"], "sparse": False,
+                    "TxnDate": existing.get("TxnDate")})
+        saved = _call("POST", "estimate", body=est)
+    else:
+        key = hashlib.sha1(("est|" + job_id + json.dumps(est, sort_keys=True)).encode()).hexdigest()
+        saved = _call("POST", "estimate", body=est, request_id=key)
+    e = saved.get("Estimate") or {}
+
+    sent_to = ""
+    if body.get("email"):
+        if not email:
+            raise RuntimeError("Saved in QuickBooks, but the job has no email to send it to")
+        sent = _call("POST", "estimate/%s/send" % e["Id"], params={"sendTo": email}, empty_body=True)
+        e = sent.get("Estimate") or e
+        sent_to = email
+
+    out = _estimate_record(e, customer_id)
+    if sent_to:
+        out.update(sentAt=_now().isoformat(), sentTo=sent_to)
+    _db().collection("jobs").document(job_id).set({"qbEstimate": out}, merge=True)
+    return out
+
+
+def _estimate_record(e, customer_id=None):
+    env = _env("QB_ENV", "sandbox")
     return {
-        "items": [
-            {"id": i.get("Id"), "name": i.get("Name", ""), "type": i.get("Type", "")}
-            for i in rows
-        ]
+        "id": e.get("Id"), "docNumber": e.get("DocNumber"),
+        "customerId": customer_id or (e.get("CustomerRef") or {}).get("value"),
+        "total": e.get("TotalAmt"), "status": e.get("TxnStatus") or "Pending",
+        "emailStatus": e.get("EmailStatus"), "env": env,
+        "link": "%s/app/estimate?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), e.get("Id")),
+        "syncedAt": _now().isoformat(),
     }
+
+
+def estimate_status(body):
+    """Where the estimate stands in QuickBooks now: Pending, Accepted,
+    Closed (made into an invoice), Rejected."""
+    est_id = str(body.get("estimateId") or "").strip()
+    if not est_id:
+        raise RuntimeError("Which estimate?")
+    e = _query_one("Estimate", "Id = '%s'" % _quote(est_id))
+    if not e:
+        return {"missing": True}
+    out = _estimate_record(e)
+    out["acceptedBy"] = e.get("AcceptedBy")
+    out["acceptedDate"] = e.get("AcceptedDate")
+    return out
 
 
 def create_invoice(body):

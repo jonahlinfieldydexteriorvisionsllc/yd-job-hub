@@ -137,6 +137,9 @@ service cloud.firestore {
     match /jobs/{docId}      { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
     match /expenses/{docId}  { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
     match /estimates/{docId} { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    // What the business charges, one entry per priced thing (estimate.js).
+    // Prices -- so whoever deals with jobs, never crew.
+    match /priceBook/{docId} { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
     match /contacts/{docId}  { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
     match /prospects/{docId} { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
     match /equipment/{docId} { allow read: if canSee('equipment'); allow write: if canChange('equipment'); }
