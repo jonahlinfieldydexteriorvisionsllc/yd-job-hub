@@ -1097,9 +1097,43 @@
   // parseTable is shared with the estimate price book (estimate.js), which
   // takes the same pasted-from-Excel sheets. catalog() is what estimates are
   // priced from (pricing.js); 'yd-supplies' says it changed.
+  // A receipt's supplier among ours: the same name, one name inside the
+  // other ("The Home Depot"), or the initials ("Midwest Decorative Stone" is
+  // MDS). Then its item: by the supplier's item number, else by name (or an
+  // "also called" name), punctuation ignored. With no known supplier nothing
+  // is matched -- a name alone is too loose to price by. (receipts.js)
+  function vendorFor(name) {
+    const k = key(name);
+    if (!k) return null;
+    const words = norm(name).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/)
+      .filter(w => w && ['the', 'inc', 'llc', 'co', 'company', 'corp'].indexOf(w) === -1);
+    const initials = words.map(w => w[0]).join('');
+    const vs = Object.values(vendors);
+    return vs.find(v => key(v.name) === k) ||
+      vs.find(v => { const vk = key(v.name); return vk.length >= 4 && (k.indexOf(vk) !== -1 || vk.indexOf(k) !== -1); }) ||
+      (initials.length >= 2 ? vs.find(v => key(v.name) === initials) : null) || null;
+  }
+  function findSupply(vendorName, sku, name) {
+    const v = vendorFor(vendorName);
+    if (!v) return null;
+    const list = Object.values(items).filter(it => it.vendorId === v.id);
+    const names = it => [it.name].concat(String(it.also || '').split(/[;,]/)).map(key).filter(Boolean);
+    return (sku && list.find(it => it.sku && key(it.sku) === key(sku))) ||
+      (name && list.find(it => names(it).indexOf(key(name)) !== -1)) || null;
+  }
+  // A new price for one item, filed the way the price list files it (a
+  // newer year moves the old price into its history). Not awaited.
+  function setPrice(id, cents, year) {
+    const rec = applyPrice(prices[id], { cents: cents, year: year || thisYear() });
+    prices[id] = rec;
+    announce();
+    return Promise.resolve(window.YDDb.put('supplyPrices', id, rec));
+  }
+
   window.YDSupplies = {
     render: render, parseTable: parseTable, parseCents: parseCents,
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
+    findSupply: findSupply, setPrice: setPrice,
   };
 
   let authKey = null;

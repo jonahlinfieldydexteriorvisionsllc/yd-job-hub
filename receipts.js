@@ -208,7 +208,58 @@
     showToast(add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
       splits[splits.length - 1].jobName + (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : ''));
     redraw(true);
+    // After the toast has had its moment: a question about the price list.
+    setTimeout(() => offerPrices(r, idxs), 400);
   };
+
+  // ------------------------------------------------- the price list follows
+  //
+  // A line on a receipt that is one of our supplies (its supplier's item
+  // number, or its name) and cost something different from the price list
+  // offers to update the list -- Jonah (6 Oct 2026): ask each time. What the
+  // estimates are priced from then stays what he actually pays.
+  const wordsOf = s => ' ' + String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ')
+    .map(w => /(x|ch|sh|ss)es$/.test(w) ? w.slice(0, -2) : /[^s]s$/.test(w) ? w.slice(0, -1) : w).join(' ') + ' ';
+  const EACH = [' ', ' each ', ' ea ', ' unit ', ' piece ', ' pc '];
+  function priceChanges(r, idxs) {
+    const S = window.YDSupplies;
+    if (!S || !S.findSupply || !ydCan('supplies', 'change')) return [];
+    const cat = S.catalog();
+    const year = /^\d{4}/.test(r.date || '') ? parseInt(r.date, 10) : new Date().getFullYear();
+    const out = [], seen = {};
+    idxs.forEach(i => {
+      const l = (r.lines || [])[i] || {};
+      const it = S.findSupply(r.vendor, l.itemNo, l.name);
+      if (!it || seen[it.id]) return;
+      const pr = cat.prices[it.id] || {};
+      const qty = parseFloat(l.qty);
+      const each = l.unitCents > 0 ? l.unitCents : (qty > 0 && l.cents > 0 ? Math.round(l.cents / qty) : null);
+      if (!(each > 0) || each === pr.cents) return;
+      // A unit on the receipt that isn't what the price is per (a pallet of
+      // something priced by the sq ft) would put a nonsense price in.
+      const per = String(pr.per || it.unit || '');
+      const got = wordsOf(l.unit), want = wordsOf(per);
+      const same = got === want || (EACH.indexOf(got) !== -1 && EACH.indexOf(want) !== -1);
+      if (l.unit && !same) return;
+      seen[it.id] = true;
+      out.push({ id: it.id, name: it.name, from: typeof pr.cents === 'number' ? pr.cents : null, to: each,
+                 per: per, year: year, unsure: !l.unit && EACH.indexOf(want) === -1 });
+    });
+    return out;
+  }
+  function offerPrices(r, idxs) {
+    const ch = priceChanges(r, idxs);
+    if (!ch.length) return;
+    const lines = ch.map(c => '• ' + c.name + ': ' + (c.from === null ? 'no price' : money(c.from)) + ' → ' + money(c.to) +
+      (c.per ? ' a ' + c.per : '') + (c.unsure ? ' (the receipt doesn’t say per what — check)' : ''));
+    if (!confirm('Update the price list from this ' + (r.vendor || '') + ' receipt?\n\n' + lines.join('\n') +
+        '\n\nEstimates are priced from these.')) return;
+    let failed = 0;
+    ch.forEach(c => window.YDSupplies.setPrice(c.id, c.to, c.year).catch(e => {
+      if (!failed++) showToast(e && e.code === 'permission-denied' ? 'Price list not changed — not allowed' : 'Price list change not on the server yet');
+    }));
+    showToast(ch.length + ' price' + (ch.length === 1 ? '' : 's') + ' updated');
+  }
 
   window.rcUndo = function (rid, sid) {
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
