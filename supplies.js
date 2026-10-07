@@ -294,8 +294,10 @@
   function linksHtml(v) {
     const map = v.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(v.address) : '';
     const tel = v.phone ? 'tel:' + String(v.phone).replace(/[^0-9+]/g, '') : '';
+    const mail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email || '') ? 'mailto:' + v.email : '';
     return (map ? '<a class="btn btn-sm" href="' + map + '" target="_blank" rel="noopener">📍 Directions</a>' : '') +
-      (tel ? '<a class="btn btn-sm" href="' + esc(tel) + '">📞 Call</a>' : '');
+      (tel ? '<a class="btn btn-sm" href="' + esc(tel) + '">📞 Call</a>' : '') +
+      (mail ? '<a class="btn btn-sm" href="' + esc(mail) + '">✉️ Email</a>' : '');
   }
 
   function groupHeadHtml(v, n) {
@@ -380,6 +382,8 @@
           field('Phone', 'svPhone', v.phone, '608-…') +
           field('Hours', 'svHours', v.hours, 'e.g. Mon–Sat 7–5') +
         '</div>' +
+        // Where an order goes: Materials to Order writes the email (app.js).
+        field('Email for orders', 'svEmail', v.email, 'orders@…') +
         '<div class="field"><span class="label">Notes</span><textarea id="svNotes" rows="2" ' +
           'placeholder="Account under YD Exterior, ask for Dave, yard entrance on the side road">' + esc(v.notes || '') + '</textarea></div>' +
         actions(id ? 'supRemove(\'vendor\', \'' + safeId(id) + '\')' : ''));
@@ -469,6 +473,7 @@
       if (!name) { showToast('Give the supplier a name'); return; }
       const id = editing.id || newId('v');
       const rec = { name: name, address: val('svAddr'), phone: val('svPhone'), hours: val('svHours'),
+                    email: val('svEmail').toLowerCase(),
                     notes: (el('svNotes').value || '').trim(), updatedAt: now };
       vendors[id] = Object.assign({ id: id }, rec);
       write('vendors', id, rec);

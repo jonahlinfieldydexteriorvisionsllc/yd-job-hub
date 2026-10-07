@@ -987,18 +987,35 @@ function linkOrderItem(id, sid) {
   renderOrderList();
 }
 // One supplier's part of the order as text, to paste into an email or a text.
-function copySupplierOrder(vid) {
+function supplierOrder(vid) {
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
   const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid)
     .map(it => (it.quantity ? it.quantity + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : ''));
-  if (!lines.length) { showToast('Nothing left to order there'); return; }
-  const v = (cat.vendors || {})[vid];
+  const v = (cat.vendors || {})[vid] || {};
   const f = id => ((document.getElementById(id) || {}).value || '').trim();
-  const where = [f('address'), f('city')].filter(Boolean).join(', ');
-  const text = 'Order' + (v && v.name ? ' for ' + v.name : '') + (where ? ' — job at ' + where : '') + '\n' + lines.join('\n');
+  const where = [f('address'), [f('city'), f('state')].filter(Boolean).join(', ')].filter(Boolean).join(', ');
+  return { lines: lines, vendor: v, where: where };
+}
+function copySupplierOrder(vid) {
+  const o = supplierOrder(vid);
+  if (!o.lines.length) { showToast('Nothing left to order there'); return; }
+  const text = 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + (o.where ? ' — job at ' + o.where : '') + '\n' + o.lines.join('\n');
   const done = () => showToast('Copied — paste it into an email or a text');
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => prompt('Copy this:', text));
   else prompt('Copy this:', text);
+}
+// The order as an email to the supplier's order address (Supplies → Edit
+// supplier), opened in the phone's or computer's mail app to read and send.
+// Plain code: nothing for Claude to do here.
+function emailSupplierOrder(vid) {
+  const o = supplierOrder(vid);
+  if (!o.lines.length) { showToast('Nothing left to order there'); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.vendor.email || '')) { showToast('Add their order email first: Supplies → the supplier → Edit supplier'); return; }
+  const subject = 'Order' + (o.where ? ' — ' + o.where : '') + ' — YD Exterior Visions';
+  const body = 'Hi,\n\nI’d like to order the following' + (o.where ? ' for a job at ' + o.where : '') + ':\n\n' +
+    o.lines.map(l => '• ' + l).join('\n') + '\n\nPlease let me know the total and when it can be ' +
+    'delivered or picked up.\n\nThanks,\nJonah\nYD Exterior Visions';
+  location.href = 'mailto:' + encodeURIComponent(o.vendor.email) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 function orderVendor(it, cat) {
   if (it.vendorId) return it.vendorId;
@@ -1067,7 +1084,9 @@ function renderOrderList() {
     const left = list.filter(it => !it.ordered).length;
     return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
         '<span class="muted">' + left + ' to order</span>' +
-        (v && left ? '<button class="link-btn" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' : '') + '</div>' : '') +
+        (v && left ? '<button class="link-btn" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' +
+          ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + esc(v) + '\')">✉️ Email the order</button>' : '') : '') +
+        '</div>' : '') +
       list.map(row).join('');
   }).join('') +
     (prices && (sum || unpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney(sum / 100) + '</b> before tax' +
