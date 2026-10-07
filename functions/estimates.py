@@ -32,6 +32,7 @@ with the job.
 """
 
 import json
+import re
 
 import digest as dg
 
@@ -135,46 +136,62 @@ CATEGORY_NAMES = {
     "bagged": "Bagged goods", "planting": "Planting package", "plant": "Plants", "dumpster": "Dumpsters",
     "hardware": "Hardware", "rental": "Rentals", "other": "Other",
 }
+# Bought to work with, not to install (pricing.js NOT_FOR_ESTIMATES): never
+# sent -- the whole tools section of the supplier's book was a third of a
+# long list Claude read on every first message.
+NOT_FOR_ESTIMATES = {"tools"}
+NOTE_CHARS = 80                 # what an item's notes may add to its line
+# Said once by the "special order" flag; the book's own wording of it in the
+# notes is dropped rather than read again on every line.
+SPECIAL_WORDING = re.compile(r"\(?\*\*[^;.)]*\)?|\bspecial[- ]order\b[^;.]*[;.]?\s*", re.I)
+
+
+def _short_notes(it):
+    text = str(it.get("notes") or "")
+    if it.get("specialOrder"):
+        text = SPECIAL_WORDING.sub("", text)
+    text = re.sub(r"\s*;\s*;+", ";", text).strip(" ;.")
+    return text[:NOTE_CHARS]
 
 
 # ------------------------------------------------------------- what it reads
 
 def catalogue():
-    """Supplies as Claude sees them: what, from whom, in what unit -- no costs.
-    Returns (text, ids)."""
+    """Supplies as Claude sees them: what, in what unit -- no costs, no
+    tools, one short line each. Returns (text, ids)."""
     db = dg._db()
-    vendors = {s.id: (s.to_dict() or {}).get("name", "") for s in db.collection("vendors").stream()}
     per = {}
     for s in db.collection("supplyPrices").stream():
         per[s.id] = str((s.to_dict() or {}).get("per") or "")
     rows, ids = [], set()
     items = [(s.id, s.to_dict() or {}) for s in db.collection("supplies").stream()]
+    items = [kv for kv in items if kv[1].get("name") and kv[1].get("category") not in NOT_FOR_ESTIMATES]
     items.sort(key=lambda kv: (CATEGORY_NAMES.get(kv[1].get("category"), "~"), str(kv[1].get("name", ""))))
     group = None
     for sid, it in items:
-        if not it.get("name"):
-            continue
         ids.add(sid)
         cat = CATEGORY_NAMES.get(it.get("category"), "Not sorted yet")
         if cat != group:
-            rows.append("\n%s:" % cat)
+            rows.append("\n%s (id | name | takeoff unit | notes):" % cat)
             group = cat
         try:
             coverage = float(it.get("coverage") or 0)
         except (TypeError, ValueError):
             coverage = 0
         unit = (it.get("takeoffUnit") or "") if coverage > 0 else (per.get(sid) or it.get("unit") or "")
-        row = "- id %s | %s | takeoff in %s" % (sid, it["name"], unit or "each")
+        row = "%s | %s | %s" % (sid, it["name"], unit or "each")
         if coverage > 0:
-            row += " (bought by the %s, one covers %g %s)" % (per.get(sid) or it.get("unit") or "unit", coverage, it.get("takeoffUnit") or "")
-        if vendors.get(it.get("vendorId")):
-            row += " | from %s" % vendors[it["vendorId"]]
-        if it.get("also"):
-            row += " | also called %s" % str(it["also"])[:120]
+            row += " (1 %s = %g)" % (per.get(sid) or it.get("unit") or "unit", coverage)
+        extra = []
         if it.get("specialOrder"):
-            row += " | SPECIAL ORDER"
-        if it.get("notes"):
-            row += " | %s" % str(it["notes"])[:200]
+            extra.append("special order")
+        if it.get("also"):
+            extra.append("aka " + str(it["also"])[:50])
+        notes = _short_notes(it)
+        if notes:
+            extra.append(notes)
+        if extra:
+            row += " | " + "; ".join(extra)
         rows.append(row)
     return ("\n".join(rows).strip() or "(Supplies is empty)"), ids
 

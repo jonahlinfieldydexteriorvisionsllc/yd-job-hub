@@ -39,8 +39,11 @@
     ['hardscape', 'Fabric, restraint, geogrid & other hardscape'], ['adhesive', 'Adhesives & sealers'],
     ['drainage', 'Drainage & concrete'], ['seed', 'Seed & erosion control'], ['bagged', 'Bagged goods'],
     ['planting', 'Planting package'], ['plant', 'Plants'], ['dumpster', 'Dumpsters'],
-    ['hardware', 'Hardware'], ['rental', 'Rentals'], ['other', 'Other'],
+    ['hardware', 'Hardware'], ['rental', 'Rentals'], ['tools', 'Tools & equipment'], ['other', 'Other'],
   ];
+  // Things we buy to work with, not to install: kept in Supplies (where to
+  // get one) but never on an estimate, and never in the list Claude reads.
+  const NOT_FOR_ESTIMATES = ['tools'];
   const CATEGORY_NAME = {};
   CATEGORIES.forEach(([id, name]) => { CATEGORY_NAME[id] = name; });
   // A job with any of these gets the layout markers.
@@ -598,7 +601,7 @@
   // ------------------------------------------------------------- start/stop
 
   window.YDPricing = {
-    CATEGORIES, CATEGORY_NAME, PROFIT_TIERS,
+    CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
     price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk,
   };

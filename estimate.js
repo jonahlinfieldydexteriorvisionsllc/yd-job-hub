@@ -278,7 +278,8 @@
   function supplyOptions(selected) {
     const c = catalog();
     const names = P().CATEGORY_NAME;
-    const list = Object.values(c.items).sort((a, b) =>
+    const skip = P().NOT_FOR_ESTIMATES || [];
+    const list = Object.values(c.items).filter(it => it.id === selected || skip.indexOf(it.category) === -1).sort((a, b) =>
       String(names[a.category] || 'zz').localeCompare(String(names[b.category] || 'zz')) || String(a.name).localeCompare(String(b.name)));
     return '<option value="">— not in Supplies —</option>' + list.map(it => {
       const v = c.vendors[it.vendorId];
