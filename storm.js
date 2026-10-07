@@ -463,17 +463,86 @@
     }
     const accounts = window.YDSnow ? YDSnow.accounts() : {};
     if (!Object.keys(accounts).length) { showToast('No snow accounts yet'); return; }
+    // One form rather than three questions in a row: big buttons for gloves,
+    // and the crew picked by tapping their names (the clock's people), so
+    // the names match the time clock and the count is never mistyped.
+    startForm = { inches: '', picked: {}, others: '', size: '2' };
+    renderStormStart();
+    const m = document.getElementById('stormStartModal');
+    if (m) m.classList.add('active');
+  };
 
-    const inchesRaw = prompt('How much snow is expected, in inches?');
-    if (inchesRaw === null) return;
-    const inches = parseFloat(inchesRaw);
-    if (isNaN(inches) || inches <= 0) { showToast('Enter a number of inches'); return; }
-
-    const crewRaw = prompt('How many people are working?', '2');
-    if (crewRaw === null) return;
+  let startForm = null;
+  function crewChoices() {
+    const ppl = window.YDClock && YDClock.people ? YDClock.people() : {};
+    return Object.keys(ppl).filter(uid => ppl[uid] && ppl[uid].active !== false &&
+        ['owner', 'admin', 'crew'].indexOf(ppl[uid].role) !== -1)
+      .map(uid => ({ uid: uid, name: ppl[uid].name || ppl[uid].email || 'Worker' }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  const othersOf = f => String(f.others || '').split(',').map(s => s.trim()).filter(Boolean);
+  function crewOf(f, people) {
+    const names = people.filter(p => f.picked[p.uid]).map(p => p.name).concat(othersOf(f));
     // At least one: a typed "-2" made every labour line negative.
-    const crewSize = Math.max(1, parseInt(crewRaw, 10) || 1);
-    const crewNames = (prompt('Who is working? (optional)') || '').trim();
+    const size = people.length ? names.length : Math.max(1, parseInt(f.size, 10) || 1);
+    return { size: Math.max(1, size), names: names.join(', ') };
+  }
+  function renderStormStart() {
+    const body = document.getElementById('stormStartBody');
+    if (!body || !startForm) return;
+    const f = startForm, people = crewChoices(), crew = crewOf(f, people);
+    body.innerHTML =
+      '<div class="stepper"><span class="stepper-label">Snow expected (inches)</span>' +
+        '<button class="stepper-btn" onclick="ssNudge(-1)">&minus;</button>' +
+        '<input class="stepper-input" id="ssInches" inputmode="decimal" value="' + esc(f.inches) + '" placeholder="4" oninput="ssSet(\'inches\', this.value)">' +
+        '<button class="stepper-btn" onclick="ssNudge(1)">+</button></div>' +
+      (people.length
+        ? '<div class="ss-label">Who is working? <span class="muted">(tap)</span></div>' +
+          '<div class="ss-crew">' + people.map(p => '<button class="ss-person' + (f.picked[p.uid] ? ' on' : '') + '" ' +
+            'onclick="ssPick(\'' + safeId(p.uid) + '\')">' + (f.picked[p.uid] ? '✓ ' : '') + esc(p.name) + '</button>').join('') + '</div>' +
+          '<label class="ss-label">Anyone else <span class="muted">(names, comma between)</span>' +
+            '<input value="' + esc(f.others) + '" oninput="ssSet(\'others\', this.value)" onchange="renderStormStartCount()"></label>'
+        : '<div class="stepper"><span class="stepper-label">How many people are working?</span>' +
+            '<input class="stepper-input" inputmode="numeric" value="' + esc(f.size) + '" oninput="ssSet(\'size\', this.value)"></div>' +
+          '<label class="ss-label">Who <span class="muted">(optional)</span><input value="' + esc(f.others) + '" oninput="ssSet(\'others\', this.value)"></label>') +
+      '<div class="ss-count" id="ssCount">' + crew.size + ' working' + (crew.names ? ' — ' + esc(crew.names) : '') + '</div>' +
+      '<div class="field-actions"><button class="btn btn-filled clock-big" onclick="beginStorm()">❄ Start the storm</button>' +
+        '<button class="btn" onclick="closeStormStart()">Cancel</button></div>';
+  }
+  window.renderStormStartCount = function () {
+    const c = document.getElementById('ssCount');
+    if (!c || !startForm) return;
+    const crew = crewOf(startForm, crewChoices());
+    c.textContent = crew.size + ' working' + (crew.names ? ' — ' + crew.names : '');
+  };
+  window.ssSet = function (k, v) { if (startForm) { startForm[k] = v; if (k !== 'inches') renderStormStartCount(); } };
+  window.ssNudge = function (by) {
+    if (!startForm) return;
+    const n = Math.max(0, (parseFloat(startForm.inches) || 0) + by);
+    startForm.inches = String(n);
+    const box = document.getElementById('ssInches'); if (box) box.value = startForm.inches;
+  };
+  window.ssPick = function (uid) {
+    if (!startForm) return;
+    const id = crewChoices().map(p => p.uid).find(u => safeId(u) === uid);
+    if (!id) return;
+    if (startForm.picked[id]) delete startForm.picked[id]; else startForm.picked[id] = true;
+    renderStormStart();
+  };
+  window.closeStormStart = function () {
+    startForm = null;
+    const m = document.getElementById('stormStartModal');
+    if (m) m.classList.remove('active');
+  };
+
+  window.beginStorm = function () {
+    if (!startForm || !ydCan('snow', 'change')) return;
+    if (storm) { closeStormStart(); showToast('A storm is already running — close it before starting another'); return; }
+    const inches = parseFloat(startForm.inches);
+    if (isNaN(inches) || inches <= 0) { showToast('How many inches are expected?'); const b = document.getElementById('ssInches'); if (b) b.focus(); return; }
+    const crew = crewOf(startForm, crewChoices());
+    const crewSize = crew.size, crewNames = crew.names;
+    const accounts = window.YDSnow ? YDSnow.accounts() : {};
 
     const start = startPoint;
     const route = buildRoute(accounts, inches, start);
@@ -481,6 +550,7 @@
       showToast('No accounts trigger at ' + inches + '" — nothing to do tonight');
       return;
     }
+    closeStormStart();
 
     const now = new Date();
     // Seconds, not just hours and minutes. Two storms started in the same

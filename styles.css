@@ -1849,3 +1849,10 @@
   .cr-cost .link-btn, .order-vendor .link-btn, .cr-link .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
   .est-invoice { margin-top:10px; padding:10px 12px; border-radius:8px; border:1px dashed var(--border-strong); }
   .est-invoice .hint { margin:0 0 4px; }
+  /* Starting a storm (storm.js renderStormStart): big targets for gloves */
+  .ss-label { display:flex; flex-direction:column; gap:6px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); margin:12px 0 6px; }
+  .ss-label input { font-size:16px; text-transform:none; letter-spacing:0; font-weight:400; color:var(--text); }
+  .ss-crew { display:flex; flex-wrap:wrap; gap:8px; }
+  .ss-person { min-height:48px; padding:0 16px; border-radius:24px; border:2px solid var(--border-strong); background:var(--surface); color:var(--text); font:inherit; font-size:15px; font-weight:600; cursor:pointer; }
+  .ss-person.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .ss-count { margin:14px 0 4px; font-size:14px; font-weight:600; }
