@@ -70,7 +70,7 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // followUps (the follow-up emails drafted for a bid) is written from the Bids
 // board the same way, and qbEstimate (what QuickBooks holds of the estimate)
 // by the server and estimate.js, so both ride along with the form too.
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef'];
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -661,6 +661,11 @@ function onStatusChange() {
   if (jobStatus === 'booked' && was !== 'booked') { boardFields.workStage = 'scheduled'; boardFields.workStageAt = at; }
   // Booked here rather than from the board: the order list fills the same way.
   if (jobStatus === 'booked' && isBidStatus(was) && !orderItems.some(it => it.fromEstimate)) fillOrderFromEstimate(true);
+  // Finished here: the plant-care email, as from the board (estimate.js).
+  if (jobStatus === 'complete' && was !== 'complete' && window.YDEstimate && window.YDEstimate.jobCompleted) {
+    if (!currentJobId) autosave();
+    if (currentJobId) window.YDEstimate.jobCompleted(currentJobId, getJobData());
+  }
   if (jobStatus === 'inprogress' && boardFields.workStage !== 'punchList' && was !== 'inprogress') {
     boardFields.workStage = 'inProgress'; boardFields.workStageAt = at;
   }

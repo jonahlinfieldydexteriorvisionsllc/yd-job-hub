@@ -71,6 +71,9 @@
       // Claude starts an estimate by itself when the site-visit notes are
       // written (estimate.js). On unless switched off.
       autoDraft: null,
+      // ...and drafts the plant-care email when a job with plants is
+      // marked Complete. On unless switched off.
+      autoCare: null,
     };
   }
 
@@ -524,6 +527,9 @@
       '<label class="est-switch"><input type="checkbox"' + (r.autoDraft !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'autoDraft\', this.checked, \'bool\')"> Start the estimate by itself when I finish my site-visit notes</label>' +
       '<p class="hint">Each estimate Claude builds costs a little (cents, not dollars). Off, it waits for “Build the estimate from my notes”.</p>' +
+      '<label class="est-switch"><input type="checkbox"' + (r.autoCare !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
+        ' onchange="prSet(\'autoCare\', this.checked, \'bool\')"> Draft the plant-care email when a job with plants is marked Complete</label>' +
+      '<p class="hint">It goes to your Gmail Drafts for you to read and send — never straight to the customer.</p>' +
       '<h3 class="pr-h">What Claude knows about takeoff</h3>' +
       '<p class="hint">Your rules for laying out an estimate — base depths, conversions, install standards, how a scope is written, the clauses every estimate carries. ' +
         'Claude reads all of this with every message about an estimate. Prices and markups don’t belong here; the app works those out.</p>' +

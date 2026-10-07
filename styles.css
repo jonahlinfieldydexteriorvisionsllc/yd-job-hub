@@ -1882,3 +1882,4 @@
   .est-sent summary { cursor:pointer; font-weight:600; }
   .est-sent-row { padding:6px 0; border-top:1px solid var(--border); }
   .est-sent-row .muted { font-size:12px; }
+  .est-care { margin-top:10px; padding:10px 12px; border-radius:8px; background:color-mix(in srgb, #2f8f5b 9%, var(--surface)); font-size:13px; }

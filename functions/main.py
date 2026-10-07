@@ -549,11 +549,14 @@ def _receipts(request, path, headers):
 
 
 def _followup(request, path, headers):
+    # The same guard writes the plant-care email (care.py): a draft in the
+    # owner's Gmail from one job, for whoever may change jobs, counted.
+    import care
     import followup
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path != "/followup/draft":
+    if path not in ("/followup/draft", "/care/draft"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
@@ -568,15 +571,16 @@ def _followup(request, path, headers):
         day = _check_and_count_usage(uid)
     except RuntimeError as e:
         return (json.dumps({"error": str(e)}), 429, json_headers)
+    task = "care" if path == "/care/draft" else "followup"
     try:
-        result, usage = followup.draft(_claude(), job_id)
+        result, usage = (care if task == "care" else followup).draft(_claude(), job_id)
     except anthropic.RateLimitError:
         return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
     except Exception as e:                          # noqa: BLE001
-        print("followup draft failed:", e)
+        print("%s draft failed: %s" % (task, e))
         return (json.dumps({"error": "The email could not be written. Try again."}), 502, json_headers)
     if usage is not None:
-        _record_spend(day, "followup", usage)
+        _record_spend(day, task, usage)
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
@@ -717,7 +721,7 @@ def claude(request):
         return _cards(request, path, headers)
     if path.startswith("/receipts"):
         return _receipts(request, path, headers)
-    if path.startswith("/followup"):
+    if path.startswith("/followup") or path.startswith("/care"):
         return _followup(request, path, headers)
     if path.startswith("/estimate"):
         return _estimate(request, path, headers)

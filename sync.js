@@ -91,7 +91,10 @@
       const list = bookedOrderItems(id, data);
       if (list) patch = Object.assign({}, patch, { orderItems: list });
     }
+    // A job finished from anywhere: its plant-care email (estimate.js).
+    const finished = patch.jobStatus === 'complete' && data.jobStatus !== 'complete';
     Object.assign(data, patch, { lastModified: new Date().toISOString() });
+    if (finished && window.YDEstimate && window.YDEstimate.jobCompleted) window.YDEstimate.jobCompleted(id, data);
     try {
       localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(data));
     } catch (err) {

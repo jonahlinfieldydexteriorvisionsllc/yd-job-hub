@@ -122,6 +122,7 @@
     totalDollars: () => { const r = priced(); return r ? r.totalCents / 100 : 0; },
     book: () => book,
     orderLines: orderLines,
+    jobCompleted: (id, data) => jobCompleted(id, data),
   };
 
   // What to buy for an estimate: every material it prices -- the takeoff and
@@ -539,7 +540,58 @@
           (checking ? 'Checking…' : 'Check for an answer') + '</button>' : '') +
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
       sentHtml(when) +
-      invoiceHtml(q, inv, can, when);
+      invoiceHtml(q, inv, can, when) +
+      careHtml(when);
+  }
+
+  // ------------------------------------------------------ plant-care email
+  //
+  // Jonah (1 Oct 2026): Claude drafts care info for exactly the plants a
+  // client had installed. When a job with plants on its estimate is marked
+  // Complete, the server (care.py) writes it into his Gmail Drafts -- he
+  // reads it and sends it (his answer: show me first). "Write it now" does
+  // the same by hand. Switched off in Pricing rules → Claude.
+  const plantsIn = e => ((e && e.materials) || []).filter(m => m && m.plant && String(m.name || '').trim());
+  const careBusy = {};        // job id -> being written
+  function careOn() { return !!(P() && P().rules().autoCare !== false); }
+  function careHtml(when) {
+    const plants = plantsIn(est);
+    if (!plants.length || !changes()) return '';
+    const c = (typeof boardFields !== 'undefined' && boardFields.careEmail) || null;
+    return '<div class="est-care">🌱 ' + (c
+        ? 'Plant-care email drafted ' + esc(when(c.at)) + ' — in your Gmail Drafts to read and send.'
+        : plants.length + ' plant' + (plants.length === 1 ? '' : 's') + ' on this job. ' +
+          (careOn() ? 'When it’s marked Complete, ' : 'Press the button and ') + 'Claude drafts a care email for them into your Gmail Drafts.') +
+      ' <button class="btn btn-sm" onclick="estCareEmail()"' + (careBusy[currentJobId] ? ' disabled' : '') + '>' +
+        (careBusy[currentJobId] ? 'Writing…' : c ? 'Write it again' : 'Write it now') + '</button></div>';
+  }
+  async function writeCare(jobId, byItself) {
+    if (careBusy[jobId] || !window.YDClaude) return;
+    careBusy[jobId] = true; renderQb();
+    try {
+      const r = await window.YDClaude.post('/care/draft', { jobId: jobId });
+      const note = { at: new Date().toISOString(), draftId: r.draftId || null, subject: r.subject || '' };
+      if (window.YDSync) window.YDSync.patchJob(jobId, { careEmail: note });
+      showToast('🌱 Plant-care email' + (r.to ? ' to ' + r.to : '') + ' is in your Gmail Drafts — read it and send');
+    } catch (e) {
+      showToast((byItself ? 'The plant-care email wasn’t written: ' : 'Plant-care email: ') + (e.message || e));
+    } finally {
+      delete careBusy[jobId]; renderQb();
+    }
+  }
+  window.estCareEmail = function () {
+    if (!changes()) return;
+    if (!(el('email').value || '').trim()) { showToast('Add the customer’s email on the job first'); return; }
+    if (!currentJobId && typeof autosave === 'function') autosave();
+    if (currentJobId) writeCare(currentJobId, false);
+  };
+  // A job marked Complete (sync.js patchJob, or the form's status): its care
+  // email, once, when it has plants and an email address.
+  function jobCompleted(jobId, data) {
+    if (!careOn() || !changes() || !data || data.careEmail) return;
+    if (!plantsIn(data.estimate).length || !/@/.test(String(data.email || ''))) return;
+    if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) return;
+    setTimeout(() => writeCare(jobId, true), 1500);
   }
 
   function sentHtml(when) {
