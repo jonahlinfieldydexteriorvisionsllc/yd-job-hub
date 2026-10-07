@@ -1866,3 +1866,6 @@
   .pp-meet-when { font-size:12px; font-weight:700; color:var(--muted); }
   .pp-meet-when .link-btn { background:none; border:0; padding:0 0 0 6px; color:var(--neg); font:inherit; font-size:11px; cursor:pointer; text-decoration:underline; }
   .pp-meet-text { white-space:pre-wrap; font-size:14px; margin-top:2px; }
+  /* A button that reads as a link, wherever one has no styling of its own
+     ("Start the conversation over" drew as a bare grey button). */
+  .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:13px; font-weight:600; text-decoration:underline; cursor:pointer; }
