@@ -81,6 +81,15 @@
       }
       let payload = {};
       try { payload = await res.json(); } catch (e) {}
+      // A button newer than the server it calls (the app goes live the moment
+      // it is pushed; the server only when it is deployed).
+      // (An unknown route under a known prefix says "unknown endpoint"; a
+      // prefix the old server has never heard of falls to its scope-of-work
+      // handler, which says "unknown task".)
+      if ((res.status === 404 && /unknown endpoint/.test(payload.error || '')) ||
+          (res.status === 400 && /unknown task/.test(payload.error || ''))) {
+        throw new Error('Not switched on yet — the server is waiting for its update');
+      }
       if (!res.ok) throw new Error(payload.error || ('Request failed (' + res.status + ')'));
       return payload;
     },
