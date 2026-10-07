@@ -13,6 +13,7 @@ import hashlib
 import json
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 
 URL = "https://yd-claude-147632184660.us-central1.run.app/version"
@@ -32,7 +33,12 @@ def fingerprint(commit):
 
 
 def main():
-    live = json.load(urllib.request.urlopen(URL, timeout=20))
+    try:
+        live = json.load(urllib.request.urlopen(URL, timeout=20))
+    except urllib.error.HTTPError as e:
+        # A server from before 76d0550 has no /version ("POST only").
+        print("live server predates /version (HTTP %s): it is older than 76d0550" % e.code)
+        return
     print("live:", live)
     if len(sys.argv) > 1:
         want = fingerprint(sys.argv[1])
