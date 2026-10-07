@@ -891,7 +891,10 @@
   }
   // Supplies items with a price whose name has most of the material's words.
   function localMatches(l, m) {
-    const want = nameWords((m && m.name) || l.name);
+    // "4" PVC tee (into the drain line) — TEMP wall": the notes after a dash
+    // or in brackets say what it is for, not what it is.
+    const bare = String((m && m.name) || l.name || '').replace(/\s+[—–]\s.*$/, '').replace(/\([^)]*\)/g, ' ');
+    const want = nameWords(bare);
     if (!want.length) return [];
     const c = catalog(), skip = P().NOT_FOR_ESTIMATES || [];
     return Object.values(c.items)
