@@ -54,6 +54,7 @@
   let building = null, saving = false, checking = false, tripping = false;
   const queued = [];          // jobs waiting for Claude to start their estimate
   let loads = 0;              // how many times the form has been loaded with a job (or emptied)
+  let notesTyped = false;     // the site notes were written or changed since the job was opened
   const checkedAt = {};       // job id -> when its QuickBooks status was last asked for
   const trippedFor = {};      // job id -> the address the miles were last looked up for
   let draftMsg = '';          // what is typed in the chat box, not sent yet
@@ -100,6 +101,7 @@
     },
     load(e) {
       loads++;
+      notesTyped = false;
       est = blank();
       if (e && typeof e === 'object') est = fromSaved(e);
       draftMsg = ''; undo = null;
@@ -112,6 +114,7 @@
     // `auto` lets Claude start the estimate from them as if they had been typed.
     setNotes(text, auto) {
       est.notes = String(text || '');
+      notesTyped = true;
       render();
       if (typeof markDirty === 'function') markDirty();
       if (auto) window.estNotesDone();
@@ -671,7 +674,7 @@
 
   const find = (list, id) => list.find(x => safeId(x.id) === id);
 
-  window.estNotesInput = function (v) { est.notes = v; if (typeof markDirty === 'function') markDirty(); };
+  window.estNotesInput = function (v) { est.notes = v; notesTyped = true; if (typeof markDirty === 'function') markDirty(); };
   // A later meeting's notes start on a line of their own, dated, so the notes
   // read as a record of each visit -- and Claude can tell the latest word.
   window.estNoteToday = function () {
@@ -808,7 +811,9 @@
   const autoAsked = {};       // job id -> already started by itself (this session)
   function autoOn() { return !!(P() && P().rules().autoDraft !== false); }
   window.estNotesDone = function () {
-    if (!autoOn() || !changes() || hasLines() || est.chat.length) return;
+    // Only notes written (or changed) on this visit: tapping in and out of an
+    // old bid's notes is not asking for an estimate.
+    if (!notesTyped || !autoOn() || !changes() || hasLines() || est.chat.length) return;
     if (String(est.notes || '').trim().split(/\s+/).length < AUTO_MIN_WORDS) return;
     if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) return;
     if (!(el('customerName').value || '').trim()) { showToast('Add the customer’s name and Claude will start the estimate'); return; }
