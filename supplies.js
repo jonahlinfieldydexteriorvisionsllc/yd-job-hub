@@ -788,7 +788,68 @@
   };
 
   const FILE_TYPES = '.csv,.tsv,.txt,.xlsx,.xls,.xlsm,.ods,text/csv,text/plain,' +
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,' +
+    '.pdf,application/pdf,image/*';
+
+  // A PDF quote or a photo of a price sheet: Claude reads it on the server
+  // (sheets.py) into rows, which land in the box below as if pasted, to be
+  // checked like any sheet. Photos are shrunk first -- a phone photo is
+  // bigger than Claude takes, and the words read just as well at 2000 px.
+  function shrinkPhoto(file) {
+    return new Promise((ok, fail) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const scale = Math.min(1, 2000 / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        ok({ mediaType: 'image/jpeg', data: c.toDataURL('image/jpeg', 0.88).split(',')[1] });
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); fail(new Error('That photo could not be opened')); };
+      img.src = url;
+    });
+  }
+  function asBase64(file) {
+    return new Promise((ok, fail) => {
+      const r = new FileReader();
+      r.onload = () => ok({ mediaType: 'application/pdf', data: String(r.result || '').split(',')[1] || '' });
+      r.onerror = () => fail(new Error('That file could not be read'));
+      r.readAsDataURL(file);
+    });
+  }
+  let reading = false;
+  async function readSheet(f) {
+    if (reading) return;
+    if (!window.YDClaude || !window.YDClaude.available()) { showToast('Reading a PDF or photo needs a connection and sign-in'); return; }
+    if (f.size > 20 * 1024 * 1024) { showToast('That file is over 20 MB — send fewer pages'); return; }
+    const box = el('supPreview');
+    const v = planVendor ? vendors[planVendor] : null;
+    // Whose prices they are has to be known: a supplier's own Price list.
+    if (!v) { showToast('Open the supplier on Supplies and use its own 💲 Price list to read a PDF or photo'); return; }
+    reading = true;
+    if (box) box.innerHTML = '<p class="empty-msg">Claude is reading “' + esc(f.name) + '” — a page takes about a minute…</p>';
+    try {
+      const file = /^image\//.test(f.type) ? await shrinkPhoto(f) : await asBase64(f);
+      const known = Object.values(items).filter(it => it.vendorId === v.id).map(it => it.name);
+      const r = await window.YDClaude.post('/supplies/read-sheet', Object.assign({ vendor: v.name, known: known, fileName: f.name }, file));
+      if (planVendor !== v.id) return;      // the window was closed or moved on meanwhile
+      const cell = s => String(s == null ? '' : s).replace(/[\t\r\n]+/g, ' ').trim();
+      const head = ['Item #', 'Item', 'Comes in', 'Price', 'Per', 'Category', 'Notes', 'Price notes'];
+      const rows = (r.rows || []).map(x => [cell(x.itemNo), cell(x.item), cell(x.comesIn),
+        String(x.price), cell(x.per), cell(x.category), cell(x.notes), cell(x.priceNotes)].join('\t'));
+      const t = el('supCsv'); if (t) t.value = [head.join('\t')].concat(rows).join('\n');
+      if (box) box.innerHTML = '<div class="sup-stat">Claude read <b>' + rows.length + '</b> priced row' + (rows.length === 1 ? '' : 's') +
+        ' from “' + esc(f.name) + '”. Look them over in the box above, then press <b>Check it</b> — nothing is saved until you do.' +
+        (r.notes ? '<br><span class="muted">' + esc(r.notes) + '</span>' : '') +
+        ((r.unreadable || []).length ? '<br><b>Could not read:</b> ' + r.unreadable.map(esc).join('; ') : '') + '</div>';
+    } catch (e) {
+      if (box) box.innerHTML = '<p class="empty-msg">' + esc(e.message || String(e)) + '</p>';
+    } finally {
+      reading = false;
+    }
+  }
 
   // One supplier's own price sheet, from that supplier's card.
   function vendorPriceList(v) {
@@ -797,7 +858,8 @@
     openModal('Price list — ' + v.name,
       '<div class="sup-stat"><b>' + priced.length + '</b> of ' + mine.length + ' ' + esc(v.name) +
         ' item' + (mine.length === 1 ? '' : 's') + ' have a price.</div>' +
-      '<div class="hint">Upload ' + esc(v.name) + '’s price sheet as it comes — their Excel file or a CSV — or ' +
+      '<div class="hint">Upload ' + esc(v.name) + '’s price sheet as it comes — their Excel file or a CSV, or a PDF quote ' +
+        'or a photo of a price sheet (Claude reads those, a few pages at a time) — or ' +
         'paste it straight out of a spreadsheet. No Supplier column needed: everything in it is taken as ' +
         esc(v.name) + '’s. Title lines at the top are skipped; the line with the column names is found by itself ' +
         '(an Item or Description column, and Price — optionally Item #, Per, Comes in, Year). ' +
@@ -843,6 +905,10 @@
     const f = input && input.files && input.files[0];
     if (!f) return;
     const put = text => { const t = el('supCsv'); if (t) t.value = text; };
+    if (/\.pdf$/i.test(f.name) || f.type === 'application/pdf' || /^image\//.test(f.type)) {
+      readSheet(f);
+      return;
+    }
     if (/\.(xlsx|xlsm|xls|ods)$/i.test(f.name)) {
       showToast('Reading ' + f.name + '…');
       const r = new FileReader();

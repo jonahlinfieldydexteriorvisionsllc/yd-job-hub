@@ -619,6 +619,42 @@ def _geo(request, path, headers):
     return (json.dumps({"found": bool(hit), "geo": hit}), 200, json_headers)
 
 
+# ---------------------------------------------------------------- supplies
+#
+# A supplier's price sheet as a PDF or a photo, read into rows for the price
+# list (sheets.py). Writes nothing -- the rows go back to the check-then-save
+# screen. For whoever may change Supplies, under the day's Claude cap.
+
+
+def _supplies(request, path, headers):
+    import sheets
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/supplies/read-sheet":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request, "supplies", "change")
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    try:
+        day = _check_and_count_usage(uid)
+    except RuntimeError as e:
+        return (json.dumps({"error": str(e)}), 429, json_headers)
+    try:
+        result, usage = sheets.read(_claude(), request.get_json(silent=True) or {})
+    except anthropic.RateLimitError:
+        return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("price sheet read failed:", e)
+        return (json.dumps({"error": "The sheet could not be read. Try again."}), 502, json_headers)
+    if usage is not None:
+        _record_spend(day, "pricesheet", usage)
+    return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -646,6 +682,8 @@ def claude(request):
         return _estimate(request, path, headers)
     if path.startswith("/geo"):
         return _geo(request, path, headers)
+    if path.startswith("/supplies"):
+        return _supplies(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)
