@@ -486,6 +486,30 @@ def _jobs():
     return {s.id: (s.to_dict() or {}) for s in _db().collection("jobs").stream()}
 
 
+def _office(jobs):
+    """Estimate work waiting on Jonah: drafts Claude built that he hasn't
+    checked and sent, estimates a customer accepted that aren't booked yet,
+    and money still owed on invoices made from estimates."""
+    drafts, accepted, owed = [], [], []
+    for j in jobs.values():
+        name = str(j.get("customerName") or "A bid")
+        e = j.get("estimate") or {}
+        q = j.get("qbEstimate") or {}
+        bid = (j.get("jobStatus") or "quoting") == "quoting" and j.get("bidStage") not in ("lost", "won")
+        if bid and (e.get("work") or e.get("materials")) and not q.get("id"):
+            drafts.append(name)
+        if bid and q.get("status") == "Accepted":
+            accepted.append(name)
+        inv = j.get("qbInvoiceRef") or {}
+        try:
+            bal = float(inv.get("balance") or 0)
+        except (TypeError, ValueError):
+            bal = 0
+        if inv.get("id") and bal > 0:
+            owed.append((name, bal, inv.get("docNumber")))
+    return {"drafts": sorted(drafts), "accepted": sorted(accepted), "owed": sorted(owed, key=lambda x: -x[1])}
+
+
 def _bids(jobs=None):
     """Bids that need chasing: quoting jobs whose stage has sat long enough."""
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -743,6 +767,24 @@ def build(slot, user, people, wx, cache):
                 ([{"text": "…and %d more on the Bids board" % (len(bids) - 8)}] if len(bids) > 8 else [])))
             if slot != "midday":
                 push_bits.append("%d bid%s to chase" % (len(bids), "" if len(bids) == 1 else "s"))
+
+    # ---- estimates: drafts to check, yeses to book, money still owed
+    office = cache.get("office") or {}
+    if sees("jobs") and slot in ("morning", "evening") and any(office.get(k) for k in ("drafts", "accepted", "owed")):
+        lines = []
+        for n in office.get("accepted") or []:
+            lines.append({"text": "✅ %s accepted the estimate — book it and make the invoice" % n})
+        if office.get("drafts"):
+            d = office["drafts"]
+            lines.append({"text": "✨ %d estimate%s drafted, waiting for you to check and send: %s" % (
+                len(d), "" if len(d) == 1 else "s", ", ".join(d[:6]) + (" +%d more" % (len(d) - 6) if len(d) > 6 else ""))})
+        for n, bal, num in (office.get("owed") or [])[:6]:
+            lines.append({"text": "💵 %s owes $%s%s" % (n, format(round(bal, 2), ",.2f"), (" on invoice #%s" % num) if num else "")})
+        sections.append(("Estimates & invoices", lines))
+        if office.get("accepted"):
+            push_bits.append("%d estimate%s accepted" % (len(office["accepted"]), "" if len(office["accepted"]) == 1 else "s"))
+        if office.get("drafts"):
+            push_bits.append("%d draft%s to check" % (len(office["drafts"]), "" if len(office["drafts"]) == 1 else "s"))
 
     # ---- receipts waiting to be put on a job (whoever may change jobs sorts them)
     waiting = cache.get("receipts") or 0
@@ -1050,6 +1092,7 @@ def _cache(slot="morning"):
         "items": _calendar_items(today, today + datetime.timedelta(days=1)),
         "storms": _storms(),
         "bids": _bids(jobs),
+        "office": _office(jobs),
         "shifts": _shifts(),
         "receipts": _receipts_to_sort(),
     }
