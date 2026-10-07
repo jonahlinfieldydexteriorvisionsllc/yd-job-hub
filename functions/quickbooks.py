@@ -386,7 +386,9 @@ def _call(method, path, params=None, body=None, request_id=None, empty_body=Fals
             reason = _fault_message(resp)
             print("quickbooks %s %s -> %d intuit_tid=%s: %s"
                   % (method, path, resp.status_code, _tid(resp), reason))
-            raise RuntimeError("QuickBooks said no: %s (Intuit ref %s)" % (reason, _tid(resp)))
+            err = RuntimeError("QuickBooks said no: %s (Intuit ref %s)" % (reason, _tid(resp)))
+            err.status = resp.status_code       # 400: what was sent was refused
+            raise err
         return resp.json() if resp.content else {}
 
 
@@ -811,7 +813,7 @@ def save_estimate(body):
     out = _estimate_record(e, customer_id)
     if sent_to:
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
-    _db().collection("jobs").document(job_id).set({"qbEstimate": out}, merge=True)
+    _db().collection("jobs").document(job_id).set({"qbEstimate": out, "lastModified": _stamp()}, merge=True)
     return out
 
 
@@ -845,6 +847,15 @@ def estimate_status(body):
     out["acceptedBy"] = e.get("AcceptedBy")
     out["acceptedDate"] = e.get("AcceptedDate")
     return out
+
+
+def _stamp():
+    """Now as JavaScript's toISOString() writes it. The app compares a job's
+    lastModified as text and skips a copy whose stamp it already has -- so a
+    change made here must carry a new stamp, in the same shape, or no device
+    ever takes it (and the next save from one puts the old values back)."""
+    t = datetime.datetime.now(datetime.timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (t.microsecond // 1000)
 
 
 def _invoice_record(inv):
@@ -902,6 +913,13 @@ def invoice_from_estimate(body):
     known = str(body.get("invoiceId") or "").strip()
     if known:
         inv = _query_one("Invoice", "Id = '%s'" % _quote(known))
+        # Only an invoice made for this job (or linked to this estimate): an
+        # id from the test company names some other customer's invoice in the
+        # real one.
+        if inv and not (str(inv.get("PrivateNote") or "").startswith(_job_note(job_id)) or
+                        any(t.get("TxnType") == "Estimate" and t.get("TxnId") == e["Id"] for t in inv.get("LinkedTxn") or [])):
+            print("quickbooks: invoice %s is not job %s's; ignoring it" % (known, job_id))
+            inv = None
     if not inv:
         # Made into an invoice in QuickBooks itself: the estimate names it.
         for t in e.get("LinkedTxn") or []:
@@ -915,9 +933,11 @@ def invoice_from_estimate(body):
         if not any(ln["DetailType"] == "SalesItemLineDetail" for ln in _invoice_lines(e)):
             raise RuntimeError("The estimate has nothing on it to invoice")
         base = {"CustomerRef": e["CustomerRef"], "PrivateNote": _job_note(job_id)}
-        for k in ("BillEmail", "ShipAddr"):
-            if e.get(k):
-                base[k] = e[k]
+        if e.get("BillEmail"):
+            base["BillEmail"] = e["BillEmail"]
+        if e.get("ShipAddr"):
+            # The address itself, not the estimate's own address record (Id).
+            base["ShipAddr"] = {k: v for k, v in e["ShipAddr"].items() if k != "Id"}
         memo = str(body.get("memo") or "").strip()
         if memo:
             base["CustomerMemo"] = {"value": memo[:MEMO_MAX]}
@@ -946,6 +966,11 @@ def invoice_from_estimate(body):
             except RuntimeError as err:
                 first_error = first_error or err
                 inv = None
+                # Only a refusal of what was sent (400) is worth another way.
+                # A server error may have saved the invoice after all, and a
+                # second try under another request id would make a second one.
+                if getattr(err, "status", None) != 400:
+                    break
         if not inv:
             raise first_error
 
@@ -962,7 +987,10 @@ def invoice_from_estimate(body):
     out["estimateId"] = e["Id"]
     if sent_to:
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
-    _db().collection("jobs").document(job_id).set({"qbInvoiceRef": out}, merge=True)
+    # Invoiced: the estimate is closed in QuickBooks; the job says so too, so
+    # the hourly check does not report it back as news.
+    _db().collection("jobs").document(job_id).set({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"},
+                                                   "lastModified": _stamp()}, merge=True)
     return out
 
 
@@ -1003,7 +1031,7 @@ def sweep():
             if e and _ours(e, snap.id) and (e.get("TxnStatus") or "Pending") != "Pending":
                 rec = _estimate_record(e)
                 rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"))
-                db.collection("jobs").document(snap.id).set({"qbEstimate": rec}, merge=True)
+                db.collection("jobs").document(snap.id).set({"qbEstimate": rec, "lastModified": _stamp()}, merge=True)
                 news.append({"jobId": snap.id, "kind": "estimate", "status": rec["status"], "name": name,
                              "docNumber": rec.get("docNumber"), "total": rec.get("total")})
         r = j.get("qbInvoiceRef") or {}
@@ -1016,9 +1044,11 @@ def sweep():
             if inv and float(inv.get("Balance") or 0) != float(r.get("balance") or 0):
                 paid = round(float(r.get("balance") or 0) - float(inv.get("Balance") or 0), 2)
                 rec = _invoice_record(inv)
-                db.collection("jobs").document(snap.id).set({"qbInvoiceRef": rec}, merge=True)
-                news.append({"jobId": snap.id, "kind": "payment", "name": name, "paid": paid,
-                             "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
+                db.collection("jobs").document(snap.id).set({"qbInvoiceRef": rec, "lastModified": _stamp()}, merge=True)
+                # A balance that went UP (the invoice was changed) is no payment.
+                if paid > 0:
+                    news.append({"jobId": snap.id, "kind": "payment", "name": name, "paid": paid,
+                                 "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
     return news
 
 

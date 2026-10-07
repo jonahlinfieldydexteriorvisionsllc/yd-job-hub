@@ -137,7 +137,8 @@ def draft(client, job_id):
         return {"error": saved["error"].split(". Put the full")[0] + "."}, resp.usage
     note = {"at": dg._now().isoformat(), "draftId": saved.get("draftId"), "subject": saved.get("subject"),
             "plants": len(plants)}
-    dg._db().collection("jobs").document(job_id).set({"careEmail": note}, merge=True)
+    import quickbooks
+    dg._db().collection("jobs").document(job_id).set({"careEmail": note, "lastModified": quickbooks._stamp()}, merge=True)
     print("care: drafted for job", job_id)
     return {"draftId": saved.get("draftId"), "link": saved.get("link"), "to": to,
             "subject": saved.get("subject")}, resp.usage

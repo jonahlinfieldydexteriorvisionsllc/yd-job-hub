@@ -188,6 +188,22 @@ def _member(req):
     return token["uid"], user
 
 
+CREW_PHOTOS_PER_DAY = 15
+
+
+def _crew_photo_allowance(uid):
+    """A crew member's receipt photos come out of the same daily Claude
+    allowance as Jonah's estimates; each has a smaller one of their own, so a
+    stuck camera button cannot use the day up."""
+    day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    ref = _db.collection("claudeUsage").document(day)
+    snap = ref.get()
+    used = (((snap.to_dict() or {}).get("photosBy") or {}).get(uid, 0)) if snap.exists else 0
+    if used >= CREW_PHOTOS_PER_DAY:
+        raise RuntimeError("That's %d receipt photos today — the rest can wait for tomorrow" % CREW_PHOTOS_PER_DAY)
+    ref.set({"photosBy": {uid: firestore.Increment(1)}}, merge=True)
+
+
 def _check_and_count_usage(uid):
     """Daily call ceiling. Refuses rather than quietly spending."""
     day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -431,19 +447,23 @@ def _cards(request, path, headers):
         only = (board_id, card_id)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    failed = None
     try:
         report = cards.run(_claude(), only)
     except Exception as e:                          # noqa: BLE001
         print("cards run failed:", e)
-        return (json.dumps({"error": str(e)}), 500, json_headers)
+        failed = str(e)
     # The hourly run also asks QuickBooks about estimates out with customers
     # and invoices not yet paid off (quickbooks.sweep): a "yes" or a payment
-    # reaches the job, and Jonah's phone, without him looking.
+    # reaches the job, and Jonah's phone, without him looking. Whatever
+    # happened with the cards.
     if only is None:
         try:
             _tell_owner(qb_sweep_news())
         except Exception as e:                      # noqa: BLE001
             print("quickbooks sweep failed:", e)
+    if failed is not None:
+        return (json.dumps({"error": failed}), 500, json_headers)
     return (json.dumps({"report": report}), 200, json_headers)
 
 
@@ -515,6 +535,8 @@ def _receipts(request, path, headers):
             return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
         try:
             uid, user = _member(request)
+            if user.get("role") == "crew":
+                _crew_photo_allowance(uid)
             day = _check_and_count_usage(uid)
         except PermissionError as e:
             return (json.dumps({"error": str(e)}), 401, json_headers)

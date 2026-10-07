@@ -136,12 +136,20 @@
     const e = saved === undefined ? est : fromSaved(saved || {});
     const r = P().price(e, ctx(saved === undefined ? undefined : city || ''));
     const items = catalog().items;
-    return r.takeoff.concat(r.added).filter(l => l.orderQty > 0).map(l => {
+    // One line per thing to buy: the same supply on two lines of the
+    // estimate (base gravel for the patio and for the walk, or a planting-
+    // package item also in the takeoff) is one order of both.
+    const out = [], byKey = {};
+    r.takeoff.concat(r.added).filter(l => l.orderQty > 0).forEach(l => {
       const it = l.supplyId ? items[l.supplyId] : null;
-      return { supplyId: l.supplyId || null, vendorId: (it && it.vendorId) || null,
-               name: (it && it.name) || l.name || '', orderQty: l.orderQty, per: l.per || '',
-               costEachCents: num(l.costCents), specialOrder: !!l.specialOrder, plant: l.category === 'plant' };
+      const line = { supplyId: l.supplyId || null, vendorId: (it && it.vendorId) || null,
+                     name: (it && it.name) || l.name || '', orderQty: l.orderQty, per: l.per || '',
+                     costEachCents: num(l.costCents), specialOrder: !!l.specialOrder, plant: l.category === 'plant' };
+      const k = line.supplyId ? 's:' + line.supplyId : 'n:' + line.name.toLowerCase().trim();
+      if (byKey[k]) byKey[k].orderQty = Math.round((byKey[k].orderQty + line.orderQty) * 1000) / 1000;
+      else { byKey[k] = line; out.push(line); }
     });
+    return out;
   }
 
   // An estimate saved by the first version (price-book lines and one message)
@@ -184,7 +192,13 @@
 
   const qb = () => (typeof boardFields !== 'undefined' && boardFields.qbEstimate) || null;
   // The job's invoice, made from the estimate (quickbooks.py invoice_from_estimate).
-  const qbInv = () => (typeof boardFields !== 'undefined' && boardFields.qbInvoiceRef) || null;
+  // An invoice made in the other QuickBooks company (the test one, before the
+  // switch to the real books) is not this estimate's: ignored everywhere.
+  const qbInv = () => {
+    const inv = (typeof boardFields !== 'undefined' && boardFields.qbInvoiceRef) || null;
+    const q = qb();
+    return inv && inv.env && q && q.env && inv.env !== q.env ? null : inv;
+  };
   let invoicing = false;
 
   // ---------------------------------------------------------------- drawing
@@ -611,7 +625,6 @@
   // 7 Oct 2026). Its balance is checked every hour by the server.
   function invoiceHtml(q, inv, can, when) {
     if (!q || !q.id) return '';
-    if (inv && inv.env && q.env && inv.env !== q.env) inv = null;   // made in the other company
     const owed = inv && inv.balance != null ? Number(inv.balance) : null;
     const line = inv && inv.id
       ? '<div class="est-qb-line"><b>QuickBooks invoice' + (inv.docNumber ? ' #' + esc(inv.docNumber) : '') + '</b>' +
@@ -682,10 +695,19 @@
 
   // The invoice onto the job, and its number into the form's invoice box.
   function afterInvoice(jobId, r) {
-    const was = (currentJobId === jobId ? qbInv() : null) || {};
+    const open = currentJobId === jobId;
+    const saved = open ? null : savedJob(jobId);
+    const was = (open ? qbInv() : saved && saved.qbInvoiceRef) || {};
     const merged = Object.assign({}, was, r);
     Object.keys(merged).forEach(k => { if (merged[k] === undefined) merged[k] = null; });
-    if (window.YDSync) window.YDSync.patchJob(jobId, { qbInvoiceRef: merged });
+    const patch = { qbInvoiceRef: merged };
+    // Invoiced from the estimate: QuickBooks has closed it (the server notes
+    // the same), so the hourly check does not report it back as news.
+    const est0 = open ? qb() : saved && saved.qbEstimate;
+    if (r.estimateId && est0 && est0.id === r.estimateId && est0.status !== 'Closed') {
+      patch.qbEstimate = Object.assign({}, est0, { status: 'Closed' });
+    }
+    if (window.YDSync) window.YDSync.patchJob(jobId, patch);
     if (currentJobId === jobId && r.docNumber &&
         (el('qbInvoice').value.trim() !== String(r.docNumber) || !el('qbInvoiced').checked)) {
       el('qbInvoice').value = r.docNumber;
@@ -866,6 +888,9 @@
     // Only notes written (or changed) on this visit: tapping in and out of an
     // old bid's notes is not asking for an estimate.
     if (!notesTyped || !autoOn() || !changes() || hasLines() || est.chat.length) return;
+    // Bids only: a booked job's price is already agreed, and lines landing on
+    // it would set its price from the estimate.
+    if (typeof isBidStatus === 'function' && typeof jobStatus !== 'undefined' && !isBidStatus(jobStatus)) return;
     if (String(est.notes || '').trim().split(/\s+/).length < AUTO_MIN_WORDS) return;
     if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) return;
     if (!(el('customerName').value || '').trim()) { showToast('Add the customer’s name and Claude will start the estimate'); return; }
@@ -1213,6 +1238,15 @@
       if (currentJobId === jobId) {
         est.sent = (est.sent || []).concat([version]).slice(-SENT_KEEP);
         if (typeof markDirty === 'function') markDirty();
+      } else {
+        // Another job was opened while QuickBooks answered: onto the saved copy.
+        const d = savedJob(jobId);
+        if (d && window.YDSync) {
+          const e = fromSaved(d.estimate || {});
+          e.sent = (e.sent || []).concat([version]).slice(-SENT_KEEP);
+          e.chat = e.chat.slice(-CHAT_KEEP);
+          window.YDSync.patchJob(jobId, { estimate: clone(e) });
+        }
       }
       afterQb(jobId, out, email);
       showToast(email ? 'Emailed from QuickBooks' + (out.docNumber ? ' — estimate #' + out.docNumber : '')

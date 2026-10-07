@@ -20,6 +20,9 @@
 
   const MIGRATED_KEY = STORAGE_PREFIX + 'migratedAt';
   const PUSH_DELAY = 800;
+  // Job fields written by the server (QuickBooks' answers, the plant-care
+  // email); all are in app.js BOARD_FIELDS so the form carries them.
+  const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -364,7 +367,13 @@
           return;
         }
         map[c.id] = buildIndexEntry(c.id, c.data);
-        if (c.id === currentJobId) openJobChanged = true;
+        if (c.id === currentJobId) {
+          openJobChanged = true;
+          // What only the server writes -- QuickBooks' answers, the care
+          // email -- goes into the open form even when it has unsaved edits,
+          // or the next save would put the old values back.
+          if (dirty) SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
+        }
       });
 
       writeIndex(map);

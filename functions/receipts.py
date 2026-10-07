@@ -915,14 +915,23 @@ def from_photo(client, body, uid, who):
         return {"error": "The receipt couldn't be read (%s) — try a clearer photo" % (err or "no answer")}, usage
     if not got.get("is_purchase"):
         return {"error": "That doesn't look like a receipt"}, usage
+    # As for email: a personal purchase is never kept, and a bank transfer is
+    # a paycheck, not a receipt.
+    if got.get("whose") == "personal":
+        return {"error": "That looks like a personal purchase — not added"}, usage
+    if got.get("doc_type") == "person_payment":
+        return {"error": "That's a payment to a person, not a receipt — not added"}, usage
     db = dg._db()
     jobs = _jobs(db)
     rid, what = _save(db, m, got, jobs)
-    extra = {"addedBy": uid, "addedByName": who, "source": "photo"}
-    job_id = str(body.get("jobId") or "")
-    if job_id and job_id in jobs:
-        extra["suggest"] = {"jobId": job_id, "why": "%s was clocked in on it" % who}
-    db.collection("receipts").document(rid).set(extra, merge=True)
+    # Only a receipt this photo made is marked as the photo's: one it matched
+    # (the same order, already emailed and maybe sorted) keeps what it had.
+    if what == "new":
+        extra = {"addedBy": uid, "addedByName": who, "source": "photo"}
+        job_id = str(body.get("jobId") or "")
+        if job_id and job_id in jobs:
+            extra["suggest"] = {"jobId": job_id, "why": "%s was clocked in on it" % who}
+        db.collection("receipts").document(rid).set(extra, merge=True)
     lines, tax, total = lines_from(got)
     return {"id": rid, "vendor": (got.get("vendor") or "").strip(), "totalCents": total, "lines": len(lines),
             "summary": (got.get("summary") or "").strip(), "what": what}, usage

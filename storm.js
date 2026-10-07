@@ -697,10 +697,17 @@
   function watchStops(stormId) {
     if (unsubStops) { unsubStops(); unsubStops = null; }
     stops = {};
+    // What was typed belongs to this storm: stop ids are the account ids, so
+    // a depth left in a box would otherwise open the next storm's card.
+    Object.keys(drafts).forEach(k => { delete drafts[k]; });
     unsubStops = window.YDDb.watch('storms/' + stormId + '/stops', changes => {
       changes.forEach(c => {
         if (c.type === 'removed') delete stops[c.id];
         else stops[c.id] = Object.assign({ id: c.id }, c.data);
+        // Departed (here or on another phone): its boxes are done with.
+        if (c.type === 'removed' || (c.data && c.data.departedAt)) {
+          delete drafts['st-inches-' + safeId(c.id)]; delete drafts['st-salt-' + safeId(c.id)];
+        }
       });
       render();
     });

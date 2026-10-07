@@ -914,8 +914,42 @@ function orderFromEstimate(list, lines) {
   });
   return out;
 }
+// Order quantities need the pricing rules (waste) and Supplies (what one of
+// a thing covers, what it is sold by). Booked straight after the app opens,
+// before they have arrived, the list would come out in takeoff units -- so it
+// waits for them (orderPending), and fills when they come.
+function orderReady() {
+  const c = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : null;
+  return !!(window.YDPricing && window.YDPricing.ready() && c && Object.keys(c.items).length &&
+    (c.pricesReady || !(typeof ydCan === 'function' && ydCan('supplies', 'see'))));
+}
+const orderPending = new Set();
+function fillPendingOrders() {
+  if (!orderPending.size || !orderReady() || !window.YDEstimate) return;
+  orderPending.forEach(id => {
+    orderPending.delete(id);
+    let d = null;
+    try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+    if (!d || isBidStatus(d.jobStatus)) return;
+    if (id === currentJobId) {
+      if (!orderItems.some(it => it.fromEstimate)) fillOrderFromEstimate(true);
+      return;
+    }
+    if ((d.orderItems || []).some(it => it.fromEstimate)) return;
+    const lines = window.YDEstimate.orderLines(d.estimate || null, d.city || '');
+    if (lines.length && window.YDSync) window.YDSync.patchJob(id, { orderItems: orderFromEstimate(d.orderItems || [], lines) });
+  });
+}
+document.addEventListener('yd-supplies', fillPendingOrders);
+document.addEventListener('yd-pricing', fillPendingOrders);
+
 function fillOrderFromEstimate(quiet) {
   if (jobsReadOnly() || !window.YDEstimate || !window.YDPricing) return;
+  if (!orderReady()) {
+    if (quiet && currentJobId) orderPending.add(currentJobId);
+    else showToast('Prices are still loading — try again in a moment');
+    return;
+  }
   const lines = window.YDEstimate.orderLines();
   if (!lines.length) { if (!quiet) showToast('The estimate has no materials yet'); return; }
   orderItems = orderFromEstimate(orderItems, lines);
@@ -928,6 +962,7 @@ function fillOrderFromEstimate(quiet) {
 // date with the estimate when he wants.
 function bookedOrderItems(id, data) {
   if (!window.YDEstimate || !window.YDPricing) return null;
+  if (!orderReady()) { orderPending.add(id); return null; }
   const open = id === currentJobId;
   const list = open ? orderItems : (data.orderItems || []);
   if (list.some(it => it.fromEstimate)) return null;
