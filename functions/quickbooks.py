@@ -630,6 +630,58 @@ def _query_one(entity, where):
     return rows[0] if rows else None
 
 
+# ---------------------------------------------------------------- numbers
+#
+# The number on an estimate or invoice. QuickBooks hands out the next one
+# itself -- unless "Custom transaction numbers" is switched on in its
+# settings, when anything made through the connection comes out with NO
+# number at all (Intuit: "If no value is supplied, the resulting DocNumber
+# is null"). Jonah (7 Oct 2026): "its important that the estimate number is
+# saved as the proper number. i am past 1600 in quickbooks." So the setting
+# is read, and when it is on, the form gets the number after the highest
+# already used for that kind -- what QuickBooks itself offers next.
+
+_CUSTOM_NUMBERS = {}      # realm -> (when read, on?)
+
+
+def _custom_numbers():
+    realm = (_load_tokens() or {}).get("realmId") or ""
+    hit = _CUSTOM_NUMBERS.get(realm)
+    if hit and time.time() - hit[0] < 600:
+        return hit[1]
+    try:
+        prefs = _call("GET", "preferences").get("Preferences") or {}
+        on = bool((prefs.get("SalesFormsPrefs") or {}).get("CustomTxnNumbers"))
+    except ReconnectNeeded:
+        raise
+    except Exception as err:          # noqa: BLE001
+        # Not known: numbered here, which is right either way (a number
+        # given is kept), and asked again next time.
+        print("quickbooks: settings not read (%s); numbering it here" % err)
+        return True
+    _CUSTOM_NUMBERS[realm] = (time.time(), on)
+    return on
+
+
+def _next_number(entity):
+    """One past the highest plain number among that kind's recent forms, or
+    None when there is none to go on (QuickBooks then decides)."""
+    data = _call("GET", "query", params={
+        "query": "select DocNumber from %s orderby MetaData.CreateTime desc maxresults 200" % entity})
+    rows = (data.get("QueryResponse") or {}).get(entity) or []
+    nums = [int(r["DocNumber"]) for r in rows if str(r.get("DocNumber") or "").isdigit()]
+    return str(max(nums) + 1) if nums else None
+
+
+def _numbered(entity, form):
+    """The form, with its number when QuickBooks would leave it without one."""
+    if not form.get("DocNumber") and _custom_numbers():
+        n = _next_number(entity)
+        if n:
+            form["DocNumber"] = n
+    return form
+
+
 def _qb_name(s, limit=100):
     # QuickBooks names may not contain a colon (it means "sub-item of") or tab.
     return " ".join(str(s or "").replace(":", "-").replace("\t", " ").split())[:limit]
@@ -794,12 +846,18 @@ def save_estimate(body):
         raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
                            % existing["TxnStatus"].lower())
     if existing:
+        # A full update replaces the whole estimate: its number goes back in
+        # with it, or it could come back without one.
         est.update({"Id": existing["Id"], "SyncToken": existing["SyncToken"], "sparse": False,
                     "TxnDate": existing.get("TxnDate")})
+        if existing.get("DocNumber"):
+            est["DocNumber"] = existing["DocNumber"]
         saved = _call("POST", "estimate", body=est)
     else:
+        # The request id is worked out before the number is given, so a
+        # retry is still recognised if another estimate was made meanwhile.
         key = hashlib.sha1(("est|" + job_id + json.dumps(est, sort_keys=True)).encode()).hexdigest()
-        saved = _call("POST", "estimate", body=est, request_id=key)
+        saved = _call("POST", "estimate", body=_numbered("Estimate", est), request_id=key)
     e = saved.get("Estimate") or {}
 
     sent_to = ""
@@ -941,6 +999,8 @@ def invoice_from_estimate(body):
         memo = str(body.get("memo") or "").strip()
         if memo:
             base["CustomerMemo"] = {"value": memo[:MEMO_MAX]}
+        # Numbered once, so every way below carries the same number.
+        _numbered("Invoice", base)
         # Linked to the estimate, which is what closes it in QuickBooks: on
         # the invoice as a whole first; if QuickBooks will not take that, line
         # by line; failing both, unlinked with the estimate named -- an
@@ -1064,9 +1124,10 @@ def sweep():
 def create_invoice(body):
     """Create one invoice and hand back the number QuickBooks gave it.
 
-    DocNumber is deliberately NOT sent. QuickBooks keeps its own sequence, and
-    letting it assign the number is what makes the two systems incapable of
-    disagreeing -- the app records what came back rather than predicting it.
+    QuickBooks keeps its own sequence and assigns the number; the app records
+    what came back rather than predicting it. The one exception is when
+    QuickBooks is set to custom numbers and would leave the invoice with none:
+    then it gets the next one after the highest (_numbered).
 
     The requestid makes a repeat of the same invoice harmless: Intuit answers it
     with the invoice it already made instead of making another. It is built from
@@ -1117,7 +1178,9 @@ def create_invoice(body):
     else:
         request_id = uuid.uuid4().hex          # still protects this request's own retries
 
-    created = _call("POST", "invoice", body=invoice, request_id=request_id)
+    # The request id is worked out first (above), so a retry is recognised
+    # whatever number this one is given.
+    created = _call("POST", "invoice", body=_numbered("Invoice", invoice), request_id=request_id)
     inv = created.get("Invoice") or {}
     return {
         "id": inv.get("Id"),
