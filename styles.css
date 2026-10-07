@@ -1257,6 +1257,11 @@
   .sub-bill:last-child { border-bottom:none; }
   .sub-sugg { font-size:13px; margin-bottom:10px; }
 
+  /* Snow: what one clear brings in, across every account */
+  .snow-totals { margin-bottom:6px; }
+  .snow-tot-sub { font-size:12px; color:var(--muted); margin-top:4px; }
+  .snow-tot-note { margin:0 0 14px; }
+
   /* ---- work log ---- */
   .wl-filters { flex-wrap:wrap; gap:8px; }
   .wl-filters select, .wl-filters input { width:auto; flex:1 1 150px; }

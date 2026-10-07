@@ -125,6 +125,45 @@
     return s;
   }
 
+  // What one clear brings in across every active account, for a 1-3" storm
+  // and a 4-6" one (Jonah, 7 Oct 2026: "total income per clear for 1-3 &
+  // total income for a 4-6"). Worked out by priceVisit, as storm billing is,
+  // so the two cannot disagree. An account counts only if a storm that deep
+  // takes it (its trigger depth). Per-inch accounts bill 4" and 6" differently,
+  // so 4-6 can be a range; hourly labour is on top of these and only noted.
+  function clearTotals() {
+    const ids = Object.keys(accounts).filter(id => accounts[id].active !== false);
+    const at = inches => {
+      let sum = 0, n = 0;
+      ids.forEach(id => {
+        if ((accounts[id].minTriggerInches || 1) > inches) return;
+        const p = priceVisit(id, inches, 0, 1);
+        if (p && p.totalCents > 0) { sum += p.totalCents; n++; }
+      });
+      return { sum: sum, n: n };
+    };
+    return {
+      low: at(3), four: at(4), six: at(6),
+      hourly: ids.filter(id => pricing[id] && pricing[id].laborRateCents).length,
+      unpriced: ids.filter(id => !(pricing[id] && pricing[id].pricing)).length,
+    };
+  }
+  function totalsHtml() {
+    const t = clearTotals();
+    if (!t.low.n && !t.six.n) return '';
+    const card = (label, value, sub) => '<div class="summary-card accent-top"><div class="summary-label">' + label + '</div>' +
+      '<div class="summary-value">' + value + '</div><div class="snow-tot-sub">' + sub + '</div></div>';
+    const deep = t.four.sum === t.six.sum ? cents(t.six.sum) : cents(Math.min(t.four.sum, t.six.sum)) + '–' + cents(Math.max(t.four.sum, t.six.sum));
+    const notes = [];
+    if (t.hourly) notes.push('+ hourly labour on ' + t.hourly + ' account' + (t.hourly === 1 ? '' : 's') + ' (billed by time on site)');
+    if (t.unpriced) notes.push(t.unpriced + ' active account' + (t.unpriced === 1 ? ' has' : 's have') + ' no price yet');
+    return '<div class="dash-totals snow-totals">' +
+        card('Every 1–3" clear', cents(t.low.sum), t.low.n + ' account' + (t.low.n === 1 ? '' : 's')) +
+        card('Every 4–6" clear', deep, t.six.n + ' account' + (t.six.n === 1 ? '' : 's') + (t.four.sum !== t.six.sum ? ' · 4" to 6"' : '')) +
+      '</div>' +
+      (notes.length ? '<div class="hint snow-tot-note">' + esc(notes.join(' · ')) + '</div>' : '');
+  }
+
   function safeId(s) { return String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, ''); }
 
   // Customer prices and contact details: Snow, or Billing -- a storm cannot
@@ -157,7 +196,7 @@
     const seesPrices = seesSnowPrices();
     const edits = ydCan('snow', 'change');
 
-    wrap.innerHTML = ids.map(id => {
+    wrap.innerHTML = (seesPrices ? totalsHtml() : '') + ids.map(id => {
       const a = accounts[id];
       const held = Array.isArray(a.vacationHolds) && a.vacationHolds.length;
       return '<div class="snow-card' + (a.active === false ? ' inactive' : '') + '">' +
