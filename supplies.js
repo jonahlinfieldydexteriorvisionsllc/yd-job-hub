@@ -105,7 +105,9 @@
   // undefined anywhere.
   // The estimate's numbers on a price record ride along untouched unless e
   // gives them (null clears one).
-  const PRICING_KEYS = ['markupPct', 'wastePct', 'clientCents'];
+  // A rental's half-day and week rates ride along the same way; its day rate
+  // is the price itself (per day), which is what estimates use.
+  const PRICING_KEYS = ['markupPct', 'wastePct', 'clientCents', 'halfDayCents', 'weekCents'];
   function applyPrice(old, e) {
     const cur = Object.assign({ cents: null, per: '', year: null, asOf: '', priceNotes: '' }, old || {});
     const extra = {};
@@ -208,21 +210,31 @@
     renderResults();
   }
 
+  // Rentals (Jonah, 5 Oct 2026): "a rental section within the supplies with
+  // the locations and phone numbers for where we pick up certain rental
+  // items". A rental is an item of the Rentals kind (or a dumpster); the
+  // rental place is a supplier like any other.
+  const RENTALS = 'rentals';
+  const isRental = it => it.category === 'rental' || it.category === 'dumpster';
+
   function renderChips() {
     const box = el('supChips');
     if (!box) return;
     const count = {};
+    let rentals = 0;
     Object.values(items).forEach(it => {
       const k = vendors[it.vendorId] ? it.vendorId : '-';
       count[k] = (count[k] || 0) + 1;
+      if (isRental(it)) rentals++;
     });
     const vs = Object.values(vendors).sort(byName);
-    if (shown && shown !== '-' && !vendors[shown]) shown = '';
+    if (shown && shown !== '-' && shown !== RENTALS && !vendors[shown]) shown = '';
     const chip = (id, label, n) =>
       '<button class="sup-chip' + (shown === id ? ' on' : '') + '" onclick="supFilter(\'' + safeId(id) + '\')">' +
         esc(label) + (n != null ? ' <span>' + n + '</span>' : '') + '</button>';
     box.innerHTML = vs.length
       ? chip('', 'All suppliers', Object.keys(items).length) +
+        (rentals ? chip(RENTALS, '🚜 Rentals', rentals) : '') +
         vs.map(v => chip(v.id, v.name, count[v.id] || 0)).join('') +
         (count['-'] ? chip('-', 'No supplier', count['-']) : '')
       : '';
@@ -233,7 +245,7 @@
     if (!box) return;
     renderChips();
     const words = norm(search).split(/\s+/).filter(Boolean);
-    const inShown = it => !shown || (shown === '-' ? !vendors[it.vendorId] : it.vendorId === shown);
+    const inShown = it => !shown || (shown === RENTALS ? isRental(it) : shown === '-' ? !vendors[it.vendorId] : it.vendorId === shown);
     const list = Object.values(items)
       .filter(it => inShown(it) && (!words.length || matches(it, words)))
       .sort(byName);
@@ -249,8 +261,12 @@
     let html = '';
     // One supplier picked: its card first -- address, phone, hours, notes --
     // then everything bought there.
-    const v = shown && shown !== '-' ? vendors[shown] : null;
+    const v = shown && shown !== '-' && shown !== RENTALS ? vendors[shown] : null;
     if (v) html += vendorCardHtml(v, list.length);
+    if (shown === RENTALS) {
+      html += '<div class="hint">What we rent and where to get it. Add one with “+ Add an item” and pick ' +
+        '“Rentals” as its kind; the rental place is a supplier like any other.</div>';
+    }
 
     if (!list.length) {
       html += '<p class="empty-msg">' + (words.length
@@ -267,11 +283,12 @@
       return;
     }
 
-    if (shown || words.length) {
+    if ((shown && shown !== RENTALS) || words.length) {
       // A search shows each item with its supplier; inside one supplier the
       // supplier is already on the card above.
       html += list.map(it => itemHtml(it, !v)).join('');
     } else {
+      // Everything (or every rental), grouped by where it comes from.
       // Everything, grouped by supplier -- the way the list is kept.
       const groups = {};
       list.forEach(it => {
@@ -331,8 +348,11 @@
     const p = prices[id];
     if (!p || typeof p.cents !== 'number') return '<div class="sup-price none">No price yet</div>';
     const prev = lastYears(p);
+    const rates = [typeof p.halfDayCents === 'number' ? 'half day ' + fmtCents(p.halfDayCents) : '',
+                   typeof p.weekCents === 'number' ? 'week ' + fmtCents(p.weekCents) : ''].filter(Boolean);
     return '<div class="sup-price"><b>' + fmtCents(p.cents) + '</b>' +
       (p.per ? ' <span class="sup-per">/ ' + esc(p.per) + '</span>' : '') +
+      (rates.length ? ' <span class="sup-per">· ' + rates.join(' · ') + '</span>' : '') +
       (p.year ? ' <span class="sup-year">' + p.year + ' price</span>' : '') +
       (prev ? ' ' + changeHtml(change(p.cents, prev.cents)) : '') +
       (p.priceNotes ? '<div class="sup-pnotes">' + esc(p.priceNotes) + '</div>' : '') +
@@ -398,6 +418,8 @@
         per: p.per || '', year: String(p.year || thisYear()), notes: p.priceNotes || '',
         markup: show(p.markupPct), waste: show(p.wastePct),
         client: typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
+        halfDay: typeof p.halfDayCents === 'number' ? (p.halfDayCents / 100).toFixed(2) : '',
+        week: typeof p.weekCents === 'number' ? (p.weekCents / 100).toFixed(2) : '',
       };
       const catRule = ((window.YDPricing && window.YDPricing.rules().categories) || {})[it.category] || {};
       editing.priceShown = priceShown;
@@ -417,7 +439,7 @@
         '<div class="field"><span class="label">Notes for the crew</span><textarea id="siNotes" rows="2" ' +
           'placeholder="Which one to get, how much per job, anything to watch for">' + esc(it.notes || '') + '</textarea></div>' +
         '<fieldset class="sup-pricebox"><legend>For estimates</legend>' +
-          '<div class="field"><span class="label">Kind of material</span><select id="siCat">' +
+          '<div class="field"><span class="label">Kind of material</span><select id="siCat" onchange="supCatPicked(this.value)">' +
             '<option value="">— pick one —</option>' +
             categories().map(([cid, cname]) => '<option value="' + cid + '"' + (cid === it.category ? ' selected' : '') + '>' + esc(cname) + '</option>').join('') +
           '</select></div>' +
@@ -439,6 +461,11 @@
             field('Waste %', 'spWaste', priceShown.waste, catRule.wastePct != null ? catRule.wastePct + ' (its kind)' : 'its kind’s', 'decimal') +
             field('Or: customer price each ($)', 'spClient', priceShown.client, 'only for fixed-price items', 'decimal') +
           '</div>' +
+          // A rental: the price above is the day rate ("Per: day").
+          '<div class="grid g2" id="spRentalRow"' + (isRental(it) ? '' : ' hidden') + '>' +
+            field('Rental: half day ($)', 'spHalfDay', priceShown.halfDay, 'optional', 'decimal') +
+            field('Rental: week ($)', 'spWeek', priceShown.week, 'optional', 'decimal') +
+          '</div>' +
           '<div class="field"><span class="label">Price notes</span><textarea id="spNotes" rows="2" ' +
             'placeholder="Contractor price, 10+ bags $79, delivery $65">' + esc(priceShown.notes) + '</textarea></div>' +
           (hist.length ? '<div class="sup-hist">Earlier: ' + hist.map(h =>
@@ -450,6 +477,14 @@
     }
     const first = el(kind === 'vendor' ? 'svName' : 'siName');
     if (first && !id) first.focus();
+  };
+
+  // Picking Rentals (or Dumpsters) as the kind shows the half-day and week
+  // rates, and a blank "Per" becomes "day".
+  window.supCatPicked = function (cat) {
+    const rental = isRental({ category: cat });
+    const row = el('spRentalRow'); if (row) row.hidden = !rental;
+    const per = el('spPer'); if (rental && per && !per.value.trim() && cat === 'rental') per.value = 'day';
   };
 
   function field(label, id, value, ph, mode) {
@@ -488,15 +523,20 @@
     // leave the item saved and the price silently dropped.
     const s = editing.priceShown || {};
     const typed = { price: val('spPrice'), per: val('spPer'), year: val('spYear'), notes: (el('spNotes').value || '').trim(),
-                    markup: val('spMarkup'), waste: val('spWaste'), client: val('spClient') };
-    const pricingTouched = typed.markup !== s.markup || typed.waste !== s.waste || typed.client !== s.client;
+                    markup: val('spMarkup'), waste: val('spWaste'), client: val('spClient'),
+                    halfDay: val('spHalfDay'), week: val('spWeek') };
+    const pricingTouched = typed.markup !== s.markup || typed.waste !== s.waste || typed.client !== s.client ||
+      typed.halfDay !== (s.halfDay || '') || typed.week !== (s.week || '');
     const priceTouched = typed.price !== s.price || typed.per !== s.per || typed.year !== s.year || typed.notes !== s.notes || pricingTouched;
     const cents = parseCents(typed.price);
     if (priceTouched && Number.isNaN(cents)) { showToast('The price should look like 89.99'); return; }
     const year = validYear(typed.year);
     if (priceTouched && !year) { showToast('The year should look like ' + thisYear()); return; }
     const markupPct = parsePct(typed.markup), wastePct = parsePct(typed.waste), clientCents = parseCents(typed.client);
-    if ([markupPct, wastePct, clientCents].some(n => Number.isNaN(n))) { showToast('Markup, waste and customer price should be numbers'); return; }
+    const halfDayCents = parseCents(typed.halfDay), weekCents = parseCents(typed.week);
+    if ([markupPct, wastePct, clientCents, halfDayCents, weekCents].some(n => Number.isNaN(n))) {
+      showToast('Markup, waste, customer price and rental rates should be numbers'); return;
+    }
     const coverage = parsePct(val('siCover'));
     if (Number.isNaN(coverage) || coverage !== null && !(coverage > 0)) { showToast('“Covers” should be a number above 0, or blank'); return; }
 
@@ -515,7 +555,8 @@
       const next = applyPrice(prices[id], Object.assign({
         cents: typed.price !== s.price || typed.year !== s.year ? cents : undefined,
         per: typed.per, year: year, priceNotes: typed.notes,
-      }, pricingTouched ? { markupPct: markupPct, wastePct: wastePct, clientCents: clientCents } : {}));
+      }, pricingTouched ? { markupPct: markupPct, wastePct: wastePct, clientCents: clientCents,
+                            halfDayCents: halfDayCents, weekCents: weekCents } : {}));
       prices[id] = next;
       write('supplyPrices', id, next);
     }
