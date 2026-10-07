@@ -61,9 +61,13 @@
   let qbItems = null;         // QuickBooks product names, fetched when first wanted
 
   const CHAT_KEEP = 60;
+  // Each version put in QuickBooks, as it went: when, the total, each line's
+  // amount, whether it was emailed -- so a customer ringing about "the
+  // estimate you sent" can be answered from the job.
+  const SENT_KEEP = 10;
   function blank() {
     return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
-             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '' };
+             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [] };
   }
   const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -146,6 +150,7 @@
     o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
     o.flags = Array.isArray(e.flags) ? e.flags.map(String) : [];
     o.memo = String(e.memo || '');
+    o.sent = Array.isArray(e.sent) ? e.sent.slice(-SENT_KEEP) : [];
     if (e.v === 2) {
       o.work = (Array.isArray(e.work) ? e.work : []).map(w => Object.assign({ id: newId('ew'), kind: 'crew' }, w));
       o.materials = (Array.isArray(e.materials) ? e.materials : []).map(m => Object.assign({ id: newId('em') }, m));
@@ -530,7 +535,20 @@
         (q && q.id && !(inv && inv.id) ? '<button class="btn btn-sm" onclick="estCheck(false)"' + (checking ? ' disabled' : '') + '>' +
           (checking ? 'Checking…' : 'Check for an answer') + '</button>' : '') +
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
+      sentHtml(when) +
       invoiceHtml(q, inv, can, when);
+  }
+
+  function sentHtml(when) {
+    const list = (est.sent || []).slice().reverse();
+    if (!list.length) return '';
+    const time = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }); };
+    return '<details class="est-sent"><summary>Versions put in QuickBooks (' + list.length + ')</summary>' +
+      list.map(v => '<div class="est-sent-row"><b>' + esc(when(v.at)) + ' ' + esc(time(v.at)) + '</b> — ' + cents(v.totalCents) +
+        (v.emailed ? ' · emailed' : ' · saved, not emailed') + (v.docNumber ? ' · #' + esc(v.docNumber) : '') +
+        '<div class="muted">' + (v.work || []).map(w => esc(w.title || 'Labour') + ' ' + cents(w.cents)).join(' · ') +
+          (v.materialsCents ? ' · Materials ' + cents(v.materialsCents) : '') + '</div></div>').join('') +
+    '</details>';
   }
 
   // The invoice, once the customer says yes: one for the whole job, made from
@@ -1118,18 +1136,27 @@
     const site = siteLine();
     saving = true; renderQb();
     try {
+      const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '' }))
+        .filter(w => w.cents > 0 || w.scope.trim());
       const out = await askQb('/qb/estimate', {
         jobId: jobId, email: !!email,
         estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
         customer: { name: f('customerName'), email: to, phone: f('phone'), address: f('address'),
                     city: f('city'), state: f('state'), zip: f('zip') },
         site: site,
-        work: est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '' }))
-          .filter(w => w.cents > 0 || w.scope.trim()),
+        work: work,
         materials: { list: P().materialsList(r), cents: r.materialsCents },
         memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
         totalCents: r.totalCents,
       });
+      // This version, as it went (see SENT_KEEP).
+      const version = { at: new Date().toISOString(), emailed: !!email, docNumber: out.docNumber || null,
+        totalCents: r.totalCents, materialsCents: r.materialsCents,
+        work: work.map(w => ({ title: w.title, cents: w.cents })), materials: P().materialsList(r) };
+      if (currentJobId === jobId) {
+        est.sent = (est.sent || []).concat([version]).slice(-SENT_KEEP);
+        if (typeof markDirty === 'function') markDirty();
+      }
       afterQb(jobId, out, email);
       showToast(email ? 'Emailed from QuickBooks' + (out.docNumber ? ' — estimate #' + out.docNumber : '')
         : 'Saved in QuickBooks' + (out.docNumber ? ' as estimate #' + out.docNumber : ''));
