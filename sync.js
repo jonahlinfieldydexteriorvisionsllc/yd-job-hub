@@ -84,6 +84,13 @@
     if (!raw) return false;
     let data;
     try { data = JSON.parse(raw); } catch { return false; }
+    // A bid booked from anywhere brings its estimate's materials onto
+    // Materials to Order (app.js bookedOrderItems).
+    if (patch.jobStatus === 'booked' && isBidStatus(data.jobStatus) && !patch.orderItems &&
+        typeof bookedOrderItems === 'function') {
+      const list = bookedOrderItems(id, data);
+      if (list) patch = Object.assign({}, patch, { orderItems: list });
+    }
     Object.assign(data, patch, { lastModified: new Date().toISOString() });
     try {
       localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(data));

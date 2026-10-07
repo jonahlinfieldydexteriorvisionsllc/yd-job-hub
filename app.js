@@ -659,6 +659,8 @@ function onStatusChange() {
   jobStatus = document.getElementById('jobStatusSelect').value;
   const at = new Date().toISOString();
   if (jobStatus === 'booked' && was !== 'booked') { boardFields.workStage = 'scheduled'; boardFields.workStageAt = at; }
+  // Booked here rather than from the board: the order list fills the same way.
+  if (jobStatus === 'booked' && isBidStatus(was) && !orderItems.some(it => it.fromEstimate)) fillOrderFromEstimate(true);
   if (jobStatus === 'inprogress' && boardFields.workStage !== 'punchList' && was !== 'inprogress') {
     boardFields.workStage = 'inProgress'; boardFields.workStageAt = at;
   }
@@ -879,27 +881,184 @@ function addOrderItem() {
 }
 function toggleOrderItem(id) { const it = orderItems.find(m => m.id === id); if (it) { it.ordered = !it.ordered; renderOrderList(); markDirty(); } }
 function rmOrderItem(id) { orderItems = orderItems.filter(m => m.id !== id); renderOrderList(); markDirty(); }
+
+// ── From the estimate ──
+// A bid becoming a job brings its estimate's takeoff onto Materials to Order
+// -- what to buy, how much of it, from whom -- so nothing is typed twice.
+// Lines that came from the estimate (fromEstimate) follow it while they are
+// not yet ordered; anything added by hand is never touched.
+function orderFields(l) {
+  return { name: l.name, quantity: window.YDPricing.qtyText(l.orderQty, l.per), qty: l.orderQty, per: l.per || '',
+           supplyId: l.supplyId || null, vendorId: l.vendorId || null, specialOrder: !!l.specialOrder };
+}
+function orderFromEstimate(list, lines) {
+  const keyOf = x => x.supplyId ? 's:' + x.supplyId : 'n:' + String(x.name || '').toLowerCase().trim();
+  const want = {};
+  lines.forEach(l => { want[keyOf(l)] = l; });
+  const seen = {}, out = [];
+  list.forEach(it => {
+    if (!it.fromEstimate) { out.push(it); return; }
+    const k = keyOf(it);
+    if (it.ordered) { out.push(it); seen[k] = 1; return; }   // bought already: left as it was
+    if (!want[k]) return;                                    // no longer on the estimate
+    seen[k] = 1;
+    out.push(Object.assign({}, it, orderFields(want[k])));
+  });
+  lines.forEach(l => {
+    if (!seen[keyOf(l)]) out.push(Object.assign({ id: uid(), proposalId: null, ordered: false, fromEstimate: true }, orderFields(l)));
+  });
+  return out;
+}
+function fillOrderFromEstimate(quiet) {
+  if (jobsReadOnly() || !window.YDEstimate || !window.YDPricing) return;
+  const lines = window.YDEstimate.orderLines();
+  if (!lines.length) { if (!quiet) showToast('The estimate has no materials yet'); return; }
+  orderItems = orderFromEstimate(orderItems, lines);
+  renderOrderList(); markDirty();
+  if (!quiet) showToast('Materials to Order now matches the estimate');
+}
+// sync.js patchJob asks this when a bid is booked from anywhere -- the Bids
+// board, "Make it a job", QuickBooks saying the customer accepted. Only the
+// first time: after that the list is Jonah's, and the button brings it up to
+// date with the estimate when he wants.
+function bookedOrderItems(id, data) {
+  if (!window.YDEstimate || !window.YDPricing) return null;
+  const open = id === currentJobId;
+  const list = open ? orderItems : (data.orderItems || []);
+  if (list.some(it => it.fromEstimate)) return null;
+  const lines = open ? window.YDEstimate.orderLines() : window.YDEstimate.orderLines(data.estimate || null, data.city || '');
+  if (!lines.length) return null;
+  const out = orderFromEstimate(list, lines);
+  if (open) { orderItems = out; renderOrderList(); }
+  return out;
+}
+
+// ── What it costs (owner, and admins with Supplies) ──
+// From the Supplies price list: an item from the estimate knows its supply; a
+// line typed by hand is matched by its name, or linked by hand. Last year's
+// price is used, and says so. Never counted in the job's numbers -- it is the
+// cost of the order, to check against the receipts.
+let linkingOrder = null;     // the order line whose supply is being picked
+function orderSupply(it, cat) {
+  if (it.supplyId) return cat.items[it.supplyId] ? it.supplyId : null;
+  const k = String(it.name || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (!k) return null;
+  const hit = Object.keys(cat.items).find(id => String(cat.items[id].name || '').toLowerCase().replace(/[^a-z0-9]+/g, '') === k);
+  return hit || null;
+}
+function orderQtyOf(it) {
+  if (typeof it.qty === 'number' && isFinite(it.qty)) return it.qty;
+  const m = String(it.quantity || '').replace(/,/g, '').match(/\d+(\.\d+)?|\.\d+/);
+  return m ? parseFloat(m[0]) : null;
+}
+function orderCost(it, cat) {
+  const sid = orderSupply(it, cat);
+  const pr = sid ? cat.prices[sid] : null;
+  if (!pr || typeof pr.cents !== 'number') return { sid: sid, cents: null };
+  const q = orderQtyOf(it);
+  const per = String(pr.per || cat.items[sid].unit || '').trim();
+  // A unit typed by hand that is not the one the price is per ("2 pallets"
+  // of something priced by the sq ft) would make a wrong number: say so.
+  const typed = String(it.quantity || '').replace(/[\d.,\s]+/g, ' ').trim().toLowerCase();
+  const sing = s => s.replace(/(es|s)$/, '');
+  const unitOff = !it.fromEstimate && typed && per && sing(typed) !== sing(per.toLowerCase());
+  return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: unitOff,
+           cents: q === null || unitOff ? null : Math.round(q * pr.cents) };
+}
+function linkOrderItem(id, sid) {
+  const it = orderItems.find(m => m.id === id);
+  linkingOrder = null;
+  if (it && sid) { it.supplyId = sid; markDirty(); }
+  renderOrderList();
+}
+// One supplier's part of the order as text, to paste into an email or a text.
+function copySupplierOrder(vid) {
+  const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
+  const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid)
+    .map(it => (it.quantity ? it.quantity + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : ''));
+  if (!lines.length) { showToast('Nothing left to order there'); return; }
+  const v = (cat.vendors || {})[vid];
+  const f = id => ((document.getElementById(id) || {}).value || '').trim();
+  const where = [f('address'), f('city')].filter(Boolean).join(', ');
+  const text = 'Order' + (v && v.name ? ' for ' + v.name : '') + (where ? ' — job at ' + where : '') + '\n' + lines.join('\n');
+  const done = () => showToast('Copied — paste it into an email or a text');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => prompt('Copy this:', text));
+  else prompt('Copy this:', text);
+}
+function orderVendor(it, cat) {
+  if (it.vendorId) return it.vendorId;
+  const sid = orderSupply(it, cat);
+  return sid ? cat.items[sid].vendorId || '' : '';
+}
+
 function renderOrderList() {
   const wrap = document.getElementById('orderListWrap');
   const prog = document.getElementById('orderProgress');
+  const fromEst = document.getElementById('orderFromEstimate');
+  const estHasMats = !!(window.YDEstimate && window.YDEstimate.hasMaterials && window.YDEstimate.hasMaterials());
+  if (fromEst) {
+    fromEst.hidden = !estHasMats || jobsReadOnly();
+    fromEst.textContent = orderItems.some(it => it.fromEstimate) ? '↻ Update from the estimate' : '⬇ Fill from the estimate';
+  }
   if (!orderItems.length) {
-    wrap.innerHTML = '<p class="empty-msg">No items yet — import a proposal or add manually.</p>';
+    wrap.innerHTML = '<p class="empty-msg">' + (estHasMats ? 'Nothing yet — fills from the estimate when the bid is booked, or press “Fill from the estimate”.'
+      : 'No items yet — import a proposal or add manually.') + '</p>';
     prog.innerHTML = ''; document.getElementById('orderBadge').textContent = ''; return;
   }
   const ordered = orderItems.filter(m => m.ordered).length, total = orderItems.length;
   const pct = Math.round(ordered / total * 100);
   prog.innerHTML = '<div class="progress-label"><span>Ordered</span><span>' + ordered + ' / ' + total + '</span></div>' +
     '<div class="progress"><div class="progress-fill" style="width:' + pct + '%"></div></div>';
-  wrap.innerHTML = orderItems.map(it =>
-    '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
+
+  const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {}, prices: {}, vendors: {} };
+  const prices = typeof ydCan === 'function' && ydCan('supplies', 'see') && Object.keys(cat.items).length > 0;
+  const thisYear = new Date().getFullYear();
+  let sum = 0, unpriced = 0;
+  const row = it => {
+    const c = prices ? orderCost(it, cat) : null;
+    if (c && !it.ordered) { if (c.cents !== null) sum += c.cents; else unpriced++; }
+    const costLine = !c ? '' : c.cents !== null
+      ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
+        (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
+      : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity</span>'
+      : c.sid ? '<span class="cr-cost muted">no price in Supplies</span>'
+      : linkingOrder === it.id ? ''
+      : '<span class="cr-cost"><button class="link-btn" onclick="linkingOrder=\'' + it.id + '\'; renderOrderList()">no price — link to Supplies</button></span>';
+    const picker = linkingOrder === it.id
+      ? '<div class="cr-link"><select class="searchable" onchange="linkOrderItem(\'' + it.id + '\', this.value)"><option value="">Which supply is it?</option>' +
+          Object.values(cat.items).sort((a, b) => String(a.name).localeCompare(String(b.name)))
+            .map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>').join('') +
+        '</select> <button class="link-btn" onclick="linkingOrder=null; renderOrderList()">Cancel</button></div>' : '';
+    return '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + it.id + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
+        (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
         // Ticked by a receipt sorted onto this job: which order it was.
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
+        (costLine ? '<br>' + costLine : '') + picker +
       '</span>' +
       (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '') +
-      '<button class="remove-btn" onclick="rmOrderItem(\'' + it.id + '\')">×</button></div>'
-  ).join('');
+      '<button class="remove-btn" onclick="rmOrderItem(\'' + it.id + '\')">×</button></div>';
+  };
+
+  // By supplier, so each call or email covers one place.
+  const groups = {};
+  orderItems.forEach(it => { const v = orderVendor(it, cat); (groups[v] = groups[v] || []).push(it); });
+  const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
+  const keys = Object.keys(groups).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || vname(a).localeCompare(vname(b)));
+  const grouped = keys.length > 1 || keys[0] !== '';
+  wrap.innerHTML = keys.map(v => {
+    const list = groups[v];
+    const left = list.filter(it => !it.ordered).length;
+    return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
+        '<span class="muted">' + left + ' to order</span>' +
+        (v && left ? '<button class="link-btn" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' : '') + '</div>' : '') +
+      list.map(row).join('');
+  }).join('') +
+    (prices && (sum || unpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney(sum / 100) + '</b> before tax' +
+      (unpriced ? ' · ' + unpriced + ' line' + (unpriced === 1 ? '' : 's') + ' without a price' : '') +
+      '<div class="muted">Your cost from Supplies — only you see this, and it isn’t in the job’s numbers.</div></div>' : '');
+  wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
   document.getElementById('orderBadge').textContent = ordered + '/' + total + ' ordered';
 }
 

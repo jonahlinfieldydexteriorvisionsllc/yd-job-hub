@@ -50,7 +50,10 @@
   let est = blank();
   let book = {};              // price book, id -> entry
   let unsub = null;
-  let building = false, saving = false, checking = false, tripping = false;
+  // building: the id of the job Claude is working on (one at a time), or null.
+  let building = null, saving = false, checking = false, tripping = false;
+  const queued = [];          // jobs waiting for Claude to start their estimate
+  let loads = 0;              // how many times the form has been loaded with a job (or emptied)
   const checkedAt = {};       // job id -> when its QuickBooks status was last asked for
   const trippedFor = {};      // job id -> the address the miles were last looked up for
   let draftMsg = '';          // what is typed in the chat box, not sent yet
@@ -70,13 +73,16 @@
     const c = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : null;
     return c || { items: {}, prices: {}, vendors: {}, pricesReady: false };
   }
-  function ctx() {
+  // city: the job's town for the delivery rate -- the form's, unless a job
+  // that is not open is being priced.
+  function ctx(city) {
     const c = catalog();
     return { rules: P().rules(), items: c.items, prices: c.prices, fuel: P().fuelPrices(),
-             city: (el('city') && el('city').value || '').trim() };
+             city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim() };
   }
   let last = null;            // the last worked-out price, for the totals and QuickBooks
   function priced() { last = P() ? P().price(est, ctx()) : null; return last; }
+  const busyHere = () => !!building && building === currentJobId;
 
   const hasLines = () => est.work.length > 0 || est.materials.length > 0;
 
@@ -89,6 +95,7 @@
       return o;
     },
     load(e) {
+      loads++;
       est = blank();
       if (e && typeof e === 'object') est = fromSaved(e);
       draftMsg = ''; undo = null;
@@ -96,9 +103,30 @@
       autoCheck();
     },
     hasLines: () => hasLines(),
+    hasMaterials: () => est.materials.length > 0,
     totalDollars: () => { const r = priced(); return r ? r.totalCents / 100 : 0; },
     book: () => book,
+    orderLines: orderLines,
   };
+
+  // What to buy for an estimate: every material it prices -- the takeoff and
+  // what the rules add (dumpsters, the planting package, markers) -- in the
+  // quantity to order and the unit it is sold in, with who sells it and what
+  // one costs us. For the open job by default, or a saved estimate (a job
+  // booked from the Bids board without being opened). Deliveries and fuel are
+  // not things to order.
+  function orderLines(saved, city) {
+    if (!P()) return [];
+    const e = saved === undefined ? est : fromSaved(saved || {});
+    const r = P().price(e, ctx(saved === undefined ? undefined : city || ''));
+    const items = catalog().items;
+    return r.takeoff.concat(r.added).filter(l => l.orderQty > 0).map(l => {
+      const it = l.supplyId ? items[l.supplyId] : null;
+      return { supplyId: l.supplyId || null, vendorId: (it && it.vendorId) || null,
+               name: (it && it.name) || l.name || '', orderQty: l.orderQty, per: l.per || '',
+               costEachCents: num(l.costCents), specialOrder: !!l.specialOrder, plant: l.category === 'plant' };
+    });
+  }
 
   // An estimate saved by the first version (price-book lines and one message)
   // comes in as flat labour lines, so nothing typed is lost.
@@ -158,12 +186,15 @@
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : 'Ask Jonah to set them.') + '</div>' : '') +
 
       '<div class="field"><span class="label">Notes from the site visit — what you saw and measured, what they want. Claude builds the estimate from these.</span>' +
-        '<textarea id="estNotes" rows="5" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" ' +
+        '<textarea id="estNotes" rows="5" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" onblur="estNotesDone()" ' +
         'placeholder="16x20 patio off the back door, Tahoe in Cascade, 2 steps down. 40 ft of Belgian edging along the beds (we pick it up). Tear out the old deck, ~12x14. Clay soil.">' +
         esc(est.notes) + '</textarea></div>' +
       (!ro && !hasLines() && !est.chat.length
         ? '<div class="field-actions"><button class="btn btn-filled" onclick="estDraftFromNotes()"' + (building ? ' disabled' : '') + '>' +
-            (building ? 'Claude is working…' : '✨ Build the estimate from my notes') + '</button></div>' : '') +
+            (busyHere() ? 'Claude is working…' : building ? 'Claude is busy with another estimate…'
+              : queued.indexOf(currentJobId) !== -1 ? 'Waiting its turn…' : '✨ Build the estimate from my notes') + '</button>' +
+            (autoOn() && !building ? '<span class="hint">Or just finish writing — when you leave the notes, Claude starts it by itself.</span>' : '') +
+          '</div>' : '') +
 
       chatHtml(ro) +
 
@@ -207,7 +238,7 @@
   }
 
   function chatHtml(ro) {
-    if (!est.chat.length && !building) return '';
+    if (!est.chat.length && !busyHere()) return '';
     const lastI = est.chat.length - 1;
     return '<div class="est-chat" id="estChat">' +
         est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + '">' +
@@ -217,12 +248,15 @@
             (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
             '</div>' : '') +
         '</div>').join('') +
-        (building ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">Working on it — a first build can take a minute or two…</div></div>' : '') +
+        (busyHere() ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">Working on it — a first build can take a minute or two. ' +
+          'You can open another job meanwhile; it lands on this one.</div></div>'
+          : queued.indexOf(currentJobId) !== -1 ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">' +
+            'Waiting its turn — finishing another estimate first.</div></div>' : '') +
       '</div>' +
       (ro ? '' : '<div class="est-send">' +
         '<textarea id="estMsg" rows="2" placeholder="Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “4 crew-days”" ' +
           'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
-        '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (building ? '…' : 'Send') + '</button>' +
+        '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (busyHere() ? '…' : 'Send') + '</button>' +
       '</div>' +
       '<div class="field-actions"><button class="link-btn" onclick="estNewChat()">Start the conversation over</button></div>');
   }
@@ -560,31 +594,79 @@
       e.preventDefault(); window.estSend();
     }
   };
+  const BUILD_ASK = 'Build the estimate from my site-visit notes.';
   window.estDraftFromNotes = function () {
     if (!String(est.notes || '').trim()) { showToast('Write your notes from the site visit first'); const n = el('estNotes'); if (n) n.focus(); return; }
-    draftMsg = 'Build the estimate from my site-visit notes.';
+    draftMsg = BUILD_ASK;
     window.estSend();
   };
 
-  function currentForClaude() {
-    const r = priced();
+  // Claude starts the estimate by itself. Jonah (6 Oct 2026): the site-visit
+  // notes are the start of a bid, and the draft should be waiting for him
+  // without being asked. So leaving the notes box -- notes written, nothing
+  // built yet -- starts it: only when the notes say enough to work from, once
+  // per job, and not at all if it is switched off in Pricing rules.
+  const AUTO_MIN_WORDS = 8;
+  const autoAsked = {};       // job id -> already started by itself (this session)
+  function autoOn() { return !!(P() && P().rules().autoDraft !== false); }
+  window.estNotesDone = function () {
+    if (!autoOn() || !changes() || hasLines() || est.chat.length) return;
+    if (String(est.notes || '').trim().split(/\s+/).length < AUTO_MIN_WORDS) return;
+    if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) return;
+    if (!(el('customerName').value || '').trim()) { showToast('Add the customer’s name and Claude will start the estimate'); return; }
+    // A moment's grace: going straight back into the notes is not leaving them.
+    // And if another job is opened in that moment, this one is left alone.
+    // (A new job gets its id from the autosave in between, so it is the form
+    // being loaded with another job that is watched for, not the id.)
+    const seq = loads;
+    setTimeout(() => {
+      const a = document.activeElement;
+      if (loads !== seq) return;
+      if ((a && a.id === 'estNotes') || hasLines() || est.chat.length || !changes()) return;
+      if (!currentJobId && typeof autosave === 'function') autosave();
+      if (!currentJobId || autoAsked[currentJobId] || building === currentJobId) return;
+      autoAsked[currentJobId] = true;
+      draftMsg = BUILD_ASK;
+      window.estSend();
+    }, 1200);
+  };
+
+  // The job as Claude needs to see it: from the form for the job that is open,
+  // from its saved copy for one that is not (an answer that comes back after
+  // Jonah has moved on, or a job that waited its turn).
+  function savedJob(jobId) {
+    try { return JSON.parse(readJobBlob(jobId) || 'null'); } catch (e) { return null; }
+  }
+  function jobFacts(jobId) {
+    const d = jobId === currentJobId ? null : savedJob(jobId);
+    if (jobId !== currentJobId && !d) return null;
+    const v = f => String(d ? d[f] || '' : (el(f) && el(f).value) || '').trim();
+    const services = d ? (Array.isArray(d.serviceTypes) ? d.serviceTypes.slice() : [])
+      : (typeof serviceTypes !== 'undefined' ? serviceTypes.slice() : []);
+    return { customer: v('customerName'), city: v('city'), notes: v('notes'), services: services,
+             location: [v('address'), [v('city'), v('state')].filter(Boolean).join(', ')].filter(Boolean).join(', '),
+             estimate: d ? fromSaved(d.estimate || {}) : est, data: d };
+  }
+
+  function currentForClaude(e, city) {
+    const r = P() ? P().price(e, ctx(city)) : null;
     return {
-      work: est.work.map(w => ({ id: w.id, title: w.title || '', scope: w.scope || '', kind: w.kind || 'crew',
+      work: e.work.map(w => ({ id: w.id, title: w.title || '', scope: w.scope || '', kind: w.kind || 'crew',
         crewDays: num(w.crewDays), priceId: w.priceId || null, qty: num(w.qty),
         amountDollars: num(w.amountCents) === null ? null : w.amountCents / 100 })),
-      materials: est.materials.map(m => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
+      materials: e.materials.map(m => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
         unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
         costEachDollars: num(m.costCents) === null ? null : m.costCents / 100, delivery: m.delivery || 'auto' })),
-      spoilCuYd: num(est.spoilCuYd),
+      spoilCuYd: num(e.spoilCuYd),
       totals: r ? { materials: r.materialsCents / 100, labour: r.laborCents / 100, total: r.totalCents / 100,
                     crewDays: r.crewDays, notPriced: r.problems.slice(0, 20) } : null,
     };
   }
 
-  // Claude's estimate onto ours, line by line by id.
-  function mergeWork(got) {
+  // Claude's estimate onto ours (e), line by line by id.
+  function mergeWork(got, e) {
     return (got || []).map(g => {
-      const was = g.id ? est.work.find(w => w.id === g.id) : null;
+      const was = g.id ? e.work.find(w => w.id === g.id) : null;
       const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
       w.title = String(g.title || '');
       w.scope = String(g.scope || '');
@@ -602,10 +684,10 @@
       return w;
     });
   }
-  function mergeMaterials(got) {
+  function mergeMaterials(got, e) {
     const items = catalog().items;
     return (got || []).map(g => {
-      const was = g.id ? est.materials.find(m => m.id === g.id) : null;
+      const was = g.id ? e.materials.find(m => m.id === g.id) : null;
       const m = was ? clone(was) : { id: newId('em'), delivery: 'auto' };
       m.plant = !!g.plant;
       m.supplyId = !m.plant && g.supplyId && items[g.supplyId] ? g.supplyId : null;
@@ -619,8 +701,8 @@
     });
   }
 
-  window.estSend = async function () {
-    if (building || !changes()) return;
+  window.estSend = function () {
+    if (!changes() || busyHere()) return;
     if (!window.YDClaude || !window.YDClaude.available()) { showToast('Sign in to use Claude'); return; }
     const text = String(draftMsg || '').trim();
     if (!text) { const b = el('estMsg'); if (b) b.focus(); return; }
@@ -629,48 +711,125 @@
     // Saved first so the job has an id that means only itself (see claude.js).
     if (!currentJobId && typeof autosave === 'function') autosave();
     const forJob = currentJobId;
+    if (!forJob) { showToast('Save the job first'); return; }
+    if (queued.indexOf(forJob) !== -1) return;
     est.chat.push({ role: 'user', text: text, at: new Date().toISOString(), changed: false });
     draftMsg = '';
-    building = true;
+    // Saved now rather than in a second: the answer may come back after
+    // another job is opened, and is then put on this one's saved copy.
     changed(true);
-    try {
-      const city = [el('city').value, el('state').value].filter(Boolean).join(', ');
-      const r = await window.YDClaude.post('/estimate/draft', {
-        jobId: forJob,
-        customer: customer,
-        location: [el('address').value, city].filter(Boolean).join(', '),
-        services: (typeof serviceTypes !== 'undefined' ? serviceTypes.slice() : []),
-        jobNotes: (el('notes').value || '').trim(),
-        siteNotes: String(est.notes || '').trim(),
-        chat: est.chat.slice(-30).map(m => ({ role: m.role, text: m.text })),
-        current: currentForClaude(),
-      });
-      if (currentJobId !== forJob) { showToast('A different job is open now — Claude’s answer was not put in it'); return; }
-      const apply = r.updated !== false && ((r.work || []).length || (r.materials || []).length);
-      if (apply) {
-        undo = { jobId: forJob, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd,
-                 questions: est.questions.slice(), flags: est.flags.slice() };
-        est.work = mergeWork(r.work);
-        est.materials = mergeMaterials(r.materials);
-        if (num(r.spoilCuYd) !== null) est.spoilCuYd = num(r.spoilCuYd) || null;
-      } else {
-        // Undo only ever undoes the change it is shown beside.
-        undo = null;
-      }
-      est.questions = (r.questions || []).map(String);
-      est.flags = (r.flags || []).map(String);
-      est.chat.push({ role: 'assistant', text: String(r.reply || (apply ? 'Updated the estimate.' : 'No change.')),
-                      at: new Date().toISOString(), changed: !!apply });
-      changed(true);
-    } catch (e) {
-      // The message stays in the box to send again.
-      est.chat.pop();
-      draftMsg = text;
-      showToast('Claude: ' + (e.message || e));
-    } finally {
-      building = false; render();
+    if (typeof autosave === 'function') autosave();
+    if (building) {
+      queued.push(forJob); render();
+      showToast('Claude is finishing another estimate — this one is next');
+      return;
     }
+    ask(forJob);
   };
+
+  async function ask(jobId) {
+    const job = jobFacts(jobId);
+    const e0 = job && job.estimate;
+    const asked = e0 && e0.chat[e0.chat.length - 1];
+    if (!job || !asked || asked.role !== 'user') { askNext(); return; }
+    building = jobId;
+    if (jobId === currentJobId) render();
+    try {
+      const r = await window.YDClaude.post('/estimate/draft', {
+        jobId: jobId,
+        customer: job.customer,
+        location: job.location,
+        services: job.services,
+        jobNotes: job.notes,
+        siteNotes: String(e0.notes || '').trim(),
+        chat: e0.chat.slice(-30).map(m => ({ role: m.role, text: m.text })),
+        current: currentForClaude(e0, job.city),
+      });
+      land(jobId, r);
+    } catch (e) {
+      failed(jobId, asked, e);
+    } finally {
+      building = null;
+      render();
+      askNext();
+    }
+  }
+  function askNext() {
+    const next = queued.shift();
+    if (next) ask(next);
+  }
+
+  // Claude's answer onto an estimate: the lines merged by id, its questions
+  // and flags, its reply in the conversation. Returns whether it changed lines.
+  function apply(e, r) {
+    const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length));
+    if (did) {
+      e.work = mergeWork(r.work, e);
+      e.materials = mergeMaterials(r.materials, e);
+      if (num(r.spoilCuYd) !== null) e.spoilCuYd = num(r.spoilCuYd) || null;
+    }
+    e.questions = (r.questions || []).map(String);
+    e.flags = (r.flags || []).map(String);
+    e.chat.push({ role: 'assistant', text: String(r.reply || (did ? 'Updated the estimate.' : 'No change.')),
+                  at: new Date().toISOString(), changed: did });
+    return did;
+  }
+
+  function land(jobId, r) {
+    if (jobId === currentJobId) {
+      const before = { jobId: jobId, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd,
+                       questions: est.questions.slice(), flags: est.flags.slice() };
+      // Undo only ever undoes the change it is shown beside.
+      undo = apply(est, r) ? before : null;
+      changed(true);
+      // Kept straight away: a minute of Claude's work should not hang on the
+      // autosave's second if Jonah opens another job right then.
+      if (typeof autosave === 'function') autosave();
+      return;
+    }
+    // Jonah has moved on to another job: the answer goes on this one's saved
+    // copy, and its price follows, the same as if it had been open.
+    const d = savedJob(jobId);
+    if (!d) return;
+    const e = fromSaved(d.estimate || {});
+    apply(e, r);
+    e.chat = e.chat.slice(-CHAT_KEEP);
+    // Through JSON, as the form's save does: Firestore refuses a write with
+    // an undefined anywhere in it.
+    const patch = { estimate: clone(e) };
+    const total = P() ? P().price(e, ctx(d.city || '')).totalCents : 0;
+    if (!d.manualJobPrice && total > 0) {
+      const extra = (d.additionalCosts || []).reduce((s, x) => s + (parseFloat(x.materialCost) || 0) + (parseFloat(x.laborCost) || 0), 0);
+      patch.baseJobPrice = total / 100;
+      patch.jobPrice = (total / 100 + extra).toFixed(2);
+    }
+    if (window.YDSync && window.YDSync.patchJob(jobId, patch)) {
+      showToast('✨ Claude finished the estimate for ' + (d.customerName || 'a bid') + ' — it’s on the job to check');
+    }
+  }
+
+  // The question goes back to where it was asked from, to send again.
+  function failed(jobId, asked, err) {
+    const why = (err && err.message) || String(err);
+    if (jobId === currentJobId) {
+      const lastM = est.chat[est.chat.length - 1];
+      if (lastM && lastM.role === 'user' && lastM.at === asked.at) {
+        est.chat.pop();
+        if (lastM.text !== BUILD_ASK) draftMsg = lastM.text;
+      }
+      changed(true);
+      showToast('Claude: ' + why);
+      return;
+    }
+    const d = savedJob(jobId);
+    if (d && d.estimate && Array.isArray(d.estimate.chat)) {
+      const e = fromSaved(d.estimate);
+      const lastM = e.chat[e.chat.length - 1];
+      if (lastM && lastM.role === 'user' && lastM.at === asked.at) e.chat.pop();
+      if (window.YDSync) window.YDSync.patchJob(jobId, { estimate: clone(e) });
+    }
+    showToast('Claude could not finish the estimate for ' + ((d && d.customerName) || 'a bid') + ': ' + why);
+  }
 
   window.estUndo = function () {
     if (!undo || undo.jobId !== currentJobId || !changes()) return;
@@ -703,7 +862,11 @@
     if (!hasLines() || num((est.fuel || {}).miles) !== null || (est.off || {}).fuel) return;
     if (!currentJobId || !(el('address') && el('address').value.trim()) || !navigator.onLine) return;
     if (trippedFor[currentJobId] === siteKey()) return;
-    setTimeout(() => window.estFindMiles(false), 800);
+    // Asked again when the time comes: two redraws in a row would otherwise
+    // both ask for the same miles.
+    setTimeout(() => {
+      if (trippedFor[currentJobId] !== siteKey() && num((est.fuel || {}).miles) === null) window.estFindMiles(false);
+    }, 800);
   }
   window.estFindMiles = async function (asked) {
     if (tripping || !changes() || !window.YDClaude) return;

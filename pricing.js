@@ -68,6 +68,9 @@
       planting: { perPlant: [], perSingleTree: [], perMultiTree: [] },
       payments: { splitAboveCents: null, twoText: '', threeText: '', warranty: '' },
       shop: { address: '', lat: null, lng: null },
+      // Claude starts an estimate by itself when the site-visit notes are
+      // written (estimate.js). On unless switched off.
+      autoDraft: null,
     };
   }
 
@@ -517,6 +520,10 @@
         '</span><textarea rows="3"' + (ro ? ' disabled' : '') + ' onchange="prSet(\'payments.' + k + '\', this.value, \'text\')">' +
         esc(r.payments[k] || '') + '</textarea></label>').join('') +
 
+      '<h3 class="pr-h">Claude</h3>' +
+      '<label class="est-switch"><input type="checkbox"' + (r.autoDraft !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
+        ' onchange="prSet(\'autoDraft\', this.checked, \'bool\')"> Start the estimate by itself when I finish my site-visit notes</label>' +
+      '<p class="hint">Each estimate Claude builds costs a little (cents, not dollars). Off, it waits for “Build the estimate from my notes”.</p>' +
       '<h3 class="pr-h">What Claude knows about takeoff</h3>' +
       '<p class="hint">Your rules for laying out an estimate — base depths, conversions, install standards, how a scope is written, the clauses every estimate carries. ' +
         'Claude reads all of this with every message about an estimate. Prices and markups don’t belong here; the app works those out.</p>' +
@@ -532,11 +539,12 @@
     showToast('Saved — Claude reads this from the next message');
   };
 
-  // path like 'delivery.markupPct'; kind: num | cents | text | id | list
+  // path like 'delivery.markupPct'; kind: num | cents | text | id | list | bool
   window.prSet = function (path, v, kind) {
     if (!owner()) return;
     let val;
-    if (kind === 'cents') val = cents(v);
+    if (kind === 'bool') val = !!v;
+    else if (kind === 'cents') val = cents(v);
     else if (kind === 'num') val = num(v);
     else if (kind === 'list') val = String(v || '').split(/[,\s]+/).map(num).filter(n => n !== null);
     else if (kind === 'id') val = v || null;

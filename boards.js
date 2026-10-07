@@ -438,6 +438,11 @@
     '</div>';
   }
 
+  function hasDraft(j) {
+    const e = j.estimate;
+    return !!(e && ((e.work || []).length || (e.materials || []).length) && !(j.qbEstimate && j.qbEstimate.id) &&
+      ['siteVisit', 'toSend'].indexOf(bidColumn(j)) !== -1);
+  }
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     const days = daysSince(since);
@@ -454,6 +459,8 @@
         (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') + '</div>' +
       (where ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
+      // Claude's draft is waiting to be checked and sent (estimate.js).
+      (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
       '<div class="bd-card-foot">' +
         (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>' : '') +
         (days != null ? '<span class="bd-age' + (stale ? ' late' : '') + '">' +
