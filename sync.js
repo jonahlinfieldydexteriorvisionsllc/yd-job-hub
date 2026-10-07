@@ -511,6 +511,13 @@
     getJobIndex().forEach(j => { if (!before.has(j.id)) queuePush(j.id); });
   };
 
+  const _createJobRecord = window.createJobRecord;
+  window.createJobRecord = function () {
+    const id = _createJobRecord.apply(this, arguments);
+    if (id) { queuePush(id); refreshVisible(); }
+    return id;
+  };
+
   // Restore announces exactly which jobs it took once the file has been read,
   // and only those go up -- not every job on the device after a fixed wait
   // that a slow file read could outlast.

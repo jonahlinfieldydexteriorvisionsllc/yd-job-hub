@@ -289,6 +289,9 @@
           (!board.virtual && editsBoards()
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">+ Add card</button>' : '') +
+          (board.virtual && movesJobs()
+            ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + board.id + '\', \'' +
+              board.columns[0].id + '\')">' + (board.id === 'bids' ? '+ New bid' : '+ New job') + '</button>' : '') +
         '</div>' +
       '</div>' +
       (board.id === 'bids' ? followUpHtml() : '') +
@@ -427,6 +430,10 @@
         (cardHtml.join('') || '<div class="bd-empty">Nothing here</div>') +
         (!board.virtual && editsBoards()
           ? '<button class="bd-add-card" onclick="addCard(\'' + board.id + '\', \'' + c.id + '\')">+ Add a card</button>' : '') +
+        // Won, Lost and Paid are where jobs end up, not where they start.
+        (board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1
+          ? '<button class="bd-add-card" onclick="addJobCard(\'' + board.id + '\', \'' + c.id + '\')">' +
+            (board.id === 'bids' ? '+ Add a bid' : '+ Add a job') + '</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -668,6 +675,29 @@
         !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
     if (typeof loadJob === 'function') loadJob(jobId);
     switchTab('job');
+  };
+
+  // A card on Bids or Jobs IS a job, so adding one makes the job: just the
+  // customer's name for now, in the column it was added to. The rest is
+  // filled in on the Job tab ("Open the job" on the card that opens).
+  window.addJobCard = function (boardId, col) {
+    const board = boardById(boardId);
+    if (!board || !board.virtual || !movesJobs() || typeof createJobRecord !== 'function') return;
+    const name = prompt(boardId === 'bids' ? 'Who is the bid for? (customer name)' : 'Who is the job for? (customer name)');
+    if (!name || !name.trim()) return;
+    const at = nowIso();
+    const fields = { customerName: name.trim() };
+    if (boardId === 'bids') {
+      Object.assign(fields, { bidStage: col, bidStageAt: at, jobStatus: 'quoting' });
+    } else {
+      Object.assign(fields, { workStage: col, workStageAt: at,
+        jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' });
+    }
+    const id = createJobRecord(fields);
+    if (!id) return;
+    render();
+    showToast(name.trim() + ' added to ' + board.columns.find(c => c.id === col).name);
+    window.openJobCard(boardId, id);
   };
 
   // ----------------------------------------------------------- stored cards

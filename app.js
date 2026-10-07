@@ -1416,6 +1416,23 @@ function duplicateJob(id) {
   idx.unshift(buildIndexEntry(newId, data));
   saveJobIndex(idx); invalidateJobsCache(); renderJobList(); showToast('Job duplicated');
 }
+// A job made without the form -- "+ Add a bid" on the Bids board. Written the
+// way a save from the form writes it (this device's copy and the index);
+// sync.js sends it up. Returns the new job's id, or null.
+function createJobRecord(fields) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return null; }
+  const id = uid();
+  const data = Object.assign({
+    customerName: '', serviceTypes: [], labor: [], materials: [], orderItems: [], proposals: [],
+    payments: [], additionalCosts: [], jobStatus: 'quoting', quoteDate: parseMD(todayMD()),
+  }, fields, { lastModified: new Date().toISOString() });
+  try { localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(data)); }
+  catch (err) { showStorageError(); return null; }
+  const idx = getJobIndex();
+  idx.unshift(buildIndexEntry(id, data));
+  saveJobIndex(idx); invalidateJobsCache();
+  return id;
+}
 function newJob() {
   if (dirty && !confirm('Start a new job? Unsaved changes will be lost.')) return;
   clearJobForm();
