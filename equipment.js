@@ -1039,7 +1039,7 @@
     // moved to Done, so it was never recorded as fixed.
     if (!YDBoards.cardsReady || !YDBoards.cardsReady(MAINT)) return;
     const first = board.columns[0].id;
-    const lastCol = board.columns[board.columns.length - 1].id;
+    const lastCol = YDBoards.doneCol ? YDBoards.doneCol(board) : board.columns[board.columns.length - 1].id;
     const have = (YDBoards.cards()[MAINT]) || {};
     const path = 'boards/' + MAINT + '/cards';
 

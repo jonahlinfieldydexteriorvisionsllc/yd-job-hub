@@ -97,6 +97,7 @@
   // per machine and per problem noted on it. Deleting it would only see it
   // made again the next time Job Hub opened, so it cannot be deleted.
   const MAINTENANCE = 'maintenance';
+  const CREW_BOARD = 'crew';         // Crew tasks: where the recurring crew tasks go (recurring.js)
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -140,6 +141,14 @@
   // out where a card sits has to read it the same way.
   function colOf(board, k) {
     return k.column || (board && board.columns && board.columns[0] ? board.columns[0].id : '');
+  }
+  // The column that means "done": the one called Done, when a board has one
+  // -- Crew tasks keeps an "Equipment Maintenance" column after its Done --
+  // otherwise the last column, as it always was.
+  function doneColOf(board) {
+    const cols = (board && board.columns) || [];
+    const named = cols.find(c => /^\s*done\s*$/i.test(String(c.name || '')));
+    return named ? named.id : (cols.length ? cols[cols.length - 1].id : '');
   }
   // Phones and tablets do not drag reliably, so there a card is moved from
   // the sheet that opens when it is tapped -- and the screen should say so.
@@ -291,7 +300,7 @@
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">+ Add card</button>' : '') +
           // The recurring crew tasks land on Maintenance (recurring.js).
-          (board.id === MAINTENANCE && isOwner() && typeof openRecurring === 'function'
+          (board.id === CREW_BOARD && isOwner() && typeof openRecurring === 'function'
             ? '<button class="btn btn-sm" onclick="openRecurring()">🔁 Recurring tasks</button>' : '') +
           (board.virtual && movesJobs()
             ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + board.id + '\', \'' +
@@ -450,7 +459,7 @@
   // Rain-day cards from every stored board this person can see, by board.
   function rainHtml() {
     const out = Object.values(boards).filter(b => !b.virtual).sort((a, b) => (a.order || 0) - (b.order || 0)).map(b => {
-      const last = b.columns[b.columns.length - 1].id;
+      const last = doneColOf(b);
       const list = Object.values(cards[b.id] || {}).filter(k => isRainy(b, k) && colOf(b, k) !== last)
         .sort((x, y) => urgRank(x) - urgRank(y) || String(x.due || '9999').localeCompare(String(y.due || '9999')));
       return list.length ? '<div class="bd-rain-group"><div class="bd-rain-head" style="--c:' + safeColor(b.color) + '">' + esc(b.name) +
@@ -468,7 +477,7 @@
     const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
     return board.columns.map((c, i) => {
       const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
-      const last = i === board.columns.length - 1;
+      const last = c.id === doneColOf(board);
       return column(board, c, inCol.map(k => storedCardHtml(board, k, last)));
     }).join('');
   }
@@ -690,9 +699,9 @@
     else order = ((inCol[idx - 1].order || 0) + (inCol[idx].order || 0)) / 2;
     if (k.column === col && k.order === order) return;
 
-    const last = board.columns[board.columns.length - 1].id;
+    const last = doneColOf(board);
     const patch = { column: col, order: order, updatedAt: nowIso(), updatedBy: myName() };
-    // Reaching the last column is "done"; leaving it is "not done any more".
+    // Reaching the Done column is "done"; leaving it is "not done any more".
     const toDone = col === last && k.column !== last;
     patch.doneAt = col === last ? (k.doneAt || nowIso()) : null;
     Object.assign(k, patch);
@@ -709,9 +718,9 @@
     // an admin) is confirmed there and then -- otherwise it sat in Done
     // waiting for an OK from the very person who moved it, and was in every
     // summary as not confirmed (recurring.js).
-    if (toDone && boardId === MAINTENANCE && k.recurring && !k.confirmedAt && editsBoards() &&
+    if (toDone && k.recurring && !k.confirmedAt && editsBoards() &&
         typeof window.confirmRecurring === 'function') {
-      window.confirmRecurring(cardId);
+      window.confirmRecurring(cardId, boardId);
     }
   }
 
@@ -827,7 +836,7 @@
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       (k.recurring && typeof recurringDetail === 'function'
-        ? recurringDetail(k, here === board.columns[board.columns.length - 1].id) : '') +
+        ? recurringDetail(k, here === doneColOf(board)) : '') +
       claudeHtml(board, k) +
       '<div class="field-actions">' +
         (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
@@ -875,7 +884,7 @@
   function claudeHtml(board, k) {
     if (!isOwner() || board.virtual || board.id === MACHINE_BOARD || k.auto) return '';
     const c = k.claude || null;
-    const last = board.columns[board.columns.length - 1].id;
+    const last = doneColOf(board);
     const finished = colOf(board, k) === last;
     const head = '<div class="bd-move-label">Claude</div>';
     if (k.noClaude) {
@@ -1191,7 +1200,7 @@
     // Linked to a job this device does not have: leave the link as it was.
     const keepLink = !job && jobId && jobId === was.jobId;
     const col = val('cdCol') || board.columns[0].id;
-    const last = board.columns[board.columns.length - 1].id;
+    const last = doneColOf(board);
 
     const rec = {
       title: title,
@@ -1414,7 +1423,7 @@
     // in it are done from now on, while those left behind in the old last
     // column are not done any more.
     const live = new Set(columns.map(c => c.id));
-    const lastId = columns[columns.length - 1].id;
+    const lastId = doneColOf({ columns: columns });
     Object.values(cards[id] || {}).forEach(k => {
       const patch = {};
       if (!live.has(k.column)) patch.column = columns[0].id;
@@ -1546,6 +1555,9 @@
       });
     }
     redrawIfVisible();
+    // A board itself changed (its sharing, its recurring tasks): recurring.js
+    // and the calendar follow.
+    if (changes.length) document.dispatchEvent(new CustomEvent('yd-boards-changed'));
   }
 
   // "Job Hub wishes" (Jonah, 6 Oct 2026): a card from his phone whenever he
@@ -1633,6 +1645,7 @@
   }
 
   window.YDBoards = {
+    doneCol: doneColOf,
     render: render,
     ready: () => ready,
     // Whether a board's cards have come from the server, not just the cache.
@@ -1646,7 +1659,7 @@
       Object.keys(cards).forEach(bid => {
         const b = boards[bid];
         if (!b) return;
-        const last = b.columns[b.columns.length - 1].id;
+        const last = doneColOf(b);
         Object.values(cards[bid]).forEach(k => {
           if (k.due) out.push({ board: b, card: k, done: colOf(b, k) === last });
         });

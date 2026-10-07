@@ -57,6 +57,11 @@
                         ownerOnly: true, about: 'Service dates from the Equipment tab' },
     'auto:cards': { id: 'auto:cards', name: 'Board due dates', color: '#6b7a8f', auto: true,
                     about: 'Cards with a due date' },
+    // Jonah (7 Oct): the crew's recurring tasks on the calendar, every week
+    // ahead -- worked out from the list on the Crew tasks board
+    // (recurring.js), never copied in.
+    'auto:recurring': { id: 'auto:recurring', name: 'Crew tasks', color: '#2a9d8f', auto: true,
+                        about: 'Recurring crew tasks, from the Crew tasks board' },
   };
 
   const PALETTE = ['#2f6fd6', '#1a9c8c', '#2f8f5b', '#8bb22a', '#e0a526',
@@ -180,7 +185,8 @@
       String(a.name || '').localeCompare(b.name || ''));
   }
   function layers() {
-    const auto = Object.values(AUTO).filter(l => !l.ownerOnly || ydCan('equipment', 'see'));
+    const auto = Object.values(AUTO).filter(l => (!l.ownerOnly || ydCan('equipment', 'see')) &&
+      (l.id !== 'auto:recurring' || (window.YDRecurring && YDRecurring.visible())));
     return storedCals().concat(auto);
   }
   function layerOf(id) { return cals[id] || AUTO[id] || null; }
@@ -244,11 +250,20 @@
         // A Maintenance card is the machine's own due date, which the
         // Equipment layer already shows -- listing both put it on the day twice.
         if (x.card.auto && x.card.equipmentId && ydCan('equipment', 'see')) return;
+        // A recurring task's card is drawn by the Crew tasks layer below.
+        if (x.card.recurring && window.YDRecurring && YDRecurring.visible()) return;
         if (onlyMine && !(x.card.assignees || []).some(a => a.uid === uid)) return;
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done,
           title: '📌 ' + (x.card.title || 'Card'), note: x.board.name,
           crew: x.card.assignees || [] });
+      });
+    }
+
+    if (!hidden.has('auto:recurring') && window.YDRecurring && YDRecurring.visible()) {
+      YDRecurring.dues(from, to).forEach(x => {
+        out.push({ day: x.day, layer: AUTO['auto:recurring'], auto: 'recurring', id: x.cardId, boardId: 'crew',
+          done: x.done, title: '🔁 ' + x.what, note: 'Crew tasks' });
       });
     }
 
@@ -751,6 +766,13 @@
     if (o.auto === 'storm') return calOpenStorm();
     if (o.auto === 'equipment') return calOpenEquipment(o.id);
     if (o.auto === 'card') return calOpenCard(o.boardId, o.id);
+    // A recurring task: its card when this date's has been made, otherwise
+    // the Crew tasks board.
+    if (o.auto === 'recurring') {
+      if (o.id) return calOpenCard('crew', o.id);
+      switchTab('boards'); if (window.showBoard) showBoard('crew');
+      return;
+    }
     openOcc(o);
   };
 
@@ -1655,6 +1677,7 @@
 
   window.YDCalendar = {
     render: render,
+    redraw: () => redrawIfVisible(),
     occurrences: occurrences,
     calendars: () => cals,
   };
@@ -1669,6 +1692,7 @@
   });
   document.addEventListener('yd-jobs-changed', redrawIfVisible);
   document.addEventListener('yd-cards-changed', redrawIfVisible);
+  document.addEventListener('yd-boards-changed', redrawIfVisible);
 
   function boot() { wire(); render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
