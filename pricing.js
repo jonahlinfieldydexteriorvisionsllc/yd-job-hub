@@ -82,6 +82,8 @@
   // ceil would then order 7. Trim to a millionth before rounding up.
   const trim = x => Math.round(x * 1e6) / 1e6;
   const isTon = unit => /^\s*(ton|tons|t)\s*$/i.test(String(unit || ''));
+  // Sold loose by the ton or the yard -- the stuff a delivery truck dumps.
+  const isBulk = unit => isTon(unit) || /^\s*(yard|yards|yd|yds|cu ?yd|cubic yards?)\s*$/i.test(String(unit || ''));
 
   // Order quantities: by the quarter ton for tons, whole units otherwise.
   function roundUp(q, unit) {
@@ -183,9 +185,12 @@
   function deliveries(lines, est, ctx) {
     const r = ctx.rules, d = r.delivery || {}, out = { lines: [], clientCents: 0, problems: [] };
     if ((est.off || {}).delivery) return out;
-    // What the rules add (markers, the planting package) comes along with
-    // the rest of the order -- it is never a truck of its own.
-    const want = lines.filter(l => l.cityDelivery && l.orderQty > 0 && !l.auto && l.delivery !== 'pickup' && l.delivery !== 'rides');
+    // A delivery is a truck of bulk material or a pallet. Small things --
+    // fabric, restraint, nails, a few bags of poly sand -- ride along or are
+    // picked up and never carry a delivery of their own (Jonah, 6 Oct 2026),
+    // and neither does what the rules add (markers, the planting package).
+    const want = lines.filter(l => l.cityDelivery && l.orderQty > 0 && !l.auto && (isBulk(l.per) || l.pallet) &&
+      l.delivery !== 'pickup' && l.delivery !== 'rides');
     if (!want.length) return out;
     const town = est.deliveryTown || ctx.city || '';
     const rates = d.rates || {};
@@ -595,7 +600,7 @@
   window.YDPricing = {
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
-    price, materialsList, qtyText, payments, roundUp, num, placeKey,
+    price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk,
   };
 
   let authKey = null;

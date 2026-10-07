@@ -316,7 +316,9 @@
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
             P().CATEGORIES.filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + k + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
           '</select></label>') +
-        (vRule.cityDelivery ? '<label><span>Delivery</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'delivery\', this.value)">' +
+        // Only a truck of bulk material or a pallet is a delivery of its own.
+        (vRule.cityDelivery && it && (it.pallet || P().isBulk(line ? line.per : it.unit))
+          ? '<label><span>Delivery</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'delivery\', this.value)">' +
           [['auto', 'Delivered'], ['pickup', 'We pick it up'], ['rides', 'Rides on another load']].map(([k, n]) =>
             '<option value="' + k + '"' + ((m.delivery || 'auto') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
           '</select></label>' : '');
