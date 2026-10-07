@@ -57,7 +57,13 @@ def _claude():
         _claude_client = anthropic.Anthropic(api_key=key)
     return _claude_client
 
-MODEL = "claude-opus-5-5"
+# Writing a scope of work is plain writing: the mid-priced model does it well
+# (Jonah, 7 Oct: nothing in the app should spend more than it needs to).
+MODEL = "claude-sonnet-5-5"
+# The board cards are worked twice a day, not every hour (Jonah, 7 Oct): at
+# these Chicago hours, unless settings/claude.cardHours says otherwise. The
+# scheduler still calls every hour -- the QuickBooks check rides on it.
+CARD_HOURS = (7, 19)
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
 ALLOWED_ORIGINS = {
     "https://jonahlinfieldydexteriorvisionsllc.github.io",
@@ -205,7 +211,11 @@ def _crew_photo_allowance(uid):
 
 
 def _check_and_count_usage(uid):
-    """Daily call ceiling. Refuses rather than quietly spending."""
+    """Daily call ceiling and spending ceiling. Refuses rather than quietly spending."""
+    import spend
+    why = spend.over_cap(_db)
+    if why:
+        raise RuntimeError(why)
     day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     ref = _db.collection("claudeUsage").document(day)
     snap = ref.get()
@@ -219,19 +229,11 @@ def _check_and_count_usage(uid):
     return day
 
 
-def _record_spend(day, task, usage):
-    """Write what each call cost in tokens, so spend is visible, not inferred."""
-    try:
-        _db.collection("claudeUsage").document(day).set(
-            {
-                "inputTokens": firestore.Increment(usage.input_tokens),
-                "outputTokens": firestore.Increment(usage.output_tokens),
-                "byTask": {task: firestore.Increment(1)},
-            },
-            merge=True,
-        )
-    except Exception as e:                      # never fail a good answer over bookkeeping
-        print("could not record usage:", e)
+def _record_spend(day, task, usage, model=MODEL):
+    """Write what each call cost -- in cents, cache tokens included -- so
+    spend is visible, not inferred (spend.py)."""
+    import spend
+    spend.record(_db, day, task, model, usage)
 
 
 # ---------------------------------------------------------------- quickbooks
@@ -433,6 +435,10 @@ def _cards(request, path, headers):
         if not _from_scheduler(request):
             return (json.dumps({"error": "not allowed"}), 403, json_headers)
         only = None
+        # Only the morning and evening calls work cards; the others just do
+        # the QuickBooks check below.
+        if not _card_hour():
+            only = "skip"
     elif path == "/cards/now":
         if origin_blocked(request):
             return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
@@ -447,9 +453,10 @@ def _cards(request, path, headers):
         only = (board_id, card_id)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
-    failed = None
+    failed, report = None, [{"skipped": "cards are worked in the morning and the evening"}]
     try:
-        report = cards.run(_claude(), only)
+        if only != "skip":
+            report = cards.run(_claude(), only)
     except Exception as e:                          # noqa: BLE001
         print("cards run failed:", e)
         failed = str(e)
@@ -457,7 +464,7 @@ def _cards(request, path, headers):
     # and invoices not yet paid off (quickbooks.sweep): a "yes" or a payment
     # reaches the job, and Jonah's phone, without him looking. Whatever
     # happened with the cards.
-    if only is None:
+    if only is None or only == "skip":
         try:
             _tell_owner(qb_sweep_news())
         except Exception as e:                      # noqa: BLE001
@@ -465,6 +472,20 @@ def _cards(request, path, headers):
     if failed is not None:
         return (json.dumps({"error": failed}), 500, json_headers)
     return (json.dumps({"report": report}), 200, json_headers)
+
+
+def _card_hour():
+    """Whether this scheduler call is one of the day's card runs."""
+    from zoneinfo import ZoneInfo
+    hours = CARD_HOURS
+    try:
+        snap = _db.collection("settings").document("claude").get()
+        got = ((snap.to_dict() or {}) if snap.exists else {}).get("cardHours")
+        if isinstance(got, list) and got and all(isinstance(h, int) and 0 <= h <= 23 for h in got):
+            hours = tuple(got)
+    except Exception as e:                          # noqa: BLE001
+        print("cards: could not read the card hours:", e)
+    return datetime.datetime.now(ZoneInfo("America/Chicago")).hour in hours
 
 
 def qb_sweep_news():
@@ -551,7 +572,7 @@ def _receipts(request, path, headers):
             print("receipt photo failed:", e)
             return (json.dumps({"error": "The receipt could not be read. Try again."}), 502, json_headers)
         if usage is not None:
-            _record_spend(day, "receiptphoto", usage)
+            _record_spend(day, "receiptphoto", usage, receipts.MODEL)
         return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
@@ -606,7 +627,7 @@ def _followup(request, path, headers):
         print("%s draft failed: %s" % (task, e))
         return (json.dumps({"error": "The email could not be written. Try again."}), 502, json_headers)
     if usage is not None:
-        _record_spend(day, task, usage)
+        _record_spend(day, task, usage, care.MODEL if task == "care" else followup.MODEL)
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
@@ -658,7 +679,7 @@ def _estimate(request, path, headers):
             print("estimate source failed:", e)
             return (json.dumps({"error": "The prices could not be looked up. Try again."}), 502, json_headers)
         if usage is not None:
-            _record_spend(day, "source", usage)
+            _record_spend(day, "source", usage, sourcing.MODEL)
         return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     try:
         result, usage = estimates.draft(_claude(), request.get_json(silent=True) or {})
@@ -667,8 +688,9 @@ def _estimate(request, path, headers):
     except Exception as e:                          # noqa: BLE001
         print("estimate draft failed:", e)
         return (json.dumps({"error": "The estimate could not be built. Try again."}), 502, json_headers)
+    model = result.pop("model", estimates.MODEL)
     if usage is not None:
-        _record_spend(day, "estimate", usage)
+        _record_spend(day, "estimate", usage, model)
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
@@ -737,7 +759,7 @@ def _supplies(request, path, headers):
         print("price sheet read failed:", e)
         return (json.dumps({"error": "The sheet could not be read. Try again."}), 502, json_headers)
     if usage is not None:
-        _record_spend(day, "pricesheet", usage)
+        _record_spend(day, "pricesheet", usage, sheets.MODEL)
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 

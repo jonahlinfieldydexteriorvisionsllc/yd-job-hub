@@ -262,9 +262,12 @@
       (ro ? '' : '<div class="field-actions">' +
         '<button class="btn btn-sm" onclick="estAddMat(false)">+ Material</button>' +
         '<button class="btn btn-sm" onclick="estAddMat(true)">+ Plant</button>' +
+        (canAddSupplies() && typedLines().length && !toSup
+          ? '<button class="btn btn-sm" onclick="estToSupplies()">➕ Add typed-in items to Supplies (' + typedLines().length + ')</button>' : '') +
         '<label class="est-inline">Spoil to haul away <input inputmode="decimal" value="' + esc(est.spoilCuYd == null ? '' : est.spoilCuYd) + '" ' +
           'oninput="estSet(\'spoilCuYd\', this.value)"> cu yd</label>' +
       '</div>') +
+      '<div id="estToSup">' + toSupHtml() + '</div>' +
 
       '<h4 class="est-h">Added by your rules</h4>' +
       '<div class="est-auto" id="estAuto"></div>' +
@@ -862,6 +865,90 @@
     changed(true);
   };
 
+  // ------------------------------------------- typed-in items into Supplies
+  //
+  // Materials typed straight onto a bid (not picked from Supplies) can be
+  // added to Supplies in one go: Jonah picks each one's supplier (or names a
+  // new one), checks the unit and cost, and they are filed there -- priced
+  // when a cost is given -- and the lines linked to them, so the next bid
+  // and the order list find them. Plain code.
+
+  let toSup = null;                 // lineId -> {vendorId, newVendor, unit, cost} while the panel is open
+  const canAddSupplies = () => changes() && ydCan('supplies', 'change') && !!(window.YDSupplies && window.YDSupplies.addSourced);
+  const typedLines = () => est.materials.filter(m => !m.plant && !m.supplyId && String(m.name || '').trim());
+
+  function toSupHtml() {
+    if (!toSup) return '';
+    const lines = typedLines().filter(m => toSup[m.id]);
+    if (!lines.length) return '';
+    const vendors = Object.values(catalog().vendors).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    const cats = P() ? P().CATEGORIES.filter(([k]) => k !== 'plant' && k !== 'tools') : [];
+    return '<div class="est-tosup"><div class="est-src-head">Add to Supplies — pick where each one comes from</div>' +
+      lines.map(m => {
+        const id = safeId(m.id), t = toSup[m.id];
+        return '<div class="est-tosup-row"><b>' + esc(m.name) + '</b>' +
+          '<label><span>Supplier</span><select onchange="estToSupSet(\'' + id + '\', \'vendorId\', this.value, true)">' +
+            '<option value="">— skip this one —</option>' +
+            vendors.map(v => '<option value="' + esc(v.id) + '"' + (t.vendorId === v.id ? ' selected' : '') + '>' + esc(v.name) + '</option>').join('') +
+            '<option value="new"' + (t.vendorId === 'new' ? ' selected' : '') + '>＋ A new supplier…</option></select></label>' +
+          (t.vendorId === 'new' ? '<label><span>New supplier’s name</span><input value="' + esc(t.newVendor) + '" ' +
+            'oninput="estToSupSet(\'' + id + '\', \'newVendor\', this.value)"></label>' : '') +
+          '<label><span>Sold per</span><input value="' + esc(t.unit) + '" placeholder="each" oninput="estToSupSet(\'' + id + '\', \'unit\', this.value)"></label>' +
+          '<label><span>Cost each ($)</span><input inputmode="decimal" value="' + esc(t.cost) + '" placeholder="blank = no price yet" ' +
+            'oninput="estToSupSet(\'' + id + '\', \'cost\', this.value)"></label>' +
+          '<label><span>Kind</span><select onchange="estToSupSet(\'' + id + '\', \'category\', this.value)">' +
+            cats.map(([k, n]) => '<option value="' + k + '"' + (t.category === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
+          '</select></label></div>';
+      }).join('') +
+      '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="estToSupSave()">Add to Supplies</button>' +
+      '<button class="btn btn-sm" onclick="estToSupCancel()">Cancel</button></div></div>';
+  }
+  function redrawToSup() {
+    const b = el('estToSup');
+    if (b) b.innerHTML = toSupHtml();
+  }
+  window.estToSupplies = function () {
+    if (!canAddSupplies()) return;
+    toSup = {};
+    typedLines().forEach(m => {
+      toSup[m.id] = { vendorId: '', newVendor: '', unit: m.unit || 'each',
+                      cost: num(m.costCents) > 0 ? (m.costCents / 100).toFixed(2) : '', category: m.category || 'other' };
+    });
+    render();
+  };
+  window.estToSupSet = function (id, k, v, redraw) {
+    const m = find(est.materials, id);
+    if (!toSup || !m || !toSup[m.id]) return;
+    toSup[m.id][k] = String(v);
+    if (redraw) redrawToSup();
+  };
+  window.estToSupCancel = function () { toSup = null; render(); };
+  window.estToSupSave = function () {
+    if (!toSup || !canAddSupplies()) return;
+    const vendors = catalog().vendors;
+    let added = 0, bad = '';
+    typedLines().forEach(m => {
+      const t = toSup[m.id];
+      if (!t || !t.vendorId) return;
+      const vendor = t.vendorId === 'new' ? String(t.newVendor || '').trim() : (vendors[t.vendorId] || {}).name;
+      if (!vendor) { bad = 'Give the new supplier a name'; return; }
+      const c = String(t.cost || '').trim(), dollarsIn = c === '' ? null : Number(c.replace(/[$,\s]/g, ''));
+      if (dollarsIn !== null && !(dollarsIn > 0)) { bad = 'A cost should be a dollar amount, or blank'; return; }
+      // "Terminal cap — Menards" is filed as "Terminal cap" under Menards.
+      const name = String(m.name).trim().replace(new RegExp('\\s+[—–-]\\s*' + vendor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i'), '');
+      const sid = window.YDSupplies.addSourced({ vendor: vendor, name: name, per: String(t.unit || '').trim() || 'each',
+        cents: dollarsIn === null ? null : Math.round(dollarsIn * 100), category: t.category || '',
+        note: 'Added from a bid ' + new Date().toISOString().slice(0, 10) });
+      if (!sid) return;
+      m.supplyId = sid;
+      added++;
+    });
+    if (bad) { showToast(bad); return; }
+    toSup = null;
+    changed(true);
+    showToast(added ? 'Added ' + added + ' to Supplies and linked ' + (added === 1 ? 'it' : 'them') : 'Pick a supplier for at least one');
+  };
+
   // ---------------------------------------------------- sourcing a material
   //
   // A material with no price ("🔎 Source it"): first whatever in Supplies
@@ -1234,6 +1321,10 @@
     const forJob = currentJobId;
     if (!forJob) { showToast('Save the job first'); return; }
     if (queued.indexOf(forJob) !== -1) return;
+    // "Put it in QuickBooks" / "send it to them" is a button press, not a
+    // question: done here in code, with no Claude call to pay for.
+    const qbWant = sends() ? qbAsk(text) : null;
+    if (qbWant) { qbFromChat(text, qbWant); return; }
     est.chat.push({ role: 'user', text: text, at: new Date().toISOString(), changed: false });
     draftMsg = '';
     // Saved now rather than in a second: the answer may come back after
@@ -1247,6 +1338,40 @@
     }
     ask(forJob);
   };
+
+  // 'put' (into QuickBooks, not emailed), 'email' (through QuickBooks to the
+  // customer -- estToQB still asks before it emails), or null: anything else
+  // goes to Claude. Only a clear instruction counts: it needs a doing word.
+  function qbAsk(text) {
+    const t = String(text || '').toLowerCase();
+    const doing = /\b(put|send|make|create|build|push|add|get|update|e-?mail|enter|load|upload|move|do)\b/.test(t);
+    const noEmail = /\b(don'?t|do not|not|no|without|never)\s+(e-?mail|send)/.test(t) || /\b(not yet|hold off)\b/.test(t);
+    if (/\b(quick ?books|qbo|qb)\b/.test(t)) {
+      // "Don't put it in QuickBooks yet" is not a yes.
+      if (!doing || /\b(don'?t|do not|never|not)\s+(\w+\s+){0,2}(put|add|make|create|build|push|enter|load|upload|move|do)\b/.test(t)) return null;
+      const intoQb = /\b(send|e-?mail)\b[^.]*\b(in)?to (quick ?books|qbo|qb)\b/.test(t);
+      return !noEmail && /\b(e-?mail|send)\b/.test(t) && !intoQb ? 'email' : 'put';
+    }
+    return /^\s*(ok(ay)?|yes|yep|great|perfect|looks good)?[,.!\s]*(go ahead and\s+)?(send|e-?mail) (it|this|the (estimate|bid))( (over )?to (them|him|her|the customer))?[.!\s]*$/.test(t)
+      ? 'email' : null;
+  }
+  async function qbFromChat(text, want) {
+    const jobId = currentJobId, at = new Date().toISOString();
+    const reply = { role: 'assistant', at: at, changed: false,
+                    text: want === 'email' ? 'Sending it through QuickBooks…' : 'Putting it in QuickBooks (not emailing it)…' };
+    est.chat.push({ role: 'user', text: text, at: at, changed: false }, reply);
+    draftMsg = '';
+    changed(true);
+    const before = JSON.stringify(qb() || {});
+    await window.estToQB(want === 'email');
+    if (currentJobId !== jobId) return;
+    const q = qb() || {};
+    reply.text = JSON.stringify(q) === before
+      ? (q.id ? 'Nothing changed in QuickBooks.' : 'It didn’t go to QuickBooks — see the buttons under the estimate.')
+      : 'Done — QuickBooks estimate' + (q.docNumber ? ' #' + q.docNumber : '') +
+        (q.sentAt && want === 'email' ? ', emailed' + (q.sentTo ? ' to ' + q.sentTo : '') : ', not emailed') + '.';
+    changed(true);
+  }
 
   async function ask(jobId) {
     const job = jobFacts(jobId);

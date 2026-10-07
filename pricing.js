@@ -442,6 +442,69 @@
     if (!m) return;
     m.classList.add('active');
     renderRules();
+    loadSpend();
+  };
+
+  // ------------------------------------------------- what Claude costs
+  //
+  // The server writes each day's Claude spend into claudeUsage/{day}
+  // (costCents, byTaskCents -- functions/spend.py) and stops every Claude
+  // feature for the day at settings/claude.dailyCapCents. Read when the
+  // screen opens; the owner only (the rules say so too).
+  let spend = null, claudeSet = {};
+  const DEFAULT_CAP_CENTS = 300;       // the server's default (spend.py)
+  const TASK_NAME = { estimate: 'Estimates', card: 'Board cards', receipt: 'Reading receipts',
+    receiptTriage: 'Sorting email', receiptphoto: 'Receipt photos', care: 'Plant-care emails',
+    followup: 'Follow-up emails', source: 'Finding prices', pricesheet: 'Price sheets', estimate_scope: 'Scopes of work' };
+  function loadSpend() {
+    if (!owner() || !window.YDDb) return;
+    Promise.all([window.YDDb.list('claudeUsage'), window.YDDb.get('settings', 'claude')]).then(([u, s]) => {
+      spend = u || {}; claudeSet = s || {};
+      const b = el('prSpend'); if (b) b.innerHTML = spendHtml();
+    }).catch(e => console.warn('[pricing] Claude spend not read:', (e && e.code) || e));
+  }
+  const usd = c => '$' + (Math.round(Number(c) || 0) / 100).toFixed(2);
+  function spendHtml() {
+    if (!owner()) return '';
+    if (!spend) return '<p class="hint">Loading what Claude has cost…</p>';
+    const now = new Date(), utcDay = now.toISOString().slice(0, 10), month = utcDay.slice(0, 7);
+    const days = Object.keys(spend).filter(d => d.slice(0, 7) === month);
+    const today = Number((spend[utcDay] || {}).costCents) || 0;
+    let monthCents = 0; const byTask = {};
+    days.forEach(d => {
+      monthCents += Number(spend[d].costCents) || 0;
+      Object.entries(spend[d].byTaskCents || {}).forEach(([t, c]) => { byTask[t] = (byTask[t] || 0) + (Number(c) || 0); });
+    });
+    const cap = typeof claudeSet.dailyCapCents === 'number' ? claudeSet.dailyCapCents : DEFAULT_CAP_CENTS;
+    const model = claudeSet.estimateModel === 'opus' ? 'opus' : 'fable';
+    const rows = Object.entries(byTask).sort((a, b) => b[1] - a[1]).map(([t, c]) =>
+      '<li>' + esc(TASK_NAME[t] || t) + ' — ' + usd(c) + '</li>').join('');
+    return '<div class="pr-spend-top"><b>Today ' + usd(today) + '</b> of a ' + usd(cap) + ' daily limit · <b>this month ' +
+        usd(monthCents) + '</b></div>' +
+      (rows ? '<ul class="pr-spend-list">' + rows + '</ul>' : '') +
+      '<p class="hint">Counted in dollars since this was switched on in October 2026 (before that only word counts were kept). When a day’s spending reaches the limit, ' +
+        'every Claude feature stops until midnight (UTC) — nothing else in the app is affected.</p>' +
+      '<label class="pr-field"><span>Daily limit ($)</span><input inputmode="decimal" value="' + (cap / 100).toFixed(2) + '"' +
+        ' onchange="prClaudeSet(\'dailyCapCents\', this.value)"></label>' +
+      '<label class="pr-field"><span>Model for estimates</span><select onchange="prClaudeSet(\'estimateModel\', this.value)">' +
+        '<option value="fable"' + (model === 'fable' ? ' selected' : '') + '>Fable 5.1 — the best, costs the most</option>' +
+        '<option value="opus"' + (model === 'opus' ? ' selected' : '') + '>Opus 5.5 — about 40% of the cost</option></select></label>' +
+      '<p class="hint">Claude works the board cards at 7 am and 7 pm. Receipts, emails and price lookups use the lower-cost model.</p>';
+  }
+  window.prClaudeSet = function (k, v) {
+    if (!owner()) return;
+    let val = v;
+    if (k === 'dailyCapCents') {
+      const n = Number(String(v).replace(/[$,\s]/g, ''));
+      if (!(n >= 0) || String(v).trim() === '') { showToast('The limit should be a dollar amount'); loadSpend(); return; }
+      val = Math.round(n * 100);
+    } else if (k === 'estimateModel') val = v === 'opus' ? 'opus' : 'fable';
+    claudeSet = Object.assign({}, claudeSet, { [k]: val });
+    const b = el('prSpend'); if (b) b.innerHTML = spendHtml();
+    Promise.resolve(window.YDDb.put('settings', 'claude', { [k]: val, updatedAt: new Date().toISOString() })).catch(e => {
+      showToast(e && e.code === 'permission-denied' ? 'Only the owner changes this' : 'Not saved yet — will retry');
+    });
+    showToast('Saved');
   };
   window.closePricingRules = function () { const m = el('prModal'); if (m) m.classList.remove('active'); };
 
@@ -554,9 +617,10 @@
         esc(r.payments[k] || '') + '</textarea></label>').join('') +
 
       '<h3 class="pr-h">Claude</h3>' +
+      '<div class="pr-spend" id="prSpend">' + spendHtml() + '</div>' +
       '<label class="est-switch"><input type="checkbox"' + (r.autoDraft !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'autoDraft\', this.checked, \'bool\')"> Start the estimate by itself when I finish my site-visit notes</label>' +
-      '<p class="hint">Each estimate Claude builds costs a little (cents, not dollars). Off, it waits for “Build the estimate from my notes”.</p>' +
+      '<p class="hint">Each estimate Claude builds costs money (see above). Off, it waits for “Build the estimate from my notes”.</p>' +
       '<label class="est-switch"><input type="checkbox"' + (r.autoCare !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'autoCare\', this.checked, \'bool\')"> Draft the plant-care email when a job with plants is marked Complete</label>' +
       '<p class="hint">It goes to your Gmail Drafts for you to read and send — never straight to the customer.</p>' +

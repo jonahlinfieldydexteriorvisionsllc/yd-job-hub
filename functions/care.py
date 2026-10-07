@@ -20,7 +20,9 @@ from google.api_core.exceptions import AlreadyExists
 import cards
 import digest as dg
 
-MODEL = "claude-opus-5-5"
+# Writing a short email: the mid-priced model writes it as well (Jonah, 7 Oct:
+# no Claude feature should cost more than it needs to).
+MODEL = "claude-sonnet-5-5"
 
 SYSTEM = (
     "You write the plant-care email YD Exterior Visions LLC sends a customer after planting at "

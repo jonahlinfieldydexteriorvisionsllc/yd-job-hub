@@ -44,8 +44,11 @@ import requests
 from firebase_admin import firestore
 
 import digest as dg
+import spend
 
-MODEL = "claude-opus-5-5"
+# Reading a receipt is copying what is printed: the mid-priced model does it
+# accurately at half the cost (Jonah, 7 Oct).
+MODEL = "claude-sonnet-5-5"
 GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -361,7 +364,8 @@ def _ask(client, system, content, schema, effort):
         # losing the receipt.
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
     )
-    used = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens}
+    used = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens,
+            "cents": spend.cents(MODEL, resp.usage)}
     if resp.stop_reason == "refusal":
         return None, used, "refused"
     if resp.stop_reason == "max_tokens":
@@ -519,19 +523,21 @@ def _budget(db):
     day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     snap = db.collection("claudeUsage").document(day).get()
     used = (snap.to_dict() or {}).get("receipts", 0) if snap.exists else 0
+    # The day's spending limit stops the reading too; what is waiting is read
+    # the next day.
+    if spend.over_cap(db):
+        return day, 0
     return day, MAX_READ_PER_DAY - used
 
 
 def _spend(db, day, used, task, count_field=None):
-    patch = {"inputTokens": firestore.Increment(used["input"]),
-             "outputTokens": firestore.Increment(used["output"]),
-             "byTask": {task: firestore.Increment(1)}}
+    spend.add(db, day, task, used.get("cents") or 0,
+              {"input_tokens": used.get("input", 0), "output_tokens": used.get("output", 0)})
     if count_field:
-        patch[count_field] = firestore.Increment(1)
-    try:
-        db.collection("claudeUsage").document(day).set(patch, merge=True)
-    except Exception as e:      # noqa: BLE001 -- never lose a receipt over bookkeeping
-        print("receipts: could not record usage:", e)
+        try:
+            db.collection("claudeUsage").document(day).set({count_field: firestore.Increment(1)}, merge=True)
+        except Exception as e:      # noqa: BLE001 -- never lose a receipt over bookkeeping
+            print("receipts: could not record usage:", e)
 
 
 def _seen(db, mid, outcome, **extra):
@@ -1019,7 +1025,7 @@ def run(client, manual=False):
                 report["byCode"] += 1
             else:
                 ask.append(m)
-        if ask:
+        if ask and left > 0:
             try:
                 keep, used = triage(client, ask)
                 _spend(db, day, used, "receiptTriage")

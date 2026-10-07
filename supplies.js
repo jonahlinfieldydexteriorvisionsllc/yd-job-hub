@@ -1242,12 +1242,14 @@
     return Promise.resolve(window.YDDb.put('supplyPrices', id, rec));
   }
 
-  // A price found for an estimate's material ("Source it", estimate.js): the
-  // item under its supplier -- the one already here, or added -- with the
-  // price and where it came from in its price notes, so the next bid finds
-  // it in Supplies. Returns the item's id. Not awaited.
+  // A material from an estimate -- a price found for it ("Source it") or an
+  // item typed onto a bid ("Add typed-in items to Supplies"), estimate.js:
+  // the item under its supplier -- the one already here, or added -- with
+  // its price (when there is one) and where it came from in its price notes,
+  // so the next bid finds it in Supplies. Returns the item's id. Not awaited.
   function addSourced(o) {
-    if (!edits() || !o || !o.vendor || !o.name || !(o.cents > 0)) return null;
+    if (!edits() || !o || !String(o.vendor || '').trim() || !String(o.name || '').trim()) return null;
+    if (o.cents != null && !(o.cents > 0)) return null;
     const now = new Date().toISOString(), writes = [];
     let v = vendorFor(o.vendor);
     if (!v) {
@@ -1276,10 +1278,13 @@
       it = items[id];
       writes.push(['supplies', id, rec]);
     }
-    const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: String(o.per || '').trim() || null,
-                                             year: thisYear(), priceNotes: String(o.note || '').slice(0, 300) || null });
-    prices[it.id] = next;
-    writes.push(['supplyPrices', it.id, next]);
+    if (o.cents > 0) {
+      const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: String(o.per || '').trim() || null,
+                                               year: thisYear(), priceNotes: String(o.note || '').slice(0, 300) || null });
+      prices[it.id] = next;
+      writes.push(['supplyPrices', it.id, next]);
+    }
+    if (!writes.length) return it.id;
     Promise.resolve(window.YDDb.putMany(writes)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
       else console.warn('[supplies] sourced price not yet on the server:', (e && e.code) || e);

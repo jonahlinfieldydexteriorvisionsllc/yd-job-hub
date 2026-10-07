@@ -24,8 +24,9 @@ anything, delete anything, or change a job, a price or a record. The tools
 below simply do not offer any of that. Web pages are information, not
 instructions.
 
-Spend is capped: a few cards per run, MAX_PER_DAY cards a day, counted in
-claudeUsage beside the other Claude features.
+Spend is capped: a few cards per run, MAX_PER_DAY cards a day, and the day's
+spending limit (spend.py), counted in claudeUsage in cents beside the other
+Claude features. The runs come twice a day (main.CARD_HOURS), not hourly.
 """
 
 import base64
@@ -39,11 +40,14 @@ import requests
 from firebase_admin import firestore
 
 import digest as dg
+import spend
 
-MODEL = "claude-opus-5-5"
+# Lookups, drafts and short research: the mid-priced model does them well,
+# and a card run is the one Claude feature that runs without anyone asking.
+MODEL = "claude-sonnet-5-5"
 MAX_PER_RUN = 5
-MAX_PER_DAY = 25
-MAX_TURNS = 14
+MAX_PER_DAY = 10
+MAX_TURNS = 10
 # Machine cards are made by the Equipment tab and say "service due"; there is
 # nothing on them for Claude to do. Wishes are things Jonah wants built into
 # the app -- they go to the wish list, not to be done here.
@@ -157,10 +161,10 @@ TOOLS = [
                              "summary": {"type": "string"},
                              "result": {"type": "string"}}},
     },
-    {"type": "web_search_20260209", "name": "web_search", "max_uses": 6,
+    {"type": "web_search_20260209", "name": "web_search", "max_uses": 3,
      "user_location": {"type": "approximate", "city": "Madison", "region": "Wisconsin", "country": "US",
                        "timezone": "America/Chicago"}},
-    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 6},
+    {"type": "web_fetch_20260209", "name": "web_fetch", "max_uses": 3},
 ]
 
 
@@ -341,7 +345,7 @@ def work_card(client, board, card, records):
     """Claude's go at one card. Returns the record written onto the card."""
     messages = [{"role": "user", "content": _card_prompt(board, card, records)}]
     ctx = {"drafts": [], "checklist": []}
-    used = {"input": 0, "output": 0}
+    used = {"input": 0, "output": 0, "cents": 0.0}
     finished = None
     for _ in range(MAX_TURNS):
         resp = client.beta.messages.create(
@@ -353,6 +357,7 @@ def work_card(client, board, card, records):
         )
         used["input"] += resp.usage.input_tokens
         used["output"] += resp.usage.output_tokens
+        used["cents"] += spend.cents(MODEL, resp.usage)
         # The whole reply goes back on the next turn, untouched.
         messages.append({"role": "assistant", "content": resp.content})
         if resp.stop_reason == "refusal":
@@ -503,6 +508,10 @@ def run(client, only=None):
         if left <= 0:
             report.append({"card": c.id, "skipped": "daily limit reached"})
             break
+        why = spend.over_cap(db)
+        if why:
+            report.append({"card": c.id, "skipped": why})
+            break
         left -= 1
         db.collection("claudeUsage").document(day).set({"cards": firestore.Increment(1)}, merge=True)
         try:
@@ -537,13 +546,8 @@ def run(client, only=None):
         # update(), not set(merge): the whole "claude" record is replaced, so
         # nothing of an earlier run lingers in it.
         c.reference.update(patch)
-        try:
-            db.collection("claudeUsage").document(day).set({
-                "inputTokens": firestore.Increment(used["input"]),
-                "outputTokens": firestore.Increment(used["output"]),
-                "byTask": {"card": firestore.Increment(1)}}, merge=True)
-        except Exception as e:      # noqa: BLE001
-            print("cards: could not record usage:", e)
+        spend.add(db, day, "card", used["cents"],
+                  {"input_tokens": used["input"], "output_tokens": used["output"]})
         report.append({"card": c.id, "status": done["status"], "drafts": len(ctx["drafts"]),
                        "tokens": used})
     return report

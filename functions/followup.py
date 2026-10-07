@@ -18,7 +18,9 @@ import json
 import cards
 import digest as dg
 
-MODEL = "claude-opus-5-5"
+# Writing a short email: the mid-priced model writes it as well (Jonah, 7 Oct:
+# no Claude feature should cost more than it needs to).
+MODEL = "claude-sonnet-5-5"
 
 SYSTEM = (
     "You write follow-up emails for Jonah Linfield, owner of YD Exterior Visions LLC, a "

@@ -38,7 +38,10 @@ import digest as dg
 
 # Jonah's choice (6 Oct): the most capable model for estimates -- they need the
 # most judgement of anything in the app, and he is used to working with it.
+# settings/claude.estimateModel = "opus" switches to the one at 40% of the
+# price (set on the Pricing rules screen).
 MODEL = "claude-fable-5-1"
+MODELS = {"fable": "claude-fable-5-1", "opus": "claude-opus-5-5"}
 
 SYSTEM = (
     "You lay out estimates for YD Exterior Visions LLC, a landscaping, hardscaping and snow "
@@ -75,12 +78,21 @@ SYSTEM = (
     "flags. Never substitute a product he named; flag it.\n"
     "- Delivery: 'pickup' when Jonah says the crew picks it up, 'rides' when it comes on another "
     "material's load, otherwise 'auto'.\n\n"
+    "QuickBooks: Job Hub sends the estimate to QuickBooks itself. Under the estimate are the "
+    "buttons 'Put in QuickBooks, don't email yet' (creates or updates the estimate there under "
+    "this customer, with its proper number) and 'Send through QuickBooks' (the same, then "
+    "QuickBooks emails it to the customer); when Jonah asks for either, the app does it. Never say Job Hub is not connected to QuickBooks or that he must "
+    "type the estimate in himself -- tell him the app is doing it, or which button to tap.\n"
+    "Costs: a material line with 'cost each' set is priced by the app even though it is not in "
+    "Supplies. Only what is listed under 'Not priced yet' is unpriced -- never say anything else "
+    "is.\n\n"
     "You are talking with Jonah. `reply` is your answer to his latest message: short and plain, "
     "like a colleague -- what you changed, or the answer to what he asked. When he asks for a "
     "change, or there is no estimate yet, set updated to true and give the WHOLE estimate as it "
     "should now be (every line), keeping the id of every line you keep and leaving lines he did "
     "not mention exactly as they are, including ones he changed by hand. A new line has an empty "
-    "id. When he only asks a question, set updated to false and give the lines unchanged."
+    "id. When he only asks a question, set updated to false and give EMPTY work and materials "
+    "lists -- the app keeps the estimate as it is (re-writing it costs money and time)."
 )
 
 SCHEMA = {
@@ -154,11 +166,47 @@ def _short_notes(it):
     return text[:NOTE_CHARS]
 
 
+# Which kinds of material a job can need, from the words in its notes and the
+# conversation. The whole of Supplies is ~800 items (~32k tokens) -- most of
+# it the supplier's wall block and paver lines -- and was sent with every
+# message: the biggest part of the Claude bill (7 Oct). A regrade-and-bed job
+# needs none of the block. The small kinds always go; the big ones only when
+# a word calls for them; a kind already on the estimate always goes; and
+# notes too short to tell go with everything.
+ALWAYS_KINDS = {"stone", "edging", "hardscape", "soil", "fill", "mulch", "seed", "bagged", "drainage",
+                "hardware", "rental", "planting", "dumpster", "plant"}
+KIND_WORDS = [
+    (r"patio|paver|walk ?way|walks?\b|path|driveway|landing|stoop|pool deck|steps?\b|stairs?|apron|courtyard|terrace",
+     {"pavers", "adhesive"}),
+    (r"wall|retaining|block|seat ?wall|seating|pillar|column|caps?\b|raised bed|planter|steps?\b|stairs?",
+     {"wall", "adhesive"}),
+    (r"fire ?pit|fire ?ring|fire ?place|fire ?table|grill|outdoor kitchen|kitchen|wood ?box|hearth",
+     {"other", "wall", "pavers", "adhesive"}),
+    (r"flag ?stone|boulder|outcrop|stepp(er|ing)|natural stone|ledge ?rock|lannon|slab|dry creek|rock garden|"
+     r"wall stone|stone steps|irregular",
+     {"natural", "adhesive"}),
+    (r"seal(er|ing)?|poly(meric)? sand|joint sand|adhesive|glue", {"adhesive"}),
+]
+
+
+def kinds_for(words, on_estimate):
+    """The catalogue kinds this job's words call for (None = everything)."""
+    text = str(words or "").lower()
+    if len(text.split()) < 6:
+        return None                     # too little said to choose: everything
+    out = set(ALWAYS_KINDS)
+    for pattern, kinds in KIND_WORDS:
+        if re.search(pattern, text):
+            out |= kinds
+    return out | set(on_estimate)
+
+
 # ------------------------------------------------------------- what it reads
 
-def catalogue():
+def catalogue(kinds=None, keep_ids=()):
     """Supplies as Claude sees them: what, in what unit -- no costs, no
-    tools, one short line each. Returns (text, ids)."""
+    tools, one short line each; only the kinds given (all when None), plus
+    any item in keep_ids. Returns (text, ids)."""
     db = dg._db()
     per = {}
     for s in db.collection("supplyPrices").stream():
@@ -166,6 +214,9 @@ def catalogue():
     rows, ids = [], set()
     items = [(s.id, s.to_dict() or {}) for s in db.collection("supplies").stream()]
     items = [kv for kv in items if kv[1].get("name") and kv[1].get("category") not in NOT_FOR_ESTIMATES]
+    keep_ids = set(keep_ids)
+    if kinds is not None:
+        items = [kv for kv in items if (kv[1].get("category") or "other") in kinds or kv[0] in keep_ids]
     items.sort(key=lambda kv: (CATEGORY_NAMES.get(kv[1].get("category"), "~"), str(kv[1].get("name", ""))))
     group = None
     for sid, it in items:
@@ -255,8 +306,8 @@ def _current_text(cur):
                 str(m.get("name") or "")[:200], "qty %s %s" % (m.get("qty"), str(m.get("unit") or "")[:20])]
         if m.get("plant"):
             bits.append("plant, tree=%s" % (m.get("tree") or "none"))
-            if _num(m.get("costEachDollars")):
-                bits.append("cost each $%s" % m.get("costEachDollars"))
+        if _num(m.get("costEachDollars")):
+            bits.append("cost each $%s (entered by hand -- priced)" % m.get("costEachDollars"))
         if m.get("delivery") and m.get("delivery") != "auto":
             bits.append("delivery %s" % m["delivery"])
         rows.append("- " + " | ".join(bits))
@@ -308,14 +359,40 @@ def _prompt(d):
 
 # ----------------------------------------------------------------- the call
 
+def _model(db):
+    try:
+        snap = db.collection("settings").document("claude").get()
+        pick = ((snap.to_dict() or {}) if snap.exists else {}).get("estimateModel")
+    except Exception as e:                          # noqa: BLE001
+        print("estimates: could not read the model setting:", e)
+        pick = None
+    return MODELS.get(pick, MODEL)
+
+
 def draft(client, d):
     """Returns (result, usage). result: {reply, updated, work, materials,
     spoilCuYd, questions, flags} with every id checked; or {error}."""
     if not (d.get("chat") or []):
         return {"error": "Write a message first"}, None
-    cat_text, supply_ids = catalogue()
-    book = price_book()
     current = d.get("current") or {}
+    on_estimate = [str(m.get("supplyId")) for m in current.get("materials") or [] if m.get("supplyId")]
+    db = dg._db()
+    kinds_on = set()
+    if on_estimate:
+        for snap in db.get_all([db.collection("supplies").document(i) for i in on_estimate[:200]]):
+            if snap.exists:
+                kinds_on.add((snap.to_dict() or {}).get("category") or "other")
+    words = " ".join([str(d.get("siteNotes") or ""), str(d.get("jobNotes") or ""),
+                      " ".join(str(x) for x in d.get("services") or []),
+                      " ".join(str(m.get("text") or "") for m in (d.get("chat") or [])[-30:]
+                               if m.get("role") == "user")])
+    kinds = kinds_for(words, kinds_on)
+    cat_text, supply_ids = catalogue(kinds, on_estimate)
+    if kinds is not None:
+        cat_text += ("\n\n(Only the kinds of material this job's notes call for are listed. If it "
+                     "needs something not here, add it with an empty supplyId and a clear name.)")
+    book = price_book()
+    model = _model(db)
     work_ids = {str(w.get("id")) for w in current.get("work") or [] if w.get("id")}
     mat_ids = {str(m.get("id")) for m in current.get("materials") or [] if m.get("id")}
 
@@ -326,11 +403,13 @@ def draft(client, d):
         {"type": "text", "text": "JONAH'S TAKEOFF AND ESTIMATE RULES (his words):\n\n" + rules_text()},
         {"type": "text", "text": "SUPPLIES CATALOGUE (pick materials by id):\n" + cat_text +
                                  "\n\nPRICE BOOK (flat-rate services, for labour lines of kind 'flat'):\n" + _book_text(book),
-         "cache_control": {"type": "ephemeral"}},
+         # An hour, not five minutes: Jonah reads, edits and comes back to a
+         # bid, and every miss re-buys the whole catalogue and rules.
+         "cache_control": {"type": "ephemeral", "ttl": "1h"}},
     ]
     first = len(d.get("chat") or []) <= 1
     with client.beta.messages.stream(
-        model=MODEL, max_tokens=64000, system=system,
+        model=model, max_tokens=64000, system=system,
         messages=[{"role": "user", "content": _prompt(d)}],
         thinking={"type": "adaptive"},
         # The first build is the careful one; a follow-up ("make it 18x20")
@@ -341,14 +420,14 @@ def draft(client, d):
     ) as stream:
         resp = stream.get_final_message()
     if resp.stop_reason == "refusal":
-        return {"error": "Claude declined to do this one"}, resp.usage
+        return {"error": "Claude declined to do this one", "model": model}, resp.usage
     if resp.stop_reason == "max_tokens":
-        return {"error": "That estimate came out too long. Try it in parts."}, resp.usage
+        return {"error": "That estimate came out too long. Try it in parts.", "model": model}, resp.usage
     text = next((b.text for b in resp.content if b.type == "text"), "")
     try:
         got = json.loads(text)
     except ValueError:
-        return {"error": "Claude's answer could not be read. Try again."}, resp.usage
+        return {"error": "Claude's answer could not be read. Try again.", "model": model}, resp.usage
 
     work = []
     for w in got.get("work") or []:
@@ -383,4 +462,4 @@ def draft(client, d):
             "spoilCuYd": max(0.0, round(_num(got.get("spoilCuYd")) or 0, 1)),
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
-            "catalogueSize": len(supply_ids)}, resp.usage
+            "catalogueSize": len(supply_ids), "model": model}, resp.usage

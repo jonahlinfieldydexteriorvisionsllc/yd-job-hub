@@ -17,7 +17,9 @@ come back from the searches as unconfirmed, for the app to say so.
 import json
 import types
 
-MODEL = "claude-opus-5-5"
+# Searching and reading supplier pages: the mid-priced model does it well
+# (Jonah, 7 Oct: no Claude feature should cost more than it needs to).
+MODEL = "claude-sonnet-5-5"
 MAX_ITEMS = 8
 MAX_TURNS = 8
 
