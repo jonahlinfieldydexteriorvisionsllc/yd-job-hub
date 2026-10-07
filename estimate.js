@@ -188,6 +188,8 @@
     if (typeof updateJobPriceSourceTag === 'function') updateJobPriceSourceTag();
     if (typeof markDirty === 'function') markDirty();
     if (redraw) render(); else renderTotals();
+    // The first lines in (or the last out) show or hide the old proposal box.
+    if (redraw && typeof renderProposal === 'function') renderProposal();
   }
 
   const qb = () => (typeof boardFields !== 'undefined' && boardFields.qbEstimate) || null;

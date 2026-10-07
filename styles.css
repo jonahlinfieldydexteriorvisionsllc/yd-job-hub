@@ -1910,3 +1910,4 @@
   .rc-task .rc-days { width:56px; }
   .rc-task .rc-next { grid-column:1 / -1; font-size:12px; }
   @media (max-width:720px) { .rc-task { grid-template-columns:1fr 1fr; } }
+  .cols2.single { grid-template-columns:1fr; }

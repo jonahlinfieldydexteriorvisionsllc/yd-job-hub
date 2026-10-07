@@ -849,6 +849,12 @@ function editProposalLabel(propId) {
 function renderProposal() {
   const content = document.getElementById('proposalContent');
   const status = document.getElementById('proposalStatus');
+  // A job estimated in Job Hub has no use for the old proposal import: the
+  // box goes, and Materials to Order takes the whole width.
+  const sec = content.closest('.section'), pair = sec && sec.parentElement;
+  const unused = !proposals.length && hasEstimate();
+  if (sec) sec.hidden = unused;
+  if (pair) pair.classList.toggle('single', unused);
   if (!proposals.length) {
     content.innerHTML = '<div class="upload-zone" onclick="document.getElementById(\'proposalFileInput\').click()">' +
       '<div class="uz-icon">📄</div><div class="uz-text">Import Proposal JSON</div>' +
