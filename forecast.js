@@ -16,6 +16,10 @@
 (function () {
   'use strict';
 
+  // A temperature, or a dash when the forecast left it out: Math.round(null)
+  // printed a confident 0 degrees.
+  const deg = v => (typeof v === 'number' && isFinite(v) ? Math.round(v) + '°' : '—');
+
   const PLACES = {
     madison: { name: 'Madison', lat: 43.0731, lng: -89.4012 },
     monroe: { name: 'Monroe', lat: 42.6011, lng: -89.6385 },
@@ -235,7 +239,7 @@
     return '<div class="wxh' + (isNow ? ' now' : '') + (snowy ? ' snow' : '') + '">' +
       '<div class="wxh-t">' + (isNow ? 'Now' : hourLabel(x.t)) + '</div>' +
       '<div class="wxh-i">' + iconFor(x.code, x.day) + '</div>' +
-      '<div class="wxh-deg">' + Math.round(x.temp) + '°</div>' +
+      '<div class="wxh-deg">' + deg(x.temp) + '</div>' +
       // A bar whose height is the chance of rain or snow, so a wet afternoon
       // can be seen at a glance across the strip.
       '<div class="wxh-bar"><span style="height:' + Math.min(100, pop) + '%"></span></div>' +
@@ -267,7 +271,7 @@
         const cur = nowReading();
         const [icon] = codeOf(cur.code);
         chip.innerHTML = '<span class="wxc-icon">' + icon + '</span><span class="wxc-temp">' +
-          Math.round(cur.temp) + '°</span>' + (data.alerts && data.alerts.length ? '<span class="wxc-alert">!</span>' : '') +
+          deg(cur.temp) + '</span>' + (data.alerts && data.alerts.length ? '<span class="wxc-alert">!</span>' : '') +
           '<span class="wxc-caret">' + (open ? '▴' : '▾') + '</span>';
       } else {
         chip.innerHTML = '<span class="wxc-icon">🌡️</span><span class="wxc-temp">' + (loading ? '…' : '—') + '</span>' +
@@ -300,9 +304,9 @@
       new Date(selDay.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' }) + ', hour by hour';
     panel.innerHTML =
       '<div class="wxp-top">' +
-        '<div class="wxp-now"><span class="wxp-big">' + codeOf(n.code)[0] + ' ' + Math.round(n.temp) + '°</span>' +
+        '<div class="wxp-now"><span class="wxp-big">' + codeOf(n.code)[0] + ' ' + deg(n.temp) + '</span>' +
           '<span class="wxp-sub">' + codeOf(n.code)[1] +
-            (n.feels != null ? ' · feels ' + Math.round(n.feels) + '°' : '') +
+            (n.feels != null ? ' · feels ' + deg(n.feels) : '') +
             ' · wind ' + Math.round(n.wind) + ' mph' +
             (n.forecast ? ' · forecast for this hour' : '') + '</span></div>' +
         '<div class="wxp-places">' + Object.keys(PLACES).map(k =>
@@ -331,7 +335,7 @@
           '<div class="wxp-name">' + dayName(d.date) + '</div>' +
           '<div class="wxp-icon" title="' + esc(words) + '">' + icon + '</div>' +
           '<div class="wxp-words">' + esc(words) + '</div>' +
-          '<div class="wxp-temps"><b>' + Math.round(d.hi) + '°</b> <span>' + Math.round(d.lo) + '°</span></div>' +
+          '<div class="wxp-temps"><b>' + deg(d.hi) + '</b> <span>' + deg(d.lo) + '</span></div>' +
           '<div class="wxp-extra">' +
             (d.pop ? '💧' + d.pop + '%' : '') +
             (snowy ? ' ❄️' + d.snow + '"' : (d.rain >= 0.05 ? ' ' + d.rain.toFixed(2) + '"' : '')) +
