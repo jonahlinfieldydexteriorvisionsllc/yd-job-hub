@@ -45,8 +45,9 @@ MAX_PER_RUN = 5
 MAX_PER_DAY = 25
 MAX_TURNS = 14
 # Machine cards are made by the Equipment tab and say "service due"; there is
-# nothing on them for Claude to do.
-SKIP_BOARDS = {"maintenance"}
+# nothing on them for Claude to do. Wishes are things Jonah wants built into
+# the app -- they go to the wish list, not to be done here.
+SKIP_BOARDS = {"maintenance", "wishes"}
 LABEL = {"id": "claude", "name": "Claude did this", "color": "#8e5bc7"}
 GMAIL_COMPOSE = "https://www.googleapis.com/auth/gmail.compose"
 

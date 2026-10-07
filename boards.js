@@ -1452,7 +1452,29 @@
     if (isOwner() && !seeded && meta && !meta.fromCache) {
       seeded = true;
       if (!Object.keys(boards).length) seedOnce();
+      if (!boards[WISHES]) wishesOnce();
     }
+    redrawIfVisible();
+  }
+
+  // "Job Hub wishes" (Jonah, 6 Oct 2026): a card from his phone whenever he
+  // thinks of something for the app. "Work on the wish list" starts by
+  // copying new cards into WISHLIST.md; Claude's hourly card run leaves this
+  // board alone (cards.py SKIP_BOARDS). Made once -- deleted, it stays gone.
+  const WISHES = 'wishes';
+  async function wishesOnce() {
+    let flags = null;
+    try { flags = await window.YDDb.get('settings', 'seeds'); } catch (e) { return; }
+    if ((flags && flags.wishes) || boards[WISHES]) return;
+    const b = {
+      name: 'Job Hub wishes', color: '#2a9d8f', order: 90, visibleTo: [],
+      columns: [{ id: 'w0', name: 'New wishes' }, { id: 'w1', name: 'On the wish list' }, { id: 'w2', name: 'Built' }],
+      labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
+    };
+    boards[WISHES] = Object.assign({ id: WISHES }, b);
+    write('boards', WISHES, b, 'wishes board');
+    write('settings', 'seeds', { wishes: true }, 'seed marker');
+    watchCards(WISHES);
     redrawIfVisible();
   }
 
