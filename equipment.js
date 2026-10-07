@@ -952,6 +952,17 @@
           setIssueDone(g, i.id, true);
           return;
         }
+        // And the other way: a person moved it back out of Done after it was
+        // marked fixed -- it is not fixed after all. Without this the card
+        // was put straight back in Done (the machine still said fixed), so a
+        // problem ticked off by mistake could never be reopened from the
+        // board. Only a move made after the fix counts, so marking it fixed
+        // on the machine still sends the card to Done.
+        if (k && i.doneAt && k.column !== lastCol && k.updatedBy !== 'Equipment' &&
+            String(k.updatedAt || '') > String(i.doneAt)) {
+          setIssueDone(g, i.id, false);
+          return;
+        }
         const u = urgencyOf(i.urgency);
         const want = {
           title: (g.name || 'Machine') + ' — ' + i.what,
