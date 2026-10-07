@@ -72,6 +72,7 @@
     { id: 'materials', name: 'Materials', color: '#e07b24' },
     { id: 'equipment', name: 'Equipment', color: '#2f6fd6' },
     { id: 'office', name: 'Office', color: '#8e5bc7' },
+    { id: 'rainday', name: '☔ Rain day', color: '#3b82c4' },
   ];
 
   // ------------------------------------------------------------------- state
@@ -298,7 +299,10 @@
         '</div>' +
       '</div>' +
       (board.id === 'bids' ? followUpHtml() : '') +
-      '<div class="bd-cols">' + columnsHtml(board) + '</div>';
+      filterBarHtml(board) +
+      (cardFilter === 'rain' && !board.virtual
+        ? '<div class="bd-rain">' + rainHtml() + '</div>'
+        : '<div class="bd-cols">' + columnsHtml(board) + '</div>');
   }
 
   // ------------------------------------------------------------- follow up
@@ -410,15 +414,58 @@
       (touch && canMove(b.id) ? '. Tap a card to move it.' : '');
   }
 
+  // ------------------------------------------------- urgency & the filter
+  //
+  // Jonah (5 Oct 2026): "a tag and urgency system for cards" and "a rain day
+  // board or a rain day tag ... so on rain days the crew can filter and figure
+  // out what they can be getting done." Urgency is picked on the card (the
+  // owner or an admin -- crew cannot change what a card says); cards sort by
+  // it, then by due date. The filter bar narrows a board to what is urgent or
+  // what is yours; ☔ Rain day shows the rain-day cards from every board you
+  // can see, grouped by board (WISHLIST #1).
+  const URGENCY = [['urgent', '🔴 Urgent', 'today'], ['high', '🟠 High', 'this week'],
+                   ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
+  const urgRank = k => { const i = URGENCY.findIndex(u => u[0] === (k.urgency || 'normal')); return i === -1 ? 2 : i; };
+  const RAIN = { id: 'rainday', name: '☔ Rain day', color: '#3b82c4' };
+  const isRainy = (board, k) => (k.labels || []).some(id => {
+    const l = (board.labels || []).find(x => x.id === id);
+    return id === RAIN.id || (l && /rain/i.test(l.name || ''));
+  });
+  let cardFilter = '';       // '' | 'urgent' | 'mine' | 'rain'
+  window.setCardFilter = function (f) { cardFilter = cardFilter === f ? '' : f; render(); };
+  function shows(board, k) {
+    if (cardFilter === 'urgent') return ['urgent', 'high'].indexOf(k.urgency) !== -1;
+    if (cardFilter === 'mine') { const u = me(); return !!u && (k.assignees || []).some(a => a.uid === u.uid); }
+    return true;
+  }
+  function filterBarHtml(board) {
+    if (board.virtual) return '';
+    const chip = (f, label) => '<button class="bd-filter' + (cardFilter === f ? ' on' : '') + '" onclick="setCardFilter(\'' + f + '\')">' + label + '</button>';
+    return '<div class="bd-filters">' + chip('urgent', '🔴 Urgent & this week') + chip('mine', '👤 Mine') + chip('rain', '☔ Rain day') + '</div>';
+  }
+  // Rain-day cards from every stored board this person can see, by board.
+  function rainHtml() {
+    const out = Object.values(boards).filter(b => !b.virtual).sort((a, b) => (a.order || 0) - (b.order || 0)).map(b => {
+      const last = b.columns[b.columns.length - 1].id;
+      const list = Object.values(cards[b.id] || {}).filter(k => isRainy(b, k) && colOf(b, k) !== last)
+        .sort((x, y) => urgRank(x) - urgRank(y) || String(x.due || '9999').localeCompare(String(y.due || '9999')));
+      return list.length ? '<div class="bd-rain-group"><div class="bd-rain-head" style="--c:' + safeColor(b.color) + '">' + esc(b.name) +
+        ' <span class="bd-count">' + list.length + '</span></div><div class="bd-rain-cards">' +
+        list.map(k => storedCardHtml(b, k, false)).join('') + '</div></div>' : '';
+    }).join('');
+    return out || '<p class="empty-msg">Nothing tagged ☔ Rain day yet. Give a card the Rain day label and it shows up here on a wet day.</p>';
+  }
+
   function columnsHtml(board) {
     if (board.virtual) {
       const grouped = jobCards(board);
       return board.columns.map(c => column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)))).join('');
     }
-    const mine = Object.values(cards[board.id] || {});
+    const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
     return board.columns.map((c, i) => {
       const inCol = mine.filter(k => colOf(board, k) === c.id)
-        .sort((a, b) => (a.order || 0) - (b.order || 0));
+        .sort((a, b) => urgRank(a) - urgRank(b) || String(a.due || '9999').localeCompare(String(b.due || '9999')) ||
+          (a.order || 0) - (b.order || 0));
       const last = i === board.columns.length - 1;
       return column(board, c, inCol.map(k => storedCardHtml(board, k, last)));
     }).join('');
@@ -490,7 +537,8 @@
     const done = list.filter(i => i.done).length;
     const today = localDay();
     const dueState = !k.due || inLastColumn ? '' : k.due < today ? ' late' : k.due === today ? ' today' : '';
-    return '<div class="bd-card' + (inLastColumn ? ' done' : '') + coverClass(k.color) + '" draggable="true" ' +
+    const urg = ['urgent', 'high', 'low'].indexOf(k.urgency) !== -1 ? ' urg-' + k.urgency : '';
+    return '<div class="bd-card' + (inLastColumn ? ' done' : '') + urg + coverClass(k.color) + '" draggable="true" ' +
         coverStyle(k.color) +
         'data-board="' + board.id + '" data-card="' + k.id + '" ' +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
@@ -947,6 +995,11 @@
         '<div class="field"><span class="label">Due</span>' +
           '<input type="date" id="cdDue" value="' + esc(k.due || '') + '"></div>' +
       '</div>' +
+      '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
+        URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
+          ((k.urgency || 'normal') === u ? ' checked' : '') + '><span>' + esc(name) + (hint ? ' <small>' + esc(hint) + '</small>' : '') +
+          '</span></label>').join('') +
+      '</div></div>' +
       '<div class="field"><span class="label">Labels</span><div class="bd-pick">' +
         (board.labels || []).map(l => '<label class="bd-pick-item" style="--c:' + safeColor(l.color) + '">' +
           '<input type="checkbox" class="cdLabel" value="' + l.id + '"' + (labelsOn.has(l.id) ? ' checked' : '') + '>' +
@@ -1128,6 +1181,7 @@
       column: col,
       order: was.column === col && was.order != null ? was.order : endOrder(board.id, col),
       due: val('cdDue') || null,
+      urgency: ((document.querySelector('input[name="cdUrg"]:checked') || {}).value) || 'normal',
       labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value),
       color: pickedColor('cdColor'),
       assignees: assignees,
@@ -1466,6 +1520,13 @@
       seeded = true;
       if (!Object.keys(boards).length) seedOnce();
       if (!boards[WISHES]) wishesOnce();
+      // Every board gets the ☔ Rain day label, so any card can be tagged for
+      // a wet day (boards made before it existed included).
+      Object.values(boards).forEach(b => {
+        if (b.virtual || (b.labels || []).some(l => l.id === RAIN.id || /rain/i.test(l.name || ''))) return;
+        b.labels = (b.labels || []).concat([RAIN]);
+        write('boards', b.id, { labels: b.labels }, 'rain day label');
+      });
     }
     redrawIfVisible();
   }

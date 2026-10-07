@@ -1911,3 +1911,18 @@
   .rc-task .rc-next { grid-column:1 / -1; font-size:12px; }
   @media (max-width:720px) { .rc-task { grid-template-columns:1fr 1fr; } }
   .cols2.single { grid-template-columns:1fr; }
+  /* Card urgency and the board filter (boards.js) */
+  .bd-card.urg-urgent { box-shadow:inset 4px 0 0 #d64545; }
+  .bd-card.urg-high { box-shadow:inset 4px 0 0 #e07b24; }
+  .bd-card.urg-low { opacity:.85; }
+  .bd-filters { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px; }
+  .bd-filter { border:1px solid var(--border-strong); background:var(--surface); color:var(--text); border-radius:16px; padding:5px 12px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+  .bd-filter.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .bd-urg-pick { display:flex; flex-wrap:wrap; gap:6px; }
+  .bd-urg-opt { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border-strong); border-radius:8px; font-size:13px; cursor:pointer; }
+  .bd-urg-opt small { color:var(--muted); }
+  .bd-urg-opt.urg-urgent { border-left:4px solid #d64545; }
+  .bd-urg-opt.urg-high { border-left:4px solid #e07b24; }
+  .bd-rain { display:flex; flex-direction:column; gap:14px; }
+  .bd-rain-head { font-weight:700; font-size:14px; padding:4px 8px; border-left:4px solid var(--c); }
+  .bd-rain-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; margin-top:6px; }
