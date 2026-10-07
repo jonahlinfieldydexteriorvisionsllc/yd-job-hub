@@ -726,6 +726,29 @@ def _supplies(request, path, headers):
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
+# ---------------------------------------------------------------- version
+
+# Which code is running, so whether a deploy went live can be checked from
+# outside -- the Cloud console needs Jonah's sign-in (7 Oct 2026: "how about
+# instead of asking me to do it you just check"). A fingerprint of this
+# folder's own .py files, which can be worked out from the repo for any
+# commit, plus Cloud Run's revision name. Nothing in it is private.
+_FINGERPRINT = None
+
+
+def _code_fingerprint():
+    global _FINGERPRINT
+    if _FINGERPRINT is None:
+        import hashlib
+        here = os.path.dirname(os.path.abspath(__file__))
+        h = hashlib.sha1()
+        for name in sorted(n for n in os.listdir(here) if n.endswith(".py")):
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read().replace(b"\r\n", b"\n") + b"\0")
+        _FINGERPRINT = h.hexdigest()[:12]
+    return _FINGERPRINT
+
+
 # ---------------------------------------------------------------- entry point
 
 
@@ -739,6 +762,9 @@ def claude(request):
     # is decided by the path. Anything under /qb/ is QuickBooks, everything else
     # is the Claude behaviour this service started as.
     path = (request.path or "/").rstrip("/")
+    if path == "/version":
+        return (json.dumps({"revision": os.environ.get("K_REVISION", ""), "code": _code_fingerprint()}), 200,
+                dict(headers, **{"Content-Type": "application/json"}))
     if path.startswith("/qb"):
         return _quickbooks(request, path, headers)
     if path.startswith("/digest"):
