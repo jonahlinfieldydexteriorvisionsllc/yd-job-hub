@@ -350,6 +350,7 @@
 
     const set = (f, v) => { const n = el(f); if (n && v) n.value = v; };
     set('customerName', p.name);
+    if (typeof namePartsFromCustomer === 'function') namePartsFromCustomer();
     set('address', p.address);
     set('phone', p.phone);
     set('email', p.email);

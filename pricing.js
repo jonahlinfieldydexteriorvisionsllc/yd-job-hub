@@ -333,6 +333,7 @@
 
   let rules = blankRules();
   let fuelPrices = {};            // pricing/fuel: {gasCents, dieselCents, asOf, source}
+  let claudeText = null;          // pricing/claude: the owner's takeoff rules, as Claude reads them
   let ready = false;
   let unsubs = [];
 
@@ -359,7 +360,7 @@
 
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
-    unsubs = []; rules = blankRules(); fuelPrices = {}; ready = false;
+    unsubs = []; rules = blankRules(); fuelPrices = {}; claudeText = null; ready = false;
   }
   function start() {
     stop();
@@ -368,6 +369,7 @@
       list.forEach(c => {
         if (c.id === 'rules') { rules = c.type === 'removed' ? blankRules() : merged(c.data); ready = true; }
         if (c.id === 'fuel') fuelPrices = c.type === 'removed' ? {} : (c.data || {});
+        if (c.id === 'claude') claudeText = c.type === 'removed' ? '' : String((c.data || {}).text || '');
       });
       changed();
     }, () => {}));
@@ -505,8 +507,22 @@
       ['twoText', 'threeText', 'warranty'].map(k => '<label class="pr-field wide"><span>' +
         ({ twoText: 'Payment terms — two payments', threeText: 'Payment terms — three payments', warranty: 'Warranty' })[k] +
         '</span><textarea rows="3"' + (ro ? ' disabled' : '') + ' onchange="prSet(\'payments.' + k + '\', this.value, \'text\')">' +
-        esc(r.payments[k] || '') + '</textarea></label>').join('');
+        esc(r.payments[k] || '') + '</textarea></label>').join('') +
+
+      '<h3 class="pr-h">What Claude knows about takeoff</h3>' +
+      '<p class="hint">Your rules for laying out an estimate — base depths, conversions, install standards, how a scope is written, the clauses every estimate carries. ' +
+        'Claude reads all of this with every message about an estimate. Prices and markups don’t belong here; the app works those out.</p>' +
+      '<textarea class="pr-claude" rows="18"' + (ro ? ' disabled' : '') + ' onchange="prClaude(this.value)">' + esc(claudeText || '') + '</textarea>';
   }
+
+  window.prClaude = function (v) {
+    if (!owner()) return;
+    claudeText = String(v || '');
+    Promise.resolve(window.YDDb.put('pricing', 'claude', { text: claudeText, updatedAt: new Date().toISOString() })).catch(e => {
+      showToast(e && e.code === 'permission-denied' ? 'Only the owner changes the pricing rules' : 'Not saved yet — will retry');
+    });
+    showToast('Saved — Claude reads this from the next message');
+  };
 
   // path like 'delivery.markupPct'; kind: num | cents | text | id | list
   window.prSet = function (path, v, kind) {

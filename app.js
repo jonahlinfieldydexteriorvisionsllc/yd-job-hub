@@ -45,7 +45,7 @@ let jobStatus = 'quoting';
 // everything between a won bid and a finished job; it is read as Booked or In
 // progress by where the job sat on the Jobs board, so nothing has to be
 // re-entered and old copies on other devices still show correctly.
-const JOB_STATUS = { quoting: 'Quoting', booked: 'Booked', inprogress: 'In progress', complete: 'Complete' };
+const JOB_STATUS = { quoting: 'Bid', booked: 'Booked', inprogress: 'In progress', complete: 'Complete' };
 function normStatus(s, d) {
   if (s === 'active') {
     const stage = d && d.workStage;
@@ -53,7 +53,12 @@ function normStatus(s, d) {
   }
   return JOB_STATUS[s] ? s : 'quoting';
 }
-function statusLabel(s) { return JOB_STATUS[s] || (s === 'active' ? 'Booked' : 'Quoting'); }
+function statusLabel(s) { return JOB_STATUS[s] || (s === 'active' ? 'Booked' : 'Bid'); }
+// A bid is not a job (Jonah, 6 Oct 2026: "i only want the job list to track
+// jobs actually picked up"). Until it is booked it lives on the Bids board and
+// under Bids in the job list -- never in the job list itself, All Jobs or the
+// crew's clock.
+const isBidStatus = s => normStatus(s) === 'quoting';
 function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s) + '</span>'; }
 // Where the job sits on the Bids and Jobs boards. The form does not edit these,
 // but it must carry them: getJobData() rebuilds the record from scratch, so a
@@ -657,9 +662,30 @@ function onStatusChange() {
   if (jobStatus === 'inprogress' && boardFields.workStage !== 'punchList' && was !== 'inprogress') {
     boardFields.workStage = 'inProgress'; boardFields.workStageAt = at;
   }
+  showBidBanner();
   updateCtxBar();
 }
-function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; }
+function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; showBidBanner(); }
+function showBidBanner() {
+  const b = document.getElementById('bidBanner');
+  if (b) b.hidden = !isBidStatus(jobStatus);
+}
+// Booking a bid: it becomes a job -- on the Jobs board, in the job list, on
+// the crew's clock -- and the bid is marked Won, the same as moving it there.
+function makeItAJob(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  id = id || currentJobId;
+  if (!id && typeof autosave === 'function') { autosave(); id = currentJobId; }
+  if (!id || !window.YDSync) return;
+  const at = new Date().toISOString();
+  if (!window.YDSync.patchJob(id, { jobStatus: 'booked', bidStage: 'won', bidStageAt: at, workStage: 'scheduled', workStageAt: at })) {
+    showToast('Could not make that a job');
+    return;
+  }
+  if (id === currentJobId) { jobStatus = 'booked'; syncStatusSelect(); updateCtxBar(); }
+  showToast('Booked — it is a job now, on the Jobs board and in your job list');
+  if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+}
 function updateJobHeadBadge() {
   const e = document.getElementById('estimateNumber').value.trim();
   document.getElementById('jobHeadBadge').textContent = e ? 'Est #' + e : '';
@@ -726,10 +752,36 @@ function loadProposalFile(event) {
   reader.readAsText(file);
 }
 
+// The customer's name in parts (Jonah, 6 Oct 2026: "clients should have a
+// field for a first and a last name"). customerName stays the name the rest
+// of the app reads -- boards, QuickBooks, summaries: the business if there is
+// one, otherwise "First Last" -- kept in step with the boxes here.
+function customerNameFromParts() {
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  document.getElementById('customerName').value = v('business') || [v('firstName'), v('lastName')].filter(Boolean).join(' ');
+}
+function onCustomerNamePart() { customerNameFromParts(); markDirty(); updateCtxBar(); }
+// Jobs saved before the boxes existed, imports and contacts turned into jobs
+// carry one name: it is split into the boxes. Two or three words read as a
+// person's name; anything else is a business name.
+function namePartsFromCustomer() {
+  const f = document.getElementById('firstName'), l = document.getElementById('lastName'), b = document.getElementById('business');
+  if (!f || f.value.trim() || l.value.trim() || b.value.trim()) return;
+  const full = (document.getElementById('customerName').value || '').trim();
+  if (!full) return;
+  const words = full.split(/\s+/);
+  if (words.length >= 2 && words.length <= 3 && !/[&\d,]|\b(llc|inc|co|company|corp|apartments?|church|school|resort|hoa|association|services?|landscaping|properties|management)\b/i.test(full)) {
+    f.value = words[0]; l.value = words.slice(1).join(' ');
+  } else {
+    b.value = full;
+  }
+}
+
 function applyClientBlock(data) {
   const c = data.client || {};
   const setIf = (id, val) => { const el = document.getElementById(id); if (el && val && !el.value.trim()) el.value = val; };
   setIf('customerName', c.name || data.clientName);
+  namePartsFromCustomer();
   setIf('address', c.address);
   setIf('city', c.city);
   setIf('state', c.state);
@@ -1183,7 +1235,7 @@ function updateSummary() {
 // ═══════════════════════════════════════════════════════════
 // SAVE / LOAD
 // ═══════════════════════════════════════════════════════════
-const FIELDS = ['customerName','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice'];
+const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice'];
 
 function getJobData() {
   const d = {};
@@ -1208,6 +1260,7 @@ function getJobData() {
 }
 function loadJobData(d) {
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = d[f] || ''; });
+  namePartsFromCustomer();
   loadedQuoteDate = d.quoteDate || '';
   document.getElementById('quoteDate').value = d.quoteDate ? fmtDateMD(d.quoteDate) : todayMD();
   document.getElementById('qbInvoiced').checked = !!d.qbInvoiced;
@@ -1474,25 +1527,34 @@ function populateServiceFilter() {
   const sel = document.getElementById('filterService');
   sel.innerHTML = '<option value="">All Services</option>' + [...set].sort().map(s => '<option>' + esc(s) + '</option>').join('');
 }
+let jobListBids = false;
+function showJobListBids(on) { jobListBids = !!on; renderJobList(); }
 function renderJobList() {
   const body = document.getElementById('jobListBody');
   const fSvc = document.getElementById('filterService').value;
   const fSearch = (document.getElementById('filterSearch').value || '').toLowerCase().trim();
-  let idx = getJobIndex();
+  const all = getJobIndex();
+  const bidCount = all.filter(j => isBidStatus(j.status)).length;
+  let idx = all.filter(j => isBidStatus(j.status) === jobListBids);
+  const switcher = '<div class="jl-switch">' +
+    '<button class="' + (jobListBids ? '' : 'on') + '" onclick="showJobListBids(false)">Jobs (' + (all.length - bidCount) + ')</button>' +
+    '<button class="' + (jobListBids ? 'on' : '') + '" onclick="showJobListBids(true)">Bids (' + bidCount + ')</button></div>';
   if (fSvc) idx = idx.filter(j => (j.services || '').includes(fSvc));
   if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '') + ' ' + (j.est || '')).toLowerCase().includes(fSearch));
-  if (!idx.length) { body.innerHTML = '<p class="empty-msg">No jobs found. Import a proposal or start a new job.</p>'; return; }
+  if (!idx.length) { body.innerHTML = switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>'; return; }
 
   const groups = {};
   idx.forEach(j => { const dt = j.lastModified ? new Date(j.lastModified) : new Date(); const key = MONTHS[dt.getMonth()] + ' ' + dt.getFullYear(); (groups[key] = groups[key] || []).push(j); });
   const keys = Object.keys(groups).sort((a, b) => { const [ma, ya] = a.split(' '), [mb, yb] = b.split(' '); return yb - ya || MONTHS.indexOf(mb) - MONTHS.indexOf(ma); });
-  body.innerHTML = keys.map(key => {
+  body.innerHTML = switcher + keys.map(key => {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
         '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' + statusPill(normStatus(j.status)) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') + fmtMoney(j.price) + '</div></div>' +
-      '<div style="display:flex;gap:4px"><button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')">DUP</button>' +
+      '<div style="display:flex;gap:4px">' +
+      (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + j.id + '\')">MAKE IT A JOB</button>' : '') +
+      '<button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')">DUP</button>' +
       '<button class="remove-btn" onclick="deleteJob(\'' + j.id + '\')">×</button></div></div>'
     ).join('');
     return '<div class="month-group"><div class="month-head" onclick="toggleMonth(\'' + key + '\')">' +
@@ -1528,7 +1590,8 @@ function renderDashboard() {
     return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
   });
   if (fSvc) rows = rows.filter(r => r.services.includes(fSvc));
-  if (fStatus) rows = rows.filter(r => r.status === fStatus);
+  // Bids show only when Bids is picked: the totals are for work actually booked.
+  rows = rows.filter(r => fStatus ? r.status === fStatus : r.status !== 'quoting');
   if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services + ' ' + r.est).toLowerCase().includes(fSearch));
   rows.sort((a, b) => { let va = a[dashSort.col], vb = b[dashSort.col]; if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); } if (va < vb) return dashSort.asc ? -1 : 1; if (va > vb) return dashSort.asc ? 1 : -1; return 0; });
 

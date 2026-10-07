@@ -1821,3 +1821,14 @@
   .pr-chips { display:flex; flex-wrap:wrap; gap:6px; align-items:center; color:var(--text); }
   .pr-chip { padding:3px 8px; border-radius:12px; background:var(--surface-2); border:1px solid var(--border); font-size:13px; }
   .pr-chip .link-btn { background:none; border:0; padding:0; color:var(--neg); cursor:pointer; }
+  .pr-claude { width:100%; font-size:13px; font-family:ui-monospace, SFMono-Regular, Consolas, monospace; line-height:1.4; }
+  /* Snow account address: city wide, state and ZIP narrow (snow.js) */
+  .sf-addr { grid-template-columns: 1fr 70px 110px; }
+  @media (max-width:720px) { .sf-addr { grid-template-columns: 1fr 64px 96px; } }
+  /* Bids are not jobs (app.js isBidStatus) */
+  .bid-banner { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; justify-content:space-between; margin-bottom:12px;
+    padding:10px 14px; border-radius:10px; border:1px solid #9cb8e8; background:color-mix(in srgb, #2f6fd6 10%, var(--surface)); font-size:14px; }
+  .bid-banner[hidden] { display:none; }
+  .jl-switch { display:flex; gap:6px; margin-bottom:10px; }
+  .jl-switch button { border:1px solid var(--border-strong); background:var(--surface); color:var(--text); border-radius:16px; padding:5px 14px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+  .jl-switch button.on { background:var(--brand); border-color:var(--brand); color:#fff; }

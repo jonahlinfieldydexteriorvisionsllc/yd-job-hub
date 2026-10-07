@@ -95,14 +95,27 @@
   <!-- ============ TAB 1: JOB ============ -->
   <div class="tab-panel active" id="panel-job">
 
+    <!-- A bid is not a job until it is booked (app.js isBidStatus). -->
+    <div class="bid-banner" id="bidBanner" hidden>
+      <span><b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.</span>
+      <button class="btn btn-sm btn-filled" onclick="makeItAJob()">Make it a job</button>
+    </div>
+
     <div class="section">
       <div class="section-head">
         <span class="section-title">Client &amp; Job Info</span>
         <span class="section-badge accent" id="jobHeadBadge"></span>
       </div>
       <div class="section-body">
-        <div class="grid g5">
-          <div class="field"><span class="label">Customer Name</span><input id="customerName" oninput="markDirty()"></div>
+        <!-- The customer's name in parts; customerName (hidden) is the name the
+             rest of the app shows -- the business, or "First Last". app.js -->
+        <div class="grid g3">
+          <div class="field"><span class="label">First name</span><input id="firstName" autocomplete="off" oninput="onCustomerNamePart()"></div>
+          <div class="field"><span class="label">Last name</span><input id="lastName" autocomplete="off" oninput="onCustomerNamePart()"></div>
+          <div class="field"><span class="label">Business name (if any)</span><input id="business" autocomplete="off" oninput="onCustomerNamePart()"></div>
+        </div>
+        <input type="hidden" id="customerName">
+        <div class="grid g4 mt">
           <div class="field"><span class="label">Estimate #</span><input id="estimateNumber" oninput="updateJobHeadBadge(); markDirty()"></div>
           <div class="field">
             <span class="label">Service Type(s)</span>
@@ -133,7 +146,7 @@
           <div class="field">
             <span class="label">Job Status</span>
             <select id="jobStatusSelect" onchange="onStatusChange(); markDirty()">
-              <option value="quoting">Quoting</option>
+              <option value="quoting">Bid</option>
               <option value="booked">Booked</option>
               <option value="inprogress">In progress</option>
               <option value="complete">Complete</option>
@@ -475,8 +488,8 @@
         <div class="filter-bar">
           <select id="dashFilter" class="searchable" onchange="renderDashboard()"><option value="">All Services</option></select>
           <select id="dashStatus" onchange="renderDashboard()">
-            <option value="">All Statuses</option>
-            <option value="quoting">Quoting</option>
+            <option value="">All jobs</option>
+            <option value="quoting">Bids (not booked yet)</option>
             <option value="booked">Booked</option>
             <option value="inprogress">In progress</option>
             <option value="complete">Complete</option>
@@ -800,16 +813,26 @@
     <div class="modal-body">
 
       <div class="grid g2">
-        <div class="field"><span class="label">Name</span>
-          <input id="sfName" placeholder="Customer or property name"></div>
+        <div class="field"><span class="label">First name</span>
+          <input id="sfFirst" autocomplete="off" placeholder="First name"></div>
+        <div class="field"><span class="label">Last name</span>
+          <input id="sfLast" autocomplete="off" placeholder="Last name"></div>
+      </div>
+      <div class="grid g2">
+        <div class="field"><span class="label">Business name (if it's a business)</span>
+          <input id="sfBusiness" autocomplete="off" placeholder="e.g. Oak Street Dental — optional"></div>
         <div class="field"><span class="label">Type</span>
           <select id="sfType"><option value="residential">Residential</option><option value="commercial">Commercial</option></select></div>
       </div>
 
       <div class="field mt"><span class="label">Street address</span>
-        <input id="sfAddress" placeholder="e.g. 123 Oak St, Madison, WI 53711">
-        <div class="hint" id="sfGeoHint">The town and map location are worked out for you when you save.</div>
+        <input id="sfStreet" autocomplete="off" placeholder="e.g. 123 Oak St or W5883 County Rd X"></div>
+      <div class="grid sf-addr">
+        <div class="field"><span class="label">City</span><input id="sfCity" autocomplete="off" placeholder="Madison"></div>
+        <div class="field"><span class="label">State</span><input id="sfState" autocomplete="off" maxlength="2" placeholder="WI"></div>
+        <div class="field"><span class="label">ZIP</span><input id="sfZip" autocomplete="off" inputmode="numeric" maxlength="10" placeholder="53711"></div>
       </div>
+      <div class="hint" id="sfGeoHint">The map location is found for you when you save.</div>
 
       <div class="grid g2 mt">
         <div class="field"><span class="label">Phone</span><input id="sfPhone" type="tel" placeholder="(608) 555-0123"></div>

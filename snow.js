@@ -131,7 +131,7 @@
 
   function mapsLink(a) {
     const q = encodeURIComponent(
-      (a.lat && a.lng) ? (a.lat + ',' + a.lng) : (a.address + ', ' + (a.town || '') + ' WI'));
+      (a.lat && a.lng) ? (a.lat + ',' + a.lng) : a.street ? a.address : (a.address + ', ' + (a.town || '') + ' WI'));
     return 'https://maps.google.com/?q=' + q;
   }
 
@@ -170,7 +170,8 @@
           (edits ? '<button class="btn btn-sm snow-edit" onclick="editSnowAccount(\'' + safeId(id) + '\')">Edit</button>' : '') +
         '</div>' +
         '<a class="snow-addr" href="' + mapsLink(a) + '" target="_blank" rel="noopener">' +
-          esc(a.address) + (a.town ? ', ' + esc(a.town) : '') +
+          // An address typed in its parts already ends with its town.
+          esc(a.address) + (a.town && !a.street ? ', ' + esc(a.town) : '') +
           '<span class="snow-go">open in maps</span>' +
         '</a>' +
         (a.areaNotes ? '<div class="snow-notes">' + esc(a.areaNotes) + '</div>' : '') +
@@ -428,6 +429,53 @@
     return (await locate(input, townHint)).geo;
   }
 
+  // An address typed in its parts. The server looks it up (geo.py): the US
+  // Census geocoder there finds Wisconsin's rural fire numbers -- "W5883
+  // County Rd X" -- that OpenStreetMap has only the road for, and it cannot
+  // be asked from a browser. With no answer from the server (no signal, or
+  // signed out of it) the browser's own OpenStreetMap search is the fallback.
+  async function locateParts(p) {
+    const line = oneLine(p);
+    if (window.YDClaude && window.YDClaude.available && window.YDClaude.available() && navigator.onLine) {
+      try {
+        const r = await window.YDClaude.post('/geo/find', { street: p.street, city: p.city, state: p.state, zip: p.zip });
+        if (r && r.found && r.geo) {
+          return { reached: true, geo: { lat: r.geo.lat, lng: r.geo.lng, town: p.city || r.geo.town || null,
+                                         matched: r.geo.matched || line } };
+        }
+        if (r && r.found === false) return { reached: true, geo: null };
+      } catch (e) { /* fall back to the browser's own search */ }
+    }
+    return locate(line, p.city || null);
+  }
+
+  // "123 Oak St, Madison, WI 53711" from its parts.
+  function oneLine(p) {
+    const tail = [p.state, p.zip].filter(Boolean).join(' ');
+    return [p.street, p.city, tail].map(s => String(s || '').trim()).filter(Boolean).join(', ');
+  }
+
+  // Accounts saved before the address and name had boxes of their own are
+  // split when opened, so editing one fills the boxes rather than starting
+  // them blank.
+  function partsOf(a) {
+    if (!a) return { street: '', city: '', state: 'WI', zip: '' };
+    if (a.street) return { street: a.street, city: a.city || a.town || '', state: a.state || 'WI', zip: a.zip || '' };
+    const s = splitAddress(a.address || '');
+    return { street: s.street || '', city: s.town || a.town || '', state: 'WI', zip: s.zip || '' };
+  }
+  function namesOf(a) {
+    if (!a) return { first: '', last: '', business: '' };
+    if (a.firstName || a.lastName || a.business) return { first: a.firstName || '', last: a.lastName || '', business: a.business || '' };
+    const words = String(a.name || '').trim().split(/\s+/).filter(Boolean);
+    // A person's name is two or three words; anything else, or a commercial
+    // account, is a business name.
+    if (a.type !== 'commercial' && words.length >= 2 && words.length <= 3 && !/[&\d]|\b(llc|inc|co|apartments?|church|school|resort|hoa|association)\b/i.test(a.name)) {
+      return { first: words[0], last: words.slice(1).join(' '), business: '' };
+    }
+    return { first: '', last: '', business: String(a.name || '') };
+  }
+
   const val = id => (document.getElementById(id) || {}).value || '';
   const checked = id => !!(document.getElementById(id) || {}).checked;
   const money = id => {
@@ -463,7 +511,9 @@
     const tick = (el, v) => { const n = document.getElementById(el); if (n) n.checked = !!v; };
     const dollars = c => (c == null ? '' : (c / 100).toString());
 
-    set('sfName', a && a.name); set('sfAddress', a && a.address);
+    const nm = namesOf(a), ad = partsOf(a);
+    set('sfFirst', nm.first); set('sfLast', nm.last); set('sfBusiness', nm.business);
+    set('sfStreet', ad.street); set('sfCity', ad.city); set('sfState', ad.state || 'WI'); set('sfZip', ad.zip);
     set('sfType', (a && a.type) || 'residential');
     set('sfPhone', p && p.phone); set('sfEmail', p && p.email);
     set('sfNotes', a && a.areaNotes);
@@ -522,10 +572,15 @@
 
   window.saveSnowForm = async function () {
     const btn = document.getElementById('sfSaveBtn');
-    const name = val('sfName').trim();
-    const address = val('sfAddress').trim();
-    if (!name)    { showToast('Give the account a name'); return; }
-    if (!address) { showToast('An address is needed — the route and weather depend on it'); return; }
+    const firstName = val('sfFirst').trim(), lastName = val('sfLast').trim(), business = val('sfBusiness').trim();
+    // The name shown everywhere: the business, or the person.
+    const name = business || [firstName, lastName].filter(Boolean).join(' ');
+    const parts = { street: val('sfStreet').trim(), city: val('sfCity').trim(),
+                    state: (val('sfState').trim() || 'WI').toUpperCase(), zip: val('sfZip').trim() };
+    const address = oneLine(parts);
+    if (!name)    { showToast('Give the customer a first and last name, or a business name'); return; }
+    if (!parts.street) { showToast('A street address is needed — the route and weather depend on it'); return; }
+    if (!parts.city && !parts.zip) { showToast('Add the city or the ZIP so the address can be found'); return; }
 
     btn.disabled = true;
     btn.textContent = 'Finding the address…';
@@ -549,7 +604,7 @@
     const moved = !existing || existing.address !== address;
     let geo = null;
     if ((moved || existing.lat == null) && unfound !== address) {
-      const found = await locate(address);
+      const found = await locateParts(parts);
       geo = found.geo;
       if (!geo) {
         // The form used to close at once and say only "saved", so the warning
@@ -576,8 +631,10 @@
     const kept = k => (!moved && existing[k] != null ? existing[k] : null);
     const pub = {
       name: name,
+      firstName: firstName, lastName: lastName, business: business,
       address: address,
-      town: geo ? geo.town : kept('town'),
+      street: parts.street, city: parts.city, state: parts.state, zip: parts.zip,
+      town: geo ? geo.town : (parts.city || kept('town')),
       lat: geo ? geo.lat : kept('lat'),
       lng: geo ? geo.lng : kept('lng'),
       geocodedAs: geo ? geo.matched : kept('geocodedAs'),
@@ -664,7 +721,9 @@
       for (const id of todo) {
         const address = accounts[id].address;
         triedAddress[id] = address;
-        const found = await locate(address);
+        // Through the server's Census lookup, which finds what OpenStreetMap
+        // could not when these were first saved.
+        const found = await locateParts(partsOf(accounts[id]));
         if (!found.reached) { delete triedAddress[id]; break; }
         // Edited while it was being looked up: the new address is its own job.
         if (found.geo && accounts[id] && accounts[id].address === address && accounts[id].lat == null) {

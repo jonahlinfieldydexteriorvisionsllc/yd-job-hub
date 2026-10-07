@@ -218,12 +218,17 @@
     };
   }
 
+  // A bid is not a job until it is booked (app.js isBidStatus), so it is not
+  // on the crew's clock either: booking it puts it there.
+  const onBoard = d => (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting')) !== 'quoting';
+
   function pushBoard(id, data) {
     // Whoever may change jobs: the owner, or an admin given that. The rules
     // refuse it from anyone else, whose app has no business maintaining the
     // list anyway.
     if (!ydCan('jobs', 'change')) return;
-    Promise.resolve(window.YDDb.put('jobBoard', id, boardEntry(id, data)))
+    const write = onBoard(data) ? window.YDDb.put('jobBoard', id, boardEntry(id, data)) : window.YDDb.remove('jobBoard', id);
+    Promise.resolve(write)
       .catch(err => console.warn('[sync] job board not yet updated for', id,
         err.code || err.message));
   }
@@ -262,10 +267,12 @@
     try {
       const board = await window.YDDb.list('jobBoard');
       const writes = [];
+      const bids = new Set();
       getJobIndex().forEach(j => {
         const raw = readJobBlob(j.id);
         if (!raw) return;
         let d; try { d = JSON.parse(raw); } catch { return; }
+        if (!onBoard(d)) { bids.add(j.id); return; }
         const want = boardEntry(j.id, d), have = board[j.id];
         if (!have || have.name !== want.name || have.address !== want.address
             || have.status !== want.status) {
@@ -277,7 +284,8 @@
       // work that no longer exists. Gone means gone from the cloud as well as
       // from this device: a job the cloud still has but this phone could not
       // store (no room left on it, say) is not gone.
-      const gone = Object.keys(board).filter(id => !readJobBlob(id) && !cloudJobIds.has(id));
+      // A bid comes off it too, until it is booked.
+      const gone = Object.keys(board).filter(id => bids.has(id) || (!readJobBlob(id) && !cloudJobIds.has(id)));
 
       // Handed to Firestore, not awaited, like every other write here: it
       // sends them whenever the signal allows.

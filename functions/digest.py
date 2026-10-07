@@ -327,58 +327,34 @@ def county_alerts():
 
 
 # A job's address becomes a map point once, kept in jobGeo/{jobId} (server
-# only), and looked up again only when the address changes -- OpenStreetMap
-# asks for no more than one lookup a second, and the same answer every day
-# would be wasted on them.
-STREET_TYPES = {"tr": "Trail", "trl": "Trail", "cir": "Circle", "rd": "Road", "dr": "Drive", "st": "Street",
-                "ave": "Avenue", "av": "Avenue", "ln": "Lane", "ct": "Court", "blvd": "Boulevard", "pl": "Place",
-                "ter": "Terrace", "pkwy": "Parkway", "hwy": "Highway", "pt": "Point", "cv": "Cove"}
-
-
-def _spelled_out(street):
-    words = (street or "").split()
-    if len(words) < 2:
-        return None
-    full = STREET_TYPES.get(words[-1].rstrip(".").lower())
-    return " ".join(words[:-1] + [full]) if full else None
+# only), and looked up again only when the address changes (geo.py does the
+# looking up). The key carries a version so a better lookup gets one more try
+# at addresses the old one could not find.
+GEO_VERSION = "2"
 
 
 def _job_point(job_id, j):
-    import time
     street = (j.get("address") or "").strip()
     city = (j.get("city") or "").strip()
     zip_ = (j.get("zip") or "").strip()
     if not street:
         return None
-    key = "|".join([street.lower(), city.lower(), zip_])
+    key = "|".join([GEO_VERSION, street.lower(), city.lower(), zip_])
     ref = _db().collection("jobGeo").document(job_id)
     snap = ref.get()
     if snap.exists:
         g = snap.to_dict() or {}
         if g.get("key") == key:
             return (g["lat"], g["lng"]) if g.get("found") else None
-    tries = []
-    for s in [_spelled_out(street), street]:
-        if not s:
-            continue
-        if zip_:
-            tries.append({"street": s, "postalcode": zip_})
-        if city:
-            tries.append({"street": s, "city": city})
-    found = None
-    for params in tries:
-        try:
-            r = requests.get("https://nominatim.openstreetmap.org/search", timeout=15,
-                             headers={"User-Agent": UA},
-                             params=dict(params, state="WI", country="USA", format="json", limit=1))
-            hit = r.json()
-            time.sleep(1.1)             # their policy: one request a second
-            if hit:
-                found = (float(hit[0]["lat"]), float(hit[0]["lon"]))
-                break
-        except Exception as e:          # noqa: BLE001
-            print("digest: job address lookup failed:", job_id, e)
-            return None                 # no answer is not "not found": try again next time
+    # The Census first, OpenStreetMap after (geo.py): OpenStreetMap alone
+    # missed rural fire-number addresses.
+    import geo
+    try:
+        hit = geo.find(street, city, "WI", zip_)
+    except Exception as e:              # noqa: BLE001
+        print("digest: job address lookup failed:", job_id, e)
+        return None                     # no answer is not "not found": try again next time
+    found = (hit["lat"], hit["lng"]) if hit else None
     ref.set({"key": key, "found": bool(found), "lat": found[0] if found else None,
              "lng": found[1] if found else None, "at": _now().isoformat()})
     return found
