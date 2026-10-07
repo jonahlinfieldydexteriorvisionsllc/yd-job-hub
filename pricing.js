@@ -449,10 +449,12 @@
   //
   // The server writes each day's Claude spend into claudeUsage/{day}
   // (costCents, byTaskCents -- functions/spend.py) and stops every Claude
-  // feature for the day at settings/claude.dailyCapCents. Read when the
+  // feature at settings/claude.dailyCapCents for the day, or
+  // settings/claude.monthlyCapCents for the month. Read when the
   // screen opens; the owner only (the rules say so too).
   let spend = null, claudeSet = {};
-  const DEFAULT_CAP_CENTS = 300;       // the server's default (spend.py)
+  const DEFAULT_CAP_CENTS = 200;       // the server's defaults (spend.py)
+  const DEFAULT_MONTH_CAP_CENTS = 2000;
   const TASK_NAME = { estimate: 'Estimates', card: 'Board cards', receipt: 'Reading receipts',
     receiptTriage: 'Sorting email', receiptphoto: 'Receipt photos', care: 'Plant-care emails',
     followup: 'Follow-up emails', source: 'Finding prices', pricesheet: 'Price sheets', estimate_scope: 'Scopes of work' };
@@ -476,14 +478,17 @@
       Object.entries(spend[d].byTaskCents || {}).forEach(([t, c]) => { byTask[t] = (byTask[t] || 0) + (Number(c) || 0); });
     });
     const cap = typeof claudeSet.dailyCapCents === 'number' ? claudeSet.dailyCapCents : DEFAULT_CAP_CENTS;
+    const monthCap = typeof claudeSet.monthlyCapCents === 'number' ? claudeSet.monthlyCapCents : DEFAULT_MONTH_CAP_CENTS;
     const model = claudeSet.estimateModel === 'opus' ? 'opus' : 'fable';
     const rows = Object.entries(byTask).sort((a, b) => b[1] - a[1]).map(([t, c]) =>
       '<li>' + esc(TASK_NAME[t] || t) + ' — ' + usd(c) + '</li>').join('');
-    return '<div class="pr-spend-top"><b>Today ' + usd(today) + '</b> of a ' + usd(cap) + ' daily limit · <b>this month ' +
-        usd(monthCents) + '</b></div>' +
+    return '<div class="pr-spend-top"><b>This month ' + usd(monthCents) + '</b> of a ' + usd(monthCap) + ' monthly limit · ' +
+        '<b>today ' + usd(today) + '</b> of ' + usd(cap) + ' a day</div>' +
       (rows ? '<ul class="pr-spend-list">' + rows + '</ul>' : '') +
-      '<p class="hint">Counted in dollars since this was switched on in October 2026 (before that only word counts were kept). When a day’s spending reaches the limit, ' +
-        'every Claude feature stops until midnight (UTC) — nothing else in the app is affected.</p>' +
+      '<p class="hint">Counted in dollars since this was switched on in October 2026 (before that only word counts were kept). When the month’s or the day’s spending reaches its limit, ' +
+        'every Claude feature stops until the next month or day (midnight UTC) — nothing else in the app is affected.</p>' +
+      '<label class="pr-field"><span>Monthly limit ($)</span><input inputmode="decimal" value="' + (monthCap / 100).toFixed(2) + '"' +
+        ' onchange="prClaudeSet(\'monthlyCapCents\', this.value)"></label>' +
       '<label class="pr-field"><span>Daily limit ($)</span><input inputmode="decimal" value="' + (cap / 100).toFixed(2) + '"' +
         ' onchange="prClaudeSet(\'dailyCapCents\', this.value)"></label>' +
       '<label class="pr-field"><span>Model for estimates</span><select onchange="prClaudeSet(\'estimateModel\', this.value)">' +
@@ -494,7 +499,7 @@
   window.prClaudeSet = function (k, v) {
     if (!owner()) return;
     let val = v;
-    if (k === 'dailyCapCents') {
+    if (k === 'dailyCapCents' || k === 'monthlyCapCents') {
       const n = Number(String(v).replace(/[$,\s]/g, ''));
       if (!(n >= 0) || String(v).trim() === '') { showToast('The limit should be a dollar amount'); loadSpend(); return; }
       val = Math.round(n * 100);
