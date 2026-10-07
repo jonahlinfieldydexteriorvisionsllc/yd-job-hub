@@ -246,13 +246,14 @@
         err.code || err.message));
   }
 
+  // Settles true once the server has the job, false if it could not be sent.
   async function pushNow(id) {
     // Someone allowed only to look at jobs never sends one up.
-    if (!ydCan('jobs', 'change')) { forgetUnsent(id); return; }
+    if (!ydCan('jobs', 'change')) { forgetUnsent(id); return false; }
     const raw = readJobBlob(id);
-    if (!raw) { forgetUnsent(id); return; }
+    if (!raw) { forgetUnsent(id); return false; }
     let data;
-    try { data = JSON.parse(raw); } catch { forgetUnsent(id); return; }
+    try { data = JSON.parse(raw); } catch { forgetUnsent(id); return false; }
     // Not awaited, and deliberately before the job push: if the signal dies
     // between the two, the clock having an extra job on it is harmless, while
     // a saved job the crew cannot clock into is the failure that matters.
@@ -263,12 +264,26 @@
       forgetUnsent(id);
       await sent;
       setCloudState('synced');
+      return true;
     } catch (err) {
       // Offline is not an error worth shouting about -- Firestore queues the
       // write and sends it when the signal comes back. Anything else is.
       console.warn('[sync] push failed for', id, err.code || err.message);
       setCloudState('offline');
+      return false;
     }
+  }
+
+  // Sent now rather than after the usual pause, settling once the server has
+  // it -- for something the server is about to read. The plant-care email
+  // reads the finished job there; asked for on a timer, it ran ahead of the
+  // save and found no email address, or no job at all (review, 7 Oct).
+  // Gives up after 20 seconds: with no signal, the write stays queued in
+  // Firestore but nothing waits on it.
+  function sendNow(id) {
+    if (!watching) return Promise.resolve(false);
+    clearTimeout(pushTimers[id]);
+    return Promise.race([pushNow(id), new Promise(done => setTimeout(() => done(false), 20000))]);
   }
 
   // Bring the board in line with the jobs that already exist -- the 21 from
@@ -331,6 +346,27 @@
 
   // ---------------------------------------------------------------- pull
 
+  // A copy kept here because its time looked newer than the server's (a
+  // phone clock running fast is enough) can still be missing what the server
+  // wrote: QuickBooks' answer, the care email. Pushed as it was, it put the
+  // old values back and the hourly check reported the same news again
+  // (review, 7 Oct). Only what is plainly further along is taken -- a field
+  // this copy does not have yet, or the same estimate moved on from Pending
+  // -- so a stale snapshot can never wind a newer answer back.
+  const EST_STEP = { Pending: 0, Accepted: 1, Rejected: 1, Closed: 2 };
+  const estStep = s => EST_STEP[s || 'Pending'] || 0;
+  function takeServerFields(local, theirs) {
+    let took = false;
+    SERVER_FIELDS.forEach(f => {
+      const s = theirs[f], l = local[f];
+      if (s == null) return;
+      const ahead = l == null ||
+        (f === 'qbEstimate' && s.id && s.id === l.id && estStep(s.status) > estStep(l.status));
+      if (ahead) { local[f] = s; took = true; }
+    });
+    return took;
+  }
+
   function applyRemote(changes) {
     if (!changes.length) return;
     applyingRemote = true;
@@ -359,7 +395,17 @@
         // Older than what this device already has: an edit made here before
         // sync had started, about to be overwritten by the stale cloud copy.
         // Keep ours and send it up instead.
-        if (mine && theirs && mine > theirs) { keepOurs.push(c.id); return; }
+        // What the server wrote into it meanwhile is carried into ours first,
+        // or the push would put the old values back.
+        if (mine && theirs && mine > theirs) {
+          if (takeServerFields(local, c.data || {})) {
+            try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(local)); } catch (e) {}
+            map[c.id] = buildIndexEntry(c.id, local);
+            if (c.id === currentJobId) SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
+          }
+          keepOurs.push(c.id);
+          return;
+        }
         try {
           localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(c.data));
         } catch (e) {
@@ -587,6 +633,7 @@
     status: () => ({ watching, cloudState, applyingRemote }),
     pushAll: pushAllLocal,
     patchJob: patchJob,
-    stop: () => { if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },
+    sendNow: sendNow,
+    stop:() => { if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },
   };
 })();

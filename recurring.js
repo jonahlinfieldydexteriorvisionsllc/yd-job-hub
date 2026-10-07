@@ -38,6 +38,7 @@
 
   let tasks = {};
   let loaded = false;
+  let fresh = false;          // the task list has come from the server, not just the cache
   let unsub = null;
   const el = id => document.getElementById(id);
   const owner = () => !!(window.YDAuth && window.YDAuth.isOwner);
@@ -131,6 +132,18 @@
       have[cid] = Object.assign({ id: cid }, card);
       Promise.resolve(window.YDDb.put('boards/' + MAINT + '/cards', cid, card))
         .catch(e => console.warn('[recurring] card not yet saved:', (e && e.code) || e));
+    });
+    // A task removed or switched off takes its open card with it -- left, it
+    // sat on the board and in every morning summary as "not done". One
+    // already moved to Done (waiting for an OK) or confirmed stays. Only on
+    // the server's own task list: a failed read leaves the list empty.
+    if (fresh) Object.keys(have).forEach(cid => {
+      const k = have[cid];
+      if (!k || !k.recurring || k.confirmedAt || k.doneAt) return;
+      const t = tasks[k.recurring];
+      if (t && !t.off && t.what) return;
+      delete have[cid];
+      Promise.resolve(window.YDDb.remove('boards/' + MAINT + '/cards', cid)).catch(() => {});
     });
   }
 
@@ -268,7 +281,7 @@
 
   // ---------------------------------------------------------------- start
 
-  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; tasks = {}; loaded = false; }
+  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; tasks = {}; loaded = false; fresh = false; }
   function start() {
     stop();
     if (!owner() || !window.YDDb) return;
@@ -280,6 +293,7 @@
         Object.keys(t).forEach(id => { if (t[id]) tasks[id] = t[id]; });
       });
       if (!meta || meta.fromCache === false) loaded = true;
+      if (meta && meta.fromCache === false) fresh = true;
       sync();
       const m = el('recurModal'); if (m && m.classList.contains('active')) renderList();
     }, () => { loaded = true; });

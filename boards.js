@@ -420,12 +420,16 @@
   // board or a rain day tag ... so on rain days the crew can filter and figure
   // out what they can be getting done." Urgency is picked on the card (the
   // owner or an admin -- crew cannot change what a card says); cards sort by
-  // it, then by due date. The filter bar narrows a board to what is urgent or
+  // it, then as they were dragged. The filter bar narrows a board to what is urgent or
   // what is yours; ☔ Rain day shows the rain-day cards from every board you
   // can see, grouped by board (WISHLIST #1).
   const URGENCY = [['urgent', '🔴 Urgent', 'today'], ['high', '🟠 High', 'this week'],
                    ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
   const urgRank = k => { const i = URGENCY.findIndex(u => u[0] === (k.urgency || 'normal')); return i === -1 ? 2 : i; };
+  // A column's order: by urgency, then where people dragged them. (Due date
+  // as a second key made dragging do nothing on a board with due dates --
+  // the drop was worked out from a different order than the one on screen.)
+  const byPlace = (a, b) => urgRank(a) - urgRank(b) || (a.order || 0) - (b.order || 0);
   const RAIN = { id: 'rainday', name: '☔ Rain day', color: '#3b82c4' };
   const isRainy = (board, k) => (k.labels || []).some(id => {
     const l = (board.labels || []).find(x => x.id === id);
@@ -463,9 +467,7 @@
     }
     const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
     return board.columns.map((c, i) => {
-      const inCol = mine.filter(k => colOf(board, k) === c.id)
-        .sort((a, b) => urgRank(a) - urgRank(b) || String(a.due || '9999').localeCompare(String(b.due || '9999')) ||
-          (a.order || 0) - (b.order || 0));
+      const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
       const last = i === board.columns.length - 1;
       return column(board, c, inCol.map(k => storedCardHtml(board, k, last)));
     }).join('');
@@ -672,11 +674,18 @@
     // Cards with no column sit in the first one on screen, so they count
     // there too -- otherwise a card dropped among them was placed as if the
     // column were empty.
-    const inCol = Object.values(set).filter(x => x.id !== cardId && colOf(board, x) === col)
-      .sort((a, b) => (a.order || 0) - (b.order || 0));
+    // A column is drawn by urgency, then by this order -- so a card is placed
+    // among the cards of its own urgency. Dropped among less urgent ones it
+    // goes last of its own; among more urgent ones, first.
+    const rank = urgRank(k);
+    const inCol = Object.values(set)
+      .filter(x => x.id !== cardId && colOf(board, x) === col && urgRank(x) === rank).sort(byPlace);
+    const target = beforeId ? set[beforeId] : null;
     let order;
-    const idx = beforeId ? inCol.findIndex(x => x.id === beforeId) : -1;
-    if (idx === -1) order = inCol.length ? (inCol[inCol.length - 1].order || 0) + 1000 : 1000;
+    const idx = !target || colOf(board, target) !== col ? -1
+      : urgRank(target) === rank ? inCol.indexOf(target)
+      : urgRank(target) > rank ? -1 : 0;
+    if (idx === -1 || !inCol.length) order = inCol.length ? (inCol[inCol.length - 1].order || 0) + 1000 : 1000;
     else if (idx === 0) order = (inCol[0].order || 0) - 1000;
     else order = ((inCol[idx - 1].order || 0) + (inCol[idx].order || 0)) / 2;
     if (k.column === col && k.order === order) return;
@@ -695,6 +704,14 @@
     // (WISHLIST #2). Problem cards record themselves (equipment.js).
     if (toDone && boardId === MAINTENANCE && k.equipmentId && !k.issueId && window.YDEquipment && YDEquipment.serviceFromBoard) {
       YDEquipment.serviceFromBoard(k.equipmentId);
+    }
+    // A recurring task moved to Done by someone who confirms them (the owner,
+    // an admin) is confirmed there and then -- otherwise it sat in Done
+    // waiting for an OK from the very person who moved it, and was in every
+    // summary as not confirmed (recurring.js).
+    if (toDone && boardId === MAINTENANCE && k.recurring && !k.confirmedAt && editsBoards() &&
+        typeof window.confirmRecurring === 'function') {
+      window.confirmRecurring(cardId);
     }
   }
 

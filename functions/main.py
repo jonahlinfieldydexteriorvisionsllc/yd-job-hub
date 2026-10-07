@@ -586,7 +586,8 @@ def _followup(request, path, headers):
         uid = _caller(request, "jobs", "change")
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
-    job_id = str((request.get_json(silent=True) or {}).get("jobId") or "")
+    body = request.get_json(silent=True) or {}
+    job_id = str(body.get("jobId") or "")
     if not job_id or "/" in job_id:
         return (json.dumps({"error": "which job?"}), 400, json_headers)
     try:
@@ -595,7 +596,10 @@ def _followup(request, path, headers):
         return (json.dumps({"error": str(e)}), 429, json_headers)
     task = "care" if path == "/care/draft" else "followup"
     try:
-        result, usage = (care if task == "care" else followup).draft(_claude(), job_id)
+        if task == "care":
+            result, usage = care.draft(_claude(), job_id, auto=body.get("auto") is True)
+        else:
+            result, usage = followup.draft(_claude(), job_id)
     except anthropic.RateLimitError:
         return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
     except Exception as e:                          # noqa: BLE001

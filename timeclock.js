@@ -1234,6 +1234,7 @@
     workerUid = uid || ((me() || {}).uid);
     workerRange = 'week';
     editingWorker = false;
+    asking = null;          // a half-asked change closed with × or Escape is let go
     const m = el('workerModal');
     if (m) m.classList.add('active');
     renderWorker();
@@ -1246,6 +1247,7 @@
     const m = el('workerModal');
     if (m) m.classList.remove('active');
     workerUid = null;
+    asking = null;
   };
   window.setWorkerRange = function (r) { workerRange = r; renderWorker(); };
 
@@ -1365,16 +1367,40 @@
     });
   }
   const hm = iso => { const d = new Date(iso); return isNaN(d) ? '' : String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
-  // A time typed for a shift: on the shift's own day (an end before the start
-  // is the next morning).
-  function onShiftDay(e, time, after) {
+  // A time typed for a shift lands on whichever day puts it nearest the time
+  // it replaces. A snow shift that ran 11:40 pm to 6 am and should have
+  // started at 12:05 starts just after midnight the NEXT day, not 24 hours
+  // earlier (the reviewer's case, 7 Oct). An end is then kept after the start
+  // and within a day of it.
+  function nearTime(ref, time) {
     const m = /^(\d{1,2}):(\d{2})$/.exec(String(time || ''));
-    if (!m) return null;
-    const d = new Date(e.startedAt);
-    d.setHours(+m[1], +m[2], 0, 0);
-    if (after && d.getTime() <= ms(after)) d.setDate(d.getDate() + 1);
-    return d.toISOString();
+    const at = new Date(ref);
+    if (!m || isNaN(at)) return null;
+    let best = null;
+    [-1, 0, 1].forEach(shift => {
+      const d = new Date(at);
+      d.setDate(d.getDate() + shift);
+      d.setHours(+m[1], +m[2], 0, 0);
+      if (!best || Math.abs(d - at) < Math.abs(best - at)) best = d;
+    });
+    return best;
   }
+  function shiftTimes(e, startTime, endTime) {
+    const start = nearTime(e.startedAt, startTime);
+    let end = start && nearTime(e.endedAt || e.startedAt, endTime);
+    if (!start || !end) return null;
+    while (end <= start) end.setDate(end.getDate() + 1);
+    while (end - start > 24 * 3600000) end.setDate(end.getDate() - 1);
+    if (end <= start) return null;
+    return { start: start.toISOString(), end: end.toISOString() };
+  }
+  // "Tue 10/6 11:40 PM" -- a request's times always carry their day, so a
+  // change that crosses midnight cannot look like the same day's shift.
+  const dayTime = iso => {
+    const d = new Date(iso);
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) + ' ' + clockTime(iso);
+  };
+  const spanOf = (a, b) => (ms(b) > ms(a) ? fmtDur(ms(b) - ms(a)) : '');
 
   function askHtml(e) {
     return '<div class="add-area wk-ask">' +
@@ -1407,8 +1433,8 @@
   window.sendRequest = function () {
     const e = entries[asking], u = me();
     if (!e || !u || e.uid !== u.uid) return;
-    const start = onShiftDay(e, (el('crStart') || {}).value);
-    const end = start && onShiftDay(e, (el('crEnd') || {}).value, start);
+    const t = shiftTimes(e, (el('crStart') || {}).value, (el('crEnd') || {}).value);
+    const start = t && t.start, end = t && t.end;
     const why = ((el('crWhy') || {}).value || '').trim();
     if (!start || !end) { showToast('Put in both times'); return; }
     if (!why) { showToast('Say why, so the office knows'); return; }
@@ -1442,8 +1468,10 @@
       const b = r.before || {}, a = r.after || {};
       return '<div class="appr appr-req">' +
         '<div class="appr-top"><b>' + esc(whoIs(r.requestedBy, r.requestedByName)) + '</b> asks to change a shift</div>' +
-        '<div class="appr-times">' + new Date(b.startedAt || r.createdAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
-          ' · ' + clockTime(b.startedAt) + ' – ' + clockTime(b.endedAt) + ' → <b>' + clockTime(a.startedAt) + ' – ' + clockTime(a.endedAt) + '</b></div>' +
+        '<div class="appr-times">Now: ' + dayTime(b.startedAt) + ' – ' + dayTime(b.endedAt) +
+          (spanOf(b.startedAt, b.endedAt) ? ' (' + spanOf(b.startedAt, b.endedAt) + ')' : '') + '<br>' +
+          'Asks for: <b>' + dayTime(a.startedAt) + ' – ' + dayTime(a.endedAt) +
+          (spanOf(a.startedAt, a.endedAt) ? ' (' + spanOf(a.startedAt, a.endedAt) + ')' : '') + '</b></div>' +
         (r.reason ? '<div class="appr-note">“' + esc(r.reason) + '”</div>' : '') +
         '<div class="appr-act"><button class="btn btn-filled btn-sm" onclick="approveRequest(\'' + safeId(r.id) + '\')">Approve</button>' +
           '<button class="btn btn-sm" onclick="rejectRequest(\'' + safeId(r.id) + '\')">Reject</button></div>' +
@@ -1455,6 +1483,14 @@
     if (!r || r.status !== 'pending' || !isOwner()) return;
     const e = entries[r.targetId];
     if (!e) { showToast('That shift is no longer there'); return; }
+    // The rules let a crew member file a request naming any shift, so the
+    // shift must be the asker's own -- and still the one they looked at: a
+    // change made to it since (by the office) is not quietly undone.
+    if (e.uid !== r.requestedBy) { showToast('That shift is not theirs — reject it'); return; }
+    const b = r.before || {};
+    if (ms(b.startedAt) !== ms(e.startedAt) || ms(b.endedAt || 0) !== ms(e.endedAt || 0)) {
+      showToast('That shift has changed since they asked — reject it and they can ask again'); return;
+    }
     const a = r.after || {};
     const patch = {};
     if (a.startedAt) { patch.startedAt = a.startedAt; patch.startedMs = ms(a.startedAt); }

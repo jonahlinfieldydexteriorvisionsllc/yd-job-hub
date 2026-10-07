@@ -15,6 +15,8 @@ by whatever a browser sends, and the address it goes to is the one on the job.
 
 import json
 
+from google.api_core.exceptions import AlreadyExists
+
 import cards
 import digest as dg
 
@@ -99,10 +101,18 @@ def _prompt(j, plants):
     return "\n".join(lines)
 
 
-def draft(client, job_id):
+def draft(client, job_id, auto=False):
     """Write the care email into the owner's Gmail Drafts. Returns (result,
-    usage): result is {draftId, link, to, subject} or {error}; usage is None
-    when Claude was never asked."""
+    usage): result is {draftId, link, to, subject}, {error}, or {skipped}
+    for an automatic one already written; usage is None when Claude was never
+    asked.
+
+    `auto` is the app asking by itself because the job was just marked
+    Complete. That happens once per job however many devices see it: a job
+    with a care email already is skipped, and a claim in reminderLog stops
+    two devices (or Complete, In progress, Complete in quick succession)
+    drafting it twice at the same moment. "Write it again" by hand is never
+    stopped."""
     snap = dg._db().collection("jobs").document(job_id).get()
     if not snap.exists:
         return {"error": "That job was not found"}, None
@@ -113,8 +123,30 @@ def draft(client, job_id):
     to = (j.get("email") or "").strip()
     if not cards.EMAIL_RE.match(to):
         return {"error": "This job has no email address. Add one to the job first."}, None
+    claim = None
+    if auto:
+        if j.get("careEmail"):
+            return {"skipped": True}, None
+        claim = dg._db().collection("reminderLog").document("care_" + job_id)
+        try:
+            claim.create({"job": job_id, "at": dg._now().isoformat()})
+        except AlreadyExists:
+            return {"skipped": True}, None
+    try:
+        result = _write(client, job_id, j, plants, to)
+    except Exception:
+        # Not written after all: the claim goes, so the next try is not
+        # mistaken for a duplicate.
+        if claim is not None:
+            claim.delete()
+        raise
+    if claim is not None and result[0].get("error"):
+        claim.delete()
+    return result
 
-    resp = client.beta.messages.create(
+
+def _write(client, job_id, j, plants, to):
+    resp =client.beta.messages.create(
         model=MODEL, max_tokens=8000, system=SYSTEM,
         messages=[{"role": "user", "content": _prompt(j, plants)}],
         thinking={"type": "adaptive"},

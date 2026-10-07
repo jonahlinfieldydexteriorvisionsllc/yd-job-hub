@@ -662,8 +662,10 @@ function onStatusChange() {
   // Booked here rather than from the board: the order list fills the same way.
   if (jobStatus === 'booked' && isBidStatus(was) && !orderItems.some(it => it.fromEstimate)) fillOrderFromEstimate(true);
   // Finished here: the plant-care email, as from the board (estimate.js).
+  // Saved first, so what goes to the server has the status (and an email
+  // address typed a moment ago) in it.
   if (jobStatus === 'complete' && was !== 'complete' && window.YDEstimate && window.YDEstimate.jobCompleted) {
-    if (!currentJobId) autosave();
+    autosave();
     if (currentJobId) window.YDEstimate.jobCompleted(currentJobId, getJobData());
   }
   if (jobStatus === 'inprogress' && boardFields.workStage !== 'punchList' && was !== 'inprogress') {
@@ -924,16 +926,32 @@ function orderFromEstimate(list, lines) {
 // a thing covers, what it is sold by). Booked straight after the app opens,
 // before they have arrived, the list would come out in takeoff units -- so it
 // waits for them (orderPending), and fills when they come.
+// With no signal the copy on this device is the best there is, and waiting
+// for the server would mean waiting for ever.
 function orderReady() {
   const c = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : null;
   return !!(window.YDPricing && window.YDPricing.ready() && c && Object.keys(c.items).length &&
-    (c.pricesReady || !(typeof ydCan === 'function' && ydCan('supplies', 'see'))));
+    (c.pricesReady || !navigator.onLine || !(typeof ydCan === 'function' && ydCan('supplies', 'see'))));
 }
-const orderPending = new Set();
+// Kept on the device: a bid booked from the board in the first seconds and
+// the app then closed still gets its order list next time (review, 7 Oct).
+const ORDER_PENDING_KEY = 'ydjobhub_orderPending';
+const orderPending = (() => {
+  try { return new Set(JSON.parse(localStorage.getItem(ORDER_PENDING_KEY) || '[]')); }
+  catch (e) { return new Set(); }
+})();
+function saveOrderPending() {
+  try {
+    if (orderPending.size) localStorage.setItem(ORDER_PENDING_KEY, JSON.stringify([...orderPending]));
+    else localStorage.removeItem(ORDER_PENDING_KEY);
+  } catch (e) { /* full storage: it waits in memory instead */ }
+}
+function waitForOrder(id) { orderPending.add(id); saveOrderPending(); }
 function fillPendingOrders() {
   if (!orderPending.size || !orderReady() || !window.YDEstimate) return;
-  orderPending.forEach(id => {
-    orderPending.delete(id);
+  const ids = [...orderPending];
+  orderPending.clear(); saveOrderPending();
+  ids.forEach(id => {
     let d = null;
     try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
     if (!d || isBidStatus(d.jobStatus)) return;
@@ -952,7 +970,7 @@ document.addEventListener('yd-pricing', fillPendingOrders);
 function fillOrderFromEstimate(quiet) {
   if (jobsReadOnly() || !window.YDEstimate || !window.YDPricing) return;
   if (!orderReady()) {
-    if (quiet && currentJobId) orderPending.add(currentJobId);
+    if (quiet && currentJobId) waitForOrder(currentJobId);
     else showToast('Prices are still loading — try again in a moment');
     return;
   }
@@ -968,7 +986,7 @@ function fillOrderFromEstimate(quiet) {
 // date with the estimate when he wants.
 function bookedOrderItems(id, data) {
   if (!window.YDEstimate || !window.YDPricing) return null;
-  if (!orderReady()) { orderPending.add(id); return null; }
+  if (!orderReady()) { waitForOrder(id); return null; }
   const open = id === currentJobId;
   const list = open ? orderItems : (data.orderItems || []);
   if (list.some(it => it.fromEstimate)) return null;

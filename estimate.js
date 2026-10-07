@@ -585,8 +585,10 @@
     if (careBusy[jobId] || !window.YDClaude) return;
     careBusy[jobId] = true; renderQb();
     try {
-      const r = await window.YDClaude.post('/care/draft', { jobId: jobId });
-      const note = { at: new Date().toISOString(), draftId: r.draftId || null, subject: r.subject || '' };
+      const r = await window.YDClaude.post('/care/draft', { jobId: jobId, auto: !!byItself });
+      // Drafted already (another device got there first): nothing to say.
+      if (r.skipped) return;
+      const note ={ at: new Date().toISOString(), draftId: r.draftId || null, subject: r.subject || '' };
       if (window.YDSync) window.YDSync.patchJob(jobId, { careEmail: note });
       showToast('🌱 Plant-care email' + (r.to ? ' to ' + r.to : '') + ' is in your Gmail Drafts — read it and send');
     } catch (e) {
@@ -607,7 +609,16 @@
     if (!careOn() || !changes() || !data || data.careEmail) return;
     if (!plantsIn(data.estimate).length || !/@/.test(String(data.email || ''))) return;
     if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) return;
-    setTimeout(() => writeCare(jobId, true), 1500);
+    // The server reads the finished job from the database, so the job goes up
+    // first and the email is asked for once the server has it. (Called from
+    // the middle of patchJob -- the turn after it is when the copy on this
+    // device is complete.)
+    Promise.resolve()
+      .then(() => (window.YDSync && window.YDSync.sendNow ? window.YDSync.sendNow(jobId) : false))
+      .then(sent => {
+        if (sent) writeCare(jobId, true);
+        else showToast('🌱 The plant-care email waits for a signal — press “Write it now” on the job later');
+      });
   }
 
   function sentHtml(when) {
@@ -699,7 +710,10 @@
   function afterInvoice(jobId, r) {
     const open = currentJobId === jobId;
     const saved = open ? null : savedJob(jobId);
-    const was = (open ? qbInv() : saved && saved.qbInvoiceRef) || {};
+    // What was known is kept only for the SAME invoice: an old test-company
+    // invoice's "emailed to" must not show on the real one made after it.
+    let was = (open ? qbInv() : saved && saved.qbInvoiceRef) || {};
+    if (r.id && (was.id !== r.id || (was.env && r.env && was.env !== r.env))) was = {};
     const merged = Object.assign({}, was, r);
     Object.keys(merged).forEach(k => { if (merged[k] === undefined) merged[k] = null; });
     const patch = { qbInvoiceRef: merged };

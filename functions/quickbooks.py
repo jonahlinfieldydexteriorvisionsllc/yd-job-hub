@@ -989,8 +989,17 @@ def invoice_from_estimate(body):
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
     # Invoiced: the estimate is closed in QuickBooks; the job says so too, so
     # the hourly check does not report it back as news.
-    _db().collection("jobs").document(job_id).set({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"},
-                                                   "lastModified": _stamp()}, merge=True)
+    # The invoice record is written whole, not merged: merged, a test-company
+    # invoice's "emailed to" stayed on the real one made after it, which then
+    # showed as sent (review, 7 Oct). The same invoice again keeps what was
+    # known about it.
+    ref = _db().collection("jobs").document(job_id)
+    snap = ref.get()
+    cur = ((snap.to_dict() or {}).get("qbInvoiceRef") if snap.exists else None) or {}
+    if cur.get("id") == out.get("id") and cur.get("env") == out.get("env"):
+        out = dict(cur, **out)
+    ref.set({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"}, "lastModified": _stamp()},
+            merge=["qbInvoiceRef", "qbEstimate.status", "lastModified"])
     return out
 
 

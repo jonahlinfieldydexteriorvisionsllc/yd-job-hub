@@ -488,13 +488,15 @@ def _jobs():
 
 def _recurring_overdue(today):
     """Recurring crew tasks (recurring.js) not confirmed by their due day --
-    Jonah: tell me if they have not been done. [(title, due YYYY-MM-DD)]."""
+    Jonah: tell me if they have not been done. [(title, due YYYY-MM-DD,
+    done)]: `done` is a card already moved to Done, only waiting for his OK --
+    not the same news as a task nobody did."""
     out = []
     try:
         for s in _db().collection("boards").document("maintenance").collection("cards").stream():
             k = s.to_dict() or {}
             if k.get("recurring") and not k.get("confirmedAt") and str(k.get("due") or "") < _day(today):
-                out.append((str(k.get("title") or "A recurring task"), str(k.get("due"))))
+                out.append((str(k.get("title") or "A recurring task"), str(k.get("due")), bool(k.get("doneAt"))))
     except Exception as e:      # noqa: BLE001
         print("digest: recurring tasks not read:", e)
     return sorted(out, key=lambda x: x[1])
@@ -792,9 +794,12 @@ def build(slot, user, people, wx, cache):
     # admin who runs the boards)
     late = cache.get("recurring") or []
     if (owner or access.get("boards") == "change") and slot in ("morning", "evening") and late:
-        sections.append(("Recurring tasks not done", [{"text": "🔁 %s — was due %s" % (
-            t, _long_day(datetime.date.fromisoformat(d)))} for t, d in late[:8]]))
-        push_bits.append("%d recurring task%s not done" % (len(late), "" if len(late) == 1 else "s"))
+        undone = [x for x in late if not x[2]]
+        sections.append(("Recurring tasks not done", [{"text": (
+            "✔ %s — done, waiting for your OK on the Maintenance board" % t if done else
+            "🔁 %s — was due %s" % (t, _long_day(datetime.date.fromisoformat(d))))} for t, d, done in late[:8]]))
+        if undone:
+            push_bits.append("%d recurring task%s not done" % (len(undone), "" if len(undone) == 1 else "s"))
 
     # ---- estimates: drafts to check, yeses to book, money still owed
     office = cache.get("office") or {}

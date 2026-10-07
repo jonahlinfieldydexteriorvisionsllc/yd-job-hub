@@ -1212,6 +1212,9 @@
   .eq-urg { display:inline-block; font-size:10px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;
     color:#fff; background:var(--c); padding:2px 8px; border-radius:10px; }
   .eq-more { color:var(--muted); font-size:11px; }
+  .eq-marked { --c:#3b7dd8; margin-top:6px; font-size:13px; padding:5px 9px; border-radius:6px;
+    border-left:4px solid var(--c); background:var(--surface-2);
+    background:color-mix(in srgb, var(--c) 12%, var(--surface)); }
   .eq-issues { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
   .eq-issue-row { --c:#6b7a8f; display:flex; gap:10px; align-items:flex-start; padding:10px 12px;
     border:1px solid var(--border); border-left:5px solid var(--c); border-radius:8px; background:var(--surface); }

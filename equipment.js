@@ -40,6 +40,9 @@
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
   // On the Maintenance board, a problem whose part has arrived says so.
   const PART_LABEL = { id: 'part-at-shop', name: 'Part at shop', color: '#2f8f5b' };
+  // A machine's service card someone moved to Done with no service logged
+  // behind it (crew cannot log one; a form closed unsaved).
+  const LOG_LABEL = { id: 'log-it', name: 'Log the service', color: '#3b7dd8' };
 
   // Problems are kept on the machine's record beside its service history, for
   // the same reason: a machine has a handful, and one document means one read
@@ -205,6 +208,15 @@
 
   window.filterEquipment = function (f) { filter = f; renderEquipment(); };
 
+  // "Marked done on the board" -- the service card sits in Done but nothing
+  // was logged, so the machine still counts toward its old due point.
+  function markedLine(g) {
+    const k = window.YDBoards && YDBoards.cards ? ((YDBoards.cards()['maintenance'] || {})['eq-' + g.id]) : null;
+    if (!k || !k.markedDoneBy) return '';
+    return '<div class="eq-marked">✔ ' + esc(k.markedDoneBy) + ' marked the service done' +
+      (k.markedDoneAt ? ' ' + shortDate(k.markedDoneAt) : '') + ' — log it so the next one counts from it</div>';
+  }
+
   function card(g) {
     const d = due(g);
     const l = last(g);
@@ -218,6 +230,7 @@
         ? '<div class="eq-what">' + esc([g.year, g.make, g.model].filter(Boolean).join(' ')) + '</div>'
         : '') +
       issueLine(g) +
+      markedLine(g) +
       '<div class="eq-last">' +
         (l ? 'Last: ' + shortDate(l.at) + ' — ' + esc(l.what)
            : 'Nothing logged yet') +
@@ -1053,7 +1066,8 @@
     const labelIds = new Set((board.labels || []).map(l => l.id));
     const missing = URGENCY.filter(u => !labelIds.has('u-' + u.id))
       .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }))
-      .concat(labelIds.has(PART_LABEL.id) ? [] : [PART_LABEL]);
+      .concat(labelIds.has(PART_LABEL.id) ? [] : [PART_LABEL])
+      .concat(labelIds.has(LOG_LABEL.id) ? [] : [LOG_LABEL]);
     if (missing.length) {
       board.labels = (board.labels || []).concat(missing);
       Promise.resolve(window.YDDb.put('boards', MAINT, { labels: board.labels }))
@@ -1146,20 +1160,36 @@
         return;
       }
       const state = due(g).state;
+      const newCycle = !k || k.dueKey !== dueKey(g);
+      // Moved to Done by a person while the machine's due point stayed put:
+      // the work was done but never logged -- a crew member cannot log one,
+      // or the service form was closed unsaved. Taken as nothing, the board
+      // said "done" while the machine stayed overdue (review, 7 Oct). The
+      // card stays in Done and says who marked it, on the board and on the
+      // Equipment tab, until the service is logged (a new cycle clears it)
+      // or someone moves it back out.
+      const inDone = !!k && !newCycle && k.column === lastCol;
+      const markedBy = !inDone ? null
+        : k.markedDoneBy || (k.updatedBy && k.updatedBy !== 'Equipment' ? k.updatedBy : null);
       const want = {
         title: (g.name || 'Machine') + ' — service due',
         due: g.dueDate || null,
-        notes: 'Next service ' + dueWords(g) + '.' +
+        notes: (markedBy ? 'Marked done by ' + markedBy + ' — log the service on the Equipment tab ' +
+                  '(with its hours or miles) so the next one counts from it.\n\n' : '') +
+          'Next service ' + dueWords(g) + '.' +
           (g.notes ? '\n\n' + g.notes : '') +
           '\n\nLog the service on the Equipment tab and this card resets itself for the next one.',
-        labels: state === 'overdue' ? ['overdue'] : state === 'soon' ? ['soon'] : [],
+        labels: (state === 'overdue' ? ['overdue'] : state === 'soon' ? ['soon'] : [])
+          .concat(markedBy ? [LOG_LABEL.id] : []),
         equipmentId: g.id,
         dueKey: dueKey(g),
+        markedDoneBy: markedBy,
+        markedDoneAt: markedBy ? (k.markedDoneAt || k.doneAt || new Date().toISOString()) : null,
         auto: true,
       };
-      const newCycle = !k || k.dueKey !== want.dueKey;
       const same = k && !newCycle && k.title === want.title && k.due === want.due &&
-        k.notes === want.notes && JSON.stringify(k.labels || []) === JSON.stringify(want.labels);
+        k.notes === want.notes && JSON.stringify(k.labels || []) === JSON.stringify(want.labels) &&
+        (k.markedDoneBy || null) === want.markedDoneBy;
       if (same) return;
       const patch = Object.assign({}, want, { updatedAt: new Date().toISOString(), updatedBy: 'Equipment' });
       // A known card whose due point moved has been serviced: back to the start.
@@ -1181,7 +1211,12 @@
   document.addEventListener('yd-boards-ready', scheduleMaintSync);
   // The Maintenance cards themselves arrive a moment after the boards do;
   // checking again then is what lets a removed machine's card be cleared.
-  document.addEventListener('yd-cards-changed', () => { if (YDBoards.boards()[MAINT]) scheduleMaintSync(); });
+  document.addEventListener('yd-cards-changed', () => {
+    if (YDBoards.boards()[MAINT]) scheduleMaintSync();
+    // The machine list shows "marked the service done" from these cards.
+    const p = el('panel-equipment');
+    if (p && p.classList.contains('active')) renderEquipment();
+  });
 
   window.YDEquipment = {
     all: () => gear,
@@ -1205,8 +1240,10 @@
     // the Equipment tab. Saving it starts the next cycle, which puts the card
     // back in Due with its new due point.
     serviceFromBoard: id => {
+      // Crew cannot read the machines at all, so this comes before the
+      // lookup -- they were left with no word that anything happened.
+      if (!ydCan('equipment', 'change')) { showToast('Marked done — the office logs the service'); return; }
       if (!gear[id]) return;
-      if (!ydCan('equipment', 'change')) { showToast('Moved — the service gets logged on the Equipment tab'); return; }
       if (typeof switchTab === 'function') switchTab('equipment');
       window.openEquipment(id);
       setTimeout(() => window.addService(), 50);
