@@ -365,7 +365,8 @@
         : (notingIssue ? '' : '<p class="empty-msg">Nothing noted. If something is wrong with it, note it here so it does not get forgotten.</p>')) +
       (fixed.length
         ? '<div class="eq-fixed">Fixed recently: ' + fixed.map(i =>
-            esc(i.what) + ' <span class="muted">(' + shortDate(i.doneAt) + ')</span>').join(' · ') + '</div>'
+            esc(i.what) + ' <span class="muted">(' + shortDate(i.doneAt) + ')</span>' +
+            ' <button class="link-btn" onclick="reopenIssue(\'' + safeId(i.id) + '\')" title="It was not actually fixed">Not fixed</button>').join(' · ') + '</div>'
         : '');
   }
 
@@ -425,9 +426,22 @@
 
   function setIssueDone(g, issueId, done) {
     g.issues = (g.issues || []).map(i => i.id === issueId
-      ? Object.assign({}, i, { doneAt: done ? new Date().toISOString() : null, doneBy: done ? whoAmI() : null }) : i);
+      ? Object.assign({}, i, { doneAt: done ? new Date().toISOString() : null, doneBy: done ? whoAmI() : null },
+          // When it was reopened, so a card left in Done from before is not
+          // read as a fresh "fixed" (syncMaintenance).
+          done ? {} : { reopenedAt: new Date().toISOString() }) : i);
     write(g.id, { issues: g.issues }, done ? 'marking a problem fixed' : 'reopening a problem');
   }
+
+  // Ticked "Fixed" by mistake: back on the list, and its Maintenance card
+  // back out of Done.
+  window.reopenIssue = function (issueId) {
+    const g = gear[openId];
+    if (!g || !(g.issues || []).some(i => i.id === issueId)) return;
+    setIssueDone(g, issueId, false);
+    renderDetail(); renderEquipment();
+    showToast('Back on the list');
+  };
 
   window.togglePart = function (issueId, on) {
     const g = gear[openId];
@@ -948,7 +962,13 @@
         // Moved to the last column on the board (by anyone it is shared with)
         // while still open on the machine: someone fixed it. Record that on
         // the machine, which is the record that counts.
-        if (k && !i.doneAt && k.column === lastCol && k.doneAt) {
+        // Only a PERSON's move counts, and only one made after the problem was
+        // last reopened: a card this sync itself put in Done, or one still
+        // sitting there when the problem is reopened on the machine, is not
+        // someone saying "fixed" -- taking it as that re-marked a reopened
+        // problem fixed straight away, for ever.
+        if (k && !i.doneAt && k.column === lastCol && k.doneAt && k.updatedBy !== 'Equipment' &&
+            String(k.updatedAt || '') > String(i.reopenedAt || '')) {
           setIssueDone(g, i.id, true);
           return;
         }

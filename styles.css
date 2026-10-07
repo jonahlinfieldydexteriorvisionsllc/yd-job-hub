@@ -1768,3 +1768,4 @@
   .est-did .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-weight:700; text-decoration:underline; cursor:pointer; }
   .est-send { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
   .est-send textarea { flex:1; }
+  .eq-fixed .link-btn { background:none; border:0; padding:0 2px; color:var(--brand); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
