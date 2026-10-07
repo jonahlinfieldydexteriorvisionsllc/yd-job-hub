@@ -1242,10 +1242,56 @@
     return Promise.resolve(window.YDDb.put('supplyPrices', id, rec));
   }
 
+  // A price found for an estimate's material ("Source it", estimate.js): the
+  // item under its supplier -- the one already here, or added -- with the
+  // price and where it came from in its price notes, so the next bid finds
+  // it in Supplies. Returns the item's id. Not awaited.
+  function addSourced(o) {
+    if (!edits() || !o || !o.vendor || !o.name || !(o.cents > 0)) return null;
+    const now = new Date().toISOString(), writes = [];
+    let v = vendorFor(o.vendor);
+    if (!v) {
+      const id = newId('v');
+      const rec = { name: String(o.vendor).trim().slice(0, 80), address: '', phone: '', hours: '',
+                    notes: 'Added when sourcing an estimate', updatedAt: now };
+      vendors[id] = Object.assign({ id: id }, rec);
+      v = vendors[id];
+      writes.push(['vendors', id, rec]);
+    }
+    // The line's own item, when the price is from its supplier (an MDS item
+    // with no price, priced from MDS's page) -- not a second copy of it.
+    let it = o.into && items[o.into] && items[o.into].vendorId === v.id ? items[o.into] : findSupply(v.name, o.sku || '', o.name);
+    if (!it) {
+      const id = newId('s');
+      // Sold by the bag/roll/box but measured in sq ft (or LF...): how much
+      // one covers, so the estimate orders whole packages.
+      const covers = Number(o.coverage) > 0 && String(o.takeoffUnit || '').trim();
+      const rec = { name: String(o.name).trim().slice(0, 120), also: '', sku: String(o.sku || '').trim().slice(0, 40),
+                    where: '', notes: String(o.notes || '').trim().slice(0, 300),
+                    unit: String(o.per || o.unit || '').trim().slice(0, 30), vendorId: v.id,
+                    category: categoryId(o.category) || null,
+                    coverage: covers ? Number(o.coverage) : null,
+                    takeoffUnit: covers ? String(o.takeoffUnit).trim().slice(0, 30) : '', updatedAt: now };
+      items[id] = Object.assign({ id: id }, rec);
+      it = items[id];
+      writes.push(['supplies', id, rec]);
+    }
+    const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: String(o.per || '').trim() || null,
+                                             year: thisYear(), priceNotes: String(o.note || '').slice(0, 300) || null });
+    prices[it.id] = next;
+    writes.push(['supplyPrices', it.id, next]);
+    Promise.resolve(window.YDDb.putMany(writes)).catch(e => {
+      if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
+      else console.warn('[supplies] sourced price not yet on the server:', (e && e.code) || e);
+    });
+    announce();
+    return it.id;
+  }
+
   window.YDSupplies = {
     render: render, parseTable: parseTable, parseCents: parseCents,
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
-    findSupply: findSupply, setPrice: setPrice,
+    findSupply: findSupply, setPrice: setPrice, addSourced: addSourced,
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
   };
 

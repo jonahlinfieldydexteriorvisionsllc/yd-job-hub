@@ -1942,11 +1942,11 @@
   .est-wtop, .est-mtop { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:flex-end; }
   .est-title { flex:2 1 220px; font-weight:600; width:auto !important; min-width:0; }
   .est-wtop > select { flex:0 0 150px; width:auto; }
-  .est-mtop select, .est-nums select { width:auto; }
+  .est-mtop select, .est-nums select { width:auto; max-width:100%; }
   .est-supply { flex:2 1 220px; max-width:100%; }
   .est-grow { flex:1 1 220px; }
   .est-grow select { width:100%; }
-  .est-mtop label, .est-nums label { display:flex; flex-direction:column; font-size:11px; color:var(--muted); }
+  .est-mtop label, .est-nums label { display:flex; flex-direction:column; font-size:11px; color:var(--muted); max-width:100%; min-width:0; }
   .est-mtop label input { width:84px; }
   .est-scope { width:100%; font-size:14px; }
   .est-qbitem { display:flex; gap:8px; align-items:center; font-size:12px; color:var(--muted); }
@@ -1954,6 +1954,14 @@
   .est-probs:empty, .est-order:empty { display:none; }
   .est-probs, .est-order { font-size:12px; color:var(--muted); }
   .est-order.bad, .est-probs { color:var(--neg); }
+  /* Source it: prices found for a material with none */
+  .est-source:empty { display:none; }
+  .est-source { font-size:13px; display:flex; flex-direction:column; gap:6px; padding:6px 8px; border-radius:6px; background:var(--surface-2, rgba(0,0,0,.03)); }
+  .est-src-head { font-weight:600; font-size:12px; color:var(--muted); }
+  .est-src-opt { display:flex; gap:8px; align-items:flex-start; justify-content:space-between; }
+  .est-src-opt > span { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .est-src-opt .btn { flex:none; }
+  .est-problems .btn { margin-top:6px; }
   .est-plant { font-size:20px; padding-bottom:6px; }
   .est-inline { display:inline-flex; gap:6px; align-items:center; font-size:13px; }
   .est-inline input { width:70px; }

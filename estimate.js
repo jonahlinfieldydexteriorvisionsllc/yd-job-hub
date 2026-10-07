@@ -411,6 +411,7 @@
     return '<div class="est-mrow">' +
       '<div class="est-mtop">' + head + '<div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div>' +
       '<div class="est-order" id="estMO_' + id + '"></div>' +
+      '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
     '</div>';
   }
 
@@ -429,11 +430,14 @@
       const o = el('estMO_' + safeId(l.id));
       if (o) {
         o.className = 'est-order' + (l.problems.length ? ' bad' : '');
-        o.textContent = l.problems.length ? '⚠ ' + l.problems.join(' · ')
-          : l.orderQty ? 'Order ' + P().qtyText(l.orderQty, l.per) +
-            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + (l.specialOrder ? ' · special order' : '') : '';
+        o.innerHTML = l.problems.length ? '⚠ ' + esc(l.problems.join(' · ')) +
+            (canSource() && unpriced(l) && !(found[foundKey(l.id)] || {}).busy
+              ? ' <button class="link-btn" onclick="estSource(\'' + safeId(l.id) + '\')">🔎 Source it</button>' : '')
+          : l.orderQty ? esc('Order ' + P().qtyText(l.orderQty, l.per) +
+            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + (l.specialOrder ? ' · special order' : '')) : '';
       }
     });
+    const toSource = canSource() ? r.takeoff.filter(l => unpriced(l) && !(found[foundKey(l.id)] || {}).busy) : [];
     renderAuto(r);
     renderCustomer(r);
     const pays = r.payments;
@@ -443,7 +447,9 @@
         '<div class="est-grand"><span>Project total</span><b>' + cents(r.totalCents) + '</b></div>' +
         (pays.length ? '<div class="muted">' + pays.map(p => esc(p.label) + ' ' + cents(p.cents)).join(' · ') + '</div>' : '') +
         (r.crewDays ? '<div class="muted">' + fmtQ(r.crewDays) + ' crew-day' + (r.crewDays === 1 ? '' : 's') + ' — only you see this</div>' : '') +
-        (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul></div>' : '') +
+        (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
+          (toSource.length > 1 ? '<button class="btn btn-sm" onclick="estSource(\'all\')">🔎 Source all ' + toSource.length + ' unpriced materials</button>' : '') +
+          '</div>' : '') +
         (r.specialOrder.length ? '<div class="warn">Special order (non-returnable — lock their selections first): ' + r.specialOrder.map(esc).join(', ') + '</div>' : '')
       : '';
     renderQb();
@@ -854,6 +860,209 @@
     m.supplyId = it ? sid : null;
     if (it && !String(m.name || '').trim()) m.name = it.name || '';
     changed(true);
+  };
+
+  // ---------------------------------------------------- sourcing a material
+  //
+  // A material with no price ("🔎 Source it"): first whatever in Supplies
+  // already has a price and a name like it (plain matching, no Claude); then,
+  // asked for, Claude searches the web for local suppliers and their prices
+  // (/estimate/source, sourcing.py). "Use" on a web price files the product
+  // and its price under the supplier in Supplies -- so the next bid finds it
+  // there -- and links the line to it. What was found is kept for this
+  // visit only, per job and line.
+
+  const found = {};                 // jobId|lineId -> {busy, local[], options[], note, error, web}
+  const foundKey = id => (currentJobId || 'new') + '|' + safeId(id);
+  const canSource = () => changes() && ydCan('supplies', 'change') && !!(window.YDClaude && window.YDClaude.post);
+  const unpriced = l => l.problems.some(p => p === 'no price in Supplies' || p === 'no cost');
+  const STOP_WORDS = ['the', 'a', 'and', 'of', 'for', 'with', 'in', 'x', 'per', 'or', 'to'];
+  const nameWords = s => String(s || '').toLowerCase().replace(/[”″"]/g, ' in ').replace(/[^a-z0-9.]+/g, ' ').split(' ')
+    .map(w => w.replace(/\.$/, '')).filter(w => w && STOP_WORDS.indexOf(w) === -1)
+    .map(w => w.length > 3 && /[a-z]s$/.test(w) && !/ss$/.test(w) ? w.slice(0, -1) : w);
+  // One unit, however it is written: "sq. ft" = "sf", "Tons" = "ton".
+  function unitKey(u) {
+    const s = String(u || '').toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ').trim();
+    const table = [[/^(each|ea|pc|pcs|piece|pieces|unit|units)$/, 'each'], [/^(sq ?ft|sf|square f(ee|oo)t)$/, 'sqft'],
+      [/^(lf|lin ?ft|linear f(ee|oo)t|ft|feet|foot)$/, 'lf'], [/^(tons?|t)$/, 'ton'],
+      [/^(yards?|yds?|cu ?yds?|cubic yards?)$/, 'yd'], [/^(cu ?ft|cubic f(ee|oo)t)$/, 'cuft'], [/^(gal|gallons?)$/, 'gal']];
+    const hit = table.find(([re]) => re.test(s));
+    return hit ? hit[1] : s.replace(/s$/, '');
+  }
+  // Supplies items with a price whose name has most of the material's words.
+  function localMatches(l, m) {
+    const want = nameWords((m && m.name) || l.name);
+    if (!want.length) return [];
+    const c = catalog(), skip = P().NOT_FOR_ESTIMATES || [];
+    return Object.values(c.items)
+      .filter(it => it.id !== l.supplyId && skip.indexOf(it.category) === -1 && c.prices[it.id] && num(c.prices[it.id].cents) > 0)
+      .map(it => {
+        const have = nameWords(it.name + ' ' + (it.also || ''));
+        const hit = want.filter(w => have.indexOf(w) !== -1).length;
+        return { it: it, hit: hit, score: hit / want.length };
+      })
+      .filter(x => x.hit >= Math.min(2, want.length) && x.score >= 0.6)
+      .sort((a, b) => b.score - a.score || String(a.it.name).length - String(b.it.name).length)
+      .slice(0, 3).map(x => x.it.id);
+  }
+  const lineOf = id => (last || priced()).takeoff.find(l => safeId(l.id) === id) || null;
+
+  function sourceHtml(lineId) {
+    const f = found[foundKey(lineId)];
+    if (!f) return '';
+    const id = safeId(lineId), ro = !canSource();
+    const c = catalog(), l = lineOf(id);
+    const m = find(est.materials, id);
+    let h = '';
+    if (f.local && f.local.length) {
+      h += '<div class="est-src-head">Already in your Supplies:</div>' + f.local.map(sid => {
+        const it = c.items[sid], pr = c.prices[sid] || {}, v = it ? c.vendors[it.vendorId] : null;
+        if (!it) return '';
+        return '<div class="est-src-opt"><span><b>' + esc(it.name) + '</b>' + (v ? ' — ' + esc(v.name) : '') + ' · ' +
+          cents(pr.cents) + (pr.per || it.unit ? ' / ' + esc(pr.per || it.unit) : '') + '</span>' +
+          (ro ? '' : '<button class="btn btn-sm" onclick="estUseLocal(\'' + id + '\', \'' + safeId(sid) + '\')">Use</button>') + '</div>';
+      }).join('');
+      if (!f.web && !f.busy && !ro) h += '<button class="link-btn" onclick="estSourceWeb([\'' + id + '\'])">Not these — look on the web</button>';
+    }
+    if (f.busy) h += '<div class="muted">🔎 Looking up suppliers and prices on the web — a minute or two…</div>';
+    if (f.error) h += '<div class="warn">' + esc(f.error) + (ro ? '' : ' <button class="link-btn" onclick="estSourceWeb([\'' + id + '\'])">Try again</button>') + '</div>';
+    if (f.web && !f.busy && !f.error) {
+      const opts = f.options || [];
+      const qty = l ? num(l.qty) : null, unit = l ? l.takeoffUnit : '';
+      h += opts.length ? '<div class="est-src-head">Found on the web' + (f.at ? ' ' + esc(f.at) : '') + ':</div>' : '';
+      h += opts.map((o, k) => {
+        const same = unitKey(o.per) === unitKey(unit);
+        // What this job would need of it, when the units allow the sum.
+        const n = qty > 0 ? (o.coversQty > 0 && !same ? Math.ceil(qty / o.coversQty) : same ? Math.ceil(qty) : null) : null;
+        return '<div class="est-src-opt"><span><b>' + esc(o.supplier) + '</b> — ' + esc(o.product) +
+          (o.price > 0 ? ' · <b>$' + o.price.toFixed(2) + '</b>' + (o.per ? ' / ' + esc(o.per) : '') : ' · call for price') +
+          (o.coversQty > 0 && !same ? ' (covers ' + fmtQ(o.coversQty) + ' ' + esc(o.coversUnit) + ')' : '') +
+          (n && o.price > 0 ? ' · ≈ ' + cents(Math.round(n * o.price * 100)) + ' for this job' : '') +
+          (o.where ? ' · ' + esc(o.where) : '') + (o.inStock === 'yes' ? ' · in stock' : o.inStock === 'no' ? ' · not in stock' : '') +
+          (o.note ? '<br><span class="muted">' + esc(o.note) + '</span>' : '') +
+          (o.url ? ' <a href="' + esc(o.url) + '" target="_blank" rel="noopener noreferrer">page ↗</a>' : '') +
+          (o.url && !o.confirmed ? ' <span class="warn">(link not checked — open it before you trust the price)</span>' : '') +
+          '</span>' +
+          (!ro && o.price > 0 ? '<button class="btn btn-sm" onclick="estUseFound(\'' + id + '\', ' + k + ')">Use</button>' : '') + '</div>';
+      }).join('');
+      if (f.note) h += '<div class="muted">' + esc(f.note) + '</div>';
+      if (!opts.length && !f.note) h += '<div class="muted">Nothing found on the web for this one.</div>';
+    }
+    if (!f.busy && !ro && m) h += '<button class="link-btn" onclick="estSourceClose(\'' + id + '\')">Close</button>';
+    return h;
+  }
+  function redrawSource(lineId) {
+    const box = el('estMS_' + safeId(lineId));
+    if (box) box.innerHTML = sourceHtml(lineId);
+  }
+
+  // One line ('<id>') or every unpriced one ('all').
+  window.estSource = function (which) {
+    if (!canSource()) return;
+    const r = priced();
+    const lines = r.takeoff.filter(l => unpriced(l) && (which === 'all' || safeId(l.id) === which) && !(found[foundKey(l.id)] || {}).busy);
+    if (!lines.length) return;
+    const toWeb = [];
+    lines.forEach(l => {
+      const m = find(est.materials, safeId(l.id));
+      const local = m && !m.plant ? localMatches(l, m) : [];
+      found[foundKey(l.id)] = { local: local };
+      if (!local.length) toWeb.push(safeId(l.id));
+      else redrawSource(l.id);
+    });
+    if (toWeb.length) estSourceWeb(toWeb);
+    else renderTotals();
+  };
+
+  window.estSourceWeb = async function (ids) {
+    if (!canSource() || !ids || !ids.length) return;
+    const jobId = currentJobId || 'new';
+    const r = priced();
+    const items = [];
+    ids.forEach(id => {
+      const l = r.takeoff.find(x => safeId(x.id) === id), m = find(est.materials, id);
+      if (!l || !m) return;
+      const it = l.supplyId ? catalog().items[l.supplyId] : null;
+      const k = foundKey(l.id);
+      found[k] = Object.assign({}, found[k], { busy: true, error: null, web: false });
+      items.push({ id: id, name: m.name || l.name || (it && it.name) || '', qty: num(l.qty) || 0,
+                   unit: l.takeoffUnit || m.unit || '', category: m.plant ? 'plant' : l.category !== 'other' ? l.category || '' : '',
+                   notes: [it ? 'Listed in Supplies as ' + it.name : '', m.plant && m.tree ? (m.tree === 'single' ? 'single-trunk tree' : 'multi-trunk or evergreen tree') : '']
+                     .filter(Boolean).join('; ') });
+    });
+    if (!items.length) return;
+    renderTotals(); items.forEach(x => redrawSource(x.id));
+    const vendors = Object.values(catalog().vendors).map(v => v.name).filter(Boolean);
+    let res = null, err = null;
+    try {
+      res = await window.YDClaude.post('/estimate/source', { items: items, town: (el('city').value || '').trim(), vendors: vendors });
+      if (res.error) err = res.error;
+    } catch (e) { err = e.message || String(e); }
+    const at = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    items.forEach(x => {
+      const k = jobId + '|' + x.id;
+      const got = res && !err ? (res.results || []).find(y => y.id === x.id) : null;
+      found[k] = Object.assign({}, found[k], err ? { busy: false, error: 'Prices: ' + err, web: false }
+        : { busy: false, error: null, web: true, at: at, options: (got && got.options) || [], note: (got && got.note) || '' });
+    });
+    if ((currentJobId || 'new') !== jobId) { showToast('Prices found for another job — open it to see them'); return; }
+    renderTotals(); items.forEach(x => redrawSource(x.id));
+  };
+
+  window.estSourceClose = function (id) {
+    delete found[foundKey(id)];
+    redrawSource(id); renderTotals();
+  };
+
+  window.estUseLocal = function (id, sid) {
+    if (!canSource() || !catalog().items[sid]) return;
+    delete found[foundKey(id)];
+    redrawSource(id);
+    estPickSupply(id, sid);
+  };
+
+  window.estUseFound = function (id, k) {
+    if (!canSource()) return;
+    const f = found[foundKey(id)], o = f && f.options && f.options[k];
+    const m = find(est.materials, id), l = lineOf(id);
+    if (!o || !m || !(o.price > 0)) return;
+    const priceCents = Math.round(o.price * 100);
+    // A plant is priced on its line, not in Supplies.
+    if (m.plant) {
+      m.costCents = priceCents;
+      delete found[foundKey(id)];
+      redrawSource(id); changed(true);
+      showToast('Cost each set from ' + o.supplier);
+      return;
+    }
+    // Sold in another unit than the takeoff measures in, with no coverage
+    // given: ask, or the estimate would order 3 bags for 3 tons.
+    const unit = (l && l.takeoffUnit) || m.unit || '';
+    let coverage = o.coversQty > 0 ? o.coversQty : null, takeoffUnit = coverage ? o.coversUnit || unit : '';
+    if (unit && unitKey(o.per) === unitKey(unit)) { coverage = null; takeoffUnit = ''; }
+    else if (unit && o.per && !coverage) {
+      const a = window.prompt('How much does one ' + o.per + ' cover, in ' + unit + '?', '');
+      if (a === null) return;
+      const n = num(String(a).replace(/[^0-9.]/g, ''));
+      if (!(n > 0)) { showToast('That should be a number above 0'); return; }
+      coverage = n; takeoffUnit = unit;
+    }
+    // The line's own (unpriced) item takes the price only when it is sold the
+    // same way; otherwise the product goes in as an item of its own.
+    const c = catalog(), linked = m.supplyId ? c.items[m.supplyId] : null;
+    const into = linked && unitKey(o.per) === unitKey((c.prices[linked.id] || {}).per || linked.unit) ? linked.id : null;
+    const note = ('Found on the web ' + new Date().toISOString().slice(0, 10) + (o.where ? ' (' + o.where + ')' : '') + ': ' +
+                  (o.url || 'no link') + (o.note ? ' — ' + o.note : '')).slice(0, 300);
+    const sid = window.YDSupplies && window.YDSupplies.addSourced ? window.YDSupplies.addSourced({
+      vendor: o.supplier, name: o.product, sku: o.sku, cents: priceCents, into: into,
+      per: into ? (c.prices[into] || {}).per || linked.unit || o.per : o.per,
+      category: o.category || (l && l.category !== 'other' ? l.category : ''), coverage: coverage, takeoffUnit: takeoffUnit,
+      note: note }) : null;
+    if (!sid) { showToast('Could not add it to Supplies'); return; }
+    delete found[foundKey(id)];
+    redrawSource(id);
+    estPickSupply(id, sid);
+    showToast('Added to Supplies under ' + o.supplier + ' and priced');
   };
 
   window.estAddWork = function () {

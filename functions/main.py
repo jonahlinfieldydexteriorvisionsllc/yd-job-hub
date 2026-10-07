@@ -616,7 +616,8 @@ def _followup(request, path, headers):
 # conversation in, labour and takeoff lines out (the app prices them). Writes
 # nothing -- the lines go back to the form to be checked -- so it is for
 # whoever may change jobs, under the cap. /estimate/trip (trip.py) gives the
-# road miles to the job and the week's fuel prices.
+# road miles to the job and the week's fuel prices; /estimate/source
+# (sourcing.py) finds a price on the web for a material Supplies lacks.
 
 
 def _estimate(request, path, headers):
@@ -624,7 +625,7 @@ def _estimate(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path not in ("/estimate/draft", "/estimate/trip"):
+    if path not in ("/estimate/draft", "/estimate/trip", "/estimate/source"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
@@ -645,6 +646,20 @@ def _estimate(request, path, headers):
         day = _check_and_count_usage(uid)
     except RuntimeError as e:
         return (json.dumps({"error": str(e)}), 429, json_headers)
+    # Where to buy a material Supplies has no price for (sourcing.py): Claude
+    # searches the web; the app saves the option the owner picks.
+    if path == "/estimate/source":
+        import sourcing
+        try:
+            result, usage = sourcing.find(_claude(), request.get_json(silent=True) or {})
+        except anthropic.RateLimitError:
+            return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("estimate source failed:", e)
+            return (json.dumps({"error": "The prices could not be looked up. Try again."}), 502, json_headers)
+        if usage is not None:
+            _record_spend(day, "source", usage)
+        return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     try:
         result, usage = estimates.draft(_claude(), request.get_json(silent=True) or {})
     except anthropic.RateLimitError:
