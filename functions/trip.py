@@ -150,4 +150,10 @@ def trip(d):
         return {"error": "The road distance could not be worked out just now", "fuel": fuel}
     if not route:
         return {"error": "No road route was found to that address", "fuel": fuel}
-    return {"miles": round(route["distance"] / METERS_PER_MILE, 1), "approx": approx, "fuel": fuel}
+    out = {"miles": round(route["distance"] / METERS_PER_MILE, 1), "approx": approx, "fuel": fuel}
+    # Where the job is, when the street was found (not the middle of town):
+    # the estimate picks a town's MDS delivery zone from it (Madison is
+    # priced west / central / east).
+    if not approx:
+        out["point"] = [round(point[0], 5), round(point[1], 5)]
+    return out

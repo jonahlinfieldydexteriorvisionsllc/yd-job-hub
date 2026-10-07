@@ -103,6 +103,28 @@
   // "Madison — west" and "madison west" are the same place.
   const placeKey = s => String(s || '').toLowerCase().replace(/\btown of\b/g, 'town of').replace(/[^a-z0-9]+/g, ' ').trim();
 
+  // MDS splits Madison into three delivery zones (book p.36: Madison -
+  // Central / East / West) without saying where the lines are. Central is
+  // taken as within about a mile and a half of the Capitol (downtown, the
+  // isthmus, campus); the rest of the city is east or west of it -- the north
+  // side counts as east, south Madison (toward the Fitchburg yard) as west.
+  // The estimate shows which zone was picked, and another can be chosen.
+  const ZONED = { madison: { lat: 43.0747, lng: -89.3843, centralMiles: 1.6 } };
+  function zoneFor(town, rates, site) {
+    const base = placeKey(town);
+    const zones = Object.keys(rates).filter(k => num(rates[k]) !== null && placeKey(k).indexOf(base + ' ') === 0);
+    if (!base || !zones.length) return null;
+    const c = ZONED[base];
+    if (!c || !site || typeof site.lat !== 'number' || typeof site.lng !== 'number') return { zones: zones };
+    const rad = x => x * Math.PI / 180;
+    const dLat = rad(site.lat - c.lat), dLng = rad(site.lng - c.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(c.lat)) * Math.cos(rad(site.lat)) * Math.sin(dLng / 2) ** 2;
+    const miles = 2 * 3958.8 * Math.asin(Math.sqrt(h));
+    const want = miles <= c.centralMiles ? 'central' : site.lng > c.lng ? 'east' : 'west';
+    const key = zones.find(k => placeKey(k) === base + ' ' + want);
+    return key ? { key: key, zones: zones } : { zones: zones };
+  }
+
   // -------------------------------------------------------------- materials
   //
   // One line of the takeoff: {supplyId, name, qty, unit, plant, tree,
@@ -205,9 +227,17 @@
     const rates = d.rates || {};
     // A town taken off the list is stored as null (saves merge, so a key
     // left out would stay).
-    const key = Object.keys(rates).find(k => num(rates[k]) !== null && placeKey(k) === placeKey(town));
+    let key = Object.keys(rates).find(k => num(rates[k]) !== null && placeKey(k) === placeKey(town));
+    // A town MDS prices by zone ("Madison — west / central / east" in the
+    // book): the zone is picked from where the job is.
+    let zone = null;
+    if (!key && !est.deliveryTown) {
+      zone = zoneFor(town, rates, est.site);
+      if (zone && zone.key) { key = zone.key; out.deliveryZone = zone.key; }
+    }
     if (!key) {
-      out.problems.push(town ? 'no delivery rate for ' + town + ' — pick the town on the estimate, or get a quote'
+      out.problems.push(zone ? town + ' has ' + zone.zones.length + ' MDS delivery zones — pick one on the estimate (or press Find miles)'
+        : town ? 'no delivery rate for ' + town + ' — pick the town on the estimate, or get a quote'
         : 'no town on the job, so no delivery rate');
     }
     const rate = key ? num(rates[key]) : null;

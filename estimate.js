@@ -68,7 +68,7 @@
   const SENT_KEEP = 10;
   function blank() {
     return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
-             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [] };
+             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null };
   }
   const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -86,7 +86,13 @@
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim() };
   }
   let last = null;            // the last worked-out price, for the totals and QuickBooks
-  function priced() { last = P() ? P().price(est, ctx()) : null; return last; }
+  function priced() {
+    // The map point belongs to the address it was found for; a changed
+    // address leaves it behind (the next miles lookup finds the new one).
+    if (est.site && est.site.at !== siteKey()) est.site = null;
+    last = P() ? P().price(est, ctx()) : null;
+    return last;
+  }
   const busyHere = () => !!building && building === currentJobId;
 
   const hasLines = () => est.work.length > 0 || est.materials.length > 0;
@@ -170,6 +176,10 @@
       o.fuel = Object.assign({}, e.fuel || {});
       o.deliveryTown = String(e.deliveryTown || '');
       o.off = Object.assign({}, e.off || {});
+      // Where the job is on the map (from the miles lookup), for a town MDS
+      // prices by zone; `at` is the address it was found for.
+      o.site = e.site && typeof e.site.lat === 'number' && typeof e.site.lng === 'number'
+        ? { lat: e.site.lat, lng: e.site.lng, at: String(e.site.at || '') } : null;
     } else {
       if (!o.notes && e.ask) o.notes = String(e.ask);
       let heading = '';
@@ -492,11 +502,14 @@
     const d = r.delivery;
     const rates = (P().rules().delivery || {}).rates || {};
     const towns = Object.keys(rates).filter(k => num(rates[k]) !== null).sort();
-    const needTown = d.problems.some(p => /town|rate/.test(p)) || est.deliveryTown;
+    // A zone picked from the address (Madison) is shown, and can be changed.
+    const needTown = d.problems.some(p => /town|rate|zone/.test(p)) || est.deliveryTown || d.deliveryZone;
     rows.push('<div class="est-arow">' + sw('delivery', 'Delivery') + '<span class="est-adesc">' +
       (off.delivery ? 'off' : d.lines.length ? d.lines.map(l => esc(l.name) + ' — ' + l.loads + ' load' + (l.loads === 1 ? '' : 's') + (l.pallet ? ' + pallet' : '')).join('; ')
-        : 'nothing delivered') + '</span>' +
-      (needTown && !off.delivery ? '<select' + (ro ? ' disabled' : '') + ' onchange="estSet(\'deliveryTown\', this.value)"><option value="">Town: from the job</option>' +
+        : 'nothing delivered') +
+      (d.deliveryZone && !off.delivery && d.lines.length ? ' · <b>' + esc(d.deliveryZone) + '</b> (from the address)' : '') + '</span>' +
+      (needTown && !off.delivery ? '<select' + (ro ? ' disabled' : '') + ' onchange="estSet(\'deliveryTown\', this.value)"><option value="">' +
+        (d.deliveryZone ? 'Zone: from the address' : 'Town: from the job') + '</option>' +
         towns.map(t => '<option' + (t === est.deliveryTown ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' : '') +
       '<b>' + (d.clientCents ? cents(d.clientCents) : '') + '</b></div>');
     // Fuel
@@ -1154,14 +1167,21 @@
   function siteKey() {
     return ['address', 'city', 'zip'].map(f => (el(f) && el(f).value || '').trim().toLowerCase()).join('|');
   }
+  // A town MDS delivers to by zone (Madison) needs the job's map point too.
+  function zonedTown() {
+    const r = P() && P().rules(), rates = (r && r.delivery && r.delivery.rates) || {};
+    const base = P() ? P().placeKey((el('city') && el('city').value) || '') : '';
+    return !!base && !est.deliveryTown && Object.keys(rates).some(k => P().placeKey(k).indexOf(base + ' ') === 0);
+  }
   function autoTrip() {
-    if (!hasLines() || num((est.fuel || {}).miles) !== null || (est.off || {}).fuel) return;
+    const needSite = zonedTown() && !est.site;
+    if (!hasLines() || (num((est.fuel || {}).miles) !== null && !needSite) || ((est.off || {}).fuel && !needSite)) return;
     if (!currentJobId || !(el('address') && el('address').value.trim()) || !navigator.onLine) return;
     if (trippedFor[currentJobId] === siteKey()) return;
     // Asked again when the time comes: two redraws in a row would otherwise
     // both ask for the same miles.
     setTimeout(() => {
-      if (trippedFor[currentJobId] !== siteKey() && num((est.fuel || {}).miles) === null) window.estFindMiles(false);
+      if (trippedFor[currentJobId] !== siteKey() && (num((est.fuel || {}).miles) === null || (zonedTown() && !est.site))) window.estFindMiles(false);
     }, 800);
   }
   window.estFindMiles = async function (asked) {
@@ -1179,8 +1199,12 @@
         zip: (el('zip').value || '').trim(),
       });
       if (currentJobId !== jobId) return;
+      if (Array.isArray(r.point) && typeof r.point[0] === 'number' && typeof r.point[1] === 'number') {
+        est.site = { lat: r.point[0], lng: r.point[1], at: key };
+      }
       if (num(r.miles) !== null) {
-        est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10 });
+        // Miles typed by hand stay; only an empty box is filled.
+        if (asked || num((est.fuel || {}).miles) === null) est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10 });
         changed(true);
         // A rural address the map does not know is measured to the town.
         if (asked || r.approx) showToast(est.fuel.miles + ' miles each way' + (r.approx ? ' — to the middle of town; check it' : ''));
