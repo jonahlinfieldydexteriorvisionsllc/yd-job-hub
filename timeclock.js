@@ -776,7 +776,7 @@
     const waiting = Object.values(entries).filter(awaitingOwner)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
     const asked = requestsHtml();
-    const nAsked = isOwner() ? Object.values(requests).filter(r => r.status === 'pending' && r.type === 'timeEntry').length : 0;
+    const nAsked = isOwner() ? Object.values(requests).filter(r => r.status === 'pending' && ASKABLE.indexOf(r.type) !== -1).length : 0;
     const badge = el('approveBadge');
     if (badge) badge.textContent = waiting.length + nAsked ? (waiting.length + nAsked) + ' waiting' : '';
     const sec = el('clockApproveSection');
@@ -1459,12 +1459,32 @@
     renderWorker();
   };
 
-  // The owner's side, at the top of Waiting for You.
+  // The owner's side, at the top of Waiting for You: clock times, and the
+  // figures on a closed storm's stop (storm.js) -- approving one of those
+  // fixes the stop and works that customer's bill out again (billing.js).
+  const ASKABLE = ['timeEntry', 'stopFigures'];
+  const figure = v => (typeof v === 'number' && isFinite(v) ? v : null);
+  function stopRequestHtml(r) {
+    const b = r.before || {}, a = r.after || {};
+    const bits = [];
+    if (figure(a.inchesCleared) !== figure(b.inchesCleared)) bits.push(esc(String(figure(b.inchesCleared) != null ? figure(b.inchesCleared) : '–')) + '" → <b>' + esc(String(figure(a.inchesCleared))) + '"</b>');
+    if (figure(a.saltBags) !== figure(b.saltBags)) bits.push(esc(String(figure(b.saltBags) != null ? figure(b.saltBags) : 0)) + ' → <b>' + esc(String(figure(a.saltBags))) + ' bags</b>');
+    const storm = window.YDBilling && YDBilling.storms()[r.stormId];
+    const day = storm && storm.startedAt ? new Date(storm.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) : 'a storm';
+    return '<div class="appr appr-req">' +
+      '<div class="appr-top"><b>' + esc(whoIs(r.requestedBy, r.requestedByName)) + '</b> asks to change a storm stop</div>' +
+      '<div class="appr-times">❄️ ' + esc(r.accountName || r.accountId || 'A stop') + ' · ' + esc(day) + ': ' + (bits.join(', ') || 'no change') + '</div>' +
+      (r.reason ? '<div class="appr-note">“' + esc(r.reason) + '”</div>' : '') +
+      '<div class="appr-act"><button class="btn btn-filled btn-sm" onclick="approveRequest(\'' + safeId(r.id) + '\')">Approve — fix the bill</button>' +
+        '<button class="btn btn-sm" onclick="rejectRequest(\'' + safeId(r.id) + '\')">Reject</button></div>' +
+    '</div>';
+  }
   function requestsHtml() {
     if (!isOwner()) return '';
-    const list = Object.values(requests).filter(r => r.status === 'pending' && r.type === 'timeEntry')
+    const list = Object.values(requests).filter(r => r.status === 'pending' && ASKABLE.indexOf(r.type) !== -1)
       .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
     return list.map(r => {
+      if (r.type === 'stopFigures') return stopRequestHtml(r);
       const b = r.before || {}, a = r.after || {};
       return '<div class="appr appr-req">' +
         '<div class="appr-top"><b>' + esc(whoIs(r.requestedBy, r.requestedByName)) + '</b> asks to change a shift</div>' +
@@ -1481,6 +1501,7 @@
   window.approveRequest = function (id) {
     const r = requests[id];
     if (!r || r.status !== 'pending' || !isOwner()) return;
+    if (r.type === 'stopFigures') { approveStopRequest(r); return; }
     const e = entries[r.targetId];
     if (!e) { showToast('That shift is no longer there'); return; }
     // The rules let a crew member file a request naming any shift, so the
@@ -1513,6 +1534,19 @@
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
     showToast('Changed — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
   };
+  function approveStopRequest(r) {
+    const a = r.after || {};
+    if (!window.YDBilling || !YDBilling.fixVisit) { showToast('Storm billing is still loading — try again'); return; }
+    if (figure(a.inchesCleared) == null) { showToast('That request has no depth in it — reject it'); return; }
+    YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), figure(a.saltBags), (me() || {}).uid || '')
+      .then(res => {
+        r.status = 'approved';
+        writeRequest(r.id, { status: 'approved', decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'approving a change');
+        render();
+        showToast('Changed — ' + YDBilling.fixedWords(res));
+      })
+      .catch(err => showToast((err && err.message) || 'Not changed'));
+  }
   window.rejectRequest = function (id) {
     const r = requests[id];
     if (!r || r.status !== 'pending' || !isOwner()) return;
@@ -1702,6 +1736,9 @@
   window.YDClock = {
     forJob: forJob,
     pausedMinutesAt: pausedMinutesAt,
+    // Change requests: the owner's queue, or a crew member's own (storm.js
+    // shows a crew member's storm-figure requests on the Snow tab).
+    requests: () => requests,
     entries: () => entries,
     people: () => people,
     render: render,
@@ -1782,6 +1819,8 @@
       });
       render();
       if (workerUid && !asking && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
+      // The Snow tab shows the crew how their storm-figure requests went.
+      document.dispatchEvent(new CustomEvent('yd-requests'));
     };
     unsub.push(isOwner()
       ? window.YDDb.watch('changeRequests', onRequests, () => {})

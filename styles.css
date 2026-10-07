@@ -1214,6 +1214,14 @@
     .cg-hours span { right:4px; font-size:9px; }
   }
 
+  /* the crew's last closed storm: ask for a change to a figure */
+  .ls-row { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:6px 12px;
+            padding:10px 0; border-bottom:1px solid var(--border); }
+  .ls-row:last-child { border-bottom:none; }
+  .ls-main { min-width:0; font-size:14px; }
+  .ls-main .muted { font-size:12.5px; margin-top:2px; }
+  .ls-ask { flex:1 1 100%; }
+
   /* ---- work log ---- */
   .wl-filters { flex-wrap:wrap; gap:8px; }
   .wl-filters select, .wl-filters input { width:auto; flex:1 1 150px; }

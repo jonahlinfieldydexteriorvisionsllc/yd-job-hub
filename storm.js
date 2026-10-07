@@ -21,6 +21,10 @@
   let stops = {};            // stopId -> stop record
   let unsubStorms = null;
   let unsubStops = null;
+  let fixing = null;         // the departed stop whose figures are being put right
+  // The last closed storm, for the crew's "ask for a change" (see below).
+  let lastId = null, lastStops = {}, unsubLast = null, askingStop = null;
+  const askedHere = {};      // stop id -> asked from this phone (before the request comes back)
 
   // Where the truck sets out from -- the first leg of every route is measured
   // from here, so it changes the whole order. Read from settings; the middle
@@ -139,6 +143,7 @@
     const accountsWrap = document.getElementById('snowAccountsWrap');
     const startBtn = document.getElementById('stormStartBtn');
     if (!wrap) return;
+    renderLast();
 
     // Running storms is Snow; closing one and working out the bills is
     // Billing. The owner has both; an admin has whichever they were given.
@@ -259,8 +264,17 @@
                 num(s.inchesCleared, storm.accumulationInches), 0.5) +
         (a.saltApplies ? stepper(safeId(s.id), 'salt', 'Salt bags', num(s.saltBags, 0), 1) : '') +
         '<button class="btn-stop depart" onclick="departStop(\'' + safeId(s.id) + '\')">Depart</button>';
+    } else if (fixing === s.id) {
+      // Departed with the wrong number in a box: put right while the storm
+      // is still open (once it is closed, the bill is the office's).
+      actions =
+        stepper(safeId(s.id), 'inches', 'Inches cleared', num(s.inchesCleared, storm.accumulationInches), 0.5) +
+        (a.saltApplies ? stepper(safeId(s.id), 'salt', 'Salt bags', num(s.saltBags, 0), 1) : '') +
+        '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + safeId(s.id) + '\')">Save</button>' +
+        '<button class="btn btn-sm" onclick="cancelFix()">Cancel</button>';
     } else {
-      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + safeId(s.id) + '\')">Another pass here</button>';
+      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + safeId(s.id) + '\')">Another pass here</button>' +
+        '<button class="btn btn-sm" onclick="fixStop(\'' + safeId(s.id) + '\')">✏️ Fix the numbers</button>';
     }
 
     const miles = num(s.driveMiles, null);
@@ -286,7 +300,11 @@
         '<span class="snow-go">maps</span></a>' +
       (a.areaNotes ? '<div class="stop-notes">' + esc(a.areaNotes) + '</div>' : '') +
       (s.arrivedAt ? '<div class="stop-times">in ' + clockTime(s.arrivedAt) +
-        (s.departedAt ? ' · out ' + clockTime(s.departedAt) + ' · <strong>' + mins + ' min</strong>' : '') +
+        (s.departedAt ? ' · out ' + clockTime(s.departedAt) + ' · <strong>' + mins + ' min</strong>' +
+          // What went on the record, so a wrong one can be seen and fixed.
+          (num(s.inchesCleared, null) != null ? ' · ' + num(s.inchesCleared, 0) + '"' : '') +
+          (a.saltApplies && num(s.saltBags, null) != null ? ' · ' + num(s.saltBags, 0) + ' bag' + (num(s.saltBags, 0) === 1 ? '' : 's') : '') +
+          (s.fixedAt ? ' · fixed' : '') : '') +
         '</div>' : '') +
       (s.skipped ? '<div class="stop-times">skipped — ' + esc(s.skipReason || 'no reason given') + '</div>' : '') +
       '<div class="stop-actions">' + actions + '</div>' +
@@ -338,6 +356,26 @@
     delete drafts['st-inches-' + id]; delete drafts['st-salt-' + id];
     writeStop(id, { departedAt: new Date().toISOString(), inchesCleared: inches, saltBags: salt });
     locate(id, 'depart');
+  };
+
+  // Fixing a departed stop's figures (the storm still open). The rules let
+  // the crew write numbers to a stop until the storm is closed.
+  window.fixStop = function (id) { fixing = id; render(); };
+  window.cancelFix = function () {
+    if (fixing) { delete drafts['st-inches-' + fixing]; delete drafts['st-salt-' + fixing]; }
+    fixing = null; render();
+  };
+  window.saveFix = function (id) {
+    const s = stops[id];
+    if (!s || !storm) { fixing = null; render(); return; }
+    const a = accountFor(s);
+    const inches = readStepper(id, 'inches', num(s.inchesCleared, storm.accumulationInches));
+    const salt = a.saltApplies ? readStepper(id, 'salt', num(s.saltBags, 0)) : num(s.saltBags, null);
+    delete drafts['st-inches-' + id]; delete drafts['st-salt-' + id];
+    fixing = null;
+    const me = (window.YDAuth && window.YDAuth.user) || {};
+    writeStop(id, { inchesCleared: inches, saltBags: salt, fixedAt: new Date().toISOString(), fixedBy: me.uid || '' });
+    showToast('Fixed — ' + inches + '"' + (a.saltApplies ? ', ' + salt + ' bags' : ''));
   };
 
   window.skipStop = function (id) {
@@ -705,7 +743,8 @@
         if (c.type === 'removed') delete stops[c.id];
         else stops[c.id] = Object.assign({ id: c.id }, c.data);
         // Departed (here or on another phone): its boxes are done with.
-        if (c.type === 'removed' || (c.data && c.data.departedAt)) {
+        // (Not the one whose figures are being fixed this minute.)
+        if (c.type === 'removed' || (c.data && c.data.departedAt && c.id !== fixing)) {
           delete drafts['st-inches-' + safeId(c.id)]; delete drafts['st-salt-' + safeId(c.id)];
         }
       });
@@ -764,6 +803,124 @@
     showToast('Route will start from ' + (geo.town || addr.trim()));
   };
 
+  // ------------------------------------------- after the storm is closed
+  //
+  // Closing a storm freezes its bill, so a crew member who spots a wrong
+  // figure afterwards asks the office (Jonah, 6 Oct: crew can ask for changes
+  // to storm stop figures). The last storm closed in the past two weeks is
+  // listed on their Snow tab, each visit with "Ask for a change"; the office
+  // approves it under Waiting for You, which fixes the stop and works that
+  // customer's bill out again (billing.js fixVisit).
+  function lastClosed() {
+    const cutoff = Date.now() - 14 * 864e5;
+    return Object.values(known).filter(s => s.status === 'closed' && s.closedAt && Date.parse(s.closedAt) > cutoff)
+      .sort((a, b) => String(b.closedAt).localeCompare(String(a.closedAt)))[0] || null;
+  }
+  const stormDay = s => {
+    const d = new Date(s.startedAt || s.closedAt);
+    return isNaN(d) ? 'storm' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  function dropLast() {
+    if (unsubLast) { try { unsubLast(); } catch (e) {} }
+    unsubLast = null; lastId = null; lastStops = {}; askingStop = null;
+  }
+  function renderLast(force) {
+    const wrap = document.getElementById('lastStormWrap');
+    if (!wrap) return;
+    // For whoever cannot put a closed storm's bill right themselves.
+    const s = !storm && window.YDDb && !ydCan('billing', 'change') ? lastClosed() : null;
+    if (!s) { wrap.hidden = true; wrap.innerHTML = ''; dropLast(); return; }
+    if (s.id !== lastId) {
+      dropLast();
+      lastId = s.id;
+      unsubLast = window.YDDb.watch('storms/' + s.id + '/stops', changes => {
+        changes.forEach(c => {
+          if (c.type === 'removed') delete lastStops[c.id];
+          else lastStops[c.id] = Object.assign({ id: c.id }, c.data);
+        });
+        renderLast();
+      }, () => {});
+    }
+    // Typing in the form is not interrupted by a redraw.
+    if (!force && askingStop && document.activeElement && wrap.contains(document.activeElement)) return;
+    const list = Object.values(lastStops).filter(x => x.departedAt && !x.skipped)
+      .sort((a, b) => num(a.order, 0) - num(b.order, 0));
+    wrap.hidden = false;
+    wrap.innerHTML = '<div class="section"><div class="section-head">' +
+        '<span class="section-title">Last storm — ' + esc(stormDay(s)) + '</span></div>' +
+      '<div class="section-body">' +
+        '<p class="hint" style="margin-top:0">Closed and billed. If a number is wrong, ask for a change — the office checks it.</p>' +
+        (list.length ? list.map(x => lastRow(s, x)).join('') : '<p class="empty-msg">Loading…</p>') +
+      '</div></div>';
+  }
+  function latestRequest(stormId, stopId) {
+    const reqs = window.YDClock && YDClock.requests ? YDClock.requests() : {};
+    return Object.values(reqs).filter(r => r.type === 'stopFigures' && r.stormId === stormId && r.targetId === stopId)
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0] || null;
+  }
+  function lastRow(s, x) {
+    const a = accountFor(x);
+    const inches = num(x.inchesCleared, null), salt = num(x.saltBags, null);
+    const r = latestRequest(s.id, x.id);
+    const status = r && r.status === 'pending' || (!r && askedHere[x.id]) ? '<span class="muted">change asked</span>'
+      : r && r.status === 'approved' ? '<span class="muted">changed ✔</span>'
+      : r && r.status === 'rejected' ? '<span class="muted">turned down' + (r.decidedReason ? ' — ' + esc(r.decidedReason) : '') + '</span>' : '';
+    const canAsk = !(r && r.status === 'pending') && !(!r && askedHere[x.id]);
+    return '<div class="ls-row">' +
+      '<div class="ls-main"><b>' + esc(a.name || x.accountId) + '</b>' + (num(x.pass, 1) > 1 ? ' <span class="muted">pass ' + num(x.pass, 1) + '</span>' : '') +
+        '<div class="muted">' + (inches != null ? inches + '"' : 'no depth') + (a.saltApplies ? ' · ' + (salt != null ? salt : 0) + ' bags' : '') +
+        (status ? ' · ' + status : '') + '</div></div>' +
+      (askingStop === x.id
+        ? '<div class="ls-ask">' +
+            '<div class="grid g2">' +
+              '<div class="field"><span class="label">Inches it should be</span><input id="lsIn" inputmode="decimal" value="' + (inches != null ? inches : '') + '"></div>' +
+              (a.saltApplies ? '<div class="field"><span class="label">Salt bags it should be</span><input id="lsSalt" inputmode="decimal" value="' + (salt != null ? salt : '') + '"></div>' : '') +
+            '</div>' +
+            '<div class="field"><span class="label">Why</span><input id="lsWhy" placeholder="e.g. typed 3, it was 5 by the garage"></div>' +
+            '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="sendStopAsk(\'' + safeId(x.id) + '\')">Send to the office</button>' +
+              '<button class="btn btn-sm" onclick="askStop(\'\')">Cancel</button></div>' +
+          '</div>'
+        : canAsk ? '<button class="link-btn" onclick="askStop(\'' + safeId(x.id) + '\')">Ask for a change</button>' : '') +
+    '</div>';
+  }
+  window.askStop = function (id) { askingStop = id || null; renderLast(true); };
+  window.sendStopAsk = function (id) {
+    const s = lastClosed(), x = lastStops[id], u = (window.YDAuth && window.YDAuth.user) || null;
+    if (!s || !x || !u) return;
+    const a = accountFor(x);
+    const read = (elId, cap) => {
+      const el = document.getElementById(elId);
+      if (!el || el.value.trim() === '') return null;
+      const n = parseFloat(el.value);
+      return isNaN(n) ? NaN : Math.max(0, Math.min(cap, Math.round(n * 10) / 10));
+    };
+    const inches = read('lsIn', 60);
+    const salt = a.saltApplies ? read('lsSalt', 200) : num(x.saltBags, null);
+    const why = ((document.getElementById('lsWhy') || {}).value || '').trim();
+    if (inches == null || Number.isNaN(inches) || Number.isNaN(salt)) { showToast('Put in the numbers it should be'); return; }
+    if (!why) { showToast('Say why, so the office knows'); return; }
+    if (inches === num(x.inchesCleared, null) && salt === num(x.saltBags, null)) { showToast('Those are the numbers it has now'); return; }
+    const rid = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const rec = {
+      type: 'stopFigures', stormId: s.id, targetId: x.id, targetPath: 'storms/' + s.id + '/stops/' + x.id,
+      accountId: x.accountId || '', accountName: a.name || '',
+      requestedBy: u.uid, requestedByName: u.displayName || u.email || '', reason: why.slice(0, 300), status: 'pending',
+      before: { inchesCleared: num(x.inchesCleared, null), saltBags: num(x.saltBags, null) },
+      after: { inchesCleared: inches, saltBags: salt == null ? null : salt },
+      createdAt: new Date().toISOString(),
+    };
+    askedHere[x.id] = true;
+    askingStop = null;
+    Promise.resolve(window.YDDb.put('changeRequests', rid, rec)).catch(e => {
+      if (e && e.code === 'permission-denied') showToast('Not sent — not allowed');
+      else console.warn('[storm] change request not yet on the server:', (e && e.code) || e);
+    });
+    renderLast(true);
+    showToast('Sent — the office will look at it');
+  };
+  // A request decided (or arriving back) redraws the list.
+  document.addEventListener('yd-requests', () => renderLast());
+
   window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render,
                      startPoint: () => startPoint };
 
@@ -779,6 +936,8 @@
       unsubStorms = unsubStops = null;
       storm = null; stops = {};
       Object.keys(known).forEach(k => delete known[k]);
+      dropLast();
+      Object.keys(askedHere).forEach(k => delete askedHere[k]);
       authKey = key;
     }
     if (key) start(); else render();

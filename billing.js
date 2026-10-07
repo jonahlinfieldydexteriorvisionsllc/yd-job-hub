@@ -292,6 +292,7 @@
     b.lines.forEach(l => {
       (byAccount[l.accountId] = byAccount[l.accountId] || []).push(l);
     });
+    const canFix = ydCan('billing', 'change');
 
     const rows = Object.keys(byAccount).sort((x, y) => accountName(x).localeCompare(accountName(y)))
       .map(aid => {
@@ -299,8 +300,12 @@
         const total = ls.reduce((t, l) => t + l.totalCents, 0);
         return '<tr><td class="bold">' + esc(accountName(aid)) + '</td>' +
           '<td>' + ls.length + '</td>' +
-          // Escaped: depths come from crew phones (see count() above).
-          '<td>' + ls.map(l => esc(l.inches) + '"').join(', ') + '</td>' +
+          // Escaped: depths come from crew phones (see count() above). Each
+          // one opens the fix for that visit, for whoever may change bills.
+          '<td>' + ls.map(l => (canFix
+            ? '<button class="link-btn" title="Fix this visit" onclick="fixVisitForm(\'' + sid(id) + '\', \'' + sid(l.accountId) + '\', ' +
+                (count(l.pass) || 1) + ')">' + esc(l.inches) + '"' + (l.fixedAt ? ' ✏️' : '') + '</button>'
+            : esc(l.inches) + '"' + (l.fixedAt ? ' ✏️' : ''))).join(', ') + '</td>' +
           '<td>' + ls.reduce((t, l) => t + l.minutes, 0) + ' min</td>' +
           '<td>' + money(ls.reduce((t, l) => t + l.plowCents, 0)) + '</td>' +
           '<td>' + (ls.some(l => l.saltCents) ? money(ls.reduce((t, l) => t + l.saltCents, 0)) : '—') + '</td>' +
@@ -316,6 +321,8 @@
         card('Per crew-hour', money(b.revenuePerCrewHourCents), 'pos-top') +
         card('On site', b.onSiteMinutes + ' min') +
       '</div>' +
+      (canFix ? '<div class="hint" style="margin-bottom:8px">A depth wrong? Tap it to fix that visit.</div>' : '') +
+      '<div id="stormFixArea"></div>' +
       '<div class="table-wrap"><table><thead><tr>' +
         '<th>Account</th><th>Visits</th><th>Depth</th><th>On site</th>' +
         '<th>Plowing</th><th>Salt</th><th>Labour</th><th>Total</th>' +
@@ -337,6 +344,133 @@
 
   window.closeStormDetail = function () {
     document.getElementById('stormDetailModal').classList.remove('active');
+  };
+
+  // ------------------------------------------------------------ fixing a visit
+  //
+  // A storm's bill is frozen when it closes. When a figure on it turns out to
+  // be wrong -- a crew member asked (a change request, approved in Waiting for
+  // You) or the office spotted it -- the visit is put right here: the stop
+  // gets the right figures and that visit's line is worked out again from the
+  // customer's pricing as it stands today; the storm's totals follow. An
+  // invoice already in QuickBooks is not touched -- the screen says to change
+  // it there too.
+  const sid = v => String(v == null ? '' : v).replace(/[^A-Za-z0-9_-]/g, '');
+  const minutesBetween = (a, b) => (a && b ? Math.max(0, Math.round((new Date(b) - new Date(a)) / 60000)) : 0);
+  // Stop ids are the account id, with "-p2" and so on for later passes.
+  const stopIdOf = (accountId, pass) => (pass > 1 ? accountId + '-p' + pass : accountId);
+
+  async function fixVisit(id, stopId, inches, saltBags, by) {
+    if (!ydCan('billing', 'change')) throw new Error('Changing a bill needs Billing access');
+    const s = storms[id];
+    if (!s) throw new Error('That storm is not closed');
+    if (!(typeof inches === 'number' && isFinite(inches) && inches >= 0 && inches <= 60)) throw new Error('That depth is not a number the bill can use');
+    if (saltBags != null && !(typeof saltBags === 'number' && isFinite(saltBags) && saltBags >= 0 && saltBags <= 200)) {
+      throw new Error('That salt figure is not a number the bill can use');
+    }
+    // The server's copies: a bill worked out again from a stale copy would
+    // quietly put back anything changed on another device since.
+    let b, stop;
+    try {
+      b = await window.YDDb.getFresh('storms/' + id + '/private', 'billing');
+      stop = await window.YDDb.getFresh('storms/' + id + '/stops', stopId);
+    } catch (e) { throw new Error('This needs a signal — try again when there is one'); }
+    if (!b || !Array.isArray(b.lines)) throw new Error('No bill recorded for that storm');
+    if (!stop || !stop.accountId) throw new Error('That visit is not on the storm');
+    const accountId = stop.accountId, pass = count(stop.pass) || 1;
+    await YDSnow.refreshPricing([accountId]);
+    const lines = b.lines.slice();
+    const i = lines.findIndex(l => l.accountId === accountId && (count(l.pass) || 1) === pass);
+    const old = i === -1 ? null : lines[i];
+    // The time on site is the bill's own (pauses already taken off). A visit
+    // that was left off the bill gets it worked out the way closing does.
+    let mins = old ? count(old.minutes) : null;
+    const extra = {};
+    if (mins == null) {
+      const onSite = minutesBetween(stop.arrivedAt, stop.departedAt);
+      const paused = window.YDClock ? YDClock.pausedMinutesAt(id, stop.arrivedAt, stop.departedAt) : 0;
+      mins = Math.max(0, onSite - paused);
+      const rate = (YDSnow.pricing()[accountId] || {}).laborRateCents;
+      Object.assign(extra, { accountId: accountId, pass: pass, minutes: mins, onSiteMinutes: onSite, pausedMinutes: paused,
+                             laborRateCents: rate != null ? rate : null });
+    }
+    const p = YDSnow.priceVisit(accountId, inches, mins, s.crewSize);
+    if (!p) throw new Error('No price for ' + accountName(accountId) + ' — check their pricing on the Snow tab');
+    const at = new Date().toISOString();
+    const salt = saltBags == null ? null : saltBags;
+    const was = old ? { inches: old.inches, saltBags: old.saltBags == null ? null : old.saltBags, totalCents: count(old.totalCents) } : null;
+    const line = Object.assign({}, old || extra, {
+      inches: inches, saltBags: salt,
+      manHours: p.manHours, plowCents: p.plowCents, saltCents: p.saltCents, laborCents: p.laborCents, totalCents: p.totalCents,
+      fixedAt: at, fixedBy: by || '', was: was,
+    });
+    // As when closing: no $0 lines on a bill.
+    if (p.totalCents > 0) { if (i === -1) lines.push(line); else lines[i] = line; }
+    else if (i !== -1) lines.splice(i, 1);
+    const totalCents = lines.reduce((t, l) => t + count(l.totalCents), 0);
+    const minutes = lines.reduce((t, l) => t + count(l.minutes), 0);
+    const crewHours = Math.round(minutes * count(s.crewSize) / 60 * 100) / 100;
+    // Through JSON, so a field missing on an old line cannot reach the write
+    // as undefined (which would refuse the whole thing).
+    const patch = JSON.parse(JSON.stringify({
+      lines: lines, totalCents: totalCents,
+      saltCents: lines.reduce((t, l) => t + count(l.saltCents), 0),
+      onSiteMinutes: minutes, crewHours: crewHours,
+      revenuePerCrewHourCents: crewHours > 0 ? Math.round(totalCents / crewHours) : 0,
+      fixes: (Array.isArray(b.fixes) ? b.fixes : []).concat([{ at: at, by: by || '', stopId: stopId, accountId: accountId,
+        inches: inches, saltBags: salt, totalCents: p.totalCents, was: was }]),
+    }));
+    billingCache[id] = Object.assign({}, b, patch);
+    Promise.resolve(window.YDDb.putMany([
+      ['storms/' + id + '/private', 'billing', patch],
+      ['storms/' + id + '/stops', stopId, { inchesCleared: inches, saltBags: salt, fixedAt: at, fixedBy: by || '' }],
+    ])).catch(e => {
+      console.warn('[billing] fixed visit not yet on the server:', (e && e.code) || e);
+      if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
+    });
+    render();
+    const sent = (b.quickbooks || {})[accountId];
+    return { name: accountName(accountId), totalCents: p.totalCents, wasCents: was ? was.totalCents : 0,
+             inQuickBooks: sent ? (sent.number || sent.id || 'yes') : null, numbered: (b.invoiceNos || {})[accountId] || null };
+  }
+
+  // What the office is told after a fix: the new charge, and what still needs
+  // doing by hand.
+  function fixedWords(r) {
+    return r.name + ': ' + money(r.wasCents) + ' → ' + money(r.totalCents) +
+      (r.inQuickBooks ? ' — invoice ' + r.inQuickBooks + ' is already in QuickBooks: change it there too'
+        : r.numbered ? ' — invoice ' + r.numbered + ' was already exported: export it again or change it in QuickBooks' : '');
+  }
+
+  window.fixVisitForm = function (id, accountId, pass) {
+    const area = document.getElementById('stormFixArea');
+    const b = billingCache[id];
+    if (!area || !b) return;
+    const l = b.lines.find(x => x.accountId === accountId && (count(x.pass) || 1) === pass) || {};
+    const a = (window.YDSnow && YDSnow.accounts()[accountId]) || {};
+    area.innerHTML = '<div class="add-area">' +
+      '<div class="add-label">Fix ' + esc(accountName(accountId)) + (pass > 1 ? ' (pass ' + pass + ')' : '') + '</div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Inches</span><input id="fvIn" inputmode="decimal" value="' + count(l.inches) + '"></div>' +
+        (a.saltApplies ? '<div class="field"><span class="label">Salt bags</span><input id="fvSalt" inputmode="decimal" value="' + count(l.saltBags) + '"></div>' : '') +
+      '</div>' +
+      '<div class="hint">The charge is worked out again from ' + esc(accountName(accountId)) + '’s pricing as it is today.</div>' +
+      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="saveVisitFix(\'' + sid(id) + '\', \'' + sid(accountId) + '\', ' + pass + ')">Save</button>' +
+        '<button class="btn btn-sm" onclick="document.getElementById(\'stormFixArea\').innerHTML=\'\'">Cancel</button></div>' +
+    '</div>';
+  };
+  window.saveVisitFix = async function (id, accountId, pass) {
+    const inches = parseFloat((document.getElementById('fvIn') || {}).value);
+    const saltEl = document.getElementById('fvSalt');
+    const salt = saltEl ? parseFloat(saltEl.value) : null;
+    if (isNaN(inches) || (saltEl && isNaN(salt))) { showToast('Put in numbers'); return; }
+    try {
+      const me = (window.YDAuth && window.YDAuth.user) || {};
+      const r = await fixVisit(id, stopIdOf(accountId, pass), Math.round(inches * 10) / 10,
+                               salt == null ? null : Math.round(salt * 10) / 10, me.uid || '');
+      showToast(fixedWords(r));
+      stormDetail(id);
+    } catch (e) { showToast(e.message || String(e)); }
   };
 
   // ---------------------------------------------------------------- export
@@ -635,7 +769,7 @@
       'the best is flagged — worth a look at the rate, not necessarily worth dropping.</div>';
   };
 
-  window.YDBilling = { storms: () => storms, render, seasonByAccount };
+  window.YDBilling = { storms: () => storms, render, seasonByAccount, fixVisit, fixedWords };
 
   // Dropped on sign-out (the page does not reload), so the next person on the
   // same device neither inherits these figures nor misses a fresh watch.
