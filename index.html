@@ -750,6 +750,17 @@
 </div>
 
 <!-- How every estimate is priced: the owner's numbers. pricing.js -->
+<!-- Recurring crew tasks: the owner's list (recurring.js) -->
+<div class="modal-overlay" id="recurModal">
+  <div class="modal" style="max-width:820px">
+    <div class="modal-head">
+      <h2>Recurring tasks</h2>
+      <button class="modal-close" onclick="closeRecurring()">&times;</button>
+    </div>
+    <div class="modal-body" id="recurBody"></div>
+  </div>
+</div>
+
 <!-- Starting a storm: one form, big buttons, crew picked by tapping (storm.js) -->
 <div class="modal-overlay" id="stormStartModal">
   <div class="modal" style="max-width:480px">
@@ -954,6 +965,7 @@
 <script src="./quickbooks.js"></script>
 <script src="./equipment.js"></script>
 <script src="./boards.js"></script>
+<script src="./recurring.js"></script>
 <script src="./calendar.js"></script>
 <script src="./supplies.js"></script>
 <script src="./pricing.js"></script>

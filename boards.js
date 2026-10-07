@@ -289,6 +289,9 @@
           (!board.virtual && editsBoards()
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">+ Add card</button>' : '') +
+          // The recurring crew tasks land on Maintenance (recurring.js).
+          (board.id === MAINTENANCE && isOwner() && typeof openRecurring === 'function'
+            ? '<button class="btn btn-sm" onclick="openRecurring()">🔁 Recurring tasks</button>' : '') +
           (board.virtual && movesJobs()
             ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">' + (board.id === 'bids' ? '+ New bid' : '+ New job') + '</button>' : '') +
@@ -502,6 +505,7 @@
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
+        (k.recurring && typeof recurringBadge === 'function' ? recurringBadge(k, inLastColumn) : '') +
         (isOwner() && k.claude && k.claude.status === 'done' ? '<span class="bd-claude" title="Claude did this — check it">🤖</span>' : '') +
         (isOwner() && k.claude && k.claude.status === 'needs_info' ? '<span class="bd-claude ask" title="Claude needs something from you">🤖?</span>' : '') +
         (isOwner() && k.claude && k.claude.status === 'working' ? '<span class="bd-claude" title="Claude at home is working on this">🖥…</span>' : '') +
@@ -757,6 +761,8 @@
         (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
+      (k.recurring && typeof recurringDetail === 'function'
+        ? recurringDetail(k, here === board.columns[board.columns.length - 1].id) : '') +
       claudeHtml(board, k) +
       '<div class="field-actions">' +
         (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +

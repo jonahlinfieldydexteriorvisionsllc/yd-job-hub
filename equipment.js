@@ -87,7 +87,8 @@
   // Repairs (logged by pressing Fixed on a problem) do not count: a new
   // hydraulic hose is not an oil change, and must not restart its countdown.
   function dueFromHistory(g, all) {
-    const service = (all || []).filter(e => e.kind !== 'repair');
+    // Repairs and the recurring tasks (a car wash) never move the next service.
+    const service = (all || []).filter(e => e.kind !== 'repair' && e.kind !== 'task');
     const out = {};
     const h = newestWith(service, 'hours');
     if (g.intervalHours && h) out.dueHours = round1(h.hours + g.intervalHours);
@@ -311,6 +312,7 @@
               '<span class="eq-log-when">' + shortDate(e.at) + '</span>' +
               '<span class="eq-log-what"><b>' + esc(e.what) + '</b>' +
                 (e.kind === 'repair' ? ' <span class="eq-repair">repair</span>' : '') +
+                (e.kind === 'task' ? ' <span class="eq-repair">recurring</span>' : '') +
                 '<span class="eq-log-sub">' + [reading, e.by ? esc(e.by) : ''].filter(Boolean).join(' · ') + '</span>' +
                 ((e.parts || []).length ? '<span class="eq-log-sub">Parts: ' + e.parts.map(p => esc(p.name) +
                   (p.warranty ? ' 🛡 ' + esc(warrantyLeft(g, e, p).text) : '')).join(' · ') + '</span>' : '') +
@@ -1183,6 +1185,19 @@
 
   window.YDEquipment = {
     all: () => gear,
+    // A recurring task confirmed done (recurring.js): in the history as a
+    // task, with the miles if given -- it does not move the next service.
+    logTask: (id, what, miles, by) => {
+      const g = gear[id];
+      if (!g || !ydCan('equipment', 'change')) return;
+      const entry = { id: 'sv' + Date.now().toString(36), at: localDay(), what: what, costCents: null,
+                      hours: null, miles: miles != null ? miles : null, by: by || '', kind: 'task', parts: [] };
+      const patch = { service: (g.service || []).concat([entry]) };
+      if (miles != null && (g.miles == null || miles > g.miles)) patch.miles = miles;
+      Object.assign(g, patch);
+      write(g.id, patch, 'logging a task');
+      renderEquipment();
+    },
     overdue: () => Object.values(gear).filter(g => due(g).state === 'overdue'),
     render: () => renderEquipment(),
     // The Maintenance board's machine card moved to Done (boards.js): the

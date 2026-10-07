@@ -486,6 +486,20 @@ def _jobs():
     return {s.id: (s.to_dict() or {}) for s in _db().collection("jobs").stream()}
 
 
+def _recurring_overdue(today):
+    """Recurring crew tasks (recurring.js) not confirmed by their due day --
+    Jonah: tell me if they have not been done. [(title, due YYYY-MM-DD)]."""
+    out = []
+    try:
+        for s in _db().collection("boards").document("maintenance").collection("cards").stream():
+            k = s.to_dict() or {}
+            if k.get("recurring") and not k.get("confirmedAt") and str(k.get("due") or "") < _day(today):
+                out.append((str(k.get("title") or "A recurring task"), str(k.get("due"))))
+    except Exception as e:      # noqa: BLE001
+        print("digest: recurring tasks not read:", e)
+    return sorted(out, key=lambda x: x[1])
+
+
 def _office(jobs):
     """Estimate work waiting on Jonah: drafts Claude built that he hasn't
     checked and sent, estimates a customer accepted that aren't booked yet,
@@ -773,6 +787,14 @@ def build(slot, user, people, wx, cache):
                 ([{"text": "…and %d more on the Bids board" % (len(bids) - 8)}] if len(bids) > 8 else [])))
             if slot != "midday":
                 push_bits.append("%d bid%s to chase" % (len(bids), "" if len(bids) == 1 else "s"))
+
+    # ---- recurring crew tasks not confirmed by their day (the owner, and an
+    # admin who runs the boards)
+    late = cache.get("recurring") or []
+    if (owner or access.get("boards") == "change") and slot in ("morning", "evening") and late:
+        sections.append(("Recurring tasks not done", [{"text": "🔁 %s — was due %s" % (
+            t, _long_day(datetime.date.fromisoformat(d)))} for t, d in late[:8]]))
+        push_bits.append("%d recurring task%s not done" % (len(late), "" if len(late) == 1 else "s"))
 
     # ---- estimates: drafts to check, yeses to book, money still owed
     office = cache.get("office") or {}
@@ -1103,6 +1125,7 @@ def _cache(slot="morning"):
         "storms": _storms(),
         "bids": _bids(jobs),
         "office": _office(jobs),
+        "recurring": _recurring_overdue(today),
         "shifts": _shifts(),
         "receipts": _receipts_to_sort(),
     }

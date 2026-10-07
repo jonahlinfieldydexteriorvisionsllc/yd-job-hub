@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v118';
+const CACHE = 'ydjobhub-v119';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -31,6 +31,7 @@ const SHELL = [
   './problems.js',
   './quickbooks.js',
   './equipment.js',
+  './recurring.js',
   './boards.js',
   './calendar.js',
   './worklog.js',

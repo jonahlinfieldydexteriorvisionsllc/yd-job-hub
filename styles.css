@@ -1899,3 +1899,14 @@
   .wk-req.approved b { color:var(--pos); }
   .wk-req.rejected b { color:var(--neg); }
   .appr-req { border-left:4px solid var(--accent); }
+  /* Recurring crew tasks (recurring.js) */
+  .bd-rc { font-size:12px; }
+  .bd-rc.ask { font-weight:700; color:#7a5410; background:#fbeccd; border-radius:8px; padding:0 6px; }
+  .bd-rc.ok { color:var(--pos); font-weight:700; }
+  .bd-rc-box { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--surface-2); font-size:13px; }
+  .rc-task { display:grid; grid-template-columns:2fr 1.6fr auto 1fr 1.2fr auto auto; gap:6px; align-items:center; padding:8px 0; border-top:1px solid var(--border); }
+  .rc-task.off { opacity:.55; }
+  .rc-task input, .rc-task select { min-width:0; width:100%; }
+  .rc-task .rc-days { width:56px; }
+  .rc-task .rc-next { grid-column:1 / -1; font-size:12px; }
+  @media (max-width:720px) { .rc-task { grid-template-columns:1fr 1fr; } }
