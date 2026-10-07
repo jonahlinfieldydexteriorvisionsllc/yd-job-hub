@@ -642,6 +642,50 @@
       authKey = k;
       if (on && window.YDDb) start(); else stop();
     }
+    // Anyone signed in may photograph a receipt (the server checks again).
+    const member = a.mode === 'cloud' && !!a.user;
+    document.querySelectorAll('.rc-photo-btn').forEach(b => { b.hidden = !member; });
     render();
   });
+
+  // ------------------------------------------------------ a paper receipt
+  //
+  // 📷 Add a receipt: the camera, then the server reads the photo the way an
+  // emailed receipt is read (receipts.py from_photo) and it lands in Receipts
+  // to sort. Someone clocked into a job sends that job along.
+  function clockedJob() {
+    const u = me();
+    const all = window.YDClock && YDClock.entries ? YDClock.entries() : {};
+    const e = u && Object.values(all).find(x => x.uid === u.uid && !x.endedAt && x.kind === 'job');
+    return e ? e.targetId || '' : '';
+  }
+  let sendingPhoto = false;
+  window.rcPhoto = function () {
+    let inp = el('rcPhotoInput');
+    if (!inp) {
+      inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'image/*'; inp.id = 'rcPhotoInput'; inp.hidden = true;
+      inp.setAttribute('capture', 'environment');
+      inp.onchange = () => sendPhoto(inp.files && inp.files[0]);
+      document.body.appendChild(inp);
+    }
+    inp.value = '';
+    inp.click();
+  };
+  async function sendPhoto(f) {
+    if (!f || sendingPhoto) return;
+    if (!window.YDClaude || !window.YDSupplies || !window.YDSupplies.shrinkPhoto) { showToast('Not ready yet — try again in a moment'); return; }
+    sendingPhoto = true;
+    showToast('Reading the receipt…');
+    try {
+      const photo = await window.YDSupplies.shrinkPhoto(f);
+      const r = await window.YDClaude.post('/receipts/photo', { mediaType: photo.mediaType, data: photo.data, jobId: clockedJob() });
+      showToast('🧾 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents) + ' — ' +
+        (r.what === 'added to' ? 'matched a receipt already there' : (sees() ? 'in Receipts to sort' : 'sent to the office')));
+    } catch (e) {
+      showToast('Receipt: ' + (e.message || e));
+    } finally {
+      sendingPhoto = false;
+    }
+  }
 })();

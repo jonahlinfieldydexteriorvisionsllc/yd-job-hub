@@ -277,7 +277,7 @@
     <div class="section">
       <div class="section-head">
         <span class="section-title">Time Clock</span>
-        <span class="section-badge accent" id="clockBadge"></span>
+        <span style="display:flex;align-items:center;gap:8px"><span class="section-badge accent" id="clockBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" hidden>📷 Add a receipt</button></span>
       </div>
       <div class="section-body" id="clockWrap"></div>
     </div>
@@ -527,6 +527,7 @@
     <div class="section">
       <div class="section-head">
         <span class="section-title">Supplies — where to get it</span>
+        <button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" hidden>📷 Add a receipt</button>
       </div>
       <div class="section-body" id="suppliesWrap"></div>
     </div>
@@ -565,7 +566,7 @@
     <div class="section" id="rcSection" hidden>
       <div class="section-head">
         <span class="section-title">Receipts to sort</span>
-        <span class="section-badge accent" id="rcBadge"></span>
+        <span style="display:flex;align-items:center;gap:8px"><span class="section-badge accent" id="rcBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" hidden>📷 Add a receipt</button></span>
       </div>
       <div class="section-body">
         <div class="rc-bar" id="rcBar"></div>

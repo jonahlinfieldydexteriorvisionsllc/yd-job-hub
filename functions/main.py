@@ -171,6 +171,23 @@ def _caller(req, area=None, level="change"):
     raise PermissionError("owner access required")
 
 
+def _member(req):
+    """(uid, user record) for anyone signed in and active -- owner, admin or
+    crew. For the few things every crew member may do (a receipt photo)."""
+    header = req.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise PermissionError("not signed in")
+    try:
+        token = fb_auth.verify_id_token(header[7:])
+    except Exception:
+        raise PermissionError("sign-in could not be verified")
+    snap = _db.collection("users").document(token["uid"]).get()
+    user = snap.to_dict() if snap.exists else None
+    if not user or user.get("active") is not True or user.get("role") not in ("owner", "admin", "crew"):
+        raise PermissionError("no access")
+    return token["uid"], user
+
+
 def _check_and_count_usage(uid):
     """Daily call ceiling. Refuses rather than quietly spending."""
     day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -490,6 +507,30 @@ def _receipts(request, path, headers):
         except PermissionError as e:
             return (json.dumps({"error": str(e)}), 401, json_headers)
         manual = True
+    elif path == "/receipts/photo":
+        # A paper receipt photographed in the app. Anyone on the crew may send
+        # one (Jonah, 6 Oct 2026); it only lands in Receipts to sort, and the
+        # reply tells them what was read -- they never see the list itself.
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            uid, user = _member(request)
+            day = _check_and_count_usage(uid)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        except RuntimeError as e:
+            return (json.dumps({"error": str(e)}), 429, json_headers)
+        try:
+            result, usage = receipts.from_photo(_claude(), request.get_json(silent=True) or {}, uid,
+                                                user.get("name") or user.get("email") or "someone")
+        except anthropic.RateLimitError:
+            return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("receipt photo failed:", e)
+            return (json.dumps({"error": "The receipt could not be read. Try again."}), 502, json_headers)
+        if usage is not None:
+            _record_spend(day, "receiptphoto", usage)
+        return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     try:

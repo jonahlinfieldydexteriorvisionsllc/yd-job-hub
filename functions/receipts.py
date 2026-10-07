@@ -630,12 +630,14 @@ def _save(db, m, got, jobs):
             (len(lines) > len(have.get("lines") or []) and fields["docType"] != "shipping_notice")
         if not (have.get("splits") or []) and have.get("status") == "new" and says_more:
             patch.update({k: v for k, v in fields.items() if k not in ("whose", "orderNo", "paid")})
-            patch["link"] = gmail_link(m["threadId"])
+            if m["threadId"]:
+                patch["link"] = gmail_link(m["threadId"])
         ref.update(patch)
         return ref.id, "added to"
+    # A photographed paper receipt has no email to link to.
     ref.set(dict(fields, **{
         "status": "new", "skipWhy": "", "skippedBy": "",
-        "splits": [], "mail": [mail], "link": gmail_link(m["threadId"]),
+        "splits": [], "mail": [mail], "link": gmail_link(m["threadId"]) if m["threadId"] else "",
         "createdAt": dg._now().isoformat(), "model": MODEL,
     }))
     return rid, "new"
@@ -870,6 +872,67 @@ def _tally(db, m, purchase):
 
 def _jobs(db):
     return {s.id: (s.to_dict() or {}) for s in db.collection("jobs").stream()}
+
+
+# ---------------------------------------------------------------- a photo of one
+#
+# A paper receipt from the yard counter, photographed in the app (Jonah, 6
+# Oct 2026: crew may add them too; the read-out is enough, no photo kept). It
+# is read exactly as an emailed one and lands in Receipts to sort. Someone
+# clocked into a job sends that job along, and it is offered first.
+
+PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
+PHOTO_MAX = 8 * 1024 * 1024
+
+
+def from_photo(client, body, uid, who):
+    """Returns ({id, vendor, total, lines, summary, what} or {error}, usage or None)."""
+    mime = str(body.get("mediaType") or "").lower()
+    if mime not in PHOTO_TYPES:
+        return {"error": "Send a photo (JPEG or PNG)"}, None
+    data = re.sub(r"\s+", "", str(body.get("data") or ""))
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except Exception:                                   # noqa: BLE001
+        return {"error": "The photo didn't arrive whole — try again"}, None
+    if not raw or len(raw) > PHOTO_MAX:
+        return {"error": "That photo is empty or too big"}, None
+    now = dg._now()
+    who = str(who or "someone").strip()[:60]
+    key = hashlib.sha1(raw).hexdigest()[:20]
+    m = {"id": "photo-" + key, "threadId": "", "from": "Photo from " + who, "to": "",
+         "subject": "Receipt photo", "date": now.isoformat(), "internalDate": int(now.timestamp() * 1000),
+         "snippet": "", "text": "", "files": []}
+    note = str(body.get("note") or "").strip()[:300]
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}},
+        {"type": "text", "text": "A photo of a paper receipt, taken in the Job Hub app by %s on %s.%s" % (
+            who, now.astimezone(dg.TZ).strftime("%Y-%m-%d"), (" Their note: " + note) if note else "")},
+    ]
+    got, used, err = _ask(client, READ_SYSTEM, content, RECEIPT_SCHEMA, "medium")
+    usage = types_usage(used)
+    if err or not got:
+        return {"error": "The receipt couldn't be read (%s) — try a clearer photo" % (err or "no answer")}, usage
+    if not got.get("is_purchase"):
+        return {"error": "That doesn't look like a receipt"}, usage
+    db = dg._db()
+    jobs = _jobs(db)
+    rid, what = _save(db, m, got, jobs)
+    extra = {"addedBy": uid, "addedByName": who, "source": "photo"}
+    job_id = str(body.get("jobId") or "")
+    if job_id and job_id in jobs:
+        extra["suggest"] = {"jobId": job_id, "why": "%s was clocked in on it" % who}
+    db.collection("receipts").document(rid).set(extra, merge=True)
+    lines, tax, total = lines_from(got)
+    return {"id": rid, "vendor": (got.get("vendor") or "").strip(), "totalCents": total, "lines": len(lines),
+            "summary": (got.get("summary") or "").strip(), "what": what}, usage
+
+
+def types_usage(used):
+    """_ask's {input, output} as the usage object main._record_spend wants."""
+    if not used:
+        return None
+    return type("Usage", (), {"input_tokens": used.get("input", 0), "output_tokens": used.get("output", 0)})()
 
 
 def _open_all(ids):

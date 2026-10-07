@@ -1200,6 +1200,7 @@
     render: render, parseTable: parseTable, parseCents: parseCents,
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
     findSupply: findSupply, setPrice: setPrice,
+    shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
   };
 
   let authKey = null;
