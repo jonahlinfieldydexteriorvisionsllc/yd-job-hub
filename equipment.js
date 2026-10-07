@@ -189,13 +189,14 @@
 
     wrap.innerHTML =
       '<div class="filter-bar">' +
-        ['all', 'machine', 'vehicle'].map(f =>
+        ['all', 'machine', 'vehicle', 'warranty'].map(f =>
           '<button class="btn btn-sm' + (filter === f ? ' btn-filled' : '') +
           '" onclick="filterEquipment(\'' + f + '\')">' +
-          (f === 'all' ? 'Everything' : KINDS[f] + 's') + '</button>').join('') +
+          (f === 'all' ? 'Everything' : f === 'warranty' ? '🛡 Under warranty' : KINDS[f] + 's') + '</button>').join('') +
         '<button class="btn btn-sm btn-accent" onclick="editEquipment(\'\')">+ Add</button>' +
       '</div>' +
-      (list.length
+      (filter === 'warranty' ? warrantyHtml()
+        : list.length
         ? list.map(card).join('')
         : '<p class="empty-msg">Nothing here yet. Add a machine or a truck and start ' +
           'writing down what gets done to it.</p>');
@@ -311,6 +312,8 @@
               '<span class="eq-log-what"><b>' + esc(e.what) + '</b>' +
                 (e.kind === 'repair' ? ' <span class="eq-repair">repair</span>' : '') +
                 '<span class="eq-log-sub">' + [reading, e.by ? esc(e.by) : ''].filter(Boolean).join(' · ') + '</span>' +
+                ((e.parts || []).length ? '<span class="eq-log-sub">Parts: ' + e.parts.map(p => esc(p.name) +
+                  (p.warranty ? ' 🛡 ' + esc(warrantyLeft(g, e, p).text) : '')).join(' · ') + '</span>' : '') +
               '</span>' +
               '<span class="eq-log-cost">' + (e.costCents ? money(e.costCents) : '') + '</span>' +
               '<span class="eq-log-edit">Edit ›</span>' +
@@ -535,15 +538,116 @@
         '</div>' +
         '<div class="hint">Putting the hours or miles in is what lets the next service ' +
           'be worked out. Leave them blank if this machine goes by date.</div>' +
+        '<div class="eq-parts-head">Parts <span class="muted">— list any with a warranty, so it can be found when one fails</span></div>' +
+        '<div id="svParts"></div>' +
+        '<button class="btn btn-sm" type="button" onclick="addPartRow()">+ Add a part</button>' +
         '<div class="field-actions">' +
           '<button class="btn btn-filled" onclick="saveService()">' +
             (e ? 'Save changes' : fixing ? 'Save — mark it fixed' : 'Save') + '</button>' +
           '<button class="btn btn-sm" onclick="renderDetail2()">Cancel</button>' +
         '</div>' +
       '</div>');
+    formParts = (e && Array.isArray(e.parts) ? e.parts : []).map(p => ({
+      id: p.id, name: p.name || '', vendor: p.vendor || '',
+      cost: p.costCents != null ? String(p.costCents / 100) : '',
+      months: p.warranty && p.warranty.months != null ? String(p.warranty.months) : '',
+      miles: p.warranty && p.warranty.miles != null ? String(p.warranty.miles) : '',
+    }));
+    renderPartRows();
     const form = el('eqServiceForm');
     if (form && form.scrollIntoView) form.scrollIntoView({ block: 'nearest' });
     const w = el('svWhat'); if (w) w.focus();
+  }
+
+  // ------------------------------------------------------- parts & warranty
+  //
+  // Jonah (5 Oct 2026): "a warrantee checkbox for parts purchased for vehicle
+  // with a tag and to input the warrantee time so i can easily find what can
+  // be warranteed." A service lists its parts; one with a warranty -- months
+  // and/or miles, whichever runs out first -- shows 🛡 and is in the Under
+  // warranty view until it runs out.
+  let formParts = [];
+  function readPartRows() {
+    formParts = formParts.map((p, i) => ({
+      id: p.id, name: val('svpName' + i), vendor: val('svpVendor' + i), cost: val('svpCost' + i),
+      months: val('svpMonths' + i), miles: val('svpMiles' + i),
+    }));
+  }
+  function renderPartRows() {
+    const box = el('svParts');
+    if (!box) return;
+    const has = v => esc(String(v == null ? '' : v));
+    box.innerHTML = formParts.map((p, i) => '<div class="eq-part-row">' +
+      '<input id="svpName' + i + '" placeholder="Part, e.g. alternator" value="' + has(p.name) + '">' +
+      '<input id="svpVendor' + i + '" placeholder="Bought at" value="' + has(p.vendor) + '">' +
+      '<input id="svpCost' + i + '" inputmode="decimal" placeholder="$" value="' + has(p.cost) + '">' +
+      '<label>🛡 <input id="svpMonths' + i + '" inputmode="numeric" placeholder="months" value="' + has(p.months) + '"></label>' +
+      '<label><input id="svpMiles' + i + '" inputmode="numeric" placeholder="miles" value="' + has(p.miles) + '"></label>' +
+      '<button class="remove-btn" type="button" onclick="removePartRow(' + i + ')" title="Remove">&times;</button>' +
+    '</div>').join('');
+  }
+  window.addPartRow = function () {
+    readPartRows();
+    formParts.push({ id: 'pt' + Date.now().toString(36), name: '', vendor: '', cost: '', months: '', miles: '' });
+    renderPartRows();
+    const n = el('svpName' + (formParts.length - 1)); if (n) n.focus();
+  };
+  window.removePartRow = function (i) { readPartRows(); formParts.splice(i, 1); renderPartRows(); };
+  // The parts as saved on the entry; rows with no name are dropped.
+  function partsFromForm() {
+    readPartRows();
+    const n = s => { const x = parseFloat(String(s || '').replace(/[$,\s]/g, '')); return isFinite(x) && x > 0 ? x : null; };
+    return formParts.filter(p => p.name.trim()).map(p => {
+      const months = n(p.months), miles = n(p.miles), cost = n(p.cost);
+      return { id: p.id, name: p.name.trim(), vendor: p.vendor.trim(), costCents: cost != null ? Math.round(cost * 100) : null,
+               warranty: months != null || miles != null ? { months: months != null ? Math.round(months) : null,
+                                                              miles: miles != null ? Math.round(miles) : null } : null };
+    });
+  }
+
+  // What is left of one part's warranty: {active, text}. Time from the day
+  // of the service; miles from the reading then against the machine's now.
+  function warrantyLeft(g, e, p) {
+    const w = p.warranty;
+    if (!w) return { active: false, text: '' };
+    const bits = [];
+    let active = true;
+    if (w.months != null) {
+      const end = new Date((e.at || '') + 'T00:00:00');
+      end.setMonth(end.getMonth() + w.months);
+      const days = Math.ceil((end - new Date()) / 864e5);
+      if (!(days > 0)) active = false;
+      else bits.push(days >= 60 ? Math.round(days / 30.44) + ' months' : days + ' days');
+    }
+    if (w.miles != null) {
+      const from = e.miles != null ? e.miles : null;
+      if (from == null || g.miles == null) bits.push(fmtNum(w.miles) + ' miles from the reading then');
+      else {
+        const left = from + w.miles - g.miles;
+        if (!(left > 0)) active = false;
+        else bits.push(fmtNum(left) + ' miles');
+      }
+    }
+    return { active: active, text: active ? bits.join(' / ') + ' left' : 'ran out' };
+  }
+  function warrantyParts() {
+    const out = [];
+    Object.values(gear).forEach(g => (g.service || []).forEach(e => (e.parts || []).forEach(p => {
+      if (!p.warranty) return;
+      const left = warrantyLeft(g, e, p);
+      if (left.active) out.push({ g: g, e: e, p: p, left: left });
+    })));
+    return out.sort((a, b) => String(b.e.at || '').localeCompare(String(a.e.at || '')));
+  }
+  function warrantyHtml() {
+    const list = warrantyParts();
+    if (!list.length) return '<p class="empty-msg">Nothing under warranty. When you log a service, list its parts and ' +
+      'put in how long the warranty runs.</p>';
+    return '<div class="eq-warranty">' + list.map(x => '<div class="eq-war-row" role="button" tabindex="0" onclick="openEquipment(\'' + safeId(x.g.id) + '\')">' +
+      '<div><b>🛡 ' + esc(x.p.name) + '</b> — ' + esc(x.g.name || 'Machine') + '</div>' +
+      '<div class="muted">Bought ' + shortDate(x.e.at) + (x.p.vendor ? ' at ' + esc(x.p.vendor) : '') +
+        (x.p.costCents ? ' · ' + money(x.p.costCents) : '') + ' · <b>' + esc(x.left.text) + '</b></div>' +
+    '</div>').join('') + '</div>';
   }
 
   window.renderDetail2 = function () { editingEntry = null; fixingIssue = null; renderDetail(); };
@@ -579,6 +683,7 @@
       hours: num('svHours'),
       miles: num('svMiles'),
       by: val('svBy'),
+      parts: partsFromForm(),
     };
     const fixed = fixingIssue ? (g.issues || []).find(i => i.id === fixingIssue) : null;
     fixingIssue = null;
@@ -627,6 +732,7 @@
       hours: num('svHours'),
       miles: num('svMiles'),
       by: val('svBy'),
+      parts: partsFromForm(),
     });
     const service = (g.service || []).map(e => (e.id === entry.id ? entry : e));
     const patch = { service: service };

@@ -1883,3 +1883,13 @@
   .est-sent-row { padding:6px 0; border-top:1px solid var(--border); }
   .est-sent-row .muted { font-size:12px; }
   .est-care { margin-top:10px; padding:10px 12px; border-radius:8px; background:color-mix(in srgb, #2f8f5b 9%, var(--surface)); font-size:13px; }
+  /* Parts and warranty on a service (equipment.js) */
+  .eq-parts-head { margin:12px 0 6px; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  .eq-parts-head .muted { text-transform:none; letter-spacing:0; font-weight:400; }
+  .eq-part-row { display:grid; grid-template-columns:2fr 1.4fr .8fr .9fr .9fr auto; gap:6px; align-items:center; margin-bottom:6px; }
+  .eq-part-row input { min-width:0; width:100%; }
+  .eq-part-row label { display:flex; align-items:center; gap:4px; font-size:13px; }
+  @media (max-width:720px) { .eq-part-row { grid-template-columns:1fr 1fr; } }
+  .eq-warranty { display:flex; flex-direction:column; gap:8px; }
+  .eq-war-row { padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--surface); cursor:pointer; font-size:14px; }
+  .eq-war-row .muted { font-size:12.5px; margin-top:2px; }
