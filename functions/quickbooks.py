@@ -673,12 +673,51 @@ def _next_number(entity):
     return str(max(nums) + 1) if nums else None
 
 
+def _reserve_number(entity, seen):
+    """The number to give, taken in one Firestore step: one past the higher of
+    what QuickBooks shows (`seen`, or None when it could not be asked) and the
+    last number handed out here. Two saves at the same moment (two devices,
+    or a retry overlapping the first) never get the same number. Kept per
+    QuickBooks company in integrations/quickbooksNumbers (server only)."""
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    ref = _db().collection("integrations").document("quickbooksNumbers")
+    field = "%s_%s" % (realm, entity)
+
+    @firestore.transactional
+    def take(tx):
+        snap = ref.get(transaction=tx)
+        last = ((snap.to_dict() or {}) if snap.exists else {}).get(field)
+        last = int(last) if isinstance(last, int) or str(last or "").isdigit() else None
+        candidates = [n for n in (int(seen) - 1 if seen else None, last) if n is not None]
+        if not candidates:
+            return None
+        n = max(candidates) + 1
+        tx.set(ref, {field: n}, merge=True)
+        return str(n)
+
+    return take(_db().transaction())
+
+
 def _numbered(entity, form):
     """The form, with its number when QuickBooks would leave it without one."""
     if not form.get("DocNumber") and _custom_numbers():
-        n = _next_number(entity)
+        failed = False
+        try:
+            seen = _next_number(entity)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:          # noqa: BLE001
+            # QuickBooks would not say its latest number: carry on from the
+            # last one handed out here, if there is one.
+            print("quickbooks: latest %s number not read (%s)" % (entity, err))
+            seen, failed = None, True
+        n = _reserve_number(entity, seen)
         if n:
             form["DocNumber"] = n
+        elif failed:
+            # Nothing to go on: better no form than one with no number.
+            raise RuntimeError("QuickBooks didn't say what %s number comes next — try again" % entity.lower())
+        # else: no numbered forms yet anywhere -- QuickBooks decides, as before.
     return form
 
 
