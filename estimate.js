@@ -898,7 +898,7 @@
           (m.unit && unitKey(t.unit) !== unitKey(m.unit)
             ? '<label><span>One ' + esc(t.unit || 'of these') + ' covers (' + esc(m.unit) + ')</span><input inputmode="decimal" value="' + esc(t.covers || '') + '" ' +
               'oninput="estToSupSet(\'' + id + '\', \'covers\', this.value)"></label>' : '') +
-          '<label><span>Cost each ($)</span><input inputmode="decimal" value="' + esc(t.cost) + '" placeholder="blank = no price yet" ' +
+          '<label><span>Cost per ' + esc(t.unit || 'each') + ' ($)</span><input inputmode="decimal" value="' + esc(t.cost) + '" placeholder="blank = no price yet" ' +
             'oninput="estToSupSet(\'' + id + '\', \'cost\', this.value)"></label>' +
           '<label><span>Kind</span><select onchange="estToSupSet(\'' + id + '\', \'category\', this.value)">' +
             cats.map(([k, n]) => '<option value="' + k + '"' + (t.category === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +

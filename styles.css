@@ -2114,3 +2114,11 @@
   .bd-rain { display:flex; flex-direction:column; gap:14px; }
   .bd-rain-head { font-weight:700; font-size:14px; padding:4px 8px; border-left:4px solid var(--c); }
   .bd-rain-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; margin-top:6px; }
+  /* Equipment on a phone: the type filters on one line to swipe along, the
+     Add button first so it never scrolls out of reach. */
+  @media (max-width:720px) {
+    #panel-equipment .filter-bar { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; }
+    #panel-equipment .filter-bar::-webkit-scrollbar { display:none; }
+    #panel-equipment .filter-bar .btn { flex:none; white-space:nowrap; }
+    #panel-equipment .filter-bar .btn-accent { order:-1; }
+  }
