@@ -88,12 +88,25 @@ SYSTEM = (
     "is.\n\n"
     "You are talking with Jonah. `reply` is your answer to his latest message: short and plain, "
     "like a colleague -- what you changed, or the answer to what he asked. When he asks for a "
-    "change, or there is no estimate yet, set updated to true and give the WHOLE estimate as it "
-    "should now be (every line), keeping the id of every line you keep and leaving lines he did "
-    "not mention exactly as they are, including ones he changed by hand. A new line has an empty "
-    "id. When he only asks a question, set updated to false and give EMPTY work and materials "
-    "lists -- the app keeps the estimate as it is (re-writing it costs money and time)."
+    "change, or there is no estimate yet, set updated to true and give the lines as the message "
+    "says (HOW TO GIVE THE LINES, at its end): keep the id of every line you keep, leave lines he "
+    "did not mention exactly as they are (including ones he changed by hand), and give a new line "
+    "an empty id. When he only asks a question, set updated to false and give EMPTY work, "
+    "materials and removed lists -- the app keeps the estimate as it is (re-writing it costs "
+    "money and time)."
 )
+
+# How the lines come back, said in the message (not the cached system text,
+# so the cache holds for both). "Only what changed" is asked for only when
+# the app says it can merge that (patchOk) and there is an estimate to change:
+# an older copy of the app, still cached on a phone, would read a partial
+# list as the whole estimate and drop the rest.
+WHOLE = ("HOW TO GIVE THE LINES: the WHOLE estimate as it should now be -- every labour line and every "
+         "material, the ones you did not change included. `removed` is empty.")
+PATCH = ("HOW TO GIVE THE LINES: ONLY what changes. In work and materials give just the lines you add "
+         "(empty id) or change (their id, every field as the line should now be); a line you do not "
+         "give stays exactly as it is. Put the id of every line to take off in `removed`. spoilCuYd is "
+         "the whole job's figure as it should now be.")
 
 SCHEMA = {
     "type": "object",
@@ -134,8 +147,9 @@ SCHEMA = {
         "spoilCuYd": {"type": "number"},
         "questions": {"type": "array", "items": {"type": "string"}},
         "flags": {"type": "array", "items": {"type": "string"}},
+        "removed": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["reply", "updated", "work", "materials", "spoilCuYd", "questions", "flags"],
+    "required": ["reply", "updated", "work", "materials", "spoilCuYd", "questions", "flags", "removed"],
     "additionalProperties": False,
 }
 
@@ -359,7 +373,14 @@ def _prompt(d):
         "",
         "JONAH'S LATEST MESSAGE:",
         str(chat[-1].get("text") or "")[:6000] if chat else "(none)",
+        "",
+        PATCH if _patching(d) else WHOLE,
     ])
+
+
+def _patching(d):
+    cur = d.get("current") or {}
+    return d.get("patchOk") is True and bool((cur.get("work") or []) or (cur.get("materials") or []))
 
 
 # ----------------------------------------------------------------- the call
@@ -462,7 +483,10 @@ def draft(client, d):
             "costEachDollars": max(0.0, round(_num(m.get("costEachDollars")) or 0, 2)),
             "delivery": m.get("delivery") if m.get("delivery") in ("pickup", "rides") else "auto",
         })
+    patching = _patching(d)
+    removed = [str(i) for i in got.get("removed") or [] if str(i) in work_ids or str(i) in mat_ids] if patching else []
     return {"reply": str(got.get("reply") or "").strip(), "updated": bool(got.get("updated", True)),
+            "mode": "patch" if patching else "whole", "removed": removed,
             "work": work, "materials": materials,
             "spoilCuYd": max(0.0, round(_num(got.get("spoilCuYd")) or 0, 1)),
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],

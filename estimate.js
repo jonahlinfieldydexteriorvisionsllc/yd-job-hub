@@ -1290,40 +1290,52 @@
 
   // Claude's estimate onto ours (e), line by line by id.
   function mergeWork(got, e) {
-    return (got || []).map(g => {
-      const was = g.id ? e.work.find(w => w.id === g.id) : null;
-      const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
-      w.title = String(g.title || '');
-      w.scope = String(g.scope || '');
-      w.kind = ['crew', 'flat', 'amount'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
-      if (w.kind === 'crew' && num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
-      if (w.kind === 'flat') {
-        const p = g.priceId && book[g.priceId] ? book[g.priceId] : null;
-        if (p) {
-          if (w.priceId !== g.priceId || num(w.rateCents) === null) w.rateCents = Number.isInteger(p.priceCents) ? p.priceCents : null;
-          w.priceId = g.priceId; w.unit = p.unit || 'each';
-        }
-        if (num(g.qty) !== null) w.qty = num(g.qty);
+    return (got || []).map(g => workLine(g, g.id ? e.work.find(w => w.id === g.id) : null));
+  }
+  function workLine(g, was) {
+    const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
+    w.title = String(g.title || '');
+    w.scope = String(g.scope || '');
+    w.kind = ['crew', 'flat', 'amount'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
+    if (w.kind === 'crew' && num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
+    if (w.kind === 'flat') {
+      const p = g.priceId && book[g.priceId] ? book[g.priceId] : null;
+      if (p) {
+        if (w.priceId !== g.priceId || num(w.rateCents) === null) w.rateCents = Number.isInteger(p.priceCents) ? p.priceCents : null;
+        w.priceId = g.priceId; w.unit = p.unit || 'each';
       }
-      if (w.kind === 'amount' && num(g.amountDollars) > 0) w.amountCents = Math.round(num(g.amountDollars) * 100);
-      return w;
-    });
+      if (num(g.qty) !== null) w.qty = num(g.qty);
+    }
+    if (w.kind === 'amount' && num(g.amountDollars) > 0) w.amountCents = Math.round(num(g.amountDollars) * 100);
+    return w;
   }
   function mergeMaterials(got, e) {
+    return (got || []).map(g => matLine(g, g.id ? e.materials.find(m => m.id === g.id) : null));
+  }
+  function matLine(g, was) {
     const items = catalog().items;
-    return (got || []).map(g => {
-      const was = g.id ? e.materials.find(m => m.id === g.id) : null;
-      const m = was ? clone(was) : { id: newId('em'), delivery: 'auto' };
-      m.plant = !!g.plant;
-      m.supplyId = !m.plant && g.supplyId && items[g.supplyId] ? g.supplyId : null;
-      m.name = String(g.name || (m.supplyId ? items[m.supplyId].name : '') || '');
-      m.qty = num(g.qty);
-      if (!m.supplyId) m.unit = String(g.unit || m.unit || '');
-      if (m.plant) m.tree = g.tree === 'single' || g.tree === 'multi' ? g.tree : null;
-      if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
-      if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
-      return m;
+    const m = was ? clone(was) : { id: newId('em'), delivery: 'auto' };
+    m.plant = !!g.plant;
+    m.supplyId = !m.plant && g.supplyId && items[g.supplyId] ? g.supplyId : null;
+    m.name = String(g.name || (m.supplyId ? items[m.supplyId].name : '') || '');
+    m.qty = num(g.qty);
+    if (!m.supplyId) m.unit = String(g.unit || m.unit || '');
+    if (m.plant) m.tree = g.tree === 'single' || g.tree === 'multi' ? g.tree : null;
+    if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
+    if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
+    return m;
+  }
+  // Only what changed (r.mode 'patch', estimates.py): the lines given are
+  // changed in place or added at the end, the ids in r.removed come off, and
+  // every other line stays exactly as it is.
+  function patchLines(list, got, removed, line) {
+    const out = list.map(x => clone(x));
+    (got || []).forEach(g => {
+      const i = g.id ? out.findIndex(x => x.id === g.id) : -1;
+      if (i === -1) out.push(line(g, null));
+      else out[i] = line(g, out[i]);
     });
+    return out.filter(x => (removed || []).indexOf(x.id) === -1);
   }
 
   window.estSend = function () {
@@ -1421,6 +1433,9 @@
         siteNotes: String(e0.notes || '').trim(),
         chat: e0.chat.slice(-30).map(m => ({ role: m.role, text: m.text })),
         current: currentForClaude(e0, job.city),
+        // This copy of the app can take just the lines that change (less for
+        // Claude to write, so cheaper and quicker).
+        patchOk: true,
       });
       land(jobId, r);
     } catch (e) {
@@ -1439,11 +1454,14 @@
   // Claude's answer onto an estimate: the lines merged by id, its questions
   // and flags, its reply in the conversation. Returns whether it changed lines.
   function apply(e, r) {
-    const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length));
+    const patch = r.mode === 'patch';
+    const spoil = num(r.spoilCuYd) !== null ? (num(r.spoilCuYd) || null) : e.spoilCuYd;
+    const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length ||
+      (patch && ((r.removed || []).length || spoil !== e.spoilCuYd))));
     if (did) {
-      e.work = mergeWork(r.work, e);
-      e.materials = mergeMaterials(r.materials, e);
-      if (num(r.spoilCuYd) !== null) e.spoilCuYd = num(r.spoilCuYd) || null;
+      e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
+      e.materials = patch ? patchLines(e.materials, r.materials, r.removed, matLine) : mergeMaterials(r.materials, e);
+      e.spoilCuYd = spoil;
     }
     e.questions = (r.questions || []).map(String);
     e.flags = (r.flags || []).map(String);
