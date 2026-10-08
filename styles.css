@@ -2122,3 +2122,6 @@
     #panel-equipment .filter-bar .btn { flex:none; white-space:nowrap; }
     #panel-equipment .filter-bar .btn-accent { order:-1; }
   }
+  /* Crew tasks: cards tagged Crew on other boards */
+  .bd-crew-lane { margin-top:18px; padding-top:12px; border-top:1px dashed var(--border-strong); }
+  .bd-crew-head { font-weight:700; font-size:14px; margin-bottom:8px; color:var(--text); }

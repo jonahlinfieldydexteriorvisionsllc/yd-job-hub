@@ -158,7 +158,13 @@ service cloud.firestore {
         || (docId in ['invoicing', 'quickbooksMap'] && canSee('billing'));
       allow write: if isOwner()
         || (docId == 'snow' && canChange('snow'))
-        || (docId in ['invoicing', 'quickbooksMap'] && canChange('billing'));
+        || (docId in ['invoicing', 'quickbooksMap'] && canChange('billing'))
+        // The board list the crew read to find Crew-tagged cards on boards
+        // they are not on (names and columns only): kept up by whoever may
+        // change boards.
+        || (docId == 'public' && canChange('boards')
+            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
+                 .hasOnly(['crewBoards', 'crewBoardsAt']));
     }
 
     // ===================================================================
@@ -534,16 +540,22 @@ service cloud.firestore {
       allow write: if canChange('boards');
 
       match /cards/{cardId} {
+        // A card tagged Crew (the shared label id 'crew') is the crew's from
+        // any board, even one they are not on: Crew tasks lists them all
+        // (Jonah, 6 Oct). They ask for them with labels array-contains 'crew',
+        // which this clause proves.
         allow read: if canSee('boards')
           || (isWorker() && request.auth.uid in
-              get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo);
+              get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo)
+          || (isWorker() && 'crew' in resource.data.labels);
         // Crew can move a card they can see and tick its checklist -- and
         // nothing else. Without the field list, "can move a card" would also
         // mean "can rewrite what it says or who it is assigned to". Only the
         // owner (or an admin who may change boards) creates or deletes.
         allow update: if canChange('boards')
-          || (isWorker() && request.auth.uid in
-                get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo
+          || (isWorker()
+              && (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo
+                  || 'crew' in resource.data.labels)
               && request.resource.data.diff(resource.data).affectedKeys()
                    .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']));
         allow create, delete: if canChange('boards');

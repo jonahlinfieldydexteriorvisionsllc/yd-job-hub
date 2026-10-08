@@ -246,7 +246,9 @@
   // ------------------------------------------------------------ board lists
 
   function visibleBoards() {
-    const stored = Object.values(boards).sort((a, b) =>
+    // A board the crew only see Crew-tagged cards of (loadCrewBoards) is not
+    // one of theirs to open: those cards show on Crew tasks.
+    const stored = Object.values(boards).filter(b => !b.crewOnly).sort((a, b) =>
       (a.order || 0) - (b.order || 0) || String(a.name || '').localeCompare(b.name || ''));
     return seesJobs() ? [BIDS, JOBS].concat(stored) : stored;
   }
@@ -311,7 +313,7 @@
       filterBarHtml(board) +
       (cardFilter === 'rain' && !board.virtual
         ? '<div class="bd-rain">' + rainHtml() + '</div>'
-        : '<div class="bd-cols">' + columnsHtml(board) + '</div>');
+        : '<div class="bd-cols">' + columnsHtml(board) + '</div>' + (board.id === CREW_BOARD ? crewLaneHtml() : ''));
   }
 
   // ------------------------------------------------------------- follow up
@@ -440,6 +442,12 @@
   // the drop was worked out from a different order than the one on screen.)
   const byPlace = (a, b) => urgRank(a) - urgRank(b) || (a.order || 0) - (b.order || 0);
   const RAIN = { id: 'rainday', name: '☔ Rain day', color: '#3b82c4' };
+  // Tagged for the crew: the same label id on every board (the server's
+  // Pickups board uses it too), so the crew can find these cards on boards
+  // they are not on -- the security rules let them read a card whose labels
+  // hold 'crew'.
+  const CREW_LABEL = { id: 'crew', name: '👷 Crew', color: '#c9922f' };
+  const isCrewCard = k => (k.labels || []).indexOf(CREW_LABEL.id) !== -1;
   const isRainy = (board, k) => (k.labels || []).some(id => {
     const l = (board.labels || []).find(x => x.id === id);
     return id === RAIN.id || (l && /rain/i.test(l.name || ''));
@@ -467,6 +475,22 @@
         list.map(k => storedCardHtml(b, k, false)).join('') + '</div></div>' : '';
     }).join('');
     return out || '<p class="empty-msg">Nothing tagged ☔ Rain day yet. Give a card the Rain day label and it shows up here on a wet day.</p>';
+  }
+  // On Crew tasks: every open card tagged 👷 Crew on any other board (Jonah,
+  // 6 Oct). The crew get the ones on boards they are not on through
+  // loadCrewBoards below.
+  function crewLaneHtml() {
+    const groups = Object.values(boards).filter(b => !b.virtual && b.id !== CREW_BOARD)
+      .sort((a, b) => (a.order || 0) - (b.order || 0) || String(a.name || '').localeCompare(b.name || '')).map(b => {
+        const last = doneColOf(b);
+        const list = Object.values(cards[b.id] || {}).filter(k => isCrewCard(k) && colOf(b, k) !== last && shows(b, k))
+          .sort((x, y) => urgRank(x) - urgRank(y) || String(x.due || '9999').localeCompare(String(y.due || '9999')));
+        return list.length ? '<div class="bd-rain-group"><div class="bd-rain-head" style="--c:' + safeColor(b.color) + '">' + esc(b.name) +
+          ' <span class="bd-count">' + list.length + '</span></div><div class="bd-rain-cards">' +
+          list.map(k => storedCardHtml(b, k, false)).join('') + '</div></div>' : '';
+      }).join('');
+    return groups ? '<div class="bd-crew-lane"><div class="bd-crew-head">👷 Tagged Crew on other boards</div><div class="bd-rain">' +
+      groups + '</div></div>' : '';
   }
 
   function columnsHtml(board) {
@@ -1527,6 +1551,70 @@
     });
   }
 
+  // ------------------------------------------------ Crew cards, any board
+  //
+  // The crew can read a card tagged 👷 Crew on any board (firestore.rules),
+  // but not the boards they are not on -- so they cannot know those boards'
+  // names and columns. Whoever may change boards publishes them in
+  // settings/public.crewBoards (names and columns only, nothing else of the
+  // board); a crew phone reads that and watches each such board for its
+  // Crew-tagged cards. Those boards sit in `boards` marked crewOnly: never in
+  // the picker, their cards shown on Crew tasks, moved like any other card.
+  const crewWatch = {};              // boardId -> unsubscribe, on a crew phone
+  let crewPublished = null;          // what this device last wrote
+  function publishCrewBoards() {
+    if (!editsBoards() || !window.YDDb) return;
+    const out = {};
+    Object.values(boards).filter(b => !b.virtual && !b.crewOnly).forEach(b => {
+      out[b.id] = { name: String(b.name || 'Board').slice(0, 80), color: b.color || null,
+                    columns: (b.columns || []).map(c => ({ id: c.id, name: String(c.name || '').slice(0, 60) })) };
+    });
+    const json = JSON.stringify(out);
+    if (json === crewPublished) return;
+    crewPublished = json;
+    Promise.resolve(window.YDDb.get('settings', 'public')).then(pub => {
+      const was = (pub && pub.crewBoards) || {};
+      if (JSON.stringify(was) === json) return;
+      // put() merges map keys: a board deleted since is cleared by name.
+      const patch = Object.assign({}, out);
+      Object.keys(was).forEach(id => { if (!out[id]) patch[id] = null; });
+      write('settings', 'public', { crewBoards: patch, crewBoardsAt: new Date().toISOString() }, 'the board list for the crew');
+    }).catch(e => console.warn('[boards] crew board list not read:', (e && e.code) || e));
+  }
+  function dropCrewBoard(id) {
+    if (crewWatch[id]) { crewWatch[id](); delete crewWatch[id]; }
+    if (boards[id] && boards[id].crewOnly) { delete boards[id]; delete cards[id]; }
+  }
+  let crewLoading = false;
+  function loadCrewBoards() {
+    if (seesAllBoards() || !window.YDDb || !me() || crewLoading) return;
+    crewLoading = true;
+    Promise.resolve(window.YDDb.get('settings', 'public')).then(pub => {
+      const list = (pub && pub.crewBoards) || {};
+      Object.keys(list).forEach(id => {
+        const info = list[id];
+        if (!info || (boards[id] && !boards[id].crewOnly)) return;      // gone, or a board they are on
+        const meta = { name: info.name || 'Board', color: info.color || null, columns: info.columns || [] };
+        if (crewWatch[id]) { Object.assign(boards[id], meta); return; }
+        if (!meta.columns.length) return;
+        boards[id] = Object.assign({ id: id, crewOnly: true }, meta);
+        crewWatch[id] = window.YDDb.watchContains('boards/' + id + '/cards', 'labels', CREW_LABEL.id, changes => {
+          const set = cards[id] = cards[id] || {};
+          changes.forEach(c => {
+            if (c.type === 'removed') delete set[c.id];
+            else set[c.id] = Object.assign({ id: c.id }, c.data);
+          });
+          redrawIfVisible();
+          document.dispatchEvent(new CustomEvent('yd-cards-changed'));
+          if (openCard && openCard.boardId === id && openCard.cardId && !document.getElementById('cdTitle')) renderCardDetail();
+        }, () => { dropCrewBoard(id); redrawIfVisible(); });   // not allowed yet (rules not published): nothing shown
+      });
+      Object.keys(crewWatch).forEach(id => { if (!list[id]) dropCrewBoard(id); });
+      redrawIfVisible();
+    }).catch(() => {}).then(() => { crewLoading = false; });
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadCrewBoards(); });
+
   function onBoards(changes, meta) {
     changes.forEach(c => {
       if (c.type === 'removed') {
@@ -1534,6 +1622,8 @@
         if (cardUnsubs[c.id]) { cardUnsubs[c.id](); delete cardUnsubs[c.id]; }
         delete cards[c.id]; delete cardsLoaded[c.id];
       } else {
+        // Shared with them now: the whole board replaces its Crew cards.
+        if (boards[c.id] && boards[c.id].crewOnly) dropCrewBoard(c.id);
         boards[c.id] = Object.assign({ id: c.id }, c.data);
         watchCards(c.id);
       }
@@ -1558,7 +1648,15 @@
         b.labels = (b.labels || []).concat([RAIN]);
         write('boards', b.id, { labels: b.labels }, 'rain day label');
       });
+      // And the 👷 Crew label, with the one id the crew's reading rule knows.
+      Object.values(boards).forEach(b => {
+        if (b.virtual || b.crewOnly || (b.labels || []).some(l => l.id === CREW_LABEL.id)) return;
+        b.labels = (b.labels || []).concat([CREW_LABEL]);
+        write('boards', b.id, { labels: b.labels }, 'crew label');
+      });
     }
+    if (meta && !meta.fromCache) publishCrewBoards();
+    loadCrewBoards();
     redrawIfVisible();
     // A board itself changed (its sharing, its recurring tasks): recurring.js
     // and the calendar follow.
@@ -1624,6 +1722,8 @@
     if (unsubBoards) { unsubBoards(); unsubBoards = null; }
     if (unsubPeople) { unsubPeople(); unsubPeople = null; }
     Object.values(cardUnsubs).forEach(u => u());
+    Object.keys(crewWatch).forEach(id => { crewWatch[id](); delete crewWatch[id]; });
+    crewPublished = null;
     cardUnsubs = {}; cardsLoaded = {}; boards = {}; cards = {}; people = {}; seeded = false; current = null; ready = false;
   }
 
