@@ -13,7 +13,7 @@ spend in a month (7 Oct: not $90 a month) -- and settings/claude.dailyCapCents,
 so one busy day cannot use up the month. Reaching either stops every Claude
 feature -- the board cards, the receipts reader and anything pressed in the
 app alike -- until the next day (or month), midnight UTC. The month's total
-is kept in claudeUsageMonths/{YYYY-MM} (server only) so the check is one read.
+is the sum of its days' records -- the same figure the app shows.
 """
 
 import datetime
@@ -78,8 +78,6 @@ def add(db, day, task, amount_cents, usage=None, count=True):
         patch["cacheReadTokens"] = firestore.Increment(_get(usage, "cache_read_input_tokens"))
     try:
         db.collection("claudeUsage").document(day).set(patch, merge=True)
-        db.collection("claudeUsageMonths").document(day[:7]).set(
-            {"costCents": firestore.Increment(round(amount_cents, 3))}, merge=True)
     except Exception as e:                          # noqa: BLE001 -- never fail a good answer over bookkeeping
         print("spend: could not record:", e)
 
@@ -101,18 +99,21 @@ def caps(db):
     return pick("dailyCapCents", DEFAULT_CAP_CENTS), pick("monthlyCapCents", DEFAULT_MONTH_CAP_CENTS)
 
 
-def _cost(db, col, doc_id):
-    snap = db.collection(col).document(doc_id).get()
+def _cost_of(snap):
     v = ((snap.to_dict() or {}) if snap.exists else {}).get("costCents")
     return float(v) if isinstance(v, (int, float)) else 0.0
 
 
 def spent_today(db, day=None):
-    return _cost(db, "claudeUsage", day or today())
+    return _cost_of(db.collection("claudeUsage").document(day or today()).get())
 
 
 def spent_month(db, month=None):
-    return _cost(db, "claudeUsageMonths", month or this_month())
+    """The month so far: its days' records, read in one go."""
+    month = month or this_month()
+    last = int(today()[8:10]) if month == this_month() else 31
+    refs = [db.collection("claudeUsage").document("%s-%02d" % (month, d)) for d in range(1, last + 1)]
+    return sum(_cost_of(s) for s in db.get_all(refs))
 
 
 def over_cap(db):

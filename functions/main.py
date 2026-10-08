@@ -556,6 +556,12 @@ def _receipts(request, path, headers):
             return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
         try:
             uid, user = _member(request)
+            # The spending limit first: a photo refused for it must not use up
+            # one of the crew member's photos for the day.
+            import spend
+            why = spend.over_cap(_db)
+            if why:
+                raise RuntimeError(why)
             if user.get("role") == "crew":
                 _crew_photo_allowance(uid)
             day = _check_and_count_usage(uid)
@@ -671,15 +677,20 @@ def _estimate(request, path, headers):
     # searches the web; the app saves the option the owner picks.
     if path == "/estimate/source":
         import sourcing
+        import spend
+        # Counted whatever happens: a search that fails on its third call
+        # has still paid for the first two (and their web searches).
+        meter = {"cents": 0.0}
         try:
-            result, usage = sourcing.find(_claude(), request.get_json(silent=True) or {})
+            result, _ = sourcing.find(_claude(), request.get_json(silent=True) or {}, meter)
         except anthropic.RateLimitError:
             return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
         except Exception as e:                      # noqa: BLE001
             print("estimate source failed:", e)
             return (json.dumps({"error": "The prices could not be looked up. Try again."}), 502, json_headers)
-        if usage is not None:
-            _record_spend(day, "source", usage, sourcing.MODEL)
+        finally:
+            if meter["cents"]:
+                spend.add(_db, day, "source", meter["cents"], meter)
         return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     try:
         result, usage = estimates.draft(_claude(), request.get_json(silent=True) or {})

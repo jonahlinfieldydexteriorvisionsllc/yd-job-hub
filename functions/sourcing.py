@@ -17,6 +17,8 @@ come back from the searches as unconfirmed, for the app to say so.
 import json
 import types
 
+import spend
+
 # Searching and reading supplier pages: the mid-priced model does it well
 # (Jonah, 7 Oct: no Claude feature should cost more than it needs to).
 MODEL = "claude-sonnet-5-5"
@@ -199,7 +201,7 @@ def _tidy(result, items, seen_text):
     return {"results": out, "notes": str(result.get("notes") or "").strip()[:600]}
 
 
-def find(client, body):
+def find(client, body, meter=None):
     """{items: [{id, name, qty, unit, category, notes}], town, vendors} ->
     ({results: [{id, options, note}], notes} or {error}, usage or None)."""
     items = _clean_items(body.get("items"))
@@ -207,6 +209,10 @@ def find(client, body):
         return {"error": "Nothing to look up"}, None
     messages = [{"role": "user", "content": _prompt(items, body)}]
     used = types.SimpleNamespace(input_tokens=0, output_tokens=0)
+    # What the calls cost so far -- web searches included -- kept in the
+    # caller's meter so a search that fails half way is still counted.
+    meter = meter if meter is not None else {}
+    meter.setdefault("cents", 0.0)
     seen_text, answer, nudged = "", None, False
     for _ in range(MAX_TURNS):
         resp = client.beta.messages.create(
@@ -216,6 +222,8 @@ def find(client, body):
         )
         used.input_tokens += resp.usage.input_tokens
         used.output_tokens += resp.usage.output_tokens
+        meter["cents"] += spend.cents(getattr(resp, "model", None) or MODEL, resp.usage)
+        meter["input_tokens"], meter["output_tokens"] = used.input_tokens, used.output_tokens
         seen_text += _search_text(resp.content)
         if resp.stop_reason == "refusal":
             return {"error": "Claude wouldn't look that up"}, used

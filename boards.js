@@ -836,7 +836,7 @@
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       (k.recurring && typeof recurringDetail === 'function'
-        ? recurringDetail(k, here === doneColOf(board)) : '') +
+        ? recurringDetail(k, here === doneColOf(board), boardId) : '') +
       claudeHtml(board, k) +
       '<div class="field-actions">' +
         (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
@@ -1305,11 +1305,14 @@
         ? '<div class="hint">This board is kept in step with the Equipment tab — a card for every machine ' +
           'with a service coming up and every problem noted on one — so it cannot be deleted. ' +
           'Rename it, recolour it or share it as you like.</div>'
+        : id === CREW_BOARD
+        ? '<div class="hint">This board holds the recurring crew tasks (🔁), so it cannot be deleted. ' +
+          'Rename it, recolour it or share it as you like.</div>'
         : '') +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveBoard()">Save</button>' +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Cancel</button>' +
-        (id && id !== MAINTENANCE ? '<button class="btn btn-sm" onclick="removeBoard(\'' + id + '\')">Delete board</button>' : '') +
+        (id && id !== MAINTENANCE && id !== CREW_BOARD ? '<button class="btn btn-sm" onclick="removeBoard(\'' + id + '\')">Delete board</button>' : '') +
       '</div>');
     drawDrafts();
     const n = el('bdName'); if (n && !id) n.focus();
@@ -1452,7 +1455,9 @@
 
   window.removeBoard = function (id) {
     const b = boards[id];
-    if (!b || !editsBoards() || id === MAINTENANCE) return;
+    // Maintenance follows the Equipment tab; Crew tasks holds the recurring
+    // task list (recurring.js) -- deleting either would lose it.
+    if (!b || !editsBoards() || id === MAINTENANCE || id === CREW_BOARD) return;
     const n = Object.keys(cards[id] || {}).length;
     if (!confirm('Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') +
                  '? This cannot be undone.')) return;

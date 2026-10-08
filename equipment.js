@@ -298,7 +298,7 @@
     renderDetail();
   };
   window.closeEquipment = function () {
-    openId = null; editingId = null; notingIssue = false;
+    openId = null; editingId = null; notingIssue = false; newTypes = [];
     const m = el('eqModal');
     if (m) m.classList.remove('active');
   };
@@ -900,8 +900,10 @@
     let pick = (gear[editingId] || {}).kind || 'machine';     // cancelled: as it was
     if (name) {
       const key = name.toLowerCase();
-      const builtIn = Object.keys(KINDS).find(k => k === key || KINDS[k].toLowerCase() === key);
-      const have = typeList().find(k => String(k).toLowerCase() === key);
+      // "Vehicles" is the Vehicle type, not a second one with the same button.
+      const same = k => String(k).toLowerCase() === key || kindName(k).toLowerCase() === key || plural(k).toLowerCase() === key;
+      const builtIn = Object.keys(KINDS).find(same);
+      const have = typeList().find(same);
       if (RESERVED_TYPES.indexOf(key) !== -1) showToast('Pick another name — “' + name + '” is already a filter');
       else if (builtIn || have) pick = builtIn || have;
       else { newTypes.push(name); pick = name; }
@@ -911,6 +913,7 @@
 
   window.cancelEquipmentEdit = function () {
     editingId = null;
+    newTypes = [];                  // a type named but not used goes
     if (openId && gear[openId]) renderDetail();
     else closeEquipment();
   };
@@ -969,7 +972,7 @@
     else rec.dueDate = null;
 
     gear[id] = Object.assign({ id: id }, rec);
-    editingId = null; openId = id;
+    editingId = null; openId = id; newTypes = [];     // the saved machine carries its type now
     renderDetail(); renderEquipment();
     write(id, rec, 'saving ' + name);
     showToast(name + ' saved');

@@ -1247,11 +1247,31 @@
   // the item under its supplier -- the one already here, or added -- with
   // its price (when there is one) and where it came from in its price notes,
   // so the next bid finds it in Supplies. Returns the item's id. Not awaited.
+  // One unit however it is written ("sq. ft" = "sf", "Tons" = "ton"), so a
+  // price per box is never filed on an item bought by the piece.
+  function unitWord(u) {
+    const s = norm(u).replace(/\./g, '').replace(/\s+/g, ' ').trim();
+    const table = [[/^(each|ea|pc|pcs|piece|pieces|unit|units)$/, 'each'], [/^(sq ?ft|sf|square f(ee|oo)t)$/, 'sqft'],
+      [/^(lf|lin ?ft|linear f(ee|oo)t|ft|feet|foot)$/, 'lf'], [/^(tons?|t)$/, 'ton'],
+      [/^(yards?|yds?|cu ?yds?|cubic yards?)$/, 'yd'], [/^(cu ?ft|cubic f(ee|oo)t)$/, 'cuft'], [/^(gal|gallons?)$/, 'gal']];
+    const hit = table.find(([re]) => re.test(s));
+    return hit ? hit[1] : s.replace(/s$/, '');
+  }
+  // A supplier by its name, strictly: the same name, or one name inside the
+  // other ("Home Depot" / "The Home Depot") -- never by initials, which could
+  // file a new supplier's items under the wrong one.
+  function vendorNamed(name) {
+    const k = key(name);
+    if (!k) return null;
+    const vs = Object.values(vendors);
+    return vs.find(v => key(v.name) === k) ||
+      vs.find(v => { const vk = key(v.name); return vk.length >= 4 && k.length >= 4 && (k.indexOf(vk) !== -1 || vk.indexOf(k) !== -1); }) || null;
+  }
   function addSourced(o) {
     if (!edits() || !o || !String(o.vendor || '').trim() || !String(o.name || '').trim()) return null;
     if (o.cents != null && !(o.cents > 0)) return null;
     const now = new Date().toISOString(), writes = [];
-    let v = vendorFor(o.vendor);
+    let v = (o.vendorId && vendors[o.vendorId]) || vendorNamed(o.vendor);
     if (!v) {
       const id = newId('v');
       const rec = { name: String(o.vendor).trim().slice(0, 80), address: '', phone: '', hours: '',
@@ -1262,13 +1282,33 @@
     }
     // The line's own item, when the price is from its supplier (an MDS item
     // with no price, priced from MDS's page) -- not a second copy of it.
-    let it = o.into && items[o.into] && items[o.into].vendorId === v.id ? items[o.into] : findSupply(v.name, o.sku || '', o.name);
+    const inVendor = (sku, name) => {
+      const list = Object.values(items).filter(x => x.vendorId === v.id);
+      const names = x => [x.name].concat(String(x.also || '').split(/[;,]/)).map(key).filter(Boolean);
+      return (sku && list.find(x => x.sku && key(x.sku) === key(sku))) || list.find(x => names(x).indexOf(key(name)) !== -1) || null;
+    };
+    const per = String(o.per || '').trim();
+    // An item already here takes the price only when it is sold the same way;
+    // "Fabric" at $90 a roll is not re-priced at 12 cents a sq ft. Otherwise
+    // the product goes in as its own item, named with how it is sold.
+    const fits = x => { const was = (prices[x.id] || {}).per || x.unit; return !per || !was || unitWord(was) === unitWord(per); };
+    let it = o.into && items[o.into] && items[o.into].vendorId === v.id ? items[o.into] : inVendor(o.sku || '', o.name);
+    let name = String(o.name).trim();
+    if (it && !fits(it)) {
+      name = name + ' (per ' + per + ')';
+      it = inVendor('', name);
+    }
+    // Sold by the bag/roll/box but measured in sq ft (or LF...): how much
+    // one covers, so the estimate orders whole packages.
+    const covers = Number(o.coverage) > 0 && String(o.takeoffUnit || '').trim();
+    if (it && covers && !(Number(it.coverage) > 0)) {
+      const patch = { coverage: Number(o.coverage), takeoffUnit: String(o.takeoffUnit).trim().slice(0, 30), updatedAt: now };
+      Object.assign(it, patch);
+      writes.push(['supplies', it.id, patch]);
+    }
     if (!it) {
       const id = newId('s');
-      // Sold by the bag/roll/box but measured in sq ft (or LF...): how much
-      // one covers, so the estimate orders whole packages.
-      const covers = Number(o.coverage) > 0 && String(o.takeoffUnit || '').trim();
-      const rec = { name: String(o.name).trim().slice(0, 120), also: '', sku: String(o.sku || '').trim().slice(0, 40),
+      const rec = { name: name.slice(0, 120), also: '', sku: String(o.sku || '').trim().slice(0, 40),
                     where: '', notes: String(o.notes || '').trim().slice(0, 300),
                     unit: String(o.per || o.unit || '').trim().slice(0, 30), vendorId: v.id,
                     category: categoryId(o.category) || null,
@@ -1279,7 +1319,7 @@
       writes.push(['supplies', id, rec]);
     }
     if (o.cents > 0) {
-      const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: String(o.per || '').trim() || null,
+      const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: per || null,
                                                year: thisYear(), priceNotes: String(o.note || '').slice(0, 300) || null });
       prices[it.id] = next;
       writes.push(['supplyPrices', it.id, next]);

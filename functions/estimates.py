@@ -175,6 +175,10 @@ def _short_notes(it):
 # notes too short to tell go with everything.
 ALWAYS_KINDS = {"stone", "edging", "hardscape", "soil", "fill", "mulch", "seed", "bagged", "drainage",
                 "hardware", "rental", "planting", "dumpster", "plant"}
+# The only kinds ever left out -- the big ones. Anything else, including an
+# item with no kind or one not on the list (a price found on the web, an
+# older hand-added item), always goes.
+TRIMMED_KINDS = {"wall", "pavers", "natural", "other", "adhesive"}
 KIND_WORDS = [
     (r"patio|paver|walk ?way|walks?\b|path|driveway|landing|stoop|pool deck|steps?\b|stairs?|apron|courtyard|terrace",
      {"pavers", "adhesive"}),
@@ -216,7 +220,8 @@ def catalogue(kinds=None, keep_ids=()):
     items = [kv for kv in items if kv[1].get("name") and kv[1].get("category") not in NOT_FOR_ESTIMATES]
     keep_ids = set(keep_ids)
     if kinds is not None:
-        items = [kv for kv in items if (kv[1].get("category") or "other") in kinds or kv[0] in keep_ids]
+        items = [kv for kv in items if kv[1].get("category") not in TRIMMED_KINDS
+                 or kv[1].get("category") in kinds or kv[0] in keep_ids]
     items.sort(key=lambda kv: (CATEGORY_NAMES.get(kv[1].get("category"), "~"), str(kv[1].get("name", ""))))
     group = None
     for sid, it in items:

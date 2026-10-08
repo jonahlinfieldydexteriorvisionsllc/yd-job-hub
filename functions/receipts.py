@@ -365,7 +365,7 @@ def _ask(client, system, content, schema, effort):
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
     )
     used = {"input": resp.usage.input_tokens, "output": resp.usage.output_tokens,
-            "cents": spend.cents(MODEL, resp.usage)}
+            "cents": spend.cents(getattr(resp, "model", None) or MODEL, resp.usage)}
     if resp.stop_reason == "refusal":
         return None, used, "refused"
     if resp.stop_reason == "max_tokens":

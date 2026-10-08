@@ -110,7 +110,7 @@
       notesTyped = false;
       est = blank();
       if (e && typeof e === 'object') est = fromSaved(e);
-      draftMsg = ''; undo = null;
+      draftMsg = ''; undo = null; toSup = null;
       render();
       autoCheck();
     },
@@ -893,7 +893,11 @@
             '<option value="new"' + (t.vendorId === 'new' ? ' selected' : '') + '>＋ A new supplier…</option></select></label>' +
           (t.vendorId === 'new' ? '<label><span>New supplier’s name</span><input value="' + esc(t.newVendor) + '" ' +
             'oninput="estToSupSet(\'' + id + '\', \'newVendor\', this.value)"></label>' : '') +
-          '<label><span>Sold per</span><input value="' + esc(t.unit) + '" placeholder="each" oninput="estToSupSet(\'' + id + '\', \'unit\', this.value)"></label>' +
+          '<label><span>Sold per</span><input value="' + esc(t.unit) + '" placeholder="each" oninput="estToSupSet(\'' + id + '\', \'unit\', this.value)" onchange="estToSupSet(\'' + id + '\', \'unit\', this.value, true)"></label>' +
+          // Sold by the box but measured on the bid in feet: how much one covers.
+          (m.unit && unitKey(t.unit) !== unitKey(m.unit)
+            ? '<label><span>One ' + esc(t.unit || 'of these') + ' covers (' + esc(m.unit) + ')</span><input inputmode="decimal" value="' + esc(t.covers || '') + '" ' +
+              'oninput="estToSupSet(\'' + id + '\', \'covers\', this.value)"></label>' : '') +
           '<label><span>Cost each ($)</span><input inputmode="decimal" value="' + esc(t.cost) + '" placeholder="blank = no price yet" ' +
             'oninput="estToSupSet(\'' + id + '\', \'cost\', this.value)"></label>' +
           '<label><span>Kind</span><select onchange="estToSupSet(\'' + id + '\', \'category\', this.value)">' +
@@ -926,24 +930,37 @@
   window.estToSupSave = function () {
     if (!toSup || !canAddSupplies()) return;
     const vendors = catalog().vendors;
-    let added = 0, bad = '';
+    // Every row checked first: nothing is saved until all of them are right.
+    const rows = [];
+    let bad = '';
     typedLines().forEach(m => {
       const t = toSup[m.id];
-      if (!t || !t.vendorId) return;
+      if (!t || !t.vendorId || bad) return;
       const vendor = t.vendorId === 'new' ? String(t.newVendor || '').trim() : (vendors[t.vendorId] || {}).name;
       if (!vendor) { bad = 'Give the new supplier a name'; return; }
       const c = String(t.cost || '').trim(), dollarsIn = c === '' ? null : Number(c.replace(/[$,\s]/g, ''));
       if (dollarsIn !== null && !(dollarsIn > 0)) { bad = 'A cost should be a dollar amount, or blank'; return; }
-      // "Terminal cap — Menards" is filed as "Terminal cap" under Menards.
-      const name = String(m.name).trim().replace(new RegExp('\\s+[—–-]\\s*' + vendor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i'), '');
-      const sid = window.YDSupplies.addSourced({ vendor: vendor, name: name, per: String(t.unit || '').trim() || 'each',
-        cents: dollarsIn === null ? null : Math.round(dollarsIn * 100), category: t.category || '',
-        note: 'Added from a bid ' + new Date().toISOString().slice(0, 10) });
-      if (!sid) return;
-      m.supplyId = sid;
-      added++;
+      const per = String(t.unit || '').trim() || 'each';
+      let coverage = null;
+      if (m.unit && unitKey(per) !== unitKey(m.unit)) {
+        coverage = num(String(t.covers || '').replace(/[^0-9.]/g, ''));
+        if (!(coverage > 0)) { bad = 'Say how many ' + m.unit + ' one ' + per + ' of “' + m.name + '” covers'; return; }
+      }
+      rows.push({ m: m, t: t, vendor: vendor, per: per, coverage: coverage, cents: dollarsIn === null ? null : Math.round(dollarsIn * 100) });
     });
     if (bad) { showToast(bad); return; }
+    let added = 0;
+    rows.forEach(r => {
+      // "Terminal cap — Menards" is filed as "Terminal cap" under Menards.
+      const name = String(r.m.name).trim().replace(new RegExp('\\s+[—–-]\\s*' + r.vendor.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i'), '');
+      const sid = window.YDSupplies.addSourced({ vendor: r.vendor, vendorId: r.t.vendorId === 'new' ? null : r.t.vendorId,
+        name: name, per: r.per, cents: r.cents, category: r.t.category || '',
+        coverage: r.coverage, takeoffUnit: r.coverage ? r.m.unit : '',
+        note: 'Added from a bid ' + new Date().toISOString().slice(0, 10) });
+      if (!sid) return;
+      r.m.supplyId = sid;
+      added++;
+    });
     toSup = null;
     changed(true);
     showToast(added ? 'Added ' + added + ' to Supplies and linked ' + (added === 1 ? 'it' : 'them') : 'Pick a supplier for at least one');
@@ -1342,23 +1359,37 @@
   // 'put' (into QuickBooks, not emailed), 'email' (through QuickBooks to the
   // customer -- estToQB still asks before it emails), or null: anything else
   // goes to Claude. Only a clear instruction counts: it needs a doing word.
+  // Only a message that IS the instruction counts -- "put it in QuickBooks",
+  // "ok send it to them", "put it in qb but don't email it". A sentence that
+  // only mentions QuickBooks ("before you put it in QuickBooks, change...",
+  // "don't put it in QuickBooks yet", "I already put it in QB") goes to
+  // Claude, which knows which button does what.
   function qbAsk(text) {
-    const t = String(text || '').toLowerCase();
-    const doing = /\b(put|send|make|create|build|push|add|get|update|e-?mail|enter|load|upload|move|do)\b/.test(t);
-    const noEmail = /\b(don'?t|do not|not|no|without|never)\s+(e-?mail|send)/.test(t) || /\b(not yet|hold off)\b/.test(t);
-    if (/\b(quick ?books|qbo|qb)\b/.test(t)) {
-      // "Don't put it in QuickBooks yet" is not a yes.
-      if (!doing || /\b(don'?t|do not|never|not)\s+(\w+\s+){0,2}(put|add|make|create|build|push|enter|load|upload|move|do)\b/.test(t)) return null;
-      const intoQb = /\b(send|e-?mail)\b[^.]*\b(in)?to (quick ?books|qbo|qb)\b/.test(t);
-      return !noEmail && /\b(e-?mail|send)\b/.test(t) && !intoQb ? 'email' : 'put';
-    }
-    return /^\s*(ok(ay)?|yes|yep|great|perfect|looks good)?[,.!\s]*(go ahead and\s+)?(send|e-?mail) (it|this|the (estimate|bid))( (over )?to (them|him|her|the customer))?[.!\s]*$/.test(t)
-      ? 'email' : null;
+    let t = String(text || '').toLowerCase().replace(/[’‘`]/g, "'").replace(/[.!,;:]+/g, ' ').replace(/\s+/g, ' ').trim();
+    t = t.replace(/^((ok(ay)?|yes|yep|yeah|great|perfect|cool|thanks|good|alright|all right|looks good|sounds good|please|now|so|go ahead and|can you|could you|you can|let's)\s+)+/, '')
+      .replace(/\s+(please|now|thanks|thank you)$/, '').trim();
+    const IT = '( (it|this|that|the (estimate|bid)|this (estimate|bid)))?';
+    const QB = '(quick ?books|qbo|qb)';
+    // To a person ("to casey") -- never "to QuickBooks", which is a put.
+    const WHO = '( (over )?to (them|him|her|the customer|the client|(?!quick ?books\\b|qbo?\\b)[a-z]+))?';
+    // "Send it through QuickBooks" is the button that emails it.
+    if (new RegExp('^(send|e-?mail)' + IT + WHO + ' (through|via|from|with|using) ' + QB + '$').test(t)) return 'email';
+    if (new RegExp('^(send|e-?mail)' + IT + WHO + '$').test(t) && /^(send|e-?mail) (it|this|the|that)/.test(t)) return 'email';
+    const m = t.match(new RegExp('^(put|send|push|create|make|build|enter|load|upload|get|add)' + IT + ' (in|into|in to|to|over to|on) ' + QB));
+    if (!m) return null;
+    const rest = t.slice(m[0].length).trim();
+    if (!rest) return 'put';
+    if (/^(but |and )?(don't|dont|do not|not|no need to|without) (e-?mail|send)(ing)?( it)?( to (them|him|her|the customer|the client))?( yet)?$/.test(rest)) return 'put';
+    if (new RegExp('^(and|then|and then) (e-?mail|send)( it)?' + WHO + '$').test(rest)) return 'email';
+    return null;
   }
   async function qbFromChat(text, want) {
     const jobId = currentJobId, at = new Date().toISOString();
     const reply = { role: 'assistant', at: at, changed: false,
-                    text: want === 'email' ? 'Sending it through QuickBooks…' : 'Putting it in QuickBooks (not emailing it)…' };
+                    // Worded to stand on its own: if another job is opened
+                    // before QuickBooks answers, this is what stays.
+                    text: want === 'email' ? 'Sending it through QuickBooks — the result shows under the estimate.'
+                      : 'Putting it in QuickBooks, not emailed — the result shows under the estimate.' };
     est.chat.push({ role: 'user', text: text, at: at, changed: false }, reply);
     draftMsg = '';
     changed(true);

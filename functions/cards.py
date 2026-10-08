@@ -341,11 +341,13 @@ def _run_tool(name, args, records, ctx):
     return {"error": "Unknown tool."}
 
 
-def work_card(client, board, card, records):
-    """Claude's go at one card. Returns the record written onto the card."""
+def work_card(client, board, card, records, used=None):
+    """Claude's go at one card. Returns the record written onto the card.
+    `used` (the caller's) keeps the running cost, so a card that fails part
+    way is still counted against the spending limit."""
     messages = [{"role": "user", "content": _card_prompt(board, card, records)}]
     ctx = {"drafts": [], "checklist": []}
-    used = {"input": 0, "output": 0, "cents": 0.0}
+    used = used if used is not None else {"input": 0, "output": 0, "cents": 0.0}
     finished = None
     for _ in range(MAX_TURNS):
         resp = client.beta.messages.create(
@@ -357,7 +359,7 @@ def work_card(client, board, card, records):
         )
         used["input"] += resp.usage.input_tokens
         used["output"] += resp.usage.output_tokens
-        used["cents"] += spend.cents(MODEL, resp.usage)
+        used["cents"] += spend.cents(getattr(resp, "model", None) or MODEL, resp.usage)
         # The whole reply goes back on the next turn, untouched.
         messages.append({"role": "assistant", "content": resp.content})
         if resp.stop_reason == "refusal":
@@ -422,12 +424,18 @@ def _candidates(db, only=None):
             continue
         board = b.to_dict() or {}
         cols = board.get("columns") or []
-        last = cols[-1].get("id") if cols else None
+        # The column named Done, else the last (boards.js doneColOf): Crew
+        # tasks has a column after Done.
+        named = [x.get("id") for x in cols if str(x.get("name") or "").strip().lower() == "done"]
+        last = named[0] if named else (cols[-1].get("id") if cols else None)
         for c in b.reference.collection("cards").stream():
             if only and c.id != only[1]:
                 continue
             k = c.to_dict() or {}
-            if k.get("noClaude") or k.get("auto"):
+            # Recurring crew tasks (tire pressures, the car wash) are the
+            # crew's to do and the office's to sign off -- plain code, not
+            # Claude's.
+            if k.get("noClaude") or k.get("auto") or k.get("recurring") or c.id.startswith("rc-"):
                 continue
             if k.get("column") == last or k.get("doneAt"):
                 continue
@@ -514,15 +522,22 @@ def run(client, only=None):
             break
         left -= 1
         db.collection("claudeUsage").document(day).set({"cards": firestore.Increment(1)}, merge=True)
+        used = {"input": 0, "output": 0, "cents": 0.0}
+        tokens = lambda: {"input_tokens": used["input"], "output_tokens": used["output"]}
         try:
-            done, ctx, used = work_card(client, board, k, records)
+            done, ctx, used = work_card(client, board, k, records, used)
         except anthropic.APIStatusError as e:
             print("cards: claude error", e.status_code, e.message)
+            spend.add(db, day, "card", used["cents"], tokens())
             report.append({"card": c.id, "error": "claude %s" % e.status_code})
             continue
         except anthropic.APIConnectionError:
+            spend.add(db, day, "card", used["cents"], tokens())
             report.append({"card": c.id, "error": "could not reach claude"})
             continue
+        # Counted before the card is written: the card may have been deleted
+        # while Claude worked it.
+        spend.add(db, day, "card", used["cents"], tokens())
         rec = {
             "status": done["status"], "summary": done["summary"], "result": done["result"],
             "drafts": ctx["drafts"], "at": dg._now().isoformat(), "model": MODEL,
@@ -545,9 +560,12 @@ def run(client, only=None):
                 board["labels"] = labels + [LABEL]
         # update(), not set(merge): the whole "claude" record is replaced, so
         # nothing of an earlier run lingers in it.
-        c.reference.update(patch)
-        spend.add(db, day, "card", used["cents"],
-                  {"input_tokens": used["input"], "output_tokens": used["output"]})
+        try:
+            c.reference.update(patch)
+        except Exception as e:      # noqa: BLE001 -- e.g. deleted while Claude worked it
+            print("cards: could not write card", c.id, e)
+            report.append({"card": c.id, "error": "the card could not be written (deleted?)"})
+            continue
         report.append({"card": c.id, "status": done["status"], "drafts": len(ctx["drafts"]),
                        "tokens": used})
     return report

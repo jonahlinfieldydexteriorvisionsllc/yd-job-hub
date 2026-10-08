@@ -76,8 +76,10 @@
     const d = new Date(day + 'T00:00:00');
     if (t.season === 'season' && (d.getMonth() < 3 || d.getMonth() > 9)) return null;
     if (t.every === 'week') {
-      const start = new Date(d); start.setDate(d.getDate() - ((d.getDay() + 6) % 7));     // Monday
-      const due = new Date(start); due.setDate(start.getDate() + 4);                      // Friday
+      // Saturday to Friday, due Friday: a task added (or a new week begun)
+      // on the weekend is due the coming Friday, not the one just gone.
+      const start = new Date(d); start.setDate(d.getDate() - ((d.getDay() + 1) % 7));     // Saturday
+      const due = new Date(start); due.setDate(start.getDate() + 6);                      // Friday
       return { start: ymd(start), due: ymd(due) };
     }
     const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
@@ -189,26 +191,39 @@
         }
         return;
       }
+      if (creating.has(cid)) return;
       const card = {
         title: t.what, due: p.due, column: first, order: (order += 1000), notes: notes(t, machine),
         labels: [LABEL.id], recurring: id, machineId: t.machineId || null, confirmedAt: null,
+        noClaude: true,               // the crew's to do, not Claude's (cards.py skips it too)
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: 'Recurring',
       };
-      have[cid] = Object.assign({ id: cid }, card);
-      put('boards/' + CREW + '/cards', cid, card, 'a recurring card');
+      // Made only if no device has made it yet, in one step on the server:
+      // a device that was offline at the turn of the period must not, on
+      // coming back, write a fresh card over one already done and confirmed.
+      creating.add(cid);
+      Promise.resolve(window.YDDb.transact([['boards/' + CREW + '/cards', cid]], ([cur]) => [cur ? null : card]))
+        .catch(e => console.warn('[recurring] card not made yet:', (e && e.code) || e))
+        .then(() => creating.delete(cid));
     });
     // A task removed or switched off takes its open card with it -- left, it
-    // sat on the board and in every morning summary as "not done". One
+    // sat on the board and in every morning summary as "not done". So does a
+    // card the task's schedule no longer has (weekly changed to monthly, say);
+    // last period's card, still not done, is a real one and stays. One
     // already moved to Done (waiting for an OK) or confirmed stays.
     Object.keys(have).forEach(cid => {
       const k = have[cid];
       if (!k || !k.recurring || k.confirmedAt || k.doneAt) return;
       const t = tasks[k.recurring];
-      if (t && !t.off && t.what) return;
+      if (t && !t.off && t.what) {
+        const p = k.due ? periodOf(t, k.due) : null;
+        if (!k.due || (p && p.due === k.due)) return;
+      }
       delete have[cid];
       Promise.resolve(window.YDDb.remove('boards/' + CREW + '/cards', cid)).catch(() => {});
     });
   }
+  const creating = new Set();         // cards being made right now (sync runs often)
 
   // Confirmed done by the owner or an admin. A task about a machine goes in
   // its service history (not as a service -- it does not move the next one).
@@ -249,11 +264,15 @@
     if (inLast) return '<span class="bd-rc ask" title="Done — waiting to be confirmed">✔ OK?</span>';
     return '<span class="bd-rc" title="Recurring">🔁</span>';
   };
-  window.recurringDetail = function (k, inLast) {
+  // boardId: the board the card is open on -- a card left on Maintenance from
+  // before the move can share its id with this period's card on Crew tasks.
+  window.recurringDetail = function (k, inLast, boardId) {
     if (!k || !k.recurring) return '';
     if (k.confirmedAt) return '<div class="hint">✔ Confirmed ' + new Date(k.confirmedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + '.</div>';
+    const clean = s => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
     return '<div class="bd-rc-box">' + (inLast ? 'Marked done — ' : 'Recurring task. ') +
-      (confirms() ? '<button class="btn btn-sm btn-filled" onclick="confirmRecurring(\'' + String(k.id).replace(/[^A-Za-z0-9_-]/g, '') + '\')">✔ Confirm it was done</button>'
+      (confirms() ? '<button class="btn btn-sm btn-filled" onclick="confirmRecurring(\'' + clean(k.id) + '\'' +
+        (boardId ? ', \'' + clean(boardId) + '\'' : '') + ')">✔ Confirm it was done</button>'
         : 'Jonah or an admin confirms it once it is in Done.') + '</div>';
   };
 
@@ -368,9 +387,11 @@
         if (t.off || !t.what) return;
         const p = periodOf(t, day);
         if (!p || p.due < from || p.due > to || seen[id + p.due]) return;
-        // Not before the task existed (its first period is the one it was added in).
+        // Not before the task existed: its first period is the one it was
+        // added in (or, added out of season, nothing before the day it was).
         const first = t.from ? periodOf(t, t.from) : null;
-        if (first && p.due < first.due) return;
+        const floor = first ? first.due : (t.from || '');
+        if (floor && p.due < floor) return;
         seen[id + p.due] = 1;
         const cid = 'rc-' + id + '-' + p.due, k = cards[cid];
         out.push({ day: p.due, taskId: id, what: t.what, cardId: k ? cid : '',
