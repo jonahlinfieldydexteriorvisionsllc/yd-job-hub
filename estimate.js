@@ -1370,7 +1370,7 @@
       .replace(/\s+(please|now|thanks|thank you)$/, '').trim();
     const IT = '( (it|this|that|the (estimate|bid)|this (estimate|bid)))?';
     const QB = '(quick ?books|qbo|qb)';
-    // To a person ("to casey") -- never "to QuickBooks", which is a put.
+    // To a person ("to pat") -- never "to QuickBooks", which is a put.
     const WHO = '( (over )?to (them|him|her|the customer|the client|(?!quick ?books\\b|qbo?\\b)[a-z]+))?';
     // "Send it through QuickBooks" is the button that emails it.
     if (new RegExp('^(send|e-?mail)' + IT + WHO + ' (through|via|from|with|using) ' + QB + '$').test(t)) return 'email';
