@@ -4,7 +4,8 @@
 // and writes each purchase it finds to receipts/{id}: the store, the date,
 // every line, the tax and the total, and a job it thinks the purchase is for
 // when the delivery address or a name on the order says so. This screen is
-// where each one is put against a job.
+// where each one is sorted: to a job, a vehicle, shop overhead, office
+// overhead, or personal (DEST below).
 //
 // "Add to job" puts the ticked lines into that job's materials (Tracking),
 // one materials line per receipt line, plus that job's share of the sales
@@ -45,8 +46,37 @@
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', other: 'Other',
   };
-  const WHY = { overhead: 'Shop / overhead', personal: 'Personal (deletes it)', notPurchase: 'Not a purchase',
+  // Why a receipt was set aside. 'overhead' and 'personal' are only read
+  // back now (before 9 Oct a receipt was set aside as overhead); both are
+  // places it goes, below.
+  const WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
+  const ASIDE = ['notPurchase', 'alreadyEntered', 'subcontractor'];
+
+  // Where a receipt goes (Jonah, 9 Oct 2026: "sort receipts ... by vehicle/
+  // job/shop overhead/office overhead/personal"). Each split says where its
+  // lines went (`to`); one with no `to` went to a job, as all did before.
+  // The first choice comes from what Claude already said the purchase was
+  // (`kind`, read with the receipt -- no extra call): fuel and repairs to a
+  // vehicle, office things to the office, tools to the shop, the rest a job.
+  const DEST = [['job', '📋 Job'], ['vehicle', '🚚 Vehicle'], ['shop', '🏠 Shop overhead'],
+                ['office', '🗂 Office overhead'], ['personal', '👤 Personal']];
+  const DEST_NAME = { job: 'Job', vehicle: 'Vehicle', shop: 'Shop overhead', office: 'Office overhead', personal: 'Personal' };
+  const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'vehicle',
+    office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop' };
+  const destOf = s => s.to || 'job';
+  const dest = {};            // receipt id -> where it is going, once picked
+  const chosenGear = {};      // receipt id -> vehicle picked
+  function defaultDest(r) {
+    return r.suggest && r.suggest.jobId ? 'job' : (DEST_OF_KIND[r.kind] || 'job');
+  }
+  // The vehicles and machines on the Equipment tab, vehicles first.
+  function gearList() {
+    if (!window.YDEquipment || !ydCan('equipment', 'see')) return [];
+    const cm = YDEquipment.countsMiles || (() => false);
+    return Object.values(YDEquipment.all() || {}).filter(g => g && g.id)
+      .sort((a, b) => (cm(b) - cm(a)) || String(a.name || '').localeCompare(String(b.name || '')));
+  }
 
   const sees = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
   const sorts = () => typeof ydCan === 'function' && ydCan('jobs', 'change');
@@ -153,17 +183,20 @@
     if (on) splitting[rid] = true; else { delete splitting[rid]; delete ticked[rid]; }
     redraw(true);
   };
+  window.rcDest = function (rid, to) {
+    if (!DEST_NAME[to]) return;
+    dest[rid] = to;
+    redraw(true);
+  };
+  window.rcPickGear = function (rid, id) { chosenGear[rid] = id; };
 
-  window.rcAssign = function (rid) {
-    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
-    const r = receipts[rid];
-    if (!r) return;
-    const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
-    if (!jobId) { showToast('Pick the job first'); return; }
+  // The ticked lines (all of them, when not split up) and their share of
+  // the sales tax: by value, the last share taking whatever cent is left so
+  // the shares add up to the receipt exactly.
+  function portion(rid, r) {
     const free = freeLines(r);
     const idxs = tickedLines(rid, r);
-    if (!idxs.length) { showToast('Tick at least one line'); return; }
-
+    if (!idxs.length) { showToast('Tick at least one line'); return null; }
     const lines = r.lines || [];
     const all = lines.reduce((s, l) => s + (l.cents || 0), 0);
     const part = idxs.reduce((s, i) => s + (lines[i].cents || 0), 0);
@@ -171,6 +204,48 @@
     const taxSoFar = (r.splits || []).reduce((s, x) => s + (x.taxCents || 0), 0);
     const tax = last ? (r.taxCents || 0) - taxSoFar
       : (all ? Math.round((r.taxCents || 0) * part / all) : 0);
+    return { free, idxs, lines, part, tax, last };
+  }
+
+  // A vehicle, the shop or the office: kept on the receipt, nothing changes
+  // on a job. The vehicle's own page lists what was sorted to it
+  // (equipment.js receiptsHtml).
+  function assignElsewhere(rid, r, to) {
+    let target;
+    if (to === 'vehicle') {
+      const id = chosenGear[rid];
+      const g = id && gearList().find(x => x.id === id);
+      if (!g) { showToast('Pick the vehicle first'); return; }
+      target = { equipmentId: g.id, name: g.name || 'Vehicle' };
+    } else {
+      target = { name: DEST_NAME[to] };
+    }
+    const p = portion(rid, r);
+    if (!p) return;
+    const splits = (r.splits || []).concat([Object.assign({
+      id: 'sp' + Date.now().toString(36) + uid(), to: to, lines: p.idxs, cents: p.part, taxCents: p.tax,
+      at: new Date().toISOString(), by: (me() || {}).uid || '',
+    }, target)]);
+    const status = p.last ? 'done' : (r.status === 'skipped' ? 'skipped' : 'new');
+    receipts[rid] = Object.assign({}, r, { splits, status });
+    delete ticked[rid];
+    write(rid, { splits, status });
+    showToast(money(p.part + p.tax) + ' → ' + target.name);
+    redraw(true);
+  }
+
+  window.rcAssign = function (rid) {
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    const r = receipts[rid];
+    if (!r) return;
+    const to = dest[rid] || defaultDest(r);
+    if (to === 'personal') { window.rcSkip(rid, 'personal'); return; }
+    if (to !== 'job') { assignElsewhere(rid, r, to); return; }
+    const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
+    if (!jobId) { showToast('Pick the job first'); return; }
+    const p = portion(rid, r);
+    if (!p) return;
+    const { idxs, lines, part, tax, last } = p;
 
     const sid = 'sp' + Date.now().toString(36) + uid();
     const from = (r.vendor || 'Receipt') + (r.orderNo ? ' #' + r.orderNo : '');
@@ -196,7 +271,7 @@
     });
     if (!job) return;
     const splits = (r.splits || []).concat([{
-      id: sid, jobId, jobName: (job.customerName || '').trim() || 'Untitled job',
+      id: sid, to: 'job', jobId, jobName: (job.customerName || '').trim() || 'Untitled job',
       est: String(job.estimateNumber || '').trim(), lines: idxs, cents: part, taxCents: tax,
       at: new Date().toISOString(), by: (me() || {}).uid || '',
     }]);
@@ -266,9 +341,11 @@
     const r = receipts[rid];
     const s = r && (r.splits || []).find(x => x.id === sid);
     if (!s) return;
-    if (!confirm('Take these lines back off ' + s.jobName + '?')) return;
-    // A job deleted since has nothing left to take back.
-    if (readJobBlob(s.jobId)) {
+    const onJob = destOf(s) === 'job';
+    if (!confirm('Take these lines back off ' + (onJob ? s.jobName : s.name || DEST_NAME[destOf(s)]) + '?')) return;
+    // A job deleted since has nothing left to take back; nothing else was
+    // ever written anywhere but the receipt.
+    if (onJob && readJobBlob(s.jobId)) {
       if (!changeJob(s.jobId, list => list.filter(m => !(m.receiptId === rid && m.splitId === sid)),
         list => untickOrdered(list, sid))) return;
     }
@@ -310,8 +387,30 @@
   window.rcSkip = function (rid, why) {
     if (!why || !receipts[rid]) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); redraw(true); return; }
-    // Personal purchases have no business in the hub at all.
-    if (why === 'personal' && owner()) { drop([rid]); showToast('Personal — deleted from the hub'); return; }
+    // Personal purchases have no business in the hub at all (Jonah, 5 Oct).
+    // Part of a receipt already sorted elsewhere keeps the receipt, though --
+    // a vehicle's or the shop's share lives nowhere else -- so the rest is
+    // noted as personal and the receipt is done.
+    if (why === 'personal') {
+      const r = receipts[rid];
+      if ((r.splits || []).length) {
+        const p = portion(rid, r);
+        if (!p) return;
+        const splits = r.splits.concat([{ id: 'sp' + Date.now().toString(36) + uid(), to: 'personal', name: 'Personal',
+          lines: p.idxs, cents: p.part, taxCents: p.tax, at: new Date().toISOString(), by: (me() || {}).uid || '' }]);
+        const status = p.last ? 'done' : r.status;
+        receipts[rid] = Object.assign({}, r, { splits, status });
+        delete ticked[rid];
+        write(rid, { splits, status });
+        showToast('Marked personal');
+        redraw(true);
+        return;
+      }
+      if (owner()) {
+        if (!confirm('Personal — delete this ' + (r.vendor || '') + ' receipt from the hub?')) return;
+        drop([rid]); showToast('Personal — deleted from the hub'); return;
+      }
+    }
     receipts[rid] = Object.assign({}, receipts[rid], { status: 'skipped', skipWhy: why });
     write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
     showToast('Set aside — find it under "Set aside" if that was wrong');
@@ -384,9 +483,14 @@
       '<span class="rc-lamt">' + money(l.cents) + '</span></label>';
   }
 
+  function splitWhere(s) {
+    const to = destOf(s);
+    if (to === 'job') return 'Added to <b>' + jobNameHtml(s.jobName, s.est) + '</b>';
+    return (DEST.find(d => d[0] === to) || ['', ''])[1].split(' ')[0] + ' <b>' + esc(s.name || DEST_NAME[to] || '') + '</b>';
+  }
   function splitsHtml(rid, r) {
     return (r.splits || []).map(s =>
-      '<div class="rc-split"><span>Added to <b>' + jobNameHtml(s.jobName, s.est) + '</b> — ' +
+      '<div class="rc-split"><span>' + splitWhere(s) + ' — ' +
         (s.lines || []).length + ' line' + ((s.lines || []).length === 1 ? '' : 's') +
         (s.taxCents ? ' + tax' : '') + ', ' + money((s.cents || 0) + (s.taxCents || 0)) + '</span>' +
         (sorts() ? '<button class="btn btn-sm" onclick="rcUndo(\'' + rid + '\',\'' + safeId(s.id) + '\')">Undo</button>' : '') +
@@ -402,6 +506,7 @@
     const sug = r.suggest && jobs.find(j => j.id === r.suggest.jobId);
     const owed = r.paid === false && r.docType === 'invoice';
     const split = isSplit(rid, r);
+    const to = dest[rid] || defaultDest(r);
     return '<div class="rc-card" id="rc_' + rid + '">' +
       '<div class="rc-top">' +
         '<span class="rc-vendor">' + esc(r.vendor || 'Receipt') + '</span>' +
@@ -413,10 +518,10 @@
       '<div class="rc-sum">' + esc(r.summary || '') +
         ' <span class="muted">· ' + esc(KIND[r.kind] || 'Other') + '</span></div>' +
       (r.whose === 'unsure' ? '<div class="rc-note">Claude was not sure this one is for the business.</div>' : '') +
-      (sug && free.length ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b> — ' +
+      (sug && free.length && to === 'job' ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b> — ' +
         esc(r.suggest.why || '') + '</div>' : '') +
-      (split && free.length ? '<div class="rc-hint">Tick the lines for one job, add them, then do the rest.' +
-        ((r.splits || []).length ? '' : ' <button class="rc-link" onclick="rcSplit(\'' + rid + '\', false)">All one job after all</button>') +
+      (split && free.length ? '<div class="rc-hint">Tick the lines for one place, add them, then do the rest.' +
+        ((r.splits || []).length ? '' : ' <button class="rc-link" onclick="rcSplit(\'' + rid + '\', false)">All one place after all</button>') +
         '</div>' : '') +
       '<div class="rc-lines">' +
         (r.lines || []).map((_, i) => lineHtml(rid, r, i, at, tickedSet.has(i), split)).join('') +
@@ -426,27 +531,56 @@
           '</span><span class="rc-lamt">' + money(r.taxCents) + '</span></div>' : '') +
       '</div>' +
       (!split && free.length > 1 && sorts() ?
-        '<button class="rc-link" onclick="rcSplit(\'' + rid + '\', true)">Split across jobs</button>' : '') +
+        '<button class="rc-link" onclick="rcSplit(\'' + rid + '\', true)">Split it up (some lines one place, some another)</button>' : '') +
       splitsHtml(rid, r) +
-      (free.length && sorts() ?
-        '<div class="rc-assign">' +
-          '<select class="searchable" id="rcJob_' + rid + '" onchange="rcPickJob(\'' + rid + '\', this.value)">' +
-            '<option value="">Which job?</option>' +
-            jobs.map(j => '<option value="' + safeId(j.id) + '"' + (j.id === pick ? ' selected' : '') + '>' +
-              esc(jobLabel(j)) + '</option>').join('') +
-          '</select>' +
-          '<button class="btn btn-sm btn-filled" onclick="rcAssign(\'' + rid + '\')">Add ' +
-            (tickedSet.size === free.length ? 'to job' : tickedSet.size + ' to job') + '</button>' +
-        '</div>' : '') +
+      (free.length && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
         (sorts() ? '<select class="rc-skip" onchange="rcSkip(\'' + rid + '\', this.value)">' +
-          '<option value="">' + ((r.splits || []).length ? 'The rest is not a job cost…' : 'Not a job cost…') + '</option>' +
-          Object.keys(WHY).map(k => '<option value="' + k + '">' + WHY[k] + '</option>').join('') +
+          '<option value="">Something else…</option>' +
+          ASIDE.map(k => '<option value="' + k + '">' + WHY[k] + '</option>').join('') +
         '</select>' : '') +
         (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')">🗑 Delete</button>' : '') +
       '</div>' +
     '</div>';
+  }
+
+  // Where it is going: one chip each, the first already picked from what
+  // Claude said the purchase was.
+  function destHtml(rid, r, to) {
+    return '<div class="rc-dest">' + DEST.map(([k, label]) =>
+      '<button class="rc-dest-chip' + (k === to ? ' on' : '') + '" onclick="rcDest(\'' + rid + '\', \'' + k + '\')">' +
+      label + '</button>').join('') + '</div>';
+  }
+  // And what goes with that choice: the job, the vehicle, or just the button.
+  function assignHtml(rid, r, to, jobs, pick, tickedSet, free) {
+    const n = tickedSet.size === free.length ? '' : tickedSet.size + ' ';
+    const btn = words => '<button class="btn btn-sm btn-filled" onclick="rcAssign(\'' + rid + '\')">' + words + '</button>';
+    if (to === 'job') {
+      return '<div class="rc-assign">' +
+        '<select class="searchable" id="rcJob_' + rid + '" onchange="rcPickJob(\'' + rid + '\', this.value)">' +
+          '<option value="">Which job?</option>' +
+          jobs.map(j => '<option value="' + safeId(j.id) + '"' + (j.id === pick ? ' selected' : '') + '>' +
+            esc(jobLabel(j)) + '</option>').join('') +
+        '</select>' + btn('Add ' + n + 'to job') + '</div>';
+    }
+    if (to === 'vehicle') {
+      const gear = gearList();
+      if (!gear.length) return '<div class="rc-note">No vehicles on the Equipment tab yet' +
+        (ydCan('equipment', 'see') ? ' — add them there first.' : ' that you can see.') + '</div>';
+      const cur = chosenGear[rid] || '';
+      return '<div class="rc-assign">' +
+        '<select onchange="rcPickGear(\'' + rid + '\', this.value)">' +
+          '<option value="">Which vehicle or machine?</option>' +
+          gear.map(g => '<option value="' + safeId(g.id) + '"' + (g.id === cur ? ' selected' : '') + '>' +
+            esc(g.name || 'Machine') + '</option>').join('') +
+        '</select>' + btn('Add ' + n + 'to vehicle') + '</div>';
+    }
+    if (to === 'personal') {
+      return '<div class="rc-assign">' + btn((r.splits || []).length ? 'Mark ' + (n || 'the rest ') + 'personal'
+        : (owner() ? 'Personal — delete it' : 'Personal — set it aside')) + '</div>';
+    }
+    return '<div class="rc-assign">' + btn('Add ' + n + 'to ' + DEST_NAME[to].toLowerCase()) + '</div>';
   }
 
   // One line in All receipts: what it was, when, what it came to, and where
@@ -530,8 +664,19 @@
 
   // ------------------------------------------------------------ All receipts
 
-  const VIEWS = { all: 'All', done: 'Sorted', skipped: 'Set aside' };
+  const VIEWS = { all: 'All', job: '📋 Jobs', vehicle: '🚚 Vehicles', shop: '🏠 Shop', office: '🗂 Office', skipped: 'Set aside' };
   let view = 'all';
+  // What a receipt put to one place, tax share included. A receipt set aside
+  // as overhead before the places existed counts its unsorted rest as shop.
+  function amountTo(r, to) {
+    const splits = r.splits || [];
+    let c = splits.filter(s => destOf(s) === to).reduce((t, s) => t + (s.cents || 0) + (s.taxCents || 0), 0);
+    if (to === 'shop' && r.status === 'skipped' && r.skipWhy === 'overhead') {
+      c += Math.max(0, (r.totalCents || 0) - splits.reduce((t, s) => t + (s.cents || 0) + (s.taxCents || 0), 0));
+    }
+    return c;
+  }
+  const inView = r => view === 'all' || (view === 'skipped' ? r.status === 'skipped' : amountTo(r, view) > 0);
   window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
   // Typing in the search box redraws only the list under it, so the box keeps
   // its focus and what was typed.
@@ -541,7 +686,7 @@
     if (!words.length) return true;
     const hay = [r.vendor, r.orderNo, r.summary, r.date,
       (r.lines || []).map(l => l.name + ' ' + (l.itemNo || '')).join(' '),
-      (r.splits || []).map(x => x.jobName + ' ' + (x.est || '')).join(' ')].join(' ').toLowerCase();
+      (r.splits || []).map(x => (x.jobName || x.name || '') + ' ' + (x.est || '') + ' ' + DEST_NAME[destOf(x)]).join(' ')].join(' ').toLowerCase();
     return words.every(w => hay.indexOf(w) !== -1);
   }
 
@@ -550,7 +695,7 @@
     if (!wrap) return;
     const words = String((el('rcSearch') || {}).value || '').toLowerCase().split(/\s+/).filter(Boolean);
     const every = allReceipts().filter(r => r.status !== 'new');
-    const shown = every.filter(r => (view === 'all' || r.status === view) && matches(r, words)).sort(byNewest);
+    const shown = every.filter(r => inView(r) && matches(r, words)).sort(byNewest);
     const aside = every.filter(r => r.status === 'skipped' && r.skipWhy !== 'subcontractor');
     el('rcHistBadge').textContent = every.length ? String(every.length) : '';
     el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
@@ -563,21 +708,29 @@
       wrap.innerHTML = '<p class="empty-msg">' + (words.length ? 'Nothing matches.' : 'Nothing here yet.') + '</p>';
       return;
     }
-    // By month, newest first, each with what it came to.
+    // By month, newest first, each with what it came to -- and, under All,
+    // what of it went where (for the books: jobs, vehicles, shop, office).
+    const PLACES = ['job', 'vehicle', 'shop', 'office'];
     const months = [];
     shown.slice(0, 300).forEach(r => {
       const key = String(r.date || '').slice(0, 7);
       let m = months[months.length - 1];
-      if (!m || m.key !== key) { m = { key, rows: [], cents: 0 }; months.push(m); }
-      m.rows.push(r); m.cents += r.totalCents || 0;
+      if (!m || m.key !== key) { m = { key, rows: [], cents: 0, by: {} }; months.push(m); }
+      m.rows.push(r);
+      m.cents += view === 'all' || view === 'skipped' ? (r.totalCents || 0) : amountTo(r, view);
+      PLACES.forEach(p => { m.by[p] = (m.by[p] || 0) + amountTo(r, p); });
     });
     const label = key => {
       const d = new Date(key + '-01T12:00:00');
       return isNaN(d) ? 'No date' : d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
     };
+    const split = m => view !== 'all' ? '' : PLACES.filter(p => m.by[p]).map(p =>
+      DEST_NAME[p].replace(' overhead', '') + ' ' + money(m.by[p])).join(' · ');
     wrap.innerHTML = months.map(m =>
       '<div class="rc-month"><span>' + esc(label(m.key)) + '</span><span>' + m.rows.length + ' · ' +
-        money(m.cents) + '</span></div>' + m.rows.map(rowHtml).join('')).join('') +
+        money(m.cents) + '</span></div>' +
+      (split(m) ? '<div class="rc-month-split">' + esc(split(m)) + '</div>' : '') +
+      m.rows.map(rowHtml).join('')).join('') +
       (shown.length > 300 ? '<p class="empty-msg">Showing the newest 300 — search to find older ones.</p>' : '');
   }
 

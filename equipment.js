@@ -338,6 +338,7 @@
       (g.notes ? '<div class="eq-notes">' + esc(g.notes) + '</div>' : '') +
 
       issuesHtml(g) +
+      receiptsHtml(g) +
 
       '<div class="eq-loghead">Service history' +
         '<button class="btn btn-sm btn-filled" onclick="addService()">+ Log a service</button>' +
@@ -368,6 +369,36 @@
           }).join('') + '</div>'
         : '<p class="empty-msg">Nothing logged yet.</p>');
   }
+
+  // Receipts sorted to this vehicle or machine on the Receipts tab (Jonah,
+  // 9 Oct 2026; receipts.js, a split with to 'vehicle'): fuel, parts,
+  // repairs. Read from the receipts, never copied here -- and kept apart from
+  // "Spent on it", which is what was logged with services, so the same
+  // repair is never counted twice.
+  function receiptsHtml(g) {
+    if (!window.YDReceipts || !ydCan('jobs', 'see')) return '';
+    const rows = [];
+    Object.values(YDReceipts.all() || {}).forEach(r => (r.splits || []).forEach(s => {
+      if (s.to === 'vehicle' && s.equipmentId === g.id) rows.push({ r, s });
+    }));
+    if (!rows.length) return '';
+    rows.sort((a, b) => String(b.r.date || '').localeCompare(String(a.r.date || '')));
+    const year = String(new Date().getFullYear());
+    const cents = x => (x.s.cents || 0) + (x.s.taxCents || 0);
+    const thisYear = rows.filter(x => String(x.r.date || '').slice(0, 4) === year).reduce((t, x) => t + cents(x), 0);
+    return '<div class="eq-loghead">🧾 Receipts <span class="muted">' + money(thisYear) + ' this year</span></div>' +
+      '<div class="eq-log">' + rows.slice(0, 15).map(x => '<div class="eq-log-row eq-rc-row">' +
+        '<span class="eq-log-when">' + shortDate(x.r.date) + '</span>' +
+        '<span class="eq-log-what"><b>' + esc(x.r.vendor || 'Receipt') + '</b>' +
+          (x.r.summary ? '<span class="eq-log-sub">' + esc(x.r.summary) + '</span>' : '') + '</span>' +
+        '<span class="eq-log-cost">' + money(cents(x)) + '</span>' +
+        (x.r.link && /^https:\/\/mail\.google\.com\//.test(x.r.link)
+          ? '<a class="btn btn-sm" href="' + esc(x.r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
+      '</div>').join('') + '</div>' +
+      (rows.length > 15 ? '<div class="hint">The newest 15 — the rest are on the Receipts tab (🚚 Vehicles).</div>' : '');
+  }
+  // A receipt sorted while the machine is open shows at once.
+  document.addEventListener('yd-receipts', () => { if (openId && gear[openId]) renderDetail(); });
 
   function eqCard(label, value, state) {
     return '<div class="eq-card' + (state ? ' ' + state : '') + '">' +
