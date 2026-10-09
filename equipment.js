@@ -1074,7 +1074,7 @@
     const board = YDBoards.boards()[MAINT];
     if (!board) {
       const rec = {
-        name: 'Maintenance', color: '#8a6d3b', order: 3, visibleTo: [],
+        name: 'Maintenance', color: '#8a6d3b', order: 3, visibleTo: [], ownerOnly: false,
         columns: [{ id: 'm0', name: 'Due' }, { id: 'm1', name: 'Booked in' }, { id: 'm2', name: 'Done' }],
         labels: [{ id: 'overdue', name: 'Overdue', color: '#d64545' },
                  { id: 'soon', name: 'Due soon', color: '#e0a526' }],

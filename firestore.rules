@@ -541,31 +541,44 @@ service cloud.firestore {
       allow write: if canChange('supplies');
     }
 
+    // A board the owner marks Private (ownerOnly true, Jonah 9 Oct 2026: his
+    // To-buy board) is his alone -- an admin's Boards access does not reach
+    // it, as a private calendar's does not; only someone it is shared with by
+    // name (visibleTo) sees it. Admins ask for "ownerOnly == false" boards,
+    // which is why every board carries the field (boards.js marks old ones).
     match /boards/{boardId} {
-      allow read: if canSee('boards')
+      allow read: if isOwner()
+        || (canSee('boards') && resource.data.ownerOnly == false)
         || (isWorker() && request.auth.uid in resource.data.visibleTo);
-      allow write: if canChange('boards');
+      allow create: if isOwner() || (canChange('boards') && request.resource.data.ownerOnly == false);
+      allow update: if isOwner()
+        || (canChange('boards') && resource.data.ownerOnly == false && request.resource.data.ownerOnly == false);
+      allow delete: if isOwner() || (canChange('boards') && resource.data.ownerOnly == false);
+
+      function boardDoc() { return get(/databases/$(database)/documents/boards/$(boardId)).data; }
+      function openBoard() { return boardDoc().get('ownerOnly', false) == false; }
 
       match /cards/{cardId} {
         // A card tagged Crew (the shared label id 'crew') is the crew's from
         // any board, even one they are not on: Crew tasks lists them all
         // (Jonah, 6 Oct). They ask for them with labels array-contains 'crew',
-        // which this clause proves.
-        allow read: if canSee('boards')
-          || (isWorker() && request.auth.uid in
-              get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo)
-          || (isWorker() && 'crew' in resource.data.labels);
+        // which this clause proves. Never on a private board.
+        allow read: if isOwner()
+          || (canSee('boards') && openBoard())
+          || (isWorker() && request.auth.uid in boardDoc().visibleTo)
+          || (isWorker() && 'crew' in resource.data.labels && openBoard());
         // Crew can move a card they can see and tick its checklist -- and
         // nothing else. Without the field list, "can move a card" would also
         // mean "can rewrite what it says or who it is assigned to". Only the
         // owner (or an admin who may change boards) creates or deletes.
-        allow update: if canChange('boards')
+        allow update: if isOwner()
+          || (canChange('boards') && openBoard())
           || (isWorker()
-              && (request.auth.uid in get(/databases/$(database)/documents/boards/$(boardId)).data.visibleTo
-                  || 'crew' in resource.data.labels)
+              && (request.auth.uid in boardDoc().visibleTo
+                  || ('crew' in resource.data.labels && openBoard()))
               && request.resource.data.diff(resource.data).affectedKeys()
                    .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']));
-        allow create, delete: if canChange('boards');
+        allow create, delete: if isOwner() || (canChange('boards') && openBoard());
       }
     }
 

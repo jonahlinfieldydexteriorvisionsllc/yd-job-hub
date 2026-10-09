@@ -60,6 +60,9 @@
     crew: { label: 'Crew task list', columns: ['To do', 'Doing', 'Done'] },
     admin: { label: 'To-do list', columns: ['This week', 'Recurring', 'Waiting on', 'Done'] },
     blank: { label: 'Blank', columns: ['To do', 'Done'] },
+    // Jonah (9 Oct 2026): "something to track things i want to purchase".
+    // Bought is the done column, so a bought thing leaves the board next day.
+    tobuy: { label: 'To-buy list', columns: ['Want', 'Researching', 'Ready to buy', 'Bought'] },
   };
 
   // Colours a board or a label can be. Picked to be told apart at a glance in
@@ -299,6 +302,7 @@
         list.map(b => '<button class="bd-chip' + (b.id === current ? ' on' : '') +
           '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + b.id + '\')">' +
           '<span class="bd-dot"></span>' + esc(b.name || 'Board') +
+          (b.ownerOnly ? ' <span title="Private — only you">🔒</span>' : '') +
           (b.visibleTo && b.visibleTo.length && editsBoards()
             ? '<span class="bd-shared" title="Shared with crew">👥 ' + b.visibleTo.length + '</span>' : '') +
           '</button>').join('') +
@@ -431,8 +435,11 @@
     if (b.id === 'jobs') return 'Every job you have won, until it is paid. Moving a card changes the job’s status.' +
       (touch ? ' Tap a card to move it.' : '');
     const shared = (b.visibleTo || []).map(uid => personName(uid)).filter(Boolean);
+    // Admins with Boards access see every board that is not private, so
+    // "only you" is said of a private one alone.
     return (editsBoards()
-      ? (shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Only you can see this board')
+      ? (b.ownerOnly ? '🔒 Private — ' + (shared.length ? 'you and ' + shared.map(esc).join(', ') : 'only you')
+        : shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Not shared with the crew')
       : 'Shared with you') +
       (touch && canMove(b.id) ? '. Tap a card to move it.' : '');
   }
@@ -1515,6 +1522,11 @@
         '<button class="btn btn-sm" onclick="bdLabelAdd()">+ Add a label</button>' +
       '</div>' +
       '<div class="field"><span class="label">Who can see it</span>' +
+        // Private: the owner's alone (firestore.rules). Only the owner sets
+        // it -- an admin cannot hide a board from the person who runs it.
+        (isOwner() && id !== MAINTENANCE && id !== CREW_BOARD
+          ? '<label class="chk"><input type="checkbox" id="bdPrivate"' + (b.ownerOnly ? ' checked' : '') + '> ' +
+            '🔒 Private — only you (admins don’t see it unless you tick them below)</label>' : '') +
         (crew.length
           ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdShare" value="' +
               esc(p.uid) + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
@@ -1634,6 +1646,8 @@
       columns: columns,
       labels: labels,
       visibleTo: Array.from(document.querySelectorAll('.bdShare:checked')).map(i => i.value),
+      // Always written: admins ask for ownerOnly == false (start()).
+      ownerOnly: isOwner() ? !!(el('bdPrivate') && el('bdPrivate').checked) : false,
       order: was.order != null ? was.order : Object.keys(boards).length + 1,
       createdAt: was.createdAt || nowIso(),
       updatedAt: nowIso(),
@@ -1762,7 +1776,8 @@
   function publishCrewBoards() {
     if (!editsBoards() || !window.YDDb) return;
     const out = {};
-    Object.values(boards).filter(b => !b.virtual && !b.crewOnly).forEach(b => {
+    // A private board's name and columns are not the crew's business either.
+    Object.values(boards).filter(b => !b.virtual && !b.crewOnly && !b.ownerOnly).forEach(b => {
       out[b.id] = { name: String(b.name || 'Board').slice(0, 80), color: b.color || null,
                     columns: (b.columns || []).map(c => ({ id: c.id, name: String(c.name || '').slice(0, 60) })) };
     });
@@ -1851,6 +1866,14 @@
         b.labels = (b.labels || []).concat([CREW_LABEL]);
         write('boards', b.id, { labels: b.labels }, 'crew label');
       });
+      // Boards made before private ones existed say nothing either way. Each
+      // is marked not private once, or an admin -- who asks for
+      // "ownerOnly == false" -- would never see it.
+      Object.values(boards).forEach(b => {
+        if (b.virtual || b.crewOnly || typeof b.ownerOnly === 'boolean') return;
+        b.ownerOnly = false;
+        write('boards', b.id, { ownerOnly: false }, 'not private');
+      });
     }
     if (meta && !meta.fromCache) publishCrewBoards();
     loadCrewBoards();
@@ -1870,7 +1893,7 @@
     try { flags = await window.YDDb.get('settings', 'seeds'); } catch (e) { return; }
     if ((flags && flags.wishes) || boards[WISHES]) return;
     const b = {
-      name: 'Job Hub wishes', color: '#2a9d8f', order: 90, visibleTo: [],
+      name: 'Job Hub wishes', color: '#2a9d8f', order: 90, visibleTo: [], ownerOnly: false,
       columns: [{ id: 'w0', name: 'New wishes' }, { id: 'w1', name: 'On the wish list' }, { id: 'w2', name: 'Built' }],
       labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
     };
@@ -1897,7 +1920,7 @@
 
   function seedBoards() {
     const mk = (id, name, color, tpl, order) => ({
-      name: name, color: color, order: order, visibleTo: [],
+      name: name, color: color, order: order, visibleTo: [], ownerOnly: false,
       columns: TEMPLATES[tpl].columns.map((n, i) => ({ id: tpl + i, name: n })),
       labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
     });
@@ -1927,8 +1950,29 @@
   function start(a) {
     stop();
     if (!window.YDDb || !a.user) return;
-    if (seesAllBoards()) {
+    if (a.isOwner) {
       unsubBoards = window.YDDb.watch('boards', onBoards);
+    } else if (seesAllBoards()) {
+      // An admin never asks for the whole collection: the rules refuse a
+      // question whose answer could include a private board of the owner's.
+      // Two questions instead -- every board not kept private, and any shared
+      // with them by name -- and a board goes only when neither returns it
+      // (as calendar.js does for private calendars).
+      const from = {};
+      const tagged = name => (changes, meta) => {
+        const pass = [];
+        changes.forEach(c => {
+          const s = from[c.id] || (from[c.id] = new Set());
+          if (c.type === 'removed') {
+            s.delete(name);
+            if (!s.size) { delete from[c.id]; pass.push(c); }
+          } else { s.add(name); pass.push(c); }
+        });
+        if (pass.length || meta) onBoards(pass, meta);
+      };
+      const open = window.YDDb.watchWhere('boards', 'ownerOnly', false, tagged('open'), () => redrawIfVisible());
+      const mine = window.YDDb.watchContains('boards', 'visibleTo', a.user.uid, tagged('mine'), () => redrawIfVisible());
+      unsubBoards = () => { open(); mine(); };
     } else {
       // Crew may only ask for the boards that list them.
       unsubBoards = window.YDDb.watchContains('boards', 'visibleTo', a.user.uid, onBoards,

@@ -129,7 +129,9 @@ def _sees_board(user, board):
     """Whether this person may read this board -- the security rules' test."""
     if user.get("role") == "owner" or user["uid"] in (board.get("visibleTo") or []):
         return True
-    return user.get("role") == "admin" and (user.get("access") or {}).get("boards", "none") in ("see", "change")
+    # A private board (ownerOnly) is the owner's, whatever an admin's access.
+    return user.get("role") == "admin" and board.get("ownerOnly") is not True \
+        and (user.get("access") or {}).get("boards", "none") in ("see", "change")
 
 
 def _card_reminders(db, people, since, now):

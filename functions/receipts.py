@@ -742,7 +742,7 @@ def _board(db, board_id):
         return board_id, snap.to_dict() or {}
     if board_id == PICKUPS:
         now = dg._now().isoformat()
-        board = {"name": "Pickups", "color": "#e07b24", "order": 3, "visibleTo": [],
+        board = {"name": "Pickups", "color": "#e07b24", "order": 3, "visibleTo": [], "ownerOnly": False,
                  "columns": [{"id": "pk0", "name": "Ready to pick up"}, {"id": "pk1", "name": "Picked up"}],
                  "labels": DEFAULT_LABELS, "createdAt": now, "updatedAt": now}
         ref.set(board)
