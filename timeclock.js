@@ -14,6 +14,10 @@
 //
 // A pause is still PAID. Only the client's side of it goes away.
 //
+// A BREAK is neither: the Break button clocks the person out (endedFor
+// 'break') and "Clock back in" starts a new shift on the same work, so the
+// break sits on no shift at all (see takeBreak).
+//
 // Everything is one document per shift in `timeEntries`, pauses included as an
 // array inside it. A shift is a single person at a single place, so nothing
 // two people do at once can collide -- which is why pauses are not their own
@@ -29,7 +33,19 @@
   const DEFAULT_RATE_CENTS = 2500;   // $25/hr, the standing crew rate
 
   // Buttons, not a text box: this gets tapped in the cold with gloves on.
-  const PAUSE_REASONS = ['Gas', 'Salt / materials', 'Dump run', 'Driving', 'Break', 'Other'];
+  // What a pause is FOR -- still paid, the customer not charged (Jonah, 9 Oct
+  // 2026: "pause ... pauses hours billed to client and they select what
+  // theyre going to do"). A break is not one of these any more: it has its
+  // own button and it is unpaid.
+  const PAUSE_REASONS = ['Gas', 'Salt / materials', 'Dump run', 'Driving', 'Equipment trouble', 'Other'];
+
+  // A BREAK (Jonah, 9 Oct 2026: "a button for break and it takes them off
+  // the clock and they can click a button to clock back in"). It is a real
+  // clock-out, marked endedFor 'break': the break is on no shift, so it is
+  // neither paid nor billed, and nothing in the pay or billing sums changes.
+  // For BREAK_SHOW_HOURS afterwards the clock offers "Clock back in" to the
+  // same work in one tap, and the office sees them as on break.
+  const BREAK_SHOW_HOURS = 4;
 
   let entries = {};      // id -> shift. Crew see only their own; owner sees all.
   let board = {};        // jobId -> { name, address, status }
@@ -388,6 +404,11 @@
   window.pauseClock = function (id, reason) {
     const e = entries[id];
     if (!e || !running(e) || openPause(e)) return;
+    // "Other" says what, in a few words, so the office is not left guessing.
+    if (reason === 'Other') {
+      const what = (prompt('What are you going to do?') || '').trim().slice(0, 60);
+      if (what) reason = 'Other: ' + what;
+    }
     e.pauses = (e.pauses || []).concat([{ startedAt: nowIso(), endedAt: null, reason: reason }]);
     pausingId = null;
     render();
@@ -409,9 +430,10 @@
 
   // --------------------------------------------------------------- clock out
 
-  function endShift(id, why) {
+  function endShift(id, why, extra) {
     const e = entries[id];
     if (!e || !running(e)) return;
+    if (extra) Object.assign(e, extra);
     const stamp = nowIso(), stampMs = Date.now();
     // An open pause is closed too, or the shift would look paused forever and
     // its billable time would be wrong.
@@ -429,10 +451,54 @@
     e.status = needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
 
     render();
-    write(id, { endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status },
+    write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
       why || 'clocking out');
     return e.status;
   }
+
+  // ------------------------------------------------------------------ break
+
+  window.takeBreak = function (id) {
+    const e = entries[id];
+    if (!e || !running(e)) return;
+    const status = endShift(id, 'starting a break', { endedFor: 'break' });
+    showToast('On break — off the clock. Tap Clock back in when you’re back.' +
+      (status === 'pending' ? ' (Over ' + LONG_SHIFT_HOURS + ' hours, so the part before goes to the office to check.)' : ''), 5000);
+  };
+
+  // This person's break, while it is one: their last shift ended for a break,
+  // in the last few hours, nothing started since, and not waved off.
+  const BREAK_DONE_KEY = 'ydjobhub_breakDone';
+  function breakDismissed(id) {
+    try { return localStorage.getItem(BREAK_DONE_KEY) === id; } catch (e) { return false; }
+  }
+  function breakOf(list) {
+    if (list.some(running)) return null;
+    let last = null;
+    list.forEach(e => { if (e.endedAt && (!last || (endMsOf(e) || 0) > (endMsOf(last) || 0))) last = e; });
+    if (!last || last.endedFor !== 'break') return null;
+    if (Date.now() - endMsOf(last) > BREAK_SHOW_HOURS * 3600000) return null;
+    if (list.some(e => startMsOf(e) >= endMsOf(last))) return null;
+    return last;
+  }
+  const myBreak = () => { const b = breakOf(mine()); return b && !breakDismissed(b.id) ? b : null; };
+
+  window.backFromBreak = function (id) {
+    const b = entries[id];
+    if (!b) return;
+    // A storm that has finished, or a job that has gone, is not somewhere to
+    // go back to: the picker instead.
+    const stormGone = b.kind === 'storm' && !(window.YDStorm && YDStorm.current() &&
+      YDStorm.current().id === b.targetId && YDStorm.current().status === 'open');
+    if (stormGone || (b.kind === 'job' && !board[b.targetId])) { window.openJobPicker(); return; }
+    const was = fmtDur(Date.now() - endMsOf(b));
+    window.clockInTo(b.kind, b.targetId, b.targetName);
+    showToast('Back on — ' + b.targetName + ' (break ' + was + ')');
+  };
+  window.endBreakDay = function (id) {
+    try { localStorage.setItem(BREAK_DONE_KEY, id); } catch (e) {}
+    render();
+  };
 
   window.clockOut = function (id) {
     const e = entries[id];
@@ -467,7 +533,7 @@
   // screen sluggish on a phone for no visible gain.
   function manageTicker() {
     const visible = el('panel-clock') && el('panel-clock').classList.contains('active');
-    const live = Object.values(entries).some(running);
+    const live = Object.values(entries).some(running) || !!document.querySelector('[data-live-break]');
     if (visible && live && !ticker) ticker = setInterval(tick, 1000);
     if ((!visible || !live) && ticker) { clearInterval(ticker); ticker = null; }
   }
@@ -480,6 +546,11 @@
       const e = entries[n.dataset.liveEntry];
       if (e && running(e)) n.textContent = fmtDur(paidMs(e));
     });
+    // How long a break has run (the clock card, and On now for the office).
+    document.querySelectorAll('[data-live-break]').forEach(n => {
+      const b = entries[n.dataset.liveBreak];
+      if (b && b.endedAt) n.textContent = fmtDur(Date.now() - endMsOf(b));
+    });
     manageTicker();
   }
 
@@ -489,7 +560,7 @@
     const shift = myOpenShift();
 
     const badge = el('clockBadge');
-    if (badge) badge.textContent = shift ? (openPause(shift) ? 'Paused' : 'On the clock') : '';
+    if (badge) badge.textContent = shift ? (openPause(shift) ? 'Paused' : 'On the clock') : (myBreak() ? 'On break' : '');
 
     if (addingShift) {
       // Built once, then left alone. The clock redraws on every change from
@@ -531,7 +602,24 @@
     wrap.innerHTML = shift ? liveHtml(shift) : idleHtml();
   }
 
+  function breakHtml(b) {
+    const id = safeId(b.id);
+    return '<div class="clock-live clock-onbreak">' +
+      '<div class="clock-where">🍔 On break</div>' +
+      '<div class="clock-elapsed" data-live-break="' + id + '">' + fmtDur(Date.now() - endMsOf(b)) + '</div>' +
+      '<div class="clock-sub">since ' + clockTime(b.endedAt) + ' · off the clock, not paid</div>' +
+      '<div class="clock-actions">' +
+        '<button class="btn btn-filled clock-big" onclick="backFromBreak(\'' + id + '\')">Clock back in — ' +
+          esc(b.targetName) + '</button>' +
+        '<button class="btn btn-sm" onclick="openJobPicker()">Clock in to something else</button>' +
+        '<button class="btn btn-sm" onclick="endBreakDay(\'' + id + '\')">Done for the day</button>' +
+      '</div>' +
+    '</div>';
+  }
+
   function idleHtml() {
+    const b = myBreak();
+    if (b) return breakHtml(b);
     return '<div class="clock-idle">' +
       '<p class="clock-lead">Not on the clock.</p>' +
       '<button class="btn btn-filled clock-big" onclick="openJobPicker()">Clock in</button>' +
@@ -567,7 +655,10 @@
                   ? '<button class="btn btn-filled clock-big" onclick="resumeClock(\'' + safeId(e.id) + '\')">Back on</button>'
                   : '<button class="btn btn-accent clock-big" onclick="askPause(\'' + safeId(e.id) + '\')">Pause</button>')
               : '') +
+            '<button class="btn clock-big clock-break-btn" onclick="takeBreak(\'' + safeId(e.id) + '\')">🍔 Break</button>' +
             '<button class="btn clock-big" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' +
+            '<div class="clock-hint">' + (canPause(e) ? '<b>Pause</b> — still paid, the customer isn’t charged. ' : '') +
+              '<b>Break</b> — off the clock, unpaid.</div>' +
             '<button class="btn btn-sm" onclick="openJobPicker()">Switch to something else</button>' +
             '<button class="btn btn-sm" onclick="openWorker()">My hours</button>' +
           '</div>') +
@@ -694,11 +785,22 @@
     if (!wrap) return;
     const live = Object.values(entries).filter(running)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
+    // Who is on a break right now (off the clock, coming back).
+    const byUid = {};
+    Object.values(entries).forEach(e => { (byUid[e.uid] = byUid[e.uid] || []).push(e); });
+    const breaks = Object.keys(byUid).map(uid => breakOf(byUid[uid])).filter(Boolean);
     const badge = el('onNowBadge');
-    if (badge) badge.textContent = live.length ? live.length + ' working' : '';
+    if (badge) badge.textContent = live.length ? live.length + ' working' + (breaks.length ? ' · ' + breaks.length + ' on break' : '')
+      : breaks.length ? breaks.length + ' on break' : '';
 
-    wrap.innerHTML = (live.length
-      ? live.map(e => {
+    wrap.innerHTML = (live.length || breaks.length
+      ? breaks.map(b => '<div class="on-now paused">' +
+          '<button class="on-who linkish" onclick="openWorker(\'' + safeId(b.uid) + '\')">' + esc(workerOf(b)) + '</button>' +
+          '<span class="on-where">' + esc(b.targetName) + '</span>' +
+          '<span class="on-time">🍔 on break <span data-live-break="' + safeId(b.id) + '">' +
+            fmtDur(Date.now() - endMsOf(b)) + '</span></span>' +
+        '</div>').join('') +
+        live.map(e => {
           const p = openPause(e);
           return '<div class="on-now' + (p ? ' paused' : '') + '">' +
             '<button class="on-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
