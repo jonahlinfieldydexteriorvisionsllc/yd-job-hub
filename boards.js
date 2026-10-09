@@ -448,6 +448,20 @@
   // can see, grouped by board (WISHLIST #1).
   const URGENCY = [['urgent', '🔴 Urgent', 'today'], ['high', '🟠 High', 'this week'],
                    ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
+  // A card's due time and reminder (Jonah, 9 Oct 2026: "make cards and set a
+  // date on them and then they go on my calendar" -- with a time, at that
+  // hour). The same choices as a calendar entry's reminder (calendar.js).
+  const REMIND = [
+    [null, 'No reminder'], [0, 'At the time'], [10, '10 minutes before'], [30, '30 minutes before'],
+    [60, '1 hour before'], [120, '2 hours before'], [1440, 'The day before'], [2880, 'Two days before'],
+  ];
+  function clockText(t) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || ''));
+    if (!m) return '';
+    const h = +m[1];
+    return (h % 12 || 12) + ':' + m[2] + (h < 12 ? ' AM' : ' PM');
+  }
+  const dueText = k => shortDay(k.due) + (k.dueTime ? ', ' + clockText(k.dueTime) : '');
   const urgRank = k => { const i = URGENCY.findIndex(u => u[0] === (k.urgency || 'normal')); return i === -1 ? 2 : i; };
   // A column's order: by urgency, then where people dragged them. (Due date
   // as a second key made dragging do nothing on a board with due dates --
@@ -640,7 +654,7 @@
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
       '<div class="bd-card-foot">' +
-        (k.due ? '<span class="bd-due' + dueState + '">📅 ' + shortDay(k.due) + '</span>' : '') +
+        (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueText(k) + (k.hasReminder ? ' 🔔' : '') + '</span>' : '') +
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
@@ -998,7 +1012,7 @@
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
-        (k.due ? '<span>📅 ' + shortDay(k.due) + '</span>' : '') +
+        (k.due ? '<span>📅 ' + dueText(k) + (k.hasReminder ? ' · 🔔 ' + esc((REMIND.find(r => r[0] === k.remindMins) || [0, ''])[1].toLowerCase()) : '') + '</span>' : '') +
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
@@ -1209,6 +1223,16 @@
         '<div class="field"><span class="label">Due</span>' +
           '<input type="date" id="cdDue" value="' + esc(k.due || '') + '"></div>' +
       '</div>' +
+      // A time puts the card at that hour on the calendar, not just on the
+      // day; the reminder buzzes the phone (functions/reminders.py).
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Time (if it has one)</span>' +
+          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '"></div>' +
+        '<div class="field"><span class="label">Reminder</span><select id="cdRemind">' +
+          REMIND.map(([m, words]) => '<option value="' + (m == null ? '' : m) + '"' +
+            ((k.remindMins == null ? null : k.remindMins) === m ? ' selected' : '') + '>' + esc(words) + '</option>').join('') +
+        '</select></div>' +
+      '</div>' +
       '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
         URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
           ((k.urgency || 'normal') === u ? ' checked' : '') + '><span>' + esc(name) + (hint ? ' <small>' + esc(hint) + '</small>' : '') +
@@ -1389,12 +1413,20 @@
     const keepLink = !job && jobId && jobId === was.jobId;
     const col = val('cdCol') || board.columns[0].id;
     const last = doneColOf(board);
+    const due = val('cdDue') || null;
+    const dueTime = /^\d{2}:\d{2}$/.test(val('cdTime')) ? val('cdTime') : null;
+    const remind = val('cdRemind') === '' ? null : Number(val('cdRemind'));
+    if ((dueTime || remind != null) && !due) { showToast('Pick the day it is due first'); return; }
+    // The reminder goes to whoever set it, and the people on the card.
+    const remindUids = remind == null ? [] : Array.from(new Set((was.remindUids || []).concat(me() ? [me().uid] : [])));
 
     const rec = {
       title: title,
       column: col,
       order: was.column === col && was.order != null ? was.order : endOrder(board.id, col),
-      due: val('cdDue') || null,
+      due: due,
+      dueTime: dueTime,
+      remindMins: remind, hasReminder: remind != null, remindUids: remindUids,
       urgency: ((document.querySelector('input[name="cdUrg"]:checked') || {}).value) || 'normal',
       labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value),
       color: pickedColor('cdColor'),

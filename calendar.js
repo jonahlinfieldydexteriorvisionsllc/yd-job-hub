@@ -254,6 +254,9 @@
         if (x.card.recurring && window.YDRecurring && YDRecurring.visible()) return;
         if (onlyMine && !(x.card.assignees || []).some(a => a.uid === uid)) return;
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
+          // A card with a time sits at that hour (an hour long); without one,
+          // with the day's all-day entries.
+          time: /^\d{2}:\d{2}$/.test(x.card.dueTime || '') ? x.card.dueTime : '',
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done,
           title: '📌 ' + (x.card.title || 'Card'), note: x.board.name,
           crew: x.card.assignees || [] });

@@ -121,7 +121,65 @@ def run():
                     except Exception as err:      # noqa: BLE001
                         print("reminders: push failed for", uid, key, err)
     sent.extend(_urgent_cards(db, people, now))
+    sent.extend(_card_reminders(db, people, since, now))
     return sent
+
+
+def _sees_board(user, board):
+    """Whether this person may read this board -- the security rules' test."""
+    if user.get("role") == "owner" or user["uid"] in (board.get("visibleTo") or []):
+        return True
+    return user.get("role") == "admin" and (user.get("access") or {}).get("boards", "none") in ("see", "change")
+
+
+def _card_reminders(db, people, since, now):
+    """A card with a due date and a reminder (boards.js: Jonah, 9 Oct 2026)
+    buzzes the phone of whoever set it and the people on the card, the way a
+    calendar entry does -- once per due date and time (a card moved to
+    another day reminds again), never once it is done."""
+    out = []
+    try:
+        for b in db.collection("boards").stream():
+            board = b.to_dict() or {}
+            for s in b.reference.collection("cards").where("hasReminder", "==", True).stream():
+                k = s.to_dict() or {}
+                mins = k.get("remindMins")
+                if k.get("doneAt") or not k.get("due") or not isinstance(mins, (int, float)) \
+                        or mins < 0 or mins > MAX_LEAD_MIN:
+                    continue
+                try:
+                    day = datetime.date.fromisoformat(str(k["due"]))
+                except ValueError:
+                    continue
+                ev = {"time": k.get("dueTime"), "allDay": not k.get("dueTime")}
+                start = _start_of(ev, day)
+                due = start - datetime.timedelta(minutes=mins)
+                if not (since < due <= now):
+                    continue
+                key = "card_%s_%s_%s_%s" % (b.id, s.id, day.isoformat(), str(k.get("dueTime") or "allday").replace(":", ""))
+                try:
+                    db.collection("reminderLog").document(key).create({"board": b.id, "card": s.id, "at": now.isoformat()})
+                except AlreadyExists:
+                    continue
+                uids = set(k.get("remindUids") or [])
+                uids.update(a.get("uid") for a in (k.get("assignees") or []) if a.get("uid"))
+                when = dg._fmt_time(k["dueTime"]) if k.get("dueTime") else "Due"
+                today = dg._now().date()
+                on = ("today" if day == today else "tomorrow" if day == today + datetime.timedelta(days=1)
+                      else start.strftime("%a %b ") + str(day.day))
+                note = {"push": {"title": "🔔 " + str(k.get("title") or "A card")[:80],
+                                 "body": " · ".join(x for x in (when + " " + on, board.get("name") or "") if x)}}
+                for uid in uids:
+                    u = people.get(uid)
+                    if not u or not _sees_board(u, board):
+                        continue
+                    try:
+                        out.append({"uid": uid, "card": key, "phones": dg.send_push(uid, note, tag="yd-" + key, ttl=2 * 3600)})
+                    except Exception as err:      # noqa: BLE001
+                        print("reminders: card push failed:", uid, key, err)
+    except Exception as err:          # noqa: BLE001
+        print("reminders: card reminders not read:", err)
+    return out
 
 
 def _urgent_cards(db, people, now):
