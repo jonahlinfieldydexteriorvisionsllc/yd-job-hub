@@ -521,7 +521,15 @@ def _tell_owner(news):
                      "Closed": "Estimate made into an invoice"}.get(n["status"], "Estimate " + str(n["status"]).lower())
             body = "%s — estimate%s %s" % (n["name"], num, _money(n.get("total")))
             if n["status"] == "Accepted":
-                body += ". Open the job to book it and make the invoice."
+                # Booked by the owner's device (sync.js bookIfAccepted).
+                body += ". It's booked as a job — make the invoice from the job."
+        elif n["kind"] == "imported":
+            # An estimate made in QuickBooks itself (quickbooks.import_accepted).
+            title = "📥 New job from QuickBooks"
+            body = "%s accepted estimate%s %s. It's on the Jobs board." % (n["name"], num, _money(n.get("total")))
+        elif n["kind"] == "linked":
+            title = "✅ Estimate accepted"
+            body = "%s accepted estimate%s %s in QuickBooks — linked to their job here." % (n["name"], num, _money(n.get("total")))
         else:
             title = "💵 Payment received"
             body = "%s paid %s on invoice%s — %s still owed" % (n["name"], _money(n.get("paid")), num, _money(n.get("balance")))

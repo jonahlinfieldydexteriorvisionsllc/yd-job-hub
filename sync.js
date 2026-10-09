@@ -119,7 +119,30 @@
     }
     queuePush(id);
     refreshVisible();
+    bookIfAccepted(id, data);
     return true;
+  }
+
+  // Accepted in QuickBooks = booked (Jonah, 9 Oct 2026: "pull accepted
+  // estimates from quickbooks and add them as jobs"). A bid whose estimate
+  // the customer accepted becomes a job by itself, through patchJob like
+  // Make it a job -- so Materials to Order fills from the estimate, which the
+  // server cannot do. The owner's device does it. A bid someone moved AFTER
+  // the acceptance came in (marked lost after all, say) is left where they
+  // put it.
+  const booking = new Set();
+  function bookIfAccepted(id, d) {
+    if (!d || booking.has(id) || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
+    const q = d.qbEstimate || {};
+    if (q.status !== 'Accepted' || !isBidStatus(d.jobStatus) || d.bidStage === 'won') return;
+    if (d.bidStageAt && q.syncedAt && String(d.bidStageAt) > String(q.syncedAt)) return;
+    booking.add(id);
+    setTimeout(() => {
+      const at = new Date().toISOString();
+      const ok = patchJob(id, { bidStage: 'won', bidStageAt: at, jobStatus: 'booked', workStage: 'scheduled', workStageAt: at });
+      booking.delete(id);
+      if (ok) showToast((d.customerName || 'A customer') + ' accepted the estimate in QuickBooks — booked as a job', 6000);
+    }, 0);
   }
 
   function setCloudState(s) {
@@ -402,6 +425,7 @@
             try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(local)); } catch (e) {}
             map[c.id] = buildIndexEntry(c.id, local);
             if (c.id === currentJobId) SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
+            bookIfAccepted(c.id, local);
           }
           keepOurs.push(c.id);
           return;
@@ -413,6 +437,7 @@
           return;
         }
         map[c.id] = buildIndexEntry(c.id, c.data);
+        bookIfAccepted(c.id, c.data);
         if (c.id === currentJobId) {
           openJobChanged = true;
           // What only the server writes -- QuickBooks' answers, the care

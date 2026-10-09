@@ -1717,12 +1717,11 @@
       if (currentJobId !== jobId) return;
       if (r.missing) { if (!quiet) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
       const before = q.status;
+      // Accepted books the bid by itself, on the owner's device (sync.js
+      // bookIfAccepted, which this save passes through) -- no question asked.
       afterQb(jobId, r, false);
-      if (r.status === 'Accepted' && before !== 'Accepted' && boardFields.bidStage !== 'won' &&
-          confirm('The customer accepted estimate #' + (r.docNumber || '') + ' in QuickBooks.\n\nMark the bid Won and the job Booked?')) {
-        const at = new Date().toISOString();
-        window.YDSync.patchJob(jobId, { bidStage: 'won', bidStageAt: at, jobStatus: 'booked', workStage: 'scheduled', workStageAt: at });
-      } else if (!quiet) {
+      // A fresh "accepted" is announced by the booking itself.
+      if (!quiet && !(r.status === 'Accepted' && before !== 'Accepted')) {
         showToast('QuickBooks says: ' + ({ Pending: 'no answer yet', Accepted: 'accepted', Closed: 'made into an invoice',
           Rejected: 'turned down' }[r.status] || r.status));
       }

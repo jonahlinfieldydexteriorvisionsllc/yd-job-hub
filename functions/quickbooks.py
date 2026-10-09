@@ -41,6 +41,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import secrets
 import time
 import urllib.parse
@@ -843,6 +844,21 @@ def _ours(e, job_id):
     return str((e or {}).get("PrivateNote") or "").strip() == _job_note(job_id)
 
 
+def _belongs(e, job_id, job=None):
+    """This job's estimate: made for it here (_ours), or made in QuickBooks
+    itself and brought in as this job (import_accepted marks the job's record
+    `linked`). The estimate is never written to for that -- the job names it."""
+    if not e:
+        return False
+    if _ours(e, job_id):
+        return True
+    if job is None:
+        snap = _db().collection("jobs").document(job_id).get()
+        job = (snap.to_dict() or {}) if snap.exists else {}
+    q = (job or {}).get("qbEstimate") or {}
+    return bool(q.get("linked") and str(q.get("id")) == str(e.get("Id")) and q.get("env") == _env("QB_ENV", "sandbox"))
+
+
 def save_estimate(body):
     """Create or update the job's estimate in QuickBooks; email it when asked.
 
@@ -878,7 +894,7 @@ def save_estimate(body):
     existing = None
     if body.get("estimateId") and same:
         existing = _query_one("Estimate", "Id = '%s'" % _quote(body["estimateId"]))
-        if existing and not _ours(existing, job_id):
+        if existing and not _belongs(existing, job_id):
             print("quickbooks: estimate %s is not job %s's; making a new one" % (body["estimateId"], job_id))
             existing = None
     if existing and existing.get("TxnStatus") in ("Closed", "Converted"):
@@ -938,7 +954,7 @@ def estimate_status(body):
     if not e:
         return {"missing": True}
     job_id = str(body.get("jobId") or "").strip()
-    if job_id and not _ours(e, job_id):
+    if job_id and not _belongs(e, job_id):
         return {"missing": True, "error": "That QuickBooks estimate belongs to another job"}
     out = _estimate_record(e)
     out["acceptedBy"] = e.get("AcceptedBy")
@@ -1003,7 +1019,7 @@ def invoice_from_estimate(body):
     if not _same_company(body):
         raise RuntimeError("That estimate is in the QuickBooks test company, not the one connected now")
     e = _query_one("Estimate", "Id = '%s'" % _quote(est_id))
-    if not e or not _ours(e, job_id):
+    if not e or not _belongs(e, job_id):
         raise RuntimeError("That estimate isn't in QuickBooks any more")
 
     inv = None
@@ -1126,8 +1142,8 @@ def sweep():
     env = _env("QB_ENV", "sandbox")
     db = _db()
     news = []
-    for snap in db.collection("jobs").stream():
-        j = snap.to_dict() or {}
+    jobs = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").stream()}
+    for job_id, j in jobs.items():
         name = str(j.get("customerName") or "a customer")
         q = j.get("qbEstimate") or {}
         if q.get("id") and q.get("env") == env and (q.get("status") or "Pending") == "Pending":
@@ -1136,11 +1152,13 @@ def sweep():
             except Exception as err:                    # noqa: BLE001
                 print("quickbooks sweep: estimate %s: %s" % (q["id"], err))
                 e = None
-            if e and _ours(e, snap.id) and (e.get("TxnStatus") or "Pending") != "Pending":
+            if e and _belongs(e, job_id, j) and (e.get("TxnStatus") or "Pending") != "Pending":
                 rec = _estimate_record(e)
                 rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"))
-                db.collection("jobs").document(snap.id).set({"qbEstimate": rec, "lastModified": _stamp()}, merge=True)
-                news.append({"jobId": snap.id, "kind": "estimate", "status": rec["status"], "name": name,
+                if q.get("linked"):
+                    rec["linked"] = True
+                db.collection("jobs").document(job_id).set({"qbEstimate": rec, "lastModified": _stamp()}, merge=True)
+                news.append({"jobId": job_id, "kind": "estimate", "status": rec["status"], "name": name,
                              "docNumber": rec.get("docNumber"), "total": rec.get("total")})
         r = j.get("qbInvoiceRef") or {}
         if r.get("id") and r.get("env") == env and float(r.get("balance") or 0) > 0:
@@ -1152,11 +1170,195 @@ def sweep():
             if inv and float(inv.get("Balance") or 0) != float(r.get("balance") or 0):
                 paid = round(float(r.get("balance") or 0) - float(inv.get("Balance") or 0), 2)
                 rec = _invoice_record(inv)
-                db.collection("jobs").document(snap.id).set({"qbInvoiceRef": rec, "lastModified": _stamp()}, merge=True)
+                db.collection("jobs").document(job_id).set({"qbInvoiceRef": rec, "lastModified": _stamp()}, merge=True)
                 # A balance that went UP (the invoice was changed) is no payment.
                 if paid > 0:
-                    news.append({"jobId": snap.id, "kind": "payment", "name": name, "paid": paid,
+                    news.append({"jobId": job_id, "kind": "payment", "name": name, "paid": paid,
                                  "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
+    try:
+        news += import_accepted(jobs)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: accepted estimates not brought in:", err)
+    return news
+
+
+# ------------------------------------------------- accepted estimates in
+#
+# Jonah (9 Oct 2026): "pull accepted estimates from quickbooks and add them
+# as jobs". An estimate made in QuickBooks itself that the customer accepts
+# becomes a job here -- booked, on the Jobs board, the crew's clock -- with
+# the customer, address, number, price and the estimate's lines as its notes.
+# One already a job here (the same estimate number typed on it) is linked to
+# that job instead of made twice. Estimates made in Job Hub are left to the
+# sweep above, and the owner's device books those (sync.js bookIfAccepted).
+#
+# Only from the real company: the test company is full of made-up
+# customers, and they must never land in the job list. The first look goes
+# back IMPORT_LOOKBACK_DAYS; after that, whatever changed since the last
+# look. An estimate brought in once is remembered, so a job deleted here is
+# not brought back.
+IMPORT_LOOKBACK_DAYS = 30
+NOTES_MAX = 4000
+
+
+def _qb_time(t):
+    return t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S") + "+00:00"
+
+
+def _parse_time(s):
+    """QuickBooks' times carry the company's offset (-05:00); compared as
+    times, not as text."""
+    try:
+        t = datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+        return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _money_text(v):
+    try:
+        return "${:,.2f}".format(float(v))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _estimate_notes(e):
+    """The estimate's lines, as the new job's notes."""
+    out = ["From QuickBooks estimate #%s, accepted%s%s." % (
+        e.get("DocNumber") or e.get("Id"),
+        (" " + str(e["AcceptedDate"])[:10]) if e.get("AcceptedDate") else "",
+        (" by " + str(e["AcceptedBy"])) if e.get("AcceptedBy") else "")]
+    for ln in e.get("Line") or []:
+        kind = ln.get("DetailType")
+        if kind == "SalesItemLineDetail":
+            item = ((ln.get("SalesItemLineDetail") or {}).get("ItemRef") or {}).get("name") or ""
+            desc = " ".join(str(ln.get("Description") or "").split())
+            text = ": ".join(s for s in (item, desc) if s)
+            out.append("• " + (text or "Line") + (" — " + _money_text(ln.get("Amount")) if ln.get("Amount") is not None else ""))
+        elif kind == "DescriptionOnly" and ln.get("Description"):
+            out.append(" ".join(str(ln["Description"]).split()))
+    memo = ((e.get("CustomerMemo") or {}).get("value") or "").strip()
+    if memo:
+        out.append("\n" + memo)
+    return "\n".join(out)[:NOTES_MAX]
+
+
+def _job_from_estimate(e, cust, stamp):
+    cust = cust or {}
+    addr = e.get("ShipAddr") or cust.get("ShipAddr") or e.get("BillAddr") or cust.get("BillAddr") or {}
+    name = (cust.get("DisplayName") or (e.get("CustomerRef") or {}).get("name") or "").strip()
+    total = float(e.get("TotalAmt") or 0)
+    rec = _estimate_record(e, (e.get("CustomerRef") or {}).get("value"))
+    rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"), linked=True)
+    return {
+        "customerName": name or "Customer from QuickBooks",
+        "firstName": str(cust.get("GivenName") or ""), "lastName": str(cust.get("FamilyName") or ""),
+        "business": str(cust.get("CompanyName") or ""),
+        "address": str(addr.get("Line1") or ""), "city": str(addr.get("City") or ""),
+        "state": str(addr.get("CountrySubDivisionCode") or ""), "zip": str(addr.get("PostalCode") or ""),
+        "phone": str(((cust.get("PrimaryPhone") or cust.get("Mobile") or {}).get("FreeFormNumber")) or ""),
+        "email": str(((e.get("BillEmail") or cust.get("PrimaryEmailAddr") or {}).get("Address")) or ""),
+        # The accepted total is the job's price, kept as typed (the form's
+        # own estimate is empty, so nothing would set it).
+        "jobPrice": "%.2f" % total, "manualJobPrice": True, "baseJobPrice": total,
+        "estimateNumber": str(e.get("DocNumber") or ""), "quoteDate": str(e.get("TxnDate") or ""),
+        "notes": _estimate_notes(e), "referral": "", "qbInvoice": "", "qbInvoiced": False, "taxable": False,
+        "serviceTypes": [], "labor": [], "materials": [], "orderItems": [], "proposals": [],
+        "payments": [], "additionalCosts": [],
+        "jobStatus": "booked", "workStage": "scheduled", "workStageAt": stamp,
+        "bidStage": "won", "bidStageAt": stamp,
+        "qbEstimate": rec, "fromQuickBooks": {"estimateId": e.get("Id"), "at": stamp},
+        "lastModified": stamp,
+    }
+
+
+def _number(s):
+    return str(s or "").strip().lstrip("#").strip()
+
+
+def import_accepted(jobs):
+    """Accepted estimates made in QuickBooks -> jobs. `jobs` is every job,
+    as the sweep read them. Returns news for the owner's phone."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return []
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    db = _db()
+    ref = db.collection("integrations").document("quickbooksImport")
+    snap = ref.get()
+    state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
+    since = state.get("since") or _qb_time(_now() - datetime.timedelta(days=IMPORT_LOOKBACK_DAYS))
+    seen = dict(state.get("seen") or {})          # estimate id -> job id
+
+    rows = _query("Estimate", "MetaData.LastUpdatedTime > '%s' orderby MetaData.LastUpdatedTime maxresults 200"
+                  % _quote(since))
+    by_est = {str((j.get("qbEstimate") or {}).get("id")): jid for jid, j in jobs.items()
+              if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
+    by_num = {}
+    for jid, j in jobs.items():
+        n = _number(j.get("estimateNumber"))
+        if n:
+            by_num.setdefault(n, jid)
+    news = []
+    newest = _parse_time(since)
+    for e in rows:
+        t = _parse_time((e.get("MetaData") or {}).get("LastUpdatedTime"))
+        if t and (not newest or t > newest):
+            newest = t
+        eid = str(e.get("Id") or "")
+        if not eid or eid in seen or (e.get("TxnStatus") or "") != "Accepted":
+            continue
+        note = str(e.get("PrivateNote") or "").strip()
+        if note.startswith(_job_note("")):           # made in Job Hub: the sweep has it
+            seen[eid] = note[len(_job_note("")):].strip()
+            continue
+        if eid in by_est:
+            seen[eid] = by_est[eid]
+            continue
+        stamp = _stamp()
+        rec = _estimate_record(e)
+        rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"), linked=True)
+        num = _number(e.get("DocNumber"))
+        if num and num in by_num:
+            # Already a job here, typed in by hand with this number: linked,
+            # and booked by the owner's device if it is still a bid.
+            jid = by_num[num]
+            if not ((jobs[jid].get("qbEstimate") or {}).get("id")):
+                db.collection("jobs").document(jid).set({"qbEstimate": rec, "lastModified": stamp}, merge=True)
+                news.append({"jobId": jid, "kind": "linked", "name": str(jobs[jid].get("customerName") or "a customer"),
+                             "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+            seen[eid] = jid
+            continue
+        cust = None
+        cid = (e.get("CustomerRef") or {}).get("value")
+        if cid:
+            try:
+                cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001
+                print("quickbooks import: customer %s not read: %s" % (cid, err))
+        job = _job_from_estimate(e, cust, stamp)
+        # One id per estimate: two sweeps at once make one job, not two.
+        jid = "qb" + re.sub(r"[^A-Za-z0-9]", "", eid)
+        try:
+            db.collection("jobs").document(jid).create(job)
+        except Exception as err:                        # noqa: BLE001
+            print("quickbooks import: job %s not made (%s)" % (jid, err))
+            seen[eid] = jid
+            continue
+        # On the crew's clock too (sync.js boardEntry).
+        db.collection("jobBoard").document(jid).set({
+            "name": job["customerName"], "status": "booked",
+            "address": ", ".join(s for s in (job["address"], job["city"], job["state"]) if s),
+            "updatedAt": stamp})
+        seen[eid] = jid
+        by_num.setdefault(num, jid)
+        news.append({"jobId": jid, "kind": "imported", "name": job["customerName"],
+                     "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+    ref.set({realm: {"since": _qb_time(newest) if newest else since, "seen": seen, "at": _now().isoformat()}}, merge=True)
     return news
 
 
