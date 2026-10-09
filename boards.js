@@ -493,26 +493,69 @@
       groups + '</div></div>' : '';
   }
 
+  // Done cards go away (Jonah, 9 Oct 2026). A card finished today stays in
+  // Done, so the day's work can be seen and a slip of the finger put back;
+  // from the next day it is off the board. Nothing is deleted -- the card
+  // keeps its history, and "Show the ones finished earlier" at the foot of
+  // Done brings them back on this screen. A card that still wants somebody
+  // stays put: a recurring task waiting for its OK, a machine marked serviced
+  // but not logged yet, Claude's work waiting for "Put it live".
+  const showOldDone = {};      // boardId -> true while the older done cards are shown
+  function stillWanted(k) {
+    return !!((k.recurring && !k.confirmedAt) || k.markedDoneBy ||
+      (k.claude && k.claude.status === 'waiting_ok' && !k.claude.approvedAt));
+  }
+  function finishedToday(k) {
+    const t = k.doneAt ? new Date(k.doneAt) : null;
+    return !!t && !isNaN(t) && localDay(t) === localDay();
+  }
+  const onBoardWhenDone = k => finishedToday(k) || stillWanted(k);
+  window.toggleOldDone = function (boardId) {
+    showOldDone[boardId] = !showOldDone[boardId];
+    render();
+  };
+
   function columnsHtml(board) {
     if (board.virtual) {
       const grouped = jobCards(board);
       return board.columns.map(c => column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)))).join('');
     }
     const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
-    return board.columns.map((c, i) => {
+    const doneId = doneColOf(board);
+    return board.columns.map(c => {
       const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
-      const last = c.id === doneColOf(board);
-      return column(board, c, inCol.map(k => storedCardHtml(board, k, last)));
+      if (c.id !== doneId) return column(board, c, inCol.map(k => storedCardHtml(board, k, false)));
+      const recent = inCol.filter(onBoardWhenDone);
+      // The older ones, newest first, under their own heading when shown.
+      const older = inCol.filter(k => !onBoardWhenDone(k))
+        .sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || '')));
+      const open = !!showOldDone[board.id];
+      const html = recent.map(k => storedCardHtml(board, k, true));
+      if (open && older.length) {
+        html.push('<div class="bd-old-head">Finished earlier</div>');
+        older.forEach(k => html.push(storedCardHtml(board, k, true)));
+      }
+      return column(board, c, html, {
+        count: recent.length + (open ? older.length : 0),
+        empty: older.length ? 'Nothing finished today' : '',
+        foot: older.length ? '<button class="bd-add-card bd-old-btn" onclick="toggleOldDone(\'' + board.id + '\')">' +
+          (open ? 'Hide the ones finished earlier'
+            : 'Show the ' + older.length + ' finished earlier') + '</button>' : '',
+      });
     }).join('');
   }
 
-  function column(board, c, cardHtml) {
+  // `more` (Done on a stored board): the count when the list holds more than
+  // cards, the empty-column words, and a line under the cards.
+  function column(board, c, cardHtml, more) {
+    more = more || {};
     return '<div class="bd-col" data-board="' + board.id + '" data-col="' + c.id + '" ' +
         'ondragover="bdDragOver(event)" ondragleave="bdDragLeave(event)" ondrop="bdDrop(event)">' +
       '<div class="bd-col-head"><span>' + esc(c.name) + '</span>' +
-        '<span class="bd-count">' + cardHtml.length + '</span></div>' +
+        '<span class="bd-count">' + (more.count != null ? more.count : cardHtml.length) + '</span></div>' +
       '<div class="bd-col-body">' +
-        (cardHtml.join('') || '<div class="bd-empty">Nothing here</div>') +
+        (cardHtml.join('') || '<div class="bd-empty">' + (more.empty || 'Nothing here') + '</div>') +
+        (more.foot || '') +
         (!board.virtual && editsBoards()
           ? '<button class="bd-add-card" onclick="addCard(\'' + board.id + '\', \'' + c.id + '\')">+ Add a card</button>' : '') +
         // Won, Lost and Paid are where jobs end up, not where they start.
@@ -1311,7 +1354,8 @@
       '<div class="field"><span class="label">Columns, left to right</span>' +
         '<div id="bdColList" class="bd-edit-list"></div>' +
         '<button class="btn btn-sm" onclick="bdColAdd()">+ Add a column</button>' +
-        '<div class="hint">The last column counts as done. Cards in a column you delete move to the first column.</div>' +
+        '<div class="hint">The column called Done (or else the last one) counts as done: a card there stays ' +
+          'until the end of the day, then leaves the board. Cards in a column you delete move to the first column.</div>' +
       '</div>' +
       '<div class="field"><span class="label">Labels</span>' +
         '<div id="bdLabelList" class="bd-edit-list"></div>' +

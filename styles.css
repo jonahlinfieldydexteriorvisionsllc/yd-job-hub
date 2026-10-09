@@ -968,6 +968,10 @@
   .bd-empty { color:rgba(255,255,255,.55); }
   .bd-add-card, html[data-night] .bd-add-card { color:rgba(255,255,255,.7); border-color:rgba(255,255,255,.28); }
   .bd-add-card:hover, html[data-night] .bd-add-card:hover { color:#fff; border-color:#fff; }
+  /* Done: the cards finished before today, shown only when asked for */
+  .bd-old-btn { border-style:solid; }
+  .bd-old-head { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+    color:rgba(255,255,255,.6); padding:6px 2px 0; border-top:1px solid rgba(255,255,255,.15); }
   .bd-card { --surface:#ffffff; --surface-2:#f4f1f8; --text:#2b2433; --muted:#6f6480;
     --border:#e4dfeb; --border-strong:#cfc5dc; --pos:#2f8f5b; --pos-soft:#d8ecdf;
     --neg:#c8492b; --neg-soft:#f6ddd3;
