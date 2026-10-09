@@ -73,11 +73,42 @@ SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
           "\"your order\" OR confirmation OR delivered OR shipped)}")
 
 
-def search_for(since_epoch):
+# How often Claude reads the receipts (Jonah, 9 Oct 2026: "just run receipt
+# checking once a week" -- the AI costs money). The half-hourly run still
+# makes cards from forwarded emails (plain code, free), and still reads an
+# order waiting at a store when the email comes in: a pickup card a week late
+# is no use, and one such email is a fraction of a cent. Everything else
+# waits for the weekly read; "Check email now" in the app reads it all at
+# once. settings/receipts.readEveryDays changes the gap.
+READ_EVERY_DAYS = 7
+PICKUP_SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
+                 "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+card@") + " "
+                 "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+crew@") + " "
+                 "subject:(\"ready for pickup\" OR \"ready for pick up\" OR \"ready to pick up\" OR "
+                 "\"awaiting pickup\" OR \"waiting for pickup\" OR \"pick up your order\")")
+
+
+def search_for(since_epoch, query=SEARCH):
     """The Gmail search for mail since `since_epoch`, never more than
     LOOK_BACK_DAYS back however long the service was off."""
     floor = int(time.time()) - LOOK_BACK_DAYS * 86400
-    return SEARCH % max(int(since_epoch or 0), floor)
+    return query % max(int(since_epoch or 0), floor)
+
+
+def _reading_due(st):
+    """Whether this run is the week's read: a week since the last one, or
+    the last one left emails behind (it carries on until they are read)."""
+    if st.get("readBacklog"):
+        return True
+    every = st.get("readEveryDays")
+    every = every if isinstance(every, (int, float)) and 0 <= every <= 60 else READ_EVERY_DAYS
+    try:
+        last = datetime.datetime.fromisoformat(str(st.get("lastReadAt"))).timestamp()
+    except (TypeError, ValueError):
+        return True
+    # A quarter of an hour's slack, so the read lands on the same half-hour
+    # each week rather than creeping later.
+    return time.time() - last >= every * 86400 - 15 * 60
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
@@ -977,11 +1008,13 @@ def run(client, manual=False):
               "notReceipts": 0, "waiting": 0, "errors": 0, "byCode": 0}
     people = None      # user records, read only if a paycheck turns up
     needs_permission = False
+    read_state = {}    # when this was the week's read: when, and whether it left any behind
     try:
         # Where reading starts. Set once -- the first run after it is missing
         # starts from that moment -- and moved only by hand.
         st = state.get()
-        since = (st.to_dict() or {}).get("since") if st.exists else None
+        st_data = (st.to_dict() or {}) if st.exists else {}
+        since = st_data.get("since")
         try:
             since_epoch = datetime.datetime.fromisoformat(str(since)).timestamp() if since else None
         except ValueError:
@@ -996,14 +1029,18 @@ def run(client, manual=False):
             raise
         except Exception as e:      # noqa: BLE001 -- receipts still run
             print("receipts: forwarded cards failed:", e)
-        ids = _list_ids(search_for(since_epoch))
+        # The week's read, or between reads: only orders waiting for pickup.
+        reading = bool(manual) or _reading_due(st_data)
+        report["reading"] = reading
+        ids = _list_ids(search_for(since_epoch, SEARCH if reading else PICKUP_SEARCH))
         done = {s.id: (s.to_dict() or {})
                 for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
         # Already judged to be a purchase, but not yet read (the run's limit),
         # or the read failed: read these without asking again.
         pending = [i for i in ids if done.get(i, {}).get("outcome") == "queued"
                    or (done.get(i, {}).get("outcome") == "error" and (done[i].get("tries") or 0) < MAX_TRIES)]
-        fresh = [i for i in ids if i not in done][:MAX_TRIAGE]
+        unseen = [i for i in ids if i not in done]
+        fresh = unseen[:MAX_TRIAGE]
         report["looked"] = len(fresh)
 
         day, left = _budget(db)
@@ -1015,7 +1052,10 @@ def run(client, manual=False):
         records = _sender_records(db, msgs) if msgs else {}
         ask = []
         for m in msgs:
-            verdict = by_code(m, records.get(sender_key(m["from"])))
+            # Between reads every email here is a pickup notice by its
+            # subject: read it, no sorting call.
+            verdict = ("skip" if OWN_SALES.search(m.get("subject") or "") else "read") if not reading \
+                else by_code(m, records.get(sender_key(m["from"])))
             if verdict == "skip":
                 _seen(db, m["id"], "not_purchase", subject=m["subject"][:200], byCode=True)
                 report["notReceipts"] += 1
@@ -1048,6 +1088,10 @@ def run(client, manual=False):
             _seen(db, m["id"], "queued", subject=m["subject"][:200])
         report["waiting"] = max(0, len(to_read) - allowed)
         to_read = to_read[:allowed]
+        if reading:
+            # More than one run's worth: the next half-hourly run carries on.
+            read_state = {"lastReadAt": dg._now().isoformat(),
+                          "readBacklog": bool(report["waiting"] or len(unseen) > len(fresh) or len(pending) > allowed)}
         if not to_read:
             return report
 
@@ -1116,6 +1160,6 @@ def run(client, manual=False):
         needs_permission = True
         return {"needsPermission": True}
     finally:
-        state.set({"runningSince": None, "lastRunAt": dg._now().isoformat(),
-                   "lastReport": report, "needsPermission": needs_permission,
-                   "manual": bool(manual)}, merge=True)
+        state.set(dict({"runningSince": None, "lastRunAt": dg._now().isoformat(),
+                        "lastReport": report, "needsPermission": needs_permission,
+                        "manual": bool(manual)}, **read_state), merge=True)

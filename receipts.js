@@ -473,10 +473,17 @@
       return '<div class="rc-note">Reading email is not switched on yet. In the Google Admin console, the ' +
         'Job Hub service needs <b>gmail.readonly</b> added beside gmail.send and gmail.compose.</div>';
     }
-    if (!state.lastRunAt) return '';
-    const t = new Date(state.lastRunAt);
-    const when = isNaN(t) ? '' : t.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
-    return when ? '<span class="muted">Email last checked ' + esc(when) + '</span>' : '';
+    // Claude reads the receipts once a week (functions/receipts.py
+    // READ_EVERY_DAYS; Jonah, 9 Oct 2026); orders ready for pickup are read
+    // as they come in.
+    const t = new Date(state.lastReadAt || state.lastRunAt || '');
+    if (isNaN(t)) return '';
+    const fmt = d => d.toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const every = typeof state.readEveryDays === 'number' ? state.readEveryDays : 7;
+    const next = new Date(t.getTime() + every * 864e5);
+    return '<span class="muted">' + (state.lastReadAt ? 'Receipts last read ' + esc(fmt(t)) +
+      ' · next read about ' + esc(fmt(next)) + ' (pickup notices are read as they come in)'
+      : 'Email last checked ' + esc(fmt(t))) + '</span>';
   }
 
   const byNewest = (a, b) => String(b.date || '').localeCompare(String(a.date || '')) ||
