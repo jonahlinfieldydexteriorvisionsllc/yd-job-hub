@@ -97,7 +97,8 @@
 
     <!-- A bid is not a job until it is booked (app.js isBidStatus). -->
     <div class="bid-banner" id="bidBanner" hidden>
-      <span><b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.</span>
+      <span id="bidBannerText"><b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.</span>
+      <button class="btn btn-sm" id="bidReopenBtn" onclick="reopenBid()" hidden>Back on the Bids board</button>
       <button class="btn btn-sm btn-filled" onclick="makeItAJob()">Make it a job</button>
     </div>
 
@@ -662,6 +663,7 @@
             <option value="quoted">Quoted</option>
             <option value="won">Won</option>
             <option value="no">Not interested</option>
+            <option value="declined">Declined a bid</option>
           </select>
           <input id="ppSearch" placeholder="Search…" oninput="renderProspects()">
         </div>

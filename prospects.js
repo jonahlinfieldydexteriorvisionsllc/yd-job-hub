@@ -158,7 +158,8 @@
     const q = ((el('ppSearch') || {}).value || '').trim().toLowerCase();
 
     const list = all.filter(p => {
-      if (wantStat === 'open' ? isClosed(p) : wantStat && p.status !== wantStat) return false;
+      if (wantStat === 'declined') { if (!(p.declined || []).length) return false; }
+      else if (wantStat === 'open' ? isClosed(p) : wantStat && p.status !== wantStat) return false;
       if (wantSvc && (p.services || []).indexOf(wantSvc) === -1) return false;
       if (q) {
         const hay = [p.name, p.note, p.address, p.phone, p.email,
@@ -192,6 +193,7 @@
         '<span class="pp-name">' + esc(p.name || '(no name)') + '</span>' +
         (p.contactWhen ? '<span class="pp-when">' + esc(p.contactWhen) + '</span>' : '') +
         '<span class="pp-stat s-' + status + '">' + STATUSES[status] + '</span>' +
+        declinedBadge(p) +
       '</div>' +
       (svc.length
         ? '<div class="pp-svc">' + svc.map(s => '<span class="svc-tag">' + esc(s) + '</span>').join('') + '</div>'
@@ -216,6 +218,85 @@
         '<button class="remove-btn" onclick="removeProspect(\'' + p.id + '\')" title="Take off the list">&times;</button>' +
       '</div>' +
     '</div>';
+  }
+
+  function declinedBadge(p) {
+    const list = p.declined || [];
+    if (!list.length) return '';
+    const last = new Date(list[list.length - 1].at);
+    return '<span class="pp-declined">Declined a bid' +
+      (isNaN(last) ? '' : ' · ' + last.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })) + '</span>';
+  }
+
+  // ------------------------------------------------------- a bid they declined
+  //
+  // Jonah (9 Oct 2026): a bid marked lost puts the customer on this list for
+  // next season -- "customers who declined bids with a note of what service
+  // they declined and tagged for what service so I can sort". So: tagged with
+  // the bid's services (the service filter finds them), a dated note saying
+  // what they turned down, "when" set to next spring, and a `declined` entry
+  // per bid (the "Declined a bid" filter). Someone already here -- the bid
+  // may have started from this list -- is brought up to date, not added
+  // twice: matched by the bid, then email, then phone, then the same name.
+  // No price in the note: Contacts can be shared with an admin who has no
+  // business seeing what a job was bid at.
+  const digits = s => String(s || '').replace(/\D/g, '').slice(-10);
+  function nextSpring(d) { return 'Spring ' + (d.getFullYear() + (d.getMonth() >= 2 ? 1 : 0)); }
+  function fromLostBid(jobId, j) {
+    if (!j || !window.YDDb || !ydCan('contacts', 'change')) return null;
+    const name = String(j.customerName || '').trim() ||
+      String(j.business || '').trim() || [j.firstName, j.lastName].filter(Boolean).join(' ').trim();
+    if (!name) return null;
+    const email = String(j.email || '').trim().toLowerCase();
+    const phone = digits(j.phone);
+    const all = Object.keys(people).map(k => people[k]);
+    const match = all.find(p => (p.declined || []).some(d => d.jobId === jobId)) ||
+      (email && all.find(p => String(p.email || '').trim().toLowerCase() === email)) ||
+      (phone.length === 10 && all.find(p => digits(p.phone) === phone)) ||
+      all.find(p => String(p.name || '').trim().toLowerCase() === name.toLowerCase());
+
+    const now = new Date();
+    const services = (Array.isArray(j.serviceTypes) ? j.serviceTypes : []).map(s => String(s).trim()).filter(Boolean);
+    const est = String(j.estimateNumber || '').trim();
+    const line = 'Declined our bid' + (est ? ' #' + est : '') + (services.length ? ' for ' + services.join(', ') : '') +
+      ' on ' + now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + '.';
+    const entry = { at: now.toISOString(), jobId: jobId, est: est || null, services: services };
+    const address = [String(j.address || '').trim(),
+      [j.city, [j.state, j.zip].filter(Boolean).join(' ')].map(s => String(s || '').trim()).filter(Boolean).join(', ')]
+      .filter(Boolean).join(', ');
+
+    let id, patch;
+    if (match) {
+      id = match.id;
+      const before = match.declined || [];
+      const again = before.some(d => d.jobId === jobId);
+      patch = {
+        services: (match.services || []).concat(services.filter(s => (match.services || []).indexOf(s) === -1)),
+        declined: again ? before : before.concat([entry]),
+      };
+      if (!again) patch.note = [String(match.note || '').trim(), line].filter(Boolean).join('\n');
+      // Someone who said "not interested" stays that way; anyone else is to call.
+      if (match.status !== 'no') patch.status = 'to-contact';
+      if (!String(match.contactWhen || '').trim()) patch.contactWhen = nextSpring(now);
+      // Fill in what the contact was missing; never overwrite what is there.
+      [['phone', String(j.phone || '').trim()], ['email', email], ['address', address]].forEach(([k, v]) => {
+        if (v && !String(match[k] || '').trim()) patch[k] = v;
+      });
+    } else {
+      id = 'p' + Date.now().toString(36);
+      const nm = (j.firstName || j.lastName || j.business) ? { first: j.firstName || '', last: j.lastName || '', business: j.business || '' }
+        : (typeof splitName === 'function' ? splitName(name) : { first: '', last: '', business: name });
+      patch = {
+        name: name, firstName: nm.first || '', lastName: nm.last || '', business: nm.business || '',
+        services: services, contactWhen: nextSpring(now), note: line, address: address,
+        phone: String(j.phone || '').trim(), email: email, status: 'to-contact',
+        addedAt: now.toISOString(), declined: [entry],
+      };
+    }
+    people[id] = Object.assign({ id: id }, people[id] || {}, patch);
+    render();
+    write(id, patch, 'the declined bid for ' + name);
+    return { id: id, added: !match };
   }
 
   // ------------------------------------------------------------ meeting notes
@@ -326,7 +407,9 @@
     };
 
     const wasEdit = !!editingId;
-    people[id] = Object.assign({ id: id }, rec);
+    // Merged over what was there: the save only writes these fields, so a
+    // contact's declined bids and notes stay, here as in the database.
+    people[id] = Object.assign({ id: id }, was || {}, rec);
     clearForm();
     render();
     write(id, rec, 'saving ' + name);
@@ -483,7 +566,7 @@
     });
   }
 
-  window.YDProspects = { all: () => people, render: render, whenKey: whenKey };
+  window.YDProspects = { all: () => people, render: render, whenKey: whenKey, fromLostBid: fromLostBid };
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};

@@ -49,9 +49,11 @@
   const ACTIVE_STAGES = ['scheduled', 'inProgress', 'punchList'];
   const COMPLETE_STAGES = ['toInvoice', 'invoiced', 'paid'];
 
-  // Won, lost and paid cards would pile up forever. They stay on the board
-  // long enough to be seen, then drop off -- the job itself is untouched.
-  const SHOW_WON_DAYS = 30, SHOW_LOST_DAYS = 45, SHOW_PAID_DAYS = 30;
+  // Won and paid cards would pile up forever. They stay on the board long
+  // enough to be seen, then drop off -- the job itself is untouched. A lost
+  // bid leaves at once (Jonah, 9 Oct 2026): it stays under Bids in My Jobs,
+  // marked Lost, and the customer goes on Contacts for next season.
+  const SHOW_WON_DAYS = 30, SHOW_PAID_DAYS = 30;
 
   // Templates for new stored boards.
   const TEMPLATES = {
@@ -169,7 +171,7 @@
     // customer rang back and was set Active in the form used to sit in Lost on
     // this board AND in Scheduled on the Jobs board.
     if (stage === 'won' && !quoting) return (daysSince(j.bidStageAt) || 0) <= SHOW_WON_DAYS ? 'won' : null;
-    if (stage === 'lost' && quoting) return (daysSince(j.bidStageAt) || 0) <= SHOW_LOST_DAYS ? 'lost' : null;
+    if (stage === 'lost' && quoting) return null;
     if (!quoting) return null;
     return QUOTING_STAGES.indexOf(stage) !== -1 ? stage : 'toSend';
   }
@@ -237,6 +239,16 @@
       return;
     }
     const name = (j.customerName || 'Job').trim();
+    if (boardId === 'bids' && col === 'lost') {
+      // Off the board; the customer onto Contacts, tagged with what they
+      // turned down, to call next season (prospects.js).
+      const contact = window.YDProspects && window.YDProspects.fromLostBid
+        ? window.YDProspects.fromLostBid(jobId, Object.assign({}, j, patch)) : null;
+      showToast(name + ' marked lost — kept under Bids in My Jobs' +
+        (contact ? (contact.added ? ', and added to Contacts for next season' : ', and noted on their contact') : ''), 5000);
+      render();
+      return;
+    }
     const colName = (boardId === 'bids' ? BIDS : JOBS).columns.find(c => c.id === col).name;
     showToast(name + ' → ' + colName + (col === 'won' && patch.jobStatus === 'booked'
       ? ' (now on the Jobs board)' : ''));
@@ -518,7 +530,8 @@
   function columnsHtml(board) {
     if (board.virtual) {
       const grouped = jobCards(board);
-      return board.columns.map(c => column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)))).join('');
+      return board.columns.map(c => column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)),
+        c.id === 'lost' ? { empty: 'Drop a lost bid here. It leaves the board, stays under Bids in My Jobs, and goes on Contacts for next season.' } : null)).join('');
     }
     const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
     const doneId = doneColOf(board);
@@ -798,8 +811,11 @@
     const j = jobsList().find(x => x._id === jobId);
     if (!board || !j) return;
     const col = boardId === 'bids' ? bidColumn(j) : workColumn(j);
+    const reach = [j.phone ? '<a href="tel:' + esc(String(j.phone).replace(/[^0-9+]/g, '')) + '">' + esc(j.phone) + '</a>' : '',
+                   looksLikeEmail(j.email) ? '<a href="mailto:' + esc(j.email) + '">' + esc(j.email) + '</a>' : ''].filter(Boolean);
     openModal(esc(j.customerName || 'Job'),
       '<div class="bd-detail-sub">' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</div>' +
+      (reach.length ? '<div class="bd-detail-line">' + reach.join(' · ') + '</div>' : '') +
       ((j.serviceTypes || []).length ? '<div class="bd-detail-line">' + esc(j.serviceTypes.join(', ')) + '</div>' : '') +
       (parseMoney(j.jobPrice) ? '<div class="bd-detail-line bold">' + fmtMoney(parseMoney(j.jobPrice)) + '</div>' : '') +
       '<div class="bd-move-label">Move to</div>' +
@@ -810,9 +826,103 @@
       '<div class="bd-move-label">Card colour</div>' +
       '<div onchange="setJobCardColor(\'' + safeId(jobId) + '\')">' + colorPickHtml('jcColor', j.cardColor) + '</div>' +
       '<div class="field-actions">' +
-        '<button class="btn btn-filled" onclick="openJobFromBoard(\'' + jobId + '\')">Open the job</button>' +
+        (movesJobs() ? '<button class="btn btn-filled" onclick="editJobCard(\'' + boardId + '\', \'' + safeId(jobId) + '\')">Edit</button>' : '') +
+        '<button class="btn' + (movesJobs() ? ' btn-sm' : ' btn-filled') + '" onclick="openJobFromBoard(\'' + jobId + '\')">' +
+          (boardId === 'bids' ? 'Open the bid' : 'Open the job') + '</button>' +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
+  };
+
+  // Editing a bid or job from its card (Jonah, 9 Oct 2026: "bid cards need
+  // to be editable"): who, where, how to reach them, what work, the notes --
+  // and on a bid the site-visit notes Claude builds the estimate from. Saved
+  // to the job itself through patchJob, like a move, so every device and the
+  // Job tab follow. The estimate and the money stay on the Job tab.
+  let jobEdit = null;       // { boardId, jobId, services } while the editor is open
+  function serviceChoices() {
+    const sel = el('serviceTypeSelect');
+    return sel ? Array.prototype.filter.call(sel.options, o => o.value && o.value !== '__custom').map(o => o.value) : [];
+  }
+  function jobEditTags() {
+    const w = el('jeTags');
+    if (!w) return;
+    w.innerHTML = jobEdit.services.length
+      ? jobEdit.services.map((s, i) => '<span class="svc-tag">' + esc(s) +
+          '<button onclick="jobEditTagOff(' + i + ')" title="Remove">&times;</button></span>').join('')
+      : '<span class="tag-none">No services yet</span>';
+  }
+  window.editJobCard = function (boardId, jobId) {
+    const j = jobsList().find(x => x._id === jobId);
+    if (!j || !movesJobs()) return;
+    jobEdit = { boardId: boardId, jobId: jobId, services: (j.serviceTypes || []).slice() };
+    const nm = (j.firstName || j.lastName || j.business) ? { first: j.firstName, last: j.lastName, business: j.business }
+      : (typeof splitName === 'function' ? splitName(j.customerName) : { first: '', last: '', business: j.customerName });
+    const box = (id, label, v, attrs) => '<div class="field"><span class="label">' + label + '</span>' +
+      '<input id="' + id + '" value="' + esc(v || '') + '"' + (attrs || '') + '></div>';
+    const bid = boardId === 'bids';
+    openModal(bid ? 'Edit the bid' : 'Edit the job',
+      '<div class="grid g2">' + box('jeFirst', 'First name', nm.first, ' autocomplete="off"') +
+        box('jeLast', 'Last name', nm.last, ' autocomplete="off"') + '</div>' +
+      box('jeBusiness', 'Business name (if a business)', nm.business, ' autocomplete="off"') +
+      box('jeStreet', 'Street address', j.address, ' autocomplete="off"') +
+      '<div class="grid g3">' + box('jeCity', 'City', j.city) + box('jeState', 'State', j.state) +
+        box('jeZip', 'ZIP', j.zip, ' inputmode="numeric"') + '</div>' +
+      '<div class="grid g2">' + box('jePhone', 'Phone', j.phone, ' type="tel"') +
+        box('jeEmail', 'Email', j.email, ' type="email" autocapitalize="off"') + '</div>' +
+      '<div class="field"><span class="label">Services</span><div class="tag-box" id="jeTags"></div>' +
+        '<select id="jeTagPick" onchange="jobEditTagOn(this)" style="margin-top:6px"><option value="">+ Add a service…</option>' +
+          serviceChoices().map(s => '<option>' + esc(s) + '</option>').join('') +
+          '<option value="__custom">Something else…</option></select></div>' +
+      (bid ? '<div class="field"><span class="label">Site-visit notes</span>' +
+        '<textarea id="jeSite" rows="5" placeholder="What you saw, measured and talked about — Claude builds the estimate from these">' +
+        esc(((j.estimate || {}).notes) || '') + '</textarea></div>' : '') +
+      '<div class="field"><span class="label">Notes</span><textarea id="jeNotes" rows="3">' + esc(j.notes || '') + '</textarea></div>' +
+      '<div class="field-actions">' +
+        '<button class="btn btn-filled" onclick="saveJobCard()">Save</button>' +
+        '<button class="btn btn-sm" onclick="openJobCard(\'' + boardId + '\', \'' + safeId(jobId) + '\')">Cancel</button>' +
+      '</div>');
+    jobEditTags();
+  };
+  window.jobEditTagOn = function (sel) {
+    let v = sel.value;
+    sel.value = '';
+    if (!v || !jobEdit) return;
+    if (v === '__custom') { v = (prompt('What service?') || '').trim(); if (!v) return; }
+    if (jobEdit.services.indexOf(v) === -1) jobEdit.services.push(v);
+    jobEditTags();
+  };
+  window.jobEditTagOff = function (i) { if (jobEdit) { jobEdit.services.splice(i, 1); jobEditTags(); } };
+  window.saveJobCard = function () {
+    if (!jobEdit || !movesJobs() || !window.YDSync) return;
+    const { boardId, jobId } = jobEdit;
+    const first = val('jeFirst'), last = val('jeLast'), business = val('jeBusiness');
+    const name = business || [first, last].filter(Boolean).join(' ');
+    if (!name) { showToast('Give it the customer’s name'); return; }
+    // The same job open on the Job tab with typing not yet saved: saved
+    // first, so this lands on top of it -- otherwise the form's next save
+    // would write the old name and address straight back.
+    if (typeof currentJobId !== 'undefined' && currentJobId === jobId &&
+        typeof dirty !== 'undefined' && dirty && typeof autosave === 'function') autosave();
+    const j = jobsList().find(x => x._id === jobId);
+    if (!j) return;
+    const patch = {
+      customerName: name, firstName: first, lastName: last, business: business,
+      address: val('jeStreet'), city: val('jeCity'), state: val('jeState'), zip: val('jeZip'),
+      phone: val('jePhone'), email: val('jeEmail'),
+      serviceTypes: jobEdit.services.slice(), notes: (el('jeNotes').value || '').trim(),
+    };
+    const site = el('jeSite');
+    if (site && site.value.trim() !== String((j.estimate || {}).notes || '').trim()) {
+      // Only the notes change. A bid with no estimate yet gets one in the
+      // current shape (estimate.js fromSaved, v 2).
+      patch.estimate = j.estimate ? Object.assign({}, j.estimate, { notes: site.value.trim() })
+        : { v: 2, notes: site.value.trim() };
+    }
+    if (!window.YDSync.patchJob(jobId, patch)) { showToast('Could not save that'); return; }
+    jobEdit = null;
+    render();
+    window.openJobCard(boardId, jobId);
+    showToast(name + ' saved');
   };
   // Kept on the job itself, through the same path as a move, so the colour
   // shows on every device and survives the next save of the job form.
@@ -839,9 +949,9 @@
     switchTab('job');
   };
 
-  // A card on Bids or Jobs IS a job, so adding one makes the job: just the
-  // customer's name for now, in the column it was added to. The rest is
-  // filled in on the Job tab ("Open the job" on the card that opens).
+  // A card on Bids or Jobs IS a job, so adding one makes the job: the
+  // customer's name, in the column it was added to, then its editor for the
+  // rest. The estimate is built on the Job tab ("Open the bid").
   window.addJobCard = function (boardId, col) {
     const board = boardById(boardId);
     if (!board || !board.virtual || !movesJobs() || typeof createJobRecord !== 'function') return;
@@ -859,7 +969,8 @@
     if (!id) return;
     render();
     showToast(name.trim() + ' added to ' + board.columns.find(c => c.id === col).name);
-    window.openJobCard(boardId, id);
+    // Straight into its details: address, phone, the work, site-visit notes.
+    window.editJobCard(boardId, id);
   };
 
   // ----------------------------------------------------------- stored cards

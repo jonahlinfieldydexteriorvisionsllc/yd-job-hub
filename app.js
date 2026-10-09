@@ -679,6 +679,26 @@ function syncStatusSelect() { document.getElementById('jobStatusSelect').value =
 function showBidBanner() {
   const b = document.getElementById('bidBanner');
   if (b) b.hidden = !isBidStatus(jobStatus);
+  // A lost bid is off the Bids board (Jonah, 9 Oct 2026) -- it can be put
+  // back, or booked if they ring after all.
+  const lost = isBidStatus(jobStatus) && boardFields.bidStage === 'lost';
+  const t = document.getElementById('bidBannerText'), r = document.getElementById('bidReopenBtn');
+  if (t) t.innerHTML = lost ? '<b>This bid was lost.</b> It is off the Bids board and the customer is on Contacts for next season.'
+    : '<b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.';
+  if (r) r.hidden = !lost;
+}
+// A lost bid back on the board, in Follow up -- they called back.
+function reopenBid(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  id = id || currentJobId;
+  if (!id || !window.YDSync) return;
+  if (!window.YDSync.patchJob(id, { bidStage: 'followUp', bidStageAt: new Date().toISOString(), jobStatus: 'quoting' })) {
+    showToast('Could not put that bid back');
+    return;
+  }
+  if (id === currentJobId) showBidBanner();
+  showToast('Back on the Bids board, under Follow up');
+  if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
 }
 // Booking a bid: it becomes a job -- on the Jobs board, in the job list, on
 // the crew's clock -- and the bid is marked Won, the same as moving it there.
@@ -1584,10 +1604,11 @@ function migrateJobIndex() {
       price: parseMoney(data.jobPrice || ''),
       services: svc,
       est: String(data.estimateNumber || '').trim(),
+      lost: isBidStatus(data.jobStatus || entry.status) && data.bidStage === 'lost',
       invoiced: !!data.qbInvoiced,
       lastModified: data.lastModified || entry.lastModified || ''
     };
-    if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est) changed = true;
+    if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est || fresh.lost !== entry.lost) changed = true;
     return fresh;
   });
   if (changed) { saveJobIndex(idx); invalidateJobsCache(); }
@@ -1610,6 +1631,8 @@ function buildIndexEntry(id, data) {
     services: (data.serviceTypes || []).join(', '),
     // The job's number, shown beside the name wherever jobs are listed.
     est: String(data.estimateNumber || '').trim(),
+    // A lost bid: still listed under Bids, marked Lost (Jonah, 9 Oct 2026).
+    lost: isBidStatus(data.jobStatus) && data.bidStage === 'lost',
     invoiced: !!data.qbInvoiced, lastModified: data.lastModified };
 }
 // "Smith #1042": the name with the job's number beside it, escaped for HTML.
@@ -1812,9 +1835,11 @@ function renderJobList() {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
-        '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' + statusPill(normStatus(j.status)) + '</div>' +
+        '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
+          (j.lost ? '<span class="pill lost">Lost</span>' : statusPill(normStatus(j.status))) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') + fmtMoney(j.price) + '</div></div>' +
       '<div style="display:flex;gap:4px">' +
+      (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + j.id + '\')">BACK ON THE BOARD</button>' : '') +
       (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + j.id + '\')">MAKE IT A JOB</button>' : '') +
       '<button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')">DUP</button>' +
       '<button class="remove-btn" onclick="deleteJob(\'' + j.id + '\')">×</button></div></div>'

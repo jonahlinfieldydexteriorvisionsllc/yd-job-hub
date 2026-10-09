@@ -170,6 +170,7 @@
   .pill.quoting { background:#fbeaca; color:#9a6a12; }
   .pill.active { background:var(--pos-soft); color:#1f6b43; }
   .pill.complete { background:#dbe4f0; color:#3a5878; }
+  .pill.lost { background:var(--neg-soft); color:var(--neg); }
   .paid-chip { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px; padding:3px 10px; border-radius:20px; background:var(--pos); color:#fff; }
 
   .change-tag { display:inline-block; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; background:#f5dcc8; color:var(--accent-dark); padding:2px 7px; margin-left:8px; border-radius:20px; }
@@ -229,6 +230,10 @@
              background:var(--surface-2); color:var(--muted); border:1px solid var(--border); }
   .pp-stat.s-won { background:var(--pos-soft); color:#2f6b3f; border-color:#bcdcc6; }
   .pp-stat.s-no  { background:var(--neg-soft); color:var(--neg); border-color:transparent; }
+  /* a bid they turned down (prospects.js fromLostBid) */
+  .pp-declined { font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase;
+    padding:2px 8px; border-radius:10px; background:#fbeaca; color:#9a6a12; }
+  html[data-night] .pp-declined { background:#3a2c10; color:#f0b04a; }
   .pp-svc { display:flex; flex-wrap:wrap; gap:4px; margin-top:9px; }
   .pp-note { font-size:13px; line-height:1.55; margin-top:9px; white-space:pre-wrap; }
   .pp-contact { font-size:12px; color:var(--muted); margin-top:7px; }
