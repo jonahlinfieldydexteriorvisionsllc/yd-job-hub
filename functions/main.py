@@ -63,6 +63,9 @@ MODEL = "claude-sonnet-5-5"
 # The board cards are worked twice a day, not every hour (Jonah, 7 Oct): at
 # these Chicago hours, unless settings/claude.cardHours says otherwise. The
 # scheduler still calls every hour -- the QuickBooks check rides on it.
+# And only while settings/claude.cardRuns is true: switched off 9 Oct (Jonah:
+# not enough on the boards yet, more useful next year). The switch is on
+# Pricing rules -> Claude; "Ask Claude now" on a card works either way.
 CARD_HOURS = (7, 19)
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
 ALLOWED_ORIGINS = {
@@ -435,8 +438,8 @@ def _cards(request, path, headers):
         if not _from_scheduler(request):
             return (json.dumps({"error": "not allowed"}), 403, json_headers)
         only = None
-        # Only the morning and evening calls work cards; the others just do
-        # the QuickBooks check below.
+        # Only the morning and evening calls work cards, and only while card
+        # runs are switched on; the others just do the QuickBooks check below.
         if not _card_hour():
             only = "skip"
     elif path == "/cards/now":
@@ -453,7 +456,7 @@ def _cards(request, path, headers):
         only = (board_id, card_id)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
-    failed, report = None, [{"skipped": "cards are worked in the morning and the evening"}]
+    failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
     try:
         if only != "skip":
             report = cards.run(_claude(), only)
@@ -477,14 +480,19 @@ def _cards(request, path, headers):
 def _card_hour():
     """Whether this scheduler call is one of the day's card runs."""
     from zoneinfo import ZoneInfo
-    hours = CARD_HOURS
     try:
         snap = _db.collection("settings").document("claude").get()
-        got = ((snap.to_dict() or {}) if snap.exists else {}).get("cardHours")
-        if isinstance(got, list) and got and all(isinstance(h, int) and 0 <= h <= 23 for h in got):
-            hours = tuple(got)
+        conf = (snap.to_dict() or {}) if snap.exists else {}
     except Exception as e:                          # noqa: BLE001
-        print("cards: could not read the card hours:", e)
+        print("cards: could not read the card settings:", e)
+        return False
+    # Off unless switched on: spending Claude credit is the thing to ask for.
+    if conf.get("cardRuns") is not True:
+        return False
+    hours = CARD_HOURS
+    got = conf.get("cardHours")
+    if isinstance(got, list) and got and all(isinstance(h, int) and 0 <= h <= 23 for h in got):
+        hours = tuple(got)
     return datetime.datetime.now(ZoneInfo("America/Chicago")).hour in hours
 
 

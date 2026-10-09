@@ -494,7 +494,12 @@
       '<label class="pr-field"><span>Model for estimates</span><select onchange="prClaudeSet(\'estimateModel\', this.value)">' +
         '<option value="fable"' + (model === 'fable' ? ' selected' : '') + '>Fable 5.1 — the best, costs the most</option>' +
         '<option value="opus"' + (model === 'opus' ? ' selected' : '') + '>Opus 5.5 — about 40% of the cost</option></select></label>' +
-      '<p class="hint">Claude works the board cards at 7 am and 7 pm. Receipts, emails and price lookups use the lower-cost model.</p>';
+      // Off since 9 Oct (Jonah: not enough on the boards yet). The server
+      // reads the same field (main._card_hour); off unless it is true.
+      '<label class="est-switch"><input type="checkbox"' + (claudeSet.cardRuns === true ? ' checked' : '') +
+        ' onchange="prClaudeSet(\'cardRuns\', this.checked)"> Claude works the board cards by itself at 7 am and 7 pm</label>' +
+      '<p class="hint">' + (claudeSet.cardRuns === true ? '' : 'Off: Claude only does a card when you press 🤖 Ask Claude now on it. ') +
+        'Receipts, emails and price lookups use the lower-cost model.</p>';
   }
   window.prClaudeSet = function (k, v) {
     if (!owner()) return;
@@ -504,6 +509,7 @@
       if (!(n >= 0) || String(v).trim() === '') { showToast('The limit should be a dollar amount'); loadSpend(); return; }
       val = Math.round(n * 100);
     } else if (k === 'estimateModel') val = v === 'opus' ? 'opus' : 'fable';
+    else if (k === 'cardRuns') val = v === true;
     claudeSet = Object.assign({}, claudeSet, { [k]: val });
     const b = el('prSpend'); if (b) b.innerHTML = spendHtml();
     Promise.resolve(window.YDDb.put('settings', 'claude', { [k]: val, updatedAt: new Date().toISOString() })).catch(e => {

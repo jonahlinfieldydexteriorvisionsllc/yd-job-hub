@@ -913,8 +913,8 @@
 
   // ------------------------------------------------- Claude on the cards
   //
-  // Two Claudes work the cards. The server does it every hour from 7 am to
-  // 7 pm (research, writing, emails left in Gmail Drafts -- never sent). When
+  // Two Claudes work the cards. The server does it at 7 am and 7 pm
+  // (research, writing, emails left in Gmail Drafts -- never sent). When
   // the owner leaves the computer at home on, Claude there checks every 20
   // minutes instead and can do more: websites, documents, and changes to Job
   // Hub itself -- which it builds and then waits for "Put it live". The
@@ -922,12 +922,18 @@
   // server leaves the cards to it. What either did is kept on the card as
   // `claude` (`by: 'computer'` for the one at home). Only the owner sees this
   // and steers it: the work can name customers and prices.
+  //
+  // Both are switched off for now (Jonah, 9 Oct: not enough on the boards
+  // yet, more useful next year): the server works cards by itself only while
+  // settings/claude.cardRuns is true (Pricing rules -> Claude), and the
+  // computer's 20-minute task is paused. "Ask Claude now" still works.
   const MACHINE_BOARD = 'maintenance';
   const COMPUTER_AWAKE_MIN = 45;
 
-  // When the computer at home last checked in. Read now and then rather than
-  // watched: it changes every 20 minutes and only the owner's screen shows it.
-  let homeComputer = null, homeComputerAt = 0;
+  // When the computer at home last checked in, and whether the card runs
+  // are on. Read now and then rather than watched: only the owner's screen
+  // shows them.
+  let homeComputer = null, homeComputerAt = 0, cardRuns = false;
   function computerAwake() {
     const t = homeComputer && Date.parse(homeComputer.lastSeenAt || '');
     return !!t && Date.now() - t < COMPUTER_AWAKE_MIN * 60000;
@@ -935,12 +941,13 @@
   function refreshComputer() {
     if (!isOwner() || !window.YDDb || Date.now() - homeComputerAt < 60000) return;
     homeComputerAt = Date.now();
-    Promise.resolve(window.YDDb.get('settings', 'homeComputer'))
-      .then(d => { homeComputer = d; redrawIfVisible(); })
+    Promise.all([window.YDDb.get('settings', 'homeComputer'), window.YDDb.get('settings', 'claude')])
+      .then(([d, c]) => { homeComputer = d; cardRuns = !!(c && c.cardRuns === true); redrawIfVisible(); })
       .catch(() => {});
   }
   function computerLine() {
-    if (!isOwner() || !homeComputer || !homeComputer.lastSeenAt) return '';
+    // With the card runs off, "the computer is off" is no news.
+    if (!isOwner() || !homeComputer || !homeComputer.lastSeenAt || (!cardRuns && !computerAwake())) return '';
     const t = new Date(homeComputer.lastSeenAt);
     const when = t.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
     return '<div class="bd-computer' + (computerAwake() ? ' on' : '') + '">🖥 ' +
@@ -961,7 +968,8 @@
     if (!c) {
       return head + '<div class="cl-box muted">' + (finished ? 'Done — Claude does not look at finished cards.'
         : computerAwake() ? 'Claude on the computer at home looks at new cards every 20 minutes and does the ones it can.'
-        : 'Claude looks at new cards every hour from 7 am to 7 pm and does the ones it can by itself.') +
+        : cardRuns ? 'Claude looks at new cards at 7 am and 7 pm and does the ones it can by itself.'
+        : 'Claude does a card only when you ask (switched on or off in Pricing rules → Claude).') +
         '<div class="field-actions">' +
           (finished ? '' : '<button class="btn btn-sm btn-filled" onclick="claudeNow()">🤖 Ask Claude now</button>') +
           '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button>' +
@@ -986,8 +994,9 @@
       ((c.drafts || []).length ? '<div class="cl-drafts">' + c.drafts.map(d =>
         '<a class="btn btn-sm" href="' + esc(safeLink(d.link)) + '" target="_blank" rel="noopener">✉️ Draft to ' +
         esc(d.to || '') + '</a>').join('') + '</div>' : '') +
-      (c.status === 'needs_info' ? '<div class="hint">Add what it needs to the card (Edit → Notes) and it looks again ' +
-        (computerAwake() ? 'within 20 minutes' : 'within the hour') + '.</div>' : '') +
+      (c.status === 'needs_info' ? '<div class="hint">Add what it needs to the card (Edit → Notes) and ' +
+        (computerAwake() ? 'it looks again within 20 minutes' : cardRuns ? 'it looks again at the next run (7 am or 7 pm)'
+          : 'press Ask Claude again') + '.</div>' : '') +
       '<div class="field-actions">' +
         (c.status === 'waiting_ok' && !c.approvedAt
           ? '<button class="btn btn-sm btn-filled" onclick="claudeApprove()">✅ Put it live</button>' : '') +
@@ -1028,7 +1037,8 @@
   window.claudeAgain = function () {
     if (!confirm('Have Claude do this card again? What it did before is replaced (drafts already in Gmail stay there).')) return;
     claudePatch({ claude: null });
-    showToast('Claude will look at it again within the hour');
+    showToast(computerAwake() || cardRuns ? 'Claude will look at it again on the next run'
+      : 'Cleared — press 🤖 Ask Claude now when you want it done');
   };
   window.claudeNow = async function () {
     if (!openCard || !isOwner() || !window.YDClaude) return;
