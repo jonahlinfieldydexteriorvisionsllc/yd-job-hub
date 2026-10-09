@@ -232,6 +232,57 @@
     } catch (e) { showToast(e.message); }
   };
 
+  // -------------------------------------------------------------- summaries
+  //
+  // Jonah (9 Oct 2026): "id prefer to view them in the app rather than my
+  // email." The server keeps each summary it sends for two weeks
+  // (summaries/{uid}_{day}_{slot}, digest.py _keep; each person reads only
+  // their own) and the phone notification opens this. Shown in a sandboxed
+  // frame: the email's own page, exactly as it would have arrived.
+  const SLOT_ICON = { morning: '☀️', midday: '🕛', evening: '🌙' };
+  const SLOT_WORD = { morning: 'Morning', midday: 'Midday', evening: 'End of day' };
+  let summaries = {}, sumUnsub = null, sumShown = null;
+
+  window.openSummaries = function () {
+    const m = el('sumModal'), u = me();
+    if (!m || !u || !window.YDDb) return;
+    m.classList.add('active');
+    summaries = {}; sumShown = null;
+    el('sumBody').innerHTML = '<p class="empty-msg">Loading…</p>';
+    if (sumUnsub) sumUnsub();
+    sumUnsub = window.YDDb.watchWhere('summaries', 'uid', u.uid, changes => {
+      changes.forEach(c => { if (c.type === 'removed') delete summaries[c.id]; else summaries[c.id] = Object.assign({ id: c.id }, c.data); });
+      renderSummaries();
+    }, () => { el('sumBody').innerHTML = '<p class="ntf-warn">Summaries could not be loaded yet.</p>'; });
+  };
+  window.closeSummaries = function () {
+    const m = el('sumModal'); if (m) m.classList.remove('active');
+    if (sumUnsub) { sumUnsub(); sumUnsub = null; }
+  };
+  window.showSummary = function (id) { sumShown = id; renderSummaries(); };
+
+  function sumLabel(s) {
+    const d = new Date(String(s.day || '') + 'T12:00:00');
+    return (SLOT_ICON[s.slot] || '📰') + ' ' + (isNaN(d) ? '' : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) +
+      ' · ' + (SLOT_WORD[s.slot] || s.slot || '');
+  }
+  function renderSummaries() {
+    const body = el('sumBody');
+    if (!body) return;
+    const list = Object.values(summaries).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    if (!list.length) {
+      body.innerHTML = '<p class="empty-msg">No summaries here yet. The next one lands at 5:00 am (morning) or 5:30 pm (end of day).</p>' +
+        '<div class="field-actions"><button class="btn btn-sm" onclick="closeSummaries(); openNotifications()">Change what you get</button></div>';
+      return;
+    }
+    const shown = list.find(s => s.id === sumShown) || list[0];
+    body.innerHTML = '<div class="sum-pick">' + list.map(s => '<button class="sum-chip' + (s.id === shown.id ? ' on' : '') +
+        '" onclick="showSummary(\'' + String(s.id).replace(/[^A-Za-z0-9_-]/g, '') + '\')">' + esc(sumLabel(s)) + '</button>').join('') + '</div>' +
+      '<iframe class="ntf-frame sum-frame" sandbox="" title="' + esc(shown.subject || 'Summary') + '"></iframe>' +
+      '<div class="field-actions"><button class="btn btn-sm" onclick="closeSummaries(); openNotifications()">Change what you get</button></div>';
+    body.querySelector('iframe').srcdoc = String(shown.html || '');
+  }
+
   // --------------------------------------------------------------- wiring
 
   // Signing out switches this phone's notifications off. They belong to the
@@ -261,12 +312,17 @@
     const on = a.mode === 'cloud' && !!a.user;
     const item = el('menuNotify');
     if (item) item.hidden = !on;
+    const sum = el('menuSummaries');
+    if (sum) sum.hidden = !on;
     prefs = null;
-    // A notification opens the app at #calendar (or another tab): go there once
-    // signed in, then clear it so a reload does not keep jumping back.
+    if (!on) window.closeSummaries();
+    // A notification opens the app at #calendar (or another tab, or
+    // #summary): go there once signed in, then clear it so a reload does not
+    // keep jumping back.
     if (on && location.hash && typeof switchTab === 'function') {
       const want = location.hash.slice(1);
-      if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
+      if (want === 'summary') window.openSummaries();
+      else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
         const btn = el(tabButtonId(want));
         if (btn && !btn.hidden) switchTab(want);
       }

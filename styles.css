@@ -1424,6 +1424,12 @@
   .ntf-toggle small { color:var(--muted); font-size:12px; }
   .ntf-push-preview { margin-top:12px; padding:10px 12px; border-radius:12px; background:var(--surface-2); font-size:13px; }
   .ntf-frame { width:100%; height:420px; border:1px solid var(--border); border-radius:8px; margin-top:10px; background:#fff; }
+  /* Summaries (notify.js): the kept ones as chips, the chosen one below */
+  .sum-pick { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+  .sum-chip { flex:0 0 auto; min-height:36px; padding:6px 12px; border-radius:18px; cursor:pointer;
+    border:1.5px solid var(--border-strong); background:var(--surface); color:var(--text); font:600 12px 'DM Sans',sans-serif; }
+  .sum-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .sum-frame { height:70vh; }
 
   /* On a phone, Notifications & summaries lives in the More sheet; the header
      menu keeps it only on a laptop, which has no More button. */

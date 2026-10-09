@@ -425,7 +425,9 @@ function openMore() {
     ? [{ label: '👥 People & names', hint: 'Rename people, let them in, make an admin',
          call: 'closeMore(); openPeople()' }]
     : []).concat((window.YDAuth && window.YDAuth.user)
-    ? [{ label: '🔔 Notifications & summaries', hint: 'Daily updates by email and on your phone',
+    ? [{ label: '📰 Summaries', hint: 'This morning’s and last night’s summary, and the two weeks before',
+         call: 'closeMore(); openSummaries()' },
+       { label: '🔔 Notifications & summaries', hint: 'Daily updates by email and on your phone',
          call: 'closeMore(); openNotifications()' }]
     : []).concat([{ label: '🌓 Appearance', hint: 'Light, dark, or match this phone',
          call: 'closeMore(); openAppearance()' }]);
@@ -599,6 +601,8 @@ function switchTab(name) {
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
+  // A daily summary opens itself in the app (notify.js).
+  if (want === 'summary' && window.YDAuth && window.YDAuth.user && typeof openSummaries === 'function') { openSummaries(); return; }
   if (TABS.indexOf(want) === -1) return;
   if (!(window.YDAuth && window.YDAuth.user)) {
     history.replaceState(null, '', location.pathname + location.search + '#' + want);

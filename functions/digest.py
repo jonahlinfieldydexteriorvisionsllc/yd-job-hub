@@ -12,10 +12,12 @@ own assignments and storm news. Building them apart means a crew summary can
 never contain something it should not, whatever is later added to the
 owner's.
 
-NOTHING HERE IS STORED. Every summary is worked out fresh from the same
-records the app reads -- calendars, storms, jobs, time entries -- so it cannot
-disagree with what the app shows. Repeating and multi-day events are expanded
-with the same rules as calendar.js.
+Every summary is worked out fresh from the same records the app reads --
+calendars, storms, jobs, time entries -- so it cannot disagree with what the
+app shows. Repeating and multi-day events are expanded with the same rules as
+calendar.js. What was sent is kept for KEEP_DAYS in summaries/{uid}_{day}_{slot}
+(readable only by that person), so it can be read in the app rather than in
+email (Jonah, 9 Oct 2026); the phone notification opens it there.
 
 DATES ARE CENTRAL TIME. "Today" is Madison's today, worked out from the
 time zone, not from UTC -- the server runs in UTC, and a 5 am summary built
@@ -1122,18 +1124,18 @@ def send_email(to, d):
         raise RuntimeError("Gmail said %d: %s" % (r.status_code, r.text[:300]))
 
 
-def send_push(uid, d, tag=None, ttl=6 * 3600):
+def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
     """To every phone this person has switched notifications on for. A phone
     that has since said no (404/410) is forgotten. `tag` keeps one kind of
     notification from replacing another on the phone (a reminder must not
-    wipe out the morning summary)."""
+    wipe out the morning summary). `opens` is where a tap takes them."""
     from pywebpush import WebPushException, webpush
     key = os.environ.get("VAPID_PRIVATE")
     if not key:
         raise RuntimeError("phone notifications are not configured (no VAPID key)")
     db = _db()
     sent = 0
-    body = {"title": d["push"]["title"], "body": d["push"]["body"][:180], "url": _app_url() + "#calendar"}
+    body = {"title": d["push"]["title"], "body": d["push"]["body"][:180], "url": _app_url() + "#" + opens}
     if tag:
         body["tag"] = tag
     payload = json.dumps(body)
@@ -1160,6 +1162,24 @@ DEFAULT_PREFS = {
     "owner": {"email": True, "push": True, "morning": True, "midday": True, "evening": True},
     "crew": {"email": False, "push": True, "morning": True, "midday": True, "evening": True},
 }
+
+
+KEEP_DAYS = 14
+
+
+def _keep(uid, slot, d):
+    """The summary as sent, for the app's Summaries screen (notify.js). The
+    email's own page, so the app shows exactly what the email would. A
+    person's older than KEEP_DAYS are cleared as the new one goes in."""
+    db = _db()
+    today = _now().date()
+    db.collection("summaries").document("%s_%s_%s" % (uid, _day(today), slot)).set({
+        "uid": uid, "slot": slot, "day": _day(today), "at": _now().isoformat(),
+        "subject": d.get("subject") or "", "push": d.get("push") or {}, "html": to_html(d)})
+    cutoff = _day(today - datetime.timedelta(days=KEEP_DAYS))
+    for s in db.collection("summaries").where("uid", "==", uid).stream():
+        if str((s.to_dict() or {}).get("day") or "") < cutoff:
+            s.reference.delete()
 
 
 def _prefs(user):
@@ -1247,6 +1267,11 @@ def run(slot, only_uid=None, dry=False):
             report.append({"uid": uid, "error": "could not build: %s" % e})
             continue
         r = {"uid": uid}
+        try:
+            _keep(uid, slot, d)
+            r["kept"] = True
+        except Exception as e:          # noqa: BLE001 -- the email and push still go
+            print("digest: summary not kept for", uid, e)
         if p.get("email") and u.get("email"):
             try:
                 send_email(u["email"], d)
@@ -1256,7 +1281,8 @@ def run(slot, only_uid=None, dry=False):
                 print("digest: email failed for", uid, e)
         if p.get("push"):
             try:
-                r["push"] = send_push(uid, d)
+                # A tap opens the summary itself in the app.
+                r["push"] = send_push(uid, d, opens="summary")
             except Exception as e:      # noqa: BLE001
                 r["push"] = "failed: %s" % e
                 print("digest: push failed for", uid, e)

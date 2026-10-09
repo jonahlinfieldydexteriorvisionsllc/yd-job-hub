@@ -511,6 +511,13 @@ service cloud.firestore {
     match /digestPrefs/{uid} {
       allow read, write: if isOwner() || (isStaff() && request.auth.uid == uid);
     }
+    // The daily summaries as sent (digest.py _keep), read in the app. Each
+    // person's own only -- not even the owner reads a crew member's, which
+    // is theirs. Written by the server alone.
+    match /summaries/{id} {
+      allow read: if isStaff() && resource.data.uid == request.auth.uid;
+      allow write: if false;
+    }
     match /pushSubs/{subId} {
       allow read: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
       allow create, update: if isStaff() && request.resource.data.uid == request.auth.uid
