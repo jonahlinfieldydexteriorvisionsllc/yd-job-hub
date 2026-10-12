@@ -178,14 +178,98 @@
 
   // ---------------------------------------------------------------- render
 
+  // Tags: what a material is used for (Jonah, 12 Oct 2026: "a central hub of
+  // all supplies that I can search in and is organized by what the material
+  // is used for"; "tags i can add like drainage, snow removal so i can sort
+  // all the materials by what their for"). The starter tags below are worked
+  // out from each item's kind and name; his own (typed on an item, or on a
+  // whole search at once) sit beside them, stored by name. An item's own
+  // `usedFor` -- starter ids and his tags -- wins over the worked-out ones.
+  // One item can carry several: base gravel goes under a patio and behind a wall.
+  // `also` are the words that, typed as a tag, mean this starter one.
+  const USES = [
+    { id: 'patios', icon: '🏡', name: 'Patios & walkways', kinds: ['pavers', 'stone', 'hardscape', 'adhesive', 'edging'],
+      also: ['patio', 'walkway', 'walkways', 'pavers', 'hardscape', 'hardscaping'] },
+    { id: 'walls', icon: '🧱', name: 'Retaining walls & steps', kinds: ['wall', 'stone', 'hardscape', 'adhesive'],
+      also: ['wall', 'retaining wall', 'retaining walls', 'steps'] },
+    { id: 'natural', icon: '⛰', name: 'Natural stone & boulders', kinds: ['natural'], also: ['natural stone', 'boulders', 'flagstone'] },
+    { id: 'beds', icon: '🌷', name: 'Beds & planting', kinds: ['mulch', 'soil', 'plant', 'planting', 'edging'],
+      words: /\b(river rock|decorative|landscape rock|mulch)\b/, also: ['beds', 'planting', 'plants', 'landscaping'] },
+    { id: 'lawn', icon: '🌱', name: 'Lawn & seed', kinds: ['seed', 'soil'], also: ['lawn', 'seed', 'grass', 'erosion', 'sod'] },
+    { id: 'grading', icon: '🚜', name: 'Grading & base', kinds: ['fill', 'stone', 'soil'], also: ['grading', 'fill', 'base'] },
+    { id: 'drainage', icon: '💧', name: 'Drainage & concrete', kinds: ['drainage'], also: ['drainage', 'concrete'] },
+    { id: 'snow', icon: '❄️', name: 'Snow removal', kinds: [],
+      words: /\b(salt|ice ?melt|de-?icer|calcium chloride|magnesium chloride)\b/,
+      also: ['snow', 'snow & ice', 'snow and ice', 'ice', 'salt', 'snow plowing', 'plowing'] },
+    { id: 'tools', icon: '🔧', name: 'Tools & hardware', kinds: ['tools', 'hardware'], also: ['tools', 'hardware', 'equipment'] },
+    { id: 'rentals', icon: '🚛', name: 'Rentals & dumpsters', kinds: ['rental', 'dumpster'], also: ['rental', 'rentals', 'dumpster', 'dumpsters'] },
+    { id: 'other', icon: '📦', name: 'Everything else', kinds: ['bagged', 'other'], also: ['other', 'misc'] },
+  ];
+  const USE_BY_ID = {};
+  USES.forEach(u => { USE_BY_ID[u.id] = u; });
+  const sameSet = (a, b) => a.slice().sort().join('|') === b.slice().sort().join('|');
+  function usesFromKind(category, name, also) {
+    const words = norm([name, also].join(' '));
+    // Everything else is only for what nothing else claims (bagged salt is snow removal).
+    const out = USES.filter(u => u.id !== 'other' && (u.kinds.indexOf(category) !== -1 || (u.words && u.words.test(words)))).map(u => u.id);
+    return out.length ? out : ['other'];
+  }
+  const cleanTag = t => String(t == null ? '' : t).replace(/\s+/g, ' ').trim().slice(0, 40);
+  // His own tags, spelt the way each was first typed ("snow Removal" on one
+  // item and "Snow removal" on another are one tag). Rebuilt whenever the
+  // items change (tagsChanged).
+  let tagCache = null;
+  function canonTags() {
+    if (tagCache) return tagCache;
+    tagCache = {};
+    Object.values(items).forEach(it => (Array.isArray(it.usedFor) ? it.usedFor : []).forEach(t => {
+      t = cleanTag(t);
+      if (t && !USE_BY_ID[t] && !tagCache[key(t)]) tagCache[key(t)] = t;
+    }));
+    return tagCache;
+  }
+  const tagsChanged = () => { tagCache = null; };
+  const customTags = () => Object.values(canonTags()).sort((a, b) => a.localeCompare(b));
+  function usesOf(it) {
+    const own = (Array.isArray(it.usedFor) ? it.usedFor : []).map(cleanTag).filter(Boolean)
+      .map(t => (USE_BY_ID[t] ? t : canonTags()[key(t)] || t)).filter((t, i, a) => a.indexOf(t) === i);
+    return own.length ? own : usesFromKind(it.category, it.name, it.also);
+  }
+  // A tag as typed -> the tag it is: a starter one ("drainage", "snow"), one
+  // already in use however it was capitalised, or a new one as typed.
+  function tagFor(text) {
+    const t = cleanTag(text), k = key(t);
+    if (!k) return '';
+    const hit = USES.find(u => key(u.id) === k || key(u.name) === k || u.also.some(a => key(a) === k));
+    if (hit) return hit.id;
+    return customTags().find(c => key(c) === k) || t;
+  }
+  const tagInfo = t => USE_BY_ID[t] || { id: t, icon: '🔖', name: t, custom: true };
+  const isTag = t => !!t && (!!USE_BY_ID[t] || customTags().indexOf(t) !== -1);
+  const kindName = it => ((categories().find(c => c[0] === it.category) || [])[1]) || 'No kind set';
+
   // Every word typed has to appear somewhere in the item: its name, the other
-  // names it goes by, the supplier, the item number, or the where. "grass
-  // seed" finds "Seed -- sun & shade mix" listed with "grass" as another name.
+  // names it goes by, the supplier, the item number, the where, its kind or
+  // what it is used for. "grass seed" finds "Seed -- sun & shade mix" listed
+  // with "grass" as another name; "snow" finds the salt.
   function matches(it, words) {
     const v = vendors[it.vendorId] || {};
-    const hay = norm([it.name, it.also, it.sku, v.name, it.where, it.notes].join(' '));
+    const hay = norm([it.name, it.also, it.sku, v.name, it.where, it.notes, kindName(it)]
+      .concat(usesOf(it).map(t => tagInfo(t).name)).join(' '));
     return words.every(w => hay.indexOf(w) !== -1);
   }
+
+  // Two ways in (Jonah, 12 Oct 2026: "I want to be able to scroll through the
+  // vendors without seeing every single item ... click on a vendor then it
+  // shows me their items"): the suppliers, one line each, opened one at a
+  // time; and every supply in one place, by what it is for. Kept per device.
+  const VIEW_KEY = 'ydjobhub_supView';
+  let view = (() => { try { return localStorage.getItem(VIEW_KEY) === 'hub' ? 'hub' : 'vendors'; } catch (e) { return 'vendors'; } })();
+  let use = '';              // the use opened in All supplies, '' for the list of uses
+  const SHOW_MAX = 150;      // a search that matches more shows this many
+  const FOLD_OVER = 25;      // a list longer than this is folded by kind
+  const openFolds = new Set();
+  let foldLists = {};        // fold key -> { list, withVendor }, from the last draw
 
   function render() {
     const wrap = el('suppliesWrap');
@@ -198,14 +282,16 @@
     // the box never loses focus (or the keyboard) mid-word.
     if (!el('supSearch')) {
       wrap.innerHTML =
-        '<input id="supSearch" class="sup-search" type="search" placeholder="What do you need? e.g. seed, pavers, salt" ' +
-          'oninput="supSearch(this.value)" autocomplete="off">' +
+        '<div class="sup-views" role="tablist">' +
+          '<button id="supViewVendors" class="sup-view" role="tab" onclick="supView(\'vendors\')">🏪 Suppliers</button>' +
+          '<button id="supViewHub" class="sup-view" role="tab" onclick="supView(\'hub\')">📦 All supplies</button>' +
+        '</div>' +
+        '<input id="supSearch" class="sup-search" type="search" oninput="supSearch(this.value)" autocomplete="off">' +
         (edits() ? '<div class="field-actions sup-actions">' +
           '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\')">+ Add an item</button>' +
           '<button class="btn btn-sm" onclick="supEdit(\'vendor\', \'\')">+ Add a supplier</button>' +
           '<button class="btn btn-sm" onclick="supPriceList()">💲 Price list</button>' +
         '</div>' : '') +
-        '<div id="supChips" class="sup-chips"></div>' +
         '<div id="supResults"></div>';
       el('supSearch').value = search;
     }
@@ -214,100 +300,230 @@
 
   // Rentals (Jonah, 5 Oct 2026): "a rental section within the supplies with
   // the locations and phone numbers for where we pick up certain rental
-  // items". A rental is an item of the Rentals kind (or a dumpster); the
-  // rental place is a supplier like any other.
-  const RENTALS = 'rentals';
+  // items". A rental is an item of the Rentals kind (or a dumpster), found
+  // under Rentals & dumpsters in All supplies; the rental place is a supplier
+  // like any other.
   const isRental = it => it.category === 'rental' || it.category === 'dumpster';
-
-  function renderChips() {
-    const box = el('supChips');
-    if (!box) return;
-    const count = {};
-    let rentals = 0;
-    Object.values(items).forEach(it => {
-      const k = vendors[it.vendorId] ? it.vendorId : '-';
-      count[k] = (count[k] || 0) + 1;
-      if (isRental(it)) rentals++;
-    });
-    const vs = Object.values(vendors).sort(byName);
-    if (shown && shown !== '-' && shown !== RENTALS && !vendors[shown]) shown = '';
-    const chip = (id, label, n) =>
-      '<button class="sup-chip' + (shown === id ? ' on' : '') + '" onclick="supFilter(\'' + safeId(id) + '\')">' +
-        esc(label) + (n != null ? ' <span>' + n + '</span>' : '') + '</button>';
-    box.innerHTML = vs.length
-      ? chip('', 'All suppliers', Object.keys(items).length) +
-        (rentals ? chip(RENTALS, '🚜 Rentals', rentals) : '') +
-        vs.map(v => chip(v.id, v.name, count[v.id] || 0)).join('') +
-        (count['-'] ? chip('-', 'No supplier', count['-']) : '')
-      : '';
-  }
 
   function renderResults() {
     const box = el('supResults');
     if (!box) return;
-    renderChips();
-    const words = norm(search).split(/\s+/).filter(Boolean);
-    const inShown = it => !shown || (shown === RENTALS ? isRental(it) : shown === '-' ? !vendors[it.vendorId] : it.vendorId === shown);
-    const list = Object.values(items)
-      .filter(it => inShown(it) && (!words.length || matches(it, words)))
-      .sort(byName);
+    tagsChanged();
+    if (shown && shown !== '-' && !vendors[shown]) shown = '';
+    if (use && !isTag(use)) use = '';
+    const vBtn = el('supViewVendors'), hBtn = el('supViewHub'), sBox = el('supSearch');
+    if (vBtn) vBtn.classList.toggle('on', view === 'vendors');
+    if (hBtn) hBtn.classList.toggle('on', view === 'hub');
+    const v = view === 'vendors' && shown && shown !== '-' ? vendors[shown] : null;
+    if (sBox) sBox.placeholder = view === 'hub'
+      ? (use ? 'Search ' + tagInfo(use).name.toLowerCase() : 'What do you need? e.g. seed, pavers, salt')
+      : v ? 'Search what ' + v.name + ' sells' : shown === '-' ? 'Search these items' : 'Find a supplier — or something they sell';
+    foldLists = {};
 
     if (!Object.keys(items).length && !Object.keys(vendors).length) {
       box.innerHTML = '<p class="empty-msg">' + (edits()
         ? 'Nothing here yet. Add your suppliers first, then the things you buy from each — ' +
-          'and where they are once you get there.'
+          'and where they are once you get there. Or paste a whole price list in at once with “💲 Price list”.'
         : 'Nothing has been added here yet.') + '</p>';
       return;
     }
+    const words = norm(search).split(/\s+/).filter(Boolean);
+    box.innerHTML = view === 'hub' ? hubHtml(words) : shown ? oneVendorHtml(v, words) : vendorListHtml(words);
+  }
 
-    let html = '';
-    // One supplier picked: its card first -- address, phone, hours, notes --
-    // then everything bought there.
-    const v = shown && shown !== '-' && shown !== RENTALS ? vendors[shown] : null;
-    if (v) html += vendorCardHtml(v, list.length);
-    if (shown === RENTALS) {
-      html += '<div class="hint">What we rent and where to get it. Add one with “+ Add an item” and pick ' +
-        '“Rentals” as its kind; the rental place is a supplier like any other.</div>';
+  // ---- Suppliers: one line each; tap one for its card and what it sells.
+
+  function vendorListHtml(words) {
+    const count = {}, hits = {};
+    Object.values(items).forEach(it => {
+      const k = vendors[it.vendorId] ? it.vendorId : '-';
+      count[k] = (count[k] || 0) + 1;
+      if (words.length && matches(it, words)) hits[k] = (hits[k] || 0) + 1;
+    });
+    // A search finds a supplier by its own name and address, or by what it sells.
+    const own = vd => words.every(w => norm([vd.name, vd.address, vd.notes, vd.website].join(' ')).indexOf(w) !== -1);
+    const list = Object.values(vendors).sort(byName).filter(vd => !words.length || own(vd) || hits[vd.id]);
+    const row = (id, name, n, sub, ways, hit) =>
+      '<button class="sup-vrow" onclick="supFilter(\'' + safeId(id) + '\')">' +
+        '<span class="sup-vrow-main">' +
+          '<span class="sup-vrow-top"><span class="sup-vrow-name">' + esc(name) + '</span>' +
+            '<span class="sup-unit">' + n + ' item' + (n === 1 ? '' : 's') + '</span>' +
+            (hit ? '<span class="sup-unit sup-hit">' + hit + ' match' + (hit === 1 ? '' : 'es') + '</span>' : '') +
+          '</span>' +
+          (ways ? '<span class="sup-ways">' + ways + '</span>' : '') +
+          (sub ? '<span class="sup-vrow-sub">' + esc(sub) + '</span>' : '') +
+        '</span><span class="sup-vrow-go" aria-hidden="true">›</span></button>';
+    let html = list.map(vd => row(vd.id, vd.name, count[vd.id] || 0,
+      [vd.address, vd.hours].filter(Boolean).join(' · '), waysSpans(vd), hits[vd.id] || 0)).join('');
+    if (count['-'] && (!words.length || hits['-'])) html += row('-', 'No supplier set', count['-'], '', '', hits['-'] || 0);
+    if (!html) {
+      return '<p class="empty-msg">No supplier matches “' + esc(search) + '”, and nobody sells anything by that name.' +
+        (edits() ? ' Add it with “+ Add a supplier” or “+ Add an item”.' : ' Ask Jonah, and he can add it here.') + '</p>';
     }
+    return '<div class="sup-vlist">' + html + '</div>';
+  }
 
+  function oneVendorHtml(v, words) {
+    const mine = Object.values(items).filter(it => (v ? it.vendorId === v.id : !vendors[it.vendorId])).sort(byName);
+    const list = words.length ? mine.filter(it => matches(it, words)) : mine;
+    let html = '<button class="link-btn sup-back" onclick="supFilter(\'\')">← All suppliers</button>';
+    html += v ? vendorCardHtml(v, mine.length)
+      : '<div class="sup-h">No supplier set</div><div class="hint">Pick each one’s supplier with its Edit button.</div>';
     if (!list.length) {
-      html += '<p class="empty-msg">' + (words.length
-        ? 'Nothing matches “' + esc(search) + '”' + (v ? ' at ' + esc(v.name) : '') + '.' +
-          (edits() ? ' Add it with “+ Add an item”.' : ' Ask Jonah where to get it, and he can add it here.')
-        : (v ? 'Nothing listed for ' + esc(v.name) + ' yet.' : 'Nothing here yet.') +
-          // The first visit: suppliers in, nothing bought from them yet. Say
-          // how the list gets filled rather than just that it is empty.
-          (edits() && !Object.keys(items).length
-            ? ' Add things one at a time with “+ Add an item”, or paste a whole price list ' +
-              'in at once with “💲 Price list”.'
-            : '')) + '</p>';
-      box.innerHTML = html;
-      return;
+      return html + '<p class="empty-msg">' + (words.length
+        ? 'Nothing ' + (v ? 'at ' + esc(v.name) + ' ' : '') + 'matches “' + esc(search) + '”.'
+        : 'Nothing listed for ' + esc(v ? v.name : 'here') + ' yet.' + (edits() ? ' Add things with “+ Add an item here”.' : '')) + '</p>';
     }
+    return html + (words.length ? bulkBarHtml(list, '') : '') + itemsHtml('v:' + (v ? v.id : '-'), list, false, !!words.length);
+  }
 
-    if ((shown && shown !== RENTALS) || words.length) {
-      // A search shows each item with its supplier; inside one supplier the
-      // supplier is already on the card above.
-      html += list.map(it => itemHtml(it, !v)).join('');
-    } else {
-      // Everything (or every rental), grouped by where it comes from.
-      // Everything, grouped by supplier -- the way the list is kept.
-      const groups = {};
-      list.forEach(it => {
-        const k = vendors[it.vendorId] ? it.vendorId : '-';
-        (groups[k] = groups[k] || []).push(it);
-      });
-      Object.values(vendors).sort(byName).forEach(g => {
-        if (!groups[g.id]) return;
-        html += groupHeadHtml(g, groups[g.id].length) + groups[g.id].map(it => itemHtml(it, false)).join('');
-      });
-      if (groups['-']) {
-        html += '<div class="sup-group"><span class="sup-group-name">No supplier set</span>' +
-          '<span class="sup-group-count">' + groups['-'].length + '</span></div>' +
-          groups['-'].map(it => itemHtml(it, false)).join('');
-      }
+  // ---- All supplies: every item, by what it is used for.
+
+  // Every tag, the starter ones first. A tag goes in an onclick through
+  // data-t, never inside the quotes: his own tags have spaces and apostrophes.
+  const allTags = () => USES.map(u => u.id).concat(customTags());
+  const tagAttr = t => ' data-t="' + esc(t) + '" onclick="supUse(this.dataset.t)"';
+
+  function hubHtml(words) {
+    const all = Object.values(items).sort(byName);
+    if (use) {
+      const u = tagInfo(use);
+      const mine = all.filter(it => usesOf(it).indexOf(use) !== -1);
+      const list = words.length ? mine.filter(it => matches(it, words)) : mine;
+      return '<button class="link-btn sup-back" onclick="supUse(\'\')">← Every tag</button>' +
+        '<div class="sup-h">' + u.icon + ' ' + esc(u.name) + ' <span class="sup-group-count">' + mine.length + '</span></div>' +
+        (use === 'rentals' ? '<div class="hint">What we rent and where to get it. Add one with “+ Add an item” and pick ' +
+          '“Rentals” as its kind; the rental place is a supplier like any other.</div>' : '') +
+        bulkBarHtml(list, use) +
+        (list.length ? itemsHtml('u:' + use, list, true, !!words.length)
+          : '<p class="empty-msg">' + (words.length ? 'Nothing here matches “' + esc(search) + '”.' : 'Nothing here yet.') + '</p>');
     }
-    box.innerHTML = html;
+    if (words.length) {
+      // A search across everything, under the first tag each one carries.
+      const list = all.filter(it => matches(it, words));
+      if (!list.length) {
+        return '<p class="empty-msg">Nothing matches “' + esc(search) + '”.' +
+          (edits() ? ' Add it with “+ Add an item”.' : ' Ask Jonah where to get it, and he can add it here.') + '</p>';
+      }
+      const byUse = {};
+      list.slice(0, SHOW_MAX).forEach(it => { const k = usesOf(it)[0]; (byUse[k] = byUse[k] || []).push(it); });
+      return bulkBarHtml(list, '') + allTags().filter(t => byUse[t]).map(t =>
+        '<div class="sup-group"><button class="sup-group-name"' + tagAttr(t) + '>' + tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>' +
+          '<span class="sup-group-count">' + byUse[t].length + '</span></div>' +
+        byUse[t].map(it => itemHtml(it, true)).join('')).join('') + moreHtml(list.length);
+    }
+    // The tags, as tiles to open -- not every item at once.
+    const count = {};
+    all.forEach(it => usesOf(it).forEach(k => { count[k] = (count[k] || 0) + 1; }));
+    return '<div class="sup-tiles">' + allTags().filter(t => count[t]).map(t =>
+      '<button class="sup-tile"' + tagAttr(t) + '><span class="sup-tile-icon" aria-hidden="true">' + tagInfo(t).icon + '</span>' +
+        '<b>' + esc(tagInfo(t).name) + '</b><small>' + count[t] + ' item' + (count[t] === 1 ? '' : 's') + '</small></button>').join('') +
+      '</div><div class="hint">Tags start from each item’s kind. Add your own on an item (Edit → Used for), ' +
+        'or search, then “🔖 Tag these” to tag everything found at once.</div>';
+  }
+
+  // Tagging many at once: everything a search (or a tag's page) shows.
+  let bulkList = [];
+  function bulkBarHtml(list, tag) {
+    bulkList = list;
+    if (!edits() || !list.length || (!tag && !norm(search).trim())) return '';
+    const n = list.length + ' item' + (list.length === 1 ? '' : 's');
+    return '<div class="sup-bulk">' +
+      '<button class="btn btn-sm" onclick="supTagAll()">🔖 Tag these ' + n + '…</button>' +
+      (tag ? '<button class="btn btn-sm" onclick="supUntagAll()">✕ Take “' + esc(tagInfo(tag).name) + '” off these ' + n + '</button>' : '') +
+      (tag && tagInfo(tag).custom ? '<button class="btn btn-sm" onclick="supRenameTag()">✎ Rename this tag</button>' : '') +
+    '</div>';
+  }
+  // Each item's tags as `fn` makes them; saved as the item's own unless they
+  // come out the same as its kind would give.
+  function retag(list, fn) {
+    const now = new Date().toISOString(), writes = [];
+    list.forEach(it => {
+      const before = usesOf(it), next = fn(before.slice()).filter((t, i, a) => t && a.indexOf(t) === i);
+      if (sameSet(before, next)) return;
+      const usedFor = sameSet(next, usesFromKind(it.category, it.name, it.also)) ? null : next;
+      it.usedFor = usedFor;
+      writes.push(['supplies', it.id, { usedFor: usedFor, updatedAt: now }]);
+      tagsChanged();
+    });
+    if (writes.length) {
+      Promise.resolve(window.YDDb.putMany(writes)).catch(e => {
+        if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
+        else console.warn('[supplies] tags not yet on the server:', (e && e.code) || e);
+      });
+    }
+    return writes.length;
+  }
+  const bigAsk = n => n <= 50 || confirm('That changes ' + n + ' items. Go ahead?');
+  window.supTagAll = function () {
+    if (!edits() || !bulkList.length) return;
+    const t = tagFor(prompt('Tag all ' + bulkList.length + ' with… (e.g. Snow removal, Drainage)') || '');
+    if (!t || !bigAsk(bulkList.length)) return;
+    const n = retag(bulkList, tags => tags.concat(t));
+    showToast(n ? n + ' tagged “' + tagInfo(t).name + '”' : 'They already have that tag');
+    renderResults();
+  };
+  window.supUntagAll = function () {
+    if (!edits() || !use || !bulkList.length || !bigAsk(bulkList.length)) return;
+    const t = use;
+    // An item left with no tag at all goes under Everything else rather than
+    // springing back to the ones its kind gives.
+    const n = retag(bulkList, tags => { const left = tags.filter(x => x !== t); return left.length ? left : ['other']; });
+    showToast(n + ' untagged');
+    renderResults();
+  };
+  window.supRenameTag = function () {
+    if (!edits() || !use || !tagInfo(use).custom) return;
+    const was = use, typed = prompt('Rename “' + was + '” to…', was) || '';
+    let to = tagFor(typed);
+    if (to === was && cleanTag(typed) !== was) to = cleanTag(typed);   // only the capitals changed
+    if (!to || to === was) return;
+    const n = retag(Object.values(items).filter(it => usesOf(it).indexOf(was) !== -1), tags => tags.map(x => (x === was ? to : x)));
+    use = to;
+    showToast(n + ' item' + (n === 1 ? '' : 's') + ' moved to “' + tagInfo(to).name + '”');
+    renderResults();
+  };
+
+  // A list of items: as it is when short or searched, else folded by kind so
+  // a supplier with 800 things opens as a dozen headings, not a wall.
+  function itemsHtml(scope, list, withVendor, searched) {
+    if (searched || list.length <= FOLD_OVER) {
+      return list.slice(0, SHOW_MAX).map(it => itemHtml(it, withVendor)).join('') + moreHtml(list.length);
+    }
+    const byKind = {};
+    list.forEach(it => { const k = kindName(it); (byKind[k] = byKind[k] || []).push(it); });
+    return Object.keys(byKind).sort((a, b) => (a === 'No kind set') - (b === 'No kind set') || a.localeCompare(b)).map(k => {
+      const fk = scope + '|' + k, open = openFolds.has(fk);
+      foldLists[fk] = { list: byKind[k], withVendor: withVendor };
+      return '<details class="sup-fold" data-k="' + esc(fk) + '"' + (open ? ' open' : '') + ' ontoggle="supFold(this)">' +
+        '<summary><span class="sup-fold-name">' + esc(k) + '</span><span class="sup-group-count">' + byKind[k].length + '</span></summary>' +
+        '<div class="sup-fold-body">' + (open ? byKind[k].map(it => itemHtml(it, withVendor)).join('') : '') + '</div></details>';
+    }).join('');
+  }
+  const moreHtml = n => (n > SHOW_MAX ? '<p class="hint">Showing ' + SHOW_MAX + ' of ' + n + ' — type more to narrow it down.</p>' : '');
+
+  // A fold is filled the first time it opens, so a closed one costs nothing.
+  window.supFold = function (d) {
+    const k = d.getAttribute('data-k');
+    if (d.open) openFolds.add(k); else openFolds.delete(k);
+    const body = d.querySelector('.sup-fold-body'), f = foldLists[k];
+    if (d.open && body && !body.childElementCount && f) body.innerHTML = f.list.map(it => itemHtml(it, f.withVendor)).join('');
+  };
+  window.supView = function (which) {
+    view = which === 'hub' ? 'hub' : 'vendors';
+    try { localStorage.setItem(VIEW_KEY, view); } catch (e) { /* private window */ }
+    renderResults();
+  };
+  window.supUse = function (id) {
+    view = 'hub';
+    use = isTag(id) ? id : '';
+    renderResults();
+    toTop();
+  };
+  // Back at the top of the list after opening or leaving something further down.
+  function toTop() {
+    const w = el('suppliesWrap');
+    if (w && w.getBoundingClientRect().top < 0) w.scrollIntoView({ block: 'start' });
   }
 
   // How a supplier that isn't down the road is bought from (Jonah, 12 Oct
@@ -333,12 +549,14 @@
     } catch (e) { return ''; }
   }
   // The chips under a supplier's name: how it is bought, and how long it takes.
-  function waysHtml(v) {
+  function waysSpans(v) {
     const w = waysOf(v);
-    if (!w.length && !v.leadTime) return '';
-    return '<div class="sup-ways">' + BUY_WAYS.filter(b => w.indexOf(b.id) !== -1)
-      .map(b => '<span class="sup-way">' + b.chip + '</span>').join('') +
-      (v.leadTime ? '<span class="sup-way">⏱ ' + esc(v.leadTime) + '</span>' : '') + '</div>';
+    return BUY_WAYS.filter(b => w.indexOf(b.id) !== -1).map(b => '<span class="sup-way">' + b.chip + '</span>').join('') +
+      (v.leadTime ? '<span class="sup-way">⏱ ' + esc(v.leadTime) + '</span>' : '');
+  }
+  function waysHtml(v) {
+    const s = waysSpans(v);
+    return s ? '<div class="sup-ways">' + s + '</div>' : '';
   }
 
   function linksHtml(v) {
@@ -353,14 +571,6 @@
       (map ? '<a class="btn btn-sm" href="' + map + '" target="_blank" rel="noopener">📍 Directions</a>' : '') +
       (tel ? '<a class="btn btn-sm" href="' + esc(tel) + '">📞 Call</a>' : '') +
       (mail ? '<a class="btn btn-sm" href="' + esc(mail) + '">✉️ Email</a>' : '');
-  }
-
-  function groupHeadHtml(v, n) {
-    return '<div class="sup-group">' +
-      '<button class="sup-group-name" onclick="supFilter(\'' + safeId(v.id) + '\')">' + esc(v.name) + '</button>' +
-      '<span class="sup-group-count">' + n + '</span>' +
-      '<span class="sup-group-links">' + linksHtml(v) + '</span>' +
-    '</div>';
   }
 
   function vendorCardHtml(v, n) {
@@ -414,6 +624,9 @@
       // So nobody drives to a supplier that only ships.
       (withVendor && v ? waysHtml(v) : '') +
       (it.notes ? '<div class="sup-notes">' + esc(it.notes) + '</div>' : '') +
+      // Its tags; one tap opens everything else with that tag.
+      '<div class="sup-tags">' + usesOf(it).map(t => '<button class="sup-tag"' + tagAttr(t) + '>' +
+        tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>').join('') + '</div>' +
       priceHtml(it.id) +
       itemLinksHtml(it, withVendor ? v : null) +
     '</div>';
@@ -430,11 +643,12 @@
   }
 
   window.supSearch = function (q) { search = q; renderResults(); };
+  // Open one supplier ('-' the items with none), or '' back to the list.
   window.supFilter = function (id) {
-    shown = shown === id ? '' : id;
+    view = 'vendors';
+    shown = id || '';
     renderResults();
-    const r = el('supChips');
-    if (r) r.scrollIntoView({ block: 'nearest' });
+    toTop();
   };
 
   // ----------------------------------------------------------------- editing
@@ -466,8 +680,14 @@
     } else {
       const it = id ? items[id] || {} : {};
       const p = (id && prices[id]) || {};
-      const pick = it.vendorId || vendorId || (shown && shown !== '-' ? shown : '');
+      const pick = it.vendorId || vendorId || (view === 'vendors' && shown && shown !== '-' ? shown : '');
       const vs = Object.values(vendors).sort(byName);
+      // Used for: the item's own ticks, else worked out from its kind. A new
+      // item added from inside a use starts in that use.
+      const fromUse = !id && view === 'hub' && use;
+      const usesShown = id ? usesOf(it) : fromUse ? [use] : [];
+      editing.usesShown = usesShown;
+      editing.usesAuto = !fromUse && !(Array.isArray(it.usedFor) && it.usedFor.length);
       const show = v => (typeof v === 'number' ? String(v) : '');
       const priceShown = {
         price: typeof p.cents === 'number' ? (p.cents / 100).toFixed(2) : '',
@@ -497,6 +717,13 @@
         field('Also called (helps the search)', 'siAlso', it.also, 'e.g. seed, lawn seed, overseed') +
         '<div class="field"><span class="label">Notes for the crew</span><textarea id="siNotes" rows="2" ' +
           'placeholder="Which one to get, how much per job, anything to watch for">' + esc(it.notes || '') + '</textarea></div>' +
+        '<div class="field"><span class="label">Used for — tags</span><div class="sup-uses" id="siUses">' +
+          allTags().map(t => tagBoxHtml(t, usesShown.indexOf(t) !== -1)).join('') + '</div>' +
+          '<div class="sup-tag-add"><input id="siNewTag" placeholder="Add a tag — e.g. Snow removal" ' +
+            'onkeydown="if (event.key === \'Enter\') { event.preventDefault(); supAddTag(); }">' +
+            '<button class="btn btn-sm" onclick="supAddTag()">+ Add tag</button></div>' +
+          '<div class="hint">Where it shows in 📦 All supplies. Left alone, the tags follow the kind of material below; ' +
+          'untick everything to go back to that.</div></div>' +
         '<fieldset class="sup-pricebox"><legend>For estimates</legend>' +
           '<div class="field"><span class="label">Kind of material</span><select id="siCat" onchange="supCatPicked(this.value)">' +
             '<option value="">— pick one —</option>' +
@@ -611,7 +838,8 @@
                   where: val('siWhere'), unit: val('siUnit'), notes: (el('siNotes').value || '').trim(), link: link,
                   category: val('siCat') || null, coverage: coverage, takeoffUnit: val('siTakeoff'),
                   pallet: !!(el('siPallet') && el('siPallet').checked),
-                  specialOrder: !!(el('siSpecial') && el('siSpecial').checked), updatedAt: now };
+                  specialOrder: !!(el('siSpecial') && el('siSpecial').checked),
+                  usedFor: usedForFromForm(name), updatedAt: now };
     items[id] = Object.assign({ id: id }, rec);
     write('supplies', id, rec);
     // Written only when the price box was actually changed. If this device
@@ -629,6 +857,33 @@
     showToast(name + ' saved');
     closeSupModal(); renderResults();
   };
+
+  function tagBoxHtml(t, on) {
+    const u = tagInfo(t);
+    return '<label class="sup-tagchk"><input type="checkbox" class="siUse" value="' + esc(t) + '"' + (on ? ' checked' : '') + '> ' +
+      u.icon + ' ' + esc(u.name) + '</label>';
+  }
+  // A tag typed on the item: ticks the one it means, or adds it as new.
+  window.supAddTag = function () {
+    const inp = el('siNewTag'), box = el('siUses');
+    const t = tagFor(inp ? inp.value : '');
+    if (!t || !box) return;
+    const have = Array.from(box.querySelectorAll('.siUse')).find(i => i.value === t);
+    if (have) have.checked = true;
+    else box.insertAdjacentHTML('beforeend', tagBoxHtml(t, true));
+    inp.value = '';
+    inp.focus();
+  };
+
+  // The Used for ticks as saved: null (follow the kind) unless they were
+  // changed to something the kind would not give -- so an item left alone
+  // still moves when its kind is changed.
+  function usedForFromForm(name) {
+    const ticked = Array.from(document.querySelectorAll('.siUse:checked')).map(i => cleanTag(i.value)).filter(Boolean);
+    const same = (a, b) => a.slice().sort().join() === b.slice().sort().join();
+    if (!ticked.length || (editing.usesAuto && same(ticked, editing.usesShown || []))) return null;
+    return same(ticked, usesFromKind(val('siCat'), name, val('siAlso'))) ? null : ticked;
+  }
 
   window.supRemove = function (kind, id) {
     if (kind === 'vendor') {
@@ -674,6 +929,7 @@
     where: ['where', 'where at the supplier', 'location', 'aisle'],
     also: ['also called', 'also', 'other names', 'aka'],
     link: ['link', 'url', 'web link', 'product link', 'product url', 'product page', 'web address', 'link to it online'],
+    usedFor: ['used for', 'tags', 'tag', 'used for tags'],
     // For estimates (pricing.js). Names as they read once "%" and the like
     // are taken out of the header.
     category: ['category', 'kind of material'],
@@ -815,6 +1071,14 @@
       if (c.coverage) { const n = parsePct(c.coverage); if (!(n > 0)) bad = '“covers” should be a number above 0'; else extra.coverage = n; }
       if (c.takeoffUnit) extra.takeoffUnit = c.takeoffUnit;
       if (c.link) { const page = websiteUrl({ website: c.link }); if (!page) bad = 'the link “' + c.link + '” is not a web address'; else extra.link = page; }
+      // Tags, split on ; or , -- kept as the item's own only when they are not
+      // just what its kind gives.
+      if (c.usedFor) {
+        const tags = c.usedFor.split(/[;,]/).map(tagFor).filter((t, i, a) => t && a.indexOf(t) === i);
+        const was = existingById || (id ? items[id] : null) || {};
+        const auto = usesFromKind(extra.category !== undefined ? extra.category : was.category, c.name || was.name, c.also || was.also);
+        extra.usedFor = !tags.length || sameSet(tags, auto) ? null : tags;
+      }
       [['pallet', 'pallet'], ['specialOrder', 'special order']].forEach(([k, label]) => {
         if (!c[k]) return;
         const yn = yesNo(c[k]);
@@ -1175,7 +1439,7 @@
     };
     const head = ['id', 'Supplier', 'Item', 'Item #', 'Comes in', 'Price', 'Per', 'Year',
                   'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes',
-                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link'];
+                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link', 'Used for'];
     const catName = id => ((categories().find(c => c[0] === id) || [])[1]) || '';
     const yn = b => (b ? 'yes' : '');
     const n = v => (typeof v === 'number' ? String(v) : '');
@@ -1194,7 +1458,7 @@
           cell(it.where, true), cell(it.also, true), cell(it.notes, true), cell(p.priceNotes, true),
           cell(catName(it.category), true), n(it.coverage), cell(it.takeoffUnit, true), yn(it.pallet), yn(it.specialOrder),
           n(p.markupPct), n(p.wastePct), typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
-          cell(it.link, true)].join(',');
+          cell(it.link, true), cell(usesOf(it).map(t => tagInfo(t).name).join('; '), true)].join(',');
       });
     // A byte-order mark and CRLF line endings, so Excel opens it with the
     // dashes and accents intact.
@@ -1266,6 +1530,7 @@
         else store[c.id] = withId ? Object.assign({ id: c.id }, c.data) : c.data;
       });
       if (store === prices && meta && meta.fromCache === false) pricesReady = true;
+      if (store === items) tagsChanged();
       redrawIfVisible();
       announce();
     };

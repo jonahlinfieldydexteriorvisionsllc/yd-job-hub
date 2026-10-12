@@ -1691,16 +1691,56 @@
   @media (hover:hover) { button.wxp-day:hover { border-color:var(--brand); } }
 
   /* ---- Supplies: suppliers, grouping, prices, price-list import ---- */
-  .sup-chips { display:flex; gap:6px; overflow-x:auto; padding:2px 0 10px; margin-bottom:4px;
-    -webkit-overflow-scrolling:touch; scrollbar-width:thin; }
-  .sup-chip { flex:none; min-height:36px; padding:6px 13px; border-radius:18px; border:1.5px solid var(--border-strong);
-    background:var(--surface); color:var(--text); font:600 13px 'DM Sans',sans-serif; cursor:pointer; white-space:nowrap; }
-  .sup-chip span { color:var(--muted); font-weight:500; margin-left:2px; }
-  .sup-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
-  .sup-chip.on span { color:rgba(255,255,255,.75); }
-  html[data-night] .sup-chip.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
-  html[data-night] .sup-chip.on span { color:rgba(20,15,24,.7); }
-  @media (hover:hover) { .sup-chip:hover { border-color:var(--brand-2); } }
+  /* Two ways in: the suppliers, and every supply by tag (supplies.js). */
+  .sup-views { display:flex; gap:0; margin-bottom:10px; border:1.5px solid var(--brand); border-radius:10px; overflow:hidden; }
+  .sup-view { flex:1; min-height:42px; border:none; background:var(--surface); color:var(--brand);
+    font:700 14px 'DM Sans',sans-serif; cursor:pointer; }
+  .sup-view + .sup-view { border-left:1.5px solid var(--brand); }
+  .sup-view.on { background:var(--brand); color:#fff; }
+  html[data-night] .sup-views, html[data-night] .sup-view + .sup-view { border-color:var(--brand-2); }
+  html[data-night] .sup-view { color:var(--brand-2); }
+  html[data-night] .sup-view.on { background:var(--brand-2); color:#140f18; }
+  .sup-vlist { display:flex; flex-direction:column; gap:8px; }
+  .sup-vrow { display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:12px 14px; cursor:pointer;
+    border:1px solid var(--border); border-left:4px solid var(--brand-2); border-radius:10px; background:var(--surface);
+    color:var(--text); font:inherit; }
+  @media (hover:hover) { .sup-vrow:hover { border-color:var(--brand-2); } }
+  .sup-vrow-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+  .sup-vrow-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .sup-vrow-name { font:700 16px 'Playfair Display',serif; color:var(--brand); }
+  html[data-night] .sup-vrow-name { color:var(--brand-2); }
+  .sup-vrow-sub { font-size:13px; color:var(--muted); }
+  .sup-vrow .sup-ways { margin-top:0; }
+  .sup-vrow-go { font-size:24px; color:var(--muted); flex:none; }
+  .sup-hit { border-color:var(--accent); color:var(--accent-dark); font-weight:700; }
+  .sup-back { display:inline-block; margin:0 0 10px; font-size:14px; }
+  .sup-tiles { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:8px; }
+  .sup-tile { display:flex; flex-direction:column; align-items:flex-start; gap:3px; padding:12px 14px; min-height:84px;
+    border:1px solid var(--border); border-radius:12px; background:var(--surface); color:var(--text);
+    font:inherit; text-align:left; cursor:pointer; }
+  @media (hover:hover) { .sup-tile:hover { border-color:var(--brand-2); } }
+  .sup-tile-icon { font-size:22px; line-height:1; }
+  .sup-tile b { font-size:14px; }
+  .sup-tile small { font-size:12px; color:var(--muted); }
+  .sup-fold { border:1px solid var(--border); border-radius:10px; margin-bottom:8px; background:var(--surface); }
+  .sup-fold > summary { display:flex; align-items:center; gap:8px; padding:11px 14px; cursor:pointer; min-height:44px; list-style:none; }
+  .sup-fold > summary::-webkit-details-marker { display:none; }
+  .sup-fold > summary::before { content:'▸'; color:var(--muted); transition:transform .15s; }
+  .sup-fold[open] > summary::before { transform:rotate(90deg); }
+  .sup-fold-name { font-weight:700; }
+  .sup-fold-body { padding:0 10px 4px; }
+  .sup-tags { display:flex; flex-wrap:wrap; gap:5px; margin-top:6px; }
+  .sup-tag { font:500 11.5px 'DM Sans',sans-serif; padding:2px 8px; border-radius:10px; border:1px solid var(--border);
+    background:var(--surface-2); color:var(--muted); cursor:pointer; }
+  @media (hover:hover) { .sup-tag:hover { border-color:var(--brand-2); color:var(--text); } }
+  .sup-uses { display:flex; flex-wrap:wrap; gap:6px; }
+  .sup-tagchk { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border:1px solid var(--border);
+    border-radius:16px; font-size:13px; cursor:pointer; background:var(--surface); }
+  .sup-tagchk input { width:16px; height:16px; accent-color:var(--brand-2); }
+  .sup-tagchk:has(input:checked) { border-color:var(--brand-2); background:var(--surface-2); font-weight:600; }
+  .sup-tag-add { display:flex; gap:6px; margin-top:8px; }
+  .sup-tag-add input { flex:1; min-width:0; }
+  .sup-bulk { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 10px; }
   .sup-group { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:18px 0 8px; padding-bottom:6px;
     border-bottom:2px solid var(--border); }
   .sup-group:first-child { margin-top:4px; }
@@ -1709,8 +1749,6 @@
   html[data-night] .sup-group-name { color:var(--brand-2); }
   .sup-group-count { font-size:11px; font-weight:700; color:var(--muted); background:var(--surface-2);
     border:1px solid var(--border); border-radius:10px; padding:1px 8px; }
-  .sup-group-links { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; }
-  .sup-group-links a.btn { text-decoration:none; }
   .sup-vcard { border:1.5px solid var(--brand-2); border-radius:12px; background:var(--surface-2); padding:14px 16px; margin-bottom:12px; }
   .sup-vname { font:700 20px 'Playfair Display',serif; color:var(--brand); }
   html[data-night] .sup-vname { color:var(--brand-2); }
@@ -1752,7 +1790,7 @@
   .sup-table small { color:var(--muted); }
   .sup-new { font-size:10px; font-weight:700; text-transform:uppercase; color:var(--accent-dark); }
   @media (max-width:720px) {
-    .sup-group-links { margin-left:0; width:100%; }
+    .sup-tiles { grid-template-columns:1fr 1fr; }
     .sup-pricebox .g3 { grid-template-columns:1fr 1fr; }
   }
 
