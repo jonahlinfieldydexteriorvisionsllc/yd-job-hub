@@ -10,11 +10,16 @@
 // document needs no new security rules:
 //   subs: { subId: { name, match, phone, email, notes, createdAt,
 //                    props: { propId: { jobId, client, address, every,
+//                                       everyText, perMonth, services[],
 //                                       theirCents, theirPer, ourCents,
-//                                       ourPer, from, to, off } } } }
+//                                       ourPer, from, to, off,
+//                                       doneOn, doneWhy } } } }
 //   paid: { receiptId: 'YYYY-MM-DD' }     bills marked paid here
-// every: weekly | biweekly | monthly. *Per: visit | month. from/to: the
-// season as MM-DD. A key written null is a deleted one (writes merge).
+// every: weekly | biweekly | monthly | other (everyText written in, perMonth
+// visits a month for the totals). *Per: visit | month. from/to: the season
+// as MM-DD. doneOn: the day its Done box was ticked; doneWhy: season (back
+// next season) | ended (for good). A key written null is a deleted one
+// (writes merge).
 //
 // Their bills are receipts the email reader already files (receipts.js): a
 // receipt whose store has a subcontractor's "match" words in it is theirs.
@@ -24,9 +29,19 @@
 (function () {
   'use strict';
 
-  const EVERY = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Once a month' };
+  const EVERY = { weekly: 'Every week', biweekly: 'Every 2 weeks', monthly: 'Once a month', other: 'Something else…' };
+  // How often, in words: one of the above, or what was written in for it.
+  const everyWords = p => p.every === 'other' ? (p.everyText || 'Written in') : (EVERY[p.every] || '');
+  const DONE_WHY = { season: 'Done for the season', ended: 'Service ended' };
   const PER = { visit: 'a visit', month: 'a month' };
   const SEASON = { from: '04-15', to: '10-31' };    // mowing, by default
+  // What a subcontractor does at a property (Jonah, 12 Oct 2026: "i need to
+  // be able to select the service(s) total guard is doing for each client").
+  // Kept on the property as `services: [names]`; one typed in by hand joins
+  // the list for every property after.
+  const SERVICES = ['Mowing', 'Trimming', 'Edging', 'Blowing', 'Fertilizing', 'Weed control', 'Aeration',
+                    'Overseeding', 'Spring cleanup', 'Fall cleanup', 'Leaf removal', 'Shrub trimming',
+                    'Mulching', 'Snow removal'];
   const DUE_SOON_DAYS = 5;
 
   let data = { subs: {}, paid: {}, filed: {} };
@@ -70,14 +85,42 @@
   // ------------------------------------------------------------- the money
 
   const dayNum = mmdd => { const m = /^(\d{2})-(\d{2})$/.exec(mmdd || ''); return m ? +m[1] * 100 + +m[2] : null; };
-  // The days of a month that fall in a property's season.
+  // Which season a day belongs to, named by the year it starts in: a season
+  // that runs over New Year (snow, Nov to Mar) started the year before for
+  // its January days.
+  function seasonOf(p, y, k) {
+    const from = dayNum(p.from || SEASON.from), to = dayNum(p.to || SEASON.to);
+    return from != null && to != null && from > to && k <= to ? y - 1 : y;
+  }
+  // Ticked done (doneOn, Jonah 12 Oct 2026): nothing counts from the next day
+  // on -- for the rest of that season if it was done for the season, for
+  // good if the service ended.
+  function stoppedOn(p, y, k) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(p.doneOn || '')) return false;
+    const day = y + '-' + String(k).padStart(4, '0').replace(/(\d\d)(\d\d)/, '$1-$2');
+    if (day <= p.doneOn) return false;
+    if (p.doneWhy === 'ended') return true;
+    const dy = +p.doneOn.slice(0, 4), dk = dayNum(p.doneOn.slice(5));
+    return seasonOf(p, y, k) === seasonOf(p, dy, dk);
+  }
+  // Whether its Done box is ticked now: ended for good, or done in the
+  // season we are in.
+  function doneNow(p) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(p.doneOn || '')) return false;
+    if (p.doneWhy === 'ended') return true;
+    const t = new Date();
+    return seasonOf(p, t.getFullYear(), (t.getMonth() + 1) * 100 + t.getDate()) ===
+      seasonOf(p, +p.doneOn.slice(0, 4), dayNum(p.doneOn.slice(5)));
+  }
+  // The days of a month that fall in a property's season (and before it was
+  // ticked done).
   function seasonDays(p, y, m) {
     const from = dayNum(p.from || SEASON.from), to = dayNum(p.to || SEASON.to);
     const last = new Date(y, m + 1, 0).getDate();
     let n = 0;
     for (let d = 1; d <= last; d++) {
       const k = (m + 1) * 100 + d;
-      if (from == null || to == null || (from <= to ? k >= from && k <= to : k >= from || k <= to)) n++;
+      if ((from == null || to == null || (from <= to ? k >= from && k <= to : k >= from || k <= to)) && !stoppedOn(p, y, k)) n++;
     }
     return { n: n, of: last };
   }
@@ -88,8 +131,11 @@
   function monthOf(p, y, m) {
     const s = seasonDays(p, y, m);
     if (!s.n || p.off) return { visits: 0, their: 0, ours: 0 };
-    const visits = p.every === 'monthly' ? 1 : s.n / (p.every === 'biweekly' ? 14 : 7);
     const part = s.n / s.of;
+    // Written in by hand ("every 10 days", "as needed"): as many visits a
+    // month as were given for it, none if none were.
+    const visits = p.every === 'other' ? (+p.perMonth || 0) * part
+      : p.every === 'monthly' ? 1 : s.n / (p.every === 'biweekly' ? 14 : 7);
     const cost = (c, per) => (typeof c === 'number' ? Math.round(per === 'month' ? c * part : c * visits) : 0);
     return { visits: visits, their: cost(p.theirCents, p.theirPer), ours: cost(p.ourCents, p.ourPer) };
   }
@@ -255,17 +301,26 @@
       ? props.find(p => p.id === form.propId) : null;
     const rows = props.map(p => {
       const x = monthOf(p, y, m);
-      return (editing === p ? '<tr class="sub-editing"><td colspan="6"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
-        '<tr' + (p.off ? ' class="sub-off"' : '') + '><td><b>' + esc(p.client || 'Client') + '</b>' + (p.address ? '<div class="muted">' + esc(p.address) + '</div>' : '') + '</td>' +
-        '<td>' + esc(EVERY[p.every] || '') + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
+      // Ticked done this season (or ended for good): checked, with the date.
+      // A done-for-the-season tick from an earlier season is history, not
+      // this year's -- the box is clear again.
+      const done = doneNow(p);
+      return (editing === p ? '<tr class="sub-editing"><td colspan="8"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
+        '<tr class="' + (p.off ? 'sub-off' : '') + (done ? ' sub-done' : '') + '">' +
+        '<td class="sub-done-cell"><label title="' + (done ? esc(DONE_WHY[p.doneWhy] || DONE_WHY.season) : 'Tick when done for the season or the service ended') + '">' +
+          '<input type="checkbox"' + (done ? ' checked' : '') + ' onchange="subPropDone(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\', this.checked)">' +
+          (done ? '<span>' + esc(fmtDateMD(p.doneOn)) + (p.doneWhy === 'ended' ? '<br>ended' : '') + '</span>' : '') + '</label></td>' +
+        '<td><b>' + esc(p.client || 'Client') + '</b>' + (p.address ? '<div class="muted">' + esc(p.address) + '</div>' : '') + '</td>' +
+        '<td>' + ((p.services || []).length ? esc(p.services.join(', ')) : '<span class="muted">—</span>') + '</td>' +
+        '<td>' + esc(everyWords(p)) + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
         '<td>' + money(p.theirCents) + ' ' + esc(PER[p.theirPer] || '') + '</td>' +
         '<td>' + money(p.ourCents) + ' ' + esc(PER[p.ourPer] || '') + '</td>' +
         '<td>' + (x.their || x.ours ? marginText(x) : '—') + '</td>' +
         '<td><button class="link-btn" onclick="subProp(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\')">Edit</button></td></tr>');
     }).join('');
-    return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Client</th><th>How often</th><th>They charge</th>' +
+    return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Done</th><th>Client</th><th>What they do</th><th>How often</th><th>They charge</th>' +
         '<th>You charge</th><th>Margin this month</th><th></th></tr></thead><tbody>' +
-        (rows || '<tr><td colspan="6" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
+        (rows || '<tr><td colspan="8" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
       (editing ? propFormHtml(s, editing)
         : form && form.kind === 'prop' && form.subId === s.id && !form.propId ? propFormHtml(s, {})
         : '<button class="btn btn-sm" onclick="subProp(\'' + sid(s.id) + '\', \'\')">+ Add a property</button>');
@@ -303,6 +358,19 @@
     '</div>';
   }
 
+  // The services to pick from: the usual ones, then any typed in on any
+  // property, so a one-off name only has to be typed once.
+  function serviceChoices(p) {
+    const seen = SERVICES.slice();
+    Object.values(data.subs || {}).forEach(s => propsOf(s).forEach(x => (x.services || []).forEach(n => {
+      if (n && seen.indexOf(n) === -1) seen.push(n);
+    })));
+    (p.services || []).forEach(n => { if (n && seen.indexOf(n) === -1) seen.push(n); });
+    return seen;
+  }
+  const svcPill = (name, on) => '<label class="bd-pick-item"><input type="checkbox" class="spSvc" value="' + esc(name) + '"' +
+    (on ? ' checked' : '') + '><span>' + esc(name) + '</span></label>';
+
   function propFormHtml(s, p) {
     const jobs = (typeof loadAllJobs === 'function' ? loadAllJobs() : [])
       .filter(j => j && j._id).sort((a, b) => String(a.customerName || '').localeCompare(b.customerName || ''));
@@ -315,7 +383,14 @@
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Client</span><input id="spClient" value="' + esc(p.client || '') + '"></div>' +
         '<div class="field"><span class="label">Address</span><input id="spAddr" value="' + esc(p.address || '') + '"></div>' +
-        '<div class="field"><span class="label">How often</span><select id="spEvery">' + opt(EVERY, p.every || 'weekly') + '</select></div>' +
+        '<div class="field"><span class="label">How often</span><select id="spEvery" onchange="subEveryPicked()">' + opt(EVERY, p.every || 'weekly') + '</select>' +
+          // Jonah (12 Oct 2026): "i want to be able to write in something if
+          // the ofteness doesnt fit the options".
+          '<div class="sub-every-other"' + (p.every === 'other' ? '' : ' hidden') + ' id="spEveryOther">' +
+            '<input id="spEveryText" value="' + esc(p.everyText || '') + '" placeholder="e.g. Every 10 days, as needed">' +
+            '<input id="spPerMonth" inputmode="decimal" value="' + (p.perMonth != null ? esc(String(p.perMonth)) : '') + '" ' +
+              'placeholder="Visits a month" title="About how many visits a month — for the totals">' +
+          '</div></div>' +
         '<div class="field"><span class="label">Season (month-day)</span><div class="sub-season">' +
           '<input id="spFrom" value="' + esc(p.from || SEASON.from) + '" placeholder="04-15"> to ' +
           '<input id="spTo" value="' + esc(p.to || SEASON.to) + '" placeholder="10-31"></div></div>' +
@@ -323,6 +398,16 @@
           (typeof p.theirCents === 'number' ? (p.theirCents / 100).toFixed(2) : '') + '"><select id="spTheirPer">' + opt(PER, p.theirPer || 'visit') + '</select></div></div>' +
         '<div class="field"><span class="label">You charge the client</span><div class="sub-price">$<input id="spOurs" inputmode="decimal" value="' +
           (typeof p.ourCents === 'number' ? (p.ourCents / 100).toFixed(2) : '') + '"><select id="spOurPer">' + opt(PER, p.ourPer || 'visit') + '</select></div></div>' +
+      '</div>' +
+      '<div class="field"><span class="label">What they do here</span>' +
+        '<div class="bd-pick" id="spSvcs">' + serviceChoices(p).map(n => svcPill(n, (p.services || []).indexOf(n) !== -1)).join('') + '</div>' +
+        '<div class="sub-svc-add"><input id="spSvcNew" placeholder="Something else they do" ' +
+          'onkeydown="if(event.key===\'Enter\'){event.preventDefault();subSvcAdd()}">' +
+          '<button class="btn btn-sm" onclick="subSvcAdd()">+ Add</button></div></div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Done on (blank: still going)</span>' +
+          '<input type="date" id="spDoneOn" value="' + esc(p.doneOn || '') + '"></div>' +
+        '<div class="field"><span class="label">Done how</span><select id="spDoneWhy">' + opt(DONE_WHY, p.doneWhy || 'season') + '</select></div>' +
       '</div>' +
       '<label class="chk"><input type="checkbox" id="spOff"' + (p.off ? ' checked' : '') + '> Not this season (kept for the record)</label>' +
       '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="subPropSave(\'' + sid(s.id) + '\', \'' + sid(p.id || '') + '\')">Save</button>' +
@@ -376,16 +461,51 @@
     if (!client) { showToast('Who is the client?'); return; }
     const from = v('spFrom') || SEASON.from, to = v('spTo') || SEASON.to;
     if (dayNum(from) == null || dayNum(to) == null) { showToast('Season dates as month-day, like 04-15'); return; }
+    if (v('spEvery') === 'other' && !v('spEveryText')) { showToast('Write in how often'); return; }
     const pid = propId || newId('sp');
     const rec = {
       jobId: v('spJob') || null, client: client, address: v('spAddr'), every: v('spEvery') || 'weekly',
+      everyText: v('spEvery') === 'other' ? v('spEveryText') : null,
+      perMonth: v('spEvery') === 'other' && v('spPerMonth') && isFinite(+v('spPerMonth')) ? +v('spPerMonth') : null,
+      doneOn: /^\d{4}-\d{2}-\d{2}$/.test(v('spDoneOn')) ? v('spDoneOn') : null,
+      doneWhy: /^\d{4}-\d{2}-\d{2}$/.test(v('spDoneOn')) ? (v('spDoneWhy') || 'season') : null,
       theirCents: cents(v('spTheir')), theirPer: v('spTheirPer') || 'visit',
       ourCents: cents(v('spOurs')), ourPer: v('spOurPer') || 'visit',
+      services: Array.from(document.querySelectorAll('.spSvc:checked')).map(i => i.value),
       from: from, to: to, off: !!(el('spOff') && el('spOff').checked), updatedAt: new Date().toISOString(),
     };
     form = null;
     put({ subs: { [subId]: { props: { [pid]: rec } } } }, 'saving a property');
     showToast('Saved — ' + client);
+  };
+  window.subEveryPicked = function () {
+    const box = el('spEveryOther');
+    if (box) box.hidden = v('spEvery') !== 'other';
+    if (v('spEvery') === 'other' && el('spEveryText')) el('spEveryText').focus();
+  };
+  // The Done box on a property's row: ticked with today's date (done for the
+  // season unless it was already marked ended), unticked clears it.
+  window.subPropDone = function (subId, propId, on) {
+    const p = (((data.subs || {})[subId] || {}).props || {})[propId];
+    if (!p) return;
+    put({ subs: { [subId]: { props: { [propId]: {
+      doneOn: on ? ymd(new Date()) : null,
+      doneWhy: on ? (p.doneWhy === 'ended' ? 'ended' : 'season') : null,
+      updatedAt: new Date().toISOString(),
+    } } } } }, on ? 'ticking done' : 'unticking done');
+    showToast(on ? (p.client || 'It') + ' — done ' + fmtDateMD(ymd(new Date())) : (p.client || 'It') + ' — not done');
+  };
+  // Something not on the list: added ticked, without redrawing the form
+  // (what is typed elsewhere in it stays).
+  window.subSvcAdd = function () {
+    const box = el('spSvcNew'), wrap = el('spSvcs');
+    const name = box ? box.value.trim().slice(0, 40) : '';
+    if (!name || !wrap) return;
+    const have = Array.from(wrap.querySelectorAll('.spSvc')).find(i => i.value.toLowerCase() === name.toLowerCase());
+    if (have) have.checked = true;
+    else wrap.insertAdjacentHTML('beforeend', svcPill(name, true));
+    box.value = '';
+    box.focus();
   };
   window.subPropRemove = function (subId, propId) {
     const p = (((data.subs || {})[subId] || {}).props || {})[propId];

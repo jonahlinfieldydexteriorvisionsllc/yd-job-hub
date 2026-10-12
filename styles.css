@@ -1248,6 +1248,16 @@
   html[data-night] .crew-flag.on { border-color:#7aa7ef; color:#7aa7ef; }
   @media (max-width:720px) { .md-time { width:74px; font-size:12px; } }
 
+  /* Subcontractors: what they do at a property (12 Oct 2026) */
+  .sub-svc-add { display:flex; gap:8px; margin-top:8px; }
+  .sub-svc-add input { flex:1; min-width:0; }
+  .sub-every-other { display:flex; gap:8px; margin-top:6px; }
+  .sub-every-other input:first-child { flex:2; min-width:0; }
+  .sub-every-other input:last-child { flex:1; min-width:0; }
+  .sub-done-cell label { display:flex; align-items:center; gap:6px; cursor:pointer; font-size:11.5px; color:var(--muted); line-height:1.2; }
+  .sub-done-cell input { width:20px; height:20px; margin:0; flex:none; cursor:pointer; accent-color:var(--pos, #2f8f5b); }
+  .sub-table tr.sub-done td:not(.sub-done-cell) { opacity:.55; }
+
   .cal-key { display:flex; flex-direction:column; gap:3px; padding:2px 6px; }
   .cal-key-i { --c:#6b7a8f; display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text); }
   .cal-key-dot { width:12px; height:12px; border-radius:3px; background:var(--c); flex:none; }
