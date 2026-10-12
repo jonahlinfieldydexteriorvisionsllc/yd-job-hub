@@ -544,6 +544,15 @@ service cloud.firestore {
       allow delete: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
     }
 
+    // The crew's page for each booked or in-progress job (crewjobs.js): name,
+    // address, phone, site notes, the work and the materials -- never a price
+    // (any dollar amount in a note is blanked before it is written). Written
+    // by whoever may change jobs, from the same save as jobBoard.
+    match /jobCrew/{jobId} {
+      allow read: if isStaff();
+      allow write: if canChange('jobs');
+    }
+
     // Notes from the crew to the owner (crewnotes.js; Jonah, 12 Oct 2026:
     // "leave note for jonah ... i get a notification"). Each person writes
     // and reads their own; the owner reads them all and marks them read. The

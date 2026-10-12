@@ -69,6 +69,7 @@
   </div>
 
   <div class="tab-bar">
+    <button class="tab-btn" id="tabCrewJobs" hidden onclick="switchTab('crewjobs')"><span class="tab-icon">🧰</span>Jobs</button>
     <button class="tab-btn active" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
@@ -155,6 +156,12 @@
               <option value="inprogress">In progress</option>
               <option value="complete">Complete</option>
             </select>
+            <!-- The crew's page for a booked job (crewjobs.js): hide one, or
+                 see exactly what they see. -->
+            <div class="crew-view-row">
+              <label class="chk"><input type="checkbox" id="crewHidden" onchange="markDirty()"> Hide from crew</label>
+              <button type="button" class="link-btn" id="crewPreviewBtn" hidden onclick="previewCrewJob()">👷 What the crew see</button>
+            </div>
           </div>
           <div class="field">
             <span class="label">Job Price <span id="jobPriceSourceTag" style="font-size:9px;color:var(--pos);margin-left:4px"></span></span>
@@ -271,6 +278,16 @@
       <div class="section-body"><div id="seasonWrap"></div></div>
     </div>
 
+  </div>
+
+  <!-- ============ TAB: JOBS (crew) ============ -->
+  <!-- The crew's own job pages (crewjobs.js): client, address, the work and
+       the materials -- never a price. The owner has the Job tab instead. -->
+  <div class="tab-panel" id="panel-crewjobs">
+    <div class="section">
+      <div class="section-head"><span class="section-title">Jobs</span></div>
+      <div class="section-body" id="crewJobsWrap"><p class="empty-msg">Loading…</p></div>
+    </div>
   </div>
 
   <!-- ============ TAB: CLOCK ============ -->
@@ -998,6 +1015,7 @@
 <script src="./paychecks.js"></script>
 <script src="./notify.js"></script>
 <script src="./crewnotes.js"></script>
+<script src="./crewjobs.js"></script>
 <script src="./forecast.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>

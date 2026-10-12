@@ -263,6 +263,8 @@
     // refuse it from anyone else, whose app has no business maintaining the
     // list anyway.
     if (!ydCan('jobs', 'change')) return;
+    // The crew's page for the job (crewjobs.js) follows the same save.
+    if (window.YDCrewJobs) YDCrewJobs.mirror(id, data);
     const write = onBoard(data) ? window.YDDb.put('jobBoard', id, boardEntry(id, data)) : window.YDDb.remove('jobBoard', id);
     Promise.resolve(write)
       .catch(err => console.warn('[sync] job board not yet updated for', id,

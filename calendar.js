@@ -1995,6 +1995,19 @@
     redraw: () => redrawIfVisible(),
     occurrences: occurrences,
     calendars: () => cals,
+    // A job's days on the calendars this person can see, from today on
+    // (crewjobs.js: who is working which day) -- every calendar, whatever is
+    // ticked in the side.
+    forJob: (jobId, days) => {
+      const from = today();
+      return occurrences(from, addDays(from, days || 45), true)
+        .filter(o => o.ev && o.ev.jobId === jobId)
+        .map(o => ({ day: o.day, time: o.time || '', endTime: o.endTime || '', title: o.name || o.title,
+                     crew: (o.crew || []).map(c => {
+                       const p = people[c.uid];
+                       return (p && (p.name || p.email)) || c.name || '';
+                     }).filter(Boolean) }));
+    },
   };
 
   document.addEventListener('yd-auth', e => {

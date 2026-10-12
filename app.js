@@ -455,7 +455,7 @@ function closeMore() {
   if (s) s.classList.remove('active');
 }
 function tabButtonId(name) {
-  return { job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
+  return { crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
     dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
     supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts' }[name] || '';
@@ -538,9 +538,10 @@ function closeOnTapOutside(id) {
 // and Supplies beside it, All Jobs on the far right. Materials used to be a
 // tab of its own; it is now the second half of Supplies, beside the suppliers
 // it is bought from.
-const TABS = ['job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
-const PHONE_TABS = ['job', 'snow', 'clock', 'calendar', 'dashboard'];
-const TAB_LABEL = { job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
+const TABS = ['crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
+// crewjobs: the crew's Jobs tab (crewjobs.js) -- shown only to whoever cannot see the Job tab.
+const PHONE_TABS = ['crewjobs', 'job', 'snow', 'clock', 'calendar', 'dashboard'];
+const TAB_LABEL = { crewjobs: '🧰 Jobs', job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
   equipment: '🚜 Equipment', tracking: '🔨 Tracking',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
@@ -595,6 +596,7 @@ function switchTab(name) {
   if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
   if (name === 'receipts' && window.YDReceipts) YDReceipts.render();
   if (name === 'dashboard' && window.YDSubs) YDSubs.render();
+  if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
 }
 
 // A notification tapped while Job Hub is already open. The service worker
@@ -1654,6 +1656,8 @@ function getJobData() {
     : readMD('quoteDate');
   d.qbInvoiced = document.getElementById('qbInvoiced').checked;
   d.taxable = document.getElementById('taxable').checked;
+  // Kept off the crew's Jobs tab even while booked (crewjobs.js).
+  d.crewHidden = !!(document.getElementById('crewHidden') || {}).checked;
   d.serviceTypes = serviceTypes.slice();
   d.labor = labor; d.materials = materials; d.orderItems = orderItems;
   d.proposals = proposals; d.payments = payments; d.additionalCosts = additionalCosts;
@@ -1671,6 +1675,7 @@ function loadJobData(d) {
   document.getElementById('quoteDate').value = d.quoteDate ? fmtDateMD(d.quoteDate) : todayMD();
   document.getElementById('qbInvoiced').checked = !!d.qbInvoiced;
   document.getElementById('taxable').checked = !!d.taxable;
+  const ch = document.getElementById('crewHidden'); if (ch) ch.checked = !!d.crewHidden;
   serviceTypes = Array.isArray(d.serviceTypes) ? d.serviceTypes.slice() : (d.serviceType ? [d.serviceType] : []);
   renderServiceTypes();
   labor = (d.labor || []).map(e => ({ ...e, id: e.id || uid() }));
