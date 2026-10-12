@@ -1161,7 +1161,7 @@
     const note = ('Found on the web ' + new Date().toISOString().slice(0, 10) + (o.where ? ' (' + o.where + ')' : '') + ': ' +
                   (o.url || 'no link') + (o.note ? ' — ' + o.note : '')).slice(0, 300);
     const sid = window.YDSupplies && window.YDSupplies.addSourced ? window.YDSupplies.addSourced({
-      vendor: o.supplier, name: o.product, sku: o.sku, cents: priceCents, into: into,
+      vendor: o.supplier, name: o.product, sku: o.sku, cents: priceCents, into: into, url: o.url,
       per: into ? (c.prices[into] || {}).per || linked.unit || o.per : o.per,
       category: o.category || (l && l.category !== 'other' ? l.category : ''), coverage: coverage, takeoffUnit: takeoffUnit,
       note: note }) : null;

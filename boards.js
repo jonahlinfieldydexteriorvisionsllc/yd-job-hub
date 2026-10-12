@@ -119,6 +119,12 @@
   // 2026: "select specific calendars and boards that the guys can change").
   const editsBoard = b => !!b && !b.virtual && (isOwner() || (editsBoards() && b.ownerOnly !== true) ||
     (!!me() && (b.editors || []).indexOf(me().uid) !== -1));
+  // Who sees a board and who may change its cards: the owner, or an admin he
+  // gave Board sharing on Your Crew → Access (Jonah, 12 Oct 2026: "it needs
+  // to be an admin access option") -- never on a private board, and Private
+  // itself stays his (firestore.rules hold both).
+  const setsSharing = b => isOwner() ||
+    (editsBoards() && ydCan('boardSharing', 'change') && !(b && b.ownerOnly === true));
   const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const two = n => String(n).padStart(2, '0');
@@ -1616,30 +1622,31 @@
         '<div id="bdLabelList" class="bd-edit-list"></div>' +
         '<button class="btn btn-sm" onclick="bdLabelAdd()">+ Add a label</button>' +
       '</div>' +
-      // Who sees a board, who may change it, and Private: the owner's alone
-      // (Jonah, 12 Oct 2026: "only me to mark which boards can be viewed by
-      // who"; firestore.rules refuse anyone else). An admin sees who it is
-      // shared with, and the rest of the settings.
-      (!isOwner() ? sharingSummary(b) :
+      // Who sees a board and who may change it: the owner's, or an admin's
+      // with Board sharing (setsSharing; firestore.rules refuse anyone else).
+      // Any other admin sees who it is shared with, and the rest of the
+      // settings.
+      (!setsSharing(b) ? sharingSummary(b) :
       '<div class="field"><span class="label">Who can see it</span>' +
         // Private: the owner's alone (firestore.rules). Only the owner sets
         // it -- an admin cannot hide a board from the person who runs it.
-        (id !== MAINTENANCE && id !== CREW_BOARD
+        (isOwner() && id !== MAINTENANCE && id !== CREW_BOARD
           ? '<label class="chk"><input type="checkbox" id="bdPrivate"' + (b.ownerOnly ? ' checked' : '') + '> ' +
             '🔒 Private — only you (admins don’t see it unless you tick them below)</label>' : '') +
         (crew.length
           ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdShare" value="' +
               esc(p.uid) + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
             '<div class="hint">Anyone ticked sees this board and its cards, can move cards and tick ' +
-            'checklists. Leave everyone unticked to keep it to yourself.</div>'
-          : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
+            'checklists. Leave everyone unticked to keep it to ' + (isOwner() ? 'yourself' : 'the office') + '.</div>'
+          : '<div class="hint">No crew accounts yet. Once someone signs in and ' + (isOwner() ? 'you approve' : 'the owner approves') +
+            ' them, they appear here.</div>') +
       '</div>' +
       (crew.length ? '<div class="field"><span class="label">Who can add &amp; change</span>' +
         '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdEdit" value="' +
             esc(p.uid) + '"' + (editors.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
         '<div class="hint">Anyone ticked here adds, edits and deletes cards on this board only (and sees it). ' +
-          'An admin whose Boards access is “change” can do that on every board not marked private — for ' +
-          'hand-picking, set theirs to “see” on Your Crew and tick them here.</div></div>' : '')) +
+          'An admin whose Boards access is “change” can do that on every board not marked private' +
+          (isOwner() ? ' — for hand-picking, set theirs to “see” on Your Crew and tick them here.' : '.') + '</div></div>' : '')) +
       (id === MAINTENANCE
         ? '<div class="hint">This board is kept in step with the Equipment tab — a card for every machine ' +
           'with a service coming up and every problem noted on one — so it cannot be deleted. ' +
@@ -1664,7 +1671,8 @@
     return '<div class="field"><span class="label">Who can see it</span>' +
       '<div class="hint">' + (b.id ? (sees.length ? 'Shared with ' + esc(sees.join(', ')) : 'Not shared with the crew') +
         (changes.length ? ' · ' + esc(changes.join(', ')) + ' can add and change cards' : '') + '.' : 'A new board starts shared with nobody.') +
-      ' Only the owner sets who sees a board and who can change it.</div></div>';
+      (b.ownerOnly === true ? ' Only the owner sets who sees a private board.'
+        : ' Only the owner, or an admin he gives Board sharing to, sets who sees a board and who can change it.') + '</div></div>';
   }
 
   // Read whatever has been typed back into the drafts before a redraw.
@@ -1765,19 +1773,20 @@
       createdAt: was.createdAt || nowIso(),
       updatedAt: nowIso(),
     };
-    if (isOwner()) {
+    if (setsSharing(was)) {
       // Whoever may change it sees it too.
       rec.editors = Array.from(document.querySelectorAll('.bdEdit:checked')).map(i => i.value);
       rec.visibleTo = Array.from(new Set(Array.from(document.querySelectorAll('.bdShare:checked'))
         .concat(Array.from(document.querySelectorAll('.bdEdit:checked'))).map(i => i.value)));
-      // Always written: admins ask for ownerOnly == false (start()).
-      rec.ownerOnly = !!(el('bdPrivate') && el('bdPrivate').checked);
     } else if (!editingBoard) {
-      // An admin's new board starts shared with nobody, not private; who
-      // sees it is the owner's to say. An existing one keeps its sharing
-      // (nothing about it is sent).
-      Object.assign(rec, { editors: [], visibleTo: [], ownerOnly: false });
+      // An admin's new board without Board sharing starts shared with
+      // nobody; an existing one keeps its sharing (nothing about it is sent).
+      Object.assign(rec, { editors: [], visibleTo: [] });
     }
+    // Private is the owner's alone. Always on a new board: admins ask for
+    // ownerOnly == false (start()).
+    if (isOwner()) rec.ownerOnly = !!(el('bdPrivate') && el('bdPrivate').checked);
+    else if (!editingBoard) rec.ownerOnly = false;
     boards[id] = Object.assign({ id: id }, was, rec);
     write('boards', id, rec, 'saving the board');
 

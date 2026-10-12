@@ -1149,6 +1149,10 @@
     { id: 'hours', label: 'Crew hours & pay', hint: 'Everyone’s shifts and pay rates; approving shifts (never their own)' },
     { id: 'calendars', label: 'Calendars', hint: 'Every shared calendar — never your Personal one' },
     { id: 'boards', label: 'Boards', hint: 'Every board and card, not only those shared with them' },
+    // Jonah (12 Oct 2026): who sees and who changes each board is his to say
+    // -- or an admin's he gives it to. Never a private board, never Private.
+    { id: 'boardSharing', label: 'Board sharing', hint: 'Who sees each board and who can add & change its cards — never your private boards. Needs Boards: Change',
+      levels: ['none', 'change'], words: { none: 'Off', change: 'On' } },
     { id: 'supplies', label: 'Supplies & prices', hint: 'What things cost; adding and editing supplies' },
     { id: 'equipment', label: 'Equipment', hint: 'Machines, services and problems' },
     { id: 'contacts', label: 'Contacts', hint: 'People to call next season' },
@@ -1185,9 +1189,9 @@
         return '<div class="acc-row">' +
           '<div class="acc-area"><b>' + esc(a.label) + '</b><small>' + esc(a.hint) + '</small></div>' +
           '<div class="acc-seg" role="radiogroup" aria-label="' + esc(a.label) + '">' +
-            ['none', 'see', 'change'].map(l =>
+            (a.levels || ['none', 'see', 'change']).map(l =>
               '<label class="acc-opt' + (l === lv ? ' on' : '') + '"><input type="radio" name="acc-' + a.id + '" value="' + l + '"' +
-                (l === lv ? ' checked' : '') + ' onchange="accessPicked(this)">' + LEVEL_WORDS[l] + '</label>').join('') +
+                (l === lv ? ' checked' : '') + ' onchange="accessPicked(this)">' + (a.words || LEVEL_WORDS)[l] + '</label>').join('') +
           '</div></div>';
       }).join('') + '</div>' +
       '<div class="acc-never">Only you, always: letting people in and setting their access, your Personal calendar, ' +
@@ -1228,7 +1232,7 @@
     const any = Object.values(access).some(l => l !== 'none');
     if (!wasAdmin && !confirm('Make ' + (u.name || u.email) + ' an admin?\n\n' +
         (any ? 'They will be able to ' + AREAS.filter(a => access[a.id] !== 'none')
-          .map(a => (access[a.id] === 'change' ? 'change ' : 'see ') + a.label.toLowerCase()).join(', ') + '.'
+          .map(a => a.levels ? 'set ' + a.label.toLowerCase() : (access[a.id] === 'change' ? 'change ' : 'see ') + a.label.toLowerCase()).join(', ') + '.'
           : 'Nothing is ticked yet, so for now they will have the same screens as crew.'))) return;
     setRole(accessUid, { role: 'admin', access: access },
       (u.name || u.email) + (wasAdmin ? '’s access saved' : ' is now an admin'));

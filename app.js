@@ -1290,13 +1290,17 @@ function renderOrderList() {
   const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
   const keys = Object.keys(groups).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || vname(a).localeCompare(vname(b)));
   const grouped = keys.length > 1 || keys[0] !== '';
+  // A supplier ordered from online: its site, and how long it takes to come.
+  const siteOf = v => (window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl(cat.vendors[v]) : '');
   wrap.innerHTML = keys.map(v => {
     const list = groups[v];
     const left = list.filter(it => !it.ordered).length;
+    const lead = v ? (cat.vendors[v] || {}).leadTime : '';
     return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
-        '<span class="muted">' + left + ' to order</span>' +
+        '<span class="muted">' + left + ' to order' + (lead && left ? ' · takes ' + esc(lead) : '') + '</span>' +
         (v && left ? '<button class="link-btn" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' +
-          ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + esc(v) + '\')">✉️ Email the order</button>' : '') : '') +
+          ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + esc(v) + '\')">✉️ Email the order</button>' : '') +
+          (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +
       list.map(row).join('');
   }).join('') +

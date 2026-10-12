@@ -1509,6 +1509,11 @@
   .sup-where b { color:var(--accent-dark); }
   html[data-night] .sup-where b { color:var(--accent); }
   .sup-notes { margin-top:5px; font-size:13px; color:var(--muted); white-space:pre-wrap; }
+  /* How a supplier that isn't local is bought from (supplies.js waysHtml). */
+  .sup-ways { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .sup-way { font-size:12px; padding:2px 9px; border-radius:10px; background:var(--accent-light, rgba(102,65,143,.1));
+    color:var(--text); border:1px solid var(--border); }
+  .order-vendor a.link-btn { text-decoration:none; }
   .sup-links { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:10px; }
   .sup-links a.btn { text-decoration:none; }
   .sup-hours { font-size:12px; color:var(--muted); }

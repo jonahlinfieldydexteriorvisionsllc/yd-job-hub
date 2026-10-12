@@ -595,17 +595,21 @@ service cloud.firestore {
       allow read: if isOwner()
         || (canSee('boards') && resource.data.ownerOnly == false)
         || (isWorker() && request.auth.uid in resource.data.visibleTo);
-      // Who sees a board, who may change its cards, and Private are the
-      // owner's alone (Jonah, 12 Oct 2026: "only me to mark which boards can
-      // be viewed by who"): an admin's new board is shared with nobody, and
-      // an admin's change to a board never touches them.
+      // Who sees a board and who may change its cards are the owner's to set
+      // (Jonah, 12 Oct 2026: "only me to mark which boards can be viewed by
+      // who") -- or an admin's he gives Board sharing to ("it needs to be an
+      // admin access option"). Private, and the auto-share record, stay his
+      // alone. Without Board sharing an admin's new board is shared with
+      // nobody, and an admin's change to a board never touches who sees it.
       allow create: if isOwner() || (canChange('boards') && request.resource.data.ownerOnly == false
-        && request.resource.data.get('visibleTo', []).size() == 0
-        && request.resource.data.get('editors', []).size() == 0);
+        && (canChange('boardSharing')
+            || (request.resource.data.get('visibleTo', []).size() == 0
+                && request.resource.data.get('editors', []).size() == 0)));
       allow update: if isOwner()
         || (canChange('boards') && resource.data.ownerOnly == false && request.resource.data.ownerOnly == false
-            && !request.resource.data.diff(resource.data).affectedKeys()
-                 .hasAny(['visibleTo', 'editors', 'ownerOnly', 'autoShared']));
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['ownerOnly', 'autoShared'])
+            && (canChange('boardSharing')
+                || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['visibleTo', 'editors'])));
       allow delete: if isOwner() || (canChange('boards') && resource.data.ownerOnly == false);
 
       function boardDoc() { return get(/databases/$(database)/documents/boards/$(boardId)).data; }

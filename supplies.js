@@ -9,7 +9,8 @@
 //
 // Three collections, because Firestore cannot hide one field of a document
 // from the crew -- the same split as the snow accounts:
-//   vendors/{id}       name, address, phone, hours, notes             everyone
+//   vendors/{id}       name, address, phone, hours, notes, email,     everyone
+//                      website, buyWays [online|shipped|phone|far], leadTime
 //   supplies/{id}      name, also, vendorId, sku, where, unit, notes  everyone
 //   supplyPrices/{id}  (same id as the item) cents, per, year, asOf,
 //                      priceNotes, history [{year, cents, per, asOf}] owner only
@@ -308,11 +309,47 @@
     box.innerHTML = html;
   }
 
+  // How a supplier that isn't down the road is bought from (Jonah, 12 Oct
+  // 2026: "mark vendors as online order only or shipping only etc for vendors
+  // i use that arent local"). Any number may be ticked; none ticked is a
+  // local yard you drive to.
+  const BUY_WAYS = [
+    { id: 'online', chip: '🌐 Online only', label: 'Online orders only — no counter to walk up to' },
+    { id: 'shipped', chip: '📦 Ships to us', label: 'Ships to us — nobody drives there to pick up' },
+    { id: 'phone', chip: '📞 Phone/email orders', label: 'Orders by phone or email only' },
+    { id: 'far', chip: '🗺 Not local', label: 'Not local — a long way off, plan ahead' },
+  ];
+  const waysOf = v => (v && Array.isArray(v.buyWays) ? v.buyWays : []).filter(w => BUY_WAYS.some(b => b.id === w));
+  // Only a real web address becomes a link: http(s) only, and a bare
+  // "theirsite.com" gets https:// in front.
+  function websiteUrl(v) {
+    let s = String((v && v.website) || '').trim();
+    if (!s) return '';
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) s = 'https://' + s.replace(/^\/+/, '');
+    try {
+      const u = new URL(s);
+      return /^https?:$/.test(u.protocol) && u.hostname.indexOf('.') > 0 ? u.href : '';
+    } catch (e) { return ''; }
+  }
+  // The chips under a supplier's name: how it is bought, and how long it takes.
+  function waysHtml(v) {
+    const w = waysOf(v);
+    if (!w.length && !v.leadTime) return '';
+    return '<div class="sup-ways">' + BUY_WAYS.filter(b => w.indexOf(b.id) !== -1)
+      .map(b => '<span class="sup-way">' + b.chip + '</span>').join('') +
+      (v.leadTime ? '<span class="sup-way">⏱ ' + esc(v.leadTime) + '</span>' : '') + '</div>';
+  }
+
   function linksHtml(v) {
-    const map = v.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(v.address) : '';
+    // A supplier that only ships has nowhere to drive to, whatever address
+    // it has on file.
+    const map = v.address && waysOf(v).indexOf('shipped') === -1
+      ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(v.address) : '';
     const tel = v.phone ? 'tel:' + String(v.phone).replace(/[^0-9+]/g, '') : '';
     const mail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email || '') ? 'mailto:' + v.email : '';
-    return (map ? '<a class="btn btn-sm" href="' + map + '" target="_blank" rel="noopener">📍 Directions</a>' : '') +
+    const site = websiteUrl(v);
+    return (site ? '<a class="btn btn-sm" href="' + esc(site) + '" target="_blank" rel="noopener">🌐 Website</a>' : '') +
+      (map ? '<a class="btn btn-sm" href="' + map + '" target="_blank" rel="noopener">📍 Directions</a>' : '') +
       (tel ? '<a class="btn btn-sm" href="' + esc(tel) + '">📞 Call</a>' : '') +
       (mail ? '<a class="btn btn-sm" href="' + esc(mail) + '">✉️ Email</a>' : '');
   }
@@ -331,6 +368,7 @@
         '<span class="sup-unit">' + n + ' item' + (n === 1 ? '' : 's') + '</span>' +
         (edits() ? '<button class="btn btn-sm sup-edit" onclick="supEdit(\'vendor\', \'' + safeId(v.id) + '\')">Edit supplier</button>' : '') +
       '</div>' +
+      waysHtml(v) +
       ([v.address, v.hours].filter(Boolean).length
         ? '<div class="sup-where">' + esc([v.address, v.hours].filter(Boolean).join(' · ')) + '</div>' : '') +
       (v.notes ? '<div class="sup-notes">' + esc(v.notes) + '</div>' : '') +
@@ -372,9 +410,11 @@
         ? '<div class="sup-where">' + (withVendor ? '<b>' + esc(v ? v.name : 'No supplier set') + '</b>' : '') +
             (it.where ? (withVendor ? ' — ' : '') + esc(it.where) : '') + '</div>'
         : '') +
+      // So nobody drives to a supplier that only ships.
+      (withVendor && v ? waysHtml(v) : '') +
       (it.notes ? '<div class="sup-notes">' + esc(it.notes) + '</div>' : '') +
       priceHtml(it.id) +
-      (withVendor && v && (v.address || v.phone)
+      (withVendor && v && (v.address || v.phone || websiteUrl(v))
         ? '<div class="sup-links">' + linksHtml(v) + (v.hours ? '<span class="sup-hours">' + esc(v.hours) + '</span>' : '') + '</div>'
         : '') +
     '</div>';
@@ -404,6 +444,13 @@
         '</div>' +
         // Where an order goes: Materials to Order writes the email (app.js).
         field('Email for orders', 'svEmail', v.email, 'orders@…') +
+        field('Website', 'svWeb', v.website, 'e.g. theirsite.com — where to look things up or order') +
+        '<div class="field"><span class="label">Not a local yard?</span>' +
+          BUY_WAYS.map(b => '<label class="chk"><input type="checkbox" class="svWay" value="' + b.id + '"' +
+            (waysOf(v).indexOf(b.id) !== -1 ? ' checked' : '') + '> ' + b.chip.split(' ')[0] + ' ' + esc(b.label) + '</label>').join('') +
+          '<div class="hint">Leave all unticked for a supplier you drive to. Shown to the crew under the supplier and its items.</div>' +
+        '</div>' +
+        field('Usually takes', 'svLead', v.leadTime, 'e.g. 3–5 business days to arrive') +
         '<div class="field"><span class="label">Notes</span><textarea id="svNotes" rows="2" ' +
           'placeholder="Account under YD Exterior, ask for Dave, yard entrance on the side road">' + esc(v.notes || '') + '</textarea></div>' +
         actions(id ? 'supRemove(\'vendor\', \'' + safeId(id) + '\')' : ''));
@@ -506,9 +553,14 @@
     if (editing.kind === 'vendor') {
       const name = val('svName');
       if (!name) { showToast('Give the supplier a name'); return; }
+      const typedSite = val('svWeb');
+      const website = websiteUrl({ website: typedSite });
+      if (typedSite && !website) { showToast('That website doesn’t look right — e.g. theirsite.com'); return; }
       const id = editing.id || newId('v');
       const rec = { name: name, address: val('svAddr'), phone: val('svPhone'), hours: val('svHours'),
-                    email: val('svEmail').toLowerCase(),
+                    email: val('svEmail').toLowerCase(), website: website,
+                    buyWays: Array.from(document.querySelectorAll('.svWay:checked')).map(i => i.value),
+                    leadTime: val('svLead').slice(0, 80),
                     notes: (el('svNotes').value || '').trim(), updatedAt: now };
       vendors[id] = Object.assign({ id: id }, rec);
       write('vendors', id, rec);
@@ -1274,7 +1326,10 @@
     let v = (o.vendorId && vendors[o.vendorId]) || vendorNamed(o.vendor);
     if (!v) {
       const id = newId('v');
+      // The shop's own site, from the page the price came from.
+      const site = websiteUrl({ website: o.url });
       const rec = { name: String(o.vendor).trim().slice(0, 80), address: '', phone: '', hours: '',
+                    website: site ? new URL(site).origin : '',
                     notes: 'Added when sourcing an estimate', updatedAt: now };
       vendors[id] = Object.assign({ id: id }, rec);
       v = vendors[id];
@@ -1338,6 +1393,7 @@
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
     findSupply: findSupply, setPrice: setPrice, addSourced: addSourced,
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
+    websiteUrl: websiteUrl,       // app.js, Materials to Order
   };
 
   let authKey = null;
