@@ -155,10 +155,16 @@ service cloud.firestore {
     match /settings/{docId} {
       allow read:  if isOwner() || (isStaff() && docId == 'public')
         || (docId == 'snow' && canSee('snow'))
-        || (docId in ['invoicing', 'quickbooksMap'] && canSee('billing'));
+        || (docId in ['invoicing', 'quickbooksMap'] && canSee('billing'))
+        // The services typed in by hand and kept for reuse (app.js
+        // rememberService): whoever fills in jobs or contacts.
+        || (docId == 'services' && (canSee('jobs') || canSee('contacts')));
       allow write: if isOwner()
         || (docId == 'snow' && canChange('snow'))
         || (docId in ['invoicing', 'quickbooksMap'] && canChange('billing'))
+        || (docId == 'services' && (canChange('jobs') || canChange('contacts'))
+            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
+                 .hasOnly(['custom', 'updatedAt']))
         // The board list the crew read to find Crew-tagged cards on boards
         // they are not on (names and columns only): kept up by whoever may
         // change boards.

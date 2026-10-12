@@ -104,15 +104,19 @@
   }
 
   // The options are cloned from the Job tab's dropdown, so the service list is
-  // never maintained in two places.
+  // never maintained in two places -- and cloned again whenever that list
+  // changes (a service typed in anywhere is kept for good: app.js
+  // rememberService).
   function fillTagOptions() {
     const src = el('serviceTypeSelect'), dst = el('ppTagSelect');
-    if (!src || !dst || dst.options.length > 1) return;
+    if (!src || !dst) return;
+    while (dst.options.length > 1) dst.remove(1);
     Array.prototype.forEach.call(src.options, o => {
-      if (o.value === '') return;
+      if (o.value === '' || o.dataset.typed) return;
       dst.appendChild(new Option(o.textContent, o.value));
     });
   }
+  document.addEventListener('yd-services', fillTagOptions);
 
   window.addProspectTag = function () {
     const sel = el('ppTagSelect');
@@ -123,6 +127,7 @@
       if (!v || !v.trim()) { sel.value = ''; return; }
       v = v.trim();
     }
+    if (window.rememberService) rememberService(v);
     if (tags.indexOf(v) === -1) tags.push(v);
     sel.value = '';
     renderTags();

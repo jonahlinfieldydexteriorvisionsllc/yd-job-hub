@@ -639,6 +639,7 @@ function addServiceType() {
   if (!val) return;
   if (val === '__custom') { val = prompt('Custom service type:'); if (!val || !val.trim()) { sel.value = ''; return; } val = val.trim(); }
   sel.value = '';
+  rememberService(val);
   // Only a real change marks the job unsaved -- a cancelled custom type or a
   // type already on the job used to trigger an autosave of nothing.
   if (serviceTypes.includes(val)) return;
@@ -646,6 +647,117 @@ function addServiceType() {
   renderServiceTypes();
   markDirty();
 }
+
+// Services typed in by hand are kept for good (Jonah, 12 Oct 2026: "the
+// service i add then adds the list and is there permanently for me to reuse
+// on other clients/jobs/bids"), in settings/services as
+// { custom: { key: name } } -- a map, so two devices adding at the same
+// moment both keep theirs. The Job tab's list and the Contacts tags offer
+// them after the built-in ones; "✎ Edit the list" adds or takes one off by
+// hand.
+const savedServices = {};   // key -> name
+const svcKey = n => String(n || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60);
+function builtInServices() {
+  return Array.prototype.filter.call(document.getElementById('serviceTypeSelect').options,
+    o => o.value && o.value !== '__custom' && !o.dataset.saved && !o.dataset.typed).map(o => o.value);
+}
+function isKnownService(name) {
+  const k = svcKey(name);
+  return !k || !!savedServices[k] || builtInServices().some(b => svcKey(b) === k);
+}
+// The saved ones go in just before "Custom…", in A–Z order.
+function fillServiceOptions() {
+  const sel = document.getElementById('serviceTypeSelect');
+  if (!sel) return;
+  Array.prototype.slice.call(sel.options).forEach(o => { if (o.dataset.saved) o.remove(); });
+  const built = builtInServices().map(svcKey);
+  const before = Array.prototype.find.call(sel.options, o => o.value === '__custom') || null;
+  Object.values(savedServices).filter(n => built.indexOf(svcKey(n)) === -1)
+    .sort((a, b) => a.localeCompare(b)).forEach(n => {
+      const o = new Option(n, n);
+      o.dataset.saved = '1';
+      sel.insertBefore(o, before);
+    });
+  document.dispatchEvent(new CustomEvent('yd-services'));
+}
+function saveServices(patch, what) {
+  if (!window.YDDb || !window.YDAuth || window.YDAuth.mode !== 'cloud') return;
+  Promise.resolve(window.YDDb.put('settings', 'services', { custom: patch, updatedAt: new Date().toISOString() }))
+    .catch(e => {
+      if (e && e.code === 'permission-denied') showToast('Not saved to the list — not allowed');
+      else console.warn('[services] ' + what + ' not yet on the server:', (e && e.code) || e);
+    });
+}
+function rememberService(name) {
+  name = String(name || '').trim().slice(0, 60);
+  if (!name || isKnownService(name)) return;
+  savedServices[svcKey(name)] = name;
+  saveServices({ [svcKey(name)]: name }, 'adding ' + name);
+  fillServiceOptions();
+}
+window.rememberService = rememberService;
+function loadServices() {
+  if (!window.YDDb || !window.YDAuth || !window.YDAuth.user) return;
+  Promise.resolve(window.YDDb.get('settings', 'services')).then(d => {
+    Object.keys(savedServices).forEach(k => delete savedServices[k]);
+    Object.entries((d && d.custom) || {}).forEach(([k, n]) => { if (n) savedServices[k] = n; });
+    fillServiceOptions();
+  }).catch(() => {});
+}
+document.addEventListener('yd-auth', e => { if (e.detail && e.detail.user) loadServices(); });
+
+// "✎ Edit the list": the saved services, each with ✕, and a box to add one.
+// The built-in ones are listed too, but stay.
+function openServicesEditor() {
+  let m = document.getElementById('svcListModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modal-overlay';
+    m.id = 'svcListModal';
+    m.onclick = ev => { if (ev.target === m) closeServicesEditor(); };
+    m.innerHTML = '<div class="modal" style="max-width:520px"><div class="modal-head"><h2>Your services</h2>' +
+      '<button class="modal-close" onclick="closeServicesEditor()">&times;</button></div>' +
+      '<div class="modal-body" id="svcListBody"></div></div>';
+    document.body.appendChild(m);
+  }
+  m.classList.add('active');
+  renderServicesEditor();
+}
+window.openServicesEditor = openServicesEditor;
+window.closeServicesEditor = function () { const m = document.getElementById('svcListModal'); if (m) m.classList.remove('active'); };
+function renderServicesEditor() {
+  const body = document.getElementById('svcListBody');
+  if (!body) return;
+  const saved = Object.entries(savedServices).sort((a, b) => a[1].localeCompare(b[1]));
+  body.innerHTML =
+    '<div class="field"><span class="label">Added by you</span>' +
+      (saved.length ? '<div class="svc-list">' + saved.map(([k, n]) => '<span class="svc-tag">' + esc(n) +
+        '<button onclick="forgetService(\'' + k.replace(/[^a-z0-9-]/g, '') + '\')" title="Take it off the list">×</button></span>').join('') + '</div>'
+        : '<div class="hint">None yet. Anything you type in on a job, bid or contact is kept here.</div>') +
+    '</div>' +
+    '<div class="field"><span class="label">Add one</span><div class="sub-svc-add">' +
+      '<input id="svcListNew" placeholder="e.g. Gutter cleaning" onkeydown="if(event.key===\'Enter\'){event.preventDefault();addServiceToList()}">' +
+      '<button class="btn btn-sm btn-filled" onclick="addServiceToList()">+ Add</button></div></div>' +
+    '<div class="field"><span class="label">Always on the list</span><div class="hint">' + esc(builtInServices().join(' · ')) + '</div></div>' +
+    '<div class="hint">Taking one off the list leaves it on the jobs and contacts that already have it.</div>';
+}
+window.addServiceToList = function () {
+  const box = document.getElementById('svcListNew');
+  const name = box ? box.value.trim() : '';
+  if (!name) return;
+  if (isKnownService(name)) { showToast('Already on the list'); box.value = ''; return; }
+  rememberService(name);
+  renderServicesEditor();
+  const again = document.getElementById('svcListNew'); if (again) again.focus();
+};
+window.forgetService = function (key) {
+  const name = savedServices[key];
+  if (!name) return;
+  delete savedServices[key];
+  saveServices({ [key]: null }, 'taking ' + name + ' off');
+  fillServiceOptions();
+  renderServicesEditor();
+};
 function removeServiceType(idx) { serviceTypes.splice(idx, 1); renderServiceTypes(); markDirty(); }
 function renderServiceTypes() {
   const wrap = document.getElementById('serviceTypeTags');
@@ -2291,6 +2403,7 @@ function makeSearchable(sel) {
       // Put the typed name in as an option for the moment, so the handler
       // reads it exactly as if it had been on the list all along.
       temp = new Option(s.typed, s.typed);
+      temp.dataset.typed = '1';     // not one of the list's own (builtInServices)
       sel.appendChild(temp);
       sel.value = s.typed;
     } else {

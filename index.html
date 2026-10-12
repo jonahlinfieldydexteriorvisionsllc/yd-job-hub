@@ -120,7 +120,7 @@
         <div class="grid g4 mt">
           <div class="field"><span class="label">Estimate #</span><input id="estimateNumber" oninput="updateJobHeadBadge(); markDirty()"></div>
           <div class="field">
-            <span class="label">Service Type(s)</span>
+            <span class="label">Service Type(s) <button type="button" class="link-btn svc-edit-link" onclick="openServicesEditor()">✎ Edit the list</button></span>
             <div id="serviceTypeTags" style="display:flex;flex-wrap:wrap;gap:4px;min-height:40px;padding:6px;border:1.5px solid var(--border-strong);background:var(--surface-2);align-items:flex-start;border-radius:6px"></div>
             <select id="serviceTypeSelect" class="searchable" onchange="addServiceType()" style="margin-top:6px">
               <option value="">+ Add service type…</option>
@@ -634,7 +634,7 @@
           <div class="grid g3">
             <div class="field"><span class="label">When to contact</span>
               <input id="ppWhen" placeholder="e.g. Sept 2027, early spring"></div>
-            <div class="field"><span class="label">What for</span>
+            <div class="field"><span class="label">What for <button type="button" class="link-btn svc-edit-link" onclick="openServicesEditor()">✎ Edit the list</button></span>
               <div id="ppTags" class="tag-box"></div>
               <select id="ppTagSelect" onchange="addProspectTag()" class="tag-pick searchable">
                 <option value="">+ Add a service…</option>
