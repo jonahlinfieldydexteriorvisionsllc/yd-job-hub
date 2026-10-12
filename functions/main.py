@@ -599,10 +599,48 @@ def _receipts(request, path, headers):
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     try:
-        return (json.dumps({"report": receipts.run(_claude(), manual)}), 200, json_headers)
+        report = receipts.run(_claude(), manual)
     except Exception as e:                          # noqa: BLE001
         print("receipts run failed:", e)
         return (json.dumps({"error": str(e)}), 500, json_headers)
+    # Each subcontractor's invoices, for their visit counts (subvisits.py):
+    # plain code, no Claude, on the same half-hourly run.
+    try:
+        import subvisits
+        report["subVisits"] = subvisits.scan(_db)
+    except Exception as e:                          # noqa: BLE001
+        print("subcontractor visits not read:", e)
+    return (json.dumps({"report": report}), 200, json_headers)
+
+
+# ---------------------------------------------------------- subcontractors
+#
+# "Check their email now" on the Subcontractors section: the owner's alone,
+# like the section. {full: true} reads the whole year again.
+
+
+def _subs(request, path, headers):
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/subs/scan":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        _caller(request)
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    import receipts
+    import subvisits
+    body = request.get_json(silent=True) or {}
+    try:
+        return (json.dumps({"report": subvisits.scan(_db, full=bool(body.get("full")))}), 200, json_headers)
+    except receipts.NeedsPermission:
+        return (json.dumps({"error": "Reading email is not switched on"}), 403, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("subs scan failed:", e)
+        return (json.dumps({"error": "Their email could not be read just now"}), 502, json_headers)
 
 
 # ---------------------------------------------------------------- follow-ups
@@ -837,6 +875,8 @@ def claude(request):
         return _cards(request, path, headers)
     if path.startswith("/receipts"):
         return _receipts(request, path, headers)
+    if path.startswith("/subs"):
+        return _subs(request, path, headers)
     if path.startswith("/followup") or path.startswith("/care"):
         return _followup(request, path, headers)
     if path.startswith("/estimate"):

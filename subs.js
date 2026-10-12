@@ -44,7 +44,10 @@
                     'Mulching', 'Snow removal'];
   const DUE_SOON_DAYS = 5;
 
-  let data = { subs: {}, paid: {}, filed: {} };
+  let data = { subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {} };
+  let visitsDoc = { visits: {}, scannedAt: '' };   // settings/subVisits (functions/subvisits.py)
+  let checking = false;       // "Check their email now" is waiting on the server
+  let addingVisit = '';       // subId while its "add a visit by hand" form is open
   let fresh = false;          // from the server, not just this device's copy
   let unsub = null;
   let open = {};              // subId -> its details are open
@@ -245,6 +248,87 @@
 
   // ---------------------------------------------------------------- drawing
 
+  // ------------------------------------------------------------- the visits
+  //
+  // Jonah (12 Oct 2026): count the mows at each client "by pulling receipts
+  // from my email" -- and be able to set any of it by hand ("always having a
+  // manual thing built in avoids issues down the line"). The server reads
+  // each subcontractor's invoice emails into settings/subVisits (functions/
+  // subvisits.py): one visit per invoice {sub, date, service, address,
+  // cents}. Here each is put with a client -- by the address on it, else the
+  // client a visit of that service was last put with by hand -- and counted
+  // as mows: one for a visit, a month's worth (from how often) for a monthly
+  // bill (≈, a guess until set), none for other work. What Jonah sets by hand
+  // is kept beside them in settings/subcontractors and always wins:
+  //   visitFix:   { key: { prop, mows, skip } }
+  //   handVisits: { id: { sub, prop, date, service, mows } }
+  //   svcProp:    { subId: { serviceKey: propId } }    learned from his picks
+  // and a property's own mowsByHand {season, n} replaces its whole count.
+  const MOWING = /mow|lawn/i;
+  const ABBR = { saint: 'st', street: 'st', drive: 'dr', avenue: 'ave', road: 'rd', lane: 'ln', court: 'ct',
+                 circle: 'cir', boulevard: 'blvd', place: 'pl', parkway: 'pkwy', highway: 'hwy', terrace: 'ter',
+                 trail: 'trl', north: 'n', south: 's', east: 'e', west: 'w' };
+  const svcKeyOf = s => norm(s).replace(/ /g, '-').slice(0, 60);
+  // An address as house number + street name, the way two spellings of it
+  // agree ("4858 Saint Annes Dr" is "4858 St Annes Drive"). A rural fire
+  // number (W5883) counts as the number.
+  function addrKey(a) {
+    const t = norm(a).split(' ').filter(Boolean).map(w => ABBR[w] || w);
+    const i = t.findIndex(w => /^[nsew]?\d+$/.test(w));
+    if (i === -1) return '';
+    let rest = t.slice(i + 1).filter(w => !/^[nsew]$/.test(w));
+    if (rest[0] === 'st' && rest.length > 1) rest = rest.slice(1);   // "St Annes", "Saint Annes"
+    return rest.length ? t[i] + ' ' + rest[0] : '';
+  }
+  function propForVisit(s, v) {
+    const fix = (data.visitFix || {})[v.key];
+    if (fix && 'prop' in fix) return fix.prop && (s.props || {})[fix.prop] ? fix.prop : null;
+    const k = addrKey(v.address);
+    if (k) {
+      const p = propsOf(s).find(x => addrKey(x.address) === k);
+      if (p) return p.id;
+    }
+    const learned = ((data.svcProp || {})[s.id] || {})[svcKeyOf(v.service)];
+    return learned && (s.props || {})[learned] ? learned : null;
+  }
+  // Mows a visit is worth when nobody has said: one, a month's worth for a
+  // monthly bill, none for work that is not mowing.
+  function defaultMows(v, p) {
+    if (!MOWING.test(v.service || '')) return 0;
+    if (!/month/i.test(v.service || '')) return 1;
+    if (!p) return 4;
+    return p.every === 'biweekly' ? 2 : p.every === 'monthly' ? 1
+      : p.every === 'other' ? Math.max(1, Math.round(+p.perMonth || 1)) : 4;
+  }
+  function visitsOf(s) {
+    const auto = Object.keys(visitsDoc.visits || {}).filter(k => (visitsDoc.visits[k] || {}).sub === s.id)
+      .map(k => Object.assign({ key: k }, visitsDoc.visits[k]));
+    const hand = Object.keys(data.handVisits || {}).filter(k => (data.handVisits[k] || {}).sub === s.id)
+      .map(k => Object.assign({ key: k, hand: true }, data.handVisits[k]));
+    return auto.concat(hand).map(v => {
+      const fix = v.hand ? {} : ((data.visitFix || {})[v.key] || {});
+      const prop = v.hand ? ((s.props || {})[v.prop] ? v.prop : null) : propForVisit(s, v);
+      const setMows = v.hand || typeof fix.mows === 'number';
+      const mows = v.hand ? (+v.mows || 0) : setMows ? fix.mows : defaultMows(v, prop ? s.props[prop] : null);
+      return Object.assign(v, { prop: prop, mows: mows, setMows: setMows, skip: !!fix.skip,
+        guess: !setMows && /month/i.test(v.service || '') && MOWING.test(v.service || '') });
+    }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+  }
+  const seasonNow = p => { const t = new Date(); return seasonOf(p, t.getFullYear(), (t.getMonth() + 1) * 100 + t.getDate()); };
+  // This season's mows at one property, and the last one.
+  function mowsFor(s, p, list) {
+    const cur = seasonNow(p);
+    let n = 0, last = '';
+    (list || visitsOf(s)).forEach(v => {
+      if (v.skip || v.prop !== p.id || !/^\d{4}-\d{2}-\d{2}$/.test(v.date || '')) return;
+      if (seasonOf(p, +v.date.slice(0, 4), dayNum(v.date.slice(5))) !== cur) return;
+      n += v.mows;
+      if (v.mows && v.date > last) last = v.date;
+    });
+    const byHand = p.mowsByHand && p.mowsByHand.season === cur && typeof p.mowsByHand.n === 'number';
+    return { n: byHand ? p.mowsByHand.n : n, counted: n, last: last, byHand: byHand };
+  }
+
   function render() {
     const sec = el('subsSection'), wrap = el('subsWrap');
     if (!sec || !wrap) return;
@@ -286,8 +370,9 @@
       (o.late.length ? '<div class="sub-warn late">⚠️ Past due: ' + o.late.map(r => money(r.totalCents) + ' (due ' + fmtDateMD(r.dueDate) + ')').join(', ') + '</div>'
         : o.soon.length ? '<div class="sub-warn">Due soon: ' + o.soon.map(r => money(r.totalCents) + ' by ' + fmtDateMD(r.dueDate)).join(', ') + '</div>' : '') +
       '<details class="sub-more"' + (open[s.id] ? ' open' : '') + ' ontoggle="subToggle(\'' + sid(s.id) + '\', this.open)">' +
-        '<summary>Properties (' + props.length + ') and bills (' + bills.length + ')</summary>' +
+        '<summary>Properties (' + props.length + '), visits and bills (' + bills.length + ')</summary>' +
         propsHtml(s, props, y, m) +
+        visitsHtml(s, props) +
         billsHtml(bills) +
       '</details>' +
     '</div>';
@@ -299,31 +384,88 @@
     // it: the table scrolls sideways on a phone, and a form in it did too.
     const editing = form && form.kind === 'prop' && form.subId === s.id && form.propId
       ? props.find(p => p.id === form.propId) : null;
+    const list = visitsOf(s);
     const rows = props.map(p => {
       const x = monthOf(p, y, m);
+      const mw = mowsFor(s, p, list);
       // Ticked done this season (or ended for good): checked, with the date.
       // A done-for-the-season tick from an earlier season is history, not
       // this year's -- the box is clear again.
       const done = doneNow(p);
-      return (editing === p ? '<tr class="sub-editing"><td colspan="8"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
+      return (editing === p ? '<tr class="sub-editing"><td colspan="9"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
         '<tr class="' + (p.off ? 'sub-off' : '') + (done ? ' sub-done' : '') + '">' +
         '<td class="sub-done-cell"><label title="' + (done ? esc(DONE_WHY[p.doneWhy] || DONE_WHY.season) : 'Tick when done for the season or the service ended') + '">' +
           '<input type="checkbox"' + (done ? ' checked' : '') + ' onchange="subPropDone(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\', this.checked)">' +
           (done ? '<span>' + esc(fmtDateMD(p.doneOn)) + (p.doneWhy === 'ended' ? '<br>ended' : '') + '</span>' : '') + '</label></td>' +
         '<td><b>' + esc(p.client || 'Client') + '</b>' + (p.address ? '<div class="muted">' + esc(p.address) + '</div>' : '') + '</td>' +
         '<td>' + ((p.services || []).length ? esc(p.services.join(', ')) : '<span class="muted">—</span>') + '</td>' +
+        '<td class="sub-mows"><b>' + mw.n + '</b>' + (mw.byHand ? ' <span class="muted" title="Set by hand on the property (' + mw.counted +
+          ' from their invoices)">✎</span>' : '') + (mw.last ? '<div class="muted">last ' + esc(fmtDateMD(mw.last)) + '</div>' : '') + '</td>' +
         '<td>' + esc(everyWords(p)) + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
         '<td>' + money(p.theirCents) + ' ' + esc(PER[p.theirPer] || '') + '</td>' +
         '<td>' + money(p.ourCents) + ' ' + esc(PER[p.ourPer] || '') + '</td>' +
         '<td>' + (x.their || x.ours ? marginText(x) : '—') + '</td>' +
         '<td><button class="link-btn" onclick="subProp(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\')">Edit</button></td></tr>');
     }).join('');
-    return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Done</th><th>Client</th><th>What they do</th><th>How often</th><th>They charge</th>' +
+    return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Done</th><th>Client</th><th>What they do</th>' +
+        '<th title="This season, from their invoices (and what you set by hand)">Mows</th><th>How often</th><th>They charge</th>' +
         '<th>You charge</th><th>Margin this month</th><th></th></tr></thead><tbody>' +
-        (rows || '<tr><td colspan="8" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
+        (rows || '<tr><td colspan="9" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
       (editing ? propFormHtml(s, editing)
         : form && form.kind === 'prop' && form.subId === s.id && !form.propId ? propFormHtml(s, {})
         : '<button class="btn btn-sm" onclick="subProp(\'' + sid(s.id) + '\', \'\')">+ Add a property</button>');
+  }
+
+  // Every visit their invoices show (and any added by hand), newest first:
+  // which client, how many mows, whether it counts -- each settable here.
+  const VISITS_SHOWN = 60;
+  function visitsHtml(s, props) {
+    const list = visitsOf(s);
+    const loose = list.filter(v => !v.prop && !v.skip && v.mows);
+    const pickProp = v => '<select onchange="subVisitProp(\'' + sid(s.id) + '\', \'' + sid(v.key) + '\', this.value, ' + !!v.hand + ')">' +
+      '<option value="">— which client? —</option>' + props.map(p => '<option value="' + sid(p.id) + '"' +
+        (p.id === v.prop ? ' selected' : '') + '>' + esc(p.client || 'Client') + '</option>').join('') + '</select>';
+    const row = v => '<tr class="' + (v.skip ? 'sub-off' : '') + (!v.prop && !v.skip && v.mows ? ' sub-loose' : '') + '">' +
+      '<td>' + esc(String(v.date || '').slice(0, 4) === String(new Date().getFullYear()) ? fmtDateMD(v.date) : fmtDateMDY(v.date)) + '</td>' +
+      '<td>' + esc(v.service || '') + (v.hand ? ' <span class="rc-tag">by hand</span>' : '') +
+        (v.address ? '<div class="muted">' + esc(v.address) + '</div>' : '') + '</td>' +
+      '<td>' + (typeof v.cents === 'number' ? money(v.cents) : '') + '</td>' +
+      '<td>' + pickProp(v) + '</td>' +
+      '<td><input class="sub-mow-in" type="number" min="0" step="1" inputmode="numeric" value="' + v.mows + '"' +
+        ' title="' + (v.setMows ? 'Set by hand' : v.guess ? 'A guess from how often — set it' : 'From the invoice') + '"' +
+        ' onchange="subVisitMows(\'' + sid(s.id) + '\', \'' + sid(v.key) + '\', this.value, ' + !!v.hand + ')">' +
+        (v.guess ? '<span class="muted" title="A month\'s worth, guessed from how often — set it to the real number">≈</span>' : '') + '</td>' +
+      '<td>' + (v.hand
+        ? '<button class="link-btn" onclick="subVisitRemove(\'' + sid(v.key) + '\')">Remove</button>'
+        : '<label class="sub-count"><input type="checkbox"' + (v.skip ? '' : ' checked') +
+          ' onchange="subVisitSkip(\'' + sid(v.key) + '\', !this.checked)"> Count</label>') + '</td></tr>';
+    const today = ymd(new Date());
+    const form = addingVisit === s.id
+      ? '<div class="add-area sub-form"><div class="grid g4">' +
+          '<div class="field"><span class="label">Date</span><input type="date" id="svDate" value="' + today + '"></div>' +
+          '<div class="field"><span class="label">Client</span><select id="svProp">' + props.map(p => '<option value="' + sid(p.id) + '">' +
+            esc(p.client || 'Client') + '</option>').join('') + '</select></div>' +
+          '<div class="field"><span class="label">What</span><input id="svService" value="Mow"></div>' +
+          '<div class="field"><span class="label">Mows</span><input id="svMows" type="number" min="0" step="1" value="1"></div>' +
+        '</div><div class="field-actions"><button class="btn btn-filled btn-sm" onclick="subVisitSave(\'' + sid(s.id) + '\')">Add it</button>' +
+          '<button class="btn btn-sm" onclick="subVisitCancel()">Cancel</button></div></div>'
+      : '';
+    return '<div class="sub-visits"><div class="sub-bills-h">Visits from their invoices' +
+        (visitsDoc.scannedAt ? ' <span class="muted">· email checked ' + esc(fmtDateMD(visitsDoc.scannedAt.slice(0, 10))) + '</span>' : '') +
+        '<span class="sub-visit-acts"><button class="link-btn" onclick="subCheckEmail()"' + (checking ? ' disabled' : '') + '>' +
+          (checking ? 'Checking…' : '📧 Check their email now') + '</button>' +
+        (props.length ? '<button class="link-btn" onclick="subVisitAdd(\'' + sid(s.id) + '\')">+ Add a visit by hand</button>' : '') +
+        '</span></div>' + form +
+      (loose.length ? '<div class="sub-warn">' + loose.length + ' visit' + (loose.length === 1 ? '' : 's') +
+        ' not matched to a client yet — pick who each was for and it counts (the next bill like it goes there by itself).</div>' : '') +
+      (list.length
+        ? '<div class="table-wrap"><table class="sub-table sub-visit-table"><thead><tr><th>Date</th><th>What</th><th>Bill</th>' +
+            '<th>Client</th><th>Mows</th><th></th></tr></thead><tbody>' + list.slice(0, VISITS_SHOWN).map(row).join('') +
+            '</tbody></table></div>' + (list.length > VISITS_SHOWN ? '<p class="muted">The ' + VISITS_SHOWN + ' latest of ' + list.length + '.</p>' : '')
+        : '<p class="muted" style="margin:8px 0 0">' + (visitsDoc.scannedAt
+            ? 'No invoices from them found in your email this year.'
+            : 'Their invoices have not been read from your email yet — press Check their email now.') + '</p>') +
+    '</div>';
   }
 
   function billsHtml(bills) {
@@ -404,6 +546,9 @@
         '<div class="sub-svc-add"><input id="spSvcNew" placeholder="Something else they do" ' +
           'onkeydown="if(event.key===\'Enter\'){event.preventDefault();subSvcAdd()}">' +
           '<button class="btn btn-sm" onclick="subSvcAdd()">+ Add</button></div></div>' +
+      '<div class="field"><span class="label">Mows this season, by hand (blank: count them from their invoices)</span>' +
+        '<input id="spMowsHand" type="number" min="0" step="1" inputmode="numeric" value="' +
+          (p.mowsByHand && p.mowsByHand.season === seasonNow(p) && typeof p.mowsByHand.n === 'number' ? p.mowsByHand.n : '') + '"></div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Done on (blank: still going)</span>' +
           '<input type="date" id="spDoneOn" value="' + esc(p.doneOn || '') + '"></div>' +
@@ -472,12 +617,69 @@
       theirCents: cents(v('spTheir')), theirPer: v('spTheirPer') || 'visit',
       ourCents: cents(v('spOurs')), ourPer: v('spOurPer') || 'visit',
       services: Array.from(document.querySelectorAll('.spSvc:checked')).map(i => i.value),
+      // Replaces this season's count (blank: counted from the invoices).
+      mowsByHand: v('spMowsHand') !== '' && isFinite(+v('spMowsHand'))
+        ? { season: seasonNow({ from: v('spFrom') || SEASON.from, to: v('spTo') || SEASON.to }), n: Math.max(0, Math.round(+v('spMowsHand'))) }
+        : null,
       from: from, to: to, off: !!(el('spOff') && el('spOff').checked), updatedAt: new Date().toISOString(),
     };
     form = null;
     put({ subs: { [subId]: { props: { [pid]: rec } } } }, 'saving a property');
     showToast('Saved — ' + client);
   };
+  // ------------------------------------------------- visits, set by hand
+  window.subVisitProp = function (subId, key, propId, hand) {
+    const s = (data.subs || {})[subId];
+    if (!s) return;
+    propId = propId && (s.props || {})[propId] ? propId : '';
+    if (hand) { put({ handVisits: { [key]: { prop: propId || null } } }, 'moving a visit'); return; }
+    const patch = { visitFix: { [key]: { prop: propId } } };
+    // A bill with no address (a monthly one): the next bill for the same
+    // service goes to the same client by itself.
+    const v = (visitsDoc.visits || {})[key];
+    if (v && !addrKey(v.address) && propId) patch.svcProp = { [subId]: { [svcKeyOf(v.service)]: propId } };
+    put(patch, 'matching a visit');
+  };
+  window.subVisitMows = function (subId, key, value, hand) {
+    const n = String(value).trim() === '' ? null : Math.max(0, Math.round(+value));
+    if (n != null && !isFinite(n)) { showToast('Mows as a number'); render(); return; }
+    if (hand) put({ handVisits: { [key]: { mows: n == null ? 0 : n } } }, 'setting mows');
+    // Cleared: back to what the invoice says.
+    else put({ visitFix: { [key]: { mows: n } } }, 'setting mows');
+  };
+  window.subVisitSkip = function (key, skip) { put({ visitFix: { [key]: { skip: !!skip } } }, skip ? 'not counting a visit' : 'counting a visit'); };
+  window.subVisitRemove = function (key) {
+    const v = (data.handVisits || {})[key];
+    if (!v || !confirm('Remove this visit you added?')) return;
+    put({ handVisits: { [key]: null } }, 'removing a visit');
+  };
+  window.subVisitAdd = function (subId) { addingVisit = subId; open[subId] = true; render(); };
+  window.subVisitCancel = function () { addingVisit = ''; render(); };
+  window.subVisitSave = function (subId) {
+    const date = v('svDate'), prop = v('svProp'), mows = Math.max(0, Math.round(+v('svMows') || 0));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { showToast('Pick the date'); return; }
+    if (!prop) { showToast('Which client?'); return; }
+    addingVisit = '';
+    put({ handVisits: { [newId('hv')]: { sub: subId, prop: prop, date: date, service: v('svService') || 'Mow', mows: mows,
+      at: new Date().toISOString() } } }, 'adding a visit');
+    showToast('Added — ' + mows + ' mow' + (mows === 1 ? '' : 's'));
+  };
+  // Reads their invoice emails now rather than at the next half-hourly look
+  // (functions/subvisits.py). The first time, the whole year.
+  window.subCheckEmail = async function () {
+    if (checking || !window.YDClaude) return;
+    checking = true; render();
+    try {
+      const r = await YDClaude.post('/subs/scan', { full: !visitsDoc.scannedAt });
+      const n = ((r && r.report) || {}).new || 0;
+      showToast(n ? n + ' new visit' + (n === 1 ? '' : 's') + ' from their invoices' : 'Nothing new in their email');
+    } catch (e) {
+      showToast(e.message || 'Their email could not be read just now');
+    } finally {
+      checking = false; render();
+    }
+  };
+
   window.subEveryPicked = function () {
     const box = el('spEveryOther');
     if (box) box.hidden = v('spEvery') !== 'other';
@@ -519,15 +721,22 @@
 
   // ---------------------------------------------------------------- loading
 
-  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; data = { subs: {}, paid: {}, filed: {} }; fresh = false; form = null; }
+  function stop() {
+    if (unsub) { try { unsub(); } catch (e) {} }
+    unsub = null; fresh = false; form = null; addingVisit = '';
+    data = { subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {} };
+    visitsDoc = { visits: {}, scannedAt: '' };
+  }
   function start() {
     stop();
     if (!owner() || !window.YDDb) { render(); return; }
     unsub = window.YDDb.watch('settings', (changes, meta) => {
       changes.forEach(c => {
-        if (c.id !== 'subcontractors') return;
         const d = c.type === 'removed' ? {} : (c.data || {});
-        data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {} };
+        if (c.id === 'subVisits') { visitsDoc = { visits: d.visits || {}, scannedAt: d.scannedAt || '' }; return; }
+        if (c.id !== 'subcontractors') return;
+        data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {},
+                 visitFix: d.visitFix || {}, handVisits: d.handVisits || {}, svcProp: d.svcProp || {} };
       });
       if (meta && meta.fromCache === false) fresh = true;
       fileBills();
