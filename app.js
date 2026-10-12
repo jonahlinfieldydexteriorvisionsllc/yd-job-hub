@@ -1272,10 +1272,14 @@ function renderOrderList() {
           Object.values(cat.items).sort((a, b) => String(a.name).localeCompare(String(b.name)))
             .map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>').join('') +
         '</select> <button class="link-btn" onclick="linkingOrder=null; renderOrderList()">Cancel</button></div>' : '';
+    // The product's own page, from Supplies, for what is ordered online.
+    const sid = !it.ordered ? orderSupply(it, cat) : null;
+    const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
     return '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + it.id + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
+        (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') +
         // Ticked by a receipt sorted onto this job: which order it was.
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
         (costLine ? '<br>' + costLine : '') + picker +

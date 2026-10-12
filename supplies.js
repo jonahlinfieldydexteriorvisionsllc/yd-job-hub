@@ -11,7 +11,8 @@
 // from the crew -- the same split as the snow accounts:
 //   vendors/{id}       name, address, phone, hours, notes, email,     everyone
 //                      website, buyWays [online|shipped|phone|far], leadTime
-//   supplies/{id}      name, also, vendorId, sku, where, unit, notes  everyone
+//   supplies/{id}      name, also, vendorId, sku, where, unit, notes, everyone
+//                      link (the product's own page)
 //   supplyPrices/{id}  (same id as the item) cents, per, year, asOf,
 //                      priceNotes, history [{year, cents, per, asOf}] owner only
 //
@@ -414,10 +415,18 @@
       (withVendor && v ? waysHtml(v) : '') +
       (it.notes ? '<div class="sup-notes">' + esc(it.notes) + '</div>' : '') +
       priceHtml(it.id) +
-      (withVendor && v && (v.address || v.phone || websiteUrl(v))
-        ? '<div class="sup-links">' + linksHtml(v) + (v.hours ? '<span class="sup-hours">' + esc(v.hours) + '</span>' : '') + '</div>'
-        : '') +
+      itemLinksHtml(it, withVendor ? v : null) +
     '</div>';
+  }
+
+  // The item's own page first, then (in a list of every supplier's items)
+  // how to reach the supplier.
+  function itemLinksHtml(it, v) {
+    const page = websiteUrl({ website: it.link });
+    const own = page ? '<a class="btn btn-sm btn-accent" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 See it online</a>' : '';
+    const theirs = v && (v.address || v.phone || websiteUrl(v))
+      ? linksHtml(v) + (v.hours ? '<span class="sup-hours">' + esc(v.hours) + '</span>' : '') : '';
+    return own || theirs ? '<div class="sup-links">' + own + theirs + '</div>' : '';
   }
 
   window.supSearch = function (q) { search = q; renderResults(); };
@@ -477,6 +486,9 @@
           '<option value="">— pick one —</option>' +
           vs.map(v => '<option value="' + esc(v.id) + '"' + (v.id === pick ? ' selected' : '') + '>' + esc(v.name) + '</option>').join('') +
         '</select>' + (vs.length ? '' : '<div class="hint">Add a supplier first, with “+ Add a supplier”.</div>') + '</div>' +
+        // Jonah (12 Oct 2026): for the suppliers ordered from online, a link
+        // to the product's own page.
+        field('Link to it online', 'siLink', it.link, 'Paste the product’s page — e.g. theirsite.com/item/123') +
         '<div class="grid g2">' +
           field('Comes in', 'siUnit', it.unit, 'e.g. 50 lb bag, pallet, yard') +
           field('Supplier’s item #', 'siSku', it.sku, 'optional') +
@@ -591,10 +603,12 @@
     }
     const coverage = parsePct(val('siCover'));
     if (Number.isNaN(coverage) || coverage !== null && !(coverage > 0)) { showToast('“Covers” should be a number above 0, or blank'); return; }
+    const link = websiteUrl({ website: val('siLink') });
+    if (val('siLink') && !link) { showToast('That link doesn’t look right — paste the page’s address'); return; }
 
     const id = editing.id || newId('s');
     const rec = { name: name, also: val('siAlso'), vendorId: val('siVendor') || null, sku: val('siSku'),
-                  where: val('siWhere'), unit: val('siUnit'), notes: (el('siNotes').value || '').trim(),
+                  where: val('siWhere'), unit: val('siUnit'), notes: (el('siNotes').value || '').trim(), link: link,
                   category: val('siCat') || null, coverage: coverage, takeoffUnit: val('siTakeoff'),
                   pallet: !!(el('siPallet') && el('siPallet').checked),
                   specialOrder: !!(el('siSpecial') && el('siSpecial').checked), updatedAt: now };
@@ -659,6 +673,7 @@
     priceNotes: ['price notes', 'pricing notes', 'owner notes'],
     where: ['where', 'where at the supplier', 'location', 'aisle'],
     also: ['also called', 'also', 'other names', 'aka'],
+    link: ['link', 'url', 'web link', 'product link', 'product url', 'product page', 'web address', 'link to it online'],
     // For estimates (pricing.js). Names as they read once "%" and the like
     // are taken out of the header.
     category: ['category', 'kind of material'],
@@ -799,6 +814,7 @@
       if (c.category) { const cat = categoryId(c.category); if (cat === undefined) bad = 'the kind “' + c.category + '” is not one Job Hub knows'; else extra.category = cat; }
       if (c.coverage) { const n = parsePct(c.coverage); if (!(n > 0)) bad = '“covers” should be a number above 0'; else extra.coverage = n; }
       if (c.takeoffUnit) extra.takeoffUnit = c.takeoffUnit;
+      if (c.link) { const page = websiteUrl({ website: c.link }); if (!page) bad = 'the link “' + c.link + '” is not a web address'; else extra.link = page; }
       [['pallet', 'pallet'], ['specialOrder', 'special order']].forEach(([k, label]) => {
         if (!c[k]) return;
         const yn = yesNo(c[k]);
@@ -1159,7 +1175,7 @@
     };
     const head = ['id', 'Supplier', 'Item', 'Item #', 'Comes in', 'Price', 'Per', 'Year',
                   'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes',
-                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each'];
+                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link'];
     const catName = id => ((categories().find(c => c[0] === id) || [])[1]) || '';
     const yn = b => (b ? 'yes' : '');
     const n = v => (typeof v === 'number' ? String(v) : '');
@@ -1177,7 +1193,8 @@
           pct != null ? (pct > 0 ? '+' : '') + pct.toFixed(1) + '%' : '',
           cell(it.where, true), cell(it.also, true), cell(it.notes, true), cell(p.priceNotes, true),
           cell(catName(it.category), true), n(it.coverage), cell(it.takeoffUnit, true), yn(it.pallet), yn(it.specialOrder),
-          n(p.markupPct), n(p.wastePct), typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : ''].join(',');
+          n(p.markupPct), n(p.wastePct), typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
+          cell(it.link, true)].join(',');
       });
     // A byte-order mark and CRLF line endings, so Excel opens it with the
     // dashes and accents intact.
@@ -1356,8 +1373,13 @@
     // Sold by the bag/roll/box but measured in sq ft (or LF...): how much
     // one covers, so the estimate orders whole packages.
     const covers = Number(o.coverage) > 0 && String(o.takeoffUnit || '').trim();
-    if (it && covers && !(Number(it.coverage) > 0)) {
-      const patch = { coverage: Number(o.coverage), takeoffUnit: String(o.takeoffUnit).trim().slice(0, 30), updatedAt: now };
+    // The product's own page, where the price came from -- kept on an item
+    // that has no link yet, never over one typed in by hand.
+    const link = websiteUrl({ website: o.url });
+    if (it && ((covers && !(Number(it.coverage) > 0)) || (link && !it.link))) {
+      const patch = { updatedAt: now };
+      if (covers && !(Number(it.coverage) > 0)) Object.assign(patch, { coverage: Number(o.coverage), takeoffUnit: String(o.takeoffUnit).trim().slice(0, 30) });
+      if (link && !it.link) patch.link = link;
       Object.assign(it, patch);
       writes.push(['supplies', it.id, patch]);
     }
@@ -1368,7 +1390,7 @@
                     unit: String(o.per || o.unit || '').trim().slice(0, 30), vendorId: v.id,
                     category: categoryId(o.category) || null,
                     coverage: covers ? Number(o.coverage) : null,
-                    takeoffUnit: covers ? String(o.takeoffUnit).trim().slice(0, 30) : '', updatedAt: now };
+                    takeoffUnit: covers ? String(o.takeoffUnit).trim().slice(0, 30) : '', link: link, updatedAt: now };
       items[id] = Object.assign({ id: id }, rec);
       it = items[id];
       writes.push(['supplies', id, rec]);
