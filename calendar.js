@@ -36,6 +36,11 @@
       about: 'Calls to make and things to chase' },
     { id: 'personal', name: 'Personal', color: '#d94f8a', kind: 'personal', order: 4,
       about: 'Yours only' },
+    // Jonah (12 Oct 2026): a crew task is seen by every crew member. An entry
+    // made one goes here, and this calendar is kept shared with everybody
+    // ticked as crew on Your Crew (shareCrewCal).
+    { id: 'crewtasks', name: 'Crew tasks', color: '#2f6fd6', kind: 'crew', order: 5,
+      about: 'Shared with every crew member' },
   ];
 
   // What an entry is (a bid appointment, a pickup...) and when it buzzes the
@@ -55,7 +60,7 @@
     // ahead -- worked out from the list on the Crew tasks board
     // (recurring.js), never copied in.
     // Blue, as every crew task is (remind.js, Jonah 12 Oct).
-    'auto:recurring': { id: 'auto:recurring', name: 'Crew tasks', color: '#2f6fd6', auto: true,
+    'auto:recurring': { id: 'auto:recurring', name: 'Recurring crew tasks', color: '#2f6fd6', auto: true,
                         about: 'Recurring crew tasks, from the Crew tasks board' },
   };
 
@@ -76,7 +81,8 @@
   // phone, behind the ☰ button. Tap an empty hour to add something there; drag
   // an entry to move it, or its bottom edge to change how long it runs. A phone
   // opens in 3 days (his answer, 6 Oct), and a swipe moves along.
-  const VIEWS = [['day', 'Day'], ['3day', '3 days'], ['week', 'Week'], ['month', 'Month'], ['schedule', 'List']];
+  // My day (12 Oct 2026): one person's day -- what is theirs, in order.
+  const VIEWS = [['myday', 'My day'], ['day', 'Day'], ['3day', '3 days'], ['week', 'Week'], ['month', 'Month'], ['schedule', 'List']];
   const HOUR = 48;          // pixels an hour takes in the time grid
   const SNAP = 15;          // minutes a dragged entry moves by
 
@@ -89,6 +95,7 @@
   let unsubCals = null, unsubStorms = null, unsubPeople = null;
   let eventUnsubs = {};
   let seeded = false;
+  let peopleLoaded = false; // the users list has come from the server (owner, admin)
 
   let view = loadView();    // one of VIEWS (null until the first draw picks one)
   let cursor = '';          // the day the view is on (set on first draw)
@@ -96,7 +103,7 @@
   let miniMonth = '';       // the month the small calendar shows, YYYY-MM-01
   let sideOpen = false;     // phone: the calendars list is open
   let hidden = loadHidden();// layer ids switched off
-  let onlyMine = false;
+  let onlyMineOn = false;   // "👤 Only mine" in the side (remind.js isMine)
   let editing = null;       // { calId, eventId, occ, date, time } in the editor
   let lastCal = null;       // calendar last added to, offered first next time
   let drawn = {};           // key -> the occurrence drawn with that key
@@ -198,17 +205,21 @@
   // entries ready to draw: { day, layer, title, time, ev, ... }. `ev` is the
   // entry as it is on that date (its own date, or what was changed for it);
   // `orig` is the date a repeat fell on, which names its single-date change.
-  function occurrences(from, to) {
+  // `everything`: every layer, whatever is ticked in the side (My day).
+  function occurrences(from, to, everything) {
     const out = [];
     const uid = me() && me().uid;
+    const w = YDRemind.who(people);
+    const off = id => !everything && hidden.has(id);
+    const onlyMine = !everything && onlyMineOn;
 
     Object.keys(events).forEach(cid => {
       const cal = cals[cid];
-      if (!cal || hidden.has(cid)) return;
+      if (!cal || off(cid)) return;
       Object.values(events[cid]).forEach(base => {
         occurrencesOf(base, from, to).forEach(x => {
           const ev = x.ev;
-          if (onlyMine && !isMine(ev, cal, uid)) return;
+          if (onlyMine && !YDRemind.eventIsMine(ev, cal, w)) return;
           const name = ev.title || (ev.jobName ? ev.jobName : 'Untitled');
           const type = typeOfEv(ev, cal), ic = YDRemind.icon(type);
           out.push({
@@ -225,7 +236,7 @@
       });
     });
 
-    if (!hidden.has('auto:storms') && !onlyMine) {
+    if (!off('auto:storms') && !onlyMine) {
       Object.values(storms).forEach(s => {
         if (!s.startedAt || s.status === 'abandoned') return;
         const day = dayOf(new Date(s.startedAt));
@@ -236,7 +247,7 @@
       });
     }
 
-    if (ydCan('equipment', 'see') && !hidden.has('auto:equipment') && !onlyMine && window.YDEquipment) {
+    if (ydCan('equipment', 'see') && !off('auto:equipment') && !onlyMine && window.YDEquipment) {
       Object.values(YDEquipment.all()).forEach(g => {
         if (!g.dueDate || g.dueDate < from || g.dueDate > to) return;
         out.push({ day: g.dueDate, layer: AUTO['auto:equipment'], auto: 'equipment', id: g.id,
@@ -244,7 +255,7 @@
       });
     }
 
-    if (!hidden.has('auto:cards') && window.YDBoards) {
+    if (!off('auto:cards') && window.YDBoards) {
       YDBoards.dueCards().forEach(x => {
         if (x.card.due < from || x.card.due > to) return;
         // A Maintenance card is the machine's own due date, which the
@@ -266,7 +277,7 @@
       });
     }
 
-    if (!hidden.has('auto:recurring') && window.YDRecurring && YDRecurring.visible()) {
+    if (!off('auto:recurring') && window.YDRecurring && YDRecurring.visible()) {
       YDRecurring.dues(from, to).forEach(x => {
         out.push({ day: x.day, layer: AUTO['auto:recurring'], auto: 'recurring', id: x.cardId, boardId: 'crew',
           done: x.done, title: '🔁 ' + x.what, note: 'Crew tasks', type: 'crew',
@@ -298,12 +309,6 @@
     return isNaN(d) ? '' : fmtTime(two(d.getHours()) + ':' + two(d.getMinutes()));
   }
 
-  function isMine(ev, cal, uid) {
-    if (!uid) return false;
-    if ((ev.crew || []).some(c => c.uid === uid)) return true;
-    // For the owner, their own personal calendar is "theirs" too.
-    return isOwner() && cal.kind === 'personal';
-  }
 
   // The days each repeat of an event starts on, up to `to`.
   function startsOf(ev, from, to) {
@@ -406,7 +411,9 @@
     // A finger still holding (not yet dragging) would be left holding an
     // entry no longer on the page: it lets go instead.
     if (drag) stopDrag();
-    if (!view) view = isPhone() ? '3day' : 'week';
+    // The crew start on their own day; the owner's phone in 3 days (his
+    // answer, 6 Oct), a computer in the week.
+    if (!view) view = !isOwner() && !(window.YDAuth && window.YDAuth.isAdmin) ? 'myday' : isPhone() ? '3day' : 'week';
     if (!cursor) { cursor = today(); selected = cursor; }
     if (!miniMonth) miniMonth = cursor.slice(0, 8) + '01';
     // Where the hours are scrolled to, read off the grid -- only one that
@@ -419,9 +426,11 @@
         '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml() + '</aside>' +
         '<div class="cal-main">' + topHtml() +
           // A phone has the side folded away behind ☰: the list goes on top.
-          todayHtml() +
+          // My day has it in the page already.
+          (view === 'myday' ? '' : todayHtml()) +
           '<div class="cal-body" id="calBody">' +
-            (view === 'month' ? monthHtml() : view === 'schedule' ? listHtml() : gridHtml(gridDays())) +
+            (view === 'month' ? monthHtml() : view === 'schedule' ? listHtml() : view === 'myday' ? myDayHtml()
+              : gridHtml(gridDays())) +
           '</div>' +
         '</div>' +
       '</div>';
@@ -468,7 +477,10 @@
     if (o.auto === 'card') return true;            // the rules say who may move it
     if (o.auto === 'recurring') return !!o.id;     // only once this week's card exists
     if (o.auto) return false;                      // a machine is done by logging its service
-    return editsCal(cals[o.calId]);
+    // Whoever the calendar is shared with may tick a date off (the rules
+    // let them change `done` and nothing else).
+    const cal = cals[o.calId], u = me();
+    return editsCal(cal) || !!(cal && u && (cal.visibleTo || []).indexOf(u.uid) !== -1);
   }
   function todayHtml() {
     const day = dayForNew();
@@ -476,15 +488,8 @@
     const rank = o => { const i = YDRemind.TYPES.findIndex(t => t.id === o.type); return i === -1 ? YDRemind.TYPES.length : i; };
     const sorted = list => list.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || rank(a) - rank(b) ||
       String(a.name || a.title).localeCompare(String(b.name || b.title)));
-    const row = o => {
-      const k = keyOf(o);
-      return '<div class="cal-todo' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '">' +
-        (canTick(o) ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
-          'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
-        '<button class="cal-todo-t" onclick="calClick(\'' + k + '\')">' + esc(o.title) + '</button></div>';
-    };
     const group = (label, list) => !list.length ? '' :
-      (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + sorted(list).map(row).join('');
+      (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + sorted(list).map(o => todoRow(o)).join('');
     const mine = items.filter(o => !isCrewOcc(o)), crew = items.filter(isCrewOcc);
     const left = items.filter(o => !o.done).length;
     return '<div class="cal-today' + (todayFolded ? ' folded' : '') + '">' +
@@ -497,6 +502,98 @@
           : '<div class="cal-today-none">Nothing for any time this day.</div>') +
       '</div></div>';
   }
+  // One thing on the "any time" list: a tick box when this person may tick
+  // it off, its kind's colour down the side, a tap to open it. `sub`: a
+  // second line (who is on it).
+  function todoRow(o, sub) {
+    const k = keyOf(o);
+    return '<div class="cal-todo' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '">' +
+      (canTick(o) ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
+        'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
+      '<button class="cal-todo-t" onclick="calClick(\'' + k + '\')">' + esc(o.title) +
+        (sub ? '<small>' + esc(sub) + '</small>' : '') + '</button></div>';
+  }
+  const rankOf = o => { const i = YDRemind.TYPES.findIndex(t => t.id === o.type); return i === -1 ? YDRemind.TYPES.length : i; };
+  const byKind = (a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || rankOf(a) - rankOf(b) ||
+    String(a.name || a.title).localeCompare(String(b.name || b.title));
+
+  // ------------------------------------------------------------------ my day
+  //
+  // Jonah (12 Oct 2026): "a daily overview section where each person can
+  // view what their day consists of." One day, only what is theirs
+  // (remind.js isMine): what is at a set time, in order, then what is for any
+  // time that day, to tick off. Below, what the crew have that day that is
+  // not theirs -- the owner sees every crew task, as he asked. Every
+  // calendar counts, whatever is ticked in the side. The crew open the
+  // calendar here.
+  let pushState = '';       // this phone's notifications (notify.js); '' until asked
+  function occIsMine(o, w) {
+    if (o.auto === 'storm') return true;                       // a storm is everybody's
+    if (o.auto === 'equipment') return !!w.owner;
+    if (o.auto === 'card' || o.auto === 'recurring') {
+      const boardId = o.auto === 'card' ? o.boardId : 'crew';
+      const b = (YDBoards.boards() || {})[boardId] || { id: boardId };
+      const card = ((YDBoards.cards() || {})[boardId] || {})[o.id] || { assignees: [] };
+      return YDRemind.cardIsMine(card, b, YDRemind.who(YDBoards.people()));
+    }
+    return YDRemind.eventIsMine(o.ev, cals[o.calId], w);
+  }
+  function whoOn(o) {
+    const names = (o.crew || []).map(c => {
+      const p = people[c.uid];
+      const n = (p && (p.name || p.email)) || c.name || '';
+      return n ? firstName(n) : '';
+    }).filter(Boolean);
+    return names.length ? '👤 ' + names.join(', ') : '';
+  }
+  function myDayHtml() {
+    const day = cursor, w = YDRemind.who(people);
+    if (!w) return '';
+    const all = occurrences(day, day, true);
+    const mine = all.filter(o => occIsMine(o, w));
+    const crew = all.filter(o => !occIsMine(o, w) && isCrewOcc(o));
+    const timed = list => list.filter(o => o.time).sort((a, b) => String(to24(a.time)).localeCompare(String(to24(b.time))));
+    const untimed = list => list.filter(o => !o.time).sort(byKind);
+    const timedRow = o => {
+      const k = keyOf(o);
+      const sub = [o.address, o.note, o.auto ? '' : o.layer.name, whoOn(o)].filter(Boolean).join(' · ');
+      return '<button class="md-row' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '" onclick="calClick(\'' + k + '\')">' +
+        '<span class="md-time">' + esc(o.endTime ? fmtTimeRange(o.time, o.endTime) : fmtTimeRange(o.time)) + '</span>' +
+        '<span class="md-what"><b>' + esc(o.title) + '</b>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span></button>';
+    };
+    const mineT = timed(mine), mineU = untimed(mine);
+    const left = mineU.filter(o => !o.done).length;
+    const which = day === today() ? 'today' : 'this day';
+    // Reminders only reach a phone that has said yes to them.
+    if (!pushState && window.YDNotify) {
+      pushState = 'asking';
+      YDNotify.deviceState().then(st => { pushState = st; redrawIfVisible(); }).catch(() => { pushState = 'unsupported'; });
+    }
+    const nudge = YDRemind.autoOn() === false
+      ? '<div class="md-nudge">🔕 Your reminders are switched off. <button class="link-btn" onclick="openNotifications()">Switch them on</button></div>'
+      : pushState === 'off' ? '<div class="md-nudge">🔔 Get a buzz before each thing on your day. ' +
+          '<button class="btn btn-sm btn-filled" onclick="calPushOn()">Turn on notifications</button></div>'
+      : pushState === 'needs-home-screen' ? '<div class="md-nudge">🔔 For reminders on an iPhone, open Job Hub from the home screen ' +
+          '(Safari → Share → Add to Home Screen), then turn notifications on.</div>'
+      : pushState === 'blocked' ? '<div class="md-nudge">🔕 Notifications are blocked for Job Hub on this device — allow them in its settings.</div>'
+      : '';
+    return '<div class="md">' + nudge +
+      (!mine.length ? '<p class="empty-msg">Nothing of yours ' + which + '.</p>' :
+        (mineT.length ? '<div class="md-head">🕑 At set times</div>' + mineT.map(timedRow).join('') : '') +
+        (mineU.length ? '<div class="md-head">✅ Any time ' + which +
+          ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span></div>' +
+          mineU.map(o => todoRow(o, whoOn(o))).join('') : '')) +
+      (crew.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
+        timed(crew).map(timedRow).join('') + untimed(crew).map(o => todoRow(o, whoOn(o))).join('') : '') +
+      '</div>';
+  }
+  window.calPushOn = async function () {
+    if (typeof ntfTurnOn !== 'function') return;
+    await ntfTurnOn();
+    pushState = '';
+    render();
+  };
+
   window.calTodayFold = function () {
     todayFolded = !todayFolded;
     try { localStorage.setItem('ydjobhub_calTodayFolded', todayFolded ? '1' : '0'); } catch (e) {}
@@ -513,7 +610,7 @@
       return;
     }
     const cal = cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
-    if (!base || !editsCal(cal)) { render(); return; }
+    if (!base || !canTick(o)) { render(); return; }
     // Undone is written as null: a merge keeps whatever key is left out.
     const mark = on ? { at: nowIso(), by: (me() || {}).uid || '' } : null;
     base.done = Object.assign({}, base.done, { [o.day]: mark });
@@ -524,7 +621,7 @@
   // Down the side: the small month, the day's "any time" list, then every
   // calendar with a tick box.
   function sideHtml() {
-    return miniHtml() + todayHtml() +
+    return miniHtml() + (view === 'myday' ? '' : todayHtml()) +
       '<div class="cal-side-head">Calendars</div>' +
       '<div class="cal-checks">' + layers().map(l =>
         '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
@@ -532,8 +629,8 @@
           '<span class="cal-box"></span><span class="cal-check-name">' + esc(l.name) + '</span>' +
           (isOwner() && !l.auto && (l.visibleTo || []).length ? '<span class="cal-shared">👥' + l.visibleTo.length + '</span>' : '') +
         '</label>').join('') +
-        '<label class="cal-check mine"><input type="checkbox"' + (onlyMine ? ' checked' : '') + ' onchange="calOnlyMine()">' +
-          '<span class="cal-box"></span><span class="cal-check-name">👤 Only what I’m on</span></label>' +
+        '<label class="cal-check mine"><input type="checkbox"' + (onlyMineOn ? ' checked' : '') + ' onchange="calOnlyMine()">' +
+          '<span class="cal-box"></span><span class="cal-check-name">👤 Only mine</span></label>' +
       '</div>' +
       // What each colour means (remind.js). Anything not marked keeps its
       // calendar's colour.
@@ -541,7 +638,7 @@
       '<div class="cal-key">' + YDRemind.TYPES.map(t => '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
         '<span class="cal-key-dot"></span>' + t.icon + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
       '<div class="cal-side-links">' +
-        (hidden.size || onlyMine ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
+        (hidden.size || onlyMineOn ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
         (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars</button>' : '') +
       '</div>';
   }
@@ -565,7 +662,7 @@
 
   function titleFor() {
     if (view === 'month') return monthTitle(cursor);
-    if (view === 'day') return parseDay(cursor).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    if (view === 'day' || view === 'myday') return parseDay(cursor).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
     if (view === 'schedule') return 'From ' + parseDay(cursor).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
     const ds = gridDays(), a = parseDay(ds[0]), b = parseDay(ds[ds.length - 1]);
     return a.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' – ' +
@@ -812,7 +909,7 @@
   window.calToday = function () { cursor = today(); selected = cursor; miniMonth = cursor.slice(0, 8) + '01'; render(); };
   window.calStep = function (n) {
     cursor = view === 'month' ? addMonths(cursor.slice(0, 8) + '01', n)
-      : addDays(cursor, n * ({ day: 1, '3day': 3, week: 7, schedule: 14 }[view] || 7));
+      : addDays(cursor, n * ({ day: 1, myday: 1, '3day': 3, week: 7, schedule: 14 }[view] || 7));
     if (view === 'month') selected = cursor.slice(0, 7) === today().slice(0, 7) ? today() : cursor;
     miniMonth = cursor.slice(0, 8) + '01';
     render();
@@ -838,8 +935,8 @@
     if (on) hidden.delete(id); else hidden.add(id);
     saveHidden(); render();
   };
-  window.calShowAll = function () { hidden = new Set(); onlyMine = false; saveHidden(); render(); };
-  window.calOnlyMine = function () { onlyMine = !onlyMine; render(); };
+  window.calShowAll = function () { hidden = new Set(); onlyMineOn = false; saveHidden(); render(); };
+  window.calOnlyMine = function () { onlyMineOn = !onlyMineOn; render(); };
 
   // ----------------------------------------------------------- open things
 
@@ -903,6 +1000,7 @@
       '</div>' +
       '<div class="field-actions">' +
         (editsCal(cal) ? '<button class="btn btn-filled" onclick="calEditShown()">Edit</button>' : '') +
+        (editsCal(cal) && !(type && type.crew) ? '<button class="btn btn-sm" onclick="calCrewTask()">👷 Make it a crew task</button>' : '') +
         (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
         '<button class="btn btn-sm" onclick="closeCalModal()">Close</button>' +
       '</div>');
@@ -936,7 +1034,7 @@
     const t = today();
     if (view === 'month') return selected || t;
     if (isGrid()) { const ds = gridDays(); return ds.indexOf(t) !== -1 ? t : ds[0]; }
-    return view === 'schedule' ? cursor : t;
+    return view === 'schedule' || view === 'myday' ? cursor : t;
   }
   window.calEditShown = function () {
     if (!shown) return;
@@ -1169,6 +1267,7 @@
     if (!base) {
       const rec = first.rec, id = newId('ev');
       rec.createdAt = nowIso();
+      rec.createdBy = (me() || {}).uid || null;
       events[first.calId] = events[first.calId] || {};
       events[first.calId][id] = Object.assign({ id: id }, rec);
       write('calendars/' + first.calId + '/events', id, rec, 'saving ' + rec.title);
@@ -1756,8 +1855,57 @@
         write('calendars', c.id, { ownerOnly: c.ownerOnly }, 'marking private or not');
       });
     }
+    if (meta && !meta.fromCache) shareCrewCal();
     redrawIfVisible();
   }
+
+  // The Crew tasks calendar is shared with exactly the people ticked as crew
+  // on Your Crew (remind.js isCrewMember) -- put right by the owner's device
+  // whenever either list comes in from the server, so ticking someone shares
+  // it with them and unticking (or switching them off) takes it away.
+  const CREW_CAL = 'crewtasks';
+  function crewMemberUids() {
+    return Object.keys(people).filter(uid => people[uid].active && YDRemind.isCrewMember(people[uid])).sort();
+  }
+  function shareCrewCal() {
+    const c = cals[CREW_CAL];
+    if (!isOwner() || !peopleLoaded || !c) return;
+    const want = crewMemberUids();
+    if (same(want, (c.visibleTo || []).slice().sort())) return;
+    c.visibleTo = want;
+    write('calendars', CREW_CAL, { visibleTo: want, updatedAt: nowIso() }, 'sharing Crew tasks');
+  }
+  // Whether every crew member can see this calendar already.
+  function crewSees(cal) {
+    if (!cal) return false;
+    if (cal.kind === 'crew') return true;
+    const on = cal.visibleTo || [];
+    const crew = crewMemberUids();
+    return !cal.ownerOnly && crew.length > 0 && crew.every(uid => on.indexOf(uid) !== -1);
+  }
+
+  // Jonah (12 Oct 2026): "click a button on a card on the boards or calendars
+  // that marks it as a crew task so every profile marked as a crew member
+  // can view it." An entry on a calendar the crew already all see just
+  // becomes a crew task; anything else moves to the Crew tasks calendar
+  // (every date of a repeat), which they do.
+  window.calCrewTask = function () {
+    const o = shown;
+    const cal = o && cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
+    if (!base || !editsCal(cal)) return;
+    if (crewSees(cal)) {
+      const next = Object.assign({}, o.ev, { type: cal.kind === 'crew' ? null : 'crew' });
+      applyChange(o.calId, base, o.ev ? o : Object.assign({}, o, { ev: base }), next, 'all');
+      closeCalModal(); render();
+      showToast('A crew task now — every crew member can see it');
+      return;
+    }
+    if (!cals[CREW_CAL]) { showToast('The Crew tasks calendar is still being set up — try again in a moment'); return; }
+    const next = Object.assign({}, o.ev || base, { type: null });
+    applyChange(o.calId, base, o.ev ? o : Object.assign({}, o, { ev: base }), next, 'all', CREW_CAL);
+    closeCalModal(); render();
+    showToast('Moved to Crew tasks — every crew member can see it');
+  };
 
   function redrawIfVisible() {
     const p = el('panel-calendar');
@@ -1772,7 +1920,7 @@
     [unsubCals, unsubStorms, unsubPeople].forEach(u => { if (u) u(); });
     unsubCals = unsubStorms = unsubPeople = null;
     Object.values(eventUnsubs).forEach(u => u());
-    eventUnsubs = {}; cals = {}; events = {}; storms = {}; people = {}; seeded = false;
+    eventUnsubs = {}; cals = {}; events = {}; storms = {}; people = {}; seeded = false; peopleLoaded = false;
   }
 
   function start(a) {
@@ -1805,8 +1953,9 @@
     }
     // Names for the people on events, and who a calendar can be shared with.
     if (a.isOwner || a.isAdmin) {
-      unsubPeople = window.YDDb.watch('users', changes => {
+      unsubPeople = window.YDDb.watch('users', (changes, meta) => {
         changes.forEach(c => { if (c.type === 'removed') delete people[c.id]; else people[c.id] = c.data; });
+        if (meta && !meta.fromCache) { peopleLoaded = true; shareCrewCal(); }
         redrawIfVisible();
       }, () => {});
     }

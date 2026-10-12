@@ -142,14 +142,11 @@
     if (!u) return '';
     return (people[u.uid] && people[u.uid].name) || u.displayName || u.email || '';
   }
-  // Whether a card is mine: on it, or made by me with nobody else on it, or
-  // (the owner) made from his email or on his private board -- remind.js.
-  // The 👤 Mine filter and the reminders agree on it.
+  // Whether a card is mine: I am on it, or nobody is and I made it (a crew
+  // task with nobody on it: every crew member's) -- remind.js. The 👤 Mine
+  // filter, My day and the reminders agree on it.
   function isMineCard(board, k) {
-    const u = me();
-    if (!u) return false;
-    const names = [myName(), u.email].map(s => String(s || '').trim().toLowerCase()).filter(Boolean);
-    return YDRemind.cardIsMine(k, board, { uid: u.uid, names: names, owner: isOwner() });
+    return YDRemind.cardIsMine(k, board, YDRemind.who(people));
   }
   const cardType = (board, k) => YDRemind.typeOf(k, { boardId: board.id });
   // A card with no column shows in the first one, so everything that works
@@ -1029,8 +1026,14 @@
     const here = colOf(board, k);
     const type = YDRemind.typeById(cardType(board, k));
     // The usual reminder only for a card that is this person's (remind.js).
-    const remind = !k.due ? '' : k.hasReminder || k.noReminder || isMineCard(board, k)
-      ? YDRemind.line(k, type ? type.id : '', !!k.dueTime) : '';
+    const remind = !k.due ? '' : YDRemind.line(k, type ? type.id : '', !!k.dueTime, isMineCard(board, k));
+    // Jonah (12 Oct 2026): a button that makes it a crew task, "so every
+    // profile marked as a crew member can view it" -- the 👷 Crew tag, which
+    // the crew can read from any board that is not private.
+    const crewTask = !!(type && type.crew);
+    const crewBtn = !editsBoards() || board.id === CREW_BOARD ? ''
+      : '<button class="btn btn-sm" onclick="cardCrewTask(' + (crewTask ? 'false' : 'true') + ')">' +
+          (crewTask ? 'Not a crew task' : '👷 Make it a crew task') + '</button>';
     openModal(esc(k.title || 'Card'),
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
@@ -1057,9 +1060,31 @@
       claudeHtml(board, k) +
       '<div class="field-actions">' +
         (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
+        crewBtn +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
   }
+
+  // Making a card a crew task tags it 👷 Crew (every crew member can read a
+  // card with that tag on a board that is not private) and drops any other
+  // kind it was given; undoing takes both off.
+  window.cardCrewTask = function (on) {
+    const board = openCard && boards[openCard.boardId];
+    const k = board && (cards[board.id] || {})[openCard.cardId];
+    if (!k || !editsBoards()) return;
+    if (on && board.ownerOnly === true) {
+      showToast(board.name + ' is private, so the crew cannot see it — move the card to another board first');
+      return;
+    }
+    const labels = (k.labels || []).filter(id => id !== CREW_LABEL.id);
+    if (on) labels.push(CREW_LABEL.id);
+    const type = on ? null : (k.type === 'crew' ? null : (k.type || null));
+    const patch = { labels: labels, type: type, updatedAt: nowIso(), updatedBy: myName() };
+    Object.assign(k, patch);
+    render(); renderCardDetail();
+    writeCard(board.id, k.id, patch);
+    showToast(on ? 'A crew task now — every crew member can see it' : 'Not a crew task any more');
+  };
 
   // ------------------------------------------------- Claude on the cards
   //

@@ -495,6 +495,12 @@ service cloud.firestore {
           || (isWorker() && request.auth.uid in
               get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo);
         allow write: if isOwner() || (canChange('calendars') && sharedCal());
+        // Anyone a calendar is shared with ticks a date of an entry off on
+        // My day (calendar.js calTick: done {YYYY-MM-DD: {at, by} | null}) --
+        // and changes nothing else about it.
+        allow update: if isWorker()
+          && request.auth.uid in get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done']);
       }
     }
 

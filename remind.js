@@ -16,16 +16,17 @@
 //   - anything for no particular time (all day, a pickup, a to-do): one list
 //     at 7 am of all of that day's -- the calendar's "any time today"
 //     checklist, on the phone;
-//   - a crew task: only to the people on it.
+//   - to whoever it is theirs (isMine): the people on it; with nobody on it,
+//     a crew task goes to every crew member and anything else to whoever
+//     made it (the owner, mostly).
 // A thing's own Remind box overrides the usual one for the people it
 // reminds, and "No reminder" switches it off for everyone. Ticked off,
 // nothing.
 //
-// Who gets the usual reminders: each person with "Remind me of everything"
-// switched on (Notifications & summaries -- on for the owner unless he turns
-// it off, off for everyone else until they turn it on). They get every
-// calendar entry they can see, every machine service due if they see
-// Equipment, and every card that is theirs (cardIsMine).
+// Who gets the usual reminders: everyone with "Remind me of everything" on
+// (Notifications & summaries -- on unless they switch it off; Jonah, 12 Oct:
+// "make it so crew members can get notifications"), for every calendar
+// entry and card that is theirs, and the owner for each machine due.
 
 (function () {
   'use strict';
@@ -50,9 +51,6 @@
   ];
   const TIMED_LEADS = [30];
   const LEADS = { bid: [60, 30] };
-  // The card from a pickup email (functions/receipts.py) and Jonah's own
-  // forwarded to-dos carry this as their maker.
-  const EMAIL_MADE = 'job hub (email)';
 
   // Picking one's own reminder: the usual one, none at all, or a set time.
   const CHOICES = [
@@ -69,8 +67,9 @@
   // ("Estimates and walk-throughs") are bid appointments, the Work schedule
   // (who is working which job) crew tasks, Personal personal; a card on
   // Pickups -- made from a store's "ready for pickup" email -- is a material
-  // pickup, and one on Crew tasks or tagged 👷 Crew a crew task.
-  const BY_CALENDAR = { visits: 'bid', schedule: 'crew', personal: 'personal' };
+  // pickup, and one on Crew tasks or tagged 👷 Crew a crew task. Anything on
+  // the Crew tasks calendar is a crew task.
+  const BY_CALENDAR = { visits: 'bid', schedule: 'crew', personal: 'personal', crew: 'crew' };
   function typeOf(item, where) {
     if (item && typeById(item.type)) return item.type;
     where = where || {};
@@ -82,9 +81,6 @@
   function icon(type) { const t = typeById(type); return t ? t.icon : ''; }
   function color(type) { const t = typeById(type); return t ? t.color : ''; }
   function ink(type) { const t = typeById(type); return (t && t.ink) || ''; }
-  // A crew task buzzes only the people on it; anything else, whoever it is
-  // for (every entry they see, every card of theirs).
-  const forMe = (type, onIt) => !(typeById(type) || {}).crew || !!onIt;
 
   function minutesWords(m) {
     if (m >= 60 && m % 60 === 0) return m === 60 ? '1 hour' : (m / 60) + ' hours';
@@ -102,12 +98,12 @@
     return hit ? hit[1] : minutesWords(Number(mins)) + ' before';
   }
   // The reminder line for the details window, '' when there is none for
-  // this person. `onIt`: they are one of the people on it.
-  function line(item, type, timed, onIt) {
+  // this person. `mine`: the thing is theirs (isMine).
+  function line(item, type, timed, mine) {
     if (!item) return '';
     if (item.noReminder) return '🔕 No reminder';
     if (item.hasReminder && item.remindMins != null) return '🔔 Reminder: ' + setWords(item.remindMins).toLowerCase();
-    return usualFor(item) && forMe(type, onIt) ? '🔔 Reminder: ' + usualWords(type, timed) : '';
+    return usualFor(item) && mine ? '🔔 Reminder: ' + usualWords(type, timed) : '';
   }
 
   // The Remind box's value for a saved entry or card.
@@ -137,7 +133,7 @@
   function usualHint(type, timed) {
     const when = usualWords(type, timed);
     if ((typeById(type) || {}).crew) {
-      return 'Usual: ' + when + ', to the people on it who have automatic reminders on — not to you unless you are one of them.';
+      return 'Usual: ' + when + ', to the people on it — or, with nobody on it, to every crew member.';
     }
     if (autoOn === false) {
       return 'Usual: nothing — your automatic reminders are off (⋯ → Notifications &amp; summaries).';
@@ -145,21 +141,58 @@
     return 'Usual: ' + when + '. Phones need notifications switched on: ⋯ → Notifications &amp; summaries.';
   }
 
-  // Whether a card is this person's. The 👤 Mine filter, the calendar's "only
-  // mine" and the reminders (functions/reminders.py _card_is_mine) all read
-  // it this way: they are on it; or nobody is on it and they made it, or it
-  // is the owner's -- made from his own email (a pickup, a forwarded to-do)
-  // or on a board of his marked Private. `who` = { uid, names (lower case:
-  // their name and email), owner }. A card keeps the name of whoever made it,
-  // so after a rename only the cards they are on still count.
+  // Who counts as crew (Jonah, 12 Oct 2026: "mark profiles in the app as
+  // crew members"): ticked on Your Crew. A crew account is unless unticked,
+  // an admin only when ticked, the owner never.
+  function isCrewMember(u) {
+    if (!u || u.role === 'owner') return false;
+    return u.crewMember === true || (u.role === 'crew' && u.crewMember !== false);
+  }
+
+  // Whose a thing is. Jonah (12 Oct 2026): "my cards are cards i dont select
+  // anyone else on or ones i select myself on." So it is theirs when they are
+  // on it; with nobody on it, a crew task is every crew member's and
+  // anything else is whoever made it's -- the owner's when that is nobody we
+  // know (made from his email, an import, a machine's own card). The 👤 Mine
+  // filters, My day and the reminders (functions/reminders.py _is_mine) all
+  // read it this way. `who` = { uid, owner, crew (a crew member),
+  // makerOf(createdBy) -> uid or '' }.
+  function isMine(onUids, type, maker, who) {
+    if (!who || !who.uid) return false;
+    if (onUids.indexOf(who.uid) !== -1) return true;
+    if (onUids.length) return false;
+    if ((typeById(type) || {}).crew) return !!who.crew;
+    if (maker) return maker === who.uid;
+    return !!who.owner;
+  }
+  // A card keeps the NAME of whoever made it; makerOf turns that into them.
   function cardIsMine(card, board, who) {
-    if (!card || !who || !who.uid) return false;
-    const on = card.assignees || [];
-    if (on.some(a => a && a.uid === who.uid)) return true;
-    if (on.length) return false;
-    const by = String(card.createdBy || '').trim().toLowerCase();
-    if (by && (who.names || []).indexOf(by) !== -1) return true;
-    return !!who.owner && (by === EMAIL_MADE || !!(board && board.ownerOnly === true));
+    if (!card || !who) return false;
+    const on = (card.assignees || []).map(a => a && a.uid).filter(Boolean);
+    const maker = who.makerOf ? who.makerOf(card.createdBy) : '';
+    return isMine(on, typeOf(card, { boardId: board && board.id }), maker, who);
+  }
+  // A calendar entry keeps the uid of whoever made it (from 12 Oct 2026; the
+  // ones before are the owner's).
+  function eventIsMine(ev, cal, who) {
+    if (!ev || !who) return false;
+    const on = (ev.crew || []).map(c => c && c.uid).filter(Boolean);
+    return isMine(on, typeOf(ev, { calKind: cal && cal.kind }), ev.createdBy || '', who);
+  }
+  // This person, as isMine wants them. `people`: uid -> user record, where
+  // this device has them (the owner's and an admin's do; a crew phone knows
+  // only its own, and a card's maker it cannot name is not its anyway).
+  function who(people) {
+    const a = window.YDAuth || {};
+    if (!a.user) return null;
+    const byName = {};
+    Object.keys(people || {}).forEach(uid => {
+      const p = people[uid] || {};
+      [p.name, p.email].forEach(n => { const k = String(n || '').trim().toLowerCase(); if (k) byName[k] = uid; });
+    });
+    const mine = meRec || { role: a.role };
+    return { uid: a.user.uid, owner: !!a.isOwner, crew: isCrewMember(mine),
+             makerOf: by => byName[String(by || '').trim().toLowerCase()] || '' };
   }
 
   // Whether this one will buzz this person by the usual rule -- for the 🔔
@@ -168,13 +201,18 @@
     return autoOn === true && !!item && !item.noReminder && !item.hasReminder;
   }
 
+  // On for everyone unless they switched it off (notify.js DEFAULTS).
+  let meRec = null;         // this person's own user record (crewMember)
   function readPrefs(a) {
-    autoOn = null;
+    autoOn = null; meRec = null;
     if (!a || a.mode !== 'cloud' || !a.user || !window.YDDb) return;
-    const fallback = !!a.isOwner;
     Promise.resolve(window.YDDb.get('digestPrefs', a.user.uid)).then(p => {
-      autoOn = p && typeof p.autoRemind === 'boolean' ? p.autoRemind : fallback;
-    }).catch(() => { autoOn = fallback; });
+      autoOn = p && typeof p.autoRemind === 'boolean' ? p.autoRemind : true;
+    }).catch(() => { autoOn = true; });
+    Promise.resolve(window.YDDb.get('users', a.user.uid)).then(u => {
+      meRec = u ? Object.assign({ uid: a.user.uid }, u) : null;
+      document.dispatchEvent(new CustomEvent('yd-remind-me'));
+    }).catch(() => {});
   }
   document.addEventListener('yd-auth', e => readPrefs(e.detail || {}));
 
@@ -185,14 +223,16 @@
     icon: icon,
     color: color,
     ink: ink,
-    forMe: forMe,
+    isCrewMember: isCrewMember,
+    cardIsMine: cardIsMine,
+    eventIsMine: eventIsMine,
+    who: who,
     usualWords: usualWords,
     usualHint: usualHint,
     setWords: setWords,
     line: line,
     optionsHtml: optionsHtml,
     fromChoice: fromChoice,
-    cardIsMine: cardIsMine,
     usualFor: usualFor,
     // notify.js tells this when the person flips the switch.
     setAuto: on => { autoOn = !!on; },

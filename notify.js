@@ -18,11 +18,11 @@
 
   // autoRemind: everything on the calendar and every card of theirs buzzes
   // the phone without a reminder set on each (remind.js; Jonah, 12 Oct
-  // 2026). The owner's is on until he turns it off; the crew's is theirs to
-  // turn on. functions/digest.py DEFAULT_PREFS says the same.
+  // 2026) -- everyone's on until they turn it off ("make it so crew members
+  // can get notifications"). functions/digest.py DEFAULT_PREFS says the same.
   const DEFAULTS = {
     owner: { email: true, push: true, morning: true, midday: true, evening: true, autoRemind: true },
-    crew: { email: false, push: true, morning: true, midday: true, evening: true, autoRemind: false },
+    crew: { email: false, push: true, morning: true, midday: true, evening: true, autoRemind: true },
   };
   const SLOT_INFO = [
     ['morning', 'Morning', '5:00 am — the day ahead and the weather'],
@@ -193,7 +193,8 @@
         toggle('autoRemind', 'Remind me of everything', 'every calendar entry I can see and every card that is mine — ' +
           'no need to set a reminder on each one') +
         '<div class="hint">Bid appointments 1 hour and 30 minutes before. Anything else at a set time, 30 minutes before. ' +
-          'Things for any time that day, one list at 7 am. Crew tasks remind only the people on them. One thing’s own ' +
+          'Things for any time that day, one list at 7 am. A crew task reminds the people on it — or, with nobody on ' +
+          'it, every crew member. One thing’s own ' +
           'Remind box changes its reminder or switches it off.</div>' +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Which updates</div>' +
@@ -318,6 +319,9 @@
     }
   }
   (window.YDSignOutHooks = window.YDSignOutHooks || []).push(forgetThisDevice);
+
+  // My day (calendar.js) asks whether this phone will get the reminders.
+  window.YDNotify = { deviceState: deviceState };
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};

@@ -1060,6 +1060,12 @@
               esc(u.name || u.email) + '</button>' +
             (u.role === 'admin' ? '<span class="crew-admin">admin</span>' : '') +
             '<span class="crew-mail">' + esc(u.email) + '</span>' +
+            // Jonah (12 Oct 2026): "mark profiles in the app as crew members"
+            // -- they see every crew task (the Crew tasks calendar is shared
+            // with them) and are reminded of the ones nobody is on.
+            '<button class="btn btn-sm crew-flag' + (YDRemind.isCrewMember(u) ? ' on' : '') +
+              '" onclick="toggleCrewMember(\'' + safeId(u.uid) + '\')" title="Crew members see every crew task">' +
+              (YDRemind.isCrewMember(u) ? '👷 Crew member' : '+ Crew member') + '</button>' +
             '<button class="btn btn-sm" onclick="openAccess(\'' + safeId(u.uid) + '\')">' +
               (u.role === 'admin' ? 'Access' : 'Make admin…') + '</button>' +
             '<button class="btn btn-sm" onclick="renameWorker(\'' + safeId(u.uid) + '\')">Rename</button>' +
@@ -1092,6 +1098,14 @@
     const clean = name.trim().slice(0, 60);
     if (!clean) { showToast('A name cannot be blank'); return; }
     setRole(uid, { name: clean }, 'Renamed to ' + clean);
+  };
+
+  window.toggleCrewMember = function (uid) {
+    const u = people[uid];
+    if (!u || !isOwner()) return;
+    const on = !YDRemind.isCrewMember(u);
+    setRole(uid, { crewMember: on }, (u.name || u.email) + (on
+      ? ' is crew — they see every crew task' : ' is not crew any more'));
   };
 
   window.approveCrew = function (uid) {

@@ -197,22 +197,25 @@ def _card_reminders(db, people, since, now):
 #   - for any time that day (all day, or a card with no time): ONE list at
 #     7 am of everything that day, not a buzz apiece -- the calendar's "any
 #     time today" checklist, on the phone;
-#   - a crew task ("things not for jonah to handle") only to the people on it;
+#   - to whoever it is theirs (_is_mine; "my cards are cards i dont select
+#     anyone else on or ones i select myself on"): the people on it; with
+#     nobody on it, a crew task ("things not for jonah to handle") goes to
+#     every crew member (ticked on Your Crew) and anything else to whoever
+#     made it -- the owner when that is nobody we know;
 #   - "No reminder" on a thing: nobody. Its own set reminder takes the place
 #     of the usual one for whoever that one goes to. Ticked off: nothing.
-# To each person with autoRemind on (digestPrefs: the owner's is on unless he
-# switched it off, nobody else's until they switch it on), for every calendar
-# entry they can see, every machine due if they see Equipment, and every card
-# of theirs. Each once, logged in reminderLog as auto_<uid>_...
+# To each person with autoRemind on (digestPrefs: on unless they switched it
+# off -- "make it so crew members can get notifications"), for every calendar
+# entry and card of theirs they can see, and the owner for every machine due.
+# Each once, logged in reminderLog as auto_<uid>_...
 
 TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
 TYPES = {"bid": "📋", "appt": "🕑", "doctor": "🩺", "pickup": "🚚", "delivery": "🚛",
          "todo": "✅", "crew": "👷", "personal": "🏠"}
 CREW_TYPES = {"crew"}
-BY_CALENDAR = {"visits": "bid", "schedule": "crew", "personal": "personal"}
+BY_CALENDAR = {"visits": "bid", "schedule": "crew", "personal": "personal", "crew": "crew"}
 REPEATS = ["weekly", "biweekly", "monthly", "yearly"]
-EMAIL_MADE = "job hub (email)"     # receipts.py signs the cards it makes this way
 DAY_LIST_MAX = 6                   # named in the 7 am buzz; the rest are "+N more"
 
 
@@ -229,24 +232,27 @@ def _type_of(item, cal_kind=None, board_id=None):
     return ""
 
 
-def _card_is_mine(k, board, u):
-    """remind.js cardIsMine: they are on it; or nobody is and they made it,
-    or it is the owner's -- made from his email, or on his private board."""
-    on = [a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)]
+def _is_crew_member(u):
+    """Ticked as crew on Your Crew (remind.js isCrewMember): a crew account
+    unless unticked, an admin only when ticked, the owner never."""
+    if u.get("role") == "owner":
+        return False
+    return u.get("crewMember") is True or (u.get("role") == "crew" and u.get("crewMember") is not False)
+
+
+def _is_mine(on, kind, maker, u):
+    """remind.js isMine: theirs when they are on it; with nobody on it, a
+    crew task is every crew member's and anything else whoever made it's --
+    the owner's when that is nobody we know."""
     if u["uid"] in on:
         return True
     if on:
         return False
-    by = str(k.get("createdBy") or "").strip().lower()
-    names = {str(u.get("name") or "").strip().lower(), str(u.get("email") or "").strip().lower()} - {""}
-    if by and by in names:
-        return True
-    return u.get("role") == "owner" and (by == EMAIL_MADE or board.get("ownerOnly") is True)
-
-
-def _sees_equipment(u):
-    return u.get("role") == "owner" or (
-        u.get("role") == "admin" and (u.get("access") or {}).get("equipment", "none") in ("see", "change"))
+    if kind in CREW_TYPES:
+        return _is_crew_member(u)
+    if maker:
+        return maker == u["uid"]
+    return u.get("role") == "owner"
 
 
 def _lead_words(m):
@@ -268,6 +274,12 @@ def _usual(db, people, since, now):
     seven = datetime.datetime(today.year, today.month, today.day, ALL_DAY_HOUR, 0, tzinfo=dg.TZ)
     morning = since < seven <= now          # this run sends the day's list
     longest = max(max(v) for v in list(TYPE_LEADS.values()) + [TIMED_LEADS])
+    # A card keeps the NAME of whoever made it; this turns that into them.
+    by_name = {}
+    for uid, u in people.items():
+        for n in (u.get("name"), u.get("email")):
+            if str(n or "").strip():
+                by_name[str(n).strip().lower()] = uid
     first = since.date() - datetime.timedelta(days=1)
     last = (now + datetime.timedelta(minutes=longest)).date() + datetime.timedelta(days=1)
     day_list = {uid: [] for uid in auto}
@@ -320,7 +332,7 @@ def _usual(db, people, since, now):
                         continue
                     kind = _type_of(one, cal_kind=cal.get("kind"))
                     on = {cr.get("uid") for cr in (one.get("crew") or []) if isinstance(cr, dict)}
-                    who = [u["uid"] for u in sees if kind not in CREW_TYPES or u["uid"] in on]
+                    who = [u["uid"] for u in sees if _is_mine(on, kind, ev.get("createdBy") or "", u)]
                     title = str(one.get("title") or one.get("jobName") or "Calendar")
                     if one.get("time") and not one.get("allDay"):
                         if day.isoformat() != str(one.get("date")):
@@ -358,7 +370,8 @@ def _usual(db, people, since, now):
                     continue
                 kind = _type_of(k, board_id=b.id)
                 on = {a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)}
-                who = [u for u in sees if (u["uid"] in on if kind in CREW_TYPES else _card_is_mine(k, board, u))]
+                maker = by_name.get(str(k.get("createdBy") or "").strip().lower(), "")
+                who = [u for u in sees if _is_mine(on, kind, maker, u)]
                 title = str(k.get("title") or "A card")
                 t = str(k.get("dueTime") or "")
                 if len(t) == 5 and t[2] == ":":
@@ -373,7 +386,7 @@ def _usual(db, people, since, now):
                 elif morning and day == today:
                     for u in who:
                         # A machine's own card: the machine is on the list already.
-                        if k.get("auto") and k.get("equipmentId") and _sees_equipment(u):
+                        if k.get("auto") and k.get("equipmentId") and u.get("role") == "owner":
                             continue
                         day_list[u["uid"]].append((kind, title))
     except Exception as err:          # noqa: BLE001
@@ -381,9 +394,9 @@ def _usual(db, people, since, now):
 
     if not morning:
         return out
-    # Machines due a service today.
+    # Machines due a service today: the owner's to see to.
     try:
-        eq = [u for u in auto.values() if _sees_equipment(u)]
+        eq = [u for u in auto.values() if u.get("role") == "owner"]
         if eq:
             for s in db.collection("equipment").where("dueDate", "==", today.isoformat()).stream():
                 g = s.to_dict() or {}
