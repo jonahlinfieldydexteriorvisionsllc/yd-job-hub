@@ -136,16 +136,24 @@
   }
 
   // Crew tasks is the crew's: shared with every active crew member and admin,
-  // a newcomer added the next time this runs. Nobody is taken off.
+  // a newcomer added the next time this runs -- once. Who sees a board is the
+  // owner's to say (Jonah, 12 Oct 2026: "only me to mark which boards can be
+  // viewed by who"), so it runs on his device alone, and someone he takes off
+  // stays off (autoShared remembers who was already added).
   function share(b) {
+    if (!(window.YDAuth && window.YDAuth.isOwner)) return;
     const ppl = YDBoards.people ? YDBoards.people() : {};
     if (!Object.keys(ppl).length) return;
     const crew = Object.keys(ppl).filter(uid => ppl[uid].active && ['crew', 'admin'].indexOf(ppl[uid].role) !== -1);
     const vis = Array.isArray(b.visibleTo) ? b.visibleTo : [];
-    const add = crew.filter(uid => vis.indexOf(uid) === -1);
-    if (!add.length) return;
+    // Boards shared before autoShared existed count everyone already on them.
+    const once = Array.isArray(b.autoShared) ? b.autoShared : vis.slice();
+    const add = crew.filter(uid => vis.indexOf(uid) === -1 && once.indexOf(uid) === -1);
+    const remember = Array.from(new Set(once.concat(add, vis)));
+    if (!add.length && Array.isArray(b.autoShared) && remember.length === once.length) return;
     b.visibleTo = vis.concat(add);
-    put('boards', CREW, { visibleTo: b.visibleTo }, 'sharing Crew tasks');
+    b.autoShared = remember;
+    put('boards', CREW, { visibleTo: b.visibleTo, autoShared: remember }, 'sharing Crew tasks');
   }
 
   // ---------------------------------------------------------------- the cards

@@ -1160,16 +1160,20 @@
 
     // Every crew member sees the Maintenance board (Jonah, 6 Oct 2026): it is
     // shared with each active crew member and admin, a newcomer added here the
-    // next time this runs. Nobody is taken off (someone switched off cannot
-    // sign in anyway).
+    // next time this runs -- once, and only from the owner's device: who sees
+    // a board is his to say (12 Oct 2026), so someone he takes off stays off
+    // (autoShared remembers who was already added).
     const ppl = YDBoards.people ? YDBoards.people() : {};
-    if (Object.keys(ppl).length) {
+    if (Object.keys(ppl).length && window.YDAuth && YDAuth.isOwner) {
       const crew = Object.keys(ppl).filter(uid => ppl[uid].active && ['crew', 'admin'].indexOf(ppl[uid].role) !== -1);
       const vis = Array.isArray(board.visibleTo) ? board.visibleTo : [];
-      const add = crew.filter(uid => vis.indexOf(uid) === -1);
-      if (add.length) {
+      const once = Array.isArray(board.autoShared) ? board.autoShared : vis.slice();
+      const add = crew.filter(uid => vis.indexOf(uid) === -1 && once.indexOf(uid) === -1);
+      const remember = Array.from(new Set(once.concat(add, vis)));
+      if (add.length || !Array.isArray(board.autoShared) || remember.length !== once.length) {
         board.visibleTo = vis.concat(add);
-        Promise.resolve(window.YDDb.put('boards', MAINT, { visibleTo: board.visibleTo }))
+        board.autoShared = remember;
+        Promise.resolve(window.YDDb.put('boards', MAINT, { visibleTo: board.visibleTo, autoShared: remember }))
           .catch(e => console.warn('[equipment] sharing not yet saved:', e.code || e.message));
       }
     }
