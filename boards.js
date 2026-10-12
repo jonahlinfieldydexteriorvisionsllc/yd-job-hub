@@ -142,6 +142,16 @@
     if (!u) return '';
     return (people[u.uid] && people[u.uid].name) || u.displayName || u.email || '';
   }
+  // Whether a card is mine: on it, or made by me with nobody else on it, or
+  // (the owner) made from his email or on his private board -- remind.js.
+  // The 👤 Mine filter and the reminders agree on it.
+  function isMineCard(board, k) {
+    const u = me();
+    if (!u) return false;
+    const names = [myName(), u.email].map(s => String(s || '').trim().toLowerCase()).filter(Boolean);
+    return YDRemind.cardIsMine(k, board, { uid: u.uid, names: names, owner: isOwner() });
+  }
+  const cardType = (board, k) => YDRemind.typeOf(k, { boardId: board.id });
   // A card with no column shows in the first one, so everything that works
   // out where a card sits has to read it the same way.
   function colOf(board, k) {
@@ -457,11 +467,10 @@
                    ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
   // A card's due time and reminder (Jonah, 9 Oct 2026: "make cards and set a
   // date on them and then they go on my calendar" -- with a time, at that
-  // hour). The same choices as a calendar entry's reminder (calendar.js).
-  const REMIND = [
-    [null, 'No reminder'], [0, 'At the time'], [10, '10 minutes before'], [30, '30 minutes before'],
-    [60, '1 hour before'], [120, '2 hours before'], [1440, 'The day before'], [2880, 'Two days before'],
-  ];
+  // hour). The same choices as a calendar entry's reminder: remind.js.
+  // Whether it buzzes this person's phone: its own reminder, or the usual
+  // one when the card is theirs.
+  const buzzes = (board, k) => !!k.due && (k.hasReminder || (YDRemind.usualFor(k) && isMineCard(board, k)));
   function clockText(t) {
     const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || ''));
     if (!m) return '';
@@ -489,7 +498,7 @@
   window.setCardFilter = function (f) { cardFilter = cardFilter === f ? '' : f; render(); };
   function shows(board, k) {
     if (cardFilter === 'urgent') return ['urgent', 'high'].indexOf(k.urgency) !== -1;
-    if (cardFilter === 'mine') { const u = me(); return !!u && (k.assignees || []).some(a => a.uid === u.uid); }
+    if (cardFilter === 'mine') return isMineCard(board, k);
     return true;
   }
   function filterBarHtml(board) {
@@ -650,18 +659,22 @@
     const today = localDay();
     const dueState = !k.due || inLastColumn ? '' : k.due < today ? ' late' : k.due === today ? ' today' : '';
     const urg = ['urgent', 'high', 'low'].indexOf(k.urgency) !== -1 ? ' urg-' + k.urgency : '';
-    return '<div class="bd-card' + (inLastColumn ? ' done' : '') + urg + coverClass(k.color) + '" draggable="true" ' +
-        coverStyle(k.color) +
+    // A card's own colour, else its kind's (remind.js): crew tasks blue,
+    // bid appointments green...
+    const cover = k.color || YDRemind.color(cardType(board, k)) || null;
+    return '<div class="bd-card' + (inLastColumn ? ' done' : '') + urg + coverClass(cover) + '" draggable="true" ' +
+        coverStyle(cover) +
         'data-board="' + board.id + '" data-card="' + k.id + '" ' +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openCardDetail(\'' + board.id + '\', \'' + k.id + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
-      '<div class="bd-card-title">' + esc(k.title || 'Untitled') + '</div>' +
+      '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
+        esc(k.title || 'Untitled') + '</div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
       '<div class="bd-card-foot">' +
-        (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueText(k) + (k.hasReminder ? ' 🔔' : '') + '</span>' : '') +
+        (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueText(k) + (buzzes(board, k) && !inLastColumn ? ' 🔔' : '') + '</span>' : '') +
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
@@ -1014,12 +1027,17 @@
     const labels = (k.labels || []).map(id => (board.labels || []).find(l => l.id === id)).filter(Boolean);
     const list = k.checklist || [];
     const here = colOf(board, k);
+    const type = YDRemind.typeById(cardType(board, k));
+    // The usual reminder only for a card that is this person's (remind.js).
+    const remind = !k.due ? '' : k.hasReminder || k.noReminder || isMineCard(board, k)
+      ? YDRemind.line(k, type ? type.id : '', !!k.dueTime) : '';
     openModal(esc(k.title || 'Card'),
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
-        (k.due ? '<span>📅 ' + dueText(k) + (k.hasReminder ? ' · 🔔 ' + esc((REMIND.find(r => r[0] === k.remindMins) || [0, ''])[1].toLowerCase()) : '') + '</span>' : '') +
+        (type ? '<span>' + type.icon + ' ' + esc(type.name) + '</span>' : '') +
+        (k.due ? '<span>📅 ' + dueText(k) + (remind ? ' · ' + esc(remind.replace('Reminder: ', '')) : '') + '</span>' : '') +
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
@@ -1222,6 +1240,13 @@
     openModal(openCard.cardId ? 'Edit card' : 'New card on ' + esc(board.name),
       '<div class="field"><span class="label">What needs doing</span>' +
         '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"></div>' +
+      // Jonah (12 Oct 2026): what it is decides when it buzzes -- a pickup
+      // or a to-do is for any time that day, a bid appointment at its time.
+      '<div class="field"><span class="label">What is it</span><select id="cdType" onchange="cardTypeChanged()">' +
+        '<option value="">—</option>' +
+        YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
+          t.icon + ' ' + esc(t.name) + (t.timed === false ? ' (any time that day)' : '') + '</option>').join('') +
+      '</select></div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Column</span><select id="cdCol">' +
           board.columns.map(c => '<option value="' + c.id + '"' +
@@ -1234,12 +1259,11 @@
       // day; the reminder buzzes the phone (functions/reminders.py).
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Time (if it has one)</span>' +
-          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '"></div>' +
-        '<div class="field"><span class="label">Reminder</span><select id="cdRemind">' +
-          REMIND.map(([m, words]) => '<option value="' + (m == null ? '' : m) + '"' +
-            ((k.remindMins == null ? null : k.remindMins) === m ? ' selected' : '') + '>' + esc(words) + '</option>').join('') +
-        '</select></div>' +
+          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '" onchange="cardRemindHint()"></div>' +
+        '<div class="field"><span class="label">Reminder</span><select id="cdRemind" onchange="cardRemindHint()">' +
+          YDRemind.optionsHtml(k) + '</select></div>' +
       '</div>' +
+      '<div class="hint" id="cdRemindHint"></div>' +
       '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
         URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
           ((k.urgency || 'normal') === u ? ' checked' : '') + '><span>' + esc(name) + (hint ? ' <small>' + esc(hint) + '</small>' : '') +
@@ -1286,9 +1310,35 @@
         '<button class="btn btn-sm" onclick="' + (openCard.cardId ? 'renderCardDetail2()' : 'closeBoardModal()') + '">Cancel</button>' +
         (openCard.cardId ? '<button class="btn btn-sm" onclick="removeCard()">Delete card</button>' : '') +
       '</div>');
+    cardRemindHint();
     const t = el('cdTitle'); if (t) t.focus();
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
+
+  // A crew task is the crew's: picking it tags the card 👷 Crew, so the crew
+  // can see it from any board and it is listed on Crew tasks with the rest.
+  // Something for any time that day needs no time.
+  window.cardTypeChanged = function () {
+    const t = YDRemind.typeById(val('cdType'));
+    if (t && t.crew) {
+      const box = document.querySelector('.cdLabel[value="' + CREW_LABEL.id + '"]');
+      if (box) box.checked = true;
+    }
+    if (t && t.timed === false && el('cdTime')) el('cdTime').value = '';
+    cardRemindHint();
+  };
+  window.cardRemindHint = function () {
+    const hint = el('cdRemindHint');
+    const board = openCard && boards[openCard.boardId];
+    if (!hint || !board) return;
+    const choice = val('cdRemind');
+    const type = val('cdType') || YDRemind.typeOf({ labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) },
+      { boardId: board.id });
+    hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this card.'
+      : choice === '' ? YDRemind.usualHint(type, /^\d{2}:\d{2}$/.test(val('cdTime'))) +
+          ((YDRemind.typeById(type) || {}).crew ? '' : ' Only for a card that is yours: you are on it, or you made it and nobody else is.')
+      : 'To you and the people on it.';
+  };
 
   // ---------------------------------------------------- the linked-job search
 
@@ -1422,10 +1472,17 @@
     const last = doneColOf(board);
     const due = val('cdDue') || null;
     const dueTime = /^\d{2}:\d{2}$/.test(val('cdTime')) ? val('cdTime') : null;
-    const remind = val('cdRemind') === '' ? null : Number(val('cdRemind'));
-    if ((dueTime || remind != null) && !due) { showToast('Pick the day it is due first'); return; }
-    // The reminder goes to whoever set it, and the people on the card.
-    const remindUids = remind == null ? [] : Array.from(new Set((was.remindUids || []).concat(me() ? [me().uid] : [])));
+    const choice = val('cdRemind');
+    if ((dueTime || (choice !== '' && choice !== 'none')) && !due) { showToast('Pick the day it is due first'); return; }
+    // The usual reminder, none, or a set time -- which goes to whoever set
+    // it and the people on the card.
+    const remind = YDRemind.fromChoice(choice, was, me() && me().uid);
+    const picked = YDRemind.typeById(val('cdType')) ? val('cdType') : null;
+    const labels = Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value);
+    if (picked === 'crew' && labels.indexOf(CREW_LABEL.id) === -1) labels.push(CREW_LABEL.id);
+    // Kept only when it is not what the board and labels make it anyway (a
+    // card on Pickups is a pickup, one tagged 👷 Crew a crew task).
+    const type = picked && picked !== YDRemind.typeOf({ labels: labels }, { boardId: board.id }) ? picked : null;
 
     const rec = {
       title: title,
@@ -1433,9 +1490,11 @@
       order: was.column === col && was.order != null ? was.order : endOrder(board.id, col),
       due: due,
       dueTime: dueTime,
-      remindMins: remind, hasReminder: remind != null, remindUids: remindUids,
+      remindMins: remind.remindMins, hasReminder: remind.hasReminder, remindUids: remind.remindUids,
+      noReminder: remind.noReminder,
+      type: type,
       urgency: ((document.querySelector('input[name="cdUrg"]:checked') || {}).value) || 'normal',
-      labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value),
+      labels: labels,
       color: pickedColor('cdColor'),
       assignees: assignees,
       jobId: job ? job._id : (keepLink ? was.jobId : null),
@@ -1999,6 +2058,15 @@
     boards: () => boards,
     cards: () => cards,
     people: () => people,
+    isMine: (card, board) => isMineCard(board, card),
+    // The calendar's "any time today" list ticks a card off: to Done (as a
+    // drag there would), or back to the first column.
+    setDone: (boardId, cardId, done) => {
+      const b = boards[boardId];
+      if (!b || !(cards[boardId] || {})[cardId]) return false;
+      moveCard(boardId, cardId, done ? doneColOf(b) : b.columns[0].id, null);
+      return true;
+    },
     // For the calendar: every stored card with a due date, with its board.
     dueCards: () => {
       const out = [];

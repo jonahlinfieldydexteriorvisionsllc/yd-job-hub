@@ -122,6 +122,7 @@ def run():
                         print("reminders: push failed for", uid, key, err)
     sent.extend(_urgent_cards(db, people, now))
     sent.extend(_card_reminders(db, people, since, now))
+    sent.extend(_usual(db, people, since, now))
     return sent
 
 
@@ -181,6 +182,227 @@ def _card_reminders(db, people, since, now):
                         print("reminders: card push failed:", uid, key, err)
     except Exception as err:          # noqa: BLE001
         print("reminders: card reminders not read:", err)
+    return out
+
+
+# ----------------------------------------------------------- the usual ones
+#
+# Jonah (12 Oct 2026): "i want all of my things on the calendar to auto send
+# notifications to my phone", and "every card thats mine", without setting a
+# reminder on each -- and to say what each thing is, "because some stuff on
+# the calendar just needs to be done that day but not at a specific time".
+# remind.js has the same rules for the screens:
+#   - at a set time: 30 minutes before; a bid appointment an hour AND half
+#     an hour before ("bids should ping 1 hour and 30 min before");
+#   - for any time that day (all day, or a card with no time): ONE list at
+#     7 am of everything that day, not a buzz apiece -- the calendar's "any
+#     time today" checklist, on the phone;
+#   - a crew task ("things not for jonah to handle") only to the people on it;
+#   - "No reminder" on a thing: nobody. Its own set reminder takes the place
+#     of the usual one for whoever that one goes to. Ticked off: nothing.
+# To each person with autoRemind on (digestPrefs: the owner's is on unless he
+# switched it off, nobody else's until they switch it on), for every calendar
+# entry they can see, every machine due if they see Equipment, and every card
+# of theirs. Each once, logged in reminderLog as auto_<uid>_...
+
+TIMED_LEADS = (30,)
+TYPE_LEADS = {"bid": (60, 30)}
+TYPES = {"bid": "📋", "appt": "🕑", "doctor": "🩺", "pickup": "🚚", "delivery": "🚛",
+         "todo": "✅", "crew": "👷", "personal": "🏠"}
+CREW_TYPES = {"crew"}
+BY_CALENDAR = {"visits": "bid", "schedule": "crew", "personal": "personal"}
+REPEATS = ["weekly", "biweekly", "monthly", "yearly"]
+EMAIL_MADE = "job hub (email)"     # receipts.py signs the cards it makes this way
+DAY_LIST_MAX = 6                   # named in the 7 am buzz; the rest are "+N more"
+
+
+def _type_of(item, cal_kind=None, board_id=None):
+    """What a thing is -- picked, or by where it is (remind.js typeOf)."""
+    if item.get("type") in TYPES:
+        return item["type"]
+    if cal_kind in BY_CALENDAR:
+        return BY_CALENDAR[cal_kind]
+    if board_id == "pickups":
+        return "pickup"
+    if board_id == "crew" or "crew" in (item.get("labels") or []):
+        return "crew"
+    return ""
+
+
+def _card_is_mine(k, board, u):
+    """remind.js cardIsMine: they are on it; or nobody is and they made it,
+    or it is the owner's -- made from his email, or on his private board."""
+    on = [a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)]
+    if u["uid"] in on:
+        return True
+    if on:
+        return False
+    by = str(k.get("createdBy") or "").strip().lower()
+    names = {str(u.get("name") or "").strip().lower(), str(u.get("email") or "").strip().lower()} - {""}
+    if by and by in names:
+        return True
+    return u.get("role") == "owner" and (by == EMAIL_MADE or board.get("ownerOnly") is True)
+
+
+def _sees_equipment(u):
+    return u.get("role") == "owner" or (
+        u.get("role") == "admin" and (u.get("access") or {}).get("equipment", "none") in ("see", "change"))
+
+
+def _lead_words(m):
+    return "In 1 hour" if m == 60 else "In %d hours" % (m // 60) if m % 60 == 0 else "In %d minutes" % m
+
+
+def _usual(db, people, since, now):
+    out = []
+    auto = {}
+    for uid, u in people.items():
+        try:
+            if dg._prefs(u).get("autoRemind"):
+                auto[uid] = u
+        except Exception as err:      # noqa: BLE001
+            print("reminders: prefs not read for", uid, err)
+    if not auto:
+        return out
+    today = now.date()
+    seven = datetime.datetime(today.year, today.month, today.day, ALL_DAY_HOUR, 0, tzinfo=dg.TZ)
+    morning = since < seven <= now          # this run sends the day's list
+    longest = max(max(v) for v in list(TYPE_LEADS.values()) + [TIMED_LEADS])
+    first = since.date() - datetime.timedelta(days=1)
+    last = (now + datetime.timedelta(minutes=longest)).date() + datetime.timedelta(days=1)
+    day_list = {uid: [] for uid in auto}
+
+    def buzz(uid, key, title, body, tag):
+        try:
+            db.collection("reminderLog").document(key).create({"uid": uid, "at": now.isoformat()})
+        except AlreadyExists:
+            return
+        try:
+            out.append({"uid": uid, "usual": key, "phones": dg.send_push(
+                uid, {"push": {"title": title[:90], "body": body}}, tag=tag, ttl=2 * 3600)})
+        except Exception as err:      # noqa: BLE001
+            print("reminders: usual push failed:", uid, key, err)
+
+    def timed(uids, kind, title, start, body, key, tag):
+        for lead in TYPE_LEADS.get(kind, TIMED_LEADS):
+            due = start - datetime.timedelta(minutes=lead)
+            if since < due <= now:
+                for uid in uids:
+                    buzz(uid, "auto_%s_%s_%d" % (uid, key, lead), (TYPES.get(kind) or "🔔") + " " + title,
+                         _lead_words(lead) + " · " + body, tag)
+
+    # Calendar entries: the ones starting about now, the repeats, and any
+    # running over several days that are still going.
+    try:
+        for c in db.collection("calendars").stream():
+            cal = c.to_dict() or {}
+            sees = [u for u in auto.values() if _can_see(u, cal)]
+            if not sees:
+                continue
+            ref = c.reference.collection("events")
+            evs = {}
+            for q in (ref.where("date", ">=", first.isoformat()).where("date", "<=", last.isoformat()),
+                      ref.where("repeat", "in", REPEATS),
+                      ref.where("endDate", ">=", today.isoformat())):
+                for s in q.stream():
+                    evs[s.id] = s.to_dict() or {}
+            for eid, ev in evs.items():
+                if ev.get("noReminder"):
+                    continue
+                try:
+                    days = dg._occurrences(ev, first, last)
+                except (TypeError, ValueError) as err:
+                    print("reminders: skipped", c.id, eid, "-", err)
+                    continue
+                done = ev.get("done") or {}
+                for day, one in days:
+                    if done.get(day.isoformat()):
+                        continue
+                    kind = _type_of(one, cal_kind=cal.get("kind"))
+                    on = {cr.get("uid") for cr in (one.get("crew") or []) if isinstance(cr, dict)}
+                    who = [u["uid"] for u in sees if kind not in CREW_TYPES or u["uid"] in on]
+                    title = str(one.get("title") or one.get("jobName") or "Calendar")
+                    if one.get("time") and not one.get("allDay"):
+                        if day.isoformat() != str(one.get("date")):
+                            continue            # a timed entry over days reminds on its first
+                        mine = (set(ev.get("remindUids") or []) | on) if ev.get("hasReminder") else set()
+                        timed([u for u in who if u not in mine], kind, title, _start_of(one, day),
+                              _words(one, cal, _start_of(one, day)),
+                              "ev_%s_%s_%s" % (c.id, eid, day.isoformat()), "yd-remind-%s_%s_%s" % (c.id, eid, day.isoformat()))
+                    elif morning and day == today:
+                        for uid in who:
+                            day_list[uid].append((kind, title))
+    except Exception as err:          # noqa: BLE001
+        print("reminders: usual calendar reminders not read:", err)
+
+    # Cards with a due date that are theirs.
+    try:
+        for b in db.collection("boards").stream():
+            board = b.to_dict() or {}
+            sees_board = [u for u in auto.values() if _sees_board(u, board)]
+            # A card tagged 👷 Crew is read by the crew from any board that is
+            # not private (the security rules), so it reminds them too.
+            crew_reads = board.get("ownerOnly") is not True
+            if not sees_board and not crew_reads:
+                continue
+            for s in b.reference.collection("cards").where("due", ">=", first.isoformat()) \
+                    .where("due", "<=", last.isoformat()).stream():
+                k = s.to_dict() or {}
+                if k.get("doneAt") or k.get("noReminder"):
+                    continue
+                sees = sees_board if not (crew_reads and "crew" in (k.get("labels") or [])) else [
+                    u for u in auto.values() if u in sees_board or u.get("role") in ("crew", "admin")]
+                try:
+                    day = datetime.date.fromisoformat(str(k.get("due")))
+                except ValueError:
+                    continue
+                kind = _type_of(k, board_id=b.id)
+                on = {a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)}
+                who = [u for u in sees if (u["uid"] in on if kind in CREW_TYPES else _card_is_mine(k, board, u))]
+                title = str(k.get("title") or "A card")
+                t = str(k.get("dueTime") or "")
+                if len(t) == 5 and t[2] == ":":
+                    mine = (set(k.get("remindUids") or []) | on) if k.get("hasReminder") else set()
+                    start = _start_of({"time": t}, day)
+                    on_day = ("today" if day == today else "tomorrow" if day == today + datetime.timedelta(days=1)
+                              else start.strftime("%a %b ") + str(day.day))
+                    timed([u["uid"] for u in who if u["uid"] not in mine], kind, title, start,
+                          " · ".join(x for x in (dg._fmt_time(t) + " " + on_day, board.get("name") or "") if x),
+                          "card_%s_%s_%s_%s" % (b.id, s.id, day.isoformat(), t.replace(":", "")),
+                          "yd-card_%s_%s" % (b.id, s.id))
+                elif morning and day == today:
+                    for u in who:
+                        # A machine's own card: the machine is on the list already.
+                        if k.get("auto") and k.get("equipmentId") and _sees_equipment(u):
+                            continue
+                        day_list[u["uid"]].append((kind, title))
+    except Exception as err:          # noqa: BLE001
+        print("reminders: usual card reminders not read:", err)
+
+    if not morning:
+        return out
+    # Machines due a service today.
+    try:
+        eq = [u for u in auto.values() if _sees_equipment(u)]
+        if eq:
+            for s in db.collection("equipment").where("dueDate", "==", today.isoformat()).stream():
+                g = s.to_dict() or {}
+                for u in eq:
+                    day_list[u["uid"]].append(("", "🚜 " + str(g.get("name") or "A machine") + " service due"))
+    except Exception as err:          # noqa: BLE001
+        print("reminders: equipment due not read:", err)
+
+    # The day's list, one buzz each.
+    for uid, items in day_list.items():
+        if not items:
+            continue
+        order = list(TYPES)
+        items.sort(key=lambda x: (x[0] in CREW_TYPES, order.index(x[0]) if x[0] in order else len(order), x[1].lower()))
+        names = [((TYPES.get(kind) + " ") if TYPES.get(kind) else "") + title for kind, title in items[:DAY_LIST_MAX]]
+        more = len(items) - DAY_LIST_MAX
+        buzz(uid, "auto_%s_day_%s" % (uid, today.isoformat()),
+             "✅ Today, any time: %d thing%s" % (len(items), "" if len(items) == 1 else "s"),
+             " · ".join(names) + (" +%d more" % more if more > 0 else ""), "yd-day-" + today.isoformat())
     return out
 
 

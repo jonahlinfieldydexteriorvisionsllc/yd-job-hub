@@ -1207,7 +1207,32 @@
   .cal-scope { display:flex; flex-direction:column; gap:8px; width:100%; }
   .cal-scope-q { font-weight:700; font-size:14px; margin-bottom:2px; }
 
+  /* "Any time today": the day's things with no set time, ticked off here
+     (12 Oct 2026). Down the side; above the calendar when the side folds. */
+  .cal-today { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:6px 8px 8px; }
+  .cal-main > .cal-today { display:none; }
+  .cal-today-head { display:flex; align-items:center; gap:6px; width:100%; background:none; border:none; cursor:pointer;
+                    font-family:'DM Sans',sans-serif; font-size:13px; font-weight:700; color:var(--text); padding:4px 2px; text-align:left; }
+  .cal-today-n { font-size:11px; font-weight:700; color:var(--muted); }
+  .cal-today-fold { margin-left:auto; color:var(--muted); }
+  .cal-today.folded .cal-today-body { display:none; }
+  .cal-today-none { font-size:12px; color:var(--muted); padding:4px 2px; }
+  .cal-todo-group { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); margin:8px 2px 2px; }
+  .cal-todo { --c:#6b7a8f; display:flex; align-items:center; gap:8px; min-height:34px; border-left:4px solid var(--c);
+              border-radius:4px; padding:2px 4px 2px 6px; margin-top:4px; background:var(--surface-2); }
+  .cal-todo input { width:18px; height:18px; flex:none; accent-color:var(--c); margin:0; cursor:pointer; }
+  .cal-todo-dot { width:18px; flex:none; }
+  .cal-todo-t { flex:1; min-width:0; text-align:left; background:none; border:none; cursor:pointer; padding:4px 0;
+                font-family:'DM Sans',sans-serif; font-size:12.5px; color:var(--text); overflow-wrap:anywhere; }
+  .cal-todo.done .cal-todo-t { text-decoration:line-through; color:var(--muted); }
+  .cal-key { display:flex; flex-direction:column; gap:3px; padding:2px 6px; }
+  .cal-key-i { --c:#6b7a8f; display:flex; align-items:center; gap:7px; font-size:12px; color:var(--text); }
+  .cal-key-dot { width:12px; height:12px; border-radius:3px; background:var(--c); flex:none; }
+
   @media (max-width:900px) {
+    .cal-side .cal-today { display:none; }
+    .cal-main > .cal-today { display:block; margin-bottom:10px; }
+    .cal-todo { min-height:40px; }
     .cal-shell { grid-template-columns:minmax(0, 1fr); gap:12px; }
     .cal-side { display:none; position:static; border:1px solid var(--border); border-radius:10px; padding:10px; background:var(--surface); }
     .cal-side.open { display:flex; }

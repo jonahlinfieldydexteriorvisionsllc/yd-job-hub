@@ -1158,9 +1158,12 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
 
 # ---------------------------------------------------------------- running
 
+# autoRemind: everything on the calendar and every card of theirs buzzes the
+# phone without a reminder set on each (reminders.py _usual; Jonah, 12 Oct
+# 2026) -- the owner's on, the crew's theirs to switch on. notify.js too.
 DEFAULT_PREFS = {
-    "owner": {"email": True, "push": True, "morning": True, "midday": True, "evening": True},
-    "crew": {"email": False, "push": True, "morning": True, "midday": True, "evening": True},
+    "owner": {"email": True, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True},
+    "crew": {"email": False, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": False},
 }
 
 

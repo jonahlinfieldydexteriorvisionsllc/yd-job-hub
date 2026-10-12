@@ -38,17 +38,11 @@
       about: 'Yours only' },
   ];
 
-  // How long before an entry its phone reminder pops up, in minutes. For an
-  // all-day entry the time counts back from 7 am that day.
-  const REMIND = [
-    [null, 'No reminder'], [0, 'At the time'], [10, '10 minutes before'], [30, '30 minutes before'],
-    [60, '1 hour before'], [120, '2 hours before'], [1440, 'The day before'], [2880, 'Two days before'],
-  ];
-  function remindWords(ev) {
-    if (!ev.hasReminder || ev.remindMins == null) return '';
-    const hit = REMIND.find(r => r[0] === ev.remindMins);
-    return hit ? hit[1] : ev.remindMins + ' minutes before';
-  }
+  // What an entry is (a bid appointment, a pickup...) and when it buzzes the
+  // phone by itself: remind.js. For an all-day entry the time counts back
+  // from 7 am that day.
+  const typeOfEv = (ev, cal) => YDRemind.typeOf(ev, { calKind: cal && cal.kind });
+  const isTimed = ev => !ev.allDay && !!ev.time;
 
   const AUTO = {
     'auto:storms': { id: 'auto:storms', name: 'Storm nights', color: '#3fb6d8', auto: true,
@@ -60,7 +54,8 @@
     // Jonah (7 Oct): the crew's recurring tasks on the calendar, every week
     // ahead -- worked out from the list on the Crew tasks board
     // (recurring.js), never copied in.
-    'auto:recurring': { id: 'auto:recurring', name: 'Crew tasks', color: '#2a9d8f', auto: true,
+    // Blue, as every crew task is (remind.js, Jonah 12 Oct).
+    'auto:recurring': { id: 'auto:recurring', name: 'Crew tasks', color: '#2f6fd6', auto: true,
                         about: 'Recurring crew tasks, from the Crew tasks board' },
   };
 
@@ -214,9 +209,14 @@
         occurrencesOf(base, from, to).forEach(x => {
           const ev = x.ev;
           if (onlyMine && !isMine(ev, cal, uid)) return;
+          const name = ev.title || (ev.jobName ? ev.jobName : 'Untitled');
+          const type = typeOfEv(ev, cal), ic = YDRemind.icon(type);
           out.push({
             day: x.day, layer: cal, ev: ev, calId: cid, id: base.id, orig: x.orig,
-            title: ev.title || (ev.jobName ? ev.jobName : 'Untitled'),
+            title: (ic ? ic + ' ' : '') + name, name: name,
+            color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
+            // Ticked off on the "any time" list, date by date (a repeat too).
+            done: !!(base.done && base.done[x.day]),
             time: ev.allDay ? '' : ev.time, endTime: ev.allDay ? '' : ev.endTime,
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
@@ -252,13 +252,16 @@
         if (x.card.auto && x.card.equipmentId && ydCan('equipment', 'see')) return;
         // A recurring task's card is drawn by the Crew tasks layer below.
         if (x.card.recurring && window.YDRecurring && YDRecurring.visible()) return;
-        if (onlyMine && !(x.card.assignees || []).some(a => a.uid === uid)) return;
+        if (onlyMine && !YDBoards.isMine(x.card, x.board)) return;
+        const type = YDRemind.typeOf(x.card, { boardId: x.board.id });
+        const ic = YDRemind.icon(type) || '📌';
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
+          color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
           // A card with a time sits at that hour (an hour long); without one,
           // with the day's all-day entries.
           time: /^\d{2}:\d{2}$/.test(x.card.dueTime || '') ? x.card.dueTime : '',
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done,
-          title: '📌 ' + (x.card.title || 'Card'), note: x.board.name,
+          title: ic + ' ' + (x.card.title || 'Card'), note: x.board.name,
           crew: x.card.assignees || [] });
       });
     }
@@ -266,7 +269,8 @@
     if (!hidden.has('auto:recurring') && window.YDRecurring && YDRecurring.visible()) {
       YDRecurring.dues(from, to).forEach(x => {
         out.push({ day: x.day, layer: AUTO['auto:recurring'], auto: 'recurring', id: x.cardId, boardId: 'crew',
-          done: x.done, title: '🔁 ' + x.what, note: 'Crew tasks' });
+          done: x.done, title: '🔁 ' + x.what, note: 'Crew tasks', type: 'crew',
+          color: YDRemind.color('crew') });
       });
     }
 
@@ -414,6 +418,8 @@
     wrap.innerHTML = '<div class="cal-shell">' +
         '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml() + '</aside>' +
         '<div class="cal-main">' + topHtml() +
+          // A phone has the side folded away behind ☰: the list goes on top.
+          todayHtml() +
           '<div class="cal-body" id="calBody">' +
             (view === 'month' ? monthHtml() : view === 'schedule' ? listHtml() : gridHtml(gridDays())) +
           '</div>' +
@@ -440,9 +446,85 @@
       '</div>';
   }
 
-  // Down the side: the small month, then every calendar with a tick box.
+  // ------------------------------------------------------ any time today
+  //
+  // Jonah (12 Oct 2026): "some cards dont have a specific time to be
+  // completed that day but need to be done that day ... a small board on the
+  // side of the calendar view so theres also a checklist of just stuff that
+  // needs to be done each day but not at specific times." Everything on the
+  // day in view with no time -- all-day entries, cards due with no time, the
+  // week's crew tasks, machines due -- to tick off here. His first, then the
+  // crew's (not his to handle, but he sees them all); each sorted by kind,
+  // what is done at the foot. Down the side on a computer; above the
+  // calendar on a phone, folding away with a tap.
+  //
+  // Ticking a card moves it to Done, as a drag there would (a recurring task
+  // is confirmed, a machine's service form opens). Ticking a calendar entry
+  // marks that one date done: done {YYYY-MM-DD: {at, by}} on the entry, so a
+  // repeat is done date by date, and the reminders skip it.
+  let todayFolded = (() => { try { return localStorage.getItem('ydjobhub_calTodayFolded') === '1'; } catch (e) { return false; } })();
+  const isCrewOcc = o => !!(YDRemind.typeById(o.type) || {}).crew;
+  function canTick(o) {
+    if (o.auto === 'card') return true;            // the rules say who may move it
+    if (o.auto === 'recurring') return !!o.id;     // only once this week's card exists
+    if (o.auto) return false;                      // a machine is done by logging its service
+    return editsCal(cals[o.calId]);
+  }
+  function todayHtml() {
+    const day = dayForNew();
+    const items = occurrences(day, day).filter(o => !o.time && o.auto !== 'storm');
+    const rank = o => { const i = YDRemind.TYPES.findIndex(t => t.id === o.type); return i === -1 ? YDRemind.TYPES.length : i; };
+    const sorted = list => list.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || rank(a) - rank(b) ||
+      String(a.name || a.title).localeCompare(String(b.name || b.title)));
+    const row = o => {
+      const k = keyOf(o);
+      return '<div class="cal-todo' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '">' +
+        (canTick(o) ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
+          'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
+        '<button class="cal-todo-t" onclick="calClick(\'' + k + '\')">' + esc(o.title) + '</button></div>';
+    };
+    const group = (label, list) => !list.length ? '' :
+      (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + sorted(list).map(row).join('');
+    const mine = items.filter(o => !isCrewOcc(o)), crew = items.filter(isCrewOcc);
+    const left = items.filter(o => !o.done).length;
+    return '<div class="cal-today' + (todayFolded ? ' folded' : '') + '">' +
+      '<button class="cal-today-head" onclick="calTodayFold()">✅ Any time ' +
+        (day === today() ? 'today' : esc(shortDay(day))) +
+        (items.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') +
+        '<span class="cal-today-fold">' + (todayFolded ? '▸' : '▾') + '</span></button>' +
+      '<div class="cal-today-body">' +
+        (items.length ? group(crew.length && mine.length ? 'Yours' : '', mine) + group('👷 Crew', crew)
+          : '<div class="cal-today-none">Nothing for any time this day.</div>') +
+      '</div></div>';
+  }
+  window.calTodayFold = function () {
+    todayFolded = !todayFolded;
+    try { localStorage.setItem('ydjobhub_calTodayFolded', todayFolded ? '1' : '0'); } catch (e) {}
+    render();
+  };
+  window.calTick = function (k, on) {
+    const o = drawn[k];
+    if (!o) return;
+    if (o.auto === 'card' || o.auto === 'recurring') {
+      if (!window.YDBoards || !YDBoards.setDone(o.auto === 'card' ? o.boardId : 'crew', o.id, on)) {
+        showToast('That card is not on its board yet');
+      }
+      render();
+      return;
+    }
+    const cal = cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
+    if (!base || !editsCal(cal)) { render(); return; }
+    // Undone is written as null: a merge keeps whatever key is left out.
+    const mark = on ? { at: nowIso(), by: (me() || {}).uid || '' } : null;
+    base.done = Object.assign({}, base.done, { [o.day]: mark });
+    write('calendars/' + o.calId + '/events', o.id, { done: { [o.day]: mark } }, 'ticking off ' + (base.title || 'an entry'));
+    render();
+  };
+
+  // Down the side: the small month, the day's "any time" list, then every
+  // calendar with a tick box.
   function sideHtml() {
-    return miniHtml() +
+    return miniHtml() + todayHtml() +
       '<div class="cal-side-head">Calendars</div>' +
       '<div class="cal-checks">' + layers().map(l =>
         '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
@@ -453,6 +535,11 @@
         '<label class="cal-check mine"><input type="checkbox"' + (onlyMine ? ' checked' : '') + ' onchange="calOnlyMine()">' +
           '<span class="cal-box"></span><span class="cal-check-name">👤 Only what I’m on</span></label>' +
       '</div>' +
+      // What each colour means (remind.js). Anything not marked keeps its
+      // calendar's colour.
+      '<div class="cal-side-head">Colours</div>' +
+      '<div class="cal-key">' + YDRemind.TYPES.map(t => '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
+        '<span class="cal-key-dot"></span>' + t.icon + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
       '<div class="cal-side-links">' +
         (hidden.size || onlyMine ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
         (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars</button>' : '') +
@@ -561,7 +648,7 @@
   function chipHtml(o) {
     const k = keyOf(o);
     return '<div class="cg-chip' + (o.done ? ' done' : '') + (movable(o) ? ' mv' : '') + '" data-k="' + k + '" ' +
-      'style="--c:' + safeColor(o.layer.color) + '" onclick="calClick(\'' + k + '\')">' + esc(o.title) + '</div>';
+      'style="' + paint(o) + '" onclick="calClick(\'' + k + '\')">' + esc(o.title) + '</div>';
   }
 
   function blockHtml(it) {
@@ -571,7 +658,7 @@
     // one piece of them would have to guess what happens to the rest.
     const mv = movable(o) && !o.multi;
     return '<div class="cg-ev' + (o.done ? ' done' : '') + (h < 34 ? ' short' : '') + (mv ? ' mv' : '') + '" data-k="' + k + '" ' +
-        'style="--c:' + safeColor(o.layer.color) + ';top:' + (it.a * HOUR / 60) + 'px;height:' + h + 'px;' +
+        'style="' + paint(o) + ';top:' + (it.a * HOUR / 60) + 'px;height:' + h + 'px;' +
         'left:calc(' + (it.col * w) + '% + 1px);width:calc(' + w + '% - 3px)" onclick="calClick(\'' + k + '\')">' +
         '<div class="cg-ev-t">' + esc(o.title) + '</div>' +
         '<div class="cg-ev-s">' + esc(fmtMin(it.a) + '–' + fmtMin(it.b)) + (o.address ? ' · ' + esc(o.address) : '') + '</div>' +
@@ -630,14 +717,14 @@
           list.slice(0, 3).map(o => {
             const k = keyOf(o);
             return '<div class="cal-bar' + (o.done ? ' done' : '') + (movable(o) ? ' mv' : '') + '" data-k="' + k + '" ' +
-              'style="--c:' + safeColor(o.layer.color) + '" onclick="event.stopPropagation();calClick(\'' + k + '\')">' +
+              'style="' + paint(o) + '" onclick="event.stopPropagation();calClick(\'' + k + '\')">' +
               (o.time ? '<b>' + esc(fmtTimeRange(o.time)) + '</b> ' : '') + esc(o.title) + '</div>';
           }).join('') +
           (list.length > 3 ? '<button class="cal-more" onclick="event.stopPropagation();calGoDay(\'' + day + '\')">+' +
             (list.length - 3) + ' more</button>' : '') +
         '</div>' +
         '<div class="cal-dots">' + list.slice(0, 5).map(o =>
-          '<span style="--c:' + safeColor(o.layer.color) + '"></span>').join('') + '</div>' +
+          '<span style="--c:' + colorOf(o) + '"></span>').join('') + '</div>' +
       '</div>';
     }
     return '<div class="cal-month">' +
@@ -670,13 +757,13 @@
   function entryHtml(o) {
     const k = keyOf(o);
     const time = o.time ? fmtTimeRange(o.time, o.endTime) : 'All day';
-    return '<div class="cal-entry' + (o.done ? ' done' : '') + '" style="--c:' + safeColor(o.layer.color) + '" onclick="calClick(\'' + k + '\')">' +
+    return '<div class="cal-entry' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '" onclick="calClick(\'' + k + '\')">' +
       '<div class="cal-entry-time">' + esc(time) + '</div>' +
       '<div class="cal-entry-main">' +
         '<div class="cal-entry-title">' + esc(o.title) + '</div>' +
         '<div class="cal-entry-sub">' +
           '<span class="cal-entry-cal">' + esc(o.layer.name) + '</span>' +
-          (o.jobName && o.jobName !== o.title ? ' · 📋 ' + esc(o.jobName) : '') +
+          (o.jobName && o.jobName !== (o.name || o.title) ? ' · 📋 ' + esc(o.jobName) : '') +
           (o.address ? ' · ' + esc(o.address) : '') +
           (o.note ? ' · ' + esc(o.note) : '') +
         '</div>' +
@@ -705,6 +792,11 @@
   function safeColor(c) {
     return /^#[0-9a-fA-F]{3,8}$/.test(String(c || '')) ? c : '#6b7a8f';
   }
+  // An entry's colour: its kind's (remind.js) when it has one, else its
+  // calendar's. On the filled blocks a light colour (doctor's yellow) gets
+  // dark writing.
+  const colorOf = o => safeColor(o.color || o.layer.color);
+  const paint = o => '--c:' + colorOf(o) + (o.ink ? ';color:' + safeColor(o.ink) : '');
 
   // ------------------------------------------------------------- controls
 
@@ -787,6 +879,10 @@
     const ev = o.ev || base;
     const when = ev.allDay || !ev.time ? 'All day' : fmtTimeRange(ev.time, ev.endTime);
     const mapUrl = ev.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ev.address) : '';
+    const type = YDRemind.typeById(typeOfEv(ev, cal));
+    // The reminder is the series' (a single date cannot have its own).
+    const onIt = (ev.crew || []).some(c => me() && c.uid === me().uid);
+    const remindLine = YDRemind.line(base, type ? type.id : '', isTimed(ev), onIt);
     openModal(esc(ev.title || ev.jobName || 'Event'),
       '<div class="cal-detail" style="--c:' + safeColor(cal.color) + '">' +
         '<div class="cal-detail-cal"><span class="cal-dot"></span>' + esc(cal.name) + '</div>' +
@@ -796,12 +892,13 @@
             (base.repeatUntil ? ' until ' + shortDay(base.repeatUntil) : '') +
             (o.changed ? ' · changed for this date' : '') + '</span>' : '') +
         '</div>' +
+        (type ? '<div class="cal-detail-line">' + type.icon + ' ' + esc(type.name) + '</div>' : '') +
         (ev.jobName ? '<div class="cal-detail-line">📋 ' + esc(ev.jobName) + '</div>' : '') +
         (ev.address ? '<a class="snow-addr" href="' + mapUrl + '" target="_blank" rel="noopener">📍 ' + esc(ev.address) +
           '<span class="snow-go">Directions</span></a>' : '') +
         ((ev.crew || []).length ? '<div class="cal-detail-line">👷 ' + ev.crew.map(c =>
           '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(nameOf(c)) + '</span>').join(' ') + '</div>' : '') +
-        (remindWords(base) ? '<div class="cal-detail-line">🔔 Reminder: ' + esc(remindWords(base).toLowerCase()) + '</div>' : '') +
+        (remindLine ? '<div class="cal-detail-line">' + esc(remindLine) + '</div>' : '') +
         (ev.notes ? '<div class="bd-notes">' + esc(ev.notes) + '</div>' : '') +
       '</div>' +
       '<div class="field-actions">' +
@@ -864,13 +961,24 @@
     const allDay = ev.allDay != null ? ev.allDay : editing.time ? false : !ev.time;
     const startT = ev.time || editing.time || '07:00';
     const endT = ev.endTime || (editing.time ? hhmm(minutesOf(editing.time) + 60) : '');
+    // What it is, as it counts now: a site visit nobody marked is already a
+    // bid appointment, so the box says so.
+    const type = typeOfEv(ev, cals[calId]);
 
     openModal(editing.eventId ? 'Edit' : 'Add to the calendar',
       '<div class="field"><span class="label">Calendar</span><div class="cal-pickcal">' +
         list.map(c => '<label class="cal-pickcal-item" style="--c:' + safeColor(c.color) + '">' +
           '<input type="radio" name="evCal" value="' + c.id + '"' + (c.id === calId ? ' checked' : '') +
-          ' onchange="calCalChanged()"><span><span class="cal-dot"></span>' + esc(c.name) + '</span></label>').join('') +
+          ' onchange="calCalChanged(true)"><span><span class="cal-dot"></span>' + esc(c.name) + '</span></label>').join('') +
       '</div></div>' +
+      // Jonah (12 Oct 2026): pick what it is -- some things are at a set time,
+      // some just need doing that day. It decides when the phone buzzes.
+      '<div class="field"><span class="label">What is it</span><select id="evType" onchange="calTypeChanged()"' +
+          (ev.type ? ' data-picked="1"' : '') + '>' +
+        '<option value="">—</option>' +
+        YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === type ? ' selected' : '') + '>' +
+          t.icon + ' ' + esc(t.name) + (t.timed === false ? ' (any time that day)' : '') + '</option>').join('') +
+      '</select></div>' +
       '<div class="field"><span class="label">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
         '<option value="">— not about a job —</option>' +
         jobs.map(j => '<option value="' + j._id + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
@@ -888,7 +996,7 @@
         ' onchange="calAllDayChanged()"> All day</label>' +
       '<div class="grid g2" id="evTimes"' + (allDay ? ' hidden' : '') + '>' +
         '<div class="field"><span class="label">Starts</span>' +
-          '<input type="time" id="evTime" value="' + esc(startT) + '"></div>' +
+          '<input type="time" id="evTime" value="' + esc(startT) + '" onchange="calRemindHint()"></div>' +
         '<div class="field"><span class="label">Ends</span>' +
           '<input type="time" id="evEndTime" value="' + esc(endT) + '"></div>' +
       '</div>' +
@@ -899,14 +1007,12 @@
         '<div class="field"><span class="label">Repeat until (optional)</span>' +
           '<input type="date" id="evUntil" value="' + esc(base.repeatUntil || '') + '"></div>' +
       '</div>' +
-      // A pop-up on the phone, like Google Calendar's: to whoever sets it and
-      // to the crew on it, on every phone with notifications switched on.
-      '<div class="field"><span class="label">Remind</span><select id="evRemind">' +
-        REMIND.map(([m, words]) => '<option value="' + (m == null ? '' : m) + '"' +
-          ((base.hasReminder ? base.remindMins : null) === m ? ' selected' : '') + '>' + words + '</option>').join('') +
-        '</select>' +
-        '<div class="hint">A pop-up on your phone (and on the phones of anyone on it). All-day entries remind ' +
-          'from 7 am. Phones need notifications switched on: ⋯ → Notifications &amp; summaries.</div></div>' +
+      // A pop-up on the phone, like Google Calendar's. "Usual" goes by what it
+      // is (remind.js) to everyone with automatic reminders on; a set time
+      // goes to whoever sets it and to the crew on it.
+      '<div class="field"><span class="label">Remind</span><select id="evRemind" onchange="calRemindHint()">' +
+        YDRemind.optionsHtml(base) + '</select>' +
+        '<div class="hint" id="evRemindHint"></div></div>' +
       '<div class="field" id="evCrewField"><span class="label">Who is on it</span>' +
         (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item" style="--c:' + personColor(p.uid) + '">' +
           '<input type="checkbox" class="evWho" value="' + p.uid + '"' + (chosen.has(p.uid) ? ' checked' : '') + '>' +
@@ -920,6 +1026,7 @@
         '<textarea id="evNotes" rows="3" placeholder="What to bring, gate code, who to ask for">' + esc(ev.notes || '') + '</textarea></div>' +
       '<div class="field-actions" id="evActions">' + editorActions() + '</div>');
     calCalChanged();
+    calRemindHint();
   }
   function editorActions() {
     return '<button class="btn btn-filled" onclick="calSave()">Save</button>' +
@@ -930,6 +1037,30 @@
   window.calAllDayChanged = function () {
     const t = el('evTimes');
     if (t) t.hidden = el('evAllDay').checked;
+    calRemindHint();
+  };
+  // A pickup or a to-do is for any time that day; an appointment is at a set
+  // time. Picking one sets "All day" to match (it can still be changed); a
+  // kind that only followed the calendar leaves it as it was.
+  window.calTypeChanged = function (byCalendar) {
+    const byHand = byCalendar !== true;
+    if (byHand && el('evType')) el('evType').dataset.picked = '1';
+    const t = YDRemind.typeById(val('evType'));
+    const box = el('evAllDay');
+    if (byHand && t && box && t.timed != null) { box.checked = !t.timed; calAllDayChanged(); }
+    else calRemindHint();
+  };
+  // What "Usual" means for this entry as the form stands.
+  window.calRemindHint = function () {
+    const hint = el('evRemindHint');
+    if (!hint) return;
+    const choice = val('evRemind');
+    const timed = !el('evAllDay').checked && !!val('evTime');
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const type = val('evType') || typeOfEv({}, c && cals[c.value]);
+    hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this one.'
+      : choice === '' ? YDRemind.usualHint(type, timed)
+      : 'To you and anyone on it. Phones need notifications switched on: ⋯ → Notifications &amp; summaries.';
   };
   window.calJobChanged = function () {
     const id = val('evJob');
@@ -938,11 +1069,20 @@
     if (j && a && !a.value.trim()) a.value = [j.address, j.city, j.state].filter(Boolean).join(', ');
   };
   // Says plainly whether the people being picked will actually see this.
-  window.calCalChanged = function () {
+  window.calCalChanged = function (byHand) {
     const c = document.querySelector('input[name="evCal"]:checked');
     const cal = c && cals[c.value];
     const hint = el('evShareHint');
     if (!cal || !hint) return;
+    // Until a kind is picked by hand, it follows the calendar (Site visits:
+    // a bid appointment; Work schedule: a crew task; Personal: personal).
+    const box = el('evType');
+    if (byHand === true && box && !box.dataset.picked) {
+      const was = box.value;
+      box.value = typeOfEv({}, cal);
+      if (box.value !== was) calTypeChanged(true);
+    }
+    calRemindHint();
     const n = (cal.visibleTo || []).length;
     hint.textContent = cal.kind === 'personal' ? 'Personal is yours only — nobody else sees it.'
       : n ? cal.name + ' is shared with ' + (cal.visibleTo || []).map(u => firstName(personName(u))).join(', ') + '.'
@@ -1002,16 +1142,14 @@
         .map(i => crew.find(p => p.uid === i.value)).filter(Boolean)
         .map(p => ({ uid: p.uid, name: p.name })),
       notes: el('evNotes').value.trim(),
+      // Kept only when it is not what the calendar makes it anyway, so an
+      // entry moved to another calendar takes on that one's.
+      type: YDRemind.typeById(val('evType')) && val('evType') !== typeOfEv({}, cals[calId]) ? val('evType') : null,
       updatedAt: nowIso(),
     };
-    // The reminder, and who asked for it. Whoever set one before keeps theirs
-    // when someone else edits the entry.
-    const remind = val('evRemind');
+    // The reminder: the usual one, none, or a set time (and who asked for it).
     const base = ed.eventId ? (events[ed.calId] || {})[ed.eventId] : null;
-    rec.hasReminder = remind !== '';
-    rec.remindMins = remind === '' ? null : parseInt(remind, 10);
-    rec.remindUids = remind === '' ? [] : Array.from(new Set(
-      ((base && base.remindUids) || []).concat([(me() || {}).uid]).filter(Boolean)));
+    Object.assign(rec, YDRemind.fromChoice(val('evRemind'), base, (me() || {}).uid));
     return { rec: rec, calId: calId, base: base };
   }
 
@@ -1044,7 +1182,8 @@
       const r = first.rec;
       const ruleChanged = first.calId !== ed.calId || r.repeat !== (base.repeat || 'none') ||
         (r.repeatUntil || null) !== (base.repeatUntil || null) ||
-        r.hasReminder !== !!base.hasReminder || (r.remindMins == null ? null : r.remindMins) !== (base.remindMins == null ? null : base.remindMins);
+        r.hasReminder !== !!base.hasReminder || (r.remindMins == null ? null : r.remindMins) !== (base.remindMins == null ? null : base.remindMins) ||
+        !!r.noReminder !== !!base.noReminder;
       askScope('Save the change to', ruleChanged ? ['following', 'all'] : ['one', 'following', 'all'], scope => {
         const now = readEditor(ed);
         if (!now) { calScope(''); return; }
@@ -1105,7 +1244,7 @@
 
   // The fields that make up one date of an entry -- what a single-date
   // change keeps.
-  const OCC_FIELDS = ['date', 'endDate', 'allDay', 'time', 'endTime', 'title', 'jobId', 'jobName', 'address', 'crew', 'notes'];
+  const OCC_FIELDS = ['date', 'endDate', 'allDay', 'time', 'endTime', 'title', 'jobId', 'jobName', 'address', 'crew', 'notes', 'type'];
   function pick(o, keys) {
     const out = {};
     keys.forEach(k => { out[k] = o[k] === undefined ? null : o[k]; });

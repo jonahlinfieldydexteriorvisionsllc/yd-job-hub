@@ -16,9 +16,13 @@
 (function () {
   'use strict';
 
+  // autoRemind: everything on the calendar and every card of theirs buzzes
+  // the phone without a reminder set on each (remind.js; Jonah, 12 Oct
+  // 2026). The owner's is on until he turns it off; the crew's is theirs to
+  // turn on. functions/digest.py DEFAULT_PREFS says the same.
   const DEFAULTS = {
-    owner: { email: true, push: true, morning: true, midday: true, evening: true },
-    crew: { email: false, push: true, morning: true, midday: true, evening: true },
+    owner: { email: true, push: true, morning: true, midday: true, evening: true, autoRemind: true },
+    crew: { email: false, push: true, morning: true, midday: true, evening: true, autoRemind: false },
   };
   const SLOT_INFO = [
     ['morning', 'Morning', '5:00 am — the day ahead and the weather'],
@@ -145,6 +149,7 @@
   window.ntfSet = function (key, on) {
     if (!prefs) return;
     prefs[key] = !!on;
+    if (key === 'autoRemind' && window.YDRemind) YDRemind.setAuto(on);
     Promise.resolve(window.YDDb.put('digestPrefs', me().uid, { [key]: !!on, updatedAt: new Date().toISOString() }))
       .catch(e => console.warn('[notify] preference not yet saved', e.code || e.message));
   };
@@ -183,6 +188,13 @@
       '<div class="ntf-block"><div class="ntf-head">Send me</div>' +
         toggle('email', 'Email', 'to ' + esc(u.email || 'your address')) +
         toggle('push', 'Phone notifications', 'on every device you have turned them on for') +
+      '</div>' +
+      '<div class="ntf-block"><div class="ntf-head">Reminders</div>' +
+        toggle('autoRemind', 'Remind me of everything', 'every calendar entry I can see and every card that is mine — ' +
+          'no need to set a reminder on each one') +
+        '<div class="hint">Bid appointments 1 hour and 30 minutes before. Anything else at a set time, 30 minutes before. ' +
+          'Things for any time that day, one list at 7 am. Crew tasks remind only the people on them. One thing’s own ' +
+          'Remind box changes its reminder or switches it off.</div>' +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Which updates</div>' +
         SLOT_INFO.map(([k, label, hint]) => toggle(k, label, hint)).join('') +
