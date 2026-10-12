@@ -383,7 +383,7 @@
   }
 
   // Only a TRAILING abbreviation is expanded: "45 St Marys Dr" must keep
-  // its "St" as Saint rather than becoming "Street Annes Drive".
+  // its "St" as Saint rather than becoming "Street Marys Drive".
   function expandStreetType(s) {
     const words = s.trim().split(/\s+/);
     if (words.length < 2) return null;

@@ -50,8 +50,8 @@ def _words(s):
 
 def names_match(sub, company):
     """Whether an invoice's company is this subcontractor: every word of
-    theirs is in it -- or, run together, the same letters ("Total Guard" is
-    "TotalGuard Yard Care")."""
+    theirs is in it -- or, run together, the same letters ("Green Acre" is
+    "GreenAcre Lawn Care")."""
     want, have = _words(sub.get("match") or sub.get("name")), _words(company)
     if not want:
         return False

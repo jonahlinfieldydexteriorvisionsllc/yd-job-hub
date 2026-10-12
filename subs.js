@@ -270,14 +270,14 @@
                  trail: 'trl', north: 'n', south: 's', east: 'e', west: 'w' };
   const svcKeyOf = s => norm(s).replace(/ /g, '-').slice(0, 60);
   // An address as house number + street name, the way two spellings of it
-  // agree ("4858 Saint Annes Dr" is "4858 St Annes Drive"). A rural fire
+  // agree ("120 Saint Marys Dr" is "120 St Marys Drive"). A rural fire
   // number (W5883) counts as the number.
   function addrKey(a) {
     const t = norm(a).split(' ').filter(Boolean).map(w => ABBR[w] || w);
     const i = t.findIndex(w => /^[nsew]?\d+$/.test(w));
     if (i === -1) return '';
     let rest = t.slice(i + 1).filter(w => !/^[nsew]$/.test(w));
-    if (rest[0] === 'st' && rest.length > 1) rest = rest.slice(1);   // "St Annes", "Saint Annes"
+    if (rest[0] === 'st' && rest.length > 1) rest = rest.slice(1);   // "St Marys", "Saint Marys"
     return rest.length ? t[i] + ' ' + rest[0] : '';
   }
   function propForVisit(s, v) {
