@@ -123,6 +123,7 @@ def run():
     sent.extend(_urgent_cards(db, people, now))
     sent.extend(_card_reminders(db, people, since, now))
     sent.extend(_usual(db, people, since, now))
+    sent.extend(_activity(db, people, now))
     return sent
 
 
@@ -416,6 +417,144 @@ def _usual(db, people, since, now):
         buzz(uid, "auto_%s_day_%s" % (uid, today.isoformat()),
              "✅ Today, any time: %d thing%s" % (len(items), "" if len(items) == 1 else "s"),
              " · ".join(names) + (" +%d more" % more if more > 0 else ""), "yd-day-" + today.isoformat())
+    return out
+
+
+# ------------------------------------------------------- what the crew did
+#
+# Jonah (12 Oct 2026): "i want to get notifications on my phone whenever the
+# guys adds a card or something to a calendar or makes a change to an
+# existing card on a baord or calendar." Each run looks at the cards and
+# calendar entries changed since the last one (updatedAt), and tells the
+# owner -- one buzz per run, however many -- about those changed by anybody
+# but him: added, finished / ticked off, or changed. A card names who changed
+# it (updatedBy, a name); an entry carries their uid (calendar.js write). A
+# deletion leaves nothing to find, so it is not told.
+#
+# Phone clocks are not the server's: each look reaches ACTIVITY_OVERLAP_MIN
+# back past the last, and reminderLog act_... keeps anything from being told
+# twice.
+
+ACTIVITY_OVERLAP_MIN = 10
+ACTIVITY_NAMED = 4          # changes named in one buzz; the rest are "+N more"
+
+
+def _when(iso):
+    """A stored ISO time (the app's ...Z, or the server's +00:00) as a datetime."""
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=dg.TZ)
+
+
+def _iso_z(t):
+    """The app's way of writing a time (JavaScript toISOString), to compare
+    stored times as text in a query."""
+    return t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _activity(db, people, now):
+    out = []
+    owners = []
+    for uid, u in people.items():
+        if u.get("role") == "owner":
+            try:
+                if dg._prefs(u).get("crewActivity"):
+                    owners.append(uid)
+            except Exception as err:      # noqa: BLE001
+                print("reminders: prefs not read for", uid, err)
+    if not owners:
+        return out
+    owner_uids = {uid for uid, u in people.items() if u.get("role") == "owner"}
+    by_name = {}
+    for uid, u in people.items():
+        for n in (u.get("name"), u.get("email")):
+            if str(n or "").strip():
+                by_name[str(n).strip().lower()] = uid
+    cursor = db.collection("reminderLog").document("activity_cursor")
+    try:
+        snap = cursor.get()
+        last = _when((snap.to_dict() or {}).get("at")) if snap.exists else None
+    except Exception as err:          # noqa: BLE001
+        print("reminders: activity cursor not read:", err)
+        return out
+    since = (last or now - datetime.timedelta(minutes=WINDOW_MIN)) - datetime.timedelta(minutes=ACTIVITY_OVERLAP_MIN)
+    news = []       # (log key, uid, verb, title, where, tab)
+
+    def fresh(t):
+        return t is not None and t >= since
+
+    def same_moment(a, b):
+        """This change is the one that made it (or finished it), not a later one."""
+        a, b = _when(a), _when(b)
+        return a is not None and b is not None and abs((a - b).total_seconds()) < 60
+
+    try:
+        for b in db.collection("boards").stream():
+            board = b.to_dict() or {}
+            for s in b.reference.collection("cards").where("updatedAt", ">", _iso_z(since)).stream():
+                k = s.to_dict() or {}
+                by = str(k.get("updatedBy") or "").strip().lower()
+                who = by_name.get(by)
+                if not who or who in owner_uids:
+                    continue
+                verb = ("added" if same_moment(k.get("createdAt"), k.get("updatedAt"))
+                        and str(k.get("createdBy") or "").strip().lower() == by
+                        else "finished" if same_moment(k.get("doneAt"), k.get("updatedAt")) else "changed")
+                news.append(("act_card_%s_%s_%s" % (b.id, s.id, k.get("updatedAt")), who, verb,
+                             str(k.get("title") or "a card"), board.get("name") or "a board", "boards"))
+        for c in db.collection("calendars").stream():
+            cal = c.to_dict() or {}
+            for s in c.reference.collection("events").where("updatedAt", ">", _iso_z(since)).stream():
+                ev = s.to_dict() or {}
+                who = ev.get("updatedBy")
+                if not who or who in owner_uids or who not in people:
+                    continue
+                ticked = any(isinstance(m, dict) and m.get("by") == who and same_moment(m.get("at"), ev.get("updatedAt"))
+                             for m in (ev.get("done") or {}).values())
+                verb = ("added" if same_moment(ev.get("createdAt"), ev.get("updatedAt")) and ev.get("createdBy") == who
+                        else "ticked off" if ticked else "changed")
+                news.append(("act_ev_%s_%s_%s" % (c.id, s.id, ev.get("updatedAt")), who, verb,
+                             str(ev.get("title") or ev.get("jobName") or "an entry"), cal.get("name") or "a calendar",
+                             "calendar"))
+    except Exception as err:          # noqa: BLE001
+        print("reminders: crew changes not read:", err)
+        return out
+
+    told = []
+    for key, who, verb, title, where, tab in news:
+        try:
+            db.collection("reminderLog").document(key).create({"at": now.isoformat()})
+        except AlreadyExists:
+            continue
+        told.append((who, verb, title, where, tab))
+    try:
+        cursor.set({"at": now.isoformat()})
+    except Exception as err:          # noqa: BLE001
+        print("reminders: activity cursor not saved:", err)
+    if not told:
+        return out
+
+    def first(uid):
+        return (dg._name(people.get(uid)) or "Someone").split()[0]
+    if len(told) == 1:
+        who, verb, title, where, tab = told[0]
+        head = "👷 %s %s %s" % (first(who), verb, "a card" if tab == "boards" else "an entry")
+        body = "“%s” · %s" % (title[:80], where)
+    else:
+        head = "👷 %d changes from the crew" % len(told)
+        body = " · ".join("%s %s “%s” (%s)" % (first(w), v, t[:40], wh) for w, v, t, wh, _ in told[:ACTIVITY_NAMED]) + \
+            (" +%d more" % (len(told) - ACTIVITY_NAMED) if len(told) > ACTIVITY_NAMED else "")
+    tabs = {x[4] for x in told}
+    opens = next(iter(tabs)) if len(tabs) == 1 else "calendar"
+    for uid in owners:
+        try:
+            out.append({"uid": uid, "activity": len(told), "phones": dg.send_push(
+                uid, {"push": {"title": head, "body": body}}, tag="yd-activity-" + now.strftime("%H%M"),
+                ttl=6 * 3600, opens=opens)})
+        except Exception as err:      # noqa: BLE001
+            print("reminders: activity push failed:", uid, err)
     return out
 
 

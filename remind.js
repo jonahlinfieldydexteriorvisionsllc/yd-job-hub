@@ -227,6 +227,7 @@
     cardIsMine: cardIsMine,
     eventIsMine: eventIsMine,
     who: who,
+    me: () => meRec,
     usualWords: usualWords,
     usualHint: usualHint,
     setWords: setWords,

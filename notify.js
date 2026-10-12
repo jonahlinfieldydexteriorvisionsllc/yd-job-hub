@@ -21,8 +21,8 @@
   // 2026) -- everyone's on until they turn it off ("make it so crew members
   // can get notifications"). functions/digest.py DEFAULT_PREFS says the same.
   const DEFAULTS = {
-    owner: { email: true, push: true, morning: true, midday: true, evening: true, autoRemind: true },
-    crew: { email: false, push: true, morning: true, midday: true, evening: true, autoRemind: true },
+    owner: { email: true, push: true, morning: true, midday: true, evening: true, autoRemind: true, crewActivity: true },
+    crew: { email: false, push: true, morning: true, midday: true, evening: true, autoRemind: true, crewActivity: false },
   };
   const SLOT_INFO = [
     ['morning', 'Morning', '5:00 am — the day ahead and the weather'],
@@ -196,6 +196,10 @@
           'Things for any time that day, one list at 7 am. A crew task reminds the people on it — or, with nobody on ' +
           'it, every crew member. One thing’s own ' +
           'Remind box changes its reminder or switches it off.</div>' +
+        // Jonah (12 Oct 2026): told "whenever the guys adds a card or something
+        // to a calendar or makes a change" (functions/reminders.py _activity).
+        (isOwner() ? toggle('crewActivity', 'When the crew add or change something',
+          'a card or calendar entry added, changed, finished or ticked off by anyone but you — one buzz every few minutes at most') : '') +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Which updates</div>' +
         SLOT_INFO.map(([k, label, hint]) => toggle(k, label, hint)).join('') +

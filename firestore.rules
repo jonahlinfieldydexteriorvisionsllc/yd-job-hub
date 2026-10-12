@@ -488,19 +488,26 @@ service cloud.firestore {
       function sharedCal() {
         return get(/databases/$(database)/documents/calendars/$(calId)).data.get('ownerOnly', true) == false;
       }
+      // Ticked under "Who can add & change" on this calendar (Jonah, 12 Oct
+      // 2026: "select specific calendars and boards that the guys can
+      // change"): adds, edits and deletes its entries, and nothing else.
+      function calEditor() {
+        return isWorker() && request.auth.uid in
+          get(/databases/$(database)/documents/calendars/$(calId)).data.get('editors', []);
+      }
 
       match /events/{eventId} {
         allow read: if isOwner()
           || (canSee('calendars') && sharedCal())
           || (isWorker() && request.auth.uid in
               get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo);
-        allow write: if isOwner() || (canChange('calendars') && sharedCal());
+        allow write: if isOwner() || (canChange('calendars') && sharedCal()) || calEditor();
         // Anyone a calendar is shared with ticks a date of an entry off on
-        // My day (calendar.js calTick: done {YYYY-MM-DD: {at, by} | null}) --
-        // and changes nothing else about it.
+        // My day (calendar.js calTick: done {YYYY-MM-DD: {at, by} | null},
+        // stamped with who and when) -- and changes nothing else about it.
         allow update: if isWorker()
           && request.auth.uid in get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done', 'updatedAt', 'updatedBy']);
       }
     }
 
@@ -563,6 +570,9 @@ service cloud.firestore {
 
       function boardDoc() { return get(/databases/$(database)/documents/boards/$(boardId)).data; }
       function openBoard() { return boardDoc().get('ownerOnly', false) == false; }
+      // Ticked under "Who can add & change" on this board: adds, edits and
+      // deletes its cards (not the board itself).
+      function boardEditor() { return isWorker() && request.auth.uid in boardDoc().get('editors', []); }
 
       match /cards/{cardId} {
         // A card tagged Crew (the shared label id 'crew') is the crew's from
@@ -579,12 +589,13 @@ service cloud.firestore {
         // owner (or an admin who may change boards) creates or deletes.
         allow update: if isOwner()
           || (canChange('boards') && openBoard())
+          || boardEditor()
           || (isWorker()
               && (request.auth.uid in boardDoc().visibleTo
                   || ('crew' in resource.data.labels && openBoard()))
               && request.resource.data.diff(resource.data).affectedKeys()
                    .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']));
-        allow create, delete: if isOwner() || (canChange('boards') && openBoard());
+        allow create, delete: if isOwner() || (canChange('boards') && openBoard()) || boardEditor();
       }
     }
 

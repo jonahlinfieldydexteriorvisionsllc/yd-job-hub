@@ -113,6 +113,12 @@
   // Every stored board, not only the ones shared with you; and running them.
   const seesAllBoards = () => ydCan('boards', 'see');
   const editsBoards = () => ydCan('boards', 'change');
+  // Adding, editing and deleting the cards on ONE board: the owner; an admin
+  // who may change boards, on a board not marked private; and anyone the
+  // owner ticked under "Who can add & change" on it (`editors`; Jonah, 12 Oct
+  // 2026: "select specific calendars and boards that the guys can change").
+  const editsBoard = b => !!b && !b.virtual && (isOwner() || (editsBoards() && b.ownerOnly !== true) ||
+    (!!me() && (b.editors || []).indexOf(me().uid) !== -1));
   const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const two = n => String(n).padStart(2, '0');
@@ -140,7 +146,11 @@
   function myName() {
     const u = me();
     if (!u) return '';
-    return (people[u.uid] && people[u.uid].name) || u.displayName || u.email || '';
+    // A crew phone has no list of people, but knows its own record -- the
+    // name the owner gave them, which is what the owner's phone is told
+    // (functions/reminders.py _activity), not their Google name.
+    const own = window.YDRemind && YDRemind.me();
+    return (people[u.uid] && people[u.uid].name) || (own && own.name) || u.displayName || u.email || '';
   }
   // Whether a card is mine: I am on it, or nobody is and I made it (a crew
   // task with nobody on it: every crew member's) -- remind.js. The 👤 Mine
@@ -321,7 +331,7 @@
         '<div class="bd-actions">' +
           (!board.virtual && editsBoards()
             ? '<button class="btn btn-sm" onclick="editBoard(\'' + board.id + '\')">Board settings</button>' : '') +
-          (!board.virtual && editsBoards()
+          (editsBoard(board)
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">+ Add card</button>' : '') +
           // The recurring crew tasks land on Maintenance (recurring.js).
@@ -447,7 +457,7 @@
     return (editsBoards()
       ? (b.ownerOnly ? '🔒 Private — ' + (shared.length ? 'you and ' + shared.map(esc).join(', ') : 'only you')
         : shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Not shared with the crew')
-      : 'Shared with you') +
+      : editsBoard(b) ? 'Shared with you — you can add and change cards' : 'Shared with you') +
       (touch && canMove(b.id) ? '. Tap a card to move it.' : '');
   }
 
@@ -596,7 +606,7 @@
       '<div class="bd-col-body">' +
         (cardHtml.join('') || '<div class="bd-empty">' + (more.empty || 'Nothing here') + '</div>') +
         (more.foot || '') +
-        (!board.virtual && editsBoards()
+        (editsBoard(board)
           ? '<button class="bd-add-card" onclick="addCard(\'' + board.id + '\', \'' + c.id + '\')">+ Add a card</button>' : '') +
         // Won, Lost and Paid are where jobs end up, not where they start.
         (board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1
@@ -1007,7 +1017,7 @@
   // ----------------------------------------------------------- stored cards
 
   window.addCard = function (boardId, col) {
-    if (!editsBoards()) return;
+    if (!editsBoard(boards[boardId])) return;
     openCard = { boardId: boardId, cardId: '', column: col };
     renderCardEditor();
   };
@@ -1031,7 +1041,7 @@
     // profile marked as a crew member can view it" -- the 👷 Crew tag, which
     // the crew can read from any board that is not private.
     const crewTask = !!(type && type.crew);
-    const crewBtn = !editsBoards() || board.id === CREW_BOARD ? ''
+    const crewBtn = !editsBoard(board) || board.id === CREW_BOARD ? ''
       : '<button class="btn btn-sm" onclick="cardCrewTask(' + (crewTask ? 'false' : 'true') + ')">' +
           (crewTask ? 'Not a crew task' : '👷 Make it a crew task') + '</button>';
     openModal(esc(k.title || 'Card'),
@@ -1059,7 +1069,7 @@
         ? recurringDetail(k, here === doneColOf(board), boardId) : '') +
       claudeHtml(board, k) +
       '<div class="field-actions">' +
-        (editsBoards() ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
+        (editsBoard(board) ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
         crewBtn +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
@@ -1071,7 +1081,7 @@
   window.cardCrewTask = function (on) {
     const board = openCard && boards[openCard.boardId];
     const k = board && (cards[board.id] || {})[openCard.cardId];
-    if (!k || !editsBoards()) return;
+    if (!k || !editsBoard(board)) return;
     if (on && board.ownerOnly === true) {
       showToast(board.name + ' is private, so the crew cannot see it — move the card to another board first');
       return;
@@ -1248,7 +1258,7 @@
   };
 
   window.editCard = function () {
-    if (!openCard || !editsBoards()) return;
+    if (!openCard || !editsBoard(boards[openCard.boardId])) return;
     renderCardEditor();
   };
 
@@ -1464,7 +1474,7 @@
   };
 
   window.saveCard = function () {
-    if (!openCard || !editsBoards()) return;
+    if (!openCard || !editsBoard(boards[openCard.boardId])) return;
     const board = boards[openCard.boardId];
     const title = val('cdTitle');
     if (!title) { showToast('Say what needs doing'); return; }
@@ -1547,7 +1557,7 @@
   }
 
   window.removeCard = function () {
-    if (!openCard || !editsBoards()) return;
+    if (!openCard || !editsBoard(boards[openCard.boardId])) return;
     const k = (cards[openCard.boardId] || {})[openCard.cardId];
     if (!k || !confirm('Delete "' + k.title + '"?')) return;
     delete cards[openCard.boardId][openCard.cardId];
@@ -1579,6 +1589,7 @@
     const b = id ? boards[id] : {};
     const crew = crewPeople().filter(p => p.role !== 'owner');
     const shared = new Set(b.visibleTo || []);
+    const editors = new Set(b.editors || []);
     const color = b.color || PALETTE[Object.keys(boards).length % PALETTE.length];
     draftCols = (b.columns || TEMPLATES.crew.columns.map(n => ({ name: n })))
       .map(c => ({ id: c.id || null, name: c.name }));
@@ -1615,9 +1626,15 @@
           ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdShare" value="' +
               esc(p.uid) + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
             '<div class="hint">Anyone ticked sees this board and its cards, can move cards and tick ' +
-            'checklists. They cannot add, edit or delete cards. Leave everyone unticked to keep it to yourself.</div>'
+            'checklists. Leave everyone unticked to keep it to yourself.</div>'
           : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
       '</div>' +
+      (crew.length ? '<div class="field"><span class="label">Who can add &amp; change</span>' +
+        '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdEdit" value="' +
+            esc(p.uid) + '"' + (editors.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
+        '<div class="hint">Anyone ticked here adds, edits and deletes cards on this board only (and sees it). ' +
+          'An admin whose Boards access is “change” can do that on every board not marked private — for ' +
+          'hand-picking, set theirs to “see” on Your Crew and tick them here.</div></div>' : '') +
       (id === MAINTENANCE
         ? '<div class="hint">This board is kept in step with the Equipment tab — a card for every machine ' +
           'with a service coming up and every problem noted on one — so it cannot be deleted. ' +
@@ -1729,7 +1746,10 @@
       color: colorInput ? colorInput.value : PALETTE[0],
       columns: columns,
       labels: labels,
-      visibleTo: Array.from(document.querySelectorAll('.bdShare:checked')).map(i => i.value),
+      // Whoever may change it sees it too.
+      editors: Array.from(document.querySelectorAll('.bdEdit:checked')).map(i => i.value),
+      visibleTo: Array.from(new Set(Array.from(document.querySelectorAll('.bdShare:checked'))
+        .concat(Array.from(document.querySelectorAll('.bdEdit:checked'))).map(i => i.value))),
       // Always written: admins ask for ownerOnly == false (start()).
       ownerOnly: isOwner() ? !!(el('bdPrivate') && el('bdPrivate').checked) : false,
       order: was.order != null ? was.order : Object.keys(boards).length + 1,

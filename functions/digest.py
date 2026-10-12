@@ -561,6 +561,97 @@ def _recurring_overdue(today):
     return sorted(out, key=lambda x: x[1])
 
 
+RECORD_MAX = 30     # lines in each of "Done today" / "Added today"
+
+
+def _day_record(today, people):
+    """The day on the boards, the calendars and the machines. Jonah (12 Oct
+    2026): an end-of-day summary that lists "each card that was marked done,
+    each calendar item that was marked completed, and every card, calendar
+    card, and vehicle maintenance that was input into the app". Each list is
+    [(what, where, who)]. The app writes times as ISO ...Z; a day is
+    Central time."""
+    db = _db()
+    start = datetime.datetime(today.year, today.month, today.day, tzinfo=TZ)
+    start_z = start.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    def when(iso):
+        try:
+            t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return (t if t.tzinfo else t.replace(tzinfo=TZ)).astimezone(TZ)
+
+    def on_day(iso):
+        t = when(iso)
+        return bool(t) and t.date() == today
+
+    def name_of(uid):
+        return _name(people.get(uid)) if uid and people.get(uid) else ""
+
+    out = {"cardsDone": [], "eventsDone": [], "cardsAdded": [], "eventsAdded": [], "machines": []}
+    try:
+        for b in db.collection("boards").stream():
+            board = b.to_dict() or {}
+            where = board.get("name") or "a board"
+            cards = b.reference.collection("cards")
+            for s in cards.where("doneAt", ">=", start_z).stream():
+                k = s.to_dict() or {}
+                if on_day(k.get("doneAt")):
+                    out["cardsDone"].append((str(k.get("title") or "A card"), where, str(k.get("updatedBy") or "")))
+            # Not the ones the app makes by itself: each week's recurring
+            # task card, a machine's service card.
+            for s in cards.where("createdAt", ">=", start_z).stream():
+                k = s.to_dict() or {}
+                if on_day(k.get("createdAt")) and not s.id.startswith("rc-") and not k.get("auto"):
+                    out["cardsAdded"].append((str(k.get("title") or "A card"), where, str(k.get("createdBy") or "")))
+    except Exception as e:      # noqa: BLE001
+        print("digest: the day's cards not read:", e)
+    try:
+        for c in db.collection("calendars").stream():
+            cal = c.to_dict() or {}
+            where = cal.get("name") or "a calendar"
+            evs = c.reference.collection("events")
+            # Ticking a date off stamps the entry (calendar.js write), so
+            # whatever was ticked today was changed today.
+            for s in evs.where("updatedAt", ">=", start_z).stream():
+                ev = s.to_dict() or {}
+                for d, m in (ev.get("done") or {}).items():
+                    if isinstance(m, dict) and on_day(m.get("at")):
+                        out["eventsDone"].append((str(ev.get("title") or ev.get("jobName") or "An entry") +
+                                                  ("" if d == _day(today) else " (%s)" % d), where, name_of(m.get("by"))))
+            for s in evs.where("createdAt", ">=", start_z).stream():
+                ev = s.to_dict() or {}
+                if on_day(ev.get("createdAt")):
+                    out["eventsAdded"].append((str(ev.get("title") or ev.get("jobName") or "An entry"),
+                                               where + (" · " + str(ev.get("date")) if ev.get("date") else ""),
+                                               name_of(ev.get("createdBy"))))
+    except Exception as e:      # noqa: BLE001
+        print("digest: the day's calendar entries not read:", e)
+    try:
+        for s in db.collection("equipment").stream():
+            g = s.to_dict() or {}
+            name = str(g.get("name") or "A machine")
+            for e in g.get("service") or []:
+                # A service's id is "sv" + the moment it was typed in
+                # (equipment.js), which is "input today" -- its own date may
+                # be an older service written up late.
+                made = None
+                try:
+                    made = datetime.datetime.fromtimestamp(int(str(e.get("id") or "")[2:], 36) / 1000, TZ)
+                except ValueError:
+                    pass
+                if (made.date() == today) if made else e.get("at") == _day(today):
+                    out["machines"].append((("🛠️ " if e.get("kind") == "repair" else "🔧 ") + name + " — " +
+                                            str(e.get("what") or "service"), str(e.get("by") or "")))
+            for i in g.get("issues") or []:
+                if on_day(i.get("at")):
+                    out["machines"].append(("⚠️ " + name + " — " + str(i.get("what") or "a problem"), str(i.get("by") or "")))
+    except Exception as e:      # noqa: BLE001
+        print("digest: the day's equipment not read:", e)
+    return out
+
+
 def _office(jobs):
     """Estimate work waiting on Jonah: drafts Claude built that he hasn't
     checked and sent, estimates a customer accepted that aren't booked yet,
@@ -837,6 +928,26 @@ def build(slot, user, people, wx, cache):
             sections.append(("Your hours today" if slot == "evening" else "Your hours yesterday",
                              [{"text": "%s — %s" % (s["where"], _fmt_dur(s["mins"])) +
                                (" (still clocked in)" if s["running"] else "")} for s in mine_s]))
+
+    # ---- the day on the boards, calendars and machines (the owner's end of
+    # the day; _day_record)
+    rec = cache.get("record")
+    if owner and slot == "evening" and rec:
+        def by(who):
+            w = str(who or "").strip()
+            return "" if not w or w.lower() == "job hub (email)" else " · " + w
+
+        def capped(lines):
+            return lines[:RECORD_MAX] + ([{"text": "…and %d more" % (len(lines) - RECORD_MAX)}] if len(lines) > RECORD_MAX else [])
+        done = [{"text": "📌 %s — %s%s" % (t, w, by(b))} for t, w, b in rec["cardsDone"]] + \
+            [{"text": "📅 %s — %s%s" % (t, w, by(b))} for t, w, b in rec["eventsDone"]]
+        sections.append(("Done today", capped(done) or [{"text": "Nothing marked done today."}]))
+        added = [{"text": "📌 Card: %s — %s%s" % (t, w, by(b))} for t, w, b in rec["cardsAdded"]] + \
+            [{"text": "📅 Calendar: %s — %s%s" % (t, w, by(b))} for t, w, b in rec["eventsAdded"]] + \
+            [{"text": "%s%s" % (t, by(b))} for t, b in rec["machines"]]
+        sections.append(("Added today", capped(added) or [{"text": "Nothing new put in today."}]))
+        if done:
+            push_bits.append("%d done today" % len(done))
 
     # ---- bids (the owner, and an admin given Jobs)
     if sees("jobs") and (slot in ("morning", "evening") or (slot == "midday" and cache["bids"])):
@@ -1160,10 +1271,14 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
 
 # autoRemind: everything on the calendar and every card of theirs buzzes the
 # phone without a reminder set on each (reminders.py _usual; Jonah, 12 Oct
-# 2026) -- everyone's on until they switch it off. notify.js too.
+# 2026) -- everyone's on until they switch it off. crewActivity: the owner's
+# phone told what anybody else added or changed (reminders.py _activity).
+# notify.js too.
 DEFAULT_PREFS = {
-    "owner": {"email": True, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True},
-    "crew": {"email": False, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True},
+    "owner": {"email": True, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True,
+              "crewActivity": True},
+    "crew": {"email": False, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True,
+             "crewActivity": False},
 }
 
 
@@ -1214,6 +1329,8 @@ def _cache(slot="morning"):
         "shifts": _shifts(),
         "receipts": _receipts_to_sort(),
     }
+    if slot == "evening":
+        cache["record"] = _day_record(today, _people())
     # The day the weather tables are for: tomorrow in the evening summary,
     # today otherwise. Every town and every job site in one forecast call.
     day = today + datetime.timedelta(days=1) if slot == "evening" else today

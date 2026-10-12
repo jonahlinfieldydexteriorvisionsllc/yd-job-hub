@@ -123,9 +123,14 @@
   // "change" adds and edits events on them. Making, sharing and deleting
   // calendars stays the owner's.
   const seesAllCals = () => ydCan('calendars', 'see');
-  const editsCal = cal => !!cal && (isOwner() || (ydCan('calendars', 'change') && cal.ownerOnly === false));
+  // ...and anyone the owner ticked under "Who can add & change" on that one
+  // calendar (`editors`; Jonah, 12 Oct 2026: "select specific calendars and
+  // boards that the guys can change not just set it so they can change every
+  // single one they have access to").
+  const editsCal = cal => !!cal && (isOwner() || (ydCan('calendars', 'change') && cal.ownerOnly === false) ||
+    (!!me() && (cal.editors || []).indexOf(me().uid) !== -1));
   const editableCals = () => storedCals().filter(editsCal);
-  const adds = () => isOwner() || ydCan('calendars', 'change');
+  const adds = () => isOwner() || ydCan('calendars', 'change') || editableCals().length > 0;
   const two = n => String(n).padStart(2, '0');
   const nowIso = () => new Date().toISOString();
   const newId = p => p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -1683,7 +1688,8 @@
           '<span class="cal-dot"></span>' +
           '<div class="cal-manage-name"><b>' + esc(c.name) + '</b><span class="muted">' +
             (c.kind === 'personal' ? 'Only you'
-              : (c.visibleTo || []).length ? 'Shared with ' + c.visibleTo.map(u => esc(firstName(personName(u)))).join(', ')
+              : (c.visibleTo || []).length ? 'Shared with ' + c.visibleTo.map(u => esc(firstName(personName(u)))).join(', ') +
+                ((c.editors || []).length ? ' · ' + c.editors.map(u => esc(firstName(personName(u)))).join(', ') + ' can change it' : '')
               : 'Only you so far') + '</span></div>' +
           '<button class="btn btn-sm" onclick="calEditCal(\'' + c.id + '\')">Edit</button>' +
         '</div>').join('') + '</div>' +
@@ -1700,6 +1706,7 @@
     const c = id ? cals[id] : {};
     const crew = crewPeople().filter(p => p.role !== 'owner');
     const shared = new Set(c.visibleTo || []);
+    const editors = new Set(c.editors || []);
     const color = c.color || PALETTE[(Object.keys(cals).length + 3) % PALETTE.length];
     openModal(id ? 'Edit ' + esc(c.name) : 'New calendar',
       '<div class="field"><span class="label">Name</span>' +
@@ -1711,10 +1718,17 @@
         '<div class="field"><span class="label">Who can see it</span>' +
           (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="ccShare" value="' +
               p.uid + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
-            '<div class="hint">Anyone ticked sees every event on this calendar, including the address. ' +
-            'They cannot add or change anything.</div>'
+            '<div class="hint">Anyone ticked sees every event on this calendar, including the address, and can tick ' +
+            'a day’s entry off as done.' + (c.kind === 'crew' ? ' Everyone ticked as a crew member on Your Crew sees ' +
+            'this one by itself.' : '') + '</div>'
             : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
         '</div>' +
+        (crew.length ? '<div class="field"><span class="label">Who can add &amp; change</span>' +
+          '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="ccEdit" value="' +
+              p.uid + '"' + (editors.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
+          '<div class="hint">Anyone ticked here adds, changes and deletes entries on this calendar only (and sees it). ' +
+            'An admin whose Calendars access is “change” can change every calendar not marked private — for ' +
+            'hand-picking, set theirs to “see” on Your Crew and tick them here.</div></div>' : '') +
         '<label class="chk"><input type="checkbox" id="ccPrivate"' + (c.ownerOnly ? ' checked' : '') +
           '> Private — admins with Calendars access do not see it (anyone ticked above still does)</label>') +
       '<div class="field-actions">' +
@@ -1735,16 +1749,22 @@
       name: name,
       color: colorInput ? colorInput.value : PALETTE[0],
       kind: was ? was.kind : 'custom',
-      // Personal is never shared, whatever was ticked.
-      visibleTo: was && was.kind === 'personal' ? []
-        : Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value),
+      // Personal is never shared, whatever was ticked. Whoever may change it
+      // sees it too.
+      editors: was && was.kind === 'personal' ? []
+        : Array.from(document.querySelectorAll('.ccEdit:checked')).map(i => i.value),
       // Always written, true or false: an admin's calendars are fetched by
       // asking for ownerOnly == false, and a calendar without the field at
       // all would be missing from their screen.
       ownerOnly: was && was.kind === 'personal' ? true : !!(el('ccPrivate') && el('ccPrivate').checked),
+      visibleTo: [],
       order: was && was.order != null ? was.order : Object.keys(cals).length + 1,
       updatedAt: nowIso(),
     };
+    if (!(was && was.kind === 'personal')) {
+      rec.visibleTo = Array.from(new Set(Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value)
+        .concat(rec.editors)));
+    }
     cals[cid] = Object.assign({ id: cid }, was || {}, rec);
     write('calendars', cid, rec, 'saving ' + name);
     if (!eventUnsubs[cid]) watchEvents(cid);
@@ -1801,6 +1821,10 @@
   // Firestore sends the write when there is signal.
   function write(path, id, data, what) {
     if (!window.YDDb) { showToast('Not saved — still connecting'); return; }
+    // Every change to an entry carries who made it and when: the owner's
+    // phone is told what the crew added or changed (functions/reminders.py
+    // _activity), and the day's summary lists what was added.
+    if (/\/events$/.test(path) && data && me()) data = Object.assign({}, data, { updatedAt: nowIso(), updatedBy: me().uid });
     Promise.resolve(window.YDDb.put(path, id, data)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
       else console.warn('[calendar] ' + what + ' not yet on the server:', (e && e.code) || e);
@@ -1870,7 +1894,7 @@
   function shareCrewCal() {
     const c = cals[CREW_CAL];
     if (!isOwner() || !peopleLoaded || !c) return;
-    const want = crewMemberUids();
+    const want = Array.from(new Set(crewMemberUids().concat(c.editors || []))).sort();
     if (same(want, (c.visibleTo || []).slice().sort())) return;
     c.visibleTo = want;
     write('calendars', CREW_CAL, { visibleTo: want, updatedAt: nowIso() }, 'sharing Crew tasks');
