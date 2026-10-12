@@ -32,6 +32,9 @@
   // of Madison is the fallback so a storm can always be started.
   const FALLBACK_START = { lat: 43.0731, lng: -89.4012, label: 'Madison (yard not set)' };
   let startPoint = FALLBACK_START;
+  // The order set by hand on the Snow tab's route bar (snowroute.js), kept in
+  // settings/snow.routeOrder: a list of account ids. Empty: worked out.
+  let routeOrder = [];
 
   async function loadStartPoint() {
     try {
@@ -39,6 +42,8 @@
       if (s && s.startLat != null) {
         startPoint = { lat: s.startLat, lng: s.startLng, label: s.startAddress || 'yard' };
       }
+      routeOrder = s && Array.isArray(s.routeOrder) ? s.routeOrder.filter(x => typeof x === 'string') : [];
+      document.dispatchEvent(new CustomEvent('yd-route-order'));
     } catch (e) { /* keep the fallback */ }
     const el = document.getElementById('snowStartPoint');
     if (el) el.textContent = 'Route starts from ' + startPoint.label;
@@ -64,13 +69,28 @@
   // alphabetical, and it beats whatever order a tired person picks at 3am.
   // Accounts with a morning deadline go first regardless of distance, because
   // missing those costs a customer.
-  function buildRoute(accounts, accumulation, start) {
+  //
+  // An order set by hand (`order`, the route bar's) is followed as it is:
+  // what is in it goes first, in its order, and anything added since goes
+  // after, nearest first.
+  function buildRoute(accounts, accumulation, start, order) {
     const eligible = Object.keys(accounts).filter(id => {
       const a = accounts[id];
       if (a.active === false) return false;
       if (onHold(a)) return false;
       return (a.minTriggerInches || 1) <= accumulation;
     });
+    if (Array.isArray(order) && order.length) {
+      const set = order.filter(id => eligible.indexOf(id) !== -1);
+      const rest = buildRoute(Object.assign({}, ...eligible.filter(id => set.indexOf(id) === -1).map(id => ({ [id]: accounts[id] }))),
+        accumulation, set.length ? accounts[set[set.length - 1]] : start);
+      let here = start;
+      return set.map(id => {
+        const d = milesBetween(here, accounts[id]);
+        if (accounts[id].lat != null) here = accounts[id];
+        return { accountId: id, driveMiles: isFinite(d) ? Math.round(d * 10) / 10 : null };
+      }).concat(rest);
+    }
 
     const deadline = eligible.filter(id => accounts[id].serviceWindow === 'morning');
     const rest = eligible.filter(id => accounts[id].serviceWindow !== 'morning');
@@ -241,8 +261,20 @@
     // The field accepts typing, which means it accepts nonsense. Negative snow
     // does not exist, and a mistyped 1e9 would bill a fortune -- clamp rather
     // than trust, since these numbers go straight onto an invoice.
-    const cap = kind === 'inches' ? 60 : 200;
+    const cap = kind === 'inches' ? 60 : kind === 'lbs' ? SALT_LBS_MAX : 200;
     return Math.max(0, Math.min(cap, n));
+  }
+
+  // Salt in pounds at every stop (Jonah, 12 Oct 2026: "for each property i
+  // want whoevers filling out the storm to have to enter the quantity of salt
+  // used in pounds"): a box that starts empty, so Depart waits until a number
+  // -- 0 for none -- has been put in. Storms before this counted bags
+  // (saltBags), which still read as bags wherever they show.
+  const SALT_LBS_MAX = 20000;
+  const SALT_STEP = 50;                 // a bag
+  function saltWords(x) {
+    const lbs = num(x.saltLbs, null), bags = num(x.saltBags, null);
+    return lbs != null ? lbs + ' lb salt' : bags != null ? bags + ' bag' + (bags === 1 ? '' : 's') : '';
   }
 
   function renderStop(s) {
@@ -263,14 +295,14 @@
       actions =
         stepper(safeId(s.id), 'inches', 'Inches cleared',
                 num(s.inchesCleared, storm.accumulationInches), 0.5) +
-        (a.saltApplies ? stepper(safeId(s.id), 'salt', 'Salt bags', num(s.saltBags, 0), 1) : '') +
+        stepper(safeId(s.id), 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
         '<button class="btn-stop depart" onclick="departStop(\'' + safeId(s.id) + '\')">Depart</button>';
     } else if (fixing === s.id) {
       // Departed with the wrong number in a box: put right while the storm
       // is still open (once it is closed, the bill is the office's).
       actions =
         stepper(safeId(s.id), 'inches', 'Inches cleared', num(s.inchesCleared, storm.accumulationInches), 0.5) +
-        (a.saltApplies ? stepper(safeId(s.id), 'salt', 'Salt bags', num(s.saltBags, 0), 1) : '') +
+        stepper(safeId(s.id), 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
         '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + safeId(s.id) + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="cancelFix()">Cancel</button>';
     } else {
@@ -304,7 +336,7 @@
         (s.departedAt ? ' · out ' + clockTime(s.departedAt) + ' · <strong>' + mins + ' min</strong>' +
           // What went on the record, so a wrong one can be seen and fixed.
           (num(s.inchesCleared, null) != null ? ' · ' + num(s.inchesCleared, 0) + '"' : '') +
-          (a.saltApplies && num(s.saltBags, null) != null ? ' · ' + num(s.saltBags, 0) + ' bag' + (num(s.saltBags, 0) === 1 ? '' : 's') : '') +
+          (saltWords(s) ? ' · ' + saltWords(s) : '') +
           (s.fixedAt ? ' · fixed' : '') : '') +
         '</div>' : '') +
       (s.skipped ? '<div class="stop-times">skipped — ' + esc(s.skipReason || 'no reason given') + '</div>' : '') +
@@ -350,12 +382,16 @@
   };
 
   window.departStop = function (id) {
-    const s = stops[id];
-    const a = accountFor(s);
+    const box = document.getElementById('st-lbs-' + id);
+    if (!box || box.value.trim() === '' || isNaN(parseFloat(box.value))) {
+      showToast('Put in the salt used, in pounds — 0 if none');
+      if (box) box.focus();
+      return;
+    }
     const inches = readStepper(id, 'inches', storm.accumulationInches);
-    const salt = a.saltApplies ? readStepper(id, 'salt', 0) : null;
-    delete drafts['st-inches-' + id]; delete drafts['st-salt-' + id];
-    writeStop(id, { departedAt: new Date().toISOString(), inchesCleared: inches, saltBags: salt });
+    const lbs = readStepper(id, 'lbs', 0);
+    delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
+    writeStop(id, { departedAt: new Date().toISOString(), inchesCleared: inches, saltLbs: lbs });
     locate(id, 'depart');
   };
 
@@ -363,20 +399,25 @@
   // the crew write numbers to a stop until the storm is closed.
   window.fixStop = function (id) { fixing = id; render(); };
   window.cancelFix = function () {
-    if (fixing) { delete drafts['st-inches-' + fixing]; delete drafts['st-salt-' + fixing]; }
+    if (fixing) { delete drafts['st-inches-' + fixing]; delete drafts['st-lbs-' + fixing]; }
     fixing = null; render();
   };
   window.saveFix = function (id) {
     const s = stops[id];
     if (!s || !storm) { fixing = null; render(); return; }
-    const a = accountFor(s);
+    const box = document.getElementById('st-lbs-' + id);
+    if (!box || box.value.trim() === '' || isNaN(parseFloat(box.value))) {
+      showToast('Put in the salt used, in pounds — 0 if none');
+      if (box) box.focus();
+      return;
+    }
     const inches = readStepper(id, 'inches', num(s.inchesCleared, storm.accumulationInches));
-    const salt = a.saltApplies ? readStepper(id, 'salt', num(s.saltBags, 0)) : num(s.saltBags, null);
-    delete drafts['st-inches-' + id]; delete drafts['st-salt-' + id];
+    const lbs = readStepper(id, 'lbs', num(s.saltLbs, 0));
+    delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
     fixing = null;
     const me = (window.YDAuth && window.YDAuth.user) || {};
-    writeStop(id, { inchesCleared: inches, saltBags: salt, fixedAt: new Date().toISOString(), fixedBy: me.uid || '' });
-    showToast('Fixed — ' + inches + '"' + (a.saltApplies ? ', ' + salt + ' bags' : ''));
+    writeStop(id, { inchesCleared: inches, saltLbs: lbs, fixedAt: new Date().toISOString(), fixedBy: me.uid || '' });
+    showToast('Fixed — ' + inches + '", ' + lbs + ' lb salt');
   };
 
   window.skipStop = function (id) {
@@ -435,7 +476,7 @@
       const next = seen[s.accountId] + 1;
       writes.push(['storms/' + storm.id + '/stops', s.accountId + '-p' + next, {
         accountId: s.accountId, order: order++, pass: next, driveMiles: num(s.driveMiles, null),
-        arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, skipped: false,
+        arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, saltLbs: null, skipped: false,
       }]);
     });
     writeSoon(window.YDDb.putMany(writes), 'extra round');
@@ -463,7 +504,7 @@
       pass: pass,
       driveMiles: null,
       arrivedAt: null, departedAt: null,
-      inchesCleared: null, saltBags: null,
+      inchesCleared: null, saltBags: null, saltLbs: null,
       skipped: false,
     };
     stops[newId] = Object.assign({ id: newId }, rec);
@@ -584,7 +625,7 @@
     const accounts = window.YDSnow ? YDSnow.accounts() : {};
 
     const start = startPoint;
-    const route = buildRoute(accounts, inches, start);
+    const route = buildRoute(accounts, inches, start, routeOrder);
     if (!route.length) {
       showToast('No accounts trigger at ' + inches + '" — nothing to do tonight');
       return;
@@ -624,7 +665,7 @@
     route.forEach((r, i) => {
       writes.push(['storms/' + id + '/stops', r.accountId, {
         accountId: r.accountId, order: i, pass: 1, driveMiles: r.driveMiles,
-        arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null,
+        arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, saltLbs: null,
         skipped: false,
       }]);
     });
@@ -701,7 +742,7 @@
         manHours: p.manHours,
         laborRateCents: ((YDSnow.pricing()[s.accountId] || {}).laborRateCents) != null
           ? YDSnow.pricing()[s.accountId].laborRateCents : null,
-        saltBags: num(s.saltBags, null), plowCents: p.plowCents, saltCents: p.saltCents,
+        saltBags: num(s.saltBags, null), saltLbs: num(s.saltLbs, null), plowCents: p.plowCents, saltCents: p.saltCents,
         laborCents: p.laborCents, totalCents: p.totalCents,
       });
     });
@@ -866,7 +907,7 @@
   }
   function lastRow(s, x) {
     const a = accountFor(x);
-    const inches = num(x.inchesCleared, null), salt = num(x.saltBags, null);
+    const inches = num(x.inchesCleared, null), lbs = num(x.saltLbs, null);
     const r = latestRequest(s.id, x.id);
     const asked = !!askedHere[s.id + '/' + x.id];
     const status = r && r.status === 'pending' || (!r && asked) ? '<span class="muted">change asked</span>'
@@ -875,13 +916,13 @@
     const canAsk = !(r && r.status === 'pending') && !(!r && asked);
     return '<div class="ls-row">' +
       '<div class="ls-main"><b>' + esc(a.name || x.accountId) + '</b>' + (num(x.pass, 1) > 1 ? ' <span class="muted">pass ' + num(x.pass, 1) + '</span>' : '') +
-        '<div class="muted">' + (inches != null ? inches + '"' : 'no depth') + (a.saltApplies ? ' · ' + (salt != null ? salt : 0) + ' bags' : '') +
+        '<div class="muted">' + (inches != null ? inches + '"' : 'no depth') + (saltWords(x) ? ' · ' + saltWords(x) : '') +
         (status ? ' · ' + status : '') + '</div></div>' +
       (askingStop === x.id
         ? '<div class="ls-ask">' +
             '<div class="grid g2">' +
               '<div class="field"><span class="label">Inches it should be</span><input id="lsIn" inputmode="decimal" value="' + (inches != null ? inches : '') + '"></div>' +
-              (a.saltApplies ? '<div class="field"><span class="label">Salt bags it should be</span><input id="lsSalt" inputmode="decimal" value="' + (salt != null ? salt : '') + '"></div>' : '') +
+              '<div class="field"><span class="label">Salt (lbs) it should be</span><input id="lsSalt" inputmode="decimal" value="' + (lbs != null ? lbs : '') + '"></div>' +
             '</div>' +
             '<div class="field"><span class="label">Why</span><input id="lsWhy" placeholder="e.g. typed 3, it was 5 by the garage"></div>' +
             '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="sendStopAsk(\'' + safeId(x.id) + '\')">Send to the office</button>' +
@@ -902,18 +943,18 @@
       return isNaN(n) ? NaN : Math.max(0, Math.min(cap, Math.round(n * 10) / 10));
     };
     const inches = read('lsIn', 60);
-    const salt = a.saltApplies ? read('lsSalt', 200) : num(x.saltBags, null);
+    const lbs = read('lsSalt', SALT_LBS_MAX);
     const why = ((document.getElementById('lsWhy') || {}).value || '').trim();
-    if (inches == null || Number.isNaN(inches) || Number.isNaN(salt)) { showToast('Put in the numbers it should be'); return; }
+    if (inches == null || Number.isNaN(inches) || lbs == null || Number.isNaN(lbs)) { showToast('Put in the numbers it should be'); return; }
     if (!why) { showToast('Say why, so the office knows'); return; }
-    if (inches === num(x.inchesCleared, null) && salt === num(x.saltBags, null)) { showToast('Those are the numbers it has now'); return; }
+    if (inches === num(x.inchesCleared, null) && lbs === num(x.saltLbs, null)) { showToast('Those are the numbers it has now'); return; }
     const rid = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const rec = {
       type: 'stopFigures', stormId: s.id, targetId: x.id, targetPath: 'storms/' + s.id + '/stops/' + x.id,
       accountId: x.accountId || '', accountName: a.name || '',
       requestedBy: u.uid, requestedByName: u.displayName || u.email || '', reason: why.slice(0, 300), status: 'pending',
-      before: { inchesCleared: num(x.inchesCleared, null), saltBags: num(x.saltBags, null) },
-      after: { inchesCleared: inches, saltBags: salt == null ? null : salt },
+      before: { inchesCleared: num(x.inchesCleared, null), saltLbs: num(x.saltLbs, null) },
+      after: { inchesCleared: inches, saltLbs: lbs },
       createdAt: new Date().toISOString(),
     };
     askedHere[s.id + '/' + x.id] = true;
@@ -929,7 +970,16 @@
   document.addEventListener('yd-requests', () => renderLast());
 
   window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render,
-                     startPoint: () => startPoint };
+                     startPoint: () => startPoint, routeOrder: () => routeOrder.slice(),
+                     // The route bar's order, set by hand (null: worked out again).
+                     setRouteOrder: ids => {
+                       if (!ydCan('snow', 'change')) { showToast('Changing the route needs Snow access'); return false; }
+                       routeOrder = Array.isArray(ids) ? ids.slice() : [];
+                       Promise.resolve(window.YDDb.put('settings', 'snow', { routeOrder: routeOrder }))
+                         .catch(e => console.warn('[storm] route order not yet on the server:', e && (e.code || e.message)));
+                       document.dispatchEvent(new CustomEvent('yd-route-order'));
+                       return true;
+                     } };
 
   // Signing out does not reload the page, so the watches and the data are
   // dropped here; otherwise the next person on the same phone would never get

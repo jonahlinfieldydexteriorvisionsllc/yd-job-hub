@@ -221,6 +221,8 @@
           (a.walkSqFt ? ' · ' + a.walkSqFt + ' sq ft walks' : '') + '</div>' : '') +
       '</div>';
     }).join('');
+    // The route bar above follows the accounts (snowroute.js).
+    if (window.YDSnowRoute) YDSnowRoute.refresh();
   }
 
   // ---------------------------------------------------------------- loading

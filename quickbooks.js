@@ -322,7 +322,10 @@
                        itemId: map.items.plow || '' });
         }
         if (l.saltCents) {
-          lines.push({ description: 'Salt application' + (l.saltBags ? ' — ' + l.saltBags + ' bags' : ''),
+          // Pounds, or bags on a storm from before salt was weighed.
+          const saltNote = l.saltLbs != null && l.saltLbs > 0 ? ' — ' + Number(l.saltLbs).toLocaleString('en-US') + ' lb'
+            : l.saltBags ? ' — ' + l.saltBags + ' bags' : '';
+          lines.push({ description: 'Salt application' + saltNote,
                        qty: 1, rate: l.saltCents / 100, amount: l.saltCents / 100,
                        itemId: map.items.salt || '' });
         }

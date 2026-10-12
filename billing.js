@@ -26,6 +26,10 @@
   // adding text to a total turns the total into text -- which this screen
   // then drew as HTML.
   const count = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+  // How much salt a visit's line says went down -- pounds, or (storms before
+  // 12 Oct 2026) bags.
+  const saltNote = l => (l.saltLbs != null && count(l.saltLbs) > 0) ? ' — ' + count(l.saltLbs).toLocaleString('en-US') + ' lb'
+    : l.saltBags ? ' — ' + l.saltBags + ' bags' : '';
 
   // ------------------------------------------------------- dates and seasons
   //
@@ -362,12 +366,14 @@
   // figures it says the stop has now. The request is the crew's own writing,
   // so it is checked against the stop itself -- a visit fixed by the office
   // since, or a request pointing at a different customer's stop, is refused.
-  async function fixVisit(id, stopId, inches, saltBags, by, expect) {
+  // saltLbs: the salt used, in pounds (a number), or undefined to leave it as
+  // it is. Salt is a figure on the record, never what a visit is charged by.
+  async function fixVisit(id, stopId, inches, saltLbs, by, expect) {
     if (!ydCan('billing', 'change')) throw new Error('Changing a bill needs Billing access');
     const s = storms[id];
     if (!s) throw new Error('That storm is not closed');
     if (!(typeof inches === 'number' && isFinite(inches) && inches >= 0 && inches <= 60)) throw new Error('That depth is not a number the bill can use');
-    if (saltBags != null && !(typeof saltBags === 'number' && isFinite(saltBags) && saltBags >= 0 && saltBags <= 200)) {
+    if (saltLbs != null && !(typeof saltLbs === 'number' && isFinite(saltLbs) && saltLbs >= 0 && saltLbs <= 20000)) {
       throw new Error('That salt figure is not a number the bill can use');
     }
     const needSignal = () => new Error('This needs a signal — try again when there is one');
@@ -382,7 +388,7 @@
     // same storm cannot each put back the other's lines (YDDb.transact). It
     // may be run again on fresh data, so it only works things out.
     let result = null;
-    const salt = saltBags == null ? null : saltBags;
+    const keepSalt = saltLbs === undefined;
     try {
       await window.YDDb.transact([['storms/' + id + '/private', 'billing'], ['storms/' + id + '/stops', stopId]], ([b, stop]) => {
         result = null;
@@ -394,7 +400,9 @@
           if (expect.accountId && expect.accountId !== stop.accountId) {
             throw new Error('That request names a different customer than its stop — reject it');
           }
-          if (fig(stop.inchesCleared) !== fig(bf.inchesCleared) || fig(stop.saltBags) !== fig(bf.saltBags)) {
+          // A request from before salt was in pounds names bags.
+          const saltMoved = 'saltLbs' in bf ? fig(stop.saltLbs) !== fig(bf.saltLbs) : fig(stop.saltBags) !== fig(bf.saltBags);
+          if (fig(stop.inchesCleared) !== fig(bf.inchesCleared) || saltMoved) {
             throw new Error('That visit has been changed since they asked — reject it, and they can ask again');
           }
         }
@@ -403,13 +411,15 @@
         const i = lines.findIndex(l => l.accountId === accountId && (count(l.pass) || 1) === pass);
         const old = i === -1 ? null : lines[i];
         const at = new Date().toISOString();
-        const was = old ? { inches: old.inches, saltBags: old.saltBags == null ? null : old.saltBags, totalCents: count(old.totalCents) } : null;
+        const was = old ? { inches: old.inches, saltBags: old.saltBags == null ? null : old.saltBags,
+                            saltLbs: old.saltLbs == null ? null : old.saltLbs, totalCents: count(old.totalCents) } : null;
+        const salt = keepSalt ? (stop.saltLbs == null ? null : stop.saltLbs) : saltLbs;
         let line;
         if (old && count(old.inches) === inches) {
-          // Only the salt bags changed. A visit is not charged by them, so the
+          // Only the salt changed. A visit is not charged by it, so the
           // money stays as it was billed -- re-pricing would also move the
           // plowing to whatever the customer's price is today.
-          line = Object.assign({}, old, { saltBags: salt, fixedAt: at, fixedBy: by || '', was: was });
+          line = Object.assign({}, old, { saltLbs: salt, fixedAt: at, fixedBy: by || '', was: was });
         } else {
           // The time on site is the bill's own (pauses already taken off). A
           // visit that was left off the bill gets it worked out the way
@@ -428,7 +438,7 @@
           // beside the labour line is today's too.
           const rate = (YDSnow.pricing()[accountId] || {}).laborRateCents;
           line = Object.assign({}, old || extra, {
-            inches: inches, saltBags: salt, laborRateCents: rate != null ? rate : null,
+            inches: inches, saltLbs: salt, laborRateCents: rate != null ? rate : null,
             manHours: p.manHours, plowCents: p.plowCents, saltCents: p.saltCents, laborCents: p.laborCents, totalCents: p.totalCents,
             fixedAt: at, fixedBy: by || '', was: was,
           });
@@ -450,13 +460,13 @@
           crewHours: Math.round(crewHours * 100) / 100,
           revenuePerCrewHourCents: crewHours > 0 ? Math.round(totalCents / crewHours) : 0,
           fixes: (Array.isArray(b.fixes) ? b.fixes : []).concat([{ at: at, by: by || '', stopId: stopId, accountId: accountId,
-            inches: inches, saltBags: salt, totalCents: count(line.totalCents), was: was }]),
+            inches: inches, saltLbs: salt, totalCents: count(line.totalCents), was: was }]),
         }));
         const sent = (b.quickbooks || {})[accountId];
         result = { bill: Object.assign({}, b, patch), name: accountName(accountId), totalCents: count(line.totalCents),
                    wasCents: was ? was.totalCents : 0, inQuickBooks: sent ? (sent.number || sent.id || 'yes') : null,
                    numbered: (b.invoiceNos || {})[accountId] || null };
-        return [patch, { inchesCleared: inches, saltBags: salt, fixedAt: at, fixedBy: by || '' }];
+        return [patch, { inchesCleared: inches, saltLbs: salt, fixedAt: at, fixedBy: by || '' }];
       });
     } catch (e) {
       if (e && e.message && !e.code) throw e;          // our own refusal, said as it is
@@ -488,7 +498,8 @@
       '<div class="add-label">Fix ' + esc(accountName(accountId)) + (pass > 1 ? ' (pass ' + pass + ')' : '') + '</div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Inches</span><input id="fvIn" inputmode="decimal" value="' + count(l.inches) + '"></div>' +
-        (a.saltApplies ? '<div class="field"><span class="label">Salt bags</span><input id="fvSalt" inputmode="decimal" value="' + count(l.saltBags) + '"></div>' : '') +
+        '<div class="field"><span class="label">Salt used (lbs)</span><input id="fvSalt" inputmode="decimal" value="' +
+          (l.saltLbs != null ? count(l.saltLbs) : '') + '" placeholder="' + (l.saltBags != null ? count(l.saltBags) + ' bags before' : '') + '"></div>' +
       '</div>' +
       '<div class="hint">The charge is worked out again from ' + esc(accountName(accountId)) + '’s pricing as it is today.</div>' +
       '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="saveVisitFix(\'' + sid(id) + '\', \'' + sid(accountId) + '\', ' + pass + ')">Save</button>' +
@@ -498,12 +509,13 @@
   window.saveVisitFix = async function (id, accountId, pass) {
     const inches = parseFloat((document.getElementById('fvIn') || {}).value);
     const saltEl = document.getElementById('fvSalt');
-    const salt = saltEl ? parseFloat(saltEl.value) : null;
-    if (isNaN(inches) || (saltEl && isNaN(salt))) { showToast('Put in numbers'); return; }
+    // Left empty: the salt stays as it is.
+    const salt = saltEl && saltEl.value.trim() !== '' ? parseFloat(saltEl.value) : undefined;
+    if (isNaN(inches) || (salt !== undefined && isNaN(salt))) { showToast('Put in numbers'); return; }
     try {
       const me = (window.YDAuth && window.YDAuth.user) || {};
       const r = await fixVisit(id, stopIdOf(accountId, pass), Math.round(inches * 10) / 10,
-                               salt == null ? null : Math.round(salt * 10) / 10, me.uid || '');
+                               salt === undefined ? undefined : Math.round(salt), me.uid || '');
       await stormDetail(id);
       // Kept on screen, not only in a passing message: an invoice already in
       // QuickBooks has to be changed there by hand.
@@ -600,7 +612,7 @@
                    1, (l.plowCents / 100).toFixed(2), (l.plowCents / 100).toFixed(2)].join(','));
         if (l.saltCents) {
           rows.push([invoiceNo, q(name), date, due, q('Salt'),
-                     q('Salt application' + (l.saltBags ? ' — ' + l.saltBags + ' bags' : '')),
+                     q('Salt application' + saltNote(l)),
                      1, (l.saltCents / 100).toFixed(2), (l.saltCents / 100).toFixed(2)].join(','));
         }
         if (l.laborCents) {
@@ -696,7 +708,7 @@
       b.lines.forEach(l => {
         const a = acc[l.accountId] = acc[l.accountId] || {
           visits: 0, minutes: 0, crewMinutes: 0, plow: 0, salt: 0, labor: 0, total: 0,
-          bags: 0, storms: {},
+          bags: 0, lbs: 0, storms: {},
         };
         a.visits++;
         a.minutes += l.minutes;
@@ -704,12 +716,13 @@
         a.plow += l.plowCents; a.salt += l.saltCents;
         a.labor += l.laborCents; a.total += l.totalCents;
         a.bags += count(l.saltBags);
+        a.lbs += count(l.saltLbs);
         a.storms[id] = true;
       });
       (b.skipped || []).forEach(s => {
         const a = acc[s.accountId] = acc[s.accountId] || {
           visits: 0, minutes: 0, crewMinutes: 0, plow: 0, salt: 0, labor: 0, total: 0,
-          bags: 0, storms: {}, skips: 0,
+          bags: 0, lbs: 0, storms: {}, skips: 0,
         };
         a.skips = (a.skips || 0) + 1;
       });
@@ -779,7 +792,8 @@
         '<td>' + Math.round(a.minutes) + ' min</td>' +
         '<td>' + (a.crewMinutes / 60).toFixed(1) + '</td>' +
         '<td>' + money(a.plow) + '</td>' +
-        '<td>' + (a.salt ? money(a.salt) + (a.bags ? ' <span class="muted">' + a.bags + ' bags</span>' : '') : '—') + '</td>' +
+        '<td>' + (a.salt || a.lbs ? (a.salt ? money(a.salt) : '') + (a.lbs ? ' <span class="muted">' + a.lbs.toLocaleString('en-US') + ' lb</span>' : '') +
+          (a.bags ? ' <span class="muted">' + a.bags + ' bags</span>' : '') : '—') + '</td>' +
         '<td>' + (a.labor ? money(a.labor) : '—') + '</td>' +
         '<td class="bold">' + money(a.total) + '</td>' +
         '<td class="bold" style="color:' + (weak ? 'var(--neg)' : 'var(--pos)') + '">' +

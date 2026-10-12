@@ -1584,7 +1584,11 @@
     const b = r.before || {}, a = r.after || {};
     const bits = [];
     if (figure(a.inchesCleared) !== figure(b.inchesCleared)) bits.push(esc(String(figure(b.inchesCleared) != null ? figure(b.inchesCleared) : '–')) + '" → <b>' + esc(String(figure(a.inchesCleared))) + '"</b>');
-    if (figure(a.saltBags) !== figure(b.saltBags)) bits.push(esc(String(figure(b.saltBags) != null ? figure(b.saltBags) : 0)) + ' → <b>' + esc(String(figure(a.saltBags))) + ' bags</b>');
+    if ('saltLbs' in a ? figure(a.saltLbs) !== figure(b.saltLbs) : figure(a.saltBags) !== figure(b.saltBags)) {
+      bits.push('saltLbs' in a
+        ? esc(String(figure(b.saltLbs) != null ? figure(b.saltLbs) : '–')) + ' → <b>' + esc(String(figure(a.saltLbs))) + ' lb salt</b>'
+        : esc(String(figure(b.saltBags) != null ? figure(b.saltBags) : 0)) + ' → <b>' + esc(String(figure(a.saltBags))) + ' bags</b>');
+    }
     const storm = window.YDBilling && YDBilling.storms()[r.stormId];
     const day = storm && storm.startedAt ? new Date(storm.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) : 'a storm';
     return '<div class="appr appr-req">' +
@@ -1661,7 +1665,8 @@
     deciding.add(r.id);
     // What the crew said the stop has now, and whose stop: checked against
     // the stop itself before anything changes (billing.js fixVisit).
-    YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), figure(a.saltBags), (me() || {}).uid || '',
+    // Pounds; a request from before salt was weighed leaves the salt alone.
+    YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), 'saltLbs' in a ? figure(a.saltLbs) : undefined, (me() || {}).uid || '',
                        { accountId: r.accountId || null, before: r.before || {} })
       .then(res => {
         r.status = 'approved';

@@ -217,7 +217,7 @@ service cloud.firestore {
         function stopFiguresAreNumbers() {
           return numberOrNull('order') && numberOrNull('pass')
             && numberOrNull('driveMiles') && numberOrNull('inchesCleared')
-            && numberOrNull('saltBags');
+            && numberOrNull('saltBags') && numberOrNull('saltLbs');
         }
 
         // Crew may record work on a storm that is still running. Once the owner
