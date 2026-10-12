@@ -613,6 +613,33 @@ def _receipts(request, path, headers):
     return (json.dumps({"report": report}), 200, json_headers)
 
 
+# ------------------------------------------------------- notes from the crew
+#
+# A crew member's phone, just after saving a note (crewnotes.js): "tell him
+# now". Anyone on the crew may ask; it only sends the notes not yet told,
+# which the five-minute reminders run would send anyway.
+
+
+def _notes(request, path, headers):
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/notes/ping":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        _member(request)
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    import reminders
+    try:
+        return (json.dumps({"sent": len(reminders.crew_notes(_db))}), 200, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("notes ping failed:", e)
+        return (json.dumps({"error": "not sent yet — it goes within five minutes"}), 502, json_headers)
+
+
 # ---------------------------------------------------------- subcontractors
 #
 # "Check their email now" on the Subcontractors section: the owner's alone,
@@ -877,6 +904,8 @@ def claude(request):
         return _receipts(request, path, headers)
     if path.startswith("/subs"):
         return _subs(request, path, headers)
+    if path.startswith("/notes"):
+        return _notes(request, path, headers)
     if path.startswith("/followup") or path.startswith("/care"):
         return _followup(request, path, headers)
     if path.startswith("/estimate"):

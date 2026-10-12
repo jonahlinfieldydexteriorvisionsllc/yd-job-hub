@@ -544,6 +544,23 @@ service cloud.firestore {
       allow delete: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
     }
 
+    // Notes from the crew to the owner (crewnotes.js; Jonah, 12 Oct 2026:
+    // "leave note for jonah ... i get a notification"). Each person writes
+    // and reads their own; the owner reads them all and marks them read. The
+    // server stamps notifiedAt when it has told him (not bound by these
+    // rules).
+    match /crewNotes/{noteId} {
+      allow read: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid
+        && request.resource.data.text is string && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.readAt == null && request.resource.data.notifiedAt == null
+        && noteId.matches('cn[a-z0-9]+');
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+      allow delete: if isOwner();
+    }
+
     match /supplies/{docId} {
       allow read:  if isStaff();
       allow write: if canChange('supplies');

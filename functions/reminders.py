@@ -124,7 +124,43 @@ def run():
     sent.extend(_card_reminders(db, people, since, now))
     sent.extend(_usual(db, people, since, now))
     sent.extend(_activity(db, people, now))
+    sent.extend(crew_notes(db, people, now))
     return sent
+
+
+def crew_notes(db, people=None, now=None):
+    """Notes from the crew (crewnotes.js) the owner has not been told about:
+    a buzz each, once -- reminderLog note_<id> settles a race between the
+    phone's own "tell him now" (/notes/ping) and this five-minute run."""
+    people = people if people is not None else dg._people()
+    now = now or dg._now()
+    owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
+    out = []
+    try:
+        waiting = list(db.collection("crewNotes").where("notifiedAt", "==", None).stream())
+    except Exception as err:          # noqa: BLE001
+        print("reminders: crew notes not read:", err)
+        return out
+    for s in waiting:
+        n = s.to_dict() or {}
+        try:
+            db.collection("reminderLog").document("note_" + s.id).create({"at": now.isoformat()})
+        except AlreadyExists:
+            continue
+        who = (dg._name(people.get(n.get("uid"))) if people.get(n.get("uid")) else str(n.get("by") or "Someone")).split()[0]
+        head = "📝 %s%s" % (who, (" · " + str(n.get("jobName"))[:50]) if n.get("jobName") else "")
+        for uid in owners:
+            try:
+                out.append({"uid": uid, "note": s.id, "phones": dg.send_push(
+                    uid, {"push": {"title": head, "body": str(n.get("text") or "")[:180]}},
+                    tag="yd-note-" + s.id, ttl=24 * 3600, opens="notes")})
+            except Exception as err:      # noqa: BLE001
+                print("reminders: note push failed:", uid, err)
+        try:
+            s.reference.update({"notifiedAt": now.isoformat()})
+        except Exception as err:          # noqa: BLE001
+            print("reminders: note not stamped:", s.id, err)
+    return out
 
 
 def _sees_board(user, board):

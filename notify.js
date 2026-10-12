@@ -342,6 +342,7 @@
     if (on && location.hash && typeof switchTab === 'function') {
       const want = location.hash.slice(1);
       if (want === 'summary') window.openSummaries();
+      else if (want === 'notes' && window.openCrewNotes) window.openCrewNotes();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
         const btn = el(tabButtonId(want));
         if (btn && !btn.hidden) switchTab(want);

@@ -1248,6 +1248,13 @@
   html[data-night] .crew-flag.on { border-color:#7aa7ef; color:#7aa7ef; }
   @media (max-width:720px) { .md-time { width:74px; font-size:12px; } }
 
+  /* Notes from the crew (12 Oct 2026) */
+  .note-row { border-left:4px solid var(--accent); background:var(--surface-2); border-radius:6px; padding:9px 12px; margin-bottom:8px; }
+  .note-row.read { border-left-color:var(--border-strong); opacity:.7; }
+  .note-head { font-size:13px; }
+  .note-text { font-size:14px; margin-top:4px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .note-acts { display:flex; gap:14px; margin-top:6px; }
+
   /* Your services: the saved list (12 Oct 2026) */
   .svc-edit-link { font-size:11px; font-weight:600; text-transform:none; letter-spacing:0; margin-left:6px; }
   .svc-list { display:flex; flex-wrap:wrap; gap:6px; }

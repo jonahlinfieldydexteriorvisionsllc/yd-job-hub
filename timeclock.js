@@ -1865,6 +1865,8 @@
     // shows a crew member's storm-figure requests on the Snow tab).
     requests: () => requests,
     entries: () => entries,
+    // The jobs anyone can clock into (jobBoard): the crew's list of jobs.
+    board: () => board,
     people: () => people,
     render: render,
     // The work log uses these rather than its own arithmetic, so a shift is

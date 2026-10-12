@@ -421,9 +421,17 @@ function openMore() {
     });
   // Settings that are not screens of their own live here too, so they are
   // found where everything else is rather than up in the header.
+  const signedIn = !!(window.YDAuth && window.YDAuth.user && window.YDAuth.mode === 'cloud');
+  const notesN = window.YDCrewNotes ? YDCrewNotes.unread() : 0;
   const extras = ((window.YDAuth && window.YDAuth.isOwner)
     ? [{ label: '👥 People & names', hint: 'Rename people, let them in, make an admin',
-         call: 'closeMore(); openPeople()' }]
+         call: 'closeMore(); openPeople()' },
+       { label: '📝 Notes from the crew' + (notesN ? ' (' + notesN + ')' : ''), hint: 'What the crew wrote you',
+         call: 'closeMore(); openCrewNotes()' }]
+    : signedIn
+    ? [{ label: '📝 Leave a note for Jonah', hint: 'He gets it as a notification',
+         call: 'closeMore(); openNoteForJonah()' },
+       { label: '📝 Your notes', hint: 'The notes you have sent', call: 'closeMore(); openCrewNotes()' }]
     : []).concat((window.YDAuth && window.YDAuth.user)
     ? [{ label: '📰 Summaries', hint: 'This morning’s and last night’s summary, and the two weeks before',
          call: 'closeMore(); openSummaries()' },
