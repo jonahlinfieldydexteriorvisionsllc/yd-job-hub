@@ -324,6 +324,14 @@ def _access_token(force_refresh=False):
     tokens = _load_tokens()
     if not tokens or not tokens.get("refreshToken"):
         raise RuntimeError("QuickBooks is not connected")
+    # Tokens from the other Intuit environment (the test company, kept after the
+    # switch to the real one) can never work with this environment's keys: say
+    # "connect again" plainly rather than send them and get a puzzling refusal.
+    if tokens.get("env") and tokens["env"] != _env("QB_ENV", "sandbox"):
+        raise ReconnectNeeded(
+            "QuickBooks is still connected to Intuit's %s company -- connect your %s company"
+            % (("test", "real") if tokens["env"] == "sandbox" else ("real", "test"))
+        )
 
     # The hundred-day clock, kept away from the edge.
     #
@@ -542,7 +550,9 @@ def status():
     except ReconnectNeeded as e:
         # Tokens on file but QuickBooks will not honour them: show it as not
         # connected, with the reason, so the Connect button is right there.
-        return {"connected": False, "reconnect": True, "env": out["env"], "error": str(e)}
+        # The env is where a new connection would go (the server's), not the
+        # one the dead tokens came from.
+        return {"connected": False, "reconnect": True, "env": _env("QB_ENV", "sandbox"), "error": str(e)}
     except Exception as e:                  # noqa: BLE001
         # Connected on paper but not actually working is worth saying plainly.
         out["warning"] = str(e)
