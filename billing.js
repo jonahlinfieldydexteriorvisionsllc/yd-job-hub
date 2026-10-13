@@ -396,6 +396,15 @@
     try { first = await window.YDDb.getFresh('storms/' + id + '/stops', stopId); } catch (e) { throw needSignal(); }
     if (!first || !first.accountId) throw new Error('That visit is not on the storm');
     await YDSnow.refreshPricing([first.accountId]);
+    // So are the crew's shifts: a visit left off the bill has their pauses
+    // and breaks taken off (pausedMinutesAt), and the office's devices keep
+    // only the recent shifts live -- for a storm from before the clock's
+    // cutoff (timeclock.js, "older shifts") they are read first.
+    const visitStart = Date.parse(first.arrivedAt || s.startedAt || '');
+    if (window.YDClock && YDClock.olderReady && isFinite(visitStart) &&
+        (await YDClock.olderReady(visitStart - 864e5)) === 'failed') {
+      throw new Error('That storm’s shifts could not be read — try again with a signal');
+    }
 
     // Read and written as ONE step on the server, so two devices fixing the
     // same storm cannot each put back the other's lines (YDDb.transact). It

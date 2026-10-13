@@ -78,6 +78,10 @@
     return [0, Infinity];
   }
 
+  // Every shift the clock has: the live ones (a crew member's own; the
+  // office's recent ones and those waiting) and, once read, the older ones.
+  const pool = c => Object.values(c.shifts ? c.shifts() : c.entries());
+
   // Every shift in range as a flat row. Rejected shifts are left out: they
   // were decided not to have happened.
   function rows() {
@@ -85,7 +89,7 @@
     if (!c) return [];
     const [from, to] = bounds();
     const out = [];
-    Object.values(c.entries()).forEach(e => {
+    pool(c).forEach(e => {
       if (e.status === 'rejected') return;
       const s = c.startMsOf(e);
       if (!s || s < from || s >= to) return;
@@ -123,9 +127,15 @@
       return;
     }
 
-    // Filter choices come from every shift on record, not just this range, so
-    // picking a person does not make the other names disappear from the list.
-    const all = Object.values(c.entries()).filter(e => e.status !== 'rejected');
+    // A range reaching back past the shifts the office keeps live (All time,
+    // or dates before 1 January last year): the older ones are read once,
+    // and the log is drawn again when they land (yd-clock-changed).
+    const older = c.olderFor ? c.olderFor(bounds()[0]) : 'ready';
+
+    // Filter choices come from every shift the clock has, not just this
+    // range, so picking a person does not make the other names disappear
+    // from the list.
+    const all = pool(c).filter(e => e.status !== 'rejected');
     const names = {};
     all.forEach(e => { names[e.uid] = nameOf(e); });
     // Keyed by place, labelled by name: two jobs with one name are two choices.
@@ -175,8 +185,12 @@
         [['day', 'By day'], ['job', 'By job'], ['person', isOwner() ? 'By person' : 'Summary']]
           .map(([v, t]) => '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') +
             '" onclick="wlSet(\'view\', \'' + v + '\')">' + t + '</button>').join('') +
-        (list.length ? '<button class="btn btn-sm" onclick="wlExport()">⬇ Spreadsheet</button>' : '') +
+        // Only with every shift in the range here: while older ones are on
+        // their way, or could not be read, the sheet would be missing them
+        // without saying so.
+        (list.length && older === 'ready' ? '<button class="btn btn-sm" onclick="wlExport()">⬇ Spreadsheet</button>' : '') +
       '</div>' +
+      (c.olderNote ? c.olderNote(older) : '') +
       (list.length
         ? '<div class="wl-sum">' +
             sumCard('Hours worked', c.fmtDur(totals.paid)) +

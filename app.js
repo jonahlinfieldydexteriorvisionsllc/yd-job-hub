@@ -1351,7 +1351,10 @@ function clockedLaborHtml() {
   const names = Object.keys(c.byWorker);
   if (!names.length && !c.pendingHours) return '';
 
-  let h = '<div class="clocked-block"><div class="clocked-head">From the time clock</div>';
+  // Shifts from before last year are loaded on demand (timeclock.js): says
+  // so while they are, or if they could not be read.
+  const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
+  let h = '<div class="clocked-block"><div class="clocked-head">From the time clock</div>' + (older || '');
   if (names.length) {
     h += '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Paid</th><th>Billable</th></tr></thead><tbody>';
     names.sort().forEach(n => {
@@ -2071,7 +2074,9 @@ function renderDashboard() {
   const w = document.getElementById('dashTableWrap');
   if (!rows.length) { w.innerHTML = '<p class="empty-msg">No jobs match.</p>'; return; }
   const arrow = c => dashSort.col === c ? (dashSort.asc ? ' ▲' : ' ▼') : '';
-  let h = '<table><thead><tr>' +
+  // Old jobs' clocked labour waiting on shifts from before last year.
+  const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
+  let h = (older || '') + '<table><thead><tr>' +
     '<th style="cursor:pointer" onclick="sortDash(\'name\')">Customer' + arrow('name') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'city\')">Location' + arrow('city') + '</th>' +
     '<th>Services</th><th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +

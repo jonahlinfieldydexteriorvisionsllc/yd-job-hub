@@ -391,6 +391,29 @@ service cloud.firestore {
     }
 
     // ===================================================================
+    // labour/before -- the clock's labour on old jobs, added up
+    //
+    // The office keeps only the recent shifts live (from 1 January of last
+    // year); every counted shift from before that is summed per job and per
+    // person into this one record, so All Jobs reads one document instead of
+    // every shift ever clocked (timeclock.js). It holds hours and wage costs,
+    // so it is read by exactly who reads everyone's shifts.
+    //
+    // Only the owner's device writes the sums. Someone else who settles or
+    // changes an old shift -- an admin with Crew hours & pay: Change -- may
+    // only mark it out of date, so the owner's device works it out again;
+    // they cannot write figures into it.
+    // ===================================================================
+    match /labour/{docId} {
+      allow read: if canSee('hours');
+      allow write: if isOwner() && docId == 'before';
+      allow update: if canChange('hours') && docId == 'before'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stale', 'staleAt', 'staleBy'])
+        && request.resource.data.stale == true
+        && request.resource.data.staleAt is number;
+    }
+
+    // ===================================================================
     // problems -- what broke, on whose phone
     //
     // Anyone signed in may file one, because the whole point is to hear about

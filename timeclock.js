@@ -47,7 +47,10 @@
   // same work in one tap, and the office sees them as on break.
   const BREAK_SHOW_HOURS = 4;
 
-  let entries = {};      // id -> shift. Crew see only their own; owner sees all.
+  // id -> shift. Crew see only their own (all of them); the owner and admins
+  // with Crew hours & pay see everyone's RECENT shifts, and every one still
+  // waiting for approval however old (see "older shifts" below).
+  let entries = {};
   let board = {};        // jobId -> { name, address, status }
   let people = {};       // uid -> user record (owner and admins; crew get their own)
   // uid -> hourly rate in cents, from payRates/{uid}. Kept apart from the user
@@ -1001,8 +1004,12 @@
     // stamping then froze every settled shift at the default rate for good --
     // a $30/hr worker's night recorded at $25.
     if (!decides() || !window.YDDb || !usersLoaded || !ratesLoaded) return;
-    Object.keys(entries).forEach(id => {
-      const e = entries[id];
+    // The older shifts too, once read (the owner's device prices them before
+    // summing them up for old jobs -- buildRoll).
+    const all = known();
+    let old = false;
+    Object.keys(all).forEach(id => {
+      const e = all[id];
       if (!counts(e) || running(e) || e.rateCents != null) return;
       // An admin never prices their own shifts; the owner's device does.
       if (!mayDecide(e)) return;
@@ -1013,8 +1020,11 @@
         billableHours: hours(chargeableMs(e)),
       };
       Object.assign(e, patch);
+      patchOlder(id, patch);
       write(id, patch, 'pricing a settled shift');
+      if (isOld(e)) old = true;
     });
+    if (old && !building) markStale();
   }
 
   window.approveShift = function (id) {
@@ -1034,8 +1044,13 @@
       approvedAt: nowIso(),
     };
     Object.assign(e, patch);
-    render();
+    patchOlder(id, patch);
     write(id, patch, 'approving');
+    // One from before the cutoff now counts on its job: the summary of old
+    // jobs' labour has to take it in (after the shift's own write, so the
+    // owner's device never sums from the shift as it was).
+    if (isOld(e)) markStale();
+    render();
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
     showToast('Approved — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
   };
@@ -1048,6 +1063,9 @@
     const patch = { status: 'rejected', rejectedReason: why.trim(),
                     approvedBy: (me() || {}).uid || '', approvedAt: nowIso() };
     Object.assign(e, patch);
+    // Waiting or turned down, it was never in the summary of old jobs'
+    // labour, so nothing there changes.
+    patchOlder(id, patch);
     render();
     write(id, patch, 'rejecting');
   };
@@ -1319,9 +1337,13 @@
     const from = rangeStart(which);
     const to = which === 'lastweek' ? rangeStart('week') : Infinity;
 
+    // All time reaches back past the shifts kept live: the older ones are
+    // read once, and this is drawn again when they land (render).
+    const olderNow = olderFor(from);
+    const pool = Object.values(known());
     const inRange = e => startMsOf(e) >= from && startMsOf(e) < to;
-    const done = Object.values(entries).filter(e => counts(e) && inRange(e));
-    const pending = Object.values(entries).filter(e => awaitingOwner(e) && inRange(e));
+    const done = pool.filter(e => counts(e) && inRange(e));
+    const pending = pool.filter(e => awaitingOwner(e) && inRange(e));
 
     const byWorker = {};
     done.forEach(e => {
@@ -1337,7 +1359,7 @@
     const badge = el('totalsBadge');
     if (badge) badge.textContent = totalCost ? money(totalCost) : '';
 
-    wrap.innerHTML = (list.length
+    wrap.innerHTML = olderNote(olderNow) + (list.length
       ? '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Paid</th>' +
         '<th>Billable</th><th>Rate</th><th>Cost</th></tr></thead><tbody>' +
         list.map(w =>
@@ -1437,9 +1459,13 @@
     const title = el('workerTitle');
     if (title) title.textContent = name;
 
-    const all = Object.values(entries).filter(e => e.uid === workerUid);
     const from = rangeStart(workerRange);
     const to = workerRange === 'lastweek' ? rangeStart('week') : Infinity;
+    // All time reaches back past the shifts kept live: the older ones are
+    // read once, and this is drawn again when they land (render).
+    const olderNow = olderFor(from);
+    const pool = known();
+    const all = Object.values(pool).filter(e => e.uid === workerUid);
     const inRange = all.filter(e => startMsOf(e) >= from && startMsOf(e) < to);
 
     const approved = inRange.filter(counts);
@@ -1496,6 +1522,7 @@
           ({ week: 'This week', lastweek: 'Last week', month: 'This month', all: 'All time' })[r] +
           '</button>').join('') +
       '</div>' +
+      olderNote(olderNow) +
 
       '<div class="wk-cards">' +
         wkCard('Paid', fmtDur(paid), 'what they worked') +
@@ -1511,7 +1538,7 @@
           ', not counted above.</div>'
         : '') +
 
-      (askable && asking && entries[asking] ? askHtml(entries[asking]) : '') +
+      (askable && asking && pool[asking] ? askHtml(pool[asking]) : '') +
       '<div class="wk-head">Every shift</div>' +
       (inRange.length
         ? '<div class="table-wrap"><table><thead><tr><th>When</th><th>What</th>' +
@@ -1607,7 +1634,7 @@
   window.askChange = function (id) { asking = id; renderWorker(); };
   window.cancelRequest = function () { asking = null; renderWorker(); };
   window.sendRequest = function () {
-    const e = entries[asking], u = me();
+    const e = entries[asking] || older[asking], u = me();
     if (!e || !u || e.uid !== u.uid) return;
     const t = shiftTimes(e, (el('crStart') || {}).value, (el('crEnd') || {}).value);
     const start = t && t.start, end = t && t.end;
@@ -1682,7 +1709,20 @@
     const r = requests[id];
     if (!r || r.status !== 'pending' || !isOwner()) return;
     if (r.type === 'stopFigures') { approveStopRequest(r); return; }
-    const e = entries[r.targetId];
+    const e = entries[r.targetId] || older[r.targetId];
+    if (e || !windowed) { applyRequest(r, e); return; }
+    // A shift from before the clock's cutoff, not read on this device: read
+    // just that one (a crew phone holds all of its own, however old).
+    if (deciding.has(r.id)) return;
+    deciding.add(r.id);
+    Promise.resolve(window.YDDb.get('timeEntries', r.targetId))
+      .then(d => applyRequest(r, d ? Object.assign({ id: r.targetId }, d) : null))
+      .catch(() => showToast('That shift could not be read — try again with a signal'))
+      .then(() => deciding.delete(r.id));
+  };
+  function applyRequest(r, e) {
+    const id = r.id;
+    if (r.status !== 'pending') return;      // decided meanwhile
     if (!e) { showToast('That shift is no longer there'); return; }
     // The rules let a crew member file a request naming any shift, so the
     // shift must be the asker's own -- and still the one they looked at: a
@@ -1706,14 +1746,19 @@
                              costCents: costOf(paidMs(next), rate) });
     }
     Object.assign(patch, { changedBy: (me() || {}).uid || '', changedAt: nowIso(), changeRequestId: id });
+    const wasOld = isOld(e);
     Object.assign(e, patch);
+    patchOlder(e.id, patch);
     write(e.id, patch, 'applying a change');
+    // From before the clock's cutoff, then or now: the summary of old jobs'
+    // labour no longer adds up (marked after the shift's own write).
+    if (wasOld || isOld(e)) markStale();
     r.status = 'approved';
     writeRequest(id, { status: 'approved', decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'approving a change');
     render();
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
     showToast('Changed — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
-  };
+  }
   // One at a time: the bill is worked out on the server, which takes a
   // moment, and a second tap meanwhile fixed it twice.
   const deciding = new Set();
@@ -1724,7 +1769,8 @@
     if (figure(a.inchesCleared) == null) { showToast('That request has no depth in it — reject it'); return; }
     deciding.add(r.id);
     // What the crew said the stop has now, and whose stop: checked against
-    // the stop itself before anything changes (billing.js fixVisit).
+    // the stop itself before anything changes (billing.js fixVisit, which
+    // also reads an old storm's shifts first: olderReady).
     // Pounds; a request from before salt was weighed leaves the salt alone.
     YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), 'saltLbs' in a ? figure(a.saltLbs) : undefined, (me() || {}).uid || '',
                        { accountId: r.accountId || null, before: r.before || {} })
@@ -1877,22 +1923,382 @@
     renderWorker();
   };
 
+  // ----------------------------------------------------------- older shifts
+  //
+  // timeEntries only ever grows, and the owner's and admins' devices used to
+  // watch all of it: every opening of the app after half an hour away read
+  // every shift ever clocked again (Firestore bills per document), and every
+  // screen walked the lot (review, 12 Oct). Now they keep live only the
+  // shifts that started on or after `cutoff` -- 1 January of LAST year, so
+  // this season and last are always whole -- plus every shift still waiting
+  // for approval, however old, so Waiting for You never misses one. Two
+  // questions on one field each, so no index has to be made for them.
+  //
+  // Anything older comes one of two ways:
+  //   - the labour on old jobs, from ONE record, labour/before: every counted
+  //     shift from before the cutoff added up per job and person by the
+  //     owner's device, with exactly the sums sumJob does. It is worked out
+  //     again when the cutoff moves on (a new year) or an old shift changes
+  //     -- whoever changes one marks the record out of date (markStale);
+  //   - the shifts themselves, read once (not watched) the first time
+  //     somebody looks back that far: the work log's All time or older
+  //     dates, a person's All time, a fix to an old storm's visit. Until a
+  //     summary is there to use, old jobs' labour is worked out from these.
+  const ROLL_PATH = 'labour', ROLL_ID = 'before';
+  const ROLL_V = 1;              // the record's shape; a summary of another shape is worked out again
+  // This page, as against any other device: whose "out of date" mark is whose.
+  const DEVICE = 'd' + Math.random().toString(36).slice(2, 10);
+  // Midnight UTC on 1 January of last year. The same on every device in any
+  // time zone: two devices that put the line in different places would each
+  // find the other's summary unusable and work it out again for ever. It is
+  // only where "recent" starts, so it need not fall on a local midnight.
+  const cutoffNow = () => Date.UTC(new Date().getUTCFullYear() - 1, 0, 1);
+  let cutoff = 0;                // cutoffNow() as the watches started
+  let windowed = false;          // this device keeps only the recent shifts live
+  let recent = {}, waiting = {}; // what each of the two live questions has answered
+  let liveFresh = false;         // the recent list's last answer came from the server
+  let older = {};                // id -> shift from before the cutoff, once read
+  let olderState = null;         // null | 'loading' | 'done' | 'failed'
+  let olderGen = 0;              // moved on whatever was read is let go
+  let olderFresh = false;        // read while connected: fit to make the summary from
+  let olderWaiters = [];
+  let olderWanted = false;       // old jobs' labour asked for with no summary to use
+  let roll = null;               // labour/before as last heard
+  let rollAnswered = false;      // any answer about it yet, even from this device's cache
+  let rollHeard = false, rollFailed = false, rollIndex = null;
+  let serverSlow = false;        // no word from the server about it for a while: no signal, most likely
+  let lastMark;                  // the summary's "out of date" mark (staleAt) as last heard here
+  let building = false, buildFailed = false;
+
+  const isOld = e => !!e && startMsOf(e) < cutoff;
+  const relabour = () => { if (typeof refreshJobLabour === 'function') refreshJobLabour(); };
+
+  // A shift either live question has is in `entries`. One the recent list
+  // drops stays while the waiting list still has it, and the other way round
+  // (receipts.js keeps its two lists the same way).
+  function settle(id) {
+    const e = recent[id] || waiting[id];
+    if (e) entries[id] = e; else delete entries[id];
+  }
+  function take(src, changes) {
+    changes.forEach(c => {
+      if (c.type === 'removed') {
+        const was = src[c.id];
+        delete src[c.id];
+        // In neither list now: an old shift no longer waiting (approved or
+        // turned down, perhaps on another device), or one whose start was
+        // moved back before the cutoff. With the older ones read, it is kept
+        // among them as this device last had it (its own change already on
+        // it), and read again to be sure.
+        if (!recent[c.id] && !waiting[c.id] && olderState === 'done') {
+          if (isOld(was)) older[c.id] = was;
+          readAgain(c.id);
+        }
+      } else {
+        src[c.id] = Object.assign({ id: c.id }, c.data);
+      }
+      settle(c.id);
+    });
+  }
+  function readAgain(id) {
+    if (olderState !== 'done' || !window.YDDb) return;
+    const gen = olderGen;
+    Promise.resolve(window.YDDb.get('timeEntries', id)).then(d => {
+      if (gen !== olderGen) return;
+      if (d && isOld(d)) older[id] = Object.assign({ id: id }, d); else delete older[id];
+      render(); relabour(); announce();
+    }).catch(() => { /* no signal: the copy read before stands */ });
+  }
+  // This device changed a shift: the copy read with the older ones, too.
+  function patchOlder(id, patch) {
+    if (older[id] && older[id] !== entries[id]) Object.assign(older[id], patch);
+  }
+
+  // Every shift this device has: the live ones, and the older ones once read.
+  // A live copy wins over a read one -- it is the newer of the two.
+  function known() {
+    return olderState === 'done' ? Object.assign({}, older, entries) : entries;
+  }
+
+  // Whether every shift from `from` (ms) on is here: 'ready'; 'loading' (and
+  // now asked for); or 'failed', until Try again.
+  function olderFor(from) {
+    if (!windowed || !(from < cutoff) || olderState === 'done') return 'ready';
+    if (olderState === 'failed') return 'failed';
+    loadOlder();
+    return olderState === 'loading' ? 'loading' : 'failed';
+  }
+  // The same, for code that has to wait for them. Settles with the state.
+  function olderReady(from) {
+    const state = olderFor(from);
+    if (state !== 'loading') return Promise.resolve(state);
+    return new Promise(res => olderWaiters.push(res));
+  }
+  // What a screen looking back that far says meanwhile.
+  function olderNote(state) {
+    return state === 'loading' ? '<div class="hint">Loading older shifts…</div>'
+      : state === 'failed' ? '<div class="hint">Older shifts could not be read. ' +
+          '<button class="link-btn" onclick="clockOlderAgain()">Try again</button></div>'
+      : '';
+  }
+  window.clockOlderAgain = function () {
+    if (olderState !== 'failed') return;
+    olderState = null;
+    loadOlder();
+    render(); announce();
+  };
+
+  // Read once, not watched: nothing new starts that far back. A failure is
+  // left as it is until Try again -- read again by itself, every redraw
+  // would ask the server for all of them once more.
+  function loadOlder() {
+    if (!windowed || olderState === 'loading' || olderState === 'done' || olderState === 'failed') return;
+    if (!window.YDDb || !window.YDDb.listWhere) return;
+    olderState = 'loading';
+    const gen = olderGen, freshAtStart = liveFresh;
+    window.YDDb.listWhere('timeEntries', 'startedMs', '<', cutoff).then(got => {
+      if (gen !== olderGen) return;          // let go meanwhile: signed out, or out of date
+      older = {};
+      Object.keys(got).forEach(id => { older[id] = Object.assign({ id: id }, got[id]); });
+      olderState = 'done';
+      // With no signal the answer is whatever this device had cached, which
+      // may be only part of them: fine to look at, not to sum for good.
+      olderFresh = freshAtStart && liveFresh;
+      heardOlder();
+    }).catch(err => {
+      if (gen !== olderGen) return;
+      olderState = 'failed';
+      console.warn('[clock] older shifts not read:', (err && err.code) || err);
+      heardOlder();
+    });
+  }
+  function heardOlder() {
+    const w = olderWaiters;
+    olderWaiters = [];
+    w.forEach(res => res(olderState === 'done' ? 'ready' : olderState));
+    stampUnpriced();
+    render(); relabour(); announce();
+    checkOld();
+  }
+  // What was read may be out of date: let go, and read again when next
+  // needed. A read still on its way is ignored when it lands.
+  function dropOlder() {
+    olderGen++;
+    older = {}; olderState = null; olderFresh = false;
+    forgetLabour();
+    if (olderWaiters.length) loadOlder();
+  }
+
+  function rollUsable() {
+    return !!(roll && roll.v === ROLL_V && roll.cutoff === cutoff && roll.stale !== true && Array.isArray(roll.jobs));
+  }
+  // Where the labour on old jobs comes from just now:
+  //   'live'     nothing is left out on this device (crew, or an old firebase-init.js)
+  //   'roll'     the summary, labour/before
+  //   'raw'      the older shifts themselves, read
+  //   'missing'  neither yet -- asked for (wantOlder)
+  function oldSource() {
+    if (!windowed) return 'live';
+    if (rollUsable()) return 'roll';
+    if (olderState === 'done') return 'raw';
+    return 'missing';
+  }
+  function rollFor(jobId) {
+    if (!rollIndex) {
+      rollIndex = {};
+      ((roll && roll.jobs) || []).forEach(j => { if (j && j.id) rollIndex[j.id] = j; });
+    }
+    return rollIndex[jobId] || null;
+  }
+
+  // The summary of the shifts from before the cutoff, added up exactly as
+  // sumJob adds them: per job, per person -- by uid AND the name stamped on
+  // the shift, which is what whoIs reads, so a later rename still shows
+  // right -- the paid and billable hours, and the job's wage cost. A shift
+  // whose figures can still move (no end yet, or neither a cost nor a rate
+  // stamped, so priced at today's rate) is kept whole in `loose` and summed
+  // the way a live one is. Shifts still waiting are not in it: they are live.
+  function rollOf(list) {
+    const jobs = {}, at = {};
+    let counted = 0;
+    list.forEach(e => {
+      if (!isOld(e) || e.kind !== 'job' || !e.targetId || !counts(e)) return;
+      counted++;
+      const j = jobs[e.targetId] = jobs[e.targetId] || { id: e.targetId, cost: 0, rows: [], loose: [] };
+      if (endMsOf(e) == null || (e.costCents == null && !e.rateCents)) {
+        j.loose.push(JSON.parse(JSON.stringify(e)));     // no undefined can reach the write
+        return;
+      }
+      const key = e.targetId + '\u0001' + (e.uid || '') + '\u0001' + (e.workerName || '');
+      let row = at[key];
+      if (!row) { row = at[key] = { uid: e.uid || '', name: e.workerName || '', paid: 0, billable: 0 }; j.rows.push(row); }
+      row.paid += e.paidHours != null ? e.paidHours : hours(paidMs(e));
+      row.billable += e.billableHours != null ? e.billableHours : hours(billableMs(e));
+      j.cost += e.costCents != null ? e.costCents : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
+    });
+    return { jobs: Object.keys(jobs).map(id => jobs[id]), counted: counted };
+  }
+
+  // The owner's device works the summary out -- from the older shifts read
+  // while connected, after pricing any settled one never priced (as
+  // stampUnpriced always has: the figures are then the same ones the old
+  // whole-collection device came to). Written in one step that first checks
+  // the record's "out of date" mark is still the one this device had heard
+  // when it started -- any other mark, another device's or a later one of
+  // its own (a second old shift approved while this was being worked out),
+  // is a change these sums may not hold, so nothing is written and it is
+  // worked out again. The mark and who made it are left on the record, so
+  // every device can still tell a mark it has not heard of from one it has.
+  function buildRoll() {
+    building = true;
+    stampUnpriced();
+    // The live ones too: an old shift approved here a moment ago is still
+    // in the waiting list until the server says otherwise.
+    const made = rollOf(Object.values(known()));
+    const doc = { v: ROLL_V, cutoff: cutoff, builtAt: nowIso(), counted: made.counted, jobs: made.jobs, stale: false };
+    const basis = lastMark === undefined ? null : lastMark, key = watchKey;
+    const write = window.YDDb.transact
+      ? window.YDDb.transact([[ROLL_PATH, ROLL_ID]], ([cur]) => {
+          const unheard = !!cur && (cur.staleAt || null) !== basis;
+          return [unheard ? null : doc];
+        })
+      : window.YDDb.put(ROLL_PATH, ROLL_ID, doc);
+    Promise.resolve(write).then(res => {
+      if (key !== watchKey) return;
+      building = false;
+      // A mark this device had not heard of when it started: another
+      // device's is answered by the summary watch (the older shifts read
+      // again); its own, by working it out again. Looked at again shortly
+      // either way, in case it came while this was being written.
+      if (window.YDDb.transact && !(res && res[0])) setTimeout(checkOld, 3000);
+    }).catch(err => {
+      if (key !== watchKey) return;
+      // Most likely no signal, or the rules for it not yet published. The
+      // older shifts are here, so old jobs' labour is still right on this
+      // device; it is tried again next time the app opens.
+      building = false; buildFailed = true;
+      console.warn('[clock] old jobs’ labour not summed:', (err && err.code) || err);
+    });
+  }
+
+  // This device changed a shift from before the cutoff, so the summary no
+  // longer adds up: marked out of date -- when, and by which device -- so
+  // the owner's device works it out again and any device holding the older
+  // shifts reads them again. Every change marks it, not only the first: a
+  // device that read them between two changes must hear of the second.
+  function markStale() {
+    if (!windowed || !window.YDDb || rollFailed) return;   // unreadable: its rules not published yet
+    // None made yet: the owner's device makes one anyway (and an admin may
+    // not start the record). The owner's own device marks it regardless --
+    // the one it has just written may not have come back to it yet.
+    if (rollHeard && !roll && !isOwner()) return;
+    // Never the same mark twice, even for two changes in one millisecond: a
+    // summary being worked out is checked against the mark it started from.
+    const mark = { stale: true, staleAt: Math.max(Date.now(), (lastMark || 0) + 1), staleBy: DEVICE };
+    if (roll) roll = Object.assign({}, roll, mark);
+    lastMark = mark.staleAt;
+    rollIndex = null;
+    forgetLabour();
+    Promise.resolve(window.YDDb.put(ROLL_PATH, ROLL_ID, mark))
+      .catch(err => console.warn('[clock] old jobs’ labour not marked out of date:', (err && err.code) || err));
+    checkOld();
+  }
+
+  // Run whenever the summary, the older shifts, the people or the rates come
+  // in. The owner's device makes the summary when there is none to use; any
+  // other device -- or the owner's, until it can -- reads the older shifts
+  // instead, once old jobs' labour has been asked for.
+  function checkOld() {
+    if (!windowed || building || !rollAnswered || rollUsable()) return;
+    // A summary to a LATER cutoff: the year has moved on here too (start
+    // again with it), or this device's clock says otherwise -- then it is
+    // never replaced from here, or two devices that disagree would each undo
+    // the other's for ever; the older shifts are read instead.
+    const later = !!(roll && typeof roll.cutoff === 'number' && roll.cutoff > cutoff);
+    if (later && newYear()) return;
+    // Pricing never-priced shifts needs everyone's rate, and the summary
+    // must come from what the server holds, not one phone's part-copy.
+    if (!later && rollHeard && isOwner() && !rollFailed && !buildFailed &&
+        usersLoaded && ratesLoaded && liveFresh) {
+      if (olderState === 'done' && !olderFresh) dropOlder();
+      if (olderState === 'done') { buildRoll(); return; }
+      loadOlder();                           // checkOld again when they land
+      return;
+    }
+    if (!olderWanted) return;
+    // Read with no signal before: again, now there is one.
+    if (olderState === 'done' && !olderFresh && liveFresh && (rollHeard || rollFailed)) dropOlder();
+    // Once the server has said there is no summary to use -- or, with no
+    // signal, from what this device has, rather than show old jobs short.
+    if (rollHeard || rollFailed || serverSlow || navigator.onLine === false) loadOlder();
+  }
+  function wantOlder() {
+    if (olderWanted) return;
+    olderWanted = true;
+    checkOld();
+  }
+
+  // The year has moved on since the watches started -- the app left open
+  // over New Year, or another device already summed up to the new cutoff:
+  // everything starts again with the new one. Looked at whenever the app
+  // comes back on screen, too.
+  function newYear() {
+    if (!watchKey || !windowed || cutoffNow() === cutoff) return false;
+    setTimeout(() => {
+      if (watchKey && windowed && cutoffNow() !== cutoff) { watchKey = null; start(); }
+    }, 0);
+    return true;
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') newYear();
+  });
+
+  // For All Jobs and a job's labour: '' while every old job's labour is in
+  // the figures; otherwise the same note the work log shows (Try again
+  // included when the older shifts could not be read).
+  function oldLabourNote() {
+    if (oldSource() !== 'missing' || !olderWanted) return '';
+    return olderNote(olderState === 'failed' ? 'failed' : 'loading');
+  }
+
+  // Back to nothing, for a sign-in or a sign-out.
+  function resetOlder() {
+    recent = {}; waiting = {}; liveFresh = false;
+    olderGen++;
+    older = {}; olderState = null; olderFresh = false; olderWanted = false;
+    const w = olderWaiters;
+    olderWaiters = [];
+    w.forEach(res => res('failed'));
+    roll = null; rollAnswered = false; rollHeard = false; rollFailed = false; rollIndex = null;
+    serverSlow = false; lastMark = undefined;
+    building = false; buildFailed = false;
+  }
+
   // ------------------------------------------------- what other screens ask
 
   // All Jobs asks for every job's labour on each redraw and each letter typed
   // in its search, and walking every shift on record once per job made that
   // jobs x shifts. So the shifts are filed by job once, and each job's sums
   // are kept, until anything they are worked out from changes -- a shift, a
-  // name or a rate -- which always ends in render() (forgetLabour there).
+  // name, a rate, or where old jobs' labour comes from -- which always ends
+  // in render() (forgetLabour there), or is noticed by forJob (jobFrom).
   let jobIndex = null;        // jobId -> its shifts, in the same order as before
   let jobSums = {};           // jobId -> forJob's answer
-  function forgetLabour() { jobIndex = null; jobSums = {}; }
+  let jobFrom = null;         // oldSource() when jobIndex was made
+  function forgetLabour() { jobIndex = null; jobSums = {}; jobFrom = null; }
   function shiftsOnJob(jobId) {
     if (!jobIndex) {
       jobIndex = {};
-      Object.values(entries).forEach(e => {
-        if (e.kind === 'job' && e.targetId) (jobIndex[e.targetId] = jobIndex[e.targetId] || []).push(e);
-      });
+      jobFrom = oldSource();
+      const file = e => {
+        if (e.kind !== 'job' || !e.targetId) return;
+        // With the summary in use, a settled shift from before the cutoff
+        // is already in it; only one still waiting is counted from here.
+        if (jobFrom === 'roll' && isOld(e) && e.status !== 'pending') return;
+        (jobIndex[e.targetId] = jobIndex[e.targetId] || []).push(e);
+      };
+      Object.values(entries).forEach(file);
+      if (jobFrom === 'raw') Object.keys(older).forEach(id => { if (!entries[id]) file(older[id]); });
     }
     return jobIndex[jobId] || [];
   }
@@ -1903,8 +2309,15 @@
   //
   // A copy each time, so nothing a screen does with the answer can change
   // what the next one is given.
+  //
+  // Old jobs: the summary of the shifts before the cutoff plus the live ones
+  // -- or, until there is one to use, the older shifts read (asked for here;
+  // the screens are told again when they land).
   function forJob(jobId) {
     if (!jobId) return sumJob(null).out;
+    const src = oldSource();
+    if (src === 'missing') wantOlder();
+    if (jobIndex && jobFrom !== src) forgetLabour();
     if (!jobSums[jobId]) {
       const r = sumJob(jobId);
       // A counted shift with no end is still growing by the second: worked
@@ -1921,7 +2334,7 @@
     const out = { byWorker: {}, paidHours: 0, billableHours: 0, costCents: 0, pendingHours: 0 };
     let steady = true;
     if (!jobId) return { out: out, steady: steady };
-    shiftsOnJob(jobId).forEach(e => {
+    const add = e => {
       if ((awaitingOwner(e) || counts(e)) && endMsOf(e) == null) steady = false;
       if (awaitingOwner(e)) { out.pendingHours += hours(paidMs(e)); return; }
       if (!counts(e)) return;
@@ -1935,7 +2348,22 @@
       out.paidHours += p; out.billableHours += b;
       out.costCents += e.costCents != null ? e.costCents
         : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
-    });
+    };
+    shiftsOnJob(jobId).forEach(add);
+    // From the summary: the settled older shifts, already added up (named
+    // as they would be now), and any whose figures can still move, added
+    // like the live ones.
+    const r = jobFrom === 'roll' ? rollFor(jobId) : null;
+    if (r) {
+      (r.loose || []).forEach(add);
+      (r.rows || []).forEach(row => {
+        const who = whoIs(row.uid, row.name);
+        const w = out.byWorker[who] = out.byWorker[who] || { paid: 0, billable: 0 };
+        w.paid += row.paid; w.billable += row.billable;
+        out.paidHours += row.paid; out.billableHours += row.billable;
+      });
+      out.costCents += r.cost || 0;
+    }
     out.paidHours = Math.round(out.paidHours * 100) / 100;
     out.billableHours = Math.round(out.billableHours * 100) / 100;
     out.pendingHours = Math.round(out.pendingHours * 100) / 100;
@@ -1959,12 +2387,14 @@
     if (!(lo && hi && hi > lo)) return 0;
     const overlap = (a, b) => Math.max(0, Math.min(b, hi) - Math.max(a, lo));
     // Every shift of each person who worked this storm, whatever it was on:
-    // the shift after a break may be anywhere.
+    // the shift after a break may be anywhere. A storm from before the
+    // clock's cutoff needs the older shifts read first (olderReady).
+    const pool = Object.values(known());
     const byUid = {};
-    Object.values(entries).forEach(e => {
+    pool.forEach(e => {
       if (e.kind === 'storm' && e.targetId === stormId) byUid[e.uid] = byUid[e.uid] || [];
     });
-    Object.values(entries).forEach(e => { if (byUid[e.uid]) byUid[e.uid].push(e); });
+    pool.forEach(e => { if (byUid[e.uid]) byUid[e.uid].push(e); });
     let worst = 0;
     Object.keys(byUid).forEach(uid => {
       const theirs = byUid[uid];
@@ -2005,7 +2435,18 @@
     // Change requests: the owner's queue, or a crew member's own (storm.js
     // shows a crew member's storm-figure requests on the Snow tab).
     requests: () => requests,
+    // The live shifts: a crew member's own, or everyone's recent ones and
+    // those still waiting (enough for who is on the clock now).
     entries: () => entries,
+    // Those and, once read, the older ones -- for a screen looking further
+    // back, which first asks olderFor(its start) and says olderNote(...)
+    // while they come (the work log). olderReady waits for them.
+    shifts: known,
+    olderFor: olderFor,
+    olderReady: olderReady,
+    olderNote: olderNote,
+    // '' when old jobs' labour is all in forJob's figures, else a note.
+    oldLabourNote: oldLabourNote,
     // The jobs anyone can clock into (jobBoard): the crew's list of jobs.
     board: () => board,
     people: () => people,
@@ -2072,7 +2513,7 @@
 
     // Rebuild whenever the account, the role or the access changes, rather
     // than only on a first run. A crew member reads their shifts through a
-    // filtered query and the owner reads the whole collection; keeping the
+    // filtered query and the owner reads everyone's; keeping the
     // first set of watches after a promotion would leave someone looking at
     // one person's hours and wondering where everyone else went.
     const key = (window.YDAuth && window.YDAuth.key) || u.uid;
@@ -2081,8 +2522,19 @@
     unsub = [];
     entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
     requests = {}; asking = null;
+    resetOlder();
     forgetLabour();
     watchKey = key;
+    // Everyone's shifts: only the recent ones live (see "older shifts"). A
+    // phone still holding a firebase-init.js from before watchFrom watches
+    // the whole collection, as it always did.
+    cutoff = cutoffNow();
+    windowed = all && !!window.YDDb.watchFrom && !!window.YDDb.listWhere;
+    // No word from the server about the summary for a while: most likely no
+    // signal, so old jobs' labour comes from what this device has meanwhile.
+    if (windowed) setTimeout(() => {
+      if (watchKey === key && !rollHeard) { serverSlow = true; checkOld(); }
+    }, 8000);
 
     // Change requests: the owner reads them all (the queue); anyone else only
     // their own, asked for by name -- the rules refuse a wider read.
@@ -2100,15 +2552,18 @@
       ? window.YDDb.watch('changeRequests', onRequests, () => {})
       : window.YDDb.watchWhere('changeRequests', 'requestedBy', u.uid, onRequests, () => {}));
 
+    const heard = () => {
+      stampUnpriced();
+      render();
+      relabour();
+      announce();
+    };
     const onEntries = changes => {
       changes.forEach(c => {
         if (c.type === 'removed') delete entries[c.id];
         else entries[c.id] = Object.assign({ id: c.id }, c.data);
       });
-      stampUnpriced();
-      render();
-      if (typeof refreshJobLabour === 'function') refreshJobLabour();
-      announce();
+      heard();
     };
     const onEntriesError = err => {
       if (err && err.code === 'permission-denied') {
@@ -2121,9 +2576,45 @@
     // A crew member may read only their own shifts, so they must ask only for
     // their own -- Firestore refuses a whole-collection read outright when the
     // rules could not have permitted every row in it.
-    unsub.push(all
-      ? window.YDDb.watch('timeEntries', onEntries, onEntriesError)
-      : window.YDDb.watchWhere('timeEntries', 'uid', u.uid, onEntries, onEntriesError));
+    if (!all) {
+      unsub.push(window.YDDb.watchWhere('timeEntries', 'uid', u.uid, onEntries, onEntriesError));
+    } else if (!windowed) {
+      unsub.push(window.YDDb.watch('timeEntries', onEntries, onEntriesError));
+    } else {
+      unsub.push(window.YDDb.watchFrom('timeEntries', 'startedMs', cutoff, (changes, meta) => {
+        const was = liveFresh;
+        liveFresh = !!(meta && meta.fromCache === false);
+        // Connected again: a read of the older shifts that failed is tried
+        // again by whatever wants them (screens on their next redraw).
+        if (liveFresh && !was && olderState === 'failed') olderState = null;
+        take(recent, changes);
+        heard();
+        checkOld();          // connected again: the owner's device may make the summary now
+      }, onEntriesError));
+      unsub.push(window.YDDb.watchWhere('timeEntries', 'status', 'pending', changes => {
+        take(waiting, changes);
+        heard();
+      }, onEntriesError));
+      // The summary of old jobs' labour. Unreadable (the rules for it not yet
+      // published): the older shifts are read instead, when needed.
+      unsub.push(window.YDDb.watch(ROLL_PATH, (changes, meta) => {
+        changes.forEach(c => { if (c.id === ROLL_ID) roll = c.type === 'removed' ? null : c.data; });
+        rollIndex = null;
+        rollAnswered = true;
+        if (meta && meta.fromCache === false) rollHeard = true;
+        // Another device has changed a shift from before the cutoff: the
+        // older ones read here may be out of date. (On the first answer
+        // there is nothing read yet to be out of date.)
+        const mark = (roll && roll.staleAt) || null;
+        if (mark !== lastMark) {
+          if (mark && roll.staleBy !== DEVICE && lastMark !== undefined &&
+              (olderState === 'done' || olderState === 'loading')) dropOlder();
+          lastMark = mark;
+        }
+        checkOld();
+        render(); relabour(); announce();
+      }, () => { rollAnswered = true; rollFailed = true; checkOld(); render(); relabour(); announce(); }));
+    }
 
     // The office's every pause in typing on a job re-sends its entry here
     // with a new updatedAt, and each one used to redraw the whole Clock
@@ -2159,6 +2650,7 @@
         // A rename shows on the open job's labour and in the work log too.
         if (typeof refreshJobLabour === 'function') refreshJobLabour();
         announce();
+        checkOld();
       }, () => render()));
     }
     if (all) {
@@ -2178,7 +2670,8 @@
         moveRates();
         render();
         if (typeof refreshJobLabour === 'function') refreshJobLabour();
-      }, () => { ratesLoaded = true; newRulesLive = false; stampUnpriced(); render(); }));
+        checkOld();
+      }, () => { ratesLoaded = true; newRulesLive = false; stampUnpriced(); render(); checkOld(); }));
     }
     if (!readsPeople || !all) loadMyRecord();
   }
@@ -2203,6 +2696,7 @@
       unsub.forEach(fn => { try { fn(); } catch (e) {} });
       unsub = []; watchKey = null;
       entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
+      resetOlder(); windowed = false;
       forgetLabour();
       closeAccess();
       // Half-done screens go too. A form the owner opened to file a shift for
