@@ -362,12 +362,16 @@
     '</div>';
   }
 
+  // Every kind of material, his own included (pricing.js).
+  const kinds = () => (P().allKinds ? P().allKinds() : P().CATEGORIES);
+
   function supplyOptions(selected) {
     const c = catalog();
-    const names = P().CATEGORY_NAME;
+    // By kind (his own kinds by their names), then by name.
+    const kind = cat => (cat ? (P().kindName ? P().kindName(cat) : P().CATEGORY_NAME[cat]) : '') || 'zz';
     const skip = P().NOT_FOR_ESTIMATES || [];
     const list = Object.values(c.items).filter(it => it.id === selected || skip.indexOf(it.category) === -1).sort((a, b) =>
-      String(names[a.category] || 'zz').localeCompare(String(names[b.category] || 'zz')) || String(a.name).localeCompare(String(b.name)));
+      String(kind(a.category)).localeCompare(String(kind(b.category))) || String(a.name).localeCompare(String(b.name)));
     return '<option value="">— not in Supplies —</option>' + list.map(it => {
       const v = c.vendors[it.vendorId];
       const unit = num(it.coverage) > 0 ? it.takeoffUnit : ((c.prices[it.id] || {}).per || it.unit || '');
@@ -402,7 +406,7 @@
         (it ? '' : '<label><span>Unit</span>' + on('unit', m.unit, 'each', '') + '</label>' +
           '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', '', 'decimal') + '</label>' +
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
-            P().CATEGORIES.filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + k + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
+            kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
           '</select></label>') +
         // Only a truck of bulk material or a pallet is a delivery of its own.
         (vRule.cityDelivery && it && (it.pallet || P().isBulk(line ? line.per : it.unit))
@@ -882,7 +886,7 @@
     const lines = typedLines().filter(m => toSup[m.id]);
     if (!lines.length) return '';
     const vendors = Object.values(catalog().vendors).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    const cats = P() ? P().CATEGORIES.filter(([k]) => k !== 'plant' && k !== 'tools') : [];
+    const cats = P() ? kinds().filter(([k]) => k !== 'plant' && k !== 'tools') : [];
     return '<div class="est-tosup"><div class="est-src-head">Add to Supplies — pick where each one comes from</div>' +
       lines.map(m => {
         const id = safeId(m.id), t = toSup[m.id];
@@ -901,7 +905,7 @@
           '<label><span>Cost per ' + esc(t.unit || 'each') + ' ($)</span><input inputmode="decimal" value="' + esc(t.cost) + '" placeholder="blank = no price yet" ' +
             'oninput="estToSupSet(\'' + id + '\', \'cost\', this.value)"></label>' +
           '<label><span>Kind</span><select onchange="estToSupSet(\'' + id + '\', \'category\', this.value)">' +
-            cats.map(([k, n]) => '<option value="' + k + '"' + (t.category === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
+            cats.map(([k, n]) => '<option value="' + esc(k) + '"' + (t.category === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
           '</select></label></div>';
       }).join('') +
       '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="estToSupSave()">Add to Supplies</button>' +

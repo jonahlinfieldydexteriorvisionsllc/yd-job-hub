@@ -46,6 +46,51 @@
   const NOT_FOR_ESTIMATES = ['tools'];
   const CATEGORY_NAME = {};
   CATEGORIES.forEach(([id, name]) => { CATEGORY_NAME[id] = name; });
+
+  // Kinds Jonah adds himself (12 Oct 2026: "i need to be able to add kinds of
+  // materials"). A kind of his is kept as its name: on the items that are that
+  // kind (Supplies, which everyone can read -- so the crew see the name too)
+  // and, once it has a markup or waste, in pricing/rules.categories like any
+  // other. The list is every such name in use.
+  const kindKey = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  // "lighting" on one item and "Lighting" on another are one kind: shown,
+  // and priced, by the spelling first seen. Worked out at most once a second
+  // (a list of 800 items asks for every one).
+  let spelt = null, speltAt = 0;
+  function spelling(id) {
+    if (!spelt || Date.now() - speltAt > 1000) {
+      spelt = {};
+      customKinds().forEach(k => { spelt[kindKey(k)] = k; });
+      speltAt = Date.now();
+    }
+    return spelt[kindKey(id)] || String(id || '');
+  }
+  const kindName = id => CATEGORY_NAME[id] || (id ? spelling(id) : '');
+  // The markup and waste for a kind, his own found whatever its capitals.
+  const catRuleOf = (r, cat) => (r.categories || {})[cat] || (CATEGORY_NAME[cat] ? null : (r.categories || {})[spelling(cat)]) || {};
+  function customKinds() {
+    const seen = {};
+    const add = k => {
+      k = String(k || '').trim();
+      if (k && !CATEGORY_NAME[k] && !seen[kindKey(k)]) seen[kindKey(k)] = k;
+    };
+    const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {} };
+    Object.values(cat.items || {}).forEach(it => add(it.category));
+    Object.keys((rules && rules.categories) || {}).forEach(k => { if (rules.categories[k]) add(k); });
+    return Object.values(seen).sort((a, b) => a.localeCompare(b));
+  }
+  const allKinds = () => CATEGORIES.concat(customKinds().map(k => [k, k]));
+  // A kind as typed -> the kind it is: one of the list ("pavers", "Mulch"),
+  // one of his already in use however it was capitalised, or a new one. No
+  // dots or slashes: the name is also a key in pricing/rules.
+  function kindFor(text) {
+    const t = String(text || '').replace(/[.\/`[\]*~]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+    const k = kindKey(t);
+    if (!k) return '';
+    const hit = CATEGORIES.find(([id, name]) => kindKey(id) === k || kindKey(name) === k);
+    if (hit) return hit[0];
+    return customKinds().find(c => kindKey(c) === k) || t;
+  }
   // A job with any of these gets the layout markers.
   const MARKER_CATEGORIES = ['pavers', 'wall', 'edging'];
 
@@ -137,7 +182,7 @@
     const it = m.supplyId ? ctx.items[m.supplyId] || null : null;
     const pr = m.supplyId ? ctx.prices[m.supplyId] || null : null;
     const cat = m.plant ? 'plant' : (it && it.category) || m.category || 'other';
-    const catRule = (r.categories || {})[cat] || {};
+    const catRule = catRuleOf(r, cat);
     const per = String((pr && pr.per) || (it && it.unit) || m.unit || '').trim();
     const coverage = it && num(it.coverage) > 0 ? num(it.coverage) : null;
     const takeoffUnit = coverage ? String(it.takeoffUnit || '').trim() : per;
@@ -166,7 +211,7 @@
       return out;
     }
     if (costCents === null) { out.problems.push(it ? 'no price in Supplies' : 'no cost'); return out; }
-    if (markupPct === null) { out.problems.push('no markup set for ' + (CATEGORY_NAME[cat] || cat)); return out; }
+    if (markupPct === null) { out.problems.push('no markup set for ' + kindName(cat) + ' (⋯ → Pricing rules)'); return out; }
     if (num(r.taxPct) === null) { out.problems.push('sales tax % not set'); return out; }
     // A category can be set as not taxed when bought (a rental, say).
     const tax = catRule.noTax ? 0 : pct(r.taxPct);
@@ -565,16 +610,23 @@
         box('Sales tax on purchases (%)', r.taxPct, "prSet('taxPct', this.value, 'num')", 'added to every material cost before markup') +
       '</div>' +
       '<table class="pr-table"><thead><tr><th>Category</th><th>Markup %</th><th>Waste %</th><th>No tax</th></tr></thead><tbody>' +
-        CATEGORIES.map(([id, name]) => {
+        // A kind goes in an onchange through data-k: his own have spaces and apostrophes.
+        allKinds().map(([id, name]) => {
           const c = r.categories[id] || {};
-          const cell = (k, v) => '<td><input inputmode="decimal" value="' + esc(v == null ? '' : v) + '"' + (ro ? ' disabled' : '') +
-            ' onchange="prCat(\'' + id + '\', \'' + k + '\', this.value)"></td>';
-          return '<tr><td>' + esc(name) + '</td>' + cell('markupPct', c.markupPct) + cell('wastePct', c.wastePct) +
-            '<td><input type="checkbox"' + (c.noTax ? ' checked' : '') + (ro ? ' disabled' : '') +
-            ' onchange="prCat(\'' + id + '\', \'noTax\', this.checked)"></td></tr>';
+          const at = ' data-k="' + esc(id) + '"' + (ro ? ' disabled' : '');
+          const cell = (k, v) => '<td><input inputmode="decimal" value="' + esc(v == null ? '' : v) + '"' + at +
+            ' onchange="prCat(this.dataset.k, \'' + k + '\', this.value)"></td>';
+          const mine = !CATEGORY_NAME[id];
+          return '<tr><td>' + esc(name) + (mine ? ' <span class="muted">(yours)</span>' +
+              (ro ? '' : ' <button class="link-btn"' + at + ' onclick="prKindRename(this.dataset.k)">✎ Rename</button>') : '') + '</td>' +
+            cell('markupPct', c.markupPct) + cell('wastePct', c.wastePct) +
+            '<td><input type="checkbox"' + (c.noTax ? ' checked' : '') + at +
+            ' onchange="prCat(this.dataset.k, \'noTax\', this.checked)"></td></tr>';
         }).join('') + '</tbody></table>' +
+      (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="prKindAdd()">+ Add a kind of material</button></div>') +
       '<p class="hint">An item in Supplies can have its own markup or waste; these are for everything else in the category. ' +
-        '“No tax” leaves the sales tax off that kind of thing (a rental, say).</p>' +
+        '“No tax” leaves the sales tax off that kind of thing (a rental, say). A kind you add is picked on an item in Supplies ' +
+        '(Edit → For estimates → Kind of material), where you can add one too.</p>' +
 
       '<h3 class="pr-h">Suppliers</h3>' +
       (vendors.length ? '<table class="pr-table"><thead><tr><th>Supplier</th><th>Card/processing fee %</th><th>Delivers by town (one load per material)</th></tr></thead><tbody>' +
@@ -681,6 +733,42 @@
     cats[id] = Object.assign({}, cats[id], { [k]: n });
     save({ categories: cats });
   };
+  // A new kind is listed once it has a markup: ask for it straight away.
+  window.prKindAdd = function () {
+    if (!owner()) return;
+    const id = kindFor(prompt('The new kind of material (e.g. Lighting, Irrigation)') || '');
+    if (!id) return;
+    if (CATEGORY_NAME[id] || (rules.categories[id] && rules.categories[id].markupPct != null)) {
+      showToast('“' + kindName(id) + '” is already on the list'); return;
+    }
+    const m = prompt('Markup % for ' + id + ' (blank to set it later)');
+    if (m == null) return;
+    const w = prompt('Waste % for ' + id + ' (blank for none)');
+    if (String(m).trim() !== '' && num(m) === null || w != null && String(w).trim() !== '' && num(w) === null) {
+      showToast('That isn’t a number'); return;
+    }
+    // The whole map: save() replaces it on this device (the server merges).
+    save({ categories: Object.assign({}, rules.categories, { [id]: { markupPct: num(m), wastePct: w == null ? null : num(w), noTax: false } }) });
+    showToast('“' + id + '” added — pick it on items in Supplies');
+    renderRules();
+  };
+  // His own kind renamed everywhere: on every item that is that kind, and its
+  // markup and waste moved across.
+  window.prKindRename = function (was) {
+    if (!owner() || !was || CATEGORY_NAME[was]) return;
+    const typed = prompt('Rename “' + was + '” to…', was);
+    if (typed == null) return;
+    let to = kindFor(typed);
+    if (to === was && String(typed).trim() !== was) to = String(typed).replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (!to || to === was) return;
+    const n = window.YDSupplies && window.YDSupplies.renameKind ? window.YDSupplies.renameKind(was, to) : 0;
+    const cats = Object.assign({}, rules.categories);
+    cats[to] = rules.categories[to] || rules.categories[was] || null;
+    cats[was] = null;                  // null, not left out: the server merges the map
+    save({ categories: cats });
+    showToast('Renamed — ' + n + ' item' + (n === 1 ? '' : 's') + ' moved to “' + kindName(to) + '”');
+    renderRules();
+  };
   window.prVendor = function (id, k, v) {
     if (!owner()) return;
     const vs = Object.assign({}, rules.vendors);
@@ -720,7 +808,7 @@
   // ------------------------------------------------------------- start/stop
 
   window.YDPricing = {
-    CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES,
+    CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
     price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk,
   };

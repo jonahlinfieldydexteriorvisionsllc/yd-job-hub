@@ -236,11 +236,14 @@ def catalogue(kinds=None, keep_ids=()):
     if kinds is not None:
         items = [kv for kv in items if kv[1].get("category") not in TRIMMED_KINDS
                  or kv[1].get("category") in kinds or kv[0] in keep_ids]
-    items.sort(key=lambda kv: (CATEGORY_NAMES.get(kv[1].get("category"), "~"), str(kv[1].get("name", ""))))
+    # A kind Jonah added himself is stored as its own name (pricing.js kindFor).
+    def kind_name(c, missing):
+        return CATEGORY_NAMES.get(c) or (str(c).strip() if c else "") or missing
+    items.sort(key=lambda kv: (kind_name(kv[1].get("category"), "~"), str(kv[1].get("name", ""))))
     group = None
     for sid, it in items:
         ids.add(sid)
-        cat = CATEGORY_NAMES.get(it.get("category"), "Not sorted yet")
+        cat = kind_name(it.get("category"), "Not sorted yet")
         if cat != group:
             rows.append("\n%s (id | name | takeoff unit | notes):" % cat)
             group = cat

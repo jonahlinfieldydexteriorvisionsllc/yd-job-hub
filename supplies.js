@@ -160,12 +160,14 @@
     if (!t) return null;
     return /^-?(\d+\.?\d*|\.\d+)$/.test(t) ? parseFloat(t) : NaN;
   }
-  const categories = () => (window.YDPricing ? window.YDPricing.CATEGORIES : []);
-  // "Pavers", "pavers", "PAVERS" and the id all name the same category.
+  // Every kind of material: the app's list and the ones Jonah added (pricing.js).
+  const categories = () => (window.YDPricing ? (window.YDPricing.allKinds ? window.YDPricing.allKinds() : window.YDPricing.CATEGORIES) : []);
+  // "Pavers", "pavers", "PAVERS" and the id all name the same category; a
+  // name that is none of them is a new kind of his own.
   function categoryId(s) {
-    const k = key(s);
-    if (!k) return null;
-    const hit = categories().find(([id, name]) => key(id) === k || key(name) === k);
+    if (!key(s)) return null;
+    if (window.YDPricing && window.YDPricing.kindFor) return window.YDPricing.kindFor(s) || null;
+    const hit = categories().find(([id, name]) => key(id) === key(s) || key(name) === key(s));
     return hit ? hit[0] : undefined;
   }
   function yesNo(s) {
@@ -246,7 +248,8 @@
   }
   const tagInfo = t => USE_BY_ID[t] || { id: t, icon: '🔖', name: t, custom: true };
   const isTag = t => !!t && (!!USE_BY_ID[t] || customTags().indexOf(t) !== -1);
-  const kindName = it => ((categories().find(c => c[0] === it.category) || [])[1]) || 'No kind set';
+  const kindName = it => (it.category ? (window.YDPricing && window.YDPricing.kindName ? window.YDPricing.kindName(it.category)
+    : ((categories().find(c => c[0] === it.category) || [])[1]) || it.category) : '') || 'No kind set';
 
   // Every word typed has to appear somewhere in the item: its name, the other
   // names it goes by, the supplier, the item number, the where, its kind or
@@ -727,8 +730,10 @@
         '<fieldset class="sup-pricebox"><legend>For estimates</legend>' +
           '<div class="field"><span class="label">Kind of material</span><select id="siCat" onchange="supCatPicked(this.value)">' +
             '<option value="">— pick one —</option>' +
-            categories().map(([cid, cname]) => '<option value="' + cid + '"' + (cid === it.category ? ' selected' : '') + '>' + esc(cname) + '</option>').join('') +
-          '</select></div>' +
+            categories().map(([cid, cname]) => '<option value="' + esc(cid) + '"' + (cid === it.category ? ' selected' : '') + '>' + esc(cname) + '</option>').join('') +
+            // Jonah (12 Oct 2026): "i need to be able to add kinds of materials".
+            '<option value="__new">＋ A new kind…</option>' +
+          '</select><div class="hint" id="siCatHint" hidden></div></div>' +
           '<div class="grid g2">' +
             field('One of these covers', 'siCover', show(it.coverage), 'e.g. 750 — blank if bought as measured', 'decimal') +
             field('…of what (the takeoff unit)', 'siTakeoff', it.takeoffUnit, 'e.g. sq ft, LF, plants') +
@@ -768,6 +773,24 @@
   // Picking Rentals (or Dumpsters) as the kind shows the half-day and week
   // rates, and a blank "Per" becomes "day".
   window.supCatPicked = function (cat) {
+    const sel = el('siCat');
+    if (cat === '__new' && sel) {
+      // Typed in: one already on the list is just picked; a new one is added.
+      cat = categoryId(prompt('The new kind of material (e.g. Lighting, Irrigation)') || '') || '';
+      if (cat && !Array.from(sel.options).some(o => o.value === cat)) {
+        const o = document.createElement('option');
+        o.value = cat; o.textContent = cat;
+        sel.insertBefore(o, sel.querySelector('option[value="__new"]'));
+      }
+      sel.value = cat;
+      const r = window.YDPricing && window.YDPricing.rules ? (window.YDPricing.rules().categories || {})[cat] : null;
+      const hint = el('siCatHint');
+      if (hint) {
+        hint.hidden = !cat || !!(r && r.markupPct != null);
+        hint.textContent = 'New kind. Set its markup and waste on ⋯ → Pricing rules (or this item’s own below), ' +
+          'or estimates will say it has no markup.';
+      }
+    }
     const rental = isRental({ category: cat });
     const row = el('spRentalRow'); if (row) row.hidden = !rental;
     const per = el('spPer'); if (rental && per && !per.value.trim() && cat === 'rental') per.value = 'day';
@@ -1440,7 +1463,7 @@
     const head = ['id', 'Supplier', 'Item', 'Item #', 'Comes in', 'Price', 'Per', 'Year',
                   'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes',
                   'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link', 'Used for'];
-    const catName = id => ((categories().find(c => c[0] === id) || [])[1]) || '';
+    const catName = id => (id ? ((categories().find(c => c[0] === id) || [])[1]) || id : '');
     const yn = b => (b ? 'yes' : '');
     const n = v => (typeof v === 'number' ? String(v) : '');
     const vName = it => (vendors[it.vendorId] || {}).name || '';
@@ -1675,12 +1698,35 @@
     return it.id;
   }
 
+  // One of Jonah's kinds renamed (Pricing rules → ✎ Rename): every item of
+  // that kind moves to the new name. Returns how many.
+  function renameKind(was, to) {
+    if (!edits() || !was || !to || was === to) return 0;
+    const now = new Date().toISOString(), writes = [];
+    Object.values(items).forEach(it => {
+      // "lighting" on one item and "Lighting" on another are the same kind.
+      if (!it.category || key(it.category) !== key(was) || it.category === to) return;
+      it.category = to;
+      writes.push(['supplies', it.id, { category: to, updatedAt: now }]);
+    });
+    if (writes.length) {
+      Promise.resolve(window.YDDb.putMany(writes)).catch(e => {
+        if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
+        else console.warn('[supplies] kind rename not yet on the server:', (e && e.code) || e);
+      });
+      tagsChanged();
+      redrawIfVisible();
+    }
+    return writes.length;
+  }
+
   window.YDSupplies = {
     render: render, parseTable: parseTable, parseCents: parseCents,
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
     findSupply: findSupply, setPrice: setPrice, addSourced: addSourced,
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
     websiteUrl: websiteUrl,       // app.js, Materials to Order
+    renameKind: renameKind,       // pricing.js, Pricing rules
   };
 
   let authKey = null;
