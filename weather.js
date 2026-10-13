@@ -1,11 +1,12 @@
-// Weather, in three layers.
+// The weather cards at the top of the Snow tab: Dane and Green County, each
+// with the temperature, the next day's snow, rain and wind, the ground
+// temperature and any warnings. (A visit bills by the depth recorded on the
+// storm night -- storm.js, billing.js -- not by anything forecast here.) The
+// header's weather button and its week are forecast.js.
 //
-//   1. Both counties, always on screen   -- Dane and Green, one request each
-//   2. Any town, on demand               -- fetched when looked at, not before
-//   3. Every stop on a storm night       -- snowfall at that exact address
-//
-// Layer 3 is the one that matters for money: it is the property's own snowfall
-// that decides which tier a visit bills at, not the town's.
+// Fetched only while the Snow tab is on screen: six requests every quarter
+// hour for cards nobody is looking at was a phone's data and battery spent
+// for nothing.
 //
 // Two sources, both free and neither needing a key:
 //   weather.gov  -- forecast, alerts, snowfall, wind, rain, heat index
@@ -189,30 +190,32 @@
   // hours -- and the last good cards are kept on the phone, so a launch with
   // no signal shows them with their time rather than "unavailable".
   const SAVED = 'ydjobhub_wxCounties';
+  const STALE_MS = 10 * 60000;               // looked at again after this, it is fetched anew
   let drawnAt = 0, on = false;
+  const snowShown = () => {
+    const p = document.getElementById('panel-snow');
+    return !!(p && p.classList.contains('active')) && document.visibilityState === 'visible';
+  };
+  // Both counties at once -- one slow answer used to hold up the other.
+  function countyHtml(county) {
+    const pt = COUNTY_POINTS[county];
+    return Promise.all([
+      pointWeather(pt.lat, pt.lng),
+      groundTemp(pt.lat, pt.lng).catch(() => null),
+      alertsFor(ZONES[county]).catch(() => []),
+    ]).then(([w, soil, alerts]) => ({ ok: true, html: countyCard(county, w, soil, alerts) }),
+      e => ({ ok: false, html: '<div class="wx-card"><div class="wx-county">' + county + ' County</div>' +
+                                '<div class="wx-fail">Weather unavailable — ' + esc(e.message) + '</div></div>' }));
+  }
   async function renderCounties() {
     const wrap = document.getElementById('weatherWrap');
     if (!wrap) return;
     if (!wrap.innerHTML.trim()) wrap.innerHTML = '<div class="wx-loading">Checking the weather…</div>';
     drawnAt = Date.now();
 
-    const out = [];
-    let good = 0;
-    for (const county of Object.keys(ZONES)) {
-      const pt = COUNTY_POINTS[county];
-      try {
-        const [w, soil, alerts] = await Promise.all([
-          pointWeather(pt.lat, pt.lng),
-          groundTemp(pt.lat, pt.lng).catch(() => null),
-          alertsFor(ZONES[county]).catch(() => []),
-        ]);
-        out.push(countyCard(county, w, soil, alerts));
-        good++;
-      } catch (e) {
-        out.push('<div class="wx-card"><div class="wx-county">' + county + ' County</div>' +
-                 '<div class="wx-fail">Weather unavailable — ' + esc(e.message) + '</div></div>');
-      }
-    }
+    const cards = await Promise.all(Object.keys(ZONES).map(countyHtml));
+    const out = cards.map(c => c.html);
+    const good = cards.filter(c => c.ok).length;
     if (good) {
       wrap.innerHTML = out.join('');
       try { localStorage.setItem(SAVED, JSON.stringify({ at: Date.now(), html: wrap.innerHTML })); } catch (e) {}
@@ -225,10 +228,23 @@
           esc(new Date(saved.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' })) + '</div>' + saved.html
       : out.join('');
   }
-  setInterval(() => { if (on && document.visibilityState === 'visible') renderCounties(); }, 15 * 60000);
-  document.addEventListener('visibilitychange', () => {
-    if (on && document.visibilityState === 'visible' && Date.now() - drawnAt > 10 * 60000) renderCounties();
-  });
+  // Fetched again when the cards are on screen and old: on arriving at the
+  // Snow tab, on coming back to the app, and every quarter hour while the
+  // Snow tab stays up (a storm night).
+  function refreshIfStale() {
+    if (on && snowShown() && Date.now() - drawnAt > STALE_MS) renderCounties();
+  }
+  setInterval(refreshIfStale, 15 * 60000);
+  document.addEventListener('visibilitychange', refreshIfStale);
+  // switchTab (app.js) only toggles the panel's `active` class, so the Snow
+  // tab coming on screen is noticed here by watching that class.
+  function watchSnowTab() {
+    const p = document.getElementById('panel-snow');
+    if (!p || typeof MutationObserver !== 'function') return;
+    new MutationObserver(refreshIfStale).observe(p, { attributes: true, attributeFilter: ['class'] });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchSnowTab);
+  else watchSnowTab();
 
   function countyCard(county, w, soil, alerts) {
     const bad = (alerts || []).filter(a => /warning|watch|advisory/i.test(a.event));
@@ -259,29 +275,11 @@
            '<div class="wx-lab">' + label + '</div></div>';
   }
 
-  // ---------------------------------------------------------------- exports
-
-  window.YDWeather = {
-    pointWeather, groundTemp, alertsFor, renderCounties, ageText,
-
-    // Layer 3: snowfall at one property, for the storm screen.
-    async forStop(lat, lng) {
-      if (lat == null) return null;
-      try { return await pointWeather(lat, lng); } catch (e) { return null; }
-    },
-
-    // Layer 2: any address, looked up when asked for.
-    async forAddress(address) {
-      const geo = await window.YDSnowGeocode(address);
-      if (!geo) return null;
-      const w = await pointWeather(geo.lat, geo.lng);
-      return Object.assign({ place: geo.matched }, w);
-    },
-  };
-
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     on = a.mode === 'cloud' && !!a.user;
-    if (on) setTimeout(renderCounties, 1200);
+    // Signed in on the Snow tab: its cards now. Anywhere else, when the Snow
+    // tab is opened.
+    if (on) setTimeout(refreshIfStale, 1200);
   });
 })();

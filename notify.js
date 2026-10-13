@@ -233,8 +233,8 @@
       if (!mine || !mine.html) { box.innerHTML = '<p class="empty-msg">Nothing to send for that one right now.</p>'; return; }
       // Shown in a sandboxed frame: it is the email exactly as it would arrive.
       box.innerHTML = '<div class="ntf-push-preview"><b>' + esc(mine.push.title) + '</b><br>' + esc(mine.push.body) + '</div>' +
-        '<iframe class="ntf-frame" sandbox="" title="Summary preview"></iframe>';
-      box.querySelector('iframe').srcdoc = mine.html;
+        '<iframe class="ntf-frame" sandbox="' + FRAME_SANDBOX + '" title="Summary preview"></iframe>';
+      box.querySelector('iframe').srcdoc = framed(mine.html);
     } catch (e) {
       box.innerHTML = '<p class="ntf-warn">' + esc(e.message) + '</p>';
     }
@@ -256,6 +256,12 @@
   // (summaries/{uid}_{day}_{slot}, digest.py _keep; each person reads only
   // their own) and the phone notification opens this. Shown in a sandboxed
   // frame: the email's own page, exactly as it would have arrived.
+  // The summary's "Open Job Hub" opens in a tab of its own: in a fully
+  // sandboxed frame it went nowhere at all. The frame still runs no scripts
+  // and cannot reach into Job Hub; the tab the link opens is an ordinary one
+  // (escape-sandbox), or Job Hub could not run in it.
+  const FRAME_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
+  const framed = html => '<base target="_blank">' + String(html || '');
   const SLOT_ICON = { morning: '☀️', midday: '🕛', evening: '🌙' };
   const SLOT_WORD = { morning: 'Morning', midday: 'Midday', evening: 'End of day' };
   let summaries = {}, sumUnsub = null, sumShown = null;
@@ -295,9 +301,9 @@
     const shown = list.find(s => s.id === sumShown) || list[0];
     body.innerHTML = '<div class="sum-pick">' + list.map(s => '<button class="sum-chip' + (s.id === shown.id ? ' on' : '') +
         '" onclick="showSummary(\'' + String(s.id).replace(/[^A-Za-z0-9_-]/g, '') + '\')">' + esc(sumLabel(s)) + '</button>').join('') + '</div>' +
-      '<iframe class="ntf-frame sum-frame" sandbox="" title="' + esc(shown.subject || 'Summary') + '"></iframe>' +
+      '<iframe class="ntf-frame sum-frame" sandbox="' + FRAME_SANDBOX + '" title="' + esc(shown.subject || 'Summary') + '"></iframe>' +
       '<div class="field-actions"><button class="btn btn-sm" onclick="closeSummaries(); openNotifications()">Change what you get</button></div>';
-    body.querySelector('iframe').srcdoc = String(shown.html || '');
+    body.querySelector('iframe').srcdoc = framed(shown.html);
   }
 
   // --------------------------------------------------------------- wiring

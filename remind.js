@@ -186,9 +186,18 @@
     const a = window.YDAuth || {};
     if (!a.user) return null;
     const byName = {};
+    const key = n => String(n || '').trim().toLowerCase();
     Object.keys(people || {}).forEach(uid => {
       const p = people[uid] || {};
-      [p.name, p.email].forEach(n => { const k = String(n || '').trim().toLowerCase(); if (k) byName[k] = uid; });
+      [p.name, p.email].forEach(n => { const k = key(n); if (k) byName[k] = uid; });
+    });
+    // A crew phone has no list of people, but a card it made carries its own
+    // name (boards.js myName) -- without this, a card a crew member made with
+    // nobody on it was not "mine" on their phone while the server reminded
+    // them of it (functions/reminders.py names every user record).
+    [meRec && meRec.name, meRec && meRec.email, a.user.email].forEach(n => {
+      const k = key(n);
+      if (k && !byName[k]) byName[k] = a.user.uid;
     });
     const mine = meRec || { role: a.role };
     return { uid: a.user.uid, owner: !!a.isOwner, crew: isCrewMember(mine),

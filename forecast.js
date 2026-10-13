@@ -63,6 +63,45 @@
     try { localStorage.setItem(STORE + p, JSON.stringify(d)); } catch (e) {}
   }
 
+  // weather.gov is often slow, sometimes very. The numbers (Open-Meteo) wait
+  // for its warnings and written forecast, so it gets this long and no more
+  // -- with no limit the header button sat on "…" for a minute on one bar.
+  // `until`: the moment to give up (one limit for /points and the forecast
+  // after it together).
+  const NWS_WAIT_MS = 8000;
+  function nwsJson(url, until) {
+    const stop = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = stop ? setTimeout(() => stop.abort(), Math.max(0, until - Date.now())) : null;
+    return fetch(url, { headers: { Accept: 'application/geo+json' }, signal: stop ? stop.signal : undefined })
+      .then(r => {
+        if (!r.ok) { const e = new Error('weather.gov said ' + r.status); e.status = r.status; throw e; }
+        return r.json();
+      })
+      .finally(() => clearTimeout(timer));
+  }
+  // Where a town's written forecast is: weather.gov answers that once for a
+  // point (/points) and it does not change, so it is kept on the device
+  // rather than asked for before every forecast.
+  async function writtenForecast(p, spot, until) {
+    const key = STORE + 'nws_' + p;
+    let url = null;
+    try { url = localStorage.getItem(key); } catch (e) {}
+    if (!url) {
+      const pt = await nwsJson('https://api.weather.gov/points/' + spot, until);
+      url = pt && pt.properties && pt.properties.forecast;
+      if (!/^https:\/\/api\.weather\.gov\//.test(String(url || ''))) throw new Error('no forecast for this point');
+      try { localStorage.setItem(key, url); } catch (e) {}
+    }
+    try {
+      return await nwsJson(url, until);
+    } catch (e) {
+      // The forecast moved (weather.gov redraws its grid now and then): ask
+      // /points again next time.
+      if (e.status === 404) { try { localStorage.removeItem(key); } catch (err) {} }
+      throw e;
+    }
+  }
+
   async function fetchWeek(p) {
     const pt = PLACES[p];
     const q = new URLSearchParams({
@@ -75,14 +114,14 @@
               'wind_speed_10m,wind_gusts_10m,is_day',
     });
     const spot = pt.lat.toFixed(4) + ',' + pt.lng.toFixed(4);
-    const geo = { headers: { Accept: 'application/geo+json' } };
     // The numbers, the warnings and the written forecast come from three
-    // places; ask for all three at once so a slow one does not hold up the rest.
+    // places; ask for all three at once, and weather.gov's two only for so
+    // long (NWS_WAIT_MS), so a slow one does not hold up the rest.
+    const until = Date.now() + NWS_WAIT_MS;
     const [om, warn, words] = await Promise.allSettled([
       fetch('https://api.open-meteo.com/v1/forecast?' + q),
-      fetch('https://api.weather.gov/alerts/active?point=' + spot, geo).then(a => a.json()),
-      fetch('https://api.weather.gov/points/' + spot, geo).then(a => a.json())
-        .then(p => fetch(p.properties.forecast, geo)).then(a => a.json()),
+      nwsJson('https://api.weather.gov/alerts/active?point=' + spot, until),
+      writtenForecast(p, spot, until),
     ]);
     if (om.status !== 'fulfilled' || !om.value.ok) throw new Error('forecast unavailable');
     const j = await om.value.json();
@@ -372,9 +411,10 @@
 
   function boot() {
     refresh(false);
-    // Kept current while the app is open; a closed app cannot fetch anyway.
+    // Kept current while the app is on screen; a closed app cannot fetch
+    // anyway, and one in the background is fetched for on its return (below).
     clearInterval(timer);
-    timer = setInterval(() => refresh(false), 10 * 60 * 1000);
+    timer = setInterval(() => { if (!document.hidden) refresh(false); }, 10 * 60 * 1000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(false); });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

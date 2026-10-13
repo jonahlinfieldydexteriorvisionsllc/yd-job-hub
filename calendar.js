@@ -112,6 +112,7 @@
   let drag = null;          // an entry being dragged
   let justDragged = 0;      // a drag ends in a click; that click opens nothing
   let gridScroll = null;     // where the hours were scrolled to (null: not yet)
+  let drawFrame = 0;        // a redraw waiting for the next frame (redrawIfVisible)
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -268,7 +269,7 @@
         if (x.card.auto && x.card.equipmentId && ydCan('equipment', 'see')) return;
         // A recurring task's card is drawn by the Crew tasks layer below.
         if (x.card.recurring && window.YDRecurring && YDRecurring.visible()) return;
-        if (onlyMine && !YDBoards.isMine(x.card, x.board)) return;
+        if (onlyMine && !YDRemind.cardIsMine(x.card, x.board, w)) return;
         const type = YDRemind.typeOf(x.card, { boardId: x.board.id });
         const ic = YDRemind.icon(type) || '📌';
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
@@ -426,13 +427,19 @@
     // not where it was.
     const old = wrap.querySelector('.cg-scroll');
     if (old && old.clientHeight && old.dataset.placed) gridScroll = old.scrollTop;
+    // Drawn now: a redraw already waiting for the next frame has nothing
+    // left to do.
+    if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
     drawn = {};
+    // The "any time" list goes in two places -- down the side on a computer,
+    // above the calendar on a phone (the stylesheet shows one) -- built once.
+    // My day has it in the page already.
+    const anyTime = view === 'myday' ? '' : todayHtml();
     wrap.innerHTML = '<div class="cal-shell">' +
-        '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml() + '</aside>' +
+        '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml(anyTime) + '</aside>' +
         '<div class="cal-main">' + topHtml() +
           // A phone has the side folded away behind ☰: the list goes on top.
-          // My day has it in the page already.
-          (view === 'myday' ? '' : todayHtml()) +
+          anyTime +
           '<div class="cal-body" id="calBody">' +
             (view === 'month' ? monthHtml() : view === 'schedule' ? listHtml() : view === 'myday' ? myDayHtml()
               : gridHtml(gridDays())) +
@@ -441,6 +448,7 @@
       '</div>';
     if (isGrid()) placeScroll();
     wireSlots();
+    wireHolds();
   }
 
   function topHtml() {
@@ -539,7 +547,7 @@
       const boardId = o.auto === 'card' ? o.boardId : 'crew';
       const b = (YDBoards.boards() || {})[boardId] || { id: boardId };
       const card = ((YDBoards.cards() || {})[boardId] || {})[o.id] || { assignees: [] };
-      return YDRemind.cardIsMine(card, b, YDRemind.who(YDBoards.people()));
+      return YDRemind.cardIsMine(card, b, w);
     }
     return YDRemind.eventIsMine(o.ev, cals[o.calId], w);
   }
@@ -623,10 +631,10 @@
     render();
   };
 
-  // Down the side: the small month, the day's "any time" list, then every
-  // calendar with a tick box.
-  function sideHtml() {
-    return miniHtml() + (view === 'myday' ? '' : todayHtml()) +
+  // Down the side: the small month, the day's "any time" list (`anyTime`,
+  // built by render), then every calendar with a tick box.
+  function sideHtml(anyTime) {
+    return miniHtml() + anyTime +
       '<div class="cal-side-head">Calendars</div>' +
       '<div class="cal-checks">' + layers().map(l =>
         '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
@@ -832,7 +840,9 @@
     return '<div class="cal-month">' +
         WEEKDAYS.map(w => '<div class="cal-wd">' + w + '</div>').join('') + cells +
       '</div>' +
-      '<div class="cal-daypanel">' + dayBlock(selected, byDay[selected] || occurrences(selected, selected), true) + '</div>';
+      // The picked day is always one of the 42 squares (calStep and calPick
+      // keep it in this month): nothing in byDay is nothing that day.
+      '<div class="cal-daypanel">' + dayBlock(selected, byDay[selected] || [], true) + '</div>';
   }
 
   function listHtml() {
@@ -982,9 +992,12 @@
     const when = ev.allDay || !ev.time ? 'All day' : fmtTimeRange(ev.time, ev.endTime);
     const mapUrl = ev.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ev.address) : '';
     const type = YDRemind.typeById(typeOfEv(ev, cal));
-    // The reminder is the series' (a single date cannot have its own).
-    const onIt = (ev.crew || []).some(c => me() && c.uid === me().uid);
-    const remindLine = YDRemind.line(base, type ? type.id : '', isTimed(ev), onIt);
+    // The reminder is the series' (a single date cannot have its own). The
+    // usual one is said only when the entry is this person's by the same
+    // rule the reminders go by (remind.js isMine) -- not just when they are
+    // on it, which left out the owner's own entries with nobody on them.
+    const remindLine = YDRemind.line(base, type ? type.id : '', isTimed(ev),
+      YDRemind.eventIsMine(ev, cal, YDRemind.who(people)));
     openModal(esc(ev.title || ev.jobName || 'Event'),
       '<div class="cal-detail" style="--c:' + safeColor(cal.color) + '">' +
         '<div class="cal-detail-cal"><span class="cal-dot"></span>' + esc(cal.name) + '</div>' +
@@ -1648,6 +1661,19 @@
     render(); moved();
   }
 
+  // Once an entry is held, the finger moves it rather than the page. A
+  // listener that may stop the page scrolling makes the browser wait on the
+  // page before every scroll that starts over it, so it goes only on the
+  // entries that can be dragged -- on the whole calendar, every swipe through
+  // the hours waited (review, 12 Oct). Not added when the hold begins: the
+  // browser settles whether a touch can be stopped from scrolling as the
+  // finger lands, so one added then could not keep the page still.
+  function holdTouch(e) { if (drag && drag.live && e.cancelable) e.preventDefault(); }
+  function wireHolds() {
+    document.querySelectorAll('#calBody [data-k].mv').forEach(n =>
+      n.addEventListener('touchmove', holdTouch, { passive: false }));
+  }
+
   // Swiping across the calendar on a phone moves to the next days, or back.
   let swipe = null;
   function onTouchStart(e) {
@@ -1670,8 +1696,7 @@
     window.addEventListener('pointermove', onMove, { passive: false });
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', () => { const was = drag && drag.live; stopDrag(); if (was) render(); });
-    // Once an entry is held, the finger moves it rather than the page.
-    wrap.addEventListener('touchmove', e => { if (drag && drag.live && e.cancelable) e.preventDefault(); }, { passive: false });
+    // Holding an entry: see wireHolds.
     wrap.addEventListener('touchstart', onTouchStart, { passive: true });
     wrap.addEventListener('touchend', onTouchEnd, { passive: true });
     // The red line at now keeps up.
@@ -1931,13 +1956,22 @@
     showToast('Moved to Crew tasks — every crew member can see it');
   };
 
+  // Every calendar's entries, every board's cards, storms and people each
+  // ask for a redraw -- at start-up dozens in a second, each running the
+  // whole calendar again. The asks in one moment share a single draw at the
+  // next frame (a hidden tab gets none until it is looked at; switchTab
+  // draws on arrival anyway).
   function redrawIfVisible() {
-    const p = el('panel-calendar');
-    if (!p || !p.classList.contains('active')) return;
-    // Do not redraw under someone filling in the editor.
-    const m = el('calModal');
-    if (m && m.classList.contains('active') && (el('evTitle') || el('ccName'))) return;
-    render();
+    if (drawFrame) return;
+    drawFrame = requestAnimationFrame(() => {
+      drawFrame = 0;
+      const p = el('panel-calendar');
+      if (!p || !p.classList.contains('active')) return;
+      // Do not redraw under someone filling in the editor.
+      const m = el('calModal');
+      if (m && m.classList.contains('active') && (el('evTitle') || el('ccName'))) return;
+      render();
+    });
   }
 
   function stop() {
@@ -1993,8 +2027,6 @@
   window.YDCalendar = {
     render: render,
     redraw: () => redrawIfVisible(),
-    occurrences: occurrences,
-    calendars: () => cals,
     // A job's days on the calendars this person can see, from today on
     // (crewjobs.js: who is working which day) -- every calendar, whatever is
     // ticked in the side.
@@ -2018,9 +2050,13 @@
     if (on) start(a); else stop();
     render();
   });
-  document.addEventListener('yd-jobs-changed', redrawIfVisible);
+  // Not the jobs: nothing drawn here reads them (an entry keeps its job's
+  // name), only the editor's job list, which is built as it opens.
   document.addEventListener('yd-cards-changed', redrawIfVisible);
   document.addEventListener('yd-boards-changed', redrawIfVisible);
+  // This person's own record has come in (remind.js): whether they are crew,
+  // and so what My day holds, follows it.
+  document.addEventListener('yd-remind-me', redrawIfVisible);
 
   function boot() { wire(); render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

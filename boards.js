@@ -97,6 +97,8 @@
   let seeded = false;
   let ready = false;        // boards have arrived from the server at least once
   let dragging = null;      // { boardId, cardId } while a card is dragged
+  let drawFrame = 0;        // a redraw waiting for the next frame (redrawIfVisible)
+  let cardsNews = 0;        // "cards changed" waiting to be told (cardsChanged)
 
   // The Maintenance board is made and kept in step by equipment.js, one card
   // per machine and per problem noted on it. Deleting it would only see it
@@ -119,6 +121,11 @@
   // 2026: "select specific calendars and boards that the guys can change").
   const editsBoard = b => !!b && !b.virtual && (isOwner() || (editsBoards() && b.ownerOnly !== true) ||
     (!!me() && (b.editors || []).indexOf(me().uid) !== -1));
+  // The board itself -- its settings, deleting it: the owner, or an admin
+  // who may change boards on one marked not private (firestore.rules ask for
+  // ownerOnly == false itself). A private board shared with an admin by name
+  // showed them Board settings and Delete, which the rules then refused.
+  const runsBoard = b => !!b && !b.virtual && (isOwner() || (editsBoards() && b.ownerOnly === false));
   // Who sees a board and who may change its cards: the owner, or an admin he
   // gave Board sharing on Your Crew → Access (Jonah, 12 Oct 2026: "it needs
   // to be an admin access option") -- never on a private board, and Private
@@ -160,9 +167,11 @@
   }
   // Whether a card is mine: I am on it, or nobody is and I made it (a crew
   // task with nobody on it: every crew member's) -- remind.js. The 👤 Mine
-  // filter, My day and the reminders agree on it.
+  // filter, My day and the reminders agree on it. Who "I" am is worked out
+  // once for a whole draw (`whoNow`, set by render), not again for each card.
+  let whoNow = null;
   function isMineCard(board, k) {
-    return YDRemind.cardIsMine(k, board, YDRemind.who(people));
+    return YDRemind.cardIsMine(k, board, whoNow || YDRemind.who(people));
   }
   const cardType = (board, k) => YDRemind.typeOf(k, { boardId: board.id });
   // A card with no column shows in the first one, so everything that works
@@ -299,6 +308,14 @@
   // ---------------------------------------------------------------- render
 
   function render() {
+    // Drawn now: a redraw already waiting for the next frame has nothing
+    // left to do.
+    if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
+    whoNow = window.YDRemind ? YDRemind.who(people) : null;
+    try { draw(); } finally { whoNow = null; }
+  }
+
+  function draw() {
     const wrap = el('boardsWrap');
     if (!wrap) return;
     const list = visibleBoards();
@@ -335,7 +352,7 @@
         '<div class="bd-title">' + esc(board.name) + '</div>' +
         '<div class="bd-sub">' + boardSubtitle(board) + '</div>' +
         '<div class="bd-actions">' +
-          (!board.virtual && editsBoards()
+          (runsBoard(board)
             ? '<button class="btn btn-sm" onclick="editBoard(\'' + board.id + '\')">Board settings</button>' : '') +
           (editsBoard(board)
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
@@ -460,7 +477,7 @@
     const shared = (b.visibleTo || []).map(uid => personName(uid)).filter(Boolean);
     // Admins with Boards access see every board that is not private, so
     // "only you" is said of a private one alone.
-    return (editsBoards()
+    return (runsBoard(b)
       ? (b.ownerOnly ? '🔒 Private — ' + (shared.length ? 'you and ' + shared.map(esc).join(', ') : 'only you')
         : shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Not shared with the crew')
       : editsBoard(b) ? 'Shared with you — you can add and change cards' : 'Shared with you') +
@@ -645,8 +662,10 @@
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
       (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
-      // The customer said yes in QuickBooks (seen by the hourly check, quickbooks.sweep).
-      (board.id === 'bids' && j.qbEstimate && j.qbEstimate.status === 'Accepted' && bidColumn(j) !== 'won'
+      // The customer said yes in QuickBooks (seen by the hourly check, quickbooks.sweep)
+      // -- or said yes and it was already turned into an invoice there.
+      (board.id === 'bids' && j.qbEstimate && (j.qbEstimate.status === 'Accepted' ||
+        (/^(Closed|Converted)$/.test(j.qbEstimate.status || '') && j.qbEstimate.acceptedDate)) && bidColumn(j) !== 'won'
         ? '<div class="bd-card-line bd-draft">✅ Accepted in QuickBooks — book it</div>' : '') +
       '<div class="bd-card-foot">' +
         (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>' : '') +
@@ -901,7 +920,11 @@
   window.editJobCard = function (boardId, jobId) {
     const j = jobsList().find(x => x._id === jobId);
     if (!j || !movesJobs()) return;
-    jobEdit = { boardId: boardId, jobId: jobId, services: (j.serviceTypes || []).slice() };
+    // The site-visit notes as they were when this opened: saving compares
+    // with these, so notes changed meanwhile on the Job tab (or Claude's
+    // estimate run) are not written over by an untouched box here.
+    jobEdit = { boardId: boardId, jobId: jobId, services: (j.serviceTypes || []).slice(),
+                siteWas: String(((j.estimate || {}).notes) || '').trim() };
     const nm = (j.firstName || j.lastName || j.business) ? { first: j.firstName, last: j.lastName, business: j.business }
       : (typeof splitName === 'function' ? splitName(j.customerName) : { first: '', last: '', business: j.customerName });
     const box = (id, label, v, attrs) => '<div class="field"><span class="label">' + label + '</span>' +
@@ -941,7 +964,7 @@
   window.jobEditTagOff = function (i) { if (jobEdit) { jobEdit.services.splice(i, 1); jobEditTags(); } };
   window.saveJobCard = function () {
     if (!jobEdit || !movesJobs() || !window.YDSync) return;
-    const { boardId, jobId } = jobEdit;
+    const { boardId, jobId, siteWas } = jobEdit;
     const first = val('jeFirst'), last = val('jeLast'), business = val('jeBusiness');
     const name = business || [first, last].filter(Boolean).join(' ');
     if (!name) { showToast('Give it the customer’s name'); return; }
@@ -959,9 +982,9 @@
       serviceTypes: jobEdit.services.slice(), notes: (el('jeNotes').value || '').trim(),
     };
     const site = el('jeSite');
-    if (site && site.value.trim() !== String((j.estimate || {}).notes || '').trim()) {
-      // Only the notes change. A bid with no estimate yet gets one in the
-      // current shape (estimate.js fromSaved, v 2).
+    if (site && site.value.trim() !== siteWas) {
+      // Only the notes change, on the estimate as it is now. A bid with no
+      // estimate yet gets one in the current shape (estimate.js fromSaved, v 2).
       patch.estimate = j.estimate ? Object.assign({}, j.estimate, { notes: site.value.trim() })
         : { v: 2, notes: site.value.trim() };
     }
@@ -1118,7 +1141,6 @@
   // yet, more useful next year): the server works cards by itself only while
   // settings/claude.cardRuns is true (Pricing rules -> Claude), and the
   // computer's 20-minute task is paused. "Ask Claude now" still works.
-  const MACHINE_BOARD = 'maintenance';
   const COMPUTER_AWAKE_MIN = 45;
 
   // When the computer at home last checked in, and whether the card runs
@@ -1147,7 +1169,7 @@
   }
 
   function claudeHtml(board, k) {
-    if (!isOwner() || board.virtual || board.id === MACHINE_BOARD || k.auto) return '';
+    if (!isOwner() || board.virtual || board.id === MAINTENANCE || k.auto) return '';
     const c = k.claude || null;
     const last = doneColOf(board);
     const finished = colOf(board, k) === last;
@@ -1590,7 +1612,7 @@
   let draftCols = [], draftLabels = [];
 
   window.editBoard = function (id) {
-    if (!editsBoards()) return;
+    if (!editsBoards() || (id && !runsBoard(boards[id]))) return;
     editingBoard = id;
     const b = id ? boards[id] : {};
     const crew = crewPeople().filter(p => p.role !== 'owner');
@@ -1749,7 +1771,7 @@
   };
 
   window.saveBoard = function () {
-    if (!editsBoards()) return;
+    if (!editsBoards() || (editingBoard && !runsBoard(boards[editingBoard]))) return;
     readDrafts();
     const name = val('bdName');
     if (!name) { showToast('Give the board a name'); return; }
@@ -1827,7 +1849,7 @@
     const b = boards[id];
     // Maintenance follows the Equipment tab; Crew tasks holds the recurring
     // task list (recurring.js) -- deleting either would lose it.
-    if (!b || !editsBoards() || id === MAINTENANCE || id === CREW_BOARD) return;
+    if (!b || !runsBoard(b) || id === MAINTENANCE || id === CREW_BOARD) return;
     const n = Object.keys(cards[id] || {}).length;
     if (!confirm('Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') +
                  '? This cannot be undone.')) return;
@@ -1890,7 +1912,7 @@
       if (meta && !meta.fromCache) cardsLoaded[boardId] = true;
       redrawIfVisible();
       // The calendar shows cards with due dates.
-      document.dispatchEvent(new CustomEvent('yd-cards-changed'));
+      cardsChanged();
       if (openCard && openCard.boardId === boardId && openCard.cardId && !document.getElementById('cdTitle')) {
         renderCardDetail();
       }
@@ -1901,15 +1923,18 @@
   //
   // The crew can read a card tagged 👷 Crew on any board (firestore.rules),
   // but not the boards they are not on -- so they cannot know those boards'
-  // names and columns. Whoever may change boards publishes them in
+  // names and columns. The owner's device publishes them in
   // settings/public.crewBoards (names and columns only, nothing else of the
   // board); a crew phone reads that and watches each such board for its
   // Crew-tagged cards. Those boards sit in `boards` marked crewOnly: never in
   // the picker, their cards shown on Crew tasks, moved like any other card.
+  // Only the owner's: he sees every board in one answer, where an admin's
+  // list is put together from two (start), and one written from half of it
+  // would take the other half's boards away from the crew.
   const crewWatch = {};              // boardId -> unsubscribe, on a crew phone
   let crewPublished = null;          // what this device last wrote
   function publishCrewBoards() {
-    if (!editsBoards() || !window.YDDb) return;
+    if (!isOwner() || !window.YDDb) return;
     const out = {};
     // A private board's name and columns are not the crew's business either.
     Object.values(boards).filter(b => !b.virtual && !b.crewOnly && !b.ownerOnly).forEach(b => {
@@ -1952,7 +1977,7 @@
             else set[c.id] = Object.assign({ id: c.id }, c.data);
           });
           redrawIfVisible();
-          document.dispatchEvent(new CustomEvent('yd-cards-changed'));
+          cardsChanged();
           if (openCard && openCard.boardId === id && openCard.cardId && !document.getElementById('cdTitle')) renderCardDetail();
         }, () => { dropCrewBoard(id); redrawIfVisible(); });   // not allowed yet (rules not published): nothing shown
       });
@@ -2068,9 +2093,29 @@
     watchCards('todo'); watchCards('crew');
   }
 
+  // Everything that changes asks for a redraw, and at start-up that is every
+  // board's cards, from the cache and again from the server, plus the jobs
+  // and the people -- dozens in a second, each a whole new board. So the
+  // asks in one moment share a single draw at the next frame (a hidden tab
+  // gets none until it is looked at, when switchTab draws it anyway).
   function redrawIfVisible() {
-    const p = el('panel-boards');
-    if (p && p.classList.contains('active')) render();
+    if (drawFrame) return;
+    drawFrame = requestAnimationFrame(() => {
+      drawFrame = 0;
+      const p = el('panel-boards');
+      if (p && p.classList.contains('active')) render();
+    });
+  }
+  // The same for everyone listening for card changes -- the calendar, the
+  // recurring tasks, Equipment: told once for a burst, not once per board.
+  // A timer rather than a frame, so the recurring cards and the Maintenance
+  // board are kept in step while the app sits in a background tab too.
+  function cardsChanged() {
+    if (cardsNews) return;
+    cardsNews = setTimeout(() => {
+      cardsNews = 0;
+      document.dispatchEvent(new CustomEvent('yd-cards-changed'));
+    }, 50);
   }
 
   function stop() {
@@ -2094,6 +2139,7 @@
       // with them by name -- and a board goes only when neither returns it
       // (as calendar.js does for private calendars).
       const from = {};
+      const answered = {};       // which questions the server has answered
       const tagged = name => (changes, meta) => {
         const pass = [];
         changes.forEach(c => {
@@ -2103,7 +2149,14 @@
             if (!s.size) { delete from[c.id]; pass.push(c); }
           } else { s.add(name); pass.push(c); }
         });
-        if (pass.length || meta) onBoards(pass, meta);
+        if (meta && !meta.fromCache) answered[name] = true;
+        // The list is only whole once the server has answered BOTH: until
+        // then a board missing from it may be one the other question has not
+        // returned yet. Marked ready on the first answer, a missing
+        // Maintenance board was made again by Equipment over the real one
+        // (its sharing wiped), so until then it counts as from the cache.
+        const whole = !!(answered.open && answered.mine);
+        if (pass.length || meta) onBoards(pass, meta && Object.assign({}, meta, { fromCache: !!meta.fromCache || !whole }));
       };
       const open = window.YDDb.watchWhere('boards', 'ownerOnly', false, tagged('open'), () => redrawIfVisible());
       const mine = window.YDDb.watchContains('boards', 'visibleTo', a.user.uid, tagged('mine'), () => redrawIfVisible());
@@ -2167,6 +2220,9 @@
     render();
   });
   document.addEventListener('yd-jobs-changed', redrawIfVisible);
+  // This person's own record has come in (remind.js): which cards are theirs
+  // can change with it -- on a crew phone it is how their own cards are known.
+  document.addEventListener('yd-remind-me', redrawIfVisible);
 
   function boot() { render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

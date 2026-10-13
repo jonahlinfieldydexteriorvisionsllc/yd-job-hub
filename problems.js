@@ -199,18 +199,26 @@
     if (m) m.classList.remove('active');
   };
 
+  // The count on the menu, kept up whether or not the window is open.
+  function updateBadge() {
+    const badge = el('problemsCount');
+    if (!badge) return;
+    let open = 0;
+    Object.keys(problems).forEach(id => { if (problems[id].status !== 'done') open++; });
+    badge.textContent = open ? String(open) : '';
+    badge.hidden = !open;
+  }
+
+  // The list itself only while the window is open (openProblems draws it
+  // on opening): every report ever sent, rebuilt on each new one with
+  // nobody looking, was work for nothing.
   function renderProblems() {
+    updateBadge();
     const wrap = el('problemsBody');
-    if (!wrap) return;
+    const m = el('problemsModal');
+    if (!wrap || !m || !m.classList.contains('active')) return;
     const list = Object.values(problems)
       .sort((a, b) => (b.atMs || 0) - (a.atMs || 0));
-    const open = list.filter(p => p.status !== 'done');
-
-    const badge = el('problemsCount');
-    if (badge) {
-      badge.textContent = open.length ? String(open.length) : '';
-      badge.hidden = !open.length;
-    }
 
     if (!list.length) {
       wrap.innerHTML = '<p class="empty-msg">Nothing has gone wrong. ' +
@@ -315,8 +323,6 @@
       renderProblems();
     }, () => renderProblems());
   }
-
-  window.YDProblems = { record: record, all: () => problems, render: renderProblems };
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
