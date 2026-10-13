@@ -553,6 +553,31 @@ service cloud.firestore {
       allow write: if canChange('jobs');
     }
 
+    // Photos on a job (jobphotos.js; Jonah, 12 Oct 2026: the crew upload
+    // photos on the job page, each marked before / during / after, showing
+    // who took it). The picture is in Cloud Storage (storage.rules); this is
+    // its record. Anyone working sees them and files their own; whoever took
+    // one may change its stage or caption and ask for it to be deleted;
+    // deleting -- and anything else -- is for whoever may change jobs.
+    function photoStage(d) { return d.stage in ['before', 'during', 'after']; }
+    function photoCaption(d) { return d.get('caption', '') is string && d.get('caption', '').size() <= 500; }
+    match /jobPhotos/{photoId} {
+      allow read: if isStaff();
+      allow create: if isStaff() && photoId.matches('jp[a-z0-9]+')
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.jobId is string
+        && request.resource.data.jobId.size() > 0 && request.resource.data.jobId.size() <= 100
+        && request.resource.data.path == 'jobPhotos/' + request.resource.data.jobId + '/' + photoId + '.jpg'
+        && request.resource.data.get('deleteAsked', null) == null
+        && photoStage(request.resource.data) && photoCaption(request.resource.data);
+      allow update: if canChange('jobs')
+        || (isStaff() && resource.data.by == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['stage', 'caption', 'deleteAsked', 'updatedAt'])
+            && photoStage(request.resource.data) && photoCaption(request.resource.data));
+      allow delete: if canChange('jobs');
+    }
+
     // Notes from the crew to the owner (crewnotes.js; Jonah, 12 Oct 2026:
     // "leave note for jonah ... i get a notification"). Each person writes
     // and reads their own; the owner reads them all and marks them read. The

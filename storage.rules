@@ -1,0 +1,46 @@
+rules_version = '2';
+
+// YD Job Hub -- who may read and add files in Cloud Storage.
+//
+// The only files are job photos (jobphotos.js): jobPhotos/{jobId}/{photoId}.jpg
+// and a small copy, {photoId}_t.jpg. Each photo's record (stage, who, when)
+// is jobPhotos/{photoId} in Firestore, guarded by firestore.rules.
+//
+// "Working for the business" is read from the same users/{uid} record that
+// firestore.rules uses: an active owner, admin or crew member. Deleting is
+// for whoever may change jobs, as in firestore.rules. Everything else is
+// refused -- a bucket a stranger with a Google account could fill would be a
+// bill, so being signed in is never enough on its own.
+//
+// Reading Firestore from here needs the Storage service agent to hold the
+// "Firebase Rules Firestore Service Agent" role; the Firebase console offers
+// that the first time these rules are published there.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function me() {
+      return firestore.get(/databases/(default)/documents/users/$(request.auth.uid)).data;
+    }
+    function staff() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/users/$(request.auth.uid))
+        && me().active == true && me().role in ['owner', 'admin', 'crew'];
+    }
+    function changesJobs() {
+      return staff() && (me().role == 'owner'
+        || (me().role == 'admin' && me().get(['access', 'jobs'], 'none') == 'change'));
+    }
+
+    match /jobPhotos/{jobId}/{file} {
+      allow read: if staff();
+      // A photo is shrunk on the phone to well under this; the cap stops a
+      // raw 40 MB file or a video from being stored by mistake.
+      allow create: if staff()
+        && file.matches('jp[a-z0-9]+(_t)?[.]jpg')
+        && request.resource.size < 4 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if changesJobs();
+    }
+  }
+}
