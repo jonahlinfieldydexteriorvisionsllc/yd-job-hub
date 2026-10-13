@@ -441,7 +441,6 @@
     if (!k) { watch(null); return; }
     if (jobId) watch(jobId);
     loadQueue();
-    if (typeof currentJobId !== 'undefined') jobShown(currentJobId);
   });
   window.addEventListener('online', sendWaiting);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendWaiting(); });

@@ -466,6 +466,28 @@ async function start() {
           err => { console.error('[db] shared-with watch failed on', path, err); if (onError) onError(err); });
       },
 
+      // Watch only the documents whose `field` is at or after `from` (an ISO
+      // date string or a number). For collections that only ever grow, like
+      // receipts: a device keeps the recent ones live and asks for older ones
+      // (listWhere) only when somebody looks back that far.
+      watchFrom(path, field, from, onChange, onError) {
+        const parts = path.split('/');
+        const q = query(collection(db, ...parts), where(field, '>=', from));
+        return onSnapshot(q, { includeMetadataChanges: true },
+          relay(onChange),
+          err => { console.error('[db] recent-only watch failed on', path, err); if (onError) onError(err); });
+      },
+
+      // One look (no watching) at the documents matching field <op> value,
+      // as { id: data }. From the cache when there is no signal.
+      async listWhere(path, field, op, value) {
+        const parts = path.split('/');
+        const snap = await getDocs(query(collection(db, ...parts), where(field, op, value)));
+        const out = {};
+        snap.forEach(d => { out[d.id] = d.data(); });
+        return out;
+      },
+
       async list(path) {
         const snap = await getDocs(collection(db, ...path.split('/')));
         const out = {};
@@ -544,6 +566,39 @@ async function start() {
           commits.push(batch.commit());
         }
         return Promise.all(commits);
+      },
+    };
+
+    // Files (job photos) in Cloud Storage. The Storage SDK is fetched the
+    // first time a photo is shown or sent, not at every launch -- most
+    // visits never touch a photo, and the crew's phones load on one bar.
+    // storage.rules is the real gate, the same way firestore.rules is.
+    let storageMod = null;
+    const storageOf = () => storageMod || (storageMod =
+      import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js')
+        .then(m => ({ m: m, s: m.getStorage(app) })));
+    window.YDStore = {
+      // Resolves with the file's download address once the whole file is
+      // up. onProgress(0..1) as it goes.
+      async upload(path, blob, contentType, onProgress) {
+        const { m, s } = await storageOf();
+        const r = m.ref(s, path);
+        await new Promise((resolve, reject) => {
+          const task = m.uploadBytesResumable(r, blob, { contentType: contentType || blob.type || 'image/jpeg' });
+          task.on('state_changed',
+            snap => { if (onProgress && snap.totalBytes) onProgress(snap.bytesTransferred / snap.totalBytes); },
+            reject, resolve);
+        });
+        return m.getDownloadURL(r);
+      },
+      async url(path) {
+        const { m, s } = await storageOf();
+        return m.getDownloadURL(m.ref(s, path));
+      },
+      async remove(path) {
+        const { m, s } = await storageOf();
+        try { await m.deleteObject(m.ref(s, path)); }
+        catch (e) { if (!e || e.code !== 'storage/object-not-found') throw e; }
       },
     };
 
