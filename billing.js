@@ -197,13 +197,23 @@
 
   // ---------------------------------------------------------------- loading
 
-  async function billingFor(id) {
-    if (billingCache[id]) return billingCache[id];
-    try {
-      const b = await window.YDDb.get('storms/' + id + '/private', 'billing');
-      if (b) billingCache[id] = b;
-      return b;
-    } catch (e) { return null; }
+  // One read per storm at a time: the list redraws on every change to any
+  // storm, and a redraw that started while the first was still reading asked
+  // the server for every bill a second time.
+  const fetching = {};      // id -> the read under way
+  function billingFor(id) {
+    if (billingCache[id]) return Promise.resolve(billingCache[id]);
+    if (fetching[id]) return fetching[id];
+    const key = authKey;
+    const read = Promise.resolve(window.YDDb.get('storms/' + id + '/private', 'billing'))
+      .then(b => {
+        // Not into the next person's cache, after a sign-out meanwhile.
+        if (b && authKey === key) billingCache[id] = b;
+        return b;
+      }, () => null)
+      .then(b => { if (fetching[id] === read) delete fetching[id]; return b; });
+    fetching[id] = read;
+    return read;
   }
 
   function start() {
@@ -231,7 +241,10 @@
     if (section) section.hidden = !ids.length;
     if (!ids.length) { wrap.innerHTML = ''; return; }
 
-    for (const id of ids) await billingFor(id);
+    // All the bills at once, not one after another: each read waits on the
+    // network, and every storm ever closed is listed (the season cards and
+    // the season picker need them all).
+    await Promise.all(ids.map(billingFor));
 
     // The cards are for the season on screen (the newest by default), not
     // every storm ever closed -- by the second winter those were all-time
@@ -833,7 +846,11 @@
     const key = a.mode === 'cloud' && a.user && ydCan('billing', 'see') ? (a.key || a.user.uid) : null;
     if (key !== authKey) {
       if (unsub) { try { unsub(); } catch (err) {} unsub = null; }
-      storms = {};
+      // The bills and the invoice numbering too, not only the list: the next
+      // person on the device (or this one, with Billing taken away) must not
+      // be shown the last one's figures from memory.
+      storms = {}; billingCache = {}; invoiceSettings = null; shownSeason = null;
+      Object.keys(fetching).forEach(k => { delete fetching[k]; });
       authKey = key;
     }
     // No longer allowed: the bills on screen go too.

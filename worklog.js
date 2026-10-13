@@ -105,12 +105,21 @@
 
   // ---------------------------------------------------------------- render
 
-  function render() {
+  // The filter bar as last drawn. It holds a type-to-search box (the job &
+  // place list), and the log redraws whenever any shift changes -- a crew
+  // member pausing, a job saved in the office. Rebuilding the bar each time
+  // wiped whatever was being typed into that box, so it is drawn again only
+  // when its choices actually change, and never while it is being used.
+  let barDrawn = null;
+
+  // `chosen`: a filter was just picked (wlSet), so the bar follows at once.
+  function render(chosen) {
     const wrap = el('worklogWrap');
     if (!wrap) return;
     const c = C();
     if (!c || !(window.YDAuth && window.YDAuth.user)) {
       wrap.innerHTML = '<p class="empty-msg">Sign in to see the work log.</p>';
+      barDrawn = null;
       return;
     }
 
@@ -131,8 +140,7 @@
     const notCounted = list.filter(r => !r.counted);
     const days = new Set(list.map(r => r.day)).size;
 
-    wrap.innerHTML =
-      '<div class="filter-bar wl-filters">' +
+    const barHtml =
         '<select onchange="wlSet(\'range\', this.value)">' +
           [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'],
            ['lastmonth', 'Last month'], ['all', 'All time'], ['custom', 'Pick dates…']]
@@ -150,8 +158,19 @@
         '<select class="searchable" onchange="wlSet(\'where\', this.value)"><option value="">Every job &amp; place</option>' +
           placeKeys.map(k => '<option value="' + esc(k) + '"' + (where === k ? ' selected' : '') + '>' +
             esc(places[k]) + '</option>').join('') +
-        '</select>' +
-      '</div>' +
+        '</select>';
+
+    let bar = el('wlFilters'), body = el('wlBody');
+    if (!bar || !body || !wrap.contains(bar)) {
+      wrap.innerHTML = '<div class="filter-bar wl-filters" id="wlFilters"></div><div id="wlBody"></div>';
+      bar = el('wlFilters'); body = el('wlBody'); barDrawn = null;
+    }
+    if (barHtml !== barDrawn && (chosen === true || !bar.contains(document.activeElement))) {
+      bar.innerHTML = barHtml;
+      barDrawn = barHtml;
+    }
+
+    body.innerHTML =
       '<div class="wl-views">' +
         [['day', 'By day'], ['job', 'By job'], ['person', isOwner() ? 'By person' : 'Summary']]
           .map(([v, t]) => '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') +
@@ -252,7 +271,7 @@
     else if (what === 'who') who = value;
     else if (what === 'where') where = value;
     else if (what === 'view') view = value;
-    render();
+    render(true);
   };
 
   // Excel runs any cell that starts with = + - or @ as a formula, quotes or
@@ -295,7 +314,7 @@
   // clock's one-second tick, which would rebuild the whole log every second.
   function redrawIfVisible() {
     const p = el('panel-clock');
-    if (p && p.classList.contains('active')) render();
+    if (p && p.classList.contains('active')) render(false);
   }
   document.addEventListener('yd-clock-changed', redrawIfVisible);
   document.addEventListener('yd-auth', e => {
@@ -306,5 +325,5 @@
     render();
   });
 
-  window.YDWorkLog = { render: render };
+  window.YDWorkLog = { render: () => render(false) };
 })();

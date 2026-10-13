@@ -1,7 +1,7 @@
 // Paychecks -- on the Clock tab, under Hours & Wages.
 //
 // Jonah pays the crew by person-to-person payment from the business's
-// Heartland Bank account. The server reads those bank emails along with the
+// bank account. The server reads those bank emails along with the
 // receipts (functions/receipts.py) and files each payment in paychecks/{id}:
 // who it went to (as the bank wrote the name, and the crew member that name
 // matched), how much, the date and the bank's confirmation number. Only mail

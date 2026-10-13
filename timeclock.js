@@ -306,14 +306,19 @@
       jobs.map(j => '<option value="job|' + esc(j.id) + '">' + esc(j.name) + '</option>').join('');
   }
 
+  // The job list the open form was last given, so a redraw with the same
+  // jobs leaves it alone (see renderClockCard).
+  let asOptions = null;
+
   function addShiftHtml() {
     const today = new Date();
     const iso = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+    asOptions = targetOptions();
 
     return '<div class="addshift">' +
       '<p class="clock-lead">A shift you forgot to clock in for</p>' +
       '<div class="field"><span class="label">What were you on?</span>' +
-        '<select id="asTarget" class="searchable">' + targetOptions() + '</select></div>' +
+        '<select id="asTarget" class="searchable">' + asOptions + '</select></div>' +
       '<div class="field"><span class="label">Day</span>' +
         '<input type="date" id="asDate" value="' + iso(today) + '" max="' + iso(today) + '"></div>' +
       '<div class="grid g2">' +
@@ -405,8 +410,11 @@
     const e = entries[id];
     if (!e || !running(e) || openPause(e)) return;
     // "Other" says what, in a few words, so the office is not left guessing.
+    // Cancel on that question is "never mind": the clock is not paused.
     if (reason === 'Other') {
-      const what = (prompt('What are you going to do?') || '').trim().slice(0, 60);
+      const typed = prompt('What are you going to do?');
+      if (typed === null) return;
+      const what = typed.trim().slice(0, 60);
       if (what) reason = 'Other: ' + what;
     }
     e.pauses = (e.pauses || []).concat([{ startedAt: nowIso(), endedAt: null, reason: reason }]);
@@ -476,7 +484,7 @@
     if (list.some(running)) return null;
     let last = null;
     list.forEach(e => { if (e.endedAt && (!last || (endMsOf(e) || 0) > (endMsOf(last) || 0))) last = e; });
-    if (!last || last.endedFor !== 'break') return null;
+    if (!last || last.endedFor !== 'break' || last.breakOverAt) return null;
     if (Date.now() - endMsOf(last) > BREAK_SHOW_HOURS * 3600000) return null;
     if (list.some(e => startMsOf(e) >= endMsOf(last))) return null;
     return last;
@@ -495,8 +503,20 @@
     window.clockInTo(b.kind, b.targetId, b.targetName);
     showToast('Back on — ' + b.targetName + ' (break ' + was + ')');
   };
+  // "Done for the day" ends the break on the shift itself (breakOverAt), so
+  // the office and the snow bill see it too -- on this phone alone, a storm
+  // stop could have counted up to BREAK_SHOW_HOURS of somebody's evening as
+  // a break. The phone's own note stays as well, for a write still waiting
+  // on signal (or refused by rules not yet published).
   window.endBreakDay = function (id) {
     try { localStorage.setItem(BREAK_DONE_KEY, id); } catch (e) {}
+    const b = entries[id];
+    if (b && b.endedFor === 'break' && !b.breakOverAt && window.YDDb) {
+      const at = Math.max(Date.now(), endMsOf(b) || 0);
+      b.breakOverAt = at;
+      Promise.resolve(window.YDDb.put('timeEntries', id, { breakOverAt: at }))
+        .catch(e => console.warn('[clock] break end kept on this phone only:', (e && e.code) || e));
+    }
     render();
   };
 
@@ -514,17 +534,26 @@
   // ------------------------------------------------------------- the display
 
   function render() {
-    renderClockCard();
+    // Every change to the shifts, the names or the rates on this device ends
+    // up here, so this is where the per-job labour sums are let go.
+    forgetLabour();
+    // The Clock screen's sections are drawn only while it is on screen:
+    // opening the tab draws them (switchTab in app.js calls this), and a
+    // phone on the Snow tab need not rebuild a hidden clock for every change.
+    if (clockShowing()) {
+      renderClockCard();
+      if (seesAll()) { renderOnNow(); renderApprovals(); renderTotals(); }
+      if (isOwner()) renderCrew();
+    }
     // Not while the name and rate are being typed into: the clock redraws
     // every second, and rebuilding the form would clear the fields mid-word.
     // Nor while a change is being asked for (the same reason).
     if (workerUid && !editingWorker && !asking
         && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
-    if (seesAll()) { renderOnNow(); renderApprovals(); renderTotals(); }
-    if (isOwner()) renderCrew();
     manageTicker();
   }
   window.renderClock = render;
+  const clockShowing = () => !!(el('panel-clock') && el('panel-clock').classList.contains('active'));
 
   // A running clock only needs redrawing while it is actually on screen and
   // actually running -- and only the parts with a running time in them. The
@@ -547,10 +576,17 @@
       if (e && running(e)) n.textContent = fmtDur(paidMs(e));
     });
     // How long a break has run (the clock card, and On now for the office).
+    // One that has just passed BREAK_SHOW_HOURS is not a break any more:
+    // the screen is drawn again once, so "On break" and its Clock back in
+    // go instead of counting up for ever.
+    let over = false;
     document.querySelectorAll('[data-live-break]').forEach(n => {
       const b = entries[n.dataset.liveBreak];
-      if (b && b.endedAt) n.textContent = fmtDur(Date.now() - endMsOf(b));
+      if (!b || !b.endedAt) return;
+      if (Date.now() - endMsOf(b) > BREAK_SHOW_HOURS * 3600000) over = true;
+      else n.textContent = fmtDur(Date.now() - endMsOf(b));
     });
+    if (over) { render(); return; }      // render() sees to the ticker
     manageTicker();
   }
 
@@ -569,11 +605,20 @@
       // they were being typed. Only the list of jobs is brought up to date,
       // and not while it is open, so a job that arrives after the form was
       // opened can still be picked.
+      //
+      // The list is a searchable one (makeSearchable in app.js): the select
+      // itself is hidden and the typing happens in the box beside it, so it
+      // is the whole control that must not have the focus. Rebuilding the
+      // options while the box was in use put its text back to the picked job
+      // after every letter. And an unchanged list is not rebuilt at all.
       const sel = el('asTarget');
-      if (!sel) { wrap.innerHTML = addShiftHtml(); return; }
-      if (document.activeElement !== sel) {
+      if (!sel) { wrap.innerHTML = addShiftHtml(); cardDrawn = null; return; }
+      const control = sel.closest('.ssel') || sel;
+      const opts = targetOptions();
+      if (opts !== asOptions && !control.contains(document.activeElement)) {
         const keep = sel.value;
-        sel.innerHTML = targetOptions();
+        sel.innerHTML = opts;
+        asOptions = opts;
         sel.value = keep;
         if (sel.selectedIndex < 0) sel.selectedIndex = 0;   // that job has gone
       }
@@ -593,14 +638,21 @@
       if (box && document.activeElement === box) { filterJobPicker(); return; }
       const typed = box ? box.value : '';
       wrap.innerHTML = pickerHtml();
+      cardDrawn = null;
       if (typed) {
         const fresh = el('clockSearch');
         if (fresh) { fresh.value = typed; filterJobPicker(); }
       }
       return;
     }
-    wrap.innerHTML = shift ? liveHtml(shift) : idleHtml();
+    // Not rebuilt when nothing on it has changed. The owner's clock redraws
+    // whenever anybody's shift does, and each rebuild swapped the Pause and
+    // Clock out buttons for new ones -- a tap landing in that instant was
+    // lost. (The running time is kept current by tick(), not by this.)
+    const html = shift ? liveHtml(shift) : idleHtml();
+    if (html !== cardDrawn || !wrap.firstChild) { wrap.innerHTML = html; cardDrawn = html; }
   }
+  let cardDrawn = null;       // the card as last drawn, by renderClockCard
 
   function breakHtml(b) {
     const id = safeId(b.id);
@@ -613,6 +665,10 @@
           esc(b.targetName) + '</button>' +
         '<button class="btn btn-sm" onclick="openJobPicker()">Clock in to something else</button>' +
         '<button class="btn btn-sm" onclick="endBreakDay(\'' + id + '\')">Done for the day</button>' +
+        // The same way out as when not on the clock at all: a shift that
+        // never got clocked, and their own hours.
+        '<button class="btn btn-sm" onclick="openAddShift()">Forgot to clock in?</button>' +
+        '<button class="btn btn-sm wk-mine" onclick="openWorker()">My hours</button>' +
       '</div>' +
     '</div>';
   }
@@ -1823,14 +1879,50 @@
 
   // ------------------------------------------------- what other screens ask
 
+  // All Jobs asks for every job's labour on each redraw and each letter typed
+  // in its search, and walking every shift on record once per job made that
+  // jobs x shifts. So the shifts are filed by job once, and each job's sums
+  // are kept, until anything they are worked out from changes -- a shift, a
+  // name or a rate -- which always ends in render() (forgetLabour there).
+  let jobIndex = null;        // jobId -> its shifts, in the same order as before
+  let jobSums = {};           // jobId -> forJob's answer
+  function forgetLabour() { jobIndex = null; jobSums = {}; }
+  function shiftsOnJob(jobId) {
+    if (!jobIndex) {
+      jobIndex = {};
+      Object.values(entries).forEach(e => {
+        if (e.kind === 'job' && e.targetId) (jobIndex[e.targetId] = jobIndex[e.targetId] || []).push(e);
+      });
+    }
+    return jobIndex[jobId] || [];
+  }
+
   // Approved hours only. Pending time is deliberately excluded from anything
   // that feeds money: a job whose profit moves on its own when a shift is
   // later rejected is a job whose numbers nobody trusts.
+  //
+  // A copy each time, so nothing a screen does with the answer can change
+  // what the next one is given.
   function forJob(jobId) {
+    if (!jobId) return sumJob(null).out;
+    if (!jobSums[jobId]) {
+      const r = sumJob(jobId);
+      // A counted shift with no end is still growing by the second: worked
+      // out fresh every time, as it always was, rather than kept.
+      if (!r.steady) return r.out;
+      jobSums[jobId] = r.out;
+    }
+    const s = jobSums[jobId], byWorker = {};
+    Object.keys(s.byWorker).forEach(k => { byWorker[k] = Object.assign({}, s.byWorker[k]); });
+    return Object.assign({}, s, { byWorker: byWorker });
+  }
+
+  function sumJob(jobId) {
     const out = { byWorker: {}, paidHours: 0, billableHours: 0, costCents: 0, pendingHours: 0 };
-    if (!jobId) return out;
-    Object.values(entries).forEach(e => {
-      if (e.kind !== 'job' || e.targetId !== jobId) return;
+    let steady = true;
+    if (!jobId) return { out: out, steady: steady };
+    shiftsOnJob(jobId).forEach(e => {
+      if ((awaitingOwner(e) || counts(e)) && endMsOf(e) == null) steady = false;
       if (awaitingOwner(e)) { out.pendingHours += hours(paidMs(e)); return; }
       if (!counts(e)) return;
       const p = e.paidHours != null ? e.paidHours : hours(paidMs(e));
@@ -1847,22 +1939,62 @@
     out.paidHours = Math.round(out.paidHours * 100) / 100;
     out.billableHours = Math.round(out.billableHours * 100) / 100;
     out.pendingHours = Math.round(out.pendingHours * 100) / 100;
-    return out;
+    return { out: out, steady: steady };
   }
 
   // Minutes a storm's crew were paused while inside one stop's window. The
   // snow billing subtracts this so a fuel stop during a driveway comes off
   // that customer's labour line, and one between driveways comes off nobody's.
+  //
+  // A BREAK counts the same way. It used to be a pause reason, and since
+  // 9 Oct it is a clock-out (endedFor 'break') -- so it sits on no shift,
+  // and the pauses alone no longer saw it: a crew member's lunch in the
+  // middle of a driveway was billed to that customer. The break runs from
+  // the end of that shift to the person's next shift of any kind (clocking
+  // in anywhere ends a break, as breakOf has it). With no next shift yet it
+  // runs to now, but never past BREAK_SHOW_HOURS -- the clock's own limit,
+  // after which it stops being a break at all.
   function pausedMinutesAt(stormId, fromIso, toIso) {
     const lo = ms(fromIso), hi = ms(toIso);
     if (!(lo && hi && hi > lo)) return 0;
-    let worst = 0;
+    const overlap = (a, b) => Math.max(0, Math.min(b, hi) - Math.max(a, lo));
+    // Every shift of each person who worked this storm, whatever it was on:
+    // the shift after a break may be anywhere.
+    const byUid = {};
     Object.values(entries).forEach(e => {
-      if (e.kind !== 'storm' || e.targetId !== stormId) return;
-      // The longest single person's pause, not the sum: if two crew stop for
-      // fuel together that is one interruption to the customer's service, not
-      // two.
-      worst = Math.max(worst, pausedMs(e, lo, hi));
+      if (e.kind === 'storm' && e.targetId === stormId) byUid[e.uid] = byUid[e.uid] || [];
+    });
+    Object.values(entries).forEach(e => { if (byUid[e.uid]) byUid[e.uid].push(e); });
+    let worst = 0;
+    Object.keys(byUid).forEach(uid => {
+      const theirs = byUid[uid];
+      let off = 0;
+      theirs.forEach(e => {
+        if (e.kind !== 'storm' || e.targetId !== stormId) return;
+        off += pausedMs(e, lo, hi);
+        const from = endMsOf(e);
+        if (e.endedFor !== 'break' || from == null) return;
+        // Their next shift, whatever it was on (a rejected one never happened).
+        let next = null;
+        theirs.forEach(x => {
+          const s = startMsOf(x);
+          if (x !== e && x.status !== 'rejected' && s >= from && (!next || s < startMsOf(next))) next = x;
+        });
+        // Only a break they came back from, to this storm, was a break in its
+        // service. A "break" that turned into going home (no "Done for the
+        // day" tapped, the next shift a job in the morning) was the end of
+        // their night, as a plain clock-out always was -- counting it took
+        // hours of the whole crew's labour off every stop the others did.
+        if (!next || next.kind !== 'storm' || next.targetId !== stormId) return;
+        let until = Math.min(startMsOf(next), from + BREAK_SHOW_HOURS * 3600000);
+        // "Done for the day" ended it (endBreakDay).
+        if (typeof e.breakOverAt === 'number') until = Math.min(until, e.breakOverAt);
+        off += overlap(from, until);
+      });
+      // The longest single person's time off, not everyone's added up: if
+      // two crew stop for fuel together that is one interruption to the
+      // customer's service, not two. And never more than the visit itself.
+      worst = Math.max(worst, Math.min(off, hi - lo));
     });
     return Math.round(worst / 60000);
   }
@@ -1900,6 +2032,11 @@
   // The work log listens for this. It is sent when names change as well as
   // shifts, because the log shows the name a person goes by now.
   function announce() { document.dispatchEvent(new CustomEvent('yd-clock-changed')); }
+
+  // What the clock (and the work log, and a crew note's job list) shows of a
+  // job from jobBoard. Its updatedAt is left out on purpose: it changes on
+  // every save of the job, whether or not anything here did.
+  const boardSig = j => [j.name, j.address, j.status].map(v => (v == null ? '' : String(v))).join('\u0001');
 
   // Crew cannot watch the users collection -- only the owner may read anyone
   // else's record -- but each person may read their own. Without it a crew
@@ -1944,6 +2081,7 @@
     unsub = [];
     entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
     requests = {}; asking = null;
+    forgetLabour();
     watchKey = key;
 
     // Change requests: the owner reads them all (the queue); anyone else only
@@ -1987,11 +2125,23 @@
       ? window.YDDb.watch('timeEntries', onEntries, onEntriesError)
       : window.YDDb.watchWhere('timeEntries', 'uid', u.uid, onEntries, onEntriesError));
 
+    // The office's every pause in typing on a job re-sends its entry here
+    // with a new updatedAt, and each one used to redraw the whole Clock
+    // screen on every phone -- rebuilding the Pause and Clock out buttons
+    // under a thumb -- and the work log and All Jobs with it. Only a change
+    // the clock shows (a job added or gone, its name, address or status) is
+    // worth that.
+    let boardHeard = false;
     unsub.push(window.YDDb.watch('jobBoard', changes => {
+      let shown = !boardHeard;
+      boardHeard = true;
       changes.forEach(c => {
+        const was = board[c.id];
         if (c.type === 'removed') delete board[c.id];
         else board[c.id] = Object.assign({ id: c.id }, c.data);
+        if (!was || c.type === 'removed' || boardSig(was) !== boardSig(board[c.id])) shown = true;
       });
+      if (!shown) return;
       render();
       announce();          // a renamed job reads under its new name in the log
     }, () => render()));
@@ -2053,6 +2203,7 @@
       unsub.forEach(fn => { try { fn(); } catch (e) {} });
       unsub = []; watchKey = null;
       entries = {}; board = {}; people = {}; rates = {}; usersLoaded = false; ratesLoaded = false;
+      forgetLabour();
       closeAccess();
       // Half-done screens go too. A form the owner opened to file a shift for
       // somebody else, left open, would otherwise file the next person's

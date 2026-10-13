@@ -363,13 +363,29 @@ service cloud.firestore {
       // Once a shift is 'ok', 'approved' or 'rejected' it is a payroll record
       // and only an owner may touch it -- otherwise a shift could be clocked
       // out short, settle itself, and then be edited longer.
+      // "Done for the day" after a break (timeclock.js endBreakDay): the time
+      // the break ended, once, on their own shift that ended for a break, and
+      // nothing else. It changes no hours and no pay -- it tells the snow bill
+      // when to stop counting the break (pausedMinutesAt) -- so it is allowed
+      // on a shift already settled, rate stamped and all.
+      function breakOver() {
+        let d = request.resource.data;
+        let was = resource.data;
+        return was.get('endedFor', '') == 'break' && !('breakOverAt' in was)
+          && d.diff(was).affectedKeys().hasOnly(['breakOverAt'])
+          && d.breakOverAt is number && was.endedMs is number
+          && d.breakOverAt >= was.endedMs
+          && d.breakOverAt <= request.time.toMillis() + 2 * 60 * 1000;
+      }
+
       allow update: if (decidesFor(resource.data.uid)
             && request.resource.data.uid == resource.data.uid)
         || (isWorker()
             && resource.data.uid == request.auth.uid
             && request.resource.data.uid == resource.data.uid
             && crewMayChange()
-            && crewFieldsOnly());
+            && crewFieldsOnly())
+        || (isWorker() && resource.data.uid == request.auth.uid && breakOver());
 
       allow delete: if decidesFor(resource.data.uid);
     }

@@ -397,8 +397,13 @@
       '</div>').join('') + '</div>' +
       (rows.length > 15 ? '<div class="hint">The newest 15 — the rest are on the Receipts tab (🚚 Vehicles).</div>' : '');
   }
-  // A receipt sorted while the machine is open shows at once.
-  document.addEventListener('yd-receipts', () => { if (openId && gear[openId]) renderDetail(); });
+  // A receipt sorted while the machine is open shows at once -- but not over
+  // a form being filled in on it (the same guard as a change to the machine
+  // from another device): receipts arrive whenever the mail is read, and a
+  // redraw then wiped a half-typed service or problem.
+  document.addEventListener('yd-receipts', () => {
+    if (openId && gear[openId] && !editingId && !notingIssue && !el('svWhat')) renderDetail();
+  });
 
   function eqCard(label, value, state) {
     return '<div class="eq-card' + (state ? ' ' + state : '') + '">' +

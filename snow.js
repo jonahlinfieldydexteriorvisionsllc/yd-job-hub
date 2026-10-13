@@ -249,17 +249,32 @@
   // Pricing lives in a subcollection per account, so it is fetched per account
   // rather than watched. Crew are refused by the rules and simply see no
   // prices -- which is the intended outcome, not an error.
-  async function loadPricing() {
-    if (!seesSnowPrices()) return;
+  //
+  // All at once rather than one after another (each read waits on the
+  // network, and a few dozen in a row held the prices back for seconds), and
+  // one run at a time: the accounts watch calls this on every change, and two
+  // runs side by side fetched every price twice. Accounts that arrive while a
+  // run is going are picked up by one more run when it finishes.
+  let pricingRun = null;      // the fetch under way, if any
+  let pricingAgain = false;   // asked for again while it was running
+  function loadPricing() {
+    if (!seesSnowPrices() || !window.YDDb) return;
+    if (pricingRun) { pricingAgain = true; return; }
     const ids = Object.keys(accounts).filter(id => !pricing[id]);
     if (!ids.length) return;
-    for (const id of ids) {
-      try {
-        const d = await window.YDDb.get('snowAccounts/' + id + '/private', PRICING_DOC);
-        if (d) pricing[id] = d;
-      } catch (e) { /* not permitted, or offline -- leave prices blank */ }
-    }
-    render();
+    // Prices that come back after a sign-out belong to the person before.
+    const key = authKey;
+    pricingRun = Promise.all(ids.map(id =>
+      Promise.resolve(window.YDDb.get('snowAccounts/' + id + '/private', PRICING_DOC))
+        .then(d => { if (d && authKey === key) pricing[id] = d; },
+              () => { /* not permitted, or offline -- leave prices blank */ })))
+      .then(() => {
+        pricingRun = null;
+        const again = pricingAgain;
+        pricingAgain = false;
+        if (authKey === key) render();
+        if (again) loadPricing();
+      });
   }
 
   // ---------------------------------------------------------------- exports
@@ -286,18 +301,6 @@
     priceVisit,
     resolveTier,
     render,
-
-    // Used once, by the import. Writes the public and private halves together
-    // so an account cannot exist with an address but no pricing.
-    async importAccounts(pub, priv) {
-      const entries = [];
-      Object.keys(pub).forEach(id => {
-        entries.push(['snowAccounts', id, pub[id]]);
-        if (priv[id]) entries.push(['snowAccounts/' + id + '/private', PRICING_DOC, priv[id]]);
-      });
-      await window.YDDb.putMany(entries);
-      return Object.keys(pub).length;
-    },
   };
 
   // ---------------------------------------------------------------- adding
@@ -480,7 +483,7 @@
   };
 
   // An address typed in its parts. The server looks it up (geo.py): the US
-  // Census geocoder there finds Wisconsin's rural fire numbers -- "W5883
+  // Census geocoder there finds Wisconsin's rural fire numbers -- "N1234
   // County Rd X" -- that OpenStreetMap has only the road for, and it cannot
   // be asked from a browser. With no answer from the server (no signal, or
   // signed out of it) the browser's own OpenStreetMap search is the fallback.

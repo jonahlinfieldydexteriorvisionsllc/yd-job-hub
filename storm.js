@@ -368,11 +368,14 @@
 
   // ---------------------------------------------------------------- actions
 
-  async function writeStop(id, patch) {
+  // `quiet`: nothing on screen changes (a location fix -- the position is
+  // kept as evidence and never shown), so the list is not redrawn under a
+  // gloved thumb for it.
+  async function writeStop(id, patch, quiet) {
     // A location fix can land seconds after the storm was closed or changed.
     if (!storm || !stops[id]) return;
     Object.assign(stops[id], patch);              // show it immediately
-    render();
+    if (!quiet) render();
     writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', id, patch), 'stop update');
   }
 
@@ -522,7 +525,7 @@
       pos => {
         // Only onto the storm it was asked for.
         if (!storm || storm.id !== sid) return;
-        writeStop(id, { [which + 'Lat']: pos.coords.latitude, [which + 'Lng']: pos.coords.longitude });
+        writeStop(id, { [which + 'Lat']: pos.coords.latitude, [which + 'Lng']: pos.coords.longitude }, true);
       },
       () => {},
       { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
@@ -781,17 +784,38 @@
     // a depth left in a box would otherwise open the next storm's card.
     Object.keys(drafts).forEach(k => { delete drafts[k]; });
     unsubStops = window.YDDb.watch('storms/' + stormId + '/stops', changes => {
+      let shown = false;      // anything that changes what the list shows
       changes.forEach(c => {
+        if (!locationOnly(c)) shown = true;
         if (c.type === 'removed') delete stops[c.id];
         else stops[c.id] = Object.assign({ id: c.id }, c.data);
         // Departed (here or on another phone): its boxes are done with.
         // (Not the one whose figures are being fixed this minute.)
         if (c.type === 'removed' || (c.data && c.data.departedAt && c.id !== fixing)) {
-          delete drafts['st-inches-' + safeId(c.id)]; delete drafts['st-salt-' + safeId(c.id)];
+          delete drafts['st-inches-' + safeId(c.id)]; delete drafts['st-lbs-' + safeId(c.id)];
         }
       });
-      render();
+      // A phone's position landing a few seconds after Arrive or Depart is
+      // not on screen, and redrawing every phone's list for it moved the
+      // buttons under whoever was tapping. So is this phone's own write
+      // coming back, already drawn when it was made.
+      if (shown) render();
     });
+  }
+
+  // A stop change that leaves what the list shows as it was: only the
+  // recorded position moved (arriveLat/Lng, departLat/Lng), or nothing did.
+  const LOCATION_KEY = /^(arrive|depart)(Lat|Lng)$/;
+  function locationOnly(c) {
+    if (c.type !== 'modified' || !stops[c.id] || !c.data) return false;
+    const was = stops[c.id], now = c.data;
+    const keys = new Set(Object.keys(was).concat(Object.keys(now)));
+    keys.delete('id');
+    for (const k of keys) {
+      if (LOCATION_KEY.test(k)) continue;
+      if (JSON.stringify(was[k]) !== JSON.stringify(now[k])) return false;
+    }
+    return true;
   }
 
   const known = {};        // every storm seen, so an orphan can be spotted
