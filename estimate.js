@@ -71,8 +71,18 @@
   // estimate you sent" can be answered from the job.
   const SENT_KEEP = 10;
   function blank() {
+    // payments: this estimate's own schedule ([{label, how: pct|amount|rest,
+    // value}]), or null for the usual (pricing.js payments).
     return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
-             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null };
+             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null, payments: null };
+  }
+  function cleanPlan(list) {
+    if (!Array.isArray(list) || !list.length) return null;
+    return list.slice(0, 8).map((s, i, a) => ({
+      label: String((s && s.label) || '').slice(0, 60),
+      how: i === a.length - 1 ? 'rest' : (s && s.how === 'amount' ? 'amount' : 'pct'),
+      value: i === a.length - 1 ? null : num(s && s.value),
+    }));
   }
   const clone = o => JSON.parse(JSON.stringify(o));
 
@@ -173,6 +183,7 @@
     o.flags = Array.isArray(e.flags) ? e.flags.map(String) : [];
     o.memo = String(e.memo || '');
     o.sent = Array.isArray(e.sent) ? e.sent.slice(-SENT_KEEP) : [];
+    o.payments = cleanPlan(e.payments);
     if (e.v === 2) {
       o.work = (Array.isArray(e.work) ? e.work : []).map(w => Object.assign({ id: newId('ew'), kind: 'crew' }, w));
       o.materials = (Array.isArray(e.materials) ? e.materials : []).map(m => Object.assign({ id: newId('em') }, m));
@@ -296,7 +307,7 @@
       '<div class="field mt"><span class="label">Message on the estimate (payment terms and warranty) — blank uses the one in Pricing rules</span>' +
         '<textarea id="estMemo" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estMemoInput(this.value)" placeholder="' +
         esc(defaultMemo(r ? r.totalCents : 0)) + '">' + esc(est.memo) + '</textarea></div>' +
-      '<div class="field-actions"><button class="btn btn-sm" onclick="openPriceBook()">💲 Price book (' + Object.keys(book).length + ')</button>' +
+      '<div class="field-actions"><button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced (' + Object.keys(book).length + ')</button>' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">⚙ Pricing rules</button>' : '') + '</div>' +
       '<div class="est-qb" id="estQb"></div>';
 
@@ -338,38 +349,56 @@
       '<button class="bd-edit-btn del" onclick="estRemove(\'' + kind + '\', \'' + id + '\')" aria-label="Remove">✕</button></span>';
   }
 
+  // How a labour line is priced (pricing.js workLine). Jonah, 13 Oct 2026: not
+  // everything is a goal profit per day -- turf is by the sq ft, adjusted.
+  const WORK_KINDS = [['crew', 'By crew-days'], ['flat', 'By the unit (a service)'], ['amount', 'Fixed price']];
+  const perDay = c => fmtMoney(Math.round(c / 100)).replace(/\.00$/, '') + '/day';
+
   function workHtml(w, i, ro) {
     const id = safeId(w.id), dis = ro ? ' disabled' : '';
     const kind = w.kind || 'crew';
-    const tiers = P().PROFIT_TIERS;
-    const rules = P().rules();
     const on = (f, v, ph, cls, mode) => '<input class="' + (cls || '') + '"' + (mode ? ' inputmode="' + mode + '"' : '') +
       ' value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph || '') + '"' + dis +
       ' oninput="estWork(\'' + id + '\', \'' + f + '\', this.value)">';
-    let nums = '';
+    let nums = '', extra = '';
     if (kind === 'crew') {
+      // His own amounts (Pricing rules), the usual marked; a line with an
+      // amount of its own shows it too; "Other" asks for one.
+      const choices = P().profitChoices ? P().profitChoices() : [];
+      const usual = P().defaultProfitCents ? P().defaultProfitCents() : null;
+      const mine = P().profitOf ? P().profitOf(w) : null;
+      const opts = choices.indexOf(mine) === -1 && mine !== null ? choices.concat([mine]).sort((a, b) => a - b) : choices;
       nums = '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'your call', '', 'decimal') + '</label>' +
-        '<label><span>Profit</span><select' + dis + ' onchange="estWork(\'' + id + '\', \'profit\', this.value)">' +
-          tiers.map(([t, name]) => '<option value="' + t + '"' + ((w.profit || rules.defaultProfit || 'aim') === t ? ' selected' : '') + '>' + name + '</option>').join('') +
+        '<label><span>Profit per crew-day</span><select' + dis + ' onchange="estWork(\'' + id + '\', \'profit\', this.value)">' +
+          (opts.length ? opts.map(c => '<option value="' + c + '"' + (c === mine ? ' selected' : '') + '>' + perDay(c) +
+            (c === usual ? ' (usual)' : '') + '</option>').join('') : '<option value="">— set them in Pricing rules —</option>') +
+          '<option value="__other">Other amount…</option>' +
         '</select></label>';
     } else if (kind === 'flat') {
-      const names = Object.keys(book).map(pid => [pid, book[pid]]).sort((a, b) => String(a[1].name || '').localeCompare(String(b[1].name || '')));
-      nums = '<label class="est-grow"><span>From the price book</span><select class="searchable"' + dis + ' onchange="estPickPrice(\'' + id + '\', this.value)">' +
+      // Services priced by crew-days are notes for Claude, not a price.
+      const names = Object.keys(book).map(pid => [pid, book[pid]]).filter(([pid, e]) => (e.method || 'unit') !== 'crew' || pid === w.priceId)
+        .sort((a, b) => String(a[1].name || '').localeCompare(String(b[1].name || '')));
+      const svc = w.priceId ? book[w.priceId] : null;
+      nums = '<label class="est-grow"><span>Service</span><select class="searchable"' + dis + ' onchange="estPickPrice(\'' + id + '\', this.value)">' +
           '<option value="">—</option>' + names.map(([pid, e]) => '<option value="' + esc(pid) + '"' + (pid === w.priceId ? ' selected' : '') + '>' +
             esc(e.name) + (Number.isInteger(e.priceCents) ? ' — ' + cents(e.priceCents) + '/' + esc(e.unit || 'each') : '') + '</option>').join('') +
         '</select></label>' +
         '<label><span>Qty' + (w.unit ? ' (' + esc(w.unit) + ')' : '') + '</span>' + on('qty', w.qty, '', '', 'decimal') + '</label>' +
-        '<label><span>Rate</span>' + on('rate', dollarsIn(w.rateCents), '0.00', '', 'decimal') + '</label>';
+        '<label><span>Price per ' + esc(w.unit || 'unit') + '</span>' + on('rate', dollarsIn(w.rateCents), '0.00', '', 'decimal') + '</label>' +
+        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
+      extra = adjustHtml(w, svc, ro);
     } else {
-      nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', '', 'decimal') + '</label>';
+      nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', '', 'decimal') + '</label>' +
+        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
     }
     return '<div class="est-wrow">' +
       '<div class="est-wtop">' + on('title', w.title, 'Heading, e.g. Paver patio & steps', 'est-title') +
         '<select' + dis + ' onchange="estWork(\'' + id + '\', \'kind\', this.value)">' +
-          [['crew', 'Crew-days'], ['flat', 'Price book'], ['amount', 'Fixed amount']].map(([k, n]) =>
-            '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + n + '</option>').join('') +
+          WORK_KINDS.map(([k, n]) => '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + n + '</option>').join('') +
         '</select>' + moves('work', id, i, est.work.length, ro) + '</div>' +
       '<div class="est-nums">' + nums + '<div class="est-amt" id="estWA_' + id + '"></div></div>' +
+      extra +
+      '<div class="est-wprofit" id="estWF_' + id + '"></div>' +
       '<textarea rows="4" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
         ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>' +
       '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
@@ -377,6 +406,48 @@
       '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
   }
+
+  // A service's adjustments (Services): each ticked one is copied onto the
+  // line with its amount, so a later change to the service never moves a
+  // price already given. One ticked before the service changed stays shown.
+  function adjText(a, unit) {
+    const n = num(a.amount) || 0, sign = n < 0 ? '−' : '+';
+    if (a.how === 'pct') return sign + Math.abs(n) + '%';
+    return sign + cents(Math.abs(n)) + (a.how === 'unit' ? '/' + (unit || 'unit') : '');
+  }
+  function adjustHtml(w, svc, ro) {
+    const ticked = Array.isArray(w.adjust) ? w.adjust : [];
+    const list = ((svc && svc.factors) || []).filter(f => f && f.id).slice();
+    ticked.forEach(a => { if (!list.some(f => f.id === a.id)) list.push(a); });
+    const id = safeId(w.id), dis = ro ? ' disabled' : '';
+    const min = num(w.minimumCents);
+    if (!list.length && min === null && !(svc && svc.notes)) return '';
+    return '<div class="est-adjust">' +
+      (list.length ? '<span class="label">Adjust for this job</span>' : '') +
+      list.map(f => {
+        const t = ticked.find(a => a.id === f.id);
+        return '<label class="chk"><input type="checkbox"' + (t ? ' checked' : '') + dis +
+          ' onchange="estAdjust(\'' + id + '\', \'' + safeId(f.id) + '\', this.checked)"> ' + esc(f.name || 'Adjustment') +
+          ' <span class="muted">' + esc(adjText(t || f, w.unit)) + '</span></label>';
+      }).join('') +
+      (min !== null ? '<div class="hint">Minimum charge for this service: ' + cents(min) + '</div>' : '') +
+      (svc && svc.notes ? '<details class="est-svcnotes"><summary>How you price ' + esc(svc.name || 'this') + '</summary>' +
+        '<div>' + esc(svc.notes) + '</div></details>' : '') +
+    '</div>';
+  }
+  window.estAdjust = function (id, fid, onOff) {
+    const w = find(est.work, id);
+    if (!w || !changes()) return;
+    const svc = w.priceId ? book[w.priceId] : null;
+    const list = Array.isArray(w.adjust) ? w.adjust.slice() : [];
+    const at = list.findIndex(a => safeId(a.id) === fid);
+    if (onOff && at === -1) {
+      const f = ((svc && svc.factors) || []).find(x => x && safeId(x.id) === fid);
+      if (f) list.push({ id: f.id, name: String(f.name || ''), how: f.how || 'pct', amount: num(f.amount) || 0 });
+    } else if (!onOff && at !== -1) list.splice(at, 1);
+    w.adjust = list;
+    changed(false);
+  };
 
   // Every kind of material, his own included (pricing.js). Worked out once
   // per drawing: his own kinds are found by going through every supply.
@@ -486,9 +557,24 @@
     const t = el('estTotals');
     if (!t || !P()) return;
     const r = priced();
-    r.work.forEach(w => {
+    const usual = P().defaultProfitCents ? P().defaultProfitCents() : null;
+    r.work.forEach((w, i) => {
       const a = el('estWA_' + safeId(w.id)); if (a) a.textContent = w.cents ? cents(w.cents) : '';
       const p = el('estWP_' + safeId(w.id)); if (p) p.textContent = w.problems.join(' · ');
+      // What a line priced by the unit (or a fixed price) makes per crew-day
+      // once the crew is paid, against his usual -- only he sees it.
+      const f = el('estWF_' + safeId(w.id));
+      if (!f) return;
+      const kind = (est.work[i] || {}).kind || 'crew';
+      if (kind === 'crew' || !w.cents) { f.innerHTML = ''; return; }
+      if (w.profitPerDayCents === null) {
+        f.innerHTML = '<span class="muted">Put in its crew-days to see what it makes per day.</span>';
+        return;
+      }
+      const vs = usual === null ? '' : w.profitPerDayCents >= usual
+        ? ' <span class="est-good">— ' + perDay(w.profitPerDayCents - usual) + ' more than your usual</span>'
+        : ' <span class="est-low">— ' + perDay(usual - w.profitPerDayCents) + ' under your usual</span>';
+      f.innerHTML = 'Makes <b>' + perDay(w.profitPerDayCents) + '</b> after the crew' + vs;
     });
     r.takeoff.forEach(l => {
       const a = el('estMA_' + safeId(l.id)); if (a) a.textContent = l.clientCents ? cents(l.clientCents) : '';
@@ -511,8 +597,8 @@
       ? '<div><span>Materials</span><b>' + cents(r.materialsCents) + '</b></div>' +
         '<div><span>Labour & installation</span><b>' + cents(r.laborCents) + '</b></div>' +
         '<div class="est-grand"><span>Project total</span><b>' + cents(r.totalCents) + '</b></div>' +
-        (pays.length ? '<div class="muted">' + pays.map(p => esc(p.label) + ' ' + cents(p.cents)).join(' · ') + '</div>' : '') +
-        (r.crewDays ? '<div class="muted">' + fmtQ(r.crewDays) + ' crew-day' + (r.crewDays === 1 ? '' : 's') + ' — only you see this</div>' : '') +
+        paymentsHtml(r) +
+        profitHtml(r) +
         (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
           (toSource.length > 1 ? '<button class="btn btn-sm" onclick="estSource(\'all\')">🔎 Source all ' + toSource.length + ' unpriced materials</button>' : '') +
           '</div>' : '') +
@@ -521,6 +607,109 @@
     renderQb();
   }
   const fmtQ = q => String(Math.round(q * 100) / 100);
+
+  // The payments the customer is asked for (pricing.js payments): the usual,
+  // or this estimate's own -- each a % of the job or a dollar amount typed
+  // in, the last always the rest. The deposit never goes under his minimum
+  // or the materials; when it was raised the line says so.
+  let editingPays = false;
+  function planNow(r) {
+    return est.payments || cleanPlan(P().usualPlan ? P().usualPlan(r ? r.totalCents : 0) : []);
+  }
+  function paymentsHtml(r) {
+    const pays = r.payments || [];
+    if (!pays.length) return '';
+    const ro = !changes();
+    const raised = pays[0].raised;
+    const note = raised ? '<div class="est-pay-note">Deposit raised to ' + (raised === 'materials'
+      ? 'cover all the materials (' + cents(r.materialsCents) + ')' : 'your ' + pays[0].minPct + '% smallest deposit') + '.</div>' : '';
+    if (!editingPays || ro) {
+      return '<div class="est-pays">' + pays.map(p => '<span>' + esc(p.label) + ' <b>' + cents(p.cents) + '</b></span>').join(' · ') +
+        (est.payments ? ' <span class="muted">(set for this estimate)</span>' : '') +
+        (ro ? '' : ' <button class="link-btn" onclick="estPays(\'edit\')">✎ Change the payments</button>') + '</div>' + note;
+    }
+    const plan = planNow(r);
+    return '<div class="est-pay-edit">' + plan.map((s, i) => {
+      const lastOne = i === plan.length - 1;
+      const shown = s.how === 'amount' ? (num(s.value) === null ? '' : (s.value / 100).toFixed(2)) : (num(s.value) === null ? '' : String(s.value));
+      return '<div class="est-pay-row">' +
+        '<input class="est-pay-label" value="' + esc(s.label) + '" placeholder="' + (i === 0 ? 'Deposit' : lastOne ? 'Final' : 'Payment') + '"' +
+          ' onchange="estPaySet(' + i + ', \'label\', this.value)">' +
+        (lastOne ? '<span class="muted">the rest</span>'
+          : '<select onchange="estPaySet(' + i + ', \'how\', this.value)"><option value="pct"' + (s.how !== 'amount' ? ' selected' : '') + '>% of the job</option>' +
+              '<option value="amount"' + (s.how === 'amount' ? ' selected' : '') + '>$ amount</option></select>' +
+            '<input class="est-pay-val" inputmode="decimal" value="' + esc(shown) + '" placeholder="' + (s.how === 'amount' ? '0.00' : '50') + '"' +
+              ' onchange="estPaySet(' + i + ', \'value\', this.value)">') +
+        '<b>' + (pays[i] ? cents(pays[i].cents) : '') + '</b>' +
+        (!lastOne && i > 0 ? '<button class="bd-edit-btn del" onclick="estPaySet(' + i + ', \'remove\')" aria-label="Remove">✕</button>' : '') +
+      '</div>';
+    }).join('') + note +
+      '<div class="field-actions">' +
+        '<button class="btn btn-sm" onclick="estPays(\'add\')">+ Add a payment</button>' +
+        '<button class="btn btn-sm" onclick="estPays(\'usual\')">Back to the usual</button>' +
+        '<button class="btn btn-sm btn-filled" onclick="estPays(\'done\')">Done</button>' +
+      '</div>' +
+      '<div class="hint">The deposit can’t go under your smallest deposit or the materials (Pricing rules). ' +
+        'The payments go on the estimate’s message unless you’ve written your own message.</div>' +
+    '</div>';
+  }
+  window.estPays = function (what) {
+    if (!changes()) return;
+    const r = last || priced();
+    if (what === 'edit') { editingPays = true; renderTotals(); return; }
+    if (what === 'done') { editingPays = false; renderTotals(); return; }
+    if (what === 'usual') { est.payments = null; editingPays = false; changed(false); return; }
+    if (what === 'add') {
+      const plan = planNow(r).slice();
+      plan.splice(Math.max(1, plan.length - 1), 0, { label: 'Payment', how: 'pct', value: 25 });
+      est.payments = cleanPlan(plan);
+      changed(false);
+    }
+  };
+  window.estPaySet = function (i, field, v) {
+    if (!changes()) return;
+    const plan = planNow(last || priced()).map(s => Object.assign({}, s));
+    const s = plan[i];
+    if (!s) return;
+    if (field === 'remove') { if (i > 0 && i < plan.length - 1) plan.splice(i, 1); }
+    else if (field === 'label') s.label = String(v || '').trim();
+    else if (field === 'how') { s.how = v === 'amount' ? 'amount' : 'pct'; s.value = null; }
+    else if (field === 'value') {
+      const n = String(v || '').replace(/[$,%\s]/g, '');
+      const f = n === '' ? null : parseFloat(n);
+      if (f !== null && !isFinite(f)) { showToast('That should be a number'); renderTotals(); return; }
+      s.value = f === null ? null : s.how === 'amount' ? Math.round(f * 100) : Math.round(f * 100) / 100;
+    }
+    est.payments = cleanPlan(plan);
+    changed(false);
+  };
+
+  // The whole job's profit once everything is paid for -- materials at cost,
+  // delivery and fuel at cost, the crew at the crew-day rate -- and per
+  // crew-day. Only he sees it (the customer view and QuickBooks never do).
+  // Jonah (13 Oct 2026): "when building a bid [show] my actual cost for
+  // material & my total profit along with the profit margin & profit per day
+  // & estimated total labor costs."
+  function profitHtml(r) {
+    const p = r.profit;
+    if (!p || !(r.totalCents > 0)) return '';
+    const why = !p.complete ? '<div class="muted">Not final — ' +
+      (r.problems.length ? 'some lines aren’t priced yet' : r.work.some(w => !w.crewDays) ? 'a labour line has no crew-days' : 'the crew-day rate isn’t set') + '.</div>' : '';
+    const row = (label, value, cls) => '<div class="' + (cls || '') + '"><span>' + label + '</span><b>' + value + '</b></div>';
+    const days = p.crewDays > 0 ? fmtQ(p.crewDays) + ' crew-day' + (p.crewDays === 1 ? '' : 's') : 'no crew-days yet';
+    return '<div class="est-profit">' +
+      '<div class="est-profit-h">Your numbers <span class="muted">— only you see this</span></div>' +
+      row('Material cost (what you pay, tax in)', cents(p.materialCostCents)) +
+      (p.deliveryCostCents ? row('Delivery cost', cents(p.deliveryCostCents)) : '') +
+      (p.fuelCostCents ? row('Fuel cost', cents(p.fuelCostCents)) : '') +
+      row('Labour cost (' + days + ' at your crew-day rate)', cents(p.laborCostCents)) +
+      row('Total cost', cents(p.costCents), 'est-profit-sub') +
+      row('Profit', cents(p.cents), 'est-profit-big') +
+      row('Profit margin', p.marginPct === null ? '—' : (Math.round(p.marginPct * 10) / 10) + '%') +
+      row('Profit per crew-day', p.perDayCents === null ? '— put in crew-days' : perDay(p.perDayCents)) +
+      why +
+    '</div>';
+  }
 
   // The estimate as the customer will read it in QuickBooks -- the same lines
   // estToQB sends and quickbooks.py lays out: each piece of labour with its
@@ -780,7 +969,9 @@
     const p = rules.payments || {};
     const above = num(p.splitAboveCents);
     const terms = String((above !== null && totalCents > above ? p.threeText : p.twoText) || '').trim();
-    const pays = P() ? P().payments(totalCents, rules) : [];
+    // This estimate's own payments, with its deposit floor (the materials).
+    const r = last || priced();
+    const pays = P() ? P().payments(totalCents, rules, { plan: est.payments, materialsCents: r ? r.materialsCents : 0 }) : [];
     return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms].filter(Boolean).join('\n\n');
   }
 
@@ -859,11 +1050,16 @@
 
   // The message on the estimate: what was typed for this one, or the rules'
   // payment terms for its size, then the warranty.
+  // The message when he has not written one: the payments asked for (the
+  // deposit and each one, in dollars), his payment terms and the warranty.
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
     const above = num(p.splitAboveCents);
     const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
-    return [terms, p.warranty].map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
+    const r = last;
+    const pays = r && r.totalCents === totalCents ? r.payments || [] : [];
+    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms, p.warranty]
+      .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
 
   // --------------------------------------------------------------- editing
@@ -908,7 +1104,16 @@
     if (field === 'crewDays' || field === 'qty') w[field] = num(v);
     else if (field === 'rate') w.rateCents = toCents(v);
     else if (field === 'amount') w.amountCents = toCents(v);
-    else if (field === 'profit') w.profit = v;
+    else if (field === 'profit') {
+      if (v === '__other') {
+        const a = prompt('Profit per crew-day for this line ($)', '');
+        const c = a === null ? null : toCents(String(a).replace(/[$,\s]/g, ''));
+        if (c !== null && c >= 0) w.profit = c;
+        changed(true);                    // redrawn either way: the list shows what is chosen
+        return;
+      }
+      w.profit = v === '' ? null : Number(v);
+    }
     else if (field === 'kind') { w.kind = v; changed(true); return; }
     else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product
     changed(false);
@@ -917,10 +1122,13 @@
     const w = find(est.work, id);
     if (!w || !changes()) return;
     const p = pid ? book[pid] : null;
+    // Another service: the adjustments ticked for the old one go.
+    if (w.priceId !== (p ? pid : null)) w.adjust = [];
     w.priceId = p ? pid : null;
     if (p) {
       w.unit = p.unit || 'each';
       if (Number.isInteger(p.priceCents)) w.rateCents = p.priceCents;
+      w.minimumCents = Number.isInteger(p.minimumCents) ? p.minimumCents : null;
       if (!String(w.title || '').trim()) w.title = p.name || '';
       if (!String(w.scope || '').trim()) w.scope = p.description || '';
       if (w.qty == null) w.qty = 1;
@@ -1363,6 +1571,7 @@
     return {
       work: e.work.map(w => ({ id: w.id, title: w.title || '', scope: w.scope || '', kind: w.kind || 'crew',
         crewDays: num(w.crewDays), priceId: w.priceId || null, qty: num(w.qty),
+        factors: (Array.isArray(w.adjust) ? w.adjust : []).map(a => a.id),
         amountDollars: num(w.amountCents) === null ? null : w.amountCents / 100 })),
       materials: e.materials.map(m => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
         unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
@@ -1382,12 +1591,24 @@
     w.title = String(g.title || '');
     w.scope = String(g.scope || '');
     w.kind = ['crew', 'flat', 'amount'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
-    if (w.kind === 'crew' && num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
+    // Crew-days on any line: priced by them, or (by the unit, fixed) how
+    // long it takes -- for his profit per day and the fuel.
+    if (num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
     if (w.kind === 'flat') {
       const p = g.priceId && book[g.priceId] ? book[g.priceId] : null;
       if (p) {
-        if (w.priceId !== g.priceId || num(w.rateCents) === null) w.rateCents = Number.isInteger(p.priceCents) ? p.priceCents : null;
+        const another = w.priceId !== g.priceId;
+        if (another || num(w.rateCents) === null) w.rateCents = Number.isInteger(p.priceCents) ? p.priceCents : null;
+        if (another) w.minimumCents = Number.isInteger(p.minimumCents) ? p.minimumCents : null;
         w.priceId = g.priceId; w.unit = p.unit || 'each';
+        // The adjustments Claude says the site notes call for, copied from
+        // the service with their amounts (an id it made up is ignored).
+        if (Array.isArray(g.factors)) {
+          const had = Array.isArray(w.adjust) && !another ? w.adjust : [];
+          w.adjust = g.factors.map(fid => had.find(a => a.id === fid) ||
+            ((p.factors || []).filter(f => f && f.id === fid).map(f => ({ id: f.id, name: String(f.name || ''), how: f.how || 'pct', amount: num(f.amount) || 0 }))[0]))
+            .filter(Boolean);
+        }
       }
       if (num(g.qty) !== null) w.qty = num(g.qty);
     }
@@ -1901,10 +2122,13 @@
     const list = bookList().filter(p => !f || [p.name, p.category, p.description, p.notes].join(' ').toLowerCase().indexOf(f) !== -1);
     let lastCat = null;
     body.innerHTML =
-      '<p class="hint">Flat-rate services — gutters by the foot, a snow visit, a maintenance package. A labour line on an estimate can be one of these instead of crew-days. ' +
-        'Materials are priced from Supplies and your pricing rules, not from here. “Notes for Claude” are rules Claude reads; customers never see them.</p>' +
+      '<p class="hint">Every service you sell and how it is priced (Jonah, 13 Oct 2026: “turf pricing is all based on sq footage and then adjusted based on factors, not goal profit per day”). ' +
+        '<b>By the unit</b>: a price per sq ft, foot, each… plus the things that adjust it, ticked on each estimate. ' +
+        '<b>By crew-days</b>: priced at your profit per day — your notes say how. <b>Fixed</b>: one price. ' +
+        'Your notes on how a service is priced are read by Claude every time it builds an estimate; customers never see them. ' +
+        'Materials still come from Supplies.</p>' +
       (ro ? '' : '<div class="field-actions">' +
-        '<button class="btn btn-sm btn-filled" onclick="pbAdd()">+ Add a price</button>' +
+        '<button class="btn btn-sm btn-filled" onclick="pbAdd()">+ Add a service</button>' +
         (sends() ? '<button class="btn btn-sm" onclick="pbFromQb()">Bring in from QuickBooks</button>' : '') +
         '<button class="btn btn-sm" onclick="pbPasteOpen()">Paste a sheet</button>' +
       '</div>') +
@@ -1912,27 +2136,84 @@
         '<textarea id="pbPasteText" rows="6"></textarea>' +
         '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="pbPasteSave()">Add these</button>' +
         '<button class="btn btn-sm" onclick="pbPasteOpen(false)">Cancel</button></div></div>' +
-      '<input id="pbFilter" class="mt" placeholder="Search the price book" value="' + esc(f) + '" oninput="pbFilterInput(this.value)">' +
+      '<input id="pbFilter" class="mt" placeholder="Search your services" value="' + esc(f) + '" oninput="pbFilterInput(this.value)">' +
       (list.length ? '<div class="pb-list">' + list.map(p => {
-        const id = safeId(p.id);
-        const head = (p.category || '') !== lastCat ? '<div class="pb-cat">' + esc(p.category || 'No category') + '</div>' : '';
+        const head = (p.category || '') !== lastCat ? '<div class="pb-cat">' + esc(p.category || 'No group') + '</div>' : '';
         lastCat = p.category || '';
-        const dis = ro ? ' disabled' : '';
-        const on = (field, v, ph, cls) => '<input class="' + (cls || '') + '" value="' + esc(v == null ? '' : v) + '" placeholder="' + ph + '"' + dis +
-          ' onchange="pbField(\'' + id + '\', \'' + field + '\', this.value)">';
-        return head + '<div class="pb-row">' +
-          '<div class="pb-top">' + on('name', p.name, 'Name, e.g. Gutter cleaning — 1st story', 'pb-name') +
-            on('price', Number.isInteger(p.priceCents) ? (p.priceCents / 100).toFixed(2) : '', 'Price', 'pb-price') +
-            '<span class="pb-per">per</span>' + on('unit', p.unit, 'LF', 'pb-unit') +
-            on('category', p.category, 'Category', 'pb-catin') +
-            (ro ? '' : '<button class="bd-edit-btn del" onclick="pbRemove(\'' + id + '\')" aria-label="Remove">✕</button>') + '</div>' +
-          '<div class="pb-more">' + on('description', p.description, 'What the customer reads on the estimate', 'pb-desc') +
-            on('notes', p.notes, 'Notes for Claude (your pricing rule)', 'pb-notes') +
-            (p.qbItemName ? '<span class="pb-qb" title="QuickBooks product">QB: ' + esc(p.qbItemName) + '</span>' : '') + '</div>' +
-        '</div>';
+        return head + serviceHtml(p, ro);
       }).join('') + '</div>'
-        : '<div class="empty-msg">' + (f ? 'Nothing matches.' : 'No flat-rate services yet. Add them, paste your sheet, or bring them in from QuickBooks.') + '</div>');
+        : '<div class="empty-msg">' + (f ? 'Nothing matches.' : 'No services yet. Add one — e.g. Artificial turf, by the sq ft.') + '</div>');
   }
+
+  // One service, everything about it in one card.
+  const METHODS = [['unit', 'By the unit'], ['crew', 'By crew-days'], ['fixed', 'Fixed price']];
+  const HOWS = [['pct', '% of the price'], ['unit', '$ per unit'], ['flat', '$ once']];
+  function serviceHtml(p, ro) {
+    const id = safeId(p.id), dis = ro ? ' disabled' : '';
+    const method = p.method || 'unit';
+    const on = (field, v, ph, cls, mode) => '<input class="' + (cls || '') + '" value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph) + '"' +
+      (mode ? ' inputmode="' + mode + '"' : '') + dis + ' onchange="pbField(\'' + id + '\', \'' + field + '\', this.value)">';
+    const area = (field, v, ph, rows) => '<textarea rows="' + rows + '" placeholder="' + esc(ph) + '"' + (ro ? ' readonly' : '') +
+      ' onchange="pbField(\'' + id + '\', \'' + field + '\', this.value)">' + esc(v || '') + '</textarea>';
+    const money = c => (Number.isInteger(c) ? (c / 100).toFixed(2) : '');
+    const factors = (p.factors || []).filter(x => x && x.id);
+    return '<div class="pb-card">' +
+      '<div class="pb-top">' + on('name', p.name, 'Service, e.g. Artificial turf', 'pb-name') +
+        '<select' + dis + ' onchange="pbField(\'' + id + '\', \'method\', this.value)">' +
+          METHODS.map(([k, n]) => '<option value="' + k + '"' + (k === method ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>' +
+        (ro ? '' : '<button class="bd-edit-btn del" onclick="pbRemove(\'' + id + '\')" aria-label="Remove">✕</button>') + '</div>' +
+      (method === 'crew' ? '<div class="hint">Priced by crew-days at your profit per day. Your notes below tell Claude how to work out the days.</div>'
+        : '<div class="pb-nums">' +
+          '<label><span>' + (method === 'fixed' ? 'Price ($)' : 'Price per unit ($)') + '</span>' + on('price', money(p.priceCents), '0.00', '', 'decimal') + '</label>' +
+          (method === 'fixed' ? '' : '<label><span>Unit</span>' + on('unit', p.unit, 'sq ft', 'pb-unit') + '</label>') +
+          '<label><span>Minimum charge ($)</span>' + on('minimum', money(p.minimumCents), 'none', '', 'decimal') + '</label>' +
+          '<label><span>Group</span>' + on('category', p.category, 'e.g. Turf & lawn', 'pb-catin') + '</label>' +
+        '</div>') +
+      '<div class="field"><span class="label">How it’s priced — your notes (Claude reads these on every estimate)</span>' +
+        area('notes', p.notes, 'e.g. Base price by the sq ft of turf laid. Add for slope, tight access, old lawn to strip, long hauls; less for big open areas. Infill and base are materials.', 3) + '</div>' +
+      (method === 'crew' ? '' : '<div class="pb-factors"><span class="label">What adjusts it (ticked on each estimate)</span>' +
+        factors.map(x => {
+          const fid = safeId(x.id);
+          const fon = (field, v, ph, mode, cls) => '<input class="' + (cls || '') + '" value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph) + '"' +
+            (mode ? ' inputmode="' + mode + '"' : '') + dis + ' onchange="pbFactor(\'' + id + '\', \'' + fid + '\', \'' + field + '\', this.value)">';
+          const amt = x.how === 'pct' ? (num(x.amount) == null ? '' : String(num(x.amount))) : money(x.amount);
+          return '<div class="pb-factor">' + fon('name', x.name, 'e.g. Steep slope', '', 'pb-fname') +
+            '<select' + dis + ' onchange="pbFactor(\'' + id + '\', \'' + fid + '\', \'how\', this.value)">' +
+              HOWS.map(([k, n]) => '<option value="' + k + '"' + (k === (x.how || 'pct') ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>' +
+            fon('amount', amt, x.how === 'pct' ? 'e.g. 15 (or -10)' : 'e.g. 0.40', 'decimal', 'pb-famt') +
+            (ro ? '' : '<button class="bd-edit-btn del" onclick="pbFactor(\'' + id + '\', \'' + fid + '\', \'remove\')" aria-label="Remove">✕</button>') +
+          '</div>';
+        }).join('') +
+        (ro ? '' : '<button class="btn btn-sm" onclick="pbFactorAdd(\'' + id + '\')">+ Add an adjustment</button>') + '</div>') +
+      '<details class="pb-desc-box"' + (p.description ? ' open' : '') + '><summary>What the customer reads (optional)</summary>' +
+        area('description', p.description, 'Scope wording put on the estimate when this service is picked', 2) + '</details>' +
+      (p.qbItemName ? '<span class="pb-qb" title="QuickBooks product">QB: ' + esc(p.qbItemName) + '</span>' : '') +
+    '</div>';
+  }
+  window.pbFactorAdd = function (id) {
+    if (!changes() || !book[id]) return;
+    const list = (book[id].factors || []).slice();
+    list.push({ id: newId('f'), name: '', how: 'pct', amount: null });
+    writeBook(id, { factors: list });
+    renderBook();
+  };
+  window.pbFactor = function (id, fid, field, v) {
+    if (!changes() || !book[id]) return;
+    let list = (book[id].factors || []).map(x => Object.assign({}, x));
+    const x = list.find(y => safeId(y.id) === fid);
+    if (!x) return;
+    if (field === 'remove') list = list.filter(y => y !== x);
+    else if (field === 'name') x.name = String(v).trim().slice(0, 80);
+    else if (field === 'how') { x.how = ['pct', 'unit', 'flat'].indexOf(v) !== -1 ? v : 'pct'; x.amount = null; }
+    else if (field === 'amount') {
+      const s = String(v).replace(/[$,%\s]/g, '');
+      if (s === '') x.amount = null;
+      else if (!isFinite(parseFloat(s))) { showToast('The amount should be a number'); renderBook(); return; }
+      else x.amount = x.how === 'pct' ? Math.round(parseFloat(s) * 100) / 100 : Math.round(parseFloat(s) * 100);
+    }
+    writeBook(id, { factors: list });
+    renderBook();
+  };
   window.pbFilterInput = function (v) {
     renderBook(v);
     const i = el('pbFilter'); if (i) { i.focus(); i.setSelectionRange(v.length, v.length); }
@@ -1940,10 +2221,12 @@
 
   window.pbField = function (id, field, v) {
     if (!changes() || !book[id]) return;
-    if (field === 'price') {
+    if (field === 'price' || field === 'minimum') {
       const c = window.YDSupplies.parseCents(v);
-      if (typeof c === 'number' && isNaN(c)) { showToast('That price isn’t a number'); renderBook(); return; }
-      writeBook(id, { priceCents: c == null ? null : c });
+      if (typeof c === 'number' && isNaN(c)) { showToast('That amount isn’t a number'); renderBook(); return; }
+      writeBook(id, { [field === 'price' ? 'priceCents' : 'minimumCents']: c == null ? null : c });
+    } else if (field === 'method') {
+      writeBook(id, { method: ['unit', 'crew', 'fixed'].indexOf(v) !== -1 ? v : 'unit' });
     } else if (field === 'name') {
       if (!String(v).trim()) { showToast('A price needs a name'); renderBook(); return; }
       writeBook(id, { name: String(v).trim(), qbItemId: null, qbItemName: null });
@@ -1953,10 +2236,11 @@
     renderBook();
   };
   window.pbAdd = function () {
-    const name = prompt('What is it? (e.g. Gutter cleaning — 1st story)');
+    const name = prompt('The service (e.g. Artificial turf)');
     if (!name || !name.trim()) return;
     const id = newId('pb');
-    writeBook(id, { name: name.trim(), unit: 'each', priceCents: null, category: '', description: '', notes: '',
+    writeBook(id, { name: name.trim(), method: 'unit', unit: 'sq ft', priceCents: null, minimumCents: null, factors: [],
+                    category: '', description: '', notes: '',
                     qbItemId: null, qbItemName: null, active: true, createdAt: new Date().toISOString() });
     renderBook();
   };

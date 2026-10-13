@@ -127,31 +127,74 @@
     }
     return { n: n, of: last };
   }
-  // What a property comes to in a month: about how many visits, what the
-  // subcontractor charges for them and what YD charges the client. A monthly
-  // price is shared by the days of the month in season, so a half month at
-  // the start of the season counts half.
-  function monthOf(p, y, m) {
+  // What a property comes to in a month: how many visits, what the
+  // subcontractor charges for them and what YD charges the client.
+  //
+  // WHOLE visits on real dates (Jonah, 13 Oct 2026, of the old figures
+  // "how ... do you mess that simple of math up"): they used to be "days in
+  // season / 7" -- 4.43 mows in October, $199.29 of margin. Now a weekly
+  // property is mowed on its day of the week (the day of its latest visit on
+  // their invoices, else the season's first day) and every such date in the
+  // season counts once; every other week counts every second one from that
+  // day; once a month is one visit. A month-priced property counts a month in
+  // full when at least half of it is in season. upTo (a day of the month)
+  // counts only the visits so far.
+  function inSeason(p, y, m, d) {
+    const from = dayNum(p.from || SEASON.from), to = dayNum(p.to || SEASON.to), k = (m + 1) * 100 + d;
+    return (from == null || to == null || (from <= to ? k >= from && k <= to : k >= from || k <= to)) && !stoppedOn(p, y, k);
+  }
+  function anchorOf(p, y, anchor) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(anchor || '')) return Date.UTC(+anchor.slice(0, 4), +anchor.slice(5, 7) - 1, +anchor.slice(8, 10));
+    const from = /^(\d{2})-(\d{2})$/.exec(p.from || SEASON.from) || [0, '04', '15'];
+    return Date.UTC(y, +from[1] - 1, +from[2]);
+  }
+  function monthOf(p, y, m, anchor, upTo) {
     const s = seasonDays(p, y, m);
     if (!s.n || p.off) return { visits: 0, their: 0, ours: 0 };
-    const part = s.n / s.of;
-    // Written in by hand ("every 10 days", "as needed"): as many visits a
-    // month as were given for it, none if none were.
-    const visits = p.every === 'other' ? (+p.perMonth || 0) * part
-      : p.every === 'monthly' ? 1 : s.n / (p.every === 'biweekly' ? 14 : 7);
-    const cost = (c, per) => (typeof c === 'number' ? Math.round(per === 'month' ? c * part : c * visits) : 0);
+    const last = new Date(y, m + 1, 0).getDate(), end = Math.min(last, upTo || last);
+    const fullMonth = s.n * 2 >= s.of;                  // at least half the month in season
+    let visits = 0;
+    if (p.every === 'monthly') {
+      visits = fullMonth && (!upTo || [...Array(end).keys()].some(i => inSeason(p, y, m, i + 1))) ? 1 : 0;
+    } else if (p.every === 'other') {
+      // Written in by hand ("every 10 days", "as needed"): as many visits a
+      // month as were given for it, in whole visits, none if none were.
+      visits = Math.round((+p.perMonth || 0) * (s.n / s.of) * (upTo ? end / last : 1));
+    } else {
+      const step = p.every === 'biweekly' ? 14 : 7, a = anchorOf(p, y, anchor);
+      for (let d = 1; d <= end; d++) {
+        const diff = Math.round((Date.UTC(y, m, d) - a) / 864e5);
+        if (((diff % step) + step) % step === 0 && inSeason(p, y, m, d)) visits++;
+      }
+    }
+    const monthsShare = fullMonth && (!upTo || end >= 1) ? 1 : 0;
+    const cost = (c, per) => (typeof c === 'number' ? Math.round(per === 'month' ? c * monthsShare : c * visits) : 0);
     return { visits: visits, their: cost(p.theirCents, p.theirPer), ours: cost(p.ourCents, p.ourPer) };
   }
-  function totals(s, y, m) {
+  // Each property's day for the schedule: its latest visit on their invoices.
+  function anchorsOf(s) {
+    const out = {};
+    visitsOf(s).forEach(v => {
+      if (v.prop && !v.skip && v.mows && /^\d{4}-\d{2}-\d{2}$/.test(v.date || '') && (!out[v.prop] || v.date > out[v.prop])) out[v.prop] = v.date;
+    });
+    return out;
+  }
+  function totals(s, y, m, upTo) {
+    const anchors = anchorsOf(s);
     return propsOf(s).reduce((t, p) => {
-      const x = monthOf(p, y, m);
+      const x = monthOf(p, y, m, anchors[p.id], upTo);
       t.visits += x.visits; t.their += x.their; t.ours += x.ours;
       return t;
     }, { visits: 0, their: 0, ours: 0 });
   }
-  function seasonTotals(s, y) {
-    const t = { their: 0, ours: 0 };
-    for (let m = 0; m < 12; m++) { const x = totals(s, y, m); t.their += x.their; t.ours += x.ours; }
+  // The season by its months; soFar stops at today.
+  function seasonTotals(s, y, soFar) {
+    const t = { visits: 0, their: 0, ours: 0 }, now = new Date();
+    for (let m = 0; m < 12; m++) {
+      if (soFar && (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth()))) break;
+      const x = totals(s, y, m, soFar && y === now.getFullYear() && m === now.getMonth() ? now.getDate() : 0);
+      t.visits += x.visits; t.their += x.their; t.ours += x.ours;
+    }
     return t;
   }
   const marginText = t => {
@@ -352,9 +395,10 @@
   }
 
   function subHtml(s, y, m) {
-    const t = totals(s, y, m), st = seasonTotals(s, y), o = owed(s);
+    const t = totals(s, y, m), st = seasonTotals(s, y), sf = seasonTotals(s, y, true), o = owed(s);
     const props = propsOf(s), bills = billsOf(s);
     const monthName = new Date(y, m, 1).toLocaleDateString('en-US', { month: 'long' });
+    const nVisits = n => n + ' visit' + (n === 1 ? '' : 's');
     return '<div class="sub-card">' +
       '<div class="sub-head"><b>' + esc(s.name || 'Subcontractor') + '</b>' +
         (s.phone ? ' <a class="link-btn" href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '') +
@@ -362,9 +406,10 @@
         '<button class="link-btn" onclick="subEdit(\'' + sid(s.id) + '\')">Edit</button></div>' +
       (form && form.kind === 'sub' && form.subId === s.id ? subFormHtml(s) : '') +
       '<div class="sub-figs">' +
-        fig(monthName, props.length ? money(t.their) + ' to them · ' + money(t.ours) + ' from clients' : 'no properties yet') +
+        fig(monthName, props.length ? nVisits(t.visits) + ' · ' + money(t.their) + ' to them · ' + money(t.ours) + ' from clients' : 'no properties yet') +
         fig('Margin this month', props.length ? marginText(t) : '—') +
-        fig('This season', props.length ? marginText(st) : '—') +
+        fig('Season so far', props.length ? marginText(sf) + ' · ' + nVisits(sf.visits) : '—') +
+        fig('Whole season', props.length ? marginText(st) + ' · ' + nVisits(st.visits) : '—') +
         fig('Owed to them', o.count ? money(o.cents) + ' · ' + o.count + ' bill' + (o.count === 1 ? '' : 's') : 'nothing') +
       '</div>' +
       (o.late.length ? '<div class="sub-warn late">⚠️ Past due: ' + o.late.map(r => money(r.totalCents) + ' (due ' + fmtDateMD(r.dueDate) + ')').join(', ') + '</div>'
@@ -385,8 +430,13 @@
     const editing = form && form.kind === 'prop' && form.subId === s.id && form.propId
       ? props.find(p => p.id === form.propId) : null;
     const list = visitsOf(s);
+    const anchors = anchorsOf(s);
     const rows = props.map(p => {
-      const x = monthOf(p, y, m);
+      const x = monthOf(p, y, m, anchors[p.id]);
+      // A visit-priced property also shows what one visit makes.
+      const each = p.theirPer !== 'month' && p.ourPer !== 'month' && typeof p.theirCents === 'number' && typeof p.ourCents === 'number'
+        ? '<div class="muted">' + money(p.ourCents - p.theirCents) + ' a visit · ' + x.visits + ' this month</div>'
+        : '<div class="muted">' + x.visits + ' visit' + (x.visits === 1 ? '' : 's') + ' this month</div>';
       const mw = mowsFor(s, p, list);
       // Ticked done this season (or ended for good): checked, with the date.
       // A done-for-the-season tick from an earlier season is history, not
@@ -404,7 +454,7 @@
         '<td>' + esc(everyWords(p)) + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
         '<td>' + money(p.theirCents) + ' ' + esc(PER[p.theirPer] || '') + '</td>' +
         '<td>' + money(p.ourCents) + ' ' + esc(PER[p.ourPer] || '') + '</td>' +
-        '<td>' + (x.their || x.ours ? marginText(x) : '—') + '</td>' +
+        '<td>' + (x.their || x.ours ? marginText(x) : '—') + each + '</td>' +
         '<td><button class="link-btn" onclick="subProp(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\')">Edit</button></td></tr>');
     }).join('');
     return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Done</th><th>Client</th><th>What they do</th>' +

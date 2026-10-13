@@ -99,6 +99,9 @@
   // A job with any of these gets the layout markers.
   const MARKER_CATEGORIES = ['pavers', 'wall', 'edging'];
 
+  // The three named profit targets of the first version. Kept only so the
+  // amounts they held become the start of his own list (profitChoices), and
+  // so a line saved with one of their names still prices by it.
   const PROFIT_TIERS = [['floor', 'Floor'], ['aim', 'Aim'], ['great', 'Great day']];
 
   // What an empty pricing/rules looks like. Everything a price needs is
@@ -107,6 +110,10 @@
     return {
       taxPct: null,
       crewDayCents: null,
+      // Profit per crew-day: his own amounts, as many as he likes, and the
+      // usual one (null until he sets them: then the old three are used).
+      profitChoices: null,
+      defaultProfitCents: null,
       profitCents: { floor: null, aim: null, great: null },
       defaultProfit: 'aim',
       categories: {},              // id -> { markupPct, wastePct }
@@ -116,7 +123,10 @@
       dumpster: { supplyId: null, maxCuYd: null },
       markers: { supplyId: null, count: null },
       planting: { perPlant: [], perSingleTree: [], perMultiTree: [] },
-      payments: { splitAboveCents: null, twoText: '', threeText: '', warranty: '' },
+      // minDepositPct: the smallest deposit (50 unless set);
+      // depositCoversMaterials: the deposit is at least the Materials figure
+      // (on unless switched off).
+      payments: { splitAboveCents: null, twoText: '', threeText: '', warranty: '', minDepositPct: null, depositCoversMaterials: null },
       shop: { address: '', lat: null, lng: null },
       // Claude starts an estimate by itself when the site-visit notes are
       // written (estimate.js). On unless switched off.
@@ -250,6 +260,7 @@
     if (!qty) return out;
     if (fixedEach !== null) {                   // priced to the customer per piece (the markers)
       out.clientCents = Math.round(orderQty * fixedEach);
+      out.costTotalCents = costCents !== null ? Math.round(orderQty * costCents) : null;
       return out;
     }
     if (costCents === null) { out.problems.push(it ? 'no price in Supplies' : 'no cost'); return out; }
@@ -262,10 +273,12 @@
     if (rent) {
       out.rentalPlan = rent.plan;
       out.landedEachCents = Math.round(rent.cents * landing / orderQty);
+      out.costTotalCents = Math.round(rent.cents * landing);
       out.clientCents = Math.round(rent.cents * landing * (1 + markupPct / 100));
       return out;
     }
     out.landedEachCents = Math.round(costCents * landing);
+    out.costTotalCents = Math.round(orderQty * out.landedEachCents);
     out.clientCents = Math.round(orderQty * out.landedEachCents * (1 + markupPct / 100));
     return out;
   }
@@ -376,6 +389,7 @@
       else cents += bob * out.bobcatDays * out.dieselCents;
     }
     if (num(rf.markupPct) === null) out.problems.push('fuel markup % not set');
+    out.costCents = Math.round(cents);
     out.clientCents = Math.round(cents * (1 + pct(rf.markupPct)));
     return out;
   }
@@ -383,42 +397,130 @@
   // ------------------------------------------------------------------ labour
   //
   // A work line is what the customer reads as one line of labour:
-  //   crew:   crew-days x (crew-day rate + the profit target for the day)
-  //   flat:   qty x a flat rate from the price book (gutters by the foot)
+  //   crew:   crew-days x (crew-day rate + the profit per crew-day picked)
+  //   flat:   qty x his price per unit (Prices by the unit -- turf by the
+  //           sq ft, edging by the foot)
   //   amount: a figure typed in
+  // Any of them may carry crew-days -- how long it takes -- and then says
+  // what it makes per crew-day once the crew is paid (Jonah, 13 Oct 2026:
+  // "some services arent priced per day like turf ... we make an amazing
+  // profit off of. I dont wanna continue bidding at a goal profit per day
+  // when some services can yield more").
+
+  // Profit per crew-day (Jonah, 13 Oct 2026: "specific numbers of profit per
+  // day not floor, aim, & great ... more than 3 options"): his own list of
+  // amounts and the usual one; a line may carry any amount of its own.
+  function profitChoices(r) {
+    r = r || rules;
+    const list = Array.isArray(r.profitChoices) ? r.profitChoices : PROFIT_TIERS.map(([id]) => (r.profitCents || {})[id]);
+    return list.map(num).filter(n => n !== null && n >= 0)
+      .filter((n, i, a) => a.indexOf(n) === i).sort((a, b) => a - b);
+  }
+  function defaultProfitCents(r) {
+    r = r || rules;
+    const d = num(r.defaultProfitCents);
+    if (d !== null) return d;
+    const old = num((r.profitCents || {})[r.defaultProfit || 'aim']);
+    if (old !== null) return old;
+    const c = profitChoices(r);
+    return c.length ? c[Math.floor((c.length - 1) / 2)] : null;
+  }
+  // A line's profit per crew-day: its own amount, an old named target, or
+  // the usual.
+  function profitOf(w, r) {
+    const p = w ? w.profit : null;
+    if (typeof p === 'number' && isFinite(p)) return p;
+    if (typeof p === 'string' && /^\d+(\.\d+)?$/.test(p)) return Number(p);
+    if (typeof p === 'string' && num((r.profitCents || {})[p]) !== null) return num(r.profitCents[p]);
+    return defaultProfitCents(r);
+  }
+
   function workLine(w, ctx) {
-    const r = ctx.rules, out = { id: w.id, cents: 0, problems: [] };
+    const r = ctx.rules, out = { id: w.id, cents: 0, problems: [], crewDays: null, costCents: null, profitPerDayCents: null };
+    const days = num(w.crewDays), dayCost = num(r.crewDayCents);
     if (w.kind === 'flat') {
+      // By the unit, then his adjustments for this job (Services: "turf
+      // pricing is all based on sq footage and then adjusted based on
+      // factors") -- each a % of the price, so much more per unit, or a set
+      // amount, copied onto the line when it was ticked -- then his minimum
+      // charge for the service.
       const q = num(w.qty), rate = num(w.rateCents);
       if (q === null || rate === null) out.problems.push('needs a quantity and a rate');
-      else out.cents = Math.round(q * rate);
+      else {
+        const adj = Array.isArray(w.adjust) ? w.adjust : [];
+        const pctSum = adj.filter(a => a && a.how === 'pct').reduce((s, a) => s + (num(a.amount) || 0), 0);
+        let c = q * rate * (1 + pctSum / 100);
+        adj.forEach(a => {
+          if (a && a.how === 'unit') c += q * (num(a.amount) || 0);
+          else if (a && a.how === 'flat') c += num(a.amount) || 0;
+        });
+        const min = num(w.minimumCents);
+        if (min !== null && c < min) { c = min; out.atMinimum = true; }
+        out.cents = Math.max(0, Math.round(c));
+      }
     } else if (w.kind === 'amount') {
       const a = num(w.amountCents);
       if (a === null) out.problems.push('needs an amount'); else out.cents = Math.round(a);
     } else {
-      const days = num(w.crewDays);
-      const tier = w.profit || r.defaultProfit || 'aim';
-      const target = typeof tier === 'number' ? tier : num((r.profitCents || {})[tier]);
+      const target = profitOf(w, r);
       if (!(days > 0)) out.problems.push('how many crew-days?');
-      else if (num(r.crewDayCents) === null || target === null) out.problems.push('crew-day rate or profit target not set');
-      else out.cents = Math.round(days * (num(r.crewDayCents) + target));
+      else if (dayCost === null || target === null) out.problems.push('crew-day rate or profit per day not set (⋯ → Pricing rules)');
+      else out.cents = Math.round(days * (dayCost + target));
+    }
+    if (days > 0) {
+      out.crewDays = days;
+      if (dayCost !== null) {
+        out.costCents = Math.round(days * dayCost);
+        if (out.cents > 0) out.profitPerDayCents = Math.round((out.cents - out.costCents) / days);
+      }
     }
     return out;
   }
 
   // ---------------------------------------------------------------- payments
 
-  // Deposit rounded up to the cent; the last payment takes up the penny.
-  function payments(totalCents, rules) {
+  // The payment schedule (Jonah, 13 Oct 2026: "adjust deposit request fields
+  // ... to be a certain percentage or to write the specific number in myself.
+  // All job deposits require a minimum of 50% & must cover the entire
+  // material cost"). A plan set on the estimate -- each payment a % of the
+  // job or a dollar amount, the last always the rest -- or the usual: 50/50,
+  // or 50/25/25 above the three-payment total. Whichever, the deposit is never
+  // under his smallest deposit (payments.minDepositPct, 50 unless set) nor
+  // under the whole Materials figure (unless he switches that off), and is
+  // raised to it, saying why. Rounded up to the cent; the last takes the rest.
+  function usualPlan(totalCents, rules) {
     const above = num(((rules || {}).payments || {}).splitAboveCents);
+    return above !== null && totalCents > above
+      ? [{ label: 'Deposit', how: 'pct', value: 50 }, { label: 'Progress', how: 'pct', value: 25 }, { label: 'Final', how: 'rest' }]
+      : [{ label: 'Deposit', how: 'pct', value: 50 }, { label: 'On completion', how: 'rest' }];
+  }
+  function depositFloor(totalCents, rules, materialsCents) {
+    const p = (rules || {}).payments || {};
+    const minPct = num(p.minDepositPct) !== null ? num(p.minDepositPct) : 50;
+    const byPct = Math.ceil(totalCents * minPct / 100);
+    const byMat = p.depositCoversMaterials === false ? 0 : Math.min(totalCents, Math.ceil(num(materialsCents) || 0));
+    return { cents: Math.max(byPct, byMat), minPct: minPct, why: byMat > byPct ? 'materials' : 'minimum' };
+  }
+  function payments(totalCents, rules, opts) {
     if (!(totalCents > 0)) return [];
-    if (above !== null && totalCents > above) {
-      const dep = Math.ceil(totalCents / 2), mid = Math.ceil(totalCents / 4);
-      return [{ label: 'Deposit (50%)', cents: dep }, { label: 'Progress (25%)', cents: mid },
-              { label: 'Final (25%)', cents: totalCents - dep - mid }];
-    }
-    const dep = Math.ceil(totalCents / 2);
-    return [{ label: 'Deposit (50%)', cents: dep }, { label: 'On completion (50%)', cents: totalCents - dep }];
+    opts = opts || {};
+    const plan = Array.isArray(opts.plan) && opts.plan.length ? opts.plan : usualPlan(totalCents, rules);
+    const floor = depositFloor(totalCents, rules, opts.materialsCents);
+    let left = totalCents;
+    return plan.map((s, i) => {
+      const last = i === plan.length - 1;
+      let c = last || s.how === 'rest' ? left
+        : s.how === 'amount' ? Math.round(num(s.value) || 0)
+        : Math.ceil(totalCents * (num(s.value) || 0) / 100);
+      let raised = null;
+      if (i === 0 && !last && c < floor.cents) { c = floor.cents; raised = floor.why; }
+      if (i === 0 && last) c = totalCents;               // one payment: the whole job up front
+      c = Math.max(0, Math.min(c, left));
+      left -= c;
+      const pctNow = Math.round(c / totalCents * 100);
+      return { label: String(s.label || (i === 0 ? 'Deposit' : last ? 'Final' : 'Payment')) + ' (' + pctNow + '%)',
+               cents: c, raised: raised, minPct: i === 0 ? floor.minPct : null };
+    });
   }
 
   // --------------------------------------------------------------- the lot
@@ -430,8 +532,9 @@
     const added = ruleLines(est, takeoff, ctx).map(m => materialLine(m, ctx));
     const all = takeoff.concat(added);
     const work = (est.work || []).map(w => workLine(w, ctx));
-    const crewDays = (est.work || []).filter(w => (w.kind || 'crew') === 'crew')
-      .reduce((s, w) => s + (num(w.crewDays) || 0), 0);
+    // Every line's crew-days, however it is priced: they are the days on
+    // site (fuel) and what the profit per day is counted over.
+    const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
     const del = deliveries(all, est, ctx);
     const fu = fuel(est, ctx, crewDays > 0 ? Math.ceil(trim(crewDays)) : null);
     const materialsCents = all.reduce((s, l) => s + l.clientCents, 0) + del.clientCents + fu.clientCents;
@@ -442,10 +545,27 @@
     (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labour line') + ': ' + p)));
     del.problems.forEach(p => problems.push('Delivery: ' + p));
     fu.problems.forEach(p => problems.push('Fuel: ' + p));
+    // What the job makes once everything is paid for: the materials at what
+    // they cost landed, delivery and fuel at cost, the crew at the crew-day
+    // rate -- and that per crew-day. Only Jonah sees it. Not exact until every
+    // line is priced and every labour line has its crew-days.
+    const dayCost = num(ctx.rules.crewDayCents);
+    const materialCost = all.reduce((s, l) => s + (l.costTotalCents || 0), 0);
+    const deliveryCost = del.lines.reduce((s, l) => s + (l.costCents || 0), 0);
+    const fuelCost = fu.costCents || 0;
+    const laborCost = dayCost !== null ? Math.round(crewDays * dayCost) : 0;
+    const costCents = materialCost + deliveryCost + fuelCost + laborCost;
+    const profit = {
+      cents: totalCents - costCents, costCents: costCents, crewDays: crewDays,
+      materialCostCents: materialCost, deliveryCostCents: deliveryCost, fuelCostCents: fuelCost, laborCostCents: laborCost,
+      marginPct: totalCents > 0 ? (totalCents - costCents) / totalCents * 100 : null,
+      perDayCents: crewDays > 0 ? Math.round((totalCents - costCents) / crewDays) : null,
+      complete: !problems.length && dayCost !== null && work.every(w => w.crewDays > 0),
+    };
     return {
-      takeoff, added, work, delivery: del, fuel: fu, crewDays,
+      takeoff, added, work, delivery: del, fuel: fu, crewDays, profit,
       materialsCents, laborCents, totalCents,
-      payments: payments(totalCents, ctx.rules),
+      payments: payments(totalCents, ctx.rules, { plan: est.payments, materialsCents: materialsCents }),
       specialOrder: all.filter(l => l.specialOrder && l.orderQty > 0).map(l => l.name),
       problems,
     };
@@ -618,6 +738,45 @@
   };
   window.closePricingRules = function () { const m = el('prModal'); if (m) m.classList.remove('active'); };
 
+  // His profit-per-crew-day amounts, as chips: add, take off, pick the usual.
+  const wholeDollars = c => '$' + Math.round(c / 100).toLocaleString('en-US') + (c % 100 ? '.' + String(Math.abs(c % 100)).padStart(2, '0') : '');
+  function profitChoicesHtml(r, ro) {
+    const list = profitChoices(r), usual = defaultProfitCents(r);
+    return '<div class="pr-profit"><span class="pr-label">Profit per crew-day — the amounts you pick from on an estimate</span>' +
+      '<div class="pr-chips">' + (list.length ? list.map(c =>
+        '<span class="pr-chip' + (c === usual ? ' on' : '') + '">' + wholeDollars(c) + '/day' +
+          (c === usual ? ' <b>· usual</b>'
+            : ro ? '' : ' <button class="link-btn" onclick="prProfitUsual(' + c + ')">make usual</button>') +
+          (ro ? '' : ' <button class="link-btn" onclick="prProfitRemove(' + c + ')" aria-label="Take off">✕</button>') +
+        '</span>').join('') : '<span class="muted">None yet — add the amounts you price by.</span>') + '</div>' +
+      (ro ? '' : '<div class="pr-add"><input id="prProfitNew" inputmode="decimal" placeholder="e.g. 750" ' +
+        'onkeydown="if (event.key === \'Enter\') prProfitAdd()"> <button class="btn btn-sm" onclick="prProfitAdd()">+ Add an amount</button></div>') +
+      '<p class="hint">As many as you like. A crew-day line on an estimate picks one (the usual unless you change it), or takes any amount of its own. ' +
+        'Labour on a crew-day line = crew-days × (crew-day rate + this).</p>' +
+    '</div>';
+  }
+  function saveProfit(list, usual) {
+    list = list.filter((n, i, a) => n >= 0 && a.indexOf(n) === i).sort((a, b) => a - b);
+    if (usual === null || list.indexOf(usual) === -1) usual = list.length ? list[Math.floor((list.length - 1) / 2)] : null;
+    save({ profitChoices: list, defaultProfitCents: usual });
+  }
+  window.prProfitAdd = function () {
+    if (!owner()) return;
+    const i = el('prProfitNew');
+    const c = cents(String((i && i.value) || '').replace(/[$,\s]/g, ''));
+    if (c === null || c < 0) { showToast('Type an amount, like 750'); return; }
+    saveProfit(profitChoices(rules).concat([c]), defaultProfitCents(rules));
+    if (i) i.value = '';
+  };
+  window.prProfitRemove = function (c) {
+    if (!owner()) return;
+    saveProfit(profitChoices(rules).filter(x => x !== c), defaultProfitCents(rules) === c ? null : defaultProfitCents(rules));
+  };
+  window.prProfitUsual = function (c) {
+    if (!owner()) return;
+    saveProfit(profitChoices(rules), c);
+  };
+
   function box(label, value, onchange, hint, attrs) {
     return '<label class="pr-field"><span>' + esc(label) + '</span><input inputmode="decimal" value="' + esc(value == null ? '' : value) + '"' +
       (owner() ? '' : ' disabled') + ' onchange="' + onchange + '"' + (attrs || '') + '>' +
@@ -687,10 +846,12 @@
 
       '<h3 class="pr-h">Labour</h3><div class="pr-grid">' +
         box('Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')", 'what a crew-day costs, for estimating') +
-        PROFIT_TIERS.map(([id, name]) => box('Profit target — ' + name + ' ($/day)', dollars(r.profitCents[id]), "prSet('profitCents." + id + "', this.value, 'cents')")).join('') +
-        '<label class="pr-field"><span>Quote at</span><select ' + (ro ? 'disabled ' : '') + 'onchange="prSet(\'defaultProfit\', this.value, \'text\')">' +
-          PROFIT_TIERS.map(([id, name]) => '<option value="' + id + '"' + (r.defaultProfit === id ? ' selected' : '') + '>' + name + '</option>').join('') + '</select></label>' +
       '</div>' +
+      profitChoicesHtml(r, ro) +
+      // Services priced by the unit, with their adjustments and his notes on
+      // how each is priced (estimate.js, Services).
+      '<p class="hint">Services priced another way — turf by the sq ft, with what adjusts it — and your notes on how ' +
+        'each service is priced: <button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced</button></p>' +
 
       '<h3 class="pr-h">Materials</h3><div class="pr-grid">' +
         box('Sales tax on purchases (%)', r.taxPct, "prSet('taxPct', this.value, 'num')", 'added to every material cost before markup') +
@@ -760,7 +921,12 @@
 
       '<h3 class="pr-h">Payments & the message on the estimate</h3><div class="pr-grid">' +
         box('Three payments above ($)', dollars(r.payments.splitAboveCents), "prSet('payments.splitAboveCents', this.value, 'cents')", '50/50 up to this total; 50/25/25 above it') +
+        box('Smallest deposit (% of the job)', num(r.payments.minDepositPct) !== null ? num(r.payments.minDepositPct) : 50,
+          "prSet('payments.minDepositPct', this.value, 'num')", 'a deposit set lower on an estimate is raised to this') +
       '</div>' +
+      '<label class="est-switch"><input type="checkbox"' + (r.payments.depositCoversMaterials !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
+        ' onchange="prSet(\'payments.depositCoversMaterials\', this.checked, \'bool\')"> The deposit always covers all the materials</label>' +
+      '<p class="hint">Each estimate can set its own deposit and payments, as a % or a dollar amount — never below these.</p>' +
       ['twoText', 'threeText', 'warranty'].map(k => '<label class="pr-field wide"><span>' +
         ({ twoText: 'Payment terms — two payments', threeText: 'Payment terms — three payments', warranty: 'Warranty' })[k] +
         '</span><textarea rows="3"' + (ro ? ' disabled' : '') + ' onchange="prSet(\'payments.' + k + '\', this.value, \'text\')">' +
@@ -898,6 +1064,9 @@
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
     price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
+    profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
+    usualPlan: total => usualPlan(total, rules),
+    profitOf: w => profitOf(w, rules),
   };
 
   let authKey = null;

@@ -64,10 +64,15 @@ SYSTEM = (
     "caliper'), the count, tree='single' for a single-trunk tree, 'multi' for multi-trunk or "
     "evergreen trees, 'none' otherwise, and costEachDollars only if Jonah gave the nursery cost.\n"
     "- Labour: one line per piece of work the customer should see separately -- often just one. "
-    "kind 'crew' is priced from crew-days, which are Jonah's call: give crewDays only if he said "
-    "them, or if he asked you to suggest them (then say in a flag that it is your guess). "
-    "Otherwise crewDays is 0 and you ask. kind 'flat' is a flat-rate service from the PRICE BOOK "
-    "(by its id, with the quantity in its unit); kind 'amount' is a figure Jonah gave.\n"
+    "Read SERVICES first: it is how Jonah prices each kind of work, in his own words. A service "
+    "priced BY THE UNIT (turf by the sq ft, say) goes on a line of kind 'flat' with its id and the "
+    "quantity in its unit -- never as crew-days, whatever the job's size -- and in factors the ids "
+    "of its adjustments the site notes call for (a steep slope, tight access, old lawn to strip...), "
+    "and only those. A FIXED-price service is kind 'flat' with qty 1. Work priced by crew-days is "
+    "kind 'crew': follow that service's notes, if it has any. crewDays are Jonah's call: give them "
+    "only if he said them, or if he asked you to suggest them (then say in a flag that it is your "
+    "guess); otherwise 0 and you ask. On a 'flat' line, crewDays is how long the work takes (for "
+    "his profit check and fuel) -- the same rule. kind 'amount' is a figure Jonah gave.\n"
     "- The scope on each labour line is what the customer reads: a short heading-style title, "
     "then the scope of work in short plain paragraphs, no prices, no crew-days, no markup, no "
     "tier numbers. Follow Jonah's rules below for how a scope is built and what every estimate "
@@ -124,9 +129,10 @@ SCHEMA = {
                 "crewDays": {"type": "number"},
                 "priceId": {"type": "string"},
                 "qty": {"type": "number"},
+                "factors": {"type": "array", "items": {"type": "string"}},
                 "amountDollars": {"type": "number"},
             },
-            "required": ["id", "title", "scope", "kind", "crewDays", "priceId", "qty", "amountDollars"],
+            "required": ["id", "title", "scope", "kind", "crewDays", "priceId", "qty", "factors", "amountDollars"],
             "additionalProperties": False,
         }},
         "materials": {"type": "array", "items": {
@@ -331,16 +337,29 @@ def price_book():
     return out
 
 
+METHOD_WORDS = {"unit": "BY THE UNIT", "crew": "BY CREW-DAYS", "fixed": "FIXED PRICE"}
+
+
 def _book_text(book):
+    """Jonah's services (the app's "Services & how they're priced"): how each
+    is priced, his notes on pricing it, and what adjusts it. Prices are left
+    out -- the app does every sum."""
     rows = []
     for pid, p in sorted(book.items(), key=lambda kv: (str(kv[1].get("category") or ""), kv[1].get("name", ""))):
-        row = "- id %s | %s | per %s" % (pid, p.get("name"), p.get("unit") or "each")
-        if p.get("description"):
-            row += " | says: %s" % str(p["description"])[:300]
+        method = p.get("method") if p.get("method") in METHOD_WORDS else "unit"
+        row = "- %s | %s" % (p.get("name"), METHOD_WORDS[method])
+        if method != "crew":
+            row += " | id %s%s" % (pid, (" | per %s" % (p.get("unit") or "each")) if method == "unit" else "")
         if p.get("notes"):
-            row += " | Jonah's rule: %s" % str(p["notes"])[:500]
+            row += "\n  How Jonah prices it: %s" % str(p["notes"])[:1500].replace("\n", "\n  ")
+        factors = [f for f in (p.get("factors") or []) if isinstance(f, dict) and f.get("id") and f.get("name")]
+        if factors and method != "crew":
+            row += "\n  Adjustments (give the ids that apply in factors): " + "; ".join(
+                "%s = %s" % (f["id"], str(f["name"])[:80]) for f in factors[:20])
+        if p.get("description"):
+            row += "\n  Customer wording: %s" % str(p["description"])[:300]
         rows.append(row)
-    return "\n".join(rows) or "(no flat-rate services)"
+    return "\n".join(rows) or "(no services written up yet)"
 
 
 def rules_text():
@@ -368,6 +387,10 @@ def _current_text(cur):
             bits.append("crewDays %s" % (w.get("crewDays") if _num(w.get("crewDays")) else "not set"))
         elif kind == "flat":
             bits.append("priceId %s qty %s" % (w.get("priceId") or "(none)", w.get("qty")))
+            if w.get("factors"):
+                bits.append("factors %s" % ", ".join(str(f) for f in (w.get("factors") or [])[:20]))
+            if _num(w.get("crewDays")):
+                bits.append("crewDays %s" % w.get("crewDays"))
         else:
             bits.append("amount $%s" % w.get("amountDollars"))
         rows.append("- " + " | ".join(bits) + "\n  scope: " + str(w.get("scope") or "")[:3000].replace("\n", "\n  "))
@@ -482,7 +505,7 @@ def draft(client, d):
         {"type": "text", "text": SYSTEM},
         {"type": "text", "text": "JONAH'S TAKEOFF AND ESTIMATE RULES (his words):\n\n" + rules_text()},
         {"type": "text", "text": "SUPPLIES CATALOGUE (pick materials by id):\n" + cat_text +
-                                 "\n\nPRICE BOOK (flat-rate services, for labour lines of kind 'flat'):\n" + _book_text(book),
+                                 "\n\nSERVICES (how Jonah prices each kind of work -- read before pricing any labour):\n" + _book_text(book),
          # An hour, not five minutes: Jonah reads, edits and comes back to a
          # bid, and every miss re-buys the whole catalogue and rules.
          "cache_control": {"type": "ephemeral", "ttl": "1h"}},
@@ -513,14 +536,19 @@ def draft(client, d):
     for w in got.get("work") or []:
         kind = w.get("kind") if w.get("kind") in ("crew", "flat", "amount") else "crew"
         pid = str(w.get("priceId") or "")
+        # A 'flat' line only for a service that has a price (by the unit or
+        # fixed); its adjustments only from that service's own list.
+        svc = book.get(pid) if pid in book and (book[pid].get("method") or "unit") != "crew" else None
+        own = {str(f.get("id")) for f in ((svc or {}).get("factors") or []) if isinstance(f, dict) and f.get("id")}
         work.append({
             "id": str(w.get("id") or "") if str(w.get("id") or "") in work_ids else "",
             "title": str(w.get("title") or "").strip()[:200],
             "scope": str(w.get("scope") or "").strip()[:6000],
-            "kind": "flat" if kind == "flat" and pid in book else ("crew" if kind == "flat" else kind),
+            "kind": "flat" if kind == "flat" and svc else ("crew" if kind == "flat" else kind),
             "crewDays": max(0.0, round(_num(w.get("crewDays")) or 0, 2)),
-            "priceId": pid if pid in book else "",
+            "priceId": pid if svc else "",
             "qty": max(0.0, round(_num(w.get("qty")) or 0, 2)),
+            "factors": [str(f) for f in (w.get("factors") or []) if str(f) in own][:20] if svc else [],
             "amountDollars": max(0.0, round(_num(w.get("amountDollars")) or 0, 2)),
         })
     materials = []

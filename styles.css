@@ -2375,3 +2375,48 @@
   .jp-v-stages { display:inline-flex; border:1px solid rgba(255,255,255,.5); border-radius:8px; overflow:hidden; }
   .jp-v-stage { background:none; border:none; color:#fff; padding:9px 13px; font-weight:700; font-size:13px; cursor:pointer; min-height:40px; }
   .jp-v-stage.on { background:#fff; color:#2b2433; }
+  /* Services & how they're priced (estimate.js serviceHtml) */
+  .pb-card { border:1px solid var(--border); border-radius:10px; padding:10px; display:flex; flex-direction:column; gap:8px; background:var(--surface); }
+  .pb-card .pb-top select { width:auto; }
+  .pb-nums { display:flex; flex-wrap:wrap; gap:8px; }
+  .pb-nums label { display:flex; flex-direction:column; font-size:11px; color:var(--muted); }
+  .pb-nums label input { width:110px; }
+  .pb-card textarea { width:100%; }
+  .pb-factors { display:flex; flex-direction:column; gap:6px; }
+  .pb-factor { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .pb-factor .pb-fname { flex:1 1 180px; min-width:0; }
+  .pb-factor select { width:auto; }
+  .pb-factor .pb-famt { width:110px; }
+  .pb-desc-box summary { cursor:pointer; font-size:12px; color:var(--muted); }
+  /* A labour line: its adjustments and what it makes per day */
+  .est-adjust { display:flex; flex-wrap:wrap; gap:4px 14px; align-items:center; margin:6px 0 2px; font-size:13px; }
+  .est-adjust .label { flex-basis:100%; }
+  .est-svcnotes { flex-basis:100%; font-size:12.5px; color:var(--muted); }
+  .est-svcnotes summary { cursor:pointer; }
+  .est-svcnotes div { white-space:pre-wrap; padding:4px 0 0 2px; }
+  .est-wprofit { font-size:12.5px; margin:4px 0; }
+  .est-wprofit:empty { display:none; }
+  .est-good { color:var(--pos); font-weight:600; }
+  .est-low { color:var(--neg); font-weight:600; }
+  .est-profit { margin-top:6px; padding:8px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border); font-size:13.5px; }
+  /* Pricing rules: profit per crew-day amounts */
+  .pr-profit { margin:10px 0 4px; }
+  .pr-profit .pr-label { display:block; font-size:12px; font-weight:700; color:var(--muted); margin-bottom:6px; }
+  .pr-profit .pr-chip.on { border-color:var(--pos); background:var(--pos-soft); }
+  .pr-add { display:flex; gap:6px; align-items:center; margin-top:8px; }
+  .pr-add input { width:120px; }
+  .pr-profit .pr-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .pr-profit .pr-chip { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; border:1px solid var(--border-strong); border-radius:16px; font-size:13px; background:var(--surface); }
+  /* The owner's numbers under an estimate: costs, profit, margin, per day */
+  .est-profit > div:not(.est-profit-h):not(.muted) { display:flex; justify-content:space-between; gap:10px; padding:2px 0; }
+  .est-profit-h { font-weight:700; margin-bottom:4px; }
+  .est-profit-sub { border-top:1px solid var(--border); margin-top:3px; padding-top:4px !important; }
+  .est-profit-big b { color:var(--pos); font-size:15px; }
+  /* Payments on an estimate */
+  .est-pays { font-size:13px; }
+  .est-pay-note { font-size:12.5px; color:var(--accent-dark); }
+  .est-pay-edit { display:flex; flex-direction:column; gap:6px; margin-top:6px; padding:8px; border:1px solid var(--border); border-radius:8px; }
+  .est-pay-row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .est-pay-row .est-pay-label { flex:1 1 140px; min-width:0; }
+  .est-pay-row select { width:auto; }
+  .est-pay-row .est-pay-val { width:100px; }
