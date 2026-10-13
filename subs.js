@@ -271,7 +271,7 @@
   const svcKeyOf = s => norm(s).replace(/ /g, '-').slice(0, 60);
   // An address as house number + street name, the way two spellings of it
   // agree ("120 Saint Marys Dr" is "120 St Marys Drive"). A rural fire
-  // number (W5883) counts as the number.
+  // number (N1234) counts as the number.
   function addrKey(a) {
     const t = norm(a).split(' ').filter(Boolean).map(w => ABBR[w] || w);
     const i = t.findIndex(w => /^[nsew]?\d+$/.test(w));
@@ -731,6 +731,13 @@
     stop();
     if (!owner() || !window.YDDb) { render(); return; }
     unsub = window.YDDb.watch('settings', (changes, meta) => {
+      // Every settings record comes through here -- the email reader writes
+      // settings/receipts every half hour -- and only two are ours. Anything
+      // else changing is no reason to file bills or redraw, unless this is
+      // the first word from the server (what `fresh` waits for).
+      const ours = changes.some(c => c.id === 'subcontractors' || c.id === 'subVisits');
+      const first = !fresh && !!meta && meta.fromCache === false;
+      if (!ours && !first) return;
       changes.forEach(c => {
         const d = c.type === 'removed' ? {} : (c.data || {});
         if (c.id === 'subVisits') { visitsDoc = { visits: d.visits || {}, scannedAt: d.scannedAt || '' }; return; }

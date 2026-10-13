@@ -60,8 +60,12 @@
   let draftMsg = '';          // what is typed in the chat box, not sent yet
   let undo = null;            // the estimate before Claude's last change
   let qbItems = null;         // QuickBooks product names, fetched when first wanted
+  let stale = false;          // Supplies or the rules changed while the Job tab was hidden (repaint)
 
+  // The conversation kept with the job (Jonah can scroll back through it),
+  // and the part of it Claude is sent with each message (ask).
   const CHAT_KEEP = 60;
+  const CHAT_SEND = 30;
   // Each version put in QuickBooks, as it went: when, the total, each line's
   // amount, whether it was emailed -- so a customer ringing about "the
   // estimate you sent" can be answered from the job.
@@ -201,6 +205,16 @@
     // The first lines in (or the last out) show or hide the old proposal box.
     if (redraw && typeof renderProposal === 'function') renderProposal();
   }
+  // Words only -- a heading, a scope, a name: nothing to re-price. Kept, and
+  // the totals (whose "not priced yet" list names the lines, and the
+  // customer's view when it is open) catch up once the typing pauses rather
+  // than at every key.
+  let wordsTimer = null;
+  function wordsChanged() {
+    if (typeof markDirty === 'function') markDirty();
+    clearTimeout(wordsTimer);
+    wordsTimer = setTimeout(renderTotals, 500);
+  }
 
   const qb = () => (typeof boardFields !== 'undefined' && boardFields.qbEstimate) || null;
   // The job's invoice, made from the estimate (quickbooks.py invoice_from_estimate).
@@ -219,6 +233,8 @@
     const wrap = el('estimateWrap');
     const sec = el('estimateSection');
     if (!wrap || !sec) return;
+    stale = false;
+    kindsNow = null;
     sec.hidden = !sees();
     if (!sees()) return;
     if (!P()) { wrap.innerHTML = '<p class="empty-msg">Loading…</p>'; return; }
@@ -362,23 +378,65 @@
     '</div>';
   }
 
-  // Every kind of material, his own included (pricing.js).
-  const kinds = () => (P().allKinds ? P().allKinds() : P().CATEGORIES);
+  // Every kind of material, his own included (pricing.js). Worked out once
+  // per drawing: his own kinds are found by going through every supply.
+  let kindsNow = null;
+  const kinds = () => kindsNow || (kindsNow = P().allKinds ? P().allKinds() : P().CATEGORIES);
 
-  function supplyOptions(selected) {
-    const c = catalog();
-    // By kind (his own kinds by their names), then by name.
-    const kind = cat => (cat ? (P().kindName ? P().kindName(cat) : P().CATEGORY_NAME[cat]) : '') || 'zz';
-    const skip = P().NOT_FOR_ESTIMATES || [];
-    const list = Object.values(c.items).filter(it => it.id === selected || skip.indexOf(it.category) === -1).sort((a, b) =>
-      String(kind(a.category)).localeCompare(String(kind(b.category))) || String(a.name).localeCompare(String(b.name)));
-    return '<option value="">— not in Supplies —</option>' + list.map(it => {
-      const v = c.vendors[it.vendorId];
-      const unit = num(it.coverage) > 0 ? it.takeoffUnit : ((c.prices[it.id] || {}).per || it.unit || '');
-      return '<option value="' + esc(it.id) + '"' + (it.id === selected ? ' selected' : '') + '>' + esc(it.name) +
-        (unit ? ' (' + esc(unit) + ')' : '') + (v ? ' — ' + esc(v.name) : '') + '</option>';
-    }).join('');
+  // The Supplies picker on a material line. Supplies holds ~900 things, and
+  // a 25-line bid drawing the whole list on every line was 22,000 options
+  // and 25 sorts per redraw. So the list is sorted and drawn once, kept until
+  // Supplies or the kinds change (onCatalog), and each line's dropdown holds
+  // only its own choice until someone goes to use it (fillPicker).
+  const NO_SUPPLY = '<option value="">— not in Supplies —</option>';
+  const byText = new Intl.Collator().compare;
+  let supplyList = null;      // { html: every option, has: Set of their ids }
+  function supplyOption(it, c, selected) {
+    const v = c.vendors[it.vendorId];
+    const unit = num(it.coverage) > 0 ? it.takeoffUnit : ((c.prices[it.id] || {}).per || it.unit || '');
+    return '<option value="' + esc(it.id) + '"' + (selected ? ' selected' : '') + '>' + esc(it.name) +
+      (unit ? ' (' + esc(unit) + ')' : '') + (v ? ' — ' + esc(v.name) : '') + '</option>';
   }
+  function allSupplyOptions() {
+    if (supplyList) return supplyList;
+    const c = catalog();
+    // By kind (his own kinds by their names), then by name. Tools are never
+    // on an estimate (NOT_FOR_ESTIMATES).
+    const kind = cat => String((cat ? (P().kindName ? P().kindName(cat) : P().CATEGORY_NAME[cat]) : '') || 'zz');
+    const skip = P().NOT_FOR_ESTIMATES || [];
+    const list = Object.values(c.items).filter(it => skip.indexOf(it.category) === -1)
+      .map(it => ({ it: it, k: kind(it.category), n: String(it.name) }))
+      .sort((a, b) => byText(a.k, b.k) || byText(a.n, b.n));
+    supplyList = { html: NO_SUPPLY + list.map(x => supplyOption(x.it, c, false)).join(''),
+                   has: new Set(list.map(x => x.it.id)) };
+    return supplyList;
+  }
+  // What a line's dropdown holds until it is used: its own choice only.
+  function supplyOptions(selected) {
+    const c = catalog(), it = selected ? c.items[selected] : null;
+    return NO_SUPPLY + (it ? supplyOption(it, c, true) : '');
+  }
+  // The whole list, the moment the dropdown is going to be used -- before
+  // the search box in front of it (app.js makeSearchable) opens its list,
+  // which is why this listens on the way down (capture), not the way back.
+  function fillPicker(sel) {
+    if (!sel || sel.dataset.full || sel.disabled) return;
+    const chosen = sel.value;
+    const L = allSupplyOptions();
+    // A line already on something no longer offered (an item since made a
+    // tool) keeps it as its choice.
+    const c = catalog(), it = chosen && !L.has.has(chosen) ? c.items[chosen] : null;
+    sel.innerHTML = it ? NO_SUPPLY + supplyOption(it, c, false) + L.html.slice(NO_SUPPLY.length) : L.html;
+    sel.value = chosen;
+    sel.dataset.full = '1';
+  }
+  function pickerOf(t) {
+    if (!t || t.nodeType !== 1) return null;
+    if (t.matches('select.est-supply')) return t;
+    const wrap = t.closest('.ssel');
+    return wrap && el('estimateWrap') && el('estimateWrap').contains(wrap) ? wrap.querySelector('select.est-supply') : null;
+  }
+  ['focus', 'pointerdown'].forEach(type => document.addEventListener(type, e => fillPicker(pickerOf(e.target)), true));
 
   function matHtml(m, i, ro, r) {
     const id = safeId(m.id), dis = ro ? ' disabled' : '';
@@ -517,7 +575,7 @@
     const towns = Object.keys(rates).filter(k => num(rates[k]) !== null).sort();
     // A zone picked from the address (Madison) is shown, and can be changed.
     const needTown = d.problems.some(p => /town|rate|zone/.test(p)) || est.deliveryTown || d.deliveryZone;
-    rows.push('<div class="est-arow">' + sw('delivery', 'Delivery') + '<span class="est-adesc">' +
+    rows.push('<div class="est-arow" data-auto="delivery">' + sw('delivery', 'Delivery') + '<span class="est-adesc">' +
       (off.delivery ? 'off' : d.lines.length ? d.lines.map(l => esc(l.name) + ' — ' + l.loads + ' load' + (l.loads === 1 ? '' : 's') + (l.pallet ? ' + pallet' : '')).join('; ')
         : 'nothing delivered') +
       (d.deliveryZone && !off.delivery && d.lines.length ? ' · <b>' + esc(d.deliveryZone) + '</b> (from the address)' : '') + '</span>' +
@@ -528,9 +586,9 @@
     // Fuel
     const f = r.fuel, fu = est.fuel || {};
     const fp = P().fuelPrices() || {};
-    rows.push('<div class="est-arow">' + sw('fuel', 'Fuel') + '<span class="est-adesc">' + (off.fuel ? 'off' :
+    rows.push('<div class="est-arow" data-auto="fuel">' + sw('fuel', 'Fuel') + '<span class="est-adesc">' + (off.fuel ? 'off' :
         '<label>Miles each way <input inputmode="decimal" value="' + esc(fu.miles == null ? '' : fu.miles) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'miles\', this.value)"></label>' +
-        '<button class="btn btn-sm" onclick="estFindMiles(true)"' + (tripping ? ' disabled' : '') + '>' + (tripping ? 'Looking…' : 'Find miles') + '</button>' +
+        '<button class="btn btn-sm est-miles-btn" onclick="estFindMiles(true)"' + (tripping ? ' disabled' : '') + '>' + (tripping ? 'Looking…' : 'Find miles') + '</button>' +
         '<label>Days <input inputmode="decimal" placeholder="' + esc(f.days == null ? '' : f.days) + '" value="' + esc(fu.jobDays == null ? '' : fu.jobDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'jobDays\', this.value)"></label>' +
         '<label>Loader days <input inputmode="decimal" placeholder="' + esc(f.bobcatDays == null ? '' : f.bobcatDays) + '" value="' + esc(fu.bobcatDays == null ? '' : fu.bobcatDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'bobcatDays\', this.value)"></label>' +
         '<label>Gas $/gal <input inputmode="decimal" placeholder="' + esc(num(fp.gasCents) !== null ? (fp.gasCents / 100).toFixed(2) : '') + '" value="' + esc(fu.gasCents == null ? '' : (fu.gasCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'gasCents\', this.value)"></label>' +
@@ -543,11 +601,32 @@
       const sum = ls.reduce((s, l) => s + l.clientCents, 0);
       const probs = [].concat.apply([], ls.map(l => l.problems));
       if (!ls.length && !off[k]) return;
-      rows.push('<div class="est-arow">' + sw(k, label) + '<span class="est-adesc">' + (off[k] ? 'off' :
+      rows.push('<div class="est-arow" data-auto="' + k + '">' + sw(k, label) + '<span class="est-adesc">' + (off[k] ? 'off' :
         ls.map(l => esc(l.name) + ' — ' + esc(P().qtyText(l.orderQty, l.per))).join('; ') +
         (probs.length ? ' <span class="bad">⚠ ' + esc(probs.join(' · ')) + '</span>' : '')) + '</span><b>' + (sum ? cents(sum) : '') + '</b></div>');
     });
-    box.innerHTML = rows.join('');
+    const html = rows.join('');
+    // Someone typing in one of the boxes here (miles, days, gas...): the
+    // boxes stay as they are. Rebuilt, they took the focus -- and the iPad's
+    // keyboard -- away at every key, and turned the 4 just typed for gas
+    // into "4.00". Only the amounts, and the rows not being typed in, are
+    // brought up to date; the whole lot is drawn again next time.
+    const a = document.activeElement;
+    if (a && a !== box && box.contains(a) && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      tmp.querySelectorAll('[data-auto]').forEach(row => {
+        const live = box.querySelector('[data-auto="' + row.getAttribute('data-auto') + '"]');
+        if (!live) return;
+        if (!live.contains(a)) { live.innerHTML = row.innerHTML; return; }
+        const amt = live.querySelector(':scope > b'), now = row.querySelector(':scope > b');
+        if (amt && now) amt.textContent = now.textContent;
+        const btn = live.querySelector('.est-miles-btn'), nb = row.querySelector('.est-miles-btn');
+        if (btn && nb) { btn.disabled = nb.disabled; btn.textContent = nb.textContent; }
+      });
+      return;
+    }
+    box.innerHTML = html;
   }
 
   function renderQb() {
@@ -559,7 +638,7 @@
     const ready = r && r.totalCents > 0;
     const when = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const status = q ? ({ Pending: 'Waiting on the customer', Accepted: '✅ Accepted', Closed: 'Made into an invoice',
-      Rejected: 'Turned down' }[q.status] || q.status || '') : '';
+      Converted: 'Made into an invoice', Rejected: 'Turned down' }[q.status] || q.status || '') : '';
     box.innerHTML =
       (q && q.id ? '<div class="est-qb-line"><b>QuickBooks estimate' + (q.docNumber ? ' #' + esc(q.docNumber) : '') + '</b>' +
         (q.total != null ? ' · ' + fmtMoney(Number(q.total) || 0) : '') +
@@ -568,7 +647,7 @@
         (q.acceptedBy ? ' · accepted by ' + esc(q.acceptedBy) : '') +
         (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</div>' : '') +
       // Once invoiced the estimate is closed in QuickBooks and can't change.
-      (can && q && q.id && (q.status === 'Closed' || (inv && inv.id))
+      (can && q && q.id && (q.status === 'Closed' || q.status === 'Converted' || (inv && inv.id))
         ? (q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<div class="field-actions"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
       : can ? '<div class="field-actions">' +
@@ -830,7 +909,7 @@
     else if (field === 'amount') w.amountCents = toCents(v);
     else if (field === 'profit') w.profit = v;
     else if (field === 'kind') { w.kind = v; changed(true); return; }
-    else w[field] = String(v);
+    else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product
     changed(false);
   };
   window.estPickPrice = function (id, pid) {
@@ -855,7 +934,8 @@
     else if (field === 'cost') m.costCents = toCents(v);
     else if (field === 'tree') m.tree = v || null;
     else if (field === 'delivery' || field === 'category') { m[field] = v; changed(true); return; }
-    else m[field] = String(v);
+    else if (field === 'name') { m.name = String(v); wordsChanged(); return; }
+    else m[field] = String(v);                               // the unit: it prices
     changed(false);
   };
   // Picking from Supplies takes its name for what the customer reads, unless
@@ -1435,7 +1515,7 @@
         services: job.services,
         jobNotes: job.notes,
         siteNotes: String(e0.notes || '').trim(),
-        chat: e0.chat.slice(-30).map(m => ({ role: m.role, text: m.text })),
+        chat: e0.chat.slice(-CHAT_SEND).map(m => ({ role: m.role, text: m.text })),
         current: currentForClaude(e0, job.city),
         // This copy of the app can take just the lines that change (less for
         // Claude to write, so cheaper and quicker).
@@ -1688,14 +1768,49 @@
     }
   };
 
+  // QuickBooks' answer in words. Real QuickBooks says Converted for an
+  // estimate made into an invoice; the test company says Closed.
+  const QB_SAID = { Pending: 'no answer yet', Accepted: 'accepted', Closed: 'made into an invoice',
+                    Converted: 'made into an invoice', Rejected: 'turned down' };
+  // The customer said yes: Accepted, or invoiced after an acceptance (QuickBooks
+  // keeps the date it was accepted).
+  const isAccepted = s => !!s && (s.status === 'Accepted' ||
+    ((s.status === 'Closed' || s.status === 'Converted') && !!s.acceptedDate));
+  // Already at a yes or past it, as last known: no news.
+  const pastYes = s => !!s && ['Accepted', 'Closed', 'Converted'].indexOf(s.status) !== -1;
+  function stillBid(jobId) {
+    const d = savedJob(jobId);
+    return !!d && typeof isBidStatus === 'function' && isBidStatus(d.jobStatus);
+  }
+
   // What QuickBooks said, onto the job. A bid that was just emailed moves to
   // Sent (which starts the Follow up clock); QuickBooks' number becomes the
   // job's estimate number.
+  //
+  // The first time the answer is seen to be yes, the job notes when
+  // (acceptedSeenAt, once, never moved -- the server's hourly check does the
+  // same): a bid moved after that (marked lost after all) is left where it
+  // was put, however often QuickBooks is asked again (sync.js bookIfAccepted).
   function afterQb(jobId, r, emailed) {
-    const was = (currentJobId === jobId ? qb() : null) || {};
+    const open = currentJobId === jobId;
+    const was = (open ? qb() : null) || {};
     const merged = Object.assign({}, was, r);
     Object.keys(merged).forEach(k => { if (merged[k] === undefined) merged[k] = null; });
     const patch = { qbEstimate: merged };
+    const stored = savedJob(jobId) || {};
+    const before = open ? qb() : stored.qbEstimate;
+    const seenAt = stored.acceptedSeenAt || (open && typeof boardFields !== 'undefined' && boardFields.acceptedSeenAt);
+    if (isAccepted(r) && !seenAt) {
+      // Seen at a yes before acceptedSeenAt existed: dated by QuickBooks'
+      // own acceptance date, or the last look before this one -- not now,
+      // or a bid marked lost in between would be booked all over again.
+      patch.acceptedSeenAt = pastYes(before)
+        ? String((before && (before.acceptedDate || before.syncedAt)) || new Date().toISOString())
+        : new Date().toISOString();
+    } else if (r.status === 'Pending' && seenAt) {
+      // Back to waiting (changed and sent again): the next yes is news.
+      patch.acceptedSeenAt = null;
+    }
     const stage = currentJobId === jobId ? boardFields.bidStage : null;
     if (emailed && (typeof jobStatus === 'undefined' || jobStatus === 'quoting') &&
         ['won', 'lost', 'sent', 'followUp'].indexOf(stage) === -1) {
@@ -1720,14 +1835,20 @@
       const r = await askQb('/qb/estimate-status', { estimateId: q.id, jobId: jobId, env: q.env || null });
       if (currentJobId !== jobId) return;
       if (r.missing) { if (!quiet) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
-      const before = q.status;
+      const wasBid = stillBid(jobId);
       // Accepted books the bid by itself, on the owner's device (sync.js
       // bookIfAccepted, which this save passes through) -- no question asked.
       afterQb(jobId, r, false);
-      // A fresh "accepted" is announced by the booking itself.
-      if (!quiet && !(r.status === 'Accepted' && before !== 'Accepted')) {
-        showToast('QuickBooks says: ' + ({ Pending: 'no answer yet', Accepted: 'accepted', Closed: 'made into an invoice',
-          Rejected: 'turned down' }[r.status] || r.status));
+      // Asked by hand, the answer is always said: by the booking, when this
+      // answer booked it (a moment after the save), else here -- an accepted
+      // bid can stay a bid (another device's job to book, or it was moved
+      // after the yes), and saying nothing then looked like no answer.
+      if (!quiet) {
+        setTimeout(() => {
+          if (wasBid && !stillBid(jobId)) return;
+          showToast('QuickBooks says: ' + (QB_SAID[r.status] || r.status || 'no answer yet') +
+            (isAccepted(r) && stillBid(jobId) ? ' — still a bid here; “Make it a job” books it' : ''), 5000);
+        }, 50);
       }
     } catch (e) {
       if (!quiet) showToast('QuickBooks: ' + (e.message || e));
@@ -1939,16 +2060,36 @@
 
   // Supplies, the pricing rules and the price book arrive after the job is
   // on screen; the estimate is re-priced as they do. Redrawn whole only when
-  // nobody is typing in it, otherwise just the numbers.
+  // nobody is typing in it, otherwise just the numbers -- and not at all
+  // while the Job tab is hidden (a Pricing rules change is two redraws, a
+  // Supplies import dozens): it is drawn once when the tab is next opened.
+  // The job's price follows either way; the Tracking tab shows it.
+  const jobShown = () => { const p = el('panel-job'); return !!(p && p.classList.contains('active')); };
   function repaint() {
-    const w = el('estimateWrap');
-    const a = document.activeElement;
-    if (w && a && w.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) renderTotals();
-    else render();
+    if (jobShown()) {
+      const w = el('estimateWrap');
+      const a = document.activeElement;
+      if (w && a && w.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName)) renderTotals();
+      else render();
+    } else stale = true;
     if (typeof syncJobPriceFromProposals === 'function') syncJobPriceFromProposals();
   }
-  document.addEventListener('yd-supplies', repaint);
-  document.addEventListener('yd-pricing', repaint);
+  // Supplies or the kinds of material changed: the pickers' list is drawn
+  // afresh the next time one is used.
+  function onCatalog() {
+    supplyList = null; kindsNow = null;
+    repaint();
+  }
+  document.addEventListener('yd-supplies', onCatalog);
+  document.addEventListener('yd-pricing', onCatalog);
+  // The Job tab opened (app.js switchTab sets its class): drawn now if
+  // anything changed while it was hidden.
+  (function watchJobTab() {
+    const p = el('panel-job');
+    if (!p || typeof MutationObserver !== 'function') return;
+    new MutationObserver(() => { if (stale && jobShown()) render(); })
+      .observe(p, { attributes: true, attributeFilter: ['class'] });
+  })();
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

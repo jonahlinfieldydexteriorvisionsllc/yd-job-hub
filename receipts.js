@@ -30,7 +30,18 @@
   const money = c => fmtMoney((Number(c) || 0) / 100);
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
 
-  let receipts = {};          // id -> record
+  let receipts = {};          // id -> record: everything below, put together (settle)
+  // Not the whole collection, which only ever grows (review, 12 Oct 2026):
+  // live, every receipt still to sort and every one dated from the 1st of
+  // January last year -- this year's books and last year's, and the year
+  // back that Subcontractors and the Equipment pages read. Older ones are
+  // asked for once, when someone searches All receipts or asks for them.
+  let toSort = {};            // id -> record, status 'new' (live)
+  let recent = {};            // id -> record, dated from `since` (live)
+  let older = {};             // id -> record, dated before `since` (read once, loadOlder)
+  let since = '';             // 'YYYY-01-01', last year's
+  let olderState = '';        // '' not read, 'loading', 'done', 'failed'
+  let toSortHeard = false, recentHeard = false;
   let state = null;           // settings/receipts: when email was last read
   let unsubs = [];
   let loaded = false;
@@ -101,6 +112,11 @@
   function tickedLines(rid, r) {
     const free = freeLines(r);
     return ticked[rid] && isSplit(rid, r) ? free.filter(i => ticked[rid].has(i)) : free;
+  }
+  // "Personal" for part of the receipt -- some of it sorted already, or split
+  // up with only some lines ticked -- rather than the whole of it.
+  function partlyPersonal(rid, r) {
+    return (r.splits || []).length > 0 || (isSplit(rid, r) && tickedLines(rid, r).length < freeLines(r).length);
   }
 
   function jobsList() {
@@ -361,23 +377,40 @@
   // Lines already put on a job stay on the job. The owner's alone (rules).
   const owner = () => !!(window.YDAuth && window.YDAuth.isOwner);
   function drop(ids) {
-    ids.forEach(id => { delete receipts[id]; delete ticked[id]; delete chosen[id]; delete splitting[id]; });
+    ids.forEach(id => {
+      delete receipts[id]; delete toSort[id]; delete recent[id]; delete older[id];
+      delete ticked[id]; delete chosen[id]; delete splitting[id];
+    });
     Promise.resolve(window.YDDb.removeMany(ids.map(id => ['receipts', id])))
       .catch(e => console.warn('[receipts] not deleted:', (e && e.code) || e));
     redraw(true);
   }
+  // What went to a vehicle, the shop or the office is kept on the receipt and
+  // nowhere else (a vehicle's page and the month totals read it from here);
+  // so is a receipt set aside as overhead before those places existed.
+  const BOOKS = ['vehicle', 'shop', 'office'];
+  const heldHere = r => (r.splits || []).some(s => BOOKS.indexOf(destOf(s)) !== -1) ||
+    (r.status === 'skipped' && r.skipWhy === 'overhead');
+  // Set aside for good: what "Delete all set aside" may take. Not a
+  // subcontractor's bills (kept on the subcontractor's card, subs.js, where
+  // what is owed is worked out), nor one holding the books' share above.
+  const deletableAside = r => r.status === 'skipped' && r.skipWhy !== 'subcontractor' && !heldHere(r);
   window.rcDelete = function (rid) {
     const r = receipts[rid];
     if (!r || !owner()) return;
+    const books = heldHere(r)
+      ? '\n\nIt holds what went to ' + (r.splits || []).filter(s => BOOKS.indexOf(destOf(s)) !== -1)
+          .map(s => s.name || DEST_NAME[destOf(s)]).concat(r.skipWhy === 'overhead' && r.status === 'skipped' ? ['shop overhead'] : [])
+          .filter((n, i, a) => a.indexOf(n) === i).join(', ') +
+        ' — that is kept nowhere else, so it comes out of those totals.'
+      : '';
     if (!confirm('Delete this ' + (r.vendor || '') + ' receipt from the hub?' +
-      ((r.splits || []).length ? ' Lines already added to jobs stay on the jobs.' : ''))) return;
+      ((r.splits || []).some(s => destOf(s) === 'job') ? ' Lines already added to jobs stay on the jobs.' : '') + books)) return;
     drop([rid]);
     showToast('Deleted');
   };
   window.rcDeleteAside = function () {
-    // Not a subcontractor's bills: they are set aside only to be kept on the
-    // subcontractor's card (subs.js), where what is owed is worked out.
-    const ids = Object.keys(receipts).filter(id => receipts[id].status === 'skipped' && receipts[id].skipWhy !== 'subcontractor');
+    const ids = Object.keys(receipts).filter(id => deletableAside(receipts[id]));
     if (!ids.length || !owner()) return;
     if (!confirm('Delete all ' + ids.length + ' set-aside receipts from the hub?')) return;
     drop(ids);
@@ -390,13 +423,15 @@
     // Personal purchases have no business in the hub at all (Jonah, 5 Oct).
     // Part of a receipt already sorted elsewhere keeps the receipt, though --
     // a vehicle's or the shop's share lives nowhere else -- so the rest is
-    // noted as personal and the receipt is done.
+    // noted as personal and the receipt is done. So does a receipt split up
+    // with only some of its lines ticked: those lines are personal, and the
+    // rest still waits to be sorted (it used to delete the whole receipt).
     if (why === 'personal') {
       const r = receipts[rid];
-      if ((r.splits || []).length) {
+      if (partlyPersonal(rid, r)) {
         const p = portion(rid, r);
         if (!p) return;
-        const splits = r.splits.concat([{ id: 'sp' + Date.now().toString(36) + uid(), to: 'personal', name: 'Personal',
+        const splits = (r.splits || []).concat([{ id: 'sp' + Date.now().toString(36) + uid(), to: 'personal', name: 'Personal',
           lines: p.idxs, cents: p.part, taxCents: p.tax, at: new Date().toISOString(), by: (me() || {}).uid || '' }]);
         const status = p.last ? 'done' : r.status;
         receipts[rid] = Object.assign({}, r, { splits, status });
@@ -479,7 +514,9 @@
       '<input type="checkbox"' + (s ? ' checked disabled' : (isTicked ? ' checked' : '')) +
         (s ? '' : ' onchange="rcTick(\'' + rid + '\',' + i + ',this.checked)"') + '>' +
       '<span class="rc-lname">' + esc(l.name) + qty +
-        (s ? ' <span class="rc-ljob">→ ' + jobNameHtml(s.jobName, s.est) + '</span>' : '') + '</span>' +
+        // Where the line went: a job by its name, a vehicle, the shop, the
+        // office or personal by theirs (a job's name was shown for every one).
+        (s ? ' <span class="rc-ljob">→ ' + (destOf(s) === 'job' ? jobNameHtml(s.jobName, s.est) : splitWhere(s)) + '</span>' : '') + '</span>' +
       '<span class="rc-lamt">' + money(l.cents) + '</span></label>';
   }
 
@@ -577,7 +614,7 @@
         '</select>' + btn('Add ' + n + 'to vehicle') + '</div>';
     }
     if (to === 'personal') {
-      return '<div class="rc-assign">' + btn((r.splits || []).length ? 'Mark ' + (n || 'the rest ') + 'personal'
+      return '<div class="rc-assign">' + btn(partlyPersonal(rid, r) ? 'Mark ' + (n || 'the rest ') + 'personal'
         : (owner() ? 'Personal — delete it' : 'Personal — set it aside')) + '</div>';
     }
     return '<div class="rc-assign">' + btn('Add ' + n + 'to ' + DEST_NAME[to].toLowerCase()) + '</div>';
@@ -694,9 +731,22 @@
     const wrap = el('rcHistory');
     if (!wrap) return;
     const words = String((el('rcSearch') || {}).value || '').toLowerCase().split(/\s+/).filter(Boolean);
+    // A search looks through the older ones too -- once; after a failure only
+    // "Try again" asks again (or every redraw would ask, for ever).
+    if (words.length && olderState === '') loadOlder();
+    const label = key => {
+      const d = new Date(key + '-01T12:00:00');
+      return isNaN(d) ? 'No date' : d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
+    };
+    const before = since ? label(since.slice(0, 7)) : '';
+    const olderHtml = !since || olderState === 'done' ? ''
+      : '<p class="hint">' + (olderState === 'loading' ? 'Looking for receipts from before ' + esc(before) + '…'
+        : (olderState === 'failed' ? 'Receipts from before ' + esc(before) + ' could not be read just now. '
+          : 'Receipts from before ' + esc(before) + ' are not loaded. ') +
+          '<button class="link-btn" onclick="rcOlder()">' + (olderState === 'failed' ? 'Try again' : 'Show them') + '</button>') + '</p>';
     const every = allReceipts().filter(r => r.status !== 'new');
     const shown = every.filter(r => inView(r) && matches(r, words)).sort(byNewest);
-    const aside = every.filter(r => r.status === 'skipped' && r.skipWhy !== 'subcontractor');
+    const aside = every.filter(deletableAside);
     el('rcHistBadge').textContent = every.length ? String(every.length) : '';
     el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
       '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') + '" onclick="rcView(\'' + v + '\')">' +
@@ -705,7 +755,7 @@
         ? '<button class="btn btn-sm rc-del" onclick="rcDeleteAside()">🗑 Delete all ' + aside.length + ' set aside</button>' : '');
 
     if (!shown.length) {
-      wrap.innerHTML = '<p class="empty-msg">' + (words.length ? 'Nothing matches.' : 'Nothing here yet.') + '</p>';
+      wrap.innerHTML = '<p class="empty-msg">' + (words.length ? 'Nothing matches.' : 'Nothing here yet.') + '</p>' + olderHtml;
       return;
     }
     // By month, newest first, each with what it came to -- and, under All,
@@ -720,10 +770,6 @@
       m.cents += view === 'all' || view === 'skipped' ? (r.totalCents || 0) : amountTo(r, view);
       PLACES.forEach(p => { m.by[p] = (m.by[p] || 0) + amountTo(r, p); });
     });
-    const label = key => {
-      const d = new Date(key + '-01T12:00:00');
-      return isNaN(d) ? 'No date' : d.toLocaleString('en-US', { month: 'long', year: 'numeric' });
-    };
     const split = m => view !== 'all' ? '' : PLACES.filter(p => m.by[p]).map(p =>
       DEST_NAME[p].replace(' overhead', '') + ' ' + money(m.by[p])).join(' · ');
     wrap.innerHTML = months.map(m =>
@@ -731,7 +777,7 @@
         money(m.cents) + '</span></div>' +
       (split(m) ? '<div class="rc-month-split">' + esc(split(m)) + '</div>' : '') +
       m.rows.map(rowHtml).join('')).join('') +
-      (shown.length > 300 ? '<p class="empty-msg">Showing the newest 300 — search to find older ones.</p>' : '');
+      (shown.length > 300 ? '<p class="empty-msg">Showing the newest 300 — search to find older ones.</p>' : '') + olderHtml;
   }
 
   // A snapshot arriving while a job is being chosen would rebuild the list
@@ -769,22 +815,97 @@
     try { state = await window.YDDb.get('settings', 'receipts'); } catch (e) { state = null; }
   }
 
+  // One receipt as known from wherever it was heard of, the live lists first.
+  function settle(id) {
+    const d = recent[id] || toSort[id] || older[id];
+    if (d) receipts[id] = d; else delete receipts[id];
+  }
+  function take(src, changes) {
+    changes.forEach(c => {
+      if (c.type === 'removed') {
+        delete src[c.id];
+        // Sorted, and recent: the recent list's own change (no longer 'new')
+        // is on its way. Settling now would put back its stale 'new' copy and
+        // flash the receipt back into To sort.
+        if (src === toSort && recent[c.id] && recent[c.id].status === 'new') return;
+        if (src === recent) delete older[c.id];
+        // Sorted (or deleted) and dated before `since`: no live list has it
+        // any more. Kept as this device last had it -- its own change is
+        // already on it -- and read again to be sure.
+        if (src === toSort && !recent[c.id]) {
+          const mine = receipts[c.id];
+          if (mine && mine.status !== 'new') older[c.id] = mine; else delete older[c.id];
+          readAgain(c.id);
+        }
+      } else {
+        src[c.id] = c.data;
+        if (older[c.id]) older[c.id] = c.data;
+      }
+      settle(c.id);
+    });
+  }
+  function readAgain(id) {
+    const at = since;
+    Promise.resolve(window.YDDb.get('receipts', id)).then(d => {
+      if (at !== since || toSort[id] || recent[id]) return;
+      if (d) older[id] = d; else delete older[id];
+      settle(id);
+      redraw();
+    }).catch(() => {});
+  }
+  // The receipts dated before `since`, read once (not watched: nothing new
+  // arrives that far back).
+  function loadOlder() {
+    if (!since || olderState === 'loading' || olderState === 'done' || !window.YDDb || !window.YDDb.listWhere) return;
+    olderState = 'loading';
+    const at = since;
+    window.YDDb.listWhere('receipts', 'date', '<', at).then(got => {
+      if (at !== since) return;               // signed out (or in again) meanwhile
+      Object.keys(got).forEach(id => { older[id] = got[id]; settle(id); });
+      olderState = 'done';
+      renderHistory();
+    }).catch(e => {
+      if (at !== since) return;
+      olderState = 'failed';
+      console.warn('[receipts] older ones not read:', (e && e.code) || e);
+      renderHistory();
+    });
+  }
+  window.rcOlder = function () { if (olderState !== 'loading') { olderState = ''; loadOlder(); renderHistory(); } };
+
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
     unsubs = []; receipts = {}; state = null; loaded = false;
+    toSort = {}; recent = {}; older = {}; since = ''; olderState = '';
+    toSortHeard = false; recentHeard = false;
   }
   function start() {
     stop();
-    unsubs.push(window.YDDb.watch('receipts', (changes, meta) => {
-      changes.forEach(c => {
-        if (c.type === 'removed') delete receipts[c.id];
-        else receipts[c.id] = c.data;
-      });
-      if (meta && meta.fromCache === false) loaded = true;
-      if (changes.length || loaded) redraw();
+    since = (new Date().getFullYear() - 1) + '-01-01';
+    // Loaded: the to-sort list has answered, and the recent one from the
+    // server. (A filtered watch is told nothing when the server only confirms
+    // what the cache had, so for that one any answer counts.)
+    const heard = n => {
+      loaded = toSortHeard && recentHeard;
+      if (n || loaded) redraw();
       // Subcontractors (subs.js) file their own bills out of this list.
       document.dispatchEvent(new CustomEvent('yd-receipts'));
-    }, () => { loaded = true; redraw(); }));
+    };
+    unsubs.push(window.YDDb.watchWhere('receipts', 'status', 'new', changes => {
+      toSortHeard = true;
+      take(toSort, changes);
+      heard(changes.length);
+    }, () => { toSortHeard = true; heard(1); }));
+    const onRecent = (changes, meta) => {
+      if (meta && meta.fromCache === false) recentHeard = true;
+      take(recent, changes);
+      heard(changes.length);
+    };
+    // An older firebase-init.js (a phone that picked up this file first, on
+    // one bar) has no watchFrom: then every receipt is "recent", as before.
+    unsubs.push(window.YDDb.watchFrom
+      ? window.YDDb.watchFrom('receipts', 'date', since, onRecent, () => { recentHeard = true; heard(1); })
+      : window.YDDb.watch('receipts', onRecent, () => { recentHeard = true; heard(1); }));
     if (window.YDAuth && window.YDAuth.isOwner) loadState().then(() => redraw());
   }
 

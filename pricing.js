@@ -508,9 +508,13 @@
   const TASK_NAME = { estimate: 'Estimates', card: 'Board cards', receipt: 'Reading receipts',
     receiptTriage: 'Sorting email', receiptphoto: 'Receipt photos', care: 'Plant-care emails',
     followup: 'Follow-up emails', source: 'Finding prices', pricesheet: 'Price sheets', estimate_scope: 'Scopes of work' };
+  // This month's days only (the screen shows the month and today): the
+  // records are named by their UTC day, so asked for by name from the 1st.
   function loadSpend() {
     if (!owner() || !window.YDDb) return;
-    Promise.all([window.YDDb.list('claudeUsage'), window.YDDb.get('settings', 'claude')]).then(([u, s]) => {
+    const first = new Date().toISOString().slice(0, 7) + '-01';
+    const days = window.YDDb.listWhere ? window.YDDb.listWhere('claudeUsage', '__name__', '>=', first) : window.YDDb.list('claudeUsage');
+    Promise.all([days, window.YDDb.get('settings', 'claude')]).then(([u, s]) => {
       spend = u || {}; claudeSet = s || {};
       const b = el('prSpend'); if (b) b.innerHTML = spendHtml();
     }).catch(e => console.warn('[pricing] Claude spend not read:', (e && e.code) || e));
@@ -575,11 +579,42 @@
       (hint ? '<small>' + esc(hint) + '</small>' : '') + '</label>';
   }
 
-  function supplyOptions(selected, filter) {
+  // The Supplies pickers on this screen. Every supply, by name, is sorted
+  // and drawn once and kept until Supplies changes (the yd-supplies
+  // listener below), not four times over at every redraw; a picker with a
+  // choice marks it in the kept string.
+  const NO_SUPPLY = '<option value="">— none —</option>';
+  const optionOf = i => '<option value="' + esc(i.id) + '">' + esc(i.name) + '</option>';
+  let byName = null;          // { list: the supplies by name, html: an option each }
+  function suppliesByName() {
+    if (byName) return byName;
     const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {} };
-    const list = Object.values(cat.items).filter(i => !filter || filter(i)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    return '<option value="">— none —</option>' + list.map(i => '<option value="' + esc(i.id) + '"' +
-      (i.id === selected ? ' selected' : '') + '>' + esc(i.name) + '</option>').join('');
+    const cmp = new Intl.Collator().compare;
+    const list = Object.values(cat.items).sort((a, b) => cmp(String(a.name), String(b.name)));
+    byName = { list: list, html: list.map(optionOf).join('') };
+    return byName;
+  }
+  function supplyOptions(selected, filter) {
+    const all = suppliesByName();
+    let html = filter ? all.list.filter(filter).map(optionOf).join('') : all.html;
+    if (selected) {
+      const opt = '<option value="' + esc(selected) + '">';
+      html = html.replace(opt, () => '<option value="' + esc(selected) + '" selected>');
+    }
+    return NO_SUPPLY + html;
+  }
+  // The planting package is soil, fertiliser, watering bags and the like:
+  // its pickers list those kinds of thing -- and any kind already on one of
+  // its lists -- rather than every supply there is.
+  const PLANTING_KINDS = ['planting', 'soil', 'mulch', 'bagged', 'hardware'];
+  function plantingPick(r) {
+    const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {} };
+    const kinds = new Set(PLANTING_KINDS);
+    ['perPlant', 'perSingleTree', 'perMultiTree'].forEach(k => (r.planting[k] || []).forEach(id => {
+      const it = cat.items[id];
+      if (it && it.category) kinds.add(it.category);
+    }));
+    return i => kinds.has(i.category);
   }
   function supplyName(id) {
     const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {} };
@@ -596,9 +631,10 @@
     const towns = shownTowns = Object.keys(rates).filter(t => num(rates[t]) !== null).sort((a, b) => a.localeCompare(b));
     const fp = fuelPrices || {};
     const pick = (path, sel, filter) => '<select ' + (ro ? 'disabled ' : '') + 'onchange="prSet(\'' + path + '\', this.value, \'id\')">' + supplyOptions(sel, filter) + '</select>';
+    const planting = ro ? null : supplyOptions('', plantingPick(r));
     const listPick = key => '<div class="pr-chips">' + ((r.planting[key] || []).map(id =>
         '<span class="pr-chip">' + esc(supplyName(id)) + (ro ? '' : ' <button class="link-btn" onclick="prListRemove(\'' + key + '\', \'' + esc(id) + '\')">✕</button>') + '</span>').join('') || '<span class="muted">none</span>') +
-      (ro ? '' : ' <select onchange="prListAdd(\'' + key + '\', this.value)">' + supplyOptions('') + '</select>') + '</div>';
+      (ro ? '' : ' <select onchange="prListAdd(\'' + key + '\', this.value)">' + planting + '</select>') + '</div>';
 
     body.innerHTML =
       '<p class="hint">How every estimate is priced. Change a number here and every estimate worked out from now on uses it; estimates already sent keep their prices. ' +
@@ -672,7 +708,8 @@
         '<label class="pr-field"><span>Layout markers (from Supplies)</span>' + pick('markers.supplyId', r.markers.supplyId) + '</label>' +
         box('Markers per paver / wall / edging job', r.markers.count, "prSet('markers.count', this.value, 'num')") +
       '</div>' +
-      '<div class="pr-field wide"><span>Planting package — for every plant (set each item’s “covers” in Supplies, e.g. soil 0.5 plants a bag)</span>' + listPick('perPlant') + '</div>' +
+      '<div class="pr-field wide"><span>Planting package — for every plant (set each item’s “covers” in Supplies, e.g. soil 0.5 plants a bag). ' +
+        'The lists offer planting-package, soil, mulch, bagged and hardware items; to add something else, give it one of those kinds in Supplies.</span>' + listPick('perPlant') + '</div>' +
       '<div class="pr-field wide"><span>For every single-trunk tree</span>' + listPick('perSingleTree') + '</div>' +
       '<div class="pr-field wide"><span>For every multi-trunk or evergreen tree</span>' + listPick('perMultiTree') + '</div>' +
 
@@ -823,10 +860,11 @@
     const a = e.detail || {};
     const on = a.mode === 'cloud' && !!a.user;
     const k = on ? (a.key || a.user.uid + ':' + a.role) : null;
-    if (k !== authKey) { authKey = k; if (on) start(); else stop(); }
+    if (k !== authKey) { authKey = k; byName = null; if (on) start(); else stop(); }
   });
   // The rules screen names suppliers and items; redraw it when they arrive.
   document.addEventListener('yd-supplies', () => {
+    byName = null;
     const m = el('prModal');
     if (m && m.classList.contains('active') && !typingIn(m)) renderRules();
   });

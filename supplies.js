@@ -57,7 +57,10 @@
   // For matching names typed slightly differently: "M.D.S.", "M D S" and
   // "mds" are one supplier; "Pavers - Holland" and "Pavers — Holland" one item.
   const key = s => norm(s).replace(/[^a-z0-9]+/g, '');
-  const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
+  // One collator, made once: localeCompare makes one per comparison, and a
+  // sort of 900 items is ~9,000 comparisons. Same order.
+  const collate = new Intl.Collator().compare;
+  const byName = (a, b) => collate(String(a.name || ''), String(b.name || ''));
   const thisYear = () => new Date().getFullYear();
   const two = n => (n < 10 ? '0' : '') + n;
   function localToday() {
@@ -187,6 +190,8 @@
   // out from each item's kind and name; his own (typed on an item, or on a
   // whole search at once) sit beside them, stored by name. An item's own
   // `usedFor` -- starter ids and his tags -- wins over the worked-out ones.
+  // (Tags, and the search index below, are worked out again after any change
+  // to Supplies: tagsChanged.)
   // One item can carry several: base gravel goes under a patio and behind a wall.
   // `also` are the words that, typed as a tag, mean this starter one.
   const USES = [
@@ -232,7 +237,7 @@
     }));
     return tagCache;
   }
-  const tagsChanged = () => { tagCache = null; };
+  const tagsChanged = () => { tagCache = null; index = null; };
   const customTags = () => Object.values(canonTags()).sort((a, b) => a.localeCompare(b));
   function usesOf(it) {
     const own = (Array.isArray(it.usedFor) ? it.usedFor : []).map(cleanTag).filter(Boolean)
@@ -257,10 +262,24 @@
   // names it goes by, the supplier, the item number, the where, its kind or
   // what it is used for. "grass seed" finds "Seed -- sun & shade mix" listed
   // with "grass" as another name; "snow" finds the salt.
-  function matches(it, words) {
+  function hayOf(it) {
     const v = vendors[it.vendorId] || {};
-    const hay = norm([it.name, it.also, it.sku, v.name, it.where, it.notes, kindName(it)]
+    return norm([it.name, it.also, it.sku, v.name, it.where, it.notes, kindName(it)]
       .concat(usesOf(it).map(t => tagInfo(t).name)).join(' '));
+  }
+  // What each item is searched by, and every item in name order: worked out
+  // once after Supplies changes, not again at every key typed in the search.
+  let index = null;           // { sorted: [items by name], hay: { id: text } }
+  function searchIndex() {
+    if (index) return index;
+    const sorted = Object.values(items).sort(byName), hay = {};
+    sorted.forEach(it => { hay[it.id] = hayOf(it); });
+    index = { sorted: sorted, hay: hay };
+    return index;
+  }
+  function matches(it, words) {
+    const h = searchIndex().hay[it.id];
+    const hay = h != null ? h : hayOf(it);
     return words.every(w => hay.indexOf(w) !== -1);
   }
 
@@ -271,7 +290,9 @@
   const VIEW_KEY = 'ydjobhub_supView';
   let view = (() => { try { return localStorage.getItem(VIEW_KEY) === 'hub' ? 'hub' : 'vendors'; } catch (e) { return 'vendors'; } })();
   let use = '';              // the use opened in All supplies, '' for the list of uses
-  const SHOW_MAX = 150;      // a search that matches more shows this many
+  const SHOW_MAX = 100;      // a search that matches more shows this many...
+  let showAll = false;       // ...until "Show all" is pressed (for this search only)
+  const cap = () => (showAll ? Infinity : SHOW_MAX);
   const FOLD_OVER = 25;      // a list longer than this is folded by kind
   const openFolds = new Set();
   let foldLists = {};        // fold key -> { list, withVendor }, from the last draw
@@ -283,6 +304,7 @@
       wrap.innerHTML = '<p class="empty-msg">Loading…</p>';
       return;
     }
+    if (!started && authKey) start();  // the crew's first look (see start)
     // The search box is drawn once and kept; only the results are redrawn, so
     // the box never loses focus (or the keyboard) mid-word.
     if (!el('supSearch')) {
@@ -310,10 +332,13 @@
   // like any other.
   const isRental = it => it.category === 'rental' || it.category === 'dumpster';
 
-  function renderResults() {
+  // searchOnly: only the search words changed, so the tags and the search
+  // index worked out for the last drawing still hold. Every other drawing
+  // starts from Supplies as it is now.
+  function renderResults(searchOnly) {
     const box = el('supResults');
     if (!box) return;
-    tagsChanged();
+    if (searchOnly !== true) tagsChanged();
     if (shown && shown !== '-' && !vendors[shown]) shown = '';
     if (use && !isTag(use)) use = '';
     const vBtn = el('supViewVendors'), hBtn = el('supViewHub'), sBox = el('supSearch');
@@ -326,6 +351,8 @@
     foldLists = {};
 
     if (!Object.keys(items).length && !Object.keys(vendors).length) {
+      // Nothing has answered yet (a crew phone opening the tab for the first time).
+      if (!heard) { box.innerHTML = '<p class="empty-msg">Loading…</p>'; return; }
       box.innerHTML = '<p class="empty-msg">' + (edits()
         ? 'Nothing here yet. Add your suppliers first, then the things you buy from each — ' +
           'and where they are once you get there. Or paste a whole price list in at once with “💲 Price list”.'
@@ -369,7 +396,7 @@
   }
 
   function oneVendorHtml(v, words) {
-    const mine = Object.values(items).filter(it => (v ? it.vendorId === v.id : !vendors[it.vendorId])).sort(byName);
+    const mine = searchIndex().sorted.filter(it => (v ? it.vendorId === v.id : !vendors[it.vendorId]));
     const list = words.length ? mine.filter(it => matches(it, words)) : mine;
     let html = '<button class="link-btn sup-back" onclick="supFilter(\'\')">← All suppliers</button>';
     html += v ? vendorCardHtml(v, mine.length)
@@ -390,7 +417,7 @@
   const tagAttr = t => ' data-t="' + esc(t) + '" onclick="supUse(this.dataset.t)"';
 
   function hubHtml(words) {
-    const all = Object.values(items).sort(byName);
+    const all = searchIndex().sorted;
     if (use) {
       const u = tagInfo(use);
       const mine = all.filter(it => usesOf(it).indexOf(use) !== -1);
@@ -411,7 +438,7 @@
           (edits() ? ' Add it with “+ Add an item”.' : ' Ask Jonah where to get it, and he can add it here.') + '</p>';
       }
       const byUse = {};
-      list.slice(0, SHOW_MAX).forEach(it => { const k = usesOf(it)[0]; (byUse[k] = byUse[k] || []).push(it); });
+      list.slice(0, cap()).forEach(it => { const k = usesOf(it)[0]; (byUse[k] = byUse[k] || []).push(it); });
       return bulkBarHtml(list, '') + allTags().filter(t => byUse[t]).map(t =>
         '<div class="sup-group"><button class="sup-group-name"' + tagAttr(t) + '>' + tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>' +
           '<span class="sup-group-count">' + byUse[t].length + '</span></div>' +
@@ -493,7 +520,7 @@
   // a supplier with 800 things opens as a dozen headings, not a wall.
   function itemsHtml(scope, list, withVendor, searched) {
     if (searched || list.length <= FOLD_OVER) {
-      return list.slice(0, SHOW_MAX).map(it => itemHtml(it, withVendor)).join('') + moreHtml(list.length);
+      return list.slice(0, cap()).map(it => itemHtml(it, withVendor)).join('') + moreHtml(list.length);
     }
     const byKind = {};
     list.forEach(it => { const k = kindName(it); (byKind[k] = byKind[k] || []).push(it); });
@@ -505,7 +532,9 @@
         '<div class="sup-fold-body">' + (open ? byKind[k].map(it => itemHtml(it, withVendor)).join('') : '') + '</div></details>';
     }).join('');
   }
-  const moreHtml = n => (n > SHOW_MAX ? '<p class="hint">Showing ' + SHOW_MAX + ' of ' + n + ' — type more to narrow it down.</p>' : '');
+  const moreHtml = n => (n > cap() ? '<p class="hint">Showing ' + SHOW_MAX + ' of ' + n + ' — type more to narrow it down, or ' +
+    '<button class="link-btn" onclick="supShowAll()">show all ' + n + '</button>.</p>' : '');
+  window.supShowAll = function () { showAll = true; renderResults(true); };
 
   // A fold is filled the first time it opens, so a closed one costs nothing.
   window.supFold = function (d) {
@@ -516,12 +545,14 @@
   };
   window.supView = function (which) {
     view = which === 'hub' ? 'hub' : 'vendors';
+    showAll = false;
     try { localStorage.setItem(VIEW_KEY, view); } catch (e) { /* private window */ }
     renderResults();
   };
   window.supUse = function (id) {
     view = 'hub';
     use = isTag(id) ? id : '';
+    showAll = false;
     renderResults();
     toTop();
   };
@@ -647,11 +678,20 @@
     return own || theirs ? '<div class="sup-links">' + own + theirs + '</div>' : '';
   }
 
-  window.supSearch = function (q) { search = q; renderResults(); };
+  // Drawn once the typing pauses, not at every key: each drawing went
+  // through all ~900 supplies.
+  let searchTimer = null;
+  window.supSearch = function (q) {
+    search = q;
+    showAll = false;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => renderResults(true), 150);
+  };
   // Open one supplier ('-' the items with none), or '' back to the list.
   window.supFilter = function (id) {
     view = 'vendors';
     shown = id || '';
+    showAll = false;
     renderResults();
     toTop();
   };
@@ -664,7 +704,7 @@
     if (kind === 'vendor') {
       const v = id ? vendors[id] || {} : {};
       openModal(id ? 'Edit supplier' : 'Add a supplier',
-        field('Name', 'svName', v.name, 'e.g. MDS') +
+        field('Name', 'svName', v.name, 'e.g. Example Stone Yard') +
         field('Address', 'svAddr', v.address, 'Street, town — used for directions') +
         '<div class="grid g2">' +
           field('Phone', 'svPhone', v.phone, '608-…') +
@@ -680,7 +720,7 @@
         '</div>' +
         field('Usually takes', 'svLead', v.leadTime, 'e.g. 3–5 business days to arrive') +
         '<div class="field"><span class="label">Notes</span><textarea id="svNotes" rows="2" ' +
-          'placeholder="Account under YD Exterior, ask for Dave, yard entrance on the side road">' + esc(v.notes || '') + '</textarea></div>' +
+          'placeholder="Which account we buy under, who to ask for, which gate the yard is through">' + esc(v.notes || '') + '</textarea></div>' +
         actions(id ? 'supRemove(\'vendor\', \'' + safeId(id) + '\')' : ''));
     } else {
       const it = id ? items[id] || {} : {};
@@ -745,7 +785,7 @@
         '</fieldset>' +
         '<fieldset class="sup-pricebox"><legend>Price — only you see this</legend>' +
           '<div class="grid g3">' +
-            field('Price ($)', 'spPrice', priceShown.price, 'e.g. 89.99', 'decimal') +
+            field('Price ($)', 'spPrice', priceShown.price, 'e.g. 12.50', 'decimal') +
             field('Per', 'spPer', priceShown.per, it.unit || 'bag, yard, each') +
             field('For year', 'spYear', priceShown.year, String(thisYear()), 'numeric') +
           '</div>' +
@@ -760,7 +800,7 @@
             field('Rental: week ($)', 'spWeek', priceShown.week, 'optional', 'decimal') +
           '</div>' +
           '<div class="field"><span class="label">Price notes</span><textarea id="spNotes" rows="2" ' +
-            'placeholder="Contractor price, 10+ bags $79, delivery $65">' + esc(priceShown.notes) + '</textarea></div>' +
+            'placeholder="e.g. contractor price; less by the pallet; delivery extra">' + esc(priceShown.notes) + '</textarea></div>' +
           (hist.length ? '<div class="sup-hist">Earlier: ' + hist.map(h =>
             '<span>' + h.year + ' ' + fmtCents(h.cents) + '</span>').join('') + '</div>' : '') +
           '<div class="hint">A price for a new year keeps the old one as history, so the change shows. ' +
@@ -1182,7 +1222,7 @@
           '<input type="file" id="supFile" accept="' + FILE_TYPES + '" onchange="supLoadFile(this)"></div>' +
       '</div>' +
       '<textarea id="supCsv" class="sup-csv" rows="7" spellcheck="false" ' +
-        'placeholder="Supplier,Item,Price,Per&#10;MDS,Grass seed — sun &amp; shade,89.99,50 lb bag"></textarea>' +
+        'placeholder="Supplier,Item,Price,Per&#10;Example Stone Yard,Grass seed — sun &amp; shade,12.50,bag"></textarea>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="supCheckImport()">Check it</button>' +
         '<button class="btn btn-sm" onclick="closeSupModal()">Close</button>' +
@@ -1274,7 +1314,7 @@
         field('These prices are for year (a Year column wins)', 'supImpYear', String(thisYear()), String(thisYear()), 'numeric') +
       '</div>' +
       '<textarea id="supCsv" class="sup-csv" rows="7" spellcheck="false" ' +
-        'placeholder="Item #,Description,Price,Unit&#10;HP-60,Holland paver 60mm charcoal,4.15,sq ft"></textarea>' +
+        'placeholder="Item #,Description,Price,Unit&#10;EX-100,Example paver 60mm grey,1.00,sq ft"></textarea>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="supCheckImport()">Check it</button>' +
         '<button class="btn btn-sm" onclick="supExportCsv(\'' + safeId(v.id) + '\')">⬇ Download ' + esc(v.name) + '’s list</button>' +
@@ -1530,9 +1570,13 @@
     Promise.resolve(window.YDDb.removeMany(entries)).catch(e => console.warn('[supplies] not removed:', (e && e.code) || e));
   }
 
+  // At most once a frame: the first load is a burst of snapshots from three
+  // collections, each of which used to redraw all ~900 supplies.
+  let drawQueued = 0;
   function redrawIfVisible() {
     const p = el('panel-supplies');
-    if (p && p.classList.contains('active')) renderResults();
+    if (!p || !p.classList.contains('active') || drawQueued) return;
+    drawQueued = requestAnimationFrame(() => { drawQueued = 0; renderResults(); });
   }
 
   // Estimates re-price when Supplies changes; a burst of snapshots (the
@@ -1543,23 +1587,34 @@
     announceTimer = setTimeout(() => document.dispatchEvent(new CustomEvent('yd-supplies')), 150);
   }
 
+  // started: listening for this sign-in. The office (anyone who sees jobs --
+  // estimates, pricing, orders all read Supplies) starts at sign-in; the
+  // crew only when they first open the tab (render), so a phone that never
+  // looks at Supplies never downloads its ~900 items.
+  let started = false;
+  let heard = false;          // the supplies list has answered (cache or server)
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
     unsubs = []; items = {}; vendors = {}; prices = {}; pricesReady = false; shown = '';
+    started = false; heard = false;
+    tagsChanged();
   }
   function start() {
     stop();
+    started = true;
     const take = (store, withId) => (changes, meta) => {
+      if (store === items) heard = true;
       changes.forEach(c => {
         if (c.type === 'removed') delete store[c.id];
         else store[c.id] = withId ? Object.assign({ id: c.id }, c.data) : c.data;
       });
       if (store === prices && meta && meta.fromCache === false) pricesReady = true;
-      if (store === items) tagsChanged();
+      // A supplier's name is searched by too.
+      if (store !== prices) tagsChanged();
       redrawIfVisible();
       announce();
     };
-    unsubs.push(window.YDDb.watch('supplies', take(items, true), () => redrawIfVisible()));
+    unsubs.push(window.YDDb.watch('supplies', take(items, true), () => { heard = true; redrawIfVisible(); }));
     unsubs.push(window.YDDb.watch('vendors', take(vendors, true), () => redrawIfVisible()));
     // Crew are refused the prices outright, so they never ask.
     if (seesPrices()) unsubs.push(window.YDDb.watch('supplyPrices', take(prices, false), () => redrawIfVisible()));
@@ -1740,10 +1795,13 @@
     const k = on ? (a.key || a.user.uid + ':' + a.role) : null;
     if (k !== authKey) {
       authKey = k;
-      if (on) start(); else stop();
+      stop();
+      if (on && window.YDDb && ydCan('jobs', 'see')) start();
       // The owner's buttons differ from the crew's, so redraw from scratch.
       const w = el('suppliesWrap'); if (w) w.innerHTML = '';
     }
-    render();
+    // Drawn now only when on screen: drawing starts the crew's listeners.
+    const p = el('panel-supplies');
+    if (!on || (p && p.classList.contains('active'))) render();
   });
 })();
