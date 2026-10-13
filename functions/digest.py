@@ -191,6 +191,28 @@ def _occurrences(ev, start, end):
     return out
 
 
+REPEATS = ("weekly", "biweekly", "monthly", "yearly")     # the repeats _starts_of steps through
+
+
+def events_near(cal_ref, first, last):
+    """{entry id: entry} for one calendar's entries that can land between
+    first and last (dates): dated in that window, repeating (from whenever),
+    or running over several days into it. Three small queries rather than
+    every entry the calendar ever had -- calendars only grow, and the
+    reminders read them every five minutes (review, 12 Oct 2026).
+    _occurrences still decides which days each one lands on."""
+    ref = cal_ref.collection("events")
+    out = {}
+    for q in (ref.where("date", ">=", first.isoformat()).where("date", "<=", last.isoformat()),
+              ref.where("repeat", "in", list(REPEATS)),
+              ref.where("endDate", ">=", first.isoformat())):
+        for s in q.stream():
+            out[s.id] = s.to_dict() or {}
+    # In id order, as reading the whole calendar gave them: entries at the
+    # same time keep the order they always had.
+    return dict(sorted(out.items()))
+
+
 def _fmt_time(t):
     """'07:30' -> '7:30am'."""
     if not t:
@@ -514,14 +536,15 @@ def _calendar_items(start, end):
     for c in db.collection("calendars").stream():
         cal = c.to_dict() or {}
         cal["id"] = c.id
-        for e in db.collection("calendars").document(c.id).collection("events").stream():
-            ev = e.to_dict() or {}
+        # Only the entries that can land in these days (events_near), not
+        # every entry ever made.
+        for eid, ev in events_near(c.reference, start, end).items():
             # One event with a date that will not parse is left out and
             # logged. Unguarded, it stopped the whole run: nobody got a summary.
             try:
                 days = _occurrences(ev, start, end)
             except (TypeError, ValueError) as err:
-                print("digest: skipped event", c.id, e.id, "-", err)
+                print("digest: skipped event", c.id, eid, "-", err)
                 continue
             for day, one in days:
                 items.append({"day": day, "cal": cal, "ev": one})
@@ -652,6 +675,15 @@ def _day_record(today, people):
     return out
 
 
+def qb_accepted(q):
+    """A job's QuickBooks estimate record says the customer said yes:
+    Accepted, or made into an invoice (Closed / Converted) after being
+    accepted -- QuickBooks keeps AcceptedDate then. quickbooks.py and the
+    app's sync.js read it the same way."""
+    q = q or {}
+    return q.get("status") == "Accepted" or (q.get("status") in ("Closed", "Converted") and bool(q.get("acceptedDate")))
+
+
 def _office(jobs):
     """Estimate work waiting on Jonah: drafts Claude built that he hasn't
     checked and sent, estimates a customer accepted that aren't booked yet,
@@ -664,7 +696,7 @@ def _office(jobs):
         bid = (j.get("jobStatus") or "quoting") == "quoting" and j.get("bidStage") not in ("lost", "won")
         if bid and (e.get("work") or e.get("materials")) and not q.get("id"):
             drafts.append(name)
-        if bid and q.get("status") == "Accepted":
+        if bid and qb_accepted(q):
             accepted.append(name)
         inv = j.get("qbInvoiceRef") or {}
         try:
@@ -1185,10 +1217,21 @@ def to_html(d):
 # ---------------------------------------------------------------- sending
 
 
+_sa_email = {"value": None}
+
+
 def _service_account_email():
+    """This service's own account, asked of the metadata server once per
+    instance: it never changes while the instance runs, and every scheduler
+    call (every five minutes) checks its caller against it."""
+    if _sa_email["value"]:
+        return _sa_email["value"]
     r = requests.get("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/email",
                      headers={"Metadata-Flavor": "Google"}, timeout=5)
-    return r.text.strip()
+    email = r.text.strip()
+    if r.status_code == 200 and "@" in email:      # an error page is not kept
+        _sa_email["value"] = email
+    return email
 
 
 GMAIL_SEND = "https://www.googleapis.com/auth/gmail.send"
@@ -1255,8 +1298,10 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
         if not sub:
             continue
         try:
+            # A push service that hangs must not hold up the five-minute
+            # reminders run (or everyone's summary) behind it.
             webpush(subscription_info=sub, data=payload, vapid_private_key=key,
-                    vapid_claims={"sub": "mailto:" + OWNER_EMAIL}, ttl=ttl)
+                    vapid_claims={"sub": "mailto:" + OWNER_EMAIL}, ttl=ttl, timeout=10)
             sent += 1
         except WebPushException as e:
             code = getattr(e.response, "status_code", None)
@@ -1264,6 +1309,9 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
                 s.reference.delete()
             else:
                 print("digest: push failed for", uid, code, e)
+        except requests.RequestException as e:
+            # Timed out or unreachable: this phone misses it; their others don't.
+            print("digest: push not delivered for", uid, e)
     return sent
 
 
@@ -1295,23 +1343,39 @@ def _keep(uid, slot, d):
         "uid": uid, "slot": slot, "day": _day(today), "at": _now().isoformat(),
         "subject": d.get("subject") or "", "push": d.get("push") or {}, "html": to_html(d)})
     cutoff = _day(today - datetime.timedelta(days=KEEP_DAYS))
-    for s in db.collection("summaries").where("uid", "==", uid).stream():
+    # Only each one's day is needed to judge it, not the whole page it holds.
+    for s in db.collection("summaries").where("uid", "==", uid).select(["day"]).stream():
         if str((s.to_dict() or {}).get("day") or "") < cutoff:
             s.reference.delete()
 
 
-def _prefs(user):
-    snap = _db().collection("digestPrefs").document(user["uid"]).get()
+def _prefs_of(user, snap):
     p = dict(DEFAULT_PREFS["owner" if user.get("role") == "owner" else "crew"])
-    if snap.exists:
+    if snap is not None and snap.exists:
         p.update({k: v for k, v in (snap.to_dict() or {}).items() if k in p})
     return p
 
 
+def _prefs(user):
+    return _prefs_of(user, _db().collection("digestPrefs").document(user["uid"]).get())
+
+
+def prefs_all(people):
+    """{uid: what _prefs gives} for everybody, in one read of all their
+    settings (the reminders run needs them every five minutes)."""
+    if not people:
+        return {}
+    db = _db()
+    snaps = {s.id: s for s in db.get_all([db.collection("digestPrefs").document(uid) for uid in people])}
+    return {uid: _prefs_of(u, snaps.get(uid)) for uid, u in people.items()}
+
+
 def _receipts_to_sort():
-    """How many purchases read out of email are waiting to be put on a job."""
+    """How many purchases read out of email are waiting to be put on a job --
+    counted by Firestore, not by reading every one."""
+    q = _db().collection("receipts").where("status", "==", "new")
     try:
-        return sum(1 for _ in _db().collection("receipts").where("status", "==", "new").stream())
+        return int(q.count().get()[0][0].value)
     except Exception as e:      # noqa: BLE001 -- a summary without the count beats none
         print("digest: could not count receipts:", e)
         return 0
@@ -1387,11 +1451,15 @@ def run(slot, only_uid=None, dry=False):
             report.append({"uid": uid, "error": "could not build: %s" % e})
             continue
         r = {"uid": uid}
-        try:
-            _keep(uid, slot, d)
-            r["kept"] = True
-        except Exception as e:          # noqa: BLE001 -- the email and push still go
-            print("digest: summary not kept for", uid, e)
+        # A test send from the app (/digest/preview, one person) is not the
+        # summary of record: kept, it replaced the real one on the Summaries
+        # screen.
+        if not only_uid:
+            try:
+                _keep(uid, slot, d)
+                r["kept"] = True
+            except Exception as e:          # noqa: BLE001 -- the email and push still go
+                print("digest: summary not kept for", uid, e)
         if p.get("email") and u.get("email"):
             try:
                 send_email(u["email"], d)

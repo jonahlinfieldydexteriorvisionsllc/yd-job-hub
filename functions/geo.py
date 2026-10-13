@@ -1,7 +1,7 @@
 """Finding an address on the map.
 
 The US Census geocoder first: it knows US street addresses -- Wisconsin's
-rural fire numbers included ("W5883 Loveland Rd") -- far better than
+rural fire numbers included ("N1234 County Rd X") -- far better than
 OpenStreetMap, which often has the road but not the house, and it needs no
 key. It cannot be called from a browser (no CORS), which is why the app asks
 this server. OpenStreetMap's Nominatim is the fallback for anything the

@@ -1,6 +1,6 @@
 """YD Job Hub -- a subcontractor's visits, counted from their invoice emails.
 
-Jonah (12 Oct 2026): "i want the sub section for vances mowing to track the
+Jonah (12 Oct 2026): "i want the sub section for [his mowing sub] to track the
 number of mows that have happened for each client by pulling receipts from
 my email." His mowing subcontractor bills through Jobber, one email per
 visit for a weekly property, with who, what and where all in the subject:

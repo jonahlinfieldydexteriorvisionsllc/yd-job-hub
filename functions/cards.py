@@ -419,18 +419,25 @@ def _candidates(db, only=None):
     card. A card Claude did, or said was not its, is left alone unless Jonah
     taps "Ask Claude again" (which clears the record)."""
     out = []
-    for b in db.collection("boards").stream():
-        if b.id in SKIP_BOARDS or (only and b.id != only[0]):
-            continue
+    if only:
+        # "Ask Claude now" on one card: that board and that card, read by id
+        # -- not every board and every card to find it.
+        board_id, card_id = only
+        if "/" in board_id or "/" in card_id or board_id in SKIP_BOARDS:
+            return out
+        b = db.collection("boards").document(board_id).get()
+        c = b.reference.collection("cards").document(card_id).get() if b.exists else None
+        pairs = [(b, [c] if c is not None and c.exists else [])] if b.exists else []
+    else:
+        pairs = ((b, None) for b in db.collection("boards").stream() if b.id not in SKIP_BOARDS)
+    for b, cards in pairs:
         board = b.to_dict() or {}
         cols = board.get("columns") or []
         # The column named Done, else the last (boards.js doneColOf): Crew
         # tasks has a column after Done.
         named = [x.get("id") for x in cols if str(x.get("name") or "").strip().lower() == "done"]
         last = named[0] if named else (cols[-1].get("id") if cols else None)
-        for c in b.reference.collection("cards").stream():
-            if only and c.id != only[1]:
-                continue
+        for c in (cards if cards is not None else b.reference.collection("cards").stream()):
             k = c.to_dict() or {}
             # Recurring crew tasks (tire pressures, the car wash) are the
             # crew's to do and the office's to sign off -- plain code, not

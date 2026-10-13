@@ -33,6 +33,7 @@ with the job.
 
 import json
 import re
+import time
 
 import digest as dg
 
@@ -234,17 +235,54 @@ def kinds_for(words, on_estimate):
 
 
 # ------------------------------------------------------------- what it reads
+#
+# Supplies is ~800 items and their ~800 price records: read whole for every
+# message, that was ~1,900 reads and a second or two before Claude was even
+# asked (review, 12 Oct 2026). So the catalogue's fields are kept in memory
+# for CATALOGUE_SECONDS -- a conversation's messages come minutes apart --
+# and the items on the estimate itself are always read fresh and laid over
+# it, so one Jonah has just added ("Source it" -> Use) is never missing. Of
+# a price record only its unit ("per") is read or kept: no cost is ever
+# held here, and this is only ever sent to Claude.
 
-def catalogue(kinds=None, keep_ids=()):
+# Five minutes: long enough for a back-and-forth, short enough that a price
+# list loaded just before building an estimate is soon seen.
+CATALOGUE_SECONDS = 300
+SUPPLY_FIELDS = ["name", "category", "coverage", "takeoffUnit", "unit", "specialOrder", "also", "notes"]
+_held = {"at": None, "items": None, "per": None}
+
+
+def _supplies(db, fresh=()):
+    """({id: item}, {id: unit sold in}) for every Supplies item, the ones in
+    `fresh` read now."""
+    now = time.monotonic()
+    if _held["items"] is None or now - _held["at"] > CATALOGUE_SECONDS:
+        per = {s.id: str((s.to_dict() or {}).get("per") or "")
+               for s in db.collection("supplyPrices").select(["per"]).stream()}
+        items = {s.id: s.to_dict() or {} for s in db.collection("supplies").select(SUPPLY_FIELDS).stream()}
+        _held.update(at=now, items=items, per=per)
+    items, per = dict(_held["items"]), dict(_held["per"])
+    fresh = [str(i) for i in fresh if i and "/" not in str(i)][:200]
+    if fresh:
+        for s in db.get_all([db.collection("supplies").document(i) for i in fresh], field_paths=SUPPLY_FIELDS):
+            if s.exists:
+                items[s.id] = s.to_dict() or {}
+            else:
+                items.pop(s.id, None)          # deleted since it was kept
+        for s in db.get_all([db.collection("supplyPrices").document(i) for i in fresh], field_paths=["per"]):
+            if s.exists:
+                per[s.id] = str((s.to_dict() or {}).get("per") or "")
+    return items, per
+
+
+def catalogue(kinds=None, keep_ids=(), supplies=None):
     """Supplies as Claude sees them: what, in what unit -- no costs, no
     tools, one short line each; only the kinds given (all when None), plus
-    any item in keep_ids. Returns (text, ids)."""
-    db = dg._db()
-    per = {}
-    for s in db.collection("supplyPrices").stream():
-        per[s.id] = str((s.to_dict() or {}).get("per") or "")
+    any item in keep_ids. `supplies` is _supplies()'s answer when the caller
+    has it. Returns (text, ids)."""
+    items_by_id, per = supplies if supplies is not None else _supplies(dg._db(), keep_ids)
     rows, ids = [], set()
-    items = [(s.id, s.to_dict() or {}) for s in db.collection("supplies").stream()]
+    items = list(items_by_id.items())
     items = [kv for kv in items if kv[1].get("name") and kv[1].get("category") not in NOT_FOR_ESTIMATES]
     keep_ids = set(keep_ids)
     if kinds is not None:
@@ -420,17 +458,16 @@ def draft(client, d):
     current = d.get("current") or {}
     on_estimate = [str(m.get("supplyId")) for m in current.get("materials") or [] if m.get("supplyId")]
     db = dg._db()
-    kinds_on = set()
-    if on_estimate:
-        for snap in db.get_all([db.collection("supplies").document(i) for i in on_estimate[:200]]):
-            if snap.exists:
-                kinds_on.add((snap.to_dict() or {}).get("category") or "other")
+    # Supplies (kept a few minutes), with the items on this estimate read
+    # fresh: their kinds always go in the catalogue.
+    supplies = _supplies(db, on_estimate)
+    kinds_on = {(supplies[0][i].get("category") or "other") for i in on_estimate[:200] if i in supplies[0]}
     words = " ".join([str(d.get("siteNotes") or ""), str(d.get("jobNotes") or ""),
                       " ".join(str(x) for x in d.get("services") or []),
                       " ".join(str(m.get("text") or "") for m in (d.get("chat") or [])[-30:]
                                if m.get("role") == "user")])
     kinds = kinds_for(words, kinds_on)
-    cat_text, supply_ids = catalogue(kinds, on_estimate)
+    cat_text, supply_ids = catalogue(kinds, on_estimate, supplies)
     if kinds is not None:
         cat_text += ("\n\n(Only the kinds of material this job's notes call for are listed. If it "
                      "needs something not here, add it with an empty supplyId and a clear name.)")

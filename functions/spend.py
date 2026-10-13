@@ -126,9 +126,3 @@ def over_cap(db):
         return ("Today's Claude spending limit ($%.2f) is used up — Claude is off until midnight UTC. "
                 "The limit is on Pricing rules → Claude." % (day_cap / 100))
     return None
-
-
-def usage_sum(items):
-    """Several calls' usage as one, for a feature that makes a few calls."""
-    keys = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
-    return {k: sum(_get(u, k) for u in items) for k in keys}

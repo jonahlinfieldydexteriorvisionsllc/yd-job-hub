@@ -3,7 +3,7 @@ it costs -- found on the web ("Source it" on the estimate).
 
 The app looks through Supplies first (estimate.js): a material it can match
 there never comes here. What is left is new to the company -- a product a
-customer asked for, a colour MDS doesn't stock, a part from a store the
+customer asked for, a colour the usual stone yard doesn't stock, a part from a store the
 company rarely uses -- and finding it is real searching and reading, so
 Claude does it with web search. Nothing is saved here: the options go back
 to the estimate, the owner taps the one he wants, and the app writes it into

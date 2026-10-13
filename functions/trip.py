@@ -79,7 +79,7 @@ def fuel_prices(force=False):
 # ------------------------------------------------------------------ miles
 
 def _split(address):
-    """'W5883 Loveland Rd, Monticello, WI 53570' -> street, town, zip."""
+    """'N1234 County Rd X, Example, WI 53500' -> street, town, zip."""
     parts = [p.strip() for p in str(address or "").split(",") if p.strip()]
     z = re.search(r"\b(\d{5})\b", address or "")
     street = parts[0] if parts else ""
@@ -152,7 +152,7 @@ def trip(d):
         return {"error": "No road route was found to that address", "fuel": fuel}
     out = {"miles": round(route["distance"] / METERS_PER_MILE, 1), "approx": approx, "fuel": fuel}
     # Where the job is, when the street was found (not the middle of town):
-    # the estimate picks a town's MDS delivery zone from it (Madison is
+    # the estimate picks a town's supplier delivery zone from it (Madison is
     # priced west / central / east).
     if not approx:
         out["point"] = [round(point[0], 5), round(point[1], 5)]

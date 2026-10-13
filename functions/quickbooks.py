@@ -37,12 +37,14 @@ The OAuth callback, which cannot carry a header, is tied back to the person who
 started it through a one-use state value stored before they were sent to Intuit.
 """
 
+import contextlib
 import datetime
 import hashlib
 import json
 import os
 import re
 import secrets
+import threading
 import time
 import urllib.parse
 import uuid
@@ -50,6 +52,7 @@ from html import escape as html_escape
 
 import requests
 from firebase_admin import firestore
+from google.api_core.exceptions import AlreadyExists
 
 # ---------------------------------------------------------------- config
 
@@ -165,13 +168,37 @@ def _tokens_ref():
     return _db().collection(TOKEN_DOC[0]).document(TOKEN_DOC[1])
 
 
-def _load_tokens():
+# The tokens, held for one run that asks QuickBooks several things in a row
+# (the hourly sweep) instead of read from Firestore before every question.
+# Per thread: another request on the same instance reads its own.
+_held = threading.local()
+
+
+@contextlib.contextmanager
+def _holding_tokens():
+    _held.on, _held.tokens = True, None
+    try:
+        yield
+    finally:
+        _held.on, _held.tokens = False, None
+
+
+def _load_tokens(fresh=False):
+    holding = getattr(_held, "on", False)
+    if holding and not fresh and _held.tokens is not None:
+        return dict(_held.tokens) if _held.tokens else None
     snap = _tokens_ref().get()
-    return snap.to_dict() if snap.exists else None
+    data = snap.to_dict() if snap.exists else None
+    if holding:
+        _held.tokens = dict(data) if data else {}
+    return data
 
 
 def _save_tokens(data):
     _tokens_ref().set(data, merge=True)
+    # A refresh in the middle of a run: what is held is the new pair.
+    if getattr(_held, "on", False) and _held.tokens is not None:
+        _held.tokens.update(data)
 
 
 def _now():
@@ -334,7 +361,7 @@ def _access_token(force_refresh=False):
         # refused. If the stored token has moved on since we read it, that is
         # what happened -- use the new pair rather than declaring the connection
         # dead.
-        latest = _load_tokens() or {}
+        latest = _load_tokens(fresh=True) or {}
         if latest.get("refreshToken") and latest["refreshToken"] != tokens["refreshToken"]:
             return latest["accessToken"], latest
         raise
@@ -844,6 +871,16 @@ def _ours(e, job_id):
     return str((e or {}).get("PrivateNote") or "").strip() == _job_note(job_id)
 
 
+def _accepted(e):
+    """The customer said yes: Accepted -- or made into an invoice after that,
+    when QuickBooks says Closed (Converted in some companies) and keeps the
+    AcceptedDate. An estimate accepted and invoiced between two hourly looks
+    is never seen as Accepted at all. digest.qb_accepted and the app's
+    sync.js read a job's record the same way."""
+    status = (e or {}).get("TxnStatus") or ""
+    return status == "Accepted" or (status in ("Closed", "Converted") and bool((e or {}).get("AcceptedDate")))
+
+
 def _belongs(e, job_id, job=None):
     """This job's estimate: made for it here (_ours), or made in QuickBooks
     itself and brought in as this job (import_accepted marks the job's record
@@ -872,6 +909,25 @@ def save_estimate(body):
         raise RuntimeError("Save the job first")
     c = body.get("customer") or {}
     same = _same_company(body)
+
+    # The estimate already made for this job, looked for before anything is
+    # made in QuickBooks (a customer, a product) for a save that is refused.
+    existing = None
+    if body.get("estimateId") and same:
+        existing = _query_one("Estimate", "Id = '%s'" % _quote(body["estimateId"]))
+        if existing and not _ours(existing, job_id):
+            if _belongs(existing, job_id):
+                # Made in QuickBooks itself and brought in as this job
+                # (import_accepted). What the customer agreed to is there;
+                # Job Hub rewriting its lines -- or emailing it again --
+                # would change an accepted estimate behind his back.
+                raise RuntimeError("This estimate was made in QuickBooks — change it there.")
+            print("quickbooks: estimate %s is not job %s's; making a new one" % (body["estimateId"], job_id))
+            existing = None
+    if existing and existing.get("TxnStatus") in ("Closed", "Converted"):
+        raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
+                           % existing["TxnStatus"].lower())
+
     customer_id = _customer_for(c, str(body.get("customerId") or "") if same else "")
     lines = _estimate_lines(body)
 
@@ -891,15 +947,6 @@ def save_estimate(body):
     if site:
         est["ShipAddr"] = site
 
-    existing = None
-    if body.get("estimateId") and same:
-        existing = _query_one("Estimate", "Id = '%s'" % _quote(body["estimateId"]))
-        if existing and not _belongs(existing, job_id):
-            print("quickbooks: estimate %s is not job %s's; making a new one" % (body["estimateId"], job_id))
-            existing = None
-    if existing and existing.get("TxnStatus") in ("Closed", "Converted"):
-        raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
-                           % existing["TxnStatus"].lower())
     if existing:
         # A full update replaces the whole estimate: its number goes back in
         # with it, or it could come back without one.
@@ -931,11 +978,17 @@ def save_estimate(body):
 
 
 def _estimate_record(e, customer_id=None):
+    """What the job keeps of its QuickBooks estimate. acceptedDate tells an
+    estimate accepted and then invoiced (Closed) from one closed unaccepted
+    (_accepted); txnDate is the estimate's own date, which the hourly sweep
+    stops asking about after SWEEP_MAX_AGE_DAYS."""
     env = _env("QB_ENV", "sandbox")
     return {
         "id": e.get("Id"), "docNumber": e.get("DocNumber"),
         "customerId": customer_id or (e.get("CustomerRef") or {}).get("value"),
         "total": e.get("TotalAmt"), "status": e.get("TxnStatus") or "Pending",
+        "acceptedBy": e.get("AcceptedBy"), "acceptedDate": e.get("AcceptedDate"),
+        "txnDate": e.get("TxnDate"),
         "emailStatus": e.get("EmailStatus"), "env": env,
         "link": "%s/app/estimate?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), e.get("Id")),
         "syncedAt": _now().isoformat(),
@@ -956,10 +1009,9 @@ def estimate_status(body):
     job_id = str(body.get("jobId") or "").strip()
     if job_id and not _belongs(e, job_id):
         return {"missing": True, "error": "That QuickBooks estimate belongs to another job"}
-    out = _estimate_record(e)
-    out["acceptedBy"] = e.get("AcceptedBy")
-    out["acceptedDate"] = e.get("AcceptedDate")
-    return out
+    # acceptedDate rides on the record: Closed with it means accepted, then
+    # invoiced (_accepted).
+    return _estimate_record(e)
 
 
 def _stamp():
@@ -1131,50 +1183,134 @@ def invoice_status(body):
     return _invoice_record(inv)
 
 
+# What the sweep reads of each job -- not the whole record (estimate chats,
+# materials, notes), which every job carries and the sweep never looks at.
+SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber",
+                "acceptedSeenAt"]
+# An estimate with no answer this long after it was made (or last emailed)
+# is not asked about every hour for ever; opening the job still checks it
+# (estimate.js). A year, because a bid sent in November is often said yes to
+# in April -- and in batches of IN_BATCH an old one costs next to nothing.
+SWEEP_MAX_AGE_DAYS = 365
+IN_BATCH = 30               # ids per "where Id in (...)" question to QuickBooks
+
+
+def _amount(v):
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _by_ids(entity, ids):
+    """{Id: record} for many estimates or invoices, IN_BATCH to a question,
+    rather than one question each."""
+    ids = sorted({str(i) for i in ids if str(i or "").strip()})
+    out = {}
+    for n in range(0, len(ids), IN_BATCH):
+        part = ids[n:n + IN_BATCH]
+        try:
+            rows = _query(entity, "Id in (%s)" % ", ".join("'%s'" % _quote(i) for i in part))
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- the rest are still asked
+            print("quickbooks sweep: %s %s: %s" % (entity.lower(), ",".join(part), err))
+            continue
+        for r in rows:
+            out[str(r.get("Id"))] = r
+    return out
+
+
+def _too_old(q, now):
+    """Whether a job's estimate record is past SWEEP_MAX_AGE_DAYS: counted
+    from the later of the estimate's own date and when it was last emailed
+    (a re-sent estimate is a live one), else from when it was last looked at
+    (records from before txnDate was kept)."""
+    times = [t for t in (_parse_time(q.get(k)) if q.get(k) else None for k in ("txnDate", "sentAt")) if t]
+    if not times and q.get("syncedAt"):
+        t = _parse_time(q.get("syncedAt"))
+        times = [t] if t else []
+    return bool(times) and now - max(times) > datetime.timedelta(days=SWEEP_MAX_AGE_DAYS)
+
+
 def sweep():
     """Once an hour (the card run): every estimate out with a customer and
     every invoice not yet paid off is asked about in QuickBooks, so a "yes" or
     a payment shows on the job without Jonah opening it. Returns what changed,
-    for his phone."""
+    for his phone.
+
+    Asked in batches, the tokens read once (_holding_tokens), and only the
+    fields it needs read of each job. An estimate with no answer after
+    SWEEP_MAX_AGE_DAYS is left alone."""
+    with _holding_tokens():
+        return _sweep()
+
+
+def _sweep():
     tokens = _load_tokens()
     if not tokens or not tokens.get("refreshToken"):
         return []
+    # Half-finished connections (Connect pressed, never come back) cleared.
+    try:
+        sweep_stale_states()
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: old connection attempts not cleared:", err)
     env = _env("QB_ENV", "sandbox")
     db = _db()
+    now = _now()
     news = []
-    jobs = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").stream()}
+    jobs = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").select(SWEEP_FIELDS).stream()}
+    pending, unpaid = {}, {}             # QuickBooks id -> [job ids]
     for job_id, j in jobs.items():
-        name = str(j.get("customerName") or "a customer")
         q = j.get("qbEstimate") or {}
-        if q.get("id") and q.get("env") == env and (q.get("status") or "Pending") == "Pending":
-            try:
-                e = _query_one("Estimate", "Id = '%s'" % _quote(q["id"]))
-            except Exception as err:                    # noqa: BLE001
-                print("quickbooks sweep: estimate %s: %s" % (q["id"], err))
-                e = None
-            if e and _belongs(e, job_id, j) and (e.get("TxnStatus") or "Pending") != "Pending":
-                rec = _estimate_record(e)
-                rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"))
-                if q.get("linked"):
-                    rec["linked"] = True
-                db.collection("jobs").document(job_id).set({"qbEstimate": rec, "lastModified": _stamp()}, merge=True)
-                news.append({"jobId": job_id, "kind": "estimate", "status": rec["status"], "name": name,
-                             "docNumber": rec.get("docNumber"), "total": rec.get("total")})
+        # A lost bid is still asked about: a customer who said no in the fall
+        # can say yes from the QuickBooks email in spring. acceptedSeenAt
+        # (sync.js) keeps a bid marked lost AFTER a yes from being re-booked.
+        if q.get("id") and q.get("env") == env and (q.get("status") or "Pending") == "Pending" \
+                and not _too_old(q, now):
+            pending.setdefault(str(q["id"]), []).append(job_id)
         r = j.get("qbInvoiceRef") or {}
-        if r.get("id") and r.get("env") == env and float(r.get("balance") or 0) > 0:
-            try:
-                inv = _query_one("Invoice", "Id = '%s'" % _quote(r["id"]))
-            except Exception as err:                    # noqa: BLE001
-                print("quickbooks sweep: invoice %s: %s" % (r["id"], err))
-                inv = None
-            if inv and float(inv.get("Balance") or 0) != float(r.get("balance") or 0):
-                paid = round(float(r.get("balance") or 0) - float(inv.get("Balance") or 0), 2)
-                rec = _invoice_record(inv)
-                db.collection("jobs").document(job_id).set({"qbInvoiceRef": rec, "lastModified": _stamp()}, merge=True)
-                # A balance that went UP (the invoice was changed) is no payment.
-                if paid > 0:
-                    news.append({"jobId": job_id, "kind": "payment", "name": name, "paid": paid,
-                                 "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
+        if r.get("id") and r.get("env") == env and _amount(r.get("balance")) > 0:
+            unpaid.setdefault(str(r["id"]), []).append(job_id)
+
+    estimates = _by_ids("Estimate", pending) if pending else {}
+    for est_id, job_ids in pending.items():
+        e = estimates.get(est_id)
+        for job_id in job_ids:
+            j = jobs[job_id]
+            if not (e and _belongs(e, job_id, j) and (e.get("TxnStatus") or "Pending") != "Pending"):
+                continue
+            rec = _estimate_record(e)
+            if (j.get("qbEstimate") or {}).get("linked"):
+                rec["linked"] = True
+            stamp = _stamp()
+            patch = {"qbEstimate": rec, "lastModified": stamp}
+            # The moment the yes was seen (sync.js bookIfAccepted: a bid moved
+            # by hand after it is left where it was put). Every job here was
+            # still waiting at the last look, so this IS that moment -- an
+            # older acceptedSeenAt belongs to an earlier yes, before the
+            # estimate was changed and sent again.
+            if _accepted(e):
+                patch["acceptedSeenAt"] = stamp
+            db.collection("jobs").document(job_id).set(patch, merge=True)
+            news.append({"jobId": job_id, "kind": "estimate", "status": rec["status"], "accepted": _accepted(e),
+                         "name": str(j.get("customerName") or "a customer"),
+                         "docNumber": rec.get("docNumber"), "total": rec.get("total")})
+
+    invoices = _by_ids("Invoice", unpaid) if unpaid else {}
+    for inv_id, job_ids in unpaid.items():
+        inv = invoices.get(inv_id)
+        for job_id in job_ids:
+            r = jobs[job_id].get("qbInvoiceRef") or {}
+            if not inv or _amount(inv.get("Balance")) == _amount(r.get("balance")):
+                continue
+            paid = round(_amount(r.get("balance")) - _amount(inv.get("Balance")), 2)
+            rec = _invoice_record(inv)
+            db.collection("jobs").document(job_id).set({"qbInvoiceRef": rec, "lastModified": _stamp()}, merge=True)
+            # A balance that went UP (the invoice was changed) is no payment.
+            if paid > 0:
+                news.append({"jobId": job_id, "kind": "payment", "name": str(jobs[job_id].get("customerName") or "a customer"),
+                             "paid": paid, "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
     try:
         news += import_accepted(jobs)
     except ReconnectNeeded:
@@ -1197,9 +1333,15 @@ def sweep():
 # Only from the real company: the test company is full of made-up
 # customers, and they must never land in the job list. The first look goes
 # back IMPORT_LOOKBACK_DAYS; after that, whatever changed since the last
-# look. An estimate brought in once is remembered, so a job deleted here is
-# not brought back.
+# look (a minute's overlap: two estimates changed in the same second must not
+# fall either side of the line). Only estimates accepted since that first
+# look's start (acceptedFrom): an old one accepted before Job Hub took them
+# in, edited or invoiced since, is not new work. An estimate brought in once
+# is remembered, so a job deleted here is not brought back; one whose job
+# could not be made is tried again, IMPORT_MAX_TRIES times.
 IMPORT_LOOKBACK_DAYS = 30
+IMPORT_OVERLAP = datetime.timedelta(minutes=1)
+IMPORT_MAX_TRIES = 3
 NOTES_MAX = 4000
 
 
@@ -1251,7 +1393,7 @@ def _job_from_estimate(e, cust, stamp):
     name = (cust.get("DisplayName") or (e.get("CustomerRef") or {}).get("name") or "").strip()
     total = float(e.get("TotalAmt") or 0)
     rec = _estimate_record(e, (e.get("CustomerRef") or {}).get("value"))
-    rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"), linked=True)
+    rec["linked"] = True
     return {
         "customerName": name or "Customer from QuickBooks",
         "firstName": str(cust.get("GivenName") or ""), "lastName": str(cust.get("FamilyName") or ""),
@@ -1270,12 +1412,22 @@ def _job_from_estimate(e, cust, stamp):
         "jobStatus": "booked", "workStage": "scheduled", "workStageAt": stamp,
         "bidStage": "won", "bidStageAt": stamp,
         "qbEstimate": rec, "fromQuickBooks": {"estimateId": e.get("Id"), "at": stamp},
-        "lastModified": stamp,
+        "acceptedSeenAt": stamp, "lastModified": stamp,
     }
 
 
 def _number(s):
     return str(s or "").strip().lstrip("#").strip()
+
+
+def _job_numbered(hits, jobs):
+    """The one job here an estimate number names: the only one carrying it,
+    or else the only bid among them (an old finished job can share a number
+    typed years ago). None when that still leaves several, or none."""
+    if len(hits) == 1:
+        return hits[0]
+    bids = [jid for jid in hits if (jobs[jid].get("jobStatus") or "quoting") == "quoting"]
+    return bids[0] if len(bids) == 1 else None
 
 
 def import_accepted(jobs):
@@ -1289,26 +1441,31 @@ def import_accepted(jobs):
     ref = db.collection("integrations").document("quickbooksImport")
     snap = ref.get()
     state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
-    since = state.get("since") or _qb_time(_now() - datetime.timedelta(days=IMPORT_LOOKBACK_DAYS))
-    seen = dict(state.get("seen") or {})          # estimate id -> job id
+    lookback = _now() - datetime.timedelta(days=IMPORT_LOOKBACK_DAYS)
+    since = state.get("since") or _qb_time(lookback)
+    accepted_from = str(state.get("acceptedFrom") or lookback.date().isoformat())
+    seen = dict(state.get("seen") or {})          # estimate id -> job id ("" = not brought in)
+    tries = dict(state.get("tries") or {})        # estimate id -> failed tries at making its job
 
+    asked_from = (_parse_time(since) or lookback) - IMPORT_OVERLAP
     rows = _query("Estimate", "MetaData.LastUpdatedTime > '%s' orderby MetaData.LastUpdatedTime maxresults 200"
-                  % _quote(since))
+                  % _quote(_qb_time(asked_from)))
     by_est = {str((j.get("qbEstimate") or {}).get("id")): jid for jid, j in jobs.items()
               if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
-    by_num = {}
+    by_num = {}                                   # estimate number -> [job ids]
     for jid, j in jobs.items():
         n = _number(j.get("estimateNumber"))
         if n:
-            by_num.setdefault(n, jid)
+            by_num.setdefault(n, []).append(jid)
     news = []
     newest = _parse_time(since)
+    hold = None             # the first estimate whose job could not be made: looked at again next time
     for e in rows:
         t = _parse_time((e.get("MetaData") or {}).get("LastUpdatedTime"))
         if t and (not newest or t > newest):
             newest = t
         eid = str(e.get("Id") or "")
-        if not eid or eid in seen or (e.get("TxnStatus") or "") != "Accepted":
+        if not eid or eid in seen or not _accepted(e):
             continue
         note = str(e.get("PrivateNote") or "").strip()
         if note.startswith(_job_note("")):           # made in Job Hub: the sweep has it
@@ -1317,16 +1474,30 @@ def import_accepted(jobs):
         if eid in by_est:
             seen[eid] = by_est[eid]
             continue
+        if str(e.get("AcceptedDate") or "")[:10] and str(e["AcceptedDate"])[:10] < accepted_from:
+            continue                                # accepted before Job Hub was looking
         stamp = _stamp()
         rec = _estimate_record(e)
-        rec.update(acceptedBy=e.get("AcceptedBy"), acceptedDate=e.get("AcceptedDate"), linked=True)
+        rec["linked"] = True
         num = _number(e.get("DocNumber"))
-        if num and num in by_num:
+        hits = (by_num.get(num) or []) if num else []
+        if hits:
+            jid = _job_numbered(hits, jobs)
+            if jid is None:
+                # Several jobs here carry the number and nothing says which:
+                # neither linked to a guess nor made a second time -- told.
+                seen[eid] = ""
+                news.append({"jobId": "est" + eid, "kind": "notBrought", "why": "several", "count": len(hits),
+                             "name": str((e.get("CustomerRef") or {}).get("name") or "A customer"),
+                             "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+                continue
             # Already a job here, typed in by hand with this number: linked,
             # and booked by the owner's device if it is still a bid.
-            jid = by_num[num]
             if not ((jobs[jid].get("qbEstimate") or {}).get("id")):
-                db.collection("jobs").document(jid).set({"qbEstimate": rec, "lastModified": stamp}, merge=True)
+                patch = {"qbEstimate": rec, "lastModified": stamp}
+                if not jobs[jid].get("acceptedSeenAt"):
+                    patch["acceptedSeenAt"] = stamp
+                db.collection("jobs").document(jid).set(patch, merge=True)
                 news.append({"jobId": jid, "kind": "linked", "name": str(jobs[jid].get("customerName") or "a customer"),
                              "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
             seen[eid] = jid
@@ -1345,9 +1516,23 @@ def import_accepted(jobs):
         jid = "qb" + re.sub(r"[^A-Za-z0-9]", "", eid)
         try:
             db.collection("jobs").document(jid).create(job)
-        except Exception as err:                        # noqa: BLE001
-            print("quickbooks import: job %s not made (%s)" % (jid, err))
+        except AlreadyExists:
+            # A sweep at the same moment made it.
             seen[eid] = jid
+            continue
+        except Exception as err:                        # noqa: BLE001
+            # Not made: tried again next hour (the look starts no later
+            # than this estimate), and the owner told after the last try.
+            n = int(tries.get(eid) or 0) + 1
+            print("quickbooks import: job %s not made, try %d (%s)" % (jid, n, err))
+            if n < IMPORT_MAX_TRIES:
+                tries[eid] = n
+                if t and (hold is None or t < hold):
+                    hold = t
+            else:
+                seen[eid] = ""
+                news.append({"jobId": jid, "kind": "notBrought", "why": "failed", "name": job["customerName"],
+                             "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
             continue
         # On the crew's clock too (sync.js boardEntry).
         db.collection("jobBoard").document(jid).set({
@@ -1355,10 +1540,13 @@ def import_accepted(jobs):
             "address": ", ".join(s for s in (job["address"], job["city"], job["state"]) if s),
             "updatedAt": stamp})
         seen[eid] = jid
-        by_num.setdefault(num, jid)
+        if num:
+            by_num.setdefault(num, []).append(jid)
         news.append({"jobId": jid, "kind": "imported", "name": job["customerName"],
                      "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
-    ref.set({realm: {"since": _qb_time(newest) if newest else since, "seen": seen, "at": _now().isoformat()}}, merge=True)
+    end = newest if hold is None or (newest and newest < hold) else hold
+    ref.set({realm: {"since": _qb_time(end) if end else since, "seen": seen, "tries": tries,
+                     "acceptedFrom": accepted_from, "at": _now().isoformat()}}, merge=True)
     return news
 
 

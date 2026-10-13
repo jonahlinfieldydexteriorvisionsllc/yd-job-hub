@@ -23,6 +23,7 @@ Three rules this file is built around:
 """
 
 import datetime
+import hmac
 import json
 import os
 
@@ -68,10 +69,11 @@ MODEL = "claude-sonnet-5-5"
 # Pricing rules -> Claude; "Ask Claude now" on a card works either way.
 CARD_HOURS = (7, 19)
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
+# The live app only. A local copy (localhost) never needs to call the real
+# server: its signed-in screens are tested against a fake database.
 ALLOWED_ORIGINS = {
     "https://jonahlinfieldydexteriorvisionsllc.github.io",
     "https://jobhub.ydexteriorvisions.com",
-    "http://localhost:8123",
 }
 
 # ---------------------------------------------------------------- the tasks
@@ -87,16 +89,6 @@ def _scope_prompt(d):
         f"Services: {', '.join(d.get('services', [])) or '(not given)'}\n"
         f"Measurements and site notes: {d.get('notes', '(none)')}\n"
         f"Price: {d.get('price', '(not set)')}\n"
-    )
-
-
-def _parse_prompt(d):
-    return (
-        "Pull the job details out of the message below. Return JSON with the "
-        "keys customerName, address, city, state, zip, phone, email, "
-        "serviceTypes (array), notes. Use an empty string for anything the "
-        "message does not say -- never invent a value.\n\n"
-        f"---\n{d.get('text', '')}\n---"
     )
 
 
@@ -119,17 +111,6 @@ TASKS = {
         "build": _scope_prompt,
         "max_tokens": 2000,
         "effort": "medium",
-    },
-    "parse_proposal": {
-        "system": (
-            "You extract structured job details from messy text -- a customer "
-            "email, a phone note, a pasted proposal. Return only JSON, no "
-            "commentary. Accuracy matters far more than completeness: an empty "
-            "field is correct, a guessed one is a wrong job record."
-        ),
-        "build": _parse_prompt,
-        "max_tokens": 1500,
-        "effort": "low",
     },
 }
 
@@ -213,10 +194,12 @@ def _crew_photo_allowance(uid):
     ref.set({"photosBy": {uid: firestore.Increment(1)}}, merge=True)
 
 
-def _check_and_count_usage(uid):
-    """Daily call ceiling and spending ceiling. Refuses rather than quietly spending."""
+def _check_and_count_usage(uid, cap_checked=False):
+    """Daily call ceiling and spending ceiling. Refuses rather than quietly
+    spending. cap_checked: the caller has just asked spend.over_cap itself
+    (a ~30-read question), so it is not asked twice."""
     import spend
-    why = spend.over_cap(_db)
+    why = None if cap_checked else spend.over_cap(_db)
     if why:
         raise RuntimeError(why)
     day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -280,7 +263,9 @@ def _quickbooks(request, path, headers):
         # A missing secret refuses rather than waves everything through: an
         # endpoint that stops being protected when a variable goes missing is
         # worse than one that stops working.
-        if not expected or given != expected:
+        # Compared in constant time, so the answer's timing gives nothing of
+        # the secret away.
+        if not expected or not hmac.compare_digest(given.encode(), expected.encode()):
             return (json.dumps({"error": "not allowed"}), 403, json_headers)
         try:
             return (json.dumps(qb.keepalive()), 200, json_headers)
@@ -523,6 +508,16 @@ def _tell_owner(news):
             if n["status"] == "Accepted":
                 # Booked by the owner's device (sync.js bookIfAccepted).
                 body += ". It's booked as a job — make the invoice from the job."
+            elif n.get("accepted"):
+                # Accepted and invoiced in QuickBooks between two looks.
+                title = "✅ Estimate accepted — and invoiced in QuickBooks"
+                body += ". It's booked as a job."
+        elif n["kind"] == "notBrought":
+            # quickbooks.import_accepted could not make or link its job.
+            title = "📥 Estimate accepted in QuickBooks"
+            why = ("%d jobs here have that number, so it wasn't linked to one" % n.get("count", 2)
+                   if n.get("why") == "several" else "its job couldn't be made here")
+            body = "%s accepted estimate%s %s — %s. Book it by hand." % (n["name"], num, _money(n.get("total")), why)
         elif n["kind"] == "imported":
             # An estimate made in QuickBooks itself (quickbooks.import_accepted).
             title = "📥 New job from QuickBooks"
@@ -580,7 +575,7 @@ def _receipts(request, path, headers):
                 raise RuntimeError(why)
             if user.get("role") == "crew":
                 _crew_photo_allowance(uid)
-            day = _check_and_count_usage(uid)
+            day = _check_and_count_usage(uid, cap_checked=True)
         except PermissionError as e:
             return (json.dumps({"error": str(e)}), 401, json_headers)
         except RuntimeError as e:
