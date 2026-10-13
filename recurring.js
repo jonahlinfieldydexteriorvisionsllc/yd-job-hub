@@ -402,6 +402,9 @@
         if (floor && p.due < floor) return;
         seen[id + p.due] = 1;
         const cid = 'rc-' + id + '-' + p.due, k = cards[cid];
+        // A past period with no card: done, confirmed and deleted with "Delete
+        // all done" (boards.js) -- not a week nobody did, which keeps its card.
+        if (!k && p.due < ymd(new Date())) return;
         out.push({ day: p.due, taskId: id, what: t.what, cardId: k ? cid : '',
                    done: !!(k && (k.confirmedAt || k.doneAt || k.column === done)) });
       });

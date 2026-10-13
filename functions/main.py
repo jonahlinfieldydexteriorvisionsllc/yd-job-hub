@@ -385,8 +385,18 @@ def _digest(request, path, headers):
     if path == "/digest/run":
         if not _from_scheduler(request):
             return (json.dumps({"error": "not allowed"}), 403, json_headers)
+        # Once a day, before the morning summary: finished cards done more
+        # than a week ago are deleted (tidy.py). Whatever happens, the
+        # summary still goes.
+        tidied = None
+        if slot == "morning":
+            try:
+                import tidy
+                tidied = tidy.run()
+            except Exception as e:                      # noqa: BLE001
+                print("tidy run failed:", e)
         try:
-            return (json.dumps({"slot": slot, "report": digest.run(slot)}), 200, json_headers)
+            return (json.dumps({"slot": slot, "report": digest.run(slot), "tidied": tidied}), 200, json_headers)
         except Exception as e:                          # noqa: BLE001
             print("digest run failed:", e)
             return (json.dumps({"error": str(e)}), 500, json_headers)

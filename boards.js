@@ -105,6 +105,7 @@
   // made again the next time Job Hub opened, so it cannot be deleted.
   const MAINTENANCE = 'maintenance';
   const CREW_BOARD = 'crew';         // Crew tasks: where the recurring crew tasks go (recurring.js)
+  const PICKUPS_BOARD = 'pickups';   // made by the server from "ready for pickup" emails (receipts.py)
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -567,12 +568,16 @@
 
   // Done cards go away (Jonah, 9 Oct 2026). A card finished today stays in
   // Done, so the day's work can be seen and a slip of the finger put back;
-  // from the next day it is off the board. Nothing is deleted -- the card
-  // keeps its history, and "Show the ones finished earlier" at the foot of
-  // Done brings them back on this screen. A card that still wants somebody
+  // from the next day it is off the board. A card that still wants somebody
   // stays put: a recurring task waiting for its OK, a machine marked serviced
   // but not logged yet, Claude's work waiting for "Put it live".
-  const showOldDone = {};      // boardId -> true while the older done cards are shown
+  //
+  // And they are deleted for good with "Delete all done" (Jonah, 13 Oct:
+  // "i want to be able to fully delete all done cards on boards ... i dont
+  // want them sitting there taking up space"). Not a card that still wants
+  // somebody, not a machine's service card (it is the machine's NEXT
+  // service, reset when one is logged -- not a finished job), and not this
+  // period's recurring card (recurring.js would make it again, not done).
   function stillWanted(k) {
     return !!((k.recurring && !k.confirmedAt) || k.markedDoneBy ||
       (k.claude && k.claude.status === 'waiting_ok' && !k.claude.approvedAt));
@@ -582,9 +587,65 @@
     return !!t && !isNaN(t) && localDay(t) === localDay();
   }
   const onBoardWhenDone = k => finishedToday(k) || stillWanted(k);
-  window.toggleOldDone = function (boardId) {
-    showOldDone[boardId] = !showOldDone[boardId];
+  function clearable(board, k) {
+    if (stillWanted(k)) return false;
+    if (board.id === MAINTENANCE && String(k.id || '').indexOf('eq-') === 0) return false;
+    if (k.recurring && String(k.due || '') >= localDay()) return false;
+    return true;
+  }
+  const doneToClear = board => Object.values(cards[board.id] || {})
+    .filter(k => shows(board, k) && colOf(board, k) === doneColOf(board) && clearable(board, k));
+
+  window.deleteDoneCards = function (boardId) {
+    const board = boards[boardId];
+    if (!board || board.virtual || !runsBoard(board)) return;
+    const gone = doneToClear(board);
+    if (!gone.length) { showToast('Nothing finished to delete'); return; }
+    if (!confirm('Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' +
+                 board.name + '" for good? This cannot be undone.')) return;
+    deleteCards(board, gone.map(k => k.id));
+    showToast(gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' deleted');
+  };
+
+  // Cards deleted for good, by "Delete all done" or a card's own 🗑. Pickup
+  // cards are made by the server from store emails: the order is remembered
+  // as cleared on the board, so a "still waiting" reminder for an order
+  // already picked up does not put its card back (receipts.py; tidy.py does
+  // the same). Kept a couple of months -- reminders come within days.
+  function deleteCards(board, ids) {
+    ids.forEach(id => { if (cards[board.id]) delete cards[board.id][id]; });
+    Promise.resolve(window.YDDb.removeMany(ids.map(id => ['boards/' + board.id + '/cards', id])))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed to delete that' : 'Not deleted yet — will retry'));
+    if (board.id === PICKUPS_BOARD && runsBoard(board)) {
+      const cutoff = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+      const keep = (board.cleared || []).filter(s => String(s).split('|')[1] >= cutoff);
+      const today = localDay();
+      board.cleared = keep.concat(ids.map(id => id + '|' + today));
+      Promise.resolve(window.YDDb.put('boards', board.id, { cleared: board.cleared }))
+        .catch(e => console.warn('[boards] cleared pickups not noted:', (e && e.code) || e));
+    }
+    cardsChanged();
     render();
+  }
+
+  // A card's own 🗑, right on the board (Jonah, 13 Oct: "all cards should
+  // have a delete button visible without actually clicking edit"). Not on a
+  // card the app would only make again: a machine's service card, a problem
+  // still open on a machine (both follow the Equipment tab), or a recurring
+  // task's card for the period that is still running.
+  function cardDeletable(board, k, inDone) {
+    const id = String(k.id || '');
+    if (board.id === MAINTENANCE && (id.indexOf('eq-') === 0 || (id.indexOf('eqi-') === 0 && !inDone))) return false;
+    if (k.recurring && String(k.due || '') >= localDay()) return false;
+    return true;
+  }
+  window.bdDeleteCard = function (boardId, cardId) {
+    const board = boards[boardId];
+    const k = board && (cards[boardId] || {})[cardId];
+    if (!k || board.virtual || !editsBoard(board)) return;
+    if (!confirm('Delete "' + (k.title || 'this card') + '"? This cannot be undone.')) return;
+    deleteCards(board, [cardId]);
+    showToast('Card deleted');
   };
 
   function columnsHtml(board) {
@@ -599,21 +660,12 @@
       const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
       if (c.id !== doneId) return column(board, c, inCol.map(k => storedCardHtml(board, k, false)));
       const recent = inCol.filter(onBoardWhenDone);
-      // The older ones, newest first, under their own heading when shown.
-      const older = inCol.filter(k => !onBoardWhenDone(k))
-        .sort((a, b) => String(b.doneAt || '').localeCompare(String(a.doneAt || '')));
-      const open = !!showOldDone[board.id];
-      const html = recent.map(k => storedCardHtml(board, k, true));
-      if (open && older.length) {
-        html.push('<div class="bd-old-head">Finished earlier</div>');
-        older.forEach(k => html.push(storedCardHtml(board, k, true)));
-      }
-      return column(board, c, html, {
-        count: recent.length + (open ? older.length : 0),
-        empty: older.length ? 'Nothing finished today' : '',
-        foot: older.length ? '<button class="bd-add-card bd-old-btn" onclick="toggleOldDone(\'' + board.id + '\')">' +
-          (open ? 'Hide the ones finished earlier'
-            : 'Show the ' + older.length + ' finished earlier') + '</button>' : '',
+      const clear = runsBoard(board) ? inCol.filter(k => clearable(board, k)).length : 0;
+      return column(board, c, recent.map(k => storedCardHtml(board, k, true)), {
+        count: recent.length,
+        empty: inCol.length ? 'Nothing finished today' : '',
+        foot: clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + board.id + '\')">🗑 Delete all ' +
+          clear + ' done</button>' : '',
       });
     }).join('');
   }
@@ -717,6 +769,9 @@
         (isOwner() && k.claude && k.claude.status === 'waiting_ok' && !k.claude.approvedAt ? '<span class="bd-claude ask" title="Built — waiting for your OK">🖥 OK?</span>' : '') +
         '<span class="bd-people">' + (k.assignees || []).map(a =>
           '<span class="bd-face" title="' + esc(nameOn(a)) + '">' + esc(initials(nameOn(a))) + '</span>').join('') + '</span>' +
+        (editsBoard(board) && cardDeletable(board, k, inLastColumn)
+          ? '<button type="button" class="bd-card-del" title="Delete this card" aria-label="Delete this card" draggable="false" ' +
+            'onclick="event.stopPropagation(); bdDeleteCard(\'' + board.id + '\', \'' + k.id + '\')">🗑</button>' : '') +
       '</div>' +
     '</div>';
   }

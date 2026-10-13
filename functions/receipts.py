@@ -792,6 +792,11 @@ def pickup_card(db, m, got, jobs):
     cid = "pk" + hashlib.sha1(key.encode()).hexdigest()[:18]
     ref = db.collection("boards").document(board_id).collection("cards").document(cid)
     snap = ref.get()
+    # Picked up and its card deleted ("Delete all done", boards.js notes it
+    # in the board's `cleared` list): a "still waiting" reminder for it must
+    # not put the card back.
+    if not snap.exists and any(str(s).split("|")[0] == cid for s in (board.get("cleared") or [])):
+        return cid
     if snap.exists:
         # A reminder for an order already on the board: noted, nothing new.
         # The same email read again (a retry) is not another reminder.

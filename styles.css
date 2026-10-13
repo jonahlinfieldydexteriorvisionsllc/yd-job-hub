@@ -978,10 +978,14 @@
   .bd-empty { color:rgba(255,255,255,.55); }
   .bd-add-card, html[data-night] .bd-add-card { color:rgba(255,255,255,.7); border-color:rgba(255,255,255,.28); }
   .bd-add-card:hover, html[data-night] .bd-add-card:hover { color:#fff; border-color:#fff; }
-  /* Done: the cards finished before today, shown only when asked for */
-  .bd-old-btn { border-style:solid; }
-  .bd-old-head { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
-    color:rgba(255,255,255,.6); padding:6px 2px 0; border-top:1px solid rgba(255,255,255,.15); }
+  /* A card's own delete, right on the board (no need to open it) */
+  .bd-card-del { background:none; border:none; cursor:pointer; font-size:14px; line-height:1; padding:4px 2px 2px 6px;
+    margin:-4px -2px -2px 0; opacity:.45; filter:grayscale(1); min-width:28px; min-height:28px; }
+  .bd-card-del:hover, .bd-card-del:focus-visible { opacity:1; filter:none; }
+  @media (pointer: coarse) { .bd-card-del { opacity:.7; min-width:36px; min-height:36px; } }
+  /* Done: delete every finished card on the board for good */
+  .bd-del-done { border-style:solid; color:#ffb3a1; border-color:rgba(255,179,161,.55); }
+  .bd-del-done:hover, html[data-night] .bd-del-done:hover { color:#fff; border-color:#fff; background:rgba(200,73,43,.35); }
   .bd-card { --surface:#ffffff; --surface-2:#f4f1f8; --text:#2b2433; --muted:#6f6480;
     --border:#e4dfeb; --border-strong:#cfc5dc; --pos:#2f8f5b; --pos-soft:#d8ecdf;
     --neg:#c8492b; --neg-soft:#f6ddd3;

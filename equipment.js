@@ -1214,6 +1214,10 @@
           setIssueDone(g, i.id, false);
           return;
         }
+        // Fixed, and its card gone -- deleted with "Delete all done" on the
+        // board (Jonah, 13 Oct). The machine keeps the record; the card is
+        // not made again.
+        if (!k && i.doneAt) return;
         const u = urgencyOf(i.urgency);
         const want = {
           title: (g.name || 'Machine') + ' — ' + i.what,
