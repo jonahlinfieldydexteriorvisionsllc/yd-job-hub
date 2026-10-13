@@ -829,7 +829,12 @@
     const when = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const status = q ? ({ Pending: 'Waiting on the customer', Accepted: '✅ Accepted', Closed: 'Made into an invoice',
       Converted: 'Made into an invoice', Rejected: 'Turned down' }[q.status] || q.status || '') : '';
+    if (can) askCompany();
+    const testCo = qbCompany && qbCompany.env && qbCompany.env !== 'production';
     box.innerHTML =
+      (testCo ? '<div class="est-testco">⚠️ QuickBooks is connected to Intuit’s <b>TEST company</b>' +
+        (qbCompany.name ? ' (“' + esc(qbCompany.name) + '”)' : '') + ', not your real QuickBooks. Bids sent from here go nowhere real — ' +
+        'switch to your real company first.</div>' : '') +
       (q && q.id ? '<div class="est-qb-line"><b>QuickBooks estimate' + (q.docNumber ? ' #' + esc(q.docNumber) : '') + '</b>' +
         (q.total != null ? ' · ' + fmtMoney(Number(q.total) || 0) : '') +
         (status ? ' · ' + esc(status) : '') +
@@ -984,13 +989,15 @@
     if (email && !to && !inv.id) { showToast('Add the customer’s email on the job first'); return; }
     if (!confirm((email ? 'Email ' + what + ' to ' + (to || 'the customer') + ' from QuickBooks?' : 'Make ' + what + ' in QuickBooks?') +
       (inv.id ? '' : '\n\nIt closes the estimate in QuickBooks.'))) return;
+    if (!(await realCompanyOrTest('This invoice'))) { showToast('Not made — QuickBooks is on the test company'); return; }
     if (typeof autosave === 'function') autosave();
     const jobId = currentJobId;
     if (!jobId) return;
     invoicing = true; renderQb();
     try {
       const out = await askQb('/qb/estimate-invoice', { jobId: jobId, estimateId: q.id, env: q.env || null,
-        invoiceId: inv.id || null, email: !!email, memo: invoiceMemo(total) });
+        invoiceId: inv.id || null, email: !!email, memo: invoiceMemo(total),
+        testOk: !!(qbCompany && qbCompany.env !== 'production') });
       afterInvoice(jobId, out);
       showToast((email ? 'Emailed from QuickBooks' : 'Made in QuickBooks') + (out.docNumber ? ' — invoice #' + out.docNumber : ''));
       // A yes from the customer: a bid still waiting to be booked is offered it.
@@ -1915,6 +1922,35 @@
     throw new Error('The server is not set up');
   }
 
+  // Which QuickBooks company is connected (Jonah, 13 Oct 2026: a real bid
+  // went into Intuit's TEST company -- production had never been switched
+  // on). Asked once a session. While it is the test company the estimate
+  // says so in red, and nothing is sent there unless he types TEST (the
+  // server refuses it too, main.py).
+  let qbCompany = null, qbCompanyAsked = false;
+  async function qbCompanyNow() {
+    if (qbCompany) return qbCompany;
+    try {
+      const s = await askQb('/qb/status', {});
+      qbCompany = { env: s.env || '', name: s.company || '', connected: !!s.connected };
+    } catch (e) { qbCompany = null; }
+    return qbCompany;
+  }
+  function askCompany() {
+    if (qbCompanyAsked || !sends()) return;
+    qbCompanyAsked = true;
+    qbCompanyNow().then(() => renderQb());
+  }
+  // true: go ahead (the real company, or he typed TEST for the test one).
+  async function realCompanyOrTest(what) {
+    const c = await qbCompanyNow();
+    if (!c || c.env === 'production') return true;
+    const typed = prompt('QuickBooks is connected to Intuit’s TEST company' + (c.name ? ' (“' + c.name + '”)' : '') +
+      ' — NOT your real QuickBooks.\n\n' + what + ' would only go to the test company: not your real books, and no customer sees it.\n\n' +
+      'Switch Job Hub to your real QuickBooks first. To send to the test company anyway, type TEST:');
+    return !!typed && typed.trim().toUpperCase() === 'TEST';
+  }
+
   window.estLoadQbItems = async function () {
     if (qbItems || !sends()) return;
     qbItems = [];
@@ -1942,6 +1978,10 @@
       if (!confirm((q.sentAt ? 'Email the updated estimate' : 'Email this estimate') + ' to ' + to +
         ' from QuickBooks?\n\nTotal ' + cents(r.totalCents))) return;
     }
+    if (!(await realCompanyOrTest(email ? 'Emailing this estimate' : 'This estimate'))) {
+      showToast('Not sent — QuickBooks is on the test company');
+      return;
+    }
     // The job is saved first so it has an id, and so what is on screen is
     // what is kept with the job.
     if (typeof autosave === 'function') autosave();
@@ -1953,7 +1993,7 @@
       const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '' }))
         .filter(w => w.cents > 0 || w.scope.trim());
       const out = await askQb('/qb/estimate', {
-        jobId: jobId, email: !!email,
+        jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
         estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
         customer: { name: f('customerName'), email: to, phone: f('phone'), address: f('address'),
                     city: f('city'), state: f('state'), zip: f('zip') },

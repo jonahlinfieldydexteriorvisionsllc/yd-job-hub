@@ -2420,3 +2420,5 @@
   .est-pay-row .est-pay-label { flex:1 1 140px; min-width:0; }
   .est-pay-row select { width:auto; }
   .est-pay-row .est-pay-val { width:100px; }
+  /* QuickBooks connected to Intuit's test company: said loudly on every estimate */
+  .est-testco { padding:8px 10px; border-radius:8px; background:var(--neg-soft); color:var(--neg); border:1px solid var(--neg); font-size:13px; margin:6px 0; }

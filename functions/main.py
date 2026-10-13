@@ -299,6 +299,14 @@ def _quickbooks(request, path, headers):
             result = qb.items()
         elif path == "/qb/invoice":
             result = qb.create_invoice(body)
+        elif path in ("/qb/estimate", "/qb/estimate-invoice") and qb._env("QB_ENV", "sandbox") != "production" \
+                and not body.get("testOk"):
+            # Intuit's TEST company is connected (Jonah, 13 Oct 2026: a real
+            # bid went into it). Nothing goes there unless he typed TEST --
+            # an older copy of the app on a phone cannot send one by mistake.
+            return (json.dumps({"error": "QuickBooks is connected to Intuit's TEST company, not your real QuickBooks. "
+                                         "Switch to your real company before sending bids.", "testCompany": True}),
+                    412, json_headers)
         elif path == "/qb/estimate":
             result = qb.save_estimate(body)
         elif path == "/qb/estimate-status":
