@@ -110,9 +110,14 @@
   // undefined anywhere.
   // The estimate's numbers on a price record ride along untouched unless e
   // gives them (null clears one).
-  // A rental's half-day and week rates ride along the same way; its day rate
-  // is the price itself (per day), which is what estimates use.
-  const PRICING_KEYS = ['markupPct', 'wastePct', 'clientCents', 'halfDayCents', 'weekCents'];
+  // A rental's other rates -- half day, weekend, week, month (Jonah, 13 Oct
+  // 2026: "different rates for rentals like a price per day and a price per
+  // week") -- ride along the same way; its day rate is the price itself (per
+  // day). Estimates take the cheapest mix of them for the days needed
+  // (pricing.js rentalCents).
+  const PRICING_KEYS = ['markupPct', 'wastePct', 'clientCents', 'halfDayCents', 'weekendCents', 'weekCents', 'monthCents'];
+  const RENTAL_RATES = [['halfDayCents', 'Half day', 'halfDay'], ['weekendCents', 'Weekend', 'weekend'],
+                        ['weekCents', 'Week', 'week'], ['monthCents', 'Month (4 weeks)', 'month']];
   function applyPrice(old, e) {
     const cur = Object.assign({ cents: null, per: '', year: null, asOf: '', priceNotes: '' }, old || {});
     const extra = {};
@@ -633,8 +638,8 @@
     const p = prices[id];
     if (!p || typeof p.cents !== 'number') return '<div class="sup-price none">No price yet</div>';
     const prev = lastYears(p);
-    const rates = [typeof p.halfDayCents === 'number' ? 'half day ' + fmtCents(p.halfDayCents) : '',
-                   typeof p.weekCents === 'number' ? 'week ' + fmtCents(p.weekCents) : ''].filter(Boolean);
+    const rates = RENTAL_RATES.filter(r => typeof p[r[0]] === 'number')
+      .map(r => r[1].replace(/ \(.*\)$/, '').toLowerCase() + ' ' + fmtCents(p[r[0]]));
     return '<div class="sup-price"><b>' + fmtCents(p.cents) + '</b>' +
       (p.per ? ' <span class="sup-per">/ ' + esc(p.per) + '</span>' : '') +
       (rates.length ? ' <span class="sup-per">· ' + rates.join(' · ') + '</span>' : '') +
@@ -705,7 +710,9 @@
       const v = id ? vendors[id] || {} : {};
       openModal(id ? 'Edit supplier' : 'Add a supplier',
         field('Name', 'svName', v.name, 'e.g. Example Stone Yard') +
-        field('Address', 'svAddr', v.address, 'Street, town — used for directions') +
+        // In its parts (addr.js); the one line is kept for directions.
+        (window.YDAddr ? YDAddr.fieldsHtml('svA', v, { streetHint: 'e.g. 123 Industrial Dr — used for directions' })
+          : field('Address', 'svAddr', v.address, 'Street, town — used for directions')) +
         '<div class="grid g2">' +
           field('Phone', 'svPhone', v.phone, '608-…') +
           field('Hours', 'svHours', v.hours, 'e.g. Mon–Sat 7–5') +
@@ -739,9 +746,8 @@
         per: p.per || '', year: String(p.year || thisYear()), notes: p.priceNotes || '',
         markup: show(p.markupPct), waste: show(p.wastePct),
         client: typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
-        halfDay: typeof p.halfDayCents === 'number' ? (p.halfDayCents / 100).toFixed(2) : '',
-        week: typeof p.weekCents === 'number' ? (p.weekCents / 100).toFixed(2) : '',
       };
+      RENTAL_RATES.forEach(([k, , f]) => { priceShown[f] = typeof p[k] === 'number' ? (p[k] / 100).toFixed(2) : ''; });
       const catRule = ((window.YDPricing && window.YDPricing.rules().categories) || {})[it.category] || {};
       editing.priceShown = priceShown;
       const hist = Array.isArray(p.history) ? p.history : [];
@@ -794,10 +800,15 @@
             field('Waste %', 'spWaste', priceShown.waste, catRule.wastePct != null ? catRule.wastePct + ' (its kind)' : 'its kind’s', 'decimal') +
             field('Or: customer price each ($)', 'spClient', priceShown.client, 'only for fixed-price items', 'decimal') +
           '</div>' +
-          // A rental: the price above is the day rate ("Per: day").
-          '<div class="grid g2" id="spRentalRow"' + (isRental(it) ? '' : ' hidden') + '>' +
-            field('Rental: half day ($)', 'spHalfDay', priceShown.halfDay, 'optional', 'decimal') +
-            field('Rental: week ($)', 'spWeek', priceShown.week, 'optional', 'decimal') +
+          // A rental: the price above is the day rate ("Per: day"); these are
+          // its other rates, any of them left blank if they don't offer it.
+          '<div id="spRentalRow"' + (isRental(it) ? '' : ' hidden') + '>' +
+            '<div class="hint">A rental: the price above is the <b>day</b> rate. Their other rates below — an estimate ' +
+              'uses whichever mix is cheapest for the days needed (5 days can be a week rate). A weekend rate is shown, ' +
+              'not used by itself, since it depends on the days.</div>' +
+            '<div class="grid g4">' +
+              RENTAL_RATES.map(([, label, f]) => field(label + ' ($)', 'spR' + f, priceShown[f], 'optional', 'decimal')).join('') +
+            '</div>' +
           '</div>' +
           '<div class="field"><span class="label">Price notes</span><textarea id="spNotes" rows="2" ' +
             'placeholder="e.g. contractor price; less by the pallet; delivery extra">' + esc(priceShown.notes) + '</textarea></div>' +
@@ -861,7 +872,9 @@
       const website = websiteUrl({ website: typedSite });
       if (typedSite && !website) { showToast('That website doesn’t look right — e.g. theirsite.com'); return; }
       const id = editing.id || newId('v');
-      const rec = { name: name, address: val('svAddr'), phone: val('svPhone'), hours: val('svHours'),
+      const a = window.YDAddr && el('svAStreet') ? YDAddr.read('svA') : { address: val('svAddr'), street: '', city: '', state: '', zip: '' };
+      const rec = { name: name, address: a.address, street: a.street, city: a.city, state: a.state, zip: a.zip,
+                    phone: val('svPhone'), hours: val('svHours'),
                     email: val('svEmail').toLowerCase(), website: website,
                     buyWays: Array.from(document.querySelectorAll('.svWay:checked')).map(i => i.value),
                     leadTime: val('svLead').slice(0, 80),
@@ -879,18 +892,19 @@
     // leave the item saved and the price silently dropped.
     const s = editing.priceShown || {};
     const typed = { price: val('spPrice'), per: val('spPer'), year: val('spYear'), notes: (el('spNotes').value || '').trim(),
-                    markup: val('spMarkup'), waste: val('spWaste'), client: val('spClient'),
-                    halfDay: val('spHalfDay'), week: val('spWeek') };
+                    markup: val('spMarkup'), waste: val('spWaste'), client: val('spClient') };
+    RENTAL_RATES.forEach(([, , f]) => { typed[f] = val('spR' + f); });
     const pricingTouched = typed.markup !== s.markup || typed.waste !== s.waste || typed.client !== s.client ||
-      typed.halfDay !== (s.halfDay || '') || typed.week !== (s.week || '');
+      RENTAL_RATES.some(([, , f]) => typed[f] !== (s[f] || ''));
     const priceTouched = typed.price !== s.price || typed.per !== s.per || typed.year !== s.year || typed.notes !== s.notes || pricingTouched;
     const cents = parseCents(typed.price);
     if (priceTouched && Number.isNaN(cents)) { showToast('The price should look like 89.99'); return; }
     const year = validYear(typed.year);
     if (priceTouched && !year) { showToast('The year should look like ' + thisYear()); return; }
     const markupPct = parsePct(typed.markup), wastePct = parsePct(typed.waste), clientCents = parseCents(typed.client);
-    const halfDayCents = parseCents(typed.halfDay), weekCents = parseCents(typed.week);
-    if ([markupPct, wastePct, clientCents, halfDayCents, weekCents].some(n => Number.isNaN(n))) {
+    const rentalRates = {};
+    RENTAL_RATES.forEach(([k, , f]) => { rentalRates[k] = parseCents(typed[f]); });
+    if ([markupPct, wastePct, clientCents].concat(Object.values(rentalRates)).some(n => Number.isNaN(n))) {
       showToast('Markup, waste, customer price and rental rates should be numbers'); return;
     }
     const coverage = parsePct(val('siCover'));
@@ -914,8 +928,8 @@
       const next = applyPrice(prices[id], Object.assign({
         cents: typed.price !== s.price || typed.year !== s.year ? cents : undefined,
         per: typed.per, year: year, priceNotes: typed.notes,
-      }, pricingTouched ? { markupPct: markupPct, wastePct: wastePct, clientCents: clientCents,
-                            halfDayCents: halfDayCents, weekCents: weekCents } : {}));
+      }, pricingTouched ? Object.assign({ markupPct: markupPct, wastePct: wastePct, clientCents: clientCents },
+                                        rentalRates) : {}));
       prices[id] = next;
       write('supplyPrices', id, next);
     }
@@ -1005,8 +1019,17 @@
     markupPct: ['markup', 'markup pct'],
     wastePct: ['waste', 'waste pct'],
     clientEach: ['customer price each', 'customer price', 'client price each'],
+    // A rental's rates, as a rental house's sheet heads them. "Day" is the
+    // price itself (per day) when the sheet has no Price column.
+    day: ['day', 'daily', 'day rate', 'per day', '1 day'],
+    halfDay: ['half day', 'half day rate', '4 hour', '4 hours', '4 hr'],
+    weekend: ['weekend', 'wknd', 'weekend rate'],
+    week: ['week', 'weekly', 'week rate', 'per week', '1 week'],
+    month: ['month', 'monthly', 'month rate', 'per month', '4 week', '4 weeks', '28 day', '28 days'],
   };
   function headerKey(h) {
+    // "½ Day" and "1/2 Day" lose the half to the cleaning below.
+    if (/½|\b1\s*\/\s*2\b/.test(String(h || ''))) return 'halfDay';
     const t = norm(h).replace(/[^a-z0-9#]+/g, ' ').trim();
     for (const k in COLUMNS) if (COLUMNS[k].indexOf(t) !== -1) return k;
     return null;
@@ -1114,6 +1137,8 @@
           vendorId = newVendors[vk].id;
         }
       }
+      // A rental sheet's Day column is the price, per day.
+      if (!c.price && c.day && !/^\s*(n\/?a|-+|—)\s*$/i.test(c.day)) { c.price = c.day; if (!c.per) c.per = 'day'; }
       let id = existingById ? c.id : null;
       const byId = !!id;
       if (!id && c.sku) id = itemByKey[(vendorId || '') + '#' + key(c.sku)] || null;
@@ -1158,6 +1183,14 @@
         const n = parseCents(c.clientEach);
         if (Number.isNaN(n)) bad = 'the customer price “' + c.clientEach + '” is not a number'; else pricing.clientCents = n;
       }
+      // Rental rates; "N/A" or "-" is a rate they don't offer.
+      RENTAL_RATES.forEach(([k, label, f]) => {
+        const raw = c[f];
+        if (!raw) return;
+        if (/^\s*(n\/?a|-+|—)\s*$/i.test(raw)) { pricing[k] = null; return; }
+        const n = parseCents(raw);
+        if (Number.isNaN(n)) bad = 'the ' + label.toLowerCase() + ' rate “' + raw + '” is not a number'; else pricing[k] = n;
+      });
       if (bad) { out.skipped.push('Line ' + line + ': ' + bad); continue; }
 
       if (isNew) {
@@ -1213,7 +1246,8 @@
       '<div class="hint">Paste a spreadsheet below: copied straight out of Excel or Google Sheets, or a CSV file. ' +
         'The first line must be the column names. Understood: <b>Supplier, Item, Price</b>, and optionally ' +
         'Per, Year, Comes in, Item #, Where, Also called, Notes, Price notes, id — and for estimates ' +
-        'Category, Covers, Takeoff unit, Pallet, Special order, Markup %, Waste %, Customer price each. ' +
+        'Category, Covers, Takeoff unit, Pallet, Special order, Markup %, Waste %, Customer price each — ' +
+        'and for rentals Day, Half day, Weekend, Week, Month (“N/A” for a rate they don’t offer). ' +
         'Only the columns you include change; blank cells leave things as they are. ' +
         'A downloaded list keeps its id column, so each row goes back to exactly the item it came from.</div>' +
       '<div class="grid g2">' +
@@ -1504,7 +1538,8 @@
     };
     const head = ['id', 'Supplier', 'Item', 'Item #', 'Comes in', 'Price', 'Per', 'Year',
                   'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes',
-                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link', 'Used for'];
+                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link', 'Used for',
+                  'Half day', 'Weekend', 'Week', 'Month'];
     const catName = id => (id ? ((categories().find(c => c[0] === id) || [])[1]) || id : '');
     const yn = b => (b ? 'yes' : '');
     const n = v => (typeof v === 'number' ? String(v) : '');
@@ -1523,7 +1558,8 @@
           cell(it.where, true), cell(it.also, true), cell(it.notes, true), cell(p.priceNotes, true),
           cell(catName(it.category), true), n(it.coverage), cell(it.takeoffUnit, true), yn(it.pallet), yn(it.specialOrder),
           n(p.markupPct), n(p.wastePct), typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
-          cell(it.link, true), cell(usesOf(it).map(t => tagInfo(t).name).join('; '), true)].join(',');
+          cell(it.link, true), cell(usesOf(it).map(t => tagInfo(t).name).join('; '), true)]
+          .concat(RENTAL_RATES.map(([k]) => (typeof p[k] === 'number' ? (p[k] / 100).toFixed(2) : ''))).join(',');
       });
     // A byte-order mark and CRLF line endings, so Excel opens it with the
     // dashes and accents intact.

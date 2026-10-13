@@ -182,6 +182,37 @@
   // wastePct (overrides), delivery: 'auto' | 'pickup' | 'rides'}.
   // ctx: {rules, items, prices} (items/prices from Supplies).
 
+  // A rental by the day with its other rates (Supplies: half day, week,
+  // month -- Jonah, 13 Oct 2026, "different rates for rentals like a price per
+  // day and a price per week"): the cheapest way to have it for the days
+  // needed. Five days at $200 a day or $800 a week is the week; nine days is
+  // a week and two days, or two weeks if that is less. A month is four weeks,
+  // as the rental houses count it. A weekend rate depends on which days, so
+  // it is never picked by itself. Worked in half days. Returns
+  // {cents, plan: "1 week + 2 days"}, or null with no day-type rates.
+  const RENTAL_STEPS = [['halfDayCents', 1, 'half day', 'half days'], ['cents', 2, 'day', 'days'],
+                        ['weekCents', 14, 'week', 'weeks'], ['monthCents', 56, 'month', 'months']];
+  function rentalCents(pr, days) {
+    const steps = RENTAL_STEPS.filter(s => pr && typeof pr[s[0]] === 'number' && pr[s[0]] >= 0);
+    const n = Math.ceil(days * 2 - 1e-9);
+    if (!steps.length || !(n > 0)) return null;
+    // best[i]: the least for i half days (or more -- a rate may run over).
+    const best = [0], how = [null];
+    for (let i = 1; i <= n; i++) {
+      best[i] = Infinity;
+      steps.forEach((s, k) => {
+        const c = best[Math.max(0, i - s[1])] + pr[s[0]];
+        if (c < best[i]) { best[i] = c; how[i] = k; }
+      });
+    }
+    const count = steps.map(() => 0);
+    for (let i = n; i > 0; i = Math.max(0, i - steps[how[i]][1])) count[how[i]]++;
+    const plan = steps.map((s, k) => count[k] ? count[k] + ' ' + (count[k] === 1 ? s[2] : s[3]) : '')
+      .filter(Boolean).reverse().join(' + ');
+    return { cents: best[n], plan: plan };
+  }
+  const isDayUnit = per => /^(day|days|daily|per day)$/i.test(String(per || '').trim());
+
   function materialLine(m, ctx) {
     const r = ctx.rules;
     const it = m.supplyId ? ctx.items[m.supplyId] || null : null;
@@ -195,7 +226,13 @@
     const wastePct = m.plant ? 0 : first(m.wastePct, pr && pr.wastePct, catRule.wastePct, 0);
     const qty = Math.max(0, num(m.qty) || 0);
     const withWaste = qty * (1 + wastePct / 100);
-    const orderQty = roundUp(coverage ? withWaste / coverage : withWaste, per);
+    // A rental with more than a day rate: priced by rentalCents, in half
+    // days when there is a half-day rate.
+    const rental = !!(it && pr && isDayUnit(per) && typeof pr.cents === 'number' &&
+      ['halfDayCents', 'weekCents', 'monthCents'].some(k => typeof pr[k] === 'number'));
+    const orderQty = rental && typeof pr.halfDayCents === 'number'
+      ? Math.ceil(withWaste * 2 - 1e-9) / 2
+      : roundUp(coverage ? withWaste / coverage : withWaste, per);
 
     const costCents = it ? (pr && typeof pr.cents === 'number' ? pr.cents : null) : num(m.costCents);
     const vendorRule = it && it.vendorId ? (r.vendors || {})[it.vendorId] || {} : {};
@@ -220,7 +257,15 @@
     if (num(r.taxPct) === null) { out.problems.push('sales tax % not set'); return out; }
     // A category can be set as not taxed when bought (a rental, say).
     const tax = catRule.noTax ? 0 : pct(r.taxPct);
-    out.landedEachCents = Math.round(costCents * (1 + tax) * (1 + pct(vendorRule.processingPct)));
+    const landing = (1 + tax) * (1 + pct(vendorRule.processingPct));
+    const rent = rental ? rentalCents(pr, orderQty) : null;
+    if (rent) {
+      out.rentalPlan = rent.plan;
+      out.landedEachCents = Math.round(rent.cents * landing / orderQty);
+      out.clientCents = Math.round(rent.cents * landing * (1 + markupPct / 100));
+      return out;
+    }
+    out.landedEachCents = Math.round(costCents * landing);
     out.clientCents = Math.round(orderQty * out.landedEachCents * (1 + markupPct / 100));
     return out;
   }
@@ -852,7 +897,7 @@
   window.YDPricing = {
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
-    price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk,
+    price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
   };
 
   let authKey = null;

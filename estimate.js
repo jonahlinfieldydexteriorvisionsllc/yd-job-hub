@@ -498,7 +498,8 @@
         o.innerHTML = l.problems.length ? '⚠ ' + esc(l.problems.join(' · ')) +
             (canSource() && unpriced(l) && !(found[foundKey(l.id)] || {}).busy
               ? ' <button class="link-btn" onclick="estSource(\'' + safeId(l.id) + '\')">🔎 Source it</button>' : '')
-          : l.orderQty ? esc('Order ' + P().qtyText(l.orderQty, l.per) +
+          : l.orderQty ? esc((l.rentalPlan ? 'Rent ' + P().qtyText(l.orderQty, l.per) + ' — charged as ' + l.rentalPlan
+                                             : 'Order ' + P().qtyText(l.orderQty, l.per)) +
             (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + (l.specialOrder ? ' · special order' : '')) : '';
       }
     });

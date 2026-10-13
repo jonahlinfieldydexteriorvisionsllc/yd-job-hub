@@ -379,7 +379,11 @@
 
   // The name in parts (Jonah, 6 Oct 2026); `name` -- the business, or
   // "First Last" -- is still what the list shows and searches.
-  const FORM = ['ppFirst', 'ppLast', 'ppBusiness', 'ppWhen', 'ppNote', 'ppAddress', 'ppPhone', 'ppEmail'];
+  // The address too (Jonah, 13 Oct 2026: "fields for each part of the
+  // address"); `address` -- one line -- is still saved, for the list, the
+  // search and directions (addr.js).
+  const FORM = ['ppFirst', 'ppLast', 'ppBusiness', 'ppWhen', 'ppNote', 'ppAStreet', 'ppACity', 'ppAState', 'ppAZip',
+                'ppPhone', 'ppEmail'];
 
   function clearForm() {
     FORM.forEach(f => { const n = el(f); if (n) n.value = ''; });
@@ -398,13 +402,14 @@
 
     const id = editingId || 'p' + Date.now().toString(36);
     const was = people[id];
+    const a = window.YDAddr ? YDAddr.read('ppA') : { address: '', street: '', city: '', state: '', zip: '' };
     const rec = {
       name: name,
       firstName: firstName, lastName: lastName, business: business,
       services: tags.slice(),
       contactWhen: val('ppWhen'),
       note: val('ppNote'),
-      address: val('ppAddress'),
+      address: a.address, street: a.street, city: a.city, state: a.state, zip: a.zip,
       phone: val('ppPhone'),
       email: val('ppEmail').toLowerCase(),
       status: (was && was.status) || 'to-contact',
@@ -432,7 +437,8 @@
       : (typeof splitName === 'function' ? splitName(p.name) : { first: '', last: '', business: p.name });
     set('ppFirst', nm.first); set('ppLast', nm.last); set('ppBusiness', nm.business);
     set('ppWhen', p.contactWhen); set('ppNote', p.note);
-    set('ppAddress', p.address); set('ppPhone', p.phone); set('ppEmail', p.email);
+    if (window.YDAddr) YDAddr.fill('ppA', p);
+    set('ppPhone', p.phone); set('ppEmail', p.email);
     tags = (p.services || []).slice();
     renderTags();
     const b = el('ppSaveBtn'); if (b) b.textContent = 'Save changes';
@@ -516,9 +522,10 @@
     set('customerName', p.name);
     set('firstName', p.firstName); set('lastName', p.lastName); set('business', p.business);
     if (typeof namePartsFromCustomer === 'function') namePartsFromCustomer();
-    // The contact's address is one line; the job has a box for each part.
-    if (typeof addressParts === 'function' && p.address) {
-      const ad = addressParts(p.address);
+    // The contact's address in its parts, box for box (addr.js splits one
+    // saved before the parts existed).
+    if (window.YDAddr && (p.address || p.street)) {
+      const ad = YDAddr.partsOf(p);
       set('address', ad.street || p.address); set('city', ad.city); set('state', ad.state); set('zip', ad.zip);
     } else set('address', p.address);
     set('phone', p.phone);

@@ -522,9 +522,12 @@
         '<option value="">— not linked to a job —</option>' +
         jobs.map(j => '<option value="' + sid(j._id) + '"' + (j._id === p.jobId ? ' selected' : '') + '>' + esc(j.customerName || 'Untitled job') +
           (j.address ? ' — ' + esc(j.address) : '') + '</option>').join('') + '</select></div>' +
+      '<div class="field"><span class="label">Client</span><input id="spClient" value="' + esc(p.client || '') + '"></div>' +
+      // In its parts (addr.js); the one line is still what the invoice
+      // matching reads (addrKey).
+      (window.YDAddr ? YDAddr.fieldsHtml('spA', p)
+        : '<div class="field"><span class="label">Address</span><input id="spAddr" value="' + esc(p.address || '') + '"></div>') +
       '<div class="grid g2">' +
-        '<div class="field"><span class="label">Client</span><input id="spClient" value="' + esc(p.client || '') + '"></div>' +
-        '<div class="field"><span class="label">Address</span><input id="spAddr" value="' + esc(p.address || '') + '"></div>' +
         '<div class="field"><span class="label">How often</span><select id="spEvery" onchange="subEveryPicked()">' + opt(EVERY, p.every || 'weekly') + '</select>' +
           // Jonah (12 Oct 2026): "i want to be able to write in something if
           // the ofteness doesnt fit the options".
@@ -597,7 +600,9 @@
     const j = id && (loadAllJobs() || []).find(x => x._id === id);
     if (!j) return;
     if (!v('spClient')) el('spClient').value = j.customerName || '';
-    if (!v('spAddr')) el('spAddr').value = [j.address, j.city].filter(Boolean).join(', ');
+    if (window.YDAddr && el('spAStreet')) {
+      if (!v('spAStreet')) YDAddr.fill('spA', { street: j.address, city: j.city, state: j.state, zip: j.zip });
+    } else if (el('spAddr') && !v('spAddr')) el('spAddr').value = [j.address, j.city].filter(Boolean).join(', ');
   };
   window.subPropSave = function (subId, propId) {
     const s = (data.subs || {})[subId];
@@ -608,8 +613,10 @@
     if (dayNum(from) == null || dayNum(to) == null) { showToast('Season dates as month-day, like 04-15'); return; }
     if (v('spEvery') === 'other' && !v('spEveryText')) { showToast('Write in how often'); return; }
     const pid = propId || newId('sp');
+    const a = window.YDAddr && el('spAStreet') ? YDAddr.read('spA') : { address: v('spAddr'), street: '', city: '', state: '', zip: '' };
     const rec = {
-      jobId: v('spJob') || null, client: client, address: v('spAddr'), every: v('spEvery') || 'weekly',
+      jobId: v('spJob') || null, client: client, address: a.address,
+      street: a.street, city: a.city, state: a.state, zip: a.zip, every: v('spEvery') || 'weekly',
       everyText: v('spEvery') === 'other' ? v('spEveryText') : null,
       perMonth: v('spEvery') === 'other' && v('spPerMonth') && isFinite(+v('spPerMonth')) ? +v('spPerMonth') : null,
       doneOn: /^\d{4}-\d{2}-\d{2}$/.test(v('spDoneOn')) ? v('spDoneOn') : null,
