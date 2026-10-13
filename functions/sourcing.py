@@ -26,9 +26,9 @@ MAX_ITEMS = 8
 MAX_TURNS = 8
 
 # The same category ids as pricing.js and sheets.py (never rename one).
-CATEGORIES = ["soil", "fill", "mulch", "stone", "pavers", "wall", "natural", "edging", "hardscape",
-              "adhesive", "drainage", "seed", "bagged", "planting", "plant", "dumpster", "hardware",
-              "rental", "tools", "other"]
+CATEGORIES = ["soil", "fill", "mulch", "stone", "decorative", "pavers", "wall", "natural", "firepit",
+              "fireplace", "kitchen", "edging", "hardscape", "adhesive", "drainage", "seed", "bagged",
+              "planting", "plant", "dumpster", "hardware", "rental", "tools", "other"]
 
 SYSTEM = """You find where YD Exterior Visions -- a landscaping and hardscaping company near
 Madison, Wisconsin -- can buy materials for a job it is pricing, and what they cost today. The

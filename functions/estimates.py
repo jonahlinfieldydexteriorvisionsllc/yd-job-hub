@@ -156,7 +156,9 @@ SCHEMA = {
 # Names of the kinds of material (pricing.js CATEGORIES), for the catalogue.
 CATEGORY_NAMES = {
     "soil": "Soil (bulk)", "fill": "Fill dirt", "mulch": "Mulch", "stone": "Stone, gravel & sand",
-    "pavers": "Pavers", "wall": "Wall block & caps", "natural": "Natural stone, flagstone & boulders",
+    "decorative": "Decorative rock", "pavers": "Pavers", "wall": "Wall block & caps",
+    "natural": "Natural stone, flagstone & boulders", "firepit": "Firepits", "fireplace": "Fireplaces",
+    "kitchen": "Outdoor kitchens",
     "edging": "Edging", "hardscape": "Fabric, restraint, geogrid & other hardscape",
     "adhesive": "Adhesives & sealers", "drainage": "Drainage & concrete", "seed": "Seed & erosion control",
     "bagged": "Bagged goods", "planting": "Planting package", "plant": "Plants", "dumpster": "Dumpsters",
@@ -192,14 +194,26 @@ ALWAYS_KINDS = {"stone", "edging", "hardscape", "soil", "fill", "mulch", "seed",
 # The only kinds ever left out -- the big ones. Anything else, including an
 # item with no kind or one not on the list (a price found on the web, an
 # older hand-added item), always goes.
-TRIMMED_KINDS = {"wall", "pavers", "natural", "other", "adhesive"}
+TRIMMED_KINDS = {"wall", "pavers", "natural", "other", "adhesive", "decorative", "firepit", "fireplace", "kitchen"}
 KIND_WORDS = [
     (r"patio|paver|walk ?way|walks?\b|path|driveway|landing|stoop|pool deck|steps?\b|stairs?|apron|courtyard|terrace",
      {"pavers", "adhesive"}),
     (r"wall|retaining|block|seat ?wall|seating|pillar|column|caps?\b|raised bed|planter|steps?\b|stairs?",
      {"wall", "adhesive"}),
-    (r"fire ?pit|fire ?ring|fire ?place|fire ?table|grill|outdoor kitchen|kitchen|wood ?box|hearth",
-     {"other", "wall", "pavers", "adhesive"}),
+    # Jonah (12 Oct 2026): fire pits, fireplaces and the outdoor kitchen are
+    # read only when a job names them.
+    (r"fire ?pit|fire ?ring|fire ?table|fire ?bowl|fire ?feature|smokeless",
+     {"firepit", "wall", "pavers", "adhesive"}),
+    (r"fire ?place|chimney|hearth|wood ?box",
+     {"fireplace", "wall", "pavers", "adhesive"}),
+    (r"outdoor kitchen|kitchen|grill|\bbar\b|pizza|\boven\b|counter ?top|rotisserie",
+     {"kitchen", "wall", "pavers", "adhesive"}),
+    # ...and decorative rock only when the job has some (the gravel and sand
+    # under a patio always go).
+    (r"decorative|river rock|river stone|landscape rock|rock (bed|mulch|border|garden|edge)|stone mulch|"
+     r"dry creek|pea gravel|lava rock|volcanic|marble|quartz|trap rock|decomposed granite|wash(ed)? stone|"
+     r"rubies|granite chunks|white (limestone|rock)|\brocks?\b",
+     {"decorative"}),
     (r"flag ?stone|boulder|outcrop|stepp(er|ing)|natural stone|ledge ?rock|lannon|slab|dry creek|rock garden|"
      r"wall stone|stone steps|irregular",
      {"natural", "adhesive"}),

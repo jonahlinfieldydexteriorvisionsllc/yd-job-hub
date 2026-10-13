@@ -34,8 +34,13 @@
   // markup and waste. Ids are stored on supplies -- never rename one.
   const CATEGORIES = [
     ['soil', 'Soil (bulk)'], ['fill', 'Fill dirt'], ['mulch', 'Mulch'],
-    ['stone', 'Stone, gravel & sand'], ['pavers', 'Pavers'], ['wall', 'Wall block & caps'],
-    ['natural', 'Natural stone, flagstone & boulders'], ['edging', 'Edging'],
+    ['stone', 'Stone, gravel & sand'], ['decorative', 'Decorative rock'], ['pavers', 'Pavers'], ['wall', 'Wall block & caps'],
+    ['natural', 'Natural stone, flagstone & boulders'],
+    // Jonah, 12 Oct 2026: decorative rock apart from the gravel and sand, fire
+    // pits apart from fireplaces, the outdoor kitchen on its own -- so Claude
+    // reads each only when a job calls for it (estimates.py KIND_WORDS).
+    ['firepit', 'Firepits'], ['fireplace', 'Fireplaces'], ['kitchen', 'Outdoor kitchens'],
+    ['edging', 'Edging'],
     ['hardscape', 'Fabric, restraint, geogrid & other hardscape'], ['adhesive', 'Adhesives & sealers'],
     ['drainage', 'Drainage & concrete'], ['seed', 'Seed & erosion control'], ['bagged', 'Bagged goods'],
     ['planting', 'Planting package'], ['plant', 'Plants'], ['dumpster', 'Dumpsters'],

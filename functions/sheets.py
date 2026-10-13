@@ -21,9 +21,9 @@ MAX_PAGES = 12
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 # The same category ids as pricing.js (never rename one -- they are stored).
-CATEGORIES = ["soil", "fill", "mulch", "stone", "pavers", "wall", "natural", "edging", "hardscape",
-              "adhesive", "drainage", "seed", "bagged", "planting", "plant", "dumpster", "hardware",
-              "rental", "tools", "other"]
+CATEGORIES = ["soil", "fill", "mulch", "stone", "decorative", "pavers", "wall", "natural", "firepit",
+              "fireplace", "kitchen", "edging", "hardscape", "adhesive", "drainage", "seed", "bagged",
+              "planting", "plant", "dumpster", "hardware", "rental", "tools", "other"]
 
 SYSTEM = """You read a landscape and hardscape supplier's price sheet, quote or price list for YD
 Exterior Visions, a landscaping company, and copy every priced product into rows. The rows are
