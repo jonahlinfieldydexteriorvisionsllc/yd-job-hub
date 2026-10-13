@@ -127,6 +127,10 @@
       // depositCoversMaterials: the deposit is at least the Materials figure
       // (on unless switched off).
       payments: { splitAboveCents: null, twoText: '', threeText: '', warranty: '', minDepositPct: null, depositCoversMaterials: null },
+      // The $0 lines every QuickBooks estimate ends with: the warranty (its
+      // text is payments.warranty) and then the terms and conditions, each on
+      // its own QuickBooks product. Blank product names use END_ITEMS.
+      estimateEnd: { warrantyItem: '', termsItem: '', terms: '' },
       shop: { address: '', lat: null, lng: null },
       // Claude starts an estimate by itself when the site-visit notes are
       // written (estimate.js). On unless switched off.
@@ -588,6 +592,27 @@
       .map(l => l.name + ': ' + qtyText(l.orderQty, l.per));
   }
 
+  // The last lines of every QuickBooks estimate, in order: the warranty, then
+  // the terms and conditions. Customers e-sign the estimate, so these travel
+  // on it as lines of their own rather than in the 1000-character message.
+  // A line with no text is left off.
+  const END_ITEMS = { warranty: 'Warranty', terms: 'Terms & Conditions' };
+  const END_TITLES = { warranty: 'WARRANTY', terms: 'TERMS & CONDITIONS' };
+  const LINE_MAX = 4000;          // QuickBooks' limit on one line's description
+  function endLines(r) {
+    const e = r.estimateEnd || {};
+    return [
+      ['warranty', (r.payments || {}).warranty, e.warrantyItem],
+      ['terms', e.terms, e.termsItem],
+    ].map(([k, text, item]) => {
+      text = String(text || '').trim();
+      return text && {
+        key: k, item: String(item || '').trim() || END_ITEMS[k],
+        text: END_TITLES[k] + '\n\n' + text,
+      };
+    }).filter(Boolean);
+  }
+
   // ------------------------------------------------------------- the rules doc
 
   let rules = blankRules();
@@ -778,10 +803,32 @@
   };
 
   function box(label, value, onchange, hint, attrs) {
-    return '<label class="pr-field"><span>' + esc(label) + '</span><input inputmode="decimal" value="' + esc(value == null ? '' : value) + '"' +
+    // A box that brings its own inputmode keeps it (the first of two
+    // attributes wins, which left the shop address on a number pad).
+    const mode = /inputmode=/.test(attrs || '') ? '' : ' inputmode="decimal"';
+    return '<label class="pr-field"><span>' + esc(label) + '</span><input' + mode + ' value="' + esc(value == null ? '' : value) + '"' +
       (owner() ? '' : ' disabled') + ' onchange="' + onchange + '"' + (attrs || '') + '>' +
       (hint ? '<small>' + esc(hint) + '</small>' : '') + '</label>';
   }
+
+  // A warranty / terms box with a running count against QuickBooks' limit
+  // for one line (its heading counts too). Saved when the box is left.
+  function endBox(key, label, value, onchange, rows, ro) {
+    const text = String(value || ''), count = endCount(key, text);
+    return '<label class="pr-field wide"><span>' + esc(label) + ' <small class="pr-count' + (/too long/.test(count) ? ' over' : '') +
+      '" id="prEndCount_' + key + '">' + count + '</small></span><textarea rows="' + rows + '"' + (ro ? ' disabled' : '') +
+      ' oninput="prEndCount(\'' + key + '\', this.value)" onchange="' + onchange + '">' + esc(text) + '</textarea></label>';
+  }
+  function endCount(key, text) {
+    const t = String(text || '').trim();
+    if (!t) return 'not on estimates';
+    const n = END_TITLES[key].length + 2 + t.length;
+    return n.toLocaleString() + ' / ' + LINE_MAX.toLocaleString() + (n > LINE_MAX ? ' — too long for QuickBooks' : '');
+  }
+  window.prEndCount = function (key, v) {
+    const c = el('prEndCount_' + key);
+    if (c) { c.textContent = endCount(key, v); c.classList.toggle('over', /too long/.test(c.textContent)); }
+  };
 
   // The Supplies pickers on this screen. Every supply, by name, is sorted
   // and drawn once and kept until Supplies changes (the yd-supplies
@@ -927,10 +974,23 @@
       '<label class="est-switch"><input type="checkbox"' + (r.payments.depositCoversMaterials !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'payments.depositCoversMaterials\', this.checked, \'bool\')"> The deposit always covers all the materials</label>' +
       '<p class="hint">Each estimate can set its own deposit and payments, as a % or a dollar amount — never below these.</p>' +
-      ['twoText', 'threeText', 'warranty'].map(k => '<label class="pr-field wide"><span>' +
-        ({ twoText: 'Payment terms — two payments', threeText: 'Payment terms — three payments', warranty: 'Warranty' })[k] +
+      ['twoText', 'threeText'].map(k => '<label class="pr-field wide"><span>' +
+        ({ twoText: 'Payment terms — two payments', threeText: 'Payment terms — three payments' })[k] +
         '</span><textarea rows="3"' + (ro ? ' disabled' : '') + ' onchange="prSet(\'payments.' + k + '\', this.value, \'text\')">' +
         esc(r.payments[k] || '') + '</textarea></label>').join('') +
+
+      '<h3 class="pr-h">The end of every QuickBooks estimate</h3>' +
+      '<p class="hint">Customers e-sign the estimate itself, so these go on it as its last two lines ($0 each): the warranty, ' +
+        'then the terms and conditions — always last. Each is one line in QuickBooks, which holds ' + LINE_MAX.toLocaleString() +
+        ' characters. Leave one empty to leave that line off.</p>' +
+      endBox('warranty', 'Warranty', r.payments.warranty, "prSet('payments.warranty', this.value, 'text')", 4, ro) +
+      endBox('terms', 'Terms & conditions', (r.estimateEnd || {}).terms, "prSet('estimateEnd.terms', this.value, 'text')", 14, ro) +
+      '<div class="pr-grid">' +
+        box('QuickBooks product for the warranty', (r.estimateEnd || {}).warrantyItem || '', "prSet('estimateEnd.warrantyItem', this.value, 'text')",
+          'made in QuickBooks the first time if it isn’t there', ' inputmode="text" placeholder="' + END_ITEMS.warranty + '"') +
+        box('QuickBooks product for the terms', (r.estimateEnd || {}).termsItem || '', "prSet('estimateEnd.termsItem', this.value, 'text')",
+          '', ' inputmode="text" placeholder="' + END_ITEMS.terms + '"') +
+      '</div>' +
 
       '<h3 class="pr-h">Claude</h3>' +
       '<div class="pr-spend" id="prSpend">' + spendHtml() + '</div>' +
@@ -1067,6 +1127,7 @@
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
+    endLines: () => endLines(rules), LINE_MAX,
   };
 
   let authKey = null;

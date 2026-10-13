@@ -304,7 +304,8 @@
         (showCustomer ? 'Hide what the customer sees' : '👁 What the customer sees') + '</button></div>' : '') +
       '<div id="estCustomer"></div>' +
 
-      '<div class="field mt"><span class="label">Message on the estimate (payment terms and warranty) — blank uses the one in Pricing rules</span>' +
+      '<div class="field mt"><span class="label">Message on the estimate (the payments and payment terms) — blank uses the one in Pricing rules. ' +
+        'The warranty and the terms & conditions go on as the estimate’s last lines.</span>' +
         '<textarea id="estMemo" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estMemoInput(this.value)" placeholder="' +
         esc(defaultMemo(r ? r.totalCents : 0)) + '">' + esc(est.memo) + '</textarea></div>' +
       '<div class="field-actions"><button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced (' + Object.keys(book).length + ')</button>' +
@@ -741,6 +742,12 @@
         '<div class="cv-scope">' + P().materialsList(r).map(esc).join('<br>') + '</div></div>' +
         '<div class="cv-amt">' + cents(r.materialsCents) + '</div></div>');
     }
+    // The warranty and the terms end every estimate (Pricing rules).
+    P().endLines().forEach(l => {
+      const [head, ...rest] = l.text.split('\n\n');
+      rows.push('<div class="cv-line cv-end"><div class="cv-text"><b>' + esc(head) + '</b>' +
+        '<div class="cv-scope">' + esc(rest.join('\n\n')) + '</div></div><div class="cv-amt">' + cents(0) + '</div></div>');
+    });
     const memo = String(est.memo || '').trim() || defaultMemo(r.totalCents);
     box.innerHTML = '<div class="cv">' +
       '<div class="cv-head"><b>' + esc((el('customerName') && el('customerName').value) || 'Customer') + '</b>' +
@@ -1055,17 +1062,16 @@
     }
   };
 
-  // The message on the estimate: what was typed for this one, or the rules'
-  // payment terms for its size, then the warranty.
   // The message when he has not written one: the payments asked for (the
-  // deposit and each one, in dollars), his payment terms and the warranty.
+  // deposit and each one, in dollars) and his payment terms. The warranty is
+  // a line of its own at the end of the estimate now (P().endLines()).
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
     const above = num(p.splitAboveCents);
     const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
     const r = last;
     const pays = r && r.totalCents === totalCents ? r.payments || [] : [];
-    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms, p.warranty]
+    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
 
@@ -1971,6 +1977,10 @@
       '\n\nSend it anyway?')) return;
     const f = id => (el(id).value || '').trim();
     if (!f('customerName')) { showToast('Add a customer name first'); return; }
+    // The warranty and terms the customer signs: never cut short.
+    const ends = P().endLines();
+    const long = ends.find(l => l.text.length > P().LINE_MAX);
+    if (long) { showToast('The ' + long.item + ' text is too long for QuickBooks — shorten it in Pricing rules'); return; }
     const to = f('email');
     const q = qb() || {};
     if (email) {
@@ -2001,6 +2011,7 @@
         work: work,
         materials: { list: P().materialsList(r), cents: r.materialsCents },
         memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
+        endLines: ends.map(l => ({ item: l.item, text: l.text })),
         totalCents: r.totalCents,
       });
       // This version, as it went (see SENT_KEEP).
