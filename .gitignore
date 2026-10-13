@@ -37,6 +37,16 @@ snow_accounts.json
 # Kept on this machine only.
 CLAUDE.md
 WISHLIST.md
+# Overnight reports and code reviews: they name clients and live accounts.
+OVERNIGHT-*.md
+REVIEW-*.md
+
+# Research notes and reports for Jonah: business planning, kept on this machine.
+research_notes/
+reports/
+
+# Python's compiled copies of the server code, made by local test runs.
+functions/__pycache__/
 
 # Copies of the code the computer at home builds changes in, one per card or
 # wish-list item. Never part of the repository.

@@ -6,12 +6,32 @@
 <title>YD Job Hub — Track · Manage</title>
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#472c64">
+<script>
+  // Dark before the first paint. app.js sets the theme properly once it runs
+  // (applyTheme), but that is at the very end of the page, so a dark phone
+  // flashed white first. Same choice, same keys: Light / Dark / Automatic,
+  // and the old Night button's key for devices that only ever had that.
+  (function () {
+    try {
+      var t = localStorage.getItem('ydjobhub_theme');
+      if (t !== 'light' && t !== 'dark' && t !== 'auto') t = localStorage.getItem('ydjobhub_night') ? 'dark' : 'light';
+      if (t === 'dark' || (t === 'auto' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+        document.documentElement.setAttribute('data-night', '');
+        document.querySelector('meta[name=theme-color]').content = '#0c0a0e';
+      }
+    } catch (e) {}
+  })();
+</script>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="YD Job Hub">
 <link rel="apple-touch-icon" href="./apple-touch-icon.png">
 <link rel="icon" type="image/png" href="./icon-192.png">
+<!-- Opened before the font stylesheet asks for them: it holds up the first
+     paint, and on a phone each new connection is several round trips. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
@@ -518,7 +538,7 @@
             <option value="inprogress">In progress</option>
             <option value="complete">Complete</option>
           </select>
-          <input id="dashSearch" placeholder="Search…" oninput="renderDashboard()">
+          <input id="dashSearch" placeholder="Search…" oninput="renderDashboardSoon()">
         </div>
         <div class="table-wrap" id="dashTableWrap"></div>
       </div>
@@ -896,7 +916,7 @@
       </div>
 
       <div class="field mt"><span class="label">Street address</span>
-        <input id="sfStreet" autocomplete="off" placeholder="e.g. 123 Oak St or W5883 County Rd X"></div>
+        <input id="sfStreet" autocomplete="off" placeholder="e.g. 123 Oak St or N1234 County Rd X"></div>
       <div class="grid sf-addr">
         <div class="field"><span class="label">City</span><input id="sfCity" autocomplete="off" placeholder="Madison"></div>
         <div class="field"><span class="label">State</span><input id="sfState" autocomplete="off" maxlength="2" placeholder="WI"></div>

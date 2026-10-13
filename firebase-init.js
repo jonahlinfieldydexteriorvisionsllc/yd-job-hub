@@ -20,12 +20,15 @@ import {
 import {
   initializeFirestore, persistentLocalCache, persistentSingleTabManager,
   doc, getDoc, getDocFromServer, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
-  getDocs, getDocsFromServer, writeBatch, disableNetwork, enableNetwork, query, where,
+  getDocs, getDocsFromServer, writeBatch, query, where,
   terminate, clearIndexedDbPersistence, waitForPendingWrites, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
 const ROLE_CACHE = 'ydjobhub_cachedRole';
 const ACCESS_CACHE = 'ydjobhub_cachedAccess';
+// Whose role and access those two are. Without it, a role remembered for one
+// account could be handed to another signing in on the same device.
+const ROLE_UID = 'ydjobhub_cachedRoleUid';
 
 // What an admin may do, area by area, as the owner set it on their user
 // record: users/{uid}.access = { jobs: 'see', hours: 'change', ... }. Anything
@@ -244,8 +247,11 @@ async function start() {
     } catch (e) {
       // Almost always "offline with nothing cached". Trust the last known role
       // so the app still opens in a truck; the rules still gate the real data.
+      // Only if it is this account's own: a device from before the uid was
+      // kept has none, and is trusted as it always was.
       const cached = localStorage.getItem(ROLE_CACHE);
-      if (cached) {
+      const whose = localStorage.getItem(ROLE_UID);
+      if (cached && (!whose || whose === user.uid)) {
         console.warn('[auth] offline, using cached role', cached);
         try { myAccess = cleanAccess(JSON.parse(localStorage.getItem(ACCESS_CACHE) || '{}')); } catch (err) { myAccess = {}; }
         return cached;
@@ -278,9 +284,56 @@ async function start() {
     return d.role;
   }
 
+  // The role this device last confirmed for THIS account, when it is one that
+  // lets someone in. Anything else -- another account, a request still
+  // waiting, someone switched off, a device from before the uid was kept --
+  // waits for the server as before.
+  function cachedRoleFor(user) {
+    try {
+      if (localStorage.getItem(ROLE_UID) !== user.uid) return null;
+      const role = localStorage.getItem(ROLE_CACHE);
+      if (['owner', 'admin', 'crew'].indexOf(role) === -1) return null;
+      myAccess = role === 'admin' ? cleanAccess(JSON.parse(localStorage.getItem(ACCESS_CACHE) || '{}')) : {};
+      return role;
+    } catch (e) { return null; }
+  }
+
+  // A full localStorage must not stop sign-in -- this used to throw inside
+  // the auth listener and leave the gate stuck on "Checking access".
+  // The uid goes last, after being cleared first, so there is never a moment
+  // when one account's uid sits beside another account's role.
+  function rememberRole(user, role) {
+    try {
+      localStorage.removeItem(ROLE_UID);
+      localStorage.setItem(ROLE_CACHE, role);
+      localStorage.setItem(ACCESS_CACHE, JSON.stringify(myAccess));
+      localStorage.setItem(ROLE_UID, user.uid);
+    } catch (e) {}
+  }
+
+  // Someone who may not use the app. At sign-in a request still waiting is
+  // told so; once the app is open, either is told their access went.
+  function shutOut(user, role, live) {
+    if (role === 'pending' && !live) {
+      gate.show('pending', {
+        title: 'Waiting for approval',
+        msg: `Signed in as ${user.email}. Jonah needs to approve this account before `
+           + 'you can use the app.',
+        signOut: true,
+      });
+      return;
+    }
+    gate.show('denied', {
+      title: 'Access removed',
+      msg: `The account ${user.email} no longer has access.`,
+      signOut: true,
+    });
+  }
+
   onAuthStateChanged(auth, async user => {
     if (!user) {
       if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
+      localStorage.removeItem(ROLE_UID);
       localStorage.removeItem(ROLE_CACHE);
       localStorage.removeItem(ACCESS_CACHE);
       // Say it before they tap, not after. Inside another app's browser the
@@ -292,50 +345,39 @@ async function start() {
       return;
     }
 
-    gate.show('loading', { title: 'YD Job Hub', msg: 'Checking access…', spinner: true });
-
-    let role;
-    try {
-      role = await resolveRole(user);
-    } catch (e) {
-      console.error('[auth] could not resolve role', e);
-      gate.show('error', {
-        title: 'Cannot check access',
-        msg: 'You are signed in, but your permissions could not be loaded. '
-           + 'Check your connection and try again.',
-        retry: true,
-        signOut: true,
-      });
-      return;
+    // Opened at once on what this device last confirmed for this same
+    // account. Waiting for the server first cost up to ~10 seconds on every
+    // launch with one bar of signal. The server is still asked, behind it
+    // (watchMyRecord): a change of role or access redraws the screens, and
+    // someone switched off is shut out. This only decides what to DRAW --
+    // firestore.rules decides what the server hands over, whatever this says.
+    // A first sign-in on this device still waits for the server.
+    let role = cachedRoleFor(user);
+    const fromDevice = !!role;
+    if (!fromDevice) {
+      gate.show('loading', { title: 'YD Job Hub', msg: 'Checking access…', spinner: true });
+      try {
+        role = await resolveRole(user);
+      } catch (e) {
+        console.error('[auth] could not resolve role', e);
+        gate.show('error', {
+          title: 'Cannot check access',
+          msg: 'You are signed in, but your permissions could not be loaded. '
+             + 'Check your connection and try again.',
+          retry: true,
+          signOut: true,
+        });
+        return;
+      }
+      rememberRole(user, role);
+      if (role === 'pending' || role === 'inactive') {
+        shown = role + JSON.stringify(myAccess);
+        shutOut(user, role, false);
+        return;
+      }
     }
 
-    // A full localStorage must not stop sign-in -- this used to throw inside
-    // the auth listener and leave the gate stuck on "Checking access".
-    try {
-      localStorage.setItem(ROLE_CACHE, role);
-      localStorage.setItem(ACCESS_CACHE, JSON.stringify(myAccess));
-    } catch (e) {}
-
-    if (role === 'pending') {
-      gate.show('pending', {
-        title: 'Waiting for approval',
-        msg: `Signed in as ${user.email}. Jonah needs to approve this account before `
-           + 'you can use the app.',
-        signOut: true,
-      });
-      return;
-    }
-
-    if (role === 'inactive') {
-      gate.show('denied', {
-        title: 'Access removed',
-        msg: `The account ${user.email} no longer has access.`,
-        signOut: true,
-      });
-      return;
-    }
-
-    // owner or crew -- let them in
+    // owner, admin or crew -- let them in
     gate.hide();
 
     // A deliberately small database interface for app.js, which is a classic
@@ -360,26 +402,7 @@ async function start() {
     }
 
     window.YDDb = {
-      // Live subscription to every job. Fires immediately with what is cached
-      // locally, then again whenever anything changes anywhere.
-      watchJobs(onChange, onError) {
-        return onSnapshot(collection(db, 'jobs'),
-          { includeMetadataChanges: false },
-          snap => {
-            const changes = snap.docChanges().map(c => ({
-              type: c.type,                 // 'added' | 'modified' | 'removed'
-              id: c.doc.id,
-              data: c.doc.data(),
-            }));
-            onChange(changes, {
-              size: snap.size,
-              fromCache: snap.metadata.fromCache,
-              hasPendingWrites: snap.metadata.hasPendingWrites,
-            });
-          },
-          err => { console.error('[sync] jobs listener failed', err); if (onError) onError(err); });
-      },
-
+      // Jobs are watched with the general watch('jobs') below (sync.js).
       async putJob(id, data) {
         await setDoc(doc(db, 'jobs', id), data);
       },
@@ -410,20 +433,13 @@ async function start() {
         return snap.size;
       },
 
-      // Cut and restore the connection on purpose. The app's central promise is
-      // that a storm can be worked with no signal, and the only honest way to
-      // check that is to actually take the signal away rather than assume the
-      // offline layer does what the documentation says.
-      goOffline: () => disableNetwork(db),
-      goOnline: () => enableNetwork(db),
-
       // ---- general collection access -------------------------------------
       // The job methods above came first and are kept as they are. Everything
       // from Snow onwards uses these instead, so a new record type needs no
       // new database code -- only rules, which are the part that must be
       // thought about.
       //
-      // `path` may be nested: 'snowAccounts/angel-b/private' addresses the
+      // `path` may be nested: 'snowAccounts/example-account/private' addresses the
       // owner-only half of an account. That nesting is what enforces crew
       // seeing the route but not the money.
 
@@ -443,14 +459,15 @@ async function start() {
       // -- not filtered down, refused -- because the query could have returned
       // something they are not allowed. Asking a question whose answer is
       // provably all-theirs is what makes it legal.
+      // Like watch(): also told when the server first answers, even with
+      // nothing new -- an admin's boards and calendars wait for both of their
+      // questions to have been answered by the server, and without this an
+      // answer identical to the cache never arrived (review, 13 Oct).
       watchWhere(path, field, value, onChange, onError) {
         const parts = path.split('/');
         const q = query(collection(db, ...parts), where(field, '==', value));
-        return onSnapshot(q,
-          snap => onChange(
-            snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() })),
-            { size: snap.size, fromCache: snap.metadata.fromCache }
-          ),
+        return onSnapshot(q, { includeMetadataChanges: true },
+          relay(onChange),
           err => { console.error('[db] filtered watch failed on', path, err); if (onError) onError(err); });
       },
 
@@ -574,9 +591,11 @@ async function start() {
     // visits never touch a photo, and the crew's phones load on one bar.
     // storage.rules is the real gate, the same way firestore.rules is.
     let storageMod = null;
+    // A fetch that failed (the first photo taken with no signal) is not kept:
+    // the next try fetches again.
     const storageOf = () => storageMod || (storageMod =
       import('https://www.gstatic.com/firebasejs/12.19.0/firebase-storage.js')
-        .then(m => ({ m: m, s: m.getStorage(app) })));
+        .then(m => ({ m: m, s: m.getStorage(app) }), e => { storageMod = null; throw e; }));
     window.YDStore = {
       // Resolves with the file's download address once the whole file is
       // up. onProgress(0..1) as it goes.
@@ -603,8 +622,8 @@ async function start() {
     };
 
     publish(user, role);
-    console.info('[auth] signed in as', user.email, 'role', role);
-    watchMyRecord(user, role);
+    console.info('[auth] signed in as', user.email, 'role', role, fromDevice ? '(from this device; checking)' : '');
+    watchMyRecord(user, fromDevice);
   });
 
   // Tell the rest of the app who is signed in and what they may do.
@@ -612,6 +631,7 @@ async function start() {
   // person with different access" from "nothing changed" and re-subscribe.
   function publish(user, role) {
     const access = Object.assign({}, myAccess);
+    shown = role + JSON.stringify(access);
     window.YDAuth = {
       ready: true, mode: 'cloud', user, role, db, auth,
       signIn: doSignIn,
@@ -629,31 +649,40 @@ async function start() {
   // Their own record is watched, so the screens they may see follow at once
   // -- and someone switched off is shown the door rather than left looking
   // at screens the rules now refuse.
+  //
+  // When the app opened on this device's own copy of the role (`checking`),
+  // the server's first answer is the check that copy was waiting for: told
+  // the way a sign-in would tell it ("Waiting for approval" for a request),
+  // and a record that has gone from the server is made again exactly as at a
+  // first sign-in -- the owner's email mints itself, anyone else files a
+  // request and is shut out. Watched with metadata changes so that first
+  // answer arrives even when it matches the copy.
   let unwatchMe = null;
-  function watchMyRecord(user, role) {
+  let shown = '';      // the role + access the screens are drawn for now
+  function watchMyRecord(user, checking) {
     if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
-    let was = role + JSON.stringify(myAccess);
-    unwatchMe = onSnapshot(doc(db, 'users', user.uid), snap => {
-      if (!snap.exists() || snap.metadata.fromCache || auth.currentUser !== user) return;
-      const now = roleOf(snap.data());
-      const sig = now + JSON.stringify(myAccess);
-      if (sig === was) return;
-      was = sig;
-      try {
-        localStorage.setItem(ROLE_CACHE, now);
-        localStorage.setItem(ACCESS_CACHE, JSON.stringify(myAccess));
-      } catch (e) {}
-      if (now === 'pending' || now === 'inactive') {
-        gate.show('denied', {
-          title: 'Access removed',
-          msg: `The account ${user.email} no longer has access.`,
-          signOut: true,
-        });
-        return;
+    unwatchMe = onSnapshot(doc(db, 'users', user.uid), { includeMetadataChanges: true }, snap => {
+      if (snap.metadata.fromCache || auth.currentUser !== user) return;
+      const first = checking;
+      checking = false;
+      if (snap.exists()) { applyRole(user, roleOf(snap.data()), !first); return; }
+      if (first) {
+        resolveRole(user).then(r => { if (auth.currentUser === user) applyRole(user, r, false); },
+          () => { /* no answer: the rules still decide */ });
       }
-      console.info('[auth] access changed to', now, myAccess);
-      publish(user, now);
     }, () => { /* offline or refused: the rules still decide */ });
+  }
+
+  // A role heard from the server after the app is open. Nothing happens
+  // unless it differs from what the screens were drawn for.
+  function applyRole(user, role, live) {
+    const sig = role + JSON.stringify(myAccess);
+    if (sig === shown) return;
+    shown = sig;
+    rememberRole(user, role);
+    if (role === 'pending' || role === 'inactive') { shutOut(user, role, live); return; }
+    console.info('[auth] access changed to', role, myAccess);
+    publish(user, role);
   }
 
   // Signing out, done properly. Resolves true once signed out, false if the

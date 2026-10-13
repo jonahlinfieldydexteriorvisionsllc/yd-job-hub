@@ -1957,6 +1957,7 @@
   .ssel-new { color:var(--brand); font-weight:700; }
   html[data-night] .ssel-new { color:var(--brand-2); }
   .ssel-empty { padding:10px 12px; font-size:13px; color:var(--muted); }
+  .ssel-more { padding:9px 12px; font-size:13px; color:var(--muted); font-style:italic; cursor:default; }
   .filter-bar .ssel { flex:1 1 170px; }
 
   /* a supplier's items that their uploaded sheet left out */

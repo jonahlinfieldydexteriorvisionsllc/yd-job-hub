@@ -21,8 +21,9 @@
   const MIGRATED_KEY = STORAGE_PREFIX + 'migratedAt';
   const PUSH_DELAY = 800;
   // Job fields written by the server (QuickBooks' answers, the plant-care
-  // email); all are in app.js BOARD_FIELDS so the form carries them.
-  const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail'];
+  // email, when the estimate was first seen accepted); all are in app.js
+  // BOARD_FIELDS so the form carries them.
+  const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -66,9 +67,13 @@
   // Once, on the owner's device: jobs still marked with the old 'active' are
   // rewritten as Booked or In progress, by where they sat on the Jobs board.
   // Done through patchJob, so the cloud copy and the crew's job list follow.
+  // Picked out by the index's status, which every save keeps equal to the
+  // job's own: reading every stored job to find the few (now none) still
+  // marked 'active' was one more full pass over them at every launch.
   function migrateStatuses() {
     if (!window.YDAuth || !window.YDAuth.isOwner || typeof normStatus !== 'function') return;
     getJobIndex().forEach(j => {
+      if (j.status !== 'active') return;
       let d = null;
       try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (e) {}
       if (d && d.jobStatus === 'active') patchJob(j.id, { jobStatus: normStatus('active', d) });
@@ -130,12 +135,24 @@
   // server cannot do. The owner's device does it. A bid someone moved AFTER
   // the acceptance came in (marked lost after all, say) is left where they
   // put it.
+  //
+  // "After" is measured from acceptedSeenAt, written once when the estimate
+  // was first seen accepted. qbEstimate.syncedAt alone moved on with every
+  // status check, so a bid marked lost after the acceptance was booked again
+  // by the next check (review, 9 Oct). Jobs from before acceptedSeenAt fall
+  // back to syncedAt.
+  //
+  // Accepted then made into an invoice before anyone looked ('Closed', or
+  // 'Converted') still counts, when QuickBooks has an accepted date for it.
+  const qbAccepted = q => q.status === 'Accepted' ||
+    ((q.status === 'Closed' || q.status === 'Converted') && !!q.acceptedDate);
   const booking = new Set();
   function bookIfAccepted(id, d) {
     if (!d || booking.has(id) || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
     const q = d.qbEstimate || {};
-    if (q.status !== 'Accepted' || !isBidStatus(d.jobStatus) || d.bidStage === 'won') return;
-    if (d.bidStageAt && q.syncedAt && String(d.bidStageAt) > String(q.syncedAt)) return;
+    if (!qbAccepted(q) || !isBidStatus(d.jobStatus) || d.bidStage === 'won') return;
+    const seenAt = d.acceptedSeenAt || q.syncedAt;
+    if (d.bidStageAt && seenAt && String(d.bidStageAt) > String(seenAt)) return;
     booking.add(id);
     setTimeout(() => {
       const at = new Date().toISOString();
@@ -228,8 +245,11 @@
         forgetDelete(id);
       });
     // Otherwise the crew's clock would keep offering a job that is gone.
-    window.YDDb.remove('jobBoard', id).catch(err =>
-      console.warn('[sync] job board delete failed', err.code || err.message));
+    boardKnown.set(id, NOT_ON_BOARD);
+    window.YDDb.remove('jobBoard', id).catch(err => {
+      boardKnown.delete(id);
+      console.warn('[sync] job board delete failed', err.code || err.message);
+    });
   }
 
   // ------------------------------------------------------------- job board
@@ -258,6 +278,19 @@
   // on the crew's clock either: booking it puts it there.
   const onBoard = d => (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting')) !== 'quoting';
 
+  // What this device knows the board holds for each job: the crew-visible
+  // part of its entry, or NOT_ON_BOARD for none. A job missing from the map
+  // is unknown -- before the first look at the board this session, or after
+  // another device changed the job -- and unknown means "send it".
+  //
+  // Every autosave used to rewrite the entry with a fresh time on it, so each
+  // pause in typing made every crew phone download it and redraw its clock;
+  // and every autosave of a bid sent a delete for an entry that was never
+  // there. Now only a change the crew would see goes out.
+  const NOT_ON_BOARD = '-';
+  const boardKnown = new Map();
+  const boardSig = e => (e ? [e.name, e.address, e.status].join('\n') : NOT_ON_BOARD);
+
   function pushBoard(id, data) {
     // Whoever may change jobs: the owner, or an admin given that. The rules
     // refuse it from anyone else, whose app has no business maintaining the
@@ -265,10 +298,18 @@
     if (!ydCan('jobs', 'change')) return;
     // The crew's page for the job (crewjobs.js) follows the same save.
     if (window.YDCrewJobs) YDCrewJobs.mirror(id, data);
-    const write = onBoard(data) ? window.YDDb.put('jobBoard', id, boardEntry(id, data)) : window.YDDb.remove('jobBoard', id);
+    const entry = onBoard(data) ? boardEntry(id, data) : null;
+    const sig = boardSig(entry);
+    if (boardKnown.get(id) === sig) return;
+    boardKnown.set(id, sig);
+    const write = entry ? window.YDDb.put('jobBoard', id, entry) : window.YDDb.remove('jobBoard', id);
     Promise.resolve(write)
-      .catch(err => console.warn('[sync] job board not yet updated for', id,
-        err.code || err.message));
+      .catch(err => {
+        // Refused, not merely offline (Firestore keeps those): the next save
+        // tries again.
+        if (boardKnown.get(id) === sig) boardKnown.delete(id);
+        console.warn('[sync] job board not yet updated for', id, err.code || err.message);
+      });
   }
 
   // Settles true once the server has the job, false if it could not be sent.
@@ -325,10 +366,12 @@
         const raw = readJobBlob(j.id);
         if (!raw) return;
         let d; try { d = JSON.parse(raw); } catch { return; }
-        if (!onBoard(d)) { bids.add(j.id); return; }
+        // After this pass the board holds what this device wants for the
+        // job, so saves from here on are compared with that (pushBoard).
+        if (!onBoard(d)) { bids.add(j.id); boardKnown.set(j.id, NOT_ON_BOARD); return; }
         const want = boardEntry(j.id, d), have = board[j.id];
-        if (!have || have.name !== want.name || have.address !== want.address
-            || have.status !== want.status) {
+        boardKnown.set(j.id, boardSig(want));
+        if (!have || boardSig(have) !== boardSig(want)) {
           writes.push(['jobBoard', j.id, want]);
         }
       });
@@ -339,16 +382,23 @@
       // store (no room left on it, say) is not gone.
       // A bid comes off it too, until it is booked.
       const gone = Object.keys(board).filter(id => bids.has(id) || (!readJobBlob(id) && !cloudJobIds.has(id)));
+      gone.forEach(id => boardKnown.set(id, NOT_ON_BOARD));
 
       // Handed to Firestore, not awaited, like every other write here: it
       // sends them whenever the signal allows.
+      // Refused (not merely offline): those are unknown again, so the next
+      // save of each tries once more.
       if (writes.length) {
-        window.YDDb.putMany(writes).catch(err =>
-          console.warn('[sync] job board update failed', err.code || err.message));
+        window.YDDb.putMany(writes).catch(err => {
+          writes.forEach(w => boardKnown.delete(w[1]));
+          console.warn('[sync] job board update failed', err.code || err.message);
+        });
       }
       if (gone.length) {
-        window.YDDb.removeMany(gone.map(id => ['jobBoard', id])).catch(err =>
-          console.warn('[sync] job board tidy-up failed', err.code || err.message));
+        window.YDDb.removeMany(gone.map(id => ['jobBoard', id])).catch(err => {
+          gone.forEach(id => boardKnown.delete(id));
+          console.warn('[sync] job board tidy-up failed', err.code || err.message);
+        });
       }
       if (writes.length || gone.length) {
         console.info('[sync] job board: ' + writes.length + ' updated, ' + gone.length + ' removed');
@@ -378,7 +428,7 @@
   // (review, 7 Oct). Only what is plainly further along is taken -- a field
   // this copy does not have yet, or the same estimate moved on from Pending
   // -- so a stale snapshot can never wind a newer answer back.
-  const EST_STEP = { Pending: 0, Accepted: 1, Rejected: 1, Closed: 2 };
+  const EST_STEP = { Pending: 0, Accepted: 1, Rejected: 1, Closed: 2, Converted: 2 };
   const estStep = s => EST_STEP[s || 'Pending'] || 0;
   function takeServerFields(local, theirs) {
     let took = false;
@@ -404,12 +454,19 @@
         if (c.type === 'removed') {
           localStorage.removeItem(STORAGE_PREFIX + c.id);
           delete map[c.id];
+          boardKnown.delete(c.id);
           if (c.id === currentJobId) openJobChanged = true;
           return;
         }
         // Deleted on this device, the delete not yet confirmed by the server:
         // the cloud's copy is on its way out and must not be written back.
         if (pendingDeletes.has(c.id)) return;
+        // Already holding exactly this copy, as the index says without the
+        // stored job being read and parsed. The first snapshot of every
+        // launch lists every job, nearly all of them unchanged.
+        const theirsAt = c.data && c.data.lastModified;
+        if (theirsAt && map[c.id] && map[c.id].lastModified === theirsAt &&
+            localStorage.getItem(STORAGE_PREFIX + c.id) !== null) return;
         let local = null;
         try { local = JSON.parse(readJobBlob(c.id) || 'null'); } catch (e) {}
         const mine = local && local.lastModified, theirs = c.data && c.data.lastModified;
@@ -429,6 +486,9 @@
             if (c.id === currentJobId) SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
             bookIfAccepted(c.id, local);
           }
+          // The other device's save rewrote the crew's board entry; ours goes
+          // back up, and pushBoard must not skip it as "already sent".
+          boardKnown.delete(c.id);
           keepOurs.push(c.id);
           return;
         }
@@ -439,6 +499,10 @@
           return;
         }
         map[c.id] = buildIndexEntry(c.id, c.data);
+        // Changed on another device: what the board holds for it is unknown
+        // here until this device next sends it -- except a bid that stays a
+        // bid, which has no entry wherever it is saved.
+        if (!(boardKnown.get(c.id) === NOT_ON_BOARD && !onBoard(c.data || {}))) boardKnown.delete(c.id);
         bookIfAccepted(c.id, c.data);
         if (c.id === currentJobId) {
           openJobChanged = true;
@@ -557,9 +621,9 @@
     pendingDeletes.forEach(sendDelete);
     migrateStatuses();
 
-    // The general watcher rather than watchJobs: it also reports the moment
-    // the server first confirms the cached copy, even when nothing changed,
-    // which the board tidy-up below has to wait for.
+    // The general watcher: it also reports the moment the server first
+    // confirms the cached copy, even when nothing changed, which the board
+    // tidy-up below has to wait for.
     unsubscribe = window.YDDb.watch('jobs',
       (changes, meta) => {
         noteCloudIds(changes);
@@ -658,7 +722,6 @@
   // Expose a little of this for diagnostics.
   window.YDSync = {
     status: () => ({ watching, cloudState, applyingRemote }),
-    pushAll: pushAllLocal,
     patchJob: patchJob,
     sendNow: sendNow,
     stop:() => { if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },

@@ -69,8 +69,10 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // copy, which merges, would keep the old colour).
 // followUps (the follow-up emails drafted for a bid) is written from the Bids
 // board the same way, and qbEstimate (what QuickBooks holds of the estimate)
-// by the server and estimate.js, so both ride along with the form too.
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail'];
+// by the server and estimate.js, so both ride along with the form too. So does
+// acceptedSeenAt: when the estimate was first seen accepted (sync.js
+// bookIfAccepted measures a later move of the bid from it).
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -608,16 +610,21 @@ function switchTab(name) {
 // window that is already signed in is moved to that screen directly; one
 // still at the sign-in screen gets the #tab put in its address, for notify.js
 // to act on once sign-in finishes.
+// A daily summary (#summary) and a note from the crew (#notes) open their own
+// windows rather than a tab. Those too are kept in the address while sign-in
+// is still going on -- the summary one used to be dropped there, so a tapped
+// summary opened nothing.
+const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
-  // A daily summary opens itself in the app (notify.js).
-  if (want === 'summary' && window.YDAuth && window.YDAuth.user && typeof openSummaries === 'function') { openSummaries(); return; }
-  if (TABS.indexOf(want) === -1) return;
+  const opener = NOTIFICATION_WINDOWS[want];
+  if (!opener && TABS.indexOf(want) === -1) return;
   if (!(window.YDAuth && window.YDAuth.user)) {
     history.replaceState(null, '', location.pathname + location.search + '#' + want);
     return;
   }
+  if (opener) { if (typeof window[opener] === 'function') window[opener](); return; }
   const btn = document.getElementById(tabButtonId(want));
   if (btn && !btn.hidden) switchTab(want);
 }
@@ -1723,7 +1730,19 @@ function readJobBlob(id) {
 // One-time (idempotent) migration: rebuild index entries from the actual job
 // blobs so prices, cities, services, and status show correctly for jobs saved
 // by an older version. Does not move or delete any job data.
+//
+// Run once per device for each INDEX_VERSION, not at every launch: it reads
+// and parses every stored job, and every save since keeps the index right by
+// itself (buildIndexEntry). Raise INDEX_VERSION whenever the index gains a
+// field, so devices fill it in for jobs saved before.
+const INDEX_VERSION = 1;
+const INDEX_VERSION_KEY = STORAGE_PREFIX + 'indexVersion';
 function migrateJobIndex() {
+  try { if (localStorage.getItem(INDEX_VERSION_KEY) === String(INDEX_VERSION)) return; } catch (e) {}
+  rebuildJobIndex();
+  try { localStorage.setItem(INDEX_VERSION_KEY, String(INDEX_VERSION)); } catch (e) {}
+}
+function rebuildJobIndex() {
   let idx = getJobIndex();
   if (!idx.length) return;
   let changed = false;
@@ -1781,7 +1800,8 @@ function jobNameHtml(name, est) {
 function persistJob(announce) {
   if (jobsReadOnly()) { if (announce) showToast('You can look at jobs but not change them'); return false; }
   const data = getJobData();
-  if (!currentJobId) currentJobId = uid();
+  if (!currentJobId) { currentJobId = uid(); jobOnScreen(); }
+  const before = localStorage.getItem(STORAGE_PREFIX + currentJobId);
   try {
     localStorage.setItem(STORAGE_PREFIX + currentJobId, JSON.stringify(data));
     let idx = getJobIndex().filter(j => j.id !== currentJobId);
@@ -1789,6 +1809,13 @@ function persistJob(announce) {
     saveJobIndex(idx);
   } catch (err) {
     console.error('Save failed:', err);
+    // The job and its index entry must never disagree: sync skips a job
+    // whose index says it already holds the cloud's copy, so a newer job
+    // behind an older index entry would never be sent.
+    try {
+      if (before === null) localStorage.removeItem(STORAGE_PREFIX + currentJobId);
+      else localStorage.setItem(STORAGE_PREFIX + currentJobId, before);
+    } catch (e) { /* nothing more to try */ }
     storageBroken = true;
     updateCtxBar();
     return false;
@@ -1850,6 +1877,11 @@ function showStorageError() {
 // and the boards use it: a change arriving from another device, or a card
 // moved on the Bids board, used to yank whoever was looking at Boards or All
 // Jobs back to the Job tab.
+// What lives beside the form rather than in it (the job's photos) follows
+// whichever job is on the Job tab.
+function jobOnScreen() {
+  if (window.YDJobPhotos) window.YDJobPhotos.jobShown(currentJobId);
+}
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);
   if (!raw) return;
@@ -1857,6 +1889,7 @@ function loadJob(id, quiet) {
   loadingJob = true;
   try { loadJobData(JSON.parse(raw)); } catch (e) { console.error(e); showToast('Could not load job'); }
   loadingJob = false;
+  jobOnScreen();
   if (!quiet) { closeManager(); switchTab('job'); }
 }
 function deleteJob(id) {
@@ -1921,6 +1954,7 @@ function newJob() {
 // the job on screen was deleted on another device.
 function clearJobForm() {
   currentJobId = null;
+  jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
   serviceTypes = []; jobStatus = 'quoting'; boardFields = {}; manualJobPrice = false; baseJobPrice = 0;
   storageBroken = false; storageWarned = false;
@@ -1995,6 +2029,14 @@ function loadAllJobs() {
   return _jobsCache;
 }
 function sortDash(col) { if (dashSort.col === col) dashSort.asc = !dashSort.asc; else { dashSort.col = col; dashSort.asc = true; } renderDashboard(); }
+// The search box redraws once typing pauses, not at every letter: each
+// redraw works out every job's figures, clocked shifts included, and a fast
+// typist queued a dozen of them back to back.
+let dashSearchTimer = null;
+function renderDashboardSoon() {
+  clearTimeout(dashSearchTimer);
+  dashSearchTimer = setTimeout(renderDashboard, 180);
+}
 function renderDashboard() {
   const svcSel = document.getElementById('dashFilter');
   const jobsAll = loadAllJobs();
@@ -2157,7 +2199,6 @@ function importAllJobs(event) {
       }
       saveJobIndex(Object.values(byId));
       invalidateJobsCache();
-      window._restoredIds = taken;
       event.target.value = '';
       showToast(taken.length ? 'Restored ' + taken.length + ' job' + (taken.length === 1 ? '' : 's') +
         (taken.length < Object.keys(backup.jobs).length ? ' — the rest were already up to date here' : '')
@@ -2389,12 +2430,22 @@ function makeSearchable(sel) {
     box.disabled = sel.disabled;
   }
 
+  // At most SHOWN_MAX matches are drawn. The Supplies list (~900 items) drew
+  // a row for every one at each key pressed, and nobody scrolls that far --
+  // they type another word. The one already chosen is always kept, in its
+  // place in the list, so it can be seen and picked again.
+  const SHOWN_MAX = 50;
   function open(q) {
     const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
-    shown = Array.prototype.filter.call(sel.options, o => !o.disabled && o.value !== '__custom' &&
-      words.every(w => label(o).toLowerCase().indexOf(w) !== -1)).map(o => ({ opt: o }));
+    const chosen = sel.options[sel.selectedIndex] || null;
+    const matches = Array.prototype.filter.call(sel.options, o => !o.disabled && o.value !== '__custom' &&
+      words.every(w => label(o).toLowerCase().indexOf(w) !== -1));
+    shown = matches.filter((o, i) => i < SHOWN_MAX || o === chosen).map(o => ({ opt: o }));
+    const more = matches.length - shown.length;
     const typed = String(q || '').trim();
-    if (typed && custom() && !shown.some(s => label(s.opt).toLowerCase() === typed.toLowerCase())) {
+    // Checked against every match, not only those drawn: a name further down
+    // the list is not new.
+    if (typed && custom() && !matches.some(o => label(o).toLowerCase() === typed.toLowerCase())) {
       shown.push({ typed: typed });
     } else if (!typed && custom()) {
       shown.push({ opt: custom() });
@@ -2405,7 +2456,8 @@ function makeSearchable(sel) {
       ? shown.map((s, i) => '<div class="ssel-item' + (i === at ? ' on' : '') +
           (s.opt && s.opt.value === '' ? ' ssel-none' : '') + (s.typed ? ' ssel-new' : '') +
           '" role="option" data-i="' + i + '">' +
-          (s.typed ? '+ Add “' + esc(s.typed) + '”' : esc(label(s.opt))) + '</div>').join('')
+          (s.typed ? '+ Add “' + esc(s.typed) + '”' : esc(label(s.opt))) + '</div>').join('') +
+        (more > 0 ? '<div class="ssel-more">Keep typing to narrow it down (' + more + ' more)</div>' : '')
       : '<div class="ssel-empty">Nothing matches “' + esc(typed) + '”</div>';
     list.hidden = false;
     box.setAttribute('aria-expanded', 'true');

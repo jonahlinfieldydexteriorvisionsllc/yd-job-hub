@@ -151,6 +151,18 @@
     if (failed) showToast(failed === 1 ? 'One photo could not be read — try it as a JPG' : failed + ' photos could not be read');
   };
 
+  // A file that may already be up from an earlier try: storage.rules lets a
+  // photo be written once and never overwritten (nobody swaps a picture out
+  // afterwards), so a second upload of the same file would be refused for
+  // ever. Asked for first, uploaded only if it is not there.
+  async function upOnce(path, blob, tried, onProgress) {
+    if (tried) {
+      try { return await YDStore.url(path); }
+      catch (e) { if (!e || e.code !== 'storage/object-not-found') throw e; }
+    }
+    return YDStore.upload(path, blob, 'image/jpeg', onProgress);
+  }
+
   async function send(item) {
     if (busy[item.id] || !window.YDStore || !window.YDDb || item.by !== myUid()) return;
     const st = status[item.id] || (status[item.id] = { progress: 0, preview: URL.createObjectURL(item.thumb) });
@@ -158,27 +170,17 @@
     busy[item.id] = true;
     st.waiting = false; st.error = ''; drawAll();
     const base = 'jobPhotos/' + item.jobId + '/' + item.id;
+    const tried = !!item.tries;
+    item.tries = (item.tries || 0) + 1;
     try {
-      const thumbUrl = await YDStore.upload(base + '_t.jpg', item.thumb, 'image/jpeg');
-      const url = await YDStore.upload(base + '.jpg', item.full, 'image/jpeg', p => {
-        st.progress = p;
-        drawProgress(item.id);
-      });
-      // Not awaited: the record waits in Firestore's own offline queue (kept
-      // on the phone) if the signal drops now, so the photo is safe to take
-      // off this queue.
-      Promise.resolve(window.YDDb.put('jobPhotos', item.id, {
-        jobId: item.jobId, stage: item.stage, caption: '',
-        path: base + '.jpg', thumbPath: base + '_t.jpg', url: url, thumbUrl: thumbUrl,
-        w: item.w, h: item.h, by: item.by, byName: item.byName, at: item.at, deleteAsked: null,
-      })).catch(e => {
-        console.warn('[photos] record not saved:', (e && e.code) || e);
-        showToast(e && e.code === 'permission-denied' ? 'Photo sent but not filed — not allowed' : 'Photo record not saved yet — will retry');
-      });
-      delete queue[item.id];
-      if (st.preview) URL.revokeObjectURL(st.preview);
-      delete status[item.id];
-      qDrop(item.id);
+      // Each address is kept on the phone as soon as it is known, so a try
+      // that dies half way picks up where it stopped.
+      if (!item.thumbUrl) { item.thumbUrl = await upOnce(base + '_t.jpg', item.thumb, tried); qSave(item); }
+      if (!item.url) {
+        item.url = await upOnce(base + '.jpg', item.full, tried, p => { st.progress = p; drawProgress(item.id); });
+        qSave(item);
+      }
+      fileRecord(item, base);
     } catch (e) {
       const code = (e && e.code) || '';
       console.warn('[photos] not sent yet:', code || e);
@@ -191,6 +193,32 @@
       drawAll();
     }
   }
+
+  // Both files are up: the record. Not awaited -- it waits in Firestore's
+  // own offline queue (kept on the phone) if the signal drops now, so the
+  // photo comes off this queue. If the server REFUSES it (rules not yet
+  // published, say), the photo goes back on the queue with its addresses,
+  // and the next try only files the record.
+  function fileRecord(item, base) {
+    Promise.resolve(window.YDDb.put('jobPhotos', item.id, {
+      jobId: item.jobId, stage: item.stage, caption: '',
+      path: base + '.jpg', thumbPath: base + '_t.jpg', url: item.url, thumbUrl: item.thumbUrl,
+      w: item.w, h: item.h, by: item.by, byName: item.byName, at: item.at, deleteAsked: null,
+    })).catch(e => {
+      console.warn('[photos] record not saved:', (e && e.code) || e);
+      queue[item.id] = item;
+      status[item.id] = { progress: 1, waiting: true, preview: URL.createObjectURL(item.thumb),
+                          error: e && e.code === 'permission-denied' ? 'Sent, but not allowed to file it yet' : 'Not filed yet' };
+      qSave(item);
+      drawAll();
+    });
+    delete queue[item.id];
+    const st = status[item.id];
+    if (st && st.preview) URL.revokeObjectURL(st.preview);
+    delete status[item.id];
+    qDrop(item.id);
+  }
+
   // Everything this person left waiting, on this phone.
   function sendWaiting() {
     if (!signedIn()) return;
@@ -209,7 +237,7 @@
 
   window.jpRetry = id => { const it = queue[id]; if (it) send(it); };
   window.jpDiscard = id => {
-    if (!queue[id] || !confirm('Throw this photo away? It has not been sent.')) return;
+    if (!queue[id] || queue[id].by !== myUid() || !confirm('Throw this photo away? It has not been sent.')) return;
     if (status[id] && status[id].preview) URL.revokeObjectURL(status[id].preview);
     delete queue[id]; delete status[id];
     qDrop(id);
@@ -247,7 +275,12 @@
 
   function ordered() {
     const list = Object.keys(photos).map(id => Object.assign({ id: id }, photos[id]));
-    Object.values(queue).forEach(q => { if (q.jobId === jobId && !photos[q.id]) list.push(Object.assign({ pending: true }, q)); });
+    // Only this person's waiting photos: on a shared phone the next person
+    // to sign in can neither send nor see someone else's (they go up when
+    // whoever took them signs in again).
+    Object.values(queue).forEach(q => {
+      if (q.jobId === jobId && q.by === myUid() && !photos[q.id]) list.push(Object.assign({ pending: true }, q));
+    });
     return list.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
   }
   function thumbHtml(p) {
@@ -441,9 +474,13 @@
     if (!k) { watch(null); return; }
     if (jobId) watch(jobId);
     loadQueue();
+    // The job already on the Job tab when sign-in finished (app.js tells us
+    // about every change after this).
+    if (typeof currentJobId !== 'undefined') jobShown(currentJobId);
   });
   window.addEventListener('online', sendWaiting);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendWaiting(); });
 
-  window.YDJobPhotos = { mount: mount, jobShown: jobShown, waiting: () => Object.keys(queue).length };
+  window.YDJobPhotos = { mount: mount, jobShown: jobShown,
+                         waiting: () => Object.values(queue).filter(q => q.by === myUid()).length };
 })();

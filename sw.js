@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v166';
+const CACHE = 'ydjobhub-v167';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -83,6 +83,13 @@ const BYPASS = [
   'run.app',
 ];
 
+// When the page itself last came from the saved copy because the network was
+// too slow. For a few seconds after, the page's own code is served from the
+// saved copies as well: an old page with new code behind it (or the reverse)
+// is the mismatch that once left screens half-working.
+let pageFromCacheAt = 0;
+const MATCH_PAGE_MS = 15000;
+
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE)
@@ -126,23 +133,48 @@ self.addEventListener('fetch', event => {
   // picked up, but fall back to the cached shell so the app still opens in a
   // truck with no bars. Fetching by URL with cache:'no-cache' forces the
   // revalidation -- a plain fetch() would be answered from the HTTP cache.
+  //
+  // Raced against the same 4 seconds as the code below. With one bar of
+  // signal the fetch neither answers nor fails, and waiting for it was a
+  // white screen for 30-60 seconds before the saved page was even tried.
+  // A fetch that loses the race still finishes in the background and saves
+  // the new page for next time.
   if (req.mode === 'navigate') {
-    event.respondWith(
-      fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' })
-        .then(res => {
-          // Each page is kept under its own address. Storing every page as
-          // index.html meant that opening the privacy page once made the app
-          // open AS the privacy page the next time there was no signal.
-          if (res && res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then(c => c.put(req, copy));
-          }
-          return res;
-        })
-        .catch(() => caches.match(req, { ignoreSearch: true })
-          .then(r => r || caches.match('./index.html'))
-          .then(r => r || caches.match('./')))
-    );
+    let saving = null;
+    const network = fetch(url.href, { cache: 'no-cache', credentials: 'same-origin' })
+      .then(res => {
+        // Each page is kept under its own address. Storing every page as
+        // index.html meant that opening the privacy page once made the app
+        // open AS the privacy page the next time there was no signal.
+        if (res && res.ok) {
+          const copy = res.clone();
+          saving = caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      });
+    const savedPage = () => caches.match(req, { ignoreSearch: true })
+      .then(r => r || caches.match('./index.html'))
+      .then(r => r || caches.match('./'))
+      .catch(() => null);
+    // Kept alive until a late page is saved, not just until one is shown.
+    event.waitUntil(network.then(() => saving, () => {}));
+    event.respondWith(new Promise(resolve => {
+      let settled = false, networkFailed = false;
+      const settle = r => { if (!settled) { settled = true; resolve(r); } };
+      // No saved page (a first visit): the network is the only hope, so keep
+      // waiting for it unless it has actually failed.
+      const fromCache = () => savedPage().then(r => {
+        if (r && !settled) { pageFromCacheAt = Date.now(); settle(r); }
+        else if (networkFailed) settle(Response.error());
+      });
+      const timer = setTimeout(fromCache, 4000);
+      network.then(res => {
+        clearTimeout(timer);
+        // A fresh page wants fresh code, whatever an earlier one had.
+        if (!settled) pageFromCacheAt = 0;
+        settle(res);
+      }).catch(() => { clearTimeout(timer); networkFailed = true; fromCache(); });
+    }));
     return;
   }
 
@@ -152,6 +184,22 @@ self.addEventListener('fetch', event => {
   // with the OLD code behind it -- a mismatch that left Calendar and Boards
   // saying "sign in" to someone who was signed in.
   if (url.origin === self.location.origin && /\.(js|css|json)$/.test(url.pathname)) {
+    // Just after a page served from the saved copy: its code comes from the
+    // saved copies too, so the page and its code are from the same visit.
+    // The fresh files are still fetched, and saved for next launch.
+    if (Date.now() - pageFromCacheAt < MATCH_PAGE_MS) {
+      let saving = null;
+      const fresh = fetch(req, { cache: 'no-cache' }).then(res => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          saving = caches.open(CACHE).then(c => c.put(req, copy)).catch(() => {});
+        }
+        return res;
+      });
+      event.waitUntil(fresh.then(() => saving, () => {}));
+      event.respondWith(caches.match(req).catch(() => null).then(saved => saved || fresh));
+      return;
+    }
     event.respondWith(new Promise(resolve => {
       let settled = false, networkFailed = false;
       const settle = r => { if (!settled) { settled = true; resolve(r); } };
