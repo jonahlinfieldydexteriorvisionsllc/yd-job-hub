@@ -648,7 +648,8 @@ def items():
 
 QB_APP = {"sandbox": "https://app.sandbox.qbo.intuit.com", "production": "https://qbo.intuit.com"}
 LABOR_ITEM = "Labor"            # a labour line with no product chosen
-MATERIALS_ITEM = "Material Fee"  # the one materials line
+MATERIALS_ITEM = "Material Fee"  # the materials line
+TAXED_MATERIALS_ITEM = "Planting & Lawn Materials"   # materials Wisconsin taxes (made taxable)
 MEMO_MAX = 1000                 # Intuit's limit on the message to the customer
 LINE_MAX = 4000                 # and on one line's description
 
@@ -828,33 +829,38 @@ def _income_account():
 _items = {}
 
 
-def _item_named(name):
-    """The QuickBooks product called this, made as a service if it is missing.
-    A category of the same name is not a product (Jonah's company has a
-    "Labor" category with a "Labor" service inside it), so it is passed over."""
+def _item_named(name, taxable=False):
+    """The QuickBooks product called this, made as a service if it is missing
+    (marked taxable when it is for taxed lines). A category of the same name
+    is not a product (Jonah's company has a "Labor" category with a "Labor"
+    service inside it), so it is passed over."""
     name = _qb_name(name)
     if name in _items:
         return _items[name]
     hit = next((i for i in _query("Item", "Name = '%s'" % _quote(name))
                 if i.get("Type") != "Category" and i.get("Active", True)), None)
     if not hit:
-        new = {"Name": name, "Type": "Service", "IncomeAccountRef": {"value": _income_account()}}
+        new = {"Name": name, "Type": "Service", "IncomeAccountRef": {"value": _income_account()}, "Taxable": bool(taxable)}
         hit = _call("POST", "item", body=new, request_id=hashlib.sha1(("item|" + name).encode()).hexdigest()).get("Item") or {}
     _items[name] = hit["Id"]
     return hit["Id"]
 
 
-def _line(item_id, cents, description):
+def _line(item_id, cents, description, taxable=False):
+    """One line. Taxable lines (landscaping and lawn care, which Wisconsin
+    taxes) carry TAX: QuickBooks' automated sales tax works out the rate from
+    the estimate's ship-to address."""
     amount = round(int(cents) / 100, 2)
     text = description if len(description) <= LINE_MAX else description[:LINE_MAX - 1] + "…"
     return {"DetailType": "SalesItemLineDetail", "Amount": amount, "Description": text,
             "SalesItemLineDetail": {"ItemRef": {"value": item_id}, "Qty": 1, "UnitPrice": amount,
-                                    "TaxCodeRef": {"value": "NON"}}}
+                                    "TaxCodeRef": {"value": "TAX" if taxable else "NON"}}}
 
 
 def _estimate_lines(body):
     """Labour lines -- heading, the address on the first, the scope -- then
-    the one materials line."""
+    the materials: one line, or two when some are taxed and some not
+    (materialParts; a client from before sends only `materials`)."""
     out, site = [], str(body.get("site") or "").strip()
     work = [w for w in body.get("work") or [] if int(w.get("cents") or 0) > 0 or str(w.get("scope") or "").strip()]
     for i, w in enumerate(work):
@@ -865,12 +871,24 @@ def _estimate_lines(body):
         scope = str(w.get("scope") or "").strip()
         if scope:
             text += ("\n\n" if text else "") + scope
-        out.append(_line(_item_named(str(w.get("qbItem") or "").strip() or LABOR_ITEM), int(w.get("cents") or 0), text))
-    m = body.get("materials") or {}
-    if int(m.get("cents") or 0) > 0:
+        out.append(_line(_item_named(str(w.get("qbItem") or "").strip() or LABOR_ITEM), int(w.get("cents") or 0), text,
+                         taxable=w.get("taxable") is True))
+    parts = body.get("materialParts")
+    if not isinstance(parts, list):
+        m = body.get("materials") or {}
+        one = "Materials: " + str(work[0].get("title") or "").strip() if len(work) == 1 and work[0].get("title") else "Materials"
+        parts = [{"head": one, "list": m.get("list"), "cents": m.get("cents"), "taxable": False}]
+    for m in parts:
+        if int((m or {}).get("cents") or 0) <= 0:
+            continue
         listed = [str(x).strip() for x in m.get("list") or [] if str(x).strip()]
-        head = "Materials: " + str(work[0].get("title") or "").strip() if len(work) == 1 and work[0].get("title") else "Materials"
-        out.append(_line(_item_named(MATERIALS_ITEM), int(m["cents"]), head + ("\n\n" + "\n".join(listed) if listed else "")))
+        head = str(m.get("head") or "Materials").strip()
+        # Taxed materials go on a product of their own, made taxable: the
+        # usual materials product is set up in QuickBooks as tax-exempt, and
+        # its automated sales tax could leave a taxed line at $0 tax.
+        taxed = m.get("taxable") is True
+        item = _item_named(TAXED_MATERIALS_ITEM, taxable=True) if taxed else _item_named(MATERIALS_ITEM)
+        out.append(_line(item, int(m["cents"]), head + ("\n\n" + "\n".join(listed) if listed else ""), taxable=taxed))
     if not out:
         raise RuntimeError("The estimate has nothing on it yet")
     return out

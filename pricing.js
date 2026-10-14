@@ -99,6 +99,42 @@
   // A job with any of these gets the layout markers.
   const MARKER_CATEGORIES = ['pavers', 'wall', 'edging'];
 
+  // ---------------------------------------------------------- sales tax
+  //
+  // Wisconsin (DOR Publication 210; Jonah, 13 Oct 2026: "set it up so the
+  // job hub taxes everything properly"): landscaping and lawn care are taxed
+  // to the customer, labour and materials both -- planting, sod, seeding,
+  // mulch or rock around plants, fine grading for seed or sod, mowing,
+  // fertilizing, trimming, cleanups. Building on the land is not: patios,
+  // walls, steps, walks, drainage, rough grading, lighting, snow plowing (the
+  // company pays tax on those materials when it buys them). A building job
+  // whose taxable part is under 10% of its price is not taxed at all
+  // (Wis. Stat. 77.54(60)). Every line can be set by hand on the estimate.
+  //
+  // A kind of material is taxed always, never, or as the job is (mostly
+  // planting work, or mostly building) -- his own setting per kind wins.
+  const KIND_TAX = {
+    plant: 'always', planting: 'always', mulch: 'always', seed: 'always',
+    fill: 'never', stone: 'never', pavers: 'never', wall: 'never', natural: 'never', firepit: 'never',
+    fireplace: 'never', kitchen: 'never', hardscape: 'never', adhesive: 'never', drainage: 'never', tools: 'never',
+  };
+  const TAX_WAYS = [['job', 'As the job is'], ['always', 'Always'], ['never', 'Never']];
+  const kindTax = (r, cat) => {
+    const own = catRuleOf(r, cat).customerTax;
+    return TAX_WAYS.some(([k]) => k === own) ? own : KIND_TAX[cat] || 'job';
+  };
+  // Labour by what it is: words of planting and lawn care, and none of
+  // building. A line with both (a patio with a planting bed) is left untaxed
+  // for him to decide.
+  const TAXED_WORK = /\b(plant(s|ing|ed)?|trees?|shrubs?|perennials?|flowers?|annuals?|sod(ding)?|seed(ing)?|overseed(ing)?|mulch(ing)?|lawn|lawns|mow(s|ing)?|fertili[sz](e|er|ing|ation)|aerat(e|ion|ing)|dethatch(ing)?|weed(s|ing)?|prun(e|ing)|trim(s|ming)?|hedges?|garden|gardens|beds?|clean-?ups?|leaf|leaves|top-?dress(ing)?)\b/i;
+  const BUILT_WORK = /\b(patios?|pavers?|walls?|retaining|steps?|walks?|walkways?|paths?|driveways?|fences?|fencing|drains?|drainage|trench(es|ing)?|french|downspouts?|grading|excavat\w*|gravel|pads?|concrete|fire ?pits?|fireplaces?|kitchens?|lighting|irrigation|snow|plow\w*|salt\w*|boulders?|pergolas?|decks?)\b/i;
+  function workTaxable(w, ctx) {
+    if (w.taxable === true || w.taxable === false) return w.taxable;
+    const svc = w.priceId && ctx.book ? ctx.book[w.priceId] : null;
+    const text = [w.title, w.qbItem, svc && svc.name].filter(Boolean).join(' ');
+    return TAXED_WORK.test(text) && !BUILT_WORK.test(text);
+  }
+
   // The three named profit targets of the first version. Kept only so the
   // amounts they held become the start of his own list (profitChoices), and
   // so a line saved with one of their names still prices by it.
@@ -109,6 +145,10 @@
   function blankRules() {
     return {
       taxPct: null,
+      // Sales tax charged to the customer on taxable work (landscaping and
+      // lawn care), as Job Hub shows it. QuickBooks works out the exact tax
+      // from the job's address when the estimate goes in.
+      customerTaxPct: null,
       crewDayCents: null,
       // Profit per crew-day: his own amounts, as many as he likes, and the
       // usual one (null until he sets them: then the old three are used).
@@ -566,13 +606,71 @@
       perDayCents: crewDays > 0 ? Math.round((totalCents - costCents) / crewDays) : null,
       complete: !problems.length && dayCost !== null && work.every(w => w.crewDays > 0),
     };
+    // Sales tax to the customer (see KIND_TAX). totalCents stays the price
+    // before tax -- the profit, the job's price and the dashboards are that;
+    // grandCents is what the customer pays, and the payments are of it.
+    const tax = salesTax(est, ctx, work, all, del, fu, totalCents);
+    tax.problems.forEach(p => problems.push('Sales tax: ' + p));
+    const grandCents = totalCents + tax.cents;
     return {
       takeoff, added, work, delivery: del, fuel: fu, crewDays, profit,
-      materialsCents, laborCents, totalCents,
-      payments: payments(totalCents, ctx.rules, { plan: est.payments, materialsCents: materialsCents }),
+      materialsCents, laborCents, totalCents, tax, grandCents,
+      payments: payments(grandCents, ctx.rules, { plan: est.payments, materialsCents: materialsCents + tax.materialsTaxCents }),
       specialOrder: all.filter(l => l.specialOrder && l.orderQty > 0).map(l => l.name),
       problems,
     };
+  }
+
+  // Which lines are taxed, and the tax. Each work line and material line is
+  // marked `taxed` (what goes to QuickBooks as taxable); the materials figure
+  // splits into its taxed and untaxed parts, delivery going with its material
+  // and fuel with the job.
+  function salesTax(est, ctx, work, all, del, fu, totalCents) {
+    const r = ctx.rules, out = { cents: 0, ratePct: num(r.customerTaxPct), taxableCents: 0, workCents: 0,
+      materialsCents: 0, materialsTaxCents: 0, underTen: false, problems: [] };
+    const ws = est.work || [], ms = est.materials || [];
+    work.forEach((w, i) => { w.taxable = workTaxable(ws[i] || {}, ctx); });
+    const taxedWork = work.filter(w => w.taxable).reduce((s, w) => s + w.cents, 0);
+    const builtWork = work.filter(w => !w.taxable).reduce((s, w) => s + w.cents, 0);
+    const own = {};
+    ms.forEach(m => { if (m.taxable === true || m.taxable === false) own[m.id] = m.taxable; });
+    // "As the job is": mostly planting work, or (no labour yet) planting
+    // materials on it.
+    const leans = work.length ? taxedWork > 0 && taxedWork >= builtWork
+      : all.some(l => l.clientCents > 0 && kindTax(r, l.category) === 'always');
+    all.forEach(l => {
+      const way = kindTax(r, l.category);
+      l.taxable = own[l.id] !== undefined ? own[l.id] : way === 'always' ? true : way === 'never' ? false : leans;
+    });
+    const bySupply = {};
+    all.forEach(l => { if (l.taxable && l.supplyId) bySupply[l.supplyId] = true; });
+    del.lines.forEach(d => { d.taxable = !!bySupply[d.supplyId]; });
+    fu.taxable = leans;
+    let taxedMat = all.filter(l => l.taxable).reduce((s, l) => s + l.clientCents, 0) +
+      del.lines.filter(d => d.taxable).reduce((s, d) => s + d.clientCents, 0) + (fu.taxable ? fu.clientCents || 0 : 0);
+    let taxable = taxedWork + taxedMat;
+    // A building job with a little planting: under 10% of the price, none of
+    // it is taxed (77.54(60)) -- the company pays tax on all its materials.
+    const building = builtWork > 0 || all.some(l => !l.taxable && l.clientCents > 0 && kindTax(r, l.category) === 'never');
+    if (building && taxable > 0 && totalCents > 0 && taxable < totalCents * 0.1) {
+      out.underTen = true;
+      taxable = 0; taxedMat = 0;
+    }
+    work.forEach(w => { w.taxed = !!w.taxable && !out.underTen; });
+    all.forEach(l => { l.taxed = !!l.taxable && !out.underTen; });
+    del.lines.forEach(d => { d.taxed = !!d.taxable && !out.underTen; });
+    fu.taxed = !!fu.taxable && !out.underTen;
+    out.taxableCents = taxable;
+    out.workCents = out.underTen ? 0 : taxedWork;
+    out.materialsCents = taxedMat;
+    if (taxable > 0) {
+      if (out.ratePct === null) out.problems.push('the sales tax % for customers isn’t set (⋯ → Pricing rules)');
+      else {
+        out.cents = Math.round(taxable * out.ratePct / 100);
+        out.materialsTaxCents = Math.round(taxedMat * out.ratePct / 100);
+      }
+    }
+    return out;
   }
 
   // What the customer reads in the materials line: every listed material and
@@ -586,9 +684,11 @@
       ? u + (/(x|ch|sh)$/i.test(u) ? 'es' : 's') : u;
     return n + ' ' + plural;
   }
-  function materialsList(result) {
+  // taxed: true -> only the materials taxed, false -> only those not, left
+  // out -> all of them (the two QuickBooks materials lines, sales tax).
+  function materialsList(result, taxed) {
     return result.takeoff.concat(result.added)
-      .filter(l => l.listed && l.orderQty > 0)
+      .filter(l => l.listed && l.orderQty > 0 && (taxed === undefined || !!l.taxed === taxed))
       .map(l => l.name + ': ' + qtyText(l.orderQty, l.per));
   }
 
@@ -945,10 +1045,17 @@
       '<p class="hint">Services priced another way — turf by the sq ft, with what adjusts it — and your notes on how ' +
         'each service is priced: <button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced</button></p>' +
 
-      '<h3 class="pr-h">Materials</h3><div class="pr-grid">' +
+      '<h3 class="pr-h">Materials & sales tax</h3><div class="pr-grid">' +
         box('Sales tax on purchases (%)', r.taxPct, "prSet('taxPct', this.value, 'num')", 'added to every material cost before markup') +
+        box('Sales tax charged to customers (%)', r.customerTaxPct, "prSet('customerTaxPct', this.value, 'num')",
+          'on planting, sod, seed, mulch and lawn care — state + county where the job is') +
       '</div>' +
-      '<table class="pr-table"><thead><tr><th>Category</th><th>Markup %</th><th>Waste %</th><th>No tax</th></tr></thead><tbody>' +
+      '<p class="hint">Wisconsin taxes landscaping and lawn care to the customer (labour and materials); patios, walls, walks, ' +
+        'drainage, grading and snow are not taxed (you pay the tax when you buy their materials). On an estimate, each line is ' +
+        'taxed or not from what it is — set any line by hand there. “Taxed to customer” below: Always, Never, or As the job is ' +
+        '(mostly planting work, or mostly building). “Not taxed when bought”: you don’t pay purchase tax on it (a rental; ' +
+        'plants or mulch bought with a resale certificate).</p>' +
+      '<table class="pr-table"><thead><tr><th>Category</th><th>Markup %</th><th>Waste %</th><th>Not taxed when bought</th><th>Taxed to customer</th></tr></thead><tbody>' +
         // A kind goes in an onchange through data-k: his own have spaces and apostrophes.
         allKinds().map(([id, name]) => {
           const c = r.categories[id] || {};
@@ -960,7 +1067,10 @@
               (ro ? '' : ' <button class="link-btn"' + at + ' onclick="prKindRename(this.dataset.k)">✎ Rename</button>') : '') + '</td>' +
             cell('markupPct', c.markupPct) + cell('wastePct', c.wastePct) +
             '<td><input type="checkbox"' + (c.noTax ? ' checked' : '') + at +
-            ' onchange="prCat(this.dataset.k, \'noTax\', this.checked)"></td></tr>';
+            ' onchange="prCat(this.dataset.k, \'noTax\', this.checked)"></td>' +
+            '<td><select' + at + ' onchange="prCat(this.dataset.k, \'customerTax\', this.value)">' +
+              TAX_WAYS.map(([k, n]) => '<option value="' + k + '"' + (kindTax(r, id) === k ? ' selected' : '') + '>' + n + '</option>').join('') +
+            '</select></td></tr>';
         }).join('') + '</tbody></table>' +
       (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="prKindAdd()">+ Add a kind of material</button></div>') +
       '<p class="hint">An item in Supplies can have its own markup or waste; these are for everything else in the category. ' +
@@ -1075,6 +1185,12 @@
     if (k === 'noTax') {
       const cats = Object.assign({}, rules.categories);
       cats[id] = Object.assign({}, cats[id], { noTax: !!v });
+      save({ categories: cats });
+      return;
+    }
+    if (k === 'customerTax') {
+      const cats = Object.assign({}, rules.categories);
+      cats[id] = Object.assign({}, cats[id], { customerTax: TAX_WAYS.some(([w]) => w === v) ? v : null });
       save({ categories: cats });
       return;
     }

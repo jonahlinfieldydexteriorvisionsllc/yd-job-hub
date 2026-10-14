@@ -96,7 +96,7 @@
   // that is not open is being priced.
   function ctx(city) {
     const c = catalog();
-    return { rules: P().rules(), items: c.items, prices: c.prices, fuel: P().fuelPrices(),
+    return { rules: P().rules(), items: c.items, prices: c.prices, fuel: P().fuelPrices(), book: book,
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim() };
   }
   let last = null;            // the last worked-out price, for the totals and QuickBooks
@@ -404,9 +404,32 @@
         ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>' +
       '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
         ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>' +
+      taxPickHtml('work', id, w.taxable, ro) +
       '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
   }
+
+  // Sales tax on a line (pricing.js salesTax): worked out from what the line
+  // is, or set by hand -- the line shows which, and why when a building job's
+  // little bit of planting goes untaxed.
+  function taxPickHtml(kind, id, v, ro) {
+    const cur = v === true ? '1' : v === false ? '0' : '';
+    return '<div class="est-tax"><span>Sales tax</span><select' + (ro ? ' disabled' : '') +
+      ' onchange="estTax(\'' + kind + '\', \'' + id + '\', this.value)">' +
+      [['', 'Auto'], ['1', 'Taxed'], ['0', 'Not taxed']].map(([k, n]) => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + n + '</option>').join('') +
+      '</select><span class="muted" id="' + (kind === 'work' ? 'estWT_' : 'estMT_') + id + '"></span></div>';
+  }
+  function taxNote(line, r, hand) {
+    if (!line) return '';
+    if (line.taxable && r.tax.underTen) return 'not taxed: planting under 10% of a building job';
+    return (hand ? '' : 'auto: ') + (line.taxed ? 'taxed' : 'not taxed');
+  }
+  window.estTax = function (kind, id, v) {
+    const x = find(kind === 'work' ? est.work : est.materials, id);
+    if (!x || !changes()) return;
+    if (v === '1') x.taxable = true; else if (v === '0') x.taxable = false; else delete x.taxable;
+    changed(false);
+  };
 
   // A service's adjustments (Services): each ticked one is copied onto the
   // line with its amount, so a later change to the service never moves a
@@ -548,6 +571,7 @@
     return '<div class="est-mrow">' +
       '<div class="est-mtop">' + head + '<div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div>' +
       '<div class="est-order" id="estMO_' + id + '"></div>' +
+      taxPickHtml('mat', id, m.taxable, ro) +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
     '</div>';
   }
@@ -562,6 +586,8 @@
     r.work.forEach((w, i) => {
       const a = el('estWA_' + safeId(w.id)); if (a) a.textContent = w.cents ? cents(w.cents) : '';
       const p = el('estWP_' + safeId(w.id)); if (p) p.textContent = w.problems.join(' · ');
+      const tx = el('estWT_' + safeId(w.id));
+      if (tx) tx.textContent = taxNote(w, r, typeof (est.work[i] || {}).taxable === 'boolean');
       // What a line priced by the unit (or a fixed price) makes per crew-day
       // once the crew is paid, against his usual -- only he sees it.
       const f = el('estWF_' + safeId(w.id));
@@ -579,6 +605,8 @@
     });
     r.takeoff.forEach(l => {
       const a = el('estMA_' + safeId(l.id)); if (a) a.textContent = l.clientCents ? cents(l.clientCents) : '';
+      const tx = el('estMT_' + safeId(l.id));
+      if (tx) tx.textContent = taxNote(l, r, typeof (find(est.materials, safeId(l.id)) || {}).taxable === 'boolean');
       const o = el('estMO_' + safeId(l.id));
       if (o) {
         o.className = 'est-order' + (l.problems.length ? ' bad' : '');
@@ -597,7 +625,8 @@
     t.innerHTML = (r.work.length || r.takeoff.length)
       ? '<div><span>Materials</span><b>' + cents(r.materialsCents) + '</b></div>' +
         '<div><span>Labour & installation</span><b>' + cents(r.laborCents) + '</b></div>' +
-        '<div class="est-grand"><span>Project total</span><b>' + cents(r.totalCents) + '</b></div>' +
+        taxRowsHtml(r) +
+        '<div class="est-grand"><span>Project total</span><b>' + cents(r.grandCents) + '</b></div>' +
         paymentsHtml(r) +
         profitHtml(r) +
         (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
@@ -609,13 +638,26 @@
   }
   const fmtQ = q => String(Math.round(q * 100) / 100);
 
+  // The sales tax under the subtotal: on what, at what rate -- or why a job
+  // with some planting has none (a building job, planting under 10%).
+  function taxRowsHtml(r) {
+    const t = r.tax || {};
+    if (t.underTen) return '<div class="est-taxnote">No sales tax: the planting and lawn work is under 10% of a building job ' +
+      '(Wisconsin taxes none of it then — you pay the tax on its materials when you buy them).</div>';
+    if (!(t.taxableCents > 0)) return '';
+    return '<div><span>Subtotal</span><b>' + cents(r.totalCents) + '</b></div>' +
+      '<div><span>Sales tax' + (t.ratePct !== null ? ' ' + fmtQ(t.ratePct) + '%' : '') + ' on ' + cents(t.taxableCents) +
+        ' of planting & lawn work</span><b>' + (t.ratePct !== null ? cents(t.cents) : '—') + '</b></div>' +
+      '<div class="est-taxnote">QuickBooks works out the exact tax from the job’s address.</div>';
+  }
+
   // The payments the customer is asked for (pricing.js payments): the usual,
   // or this estimate's own -- each a % of the job or a dollar amount typed
   // in, the last always the rest. The deposit never goes under his minimum
   // or the materials; when it was raised the line says so.
   let editingPays = false;
   function planNow(r) {
-    return est.payments || cleanPlan(P().usualPlan ? P().usualPlan(r ? r.totalCents : 0) : []);
+    return est.payments || cleanPlan(P().usualPlan ? P().usualPlan(r ? r.grandCents : 0) : []);
   }
   function paymentsHtml(r) {
     const pays = r.payments || [];
@@ -623,7 +665,7 @@
     const ro = !changes();
     const raised = pays[0].raised;
     const note = raised ? '<div class="est-pay-note">Deposit raised to ' + (raised === 'materials'
-      ? 'cover all the materials (' + cents(r.materialsCents) + ')' : 'your ' + pays[0].minPct + '% smallest deposit') + '.</div>' : '';
+      ? 'cover all the materials (' + cents(r.materialsCents + r.tax.materialsTaxCents) + ')' : 'your ' + pays[0].minPct + '% smallest deposit') + '.</div>' : '';
     if (!editingPays || ro) {
       return '<div class="est-pays">' + pays.map(p => '<span>' + esc(p.label) + ' <b>' + cents(p.cents) + '</b></span>').join(' · ') +
         (est.payments ? ' <span class="muted">(set for this estimate)</span>' : '') +
@@ -724,6 +766,18 @@
     return [f('address'), [f('city'), f('state')].filter(Boolean).join(', ') + (f('zip') ? ' ' + f('zip') : '')]
       .filter(s => s.trim()).join(', ');
   }
+  // The materials as the customer reads them: one line, or two when some
+  // are taxed and some are not (planting materials on a patio job) -- each
+  // with what is on it. The same split goes to QuickBooks.
+  function materialParts(r, work) {
+    if (!(r.materialsCents > 0)) return [];
+    const taxedCents = r.tax ? r.tax.materialsCents : 0;
+    const one = work.length === 1 && work[0].title ? 'Materials: ' + work[0].title : 'Materials';
+    if (!(taxedCents > 0)) return [{ head: one, list: P().materialsList(r), cents: r.materialsCents, taxed: false }];
+    if (taxedCents >= r.materialsCents) return [{ head: one, list: P().materialsList(r), cents: r.materialsCents, taxed: true }];
+    return [{ head: 'Materials', list: P().materialsList(r, false), cents: r.materialsCents - taxedCents, taxed: false },
+            { head: 'Planting & lawn materials', list: P().materialsList(r, true), cents: taxedCents, taxed: true }];
+  }
   function renderCustomer(r) {
     const box = el('estCustomer');
     if (!box) return;
@@ -736,12 +790,11 @@
         (i === 0 && site ? '<div>' + esc(site) + '</div>' : '') +
         (w.scope.trim() ? '<div class="cv-scope">' + esc(w.scope.trim()) + '</div>' : '') +
       '</div><div class="cv-amt">' + cents(w.cents) + '</div></div>');
-    if (r.materialsCents > 0) {
-      const head = work.length === 1 && work[0].title ? 'Materials: ' + work[0].title : 'Materials';
-      rows.push('<div class="cv-line"><div class="cv-text"><b>' + esc(head) + '</b>' +
-        '<div class="cv-scope">' + P().materialsList(r).map(esc).join('<br>') + '</div></div>' +
-        '<div class="cv-amt">' + cents(r.materialsCents) + '</div></div>');
-    }
+    materialParts(r, work).forEach(m => {
+      rows.push('<div class="cv-line"><div class="cv-text"><b>' + esc(m.head) + '</b>' +
+        '<div class="cv-scope">' + m.list.map(esc).join('<br>') + '</div></div>' +
+        '<div class="cv-amt">' + cents(m.cents) + '</div></div>');
+    });
     // The warranty and the terms end every estimate: QuickBooks products
     // (Pricing rules), shown with their text once QuickBooks has answered.
     const ends = P().endItems();
@@ -758,7 +811,9 @@
       '<div class="cv-head"><b>' + esc((el('customerName') && el('customerName').value) || 'Customer') + '</b>' +
         (qb() && qb().docNumber ? ' · Estimate #' + esc(qb().docNumber) : '') + '</div>' +
       rows.join('') +
-      '<div class="cv-total"><span>Total</span><b>' + cents(r.totalCents) + '</b></div>' +
+      (r.tax && r.tax.cents > 0 ? '<div class="cv-sub"><span>Subtotal</span><span>' + cents(r.totalCents) + '</span></div>' +
+        '<div class="cv-sub"><span>Sales tax</span><span>' + cents(r.tax.cents) + '</span></div>' : '') +
+      '<div class="cv-total"><span>Total</span><b>' + cents(r.grandCents) + '</b></div>' +
       (memo ? '<div class="cv-memo">' + esc(memo) + '</div>' : '') +
       '<div class="hint">Laid out the way QuickBooks shows it; their page adds your logo, the date and the Accept button.</div>' +
     '</div>';
@@ -988,7 +1043,8 @@
     const terms = String((above !== null && totalCents > above ? p.threeText : p.twoText) || '').trim();
     // This estimate's own payments, with its deposit floor (the materials).
     const r = last || priced();
-    const pays = P() ? P().payments(totalCents, rules, { plan: est.payments, materialsCents: r ? r.materialsCents : 0 }) : [];
+    const pays = P() ? P().payments(totalCents, rules, { plan: est.payments,
+      materialsCents: r ? r.materialsCents + ((r.tax && r.tax.materialsTaxCents) || 0) : 0 }) : [];
     return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms].filter(Boolean).join('\n\n');
   }
 
@@ -1989,7 +2045,7 @@
     if (email) {
       if (!to) { showToast('Add the customer’s email on the job first'); return; }
       if (!confirm((q.sentAt ? 'Email the updated estimate' : 'Email this estimate') + ' to ' + to +
-        ' from QuickBooks?\n\nTotal ' + cents(r.totalCents))) return;
+        ' from QuickBooks?\n\nTotal ' + cents(r.grandCents) + (r.tax.cents > 0 ? ' (with ' + cents(r.tax.cents) + ' sales tax)' : ''))) return;
     }
     if (!(await realCompanyOrTest(email ? 'Emailing this estimate' : 'This estimate'))) {
       showToast('Not sent — QuickBooks is on the test company');
@@ -2003,8 +2059,12 @@
     const site = siteLine();
     saving = true; renderQb();
     try {
-      const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '' }))
+      // Each line taxed or not (pricing.js salesTax): QuickBooks works out the
+      // tax on the taxed ones from the job's address.
+      const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '',
+                                             taxable: !!r.work[i].taxed }))
         .filter(w => w.cents > 0 || w.scope.trim());
+      const parts = materialParts(r, work);
       const out = await askQb('/qb/estimate', {
         jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
         estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
@@ -2012,16 +2072,24 @@
                     city: f('city'), state: f('state'), zip: f('zip') },
         site: site,
         work: work,
+        materialParts: parts.map(m => ({ head: m.head, list: m.list, cents: m.cents, taxable: m.taxed })),
         materials: { list: P().materialsList(r), cents: r.materialsCents },
         memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
         // The warranty and terms products, last (their text is read from
         // QuickBooks by the server).
         endItems: P().endItems(),
-        totalCents: r.totalCents,
+        totalCents: r.grandCents,
       });
+      // QuickBooks' tax comes from the address; a county rate other than the
+      // one in Pricing rules makes its total differ from Job Hub's.
+      const qbTotal = Math.round(Number(out.total) * 100);
+      if (isFinite(qbTotal) && Math.abs(qbTotal - r.grandCents) > 100) {
+        setTimeout(() => showToast('QuickBooks’ total is ' + cents(qbTotal) + ' (its sales tax for this address) — Job Hub showed ' +
+          cents(r.grandCents) + '. The payments in the message are worked from Job Hub’s.', 9000), 2500);
+      }
       // This version, as it went (see SENT_KEEP).
       const version = { at: new Date().toISOString(), emailed: !!email, docNumber: out.docNumber || null,
-        totalCents: r.totalCents, materialsCents: r.materialsCents,
+        totalCents: r.grandCents, taxCents: r.tax.cents, materialsCents: r.materialsCents,
         work: work.map(w => ({ title: w.title, cents: w.cents })), materials: P().materialsList(r) };
       if (currentJobId === jobId) {
         est.sent = (est.sent || []).concat([version]).slice(-SENT_KEEP);
