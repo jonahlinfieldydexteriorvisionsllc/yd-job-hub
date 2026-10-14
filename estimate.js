@@ -2159,6 +2159,17 @@
     // labour was raised there by hand): sending from here replaces the whole
     // estimate with Job Hub's version, so say so first.
     if (q.id && !(await qbUnchanged(q))) return;
+    // The fuel prices it was priced with stay with it: the weekly EIA figure
+    // moving must not move the price of an estimate the customer already has
+    // (14 Oct 2026: a sent estimate re-priced itself $1.28 higher). Cleared
+    // by hand on the estimate, it follows the current price again.
+    const fu = r.fuel || {}, f0 = est.fuel || {};
+    if ((num(f0.gasCents) === null && num(fu.gasCents) !== null) || (num(f0.dieselCents) === null && num(fu.dieselCents) !== null)) {
+      est.fuel = Object.assign({}, f0, {
+        gasCents: num(f0.gasCents) !== null ? num(f0.gasCents) : num(fu.gasCents),
+        dieselCents: num(f0.dieselCents) !== null ? num(f0.dieselCents) : num(fu.dieselCents) });
+      if (typeof markDirty === 'function') markDirty();
+    }
     // The job is saved first so it has an id, and so what is on screen is
     // what is kept with the job.
     if (typeof autosave === 'function') autosave();
