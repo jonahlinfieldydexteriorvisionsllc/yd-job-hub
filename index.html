@@ -521,6 +521,18 @@
         </div>
       </div>
     </div>
+
+    <!-- Estimate vs actual (jobcosts.js): what the job was bid at against what
+         it took -- crew-days, labour, materials, delivery, fuel, dumpsters --
+         and where it made or lost money. The owner, and an admin given both
+         Jobs and Crew hours & pay. -->
+    <div class="section" id="evaSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Estimate vs actual</span>
+        <span class="section-badge" id="evaBadge"></span>
+      </div>
+      <div class="section-body" id="evaWrap"></div>
+    </div>
   </div>
 
   <!-- ============ TAB 3: ALL JOBS ============ -->
@@ -545,6 +557,15 @@
         </div>
         <div class="table-wrap" id="dashTableWrap"></div>
       </div>
+    </div>
+    <!-- Every job's estimate against what it actually took, side by side,
+         worst first (jobcosts.js). Same people as the job's own. -->
+    <div class="section" id="evaListSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Estimate vs actual — job by job</span>
+        <span class="section-badge" id="evaListBadge"></span>
+      </div>
+      <div class="section-body" id="evaListWrap"></div>
     </div>
     <div class="section" id="subsSection" hidden>
       <div class="section-head">
@@ -1045,6 +1066,7 @@
 <script src="./estimate.js"></script>
 <script src="./receipts.js"></script>
 <script src="./subs.js"></script>
+<script src="./jobcosts.js"></script>
 <script src="./paychecks.js"></script>
 <script src="./notify.js"></script>
 <script src="./crewnotes.js"></script>

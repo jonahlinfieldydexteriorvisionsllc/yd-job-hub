@@ -150,6 +150,11 @@
       // from the job's address when the estimate goes in.
       customerTaxPct: null,
       crewDayCents: null,
+      // How many paid hours -- the whole crew's together -- make one
+      // crew-day: what turns the clock's hours into crew-days on Estimate vs
+      // actual (jobcosts.js). His to say (3 people x 8 hours = 24, say);
+      // nothing is assumed until he does.
+      crewDayHours: null,
       // Profit per crew-day: his own amounts, as many as he likes, and the
       // usual one (null until he sets them: then the old three are used).
       profitChoices: null,
@@ -1073,6 +1078,8 @@
 
       '<h3 class="pr-h">Labour</h3><div class="pr-grid">' +
         box('Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')", 'what a crew-day costs, for estimating') +
+        box('Hours in a crew-day', r.crewDayHours, "prSet('crewDayHours', this.value, 'num')",
+          'paid hours of the whole crew together — 3 people × 8 hours = 24. Turns clocked hours into crew-days on Estimate vs actual') +
       '</div>' +
       profitChoicesHtml(r, ro) +
       // Services priced by the unit, with their adjustments and his notes on

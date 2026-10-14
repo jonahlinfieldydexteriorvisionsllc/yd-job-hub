@@ -143,7 +143,31 @@
     book: () => book,
     orderLines: orderLines,
     jobCompleted: (id, data) => jobCompleted(id, data),
+    // Any job's saved estimate priced the way this screen prices it, for a
+    // job that is not open (Estimate vs actual, jobcosts.js): the same
+    // pricing.js price() with the same Supplies, rules and price book --
+    // never a second copy of the sums. null before pricing.js is there.
+    priceSaved: (saved, city) => (P() ? P().price(fromSaved(saved || {}), ctx(city == null ? '' : city)) : null),
   };
+
+  // What the estimate cost us, as it stood when it went to QuickBooks: kept
+  // with each version sent, so Estimate vs actual (jobcosts.js) compares the
+  // job with what was BID. Pricing it again later would not do -- a receipt
+  // updates Supplies to what was really paid (receipts.js offerPrices), which
+  // would quietly move the estimate onto the actual and hide the difference.
+  // byKind: the landed cost of each kind of material, so dumpsters and
+  // rentals can be told from the rest.
+  function costSnapshot(r) {
+    const p = r.profit || {}, byKind = {};
+    r.takeoff.concat(r.added).forEach(l => {
+      if (l.costTotalCents > 0) byKind[l.category || 'other'] = (byKind[l.category || 'other'] || 0) + l.costTotalCents;
+    });
+    const n = v => (typeof v === 'number' && isFinite(v) ? v : 0);
+    return { priceCents: n(r.totalCents), crewDays: n(r.crewDays), crewDayCents: num(P().rules().crewDayCents),
+             materialCostCents: n(p.materialCostCents), deliveryCostCents: n(p.deliveryCostCents),
+             fuelCostCents: n(p.fuelCostCents), laborCostCents: n(p.laborCostCents), costCents: n(p.costCents),
+             byKind: byKind, complete: !!p.complete };
+  }
 
   // What to buy for an estimate: every material it prices -- the takeoff and
   // what the rules add (dumpsters, the planting package, markers) -- in the
@@ -2212,7 +2236,8 @@
       // This version, as it went (see SENT_KEEP).
       const version = { at: new Date().toISOString(), emailed: !!email, docNumber: out.docNumber || null,
         totalCents: r.grandCents, taxCents: r.tax.cents, materialsCents: r.materialsCents,
-        work: work.map(w => ({ title: w.title, cents: w.cents })), materials: P().materialsList(r) };
+        work: work.map(w => ({ title: w.title, cents: w.cents })), materials: P().materialsList(r),
+        cost: costSnapshot(r) };
       if (currentJobId === jobId) {
         est.sent = (est.sent || []).concat([version]).slice(-SENT_KEEP);
         if (typeof markDirty === 'function') markDirty();

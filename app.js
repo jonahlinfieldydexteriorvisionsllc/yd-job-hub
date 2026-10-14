@@ -71,8 +71,10 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // board the same way, and qbEstimate (what QuickBooks holds of the estimate)
 // by the server and estimate.js, so both ride along with the form too. So does
 // acceptedSeenAt: when the estimate was first seen accepted (sync.js
-// bookIfAccepted measures a later move of the bid from it).
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt'];
+// bookIfAccepted measures a later move of the bid from it). costByHand (the
+// figures typed in by hand on Estimate vs actual, jobcosts.js) is written
+// through patchJob too, from Tracking or from All Jobs.
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'costByHand'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -1662,6 +1664,9 @@ function updateSummary() {
   ].map(c => '<div class="fin-card ' + c.top + '"><div class="fin-label">' + c.label + '</div><div class="fin-value ' + c.cls + '">' + c.value + '</div><div style="font-size:11px;color:var(--muted);margin-top:3px">' + c.sub + '</div></div>').join('');
 
   renderPayments();
+  // Estimate vs actual reads the same figures (jobcosts.js); it redraws
+  // once the changes pause, and only while Tracking is on screen.
+  if (window.YDJobCosts) window.YDJobCosts.jobChanged();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2047,6 +2052,9 @@ function renderDashboardSoon() {
   dashSearchTimer = setTimeout(renderDashboard, 180);
 }
 function renderDashboard() {
+  // The job-by-job Estimate vs actual below the table (jobcosts.js) has its
+  // own filters; it redraws whenever this does, once things settle.
+  if (window.YDJobCosts) window.YDJobCosts.listChanged();
   const svcSel = document.getElementById('dashFilter');
   const jobsAll = loadAllJobs();
   // Rebuild the service filter every render so newly-added service types appear (keep current pick)

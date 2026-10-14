@@ -2618,3 +2618,75 @@
   html[data-night] .hm-job-m small.hm-when.late { color:var(--neg); }
   html[data-night] .hm-job-m small.hm-when.you { color:#7aa7ef; }
   html[data-night] .hm-alert { background:#13272e; background:color-mix(in srgb, #3fb6d8 16%, var(--surface)); }
+  /* ---- Estimate vs actual (jobcosts.js): the job on Tracking, every job on All Jobs ---- */
+  .eva-basis { font-size:13px; line-height:1.5; margin-bottom:10px; }
+  .eva-basis .hint { margin-top:2px; }
+  .eva-setup { margin-bottom:10px; padding:9px 12px; border-radius:8px; border:1px solid var(--accent); background:var(--surface-2); font-size:12.5px; line-height:1.5; }
+  .eva-setup .btn { margin-left:4px; }
+  .eva-table { font-size:13px; }
+  .eva-table th:not(:first-child), .eva-table td:not(:first-child) { text-align:right; }
+  .eva-table td { padding:8px; vertical-align:top; }
+  .eva-table td small { display:block; font-size:11px; color:var(--muted); font-weight:400; line-height:1.35; margin-top:2px; }
+  .eva-table .eva-l { font-weight:600; }
+  .eva-table tr.eva-total td { border-top:2px solid var(--border); font-weight:700; }
+  .eva-table tr.eva-profit td { font-size:14.5px; }
+  .eva-good { color:var(--pos); font-weight:700; }
+  .eva-bad { color:var(--neg); font-weight:700; }
+  .eva-none { color:var(--muted); font-style:italic; }
+  .eva-hand { display:inline-block; font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; padding:1px 6px;
+    border-radius:10px; background:#fbeaca; color:#9a6a12; margin-left:5px; vertical-align:1px; }
+  .eva-v { white-space:nowrap; }
+  .eva-pen { background:none; border:0; color:var(--brand-2); cursor:pointer; font-size:13px; padding:0 2px 0 6px; line-height:1; }
+  .eva-pen:hover { color:var(--brand); }
+  .eva-edit { margin:12px 0 4px; padding:12px; border:1.5px dashed var(--border-strong); border-radius:8px; background:var(--surface-2);
+    display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .eva-edit-h { flex-basis:100%; font-weight:700; font-size:13px; }
+  .eva-edit input { width:auto; flex:1 1 150px; min-width:0; }
+  .eva-more { margin-top:12px; font-size:12.5px; }
+  .eva-more summary { cursor:pointer; font-weight:600; font-size:13px; color:var(--brand-2); }
+  .eva-more ul { margin:8px 0 0 18px; line-height:1.55; }
+  .eva-more li { overflow-wrap:anywhere; }
+  .eva-warnline { color:var(--accent-dark); }
+  .section-badge.eva-badge-good { background:var(--pos); color:#fff; }
+  .section-badge.eva-badge-bad { background:var(--neg); color:#fff; }
+  .eva-list th.eva-sort { cursor:pointer; }
+  .eva-list td { white-space:nowrap; }
+  .eva-list tbody tr { cursor:pointer; }
+  .eva-star { color:var(--accent-dark); font-weight:700; margin-left:2px; cursor:help; }
+  .eva-of { font-size:13px; color:var(--muted); font-family:'DM Sans',sans-serif; font-weight:600; }
+  /* Choosing which estimate to compare with only looks; it stays usable for
+     an admin who may see jobs but not change them. */
+  html[data-jobs-readonly] #panel-tracking .eva-view-btn { pointer-events:auto; opacity:1; }
+  /* On a phone each line's name goes across the top and its three figures
+     sit under Estimated / Actual / Difference -- four columns left the
+     figures a few letters wide. */
+  @media (max-width:720px) {
+    .eva-table { font-size:13px; }
+    .eva-table, .eva-table thead, .eva-table tbody { display:block; }
+    .eva-table tr { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); column-gap:8px; padding:7px 0; border-bottom:1px solid var(--border); }
+    .eva-table thead tr { padding:0; border-bottom:2px solid var(--border); }
+    .eva-table th { padding:6px 0; border:0; letter-spacing:.5px; }
+    .eva-table th:first-child { display:none; }
+    .eva-table td { padding:1px 0; border:0; }
+    .eva-table td:first-child { grid-column:1 / -1; text-align:left; padding-bottom:3px; }
+    .eva-table td:first-child small { display:inline; margin-left:6px; }
+    .eva-table tr.eva-total { border-top:2px solid var(--border); }
+    .eva-table tr.eva-total td { border-top:0; }
+    .eva-pen { min-width:32px; min-height:32px; padding:0; vertical-align:middle; }
+    .eva-edit input { flex-basis:100%; }
+    /* Every job a card: its name and status, then each figure under its own label */
+    .eva-totals { grid-template-columns:1fr 1fr; gap:8px; }
+    .eva-totals .summary-card { padding:10px 12px; }
+    .eva-totals .summary-value { font-size:19px; }
+    .eva-list, .eva-list tbody { display:block; }
+    .eva-list thead { display:none; }
+    .eva-list tr { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px 8px; padding:10px 0; border-bottom:1px solid var(--border); }
+    .eva-list td { padding:0; border:0; white-space:normal; font-size:13px; }
+    .eva-list td.eva-job { grid-column:1 / 3; }
+    .eva-list td.eva-st { text-align:right; }
+    .eva-list td[data-l]::before { content:attr(data-l); display:block; font-size:9.5px; font-weight:700; letter-spacing:.6px;
+      text-transform:uppercase; color:var(--muted); }
+  }
+  /* Sorting by the column headings on a wide screen; a picker on a phone */
+  .eva-sort-pick { display:none; }
+  @media (max-width:720px) { .eva-sort-pick { display:block; } }

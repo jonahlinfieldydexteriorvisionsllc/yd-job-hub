@@ -827,6 +827,8 @@
       fileBills();
       const p = el('panel-dashboard');
       if (p && p.classList.contains('active')) render();
+      // A job's subcontractor costs (forJob) may have moved.
+      document.dispatchEvent(new CustomEvent('yd-subs'));
     }, () => {});
   }
   document.addEventListener('yd-receipts', () => {
@@ -835,10 +837,35 @@
     if (p && p.classList.contains('active')) render();
   });
 
+  // What subcontractors have charged on one job this season so far: every
+  // property here linked to that job, counted the way the cards above count
+  // them (whole visits on real dates, their price). For Estimate vs actual
+  // (jobcosts.js). null when no property is linked to the job -- or for
+  // anyone but the owner, who alone has the list.
+  function forJob(jobId) {
+    if (!jobId || !owner()) return null;
+    const now = new Date(), y = now.getFullYear();
+    const out = { cents: 0, ours: 0, visits: 0, subs: [] };
+    let linked = false;
+    subsList().forEach(s => {
+      const anchors = anchorsOf(s);
+      propsOf(s).filter(p => p.jobId === jobId).forEach(p => {
+        linked = true;
+        for (let m = 0; m <= now.getMonth(); m++) {
+          const x = monthOf(p, y, m, anchors[p.id], m === now.getMonth() ? now.getDate() : 0);
+          out.visits += x.visits; out.cents += x.their; out.ours += x.ours;
+        }
+        const name = s.name || 'Subcontractor';
+        if (out.subs.indexOf(name) === -1) out.subs.push(name);
+      });
+    });
+    return linked ? out : null;
+  }
+
   // list: the subcontractors set up here, for Receipts' Subcontractor picker
   // (empty for anyone but the owner, who alone reads them).
   window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r), subOf: r => subOf(r),
-    list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })) };
+    list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })), forJob: forJob };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {
