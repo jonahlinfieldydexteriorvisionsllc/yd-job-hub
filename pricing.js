@@ -127,10 +127,10 @@
       // depositCoversMaterials: the deposit is at least the Materials figure
       // (on unless switched off).
       payments: { splitAboveCents: null, twoText: '', threeText: '', warranty: '', minDepositPct: null, depositCoversMaterials: null },
-      // The $0 lines every QuickBooks estimate ends with: the warranty (its
-      // text is payments.warranty) and then the terms and conditions, each on
-      // its own QuickBooks product. Blank product names use END_ITEMS.
-      estimateEnd: { warrantyItem: '', termsItem: '', terms: '' },
+      // The $0 lines every QuickBooks estimate ends with, in order: the
+      // QuickBooks products whose descriptions hold the warranty and the
+      // terms and conditions (written in QuickBooks, read when sending).
+      estimateEnd: { items: [] },
       shop: { address: '', lat: null, lng: null },
       // Claude starts an estimate by itself when the site-visit notes are
       // written (estimate.js). On unless switched off.
@@ -592,26 +592,34 @@
       .map(l => l.name + ': ' + qtyText(l.orderQty, l.per));
   }
 
-  // The last lines of every QuickBooks estimate, in order: the warranty, then
-  // the terms and conditions. Customers e-sign the estimate, so these travel
-  // on it as lines of their own rather than in the 1000-character message.
-  // A line with no text is left off.
-  const END_ITEMS = { warranty: 'Warranty', terms: 'Terms & Conditions' };
-  const END_TITLES = { warranty: 'WARRANTY', terms: 'TERMS & CONDITIONS' };
-  const LINE_MAX = 4000;          // QuickBooks' limit on one line's description
-  function endLines(r) {
-    const e = r.estimateEnd || {};
-    return [
-      ['warranty', (r.payments || {}).warranty, e.warrantyItem],
-      ['terms', e.terms, e.termsItem],
-    ].map(([k, text, item]) => {
-      text = String(text || '').trim();
-      return text && {
-        key: k, item: String(item || '').trim() || END_ITEMS[k],
-        text: END_TITLES[k] + '\n\n' + text,
-      };
-    }).filter(Boolean);
+  // The last lines of every QuickBooks estimate, in order: the QuickBooks
+  // products holding the warranty and the terms and conditions. Customers
+  // e-sign the estimate, so these travel on it as lines of their own, one
+  // product each because one line holds 4000 characters. Their text is the
+  // product's description in QuickBooks; the server reads it when sending.
+  function endItems(r) {
+    const seen = {};
+    return ((r.estimateEnd || {}).items || []).map(n => String(n || '').trim())
+      .filter(n => n && !seen[n.toLowerCase()] && (seen[n.toLowerCase()] = true));
   }
+
+  // QuickBooks' products with their descriptions, asked for once a session
+  // (the Pricing rules list and the estimate preview show the text).
+  // A failed ask is not repeated by every redraw -- only by "Check again".
+  let qbProducts = null, qbAsking = null, qbFailed = false;
+  function loadQbProducts(again) {
+    if (again) { qbProducts = null; qbFailed = false; }
+    if (qbProducts || qbAsking || qbFailed || !window.YDClaude || !ydCan('billing', 'change')) return qbAsking;
+    qbAsking = Promise.resolve(window.YDClaude.post('/qb/items', {})).then(r => {
+      qbProducts = {};
+      (r && r.items || []).forEach(i => {
+        if (i.name && i.type !== 'Category') qbProducts[i.name.toLowerCase()] = { name: i.name, text: String(i.description || '') };
+      });
+    }).catch(() => { qbProducts = null; qbFailed = true; }).finally(() => { qbAsking = null; changed(); });
+    return qbAsking;
+  }
+  // undefined: not known (yet); null: no such product in QuickBooks.
+  const qbProduct = name => (qbProducts ? qbProducts[String(name || '').toLowerCase()] || null : undefined);
 
   // ------------------------------------------------------------- the rules doc
 
@@ -811,24 +819,61 @@
       (hint ? '<small>' + esc(hint) + '</small>' : '') + '</label>';
   }
 
-  // A warranty / terms box with a running count against QuickBooks' limit
-  // for one line (its heading counts too). Saved when the box is left.
-  function endBox(key, label, value, onchange, rows, ro) {
-    const text = String(value || ''), count = endCount(key, text);
-    return '<label class="pr-field wide"><span>' + esc(label) + ' <small class="pr-count' + (/too long/.test(count) ? ' over' : '') +
-      '" id="prEndCount_' + key + '">' + count + '</small></span><textarea rows="' + rows + '"' + (ro ? ' disabled' : '') +
-      ' oninput="prEndCount(\'' + key + '\', this.value)" onchange="' + onchange + '">' + esc(text) + '</textarea></label>';
+  // The products that end every estimate, in order, each with what QuickBooks
+  // has for it: its text's length, or that it is missing or empty (an
+  // estimate is refused then -- quickbooks._end_lines).
+  function endListHtml(ro) {
+    const list = endItems(rules);
+    loadQbProducts();
+    const state = n => {
+      const p = qbProduct(n);
+      if (p === undefined) return '<span class="muted">' + (qbFailed ? 'couldn’t reach QuickBooks' : 'checking QuickBooks…') + '</span>';
+      if (p === null) return '<span class="warn-text">not in QuickBooks yet — estimates stop until it is</span>';
+      if (!p.text.trim()) return '<span class="warn-text">no text in QuickBooks yet</span>';
+      return '✓ ' + p.text.trim().length.toLocaleString() + ' characters';
+    };
+    const rows = list.map((n, i) => '<div class="pr-end-row"><span class="pr-end-n">' + (i + 1) + '</span>' +
+      '<b>' + esc(n) + '</b><small>' + state(n) + '</small>' +
+      (ro ? '' : '<span class="pr-end-act">' +
+        '<button class="btn btn-sm" title="Up"' + (i === 0 ? ' disabled' : '') + ' onclick="prEndMove(' + i + ', -1)">▲</button>' +
+        '<button class="btn btn-sm" title="Down"' + (i === list.length - 1 ? ' disabled' : '') + ' onclick="prEndMove(' + i + ', 1)">▼</button>' +
+        '<button class="btn btn-sm" title="Take it off" onclick="prEndRemove(' + i + ')">✕</button></span>') +
+      '</div>');
+    const names = qbProducts ? Object.keys(qbProducts).map(k => qbProducts[k].name)
+      .filter(n => list.every(x => x.toLowerCase() !== n.toLowerCase())).sort() : [];
+    return '<div class="pr-end">' + (rows.join('') || '<p class="hint">Nothing yet — estimates end with the materials line.</p>') +
+      (ro ? '' : '<div class="pr-end-add"><input id="prEndNew" list="prEndNames" inputmode="text" placeholder="QuickBooks product, e.g. Warranty">' +
+        '<datalist id="prEndNames">' + names.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
+        '<button class="btn btn-sm" onclick="prEndAdd()">+ Add to the end</button>' +
+        '<button class="btn btn-sm" onclick="prEndRecheck()">Check QuickBooks again</button></div>') +
+      '</div>';
   }
-  function endCount(key, text) {
-    const t = String(text || '').trim();
-    if (!t) return 'not on estimates';
-    const n = END_TITLES[key].length + 2 + t.length;
-    return n.toLocaleString() + ' / ' + LINE_MAX.toLocaleString() + (n > LINE_MAX ? ' — too long for QuickBooks' : '');
-  }
-  window.prEndCount = function (key, v) {
-    const c = el('prEndCount_' + key);
-    if (c) { c.textContent = endCount(key, v); c.classList.toggle('over', /too long/.test(c.textContent)); }
+  function saveEnd(list) { save({ estimateEnd: Object.assign({}, rules.estimateEnd, { items: list }) }); }
+  window.prEndAdd = function () {
+    if (!owner()) return;
+    const box = el('prEndNew'), n = String(box && box.value || '').replace(/:/g, '-').replace(/\s+/g, ' ').trim();
+    if (!n) return;
+    const list = endItems(rules);
+    if (list.some(x => x.toLowerCase() === n.toLowerCase())) { showToast('“' + n + '” is already on the list'); return; }
+    const p = qbProduct(n);
+    saveEnd(list.concat([p ? p.name : n]));
+    if (p === null) showToast('Added — make “' + n + '” in QuickBooks with its text before the next estimate');
   };
+  window.prEndMove = function (i, d) {
+    if (!owner()) return;
+    const list = endItems(rules), j = i + d;
+    if (j < 0 || j >= list.length) return;
+    [list[i], list[j]] = [list[j], list[i]];
+    saveEnd(list);
+  };
+  window.prEndRemove = function (i) {
+    if (!owner()) return;
+    const list = endItems(rules);
+    if (!confirm('Take “' + list[i] + '” off the end of new estimates?')) return;
+    list.splice(i, 1);
+    saveEnd(list);
+  };
+  window.prEndRecheck = function () { loadQbProducts(true); changed(); };
 
   // The Supplies pickers on this screen. Every supply, by name, is sorted
   // and drawn once and kept until Supplies changes (the yd-supplies
@@ -980,17 +1025,10 @@
         esc(r.payments[k] || '') + '</textarea></label>').join('') +
 
       '<h3 class="pr-h">The end of every QuickBooks estimate</h3>' +
-      '<p class="hint">Customers e-sign the estimate itself, so these go on it as its last two lines ($0 each): the warranty, ' +
-        'then the terms and conditions — always last. Each is one line in QuickBooks, which holds ' + LINE_MAX.toLocaleString() +
-        ' characters. Leave one empty to leave that line off.</p>' +
-      endBox('warranty', 'Warranty', r.payments.warranty, "prSet('payments.warranty', this.value, 'text')", 4, ro) +
-      endBox('terms', 'Terms & conditions', (r.estimateEnd || {}).terms, "prSet('estimateEnd.terms', this.value, 'text')", 14, ro) +
-      '<div class="pr-grid">' +
-        box('QuickBooks product for the warranty', (r.estimateEnd || {}).warrantyItem || '', "prSet('estimateEnd.warrantyItem', this.value, 'text')",
-          'made in QuickBooks the first time if it isn’t there', ' inputmode="text" placeholder="' + END_ITEMS.warranty + '"') +
-        box('QuickBooks product for the terms', (r.estimateEnd || {}).termsItem || '', "prSet('estimateEnd.termsItem', this.value, 'text')",
-          '', ' inputmode="text" placeholder="' + END_ITEMS.terms + '"') +
-      '</div>' +
+      '<p class="hint">Customers e-sign the estimate itself, so the warranty and the terms and conditions go on it as its last lines ($0 each), ' +
+        'in this order. Each is a product in QuickBooks: its text is the product’s description there (4,000 characters at most — ' +
+        'split longer terms into more products). Change the wording in QuickBooks; the next estimate carries it.</p>' +
+      endListHtml(ro) +
 
       '<h3 class="pr-h">Claude</h3>' +
       '<div class="pr-spend" id="prSpend">' + spendHtml() + '</div>' +
@@ -1127,7 +1165,7 @@
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
-    endLines: () => endLines(rules), LINE_MAX,
+    endItems: () => endItems(rules), qbProduct, loadQbProducts,
   };
 
   let authKey = null;

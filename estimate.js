@@ -742,11 +742,16 @@
         '<div class="cv-scope">' + P().materialsList(r).map(esc).join('<br>') + '</div></div>' +
         '<div class="cv-amt">' + cents(r.materialsCents) + '</div></div>');
     }
-    // The warranty and the terms end every estimate (Pricing rules).
-    P().endLines().forEach(l => {
-      const [head, ...rest] = l.text.split('\n\n');
-      rows.push('<div class="cv-line cv-end"><div class="cv-text"><b>' + esc(head) + '</b>' +
-        '<div class="cv-scope">' + esc(rest.join('\n\n')) + '</div></div><div class="cv-amt">' + cents(0) + '</div></div>');
+    // The warranty and the terms end every estimate: QuickBooks products
+    // (Pricing rules), shown with their text once QuickBooks has answered.
+    const ends = P().endItems();
+    if (ends.length && sends()) P().loadQbProducts();
+    ends.forEach(n => {
+      const p = P().qbProduct(n);
+      const text = p ? p.text.trim() : p === null ? 'Not in QuickBooks yet — add this product (with its text) before sending.' : '';
+      rows.push('<div class="cv-line cv-end"><div class="cv-text"><b>' + esc(n) + '</b>' +
+        (text ? '<div class="cv-scope' + (p ? '' : ' warn-text') + '">' + esc(text) + '</div>' : '') +
+        '</div><div class="cv-amt">' + cents(0) + '</div></div>');
     });
     const memo = String(est.memo || '').trim() || defaultMemo(r.totalCents);
     box.innerHTML = '<div class="cv">' +
@@ -1977,10 +1982,6 @@
       '\n\nSend it anyway?')) return;
     const f = id => (el(id).value || '').trim();
     if (!f('customerName')) { showToast('Add a customer name first'); return; }
-    // The warranty and terms the customer signs: never cut short.
-    const ends = P().endLines();
-    const long = ends.find(l => l.text.length > P().LINE_MAX);
-    if (long) { showToast('The ' + long.item + ' text is too long for QuickBooks — shorten it in Pricing rules'); return; }
     const to = f('email');
     const q = qb() || {};
     if (email) {
@@ -2011,7 +2012,9 @@
         work: work,
         materials: { list: P().materialsList(r), cents: r.materialsCents },
         memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
-        endLines: ends.map(l => ({ item: l.item, text: l.text })),
+        // The warranty and terms products, last (their text is read from
+        // QuickBooks by the server).
+        endItems: P().endItems(),
         totalCents: r.totalCents,
       });
       // This version, as it went (see SENT_KEEP).

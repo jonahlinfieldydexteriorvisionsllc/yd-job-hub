@@ -876,24 +876,30 @@ def _estimate_lines(body):
     return out
 
 
-END_LINES_MAX = 2                # the warranty, then the terms
+END_LINES_MAX = 10               # products on the end of one estimate
 
 
 def _end_lines(body):
-    """The $0 lines every estimate ends with -- the warranty, then the terms
-    and conditions -- each on its own QuickBooks product (made if missing).
-    Customers e-sign the estimate itself, so these are part of what they agree
-    to: text too long for one line is refused, never cut short."""
+    """The $0 lines every estimate ends with, in order: the warranty, then the
+    terms and conditions -- one QuickBooks product each, written in
+    QuickBooks (a product's description holds 4000 characters, as a line
+    does). Each line carries its product's own description, read now, so a
+    change made there is on the next estimate. Customers e-sign the estimate
+    itself, so a product that is missing or has no text stops the estimate
+    rather than go out without it."""
     out = []
-    for end in (body.get("endLines") or [])[:END_LINES_MAX]:
-        item = str((end or {}).get("item") or "").strip()
-        text = str((end or {}).get("text") or "").strip()
-        if not item or not text:
-            continue
-        if len(text) > LINE_MAX:
-            raise RuntimeError("The %s on the estimate is %d characters; QuickBooks takes %d on one line. "
-                               "Shorten it in Pricing rules." % (item, len(text), LINE_MAX))
-        out.append(_line(_item_named(item), 0, text))
+    names = [n for n in (_qb_name(x) for x in body.get("endItems") or []) if n]
+    for name in names[:END_LINES_MAX]:
+        hit = next((i for i in _query("Item", "Name = '%s'" % _quote(name))
+                    if i.get("Type") != "Category" and i.get("Active", True)), None)
+        if not hit:
+            raise RuntimeError('QuickBooks has no product called "%s". Add it there with its text, '
+                               "or take it off the list in Pricing rules." % name)
+        text = str(hit.get("Description") or "").strip()
+        if not text:
+            raise RuntimeError('The QuickBooks product "%s" has no description -- its text is what goes '
+                               "on the estimate." % name)
+        out.append(_line(hit["Id"], 0, text))
     return out
 
 
@@ -932,9 +938,9 @@ def save_estimate(body):
 
     body: jobId, customer {name, email, phone, address, city, state, zip},
     site (the address line), work [{title, scope, cents, qbItem}],
-    materials {list, cents}, memo, endLines [{item, text}] (the warranty
-    and the terms, last), estimateId / customerId / env (from last time),
-    email (true to send).
+    materials {list, cents}, memo, endItems (QuickBooks product names: the
+    warranty and the terms, last), estimateId / customerId / env (from last
+    time), email (true to send).
     """
     job_id = str(body.get("jobId") or "").strip()
     if not job_id or "/" in job_id:
@@ -960,7 +966,8 @@ def save_estimate(body):
         raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
                            % existing["TxnStatus"].lower())
 
-    # Terms too long are refused before a customer is made for nothing.
+    # A missing warranty or terms product is found before a customer is
+    # made for nothing.
     ends = _end_lines(body)
     customer_id = _customer_for(c, str(body.get("customerId") or "") if same else "")
     lines = _estimate_lines(body)

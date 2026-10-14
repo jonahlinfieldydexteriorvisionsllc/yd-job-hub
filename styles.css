@@ -2273,10 +2273,15 @@
   .cv-amt { font-weight:700; white-space:nowrap; }
   .cv-total { display:flex; justify-content:space-between; padding:10px 0 4px; border-top:2px solid var(--text); font-size:16px; }
   .cv-memo { white-space:pre-wrap; font-size:12.5px; color:var(--muted); margin:8px 0; }
-  /* The warranty and the terms that end every estimate (pricing.js endLines) */
+  /* The warranty and the terms that end every estimate (pricing.js endItems) */
   .cv-end .cv-scope { font-size:12px; color:var(--muted); max-height:220px; overflow:auto; }
-  .pr-count { font-weight:600; margin-left:6px; }
-  .pr-count.over { color:var(--neg); }
+  .pr-end { display:flex; flex-direction:column; gap:6px; }
+  .pr-end-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; padding:8px 10px; border-radius:8px; background:var(--surface-2); font-size:13.5px; }
+  .pr-end-row small { font-size:12px; color:var(--muted); }
+  .pr-end-n { width:20px; height:20px; border-radius:10px; background:var(--brand); color:#fff; font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .pr-end-act { margin-left:auto; display:flex; gap:4px; }
+  .pr-end-add { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+  .pr-end-add input { flex:1; min-width:200px; font-size:14px; }
   .est-sent { margin:8px 0; font-size:13px; }
   .est-sent summary { cursor:pointer; font-weight:600; }
   .est-sent-row { padding:6px 0; border-top:1px solid var(--border); }
