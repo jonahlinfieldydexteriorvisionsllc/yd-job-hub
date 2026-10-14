@@ -100,6 +100,7 @@
   let eventUnsubs = {};
   let seeded = false;
   let peopleLoaded = false; // the users list has come from the server (owner, admin)
+  let calsHeard = false;    // the calendars have answered at least once (Home waits for it)
 
   let view = loadView();    // one of VIEWS (null until the first draw picks one)
   let cursor = '';          // the day the view is on (set on first draw)
@@ -216,14 +217,16 @@
   // entry as it is on that date (its own date, or what was changed for it);
   // `orig` is the date a repeat fell on, which names its single-date change.
   // `everything`: every layer, whatever is ticked in the side (My day).
-  function occurrences(from, to, everything) {
+  // `cardsOnly`: just the board cards and the recurring crew tasks (Home's
+  // late list looks months back, and needs none of the rest).
+  function occurrences(from, to, everything, cardsOnly) {
     const out = [];
     const uid = me() && me().uid;
     const w = YDRemind.who(people);
     const off = id => !everything && hidden.has(id);
     const onlyMine = !everything && onlyMineOn;
 
-    Object.keys(events).forEach(cid => {
+    if (!cardsOnly) Object.keys(events).forEach(cid => {
       const cal = cals[cid];
       if (!cal || off(cid)) return;
       Object.values(events[cid]).forEach(base => {
@@ -254,7 +257,7 @@
       });
     });
 
-    if (!off('auto:storms') && !onlyMine) {
+    if (!off('auto:storms') && !onlyMine && !cardsOnly) {
       Object.values(storms).forEach(s => {
         if (!s.startedAt || s.status === 'abandoned') return;
         const day = dayOf(new Date(s.startedAt));
@@ -265,7 +268,7 @@
       });
     }
 
-    if (ydCan('equipment', 'see') && !off('auto:equipment') && !onlyMine && window.YDEquipment) {
+    if (ydCan('equipment', 'see') && !off('auto:equipment') && !onlyMine && !cardsOnly && window.YDEquipment) {
       Object.values(YDEquipment.all()).forEach(g => {
         if (!g.dueDate || g.dueDate < from || g.dueDate > to) return;
         // Done when its service is logged, which moves the due date on: a
@@ -703,10 +706,17 @@
     render();
   };
   window.calTick = function (k, on) {
-    const o = drawn[k];
-    if (o) tick(o, on);
-    render();
+    if (drawn[k]) tickOcc(drawn[k], on);
   };
+  // Ticking one thing off (or back on), from here or from Home: a card
+  // moves to Done the way a drag there would, an entry has that one date
+  // marked done. Redraws, tells Home, and returns whether anything changed.
+  function tickOcc(o, on) {
+    const ok = tick(o, on);
+    render();
+    if (ok) announce();
+    return ok;
+  }
   // Ticks one thing off (or back on) for its own date. False when it could
   // not be.
   function tick(o, on) {
@@ -733,6 +743,7 @@
     if (!o || !tick(o, on)) return;
     closeCalModal();
     render();
+    announce();
     showToast(on ? 'Done — ' + shortDay(o.doneKey || o.day) : 'Not done after all');
   };
 
@@ -1090,7 +1101,11 @@
 
   window.calClick = function (k) {
     if (Date.now() - justDragged < 400) return;
-    const o = drawn[k];
+    clickOcc(drawn[k]);
+  };
+  // Opening one thing on the calendar, wherever it was drawn: here, or on
+  // Home (home.js, through YDCalendar.open).
+  function clickOcc(o) {
     if (!o) return;
     if (o.auto === 'storm') return calOpenStorm();
     if (o.auto === 'equipment') return calOpenEquipment(o.id);
@@ -1103,7 +1118,7 @@
       return;
     }
     openOcc(o);
-  };
+  }
 
   function openOcc(o) {
     const cal = cals[o.calId];
@@ -2182,10 +2197,23 @@
         else set[c.id] = Object.assign({ id: c.id }, c.data);
       });
       redrawIfVisible();
+      announce();
     });
   }
 
+  // Home (home.js) shows today from here and redraws when told. Every
+  // calendar's entries, the storms and the people each answer on their own
+  // at start-up; the ones in one moment are told once. A timer, not the
+  // next frame: a phone with the app in the background draws no frames, and
+  // Home must still be right when it comes back.
+  let announceTimer = 0;
+  function announce() {
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => document.dispatchEvent(new CustomEvent('yd-calendar-changed')), 120);
+  }
+
   function onCals(changes, meta) {
+    calsHeard = true;
     changes.forEach(c => {
       if (c.type === 'removed') {
         delete cals[c.id];
@@ -2221,6 +2249,7 @@
     }
     if (meta && !meta.fromCache) shareCrewCal();
     redrawIfVisible();
+    announce();
   }
 
   // The Crew tasks calendar is shared with exactly the people ticked as crew
@@ -2294,6 +2323,8 @@
     unsubCals = unsubStorms = unsubPeople = null;
     Object.values(eventUnsubs).forEach(u => u());
     eventUnsubs = {}; cals = {}; events = {}; storms = {}; people = {}; seeded = false; peopleLoaded = false;
+    calsHeard = false;
+    announce();
   }
 
   function start(a) {
@@ -2330,13 +2361,52 @@
         changes.forEach(c => { if (c.type === 'removed') delete people[c.id]; else people[c.id] = c.data; });
         if (meta && !meta.fromCache) { peopleLoaded = true; shareCrewCal(); }
         redrawIfVisible();
+        announce();
       }, () => {});
     }
     // Crew can read storms, so both see storm nights.
     unsubStorms = window.YDDb.watch('storms', changes => {
       changes.forEach(c => { if (c.type === 'removed') delete storms[c.id]; else storms[c.id] = Object.assign({ id: c.id }, c.data); });
       redrawIfVisible();
+      announce();
     }, () => {});
+  }
+
+  // ------------------------------------------------------------------ Home
+  //
+  // Home (home.js) shows the day the way My day splits it, drawn its own
+  // way: this person's things at set times and for any time, the crew's
+  // that are not theirs, and cards gone past their due date. Each comes
+  // with what Home writes beside it, and the occurrence itself (`o`), which
+  // Home hands back to open it or tick it off -- so a tap there does exactly
+  // what the same tap does here.
+  const LATE_DAYS = 120;        // how far back a forgotten card still counts as late
+  function forHome(o) {
+    return {
+      o: o, title: o.title, day: o.day, done: !!o.done, color: colorOf(o), canTick: canTick(o),
+      time: o.time ? fmtTimeRange(o.time, o.endTime || '') : '',
+      sub: [o.address, o.note, o.auto ? '' : o.layer.name].filter(Boolean).join(' · '),
+      who: whoOn(o),
+    };
+  }
+  function homeDay(day) {
+    const w = YDRemind.who(people);
+    if (!w) return null;
+    const timed = list => list.filter(o => o.time).sort((a, b) => String(to24(a.time)).localeCompare(String(to24(b.time))));
+    const untimed = list => list.filter(o => !o.time).sort(byKind);
+    const all = occurrences(day, day, true);
+    const mine = all.filter(o => occIsMine(o, w));
+    const crew = all.filter(o => !occIsMine(o, w) && isCrewOcc(o));
+    // Late: cards and crew tasks due on an earlier day and still not done.
+    // Calendar entries are not -- a day gone by is over, not overdue.
+    const late = occurrences(addDays(day, -LATE_DAYS), addDays(day, -1), true, true).filter(o => !o.done)
+      .sort((a, b) => a.day.localeCompare(b.day));
+    return {
+      mineTimed: timed(mine).map(forHome), mineAny: untimed(mine).map(forHome),
+      crewTimed: timed(crew).map(forHome), crewAny: untimed(crew).map(forHome),
+      mineLate: late.filter(o => occIsMine(o, w)).map(forHome),
+      crewLate: late.filter(o => !occIsMine(o, w) && isCrewOcc(o)).map(forHome),
+    };
   }
 
   window.YDCalendar = {
@@ -2354,6 +2424,22 @@
                        const p = people[c.uid];
                        return (p && (p.name || p.email)) || c.name || '';
                      }).filter(Boolean) }));
+    },
+    // Home (see homeDay above). `ready`: the calendars have answered once.
+    ready: () => calsHeard,
+    adds: () => adds(),
+    day: homeDay,
+    open: o => clickOcc(o),
+    tick: (o, on) => tickOcc(o, on),
+    // The next day each job is on a calendar, from today on: job id ->
+    // { day, time } (Home's list of jobs on the go). One pass for them all.
+    nextForJobs: days => {
+      const from = today(), out = {};
+      occurrences(from, addDays(from, days || 60), true).forEach(o => {
+        const id = o.ev && o.ev.jobId;
+        if (id && !out[id]) out[id] = { day: o.day, time: o.time ? fmtTimeRange(o.time) : '' };
+      });
+      return out;
     },
   };
 

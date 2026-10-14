@@ -596,7 +596,7 @@
     // A crew member who was somehow left on this tab gets moved off it.
     if (!owner) {
       const panel = el('panel-contacts');
-      if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('clock');
+      if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('home');
     }
 
     if (owner) start();

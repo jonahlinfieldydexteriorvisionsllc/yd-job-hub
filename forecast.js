@@ -304,6 +304,8 @@
   }
 
   function draw() {
+    // Home shows today's weather from the same copy (YDForecast below).
+    document.dispatchEvent(new CustomEvent('yd-forecast'));
     const chip = el('wxChip');
     if (chip) {
       if (data && data.now) {
@@ -407,6 +409,26 @@
     data = saved(p);
     draw();
     refresh(false);
+  };
+
+  // Today's weather for Home (home.js): what it is like now and the day
+  // ahead, in the town picked here, from the copy the header button shows --
+  // null until there is one. Never fetched for Home on its own.
+  window.YDForecast = {
+    today: () => {
+      if (!data || !data.now) return null;
+      const t = dayKey(new Date());
+      const d = (data.days || []).find(x => x.date === t);
+      const n = nowReading();
+      const [icon, words] = codeOf(n.code);
+      return {
+        place: PLACES[place].name, icon: icon, words: words, temp: deg(n.temp), feels: n.feels != null ? deg(n.feels) : '',
+        hi: d ? deg(d.hi) : '', lo: d ? deg(d.lo) : '', pop: d && d.pop ? d.pop : 0,
+        rain: d && d.rain >= 0.05 ? d.rain.toFixed(2) + '"' : '', snow: d && d.snow >= 0.1 ? d.snow + '"' : '',
+        wind: d && typeof d.wind === 'number' ? Math.round(d.wind) + ' mph' + (gusty(d.wind, d.gust) ? ', gusts ' + Math.round(d.gust) : '') : '',
+        alerts: (data.alerts || []).slice(), age: ago(data.at), stale: Date.now() - data.at > 3 * 3600000,
+      };
+    },
   };
 
   function boot() {

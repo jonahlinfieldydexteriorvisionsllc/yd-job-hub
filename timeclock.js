@@ -2984,6 +2984,37 @@
     // renamed, and the work log should not show one job under two names.
     label: e => (e.kind === 'job' && board[e.targetId] && board[e.targetId].name) ||
       e.targetName || OVERHEAD_LABEL[e.kind] || 'Other',
+    // Home (home.js). Who is on the clock now and who is on a break -- the
+    // same people On now lists -- for whoever sees everyone's hours.
+    onNow: () => {
+      if (!seesAll()) return { live: [], breaks: [] };
+      const byUid = {};
+      Object.values(entries).forEach(e => { (byUid[e.uid] = byUid[e.uid] || []).push(e); });
+      return {
+        live: Object.values(entries).filter(running)
+          .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)))
+          .map(e => ({ id: e.id, uid: e.uid, who: workerOf(e), where: e.targetName || '', kind: e.kind,
+                       ms: paidMs(e), paused: openPause(e) ? openPause(e).reason || 'paused' : '' })),
+        breaks: Object.keys(byUid).map(uid => breakOf(byUid[uid])).filter(Boolean)
+          .map(b => ({ id: b.id, uid: b.uid, who: workerOf(b), where: b.targetName || '', ms: Date.now() - endMsOf(b) })),
+      };
+    },
+    // This person's own clock: the shift running now, or the break they are
+    // on, or neither.
+    mine: () => {
+      const s = myOpenShift(), b = s ? null : myBreak();
+      return {
+        shift: s ? { id: s.id, where: s.targetName || '', kind: s.kind, since: clockTime(s.startedAt),
+                     ms: paidMs(s), paused: openPause(s) ? openPause(s).reason || 'paused' : '' } : null,
+        onBreak: b ? { id: b.id, where: b.targetName || '', since: clockTime(b.endedAt), ms: Date.now() - endMsOf(b) } : null,
+      };
+    },
+    // What is waiting for this person to decide: shifts to look at (not their
+    // own -- nobody settles their own pay) and changes the crew asked for.
+    toDecide: () => ({
+      shifts: Object.values(entries).filter(e => awaitingOwner(e) && mayDecide(e)).length,
+      asks: isOwner() ? Object.values(requests).filter(r => r.status === 'pending' && ASKABLE.indexOf(r.type) !== -1).length : 0,
+    }),
   };
 
   // ---------------------------------------------------------------- loading

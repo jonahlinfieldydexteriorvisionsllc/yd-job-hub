@@ -125,6 +125,9 @@
     render();
   };
   function render() {
+    // Home lists the unread ones (home.js); it is told whenever they may
+    // have changed, which is whenever this redraws.
+    document.dispatchEvent(new CustomEvent('yd-crew-notes'));
     const m = el('notesListModal');
     const badge = el('menuCrewNotes');
     if (badge) {
@@ -199,5 +202,8 @@
     if (k !== key) { key = k; if (on) start(a); else stop(); }
   });
 
-  window.YDCrewNotes = { unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name) };
+  window.YDCrewNotes = { unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name),
+    // The owner's unread notes, newest first (Home).
+    unreadList: () => unread().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
+      .map(n => ({ id: n.id, by: n.by || 'Someone', text: n.text || '', jobId: n.jobId || '', jobName: n.jobName || '', at: n.at || '' })) };
 })();

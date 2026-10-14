@@ -696,6 +696,14 @@
     return !!(e && ((e.work || []).length || (e.materials || []).length) && !(j.qbEstimate && j.qbEstimate.id) &&
       ['siteVisit', 'toSend'].indexOf(bidColumn(j)) !== -1);
   }
+  // The customer said yes in QuickBooks (seen by the hourly check,
+  // quickbooks.sweep) -- or said yes and it was already turned into an
+  // invoice there -- and the bid is not booked yet.
+  function acceptedToBook(j) {
+    const q = j.qbEstimate;
+    return !!q && (q.status === 'Accepted' || (/^(Closed|Converted)$/.test(q.status || '') && !!q.acceptedDate)) &&
+      bidColumn(j) !== 'won' && bidColumn(j) !== null;
+  }
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     const days = daysSince(since);
@@ -714,10 +722,7 @@
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
       (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
-      // The customer said yes in QuickBooks (seen by the hourly check, quickbooks.sweep)
-      // -- or said yes and it was already turned into an invoice there.
-      (board.id === 'bids' && j.qbEstimate && (j.qbEstimate.status === 'Accepted' ||
-        (/^(Closed|Converted)$/.test(j.qbEstimate.status || '') && j.qbEstimate.acceptedDate)) && bidColumn(j) !== 'won'
+      (board.id === 'bids' && acceptedToBook(j)
         ? '<div class="bd-card-line bd-draft">✅ Accepted in QuickBooks — book it</div>' : '') +
       '<div class="bd-card-foot">' +
         (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>' : '') +
@@ -2236,6 +2241,13 @@
   window.YDBoards = {
     doneCol: doneColOf,
     render: render,
+    // Where a job sits on the Bids and Jobs boards, and the bids to chase --
+    // Home (home.js) lists them by the same rules, so the two never disagree.
+    bidColumn: bidColumn,
+    workColumn: workColumn,
+    toChase: () => toChase(),
+    hasDraft: hasDraft,
+    acceptedToBook: acceptedToBook,
     ready: () => ready,
     // Whether a board's cards have come from the server, not just the cache.
     cardsReady: id => !!cardsLoaded[id],

@@ -359,17 +359,17 @@ document.addEventListener('yd-auth', e => {
   // An admin who may look at jobs but not change them gets the form locked.
   applyJobsReadOnly();
 
-  // The attribute lets the stylesheet put Boards and Supplies on the phone's
-  // bar for anyone without the job screens, where the owner's phone keeps
-  // them behind More.
+  // The attribute tells the stylesheet this is somebody without the job
+  // screens (crew, mostly).
   document.documentElement.toggleAttribute('data-crew', noJobs);
   const more = document.getElementById('tabMore');
   // Crew get More too now: it holds their notification settings.
   if (more) more.hidden = false;
+  // Left on a job screen they may no longer see: Home, which everybody has.
   if (noJobs) {
     const openTab = document.querySelector('.tab-panel.active');
     if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard']
-        .indexOf(openTab.id) !== -1) switchTab('clock');
+        .indexOf(openTab.id) !== -1) switchTab('home');
   }
 });
 
@@ -414,9 +414,7 @@ function openMore() {
   const wrap = document.getElementById('moreItems');
   const sheet = document.getElementById('moreSheet');
   if (!wrap || !sheet) return;
-  // A crew phone already has Boards and Supplies on its bar.
-  const onCrewBar = document.documentElement.hasAttribute('data-crew') ? ['boards', 'supplies'] : [];
-  const hidden = TABS.filter(n => PHONE_TABS.indexOf(n) === -1 && onCrewBar.indexOf(n) === -1)
+  const hidden = TABS.filter(n => PHONE_TABS.indexOf(n) === -1)
     .filter(n => {
       const b = document.getElementById(tabButtonId(n));
       return b && !b.hidden;
@@ -457,7 +455,7 @@ function closeMore() {
   if (s) s.classList.remove('active');
 }
 function tabButtonId(name) {
-  return { crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
+  return { home: 'tabHome', crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
     dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
     supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts' }[name] || '';
@@ -540,10 +538,16 @@ function closeOnTapOutside(id) {
 // and Supplies beside it, All Jobs on the far right. Materials used to be a
 // tab of its own; it is now the second half of Supplies, beside the suppliers
 // it is bought from.
-const TABS = ['crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
+// Home comes first and is where the app opens (Jonah, 14 Oct 2026: "make
+// home page for the job hub with overviews of things") -- home.js.
+const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
 // crewjobs: the crew's Jobs tab (crewjobs.js) -- shown only to whoever cannot see the Job tab.
-const PHONE_TABS = ['crewjobs', 'job', 'snow', 'clock', 'calendar', 'dashboard'];
-const TAB_LABEL = { crewjobs: '🧰 Jobs', job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
+// Five on a phone's bar for anybody: Home took All Jobs' place on the
+// owner's (Home has the jobs on the go and the ones to invoice; the full
+// table is a laptop screen), and Boards and Supplies' on the crew's (their
+// cards and crew tasks for the day are on Home). All three are in More.
+const PHONE_TABS = ['home', 'crewjobs', 'job', 'snow', 'clock', 'calendar'];
+const TAB_LABEL = { home: '🏠 Home', crewjobs: '🧰 Jobs', job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
   equipment: '🚜 Equipment', tracking: '🔨 Tracking',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
@@ -552,6 +556,7 @@ const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
   receipts: 'Purchases from your email — put each on its job',
   equipment: 'What each machine and truck is due for',
   tracking: 'Hours and materials on the job you have open',
+  dashboard: 'Every job with its price and what it made',
   contacts: 'People to ring later' };
 
 function switchTab(name) {
@@ -599,6 +604,7 @@ function switchTab(name) {
   if (name === 'receipts' && window.YDReceipts) YDReceipts.render();
   if (name === 'dashboard' && window.YDSubs) YDSubs.render();
   if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
+  if (name === 'home' && window.YDHome) YDHome.render();
 }
 
 // A notification tapped while Job Hub is already open. The service worker
@@ -2301,8 +2307,10 @@ window.addEventListener('DOMContentLoaded', () => {
 
   migrateJobIndex();   // repair index entries from older versions (prices, fields, key scheme)
 
+  // The last job worked on is put in the form, ready on the Job tab -- but
+  // quietly: the app opens on Home now, not on the job.
   const idx = getJobIndex();
-  if (idx.length) { idx.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || '')); loadJob(idx[0].id); }
+  if (idx.length) { idx.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || '')); loadJob(idx[0].id, true); }
 
   // Ask the browser to keep our data (reduces iOS/Safari eviction)
   if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }

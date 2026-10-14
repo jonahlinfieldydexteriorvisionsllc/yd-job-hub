@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-tab="job">
+<html lang="en" data-tab="home">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -89,8 +89,9 @@
   </div>
 
   <div class="tab-bar">
+    <button class="tab-btn active" id="tabHome" onclick="switchTab('home')"><span class="tab-icon">🏠</span>Home</button>
     <button class="tab-btn" id="tabCrewJobs" hidden onclick="switchTab('crewjobs')"><span class="tab-icon">🧰</span>Jobs</button>
-    <button class="tab-btn active" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
+    <button class="tab-btn" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📋</span>Job</button>
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">🔨</span>Tracking</button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
     <button class="tab-btn" id="tabReceipts" hidden onclick="switchTab('receipts')"><span class="tab-icon">🧾</span>Receipts<span class="tab-count" id="rcTabCount"></span></button>
@@ -116,8 +117,15 @@
     </div>
   </div>
 
+  <!-- ============ TAB: HOME ============ -->
+  <!-- Where the app opens: today, the crew's day, and what wants doing --
+       each person's own, by what they may see (home.js). -->
+  <div class="tab-panel active" id="panel-home">
+    <div class="home" id="homeWrap"><p class="empty-msg">Loading…</p></div>
+  </div>
+
   <!-- ============ TAB 1: JOB ============ -->
-  <div class="tab-panel active" id="panel-job">
+  <div class="tab-panel" id="panel-job">
 
     <!-- A bid is not a job until it is booked (app.js isBidStatus). -->
     <div class="bid-banner" id="bidBanner" hidden>
@@ -1043,6 +1051,7 @@
 <script src="./crewjobs.js"></script>
 <script src="./jobphotos.js"></script>
 <script src="./forecast.js"></script>
+<script src="./home.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
 </html>

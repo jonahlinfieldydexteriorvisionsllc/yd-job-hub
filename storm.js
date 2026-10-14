@@ -799,9 +799,11 @@
       // not on screen, and redrawing every phone's list for it moved the
       // buttons under whoever was tapping. So is this phone's own write
       // coming back, already drawn when it was made.
-      if (shown) render();
+      if (shown) { render(); stormNews(); }
     });
   }
+  // Home shows the storm under way and how far along it is (home.js).
+  function stormNews() { document.dispatchEvent(new CustomEvent('yd-storm-changed')); }
 
   // A stop change that leaves what the list shows as it was: only the
   // recorded position moved (arriveLat/Lng, departLat/Lng), or nothing did.
@@ -846,6 +848,7 @@
       if (storm && changedStorm) watchStops(storm.id);
       if (!storm && unsubStops) { unsubStops(); unsubStops = null; stops = {}; }
       render();
+      stormNews();
     });
   }
 

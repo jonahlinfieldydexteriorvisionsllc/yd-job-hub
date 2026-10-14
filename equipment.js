@@ -1052,6 +1052,8 @@
       });
       if (meta && !meta.fromCache) gearLoaded = true;
       renderEquipment();
+      // Home lists what needs a look (needs(), below).
+      document.dispatchEvent(new CustomEvent('yd-equipment-changed'));
       // Not while something is being typed into the detail -- a change from
       // another device would otherwise wipe the half-written problem.
       if (openId && gear[openId] && !editingId && !notingIssue && !el('svWhat')) renderDetail();
@@ -1332,6 +1334,20 @@
       renderEquipment();
     },
     overdue: () => Object.values(gear).filter(g => due(g).state === 'overdue'),
+    // Home (home.js): every machine that wants a look, most pressing first
+    // -- the order the Equipment tab sorts them in. Out of service, then
+    // fix-before-use, then service overdue, then the rest that are close.
+    needs: () => {
+      const order = { overdue: 0, soon: 1, ok: 2, none: 3 };
+      return Object.values(gear).map(g => {
+        const d = due(g), w = worstIssue(g), n = openIssues(g).length;
+        const u = w ? urgencyOf(w.urgency) : null;
+        return { id: g.id, name: g.name || 'Machine', due: d, issueRank: w ? rankOf(w.urgency) : URGENCY.length,
+                 issue: w ? { label: u.label, color: u.color, what: w.what || '', more: n - 1, urgency: w.urgency } : null };
+      }).filter(x => x.issueRank <= 2 || x.due.state === 'overdue' || x.due.state === 'soon')
+        .sort((a, b) => Math.min(a.issueRank, 2) - Math.min(b.issueRank, 2) ||
+          order[a.due.state] - order[b.due.state] || String(a.name).localeCompare(b.name));
+    },
     render: () => renderEquipment(),
     // The Maintenance board's machine card moved to Done (boards.js): the
     // machine opens with its service form, the hours or miles asked for as on

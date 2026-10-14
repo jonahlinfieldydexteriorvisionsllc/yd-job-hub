@@ -198,12 +198,18 @@
 
   // ------------------------------------------------------- the Jobs tab
 
-  function render() {
-    const wrap = el('crewJobsWrap');
-    if (!wrap) return;
-    const list = Object.keys(jobs).map(id => Object.assign({ id: id }, jobs[id]))
+  // In progress first, then booked; A to Z within each.
+  function listed() {
+    return Object.keys(jobs).map(id => Object.assign({ id: id }, jobs[id]))
       .sort((a, b) => (a.status === 'inprogress' ? 0 : 1) - (b.status === 'inprogress' ? 0 : 1) ||
         String(a.name).localeCompare(String(b.name)));
+  }
+  function render() {
+    // Home shows the same list (home.js).
+    document.dispatchEvent(new CustomEvent('yd-crew-jobs'));
+    const wrap = el('crewJobsWrap');
+    if (!wrap) return;
+    const list = listed();
     wrap.innerHTML = list.length ? list.map(j => '<button class="cj-row" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
         '<span class="cj-row-name"><b>' + esc(j.name) + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
           '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small></span>' +
@@ -236,5 +242,8 @@
     if (!on) { reconciled = false; Object.keys(sent).forEach(k2 => delete sent[k2]); }
   });
 
-  window.YDCrewJobs = { mirror: mirror, render: render, entry: crewEntry };
+  window.YDCrewJobs = { mirror: mirror, render: render, entry: crewEntry,
+    // The crew's booked and in-progress jobs, as their Jobs tab lists them
+    // (a crew phone; empty for anyone who has the Job tab instead).
+    list: () => listed() };
 })();
