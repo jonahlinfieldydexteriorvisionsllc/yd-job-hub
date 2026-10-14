@@ -22,9 +22,12 @@
 // (writes merge).
 //
 // Their bills are receipts the email reader already files (receipts.js): a
-// receipt whose store has a subcontractor's "match" words in it is theirs.
-// The owner's device takes those out of "Receipts to sort" by itself (set
-// aside as "Subcontractor bill") and they are listed here: owed, paid, due.
+// receipt sorted to them in Receipts (a split `to: 'sub'` with their
+// `subId`), or whose store has a subcontractor's "match" words in it, is
+// theirs. The owner's device takes those out of "Receipts to sort" by itself
+// -- sorted whole to Subcontractors, their own place in Receipts since 13
+// Oct 2026 (before that, set aside as "Subcontractor bill", which still
+// reads as theirs) -- and they are listed here: owed, paid, due.
 
 (function () {
   'use strict';
@@ -222,10 +225,16 @@
       return want.length && want.every(w => have.indexOf(w) !== -1);
     }) || null;
   }
+  // Whose bill it is, sorted or not: the subcontractor it was put to in
+  // Receipts when that names one set up here, else by the store's name.
+  function subOf(r) {
+    const sp = (r.splits || []).find(x => x && x.to === 'sub' && x.subId && (data.subs || {})[x.subId]);
+    return sp ? Object.assign({ id: sp.subId }, data.subs[sp.subId]) : subFor(r);
+  }
   function billsOf(s) {
     const all = receiptsAll();
     return Object.keys(all).map(id => Object.assign({ id: id }, all[id]))
-      .filter(r => subFor(r) && subFor(r).id === s.id)
+      .filter(r => { const w = subOf(r); return w && w.id === s.id; })
       .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   }
   const isPayment = r => r.docType === 'receipt' || r.docType === 'person_payment';
@@ -262,14 +271,26 @@
   // owner's device, and only once both lists have come from the server.
   // Only what the reader called a subcontractor's bill: a subcontractor who
   // also sells materials keeps those receipts in To sort, for the jobs. Each
-  // one is filed once (kept in `filed`), so "Put back" in Receipts sticks.
+  // one is filed once (kept in `filed`), so Undo in Receipts sticks.
+  //
+  // Filed the way Receipts sorts one to Subcontractors by hand: done, every
+  // line (and the tax) in one split to them. A receipt's own fields are only
+  // splits/status/updatedAt/updatedBy here -- what the rules let a sorter change.
   function fileBills() {
     if (!owner() || !fresh || !window.YDReceipts || !YDReceipts.loaded || !YDReceipts.loaded() || !window.YDDb) return;
     const all = receiptsAll(), filed = data.filed || {}, now = {};
-    Object.keys(all).forEach(id => {
+    const at = new Date().toISOString(), by = ((window.YDAuth && YDAuth.user) || {}).uid || '';
+    Object.keys(all).forEach((id, n) => {
       const r = all[id];
-      if (r.status !== 'new' || (r.splits || []).length || filed[id] || r.kind !== 'subcontractor' || !subFor(r)) return;
-      const patch = { status: 'skipped', skipWhy: 'subcontractor', skippedBy: 'Job Hub', updatedAt: new Date().toISOString() };
+      const s = r.status === 'new' && !(r.splits || []).length && !filed[id] && r.kind === 'subcontractor' ? subFor(r) : null;
+      if (!s) return;
+      const lines = r.lines || [];
+      const lineCents = lines.reduce((t, l) => t + (l.cents || 0), 0);
+      const split = { id: 'sp' + Date.now().toString(36) + n.toString(36) + Math.random().toString(36).slice(2, 5),
+        to: 'sub', subId: s.id, name: s.name || r.vendor || 'Subcontractor', lines: lines.map((_, i) => i),
+        cents: lines.length ? lineCents : Math.max(0, (r.totalCents || 0) - (r.taxCents || 0)),
+        taxCents: r.taxCents || 0, at: at, by: 'Job Hub' };
+      const patch = { status: 'done', splits: [split], updatedAt: at, updatedBy: by };
       Object.assign(r, patch);
       now[id] = true;
       Promise.resolve(window.YDDb.put('receipts', id, patch))
@@ -282,7 +303,7 @@
   function suggestions() {
     const seen = {};
     Object.values(receiptsAll()).forEach(r => {
-      if (r.kind !== 'subcontractor' || !r.vendor || subFor(r)) return;
+      if (r.kind !== 'subcontractor' || !r.vendor || subOf(r)) return;
       const k = matchOf(r.vendor);
       if (k && !seen[k]) seen[k] = r.vendor;
     });
@@ -814,7 +835,10 @@
     if (p && p.classList.contains('active')) render();
   });
 
-  window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r) };
+  // list: the subcontractors set up here, for Receipts' Subcontractor picker
+  // (empty for anyone but the owner, who alone reads them).
+  window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r), subOf: r => subOf(r),
+    list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })) };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

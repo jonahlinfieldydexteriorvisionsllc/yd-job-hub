@@ -5,7 +5,8 @@
 // every line, the tax and the total, and a job it thinks the purchase is for
 // when the delivery address or a name on the order says so. This screen is
 // where each one is sorted: to a job, a vehicle, shop overhead, office
-// overhead, or personal (DEST below).
+// overhead, personal, a subcontractor -- or set aside, with a note saying
+// why (DEST below).
 //
 // "Add to job" puts the ticked lines into that job's materials (Tracking),
 // one materials line per receipt line, plus that job's share of the sales
@@ -57,12 +58,17 @@
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', other: 'Other',
   };
-  // Why a receipt was set aside. 'overhead' and 'personal' are only read
-  // back now (before 9 Oct a receipt was set aside as overhead); both are
-  // places it goes, below.
+  // Why a receipt was set aside, in the words of the old pick list. Only read
+  // back now: since 13 Oct `skipWhy` is the note typed when it was set aside
+  // (Jonah: "when something is selected to be set aside have an area to add
+  // a note for why"). 'overhead' (before 9 Oct) and 'subcontractor' (before
+  // 13 Oct) were really places -- read back as the shop and Subcontractors
+  // (LEGACY_PLACE) -- and 'personal' is a place too.
   const WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
-  const ASIDE = ['notPurchase', 'alreadyEntered', 'subcontractor'];
+  const LEGACY_PLACE = { overhead: 'shop', subcontractor: 'sub' };
+  // Offered under the note box; anything else can be typed.
+  const WHY_IDEAS = ['Already entered', 'Not a purchase', 'Duplicate of another receipt', 'Returned / refunded'];
 
   // Where a receipt goes (Jonah, 9 Oct 2026: "sort receipts ... by vehicle/
   // job/shop overhead/office overhead/personal"). Each split says where its
@@ -70,16 +76,35 @@
   // The first choice comes from what Claude already said the purchase was
   // (`kind`, read with the receipt -- no extra call): fuel and repairs to a
   // vehicle, office things to the office, tools to the shop, the rest a job.
+  //
+  // A subcontractor's bill is a place of its own (Jonah, 13 Oct 2026: "sub
+  // bills should have its own category"): a split `to: 'sub'` naming them
+  // (`subId` when they are set up under Subcontractors, subs.js). "Set
+  // aside" is the last choice: not a place -- nothing set aside counts
+  // anywhere ("anything set aside clearly doesnt have a category and doesnt
+  // matter") -- but chosen the same way, with a note for why.
   const DEST = [['job', '📋 Job'], ['vehicle', '🚚 Vehicle'], ['shop', '🏠 Shop overhead'],
-                ['office', '🗂 Office overhead'], ['personal', '👤 Personal']];
-  const DEST_NAME = { job: 'Job', vehicle: 'Vehicle', shop: 'Shop overhead', office: 'Office overhead', personal: 'Personal' };
+                ['office', '🗂 Office overhead'], ['sub', '🤝 Subcontractor'], ['personal', '👤 Personal'],
+                ['aside', '🗄 Set aside']];
+  const DEST_NAME = { job: 'Job', vehicle: 'Vehicle', shop: 'Shop overhead', office: 'Office overhead',
+    sub: 'Subcontractor', personal: 'Personal', aside: 'Set aside' };
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'vehicle',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop' };
   const destOf = s => s.to || 'job';
   const dest = {};            // receipt id -> where it is going, once picked
   const chosenGear = {};      // receipt id -> vehicle picked
+  const chosenSub = {};       // receipt id -> subcontractor picked ('' = by the store's name)
+  const asideWhy = {};        // receipt id -> the note typed so far for setting it aside
+  // The subcontractor whose bill this looks like (subs.js: their "match"
+  // words in the store's name). Only the owner has the list.
+  const subMatch = r => (window.YDSubs && YDSubs.subFor ? YDSubs.subFor(r) : null);
+  const subsKnown = () => (window.YDSubs && YDSubs.list ? YDSubs.list() : []);
   function defaultDest(r) {
-    return r.suggest && r.suggest.jobId ? 'job' : (DEST_OF_KIND[r.kind] || 'job');
+    if (r.kind === 'subcontractor') return 'sub';
+    if (r.suggest && r.suggest.jobId) return 'job';
+    // A subcontractor that also sells materials keeps those for the jobs.
+    if ((!r.kind || r.kind === 'other') && subMatch(r)) return 'sub';
+    return DEST_OF_KIND[r.kind] || 'job';
   }
   // The vehicles and machines on the Equipment tab, vehicles first.
   function gearList() {
@@ -203,13 +228,24 @@
     if (!DEST_NAME[to]) return;
     dest[rid] = to;
     redraw(true);
+    // Set aside asks for its note at once.
+    if (to === 'aside') { const box = el('rcWhy_' + rid); if (box) box.focus(); }
   };
   window.rcPickGear = function (rid, id) { chosenGear[rid] = id; };
+  window.rcPickSub = function (rid, id) { chosenSub[rid] = id; };
+  // Kept as it is typed, so a redraw (a receipt arriving) never loses it.
+  window.rcWhyTyped = function (rid, text) { asideWhy[rid] = text; };
 
   // The ticked lines (all of them, when not split up) and their share of
   // the sales tax: by value, the last share taking whatever cent is left so
   // the shares add up to the receipt exactly.
   function portion(rid, r) {
+    // A receipt with no lines at all (the email gave no total either) goes
+    // whole: the old "Something else…" list was the only way to move one.
+    if (!(r.lines || []).length && !(r.splits || []).length) {
+      return { free: [], idxs: [], lines: [], part: Math.max(0, (r.totalCents || 0) - (r.taxCents || 0)),
+        tax: r.taxCents || 0, last: true };
+    }
     const free = freeLines(r);
     const idxs = tickedLines(rid, r);
     if (!idxs.length) { showToast('Tick at least one line'); return null; }
@@ -233,6 +269,14 @@
       const g = id && gearList().find(x => x.id === id);
       if (!g) { showToast('Pick the vehicle first'); return; }
       target = { equipmentId: g.id, name: g.name || 'Vehicle' };
+    } else if (to === 'sub') {
+      // One set up under Subcontractors (subs.js reads its bills by subId),
+      // else by the store's name -- an admin has no list, and subs.js still
+      // finds theirs by name.
+      const id = chosenSub[rid] != null ? chosenSub[rid] : ((subMatch(r) || {}).id || '');
+      const s = id && subsKnown().find(x => x.id === id);
+      target = s ? { subId: s.id, name: s.name || r.vendor || 'Subcontractor' }
+        : { name: (r.vendor || '').trim() || 'Subcontractor' };
     } else {
       target = { name: DEST_NAME[to] };
     }
@@ -255,6 +299,7 @@
     const r = receipts[rid];
     if (!r) return;
     const to = dest[rid] || defaultDest(r);
+    if (to === 'aside') { setAside(rid, r); return; }
     if (to === 'personal') { window.rcSkip(rid, 'personal'); return; }
     if (to !== 'job') { assignElsewhere(rid, r, to); return; }
     const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
@@ -276,6 +321,8 @@
         price: ((l.cents || 0) / 100).toFixed(2), qty: l.qty ? String(l.qty) : '', unit: l.unit || '',
         itemNo: l.itemNo || '', unitPrice: l.unitCents ? (l.unitCents / 100).toFixed(2) : '' }, more);
     });
+    if (!idxs.length && part) add.push(Object.assign({ id: uid(), item: r.summary || r.vendor || 'Purchase', date,
+      location: from, price: (part / 100).toFixed(2), qty: '', unit: '', itemNo: '', unitPrice: '' }, more));
     if (tax) add.push(Object.assign({ id: uid(), item: 'Sales tax', date, location: from,
       price: (tax / 100).toFixed(2), qty: '', unit: '', itemNo: '', unitPrice: '' }, more));
 
@@ -385,23 +432,32 @@
       .catch(e => console.warn('[receipts] not deleted:', (e && e.code) || e));
     redraw(true);
   }
-  // What went to a vehicle, the shop or the office is kept on the receipt and
-  // nowhere else (a vehicle's page and the month totals read it from here);
-  // so is a receipt set aside as overhead before those places existed.
-  const BOOKS = ['vehicle', 'shop', 'office'];
-  const heldHere = r => (r.splits || []).some(s => BOOKS.indexOf(destOf(s)) !== -1) ||
-    (r.status === 'skipped' && r.skipWhy === 'overhead');
-  // Set aside for good: what "Delete all set aside" may take. Not a
-  // subcontractor's bills (kept on the subcontractor's card, subs.js, where
-  // what is owed is worked out), nor one holding the books' share above.
-  const deletableAside = r => r.status === 'skipped' && r.skipWhy !== 'subcontractor' && !heldHere(r);
+  // What went to a vehicle, the shop, the office or a subcontractor is kept
+  // on the receipt and nowhere else (a vehicle's page, Subcontractors and the
+  // month totals read it from here); so is a receipt set aside as overhead,
+  // or as a subcontractor's bill, before those places existed.
+  const BOOKS = ['vehicle', 'shop', 'office', 'sub'];
+  const legacyPlace = r => (r.status === 'skipped' && LEGACY_PLACE[r.skipWhy]) || '';
+  function heldNames(r) {
+    const legacy = legacyPlace(r);
+    return (r.splits || []).filter(s => BOOKS.indexOf(destOf(s)) !== -1)
+      .map(s => s.name || DEST_NAME[destOf(s)])
+      .concat(legacy === 'shop' ? ['shop overhead'] : legacy === 'sub' ? ['a subcontractor'] : [])
+      .filter((n, i, a) => a.indexOf(n) === i);
+  }
+  const heldHere = r => heldNames(r).length > 0;
+  // Set aside: skipped, and not one of the old reasons that were really a
+  // place. It counts nowhere.
+  const isAside = r => r.status === 'skipped' && !legacyPlace(r);
+  // What "Delete all set aside" may take: set aside, and holding nothing the
+  // books need (a subcontractor's bill is never set aside now; an old one is
+  // a place, above).
+  const deletableAside = r => isAside(r) && !heldHere(r);
   window.rcDelete = function (rid) {
     const r = receipts[rid];
     if (!r || !owner()) return;
     const books = heldHere(r)
-      ? '\n\nIt holds what went to ' + (r.splits || []).filter(s => BOOKS.indexOf(destOf(s)) !== -1)
-          .map(s => s.name || DEST_NAME[destOf(s)]).concat(r.skipWhy === 'overhead' && r.status === 'skipped' ? ['shop overhead'] : [])
-          .filter((n, i, a) => a.indexOf(n) === i).join(', ') +
+      ? '\n\nIt holds what went to ' + heldNames(r).join(', ') +
         ' — that is kept nowhere else, so it comes out of those totals.'
       : '';
     if (!confirm('Delete this ' + (r.vendor || '') + ' receipt from the hub?' +
@@ -448,8 +504,44 @@
     }
     receipts[rid] = Object.assign({}, receipts[rid], { status: 'skipped', skipWhy: why });
     write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
-    showToast('Set aside — find it under "Set aside" if that was wrong');
+    showToast('Set aside — All receipts → Set aside has it if that was wrong');
     redraw(true);
+  };
+
+  // The note, as typed: never one of the old reasons' own words, which are
+  // read back as places ("overhead" would count as the shop).
+  function cleanWhy(text) {
+    let why = String(text == null ? '' : text).replace(/\s+/g, ' ').trim().slice(0, 300);
+    if (WHY[why]) why = why.charAt(0).toUpperCase() + why.slice(1);
+    return why;
+  }
+  // "Set aside" picked on a receipt: the whole of what is left of it, with
+  // the note for why. Asked for, not required.
+  function setAside(rid, r) {
+    const box = el('rcWhy_' + rid);
+    const why = cleanWhy(asideWhy[rid] != null ? asideWhy[rid] : (box ? box.value : ''));
+    if (!why && !confirm('Set it aside without a note for why?')) { if (box) box.focus(); return; }
+    receipts[rid] = Object.assign({}, r, { status: 'skipped', skipWhy: why });
+    delete asideWhy[rid]; delete dest[rid]; delete ticked[rid]; delete splitting[rid];
+    write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
+    showToast('Set aside — All receipts → Set aside has it');
+    redraw(true);
+  }
+  // Changing the note on one already set aside.
+  window.rcAsideWhy = function (rid) {
+    const r = receipts[rid];
+    if (!r || !isAside(r)) return;
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    const was = r.skippedBy === 'claude' ? '' : (WHY[r.skipWhy] || r.skipWhy || '');
+    const got = prompt('Why is it set aside?', was);
+    if (got === null) return;
+    const why = cleanWhy(got);
+    // One Claude set aside as personal says so instead of a note; once a
+    // person writes why, the note is what shows.
+    const patch = r.skippedBy === 'claude' ? { skipWhy: why, skippedBy: (me() || {}).uid || '' } : { skipWhy: why };
+    receipts[rid] = Object.assign({}, r, patch);
+    write(rid, patch);
+    renderHistory();
   };
 
   window.rcPutBack = function (rid) {
@@ -544,6 +636,8 @@
     const owed = r.paid === false && r.docType === 'invoice';
     const split = isSplit(rid, r);
     const to = dest[rid] || defaultDest(r);
+    // Lines still to place -- or a receipt with no lines at all, which goes whole.
+    const sortable = free.length > 0 || (!(r.lines || []).length && !(r.splits || []).length);
     return '<div class="rc-card" id="rc_' + rid + '">' +
       '<div class="rc-top">' +
         '<span class="rc-vendor">' + esc(r.vendor || 'Receipt') + '</span>' +
@@ -570,13 +664,9 @@
       (!split && free.length > 1 && sorts() ?
         '<button class="rc-link" onclick="rcSplit(\'' + rid + '\', true)">Split it up (some lines one place, some another)</button>' : '') +
       splitsHtml(rid, r) +
-      (free.length && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
+      (sortable && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
-        (sorts() ? '<select class="rc-skip" onchange="rcSkip(\'' + rid + '\', this.value)">' +
-          '<option value="">Something else…</option>' +
-          ASIDE.map(k => '<option value="' + k + '">' + WHY[k] + '</option>').join('') +
-        '</select>' : '') +
         (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')">🗑 Delete</button>' : '') +
       '</div>' +
     '</div>';
@@ -617,24 +707,57 @@
       return '<div class="rc-assign">' + btn(partlyPersonal(rid, r) ? 'Mark ' + (n || 'the rest ') + 'personal'
         : (owner() ? 'Personal — delete it' : 'Personal — set it aside')) + '</div>';
     }
+    if (to === 'sub') {
+      // The owner picks which of his subcontractors (the one whose name the
+      // store has, to start with); anyone else files it by the store's name.
+      const subs = subsKnown();
+      const cur = chosenSub[rid] != null ? chosenSub[rid] : ((subMatch(r) || {}).id || '');
+      return '<div class="rc-assign">' +
+        (subs.length ? '<select class="rc-sub-pick" onchange="rcPickSub(\'' + rid + '\', this.value)">' +
+          subs.map(s => '<option value="' + safeId(s.id) + '"' + (s.id === cur ? ' selected' : '') + '>' +
+            esc(s.name || 'Subcontractor') + '</option>').join('') +
+          '<option value=""' + (cur ? '' : ' selected') + '>' + esc((r.vendor || '').trim() || 'This store') +
+            ' (not set up under Subcontractors)</option>' +
+        '</select>' : '') +
+        btn('Add ' + n + 'to subcontractor') + '</div>';
+    }
+    if (to === 'aside') {
+      // The whole of what is left: being set aside is the receipt's, not a line's.
+      const rest = (r.splits || []).length || (isSplit(rid, r) && tickedSet.size < free.length);
+      return '<div class="rc-assign rc-aside">' +
+        '<input class="rc-why" id="rcWhy_' + rid + '" list="rcWhyIdeas" maxlength="300" autocomplete="off"' +
+          ' placeholder="Why is it set aside?" value="' + esc(asideWhy[rid] || '') + '"' +
+          ' oninput="rcWhyTyped(\'' + rid + '\', this.value)"' +
+          ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();rcAssign(\'' + rid + '\')}">' +
+        btn(rest ? 'Set the rest aside' : 'Set it aside') + '</div>' +
+        '<div class="rc-hint">Set aside counts nowhere. All receipts → Set aside keeps it, with this note.</div>';
+    }
     return '<div class="rc-assign">' + btn('Add ' + n + 'to ' + DEST_NAME[to].toLowerCase()) + '</div>';
   }
+  // A set-aside receipt's note, as it reads.
+  const asideText = r => r.skippedBy === 'claude' ? 'Personal (Claude)' : (WHY[r.skipWhy] || r.skipWhy || '');
 
   // One line in All receipts: what it was, when, what it came to, and where
   // it went -- the jobs it was put on, or why it was set aside.
   function rowHtml(r) {
     const rid = safeId(r.id);
-    const where = r.status === 'skipped'
-      ? '<span class="rc-tag">' + esc(r.skippedBy === 'claude' ? 'Personal (Claude)' : (WHY[r.skipWhy] || 'Set aside')) + '</span>'
+    const aside = isAside(r), legacy = legacyPlace(r);
+    const legacyName = legacy === 'sub' ? ((subMatch(r) || {}).name || 'Subcontractor') : WHY[r.skipWhy];
+    const where = aside ? '<span class="rc-tag rc-aside-tag">Set aside</span>'
+      : legacy ? '<span class="rc-tag">' + (DEST.find(d => d[0] === legacy) || ['', ''])[1].split(' ')[0] + ' ' +
+          esc(legacyName || DEST_NAME[legacy]) + '</span>'
       : r.status === 'new' ? '<span class="rc-tag rc-owed">To sort</span>' : '';
+    const why = aside ? asideText(r) : '';
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
         '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
         esc(r.summary || '') + '</span>' + where +
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
+        (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
         (r.status === 'skipped' && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
         (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')" title="Delete">🗑</button>' : '') +
       '</div>' +
+      (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '') +
       ((r.splits || []).length ? '<div class="rc-row-splits">' + splitsHtml(rid, r) + '</div>' : '');
   }
 
@@ -694,26 +817,37 @@
       (sorts() ? '<button class="btn btn-sm" onclick="rcCheckNow()"' + (checking ? ' disabled' : '') + '>' +
         (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml();
     el('rcList').innerHTML = !loaded ? '<p class="empty-msg">Loading receipts…</p>'
-      : open.length ? open.map(r => cardHtml(r, jobs)).join('')
+      : open.length ? open.map(r => cardHtml(r, jobs)).join('') +
+        '<datalist id="rcWhyIdeas">' + WHY_IDEAS.map(w => '<option value="' + esc(w) + '">').join('') + '</datalist>'
       : '<p class="empty-msg">Nothing to sort. Receipts that arrive by email show up here by themselves.</p>';
     renderHistory();
   }
 
   // ------------------------------------------------------------ All receipts
 
-  const VIEWS = { all: 'All', job: '📋 Jobs', vehicle: '🚚 Vehicles', shop: '🏠 Shop', office: '🗂 Office', skipped: 'Set aside' };
+  // Set aside is only ever found here, under its own filter (Jonah, 13 Oct
+  // 2026: set-aside receipts "shouldnt exist" in the rest of the screen):
+  // All leaves out what was set aside and put nowhere.
+  const VIEWS = { all: 'All', job: '📋 Jobs', vehicle: '🚚 Vehicles', shop: '🏠 Shop', office: '🗂 Office',
+    sub: '🤝 Subcontractors', skipped: '🗄 Set aside' };
   let view = 'all';
+  // The places the books count (month totals), and what each is called there.
+  const PLACES = ['job', 'vehicle', 'shop', 'office', 'sub'];
+  const PLACE_NAME = { job: 'Jobs', vehicle: 'Vehicles', shop: 'Shop', office: 'Office', sub: 'Subcontractors' };
   // What a receipt put to one place, tax share included. A receipt set aside
-  // as overhead before the places existed counts its unsorted rest as shop.
+  // as overhead (before 9 Oct), or as a subcontractor's bill (before 13 Oct),
+  // counts its unsorted rest as the shop's or the subcontractor's.
   function amountTo(r, to) {
     const splits = r.splits || [];
     let c = splits.filter(s => destOf(s) === to).reduce((t, s) => t + (s.cents || 0) + (s.taxCents || 0), 0);
-    if (to === 'shop' && r.status === 'skipped' && r.skipWhy === 'overhead') {
+    if (legacyPlace(r) === to) {
       c += Math.max(0, (r.totalCents || 0) - splits.reduce((t, s) => t + (s.cents || 0) + (s.taxCents || 0), 0));
     }
     return c;
   }
-  const inView = r => view === 'all' || (view === 'skipped' ? r.status === 'skipped' : amountTo(r, view) > 0);
+  const placed = r => PLACES.reduce((t, p) => t + amountTo(r, p), 0);
+  const inView = r => view === 'all' ? (!isAside(r) || placed(r) > 0)
+    : view === 'skipped' ? isAside(r) : amountTo(r, view) > 0;
   window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
   // Typing in the search box redraws only the list under it, so the box keeps
   // its focus and what was typed.
@@ -723,7 +857,8 @@
     if (!words.length) return true;
     const hay = [r.vendor, r.orderNo, r.summary, r.date,
       (r.lines || []).map(l => l.name + ' ' + (l.itemNo || '')).join(' '),
-      (r.splits || []).map(x => (x.jobName || x.name || '') + ' ' + (x.est || '') + ' ' + DEST_NAME[destOf(x)]).join(' ')].join(' ').toLowerCase();
+      (r.splits || []).map(x => (x.jobName || x.name || '') + ' ' + (x.est || '') + ' ' + DEST_NAME[destOf(x)]).join(' '),
+      isAside(r) ? 'set aside ' + asideText(r) : ''].join(' ').toLowerCase();
     return words.every(w => hay.indexOf(w) !== -1);
   }
 
@@ -747,7 +882,9 @@
     const every = allReceipts().filter(r => r.status !== 'new');
     const shown = every.filter(r => inView(r) && matches(r, words)).sort(byNewest);
     const aside = every.filter(deletableAside);
-    el('rcHistBadge').textContent = every.length ? String(every.length) : '';
+    // Counted as sorted: what was put somewhere, not what was set aside.
+    const counted = every.filter(r => !isAside(r) || placed(r) > 0).length;
+    el('rcHistBadge').textContent = counted ? String(counted) : '';
     el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
       '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') + '" onclick="rcView(\'' + v + '\')">' +
       VIEWS[v] + '</button>').join('') +
@@ -759,19 +896,21 @@
       return;
     }
     // By month, newest first, each with what it came to -- and, under All,
-    // what of it went where (for the books: jobs, vehicles, shop, office).
-    const PLACES = ['job', 'vehicle', 'shop', 'office'];
+    // what of it went where (for the books: jobs, vehicles, shop, office,
+    // subcontractors). What was set aside counts in none of them, nor in
+    // All's month total.
     const months = [];
     shown.slice(0, 300).forEach(r => {
       const key = String(r.date || '').slice(0, 7);
       let m = months[months.length - 1];
       if (!m || m.key !== key) { m = { key, rows: [], cents: 0, by: {} }; months.push(m); }
       m.rows.push(r);
-      m.cents += view === 'all' || view === 'skipped' ? (r.totalCents || 0) : amountTo(r, view);
+      m.cents += view === 'skipped' ? (r.totalCents || 0)
+        : view === 'all' ? (isAside(r) ? placed(r) : (r.totalCents || 0)) : amountTo(r, view);
       PLACES.forEach(p => { m.by[p] = (m.by[p] || 0) + amountTo(r, p); });
     });
     const split = m => view !== 'all' ? '' : PLACES.filter(p => m.by[p]).map(p =>
-      DEST_NAME[p].replace(' overhead', '') + ' ' + money(m.by[p])).join(' · ');
+      PLACE_NAME[p] + ' ' + money(m.by[p])).join(' · ');
     wrap.innerHTML = months.map(m =>
       '<div class="rc-month"><span>' + esc(label(m.key)) + '</span><span>' + m.rows.length + ' · ' +
         money(m.cents) + '</span></div>' +

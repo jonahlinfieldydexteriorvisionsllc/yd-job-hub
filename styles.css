@@ -2436,3 +2436,9 @@
   .est-pay-row .est-pay-val { width:100px; }
   /* QuickBooks connected to Intuit's test company: said loudly on every estimate */
   .est-testco { padding:8px 10px; border-radius:8px; background:var(--neg-soft); color:var(--neg); border:1px solid var(--neg); font-size:13px; margin:6px 0; }
+  /* Receipts (13 Oct): Set aside is a choice like the places, with a note for why;
+     the note shows under the receipt in All receipts → Set aside */
+  .rc-assign.rc-aside .rc-why { flex:1 1 240px; width:auto; min-width:0; }
+  .rc-assign .rc-sub-pick { flex:1 1 220px; width:auto; min-width:0; }
+  .rc-aside-tag { border-style:dashed; }
+  .rc-aside-why { font-size:12.5px; color:var(--muted); margin:-4px 0 6px; padding-left:2px; font-style:italic; overflow-wrap:anywhere; }
