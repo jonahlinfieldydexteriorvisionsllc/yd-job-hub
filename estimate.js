@@ -2054,6 +2054,22 @@
     } catch (e) { qbItems = null; }
   };
 
+  // True to go ahead: QuickBooks' estimate still totals what Job Hub last
+  // put there, or he says to replace it anyway.
+  async function qbUnchanged(q) {
+    const lastSent = (est.sent || []).slice(-1)[0];
+    if (!lastSent || !(lastSent.totalCents > 0)) return true;
+    let now = null;
+    try {
+      const s = await askQb('/qb/estimate-status', { estimateId: q.id, env: q.env || null, jobId: currentJobId });
+      if (s && !s.missing) now = Math.round(Number(s.total) * 100);
+    } catch (e) { return true; }
+    if (now === null || !isFinite(now) || Math.abs(now - lastSent.totalCents) <= 100) return true;
+    return confirm('Estimate #' + (q.docNumber || '') + ' was changed in QuickBooks: it totals ' + cents(now) +
+      ' there, but Job Hub last sent ' + cents(lastSent.totalCents) + '.\n\nSending from Job Hub replaces it with Job Hub’s ' +
+      'version — the changes made in QuickBooks will be lost. Make the same changes here first if you want to keep them.\n\nReplace it anyway?');
+  }
+
   window.estToQB = async function (email) {
     if (saving || !sends() || !changes()) return;
     const r = priced();
@@ -2073,6 +2089,10 @@
       showToast('Not sent — QuickBooks is on the test company');
       return;
     }
+    // Changed in QuickBooks since Job Hub last sent it (13 Oct 2026: #1677's
+    // labour was raised there by hand): sending from here replaces the whole
+    // estimate with Job Hub's version, so say so first.
+    if (q.id && !(await qbUnchanged(q))) return;
     // The job is saved first so it has an id, and so what is on screen is
     // what is kept with the job.
     if (typeof autosave === 'function') autosave();

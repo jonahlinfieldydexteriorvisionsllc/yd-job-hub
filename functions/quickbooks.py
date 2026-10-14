@@ -812,8 +812,11 @@ _income = {"id": None}
 
 
 def _income_account():
-    """Where new service products book their income: an income account named
-    for services if there is one, otherwise the first income account."""
+    """Where new service products book their income: the account called
+    Sales (where Jonah's own products book theirs), else one named for
+    services, else the first income account -- which in his company is
+    "Billable Expense Income" (13 Oct 2026: the first product made here
+    landed there)."""
     if _income["id"]:
         return _income["id"]
     data = _call("GET", "query", params={"query":
@@ -821,7 +824,10 @@ def _income_account():
     rows = (data.get("QueryResponse") or {}).get("Account") or []
     if not rows:
         raise RuntimeError("QuickBooks has no income account to put new products in")
-    pick = next((a for a in rows if "service" in a.get("Name", "").lower()), rows[0])
+    name = lambda a: a.get("Name", "").strip().lower()
+    pick = next((a for a in rows if name(a) == "sales"), None) or \
+        next((a for a in rows if "service" in name(a)), None) or \
+        next((a for a in rows if "billable" not in name(a)), rows[0])
     _income["id"] = pick["Id"]
     return pick["Id"]
 
