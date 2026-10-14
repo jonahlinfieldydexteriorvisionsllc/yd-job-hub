@@ -684,6 +684,38 @@ def _day_record(today, people):
     return out
 
 
+def _open_tasks(people):
+    """Everybody's tasks not ticked off -- today's (that have come round) and
+    the fortnight's before -- for the end of the day (reminders.open_tasks:
+    the rule is kept beside the 7 am list's, which carries the same ones)."""
+    import reminders        # not at the top: reminders imports this module
+    now = _now()
+    try:
+        return reminders.open_tasks(_db(), people, reminders.carry_from(now.date()), now.date(), now)
+    except Exception as e:      # noqa: BLE001 -- a summary without them beats none
+        print("digest: tasks not done not read:", e)
+        return {}
+
+
+def _task_lines(tasks, today, owner):
+    """A summary's lines for tasks not done: what, where, who is on it (the
+    owner's crew tasks say whose) -- and, for one from before, its day."""
+    import reminders        # not at the top: reminders imports this module
+    out = []
+    for t in tasks:
+        icon = reminders.TYPES.get(t["kind"]) or ""
+        who = ", ".join(n for n in t.get("on") or [] if n)
+        text = (icon + " " if icon else "") + t["title"]
+        if who:
+            text += " · " + who
+        elif owner and not t["theirs"]:
+            text += " · the crew"
+        when = (_fmt_time(t["time"]) if t["time"] else "") if t["day"] == today else \
+            t["day"].strftime("%a %b ") + str(t["day"].day)
+        out.append({"when": when, "text": text, "cal": t["where"]})
+    return out
+
+
 def qb_accepted(q):
     """A job's QuickBooks estimate record says the customer said yes:
     Accepted, or made into an invoice (Closed / Converted) after being
@@ -989,6 +1021,29 @@ def build(slot, user, people, wx, cache):
         sections.append(("Added today", capped(added) or [{"text": "Nothing new put in today."}]))
         if done:
             push_bits.append("%d done today" % len(done))
+
+    # ---- tasks not ticked off. Jonah (14 Oct 2026): "make tasks on the
+    # calendar have to be marked done or they get included in the end day
+    # summary. This goes for all tasks. Appointments are different." Each
+    # person's own (reminders.open_tasks); the owner's has the crew's too.
+    # Then the ones still left from the fortnight before. A recurring task
+    # gone past its day is in "Recurring tasks not done" for whoever gets
+    # that, so it is not said twice.
+    if slot == "evening":
+        def cut(lines):
+            return lines[:RECORD_MAX] + ([{"text": "…and %d more" % (len(lines) - RECORD_MAX)}]
+                                         if len(lines) > RECORD_MAX else [])
+        gets_recurring = owner or access.get("boards") == "change"
+        tasks = [t for t in (cache.get("open") or {}).get(uid) or []
+                 if not (gets_recurring and t["recurring"] and t["day"] < today)]
+        now_left = [t for t in tasks if t["day"] == today]
+        before = [t for t in tasks if t["day"] < today]
+        if now_left:
+            sections.append(("Not done today", cut(_task_lines(now_left, today, owner))))
+        if before:
+            sections.append(("Still not done from before", cut(_task_lines(before, today, owner))))
+        if tasks:
+            push_bits.append("%d not done" % len(tasks))
 
     # ---- bids (the owner, and an admin given Jobs)
     if sees("jobs") and (slot in ("morning", "evening") or (slot == "midday" and cache["bids"])):
@@ -1390,7 +1445,7 @@ def _receipts_to_sort():
         return 0
 
 
-def _cache(slot="morning"):
+def _cache(slot="morning", people=None):
     today = _now().date()
     jobs = _jobs()
     cache = {
@@ -1403,7 +1458,9 @@ def _cache(slot="morning"):
         "receipts": _receipts_to_sort(),
     }
     if slot == "evening":
-        cache["record"] = _day_record(today, _people())
+        people = people if people is not None else _people()
+        cache["record"] = _day_record(today, people)
+        cache["open"] = _open_tasks(people)
     # The day the weather tables are for: tomorrow in the evening summary,
     # today otherwise. Every town and every job site in one forecast call.
     day = today + datetime.timedelta(days=1) if slot == "evening" else today
@@ -1433,7 +1490,7 @@ def run(slot, only_uid=None, dry=False):
         raise ValueError("unknown slot")
     people = _people()
     wx = weather()
-    cache = _cache(slot)
+    cache = _cache(slot, people)
     report = []
     for uid, u in people.items():
         if only_uid and uid != only_uid:

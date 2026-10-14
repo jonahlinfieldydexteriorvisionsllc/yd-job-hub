@@ -48,6 +48,10 @@
   // from 7 am that day.
   const typeOfEv = (ev, cal) => YDRemind.typeOf(ev, { calKind: cal && cal.kind });
   const isTimed = ev => !ev.allDay && !!ev.time;
+  // At a set time and ending the next day no later than it started: work
+  // past midnight (segOf draws it that way), not a two-day job.
+  const overnight = ev => isTimed(ev) && !!ev.endTime && !!ev.endDate && daysBetween(ev.date, ev.endDate) === 1 &&
+    minutesOf(ev.endTime) != null && minutesOf(ev.endTime) <= minutesOf(ev.time);
 
   const AUTO = {
     'auto:storms': { id: 'auto:storms', name: 'Storm nights', color: '#3fb6d8', auto: true,
@@ -228,12 +232,20 @@
           if (onlyMine && !YDRemind.eventIsMine(ev, cal, w)) return;
           const name = ev.title || (ev.jobName ? ev.jobName : 'Untitled');
           const type = typeOfEv(ev, cal), ic = YDRemind.icon(type);
+          // Work at a set time that runs past midnight into the next morning
+          // is one thing, done or not on the day it starts: the piece after
+          // midnight shares that day's tick (`doneKey`) and is not a second
+          // task left undone (`after`).
+          const night = overnight(ev), key = night ? ev.date : x.day;
+          const mark = base.done && base.done[key];
           out.push({
             day: x.day, layer: cal, ev: ev, calId: cid, id: base.id, orig: x.orig,
             title: (ic ? ic + ' ' : '') + name, name: name,
             color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
+            // Has to be ticked off (remind.js isTask), or it is "not done".
+            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind }), after: key !== x.day,
             // Ticked off on the "any time" list, date by date (a repeat too).
-            done: !!(base.done && base.done[x.day]),
+            done: !!mark, doneAt: (mark && mark.at) || '', doneKey: key,
             time: ev.allDay ? '' : ev.time, endTime: ev.allDay ? '' : ev.endTime,
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
@@ -256,7 +268,9 @@
     if (ydCan('equipment', 'see') && !off('auto:equipment') && !onlyMine && window.YDEquipment) {
       Object.values(YDEquipment.all()).forEach(g => {
         if (!g.dueDate || g.dueDate < from || g.dueDate > to) return;
-        out.push({ day: g.dueDate, layer: AUTO['auto:equipment'], auto: 'equipment', id: g.id,
+        // Done when its service is logged, which moves the due date on: a
+        // date still showing is a service not done yet.
+        out.push({ day: g.dueDate, layer: AUTO['auto:equipment'], auto: 'equipment', id: g.id, task: true,
           title: '🚜 ' + (g.name || 'Machine') + ' service due' });
       });
     }
@@ -272,21 +286,37 @@
         if (onlyMine && !YDRemind.cardIsMine(x.card, x.board, w)) return;
         const type = YDRemind.typeOf(x.card, { boardId: x.board.id });
         const ic = YDRemind.icon(type) || '📌';
+        // A card with a time sits at that hour (an hour long); without one,
+        // with the day's all-day entries.
+        const time = /^\d{2}:\d{2}$/.test(x.card.dueTime || '') ? x.card.dueTime : '';
         out.push({ day: x.card.due, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
           color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
-          // A card with a time sits at that hour (an hour long); without one,
-          // with the day's all-day entries.
-          time: /^\d{2}:\d{2}$/.test(x.card.dueTime || '') ? x.card.dueTime : '',
-          auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done,
+          time: time, task: YDRemind.isTask(type, !!time, { card: true }),
+          auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
           title: ic + ' ' + (x.card.title || 'Card'), note: x.board.name,
           crew: x.card.assignees || [] });
       });
+      // A pickup with no date is ready now: today's, every day until it is
+      // picked up (boards.js pickupsWaiting).
+      const t = today();
+      if (t >= from && t <= to) {
+        YDBoards.pickupsWaiting().forEach(x => {
+          if (onlyMine && !YDRemind.cardIsMine(x.card, x.board, w)) return;
+          out.push({ day: t, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
+            color: YDRemind.color('pickup'), type: 'pickup', time: '', task: true, undated: true,
+            auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
+            title: YDRemind.icon('pickup') + ' ' + (x.card.title || 'Card'), note: x.board.name + ' · ready to pick up',
+            crew: x.card.assignees || [] });
+        });
+      }
     }
 
     if (!off('auto:recurring') && window.YDRecurring && YDRecurring.visible()) {
+      const rc = (YDBoards.cards() || {}).crew || {};
       YDRecurring.dues(from, to).forEach(x => {
         out.push({ day: x.day, layer: AUTO['auto:recurring'], auto: 'recurring', id: x.cardId, boardId: 'crew',
-          done: x.done, title: '🔁 ' + x.what, note: 'Crew tasks', type: 'crew',
+          done: x.done, doneAt: (x.cardId && rc[x.cardId] && rc[x.cardId].doneAt) || '',
+          title: '🔁 ' + x.what, note: 'Crew tasks', type: 'crew', task: true,
           color: YDRemind.color('crew') });
       });
     }
@@ -414,6 +444,8 @@
       return;
     }
     if (drag && drag.live) return;      // not under someone's finger
+    // Nor under a swipe: drawn once it has settled (settle).
+    if ((pan && pan.dir) || settling || wheel) { panRedraw = true; return; }
     // A finger still holding (not yet dragging) would be left holding an
     // entry no longer on the page: it lets go instead.
     if (drag) stopDrag();
@@ -498,29 +530,72 @@
   function todayHtml() {
     const day = dayForNew();
     const items = occurrences(day, day).filter(o => !o.time && o.auto !== 'storm');
-    const rank = o => { const i = YDRemind.TYPES.findIndex(t => t.id === o.type); return i === -1 ? YDRemind.TYPES.length : i; };
-    const sorted = list => list.slice().sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || rank(a) - rank(b) ||
-      String(a.name || a.title).localeCompare(String(b.name || b.title)));
     const group = (label, list) => !list.length ? '' :
-      (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + sorted(list).map(o => todoRow(o)).join('');
+      (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + list.slice().sort(byKind).map(o => todoRow(o)).join('');
     const mine = items.filter(o => !isCrewOcc(o)), crew = items.filter(isCrewOcc);
-    const left = items.filter(o => !o.done).length;
+    // Tasks from the days before that nobody ticked off, at the top -- on
+    // today's list only (a later day's "earlier" has not happened yet).
+    const late = day === today() ? carried() : [];
+    const left = leftOf(items) + leftOf(late);
     return '<div class="cal-today' + (todayFolded ? ' folded' : '') + '">' +
       '<button class="cal-today-head" onclick="calTodayFold()">✅ Any time ' +
         (day === today() ? 'today' : esc(shortDay(day))) +
-        (items.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') +
+        (items.length || late.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') +
         '<span class="cal-today-fold">' + (todayFolded ? '▸' : '▾') + '</span></button>' +
-      '<div class="cal-today-body">' +
-        (items.length ? group(crew.length && mine.length ? 'Yours' : '', mine) + group('👷 Crew', crew)
-          : '<div class="cal-today-none">Nothing for any time this day.</div>') +
+      '<div class="cal-today-body">' + lateHtml(late, null, true) +
+        (items.length ? group(crew.length && mine.length ? 'Yours' : late.length ? 'Today' : '', mine) + group('👷 Crew', crew)
+          : '<div class="cal-today-none">' + (late.length ? 'Nothing else for today.' : 'Nothing for any time this day.') + '</div>') +
       '</div></div>';
   }
+
+  // ------------------------------------------------- not ticked off: carried
+  //
+  // Jonah (14 Oct 2026): tasks "have to be marked done or they get included
+  // in the end day summary ... Appointments are different." A task (remind.js
+  // isTask) left unticked on its day -- at a set time or not -- is not
+  // forgotten when the day turns: it heads today's list as "From earlier",
+  // with the day it was for, until it is ticked off (for that date: a
+  // repeat's other dates are their own) or deleted. A fortnight back at most
+  // (remind.js CARRY_DAYS). The evening summary and the 7 am list say the
+  // same (functions/reminders.py open_tasks). Whatever is switched off in the
+  // side, or "Only mine", is left out here as on the day itself.
+  // One ticked off today stays in the list, ticked, until tomorrow -- so a
+  // slip of the finger can be put back where it was.
+  function carried(everything) {
+    const t = today();
+    const from = [addDays(t, -YDRemind.CARRY_DAYS), YDRemind.TICK_FROM].sort()[1];
+    const to = addDays(t, -1);
+    if (from > to) return [];
+    return occurrences(from, to, everything).filter(o => o.task && !o.after && (!o.done || doneToday(o)))
+      .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || a.day.localeCompare(b.day) || byKind(a, b));
+  }
+  function doneToday(o) {
+    const d = o.doneAt ? new Date(o.doneAt) : null;
+    return !!d && !isNaN(d) && dayOf(d) === today();
+  }
+  const leftOf = list => list.filter(o => !o.done).length;
+  // Above the calendar on a phone, a long list of them would push the days
+  // off the screen: the side list shows the first few and the rest on a tap
+  // (`short`). My day, which is the list, shows them all.
+  const LATE_SHOW = 4;
+  let lateAll = false;
+  function lateHtml(late, subOf, short) {
+    if (!late.length) return '';
+    const cut = short && !lateAll && late.length > LATE_SHOW + 1;
+    return '<div class="cal-todo-group late">⏰ From earlier — not done</div>' +
+      (cut ? late.slice(0, LATE_SHOW) : late).map(o =>
+        todoRow(o, [shortDay(o.day), subOf ? subOf(o) : ''].filter(Boolean).join(' · '), !o.done)).join('') +
+      (cut ? '<button class="link-btn cal-late-more" onclick="calLateAll(true)">Show all ' + late.length + ' from earlier</button>'
+        : short && lateAll && late.length > LATE_SHOW + 1
+          ? '<button class="link-btn cal-late-more" onclick="calLateAll(false)">Show fewer</button>' : '');
+  }
+  window.calLateAll = function (on) { lateAll = !!on; render(); };
   // One thing on the "any time" list: a tick box when this person may tick
   // it off, its kind's colour down the side, a tap to open it. `sub`: a
-  // second line (who is on it).
-  function todoRow(o, sub) {
+  // second line (who is on it). `late`: from an earlier day, not done.
+  function todoRow(o, sub, late) {
     const k = keyOf(o);
-    return '<div class="cal-todo' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '">' +
+    return '<div class="cal-todo' + (o.done ? ' done' : '') + (late ? ' late' : '') + '" style="--c:' + colorOf(o) + '">' +
       (canTick(o) ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
       '<button class="cal-todo-t" onclick="calClick(\'' + k + '\')">' + esc(o.title) +
@@ -567,14 +642,25 @@
     const crew = all.filter(o => !occIsMine(o, w) && isCrewOcc(o));
     const timed = list => list.filter(o => o.time).sort((a, b) => String(to24(a.time)).localeCompare(String(to24(b.time))));
     const untimed = list => list.filter(o => !o.time).sort(byKind);
+    // A task at a set time is ticked off here too (an appointment needs no
+    // tick, so it has none).
     const timedRow = o => {
       const k = keyOf(o);
       const sub = [o.address, o.note, o.auto ? '' : o.layer.name, whoOn(o)].filter(Boolean).join(' · ');
-      return '<button class="md-row' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '" onclick="calClick(\'' + k + '\')">' +
-        '<span class="md-time">' + esc(o.endTime ? fmtTimeRange(o.time, o.endTime) : fmtTimeRange(o.time)) + '</span>' +
-        '<span class="md-what"><b>' + esc(o.title) + '</b>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span></button>';
+      return '<div class="md-row' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '">' +
+        (o.task && canTick(o) ? '<input type="checkbox"' + (o.done ? ' checked' : '') +
+          ' onchange="calTick(\'' + k + '\', this.checked)" aria-label="Done">' : '') +
+        '<button class="md-open" onclick="calClick(\'' + k + '\')">' +
+          '<span class="md-time">' + esc(o.endTime ? fmtTimeRange(o.time, o.endTime) : fmtTimeRange(o.time)) + '</span>' +
+          '<span class="md-what"><b>' + esc(o.title) + '</b>' + (sub ? '<small>' + esc(sub) + '</small>' : '') + '</span>' +
+        '</button></div>';
     };
     const mineT = timed(mine), mineU = untimed(mine);
+    // What was not ticked off on the days before (carried): theirs at the
+    // top; the crew's with the crew's day, for the owner.
+    const late = day === today() ? carried(true) : [];
+    const lateMine = late.filter(o => occIsMine(o, w));
+    const lateCrew = late.filter(o => !occIsMine(o, w) && isCrewOcc(o));
     const left = mineU.filter(o => !o.done).length;
     const which = day === today() ? 'today' : 'this day';
     // Reminders only reach a phone that has said yes to them.
@@ -590,13 +676,17 @@
           '(Safari → Share → Add to Home Screen), then turn notifications on.</div>'
       : pushState === 'blocked' ? '<div class="md-nudge">🔕 Notifications are blocked for Job Hub on this device — allow them in its settings.</div>'
       : '';
-    return '<div class="md">' + nudge +
-      (!mine.length ? '<p class="empty-msg">Nothing of yours ' + which + '.</p>' :
+    return '<div class="md cal-pan">' + nudge +
+      (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done ' +
+        '<span class="cal-today-n">' + (leftOf(lateMine) || 'all ticked off') + '</span></div>' +
+        lateMine.map(o => todoRow(o, [shortDay(o.day), whoOn(o)].filter(Boolean).join(' · '), !o.done)).join('') : '') +
+      (!mine.length ? '<p class="empty-msg">Nothing ' + (lateMine.length ? 'else ' : '') + 'of yours ' + which + '.</p>' :
         (mineT.length ? '<div class="md-head">🕑 At set times</div>' + mineT.map(timedRow).join('') : '') +
         (mineU.length ? '<div class="md-head">✅ Any time ' + which +
           ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span></div>' +
           mineU.map(o => todoRow(o, whoOn(o))).join('') : '')) +
-      (crew.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
+      (crew.length || lateCrew.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
+        lateHtml(lateCrew, whoOn) +
         timed(crew).map(timedRow).join('') + untimed(crew).map(o => todoRow(o, whoOn(o))).join('') : '') +
       '</div>';
   }
@@ -614,21 +704,36 @@
   };
   window.calTick = function (k, on) {
     const o = drawn[k];
-    if (!o) return;
+    if (o) tick(o, on);
+    render();
+  };
+  // Ticks one thing off (or back on) for its own date. False when it could
+  // not be.
+  function tick(o, on) {
     if (o.auto === 'card' || o.auto === 'recurring') {
       if (!window.YDBoards || !YDBoards.setDone(o.auto === 'card' ? o.boardId : 'crew', o.id, on)) {
         showToast('That card is not on its board yet');
+        return false;
       }
-      render();
-      return;
+      return true;
     }
     const cal = cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
-    if (!base || !canTick(o)) { render(); return; }
+    if (!base || !canTick(o)) return false;
     // Undone is written as null: a merge keeps whatever key is left out.
     const mark = on ? { at: nowIso(), by: (me() || {}).uid || '' } : null;
-    base.done = Object.assign({}, base.done, { [o.day]: mark });
-    write('calendars/' + o.calId + '/events', o.id, { done: { [o.day]: mark } }, 'ticking off ' + (base.title || 'an entry'));
+    const key = o.doneKey || o.day;
+    base.done = Object.assign({}, base.done, { [key]: mark });
+    write('calendars/' + o.calId + '/events', o.id, { done: { [key]: mark } }, 'ticking off ' + (base.title || 'an entry'));
+    return true;
+  }
+  // The details window's "Mark done": a task at a set time is ticked off
+  // here, as one for any time is on the list.
+  window.calDoneShown = function (on) {
+    const o = shown;
+    if (!o || !tick(o, on)) return;
+    closeCalModal();
     render();
+    showToast(on ? 'Done — ' + shortDay(o.doneKey || o.day) : 'Not done after all');
   };
 
   // Down the side: the small month, the day's "any time" list (`anyTime`,
@@ -722,34 +827,47 @@
 
   const nowTop = () => { const d = new Date(); return Math.round((d.getHours() * 60 + d.getMinutes()) * HOUR / 60); };
 
+  // The days on screen, with the same number either side drawn too, just out
+  // of sight: each row's days sit on a strip three times as wide, moved so
+  // the middle shows (.cg-track). A finger swiping sideways slides the strip
+  // and the next days come into view under it, as in Google Calendar -- see
+  // "Swiping" below. The ones out of sight are inert: nothing in them can be
+  // tapped or tabbed to, and an entry dragged along is dropped only on a day
+  // on screen (moveBlock).
   function gridHtml(days) {
-    const occ = occurrences(days[0], days[days.length - 1]);
+    const n = days.length;
+    const all = days.map(d => addDays(d, -n)).concat(days, days.map(d => addDays(d, n)));
+    const occ = occurrences(all[0], all[all.length - 1]);
     const t = today();
-    const head = '<div class="cg-row cg-head"><div class="cg-gut"></div>' + days.map(d => {
+    const nb = d => d < days[0] || d > days[n - 1];
+    const off = d => nb(d) ? ' cg-nb" inert aria-hidden="true' : '';
+    const track = (cells, extra) => '<div class="cg-vp"><div class="cg-track" style="--cols:' + all.length +
+      (extra || '') + '">' + cells + '</div></div>';
+    const head = '<div class="cg-row cg-head"><div class="cg-gut"></div>' + track(all.map(d => {
         const p = parseDay(d);
-        return '<button class="cg-dh' + (d === t ? ' today' : d < t ? ' past' : '') + '" onclick="calGoDay(\'' + d + '\')">' +
+        return '<button class="cg-dh' + (d === t ? ' today' : d < t ? ' past' : '') + off(d) + '" onclick="calGoDay(\'' + d + '\')">' +
           '<span class="cg-wd">' + WEEKDAYS[p.getDay()] + '</span><span class="cg-dn">' + p.getDate() + '</span></button>';
-      }).join('') + '</div>';
-    const allDay = '<div class="cg-row cg-all"><div class="cg-gut cg-all-l">all day</div>' + days.map(d =>
-        '<div class="cg-allcell" data-day="' + d + '">' +
-          occ.filter(o => o.day === d && !segOf(o)).map(chipHtml).join('') + '</div>').join('') + '</div>';
+      }).join('')) + '</div>';
+    const allDay = '<div class="cg-row cg-all"><div class="cg-gut cg-all-l">all day</div>' + track(all.map(d =>
+        '<div class="cg-allcell' + off(d) + '" data-day="' + d + '">' +
+          occ.filter(o => o.day === d && !segOf(o)).map(chipHtml).join('') + '</div>').join('')) + '</div>';
     let hours = '';
     for (let h = 1; h < 24; h++) hours += '<span style="top:' + h * HOUR + 'px">' + hourLabel(h) + '</span>';
-    const cols = days.map(d => {
+    const cols = all.map(d => {
       const items = layout(occ.filter(o => o.day === d).map(o => {
         const s = segOf(o);
         return s && s[1] > s[0] && { o: o, a: s[0], b: s[1] };
       }).filter(Boolean));
-      return '<div class="cg-col' + (d === t ? ' today' : '') + '" data-day="' + d + '">' +
+      return '<div class="cg-col' + (d === t ? ' today' : '') + off(d) + '" data-day="' + d + '">' +
         items.map(blockHtml).join('') +
         (d === t ? '<div class="cg-now" style="top:' + nowTop() + 'px"></div>' : '') +
       '</div>';
     }).join('');
-    return '<div class="cg" style="--n:' + days.length + ';--h:' + HOUR + 'px">' +
-      '<div class="cg-scroll">' +
+    return '<div class="cg" style="--n:' + n + ';--h:' + HOUR + 'px">' +
+      '<div class="cg-scroll cal-pan">' +
         '<div class="cg-sticky">' + head + allDay + '</div>' +
         '<div class="cg-row cg-body" style="height:' + 24 * HOUR + 'px">' +
-          '<div class="cg-gut cg-hours">' + hours + '</div>' + cols +
+          '<div class="cg-gut cg-hours">' + hours + '</div>' + track(cols, ';height:' + 24 * HOUR + 'px') +
         '</div>' +
       '</div>' +
     '</div>';
@@ -797,7 +915,7 @@
   // A tap on an empty hour adds an entry at that half hour.
   function wireSlots() {
     if (!adds()) return;
-    document.querySelectorAll('#calBody .cg-col').forEach(col => col.addEventListener('click', e => {
+    document.querySelectorAll('#calBody .cg-col:not(.cg-nb)').forEach(col => col.addEventListener('click', e => {
       if (e.target !== col || Date.now() - justDragged < 400) return;
       const y = e.clientY - col.getBoundingClientRect().top;
       calAdd(col.dataset.day, hhmm(clamp(Math.floor(y / HOUR * 2) * 30, 0, 1410)));
@@ -806,40 +924,44 @@
 
   // ------------------------------------------------------- month and list
 
+  // The month, with the month before and after drawn out of sight beside it
+  // (as the time grid's days are), so a swipe slides the next one in.
   function monthHtml() {
-    const first = cursor.slice(0, 8) + '01';
-    const gridStart = weekStart(first);
-    const gridEnd = addDays(gridStart, 41);
-    const occ = occurrences(gridStart, gridEnd);
+    const firsts = [-1, 0, 1].map(k => addMonths(cursor.slice(0, 8) + '01', k).slice(0, 8) + '01');
+    const occ = occurrences(weekStart(firsts[0]), addDays(weekStart(firsts[2]), 41));
     const byDay = {};
     occ.forEach(o => { (byDay[o.day] = byDay[o.day] || []).push(o); });
-    const month = cursor.slice(0, 7);
     const t = today();
 
-    let cells = '';
-    for (let i = 0; i < 42; i++) {
-      const day = addDays(gridStart, i);
-      const list = byDay[day] || [];
-      cells += '<div class="cal-cell' + (day.slice(0, 7) !== month ? ' out' : '') + (day === t ? ' today' : '') +
-          (day === selected ? ' sel' : '') + '" data-day="' + day + '" onclick="calPick(\'' + day + '\')">' +
-        '<div class="cal-num">' + parseDay(day).getDate() + '</div>' +
-        '<div class="cal-bars">' +
-          list.slice(0, 3).map(o => {
-            const k = keyOf(o);
-            return '<div class="cal-bar' + (o.done ? ' done' : '') + (movable(o) ? ' mv' : '') + '" data-k="' + k + '" ' +
-              'style="' + paint(o) + '" onclick="event.stopPropagation();calClick(\'' + k + '\')">' +
-              (o.time ? '<b>' + esc(fmtTimeRange(o.time)) + '</b> ' : '') + esc(o.title) + '</div>';
-          }).join('') +
-          (list.length > 3 ? '<button class="cal-more" onclick="event.stopPropagation();calGoDay(\'' + day + '\')">+' +
-            (list.length - 3) + ' more</button>' : '') +
-        '</div>' +
-        '<div class="cal-dots">' + list.slice(0, 5).map(o =>
-          '<span style="--c:' + colorOf(o) + '"></span>').join('') + '</div>' +
-      '</div>';
-    }
-    return '<div class="cal-month">' +
-        WEEKDAYS.map(w => '<div class="cal-wd">' + w + '</div>').join('') + cells +
-      '</div>' +
+    const grid = (first, side) => {
+      const gridStart = weekStart(first), month = first.slice(0, 7);
+      let cells = '';
+      for (let i = 0; i < 42; i++) {
+        const day = addDays(gridStart, i);
+        const list = byDay[day] || [];
+        cells += '<div class="cal-cell' + (day.slice(0, 7) !== month ? ' out' : '') + (day === t ? ' today' : '') +
+            (day === selected && !side ? ' sel' : '') + '" data-day="' + day + '" onclick="calPick(\'' + day + '\')">' +
+          '<div class="cal-num">' + parseDay(day).getDate() + '</div>' +
+          '<div class="cal-bars">' +
+            list.slice(0, 3).map(o => {
+              const k = keyOf(o);
+              return '<div class="cal-bar' + (o.done ? ' done' : '') + (movable(o) ? ' mv' : '') + '" data-k="' + k + '" ' +
+                'style="' + paint(o) + '" onclick="event.stopPropagation();calClick(\'' + k + '\')">' +
+                (o.time ? '<b>' + esc(fmtTimeRange(o.time)) + '</b> ' : '') + esc(o.title) + '</div>';
+            }).join('') +
+            (list.length > 3 ? '<button class="cal-more" onclick="event.stopPropagation();calGoDay(\'' + day + '\')">+' +
+              (list.length - 3) + ' more</button>' : '') +
+          '</div>' +
+          '<div class="cal-dots">' + list.slice(0, 5).map(o =>
+            '<span style="--c:' + colorOf(o) + '"></span>').join('') + '</div>' +
+        '</div>';
+      }
+      return '<div class="cal-month' + (side ? '" inert aria-hidden="true' : '') + '">' +
+        WEEKDAYS.map(w => '<div class="cal-wd">' + w + '</div>').join('') + cells + '</div>';
+    };
+    return '<div class="cal-pan-vp cal-pan"><div class="cal-month-track">' +
+        firsts.map((f, i) => grid(f, i !== 1)).join('') +
+      '</div></div>' +
       // The picked day is always one of the 42 squares (calStep and calPick
       // keep it in this month): nothing in byDay is nothing that day.
       '<div class="cal-daypanel">' + dayBlock(selected, byDay[selected] || [], true) + '</div>';
@@ -998,6 +1120,15 @@
     // on it, which left out the owner's own entries with nobody on them.
     const remindLine = YDRemind.line(base, type ? type.id : '', isTimed(ev),
       YDRemind.eventIsMine(ev, cal, YDRemind.who(people)));
+    // Ticked off for this date: when, and by whom.
+    // (A crew phone has no list of people: someone else is just "done".)
+    const mark = base.done && base.done[o.doneKey || o.day];
+    const doneBy = !mark || !mark.by ? '' : mark.by === (me() || {}).uid ? 'you'
+      : people[mark.by] ? firstName(personName(mark.by)) : '';
+    const doneAt = mark && mark.at && !isNaN(new Date(mark.at))
+      ? new Date(mark.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    const doneLine = !mark ? '' : '✅ Done' + (doneBy ? ' — ' + doneBy : '') + (doneAt ? ', ' + doneAt : '');
+    const lateLine = !mark && o.task && (o.doneKey || o.day) < today() ? '⏰ Not ticked off — still to do' : '';
     openModal(esc(ev.title || ev.jobName || 'Event'),
       '<div class="cal-detail" style="--c:' + safeColor(cal.color) + '">' +
         '<div class="cal-detail-cal"><span class="cal-dot"></span>' + esc(cal.name) + '</div>' +
@@ -1014,10 +1145,15 @@
         ((ev.crew || []).length ? '<div class="cal-detail-line">👷 ' + ev.crew.map(c =>
           '<span class="cal-face" style="--c:' + personColor(c.uid) + '">' + esc(nameOf(c)) + '</span>').join(' ') + '</div>' : '') +
         (remindLine ? '<div class="cal-detail-line">' + esc(remindLine) + '</div>' : '') +
+        (doneLine ? '<div class="cal-detail-line">' + esc(doneLine) + '</div>' : '') +
+        (lateLine ? '<div class="cal-detail-line cal-late">' + esc(lateLine) + '</div>' : '') +
         (ev.notes ? '<div class="bd-notes">' + esc(ev.notes) + '</div>' : '') +
       '</div>' +
       '<div class="field-actions">' +
-        (editsCal(cal) ? '<button class="btn btn-filled" onclick="calEditShown()">Edit</button>' : '') +
+        // A task is ticked off for this date (an appointment needs none).
+        (o.task && canTick(o) ? (mark ? '<button class="btn btn-sm" onclick="calDoneShown(false)">↩ Not done after all</button>'
+          : '<button class="btn btn-filled" onclick="calDoneShown(true)">✅ Mark done</button>') : '') +
+        (editsCal(cal) ? '<button class="btn' + (o.task && canTick(o) && !mark ? '' : ' btn-filled') + '" onclick="calEditShown()">Edit</button>' : '') +
         (editsCal(cal) && !(type && type.crew) ? '<button class="btn btn-sm" onclick="calCrewTask()">👷 Make it a crew task</button>' : '') +
         (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
         '<button class="btn btn-sm" onclick="closeCalModal()">Close</button>' +
@@ -1584,7 +1720,9 @@
       drag.b = clamp(snap((e.clientY - top) / HOUR * 60), drag.a + SNAP, 1440);
       drag.el.style.height = Math.max(18, (drag.b - drag.a) * HOUR / 60 - 2) + 'px';
     } else {
-      const cols = Array.from(document.querySelectorAll('#calBody .cg-col'));
+      // Only the days on screen: the ones drawn out of sight either side
+      // (gridHtml) are not somewhere to drop it.
+      const cols = Array.from(document.querySelectorAll('#calBody .cg-col:not(.cg-nb)'));
       if (!cols.length) return;
       const col = cols.find(c => { const r = c.getBoundingClientRect(); return e.clientX >= r.left && e.clientX < r.right; }) ||
         (e.clientX < cols[0].getBoundingClientRect().left ? cols[0] : cols[cols.length - 1]);
@@ -1674,18 +1812,188 @@
       n.addEventListener('touchmove', holdTouch, { passive: false }));
   }
 
-  // Swiping across the calendar on a phone moves to the next days, or back.
-  let swipe = null;
-  function onTouchStart(e) {
-    swipe = e.touches.length === 1 && e.target.closest && e.target.closest('#calBody')
-      ? { x: e.touches[0].clientX, y: e.touches[0].clientY, t: Date.now() } : null;
+  // --------------------------------------------------------------- swiping
+  //
+  // Jonah (14 Oct 2026): "make sideways scrolling on the calendar smooth
+  // instead of choppy. right now when i do it it just cuts to the next 3
+  // days i want it to be smooth like it is on google calendar." So the days
+  // follow the finger: the days either side are already drawn out of sight
+  // (gridHtml, monthHtml), and a sideways drag slides them in under it. Let
+  // go past a third of the way, or with a flick, and they glide the rest of
+  // the way (PAN_MS, slowing as they land); a short slow drag glides back.
+  // Only when the glide has finished is the calendar drawn again on its new
+  // days -- drawn exactly where the glide stopped, so nothing jumps. My day
+  // has no neighbours drawn: it slides out, and the next day slides in.
+  //
+  // Up-and-down stays the browser's own scrolling: the swipe areas allow it
+  // only vertical panning (touch-action, styles.css), so a finger that sets
+  // off up or down scrolls the hours (the browser takes it and says
+  // pointercancel), and one that sets off sideways is ours. A finger held
+  // still on an entry still picks it up to move it (onDown); one that moves
+  // first is a swipe. The mouse drags entries and uses the arrows; a
+  // trackpad's sideways scroll slides the days too (onWheel). Anyone who has
+  // asked their device for less motion gets no glide.
+  const PAN_VIEWS = { day: 1, '3day': 1, week: 1, month: 1, myday: 1 };
+  const PAN_MS = 240;
+  let pan = null;           // a finger on a swipe area: { id, x0, y0, dir '' | 'x', dx, pts, t }
+  let settling = false;     // gliding into place after a swipe
+  let panRedraw = false;    // something changed during a swipe: draw when it is over
+  let wheel = null;         // a trackpad's sideways scroll under way
+  let wheelQuiet = 0;       // after one: wait for its momentum to die away
+  const reduceMotion = () => !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+
+  // What slides, how wide a period is, and whether the days either side are
+  // there to slide in.
+  function panTargets() {
+    const body = el('calBody');
+    if (!body) return null;
+    if (isGrid()) {
+      const vp = body.querySelector('.cg-body .cg-vp');
+      return vp && { els: Array.from(body.querySelectorAll('.cg-track')), w: vp.clientWidth, nb: true };
+    }
+    if (view === 'month') {
+      const vp = body.querySelector('.cal-pan-vp');
+      return vp && vp.firstElementChild && { els: [vp.firstElementChild], w: vp.clientWidth, nb: true };
+    }
+    if (view === 'myday') {
+      const m = body.querySelector('.md');
+      return m && { els: [m], w: body.clientWidth, nb: false };
+    }
+    return null;
   }
-  function onTouchEnd(e) {
-    const s = swipe;
-    swipe = null;
-    if (!s || drag || Date.now() - justDragged < 500 || view === 'schedule') return;
-    const t = e.changedTouches[0], dx = t.clientX - s.x, dy = t.clientY - s.y;
-    if (Date.now() - s.t < 600 && Math.abs(dx) > 70 && Math.abs(dy) < 45) calStep(dx < 0 ? 1 : -1);
+  function slideTo(t, x, ms) {
+    const at = (t.nb ? -t.w : 0) + x;
+    t.els.forEach(n => {
+      n.style.transition = ms ? 'transform ' + ms + 'ms cubic-bezier(.22,.61,.36,1)' : 'none';
+      n.style.transform = 'translate3d(' + at + 'px,0,0)';
+    });
+  }
+  function letGo(t) {
+    t.els.forEach(n => { n.style.transition = ''; n.style.transform = ''; n.style.willChange = ''; });
+  }
+  // `step`: 1 the next days, -1 the ones before, 0 back where it was.
+  function settle(t, step) {
+    settling = true;
+    let over = false;
+    const ended = e => { if (e.target === t.els[0]) finish(); };   // not a button's own fade inside it
+    const finish = () => {
+      if (over) return;
+      over = true;
+      settling = false;
+      t.els[0].removeEventListener('transitionend', ended);
+      if (step) {
+        const w = t.w;
+        calStep(step);
+        if (!t.nb) slideIn(step * w);
+      } else {
+        letGo(t);
+        if (panRedraw) render();
+      }
+      panRedraw = false;
+    };
+    const ms = reduceMotion() ? 0 : PAN_MS;
+    if (!ms) { finish(); return; }
+    slideTo(t, -step * t.w, ms);
+    t.els[0].addEventListener('transitionend', ended);
+    setTimeout(finish, ms + 80);          // no transitionend when nothing had to move
+  }
+  // My day: the new day comes in from the side the old one left by.
+  function slideIn(from) {
+    const m = document.querySelector('#calBody .md');
+    if (!m || reduceMotion()) return;
+    m.style.transition = 'none';
+    m.style.transform = 'translate3d(' + from + 'px,0,0)';
+    void m.offsetWidth;                   // placed there before the glide starts
+    m.style.transition = 'transform ' + PAN_MS + 'ms cubic-bezier(.22,.61,.36,1)';
+    m.style.transform = '';
+    setTimeout(() => { m.style.transition = ''; }, PAN_MS + 80);
+  }
+
+  function panDown(e) {
+    // A swipe whose finger was never heard lifting (the app was left
+    // mid-swipe) is over: left in place it would stop every redraw.
+    if (pan && e.isPrimary && e.pointerId !== pan.id) panCancel();
+    if (e.pointerType === 'mouse' || !e.isPrimary || pan || settling || wheel || !PAN_VIEWS[view]) return;
+    if (!e.target.closest || !e.target.closest('#calBody .cal-pan')) return;
+    pan = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dir: '', dx: 0, pts: [[e.timeStamp, e.clientX]] };
+  }
+  function panMove(e) {
+    if (!pan || e.pointerId !== pan.id) return;
+    const dx = e.clientX - pan.x0, dy = e.clientY - pan.y0;
+    if (!pan.dir) {
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+      // Up or down, or an entry already being moved: not a swipe.
+      if (Math.abs(dy) >= Math.abs(dx) || (drag && drag.live)) { pan = null; return; }
+      const t = panTargets();
+      if (!t || !t.w) { pan = null; return; }
+      // A finger that might have been about to pick up an entry is sliding
+      // the days instead.
+      if (drag) stopDrag();
+      pan.dir = 'x'; pan.t = t;
+      t.els.forEach(n => { n.style.willChange = 'transform'; });
+    }
+    if (e.cancelable) e.preventDefault();
+    pan.dx = clamp(dx, -pan.t.w, pan.t.w);
+    pan.pts.push([e.timeStamp, e.clientX]);
+    while (pan.pts.length > 2 && e.timeStamp - pan.pts[0][0] > 100) pan.pts.shift();
+    slideTo(pan.t, pan.dx, 0);
+  }
+  function panUp(e) {
+    if (!pan || e.pointerId !== pan.id) return;
+    const p = pan;
+    pan = null;
+    if (p.dir !== 'x') return;
+    justDragged = Date.now();             // the lift is not a tap on what it ends over
+    // How fast it was going as it was let go: the last tenth of a second
+    // (a finger that stopped before lifting was not flicking).
+    const pts = p.pts.concat([[e.timeStamp, e.clientX]]).filter(q => e.timeStamp - q[0] <= 100);
+    const ms = pts.length > 1 ? pts[pts.length - 1][0] - pts[0][0] : 0;
+    const v = ms > 0 ? (pts[pts.length - 1][1] - pts[0][1]) / ms : 0;      // px per ms; minus is leftwards
+    let step = 0;
+    if (Math.abs(v) > 0.35 && Math.abs(p.dx) > 24 && Math.sign(v) === Math.sign(p.dx)) step = v < 0 ? 1 : -1;
+    else if (Math.abs(p.dx) > p.t.w / 3) step = p.dx < 0 ? 1 : -1;
+    settle(p.t, step);
+  }
+  function panCancel(e) {
+    if (!pan || (e && e.pointerId !== pan.id)) return;
+    const p = pan;
+    pan = null;
+    if (p.dir === 'x') settle(p.t, 0);
+  }
+
+  // A trackpad's sideways scroll (or shift + the mouse wheel): the days
+  // follow it, and settle as a swipe does once it stops. Its momentum keeps
+  // sending scrolls after the fingers lift; they are let die away before
+  // another can begin, or one swipe would move two weeks.
+  function onWheel(e) {
+    if (!PAN_VIEWS[view] || e.ctrlKey || !e.target.closest || !e.target.closest('#calBody .cal-pan')) return;
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const dx = e.deltaX * unit;
+    if (Math.abs(dx) <= Math.abs(e.deltaY * unit)) return;    // up or down: the hours scroll
+    // Sideways is ours -- and not the browser's "back a page" swipe.
+    e.preventDefault();
+    if (Date.now() < wheelQuiet) { wheelQuiet = Date.now() + 250; return; }
+    if (settling || pan || (drag && drag.live)) return;
+    if (!wheel) {
+      const t = panTargets();
+      if (!t || !t.w) return;
+      wheel = { acc: 0, t: t, timer: 0 };
+      t.els.forEach(n => { n.style.willChange = 'transform'; });
+    }
+    wheel.acc += dx;
+    slideTo(wheel.t, clamp(-wheel.acc, -wheel.t.w, wheel.t.w), 0);
+    clearTimeout(wheel.timer);
+    if (Math.abs(wheel.acc) > wheel.t.w / 2) wheelEnd();
+    else wheel.timer = setTimeout(wheelEnd, 140);
+  }
+  function wheelEnd() {
+    const w = wheel;
+    if (!w) return;
+    wheel = null;
+    clearTimeout(w.timer);
+    justDragged = Date.now();
+    wheelQuiet = Date.now() + 250;
+    settle(w.t, Math.abs(w.acc) >= Math.min(100, w.t.w / 4) ? (w.acc > 0 ? 1 : -1) : 0);
   }
 
   function wire() {
@@ -1693,12 +2001,19 @@
     if (!wrap || wrap.dataset.wired) return;
     wrap.dataset.wired = '1';
     wrap.addEventListener('pointerdown', onDown);
+    wrap.addEventListener('pointerdown', panDown);
     window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointermove', panMove, { passive: false });
     window.addEventListener('pointerup', onUp);
-    window.addEventListener('pointercancel', () => { const was = drag && drag.live; stopDrag(); if (was) render(); });
+    window.addEventListener('pointerup', panUp);
+    window.addEventListener('pointercancel', e => {
+      panCancel(e);
+      const was = drag && drag.live; stopDrag(); if (was) render();
+    });
     // Holding an entry: see wireHolds.
-    wrap.addEventListener('touchstart', onTouchStart, { passive: true });
-    wrap.addEventListener('touchend', onTouchEnd, { passive: true });
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    // Switched away from mid-swipe: it goes back where it was.
+    document.addEventListener('visibilitychange', () => { if (document.hidden) panCancel(); });
     // The red line at now keeps up.
     setInterval(() => document.querySelectorAll('#calBody .cg-now').forEach(n => { n.style.top = nowTop() + 'px'; }), 60000);
   }

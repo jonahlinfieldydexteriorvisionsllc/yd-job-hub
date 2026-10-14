@@ -1181,7 +1181,20 @@
   /* the time grid */
   .cg { border:1px solid var(--border); border-radius:10px; background:var(--surface); overflow:hidden; }
   .cg-scroll { max-height:calc(100vh - 230px); min-height:420px; overflow-y:auto; overflow-x:hidden; position:relative; }
-  .cg-row { display:grid; grid-template-columns:52px repeat(var(--n), minmax(0, 1fr)); }
+  .cg-row { display:grid; grid-template-columns:52px minmax(0, 1fr); }
+  /* Each row's days on a strip three periods wide, the middle one showing:
+     the days either side are there for a swipe to slide in (14 Oct 2026). */
+  .cg-vp { overflow:hidden; min-width:0; }
+  .cg-track { display:grid; grid-template-columns:repeat(var(--cols), minmax(0, 1fr)); width:300%;
+              transform:translate3d(calc(-100% / 3), 0, 0); }
+  .cal-pan-vp { overflow:hidden; }
+  .cal-month-track { display:flex; align-items:flex-start; width:300%; transform:translate3d(calc(-100% / 3), 0, 0); }
+  .cal-month-track > .cal-month { flex:0 0 calc(100% / 3); min-width:0; }
+  /* Sideways is the calendar's (a swipe to the next days); up and down
+     stays the browser's own scrolling, and pinching still zooms. */
+  .cal-pan, .cal-pan * { touch-action:pan-y pinch-zoom; }
+  /* An all-day entry being dragged may hang below its row. */
+  #calBody.dragging .cg-all .cg-vp { overflow-x:clip; overflow-y:visible; }
   .cg-sticky { position:sticky; top:0; z-index:4; background:var(--surface); border-bottom:1px solid var(--border-strong); }
   .cg-dh { font-family:'DM Sans',sans-serif; color:var(--text); background:none; border:none; cursor:pointer;
            display:flex; flex-direction:column; align-items:center; gap:1px; padding:6px 0 4px; min-width:0; }
@@ -1216,6 +1229,7 @@
   .cg-ev.short { display:flex; gap:6px; align-items:baseline; white-space:nowrap; }
   .cg-ev.short .cg-ev-t { white-space:nowrap; text-overflow:ellipsis; flex:0 1 auto; min-width:0; }
   .cg-ev.done { opacity:.55; }
+  .cg-ev.done .cg-ev-t { text-decoration:line-through; }
   .cg-ev.dragging, .cg-chip.dragging, .cal-bar.dragging { opacity:.88; z-index:6; box-shadow:0 6px 18px rgba(0,0,0,.28); cursor:grabbing; }
   .cg-chip.dragging, .cal-bar.dragging { position:relative; }
   #calBody.dragging .cal-month, #calBody.dragging .cal-cell, #calBody.dragging .cg-allcell { overflow:visible; }
@@ -1250,6 +1264,15 @@
                 font-family:'DM Sans',sans-serif; font-size:12.5px; color:var(--text); overflow-wrap:anywhere; }
   .cal-todo.done .cal-todo-t { text-decoration:line-through; color:var(--muted); }
   .cal-todo-t small { display:block; font-size:11px; color:var(--muted); margin-top:1px; }
+  /* Not ticked off on its own day (14 Oct 2026): carried to the top. */
+  .cal-todo-group.late, .md-head.md-late { color:#c0392b; }
+  html[data-night] .cal-todo-group.late, html[data-night] .md-head.md-late { color:#ff8a7a; }
+  .cal-todo.late { background:color-mix(in srgb, #d64545 9%, var(--surface-2)); }
+  .cal-todo.late .cal-todo-t small { color:#c0392b; }
+  html[data-night] .cal-todo.late .cal-todo-t small { color:#ff8a7a; }
+  .cal-late-more { display:block; font-size:12px; margin:6px 2px 2px; }
+  .cal-detail-line.cal-late { color:#c0392b; font-weight:600; }
+  html[data-night] .cal-detail-line.cal-late { color:#ff8a7a; }
 
   /* My day (12 Oct 2026): one person's day -- at set times, then any time,
      then the crew's. */
@@ -1258,10 +1281,14 @@
              margin:14px 2px 2px; display:flex; align-items:center; gap:8px; }
   .md-head:first-child, .md-nudge + .md-head { margin-top:4px; }
   .md-head.md-crew { margin-top:22px; padding-top:12px; border-top:1px solid var(--border); }
-  .md-row { --c:#6b7a8f; display:flex; gap:12px; align-items:flex-start; width:100%; text-align:left; cursor:pointer;
-            border:none; border-left:4px solid var(--c); border-radius:6px; background:var(--surface-2);
-            padding:9px 10px; margin-top:4px; font-family:'DM Sans',sans-serif; color:var(--text); }
+  .md-row { --c:#6b7a8f; display:flex; gap:10px; align-items:center; width:100%;
+            border-left:4px solid var(--c); border-radius:6px; background:var(--surface-2);
+            padding:0 0 0 10px; margin-top:4px; }
+  .md-row > input { width:18px; height:18px; flex:none; accent-color:var(--c); margin:0; cursor:pointer; }
+  .md-open { display:flex; gap:12px; align-items:flex-start; flex:1; min-width:0; text-align:left; cursor:pointer;
+             border:none; background:none; padding:9px 10px 9px 0; font-family:'DM Sans',sans-serif; color:var(--text); }
   .md-row.done { opacity:.55; }
+  .md-row.done .md-what b { text-decoration:line-through; }
   .md-time { flex:none; width:96px; font-size:12.5px; font-weight:700; color:var(--muted); padding-top:1px; }
   .md-what { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
   .md-what small { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
@@ -1376,7 +1403,7 @@
                width:58px; height:58px; padding:0; flex:none; border-radius:50%; font-size:0; letter-spacing:0;
                box-shadow:0 4px 14px rgba(43,36,51,.32); }
     .cal-views .cal-add::before { content:'+'; font-size:30px; font-weight:500; line-height:1; }
-    .cg-row { grid-template-columns:40px repeat(var(--n), minmax(0, 1fr)); }
+    .cg-row { grid-template-columns:40px minmax(0, 1fr); }
     .cg-dn { font-size:16px; width:30px; height:30px; }
     .cg-scroll { max-height:calc(100vh - 290px); min-height:360px; }
     .cg-ev { padding:2px 4px; font-size:11px; }

@@ -193,7 +193,8 @@
         toggle('autoRemind', 'Remind me of everything', 'every calendar entry I can see and every card that is mine — ' +
           'no need to set a reminder on each one') +
         '<div class="hint">Bid appointments 1 hour and 30 minutes before. Anything else at a set time, 30 minutes before. ' +
-          'Things for any time that day, one list at 7 am. A crew task reminds the people on it — or, with nobody on ' +
+          'Things for any time that day, one list at 7 am — headed by any task from the days before that was never ' +
+          'ticked off. A crew task reminds the people on it — or, with nobody on ' +
           'it, every crew member. One thing’s own ' +
           'Remind box changes its reminder or switches it off.</div>' +
         // Jonah (12 Oct 2026): told "whenever the guys adds a card or something
@@ -205,11 +206,13 @@
         SLOT_INFO.map(([k, label, hint]) => toggle(k, label, hint)).join('') +
         '<div class="hint">' + (isOwner()
           ? 'Yours has the weather, everything on today’s calendar (personal events included), bids to chase, ' +
-            'and at the end of the day who worked where and for how long.'
+            'and at the end of the day who worked where and for how long, and every task — yours and the crew’s — ' +
+            'not ticked off.'
           : window.YDAuth && window.YDAuth.isAdmin
           ? 'Yours has the weather, where you are working, storm news and your own hours — plus the calendars, ' +
-            'bids and crew hours you have been given access to.'
-          : 'Yours has the weather, where you are working, storm news, and your own hours.') + '</div>' +
+            'bids and crew hours you have been given access to. At the end of the day, your tasks not ticked off.'
+          : 'Yours has the weather, where you are working, storm news, and your own hours — and at the end of the ' +
+            'day, your tasks not ticked off.') + '</div>' +
       '</div>' +
       (isOwner() ? '<div class="ntf-block"><div class="ntf-head">Try it</div>' +
         '<div class="field-actions">' +

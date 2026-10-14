@@ -15,7 +15,8 @@
 //     and 30 minutes before;
 //   - anything for no particular time (all day, a pickup, a to-do): one list
 //     at 7 am of all of that day's -- the calendar's "any time today"
-//     checklist, on the phone;
+//     checklist, on the phone -- headed by any task from an earlier day that
+//     was never ticked off (isTask);
 //   - to whoever it is theirs (isMine): the people on it; with nobody on it,
 //     a crew task goes to every crew member and anything else to whoever
 //     made it (the owner, mostly).
@@ -37,10 +38,12 @@
   // "a certain color for everything" -- crew blue, personal pink, doctors
   // yellow, quotes green; the rest are ours to suggest). `ink`: dark
   // writing on a light colour.
+  // `appointment`: it simply happens at its time -- nobody ticks it off
+  // (isTask below).
   const TYPES = [
-    { id: 'bid', icon: '📋', name: 'Bid appointment', timed: true, color: '#2f8f5b' },
-    { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#8e5bc7' },
-    { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200' },
+    { id: 'bid', icon: '📋', name: 'Bid appointment', timed: true, color: '#2f8f5b', appointment: true },
+    { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#8e5bc7', appointment: true },
+    { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true },
     { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#e07b24' },
     { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#8a6d3b' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#1a9c8c' },
@@ -78,6 +81,33 @@
     if (where.boardId === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
     return '';
   }
+  // Whether a thing has to be ticked off as done. Jonah (14 Oct 2026): "make
+  // tasks on the calendar have to be marked done or they get included in the
+  // end day summary. This goes for all tasks. Appointments are different."
+  // A bid, an appointment or the doctor just happens at its time; a Personal
+  // entry is his own life (a birthday is not a job to tick). Everything else
+  // is a task: a pickup, a delivery, a to-do, a crew task -- and when nobody
+  // said what it is, any card (a card is a thing to do), anything on
+  // Follow-ups (calls to make, things to chase), and any entry for no set
+  // time ("just needs to be done that day"); an entry at a set time is taken
+  // for an appointment. A task not ticked off on its day is in that evening's
+  // summary as not done, and carried to the top of the next days' lists
+  // (calendar.js todayHtml, functions/reminders.py open_tasks -- the same
+  // rules) until it is ticked or deleted. `where`: { card, calKind }.
+  function isTask(type, timed, where) {
+    where = where || {};
+    const t = typeById(type);
+    if (t) return !t.appointment && (t.id !== 'personal' || !!where.card);
+    return !!where.card || where.calKind === 'followups' || !timed;
+  }
+  // How far back a task not ticked off is carried forward: a fortnight, so
+  // something forgotten does not pile up for ever (the card stays on its
+  // board, the entry on its calendar). Never before the day this began --
+  // nothing earlier was ever asked to be ticked, and the first evening would
+  // otherwise have listed two weeks of the work schedule as not done.
+  const CARRY_DAYS = 14;
+  const TICK_FROM = '2026-10-14';
+
   function icon(type) { const t = typeById(type); return t ? t.icon : ''; }
   function color(type) { const t = typeById(type); return t ? t.color : ''; }
   function ink(type) { const t = typeById(type); return (t && t.ink) || ''; }
@@ -229,6 +259,9 @@
     TYPES: TYPES,
     typeById: typeById,
     typeOf: typeOf,
+    isTask: isTask,
+    CARRY_DAYS: CARRY_DAYS,
+    TICK_FROM: TICK_FROM,
     icon: icon,
     color: color,
     ink: ink,

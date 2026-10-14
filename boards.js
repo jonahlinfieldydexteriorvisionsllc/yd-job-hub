@@ -2264,6 +2264,32 @@
       });
       return out;
     },
+    // Material pickups with no date, not picked up yet (Jonah, 14 Oct 2026:
+    // "material pickups dont have to be scheduled for a specific time"). An
+    // order the store says is ready (receipts.py makes the card, with a date
+    // only when the email gives a "pick up by") is ready now: the calendar
+    // lists it on today's "any time" list every day until it is picked up --
+    // for a fortnight at most (remind.js CARRY_DAYS) after the card was made,
+    // as functions/reminders.py open_tasks does. One picked up today stays
+    // on today's list, ticked, so a slip of the finger can be put back.
+    pickupsWaiting: () => {
+      const out = [];
+      const since = Date.now() - YDRemind.CARRY_DAYS * 864e5;
+      Object.keys(cards).forEach(bid => {
+        const b = boards[bid];
+        if (!b || b.virtual) return;
+        const last = doneColOf(b);
+        Object.values(cards[bid]).forEach(k => {
+          if (k.due || cardType(b, k) !== 'pickup') return;
+          const done = colOf(b, k) === last;
+          if (done && !finishedToday(k)) return;
+          const made = k.createdAt ? new Date(k.createdAt).getTime() : NaN;
+          if (isFinite(made) && made < since) return;
+          out.push({ board: b, card: k, done: done });
+        });
+      });
+      return out;
+    },
   };
 
   document.addEventListener('yd-auth', e => {

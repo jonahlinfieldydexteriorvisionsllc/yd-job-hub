@@ -375,6 +375,189 @@ def _is_mine(on, kind, maker, u):
     return u.get("role") == "owner"
 
 
+# ------------------------------------------------- tasks not ticked off
+#
+# Jonah (14 Oct 2026): "make tasks on the calendar have to be marked done or
+# they get included in the end day summary. This goes for all tasks.
+# Appointments are different." remind.js isTask has the same rule for the
+# screens: a bid, an appointment or the doctor just happens; a Personal
+# entry is his own life; anything else is a task -- and, when nobody said
+# what it is, any card, anything on Follow-ups, and any entry for no set
+# time (one at a set time is taken for an appointment). A task's date is
+# done when it is ticked off (an entry's done[date]; a card moved to Done).
+# One not done is in that evening's summary (digest.py) and heads the next
+# mornings' 7 am lists until it is ticked or deleted -- a fortnight back at
+# most (CARRY_DAYS), and never before TICK_FROM, the day this began: nothing
+# earlier was ever asked to be ticked. calendar.js carries them the same way.
+
+APPOINTMENTS = {"bid", "appt", "doctor"}
+CARRY_DAYS = 14
+TICK_FROM = datetime.date(2026, 10, 14)
+
+
+def _is_task(kind, timed, card=False, cal_kind=None):
+    """remind.js isTask."""
+    if kind in TYPES:
+        return kind not in APPOINTMENTS and (kind != "personal" or card)
+    return bool(card) or cal_kind == "followups" or not timed
+
+
+def _overnight(ev, timed):
+    """At a set time and ending the next day no later than it started: work
+    past midnight, not a two-day job (calendar.js overnight)."""
+    try:
+        return bool(timed and ev.get("endTime") and ev.get("endDate")) and \
+            (datetime.date.fromisoformat(str(ev["endDate"])) - datetime.date.fromisoformat(str(ev["date"]))).days == 1 \
+            and str(ev["endTime"]).zfill(5) <= str(ev["time"]).zfill(5)
+    except (KeyError, ValueError):
+        return False
+
+
+def carry_from(today):
+    """The first day a task not ticked off is still carried from."""
+    return max(today - datetime.timedelta(days=CARRY_DAYS), TICK_FROM)
+
+
+def _names_by(people):
+    """A card keeps the NAME of whoever made it; this turns that into them."""
+    out = {}
+    for uid, u in people.items():
+        for n in (u.get("name"), u.get("email")):
+            if str(n or "").strip():
+                out[str(n).strip().lower()] = uid
+    return out
+
+
+def open_tasks(db, people, first, last, now):
+    """{uid: [task]}: every task dated first..last (dates) not ticked off,
+    for each person whose it is (_is_mine) and who can see it -- and, for the
+    owner, every crew task as well (crew tasks are "things not for jonah to
+    handle", but he sees them all). A task is {day, kind, title, where, time
+    ('' for any time), on (the names of the people on it), theirs (False: a
+    crew task the owner sees), recurring, undated, machine}.
+
+    Today's at a set time still to come are left out: not done is not yet
+    late. A material pickup with no date (a store's "ready for pickup" email
+    without a "pick up by"; boards.js pickupsWaiting) is ready now: it is
+    today's, every day until it is picked up, for a fortnight at most after
+    its card was made."""
+    today = now.date()
+    out = {uid: [] for uid in people}
+    if first > last:
+        return out
+    owners = {uid for uid, u in people.items() if u.get("role") == "owner"}
+    by_name = _names_by(people)
+    later = now.strftime("%H:%M")
+
+    def names(on):
+        return [dg._name(people.get(c.get("uid"))) if people.get(c.get("uid")) else str(c.get("name") or "")
+                for c in on if isinstance(c, dict) and (c.get("uid") or c.get("name"))]
+
+    def give(sees, item, on, kind, maker):
+        for u in sees:
+            theirs = _is_mine(on, kind, maker, u)
+            if theirs or (u["uid"] in owners and kind in CREW_TYPES):
+                out[u["uid"]].append(dict(item, theirs=theirs))
+
+    def to_come(day, t):
+        return day == today and bool(t) and str(t) > later
+
+    try:
+        for c in db.collection("calendars").stream():
+            cal = c.to_dict() or {}
+            sees = [u for u in people.values() if _can_see(u, cal)]
+            if not sees:
+                continue
+            for eid, ev in dg.events_near(c.reference, first, last).items():
+                try:
+                    days = dg._occurrences(ev, first, last)
+                except (TypeError, ValueError) as err:
+                    print("tasks: skipped", c.id, eid, "-", err)
+                    continue
+                done = ev.get("done") or {}
+                for day, one in days:
+                    timed = bool(one.get("time")) and not one.get("allDay")
+                    # Work past midnight into the next morning is one task,
+                    # on the day it starts (calendar.js overnight).
+                    if _overnight(one, timed) and day.isoformat() != str(one.get("date")):
+                        continue
+                    if done.get(day.isoformat()):
+                        continue
+                    kind = _type_of(one, cal_kind=cal.get("kind"))
+                    if not _is_task(kind, timed, cal_kind=cal.get("kind")) or to_come(day, timed and one.get("time")):
+                        continue
+                    on = one.get("crew") or []
+                    give(sees, {"day": day, "kind": kind, "title": str(one.get("title") or one.get("jobName") or "An entry"),
+                                "where": cal.get("name") or "a calendar", "time": one.get("time") if timed else "",
+                                "on": names(on), "recurring": False, "undated": False, "machine": False},
+                         {cr.get("uid") for cr in on if isinstance(cr, dict)}, kind, ev.get("createdBy") or "")
+    except Exception as err:          # noqa: BLE001
+        print("tasks: calendar entries not read:", err)
+
+    try:
+        made_since = now - datetime.timedelta(days=CARRY_DAYS)
+        for b in db.collection("boards").stream():
+            board = b.to_dict() or {}
+            ref = b.reference.collection("cards")
+            got = {s.id: s.to_dict() or {} for s in
+                   ref.where("due", ">=", first.isoformat()).where("due", "<=", last.isoformat()).stream()}
+            if first <= today <= last:
+                # The pickups with no date: on Pickups, where every card is
+                # one, and any card elsewhere marked a pickup.
+                q = ref.where("due", "==", None) if b.id == "pickups" else ref.where("type", "==", "pickup")
+                for s in q.stream():
+                    k = s.to_dict() or {}
+                    made = _when(k.get("createdAt")) if k.get("createdAt") else None
+                    if not k.get("due") and _type_of(k, board_id=b.id) == "pickup" and not (made and made < made_since):
+                        got[s.id] = dict(k, due=today.isoformat(), _undated=True)
+            for cid, k in got.items():
+                if k.get("doneAt"):
+                    continue
+                try:
+                    day = datetime.date.fromisoformat(str(k.get("due")))
+                except ValueError:
+                    continue
+                t = str(k.get("dueTime") or "")
+                timed = len(t) == 5 and t[2] == ":"
+                kind = _type_of(k, board_id=b.id)
+                if not _is_task(kind, timed, card=True) or to_come(day, timed and t):
+                    continue
+                sees = [u for u in people.values() if _sees_board(u, board, k)
+                        # A machine's own card: the owner has the machine below.
+                        and not (k.get("auto") and k.get("equipmentId") and u.get("role") == "owner")]
+                on = k.get("assignees") or []
+                give(sees, {"day": day, "kind": kind, "title": str(k.get("title") or "A card"),
+                            "where": board.get("name") or "a board", "time": t if timed else "", "on": names(on),
+                            "recurring": bool(k.get("recurring")), "undated": bool(k.get("_undated")), "machine": False},
+                     {a.get("uid") for a in on if isinstance(a, dict)}, kind,
+                     by_name.get(str(k.get("createdBy") or "").strip().lower(), ""))
+    except Exception as err:          # noqa: BLE001
+        print("tasks: cards not read:", err)
+
+    # A machine due a service is done when the service is logged (that moves
+    # its due date on): one still dated in these days is not done. The
+    # owner's, as in the 7 am list.
+    try:
+        if owners:
+            for s in db.collection("equipment").where("dueDate", ">=", first.isoformat()) \
+                    .where("dueDate", "<=", last.isoformat()).stream():
+                g = s.to_dict() or {}
+                try:
+                    day = datetime.date.fromisoformat(str(g.get("dueDate")))
+                except ValueError:
+                    continue
+                for uid in owners:
+                    out[uid].append({"day": day, "kind": "", "title": "🚜 " + str(g.get("name") or "A machine") + " service due",
+                                     "where": "Equipment", "time": "", "on": [], "theirs": True, "recurring": False,
+                                     "undated": False, "machine": True})
+    except Exception as err:          # noqa: BLE001
+        print("tasks: equipment not read:", err)
+
+    for uid in out:
+        out[uid].sort(key=lambda t: (t["day"], not t["theirs"], t["time"] or "", t["title"].lower()))
+    return out
+
+
 def _lead_words(m):
     return "In 1 hour" if m == 60 else "In %d hours" % (m // 60) if m % 60 == 0 else "In %d minutes" % m
 
@@ -510,16 +693,50 @@ def _usual(db, people, since, now, cals, boards, prefs):
     except Exception as err:          # noqa: BLE001
         print("reminders: equipment due not read:", err)
 
+    # Tasks of theirs from the days before that nobody ticked off head the
+    # list ("From earlier"), and a pickup with no date -- ready now -- is
+    # today's (open_tasks).
+    late = {uid: [] for uid in auto}
+    try:
+        tasks = open_tasks(db, people, carry_from(today), today, now)
+        for uid in auto:
+            for t in tasks.get(uid) or []:
+                if not t["theirs"]:
+                    continue
+                if t["day"] < today:
+                    late[uid].append((t["kind"], t["title"]))
+                elif t["undated"]:
+                    day_list[uid].append((t["kind"], t["title"]))
+    except Exception as err:          # noqa: BLE001 -- the day's list still goes
+        print("reminders: tasks from before not read:", err)
+
     # The day's list, one buzz each.
+    order = list(TYPES)
+
+    def named(kind, title):
+        return ((TYPES.get(kind) + " ") if TYPES.get(kind) else "") + title
+
     for uid, items in day_list.items():
-        if not items:
+        old = late.get(uid) or []
+        if not items and not old:
             continue
-        order = list(TYPES)
         items.sort(key=lambda x: (x[0] in CREW_TYPES, order.index(x[0]) if x[0] in order else len(order), x[1].lower()))
-        names = [((TYPES.get(kind) + " ") if TYPES.get(kind) else "") + title for kind, title in items[:DAY_LIST_MAX]]
-        more = len(items) - DAY_LIST_MAX
-        buzz(uid, "auto_%s_day_%s" % (uid, today.isoformat()),
-             "✅ Today, any time: %d thing%s" % (len(items), "" if len(items) == 1 else "s"),
+        # The same thing left on several days (a repeat, a job over days)
+        # is named once, with how many.
+        seen = {}
+        for kind, title in old:
+            seen[(kind, title)] = seen.get((kind, title), 0) + 1
+        names = ["⏰ " + named(kind, title) + (" ×%d" % n if n > 1 else "") for (kind, title), n in seen.items()] + \
+            [named(kind, title) for kind, title in items]
+        more = len(names) - DAY_LIST_MAX
+        names = names[:DAY_LIST_MAX]
+        if items:
+            head = "✅ Today, any time: %d thing%s" % (len(items), "" if len(items) == 1 else "s")
+            if old:
+                head += " · ⏰ %d not done before" % len(old)
+        else:
+            head = "⏰ %d thing%s not done from before" % (len(old), "" if len(old) == 1 else "s")
+        buzz(uid, "auto_%s_day_%s" % (uid, today.isoformat()), head,
              " · ".join(names) + (" +%d more" % more if more > 0 else ""), "yd-day-" + today.isoformat())
     return out
 
