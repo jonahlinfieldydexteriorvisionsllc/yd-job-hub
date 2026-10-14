@@ -394,6 +394,26 @@
   .wk-live { margin-top:14px; padding:11px 14px; border-radius:8px; font-size:13px;
              background:rgba(201,146,47,.14); }
   .wk-range { margin:16px 0 0; }
+
+  /* Which days (timeclock.js date ranges): the same control on Hours & Wages,
+     a person's page, Paychecks and the Work log. */
+  .hr-range { display:flex; flex-wrap:wrap; align-items:center; gap:8px 10px; flex:1 1 100%; min-width:0; }
+  .hr-range select { max-width:220px; }
+  .hr-day { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--muted); }
+  .hr-day span { min-width:34px; }
+  .hr-day input { max-width:170px; }
+  .hr-words { font-size:12px; color:var(--muted); }
+
+  /* The clock stops a shift by itself (timeclock.js "the clock stops itself") */
+  .clock-limit .field-actions { margin-top:8px; }
+  .appr-auto { margin-top:7px; font-size:12px; line-height:1.5; padding:8px 11px; border-radius:8px;
+               background:rgba(201,146,47,.14); }
+  .crew-row.crew-setting { border-top:1px dashed var(--border); margin-top:6px; }
+  /* Approve / Change times / Reject: onto two lines on a phone rather than
+     squeezing a label onto two. */
+  .appr-act { flex-wrap:wrap; }
+  .appr-act .btn { white-space:nowrap; }
+  .crew-setting .crew-mail { flex:1 1 220px; }
   .wk-cards { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:14px; }
   .wk-card { border:1px solid var(--border); border-radius:8px; padding:12px 14px;
              background:var(--surface); }

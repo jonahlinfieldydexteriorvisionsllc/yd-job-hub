@@ -355,14 +355,9 @@
         <span class="section-badge" id="totalsBadge"></span>
       </div>
       <div class="section-body">
-        <div class="filter-bar">
-          <select id="clockRange" onchange="renderClock()">
-            <option value="week">This week</option>
-            <option value="lastweek">Last week</option>
-            <option value="month">This month</option>
-            <option value="all">All time</option>
-          </select>
-        </div>
+        <!-- Which days: the choices and From/To dates, drawn by timeclock.js
+             (the same control as a person's page, Paychecks and the Work log). -->
+        <div class="filter-bar" id="clockRangeBar"></div>
         <div id="totalsWrap"></div>
       </div>
     </div>

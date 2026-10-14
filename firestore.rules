@@ -269,6 +269,21 @@ service cloud.firestore {
           ['rateCents', 'costCents', 'approvedBy', 'approvedAt', 'paidHours', 'billableHours']);
       }
 
+      // The clock stops a shift nobody clocked out of after so many hours
+      // (functions/autoclock.py: the server, so it happens with the phone
+      // off or out of signal). The marks it leaves are the server's alone:
+      // no phone starts a shift carrying them, or adds, changes or removes
+      // them later.
+      function autoKeys() {
+        return ['autoEnded', 'autoEndedMs', 'autoEndedAt', 'autoLimitHours', 'autoTold'];
+      }
+      function noAutoMarks() {
+        return !request.resource.data.keys().hasAny(autoKeys());
+      }
+      function autoMarksKept() {
+        return !request.resource.data.diff(resource.data).affectedKeys().hasAny(autoKeys());
+      }
+
       // An ordinary clocked shift settles itself; making the owner confirm
       // every one turns approval into a rubber stamp. Two kinds do not settle:
       //
@@ -338,6 +353,17 @@ service cloud.firestore {
       //   running -> pending   clocking out a longer shift
       //   pending -> pending   correcting a typed-in shift before the owner
       //                        decides it -- it stays waiting
+      //   stopped by the clock -> ok / pending
+      //                        the phone's own clock-out (or break), made
+      //                        with no signal BEFORE the clock stopped the
+      //                        shift and sent once the signal came back. Only
+      //                        an end EARLIER than the clock's, while the
+      //                        shift still has the clock's end and is still
+      //                        waiting: the real clock-out wins over the
+      //                        clock's guess exactly as if it had arrived in
+      //                        time. Never a later end, never back to
+      //                        running, and nothing once the office has
+      //                        changed the times or decided the shift.
       function crewMayChange() {
         let d = request.resource.data;
         let was = resource.data;
@@ -350,6 +376,13 @@ service cloud.firestore {
              && ((d.status == 'running' && d.endedMs == null)
                  || (d.status == 'ok' && endedInPast() && shortEnough())
                  || (d.status == 'pending' && endedInPast() && durationMs() > 0)))
+          || (was.source == 'clock' && was.status == 'pending'
+             && was.get('autoEnded', false) == true
+             && was.endedMs is number && was.get('autoEndedMs', null) == was.endedMs
+             && d.startedMs == was.startedMs
+             && d.endedMs is number && d.endedMs < was.endedMs
+             && ((d.status == 'ok' && endedInPast() && shortEnough())
+                 || (d.status == 'pending' && endedInPast() && durationMs() > 0)))
         );
       }
 
@@ -358,7 +391,8 @@ service cloud.firestore {
             && goodId()
             && request.resource.data.uid == request.auth.uid
             && crewMayCreate()
-            && crewFieldsOnly());
+            && crewFieldsOnly()
+            && noAutoMarks());
 
       // Once a shift is 'ok', 'approved' or 'rejected' it is a payroll record
       // and only an owner may touch it -- otherwise a shift could be clocked
@@ -384,7 +418,8 @@ service cloud.firestore {
             && resource.data.uid == request.auth.uid
             && request.resource.data.uid == resource.data.uid
             && crewMayChange()
-            && crewFieldsOnly())
+            && crewFieldsOnly()
+            && autoMarksKept())
         || (isWorker() && resource.data.uid == request.auth.uid && breakOver());
 
       allow delete: if decidesFor(resource.data.uid);

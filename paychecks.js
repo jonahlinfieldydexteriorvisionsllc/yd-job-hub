@@ -27,25 +27,15 @@
   let people = {};            // uid -> user record, for names
   let unsubs = [];
   let loaded = false;
-  let range = 'month';
 
-  const RANGES = { week: 'This week', lastweek: 'Last week', month: 'This month', all: 'All time' };
-
-  // The same weeks as Hours & Wages: Sunday to Saturday.
-  function rangeStart(which) {
-    const d = new Date(); d.setHours(0, 0, 0, 0);
-    if (which === 'week' || which === 'lastweek') {
-      d.setDate(d.getDate() - d.getDay());
-      if (which === 'lastweek') d.setDate(d.getDate() - 7);
-    } else if (which === 'month') {
-      d.setDate(1);
-    } else return 0;
-    return d.getTime();
-  }
-  function inRange(p) {
+  // The same choices as Hours & Wages, From–To dates among them, worked out
+  // by the clock (timeclock.js, YDHoursRange) so a week is Sunday to
+  // Saturday on both. Kept on this device apart from the others.
+  const R = () => window.YDHoursRange;
+  function inRange(p, from, to) {
     const t = Date.parse((p.date || '') + 'T12:00:00');
-    if (isNaN(t)) return range === 'all';
-    const from = rangeStart(range), to = range === 'lastweek' ? rangeStart('week') : Infinity;
+    // A payment with no readable date only shows when no dates are chosen.
+    if (isNaN(t)) return !from && !isFinite(to);
     return t >= from && t < to;
   }
 
@@ -87,20 +77,25 @@
     render();
   };
 
-  window.payRange = function (r) {
-    if (RANGES[r]) { range = r; render(); }
-  };
-
   // ------------------------------------------------------------ drawing
 
-  function render() {
+  function render(forceBar) {
     const sec = el('paySection');
     if (!sec) return;
     const on = !!(window.YDAuth && window.YDAuth.mode === 'cloud' && me()) && sees();
     sec.hidden = !on;
     if (!on) return;
 
-    const list = Object.keys(checks).map(id => Object.assign({ id }, checks[id])).filter(inRange)
+    // The days control apart from the list, so a date being typed is not
+    // rebuilt away by a payment arriving (YDHoursRange.place).
+    const wrap = el('payWrap');
+    if (!el('payList') || !wrap.contains(el('payList'))) {
+      wrap.innerHTML = '<div class="filter-bar" id="payRangeBar"></div><div id="payList"></div>';
+    }
+    if (R()) R().place(el('payRangeBar'), 'pay', forceBar === true);
+    const [from, to] = R() ? R().bounds('pay') : [0, Infinity];
+    const all = !from && !isFinite(to);
+    const list = Object.keys(checks).map(id => Object.assign({ id }, checks[id])).filter(p => inRange(p, from, to))
       .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
     const byPerson = {};
     list.forEach(p => {
@@ -113,12 +108,9 @@
     el('payBadge').textContent = list.length ? money(total) : '';
 
     const people_ = crew();
-    el('payWrap').innerHTML =
-      '<div class="filter-bar">' + Object.keys(RANGES).map(r =>
-        '<button class="btn btn-sm' + (range === r ? ' btn-filled' : '') + '" onclick="payRange(\'' + r + '\')">' +
-        RANGES[r] + '</button>').join('') + '</div>' +
+    el('payList').innerHTML =
       (!loaded ? '<p class="empty-msg">Loading paychecks…</p>'
-        : !list.length ? '<p class="empty-msg">No paychecks ' + (range === 'all' ? 'yet' : 'in this range') +
+        : !list.length ? '<p class="empty-msg">No paychecks ' + (all ? 'yet' : 'on these days') +
           '. Payments sent from the bank to the crew show up here by themselves.</p>'
         : '<div class="dash-totals">' + Object.keys(byPerson).sort().map(n =>
             '<div class="summary-card"><div class="summary-label">' + esc(n) + '</div>' +
@@ -167,6 +159,7 @@
   }
 
   window.YDPaychecks = { render: render };
+  if (R()) R().onChange('pay', force => render(force));
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

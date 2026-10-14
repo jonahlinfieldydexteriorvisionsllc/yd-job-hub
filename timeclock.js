@@ -175,9 +175,95 @@
   // owner decided. Both are real hours and both count.
   const counts = e => e.status === 'ok' || e.status === 'approved';
   const awaitingOwner = e => e.status === 'pending' && !running(e);
-  const whyFlagged = e => e.source === 'manual'
-    ? 'typed in by hand'
-    : 'longer than ' + LONG_SHIFT_HOURS + ' hours';
+  const whyFlagged = e => autoStopped(e)
+    ? 'no clock-out — stopped at ' + hoursWord(e.autoLimitHours || autoOutHours)
+    // Stopped by the clock, then given its real end (by them or the office).
+    : e.autoEnded === true ? 'no clock-out — end put right'
+    : e.source === 'manual' ? 'typed in by hand'
+    : paidMs(e) > LONG_SHIFT_MS ? 'longer than ' + LONG_SHIFT_HOURS + ' hours'
+    : e.changedAt ? 'times changed' : 'longer than ' + LONG_SHIFT_HOURS + ' hours';
+
+  // ------------------------------------------------ the clock stops itself
+  //
+  // Jonah (14 Oct 2026): "automatically clock people out once they hit 16
+  // hours without clocking out." The server does it (functions/autoclock.py,
+  // every five minutes), so it happens with the phone off, flat or out of
+  // signal: a shift still running autoOutHours after it started is ended AT
+  // that moment -- not when it was noticed -- marked autoEnded, and goes to
+  // the office like any shift over eight hours; the person and the owner are
+  // told by phone. How many hours is the owner's to say (Your Crew), kept in
+  // settings/public.clock so every phone can say when its shift will stop.
+  //
+  // This side mostly shows it: no phone stops a shift by itself for passing
+  // the limit (the server has, or will). Only a Clock out tapped after the
+  // limit, on a screen that has not heard yet, ends the shift AT the limit
+  // (endShift) -- the same moment the server gives it, so whichever arrives
+  // first, the shift ends in the same place.
+  const AUTO_OUT_DEFAULT = 16, AUTO_OUT_MIN = 8, AUTO_OUT_MAX = 24;
+  let autoOutHours = AUTO_OUT_DEFAULT;
+  const autoOutMs = () => autoOutHours * 3600000;
+  const hoursWord = h => (Number(h) || AUTO_OUT_DEFAULT) + ' hours';
+  // Stopped by the clock, and still at the time it stopped it. The person's
+  // own clock-out arriving later from a phone that had no signal (earlier,
+  // so it wins -- firestore.rules), or times the office fixed, leave the
+  // marks on the shift but make it not the clock's end any more.
+  const autoStopped = e => !!e && e.autoEnded === true && typeof e.autoEndedMs === 'number' &&
+    endMsOf(e) === e.autoEndedMs;
+  // When a running shift stops by itself, and how near that is: 0 not yet
+  // near, 1 within the last hour, 2 past it (this phone has not heard yet).
+  const stopsAt = e => startMsOf(e) + autoOutMs();
+  function limitState(e) {
+    if (!e || !running(e)) return 0;
+    const left = stopsAt(e) - Date.now();
+    return left <= 0 ? 2 : left <= 3600000 ? 1 : 0;
+  }
+  function readAutoOut() {
+    const key = watchKey;
+    if (!window.YDDb || !key) return;
+    Promise.resolve(window.YDDb.get('settings', 'public')).then(pub => {
+      if (watchKey !== key) return;
+      const h = pub && pub.clock && pub.clock.autoOutHours;
+      const next = typeof h === 'number' && h >= AUTO_OUT_MIN && h <= AUTO_OUT_MAX ? h : AUTO_OUT_DEFAULT;
+      if (next !== autoOutHours) { autoOutHours = next; render(); }
+    }).catch(() => { /* offline with nothing cached: the usual 16 hours */ });
+  }
+
+  // The owner sets it on Your Crew.
+  window.setAutoOutHours = function () {
+    if (!isOwner() || !window.YDDb) return;
+    const typed = prompt('After how many hours on the clock, with nobody clocking out, should a shift stop by itself?\n\n' +
+      'Between ' + AUTO_OUT_MIN + ' and ' + AUTO_OUT_MAX + '. The shift ends at that hour and goes to you to check.', String(autoOutHours));
+    if (typed === null) return;
+    const h = Math.round(parseFloat(String(typed).replace(/[^0-9.]/g, '')) * 2) / 2;    // whole or half hours
+    if (!(h >= AUTO_OUT_MIN && h <= AUTO_OUT_MAX)) {
+      showToast('Pick a number of hours from ' + AUTO_OUT_MIN + ' to ' + AUTO_OUT_MAX); return;
+    }
+    autoOutHours = h;
+    render();
+    // Merged: the board list the crew read lives in the same record.
+    Promise.resolve(window.YDDb.put('settings', 'public', { clock: { autoOutHours: h, updatedAt: nowIso() } }))
+      .catch(e => {
+        console.warn('[clock] automatic clock-out hours not saved:', (e && e.code) || e);
+        if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
+      });
+    showToast('Shifts nobody clocks out of now stop by themselves after ' + hoursWord(h));
+  };
+
+  // The note on a crew member's own Clock screen after the clock stopped
+  // their shift, until they tap OK (on this phone).
+  const AUTO_SEEN_KEY = 'ydjobhub_autoStopSeen';
+  function myAutoStop() {
+    let last = null;
+    mine().forEach(e => { if (e.endedAt && (!last || (endMsOf(e) || 0) > (endMsOf(last) || 0))) last = e; });
+    if (!autoStopped(last)) return null;
+    if (Date.now() - endMsOf(last) > 2 * 864e5) return null;
+    try { if (localStorage.getItem(AUTO_SEEN_KEY) === last.id) return null; } catch (e) { /* shown */ }
+    return last;
+  }
+  window.seenAutoStop = function (id) {
+    try { localStorage.setItem(AUTO_SEEN_KEY, id); } catch (e) {}
+    render();
+  };
 
   // Snow (with a storm running) and jobs are work a customer pays for. Labor,
   // receipts and snow with no storm are the business's own time: every minute
@@ -220,7 +306,16 @@
     Promise.resolve(window.YDDb.put('timeEntries', id, data)).catch(e => {
       if (e && e.code === 'permission-denied') {
         console.error('[clock] ' + what + ' refused by the rules');
-        showToast('Not saved — you are not allowed to do that');
+        // Most likely, a phone that had no signal while the clock stopped
+        // this shift by itself: its tap (a pause, a clock-out later than
+        // that) arrives after, and the server's end stands. The screen
+        // already shows the shift as the server has it.
+        const s = entries[id] || older[id];
+        const stopped = s && (s.autoEnded === true || (startMsOf(s) && startMsOf(s) + autoOutMs() <= Date.now()));
+        showToast(stopped
+          ? 'That shift had already been stopped by the clock at ' + hoursWord((s && s.autoLimitHours) || autoOutHours) +
+            ' — it goes to the office to check. Stopped earlier? Ask for a change on My hours.'
+          : 'Not saved — you are not allowed to do that', stopped ? 8000 : undefined);
       } else {
         console.warn('[clock] ' + what + ' not yet on the server:', (e && e.code) || (e && e.message));
       }
@@ -294,6 +389,22 @@
     picking = false;
     render();
   };
+  // From a person's page: one they forgot, filed for them by whoever settles
+  // their shifts (their phone was dead, say). The form is at the top of the
+  // Clock screen, so the page is closed and the form brought into view; it
+  // still goes to Waiting for You, like any shift typed in by hand.
+  window.addShiftFor = function (uid) {
+    if (!people[uid] || !decides() || (!isOwner() && uid === (me() || {}).uid)) return;
+    closeWorker();
+    if (typeof switchTab === 'function' && !clockShowing()) switchTab('clock');
+    // A form already open (their own, or someone else's) is drawn again
+    // for this person rather than left saying the wrong name.
+    const wrap = el('clockWrap');
+    if (wrap && addingShift) wrap.innerHTML = '';
+    window.openAddShift(uid);
+    const card = el('clockWrap');
+    if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
   window.cancelAddShift = function () { addingShift = false; addFor = null; render(); };
 
   // Each choice carries only its kind and id; the name is looked up when the
@@ -318,8 +429,12 @@
     const iso = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
     asOptions = targetOptions();
 
+    // Says whose it is when it is filed for somebody else, so it cannot be
+    // mistaken for one's own.
+    const other = addFor && addFor !== (me() || {}).uid;
     return '<div class="addshift">' +
-      '<p class="clock-lead">A shift you forgot to clock in for</p>' +
+      '<p class="clock-lead">' + (other ? 'A shift ' + esc(whoIs(addFor)) + ' forgot to clock in for'
+        : 'A shift you forgot to clock in for') + '</p>' +
       '<div class="field"><span class="label">What were you on?</span>' +
         '<select id="asTarget" class="searchable">' + asOptions + '</select></div>' +
       '<div class="field"><span class="label">Day</span>' +
@@ -445,11 +560,18 @@
     const e = entries[id];
     if (!e || !running(e)) return;
     if (extra) Object.assign(e, extra);
-    const stamp = nowIso(), stampMs = Date.now();
+    // Past the hour the clock stops a shift by itself, on a phone (or the
+    // office's screen) that has not heard so yet: it ends at that hour, the
+    // moment the server gives it, whoever taps -- never later. A clock-out
+    // later than the server's stop would otherwise be written over it from
+    // the office (whose writes the rules do not hold back).
+    const late = limitState(e) === 2;
+    const stampMs = late ? Math.max(startMsOf(e), stopsAt(e)) : Date.now();
+    const stamp = new Date(stampMs).toISOString();
     // An open pause is closed too, or the shift would look paused forever and
-    // its billable time would be wrong.
+    // its billable time would be wrong (one begun after the stop counts nothing).
     const p = openPause(e);
-    if (p) p.endedAt = stamp;
+    if (p) p.endedAt = new Date(Math.max(stampMs, ms(p.startedAt))).toISOString();
     // Always an array. Firestore refuses a write containing undefined and
     // fails the whole thing with it, so a shift that somehow had no pauses
     // list could not be clocked out at all.
@@ -458,8 +580,9 @@
     e.endedMs = stampMs;
 
     // A normal day settles itself. Only a shift past the eight-hour mark goes
-    // to the owner, because that is where a forgotten clock-out hides.
-    e.status = needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
+    // to the owner, because that is where a forgotten clock-out hides -- and
+    // one the clock had to stop always does, as the server sends it.
+    e.status = late || needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
 
     render();
     write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
@@ -525,13 +648,18 @@
 
   window.clockOut = function (id) {
     const e = entries[id];
-    if (!e) return;
-    const dur = fmtDur(paidMs(e));
+    if (!e || !running(e)) return;
+    const late = limitState(e) === 2;
     const status = endShift(id);
-    showToast(status === 'pending'
+    // Worked out after: past the limit, it ended at the limit.
+    const dur = fmtDur(paidMs(e));
+    showToast(late
+      ? 'Clocked out at ' + hoursWord(autoOutHours) + ' — the clock stops a shift there by itself. ' +
+        'It goes to the office to check.'
+      : status === 'pending'
       ? 'Clocked out — ' + dur + '. Over ' + LONG_SHIFT_HOURS +
         ' hours, so it goes to the office to check.'
-      : 'Clocked out — ' + dur);
+      : 'Clocked out — ' + dur, late ? 6000 : undefined);
   };
 
   // ------------------------------------------------------------- the display
@@ -540,6 +668,7 @@
     // Every change to the shifts, the names or the rates on this device ends
     // up here, so this is where the per-job labour sums are let go.
     forgetLabour();
+    limitDrawn = limitSig();
     // The Clock screen's sections are drawn only while it is on screen:
     // opening the tab draws them (switchTab in app.js calls this), and a
     // phone on the Snow tab need not rebuild a hidden clock for every change.
@@ -551,7 +680,8 @@
     // Not while the name and rate are being typed into: the clock redraws
     // every second, and rebuilding the form would clear the fields mid-word.
     // Nor while a change is being asked for (the same reason).
-    if (workerUid && !editingWorker && !asking
+    // Nor while times are being changed on it (fixHtml).
+    if (workerUid && !editingWorker && !asking && !(fixingIn === 'worker' && typingIn(el('wkMain')))
         && el('workerModal') && el('workerModal').classList.contains('active')) renderWorker();
     manageTicker();
   }
@@ -590,8 +720,14 @@
       else n.textContent = fmtDur(Date.now() - endMsOf(b));
     });
     if (over) { render(); return; }      // render() sees to the ticker
+    // A running shift coming up to, or passing, the hour the clock stops it
+    // by itself: drawn again once, so the note about it shows.
+    if (limitSig() !== limitDrawn) { render(); return; }
     manageTicker();
   }
+  const limitSig = () => Object.values(entries).filter(running)
+    .map(e => limitState(e) ? e.id + ':' + limitState(e) : '').join('');
+  let limitDrawn = '';
 
   function renderClockCard() {
     const wrap = el('clockWrap');
@@ -680,6 +816,7 @@
     const b = myBreak();
     if (b) return breakHtml(b);
     return '<div class="clock-idle">' +
+      autoStopHtml() +
       '<p class="clock-lead">Not on the clock.</p>' +
       '<button class="btn btn-filled clock-big" onclick="openJobPicker()">Clock in</button>' +
       recentHtml() +
@@ -701,6 +838,7 @@
       '</div>' +
       (p ? '<div class="clock-pausenote">Paused for ' + esc(p.reason) +
              ' — still being paid, not billed to the customer.</div>' : '') +
+      limitNoteHtml(e) +
       (pausingId === e.id
         ? '<div class="pause-reasons"><p class="clock-lead">What for?</p>' +
             PAUSE_REASONS.map(r =>
@@ -722,6 +860,36 @@
             '<button class="btn btn-sm" onclick="openWorker()">My hours</button>' +
           '</div>') +
     '</div>';
+  }
+
+  // On the person's own running shift: when the clock will stop it, once
+  // that is under an hour away -- and, past it, that it has (a phone with
+  // no signal has not heard yet; the server stopped it at that hour).
+  function limitNoteHtml(e) {
+    const s = limitState(e);
+    if (!s) return '';
+    const at = clockTime(new Date(stopsAt(e)).toISOString());
+    return '<div class="clock-pausenote clock-limit">⏱ ' + (s === 2
+      ? 'Over ' + hoursWord(autoOutHours) + '. The clock stops a shift by itself then, so this one ended at ' + at +
+        ' and goes to the office to check — this phone shows it once it has signal. Still working? Clock out, then clock in again.'
+      : 'Still on? The clock stops this shift by itself at ' + at + ' (' + hoursWord(autoOutHours) +
+        ' on the clock). Still working then? Clock in again after.') + '</div>';
+  }
+
+  // The clock stopped their last shift by itself: said once, on their own
+  // screen, with the way to put it right.
+  function autoStopHtml() {
+    const a = myAutoStop();
+    if (!a) return '';
+    return '<div class="clock-pausenote clock-limit">⏱ Nobody clocked out of <b>' + esc(a.targetName) + '</b> (in ' +
+      dayTime(a.startedAt) + '), so the clock stopped it at ' + hoursWord(a.autoLimitHours || autoOutHours) +
+      ' — ' + dayTime(a.endedAt) + '. It goes to the office to check.' +
+      '<div class="field-actions">' +
+        // The owner fixes his own in Waiting for You; anyone else asks.
+        (!isOwner() && a.status === 'pending' && !pendingFor(a.id)
+          ? '<button class="btn btn-sm" onclick="openWorker(); askChange(\'' + safeId(a.id) + '\')">I stopped earlier — fix the time</button>' : '') +
+        '<button class="btn btn-sm" onclick="seenAutoStop(\'' + safeId(a.id) + '\')">OK</button>' +
+      '</div></div>';
   }
 
   // The last few places this person worked, so the usual case is one tap.
@@ -866,7 +1034,11 @@
               esc(workerOf(e)) + '</button>' +
             '<span class="on-where">' + esc(e.targetName) + '</span>' +
             '<span class="on-time"><span data-live-entry="' + safeId(e.id) + '">' + fmtDur(paidMs(e)) + '</span>' +
-              (p ? ' · paused (' + esc(p.reason) + ')' : '') + '</span>' +
+              (p ? ' · paused (' + esc(p.reason) + ')' : '') +
+              // Forgot to clock out, most likely: the clock stops it soon.
+              (limitState(e) === 2 ? ' · ⏱ over ' + hoursWord(autoOutHours) + ' — being stopped'
+                : limitState(e) === 1 ? ' · ⏱ stops by itself at ' + clockTime(new Date(stopsAt(e)).toISOString()) : '') +
+              '</span>' +
             (mayDecide(e) || e.uid === (me() || {}).uid
               ? '<button class="btn btn-sm" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' : '') +
           '</div>';
@@ -934,6 +1106,9 @@
   function renderApprovals() {
     const wrap = el('approveWrap');
     if (!wrap) return;
+    // Not while times are being typed into a shift here (fixing, below): a
+    // redraw for somebody else's pause would wipe them.
+    if (fixingId && fixingIn === 'appr' && typingIn(wrap)) return;
     const waiting = Object.values(entries).filter(awaitingOwner)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
     const asked = requestsHtml();
@@ -945,8 +1120,9 @@
 
     if (!waiting.length && !nAsked) {
       wrap.innerHTML = '<p class="empty-msg">Nothing waiting. Ordinary clocked shifts ' +
-        'go through on their own — only shifts typed in by hand, or longer than ' +
-        LONG_SHIFT_HOURS + ' hours, land here, and changes the crew ask for.</p>';
+        'go through on their own — only shifts typed in by hand, longer than ' +
+        LONG_SHIFT_HOURS + ' hours or stopped by the clock after ' + hoursWord(autoOutHours) +
+        ' with nobody clocking out land here, and changes the crew ask for.</p>';
       return;
     }
     wrap.innerHTML = asked + waiting.map(e => {
@@ -961,10 +1137,13 @@
           '<span class="appr-why">' + whyFlagged(e) + '</span>' +
         '</div>' +
         (e.note ? '<div class="appr-note">“' + esc(e.note) + '”</div>' : '') +
-        '<div class="appr-times">' +
-          new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
-          ' · ' + clockTime(e.startedAt) + ' – ' + clockTime(e.endedAt) +
-        '</div>' +
+        '<div class="appr-times">' + spanWords(e) +
+          (e.changedAt ? ' <span class="muted">· times changed by the office</span>' : '') + '</div>' +
+        (autoStopped(e)
+          ? '<div class="appr-auto">⏱ Nobody clocked out, so the clock stopped it at ' +
+              hoursWord(e.autoLimitHours || autoOutHours) + '.' +
+              (mayDecide(e) ? ' If they finished earlier, change the end time before approving.' : '') + '</div>'
+          : '') +
         '<div class="appr-nums">' +
           '<span><strong>' + fmtDur(paid) + '</strong> paid</span>' +
           (pause ? '<span>' + fmtDur(pause) + ' paused</span>' : '') +
@@ -978,15 +1157,105 @@
               esc(p.reason) + ' ' + fmtDur(Math.max(0, (p.endedAt ? ms(p.endedAt) : Date.now()) - ms(p.startedAt)))
             ).join(' · ') + '</div>'
           : '') +
-        (mayDecide(e)
+        (mayDecide(e) && fixingId === e.id && fixingIn === 'appr' ? fixHtml(e)
+          : mayDecide(e)
           ? '<div class="appr-act">' +
               '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
+              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>' +
               '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
             '</div>'
           : '<div class="appr-act muted">' + (decides() ? 'Your own shift — the owner approves it' : 'Waiting for the owner') + '</div>') +
       '</div>';
     }).join('');
   }
+
+  // "Mon 10/12 · 6:00 AM – 10:00 PM", the end's day too when it is another
+  // day: a 16-hour shift from 8 pm read "8:00 PM – 12:00 PM".
+  function spanWords(e) {
+    const day = iso => new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+    const sameDay = e.endedAt && new Date(e.startedAt).toDateString() === new Date(e.endedAt).toDateString();
+    return day(e.startedAt) + ' · ' + clockTime(e.startedAt) + ' – ' +
+      (!e.endedAt ? 'now' : sameDay ? clockTime(e.endedAt) : day(e.endedAt) + ' ' + clockTime(e.endedAt));
+  }
+
+  // Whether somebody is typing in a box inside `node` just now.
+  const typingIn = node => !!node && node.contains(document.activeElement) &&
+    /^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName);
+
+  // ----------------------------------------------------- changing the times
+  //
+  // The office's own hand on a shift's times (Jonah: every automatic value
+  // gets a by-hand way to change it): above all the end the clock put on a
+  // shift nobody clocked out of, but any finished shift a decider may settle
+  // -- from Waiting for You, or a person's page. The hours and pay stamped
+  // on it are worked out again at the rate it was settled at, exactly as
+  // approving a crew member's change request does (applyRequest); a shift
+  // still waiting stays waiting, to be approved as it now reads.
+  let fixingId = null;
+  // Where the form was opened -- 'worker' (a person's page) or 'appr'
+  // (Waiting for You) -- so the one shift's form is drawn in one place only.
+  let fixingIn = null;
+  window.fixTimes = function (id) {
+    const e = entries[id] || older[id];
+    if (!e || !mayDecide(e) || running(e)) return;
+    fixingId = id;
+    fixingIn = workerUid && el('workerModal') && el('workerModal').classList.contains('active') ? 'worker' : 'appr';
+    render();
+    const box = el('fxEnd');
+    if (box && box.focus) box.focus();
+  };
+  // The form is let go before the redraw, which skips a list still being
+  // typed into (typingIn) -- a phone's Save tap can leave the box focused.
+  const leaveForm = () => {
+    const a = document.activeElement;
+    if (a && a.closest && a.closest('#fxForm') && a.blur) a.blur();
+  };
+  window.cancelFixTimes = function () { leaveForm(); fixingId = null; fixingIn = null; render(); };
+  function fixHtml(e) {
+    const id = safeId(e.id);
+    return '<div class="add-area wk-ask" id="fxForm">' +
+      '<div class="add-label">Change the times — ' + esc(workerOf(e)) + ', ' + spanWords(e) + '</div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Started</span><input type="time" id="fxStart" value="' + hm(e.startedAt) + '"></div>' +
+        '<div class="field"><span class="label">Finished</span><input type="time" id="fxEnd" value="' + hm(e.endedAt) + '"></div>' +
+      '</div>' +
+      '<div class="hint">Each time lands on the day nearest the one it replaces, so a night shift past midnight stays one shift.</div>' +
+      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="saveFixTimes(\'' + id + '\')">Save the times</button>' +
+        '<button class="btn btn-sm" onclick="cancelFixTimes()">Cancel</button></div>' +
+    '</div>';
+  }
+  window.saveFixTimes = function (id) {
+    const e = entries[id] || older[id];
+    if (!e || !mayDecide(e) || running(e)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
+    const t = shiftTimes(e, (el('fxStart') || {}).value, (el('fxEnd') || {}).value);
+    if (!t) { showToast('Put in both times'); return; }
+    if (ms(t.end) > Date.now() + 60000) { showToast('That ends in the future — check the times'); return; }
+    if (ms(t.start) === ms(e.startedAt) && ms(t.end) === ms(e.endedAt)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
+    const patch = { startedAt: t.start, startedMs: ms(t.start), endedAt: t.end, endedMs: ms(t.end) };
+    if (ms(t.end) - ms(t.start) > 20 * 3600000 &&
+        !confirm('That makes it ' + fmtDur(ms(t.end) - ms(t.start)) + ' long. Keep those times?')) return;
+    const next = Object.assign({}, e, patch);
+    // A settled shift's figures follow its new length, at the rate it was
+    // settled at (or theirs now, if it never was).
+    if (e.rateCents != null || counts(e)) {
+      const rate = e.rateCents != null ? e.rateCents : rateOf(e.uid);
+      Object.assign(patch, { rateCents: rate, paidHours: hours(paidMs(next)), billableHours: hours(chargeableMs(next)),
+                             costCents: costOf(paidMs(next), rate) });
+    }
+    Object.assign(patch, { changedBy: (me() || {}).uid || '', changedAt: nowIso() });
+    const wasOld = isOld(e);
+    Object.assign(e, patch);
+    patchOlder(e.id, patch);
+    leaveForm();
+    fixingId = null; fixingIn = null;
+    write(e.id, patch, 'changing the times');
+    // From before the clock's cutoff, then or now, and counted: the summary
+    // of old jobs' labour no longer adds up (after the shift's own write).
+    if ((wasOld || isOld(e)) && counts(e)) markStale();
+    render();
+    if (typeof refreshJobLabour === 'function') refreshJobLabour();
+    showToast('Times changed — ' + fmtDur(paidMs(e)) + (awaitingOwner(e) ? '. Approve it when it looks right.' : ''));
+  };
 
   const money = c => '$' + (c / 100).toLocaleString('en-US',
     { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1070,16 +1339,191 @@
     write(id, patch, 'rejecting');
   };
 
-  function rangeStart(which) {
-    const d = new Date(); d.setHours(0, 0, 0, 0);
-    if (which === 'week' || which === 'lastweek') {
-      d.setDate(d.getDate() - d.getDay());                 // back to Sunday
-      if (which === 'lastweek') d.setDate(d.getDate() - 7);
-    } else if (which === 'month') {
-      d.setDate(1);
-    } else return 0;
-    return d.getTime();
+  // ------------------------------------------------------------ date ranges
+  //
+  // Jonah (14 Oct 2026): "make it so i can check the hours worked from any
+  // set date to another date. not just last week, two weeks, month etc."
+  // Every list of hours on the Clock tab -- Hours & Wages, a person's page,
+  // Paychecks and the Work log -- offers the same choices, "Pick dates…"
+  // among them (From and To, both days counted), and works them out here,
+  // so a week is the same week on all four. Each place keeps its own choice
+  // on this device; the last dates picked anywhere are offered first when
+  // another place is switched to dates, so they can be compared side by side.
+  //
+  // A shift belongs to the day it STARTED (as the work log has always filed
+  // it): a storm from 10 pm to 4 am is one night's work, in one range.
+  const RANGES = [
+    ['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'],
+    ['twoweeks', 'This week & last'], ['month', 'This month'], ['lastmonth', 'Last month'],
+    ['year', 'This year'], ['all', 'All time'], ['custom', 'Pick dates…'],
+  ];
+  const RANGE_DEFAULT = { totals: 'week', worker: 'week', pay: 'month', worklog: 'week' };
+  const RANGE_KEY = 'ydjobhub_hoursRange';
+  // A real day typed in full. A date box being typed into passes through
+  // years like 0002 on the way to 2026, and one of those would send the
+  // office off reading every shift ever kept (olderFor).
+  const isDay = s => typeof s === 'string' && /^(19|20|21)\d\d-\d\d-\d\d$/.test(s) &&
+    !isNaN(new Date(s + 'T00:00:00').getTime());
+  const dayStr = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+  // Days are added on the calendar, never as 24 hours: two days a year are
+  // 23 or 25 hours long, and the last hour of the day the clocks go back
+  // used to fall out of a range.
+  const plusDays = (d, n) => { const x = new Date(d.getTime()); x.setDate(x.getDate() + n); return x; };
+
+  let rangeMem = null;            // place -> { range, from, to }, and `last` dates picked
+  function rangeStore() {
+    if (rangeMem) return rangeMem;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(RANGE_KEY) || 'null'); } catch (e) { saved = null; }
+    rangeMem = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+    return rangeMem;
   }
+  function rangeOf(place) {
+    const s = rangeStore()[place] || {};
+    return {
+      range: RANGES.some(r => r[0] === s.range) ? s.range : (RANGE_DEFAULT[place] || 'week'),
+      from: isDay(s.from) ? s.from : '',
+      to: isDay(s.to) ? s.to : '',
+    };
+  }
+  function keepRange(place, r) {
+    const all = rangeStore();
+    all[place] = { range: r.range, from: r.from, to: r.to };
+    if (r.range === 'custom' && (r.from || r.to)) all.last = { from: r.from, to: r.to };
+    try { localStorage.setItem(RANGE_KEY, JSON.stringify(all)); } catch (e) { /* private window: this visit only */ }
+  }
+
+  // [from, to) in milliseconds, local time. `to` is Infinity for a range
+  // still running (nothing can have started in the future anyway).
+  function rangeBounds(r) {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    const sunday = plusDays(d, -d.getDay());
+    const first = new Date(d.getFullYear(), d.getMonth(), 1);
+    switch (r.range) {
+      case 'today': return [d.getTime(), plusDays(d, 1).getTime()];
+      case 'week': return [sunday.getTime(), Infinity];
+      case 'lastweek': return [plusDays(sunday, -7).getTime(), sunday.getTime()];
+      case 'twoweeks': return [plusDays(sunday, -7).getTime(), Infinity];
+      case 'month': return [first.getTime(), Infinity];
+      case 'lastmonth': return [new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime(), first.getTime()];
+      case 'year': return [new Date(d.getFullYear(), 0, 1).getTime(), Infinity];
+      case 'custom': {
+        const lo = r.from ? new Date(r.from + 'T00:00:00').getTime() : 0;
+        const hi = r.to ? plusDays(new Date(r.to + 'T00:00:00'), 1).getTime() : Infinity;
+        return [lo, hi];
+      }
+      default: return [0, Infinity];
+    }
+  }
+
+  // The days a range covers, in words -- so "This week" says which week.
+  function rangeWords(r) {
+    const [lo, hi] = rangeBounds(r);
+    if (!lo && !isFinite(hi)) return 'Every date';
+    const year = new Date().getFullYear();
+    const fmt = t => {
+      const d = new Date(t);
+      return d.toLocaleDateString('en-US', d.getFullYear() === year
+        ? { weekday: 'short', month: 'short', day: 'numeric' }
+        : { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+    if (!lo) return 'Up to ' + fmt(hi - 1);
+    const today = dayStr(new Date());
+    // Still running: up to today.
+    if (!isFinite(hi)) {
+      return lo > Date.now() ? 'From ' + fmt(lo)
+        : dayStr(new Date(lo)) === today ? 'Today' : fmt(lo) + ' – today';
+    }
+    const last = hi - 1;
+    return dayStr(new Date(lo)) === dayStr(new Date(last)) ? fmt(lo) : fmt(lo) + ' – ' + fmt(last);
+  }
+
+  // The control itself: the choices, and From/To when picking dates. Each
+  // place draws it where its old buttons were and redraws through
+  // rangeRedraw (registered with YDHoursRange.onChange).
+  const rangeRedraw = {};
+  function rangeBarHtml(place) {
+    const r = rangeOf(place), p = safeId(place);
+    // No latest day: "the 1st to the 31st" can be picked mid-month.
+    return '<span class="hr-range">' +
+      '<select onchange="ydRangeSet(\'' + p + '\', \'range\', this.value)" aria-label="Which days">' +
+        RANGES.map(([v, t]) => '<option value="' + v + '"' + (r.range === v ? ' selected' : '') + '>' + t + '</option>').join('') +
+      '</select>' +
+      (r.range === 'custom'
+        ? '<label class="hr-day"><span>From</span><input type="date" value="' + r.from +
+            '" onchange="ydRangeSet(\'' + p + '\', \'from\', this.value)"></label>' +
+          '<label class="hr-day"><span>To</span><input type="date" value="' + r.to +
+            '" onchange="ydRangeSet(\'' + p + '\', \'to\', this.value)"></label>'
+        : '') +
+      '<span class="hr-words">' + esc(rangeWords(r)) + '</span>' +
+    '</span>';
+  }
+
+  // A date typed key by key changes several times on the way to the one
+  // meant; the hours are worked out once it settles.
+  const rangeTimers = {};
+  window.ydRangeSet = function (place, what, value) {
+    if (!RANGE_DEFAULT[place]) return;
+    const r = rangeOf(place);
+    if (what === 'range') {
+      if (!RANGES.some(x => x[0] === value)) return;
+      if (value === 'custom' && r.range !== 'custom' && !r.from && !r.to) {
+        // Something to start from: the dates last picked anywhere, else the
+        // days of the range being left (a week to nudge), else this month.
+        const last = rangeStore().last || {};
+        const [lo, hi] = rangeBounds(r);
+        if (isDay(last.from) || isDay(last.to)) { r.from = isDay(last.from) ? last.from : ''; r.to = isDay(last.to) ? last.to : ''; }
+        else if (lo) { r.from = dayStr(new Date(lo)); r.to = dayStr(new Date(Math.min(isFinite(hi) ? hi - 1 : Date.now(), Date.now()))); }
+        else { r.from = dayStr(new Date(new Date().getFullYear(), new Date().getMonth(), 1)); r.to = dayStr(new Date()); }
+      }
+      r.range = value;
+    } else if (what === 'from' || what === 'to') {
+      // An emptied box is "from the start" or "up to today"; anything not yet
+      // a whole date is waited for.
+      if (value && !isDay(value)) return;
+      r[what] = value || '';
+    } else return;
+    // From after To is read as the days between them, the right way round.
+    let swapped = false;
+    if (r.from && r.to && r.from > r.to) { const t = r.from; r.from = r.to; r.to = t; swapped = true; }
+    keepRange(place, r);
+    clearTimeout(rangeTimers[place]);
+    const redraw = () => { if (rangeRedraw[place]) rangeRedraw[place](what === 'range' || swapped); };
+    if (what === 'range') redraw();
+    else rangeTimers[place] = setTimeout(redraw, 350);
+  };
+
+  // Draws a place's range control into `holder`, unless one of its date
+  // boxes is being typed into: replacing it then would throw the typing away.
+  function placeRangeBar(holder, place, force) {
+    if (!holder) return;
+    const html = rangeBarHtml(place);
+    if (holder.dataset.drawn === html) return;
+    if (!force && holder.contains(document.activeElement) && document.activeElement.tagName === 'INPUT') {
+      freshWords(holder, place);
+      return;
+    }
+    holder.innerHTML = html;
+    holder.dataset.drawn = html;
+  }
+  // The days in words, put right without touching the boxes beside them.
+  function freshWords(holder, place) {
+    const w = holder && holder.querySelector('.hr-words');
+    if (w) w.textContent = rangeWords(rangeOf(place));
+  }
+
+  window.YDHoursRange = {
+    get: rangeOf,
+    bounds: place => rangeBounds(rangeOf(place)),
+    words: place => rangeWords(rangeOf(place)),
+    barHtml: rangeBarHtml,
+    place: placeRangeBar,
+    freshWords: freshWords,
+    onChange: (place, fn) => { rangeRedraw[place] = fn; },
+    dayStr: dayStr,
+  };
+  rangeRedraw.totals = force => { placeRangeBar(el('clockRangeBar'), 'totals', force); renderTotals(); };
+  rangeRedraw.worker = force => renderWorker(force);
 
   // ------------------------------------------------------------- your crew
   //
@@ -1148,7 +1592,14 @@
             '<button class="remove-btn" onclick="removeCrew(\'' + safeId(u.uid) + '\')" title="Switch off">&times;</button>' +
           '</div>').join('')
         : '<p class="empty-msg">No crew yet. Send them the app link and ask them to ' +
-          'sign in with Google — they will show up here to let in.</p>');
+          'sign in with Google — they will show up here to let in.</p>') +
+      // The clock's own setting (see "the clock stops itself").
+      '<div class="crew-row crew-setting">' +
+        '<span class="crew-name">⏱ Forgot to clock out</span>' +
+        '<span class="crew-mail">A shift stops by itself after <b>' + hoursWord(autoOutHours) +
+          '</b> on the clock and comes to you to check. They and you get a notification.</span>' +
+        '<button class="btn btn-sm" onclick="setAutoOutHours()">Change</button>' +
+      '</div>';
   }
 
   function setRole(uid, patch, msg) {
@@ -1169,7 +1620,8 @@
     const now = u.name || u.email || '';
     const name = prompt('What should ' + (now || 'this person') + ' be called in Job Hub?', now);
     if (name === null) return;
-    const clean = name.trim().slice(0, 60);
+    // Runs of spaces squeezed to one: "Alex  Test" is not a second person.
+    const clean = name.trim().replace(/\s+/g, ' ').slice(0, 60);
     if (!clean) { showToast('A name cannot be blank'); return; }
     setRole(uid, { name: clean }, 'Renamed to ' + clean);
   };
@@ -1330,54 +1782,98 @@
     setRole(uid, { active: false }, (u.name || u.email) + ' switched off');
   };
 
-  function renderTotals() {
-    const wrap = el('totalsWrap');
-    if (!wrap) return;
-    const which = (el('clockRange') || {}).value || 'week';
-    const from = rangeStart(which);
-    const to = which === 'lastweek' ? rangeStart('week') : Infinity;
-
-    // All time reaches back past the shifts kept live: the older ones are
-    // read once, and this is drawn again when they land (render).
-    const olderNow = olderFor(from);
+  // Everyone's counted hours in the chosen days, one row a person -- what
+  // Hours & Wages shows and what its spreadsheet holds.
+  function totalsFor(from, to) {
     const pool = Object.values(known());
     const inRange = e => startMsOf(e) >= from && startMsOf(e) < to;
     const done = pool.filter(e => counts(e) && inRange(e));
     const pending = pool.filter(e => awaitingOwner(e) && inRange(e));
-
     const byWorker = {};
     done.forEach(e => {
       const w = byWorker[e.uid] = byWorker[e.uid] ||
-        { name: workerOf(e), uid: e.uid, paid: 0, bill: 0, cost: 0 };
-      w.paid += paidMs(e); w.bill += chargeableMs(e);
+        { name: workerOf(e), uid: e.uid, paid: 0, bill: 0, cost: 0, shifts: 0, days: new Set(), waiting: 0 };
+      w.paid += paidMs(e); w.bill += chargeableMs(e); w.shifts++;
+      w.days.add(YDHoursRange.dayStr(new Date(startMsOf(e))));
       w.cost += e.costCents != null ? e.costCents
         : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
     });
+    pending.forEach(e => { if (byWorker[e.uid]) byWorker[e.uid].waiting += paidMs(e); });
     const list = Object.values(byWorker).sort((a, b) => b.paid - a.paid);
-    const totalCost = list.reduce((s, w) => s + w.cost, 0);
+    return { done: done, pending: pending, list: list, totalCost: list.reduce((s, w) => s + w.cost, 0) };
+  }
+
+  function renderTotals() {
+    const wrap = el('totalsWrap');
+    if (!wrap) return;
+    placeRangeBar(el('clockRangeBar'), 'totals');
+    const [from, to] = rangeBounds(rangeOf('totals'));
+
+    // All time reaches back past the shifts kept live: the older ones are
+    // read once, and this is drawn again when they land (render).
+    const olderNow = olderFor(from);
+    const t = totalsFor(from, to);
+    const list = t.list, totalCost = t.totalCost, pending = t.pending;
 
     const badge = el('totalsBadge');
     if (badge) badge.textContent = totalCost ? money(totalCost) : '';
 
+    // Only someone who may change pay gets the rate as a button to change it.
+    const rateCell = w => decides() && (isOwner() || w.uid !== (me() || {}).uid)
+      ? '<button class="btn btn-sm" onclick="setWorkerRate(\'' + safeId(w.uid) + '\')">' + money(rateOf(w.uid)) + '/hr</button>'
+      : money(rateOf(w.uid)) + '/hr';
     wrap.innerHTML = olderNote(olderNow) + (list.length
       ? '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Paid</th>' +
         '<th>Billable</th><th>Rate</th><th>Cost</th></tr></thead><tbody>' +
         list.map(w =>
-          '<tr><td class="bold">' + esc(w.name) + '</td>' +
+          '<tr><td class="bold"><button class="linkish" onclick="openWorker(\'' + safeId(w.uid) + '\')">' + esc(w.name) + '</button>' +
+            '<span class="shift-time">' + w.days.size + ' day' + (w.days.size === 1 ? '' : 's') + '</span></td>' +
           '<td>' + fmtDur(w.paid) + '</td>' +
           '<td>' + fmtDur(w.bill) + '</td>' +
-          '<td><button class="btn btn-sm" onclick="setWorkerRate(\'' + safeId(w.uid) + '\')">' +
-            money(rateOf(w.uid)) + '/hr</button></td>' +
+          '<td>' + rateCell(w) + '</td>' +
           '<td class="bold">' + money(w.cost) + '</td></tr>').join('') +
         '</tbody><tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Total</td>' +
         '<td style="font-weight:700">' + money(totalCost) + '</td></tr></tfoot></table></div>'
-      : '<p class="empty-msg">No approved hours in this range.</p>') +
-      whereItWentHtml(done) +
+      : '<p class="empty-msg">No approved hours on these days.</p>') +
+      whereItWentHtml(t.done) +
       (pending.length
         ? '<p class="hint">' + pending.length + ' shift' + (pending.length === 1 ? '' : 's') +
           ' still waiting for approval. Those are not counted above, or on any job.</p>'
-        : '');
+        : '') +
+      // Only with every shift in the range here (the work log's rule): a
+      // sheet missing the older ones would not say so.
+      (list.length && olderNow === 'ready'
+        ? '<div class="field-actions"><button class="btn btn-sm" onclick="exportTotals()">⬇ Spreadsheet of these hours</button></div>' : '');
   }
+
+  // Payroll for the chosen days, one line a person: hours as plain decimals
+  // (7.75, not 7h 45m), the rate and the wages. BOM and CRLF so Excel opens
+  // it right, the same as the work log's sheet; text cells guarded the same
+  // way against being run as formulas.
+  window.exportTotals = function () {
+    if (!seesAll()) return;
+    const [from, to] = rangeBounds(rangeOf('totals'));
+    if (olderFor(from) !== 'ready') { showToast('Older shifts are still loading — try again in a moment'); return; }
+    const t = totalsFor(from, to);
+    if (!t.list.length) return;
+    const dec = milli => (Math.round(milli / 36000) / 100).toFixed(2);
+    const cell = v => { const s = String(v == null ? '' : v); return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; };
+    const q = v => '"' + cell(v).replace(/"/g, '""') + '"';
+    const rows = [['Worker', 'Days', 'Shifts', 'Hours worked', 'Billable hours', 'Rate per hour', 'Wages',
+                   'Hours waiting for approval']]
+      .concat(t.list.map(w => [w.name, w.days.size, w.shifts, dec(w.paid), dec(w.bill),
+        (rateOf(w.uid) / 100).toFixed(2), (w.cost / 100).toFixed(2), dec(w.waiting)]))
+      .concat([['Total', '', t.list.reduce((s, w) => s + w.shifts, 0), dec(t.list.reduce((s, w) => s + w.paid, 0)),
+        dec(t.list.reduce((s, w) => s + w.bill, 0)), '', (t.totalCost / 100).toFixed(2),
+        dec(t.list.reduce((s, w) => s + w.waiting, 0))]]);
+    const blob = new Blob(['\uFEFF' + rows.map(r => r.map(q).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'hours-and-wages-' + (from ? YDHoursRange.dayStr(new Date(from)) : 'start') + '-to-' +
+      YDHoursRange.dayStr(new Date(isFinite(to) ? Math.min(to - 1, Date.now()) : Date.now())) + '.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  };
 
   // Hours on a job show up on that job. Labor, receipts and snow-with-no-storm
   // show up nowhere else at all, so without this the money spent on them would
@@ -1426,11 +1922,12 @@
   // only ever gave them their own shifts to read.
 
   let workerUid = null;
-  let workerRange = 'week';
 
   window.openWorker = function (uid) {
     workerUid = uid || ((me() || {}).uid);
-    workerRange = 'week';
+    // The days shown are the ones last picked here, on this device (date
+    // ranges, above): looking at one person's month, then the next's, is the
+    // usual way round.
     editingWorker = false;
     asking = null;          // a half-asked change closed with × or Escape is let go
     const m = el('workerModal');
@@ -1446,12 +1943,17 @@
     if (m) m.classList.remove('active');
     workerUid = null;
     asking = null;
+    if (fixingIn === 'worker') { fixingId = null; fixingIn = null; }
   };
-  window.setWorkerRange = function (r) { workerRange = r; renderWorker(); };
 
-  function renderWorker() {
+  function renderWorker(forceBar) {
     const body = el('workerBody');
     if (!body || !workerUid) return;
+    // Three parts, so the days being picked are never rebuilt from under a
+    // date being typed (placeRangeBar) while the rest is drawn again.
+    if (!el('wkMain') || !body.contains(el('wkMain'))) {
+      body.innerHTML = '<div id="wkHead"></div><div class="filter-bar wk-range" id="wkRangeBar"></div><div id="wkMain"></div>';
+    }
     const u = people[workerUid] || {};
     const isMe = workerUid === ((me() || {}).uid);
     const name = u.name || u.email || (isMe ? 'My hours' : 'Worker');
@@ -1459,8 +1961,7 @@
     const title = el('workerTitle');
     if (title) title.textContent = name;
 
-    const from = rangeStart(workerRange);
-    const to = workerRange === 'lastweek' ? rangeStart('week') : Infinity;
+    const [from, to] = rangeBounds(rangeOf('worker'));
     // All time reaches back past the shifts kept live: the older ones are
     // read once, and this is drawn again when they land (render).
     const olderNow = olderFor(from);
@@ -1483,7 +1984,10 @@
     const canRate = decides() && (isOwner() || !isMe);
     // Your own page, unless you are the owner: a locked shift can be asked about.
     const askable = isMe && !isOwner();
-    body.innerHTML =
+    // Somebody else's, for whoever settles their shifts: the times changed
+    // by hand (the owner's own, too).
+    const fixable = !askable && decides() && (isOwner() || !isMe);
+    el('wkHead').innerHTML =
       (editingWorker && (canName || canRate)
         ? '<div class="wk-edit">' +
             '<div class="grid g2">' +
@@ -1513,15 +2017,9 @@
         ? '<div class="wk-live">On the clock now — <strong>' + esc(live.targetName) +
           '</strong>, <span data-live-entry="' + safeId(live.id) + '">' + fmtDur(paidMs(live)) + '</span>' +
           (openPause(live) ? ' · paused for ' + esc(openPause(live).reason) : '') + '</div>'
-        : '') +
-
-      '<div class="filter-bar wk-range">' +
-        ['week', 'lastweek', 'month', 'all'].map(r =>
-          '<button class="btn btn-sm' + (workerRange === r ? ' btn-filled' : '') +
-          '" onclick="setWorkerRange(\'' + r + '\')">' +
-          ({ week: 'This week', lastweek: 'Last week', month: 'This month', all: 'All time' })[r] +
-          '</button>').join('') +
-      '</div>' +
+        : '');
+    placeRangeBar(el('wkRangeBar'), 'worker', forceBar === true);
+    el('wkMain').innerHTML =
       olderNote(olderNow) +
 
       '<div class="wk-cards">' +
@@ -1539,14 +2037,19 @@
         : '') +
 
       (askable && asking && pool[asking] ? askHtml(pool[asking]) : '') +
-      '<div class="wk-head">Every shift</div>' +
+      (fixingIn === 'worker' && fixingId && pool[fixingId] && pool[fixingId].uid === workerUid && mayDecide(pool[fixingId])
+        ? fixHtml(pool[fixingId]) : '') +
+      '<div class="wk-head">Every shift' +
+        (fixable && people[workerUid]
+          ? ' <button class="link-btn" onclick="addShiftFor(\'' + safeId(workerUid) + '\')">+ Add a shift ' +
+              (isMe ? 'I' : 'they') + ' forgot to clock</button>' : '') + '</div>' +
       (inRange.length
         ? '<div class="table-wrap"><table><thead><tr><th>When</th><th>What</th>' +
-          '<th>Paid</th><th>Billable</th><th></th>' + (askable ? '<th></th>' : '') + '</tr></thead><tbody>' +
+          '<th>Paid</th><th>Billable</th><th></th>' + (askable || fixable ? '<th></th>' : '') + '</tr></thead><tbody>' +
           inRange.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
-            .map(e => shiftRow(e, askable)).join('') +
+            .map(e => shiftRow(e, askable, fixable)).join('') +
           '</tbody></table></div>'
-        : '<p class="empty-msg">Nothing in this range.</p>') +
+        : '<p class="empty-msg">No shifts on these days.</p>') +
       (askable ? myRequestsHtml(workerUid) : '');
   }
 
@@ -1589,8 +2092,12 @@
     return best;
   }
   function shiftTimes(e, startTime, endTime) {
-    const start = nearTime(e.startedAt, startTime);
-    let end = start && nearTime(e.endedAt || e.startedAt, endTime);
+    // A time left as it was is the time it was, to the second: the boxes
+    // show whole minutes, and reading them back moved an untouched start
+    // or end by up to a minute -- so "no change" was never seen as one.
+    const same = (iso, time) => !!iso && hm(iso) === String(time || '') ? new Date(iso) : null;
+    const start = same(e.startedAt, startTime) || nearTime(e.startedAt, startTime);
+    let end = start && (same(e.endedAt, endTime) || nearTime(e.endedAt || e.startedAt, endTime));
     if (!start || !end) return null;
     while (end <= start) end.setDate(end.getDate() + 1);
     while (end - start > 24 * 3600000) end.setDate(end.getDate() - 1);
@@ -1800,15 +2307,21 @@
       '<div class="wk-card-sub">' + sub + '</div></div>';
   }
 
-  function shiftRow(e, askable) {
+  function shiftRow(e, askable, fixable) {
     const pause = pausedMs(e);
     const when = new Date(e.startedAt);
     return '<tr class="shift-' + e.status + '">' +
       '<td>' + when.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
         '<span class="shift-time">' + clockTime(e.startedAt) +
-        (e.endedAt ? '–' + clockTime(e.endedAt) : ' — still on') + '</span></td>' +
+        // The end's day too when it is the next one: "10:00 PM–2:00 PM" read
+        // as a shift going backwards.
+        (!e.endedAt ? ' — still on'
+          : '–' + (new Date(e.endedAt).toDateString() !== when.toDateString()
+            ? new Date(e.endedAt).toLocaleDateString('en-US', { weekday: 'short' }) + ' ' : '') + clockTime(e.endedAt)) +
+        '</span></td>' +
       '<td class="bold">' + esc(e.targetName) +
-        (pause ? '<span class="shift-pause">' + fmtDur(pause) + ' paused</span>' : '') + '</td>' +
+        (pause ? '<span class="shift-pause">' + fmtDur(pause) + ' paused</span>' : '') +
+        (autoStopped(e) ? '<span class="shift-pause">⏱ no clock-out — stopped by the clock</span>' : '') + '</td>' +
       '<td>' + fmtDur(paidMs(e)) + '</td>' +
       '<td>' + (canPause(e) ? fmtDur(billableMs(e)) : '—') + '</td>' +
       '<td><span class="shift-flag ' + e.status + '">' +
@@ -1817,9 +2330,12 @@
           : e.status === 'approved' ? 'approved'
           : e.status === 'rejected' ? 'rejected'
           : 'waiting') + '</span></td>' +
-      (askable ? '<td>' + (running(e) || !e.endedAt ? ''
+      // Not on a rejected one: a change to it would still leave it rejected.
+      (askable ? '<td>' + (running(e) || !e.endedAt || e.status === 'rejected' ? ''
         : pendingFor(e.id) ? '<span class="muted">change asked</span>'
         : '<button class="link-btn" onclick="askChange(\'' + safeId(e.id) + '\')">Ask for a change</button>') + '</td>' : '') +
+      (fixable && !askable ? '<td>' + (running(e) || !e.endedAt || e.status === 'rejected' || !mayDecide(e) ? ''
+        : '<button class="link-btn" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>') + '</td>' : '') +
     '</tr>';
   }
 
@@ -1842,7 +2358,7 @@
     const canRate = decides() && (isOwner() || !isMe);
     if (!canName && !canRate) return;
     // Same limit as Rename on Your Crew, so the two ways of naming agree.
-    const name = canName ? ((el('wkName') || {}).value || '').trim().slice(0, 60) : null;
+    const name = canName ? ((el('wkName') || {}).value || '').trim().replace(/\s+/g, ' ').slice(0, 60) : null;
     const raw = ((el('wkRate') || {}).value || '').replace(/[^0-9.]/g, '');
     const cents = canRate ? Math.round(parseFloat(raw) * 100) : null;
 
@@ -2250,7 +2766,7 @@
     return true;
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') newYear();
+    if (document.visibilityState === 'visible') { newYear(); readAutoOut(); }
   });
 
   // For All Jobs and a job's labour: '' while every old job's labour is in
@@ -2460,6 +2976,8 @@
     endMsOf: endMsOf,
     counts: counts,
     awaitingOwner: awaitingOwner,
+    // Stopped by the clock after too long with nobody clocking out.
+    autoStopped: autoStopped,
     fmtDur: fmtDur,
     who: workerOf,
     // A job's name as it reads today when the job is still listed: jobs get
@@ -2525,6 +3043,8 @@
     resetOlder();
     forgetLabour();
     watchKey = key;
+    // How long a shift runs before the clock stops it (the owner's setting).
+    readAutoOut();
     // Everyone's shifts: only the recent ones live (see "older shifts"). A
     // phone still holding a firebase-init.js from before watchFrom watches
     // the whole collection, as it always did.
@@ -2703,7 +3223,8 @@
       // somebody else, left open, would otherwise file the next person's
       // shift under that somebody.
       picking = false; clockingFor = null; pausingId = null; choosingWorker = false;
-      addingShift = false; addFor = null; editingWorker = false;
+      addingShift = false; addFor = null; editingWorker = false; fixingId = null; fixingIn = null;
+      autoOutHours = AUTO_OUT_DEFAULT;
       closeWorker();
       render();
     }

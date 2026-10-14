@@ -22,6 +22,9 @@ so two runs that overlap (or a retry) cannot buzz anyone twice.
 Who gets it: whoever set the reminder, and the crew on the entry -- but only
 people who can see that calendar. A reminder must never put an entry's title
 on the phone of someone the calendar was not shared with.
+
+The same five-minute run also stops any shift nobody clocked out of once it
+reaches the owner's limit (autoclock.py), before the reminders.
 """
 
 import datetime
@@ -119,6 +122,15 @@ def run():
     now = dg._now()
     since = now - datetime.timedelta(minutes=WINDOW_MIN)
     people = dg._people()
+    # Shifts nobody clocked out of, stopped by the clock (autoclock.py) --
+    # first, so nothing below can hold it up, and nothing it does can stop
+    # the reminders going.
+    clocked = {}
+    try:
+        import autoclock
+        clocked = autoclock.run(db, people, now)
+    except Exception as err:              # noqa: BLE001
+        print("reminders: automatic clock-out failed:", err)
     try:
         prefs = dg.prefs_all(people)
     except Exception as err:              # noqa: BLE001 -- the set reminders still go
@@ -133,6 +145,9 @@ def run():
     sent.extend(_usual(db, people, since, now, cals, boards, prefs))
     sent.extend(_activity(db, people, now, cals, boards, prefs))
     sent.extend(crew_notes(db, people, now))
+    sent.extend(clocked.get("told") or [])
+    if clocked.get("stopped"):
+        sent.append({"clockStopped": clocked["stopped"]})
     return sent
 
 

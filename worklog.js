@@ -20,8 +20,9 @@
 (function () {
   'use strict';
 
-  let range = 'week';
-  let customFrom = '', customTo = '';
+  // Which days: the clock's choices (timeclock.js, YDHoursRange) -- the same
+  // weeks and months as Hours & Wages, and From–To dates -- kept on this
+  // device for the log on its own.
   let who = '';            // uid filter, '' for everyone
   let where = '';          // place filter, '' for everywhere
   let view = 'day';        // 'day' | 'job' | 'person'
@@ -34,7 +35,6 @@
   const C = () => window.YDClock;
 
   function dayOf(d) { return d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate()); }
-  function startOfDay(s) { return new Date(s + 'T00:00:00').getTime(); }
   function longDay(s) {
     return new Date(s + 'T00:00:00').toLocaleDateString('en-US',
       { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
@@ -53,29 +53,11 @@
   // The name a person goes by now, from their record where the clock knows it.
   const nameOf = e => (C().who ? C().who(e) : (e.workerName || 'Worker'));
 
-  // [from, to) in milliseconds for the chosen range.
+  // [from, to) in milliseconds for the chosen days. (The log used to work
+  // its own out, a day as 24 hours -- the last hour of the night the clocks
+  // go back fell out of "Today" and of a picked To date.)
   function bounds() {
-    const d = new Date(); d.setHours(0, 0, 0, 0);
-    const day = 864e5;
-    if (range === 'today') return [d.getTime(), d.getTime() + day];
-    if (range === 'week' || range === 'lastweek') {
-      d.setDate(d.getDate() - d.getDay());
-      if (range === 'lastweek') d.setDate(d.getDate() - 7);
-      const a = d.getTime(); d.setDate(d.getDate() + 7);
-      return [a, d.getTime()];
-    }
-    if (range === 'month' || range === 'lastmonth') {
-      d.setDate(1);
-      if (range === 'lastmonth') d.setMonth(d.getMonth() - 1);
-      const a = d.getTime(); d.setMonth(d.getMonth() + 1);
-      return [a, d.getTime()];
-    }
-    if (range === 'custom') {
-      const a = customFrom ? startOfDay(customFrom) : 0;
-      const b = customTo ? startOfDay(customTo) + day : Infinity;
-      return [a, b];
-    }
-    return [0, Infinity];
+    return window.YDHoursRange ? YDHoursRange.bounds('worklog') : [0, Infinity];
   }
 
   // Every shift the clock has: the live ones (a crew member's own; the
@@ -151,15 +133,7 @@
     const days = new Set(list.map(r => r.day)).size;
 
     const barHtml =
-        '<select onchange="wlSet(\'range\', this.value)">' +
-          [['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'], ['month', 'This month'],
-           ['lastmonth', 'Last month'], ['all', 'All time'], ['custom', 'Pick dates…']]
-            .map(([v, t]) => '<option value="' + v + '"' + (range === v ? ' selected' : '') + '>' + t + '</option>').join('') +
-        '</select>' +
-        (range === 'custom'
-          ? '<input type="date" value="' + customFrom + '" onchange="wlSet(\'from\', this.value)" aria-label="From">' +
-            '<input type="date" value="' + customTo + '" onchange="wlSet(\'to\', this.value)" aria-label="To">'
-          : '') +
+        (window.YDHoursRange ? YDHoursRange.barHtml('worklog') : '') +
         (isOwner() && Object.keys(names).length > 1
           ? '<select onchange="wlSet(\'who\', this.value)"><option value="">Everyone</option>' +
             Object.keys(names).sort((a, b) => names[a].localeCompare(names[b])).map(uid =>
@@ -178,6 +152,9 @@
     if (barHtml !== barDrawn && (chosen === true || !bar.contains(document.activeElement))) {
       bar.innerHTML = barHtml;
       barDrawn = barHtml;
+    } else if (window.YDHoursRange) {
+      // Left alone while in use, but the days it names are kept true.
+      YDHoursRange.freshWords(bar, 'worklog');
     }
 
     body.innerHTML =
@@ -228,6 +205,7 @@
             (r.live ? '<span class="wl-tag live">on the clock</span>' : '') +
             (r.pending ? '<span class="wl-tag wait">waiting approval</span>' : '') +
             (r.e.source === 'manual' ? '<span class="wl-tag">typed in</span>' : '') +
+            (c.autoStopped && c.autoStopped(r.e) ? '<span class="wl-tag wait">no clock-out — stopped by the clock</span>' : '') +
           '</div>' +
           '<div class="wl-time">' + clock(r.start) + ' – ' + (r.end ? clock(r.end) : 'now') + '</div>' +
           '<div class="wl-hrs">' + c.fmtDur(r.paid) + '</div>' +
@@ -279,10 +257,9 @@
   // --------------------------------------------------------------- controls
 
   window.wlSet = function (what, value) {
-    if (what === 'range') range = value;
-    else if (what === 'from') customFrom = value;
-    else if (what === 'to') customTo = value;
-    else if (what === 'who') who = value;
+    // The days are the clock's to keep (it redraws the log: onChange below).
+    if (what === 'range' || what === 'from' || what === 'to') { window.ydRangeSet('worklog', what, value); return; }
+    if (what === 'who') who = value;
     else if (what === 'where') where = value;
     else if (what === 'view') view = value;
     render(true);
@@ -310,7 +287,8 @@
     const lines = [head.map(q).join(',')].concat(list.map(r => [
       r.day, r.name, r.where, r.kind, clock(r.start), r.end ? clock(r.end) : '',
       decHours(r.paid), decHours(r.billable), Math.round(r.paused / 60000),
-      r.live ? 'running' : r.pending ? 'waiting approval' : 'ok',
+      (r.live ? 'running' : r.pending ? 'waiting approval' : 'ok') +
+        (c.autoStopped && c.autoStopped(r.e) ? ' (no clock-out: stopped by the clock)' : ''),
     ].map(q).join(',')));
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -340,4 +318,5 @@
   });
 
   window.YDWorkLog = { render: () => render(false) };
+  if (window.YDHoursRange) YDHoursRange.onChange('worklog', force => render(force === true));
 })();
