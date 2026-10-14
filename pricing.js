@@ -170,7 +170,9 @@
       // The $0 lines every QuickBooks estimate ends with, in order: the
       // QuickBooks products whose descriptions hold the warranty and the
       // terms and conditions (written in QuickBooks, read when sending).
-      estimateEnd: { items: [] },
+      // items: for homes; businessItems: for businesses (some notices are
+      // for homes only).
+      estimateEnd: { items: [], businessItems: [] },
       shop: { address: '', lat: null, lng: null },
       // Claude starts an estimate by itself when the site-visit notes are
       // written (estimate.js). On unless switched off.
@@ -697,9 +699,13 @@
   // e-sign the estimate, so these travel on it as lines of their own, one
   // product each because one line holds 4000 characters. Their text is the
   // product's description in QuickBooks; the server reads it when sending.
-  function endItems(r) {
+  // Homes and businesses each have their own list (Wisconsin's home-
+  // improvement notices are for homes).
+  const END_LISTS = [['items', 'Homes'], ['businessItems', 'Businesses']];
+  const endKey = which => (which === 'business' || which === 'businessItems' ? 'businessItems' : 'items');
+  function endItems(r, which) {
     const seen = {};
-    return ((r.estimateEnd || {}).items || []).map(n => String(n || '').trim())
+    return ((r.estimateEnd || {})[endKey(which)] || []).map(n => String(n || '').trim())
       .filter(n => n && !seen[n.toLowerCase()] && (seen[n.toLowerCase()] = true));
   }
 
@@ -923,8 +929,13 @@
   // has for it: its text's length, or that it is missing or empty (an
   // estimate is refused then -- quickbooks._end_lines).
   function endListHtml(ro) {
-    const list = endItems(rules);
     loadQbProducts();
+    return END_LISTS.map(([key, label]) => '<div class="pr-end-list"><h4 class="pr-end-h">' + label +
+      (key === 'businessItems' ? ' <small class="muted">— a job with a Business name; switch it on any estimate</small>' : '') + '</h4>' +
+      oneEndList(key, ro) + '</div>').join('');
+  }
+  function oneEndList(key, ro) {
+    const list = endItems(rules, key);
     const state = n => {
       const p = qbProduct(n);
       if (p === undefined) return '<span class="muted">' + (qbFailed ? 'couldn’t reach QuickBooks' : 'checking QuickBooks…') + '</span>';
@@ -932,46 +943,56 @@
       if (!p.text.trim()) return '<span class="warn-text">no text in QuickBooks yet</span>';
       return '✓ ' + p.text.trim().length.toLocaleString() + ' characters';
     };
+    const k = "'" + key + "'";
     const rows = list.map((n, i) => '<div class="pr-end-row"><span class="pr-end-n">' + (i + 1) + '</span>' +
       '<b>' + esc(n) + '</b><small>' + state(n) + '</small>' +
       (ro ? '' : '<span class="pr-end-act">' +
-        '<button class="btn btn-sm" title="Up"' + (i === 0 ? ' disabled' : '') + ' onclick="prEndMove(' + i + ', -1)">▲</button>' +
-        '<button class="btn btn-sm" title="Down"' + (i === list.length - 1 ? ' disabled' : '') + ' onclick="prEndMove(' + i + ', 1)">▼</button>' +
-        '<button class="btn btn-sm" title="Take it off" onclick="prEndRemove(' + i + ')">✕</button></span>') +
+        '<button class="btn btn-sm" title="Up"' + (i === 0 ? ' disabled' : '') + ' onclick="prEndMove(' + k + ', ' + i + ', -1)">▲</button>' +
+        '<button class="btn btn-sm" title="Down"' + (i === list.length - 1 ? ' disabled' : '') + ' onclick="prEndMove(' + k + ', ' + i + ', 1)">▼</button>' +
+        '<button class="btn btn-sm" title="Take it off" onclick="prEndRemove(' + k + ', ' + i + ')">✕</button></span>') +
       '</div>');
-    const names = qbProducts ? Object.keys(qbProducts).map(k => qbProducts[k].name)
+    const names = qbProducts ? Object.keys(qbProducts).map(q => qbProducts[q].name)
       .filter(n => list.every(x => x.toLowerCase() !== n.toLowerCase())).sort() : [];
+    const other = END_LISTS.find(([x]) => x !== key);
     return '<div class="pr-end">' + (rows.join('') || '<p class="hint">Nothing yet — estimates end with the materials line.</p>') +
-      (ro ? '' : '<div class="pr-end-add"><input id="prEndNew" list="prEndNames" inputmode="text" placeholder="QuickBooks product, e.g. Warranty">' +
-        '<datalist id="prEndNames">' + names.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
-        '<button class="btn btn-sm" onclick="prEndAdd()">+ Add to the end</button>' +
+      (ro ? '' : '<div class="pr-end-add"><input id="prEndNew_' + key + '" list="prEndNames_' + key + '" inputmode="text" placeholder="QuickBooks product, e.g. Warranty">' +
+        '<datalist id="prEndNames_' + key + '">' + names.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
+        '<button class="btn btn-sm" onclick="prEndAdd(' + k + ')">+ Add to the end</button>' +
+        (endItems(rules, other[0]).length ? '<button class="btn btn-sm" onclick="prEndCopy(' + k + ')">Same as ' + other[1].toLowerCase() + '</button>' : '') +
         '<button class="btn btn-sm" onclick="prEndRecheck()">Check QuickBooks again</button></div>') +
       '</div>';
   }
-  function saveEnd(list) { save({ estimateEnd: Object.assign({}, rules.estimateEnd, { items: list }) }); }
-  window.prEndAdd = function () {
+  function saveEnd(key, list) { save({ estimateEnd: Object.assign({}, rules.estimateEnd, { [endKey(key)]: list }) }); }
+  window.prEndAdd = function (key) {
     if (!owner()) return;
-    const box = el('prEndNew'), n = String(box && box.value || '').replace(/:/g, '-').replace(/\s+/g, ' ').trim();
+    const box = el('prEndNew_' + endKey(key)), n = String(box && box.value || '').replace(/:/g, '-').replace(/\s+/g, ' ').trim();
     if (!n) return;
-    const list = endItems(rules);
+    const list = endItems(rules, key);
     if (list.some(x => x.toLowerCase() === n.toLowerCase())) { showToast('“' + n + '” is already on the list'); return; }
     const p = qbProduct(n);
-    saveEnd(list.concat([p ? p.name : n]));
+    saveEnd(key, list.concat([p ? p.name : n]));
     if (p === null) showToast('Added — make “' + n + '” in QuickBooks with its text before the next estimate');
   };
-  window.prEndMove = function (i, d) {
+  window.prEndMove = function (key, i, d) {
     if (!owner()) return;
-    const list = endItems(rules), j = i + d;
+    const list = endItems(rules, key), j = i + d;
     if (j < 0 || j >= list.length) return;
     [list[i], list[j]] = [list[j], list[i]];
-    saveEnd(list);
+    saveEnd(key, list);
   };
-  window.prEndRemove = function (i) {
+  window.prEndRemove = function (key, i) {
     if (!owner()) return;
-    const list = endItems(rules);
+    const list = endItems(rules, key);
     if (!confirm('Take “' + list[i] + '” off the end of new estimates?')) return;
     list.splice(i, 1);
-    saveEnd(list);
+    saveEnd(key, list);
+  };
+  // Start one list from the other (then take off what doesn't belong).
+  window.prEndCopy = function (key) {
+    if (!owner()) return;
+    const other = END_LISTS.find(([x]) => x !== endKey(key))[0];
+    if (endItems(rules, key).length && !confirm('Replace this list with the other one?')) return;
+    saveEnd(key, endItems(rules, other));
   };
   window.prEndRecheck = function () { loadQbProducts(true); changed(); };
 
@@ -1281,7 +1302,7 @@
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
-    endItems: () => endItems(rules), qbProduct, loadQbProducts,
+    endItems: which => endItems(rules, which), qbProduct, loadQbProducts,
   };
 
   let authKey = null;

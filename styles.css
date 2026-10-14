@@ -2281,6 +2281,10 @@
   /* The warranty and the terms that end every estimate (pricing.js endItems) */
   .cv-end .cv-scope { font-size:12px; color:var(--muted); max-height:220px; overflow:auto; }
   .pr-end { display:flex; flex-direction:column; gap:6px; }
+  .pr-end-list { margin-top:8px; }
+  .pr-end-h { margin:10px 0 6px; font-size:14px; }
+  .est-who { display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; font-size:13px; margin:8px 0 4px; }
+  .est-who select { font-size:13px; }
   .pr-end-row { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; padding:8px 10px; border-radius:8px; background:var(--surface-2); font-size:13.5px; }
   .pr-end-row small { font-size:12px; color:var(--muted); }
   .pr-end-n { width:20px; height:20px; border-radius:10px; background:var(--brand); color:#fff; font-size:11px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }

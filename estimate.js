@@ -184,6 +184,9 @@
     o.memo = String(e.memo || '');
     o.sent = Array.isArray(e.sent) ? e.sent.slice(-SENT_KEEP) : [];
     o.payments = cleanPlan(e.payments);
+    // A home or a business, when set by hand (whoFor); left out = from the
+    // job's Business name.
+    if (e.customerType === 'home' || e.customerType === 'business') o.customerType = e.customerType;
     if (e.v === 2) {
       o.work = (Array.isArray(e.work) ? e.work : []).map(w => Object.assign({ id: newId('ew'), kind: 'crew' }, w));
       o.materials = (Array.isArray(e.materials) ? e.materials : []).map(m => Object.assign({ id: newId('em') }, m));
@@ -797,7 +800,7 @@
     });
     // The warranty and the terms end every estimate: QuickBooks products
     // (Pricing rules), shown with their text once QuickBooks has answered.
-    const ends = P().endItems();
+    const ends = P().endItems(whoFor());
     if (ends.length && sends()) P().loadQbProducts();
     ends.forEach(n => {
       const p = P().qbProduct(n);
@@ -886,6 +889,25 @@
     box.innerHTML = html;
   }
 
+  // A home or a business: which list of warranty and terms products ends the
+  // estimate (Pricing rules -- some notices are for homes only). From the
+  // job's Business name unless set on this estimate.
+  function whoFor() {
+    if (est.customerType === 'home' || est.customerType === 'business') return est.customerType;
+    return el('business') && el('business').value.trim() ? 'business' : 'home';
+  }
+  function whoHtml() {
+    const auto = !est.customerType, now = whoFor();
+    return '<div class="est-who"><span>Customer is</span><select onchange="estWho(this.value)">' +
+      [['', 'Auto — ' + (now === 'business' ? 'a business' : 'a home')], ['home', 'A home'], ['business', 'A business']]
+        .map(([k, n]) => '<option value="' + k + '"' + ((auto ? '' : est.customerType) === k ? ' selected' : '') + '>' + n + '</option>').join('') +
+      '</select><span class="muted">' + P().endItems(now).length + ' warranty & terms lines go on the end</span></div>';
+  }
+  window.estWho = function (v) {
+    if (!changes()) return;
+    if (v === 'home' || v === 'business') est.customerType = v; else delete est.customerType;
+    changed(false);
+  };
   function renderQb() {
     const box = el('estQb');
     if (!box) return;
@@ -912,7 +934,7 @@
       (can && q && q.id && (q.status === 'Closed' || q.status === 'Converted' || (inv && inv.id))
         ? (q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<div class="field-actions"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
-      : can ? '<div class="field-actions">' +
+      : can ? whoHtml() + '<div class="field-actions">' +
         '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || !ready ? ' disabled' : '') + '>' +
           (saving ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
         '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || !ready ? ' disabled' : '') + '>' +
@@ -1125,7 +1147,7 @@
 
   // The message when he has not written one: the payments asked for (the
   // deposit and each one, in dollars) and his payment terms. The warranty is
-  // a QuickBooks product at the end of the estimate (P().endItems()); until
+  // a QuickBooks product at the end of the estimate (P().endItems(whoFor())); until
   // that list has anything on it, the old warranty sentence stays here.
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
@@ -1133,7 +1155,7 @@
     const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
     const r = last;
     const pays = r && r.totalCents === totalCents ? r.payments || [] : [];
-    const warranty = P() && P().endItems().length ? '' : p.warranty;
+    const warranty = P() && P().endItems(whoFor()).length ? '' : p.warranty;
     return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms, warranty]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
@@ -2077,7 +2099,7 @@
         memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
         // The warranty and terms products, last (their text is read from
         // QuickBooks by the server).
-        endItems: P().endItems(),
+        endItems: P().endItems(whoFor()),
         totalCents: r.grandCents,
       });
       // QuickBooks' tax comes from the address; a county rate other than the
