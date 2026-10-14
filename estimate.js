@@ -18,9 +18,11 @@
 // THE ESTIMATE lives on the job as `estimate`:
 //   { v: 2, notes, chat, questions, flags,
 //     work:      [{id, title, scope, kind: crew|flat|amount, crewDays, profit,
-//                  priceId, qty, unit, rateCents, amountCents, qbItem}],
+//                  priceId, qty, unit, rateCents, amountCents, qbItem,
+//                  crewNote (the crew's page only)}],
 //     materials: [{id, supplyId, name, qty, unit, plant, tree, costCents,
-//                  category, delivery: auto|pickup|rides}],
+//                  category, delivery: auto|pickup|rides,
+//                  forWork (a work id, 'none', or unset = worked out)}],
 //     spoilCuYd, fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
 //     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo }
 // saved with the form like the materials list. What QuickBooks has is
@@ -435,11 +437,54 @@
       '<div class="est-wprofit" id="estWF_' + id + '"></div>' +
       '<textarea rows="4" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
         ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>' +
+      crewNoteHtml(w, id, ro) +
       '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
         ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>' +
       taxPickHtml('work', id, w.taxable, ro) +
       '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
+  }
+
+  // Notes for the crew on a labour line (Jonah, 14 Oct 2026: the crew should
+  // see "all the info that would be important to know to do the work"):
+  // what the customer's scope does not say -- the base goes 8 in under the
+  // driveway end, mind the sprinkler heads along the walk. Never on the
+  // estimate or in QuickBooks; shown under this line on the crew's page for
+  // the job (crewjobs.js), with any $ amount blanked. Folded away until used.
+  const crewNoteOpen = {};
+  function crewNoteHtml(w, id, ro) {
+    if (!String(w.crewNote || '').trim() && !crewNoteOpen[id]) {
+      return ro ? '' : '<div class="est-crewnote-add"><button class="link-btn" onclick="estCrewNote(\'' + id + '\')">' +
+        '👷 + Notes for the crew</button></div>';
+    }
+    return '<div class="est-crewnote"><span>👷 Notes for the crew — not on the estimate; the crew see them on the job’s page</span>' +
+      '<textarea rows="2" id="estCN_' + id + '"' + (ro ? ' readonly' : '') +
+        ' placeholder="Anything the crew need to know for this work — depths, where things go, what to watch out for"' +
+        ' oninput="estWork(\'' + id + '\', \'crewNote\', this.value)">' + esc(w.crewNote || '') + '</textarea></div>';
+  }
+  window.estCrewNote = function (id) {
+    crewNoteOpen[safeId(id)] = true;
+    render();
+    const box = el('estCN_' + safeId(id));
+    if (box) box.focus();
+  };
+
+  // Which piece of work a material is for, so the crew's page lists it
+  // under that line (crewjobs.js workFor). Left on Auto it is worked out from
+  // the words, and the choice it would make is shown; picked by hand, it
+  // stays. Only asked when there is more than one line to choose from.
+  function forWorkHtml(m, id, dis) {
+    if (est.work.length < 2 || !window.YDCrewJobs || !YDCrewJobs.workFor) return '';
+    const title = w => String(w.title || '').trim() || 'Labour line ' + (est.work.indexOf(w) + 1);
+    const guess = YDCrewJobs.workFor(Object.assign({}, m, { forWork: '' }), est.work, catalog().items);
+    const guessed = est.work.find(w => w.id === guess);
+    const cur = m.forWork === 'none' || est.work.some(w => w.id === m.forWork) ? m.forWork : '';
+    return '<label class="est-for"><span>👷 For the crew, this is for</span><select' + dis +
+        ' onchange="estMat(\'' + id + '\', \'forWork\', this.value)">' +
+      '<option value="">Auto — ' + esc(guessed ? title(guessed) : 'the whole job') + '</option>' +
+      est.work.map(w => '<option value="' + esc(safeId(w.id)) + '"' + (cur && cur === w.id ? ' selected' : '') + '>' + esc(title(w)) + '</option>').join('') +
+      '<option value="none"' + (cur === 'none' ? ' selected' : '') + '>The whole job</option>' +
+    '</select></label>';
   }
 
   // Sales tax on a line (pricing.js salesTax): worked out from what the line
@@ -604,6 +649,7 @@
     return '<div class="est-mrow">' +
       '<div class="est-mtop">' + head + '<div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div>' +
       '<div class="est-order" id="estMO_' + id + '"></div>' +
+      forWorkHtml(m, id, dis) +
       taxPickHtml('mat', id, m.taxable, ro) +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
     '</div>';
@@ -1316,7 +1362,7 @@
       w.profit = v === '' ? null : Number(v);
     }
     else if (field === 'kind') { w.kind = v; changed(true); return; }
-    else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product
+    else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product, notes for the crew
     changed(false);
   };
   window.estPickPrice = function (id, pid) {
@@ -1345,6 +1391,8 @@
     else if (field === 'tree') m.tree = v || null;
     else if (field === 'delivery' || field === 'category') { m[field] = v; changed(true); return; }
     else if (field === 'name') { m.name = String(v); wordsChanged(); return; }
+    // Which line the crew's page lists it under: nothing to re-price.
+    else if (field === 'forWork') { m.forWork = v ? String(v) : null; if (typeof markDirty === 'function') markDirty(); return; }
     else m[field] = String(v);                               // the unit: it prices
     changed(false);
   };
