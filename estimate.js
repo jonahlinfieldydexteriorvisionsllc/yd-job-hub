@@ -2100,6 +2100,9 @@
         // The warranty and terms products, last (their text is read from
         // QuickBooks by the server).
         endItems: P().endItems(whoFor()),
+        // A home gets Wisconsin's lien-waiver notice attached (a separate
+        // page it must have before signing); the server attaches it once.
+        lienNotice: whoFor() === 'home',
         totalCents: r.grandCents,
       });
       // QuickBooks' tax comes from the address; a county rate other than the

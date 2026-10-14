@@ -921,6 +921,50 @@ def _end_lines(body):
     return out
 
 
+LIEN_NOTICE_PDF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lien_waiver_notice.pdf")
+LIEN_NOTICE_NAME = "Notice of Right to Receive Lien Waivers.pdf"
+
+
+def _upload(entity, entity_id, filename, data, include_on_send=True):
+    """A file attached to a transaction (an Attachable), sent along when
+    QuickBooks emails it. Multipart, so not through _call; a 401 is answered
+    the same way (refresh once, then ask for a reconnect)."""
+    meta = {"AttachableRef": [{"EntityRef": {"type": entity, "value": str(entity_id)}, "IncludeOnSend": bool(include_on_send)}],
+            "FileName": filename, "ContentType": "application/pdf"}
+    for second_try in (False, True):
+        token, tokens = _access_token(force_refresh=second_try)
+        url = "%s/v3/company/%s/upload" % (_api_base(), tokens.get("realmId"))
+        files = {
+            "file_metadata_01": (None, json.dumps(meta), "application/json"),
+            "file_content_01": (filename, data, "application/pdf"),
+        }
+        resp = _send("POST", url, params={"minorversion": MINOR_VERSION}, files=files,
+                     headers={"Authorization": "Bearer %s" % token, "Accept": "application/json"}, timeout=60)
+        if resp.status_code == 401 and not second_try:
+            continue
+        if resp.status_code in (401, 403):
+            raise ReconnectNeeded("QuickBooks rejected the connection (Intuit ref %s)" % _tid(resp))
+        if resp.status_code >= 400:
+            raise RuntimeError("QuickBooks would not take the attachment: %s (Intuit ref %s)" % (_fault_message(resp), _tid(resp)))
+        got = (resp.json().get("AttachableResponse") or [{}])[0]
+        if got.get("Fault"):
+            raise RuntimeError("QuickBooks would not take the attachment: %s" % json.dumps(got["Fault"])[:300])
+        return (got.get("Attachable") or {}).get("Id")
+
+
+def _attach_lien_notice(job_id, est_id):
+    """Wisconsin's "Notice of Consumer's Right to Receive Lien Waivers" (ATCP
+    110.025) must reach a home customer as a separate page before they sign:
+    attached to the estimate once, and emailed with it. The job notes which
+    estimate has it, so an update doesn't attach it again."""
+    snap = _db().collection("jobs").document(job_id).get()
+    q = ((snap.to_dict() or {}) if snap.exists else {}).get("qbEstimate") or {}
+    if str(q.get("lienNoticeFor") or "") == str(est_id) and q.get("env") == _env("QB_ENV", "sandbox"):
+        return q.get("lienNoticeId")
+    with open(LIEN_NOTICE_PDF, "rb") as f:
+        return _upload("Estimate", est_id, LIEN_NOTICE_NAME, f.read())
+
+
 def _ours(e, job_id):
     """Whether a QuickBooks estimate is the one made for this job."""
     return str((e or {}).get("PrivateNote") or "").strip() == _job_note(job_id)
@@ -1022,6 +1066,22 @@ def save_estimate(body):
         saved = _call("POST", "estimate", body=_numbered("Estimate", est), request_id=key)
     e = saved.get("Estimate") or {}
 
+    # A home's estimate carries the lien-waiver notice, attached before it
+    # can be emailed; if QuickBooks won't take it, the estimate is saved but
+    # not sent.
+    notice = None
+    if body.get("lienNotice"):
+        try:
+            notice = _attach_lien_notice(job_id, e["Id"])
+        except ReconnectNeeded:
+            raise
+        except Exception as err:            # noqa: BLE001 -- said plainly below
+            print("quickbooks: lien notice not attached to estimate %s: %s" % (e.get("Id"), err))
+            if body.get("email"):
+                _keep_record(job_id, e, customer_id)
+                raise RuntimeError("Saved in QuickBooks, but not emailed: the lien-waiver notice couldn't be "
+                                   "attached (%s). Try again." % err)
+
     sent_to = ""
     if body.get("email"):
         if not email:
@@ -1033,8 +1093,17 @@ def save_estimate(body):
     out = _estimate_record(e, customer_id)
     if sent_to:
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
+    if notice:
+        out.update(lienNoticeFor=e["Id"], lienNoticeId=notice)
     _db().collection("jobs").document(job_id).set({"qbEstimate": out, "lastModified": _stamp()}, merge=True)
     return out
+
+
+def _keep_record(job_id, e, customer_id):
+    """What QuickBooks now has, onto the job, when the save went through but
+    a later step did not -- so the next try updates this estimate."""
+    _db().collection("jobs").document(job_id).set(
+        {"qbEstimate": _estimate_record(e, customer_id), "lastModified": _stamp()}, merge=True)
 
 
 def _estimate_record(e, customer_id=None):
