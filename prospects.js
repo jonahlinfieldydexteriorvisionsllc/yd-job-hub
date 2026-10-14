@@ -90,6 +90,210 @@
     return +year * 100 + (month > 0 && month < 13 ? month : 13);
   }
 
+  // ------------------------------------------------- next season's outreach
+  //
+  // Jonah (14 Oct 2026): "set up date to start reaching out to clients for
+  // jobs for next season." One date, the owner's (settings/outreach
+  // .startDate, YYYY-MM-DD). From that morning, everyone still open on this
+  // list whose time to call has come -- or who has none, or one nobody can
+  // read -- and who has not been reached since, is listed at the top under
+  // "Time to reach out". The morning summary says so on the day and counts
+  // what is left after that (functions/outreach.py, the same reading of the
+  // list), and the day is on the calendar (calendar.js, from the same date).
+  //
+  // "Reached" is reachedAt: stamped by ✓ Reached out, by a meeting note, and
+  // by setting them Contacted or Quoted (To contact clears it). It counts
+  // from the season's first day, and only if it came after their time to
+  // call was last changed (whenSetAt) -- "call me in the fall", written after
+  // the call, is a new time to call, and they come up again then.
+  let outreach = { startDate: '' };
+  let outreachLoaded = false;
+  let outreachEditing = false;
+  const justReached = {};     // contact id -> what it was before ✓ Reached out (Undo, this visit only)
+
+  const two = n => String(n).padStart(2, '0');
+  const ymd = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+  const todayYmd = () => ymd(new Date());
+  const validDay = s => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) && !isNaN(new Date(s + 'T00:00:00'));
+  function niceDate(s) {
+    return validDay(s) ? new Date(s + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) : '';
+  }
+  // The suggestion: the first weekday of February still to come.
+  function firstWeekdayOfFeb(year) {
+    const d = new Date(year, 1, 1);
+    while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
+    return ymd(d);
+  }
+  function suggestedStart() {
+    const t = todayYmd(), y = new Date().getFullYear();
+    const thisYear = firstWeekdayOfFeb(y);
+    return t <= thisYear ? thisYear : firstWeekdayOfFeb(y + 1);
+  }
+  // The first day of the month their time to call names (a year alone is
+  // that January), or '' for none.
+  function whenDay(text) {
+    const k = whenKey(text);
+    if (k === NO_DATE) return '';
+    const m = k % 100;
+    return Math.floor(k / 100) + '-' + two(m > 12 ? 1 : m) + '-01';
+  }
+  function reachedSince(p, start) {
+    const at = String(p.reachedAt || '');
+    if (!at || isNaN(new Date(at))) return false;
+    if (new Date(at) < new Date(start + 'T00:00:00')) return false;
+    return !(p.whenSetAt && String(p.whenSetAt) > at);
+  }
+  // The day someone comes up: the season's start, or their own time to call
+  // when that is later.
+  function dueFrom(p, start) {
+    const w = whenDay(p.contactWhen);
+    return w && w > start ? w : start;
+  }
+  function isDue(p, start, day) {
+    if (!validDay(start) || isClosed(p) || day < start) return false;
+    return day >= dueFrom(p, start) && !reachedSince(p, start);
+  }
+  function dueList(day) {
+    const start = outreach.startDate;
+    return Object.keys(people).map(k => people[k]).filter(p => isDue(p, start, day || todayYmd()))
+      .sort((a, b) => whenKey(a.contactWhen) - whenKey(b.contactWhen) || (a.name || '').localeCompare(b.name || ''));
+  }
+  const ownsOutreach = () => !!(window.YDAuth && window.YDAuth.isOwner);
+
+  function outreachHtml() {
+    const start = outreach.startDate;
+    const today = todayYmd();
+    const sug = suggestedStart();
+    const editor = '<div class="pp-out-edit">' +
+        '<input type="date" id="ppOutDate" value="' + esc(validDay(start) && !(start < today && outreachEditing === 'next') ? start : sug) + '">' +
+        '<button class="btn btn-sm btn-filled" onclick="saveOutreachDate()">Save this date</button>' +
+        (validDay(start) ? '<button class="btn btn-sm" onclick="editOutreachDate(false)">Cancel</button>' : '') +
+        (validDay(start) ? '<button class="link-btn" onclick="clearOutreachDate()">No start date</button>' : '') +
+      '</div>' +
+      '<div class="hint">Suggested: ' + esc(niceDate(sug)) + ' — the first weekday of February. ' +
+        'Pick any day; it can be changed whenever you like.</div>';
+    if (!validDay(start)) {
+      return '<div class="pp-out-q">When do you want to start reaching out to people for next season’s work? ' +
+        'From that day, everyone on the list whose time to call has come is listed here, in your morning summary and on the calendar.</div>' + editor;
+    }
+    const head = '<div class="pp-out-when">' + (today < start ? 'Outreach starts ' : 'Outreach started ') + '<b>' + esc(niceDate(start)) + '</b>' +
+      (outreachEditing ? '' : ' <button class="link-btn" onclick="editOutreachDate(true)">Change</button>' +
+        (start < today && sug > start && sug.slice(0, 4) > start.slice(0, 4)
+          ? ' · <button class="link-btn" onclick="editOutreachDate(\'next\')">Set next season’s date</button>' : '')) +
+      '</div>' + (outreachEditing ? editor : '');
+    if (today < start) {
+      const will = dueList(start).length;
+      return head + '<div class="muted pp-out-soon">' + (will
+        ? will + (will === 1 ? ' person is' : ' people are') + ' due to be reached that day, by the list as it stands now.'
+        : 'Nobody on the list would be due that day yet.') + '</div>';
+    }
+    const due = dueList(today);
+    const done = Object.keys(justReached).filter(id => people[id] && due.indexOf(people[id]) === -1).map(id => people[id]);
+    return head +
+      (due.length || done.length ? due.concat(done).map(p => outreachRow(p, due.indexOf(p) === -1)).join('')
+        : '<p class="empty-msg">Everyone due has been reached. 🎉</p>');
+  }
+
+  function outreachRow(p, done) {
+    const id = safeIdOf(p.id);
+    const tel = String(p.phone || '').replace(/[^0-9+]/g, '');
+    return '<div class="pp-out-row' + (done ? ' done' : '') + '">' +
+      '<div class="pp-out-main">' +
+        '<button class="pp-out-name" onclick="findProspect(\'' + id + '\')">' + esc(p.name || '(no name)') + '</button>' +
+        (p.contactWhen ? ' <span class="pp-when">' + esc(p.contactWhen) + '</span>' : '') +
+        declinedBadge(p) +
+        ((p.services || []).length ? '<div class="pp-svc">' + p.services.map(s => '<span class="svc-tag">' + esc(s) + '</span>').join('') + '</div>' : '') +
+        (p.note ? '<div class="pp-out-note">' + esc(String(p.note).split('\n')[0].slice(0, 160)) + '</div>' : '') +
+        '<div class="pp-contact">' +
+          [tel ? '<a href="tel:' + esc(tel) + '">📞 ' + esc(p.phone) + '</a>' : '',
+           p.email ? '<a href="mailto:' + esc(p.email) + '">✉️ ' + esc(p.email) + '</a>' : ''].filter(Boolean).join(' &middot; ') +
+        '</div>' +
+      '</div>' +
+      '<div class="pp-out-act">' + (done
+        ? '<span class="pp-out-did">✓ Reached</span><button class="link-btn" onclick="prospectReachedUndo(\'' + id + '\')">Undo</button>'
+        : '<button class="btn btn-sm btn-filled" onclick="prospectReached(\'' + id + '\')">✓ Reached out</button>') +
+      '</div>' +
+    '</div>';
+  }
+  const safeIdOf = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
+
+  function renderOutreach() {
+    const sec = el('ppOutSection'), wrap = el('ppOutWrap');
+    if (!sec || !wrap) return;
+    const show = ownsOutreach() && outreachLoaded;
+    sec.hidden = !show;
+    if (!show) return;
+    // A date being picked keeps its place when the list redraws.
+    const picking = document.activeElement && document.activeElement.id === 'ppOutDate' ? el('ppOutDate').value : null;
+    const start = outreach.startDate, today = todayYmd();
+    const active = validDay(start) && today >= start;
+    const n = active ? dueList(today).length : 0;
+    const title = el('ppOutTitle');
+    if (title) title.textContent = active ? '📞 Time to reach out' : '📅 Next season outreach';
+    const badge = el('ppOutBadge');
+    if (badge) badge.textContent = active && n ? n + ' to reach' : '';
+    wrap.innerHTML = outreachHtml();
+    if (picking !== null && el('ppOutDate')) { el('ppOutDate').value = picking; el('ppOutDate').focus(); }
+  }
+
+  window.editOutreachDate = function (on) { outreachEditing = on; renderOutreach(); };
+  window.saveOutreachDate = function () {
+    const v = ((el('ppOutDate') || {}).value || '').trim();
+    if (!validDay(v)) { showToast('Pick a date first'); return; }
+    saveOutreach(v);
+    showToast('Outreach starts ' + niceDate(v));
+  };
+  window.clearOutreachDate = function () {
+    if (!confirm('Take the start date off? Nobody is listed as due, and the summary and calendar say nothing, until a date is set again.')) return;
+    saveOutreach(null);
+  };
+  function saveOutreach(day) {
+    if (!ownsOutreach() || !window.YDDb) return;
+    outreach = Object.assign({}, outreach, { startDate: day || '' });
+    outreachEditing = false;
+    renderOutreach();
+    tellOutreach();
+    const me = window.YDAuth && window.YDAuth.user;
+    Promise.resolve(window.YDDb.put('settings', 'outreach', { startDate: day || null, setAt: new Date().toISOString(),
+      setBy: (me && me.uid) || null })).catch(e => failed('the outreach start date', e));
+  }
+  // The calendar draws the day from this (calendar.js).
+  function tellOutreach() { document.dispatchEvent(new CustomEvent('yd-outreach')); }
+
+  window.prospectReached = function (id) {
+    const p = people[id];
+    if (!p || !ydCan('contacts', 'change')) return;
+    justReached[id] = { reachedAt: p.reachedAt || null, status: p.status || 'to-contact' };
+    const patch = { reachedAt: new Date().toISOString() };
+    if ((p.status || 'to-contact') === 'to-contact') patch.status = 'contacted';
+    Object.assign(p, patch);
+    render();
+    write(id, patch, 'reached out to ' + p.name);
+  };
+  window.prospectReachedUndo = function (id) {
+    const p = people[id], was = justReached[id];
+    if (!p || !was) return;
+    delete justReached[id];
+    const patch = { reachedAt: was.reachedAt, status: was.status };
+    Object.assign(p, patch);
+    render();
+    write(id, patch, 'undoing reached out for ' + p.name);
+  };
+  // From the outreach list to their card below: the list is searched for
+  // them (and shows everyone), so the card is there whatever was filtered.
+  window.findProspect = function (id) {
+    const p = people[id];
+    if (!p) return;
+    const s = el('ppSearch'), st = el('ppFilterStatus'), sv = el('ppFilterSvc');
+    if (s) s.value = p.name || '';
+    if (st) st.value = '';
+    if (sv) sv.value = '';
+    notesOpen[id] = true;
+    render();
+    const card = el('ppCard_' + safeIdOf(id));
+    if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+
   // ------------------------------------------------------------ the tag field
   //
   // Same shape as the Job tab's service tags, and deliberately the same list.
@@ -138,6 +342,9 @@
   // ------------------------------------------------------------------ the list
 
   function render() {
+    renderOutreach();
+    // The calendar's outreach day says how many are due (calendar.js).
+    if (outreachLoaded && validDay(outreach.startDate)) tellOutreach();
     const wrap = el('ppWrap');
     if (!wrap) return;
 
@@ -193,7 +400,7 @@
     // Anything with a status this version does not know about is drawn as not
     // yet contacted, rather than printing the word "undefined" at someone.
     const status = STATUSES[p.status] ? p.status : 'to-contact';
-    return '<div class="pp' + (isClosed(p) ? ' pp-closed' : '') + '">' +
+    return '<div class="pp' + (isClosed(p) ? ' pp-closed' : '') + '" id="ppCard_' + safeIdOf(p.id) + '">' +
       '<div class="pp-top">' +
         '<span class="pp-name">' + esc(p.name || '(no name)') + '</span>' +
         (p.contactWhen ? '<span class="pp-when">' + esc(p.contactWhen) + '</span>' : '') +
@@ -204,6 +411,8 @@
         ? '<div class="pp-svc">' + svc.map(s => '<span class="svc-tag">' + esc(s) + '</span>').join('') + '</div>'
         : '') +
       (p.note ? '<div class="pp-note">' + esc(p.note) + '</div>' : '') +
+      (p.reachedAt && !isNaN(new Date(p.reachedAt))
+        ? '<div class="pp-reached">✓ Last reached ' + esc(new Date(p.reachedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })) + '</div>' : '') +
       contactLine(p) +
       meetingsHtml(p) +
       '<div class="pp-act">' +
@@ -282,7 +491,7 @@
       if (!again) patch.note = [String(match.note || '').trim(), line].filter(Boolean).join('\n');
       // Someone who said "not interested" stays that way; anyone else is to call.
       if (match.status !== 'no') patch.status = 'to-contact';
-      if (!String(match.contactWhen || '').trim()) patch.contactWhen = nextSpring(now);
+      if (!String(match.contactWhen || '').trim()) { patch.contactWhen = nextSpring(now); patch.whenSetAt = now.toISOString(); }
       // Fill in what the contact was missing; never overwrite what is there.
       [['phone', String(j.phone || '').trim()], ['email', email], ['address', address]].forEach(([k, v]) => {
         if (v && !String(match[k] || '').trim()) patch[k] = v;
@@ -293,7 +502,7 @@
         : (typeof splitName === 'function' ? splitName(name) : { first: '', last: '', business: name });
       patch = {
         name: name, firstName: nm.first || '', lastName: nm.last || '', business: nm.business || '',
-        services: services, contactWhen: nextSpring(now), note: line, address: address,
+        services: services, contactWhen: nextSpring(now), whenSetAt: now.toISOString(), note: line, address: address,
         phone: String(j.phone || '').trim(), email: email, status: 'to-contact',
         addedAt: now.toISOString(), declined: [entry],
       };
@@ -344,8 +553,9 @@
     const meetings = (p.meetings || []).concat([{ at: new Date().toISOString(), text: text }]);
     p.meetings = meetings;
     delete drafts[id];
-    // A note means they were talked to.
-    const patch = { meetings: meetings };
+    // A note means they were talked to -- reached, for next season's outreach.
+    const patch = { meetings: meetings, reachedAt: new Date().toISOString() };
+    p.reachedAt = patch.reachedAt;
     if ((p.status || 'to-contact') === 'to-contact') { p.status = 'contacted'; patch.status = 'contacted'; }
     render();
     write(id, patch, 'a note for ' + p.name);
@@ -416,6 +626,10 @@
       addedAt: (was && was.addedAt) || new Date().toISOString(),
     };
 
+    // A new time to call is a new reason to call: reached before it, they
+    // come up again when it arrives (isDue).
+    if (String((was && was.contactWhen) || '') !== rec.contactWhen) rec.whenSetAt = new Date().toISOString();
+
     const wasEdit = !!editingId;
     // Merged over what was there: the save only writes these fields, so a
     // contact's declined bids and notes stay, here as in the database.
@@ -449,9 +663,15 @@
 
   window.setProspectStatus = function (id, status) {
     if (!people[id]) return;
-    people[id].status = status;
+    const patch = { status: status };
+    // Contacted or Quoted: they were reached, so they come off "Time to
+    // reach out"; To contact puts them back on it.
+    if (status === 'contacted' || status === 'quoted') patch.reachedAt = new Date().toISOString();
+    else if (status === 'to-contact') patch.reachedAt = null;
+    Object.assign(people[id], patch);
+    delete justReached[id];
     render();
-    write(id, { status: status }, 'status for ' + people[id].name);
+    write(id, patch, 'status for ' + people[id].name);
   };
 
   window.removeProspect = function (id) {
@@ -578,7 +798,35 @@
     });
   }
 
-  window.YDProspects = { all: () => people, render: render, whenKey: whenKey, fromLostBid: fromLostBid };
+  // The outreach date lives in settings/outreach, which only the owner
+  // reads (the rules: every settings record but a few is the owner's).
+  let unsubOut = null;
+  function startOutreach() {
+    if (unsubOut || !window.YDDb || !ownsOutreach()) return;
+    unsubOut = window.YDDb.watch('settings', (changes, meta) => {
+      // Every settings record comes through here; only one is this.
+      let ours = false;
+      changes.forEach(c => {
+        if (c.id !== 'outreach') return;
+        ours = true;
+        const d = c.type === 'removed' ? {} : (c.data || {});
+        outreach = { startDate: validDay(d.startDate) ? d.startDate : '' };
+      });
+      const first = !outreachLoaded && (ours || (meta && meta.fromCache === false));
+      if (first) outreachLoaded = true;
+      if (ours || first) { renderOutreach(); tellOutreach(); }
+    }, () => {});
+  }
+  function stopOutreach() {
+    if (unsubOut) { try { unsubOut(); } catch (e) {} }
+    unsubOut = null; outreach = { startDate: '' }; outreachLoaded = false; outreachEditing = false;
+    renderOutreach(); tellOutreach();
+  }
+
+  window.YDProspects = { all: () => people, render: render, whenKey: whenKey, fromLostBid: fromLostBid,
+    // For the calendar: the day outreach starts, and how many are due on a day.
+    outreach: () => (ownsOutreach() && outreachLoaded && validDay(outreach.startDate)
+      ? { start: outreach.startDate, due: day => dueList(day).length } : null) };
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
@@ -599,6 +847,7 @@
       if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('home');
     }
 
+    if (owner && ownsOutreach()) startOutreach(); else if (unsubOut) stopOutreach();
     if (owner) start();
     else if (unsub) {
       // Access taken away (or signed out): stop listening and drop the list.

@@ -66,7 +66,15 @@
     // Blue, as every crew task is (remind.js, Jonah 12 Oct).
     'auto:recurring': { id: 'auto:recurring', name: 'Recurring crew tasks', color: '#2f6fd6', auto: true,
                         about: 'Recurring crew tasks, from the Crew tasks board' },
+    // Jonah (14 Oct 2026): the day to start reaching out to people for next
+    // season's work -- worked out from the date on the Contacts tab
+    // (prospects.js), never stored as an entry, so moving the date moves it.
+    // The owner's alone (only he can read the date).
+    'auto:outreach': { id: 'auto:outreach', name: 'Next season outreach', color: '#2f8f5b', auto: true,
+                       about: 'The start date on the Contacts tab' },
   };
+  // {start: 'YYYY-MM-DD', due(day)} once the owner has set the date, else null.
+  const outreachInfo = () => (window.YDProspects && YDProspects.outreach ? YDProspects.outreach() : null);
 
   const PALETTE = ['#2f6fd6', '#1a9c8c', '#2f8f5b', '#8bb22a', '#e0a526',
                    '#e07b24', '#d64545', '#d94f8a', '#8e5bc7', '#66418f', '#6b7a8f'];
@@ -199,7 +207,8 @@
   }
   function layers() {
     const auto = Object.values(AUTO).filter(l => (!l.ownerOnly || ydCan('equipment', 'see')) &&
-      (l.id !== 'auto:recurring' || (window.YDRecurring && YDRecurring.visible())));
+      (l.id !== 'auto:recurring' || (window.YDRecurring && YDRecurring.visible())) &&
+      (l.id !== 'auto:outreach' || !!outreachInfo()));
     return storedCals().concat(auto);
   }
   function layerOf(id) { return cals[id] || AUTO[id] || null; }
@@ -322,6 +331,16 @@
           title: '🔁 ' + x.what, note: 'Crew tasks', type: 'crew', task: true,
           color: YDRemind.color('crew') });
       });
+    }
+
+    // His own reminder, so "Only mine" keeps it.
+    const oi = outreachInfo();
+    if (oi && !off('auto:outreach') && oi.start >= from && oi.start <= to) {
+      const n = oi.due(oi.start);
+      // Shown done once the day has come and nobody is left to reach.
+      out.push({ day: oi.start, layer: AUTO['auto:outreach'], auto: 'outreach', id: 'outreach', done: !n && oi.start <= today(),
+        title: '📞 Start reaching out for next season', name: 'Start reaching out for next season',
+        note: n ? n + (n === 1 ? ' person' : ' people') + ' to reach — Contacts' : 'Contacts tab' });
     }
 
     // All-day first, then by time, then by calendar, so a day reads top to
@@ -620,7 +639,7 @@
   let pushState = '';       // this phone's notifications (notify.js); '' until asked
   function occIsMine(o, w) {
     if (o.auto === 'storm') return true;                       // a storm is everybody's
-    if (o.auto === 'equipment') return !!w.owner;
+    if (o.auto === 'equipment' || o.auto === 'outreach') return !!w.owner;
     if (o.auto === 'card' || o.auto === 'recurring') {
       const boardId = o.auto === 'card' ? o.boardId : 'crew';
       const b = (YDBoards.boards() || {})[boardId] || { id: boardId };
@@ -1093,6 +1112,12 @@
     switchTab('equipment');
     if (window.openEquipment) openEquipment(id);
   };
+  // The outreach day: the list of who is due, at the top of Contacts.
+  window.calOpenOutreach = function () {
+    switchTab('contacts');
+    const s = el('ppOutSection');
+    if (s) s.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
   window.calOpenCard = function (boardId, cardId) {
     switchTab('boards');
     if (window.showBoard) showBoard(boardId);
@@ -1110,6 +1135,7 @@
     if (o.auto === 'storm') return calOpenStorm();
     if (o.auto === 'equipment') return calOpenEquipment(o.id);
     if (o.auto === 'card') return calOpenCard(o.boardId, o.id);
+    if (o.auto === 'outreach') return calOpenOutreach();
     // A recurring task: its card when this date's has been made, otherwise
     // the Crew tasks board.
     if (o.auto === 'recurring') {
@@ -2455,6 +2481,8 @@
   // name), only the editor's job list, which is built as it opens.
   document.addEventListener('yd-cards-changed', redrawIfVisible);
   document.addEventListener('yd-boards-changed', redrawIfVisible);
+  // The outreach date set or moved, or who is due changed (prospects.js).
+  document.addEventListener('yd-outreach', redrawIfVisible);
   // This person's own record has come in (remind.js): whether they are crew,
   // and so what My day holds, follows it.
   document.addEventListener('yd-remind-me', redrawIfVisible);

@@ -242,6 +242,28 @@
   .pp-act { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:11px; }
   .pp-act select { max-width:150px; font-size:12px; padding:5px 8px; }
   .pp-act .remove-btn { margin-left:auto; }
+  /* Next season's outreach (prospects.js, 14 Oct): the start date, then who is due */
+  .pp-out-q { font-size:14px; margin-bottom:8px; }
+  .pp-out-when { font-size:14px; margin-bottom:8px; }
+  .pp-out-soon { font-size:13px; }
+  .pp-out-edit { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
+  .pp-out-edit input[type=date] { width:auto; font-size:16px; }
+  #ppOutWrap .link-btn { background:none; border:0; padding:0 2px; color:var(--brand); font:inherit; font-size:13px; text-decoration:underline; cursor:pointer; }
+  .pp-out-row { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--border); }
+  .pp-out-row.done { opacity:.6; }
+  .pp-out-row.done .pp-out-name { text-decoration:line-through; }
+  .pp-out-main { flex:1; min-width:0; }
+  .pp-out-name { background:none; border:0; padding:0; font:inherit; font-size:15.5px; font-weight:700; color:inherit; cursor:pointer; text-align:left; }
+  .pp-out-name:hover { text-decoration:underline; }
+  .pp-out-note { font-size:13px; color:var(--muted); margin-top:5px; overflow-wrap:anywhere; }
+  .pp-out-act { display:flex; flex-direction:column; align-items:flex-end; gap:4px; flex:0 0 auto; }
+  .pp-out-did { font-size:12px; font-weight:700; color:var(--pos); }
+  .pp-reached { font-size:12px; color:var(--pos); margin-top:6px; font-weight:600; }
+  @media (max-width:720px) {
+    .pp-out-row { flex-direction:column; }
+    .pp-out-act { flex-direction:row; align-items:center; align-self:stretch; }
+    .pp-out-act .btn { flex:1; }
+  }
 
   /* ---- Time clock ------------------------------------------------------- */
   /* Everything here is sized to be hit with a glove on, in the dark, one

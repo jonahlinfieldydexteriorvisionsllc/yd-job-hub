@@ -1126,6 +1126,10 @@ def build(slot, user, people, wx, cache):
             waiting, "" if waiting == 1 else "s")}]))
         push_bits.append("%d receipt%s to sort" % (waiting, "" if waiting == 1 else "s"))
 
+    # ---- next season's outreach (the owner's morning; outreach.py)
+    import outreach
+    outreach.add_to_summary(slot, owner, today, sections, push_bits)
+
     # ---- the weather tables: every town, and each job site being worked.
     # Crew see the sites they are on; whoever may see jobs sees them all.
     sites = [x for x in cache.get("sites") or [] if sees("jobs") or uid in x["uids"]]
