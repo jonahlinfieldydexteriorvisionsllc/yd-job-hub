@@ -413,6 +413,14 @@ GEO_VERSION = "2"
 
 
 def _job_point(job_id, j):
+    g = _job_geo(job_id, j)
+    return (g["lat"], g["lng"]) if g else None
+
+
+def _job_geo(job_id, j):
+    """{lat, lng, zip} for a job's address, or None. `zip` is the one the
+    Census has for the street (None when only OpenStreetMap found it): the
+    estimate checks the ZIP typed on the job against it before sending."""
     street = (j.get("address") or "").strip()
     city = (j.get("city") or "").strip()
     zip_ = (j.get("zip") or "").strip()
@@ -423,8 +431,9 @@ def _job_point(job_id, j):
     snap = ref.get()
     if snap.exists:
         g = snap.to_dict() or {}
-        if g.get("key") == key:
-            return (g["lat"], g["lng"]) if g.get("found") else None
+        # A point found before the ZIP was kept is looked up once more.
+        if g.get("key") == key and (not g.get("found") or "zip" in g):
+            return {"lat": g["lat"], "lng": g["lng"], "zip": g.get("zip")} if g.get("found") else None
     # The Census first, OpenStreetMap after (geo.py): OpenStreetMap alone
     # missed rural fire-number addresses.
     import geo
@@ -433,10 +442,10 @@ def _job_point(job_id, j):
     except Exception as e:              # noqa: BLE001
         print("digest: job address lookup failed:", job_id, e)
         return None                     # no answer is not "not found": try again next time
-    found = (hit["lat"], hit["lng"]) if hit else None
-    ref.set({"key": key, "found": bool(found), "lat": found[0] if found else None,
-             "lng": found[1] if found else None, "at": _now().isoformat()})
-    return found
+    zip_found = str(hit.get("zip") or "")[:5] if hit and hit.get("source") == "census" else ""
+    ref.set({"key": key, "found": bool(hit), "lat": hit["lat"] if hit else None,
+             "lng": hit["lng"] if hit else None, "zip": zip_found or None, "at": _now().isoformat()})
+    return {"lat": hit["lat"], "lng": hit["lng"], "zip": zip_found or None} if hit else None
 
 
 def job_sites(day, items, jobs):

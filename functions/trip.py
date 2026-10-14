@@ -134,9 +134,11 @@ def trip(d):
     shop, why = _shop_point()
     if not shop:
         return {"error": "Can't work out miles: " + why, "fuel": fuel}
-    point, approx = None, False
+    point, approx, zip_found = None, False, None
     if street and job_id and "/" not in job_id:
-        point = dg._job_point(job_id, {"address": street, "city": town, "zip": zip_})
+        g = dg._job_geo(job_id, {"address": street, "city": town, "zip": zip_})
+        if g:
+            point, zip_found = (g["lat"], g["lng"]), g.get("zip")
     if not point:
         point, approx = _town_point(town, zip_), True
     if not point:
@@ -156,4 +158,8 @@ def trip(d):
     # priced west / central / east).
     if not approx:
         out["point"] = [round(point[0], 5), round(point[1], 5)]
+        # The ZIP the map has for the street; the estimate warns when the
+        # one typed on the job differs.
+        if zip_found:
+            out["zip"] = zip_found
     return out

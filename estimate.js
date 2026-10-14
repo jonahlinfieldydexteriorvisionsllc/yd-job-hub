@@ -196,8 +196,11 @@
       o.off = Object.assign({}, e.off || {});
       // Where the job is on the map (from the miles lookup), for a town MDS
       // prices by zone; `at` is the address it was found for.
+      // `zip` is the ZIP the map has for the address (checked before sending),
+      // `zipOk` a typed ZIP he chose to keep anyway.
       o.site = e.site && typeof e.site.lat === 'number' && typeof e.site.lng === 'number'
-        ? { lat: e.site.lat, lng: e.site.lng, at: String(e.site.at || '') } : null;
+        ? { lat: e.site.lat, lng: e.site.lng, at: String(e.site.at || ''),
+            zip: e.site.zip ? String(e.site.zip) : null, zipOk: e.site.zipOk ? String(e.site.zipOk) : null } : null;
     } else {
       if (!o.notes && e.ask) o.notes = String(e.ask);
       let heading = '';
@@ -766,8 +769,25 @@
   window.estToggleCustomer = function () { showCustomer = !showCustomer; render(); };
   function siteLine() {
     const f = id => (el(id) && el(id).value || '').trim();
-    return [f('address'), [f('city'), f('state')].filter(Boolean).join(', ') + (f('zip') ? ' ' + f('zip') : '')]
+    return [tidyCase(f('address')), [tidyCase(f('city')), stateWord(f('state'))].filter(Boolean).join(', ') + (f('zip') ? ' ' + f('zip') : '')]
       .filter(s => s.trim()).join(', ');
+  }
+  // An address typed all in small letters ("123 main st") reads properly
+  // on the estimate ("123 Main St"). Anything with a capital in it is left
+  // exactly as typed.
+  function tidyCase(s) {
+    s = String(s || '').trim();
+    if (!s || s !== s.toLowerCase()) return s;
+    return s.replace(/(^|[\s,\-\/(])([a-z])/g, (m, before, letter) => before + letter.toUpperCase());
+  }
+  const stateWord = s => /^[a-z]{2}$/i.test(String(s || '').trim()) ? String(s).trim().toUpperCase() : tidyCase(s);
+  // A scope often starts with its line's own title, which the estimate
+  // already shows as the line's heading -- once is enough.
+  function scopeBody(w) {
+    const scope = String(w.scope || '').trim();
+    const words = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const first = scope.split('\n')[0];
+    return words(w.title) && words(first) === words(w.title) ? scope.slice(first.length).trim() : scope;
   }
   // The materials as the customer reads them: one line, or two when some
   // are taxed and some are not (planting materials on a patio job) -- each
@@ -786,7 +806,7 @@
     if (!box) return;
     if (!showCustomer || !r) { box.innerHTML = ''; return; }
     const site = siteLine();
-    const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents }))
+    const work = est.work.map((w, i) => ({ title: w.title || '', scope: scopeBody(w), cents: r.work[i].cents }))
       .filter(w => w.cents > 0 || w.scope.trim());
     const rows = work.map((w, i) => '<div class="cv-line"><div class="cv-text">' +
         (w.title ? '<b>' + esc(w.title.toUpperCase()) + '</b>' : '') +
@@ -1067,7 +1087,7 @@
     const r = last || priced();
     const pays = P() ? P().payments(totalCents, rules, { plan: est.payments,
       materialsCents: r ? r.materialsCents + ((r.tax && r.tax.materialsTaxCents) || 0) : 0 }) : [];
-    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms].filter(Boolean).join('\n\n');
+    return [payWords(pays), terms].filter(Boolean).join('\n\n');
   }
 
   window.estInvoice = async function (email) {
@@ -1145,10 +1165,31 @@
     }
   };
 
-  // The message when he has not written one: the payments asked for (the
-  // deposit and each one, in dollars) and his payment terms. The warranty is
-  // a QuickBooks product at the end of the estimate (P().endItems(whoFor())); until
-  // that list has anything on it, the old warranty sentence stays here.
+  // The payments as the customer reads them. QuickBooks keeps this message as
+  // plain text and never re-works it, so it holds nothing that a change to
+  // the total can make wrong: each payment is its share of the total, or an
+  // amount he typed himself, and the last is "the remaining balance" -- so the
+  // payments always add up to whatever the total is. (14 Oct 2026: #1677's
+  // price was raised by hand in QuickBooks and went out with a deposit and a
+  // final payment that added up to the old total.)
+  function pctWords(p) {
+    return (Math.round(p * 10) % 10 ? (Math.round(p * 10) / 10).toFixed(1) : String(Math.round(p))) + '%';
+  }
+  function payWords(pays) {
+    return (pays || []).map(x => {
+      const name = x.name || String(x.label || '').replace(/\s*\(\d+%\)$/, '');
+      if (x.how === 'all') return name + ': the full total';
+      if (x.how === 'rest') return name + ': the remaining balance';
+      if (x.how === 'amount') return name + ': ' + cents(x.cents);
+      if (typeof x.pct === 'number') return name + ': ' + pctWords(x.pct) + ' of the total';
+      return '';
+    }).filter(Boolean).join('\n');
+  }
+
+  // The message when he has not written one: the payments asked for and his
+  // payment terms. The warranty is a QuickBooks product at the end of the
+  // estimate (P().endItems(whoFor())); until that list has anything on it,
+  // the old warranty sentence stays here.
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
     const above = num(p.splitAboveCents);
@@ -1156,7 +1197,7 @@
     const r = last;
     const pays = r && r.totalCents === totalCents ? r.payments || [] : [];
     const warranty = P() && P().endItems(whoFor()).length ? '' : p.warranty;
-    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms, warranty]
+    return [payWords(pays), terms, warranty]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
 
@@ -1957,6 +1998,29 @@
   function siteKey() {
     return ['address', 'city', 'zip'].map(f => (el(f) && el(f).value || '').trim().toLowerCase()).join('|');
   }
+  // The ZIP typed on the job is not the one the map has for its address
+  // (14 Oct 2026: an estimate went out with the wrong ZIP on it).
+  function zipWrong() {
+    const s = est.site, typed = (el('zip') && el('zip').value || '').trim();
+    return !!(s && s.zip && s.at === siteKey() && typed.slice(0, 5) !== s.zip && s.zipOk !== typed);
+  }
+  // Before anything goes to QuickBooks: fix the ZIP, or keep it on purpose.
+  function zipChecked() {
+    if (!zipWrong()) return true;
+    const s = est.site, typed = (el('zip').value || '').trim();
+    const where = [tidyCase(el('address').value), tidyCase(el('city').value)].filter(Boolean).join(', ');
+    if (confirm('The ZIP on this job is ' + (typed || 'empty') + ', but the map has ' + where + ' in ' + s.zip +
+      '.\n\nChange the job’s ZIP to ' + s.zip + '?')) {
+      el('zip').value = s.zip;
+      el('zip').dispatchEvent(new Event('input', { bubbles: true }));
+      if (typeof markDirty === 'function') markDirty();
+      s.at = siteKey();               // the same place on the map, under the corrected address
+      return true;
+    }
+    if (!confirm('Send it with ZIP ' + (typed || '(none)') + ' as typed?')) return false;
+    s.zipOk = typed;
+    return true;
+  }
   // A town MDS delivers to by zone (Madison) needs the job's map point too.
   function zonedTown() {
     const r = P() && P().rules(), rates = (r && r.delivery && r.delivery.rates) || {};
@@ -1990,7 +2054,8 @@
       });
       if (currentJobId !== jobId) return;
       if (Array.isArray(r.point) && typeof r.point[0] === 'number' && typeof r.point[1] === 'number') {
-        est.site = { lat: r.point[0], lng: r.point[1], at: key };
+        est.site = { lat: r.point[0], lng: r.point[1], at: key, zip: /^\d{5}/.test(String(r.zip || '')) ? String(r.zip).slice(0, 5) : null, zipOk: null };
+        if (zipWrong()) showToast('Check the ZIP: the map has this address in ' + est.site.zip, 6000);
       }
       if (num(r.miles) !== null) {
         // Miles typed by hand stay; only an empty box is filled.
@@ -2076,6 +2141,7 @@
     if (!r || !(r.totalCents > 0)) return;
     if (r.problems.length && !confirm('Some of this isn’t priced yet:\n\n• ' + r.problems.slice(0, 8).join('\n• ') +
       '\n\nSend it anyway?')) return;
+    if (!zipChecked()) return;
     const f = id => (el(id).value || '').trim();
     if (!f('customerName')) { showToast('Add a customer name first'); return; }
     const to = f('email');
@@ -2103,15 +2169,15 @@
     try {
       // Each line taxed or not (pricing.js salesTax): QuickBooks works out the
       // tax on the taxed ones from the job's address.
-      const work = est.work.map((w, i) => ({ title: w.title || '', scope: w.scope || '', cents: r.work[i].cents, qbItem: w.qbItem || '',
+      const work = est.work.map((w, i) => ({ title: w.title || '', scope: scopeBody(w), cents: r.work[i].cents, qbItem: w.qbItem || '',
                                              taxable: !!r.work[i].taxed }))
         .filter(w => w.cents > 0 || w.scope.trim());
       const parts = materialParts(r, work);
       const out = await askQb('/qb/estimate', {
         jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
         estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
-        customer: { name: f('customerName'), email: to, phone: f('phone'), address: f('address'),
-                    city: f('city'), state: f('state'), zip: f('zip') },
+        customer: { name: f('customerName'), email: to, phone: f('phone'), address: tidyCase(f('address')),
+                    city: tidyCase(f('city')), state: stateWord(f('state')), zip: f('zip') },
         site: site,
         work: work,
         materialParts: parts.map(m => ({ head: m.head, list: m.list, cents: m.cents, taxable: m.taxed })),

@@ -564,7 +564,21 @@
       c = Math.max(0, Math.min(c, left));
       left -= c;
       const pctNow = Math.round(c / totalCents * 100);
-      return { label: String(s.label || (i === 0 ? 'Deposit' : last ? 'Final' : 'Payment')) + ' (' + pctNow + '%)',
+      const name = String(s.label || (i === 0 ? 'Deposit' : last ? 'Final' : 'Payment'));
+      // How the payment is worded for the customer (see payWords): a share
+      // of the total, an amount he typed, or the rest -- never a dollar
+      // figure worked out from the total, which goes wrong the moment the
+      // total is changed in QuickBooks by hand.
+      const how = plan.length === 1 ? 'all'
+        : last || s.how === 'rest' ? 'rest'
+        : raised === 'materials' ? 'pct'
+        : raised === 'minimum' ? 'pct'
+        : s.how === 'amount' ? 'amount' : 'pct';
+      const pct = how !== 'pct' ? null
+        : raised === 'minimum' ? floor.minPct
+        : raised === 'materials' ? Math.ceil(c / totalCents * 1000 - 1e-6) / 10   // up to a tenth: still covers the materials
+        : num(s.value) !== null ? num(s.value) : pctNow;
+      return { label: name + ' (' + pctNow + '%)', name: name, how: how, pct: pct,
                cents: c, raised: raised, minPct: i === 0 ? floor.minPct : null };
     });
   }
