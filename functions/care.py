@@ -77,6 +77,86 @@ def plants_of(j):
     return out
 
 
+def supply_plants(j, get_item=None):
+    """[(name, qty, '')] for plants on the estimate picked from Supplies (an
+    item of the Plants kind) or set as that kind, rather than added with
+    "+ Plant" -- the app counts those as plants too (plantcare.js), so the
+    email covers them. `get_item(id)` reads a Supplies item (tests pass a
+    fake); one read per such line."""
+    if get_item is None:
+        def get_item(sid):
+            snap = dg._db().collection("supplies").document(sid).get()
+            return snap.to_dict() if snap.exists else None
+    out = []
+    for m in ((j.get("estimate") or {}).get("materials") or []):
+        if not isinstance(m, dict) or m.get("plant"):
+            continue
+        it = None
+        sid = str(m.get("supplyId") or "").strip()
+        if sid and "/" not in sid:
+            try:
+                it = get_item(sid) or None
+            except Exception as e:      # noqa: BLE001 -- the "+ Plant" lines still go
+                print("care: supply not read:", sid, e)
+        # The item's kind, else the line's own -- as the app prices it.
+        kind = str((it or {}).get("category") or m.get("category") or "")
+        if kind.strip().lower() not in ("plant", "plants"):
+            continue
+        name = str(m.get("name") or (it or {}).get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            qty = float(m.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        out.append((name[:120], qty, ""))
+    return out
+
+
+def is_owed(j):
+    """A finished job with plants whose care email is still owed (the app's
+    plantcare.js says the same): marked Complete since care emails were
+    tracked (`completedAt`), not drafted by Claude (`careEmail`), not settled
+    by hand (`careDone`: sent it himself, or not needed). Whether it has plants
+    is the app's own answer, saved on the job (`hasPlants`, his Yes / No
+    included); a job saved before that existed falls back to its estimate's
+    plants."""
+    if (j.get("jobStatus") or "") != "complete" or not j.get("completedAt"):
+        return False
+    done = j.get("careDone")
+    if j.get("careEmail") or (isinstance(done, dict) and done.get("how")):
+        return False
+    has = j.get("hasPlants")
+    if isinstance(has, bool):
+        return has
+    if j.get("plants") in ("yes", "no"):
+        return j.get("plants") == "yes"
+    return bool(plants_of(j))
+
+
+def owed(jobs):
+    """[(name, job #, finished ISO)] for the owner's summary, oldest first."""
+    out = []
+    for j in (jobs or {}).values():
+        if isinstance(j, dict) and is_owed(j):
+            out.append((str(j.get("customerName") or "A job").strip() or "A job",
+                        str(j.get("estimateNumber") or "").strip(), str(j.get("completedAt"))))
+    return sorted(out, key=lambda x: x[2])
+
+
+SUMMARY_MAX = 6     # jobs named in the summary; the rest are counted
+
+
+def summary_lines(owed_list, day_of):
+    """The summary's lines for owed care emails. `day_of(iso)` gives "Oct 12"."""
+    lines = [{"text": "🌱 %s%s — finished %s" % (n, (" #" + num) if num else "", day_of(at))}
+             for n, num, at in owed_list[:SUMMARY_MAX]]
+    if len(owed_list) > SUMMARY_MAX:
+        lines.append({"text": "…and %d more" % (len(owed_list) - SUMMARY_MAX)})
+    lines.append({"text": "Open the job to have Claude write it, or mark it sent or not needed."})
+    return lines
+
+
 def _warranty():
     try:
         rules = dg._db().collection("pricing").document("rules").get().to_dict() or {}
@@ -119,7 +199,7 @@ def draft(client, job_id, auto=False):
     if not snap.exists:
         return {"error": "That job was not found"}, None
     j = snap.to_dict() or {}
-    plants = plants_of(j)
+    plants = plants_of(j) + supply_plants(j)
     if not plants:
         return {"error": "There are no plants on this job's estimate"}, None
     to = (j.get("email") or "").strip()

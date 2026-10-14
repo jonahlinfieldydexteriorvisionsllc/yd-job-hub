@@ -755,6 +755,32 @@ def _office(jobs):
             "toOrder": sorted(to_order)}
 
 
+def _care_owed(jobs):
+    """Finished jobs with plants still owing their care email (care.py) --
+    Jonah, 14 Oct 2026. A summary without this beats no summary."""
+    try:
+        import care     # here, not at the top: care.py imports this module
+        return care.owed(jobs)
+    except Exception as e:      # noqa: BLE001
+        print("digest: plant-care emails owed not worked out:", e)
+        return []
+
+
+def _care_section(owed, sections, push_bits):
+    """The owner's "Plant-care emails owed" lines, and a word in the push."""
+    import care
+
+    def day_of(iso):
+        try:
+            t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+        except ValueError:
+            return "recently"
+        t = (t if t.tzinfo else t.replace(tzinfo=TZ)).astimezone(TZ)
+        return t.strftime("%b ") + str(t.day)
+    sections.append(("Plant-care emails owed", care.summary_lines(owed, day_of)))
+    push_bits.append("%d care email%s owed" % (len(owed), "" if len(owed) == 1 else "s"))
+
+
 def _bids(jobs=None):
     """Bids that need chasing: quoting jobs whose stage has sat long enough."""
     now = datetime.datetime.now(datetime.timezone.utc)
@@ -1088,6 +1114,10 @@ def build(slot, user, people, wx, cache):
             push_bits.append("%d estimate%s accepted" % (len(office["accepted"]), "" if len(office["accepted"]) == 1 else "s"))
         if office.get("drafts"):
             push_bits.append("%d draft%s to check" % (len(office["drafts"]), "" if len(office["drafts"]) == 1 else "s"))
+
+    # ---- plant-care emails still owed on finished jobs (the owner's alone)
+    if owner and slot in ("morning", "evening") and cache.get("careOwed"):
+        _care_section(cache["careOwed"], sections, push_bits)
 
     # ---- receipts waiting to be put on a job (whoever may change jobs sorts them)
     waiting = cache.get("receipts") or 0
@@ -1453,6 +1483,7 @@ def _cache(slot="morning", people=None):
         "storms": _storms(),
         "bids": _bids(jobs),
         "office": _office(jobs),
+        "careOwed": _care_owed(jobs),
         "recurring": _recurring_overdue(today),
         "shifts": _shifts(),
         "receipts": _receipts_to_sort(),

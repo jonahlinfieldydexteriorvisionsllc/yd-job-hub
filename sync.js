@@ -99,6 +99,9 @@
       const list = bookedOrderItems(id, data);
       if (list) patch = Object.assign({}, patch, { orderItems: list });
     }
+    // When a job was finished, and whether it has plants (plantcare.js): on
+    // the patch, so a form open with typing in it carries them too.
+    if (window.YDPlants) patch = Object.assign({}, patch, window.YDPlants.patchExtras(data, patch));
     // A job finished from anywhere: its plant-care email (estimate.js).
     const finished = patch.jobStatus === 'complete' && data.jobStatus !== 'complete';
     Object.assign(data, patch, { lastModified: new Date().toISOString() });

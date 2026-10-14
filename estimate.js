@@ -148,6 +148,9 @@
     // pricing.js price() with the same Supplies, rules and price book --
     // never a second copy of the sums. null before pricing.js is there.
     priceSaved: (saved, city) => (P() ? P().price(fromSaved(saved || {}), ctx(city == null ? '' : city)) : null),
+    // The plant-care line under QuickBooks, after the job's plants or its
+    // care email were settled on the Job tab (plantcare.js).
+    redrawCare: () => renderQb(),
   };
 
   // What the estimate cost us, as it stood when it went to QuickBooks: kept
@@ -1001,16 +1004,27 @@
   // reads it and sends it (his answer: show me first). "Write it now" does
   // the same by hand. Switched off in Pricing rules → Claude.
   const plantsIn = e => ((e && e.materials) || []).filter(m => m && m.plant && String(m.name || '').trim());
+  // The plants on an estimate Claude can write about: its "+ Plant" lines,
+  // and Plants items picked from Supplies (plantcare.js; care.py reads both).
+  const carePlants = e => (window.YDPlants ? window.YDPlants.found({ estimate: e }).estPlants : plantsIn(e).length);
   const careBusy = {};        // job id -> being written
   function careOn() { return !!(P() && P().rules().autoCare !== false); }
   function careHtml(when) {
-    const plants = plantsIn(est);
-    if (!plants.length || !changes()) return '';
+    const plants = carePlants(est);
+    if (!plants || !changes()) return '';
     const c = (typeof boardFields !== 'undefined' && boardFields.careEmail) || null;
+    // Settled by hand, or the job set to "No plants" on the Job tab (plantcare.js).
+    const done = (typeof boardFields !== 'undefined' && boardFields.careDone) || null;
+    const setNo = el('plants') && el('plants').value === 'no';
+    const count = plants + ' plant' + (plants === 1 ? '' : 's') + ' on this job. ';
     return '<div class="est-care">🌱 ' + (c
         ? 'Plant-care email drafted ' + esc(when(c.at)) + ' — in your Gmail Drafts to read and send.'
-        : plants.length + ' plant' + (plants.length === 1 ? '' : 's') + ' on this job. ' +
-          (careOn() ? 'When it’s marked Complete, ' : 'Press the button and ') + 'Claude drafts a care email for them into your Gmail Drafts.') +
+        : done && done.how === 'self' ? count + 'You sent the care email yourself.'
+        : done && done.how === 'notNeeded' ? count + 'Marked: no care email needed.'
+        : setNo ? count + 'The job is set to “No plants”, so no care email is asked for when it’s finished.'
+        : typeof jobStatus !== 'undefined' && jobStatus === 'complete' && typeof boardFields !== 'undefined' && boardFields.completedAt
+          ? count + 'The job is finished and its care email is owed — press the button and Claude drafts it into your Gmail Drafts.'
+        : count + (careOn() ? 'When it’s marked Complete, ' : 'Press the button and ') + 'Claude drafts a care email for them into your Gmail Drafts.') +
       ' <button class="btn btn-sm" onclick="estCareEmail()"' + (careBusy[currentJobId] ? ' disabled' : '') + '>' +
         (careBusy[currentJobId] ? 'Writing…' : c ? 'Write it again' : 'Write it now') + '</button></div>';
   }
@@ -1033,15 +1047,39 @@
   window.estCareEmail = function () {
     if (!changes()) return;
     if (!(el('email').value || '').trim()) { showToast('Add the customer’s email on the job first'); return; }
-    if (!currentJobId && typeof autosave === 'function') autosave();
-    if (currentJobId) writeCare(currentJobId, false);
+    // The server reads the job from the database, so what was just typed --
+    // their email, as the owed-email banner asks for -- goes up first (as for
+    // the one asked for on Complete, jobCompleted below).
+    if ((!currentJobId || (typeof dirty !== 'undefined' && dirty)) && typeof autosave === 'function') autosave();
+    const id = currentJobId;
+    if (!id || careBusy[id]) return;
+    Promise.resolve(window.YDSync && window.YDSync.sendNow ? window.YDSync.sendNow(id) : true)
+      .then(sent => {
+        if (sent) writeCare(id, false);
+        else showToast('🌱 The plant-care email waits for a signal — press “Write it now” again later');
+      });
   };
   // A job marked Complete (sync.js patchJob, or the form's status): its care
   // email, once, when it has plants and an email address.
+  //
+  // A job with plants owes one from now on (plantcare.js) -- on the Job tab,
+  // the board and the summaries until it is written or settled by hand. When
+  // Claude can't write it straight away, he is told so here; the toast waits
+  // a moment, or the board's own "moved to ..." would cover it.
   function jobCompleted(jobId, data) {
-    if (!careOn() || !changes() || !data || data.careEmail) return;
-    if (!plantsIn(data.estimate).length || !/@/.test(String(data.email || ''))) return;
-    if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) return;
+    if (!changes() || !data || data.careEmail || data.careDone) return;
+    const hasPlants = window.YDPlants ? window.YDPlants.has(data) : plantsIn(data.estimate).length > 0;
+    if (!hasPlants) return;
+    const why = !carePlants(data.estimate) ? 'no plants on its estimate for Claude to write from — send it yourself'
+      : !careOn() ? 'Claude drafts it when you press “Write it now” on the job'
+      : !/@/.test(String(data.email || '')) ? 'add their email to the job, then press “Write it now”'
+      : !window.YDClaude || !window.YDClaude.available() || !navigator.onLine ? 'it waits for a signal — press “Write it now” on the job later'
+      : '';
+    if (why) {
+      const name = String(data.customerName || '').trim() || 'This job';
+      setTimeout(() => showToast('🌱 ' + name + ' is finished and has plants — the care email is owed (' + why + ')', 7000), 0);
+      return;
+    }
     // The server reads the finished job from the database, so the job goes up
     // first and the email is asked for once the server has it. (Called from
     // the middle of patchJob -- the turn after it is when the copy on this

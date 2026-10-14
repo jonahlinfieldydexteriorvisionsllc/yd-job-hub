@@ -2690,3 +2690,34 @@
   /* Sorting by the column headings on a wide screen; a picker on a phone */
   .eva-sort-pick { display:none; }
   @media (max-width:720px) { .eva-sort-pick { display:block; } }
+  /* Jobs with plants, and the plant-care email a finished one owes (plantcare.js) */
+  .section-badge.plants { margin-left:auto; margin-right:8px; background:#2f8f5b; color:#fff; text-transform:none; letter-spacing:.2px; }
+  .section-badge.plants[hidden] { display:none; }
+  .plants-row { display:flex; align-items:center; gap:4px 10px; flex-wrap:wrap; margin-top:8px; }
+  .plants-pick { display:flex; align-items:center; gap:8px; margin:0; font-size:12.5px; font-weight:600; color:var(--text); }
+  .plants-pick span { white-space:nowrap; }
+  .plants-pick select { width:auto; min-width:0; flex:1 1 auto; padding-top:4px; padding-bottom:4px; font-size:13px; }
+  .plants-why { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+  .plant-badge { font-size:.95em; margin-left:4px; }
+  .care-chip { display:inline-block; font-size:10px; font-weight:700; letter-spacing:.3px; padding:2px 8px; margin-left:6px; border-radius:20px;
+    background:#fbeaca; color:#7a5410; vertical-align:middle; white-space:nowrap; }
+  html[data-night] .care-chip { background:#3a2c10; color:var(--accent); }
+  .care-banner { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; justify-content:space-between; margin-bottom:12px;
+    padding:9px 14px; border-radius:10px; border:1px solid var(--border); background:color-mix(in srgb, #2f8f5b 8%, var(--surface)); font-size:13.5px; }
+  .care-banner.owed { border-color:#d9a441; background:color-mix(in srgb, #e0a526 16%, var(--surface)); font-size:14px; }
+  .care-banner[hidden] { display:none; }
+  .care-banner .muted { display:block; font-size:12.5px; margin-top:2px; }
+  .care-banner .link-btn { margin-left:6px; }
+  .care-btns { display:flex; flex-wrap:wrap; gap:6px; }
+  /* Board cards stay white at night too, so this keeps its daytime colour. */
+  .bd-care { font-size:11px; font-weight:700; color:#9a6a12; }
+  .care-sheet { margin:8px 0 2px; padding:8px 10px; border-radius:8px; background:color-mix(in srgb, #2f8f5b 8%, var(--surface)); font-size:13px; }
+  .care-sheet.owed { background:color-mix(in srgb, #e0a526 16%, var(--surface)); border:1px solid #d9a441; }
+  .care-sheet .field-actions { margin-top:6px; }
+  .care-note { margin-bottom:10px; padding:8px 12px; border-radius:8px; border:1px solid #d9a441; background:color-mix(in srgb, #e0a526 14%, var(--surface)); font-size:13px; line-height:1.6; }
+  .care-note .link-btn { font-size:13px; }
+  @media (max-width:720px) {
+    .care-banner { padding:9px 12px; }
+    .care-btns { width:100%; }
+    .care-btns .btn { flex:1 1 auto; }
+  }

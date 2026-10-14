@@ -74,7 +74,12 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // bookIfAccepted measures a later move of the bid from it). costByHand (the
 // figures typed in by hand on Estimate vs actual, jobcosts.js) is written
 // through patchJob too, from Tracking or from All Jobs.
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'costByHand'];
+// The plant-care email (plantcare.js): completedAt (when the job was last
+// marked Complete, from wherever), careDone (he sent it himself, or it isn't
+// needed -- set from the board too) and hasPlants (the answer saved last
+// time, kept while Supplies is still loading).
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
+  'costByHand', 'completedAt', 'careDone', 'hasPlants'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -803,6 +808,9 @@ function onStatusChange() {
   if (jobStatus === 'booked' && was !== 'booked') { boardFields.workStage = 'scheduled'; boardFields.workStageAt = at; }
   // Booked here rather than from the board: the order list fills the same way.
   if (jobStatus === 'booked' && isBidStatus(was) && !orderItems.some(it => it.fromEstimate)) fillOrderFromEstimate(true);
+  // When it was finished: a job with plants owes its care email from then
+  // (plantcare.js), as when it is finished from the board (sync.js patchJob).
+  if (jobStatus === 'complete' && was !== 'complete') boardFields.completedAt = at;
   // Finished here: the plant-care email, as from the board (estimate.js).
   // Saved first, so what goes to the server has the status (and an email
   // address typed a moment ago) in it.
@@ -815,6 +823,7 @@ function onStatusChange() {
   }
   showBidBanner();
   updateCtxBar();
+  if (window.YDPlants) window.YDPlants.refresh();
 }
 function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; showBidBanner(); }
 function showBidBanner() {
@@ -1672,7 +1681,9 @@ function updateSummary() {
 // ═══════════════════════════════════════════════════════════
 // SAVE / LOAD
 // ═══════════════════════════════════════════════════════════
-const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice'];
+// plants: Jonah's own Yes / No on whether the job has plants ('' = worked
+// out, plantcare.js).
+const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice','plants'];
 
 function getJobData() {
   const d = {};
@@ -1694,6 +1705,9 @@ function getJobData() {
   BOARD_FIELDS.forEach(f => { if (boardFields[f] != null) d[f] = boardFields[f]; });
   // The estimate being built on this job (estimate.js), kept with it like the materials.
   if (window.YDEstimate) d.estimate = window.YDEstimate.get();
+  // Whether it has plants, worked out again from all of the above, so the
+  // server's summary can read it (plantcare.js).
+  if (window.YDPlants) d.hasPlants = window.YDPlants.has(d);
   d.lastModified = new Date().toISOString();
   return d;
 }
@@ -1728,6 +1742,7 @@ function loadJobData(d) {
   renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   renderProposal(); renderOrderList(); updateSummary();
   dirty = false; updateCtxBar();
+  if (window.YDPlants) window.YDPlants.refresh();
 }
 
 function getJobIndex() { try { return JSON.parse(localStorage.getItem(STORAGE_PREFIX + 'index') || '[]'); } catch { return []; } }
@@ -1982,6 +1997,7 @@ function clearJobForm() {
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   renderProposal(); renderOrderList(); updateSummary();
   dirty = false; updateCtxBar();
+  if (window.YDPlants) window.YDPlants.refresh();
 }
 function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); }
 
@@ -2016,12 +2032,17 @@ function renderJobList() {
   const groups = {};
   idx.forEach(j => { const dt = j.lastModified ? new Date(j.lastModified) : new Date(); const key = MONTHS[dt.getMonth()] + ' ' + dt.getFullYear(); (groups[key] = groups[key] || []).push(j); });
   const keys = Object.keys(groups).sort((a, b) => { const [ma, ya] = a.split(' '), [mb, yb] = b.split(' '); return yb - ya || MONTHS.indexOf(mb) - MONTHS.indexOf(ma); });
+  // 🌱 on a job with plants, and the care email it still owes (plantcare.js)
+  // -- from the whole job, which the index does not carry.
+  const full = {};
+  if (window.YDPlants) loadAllJobs().forEach(d => { full[d._id] = d; });
+  const plantBits = j => full[j.id] ? window.YDPlants.badge(full[j.id]) + window.YDPlants.owedChip(full[j.id]) : '';
   body.innerHTML = switcher + keys.map(key => {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
         '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
-          (j.lost ? '<span class="pill lost">Lost</span>' : statusPill(normStatus(j.status))) + '</div>' +
+          (j.lost ? '<span class="pill lost">Lost</span>' : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') + fmtMoney(j.price) + '</div></div>' +
       '<div style="display:flex;gap:4px">' +
       (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + j.id + '\')">BACK ON THE BOARD</button>' : '') +
@@ -2070,7 +2091,8 @@ function renderDashboard() {
     const matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
     const price = parseMoney(d.jobPrice || '');
     const net = round2(price - (lab.cost + matCost));
-    return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced };
+    return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced,
+      plantBits: window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '' };
   });
   if (fSvc) rows = rows.filter(r => r.services.includes(fSvc));
   // Bids show only when Bids is picked: the totals are for work actually booked.
@@ -2086,11 +2108,14 @@ function renderDashboard() {
   ].map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.l + '</div><div class="summary-value">' + c.v + '</div></div>').join('');
 
   const w = document.getElementById('dashTableWrap');
-  if (!rows.length) { w.innerHTML = '<p class="empty-msg">No jobs match.</p>'; return; }
+  // Finished jobs with plants still owing their care email, whatever the
+  // filters show (plantcare.js).
+  const careNote = window.YDPlants ? window.YDPlants.owedNoteHtml(jobsAll) : '';
+  if (!rows.length) { w.innerHTML = careNote + '<p class="empty-msg">No jobs match.</p>'; return; }
   const arrow = c => dashSort.col === c ? (dashSort.asc ? ' ▲' : ' ▼') : '';
   // Old jobs' clocked labour waiting on shifts from before last year.
   const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
-  let h = (older || '') + '<table><thead><tr>' +
+  let h = careNote + (older || '') + '<table><thead><tr>' +
     '<th style="cursor:pointer" onclick="sortDash(\'name\')">Customer' + arrow('name') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'city\')">Location' + arrow('city') + '</th>' +
     '<th>Services</th><th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +
@@ -2099,7 +2124,7 @@ function renderDashboard() {
   rows.forEach(r => {
     h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
       '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
-      '<td>' + statusPill(r.status) + (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + '</td>' +
+      '<td>' + statusPill(r.status) + (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + r.plantBits + '</td>' +
       '<td class="bold">' + fmtMoney(r.price) + '</td>' +
       '<td class="bold" style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '">' + (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + '</td></tr>';
   });

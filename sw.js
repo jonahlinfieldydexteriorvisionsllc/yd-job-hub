@@ -41,6 +41,7 @@ const SHELL = [
   './supplies.js',
   './pricing.js',
   './estimate.js',
+  './plantcare.js',
   './receipts.js',
   './subs.js',
   './jobcosts.js',

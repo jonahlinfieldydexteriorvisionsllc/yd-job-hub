@@ -717,9 +717,13 @@
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openJobCard(\'' + board.id + '\', \'' + j._id + '\')">' +
       '<div class="bd-card-title">' + esc(j.customerName || 'Untitled job') +
-        (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') + '</div>' +
+        (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') +
+        // 🌱 a job with plants (plantcare.js)
+        (window.YDPlants ? YDPlants.badge(j) : '') + '</div>' +
       (where ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
+      // Finished, with plants, and the care email not done yet.
+      (window.YDPlants && YDPlants.owed(j) ? '<div class="bd-card-line bd-care">🌱 Care email owed</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
       (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
       (board.id === 'bids' && acceptedToBook(j)
@@ -944,6 +948,8 @@
       (reach.length ? '<div class="bd-detail-line">' + reach.join(' · ') + '</div>' : '') +
       ((j.serviceTypes || []).length ? '<div class="bd-detail-line">' + esc(j.serviceTypes.join(', ')) + '</div>' : '') +
       (parseMoney(j.jobPrice) ? '<div class="bd-detail-line bold">' + fmtMoney(parseMoney(j.jobPrice)) + '</div>' : '') +
+      // Its plants and the care email they owe, with the buttons that settle it.
+      (window.YDPlants ? YDPlants.sheetHtml(jobId, j) : '') +
       '<div class="bd-move-label">Move to</div>' +
       '<div class="bd-move">' + board.columns.map(c =>
         '<button class="bd-move-btn' + (c.id === col ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
@@ -1094,6 +1100,9 @@
     } else {
       Object.assign(fields, { workStage: col, workStageAt: at,
         jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' });
+      // Added already finished: when, for a care email if it turns out to
+      // have plants (plantcare.js).
+      if (fields.jobStatus === 'complete') fields.completedAt = at;
     }
     const id = createJobRecord(fields);
     if (!id) return;
