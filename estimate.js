@@ -1069,14 +1069,16 @@
 
   // The message when he has not written one: the payments asked for (the
   // deposit and each one, in dollars) and his payment terms. The warranty is
-  // a line of its own at the end of the estimate now (P().endLines()).
+  // a QuickBooks product at the end of the estimate (P().endItems()); until
+  // that list has anything on it, the old warranty sentence stays here.
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
     const above = num(p.splitAboveCents);
     const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
     const r = last;
     const pays = r && r.totalCents === totalCents ? r.payments || [] : [];
-    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms]
+    const warranty = P() && P().endItems().length ? '' : p.warranty;
+    return [pays.map(x => x.label + ': ' + cents(x.cents)).join('\n'), terms, warranty]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
 
