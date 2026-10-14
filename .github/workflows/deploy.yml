@@ -1,0 +1,45 @@
+name: Deploy server & rules
+on:
+  push:
+    branches: [main]
+    paths: ['functions/**', 'firestore.rules', 'storage.rules', '.github/workflows/deploy.yml', '.github/scripts/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: what
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || ! git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            echo "server=true" >> "$GITHUB_OUTPUT"; echo "firestore=true" >> "$GITHUB_OUTPUT"; echo "storage=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          files="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}")"
+          echo "server=$(echo "$files" | grep -q '^functions/' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "firestore=$(echo "$files" | grep -qx 'firestore.rules' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          echo "storage=$(echo "$files" | grep -qx 'storage.rules' && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/147632184660/locations/global/workloadIdentityPools/github/providers/yd-job-hub
+          service_account: github-deployer@yd-job-hub.iam.gserviceaccount.com
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Publish Firestore rules
+        if: steps.what.outputs.firestore == 'true'
+        run: bash .github/scripts/publish_rules.sh firestore.rules cloud.firestore
+      - name: Publish Storage rules
+        if: steps.what.outputs.storage == 'true'
+        run: bash .github/scripts/publish_rules.sh storage.rules firebase.storage/yd-job-hub.firebasestorage.app
+      - name: Deploy the server
+        if: steps.what.outputs.server == 'true'
+        run: |
+          gcloud run deploy yd-claude --source functions --function claude --base-image python312 --region us-central1 --project yd-job-hub --quiet
+          sleep 10; curl -fsS https://yd-claude-147632184660.us-central1.run.app/version && echo
