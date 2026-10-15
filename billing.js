@@ -285,6 +285,8 @@
             (window.YDQuickBooks && YDQuickBooks.connected() && ydCan('billing', 'change')
               ? '<button class="btn btn-sm btn-filled" onclick="sendStormToQuickBooks(\'' + id + '\')">Send to QuickBooks</button>'
               : '') +
+            (window.YDAuth && YDAuth.isOwner
+              ? '<button class="btn btn-sm btn-danger" onclick="deleteStorm(\'' + id + '\')" title="Delete this storm">🗑 Delete</button>' : '') +
           '</div>' +
         '</div>';
       }).join('');
@@ -297,6 +299,32 @@
       '<div class="summary-label">' + label + '</div>' +
       '<div class="summary-value">' + value + '</div></div>';
   }
+
+  // A storm closed by mistake or as a try-out (Jonah, 14 Oct 2026: "delete
+  // the one saved storm"): the owner deletes it whole -- the storm, every
+  // stop and its billing -- in one go. Invoices already sent to QuickBooks
+  // stay there; the question says so when numbers were handed out.
+  window.deleteStorm = async function (id) {
+    if (!(window.YDAuth && YDAuth.isOwner) || !window.YDDb) return;
+    const s = storms[id], b = billingCache[id];
+    if (!s) return;
+    const numbered = b && b.invoiceNos ? Object.keys(b.invoiceNos).length : 0;
+    if (!confirm('Delete the storm of ' + stormTitle(s, id) + '?\n\nIts stops and its billing are deleted with it' +
+      (b ? ' (' + b.lines.length + ' visits, ' + money(b.totalCents) + ')' : '') + '. This cannot be undone.' +
+      (numbered ? '\n\n' + numbered + ' invoice number(s) were handed out for it — anything already sent to QuickBooks stays there.' : ''))) return;
+    let stops = {}, priv = {};
+    try {
+      [stops, priv] = await Promise.all([window.YDDb.list('storms/' + id + '/stops'), window.YDDb.list('storms/' + id + '/private')]);
+    } catch (e) { showToast('Could not read the storm — try again with signal'); return; }
+    const gone = Object.keys(stops).map(k => ['storms/' + id + '/stops', k])
+      .concat(Object.keys(priv).map(k => ['storms/' + id + '/private', k]))
+      .concat([['storms', id]]);
+    delete storms[id]; delete billingCache[id];
+    render();
+    Promise.resolve(window.YDDb.removeMany(gone))
+      .then(() => showToast('Storm deleted'))
+      .catch(e => { console.warn('[billing] storm not deleted', e); showToast('The storm was not deleted — ' + ((e && e.code) || e)); });
+  };
 
   window.stormDetail = async function (id) {
     const s = storms[id], b = await billingFor(id);

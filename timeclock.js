@@ -175,7 +175,9 @@
   // owner decided. Both are real hours and both count.
   const counts = e => e.status === 'ok' || e.status === 'approved';
   const awaitingOwner = e => e.status === 'pending' && !running(e);
-  const whyFlagged = e => autoStopped(e)
+  const whyFlagged = e => autoStopped(e) && e.autoReason === 'storm'
+    ? 'storm done — clocked out at the last property'
+    : autoStopped(e)
     ? 'no clock-out — stopped at ' + hoursWord(e.autoLimitHours || autoOutHours)
     // Stopped by the clock, then given its real end (by them or the office).
     : e.autoEnded === true ? 'no clock-out — end put right'
@@ -212,8 +214,13 @@
   // When a running shift stops by itself, and how near that is: 0 not yet
   // near, 1 within the last hour, 2 past it (this phone has not heard yet).
   const stopsAt = e => startMsOf(e) + autoOutMs();
+  // A storm shift has no hour limit (Jonah, 14 Oct 2026: "I want no limit for
+  // storms. But auto clock out when last property is completed."): it ends
+  // when the storm's last property is done (YDClock.stormDone below, and the
+  // server for phones that are off).
+  const noHourLimit = e => !!e && e.kind === 'storm';
   function limitState(e) {
-    if (!e || !running(e)) return 0;
+    if (!e || !running(e) || noHourLimit(e)) return 0;
     const left = stopsAt(e) - Date.now();
     return left <= 0 ? 2 : left <= 3600000 ? 1 : 0;
   }
@@ -557,7 +564,8 @@
 
   // --------------------------------------------------------------- clock out
 
-  function endShift(id, why, extra) {
+  // `atMs`: when it ended, if not now (a storm's last property).
+  function endShift(id, why, extra, atMs) {
     const e = entries[id];
     if (!e || !running(e)) return;
     if (extra) Object.assign(e, extra);
@@ -567,7 +575,8 @@
     // later than the server's stop would otherwise be written over it from
     // the office (whose writes the rules do not hold back).
     const late = limitState(e) === 2;
-    const stampMs = late ? Math.max(startMsOf(e), stopsAt(e)) : Date.now();
+    const stampMs = late ? Math.max(startMsOf(e), stopsAt(e))
+      : typeof atMs === 'number' ? Math.max(startMsOf(e), Math.min(atMs, Date.now())) : Date.now();
     const stamp = new Date(stampMs).toISOString();
     // An open pause is closed too, or the shift would look paused forever and
     // its billable time would be wrong (one begun after the stop counts nothing).
@@ -882,9 +891,12 @@
   function autoStopHtml() {
     const a = myAutoStop();
     if (!a) return '';
-    return '<div class="clock-pausenote clock-limit">⏱ Nobody clocked out of <b>' + esc(a.targetName) + '</b> (in ' +
+    return '<div class="clock-pausenote clock-limit">' + (a.autoReason === 'storm'
+      ? '❄️ The storm’s last property was done at ' + dayTime(a.endedAt) + ', so your shift on <b>' + esc(a.targetName) +
+        '</b> ended then.' + (a.status === 'pending' ? ' Over ' + LONG_SHIFT_HOURS + ' hours, so it goes to the office to check.' : '')
+      : '⏱ Nobody clocked out of <b>' + esc(a.targetName) + '</b> (in ' +
       dayTime(a.startedAt) + '), so the clock stopped it at ' + hoursWord(a.autoLimitHours || autoOutHours) +
-      ' — ' + dayTime(a.endedAt) + '. It goes to the office to check.' +
+      ' — ' + dayTime(a.endedAt) + '. It goes to the office to check.') +
       '<div class="field-actions">' +
         // The owner fixes his own in Waiting for You; anyone else asks.
         (!isOwner() && a.status === 'pending' && !pendingFor(a.id)
@@ -1140,7 +1152,10 @@
         (e.note ? '<div class="appr-note">“' + esc(e.note) + '”</div>' : '') +
         '<div class="appr-times">' + spanWords(e) +
           (e.changedAt ? ' <span class="muted">· times changed by the office</span>' : '') + '</div>' +
-        (autoStopped(e)
+        (autoStopped(e) && e.autoReason === 'storm'
+          ? '<div class="appr-auto">❄️ Clocked out when the storm’s last property was done.' +
+              (mayDecide(e) ? ' If they stopped earlier or later, change the end time before approving.' : '') + '</div>'
+          : autoStopped(e)
           ? '<div class="appr-auto">⏱ Nobody clocked out, so the clock stopped it at ' +
               hoursWord(e.autoLimitHours || autoOutHours) + '.' +
               (mayDecide(e) ? ' If they finished earlier, change the end time before approving.' : '') + '</div>'
@@ -1605,7 +1620,8 @@
       '<div class="crew-row crew-setting">' +
         '<span class="crew-name">⏱ Forgot to clock out</span>' +
         '<span class="crew-mail">A shift stops by itself after <b>' + hoursWord(autoOutHours) +
-          '</b> on the clock and comes to you to check. They and you get a notification.</span>' +
+          '</b> on the clock and comes to you to check. They and you get a notification. ' +
+          'Storm shifts have no limit: they end when the storm’s last property is done.</span>' +
         '<button class="btn btn-sm" onclick="setAutoOutHours()">Change</button>' +
       '</div>';
   }
@@ -2963,7 +2979,22 @@
     return Math.round(worst / 60000);
   }
 
+  // storm.js, when every property on the storm is departed or skipped: this
+  // person's own storm shift ends at the last departure -- the moment the
+  // server gives it too (functions/autoclock.py), whichever comes first. A
+  // shift begun after it (cleanup, the drive back) is left running.
+  function stormDone(stormId, atMs) {
+    const me0 = me();
+    if (!me0 || !stormId || !(atMs > 0)) return;
+    const ended = Object.values(entries).filter(e => e.uid === me0.uid && running(e) && e.kind === 'storm' &&
+      e.targetId === stormId && startMsOf(e) < atMs);
+    if (!ended.length) return;
+    ended.forEach(e => endShift(e.id, 'clocking out — the storm is done', { endedFor: 'stormDone' }, atMs));
+    showToast('❄️ Storm done — clocked out at ' + clockTime(new Date(atMs).toISOString()), 7000);
+  }
+
   window.YDClock = {
+    stormDone: stormDone,
     forJob: forJob,
     pausedMinutesAt: pausedMinutesAt,
     // Change requests: the owner's queue, or a crew member's own (storm.js

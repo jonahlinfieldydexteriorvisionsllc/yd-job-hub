@@ -783,7 +783,7 @@
     // What was typed belongs to this storm: stop ids are the account ids, so
     // a depth left in a box would otherwise open the next storm's card.
     Object.keys(drafts).forEach(k => { delete drafts[k]; });
-    unsubStops = window.YDDb.watch('storms/' + stormId + '/stops', changes => {
+    unsubStops = window.YDDb.watch('storms/' + stormId + '/stops', (changes, meta) => {
       let shown = false;      // anything that changes what the list shows
       changes.forEach(c => {
         if (!locationOnly(c)) shown = true;
@@ -800,7 +800,27 @@
       // buttons under whoever was tapping. So is this phone's own write
       // coming back, already drawn when it was made.
       if (shown) { render(); stormNews(); }
+      // Every property done: this phone's storm shift ends at the last
+      // departure (timeclock.js stormDone). Only from a list the server has
+      // given -- a part-filled cache could look finished when it is not.
+      if (meta && meta.fromCache) return;
+      const at = doneAtMs();
+      if (at && window.YDClock && YDClock.stormDone) YDClock.stormDone(stormId, at);
     });
+  }
+  // When the storm's work was done: every property departed or skipped (at
+  // least one departed) -> the last departure, else null. The same as the
+  // server's (functions/autoclock.py storm_done_ms).
+  function doneAtMs() {
+    const list = Object.values(stops);
+    if (!list.length) return null;
+    let last = null;
+    for (const s of list) {
+      if (!s.departedAt && !s.skipped) return null;
+      const t = s.departedAt ? Date.parse(s.departedAt) : NaN;
+      if (isFinite(t) && (last === null || t > last)) last = t;
+    }
+    return last;
   }
   // Home shows the storm under way and how far along it is (home.js).
   function stormNews() { document.dispatchEvent(new CustomEvent('yd-storm-changed')); }

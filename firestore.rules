@@ -275,7 +275,7 @@ service cloud.firestore {
       // no phone starts a shift carrying them, or adds, changes or removes
       // them later.
       function autoKeys() {
-        return ['autoEnded', 'autoEndedMs', 'autoEndedAt', 'autoLimitHours', 'autoTold'];
+        return ['autoEnded', 'autoEndedMs', 'autoEndedAt', 'autoLimitHours', 'autoReason', 'autoTold'];
       }
       function noAutoMarks() {
         return !request.resource.data.keys().hasAny(autoKeys());
