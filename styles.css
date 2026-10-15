@@ -3560,3 +3560,98 @@
     html[data-tab="dashboard"] .wx-chip .wxc-temp { display:none; }
     html[data-tab="job"] .wx-chip, html[data-tab="tracking"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 8px; }
   }
+  /* ---- ux-w1 office polish (15 Oct 2026) ---- */
+
+  /* Pricing rules: the index of its sections stays at the top of the window
+     as it scrolls, with "Saved ✓" beside it (pricing.js indexHtml). The
+     window's overflow:hidden (there for its rounded corners) made it a
+     scroller of its own, which holds a sticky bar still; clip keeps the
+     corners without that. (A browser without clip keeps hidden: the index
+     then simply scrolls away with the rest.) */
+  #prModal .modal { overflow:hidden; overflow:clip; }
+  /* The window sits in 40px of padding, which a sticky bar keeps clear of:
+     pulled up by as much, it meets the top of the screen. */
+  .pr-index { position:sticky; top:-40px; z-index:6; display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px;
+    margin:-22px -22px 14px; padding:10px 22px; background:var(--bg); border-bottom:1px solid var(--border);
+    box-shadow:0 8px 14px -12px rgba(0,0,0,.4); }
+  .pr-index-links { display:flex; flex-wrap:wrap; gap:5px; flex:1 1 200px; min-width:0; }
+  .pr-index-links button { min-height:32px; padding:4px 9px; border-radius:16px; border:1px solid var(--border-strong);
+    background:var(--surface); color:var(--brand-ink); font:600 12px 'DM Sans',sans-serif; white-space:nowrap; cursor:pointer; }
+  .pr-index-links button:hover, .pr-index-links button:focus-visible { border-color:var(--brand); background:var(--surface-2); }
+  .pr-saved { flex:none; font-size:12.5px; font-weight:700; color:var(--muted); white-space:nowrap; }
+  .pr-saved:empty { display:none; }
+  .pr-saved.saved { color:var(--st-done-ink); }
+  .pr-saved.waiting { color:var(--st-soon); }
+  .pr-saved.failed { color:var(--st-now); }
+  @media (max-width:720px) {
+    .pr-index { margin:-16px -14px 12px; padding:8px 14px; top:-10px; }
+    /* One line to swipe along rather than four rows of buttons. */
+    .pr-index-links { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+    .pr-index-links::-webkit-scrollbar { display:none; }
+    .pr-index-links button { flex:none; min-height:40px; }
+  }
+
+  /* Equipment: + Add first, outside the strip of type filters, in the same
+     place on a phone and a computer; the list in groups. */
+  .eq-tools { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+  .eq-tools .eq-add { flex:none; }
+  .eq-tools .filter-bar { flex:1 1 0; min-width:0; margin-bottom:0; }
+  .eq:focus-visible { outline:3px solid var(--brand); outline-offset:2px; }
+  .eq-group-h { margin:16px 0 8px; font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; color:var(--muted); }
+  .eq-tools + .eq-group-h { margin-top:0; }
+  .eq-group-h.eq-group-0 { color:var(--st-now); }
+  .eq-group-h.eq-group-1 { color:var(--st-soon); }
+  /* An admin who may only look keeps the type filters -- they only filter;
+     the Add still goes (the readonly rule hid every button in the list). */
+  html[data-equipment-readonly] #eqWrap .eq-filters .btn { display:inline-block !important; }
+
+  /* Receipts: where a receipt went is a chip; its Undo and Delete wait
+     behind ⋯ (receipts.js chipsHtml / menuHtml). */
+  .rc-chipline { margin-top:8px; }
+  .rc-chips { display:inline-flex; flex-wrap:wrap; gap:4px 6px; min-width:0; max-width:100%; }
+  .rc-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; min-width:0; padding:2px 10px; border-radius:12px;
+    border:1px solid transparent; background:var(--st-done-soft); color:var(--st-done-ink);
+    font:600 12px/1.5 'DM Sans',sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rc-chip b { font-weight:700; }
+  .rc-chip .job-num { color:inherit; opacity:.8; }
+  .rc-chip-amt { font-weight:700; opacity:.85; }
+  button.rc-chip { cursor:pointer; }
+  button.rc-chip:hover, button.rc-chip:focus-visible { border-color:var(--st-done); }
+  .rc-menu { position:relative; display:inline-block; flex:none; }
+  .rc-menu > summary { list-style:none; }
+  .rc-menu > summary::-webkit-details-marker { display:none; }
+  .rc-menu-btn { display:inline-flex; align-items:center; justify-content:center; min-width:36px; min-height:32px; padding:0 8px;
+    border:1.5px solid var(--border-strong); border-radius:6px; background:var(--surface); color:var(--text);
+    font-size:18px; font-weight:700; line-height:1; cursor:pointer; user-select:none; }
+  .rc-menu-btn:hover, .rc-menu-btn:focus-visible, .rc-menu[open] > .rc-menu-btn { border-color:var(--brand); }
+  .rc-menu-list { position:absolute; right:0; top:calc(100% + 4px); z-index:30; min-width:230px; max-width:min(320px, 86vw);
+    padding:4px; border:1px solid var(--border); border-radius:8px; background:var(--surface);
+    box-shadow:0 10px 28px rgba(43,36,51,.22); }
+  .rc-menu-list button { display:block; width:100%; text-align:left; background:none; border:0; border-radius:6px;
+    padding:10px 12px; font:600 13px 'DM Sans',sans-serif; color:var(--text); cursor:pointer; overflow-wrap:anywhere; }
+  .rc-menu-list button:hover, .rc-menu-list button:focus-visible { background:var(--surface-2); }
+  .rc-menu-list .rc-menu-del { color:var(--neg); }
+  .rc-foot .rc-menu { margin-left:auto; }
+  /* In a row the chips are the row's own items, so the amount and ⋯ sit
+     beside the last of them rather than on a line of their own. */
+  .rc-row .rc-chips { display:contents; }
+  /* The search box is as wide as what it says it searches. */
+  #rcSearch { max-width:min(100%, 560px); }
+  @media (max-width:720px) {
+    .rc-menu-btn { min-width:44px; min-height:44px; }
+    .rc-menu-list button { min-height:44px; }
+    .rc-chip { min-height:30px; }
+  }
+
+  /* Problems: the older and fixed ones folded under the open ones. */
+  .prob-older { margin-top:16px; padding-top:6px; border-top:1px solid var(--border); }
+  .prob-older > summary { cursor:pointer; min-height:40px; display:flex; align-items:center; gap:6px; list-style:none;
+    font-weight:700; font-size:13px; color:var(--muted); }
+  .prob-older > summary::-webkit-details-marker { display:none; }
+  .prob-older > summary::before { content:'▸'; }
+  .prob-older[open] > summary::before { content:'▾'; }
+  .prob-older .hint { margin:2px 0 10px; }
+
+  /* QuickBooks: "Couldn't check" is not "not connected". */
+  .qb-unknown .qb-sub { margin:-6px 0 10px; }
+  .qb-what { margin:6px 0 0; }

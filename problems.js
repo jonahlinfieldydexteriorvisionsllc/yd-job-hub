@@ -202,12 +202,40 @@
     if (m) m.classList.remove('active');
   };
 
-  // The count on the menu, kept up whether or not the window is open.
+  // Folded away under "Older / fixed": what has been marked Sorted, and a
+  // file that failed to load in an earlier version of the app (or more than
+  // a week ago) -- the app has been updated, and reloaded, since. A list
+  // headed by last week's "Failed to load billing.js" buried today's report.
+  const OLD_LOAD_DAYS = 7;
+  const verNum = v => { const m = /^v(\d+)$/.exec(String(v || '')); return m ? Number(m[1]) : null; };
+  // The app's newest version: this device's, or a newer one some report came
+  // from (a phone can be ahead of a computer that has not reloaded).
+  function newestVersion() {
+    let n = verNum(version);
+    Object.keys(problems).forEach(id => {
+      const v = verNum(problems[id].version);
+      if (v !== null && (n === null || v > n)) n = v;
+    });
+    return n;
+  }
+  function isOlder(p, newest) {
+    if (p.status === 'done') return true;
+    if (!/^Failed to load\b/i.test(String(p.message || ''))) return false;
+    const v = verNum(p.version);
+    if (v !== null && newest !== null && v < newest) return true;
+    return !!p.atMs && Date.now() - p.atMs > OLD_LOAD_DAYS * 864e5;
+  }
+  let olderOpen = false;      // the "Older / fixed" group is open (kept through redraws)
+  window.problemsOlderToggled = function (open) { olderOpen = !!open; };
+
+  // The count on the menu, kept up whether or not the window is open: what
+  // is still open and not folded away as older.
   function updateBadge() {
     const badge = el('problemsCount');
     if (!badge) return;
+    const newest = newestVersion();
     let open = 0;
-    Object.keys(problems).forEach(id => { if (problems[id].status !== 'done') open++; });
+    Object.keys(problems).forEach(id => { if (!isOlder(problems[id], newest)) open++; });
     badge.textContent = open ? String(open) : '';
     badge.hidden = !open;
   }
@@ -229,10 +257,15 @@
       return;
     }
 
+    // Newest first: what is still open, then the older and fixed ones folded.
+    const newest = newestVersion();
+    const open = list.filter(p => !isOlder(p, newest));
+    const older = list.filter(p => isOlder(p, newest));
+
     // Reports are written from any phone, so the id is trimmed to the
     // characters our own ids use before it goes into a button.
     const pid = p => String(p.id || '').replace(/[^A-Za-z0-9_-]/g, '');
-    wrap.innerHTML = list.map(p =>
+    const row = p =>
       '<div class="prob' + (p.status === 'done' ? ' done' : '') + '">' +
         '<div class="prob-top">' +
           '<span class="prob-kind ' + esc(p.kind) + '">' +
@@ -258,7 +291,18 @@
             : '<button class="btn btn-sm btn-filled" onclick="closeProblem(\'' + pid(p) + '\')">Sorted</button>') +
           '<button class="remove-btn" onclick="deleteProblem(\'' + pid(p) + '\')" title="Delete">&times;</button>' +
         '</div>' +
-      '</div>').join('');
+      '</div>';
+    wrap.innerHTML =
+      (open.length ? open.map(row).join('')
+        : '<p class="empty-msg">Nothing open. Errors on anybody’s phone land here, along with anything the crew report.</p>') +
+      (older.length
+        ? '<details class="prob-older"' + (olderOpen ? ' open' : '') + ' ontoggle="problemsOlderToggled(this.open)">' +
+            '<summary>Older / fixed (' + older.length + ')</summary>' +
+            '<p class="hint">Marked Sorted, or a file that failed to load in an earlier version of the app — ' +
+              'it has been updated since. “Not fixed” puts a sorted one back on the list.</p>' +
+            older.map(row).join('') +
+          '</details>'
+        : '');
   }
 
   function when(ms) {
@@ -298,8 +342,14 @@
   function findVersion() {
     if (!window.caches || !caches.keys) return;
     caches.keys().then(keys => {
-      const k = keys.find(n => /^ydjobhub-v/.test(n));
-      if (k) version = k.replace('ydjobhub-', '');
+      // The newest, should an old cache still be waiting to be cleared away
+      // (the first found could be the old one).
+      let best = null;
+      keys.forEach(n => {
+        const m = /^ydjobhub-(v(\d+))$/.exec(n);
+        if (m && (!best || Number(m[2]) > best.n)) best = { v: m[1], n: Number(m[2]) };
+      });
+      if (best) { version = best.v; updateBadge(); }
     }).catch(() => {});
   }
 

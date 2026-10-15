@@ -8,6 +8,10 @@
 //             product each kind of line is
 //   SEND      raise the invoices for a closed storm
 //
+// (Estimates, the invoice an accepted one becomes, and the payments on it
+// go through the same connection from estimate.js and the server's hourly
+// check; this screen is where the connection itself is seen to.)
+//
 // THE MATCHING IS THE PART THAT MATTERS. QuickBooks identifies a customer by
 // an internal id, not by name, so an invoice cannot be raised until each snow
 // account has been pointed at one. Names are matched automatically where they
@@ -74,6 +78,17 @@
     if (m) m.classList.remove('active');
   };
 
+  // A status check that never got an answer -- no signal, the server down
+  // or busy -- is not "not connected": it said nothing either way. Only the
+  // server's own answer (connected: false) shows the Connect button; this
+  // shows "Couldn't check" and Try again, keeping the last answer it had.
+  // (What it last knew stays, for the storm list's Send buttons.)
+  const couldNotCheck = (e, was) => ({
+    connected: !!(was && was.connected), env: was && was.env, company: was && was.company,
+    // A fetch that never reached anywhere says only "Failed to fetch": no use to anyone.
+    checkFailed: true, checkError: e && !(e instanceof TypeError) ? String(e.message || '') : '' });
+  window.retryQuickBooks = function () { refresh(); };
+
   async function refresh() {
     if (!sends()) return;
     busy = true; render();
@@ -90,7 +105,7 @@
         autoMatch();
       }
     } catch (e) {
-      state = { connected: false, error: e.message, env: state && state.env };
+      state = couldNotCheck(e, state);
     }
     busy = false;
     render();
@@ -176,7 +191,8 @@
 
   window.disconnectQuickBooks = async function () {
     if (!confirm('Disconnect QuickBooks?\n\nNothing already in QuickBooks changes. ' +
-                 'Snow billing goes back to being exported as a file.')) return;
+                 'Until it is connected again, estimates can’t be sent to QuickBooks, accepted ones and ' +
+                 'payments aren’t picked up, and snow billing goes back to being exported as a file.')) return;
     try { await ask('/qb/disconnect'); showToast('Disconnected'); }
     catch (e) { showToast(e.message); }
     refresh();
@@ -189,13 +205,29 @@
     if (busy && !state) { wrap.innerHTML = '<p class="empty-msg">Checking…</p>'; return; }
     if (!state) { wrap.innerHTML = '<p class="empty-msg">Not checked yet.</p>'; return; }
 
+    if (state.checkFailed) {
+      const offline = navigator.onLine === false;
+      wrap.innerHTML =
+        '<div class="qb-intro qb-unknown">' +
+          '<p><b>Couldn’t check QuickBooks just now.</b> ' +
+          (offline ? 'This device has no signal. ' : 'The Job Hub server didn’t give an answer. ') +
+          'That doesn’t mean it is disconnected' +
+          (state.connected ? ' — it was connected' + (state.company ? ' to ' + esc(state.company) : '') + ' the last time it was checked' : '') +
+          '.</p>' +
+          (state.checkError && !offline ? '<div class="qb-sub">' + esc(state.checkError) + '</div>' : '') +
+          '<button class="btn btn-filled clock-big" onclick="retryQuickBooks()"' + (busy ? ' disabled' : '') + '>' +
+            (busy ? 'Checking…' : 'Try again') + '</button>' +
+        '</div>';
+      return;
+    }
+
     if (!state.connected) {
       wrap.innerHTML =
         '<div class="qb-intro">' +
-          '<p>Connecting QuickBooks lets Job Hub raise the invoices for a storm ' +
-          'directly, instead of you exporting a file and importing it. ' +
-          'QuickBooks gives each invoice its own number, so the two can never ' +
-          'drift apart.</p>' +
+          '<p>Connecting QuickBooks lets Job Hub put your estimates in QuickBooks for the customer ' +
+          'to read and sign, make the invoice when one is accepted, keep an eye on what has been paid, ' +
+          'and raise the invoices for a storm — instead of typing them in twice or exporting a file. ' +
+          'QuickBooks gives every estimate and invoice its own number, so the two can never drift apart.</p>' +
           (state.env === 'sandbox'
             ? '<div class="qb-note">This is pointed at a <strong>practice company</strong>, ' +
               'not your real books. Nothing here can touch your accounts.</div>' : '') +
@@ -226,8 +258,10 @@
       (state.env === 'sandbox'
         ? '<div class="qb-note">A <strong>practice company</strong> — invoices raised ' +
           'here do not appear in your real books.</div>' : '') +
+      '<p class="hint qb-what">Estimates, their invoices and payments go through this connection — from the Estimate ' +
+        'on each job. Below is what the storm invoices need: what each line is sold as, and which customer each snow account is.</p>' +
 
-      '<div class="qb-head">What each line is sold as</div>' +
+      '<div class="qb-head">Storm invoices — what each line is sold as</div>' +
       '<div class="qb-rows">' +
         LINE_KINDS.map(([key, label, hint]) =>
           '<div class="qb-row">' +
@@ -276,9 +310,10 @@
     if (!sends()) return;
     if (!state || !state.connected) { openQuickBooks(); return; }
     // The customer matches load when the QuickBooks screen opens, which may
-    // not have happened yet this session.
-    if (!customers.length) await refresh();
-    if (!state || !state.connected) { openQuickBooks(); return; }
+    // not have happened yet this session -- and a check that got no answer
+    // is asked again before anything is sent.
+    if (!customers.length || state.checkFailed) await refresh();
+    if (!state || !state.connected || state.checkFailed) { openQuickBooks(); return; }
 
     const b = await window.YDDb.get('storms/' + stormId + '/private', 'billing');
     if (!b || !b.lines || !b.lines.length) { showToast('No billing recorded for that storm'); return; }
@@ -404,7 +439,7 @@
   // signal and are only needed once the QuickBooks screen is opened.
   async function checkStatus() {
     try { state = await ask('/qb/status'); }
-    catch (e) { state = { connected: false, error: e.message }; }
+    catch (e) { state = couldNotCheck(e, state); }
     // The storm list usually draws before this answers; its "Send to
     // QuickBooks" buttons depend on the answer.
     if (window.YDBilling && YDBilling.render) YDBilling.render();
