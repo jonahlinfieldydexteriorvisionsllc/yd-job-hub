@@ -64,6 +64,13 @@
   let undo = null;            // the estimate before Claude's last change
   let qbItems = null;         // QuickBooks product names, fetched when first wanted
   let stale = false;          // Supplies or the rules changed while the Job tab was hidden (repaint)
+  // How much of the estimate is out (15 Oct 2026: it ran to four and a half
+  // screens): a bid with nothing built yet is its notes and the Build button
+  // until "or add lines by hand"; an estimate the customer has said yes to
+  // folds to one line and what is left to do (the invoice) until "Show /
+  // edit" opens it. Kept in memory only -- every job opens the same way.
+  let byHand = false;         // "or add lines by hand" pressed on the job open (load() resets it)
+  const unfolded = {};        // job id -> its accepted estimate opened out
 
   // The conversation kept with the job (Jonah can scroll back through it),
   // and the part of it Claude is sent with each message (ask).
@@ -127,7 +134,7 @@
       notesTyped = false;
       est = blank();
       if (e && typeof e === 'object') est = fromSaved(e);
-      draftMsg = ''; undo = null; toSup = null;
+      draftMsg = ''; undo = null; toSup = null; byHand = false;
       render();
       autoCheck();
     },
@@ -290,7 +297,16 @@
     const rules = P().rules();
     const notReady = num(rules.crewDayCents) === null || num(rules.taxPct) === null;
 
-    wrap.innerHTML =
+    // Said yes to: one line, and what is left to do with it (renderQb).
+    const fold = folded();
+    wrap.dataset.folded = fold ? '1' : '';
+    if (fold) {
+      wrap.innerHTML = '<div class="est-qb est-folded" id="estQb"></div>';
+      renderQb();
+      return;
+    }
+
+    const head =
       (notReady ? '<div class="est-warnbox">Your pricing rules aren’t set up yet, so nothing can be priced. ' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : 'Ask Jonah to set them.') + '</div>' : '') +
 
@@ -306,7 +322,19 @@
             (autoOn() && !building ? '<span class="hint">Or just finish writing — when you leave the notes, Claude starts it by itself.</span>' : '') +
           '</div>' : '') +
 
-      chatHtml(ro) +
+      chatHtml(ro);
+
+    // A new bid: the notes and the Build button, and the rest when asked for.
+    if (emptyBid()) {
+      wrap.innerHTML = head + (ro ? '<p class="empty-msg">No estimate lines yet.</p>'
+        : '<div class="est-byhand"><button class="link-btn" onclick="estByHand()">or add lines by hand</button>' +
+          ' <span class="muted">— labor, materials, what your rules add, fuel</span></div>');
+      return;
+    }
+
+    wrap.innerHTML =
+      (settled() ? '<div class="est-refold"><button class="link-btn" onclick="estUnfold(false)">▴ Fold the estimate back to one line</button></div>' : '') +
+      head +
 
       ((est.questions || []).length ? '<div class="est-questions"><b>Claude needs to know:</b><ul>' +
         est.questions.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul>' +
@@ -314,10 +342,10 @@
       ((est.flags || []).length ? '<div class="est-flags"><b>Flags:</b><ul>' +
         est.flags.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
 
-      '<h4 class="est-h">Labour <span class="muted">— each line is a line on the estimate, with its scope of work</span></h4>' +
+      '<h4 class="est-h">Labor <span class="muted">— each line is a line on the estimate, with its scope of work</span></h4>' +
       '<div class="est-work">' + (est.work.length ? est.work.map((w, i) => workHtml(w, i, ro)).join('')
-        : '<div class="empty-msg">No labour yet.</div>') + '</div>' +
-      (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estAddWork()">+ Labour line</button></div>') +
+        : '<div class="empty-msg">No labor yet.</div>') + '</div>' +
+      (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estAddWork()">+ Labor line</button></div>') +
 
       '<h4 class="est-h">Materials <span class="muted">— the takeoff; the customer sees the list and one total</span></h4>' +
       '<div class="est-mats">' + (est.materials.length ? est.materials.map((m, i) => matHtml(m, i, ro, r)).join('')
@@ -352,6 +380,40 @@
     const log = el('estChat'); if (log) log.scrollTop = log.scrollHeight;
     renderTotals();
     autoTrip();
+  }
+
+  // The customer said yes (Accepted, or already made into an invoice): there
+  // is nothing left to build, only the invoice to make and be paid.
+  function settled() {
+    const q = qb(), inv = qbInv();
+    return !!(q && q.id && (['Accepted', 'Closed', 'Converted'].indexOf(q.status) !== -1 || (inv && inv.id)));
+  }
+  const folded = () => settled() && !unfolded[currentJobId || ''];
+  // Nothing built, nothing said to Claude, nothing in QuickBooks.
+  function emptyBid() {
+    const q = qb();
+    return !byHand && !hasLines() && !est.chat.length && !busyHere() && !(q && q.id);
+  }
+  window.estByHand = function () { byHand = true; render(); };
+  window.estUnfold = function (open) {
+    const k = currentJobId || '';
+    if (open) unfolded[k] = true; else delete unfolded[k];
+    render();
+    const s = el('estimateSection');
+    if (!open && s && s.getBoundingClientRect().top < 0) s.scrollIntoView({ block: 'start' });
+  };
+  // The folded estimate's line: its number, the answer, the total, and the
+  // way back in.
+  function foldedHtml(q, status) {
+    const total = q.total != null ? fmtMoney(Number(q.total) || 0) : last && last.grandCents > 0 ? cents(last.grandCents) : '';
+    const link = q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
+      ? '<a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open in QuickBooks</a>' : '';
+    return '<div class="est-fold-line"><span class="est-fold-what"><b>Estimate' + (q.docNumber ? ' #' + esc(q.docNumber) : '') + '</b>' +
+        (status ? ' · ' + esc(status) : '') + (total ? ' · <b>' + total + '</b>' : '') +
+        (q.acceptedBy ? ' <span class="muted">by ' + esc(q.acceptedBy) + '</span>' : '') +
+        (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</span>' +
+      '<span class="est-fold-act">' + link +
+        '<button class="btn btn-sm" onclick="estUnfold(true)" aria-expanded="false">Show / edit ▾</button></span></div>';
   }
 
   function chatHtml(ro) {
@@ -421,13 +483,16 @@
             esc(e.name) + (Number.isInteger(e.priceCents) ? ' — ' + cents(e.priceCents) + '/' + esc(e.unit || 'each') : '') + '</option>').join('') +
         '</select></label>' +
         '<label><span>Qty' + (w.unit ? ' (' + esc(w.unit) + ')' : '') + '</span>' + on('qty', w.qty, '', '', 'decimal') + '</label>' +
-        '<label><span>Price per ' + esc(w.unit || 'unit') + '</span>' + on('rate', dollarsIn(w.rateCents), '0.00', '', 'decimal') + '</label>' +
+        '<label><span>Price per ' + esc(w.unit || 'unit') + '</span>' + on('rate', dollarsIn(w.rateCents), '0.00', 'est-money', 'decimal') + '</label>' +
         '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
       extra = adjustHtml(w, svc, ro);
     } else {
-      nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', '', 'decimal') + '</label>' +
+      nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', 'est-money', 'decimal') + '</label>' +
         '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
     }
+    // The QuickBooks product is rarely changed: under More, named on the
+    // button when it has one so it is never hidden without a word.
+    const qbName = String(w.qbItem || '').trim();
     return '<div class="est-wrow">' +
       '<div class="est-wtop">' + on('title', w.title, 'Heading, e.g. Paver patio & steps', 'est-title') +
         '<select' + dis + ' onchange="estWork(\'' + id + '\', \'kind\', this.value)">' +
@@ -436,15 +501,41 @@
       '<div class="est-nums">' + nums + '<div class="est-amt" id="estWA_' + id + '"></div></div>' +
       extra +
       '<div class="est-wprofit" id="estWF_' + id + '"></div>' +
-      '<textarea rows="4" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
+      '<textarea rows="3" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
         ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>' +
       crewNoteHtml(w, id, ro) +
-      '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
-        ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>' +
-      taxPickHtml('work', id, w.taxable, ro) +
+      '<div class="est-meta">' + crewNoteAddHtml(w, id, ro) +
+        taxPickHtml('work', id, w.taxable, ro) +
+        moreBtnHtml(id, qbName ? 'QuickBooks: ' + qbName : '') + '</div>' +
+      moreBoxHtml(id, '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
+        ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>') +
       '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
   }
+
+  // A line's "More ▾": what is seldom changed, folded under the line. Open
+  // or shut without drawing the estimate again (nothing in it prices).
+  const moreOpen = {};        // line id -> its More is open
+  function moreBtnHtml(id, says) {
+    return '<button type="button" class="est-more-btn" id="estMBt_' + id + '" aria-expanded="' + (moreOpen[id] ? 'true' : 'false') + '"' +
+      ' onclick="estMore(\'' + id + '\')">' + (moreOpen[id] ? 'Less ▴' : 'More ▾') +
+      (says ? ' <span class="est-more-says">· ' + esc(says) + '</span>' : '') + '</button>';
+  }
+  function moreBoxHtml(id, inside) {
+    return '<div class="est-more-box" id="estMB_' + id + '"' + (moreOpen[id] ? '' : ' hidden') + '>' + inside + '</div>';
+  }
+  window.estMore = function (id) {
+    id = safeId(id);
+    moreOpen[id] = !moreOpen[id];
+    const box = el('estMB_' + id), btn = el('estMBt_' + id);
+    if (box) box.hidden = !moreOpen[id];
+    if (btn) {
+      btn.setAttribute('aria-expanded', moreOpen[id] ? 'true' : 'false');
+      const says = btn.querySelector('.est-more-says');
+      btn.textContent = (moreOpen[id] ? 'Less ▴' : 'More ▾') + (says ? ' ' : '');
+      if (says) btn.appendChild(says);
+    }
+  };
 
   // Notes for the crew on a labour line (Jonah, 14 Oct 2026: the crew should
   // see "all the info that would be important to know to do the work"):
@@ -453,11 +544,14 @@
   // estimate or in QuickBooks; shown under this line on the crew's page for
   // the job (crewjobs.js), with any $ amount blanked. Folded away until used.
   const crewNoteOpen = {};
+  const crewNoteShut = (w, id) => !String(w.crewNote || '').trim() && !crewNoteOpen[id];
+  // The way to start one, on the line's bottom row beside its sales tax.
+  function crewNoteAddHtml(w, id, ro) {
+    return ro || !crewNoteShut(w, id) ? '' : '<span class="est-crewnote-add"><button class="link-btn" onclick="estCrewNote(\'' + id + '\')">' +
+      '👷 + Notes for the crew</button></span>';
+  }
   function crewNoteHtml(w, id, ro) {
-    if (!String(w.crewNote || '').trim() && !crewNoteOpen[id]) {
-      return ro ? '' : '<div class="est-crewnote-add"><button class="link-btn" onclick="estCrewNote(\'' + id + '\')">' +
-        '👷 + Notes for the crew</button></div>';
-    }
+    if (crewNoteShut(w, id)) return '';
     return '<div class="est-crewnote"><span>👷 Notes for the crew — not on the estimate; the crew see them on the job’s page</span>' +
       '<textarea rows="2" id="estCN_' + id + '"' + (ro ? ' readonly' : '') +
         ' placeholder="Anything the crew need to know for this work — depths, where things go, what to watch out for"' +
@@ -476,7 +570,7 @@
   // stays. Only asked when there is more than one line to choose from.
   function forWorkHtml(m, id, dis) {
     if (est.work.length < 2 || !window.YDCrewJobs || !YDCrewJobs.workFor) return '';
-    const title = w => String(w.title || '').trim() || 'Labour line ' + (est.work.indexOf(w) + 1);
+    const title = w => String(w.title || '').trim() || 'Labor line ' + (est.work.indexOf(w) + 1);
     const guess = YDCrewJobs.workFor(Object.assign({}, m, { forWork: '' }), est.work, catalog().items);
     const guessed = est.work.find(w => w.id === guess);
     const cur = m.forWork === 'none' || est.work.some(w => w.id === m.forWork) ? m.forWork : '';
@@ -488,16 +582,43 @@
     '</select></label>';
   }
 
+  // What a material's More button says when its line was picked by hand.
+  function forWorkSays(m) {
+    if (est.work.length < 2) return '';
+    if (m.forWork === 'none') return 'for the whole job';
+    const w = est.work.find(x => x.id === m.forWork);
+    return w ? 'for ' + (String(w.title || '').trim() || 'Labor line ' + (est.work.indexOf(w) + 1)) : '';
+  }
+
   // Sales tax on a line (pricing.js salesTax): worked out from what the line
   // is, or set by hand -- the line shows which, and why when a building job's
-  // little bit of planting goes untaxed.
+  // little bit of planting goes untaxed. Worked out, it is a small chip
+  // saying which; a tap on it brings out the choice. Set by hand, the choice
+  // stays out, so a line taxed against the rule is seen at a glance.
+  const taxOpen = {};         // line id -> its sales tax choice brought out
   function taxPickHtml(kind, id, v, ro) {
     const cur = v === true ? '1' : v === false ? '0' : '';
-    return '<div class="est-tax"><span>Sales tax</span><select' + (ro ? ' disabled' : '') +
+    const note = '<span class="muted" id="' + (kind === 'work' ? 'estWT_' : 'estMT_') + id + '"></span>';
+    if (!cur && !taxOpen[id]) {
+      return '<span class="est-tax" id="estTX_' + id + '"><button type="button" class="est-chip"' + (ro ? ' disabled' : '') +
+        ' onclick="estTaxOpen(\'' + kind + '\', \'' + id + '\')" title="Sales tax, worked out from what the line is — tap to set it by hand">' +
+        '<span class="est-chip-k">Tax</span> ' + note + (ro ? '' : ' ▾') + '</button></span>';
+    }
+    return '<span class="est-tax" id="estTX_' + id + '"><span>Sales tax</span><select' + (ro ? ' disabled' : '') +
       ' onchange="estTax(\'' + kind + '\', \'' + id + '\', this.value)">' +
       [['', 'Auto'], ['1', 'Taxed'], ['0', 'Not taxed']].map(([k, n]) => '<option value="' + k + '"' + (k === cur ? ' selected' : '') + '>' + n + '</option>').join('') +
-      '</select><span class="muted" id="' + (kind === 'work' ? 'estWT_' : 'estMT_') + id + '"></span></div>';
+      '</select>' + note + '</span>';
   }
+  window.estTaxOpen = function (kind, id) {
+    id = safeId(id);
+    const x = find(kind === 'work' ? est.work : est.materials, id), box = el('estTX_' + id);
+    if (!x || !box || !changes()) return;
+    taxOpen[id] = true;
+    box.outerHTML = taxPickHtml(kind, id, x.taxable, false);
+    renderTotals();
+    const sel = el('estTX_' + id) && el('estTX_' + id).querySelector('select');
+    if (sel) sel.focus();
+  };
   function taxNote(line, r, hand) {
     if (!line) return '';
     if (line.taxable && r.tax.underTen) return 'not taxed: planting under 10% of a building job';
@@ -563,7 +684,7 @@
   // Supplies or the kinds change (onCatalog), and each line's dropdown holds
   // only its own choice until someone goes to use it (fillPicker).
   const NO_SUPPLY = '<option value="">— not in Supplies —</option>';
-  const byText = new Intl.Collator().compare;
+  const byText = new Intl.Collator(undefined, { numeric: true }).compare;   // #8 stone before #57, as in Supplies
   let supplyList = null;      // { html: every option, has: Set of their ids }
   function supplyOption(it, c, selected) {
     const v = c.vendors[it.vendorId];
@@ -626,7 +747,7 @@
     if (m.plant) {
       head = '<span class="est-plant">🌱</span>' + on('name', m.name, 'Plant, size — e.g. Autumn Blaze maple, 2" cal', 'est-title') +
         '<label><span>How many</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>' +
-        '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', '', 'decimal') + '</label>' +
+        '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', 'est-money', 'decimal') + '</label>' +
         '<label><span>Tree?</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'tree\', this.value)">' +
           [['', 'No'], ['single', 'Single-trunk'], ['multi', 'Multi-trunk / evergreen']].map(([k, n]) =>
             '<option value="' + k + '"' + ((m.tree || '') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
@@ -636,7 +757,7 @@
         on('name', m.name, 'What the customer reads, e.g. Screened topsoil', 'est-title') +
         '<label><span>Qty' + (unit ? ' (' + esc(unit) + ')' : '') + '</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>' +
         (it ? '' : '<label><span>Unit</span>' + on('unit', m.unit, 'each', '') + '</label>' +
-          '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', '', 'decimal') + '</label>' +
+          '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', 'est-money', 'decimal') + '</label>' +
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
             kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
           '</select></label>') +
@@ -647,11 +768,15 @@
             '<option value="' + k + '"' + ((m.delivery || 'auto') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
           '</select></label>' : '');
     }
+    // Under the line, on one row: what is ordered, its sales tax, and More
+    // (which line of labor it is for, on the crew's page).
+    const forWork = forWorkHtml(m, id, dis);
     return '<div class="est-mrow">' +
       '<div class="est-mtop">' + head + '<div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div>' +
-      '<div class="est-order" id="estMO_' + id + '"></div>' +
-      forWorkHtml(m, id, dis) +
-      taxPickHtml('mat', id, m.taxable, ro) +
+      '<div class="est-meta"><div class="est-order" id="estMO_' + id + '"></div>' +
+        taxPickHtml('mat', id, m.taxable, ro) +
+        (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
+      (forWork ? moreBoxHtml(id, forWork) : '') +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
     '</div>';
   }
@@ -704,7 +829,7 @@
     const pays = r.payments;
     t.innerHTML = (r.work.length || r.takeoff.length)
       ? '<div><span>Materials</span><b>' + cents(r.materialsCents) + '</b></div>' +
-        '<div><span>Labour & installation</span><b>' + cents(r.laborCents) + '</b></div>' +
+        '<div><span>Labor & installation</span><b>' + cents(r.laborCents) + '</b></div>' +
         taxRowsHtml(r) +
         '<div class="est-grand"><span>Project total</span><b>' + cents(r.grandCents) + '</b></div>' +
         paymentsHtml(r) +
@@ -813,24 +938,41 @@
   // Jonah (13 Oct 2026): "when building a bid [show] my actual cost for
   // material & my total profit along with the profit margin & profit per day
   // & estimated total labor costs."
+  //
+  // Folded away until asked for (15 Oct 2026: bids are built on the iPad in
+  // front of the customer), and remembered on this device. A two-column
+  // table, so it fits a phone (laid out as one long row, it ran 1,100 px
+  // wide and mostly off the screen).
+  const NUMBERS_KEY = 'ydjobhub_estNumbers';
+  let numbersShown = (() => { try { return localStorage.getItem(NUMBERS_KEY) === '1'; } catch (e) { return false; } })();
+  window.estNumbers = function () {
+    numbersShown = !numbersShown;
+    try { if (numbersShown) localStorage.setItem(NUMBERS_KEY, '1'); else localStorage.removeItem(NUMBERS_KEY); } catch (e) { /* private window */ }
+    renderTotals();
+  };
   function profitHtml(r) {
     const p = r.profit;
     if (!p || !(r.totalCents > 0)) return '';
-    const why = !p.complete ? '<div class="muted">Not final — ' +
-      (r.problems.length ? 'some lines aren’t priced yet' : r.work.some(w => !w.crewDays) ? 'a labour line has no crew-days' : 'the crew-day rate isn’t set') + '.</div>' : '';
-    const row = (label, value, cls) => '<div class="' + (cls || '') + '"><span>' + label + '</span><b>' + value + '</b></div>';
+    if (!numbersShown) {
+      return '<div class="est-planned-show"><button class="link-btn" onclick="estNumbers()">📊 Show my numbers</button></div>';
+    }
+    const why = !p.complete ? '<p class="est-planned-why">Not final — ' +
+      (r.problems.length ? 'some lines aren’t priced yet' : r.work.some(w => !w.crewDays) ? 'a labor line has no crew-days' : 'the crew-day rate isn’t set') + '.</p>' : '';
+    const row = (label, value, cls) => '<tr' + (cls ? ' class="' + cls + '"' : '') + '><th scope="row">' + label + '</th><td>' + value + '</td></tr>';
     const days = p.crewDays > 0 ? fmtQ(p.crewDays) + ' crew-day' + (p.crewDays === 1 ? '' : 's') : 'no crew-days yet';
-    return '<div class="est-profit">' +
-      '<div class="est-profit-h">Your numbers <span class="muted">— only you see this</span></div>' +
-      row('Material cost (what you pay, tax in)', cents(p.materialCostCents)) +
-      (p.deliveryCostCents ? row('Delivery cost', cents(p.deliveryCostCents)) : '') +
-      (p.fuelCostCents ? row('Fuel cost', cents(p.fuelCostCents)) : '') +
-      row('Labour cost (' + days + ' at your crew-day rate)', cents(p.laborCostCents)) +
-      row('Total cost', cents(p.costCents), 'est-profit-sub') +
-      row('Profit', cents(p.cents), 'est-profit-big') +
-      row('Profit margin', p.marginPct === null ? '—' : (Math.round(p.marginPct * 10) / 10) + '%') +
-      row('Profit per crew-day', p.perDayCents === null ? '— put in crew-days' : perDay(p.perDayCents)) +
-      why +
+    return '<div class="est-planned">' +
+      '<div class="est-planned-h"><span>Planned profit <span class="muted">— only you see this</span></span>' +
+        '<button class="link-btn" onclick="estNumbers()">Hide</button></div>' +
+      '<table class="est-plan"><tbody>' +
+        row('Material cost <small>what you pay, tax in</small>', cents(p.materialCostCents)) +
+        (p.deliveryCostCents ? row('Delivery cost', cents(p.deliveryCostCents)) : '') +
+        (p.fuelCostCents ? row('Fuel cost', cents(p.fuelCostCents)) : '') +
+        row('Labor cost <small>' + days + ' at your crew-day rate</small>', cents(p.laborCostCents)) +
+        row('Total cost', cents(p.costCents), 'est-plan-sub') +
+        row('Profit', cents(p.cents), 'est-plan-big') +
+        row('Profit margin', p.marginPct === null ? '—' : (Math.round(p.marginPct * 10) / 10) + '%') +
+        row('Profit per crew-day', p.perDayCents === null ? '— put in crew-days' : perDay(p.perDayCents)) +
+      '</tbody></table>' + why +
     '</div>';
   }
 
@@ -1012,6 +1154,15 @@
     const when = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const status = q ? ({ Pending: 'Waiting on the customer', Accepted: '✅ Accepted', Closed: 'Made into an invoice',
       Converted: 'Made into an invoice', Rejected: 'Turned down' }[q.status] || q.status || '') : '';
+    // Folded, or no longer to be (an answer or an invoice since it was
+    // drawn): the whole estimate is drawn again the right way.
+    const wrap = el('estimateWrap');
+    const drawnFolded = !!(wrap && wrap.dataset.folded === '1');
+    if (wrap && drawnFolded !== folded()) { render(); return; }
+    if (drawnFolded) {
+      box.innerHTML = foldedHtml(q, status) + invoiceHtml(q, inv, can, when) + careHtml(when);
+      return;
+    }
     if (can) askCompany();
     const testCo = qbCompany && qbCompany.env && qbCompany.env !== 'production';
     box.innerHTML =
@@ -1146,7 +1297,7 @@
     return '<details class="est-sent"><summary>Versions put in QuickBooks (' + list.length + ')</summary>' +
       list.map(v => '<div class="est-sent-row"><b>' + esc(when(v.at)) + ' ' + esc(time(v.at)) + '</b> — ' + cents(v.totalCents) +
         (v.emailed ? ' · emailed' : ' · saved, not emailed') + (v.docNumber ? ' · #' + esc(v.docNumber) : '') +
-        '<div class="muted">' + (v.work || []).map(w => esc(w.title || 'Labour') + ' ' + cents(w.cents)).join(' · ') +
+        '<div class="muted">' + (v.work || []).map(w => esc(w.title || 'Labor') + ' ' + cents(w.cents)).join(' · ') +
           (v.materialsCents ? ' · Materials ' + cents(v.materialsCents) : '') + '</div></div>').join('') +
     '</details>';
   }
@@ -1727,11 +1878,30 @@
       : { id: newId('em'), supplyId: null, name: '', qty: null, delivery: 'auto' });
     changed(true);
   };
+  // Taken off, with Undo on the toast: the line goes back where it was, as
+  // it was. Only onto the same job -- another job opened in between keeps
+  // its own lines (a new job counts as the same until the form is loaded
+  // with another).
   window.estRemove = function (kind, id) {
     if (!changes()) return;
+    const list = kind === 'work' ? est.work : est.materials;
+    const at = list.findIndex(x => safeId(x.id) === id);
+    if (at === -1) return;
+    const line = list[at], jobAt = currentJobId, loadAt = loads;
     if (kind === 'work') est.work = est.work.filter(x => safeId(x.id) !== id);
     else est.materials = est.materials.filter(x => safeId(x.id) !== id);
     changed(true);
+    const name = String((kind === 'work' ? line.title : line.name) || '').trim() || (kind === 'work' ? 'the labor line' : 'the material');
+    const putBack = () => {
+      const same = jobAt ? currentJobId === jobAt : loads === loadAt;
+      if (!same || !changes()) { showToast('Another job is open — nothing put back'); return; }
+      const now = kind === 'work' ? est.work : est.materials;
+      if (now.some(x => x.id === line.id)) return;
+      now.splice(Math.min(at, now.length), 0, line);
+      changed(true);
+    };
+    const msg = 'Removed “' + (name.length > 40 ? name.slice(0, 39) + '…' : name) + '”';
+    if (typeof showUndo === 'function') showUndo(msg, putBack); else showToast(msg);
   };
   window.estMove = function (kind, id, dir) {
     const list = kind === 'work' ? est.work : est.materials;

@@ -3058,3 +3058,75 @@
     .dash-card-sub { font-size:12.5px; color:var(--muted); }
     .dash-card-nums { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:12.5px; font-weight:600; }
   }
+  /* ---- ux-d2 estimates & supplies (15 Oct 2026) ---- */
+  /* Estimate lines, compact (estimate.js): what sits under a line -- what is
+     ordered, its sales tax, More -- on one row; the seldom changed (which
+     line of labor a material is for, a labor line's QuickBooks product)
+     folded under More. */
+  .est-meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; font-size:12px; color:var(--muted); min-height:26px; }
+  .est-meta .est-order { flex:1 1 220px; min-width:0; }
+  .est-meta .est-crewnote-add { flex:1 1 auto; }
+  .est-meta .est-tax { margin:0 0 0 auto; gap:6px; }
+  .est-meta .est-tax select { width:auto; font-size:13px; padding:3px 28px 3px 8px; background-position:right 9px center; }
+  .est-chip { display:inline-flex; align-items:center; gap:4px; font:inherit; font-size:12px; line-height:1.2; color:var(--muted);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:12px; padding:3px 9px; cursor:pointer; min-height:26px; }
+  .est-chip:hover:not(:disabled) { border-color:var(--border-strong); color:var(--text); }
+  .est-chip:disabled { cursor:default; }
+  .est-chip .muted { color:inherit; }
+  .est-chip-k { font-weight:700; }
+  .est-more-btn { font:inherit; font-size:12px; color:var(--brand); background:none; border:0; padding:3px 2px; cursor:pointer; min-height:26px; text-align:left; }
+  .est-more-btn:hover { text-decoration:underline; }
+  .est-more-says { color:var(--muted); }
+  .est-more-box { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; padding:6px 8px; border-radius:6px; background:var(--surface-2); }
+  .est-more-box[hidden] { display:none; }
+  .est-more-box .est-qbitem { flex:1 1 260px; }
+  /* A labor line: its heading and its numbers side by side when there is room */
+  .est-wrow { flex-direction:row; flex-wrap:wrap; }
+  .est-wrow > * { flex:1 1 100%; min-width:0; }
+  .est-wrow > .est-wtop { flex:1 1 380px; }
+  .est-wrow > .est-nums { flex:0 1 auto; }
+  /* Money boxes wide enough for 4800.00 */
+  .est-nums label input.est-money, .est-mtop label input.est-money { width:104px; }
+  @media (max-width:720px) {
+    /* A labor line's kind beside its ↑ ↓ ✕ rather than on a row of its own */
+    .est-wtop > select { flex:1 1 140px; min-width:0; }
+  }
+  /* A new bid: the notes and Build, then "or add lines by hand" */
+  .est-byhand { margin-top:2px; font-size:13px; }
+  /* An accepted estimate, folded to one line */
+  .est-qb.est-folded { margin-top:0; padding-top:0; border-top:0; }
+  .est-fold-line { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px 12px; font-size:14px; }
+  .est-fold-act { display:flex; flex-wrap:wrap; gap:6px; }
+  .est-folded .est-invoice, .est-folded .est-qb-line { margin-top:10px; }
+  .est-refold { margin:-6px 0 8px; text-align:right; }
+  /* Planned profit (the owner's numbers): a two-column table that fits a phone */
+  .est-totals .est-planned-show { display:block; }
+  .est-totals .est-planned { display:block; align-self:stretch; width:100%; max-width:440px; margin:6px 0 0 auto; padding:8px 10px;
+    border-radius:8px; background:var(--surface-2); border:1px solid var(--border); box-sizing:border-box; }
+  .est-totals .est-planned-h { display:flex; justify-content:space-between; align-items:baseline; gap:10px; font-weight:700; margin-bottom:4px; }
+  .est-totals .est-planned-h .muted { font-weight:400; font-size:12px; }
+  .est-plan { width:100%; border-collapse:collapse; font-size:13.5px; }
+  .est-plan th { text-align:left; font-size:13px; font-weight:400; text-transform:none; letter-spacing:0; color:var(--text); padding:3px 10px 3px 0; border:0; white-space:normal; }
+  .est-plan th small { display:block; font-size:11.5px; color:var(--muted); }
+  .est-plan td { text-align:right; font-weight:700; padding:3px 0; border:0; white-space:nowrap; vertical-align:top; }
+  .est-plan tbody tr:hover { background:none; }
+  .est-plan .est-plan-sub th, .est-plan .est-plan-sub td { border-top:1px solid var(--border); padding-top:5px; }
+  .est-plan .est-plan-big th { font-weight:700; }
+  .est-plan .est-plan-big td { color:var(--pos); font-size:15px; }
+  .est-planned-why { margin:4px 0 0; font-size:12px; color:var(--muted); }
+  /* Hide from crew / What the crew see: only while the job is booked or in progress */
+  #panel-job .field:has(#jobStatusSelect option[value="quoting"]:checked) .crew-view-row,
+  #panel-job .field:has(#jobStatusSelect option[value="complete"]:checked) .crew-view-row { display:none; }
+  /* Estimate vs actual: the status picker shows its whole choice */
+  #evaListWrap .filter-bar select { width:auto; max-width:100%; }
+  /* Supplies: a note all of one supplier's items share, said once */
+  .sup-shared { margin-top:6px; }
+  .sup-shared-for { margin:0 0 10px; padding:8px 10px; border-radius:8px; background:var(--surface-2); font-size:13px; }
+  .sup-shared-v { font-weight:700; }
+  .sup-pricefirst { margin-top:4px; }
+  /* Contacts: the list first, the form behind "+ Add a contact" */
+  .pp-addbar { margin-bottom:12px; }
+  html[data-contacts-readonly] #ppAddBtn { display:none !important; }
+  #ppOutSection.pp-out-compact .section-head { display:none; }
+  #ppOutSection.pp-out-compact .section-body { padding:10px 16px; }
+  .pp-out-line { font-size:14px; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 6px; }

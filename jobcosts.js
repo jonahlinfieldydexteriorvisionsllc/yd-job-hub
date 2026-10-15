@@ -373,7 +373,7 @@
     const e = m.est, h = e.hand[key] || null;
     if (key === 'crewDays') {
       return fig(m, 'est', key, e.crewDays !== null ? fmtDays(e.crewDays) : dash, h) +
-        (e.crewDays === null && e.has ? note('no crew-days estimated — the profit leaves out labour') : '');
+        (e.crewDays === null && e.has ? note('no crew-days estimated — the profit leaves out labor') : '');
     }
     const v = e.costs[key];
     return fig(m, 'est', key, v == null ? dash : money(v), h);
@@ -416,7 +416,7 @@
     else if (l.basis === 'rate') actLab = money(l.cents) + note('at the crew-day rate' + (l.source === 'app' ? ' · wages paid ' + money(l.wagesCents) : ''));
     else actLab = money(l.cents) + note('wages paid (pay rates) — not like for like until Hours in a crew-day is set');
     const labDiff = e.labourCents !== null && l.source !== 'none' && l.cents !== null ? l.cents - e.labourCents : null;
-    out += row('Labour cost', '', estLab, actLab, diffHtml(labDiff, false, money));
+    out += row('Labor cost', '', estLab, actLab, diffHtml(labDiff, false, money));
     return out;
   }
 
@@ -598,7 +598,7 @@
       : m.status === 'inprogress' ? '<p class="hint" style="margin-top:0">In progress — the actual side is so far.</p>' : '';
     wrap.innerHTML = lead + basisHtml(m) + setupHtml(m) + tableHtml(m) + editHtml(m) +
       (m.recorded && m.filled.length ? '<p class="hint">* Not recorded yet, so counted at the estimate’s figure: ' +
-        esc(m.filled.map(k => k === 'labour' ? 'labour' : COST_NAME[k].toLowerCase()).join(', ')) +
+        esc(m.filled.map(k => k === 'labour' ? 'labor' : COST_NAME[k].toLowerCase()).join(', ')) +
         '. A cost left out would read as profit.</p>' : '') +
       detailsHtml(m);
     if (editing) { const box = el('evaHandVal'); if (box && document.activeElement !== box) box.focus(); }
@@ -713,7 +713,7 @@
       '</tr></thead><tbody>';
     list.forEach(m => {
       const e = m.est, l = m.act.labour, star = m.filled.length ? '<span class="eva-star" title="Not recorded yet, counted as estimated: ' +
-        esc(m.filled.map(k => k === 'labour' ? 'labour' : COST_NAME[k].toLowerCase()).join(', ')) + '">*</span>' : '';
+        esc(m.filled.map(k => k === 'labour' ? 'labor' : COST_NAME[k].toLowerCase()).join(', ')) + '">*</span>' : '';
       const daysTxt = (e.crewDays !== null ? fmtDays(e.crewDays) : '—') + ' → ' +
         (l.source === 'none' ? '—' : l.days !== null ? fmtDays(l.days) : fmtHrsMin(l.hours));
       const daysCls = e.crewDays !== null && l.days !== null && l.source !== 'none' && l.days - e.crewDays > 0.005 ? ' class="eva-bad"' : '';
@@ -731,8 +731,12 @@
         '<td data-l="Difference">' + diffHtml(m.diff, true, money) + '</td>' +
         '<td data-l="Margin">' + pct(m.actMargin) + '</td></tr>';
     });
+    // What the ? means, said under the table: its tooltip never shows on a
+    // phone or iPad.
+    const anyShaky = list.some(m => m.incomplete && m.estProfit !== null);
     h += '</tbody></table></div>' +
       '<p class="hint">Tap a job for its side by side on Tracking. * a cost not recorded yet (no receipts, no hours), counted at the estimate’s figure so it never reads as profit. ' +
+      (anyShaky ? '? after an estimated profit: that job’s estimate isn’t complete — some lines aren’t priced or it has no crew-days — so that profit isn’t the whole story. ' : '') +
       'In-progress jobs are so far. A job’s year is when the crew first clocked in, else its date.</p>';
     wrap.innerHTML = h;
   }

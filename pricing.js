@@ -613,7 +613,7 @@
     const totalCents = materialsCents + laborCents;
     const problems = [];
     all.forEach(l => l.problems.forEach(p => problems.push((l.name || 'A material') + ': ' + p)));
-    (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labour line') + ': ' + p)));
+    (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labor line') + ': ' + p)));
     del.problems.forEach(p => problems.push('Delivery: ' + p));
     fu.problems.forEach(p => problems.push('Fuel: ' + p));
     // What the job makes once everything is paid for: the materials at what
@@ -916,7 +916,7 @@
       (ro ? '' : '<div class="pr-add"><input id="prProfitNew" inputmode="decimal" placeholder="e.g. 750" ' +
         'onkeydown="if (event.key === \'Enter\') prProfitAdd()"> <button class="btn btn-sm" onclick="prProfitAdd()">+ Add an amount</button></div>') +
       '<p class="hint">As many as you like. A crew-day line on an estimate picks one (the usual unless you change it), or takes any amount of its own. ' +
-        'Labour on a crew-day line = crew-days × (crew-day rate + this).</p>' +
+        'Labor on a crew-day line = crew-days × (crew-day rate + this).</p>' +
     '</div>';
   }
   function saveProfit(list, usual) {
@@ -1082,7 +1082,7 @@
       '<p class="hint">How every estimate is priced. Change a number here and every estimate worked out from now on uses it; estimates already sent keep their prices. ' +
         'Only you see this screen, and the customer never sees any of it.' + (ro ? ' <b>Only the owner can change these.</b>' : '') + '</p>' +
 
-      '<h3 class="pr-h">Labour</h3><div class="pr-grid">' +
+      '<h3 class="pr-h">Labor</h3><div class="pr-grid">' +
         box('Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')", 'what a crew-day costs, for estimating') +
         box('Hours in a crew-day', r.crewDayHours, "prSet('crewDayHours', this.value, 'num')",
           'paid hours of the whole crew together — 3 people × 8 hours = 24. Turns clocked hours into crew-days on Estimate vs actual') +
@@ -1098,7 +1098,7 @@
         box('Sales tax charged to customers (%)', r.customerTaxPct, "prSet('customerTaxPct', this.value, 'num')",
           'on planting, sod, seed, mulch and lawn care — state + county where the job is') +
       '</div>' +
-      '<p class="hint">Wisconsin taxes landscaping and lawn care to the customer (labour and materials); patios, walls, walks, ' +
+      '<p class="hint">Wisconsin taxes landscaping and lawn care to the customer (labor and materials); patios, walls, walks, ' +
         'drainage, grading and snow are not taxed (you pay the tax when you buy their materials). On an estimate, each line is ' +
         'taxed or not from what it is — set any line by hand there. “Taxed to customer” below: Always, Never, or As the job is ' +
         '(mostly planting work, or mostly building). “Not taxed when bought”: you don’t pay purchase tax on it (a rental; ' +

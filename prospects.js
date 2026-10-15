@@ -176,6 +176,13 @@
       return '<div class="pp-out-q">When do you want to start reaching out to people for next season’s work? ' +
         'From that day, everyone on the list whose time to call has come is listed here, in your morning summary and on the calendar.</div>' + editor;
     }
+    // Set, and not here yet: one line, out of the list's way (15 Oct 2026).
+    if (today < start && !outreachEditing) {
+      const will = dueList(start).length;
+      return '<div class="pp-out-line">📅 Outreach starts <b>' + esc(niceDate(start)) + '</b>' +
+        '<span class="muted"> · ' + (will ? will + (will === 1 ? ' person' : ' people') + ' due that day' : 'nobody due that day yet') + '</span>' +
+        ' <button class="link-btn" onclick="editOutreachDate(true)">Change</button></div>';
+    }
     const head = '<div class="pp-out-when">' + (today < start ? 'Outreach starts ' : 'Outreach started ') + '<b>' + esc(niceDate(start)) + '</b>' +
       (outreachEditing ? '' : ' <button class="link-btn" onclick="editOutreachDate(true)">Change</button>' +
         (start < today && sug > start && sug.slice(0, 4) > start.slice(0, 4)
@@ -232,6 +239,8 @@
     if (title) title.textContent = active ? '📞 Time to reach out' : '📅 Next season outreach';
     const badge = el('ppOutBadge');
     if (badge) badge.textContent = active && n ? n + ' to reach' : '';
+    // The one-line card has no heading bar of its own (outreachHtml).
+    sec.classList.toggle('pp-out-compact', validDay(start) && today < start && !outreachEditing);
     wrap.innerHTML = outreachHtml();
     if (picking !== null && el('ppOutDate')) { el('ppOutDate').value = picking; el('ppOutDate').focus(); }
   }
@@ -390,7 +399,7 @@
       ? list.map(card).join('')
       : '<p class="empty-msg">' + (all.length
           ? 'Nobody matches that.'
-          : 'Nobody on the list yet — add the first person above.') + '</p>';
+          : 'Nobody on the list yet — add the first person with “+ Add a contact”.') + '</p>';
     const back = typing && el(typing);
     if (back) { back.focus(); try { back.setSelectionRange(back.value.length, back.value.length); } catch (e) {} }
   }
@@ -600,10 +609,29 @@
     tags = []; editingId = null;
     renderTags();
     const b = el('ppSaveBtn'); if (b) b.textContent = 'Add to the list';
-    const c = el('ppCancelBtn'); if (c) c.hidden = true;
+    const c = el('ppCancelBtn'); if (c) c.textContent = 'Close';
   }
 
-  window.cancelProspectEdit = function () { clearForm(); };
+  // The form is folded away behind "+ Add a contact" so the list comes first
+  // (15 Oct 2026: the list sat under a form the height of the screen).
+  function showForm(on) {
+    const f = el('ppForm'), b = el('ppAddBtn');
+    if (f) f.hidden = !on;
+    if (b) b.hidden = on;
+  }
+  window.openProspectForm = function () {
+    if (editingId) clearForm();
+    showForm(true);
+    const n = el('ppFirst');
+    if (n) { n.focus(); n.scrollIntoView({ block: 'nearest' }); }
+  };
+  // Closed, and emptied -- asked first when a new person was half typed in.
+  window.cancelProspectEdit = function () {
+    const typed = !editingId && (FORM.some(f => val(f)) || tags.length);
+    if (typed && !confirm('Throw away what’s typed?')) return;
+    clearForm();
+    showForm(false);
+  };
 
   window.saveProspect = function () {
     const firstName = val('ppFirst'), lastName = val('ppLast'), business = val('ppBusiness');
@@ -638,7 +666,14 @@
     render();
     write(id, rec, 'saving ' + name);
     showToast(wasEdit ? name + ' updated' : name + ' added');
-    if (el('ppFirst')) el('ppFirst').focus();
+    // A change made: the form folds away and the card is in the list. One
+    // added: the form stays for the next (several are often written in a
+    // row), until Close.
+    if (wasEdit) {
+      showForm(false);
+      const card = el('ppCard_' + safeIdOf(id));
+      if (card) card.scrollIntoView({ block: 'nearest' });
+    } else if (el('ppFirst')) el('ppFirst').focus();
   };
 
   window.editProspect = function (id) {
@@ -656,7 +691,8 @@
     tags = (p.services || []).slice();
     renderTags();
     const b = el('ppSaveBtn'); if (b) b.textContent = 'Save changes';
-    const c = el('ppCancelBtn'); if (c) c.hidden = false;
+    const c = el('ppCancelBtn'); if (c) c.textContent = 'Cancel';
+    showForm(true);
     const n = el('ppFirst');
     if (n) { n.scrollIntoView({ block: 'center', behavior: 'smooth' }); n.focus(); }
   };
@@ -680,7 +716,7 @@
     if (!p) return;
     if (!confirm('Take ' + p.name + ' off the list? This cannot be undone.')) return;
     delete people[id];
-    if (editingId === id) clearForm();
+    if (editingId === id) { clearForm(); showForm(false); }
     render();
     if (!window.YDDb) { warnNoDb(); return; }
     Promise.resolve(window.YDDb.remove('prospects', id)).catch(e => failed('removing ' + p.name, e));

@@ -1077,7 +1077,31 @@ function addOrderItem() {
   renderOrderList(); markDirty();
 }
 function toggleOrderItem(id) { const it = orderItems.find(m => m.id === id); if (it) { it.ordered = !it.ordered; renderOrderList(); markDirty(); } }
-function rmOrderItem(id) { orderItems = orderItems.filter(m => m.id !== id); renderOrderList(); markDirty(); }
+function rmOrderItem(id) {
+  const at = orderItems.findIndex(m => m.id === id), row = orderItems[at];
+  orderItems = orderItems.filter(m => m.id !== id); renderOrderList(); markDirty();
+  offerPutBack('“' + ((row && row.name) || 'Item') + '” taken off the order', row, at, () => orderItems, renderOrderList);
+}
+// A row taken off one of the job's lists (Tracking, Materials to Order), with
+// Undo on the toast: it goes back where it was, as it was. Only onto the same
+// job -- another job opened since has rows of its own. `list` reads the list
+// as it is at the time (each list is replaced, not changed, when a row goes or
+// a job is loaded), so a new job not saved yet counts as the same while its
+// list is the one the row came off.
+function offerPutBack(msg, row, at, list, redraw) {
+  if (!row) return;
+  const job = currentJobId, after = list();
+  const putBack = () => {
+    if (jobsReadOnly()) return;
+    const same = job ? currentJobId === job : list() === after;
+    if (!same) { showToast('Another job is open — nothing put back'); return; }
+    const now = list();
+    if (now.some(x => x.id === row.id)) return;
+    now.splice(Math.min(at, now.length), 0, row);
+    redraw(); markDirty();
+  };
+  if (typeof showUndo === 'function') showUndo(msg, putBack); else showToast(msg);
+}
 
 // ── From the estimate ──
 // A bid becoming a job brings its estimate's takeoff onto Materials to Order
@@ -1432,7 +1456,11 @@ function addLabor() {
   document.getElementById('labWorker').focus();
   renderLabor(); markDirty();
 }
-function rmLabor(id) { labor = labor.filter(e => e.id !== id); renderLabor(); markDirty(); }
+function rmLabor(id) {
+  const at = labor.findIndex(e => e.id === id), row = labor[at];
+  labor = labor.filter(e => e.id !== id); renderLabor(); markDirty();
+  offerPutBack('Hours for ' + ((row && row.worker) || 'that worker') + ' removed', row, at, () => labor, renderLabor);
+}
 
 // ═══════════════════════════════════════════════════════════
 // MATERIALS / PURCHASES
@@ -1489,7 +1517,17 @@ function addMaterial() {
   document.getElementById('matUnit').value = ''; document.getElementById('matDate').value = todayMD();
   renderMaterials(); markDirty();
 }
-function rmMaterial(id) { materials = materials.filter(e => e.id !== id); renderMaterials(); markDirty(); }
+function rmMaterial(id) {
+  const at = materials.findIndex(e => e.id === id), row = materials[at];
+  // A line put here from a receipt: the receipt keeps saying it went on this
+  // job (receipts.js), and only its own Undo takes it back off both -- so
+  // taking just the line off here is asked about first.
+  if (row && row.receiptId && !confirm('“' + (row.item || 'This line') + '” came from a receipt' +
+      (row.location ? ' (' + row.location + ')' : '') + '. Taken off here, the receipt still says it went on this job — ' +
+      'to take the receipt off the job, use Undo on it under Receipts.\n\nTake just this line off?')) return;
+  materials = materials.filter(e => e.id !== id); renderMaterials(); markDirty();
+  offerPutBack('“' + ((row && row.item) || 'Purchase') + '” removed', row, at, () => materials, renderMaterials);
+}
 
 // ═══════════════════════════════════════════════════════════
 // ADDITIONAL COSTS  (now with From / Vendor)
@@ -1527,7 +1565,11 @@ function addAdditionalCost() {
   document.getElementById('addCostDate').value = todayMD();
   renderAdditionalCosts(); markDirty();
 }
-function rmAdditionalCost(id) { additionalCosts = additionalCosts.filter(e => e.id !== id); renderAdditionalCosts(); markDirty(); }
+function rmAdditionalCost(id) {
+  const at = additionalCosts.findIndex(e => e.id === id), row = additionalCosts[at];
+  additionalCosts = additionalCosts.filter(e => e.id !== id); renderAdditionalCosts(); markDirty();
+  offerPutBack('“' + ((row && row.name) || 'Add-on') + '” removed', row, at, () => additionalCosts, renderAdditionalCosts);
+}
 function getAdditionalCostsTotal() { return additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0); }
 function syncJobPriceWithAdditionalCosts() {
   const newTotal = (parseFloat(baseJobPrice) || 0) + getAdditionalCostsTotal();
@@ -1584,7 +1626,11 @@ function addPayment() {
   document.getElementById('payDate').value = todayMD();
   renderPayments(); markDirty();
 }
-function rmPayment(id) { payments = payments.filter(p => p.id !== id); renderPayments(); markDirty(); }
+function rmPayment(id) {
+  const at = payments.findIndex(p => p.id === id), row = payments[at];
+  payments = payments.filter(p => p.id !== id); renderPayments(); markDirty();
+  offerPutBack('Payment' + (row && row.amount ? ' of ' + fmtMoney(parseFloat(row.amount) || 0) : '') + ' removed', row, at, () => payments, renderPayments);
+}
 
 // ═══════════════════════════════════════════════════════════
 // BADGES + FINANCIAL SUMMARY
@@ -1677,11 +1723,16 @@ function updateSummary() {
   const net = round2(jobPrice - overhead);
   const perHr = totalHrs > 0 ? net / totalHrs : 0;
   const hasPrice = jobPrice > 0, hasHrs = totalHrs > 0;
+  // Nothing spent on it yet (no labor, no purchases): its profit is not the
+  // whole price at a 100% margin, it is not known yet.
+  const hasCosts = overhead > 0;
 
   document.getElementById('financialsGrid').innerHTML = [
     { label: 'Labor Cost', value: fmtMoney(laborCost), cls: '', top: '', sub: laborCostSub(totalHrs) },
     { label: 'Total Cost', value: fmtMoney(overhead), cls: '', top: '', sub: 'Labor + Materials' },
-    { label: 'Net Profit', value: (net < 0 ? '-' : '') + fmtMoney(Math.abs(net)), cls: hasPrice ? (net >= 0 ? 'positive' : 'negative') : '', top: hasPrice ? (net >= 0 ? 'pos-top' : 'neg-top') : '', sub: hasPrice ? (net / jobPrice * 100).toFixed(1) + '% margin' : 'Set job price' },
+    hasCosts
+      ? { label: 'Net Profit', value: (net < 0 ? '-' : '') + fmtMoney(Math.abs(net)), cls: hasPrice ? (net >= 0 ? 'positive' : 'negative') : '', top: hasPrice ? (net >= 0 ? 'pos-top' : 'neg-top') : '', sub: hasPrice ? (net / jobPrice * 100).toFixed(1) + '% margin' : 'Set job price' }
+      : { label: 'Net Profit', value: '—', cls: '', top: '', sub: 'No costs logged yet' },
     { label: 'Profit / Hr', value: hasHrs ? ((perHr < 0 ? '-' : '') + fmtMoney(Math.abs(perHr))) : '—', cls: hasHrs ? (perHr >= 0 ? 'positive' : 'negative') : '', top: '', sub: hasHrs ? 'Per labor hour' : 'Add labor' },
   ].map(c => '<div class="fin-card ' + c.top + '"><div class="fin-label">' + c.label + '</div><div class="fin-value ' + c.cls + '">' + c.value + '</div><div style="font-size:11px;color:var(--muted);margin-top:3px">' + c.sub + '</div></div>').join('');
 
