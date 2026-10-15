@@ -15,6 +15,44 @@
     return (window.YD_CONFIG && window.YD_CONFIG.claudeEndpoint) || '';
   }
 
+  // How long to wait for an answer before saying so. A request sent into a
+  // dead spot used to hang for good: "Drafting…" on the button, forever, and
+  // no way to know whether to try again. Most answers take seconds; the
+  // ones where Claude reads, writes or searches -- or QuickBooks makes an
+  // estimate and emails it -- can take minutes, and cutting those short
+  // would only make the person send them twice.
+  const SHORT_MS = 45000;
+  const LONG_MS = 300000;
+  const LONG_PATHS = ['/estimate/draft', '/estimate/source', '/supplies/read-sheet', '/cards/now',
+    '/receipts/photo', '/receipts/now', '/care/draft', '/followup/draft', '/subs/scan',
+    '/qb/estimate', '/qb/estimate-invoice', '/qb/invoice'];
+  const waitFor = path => (LONG_PATHS.indexOf(path) !== -1 ? LONG_MS : SHORT_MS);
+
+  // fetch + read the answer, given up after `ms`. Resolves { res, payload };
+  // rejects with words a person can act on.
+  async function send(url, init, ms) {
+    const ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    let timedOut = false;
+    const timer = ctl ? setTimeout(() => { timedOut = true; ctl.abort(); }, ms) : null;
+    try {
+      let res;
+      try {
+        res = await fetch(url, ctl ? Object.assign({}, init, { signal: ctl.signal }) : init);
+      } catch (e) {
+        throw new Error(timedOut ? noAnswer(ms) : 'No connection — this needs signal.');
+      }
+      let payload = {};
+      try { payload = await res.json(); } catch (e) {
+        if (timedOut) throw new Error(noAnswer(ms));
+      }
+      return { res: res, payload: payload };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+  const noAnswer = ms => 'No answer from the server after ' + Math.round(ms / 1000) +
+    ' seconds — check the signal and try again.';
+
   window.YDClaude = {
     available() {
       // Drafting a scope writes into a job: the owner, or an admin who may
@@ -38,22 +76,15 @@
         throw new Error('Could not confirm your sign-in. Try again.');
       }
 
-      let res;
-      try {
-        res = await fetch(url, {
-          method: 'POST',
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ task, data: data || {} }),
-        });
-      } catch (e) {
-        throw new Error('No connection — this needs signal.');
-      }
-
-      let payload = {};
-      try { payload = await res.json(); } catch (e) {}
+      // The scope of work is Claude writing: the long wait.
+      const { res, payload } = await send(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Bearer ' + token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ task, data: data || {} }),
+      }, LONG_MS);
 
       if (!res.ok) {
         throw new Error(payload.error || ('Claude request failed (' + res.status + ')'));
@@ -68,19 +99,17 @@
       if (!base) throw new Error('Claude is not set up for this app yet.');
       const auth = window.YDAuth;
       if (!auth || !auth.user) throw new Error('Sign in first.');
-      const token = await auth.user.getIdToken();
-      let res;
+      let token;
       try {
-        res = await fetch(base + path, {
-          method: 'POST',
-          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-          body: JSON.stringify(body || {}),
-        });
+        token = await auth.user.getIdToken();
       } catch (e) {
-        throw new Error('No connection — this needs signal.');
+        throw new Error('Could not confirm your sign-in — check the signal and try again.');
       }
-      let payload = {};
-      try { payload = await res.json(); } catch (e) {}
+      const { res, payload } = await send(base + path, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {}),
+      }, waitFor(path));
       // A button newer than the server it calls (the app goes live the moment
       // it is pushed; the server only when it is deployed).
       // (An unknown route under a known prefix says "unknown endpoint"; a

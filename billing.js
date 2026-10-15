@@ -368,7 +368,7 @@
       '<div id="stormFixArea"></div>' +
       '<div class="table-wrap"><table><thead><tr>' +
         '<th>Account</th><th>Visits</th><th>Depth</th><th>On site</th>' +
-        '<th>Plowing</th><th>Salt</th><th>Labour</th><th>Total</th>' +
+        '<th>Plowing</th><th>Salt</th><th>Labor</th><th>Total</th>' +
       '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
       (b.skipped && b.skipped.length
         ? '<div style="margin-top:14px"><span class="label">Skipped</span>' +
@@ -860,7 +860,7 @@
     wrap.innerHTML = picker + invoiceBar +
       '<div class="table-wrap"><table><thead><tr>' +
         '<th>Account</th><th>Visits</th><th>Storms</th><th>On site</th><th>Crew hrs</th>' +
-        '<th>Plowing</th><th>Salt</th><th>Labour</th><th>Billed</th><th>Per crew-hr</th>' +
+        '<th>Plowing</th><th>Salt</th><th>Labor</th><th>Billed</th><th>Per crew-hr</th>' +
       '</tr></thead><tbody>' + rows + '</tbody>' +
       '<tfoot><tr style="font-weight:700">' +
         '<td>All accounts</td><td>' + totals.visits + '</td><td></td><td></td>' +

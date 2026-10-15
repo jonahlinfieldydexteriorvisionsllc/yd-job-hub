@@ -156,9 +156,14 @@
 
   // ------------------------------------------------------------------ screen
 
+  // The window's title matches the menu item that opens it (the menu said
+  // "Notification settings", the window "Notifications & summaries").
+  function titled(m, words) { const h = m.querySelector('.modal-head h2'); if (h) h.textContent = words; }
+
   window.openNotifications = async function () {
     const m = el('ntfModal');
     if (!m || !me() || !window.YDDb) return;
+    titled(m, '🔔 Notification settings');
     m.classList.add('active');
     el('ntfBody').innerHTML = '<p class="empty-msg">Loading…</p>';
     await loadPrefs();
@@ -171,6 +176,9 @@
     if (!body || !prefs) return;
     const state = await deviceState();
     const u = me();
+    // Crew (and admins) get the short version: the owner's words explain
+    // things only he sees -- the crew's activity, the test buttons.
+    const owner = isOwner();
     const deviceHtml = {
       on: '<p class="ntf-ok">✓ Notifications are on for this device.</p>' +
           '<button class="btn btn-sm" onclick="ntfTurnOff()">Turn off on this device</button>',
@@ -190,13 +198,17 @@
         toggle('push', 'Phone notifications', 'on every device you have turned them on for') +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Reminders</div>' +
-        toggle('autoRemind', 'Remind me of everything', 'every calendar entry I can see and every card that is mine — ' +
-          'no need to set a reminder on each one') +
-        '<div class="hint">Bid appointments 1 hour and 30 minutes before. Anything else at a set time, 30 minutes before. ' +
-          'Things for any time that day, one list at 7 am — headed by any task from the days before that was never ' +
-          'ticked off. A crew task reminds the people on it — or, with nobody on ' +
-          'it, every crew member. One thing’s own ' +
-          'Remind box changes its reminder or switches it off.</div>' +
+        toggle('autoRemind', 'Remind me of everything', owner
+          ? 'every calendar entry I can see and every card that is mine — no need to set a reminder on each one'
+          : 'everything on my day and every card that is mine') +
+        '<div class="hint">' + (owner
+          ? 'Bid appointments 1 hour and 30 minutes before. Anything else at a set time, 30 minutes before. ' +
+            'Things for any time that day, one list at 7 am — headed by any task from the days before that was never ' +
+            'ticked off. A crew task reminds the people on it — or, with nobody on ' +
+            'it, every crew member. One thing’s own ' +
+            'Remind box changes its reminder or switches it off.'
+          : 'Anything at a set time: 30 minutes before. Things for any time that day: one list at 7 am. ' +
+            'A crew task with nobody named on it reminds the whole crew.') + '</div>' +
         // Jonah (12 Oct 2026): told "whenever the guys adds a card or something
         // to a calendar or makes a change" (functions/reminders.py _activity).
         (isOwner() ? toggle('crewActivity', 'When the crew add or change something',
@@ -211,8 +223,8 @@
           : window.YDAuth && window.YDAuth.isAdmin
           ? 'Yours has the weather, where you are working, storm news and your own hours — plus the calendars, ' +
             'bids and crew hours you have been given access to. At the end of the day, your tasks not ticked off.'
-          : 'Yours has the weather, where you are working, storm news, and your own hours — and at the end of the ' +
-            'day, your tasks not ticked off.') + '</div>' +
+          : 'The weather, where you are working, storm news and your hours — and at the end of the day, ' +
+            'any task of yours not ticked off.') + '</div>' +
       '</div>' +
       (isOwner() ? '<div class="ntf-block"><div class="ntf-head">Try it</div>' +
         '<div class="field-actions">' +
@@ -272,6 +284,7 @@
   window.openSummaries = function () {
     const m = el('sumModal'), u = me();
     if (!m || !u || !window.YDDb) return;
+    titled(m, '📰 Past summaries');
     m.classList.add('active');
     summaries = {}; sumShown = null;
     el('sumBody').innerHTML = '<p class="empty-msg">Loading…</p>';

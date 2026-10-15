@@ -78,20 +78,46 @@
       <button class="srch-open" id="srchOpen" type="button" onclick="openSearch()" aria-label="Search everything" aria-haspopup="dialog" aria-expanded="false" aria-controls="srchPanel" title="Search everything — press / to start typing"><span class="srch-open-icon" aria-hidden="true">🔍</span><span class="srch-open-word" aria-hidden="true">Search</span><kbd class="srch-open-key" aria-hidden="true">/</kbd></button>
       <div class="menu-wrap">
         <button class="btn btn-menu" onclick="toggleHeaderMenu()" aria-haspopup="true" aria-label="More actions">&#8943;</button>
+        <!-- In groups under small headings; app.js (tidyHeaderMenu) hides a
+             heading with nothing under it for this person. Each item's own
+             file shows or hides it on sign-in. -->
         <div class="menu" id="headerMenu" hidden>
-          <button onclick="closeHeaderMenu(); exportAllJobs()">Backup</button>
-          <button onclick="closeHeaderMenu(); document.getElementById('restoreInput').click()">Restore</button>
-          <button onclick="closeHeaderMenu(); window.print()">Print</button>
-          <button id="menuReport" hidden onclick="closeHeaderMenu(); reportProblem()">Something went wrong</button>
-          <button id="menuProblems" hidden onclick="closeHeaderMenu(); openProblems()">Problems<span class="menu-count" id="problemsCount" hidden></span></button>
-          <button id="menuQuickBooks" hidden onclick="closeHeaderMenu(); openQuickBooks()">QuickBooks</button>
-          <button id="menuPeople" hidden onclick="closeHeaderMenu(); openPeople()">People &amp; names</button>
-          <button id="menuPricing" hidden onclick="closeHeaderMenu(); openPricingRules()">Pricing rules</button>
-          <button id="menuSummaries" hidden onclick="closeHeaderMenu(); openSummaries()">📰 Summaries</button>
-          <button id="menuCrewNotes" hidden onclick="closeHeaderMenu(); openCrewNotes()">📝 Notes from the crew</button>
-          <button id="menuNoteJonah" hidden onclick="closeHeaderMenu(); openNoteForJonah()">📝 Leave a note for Jonah</button>
-          <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">Notifications &amp; summaries</button>
-          <button id="menuTheme" onclick="closeHeaderMenu(); openAppearance()">Appearance</button>
+          <!-- Search and All settings come from search.js; shown only once it
+               is there (app.js tidyHeaderMenu). Search is here because on a
+               phone the header has no room for its own button on the job
+               screens. -->
+          <div class="menu-group">
+            <button id="menuSearch" hidden onclick="closeHeaderMenu(); if (typeof openSearch === 'function') openSearch()">🔍 Search</button>
+            <button id="menuSettings" hidden onclick="closeHeaderMenu(); if (typeof openSettings === 'function') openSettings()">⚙ All settings</button>
+          </div>
+          <div class="menu-group">
+            <div class="menu-head">Business</div>
+            <button id="menuPricing" hidden onclick="closeHeaderMenu(); openPricingRules()">💲 Pricing rules</button>
+            <button id="menuQuickBooks" hidden onclick="closeHeaderMenu(); openQuickBooks()">📗 QuickBooks</button>
+            <button id="menuPeople" hidden onclick="closeHeaderMenu(); openPeople()">👥 People &amp; names</button>
+          </div>
+          <div class="menu-group">
+            <div class="menu-head">Inbox</div>
+            <button id="menuCrewNotes" hidden onclick="closeHeaderMenu(); openCrewNotes()">📝 Notes from the crew</button>
+            <button id="menuNoteJonah" hidden onclick="closeHeaderMenu(); openNoteForJonah()">📝 Leave a note for Jonah</button>
+            <button id="menuSummaries" hidden onclick="closeHeaderMenu(); openSummaries()">📰 Past summaries</button>
+          </div>
+          <div class="menu-group">
+            <div class="menu-head">App</div>
+            <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">🔔 Notification settings</button>
+            <button id="menuTheme" onclick="closeHeaderMenu(); openAppearance()">🌓 Appearance</button>
+          </div>
+          <div class="menu-group">
+            <div class="menu-head">Data</div>
+            <button id="menuBackup" onclick="closeHeaderMenu(); exportAllJobs()">💾 Backup</button>
+            <button id="menuRestore" onclick="closeHeaderMenu(); document.getElementById('restoreInput').click()">📂 Restore</button>
+            <button id="menuPrint" onclick="closeHeaderMenu(); window.print()">🖨 Print</button>
+          </div>
+          <div class="menu-group">
+            <div class="menu-head">Help</div>
+            <button id="menuReport" hidden onclick="closeHeaderMenu(); reportProblem()">🆘 Something went wrong</button>
+            <button id="menuProblems" hidden onclick="closeHeaderMenu(); openProblems()">⚠ Problems<span class="menu-count" id="problemsCount" hidden></span></button>
+          </div>
           <div class="menu-sep" id="menuAccountSep" hidden></div>
           <div class="menu-who" id="menuWho" hidden></div>
           <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
@@ -563,7 +589,7 @@
         <div class="summary-grid" id="summaryGrid"></div>
         <div class="fin-grid" id="financialsGrid" style="margin-top:14px"></div>
         <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">
-          <span class="label" style="width:100%;margin-bottom:2px">Send to QuickBooks</span>
+          <span class="label" style="width:100%;margin-bottom:2px">Export</span>
           <button class="btn btn-sm" onclick="copyCostSummary()">📋 Copy Cost Summary</button>
           <button class="btn btn-sm" onclick="exportPurchasesCsv()">⬇ Export Purchases (CSV)</button>
         </div>
@@ -1037,7 +1063,7 @@
       </div>
 
       <div class="grid g2 mt">
-        <div class="field"><span class="label">Labour, per man-hour</span><input id="sfLabor" inputmode="decimal" placeholder="$25"></div>
+        <div class="field"><span class="label">Labor, per man-hour</span><input id="sfLabor" inputmode="decimal" placeholder="$25"></div>
         <div class="field" style="justify-content:flex-end">
           <label class="chk"><input type="checkbox" id="sfNoLabor" onchange="snowFormToggle()"> No hourly charge</label>
         </div>

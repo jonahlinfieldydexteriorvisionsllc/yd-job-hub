@@ -342,6 +342,12 @@ document.addEventListener('yd-auth', e => {
   if (people) people.hidden = !(on && a.isOwner);
   const pricing = document.getElementById('menuPricing');
   if (pricing) pricing.hidden = !(on && a.isOwner);
+  // Backup, Restore and Print work on the jobs saved on this device, which
+  // a crew phone never has: for the crew they only did nothing.
+  ['menuBackup', 'menuRestore', 'menuPrint'].forEach(id => {
+    const it = document.getElementById(id);
+    if (it) it.hidden = on && a.role === 'crew';
+  });
 
   // The job screens -- Job, Tracking, All Jobs, and the materials half of
   // Supplies -- are for whoever may see jobs: the owner, and an admin given
@@ -430,6 +436,8 @@ function openMore() {
   // found where everything else is rather than up in the header.
   const signedIn = !!(window.YDAuth && window.YDAuth.user && window.YDAuth.mode === 'cloud');
   const notesN = window.YDCrewNotes ? YDCrewNotes.unread() : 0;
+  const crew = crewView();
+  const hints = crew ? TAB_HINT_CREW : TAB_HINT;
   const extras = ((window.YDAuth && window.YDAuth.isOwner)
     ? [{ label: '👥 People & names', hint: 'Rename people, let them in, make an admin',
          call: 'closeMore(); openPeople()' },
@@ -440,16 +448,28 @@ function openMore() {
          call: 'closeMore(); openNoteForJonah()' },
        { label: '📝 Your notes', hint: 'The notes you have sent', call: 'closeMore(); openCrewNotes()' }]
     : []).concat((window.YDAuth && window.YDAuth.user)
-    ? [{ label: '📰 Summaries', hint: 'This morning’s and last night’s summary, and the two weeks before',
+    ? [{ label: '📰 Past summaries', hint: crew ? 'Your morning and evening updates from the last two weeks'
+           : 'This morning’s and last night’s summary, and the two weeks before',
          call: 'closeMore(); openSummaries()' },
-       { label: '🔔 Notifications & summaries', hint: 'Daily updates by email and on your phone',
+       { label: '🔔 Notification settings', hint: crew ? 'Reminders and updates on this phone'
+           : 'Daily updates by email and on your phone',
          call: 'closeMore(); openNotifications()' }]
+    : []).concat(signedIn && typeof window.openSettings === 'function'
+    ? [{ label: '⚙ All settings', hint: 'Every setting in one place',
+         call: 'closeMore(); if (typeof openSettings === \'function\') openSettings()' }]
     : []).concat([{ label: '🌓 Appearance', hint: 'Light, dark, or match this phone',
          call: 'closeMore(); openAppearance()' }]);
+  // Search (search.js) first: on a phone the header has no room for its own
+  // button on the job screens, so this is the way to it there.
+  const search = signedIn && typeof window.openSearch === 'function'
+    ? '<button class="sheet-item" onclick="closeMore(); if (typeof openSearch === \'function\') openSearch()">' +
+        '<span class="sheet-item-name">🔍 Search</span>' +
+        '<span class="sheet-item-hint">Find anything in Job Hub</span></button>'
+    : '';
   wrap.innerHTML = (hidden.length || extras.length)
-    ? hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
+    ? search + hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
         '<span class="sheet-item-name">' + TAB_LABEL[n] + '</span>' +
-        (TAB_HINT[n] ? '<span class="sheet-item-hint">' + TAB_HINT[n] + '</span>' : '') +
+        (hints[n] ? '<span class="sheet-item-hint">' + hints[n] + '</span>' : '') +
       '</button>').join('') +
       extras.map(x => '<button class="sheet-item" onclick="' + x.call + '">' +
         '<span class="sheet-item-name">' + x.label + '</span>' +
@@ -473,10 +493,32 @@ function matSectionHidden() {
   return !m || m.hidden;
 }
 
-// ---- Header overflow menu (Backup / Restore / Print) ----
+// ---- Header overflow menu (⋯) ----
+// Search and All settings first, then groups -- Business, Inbox, App, Data,
+// Help -- under small headings. Which items show is decided by each item's
+// own file on sign-in (and by the stylesheet: on a phone Notification
+// settings and Appearance live in More instead), so a heading is only known
+// to be empty once the menu is about to show: one with nothing under it is
+// hidden then.
 function toggleHeaderMenu() {
   const m = document.getElementById('headerMenu');
-  if (m) m.hidden = !m.hidden;
+  if (!m) return;
+  if (m.hidden) tidyHeaderMenu(m);
+  m.hidden = !m.hidden;
+}
+function tidyHeaderMenu(m) {
+  // Search and All settings come from search.js, when it is there.
+  const signedIn = !!(window.YDAuth && window.YDAuth.user);
+  const search = document.getElementById('menuSearch');
+  if (search) search.hidden = !(signedIn && typeof window.openSearch === 'function');
+  const all = document.getElementById('menuSettings');
+  if (all) all.hidden = !(signedIn && typeof window.openSettings === 'function');
+  // A button's own computed display says whether it shows, whatever its
+  // group or the closed menu around it are doing.
+  m.querySelectorAll('.menu-group').forEach(g => {
+    g.hidden = !Array.prototype.some.call(g.querySelectorAll('button'),
+      b => !b.hidden && getComputedStyle(b).display !== 'none');
+  });
 }
 function closeHeaderMenu() {
   const m = document.getElementById('headerMenu');
@@ -565,6 +607,17 @@ const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
   tracking: 'Hours and materials on the job you have open',
   dashboard: 'Every job with its price and what it made',
   contacts: 'People to ring later' };
+// The same screens as the crew see them: without prices, bids or what the
+// season cost, so the words should not promise them.
+const TAB_HINT_CREW = { boards: 'Crew tasks and the boards shared with you',
+  supplies: 'What we use and where to get it',
+  receipts: 'Add a receipt for something you bought',
+  equipment: 'What each machine and truck is due for',
+  calendar: 'Your day and the crew’s',
+  contacts: 'People to ring later' };
+// Somebody without the job screens (crew, mostly) -- the same test the
+// stylesheet uses (data-crew, set on sign-in).
+function crewView() { return document.documentElement.hasAttribute('data-crew'); }
 
 function switchTab(name) {
   // An old notification link, or a habit, may still ask for Materials: it
@@ -572,6 +625,12 @@ function switchTab(name) {
   const toMaterials = name === 'matdash';
   if (toMaterials) name = 'supplies';
   closeMore();
+  // Which screen was showing: a new one opens at its top. Without this a tab
+  // opened wherever the last one had been scrolled to -- halfway down an
+  // empty page, or past the part that matters. The same tab tapped again
+  // stays where it is.
+  const was = document.querySelector('.tab-panel.active');
+  const changed = !was || was.id !== 'panel-' + name;
   // The stylesheet uses this to show the job controls only on job screens.
   document.documentElement.dataset.tab = name;
   // Matched by id, not by position: the buttons are not in the same order as
@@ -592,6 +651,7 @@ function switchTab(name) {
   if (more) more.classList.toggle('active', !ownShowing);
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
+  if (changed) window.scrollTo(0, 0);
   if (name === 'dashboard') renderDashboard();
   // Labour is not redrawn while Tracking is hidden, so catch up on arrival.
   if (name === 'tracking' && typeof renderLabor === 'function') renderLabor();
@@ -2563,13 +2623,131 @@ function exportPurchasesCsv() {
 // hidden by the FIRST one's timer, sometimes after a fraction of a second.
 let toastTimer = null;
 // `ms`: how long it stays -- longer for something that must not be missed.
+// On a phone it stays longer by default: two seconds was gone before a
+// glance down from the road (or up from a shovel) reached it.
+// (A function, not a constant: it is safe to call from anywhere, however early.)
+function phoneScreen() { return !!(window.matchMedia && window.matchMedia('(max-width:720px)').matches); }
 function showToast(msg, ms) {
   let t = document.getElementById('toast');
   if (!t) { t = document.createElement('div'); t.id = 'toast'; t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:var(--brand);color:#fff;padding:13px 22px;font-family:"DM Sans",sans-serif;font-size:14px;font-weight:600;z-index:2000;opacity:0;transition:opacity .3s;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.25);'; document.body.appendChild(t); }
   t.textContent = msg; t.style.opacity = '1';
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.style.opacity = '0'; }, ms || 2000);
+  toastTimer = setTimeout(() => { t.style.opacity = '0'; }, ms || (phoneScreen() ? 3500 : 2000));
 }
+
+// ---- "Done -- Undo" ----
+// showUndo('Card deleted', () => putItBack()) shows the message with an Undo
+// button for a few seconds (7 by default): a quicker, kinder answer to a
+// slip than "Are you sure?" before every tap. One at a time -- a new one
+// simply replaces the last (whose Undo is then gone). Only the bar itself
+// takes taps; nothing else on the screen is covered. Returns a function
+// that takes the bar away early (say, when the thing is undone some other
+// way). Other files call it as:
+//   if (typeof showUndo === 'function') showUndo(msg, fn); else showToast(msg);
+let undoShown = null;        // the dismiss function of the bar on screen
+function showUndo(message, onUndo, ms) {
+  let bar = document.getElementById('undoBar');
+  if (!bar) {
+    // One bar, kept: a screen reader announces changes to a live region it
+    // already knows, not one that has just appeared.
+    bar = document.createElement('div');
+    bar.id = 'undoBar';
+    bar.className = 'undo-bar';
+    bar.setAttribute('role', 'status');
+    bar.setAttribute('aria-live', 'polite');
+    bar.innerHTML = '<span class="undo-msg"></span><button type="button" class="undo-btn">Undo</button>';
+    document.body.appendChild(bar);
+  }
+  if (undoShown) undoShown();
+  let gone = false, timer = null;
+  const dismiss = () => {
+    if (gone) return;
+    gone = true;
+    clearTimeout(timer);
+    if (undoShown === dismiss) {
+      undoShown = null;
+      bar.classList.remove('on');
+      document.documentElement.removeAttribute('data-undo');
+    }
+  };
+  bar.querySelector('.undo-msg').textContent = String(message || 'Done');
+  bar.querySelector('.undo-btn').onclick = () => {
+    if (gone) return;
+    dismiss();
+    try { if (typeof onUndo === 'function') onUndo(); }
+    catch (e) { console.error('[undo]', e); showToast('Could not undo that'); }
+  };
+  undoShown = dismiss;
+  bar.classList.add('on');
+  // Tells the stylesheet to lift the toast above the bar on a phone.
+  document.documentElement.setAttribute('data-undo', '');
+  timer = setTimeout(dismiss, ms > 0 ? ms : 7000);
+  return dismiss;
+}
+
+// ---- No signal / still sending ----
+// Nothing used to tell the crew their taps were waiting for signal: every
+// change saves on the phone at once and goes when it can, which is right --
+// but with no word of it, a clock-out in a dead spot looked lost, or got
+// tapped again. A small pill says so (above the tab bar on a phone, at the
+// top on a laptop). It never takes a tap or covers anything that does.
+//   No signal at all: "No signal -- saved on this phone ..." (+ how many wait)
+//   Signal, but a change still unsent after 4 seconds: "Sending N changes..."
+// firebase-init.js counts the changes on their way (YDDb.pending) and says
+// whenever that changes (the 'yd-pending' event).
+(function signalPill() {
+  const SLOW_MS = 4000;
+  let pending = 0, oldest = 0, slowTimer = null;
+  function pill() {
+    let p = document.getElementById('netPill');
+    if (!p) {
+      p = document.createElement('div');
+      p.id = 'netPill';
+      p.className = 'net-pill';
+      p.setAttribute('role', 'status');
+      p.setAttribute('aria-live', 'polite');
+      p.hidden = true;
+      document.body.appendChild(p);
+    }
+    return p;
+  }
+  // Running with no cloud at all (no Firebase), nothing is ever sent, so
+  // "it sends when there's signal" would not be true.
+  const cloud = () => !(window.YDAuth && window.YDAuth.mode === 'local');
+  function draw() {
+    if (!document.body) return;
+    const p = pill();
+    const n = pending;
+    let text = '', kind = '';
+    if (cloud() && navigator.onLine === false) {
+      text = 'No signal — saved on this ' + (phoneScreen() ? 'phone' : 'device') +
+        ', it sends when there’s signal' + (n > 0 ? ' · ' + n + ' waiting' : '');
+      kind = 'off';
+    } else if (cloud() && n > 0 && oldest && Date.now() - oldest >= SLOW_MS) {
+      text = 'Sending ' + n + (n === 1 ? ' change…' : ' changes…');
+      kind = 'sending';
+    }
+    if (p.textContent !== text) p.textContent = text;
+    p.className = 'net-pill' + (kind ? ' ' + kind : '');
+    p.hidden = !text;
+    // Lets the stylesheet lift the toast and the Undo bar above it.
+    document.documentElement.toggleAttribute('data-netpill', !!text);
+  }
+  document.addEventListener('yd-pending', e => {
+    const d = e.detail || {};
+    pending = typeof d.n === 'number' ? d.n : 0;
+    oldest = pending > 0 ? (d.oldest || Date.now()) : 0;
+    clearTimeout(slowTimer);
+    // Look again when the oldest change has been waiting long enough.
+    if (oldest) slowTimer = setTimeout(draw, Math.max(0, oldest + SLOW_MS - Date.now()) + 50);
+    draw();
+  });
+  window.addEventListener('online', draw);
+  window.addEventListener('offline', draw);
+  document.addEventListener('yd-auth', draw);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', draw);
+  else draw();
+})();
 
 window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('quoteDate').value = todayMD();
@@ -2611,12 +2789,24 @@ window.addEventListener('DOMContentLoaded', () => {
       .catch(() => {});
   }
 
-  // Gentle backup reminder if it's been a while (or never)
-  setTimeout(() => {
+  // Gentle backup reminder if it's been a while (or never) -- only for a
+  // device saving jobs to itself alone. Signed in to the cloud, every job
+  // is kept there already, and the tip was just noise on every launch.
+  const backupTip = () => {
     if (!getJobIndex().length) return;
-    const last = localStorage.getItem(STORAGE_PREFIX + 'lastBackup');
+    let last = null;
+    try { last = localStorage.getItem(STORAGE_PREFIX + 'lastBackup'); } catch (e) {}
     const stale = !last || (Date.now() - new Date(last).getTime()) > 30 * 864e5;
     if (stale) showToast('Tip: tap Backup to save a copy of your jobs');
+  };
+  setTimeout(() => {
+    const a = window.YDAuth;
+    if (a) { if (a.mode !== 'cloud') backupTip(); return; }
+    // Sign-in has not finished on a slow phone: decide once it has.
+    document.addEventListener('yd-auth', function once(e) {
+      document.removeEventListener('yd-auth', once);
+      if ((e.detail || {}).mode !== 'cloud') backupTip();
+    });
   }, 3500);
 });
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
@@ -2651,13 +2841,18 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
     if (o.dataset.typed && !startedInside) showToast('Still open — Save, or close it with ×');
   }, true);
   // Each time a window opens it starts untouched.
+  //
+  // Watched across the whole page, not window by window: the windows made
+  // later by a screen (a note for Jonah, a crew job, the notes list...) were
+  // never watched, so once something had been typed in one it kept refusing
+  // a tap outside on every later opening, with nothing typed at all.
+  const opened = o => o.classList && o.classList.contains('modal-overlay') && o.classList.contains('active');
   const fresh = new MutationObserver(list => list.forEach(m => {
     const o = m.target;
-    if (o.classList.contains('active') && !String(m.oldValue || '').includes('active')) delete o.dataset.typed;
+    if (opened(o) && !/(^|\s)active(\s|$)/.test(String(m.oldValue || ''))) delete o.dataset.typed;
   }));
   function watch() {
-    document.querySelectorAll('.modal-overlay').forEach(o =>
-      fresh.observe(o, { attributes: true, attributeFilter: ['class'], attributeOldValue: true }));
+    fresh.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
   else watch();
