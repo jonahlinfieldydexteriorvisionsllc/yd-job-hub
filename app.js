@@ -1731,8 +1731,16 @@ function loadJobData(d) {
   payments = (d.payments || []).map(p => ({ ...p, id: p.id || uid() }));
   additionalCosts = (d.additionalCosts || []).map(e => ({ ...e, id: e.id || uid() }));
   manualJobPrice = !!d.manualJobPrice;
+  const addOns = additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0);
   if (d.baseJobPrice !== undefined && d.baseJobPrice !== null && d.baseJobPrice !== '') baseJobPrice = parseFloat(d.baseJobPrice) || 0;
-  else baseJobPrice = parseMoney(d.jobPrice || '') - additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0);
+  else baseJobPrice = parseMoney(d.jobPrice || '') - addOns;
+  // The saved price is the one every other screen shows. Something that set
+  // it without the base (the estimate saved on a job not open, a QuickBooks
+  // update, a patch from another device) left the base behind -- and the
+  // field, rebuilt from base + add-ons, then showed the old price and the
+  // next save wrote it back (15 Oct 2026). So the saved price wins.
+  const savedPrice = parseMoney(d.jobPrice || '');
+  if (savedPrice > 0 && Math.abs(baseJobPrice + addOns - savedPrice) > 0.005) baseJobPrice = savedPrice - addOns;
   jobStatus = normStatus(d.jobStatus, d);
   boardFields = {};
   BOARD_FIELDS.forEach(f => { if (d[f] != null) boardFields[f] = d[f]; });
