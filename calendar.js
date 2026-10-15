@@ -335,7 +335,7 @@
 
     // His own reminder, so "Only mine" keeps it.
     const oi = outreachInfo();
-    if (oi && !off('auto:outreach') && oi.start >= from && oi.start <= to) {
+    if (oi && !off('auto:outreach') && !cardsOnly && oi.start >= from && oi.start <= to) {
       const n = oi.due(oi.start);
       // Shown done once the day has come and nobody is left to reach.
       out.push({ day: oi.start, layer: AUTO['auto:outreach'], auto: 'outreach', id: 'outreach', done: !n && oi.start <= today(),
@@ -732,7 +732,10 @@
   // marked done. Redraws, tells Home, and returns whether anything changed.
   function tickOcc(o, on) {
     const ok = tick(o, on);
-    render();
+    // Drawn again only where it shows: a tick from Home with the calendar
+    // hidden needs no three periods of grid built behind it.
+    const p = el('panel-calendar');
+    if (p && p.classList.contains('active')) render();
     if (ok) announce();
     return ok;
   }
@@ -2406,10 +2409,9 @@
   // with what Home writes beside it, and the occurrence itself (`o`), which
   // Home hands back to open it or tick it off -- so a tap there does exactly
   // what the same tap does here.
-  const LATE_DAYS = 120;        // how far back a forgotten card still counts as late
   function forHome(o) {
     return {
-      o: o, title: o.title, day: o.day, done: !!o.done, color: colorOf(o), canTick: canTick(o),
+      o: o, title: o.title, day: o.day, done: !!o.done, color: colorOf(o), canTick: canTick(o), task: !!o.task,
       time: o.time ? fmtTimeRange(o.time, o.endTime || '') : '',
       sub: [o.address, o.note, o.auto ? '' : o.layer.name].filter(Boolean).join(' · '),
       who: whoOn(o),
@@ -2423,10 +2425,11 @@
     const all = occurrences(day, day, true);
     const mine = all.filter(o => occIsMine(o, w));
     const crew = all.filter(o => !occIsMine(o, w) && isCrewOcc(o));
-    // Late: cards and crew tasks due on an earlier day and still not done.
-    // Calendar entries are not -- a day gone by is over, not overdue.
-    const late = occurrences(addDays(day, -LATE_DAYS), addDays(day, -1), true, true).filter(o => !o.done)
-      .sort((a, b) => a.day.localeCompare(b.day));
+    // What was not ticked off on the days before: the same list My day, the
+    // 7 am list and the evening summary carry (carried -- tasks only, from
+    // TICK_FROM, a fortnight back at most, and kept ticked for the day once
+    // done), so Home never says something different from them.
+    const late = day === today() ? carried(true) : [];
     return {
       mineTimed: timed(mine).map(forHome), mineAny: untimed(mine).map(forHome),
       crewTimed: timed(crew).map(forHome), crewAny: untimed(crew).map(forHome),

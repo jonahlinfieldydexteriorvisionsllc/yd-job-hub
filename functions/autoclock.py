@@ -176,7 +176,7 @@ def tell(db, people, now):
             place = _place(e)
             if start and end:
                 worker = people.get(e.get("uid"))
-                name = (dg._name(worker) if worker else str(e.get("workerName") or "Someone")).split()[0]
+                name = ((dg._name(worker) if worker else str(e.get("workerName") or "")).split() or ["Someone"])[0]
                 notes = []
                 if worker:
                     notes.append((e.get("uid"), {"push": {

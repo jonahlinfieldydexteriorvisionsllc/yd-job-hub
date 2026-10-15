@@ -566,7 +566,11 @@
       let raised = null;
       if (i === 0 && !last && c < floor.cents) { c = floor.cents; raised = floor.why; }
       if (i === 0 && last) c = totalCents;               // one payment: the whole job up front
+      const wanted = c;
       c = Math.max(0, Math.min(c, left));
+      // Cut down because a raised deposit left less than its share: worded
+      // as what it really is, so the message never adds up to over 100%.
+      const cut = c < wanted && !last && s.how !== 'rest';
       left -= c;
       const pctNow = Math.round(c / totalCents * 100);
       const name = String(s.label || (i === 0 ? 'Deposit' : last ? 'Final' : 'Payment'));
@@ -578,8 +582,10 @@
         : last || s.how === 'rest' ? 'rest'
         : raised === 'materials' ? 'pct'
         : raised === 'minimum' ? 'pct'
+        : cut ? 'pct'
         : s.how === 'amount' ? 'amount' : 'pct';
       const pct = how !== 'pct' ? null
+        : cut ? Math.floor(c / totalCents * 1000 + 1e-6) / 10      // down to a tenth: never asks for more than is left
         : raised === 'minimum' ? floor.minPct
         : raised === 'materials' ? Math.ceil(c / totalCents * 1000 - 1e-6) / 10   // up to a tenth: still covers the materials
         : num(s.value) !== null ? num(s.value) : pctNow;

@@ -1948,6 +1948,15 @@ function duplicateJob(id) {
   data.payments = [];
   data.jobStatus = 'quoting';
   BOARD_FIELDS.forEach(f => { delete data[f]; });
+  // Nor has the copy's estimate been sent: no versions "as it went to
+  // QuickBooks" (Estimate vs actual reads them), and the fuel prices kept
+  // when the original went out follow this week's again.
+  if (data.estimate && typeof data.estimate === 'object') {
+    const est = Object.assign({}, data.estimate);
+    if ((est.sent || []).length) est.fuel = Object.assign({}, est.fuel, { gasCents: null, dieselCents: null });
+    est.sent = [];
+    data.estimate = est;
+  }
   const newId = uid(); data.lastModified = new Date().toISOString();
   try { localStorage.setItem(STORAGE_PREFIX + newId, JSON.stringify(data)); }
   catch (err) { showStorageError(); return; }

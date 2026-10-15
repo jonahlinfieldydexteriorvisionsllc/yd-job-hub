@@ -299,8 +299,11 @@
     // refuse it from anyone else, whose app has no business maintaining the
     // list anyway.
     if (!ydCan('jobs', 'change')) return;
-    // The crew's page for the job (crewjobs.js) follows the same save.
-    if (window.YDCrewJobs) YDCrewJobs.mirror(id, data);
+    // The crew's page for the job (crewjobs.js) follows the same save -- and
+    // a fault there must never stop the job itself being saved.
+    if (window.YDCrewJobs) {
+      try { YDCrewJobs.mirror(id, data); } catch (e) { console.warn('[sync] crew copy not made for', id, e); }
+    }
     const entry = onBoard(data) ? boardEntry(id, data) : null;
     const sig = boardSig(entry);
     if (boardKnown.get(id) === sig) return;
@@ -727,6 +730,11 @@
     status: () => ({ watching, cloudState, applyingRemote }),
     patchJob: patchJob,
     sendNow: sendNow,
+    // Whether the server's job list has arrived on this device, and whether a
+    // job is in it (crewjobs.js: a crew copy is only taken down for a job the
+    // server no longer has -- never on a device still filling its list).
+    jobsHeard: () => boardReconciled,
+    inCloud: id => cloudJobIds.has(id),
     stop:() => { if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },
   };
 })();

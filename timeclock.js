@@ -217,6 +217,7 @@
     const left = stopsAt(e) - Date.now();
     return left <= 0 ? 2 : left <= 3600000 ? 1 : 0;
   }
+  let autoOutTimer = null;
   function readAutoOut() {
     const key = watchKey;
     if (!window.YDDb || !key) return;
@@ -1523,7 +1524,14 @@
     dayStr: dayStr,
   };
   rangeRedraw.totals = force => { placeRangeBar(el('clockRangeBar'), 'totals', force); renderTotals(); };
-  rangeRedraw.worker = force => renderWorker(force);
+  rangeRedraw.worker = force => {
+    if (editingWorker || asking || (fixingIn === 'worker' && typingIn(el('wkMain')))) {
+      // Only the day picker follows now; the rest when the form closes.
+      placeRangeBar(el('wkRangeBar'), 'worker', force);
+      return;
+    }
+    renderWorker(force);
+  };
 
   // ------------------------------------------------------------- your crew
   //
@@ -1798,7 +1806,13 @@
       w.cost += e.costCents != null ? e.costCents
         : costOf(paidMs(e), e.rateCents || rateOf(e.uid));
     });
-    pending.forEach(e => { if (byWorker[e.uid]) byWorker[e.uid].waiting += paidMs(e); });
+    // Someone whose only shifts are waiting (stopped by the clock, say)
+    // still has a row, with those hours under waiting.
+    pending.forEach(e => {
+      const w = byWorker[e.uid] = byWorker[e.uid] ||
+        { name: workerOf(e), uid: e.uid, paid: 0, bill: 0, cost: 0, shifts: 0, days: new Set(), waiting: 0 };
+      w.waiting += paidMs(e);
+    });
     const list = Object.values(byWorker).sort((a, b) => b.paid - a.paid);
     return { done: done, pending: pending, list: list, totalCost: list.reduce((s, w) => s + w.cost, 0) };
   }
@@ -1859,10 +1873,14 @@
     const dec = milli => (Math.round(milli / 36000) / 100).toFixed(2);
     const cell = v => { const s = String(v == null ? '' : v); return /^[=+\-@\t\r]/.test(s) ? "'" + s : s; };
     const q = v => '"' + cell(v).replace(/"/g, '""') + '"';
-    const rows = [['Worker', 'Days', 'Shifts', 'Hours worked', 'Billable hours', 'Rate per hour', 'Wages',
+    // The rate is what the wages work out to per hour: each shift keeps the
+    // rate it was paid at, so after a raise today's rate would not multiply
+    // out to the wages beside it.
+    const perHour = w => w.paid > 0 ? (w.cost / 100 / (w.paid / 3600000)).toFixed(2) : '';
+    const rows = [['Worker', 'Days', 'Shifts', 'Hours worked', 'Billable hours', 'Average rate per hour', 'Wages',
                    'Hours waiting for approval']]
       .concat(t.list.map(w => [w.name, w.days.size, w.shifts, dec(w.paid), dec(w.bill),
-        (rateOf(w.uid) / 100).toFixed(2), (w.cost / 100).toFixed(2), dec(w.waiting)]))
+        perHour(w), (w.cost / 100).toFixed(2), dec(w.waiting)]))
       .concat([['Total', '', t.list.reduce((s, w) => s + w.shifts, 0), dec(t.list.reduce((s, w) => s + w.paid, 0)),
         dec(t.list.reduce((s, w) => s + w.bill, 0)), '', (t.totalCost / 100).toFixed(2),
         dec(t.list.reduce((s, w) => s + w.waiting, 0))]]);
@@ -3075,7 +3093,11 @@
     forgetLabour();
     watchKey = key;
     // How long a shift runs before the clock stops it (the owner's setting).
+    // Read again every few minutes: a phone left open since before the owner
+    // raised it would otherwise end a late clock-out at the old limit.
     readAutoOut();
+    clearInterval(autoOutTimer);
+    autoOutTimer = setInterval(readAutoOut, 5 * 60 * 1000);
     // Everyone's shifts: only the recent ones live (see "older shifts"). A
     // phone still holding a firebase-init.js from before watchFrom watches
     // the whole collection, as it always did.

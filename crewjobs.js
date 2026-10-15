@@ -40,6 +40,7 @@
   let unsub = null;
   const sent = {};            // id -> what this device last wrote (no rewrite of the same)
   const waiting = {};         // id -> a job whose copy waits for Supplies to load (its units)
+  const forced = {};          // id -> a job whose copy went up without them, to send again
   let waitTimer = null;
   let reconciled = false;
   const el = id => document.getElementById(id);
@@ -47,7 +48,13 @@
   const statusOf = d => (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting'));
   // A price typed into free text ("gave them $500 off") never reaches a
   // crew phone.
-  const noMoney = s => String(s == null ? '' : s).replace(/\$\s?\d[\d,]*(\.\d+)?/g, '$—');
+  // Any money written into free text ("$4,500", "$ 500", "$.50", "budget
+  // ~15k", "800 dollars", "USD 300") -- never measurements, which the crew
+  // need ("320 sq ft", "45 ft of edging").
+  const noMoney = s => String(s == null ? '' : s)
+    .replace(/[$＄]\s*\.?\d[\d,]*(\.\d+)?/g, '$—')
+    .replace(/\busd\s*\d[\d,]*(\.\d+)?/gi, '$—')
+    .replace(/\b\d[\d,]*(\.\d+)?\s?(k|grand|dollars?|bucks|usd)\b/gi, '$—');
   const numOr = v => { const n = parseFloat(v); return isFinite(n) ? n : null; };
 
   function catalogue() {
@@ -79,6 +86,8 @@
     if (!window.YDSupplies || !YDSupplies.catalog) return true;
     const c = YDSupplies.catalog();
     if (!Object.keys(c.items || {}).length) return false;
+    // The suppliers too: each order line carries its supplier's name.
+    if (!Object.keys(c.vendors || {}).length) return false;
     return !!c.pricesReady || Object.keys(c.prices || {}).length > 0 || !ydCan('supplies', 'see');
   }
   const needsCatalogue = d => ((d.estimate || {}).materials || []).some(m => m && m.supplyId && !m.plant);
@@ -193,6 +202,8 @@
       return;
     }
     delete waiting[id];
+    // Sent before Supplies arrived (its units missing): sent again when it does.
+    if (force && needsCatalogue(d) && !catalogueReady()) forced[id] = d; else delete forced[id];
     const entry = crewEntry(d);
     const sig = JSON.stringify(entry);
     if (sent[id] === sig) return;
@@ -204,7 +215,11 @@
     clearTimeout(waitTimer); waitTimer = null;
     Object.keys(waiting).forEach(id => { const d = waiting[id]; delete waiting[id]; mirror(id, d, force); });
   }
-  document.addEventListener('yd-supplies', () => { if (Object.keys(waiting).length && catalogueReady()) flushWaiting(false); });
+  document.addEventListener('yd-supplies', () => {
+    if (!catalogueReady()) return;
+    if (Object.keys(waiting).length) flushWaiting(false);
+    Object.keys(forced).forEach(id => { const d = forced[id]; delete forced[id]; mirror(id, d); });
+  });
 
   // Once per session on the device that runs the jobs: every booked or
   // in-progress job has its crew copy, and nothing else does. It waits (up
@@ -217,6 +232,7 @@
     reconciled = true;
     let have = {};
     try { have = await window.YDDb.list('jobCrew'); } catch (e) { reconciled = false; return; }
+    const ready = catalogueReady();
     const ids = new Set();
     getJobIndex().forEach(j => {
       let d = null;
@@ -224,6 +240,9 @@
       if (!d) return;
       ids.add(j.id);
       if (shows(d)) {
+        // Supplies never came: a copy already on the server keeps its units
+        // rather than being rewritten without them.
+        if (!ready && have[j.id] && needsCatalogue(d)) return;
         const entry = crewEntry(d);
         // Already right on the server: only remember it, write nothing.
         if (have[j.id] && sameEntry(have[j.id], entry)) { sent[j.id] = JSON.stringify(entry); return; }
@@ -233,8 +252,14 @@
         mirror(j.id, d);
       }
     });
-    // A copy whose job is gone.
-    Object.keys(have).forEach(id => { if (!ids.has(id)) Promise.resolve(window.YDDb.remove('jobCrew', id)).catch(() => {}); });
+    // A copy whose job is gone -- from the server, not just from this device
+    // (a fresh phone, or one just signed back in, is still filling its list;
+    // sync.js guards the crew's job board the same way).
+    const S = window.YDSync;
+    if (!S || !S.jobsHeard || !S.jobsHeard()) return;
+    Object.keys(have).forEach(id => {
+      if (!ids.has(id) && !S.inCloud(id)) Promise.resolve(window.YDDb.remove('jobCrew', id)).catch(() => {});
+    });
   }
   // Field order is not the same both sides (the server hands a map back in
   // its own order), so each is written out with its keys sorted.

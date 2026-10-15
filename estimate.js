@@ -54,6 +54,7 @@
   let unsub = null;
   // building: the id of the job Claude is working on (one at a time), or null.
   let building = null, saving = false, checking = false, tripping = false;
+  let qbAsking = false;       // the checks before a send are waiting on QuickBooks
   const queued = [];          // jobs waiting for Claude to start their estimate
   let loads = 0;              // how many times the form has been loaded with a job (or emptied)
   let notesTyped = false;     // the site notes were written or changed since the job was opened
@@ -1028,9 +1029,9 @@
         ? (q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<div class="field-actions"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
       : can ? whoHtml() + '<div class="field-actions">' +
-        '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || !ready ? ' disabled' : '') + '>' +
-          (saving ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
-        '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || !ready ? ' disabled' : '') + '>' +
+        '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
+          (saving || qbAsking ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
+        '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
           (q && q.id ? 'Update in QuickBooks only' : 'Put in QuickBooks, don’t email yet') + '</button>' +
         (q && q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open in QuickBooks</a>' : '') +
@@ -1288,6 +1289,7 @@
       const name = x.name || String(x.label || '').replace(/\s*\(\d+%\)$/, '');
       if (x.how === 'all') return name + ': the full total';
       if (x.how === 'rest') return name + ': the remaining balance';
+      if (!(x.cents > 0)) return '';      // nothing left for it after a raised deposit
       if (x.how === 'amount') return name + ': ' + cents(x.cents);
       if (typeof x.pct === 'number') return name + ': ' + pctWords(x.pct) + ' of the total';
       return '';
@@ -2114,6 +2116,19 @@
     const s = est.site, typed = (el('zip') && el('zip').value || '').trim();
     return !!(s && s.zip && s.at === siteKey() && typed.slice(0, 5) !== s.zip && s.zipOk !== typed);
   }
+  // A bid whose map point was found before the ZIP was kept has none to check
+  // against: it is looked up once, just before sending.
+  async function zipKnown() {
+    const s = est.site, key = siteKey(), jobId = currentJobId;
+    if (!s || s.at !== key || s.zip || s.zipLooked === key || !jobId || !window.YDClaude) return;
+    s.zipLooked = key;
+    try {
+      const r = await window.YDClaude.post('/estimate/trip', {
+        jobId: jobId, address: (el('address').value || '').trim(), city: (el('city').value || '').trim(),
+        state: (el('state').value || '').trim(), zip: (el('zip').value || '').trim() });
+      if (est.site === s && currentJobId === jobId && /^\d{5}/.test(String(r.zip || ''))) s.zip = String(r.zip).slice(0, 5);
+    } catch (e) { /* no answer: sent as typed, as before */ }
+  }
   // Before anything goes to QuickBooks: fix the ZIP, or keep it on purpose.
   function zipChecked() {
     if (!zipWrong()) return true;
@@ -2164,7 +2179,8 @@
       });
       if (currentJobId !== jobId) return;
       if (Array.isArray(r.point) && typeof r.point[0] === 'number' && typeof r.point[1] === 'number') {
-        est.site = { lat: r.point[0], lng: r.point[1], at: key, zip: /^\d{5}/.test(String(r.zip || '')) ? String(r.zip).slice(0, 5) : null, zipOk: null };
+        const keptZip = est.site && est.site.at === key ? est.site.zipOk || null : null;
+        est.site = { lat: r.point[0], lng: r.point[1], at: key, zip: /^\d{5}/.test(String(r.zip || '')) ? String(r.zip).slice(0, 5) : null, zipOk: keptZip };
         if (zipWrong()) showToast('Check the ZIP: the map has this address in ' + est.site.zip, 6000);
       }
       if (num(r.miles) !== null) {
@@ -2246,11 +2262,15 @@
   }
 
   window.estToQB = async function (email) {
-    if (saving || !sends() || !changes()) return;
+    if (saving || qbAsking || !sends() || !changes()) return;
+    const startJob = currentJobId;
     const r = priced();
     if (!r || !(r.totalCents > 0)) return;
     if (r.problems.length && !confirm('Some of this isn’t priced yet:\n\n• ' + r.problems.slice(0, 8).join('\n• ') +
       '\n\nSend it anyway?')) return;
+    qbAsking = true; renderQb();
+    try { await zipKnown(); } finally { qbAsking = false; renderQb(); }
+    if (currentJobId !== startJob) return;
     if (!zipChecked()) return;
     const f = id => (el(id).value || '').trim();
     if (!f('customerName')) { showToast('Add a customer name first'); return; }
@@ -2261,25 +2281,21 @@
       if (!confirm((q.sentAt ? 'Email the updated estimate' : 'Email this estimate') + ' to ' + to +
         ' from QuickBooks?\n\nTotal ' + cents(r.grandCents) + (r.tax.cents > 0 ? ' (with ' + cents(r.tax.cents) + ' sales tax)' : ''))) return;
     }
-    if (!(await realCompanyOrTest(email ? 'Emailing this estimate' : 'This estimate'))) {
-      showToast('Not sent — QuickBooks is on the test company');
-      return;
-    }
-    // Changed in QuickBooks since Job Hub last sent it (13 Oct 2026: #1677's
-    // labour was raised there by hand): sending from here replaces the whole
-    // estimate with Job Hub's version, so say so first.
-    if (q.id && !(await qbUnchanged(q))) return;
-    // The fuel prices it was priced with stay with it: the weekly EIA figure
-    // moving must not move the price of an estimate the customer already has
-    // (14 Oct 2026: a sent estimate re-priced itself $1.28 higher). Cleared
-    // by hand on the estimate, it follows the current price again.
-    const fu = r.fuel || {}, f0 = est.fuel || {};
-    if ((num(f0.gasCents) === null && num(fu.gasCents) !== null) || (num(f0.dieselCents) === null && num(fu.dieselCents) !== null)) {
-      est.fuel = Object.assign({}, f0, {
-        gasCents: num(f0.gasCents) !== null ? num(f0.gasCents) : num(fu.gasCents),
-        dieselCents: num(f0.dieselCents) !== null ? num(f0.dieselCents) : num(fu.dieselCents) });
-      if (typeof markDirty === 'function') markDirty();
-    }
+    // Two questions for QuickBooks before anything is sent. A second tap, or
+    // another job opened, while they are asked must not send twice or send
+    // this estimate under the other job.
+    qbAsking = true; renderQb();
+    let real = false, same = true;
+    try {
+      real = await realCompanyOrTest(email ? 'Emailing this estimate' : 'This estimate');
+      // Changed in QuickBooks since Job Hub last sent it (13 Oct 2026: #1677's
+      // labour was raised there by hand): sending from here replaces the whole
+      // estimate with Job Hub's version, so say so first.
+      if (real && q.id) same = await qbUnchanged(q);
+    } finally { qbAsking = false; renderQb(); }
+    if (!real) { showToast('Not sent — QuickBooks is on the test company'); return; }
+    if (!same) return;
+    if (currentJobId !== startJob) { showToast('Another job was opened — nothing was sent'); return; }
     // The job is saved first so it has an id, and so what is on screen is
     // what is kept with the job.
     if (typeof autosave === 'function') autosave();
@@ -2317,15 +2333,28 @@
       const qbTotal = Math.round(Number(out.total) * 100);
       if (isFinite(qbTotal) && Math.abs(qbTotal - r.grandCents) > 100) {
         setTimeout(() => showToast('QuickBooks’ total is ' + cents(qbTotal) + ' (its sales tax for this address) — Job Hub showed ' +
-          cents(r.grandCents) + '. The payments in the message are worked from Job Hub’s.', 9000), 2500);
+          cents(r.grandCents) + '. The message gives each payment as its share of the total, so it still adds up.', 9000), 2500);
       }
       // This version, as it went (see SENT_KEEP).
       const version = { at: new Date().toISOString(), emailed: !!email, docNumber: out.docNumber || null,
         totalCents: r.grandCents, taxCents: r.tax.cents, materialsCents: r.materialsCents,
         work: work.map(w => ({ title: w.title, cents: w.cents })), materials: P().materialsList(r),
         cost: costSnapshot(r) };
+      // The fuel prices it was priced with stay with it once it has gone: the
+      // weekly EIA figure moving must not move the price of an estimate the
+      // customer already has (14 Oct 2026: a sent estimate re-priced itself
+      // $1.28 higher). Cleared by hand, it follows the current price again.
+      const keepFuel = f0 => {
+        const fu = r.fuel || {};
+        f0 = f0 || {};
+        if (num(f0.gasCents) !== null && (num(f0.dieselCents) !== null || num(fu.dieselCents) === null)) return f0;
+        return Object.assign({}, f0, {
+          gasCents: num(f0.gasCents) !== null ? num(f0.gasCents) : num(fu.gasCents),
+          dieselCents: num(f0.dieselCents) !== null ? num(f0.dieselCents) : num(fu.dieselCents) });
+      };
       if (currentJobId === jobId) {
         est.sent = (est.sent || []).concat([version]).slice(-SENT_KEEP);
+        est.fuel = keepFuel(est.fuel);
         if (typeof markDirty === 'function') markDirty();
       } else {
         // Another job was opened while QuickBooks answered: onto the saved copy.
@@ -2333,6 +2362,7 @@
         if (d && window.YDSync) {
           const e = fromSaved(d.estimate || {});
           e.sent = (e.sent || []).concat([version]).slice(-SENT_KEEP);
+          e.fuel = keepFuel(e.fuel);
           e.chat = e.chat.slice(-CHAT_KEEP);
           window.YDSync.patchJob(jobId, { estimate: clone(e) });
         }

@@ -112,15 +112,18 @@
   // way the calendar does, so a tap hands back exactly that one.
   function keep(x) { const k = 'h' + Object.keys(drawn).length; drawn[k] = x.o; return k; }
 
-  // Something at a set time.
+  // Something at a set time, drawn as My day draws it: a task (not an
+  // appointment) has its tick box here too.
   function timedRow(x) {
     const k = keep(x);
     const line = [x.sub, x.who].filter(Boolean).join(' · ');
-    return '<button class="md-row hm-row' + (x.done ? ' done' : '') + '" style="--c:' + colour(x.color) + '" ' +
-        'onclick="homeOpen(\'' + k + '\')">' +
-      '<span class="md-time">' + esc(x.time) + '</span>' +
-      '<span class="md-what"><b>' + esc(x.title) + '</b>' + (line ? '<small>' + esc(line) + '</small>' : '') + '</span>' +
-    '</button>';
+    return '<div class="md-row hm-row' + (x.done ? ' done' : '') + '" style="--c:' + colour(x.color) + '">' +
+      (x.task && x.canTick ? '<input type="checkbox"' + (x.done ? ' checked' : '') +
+        ' onchange="homeTick(\'' + k + '\', this.checked)" aria-label="Done">' : '') +
+      '<button class="md-open" onclick="homeOpen(\'' + k + '\')">' +
+        '<span class="md-time">' + esc(x.time) + '</span>' +
+        '<span class="md-what"><b>' + esc(x.title) + '</b>' + (line ? '<small>' + esc(line) + '</small>' : '') + '</span>' +
+      '</button></div>';
   }
   // Something for any time: a tick box when this person may tick it off,
   // its kind's colour down the side. `late`: it was due on an earlier day.
@@ -595,6 +598,9 @@
   window.homeTick = function (k, on) {
     const o = drawn[k];
     if (o && window.YDCalendar && YDCalendar.tick) YDCalendar.tick(o, on);
+    // Drawn again even when nothing changed: a tick that was refused must
+    // not stay looking ticked.
+    lastHtml = '';
     render();
   };
   window.homeMore = function (key) { expanded[key] = !expanded[key]; render(); };

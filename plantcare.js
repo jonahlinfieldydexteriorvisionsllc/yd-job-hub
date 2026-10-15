@@ -63,9 +63,12 @@
   // Things for plants, not plants: "tree & shrub fertilizer", "tree
   // watering bag", "shrub rake", "tree removal".
   const FOR_PLANTS = /\b(fertili[sz]er|food|mulch|soil|mix|stakes?|staking|bags?|rings?|guards?|wrap|spray|killer|seed|edging|fabric|rake|pruners?|shears|saw|removal|grind(ing)?|stump)\b/i;
+  // Wood, not trees: "2x4x8 Spruce Pine Fir stud", "birch plywood", "maple
+  // board" -- a deck job is not a planting job.
+  const LUMBER = /\b(\d+\s*x\s*\d+|lumber|plywood|ply|osb|studs?|boards?|planks?|joists?|beams?|posts?|timbers?|veneer|dowels?|decking|trim|moulding|molding|spf|kiln[- ]dried|pressure[- ]treated|treated|furring|lath)\b/i;
   function readsLikePlant(text) {
     const t = String(text || '');
-    return !!t.trim() && (PLANT_WORDS.test(t) || PLANT_SIZES.test(t)) && !FOR_PLANTS.test(t);
+    return !!t.trim() && (PLANT_WORDS.test(t) || PLANT_SIZES.test(t)) && !FOR_PLANTS.test(t) && !LUMBER.test(t);
   }
   const isPlantKind = k => ['plant', 'plants'].indexOf(key(k)) !== -1;
   const isPlantingKind = k => ['planting', 'plantingpackage'].indexOf(key(k)) !== -1;
@@ -333,7 +336,9 @@
   // Redrawn when the job on the form may have changed under it: another
   // device, a board move, the care email drafted, Supplies arriving.
   document.addEventListener('yd-jobs-changed', refreshSoon);
-  document.addEventListener('yd-supplies', refreshSoon);
+  // Supplies changes items in place (a rename, a new "also called", one
+  // moved into or out of Plants): the plant names are worked out again.
+  document.addEventListener('yd-supplies', () => { plantIndex = null; refreshSoon(); });
   document.addEventListener('yd-auth', refreshSoon);
 
   // Every change on the form (markDirty) -- the estimate's lines, materials,
