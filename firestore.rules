@@ -376,7 +376,11 @@ service cloud.firestore {
              && ((d.status == 'running' && d.endedMs == null)
                  || (d.status == 'ok' && endedInPast() && shortEnough())
                  || (d.status == 'pending' && endedInPast() && durationMs() > 0)))
-          || (was.source == 'clock' && was.status == 'pending'
+          // A storm shift the clock stopped at the last property settles
+          // itself ('ok') when it is short -- the phone's own earlier
+          // clock-out still wins there, the same way.
+          || (was.source == 'clock'
+             && (was.status == 'pending' || (was.status == 'ok' && was.get('autoReason', '') == 'storm'))
              && was.get('autoEnded', false) == true
              && was.endedMs is number && was.get('autoEndedMs', null) == was.endedMs
              && d.startedMs == was.startedMs
