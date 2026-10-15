@@ -54,7 +54,8 @@
     minutesOf(ev.endTime) != null && minutesOf(ev.endTime) <= minutesOf(ev.time);
 
   const AUTO = {
-    'auto:storms': { id: 'auto:storms', name: 'Storm nights', color: '#3fb6d8', auto: true,
+    // A deeper blue than the storm card on Home: white words must read on it.
+    'auto:storms': { id: 'auto:storms', name: 'Storm nights', color: '#17809e', auto: true,
                      about: 'From the Snow tab' },
     'auto:equipment': { id: 'auto:equipment', name: 'Equipment due', color: '#8a6d3b', auto: true,
                         ownerOnly: true, about: 'Service dates from the Equipment tab' },

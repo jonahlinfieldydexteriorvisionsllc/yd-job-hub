@@ -2844,7 +2844,9 @@
     const list = bookList().filter(p => !f || [p.name, p.category, p.description, p.notes].join(' ').toLowerCase().indexOf(f) !== -1);
     let lastCat = null;
     body.innerHTML =
-      '<p class="hint">Every service you sell and how it is priced (Jonah, 13 Oct 2026: “turf pricing is all based on sq footage and then adjusted based on factors, not goal profit per day”). ' +
+      // Turf and the like are priced by the square foot and adjusted by
+      // factors, not by profit per day (Jonah, 13 Oct 2026).
+      '<p class="hint">Every service you sell and how it is priced. ' +
         '<b>By the unit</b>: a price per sq ft, foot, each… plus the things that adjust it, ticked on each estimate. ' +
         '<b>By crew-days</b>: priced at your profit per day — your notes say how. <b>Fixed</b>: one price. ' +
         'Your notes on how a service is priced are read by Claude every time it builds an estimate; customers never see them. ' +
