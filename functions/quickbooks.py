@@ -1565,6 +1565,50 @@ def _job_numbered(hits, jobs):
     return bids[0] if len(bids) == 1 else None
 
 
+def _lines_sig(e):
+    """An estimate's lines as they read -- product, amount, words -- so two
+    estimates can be told apart from a copy of one. Subtotals left out."""
+    out = []
+    for ln in e.get("Line") or []:
+        if ln.get("DetailType") == "SubTotalLineDetail":
+            continue
+        item = ((ln.get("SalesItemLineDetail") or {}).get("ItemRef") or {}).get("value")
+        out.append((ln.get("DetailType"), str(item or ""), round(_amount(ln.get("Amount")), 2),
+                    " ".join(str(ln.get("Description") or "").split())))
+    return out
+
+
+def _copy_of(e, held):
+    """The job (as [job id, estimate id, total, estimate, its number]) already
+    holding an estimate for this customer with the same total and the same
+    lines, or None. Only open jobs are in `held`: the same snow contract
+    accepted again next season, after last year's job is finished, is new
+    work. The other estimate is read from QuickBooks only when the totals
+    match, which is rare."""
+    total = round(_amount(e.get("TotalAmt")), 2)
+    sig = None
+    for row in held:
+        if row[1] == str(e.get("Id")) or round(_amount(row[2]), 2) != total:
+            continue
+        other = row[3]
+        if other is None:
+            try:
+                other = _query_one("Estimate", "Id = '%s'" % _quote(row[1]))
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001
+                print("quickbooks import: estimate %s not read: %s" % (row[1], err))
+                continue
+            if not other:
+                continue
+            row[3] = other
+        if sig is None:
+            sig = _lines_sig(e)
+        if sig and _lines_sig(other) == sig:
+            return row[:4] + [other.get("DocNumber")]
+    return None
+
+
 def import_accepted(jobs):
     """Accepted estimates made in QuickBooks -> jobs. `jobs` is every job,
     as the sweep read them. Returns news for the owner's phone."""
@@ -1588,10 +1632,14 @@ def import_accepted(jobs):
     by_est = {str((j.get("qbEstimate") or {}).get("id")): jid for jid, j in jobs.items()
               if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
     by_num = {}                                   # estimate number -> [job ids]
+    by_cust = {}                                  # QuickBooks customer id -> [[job id, estimate id, total, estimate]]
     for jid, j in jobs.items():
         n = _number(j.get("estimateNumber"))
         if n:
             by_num.setdefault(n, []).append(jid)
+        q = j.get("qbEstimate") or {}
+        if q.get("id") and q.get("customerId") and q.get("env") == env and j.get("jobStatus") != "complete":
+            by_cust.setdefault(str(q["customerId"]), []).append([jid, str(q["id"]), q.get("total"), None])
     news = []
     newest = _parse_time(since)
     hold = None             # the first estimate whose job could not be made: looked at again next time
@@ -1637,8 +1685,17 @@ def import_accepted(jobs):
                              "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
             seen[eid] = jid
             continue
-        cust = None
         cid = (e.get("CustomerRef") or {}).get("value")
+        # The same estimate made again under a new number (copied and
+        # re-sent, then accepted again: two jobs were made from one, Oct
+        # 2026) is the same job, not a second one.
+        twin = _copy_of(e, by_cust.get(str(cid)) or []) if cid else None
+        if twin:
+            seen[eid] = twin[0]
+            news.append({"jobId": twin[0], "kind": "copy", "name": str((e.get("CustomerRef") or {}).get("name") or "A customer"),
+                         "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt"), "sameAs": twin[4]})
+            continue
+        cust = None
         if cid:
             try:
                 cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
@@ -1677,6 +1734,8 @@ def import_accepted(jobs):
         seen[eid] = jid
         if num:
             by_num.setdefault(num, []).append(jid)
+        if cid:
+            by_cust.setdefault(str(cid), []).append([jid, eid, e.get("TotalAmt"), e])
         news.append({"jobId": jid, "kind": "imported", "name": job["customerName"],
                      "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
     end = newest if hold is None or (newest and newest < hold) else hold

@@ -536,6 +536,11 @@ def _tell_owner(news):
             why = ("%d jobs here have that number, so it wasn't linked to one" % n.get("count", 2)
                    if n.get("why") == "several" else "its job couldn't be made here")
             body = "%s accepted estimate%s %s — %s. Book it by hand." % (n["name"], num, _money(n.get("total")), why)
+        elif n["kind"] == "copy":
+            # quickbooks.import_accepted: a copy of an estimate already a job here.
+            title = "📥 Estimate accepted again in QuickBooks"
+            body = "%s accepted estimate%s %s — the same as #%s, already their job here, so no second job was made." % (
+                n["name"], num, _money(n.get("total")), n.get("sameAs") or "?")
         elif n["kind"] == "imported":
             # An estimate made in QuickBooks itself (quickbooks.import_accepted).
             title = "📥 New job from QuickBooks"
