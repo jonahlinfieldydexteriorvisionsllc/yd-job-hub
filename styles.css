@@ -3195,10 +3195,19 @@
   .section-badge.eq-alert { background:var(--st-now, #c8492b); color:#fff; }
   .section-badge.eq-soon { background:var(--st-soon, #e0a526); color:#3a2a08; }
   @media (max-width:720px) {
-    /* The board list: one row that scrolls sideways, not two screens of chips. */
-    .bd-picker { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:4px; }
-    .bd-picker::-webkit-scrollbar { display:none; }
-    .bd-picker .bd-chip { flex:none; white-space:nowrap; }
+    /* The board list: every board a button, three to a row, all in sight at
+       once -- one tap to any board (Jonah, 15 Oct 2026: a sideways row was
+       slow, and snapped back to its start each time the board redrew). */
+    .bd-picker { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; }
+    .bd-picker .bd-chip { min-width:0; min-height:44px; padding:6px 8px; gap:5px; border-radius:10px;
+      font-size:12.5px; line-height:1.15; justify-content:flex-start; text-align:left; }
+    /* The board's colour as the button's left edge: the dot took room the name needs. */
+    .bd-picker .bd-chip .bd-dot { display:none; }
+    .bd-picker .bd-chip:not(.bd-add) { border-left:5px solid var(--c); padding-left:7px; }
+    .bd-picker .bd-chip .bd-name { flex:1; min-width:0; overflow:hidden; white-space:normal; overflow-wrap:break-word; hyphens:auto; -webkit-hyphens:auto;
+      display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-clamp:2; }
+    .bd-picker .bd-chip .bd-shared { display:none; }
+    .bd-picker .bd-chip.bd-add { justify-content:center; color:var(--brand-ink, var(--brand)); border-style:dashed; }
     /* Columns stacked one above another, each folding by its heading. */
     .bd-cols { flex-direction:column; overflow-x:visible; scroll-snap-type:none; }
     .bd-col { flex:none; width:auto; max-height:none; }

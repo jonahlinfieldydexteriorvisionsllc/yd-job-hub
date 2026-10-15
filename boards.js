@@ -354,7 +354,7 @@
       '<div class="bd-picker">' +
         list.map(b => '<button class="bd-chip' + (b.id === current ? ' on' : '') +
           '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + b.id + '\')">' +
-          '<span class="bd-dot"></span>' + esc(b.name || 'Board') +
+          '<span class="bd-dot"></span><span class="bd-name">' + esc(b.name || 'Board') + '</span>' +
           (b.ownerOnly ? ' <span title="Private — only you">🔒</span>' : '') +
           (b.visibleTo && b.visibleTo.length && editsBoards()
             ? '<span class="bd-shared" title="Shared with crew">👥 ' + b.visibleTo.length + '</span>' : '') +
