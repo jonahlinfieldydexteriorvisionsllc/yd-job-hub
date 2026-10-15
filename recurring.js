@@ -286,10 +286,18 @@
 
   // ---------------------------------------------------------------- the list
 
+  // One name for one thing: the calendar's layer of these, the button on
+  // the Crew tasks board and this window all say "Recurring crew tasks"
+  // (the window's heading in index.html said "Recurring tasks").
+  const TITLE = 'Recurring crew tasks';
   window.openRecurring = function () {
     if (!owner()) return;
     const m = el('recurModal');
-    if (m) m.classList.add('active');
+    if (m) {
+      const h = m.querySelector('.modal-head h2');
+      if (h) h.textContent = TITLE;
+      m.classList.add('active');
+    }
     renderList();
   };
   window.closeRecurring = function () { const m = el('recurModal'); if (m) m.classList.remove('active'); };
@@ -308,8 +316,8 @@
     const ids = Object.keys(tasks).sort((x, y) => String(tasks[x].what).localeCompare(String(tasks[y].what)));
     const today = ymd(new Date());
     body.innerHTML =
-      '<p class="hint">Each one goes on the Crew tasks board when it comes round, and shows on the crew’s calendar on its ' +
-        'day — weekly ones every Friday. The crew move it to Done; it counts once you (or an admin) confirm it. ' +
+      '<p class="hint">Each one goes on the Crew tasks board when it comes round, and shows on the calendar on its ' +
+        'day, under ' + TITLE + ' — weekly ones every Friday. The crew move it to Done; it counts once you (or an admin) confirm it. ' +
         'Anything not confirmed by its day is in your morning summary.</p>' +
       (ids.length ? ids.map(id => {
         const t = tasks[id];

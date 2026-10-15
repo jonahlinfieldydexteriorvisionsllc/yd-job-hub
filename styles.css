@@ -3460,3 +3460,26 @@
   /* A storm's Delete sits apart from its QuickBooks buttons, at the far end of
      the row -- one slip of the thumb must not land on it. */
   .storm-row-actions .btn-danger { margin-left:auto; }
+
+  /* ---- ux-w2 calendar & boards (15 Oct 2026) ---- */
+  /* Calendar editor: the line under "What is it" (a crew task at a set
+     time), and someone ticked who cannot see the calendar. */
+  .cal-type-note:empty { display:none; }
+  .cal-type-note .link-btn { font-size:inherit; }
+  .cal-share-ask { margin-top:6px; padding:8px 10px; border-radius:8px; font-size:12.5px; line-height:1.45;
+    color:var(--text); background:var(--st-soon-soft); border-left:4px solid var(--accent); }
+  .cal-share-ask .btn { margin:6px 0 0; display:inline-flex; }
+  /* The "any time" list folded above the calendar is one slim line. */
+  .cal-main > .cal-today.folded { padding-bottom:6px; }
+  .cal-main > .cal-today.folded .cal-today-head { min-height:36px; }
+
+  /* Board card: finished is a green tick, not a title struck through */
+  .bd-card.done .bd-card-title { text-decoration:none; color:var(--text); }
+  .bd-done-tick { color:var(--st-done, #2f8f5b); font-weight:800; }
+  /* The card window: Edit first, and big */
+  .bd-detail-top { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:0 0 12px; }
+  .bd-detail-top .bd-edit-big { flex:1 1 220px; min-height:48px; font-size:15px; justify-content:center; }
+  /* The card editor, in groups with a heading each */
+  .bd-ed-group { border-top:1px solid var(--border); margin-top:14px; padding-top:10px; }
+  .bd-ed-head { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:1px; color:var(--brand-ink); }
+  .bd-ed-sub { font-size:12px; color:var(--muted); line-height:1.45; margin:2px 0 8px; }

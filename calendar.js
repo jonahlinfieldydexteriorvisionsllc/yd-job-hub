@@ -328,7 +328,10 @@
       YDRecurring.dues(from, to).forEach(x => {
         out.push({ day: x.day, layer: AUTO['auto:recurring'], auto: 'recurring', id: x.cardId, boardId: 'crew',
           done: x.done, doneAt: (x.cardId && rc[x.cardId] && rc[x.cardId].doneAt) || '',
-          title: '🔁 ' + x.what, note: 'Crew tasks', type: 'crew', task: true,
+          // Where its card is: the board (the Crew tasks calendar is
+          // another thing -- one-off tasks -- and "Crew tasks" alone
+          // beside "Recurring crew tasks" read as the calendar).
+          title: '🔁 ' + x.what, note: 'Crew tasks board', type: 'crew', task: true,
           color: YDRemind.color('crew') });
       });
     }
@@ -500,7 +503,7 @@
           '</div>' +
         '</div>' +
       '</div>';
-    if (isGrid()) placeScroll();
+    if (isGrid()) { fitGrid(); placeScroll(); }
     wireSlots();
     wireHolds();
   }
@@ -551,6 +554,30 @@
   // marks that one date done: done {YYYY-MM-DD: {at, by}} on the entry, so a
   // repeat is done date by date, and the reminders skip it.
   let todayFolded = (() => { try { return localStorage.getItem('ydjobhub_calTodayFolded') === '1'; } catch (e) { return false; } })();
+  // Above the calendar (a phone, a narrow window: the stylesheet puts it
+  // there at 900px and under) the open list took a third of the screen over
+  // every view, every time. There it opens the first time the calendar is
+  // looked at each day -- so the day's list is seen -- and from then on
+  // starts folded to its one line with the count, a tap away. Remembered
+  // per device (ydjobhub_calTodaySeen: the day it was last seen open). A
+  // tap to open or fold it holds until the calendar is next opened.
+  const listOnTop = () => window.matchMedia('(max-width:900px)').matches;
+  const TODAY_SEEN = 'ydjobhub_calTodaySeen';
+  let topFold = null;       // the tap's choice on this visit; null: as the day goes
+  function foldedNow() {
+    if (!listOnTop()) return todayFolded;
+    if (topFold != null) return topFold;
+    let seen = '';
+    try { seen = localStorage.getItem(TODAY_SEEN) || ''; } catch (e) {}
+    if (seen === today()) return true;
+    // Only a list actually on screen counts as seen (the calendar is also
+    // drawn behind other tabs, at sign-in).
+    const p = el('panel-calendar');
+    if (!p || !p.classList.contains('active')) return false;
+    try { localStorage.setItem(TODAY_SEEN, today()); } catch (e) {}
+    topFold = false;          // open for the rest of this look
+    return false;
+  }
   const isCrewOcc = o => !!(YDRemind.typeById(o.type) || {}).crew;
   function canTick(o) {
     if (o.auto === 'card') return true;            // the rules say who may move it
@@ -571,11 +598,12 @@
     // today's list only (a later day's "earlier" has not happened yet).
     const late = day === today() ? carried() : [];
     const left = leftOf(items) + leftOf(late);
-    return '<div class="cal-today' + (todayFolded ? ' folded' : '') + '">' +
-      '<button class="cal-today-head" onclick="calTodayFold()">✅ Any time ' +
+    const folded = foldedNow();
+    return '<div class="cal-today' + (folded ? ' folded' : '') + '">' +
+      '<button class="cal-today-head" onclick="calTodayFold()" aria-expanded="' + !folded + '">✅ Any time ' +
         (day === today() ? 'today' : esc(shortDay(day))) +
         (items.length || late.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') +
-        '<span class="cal-today-fold">' + (todayFolded ? '▸' : '▾') + '</span></button>' +
+        '<span class="cal-today-fold">' + (folded ? '▸' : '▾') + '</span></button>' +
       '<div class="cal-today-body">' + lateHtml(late, null, true) +
         (items.length ? group(crew.length && mine.length ? 'Yours' : late.length ? 'Today' : '', mine) + group('👷 Crew', crew)
           : '<div class="cal-today-none">' + (late.length ? 'Nothing else for today.' : 'Nothing for any time this day.') + '</div>') +
@@ -738,6 +766,8 @@
   };
 
   window.calTodayFold = function () {
+    // Above the calendar: for this look only (foldedNow). Down the side: kept.
+    if (listOnTop()) { topFold = !foldedNow(); render(); return; }
     todayFolded = !todayFolded;
     try { localStorage.setItem('ydjobhub_calTodayFolded', todayFolded ? '1' : '0'); } catch (e) {}
     render();
@@ -961,6 +991,28 @@
     }
     if (s.clientHeight) s.dataset.placed = '1';
     s.addEventListener('scroll', () => { if (s.clientHeight) { gridScroll = s.scrollTop; s.dataset.placed = '1'; } }, { passive: true });
+  }
+
+  // On a phone the hours fill the screen from where they start down to the
+  // tab bar. The stylesheet's fixed height (the screen less a guess at what
+  // sits above) ran on under the tab bar whenever more sat above it -- the
+  // "any time" list, a long title -- so the hours and the page both scrolled
+  // under the same finger and the evening was out of reach behind the bar.
+  // Measured with the page at its top. Never under FIT_MIN, so with the list
+  // open above it the hours are still a fair window once the page is
+  // scrolled to them; never taller than the screen above the bar.
+  const FIT_MIN = 320;
+  function fitGrid() {
+    const s = document.querySelector('#calBody .cg-scroll');
+    if (!s) return;
+    // Not on screen (drawn behind another tab): nothing to measure; the
+    // stylesheet's height stands until it is opened.
+    if (!isPhone() || !s.offsetParent) { s.style.height = s.style.minHeight = s.style.maxHeight = ''; return; }
+    const bar = document.querySelector('.tab-bar');
+    const floor = bar && getComputedStyle(bar).position === 'fixed' ? bar.getBoundingClientRect().top : window.innerHeight;
+    const top = s.getBoundingClientRect().top + window.scrollY;
+    const h = Math.round(clamp(floor - top - 8, FIT_MIN, floor - 8));
+    s.style.height = s.style.minHeight = s.style.maxHeight = h + 'px';
   }
 
   // A tap on an empty hour adds an entry at that half hour.
@@ -1311,12 +1363,12 @@
           (ev.type ? ' data-picked="1"' : '') + '>' +
         '<option value="">—</option>' +
         YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === type ? ' selected' : '') + '>' +
-          t.icon + ' ' + esc(t.name) + (t.timed === false ? ' (any time that day)' : '') + '</option>').join('') +
-      '</select></div>' +
+          esc(typeLabel(t, allDay)) + '</option>').join('') +
+      '</select><div class="hint cal-type-note" id="evTypeNote"></div></div>' +
       '<div class="field"><span class="label">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
         '<option value="">— not about a job —</option>' +
         jobs.map(j => '<option value="' + j._id + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
-          esc(j.customerName || 'Untitled job') + '</option>').join('') +
+          esc(jobPickName(j)) + '</option>').join('') +
       '</select></div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Repeats</span><select id="evRepeat">' +
@@ -1333,7 +1385,8 @@
         '<div class="hint" id="evRemindHint"></div></div>' +
       '<div class="field" id="evCrewField"><span class="label">Who is on it</span>' +
         (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item" style="--c:' + personColor(p.uid) + '">' +
-          '<input type="checkbox" class="evWho" value="' + p.uid + '"' + (chosen.has(p.uid) ? ' checked' : '') + '>' +
+          '<input type="checkbox" class="evWho" value="' + p.uid + '"' + (chosen.has(p.uid) ? ' checked' : '') +
+            ' onchange="calWhoChanged()">' +
           '<span class="cal-face">' + esc(p.name) + '</span></label>').join('') + '</div>'
           : '<div class="hint">No crew accounts yet.</div>') +
         '<div class="hint" id="evShareHint"></div>' +
@@ -1345,6 +1398,21 @@
       '<div class="field-actions" id="evActions">' + editorActions() + '</div>');
     calCalChanged();
     calRemindHint();
+    calTypeNote();
+  }
+  // What a kind is called in the "What is it" box. One for no set time (a
+  // pickup, a to-do, a crew task) says "(any time that day)" only while the
+  // entry IS for any time that day: beside a start and an end time it said
+  // both at once. At a set time it is just its name, and the line under the
+  // box says it is at that time (calTypeNote).
+  const typeLabel = (t, allDay) => t.icon + ' ' + t.name + (t.timed === false && allDay ? ' (any time that day)' : '');
+  // A job in the Job box: who, its number and where. Two jobs for the same
+  // customer (a patio in the spring, beds in the fall) read the same by name
+  // alone -- and the number or the street can be typed to find it.
+  function jobPickName(j) {
+    const num = String(j.estimateNumber || '').trim();
+    const where = [j.address, j.city].map(s => String(s || '').trim()).filter(Boolean).join(', ');
+    return (j.customerName || 'Untitled job') + (num ? ' #' + num : '') + (where ? ' — ' + where : '');
   }
   function editorActions() {
     return '<button class="btn btn-filled" onclick="calSave()">Save</button>' +
@@ -1356,6 +1424,7 @@
     const t = el('evTimes');
     if (t) t.hidden = el('evAllDay').checked;
     calRemindHint();
+    calTypeNote();
   };
   // A pickup or a to-do is for any time that day; an appointment is at a set
   // time. Picking one sets "All day" to match (it can still be changed); a
@@ -1366,7 +1435,31 @@
     const t = YDRemind.typeById(val('evType'));
     const box = el('evAllDay');
     if (byHand && t && box && t.timed != null) { box.checked = !t.timed; calAllDayChanged(); }
-    else calRemindHint();
+    else { calRemindHint(); calTypeNote(); }
+  };
+  // The "What is it" box and the times always say the same thing. A crew
+  // task (or a pickup, a to-do) given a start and an end -- picked off the
+  // Work schedule, or All day unticked -- is that kind AT that time: the
+  // box drops "(any time that day)" and the line under it says so, with
+  // the one tap back to any time that day. Ticking All day puts it back.
+  window.calTypeNote = function () {
+    const box = el('evType'), note = el('evTypeNote'), all = el('evAllDay');
+    if (!box || !note || !all) return;
+    Array.prototype.forEach.call(box.options, o => {
+      const t = YDRemind.typeById(o.value);
+      if (t) o.textContent = typeLabel(t, all.checked);
+    });
+    const t = YDRemind.typeById(box.value);
+    note.innerHTML = t && t.timed === false && !all.checked
+      ? esc(t.name) + ' at a set time — it sits at that hour on the calendar. ' +
+        '<button type="button" class="link-btn" onclick="calAnyTime()">Make it any time that day</button>'
+      : '';
+  };
+  window.calAnyTime = function () {
+    const all = el('evAllDay');
+    if (!all) return;
+    all.checked = true;
+    calAllDayChanged();
   };
   // What "Usual" means for this entry as the form stands.
   window.calRemindHint = function () {
@@ -1401,10 +1494,61 @@
       if (box.value !== was) calTypeChanged(true);
     }
     calRemindHint();
+    calWhoChanged();
+  };
+
+  // Whether one person can see a calendar, as firestore.rules decide it: the
+  // owner; anyone on its visibleTo; an admin given Calendars, every one not
+  // marked private.
+  function seesCal(uid, cal) {
+    const p = people[uid];
+    if (!cal || !p) return false;
+    if (p.role === 'owner' || (cal.visibleTo || []).indexOf(uid) !== -1) return true;
+    const level = p.access && p.access.calendars;
+    return p.role === 'admin' && (level === 'see' || level === 'change') && cal.ownerOnly === false;
+  }
+  // Ticked on an entry but not able to see its calendar: they would never
+  // see it, and the reminder would go to a phone that cannot open it. Said
+  // right under the names, and the owner can share the calendar with them
+  // there and then -- the same visibleTo that ⚙ Manage calendars writes.
+  function unseeing(cal) {
+    return Array.from(document.querySelectorAll('.evWho:checked')).map(i => i.value)
+      .filter(uid => people[uid] && !seesCal(uid, cal));
+  }
+  window.calWhoChanged = function () {
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const cal = c && cals[c.value];
+    const hint = el('evShareHint');
+    if (!cal || !hint) return;
+    const names = list => list.map(u => firstName(personName(u))).join(', ');
     const n = (cal.visibleTo || []).length;
-    hint.textContent = cal.kind === 'personal' ? 'Personal is yours only — nobody else sees it.'
-      : n ? cal.name + ' is shared with ' + (cal.visibleTo || []).map(u => firstName(personName(u))).join(', ') + '.'
-      : cal.name + ' is not shared with anyone yet. Share it under ⚙ Calendars so the crew see it.';
+    const missing = unseeing(cal);
+    const who = esc(names(missing));
+    hint.innerHTML = (cal.kind === 'personal' ? 'Personal is yours only — nobody else sees it.'
+        : n ? esc(cal.name) + ' is shared with ' + esc(names(cal.visibleTo)) + '.'
+        : esc(cal.name) + ' is not shared with anyone yet.') +
+      (!missing.length ? ''
+        : '<div class="cal-share-ask">⚠ <b>' + who + '</b> can’t see ' + esc(cal.name) + ', so won’t see this entry.' +
+          // Personal is never shared; Crew tasks follows who is ticked as
+          // crew on Your Crew (shareCrewCal would take anyone else off).
+          (cal.kind === 'personal' ? ' Pick another calendar for them to see it.'
+            : cal.kind === 'crew' ? ' Crew tasks is shared with everyone ticked as a crew member on Your Crew.'
+            : isOwner() ? ' <button type="button" class="btn btn-sm btn-filled" onclick="calShareWith()">Share ' +
+                esc(cal.name) + ' with ' + who + '</button>'
+            : ' Ask Jonah to share it with them.') +
+        '</div>');
+  };
+  window.calShareWith = function () {
+    if (!isOwner()) return;
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const cal = c && cals[c.value];
+    if (!cal || cal.kind === 'personal' || cal.kind === 'crew') return;
+    const add = unseeing(cal);
+    if (!add.length) return;
+    cal.visibleTo = Array.from(new Set((cal.visibleTo || []).concat(add)));
+    write('calendars', cal.id, { visibleTo: cal.visibleTo, updatedAt: nowIso() }, 'sharing ' + (cal.name || 'a calendar'));
+    showToast(cal.name + ' is shared with ' + add.map(u => firstName(personName(u))).join(', ') + ' now');
+    calWhoChanged();
   };
 
   // What the editor says, checked; null (with a word why) when it cannot be
@@ -1644,9 +1788,15 @@
     const span = reSpan ? (next.endDate && next.endDate > next.date ? daysBetween(next.date, next.endDate) : 0) : spanOf(base);
     const fields = Object.assign({}, diff);
     delete fields.date; delete fields.endDate;
+    // "Repeat until" as the entry had it before this change. Read now:
+    // `base` is the copy on screen, and "this date and the ones after" ends
+    // it the day before (applyLocal) before the new series is worked out --
+    // read after that, the new series ended on its own first date and every
+    // later date of it was lost (found 15 Oct 2026).
+    const baseUntil = base.repeatUntil || null;
     // Never a repeat that stops before it starts.
     const untilFor = (start, given) => {
-      let u = given !== undefined ? given : (base.repeatUntil && delta ? addDays(base.repeatUntil, delta) : base.repeatUntil || null);
+      let u = given !== undefined ? given : (baseUntil && delta ? addDays(baseUntil, delta) : baseUntil);
       if (u && u < start) u = start;
       return u || null;
     };
@@ -2082,6 +2232,13 @@
     document.addEventListener('visibilitychange', () => { if (document.hidden) panCancel(); });
     // The red line at now keeps up.
     setInterval(() => document.querySelectorAll('#calBody .cg-now').forEach(n => { n.style.top = nowTop() + 'px'; }), 60000);
+    // A phone turned on its side, or the window resized: the hours fit the
+    // new screen (fitGrid).
+    let fitTimer = 0;
+    window.addEventListener('resize', () => {
+      clearTimeout(fitTimer);
+      fitTimer = setTimeout(() => { if (isGrid()) fitGrid(); }, 150);
+    });
   }
 
   // ------------------------------------------------------ manage calendars
@@ -2476,7 +2633,10 @@
   }
 
   window.YDCalendar = {
-    render: render,
+    // Called as the calendar is opened (app.js switchTab): a fresh look, so
+    // the "any time" list above it opens or folds by the day again
+    // (foldedNow), whatever was tapped on the last visit.
+    render: () => { topFold = null; render(); },
     redraw: () => redrawIfVisible(),
     // A job's days on the calendars this person can see, from today on
     // (crewjobs.js: who is working which day) -- every calendar, whatever is
