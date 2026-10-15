@@ -1359,7 +1359,7 @@ def invoice_status(body):
 # What the sweep reads of each job -- not the whole record (estimate chats,
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber",
-                "acceptedSeenAt", "workStage", "qbFilled", "jobPrice"]
+                "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked"]
 # An estimate with no answer this long after it was made (or last emailed)
 # is not asked about every hour for ever; opening the job still checks it
 # (estimate.js). A year, because a bid sent in November is often said yes to
@@ -1495,6 +1495,14 @@ def _sweep():
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: accepted estimates not brought in:", err)
     try:
+        moved = snow_from_jobs(jobs)
+        if moved:
+            print("quickbooks sweep: %d snow contract(s) put on the Snow route" % moved)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: snow contracts not moved:", err)
+    try:
         joined = link_hand_jobs(jobs)
         if joined:
             print("quickbooks sweep: %d job(s) typed in by hand joined to their QuickBooks estimate" % joined)
@@ -1510,6 +1518,14 @@ def _sweep():
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: jobs not filled from QuickBooks:", err)
+    try:
+        invoiced = copy_invoices(jobs)
+        if invoiced:
+            print("quickbooks sweep: %d job(s) given the invoice made from an earlier copy" % invoiced)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: copies' invoices not looked for:", err)
     return news
 
 
@@ -1818,7 +1834,7 @@ def _job_from_estimate(e, cust, stamp, end_names):
         "jobStatus": "booked", "workStage": "scheduled", "workStageAt": stamp,
         "bidStage": "won", "bidStageAt": stamp,
         "qbEstimate": rec, "fromQuickBooks": {"estimateId": e.get("Id"), "at": stamp},
-        "qbFilled": {"estimateId": str(e.get("Id")), "at": stamp},
+        "qbFilled": {"estimateId": str(e.get("Id")), "at": stamp}, "snowChecked": True,
         "acceptedSeenAt": stamp, "lastModified": stamp,
     })
 
@@ -1881,6 +1897,208 @@ def _copy_of(e, held):
     return None
 
 
+# ----------------------------------------------- snow contracts in
+#
+# Jonah (15 Oct 2026): "the imports should be input into the snow route
+# automatically when pulled". A snow estimate -- every line a snow removal,
+# salt or labour product -- is a season's contract, not a job: it becomes a
+# Snow account (snow.js: the crew-readable record + private/rates), which the
+# route takes up by itself (storm.js buildRoute puts an account missing from
+# the hand-set order after the last one). One he already has -- the same
+# name, or the same house number and street -- is joined to the estimate and
+# left priced as he set it (he folds salt and add-ons into each visit's
+# price). He tags snow estimates "snow" in QuickBooks, but Intuit's API
+# gives no tags (Oct 2026), so the products on it say what it is.
+SNOW_ITEM = re.compile(r"snow", re.I)
+SALT_ITEM = re.compile(r"\bsalt", re.I)
+LABOR_ITEM = re.compile(r"\blabou?r\b", re.I)
+SNOW_TIER = re.compile(r"(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(?:in(?:ch(?:es)?)?\b|\"|”)?\s*(?:→|->|:|=)?\s*\$\s*([\d,]+(?:\.\d+)?)", re.I)
+SNOW_PER_INCH = re.compile(r"(?:each|every|per)\s+(?:additional\s+)?inch[^$\n]*?(?:beyond|past|over|above)\s*(\d+(?:\.\d+)?)[^$\n]*?\$\s*([\d,]+(?:\.\d+)?)", re.I)
+SNOW_HOURLY = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)\s*/\s*(?:man[- ]?)?h(?:ou)?r", re.I)
+SNOW_BOILER = re.compile(r"^(priced per|\(for storms|\(during extended|\*price per|price is subject|estimated total)", re.I)
+
+
+def _snow_lines(e, end_names):
+    """A snow estimate's product lines (the terms left out) as (short name,
+    full name, line) -- or None when any line is not snow work."""
+    out = []
+    for ln in _flat_lines(e.get("Line")):
+        if ln.get("DetailType") != "SalesItemLineDetail":
+            continue
+        item = str(((ln.get("SalesItemLineDetail") or {}).get("ItemRef") or {}).get("name") or "").strip()
+        short = item.split(":")[-1].strip()
+        if _norm_name(short) in end_names or _norm_name(item) in end_names:
+            continue
+        out.append((short, item, ln))
+    plows = [x for x in out if SNOW_ITEM.search(x[1]) and not SALT_ITEM.search(x[0])]
+    if not plows or not all(SNOW_ITEM.search(i) or SALT_ITEM.search(i) or LABOR_ITEM.search(i) for _, i, _ in out):
+        return None
+    return out
+
+
+def _dollars_cents(s):
+    try:
+        return int(round(float(str(s).replace(",", "")) * 100))
+    except ValueError:
+        return None
+
+
+def _snow_terms(lines):
+    """The account's price per visit (snow.js pricing: tiers 1-3 / 4-6 / 6+ /
+    9+, or 1-3 plus so much an inch above), its hourly labour, the extras
+    priced on their own (salt per application, a deck per visit), and the
+    words the crew may read -- none of them with a price in."""
+    tiers, per_inch, labor, extras, words, salt = {}, None, None, [], [], False
+    main = next((x for x in lines if SNOW_ITEM.search(x[1]) and not SALT_ITEM.search(x[0]) and SNOW_TIER.search(str(x[2].get("Description") or ""))), None) \
+        or next(x for x in lines if SNOW_ITEM.search(x[1]) and not SALT_ITEM.search(x[0]))
+    for short, item, ln in lines:
+        desc = str(ln.get("Description") or "")
+        cents = _cents(ln.get("Amount"))
+        if LABOR_ITEM.search(item) and not SNOW_ITEM.search(item):
+            m = SNOW_HOURLY.search(desc)
+            labor = _dollars_cents(m.group(1)) if m else labor
+            continue
+        if SALT_ITEM.search(short):
+            salt = True
+            extras.append({"name": "Salt" + (" — paw-friendly" if re.search(r"paw", desc, re.I) else ""),
+                           "cents": cents, "per": "application"})
+            continue
+        if ln is not main[2]:
+            extras.append({"name": short, "cents": cents, "per": "visit",
+                           "note": " ".join(s.strip() for s in desc.splitlines() if s.strip() and "$" not in s and not SNOW_BOILER.match(s.strip()))[:200]})
+            continue
+        for lo, hi, dollars in SNOW_TIER.findall(desc):
+            top = float(hi)
+            label = "1-3" if top <= 3 else "4-6" if top <= 6 else "6+" if top <= 9 else "9+"
+            tiers.setdefault(label, _dollars_cents(dollars))
+        m = SNOW_PER_INCH.search(desc)
+        if m:
+            per_inch = {"cents": _dollars_cents(m.group(2)) or 0, "aboveInches": float(m.group(1))}
+        if "1-3" not in tiers:
+            tiers["1-3"] = cents
+        words += [s.strip() for s in desc.splitlines() if s.strip() and "$" not in s and not SNOW_BOILER.match(s.strip())]
+    # A tier with no price of its own takes the one below (snow.js resolveTier).
+    below = {"1-3": None, "4-6": "1-3", "6+": "4-6", "9+": "6+"}
+    priced = {k: ({"mode": "flat", "cents": tiers[k]} if tiers.get(k) is not None else {"mode": "inherit", "from": below[k], "cents": None})
+              for k in below}
+    pricing = {"mode": "tieredPlusPerInch" if per_inch else "tiered", "tiers": priced, "perInch": per_inch,
+               "salt": {"included": False, "portionCents": 0, "perBagCents": None}}
+    if extras:
+        words.append("Also: " + ", ".join(x["name"] for x in extras))
+    return pricing, labor, extras, " · ".join(words)[:400], salt
+
+
+def _street_key(s):
+    """House number and street name, for telling one address from another
+    however it was typed ("12 Oak Rd" / "12 oak road, Middleton")."""
+    words = re.sub(r"[^a-z0-9 ]+", " ", str(s or "").lower().split(",")[0]).split()
+    return " ".join(words[:2]) if words and any(ch.isdigit() for ch in words[0]) else ""
+
+
+def _snow_season(now):
+    y = now.year if now.month >= 7 else now.year - 1
+    return "%d-%s" % (y, str(y + 1)[2:])
+
+
+def snow_account(e, cust, end_names, stamp):
+    """A snow estimate -> its Snow account: the one he has for this customer,
+    joined to the estimate, or a new one priced from it. Returns
+    (account id, made) or None when the estimate is not snow work."""
+    lines = _snow_lines(e, end_names)
+    if not lines:
+        return None
+    db = _db()
+    cust = cust or {}
+    name = (cust.get("DisplayName") or (e.get("CustomerRef") or {}).get("name") or "").strip() or "Snow customer"
+    parts = _best_addr(e, cust, name)
+    accounts = {s.id: (s.to_dict() or {}) for s in db.collection("snowAccounts").stream()}
+    key = _street_key(parts["address"])
+    have = next((aid for aid, a in accounts.items() if _norm_name(a.get("name")) == _norm_name(name)), None) or \
+        next((aid for aid, a in accounts.items() if key and _street_key(a.get("street") or a.get("address")) == key), None)
+    ref = {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or ""), "at": stamp}
+    if have:
+        db.collection("snowAccounts").document(have).collection("private").document("rates").set({"fromQb": ref}, merge=True)
+        return have, False
+    pricing, labor, extras, notes, salt = _snow_terms(lines)
+    base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "account"
+    aid, n = base, 2
+    while aid in accounts:
+        aid, n = "%s-%d" % (base, n), n + 1
+    geo_hit = None
+    try:
+        import geo
+        geo_hit = geo.find(parts["address"], parts["city"], parts["state"] or "WI", parts["zip"])
+    except Exception as err:                            # noqa: BLE001 -- the owner's device looks it up again (snow.js locateMissing)
+        print("quickbooks snow: %s not found on the map: %s" % (aid, err))
+    one_line = ", ".join(s for s in (parts["address"], parts["city"], " ".join(s for s in (parts["state"], parts["zip"]) if s)) if s)
+    item_names = " ".join(i for _, i, _ in lines)
+    pub = {
+        "name": name, "firstName": str(cust.get("GivenName") or ""), "lastName": str(cust.get("FamilyName") or ""),
+        "business": str(cust.get("CompanyName") or ""),
+        "address": one_line, "street": parts["address"], "city": parts["city"], "state": parts["state"], "zip": parts["zip"],
+        "town": (geo_hit or {}).get("town") or parts["city"],
+        "lat": (geo_hit or {}).get("lat"), "lng": (geo_hit or {}).get("lng"), "geocodedAs": (geo_hit or {}).get("matched"),
+        "type": "commercial" if re.search(r"commercial", item_names, re.I) else "residential",
+        "active": True, "season": _snow_season(_now()), "minTriggerInches": 1, "serviceWindow": "standard",
+        "areaNotes": notes, "vacationHolds": [], "driveSqFt": None, "walkSqFt": None, "saltApplies": salt,
+        "fromQuickBooks": {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or "")},
+    }
+    priv = {
+        "phone": str(((cust.get("PrimaryPhone") or cust.get("Mobile") or {}).get("FreeFormNumber")) or ""),
+        "email": str(((e.get("BillEmail") or cust.get("PrimaryEmailAddr") or {}).get("Address")) or ""),
+        "laborRateCents": labor, "pricing": pricing, "extras": extras, "fromQb": ref,
+    }
+    batch = db.batch()
+    batch.set(db.collection("snowAccounts").document(aid), pub)
+    batch.set(db.collection("snowAccounts").document(aid).collection("private").document("rates"), priv)
+    batch.commit()
+    return aid, True
+
+
+SNOW_JOBS_MAX = 10
+
+
+def snow_from_jobs(jobs):
+    """Snow contracts brought in as jobs before they went to the Snow route:
+    each joined to (or made into) its Snow account, and the job marked to be
+    taken off (removeWhy 'snow') -- the owner deletes it from My Jobs."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return 0
+    want = {jid: str(j["qbEstimate"]["id"]) for jid, j in jobs.items()
+            if j.get("fromQuickBooks") and not j.get("removeWhy") and (j.get("qbEstimate") or {}).get("id")
+            and (j.get("qbEstimate") or {}).get("env") == env and not j.get("snowChecked")}
+    want = dict(list(want.items())[:SNOW_JOBS_MAX])
+    if not want:
+        return 0
+    estimates = _by_ids("Estimate", set(want.values()))
+    end_names = _end_names()
+    db = _db()
+    done = 0
+    for jid, eid in want.items():
+        e = estimates.get(eid)
+        if not e:
+            continue
+        stamp = _stamp()
+        cust = None
+        cid = (e.get("CustomerRef") or {}).get("value")
+        if cid:
+            try:
+                cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001
+                print("quickbooks snow: customer %s not read: %s" % (cid, err))
+        got = snow_account(e, cust, end_names, stamp)
+        patch = {"snowChecked": True, "lastModified": stamp}
+        if got:
+            patch.update({"removeWhy": "snow", "replacedBy": "snow:" + got[0],
+                          "removeNote": "Snow contract — on the Snow route" + ("" if got[1] else " (you already had it there)")})
+            done += 1
+        db.collection("jobs").document(jid).set(patch, merge=True)
+    return done
+
+
 def import_accepted(jobs):
     """Accepted estimates made in QuickBooks -> jobs. `jobs` is every job,
     as the sweep read them. Returns news for the owner's phone."""
@@ -1935,6 +2153,26 @@ def import_accepted(jobs):
         stamp = _stamp()
         rec = _estimate_record(e)
         rec["linked"] = True
+        # A snow contract goes on the Snow route, not the job list.
+        if end_names is None:
+            end_names = _end_names()
+        if _snow_lines(e, end_names):
+            cust = None
+            cid = (e.get("CustomerRef") or {}).get("value")
+            if cid:
+                try:
+                    cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
+                except ReconnectNeeded:
+                    raise
+                except Exception as err:                # noqa: BLE001
+                    print("quickbooks import: customer %s not read: %s" % (cid, err))
+            got = snow_account(e, cust, end_names, stamp)
+            if got:
+                seen[eid] = "snow:" + got[0]
+                news.append({"jobId": "snow" + eid, "kind": "snowAdded" if got[1] else "snowLinked",
+                             "name": str((e.get("CustomerRef") or {}).get("name") or "A customer"),
+                             "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+                continue
         num = _number(e.get("DocNumber"))
         hits = (by_num.get(num) or []) if num else []
         if hits:
@@ -1965,7 +2203,7 @@ def import_accepted(jobs):
         who = _norm_name((e.get("CustomerRef") or {}).get("name"))
         total = _amount(e.get("TotalAmt"))
         same = [jid for jid, j in jobs.items() if who and _norm_name(j.get("customerName")) == who
-                and not (j.get("qbEstimate") or {}).get("id") and str(j.get("jobStatus") or "") != "complete"
+                and not (j.get("qbEstimate") or {}).get("id") and str(j.get("jobStatus") or "") != "complete" and not j.get("removeWhy")
                 and (_job_price(j) is None or abs(_job_price(j) - total) < 0.005)]
         if len(same) == 1:
             jid = same[0]
@@ -1987,6 +2225,19 @@ def import_accepted(jobs):
         twin = _copy_of(e, by_cust.get(str(cid)) or []) if cid else None
         if twin:
             seen[eid] = twin[0]
+            # Sent again only to be e-signed (Jonah, 15 Oct 2026: "i sent him
+            # a second estimate in quickbooks so i could get an e-signature"):
+            # the copy said yes to last is the job's estimate from now on --
+            # its number on the job, its status the one checked.
+            held = jobs.get(twin[0]) or {}
+            if _accepted(e) and (held.get("qbEstimate") or {}).get("linked"):
+                patch = {"qbEstimate": rec, "estimateNumber": str(e.get("DocNumber") or ""), "lastModified": stamp}
+                if held.get("qbFilled"):
+                    patch["qbFilled"] = {"estimateId": eid, "at": stamp}
+                    patch["estimate"] = {"fromQb": {"estimateId": eid, "docNumber": str(e.get("DocNumber") or ""),
+                                                    "acceptedDate": str(e.get("AcceptedDate") or "")}}
+                db.collection("jobs").document(twin[0]).set(patch, merge=True)
+                held["qbEstimate"] = rec
             news.append({"jobId": twin[0], "kind": "copy", "name": str((e.get("CustomerRef") or {}).get("name") or "A customer"),
                          "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt"), "sameAs": twin[4]})
             continue
@@ -2090,7 +2341,8 @@ def link_hand_jobs(jobs):
             if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
     want = []
     for jid, j in jobs.items():
-        if (j.get("qbEstimate") or {}).get("id") or str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active"):
+        if (j.get("qbEstimate") or {}).get("id") or j.get("removeWhy") \
+                or str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active"):
             continue
         t = _parse_time(looked.get(jid))
         if (t and now - t < LOOK_AGAIN) or not _norm_name(j.get("customerName")):
@@ -2105,7 +2357,12 @@ def link_hand_jobs(jobs):
         cust = _query_one("Customer", "DisplayName = '%s'" % _quote(" ".join(str(j["customerName"]).split())))
         if not cust or _norm_name(cust.get("DisplayName")) != _norm_name(j.get("customerName")):
             continue
-        pool = [e for e in _query("Estimate", "CustomerRef = '%s'" % _quote(cust["Id"])) if str(e.get("Id")) not in used]
+        theirs = _query("Estimate", "CustomerRef = '%s'" % _quote(cust["Id"]))
+        # Not one already on a job -- nor a copy of one that is (the same
+        # estimate sent again to be e-signed): that work has its job.
+        held = [_lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] for x in theirs if str(x.get("Id")) in used]
+        pool = [x for x in theirs if str(x.get("Id")) not in used
+                and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] not in held]
         nums = set(re.findall(r"\d{3,7}", str(j.get("estimateNumber") or "")))
         pick = [e for e in pool if _number(e.get("DocNumber")) in nums]
         if len(pick) != 1:
@@ -2139,6 +2396,59 @@ def link_hand_jobs(jobs):
     return done
 
 
+def copy_invoices(jobs):
+    """A job whose estimate was sent a second time only to be e-signed: the
+    first copy is often the one the deposit invoice was made from (Oct 2026),
+    so the job takes that invoice -- what is still owed shows on it, and the
+    hourly look follows its payments. Looked for once a day per job with no
+    invoice; only a single copy with the same lines and total counts."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return 0
+    now = _now()
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    db = _db()
+    ref = db.collection("integrations").document("quickbooksImport")
+    snap = ref.get()
+    state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
+    looked = {k: v for k, v in (state.get("invLooked") or {}).items() if k in jobs}
+    want = []
+    for jid, j in jobs.items():
+        q = j.get("qbEstimate") or {}
+        if not (q.get("linked") and q.get("id") and q.get("env") == env) or (j.get("qbInvoiceRef") or {}).get("id") \
+                or j.get("removeWhy") or str(j.get("jobStatus") or "") == "quoting":
+            continue
+        t = _parse_time(looked.get(jid))
+        if t and now - t < LOOK_AGAIN:
+            continue
+        want.append(jid)
+        if len(want) >= HAND_MAX:
+            break
+    done = 0
+    for jid in want:
+        looked[jid] = now.isoformat()
+        q = jobs[jid]["qbEstimate"]
+        mine = _query_one("Estimate", "Id = '%s'" % _quote(q["id"]))
+        cid = (mine or {}).get("CustomerRef", {}).get("value")
+        if not mine or not cid:
+            continue
+        sig = _lines_sig(mine) + [round(_amount(mine.get("TotalAmt")), 2)]
+        copies = [x for x in _query("Estimate", "CustomerRef = '%s'" % _quote(cid))
+                  if str(x.get("Id")) != str(q["id"]) and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] == sig
+                  and any((t or {}).get("TxnType") == "Invoice" for t in x.get("LinkedTxn") or [])]
+        if len(copies) != 1:
+            continue
+        inv_id = next(str(t.get("TxnId")) for t in copies[0]["LinkedTxn"] if (t or {}).get("TxnType") == "Invoice")
+        inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
+        if not inv:
+            continue
+        stamp = _stamp()
+        db.collection("jobs").document(jid).set({"qbInvoiceRef": _invoice_record(inv), "lastModified": stamp}, merge=True)
+        done += 1
+    ref.set({realm: {"invLooked": looked}}, merge=True)
+    return done
+
+
 FILL_MAX = 25               # jobs filled in one sweep
 
 
@@ -2156,7 +2466,7 @@ def fill_imported(jobs):
     want = {}
     for jid, j in jobs.items():
         q = j.get("qbEstimate") or {}
-        if q.get("linked") and q.get("id") and q.get("env") == env and \
+        if q.get("linked") and q.get("id") and q.get("env") == env and not j.get("removeWhy") and \
                 str((j.get("qbFilled") or {}).get("estimateId") or "") != str(q["id"]):
             want[jid] = str(q["id"])
             if len(want) >= FILL_MAX:

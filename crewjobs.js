@@ -202,7 +202,7 @@
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
     };
   }
-  const shows = d => SHOWN.indexOf(statusOf(d)) !== -1 && !d.crewHidden;
+  const shows = d => SHOWN.indexOf(statusOf(d)) !== -1 && !d.crewHidden && !d.removeWhy;
 
   // Called from sync.js with every job it sends up: the crew copy follows.
   // Only whoever may change jobs writes it (the rules say so too), and only

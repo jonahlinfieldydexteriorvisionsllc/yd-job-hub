@@ -23,7 +23,8 @@
   // Job fields written by the server (QuickBooks' answers, the plant-care
   // email, when the estimate was first seen accepted); all are in app.js
   // BOARD_FIELDS so the form carries them.
-  const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt'];
+  const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
+    'removeWhy', 'replacedBy', 'removeNote'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -342,7 +343,9 @@
 
   // A bid is not a job until it is booked (app.js isBidStatus), so it is not
   // on the crew's clock either: booking it puts it there.
-  const onBoard = d => (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting')) !== 'quoting';
+  // Nor is a job marked to be taken off (a copy, or a snow contract now on the
+  // Snow route -- app.js removeBoxHtml).
+  const onBoard = d => !d.removeWhy && (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting')) !== 'quoting';
 
   // What this device knows the board holds for each job: the crew-visible
   // part of its entry, or NOT_ON_BOARD for none. A job missing from the map

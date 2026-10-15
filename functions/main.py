@@ -545,6 +545,11 @@ def _tell_owner(news):
             # An estimate made in QuickBooks itself (quickbooks.import_accepted).
             title = "📥 New job from QuickBooks"
             body = "%s accepted estimate%s %s. It's on the Jobs board." % (n["name"], num, _money(n.get("total")))
+        elif n["kind"] in ("snowAdded", "snowLinked"):
+            # A snow contract accepted in QuickBooks (quickbooks.snow_account).
+            title = "❄ Snow contract accepted"
+            body = ("%s accepted estimate%s — added to the Snow route." if n["kind"] == "snowAdded"
+                    else "%s accepted estimate%s — joined to their Snow account (your prices kept).") % (n["name"], num)
         elif n["kind"] == "linked":
             title = "✅ Estimate accepted"
             body = "%s accepted estimate%s %s in QuickBooks — linked to their job here." % (n["name"], num, _money(n.get("total")))

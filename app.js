@@ -78,8 +78,14 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // marked Complete, from wherever), careDone (he sent it himself, or it isn't
 // needed -- set from the board too) and hasPlants (the answer saved last
 // time, kept while Supplies is still loading).
+// From QuickBooks (quickbooks.py): fromQuickBooks (brought in from an
+// estimate made there), qbFilled (its estimate read in full) and snowChecked
+// (looked at as a snow contract) -- the server writes them once and must not
+// see them vanish at the next save, or it reads the job again every hour.
+// removeWhy / replacedBy / removeNote: a job marked to be taken off -- a
+// duplicate, or a snow contract now on the Snow route (My Jobs: Delete these).
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
-  'costByHand', 'completedAt', 'careDone', 'hasPlants'];
+  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -2280,9 +2286,10 @@ function loadJob(id, quiet) {
   jobOnScreen();
   if (!quiet) { closeManager(); switchTab('job'); }
 }
-function deleteJob(id) {
+// sure: already asked (Delete these N, below).
+function deleteJob(id, sure) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
-  if (!confirm('Delete this job permanently?')) return;
+  if (!sure && !confirm('Delete this job permanently?')) return;
   localStorage.removeItem(STORAGE_PREFIX + id);
   localStorage.removeItem(id);   // also drop legacy-key copy if present
   saveJobIndex(getJobIndex().filter(j => j.id !== id));
@@ -2399,6 +2406,38 @@ function jobListDay(j) {
   }
   return jobSeen[j.id];
 }
+// Jobs marked to be taken off (removeWhy): a second copy of a job -- the
+// estimate sent again to be e-signed, or typed in by hand before QuickBooks
+// brought it in -- and snow contracts now on the Snow route (quickbooks.py
+// snow_from_jobs). Listed at the top of My Jobs for whoever may change jobs,
+// with one Delete for them all; Keep takes one off the list.
+function markedJobs() {
+  return loadAllJobs().filter(d => d.removeWhy).sort((a, b) => String(a.customerName || '').localeCompare(String(b.customerName || '')));
+}
+function removeBoxHtml() {
+  if (jobsReadOnly()) return '';
+  const list = markedJobs();
+  if (!list.length) return '';
+  return '<div class="jl-remove"><div class="jl-remove-head"><b>To take off (' + list.length + ')</b>' +
+      '<span class="muted"> — copies of a job that is staying, and snow contracts now on the Snow route</span></div>' +
+    '<ul>' + list.map(d => '<li>' + jobNameHtml(d.customerName || 'Job', d.estimateNumber) +
+      ' <span class="muted">— ' + esc(d.removeNote || (d.removeWhy === 'snow' ? 'Snow contract — on the Snow route' : 'A copy of another job')) + '</span>' +
+      ' <button class="link-btn" onclick="keepMarkedJob(\'' + String(d._id).replace(/[^A-Za-z0-9_-]/g, '') + '\')">Keep it</button></li>').join('') + '</ul>' +
+    '<button class="btn btn-sm jl-remove-go" onclick="deleteMarkedJobs()">🗑 Delete these ' + list.length + '</button></div>';
+}
+function deleteMarkedJobs() {
+  if (jobsReadOnly()) return;
+  const list = markedJobs();
+  if (!list.length || !confirm('Delete these ' + list.length + ' jobs for good?\n\n' +
+      list.map(d => '• ' + (d.customerName || 'Job') + (d.estimateNumber ? ' #' + d.estimateNumber : '')).join('\n'))) return;
+  list.forEach(d => window.deleteJob(d._id, true));
+  showToast(list.length + ' job' + (list.length === 1 ? '' : 's') + ' deleted');
+}
+function keepMarkedJob(id) {
+  if (jobsReadOnly() || !window.YDSync) return;
+  window.YDSync.patchJob(id, { removeWhy: null, replacedBy: null, removeNote: null });
+  renderJobList();
+}
 function renderJobList() {
   const body = document.getElementById('jobListBody');
   const fSvc = document.getElementById('filterService').value;
@@ -2411,7 +2450,7 @@ function renderJobList() {
     '<button class="' + (jobListBids ? 'on' : '') + '" onclick="showJobListBids(true)">Bids (' + bidCount + ')</button></div>';
   if (fSvc) idx = idx.filter(j => (j.services || '').includes(fSvc));
   if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '') + ' ' + (j.est || '')).toLowerCase().includes(fSearch));
-  if (!idx.length) { body.innerHTML = switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>'; return; }
+  if (!idx.length) { body.innerHTML = removeBoxHtml() + switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>'; return; }
 
   // Filed by the job's own date, newest first within a month -- not by
   // lastModified, which the server moves on every QuickBooks check.
@@ -2428,7 +2467,7 @@ function renderJobList() {
   const full = {};
   if (window.YDPlants) loadAllJobs().forEach(d => { full[d._id] = d; });
   const plantBits = j => full[j.id] ? window.YDPlants.badge(full[j.id]) + window.YDPlants.owedChip(full[j.id]) : '';
-  body.innerHTML = switcher + keys.map(key => {
+  body.innerHTML = removeBoxHtml() + switcher + keys.map(key => {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
