@@ -3769,3 +3769,16 @@
   @media (max-width:720px) {
     #panel-dashboard .dash-totals { grid-template-columns:repeat(2, minmax(0, 1fr)); }
   }
+  /* Choices on a phone as buttons all in sight, not a row to swipe along
+     (Jonah, 15 Oct 2026: faster, and a redraw can't snap them back). */
+  @media (max-width:720px) {
+    /* Equipment: + Add and every type filter three to a row. */
+    .eq-tools { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; align-items:stretch; }
+    .eq-tools .filter-bar.eq-filters { display:contents; }
+    .eq-tools .btn { min-width:0; min-height:44px; padding:6px; white-space:normal; line-height:1.15; text-align:center; font-size:13px; }
+    /* Search: the kinds found wrap onto a second line when they need it. */
+    .srch-chips { flex-wrap:wrap; overflow-x:visible; }
+    /* The estimate's five links share the width -- nothing to scroll. */
+    .est-jump { overflow-x:visible; }
+    .est-jump button { flex:1 1 auto; min-width:0; padding:6px 4px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  }

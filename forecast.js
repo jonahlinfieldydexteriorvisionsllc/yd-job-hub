@@ -357,7 +357,7 @@
       (data.alerts && data.alerts.length ? '<div class="wxp-alert">⚠️ ' + data.alerts.map(esc).join(' · ') + '</div>' : '') +
       '<div class="wxp-head">' + esc(dayTitle) + '<span>°F · 💧 chance · inches · wind</span></div>' +
       (hours.length
-        ? '<div class="wxp-hours">' + hours.map((x, k) => hourCell(x, isToday && k === 0 && x.t.slice(0, 13) === thisHour)).join('') + '</div>' +
+        ? '<div class="wxp-hours" data-keep="wx-' + place + '-' + selDay.date + '">' + hours.map((x, k) => hourCell(x, isToday && k === 0 && x.t.slice(0, 13) === thisHour)).join('') + '</div>' +
           hoursTotal(hours, isToday)
         : '<div class="wxp-msg">No hourly figures for this day yet — refresh with ↻.</div>') +
       (said.length

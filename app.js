@@ -2949,6 +2949,49 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
 
+// ---- Rows that scroll sideways keep their place through a redraw ----
+//
+// Most screens are drawn whole again on every change (a card moved, a price
+// saved, another phone's update), and a row scrolled along -- the board's
+// columns, the weather hours, the snow route, a wide table -- came back at
+// its start each time: swipe over, and it snapped back before the tap
+// (Jonah, 15 Oct 2026). So each row's place is noted as it scrolls and put
+// back on the row that takes its spot. A row is known by its data-keep
+// (set where one row is drawn for many things, e.g. one per board, so a
+// different board starts at its own start), else its id, else the nearest
+// id above it + its classes + which one of those it is.
+(function keepSidewaysPlace() {
+  const ROWS = '[data-keep], .bd-cols, .rt-strip, .wxp-hours, .sum-pick, .srch-chips, .pr-index-links, ' +
+    '.est-jump, .eq-filters, .sup-grid-wrap, .table-wrap';
+  const places = new Map();
+  function keyOf(row) {
+    if (row.dataset.keep) return 'k:' + row.dataset.keep;
+    if (row.id) return '#' + row.id;
+    const home = row.parentElement && row.parentElement.closest('[id]');
+    const cls = String(row.className || '').trim();
+    if (!home || !cls) return '';
+    return home.id + ' ' + cls + ' ' + Array.prototype.indexOf.call(home.getElementsByClassName(cls), row);
+  }
+  document.addEventListener('scroll', e => {
+    const row = e.target;
+    if (!row || row.nodeType !== 1 || !row.matches(ROWS)) return;
+    const key = keyOf(row);
+    if (key) places.set(key, row.scrollLeft);
+  }, true);
+  function putBack(row) {
+    const at = places.get(keyOf(row));
+    if (at && !row.scrollLeft) row.scrollLeft = at;
+  }
+  new MutationObserver(changes => {
+    if (!places.size) return;
+    changes.forEach(c => c.addedNodes.forEach(n => {
+      if (n.nodeType !== 1) return;
+      if (n.matches(ROWS)) putBack(n);
+      if (n.firstElementChild) n.querySelectorAll(ROWS).forEach(putBack);
+    }));
+  }).observe(document.body, { childList: true, subtree: true });
+})();
+
 // ---- Windows with something typed in them do not close on a stray tap ----
 //
 // Most windows close when the dark backdrop around them is tapped, which is

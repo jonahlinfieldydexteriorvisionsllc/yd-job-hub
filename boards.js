@@ -384,7 +384,7 @@
       filterBarHtml(board) +
       (cardFilter === 'rain' && !board.virtual
         ? '<div class="bd-rain">' + rainHtml() + '</div>'
-        : '<div class="bd-cols">' + columnsHtml(board) + '</div>' + (board.id === CREW_BOARD ? crewLaneHtml() : ''));
+        : '<div class="bd-cols" data-keep="bd-' + esc(board.id) + '">' + columnsHtml(board) + '</div>' + (board.id === CREW_BOARD ? crewLaneHtml() : ''));
   }
 
   // ------------------------------------------------------------- follow up
