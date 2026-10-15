@@ -317,10 +317,13 @@
       (inSection ? (count || askedHtml ? '<div class="cj-h">' + count + askedHtml + '</div>' : '')
         : '<div class="cj-h">📷 Photos' + count + askedHtml + '</div>') +
       '<div class="jp-add">' + STAGES.map(([k, name]) =>
-        '<label class="btn jp-btn jp-btn-' + k + '">📷 ' + name +
+        // "Add before photo", not just "Before": the bare word read like a
+        // filter on the photos below. "before photo" kept together, so on a
+        // phone all three break the same way.
+        '<label class="btn jp-btn jp-btn-' + k + '">📷 Add <span class="jp-btn-what">' + name.toLowerCase() + ' photo</span>' +
         '<input type="file" accept="image/*" multiple hidden data-job="' + safe(id) + '" onchange="jpPicked(this, \'' + k + '\')"></label>').join('') +
       '</div>' +
-      (groups || '<p class="muted">' + (loaded || !navigator.onLine ? 'No photos yet. Pick Before, During or After, then take or choose the photos.' : 'Loading…') + '</p>');
+      (groups || '<p class="muted">' + (loaded || !navigator.onLine ? 'No photos yet. Tap Add before, during or after photo, then take or choose the photos.' : 'Loading…') + '</p>');
   }
   function drawAll() {
     mounts.forEach(c => { if (!c.isConnected) mounts.delete(c); else draw(c); });

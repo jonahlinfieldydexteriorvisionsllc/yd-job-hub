@@ -3460,3 +3460,71 @@
   /* A storm's Delete sits apart from its QuickBooks buttons, at the far end of
      the row -- one slip of the thumb must not land on it. */
   .storm-row-actions .btn-danger { margin-left:auto; }
+
+  /* ---- ux-w3 job & tracking (15 Oct 2026) ---- */
+  /* Job tab: the QuickBooks invoice boxes, put away on a bid and replaced by
+     a line once QuickBooks holds the invoice (app.js showJobQbFields). .field
+     and .chk set a display of their own, which beats the hidden attribute. */
+  .job-qb-row [hidden] { display:none !important; }
+  /* A note, not a box: nothing in it is typed into. */
+  .job-qb-line { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; min-height:44px; padding:6px 0 6px 12px;
+    border-left:3px solid var(--brand-2); font-size:13.5px; color:var(--text); }
+  .job-qb-line b { font-weight:700; }
+  .job-qb-line .job-qb-paid { color:var(--st-done-ink); }
+  /* Two columns wide where the row has four (or two); never on one column,
+     where a span would make a second one. */
+  @media (min-width:521px) { .job-qb-line { grid-column:span 2; } }
+
+  /* Job Price shown as money over its box while it is not being typed in
+     (app.js showJobPrice). The words sit where the box's own would: inside
+     its 1.5px border and 12px padding, at its font size. */
+  .price-wrap { position:relative; }
+  .price-shown { position:absolute; inset:0; display:none; align-items:center; padding:0 13.5px; pointer-events:none;
+    font-family:'DM Sans',sans-serif; font-size:14px; color:var(--text); white-space:nowrap; overflow:hidden; }
+  .price-wrap.formatted:not(:focus-within) .price-shown { display:flex; }
+  .price-wrap.formatted:not(:focus-within) input { color:transparent; }
+  @media (max-width:720px) { .price-shown { font-size:16px; } }
+
+  /* Tracking: each add form folded behind its "+ Add ..." button (app.js
+     openAddForm). */
+  .add-open-row { margin-top:14px; }
+  .add-open-row[hidden], .fin-pointer[hidden] { display:none; }
+  .add-open { border-style:dashed; }
+  .add-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+  .add-head .add-label { margin-bottom:0; }
+  .add-close { flex:none; min-height:32px; padding:0 4px; }
+  .fin-pointer { margin:0 0 14px; font-size:13px; color:var(--muted); }
+  .fin-pointer .link-btn { margin-left:4px; }
+  /* "📷 Add" and "before photo" are two pieces inside the button
+     (jobphotos.js): the space between them is a gap, since a flex box drops
+     the one at the end of the first. On a phone they stack (below). */
+  .jp-btn { gap:0 .3em; }
+
+  /* Scrolled to from Job Financials: clear of the sticky "Editing" bar. */
+  #evaSection { scroll-margin-top:72px; }
+
+  /* The "Editing" bar: a long name is cut short with "…" while the QB
+     Invoiced chip after it, the status and Saved all stay whole (app.js
+     updateCtxBar puts the name in its own span). */
+  .ctx-name { display:inline-flex; align-items:center; min-width:0; }
+  .ctx-name-text { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .ctx-name .qb-chip { flex:none; }
+
+  /* On one column the paired sections were 44px apart (the grid's gap and
+     each section's own margin); the last of a pair keeps its margin. */
+  @media (max-width:860px) {
+    #panel-job .cols2 > .section:not(:last-child), #panel-tracking .cols2 > .section:not(:last-child) { margin-bottom:0; }
+  }
+
+  @media (max-width:720px) {
+    /* The tab bar has gone to the foot of the screen, which left the first
+       section's rounded top hard up under the "Editing" bar. */
+    #panel-job, #panel-tracking { padding-top:12px; }
+    .add-open { width:100%; }
+    .add-close { min-height:40px; }
+    /* The three photo buttons in even thirds, words wrapping inside each
+       rather than one button dropping to a row of its own. */
+    .jp-add { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .jp-btn { flex-direction:column; min-width:0; padding:8px 4px; font-size:13px; line-height:1.25; text-align:center; }
+    .jp-btn-what { white-space:nowrap; }
+  }

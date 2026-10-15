@@ -264,7 +264,14 @@
           </div>
           <div class="field">
             <span class="label">Job Price <span id="jobPriceSourceTag" style="font-size:9px;color:var(--pos);margin-left:4px"></span></span>
-            <input id="jobPrice" placeholder="$0.00" oninput="onJobPriceManualEdit(); updateSummary(); markDirty()">
+            <!-- The box holds the plain number every other screen reads
+                 (parseMoney); while it is not being typed in, the same
+                 figure shows over it as money -- $6,237.66 (app.js
+                 showJobPrice). Tapping the box shows the number to edit. -->
+            <div class="price-wrap" id="jobPriceWrap">
+              <input id="jobPrice" placeholder="$0.00" oninput="onJobPriceManualEdit(); updateSummary(); markDirty()">
+              <span class="price-shown" id="jobPriceShown" aria-hidden="true"></span>
+            </div>
           </div>
         </div>
 
@@ -278,13 +285,23 @@
         <div class="grid g4 g-contact mt">
           <div class="field"><span class="label">Phone</span><input id="phone" type="tel" placeholder="(555) 123-4567" oninput="markDirty()"></div>
           <div class="field"><span class="label">Email</span><input id="email" type="email" placeholder="client@email.com" oninput="markDirty()"></div>
-          <div class="field"><span class="label">Date</span><input id="quoteDate" class="date-md" placeholder="M/D" oninput="markDirty()"></div>
+          <!-- quoteDate: the day it was bid (a QuickBooks estimate's own
+               date when it came from there). My Jobs files the job under
+               this month; the year is kept from when it was saved. -->
+          <div class="field"><span class="label">Bid date</span><input id="quoteDate" class="date-md" placeholder="M/D" title="The day it was bid — My Jobs files the job under this month" oninput="markDirty()"></div>
           <div class="field"><span class="label">Referral Source</span><input id="referral" placeholder="How they found you" oninput="markDirty()"></div>
         </div>
 
-        <div class="grid g4 mt" style="align-items:end">
-          <div class="field"><span class="label">QuickBooks Invoice #</span><input id="qbInvoice" placeholder="QB invoice number" oninput="markDirty()"></div>
-          <label class="chk"><input type="checkbox" id="qbInvoiced" onchange="markDirty(); updateCtxBar()"> Invoiced in QuickBooks</label>
+        <!-- The invoice belongs to a booked or finished job: on a bid the
+             two boxes are put away (unless something is already in them),
+             and once QuickBooks holds the invoice its number and what is
+             owed show as a line instead of an empty box (app.js
+             showJobQbFields). Hidden, never removed: the save still reads
+             them. -->
+        <div class="grid g4 mt job-qb-row" style="align-items:end">
+          <div class="field" id="qbInvoiceField"><span class="label">QuickBooks Invoice #</span><input id="qbInvoice" placeholder="QB invoice number" oninput="markDirty()"></div>
+          <label class="chk" id="qbInvoicedRow"><input type="checkbox" id="qbInvoiced" onchange="markDirty(); updateCtxBar()"> Invoiced in QuickBooks</label>
+          <div class="job-qb-line" id="jobQbLine" hidden></div>
           <label class="chk"><input type="checkbox" id="taxable" onchange="markDirty(); updateSummary()"> Taxable — WI 5.5% <span class="muted" style="font-weight:400">(landscaping svc)</span></label>
           <div></div>
         </div>
@@ -465,6 +482,10 @@
   <!-- ============ TAB 2: TRACKING ============ -->
   <div class="tab-panel" id="panel-tracking">
 
+    <!-- Each list's form to add to it is folded behind its "+ Add ..." button
+         (app.js openAddForm / closeAddForm): four forms always open made this
+         screen near 6,000px tall on a phone. Once open, a form stays open
+         for the next entry until Close or Esc. -->
     <div class="cols2">
       <div class="section">
         <div class="section-head">
@@ -473,8 +494,9 @@
         </div>
         <div class="section-body">
           <div id="laborTableWrap"></div>
-          <div class="add-area">
-            <div class="add-label">Add Labor — total per worker on this job</div>
+          <div class="add-open-row"><button type="button" class="btn btn-sm add-open" id="labAddOpen" aria-expanded="false" aria-controls="labAddArea" onclick="openAddForm('labAddArea')">+ Add labor hours</button></div>
+          <div class="add-area" id="labAddArea" hidden data-opener="labAddOpen" data-first="labWorker">
+            <div class="add-head"><div class="add-label">Add Labor — total per worker on this job</div><button type="button" class="link-btn add-close" onclick="closeAddForm('labAddArea')">Close</button></div>
             <div class="grid g-labor-add">
               <div class="field"><span class="label">Worker</span><input id="labWorker" placeholder="Name" onkeydown="if(event.key==='Enter')addLabor()"></div>
               <div class="field"><span class="label">Hours</span><input type="number" id="labHours" step="1" min="0" placeholder="8" onkeydown="if(event.key==='Enter')addLabor()"></div>
@@ -492,8 +514,9 @@
         </div>
         <div class="section-body">
           <div id="matTableWrap"></div>
-          <div class="add-area">
-            <div class="add-label">Add Material Purchase</div>
+          <div class="add-open-row"><button type="button" class="btn btn-sm add-open" id="matAddOpen" aria-expanded="false" aria-controls="matAddArea" onclick="openAddForm('matAddArea')">+ Add a purchase</button></div>
+          <div class="add-area" id="matAddArea" hidden data-opener="matAddOpen" data-first="matItem">
+            <div class="add-head"><div class="add-label">Add Material Purchase</div><button type="button" class="link-btn add-close" onclick="closeAddForm('matAddArea')">Close</button></div>
             <div class="grid g-mat-add">
               <div class="field"><span class="label">Date</span><input id="matDate" class="date-md" placeholder="M/D"></div>
               <div class="field"><span class="label">Item</span><input id="matItem" placeholder="e.g. Hardwood mulch"></div>
@@ -533,8 +556,9 @@
         <div class="section-body">
           <p style="font-size:12px;color:var(--muted);margin-bottom:10px;font-style:italic">Add-ons / change-order work beyond the quote. Combined cost is added to the Job Price.</p>
           <div id="addCostTableWrap"></div>
-          <div class="add-area">
-            <div class="add-label">Add Cost Line</div>
+          <div class="add-open-row"><button type="button" class="btn btn-sm add-open" id="addCostOpen" aria-expanded="false" aria-controls="addCostArea" onclick="openAddForm('addCostArea')">+ Add a cost line</button></div>
+          <div class="add-area" id="addCostArea" hidden data-opener="addCostOpen" data-first="addCostName">
+            <div class="add-head"><div class="add-label">Add Cost Line</div><button type="button" class="link-btn add-close" onclick="closeAddForm('addCostArea')">Close</button></div>
             <div class="grid g-cost-add">
               <div class="field"><span class="label">Date</span><input id="addCostDate" class="date-md" placeholder="M/D"></div>
               <div class="field"><span class="label">Description</span><input id="addCostName" placeholder="e.g. Extra yard of mulch"></div>
@@ -557,8 +581,9 @@
         </div>
         <div class="section-body">
           <div id="paymentsTableWrap"></div>
-          <div class="add-area">
-            <div class="add-label">Log a Payment</div>
+          <div class="add-open-row"><button type="button" class="btn btn-sm add-open" id="payAddOpen" aria-expanded="false" aria-controls="payAddArea" onclick="openAddForm('payAddArea')">+ Log a payment</button></div>
+          <div class="add-area" id="payAddArea" hidden data-opener="payAddOpen" data-first="payAmount">
+            <div class="add-head"><div class="add-label">Log a Payment</div><button type="button" class="link-btn add-close" onclick="closeAddForm('payAddArea')">Close</button></div>
             <div class="grid g3">
               <div class="field"><span class="label">Date</span><input id="payDate" class="date-md" placeholder="M/D"></div>
               <div class="field"><span class="label">Amount</span><input type="number" step="0.01" id="payAmount" placeholder="0.00"></div>
@@ -586,6 +611,10 @@
         <span class="section-badge accent" id="laborRateBadge">@ $25/hr</span>
       </div>
       <div class="section-body">
+        <!-- Shown while Estimate vs actual is on this screen (it has the
+             fuller picture -- estimate against what it took, line by line);
+             app.js follows that section's hidden flag. -->
+        <p class="fin-pointer" id="finEvaPointer" hidden>The full estimate-vs-actual is below. <button type="button" class="link-btn" onclick="goToEva()">↓ Estimate vs actual</button></p>
         <div class="summary-grid" id="summaryGrid"></div>
         <div class="fin-grid" id="financialsGrid" style="margin-top:14px"></div>
         <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">

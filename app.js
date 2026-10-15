@@ -712,7 +712,10 @@ function updateCtxBar() {
   // Invoiced: the box ticked by hand, or an invoice QuickBooks holds for it.
   const invoiced = (document.getElementById('qbInvoiced') && document.getElementById('qbInvoiced').checked) ||
     !!(boardFields.qbInvoiceRef && boardFields.qbInvoiceRef.id);
-  document.getElementById('ctxName').innerHTML = esc(name || (currentJobId ? 'Untitled Job' : 'New Job')) + (invoiced ? '<span class="qb-chip">QB Invoiced</span>' : '');
+  // The name in a span of its own: on a phone a long name is cut short with
+  // "…", and the chip after it must not be cut off with it.
+  document.getElementById('ctxName').innerHTML = '<span class="ctx-name-text">' + esc(name || (currentJobId ? 'Untitled Job' : 'New Job')) + '</span>' +
+    (invoiced ? '<span class="qb-chip">QB Invoiced</span>' : '');
   const st = document.getElementById('ctxStatus');
   st.textContent = statusLabel(jobStatus); st.className = 'pill ' + jobStatus;
   const dot = document.getElementById('ctxDot');
@@ -720,6 +723,9 @@ function updateCtxBar() {
   if (storageBroken) { dot.classList.add('error'); document.getElementById('ctxDotText').textContent = 'Save failed'; }
   else if (dirty) { dot.classList.add('unsaved'); document.getElementById('ctxDotText').textContent = 'Saving…'; }
   else { document.getElementById('ctxDotText').textContent = 'Saved'; }
+  // An invoice QuickBooks has just made arrives through here too (estimate.js
+  // afterInvoice), so its line on the Job tab follows.
+  showJobQbFields(false);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -909,6 +915,58 @@ function showBidBanner() {
   if (t) t.innerHTML = lost ? '<b>This bid was lost.</b> It is off the Bids board and the customer is on Contacts for next season.'
     : '<b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.';
   if (r) r.hidden = !lost;
+  // Called whenever a job loads or its status changes: the invoice boxes
+  // follow whether it is a bid.
+  showJobQbFields(true);
+}
+
+// The job's QuickBooks invoice (made from its estimate, quickbooks.py), or
+// null. One made in the other QuickBooks company -- the test one, before the
+// switch to the real books -- is not this job's; estimate.js ignores it the
+// same way.
+function jobQbInvoice() {
+  const r = boardFields.qbInvoiceRef, q = boardFields.qbEstimate;
+  if (!r || !r.id) return null;
+  return r.env && q && q.env && r.env !== q.env ? null : r;
+}
+// The invoice boxes on the Job tab. A bid has no invoice yet, so "QuickBooks
+// Invoice #" and "Invoiced in QuickBooks" are put away on one -- unless
+// something is already in them. Once QuickBooks holds the invoice, a line
+// says its number and what is still owed, and the boxes go: the number box
+// only when it is empty or says the same number (one typed in by hand for
+// another invoice stays), the tick always (the invoice is the answer).
+// Only hidden, never removed -- getJobData() still reads both.
+// Which boxes show is worked out again only when the job, its status or its
+// invoice changes (`again`, or a new key), never on a keystroke: clearing
+// the number on a bid must not make the box vanish under the cursor.
+let jobQbShownFor = null;
+function showJobQbFields(again) {
+  const box = document.getElementById('qbInvoice'), tick = document.getElementById('qbInvoiced');
+  const field = document.getElementById('qbInvoiceField'), row = document.getElementById('qbInvoicedRow');
+  const line = document.getElementById('jobQbLine');
+  if (!box || !tick || !field || !row || !line) return;
+  const inv = jobQbInvoice(), bid = isBidStatus(jobStatus);
+  if (inv) {
+    const owed = inv.balance == null || inv.balance === '' ? NaN : Number(inv.balance);
+    const total = inv.total == null || inv.total === '' ? NaN : Number(inv.total);
+    const what = isFinite(owed) ? (owed <= 0 ? 'paid in full' : fmtMoney(owed) + ' owed')
+      : isFinite(total) ? fmtMoney(total) : '';
+    const link = /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(String(inv.link || ''))
+      ? ' <a class="link-btn" href="' + esc(inv.link) + '" target="_blank" rel="noopener">Open it</a>' : '';
+    line.innerHTML = '<span class="job-qb-what">QuickBooks: invoice' + (inv.docNumber ? ' #' + esc(inv.docNumber) : ' made') +
+      (what ? ' · <b' + (isFinite(owed) && owed <= 0 ? ' class="job-qb-paid"' : '') + '>' + esc(what) + '</b>' : '') + '</span>' + link;
+  }
+  line.hidden = !inv;
+  const key = [currentJobId, bid ? 'bid' : 'job', inv ? inv.id + '|' + (inv.env || '') : ''].join(':');
+  if (!again && key === jobQbShownFor) return;
+  jobQbShownFor = key;
+  const typed = box.value.trim();
+  const fieldOff = inv ? (!typed || typed === String(inv.docNumber == null ? '' : inv.docNumber)) : (bid && !typed);
+  const rowOff = inv ? true : (bid && !tick.checked);
+  // Never hide a box while it is being typed in.
+  const active = document.activeElement;
+  if (!(fieldOff && field.contains(active))) field.hidden = fieldOff;
+  if (!(rowOff && row.contains(active))) row.hidden = rowOff;
 }
 // A lost bid back on the board, in Follow up -- they called back.
 function reopenBid(id) {
@@ -1081,6 +1139,24 @@ function updateJobPriceSourceTag() {
   else tag.textContent = '';
 }
 function resetJobPriceToAuto() { if (!proposals.length && !hasEstimate()) return; manualJobPrice = false; syncJobPriceFromProposals(); markDirty(); }
+// The price box keeps the plain number -- it is saved as typed, and every
+// screen reads it through parseMoney -- so "6237.66" is never rewritten.
+// While nobody is typing in it, the same figure shows OVER the box as money
+// ("$6,237.66", styles.css .price-wrap); tapping it shows the number to edit.
+// Only a box holding nothing but a number is dressed up: "TBD" or "6200 +
+// tax" show exactly as typed. updateSummary() calls this, and every change
+// to the box (typed, from the estimate, from add-ons, a job loaded) ends
+// there.
+function showJobPrice() {
+  const box = document.getElementById('jobPrice'), wrap = document.getElementById('jobPriceWrap');
+  const shown = document.getElementById('jobPriceShown');
+  if (!box || !wrap || !shown) return;
+  const raw = box.value.trim(), bare = raw.replace(/[$,\s]/g, '');
+  const isNumber = /^-?(\d+(\.\d*)?|\.\d+)$/.test(bare);
+  const text = isNumber ? fmtMoney(parseFloat(bare)) : '';
+  shown.textContent = text;
+  wrap.classList.toggle('formatted', isNumber && text !== raw);
+}
 function removeProposal(propId) {
   if (!confirm('Remove this proposal? Its imported order items will also be removed.')) return;
   proposals = proposals.filter(p => p.id !== propId);
@@ -1439,6 +1515,67 @@ function renderOrderList() {
 // ═══════════════════════════════════════════════════════════
 // LABOR  (worker · hours · minutes — total per worker, no date)
 // ═══════════════════════════════════════════════════════════
+// The Tracking forms (labour, purchases, extra costs, payments) are folded
+// behind their "+ Add ..." buttons: all four always open made the screen
+// nearly 6,000px tall on a phone, the figures lost between them. Opened, a
+// form takes the button's place and the cursor goes into its first box; it
+// stays open after each entry for the next one, until Close or Esc. What
+// was typed in a closed form waits there for the next time it is opened.
+function addFormParts(id) {
+  const area = document.getElementById(id);
+  const opener = area ? document.getElementById(area.dataset.opener) : null;
+  return { area: area, opener: opener, row: opener ? opener.closest('.add-open-row') : null };
+}
+function openAddForm(id) {
+  const p = addFormParts(id);
+  if (!p.area) return;
+  p.area.hidden = false;
+  if (p.row) p.row.hidden = true;
+  if (p.opener) p.opener.setAttribute('aria-expanded', 'true');
+  const first = document.getElementById(p.area.dataset.first);
+  if (first) first.focus();
+}
+function closeAddForm(id) {
+  const p = addFormParts(id);
+  if (!p.area || p.area.hidden) return;
+  const hadFocus = p.area.contains(document.activeElement);
+  p.area.hidden = true;
+  if (p.row) p.row.hidden = false;
+  if (p.opener) {
+    p.opener.setAttribute('aria-expanded', 'false');
+    // Back to the button it came from, so the keyboard does not lose its place.
+    if (hadFocus) p.opener.focus();
+  }
+}
+// Esc inside an open form folds it. Heard before the app-wide Escape (which
+// closes the window or menu in front): with one of those open, Esc is theirs.
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || e.isComposing || e.defaultPrevented) return;
+  const area = e.target && e.target.closest ? e.target.closest('.add-area[data-opener]') : null;
+  if (!area || area.hidden) return;
+  const menu = document.getElementById('headerMenu');
+  if ((menu && !menu.hidden) || topOverlay()) return;
+  e.preventDefault();
+  closeAddForm(area.id);
+}, true);
+
+// Job Financials keeps its quick figures; where Estimate vs actual is on the
+// same screen (jobcosts.js shows it to whoever may see it), one line says
+// the fuller comparison is below it. It follows that section's hidden flag.
+function goToEva() {
+  const s = document.getElementById('evaSection');
+  // A jump rather than a glide: it lands the same in every browser, and the
+  // section is straight below.
+  if (s && !s.hidden) s.scrollIntoView({ block: 'start' });
+}
+(function followEva() {
+  const sec = document.getElementById('evaSection'), ptr = document.getElementById('finEvaPointer');
+  if (!sec || !ptr) return;
+  const sync = () => { ptr.hidden = sec.hidden; };
+  if (window.MutationObserver) new MutationObserver(sync).observe(sec, { attributes: true, attributeFilter: ['hidden'] });
+  sync();
+})();
+
 // How many distinct people worked this job, counting both the rows typed in
 // by hand and the crew who clocked into it.
 function laborWorkerCount() {
@@ -1764,6 +1901,7 @@ function updateBadges() {
   document.getElementById('addCostBadge').textContent = tac > 0 ? fmtMoney(tac) + ' total' : '';
 }
 function updateSummary() {
+  showJobPrice();
   const totalHrs = totalLaborHours();
   const totalMat = materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
   const totalAddCost = getAdditionalCostsTotal();
