@@ -3798,3 +3798,7 @@
   .jl-remove ul { margin:6px 0 8px 18px; padding:0; }
   .jl-remove li { margin:3px 0; }
   .jl-remove-go { min-height:40px; }
+  /* Receipt photos on to QuickBooks (receipts.js qbHtml). */
+  .rc-qb { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
+  .rc-qb-ok { background:var(--st-done-soft); color:var(--st-done-ink); }
+  .rc-qbaddr { font-size:13px; margin-top:6px; color:var(--muted); }

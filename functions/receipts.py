@@ -949,6 +949,85 @@ PHOTO_TYPES = {"image/jpeg", "image/png", "image/webp"}
 PHOTO_MAX = 8 * 1024 * 1024
 
 
+# ------------------------------------------- receipt photos on to QuickBooks
+#
+# Jonah (15 Oct 2026): "upload receipt photos to the job hub and the hub auto
+# forwards them to quickbooks as receipts". QuickBooks takes receipts by
+# email -- he already forwards his to its Intuit Assist address from his own
+# account -- so a photo sent in to Job Hub goes the same way: emailed from
+# that account (Gmail, as the summaries are) to the address in
+# settings/receipts.qbForwardTo, the picture attached. The photo is kept in
+# Cloud Storage (receiptPhotos/) with the receipt, so a send that failed can
+# be done again from the Receipts tab (/receipts/qb-send) and the photo seen.
+STORAGE_BUCKET = "yd-job-hub.firebasestorage.app"
+PHOTO_EXT = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
+
+
+def _bucket():
+    from firebase_admin import storage
+    return storage.bucket(STORAGE_BUCKET)
+
+
+def keep_photo(rid, raw, mime):
+    """The photo, kept beside its receipt. Returns its Storage path."""
+    path = "receiptPhotos/%s.%s" % (re.sub(r"[^A-Za-z0-9_-]", "", rid), PHOTO_EXT.get(mime, "jpg"))
+    _bucket().blob(path).upload_from_string(raw, content_type=mime)
+    return path
+
+
+def forward_to_qb(db, rid, raw=None, mime=None):
+    """Email the receipt's photo to QuickBooks. Writes the outcome on the
+    receipt (qbForward) and returns it."""
+    from email.mime.application import MIMEApplication
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    to = str(((db.collection("settings").document("receipts").get().to_dict() or {}).get("qbForwardTo")) or "").strip()
+    ref = db.collection("receipts").document(rid)
+    r = (ref.get().to_dict() or {})
+    now = dg._now().isoformat()
+    if not to:
+        out = {"ok": False, "at": now, "error": "No QuickBooks receipt address set (Receipts → QuickBooks)"}
+        ref.set({"qbForward": out}, merge=True)
+        return out
+    try:
+        if raw is None:
+            path = r.get("photoPath")
+            if not path:
+                raise RuntimeError("This receipt has no photo kept")
+            blob = _bucket().blob(path)
+            raw = blob.download_as_bytes()
+            mime = blob.content_type or "image/jpeg"
+        total = r.get("totalCents")
+        money = ("$%.2f" % (total / 100)) if isinstance(total, (int, float)) else ""
+        vendor = str(r.get("vendor") or "Receipt").strip()
+        msg = MIMEMultipart("mixed")
+        msg["To"] = to
+        msg["From"] = dg.OWNER_EMAIL
+        msg["Subject"] = "Receipt: %s%s" % (vendor, (" " + money) if money else "")
+        lines = ["Receipt photo sent in to YD Job Hub.", "", "Vendor: " + vendor]
+        if money:
+            lines.append("Total: " + money)
+        if r.get("date"):
+            lines.append("Date: " + str(r["date"])[:10])
+        if r.get("addedByName"):
+            lines.append("Sent in by: " + str(r["addedByName"]))
+        msg.attach(MIMEText("\n".join(lines), "plain", "utf-8"))
+        part = MIMEApplication(raw, _subtype=(mime or "image/jpeg").split("/")[-1])
+        part.add_header("Content-Disposition", "attachment", filename="receipt-%s.%s" % (rid[-12:], PHOTO_EXT.get(mime, "jpg")))
+        msg.attach(part)
+        resp = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                             headers={"Authorization": "Bearer " + dg._gmail_access_token()},
+                             json={"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()}, timeout=60)
+        if resp.status_code >= 300:
+            raise RuntimeError("Gmail said %d: %s" % (resp.status_code, resp.text[:200]))
+        out = {"ok": True, "at": now, "to": to}
+    except Exception as err:                            # noqa: BLE001
+        print("receipts: photo %s not sent to QuickBooks: %s" % (rid, err))
+        out = {"ok": False, "at": now, "error": str(err)[:200]}
+    ref.set({"qbForward": out}, merge=True)
+    return out
+
+
 def from_photo(client, body, uid, who):
     """Returns ({id, vendor, total, lines, summary, what} or {error}, usage or None)."""
     mime = str(body.get("mediaType") or "").lower()
@@ -997,7 +1076,14 @@ def from_photo(client, body, uid, who):
         job_id = str(body.get("jobId") or "")
         if job_id and job_id in jobs:
             extra["suggest"] = {"jobId": job_id, "why": "%s was clocked in on it" % who}
+        # The photo kept with it, then on to QuickBooks. Neither stops the
+        # receipt being added: a failed send can be done again from Receipts.
+        try:
+            extra["photoPath"] = keep_photo(rid, raw, mime)
+        except Exception as err:                        # noqa: BLE001
+            print("receipts: photo %s not kept: %s" % (rid, err))
         db.collection("receipts").document(rid).set(extra, merge=True)
+        forward_to_qb(db, rid, raw, mime)
     lines, tax, total = lines_from(got)
     return {"id": rid, "vendor": (got.get("vendor") or "").strip(), "totalCents": total, "lines": len(lines),
             "summary": (got.get("summary") or "").strip(), "what": what}, usage

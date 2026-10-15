@@ -752,6 +752,7 @@
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
         menuHtml('c', rid, r) +
       '</div>' +
+      qbHtml(r, rid) +
     '</div>';
   }
 
@@ -822,6 +823,58 @@
 
   // One line in All receipts: what it was, when, what it came to, and where
   // it went -- the jobs it was put on, or why it was set aside.
+  // A receipt photo goes on to QuickBooks by itself (functions/receipts.py
+  // forward_to_qb; Jonah, 15 Oct 2026): said here, with the photo, and Send
+  // to QuickBooks when it did not go. compact: the one-line row.
+  function qbHtml(r, rid, compact) {
+    if (!r.photoPath && r.source !== 'photo') return '';
+    const f = r.qbForward || null;
+    if (compact) return f && f.ok ? '<span class="rc-tag rc-qb-ok" title="Sent to QuickBooks">📤 QB</span>' : '';
+    return '<div class="rc-qb">' +
+      (r.photoPath ? '<button class="btn btn-sm" onclick="rcPhoto(\'' + rid + '\')">🖼 Photo</button>' : '') +
+      (f && f.ok ? '<span class="rc-tag rc-qb-ok">📤 Sent to QuickBooks ' + fmtDateMD(String(f.at || '').slice(0, 10)) + '</span>'
+        : '<span class="rc-tag rc-owed">Not in QuickBooks yet' + (f && f.error ? ' — ' + esc(f.error) : '') + '</span>' +
+          (sorts() && r.photoPath ? '<button class="btn btn-sm" onclick="rcToQb(\'' + rid + '\')">📤 Send to QuickBooks</button>' : '')) +
+    '</div>';
+  }
+  window.rcPhoto = async function (rid) {
+    const r = receipts[rid];
+    if (!r || !r.photoPath || !window.YDStore) return;
+    try { window.open(await window.YDStore.url(r.photoPath), '_blank', 'noopener'); }
+    catch (e) { showToast('The photo could not be opened — try again with signal'); }
+  };
+  window.rcToQb = async function (rid) {
+    if (!sorts() || !window.YDClaude) return;
+    showToast('Sending it to QuickBooks…');
+    try {
+      await window.YDClaude.post('/receipts/qb-send', { id: rid });
+      showToast('📤 Sent to QuickBooks');
+    } catch (e) {
+      showToast('Not sent: ' + String((e && e.message) || e).slice(0, 120), 6000);
+    }
+  };
+  // Where the photos go: QuickBooks' receipt address (Settings → receipts in
+  // QuickBooks, or the Intuit Assist "+expenses" address). Owner only.
+  function qbAddressHtml() {
+    if (!(window.YDAuth && window.YDAuth.isOwner)) return '';
+    const to = state && state.qbForwardTo;
+    return '<div class="rc-qbaddr">📤 Receipt photos go to QuickBooks' +
+      (to ? ' at <b>' + esc(to) + '</b>' : ' — <b>no address set</b>, so they stay here') +
+      ' <button class="link-btn" onclick="rcQbAddress()">' + (to ? 'Change' : 'Set it') + '</button></div>';
+  }
+  window.rcQbAddress = function () {
+    if (!(window.YDAuth && window.YDAuth.isOwner)) return;
+    const was = (state && state.qbForwardTo) || '';
+    const typed = prompt('The email address QuickBooks takes receipts at (blank: don\'t send them):', was);
+    if (typed === null) return;
+    const to = typed.trim();
+    if (to && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(to)) { showToast('That is not an email address'); return; }
+    state = Object.assign({}, state || {}, { qbForwardTo: to || null });
+    Promise.resolve(window.YDDb.put('settings', 'receipts', { qbForwardTo: to || null }))
+      .catch(e => console.warn('[receipts] address not yet on the server:', e && (e.code || e.message)));
+    redraw();
+  };
+
   function rowHtml(r) {
     const rid = safeId(r.id);
     const aside = isAside(r), legacy = legacyPlace(r);
@@ -834,7 +887,7 @@
     // Where it went sits in the row as a chip or two, not a bar under it.
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
         '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
-        esc(r.summary || '') + '</span>' + chipsHtml('h', rid, r) + where +
+        esc(r.summary || '') + '</span>' + chipsHtml('h', rid, r) + where + qbHtml(r, rid, true) +
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
@@ -898,7 +951,7 @@
     el('rcBadge').textContent = open.length ? open.length + ' to sort' : '';
     el('rcBar').innerHTML =
       (sorts() ? '<button class="btn btn-sm" onclick="rcCheckNow()"' + (checking ? ' disabled' : '') + '>' +
-        (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml();
+        (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml() + qbAddressHtml();
     el('rcList').innerHTML = !loaded ? '<p class="empty-msg">Loading receipts…</p>'
       : open.length ? open.map(r => cardHtml(r, jobs)).join('') +
         '<datalist id="rcWhyIdeas">' + WHY_IDEAS.map(w => '<option value="' + esc(w) + '">').join('') + '</datalist>'

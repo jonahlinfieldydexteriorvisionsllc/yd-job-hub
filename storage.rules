@@ -32,6 +32,14 @@ service firebase.storage {
         || (me().role == 'admin' && me().get(['access', 'jobs'], 'none') == 'change'));
     }
 
+    // Receipt photos (receipts.py keep_photo): written by the server only,
+    // kept with the receipt and sent on to QuickBooks. Seen by whoever may
+    // see the receipts -- the owner, or an admin with Jobs (firestore.rules).
+    match /receiptPhotos/{file} {
+      allow read: if staff() && (me().role == 'owner'
+        || (me().role == 'admin' && me().get(['access', 'jobs'], 'none') in ['see', 'change']));
+    }
+
     match /jobPhotos/{jobId}/{file} {
       allow read: if staff();
       // A photo is shrunk on the phone to well under this; the cap stops a

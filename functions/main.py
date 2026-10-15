@@ -619,6 +619,20 @@ def _receipts(request, path, headers):
         if usage is not None:
             _record_spend(day, "receiptphoto", usage, receipts.MODEL)
         return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+    elif path == "/receipts/qb-send":
+        # A receipt photo sent to QuickBooks again (receipts.forward_to_qb) --
+        # one whose send failed, or sent before the address was set.
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            _caller(request, "jobs", "change")
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        rid = str((request.get_json(silent=True) or {}).get("id") or "").strip()
+        if not rid or not _db.collection("receipts").document(rid).get().exists:
+            return (json.dumps({"error": "Which receipt?"}), 400, json_headers)
+        out = receipts.forward_to_qb(_db, rid)
+        return (json.dumps(out), 200 if out.get("ok") else 502, json_headers)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     try:
