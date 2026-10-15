@@ -15,27 +15,78 @@
     --muted:#7b7188;
     --border:#ded5e8;
     --border-strong:#c8bcd8;
+    /* The brand purple as TEXT. The same as --brand by day; at night --brand
+       is nearly black (it is a background there), so words and links in it
+       vanished -- this one stays readable in both. */
+    --brand-ink:#66418f;
+    /* What a thing's STATE means, the same colour everywhere: needs doing
+       now / late, coming up soon, done, for information, not now (lost, not
+       interested, paused). Each has a soft background to sit on. Colours
+       that mean a KIND of thing (a board, a calendar, a card's type) are
+       separate and stay as they are. The text shades are a touch darker than
+       the fills so small words on the soft backgrounds still read. */
+    --st-now:#c8492b;   --st-now-soft:#f6ddd3;
+    --st-soon:#8a5d0e;  --st-soon-fill:#b7791f; --st-soon-soft:#fbeaca;
+    --st-done:#2f8f5b;  --st-done-ink:#1f6b43;  --st-done-soft:#d8ecdf;
+    --st-info:#2f6fd6;  --st-info-soft:#dde8fb;
+    --st-later:#56647a; --st-later-soft:#e6e9ee;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  /* Lining figures everywhere: the display face (Playfair) draws old-style
+     numbers by default, where a 0 is the height of an o -- "0h 0m" read as
+     "oh om", and a total of 0 looked like a letter. Forced on every element
+     because any `font:` shorthand (and a button's own browser style) quietly
+     resets it; the rules that also want tabular figures (columns of
+     numbers) say both, with the same !important. */
+  *, *::before, *::after { font-variant-numeric:lining-nums !important; }
   body { min-height:100vh; background:var(--bg); font-family:'DM Sans',sans-serif; color:var(--text); }
+  /* Buttons do not take the page's font on their own: anything without a
+     font of its own (the More sheet's items) came out in Arial. */
+  button { font-family:inherit; }
   .page { max-width:1400px; margin:0 auto; padding:0 28px 90px; }
 
   /* ---- Header ---- */
   .header { display:flex; align-items:center; justify-content:space-between; padding:20px 0 16px; border-bottom:3px solid var(--accent); flex-wrap:wrap; gap:12px; }
-  .logo { font-family:'Playfair Display',serif; font-size:32px; font-weight:800; letter-spacing:-0.5px; line-height:1; color:var(--brand); }
+  .logo { font-family:'Playfair Display',serif; font-size:32px; font-weight:800; letter-spacing:-0.5px; line-height:1; color:var(--brand-ink); }
   .logo-sub { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:2.5px; color:var(--accent-dark); margin-top:4px; }
   .header-actions { display:flex; gap:8px; flex-wrap:wrap; }
 
   /* ---- Buttons ---- */
-  .btn { font-family:'DM Sans',sans-serif; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; padding:9px 16px; border:2px solid var(--brand); background:transparent; color:var(--brand); cursor:pointer; transition:all .15s; border-radius:6px; }
+  .btn { font-family:'DM Sans',sans-serif; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1px; padding:9px 16px; border:2px solid var(--brand); background:transparent; color:var(--brand-ink); cursor:pointer; transition:all .15s; border-radius:6px; }
   .btn:hover { background:var(--brand); color:#fff; }
   .btn-filled { background:var(--brand); color:#fff; }
   .btn-filled:hover { background:var(--brand-dark); }
   .btn-accent { border-color:var(--accent-dark); background:var(--accent); color:#3a2a08; }
-  .btn-accent:hover { background:var(--accent-dark); color:#fff; }
-  .btn-danger { border-color:var(--neg); color:var(--neg); }
-  .btn-danger:hover { background:var(--neg); color:#fff; }
+  /* Dark text on the darker gold too: white on it was under 4:1. */
+  .btn-accent:hover { background:var(--accent-dark); color:#1a1208; }
+  /* Delete / Remove / Abandon: red words and a red edge, never a red block --
+     a filled red button shouts louder than Save. Filled only while pointed at
+     or focused, so the press is unmistakable. The same in both themes (the
+     night .btn rule used to turn them plain lavender). */
+  .btn-danger, .sup-delete, .rc-del, .bd-edit-btn.del,
+  html[data-night] .btn.btn-danger, html[data-night] .btn.sup-delete, html[data-night] .btn.rc-del {
+    background:transparent; color:var(--neg); border-color:var(--neg); border-color:color-mix(in srgb, var(--neg) 60%, transparent); }
+  .btn-danger:hover, .btn-danger:focus-visible, .sup-delete:hover, .sup-delete:focus-visible,
+  .rc-del:hover, .rc-del:focus-visible, .bd-edit-btn.del:hover, .bd-edit-btn.del:focus-visible,
+  html[data-night] .btn.btn-danger:hover, html[data-night] .btn.sup-delete:hover, html[data-night] .btn.rc-del:hover,
+  html[data-night] .btn.btn-danger:focus-visible, html[data-night] .btn.sup-delete:focus-visible, html[data-night] .btn.rc-del:focus-visible {
+    background:var(--neg); border-color:var(--neg); color:#fff; }
+  /* the night red is light: dark words on it */
+  html[data-night] .btn.btn-danger:hover, html[data-night] .btn.sup-delete:hover, html[data-night] .btn.rc-del:hover,
+  html[data-night] .btn.btn-danger:focus-visible, html[data-night] .btn.sup-delete:focus-visible, html[data-night] .btn.rc-del:focus-visible,
+  html[data-night] .bd-edit-btn.del:hover, html[data-night] .bd-edit-btn.del:focus-visible { color:#1a0c08; }
+
+  /* Buttons on the purple section bars. A plain button is purple on purple
+     there -- "📷 Add a receipt", "📝 Note for Jonah" and "◑ Night" could not be
+     seen at all -- so on the bar it is white, and a filled one is a white
+     button with purple words (the bar is already the purple fill). Gold
+     buttons keep their gold. */
+  .section-head .btn:not(.btn-filled):not(.btn-accent) { color:#fff; border-color:rgba(255,255,255,.55); background:transparent; }
+  .section-head .btn:not(.btn-filled):not(.btn-accent):hover,
+  .section-head .btn:not(.btn-filled):not(.btn-accent):focus-visible { background:rgba(255,255,255,.16); border-color:#fff; color:#fff; }
+  html:not([data-night]) .section-head .btn-filled { background:#fff; border-color:#fff; color:var(--brand); }
+  html:not([data-night]) .section-head .btn-filled:hover { background:#efe7f8; border-color:#efe7f8; color:var(--brand-dark); }
   .btn-save { border-color:var(--pos); color:var(--pos); }
   .btn-save:hover { background:var(--pos); color:#fff; }
   .btn-sm { padding:6px 11px; font-size:11px; }
@@ -59,11 +110,17 @@
   /* checkbox toggle */
   .chk { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--text); cursor:pointer; padding:9px 0; user-select:none; }
   .chk input[type=checkbox] { width:20px; height:20px; accent-color:var(--brand-2); cursor:pointer; flex:none; }
-  .qb-chip { display:inline-block; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; background:#d9e3f0; color:#3a5878; padding:2px 7px; margin-left:6px; border-radius:20px; vertical-align:middle; }
+  /* "QB Invoiced": outlined in green, so it never reads as the Complete pill
+     beside it (both used to be the same pale blue). White on the purple job bar. */
+  .qb-chip { display:inline-block; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; background:transparent;
+    color:var(--st-done-ink); border:1.5px solid currentColor; padding:1px 7px; margin-left:6px; border-radius:20px; vertical-align:middle; }
+  .ctx-bar .qb-chip { color:#fff; border-color:rgba(255,255,255,.7); }
 
   /* ---- Tab Bar ---- */
   .tab-bar { display:flex; background:var(--brand); margin:14px 0 24px; border-radius:10px; overflow:hidden; box-shadow:0 3px 10px rgba(71,44,100,.20); }
-  .tab-btn { flex:1; padding:15px 10px; text-align:center; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; color:#c0a9db; background:none; border:none; cursor:pointer; border-bottom:4px solid transparent; transition:all .15s; }
+  /* The tabs not open: a pale lavender light enough to read on the purple
+     (the darker one was under 4:1); the open one is white and underlined. */
+  .tab-btn { flex:1; padding:15px 10px; text-align:center; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; color:#ddcdf0; background:none; border:none; cursor:pointer; border-bottom:4px solid transparent; transition:all .15s; }
   /* Only with a real mouse. On a phone a tapped button keeps its hover look
      after the finger lifts, so the last tab touched looked selected too. */
   @media (hover:hover) { .tab-btn:hover { color:#f4eefb; background:rgba(255,255,255,.05); } }
@@ -127,7 +184,7 @@
   .upload-zone { border:2px dashed var(--border-strong); background:var(--surface-2); padding:34px 20px; text-align:center; cursor:pointer; transition:all .15s; border-radius:8px; }
   .upload-zone:hover { border-color:var(--brand-2); background:#f5f0fa; }
   .uz-icon { font-size:34px; margin-bottom:8px; }
-  .uz-text { font-size:15px; font-weight:700; color:var(--brand); }
+  .uz-text { font-size:15px; font-weight:700; color:var(--brand-ink); }
   .uz-sub { font-size:12px; color:var(--muted); margin-top:4px; }
 
   /* ---- Proposal card ---- */
@@ -167,10 +224,12 @@
 
   /* status pill */
   .pill { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.8px; padding:3px 10px; border-radius:20px; }
-  .pill.quoting { background:#fbeaca; color:#9a6a12; }
+  .pill.quoting { background:var(--st-soon-soft); color:var(--st-soon); }
   .pill.active { background:var(--pos-soft); color:#1f6b43; }
   .pill.complete { background:#dbe4f0; color:#3a5878; }
-  .pill.lost { background:var(--neg-soft); color:var(--neg); }
+  html[data-night] .pill.complete { background:#1c2633; color:#a9c1dc; }
+  /* A lost bid is not an alarm, just over: the grey of "not now". */
+  .pill.lost { background:var(--st-later-soft); color:var(--st-later); }
   .paid-chip { display:inline-block; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px; padding:3px 10px; border-radius:20px; background:var(--pos); color:#fff; }
 
   .change-tag { display:inline-block; font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; background:#f5dcc8; color:var(--accent-dark); padding:2px 7px; margin-left:8px; border-radius:20px; }
@@ -195,7 +254,7 @@
   .job-row-name { font-weight:600; font-size:14px; }
   .job-row-sub { font-size:12px; color:var(--muted); margin-top:2px; }
   .month-group { margin-bottom:8px; }
-  .month-head { display:flex; align-items:center; gap:8px; padding:9px 4px; cursor:pointer; font-weight:700; font-size:13px; color:var(--brand); }
+  .month-head { display:flex; align-items:center; gap:8px; padding:9px 4px; cursor:pointer; font-weight:700; font-size:13px; color:var(--brand-ink); }
   .month-arrow { display:inline-block; transition:transform .15s; font-size:11px; }
   .month-arrow.shut { transform:rotate(-90deg); }
 
@@ -229,7 +288,7 @@
              padding:3px 9px; border-radius:20px; margin-left:auto;
              background:var(--surface-2); color:var(--muted); border:1px solid var(--border); }
   .pp-stat.s-won { background:var(--pos-soft); color:#2f6b3f; border-color:#bcdcc6; }
-  .pp-stat.s-no  { background:var(--neg-soft); color:var(--neg); border-color:transparent; }
+  .pp-stat.s-no  { background:var(--st-later-soft); color:var(--st-later); border-color:transparent; }
   /* a bid they turned down (prospects.js fromLostBid) */
   .pp-declined { font-size:10px; font-weight:700; letter-spacing:.7px; text-transform:uppercase;
     padding:2px 8px; border-radius:10px; background:#fbeaca; color:#9a6a12; }
@@ -237,7 +296,7 @@
   .pp-svc { display:flex; flex-wrap:wrap; gap:4px; margin-top:9px; }
   .pp-note { font-size:13px; line-height:1.55; margin-top:9px; white-space:pre-wrap; }
   .pp-contact { font-size:12px; color:var(--muted); margin-top:7px; }
-  .pp-contact a { color:var(--brand); text-decoration:none; }
+  .pp-contact a { color:var(--brand-ink); text-decoration:none; }
   .pp-contact a:hover { text-decoration:underline; }
   .pp-act { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:11px; }
   .pp-act select { max-width:150px; font-size:12px; padding:5px 8px; }
@@ -248,7 +307,7 @@
   .pp-out-soon { font-size:13px; }
   .pp-out-edit { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
   .pp-out-edit input[type=date] { width:auto; font-size:16px; }
-  #ppOutWrap .link-btn { background:none; border:0; padding:0 2px; color:var(--brand); font:inherit; font-size:13px; text-decoration:underline; cursor:pointer; }
+  #ppOutWrap .link-btn { background:none; border:0; padding:0 2px; color:var(--brand-ink); font:inherit; font-size:13px; text-decoration:underline; cursor:pointer; }
   .pp-out-row { display:flex; gap:10px; align-items:flex-start; padding:10px 0; border-top:1px solid var(--border); }
   .pp-out-row.done { opacity:.6; }
   .pp-out-row.done .pp-out-name { text-decoration:line-through; }
@@ -272,7 +331,7 @@
   .clock-lead { font-size:13px; color:var(--muted); margin-bottom:10px; }
   .clock-big { min-height:58px; font-size:15px; padding:16px 22px; width:100%; margin-bottom:10px; }
   .clock-actions { display:flex; flex-direction:column; gap:0; margin-top:18px; }
-  .clock-actions .btn-sm { min-height:auto; width:auto; align-self:center; margin-top:4px; }
+  .clock-actions .btn-sm { min-height:44px; width:auto; align-self:center; margin-top:4px; }
 
   .clock-live { text-align:center; padding:8px 0 4px; }
   .clock-live.paused { opacity:.92; }
@@ -281,7 +340,7 @@
                 background:var(--brand); color:#fff; padding:3px 8px; border-radius:20px;
                 vertical-align:middle; margin-left:4px; }
   .clock-elapsed { font-family:'Playfair Display',serif; font-size:52px; font-weight:700;
-                   line-height:1.1; margin:10px 0 4px; font-variant-numeric:tabular-nums; }
+                   line-height:1.1; margin:10px 0 4px; font-variant-numeric:lining-nums tabular-nums !important; }
   .clock-live.paused .clock-elapsed { color:var(--muted); }
   .clock-sub { font-size:12px; color:var(--muted); }
   .clock-pausenote { margin-top:14px; font-size:12.5px; line-height:1.5; padding:11px 14px;
@@ -316,7 +375,7 @@
   .on-now.paused { opacity:.7; }
   .on-who { font-weight:700; font-size:14px; }
   .on-where { font-size:12.5px; color:var(--muted); }
-  .on-time { margin-left:auto; font-variant-numeric:tabular-nums; font-size:13px; font-weight:700; }
+  .on-time { margin-left:auto; font-variant-numeric:lining-nums tabular-nums !important; font-size:13px; font-weight:700; }
 
   .appr { border:1px solid var(--border); border-radius:8px; padding:13px 15px; margin-bottom:10px; }
   .appr-top { display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
@@ -324,7 +383,7 @@
   .appr-where { font-size:12.5px; color:var(--muted); }
   .appr-times { font-size:12px; color:var(--muted); margin-top:4px; }
   .appr-nums { display:flex; gap:14px; flex-wrap:wrap; margin-top:9px; font-size:12.5px;
-               font-variant-numeric:tabular-nums; }
+               font-variant-numeric:lining-nums tabular-nums !important; }
   .appr-cost { margin-left:auto; font-weight:700; }
   .appr-pauses { margin-top:7px; font-size:11.5px; color:var(--muted); }
   .appr-act { display:flex; gap:8px; margin-top:11px; }
@@ -332,7 +391,7 @@
   .clocked-block { border:1.5px solid var(--brand); border-radius:8px; padding:12px 14px;
                    margin-bottom:14px; background:var(--surface-2); }
   .clocked-head { font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
-                  color:var(--brand); margin-bottom:9px; }
+                  color:var(--brand-ink); margin-bottom:9px; }
   .clocked-note { font-size:11.5px; color:var(--muted); margin-top:8px; line-height:1.5; }
   .clocked-pending { font-size:11.5px; margin-top:8px; padding:8px 11px; border-radius:6px;
                      background:rgba(201,146,47,.16); line-height:1.5; }
@@ -393,7 +452,7 @@
   .went-head { font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
                color:var(--muted); margin-bottom:8px; }
   .went-row { display:flex; gap:12px; padding:5px 0; font-size:13px;
-              font-variant-numeric:tabular-nums; }
+              font-variant-numeric:lining-nums tabular-nums !important; }
   .went-row span:nth-child(2) { margin-left:auto; color:var(--muted); }
   .went-cost { font-weight:700; min-width:76px; text-align:right; }
   .went-row.overhead span:first-child::after { content:' (not billable)';
@@ -401,7 +460,7 @@
   .went-note { font-size:11.5px; color:var(--muted); margin-top:8px; }
 
   /* ---- A worker's page -------------------------------------------------- */
-  .linkish { background:none; border:none; padding:0; cursor:pointer; color:var(--brand);
+  .linkish { background:none; border:none; padding:0; cursor:pointer; color:var(--brand-ink);
              font:inherit; font-weight:700; text-align:left; }
   .linkish:hover { text-decoration:underline; }
   .wk-mine { margin-top:14px; }
@@ -443,7 +502,7 @@
   .wk-card-label { font-size:10px; font-weight:700; letter-spacing:.8px; text-transform:uppercase;
                    color:var(--muted); }
   .wk-card-value { font-family:'Playfair Display',serif; font-size:24px; font-weight:700;
-                   margin-top:4px; font-variant-numeric:tabular-nums; }
+                   margin-top:4px; font-variant-numeric:lining-nums tabular-nums !important; }
   .wk-card-sub { font-size:10.5px; color:var(--muted); margin-top:3px; }
   .wk-waiting { margin-top:14px; font-size:12.5px; padding:10px 13px; border-radius:8px;
                 background:rgba(201,146,47,.16); }
@@ -481,7 +540,7 @@
   .sheet-items > * { flex:none; }
   .sheet-item { display:block; width:100%; text-align:left; background:var(--surface);
                 border:1.5px solid var(--border); border-radius:10px; padding:14px 16px;
-                cursor:pointer; min-height:56px; }
+                cursor:pointer; min-height:56px; color:var(--text); font-family:inherit; }
   .sheet-item:hover { border-color:var(--brand); }
   .sheet-item-name { display:block; font-size:15px; font-weight:700; }
   .sheet-item-hint { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
@@ -572,13 +631,13 @@
   .eq-what { font-size:12.5px; color:var(--muted); margin-top:5px; }
   .eq-last { font-size:13px; margin-top:7px; }
   .eq-reading { font-size:11.5px; color:var(--muted); margin-top:4px;
-                font-variant-numeric:tabular-nums; }
+                font-variant-numeric:lining-nums tabular-nums !important; }
 
   .eq-head { display:flex; align-items:flex-start; gap:12px; flex-wrap:wrap; }
   .eq-head .btn { margin-left:auto; }
   .eq-sub { font-size:13px; color:var(--muted); }
   .eq-serial { font-size:11.5px; color:var(--muted); margin-top:3px;
-               font-variant-numeric:tabular-nums; }
+               font-variant-numeric:lining-nums tabular-nums !important; }
   .eq-cards { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:16px 0; }
   .eq-card { border:1px solid var(--border); border-radius:8px; padding:11px 13px; }
   .eq-card.overdue { border-color:var(--neg); background:var(--neg-soft); }
@@ -586,7 +645,7 @@
   .eq-card-label { font-size:9.5px; font-weight:700; letter-spacing:.7px;
                    text-transform:uppercase; color:var(--muted); }
   .eq-card-value { font-family:'Playfair Display',serif; font-size:19px; font-weight:700;
-                   margin-top:3px; font-variant-numeric:tabular-nums; line-height:1.2; }
+                   margin-top:3px; font-variant-numeric:lining-nums tabular-nums !important; line-height:1.2; }
   .eq-notes { font-size:13px; line-height:1.55; padding:11px 14px; border-radius:8px;
               background:var(--surface-2); white-space:pre-wrap; margin-bottom:16px; }
   .eq-loghead { display:flex; align-items:center; gap:10px; font-size:11px; font-weight:700;
@@ -618,14 +677,23 @@
   /* 2. header overflow menu */
   .menu-wrap { position:relative; display:inline-block; }
   .btn-menu { padding:9px 14px; font-size:16px; line-height:1; }
-  .menu { position:absolute; right:0; top:calc(100% + 6px); min-width:172px; padding:6px;
+  /* Wide enough that no item wraps and the email fits; never wider than
+     the screen, and never taller -- the list scrolls instead. */
+  .menu { position:absolute; right:0; top:calc(100% + 6px); width:max-content; min-width:260px; max-width:90vw; padding:6px;
+          max-height:calc(100vh - 90px); max-height:calc(100dvh - 90px); overflow-y:auto; overscroll-behavior:contain;
           background:var(--surface); border:1px solid var(--border-strong); border-radius:9px;
           box-shadow:0 10px 28px rgba(43,36,51,.20); z-index:200; }
+  /* The menu in groups (app.js tidyHeaderMenu hides a group with nothing
+     showing for this person); a line between groups, only below one that
+     is showing. */
+  .menu-group:not([hidden]) ~ .menu-group:not([hidden]) { border-top:1px solid var(--border); margin-top:4px; padding-top:4px; }
+  .menu-head { padding:7px 12px 2px; font-size:10.5px; font-weight:700; letter-spacing:.9px;
+               text-transform:uppercase; color:var(--muted); }
   .menu[hidden] { display:none; }
   .menu button { display:block; width:100%; text-align:left; background:none; border:none;
                  font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600; letter-spacing:.3px;
                  color:var(--text); padding:11px 12px; border-radius:6px; cursor:pointer; }
-  .menu button:hover { background:var(--surface-2); color:var(--brand); }
+  .menu button:hover { background:var(--surface-2); color:var(--brand-ink); }
 
   /* 3. bottom navigation on phones */
   @media (max-width:720px) {
@@ -647,6 +715,8 @@
     .field input, .field select, .field textarea { min-height:44px; }
     /* the header bar is exempt: its buttons are sized to fit on one line */
     .header-actions .btn { min-height:38px; }
+    /* ...except the menu button, which was 27px wide: the one everyone needs. */
+    .header-actions .btn-menu { min-width:44px; min-height:44px; padding:9px 10px; }
     .tab-btn.active { border-top-color:var(--accent); border-bottom-color:transparent; }
     .ctx-bar { border-radius:0; margin-left:-14px; margin-right:-14px; }
   }
@@ -655,8 +725,10 @@
 
   /* account block at the foot of the overflow menu */
   .menu-sep { height:1px; background:var(--border); margin:6px 4px; }
-  .menu-who { padding:7px 12px 3px; font-size:10px; font-weight:700; letter-spacing:.8px;
-              text-transform:uppercase; color:var(--muted); word-break:break-all; line-height:1.5; }
+  /* One line: an email broken mid-word was hard to read. */
+  .menu-who { padding:7px 12px 3px; font-size:10.5px; font-weight:700; letter-spacing:.6px;
+              text-transform:uppercase; color:var(--muted); line-height:1.5;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .menu button.menu-danger { color:var(--neg); }
   .menu button.menu-danger:hover { background:var(--neg-soft); color:var(--neg); }
 
@@ -683,11 +755,13 @@
   .snow-tag { font-size:9px; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
               padding:3px 8px; border-radius:20px; }
   .snow-tag.commercial { background:#dbe4f0; color:#3a5878; }
-  .snow-tag.salt       { background:var(--surface-2); color:var(--brand); border:1px solid var(--border-strong); }
+  .snow-tag.salt       { background:var(--surface-2); color:var(--brand-ink); border:1px solid var(--border-strong); }
   .snow-tag.trigger    { background:#fbeaca; color:#9a6a12; }
   .snow-tag.hold       { background:var(--neg-soft); color:var(--neg); }
-  .snow-addr { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-top:7px;
-               font-size:13px; color:var(--brand); text-decoration:none; }
+  /* The address opens the map: a whole 44px strip to hit with a glove,
+     not one line of 13px text. */
+  .snow-addr { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:2px; min-height:44px;
+               font-size:13px; color:var(--brand-ink); text-decoration:none; }
   .snow-addr:hover { text-decoration:underline; }
   .snow-go { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.7px;
              color:var(--muted); }
@@ -743,7 +817,7 @@
   .stepper-label { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.9px;
                    color:var(--muted); flex:1; }
   .stepper-btn { width:48px; height:48px; flex:none; border:2px solid var(--border-strong);
-                 background:var(--surface-2); color:var(--brand); font-size:24px; font-weight:700;
+                 background:var(--surface-2); color:var(--brand-ink); font-size:24px; font-weight:700;
                  line-height:1; border-radius:10px; cursor:pointer; }
   .stepper-btn:active { background:var(--brand); color:#fff; }
   .stepper-input { width:74px; flex:none; text-align:center; font-size:19px; font-weight:700;
@@ -780,7 +854,7 @@
      every digit the same width, so numbers line up and can be compared
      at a glance. */
   .wx-val { font-family:'DM Sans',sans-serif; font-size:22px; font-weight:700;
-            line-height:1; font-variant-numeric:tabular-nums; letter-spacing:-0.4px; }
+            line-height:1; font-variant-numeric:lining-nums tabular-nums !important; letter-spacing:-0.4px; }
   .wx-lab { font-size:9px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); margin-top:3px; }
   .wx-note { margin-top:9px; font-size:12px; font-weight:600; color:var(--accent-dark); }
   .wx-fail { margin-top:7px; font-size:12px; color:var(--muted); }
@@ -802,6 +876,12 @@
     --text:#f4f0f7; --muted:#a79cb2;
     --border:#2e2634; --border-strong:#463c4f;
     --pos:#4fd68a; --pos-soft:#14301f; --neg:#ff7a5c; --neg-soft:#3a1a14;
+    --brand-ink:#b99be3;
+    --st-now:#ff7a5c;   --st-now-soft:#3a1a14;
+    --st-soon:#f0b04a;  --st-soon-fill:#d9962c; --st-soon-soft:#3a2c10;
+    --st-done:#4fd68a;  --st-done-ink:#4fd68a;  --st-done-soft:#14301f;
+    --st-info:#7aa7ef;  --st-info-soft:#16273f;
+    --st-later:#a3afc0; --st-later-soft:#262b33;
     color-scheme: dark;
   }
   html[data-night] body { background:var(--bg); color:var(--text); }
@@ -840,6 +920,10 @@
   html[data-night] .modal { background:var(--bg); }
   html[data-night] .btn { color:#cdbcdc; border-color:var(--border-strong); }
   html[data-night] .btn-filled { background:var(--brand-2); color:#14101a; border-color:var(--brand-2); }
+  /* The gold buttons (the crew's Pause, "+ Add ...") took the lavender text of
+     the rule above: lavender on gold, near enough invisible. Dark words. */
+  html[data-night] .btn.btn-accent { background:var(--accent); border-color:var(--accent); color:#1a1208; }
+  html[data-night] .btn.btn-accent:hover { background:var(--accent-dark); border-color:var(--accent-dark); color:#1a1208; }
 
   /* The two that get pressed with gloves on. Bigger and louder at night. */
   html[data-night] .btn-stop { min-height:64px; font-size:17px; }
@@ -874,7 +958,7 @@
   .auth-logo { width:76px; height:76px; border-radius:18px; margin-bottom:16px;
                border:1px solid var(--border); }
   .auth-title { font-family:'Playfair Display',serif; font-size:26px; font-weight:700;
-                color:var(--brand); line-height:1.15; }
+                color:var(--brand-ink); line-height:1.15; }
   /* pre-wrap so the sign-in help can put the address on its own line, and
      break-word so a long address does not run off a phone screen. */
   .auth-msg { font-size:14px; color:var(--muted); margin-top:11px; line-height:1.55;
@@ -946,7 +1030,7 @@
   .bd-col.over { border-color:var(--accent); box-shadow:0 0 0 3px rgba(201,146,47,.25); }
   .bd-col-head { display:flex; justify-content:space-between; align-items:center;
     padding:10px 12px; font-size:12px; font-weight:700; text-transform:uppercase;
-    letter-spacing:.8px; color:var(--brand); border-bottom:1px solid var(--border); }
+    letter-spacing:.8px; color:var(--brand-ink); border-bottom:1px solid var(--border); }
   html[data-night] .bd-col-head { color:var(--brand-2); }
   .bd-count { background:var(--surface); border:1px solid var(--border); border-radius:10px;
     padding:1px 8px; font-size:11px; color:var(--muted); }
@@ -978,7 +1062,7 @@
   .bd-labels.big .bd-label { font-size:12px; padding:4px 10px; }
   .bd-add-card { background:none; border:1.5px dashed var(--border-strong); border-radius:8px;
     color:var(--muted); font:600 12px 'DM Sans',sans-serif; padding:9px; cursor:pointer; min-height:40px; }
-  .bd-add-card:hover { color:var(--brand); border-color:var(--brand); }
+  .bd-add-card:hover { color:var(--brand-ink); border-color:var(--brand); }
 
   /* card and job sheets */
   .bd-detail-sub { font-size:14px; color:var(--muted); }
@@ -1038,7 +1122,10 @@
   .bd-del-done:hover, html[data-night] .bd-del-done:hover { color:#fff; border-color:#fff; background:rgba(200,73,43,.35); }
   .bd-card { --surface:#ffffff; --surface-2:#f4f1f8; --text:#2b2433; --muted:#6f6480;
     --border:#e4dfeb; --border-strong:#cfc5dc; --pos:#2f8f5b; --pos-soft:#d8ecdf;
-    --neg:#c8492b; --neg-soft:#f6ddd3;
+    --neg:#c8492b; --neg-soft:#f6ddd3; --brand-ink:#66418f;
+    --st-now:#c8492b; --st-now-soft:#f6ddd3; --st-soon:#8a5d0e; --st-soon-fill:#b7791f; --st-soon-soft:#fbeaca;
+    --st-done:#2f8f5b; --st-done-ink:#1f6b43; --st-done-soft:#d8ecdf; --st-info:#2f6fd6; --st-info-soft:#dde8fb;
+    --st-later:#56647a; --st-later-soft:#e6e9ee;
     background:#fff; color:var(--text); border-color:transparent;
     box-shadow:0 1px 2px rgba(0,0,0,.35); }
   .bd-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.45); }
@@ -1110,7 +1197,7 @@
     font-size:13px; font-weight:700; background:var(--surface-2); border-bottom:1px solid var(--border); }
   .cal-day.today .cal-day-head { background:rgba(201,146,47,.14); }
   .cal-plus { width:36px; height:36px; border-radius:50%; border:1.5px solid var(--border-strong);
-    background:var(--surface); color:var(--brand); font-size:20px; line-height:1; cursor:pointer; }
+    background:var(--surface); color:var(--brand-ink); font-size:20px; line-height:1; cursor:pointer; }
   .cal-none { font-size:12px; color:var(--muted); font-style:italic; padding:11px 13px; }
   .cal-entry { --c:#6b7a8f; display:flex; gap:12px; padding:10px 13px; cursor:pointer;
     border-left:5px solid var(--c); border-bottom:1px solid var(--border); }
@@ -1232,7 +1319,7 @@
   .cg-dn { font-size:20px; font-weight:600; width:36px; height:36px; display:grid; place-items:center; border-radius:50%; }
   .cg-dh:hover .cg-dn { background:var(--surface-2); }
   .cg-dh.past .cg-dn { color:var(--muted); }
-  .cg-dh.today .cg-wd { color:var(--brand); }
+  .cg-dh.today .cg-wd { color:var(--brand-ink); }
   .cg-dh.today .cg-dn { background:var(--brand); color:#fff; }
   html[data-night] .cg-dh.today .cg-wd { color:var(--brand-2); }
   html[data-night] .cg-dh.today .cg-dn { background:var(--brand-2); color:#0c0a0e; }
@@ -1264,8 +1351,8 @@
   .cg-chip.dragging, .cal-bar.dragging { position:relative; }
   #calBody.dragging .cal-month, #calBody.dragging .cal-cell, #calBody.dragging .cg-allcell { overflow:visible; }
   .cg-rs { position:absolute; left:0; right:0; bottom:0; height:9px; cursor:ns-resize; }
-  .cg-now { position:absolute; left:-1px; right:0; height:2px; background:#e0412f; z-index:3; pointer-events:none; }
-  .cg-now::before { content:''; position:absolute; left:-5px; top:-4px; width:10px; height:10px; border-radius:50%; background:#e0412f; }
+  .cg-now { position:absolute; left:-1px; right:0; height:2px; background:var(--st-now); z-index:3; pointer-events:none; }
+  .cg-now::before { content:''; position:absolute; left:-5px; top:-4px; width:10px; height:10px; border-radius:50%; background:var(--st-now); }
   .cal-bar.mv, .cg-chip.mv { cursor:grab; -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
   .cal-bar { cursor:pointer; }
   .drop-on { box-shadow:inset 0 0 0 2px var(--brand) !important; }
@@ -1288,21 +1375,18 @@
   .cal-todo-group { font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--muted); margin:8px 2px 2px; }
   .cal-todo { --c:#6b7a8f; display:flex; align-items:center; gap:8px; min-height:34px; border-left:4px solid var(--c);
               border-radius:4px; padding:2px 4px 2px 6px; margin-top:4px; background:var(--surface-2); }
-  .cal-todo input { width:18px; height:18px; flex:none; accent-color:var(--c); margin:0; cursor:pointer; }
-  .cal-todo-dot { width:18px; flex:none; }
+  .cal-todo-dot { width:22px; flex:none; }
   .cal-todo-t { flex:1; min-width:0; text-align:left; background:none; border:none; cursor:pointer; padding:4px 0;
                 font-family:'DM Sans',sans-serif; font-size:12.5px; color:var(--text); overflow-wrap:anywhere; }
   .cal-todo.done .cal-todo-t { text-decoration:line-through; color:var(--muted); }
   .cal-todo-t small { display:block; font-size:11px; color:var(--muted); margin-top:1px; }
-  /* Not ticked off on its own day (14 Oct 2026): carried to the top. */
-  .cal-todo-group.late, .md-head.md-late { color:#c0392b; }
-  html[data-night] .cal-todo-group.late, html[data-night] .md-head.md-late { color:#ff8a7a; }
-  .cal-todo.late { background:color-mix(in srgb, #d64545 9%, var(--surface-2)); }
-  .cal-todo.late .cal-todo-t small { color:#c0392b; }
-  html[data-night] .cal-todo.late .cal-todo-t small { color:#ff8a7a; }
+  /* Not ticked off on its own day (14 Oct 2026): carried to the top. The
+     status colour (--st-now) has its own night shade. */
+  .cal-todo-group.late, .md-head.md-late { color:var(--st-now); }
+  .cal-todo.late { background:color-mix(in srgb, var(--st-now) 9%, var(--surface-2)); }
+  .cal-todo.late .cal-todo-t small { color:var(--st-now); }
   .cal-late-more { display:block; font-size:12px; margin:6px 2px 2px; }
-  .cal-detail-line.cal-late { color:#c0392b; font-weight:600; }
-  html[data-night] .cal-detail-line.cal-late { color:#ff8a7a; }
+  .cal-detail-line.cal-late { color:var(--st-now); font-weight:600; }
 
   /* My day (12 Oct 2026): one person's day -- at set times, then any time,
      then the crew's. */
@@ -1314,7 +1398,25 @@
   .md-row { --c:#6b7a8f; display:flex; gap:10px; align-items:center; width:100%;
             border-left:4px solid var(--c); border-radius:6px; background:var(--surface-2);
             padding:0 0 0 10px; margin-top:4px; }
-  .md-row > input { width:18px; height:18px; flex:none; accent-color:var(--c); margin:0; cursor:pointer; }
+  /* The tick boxes on My day, Any time today and Home: drawn 22px (they were
+     18px, small for a cold thumb), but pressed anywhere in 44px. The clear
+     11px border around the drawn box is part of the box -- a border takes
+     taps, a margin does not -- and the matching negative margin keeps the
+     row laid out as it was. Drawn by hand (appearance:none) because a native
+     box grows with its size; in the row's own colour, as before. The dark
+     edge on the tick keeps it seen on a pale colour (yellow). */
+  .cal-todo input[type=checkbox], .md-row > input[type=checkbox] {
+    -webkit-appearance:none; appearance:none; flex:none; box-sizing:border-box;
+    width:44px; height:44px; margin:-11px; padding:0; cursor:pointer;
+    border:11px solid transparent; border-radius:16px;
+    background:var(--surface); background-clip:padding-box;
+    box-shadow:inset 0 0 0 2px var(--c); position:relative; z-index:1; }
+  .cal-todo input[type=checkbox]:checked, .md-row > input[type=checkbox]:checked {
+    background:var(--c) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23000' stroke-opacity='.35' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 15px 15px no-repeat;
+    background-clip:padding-box; box-shadow:none; }
+  .cal-todo input[type=checkbox]:focus-visible, .md-row > input[type=checkbox]:focus-visible {
+    outline:3px solid var(--accent); outline-offset:-9px; }
+  .cal-todo input[type=checkbox]:disabled, .md-row > input[type=checkbox]:disabled { opacity:.5; cursor:default; }
   .md-open { display:flex; gap:12px; align-items:flex-start; flex:1; min-width:0; text-align:left; cursor:pointer;
              border:none; background:none; padding:9px 10px 9px 0; font-family:'DM Sans',sans-serif; color:var(--text); }
   .md-row.done { opacity:.55; }
@@ -1338,9 +1440,9 @@
   .rt-stop small { color:var(--muted); font-size:11.5px; overflow-wrap:anywhere; }
   .rt-stop.start { width:120px; border-style:dashed; }
   .rt-stop.lost { opacity:.7; border-style:dashed; }
-  .rt-stop.far { border-color:#d64545; }
-  .rt-stop small.rt-warn { color:#d64545; font-weight:700; }
-  .rt-n { font-size:11px; font-weight:700; color:var(--brand); }
+  .rt-stop.far { border-color:var(--st-now); }
+  .rt-stop small.rt-warn { color:var(--st-now); font-weight:700; }
+  .rt-n { font-size:11px; font-weight:700; color:var(--brand-ink); }
   html[data-night] .rt-n { color:var(--brand-2); }
   .rt-leg { flex:none; align-self:center; text-align:center; font-size:11px; color:var(--muted); padding:0 8px; min-width:58px;
             line-height:1.3; position:relative; }
@@ -1359,14 +1461,14 @@
             margin-bottom:8px; font-family:'DM Sans',sans-serif; color:var(--text); min-height:56px; }
   .cj-row-name { flex:1; min-width:0; font-size:15px; }
   .cj-row-name small { display:block; color:var(--muted); font-size:12.5px; margin-top:2px; }
-  .cj-status { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--brand);
+  .cj-status { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px; color:var(--brand-ink);
                background:color-mix(in srgb, var(--brand) 12%, transparent); padding:3px 8px; border-radius:20px; white-space:nowrap; }
   html[data-night] .cj-status { color:var(--brand-2); }
   .cj-preview { font-size:12.5px; padding:8px 12px; border-radius:8px; margin-bottom:12px;
                 background:color-mix(in srgb, var(--accent) 16%, var(--surface)); }
   .cj-top { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
   .cj-name { flex:1; font-size:19px; font-weight:700; }
-  .cj-call { display:inline-block; margin:8px 0 4px; font-weight:700; font-size:16px; color:var(--brand); text-decoration:none; }
+  .cj-call { display:inline-block; margin:8px 0 4px; font-weight:700; font-size:16px; color:var(--brand-ink); text-decoration:none; }
   html[data-night] .cj-call { color:var(--brand-2); }
   .cj-tags { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
   .cj-sec { margin-top:16px; }
@@ -1386,7 +1488,7 @@
   .cj-crewnote { margin:8px 0 2px; padding:8px 10px; border-left:3px solid var(--accent); border-radius:6px; background:var(--surface-2); }
   .cj-crewnote-h { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:2px; }
   .cj-sub { font-size:12px; font-weight:700; color:var(--muted); margin:10px 0 2px; }
-  .cj-m { font-weight:700; color:var(--brand); }
+  .cj-m { font-weight:700; color:var(--brand-ink); }
   html[data-night] .cj-m { color:var(--brand-2); }
   html[data-night] .cj-big { color:#f0c77a; background:rgba(201,146,47,.18); }
   .cj-haul { font-size:14px; padding:8px 0 2px; }
@@ -1476,7 +1578,7 @@
   .sub-warn { margin-top:8px; font-size:13px; font-weight:600; color:var(--accent-dark); }
   .sub-warn.late { color:var(--neg); }
   .sub-more { margin-top:10px; }
-  .sub-more summary { cursor:pointer; font-size:13px; font-weight:700; color:var(--brand); padding:4px 0; }
+  .sub-more summary { cursor:pointer; font-size:13px; font-weight:700; color:var(--brand-ink); padding:4px 0; }
   html[data-night] .sub-more summary { color:var(--brand-2); }
   .sub-table td .muted { font-size:12px; }
   .sub-off { opacity:.55; }
@@ -1559,13 +1661,15 @@
   /* ---- job controls only where there is a job ----
      Save, New, My Jobs and the "Editing ..." bar all act on the open job.
      On Snow, the calendar or the boards they were just in the way. The three
-     job screens keep them -- Job, Tracking and All Jobs -- since picking
-     another job from All Jobs is exactly what Jobs is for (Jonah missed them
-     there). The logo and the menu (with Sign out) stay on every screen. */
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnSave,
+     job screens keep New and My Jobs -- Job, Tracking and All Jobs -- since
+     picking another job from All Jobs is exactly what Jobs is for (Jonah
+     missed them there). Save and the "Editing ..." bar only where a job is
+     actually being edited: Job and Tracking. All Jobs edits nothing.
+     The logo and the menu (with Sign out) stay on every screen. */
   html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnNew,
   html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnMyJobs,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #ctxBar { display:none !important; }
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnSave,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #ctxBar { display:none !important; }
 
   /* ---- board settings: one row per column and per label ---- */
   .bd-edit-list { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
@@ -1577,7 +1681,6 @@
   .bd-edit-btn { flex:none; width:40px; height:40px; border-radius:8px; border:1.5px solid var(--border-strong);
     background:var(--surface); color:var(--text); font-size:15px; cursor:pointer; }
   .bd-edit-btn:disabled { opacity:.35; cursor:default; }
-  .bd-edit-btn.del { color:var(--neg); }
   .bd-edit-label { padding:9px; border:1px solid var(--border); border-radius:8px; background:var(--surface); }
   .bd-edit-label .bd-label { flex:none; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bd-swatches.small { gap:6px; margin-top:8px; }
@@ -1692,7 +1795,7 @@
 
   /* ---- the week's weather: header button + floating panel ---- */
   .wx-chip { display:inline-flex; align-items:center; gap:5px; min-height:38px; padding:5px 11px;
-    border:2px solid var(--brand); border-radius:6px; background:transparent; color:var(--brand);
+    border:2px solid var(--brand); border-radius:6px; background:transparent; color:var(--brand-ink);
     font:700 14px 'DM Sans',sans-serif; cursor:pointer; }
   html[data-night] .wx-chip { border-color:var(--brand-2); color:var(--brand-2); }
   .wxc-icon { font-size:16px; line-height:1; }
@@ -1724,7 +1827,7 @@
   .wxp-extra .wxp-w { display:none; }
   .wxp-extra, .wxp-wind { font-size:11px; color:var(--muted); margin-top:3px; white-space:nowrap; }
   .wxp-foot { margin-top:10px; font-size:11px; color:var(--muted); display:flex; align-items:center; gap:6px; }
-  .wxp-refresh { border:none; background:none; color:var(--brand); font-size:16px; cursor:pointer; min-width:32px; min-height:32px; }
+  .wxp-refresh { border:none; background:none; color:var(--brand-ink); font-size:16px; cursor:pointer; min-width:32px; min-height:32px; }
   .wxp-msg { font-size:13px; color:var(--muted); padding:8px 0; }
   /* A phone is too narrow for seven columns: one row per day instead. */
   @media (max-width:720px) {
@@ -1786,7 +1889,7 @@
   /* ---- Supplies: suppliers, grouping, prices, price-list import ---- */
   /* Two ways in: the suppliers, and every supply by tag (supplies.js). */
   .sup-views { display:flex; gap:0; margin-bottom:10px; border:1.5px solid var(--brand); border-radius:10px; overflow:hidden; }
-  .sup-view { flex:1; min-height:42px; border:none; background:var(--surface); color:var(--brand);
+  .sup-view { flex:1; min-height:42px; border:none; background:var(--surface); color:var(--brand-ink);
     font:700 14px 'DM Sans',sans-serif; cursor:pointer; }
   .sup-view + .sup-view { border-left:1.5px solid var(--brand); }
   .sup-view.on { background:var(--brand); color:#fff; }
@@ -1800,7 +1903,7 @@
   @media (hover:hover) { .sup-vrow:hover { border-color:var(--brand-2); } }
   .sup-vrow-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
   .sup-vrow-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .sup-vrow-name { font:700 16px 'Playfair Display',serif; color:var(--brand); }
+  .sup-vrow-name { font:700 16px 'Playfair Display',serif; color:var(--brand-ink); }
   html[data-night] .sup-vrow-name { color:var(--brand-2); }
   .sup-vrow-sub { font-size:13px; color:var(--muted); }
   .sup-vrow .sup-ways { margin-top:0; }
@@ -1837,13 +1940,13 @@
   .sup-group { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:18px 0 8px; padding-bottom:6px;
     border-bottom:2px solid var(--border); }
   .sup-group:first-child { margin-top:4px; }
-  .sup-group-name { font:700 17px 'Playfair Display',serif; color:var(--brand); background:none; border:none; padding:0;
+  .sup-group-name { font:700 17px 'Playfair Display',serif; color:var(--brand-ink); background:none; border:none; padding:0;
     cursor:pointer; text-align:left; }
   html[data-night] .sup-group-name { color:var(--brand-2); }
   .sup-group-count { font-size:11px; font-weight:700; color:var(--muted); background:var(--surface-2);
     border:1px solid var(--border); border-radius:10px; padding:1px 8px; }
   .sup-vcard { border:1.5px solid var(--brand-2); border-radius:12px; background:var(--surface-2); padding:14px 16px; margin-bottom:12px; }
-  .sup-vname { font:700 20px 'Playfair Display',serif; color:var(--brand); }
+  .sup-vname { font:700 20px 'Playfair Display',serif; color:var(--brand-ink); }
   html[data-night] .sup-vname { color:var(--brand-2); }
   .sup-price { margin-top:8px; padding-top:8px; border-top:1px dashed var(--border); font-size:15px; }
   .sup-price b { font-size:17px; }
@@ -1863,11 +1966,10 @@
   .sup-hist span { background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:2px 8px; color:var(--text); }
   #supModalBody .field + .field, #supModalBody .grid + .field, #supModalBody .field + .grid,
   #supModalBody .grid + .grid, #supModalBody .field + fieldset { margin-top:12px; }
-  .sup-delete { margin-left:auto; border-color:var(--neg); color:var(--neg); }
-  .sup-delete:hover { background:var(--neg); color:#fff; }
+  .sup-delete { margin-left:auto; }
   .sup-stat { font-size:14px; line-height:1.6; padding:10px 14px; background:var(--surface); border:1px solid var(--border);
     border-radius:10px; margin-bottom:10px; }
-  .sup-h { font:700 17px 'Playfair Display',serif; color:var(--brand); margin:18px 0 4px; }
+  .sup-h { font:700 17px 'Playfair Display',serif; color:var(--brand-ink); margin:18px 0 4px; }
   html[data-night] .sup-h { color:var(--brand-2); }
   .sup-csv { font-family:ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size:12.5px; margin-top:10px; white-space:pre; }
   .sup-plan { display:flex; gap:6px; flex-wrap:wrap; margin:14px 0 8px; }
@@ -1961,7 +2063,7 @@
   }
 
   /* Figures line up in columns. */
-  td, .fin-value, .sup-price, .wxp-temps, .wxh-deg { font-variant-numeric:tabular-nums; }
+  td, .fin-value, .sup-price, .wxp-temps, .wxh-deg { font-variant-numeric:lining-nums tabular-nums !important; }
 
   /* The message that pops up at the bottom fades out but stays where it was,
      invisible -- and on a phone that is on top of the tab bar, where it
@@ -1970,8 +2072,10 @@
      inline in showToast, hence the !important.) */
   #toast { pointer-events:none; max-width:min(560px, calc(100vw - 24px)); }
   @media (max-width:720px) {
+    /* Lifted above the signal pill and the Undo bar when they show
+       (--lift-pill, --lift-undo below), so the three never sit on each other. */
     #toast { left:12px !important; right:12px !important; text-align:center;
-             bottom:calc(70px + env(safe-area-inset-bottom, 0px)) !important; }
+             bottom:calc(70px + var(--lift-pill, 0px) + var(--lift-undo, 0px) + env(safe-area-inset-bottom, 0px)) !important; }
   }
 
   /* Section headers with several buttons (Snow: Start storm, Add account)
@@ -1986,8 +2090,9 @@
      like a button that did nothing. Empty, it is simply not shown. */
   .section-badge:empty { display:none; }
 
-  /* "Forgot to clock in?" and "My hours" sat touching each other. */
-  .clock-idle > .btn-sm { margin:4px 3px 0; }
+  /* "Forgot to clock in?" and "My hours" sat touching each other. 44px tall
+     like every other clock button: pressed with gloves on. */
+  .clock-idle > .btn-sm { margin:4px 3px 0; min-height:44px; }
 
   /* ---- an admin who may look at jobs but not change them ----
      Every control on the Job and Tracking screens is inert (rows drawn later
@@ -2047,7 +2152,7 @@
   .ssel-item:last-child { border-bottom:none; }
   .ssel-item.on, .ssel-item:hover { background:var(--surface-2); }
   .ssel-none { color:var(--muted); font-style:italic; }
-  .ssel-new { color:var(--brand); font-weight:700; }
+  .ssel-new { color:var(--brand-ink); font-weight:700; }
   html[data-night] .ssel-new { color:var(--brand-2); }
   .ssel-empty { padding:10px 12px; font-size:13px; color:var(--muted); }
   .ssel-more { padding:9px 12px; font-size:13px; color:var(--muted); font-style:italic; cursor:default; }
@@ -2090,7 +2195,7 @@
   .rc-taxrow { cursor:default; color:var(--muted); }
   .rc-line.rc-plain { grid-template-columns:1fr auto; cursor:default; }
   .rc-hint { margin-top:8px; font-size:13px; color:var(--muted); }
-  .rc-link { background:none; border:none; padding:6px 0; font:inherit; font-size:13px; font-weight:600; color:var(--brand); text-decoration:underline; cursor:pointer; }
+  .rc-link { background:none; border:none; padding:6px 0; font:inherit; font-size:13px; font-weight:600; color:var(--brand-ink); text-decoration:underline; cursor:pointer; }
   html[data-night] .rc-link { color:var(--brand-2); }
   .rc-lamt { font-weight:600; white-space:nowrap; text-align:right; }
   .rc-ljob { font-size:12px; color:var(--pos); white-space:nowrap; }
@@ -2123,8 +2228,6 @@
   .bd-computer.on { color:var(--text); border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 7%, var(--surface)); }
   .cl-box.working { border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 5%, var(--surface)); }
   .cl-box.waiting_ok { border-color:#efd59c; background:color-mix(in srgb, #e0a526 9%, var(--surface)); }
-  .rc-del { color:var(--neg); border-color:var(--neg-soft); }
-  .rc-del:hover { background:var(--neg-soft); }
 
   /* ---- the Receipts tab ---- */
   .tab-count:empty { display:none; }
@@ -2152,7 +2255,7 @@
   .eq-log-what { min-width:0; }
   .eq-log-sub { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
   .eq-log-cost { font-weight:700; white-space:nowrap; }
-  .eq-log-edit { color:var(--brand); font-size:12px; font-weight:700; white-space:nowrap; }
+  .eq-log-edit { color:var(--brand-ink); font-size:12px; font-weight:700; white-space:nowrap; }
   html[data-night] .eq-log-edit { color:var(--brand-2); }
   .eq-need { color:var(--neg); }
   /* receipts sorted to a vehicle: a list to read, not rows to tap */
@@ -2224,10 +2327,10 @@
   .est-who { font-size:11px; font-weight:700; color:var(--muted); margin-bottom:2px; }
   .est-text { white-space:pre-wrap; }
   .est-did { font-size:12px; color:var(--pos); margin-top:4px; }
-  .est-did .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-weight:700; text-decoration:underline; cursor:pointer; }
+  .est-did .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-weight:700; text-decoration:underline; cursor:pointer; }
   .est-send { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
   .est-send textarea { flex:1; }
-  .eq-fixed .link-btn { background:none; border:0; padding:0 2px; color:var(--brand); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
+  .eq-fixed .link-btn { background:none; border:0; padding:0 2px; color:var(--brand-ink); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
 
   /* ---- Estimate v2: labour, takeoff, what the rules add (estimate.js) ---- */
   .est-warnbox { margin-bottom:10px; padding:9px 12px; border-radius:8px; border:1px solid var(--neg); background:var(--neg-soft); font-size:13px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
@@ -2252,7 +2355,7 @@
   .est-order.bad, .est-probs { color:var(--neg); }
   /* The crew's side of a line (crewjobs.js): notes for the crew on a labour
      line, and which line a material is for on the crew's page */
-  .est-crewnote-add .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:12.5px; cursor:pointer; text-decoration:underline; }
+  .est-crewnote-add .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-size:12.5px; cursor:pointer; text-decoration:underline; }
   .est-crewnote { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
   .est-crewnote textarea { width:100%; font-size:14px; border-color:var(--accent); }
   .est-for { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
@@ -2336,8 +2439,8 @@
   .cr-link select { max-width:100%; }
   .order-cost { margin-top:12px; padding:10px; border-radius:8px; background:var(--surface-2); font-size:13px; }
   .order-cost .muted { font-size:11.5px; margin-top:2px; }
-  .bd-draft { font-size:11px; font-weight:700; color:var(--brand); }
-  .cr-cost .link-btn, .order-vendor .link-btn, .cr-link .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
+  .bd-draft { font-size:11px; font-weight:700; color:var(--brand-ink); }
+  .cr-cost .link-btn, .order-vendor .link-btn, .cr-link .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
   .est-invoice { margin-top:10px; padding:10px 12px; border-radius:8px; border:1px dashed var(--border-strong); }
   .est-invoice .hint { margin:0 0 4px; }
   /* Starting a storm (storm.js renderStormStart): big targets for gloves */
@@ -2348,7 +2451,7 @@
   .ss-person.on { background:var(--brand); border-color:var(--brand); color:#fff; }
   .ss-count { margin:14px 0 4px; font-size:14px; font-weight:600; }
   /* Site-visit notes: start a dated entry (estimate.js estNoteToday) */
-  .est-today { background:none; border:0; padding:0 0 0 6px; color:var(--brand); font:inherit; font-size:12px; font-weight:700; text-transform:none; letter-spacing:0; text-decoration:underline; cursor:pointer; }
+  .est-today { background:none; border:0; padding:0 0 0 6px; color:var(--brand-ink); font:inherit; font-size:12px; font-weight:700; text-transform:none; letter-spacing:0; text-decoration:underline; cursor:pointer; }
   /* Contacts: meeting notes (prospects.js) */
   .pp-meet { margin:8px 0; padding:10px; border-radius:8px; background:var(--surface-2); }
   .pp-meet textarea { width:100%; font-size:16px; }
@@ -2359,7 +2462,7 @@
   .pp-meet-text { white-space:pre-wrap; font-size:14px; margin-top:2px; }
   /* A button that reads as a link, wherever one has no styling of its own
      ("Start the conversation over" drew as a bare grey button). */
-  .link-btn { background:none; border:0; padding:0; color:var(--brand); font:inherit; font-size:13px; font-weight:600; text-decoration:underline; cursor:pointer; }
+  .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-size:13px; font-weight:600; text-decoration:underline; cursor:pointer; }
   /* The estimate as the customer reads it (estimate.js renderCustomer) */
   .cv { margin:10px 0; padding:14px 16px; border:1px solid var(--border-strong); border-radius:10px; background:var(--surface); }
   .cv-head { font-size:15px; margin-bottom:8px; }
@@ -2421,7 +2524,7 @@
   @media (max-width:720px) { .rc-task { grid-template-columns:1fr 1fr; } }
   .cols2.single { grid-template-columns:1fr; }
   /* Card urgency and the board filter (boards.js) */
-  .bd-card.urg-urgent { box-shadow:inset 4px 0 0 #d64545; }
+  .bd-card.urg-urgent { box-shadow:inset 4px 0 0 var(--st-now); }
   .bd-card.urg-high { box-shadow:inset 4px 0 0 #e07b24; }
   .bd-card.urg-low { opacity:.85; }
   .bd-filters { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px; }
@@ -2430,7 +2533,7 @@
   .bd-urg-pick { display:flex; flex-wrap:wrap; gap:6px; }
   .bd-urg-opt { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border-strong); border-radius:8px; font-size:13px; cursor:pointer; }
   .bd-urg-opt small { color:var(--muted); }
-  .bd-urg-opt.urg-urgent { border-left:4px solid #d64545; }
+  .bd-urg-opt.urg-urgent { border-left:4px solid var(--st-now); }
   .bd-urg-opt.urg-high { border-left:4px solid #e07b24; }
   .bd-rain { display:flex; flex-direction:column; gap:14px; }
   .bd-rain-head { font-weight:700; font-size:14px; padding:4px 8px; border-left:4px solid var(--c); }
@@ -2549,7 +2652,7 @@
      .cal-todo) so a thing looks the same here as on the calendar. */
   .home { padding-bottom:8px; }
   .hm-top { display:flex; align-items:flex-end; justify-content:space-between; gap:12px 18px; flex-wrap:wrap; margin:4px 0 14px; }
-  .hm-hi { font-family:'Playfair Display',serif; font-size:27px; font-weight:700; color:var(--brand); line-height:1.15; }
+  .hm-hi { font-family:'Playfair Display',serif; font-size:27px; font-weight:700; color:var(--brand-ink); line-height:1.15; }
   .hm-date { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:1.6px; color:var(--accent-dark); margin-top:5px; }
   .hm-wx { display:flex; align-items:center; gap:10px; text-align:left; cursor:pointer; max-width:100%;
     background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:8px 14px;
@@ -2569,7 +2672,7 @@
     background:#e3f5fb; background:color-mix(in srgb, #3fb6d8 14%, var(--surface));
     font-family:'DM Sans',sans-serif; font-size:14px; color:var(--text); }
   .hm-alert span { color:var(--muted); font-size:13px; }
-  .hm-alert .hm-alert-go { margin-left:auto; color:var(--brand); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
+  .hm-alert .hm-alert-go { margin-left:auto; color:var(--brand-ink); font-weight:700; font-size:12px; text-transform:uppercase; letter-spacing:.6px; }
 
   /* The figures at a glance */
   .hm-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; margin:0 0 18px; }
@@ -2595,7 +2698,7 @@
   .hm-n { font-size:10.5px; letter-spacing:0; color:var(--text); background:var(--surface-2); border:1px solid var(--border);
     border-radius:9px; padding:0 6px; }
   .hm-empty { color:var(--muted); font-style:italic; font-size:13px; padding:6px 2px 4px; }
-  .hm-more { display:block; background:none; border:none; cursor:pointer; color:var(--brand); padding:8px 2px 2px;
+  .hm-more { display:block; background:none; border:none; cursor:pointer; color:var(--brand-ink); padding:8px 2px 2px;
     font-family:'DM Sans',sans-serif; font-size:12.5px; font-weight:700; }
   .hm-body .md-row { margin-top:6px; }
   .hm-todo { min-height:40px; margin-top:6px; }
@@ -2622,7 +2725,7 @@
     font-family:'DM Sans',sans-serif; color:var(--text); }
   .hm-job-m { flex:1; min-width:0; font-size:14.5px; font-weight:700; overflow-wrap:anywhere; }
   .hm-job-m small { display:block; font-size:12.5px; font-weight:400; color:var(--muted); margin-top:2px; }
-  .hm-job-m small.hm-when { color:var(--brand); font-weight:600; }
+  .hm-job-m small.hm-when { color:var(--brand-ink); font-weight:600; }
   .hm-job-m small.hm-when.none { color:var(--muted); font-style:italic; font-weight:400; }
   .hm-job-m small.hm-when.late { color:var(--neg); }
   .hm-job-m small.hm-when.you { color:#2f6fd6; }
@@ -2685,7 +2788,7 @@
     border-radius:10px; background:#fbeaca; color:#9a6a12; margin-left:5px; vertical-align:1px; }
   .eva-v { white-space:nowrap; }
   .eva-pen { background:none; border:0; color:var(--brand-2); cursor:pointer; font-size:13px; padding:0 2px 0 6px; line-height:1; }
-  .eva-pen:hover { color:var(--brand); }
+  .eva-pen:hover { color:var(--brand-ink); }
   .eva-edit { margin:12px 0 4px; padding:12px; border:1.5px dashed var(--border-strong); border-radius:8px; background:var(--surface-2);
     display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
   .eva-edit-h { flex-basis:100%; font-weight:700; font-size:13px; }
@@ -2768,4 +2871,74 @@
     .care-banner { padding:9px 12px; }
     .care-btns { width:100%; }
     .care-btns .btn { flex:1 1 auto; }
+  }
+
+  /* ============================================================
+     Usability pass, 15 Oct 2026
+     ============================================================ */
+
+  /* Home's card links ("See all ›") look small but take a press 44px tall:
+     the invisible ::after is part of the button. */
+  .hm-link { position:relative; }
+  .hm-link::after { content:''; position:absolute; left:-4px; right:-4px; top:50%; height:44px; transform:translateY(-50%); }
+
+  /* ---- "Done -- Undo" (app.js showUndo) ----
+     Bottom centre; above the tab bar on a phone. Hidden, it takes no taps
+     (visibility), and shown, only the bar itself does. */
+  .undo-bar { position:fixed; z-index:2100; left:50%; bottom:calc(24px + env(safe-area-inset-bottom, 0px));
+    transform:translate(-50%, 14px); width:max-content; max-width:min(560px, calc(100vw - 24px));
+    display:flex; align-items:center; gap:10px; padding:4px 4px 4px 16px; border-radius:10px;
+    background:#2b2433; color:#fff; box-shadow:0 8px 26px rgba(0,0,0,.3);
+    font-size:14px; font-weight:600; line-height:1.35;
+    opacity:0; visibility:hidden; transition:opacity .18s, transform .18s, visibility .18s; }
+  .undo-bar.on { opacity:1; visibility:visible; transform:translate(-50%, 0); }
+  .undo-msg { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .undo-btn { flex:none; min-height:48px; min-width:76px; padding:0 16px; border:0; border-radius:8px; cursor:pointer;
+    background:transparent; color:#f3c56f; font:700 14px 'DM Sans',sans-serif; text-transform:uppercase; letter-spacing:.8px; }
+  .undo-btn:hover, .undo-btn:focus-visible { background:rgba(255,255,255,.13); }
+  html[data-night] .undo-bar { background:#2a2130; border:1px solid var(--border-strong); }
+  @media (prefers-reduced-motion:reduce) { .undo-bar { transition:none; } }
+
+  /* ---- No signal / still sending (app.js signalPill) ----
+     Never takes a tap. On a wide screen, top centre in the header's empty
+     middle; on a small laptop that middle holds the header's buttons, so
+     bottom left (the toast is bottom right, Undo bottom centre); on a phone,
+     just above the tab bar. */
+  .net-pill { position:fixed; z-index:2050; left:50%; transform:translateX(-50%);
+    top:calc(env(safe-area-inset-top, 0px) + 8px); width:max-content; max-width:min(520px, calc(100vw - 24px));
+    padding:6px 14px; border-radius:18px; text-align:center; pointer-events:none;
+    font-size:12.5px; font-weight:600; line-height:1.35; box-shadow:0 4px 14px rgba(0,0,0,.18); }
+  .net-pill.off { background:var(--st-later); color:#fff; }       /* slate: not an alarm, and not the Undo bar */
+  .net-pill.sending { background:var(--st-soon-soft); color:var(--st-soon); border:1px solid var(--st-soon-fill); }
+  html[data-night] .net-pill.off { background:#3d4654; color:#eef1f5; border:1px solid #56647a; }
+  @media (min-width:721px) and (max-width:1179px) {
+    .net-pill { top:auto; left:16px; transform:none; bottom:calc(16px + env(safe-area-inset-bottom, 0px));
+      max-width:min(420px, calc(100vw - 32px)); text-align:left; }
+  }
+  html[data-netpill] { --lift-pill:52px; }   /* the pill is two lines on a phone */
+  html[data-undo] { --lift-undo:62px; }
+
+  @media (max-width:720px) {
+    .net-pill { top:auto; bottom:calc(64px + env(safe-area-inset-bottom, 0px)); }
+    .undo-bar { left:12px; right:12px; width:auto; max-width:none; transform:translateY(14px);
+      bottom:calc(70px + var(--lift-pill, 0px) + env(safe-area-inset-bottom, 0px)); }
+    .undo-bar.on { transform:none; }
+
+    /* Words big enough to read outdoors. Tab labels were 9px; small tags
+       and pills under 10px; help text 11px. */
+    .tab-btn { font-size:10.5px; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .qb-chip, .pill, .paid-chip, .change-tag, .pp-stat, .pp-declined, .clock-kind, .picker-flag, .crew-state,
+    .shift-flag, .appr-why, .prob-kind, .qb-todo, .eq-kind, .eq-urg, .eq-part-chip, .eq-repair, .snow-tag, .snow-go,
+    .bd-label, .wl-tag, .sup-new, .crew-admin, .est-sandbox, .hm-chip, .eva-hand, .care-chip,
+    .label, .add-label, .form-section-label, .summary-label, .fin-label, .wk-card-label, .eq-card-label,
+    .wl-card-label, .ntf-head, .hm-link, .hm-card .section-badge { font-size:10.5px; }
+    .hint, .clock-hint, .sheet-item-hint, .qb-hint, .clocked-note, .went-note, .wk-card-sub, .summary-sub,
+    .snow-sq, .appr-pauses, .prob-meta, .uz-sub, .cal-todo-t small { font-size:12.5px; }
+
+    /* The iPhone zoom (see "16px on phones" above) for the fields that set
+       a smaller size of their own -- the estimate's pickers and scope boxes
+       above all. */
+    .est-for select, .est-tax select, .est-scope, .est-who select, .est-qbitem input, .est-crewnote textarea,
+    .pr-field input, .pr-field select, .pr-field textarea, .pr-end-add input, .pp-act select,
+    .sub-visit-table select, .plants-pick select { font-size:16px; }
   }

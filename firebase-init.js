@@ -50,6 +50,31 @@ function canFor(role, access) {
   };
 }
 
+// ---------------------------------------------------------- writes on the way
+// Every write the app makes, from the moment it is asked for until the
+// SERVER says it has it. With no signal they wait here (Firestore keeps
+// them on the phone and sends them later), so this is how many changes are
+// waiting -- app.js shows "No signal ... 3 waiting" / "Sending 3 changes...".
+// Kept by start time, so "still sending after 4 seconds" means the oldest
+// one, not a steady trickle of quick ones.
+const inFlight = new Map();          // ticket -> when it was asked for
+let nextTicket = 0;
+function tellPending() {
+  let oldest = 0;
+  inFlight.forEach(t => { if (!oldest || t < oldest) oldest = t; });
+  document.dispatchEvent(new CustomEvent('yd-pending', { detail: { n: inFlight.size, oldest: oldest } }));
+}
+// Counts `p` (a write's promise) until it settles either way, and hands the
+// SAME promise back, so every caller's .then/.catch behaves exactly as before.
+function track(p) {
+  const ticket = ++nextTicket;
+  inFlight.set(ticket, Date.now());
+  tellPending();
+  const done = () => { inFlight.delete(ticket); tellPending(); };
+  p.then(done, done);
+  return p;
+}
+
 // ---------------------------------------------------------------- gate UI
 const gate = {
   el: () => document.getElementById('authGate'),
@@ -72,7 +97,21 @@ const gate = {
     if (again) again.hidden = !opts.retry;
     const spin = document.getElementById('gateSpinner');
     if (spin) spin.hidden = !opts.spinner;
+    // "Check again", for somebody waiting to be let in. Made here the first
+    // time it is wanted, beside Sign out; what it does is gate.onCheck.
+    let chk = document.getElementById('gateCheck');
+    if (!chk && opts.check && out && out.parentNode) {
+      chk = document.createElement('button');
+      chk.type = 'button';
+      chk.id = 'gateCheck';
+      chk.className = 'btn btn-filled auth-btn';
+      chk.textContent = 'Check again';
+      chk.addEventListener('click', () => { if (gate.onCheck) gate.onCheck(); });
+      out.parentNode.insertBefore(chk, out);
+    }
+    if (chk) chk.hidden = !opts.check;
   },
+  onCheck: null,
   hide() {
     const g = this.el();
     if (g) g.hidden = true;
@@ -313,26 +352,91 @@ async function start() {
 
   // Someone who may not use the app. At sign-in a request still waiting is
   // told so; once the app is open, either is told their access went.
-  function shutOut(user, role, live) {
+  // Either way the screen now opens the app by itself the moment Jonah lets
+  // them in (their own record is watched -- they may read it), and "Check
+  // again" asks the server there and then. Before, a new crew member sat at
+  // "Waiting for approval" until they thought to close the app and reopen it.
+  // `note` replaces the usual words (the answer to Check again).
+  let shutRole = null, shutLive = false;
+  function shutOut(user, role, live, note) {
+    shutRole = role;
+    shutLive = !!live;
+    gate.onCheck = () => checkMe(user);
     if (role === 'pending' && !live) {
       gate.show('pending', {
         title: 'Waiting for approval',
-        msg: `Signed in as ${user.email}. Jonah needs to approve this account before `
-           + 'you can use the app.',
+        msg: note || `Signed in as ${user.email}. Jonah needs to approve this account before `
+           + 'you can use the app. It opens by itself once he has.',
         signOut: true,
+        check: true,
       });
       return;
     }
     gate.show('denied', {
       title: 'Access removed',
-      msg: `The account ${user.email} no longer has access.`,
+      msg: note || `The account ${user.email} no longer has access.`,
       signOut: true,
+      check: true,
     });
+  }
+
+  const ALLOWED = ['owner', 'admin', 'crew'];
+  let inFor = null;      // the account the app has been opened for (letIn)
+
+  // Shut out at sign-in: the app was never opened, so nothing is watching
+  // their record yet. Watch it until they are let in.
+  function waitForApproval(user) {
+    if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
+    unwatchMe = onSnapshot(doc(db, 'users', user.uid), snap => {
+      if (snap.metadata.fromCache || auth.currentUser !== user || !snap.exists()) return;
+      heardOutside(user, roleOf(snap.data()));
+    }, () => { /* offline or refused: Check again still asks */ });
+  }
+  // A role heard while still outside: in they come, or the words change
+  // (a request turned down reads "Access removed").
+  function heardOutside(user, role) {
+    if (ALLOWED.indexOf(role) !== -1) {
+      if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
+      rememberRole(user, role);
+      console.info('[auth] let in as', role);
+      letIn(user, role, false);
+      return;
+    }
+    const sig = role + JSON.stringify(myAccess);
+    if (sig === shown) return;
+    shown = sig;
+    rememberRole(user, role);
+    shutOut(user, role, false);
+  }
+
+  // "Check again": the server's own copy of their record, now.
+  async function checkMe(user) {
+    const btn = document.getElementById('gateCheck');
+    if (btn) { btn.disabled = true; btn.textContent = 'Checking…'; }
+    try {
+      const snap = await getDocFromServer(doc(db, 'users', user.uid));
+      if (auth.currentUser !== user) return;
+      const role = snap.exists() ? roleOf(snap.data()) : 'pending';
+      if (inFor === user) applyRole(user, role, true); else heardOutside(user, role);
+      if (ALLOWED.indexOf(role) === -1) {
+        shutOut(user, role, inFor === user, role === 'pending' && inFor !== user
+          ? `Signed in as ${user.email}. Not approved yet — this opens by itself the moment Jonah approves it.`
+          : `The account ${user.email} still has no access. Ask Jonah to switch it back on.`);
+      }
+    } catch (e) {
+      console.warn('[auth] check again failed', e.code || e.message);
+      if (auth.currentUser === user && shutRole) {
+        shutOut(user, shutRole, shutLive, 'Could not reach the server to check — look for signal and try again.');
+      }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'Check again'; }
+    }
   }
 
   onAuthStateChanged(auth, async user => {
     if (!user) {
       if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
+      inFor = null;
       localStorage.removeItem(ROLE_UID);
       localStorage.removeItem(ROLE_CACHE);
       localStorage.removeItem(ACCESS_CACHE);
@@ -373,11 +477,18 @@ async function start() {
       if (role === 'pending' || role === 'inactive') {
         shown = role + JSON.stringify(myAccess);
         shutOut(user, role, false);
+        waitForApproval(user);
         return;
       }
     }
 
-    // owner, admin or crew -- let them in
+    letIn(user, role, fromDevice);
+  });
+
+  // owner, admin or crew -- let them in. Straight after sign-in, or later
+  // from the "Waiting for approval" screen once Jonah has let them in.
+  function letIn(user, role, fromDevice) {
+    inFor = user;
     gate.hide();
 
     // A deliberately small database interface for app.js, which is a classic
@@ -404,11 +515,11 @@ async function start() {
     window.YDDb = {
       // Jobs are watched with the general watch('jobs') below (sync.js).
       async putJob(id, data) {
-        await setDoc(doc(db, 'jobs', id), data);
+        await track(setDoc(doc(db, 'jobs', id), data));
       },
 
       async removeJob(id) {
-        await deleteDoc(doc(db, 'jobs', id));
+        await track(deleteDoc(doc(db, 'jobs', id)));
       },
 
       // Used once, by the migration. Batched so 21 jobs is one round trip
@@ -420,7 +531,7 @@ async function start() {
           entries.slice(i, i + CHUNK).forEach(([id, data]) => {
             batch.set(doc(db, 'jobs', id), data);
           });
-          await batch.commit();
+          await track(batch.commit());
         }
       },
 
@@ -539,21 +650,21 @@ async function start() {
       // caller, which says so when there is none.
       async transact(docs, change) {
         const refs = docs.map(([p, id]) => doc(db, ...p.split('/'), id));
-        return runTransaction(db, async t => {
+        return track(runTransaction(db, async t => {
           const snaps = [];
           for (const r of refs) snaps.push(await t.get(r));
           const patches = change(snaps.map(s => (s.exists() ? s.data() : null))) || [];
           patches.forEach((p, i) => { if (p) t.set(refs[i], p, { merge: true }); });
           return patches;
-        });
+        }));
       },
 
       async put(path, id, data) {
-        await setDoc(doc(db, ...path.split('/'), id), data, { merge: true });
+        await track(setDoc(doc(db, ...path.split('/'), id), data, { merge: true }));
       },
 
       async remove(path, id) {
-        await deleteDoc(doc(db, ...path.split('/'), id));
+        await track(deleteDoc(doc(db, ...path.split('/'), id)));
       },
 
       // Several writes as one unit. Used by imports, where half-landed data is
@@ -565,7 +676,7 @@ async function start() {
       removeMany(entries) {
         const batch = writeBatch(db);
         entries.forEach(([path, id]) => batch.delete(doc(db, ...path.split('/'), id)));
-        return batch.commit();
+        return track(batch.commit());
       },
 
       // Every chunk is committed at once rather than one after another. A
@@ -582,8 +693,12 @@ async function start() {
           });
           commits.push(batch.commit());
         }
-        return Promise.all(commits);
+        return track(Promise.all(commits));
       },
+
+      // How many changes are on their way to the server right now (see
+      // track() at the top). The 'yd-pending' event says when it changes.
+      pending() { return inFlight.size; },
     };
 
     // Files (job photos) in Cloud Storage. The Storage SDK is fetched the
@@ -621,10 +736,15 @@ async function start() {
       },
     };
 
+    // Changes made in an earlier visit and never sent (the app was closed
+    // with no signal) are still waiting in Firestore's own queue: counted
+    // too, as one, until they have gone.
+    track(waitForPendingWrites(db));
+
     publish(user, role);
     console.info('[auth] signed in as', user.email, 'role', role, fromDevice ? '(from this device; checking)' : '');
     watchMyRecord(user, fromDevice);
-  });
+  }
 
   // Tell the rest of the app who is signed in and what they may do.
   // `key` changes whenever any of that does, so a screen can tell "the same
@@ -682,6 +802,8 @@ async function start() {
     rememberRole(user, role);
     if (role === 'pending' || role === 'inactive') { shutOut(user, role, live); return; }
     console.info('[auth] access changed to', role, myAccess);
+    // Let back in after being shut out: the gate comes down again.
+    gate.hide();
     publish(user, role);
   }
 
