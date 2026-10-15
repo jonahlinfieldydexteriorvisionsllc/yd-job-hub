@@ -1,0 +1,309 @@
+// Invoices -- every unpaid QuickBooks invoice, when it went out and when to
+// remind (Jonah, 15 Oct 2026: "i want jobhub to track invoices & when they
+// were sent and when to send reminder invoices").
+//
+// The list is kept by the server's hourly look at QuickBooks
+// (functions/quickbooks.py sync_invoices -> invoices/{QuickBooks id}): who,
+// what is still owed, the invoice's date and due date, every time it was
+// emailed, and whether the customer has opened it -- invoices made from a job
+// here, from a storm, or by hand in QuickBooks alike. When a reminder is due
+// is worked out here by THE REMINDER RULE, the same as the summaries'
+// (functions/digest.py invoice_state):
+//   - a deposit paid on a job not finished yet: the rest is due when the job
+//     is done, so no reminder until then;
+//   - never emailed from QuickBooks: send it;
+//   - else the first reminder `firstAfterDays` after the due date (or the day
+//     the job was finished, if later), then every `everyDays` after the last,
+//     up to `max` -- then it is time to call.
+// Every email of the invoice after the first counts as a reminder (sent from
+// here or from QuickBooks), and so does one noted by hand (a call, a text).
+// A reminder sent from here is the invoice emailed again by QuickBooks, with
+// its pay link (/qb/invoice-remind) -- the same email QuickBooks' own
+// reminders send.
+(function () {
+  'use strict';
+
+  const RULES = { firstAfterDays: 3, everyDays: 7, max: 4 };
+  let invoices = {};        // id -> invoices/{id}
+  let rules = Object.assign({}, RULES);
+  let unsub = null, loaded = false;
+  let view = 'todo';        // todo | owed | paid
+  let editingRules = false;
+  const busy = {};          // id -> true while a reminder is being sent
+
+  const el = id => document.getElementById(id);
+  const sees = () => typeof ydCan === 'function' && ydCan('billing', 'see');
+  const changes = () => typeof ydCan === 'function' && ydCan('billing', 'change');
+  const money = n => (typeof fmtMoney === 'function' ? fmtMoney(Number(n) || 0) : '$' + (Number(n) || 0).toFixed(2));
+  const safe = s => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
+  const pad = n => String(n).padStart(2, '0');
+  const isoDay = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  const today = () => isoDay(new Date());
+  // The day here of a time QuickBooks or this app wrote ("2026-10-13T13:06:57-07:00");
+  // a bare date stays as it is.
+  function day(s) {
+    s = String(s || '');
+    if (s.length <= 10) return s;
+    const t = new Date(s);
+    return isNaN(t) ? s.slice(0, 10) : isoDay(t);
+  }
+  function addDays(iso, n) {
+    const d = new Date(iso + 'T12:00:00');
+    d.setDate(d.getDate() + n);
+    return isoDay(d);
+  }
+  const daysBetween = (a, b) => Math.round((new Date(b + 'T12:00:00') - new Date(a + 'T12:00:00')) / 864e5);
+  function shortDay(iso) {
+    const d = new Date(day(iso) + 'T12:00:00');
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+  // The job an invoice is on, as this device holds it (none for a storm's
+  // or one made by hand in QuickBooks).
+  function jobOf(inv) {
+    if (!inv.jobId || typeof readJobBlob !== 'function') return null;
+    try { return JSON.parse(readJobBlob(inv.jobId) || 'null'); } catch (e) { return null; }
+  }
+
+  function stateOf(inv) {
+    if (!inv.open || !(Number(inv.balance) > 0)) return { kind: 'paid' };
+    const emails = (inv.emails || []).filter(Boolean).map(day).sort();
+    const hand = (inv.handReminders || []).map(h => day(h && h.at)).filter(Boolean).sort();
+    const job = jobOf(inv);
+    const done = !!job && (typeof normStatus === 'function' ? normStatus(job.jobStatus, job) : job.jobStatus) === 'complete';
+    const total = Number(inv.total) || 0, bal = Number(inv.balance) || 0;
+    if (job && !done && bal < total - 0.005) return { kind: 'waiting' };
+    const dueDay = day(inv.dueDate || inv.txnDate);
+    const late = dueDay ? daysBetween(dueDay, today()) : 0;
+    // QuickBooks says it was emailed but not when (before Job Hub watched):
+    // sent, no reminders yet.
+    if (!emails.length && !hand.length && inv.emailStatus !== 'EmailSent') return { kind: 'unsent', late };
+    if (day(inv.snoozeUntil) > today()) return { kind: 'later', next: day(inv.snoozeUntil), late, snoozed: true };
+    let start = dueDay || today();
+    if (done && day(job.completedAt) > start) start = day(job.completedAt);
+    const count = Math.max(0, emails.length - 1) + hand.length;
+    const last = emails.concat(hand).sort().slice(-1)[0];
+    if (count >= rules.max) return { kind: 'call', count, late, last };
+    const next = count === 0 ? addDays(start, rules.firstAfterDays) : addDays(last, rules.everyDays);
+    return { kind: today() >= next ? 'due' : 'later', next, count, late, last };
+  }
+  const wantsYou = st => st.kind === 'due' || st.kind === 'unsent' || st.kind === 'call';
+
+  // ------------------------------------------------------------- drawing
+
+  function render() {
+    const sec = el('invSection');
+    if (!sec) return;
+    sec.hidden = !sees();
+    if (!sees()) return;
+    const wrap = el('invWrap');
+    const list = Object.values(invoices).map(inv => ({ inv, st: stateOf(inv) }));
+    const open = list.filter(x => x.st.kind !== 'paid');
+    const todo = open.filter(x => wantsYou(x.st));
+    const paid = list.filter(x => x.st.kind === 'paid');
+    const owedTotal = open.reduce((s, x) => s + (Number(x.inv.balance) || 0), 0);
+    const badge = el('invBadge');
+    if (badge) {
+      badge.textContent = todo.length ? todo.length + ' to do' : open.length ? money(owedTotal) + ' owed' : '';
+      badge.className = 'section-badge' + (todo.length ? ' eq-alert' : '');
+    }
+    if (!loaded) { wrap.innerHTML = '<p class="empty-msg">Loading invoices…</p>'; return; }
+    const shown = view === 'todo' ? todo : view === 'paid' ? paid : open;
+    const order = { unsent: 0, due: 1, call: 2, waiting: 4, later: 3, paid: 5 };
+    shown.sort((a, b) => order[a.st.kind] - order[b.st.kind] || (b.st.late || 0) - (a.st.late || 0) ||
+      String(a.inv.customerName).localeCompare(String(b.inv.customerName)));
+    const tab = (k, label, n) => '<button type="button" class="' + (view === k ? 'on' : '') + '" onclick="invView(\'' + k + '\')">' +
+      label + ' <b>' + n + '</b></button>';
+    wrap.innerHTML =
+      '<div class="inv-sum">' + (open.length ? '<b>' + money(owedTotal) + '</b> owed on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') : 'Nothing owed.') +
+        (changes() ? ' <button class="link-btn" onclick="invCheckNow()">↻ Check QuickBooks now</button>' : '') + '</div>' +
+      '<div class="inv-views">' + tab('todo', 'To do', todo.length) + tab('owed', 'All owed', open.length) + tab('paid', 'Paid', paid.length) + '</div>' +
+      (shown.length ? shown.map(x => rowHtml(x.inv, x.st)).join('')
+        : '<p class="empty-msg">' + (view === 'todo' ? 'No reminders due — nothing to chase today.' : view === 'paid' ? 'Nothing paid in the last month.' : 'Nothing owed.') + '</p>') +
+      rulesHtml();
+  }
+
+  function stateText(st) {
+    switch (st.kind) {
+      case 'unsent': return '<span class="inv-chip now">Not emailed yet — send it</span>';
+      case 'due': return '<span class="inv-chip now">' + (st.count ? 'Reminder ' + (st.count + 1) + ' due' : 'First reminder due') + '</span>';
+      case 'call': return '<span class="inv-chip now">' + st.count + ' reminders sent — time to call</span>';
+      case 'waiting': return '<span class="inv-chip info">Deposit paid — the rest is due when the job is done</span>';
+      case 'later': return '<span class="inv-chip later">' + (st.snoozed ? 'Put off until ' : 'Next reminder ') + esc(shortDay(st.next)) + '</span>';
+      default: return '<span class="inv-chip done">Paid</span>';
+    }
+  }
+  function rowHtml(inv, st) {
+    const id = safe(inv.id);
+    const emails = (inv.emails || []).filter(Boolean).sort();
+    const facts = [];
+    facts.push((emails.length ? 'Sent ' + shortDay(emails[0]) : inv.emailStatus === 'EmailSent' ? 'Emailed' : 'Not emailed') +
+      (inv.viewed ? ' · 👀 opened' : ''));
+    if (inv.dueDate) facts.push('Due ' + shortDay(inv.dueDate) + (st.late > 0 && st.kind !== 'paid' && st.kind !== 'waiting'
+      ? ' · <b class="inv-late">' + st.late + ' day' + (st.late === 1 ? '' : 's') + ' late</b>' : ''));
+    const hand = inv.handReminders || [];
+    const rem = Math.max(0, emails.length - 1);
+    if (rem || hand.length) {
+      facts.push((rem ? rem + ' reminder' + (rem === 1 ? '' : 's') + ' emailed' : '') + (rem && hand.length ? ', ' : '') +
+        (hand.length ? hand.length + ' by hand' : '') + ' — last ' + esc(shortDay(emails.concat(hand.map(h => h.at)).sort().slice(-1)[0])));
+    }
+    if (st.kind === 'paid' && inv.paidAt) facts.push('Paid off ' + shortDay(inv.paidAt));
+    const can = changes() && st.kind !== 'paid';
+    return '<div class="inv-row k-' + st.kind + '">' +
+      '<div class="inv-top"><span class="inv-who"><b>' + esc(inv.customerName || 'A customer') + '</b>' +
+          (inv.docNumber ? ' <span class="muted">#' + esc(inv.docNumber) + '</span>' : '') + '</span>' +
+        '<span class="inv-amt"><b>' + money(st.kind === 'paid' ? inv.total : inv.balance) + '</b>' +
+          (st.kind !== 'paid' && Number(inv.balance) < Number(inv.total) - 0.005 ? '<small> of ' + money(inv.total) + '</small>' : '') + '</span></div>' +
+      '<div class="inv-facts">' + facts.join(' · ') + '</div>' +
+      '<div class="inv-next">' + stateText(st) + '</div>' +
+      '<div class="inv-acts">' +
+        (can && st.kind !== 'waiting' ? '<button class="btn btn-sm' + (wantsYou(st) ? ' btn-filled' : '') + '" onclick="invRemind(\'' + id + '\')"' +
+          (busy[inv.id] ? ' disabled' : '') + '>' + (busy[inv.id] ? 'Sending…' : st.kind === 'unsent' ? '📧 Email it' : '📧 Send reminder') + '</button>' : '') +
+        (can && st.kind !== 'waiting' ? '<button class="btn btn-sm" onclick="invHand(\'' + id + '\')">✔ Called or texted</button>' : '') +
+        (can && wantsYou(st) && st.kind !== 'unsent' ? '<button class="btn btn-sm" onclick="invSnooze(\'' + id + '\')">Not yet — a week</button>' : '') +
+        (inv.jobId && typeof loadJob === 'function' ? '<button class="btn btn-sm" onclick="invOpenJob(\'' + safe(inv.jobId) + '\')">The job</button>' : '') +
+        (inv.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(inv.link)
+          ? '<a class="btn btn-sm" href="' + esc(inv.link) + '" target="_blank" rel="noopener">QuickBooks ↗</a>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // The rule itself, set by whoever may change billing.
+  function rulesHtml() {
+    const words = 'First reminder ' + rules.firstAfterDays + ' day' + (rules.firstAfterDays === 1 ? '' : 's') + ' after it’s due, then every ' +
+      rules.everyDays + ' days, up to ' + rules.max + ' — then call.';
+    if (!editingRules || !changes()) {
+      return '<div class="inv-rules muted">⏰ ' + words + (changes() ? ' <button class="link-btn" onclick="invRules(true)">Change</button>' : '') + '</div>';
+    }
+    const box = (id, v, label) => '<label class="inv-rule"><span>' + label + '</span><input id="' + id + '" type="number" min="0" max="60" inputmode="numeric" value="' + v + '"></label>';
+    return '<div class="inv-rules-edit">' +
+      box('invFirst', rules.firstAfterDays, 'Days after it’s due for the first reminder') +
+      box('invEvery', rules.everyDays, 'Days between reminders') +
+      box('invMax', rules.max, 'Reminders before it’s time to call') +
+      '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="invSaveRules()">Save</button>' +
+      '<button class="btn btn-sm" onclick="invRules(false)">Cancel</button></div></div>';
+  }
+
+  // ------------------------------------------------------------- actions
+
+  window.invView = function (v) { view = ['todo', 'owed', 'paid'].indexOf(v) !== -1 ? v : 'todo'; render(); };
+  // As search.js opens one: the job already in the form is just shown.
+  window.invOpenJob = function (jobId) {
+    if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
+    if (typeof dirty !== 'undefined' && dirty &&
+        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (typeof loadJob === 'function') loadJob(jobId);
+  };
+  window.invRemind = async function (id) {
+    const inv = invoices[id];
+    if (!inv || !changes() || busy[id] || !window.YDClaude) return;
+    const st = stateOf(inv);
+    if (!confirm((st.kind === 'unsent' ? 'Email' : 'Email a reminder of') + ' invoice' + (inv.docNumber ? ' #' + inv.docNumber : '') +
+        ' (' + money(inv.balance) + ' owed) to ' + (inv.email || inv.customerName) + ' from QuickBooks?')) return;
+    busy[id] = true; render();
+    try {
+      await window.YDClaude.post('/qb/invoice-remind', { id: inv.id });
+      showToast('📧 Sent to ' + (inv.email || inv.customerName));
+    } catch (e) {
+      showToast('Not sent: ' + String((e && e.message) || e).slice(0, 140), 7000);
+    } finally {
+      delete busy[id]; render();
+    }
+  };
+  // A call or a text counts as a reminder too, so the next one is timed from it.
+  window.invHand = function (id) {
+    const inv = invoices[id];
+    if (!inv || !changes()) return;
+    const how = prompt('How did you remind them? (e.g. Called, Texted)', 'Called');
+    if (how === null) return;
+    const me = (window.YDAuth && window.YDAuth.user && (window.YDAuth.user.displayName || window.YDAuth.user.email)) || '';
+    const hand = (inv.handReminders || []).concat([{ at: new Date().toISOString(), how: String(how).trim().slice(0, 60) || 'By hand', by: me }]);
+    inv.handReminders = hand;
+    render();
+    Promise.resolve(window.YDDb.put('invoices', inv.id, { handReminders: hand, updatedAt: new Date().toISOString() }))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
+  window.invSnooze = function (id) {
+    const inv = invoices[id];
+    if (!inv || !changes()) return;
+    inv.snoozeUntil = addDays(today(), 7);
+    render();
+    Promise.resolve(window.YDDb.put('invoices', inv.id, { snoozeUntil: inv.snoozeUntil, updatedAt: new Date().toISOString() }))
+      .catch(e => console.warn('[invoices] not put off on the server yet:', e && (e.code || e.message)));
+  };
+  window.invCheckNow = async function () {
+    if (!changes() || !window.YDClaude) return;
+    showToast('Checking QuickBooks…');
+    try { await window.YDClaude.post('/qb/invoices-now', {}); showToast('Invoices up to date'); }
+    catch (e) { showToast('Could not check: ' + String((e && e.message) || e).slice(0, 120), 6000); }
+  };
+  window.invRules = function (on) { editingRules = !!on; render(); };
+  window.invSaveRules = function () {
+    const n = id => { const v = parseInt((el(id) || {}).value, 10); return isFinite(v) && v >= 0 && v <= 60 ? v : null; };
+    const next = { firstAfterDays: n('invFirst'), everyDays: n('invEvery'), max: n('invMax') };
+    if (Object.values(next).some(v => v === null) || next.everyDays < 1 || next.max < 1) {
+      showToast('Whole numbers — at least 1 day between reminders and 1 reminder'); return;
+    }
+    rules = next;
+    editingRules = false;
+    render();
+    Promise.resolve(window.YDDb.put('settings', 'invoiceReminders', Object.assign({ updatedAt: new Date().toISOString() }, next)))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
+  // Home's "Waiting on you" opens the list here.
+  window.openInvoices = function () {
+    if (typeof switchTab === 'function') switchTab('dashboard');
+    view = 'todo'; render();
+    const s = el('invSection');
+    if (s && s.scrollIntoView) s.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
+
+  // ------------------------------------------------------------- data
+
+  function start() {
+    stop();
+    if (!window.YDDb || !sees()) return;
+    unsub = window.YDDb.watch('invoices', (changes, meta) => {
+      changes.forEach(c => {
+        if (c.type === 'removed') delete invoices[c.id];
+        else invoices[c.id] = Object.assign({ id: c.id }, c.data);
+      });
+      if (meta && !meta.fromCache) loaded = true;
+      else if (Object.keys(invoices).length) loaded = true;
+      render();
+      document.dispatchEvent(new CustomEvent('yd-invoices'));
+    }, () => { loaded = true; render(); });
+    Promise.resolve(window.YDDb.get('settings', 'invoiceReminders')).then(r => {
+      if (r) Object.keys(RULES).forEach(k => { if (typeof r[k] === 'number' && r[k] >= 0) rules[k] = r[k]; });
+      render();
+    }).catch(() => {});
+  }
+  function stop() {
+    if (unsub) { try { unsub(); } catch (e) { /* already gone */ } }
+    unsub = null; invoices = {}; loaded = false;
+  }
+
+  window.YDInvoices = {
+    all: () => invoices,
+    stateOf: stateOf,
+    // What wants doing, most late first (Home).
+    toDo: () => Object.values(invoices).map(inv => ({ inv, st: stateOf(inv) })).filter(x => wantsYou(x.st))
+      .sort((a, b) => (b.st.late || 0) - (a.st.late || 0)),
+    render: render,
+  };
+
+  let authKey = null;
+  document.addEventListener('yd-auth', e => {
+    const a = e.detail || {};
+    const on = a.mode === 'cloud' && !!a.user && sees();
+    const k = on ? (a.key || a.user.uid + ':' + a.role) : null;
+    if (k === authKey) return;
+    authKey = k;
+    if (on) start(); else stop();
+    render();
+  });
+  // Which job is finished moves an invoice on (waiting -> reminders).
+  document.addEventListener('yd-jobs-changed', render);
+  function boot() { render(); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+  else boot();
+})();

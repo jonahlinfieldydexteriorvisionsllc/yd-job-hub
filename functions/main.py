@@ -279,7 +279,8 @@ def _quickbooks(request, path, headers):
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
-                       "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status")
+                       "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
+                       "/qb/invoice-remind", "/qb/invoices-now")
     try:
         uid = _caller(request, "billing", "change") if billing else _caller(request)
     except PermissionError as e:
@@ -315,6 +316,17 @@ def _quickbooks(request, path, headers):
             result = qb.invoice_from_estimate(body)
         elif path == "/qb/invoice-status":
             result = qb.invoice_status(body)
+        elif path == "/qb/invoice-remind":
+            # A reminder emailed from QuickBooks (invoices.js Send reminder).
+            who = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or ""
+            result = qb.invoice_remind(body, who)
+        elif path == "/qb/invoices-now":
+            # The Invoices list brought up to date now, not at the next hourly look.
+            jobs = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
+            with qb._holding_tokens():
+                news = qb.sync_invoices(jobs)
+            _tell_owner(news)
+            result = {"ok": True}
         else:
             return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     except PermissionError as e:

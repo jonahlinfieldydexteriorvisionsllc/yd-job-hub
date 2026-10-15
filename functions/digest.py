@@ -786,6 +786,97 @@ def _office(jobs):
             "toOrder": sorted(to_order)}
 
 
+# When an invoice wants a reminder (Jonah, 15 Oct 2026: "track invoices &
+# when they were sent and when to send reminder invoices"). THE REMINDER
+# RULE -- the same in invoices.js stateOf, so the list and the summary agree:
+#   - a deposit paid on a job not finished yet: the rest is due when the job
+#     is done -- no reminder until then;
+#   - never emailed from QuickBooks: send it;
+#   - else the first reminder `firstAfterDays` after the due date (or the
+#     day the job was finished, if later), then every `everyDays` after the
+#     last one sent, up to `max` -- then it is time to call.
+# Every email of the invoice after the first counts as a reminder (QuickBooks'
+# own sends too), and so does one noted by hand (a call, a text).
+INVOICE_RULES = {"firstAfterDays": 3, "everyDays": 7, "max": 4}
+
+
+def invoice_rules():
+    try:
+        got = _db().collection("settings").document("invoiceReminders").get().to_dict() or {}
+    except Exception as e:      # noqa: BLE001
+        print("digest: reminder settings not read:", e)
+        got = {}
+    out = dict(INVOICE_RULES)
+    for k in out:
+        if isinstance(got.get(k), (int, float)) and got[k] >= 0:
+            out[k] = int(got[k])
+    return out
+
+
+def _local_day(s):
+    """The Chicago day of an ISO time ("2026-10-13T13:06:57-07:00" -> its day
+    here); a bare date stays as it is."""
+    s = str(s or "")
+    if len(s) <= 10:
+        return s
+    try:
+        t = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        return s[:10]
+    return (t if t.tzinfo else t.replace(tzinfo=TZ)).astimezone(TZ).date().isoformat()
+
+
+def invoice_state(inv, job, rules, today):
+    """{kind: paid|waiting|unsent|call|due|later, next, count, late} for one
+    invoice (invoices/{id}); `today` a date. The same rule as invoices.js
+    stateOf -- change both together."""
+    if not inv.get("open") or not (float(inv.get("balance") or 0) > 0):
+        return {"kind": "paid"}
+    emails = sorted(_local_day(x) for x in inv.get("emails") or [] if x)
+    hand = sorted(_local_day((h or {}).get("at")) for h in inv.get("handReminders") or [] if (h or {}).get("at"))
+    done = bool(job) and status_of(job) == "complete"
+    total, bal = float(inv.get("total") or 0), float(inv.get("balance") or 0)
+    # A deposit paid on a job not finished: the rest is due when it is done.
+    if job and not done and bal < total - 0.005:
+        return {"kind": "waiting"}
+    due_day = _local_day(inv.get("dueDate") or inv.get("txnDate"))
+    late = (today - datetime.date.fromisoformat(due_day)).days if due_day else 0
+    # QuickBooks says it was emailed but not when (before Job Hub watched):
+    # sent, with no reminders yet.
+    if not emails and not hand and inv.get("emailStatus") != "EmailSent":
+        return {"kind": "unsent", "late": late}
+    # Put off by hand ("Not yet"): nothing until that day.
+    if _local_day(inv.get("snoozeUntil")) > today.isoformat():
+        return {"kind": "later", "next": _local_day(inv.get("snoozeUntil")), "late": late}
+    start = due_day or today.isoformat()
+    if done and _local_day(job.get("completedAt")) > start:
+        start = _local_day(job.get("completedAt"))
+    count = max(0, len(emails) - 1) + len(hand)
+    if count >= rules["max"]:
+        return {"kind": "call", "count": count, "late": late}
+    base = datetime.date.fromisoformat(start if count == 0 else max(emails[-1:] + hand[-1:]))
+    nxt = base + datetime.timedelta(days=rules["firstAfterDays"] if count == 0 else rules["everyDays"])
+    return {"kind": "due" if today >= nxt else "later", "next": nxt.isoformat(), "count": count, "late": late}
+
+
+def _invoice_reminders(jobs, today):
+    """The open invoices that want something done today: a reminder due, one
+    never emailed, or one past its reminders (call them)."""
+    out = []
+    try:
+        rules = invoice_rules()
+        for s in _db().collection("invoices").where("open", "==", True).stream():
+            inv = s.to_dict() or {}
+            st = invoice_state(inv, jobs.get(inv.get("jobId")) if inv.get("jobId") else None, rules, today)
+            if st["kind"] in ("due", "unsent", "call"):
+                out.append({"name": inv.get("customerName") or "A customer", "doc": inv.get("docNumber") or "",
+                            "balance": float(inv.get("balance") or 0), "kind": st["kind"], "late": st.get("late") or 0,
+                            "count": st.get("count") or 0})
+    except Exception as e:      # noqa: BLE001 -- a summary without them beats none
+        print("digest: invoice reminders not worked out:", e)
+    return sorted(out, key=lambda x: -x["late"])
+
+
 def _care_owed(jobs):
     """Finished jobs with plants still owing their care email (care.py) --
     Jonah, 14 Oct 2026. A summary without this beats no summary."""
@@ -1151,7 +1242,9 @@ def build(slot, user, people, wx, cache):
             d = office["drafts"]
             lines.append({"text": "✨ %d estimate%s drafted, waiting for you to check and send: %s" % (
                 len(d), "" if len(d) == 1 else "s", ", ".join(d[:6]) + (" +%d more" % (len(d) - 6) if len(d) > 6 else ""))})
-        for n, bal, num in (office.get("owed") or [])[:6]:
+        # One the Invoices section below says to chase is told there, not twice.
+        chase = {str(x["doc"]) for x in cache.get("invoices") or [] if x.get("doc")}
+        for n, bal, num in [o for o in office.get("owed") or [] if not (o[2] and str(o[2]) in chase)][:6]:
             lines.append({"text": "💵 %s owes $%s%s" % (n, format(round(bal, 2), ",.2f"), (" on invoice #%s" % num) if num else "")})
         if office.get("toOrder"):
             t = office["toOrder"]
@@ -1162,6 +1255,22 @@ def build(slot, user, people, wx, cache):
             push_bits.append("%d estimate%s accepted" % (len(office["accepted"]), "" if len(office["accepted"]) == 1 else "s"))
         if office.get("drafts"):
             push_bits.append("%d draft%s to check" % (len(office["drafts"]), "" if len(office["drafts"]) == 1 else "s"))
+
+    # ---- invoices wanting a reminder (invoice_state; the Invoices list on All Jobs)
+    remind = cache.get("invoices") or []
+    if (owner or access.get("billing") in ("see", "change")) and slot in ("morning", "evening") and remind:
+        lines = []
+        for x in remind[:10]:
+            what = ("not emailed yet — send it" if x["kind"] == "unsent"
+                    else "%d reminders sent — time to call" % x["count"] if x["kind"] == "call"
+                    else "reminder due")
+            lines.append({"text": "💵 %s%s — $%s%s — %s" % (
+                x["name"], (" #" + x["doc"]) if x["doc"] else "", format(round(x["balance"], 2), ",.2f"),
+                (", %d day%s late" % (x["late"], "" if x["late"] == 1 else "s")) if x["late"] > 0 else "", what)})
+        sections.append(("Invoices", lines + [{"text": "Send them from All Jobs → Invoices."}]))
+        due = [x for x in remind if x["kind"] != "call"]
+        if due:
+            push_bits.append("%d invoice reminder%s due" % (len(due), "" if len(due) == 1 else "s"))
 
     # ---- plant-care emails still owed on finished jobs (the owner's alone)
     if owner and slot in ("morning", "evening") and cache.get("careOwed"):
@@ -1535,6 +1644,7 @@ def _cache(slot="morning", people=None):
         "storms": _storms(),
         "bids": _bids(jobs),
         "office": _office(jobs),
+        "invoices": _invoice_reminders(jobs, today),
         "careOwed": _care_owed(jobs),
         "recurring": _recurring_overdue(today),
         "shifts": _shifts(),

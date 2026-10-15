@@ -1489,6 +1489,12 @@ def _sweep():
                 news.append({"jobId": job_id, "kind": "payment", "name": str(jobs[job_id].get("customerName") or "a customer"),
                              "paid": paid, "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
     try:
+        news += sync_invoices(jobs)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: invoices list not brought up to date:", err)
+    try:
         news += import_accepted(jobs)
     except ReconnectNeeded:
         raise
@@ -2530,6 +2536,163 @@ def fill_imported(jobs):
         db.collection("jobs").document(jid).set(patch, merge=True)
         done += 1
     return done
+
+
+# ------------------------------------------------ invoices and reminders
+#
+# Jonah (15 Oct 2026): "track invoices & when they were sent and when to send
+# reminder invoices". Every unpaid invoice in QuickBooks -- made from a job
+# here, a storm, or by hand there -- is kept in invoices/{QuickBooks id}: who,
+# how much is still owed, its date and due date, every time it was emailed
+# (QuickBooks keeps only the last, DeliveryInfo; each one seen is added), and
+# whether the customer has opened it. When a reminder is due is the app's to
+# work out from settings/invoiceReminders (invoices.js, digest.py), and a
+# reminder is the invoice emailed again from QuickBooks (/qb/invoice-remind),
+# with its pay link, as QuickBooks' own reminders are. An invoice paid off
+# stays a month (paidAt), then goes.
+INVOICES_KEEP_PAID = datetime.timedelta(days=30)
+EMAILS_KEEP = 20
+
+
+def _open_invoices():
+    """Every invoice with money still owed, in pages."""
+    out, start = [], 1
+    while True:
+        rows = _query("Invoice", "Balance > '0' startposition %d maxresults 200" % start)
+        out += rows
+        if len(rows) < 200:
+            return out
+        start += 200
+
+
+def _when(s):
+    try:
+        t = datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return t if t.tzinfo else t.replace(tzinfo=datetime.timezone.utc)
+
+
+def _add_email(emails, sent):
+    """`emails` with one more send -- unless it is one already there (the
+    same send, timed by QuickBooks and by Job Hub a moment apart)."""
+    t = _when(sent)
+    if not sent or t is None:
+        return emails
+    for e in emails:
+        u = _when(e)
+        if u is not None and abs((u - t).total_seconds()) < 900:
+            return emails
+    return sorted(emails + [sent], key=lambda e: _when(e) or t)[-EMAILS_KEEP:]
+
+
+def _inv_doc(inv, have, job_id):
+    """What invoices/{id} keeps of a QuickBooks invoice. `have`: what it kept
+    before -- the times it was emailed are added to, never lost."""
+    env = _env("QB_ENV", "sandbox")
+    emails = _add_email(list(have.get("emails") or []),
+                        ((inv.get("DeliveryInfo") or {}).get("DeliveryTime")) or "")
+    bal, total = _amount(inv.get("Balance")), _amount(inv.get("TotalAmt"))
+    rec = {
+        "id": str(inv.get("Id")), "docNumber": str(inv.get("DocNumber") or ""),
+        "customerId": str((inv.get("CustomerRef") or {}).get("value") or ""),
+        "customerName": str((inv.get("CustomerRef") or {}).get("name") or "A customer"),
+        "email": str(((inv.get("BillEmail") or {}).get("Address")) or ""),
+        "total": total, "balance": bal, "open": bal > 0,
+        "txnDate": str(inv.get("TxnDate") or ""), "dueDate": str(inv.get("DueDate") or ""),
+        "emailStatus": str(inv.get("EmailStatus") or ""), "viewed": str(inv.get("EInvoiceStatus") or "") == "Viewed",
+        "emails": emails, "jobId": job_id or have.get("jobId") or None, "env": env,
+        "link": "%s/app/invoice?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), inv.get("Id")),
+    }
+    if bal <= 0 and have.get("open", True):
+        rec["paidAt"] = _now().isoformat()
+    return rec
+
+
+def _inv_changed(rec, have):
+    keys = ("docNumber", "customerName", "email", "total", "balance", "open", "txnDate", "dueDate",
+            "emailStatus", "viewed", "emails", "jobId")
+    return any(rec.get(k) != have.get(k) for k in keys)
+
+
+def sync_invoices(jobs):
+    """The invoices list brought up to date with QuickBooks. Returns news of
+    payments on invoices no job here holds (a job's own invoice is told by the
+    sweep above, so a payment is never told twice)."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return []
+    db = _db()
+    col = db.collection("invoices")
+    have = {s.id: (s.to_dict() or {}) for s in col.where("open", "==", True).stream()}
+    by_inv = {str((j.get("qbInvoiceRef") or {}).get("id")): jid for jid, j in jobs.items()
+              if (j.get("qbInvoiceRef") or {}).get("id") and (j.get("qbInvoiceRef") or {}).get("env") == env}
+    news = []
+    now_open = {str(i.get("Id")): i for i in _open_invoices()}
+    # Open here, gone from the open list there: paid off (or deleted).
+    gone = [i for i in have if i not in now_open]
+    closed = _by_ids("Invoice", gone) if gone else {}
+    batch, n = db.batch(), 0
+    for inv_id in list(now_open) + gone:
+        old = have.get(inv_id)
+        if old is None:
+            snap = col.document(inv_id).get()
+            old = (snap.to_dict() or {}) if snap.exists else {}
+        inv = now_open.get(inv_id) or closed.get(inv_id)
+        if inv is None:                                 # deleted in QuickBooks
+            batch.set(col.document(inv_id), {"open": False, "deletedAt": _now().isoformat()}, merge=True)
+            n += 1
+            continue
+        rec = _inv_doc(inv, old, by_inv.get(inv_id))
+        if not _inv_changed(rec, old):
+            continue
+        paid = round(_amount(old.get("balance")) - rec["balance"], 2) if old else 0
+        if paid > 0 and not rec.get("jobId"):
+            news.append({"jobId": "inv" + inv_id, "kind": "payment", "name": rec["customerName"], "paid": paid,
+                         "balance": rec["balance"], "docNumber": rec["docNumber"]})
+        rec["syncedAt"] = _now().isoformat()
+        batch.set(col.document(inv_id), rec, merge=True)
+        n += 1
+        if n >= 400:
+            batch.commit()
+            batch, n = db.batch(), 0
+    if n:
+        batch.commit()
+    # Paid a month ago: off the list.
+    cutoff = (_now() - INVOICES_KEEP_PAID).isoformat()
+    for s in col.where("open", "==", False).stream():
+        if str((s.to_dict() or {}).get("paidAt") or (s.to_dict() or {}).get("deletedAt") or "") < cutoff:
+            s.reference.delete()
+    return news
+
+
+def invoice_remind(body, who=""):
+    """A reminder: the invoice emailed again from QuickBooks, with its pay
+    link, to the address on it. Noted on invoices/{id}."""
+    inv_id = str(body.get("id") or "").strip()
+    if not inv_id:
+        raise RuntimeError("Which invoice?")
+    inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
+    if not inv:
+        raise RuntimeError("QuickBooks has no such invoice")
+    if _amount(inv.get("Balance")) <= 0:
+        raise RuntimeError("That invoice is paid")
+    to = str(((inv.get("BillEmail") or {}).get("Address")) or "").strip()
+    if not to:
+        raise RuntimeError("The invoice has no email address in QuickBooks — add one there first")
+    sent = _call("POST", "invoice/%s/send" % inv_id, params={"sendTo": to}, empty_body=True).get("Invoice") or inv
+    ref = _db().collection("invoices").document(inv_id)
+    snap = ref.get()
+    old = (snap.to_dict() or {}) if snap.exists else {}
+    rec = _inv_doc(sent, old, old.get("jobId"))
+    stamp = _now().isoformat()
+    # The send itself is an email, timed by QuickBooks when it says (then
+    # this is the same one, and not added twice).
+    rec["emails"] = _add_email(rec["emails"], stamp)
+    rec["reminders"] = list(old.get("reminders") or []) + [{"at": stamp, "by": who, "to": to}]
+    rec["syncedAt"] = stamp
+    ref.set(rec, merge=True)
+    return rec
 
 
 def create_invoice(body):

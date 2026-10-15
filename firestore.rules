@@ -155,13 +155,13 @@ service cloud.firestore {
     match /settings/{docId} {
       allow read:  if isOwner() || (isStaff() && docId == 'public')
         || (docId == 'snow' && canSee('snow'))
-        || (docId in ['invoicing', 'quickbooksMap'] && canSee('billing'))
+        || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canSee('billing'))
         // The services typed in by hand and kept for reuse (app.js
         // rememberService): whoever fills in jobs or contacts.
         || (docId == 'services' && (canSee('jobs') || canSee('contacts')));
       allow write: if isOwner()
         || (docId == 'snow' && canChange('snow'))
-        || (docId in ['invoicing', 'quickbooksMap'] && canChange('billing'))
+        || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canChange('billing'))
         || (docId == 'services' && (canChange('jobs') || canChange('contacts'))
             && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
                  .hasOnly(['custom', 'updatedAt']))
@@ -761,6 +761,18 @@ service cloud.firestore {
     // receiptMail (which emails have already been read) is the server's
     // alone and falls to the deny-all below.
     // ===================================================================
+    // ===================================================================
+    // invoices -- every unpaid QuickBooks invoice, kept by the server's
+    // hourly look (quickbooks.py sync_invoices): when it was emailed, when it
+    // is due, the reminders sent. Billing reads it; a reminder noted by hand
+    // (a call, a text) or one put off is all anyone writes here.
+    // ===================================================================
+    match /invoices/{docId} {
+      allow read: if canSee('billing');
+      allow update: if canChange('billing')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['handReminders', 'snoozeUntil', 'updatedAt']);
+    }
+
     match /receipts/{docId} {
       allow read: if canSee('jobs');
       allow update: if canChange('jobs')

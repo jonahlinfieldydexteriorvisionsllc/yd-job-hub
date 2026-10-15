@@ -3826,3 +3826,39 @@
   #eqBody .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
   .bd-done-pick { display:inline-flex; align-items:center; gap:4px; font-size:12.5px; white-space:nowrap; color:var(--muted); }
   .bd-done-none { display:flex; align-items:center; gap:6px; margin:6px 0 2px; font-size:13px; }
+
+  /* Invoices on All Jobs (invoices.js): one row per unpaid invoice -- who and
+     what's owed on top, when it went out / was due / reminded under, then
+     what to do next (in the state colours) and the buttons. */
+  .inv-sum { display:flex; flex-wrap:wrap; align-items:center; gap:8px; font-size:14px; margin-bottom:10px; }
+  .inv-views { display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; margin-bottom:12px; }
+  .inv-views button { min-height:44px; border-radius:10px; border:1.5px solid var(--border-strong); background:var(--surface);
+    color:var(--text); font:600 14px 'DM Sans',sans-serif; cursor:pointer; }
+  .inv-views button.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  html[data-night] .inv-views button.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
+  .inv-row { display:flex; flex-direction:column; gap:6px; padding:12px; margin-bottom:8px; border-radius:12px;
+    border:1.5px solid var(--border); border-left:5px solid var(--st-later); background:var(--surface); }
+  .inv-row.k-due, .inv-row.k-unsent, .inv-row.k-call { border-left-color:var(--st-now); }
+  .inv-row.k-waiting { border-left-color:var(--st-info); }
+  .inv-row.k-paid { border-left-color:var(--st-done); }
+  .inv-top { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
+  .inv-who { min-width:0; overflow-wrap:anywhere; font-size:15px; }
+  .inv-amt { white-space:nowrap; font-variant-numeric:tabular-nums; font-size:15px; }
+  .inv-amt small { color:var(--muted); font-weight:400; }
+  .inv-facts { font-size:13px; color:var(--muted); line-height:1.4; }
+  .inv-late { color:var(--st-now); }
+  .inv-chip { display:inline-block; padding:3px 9px; border-radius:999px; font-size:12.5px; font-weight:600; }
+  .inv-chip.now { background:var(--st-now-soft); color:var(--st-now); }
+  .inv-chip.info { background:var(--st-info-soft); color:var(--st-info); }
+  .inv-chip.later { background:var(--st-later-soft); color:var(--st-later); }
+  .inv-chip.done { background:var(--st-done-soft); color:var(--st-done-ink); }
+  .inv-acts { display:flex; flex-wrap:wrap; gap:6px; }
+  .inv-acts .btn { min-height:40px; }
+  .inv-rules { font-size:13px; margin-top:12px; }
+  .inv-rules-edit { display:flex; flex-direction:column; gap:8px; margin-top:12px; padding:12px; border-radius:12px;
+    border:1.5px solid var(--border-strong); background:var(--surface-2); }
+  .inv-rule { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:14px; }
+  .inv-rule input { width:80px; text-align:center; }
+  @media (max-width:720px) {
+    .inv-acts .btn { flex:1 1 calc(50% - 6px); }
+  }

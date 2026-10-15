@@ -644,6 +644,15 @@
 
   <!-- ============ TAB 3: ALL JOBS ============ -->
   <div class="tab-panel" id="panel-dashboard">
+    <!-- Every unpaid QuickBooks invoice: when it went out, whether they
+         opened it, and when to send a reminder (invoices.js). Billing access. -->
+    <div class="section" id="invSection" hidden>
+      <div class="section-head">
+        <span class="section-title">💵 Invoices</span>
+        <span class="section-badge" id="invBadge"></span>
+      </div>
+      <div class="section-body" id="invWrap"></div>
+    </div>
     <div class="section">
       <div class="section-head">
         <span class="section-title">All Jobs Overview</span>
@@ -1187,6 +1196,7 @@
 <script src="./plantcare.js"></script>
 <script src="./receipts.js"></script>
 <script src="./subs.js"></script>
+<script src="./invoices.js"></script>
 <script src="./jobcosts.js"></script>
 <script src="./paychecks.js"></script>
 <script src="./notify.js"></script>

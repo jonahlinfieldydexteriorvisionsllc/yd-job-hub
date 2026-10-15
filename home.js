@@ -256,7 +256,11 @@
     const onGo = all.filter(j => ['booked', 'inprogress'].indexOf(statusOf(j)) !== -1);
     const inProg = onGo.filter(j => statusOf(j) === 'inprogress').length;
     const toInv = all.filter(needsInvoice);
-    const owing = all.map(owed).filter(v => v > 0);
+    // Every unpaid QuickBooks invoice when the Invoices list is here (storms'
+    // and ones made in QuickBooks too); else the jobs' own.
+    const invList = can('billing', 'see') && window.YDInvoices
+      ? Object.values(YDInvoices.all() || {}).filter(i => i.open && Number(i.balance) > 0) : [];
+    const owing = invList.length ? invList.map(i => Number(i.balance)) : all.map(owed).filter(v => v > 0);
     const g = bidGroups(all);
     const bidsOut = g ? g.chase.map(x => x.j).concat(g.waiting) : [];
     const chase = g ? g.chase.length : 0;
@@ -268,7 +272,7 @@
       tile('jobs', '#2f8f5b', onGo.length, 'Jobs on the go',
         (onGo.length ? dollars(sum(onGo)) + ' · ' : '') + inProg + ' in progress') +
       tile('invoice', '#c9922f', toInv.length, 'To invoice', toInv.length ? dollars(sum(toInv)) : 'all caught up') +
-      (owing.length ? tile('invoice', '#c8492b', dollars(owing.reduce((s, v) => s + v, 0)), 'Owed to you',
+      (owing.length ? tile(invList.length ? 'invoices' : 'invoice', '#c8492b', dollars(owing.reduce((s, v) => s + v, 0)), 'Owed to you',
         'on ' + plural(owing.length, 'invoice')) : '') +
       tile('bids', '#2f6fd6', bidsOut.length, 'Bids out',
         (bidsOut.length ? dollars(sum(bidsOut)) : 'none waiting') + (chase ? ' · ' + chase + ' to chase' : '')) +
@@ -603,6 +607,18 @@
           "switchTab('receipts')"));
       }
     }
+    // Invoices to chase (invoices.js): a reminder due, one never emailed,
+    // or past its reminders -- for whoever may send them.
+    if (can('billing', 'change') && window.YDInvoices && YDInvoices.toDo) {
+      any = true;
+      const due = YDInvoices.toDo();
+      if (due.length) {
+        const owed = due.reduce((t, x) => t + (Number(x.inv.balance) || 0), 0);
+        const top = due.slice(0, 3).map(x => esc(x.inv.customerName || 'A customer') + ' ' + fmtMoney(x.inv.balance)).join(' · ');
+        rows.push(line('💵', '<b>' + plural(due.length, 'invoice') + ' to chase</b> · ' + fmtMoney(owed),
+          top + (due.length > 3 ? ' …' : ''), '', 'openInvoices()'));
+      }
+    }
     if (!any) return '';
     return card('waiting', '📥 Waiting on you', rows.length || '', null,
       rows.length ? capped('wait', rows) : empty('Nothing waiting on you.'), rows.length > 0);
@@ -716,6 +732,7 @@
   };
   window.homeMore = function (key) { expanded[key] = !expanded[key]; render(); };
   window.homeGo = function (id) {
+    if (id === 'invoices' && window.openInvoices) { openInvoices(); return; }
     const c = el('hm-' + id);
     if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
@@ -812,7 +829,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 
