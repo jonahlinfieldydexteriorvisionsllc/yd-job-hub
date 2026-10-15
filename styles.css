@@ -3655,3 +3655,86 @@
   /* QuickBooks: "Couldn't check" is not "not connected". */
   .qb-unknown .qb-sub { margin:-6px 0 10px; }
   .qb-what { margin:6px 0 0; }
+  /* ---- ux-w4 estimate & supplies (15 Oct 2026) ---- */
+  /* A material line: what it is, its name and how many on the left (wrapping
+     as they must), its amount and ↑ ↓ ✕ always together at the right -- a
+     typed-in line's unit, cost and kind no longer push the arrows onto a row
+     of their own (estimate.js matHtml). */
+  .est-mtop { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:end; gap:6px 8px; }
+  .est-mfields { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:flex-end; min-width:0; }
+  .est-mxs { display:contents; }
+  /* "Fabric, restraint, geogrid & other hardscape" drew the Kind picker
+     wide enough to push it onto a second row on its own. */
+  .est-mxs select { max-width:190px; }
+  .est-mend { display:flex; align-items:flex-end; gap:8px; }
+  /* QuickBooks under the estimate: links drawn as the buttons beside them;
+     QuickBooks' total when it differs from Job Hub's, on the row itself. */
+  .est-qb-acts a.btn, .est-fold-act a.btn { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; }
+  .est-qb-diff { margin:0 0 8px; padding:8px 11px; border-radius:8px; border:1px solid var(--st-soon-fill); background:var(--st-soon-soft);
+    color:var(--text); font-size:13px; line-height:1.45; }
+  .est-qb-diff b { color:var(--st-soon); }
+  .est-invoice-quiet { margin-top:8px; font-size:13px; }
+  .est-miles-miss { color:var(--st-soon); font-size:12px; }
+  /* Phone-only pieces, hidden on a wider screen */
+  .est-jump, .est-chat-older { display:none; }
+  @media (max-width:720px) {
+    .est-mtop { display:flex; flex-wrap:wrap; }
+    .est-mfields, .est-mend { display:contents; }
+    .est-mend > .est-amt, .est-mend > .est-moves { order:1; }
+    .est-mxs { order:2; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:flex-end; flex:1 1 100%; }
+    .est-mxs select { max-width:100%; }
+    /* No box scrolling inside the page: the notes, scopes and the message
+       grow with what is in them (estimate.js grow), up to most of a screen. */
+    #estimateWrap #estNotes, #estimateWrap #estMemo, #estimateWrap .est-scope, #estimateWrap .est-crewnote textarea { max-height:70vh; }
+    .est-chat { max-height:none; overflow:visible; }
+    .est-chat:not(.est-chat-all) .est-msg-old { display:none; }
+    .est-chat:not(.est-chat-all) .est-chat-older { display:inline-block; align-self:center; min-height:40px; padding:0 8px; }
+    /* The bar of links to each part, held under the Editing bar (its height
+       in --est-under, estimate.js placeJump). A section's overflow:hidden
+       would stop it sticking; clip rounds the corners the same way. */
+    #estimateSection { overflow:clip; }
+    .est-jump { display:flex; gap:4px; position:sticky; z-index:80; top:calc(env(safe-area-inset-top, 0px) + var(--est-under, 0px));
+      margin:-20px -20px 14px; padding:6px 8px; background:var(--surface); border-bottom:1px solid var(--border);
+      overflow-x:auto; scrollbar-width:none; }
+    .est-jump::-webkit-scrollbar { display:none; }
+    .est-jump button { flex:1 0 auto; min-height:40px; padding:6px 9px; border:0; border-radius:18px; background:var(--surface-2);
+      color:var(--brand-ink); font:600 13px 'DM Sans',sans-serif; cursor:pointer; }
+    .est-jump-to { scroll-margin-top:calc(env(safe-area-inset-top, 0px) + var(--est-under, 0px) + 62px); }
+  }
+  html[data-night] .est-jump button { color:var(--brand-2); }
+
+  /* Supplies as a table (supplies.js tableHtml): one line per item, on a
+     computer; the cards stay on a phone. */
+  .sup-layout { display:flex; justify-content:flex-end; margin:4px 0 8px; }
+  .sup-lay { border:1.5px solid var(--border-strong); background:var(--surface); color:var(--text); cursor:pointer;
+    font:600 12.5px 'DM Sans',sans-serif; padding:5px 12px; min-height:32px; }
+  .sup-lay:first-child { border-radius:8px 0 0 8px; }
+  .sup-lay + .sup-lay { border-left:0; border-radius:0 8px 8px 0; }
+  .sup-lay.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  html[data-night] .sup-lay.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
+  .sup-grid-wrap { overflow-x:auto; border:1px solid var(--border); border-radius:10px; background:var(--surface); margin-bottom:10px; }
+  .sup-fold-body .sup-grid-wrap { margin:0 0 8px; }
+  .sup-grid th { padding:7px 10px; }
+  .sup-grid td { padding:5px 10px; font-size:13px; vertical-align:middle; }
+  .sup-g-name { font-weight:600; min-width:180px; }
+  /* One line a row where it fits: the name and the kind wrap only when they
+     must; a table too wide for the screen scrolls sideways in its box. */
+  .sup-g-sku, .sup-g-price, .sup-g-year, .sup-g-v, .sup-g-tags { white-space:nowrap; }
+  .sup-g-v, .sup-g-kind { color:var(--muted); }
+  .sup-g-kind { min-width:110px; }
+  .sup-g-none { color:var(--muted); font-size:12px; }
+  .sup-g-year .sup-chg { margin-left:4px; }
+  .sup-g-tags .sup-tag { margin:1px 3px 1px 0; }
+  .sup-g-edit { text-align:right; white-space:nowrap; }
+  .sup-g-edit .btn { margin:0; padding:3px 10px; }
+  @media (max-width:720px) { .sup-layout { display:none; } }
+
+  /* Estimate vs actual: the jobs with nothing to compare, one line until opened */
+  .eva-list tbody[hidden] { display:none !important; }
+  .eva-list tr.eva-fold-row { cursor:default; }
+  .eva-list tr.eva-fold-row:hover { background:none; }
+  .eva-list tr.eva-fold-row td { padding:10px; white-space:normal; font-size:13px; }
+  @media (max-width:720px) {
+    .eva-list tr.eva-fold-row { display:block; }
+    .eva-list tr.eva-fold-row td { display:block; padding:4px 0; }
+  }

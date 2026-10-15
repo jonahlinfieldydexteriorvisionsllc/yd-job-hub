@@ -310,7 +310,7 @@
       (notReady ? '<div class="est-warnbox">Your pricing rules aren’t set up yet, so nothing can be priced. ' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : 'Ask Jonah to set them.') + '</div>' : '') +
 
-      '<div class="field"><span class="label">Notes from the site visit — what you saw and measured, what they want. Claude builds the estimate from these.' +
+      '<div class="field est-jump-to" id="estJNotes"><span class="label">Notes from the site visit — what you saw and measured, what they want. Claude builds the estimate from these.' +
         (ro ? '' : ' <button class="link-btn est-today" onclick="estNoteToday()">+ today’s date</button>') + '</span>' +
         '<textarea id="estNotes" rows="5" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" onblur="estNotesDone()" ' +
         'placeholder="16x20 patio off the back door, Tahoe in Cascade, 2 steps down. 40 ft of Belgian edging along the beds (we pick it up). Tear out the old deck, ~12x14. Clay soil.">' +
@@ -329,10 +329,12 @@
       wrap.innerHTML = head + (ro ? '<p class="empty-msg">No estimate lines yet.</p>'
         : '<div class="est-byhand"><button class="link-btn" onclick="estByHand()">or add lines by hand</button>' +
           ' <span class="muted">— labor, materials, what your rules add, fuel</span></div>');
+      drawn(wrap);
       return;
     }
 
     wrap.innerHTML =
+      jumpHtml() +
       (settled() ? '<div class="est-refold"><button class="link-btn" onclick="estUnfold(false)">▴ Fold the estimate back to one line</button></div>' : '') +
       head +
 
@@ -342,12 +344,12 @@
       ((est.flags || []).length ? '<div class="est-flags"><b>Flags:</b><ul>' +
         est.flags.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
 
-      '<h4 class="est-h">Labor <span class="muted">— each line is a line on the estimate, with its scope of work</span></h4>' +
+      '<h4 class="est-h est-jump-to" id="estJLabor">Labor <span class="muted">— each line is a line on the estimate, with its scope of work</span></h4>' +
       '<div class="est-work">' + (est.work.length ? est.work.map((w, i) => workHtml(w, i, ro)).join('')
         : '<div class="empty-msg">No labor yet.</div>') + '</div>' +
       (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estAddWork()">+ Labor line</button></div>') +
 
-      '<h4 class="est-h">Materials <span class="muted">— the takeoff; the customer sees the list and one total</span></h4>' +
+      '<h4 class="est-h est-jump-to" id="estJMats">Materials <span class="muted">— the takeoff; the customer sees the list and one total</span></h4>' +
       '<div class="est-mats">' + (est.materials.length ? est.materials.map((m, i) => matHtml(m, i, ro, r)).join('')
         : '<div class="empty-msg">No materials yet.</div>') + '</div>' +
       (ro ? '' : '<div class="field-actions">' +
@@ -363,7 +365,7 @@
       '<h4 class="est-h">Added by your rules</h4>' +
       '<div class="est-auto" id="estAuto"></div>' +
 
-      '<div class="est-totals" id="estTotals"></div>' +
+      '<div class="est-totals est-jump-to" id="estTotals"></div>' +
       (hasLines() ? '<div class="field-actions"><button class="btn btn-sm" onclick="estToggleCustomer()">' +
         (showCustomer ? 'Hide what the customer sees' : '👁 What the customer sees') + '</button></div>' : '') +
       '<div id="estCustomer"></div>' +
@@ -374,13 +376,75 @@
         esc(defaultMemo(r ? r.totalCents : 0)) + '">' + esc(est.memo) + '</textarea></div>' +
       '<div class="field-actions"><button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced (' + Object.keys(book).length + ')</button>' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">⚙ Pricing rules</button>' : '') + '</div>' +
-      '<div class="est-qb" id="estQb"></div>';
+      '<div class="est-qb est-jump-to" id="estQb"></div>';
 
     wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
     const log = el('estChat'); if (log) log.scrollTop = log.scrollHeight;
     renderTotals();
+    drawn(wrap);
     autoTrip();
   }
+
+  // ------------------------------------------------- on a phone (15 Oct 2026)
+  //
+  // On a phone the estimate is one long page, and a box that scrolls inside
+  // it -- the site notes, the chat, a scope of work -- catches the thumb that
+  // meant to scroll the page. There they grow with what is in them instead
+  // (up to most of the screen, styles.css), the chat shows its last few
+  // messages with the rest a tap away, and a bar of links along the top
+  // goes straight to each part.
+  const phone = () => !!(window.matchMedia && window.matchMedia('(max-width:720px)').matches);
+  const GROWS = '#estNotes, #estMemo, .est-scope, .est-crewnote textarea';
+  function grow(t) {
+    if (!t) return;
+    // A wider screen keeps the boxes as drawn (or as dragged to size by
+    // hand): only a height set here is taken off again.
+    if (!phone()) { if (t.dataset.grown) { t.style.height = ''; delete t.dataset.grown; } return; }
+    // Not on screen (the Job tab hidden): measured when it is shown.
+    if (!t.offsetParent) return;
+    // Shrunk to measure, then grown: the page must not jump while it is.
+    const y = window.scrollY;
+    t.style.height = 'auto';
+    t.style.height = (t.scrollHeight + t.offsetHeight - t.clientHeight) + 'px';
+    t.dataset.grown = '1';
+    if (window.scrollY !== y) window.scrollTo(window.scrollX, y);
+  }
+  function growAll() {
+    const w = el('estimateWrap');
+    if (w) w.querySelectorAll(GROWS).forEach(grow);
+  }
+  document.addEventListener('input', e => {
+    const t = e.target, w = el('estimateWrap');
+    if (t && t.matches && t.matches(GROWS) && w && w.contains(t)) grow(t);
+  });
+  let growTimer = null;
+  window.addEventListener('resize', () => { clearTimeout(growTimer); growTimer = setTimeout(() => { growAll(); placeJump(); }, 150); });
+  // After every drawing of the estimate.
+  function drawn(wrap) {
+    growAll();
+    placeJump(wrap);
+  }
+
+  // The links: shown on a phone only (styles.css), held under the Editing
+  // bar as the page scrolls -- its height measured, as it changes with the
+  // job's name and the width.
+  const JUMPS = [['estJNotes', 'Notes'], ['estJLabor', 'Labor'], ['estJMats', 'Materials'], ['estTotals', 'Totals'], ['estQb', 'QuickBooks']];
+  function jumpHtml() {
+    return '<nav class="est-jump" aria-label="Parts of the estimate">' +
+      JUMPS.map(([id, name]) => '<button type="button" onclick="estJump(\'' + id + '\')">' + name + '</button>').join('') + '</nav>';
+  }
+  function placeJump(wrap) {
+    wrap = wrap || el('estimateWrap');
+    const bar = el('ctxBar');
+    if (!wrap || !phone()) return;
+    wrap.style.setProperty('--est-under', (bar && bar.offsetParent ? bar.offsetHeight : 0) + 'px');
+  }
+  window.estJump = function (id) {
+    const t = el(id);
+    if (!t) return;
+    placeJump();
+    t.scrollIntoView({ block: 'start' });
+  };
 
   // The customer said yes (Accepted, or already made into an invoice): there
   // is nothing left to build, only the invoice to make and be paid.
@@ -416,11 +480,24 @@
         '<button class="btn btn-sm" onclick="estUnfold(true)" aria-expanded="false">Show / edit ▾</button></span></div>';
   }
 
+  // On a phone the chat is part of the page, not a box of its own: its last
+  // few messages, and the earlier ones behind a tap (styles.css hides them
+  // there; a wider screen keeps the whole conversation in its scrolling box).
+  const CHAT_PHONE = 4;
+  const chatAll = {};         // job id -> its earlier messages shown on a phone
+  window.estChatAll = function () {
+    chatAll[currentJobId || ''] = true;
+    const c = el('estChat');
+    if (c) c.classList.add('est-chat-all');
+  };
   function chatHtml(ro) {
     if (!est.chat.length && !busyHere()) return '';
     const lastI = est.chat.length - 1;
-    return '<div class="est-chat" id="estChat">' +
-        est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + '">' +
+    const older = Math.max(0, est.chat.length - CHAT_PHONE);
+    return '<div class="est-chat' + (chatAll[currentJobId || ''] ? ' est-chat-all' : '') + '" id="estChat">' +
+        (older ? '<button type="button" class="link-btn est-chat-older" onclick="estChatAll()">Show the ' + older +
+          ' earlier message' + (older === 1 ? '' : 's') + '</button>' : '') +
+        est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + (i < older ? ' est-msg-old' : '') + '">' +
           '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
           '<div class="est-text">' + esc(m.text) + '</div>' +
           (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate' +
@@ -743,11 +820,17 @@
     const line = r ? r.takeoff.find(l => l.id === m.id) : null;
     const unit = line ? line.takeoffUnit : (m.unit || '');
     const vRule = it && it.vendorId ? (P().rules().vendors || {})[it.vendorId] || {} : {};
-    let head;
+    // Every line starts the same way -- what it is, its name, how many --
+    // and ends with its amount and ↑ ↓ ✕ at the right. What only some lines
+    // have (a typed-in item's unit, cost and kind; a plant's cost and tree;
+    // how a bulk item comes) sits between, wrapping under the name when the
+    // row is full, so the arrows never drop onto a row of their own
+    // (15 Oct 2026: a typed-in line's did).
+    let head, extra;
     if (m.plant) {
       head = '<span class="est-plant">🌱</span>' + on('name', m.name, 'Plant, size — e.g. Autumn Blaze maple, 2" cal', 'est-title') +
-        '<label><span>How many</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>' +
-        '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', 'est-money', 'decimal') + '</label>' +
+        '<label><span>How many</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>';
+      extra = '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', 'est-money', 'decimal') + '</label>' +
         '<label><span>Tree?</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'tree\', this.value)">' +
           [['', 'No'], ['single', 'Single-trunk'], ['multi', 'Multi-trunk / evergreen']].map(([k, n]) =>
             '<option value="' + k + '"' + ((m.tree || '') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
@@ -755,8 +838,8 @@
     } else {
       head = '<select class="searchable est-supply"' + dis + ' onchange="estPickSupply(\'' + id + '\', this.value)">' + supplyOptions(m.supplyId) + '</select>' +
         on('name', m.name, 'What the customer reads, e.g. Screened topsoil', 'est-title') +
-        '<label><span>Qty' + (unit ? ' (' + esc(unit) + ')' : '') + '</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>' +
-        (it ? '' : '<label><span>Unit</span>' + on('unit', m.unit, 'each', '') + '</label>' +
+        '<label><span>Qty' + (unit ? ' (' + esc(unit) + ')' : '') + '</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>';
+      extra = (it ? '' : '<label><span>Unit</span>' + on('unit', m.unit, 'each', '') + '</label>' +
           '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', 'est-money', 'decimal') + '</label>' +
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
             kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
@@ -772,7 +855,8 @@
     // (which line of labor it is for, on the crew's page).
     const forWork = forWorkHtml(m, id, dis);
     return '<div class="est-mrow">' +
-      '<div class="est-mtop">' + head + '<div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div>' +
+      '<div class="est-mtop"><div class="est-mfields">' + head + (extra ? '<span class="est-mxs">' + extra + '</span>' : '') + '</div>' +
+        '<div class="est-mend"><div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div></div>' +
       '<div class="est-meta"><div class="est-order" id="estMO_' + id + '"></div>' +
         taxPickHtml('mat', id, m.taxable, ro) +
         (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
@@ -1084,7 +1168,12 @@
     const fp = P().fuelPrices() || {};
     rows.push('<div class="est-arow" data-auto="fuel">' + sw('fuel', 'Fuel') + '<span class="est-adesc">' + (off.fuel ? 'off' :
         '<label>Miles each way <input inputmode="decimal" value="' + esc(fu.miles == null ? '' : fu.miles) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'miles\', this.value)"></label>' +
-        '<button class="btn btn-sm est-miles-btn" onclick="estFindMiles(true)"' + (tripping ? ' disabled' : '') + '>' + (tripping ? 'Looking…' : 'Find miles') + '</button>' +
+        // Looked up by itself once the job has an address (autoTrip); the
+        // button is for looking again.
+        '<button class="btn btn-sm est-miles-btn" onclick="estFindMiles(true)"' + (tripping ? ' disabled' : '') + '>' +
+          (tripping ? 'Looking…' : num(fu.miles) !== null ? 'Check again' : 'Find miles') + '</button>' +
+        (!tripping && num(fu.miles) === null && tripMissed[currentJobId] && tripMissed[currentJobId] === siteKey()
+          ? '<small class="est-miles-miss">Couldn’t find the miles by itself — type them, or press Find miles.</small>' : '') +
         '<label>Days <input inputmode="decimal" placeholder="' + esc(f.days == null ? '' : f.days) + '" value="' + esc(fu.jobDays == null ? '' : fu.jobDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'jobDays\', this.value)"></label>' +
         '<label>Loader days <input inputmode="decimal" placeholder="' + esc(f.bobcatDays == null ? '' : f.bobcatDays) + '" value="' + esc(fu.bobcatDays == null ? '' : fu.bobcatDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'bobcatDays\', this.value)"></label>' +
         '<label>Gas $/gal <input inputmode="decimal" placeholder="' + esc(num(fp.gasCents) !== null ? (fp.gasCents / 100).toFixed(2) : '') + '" value="' + esc(fu.gasCents == null ? '' : (fu.gasCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'gasCents\', this.value)"></label>' +
@@ -1165,6 +1254,10 @@
     }
     if (can) askCompany();
     const testCo = qbCompany && qbCompany.env && qbCompany.env !== 'production';
+    const closed = !!(q && q.id && (q.status === 'Closed' || q.status === 'Converted' || (inv && inv.id)));
+    // One button stands out -- the next thing to do: the invoice once the
+    // customer has said yes, else sending the estimate. The rest are plain.
+    const yes = !!(q && q.id && q.status === 'Accepted' && !(inv && inv.id));
     box.innerHTML =
       (testCo ? '<div class="est-testco">⚠️ QuickBooks is connected to Intuit’s <b>TEST company</b>' +
         (qbCompany.name ? ' (“' + esc(qbCompany.name) + '”)' : '') + ', not your real QuickBooks. Bids sent from here go nowhere real — ' +
@@ -1174,13 +1267,14 @@
         (status ? ' · ' + esc(status) : '') +
         (q.sentAt ? ' · emailed ' + esc(when(q.sentAt)) + (q.sentTo ? ' to ' + esc(q.sentTo) : '') : ' · not emailed yet') +
         (q.acceptedBy ? ' · accepted by ' + esc(q.acceptedBy) : '') +
-        (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</div>' : '') +
+        (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</div>' +
+        qbDiffHtml(q, r, closed) : '') +
       // Once invoiced the estimate is closed in QuickBooks and can't change.
-      (can && q && q.id && (q.status === 'Closed' || q.status === 'Converted' || (inv && inv.id))
+      (can && closed
         ? (q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
-          ? '<div class="field-actions"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
-      : can ? whoHtml() + '<div class="field-actions">' +
-        '<button class="btn btn-sm btn-filled" onclick="estToQB(true)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
+          ? '<div class="field-actions est-qb-acts"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
+      : can ? whoHtml() + '<div class="field-actions est-qb-acts">' +
+        '<button class="btn btn-sm' + (yes ? '' : ' btn-filled') + '" onclick="estToQB(true)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
           (saving || qbAsking ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
         '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
           (q && q.id ? 'Update in QuickBooks only' : 'Put in QuickBooks, don’t email yet') + '</button>' +
@@ -1192,6 +1286,23 @@
       sentHtml(when) +
       invoiceHtml(q, inv, can, when) +
       careHtml(when);
+  }
+
+  // QuickBooks' total against Job Hub's, said on the row while it differs by
+  // more than a dollar (it was only a toast after sending, gone in seconds).
+  // Either the estimate changed here since it went, or QuickBooks has its
+  // own figure: its sales tax worked out from the address, or a change made
+  // there by hand.
+  function qbDiffHtml(q, r, closed) {
+    if (!q || q.total == null || !r || !(r.grandCents > 0)) return '';
+    const there = Math.round(Number(q.total) * 100);
+    if (!isFinite(there) || Math.abs(there - r.grandCents) <= 100) return '';
+    const lastSent = (est.sent || []).slice(-1)[0];
+    const changedHere = !!(lastSent && lastSent.totalCents > 0 && Math.abs(lastSent.totalCents - r.grandCents) > 100);
+    return '<div class="est-qb-diff" role="note">⚠ QuickBooks’ total is <b>' + cents(there) + '</b> — Job Hub’s is <b>' + cents(r.grandCents) + '</b>. ' +
+      (changedHere && !closed ? 'The estimate has changed here since it last went to QuickBooks — update it (below) to send the new total.'
+        : 'QuickBooks works out the sales tax from the job’s address, or it was changed in QuickBooks. ' +
+          'The payments are each a share of the total, so they still add up.') + '</div>';
   }
 
   // ------------------------------------------------------ plant-care email
@@ -1316,7 +1427,7 @@
       : '';
     if (!can) return line;
     if (inv && inv.id) {
-      return line + '<div class="field-actions">' +
+      return line + '<div class="field-actions est-qb-acts">' +
         (!inv.sentAt ? '<button class="btn btn-sm btn-filled" onclick="estInvoice(true)"' + (invoicing ? ' disabled' : '') + '>✉️ Email the invoice</button>' : '') +
         (inv.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(inv.link)
           ? '<a class="btn btn-sm" href="' + esc(inv.link) + '" target="_blank" rel="noopener">Open the invoice</a>' : '') +
@@ -1324,13 +1435,18 @@
           (checking ? 'Checking…' : 'Check for a payment') + '</button>' : '') +
       '</div>';
     }
-    if (['Pending', 'Accepted'].indexOf(q.status || 'Pending') === -1) return line;
-    const yes = q.status === 'Accepted';
+    // Only once they have said yes: while the estimate is still waiting on
+    // the customer there is no invoice to make (15 Oct 2026 -- the buttons
+    // sat there from the day it was sent). A yes on the phone, with
+    // QuickBooks still waiting, keeps a quiet way to make it.
+    if (q.status !== 'Accepted') {
+      return line + ((q.status || 'Pending') === 'Pending' ? '<div class="est-invoice-quiet"><button class="link-btn" onclick="estInvoice(false)"' +
+        (invoicing ? ' disabled' : '') + '>' + (invoicing ? 'Working…' : 'Said yes another way? Make the invoice') + '</button></div>' : '');
+    }
     return '<div class="est-invoice">' +
-      '<div class="hint">' + (yes ? 'They said yes. Make' : 'When they say yes, make') +
-        ' one invoice for the whole job from this estimate — the deposit is paid against it.</div>' +
-      '<div class="field-actions">' +
-        '<button class="btn btn-sm' + (yes ? ' btn-filled' : '') + '" onclick="estInvoice(true)"' + (invoicing ? ' disabled' : '') + '>' +
+      '<div class="hint">They said yes. Make one invoice for the whole job from this estimate — the deposit is paid against it.</div>' +
+      '<div class="field-actions est-qb-acts">' +
+        '<button class="btn btn-sm btn-filled" onclick="estInvoice(true)"' + (invoicing ? ' disabled' : '') + '>' +
           (invoicing ? 'Working…' : '🧾 Make the invoice & email it') + '</button>' +
         '<button class="btn btn-sm" onclick="estInvoice(false)"' + (invoicing ? ' disabled' : '') + '>Make it, don’t email yet</button>' +
       '</div></div>';
@@ -2322,32 +2438,71 @@
     const base = P() ? P().placeKey((el('city') && el('city').value) || '') : '';
     return !!base && !est.deliveryTown && Object.keys(rates).some(k => P().placeKey(k).indexOf(base + ' ') === 0);
   }
+  // Whether the miles should be looked up by themselves now (Jonah, 15 Oct
+  // 2026: he should not have to press "Find miles"): an estimate with lines
+  // that is missing its miles (fuel on) or the map point a town priced by
+  // zone needs, on a job with an address and an id, open to someone who may
+  // change it, with a signal -- and this address not looked up already this
+  // visit (trippedFor). Never on an estimate the customer has said yes to:
+  // its price is agreed, and miles landing on it would move it.
+  function tripWanted() {
+    if (!currentJobId || !hasLines() || !changes() || settled() || !navigator.onLine) return false;
+    if (!window.YDClaude || !window.YDClaude.available()) return false;
+    if (!(el('address') && el('address').value.trim())) return false;
+    const needSite = zonedTown() && !(est.site && est.site.at === siteKey());
+    const needMiles = num((est.fuel || {}).miles) === null && !(est.off || {}).fuel;
+    return (needSite || needMiles) && trippedFor[currentJobId] !== siteKey();
+  }
   function autoTrip() {
-    const needSite = zonedTown() && !est.site;
-    if (!hasLines() || (num((est.fuel || {}).miles) !== null && !needSite) || ((est.off || {}).fuel && !needSite)) return;
-    if (!currentJobId || !(el('address') && el('address').value.trim()) || !navigator.onLine) return;
-    if (trippedFor[currentJobId] === siteKey()) return;
+    if (!tripWanted()) return;
     // Asked again when the time comes: two redraws in a row would otherwise
     // both ask for the same miles.
-    setTimeout(() => {
-      if (trippedFor[currentJobId] !== siteKey() && (num((est.fuel || {}).miles) === null || (zonedTown() && !est.site))) window.estFindMiles(false);
-    }, 800);
+    setTimeout(() => { if (tripWanted()) window.estFindMiles(false); }, 800);
   }
+  // Until 15 Oct the lookup only started when the estimate was drawn whole,
+  // so an address typed in after the lines were built -- or a signal coming
+  // back -- never brought the miles. Now: once the address box is left
+  // (not at every letter), and when the signal returns. The totals follow
+  // the town at once, as the delivery rate is by town (and the job's price
+  // with them, as after any change to the estimate -- but not once the
+  // customer has said yes).
+  document.addEventListener('change', e => {
+    const t = e.target;
+    if (!t || ['address', 'city', 'state', 'zip'].indexOf(t.id) === -1 || !jobShown() || !P() || !hasLines()) return;
+    if (!settled() && typeof syncJobPriceFromProposals === 'function') syncJobPriceFromProposals();
+    renderTotals();
+    autoTrip();
+  });
+  window.addEventListener('online', () => { if (jobShown()) autoTrip(); });
+  // An automatic lookup that found no miles says so beside the box, rather
+  // than leaving it empty with no word why. job id -> the address it was for.
+  const tripMissed = {};
+  // Someone typing in the estimate: an answer arriving redraws only the
+  // numbers, not the box under their fingers (and the iPad's keyboard).
+  const typingHere = () => {
+    const w = el('estimateWrap'), a = document.activeElement;
+    return !!(w && a && w.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName));
+  };
   window.estFindMiles = async function (asked) {
     if (tripping || !changes() || !window.YDClaude) return;
+    if (!asked && !navigator.onLine) return;
     const addr = (el('address').value || '').trim();
     if (!addr) { if (asked) showToast('Add the job’s address first'); return; }
     // The job's map point is kept under its id, so it needs one.
     if (!currentJobId && typeof autosave === 'function') autosave();
     const jobId = currentJobId, key = siteKey();
     trippedFor[jobId] = key;
+    delete tripMissed[jobId];
     tripping = true; renderTotals();
     try {
       const r = await window.YDClaude.post('/estimate/trip', {
         jobId: jobId, address: addr, city: (el('city').value || '').trim(), state: (el('state').value || '').trim(),
         zip: (el('zip').value || '').trim(),
       });
-      if (currentJobId !== jobId) return;
+      // Another job was opened while the server answered: nothing lands on
+      // the wrong job, and this one is asked again when it is next opened
+      // (it used to count as asked, so its miles never came that visit).
+      if (currentJobId !== jobId) { if (!asked) delete trippedFor[jobId]; return; }
       if (Array.isArray(r.point) && typeof r.point[0] === 'number' && typeof r.point[1] === 'number') {
         const keptZip = est.site && est.site.at === key ? est.site.zipOk || null : null;
         est.site = { lat: r.point[0], lng: r.point[1], at: key, zip: /^\d{5}/.test(String(r.zip || '')) ? String(r.zip).slice(0, 5) : null, zipOk: keptZip };
@@ -2356,12 +2511,19 @@
       if (num(r.miles) !== null) {
         // Miles typed by hand stay; only an empty box is filled.
         if (asked || num((est.fuel || {}).miles) === null) est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10 });
-        changed(true);
+        changed(asked || !typingHere());
+        // Found by itself: kept straight away, as Claude's answers are (land),
+        // so opening another job a moment later does not lose them.
+        if (!asked && typeof autosave === 'function') autosave();
         // A rural address the map does not know is measured to the town.
         if (asked || r.approx) showToast(est.fuel.miles + ' miles each way' + (r.approx ? ' — to the middle of town; check it' : ''));
       } else if (asked) showToast(r.error || 'Could not find that address');
+      else tripMissed[jobId] = key;
     } catch (e) {
       if (asked) showToast('Miles: ' + (e.message || e));
+      // The signal went: asked again when it comes back ('online').
+      else if (!navigator.onLine) delete trippedFor[jobId];
+      else tripMissed[jobId] = key;
     } finally {
       tripping = false; renderTotals();
     }
@@ -2925,12 +3087,15 @@
   document.addEventListener('yd-supplies', onCatalog);
   document.addEventListener('yd-pricing', onCatalog);
   // The Job tab opened (app.js switchTab sets its class): drawn now if
-  // anything changed while it was hidden.
+  // anything changed while it was hidden -- and on a phone, the boxes drawn
+  // while it was hidden are sized to what is in them now they can be measured.
   (function watchJobTab() {
     const p = el('panel-job');
     if (!p || typeof MutationObserver !== 'function') return;
-    new MutationObserver(() => { if (stale && jobShown()) render(); })
-      .observe(p, { attributes: true, attributeFilter: ['class'] });
+    new MutationObserver(() => {
+      if (!jobShown()) return;
+      if (stale) render(); else drawn(el('estimateWrap'));
+    }).observe(p, { attributes: true, attributeFilter: ['class'] });
   })();
 
   let authKey = null;

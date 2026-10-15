@@ -303,6 +303,58 @@
   const openFolds = new Set();
   let foldLists = {};        // fold key -> { list, withVendor }, from the last draw
 
+  // Items as cards, or (on a computer) as a table of rows -- name, item #,
+  // price, year, kind, tags, Edit -- so a supplier's 20, 30 items fit on one
+  // screen instead of five (15 Oct 2026). Kept per device. A phone always
+  // has the cards: a table that wide does not fit it.
+  const LAYOUT_KEY = 'ydjobhub_supLayout';
+  let layout = (() => { try { return localStorage.getItem(LAYOUT_KEY) === 'table' ? 'table' : 'cards'; } catch (e) { return 'cards'; } })();
+  const narrow = () => !!(window.matchMedia && window.matchMedia('(max-width:720px)').matches);
+  const asTable = () => layout === 'table' && !narrow();
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(max-width:720px)');
+    const flip = () => { if (layout === 'table' && el('supResults')) renderResults(true); };
+    if (mq.addEventListener) mq.addEventListener('change', flip); else if (mq.addListener) mq.addListener(flip);
+  }
+  function layoutHtml() {
+    const b = (k, label) => '<button type="button" class="sup-lay' + (layout === k ? ' on' : '') + '" aria-pressed="' + (layout === k) + '"' +
+      ' onclick="supLayout(\'' + k + '\')">' + label + '</button>';
+    return '<div class="sup-layout" role="group" aria-label="Show the items as">' + b('table', '▦ Table') + b('cards', '▤ Cards') + '</div>';
+  }
+  window.supLayout = function (which) {
+    layout = which === 'table' ? 'table' : 'cards';
+    try { localStorage.setItem(LAYOUT_KEY, layout); } catch (e) { /* private window */ }
+    renderResults(true);
+  };
+  // Items as table rows. The kind column is left out inside a fold that is
+  // already one kind. Prices only for whoever may see them, as on the cards.
+  function tableHtml(list, withVendor, showKind) {
+    const sp = seesPrices(), ed = edits();
+    return '<div class="sup-grid-wrap"><table class="sup-grid"><thead><tr><th>Name</th>' + (withVendor ? '<th>Supplier</th>' : '') +
+      '<th>Item #</th>' + (sp ? '<th>Price</th><th>Year</th>' : '') + (showKind ? '<th>Kind</th>' : '') + '<th>Tags</th>' +
+      (ed ? '<th aria-label="Edit"></th>' : '') + '</tr></thead><tbody>' +
+      list.map(it => rowHtml(it, withVendor, showKind, sp, ed)).join('') + '</tbody></table></div>';
+  }
+  function rowHtml(it, withVendor, showKind, sp, ed) {
+    const v = vendors[it.vendorId] || null, p = prices[it.id];
+    const priced = !!(p && typeof p.cents === 'number');
+    const prev = priced ? lastYears(p) : null;
+    // Where it is at the supplier, and its notes, on hover: the row stays one line.
+    const tip = [it.where ? 'Where: ' + it.where : '', it.notes && String(it.notes).trim() !== sharedOf(it).notes ? it.notes : ''].filter(Boolean).join(' — ');
+    return '<tr>' +
+      '<td class="sup-g-name"' + (tip ? ' title="' + esc(tip) + '"' : '') + '>' + esc(it.name) + '</td>' +
+      (withVendor ? '<td class="sup-g-v">' + esc(v ? v.name : 'No supplier set') + '</td>' : '') +
+      '<td class="sup-g-sku">' + esc(it.sku || '') + '</td>' +
+      (sp ? '<td class="sup-g-price">' + (priced ? '<b>' + fmtCents(p.cents) + '</b>' + (p.per ? ' <span class="sup-per">/ ' + esc(p.per) + '</span>' : '')
+          : '<span class="sup-g-none">No price yet</span>') + '</td>' +
+        '<td class="sup-g-year">' + (priced && p.year ? p.year + (prev ? ' ' + changeHtml(change(p.cents, prev.cents)) : '') : '') + '</td>' : '') +
+      (showKind ? '<td class="sup-g-kind">' + esc(kindName(it)) + '</td>' : '') +
+      '<td class="sup-g-tags">' + usesOf(it).map(t => '<button class="sup-tag"' + tagAttr(t) + '>' +
+        tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>').join('') + '</td>' +
+      (ed ? '<td class="sup-g-edit"><button class="btn btn-sm sup-edit" onclick="supEdit(\'item\', \'' + safeId(it.id) + '\')">Edit</button></td>' : '') +
+    '</tr>';
+  }
+
   function render() {
     const wrap = el('suppliesWrap');
     if (!wrap) return;
@@ -499,10 +551,10 @@
       }
       const byUse = {};
       list.slice(0, cap()).forEach(it => { const k = usesOf(it)[0]; (byUse[k] = byUse[k] || []).push(it); });
-      return bulkBarHtml(list, '') + sharedListHtml(list.slice(0, cap())) + allTags().filter(t => byUse[t]).map(t =>
+      return bulkBarHtml(list, '') + sharedListHtml(list.slice(0, cap())) + layoutHtml() + allTags().filter(t => byUse[t]).map(t =>
         '<div class="sup-group"><button class="sup-group-name"' + tagAttr(t) + '>' + tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>' +
           '<span class="sup-group-count">' + byUse[t].length + '</span></div>' +
-        byUse[t].map(it => itemHtml(it, true)).join('')).join('') + moreHtml(list.length);
+        (asTable() ? tableHtml(byUse[t], true, true) : byUse[t].map(it => itemHtml(it, true)).join(''))).join('') + moreHtml(list.length);
     }
     // The tags, as tiles to open -- not every item at once.
     const count = {};
@@ -580,18 +632,21 @@
   // a supplier with 800 things opens as a dozen headings, not a wall.
   function itemsHtml(scope, list, withVendor, searched) {
     if (searched || list.length <= FOLD_OVER) {
-      return list.slice(0, cap()).map(it => itemHtml(it, withVendor)).join('') + moreHtml(list.length);
+      const shown = list.slice(0, cap());
+      return layoutHtml() + (asTable() ? tableHtml(shown, withVendor, true) : shown.map(it => itemHtml(it, withVendor)).join('')) + moreHtml(list.length);
     }
     const byKind = {};
     list.forEach(it => { const k = kindName(it); (byKind[k] = byKind[k] || []).push(it); });
-    return Object.keys(byKind).sort((a, b) => (a === 'No kind set') - (b === 'No kind set') || a.localeCompare(b)).map(k => {
+    return layoutHtml() + Object.keys(byKind).sort((a, b) => (a === 'No kind set') - (b === 'No kind set') || a.localeCompare(b)).map(k => {
       const fk = scope + '|' + k, open = openFolds.has(fk);
       foldLists[fk] = { list: byKind[k], withVendor: withVendor };
       return '<details class="sup-fold" data-k="' + esc(fk) + '"' + (open ? ' open' : '') + ' ontoggle="supFold(this)">' +
         '<summary><span class="sup-fold-name">' + esc(k) + '</span><span class="sup-group-count">' + byKind[k].length + '</span></summary>' +
-        '<div class="sup-fold-body">' + (open ? byKind[k].map(it => itemHtml(it, withVendor)).join('') : '') + '</div></details>';
+        '<div class="sup-fold-body">' + (open ? foldBody(byKind[k], withVendor) : '') + '</div></details>';
     }).join('');
   }
+  // A fold is all one kind: its table needs no kind column.
+  const foldBody = (list, withVendor) => (asTable() ? tableHtml(list, withVendor, false) : list.map(it => itemHtml(it, withVendor)).join(''));
   const moreHtml = n => (n > cap() ? '<p class="hint">Showing ' + SHOW_MAX + ' of ' + n + ' — type more to narrow it down, or ' +
     '<button class="link-btn" onclick="supShowAll()">show all ' + n + '</button>.</p>' : '');
   window.supShowAll = function () { showAll = true; renderResults(true); };
@@ -601,7 +656,7 @@
     const k = d.getAttribute('data-k');
     if (d.open) openFolds.add(k); else openFolds.delete(k);
     const body = d.querySelector('.sup-fold-body'), f = foldLists[k];
-    if (d.open && body && !body.childElementCount && f) body.innerHTML = f.list.map(it => itemHtml(it, f.withVendor)).join('');
+    if (d.open && body && !body.childElementCount && f) body.innerHTML = foldBody(f.list, f.withVendor);
   };
   window.supView = function (which) {
     view = which === 'hub' ? 'hub' : 'vendors';

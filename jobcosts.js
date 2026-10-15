@@ -609,6 +609,7 @@
   const ORDER = { booked: 1, inprogress: 0, complete: 2 };
   let listYear = 'this', listStatus = '';
   let listSort = { col: 'diff', asc: true };
+  let noneOpen = false;       // the jobs with nothing to compare yet, opened out (this visit)
   // A job's year: when the crew first clocked into it, else its date on the
   // Job tab, else when it was last changed.
   function firstShifts() {
@@ -711,7 +712,7 @@
       th('estCost', 'Est. cost') + th('actCost', 'Actual cost') + th('estProfit', 'Est. profit') +
       th('actProfit', 'Actual profit') + th('diff', 'Difference') + th('margin', 'Margin') +
       '</tr></thead><tbody>';
-    list.forEach(m => {
+    const rowOf = m => {
       const e = m.est, l = m.act.labour, star = m.filled.length ? '<span class="eva-star" title="Not recorded yet, counted as estimated: ' +
         esc(m.filled.map(k => k === 'labour' ? 'labor' : COST_NAME[k].toLowerCase()).join(', ')) + '">*</span>' : '';
       const daysTxt = (e.crewDays !== null ? fmtDays(e.crewDays) : '—') + ' → ' +
@@ -720,7 +721,7 @@
       const noEst = '<span class="muted">no estimate</span>', nothing = '<span class="muted">nothing yet</span>';
       // An estimate with unpriced lines or no crew-days: its profit is not the whole story.
       const shaky = m.incomplete ? '<span class="eva-star" title="The estimate isn’t complete — unpriced lines or no crew-days">?</span>' : '';
-      h += '<tr onclick="evaOpen(\'' + safeId(m.id) + '\')">' +
+      return '<tr onclick="evaOpen(\'' + safeId(m.id) + '\')">' +
         '<td class="bold eva-job">' + jobNameHtml(m.job.customerName, String(m.job.estimateNumber || '').trim()) + '</td>' +
         '<td class="eva-st">' + statusPill(m.status) + '</td>' +
         '<td data-l="Crew-days"' + daysCls + '>' + esc(daysTxt) + '</td>' +
@@ -730,11 +731,24 @@
         '<td data-l="Actual profit">' + (m.actProfit !== null ? money(m.actProfit) + star : m.recorded ? '—' : nothing) + '</td>' +
         '<td data-l="Difference">' + diffHtml(m.diff, true, money) + '</td>' +
         '<td data-l="Margin">' + pct(m.actMargin) + '</td></tr>';
-    });
+    };
+    // The jobs with nothing to compare yet -- no estimate to go by, or
+    // nothing recorded against it -- fold into one line at the foot (15 Oct
+    // 2026: a wall of "no estimate / nothing yet" rows under "0 of 14
+    // compared"). Opened, they keep the order picked.
+    const none = list.filter(m => m.diff === null);
+    h += both.map(rowOf).join('') + '</tbody>';
+    if (none.length) {
+      h += '<tbody class="eva-none-fold"><tr class="eva-fold-row"><td colspan="9">' +
+          '<button type="button" class="link-btn" onclick="evaNoneFold()" aria-expanded="' + (noneOpen ? 'true' : 'false') + '">' +
+            plural(none.length, 'job', 'jobs') + ' with nothing to compare yet ' + (noneOpen ? '▴' : '▾') + '</button>' +
+          '<span class="muted"> — no estimate to go by, or nothing recorded yet</span></td></tr></tbody>' +
+        '<tbody class="eva-none-rows"' + (noneOpen ? '' : ' hidden') + '>' + none.map(rowOf).join('') + '</tbody>';
+    }
     // What the ? means, said under the table: its tooltip never shows on a
     // phone or iPad.
     const anyShaky = list.some(m => m.incomplete && m.estProfit !== null);
-    h += '</tbody></table></div>' +
+    h += '</table></div>' +
       '<p class="hint">Tap a job for its side by side on Tracking. * a cost not recorded yet (no receipts, no hours), counted at the estimate’s figure so it never reads as profit. ' +
       (anyShaky ? '? after an estimated profit: that job’s estimate isn’t complete — some lines aren’t priced or it has no crew-days — so that profit isn’t the whole story. ' : '') +
       'In-progress jobs are so far. A job’s year is when the crew first clocked in, else its date.</p>';
@@ -828,6 +842,10 @@
   window.evaListSortBy = function (col) {
     if (!SORTS[col]) return;
     listSort = { col: col, asc: LOW_FIRST.indexOf(col) !== -1 };
+    renderList();
+  };
+  window.evaNoneFold = function () {
+    noneOpen = !noneOpen;
     renderList();
   };
   window.evaListFilter = function (k, v) {
