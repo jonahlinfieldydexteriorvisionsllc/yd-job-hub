@@ -554,7 +554,11 @@
         if (mine && theirs && mine > theirs) {
           const tookFields = takeServerFields(local, c.data || {});
           const tookStage = takeServerStage(local, c.data || {});
-          if (tookFields || tookStage) {
+          // The QuickBooks side of its payments (app.js mergePayments).
+          const pays = typeof mergePayments === 'function' ? mergePayments(local.payments, (c.data || {}).payments) : null;
+          if (pays && pays.changed) local.payments = pays.list;
+          if (c.id === currentJobId && typeof mergeOpenPayments === 'function') mergeOpenPayments((c.data || {}).payments);
+          if (tookFields || tookStage || (pays && pays.changed)) {
             try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(local)); } catch (e) {}
             map[c.id] = buildIndexEntry(c.id, local);
             if (c.id === currentJobId) {
@@ -590,6 +594,7 @@
           // or the next save would put the old values back.
           if (dirty) {
             SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
+            if (typeof mergeOpenPayments === 'function') mergeOpenPayments(c.data && c.data.payments);
             // And the stage the server moved it to with its invoice, or the
             // form's next save would put the card back in Ready to invoice.
             const form = { workStage: boardFields.workStage, jobStatus: jobStatus };

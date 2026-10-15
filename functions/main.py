@@ -280,7 +280,7 @@ def _quickbooks(request, path, headers):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
                        "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
-                       "/qb/invoice-remind", "/qb/invoices-now")
+                       "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now")
     try:
         uid = _caller(request, "billing", "change") if billing else _caller(request)
     except PermissionError as e:
@@ -320,6 +320,17 @@ def _quickbooks(request, path, headers):
             # A reminder emailed from QuickBooks (invoices.js Send reminder).
             who = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or ""
             result = qb.invoice_remind(body, who)
+        elif path == "/qb/payments-now":
+            # A payment just logged on a job (app.js): to QuickBooks now, not
+            # at the next hourly look -- and QuickBooks' payments back onto it.
+            jid = str(body.get("jobId") or "").strip()
+            snap = _db.collection("jobs").document(jid).get() if jid else None
+            if not snap or not snap.exists:
+                raise RuntimeError("No such job")
+            with qb._holding_tokens():
+                jobs = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
+                qb.sync_invoices(jobs)
+                result = {"ok": True, "changed": qb.sync_payments({jid: snap.to_dict() or {}}, only=jid)}
         elif path == "/qb/invoices-now":
             # The Invoices list brought up to date now, not at the next hourly look.
             jobs = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}

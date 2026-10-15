@@ -1358,7 +1358,7 @@ def invoice_status(body):
 
 # What the sweep reads of each job -- not the whole record (estimate chats,
 # materials, notes), which every job carries and the sweep never looks at.
-SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber",
+SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber", "payments",
                 "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked"]
 # An estimate with no answer this long after it was made (or last emailed)
 # is not asked about every hour for ever; opening the job still checks it
@@ -1494,6 +1494,12 @@ def _sweep():
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: invoices list not brought up to date:", err)
+    try:
+        sync_payments(jobs)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: payments not brought in step:", err)
     try:
         news += import_accepted(jobs)
     except ReconnectNeeded:
@@ -2625,17 +2631,18 @@ def _payment_ids(inv):
                   if t.get("TxnType") == "Payment" and t.get("TxnId"))
 
 
-def _payments_on(inv_id, pays):
-    """[{id, date, amount}] -- each QuickBooks payment's part paid on this
-    invoice, oldest first. When the deposit came in is what tells the bill
-    for the rest from the first one (invoices.js stateOf)."""
+def _payments_on(inv_id, pays, names=None):
+    """[{id, date, amount, method}] -- each QuickBooks payment's part paid on
+    this invoice, oldest first. When the deposit came in is what tells the
+    bill for the rest from the first one (invoices.js stateOf)."""
     out = []
     for pid, p in pays.items():
         amt = sum(_amount(ln.get("Amount")) for ln in p.get("Line") or []
                   if any(str(t.get("TxnId")) == str(inv_id) and t.get("TxnType") == "Invoice"
                          for t in ln.get("LinkedTxn") or []))
         if amt > 0:
-            out.append({"id": pid, "date": str(p.get("TxnDate") or ""), "amount": round(amt, 2)})
+            out.append({"id": pid, "date": str(p.get("TxnDate") or ""), "amount": round(amt, 2),
+                        "method": (names or {}).get(str((p.get("PaymentMethodRef") or {}).get("value") or ""), "")})
     return sorted(out, key=lambda x: (x["date"], x["id"]))
 
 
@@ -2693,6 +2700,14 @@ def sync_invoices(jobs):
         if ids != sorted(str(p.get("id")) for p in olds[inv_id].get("payments") or []):
             want[inv_id] = ids
     pays = _by_ids("Payment", [i for ids in want.values() for i in ids]) if want else {}
+    names = {}
+    if pays:
+        try:
+            names = {str(m.get("Id")): str(m.get("Name") or "") for m in _query("PaymentMethod", "Active = true")}
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- the payments without their method
+            print("quickbooks invoices: payment methods not read:", err)
     batch, n = db.batch(), 0
     for inv_id in list(now_open) + gone:
         old = olds[inv_id]
@@ -2710,7 +2725,7 @@ def sync_invoices(jobs):
         if inv_id in want:
             got = {i: pays[i] for i in want[inv_id] if i in pays}
             # A payment QuickBooks didn't answer for: keep what was known.
-            rec["payments"] = (_payments_on(inv_id, got) if len(got) == len(want[inv_id])
+            rec["payments"] = (_payments_on(inv_id, got, names) if len(got) == len(want[inv_id])
                                else list(old.get("payments") or []))
         else:
             rec["payments"] = list(old.get("payments") or [])
@@ -2764,6 +2779,177 @@ def invoice_remind(body, who=""):
     rec["syncedAt"] = stamp
     ref.set(rec, merge=True)
     return rec
+
+
+# ------------------------------------------------ payments, both ways
+#
+# Jonah (15 Oct 2026): "can we set it up where logged payments in the job hub
+# auto get logged in quickbooks or vice versa?" -- both ways, automatic. One
+# payment is one record in each place, tied by its QuickBooks payment id
+# (qbPaymentId on the job's payments list):
+#   - a payment in QuickBooks (a card through QuickBooks Payments, a check he
+#     entered there) is added to the job's payments here;
+#   - a payment logged here on a job with a QuickBooks invoice goes on that
+#     invoice, into Undeposited Funds -- so the bank feed MATCHES the deposit
+#     to it instead of booking the check a second time as a sale (what had
+#     happened to two checks by 15 Oct);
+#   - before anything is made, a payment of the same amount within
+#     MATCH_DAYS on the other side is taken to be the same one and tied to
+#     it, never copied;
+#   - one deleted in QuickBooks leaves the job's list too.
+# Payments logged here before PAYMENTS_FROM were already entered in
+# QuickBooks by hand: they are tied to theirs, never sent.
+PAYMENTS_FROM = "2026-10-15T19:00:00.000Z"
+MATCH_DAYS = 14
+_METHOD_WORDS = [            # what is typed in a payment's notes -> QuickBooks' payment method
+    (r"\bzelle\b", "Zelle"), (r"cash\s*app", "Cashapp"), (r"\bach\b|bank transfer|direct deposit", "ACH"),
+    (r"\bcredit\b|\bcard\b|\bvisa\b|mastercard|\bamex\b|discover", "Credit Card"),
+    (r"\bcheck\b|\bchk\b|\bcheque\b|#\s*\d", "Check"), (r"\bcash\b", "Cash"),
+]
+
+
+def _hub_amount(p):
+    try:
+        return round(float(str(p.get("amount") or 0).replace(",", "").replace("$", "").strip() or 0), 2)
+    except ValueError:
+        return 0.0
+
+
+def _days_apart(a, b):
+    try:
+        return abs((datetime.date.fromisoformat(str(a)[:10]) - datetime.date.fromisoformat(str(b)[:10])).days)
+    except ValueError:
+        return 9999
+
+
+def _method_of(p):
+    """The payment method a payment logged here names: picked (method) or
+    written in its notes ("check #1042", "Zelle")."""
+    if p.get("method"):
+        return str(p["method"])
+    text = str(p.get("notes") or "").lower()
+    for pat, name in _METHOD_WORDS:
+        if re.search(pat, text):
+            return name
+    return ""
+
+
+def _payment_setup():
+    """{undeposited: account id, methods: {lower name: id}, names: {id: name}}."""
+    accts = _query("Account", "AccountType = 'Other Current Asset'")
+    und = next((str(a.get("Id")) for a in accts if a.get("AccountSubType") == "UndepositedFunds"), None)
+    methods = _query("PaymentMethod", "Active = true")
+    return {"undeposited": und,
+            "methods": {str(m.get("Name") or "").lower(): str(m.get("Id")) for m in methods},
+            "names": {str(m.get("Id")): str(m.get("Name") or "") for m in methods}}
+
+
+def sync_payments(jobs, only=None):
+    """Each job's payments here and its invoice's payments in QuickBooks
+    brought into one list (see above). `only`: one job id (the app asking
+    right after a payment was logged). Returns how many jobs changed."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return 0
+    db = _db()
+    by_job = {}
+    for s in db.collection("invoices").stream():
+        inv = dict(s.to_dict() or {}, id=s.id)
+        if inv.get("jobId") and not inv.get("deletedAt"):
+            by_job.setdefault(inv["jobId"], []).append(inv)
+    setup = None
+    today = _now().astimezone(datetime.timezone(datetime.timedelta(hours=-5))).date().isoformat()
+    changed_jobs = 0
+    for jid, j in jobs.items():
+        if (only and jid != only) or j.get("removeWhy"):
+            continue
+        mine = by_job.get(jid) or []
+        pays = [dict(p) for p in j.get("payments") or [] if isinstance(p, dict)]
+        wants_push = [p for p in pays if not p.get("qbPaymentId") and not p.get("fromQb")
+                      and str(p.get("createdAt") or "") >= PAYMENTS_FROM and _hub_amount(p) > 0]
+        if not mine and not wants_push:
+            continue
+        before = json.dumps(pays, sort_keys=True)
+        qb_pays = sorted((dict(p, invoiceId=inv["id"]) for inv in mine for p in inv.get("payments") or []),
+                         key=lambda x: (x.get("date") or "", x.get("id") or ""))
+        linked = {str(p["qbPaymentId"]) for p in pays if p.get("qbPaymentId")}
+        # QuickBooks -> here: tied to the same payment logged here, else added.
+        for qp in qb_pays:
+            if str(qp["id"]) in linked:
+                continue
+            # Within a dollar: the same payment typed with or without its cents.
+            same = next((p for p in pays if not p.get("qbPaymentId") and abs(_hub_amount(p) - qp["amount"]) < 1
+                         and _days_apart(p.get("date"), qp.get("date")) <= MATCH_DAYS), None)
+            if same:
+                same["qbPaymentId"] = str(qp["id"])
+                same.pop("qbError", None)
+            else:
+                # Its label as he would write it: the one that paid it off is
+                # the final payment, the first of several the deposit.
+                inv = next(i for i in mine if i["id"] == qp["invoiceId"])
+                earlier = any(str(p.get("date") or "") < str(qp.get("date") or "") for p in pays if _hub_amount(p) > 0)
+                label = ("Final" if qp is qb_pays[-1] and _amount(inv.get("balance")) <= 0
+                         else "Payment" if earlier else "Deposit")
+                pays.append({"id": "qb" + str(qp["id"]), "date": qp.get("date") or "", "amount": "%.2f" % qp["amount"],
+                             "label": label, "notes": qp.get("method") or "", "qbPaymentId": str(qp["id"]), "fromQb": True})
+            linked.add(str(qp["id"]))
+        # Gone from QuickBooks (deleted there): gone from here -- asked of
+        # QuickBooks itself first, never guessed from a list that may be short.
+        ours = {str(p["id"]) for p in qb_pays}
+        missing = [str(p["qbPaymentId"]) for p in pays if p.get("qbPaymentId") and str(p["qbPaymentId"]) not in ours]
+        if missing and mine:
+            try:
+                still = {str(r.get("Id")) for r in _query("Payment", "Id in (%s)" % ", ".join("'%s'" % _quote(i) for i in missing))}
+                pays = [p for p in pays if not (p.get("qbPaymentId") and str(p["qbPaymentId"]) in missing
+                                                and str(p["qbPaymentId"]) not in still)]
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001 -- kept until QuickBooks answers
+                print("quickbooks payments: could not check %s: %s" % (missing, err))
+        # Here -> QuickBooks.
+        open_inv = next((i for i in mine if i.get("open") and _amount(i.get("balance")) > 0), None)
+        left = _amount(open_inv.get("balance")) if open_inv else 0.0
+        for p in pays:
+            if p.get("qbPaymentId") or p.get("fromQb") or str(p.get("createdAt") or "") < PAYMENTS_FROM:
+                continue
+            amt = _hub_amount(p)
+            if amt <= 0:
+                continue
+            if not open_inv:
+                p["qbError"] = "No QuickBooks invoice with money owing on this job yet"
+                continue
+            if amt > left + 0.005:
+                p["qbError"] = "More than the invoice's balance ($%.2f) — not sent" % left
+                continue
+            if setup is None:
+                setup = _payment_setup()
+            method = _method_of(p)
+            body = {
+                "CustomerRef": {"value": open_inv.get("customerId")},
+                "TotalAmt": amt,
+                "TxnDate": min(str(p.get("date") or today)[:10], today),
+                "PrivateNote": ("Logged in Job Hub: %s %s" % (p.get("label") or "", p.get("notes") or "")).strip()[:4000],
+                "Line": [{"Amount": amt, "LinkedTxn": [{"TxnId": open_inv["id"], "TxnType": "Invoice"}]}],
+            }
+            if setup.get("undeposited"):
+                body["DepositToAccountRef"] = {"value": setup["undeposited"]}
+            if method and setup["methods"].get(method.lower()):
+                body["PaymentMethodRef"] = {"value": setup["methods"][method.lower()]}
+            try:
+                made = _call("POST", "payment", body=body, request_id="pay|%s|%s" % (jid, p.get("id"))).get("Payment") or {}
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001 -- told on the payment, tried again next hour
+                p["qbError"] = "QuickBooks said no: %s" % str(err)[:200]
+                continue
+            p["qbPaymentId"] = str(made.get("Id"))
+            p["qbSyncedAt"] = _now().isoformat()
+            p.pop("qbError", None)
+            left = round(left - amt, 2)
+        if json.dumps(pays, sort_keys=True) != before:
+            db.collection("jobs").document(jid).set({"payments": pays, "lastModified": _stamp()}, merge=True)
+            changed_jobs += 1
+    return changed_jobs
 
 
 def create_invoice(body):

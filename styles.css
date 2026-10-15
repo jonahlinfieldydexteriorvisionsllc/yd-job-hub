@@ -3867,3 +3867,9 @@
   .inv-job { font-size:13px; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
   .inv-jobpick { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
   .inv-jobpick .ssel, .inv-jobpick select:not(.ssel-native) { flex:1 1 220px; min-width:0; }
+  /* A payment's QuickBooks side (app.js payQbHtml). */
+  .pay-qb { display:inline-block; margin-left:4px; font-size:12px; color:var(--muted); }
+  .pay-qb.ok { color:var(--st-done-ink, var(--st-done)); }
+  .pay-qb.wait { color:var(--st-soon); }
+  .pay-qb.bad { color:var(--st-now); }
+  .pay-qb-note { font-size:12.5px; margin:2px 0 8px; }

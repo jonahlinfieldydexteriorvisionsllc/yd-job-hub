@@ -1841,8 +1841,9 @@ function renderPayments() {
     let recv = 0;
     payments.forEach(p => {
       const amt = parseFloat(p.amount) || 0; recv += amt;
+      const how = [p.method, p.notes].filter(Boolean).join(' · ');
       h += '<tr><td>' + fmtDateMD(p.date) + '</td><td class="bold">' + esc(p.label || '') + '</td>' +
-        '<td class="bold">' + fmtMoney(amt) + '</td><td>' + esc(p.notes || '—') + '</td>' +
+        '<td class="bold">' + fmtMoney(amt) + '</td><td>' + esc(how || '—') + payQbHtml(p) + '</td>' +
         '<td><button class="remove-btn" onclick="rmPayment(\'' + p.id + '\')">×</button></td></tr>';
     });
     recv = round2(recv);
@@ -1866,18 +1867,90 @@ function renderPayments() {
   if (bal <= 0 && invoiceTotal > 0) { badge.textContent = 'Paid'; badge.className = 'section-badge accent'; }
   else { badge.textContent = recvTotal > 0 ? fmtMoney(recvTotal) + ' in' : ''; badge.className = 'section-badge'; }
 }
+// Payments and QuickBooks, both ways (Jonah, 15 Oct 2026): one logged here on
+// a job with a QuickBooks invoice goes on that invoice by itself, and ones
+// paid in QuickBooks (a card, a check entered there) come onto the job --
+// functions/quickbooks.py sync_payments, tied by qbPaymentId so nothing is
+// counted twice. Payments logged before PAYMENTS_FROM were already entered
+// in QuickBooks by hand and are only tied, never sent.
+const PAYMENTS_FROM = '2026-10-15T19:00:00.000Z';
+function jobQbInvoice(id) {
+  if (boardFields.qbInvoiceRef && boardFields.qbInvoiceRef.id && id === currentJobId) return true;
+  const all = window.YDInvoices && YDInvoices.all ? YDInvoices.all() : {};
+  return Object.values(all).some(i => i && i.jobId === id && !i.deletedAt);
+}
+function payQbHtml(p) {
+  if (p.qbPaymentId) return ' <span class="pay-qb ok" title="In QuickBooks">✓ ' + (p.fromQb ? 'from QuickBooks' : 'in QuickBooks') + '</span>';
+  if (p.qbError) return ' <span class="pay-qb bad">⚠ ' + esc(p.qbError) + '</span>';
+  if (String(p.createdAt || '') >= PAYMENTS_FROM) {
+    return jobQbInvoice(currentJobId) ? ' <span class="pay-qb wait">⏳ going to QuickBooks</span>'
+      : ' <span class="pay-qb">not in QuickBooks — this job has no invoice there yet</span>';
+  }
+  return '';
+}
 function addPayment() {
   const amt = document.getElementById('payAmount').value;
   if (!amt) return;
-  payments.push({ id: uid(), date: readMD('payDate'), amount: amt, label: document.getElementById('payLabel').value, notes: document.getElementById('payNotes').value.trim() });
+  const me = window.YDAuth && YDAuth.user ? (YDAuth.user.displayName || YDAuth.user.email || '') : '';
+  payments.push({ id: uid(), date: readMD('payDate'), amount: amt, label: document.getElementById('payLabel').value,
+    method: document.getElementById('payMethod').value, notes: document.getElementById('payNotes').value.trim(),
+    createdAt: new Date().toISOString(), by: me });
   ['payAmount','payNotes'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('payDate').value = todayMD();
   renderPayments(); markDirty();
+  sendPaymentSoon(currentJobId);
+}
+// Sent once the job has saved and reached the server, rather than at the
+// next hourly look. Whoever may not change billing waits for that look.
+let paySendTimer = 0;
+function sendPaymentSoon(jobId) {
+  if (!jobId || !jobQbInvoice(jobId) || !(typeof ydCan === 'function' && ydCan('billing', 'change')) || !window.YDClaude) return;
+  clearTimeout(paySendTimer);
+  paySendTimer = setTimeout(async () => {
+    try {
+      if (dirty && jobId === currentJobId) autosave();
+      if (window.YDSync && YDSync.sendNow) await YDSync.sendNow(jobId);
+      await window.YDClaude.post('/qb/payments-now', { jobId });
+    } catch (e) {
+      showToast('Payment saved — it goes to QuickBooks at the next hourly check', 5000);
+    }
+  }, 2500);
 }
 function rmPayment(id) {
   const at = payments.findIndex(p => p.id === id), row = payments[at];
+  // QuickBooks holds the money record: one taken off here would come
+  // straight back from there at the next check.
+  if (row && row.qbPaymentId) {
+    showToast('This payment is in QuickBooks — delete it there and it goes from here too', 6000);
+    return;
+  }
   payments = payments.filter(p => p.id !== id); renderPayments(); markDirty();
   offerPutBack('Payment' + (row && row.amount ? ' of ' + fmtMoney(parseFloat(row.amount) || 0) : '') + ' removed', row, at, () => payments, renderPayments);
+}
+// What the server wrote onto a job's payments (quickbooks.py sync_payments) --
+// the QuickBooks payment each is tied to, why one couldn't be sent, and those
+// that came from QuickBooks -- carried into a copy with unsaved edits, or its
+// next save would undo them.
+function mergePayments(local, server) {
+  const out = (local || []).map(p => ({ ...p }));
+  let changed = false;
+  (Array.isArray(server) ? server : []).forEach(s => {
+    if (!s) return;
+    const mine = out.find(p => p.id === s.id) || (s.qbPaymentId && out.find(p => p.qbPaymentId === s.qbPaymentId));
+    if (mine) {
+      ['qbPaymentId', 'qbError', 'qbSyncedAt'].forEach(k => {
+        if (s[k] === mine[k]) return;
+        if (s[k] == null) { if (k === 'qbError' && mine[k] != null) { delete mine[k]; changed = true; } return; }
+        mine[k] = s[k]; changed = true;
+      });
+    } else if (s.fromQb) { out.push({ ...s }); changed = true; }
+  });
+  return { list: out, changed };
+}
+function mergeOpenPayments(server) {
+  const m = mergePayments(payments, server);
+  if (m.changed) { payments = m.list; renderPayments(); }
+  return m.changed;
 }
 
 // ═══════════════════════════════════════════════════════════
