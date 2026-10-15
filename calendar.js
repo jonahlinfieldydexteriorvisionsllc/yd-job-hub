@@ -505,6 +505,18 @@
     wireHolds();
   }
 
+  // The crew get three ways to look -- their day, the week, the month --
+  // as bigger buttons: six small ones in a row were hard to hit with a
+  // glove, and Day / 3 days / List are the office's. A view they reach
+  // another way (a day's heading in Month opens Day) keeps its button
+  // while it is on screen, so they can see where they are.
+  const CREW_VIEWS = ['myday', 'week', 'month'];
+  const crewViews = () => !isOwner() && !(window.YDAuth && window.YDAuth.isAdmin);
+  function shownViews() {
+    if (!crewViews()) return VIEWS;
+    return VIEWS.filter(([v]) => CREW_VIEWS.indexOf(v) !== -1 || v === view);
+  }
+
   function topHtml() {
     return '<div class="cal-top">' +
         '<div class="cal-nav">' +
@@ -515,7 +527,7 @@
           '<span class="cal-title">' + titleFor() + '</span>' +
         '</div>' +
         '<div class="cal-views">' +
-          '<div class="cal-seg">' + VIEWS.map(([v, n]) => '<button class="cal-vbtn' + (view === v ? ' on' : '') +
+          '<div class="cal-seg' + (crewViews() ? ' cal-seg-crew' : '') + '">' + shownViews().map(([v, n]) => '<button class="cal-vbtn' + (view === v ? ' on' : '') +
             '" onclick="calView(\'' + v + '\')">' + n + '</button>').join('') + '</div>' +
           (adds() ? '<button class="btn btn-sm btn-accent cal-add" onclick="calAdd()">+ Add</button>' : '') +
         '</div>' +
@@ -685,20 +697,7 @@
     const lateCrew = late.filter(o => !occIsMine(o, w) && isCrewOcc(o));
     const left = mineU.filter(o => !o.done).length;
     const which = day === today() ? 'today' : 'this day';
-    // Reminders only reach a phone that has said yes to them.
-    if (!pushState && window.YDNotify) {
-      pushState = 'asking';
-      YDNotify.deviceState().then(st => { pushState = st; redrawIfVisible(); }).catch(() => { pushState = 'unsupported'; });
-    }
-    const nudge = YDRemind.autoOn() === false
-      ? '<div class="md-nudge">🔕 Your reminders are switched off. <button class="link-btn" onclick="openNotifications()">Switch them on</button></div>'
-      : pushState === 'off' ? '<div class="md-nudge">🔔 Get a buzz before each thing on your day. ' +
-          '<button class="btn btn-sm btn-filled" onclick="calPushOn()">Turn on notifications</button></div>'
-      : pushState === 'needs-home-screen' ? '<div class="md-nudge">🔔 For reminders on an iPhone, open Job Hub from the home screen ' +
-          '(Safari → Share → Add to Home Screen), then turn notifications on.</div>'
-      : pushState === 'blocked' ? '<div class="md-nudge">🔕 Notifications are blocked for Job Hub on this device — allow them in its settings.</div>'
-      : '';
-    return '<div class="md cal-pan">' + nudge +
+    return '<div class="md cal-pan">' + nudgeHtml() +
       (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done ' +
         '<span class="cal-today-n">' + (leftOf(lateMine) || 'all ticked off') + '</span></div>' +
         lateMine.map(o => todoRow(o, [shortDay(o.day), whoOn(o)].filter(Boolean).join(' · '), !o.done)).join('') : '') +
@@ -712,11 +711,30 @@
         timed(crew).map(timedRow).join('') + untimed(crew).map(o => todoRow(o, whoOn(o))).join('') : '') +
       '</div>';
   }
+  // Reminders only reach a phone that has said yes to them: a note at the
+  // top of My day -- and of Home's day (home.js) -- until this one has.
+  // The phone is asked once; Home is told when the answer comes.
+  function nudgeHtml() {
+    if (!pushState && window.YDNotify) {
+      pushState = 'asking';
+      YDNotify.deviceState().then(st => { pushState = st; redrawIfVisible(); announce(); })
+        .catch(() => { pushState = 'unsupported'; });
+    }
+    return YDRemind.autoOn() === false
+      ? '<div class="md-nudge">🔕 Your reminders are switched off. <button class="link-btn" onclick="openNotifications()">Switch them on</button></div>'
+      : pushState === 'off' ? '<div class="md-nudge">🔔 Get a buzz before each thing on your day. ' +
+          '<button class="btn btn-sm btn-filled" onclick="calPushOn()">Turn on notifications</button></div>'
+      : pushState === 'needs-home-screen' ? '<div class="md-nudge">🔔 For reminders on an iPhone, open Job Hub from the home screen ' +
+          '(Safari → Share → Add to Home Screen), then turn notifications on.</div>'
+      : pushState === 'blocked' ? '<div class="md-nudge">🔕 Notifications are blocked for Job Hub on this device — allow them in its settings.</div>'
+      : '';
+  }
   window.calPushOn = async function () {
     if (typeof ntfTurnOn !== 'function') return;
     await ntfTurnOn();
     pushState = '';
     render();
+    announce();
   };
 
   window.calTodayFold = function () {
@@ -1261,7 +1279,27 @@
     // bid appointment, so the box says so.
     const type = typeOfEv(ev, cals[calId]);
 
+    // What it is called and when, first -- the two things every entry
+    // needs, at the top of a phone's screen -- then which calendar, what
+    // kind of thing and which job, and the rest. The boxes are the same
+    // ones whatever their order, so saving reads them just the same.
     openModal(editing.eventId ? 'Edit' : 'Add to the calendar',
+      '<div class="field"><span class="label">Title</span>' +
+        '<input id="evTitle" value="' + esc(ev.title || '') + '" placeholder="Leave blank to use the job’s name (below)"></div>' +
+      '<div class="grid g2">' +
+        '<div class="field"><span class="label">Date</span>' +
+          '<input type="date" id="evDate" value="' + esc(ev.date || editing.date || today()) + '"></div>' +
+        '<div class="field"><span class="label">Until (for more than one day)</span>' +
+          '<input type="date" id="evEnd" value="' + esc(ev.endDate || '') + '"></div>' +
+      '</div>' +
+      '<label class="chk"><input type="checkbox" id="evAllDay"' + (allDay ? ' checked' : '') +
+        ' onchange="calAllDayChanged()"> All day</label>' +
+      '<div class="grid g2" id="evTimes"' + (allDay ? ' hidden' : '') + '>' +
+        '<div class="field"><span class="label">Starts</span>' +
+          '<input type="time" id="evTime" value="' + esc(startT) + '" onchange="calRemindHint()"></div>' +
+        '<div class="field"><span class="label">Ends</span>' +
+          '<input type="time" id="evEndTime" value="' + esc(endT) + '"></div>' +
+      '</div>' +
       '<div class="field"><span class="label">Calendar</span><div class="cal-pickcal">' +
         list.map(c => '<label class="cal-pickcal-item" style="--c:' + safeColor(c.color) + '">' +
           '<input type="radio" name="evCal" value="' + c.id + '"' + (c.id === calId ? ' checked' : '') +
@@ -1280,22 +1318,6 @@
         jobs.map(j => '<option value="' + j._id + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
           esc(j.customerName || 'Untitled job') + '</option>').join('') +
       '</select></div>' +
-      '<div class="field"><span class="label">Title</span>' +
-        '<input id="evTitle" value="' + esc(ev.title || '') + '" placeholder="Leave blank to use the job’s name"></div>' +
-      '<div class="grid g2">' +
-        '<div class="field"><span class="label">Date</span>' +
-          '<input type="date" id="evDate" value="' + esc(ev.date || editing.date || today()) + '"></div>' +
-        '<div class="field"><span class="label">Until (for more than one day)</span>' +
-          '<input type="date" id="evEnd" value="' + esc(ev.endDate || '') + '"></div>' +
-      '</div>' +
-      '<label class="chk"><input type="checkbox" id="evAllDay"' + (allDay ? ' checked' : '') +
-        ' onchange="calAllDayChanged()"> All day</label>' +
-      '<div class="grid g2" id="evTimes"' + (allDay ? ' hidden' : '') + '>' +
-        '<div class="field"><span class="label">Starts</span>' +
-          '<input type="time" id="evTime" value="' + esc(startT) + '" onchange="calRemindHint()"></div>' +
-        '<div class="field"><span class="label">Ends</span>' +
-          '<input type="time" id="evEndTime" value="' + esc(endT) + '"></div>' +
-      '</div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Repeats</span><select id="evRepeat">' +
           Object.keys(REPEAT).map(r => '<option value="' + r + '"' + ((base.repeat || 'none') === r ? ' selected' : '') + '>' +
@@ -2353,6 +2375,9 @@
     Object.values(eventUnsubs).forEach(u => u());
     eventUnsubs = {}; cals = {}; events = {}; storms = {}; people = {}; seeded = false; peopleLoaded = false;
     calsHeard = false;
+    // Whether this phone gets reminders is asked again for whoever signs in
+    // next: the answer is per person as well as per phone.
+    pushState = '';
     announce();
   }
 
@@ -2409,12 +2434,24 @@
   // with what Home writes beside it, and the occurrence itself (`o`), which
   // Home hands back to open it or tick it off -- so a tap there does exactly
   // what the same tap does here.
+  // Who is on something, by uid: a card's (or a recurring task's card's)
+  // assignees, an entry's crew -- the list isMine goes by.
+  function onUids(o) {
+    if (o.auto === 'card' || o.auto === 'recurring') {
+      const card = ((YDBoards.cards() || {})[o.auto === 'card' ? o.boardId : 'crew'] || {})[o.id] || {};
+      return (card.assignees || []).map(a => a && a.uid).filter(Boolean);
+    }
+    return (o.crew || []).map(c => c && c.uid).filter(Boolean);
+  }
   function forHome(o) {
+    const crewTask = isCrewOcc(o);
     return {
       o: o, title: o.title, day: o.day, done: !!o.done, color: colorOf(o), canTick: canTick(o), task: !!o.task,
       time: o.time ? fmtTimeRange(o.time, o.endTime || '') : '',
       sub: [o.address, o.note, o.auto ? '' : o.layer.name].filter(Boolean).join(' · '),
       who: whoOn(o),
+      // A crew task, and whether nobody is on it yet (anyone may do it).
+      crewTask: crewTask, open: crewTask && !onUids(o).length,
     };
   }
   function homeDay(day) {
@@ -2448,7 +2485,9 @@
       const from = today();
       return occurrences(from, addDays(from, days || 45), true)
         .filter(o => o.ev && o.ev.jobId === jobId)
+        // `when`: the times as the rest of the app writes them ("7:30am–3pm").
         .map(o => ({ day: o.day, time: o.time || '', endTime: o.endTime || '', title: o.name || o.title,
+                     when: o.time ? fmtTimeRange(o.time, o.endTime || '') : '',
                      crew: (o.crew || []).map(c => {
                        const p = people[c.uid];
                        return (p && (p.name || p.email)) || c.name || '';
@@ -2458,6 +2497,9 @@
     ready: () => calsHeard,
     adds: () => adds(),
     day: homeDay,
+    // The "turn on notifications" note My day shows ('' once this phone
+    // gets reminders) -- Home puts it at the top of its day too.
+    nudge: () => nudgeHtml(),
     open: o => clickOcc(o),
     tick: (o, on) => tickOcc(o, on),
     // The next day each job is on a calendar, from today on: job id ->

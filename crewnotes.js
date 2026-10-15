@@ -82,6 +82,10 @@
           ? '<option value="' + safe(forJob.id) + '" selected>' + esc(forJob.name || 'This job') + '</option>' : '') +
       '</select></div>' +
       '<div class="field"><span class="label">Note</span>' +
+        // The usual ones, a tap each -- typing on a phone in gloves is slow.
+        // A tap only starts the note; the rest is theirs to write.
+        '<div class="note-chips">' + CHIPS.map((c, i) =>
+          '<button type="button" class="note-chip" onclick="noteChip(' + i + ')">' + c[0] + '</button>').join('') + '</div>' +
         '<textarea id="noteText" rows="5" maxlength="' + MAX_LEN + '" placeholder="e.g. Ran short 2 pallets of pavers — need them by Thursday"></textarea></div>' +
       '<div class="hint">Jonah’s phone gets it as a notification. It saves even with no signal and goes when you have it.</div>' +
       '<div class="field-actions"><button class="btn btn-filled" onclick="sendNoteForJonah()">Send</button>' +
@@ -89,6 +93,24 @@
     const t = el('noteText'); if (t) t.focus();
   };
   window.closeNoteForJonah = function () { const m = el('noteModal'); if (m) m.classList.remove('active'); };
+
+  // [what the chip says, what it puts in the box]
+  const CHIPS = [
+    ['📦 Need more material', 'Need more material: '],
+    ['⏰ Running late', 'Running late — '],
+    ['🔧 Machine problem', 'Machine problem: '],
+    ['✅ Done for the day', 'Done for the day. '],
+  ];
+  // Into an empty box, or on a new line under what is there already; the
+  // cursor left at the end, ready for the rest.
+  window.noteChip = function (i) {
+    const t = el('noteText'), c = CHIPS[i];
+    if (!t || !c) return;
+    const now = t.value.replace(/\s+$/, '');
+    t.value = (now ? now + '\n' : '') + c[1];
+    t.focus();
+    try { t.setSelectionRange(t.value.length, t.value.length); } catch (e) { /* not a text box that takes it */ }
+  };
 
   window.sendNoteForJonah = function () {
     const u = me();

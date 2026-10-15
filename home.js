@@ -187,11 +187,28 @@
     const hello = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
     const name = firstName();
     const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    // The crew get the weather as one line: on a phone the full box pushed
+    // their clock and their day down past the fold.
+    const crewish = signedIn() && !seesJobs();
     return '<div class="hm-top">' +
       '<div class="hm-hello"><div class="hm-hi">' + esc(hello + (name ? ', ' + name : '')) + '</div>' +
         '<div class="hm-date">' + esc(date) + '</div></div>' +
-      weatherHtml() +
-    '</div>';
+      (crewish ? '' : weatherHtml()) +
+    '</div>' + (crewish ? weatherLineHtml() : '');
+  }
+
+  // The same weather, in one line (the crew's Home).
+  function weatherLineHtml() {
+    const w = window.YDForecast && YDForecast.today();
+    if (!w) return '';
+    const bits = [w.hi && w.lo ? 'H ' + w.hi + ' · L ' + w.lo : '', w.pop >= 10 ? '💧 ' + w.pop + '%' : '',
+      w.snow ? '❄️ ' + w.snow : w.rain ? w.rain + ' rain' : '', w.wind ? 'wind ' + w.wind : ''].filter(Boolean);
+    return '<button class="hm-wx-line" onclick="homeWeather()" title="The week’s weather">' +
+      '<span class="hm-wx-i">' + esc(w.icon) + '</span>' +
+      '<span class="hm-wx-one"><b>' + esc(w.temp) + '</b> ' + esc(w.words) +
+        (bits.length ? ' · ' + esc(bits.join(' · ')) : '') + (w.stale ? ' · from ' + esc(w.age) : '') + '</span>' +
+      ((w.alerts || []).length ? '<span class="hm-wx-warn" title="' + esc(w.alerts.join(' · ')) + '">⚠️ ' + esc(w.alerts[0]) + '</span>' : '') +
+    '</button>';
   }
 
   // Today's weather from the header button's copy (forecast.js); a tap
@@ -254,20 +271,48 @@
     '</div>';
   }
 
-  // A storm being worked: right at the top, for anybody it is news to.
+  // A storm being worked: right at the top, for anybody it is news to --
+  // and for the crew, the one thing to do next: the property they are on
+  // (Depart) or the next one on the route (Arrive), a tap away on the Snow
+  // tab. Not on the storm's clock yet: one tap for that too.
   function stormHtml() {
     const s = window.YDStorm && YDStorm.current();
     if (!s || s.status !== 'open') return '';
-    const stops = Object.values((YDStorm.stops && YDStorm.stops()) || {});
+    const stops = Object.values((YDStorm.stops && YDStorm.stops()) || {})
+      .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
     const done = stops.filter(x => x.departedAt || x.skipped).length;
     const at = s.startedAt ? new Date(s.startedAt) : null;
     // "9:19pm", the way the calendar writes a time.
     const since = at && !isNaN(at) ? at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
       .replace(/\s*([AP])M$/i, (m, ap) => ap.toLowerCase() + 'm') : '';
-    return '<button class="hm-alert" onclick="switchTab(\'snow\')">❄️ <b>Storm under way</b>' +
-      (s.label ? ' — ' + esc(s.label) : '') +
-      '<span>' + (stops.length ? done + ' of ' + stops.length + ' stops done' : 'route starting') +
-        (since ? ' · since ' + esc(since) : '') + '</span><span class="hm-alert-go">Snow ›</span></button>';
+    const accounts = (window.YDSnow && YDSnow.accounts && YDSnow.accounts()) || {};
+    const placeOf = x => (accounts[x.accountId] || {}).name || 'the next property';
+    // The Snow tab's own answer when it has one (storm.js currentStop: this
+    // person's stop on site, else the next to do); else worked out here.
+    let cur = YDStorm.currentStop ? YDStorm.currentStop() : undefined;
+    // Its id, should the answer come without one (the id is what Depart
+    // and Arrive are found by).
+    if (cur && !cur.id) cur = stops.find(x => x === cur || (x.accountId === cur.accountId && (x.pass || 1) === (cur.pass || 1))) || null;
+    const here = cur !== undefined ? (cur && cur.id && cur.arrivedAt && !cur.departedAt ? cur : null)
+      : stops.find(x => x.arrivedAt && !x.departedAt && !x.skipped);
+    const next = here ? null : cur !== undefined ? (cur && cur.id ? cur : null) : stops.find(x => !x.arrivedAt && !x.skipped);
+    const go = here ? { words: 'On site: ' + placeOf(here), act: 'Depart ›', id: here.id, icon: '📍' }
+      : next ? { words: 'Next: ' + placeOf(next), act: 'Arrive ›', id: next.id, icon: '➡️' }
+      : { words: stops.length ? 'Every stop done' : 'Route starting', act: 'Snow ›', id: '', icon: '✅' };
+    const m = signedIn() && window.YDClock && YDClock.mine ? YDClock.mine() : null;
+    const onStorm = !!(m && m.shift && m.shift.kind === 'storm' && m.shift.targetId === s.id);
+    return '<div class="hm-storm">' +
+      '<button class="hm-alert" onclick="homeStop(\'' + safe(go.id) + '\')">' +
+        '<span class="hm-storm-l1">❄️ <b>Storm under way</b>' + (s.label ? ' — ' + esc(s.label) : '') +
+          ' <span>' + (stops.length ? done + ' of ' + stops.length + ' stops done' : 'route starting') +
+          (since ? ' · since ' + esc(since) : '') + '</span></span>' +
+        '<span class="hm-storm-l2"><span class="hm-storm-what">' + go.icon + ' ' + esc(go.words) + '</span>' +
+          '<span class="hm-alert-go">' + go.act + '</span></span>' +
+      '</button>' +
+      (m && !onStorm && !(m.shift && m.shift.leaving) && typeof window.clockInTo === 'function'
+        ? '<button class="btn btn-filled hm-storm-in" onclick="homeStormIn()">⏱ ' +
+            (m.shift ? 'Switch to tonight’s storm' : 'Clock in to tonight’s storm') + '</button>' : '') +
+    '</div>';
   }
 
   // This person's own clock (not the owner's: his is on the Clock tab, and
@@ -276,15 +321,29 @@
     if (!signedIn() || isOwner() || !window.YDClock || !YDClock.mine) return '';
     const m = YDClock.mine();
     let body, badge = '';
-    if (m.shift) {
+    if (m.shift && m.shift.leaving) {
+      // Clock out or Break just tapped: a few seconds to take it back
+      // (timeclock.js), the same here as on the Clock tab.
+      const brk = m.shift.leaving === 'break';
+      badge = brk ? 'Going on break…' : 'Clocking out…';
+      body = '<div class="hm-clock leaving">' +
+          '<div class="hm-clock-where">' + esc(m.shift.where || 'Working') + '</div>' +
+          '<div class="hm-clock-sub">' + (brk ? '🍔 Going on break' : 'Clocking out') + ' · <b>' + esc(dur(m.shift.ms)) + '</b></div></div>' +
+        '<div class="hm-actions"><button class="btn btn-filled hm-big" onclick="homeClock(\'undoClockOut\', \'' + safe(m.shift.id) + '\')">' +
+          '↩ Undo — stay on the clock</button></div>';
+    } else if (m.shift) {
       badge = m.shift.paused ? 'Paused' : 'On the clock';
       body = '<div class="hm-clock on">' +
           '<div class="hm-clock-where">' + esc(m.shift.where || 'Working') + '</div>' +
-          '<div class="hm-clock-sub">in at ' + esc(m.shift.since) + ' · <b>' + esc(dur(m.shift.ms)) + '</b>' +
-            (m.shift.paused ? ' · paused for ' + esc(m.shift.paused) : '') + '</div></div>' +
+          '<div class="hm-clock-sub">' + esc(m.shift.inWords || 'in at ' + m.shift.since) + ' · <b>' + esc(dur(m.shift.ms)) + '</b>' +
+            (m.shift.paused ? ' · paused for ' + esc(m.shift.paused) : '') + '</div>' +
+          (m.shift.note ? '<div class="hm-clock-note">⏱ ' + esc(m.shift.note) + '</div>' : '') + '</div>' +
         '<div class="hm-actions">' +
           '<button class="btn btn-filled" onclick="switchTab(\'clock\')">Go to the clock</button>' +
-          '<button class="btn" onclick="homeClock(\'clockOut\', \'' + safe(m.shift.id) + '\')">Clock out</button></div>';
+          '<button class="btn" onclick="homeClock(\'takeBreak\', \'' + safe(m.shift.id) + '\')">🍔 Break</button></div>' +
+        // On a line of its own and marked as the one that ends the day.
+        '<div class="hm-actions hm-out-row"><button class="btn hm-out" onclick="homeClock(\'clockOut\', \'' + safe(m.shift.id) + '\')">' +
+          '⏹ Clock out</button></div>';
     } else if (m.onBreak) {
       badge = 'On break';
       body = '<div class="hm-clock">' +
@@ -309,23 +368,39 @@
     return YDCalendar.day(today()) || 'loading';
   }
 
+  // A crew task nobody has been put on: every crew member's to pick up
+  // (remind.js isMine), so it is in each of their days -- said as such, or
+  // it reads as though it were theirs alone.
+  const openCrew = x => !!(x && x.crewTask && x.open);
+
   function myDayHtml(d) {
     if (!signedIn()) return '';
     const title = isOwner() ? '📅 My day' : '📅 Your day';
     const link = ['Calendar', "switchTab('calendar')"];
     if (d === 'loading' || !d) return card('day', title, '', link, empty('Loading…'));
-    const todo = d.mineAny.concat(d.mineLate);
-    const left = todo.filter(x => !x.done).length;
-    const body =
+    const all = d.mineAny.concat(d.mineLate);
+    const left = all.filter(x => !x.done).length;
+    const ownLate = d.mineLate.filter(x => !openCrew(x)), ownAny = d.mineAny.filter(x => !openCrew(x));
+    const crewLate = d.mineLate.filter(openCrew), crewAny = d.mineAny.filter(openCrew);
+    const ownLeft = ownLate.concat(ownAny).filter(x => !x.done).length;
+    const crewLeft = crewLate.concat(crewAny).filter(x => !x.done).length;
+    // Reminders reach only a phone that has said yes to them (calendar.js,
+    // the same note My day shows).
+    const nudge = window.YDCalendar && YDCalendar.nudge ? YDCalendar.nudge() : '';
+    const body = nudge +
       sub('🕑 Schedule', d.mineTimed.length || null) +
       (d.mineTimed.length ? capped('mineT', d.mineTimed.map(timedRow), 8)
         : empty('Nothing at a set time today.')) +
       // What is late first: it was wanted sooner than today's, and a long
       // list must not fold it away under "Show all".
-      sub('✅ To do today', left || null) +
-      (todo.length ? capped('mineA', d.mineLate.map(x => todoRow(x, true)).concat(d.mineAny.map(x => todoRow(x, false))))
-        : empty('Nothing else to get done today.'));
-    return card('day', title, left ? left + ' to do' : todo.length ? 'all done' : '', link, body, left > 0);
+      sub('✅ To do today', ownLeft || null) +
+      (ownLate.length || ownAny.length ? capped('mineA', ownLate.map(x => todoRow(x, true)).concat(ownAny.map(x => todoRow(x, false))))
+        : empty('Nothing else to get done today.')) +
+      (crewLate.length || crewAny.length
+        ? sub('👷 Crew tasks — anyone can do these', crewLeft || null) +
+          capped('mineC', crewLate.map(x => todoRow(x, true)).concat(crewAny.map(x => todoRow(x, false))))
+        : '');
+    return card('day', title, left ? left + ' to do' : all.length ? 'all done' : '', link, body, left > 0);
   }
 
   function crewDayHtml(d) {
@@ -338,19 +413,29 @@
     if (d === 'loading' || !d) return card('crew', title, '', link, empty('Loading…'));
     const tasks = d.crewAny.concat(d.crewLate);
     const left = tasks.filter(x => !x.done).length;
-    // Who is working right now: for whoever sees everyone's hours.
+    // Nobody on it (anyone's to do) apart from someone's already: the rows
+    // of the second say who.
+    const openLate = d.crewLate.filter(openCrew), openAny = d.crewAny.filter(openCrew);
+    const takenLate = d.crewLate.filter(x => !openCrew(x)), takenAny = d.crewAny.filter(x => !openCrew(x));
+    const leftOf = list => list.filter(x => !x.done).length || null;
+    // Who is working right now: for whoever sees everyone's hours. A shift
+    // on a long time (a clock-out forgotten, most likely) is marked.
     const now = window.YDClock && YDClock.onNow && can('hours', 'see') ? YDClock.onNow() : null;
-    const onClock = now ? now.live.map(e => line(e.paused ? '⏸️' : '🟢', '<b>' + esc(e.who) + '</b> — ' + esc(e.where || 'on the clock'),
-        e.paused ? 'paused for ' + esc(e.paused) : '', esc(dur(e.ms)), "switchTab('clock')", e.paused ? 'paused' : ''))
+    const onClock = now ? now.live.map(e => line(e.paused ? '⏸️' : e.long ? '⏱️' : '🟢', '<b>' + esc(e.who) + '</b> — ' + esc(e.where || 'on the clock'),
+        [e.paused ? 'paused for ' + esc(e.paused) : '', e.long ? '<span class="hm-late">Long shift — still on?</span>' : '',
+          e.since ? esc(e.since) : ''].filter(Boolean).join(' · '),
+        esc(dur(e.ms)), "switchTab('clock')", (e.paused ? 'paused' : '') + (e.long ? ' hm-long' : '')))
       .concat(now.breaks.map(b => line('🍔', '<b>' + esc(b.who) + '</b> — on a break', esc(b.where), esc(dur(b.ms)),
         "switchTab('clock')", 'paused'))) : [];
     const body =
       sub('🕑 Schedule', d.crewTimed.length || null) +
       (d.crewTimed.length ? capped('crewT', d.crewTimed.map(timedRow), 8)
         : empty('Nothing on the crew’s calendar at a set time.')) +
-      sub('✅ Crew tasks', left || null) +
-      (tasks.length ? capped('crewA', d.crewLate.map(x => todoRow(x, true)).concat(d.crewAny.map(x => todoRow(x, false))))
-        : empty('No crew tasks for today.')) +
+      (!tasks.length ? sub('✅ Crew tasks') + empty('No crew tasks for today.') :
+        (openLate.length || openAny.length ? sub('👷 Crew tasks — anyone can do these', leftOf(openLate.concat(openAny))) +
+          capped('crewA', openLate.map(x => todoRow(x, true)).concat(openAny.map(x => todoRow(x, false)))) : '') +
+        (takenLate.length || takenAny.length ? sub('👤 Crew tasks someone is on', leftOf(takenLate.concat(takenAny))) +
+          capped('crewB', takenLate.map(x => todoRow(x, true)).concat(takenAny.map(x => todoRow(x, false)))) : '')) +
       (now ? sub('⏱️ On the clock now', now.live.length || null) +
         (onClock.length ? capped('onNow', onClock) : empty('Nobody is on the clock.')) : '');
     const badge = now && now.live.length ? now.live.length + ' working' : left ? left + ' to do' : '';
@@ -366,9 +451,12 @@
         String(a.n ? a.n.day : '9999').localeCompare(b.n ? b.n.day : '9999') || nameOf(a.j).localeCompare(nameOf(b.j)));
     // A booked job with no day on the calendar is one to schedule; one under
     // way may simply have had its days already.
+    // A booked job with no day says nothing on its own row: one line above
+    // the list counts them ("Not on the calendar yet" on every row was most
+    // of the card).
     const row = ({ j, n }) => {
       const when = n ? '<small class="hm-when">📅 ' + esc(dayWords(n.day)) + (n.time ? ' · ' + esc(n.time) : '') + '</small>'
-        : !signedIn() ? '' : statusOf(j) === 'booked' ? '<small class="hm-when none">Not on the calendar yet</small>'
+        : !signedIn() || statusOf(j) === 'booked' ? ''
         : '<small class="hm-when none">No more days on the calendar</small>';
       const about = [whereOf(j), servicesOf(j)].filter(Boolean).join(' · ');
       return '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
@@ -378,9 +466,14 @@
           (priceOf(j) ? '<span class="hm-money">' + fmtMoney(priceOf(j)) + '</span>' : '') + '</span></button>';
     };
     const inProg = list.filter(x => statusOf(x.j) === 'inprogress'), booked = list.filter(x => statusOf(x.j) === 'booked');
+    const unplanned = signedIn() ? booked.filter(x => !x.n).length : 0;
+    // A few of each, then "Show all": on a wide screen the cards sit side by
+    // side, and one long list left the cards beside it with a tall gap.
     const body = !list.length ? empty('Nothing booked yet.') :
-      (inProg.length ? sub('🔨 In progress', inProg.length) + capped('jobsP', inProg.map(row)) : '') +
-      (booked.length ? sub('📌 Booked', booked.length) + capped('jobsB', booked.map(row)) : '');
+      (inProg.length ? sub('🔨 In progress', inProg.length) + capped('jobsP', inProg.map(row), 4) : '') +
+      (booked.length ? sub('📌 Booked', booked.length) +
+        (unplanned ? '<div class="hm-note">📅 ' + unplanned + ' not scheduled yet</div>' : '') +
+        capped('jobsB', booked.map(row), 4) : '');
     return card('jobs', '🔨 Booked & in progress', list.length || '', ['Jobs board', "homeBoard('jobs')"], body);
   }
 
@@ -451,14 +544,21 @@
         (words ? '<small class="hm-when' + (late ? ' late' : '') + '">' + esc(words) + '</small>' : '') + '</span>' +
       '<span class="hm-job-r">' + (priceOf(j) ? '<span class="hm-money">' + fmtMoney(priceOf(j)) + '</span>' : '') + '</span></button>';
     const sentWords = j => { const d = daysSince(j.bidStageAt || j.lastModified); return d == null ? '' : 'Sent ' + ago(d); };
-    const body = !open.length ? empty('No bids open right now.') :
+    // Bids the customer turned down in QuickBooks, when the Bids board
+    // sorts them out (boards.js: `no`, not in any group below) -- listed so
+    // they do not simply vanish from Home before they are marked lost.
+    // (Each a job, or { j } like the chase list.)
+    const no = (Array.isArray(g.no) ? g.no : []).map(x => (x && x.j ? x.j : x)).filter(j => j && j._id);
+    const body = !open.length && !no.length ? empty('No bids open right now.') :
       (yes.length ? sub('✅ Said yes in QuickBooks — book it', yes.length) + capped('bidY', yes.map(j => row(j, 'Open it and press Make it a job'))) : '') +
       (drafted.length ? sub('✨ Estimate drafted — check it & send', drafted.length) + capped('bidD', drafted.map(j => row(j, servicesOf(j)))) : '') +
       (chase.length ? sub('📨 Due a follow-up', chase.length) + capped('bidC', chase.map(x =>
         row(x.j, (x.col === 'followUp' ? 'In Follow up · ' : '') + sentWords(x.j), x.days >= 14))) : '') +
       (waiting.length ? sub('🕑 Waiting on the customer', waiting.length) + capped('bidW', waiting.map(j => row(j, sentWords(j)))) : '') +
       (toDo.length ? sub('📍 Site visits & bids to write', toDo.length) + capped('bidT', toDo.map(j =>
-        row(j, bc(j) === 'siteVisit' ? 'Site visit' : 'Bid to send'))) : '');
+        row(j, bc(j) === 'siteVisit' ? 'Site visit' : 'Bid to send'))) : '') +
+      (no.length ? sub('✖ Turned down in QuickBooks', no.length) +
+        capped('bidN', no.map(j => row(j, 'Open it to mark it lost, or follow up'))) : '');
     const needs = yes.length + drafted.length + chase.length;
     return card('bids', '📋 Bids', needs ? needs + ' need you' : open.length || '', ['Bids board', "homeBoard('bids')"], body, needs > 0);
   }
@@ -523,7 +623,8 @@
     const list = YDCrewJobs.list();
     const next = window.YDCalendar && YDCalendar.nextForJobs ? YDCalendar.nextForJobs(60) : {};
     const mineToday = {};
-    if (d && d !== 'loading') d.mineTimed.concat(d.mineAny).forEach(x => { if (x.o && x.o.ev && x.o.ev.jobId) mineToday[x.o.ev.jobId] = 1; });
+    // On it by name -- not a crew day nobody is on yet (anyone's: openCrew).
+    if (d && d !== 'loading') d.mineTimed.concat(d.mineAny).forEach(x => { if (x.o && x.o.ev && x.o.ev.jobId && !openCrew(x)) mineToday[x.o.ev.jobId] = 1; });
     const rows = list.map(j => {
       const n = next[j.id];
       return '<button class="hm-job" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
@@ -546,11 +647,13 @@
     const all = seesJobs() ? jobs() : [];
     const d = dayData();
     const crewish = signedIn() && !seesJobs();
-    // The owner's day first, then the crew's, then the work and the money.
-    // The crew: their clock, their day, the rest of the crew, their jobs.
+    // What is waiting on the owner first, under the figures -- notes from
+    // the crew, hours to look at, receipts -- then his day, the crew's, and
+    // the work and the money. The crew: their clock, their day, the rest of
+    // the crew, their jobs.
     const cards = crewish
       ? [clockHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
-      : [clockHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), waitingHtml(), equipmentHtml()];
+      : [waitingHtml(), clockHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
     return greetingHtml() + actionsHtml() + stormHtml() + statsHtml(all) +
       '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
   }
@@ -632,11 +735,38 @@
   // (timeclock.js) -- then Home at once: the clock only tells the other
   // screens when the database answers, which with no signal is later.
   window.homeClock = function (what, id) {
-    if (['clockOut', 'backFromBreak'].indexOf(what) === -1 || typeof window[what] !== 'function') return;
+    if (['clockOut', 'backFromBreak', 'takeBreak', 'undoClockOut'].indexOf(what) === -1 || typeof window[what] !== 'function') return;
     window[what](id);
     // Back from a break to a storm that has finished or a job that has gone:
     // the clock asks what instead, on its own tab.
     if (what === 'backFromBreak' && window.YDClock && YDClock.mine && !YDClock.mine().shift) { switchTab('clock'); return; }
+    if (showing()) render();
+  };
+  // The storm's stop to see to next, on the Snow tab: scrolled to and
+  // lit up for a moment. The Snow tab does it itself where it can
+  // (storm.js focusStop: it also opens a folded stop); otherwise it is
+  // found by the id storm.js gives each stop (stop-<its id>) -- looked for
+  // a few times, as the Snow tab may still be drawing it.
+  window.homeStop = function (id) {
+    if (id && window.YDStorm && YDStorm.focusStop && YDStorm.focusStop(id) !== false) return;
+    if (typeof switchTab === 'function') switchTab('snow');
+    if (!id) return;
+    const find = tries => {
+      const n = document.getElementById('stop-' + safe(id));
+      if (n) {
+        if (n.scrollIntoView) n.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        n.classList.add('hm-flash');
+        setTimeout(() => n.classList.remove('hm-flash'), 1800);
+      } else if (tries > 0) setTimeout(() => find(tries - 1), 150);
+    };
+    setTimeout(() => find(8), 60);
+  };
+  // On the storm's clock in one tap (the clock's own clock-in, so it is
+  // the same shift the Clock tab would start).
+  window.homeStormIn = function () {
+    const s = window.YDStorm && YDStorm.current();
+    if (!s || s.status !== 'open' || typeof window.clockInTo !== 'function') return;
+    window.clockInTo('storm', s.id);
     if (showing()) render();
   };
   window.homeAddEntry = function () {
@@ -654,16 +784,27 @@
 
   // ------------------------------------------------------------ wiring
 
+  // Looked at again a few times while everything is first arriving. Each
+  // screen says when it changes, but at start-up a calendar's entries can
+  // land in the same moment as the draw that was waiting for them (My day
+  // here showed fewer than the Calendar until the next minute's redraw);
+  // drawn again only if something on it is different.
+  let warmTimers = [];
+  function warmUp() {
+    warmTimers.forEach(clearTimeout);
+    warmTimers = [1500, 4000, 9000, 15000].map(ms => setTimeout(() => { if (showing()) render(); }, ms));
+  }
+
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    if (a.user && !authAt) authAt = Date.now();
+    if (a.user && !authAt) { authAt = Date.now(); warmUp(); }
     if (!a.user) authAt = 0;
     lastHtml = '';
     if (showing()) render();
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 
