@@ -221,7 +221,8 @@
     wrap.innerHTML = (seesPrices ? totalsHtml() : '') + ids.map(id => {
       const a = accounts[id];
       const held = Array.isArray(a.vacationHolds) && a.vacationHolds.length;
-      return '<div class="snow-card' + (a.active === false ? ' inactive' : '') + '">' +
+      // The id lets search (search.js) land on exactly this card.
+      return '<div class="snow-card' + (a.active === false ? ' inactive' : '') + '" id="sa-' + String(id).replace(/[^A-Za-z0-9_-]/g, '') + '">' +
         '<div class="snow-card-head">' +
           (place[id] ? '<span class="snow-route-n" title="Stop ' + place[id] + ' on the route">' + place[id] + '</span>' : '') +
           '<span class="snow-name">' + esc(a.name) + '</span>' +
@@ -262,6 +263,8 @@
       });
       loaded = true;
       render();
+      // Search (search.js) reads the accounts again when they change.
+      document.dispatchEvent(new CustomEvent('yd-snow-accounts'));
       loadPricing();          // only the owner will get anything back
       // Only once the server's copy is in: a stale cached one might list as
       // unlocated an account another device has already found.

@@ -826,6 +826,8 @@
         people[c.id] = rec;
       });
       render();
+      // Search (search.js) reads the list again when it changes.
+      document.dispatchEvent(new CustomEvent('yd-prospects'));
     }, err => {
       render();
       if (err && err.code === 'permission-denied') {

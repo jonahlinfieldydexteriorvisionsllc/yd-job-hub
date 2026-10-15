@@ -762,7 +762,8 @@
 
   function itemHtml(it, withVendor) {
     const v = vendors[it.vendorId] || null;
-    return '<div class="sup-item">' +
+    // The id lets search (search.js) land on exactly this item.
+    return '<div class="sup-item" id="si-' + String(it.id || '').replace(/[^A-Za-z0-9_-]/g, '') + '">' +
       '<div class="sup-top">' +
         '<span class="sup-name">' + esc(it.name) + '</span>' +
         (it.unit ? '<span class="sup-unit">' + esc(it.unit) + '</span>' : '') +

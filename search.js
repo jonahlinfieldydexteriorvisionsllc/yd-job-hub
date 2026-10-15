@@ -189,6 +189,9 @@
     if (!a) return;
     const order = Object.keys(all).sort((x, y) => (all[x].name || '').localeCompare(all[y].name || ''));
     later(() => {
+      // The card's own id first (snow.js); else by its place and name.
+      const own = el('sa-' + String(id).replace(/[^A-Za-z0-9_-]/g, ''));
+      if (own) { reveal(own); return; }
       const cards = document.querySelectorAll('#snowAccountsWrap .snow-card');
       const nameOf = c => ((c && c.querySelector('.snow-name')) || {}).textContent || '';
       let card = cards[order.indexOf(id)];
@@ -217,6 +220,8 @@
     suppliesSearch(it.name || '');
     if (fn('supFilter')) supFilter(cat.vendors && cat.vendors[it.vendorId] ? it.vendorId : '-');
     later(() => {
+      const own = it.id ? el('si-' + String(it.id).replace(/[^A-Za-z0-9_-]/g, '')) : null;
+      if (own) { reveal(own); return; }
       const names = document.querySelectorAll('#supResults .sup-item .sup-name');
       const hit = Array.prototype.find.call(names, n => n.textContent === (it.name || ''));
       reveal(hit ? hit.closest('.sup-item') : null);
@@ -488,11 +493,15 @@
   function buildCalendar() {
     const today = ymd(new Date());
     const seen = {}, out = [];
-    for (let i = -CAL_DAYS; i <= CAL_DAYS; i++) {
-      const day = addDays(today, i);
-      const d = YDCalendar.day(day);
+    // The whole two months at once where the calendar offers it (every entry
+    // this person can see, including ones put on someone else); a day at a
+    // time otherwise.
+    const all = YDCalendar.between ? YDCalendar.between(addDays(today, -CAL_DAYS), addDays(today, CAL_DAYS)) : null;
+    const days = all ? [{ all: all }] : [];
+    if (!all) for (let i = -CAL_DAYS; i <= CAL_DAYS; i++) days.push(YDCalendar.day(addDays(today, i)));
+    for (const d of days) {
       if (!d) continue;
-      ['mineTimed', 'mineAny', 'crewTimed', 'crewAny', 'mineLate', 'crewLate'].forEach(list => {
+      ['all', 'mineTimed', 'mineAny', 'crewTimed', 'crewAny', 'mineLate', 'crewLate'].forEach(list => {
         (d[list] || []).forEach(x => {
           const o = x && x.o;
           if (!o || o.auto) return;
@@ -658,6 +667,7 @@
     'yd-supplies': ['supplies'], 'yd-equipment-changed': ['equipment'], 'yd-receipts': ['receipts'],
     'yd-cards-changed': ['cards', 'calendar'], 'yd-boards-changed': ['cards', 'calendar', 'settings'],
     'yd-calendar-changed': ['calendar'], 'yd-outreach': ['contacts'], 'yd-remind-me': ['calendar'],
+    'yd-prospects': ['contacts'], 'yd-snow-accounts': ['snow'],
   };
   let redoTimer = null;
   Object.keys(CHANGES).forEach(ev => document.addEventListener(ev, () => {

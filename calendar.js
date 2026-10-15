@@ -2657,6 +2657,10 @@
     ready: () => calsHeard,
     adds: () => adds(),
     day: homeDay,
+    // Every entry this person can see between two dates, drawn as Home draws
+    // them (search.js: one call instead of a day at a time, and entries put
+    // on someone else are found too).
+    between: (from, to) => occurrences(from, to, true).map(forHome),
     // The "turn on notifications" note My day shows ('' once this phone
     // gets reminders) -- Home puts it at the top of its day too.
     nudge: () => nudgeHtml(),
