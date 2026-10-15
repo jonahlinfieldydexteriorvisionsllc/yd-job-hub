@@ -3550,3 +3550,13 @@
   .bd-ed-group { border-top:1px solid var(--border); margin-top:14px; padding-top:10px; }
   .bd-ed-head { font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:1px; color:var(--brand-ink); }
   .bd-ed-sub { font-size:12px; color:var(--muted); line-height:1.45; margin:2px 0 8px; }
+
+  /* ---- merge fixes, wave 2 (15 Oct 2026) ---- */
+  /* On a phone the job screens' header holds Save, New, My Jobs, the weather
+     and ⋯ -- a few pixels too many, so the ⋯ touched the screen edge. There
+     the weather shows as its icon only (the temperature is one tap away). */
+  @media (max-width:420px) {
+    html[data-tab="job"] .wx-chip .wxc-temp, html[data-tab="tracking"] .wx-chip .wxc-temp,
+    html[data-tab="dashboard"] .wx-chip .wxc-temp { display:none; }
+    html[data-tab="job"] .wx-chip, html[data-tab="tracking"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 8px; }
+  }
