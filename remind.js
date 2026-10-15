@@ -32,9 +32,9 @@
 (function () {
   'use strict';
 
-  // `timed`: whether it happens at a set time. Picking one that is not sets
-  // the entry to all day (null: leaves it as it is); a card simply needs no
-  // time. `color`: each kind has its own on the calendar (Jonah, 12 Oct:
+  // `timed`: whether it usually happens at a set time -- a hint only; the
+  // entry's own "Any time that day" box (or a card's Time) decides, and
+  // picking a kind never changes it (Jonah, 15 Oct 2026). `color`: each kind has its own on the calendar (Jonah, 12 Oct:
   // "a certain color for everything" -- crew blue, personal pink, doctors
   // yellow, quotes green; the rest are ours to suggest). `ink`: dark
   // writing on a light colour.

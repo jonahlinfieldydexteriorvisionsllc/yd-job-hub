@@ -1630,14 +1630,14 @@
     openModal(openCard.cardId ? 'Edit card' : 'New card on ' + esc(board.name),
       '<div class="field"><span class="label">What needs doing</span>' +
         '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"></div>' +
-      group('What it is &amp; who is on it', 'The kind gives the card its colour and decides when it buzzes. ' +
+      group('What it is &amp; who is on it', 'The kind gives the card its colour. ' +
           '👷 A crew task can be seen by every crew member, from any board that is not private.',
-        // Jonah (12 Oct 2026): what it is decides when it buzzes -- a pickup
-        // or a to-do is for any time that day, a bid appointment at its time.
+        // What it is gives the card its colour; whether it has a time is the
+        // Time box's alone (Jonah, 15 Oct 2026).
         '<div class="field"><span class="label">What is it</span><select id="cdType" onchange="cardTypeChanged()">' +
           '<option value="">—</option>' +
           YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
-            esc(cardTypeLabel(t, !!k.dueTime)) + '</option>').join('') +
+            esc(cardTypeLabel(t)) + '</option>').join('') +
         '</select></div>' +
         (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +
           crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="cdWho" value="' + p.uid + '"' +
@@ -1713,21 +1713,18 @@
     const t = el('cdTitle'); if (t) t.focus();
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
-  // A kind for no set time says "(any time that day)" only while the card
-  // has no time: a crew task due at 9:00 is a crew task at 9:00 (as on the
-  // calendar's editor, calendar.js typeLabel).
-  const cardTypeLabel = (t, timed) => t.icon + ' ' + t.name + (t.timed === false && !timed ? ' (any time that day)' : '');
+  // Just its name (as on the calendar's editor, calendar.js typeLabel).
+  const cardTypeLabel = t => t.icon + ' ' + t.name;
 
   // A crew task is the crew's: picking it tags the card 👷 Crew, so the crew
   // can see it from any board and it is listed on Crew tasks with the rest.
-  // Something for any time that day needs no time.
+  // Picking what it is never clears a time.
   window.cardTypeChanged = function () {
     const t = YDRemind.typeById(val('cdType'));
     if (t && t.crew) {
       const box = document.querySelector('.cdLabel[value="' + CREW_LABEL.id + '"]');
       if (box) box.checked = true;
     }
-    if (t && t.timed === false && el('cdTime')) el('cdTime').value = '';
     cardRemindHint();
   };
   window.cardRemindHint = function () {

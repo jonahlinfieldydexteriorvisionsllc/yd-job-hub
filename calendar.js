@@ -1094,7 +1094,7 @@
 
   function entryHtml(o) {
     const k = keyOf(o);
-    const time = o.time ? fmtTimeRange(o.time, o.endTime) : 'All day';
+    const time = o.time ? fmtTimeRange(o.time, o.endTime) : 'Any time';
     return '<div class="cal-entry' + (o.done ? ' done' : '') + '" style="--c:' + colorOf(o) + '" onclick="calClick(\'' + k + '\')">' +
       '<div class="cal-entry-time">' + esc(time) + '</div>' +
       '<div class="cal-entry-main">' +
@@ -1226,7 +1226,7 @@
     if (!base) return;
     shown = o;
     const ev = o.ev || base;
-    const when = ev.allDay || !ev.time ? 'All day' : fmtTimeRange(ev.time, ev.endTime);
+    const when = ev.allDay || !ev.time ? 'Any time that day' : fmtTimeRange(ev.time, ev.endTime);
     const mapUrl = ev.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ev.address) : '';
     const type = YDRemind.typeById(typeOfEv(ev, cal));
     // The reminder is the series' (a single date cannot have its own). The
@@ -1324,10 +1324,13 @@
     const jobs = (typeof loadAllJobs === 'function' ? loadAllJobs() : [])
       .filter(j => j && j._id && (j.jobStatus || 'quoting') !== 'complete')
       .sort((a, b) => String(a.customerName || '').localeCompare(b.customerName || ''));
-    // Added from an hour in the grid: at that time, for an hour.
-    const allDay = ev.allDay != null ? ev.allDay : editing.time ? false : !ev.time;
+    // "Any time that day" is a box of its own, off unless ticked (Jonah, 15
+    // Oct 2026: all the kinds, "and then just a box to check for any time
+    // today"). A saved entry keeps what it had; a new one is at a set time --
+    // the hour tapped in the grid, else 7 am -- for an hour.
+    const allDay = editing.eventId ? (ev.allDay != null ? ev.allDay : !ev.time) : false;
     const startT = ev.time || editing.time || '07:00';
-    const endT = ev.endTime || (editing.time ? hhmm(minutesOf(editing.time) + 60) : '');
+    const endT = ev.endTime || hhmm(minutesOf(startT) + 60);
     // What it is, as it counts now: a site visit nobody marked is already a
     // bid appointment, so the box says so.
     const type = typeOfEv(ev, cals[calId]);
@@ -1346,7 +1349,7 @@
           '<input type="date" id="evEnd" value="' + esc(ev.endDate || '') + '"></div>' +
       '</div>' +
       '<label class="chk"><input type="checkbox" id="evAllDay"' + (allDay ? ' checked' : '') +
-        ' onchange="calAllDayChanged()"> All day</label>' +
+        ' onchange="calAllDayChanged()"> Any time that day — no set time</label>' +
       '<div class="grid g2" id="evTimes"' + (allDay ? ' hidden' : '') + '>' +
         '<div class="field"><span class="label">Starts</span>' +
           '<input type="time" id="evTime" value="' + esc(startT) + '" onchange="calRemindHint()"></div>' +
@@ -1364,7 +1367,7 @@
           (ev.type ? ' data-picked="1"' : '') + '>' +
         '<option value="">—</option>' +
         YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === type ? ' selected' : '') + '>' +
-          esc(typeLabel(t, allDay)) + '</option>').join('') +
+          esc(typeLabel(t)) + '</option>').join('') +
       '</select><div class="hint cal-type-note" id="evTypeNote"></div></div>' +
       '<div class="field"><span class="label">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
         '<option value="">— not about a job —</option>' +
@@ -1401,12 +1404,10 @@
     calRemindHint();
     calTypeNote();
   }
-  // What a kind is called in the "What is it" box. One for no set time (a
-  // pickup, a to-do, a crew task) says "(any time that day)" only while the
-  // entry IS for any time that day: beside a start and an end time it said
-  // both at once. At a set time it is just its name, and the line under the
-  // box says it is at that time (calTypeNote).
-  const typeLabel = (t, allDay) => t.icon + ' ' + t.name + (t.timed === false && allDay ? ' (any time that day)' : '');
+  // What a kind is called in the "What is it" box: just its name. What it
+  // is and whether it has a set time are two separate questions -- a pickup
+  // can be at 9:00 or any time that day -- answered by two separate boxes.
+  const typeLabel = t => t.icon + ' ' + t.name;
   // A job in the Job box: who, its number and where. Two jobs for the same
   // customer (a patio in the spring, beds in the fall) read the same by name
   // alone -- and the number or the street can be typed to find it.
@@ -1427,34 +1428,16 @@
     calRemindHint();
     calTypeNote();
   };
-  // A pickup or a to-do is for any time that day; an appointment is at a set
-  // time. Picking one sets "All day" to match (it can still be changed); a
-  // kind that only followed the calendar leaves it as it was.
+  // Picking what it is never touches the time: only the "Any time that
+  // day" box does.
   window.calTypeChanged = function (byCalendar) {
-    const byHand = byCalendar !== true;
-    if (byHand && el('evType')) el('evType').dataset.picked = '1';
-    const t = YDRemind.typeById(val('evType'));
-    const box = el('evAllDay');
-    if (byHand && t && box && t.timed != null) { box.checked = !t.timed; calAllDayChanged(); }
-    else { calRemindHint(); calTypeNote(); }
+    if (byCalendar !== true && el('evType')) el('evType').dataset.picked = '1';
+    calRemindHint();
+    calTypeNote();
   };
-  // The "What is it" box and the times always say the same thing. A crew
-  // task (or a pickup, a to-do) given a start and an end -- picked off the
-  // Work schedule, or All day unticked -- is that kind AT that time: the
-  // box drops "(any time that day)" and the line under it says so, with
-  // the one tap back to any time that day. Ticking All day puts it back.
   window.calTypeNote = function () {
-    const box = el('evType'), note = el('evTypeNote'), all = el('evAllDay');
-    if (!box || !note || !all) return;
-    Array.prototype.forEach.call(box.options, o => {
-      const t = YDRemind.typeById(o.value);
-      if (t) o.textContent = typeLabel(t, all.checked);
-    });
-    const t = YDRemind.typeById(box.value);
-    note.innerHTML = t && t.timed === false && !all.checked
-      ? esc(t.name) + ' at a set time — it sits at that hour on the calendar. ' +
-        '<button type="button" class="link-btn" onclick="calAnyTime()">Make it any time that day</button>'
-      : '';
+    const note = el('evTypeNote');
+    if (note) note.innerHTML = '';
   };
   window.calAnyTime = function () {
     const all = el('evAllDay');
