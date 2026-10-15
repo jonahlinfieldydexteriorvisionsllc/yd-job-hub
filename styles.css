@@ -3171,6 +3171,8 @@
   @media (max-width:720px) {
     .set-boards { margin-left:0; }
     .set-board { min-height:40px; }
+  }
+
   /* ---- ux-d1 lifecycle & boards (15 Oct 2026) ---- */
   /* Board cards stay white at night (see "the board itself" above), so the
      colours on them are the daytime ones. */
