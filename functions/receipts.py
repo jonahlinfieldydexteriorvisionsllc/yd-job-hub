@@ -739,9 +739,11 @@ def _same_bill(db, f):
 #     the way Trello does it.
 
 PICKUPS = "pickups"
+# The labels a new Pickups board starts with. No "Urgent" label: a card's
+# urgency has its own field and picker (boards.js), which sorts and pings; a
+# label of that name did neither. A board made before keeps its labels.
 DEFAULT_LABELS = [
     {"id": "crew", "name": "Crew", "color": "#2f8f5b"},
-    {"id": "urgent", "name": "Urgent", "color": "#d64545"},
     {"id": "waiting", "name": "Waiting", "color": "#e0a526"},
     {"id": "materials", "name": "Materials", "color": "#e07b24"},
     {"id": "equipment", "name": "Equipment", "color": "#2f6fd6"},

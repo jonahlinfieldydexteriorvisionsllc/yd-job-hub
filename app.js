@@ -649,7 +649,9 @@ if ('serviceWorker' in navigator) {
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();
-  const invoiced = document.getElementById('qbInvoiced') && document.getElementById('qbInvoiced').checked;
+  // Invoiced: the box ticked by hand, or an invoice QuickBooks holds for it.
+  const invoiced = (document.getElementById('qbInvoiced') && document.getElementById('qbInvoiced').checked) ||
+    !!(boardFields.qbInvoiceRef && boardFields.qbInvoiceRef.id);
   document.getElementById('ctxName').innerHTML = esc(name || (currentJobId ? 'Untitled Job' : 'New Job')) + (invoiced ? '<span class="qb-chip">QB Invoiced</span>' : '');
   const st = document.getElementById('ctxStatus');
   st.textContent = statusLabel(jobStatus); st.className = 'pill ' + jobStatus;
@@ -811,6 +813,17 @@ function onStatusChange() {
   // When it was finished: a job with plants owes its care email from then
   // (plantcare.js), as when it is finished from the board (sync.js patchJob).
   if (jobStatus === 'complete' && was !== 'complete') boardFields.completedAt = at;
+  // Finished here: the card goes to Ready to invoice -- or Invoiced / Paid
+  // when QuickBooks already has the invoice (the deposit invoice is often
+  // made at acceptance). It used to stay wherever it was, so the Jobs board
+  // said "In progress" for a job the form called Complete. One rule with the
+  // board and the server (sync.js finishedStage). Set before the save below.
+  if (jobStatus === 'complete' && was !== 'complete' && window.YDSync && window.YDSync.finishedStage) {
+    const inv = document.getElementById('qbInvoiced');
+    boardFields.workStage = window.YDSync.finishedStage({ workStage: boardFields.workStage,
+      qbInvoiceRef: boardFields.qbInvoiceRef, qbInvoiced: !!(inv && inv.checked) });
+    boardFields.workStageAt = at;
+  }
   // Finished here: the plant-care email, as from the board (estimate.js).
   // Saved first, so what goes to the server has the status (and an email
   // address typed a moment ago) in it.
@@ -1764,7 +1777,7 @@ function readJobBlob(id) {
 // and parses every stored job, and every save since keeps the index right by
 // itself (buildIndexEntry). Raise INDEX_VERSION whenever the index gains a
 // field, so devices fill it in for jobs saved before.
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;     // 2 (15 Oct 2026): date, and invoiced from QuickBooks too
 const INDEX_VERSION_KEY = STORAGE_PREFIX + 'indexVersion';
 function migrateJobIndex() {
   try { if (localStorage.getItem(INDEX_VERSION_KEY) === String(INDEX_VERSION)) return; } catch (e) {}
@@ -1790,10 +1803,12 @@ function rebuildJobIndex() {
       services: svc,
       est: String(data.estimateNumber || '').trim(),
       lost: isBidStatus(data.jobStatus || entry.status) && data.bidStage === 'lost',
-      invoiced: !!data.qbInvoiced,
+      date: String(data.quoteDate || '').slice(0, 10),
+      invoiced: isInvoiced(data),
       lastModified: data.lastModified || entry.lastModified || ''
     };
-    if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est || fresh.lost !== entry.lost) changed = true;
+    if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est || fresh.lost !== entry.lost ||
+        fresh.date !== entry.date || fresh.invoiced !== entry.invoiced) changed = true;
     return fresh;
   });
   if (changed) { saveJobIndex(idx); invalidateJobsCache(); }
@@ -1818,7 +1833,16 @@ function buildIndexEntry(id, data) {
     est: String(data.estimateNumber || '').trim(),
     // A lost bid: still listed under Bids, marked Lost (Jonah, 9 Oct 2026).
     lost: isBidStatus(data.jobStatus) && data.bidStage === 'lost',
-    invoiced: !!data.qbInvoiced, lastModified: data.lastModified };
+    // The job's own date (the form's Date, YYYY-MM-DD): My Jobs files it by
+    // this month. lastModified moves with every QuickBooks check the server
+    // makes, so jobs used to jump into this month on their own.
+    date: String(data.quoteDate || '').slice(0, 10),
+    invoiced: isInvoiced(data), lastModified: data.lastModified };
+}
+// Invoiced: the box ticked by hand, or an invoice made in QuickBooks
+// (qbInvoiceRef) -- the QB chip on All Jobs showed only the first.
+function isInvoiced(data) {
+  return !!(data && (data.qbInvoiced || (data.qbInvoiceRef && data.qbInvoiceRef.id)));
 }
 // "Smith #1042": the name with the job's number beside it, escaped for HTML.
 function jobNameHtml(name, est) {
@@ -2024,6 +2048,21 @@ function populateServiceFilter() {
 }
 let jobListBids = false;
 function showJobListBids(on) { jobListBids = !!on; renderJobList(); }
+// The day a job is filed under in My Jobs: its own date; a job with none
+// (very old ones) keeps the day this device first listed it, remembered
+// here, so it does not drift with every save as lastModified does.
+const JOB_SEEN_KEY = STORAGE_PREFIX + 'jobFirstSeen';
+let jobSeen = null;
+function jobListDay(j) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(j.date || '')) return j.date;
+  if (!jobSeen) { try { jobSeen = JSON.parse(localStorage.getItem(JOB_SEEN_KEY) || '{}') || {}; } catch (e) { jobSeen = {}; } }
+  if (!jobSeen[j.id]) {
+    const t = j.lastModified ? new Date(j.lastModified) : new Date();
+    jobSeen[j.id] = localYMD(isNaN(t) ? new Date() : t);
+    try { localStorage.setItem(JOB_SEEN_KEY, JSON.stringify(jobSeen)); } catch (e) {}
+  }
+  return jobSeen[j.id];
+}
 function renderJobList() {
   const body = document.getElementById('jobListBody');
   const fSvc = document.getElementById('filterService').value;
@@ -2038,8 +2077,15 @@ function renderJobList() {
   if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '') + ' ' + (j.est || '')).toLowerCase().includes(fSearch));
   if (!idx.length) { body.innerHTML = switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>'; return; }
 
+  // Filed by the job's own date, newest first within a month -- not by
+  // lastModified, which the server moves on every QuickBooks check.
   const groups = {};
-  idx.forEach(j => { const dt = j.lastModified ? new Date(j.lastModified) : new Date(); const key = MONTHS[dt.getMonth()] + ' ' + dt.getFullYear(); (groups[key] = groups[key] || []).push(j); });
+  idx.map(j => ({ j, day: jobListDay(j) })).sort((a, b) => b.day.localeCompare(a.day) || String(a.j.name || '').localeCompare(String(b.j.name || '')))
+    .forEach(({ j, day }) => {
+      const dt = new Date(day + 'T00:00:00');
+      const key = MONTHS[dt.getMonth()] + ' ' + dt.getFullYear();
+      (groups[key] = groups[key] || []).push(j);
+    });
   const keys = Object.keys(groups).sort((a, b) => { const [ma, ya] = a.split(' '), [mb, yb] = b.split(' '); return yb - ya || MONTHS.indexOf(mb) - MONTHS.indexOf(ma); });
   // 🌱 on a job with plants, and the care email it still owes (plantcare.js)
   // -- from the whole job, which the index does not carry.
@@ -2052,12 +2098,16 @@ function renderJobList() {
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
         '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
           (j.lost ? '<span class="pill lost">Lost</span>' : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
-        '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') + fmtMoney(j.price) + '</div></div>' +
-      '<div style="display:flex;gap:4px">' +
+        '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
+          // A bid with no price yet said "$0.00", which read as a free job.
+          (j.price ? fmtMoney(j.price) : '<span class="muted">no price yet</span>') + '</div></div>' +
+      '<div class="jl-acts">' +
       (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + j.id + '\')">BACK ON THE BOARD</button>' : '') +
       (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + j.id + '\')">MAKE IT A JOB</button>' : '') +
-      '<button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')">DUP</button>' +
-      '<button class="remove-btn" onclick="deleteJob(\'' + j.id + '\')">×</button></div></div>'
+      // "DUP" meant nothing to anyone; and Delete sat right against it.
+      '<button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')" title="Make a copy of this ' + (jobListBids ? 'bid' : 'job') + '">COPY</button>' +
+      '<button class="remove-btn jl-del" onclick="deleteJob(\'' + j.id + '\')" title="Delete this ' + (jobListBids ? 'bid' : 'job') +
+        '" aria-label="Delete ' + esc(j.name || 'this job') + '">🗑 Delete</button></div></div>'
     ).join('');
     return '<div class="month-group"><div class="month-head" onclick="toggleMonth(\'' + key + '\')">' +
       '<span class="month-arrow' + (shut ? ' shut' : '') + '">▼</span> ' + key + ' (' + groups[key].length + ')</div>' + (shut ? '' : rows) + '</div>';
@@ -2081,10 +2131,86 @@ function renderDashboardSoon() {
   clearTimeout(dashSearchTimer);
   dashSearchTimer = setTimeout(renderDashboard, 180);
 }
+// All Jobs: the filters added since the page was written (index.html keeps
+// the first five) are put in once, here: where a job is on its board --
+// Ready to invoice, money still owed, lost bids -- and which year.
+function ensureDashFilters() {
+  const st = document.getElementById('dashStatus');
+  if (st && !st.querySelector('option[value="toInvoice"]')) {
+    st.insertAdjacentHTML('beforeend', '<option value="toInvoice">Ready to invoice</option>' +
+      '<option value="owed">Owed money</option><option value="lost">Lost bids</option>');
+  }
+  if (!document.getElementById('dashYear') && st) {
+    const sel = document.createElement('select');
+    sel.id = 'dashYear';
+    sel.setAttribute('aria-label', 'Which year');
+    sel.onchange = renderDashboard;
+    st.insertAdjacentElement('afterend', sel);
+  }
+}
+// The year a job belongs to on All Jobs: a finished one, the year it was
+// finished (its date when that was never noted); one booked or under way is
+// this year's work whatever year it was quoted; a bid, the year of its date.
+function dashYearOf(d, status) {
+  const now = new Date().getFullYear();
+  if (status === 'booked' || status === 'inprogress') return now;
+  const when = (status === 'complete' && d.completedAt) || d.quoteDate || d.lastModified || '';
+  const y = parseInt(String(when).slice(0, 4), 10);
+  return y > 1990 ? y : now;
+}
+// The year list: this year (the default), every year a job is in, and all.
+function fillDashYears(years) {
+  const sel = document.getElementById('dashYear');
+  if (!sel) return '';
+  const now = new Date().getFullYear();
+  const prev = sel.dataset.filled ? sel.value : String(now);
+  const list = Array.from(new Set([now].concat(years))).sort((a, b) => b - a);
+  sel.innerHTML = list.map(y => '<option value="' + y + '">' + (y === now ? 'This year (' + y + ')' : y) + '</option>').join('') +
+    '<option value="all">Every year</option>';
+  sel.value = list.indexOf(+prev) !== -1 || prev === 'all' ? prev : String(now);
+  sel.dataset.filled = '1';
+  return sel.value;
+}
+// Where the job is on its board, in the board's words -- shown beside the
+// status, and left out where it only repeats it (Booked is Scheduled).
+function dashStage(d, status) {
+  if (isBidStatus(d.jobStatus) && d.bidStage === 'lost') return { id: 'lost', name: 'Lost' };
+  const st = window.YDBoards && YDBoards.stageOf ? YDBoards.stageOf(d) : null;
+  if (st) return st;
+  // Paid a while ago: off the Jobs board, but still paid.
+  if (status === 'complete' && window.YDSync && YDSync.finishedStage && window.YDBoards && YDBoards.jobColumnName) {
+    const id = YDSync.finishedStage(d);
+    return { id: id, name: YDBoards.jobColumnName(id) };
+  }
+  return null;
+}
+const DASH_SAME_AS_STATUS = { scheduled: 1, inProgress: 1, won: 1 };
+// What the job makes. Real costs (materials bought, labour clocked or
+// entered) once there are any; until then what the estimate planned -- the
+// price less what its materials, delivery, fuel and crew-days cost
+// (pricing.js profit) -- marked as planned. With neither: unknown, never the
+// whole price shown as profit.
+function dashPlannedNet(d, price) {
+  const e = d.estimate;
+  if (!price || !e || !((e.work || []).length || (e.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return null;
+  try {
+    const r = YDEstimate.priceSaved(e, d.city || '');
+    if (!r || !r.profit || !r.profit.complete) return null;
+    return round2(price - r.profit.costCents / 100);
+  } catch (err) { return null; }
+}
+// Money still owed on the job's QuickBooks invoice; null with no invoice.
+function dashOwed(d) {
+  const r = d.qbInvoiceRef;
+  if (!r || !r.id || r.balance == null || r.balance === '') return null;
+  const n = Number(r.balance);
+  return isFinite(n) ? n : null;
+}
 function renderDashboard() {
   // The job-by-job Estimate vs actual below the table (jobcosts.js) has its
   // own filters; it redraws whenever this does, once things settle.
   if (window.YDJobCosts) window.YDJobCosts.listChanged();
+  ensureDashFilters();
   const svcSel = document.getElementById('dashFilter');
   const jobsAll = loadAllJobs();
   // Rebuild the service filter every render so newly-added service types appear (keep current pick)
@@ -2099,22 +2225,47 @@ function renderDashboard() {
     const hrs = lab.hours;
     const matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
     const price = parseMoney(d.jobPrice || '');
-    const net = round2(price - (lab.cost + matCost));
-    return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status: normStatus(d.jobStatus, d), price, hrs, matCost, net, invoiced: !!d.qbInvoiced,
+    const status = normStatus(d.jobStatus, d);
+    const real = lab.cost + matCost > 0;
+    const net = real ? round2(price - (lab.cost + matCost)) : dashPlannedNet(d, price);
+    const stage = dashStage(d, status);
+    return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, hrs, matCost, net, planned: !real && net != null,
+      invoiced: isInvoiced(d), owed: dashOwed(d), stage, lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', year: dashYearOf(d, status),
       plantBits: window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '' };
   });
+  const fYear = fillDashYears(Array.from(new Set(rows.map(r => r.year))));
+  if (fYear && fYear !== 'all') rows = rows.filter(r => String(r.year) === fYear);
   if (fSvc) rows = rows.filter(r => r.services.includes(fSvc));
-  // Bids show only when Bids is picked: the totals are for work actually booked.
-  rows = rows.filter(r => fStatus ? r.status === fStatus : r.status !== 'quoting');
+  // Bids show only when Bids (or Lost bids) is picked: the totals are for
+  // work actually booked.
+  rows = rows.filter(r => fStatus === 'lost' ? r.lost
+    : fStatus === 'toInvoice' ? !!r.stage && r.stage.id === 'toInvoice'
+    : fStatus === 'owed' ? r.owed > 0
+    : fStatus ? r.status === fStatus : r.status !== 'quoting');
   if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services + ' ' + r.est).toLowerCase().includes(fSearch));
-  rows.sort((a, b) => { let va = a[dashSort.col], vb = b[dashSort.col]; if (typeof va === 'string') { va = va.toLowerCase(); vb = (vb || '').toLowerCase(); } if (va < vb) return dashSort.asc ? -1 : 1; if (va > vb) return dashSort.asc ? 1 : -1; return 0; });
+  // Unknown figures (no profit worked out, no invoice) sort below every
+  // known one, whichever way round.
+  const sortVal = (r, c) => c === 'owed' ? (r.owed == null ? null : r.owed) : r[c];
+  rows.sort((a, b) => {
+    let va = sortVal(a, dashSort.col), vb = sortVal(b, dashSort.col);
+    if (va == null || vb == null) return (va == null) - (vb == null);
+    if (typeof va === 'string') { va = va.toLowerCase(); vb = String(vb || '').toLowerCase(); }
+    if (va < vb) return dashSort.asc ? -1 : 1; if (va > vb) return dashSort.asc ? 1 : -1; return 0;
+  });
 
   document.getElementById('dashCount').textContent = rows.length + ' job' + (rows.length !== 1 ? 's' : '');
-  const totPrice = rows.reduce((s, r) => s + r.price, 0), totNet = rows.reduce((s, r) => s + r.net, 0), totHrs = rows.reduce((s, r) => s + r.hrs, 0);
+  const known = rows.filter(r => r.net != null);
+  const totPrice = rows.reduce((s, r) => s + r.price, 0), totNet = known.reduce((s, r) => s + r.net, 0), totHrs = rows.reduce((s, r) => s + r.hrs, 0);
+  const totOwed = rows.reduce((s, r) => s + (r.owed > 0 ? r.owed : 0), 0);
+  const plannedN = known.filter(r => r.planned).length, unknownN = rows.length - known.length;
   document.getElementById('dashTotals').innerHTML = [
     { l: 'Jobs', v: rows.length, cls: '' }, { l: 'Total Booked', v: fmtMoney(totPrice), cls: 'accent-top' },
-    { l: 'Est. Net Profit', v: fmtMoney(totNet), cls: 'pos-top' }, { l: 'Total Labor', v: fmtHrsMin(totHrs), cls: '' },
-  ].map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.l + '</div><div class="summary-value">' + c.v + '</div></div>').join('');
+    { l: 'Est. Net Profit', v: fmtMoney(totNet), cls: 'pos-top',
+      sub: [plannedN ? plannedN + ' planned, not yet costed' : '', unknownN ? unknownN + ' not known' : ''].filter(Boolean).join(' · ') },
+    { l: 'Total Labor', v: fmtHrsMin(totHrs), cls: '' },
+  ].concat(totOwed > 0 ? [{ l: 'Owed to you', v: fmtMoney(totOwed), cls: 'neg-top' }] : [])
+    .map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.l + '</div><div class="summary-value">' + c.v + '</div>' +
+      (c.sub ? '<div class="dash-sub">' + esc(c.sub) + '</div>' : '') + '</div>').join('');
 
   const w = document.getElementById('dashTableWrap');
   // Finished jobs with plants still owing their care email, whatever the
@@ -2124,21 +2275,43 @@ function renderDashboard() {
   const arrow = c => dashSort.col === c ? (dashSort.asc ? ' ▲' : ' ▼') : '';
   // Old jobs' clocked labour waiting on shifts from before last year.
   const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
-  let h = careNote + (older || '') + '<table><thead><tr>' +
+  const stageHtml = r => r.stage && !DASH_SAME_AS_STATUS[r.stage.id] ? '<span class="dash-stage">' + esc(r.stage.name) + '</span>' : '';
+  const statusHtml = r => (r.lost ? '<span class="pill lost">Lost</span>' : statusPill(r.status) + stageHtml(r)) +
+    (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + r.plantBits;
+  const netHtml = r => r.net == null ? '<span class="muted" title="No costs recorded and no costed estimate yet">—</span>'
+    : '<span style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '"' +
+      (r.planned ? ' class="dash-planned" title="Planned, from the estimate — no real costs recorded yet"' : '') + '>' +
+      (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + (r.planned ? '<small> plan</small>' : '') + '</span>';
+  const owedHtml = r => r.owed == null ? '<span class="muted">—</span>'
+    : r.owed > 0 ? '<span class="dash-owed">' + fmtMoney(r.owed) + '</span>' : '<span class="muted">Paid</span>';
+  let h = careNote + (older || '') + '<table class="dash-table"><thead><tr>' +
     '<th style="cursor:pointer" onclick="sortDash(\'name\')">Customer' + arrow('name') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'city\')">Location' + arrow('city') + '</th>' +
     '<th>Services</th><th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'price\')">Price' + arrow('price') + '</th>' +
-    '<th style="cursor:pointer" onclick="sortDash(\'net\')">Est. Net' + arrow('net') + '</th></tr></thead><tbody>';
+    '<th style="cursor:pointer" onclick="sortDash(\'owed\')" title="Still owed on the QuickBooks invoice">Owed' + arrow('owed') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'net\')" title="Real costs once there are any; until then what the estimate planned">Est. Net' + arrow('net') + '</th></tr></thead><tbody>';
+  // The same jobs as cards, for a phone (styles.css shows one or the other
+  // at 720px): the seven-column table was wider than the screen.
+  let cardsHtml = '<div class="dash-cards">';
   rows.forEach(r => {
     h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
       '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
-      '<td>' + statusPill(r.status) + (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + r.plantBits + '</td>' +
-      '<td class="bold">' + fmtMoney(r.price) + '</td>' +
-      '<td class="bold" style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '">' + (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + '</td></tr>';
+      '<td>' + statusHtml(r) + '</td>' +
+      '<td class="bold">' + (r.price ? fmtMoney(r.price) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="bold">' + owedHtml(r) + '</td>' +
+      '<td class="bold">' + netHtml(r) + '</td></tr>';
+    cardsHtml += '<button type="button" class="dash-card" onclick="loadJob(\'' + r.id + '\')">' +
+      '<span class="dash-card-top"><span class="dash-card-name">' + jobNameHtml(r.name, r.est) + '</span>' +
+        '<span class="dash-card-price">' + (r.price ? fmtMoney(r.price) : '<span class="muted">no price yet</span>') + '</span></span>' +
+      '<span class="dash-card-status">' + statusHtml(r) + '</span>' +
+      ((r.city || r.services) ? '<span class="dash-card-sub">' + esc([r.city, r.services].filter(Boolean).join(' · ')) + '</span>' : '') +
+      '<span class="dash-card-nums"><span>Net ' + netHtml(r) + '</span>' +
+        (r.owed != null ? '<span>Owed ' + owedHtml(r) + '</span>' : '') + '</span>' +
+    '</button>';
   });
   h += '</tbody></table>';
-  w.innerHTML = h;
+  w.innerHTML = h + cardsHtml + '</div>';
 }
 
 // ═══════════════════════════════════════════════════════════

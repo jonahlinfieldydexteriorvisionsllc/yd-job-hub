@@ -99,6 +99,18 @@
       const list = bookedOrderItems(id, data);
       if (list) patch = Object.assign({}, patch, { orderItems: list });
     }
+    // Where a finished job stands with its invoice (finishedStage): finished
+    // from somewhere that did not say (anything but a move on the Jobs board,
+    // which picks the column itself), or its QuickBooks invoice changed --
+    // made, or paid off. Done here, on the patch, because the server writes
+    // the same stage (quickbooks.py) and this device's copy, pushed whole a
+    // moment later, would otherwise put the old one back.
+    const after = Object.assign({}, data, patch);
+    if (statusOf(after) === 'complete' && !('workStage' in patch) &&
+        ('qbInvoiceRef' in patch || (patch.jobStatus === 'complete' && statusOf(data) !== 'complete'))) {
+      const stage = finishedStage(after);
+      if (stage !== after.workStage) patch = Object.assign({}, patch, { workStage: stage, workStageAt: new Date().toISOString() });
+    }
     // When a job was finished, and whether it has plants (plantcare.js): on
     // the patch, so a form open with typing in it carries them too.
     if (window.YDPlants) patch = Object.assign({}, patch, window.YDPlants.patchExtras(data, patch));
@@ -147,8 +159,57 @@
   //
   // Accepted then made into an invoice before anyone looked ('Closed', or
   // 'Converted') still counts, when QuickBooks has an accepted date for it.
-  const qbAccepted = q => q.status === 'Accepted' ||
-    ((q.status === 'Closed' || q.status === 'Converted') && !!q.acceptedDate);
+  // The one reading of it: the Bids board and Home ask here (YDSync.qbAccepted),
+  // functions/digest.py qb_accepted reads a job's record the same way.
+  function qbAccepted(q) {
+    q = q || {};
+    return q.status === 'Accepted' ||
+      ((q.status === 'Closed' || q.status === 'Converted') && !!q.acceptedDate);
+  }
+  // The customer turned the estimate down in QuickBooks. Not lost by itself
+  // -- Jonah may still talk them round -- but never chased (boards.js
+  // toChase, digest.py _bids, followup.py).
+  const qbTurnedDown = q => !!q && q.status === 'Rejected';
+
+  // ------------------------------------------- a finished job and its invoice
+  //
+  // A finished job is Ready to invoice, Invoiced or Paid (the Jobs board's
+  // last three columns). Ten fields used to say where a job was and they
+  // disagreed: the form set Complete and left the card wherever it was, the
+  // invoice was made in QuickBooks and the card still said Ready to invoice.
+  // Now one rule, here, read by the form (app.js onStatusChange), the board
+  // (boards.js workColumn) and this file's patchJob; the server's twin is
+  // quickbooks.py _finished_stage. The stage only ever moves forward on its
+  // own -- a job Jonah marked Paid by hand (cash) stays Paid.
+  const END_STAGES = { toInvoice: 0, invoiced: 1, paid: 2 };
+  const statusOf = d => (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting'));
+  function invoiceStage(d) {
+    const r = d.qbInvoiceRef;
+    if (r && r.id) {
+      const bal = r.balance == null || r.balance === '' ? NaN : Number(r.balance);
+      return isFinite(bal) && bal <= 0 ? 'paid' : 'invoiced';
+    }
+    return d.qbInvoiced ? 'invoiced' : 'toInvoice';
+  }
+  function finishedStage(d) {
+    const by = invoiceStage(d || {}), had = (d || {}).workStage;
+    return END_STAGES[had] != null && END_STAGES[had] > END_STAGES[by] ? had : by;
+  }
+  // The server moved a finished job on (quickbooks.py: invoice made, or paid
+  // off) while this device holds a newer copy, or has the job open with
+  // typing in it. Its stage is carried in only when this copy is finished
+  // too and not already as far along -- this device moving a job back to In
+  // progress, or marking it Paid by hand, is not undone.
+  function takeServerStage(local, theirs) {
+    const s = theirs.workStage, l = local.workStage;
+    if (END_STAGES[s] == null || !(theirs.qbInvoiceRef && theirs.qbInvoiceRef.id)) return false;
+    if (statusOf(local) !== 'complete') return false;
+    if (END_STAGES[l] != null && END_STAGES[s] <= END_STAGES[l]) return false;
+    local.workStage = s;
+    local.workStageAt = theirs.workStageAt || new Date().toISOString();
+    return true;
+  }
+
   const booking = new Set();
   function bookIfAccepted(id, d) {
     if (!d || booking.has(id) || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
@@ -486,10 +547,15 @@
         // What the server wrote into it meanwhile is carried into ours first,
         // or the push would put the old values back.
         if (mine && theirs && mine > theirs) {
-          if (takeServerFields(local, c.data || {})) {
+          const tookFields = takeServerFields(local, c.data || {});
+          const tookStage = takeServerStage(local, c.data || {});
+          if (tookFields || tookStage) {
             try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(local)); } catch (e) {}
             map[c.id] = buildIndexEntry(c.id, local);
-            if (c.id === currentJobId) SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
+            if (c.id === currentJobId) {
+              SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
+              if (tookStage) { boardFields.workStage = local.workStage; boardFields.workStageAt = local.workStageAt; }
+            }
             bookIfAccepted(c.id, local);
           }
           // The other device's save rewrote the crew's board entry; ours goes
@@ -515,7 +581,15 @@
           // What only the server writes -- QuickBooks' answers, the care
           // email -- goes into the open form even when it has unsaved edits,
           // or the next save would put the old values back.
-          if (dirty) SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
+          if (dirty) {
+            SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
+            // And the stage the server moved it to with its invoice, or the
+            // form's next save would put the card back in Ready to invoice.
+            const form = { workStage: boardFields.workStage, jobStatus: jobStatus };
+            if (takeServerStage(form, c.data || {})) {
+              boardFields.workStage = form.workStage; boardFields.workStageAt = form.workStageAt;
+            }
+          }
         }
       });
 
@@ -730,6 +804,11 @@
     status: () => ({ watching, cloudState, applyingRemote }),
     patchJob: patchJob,
     sendNow: sendNow,
+    // The job lifecycle's shared readings (see above): boards.js, home.js and
+    // app.js ask these rather than each working it out again.
+    qbAccepted: qbAccepted,
+    qbTurnedDown: qbTurnedDown,
+    finishedStage: finishedStage,
     // Whether the server's job list has arrived on this device, and whether a
     // job is in it (crewjobs.js: a crew copy is only taken down for a job the
     // server no longer has -- never on a device still filling its list).

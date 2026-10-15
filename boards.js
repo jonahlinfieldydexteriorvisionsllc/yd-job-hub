@@ -70,9 +70,18 @@
   // that differ only by red/green.
   const PALETTE = ['#2f6fd6', '#1a9c8c', '#2f8f5b', '#8bb22a', '#e0a526',
                    '#e07b24', '#d64545', '#d94f8a', '#8e5bc7', '#66418f', '#6b7a8f'];
+  // Each colour's name, said by a screen reader and shown on hover: a row of
+  // unnamed dots tells nobody which is which.
+  const COLOR_NAMES = { '#2f6fd6': 'Blue', '#1a9c8c': 'Teal', '#2f8f5b': 'Green', '#8bb22a': 'Lime',
+    '#e0a526': 'Yellow', '#e07b24': 'Orange', '#d64545': 'Red', '#d94f8a': 'Pink', '#8e5bc7': 'Purple',
+    '#66418f': 'Plum', '#6b7a8f': 'Grey' };
+  const colorName = c => COLOR_NAMES[String(c || '').toLowerCase()] || 'Colour';
 
+  // The labels a new board starts with. No "Urgent" label any more: how
+  // urgent a card is has its own picker (urgency), which sorts, filters and
+  // pings -- a label of the same name did none of that and only confused.
+  // Boards that already have it keep it.
   const DEFAULT_LABELS = [
-    { id: 'urgent', name: 'Urgent', color: '#d64545' },
     { id: 'waiting', name: 'Waiting', color: '#e0a526' },
     { id: 'materials', name: 'Materials', color: '#e07b24' },
     { id: 'equipment', name: 'Equipment', color: '#2f6fd6' },
@@ -223,7 +232,10 @@
     if (st === 'booked') return 'scheduled';
     if (st === 'inprogress') return stage === 'punchList' ? 'punchList' : 'inProgress';
     if (st === 'complete') {
+      // A finished job with no end stage of its own yet (finished before the
+      // form set one): where its invoice says it is (sync.js finishedStage).
       const col = COMPLETE_STAGES.indexOf(stage) !== -1 ? stage
+        : window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
         : (j.qbInvoiced ? 'invoiced' : 'toInvoice');
       if (col === 'paid' && (daysSince(j.workStageAt) || 0) > SHOW_PAID_DAYS) return null;
       return col;
@@ -376,19 +388,33 @@
   // ------------------------------------------------------------- follow up
   //
   // Bids waiting on an answer long enough to chase, oldest first, at the top
-  // of the Bids board. Same rule as the summaries (digest.py CHASE_AFTER_DAYS):
-  // Sent for 5 days, or moved to Follow up. "Write the email" has Claude draft
-  // a follow-up from the job into Gmail Drafts -- never sent -- and the draft
-  // is noted on the job (followUps) so the list says when the last one was.
+  // of the Bids board. THE CHASE RULE -- the same in the summaries
+  // (functions/digest.py CHASE_AFTER_DAYS / WRITE_AFTER_DAYS / _bids), so the
+  // board, Home and the morning email never disagree:
+  //   - chase: in "Sent — waiting" 5 days or more, or moved to Follow up (at once);
+  //   - write: in "Bid to send" 2 days or more is a bid still to write (its
+  //     age chip turns red here; the summaries list it under "Bids to write");
+  //   - never: a bid the customer accepted or turned down in QuickBooks --
+  //     the first is booked, the second is asked "mark lost?" on its card.
+  // "Write the email" has Claude draft a follow-up from the job into Gmail
+  // Drafts -- never sent -- and the draft is noted on the job (followUps) so
+  // the list says when the last one was.
   const CHASE_AFTER_DAYS = { sent: 5, followUp: 0 };
+  const WRITE_AFTER_DAYS = 2;
   const drafting = {};      // job id -> true while its email is being written
 
+  // How long a bid has sat in its column, in whole days.
+  const bidDays = j => daysSince(j.bidStageAt || j.lastModified) || 0;
   function toChase() {
-    return jobsList().map(j => {
-      const col = bidColumn(j);
-      const days = daysSince(j.bidStageAt || j.lastModified);
-      return { j, col, days: days || 0 };
-    }).filter(b => b.col in CHASE_AFTER_DAYS && b.days >= CHASE_AFTER_DAYS[b.col])
+    return jobsList().map(j => ({ j, col: bidColumn(j), days: bidDays(j) }))
+      .filter(b => b.col in CHASE_AFTER_DAYS && b.days >= CHASE_AFTER_DAYS[b.col] &&
+        !acceptedToBook(b.j) && !turnedDown(b.j))
+      .sort((a, b) => b.days - a.days);
+  }
+  // Bids sat in "Bid to send" long enough that writing them is late.
+  const lateToWrite = j => bidColumn(j) === 'toSend' && bidDays(j) >= WRITE_AFTER_DAYS && !turnedDown(j);
+  function toWrite() {
+    return jobsList().filter(lateToWrite).map(j => ({ j, col: 'toSend', days: bidDays(j) }))
       .sort((a, b) => b.days - a.days);
   }
 
@@ -399,9 +425,13 @@
     if (!movesJobs()) return '';
     const list = toChase();
     if (!list.length) return '';
+    // Not called "Follow up": that is also a column's name, and a bid listed
+    // here while sitting in "Sent — waiting" looked like the column and the
+    // list disagreed. Each row says which column the bid is in.
     return '<div class="bd-chase">' +
-      '<div class="bd-chase-head">📨 Follow up <span class="bd-count">' + list.length + '</span>' +
-        '<span class="bd-chase-sub">Bids waiting on an answer, oldest first. The email is saved in Gmail Drafts for you to read and send.</span></div>' +
+      '<div class="bd-chase-head">📨 Time to chase <span class="bd-count">' + list.length + '</span>' +
+        '<span class="bd-chase-sub">Sent ' + CHASE_AFTER_DAYS.sent + ' or more days ago with no answer, or moved to Follow up — oldest first. ' +
+        'The email is saved in Gmail Drafts for you to read and send.</span></div>' +
       list.map(({ j, col, days }) => {
         const price = parseMoney(j.jobPrice);
         const ups = (Array.isArray(j.followUps) ? j.followUps : []).filter(f => f && f.at);
@@ -414,8 +444,9 @@
             '<div class="bd-chase-name">' + esc((j.customerName || 'Untitled job').trim()) +
               (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') +
               (price ? ' · <span class="bd-money">' + fmtMoney(price) + '</span>' : '') + '</div>' +
-            '<div class="bd-chase-line">' + (col === 'followUp' ? 'In Follow up' : 'Sent') + ' ' + agoText(days) +
-              (j.bidStageAt ? ' (' + shortDay(localDay(new Date(j.bidStageAt))) + ')' : '') +
+            '<div class="bd-chase-line">' + (col === 'followUp' ? 'In Follow up since ' : 'In Sent — waiting since ') +
+              (days === 0 ? 'today' : days === 1 ? 'yesterday' : (j.bidStageAt ? shortDay(localDay(new Date(j.bidStageAt))) : agoText(days)) +
+                ' (' + days + ' days)') +
               (last ? ' · follow-up drafted ' + agoText(lastDays || 0) +
                 (ups.length > 1 ? ' (' + ups.length + ' so far)' : '') : '') + '</div>' +
           '</div>' +
@@ -496,6 +527,31 @@
   // can see, grouped by board (WISHLIST #1).
   const URGENCY = [['urgent', '🔴 Urgent', 'today'], ['high', '🟠 High', 'this week'],
                    ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
+  // On the card itself urgency is said in words as well as the coloured
+  // stripe -- a stripe alone means nothing to someone who never opened the
+  // picker, or cannot tell red from orange. Normal says nothing.
+  const URGENCY_CHIP = { urgent: '🔴 Today', high: '🟠 This week', low: '⚪ Whenever' };
+  function urgChipHtml(k) {
+    const w = URGENCY_CHIP[k.urgency];
+    return w ? '<span class="bd-urg urg-' + k.urgency + '" title="How urgent">' + w + '</span>' : '';
+  }
+  // Who finished a card, and when: written by whoever may change the card
+  // (doneBy / doneByName, moveCard); a crew member's move is allowed to
+  // write only who moved it (firestore.rules), so theirs falls back to that.
+  function doneWho(k) {
+    const named = k.doneByName && k.doneByAt === k.doneAt ? k.doneByName : '';
+    const who = k.doneAt ? (named || k.updatedBy || '') : '';
+    // equipment.js signs the moves it makes itself 'Equipment'.
+    return who === 'Equipment' ? 'the Equipment tab' : who;
+  }
+  function doneLine(k) {
+    const who = doneWho(k);
+    const t = k.doneAt ? new Date(k.doneAt) : null;
+    if (!t || isNaN(t)) return who ? 'Done by ' + who : '';
+    const when = localDay(t) === localDay() ? t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return (who ? 'Done by ' + who + ' · ' : 'Done · ') + when;
+  }
   // A card's due time and reminder (Jonah, 9 Oct 2026: "make cards and set a
   // date on them and then they go on my calendar" -- with a time, at that
   // hour). The same choices as a calendar entry's reminder: remind.js.
@@ -601,8 +657,14 @@
     if (!board || board.virtual || !runsBoard(board)) return;
     const gone = doneToClear(board);
     if (!gone.length) { showToast('Nothing finished to delete'); return; }
-    if (!confirm('Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' +
-                 board.name + '" for good? This cannot be undone.')) return;
+    // Most of them are usually off the board already (finished before
+    // today), so the question says how many of each -- "delete all 40" next
+    // to "Nothing finished today" read as deleting things never seen.
+    const today = gone.filter(onBoardWhenDone).length, before = gone.length - today;
+    if (!confirm('Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' + board.name + '" for good?\n\n' +
+                 (today ? today + ' finished today' + (before ? ', ' : '.') : '') +
+                 (before ? before + ' finished before today' + (showOldDone[board.id] ? '.' : ' (not shown on the board — "Show the finished earlier" lists them).') : '') +
+                 '\n\nThis cannot be undone.')) return;
     deleteCards(board, gone.map(k => k.id));
     showToast(gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' deleted');
   };
@@ -648,11 +710,24 @@
     showToast('Card deleted');
   };
 
+  // Done cards finished before today, shown again on asking ("Show the N
+  // finished earlier"), per board, until the app is reloaded.
+  const showOldDone = {};
+  window.toggleOldDone = function (boardId) { showOldDone[boardId] = !showOldDone[boardId]; render(); };
+
   function columnsHtml(board) {
     if (board.virtual) {
       const grouped = jobCards(board);
-      return board.columns.map(c => column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)),
-        c.id === 'lost' ? { empty: 'Drop a lost bid here. It leaves the board, stays under Bids in My Jobs, and goes on Contacts for next season.' } : null)).join('');
+      return board.columns.map(c => {
+        // What the column is worth (Jonah sees the money on these two boards).
+        const sum = grouped[c.id].reduce((s, j) => s + (parseMoney(j.jobPrice) || 0), 0);
+        const owed = board.id === 'jobs' && c.id === 'invoiced'
+          ? grouped[c.id].reduce((s, j) => s + Math.max(0, owedOf(j) || 0), 0) : 0;
+        return column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)), {
+          empty: c.id === 'lost' ? 'Drop a lost bid here. It leaves the board, stays under Bids in My Jobs, and goes on Contacts for next season.' : '',
+          total: sum ? fmtMoney(sum) + (owed ? ' · ' + fmtMoney(owed) + ' owed' : '') : '',
+        });
+      }).join('');
     }
     const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
     const doneId = doneColOf(board);
@@ -660,24 +735,53 @@
       const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
       if (c.id !== doneId) return column(board, c, inCol.map(k => storedCardHtml(board, k, false)));
       const recent = inCol.filter(onBoardWhenDone);
+      const earlier = inCol.filter(k => !onBoardWhenDone(k));
+      const showing = showOldDone[board.id] && earlier.length;
+      const listed = showing ? recent.concat(earlier) : recent;
       const clear = runsBoard(board) ? inCol.filter(k => clearable(board, k)).length : 0;
-      return column(board, c, recent.map(k => storedCardHtml(board, k, true)), {
-        count: recent.length,
-        empty: inCol.length ? 'Nothing finished today' : '',
-        foot: clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + board.id + '\')">🗑 Delete all ' +
-          clear + ' done</button>' : '',
+      return column(board, c, listed.map(k => storedCardHtml(board, k, true)), {
+        count: listed.length,
+        empty: earlier.length ? 'Nothing finished today' : '',
+        foot: (earlier.length ? '<button class="bd-add-card bd-old-done" onclick="toggleOldDone(\'' + board.id + '\')">' +
+            (showing ? 'Hide the ' + earlier.length + ' finished earlier' : 'Show the ' + earlier.length + ' finished earlier') + '</button>' : '') +
+          (clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + board.id + '\')">🗑 Delete all ' +
+            clear + ' done' + (earlier.length && !showing ? ' (incl. ' + earlier.length + ' not shown)' : '') + '</button>' : ''),
       });
     }).join('');
   }
 
-  // `more` (Done on a stored board): the count when the list holds more than
-  // cards, the empty-column words, and a line under the cards.
+  // Phones stack the columns one above another (≤720px, as styles.css lays
+  // them out) rather than one column per screen width -- an empty first
+  // column filled the whole screen. Each folds; empty ones start folded.
+  const colOpen = {};       // 'board|col' -> true/false once tapped
+  const phoneWide = () => !!(window.matchMedia && window.matchMedia('(max-width: 720px)').matches);
+  window.bdToggleCol = function (boardId, colId) {
+    if (!phoneWide()) return;
+    const key = boardId + '|' + colId;
+    const head = document.querySelector('.bd-col[data-board="' + boardId + '"][data-col="' + colId + '"]');
+    colOpen[key] = head ? head.classList.contains('shut') : !colOpen[key];
+    render();
+  };
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(max-width: 720px)');
+    const again = () => redrawIfVisible();
+    if (mq.addEventListener) mq.addEventListener('change', again); else if (mq.addListener) mq.addListener(again);
+  }
+
+  // `more`: the count when the list holds more than cards (Done on a stored
+  // board), the empty-column words, a line under the cards, and the money
+  // in the column (Bids and Jobs).
   function column(board, c, cardHtml, more) {
     more = more || {};
-    return '<div class="bd-col" data-board="' + board.id + '" data-col="' + c.id + '" ' +
+    const n = more.count != null ? more.count : cardHtml.length;
+    const key = board.id + '|' + c.id;
+    const shut = phoneWide() && (key in colOpen ? !colOpen[key] : n === 0);
+    return '<div class="bd-col' + (shut ? ' shut' : '') + '" data-board="' + board.id + '" data-col="' + c.id + '" ' +
         'ondragover="bdDragOver(event)" ondragleave="bdDragLeave(event)" ondrop="bdDrop(event)">' +
-      '<div class="bd-col-head"><span>' + esc(c.name) + '</span>' +
-        '<span class="bd-count">' + (more.count != null ? more.count : cardHtml.length) + '</span></div>' +
+      '<div class="bd-col-head" onclick="bdToggleCol(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
+        '<span><span class="bd-fold" aria-hidden="true">' + (shut ? '▸' : '▾') + '</span>' + esc(c.name) + '</span>' +
+        '<span class="bd-count">' + n + '</span></div>' +
+      (more.total ? '<div class="bd-col-total" title="What the jobs in this column are worth">' + esc(more.total) + '</div>' : '') +
       '<div class="bd-col-body">' +
         (cardHtml.join('') || '<div class="bd-empty">' + (more.empty || 'Nothing here') + '</div>') +
         (more.foot || '') +
@@ -699,19 +803,67 @@
   // The customer said yes in QuickBooks (seen by the hourly check,
   // quickbooks.sweep) -- or said yes and it was already turned into an
   // invoice there -- and the bid is not booked yet.
+  // (The reading is sync.js qbAccepted, shared with Home and the summaries.)
   function acceptedToBook(j) {
-    const q = j.qbEstimate;
-    return !!q && (q.status === 'Accepted' || (/^(Closed|Converted)$/.test(q.status || '') && !!q.acceptedDate)) &&
+    return !!(window.YDSync && YDSync.qbAccepted && j.qbEstimate && YDSync.qbAccepted(j.qbEstimate)) &&
       bidColumn(j) !== 'won' && bidColumn(j) !== null;
+  }
+  // The customer turned the estimate down in QuickBooks (Rejected), and the
+  // bid is still open here: its card asks "mark lost?", and it is never
+  // chased (toChase, digest.py _bids, followup.py refuse it too).
+  function turnedDown(j) {
+    const c = bidColumn(j);
+    return !!(window.YDSync && YDSync.qbTurnedDown && YDSync.qbTurnedDown(j.qbEstimate)) && c !== null && c !== 'won';
+  }
+  window.bdMarkLost = function (jobId) {
+    if (!movesJobs()) return;
+    moveJob(jobId, 'bids', 'lost');
+  };
+  // A one-tap move from a button on a job's card.
+  window.bdMoveJob = function (jobId, boardId, col) {
+    if (!movesJobs() || (boardId !== 'bids' && boardId !== 'jobs')) return;
+    moveJob(jobId, boardId, col);
+  };
+  // How long a card has sat in its column, said in words, with what it means
+  // on hover ("6d" alone puzzled people).
+  function ageHtml(board, j, col, days, late) {
+    if (days == null) return '';
+    const colName = (board.columns.find(c => c.id === col) || {}).name || 'this column';
+    const words = days === 0 ? 'today' : days === 1 ? '1 day' : days + ' days';
+    const cold = board.id === 'bids' && late && ['sent', 'followUp'].indexOf(col) !== -1;
+    return '<span class="bd-age' + (late ? ' late' : '') + '" title="' +
+      esc((days === 0 ? 'Moved to ' + colName + ' today' : 'In ' + colName + ' for ' + words) +
+        (cold ? ' — no answer in a fortnight, going cold' : late ? ' — late to write' : '')) + '">' +
+      (cold ? '🥶 cold · ' : '') + '🕑 ' + words + '</span>';
+  }
+  // What a finished job's invoice says, from QuickBooks (qbInvoiceRef).
+  function owedOf(j) {
+    const r = j.qbInvoiceRef;
+    if (!r || !r.id || r.balance == null || r.balance === '') return null;
+    const n = Number(r.balance);
+    return isFinite(n) ? n : null;
   }
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     const days = daysSince(since);
+    const col = board.id === 'bids' ? bidColumn(j) : workColumn(j);
     const price = parseMoney(j.jobPrice);
+    const name = String(j.customerName || '').trim();
+    // The address under the name -- but not the name again: a job with no
+    // street, whose "address" was the customer's name, showed it twice.
     const where = [j.address, j.city].filter(Boolean).join(', ');
+    const showWhere = where && where.trim().toLowerCase() !== name.toLowerCase() &&
+      String(j.address || '').trim().toLowerCase() !== name.toLowerCase();
     const services = (j.serviceTypes || []).join(', ');
-    // A bid nobody has touched in a fortnight is the one about to be lost.
-    const stale = board.id === 'bids' && ['sent', 'followUp'].indexOf(bidColumn(j)) !== -1 && days >= 14;
+    // A bid nobody has touched in a fortnight is the one about to be lost;
+    // one sat in "Bid to send" two days is late to write (the chase rule).
+    // (Not one the customer has already answered no to in QuickBooks.)
+    const late = board.id === 'bids' && !turnedDown(j) &&
+      ((['sent', 'followUp'].indexOf(col) !== -1 && days >= 14) || lateToWrite(j));
+    const owed = board.id === 'jobs' && col === 'invoiced' ? owedOf(j) : null;
+    const inv = j.qbInvoiceRef && j.qbInvoiceRef.id ? j.qbInvoiceRef : null;
+    const paidUp = owedOf(j) !== null && owedOf(j) <= 0;
+    const stop = 'event.stopPropagation(); ';
     return '<div class="bd-card' + coverClass(j.cardColor) + '" draggable="true" data-board="' + board.id + '" data-card="' + j._id + '" ' +
         coverStyle(j.cardColor) +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
@@ -720,7 +872,7 @@
         (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') +
         // 🌱 a job with plants (plantcare.js)
         (window.YDPlants ? YDPlants.badge(j) : '') + '</div>' +
-      (where ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
+      (showWhere ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
       // Finished, with plants, and the care email not done yet.
       (window.YDPlants && YDPlants.owed(j) ? '<div class="bd-card-line bd-care">🌱 Care email owed</div>' : '') +
@@ -728,10 +880,27 @@
       (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
       (board.id === 'bids' && acceptedToBook(j)
         ? '<div class="bd-card-line bd-draft">✅ Accepted in QuickBooks — book it</div>' : '') +
+      (board.id === 'bids' && turnedDown(j)
+        ? '<div class="bd-card-line bd-said-no">✖ Turned down in QuickBooks — mark lost?' +
+          (movesJobs() ? ' <button type="button" class="bd-card-act" draggable="false" onclick="' + stop +
+            'bdMarkLost(\'' + safeId(j._id) + '\')">Mark lost</button>' : '') + '</div>' : '') +
+      // Ready to invoice: the invoice is made from the job's estimate on the
+      // Job tab -- or, made already (in QuickBooks, or before the stage was
+      // kept), the card belongs under Invoiced.
+      (board.id === 'jobs' && col === 'toInvoice' && movesJobs()
+        ? (inv ? '<div class="bd-card-line">🧾 Invoice' + (inv.docNumber ? ' #' + esc(inv.docNumber) : '') + ' is already in QuickBooks ' +
+              '<button type="button" class="bd-card-act" draggable="false" onclick="' + stop +
+              'bdMoveJob(\'' + safeId(j._id) + '\', \'jobs\', \'' + (paidUp ? 'paid' : 'invoiced') + '\')">' +
+              (paidUp ? 'Paid off — move to Paid' : 'Move to Invoiced') + '</button></div>'
+          : '<div class="bd-card-line"><button type="button" class="bd-card-act strong" draggable="false" onclick="' + stop +
+              'openJobFromBoard(\'' + safeId(j._id) + '\')">🧾 Make the invoice ›</button></div>') : '') +
+      (owed != null
+        ? '<div class="bd-card-line bd-owed' + (owed > 0 ? '' : ' paid') + '">' + (owed > 0
+            ? '🧾 ' + fmtMoney(owed) + ' still owed' + (inv && inv.docNumber ? ' on #' + esc(inv.docNumber) : '')
+            : '✓ Paid in full in QuickBooks') + '</div>' : '') +
       '<div class="bd-card-foot">' +
         (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>' : '') +
-        (days != null ? '<span class="bd-age' + (stale ? ' late' : '') + '">' +
-          (days === 0 ? 'today' : days + 'd') + '</span>' : '') +
+        ageHtml(board, j, col, days, late) +
       '</div>' +
     '</div>';
   }
@@ -751,6 +920,9 @@
     const done = list.filter(i => i.done).length;
     const today = localDay();
     const dueState = !k.due || inLastColumn ? '' : k.due < today ? ' late' : k.due === today ? ' today' : '';
+    // The due chip says it in words too: "Late", "Today" -- not only a colour.
+    const dueLabel = dueState === ' today' ? 'Today' + (k.dueTime ? ', ' + clockText(k.dueTime) : '')
+      : (dueState === ' late' ? 'Late · ' : '') + dueText(k);
     const urg = ['urgent', 'high', 'low'].indexOf(k.urgency) !== -1 ? ' urg-' + k.urgency : '';
     // A card's own colour, else its kind's (remind.js): crew tasks blue,
     // bid appointments green...
@@ -766,8 +938,10 @@
         esc(k.title || 'Untitled') + '</div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
+      (inLastColumn && doneLine(k) ? '<div class="bd-card-line bd-done-by">✓ ' + esc(doneLine(k)) + '</div>' : '') +
       '<div class="bd-card-foot">' +
-        (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueText(k) + (buzzes(board, k) && !inLastColumn ? ' 🔔' : '') + '</span>' : '') +
+        (inLastColumn ? '' : urgChipHtml(k)) +
+        (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueLabel + (buzzes(board, k) && !inLastColumn ? ' 🔔' : '') + '</span>' : '') +
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
@@ -812,9 +986,9 @@
   function colorPickHtml(name, current) {
     return '<div class="bd-swatches">' +
       '<label class="bd-swatch none" title="No colour"><input type="radio" name="' + name + '" value=""' +
-        (hasCover(current) ? '' : ' checked') + '><span></span></label>' +
-      PALETTE.map(c => '<label class="bd-swatch" style="--c:' + c + '"><input type="radio" name="' + name +
-        '" value="' + c + '"' + (current === c ? ' checked' : '') + '><span></span></label>').join('') +
+        ' aria-label="No colour"' + (hasCover(current) ? '' : ' checked') + '><span></span></label>' +
+      PALETTE.map(c => '<label class="bd-swatch" style="--c:' + c + '" title="' + colorName(c) + '"><input type="radio" name="' + name +
+        '" value="' + c + '" aria-label="' + colorName(c) + '"' + (current === c ? ' checked' : '') + '><span></span></label>').join('') +
     '</div>';
   }
   function pickedColor(name) {
@@ -884,6 +1058,21 @@
     return editsBoards() || !!(b && (b.visibleTo || []).indexOf(mine) !== -1);
   }
 
+  // Who finished a card (the card says "Done by <name> · 3:12 PM"): set
+  // when it reaches Done, cleared when it leaves. Only by someone allowed to
+  // change the card -- a crew member on a shared board may move a card but
+  // write nothing else (firestore.rules), and a refused write would lose the
+  // move itself. Their name is still the card's updatedBy (doneWho).
+  // `wasDone` / `nowDone`: in the done column before and after; `doneAt`:
+  // the finish time the same write gives the card. doneByAt ties the name to
+  // that finish -- a crew member who cannot clear the name may move the card
+  // out and back in, and a name left from the time before must not show.
+  function doneByPatch(board, k, wasDone, nowDone, doneAt) {
+    if (!editsBoard(board) || wasDone === nowDone) return {};
+    if (nowDone) return { doneBy: (me() || {}).uid || null, doneByName: myName() || null, doneByAt: doneAt || null };
+    return k.doneBy || k.doneByName ? { doneBy: null, doneByName: null, doneByAt: null } : {};
+  }
+
   function moveCard(boardId, cardId, col, beforeId) {
     if (boardId === 'bids' || boardId === 'jobs') { moveJob(cardId, boardId, col); return; }
     const set = cards[boardId] || {};
@@ -914,6 +1103,7 @@
     // Reaching the Done column is "done"; leaving it is "not done any more".
     const toDone = col === last && k.column !== last;
     patch.doneAt = col === last ? (k.doneAt || nowIso()) : null;
+    Object.assign(patch, doneByPatch(board, k, colOf(board, k) === last, col === last, patch.doneAt));
     Object.assign(k, patch);
     render();
     if (openCard && openCard.cardId === cardId) renderCardDetail();
@@ -1162,7 +1352,8 @@
         '<button class="bd-move-btn' + (c.id === here ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
         (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
-      (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
+      (here === doneColOf(board) && doneLine(k) ? '<div class="hint">' + esc(doneLine(k)) + '</div>'
+        : k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       (k.recurring && typeof recurringDetail === 'function'
         ? recurringDetail(k, here === doneColOf(board), board.id) : '') +
       claudeHtml(board, k) +
@@ -1640,6 +1831,7 @@
       updatedAt: nowIso(),
       updatedBy: myName(),
     };
+    Object.assign(rec, doneByPatch(board, was, !!openCard.cardId && colOf(board, was) === last, col === last, rec.doneAt));
     cards[board.id] = cards[board.id] || {};
     cards[board.id][id] = Object.assign({ id: id }, rec);
     openCard.cardId = id;
@@ -1696,8 +1888,8 @@
       '<div class="field"><span class="label">Name</span>' +
         '<input id="bdName" value="' + esc(b.name || '') + '" placeholder="e.g. Crew — this week"></div>' +
       '<div class="field"><span class="label">Colour</span><div class="bd-swatches">' +
-        PALETTE.map(c => '<label class="bd-swatch" style="--c:' + c + '"><input type="radio" name="bdColor" value="' + c + '"' +
-          (c === color ? ' checked' : '') + '><span></span></label>').join('') + '</div></div>' +
+        PALETTE.map(c => '<label class="bd-swatch" style="--c:' + c + '" title="' + colorName(c) + '"><input type="radio" name="bdColor" value="' + c + '"' +
+          ' aria-label="' + colorName(c) + '"' + (c === color ? ' checked' : '') + '><span></span></label>').join('') + '</div></div>' +
       (id ? '' :
         '<div class="field"><span class="label">Start from</span><select id="bdTemplate" onchange="bdTemplateChanged()">' +
           Object.keys(TEMPLATES).map(t => '<option value="' + t + '"' + (t === 'crew' ? ' selected' : '') + '>' +
@@ -1792,7 +1984,8 @@
         '</div>' +
         '<div class="bd-swatches small">' + PALETTE.map(c =>
           '<button class="bd-dotpick' + (c === l.color ? ' on' : '') + '" style="--c:' + c + '" ' +
-          'onclick="bdLabelColor(' + i + ', \'' + c + '\')" aria-label="Colour"></button>').join('') + '</div>' +
+          'onclick="bdLabelColor(' + i + ', \'' + c + '\')" title="' + colorName(c) + '" aria-label="' + colorName(c) +
+          (c === l.color ? ' (picked)' : '') + '"></button>').join('') + '</div>' +
       '</div>').join('') : '<div class="hint">No labels.</div>';
   }
 
@@ -2255,8 +2448,22 @@
     bidColumn: bidColumn,
     workColumn: workColumn,
     toChase: () => toChase(),
+    toWrite: () => toWrite(),
     hasDraft: hasDraft,
     acceptedToBook: acceptedToBook,
+    turnedDown: turnedDown,
+    // The column a job sits in, named as on its board -- All Jobs shows it
+    // beside the status (app.js renderDashboard). null: on neither board (a
+    // lost bid, a job paid over a month ago).
+    stageOf: j => {
+      const bid = typeof isBidStatus === 'function' ? isBidStatus(j.jobStatus) : (j.jobStatus || 'quoting') === 'quoting';
+      const board = bid ? BIDS : JOBS;
+      const id = bid ? bidColumn(j) : workColumn(j);
+      const c = id && board.columns.find(x => x.id === id);
+      return c ? { board: board.id, id: c.id, name: c.name } : null;
+    },
+    // Paid jobs leave the Jobs board after a while, but still were paid.
+    jobColumnName: id => ((JOBS.columns.find(c => c.id === id) || {}).name || ''),
     ready: () => ready,
     // Whether a board's cards have come from the server, not just the cache.
     cardsReady: id => !!cardsLoaded[id],

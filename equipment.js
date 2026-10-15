@@ -64,6 +64,11 @@
     { id: 'whenever', label: 'When you have time', hint: 'not holding anything up', color: '#6b7a8f' },
   ];
   const urgencyOf = id => URGENCY.find(u => u.id === id) || URGENCY[URGENCY.length - 1];
+  // A problem's urgency as the boards' own card urgency (boards.js URGENCY),
+  // so a machine out of service sorts to the top of Maintenance, shows under
+  // "🔴 Urgent & this week" and pings the owner like any urgent card
+  // (functions/reminders.py _urgent_cards).
+  const CARD_URGENCY = { down: 'urgent', before: 'high', soon: 'normal', whenever: 'low' };
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
   // On the Maintenance board, a problem whose part has arrived says so.
   const PART_LABEL = { id: 'part-at-shop', name: 'Part at shop', color: '#2f8f5b' };
@@ -203,17 +208,25 @@
       badge.textContent = down.length ? down.length + ' out of service'
         : overdue.length ? overdue.length + ' overdue'
         : soon.length ? soon.length + ' coming up' : '';
-      badge.className = 'section-badge' + (down.length || overdue.length ? ' accent' : '');
+      // Out of service or overdue is the "act now" colour (styles.css
+      // .eq-alert), not the gold every other section's count wears.
+      badge.className = 'section-badge' + (down.length || overdue.length ? ' eq-alert' : soon.length ? ' eq-soon' : '');
     }
 
     // Anything out of service first, then whatever must be fixed before it is
     // used, then by service due.
     const issueRank = g => { const w = worstIssue(g); return w ? rankOf(w.urgency) : URGENCY.length; };
     const types = typeList();
+    // Types are listed once whatever their case ("trailer", "Trailer":
+    // typeList), so a machine is in its type's list whatever case it has.
+    const sameType = (k, f) => String(k || '').trim().toLowerCase() === String(f || '').trim().toLowerCase();
     // A type whose last machine was changed or removed: back to everything.
-    if (filter !== 'all' && filter !== 'warranty' && types.indexOf(filter) === -1) filter = 'all';
+    if (filter !== 'all' && filter !== 'warranty') {
+      const now = types.find(t => sameType(t, filter));
+      filter = now || 'all';
+    }
     const list = all
-      .filter(g => filter === 'all' || g.kind === filter)
+      .filter(g => filter === 'all' || sameType(g.kind, filter))
       .sort((a, b) => {
         const order = { overdue: 0, soon: 1, ok: 2, none: 3 };
         return Math.min(issueRank(a), 2) - Math.min(issueRank(b), 2) ||
@@ -1228,14 +1241,19 @@
             (i.note ? '\n\n' + i.note : '') +
             '\n\nNoted ' + shortDate(i.at) + (i.by ? ' by ' + i.by : '') + '.',
           labels: ['u-' + u.id].concat(i.partAtShop ? [PART_LABEL.id] : []),
+          urgency: CARD_URGENCY[u.id] || 'normal',
           equipmentId: g.id, issueId: i.id, auto: true,
         };
         const doneNow = !!i.doneAt;
         const same = k && k.title === want.title && k.notes === want.notes &&
-          JSON.stringify(k.labels || []) === JSON.stringify(want.labels) &&
+          JSON.stringify(k.labels || []) === JSON.stringify(want.labels) && k.urgency === want.urgency &&
           (doneNow ? k.column === lastCol : k.column !== lastCol);
         if (same) return;
         const patch = Object.assign({}, want, { updatedAt: new Date().toISOString(), updatedBy: 'Equipment' });
+        // Who noted the problem made the card: an urgent one pings the owner
+        // unless he noted it himself (reminders.py compares createdBy with
+        // his name). Given once, to a card that has none.
+        if (!k || !k.createdBy) patch.createdBy = i.by || null;
         if (!k) { patch.createdAt = new Date().toISOString(); patch.column = doneNow ? lastCol : first; }
         if (doneNow && (!k || k.column !== lastCol)) { patch.column = lastCol; patch.doneAt = i.doneAt; }
         // Reopened on the machine: back out of Done.
@@ -1270,8 +1288,14 @@
       const inDone = !!k && !newCycle && k.column === lastCol;
       const markedBy = !inDone ? null
         : k.markedDoneBy || (k.updatedBy && k.updatedBy !== 'Equipment' ? k.updatedBy : null);
+      // The title says how close it is, as the Equipment tab does (due()):
+      // every machine with a next service has a card, and one thousands of
+      // miles off was titled "service due" while Equipment said "due in
+      // 4,000 miles" -- the two seemed to disagree. Absolute words for one
+      // still far off, so the card is rewritten only when the state changes.
       const want = {
-        title: (g.name || 'Machine') + ' — service due',
+        title: (g.name || 'Machine') + (state === 'overdue' ? ' — service overdue'
+          : state === 'soon' ? ' — service due soon' : ' — next service ' + dueWords(g)),
         due: g.dueDate || null,
         notes: (markedBy ? 'Marked done by ' + markedBy + ' — log the service on the Equipment tab ' +
                   '(with its hours or miles) so the next one counts from it.\n\n' : '') +

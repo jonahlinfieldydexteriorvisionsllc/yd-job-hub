@@ -1158,6 +1158,39 @@ def _stamp():
     return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (t.microsecond // 1000)
 
 
+# A finished job's place on the Jobs board follows its invoice (Jonah's
+# board: Ready to invoice -> Invoiced -> Paid). The app's sync.js
+# finishedStage is the same rule; both only ever move a job forward, and only
+# a job marked Complete -- the deposit invoice is usually made the day the
+# estimate is accepted, long before the work is done, and a job still being
+# worked keeps its own column (Punch list, say).
+END_STAGES = {"toInvoice": 0, "invoiced": 1, "paid": 2}
+
+
+def _job_status(j):
+    s = (j or {}).get("jobStatus") or "quoting"
+    if s == "active":
+        return "inprogress" if (j or {}).get("workStage") in ("inProgress", "punchList") else "booked"
+    return s
+
+
+def _stage_patch(j, inv_rec, stamp):
+    """{workStage, workStageAt} to move a finished job on to where its
+    invoice (inv_rec: _invoice_record) says it is, or {} to leave it."""
+    if _job_status(j) != "complete" or not (inv_rec or {}).get("id"):
+        return {}
+    bal = inv_rec.get("balance")
+    try:
+        paid = bal is not None and bal != "" and float(bal) <= 0
+    except (TypeError, ValueError):
+        paid = False
+    want = "paid" if paid else "invoiced"
+    had = (j or {}).get("workStage")
+    if had in END_STAGES and END_STAGES[had] >= END_STAGES[want]:
+        return {}
+    return {"workStage": want, "workStageAt": stamp}
+
+
 def _invoice_record(inv):
     env = _env("QB_ENV", "sandbox")
     return {
@@ -1297,11 +1330,16 @@ def invoice_from_estimate(body):
     # known about it.
     ref = _db().collection("jobs").document(job_id)
     snap = ref.get()
-    cur = ((snap.to_dict() or {}).get("qbInvoiceRef") if snap.exists else None) or {}
+    job = (snap.to_dict() or {}) if snap.exists else {}
+    cur = job.get("qbInvoiceRef") or {}
     if cur.get("id") == out.get("id") and cur.get("env") == out.get("env"):
         out = dict(cur, **out)
-    ref.set({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"}, "lastModified": _stamp()},
-            merge=["qbInvoiceRef", "qbEstimate.status", "lastModified"])
+    # A finished job moves to Invoiced (or Paid) on the Jobs board in the
+    # same write (_stage_patch) -- it used to sit in Ready to invoice.
+    stamp = _stamp()
+    stage = _stage_patch(job, out, stamp)
+    ref.set(dict({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"}, "lastModified": stamp}, **stage),
+            merge=["qbInvoiceRef", "qbEstimate.status", "lastModified"] + sorted(stage))
     return out
 
 
@@ -1321,7 +1359,7 @@ def invoice_status(body):
 # What the sweep reads of each job -- not the whole record (estimate chats,
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber",
-                "acceptedSeenAt"]
+                "acceptedSeenAt", "workStage"]
 # An estimate with no answer this long after it was made (or last emailed)
 # is not asked about every hour for ever; opening the job still checks it
 # (estimate.js). A year, because a bid sent in November is often said yes to
@@ -1441,7 +1479,11 @@ def _sweep():
                 continue
             paid = round(_amount(r.get("balance")) - _amount(inv.get("Balance")), 2)
             rec = _invoice_record(inv)
-            db.collection("jobs").document(job_id).set({"qbInvoiceRef": rec, "lastModified": _stamp()}, merge=True)
+            # Paid off: a finished job moves to Paid on the Jobs board (and
+            # one still in Ready to invoice to Invoiced) -- _stage_patch.
+            stamp = _stamp()
+            patch = dict({"qbInvoiceRef": rec, "lastModified": stamp}, **_stage_patch(jobs[job_id], rec, stamp))
+            db.collection("jobs").document(job_id).set(patch, merge=True)
             # A balance that went UP (the invoice was changed) is no payment.
             if paid > 0:
                 news.append({"jobId": job_id, "kind": "payment", "name": str(jobs[job_id].get("customerName") or "a customer"),
