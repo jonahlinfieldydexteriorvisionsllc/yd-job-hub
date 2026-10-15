@@ -1439,12 +1439,6 @@
     const note = el('evTypeNote');
     if (note) note.innerHTML = '';
   };
-  window.calAnyTime = function () {
-    const all = el('evAllDay');
-    if (!all) return;
-    all.checked = true;
-    calAllDayChanged();
-  };
   // What "Usual" means for this entry as the form stands.
   window.calRemindHint = function () {
     const hint = el('evRemindHint');
