@@ -370,9 +370,11 @@
           (editsBoard(board)
             ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">+ Add card</button>' : '') +
-          // The recurring crew tasks land on Maintenance (recurring.js).
+          // The recurring crew tasks land here, on Crew tasks (recurring.js).
+          // Named as the calendar's layer of them is, "Recurring crew tasks":
+          // one thing, one name.
           (board.id === CREW_BOARD && isOwner() && typeof openRecurring === 'function'
-            ? '<button class="btn btn-sm" onclick="openRecurring()">🔁 Recurring tasks</button>' : '') +
+            ? '<button class="btn btn-sm" onclick="openRecurring()">🔁 Recurring crew tasks</button>' : '') +
           (board.virtual && movesJobs()
             ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + board.id + '\', \'' +
               board.columns[0].id + '\')">' + (board.id === 'bids' ? '+ New bid' : '+ New job') + '</button>' : '') +
@@ -938,7 +940,10 @@
         esc(k.title || 'Untitled') + '</div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
-      (inLastColumn && doneLine(k) ? '<div class="bd-card-line bd-done-by">✓ ' + esc(doneLine(k)) + '</div>' : '') +
+      // Finished: said with a tick, not by striking the title through -- a
+      // struck grey title in Done (or Built) was hard to read at all.
+      (inLastColumn ? '<div class="bd-card-line bd-done-by"><span class="bd-done-tick">✓</span> ' +
+        esc(doneLine(k) || 'Done') + '</div>' : '') +
       '<div class="bd-card-foot">' +
         (inLastColumn ? '' : urgChipHtml(k)) +
         (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueLabel + (buzzes(board, k) && !inLastColumn ? ' 🔔' : '') + '</span>' : '') +
@@ -1332,7 +1337,14 @@
     const crewBtn = !editsBoard(board) || board.id === CREW_BOARD ? ''
       : '<button class="btn btn-sm" onclick="cardCrewTask(' + (crewTask ? 'false' : 'true') + ')">' +
           (crewTask ? 'Not a crew task' : '👷 Make it a crew task') + '</button>';
+    const inDone = here === doneColOf(board);
     openModal(esc(k.title || 'Card'),
+      // Whoever may change the card opens it mostly to change it: Edit is
+      // the first thing in the window, and big -- it sat at the foot, under
+      // the checklist, the columns and Claude. Moving it, ticking the
+      // checklist and the rest stay below, a tap each, as before.
+      (editsBoard(board) ? '<div class="bd-detail-top">' +
+        '<button class="btn btn-filled bd-edit-big" onclick="editCard()">✏️ Edit this card</button>' + crewBtn + '</div>' : '') +
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
@@ -1352,17 +1364,28 @@
         '<button class="bd-move-btn' + (c.id === here ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
         (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
-      (here === doneColOf(board) && doneLine(k) ? '<div class="hint">' + esc(doneLine(k)) + '</div>'
+      (inDone && doneLine(k) ? '<div class="hint">' + esc(doneLine(k)) + '</div>'
         : k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       (k.recurring && typeof recurringDetail === 'function'
-        ? recurringDetail(k, here === doneColOf(board), board.id) : '') +
+        ? recurringDetail(k, inDone, board.id) : '') +
       claudeHtml(board, k) +
       '<div class="field-actions">' +
-        (editsBoard(board) ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +
-        crewBtn +
+        claudeAskHtml(board, k) +
+        // Delete here too, beside Close: the card's own 🗑 on the board is
+        // small, and this is where a card is looked at. Not on a card the
+        // app would only make again (cardDeletable).
+        (editsBoard(board) && cardDeletable(board, k, inDone)
+          ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete</button>' : '') +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
   }
+  // The card open in the window, deleted (with the same question as its 🗑).
+  window.bdDeleteOpen = function () {
+    if (!openCard) return;
+    const b = openCard.boardId, c = openCard.cardId;
+    bdDeleteCard(b, c);
+    if (!(cards[b] || {})[c]) closeBoardModal();
+  };
 
   // Making a card a crew task tags it 👷 Crew (every crew member can read a
   // card with that tag on a board that is not private) and drops any other
@@ -1428,8 +1451,20 @@
       esc(when) + '</div>';
   }
 
+  // The Claude part of a card shows while Claude works the cards by itself
+  // (the runs switched on, or the computer at home checking in), or once
+  // Claude has done something on this card. With the runs off -- as they are
+  // (Jonah, 9 Oct) -- a box on every card explaining that was only clutter:
+  // what is left is one small "Ask Claude" beside Close (claudeAskHtml),
+  // which works as it always did.
+  const claudeOwns = (board, k) => isOwner() && !board.virtual && board.id !== MAINTENANCE && !k.auto;
+  const claudeShown = k => cardRuns || computerAwake() || !!k.claude;
+  function claudeAskHtml(board, k) {
+    if (!claudeOwns(board, k) || claudeShown(k) || k.noClaude || colOf(board, k) === doneColOf(board)) return '';
+    return '<button class="btn btn-sm" onclick="claudeNow()">🤖 Ask Claude to do it</button>';
+  }
   function claudeHtml(board, k) {
-    if (!isOwner() || board.virtual || board.id === MAINTENANCE || k.auto) return '';
+    if (!claudeOwns(board, k) || !claudeShown(k)) return '';
     const c = k.claude || null;
     const last = doneColOf(board);
     const finished = colOf(board, k) === last;
@@ -1560,16 +1595,35 @@
     const chosen = new Set((k.assignees || []).map(a => a.uid));
     const labelsOn = new Set(k.labels || []);
 
+    // The boxes come in four groups, each headed with what it is for. Kind,
+    // labels, urgency and colour all looked like ways of marking a card and
+    // sat in one run, so it was not clear which did what: the kind decides
+    // its colour and when it buzzes, the people who it is for; urgency sorts
+    // it and labels are for finding it; the colour is only the band on top.
+    // Every box is the one it was (same ids): saving reads them the same.
+    const group = (title, sub, body) => '<div class="bd-ed-group"><div class="bd-ed-head">' + title + '</div>' +
+      (sub ? '<div class="bd-ed-sub">' + sub + '</div>' : '') + body + '</div>';
     openModal(openCard.cardId ? 'Edit card' : 'New card on ' + esc(board.name),
       '<div class="field"><span class="label">What needs doing</span>' +
         '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"></div>' +
-      // Jonah (12 Oct 2026): what it is decides when it buzzes -- a pickup
-      // or a to-do is for any time that day, a bid appointment at its time.
-      '<div class="field"><span class="label">What is it</span><select id="cdType" onchange="cardTypeChanged()">' +
-        '<option value="">—</option>' +
-        YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
-          t.icon + ' ' + esc(t.name) + (t.timed === false ? ' (any time that day)' : '') + '</option>').join('') +
-      '</select></div>' +
+      group('What it is &amp; who is on it', 'The kind gives the card its colour and decides when it buzzes. ' +
+          '👷 A crew task can be seen by every crew member, from any board that is not private.',
+        // Jonah (12 Oct 2026): what it is decides when it buzzes -- a pickup
+        // or a to-do is for any time that day, a bid appointment at its time.
+        '<div class="field"><span class="label">What is it</span><select id="cdType" onchange="cardTypeChanged()">' +
+          '<option value="">—</option>' +
+          YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
+            esc(cardTypeLabel(t, !!k.dueTime)) + '</option>').join('') +
+        '</select></div>' +
+        (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +
+          crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="cdWho" value="' + p.uid + '"' +
+            (chosen.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') +
+          '</div>' +
+          (board.visibleTo && board.visibleTo.length ? '' :
+            '<div class="hint">This board is not shared with anyone yet, so the people you pick ' +
+            'here will not see it until you share it in Board settings.</div>') +
+        '</div>' : '')) +
+      group('When', 'Where it sits on the board, the day it is due, and the buzz on the phone.',
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Column</span><select id="cdCol">' +
           board.columns.map(c => '<option value="' + c.id + '"' +
@@ -1586,26 +1640,21 @@
         '<div class="field"><span class="label">Reminder</span><select id="cdRemind" onchange="cardRemindHint()">' +
           YDRemind.optionsHtml(k) + '</select></div>' +
       '</div>' +
-      '<div class="hint" id="cdRemindHint"></div>' +
-      '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
-        URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
-          ((k.urgency || 'normal') === u ? ' checked' : '') + '><span>' + esc(name) + (hint ? ' <small>' + esc(hint) + '</small>' : '') +
-          '</span></label>').join('') +
-      '</div></div>' +
-      '<div class="field"><span class="label">Labels</span><div class="bd-pick">' +
-        (board.labels || []).map(l => '<label class="bd-pick-item" style="--c:' + safeColor(l.color) + '">' +
-          '<input type="checkbox" class="cdLabel" value="' + l.id + '"' + (labelsOn.has(l.id) ? ' checked' : '') + '>' +
-          '<span class="bd-label">' + esc(l.name) + '</span></label>').join('') +
-      '</div></div>' +
-      '<div class="field"><span class="label">Card colour</span>' + colorPickHtml('cdColor', k.color) + '</div>' +
-      (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +
-        crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="cdWho" value="' + p.uid + '"' +
-          (chosen.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') +
-        '</div>' +
-        (board.visibleTo && board.visibleTo.length ? '' :
-          '<div class="hint">This board is not shared with anyone yet, so the people you pick ' +
-          'here will not see it until you share it in Board settings.</div>') +
-      '</div>' : '') +
+      '<div class="hint" id="cdRemindHint"></div>') +
+      group('Sorting &amp; look', 'Urgency puts it higher in its column (and in “🔴 Urgent &amp; this week”); labels are for ' +
+          'finding it (☔ Rain day…); the colour is only the band across the top — with none, it takes its kind’s.',
+        '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
+          URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
+            ((k.urgency || 'normal') === u ? ' checked' : '') + '><span>' + esc(name) + (hint ? ' <small>' + esc(hint) + '</small>' : '') +
+            '</span></label>').join('') +
+        '</div></div>' +
+        '<div class="field"><span class="label">Labels</span><div class="bd-pick">' +
+          (board.labels || []).map(l => '<label class="bd-pick-item" style="--c:' + safeColor(l.color) + '">' +
+            '<input type="checkbox" class="cdLabel" value="' + l.id + '"' + (labelsOn.has(l.id) ? ' checked' : '') + '>' +
+            '<span class="bd-label">' + esc(l.name) + '</span></label>').join('') +
+        '</div></div>' +
+        '<div class="field"><span class="label">Card colour</span>' + colorPickHtml('cdColor', k.color) + '</div>') +
+      group('Details', '',
       // A search box rather than a list of every customer's name, which grew
       // too long to scroll. A job not on this device keeps its link as it was.
       // Someone without Jobs has no jobs to pick from; whatever is linked stays.
@@ -1627,16 +1676,23 @@
       '<div class="field"><span class="label">Checklist — one item per line</span>' +
         '<textarea id="cdList" rows="4" placeholder="e.g.\n4 bags polymeric sand\nedge restraint">' +
         esc((k.checklist || []).map(i => (i.done ? '[x] ' : '') + i.text).join('\n')) + '</textarea>' +
-        '<div class="hint">Start a line with [x] to mark it already done.</div></div>' +
+        '<div class="hint">Start a line with [x] to mark it already done.</div></div>') +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveCard()">Save</button>' +
         '<button class="btn btn-sm" onclick="' + (openCard.cardId ? 'renderCardDetail2()' : 'closeBoardModal()') + '">Cancel</button>' +
-        (openCard.cardId ? '<button class="btn btn-sm" onclick="removeCard()">Delete card</button>' : '') +
+        // The same delete as the card's own 🗑 (and its question); not on a
+        // card the app would only make again (cardDeletable).
+        (openCard.cardId && cardDeletable(board, k, colOf(board, k) === doneColOf(board))
+          ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete card</button>' : '') +
       '</div>');
     cardRemindHint();
     const t = el('cdTitle'); if (t) t.focus();
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
+  // A kind for no set time says "(any time that day)" only while the card
+  // has no time: a crew task due at 9:00 is a crew task at 9:00 (as on the
+  // calendar's editor, calendar.js typeLabel).
+  const cardTypeLabel = (t, timed) => t.icon + ' ' + t.name + (t.timed === false && !timed ? ' (any time that day)' : '');
 
   // A crew task is the crew's: picking it tags the card 👷 Crew, so the crew
   // can see it from any board and it is listed on Crew tasks with the rest.
@@ -1654,6 +1710,11 @@
     const hint = el('cdRemindHint');
     const board = openCard && boards[openCard.boardId];
     if (!hint || !board) return;
+    const box = el('cdType'), timed = /^\d{2}:\d{2}$/.test(val('cdTime'));
+    if (box) Array.prototype.forEach.call(box.options, o => {
+      const t = YDRemind.typeById(o.value);
+      if (t) o.textContent = cardTypeLabel(t, timed);
+    });
     const choice = val('cdRemind');
     const type = val('cdType') || YDRemind.typeOf({ labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) },
       { boardId: board.id });
@@ -1844,18 +1905,6 @@
     const inCol = Object.values(cards[boardId] || {}).filter(k => board ? colOf(board, k) === col : k.column === col);
     return inCol.length ? Math.max.apply(null, inCol.map(k => k.order || 0)) + 1000 : 1000;
   }
-
-  window.removeCard = function () {
-    if (!openCard || !editsBoard(boards[openCard.boardId])) return;
-    const k = (cards[openCard.boardId] || {})[openCard.cardId];
-    if (!k || !confirm('Delete "' + k.title + '"?')) return;
-    delete cards[openCard.boardId][openCard.cardId];
-    const where = 'boards/' + openCard.boardId + '/cards';
-    const id = openCard.cardId;
-    closeBoardModal(); render();
-    Promise.resolve(window.YDDb.remove(where, id))
-      .catch(e => console.warn('[boards] card not removed:', e.code || e.message));
-  };
 
   function crewPeople() {
     return Object.keys(people)
