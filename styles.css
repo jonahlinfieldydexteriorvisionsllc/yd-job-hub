@@ -465,20 +465,27 @@
   .sheet-overlay { position:fixed; inset:0; background:rgba(40,26,56,.5); z-index:1100;
                    display:none; align-items:flex-end; justify-content:center; }
   .sheet-overlay.active { display:flex; }
+  /* Never taller than the screen: with more screens than fit, the list
+     scrolls between the title and Close (Jonah, 14 Oct 2026 -- the top of
+     the list was cut off and could not be reached on a phone). */
   .sheet { background:var(--bg); width:100%; max-width:560px; border-radius:16px 16px 0 0;
-           padding:10px 18px calc(18px + env(safe-area-inset-bottom)); }
+           padding:10px 18px calc(18px + env(safe-area-inset-bottom));
+           max-height:calc(100vh - 24px); max-height:calc(100dvh - 24px);
+           display:flex; flex-direction:column; }
   .sheet-grip { width:40px; height:4px; border-radius:4px; background:var(--border-strong);
-                margin:0 auto 14px; }
+                margin:0 auto 14px; flex:none; }
   .sheet-title { font-family:'Playfair Display',serif; font-size:17px; font-weight:700;
-                 margin-bottom:12px; }
-  .sheet-items { display:flex; flex-direction:column; gap:8px; }
+                 margin-bottom:12px; flex:none; }
+  .sheet-items { display:flex; flex-direction:column; gap:8px; min-height:0; overflow-y:auto;
+                 overscroll-behavior:contain; -webkit-overflow-scrolling:touch; }
+  .sheet-items > * { flex:none; }
   .sheet-item { display:block; width:100%; text-align:left; background:var(--surface);
                 border:1.5px solid var(--border); border-radius:10px; padding:14px 16px;
                 cursor:pointer; min-height:56px; }
   .sheet-item:hover { border-color:var(--brand); }
   .sheet-item-name { display:block; font-size:15px; font-weight:700; }
   .sheet-item-hint { display:block; font-size:12px; color:var(--muted); margin-top:3px; }
-  .sheet-close { width:100%; margin-top:14px; padding:13px; }
+  .sheet-close { width:100%; margin-top:14px; padding:13px; flex:none; }
 
   .addshift .field, .addshift .grid { margin-bottom:12px; }
   .addshift .clock-big { margin-bottom:0; }
