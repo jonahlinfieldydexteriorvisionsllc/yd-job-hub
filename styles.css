@@ -3802,3 +3802,27 @@
   .rc-qb { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
   .rc-qb-ok { background:var(--st-done-soft); color:var(--st-done-ink); }
   .rc-qbaddr { font-size:13px; margin-top:6px; color:var(--muted); }
+  /* The Equipment tab: a search over everything, then the shop board (the
+     Maintenance board, boards.js columnsFor) or the machines (equipment.js). */
+  .eq-find input { width:100%; min-height:44px; font-size:16px; padding:8px 12px; border-radius:10px;
+    border:1.5px solid var(--border-strong); background:var(--surface); color:var(--text); }
+  .eq-views { display:grid; grid-template-columns:1fr 1fr; gap:6px; margin:10px 0 12px; }
+  .eq-views button { min-height:44px; border-radius:10px; border:1.5px solid var(--border-strong); background:var(--surface);
+    color:var(--text); font:600 14px 'DM Sans',sans-serif; cursor:pointer; }
+  .eq-views button.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  html[data-night] .eq-views button.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
+  .eq-bd-head { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; margin:10px 0; font-size:13.5px; }
+  .eq-found { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .eq-addcard { margin:10px 0 14px; padding:12px; border-radius:12px; border:1.5px solid var(--border-strong); background:var(--surface-2); }
+  .eq-urg-pick { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:6px; }
+  .eq-urg-opt { display:flex; align-items:flex-start; gap:8px; min-height:44px; padding:8px 10px; border-radius:10px; cursor:pointer;
+    border:1.5px solid var(--border-strong); border-left:5px solid var(--c); background:var(--surface); }
+  .eq-urg-opt input { margin-top:3px; }
+  .eq-urg-opt span { display:flex; flex-direction:column; line-height:1.25; }
+  .eq-urg-opt small { color:var(--muted); font-size:12px; }
+  .eq-urg-opt:has(input:checked) { outline:2px solid var(--c); }
+  /* On the Equipment tab a card is added through its machine picker (+ Add a
+     card above the board), not the columns' own plain add. */
+  #eqBody .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
+  .bd-done-pick { display:inline-flex; align-items:center; gap:4px; font-size:12.5px; white-space:nowrap; color:var(--muted); }
+  .bd-done-none { display:flex; align-items:center; gap:6px; margin:6px 0 2px; font-size:13px; }

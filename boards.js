@@ -192,10 +192,21 @@
   // The column that means "done": the one called Done, when a board has one
   // -- Crew tasks keeps an "Equipment Maintenance" column after its Done --
   // otherwise the last column, as it always was.
+  // The column that means done. A board says which in its settings
+  // (doneColumn: a column's id, or '' for none) -- Jonah, 15 Oct 2026:
+  // deleting the To buy board's "Bought" column made the next one along,
+  // "Vehicles", the last -- and so "done" -- and every card in it was
+  // crossed off. A board not saved since: the column called Done, else one
+  // whose name says finished (Bought, Picked up, Built…) -- never just the
+  // last column.
+  const FINISHED_NAME = /^\s*(done|bought|built|finished|complete|completed|paid|picked up|fixed|closed|sold|delivered)\s*$/i;
   function doneColOf(board) {
     const cols = (board && board.columns) || [];
+    if (board && typeof board.doneColumn === 'string') return cols.some(c => c.id === board.doneColumn) ? board.doneColumn : '';
     const named = cols.find(c => /^\s*done\s*$/i.test(String(c.name || '')));
-    return named ? named.id : (cols.length ? cols[cols.length - 1].id : '');
+    if (named) return named.id;
+    const finished = cols.filter(c => FINISHED_NAME.test(String(c.name || '')));
+    return finished.length ? finished[finished.length - 1].id : '';
   }
   // Phones and tablets do not drag reliably, so there a card is moved from
   // the sheet that opens when it is tapped -- and the screen should say so.
@@ -717,7 +728,10 @@
   const showOldDone = {};
   window.toggleOldDone = function (boardId) { showOldDone[boardId] = !showOldDone[boardId]; render(); };
 
-  function columnsHtml(board) {
+  // pick: which cards to draw -- the Boards tab's filter, unless another
+  // screen narrows them its own way (the Equipment tab's search).
+  function columnsHtml(board, pick) {
+    pick = pick || (k => shows(board, k));
     if (board.virtual) {
       const grouped = jobCards(board);
       return board.columns.map(c => {
@@ -731,7 +745,7 @@
         });
       }).join('');
     }
-    const mine = Object.values(cards[board.id] || {}).filter(k => shows(board, k));
+    const mine = Object.values(cards[board.id] || {}).filter(pick);
     const doneId = doneColOf(board);
     return board.columns.map(c => {
       const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
@@ -757,12 +771,17 @@
   // column filled the whole screen. Each folds; empty ones start folded.
   const colOpen = {};       // 'board|col' -> true/false once tapped
   const phoneWide = () => !!(window.matchMedia && window.matchMedia('(max-width: 720px)').matches);
-  window.bdToggleCol = function (boardId, colId) {
+  // `from`: the heading tapped -- the same board can be drawn on two tabs
+  // (Maintenance on the Equipment tab too), so the column is read off the
+  // copy that was tapped.
+  window.bdToggleCol = function (boardId, colId, from) {
     if (!phoneWide()) return;
     const key = boardId + '|' + colId;
-    const head = document.querySelector('.bd-col[data-board="' + boardId + '"][data-col="' + colId + '"]');
+    const head = (from && from.closest && from.closest('.bd-col')) ||
+      document.querySelector('.bd-col[data-board="' + boardId + '"][data-col="' + colId + '"]');
     colOpen[key] = head ? head.classList.contains('shut') : !colOpen[key];
     render();
+    document.dispatchEvent(new CustomEvent('yd-board-redraw'));
   };
   if (window.matchMedia) {
     const mq = window.matchMedia('(max-width: 720px)');
@@ -780,7 +799,7 @@
     const shut = phoneWide() && (key in colOpen ? !colOpen[key] : n === 0);
     return '<div class="bd-col' + (shut ? ' shut' : '') + '" data-board="' + board.id + '" data-col="' + c.id + '" ' +
         'ondragover="bdDragOver(event)" ondragleave="bdDragLeave(event)" ondrop="bdDrop(event)">' +
-      '<div class="bd-col-head" onclick="bdToggleCol(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
+      '<div class="bd-col-head" onclick="bdToggleCol(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\', this)">' +
         '<span><span class="bd-fold" aria-hidden="true">' + (shut ? '▸' : '▾') + '</span>' + esc(c.name) + '</span>' +
         '<span class="bd-count">' + n + '</span></div>' +
       (more.total ? '<div class="bd-col-total" title="What the jobs in this column are worth">' + esc(more.total) + '</div>' : '') +
@@ -1116,7 +1135,10 @@
     // A machine's "service due" card moved to Done: the service is logged on
     // the machine, with its hours or miles, so nothing is typed twice
     // (WISHLIST #2). Problem cards record themselves (equipment.js).
-    if (toDone && boardId === MAINTENANCE && k.equipmentId && !k.issueId && window.YDEquipment && YDEquipment.serviceFromBoard) {
+    // Only a service card (eq-<machine>): a problem or a card added in the
+    // shop (eqc-) for that machine is not its service.
+    if (toDone && boardId === MAINTENANCE && String(cardId).indexOf('eq-') === 0 && k.equipmentId && !k.issueId &&
+        window.YDEquipment && YDEquipment.serviceFromBoard) {
       YDEquipment.serviceFromBoard(k.equipmentId);
     }
     // A recurring task moved to Done by someone who confirms them (the owner,
@@ -1929,8 +1951,10 @@
     const shared = new Set(b.visibleTo || []);
     const editors = new Set(b.editors || []);
     const color = b.color || PALETTE[Object.keys(boards).length % PALETTE.length];
+    const doneNow = id ? doneColOf(b) : null;
     draftCols = (b.columns || TEMPLATES.crew.columns.map(n => ({ name: n })))
-      .map(c => ({ id: c.id || null, name: c.name }));
+      .map(c => ({ id: c.id || null, name: c.name, done: id ? c.id === doneNow : false }));
+    if (!id) markDraftDone();
     draftLabels = (b.labels || DEFAULT_LABELS).map(l => ({ id: l.id, name: l.name, color: l.color }));
 
     openModal(id ? 'Board settings' : 'New board',
@@ -1947,8 +1971,11 @@
       '<div class="field"><span class="label">Columns, left to right</span>' +
         '<div id="bdColList" class="bd-edit-list"></div>' +
         '<button class="btn btn-sm" onclick="bdColAdd()">+ Add a column</button>' +
-        '<div class="hint">The column called Done (or else the last one) counts as done: a card there stays ' +
-          'until the end of the day, then leaves the board. Cards in a column you delete move to the first column.</div>' +
+        '<label class="bd-done-none"><input type="radio" name="bdDone" onchange="bdDonePick(-1)"' +
+          (draftCols.some(c => c.done) ? '' : ' checked') + '> No column counts as done</label>' +
+        '<div class="hint">The column ticked ✓ Done counts as done: a card moved there is crossed off, stays ' +
+          'until the end of the day, then leaves the board (and is deleted a week later). Cards in a column you ' +
+          'delete move to the first column.</div>' +
       '</div>' +
       '<div class="field"><span class="label">Labels</span>' +
         '<div id="bdLabelList" class="bd-edit-list"></div>' +
@@ -2013,12 +2040,28 @@
     document.querySelectorAll('.bdLabelName').forEach((inp, i) => { if (draftLabels[i]) draftLabels[i].name = inp.value; });
   }
 
+  // A new board's done column: the one called Done, else the last if its
+  // name says finished (doneColOf's own rule).
+  function markDraftDone() {
+    const id = doneColOf({ columns: draftCols.map((c, i) => ({ id: 'd' + i, name: c.name })) });
+    draftCols.forEach((c, i) => { c.done = id === 'd' + i; });
+  }
+  window.bdDonePick = function (i) {
+    readDrafts();
+    draftCols.forEach((c, j) => { c.done = j === i; });
+    drawDrafts();
+    const none = document.querySelector('.bd-done-none input');
+    if (none) none.checked = i === -1;
+  };
+
   function drawDrafts() {
     const cl = el('bdColList'), ll = el('bdLabelList');
     if (cl) cl.innerHTML = draftCols.map((c, i) =>
       '<div class="bd-edit-row">' +
         '<span class="bd-edit-num">' + (i + 1) + '</span>' +
         '<input class="bdColName" value="' + esc(c.name) + '" placeholder="Column name" aria-label="Column ' + (i + 1) + '">' +
+        '<label class="bd-done-pick" title="Cards in this column count as done"><input type="radio" name="bdDone"' +
+          (c.done ? ' checked' : '') + ' onchange="bdDonePick(' + i + ')"> ✓ Done</label>' +
         '<button class="bd-edit-btn" onclick="bdColMove(' + i + ', -1)"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move earlier">↑</button>' +
         '<button class="bd-edit-btn" onclick="bdColMove(' + i + ', 1)"' + (i === draftCols.length - 1 ? ' disabled' : '') + ' aria-label="Move later">↓</button>' +
         '<button class="bd-edit-btn del" onclick="bdColRemove(' + i + ')"' + (draftCols.length === 1 ? ' disabled' : '') + ' aria-label="Delete column">✕</button>' +
@@ -2036,6 +2079,10 @@
           'onclick="bdLabelColor(' + i + ', \'' + c + '\')" title="' + colorName(c) + '" aria-label="' + colorName(c) +
           (c === l.color ? ' (picked)' : '') + '"></button>').join('') + '</div>' +
       '</div>').join('') : '<div class="hint">No labels.</div>';
+    // The done column deleted: none is done now (the board then has no done
+    // column until one is ticked -- nothing else is crossed off instead).
+    const none = document.querySelector('.bd-done-none input');
+    if (none) none.checked = !draftCols.some(c => c.done);
   }
 
   window.bdColAdd = function () {
@@ -2078,6 +2125,7 @@
   window.bdTemplateChanged = function () {
     const t = TEMPLATES[val('bdTemplate')] || TEMPLATES.blank;
     draftCols = t.columns.map(n => ({ id: null, name: n }));
+    markDraftDone();
     drawDrafts();
   };
 
@@ -2092,6 +2140,8 @@
     const was = boards[id] || {};
     const stamp = Date.now().toString(36);
     const columns = cols.map((c, i) => ({ id: c.id || 'col' + i + stamp, name: c.name }));
+    const doneDraft = draftCols.filter(c => String(c.name || '').trim()).findIndex(c => c.done);
+    const doneColumn = doneDraft === -1 ? '' : columns[doneDraft].id;
     const labels = draftLabels.filter(l => String(l.name || '').trim()).map((l, i) => ({
       id: l.id || 'lb' + i + stamp, name: String(l.name).trim(), color: safeColor(l.color),
     }));
@@ -2101,6 +2151,7 @@
       name: name,
       color: colorInput ? colorInput.value : PALETTE[0],
       columns: columns,
+      doneColumn: doneColumn,
       labels: labels,
       order: was.order != null ? was.order : Object.keys(boards).length + 1,
       createdAt: was.createdAt || nowIso(),
@@ -2129,7 +2180,7 @@
     // in it are done from now on, while those left behind in the old last
     // column are not done any more.
     const live = new Set(columns.map(c => c.id));
-    const lastId = doneColOf({ columns: columns });
+    const lastId = doneColumn;
     Object.values(cards[id] || {}).forEach(k => {
       const patch = {};
       if (!live.has(k.column)) patch.column = columns[0].id;
@@ -2492,6 +2543,19 @@
   window.YDBoards = {
     doneCol: doneColOf,
     render: render,
+    // One board's columns drawn on another tab -- the Maintenance board on
+    // the Equipment tab (equipment.js): the same cards, drag and card window
+    // as here, the cards narrowed by `match` (its search) instead of this
+    // tab's filters. Empty when the board is not one this person sees.
+    columnsFor: (boardId, match) => {
+      const b = boards[boardId];
+      if (!b) return '';
+      whoNow = window.YDRemind ? YDRemind.who(people) : null;
+      try {
+        return '<div class="bd-cols" data-keep="eqbd-' + esc(b.id) + '">' + columnsHtml(b, k => !match || match(k)) + '</div>';
+      } finally { whoNow = null; }
+    },
+    editsBoard: id => !!boards[id] && editsBoard(boards[id]),
     // Where a job sits on the Bids and Jobs boards, and the bids to chase --
     // Home (home.js) lists them by the same rules, so the two never disagree.
     bidColumn: bidColumn,
@@ -2525,6 +2589,8 @@
     setDone: (boardId, cardId, done) => {
       const b = boards[boardId];
       if (!b || !(cards[boardId] || {})[cardId]) return false;
+      // A board with no done column has nowhere to tick a card off to.
+      if (done && !doneColOf(b)) return false;
       moveCard(boardId, cardId, done ? doneColOf(b) : b.columns[0].id, null);
       return true;
     },

@@ -194,14 +194,192 @@
 
   // ---------------------------------------------------------------- the list
 
+  // Equipment is the shop's screen (Jonah, 15 Oct 2026: "a board for
+  // equipment where people add cards and there's a search bar to find the
+  // piece of equipment ... in the same tab as equipment so it's like an
+  // overview -- when people are working in the shop they check the equipment
+  // tab and the board shows urgency levels and what needs to be done"). A
+  // search over everything, then the shop board -- the Maintenance board,
+  // the same one as on Boards: every machine's problems and services, most
+  // urgent first, cards added from here -- or the machines themselves. The
+  // crew cannot read the machines' records (costs, receipts), so they get
+  // the board; it is shared with them.
+  const VIEW_KEY = 'ydjobhub_eqView';
+  let eqView = (() => { try { return localStorage.getItem(VIEW_KEY) === 'machines' ? 'machines' : 'board'; } catch (e) { return 'board'; } })();
+  let eqSearch = '';
+  let addingCard = false;
+  const seesGear = () => typeof ydCan === 'function' && ydCan('equipment', 'see');
+  const maintBoard = () => (window.YDBoards && YDBoards.boards ? YDBoards.boards()[MAINT] : null) || null;
+  const viewNow = () => (seesGear() ? eqView : 'board');
+  const searchWords = () => String(eqSearch || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = (text, words) => { const t = String(text || '').toLowerCase(); return words.every(w => t.indexOf(w) !== -1); };
+
+  // The machines by name, for the search and the + Add a card picker: their
+  // own records for whoever sees them, else the names the office publishes
+  // for the crew (settings/public.equipmentList, publishNames below).
+  let publicNames = null;
+  function loadPublicNames() {
+    if (publicNames || seesGear() || !window.YDDb) return;
+    publicNames = {};
+    Promise.resolve(window.YDDb.get('settings', 'public')).then(p => {
+      publicNames = ((p && p.equipmentList) || {});
+      if (addingCard) renderAdd();
+    }).catch(() => { publicNames = null; });
+  }
+  function machineList() {
+    const src = seesGear() ? gear : (publicNames || {});
+    const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
+    return Object.keys(src).filter(id => src[id]).map(id => ({ id: id, name: String(src[id].name || 'Machine'), kind: String(src[id].kind || '') }))
+      .sort((a, b) => byName(a.name, b.name));
+  }
+  const machineName = id => ((machineList().find(m => m.id === id) || {}).name || '');
+
   window.renderEquipment = function () {
     const wrap = el('eqWrap');
     if (!wrap) return;
+    // Three parts, each redrawn on its own: the search box keeps its typing
+    // and the add form its words while the board below changes.
+    if (!el('eqTop')) wrap.innerHTML = '<div id="eqTop"></div><div id="eqAdd"></div><div id="eqBody"></div>';
+    renderBadge();
+    renderTop();
+    renderBody();
+  };
 
+  function renderTop() {
+    const top = el('eqTop');
+    if (!top) return;
+    const view = viewNow(), sig = view + '|' + seesGear();
+    if (top.dataset.sig === sig) return;
+    top.dataset.sig = sig;
+    const box = el('eqFind');
+    const typed = box ? box.value : eqSearch;
+    top.innerHTML =
+      '<div class="eq-find"><input id="eqFind" type="search" autocomplete="off" enterkeyhint="search" ' +
+        'placeholder="Find a machine, truck or trailer…" value="' + esc(typed) + '" oninput="eqFind(this.value)"></div>' +
+      (seesGear() ? '<div class="eq-views" role="tablist">' +
+        '<button type="button" role="tab" aria-selected="' + (view === 'board') + '" class="' + (view === 'board' ? 'on' : '') + '" onclick="eqShow(\'board\')">📋 Shop board</button>' +
+        '<button type="button" role="tab" aria-selected="' + (view === 'machines') + '" class="' + (view === 'machines' ? 'on' : '') + '" onclick="eqShow(\'machines\')">🚜 Machines</button>' +
+      '</div>' : '');
+  }
+  window.eqFind = function (v) { eqSearch = String(v || ''); renderBody(); };
+  window.eqShow = function (v) {
+    eqView = v === 'machines' ? 'machines' : 'board';
+    try { localStorage.setItem(VIEW_KEY, eqView); } catch (e) { /* private window */ }
+    renderTop(); renderBody();
+  };
+
+  function renderBody() {
+    const body = el('eqBody');
+    if (!body) return;
+    body.innerHTML = viewNow() === 'board' ? boardHtml() : machinesHtml();
+  }
+
+  // What a card is about, for the search: its words and its machine's name.
+  function cardText(k) {
+    const m = k.equipmentId ? machineList().find(x => x.id === k.equipmentId) : null;
+    return [k.title, k.notes, m && m.name, m && m.kind].join(' ');
+  }
+  const canAddCard = () => (seesGear() && ydCan('equipment', 'change')) ||
+    !!(window.YDBoards && YDBoards.editsBoard && YDBoards.editsBoard(MAINT));
+
+  function boardHtml() {
+    const b = maintBoard();
+    if (!b) {
+      return '<p class="empty-msg">' + (window.YDBoards && YDBoards.ready && YDBoards.ready()
+        ? 'The Maintenance board isn’t shared with you yet — ask Jonah.' : 'Loading the board…') + '</p>';
+    }
+    const words = searchWords();
+    // The machines the search names, a tap from their page.
+    const found = words.length && seesGear() ? machineList().filter(m => hits(m.name + ' ' + m.kind, words)).slice(0, 6) : [];
+    return '<div class="eq-bd-head"><span class="muted">' + (words.length
+        ? 'The cards for “' + esc(eqSearch.trim()) + '”.'
+        : 'What needs doing on every machine, the most urgent first — the Maintenance board, the same as on Boards.') + '</span>' +
+        (canAddCard() && !addingCard ? '<button class="btn btn-sm btn-filled" onclick="eqAddCard()">+ Add a card</button>' : '') + '</div>' +
+      (found.length ? '<div class="eq-found">' + found.map(m => '<button class="btn btn-sm" onclick="openEquipment(\'' + safeId(m.id) + '\')">🚜 ' +
+        esc(m.name) + '</button>').join('') + '</div>' : '') +
+      YDBoards.columnsFor(MAINT, words.length ? k => hits(cardText(k), words) : null);
+  }
+
+  // + Add a card: which machine (or the shop), what, how urgent. Put on the
+  // machine itself by whoever may change the machines -- its card follows
+  // (syncMaintenance) and its history keeps it; by anyone else as a card
+  // (eqc-…), which the office's device then puts on the machine the same way.
+  window.eqAddCard = function () {
+    if (!canAddCard()) return;
+    addingCard = true;
+    loadPublicNames();
+    renderAdd(); renderBody();
+    const f = el('ecWhat');
+    if (f && el('ecMachine') && el('ecMachine').value) f.focus();
+  };
+  window.eqCancelCard = function () { addingCard = false; renderAdd(); renderBody(); };
+  function renderAdd() {
+    const box = el('eqAdd');
+    if (!box) return;
+    if (!addingCard) { box.innerHTML = ''; return; }
+    const list = machineList();
+    // The search names one machine: it is the one picked.
+    const words = searchWords();
+    const only = words.length ? list.filter(m => hits(m.name + ' ' + m.kind, words)) : [];
+    const pre = only.length === 1 ? only[0].id : '';
+    box.innerHTML = '<div class="eq-addcard">' +
+      '<div class="field"><span class="label">Which machine</span><select id="ecMachine" class="searchable">' +
+        '<option value="">— Pick the machine —</option><option value="__shop">The shop — not one machine</option>' +
+        list.map(m => '<option value="' + esc(m.id) + '"' + (m.id === pre ? ' selected' : '') + '>' + esc(m.name) +
+          (m.kind ? ' (' + esc(kindName(m.kind)) + ')' : '') + '</option>').join('') + '</select></div>' +
+      '<div class="field"><span class="label">What needs doing</span><input id="ecWhat" autocomplete="off" placeholder="e.g. Hydraulic leak at the bucket cylinder"></div>' +
+      '<div class="field"><span class="label">How urgent</span><div class="eq-urg-pick">' +
+        URGENCY.map(u => '<label class="eq-urg-opt" style="--c:' + u.color + '"><input type="radio" name="ecUrg" value="' + u.id + '"' +
+          (u.id === 'soon' ? ' checked' : '') + '><span><b>' + esc(u.label) + '</b><small>' + esc(u.hint) + '</small></span></label>').join('') +
+      '</div></div>' +
+      '<div class="field"><span class="label">Notes <span class="muted">(optional)</span></span><textarea id="ecNote" rows="2"></textarea></div>' +
+      '<div class="field-actions"><button class="btn btn-filled" onclick="eqSaveCard()">Add it</button>' +
+        '<button class="btn btn-sm" onclick="eqCancelCard()">Cancel</button></div>' +
+    '</div>';
+    box.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
+  }
+  window.eqSaveCard = function () {
+    const mid = val('ecMachine'), what = val('ecWhat'), note = val('ecNote');
+    if (!mid) { showToast('Pick the machine — or The shop'); return; }
+    if (!what) { showToast('Say what needs doing'); return; }
+    const pick = document.querySelector('input[name="ecUrg"]:checked');
+    const u = urgencyOf(pick ? pick.value : 'soon');
+    const g = mid !== '__shop' ? gear[mid] : null;
+    const now = new Date().toISOString();
+    if (g && ydCan('equipment', 'change')) {
+      const issue = { id: 'is' + Date.now().toString(36), what: what, urgency: u.id, note: note, partAtShop: false,
+                      at: now, by: whoAmI(), doneAt: null };
+      g.issues = (g.issues || []).concat([issue]);
+      write(g.id, { issues: g.issues }, 'noting a problem');
+      scheduleMaintSync();
+    } else if (window.YDBoards && YDBoards.editsBoard && YDBoards.editsBoard(MAINT)) {
+      const b = maintBoard();
+      const name = mid === '__shop' ? '' : machineName(mid);
+      const id = 'eqc' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+      const card = {
+        title: (name ? name + ' — ' : '') + what,
+        notes: u.label + ' (' + u.hint + ').' + (note ? '\n\n' + note : ''),
+        labels: ['u-' + u.id], urgency: CARD_URGENCY[u.id] || 'normal',
+        equipmentId: mid === '__shop' ? null : mid, eqUrgency: u.id, what: what, eqNote: note,
+        column: b.columns[0].id, order: Date.now(), checklist: [],
+        createdAt: now, createdBy: whoAmI(), updatedAt: now, updatedBy: whoAmI(),
+      };
+      Promise.resolve(window.YDDb.put('boards/' + MAINT + '/cards', id, card))
+        .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed to add cards to the Maintenance board — ask Jonah' : 'Saved on this phone — it goes up with signal'));
+    } else {
+      showToast('Ask Jonah to let you add cards to the Maintenance board');
+      return;
+    }
+    addingCard = false;
+    renderAdd(); renderBody();
+    showToast(u.label + ' — ' + what);
+  };
+
+  // The count beside the heading, whichever view is showing.
+  function renderBadge() {
     const all = Object.values(gear);
     const overdue = all.filter(g => due(g).state === 'overdue');
     const soon = all.filter(g => due(g).state === 'soon');
-
     const down = all.filter(g => (worstIssue(g) || {}).urgency === 'down');
     const badge = el('eqBadge');
     if (badge) {
@@ -212,7 +390,15 @@
       // .eq-alert), not the gold every other section's count wears.
       badge.className = 'section-badge' + (down.length || overdue.length ? ' eq-alert' : soon.length ? ' eq-soon' : '');
     }
+  }
 
+  function machinesHtml() {
+    // The search: a machine's name, type, make, model, number, or what is
+    // wrong with it.
+    const words = searchWords();
+    const all = Object.values(gear).filter(g => !words.length ||
+      hits([g.name, kindName(g.kind), g.make, g.model, g.year, g.serial, g.plate, g.notes]
+        .concat(openIssues(g).map(i => i.what)).join(' '), words));
     const types = typeList();
     // Types are listed once whatever their case ("trailer", "Trailer":
     // typeList), so a machine is in its type's list whatever case it has.
@@ -256,8 +442,7 @@
     // + Add first, outside the strip of type filters: in the same place on a
     // phone (where the filters swipe sideways and an Add at their end
     // scrolled out of reach) and on a computer.
-    wrap.innerHTML =
-      '<div class="eq-tools">' +
+    return '<div class="eq-tools">' +
         '<button class="btn btn-sm btn-accent eq-add" onclick="editEquipment(\'\')">+ Add</button>' +
         '<div class="filter-bar eq-filters">' +
           ['all'].concat(types, ['warranty']).map(f =>
@@ -269,9 +454,10 @@
       (filter === 'warranty' ? warrantyHtml()
         : list.length
         ? cards
+        : words.length ? '<p class="empty-msg">No machine matches “' + esc(eqSearch.trim()) + '”.</p>'
         : '<p class="empty-msg">Nothing here yet. Add a machine or a truck and start ' +
           'writing down what gets done to it.</p>');
-  };
+  }
 
   window.filterEquipment = function (f) { filter = f; renderEquipment(); };
 
@@ -1136,6 +1322,28 @@
     return bits.join(' or ');
   }
 
+  // The crew cannot read the machines (their records carry costs and
+  // receipts), but the Equipment tab's search and + Add a card need their
+  // names: kept in settings/public, names and types only, by whoever may
+  // change the machines. Written only when something changed; a machine
+  // taken away is written as null (the save merges).
+  let namesSig = null;
+  function publishNames() {
+    if (!ydCan('equipment', 'change') || !gearLoaded || !window.YDDb) return;
+    const list = {};
+    Object.values(gear).forEach(g => { list[g.id] = { name: String(g.name || 'Machine'), kind: String(g.kind || '') }; });
+    const sigOf = l => JSON.stringify(Object.keys(l || {}).filter(id => l[id]).sort().map(id => [id, l[id].name, l[id].kind]));
+    const sig = sigOf(list);
+    if (sig === namesSig) return;
+    namesSig = sig;
+    Promise.resolve(window.YDDb.get('settings', 'public')).then(p => {
+      const had = (p && p.equipmentList) || {};
+      if (sigOf(had) === sig) return;
+      Object.keys(had).forEach(id => { if (!list[id]) list[id] = null; });
+      return window.YDDb.put('settings', 'public', { equipmentList: list, equipmentListAt: new Date().toISOString() });
+    }).catch(e => { namesSig = null; console.warn('[equipment] names for the crew not yet saved:', e && (e.code || e.message)); });
+  }
+
   function scheduleMaintSync() {
     clearTimeout(maintTimer);
     maintTimer = setTimeout(syncMaintenance, 400);
@@ -1224,6 +1432,47 @@
         Promise.resolve(window.YDDb.put('boards', MAINT, { visibleTo: board.visibleTo, autoShared: remember }))
           .catch(e => console.warn('[equipment] sharing not yet saved:', e.code || e.message));
       }
+      // And may add cards to it (Jonah, 15 Oct 2026: "a board for equipment
+      // where people add cards"): each is made an editor of it once, the same
+      // way, so someone he takes off stays off.
+      const eds = Array.isArray(board.editors) ? board.editors : [];
+      const onceEd = Array.isArray(board.autoEditors) ? board.autoEditors : eds.slice();
+      const addEd = crew.filter(uid => eds.indexOf(uid) === -1 && onceEd.indexOf(uid) === -1);
+      const rememberEd = Array.from(new Set(onceEd.concat(addEd, eds)));
+      if (addEd.length || !Array.isArray(board.autoEditors) || rememberEd.length !== onceEd.length) {
+        board.editors = eds.concat(addEd);
+        board.autoEditors = rememberEd;
+        Promise.resolve(window.YDDb.put('boards', MAINT, { editors: board.editors, autoEditors: rememberEd }))
+          .catch(e => console.warn('[equipment] editors not yet saved:', e.code || e.message));
+      }
+    }
+    publishNames();
+
+    // Cards added in the shop by someone who cannot write to the machines
+    // (eqc…, the Equipment tab's + Add a card): put on their machine as a
+    // problem, so its history has it, and replaced by the problem's own card
+    // in the column it had got to. The same card id always makes the same
+    // problem, so two devices doing it at once agree.
+    const nowIso = new Date().toISOString();
+    const converted = [];
+    if (ydCan('equipment', 'change')) {
+      Object.keys(have).forEach(cid => {
+        if (cid.indexOf('eqc') !== 0) return;
+        const k = have[cid], g = k.equipmentId ? gear[k.equipmentId] : null;
+        if (!g) return;
+        const issueId = 'is' + cid.slice(3);
+        if (!(g.issues || []).some(i => i.id === issueId)) {
+          const done = k.column === lastCol;
+          g.issues = (g.issues || []).concat([{
+            id: issueId, what: k.what || String(k.title || '').replace(/^.*? — /, '') || 'See the card',
+            urgency: k.eqUrgency || 'soon', note: k.eqNote || '', partAtShop: false,
+            at: k.createdAt || nowIso, by: k.createdBy || '', doneAt: done ? (k.doneAt || nowIso) : null,
+            boardColumn: k.column || first,
+          }]);
+          write(g.id, { issues: g.issues }, 'putting a shop card on its machine');
+        }
+        converted.push(cid);
+      });
     }
 
     // Problems noted on machines: one card each.
@@ -1282,7 +1531,10 @@
         // unless he noted it himself (reminders.py compares createdBy with
         // his name). Given once, to a card that has none.
         if (!k || !k.createdBy) patch.createdBy = i.by || null;
-        if (!k) { patch.createdAt = new Date().toISOString(); patch.column = doneNow ? lastCol : first; }
+        // A problem that came from a card added in the shop starts in the
+        // column that card had reached.
+        const startCol = i.boardColumn && board.columns.some(c => c.id === i.boardColumn) ? i.boardColumn : first;
+        if (!k) { patch.createdAt = new Date().toISOString(); patch.column = doneNow ? lastCol : startCol; }
         if (doneNow && (!k || k.column !== lastCol)) { patch.column = lastCol; patch.doneAt = i.doneAt; }
         // Reopened on the machine: back out of Done.
         if (!doneNow && k && k.column === lastCol) { patch.column = first; patch.doneAt = null; }
@@ -1290,6 +1542,11 @@
           .catch(e => console.warn('[equipment] card not yet saved:', e.code || e.message));
       });
     });
+    // The shop's cards now on their machines: their problems' cards replace them.
+    if (converted.length) {
+      Promise.resolve(window.YDDb.removeMany(converted.map(cid => [path, cid])))
+        .catch(e => console.warn('[equipment] shop cards not yet replaced:', e.code || e.message));
+    }
     // A problem deleted from the machine takes its card with it.
     Object.keys(have).forEach(id => {
       if (id.indexOf('eqi-') === 0 && !wanted.has(id)) {
@@ -1359,14 +1616,29 @@
     });
   }
 
-  document.addEventListener('yd-boards-ready', scheduleMaintSync);
+  // The tab is there for whoever sees the machines -- or the Maintenance
+  // board, which is shared with the crew (the shop board).
+  function showTab() {
+    const tab = el('tabEquipment');
+    const on = !!(window.YDAuth && window.YDAuth.user && window.YDAuth.mode === 'cloud');
+    if (tab) tab.hidden = !(on && (seesGear() || maintBoard()));
+  }
+  const equipmentShowing = () => { const p = el('panel-equipment'); return !!(p && p.classList.contains('active')); };
+  document.addEventListener('yd-boards-ready', () => {
+    scheduleMaintSync();
+    showTab();
+    if (equipmentShowing()) renderEquipment();
+  });
+  document.addEventListener('yd-boards-changed', () => { showTab(); if (equipmentShowing()) renderEquipment(); });
+  // A column folded on a phone (boards.js bdToggleCol).
+  document.addEventListener('yd-board-redraw', () => { if (equipmentShowing()) renderBody(); });
   // The Maintenance cards themselves arrive a moment after the boards do;
   // checking again then is what lets a removed machine's card be cleared.
   document.addEventListener('yd-cards-changed', () => {
     if (YDBoards.boards()[MAINT]) scheduleMaintSync();
-    // The machine list shows "marked the service done" from these cards.
-    const p = el('panel-equipment');
-    if (p && p.classList.contains('active')) renderEquipment();
+    // The shop board, and the machine list's "marked the service done", are
+    // drawn from these cards.
+    if (equipmentShowing()) renderEquipment();
   });
 
   window.YDEquipment = {
@@ -1421,8 +1693,9 @@
     const a = e.detail || {};
     const on = a.mode === 'cloud' && !!a.user;
     const sees = on && ydCan('equipment', 'see');
-    const tab = el('tabEquipment');
-    if (tab) tab.hidden = !sees;
+    showTab();
+    publicNames = null;
+    const top = el('eqTop'); if (top) top.dataset.sig = '';
     // Looking without changing: every editing control is hidden.
     document.documentElement.toggleAttribute('data-equipment-readonly', sees && !ydCan('equipment', 'change'));
     if (sees) start();

@@ -433,10 +433,9 @@ def _candidates(db, only=None):
     for b, cards in pairs:
         board = b.to_dict() or {}
         cols = board.get("columns") or []
-        # The column named Done, else the last (boards.js doneColOf): Crew
-        # tasks has a column after Done.
-        named = [x.get("id") for x in cols if str(x.get("name") or "").strip().lower() == "done"]
-        last = named[0] if named else (cols[-1].get("id") if cols else None)
+        # The column that means done (boards.js doneColOf, tidy._done_col).
+        import tidy
+        last = tidy._done_col(board)
         for c in (cards if cards is not None else b.reference.collection("cards").stream()):
             k = c.to_dict() or {}
             # Recurring crew tasks (tire pressures, the car wash) are the

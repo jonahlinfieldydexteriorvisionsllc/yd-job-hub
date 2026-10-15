@@ -170,7 +170,13 @@ service cloud.firestore {
         // change boards.
         || (docId == 'public' && canChange('boards')
             && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
-                 .hasOnly(['crewBoards', 'crewBoardsAt']));
+                 .hasOnly(['crewBoards', 'crewBoardsAt']))
+        // The machines' names and types (no costs), for the crew's shop board
+        // on the Equipment tab (equipment.js publishNames): kept up by
+        // whoever may change the machines.
+        || (docId == 'public' && canChange('equipment')
+            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
+                 .hasOnly(['equipmentList', 'equipmentListAt']));
     }
 
     // ===================================================================
