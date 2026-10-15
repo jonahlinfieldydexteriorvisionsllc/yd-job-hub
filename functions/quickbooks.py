@@ -2647,9 +2647,11 @@ def _payments_on(inv_id, pays, names=None):
 
 
 def _name_jobs(jobs, env):
-    """Customer name -> the one open job of that name, for an invoice no job
-    holds (made by hand in QuickBooks, for a job typed in by hand here). Two
-    open jobs of one name: neither -- a wrong guess is worse than none. A job
+    """Customer name -> the one job of that name, for an invoice no job holds
+    (made by hand in QuickBooks, for a job typed in by hand here) -- booked,
+    under way or finished (the bill for the rest is on a finished one). Two
+    jobs of one name, as a customer back for more work has: neither -- a
+    wrong guess is worse than none, and the job can be picked by hand. A job
     marked to take off (removeWhy) or already holding an invoice is never a
     candidate."""
     seen = {}
@@ -2657,7 +2659,7 @@ def _name_jobs(jobs, env):
         ref = j.get("qbInvoiceRef") or {}
         if j.get("removeWhy") or (ref.get("id") and ref.get("env") == env):
             continue
-        if str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active"):
+        if str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active", "complete"):
             continue
         key = _norm_name(j.get("customerName"))
         if key:
