@@ -64,7 +64,9 @@
   const sid = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const money = c => (typeof c === 'number' && isFinite(c) ? fmtMoney(c / 100) : '—');
   const cents = v => { const n = parseFloat(String(v == null ? '' : v).replace(/[^0-9.]/g, '')); return isNaN(n) ? null : Math.round(n * 100); };
-  const live = o => Object.keys(o || {}).filter(k => o[k]).map(k => Object.assign({ id: k }, o[k]));
+  // The key is the id, whatever the record says: a record carrying an `id` of
+  // its own used to win, and a bill filed under that id then found nobody.
+  const live = o => Object.keys(o || {}).filter(k => o[k]).map(k => Object.assign({}, o[k], { id: k }));
   const subsList = () => live(data.subs).sort((a, b) => String(a.name || '').localeCompare(b.name || ''));
   const propsOf = s => live(s.props).sort((a, b) => String(a.client || '').localeCompare(b.client || ''));
 
@@ -215,15 +217,51 @@
   const words = s => norm(s).split(' ').filter(w => w.length > 1 && FILLER.indexOf(w) === -1);
   const matchOf = name => words(name).join(' ');
   function receiptsAll() { return window.YDReceipts && YDReceipts.all ? YDReceipts.all() : {}; }
-  // Whose bill a receipt is: the subcontractor whose "match" words are all in
-  // the store's name.
+  // Whether a name (its words, `want`) is in a store's name (`have`): every
+  // word of it -- or, run together, the same letters on whole words, the way
+  // the server matches their invoice emails (subvisits.names_match): "Green
+  // Acre" is "GreenAcre Lawn Care", and "GreenAcre" is "Green Acre Mowing".
+  // Whole words only, so "Art" is never found in "Smartlawn".
+  function nameIn(want, have) {
+    if (!want.length || !have.length) return false;
+    if (want.every(w => have.indexOf(w) !== -1)) return true;
+    const joined = want.join(''), all = have.join('');
+    const starts = {}, ends = {};
+    let at = 0;
+    have.forEach(w => { starts[at] = true; at += w.length; ends[at] = true; });
+    for (let i = all.indexOf(joined); i !== -1; i = all.indexOf(joined, i + 1)) {
+      if (starts[i] && ends[i + joined.length]) return true;
+    }
+    return false;
+  }
+  // The names a bill goes by: the store the email reader wrote down, and --
+  // for a bill sent through Jobber or the like, where that can come out as
+  // the billing service's name -- who the email was from and the company in
+  // an "Invoice from <company> - ..." subject.
+  function billNames(r) {
+    const out = [r.vendor];
+    (Array.isArray(r.mail) ? r.mail : []).forEach(m => {
+      if (!m) return;
+      const from = String(m.from || '').replace(/<[^>]*>/g, ' ').replace(/["']/g, ' ');
+      if (from.trim()) out.push(from);
+      const subj = /^\s*(?:(?:re|fwd?|fw)\s*:\s*)*invoice from\s+(.+?)\s+[-–—]\s/i.exec(String(m.subject || ''));
+      if (subj) out.push(subj[1]);
+    });
+    return out.map(words).filter(w => w.length);
+  }
+  // Whose bill a receipt is: the subcontractor whose "match" words -- or
+  // whose name, should the match words have been typed another way -- are in
+  // one of the bill's names (case, punctuation and "LLC"/"Inc" never count).
+  // It used to read the match words alone against the store alone, so a
+  // subcontractor set up under exactly the store's name was still "not set
+  // up" when the match words were spaced differently from the bill.
   function subFor(r) {
-    const have = words(r.vendor);
-    if (!have.length) return null;
-    return subsList().find(s => {
-      const want = words(s.match || s.name);
-      return want.length && want.every(w => have.indexOf(w) !== -1);
-    }) || null;
+    const names = billNames(r || {});
+    if (!names.length) return null;
+    const fits = text => { const want = words(text); return names.some(have => nameIn(want, have)); };
+    const subs = subsList();
+    // The match words first: they are what was set up to pick the bills out.
+    return subs.find(s => s.match && fits(s.match)) || subs.find(s => fits(s.name)) || null;
   }
   // Whose bill it is, sorted or not: the subcontractor it was put to in
   // Receipts when that names one set up here, else by the store's name.

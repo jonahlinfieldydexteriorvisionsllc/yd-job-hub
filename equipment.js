@@ -213,9 +213,6 @@
       badge.className = 'section-badge' + (down.length || overdue.length ? ' eq-alert' : soon.length ? ' eq-soon' : '');
     }
 
-    // Anything out of service first, then whatever must be fixed before it is
-    // used, then by service due.
-    const issueRank = g => { const w = worstIssue(g); return w ? rankOf(w.urgency) : URGENCY.length; };
     const types = typeList();
     // Types are listed once whatever their case ("trailer", "Trailer":
     // typeList), so a machine is in its type's list whatever case it has.
@@ -225,26 +222,46 @@
       const now = types.find(t => sameType(t, filter));
       filter = now || 'all';
     }
+    // In three groups, each in name order, so a machine keeps its place in
+    // its group while its meter creeps up. What must not go out -- out of
+    // service, to be fixed before it is used, or past its service -- comes
+    // first; then a service coming up or any other problem; then the rest.
+    const groupOf = g => {
+      const w = worstIssue(g), state = due(g).state;
+      if ((w && (w.urgency === 'down' || w.urgency === 'before')) || state === 'overdue') return 0;
+      return w || state === 'soon' ? 1 : 2;
+    };
+    const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
     const list = all
       .filter(g => filter === 'all' || sameType(g.kind, filter))
-      .sort((a, b) => {
-        const order = { overdue: 0, soon: 1, ok: 2, none: 3 };
-        return Math.min(issueRank(a), 2) - Math.min(issueRank(b), 2) ||
-               order[due(a).state] - order[due(b).state] ||
-               String(a.name || '').localeCompare(b.name || '');
-      });
+      .map(g => ({ g, group: groupOf(g) }))
+      .sort((a, b) => a.group - b.group || byName(String(a.g.name || ''), String(b.g.name || '')) ||
+        String(a.g.id).localeCompare(String(b.g.id)));
+    // A heading over each group -- only when something needs looking at;
+    // a yard with nothing due is just the list.
+    const GROUP_HEAD = ['Needs attention now', 'Coming up', 'Everything else'];
+    const headed = list.some(x => x.group < 2);
+    const cards = list.map((x, i) =>
+      (headed && (i === 0 || list[i - 1].group !== x.group)
+        ? '<div class="eq-group-h eq-group-' + x.group + '">' + GROUP_HEAD[x.group] + '</div>' : '') +
+      card(x.g)).join('');
 
+    // + Add first, outside the strip of type filters: in the same place on a
+    // phone (where the filters swipe sideways and an Add at their end
+    // scrolled out of reach) and on a computer.
     wrap.innerHTML =
-      '<div class="filter-bar">' +
-        ['all'].concat(types, ['warranty']).map(f =>
-          '<button class="btn btn-sm' + (filter === f ? ' btn-filled' : '') +
-          '" onclick="filterEquipment(' + esc(JSON.stringify(f)) + ')">' +
-          (f === 'all' ? 'Everything' : f === 'warranty' ? '🛡 Under warranty' : esc(plural(f))) + '</button>').join('') +
-        '<button class="btn btn-sm btn-accent" onclick="editEquipment(\'\')">+ Add</button>' +
+      '<div class="eq-tools">' +
+        '<button class="btn btn-sm btn-accent eq-add" onclick="editEquipment(\'\')">+ Add</button>' +
+        '<div class="filter-bar eq-filters">' +
+          ['all'].concat(types, ['warranty']).map(f =>
+            '<button class="btn btn-sm' + (filter === f ? ' btn-filled' : '') +
+            '" onclick="filterEquipment(' + esc(JSON.stringify(f)) + ')">' +
+            (f === 'all' ? 'Everything' : f === 'warranty' ? '🛡 Under warranty' : esc(plural(f))) + '</button>').join('') +
+        '</div>' +
       '</div>' +
       (filter === 'warranty' ? warrantyHtml()
         : list.length
-        ? list.map(card).join('')
+        ? cards
         : '<p class="empty-msg">Nothing here yet. Add a machine or a truck and start ' +
           'writing down what gets done to it.</p>');
   };
@@ -260,10 +277,14 @@
       (k.markedDoneAt ? ' ' + shortDate(k.markedDoneAt) : '') + ' — log it so the next one counts from it</div>';
   }
 
+  // The whole card opens the machine -- by a tap, or by Tab then Enter (or
+  // Space) for a keyboard, as the service history's rows do.
   function card(g) {
     const d = due(g);
     const l = last(g);
-    return '<div class="eq eq-' + d.state + '" onclick="openEquipment(\'' + g.id + '\')">' +
+    const id = safeId(g.id);
+    return '<div class="eq eq-' + d.state + '" role="button" tabindex="0" onclick="openEquipment(\'' + id + '\')" ' +
+        'onkeydown="if(event.target===this&&(event.key===\'Enter\'||event.key===\' \')){event.preventDefault();openEquipment(\'' + id + '\')}">' +
       '<div class="eq-top">' +
         '<span class="eq-name">' + esc(g.name) + '</span>' +
         '<span class="eq-kind">' + esc(kindName(g.kind)) + '</span>' +

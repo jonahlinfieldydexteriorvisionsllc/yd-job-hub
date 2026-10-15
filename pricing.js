@@ -784,6 +784,7 @@
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
     unsubs = []; rules = blankRules(); fuelPrices = {}; claudeText = null; ready = false;
+    saved = null;
   }
   function start() {
     stop();
@@ -801,10 +802,62 @@
   // Not awaited: a write only settles when the server answers.
   function save(patch) {
     rules = merged(Object.assign({}, rules, patch));
-    Promise.resolve(window.YDDb.put('pricing', 'rules', patch)).catch(e => {
+    track(window.YDDb.put('pricing', 'rules', patch)).catch(e => {
       showToast(e && e.code === 'permission-denied' ? 'Only the owner changes the pricing rules' : 'Not saved yet — will retry');
     });
     changed();
+  }
+
+  // "Saved ✓ 3:42 pm" at the top of the screen after each change -- every
+  // box saves as it is left, and nothing said so. A write is only answered
+  // once it reaches the server: with no signal it waits on this device
+  // (Firestore sends it when there is signal) and the screen says that
+  // instead of pretending; one refused says so too.
+  let saved = null;           // { state: 'saving'|'saved'|'waiting'|'failed', at, denied }
+  let saveCount = 0;
+  const WAIT_MS = 6000;       // longer than this unanswered: say so
+  function track(write) {
+    const n = ++saveCount;
+    saved = { state: navigator.onLine === false ? 'waiting' : 'saving' };
+    paintSaved();
+    const slow = setTimeout(() => {
+      if (n === saveCount && saved && saved.state === 'saving') { saved = { state: 'waiting' }; paintSaved(); }
+    }, WAIT_MS);
+    return Promise.resolve(write).then(() => {
+      clearTimeout(slow);
+      // Writes reach the server in order: the newest answered means all are.
+      if (n === saveCount) { saved = { state: 'saved', at: new Date() }; paintSaved(); }
+    }, e => {
+      clearTimeout(slow);
+      saved = { state: 'failed', denied: !!(e && e.code === 'permission-denied') };
+      paintSaved();
+      throw e;
+    });
+  }
+  function savedWords() {
+    if (!saved) return ['', ''];
+    if (saved.state === 'saving') return ['Saving…', ''];
+    if (saved.state === 'saved') {
+      return ['Saved ✓ ' + saved.at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }), 'Saved to the server'];
+    }
+    if (saved.state === 'waiting') {
+      return ['Not saved yet — no signal?', 'Kept on this device: it goes to the server by itself when there is signal'];
+    }
+    return [saved.denied ? 'Not saved — only the owner can change these' : 'Not saved — no signal?',
+      saved.denied ? '' : 'The server did not take it — change the box again to try again'];
+  }
+  function savedHtml() {
+    const [text, title] = savedWords();
+    return '<span class="pr-saved' + (saved ? ' ' + saved.state : '') + '" id="prSaved" role="status" aria-live="polite"' +
+      (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(text) + '</span>';
+  }
+  function paintSaved() {
+    const b = el('prSaved');
+    if (!b) return;
+    const [text, title] = savedWords();
+    b.className = 'pr-saved' + (saved ? ' ' + saved.state : '');
+    b.textContent = text;
+    if (title) b.title = title; else b.removeAttribute('title');
   }
 
   // ------------------------------------------------------- Pricing rules screen
@@ -895,7 +948,7 @@
     else if (k === 'cardRuns') val = v === true;
     claudeSet = Object.assign({}, claudeSet, { [k]: val });
     const b = el('prSpend'); if (b) b.innerHTML = spendHtml();
-    Promise.resolve(window.YDDb.put('settings', 'claude', { [k]: val, updatedAt: new Date().toISOString() })).catch(e => {
+    track(window.YDDb.put('settings', 'claude', { [k]: val, updatedAt: new Date().toISOString() })).catch(e => {
       showToast(e && e.code === 'permission-denied' ? 'Only the owner changes this' : 'Not saved yet — will retry');
     });
     showToast('Saved');
@@ -1063,9 +1116,54 @@
     return (cat.items[id] || {}).name || '(gone from Supplies)';
   }
 
+  // The screen's sections, in order: [id, heading, its name in the index].
+  // The index stays at the top of the window while it scrolls (styles.css,
+  // ux-w1): the screen is a long one, and Claude's takeoff rules were a
+  // long scroll from the labour rate.
+  const SECTIONS = [
+    ['labor', 'Labor', 'Labor'],
+    ['materials', 'Materials & sales tax', 'Materials'],
+    ['suppliers', 'Suppliers', 'Suppliers'],
+    ['delivery', 'Delivery', 'Delivery'],
+    ['fuel', 'Fuel', 'Fuel'],
+    ['rule', 'Added by rule', 'By rule'],
+    ['payments', 'Payments & the message on the estimate', 'Payments'],
+    ['end', 'The end of every QuickBooks estimate', 'Estimate end'],
+    ['claude', 'Claude', 'Claude'],
+    ['takeoff', 'What Claude knows about takeoff', 'Takeoff'],
+  ];
+  const secHead = id => {
+    const s = SECTIONS.find(x => x[0] === id) || [id, id];
+    return '<h3 class="pr-h" id="prSec_' + s[0] + '">' + esc(s[1]) + '</h3>';
+  };
+  function indexHtml() {
+    return '<nav class="pr-index" aria-label="Sections of the pricing rules">' +
+      '<div class="pr-index-links">' + SECTIONS.map(([id, , short]) =>
+        '<button type="button" onclick="prGoTo(\'' + id + '\')">' + esc(short) + '</button>').join('') + '</div>' +
+      savedHtml() + '</nav>';
+  }
+  // The window itself scrolls (the dark backdrop round it); the section's
+  // heading lands just under the index, which by then sits at the top --
+  // where exactly depends on how many rows the index wraps to.
+  window.prGoTo = function (id) {
+    const t = el('prSec_' + String(id).replace(/[^a-z]/g, '')), m = el('prModal');
+    if (!t || !m) return;
+    const bar = m.querySelector('.pr-index');
+    const stuckAt = (parseFloat(getComputedStyle(m).paddingTop) || 0) +
+      (bar ? parseFloat(getComputedStyle(bar).top) || 0 : 0);
+    const below = stuckAt + (bar ? bar.getBoundingClientRect().height : 0) + 10;
+    const y = m.scrollTop + t.getBoundingClientRect().top - m.getBoundingClientRect().top - below;
+    const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    m.scrollTo({ top: Math.max(0, y), behavior: still ? 'auto' : 'smooth' });
+  };
+
   function renderRules() {
     const body = el('prBody');
     if (!body) return;
+    // The index strip scrolls sideways on a phone: a redraw (every save is
+    // one) keeps it where it was rather than snapping back to Labor.
+    const strip = body.querySelector('.pr-index-links');
+    const stripAt = strip ? strip.scrollLeft : 0;
     const r = rules, ro = !owner();
     const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { vendors: {} };
     const vendors = Object.values(cat.vendors || {}).sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -1078,11 +1176,11 @@
         '<span class="pr-chip">' + esc(supplyName(id)) + (ro ? '' : ' <button class="link-btn" onclick="prListRemove(\'' + key + '\', \'' + esc(id) + '\')">✕</button>') + '</span>').join('') || '<span class="muted">none</span>') +
       (ro ? '' : ' <select onchange="prListAdd(\'' + key + '\', this.value)">' + planting + '</select>') + '</div>';
 
-    body.innerHTML =
+    body.innerHTML = indexHtml() +
       '<p class="hint">How every estimate is priced. Change a number here and every estimate worked out from now on uses it; estimates already sent keep their prices. ' +
         'Only you see this screen, and the customer never sees any of it.' + (ro ? ' <b>Only the owner can change these.</b>' : '') + '</p>' +
 
-      '<h3 class="pr-h">Labor</h3><div class="pr-grid">' +
+      secHead('labor') + '<div class="pr-grid">' +
         box('Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')", 'what a crew-day costs, for estimating') +
         box('Hours in a crew-day', r.crewDayHours, "prSet('crewDayHours', this.value, 'num')",
           'paid hours of the whole crew together — 3 people × 8 hours = 24. Turns clocked hours into crew-days on Estimate vs actual') +
@@ -1093,7 +1191,7 @@
       '<p class="hint">Services priced another way — turf by the sq ft, with what adjusts it — and your notes on how ' +
         'each service is priced: <button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced</button></p>' +
 
-      '<h3 class="pr-h">Materials & sales tax</h3><div class="pr-grid">' +
+      secHead('materials') + '<div class="pr-grid">' +
         box('Sales tax on purchases (%)', r.taxPct, "prSet('taxPct', this.value, 'num')", 'added to every material cost before markup') +
         box('Sales tax charged to customers (%)', r.customerTaxPct, "prSet('customerTaxPct', this.value, 'num')",
           'on planting, sod, seed, mulch and lawn care — state + county where the job is') +
@@ -1125,7 +1223,7 @@
         '“No tax” leaves the sales tax off that kind of thing (a rental, say). A kind you add is picked on an item in Supplies ' +
         '(Edit → For estimates → Kind of material), where you can add one too.</p>' +
 
-      '<h3 class="pr-h">Suppliers</h3>' +
+      secHead('suppliers') +
       (vendors.length ? '<table class="pr-table"><thead><tr><th>Supplier</th><th>Card/processing fee %</th><th>Delivers by town (one load per material)</th></tr></thead><tbody>' +
         vendors.map(v => {
           const vr = r.vendors[v.id] || {};
@@ -1135,7 +1233,7 @@
             ' onchange="prVendor(\'' + esc(v.id) + '\', \'cityDelivery\', this.checked)"></td></tr>';
         }).join('') + '</tbody></table>' : '<p class="muted">No suppliers in Supplies yet.</p>') +
 
-      '<h3 class="pr-h">Delivery</h3><div class="pr-grid">' +
+      secHead('delivery') + '<div class="pr-grid">' +
         box('Pallet / boulder surcharge per load ($)', dollars(r.delivery.palletCents), "prSet('delivery.palletCents', this.value, 'cents')") +
         box('Most tons in one load', r.delivery.loadTons, "prSet('delivery.loadTons', this.value, 'num')") +
         box('Markup on delivery (%)', r.delivery.markupPct, "prSet('delivery.markupPct', this.value, 'num')") +
@@ -1146,7 +1244,7 @@
         (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="prTownAdd()">+ Add a town</button></div>') +
       '</details>' +
 
-      '<h3 class="pr-h">Fuel</h3><div class="pr-grid">' +
+      secHead('fuel') + '<div class="pr-grid">' +
         box('Truck mpg (each truck, comma between)', (r.fuel.mpg || []).join(', '), "prSet('fuel.mpg', this.value, 'list')", 'every truck makes the round trip every day') +
         box('Loader diesel (gallons a day)', r.fuel.bobcatGalPerDay, "prSet('fuel.bobcatGalPerDay', this.value, 'num')") +
         box('Markup on fuel (%)', r.fuel.markupPct, "prSet('fuel.markupPct', this.value, 'num')") +
@@ -1157,7 +1255,7 @@
         (fp.asOf ? ' a gallon, week of ' + esc(fp.asOf) : '') + (fp.source ? ' (' + esc(fp.source) + ')' : '') +
         '. Fetched once a week; an estimate can use a different price.</p>' +
 
-      '<h3 class="pr-h">Added by rule</h3>' +
+      secHead('rule') +
       '<div class="pr-grid">' +
         '<label class="pr-field"><span>Dumpster (from Supplies)</span>' + pick('dumpster.supplyId', r.dumpster.supplyId, i => i.category === 'dumpster') + '</label>' +
         box('Most cubic yards of spoil in one', r.dumpster.maxCuYd, "prSet('dumpster.maxCuYd', this.value, 'num')") +
@@ -1169,7 +1267,7 @@
       '<div class="pr-field wide"><span>For every single-trunk tree</span>' + listPick('perSingleTree') + '</div>' +
       '<div class="pr-field wide"><span>For every multi-trunk or evergreen tree</span>' + listPick('perMultiTree') + '</div>' +
 
-      '<h3 class="pr-h">Payments & the message on the estimate</h3><div class="pr-grid">' +
+      secHead('payments') + '<div class="pr-grid">' +
         box('Three payments above ($)', dollars(r.payments.splitAboveCents), "prSet('payments.splitAboveCents', this.value, 'cents')", '50/50 up to this total; 50/25/25 above it') +
         box('Smallest deposit (% of the job)', num(r.payments.minDepositPct) !== null ? num(r.payments.minDepositPct) : 50,
           "prSet('payments.minDepositPct', this.value, 'num')", 'a deposit set lower on an estimate is raised to this') +
@@ -1182,13 +1280,13 @@
         '</span><textarea rows="3"' + (ro ? ' disabled' : '') + ' onchange="prSet(\'payments.' + k + '\', this.value, \'text\')">' +
         esc(r.payments[k] || '') + '</textarea></label>').join('') +
 
-      '<h3 class="pr-h">The end of every QuickBooks estimate</h3>' +
+      secHead('end') +
       '<p class="hint">Customers e-sign the estimate itself, so the warranty and the terms and conditions go on it as its last lines ($0 each), ' +
         'in this order. Each is a product in QuickBooks: its text is the product’s description there (4,000 characters at most — ' +
         'split longer terms into more products). Change the wording in QuickBooks; the next estimate carries it.</p>' +
       endListHtml(ro) +
 
-      '<h3 class="pr-h">Claude</h3>' +
+      secHead('claude') +
       '<div class="pr-spend" id="prSpend">' + spendHtml() + '</div>' +
       '<label class="est-switch"><input type="checkbox"' + (r.autoDraft !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'autoDraft\', this.checked, \'bool\')"> Start the estimate by itself when I finish my site-visit notes</label>' +
@@ -1196,16 +1294,18 @@
       '<label class="est-switch"><input type="checkbox"' + (r.autoCare !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'autoCare\', this.checked, \'bool\')"> Draft the plant-care email when a job with plants is marked Complete</label>' +
       '<p class="hint">It goes to your Gmail Drafts for you to read and send — never straight to the customer.</p>' +
-      '<h3 class="pr-h">What Claude knows about takeoff</h3>' +
+      secHead('takeoff') +
       '<p class="hint">Your rules for laying out an estimate — base depths, conversions, install standards, how a scope is written, the clauses every estimate carries. ' +
         'Claude reads all of this with every message about an estimate. Prices and markups don’t belong here; the app works those out.</p>' +
       '<textarea class="pr-claude" rows="18"' + (ro ? ' disabled' : '') + ' onchange="prClaude(this.value)">' + esc(claudeText || '') + '</textarea>';
+    const again = body.querySelector('.pr-index-links');
+    if (again && stripAt) again.scrollLeft = stripAt;
   }
 
   window.prClaude = function (v) {
     if (!owner()) return;
     claudeText = String(v || '');
-    Promise.resolve(window.YDDb.put('pricing', 'claude', { text: claudeText, updatedAt: new Date().toISOString() })).catch(e => {
+    track(window.YDDb.put('pricing', 'claude', { text: claudeText, updatedAt: new Date().toISOString() })).catch(e => {
       showToast(e && e.code === 'permission-denied' ? 'Only the owner changes the pricing rules' : 'Not saved yet — will retry');
     });
     showToast('Saved — Claude reads this from the next message');

@@ -617,14 +617,88 @@
     if (to === 'job') return 'Added to <b>' + jobNameHtml(s.jobName, s.est) + '</b>';
     return (DEST.find(d => d[0] === to) || ['', ''])[1].split(' ')[0] + ' <b>' + esc(s.name || DEST_NAME[to] || '') + '</b>';
   }
-  function splitsHtml(rid, r) {
-    return (r.splits || []).map(s =>
-      '<div class="rc-split"><span>' + splitWhere(s) + ' — ' +
-        (s.lines || []).length + ' line' + ((s.lines || []).length === 1 ? '' : 's') +
-        (s.taxCents ? ' + tax' : '') + ', ' + money((s.cents || 0) + (s.taxCents || 0)) + '</span>' +
-        (sorts() ? '<button class="btn btn-sm" onclick="rcUndo(\'' + rid + '\',\'' + safeId(s.id) + '\')">Undo</button>' : '') +
-      '</div>').join('');
+  const splitPlace = s => destOf(s) === 'job' ? (s.jobName || 'the job') : (s.name || DEST_NAME[destOf(s)] || '');
+
+  // ------------------------------------------------- what was done with it
+  //
+  // Where a receipt went shows as a small chip ("✓ Added to the Smith job");
+  // taking it back, and deleting the receipt, sit behind ⋯ -- or a tap on
+  // the chip, which opens the same menu. A green bar with its own Undo on
+  // every sorted receipt doubled the height of All receipts, and a 🗑 on
+  // every row was one slip of the thumb from gone. Undo is there for as long
+  // as it ever was; it is only out of the way.
+  //
+  // `where` tells a card in To sort ('c') from a row in All receipts ('h'):
+  // the same receipt can be in both.
+  let menuOpen = '';          // the ⋯ menu that is open, kept through a redraw
+  function menuItems(rid, r) {
+    const items = [];
+    if (sorts()) {
+      (r.splits || []).forEach(s => items.push('<button type="button" ' +
+        'onclick="rcMenuClose(); rcUndo(\'' + rid + '\',\'' + safeId(s.id) + '\')">↩ Undo — take it off ' +
+        esc(splitPlace(s)) + '</button>'));
+    }
+    if (owner()) {
+      items.push('<button type="button" class="rc-menu-del" onclick="rcMenuClose(); rcDelete(\'' + rid + '\')">' +
+        '🗑 Delete this receipt</button>');
+    }
+    return items;
   }
+  function menuHtml(where, rid, r) {
+    const items = menuItems(rid, r);
+    if (!items.length) return '';
+    const key = where + rid;
+    return '<details class="rc-menu" data-menu="' + key + '"' + (menuOpen === key ? ' open' : '') +
+        ' ontoggle="rcMenuToggled(this)">' +
+      '<summary class="rc-menu-btn" title="More" aria-label="More for this receipt">⋯</summary>' +
+      '<div class="rc-menu-list">' + items.join('') + '</div></details>';
+  }
+  function chipsHtml(where, rid, r) {
+    const list = r.splits || [];
+    if (!list.length) return '';
+    const opens = menuItems(rid, r).length > 0;
+    return '<span class="rc-chips">' + list.map(s => {
+      const n = (s.lines || []).length, amt = money((s.cents || 0) + (s.taxCents || 0));
+      const title = (n ? n + ' line' + (n === 1 ? '' : 's') + (s.taxCents ? ' + tax' : '') + ', ' : '') + amt +
+        (opens ? ' — tap for Undo' : '');
+      const inner = '✓ ' + splitWhere(s) + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
+      return opens
+        ? '<button type="button" class="rc-chip" title="' + esc(title) + '" onclick="rcMenuOpen(\'' + where + rid + '\')">' + inner + '</button>'
+        : '<span class="rc-chip" title="' + esc(title) + '">' + inner + '</span>';
+    }).join('') + '</span>';
+  }
+  // One menu open at a time; remembered so a receipt arriving (a redraw)
+  // does not snap it shut under the finger.
+  window.rcMenuToggled = function (box) {
+    const key = box.getAttribute('data-menu') || '';
+    if (box.open) {
+      menuOpen = key;
+      document.querySelectorAll('details.rc-menu[open]').forEach(d => { if (d !== box) d.open = false; });
+    } else if (menuOpen === key) menuOpen = '';
+  };
+  window.rcMenuOpen = function (key) {
+    const box = document.querySelector('details.rc-menu[data-menu="' + safeId(key) + '"]');
+    if (box) { box.open = true; const first = box.querySelector('.rc-menu-list button'); if (first) first.focus(); }
+  };
+  window.rcMenuClose = function () {
+    menuOpen = '';
+    document.querySelectorAll('details.rc-menu[open]').forEach(d => { d.open = false; });
+  };
+  // A tap anywhere else, or Escape, closes it -- the way any menu does.
+  document.addEventListener('click', e => {
+    if (!menuOpen) return;
+    const t = e.target;
+    if (t && t.closest && (t.closest('details.rc-menu') || t.closest('.rc-chip'))) return;
+    window.rcMenuClose();
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !menuOpen) return;
+    const box = document.querySelector('details.rc-menu[open]');
+    window.rcMenuClose();
+    // Back on the ⋯ it was opened from, for a keyboard.
+    const btn = box && box.querySelector('summary');
+    if (btn) btn.focus();
+  });
 
   function cardHtml(r, jobs) {
     const rid = safeId(r.id);
@@ -638,6 +712,15 @@
     const to = dest[rid] || defaultDest(r);
     // Lines still to place -- or a receipt with no lines at all, which goes whole.
     const sortable = free.length > 0 || (!(r.lines || []).length && !(r.splits || []).length);
+    // An email with no itemised lines gets its one line named after the
+    // summary (functions/receipts.py lines_from), so the summary above it
+    // said the same sentence twice: shown once, as the line.
+    const plain = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 160);
+    const lines = r.lines || [];
+    const summary = r.summary && !(lines.length === 1 && plain(lines[0].name) === plain(r.summary)) ? esc(r.summary) + ' ' : '';
+    // "the order names <the customer>" beside the customer's own name read
+    // the name twice over.
+    const why = /^the order names /i.test(String((r.suggest || {}).why || '')) ? 'named on the order' : String((r.suggest || {}).why || '');
     return '<div class="rc-card" id="rc_' + rid + '">' +
       '<div class="rc-top">' +
         '<span class="rc-vendor">' + esc(r.vendor || 'Receipt') + '</span>' +
@@ -646,11 +729,11 @@
         (owed ? '<span class="rc-tag rc-owed">Owed</span>' : '') +
         '<span class="rc-total">' + money(r.totalCents) + '</span>' +
       '</div>' +
-      '<div class="rc-sum">' + esc(r.summary || '') +
-        ' <span class="muted">· ' + esc(KIND[r.kind] || 'Other') + '</span></div>' +
+      '<div class="rc-sum">' + summary +
+        '<span class="muted">' + (summary ? '· ' : '') + esc(KIND[r.kind] || 'Other') + '</span></div>' +
       (r.whose === 'unsure' ? '<div class="rc-note">Claude was not sure this one is for the business.</div>' : '') +
-      (sug && free.length && to === 'job' ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b> — ' +
-        esc(r.suggest.why || '') + '</div>' : '') +
+      (sug && free.length && to === 'job' ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b>' +
+        (why ? ' — ' + esc(why) : '') + '</div>' : '') +
       (split && free.length ? '<div class="rc-hint">Tick the lines for one place, add them, then do the rest.' +
         ((r.splits || []).length ? '' : ' <button class="rc-link" onclick="rcSplit(\'' + rid + '\', false)">All one place after all</button>') +
         '</div>' : '') +
@@ -663,11 +746,11 @@
       '</div>' +
       (!split && free.length > 1 && sorts() ?
         '<button class="rc-link" onclick="rcSplit(\'' + rid + '\', true)">Split it up (some lines one place, some another)</button>' : '') +
-      splitsHtml(rid, r) +
+      ((r.splits || []).length ? '<div class="rc-chipline">' + chipsHtml('c', rid, r) + '</div>' : '') +
       (sortable && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
-        (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')">🗑 Delete</button>' : '') +
+        menuHtml('c', rid, r) +
       '</div>' +
     '</div>';
   }
@@ -748,17 +831,17 @@
           esc(legacyName || DEST_NAME[legacy]) + '</span>'
       : r.status === 'new' ? '<span class="rc-tag rc-owed">To sort</span>' : '';
     const why = aside ? asideText(r) : '';
+    // Where it went sits in the row as a chip or two, not a bar under it.
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
         '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
-        esc(r.summary || '') + '</span>' + where +
+        esc(r.summary || '') + '</span>' + chipsHtml('h', rid, r) + where +
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
         (r.status === 'skipped' && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
-        (owner() ? '<button class="btn btn-sm rc-del" onclick="rcDelete(\'' + rid + '\')" title="Delete">🗑</button>' : '') +
+        menuHtml('h', rid, r) +
       '</div>' +
-      (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '') +
-      ((r.splits || []).length ? '<div class="rc-row-splits">' + splitsHtml(rid, r) + '</div>' : '');
+      (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '');
   }
 
   function stateHtml() {
