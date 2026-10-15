@@ -311,10 +311,12 @@
 
   <!-- ============ TAB: SNOW ============ -->
   <div class="tab-panel" id="panel-snow">
-    <div id="weatherWrap" class="wx-strip"></div>
+    <!-- The storm first: it is hidden until one is open, so the weather
+         leads on any other night (storm.js). -->
     <div id="stormWrap" hidden></div>
+    <div id="weatherWrap" class="wx-strip"></div>
     <div id="lastStormWrap" hidden></div>
-    <div class="start-point"><span id="snowStartPoint">Route starts from Madison (yard not set)</span><button class="btn btn-sm" onclick="setStartPoint()">Change</button></div>
+    <div class="start-point" id="snowStartRow"><span id="snowStartPoint">Route starts from Madison (yard not set)</span><button class="btn btn-sm" onclick="setStartPoint()">Change</button></div>
     <div id="snowRouteWrap"></div>
     <div class="section">
       <div class="section-head">
@@ -322,8 +324,9 @@
         <span style="display:flex;align-items:center;gap:10px">
           <span class="section-badge" id="snowCountBadge"></span>
           <button class="btn btn-sm" id="nightBtn" onclick="toggleNight()" title="Night mode">◑ Night</button>
-          <button class="btn btn-filled btn-sm" id="stormStartBtn" onclick="startStorm()">❄ Start storm</button>
-          <button class="btn btn-accent btn-sm" id="snowAddBtn" onclick="openSnowForm()">+ Add account</button>
+          <!-- Start storm is the main button here: it is what a storm night needs. -->
+          <button class="btn btn-sm" id="snowAddBtn" onclick="openSnowForm()">+ Add account</button>
+          <button class="btn btn-accent btn-sm" id="stormStartBtn" onclick="startStorm()">❄ Start storm</button>
         </span>
       </div>
       <div class="section-body">

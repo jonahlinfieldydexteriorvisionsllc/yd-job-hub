@@ -27,6 +27,29 @@
   const askedHere = {};      // 'stormId/stopId' -> asked from this phone (before the request comes back)
   let lastLoaded = false;    // the last storm's stops have answered (an empty list is not "loading")
 
+  // Finding your place at 3am (15 Oct 2026). A finished stop folds to one
+  // line, so the list is mostly the stops still to do; `opened` holds the
+  // finished ones tapped open on this phone. `skipping` is the stop whose
+  // reasons are on screen. `scrollWanted` brings this person's stop on
+  // screen at the next drawing -- set when a storm is first drawn and after
+  // THIS phone's own Arrive or Depart, never for another phone's change, so
+  // the page never jumps under somebody's thumb. (A stop id in place of
+  // `true` names the card to bring up: the one just arrived at.)
+  const opened = {};
+  let skipping = null;
+  let scrollWanted = false;
+  // How long the "Undo" after Arrive / Depart / Skip stays up.
+  const UNDO_MS = 8000;
+  // Salt chips for gloves: the usual amounts, one tap each.
+  const SALT_CHIPS = [0, 100, 200, 300, 500];
+  // Picked as big buttons rather than typed. "Other…" asks for the words.
+  const SKIP_REASONS = ['Under trigger', 'Car in the way', 'Cancelled by customer', 'Can’t get in'];
+  // accountId -> { lbs, at }: the salt put down there on the last few storms,
+  // for "Same as last time". Read once per storm (see loadPastSalt).
+  let pastSalt = {}, pastSaltFor = null;
+  // The storm-shift clock-out, held while an Undo is up (see checkDone).
+  let fromServer = false, holdDoneUntil = 0, doneTimer = null;
+
   // Where the truck sets out from -- the first leg of every route is measured
   // from here, so it changes the whole order. Read from settings; the middle
   // of Madison is the fallback so a storm can always be started.
@@ -156,6 +179,106 @@
   function accountFor(stop) {
     return (window.YDSnow && YDSnow.accounts()[stop.accountId]) || {};
   }
+  const nameOf = s => accountFor(s).name || s.accountId || 'this stop';
+  const myUid = () => (window.YDAuth && window.YDAuth.user && window.YDAuth.user.uid) || '';
+  const sortedStops = () => Object.values(stops).sort((a, b) => a.order - b.order);
+
+  // "Undo" beside the news where the app has it (app.js showUndo), else the
+  // plain message.
+  function undoOr(msg, onUndo) {
+    if (typeof showUndo === 'function') showUndo(msg, onUndo, UNDO_MS);
+    else showToast(msg);
+  }
+
+  // Google Maps driving directions to the stop, the way the crew job page
+  // does it (crewjobs.js mapUrl): to the address, which is what Maps shows
+  // the driver; the map point only when there is no address.
+  function directionsUrl(a) {
+    // With its town (unless it already has it) and the state, as snow.js's
+    // own map link sends it.
+    const line = window.YDSnow && YDSnow.addressShown ? YDSnow.addressShown(a) : String(a.address || '');
+    const where = line
+      ? (a.street || /\b(WI|Wisconsin)\b/i.test(line) ? line : line + ', WI')
+      : (a.lat != null && a.lng != null ? a.lat + ',' + a.lng : '');
+    return where ? 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(where) : '';
+  }
+
+  // The stop this phone should be looking at: the one this person is on
+  // site at, else the next one nobody has started, else anybody's on site.
+  function currentStop(list) {
+    const me = myUid();
+    const onSite = s => s.arrivedAt && !s.departedAt && !s.skipped;
+    // Of this person's own, the one arrived at last.
+    const mine = list.filter(s => onSite(s) && me && s.arrivedBy === me)
+      .sort((a, b) => String(b.arrivedAt).localeCompare(String(a.arrivedAt)))[0];
+    return mine || list.find(s => !s.arrivedAt && !s.skipped) || list.find(onSite) || null;
+  }
+
+  // Bring that stop on screen (or the one just arrived at, when
+  // `scrollWanted` names it). Only while the Snow tab is showing (a hidden
+  // card cannot be scrolled to); otherwise it waits for the tab to open.
+  function showCurrent(list) {
+    const panel = document.getElementById('panel-snow');
+    if (!panel || !panel.classList.contains('active') || !list.length) return;
+    const named = typeof scrollWanted === 'string' ? list.find(s => s.id === scrollWanted) : null;
+    scrollWanted = false;
+    const s = named || currentStop(list);
+    if (!s) return;
+    // The first stop: the storm's heading too, so the count stays in view.
+    const el = s === list[0] ? document.getElementById('stormWrap')
+      : document.getElementById('stop-' + safeId(s.id));
+    const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+  }
+  function watchSnowTab() {
+    const p = document.getElementById('panel-snow');
+    if (!p || typeof MutationObserver !== 'function') return;
+    new MutationObserver(() => { if (scrollWanted && storm) showCurrent(sortedStops()); })
+      .observe(p, { attributes: true, attributeFilter: ['class'] });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchSnowTab);
+  else watchSnowTab();
+
+  // The salt put down at each account on the last three storms closed, for
+  // the "Same as last time" chip. A few small reads, once per storm, never
+  // waited on: the chip just appears when they answer (from the phone's
+  // copy with no signal).
+  function loadPastSalt() {
+    if (!storm || pastSaltFor === storm.id || !window.YDDb || !window.YDDb.list) return;
+    const forId = pastSaltFor = storm.id;
+    pastSalt = {};
+    Object.values(known).filter(x => x.id !== forId && x.status === 'closed')
+      .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')))
+      .slice(0, 3)
+      .forEach(p => {
+        Promise.resolve(window.YDDb.list('storms/' + p.id + '/stops')).then(rows => {
+          if (pastSaltFor !== forId) return;
+          let added = false;
+          Object.values(rows || {}).forEach(x => {
+            const lbs = num(x.saltLbs, null);
+            if (lbs == null || !x.departedAt || x.skipped || !x.accountId) return;
+            const was = pastSalt[x.accountId];
+            if (!was || String(x.departedAt) > was.at) { pastSalt[x.accountId] = { lbs: lbs, at: String(x.departedAt) }; added = true; }
+          });
+          // Redrawn only where a salt box is showing.
+          if (added && storm && storm.id === forId &&
+              (fixing || Object.values(stops).some(s => s.arrivedAt && !s.departedAt && !s.skipped))) render();
+        }).catch(() => { /* no chip, that is all */ });
+      });
+  }
+  // This account's last salt: an earlier visit tonight first (a second
+  // pass), then the last storms'. Null when nothing is known.
+  function lastSaltOf(s) {
+    let best = null;
+    Object.values(stops).forEach(x => {
+      if (x.id === s.id || x.accountId !== s.accountId || !x.departedAt || x.skipped) return;
+      const lbs = num(x.saltLbs, null);
+      if (lbs != null && (!best || String(x.departedAt) > best.at)) best = { lbs: lbs, at: String(x.departedAt) };
+    });
+    if (best) return best.lbs;
+    const p = pastSalt[s.accountId];
+    return p ? p.lbs : null;
+  }
 
   // ---------------------------------------------------------------- render
 
@@ -173,6 +296,9 @@
     // the time on site -- so it needs everyone's hours as well as Billing.
     const bills = ydCan('billing', 'change') && ydCan('hours', 'see');
     if (startBtn) startBtn.hidden = !runs || !!storm;
+    // Where the NEXT storm's route starts is beside the point during one.
+    const startRow = document.getElementById('snowStartRow');
+    if (startRow) startRow.hidden = !!storm;
 
     if (!storm) {
       wrap.innerHTML = '';
@@ -183,12 +309,14 @@
 
     wrap.hidden = false;
     if (accountsWrap) accountsWrap.closest('.section').hidden = true;
+    loadPastSalt();
     // Whoever is typing in a box keeps their place through the redraw.
     const typing = document.activeElement && wrap.contains(document.activeElement) ? document.activeElement.id : null;
 
-    const list = Object.values(stops).sort((a, b) => a.order - b.order);
+    const list = sortedStops();
     const done = list.filter(s => s.departedAt || s.skipped).length;
-    const openStop = list.find(s => s.arrivedAt && !s.departedAt);
+    const openStop = list.find(s => s.arrivedAt && !s.departedAt && !s.skipped);
+    const next = list.find(s => !s.arrivedAt && !s.skipped);
 
     wrap.innerHTML =
       '<div class="section">' +
@@ -198,7 +326,9 @@
             '<span class="section-badge accent">' + done + ' / ' + list.length + ' done</span>' +
             // Night mode lives on the accounts section, which is hidden while a
             // storm is open -- the one time it is wanted most.
-            '<button class="btn btn-sm" onclick="toggleNight()" title="Night mode">◑ Night</button>' +
+            // Says which way it goes, and is drawn again when tapped.
+            '<button class="btn btn-sm" onclick="toggleNight(); YDStorm.render()" title="Night mode">◑ ' +
+              (document.documentElement.hasAttribute('data-night') ? 'Day' : 'Night') + '</button>' +
           '</span>' +
         '</div>' +
         '<div class="section-body">' +
@@ -208,12 +338,15 @@
               (storm.crewNames ? ' · ' + esc(storm.crewNames) : '') + '</span>' +
             (openStop ? '<span class="storm-onsite">on site at ' + esc(accountFor(openStop).name) + '</span>' : '') +
           '</div>' +
-          list.map(renderStop).join('') +
-          (runs || bills ? '<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap">' +
+          list.map(s => renderStop(s, next && next.id)).join('') +
+          // The end of the night, well apart from the last stop's buttons and
+          // each on its own row: a thumb reaching for that stop's Depart must
+          // not land on Close.
+          (runs || bills ? '<div class="storm-end">' +
             (runs && done === list.length && list.length
-              ? '<button class="btn btn-accent" onclick="anotherRound()">Run the route again</button>' : '') +
-            (bills ? '<button class="btn btn-filled" onclick="closeStorm()">Close storm &amp; work out billing</button>' : '') +
-            (runs ? '<button class="btn btn-danger btn-sm" onclick="abandonStorm()">Abandon</button>' : '') +
+              ? '<div class="storm-end-row"><button class="btn btn-accent storm-end-btn" onclick="anotherRound()">Run the route again</button></div>' : '') +
+            (bills ? '<div class="storm-end-row"><button class="btn btn-filled storm-end-btn" onclick="closeStorm()">Close storm &amp; work out billing</button></div>' : '') +
+            (runs ? '<div class="storm-end-row"><button class="btn btn-danger btn-sm" onclick="abandonStorm()">Abandon</button></div>' : '') +
             '</div>' : '') +
         '</div>' +
       '</div>';
@@ -221,6 +354,7 @@
       const el = document.getElementById(typing);
       if (el && el.tagName === 'INPUT') { el.focus(); try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) {} }
     }
+    if (scrollWanted) showCurrent(list);
   }
 
   // A number that can be nudged or typed. The buttons are for gloves; the
@@ -232,25 +366,72 @@
   // used to go back to the storm's expected depth each time, so a stop could
   // be billed at the wrong tier.
   const drafts = {};          // input id -> what is in the box
-  function stepper(stopId, kind, label, value, step) {
+  // `guess`: the box starts on the storm's expected depth, not a measurement.
+  // Until somebody touches it, it says so -- an untouched box is billed at
+  // whatever it shows. (Not required: whether to make it so is Jonah's call.)
+  function stepper(stopId, kind, label, value, step, guess) {
     const inputId = 'st-' + kind + '-' + stopId;
     const shown = drafts[inputId] != null ? drafts[inputId] : value;
-    return '<div class="stepper">' +
-      '<span class="stepper-label">' + label + '</span>' +
-      '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + (-step) + ')">&minus;</button>' +
+    const guessing = guess && drafts[inputId] == null;
+    return '<div class="stepper' + (guessing ? ' is-guess' : '') + '">' +
+      '<span class="stepper-label">' + label +
+        (guess ? '<span class="stepper-guess">expected — check</span>' : '') + '</span>' +
+      '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + (-step) + ')" aria-label="Less">&minus;</button>' +
       '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + esc(shown) + '" ' +
-        'oninput="stepperTyped(this)">' +
-      '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + step + ')">+</button>' +
+        'aria-label="' + esc(label) + '" oninput="stepperTyped(this)">' +
+      '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + step + ')" aria-label="More">+</button>' +
     '</div>';
   }
 
-  window.stepperTyped = function (el) { drafts[el.id] = el.value; };
+  // The salt amounts as chips under the salt box, and "Same as last time"
+  // when this account's last salt is known. A tap fills the box; Depart
+  // still reads the box, so typing and the stepper work as before.
+  function saltChips(stopId, s) {
+    const inputId = 'st-lbs-' + stopId;
+    const cur = drafts[inputId] != null ? drafts[inputId] : (num(s.saltLbs, null) != null ? String(s.saltLbs) : '');
+    const v = String(cur).trim() === '' ? NaN : parseFloat(cur);
+    const chip = (n, label) => '<button type="button" class="salt-chip' + (n === v ? ' on' : '') + '" data-lbs="' + n + '" ' +
+      'aria-pressed="' + (n === v) + '" onclick="saltPick(\'' + inputId + '\',' + n + ')">' + label + '</button>';
+    const same = lastSaltOf(s);
+    return '<div class="salt-chips" data-chips-for="' + inputId + '" role="group" aria-label="Salt used">' +
+      SALT_CHIPS.map(n => chip(n, n + ' lb')).join('') +
+      (same != null ? chip(same, 'Same as last time · ' + same + ' lb') : '') +
+    '</div>';
+  }
+  function markChips(inputId) {
+    const el = document.getElementById(inputId);
+    const group = document.querySelector('[data-chips-for="' + inputId + '"]');
+    if (!el || !group) return;
+    const v = el.value.trim() === '' ? NaN : parseFloat(el.value);
+    group.querySelectorAll('.salt-chip').forEach(b => {
+      const on = parseFloat(b.getAttribute('data-lbs')) === v;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+  }
+  // A box that has been touched is no longer a guess, and the chips follow
+  // what is in the salt box -- both without redrawing the card.
+  function touched(el) {
+    const box = el && el.closest && el.closest('.stepper');
+    if (box) box.classList.remove('is-guess');
+    if (el && /^st-lbs-/.test(el.id)) markChips(el.id);
+  }
+
+  window.stepperTyped = function (el) { drafts[el.id] = el.value; touched(el); };
   window.nudge = function (inputId, by) {
     const el = document.getElementById(inputId);
     if (!el) return;
     const n = (parseFloat(el.value) || 0) + by;
     el.value = Math.max(0, Math.round(n * 10) / 10);
     drafts[inputId] = el.value;
+    touched(el);
+  };
+  window.saltPick = function (inputId, n) {
+    const el = document.getElementById(inputId);
+    if (!el || typeof n !== 'number' || !isFinite(n)) return;
+    el.value = n;
+    drafts[inputId] = el.value;
+    touched(el);
   };
 
   function readStepper(stopId, kind, fallback) {
@@ -277,60 +458,116 @@
     return lbs != null ? lbs + ' lb salt' : bags != null ? bags + ' bag' + (bags === 1 ? '' : 's') : '';
   }
 
-  function renderStop(s) {
+  // A finished stop's one line: what went on the record, and when.
+  function rowFigures(s) {
+    if (s.skipped) return 'skipped — ' + (s.skipReason || 'no reason given');
+    const inches = num(s.inchesCleared, null);
+    const lbs = num(s.saltLbs, null), bags = num(s.saltBags, null);
+    return [inches != null ? inches + '"' : '',
+      lbs != null ? lbs + ' lb' : bags != null ? bags + ' bag' + (bags === 1 ? '' : 's') : '',
+      s.departedAt ? clockTime(s.departedAt) : '',
+      s.fixedAt ? 'fixed' : ''].filter(Boolean).join(' · ');
+  }
+
+  // The skip reasons, as big buttons in place of Arrive / Skip.
+  function skipChoices(sid) {
+    return '<div class="skip-why" role="group" aria-label="Why is it being skipped?">' +
+      '<div class="skip-why-q">Why skip it?</div>' +
+      SKIP_REASONS.map((r, i) => '<button type="button" class="btn skip-why-btn" onclick="skipWhy(\'' + sid + '\',' + i + ')">' +
+        esc(r) + '</button>').join('') +
+      '<button type="button" class="btn skip-why-btn" onclick="skipWhy(\'' + sid + '\',-1)">Other…</button>' +
+      '<button type="button" class="btn skip-why-cancel" onclick="skipCancel()">Cancel — don’t skip</button>' +
+    '</div>';
+  }
+
+  function renderStop(s, nextId) {
     const a = accountFor(s);
+    const sid = safeId(s.id);
     const state = s.skipped ? 'skipped' : s.departedAt ? 'done' : s.arrivedAt ? 'onsite' : 'todo';
+    const finished = state === 'done' || state === 'skipped';
     const mins = minutesBetween(s.arrivedAt, s.departedAt);
+    const miles = num(s.driveMiles, null);
+    const pass = num(s.pass, 1);
+    const num1 = '<span class="stop-num">' + (num(s.order, 0) + 1) + '</span>';
+    // Every stop carries id "stop-<stop id>", folded or not, so other
+    // screens (Home) can point at one.
+    const elId = 'stop-' + sid;
+
+    // Finished and not opened: one line, tap to open.
+    if (finished && !opened[s.id] && fixing !== s.id) {
+      return '<div class="stop ' + state + ' folded" id="' + elId + '">' +
+        '<button type="button" class="stop-row" onclick="stopOpen(\'' + sid + '\')" aria-expanded="false">' +
+          num1 +
+          '<span class="stop-row-main"><span class="stop-row-name">' + esc(a.name || s.accountId) +
+            (pass > 1 ? ' <small>pass ' + pass + '</small>' : '') + '</span>' +
+            '<span class="stop-row-figs">' + esc(rowFigures(s)) + '</span></span>' +
+          '<span class="stop-chev" aria-hidden="true">›</span>' +
+        '</button></div>';
+    }
 
     let actions;
     if (s.skipped) {
-      actions = '<button class="btn btn-sm" onclick="unskipStop(\'' + safeId(s.id) + '\')">Undo skip</button>';
+      actions = '<button class="btn btn-sm" onclick="unskipStop(\'' + sid + '\')">Undo skip</button>';
     } else if (!s.arrivedAt) {
-      actions = '<button class="btn-stop arrive" onclick="arriveStop(\'' + safeId(s.id) + '\')">Arrive</button>' +
-                '<button class="btn btn-sm" onclick="skipStop(\'' + safeId(s.id) + '\')">Skip</button>';
+      actions = skipping === s.id ? skipChoices(sid)
+        : '<button class="btn-stop arrive" onclick="arriveStop(\'' + sid + '\')">Arrive</button>' +
+          '<button class="btn btn-sm stop-skip" onclick="skipStop(\'' + sid + '\')">Skip</button>';
     } else if (!s.departedAt) {
       // Numbers are captured here, on the card, at the moment they are known --
       // steppers for gloved hands, and the field itself accepts typing for
       // anything the steppers make slow (13.5 inches, 11 bags).
       actions =
-        stepper(safeId(s.id), 'inches', 'Inches cleared',
-                num(s.inchesCleared, storm.accumulationInches), 0.5) +
-        stepper(safeId(s.id), 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
-        '<button class="btn-stop depart" onclick="departStop(\'' + safeId(s.id) + '\')">Depart</button>';
+        stepper(sid, 'inches', 'Inches cleared',
+                num(s.inchesCleared, storm.accumulationInches), 0.5, num(s.inchesCleared, null) == null) +
+        stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
+        saltChips(sid, s) +
+        '<button class="btn-stop depart" onclick="departStop(\'' + sid + '\')">Depart</button>' +
+        // Arrive tapped on the wrong card, or too soon: taken back, not
+        // left to bill a visit that never happened.
+        '<div class="stop-undo-row"><button class="btn btn-sm stop-not-here" onclick="notHere(\'' + sid + '\')">Not here — undo arrive</button></div>';
     } else if (fixing === s.id) {
       // Departed with the wrong number in a box: put right while the storm
       // is still open (once it is closed, the bill is the office's).
       actions =
-        stepper(safeId(s.id), 'inches', 'Inches cleared', num(s.inchesCleared, storm.accumulationInches), 0.5) +
-        stepper(safeId(s.id), 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
-        '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + safeId(s.id) + '\')">Save</button>' +
+        stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, storm.accumulationInches), 0.5,
+                num(s.inchesCleared, null) == null) +
+        stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
+        saltChips(sid, s) +
+        '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + sid + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="cancelFix()">Cancel</button>';
     } else {
-      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + safeId(s.id) + '\')">Another pass here</button>' +
-        '<button class="btn btn-sm" onclick="fixStop(\'' + safeId(s.id) + '\')">✏️ Fix the numbers</button>';
+      actions = '<button class="btn btn-sm" onclick="secondPass(\'' + sid + '\')">Another pass here</button>' +
+        '<button class="btn btn-sm" onclick="fixStop(\'' + sid + '\')">✏️ Fix the numbers</button>';
     }
 
-    const miles = num(s.driveMiles, null);
-    const pass = num(s.pass, 1);
+    const headInner = num1 +
+      '<span class="stop-name">' + esc(a.name || s.accountId) + '</span>' +
+      (pass > 1 ? '<span class="snow-tag trigger">pass ' + pass + '</span>' : '') +
+      (a.serviceWindow === 'morning' ? '<span class="snow-tag hold">by morning</span>' : '') +
+      (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '');
+    // A finished stop opened from its line folds back from its heading.
+    const head = finished && fixing !== s.id
+      ? '<button type="button" class="stop-head stop-head-btn" onclick="stopOpen(\'' + sid + '\')" aria-expanded="true">' +
+          headInner + '<span class="stop-chev open" aria-hidden="true">›</span></button>'
+      : '<div class="stop-head">' + headInner +
+          (!s.arrivedAt && !s.skipped
+            ? '<span class="stop-move">' +
+                '<button onclick="moveStop(\'' + sid + '\',-1)" title="Earlier" aria-label="Move earlier">&#9650;</button>' +
+                '<button onclick="moveStop(\'' + sid + '\',1)" title="Later" aria-label="Move later">&#9660;</button>' +
+              '</span>' : '') +
+        '</div>';
+    // The big Directions button on the stop being worked and the next one;
+    // the small maps link stays on every card.
+    const dirUrl = (state === 'onsite' || s.id === nextId) ? directionsUrl(a) : '';
 
-    return '<div class="stop ' + state + '">' +
-      '<div class="stop-head">' +
-        '<span class="stop-num">' + (num(s.order, 0) + 1) + '</span>' +
-        (!s.arrivedAt && !s.skipped
-          ? '<span class="stop-move">' +
-              '<button onclick="moveStop(\'' + safeId(s.id) + '\',-1)" title="Earlier">&#9650;</button>' +
-              '<button onclick="moveStop(\'' + safeId(s.id) + '\',1)" title="Later">&#9660;</button>' +
-            '</span>' : '') +
-        '<span class="stop-name">' + esc(a.name || s.accountId) + '</span>' +
-        (pass > 1 ? '<span class="snow-tag trigger">pass ' + pass + '</span>' : '') +
-        (a.serviceWindow === 'morning' ? '<span class="snow-tag hold">by morning</span>' : '') +
-        (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
-      '</div>' +
+    return '<div class="stop ' + state + (s.id === nextId ? ' next' : '') + '" id="' + elId + '">' +
+      head +
       '<a class="snow-addr" href="https://maps.google.com/?q=' +
         encodeURIComponent(a.lat ? a.lat + ',' + a.lng : (a.address || '')) +
         '" target="_blank" rel="noopener">' + esc(a.address || '') +
         (miles != null ? ' · ' + miles + ' mi' : '') +
         '<span class="snow-go">maps</span></a>' +
+      (dirUrl ? '<a class="stop-dir" href="' + esc(dirUrl) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
       (a.areaNotes ? '<div class="stop-notes">' + esc(a.areaNotes) + '</div>' : '') +
       (s.arrivedAt ? '<div class="stop-times">in ' + clockTime(s.arrivedAt) +
         (s.departedAt ? ' · out ' + clockTime(s.departedAt) + ' · <strong>' + mins + ' min</strong>' +
@@ -379,9 +616,51 @@
     writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', id, patch), 'stop update');
   }
 
+  // Who tapped Arrive and Depart is saved with the time (arrivedBy /
+  // departedBy, the uid): it tells this phone which stop is its own, and
+  // the office who was there.
   window.arriveStop = function (id) {
-    writeStop(id, { arrivedAt: new Date().toISOString() });
-    locate(id, 'arrive');
+    const s = stops[id];
+    if (!storm || !s || s.arrivedAt || s.skipped) return;
+    const me = myUid();
+    // Still on site somewhere else: nearly always a forgotten Depart, or
+    // Arrive tapped on the wrong card.
+    const here = me && Object.values(stops).find(x => x.id !== id && x.arrivedAt && !x.departedAt && !x.skipped && x.arrivedBy === me);
+    if (here && !confirm('You are still on site at ' + nameOf(here) + ' — nobody has departed it.\n\n' +
+        'Arrive at ' + nameOf(s) + ' as well?')) return;
+    const at = new Date().toISOString();
+    if (skipping === id) skipping = null;
+    scrollWanted = id;                     // this card, now its boxes are open
+    writeStop(id, { arrivedAt: at, arrivedBy: me || null });
+    locate(id, 'arrive', at);
+    undoOr('Arrived at ' + nameOf(s) + ' · ' + clockTime(at), () => {
+      const x = stops[id];
+      if (!x || x.arrivedAt !== at || x.departedAt) return;
+      takeBackArrival(id);
+    });
+  };
+
+  function takeBackArrival(id) {
+    delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
+    writeStop(id, { arrivedAt: null, arrivedBy: null, arriveLat: null, arriveLng: null });
+  }
+
+  // "Not here — undo arrive": the arrival taken back. With Undo after it
+  // where the app has one, else asked first -- the time would be lost.
+  window.notHere = function (id) {
+    const s = stops[id];
+    if (!storm || !s || !s.arrivedAt || s.departedAt) return;
+    const canUndo = typeof showUndo === 'function';
+    if (!canUndo && !confirm('Take back the arrival at ' + nameOf(s) + '?')) return;
+    // Never undefined in a write: a field that was missing comes back as null.
+    const was = { arrivedAt: s.arrivedAt, arrivedBy: s.arrivedBy || null,
+                  arriveLat: num(s.arriveLat, null), arriveLng: num(s.arriveLng, null) };
+    takeBackArrival(id);
+    undoOr('Arrival at ' + nameOf(s) + ' taken back', () => {
+      const x = stops[id];
+      if (!x || x.arrivedAt || x.skipped) return;
+      writeStop(id, was);
+    });
   };
 
   window.departStop = function (id) {
@@ -391,16 +670,37 @@
       if (box) box.focus();
       return;
     }
+    const s = stops[id];
+    if (!storm || !s || s.departedAt) return;
     const inches = readStepper(id, 'inches', storm.accumulationInches);
     const lbs = readStepper(id, 'lbs', 0);
     delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
-    writeStop(id, { departedAt: new Date().toISOString(), inchesCleared: inches, saltLbs: lbs });
-    locate(id, 'depart');
+    const at = new Date().toISOString();
+    scrollWanted = true;
+    holdDone();
+    writeStop(id, { departedAt: at, departedBy: myUid() || null, inchesCleared: inches, saltLbs: lbs });
+    locate(id, 'depart', at);
+    undoOr('Departed ' + nameOf(s) + ' — ' + inches + '", ' + lbs + ' lb salt', () => {
+      const x = stops[id];
+      if (!x || x.departedAt !== at) return;
+      // Back on site, with what was typed still in the boxes.
+      drafts['st-inches-' + id] = String(inches); drafts['st-lbs-' + id] = String(lbs);
+      scrollWanted = id;
+      writeStop(id, { departedAt: null, departedBy: null, inchesCleared: null, saltLbs: null,
+                      departLat: null, departLng: null });
+    });
+  };
+
+  // A finished stop's line opened or folded again (this phone only).
+  window.stopOpen = function (id) {
+    if (!stops[id]) return;
+    if (opened[id]) delete opened[id]; else opened[id] = true;
+    render();
   };
 
   // Fixing a departed stop's figures (the storm still open). The rules let
   // the crew write numbers to a stop until the storm is closed.
-  window.fixStop = function (id) { fixing = id; render(); };
+  window.fixStop = function (id) { fixing = id; opened[id] = true; render(); };
   window.cancelFix = function () {
     if (fixing) { delete drafts['st-inches-' + fixing]; delete drafts['st-lbs-' + fixing]; }
     fixing = null; render();
@@ -418,15 +718,37 @@
     const lbs = readStepper(id, 'lbs', num(s.saltLbs, 0));
     delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
     fixing = null;
+    delete opened[id];          // back to its line, which shows the new figures
     const me = (window.YDAuth && window.YDAuth.user) || {};
     writeStop(id, { inchesCleared: inches, saltLbs: lbs, fixedAt: new Date().toISOString(), fixedBy: me.uid || '' });
     showToast('Fixed — ' + inches + '", ' + lbs + ' lb salt');
   };
 
+  // Skip shows the reasons as buttons on the card; one more tap says why.
   window.skipStop = function (id) {
-    const why = prompt('Why is this stop being skipped?\n\n(e.g. under trigger, on hold, could not access)');
-    if (why === null) return;
-    writeStop(id, { skipped: true, skipReason: why.trim() || 'no reason given' });
+    if (!stops[id]) return;
+    skipping = id;
+    render();
+  };
+  window.skipCancel = function () { skipping = null; render(); };
+  window.skipWhy = function (id, i) {
+    const s = stops[id];
+    if (!storm || !s || s.arrivedAt) { skipping = null; render(); return; }
+    let why = SKIP_REASONS[i];
+    if (i === -1) {
+      const typed = prompt('Why is ' + nameOf(s) + ' being skipped?');
+      if (typed === null) return;
+      why = typed.trim().slice(0, 200) || 'Other';
+    }
+    if (!why) return;
+    skipping = null;
+    holdDone();
+    writeStop(id, { skipped: true, skipReason: why });
+    undoOr('Skipped ' + nameOf(s) + ' — ' + why, () => {
+      const x = stops[id];
+      if (!x || !x.skipped || x.skipReason !== why) return;
+      writeStop(id, { skipped: false, skipReason: null });
+    });
   };
 
   window.unskipStop = function (id) {
@@ -490,6 +812,9 @@
   window.secondPass = async function (id) {
     const s = stops[id];
     if (!s) return;
+    // Every pass is billed, so a stray tap here would charge the customer
+    // for a visit nobody made.
+    if (!confirm('Add another billed visit to ' + nameOf(s) + '?\n\nIt goes at the end of the list.')) return;
     // The next pass for this customer is one past the HIGHEST pass they have,
     // not one past the card that was tapped. Tapping it on a pass-1 card after
     // "Run the route again" had already made pass 2 used to write a blank
@@ -518,13 +843,17 @@
 
   // Position is recorded where the browser allows it, and simply skipped where
   // it does not. It is evidence for a billing dispute, not a requirement.
-  function locate(id, which) {
+  // `at`: the arrive / depart time it belongs to. An Arrive or Depart taken
+  // back (Undo) before the position answers must not get one.
+  function locate(id, which, at) {
     if (!navigator.geolocation) return;
     const sid = storm && storm.id;
     navigator.geolocation.getCurrentPosition(
       pos => {
         // Only onto the storm it was asked for.
         if (!storm || storm.id !== sid) return;
+        const s = stops[id];
+        if (at && (!s || s[which === 'arrive' ? 'arrivedAt' : 'departedAt'] !== at)) return;
         writeStop(id, { [which + 'Lat']: pos.coords.latitude, [which + 'Lng']: pos.coords.longitude }, true);
       },
       () => {},
@@ -687,9 +1016,18 @@
   window.closeStorm = async function () {
     if (!ydCan('billing', 'change') || !ydCan('hours', 'see')) return;
     if (!storm) return;
-    const list = Object.values(stops).sort((a, b) => a.order - b.order);
-    const openOnes = list.filter(s => s.arrivedAt && !s.departedAt);
-    if (openOnes.length && !confirm(openOnes.length + ' stop(s) are still open — nobody has departed.\n\nClose the storm anyway?')) return;
+    const list = sortedStops();
+    // Always asked, with where the route stands: closing is final (the crew
+    // can no longer change a number) and the button is one tap away.
+    const doneN = list.filter(s => s.departedAt && !s.skipped).length;
+    const skippedN = list.filter(s => s.skipped).length;
+    const onSiteN = list.filter(s => s.arrivedAt && !s.departedAt && !s.skipped).length;
+    const openN = list.length - doneN - skippedN;
+    if (!confirm('Close this storm and work out the billing?\n\n' +
+        doneN + ' done · ' + skippedN + ' skipped · ' + openN + ' still open' +
+        (onSiteN ? ' (' + onSiteN + ' on site — nobody has departed)' : '') + '\n\n' +
+        (openN ? 'Stops still open are left off the bill. ' : '') +
+        'Once it is closed, the crew can no longer change its numbers.')) return;
 
     // Every customer visited must have a price before the bill is frozen. A
     // visit with no pricing loaded used to be left off the bill without a
@@ -768,7 +1106,7 @@
       ['storms', storm.id, { status: 'closed', closedAt: new Date().toISOString() }],
     ]), 'storm close');
     alert('Storm closed.\n\n' +
-      lines.length + ' billable visits\n' +
+      lines.length + ' billable visit' + (lines.length === 1 ? '' : 's') + '\n' +
       'Revenue: $' + (revenue / 100).toFixed(2) + '\n' +
       (salt ? 'of which salt: $' + (salt / 100).toFixed(2) + '\n' : '') +
       'Crew hours: ' + billing.crewHours + '\n' +
@@ -782,7 +1120,11 @@
     stops = {};
     // What was typed belongs to this storm: stop ids are the account ids, so
     // a depth left in a box would otherwise open the next storm's card.
+    // So do the lines opened and the skip question.
     Object.keys(drafts).forEach(k => { delete drafts[k]; });
+    Object.keys(opened).forEach(k => { delete opened[k]; });
+    skipping = null;
+    clearTimeout(doneTimer); doneTimer = null; holdDoneUntil = 0;
     unsubStops = window.YDDb.watch('storms/' + stormId + '/stops', (changes, meta) => {
       let shown = false;      // anything that changes what the list shows
       changes.forEach(c => {
@@ -803,10 +1145,21 @@
       // Every property done: this phone's storm shift ends at the last
       // departure (timeclock.js stormDone). Only from a list the server has
       // given -- a part-filled cache could look finished when it is not.
-      if (meta && meta.fromCache) return;
-      const at = doneAtMs();
-      if (at && window.YDClock && YDClock.stormDone) YDClock.stormDone(stormId, at);
+      fromServer = !(meta && meta.fromCache);
+      checkDone(stormId);
     });
+  }
+  // The last Depart or Skip from this phone can still be undone for a few
+  // seconds; the shift is not ended under it until that has passed (an
+  // undone last Depart used to leave the person clocked out mid-storm).
+  function holdDone() { holdDoneUntil = Date.now() + UNDO_MS + 1000; }
+  function checkDone(stormId) {
+    clearTimeout(doneTimer); doneTimer = null;
+    if (!fromServer || !storm || storm.id !== stormId) return;
+    const wait = holdDoneUntil - Date.now();
+    if (wait > 0) { doneTimer = setTimeout(() => checkDone(stormId), wait); return; }
+    const at = doneAtMs();
+    if (at && window.YDClock && YDClock.stormDone) YDClock.stormDone(stormId, at);
   }
   // When the storm's work was done: every property departed or skipped (at
   // least one departed) -> the last departure, else null. The same as the
@@ -865,7 +1218,10 @@
       // A stop being fixed belongs to the storm it was on (stop ids repeat
       // from storm to storm).
       if (changedStorm) fixing = null;
-      if (storm && changedStorm) watchStops(storm.id);
+      // A storm newly on this phone: its current stop is brought on screen
+      // once the stops are in (and the Snow tab is showing).
+      if (storm && changedStorm) { scrollWanted = true; watchStops(storm.id); }
+      if (!storm) scrollWanted = false;
       if (!storm && unsubStops) { unsubStops(); unsubStops = null; stops = {}; }
       render();
       stormNews();
@@ -1016,7 +1372,24 @@
   // A request decided (or arriving back) redraws the list.
   document.addEventListener('yd-requests', () => renderLast());
 
+  // Another screen pointing at a stop (Home): the Snow tab opened on it,
+  // a finished one opened from its line.
+  function focusStop(id) {
+    const s = stops[id];
+    if (!storm || !s) return false;
+    if (s.departedAt || s.skipped) opened[id] = true;
+    scrollWanted = false;
+    if (typeof switchTab === 'function') switchTab('snow');
+    render();
+    const el = document.getElementById('stop-' + safeId(id));
+    if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    return true;
+  }
+
   window.YDStorm = { current: () => storm, stops: () => stops, buildRoute, render,
+                     // The stop this person is on, else the next to do (or null).
+                     currentStop: () => (storm ? currentStop(sortedStops()) : null),
+                     focusStop: focusStop,
                      startPoint: () => startPoint, routeOrder: () => routeOrder.slice(),
                      // The route bar's order, set by hand (null: worked out again).
                      setRouteOrder: ids => {
@@ -1042,6 +1415,10 @@
       Object.keys(known).forEach(k => delete known[k]);
       dropLast();
       Object.keys(askedHere).forEach(k => delete askedHere[k]);
+      Object.keys(opened).forEach(k => delete opened[k]);
+      skipping = null; scrollWanted = false; fixing = null;
+      pastSalt = {}; pastSaltFor = null;
+      clearTimeout(doneTimer); doneTimer = null; holdDoneUntil = 0; fromServer = false;
       authKey = key;
     }
     if (key) start(); else render();

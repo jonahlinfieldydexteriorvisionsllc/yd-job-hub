@@ -170,9 +170,22 @@
   // be billed without the prices. The rules allow exactly the same.
   const seesSnowPrices = () => ydCan('snow', 'see') || ydCan('billing', 'see');
 
+  // An address typed whole into the one box already carries its town after
+  // a comma ("12 Main St, Anytown, WI"); adding the town again showed it twice.
+  function townSaid(a) {
+    const town = String(a.town || '').trim().toLowerCase();
+    const rest = String(a.address || '').split(',').slice(1).join(',').toLowerCase();
+    return !!town && rest.indexOf(town) !== -1;
+  }
+  // The address in one line, the town added only where it is not there yet.
+  function addressShown(a) {
+    const addr = String(a.address || '').trim();
+    return a.street || !a.town || townSaid(a) ? addr : addr + (addr ? ', ' : '') + a.town;
+  }
+
   function mapsLink(a) {
     const q = encodeURIComponent(
-      (a.lat && a.lng) ? (a.lat + ',' + a.lng) : a.street ? a.address : (a.address + ', ' + (a.town || '') + ' WI'));
+      (a.lat && a.lng) ? (a.lat + ',' + a.lng) : (a.street || townSaid(a)) ? a.address : (a.address + ', ' + (a.town || '') + ' WI'));
     return 'https://maps.google.com/?q=' + q;
   }
 
@@ -195,12 +208,22 @@
     // Prices are for whoever may see Snow (or bill it); editing is Snow: change.
     const seesPrices = seesSnowPrices();
     const edits = ydCan('snow', 'change');
+    // Each account's place on the route the next storm takes -- the route
+    // bar's numbers. None for one off the route (switched off, on hold).
+    const place = {};
+    if (window.YDStorm && YDStorm.buildRoute) {
+      try {
+        YDStorm.buildRoute(accounts, 99, YDStorm.startPoint(), YDStorm.routeOrder())
+          .forEach((r, i) => { place[r.accountId] = i + 1; });
+      } catch (e) { /* the list still draws without the numbers */ }
+    }
 
     wrap.innerHTML = (seesPrices ? totalsHtml() : '') + ids.map(id => {
       const a = accounts[id];
       const held = Array.isArray(a.vacationHolds) && a.vacationHolds.length;
       return '<div class="snow-card' + (a.active === false ? ' inactive' : '') + '">' +
         '<div class="snow-card-head">' +
+          (place[id] ? '<span class="snow-route-n" title="Stop ' + place[id] + ' on the route">' + place[id] + '</span>' : '') +
           '<span class="snow-name">' + esc(a.name) + '</span>' +
           (a.type === 'commercial' ? '<span class="snow-tag commercial">commercial</span>' : '') +
           (a.saltApplies ? '<span class="snow-tag salt">salt</span>' : '') +
@@ -212,7 +235,7 @@
         '</div>' +
         '<a class="snow-addr" href="' + mapsLink(a) + '" target="_blank" rel="noopener">' +
           // An address typed in its parts already ends with its town.
-          esc(a.address) + (a.town && !a.street ? ', ' + esc(a.town) : '') +
+          esc(addressShown(a)) +
           '<span class="snow-go">open in maps</span>' +
         '</a>' +
         (a.areaNotes ? '<div class="snow-notes">' + esc(a.areaNotes) + '</div>' : '') +
@@ -301,7 +324,11 @@
     priceVisit,
     resolveTier,
     render,
+    addressShown,
   };
+  // The route numbers on the cards follow an order set by hand, and the
+  // route start once it has been read (storm.js says both).
+  document.addEventListener('yd-route-order', () => { if (loaded) render(); });
 
   // ---------------------------------------------------------------- adding
 
