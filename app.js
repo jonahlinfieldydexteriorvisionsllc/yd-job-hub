@@ -1990,7 +1990,39 @@ function updateSummary() {
 // ═══════════════════════════════════════════════════════════
 // plants: Jonah's own Yes / No on whether the job has plants ('' = worked
 // out, plantcare.js).
-const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice','plants'];
+// crewWhat: what the job is in a few words, typed by hand (jobWhat).
+const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice','plants','crewWhat'];
+
+// A few words on what the job is, beside the customer's name wherever the
+// crew pick or see a job (Jonah, 15 Oct 2026: "so my crew doesn't have to
+// memorize every client name"): what was typed for it on the Job tab, else
+// the estimate's first line or two of work, else its services.
+const WHAT_MAX = 40;
+function autoWhat(d) {
+  d = d || {};
+  // A QuickBooks line's "(10 × $50.00)" says how it was priced, not what it is.
+  const work = (((d.estimate || {}).work) || []).map(w => String((w && w.title) || '').replace(/\s*\([^)]*×[^)]*\)\s*$/, '').trim())
+    .filter(Boolean);
+  const pick = work.length ? work : (d.serviceTypes || []).map(s => String(s || '').trim()).filter(Boolean);
+  if (!pick.length) return '';
+  let out = pick[0];
+  if (pick[1] && pick[1] !== pick[0] && (out + ' & ' + pick[1]).length <= WHAT_MAX) out += ' & ' + pick[1];
+  return out.length > WHAT_MAX ? out.slice(0, WHAT_MAX - 1).trim() + '…' : out;
+}
+function jobWhat(d) {
+  const typed = String((d && d.crewWhat) || '').trim();
+  return typed ? typed.slice(0, WHAT_MAX) : autoWhat(d);
+}
+// "Pat Smith · Paver patio".
+function jobLabel(name, what) { return what ? name + ' · ' + what : name; }
+// The box on the Job tab shows what goes there when it is left blank.
+function crewWhatHint() {
+  const box = document.getElementById('crewWhat');
+  if (!box) return;
+  const auto = autoWhat({ estimate: window.YDEstimate ? window.YDEstimate.get() : null, serviceTypes: serviceTypes });
+  box.placeholder = auto ? auto + ' (from the ' + (window.YDEstimate && window.YDEstimate.hasLines() ? 'estimate' : 'services') + ')'
+    : 'e.g. Paver patio, Fall cleanup';
+}
 
 function getJobData() {
   const d = {};
@@ -2052,6 +2084,7 @@ function loadJobData(d) {
   boardFields = {};
   BOARD_FIELDS.forEach(f => { if (d[f] != null) boardFields[f] = d[f]; });
   if (window.YDEstimate) window.YDEstimate.load(d.estimate || null);
+  crewWhatHint();
 
   syncStatusSelect(); updateJobHeadBadge();
   renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
@@ -2328,6 +2361,7 @@ function clearJobForm() {
   loadedQuoteDate = '';
   document.getElementById('quoteDate').value = todayMD();
   if (window.YDEstimate) window.YDEstimate.load(null);
+  crewWhatHint();
   syncStatusSelect(); updateJobHeadBadge();
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   renderProposal(); renderOrderList(); updateSummary();

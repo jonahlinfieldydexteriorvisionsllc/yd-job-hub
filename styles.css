@@ -3786,3 +3786,8 @@
      figures are the customer's (estimate.js fromQbHtml). */
   .est-fromqb { margin:0 0 12px; padding:9px 12px; border-radius:8px; border-left:4px solid var(--st-info);
     background:var(--st-info-soft); font-size:13.5px; line-height:1.45; }
+  /* What the job is, beside the customer's name, wherever the crew pick or
+     see a job (app.js jobWhat). */
+  .picker-what { font-weight:500; color:var(--muted); }
+  .cj-what { font-size:14px; font-weight:600; color:var(--brand-ink, var(--brand)); margin-top:2px; }
+  .cj-row-what, .hm-job-m .hm-job-what { display:block; font-size:13px; font-weight:600; color:var(--brand-ink, var(--brand)); }

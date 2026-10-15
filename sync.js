@@ -334,6 +334,8 @@
       // The crew's clock lists booked and in-progress jobs first; the old
       // 'active' is translated so a job not yet re-saved still shows.
       status: typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting'),
+      // What the job is, in a few words, shown beside the name (app.js jobWhat).
+      what: typeof jobWhat === 'function' ? jobWhat(d) : '',
       updatedAt: new Date().toISOString(),
     };
   }
@@ -353,7 +355,7 @@
   // there. Now only a change the crew would see goes out.
   const NOT_ON_BOARD = '-';
   const boardKnown = new Map();
-  const boardSig = e => (e ? [e.name, e.address, e.status].join('\n') : NOT_ON_BOARD);
+  const boardSig = e => (e ? [e.name, e.address, e.status, e.what || ''].join('\n') : NOT_ON_BOARD);
 
   function pushBoard(id, data) {
     // Whoever may change jobs: the owner, or an admin given that. The rules

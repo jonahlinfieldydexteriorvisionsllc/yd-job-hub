@@ -204,6 +204,10 @@
           <div class="field"><span class="label">Business name (if any)</span><input id="business" autocomplete="off" oninput="onCustomerNamePart()"></div>
         </div>
         <input type="hidden" id="customerName">
+        <!-- What the job is in a few words: the crew see it beside the name
+             (app.js jobWhat). Blank = from the estimate, else the services. -->
+        <div class="field mt"><span class="label">What the job is, in a few words — the crew see it beside the name</span>
+          <input id="crewWhat" maxlength="40" autocomplete="off" oninput="markDirty()" onfocus="crewWhatHint()"></div>
         <div class="grid g4 mt">
           <div class="field"><span class="label">Estimate #</span><input id="estimateNumber" oninput="updateJobHeadBadge(); markDirty()"></div>
           <div class="field">

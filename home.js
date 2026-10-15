@@ -636,6 +636,7 @@
       const n = next[j.id];
       return '<button class="hm-job" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
         '<span class="hm-job-m"><b>' + esc(j.name || 'Job') + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+          (j.what ? '<small class="hm-job-what">' + esc(j.what) + '</small>' : '') +
           '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small>' +
           (mineToday[j.id] ? '<small class="hm-when you">👷 You’re on it today</small>'
             : n ? '<small class="hm-when">📅 ' + esc(dayWords(n.day)) + (n.time ? ' · ' + esc(n.time) : '') + '</small>' : '') +

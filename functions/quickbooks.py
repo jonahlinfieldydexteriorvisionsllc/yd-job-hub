@@ -1720,6 +1720,23 @@ def _hub_estimate(e, end_names, stamp):
     return est, words
 
 
+WHAT_MAX = 40
+PRICED_AS = re.compile(r"\s*\([^)]*×[^)]*\)\s*$")
+
+
+def _what(est):
+    """What the job is in a few words, beside the name on the crew's clock
+    (app.js jobWhat, the same rule): the first line or two of work."""
+    titles = [PRICED_AS.sub("", str(w.get("title") or "")).strip() for w in (est or {}).get("work") or []]
+    titles = [t for t in titles if t]
+    if not titles:
+        return ""
+    out = titles[0]
+    if len(titles) > 1 and titles[1] != titles[0] and len(out + " & " + titles[1]) <= WHAT_MAX:
+        out += " & " + titles[1]
+    return out if len(out) <= WHAT_MAX else out[:WHAT_MAX - 1].strip() + "…"
+
+
 def _hub_notes(e, words):
     """The job's notes for an estimate brought in: where it came from, and any
     words in it that are not a line of work or a material."""
@@ -1978,7 +1995,7 @@ def import_accepted(jobs):
             continue
         # On the crew's clock too (sync.js boardEntry).
         db.collection("jobBoard").document(jid).set({
-            "name": job["customerName"], "status": "booked",
+            "name": job["customerName"], "status": "booked", "what": _what(job["estimate"]),
             "address": ", ".join(s for s in (job["address"], job["city"], job["state"]) if s),
             "updatedAt": stamp})
         seen[eid] = jid
@@ -2062,10 +2079,16 @@ def fill_imported(jobs):
             parts = _best_addr(e, cust, name)
             if parts["address"]:
                 patch.update(parts)
-                board = db.collection("jobBoard").document(jid)
-                if board.get().exists:
-                    board.set({"address": ", ".join(s for s in (parts["address"], parts["city"], parts["state"]) if s),
-                               "updatedAt": stamp}, merge=True)
+        # The crew's clock list: the address read again, and what the job is.
+        board_patch = {}
+        if patch.get("address"):
+            board_patch["address"] = ", ".join(s for s in (patch["address"], patch.get("city"), patch.get("state")) if s)
+        if patch.get("estimate") and not str(j.get("crewWhat") or "").strip():
+            board_patch["what"] = _what(patch["estimate"])
+        if board_patch:
+            board = db.collection("jobBoard").document(jid)
+            if board.get().exists:
+                board.set(dict(board_patch, updatedAt=stamp), merge=True)
         db.collection("jobs").document(jid).set(patch, merge=True)
         done += 1
     return done

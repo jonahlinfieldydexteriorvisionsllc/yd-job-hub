@@ -169,6 +169,8 @@
     const items = catalogue().items;
     return {
       name: String(d.customerName || '').trim() || 'Untitled job',
+      // What the job is, in a few words (app.js jobWhat), beside the name.
+      what: typeof jobWhat === 'function' ? noMoney(jobWhat(d)) : '',
       address: d.address || '', city: d.city || '', state: d.state || '', zip: d.zip || '',
       phone: d.phone || '',
       status: statusOf(d),
@@ -410,7 +412,8 @@
     return '<div class="cj-page">' +
       (preview ? '<div class="cj-preview">This is the page the crew see for this job — no prices anywhere. ' +
         'Hide it from them with “Hide from crew” on the Job tab.</div>' : '') +
-      '<div class="cj-top"><div class="cj-name">' + esc(j.name) + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') + '</div>' +
+      '<div class="cj-top"><div class="cj-name">' + esc(j.name) + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+        (j.what ? '<div class="cj-what">' + esc(j.what) + '</div>' : '') + '</div>' +
         '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></div>' +
       (where ? '<div class="cj-where">📍 ' + esc(where) + '</div>' : '<div class="muted">No address on the job yet.</div>') +
       // Two big buttons a gloved thumb can find, side by side.
@@ -481,7 +484,7 @@
     const j = jobs[id];
     if (!j || typeof window.clockInTo !== 'function') return;
     if (onThisJob(myShift(), id)) { freshClock(); return; }
-    window.clockInTo('job', id, j.name || 'Job');
+    window.clockInTo('job', id, typeof jobLabel === 'function' ? jobLabel(j.name || 'Job', j.what || '') : (j.name || 'Job'));
     freshClock();
   };
   window.cjToClock = function () {
@@ -541,6 +544,7 @@
     const list = listed();
     wrap.innerHTML = list.length ? list.map(j => '<button class="cj-row" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
         '<span class="cj-row-name"><b>' + esc(j.name) + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+          (j.what ? '<span class="cj-row-what">' + esc(j.what) + '</span>' : '') +
           '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small></span>' +
         '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></button>').join('')
       : '<p class="empty-msg">No booked jobs right now.</p>';

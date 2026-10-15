@@ -145,6 +145,7 @@ def run():
     sent.extend(_usual(db, people, since, now, cals, boards, prefs))
     sent.extend(_activity(db, people, now, cals, boards, prefs))
     sent.extend(crew_notes(db, people, now))
+    sent.extend(crew_shifts(db, people, now))
     sent.extend(clocked.get("told") or [])
     if clocked.get("stopped"):
         sent.append({"clockStopped": clocked["stopped"]})
@@ -235,6 +236,60 @@ def crew_notes(db, people=None, now=None):
             s.reference.update({"notifiedAt": now.isoformat()})
         except Exception as err:          # noqa: BLE001
             print("reminders: note not stamped:", s.id, err)
+    return out
+
+
+def crew_shifts(db, people=None, now=None):
+    """Shifts the crew typed in -- forgotten clock-ins, any day, any hours
+    (timeclock.js submitAddShift: Jonah, 15 Oct 2026, "for me to approve") --
+    the owner has not been told about: a buzz each, once, that opens the
+    Clock tab where Waiting for You has it. reminderLog shift_<id> makes it
+    once whatever else runs at the same moment."""
+    people = people if people is not None else dg._people()
+    now = now or dg._now()
+    owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
+    out = []
+    try:
+        waiting = list(db.collection("timeEntries").where("notifiedAt", "==", None).stream())
+    except Exception as err:          # noqa: BLE001
+        print("reminders: typed-in shifts not read:", err)
+        return out
+    for s in waiting:
+        e = s.to_dict() or {}
+        if e.get("source") != "manual" or e.get("status") != "pending":
+            try:
+                s.reference.update({"notifiedAt": now.isoformat()})
+            except Exception as err:      # noqa: BLE001
+                print("reminders: shift not stamped:", s.id, err)
+            continue
+        try:
+            db.collection("reminderLog").document("shift_" + s.id).create({"at": now.isoformat()})
+        except AlreadyExists:
+            continue
+        who = (dg._name(people.get(e.get("uid"))) if people.get(e.get("uid")) else str(e.get("workerName") or "Someone")).split()[0]
+        body = str(e.get("targetName") or "")
+        try:
+            a = datetime.datetime.fromtimestamp(float(e["startedMs"]) / 1000, dg.TZ)
+            b = datetime.datetime.fromtimestamp(float(e["endedMs"]) / 1000, dg.TZ)
+            mins = int(round((b - a).total_seconds() / 60))
+            body = "%s %d, %s–%s (%d h %02d m) · %s" % (a.strftime("%a %b"), a.day,
+                                                        dg._fmt_time(a.strftime("%H:%M")), dg._fmt_time(b.strftime("%H:%M")),
+                                                        mins // 60, mins % 60, body)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            pass
+        if e.get("note"):
+            body += " — " + str(e["note"])[:80]
+        for uid in owners:
+            try:
+                out.append({"uid": uid, "shift": s.id, "phones": dg.send_push(
+                    uid, {"push": {"title": "🕓 %s sent in a shift to approve" % who, "body": body[:180]}},
+                    tag="yd-shift-" + s.id, ttl=48 * 3600, opens="clock")})
+            except Exception as err:      # noqa: BLE001
+                print("reminders: shift push failed:", uid, err)
+        try:
+            s.reference.update({"notifiedAt": now.isoformat()})
+        except Exception as err:          # noqa: BLE001
+            print("reminders: shift not stamped:", s.id, err)
     return out
 
 

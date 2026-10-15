@@ -437,6 +437,17 @@
     const card = el('clockWrap');
     if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
+  // From their own My hours page (Jonah, 15 Oct 2026: the crew can send in
+  // any shift, any day, any hours, for him to approve).
+  window.addMyShift = function () {
+    closeWorker();
+    if (typeof switchTab === 'function' && !clockShowing()) switchTab('clock');
+    const wrap = el('clockWrap');
+    if (wrap && addingShift) wrap.innerHTML = '';
+    window.openAddShift();
+    const card = el('clockWrap');
+    if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  };
   window.cancelAddShift = function () { addingShift = false; addFor = null; render(); };
   // Picked at last: the "pick one" mark goes.
   window.asTargetPicked = function () {
@@ -447,17 +458,28 @@
   // Each choice carries only its kind and id; the name is looked up when the
   // shift is sent. Carrying the name too, split on '|', cut short any job whose
   // name had a '|' in it.
+  // Any job, finished ones too (the shift forgotten was often the job's last
+  // day), and the storm going on now -- so a forgotten storm shift lands on
+  // the storm, as one clocked would.
   function targetOptions() {
     const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]))
-      .filter(j => j.status !== 'complete')
       .sort((a, b) => String(a.name).localeCompare(b.name));
+    const open = jobs.filter(j => j.status !== 'complete'), done = jobs.filter(j => j.status === 'complete');
+    const storm = window.YDStorm && YDStorm.current();
+    const opt = j => '<option value="job|' + esc(j.id) + '">' + esc(jobName(j)) + (j.status === 'complete' ? ' (finished)' : '') + '</option>';
     // Nothing picked to start with. With Labor first and already chosen, a
     // shift sent without looking went in as Labor -- paid, but on no job.
     return '<option value="">— Pick what you were on —</option>' +
       '<option value="labor|labor">Labor</option>' +
+      (storm && storm.id ? '<option value="storm|' + esc(storm.id) + '">❄ ' + esc(stormName(storm)) + '</option>' : '') +
       '<option value="snow|snow">Snow</option>' +
       '<option value="receipts|receipts">Receipts</option>' +
-      jobs.map(j => '<option value="job|' + esc(j.id) + '">' + esc(j.name) + '</option>').join('');
+      (open.length ? '<optgroup label="Jobs">' + open.map(opt).join('') + '</optgroup>' : '') +
+      (done.length ? '<optgroup label="Finished jobs">' + done.map(opt).join('') + '</optgroup>' : '');
+  }
+  function stormName(storm) {
+    const t = storm.startedAt ? new Date(storm.startedAt) : null;
+    return 'Storm' + (t && !isNaN(t) ? ' of ' + t.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '');
   }
 
   // The job list the open form was last given, so a redraw with the same
@@ -546,7 +568,8 @@
       showToast('That is in the future'); return;
     }
 
-    const targetName = nameFor(kind, targetId);
+    const storm = kind === 'storm' && window.YDStorm ? YDStorm.current() : null;
+    const targetName = storm && storm.id === targetId ? stormName(storm) : nameFor(kind, targetId);
     const id = 'te' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
     const rec = {
       uid: forUid,
@@ -561,6 +584,10 @@
       status: 'pending',       // always: nobody watched the clock run
       createdBy: u.uid,
     };
+    // Sent in by the crew, the owner's phone is told (reminders.py
+    // crew_shifts) so it is approved while the day is remembered; one he
+    // typed in himself needs no telling.
+    if (!isOwner()) rec.notifiedAt = null;
     entries[id] = Object.assign({ id: id }, rec);
     addingShift = false; addFor = null;
     render();
@@ -1029,6 +1056,9 @@
             '<button class="btn clock-big clock-out-btn" onclick="clockOut(\'' + safeId(e.id) + '\')">⏹ Clock out</button>' +
             '<button class="btn btn-sm" onclick="openJobPicker()">Switch to something else</button>' +
             '<button class="btn btn-sm" onclick="openWorker()">My hours</button>' +
+            // A shift on another day they forgot to clock -- sent in for
+            // approval without clocking out of this one.
+            '<button class="btn btn-sm" onclick="openAddShift()">Add a shift I forgot</button>' +
           '</div>') +
     '</div>';
   }
@@ -1103,8 +1133,12 @@
   // The name shown on a shift, looked up from the id when the button is tapped
   // rather than written into the button -- a job called O'Brien used to end the
   // handler's text at the apostrophe and the button did nothing.
+  // A job as the crew read it: the customer, and what the work is.
+  function jobName(j) {
+    return typeof jobLabel === 'function' ? jobLabel(j.name || 'Job', j.what || '') : (j.name || 'Job');
+  }
   function nameFor(kind, id) {
-    if (kind === 'job') return (board[id] && board[id].name) || 'Job';
+    if (kind === 'job') return board[id] ? jobName(board[id]) : 'Job';
     if (kind === 'storm') return 'Tonight’s storm';
     return OVERHEAD_LABEL[kind] || 'Other';
   }
@@ -1198,7 +1232,7 @@
       (isToday(a) && isToday(b) ? today[a.id].at - today[b.id].at : 0);
 
     const list = search
-      ? jobs.filter(j => (j.name + ' ' + (j.address || '')).toLowerCase().indexOf(search) !== -1)
+      ? jobs.filter(j => (j.name + ' ' + (j.what || '') + ' ' + (j.address || '')).toLowerCase().indexOf(search) !== -1)
             .sort((a, b) => byDay(a, b) || rank(a) - rank(b) || String(a.name).localeCompare(b.name))
       : jobs.filter(j => isLive(j.status) || isToday(j))
             .sort((a, b) => byDay(a, b) || String(a.name).localeCompare(b.name));
@@ -1210,7 +1244,7 @@
     const row = j => {
       const t = today[j.id];
       return '<button class="picker-job' + (t ? ' picker-today-job' : '') + '" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
-        '<span class="picker-name">' + esc(j.name) + '</span>' +
+        '<span class="picker-name">' + esc(j.name) + (j.what ? ' <span class="picker-what">· ' + esc(j.what) + '</span>' : '') + '</span>' +
         (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
         (t ? '<span class="picker-today">📅 Today' + (t.time ? ' · ' + esc(t.time) : '') + (t.mine ? ' · you’re on it' : '') + '</span>' : '') +
         '<span class="picker-flag ' + esc(j.status || '') + '">' +
@@ -2310,7 +2344,8 @@
       '<div class="wk-head">Every shift' +
         (fixable && people[workerUid]
           ? ' <button class="link-btn" onclick="addShiftFor(\'' + safeId(workerUid) + '\')">+ Add a shift ' +
-              (isMe ? 'I' : 'they') + ' forgot to clock</button>' : '') + '</div>' +
+              (isMe ? 'I' : 'they') + ' forgot to clock</button>'
+          : askable ? ' <button class="link-btn" onclick="addMyShift()">+ Add a shift I forgot to clock</button>' : '') + '</div>' +
       // A table on a wide screen; on a phone each shift is a card of its
       // own (the stylesheet shows one or the other) -- the table ran off
       // the side and had to be scrolled sideways to reach Ask for a change.
@@ -3319,7 +3354,7 @@
     who: workerOf,
     // A job's name as it reads today when the job is still listed: jobs get
     // renamed, and the work log should not show one job under two names.
-    label: e => (e.kind === 'job' && board[e.targetId] && board[e.targetId].name) ||
+    label: e => (e.kind === 'job' && board[e.targetId] && jobName(board[e.targetId])) ||
       e.targetName || OVERHEAD_LABEL[e.kind] || 'Other',
     // Home (home.js). Who is on the clock now and who is on a break -- the
     // same people On now lists -- for whoever sees everyone's hours.
@@ -3373,7 +3408,7 @@
   // What the clock (and the work log, and a crew note's job list) shows of a
   // job from jobBoard. Its updatedAt is left out on purpose: it changes on
   // every save of the job, whether or not anything here did.
-  const boardSig = j => [j.name, j.address, j.status].map(v => (v == null ? '' : String(v))).join('\u0001');
+  const boardSig = j => [j.name, j.address, j.status, j.what].map(v => (v == null ? '' : String(v))).join('\u0001');
 
   // Crew cannot watch the users collection -- only the owner may read anyone
   // else's record -- but each person may read their own. Without it a crew
