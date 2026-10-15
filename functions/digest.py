@@ -53,8 +53,19 @@ SLOTS = {
     "evening": {"label": "End of day", "icon": "🌙"},
 }
 
-# Bids sitting this long without moving are worth a call.
-CHASE_AFTER_DAYS = {"toSend": 2, "sent": 5, "followUp": 0}
+# THE CHASE RULE -- the same on the Bids board and Home (boards.js
+# CHASE_AFTER_DAYS / WRITE_AFTER_DAYS / toChase), so the summary never names
+# a bid the board does not, or the other way round:
+#   - to chase: in "Sent — waiting" this many days or more, or moved to
+#     Follow up (at once);
+#   - to write: in "Bid to send" WRITE_AFTER_DAYS or more -- the bid itself
+#     is late, there is nothing to chase yet;
+#   - never: a bid accepted or turned down in QuickBooks (qb_accepted,
+#     qb_turned_down) -- one is being booked, the other is asked "mark lost?".
+# (They used to disagree: the summary chased "Bid to send" after 2 days as
+# if it had been sent, the board did not list it at all.)
+CHASE_AFTER_DAYS = {"sent": 5, "followUp": 0}
+WRITE_AFTER_DAYS = 2
 BID_STAGE_NAME = {"siteVisit": "Site visit", "toSend": "Bid to send", "sent": "Sent — waiting",
                   "followUp": "Follow up"}
 
@@ -463,7 +474,10 @@ def job_sites(day, items, jobs):
             if c.get("uid"):
                 s["uids"].add(c["uid"])
     for jid, j in jobs.items():
-        if jid not in sites and (j.get("workStage") == "inProgress" or j.get("jobStatus") == "inprogress"):
+        # In progress by its status, as the app reads it -- not a workStage
+        # left behind on a job since marked Complete in the form, whose site
+        # weather then came in every summary.
+        if jid not in sites and status_of(j) == "inprogress":
             sites[jid] = {"jobId": jid, "uids": set(), "scheduled": False}
     out = []
     for jid, s in sites.items():
@@ -725,6 +739,23 @@ def qb_accepted(q):
     return q.get("status") == "Accepted" or (q.get("status") in ("Closed", "Converted") and bool(q.get("acceptedDate")))
 
 
+def qb_turned_down(q):
+    """The customer turned the estimate down in QuickBooks (Rejected). Not
+    lost by itself -- the board asks "mark lost?" -- but never chased, and no
+    follow-up email is written for it (followup.py). sync.js qbTurnedDown."""
+    return (q or {}).get("status") == "Rejected"
+
+
+def status_of(j):
+    """A job's status as the app reads it (app.js normStatus): the old
+    'active' is Booked or In progress by where the job sat on the Jobs board,
+    anything unknown is a bid."""
+    s = j.get("jobStatus") or "quoting"
+    if s == "active":
+        return "inprogress" if j.get("workStage") in ("inProgress", "punchList") else "booked"
+    return s if s in ("quoting", "booked", "inprogress", "complete") else "quoting"
+
+
 def _office(jobs):
     """Estimate work waiting on Jonah: drafts Claude built that he hasn't
     checked and sent, estimates a customer accepted that aren't booked yet,
@@ -782,17 +813,22 @@ def _care_section(owed, sections, push_bits):
 
 
 def _bids(jobs=None):
-    """Bids that need chasing: quoting jobs whose stage has sat long enough."""
+    """Bids that need Jonah, by the chase rule above (CHASE_AFTER_DAYS):
+    each {name, stage, days, price, kind} -- kind "chase" (sent, no answer)
+    or "write" (still to write and send). Oldest first."""
     now = datetime.datetime.now(datetime.timezone.utc)
     out = []
     for j in (jobs if jobs is not None else _jobs()).values():
-        if (j.get("jobStatus") or "quoting") != "quoting":
+        if status_of(j) != "quoting":
             continue
         # A lost bid stays 'quoting' (boards.js keeps it there in case the
         # customer rings back), so without this it fell through to "Bid to
         # send" below and was chased in every summary for ever. The Bids board
         # files it under Lost; this agrees with it.
         if j.get("bidStage") == "lost":
+            continue
+        q = j.get("qbEstimate") or {}
+        if qb_accepted(q) or qb_turned_down(q):
             continue
         stage = j.get("bidStage") if j.get("bidStage") in BID_STAGE_NAME else "toSend"
         if stage == "siteVisit":
@@ -802,14 +838,20 @@ def _bids(jobs=None):
             days = (now - datetime.datetime.fromisoformat(since.replace("Z", "+00:00"))).days
         except Exception:       # noqa: BLE001
             days = 0
-        if days < CHASE_AFTER_DAYS.get(stage, 3):
+        if stage == "toSend":
+            if days < WRITE_AFTER_DAYS:
+                continue
+            kind = "write"
+        elif days < CHASE_AFTER_DAYS.get(stage, 5):
             continue
+        else:
+            kind = "chase"
         try:
             price = float(str(j.get("jobPrice") or "0").replace("$", "").replace(",", "") or 0)
         except ValueError:
             price = 0
         out.append({"name": (j.get("customerName") or "Untitled").strip(), "stage": stage, "days": days,
-                    "price": price})
+                    "price": price, "kind": kind})
     out.sort(key=lambda b: (-b["days"]))
     return out
 
@@ -1074,13 +1116,19 @@ def build(slot, user, people, wx, cache):
     # ---- bids (the owner, and an admin given Jobs)
     if sees("jobs") and (slot in ("morning", "evening") or (slot == "midday" and cache["bids"])):
         bids = cache["bids"]
-        if bids:
-            sections.append(("Bids to chase", [{"text": "%s — %s, %d day%s%s" % (
+        # Two lists, as the board has them (the chase rule, CHASE_AFTER_DAYS):
+        # sent and waiting on an answer, and still to write. Older caches
+        # (no kind) were all chases.
+        for kind, title, word in (("chase", "Bids to chase", "to chase"), ("write", "Bids to write", "to write")):
+            some = [b for b in bids if b.get("kind", "chase") == kind]
+            if not some:
+                continue
+            sections.append((title, [{"text": "%s — %s, %d day%s%s" % (
                 b["name"], BID_STAGE_NAME[b["stage"]], b["days"], "" if b["days"] == 1 else "s",
-                (" · $%s" % format(int(round(b["price"])), ",")) if b["price"] else "")} for b in bids[:8]] +
-                ([{"text": "…and %d more on the Bids board" % (len(bids) - 8)}] if len(bids) > 8 else [])))
+                (" · $%s" % format(int(round(b["price"])), ",")) if b["price"] else "")} for b in some[:8]] +
+                ([{"text": "…and %d more on the Bids board" % (len(some) - 8)}] if len(some) > 8 else [])))
             if slot != "midday":
-                push_bits.append("%d bid%s to chase" % (len(bids), "" if len(bids) == 1 else "s"))
+                push_bits.append("%d bid%s %s" % (len(some), "" if len(some) == 1 else "s", word))
 
     # ---- recurring crew tasks not confirmed by their day (the owner, and an
     # admin who runs the boards)

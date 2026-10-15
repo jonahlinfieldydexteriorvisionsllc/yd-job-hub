@@ -9,7 +9,8 @@ WHICH job. That way the email cannot be steered by whatever a browser sends,
 and the address it goes to is the one on the job.
 
 Which bids count is the same rule the summaries chase (digest.CHASE_AFTER_DAYS);
-the app draws the list, this only writes one email at a time.
+the app draws the list, this only writes one email at a time -- and refuses a
+bid the customer has already answered in QuickBooks.
 """
 
 import datetime
@@ -95,6 +96,13 @@ def draft(client, job_id):
     j = snap.to_dict() or {}
     if (j.get("jobStatus") or "quoting") != "quoting" or j.get("bidStage") in ("won", "lost"):
         return {"error": "That job is not a bid waiting on an answer any more"}, None
+    # The customer already answered in QuickBooks: no "just following up"
+    # email to someone who said no -- or yes (the chase rule, digest.py).
+    q = j.get("qbEstimate") or {}
+    if dg.qb_turned_down(q):
+        return {"error": "The customer turned this estimate down in QuickBooks — mark the bid lost instead"}, None
+    if dg.qb_accepted(q):
+        return {"error": "The customer accepted this estimate in QuickBooks — book it instead"}, None
     to = (j.get("email") or "").strip()
     if not cards.EMAIL_RE.match(to):
         return {"error": "This job has no email address. Add one to the job first."}, None

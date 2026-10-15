@@ -433,12 +433,15 @@
       return mine;
     };
     const yes = take(open.filter(j => b.acceptedToBook(j)));
+    // Turned down in QuickBooks: never chased or "waiting" (boards.js
+    // turnedDown); `no` lists them for a "mark lost?" line.
+    const no = take(open.filter(j => b.turnedDown && b.turnedDown(j)));
     const drafted = take(open.filter(j => b.hasDraft(j)));
     const chase = b.toChase().filter(x => !taken[x.j._id]);
     chase.forEach(x => { taken[x.j._id] = true; });
     const waiting = take(open.filter(j => b.bidColumn(j) === 'sent'));
     const toDo = take(open.filter(j => ['siteVisit', 'toSend'].indexOf(b.bidColumn(j)) !== -1));
-    return { open, yes, drafted, chase, waiting, toDo };
+    return { open, yes, no, drafted, chase, waiting, toDo };
   }
 
   function bidsHtml(all) {

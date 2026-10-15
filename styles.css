@@ -2999,4 +2999,62 @@
   @media (max-width:720px) {
     .set-boards { margin-left:0; }
     .set-board { min-height:40px; }
+  /* ---- ux-d1 lifecycle & boards (15 Oct 2026) ---- */
+  /* Board cards stay white at night (see "the board itself" above), so the
+     colours on them are the daytime ones. */
+  .bd-urg { padding:2px 7px; border-radius:10px; font-weight:700; border:1px solid transparent; }
+  .bd-urg.urg-urgent { background:#fde3dc; color:var(--st-now, #c8492b); }
+  .bd-urg.urg-high { background:#fde9d2; color:#a8520f; }
+  .bd-urg.urg-low { background:#eef0f3; color:#56606e; }
+  .bd-done-by { font-size:11px; color:#56606e; }
+  .bd-said-no { font-size:11px; font-weight:700; color:var(--st-now, #c8492b); display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .bd-card-act { font:700 11px 'DM Sans',sans-serif; padding:3px 9px; min-height:28px; border-radius:14px; cursor:pointer;
+    background:#fff; color:#66418f; border:1.5px solid #c9b8dc; }
+  .bd-card-act:hover, .bd-card-act:focus-visible { border-color:#66418f; }
+  .bd-card-act.strong { background:#66418f; color:#fff; border-color:#66418f; }
+  @media (pointer: coarse) { .bd-card-act { min-height:36px; padding:6px 12px; } }
+  .bd-owed { font-size:11.5px; font-weight:700; color:var(--st-now, #c8492b); }
+  .bd-owed.paid { color:var(--st-done, #2f8f5b); }
+  .bd-col-total { padding:6px 12px 0; font-size:12px; font-weight:700; color:#9be3b5; letter-spacing:.2px; }
+  .bd-fold { display:none; margin-right:6px; }
+  .bd-old-done { border-style:dashed; }
+  .section-badge.eq-alert { background:var(--st-now, #c8492b); color:#fff; }
+  .section-badge.eq-soon { background:var(--st-soon, #e0a526); color:#3a2a08; }
+  @media (max-width:720px) {
+    /* The board list: one row that scrolls sideways, not two screens of chips. */
+    .bd-picker { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:4px; }
+    .bd-picker::-webkit-scrollbar { display:none; }
+    .bd-picker .bd-chip { flex:none; white-space:nowrap; }
+    /* Columns stacked one above another, each folding by its heading. */
+    .bd-cols { flex-direction:column; overflow-x:visible; scroll-snap-type:none; }
+    .bd-col { flex:none; width:auto; max-height:none; }
+    .bd-col-head { cursor:pointer; min-height:44px; }
+    .bd-fold { display:inline-block; }
+    .bd-col.shut .bd-col-body, .bd-col.shut .bd-col-total { display:none; }
+    .bd-col.shut .bd-col-head { border-bottom-color:transparent; }
+  }
+
+  /* My Jobs: Copy and Delete apart, Delete plainly a delete. */
+  .jl-acts { display:flex; gap:4px; align-items:center; flex-wrap:wrap; justify-content:flex-end; }
+  .jl-acts .jl-del { font-size:12px; font-weight:700; margin-left:10px; padding:6px 9px; color:var(--neg); }
+  @media (max-width:720px) { .jl-acts .jl-del { min-width:0; } }
+
+  /* All Jobs */
+  .summary-card.neg-top { border-top-color:var(--st-now, var(--neg)); }
+  .dash-sub { font-size:11.5px; color:var(--muted); margin-top:3px; }
+  .dash-stage { display:inline-block; font-size:11px; font-weight:600; color:var(--muted); margin-left:6px; white-space:nowrap; }
+  .dash-planned small { font-size:10px; font-weight:600; color:var(--muted); margin-left:3px; text-transform:uppercase; letter-spacing:.4px; }
+  .dash-owed { color:var(--st-now, var(--neg)); }
+  #dashYear { max-width:180px; }
+  .dash-cards { display:none; }
+  @media (max-width:720px) {
+    #dashTableWrap .dash-table { display:none; }
+    .dash-cards { display:flex; flex-direction:column; gap:8px; }
+    .dash-card { display:flex; flex-direction:column; gap:4px; width:100%; text-align:left; padding:11px 13px; cursor:pointer;
+      background:var(--surface); color:var(--text); border:1px solid var(--border); border-radius:10px; font:inherit; }
+    .dash-card-top { display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
+    .dash-card-name { font-weight:700; min-width:0; overflow-wrap:anywhere; }
+    .dash-card-price { font-weight:700; white-space:nowrap; }
+    .dash-card-sub { font-size:12.5px; color:var(--muted); }
+    .dash-card-nums { display:flex; flex-wrap:wrap; gap:4px 16px; font-size:12.5px; font-weight:600; }
   }
