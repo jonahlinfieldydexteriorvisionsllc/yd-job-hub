@@ -881,6 +881,9 @@
       // once the crew is paid, against his usual -- only he sees it.
       const f = el('estWF_' + safeId(w.id));
       if (!f) return;
+      // His numbers stay out of sight until he asks for them ("Show my
+      // numbers"): bids are built on the iPad in front of the customer.
+      if (!numbersShown) { f.innerHTML = ''; return; }
       const kind = (est.work[i] || {}).kind || 'crew';
       if (kind === 'crew' || !w.cents) { f.innerHTML = ''; return; }
       if (w.profitPerDayCents === null) {

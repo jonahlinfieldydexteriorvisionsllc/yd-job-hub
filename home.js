@@ -65,9 +65,13 @@
     if (ymd === addDays(t, -1)) return 'Yesterday';
     return new Date(ymd + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
   }
+  // Calendar days, not 24-hour blocks: at 2 am a bid sent yesterday
+  // morning was sent "yesterday", not "today".
   function daysSince(iso) {
-    const t = iso ? new Date(iso).getTime() : NaN;
-    return isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 864e5)) : null;
+    const t = iso ? new Date(iso) : null;
+    if (!t || isNaN(t)) return null;
+    const midnight = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    return Math.max(0, Math.round((midnight(new Date()) - midnight(t)) / 864e5));
   }
   const ago = d => d == null ? '' : d === 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago';
   const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));

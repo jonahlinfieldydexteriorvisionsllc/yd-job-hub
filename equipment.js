@@ -231,11 +231,18 @@
       if ((w && (w.urgency === 'down' || w.urgency === 'before')) || state === 'overdue') return 0;
       return w || state === 'soon' ? 1 : 2;
     };
+    // Within a group the most pressing first (a problem's urgency, then a
+    // service due), then by name.
+    const rank = g => {
+      const w = worstIssue(g);
+      const u = w ? URGENCY.findIndex(x => x.id === w.urgency) : -1;
+      return (u < 0 ? URGENCY.length : u) * 2 + (due(g).state === 'overdue' || due(g).state === 'soon' ? 0 : 1);
+    };
     const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
     const list = all
       .filter(g => filter === 'all' || sameType(g.kind, filter))
-      .map(g => ({ g, group: groupOf(g) }))
-      .sort((a, b) => a.group - b.group || byName(String(a.g.name || ''), String(b.g.name || '')) ||
+      .map(g => ({ g, group: groupOf(g), rank: rank(g) }))
+      .sort((a, b) => a.group - b.group || a.rank - b.rank || byName(String(a.g.name || ''), String(b.g.name || '')) ||
         String(a.g.id).localeCompare(String(b.g.id)));
     // A heading over each group -- only when something needs looking at;
     // a yard with nothing due is just the list.
@@ -316,7 +323,7 @@
     if (!open.length) return '';
     const u = urgencyOf(open[0].urgency);
     return '<div class="eq-issue" style="--c:' + u.color + '">' +
-      '<span class="eq-urg">' + esc(u.label) + '</span> ' + esc(open[0].what) +
+      '<span class="eq-urg u-' + esc(u.id) + '">' + esc(u.label) + '</span> ' + esc(open[0].what) +
       (open[0].partAtShop ? ' <span class="eq-part-chip">part at shop</span>' : '') +
       (open.length > 1 ? ' <span class="eq-more">+' + (open.length - 1) + ' more</span>' : '') +
     '</div>';
@@ -465,7 +472,7 @@
             const u = urgencyOf(i.urgency);
             return '<div class="eq-issue-row" style="--c:' + u.color + '">' +
               '<div class="eq-issue-main">' +
-                '<span class="eq-urg">' + esc(u.label) + '</span>' +
+                '<span class="eq-urg u-' + esc(u.id) + '">' + esc(u.label) + '</span>' +
                 '<div class="eq-issue-what">' + esc(i.what) + '</div>' +
                 (i.note ? '<div class="eq-issue-note">' + esc(i.note) + '</div>' : '') +
                 '<div class="eq-issue-meta">Noted ' + shortDate(i.at) + (i.by ? ' by ' + esc(i.by) : '') + '</div>' +

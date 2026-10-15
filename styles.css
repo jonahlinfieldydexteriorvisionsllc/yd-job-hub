@@ -3738,3 +3738,25 @@
     .eva-list tr.eva-fold-row { display:block; }
     .eva-list tr.eva-fold-row td { display:block; padding:4px 0; }
   }
+
+  /* ---- final check fixes (15 Oct 2026) ---- */
+  /* "More" on an estimate line reads at night too. */
+  .est-more-btn { color:var(--brand-ink); }
+  /* Pricing rules on a phone: its wide tables scroll sideways inside the
+     window (the window itself clips, for its sticky index). */
+  @media (max-width:720px) {
+    #prModal .pr-table { display:block; max-width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+  }
+  /* On the job screens of a wide computer the header's middle holds Save and
+     New, so the "No signal" pill goes bottom-left there, as it does on
+     narrower computers. */
+  @media (min-width:1180px) {
+    html[data-tab="job"] .net-pill, html[data-tab="tracking"] .net-pill, html[data-tab="dashboard"] .net-pill {
+      top:auto; left:16px; transform:none; bottom:calc(16px + env(safe-area-inset-bottom, 0px)); text-align:left; }
+  }
+  /* Amber "Soon" chips: dark words, readable in sunlight (white was 2.2:1). */
+  .eq-urg.u-soon { color:#3a2a08; }
+  /* All Jobs' figures two to a row on a phone, like Home's. */
+  @media (max-width:720px) {
+    #panel-dashboard .dash-totals { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
