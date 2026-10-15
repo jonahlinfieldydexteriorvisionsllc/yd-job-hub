@@ -3107,8 +3107,54 @@ window.addEventListener('DOMContentLoaded', () => {
   const LOCAL_DEV = ['localhost', '127.0.0.1', '[::1]'].indexOf(location.hostname) !== -1
     || /\.localhost$/.test(location.hostname);
   if ('serviceWorker' in navigator && !LOCAL_DEV) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration skipped:', err.message)); });
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('./sw.js')
+        .then(reg => keepUpToDate(reg))
+        .catch(err => console.log('SW registration skipped:', err.message));
+    });
   }
+  // A page left open all day kept running the old code: Jonah, 15 Oct 2026,
+  // still saw a box ticked an hour after the fix went live ("explain why
+  // this isnt fixed"). The browser only looks for a new version when a page
+  // loads, so it is asked every 10 minutes and whenever the app comes back
+  // into view. Once the new one has taken over, the page reloads itself at a
+  // safe moment -- when it is out of view, or straight away if it is and
+  // nothing typed would be lost -- and otherwise says so, with a Reload button.
+  function keepUpToDate(reg) {
+    const hadController = !!navigator.serviceWorker.controller;   // the very first install is not an update
+    const ask = () => { reg.update().catch(() => {}); };
+    setInterval(ask, 10 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) ask(); });
+    let waiting = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || waiting) return;
+      waiting = true;
+      if (document.hidden && safeToReload()) { location.reload(); return; }
+      showUpdateBar();
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden && safeToReload()) location.reload();
+      });
+    });
+  }
+  // Nothing typed and unsaved, no window open, nothing still to send.
+  function safeToReload() {
+    if (typeof dirty !== 'undefined' && dirty) return false;
+    if (document.querySelector('.modal-overlay.active')) return false;
+    try { if (window.YDDb && YDDb.pending && YDDb.pending() > 0) return false; } catch (e) { /* treat as fine */ }
+    return true;
+  }
+  function showUpdateBar() {
+    if (document.getElementById('updBar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'updBar';
+    bar.setAttribute('role', 'status');
+    bar.innerHTML = '<span>Job Hub has been updated.</span> <button type="button" class="btn btn-sm btn-filled" onclick="reloadForUpdate()">Reload</button>';
+    document.body.appendChild(bar);
+  }
+  window.reloadForUpdate = function () {
+    if (!safeToReload() && !confirm('Something here isn’t saved yet. Reload anyway?')) return;
+    location.reload();
+  };
   // Clear out a worker registered by an earlier visit, or it keeps serving the
   // cache long after registration stopped.
   if ('serviceWorker' in navigator && LOCAL_DEV) {
@@ -3205,6 +3251,20 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
 // So, for every window: a tap on the backdrop is ignored once anything has
 // been typed in it since it opened, or when the press began inside the
 // window. The × and Escape still close it, deliberately.
+// ---- A time box opens its scrolling list of times when clicked ----------
+//
+// On a computer the browser only opens the list of hours and minutes from
+// the small clock at the end of the box; a click anywhere else in it starts
+// typing. Jonah (15 Oct 2026): "i dont want to have to type in the time ...
+// i liked clicking it and having a scroll of the times come up". So a click
+// anywhere in a time box opens the list. Phones already open their wheel.
+document.addEventListener('click', e => {
+  const box = e.target;
+  if (!box || box.tagName !== 'INPUT' || box.type !== 'time' || box.disabled || box.readOnly) return;
+  if (typeof box.showPicker !== 'function') return;
+  try { box.showPicker(); } catch (err) { /* already open, or not allowed here: the box still works */ }
+});
+
 (function guardWindows() {
   let pressedOn = null;
   document.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
