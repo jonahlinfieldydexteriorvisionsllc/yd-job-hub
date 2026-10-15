@@ -21,6 +21,28 @@
       }
     } catch (e) {}
   })();
+  // A file of the app that did not download (a dropped signal in the middle
+  // of an update) leaves the app half there: every later file throws "esc is
+  // not defined" and nothing works (Problems, 13 Oct). Heard from here, the
+  // first thing on the page, because problems.js loads after most of them.
+  // Once the page is read, it is loaded again -- once a minute at most, so
+  // a phone with no signal and nothing cached does not reload for ever.
+  (function () {
+    var failed = window.YDLoadFails = [];
+    window.addEventListener('error', function (e) {
+      var t = e.target;
+      if (t && t.tagName === 'SCRIPT' && t.src && t.src.indexOf(location.origin) === 0) failed.push(t.src);
+    }, true);
+    document.addEventListener('DOMContentLoaded', function () {
+      if (!failed.length) return;
+      try {
+        var last = +sessionStorage.getItem('ydjobhub_loadRetry') || 0;
+        if (Date.now() - last < 60000) return;
+        sessionStorage.setItem('ydjobhub_loadRetry', String(Date.now()));
+      } catch (e) { return; }
+      location.reload();
+    });
+  })();
 </script>
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">

@@ -1164,7 +1164,7 @@
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       (k.recurring && typeof recurringDetail === 'function'
-        ? recurringDetail(k, here === doneColOf(board), boardId) : '') +
+        ? recurringDetail(k, here === doneColOf(board), board.id) : '') +
       claudeHtml(board, k) +
       '<div class="field-actions">' +
         (editsBoard(board) ? '<button class="btn btn-filled" onclick="editCard()">Edit</button>' : '') +

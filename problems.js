@@ -157,6 +157,9 @@
 
   // ------------------------------------------------------------- the hooks
 
+  // Files that failed before this one loaded (index.html heard them).
+  (window.YDLoadFails || []).forEach(src => record('error', 'Failed to load ' + src, ''));
+
   window.addEventListener('error', e => {
     // A failed <script> or <img> fires this too, with no Error object.
     if (!e.error && e.target && e.target !== window) {
