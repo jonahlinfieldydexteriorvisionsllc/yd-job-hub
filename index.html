@@ -73,6 +73,9 @@
       <button class="btn btn-accent" id="btnNew" onclick="newJob()">+ New</button>
       <button class="btn" id="btnMyJobs" onclick="openManager()"><span class="hide-phone">My </span>Jobs</button>
       <button class="wx-chip" id="wxChip" onclick="toggleWeek()" aria-expanded="false" aria-controls="wxPanel" title="This week's weather"><span class="wxc-icon">🌡️</span><span class="wxc-temp">—</span></button>
+      <!-- Search everything (search.js): a box on a laptop ("/" to start
+           typing), a magnifying glass on a phone that opens a full screen. -->
+      <button class="srch-open" id="srchOpen" type="button" onclick="openSearch()" aria-label="Search everything" aria-haspopup="dialog" aria-expanded="false" aria-controls="srchPanel" title="Search everything — press / to start typing"><span class="srch-open-icon" aria-hidden="true">🔍</span><span class="srch-open-word" aria-hidden="true">Search</span><kbd class="srch-open-key" aria-hidden="true">/</kbd></button>
       <div class="menu-wrap">
         <button class="btn btn-menu" onclick="toggleHeaderMenu()" aria-haspopup="true" aria-label="More actions">&#8943;</button>
         <div class="menu" id="headerMenu" hidden>
@@ -1127,6 +1130,7 @@
 <script src="./crewjobs.js"></script>
 <script src="./jobphotos.js"></script>
 <script src="./forecast.js"></script>
+<script src="./search.js"></script>
 <script src="./home.js"></script>
 <script type="module" src="./firebase-init.js" onerror="window.YDModuleFailed = true"></script>
 </body>
