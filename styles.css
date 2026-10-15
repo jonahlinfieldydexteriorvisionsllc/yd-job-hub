@@ -3130,3 +3130,154 @@
   #ppOutSection.pp-out-compact .section-head { display:none; }
   #ppOutSection.pp-out-compact .section-body { padding:10px 16px; }
   .pp-out-line { font-size:14px; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 6px; }
+  /* ---- ux-c crew pages (15 Oct 2026) ----
+     The crew's screens -- the Clock, Home, a job's page, the calendar, a
+     note, a receipt photo -- made for a phone outdoors, in gloves, often
+     with no signal: bigger targets, the day-ending buttons set apart, and
+     what is waiting on the phone said until it has gone. */
+
+  /* The Clock: Clock out apart from Pause and Break, and marked as the one
+     that ends the day (timeclock.js liveHtml). */
+  .clock-out-gap { height:0; margin:8px 0 18px; border-top:1px dashed var(--border-strong); }
+  .clock-out-btn { background:transparent; border:2px solid var(--neg); color:var(--neg); font-weight:700; }
+  .clock-out-btn:hover, .clock-out-btn:active { background:var(--neg-soft); color:var(--neg); }
+  /* The seconds before a Clock out or Break is written (Undo) */
+  .clock-leaving .clock-elapsed { color:var(--muted); }
+  .clock-leaving .clock-sub { font-size:15px; font-weight:700; color:var(--text); margin-top:2px; }
+  .clock-leaving .clock-actions { margin-top:14px; }
+  /* "Forgot to clock in?" with nothing picked */
+  .cl-missing .label { color:var(--neg); }
+  .cl-missing .ssel-box, .cl-missing select { border-color:var(--neg); box-shadow:0 0 0 2px var(--neg-soft); }
+  /* The clock-in list: today's jobs first */
+  .picker-sub { margin:14px 0 8px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; font-size:11px; }
+  .picker-today-job { border-left:4px solid #2f6fd6; }
+  .picker-today { display:inline-block; font-size:11px; font-weight:700; color:#fff; background:#2f6fd6;
+    padding:2px 8px; border-radius:20px; margin:6px 6px 0 0; vertical-align:middle; }
+  .picker-today + .picker-flag { margin-top:6px; vertical-align:middle; }
+  /* Your Crew: switched off and refused, folded at the foot */
+  .crew-off { margin-top:10px; border-top:1px dashed var(--border); padding-top:8px; }
+  .crew-off > summary { cursor:pointer; font-size:12.5px; font-weight:700; color:var(--muted); padding:8px 0; min-height:32px; }
+  .crew-off .crew-row.crew-off-row { background:var(--surface-2); opacity:.85; }
+
+  /* My hours: a crew member's own two figures; each shift a card on a phone */
+  .wk-cards.wk-two { grid-template-columns:1fr 1fr; }
+  .wk-shiftcards { display:none; }
+  .shift-why { display:block; font-size:12px; font-weight:600; color:var(--neg); margin-top:3px; overflow-wrap:anywhere; }
+  .wk-sc { border:1px solid var(--border); border-radius:10px; padding:11px 13px; margin-bottom:8px; background:var(--surface); }
+  .wk-sc.shift-rejected { border-color:var(--neg-soft); background:var(--surface-2); }
+  .wk-sc-top { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:14px; }
+  .wk-sc-where { font-weight:700; font-size:15px; margin-top:4px; overflow-wrap:anywhere; }
+  .wk-sc-time { font-size:13px; color:var(--muted); margin-top:2px; }
+  .wk-sc-time b { color:var(--text); }
+  .wk-sc .shift-pause { margin-top:2px; }
+  .wk-sc-act { margin-top:8px; }
+  .wk-sc-act .btn { min-height:44px; width:100%; }
+  @media (max-width:720px) {
+    .wk-shifts { display:none; }
+    .wk-shiftcards { display:block; }
+  }
+
+  /* Home: the crew's weather in one line */
+  .hm-wx-line { display:flex; align-items:center; gap:8px; width:100%; min-height:44px; margin:-4px 0 12px; padding:6px 12px;
+    text-align:left; cursor:pointer; background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    font-family:'DM Sans',sans-serif; font-size:13.5px; color:var(--text); }
+  .hm-wx-line .hm-wx-i { font-size:20px; }
+  .hm-wx-one { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .hm-wx-warn { flex:none; max-width:40%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--neg);
+    font-weight:700; font-size:12px; }
+  /* Home: the storm -- where to go next, and its clock */
+  .hm-storm { margin:0 0 14px; }
+  .hm-storm .hm-alert { margin:0; flex-direction:column; align-items:stretch; gap:8px; }
+  .hm-alert .hm-storm-l1 { display:block; color:var(--text); font-size:14px; }
+  .hm-alert .hm-storm-l1 > span { color:var(--muted); font-size:13px; }
+  .hm-alert .hm-storm-l2 { display:flex; align-items:center; gap:10px; min-height:40px; padding:8px 10px; border-radius:8px;
+    background:var(--surface); border:1px solid var(--border); color:var(--text); font-size:15px; }
+  .hm-alert .hm-storm-what { flex:1; min-width:0; font-weight:700; color:var(--text); font-size:15px; overflow-wrap:anywhere; }
+  .hm-storm .hm-alert-go { flex:none; }
+  .hm-storm-in { width:100%; min-height:50px; margin-top:8px; font-size:15px; }
+  .hm-flash { animation:uxc-flash 1.6s ease-out; }
+  @keyframes uxc-flash { 0%, 40% { box-shadow:0 0 0 4px #3fb6d8; } 100% { box-shadow:0 0 0 4px rgba(63,182,216,0); } }
+  /* Home: your clock -- Clock out on its own, marked; the long-shift note */
+  .hm-out-row { margin-top:4px; }
+  .hm-out { background:transparent; border:2px solid var(--neg); color:var(--neg); font-weight:700; min-height:46px; }
+  .hm-out:hover, .hm-out:active { background:var(--neg-soft); color:var(--neg); }
+  .hm-clock.leaving .hm-clock-where { color:var(--muted); }
+  .hm-clock-note { margin-top:8px; font-size:12.5px; line-height:1.45; padding:8px 10px; border-radius:8px; background:rgba(201,146,47,.14); }
+  .hm-note { font-size:12.5px; color:var(--muted); margin:4px 2px 0; }
+  .hm-line.hm-long { border-color:var(--accent); }
+  .hm-body .md-nudge { margin:6px 0 2px; }
+  /* The cards flow down columns on a wide screen rather than sitting in
+     rows: in rows, every card beside a long one (the crew's day, the jobs)
+     left a tall empty gap under it. Waiting on you stays first, top left. */
+  @media (min-width:721px) {
+    .hm-grid { display:block; columns:360px 3; column-gap:18px; }
+    .hm-grid > .section { display:block; width:100%; margin:0 0 18px; break-inside:avoid; -webkit-column-break-inside:avoid; page-break-inside:avoid; }
+  }
+
+  /* The calendar: the crew's three views, big enough for a thumb */
+  .cal-seg-crew .cal-vbtn { min-height:44px; font-size:13px; padding:10px 14px; }
+
+  /* A job's page for the crew (crewjobs.js) */
+  .cj-where { font-size:14.5px; margin:2px 0 8px; overflow-wrap:anywhere; }
+  .cj-go { display:flex; gap:8px; margin:0 0 12px; }
+  .cj-go-btn { flex:1 1 0; min-height:52px; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    font-size:15px; font-weight:700; text-decoration:none; text-align:center; }
+  .cj-go-sub { display:block; font-size:11.5px; font-weight:400; color:var(--muted); margin-top:1px; }
+  .cj-before { margin:0 0 12px; padding:10px 12px; border-radius:10px; border:1px solid var(--accent); border-left:5px solid var(--accent);
+    background:color-mix(in srgb, #e0a526 10%, var(--surface)); }
+  .cj-before-h { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--accent-dark); margin-bottom:4px; }
+  .cj-before.cj-folded .cj-before-body { max-height:9.5em; overflow:hidden;
+    -webkit-mask-image:linear-gradient(#000 70%, transparent); mask-image:linear-gradient(#000 70%, transparent); }
+  .cj-before-more { margin-top:4px; font-size:13px; }
+  .cj-before:not(.cj-folded) .cj-before-more { display:none; }
+  .cj-clock { margin:0 0 12px; }
+  .cj-clock-btn { width:100%; min-height:56px; font-size:16px; }
+  .cj-clock-btn[disabled] { opacity:.75; cursor:default; }
+  .cj-clock small { display:block; font-size:12.5px; color:var(--muted); margin-top:4px; text-align:center; }
+  .cj-clock.cj-on { padding:12px 14px; border-radius:10px; border:1px solid var(--pos); background:var(--pos-soft); color:#1f5c3a; font-size:15px; }
+  .cj-clock.cj-on small { text-align:left; color:#2f6b3f; }
+  .cj-photos.cj-flash { animation:uxc-flash 1.6s ease-out; border-radius:8px; }
+  /* The bar along the foot of the screen: fixed to the window, not the
+     page (crewjobs.js puts it beside the page, in the window). */
+  #crewJobModal .modal-body { padding-bottom:96px; }
+  .cj-bar { position:fixed; z-index:5; left:50%; transform:translateX(-50%); bottom:0; width:min(680px, 100%);
+    display:flex; gap:6px; padding:8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    background:var(--bg); border-top:1px solid var(--border); box-shadow:0 -6px 18px rgba(0,0,0,.12); }
+  .cj-bar-btn { flex:1 1 0; min-height:56px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px;
+    border:1.5px solid var(--border); border-radius:10px; background:var(--surface); color:var(--text); cursor:pointer;
+    font-family:'DM Sans',sans-serif; font-size:20px; line-height:1; }
+  .cj-bar-btn span { font-size:12.5px; font-weight:700; }
+  .cj-bar-btn[disabled] { opacity:.6; cursor:default; }
+  .cj-bar-in { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .cj-bar-on { border-color:var(--pos); background:var(--pos-soft); color:#1f5c3a; }
+
+  /* A note for Jonah: the usual ones, a tap each */
+  .note-chips { display:flex; flex-wrap:wrap; gap:6px; margin:2px 0 8px; }
+  .note-chip { min-height:44px; padding:6px 12px; border-radius:20px; border:1.5px solid var(--border); background:var(--surface-2);
+    color:var(--text); cursor:pointer; font-family:'DM Sans',sans-serif; font-size:13px; font-weight:600; }
+  .note-chip:active, .note-chip:hover { border-color:var(--brand); }
+
+  /* A receipt photo waiting to go (receipts.js): said until it has */
+  .rc-sendbar { position:fixed; z-index:1500; left:50%; transform:translateX(-50%); bottom:24px; width:min(520px, calc(100vw - 24px));
+    display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; padding:10px 14px; border-radius:10px;
+    background:var(--surface); color:var(--text); border:1px solid var(--border-strong); border-left:5px solid var(--accent);
+    box-shadow:0 6px 20px rgba(0,0,0,.18); font-size:13.5px; }
+  .rc-sendbar[hidden] { display:none; }
+  .rc-sendbar.failed { border-left-color:var(--neg); }
+  .rc-sendbar-t { flex:1 1 200px; min-width:0; overflow-wrap:anywhere; }
+  .rc-sendbar .btn { min-height:38px; }
+  @media (max-width:720px) {
+    .rc-sendbar { bottom:calc(70px + env(safe-area-inset-bottom, 0px)); }
+  }
+
+  /* Night */
+  html[data-night] .cj-clock.cj-on, html[data-night] .cj-bar-on { background:rgba(80,180,110,.16); color:#7fd79a; border-color:rgba(127,215,154,.5); }
+  html[data-night] .cj-clock.cj-on small { color:#9fe0b2; }
+  html[data-night] .cj-before { background:color-mix(in srgb, #e0a526 14%, var(--surface)); }
+  html[data-night] .cj-before-h { color:var(--accent); }
+  html[data-night] .cj-bar-in { background:var(--brand-2); border-color:var(--brand-2); color:#0c0a0e; }
+  html[data-night] .picker-today, html[data-night] .picker-today-job { border-left-color:#7aa7ef; }
+  html[data-night] .picker-today { background:#2f5fb0; }
+  html[data-night] .hm-clock-note { background:rgba(201,146,47,.2); }
+  html[data-night] .clock-out-btn, html[data-night] .hm-out { border-color:var(--neg); color:var(--neg); }
+  html[data-night] .clock-out-btn:hover, html[data-night] .hm-out:hover { background:var(--neg-soft); }

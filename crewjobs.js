@@ -57,6 +57,25 @@
     .replace(/\b\d[\d,]*(\.\d+)?\s?(k|grand|dollars?|bucks|usd)\b/gi, '$—');
   const numOr = v => { const n = parseFloat(v); return isFinite(n) ? n : null; };
 
+  // The job's own notes are the OFFICE's: on real jobs they hold invoice
+  // numbers, late fees, what was paid and what is still owed -- with the
+  // dollar figures blanked (noMoney) the facts still showed on a crew
+  // phone. But on a job brought in from QuickBooks the same notes carry the
+  // work itself, which the crew need. So the notes go line by line (and
+  // bullet by bullet), and any piece that talks about billing is left out;
+  // the rest goes. The proper answer is a notes-for-the-crew box of its own
+  // on the job -- Jonah's call; until then this keeps the money side home.
+  const BILLING = /\b(invoic\w*|paid|unpaid|prepaid|owe[sd]?|owing|balance|late\s*fees?|deposits?|payments?|due|quick\s*books|qbo|estimate\s*(#|no\b|number))/i;
+  function crewNotes(text) {
+    return String(text == null ? '' : text).split(/\r?\n/).map(line => {
+      if (!BILLING.test(line)) return line;
+      // A line with bullets in it loses only its billing pieces.
+      const dot = (line.match(/[•·▪●]/) || ['•'])[0];
+      const kept = line.split(/[•·▪●]/).map(s => s.trim()).filter(s => s && !BILLING.test(s));
+      return kept.length ? (/^\s*[•·▪●]/.test(line) ? dot + ' ' : '') + kept.join(' ' + dot + ' ') : null;
+    }).filter(line => line !== null).join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
   function catalogue() {
     const c = window.YDSupplies && YDSupplies.catalog ? YDSupplies.catalog() : null;
     return c || { items: {}, prices: {}, vendors: {} };
@@ -156,7 +175,7 @@
       est: String(d.estimateNumber || '').trim(),
       services: (d.serviceTypes || []).slice(0, 20),
       siteNotes: noMoney(est.notes).slice(0, 8000),
-      notes: noMoney(d.notes).slice(0, 4000),
+      notes: noMoney(crewNotes(d.notes)).slice(0, 4000),
       // Each piece of work: its scope, Jonah's notes for the crew (never on
       // the estimate), and -- a service sold by the unit -- how much of it.
       work: lines.map((w, i) => ({
@@ -337,34 +356,84 @@
       (lines ? '' : sec('🚛 Haul away', haul));
   }
 
+  // ------------------------------------------- on the clock, from the page
+  //
+  // The crew open a job's page when they get there, so the page itself
+  // clocks them in: one big button, or -- already on its clock -- saying so.
+  // On another job's clock, the same tap moves them here (the clock's own
+  // switch: one action, so the hours never land on the wrong job).
+  function myShift() {
+    const m = window.YDClock && YDClock.mine ? YDClock.mine() : null;
+    return m && m.shift ? m.shift : null;
+  }
+  const onThisJob = (s, id) => !!s && s.kind === 'job' && s.targetId === id && !s.leaving;
+  function clockHtml(id, preview) {
+    const s = myShift();
+    if (!preview && onThisJob(s, id)) {
+      return '<div class="cj-clock cj-on" data-cj-clock>✅ <b>You’re on the clock here</b>' +
+        '<small>' + esc(s.inWords || '') + (s.paused ? ' · paused' : '') + ' · ' +
+        '<button class="link-btn" onclick="cjToClock()">Go to the clock</button></small></div>';
+    }
+    return '<div class="cj-clock" data-cj-clock>' +
+      '<button class="btn btn-filled cj-clock-btn" ' + (preview ? 'disabled title="The crew’s button"' : 'onclick="cjClockIn(\'' + safe(id) + '\')"') + '>' +
+        '⏱ ' + (!preview && s && !s.leaving ? 'Switch to this job' : 'Clock in to this job') + '</button>' +
+      (!preview && s && !s.leaving ? '<small>On the clock at ' + esc(s.where || 'another job') + ' — this moves you here</small>' : '') +
+    '</div>';
+  }
+  // The bar along the foot: a photo, a note, the clock -- always in reach
+  // however far down the page they have read.
+  function barHtml(id, j, preview) {
+    const s = myShift();
+    const on = !preview && onThisJob(s, id);
+    const off = preview ? ' disabled' : '';
+    return '<button class="cj-bar-btn" onclick="cjPhoto()"' + off + '>📷<span>Photo</span></button>' +
+      '<button class="cj-bar-btn" onclick="cjNote(\'' + safe(id) + '\')"' + off + '>📝<span>Note</span></button>' +
+      (on ? '<button class="cj-bar-btn cj-bar-on" onclick="cjToClock()">✅<span>On the clock</span></button>'
+        : '<button class="cj-bar-btn cj-bar-in" onclick="cjClockIn(\'' + safe(id) + '\')"' + off + '>⏱<span>' +
+            (!preview && s && !s.leaving ? 'Switch here' : 'Clock in') + '</span></button>');
+  }
+
   function pageHtml(id, j, preview) {
     const where = [j.address, [j.city, j.state].filter(Boolean).join(', '), j.zip].filter(Boolean).join(', ');
     const tel = String(j.phone || '').replace(/[^0-9+]/g, '');
     const days = window.YDCalendar && YDCalendar.forJob ? YDCalendar.forJob(id) : [];
     const sec = (title, body) => body ? '<div class="cj-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '';
+    // The site-visit notes are where the gate code, the dog, where to park
+    // and what to watch for live: above the work, not under it. A long one
+    // shows its start and opens on a tap. (Not the job's own notes: those
+    // are the office's -- see crewNotes -- and stay at the foot.)
+    const before = j.siteNotes ? ['<div class="cj-text">' + marked(j.siteNotes) + '</div>'] : [];
+    const long = String(j.siteNotes || '').length > 600;
+    // "7:30am" as the rest of the app writes a time (the calendar's own
+    // words), not "07:30".
+    const timeOf = x => x.when || (x.time ? x.time : '');
     return '<div class="cj-page">' +
       (preview ? '<div class="cj-preview">This is the page the crew see for this job — no prices anywhere. ' +
         'Hide it from them with “Hide from crew” on the Job tab.</div>' : '') +
       '<div class="cj-top"><div class="cj-name">' + esc(j.name) + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') + '</div>' +
         '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></div>' +
-      (where ? '<a class="snow-addr" href="' + esc(mapUrl(j)) + '" target="_blank" rel="noopener">📍 ' + esc(where) +
-        '<span class="snow-go">Directions</span></a>' : '<div class="muted">No address on the job yet.</div>') +
-      (tel ? '<a class="cj-call" href="tel:' + esc(tel) + '">📞 ' + esc(j.phone) + '</a>' : '') +
+      (where ? '<div class="cj-where">📍 ' + esc(where) + '</div>' : '<div class="muted">No address on the job yet.</div>') +
+      // Two big buttons a gloved thumb can find, side by side.
+      (where || tel ? '<div class="cj-go">' +
+        (where ? '<a class="btn cj-go-btn" href="' + esc(mapUrl(j)) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
+        (tel ? '<a class="btn cj-go-btn" href="tel:' + esc(tel) + '">📞 Call<span class="cj-go-sub">' + esc(j.phone) + '</span></a>' : '') +
+      '</div>' : '') +
+      (before.length ? '<div class="cj-before' + (long ? ' cj-folded' : '') + '" id="cjBefore">' +
+          '<div class="cj-before-h">⚠️ Before you start</div>' +
+          '<div class="cj-before-body">' + before.join('') + '</div>' +
+          (long ? '<button class="link-btn cj-before-more" onclick="cjBeforeAll()">Show all</button>' : '') +
+        '</div>' : '') +
+      clockHtml(id, preview) +
       ((j.services || []).length ? '<div class="cj-tags">' + j.services.map(s => '<span class="svc-tag">' + esc(s) + '</span>').join('') + '</div>' : '') +
       sec('👷 Who is working', days.length ? days.slice(0, 12).map(x => '<div class="cj-day"><b>' +
           esc(new Date(x.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) + '</b>' +
-          (x.time ? ' · ' + esc(x.time) : '') + (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : '') + '</div>').join('') : '') +
+          (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') + (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : '') + '</div>').join('') : '') +
       workHtml(j, sec) +
-      sec('📝 Notes from the site visit', j.siteNotes ? '<div class="cj-text">' + marked(j.siteNotes) + '</div>' : '') +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '') +
       sec('🗒 Notes', j.notes ? '<div class="cj-text">' + marked(j.notes) + '</div>' : '') +
       '<div class="cj-photos" id="cjPhotos" data-job="' + safe(id) + '"></div>' +
-      '<div class="field-actions">' +
-        (!preview && window.openNoteForJonah ? '<button class="btn btn-filled" onclick="openNoteForJonah(\'' + safe(id) + '\', ' +
-          esc(JSON.stringify(j.name)).replace(/'/g, '&#39;') + ')">📝 Leave a note for Jonah about this job</button>' : '') +
-      '</div>' +
     '</div>';
   }
 
@@ -376,7 +445,11 @@
       m.id = 'crewJobModal';
       m.onclick = ev => { if (ev.target === m) m.classList.remove('active'); };
       m.innerHTML = '<div class="modal" style="max-width:680px"><div class="modal-head"><h2></h2>' +
-        '<button class="modal-close">&times;</button></div><div class="modal-body"></div></div>';
+        '<button class="modal-close">&times;</button></div><div class="modal-body"></div></div>' +
+        // The bar is the window's, not the page's: fixed to the foot of the
+        // screen while the page scrolls under it (inside the page it would
+        // scroll away with it).
+        '<div class="cj-bar" id="cjBar"></div>';
       m.querySelector('.modal-close').onclick = () => m.classList.remove('active');
       document.body.appendChild(m);
     }
@@ -384,26 +457,72 @@
     m.classList.add('active');
     return m.querySelector('.modal-body');
   }
-  function afterPage(id) {
+  let pageId = null, pagePreview = false;    // the job whose page is open
+  function afterPage(id, j, preview) {
+    pageId = id; pagePreview = !!preview;
+    const bar = el('cjBar');
+    if (bar) bar.innerHTML = barHtml(id, j, preview);
     if (window.YDJobPhotos) YDJobPhotos.mount(el('cjPhotos'), id);
   }
+  const pageOpen = () => { const m = el('crewJobModal'); return !!(m && m.classList.contains('active')); };
+  // The clock changed (clocked in here, or out): the button and the bar
+  // say so -- only those, so the page and its photos are left where they are.
+  function freshClock() {
+    if (!pageOpen() || !pageId || pagePreview) return;
+    const now = clockHtml(pageId, false);
+    document.querySelectorAll('#crewJobModal [data-cj-clock]').forEach(n => { if (n.outerHTML !== now) n.outerHTML = now; });
+    const bar = el('cjBar');
+    const b = barHtml(pageId, jobs[pageId] || {}, false);
+    if (bar && bar.innerHTML !== b) bar.innerHTML = b;
+  }
+  document.addEventListener('yd-clock-changed', freshClock);
+
+  window.cjClockIn = function (id) {
+    const j = jobs[id];
+    if (!j || typeof window.clockInTo !== 'function') return;
+    if (onThisJob(myShift(), id)) { freshClock(); return; }
+    window.clockInTo('job', id, j.name || 'Job');
+    freshClock();
+  };
+  window.cjToClock = function () {
+    const m = el('crewJobModal'); if (m) m.classList.remove('active');
+    if (typeof switchTab === 'function') switchTab('clock');
+  };
+  window.cjNote = function (id) {
+    const j = jobs[id];
+    if (window.openNoteForJonah) openNoteForJonah(id, (j && j.name) || '');
+  };
+  // The photos are at the foot of the page, under Before / During / After:
+  // brought into view and lit up, so the right button is the next tap.
+  window.cjPhoto = function () {
+    const p = el('cjPhotos');
+    if (!p) return;
+    if (p.scrollIntoView) p.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    p.classList.add('cj-flash');
+    setTimeout(() => p.classList.remove('cj-flash'), 1600);
+  };
+  window.cjBeforeAll = function () {
+    const b = el('cjBefore');
+    if (b) b.classList.remove('cj-folded');
+  };
 
   // A crew member opening one of their jobs.
   window.openCrewJob = function (id) {
     const j = jobs[id];
     if (!j) return;
     modalBody('Job').innerHTML = pageHtml(id, j, false);
-    afterPage(id);
+    afterPage(id, j, false);
   };
   // The owner's "What the crew see", from the job open on the Job tab.
   window.previewCrewJob = function () {
     if (typeof getJobData !== 'function') return;
     const d = getJobData();
     const id = typeof currentJobId !== 'undefined' ? currentJobId : '';
-    modalBody('What the crew see').innerHTML = pageHtml(id, crewEntry(d), true) +
+    const entry = crewEntry(d);
+    modalBody('What the crew see').innerHTML = pageHtml(id, entry, true) +
       (shows(d) ? '' : '<p class="ntf-warn">The crew do not see this job now — ' +
         (d.crewHidden ? 'it is hidden from them.' : 'only booked and in-progress jobs are shown to them.') + '</p>');
-    afterPage(id);
+    afterPage(id, entry, true);
   };
 
   // ------------------------------------------------------- the Jobs tab

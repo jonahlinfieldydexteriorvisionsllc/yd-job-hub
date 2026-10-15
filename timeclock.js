@@ -144,6 +144,21 @@
       { hour: 'numeric', minute: '2-digit' });
   }
 
+  // A time with its day when that is not today: "3:05 PM" today, "Tue 3:05
+  // PM" this week, "Tue 10/6 3:05 PM" before that -- a shift begun yesterday
+  // afternoon read "in at 3:05 PM", which looked like it had just started.
+  // The same for a time to come ("stops by itself at Wed 7:05 AM").
+  function sinceWords(iso) {
+    const d = new Date(iso);
+    if (!iso || isNaN(d)) return '';
+    if (d.toDateString() === new Date().toDateString()) return clockTime(iso);
+    const near = Math.abs(Date.now() - d.getTime()) < 6 * 864e5;
+    return d.toLocaleDateString('en-US', near ? { weekday: 'short' } : { weekday: 'short', month: 'numeric', day: 'numeric' }) +
+      ' ' + clockTime(iso);
+  }
+  // "in at 3:05 PM" today; "in Tue 3:05 PM" on an earlier day.
+  const inWords = iso => (new Date(iso).toDateString() === new Date().toDateString() ? 'in at ' : 'in ') + sinceWords(iso);
+
   const running = e => !e.endedAt;
 
   // ----------------------------------------------------- what needs a look
@@ -219,10 +234,14 @@
   // when the storm's last property is done (YDClock.stormDone below, and the
   // server for phones that are off).
   const noHourLimit = e => !!e && e.kind === 'storm';
+  // Ten hours on: most likely a clock-out forgotten, so it says so well
+  // before the clock stops it -- an hour's warning at sixteen came after a
+  // night of pay had run on.
+  const LONG_RUN_MS = 10 * 3600000;
   function limitState(e) {
     if (!e || !running(e) || noHourLimit(e)) return 0;
     const left = stopsAt(e) - Date.now();
-    return left <= 0 ? 2 : left <= 3600000 ? 1 : 0;
+    return left <= 0 ? 2 : (left <= 3600000 || Date.now() - startMsOf(e) >= LONG_RUN_MS) ? 1 : 0;
   }
   let autoOutTimer = null;
   function readAutoOut() {
@@ -306,12 +325,14 @@
 
   // ----------------------------------------------------------------- writes
 
+  // Hands back the write, settled either way, for the one caller that may
+  // wait a moment on it (signing out with a clock-out still to send).
   function write(id, data, what) {
-    if (!window.YDDb) { showToast('Not saved — still connecting'); return; }
+    if (!window.YDDb) { showToast('Not saved — still connecting'); return Promise.resolve(); }
     // Not awaited, for the same reason as the storm screen: Firestore settles
     // the promise only when the server acknowledges, and this gets tapped in a
     // driveway with one bar.
-    Promise.resolve(window.YDDb.put('timeEntries', id, data)).catch(e => {
+    return Promise.resolve(window.YDDb.put('timeEntries', id, data)).catch(e => {
       if (e && e.code === 'permission-denied') {
         console.error('[clock] ' + what + ' refused by the rules');
         // Most likely, a phone that had no signal while the clock stopped
@@ -335,6 +356,9 @@
   window.clockInTo = function (kind, targetId, targetName) {
     const u = me();
     if (!u) return;
+    // A clock-out still in its few seconds for Undo goes first, as tapped:
+    // clocking in somewhere is the answer to "did you mean it".
+    if (leaving) commitLeaving();
     if (!targetName) targetName = nameFor(kind, targetId);
     const forUid = clockingFor || u.uid;
     const already = Object.values(entries).find(e => e.uid === forUid && running(e));
@@ -414,6 +438,11 @@
     if (card && card.scrollIntoView) card.scrollIntoView({ block: 'start', behavior: 'smooth' });
   };
   window.cancelAddShift = function () { addingShift = false; addFor = null; render(); };
+  // Picked at last: the "pick one" mark goes.
+  window.asTargetPicked = function () {
+    const f = el('asTargetField');
+    if (f && (el('asTarget') || {}).value) f.classList.remove('cl-missing');
+  };
 
   // Each choice carries only its kind and id; the name is looked up when the
   // shift is sent. Carrying the name too, split on '|', cut short any job whose
@@ -422,7 +451,10 @@
     const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]))
       .filter(j => j.status !== 'complete')
       .sort((a, b) => String(a.name).localeCompare(b.name));
-    return '<option value="labor|labor">Labor</option>' +
+    // Nothing picked to start with. With Labor first and already chosen, a
+    // shift sent without looking went in as Labor -- paid, but on no job.
+    return '<option value="">— Pick what you were on —</option>' +
+      '<option value="labor|labor">Labor</option>' +
       '<option value="snow|snow">Snow</option>' +
       '<option value="receipts|receipts">Receipts</option>' +
       jobs.map(j => '<option value="job|' + esc(j.id) + '">' + esc(j.name) + '</option>').join('');
@@ -443,8 +475,8 @@
     return '<div class="addshift">' +
       '<p class="clock-lead">' + (other ? 'A shift ' + esc(whoIs(addFor)) + ' forgot to clock in for'
         : 'A shift you forgot to clock in for') + '</p>' +
-      '<div class="field"><span class="label">What were you on?</span>' +
-        '<select id="asTarget" class="searchable">' + asOptions + '</select></div>' +
+      '<div class="field" id="asTargetField"><span class="label">What were you on?</span>' +
+        '<select id="asTarget" class="searchable" onchange="asTargetPicked()">' + asOptions + '</select></div>' +
       '<div class="field"><span class="label">Day</span>' +
         '<input type="date" id="asDate" value="' + iso(today) + '" max="' + iso(today) + '"></div>' +
       '<div class="grid g2">' +
@@ -479,7 +511,17 @@
     const to = (el('asTo') || {}).value;
     const why = ((el('asWhy') || {}).value || '').trim();
 
-    if (!kind || !targetId) { showToast('Pick what you were working on'); return; }
+    if (!kind || !targetId) {
+      // Said beside the box as well as in a message that fades: on a phone
+      // the box may be scrolled above the button just pressed.
+      const f = el('asTargetField');
+      if (f) {
+        f.classList.add('cl-missing');
+        if (f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+      showToast('Pick what you were on first — Labor, Snow, Receipts or a job');
+      return;
+    }
     if (!day || !from || !to) { showToast('Fill in the day and both times'); return; }
 
     const startMs = new Date(day + 'T' + from).getTime();
@@ -534,7 +576,7 @@
 
   window.pauseClock = function (id, reason) {
     const e = entries[id];
-    if (!e || !running(e) || openPause(e)) return;
+    if (!e || !running(e) || openPause(e) || leavingNow(id)) return;
     // "Other" says what, in a few words, so the office is not left guessing.
     // Cancel on that question is "never mind": the clock is not paused.
     if (reason === 'Other') {
@@ -595,7 +637,7 @@
     e.status = late || needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
 
     render();
-    write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
+    lastWrite = write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
       why || 'clocking out');
     return e.status;
   }
@@ -604,11 +646,85 @@
 
   window.takeBreak = function (id) {
     const e = entries[id];
-    if (!e || !running(e)) return;
-    const status = endShift(id, 'starting a break', { endedFor: 'break' });
-    showToast('On break — off the clock. Tap Clock back in when you’re back.' +
-      (status === 'pending' ? ' (Over ' + LONG_SHIFT_HOURS + ' hours, so the part before goes to the office to check.)' : ''), 5000);
+    if (!e || !running(e) || leavingNow(id)) return;
+    later(id, 'break');
   };
+  // The break itself, once its seconds for Undo are up (or at once).
+  // `atMs`: when Break was tapped. `quiet`: the Undo bar already said so.
+  function finishBreak(id, atMs, quiet) {
+    const e = entries[id];
+    if (!e || !running(e)) return Promise.resolve();
+    const status = endShift(id, 'starting a break', { endedFor: 'break' }, atMs);
+    if (!quiet || status === 'pending') {
+      showToast('On break — off the clock. Tap Clock back in when you’re back.' +
+        (status === 'pending' ? ' (Over ' + LONG_SHIFT_HOURS + ' hours, so the part before goes to the office to check.)' : ''), 5000);
+    }
+    return lastWrite;
+  }
+
+  // ------------------------------------------- a few seconds to take it back
+  //
+  // Clock out and Break are the two taps that end a shift, and both sit on
+  // the same screen as Pause -- a glove landing on the wrong one used to end
+  // the shift there and then, and the crew cannot undo a settled shift (only
+  // ask the office to). So for a few seconds nothing is written: the screen
+  // says "Clocking out…" with an Undo, and only then does the shift end --
+  // at the moment it was TAPPED, not five seconds later. Leaving the app
+  // (another app, the phone locked, the page closed) sends it at once, so
+  // a clock-out is never lost to a phone put back in a pocket. Without the
+  // app's Undo bar (showUndo, app.js) it is written straight away, as before.
+  const UNDO_MS = 5000;
+  let leaving = null;          // { id, what: 'out' | 'break', atMs, timer }
+  let lastWrite = Promise.resolve();
+  const leavingNow = id => !!leaving && leaving.id === id;
+
+  function later(id, what) {
+    if (leaving && leaving.id !== id) commitLeaving();     // another shift's goes first
+    const e = entries[id];
+    if (!e || !running(e)) return;
+    if (typeof window.showUndo !== 'function') {
+      if (what === 'break') finishBreak(id); else finishClockOut(id);
+      return;
+    }
+    const atMs = Date.now();
+    leaving = { id: id, what: what, atMs: atMs, timer: setTimeout(commitLeaving, UNDO_MS) };
+    pausingId = null;
+    render();
+    announce();               // Home shows "Clocking out…" too
+    const dur = fmtDur(Math.max(0, atMs - startMsOf(e)));
+    window.showUndo(what === 'break' ? '🍔 Going on break — off the clock' : 'Clocking out — ' + dur,
+      () => undoLeaving(id), UNDO_MS);
+  }
+  // The seconds are up, or the app is being left: written now, as tapped.
+  function commitLeaving() {
+    const l = leaving;
+    if (!l) return Promise.resolve();
+    leaving = null;
+    clearTimeout(l.timer);
+    const done = l.what === 'break' ? finishBreak(l.id, l.atMs, true) : finishClockOut(l.id, l.atMs, true);
+    render();
+    announce();
+    return done;
+  }
+  function undoLeaving(id) {
+    if (!leavingNow(id)) {
+      // Already sent (the app was left while the bar showed): a settled
+      // shift is not the phone's to reopen.
+      const e = entries[id];
+      if (e && !running(e)) showToast('Already clocked out — if that was a mistake, clock in again, or ask for a change on My hours', 6000);
+      return;
+    }
+    clearTimeout(leaving.timer);
+    leaving = null;
+    render();
+    announce();
+    showToast('Still on the clock');
+  }
+  window.undoClockOut = undoLeaving;
+  window.addEventListener('pagehide', () => { commitLeaving(); });
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') commitLeaving(); });
+  // Signing out with one waiting: sent first (sign-out waits a moment for it).
+  (window.YDSignOutHooks = window.YDSignOutHooks || []).push(() => commitLeaving());
 
   // This person's break, while it is one: their last shift ended for a break,
   // in the last few hours, nothing started since, and not waved off.
@@ -656,21 +772,44 @@
     render();
   };
 
+  // This person's own Clock out (the Clock tab, Home): a few seconds to
+  // take it back (see "a few seconds to take it back").
   window.clockOut = function (id) {
     const e = entries[id];
-    if (!e || !running(e)) return;
+    if (!e || !running(e) || leavingNow(id)) return;
+    later(id, 'out');
+  };
+  // The office clocking somebody out from On the Clock Now: asked first,
+  // with whose shift it is and how long it has run -- one row of several,
+  // and a tap on the wrong one ended the wrong person's day.
+  window.clockOutWorker = function (id) {
+    const e = entries[id];
+    if (!e || !running(e) || !(mayDecide(e) || e.uid === (me() || {}).uid)) return;
+    if (!confirm('Clock out ' + workerOf(e) + '?\n\n' + (e.targetName || 'On the clock') + ' — ' + fmtDur(paidMs(e)) +
+        ' so far (in ' + sinceWords(e.startedAt) + ').')) return;
+    if (leavingNow(id)) { clearTimeout(leaving.timer); leaving = null; }
+    finishClockOut(id);
+  };
+  function finishClockOut(id, atMs, quiet) {
+    const e = entries[id];
+    if (!e || !running(e)) return Promise.resolve();
     const late = limitState(e) === 2;
-    const status = endShift(id);
+    const status = endShift(id, undefined, undefined, atMs);
     // Worked out after: past the limit, it ended at the limit.
     const dur = fmtDur(paidMs(e));
+    const who = e.uid === (me() || {}).uid ? '' : ' ' + workerOf(e);
+    // The Undo bar has said "Clocking out" already: only what it did not
+    // say -- that this one goes to the office -- is said again.
+    if (quiet && !late && status !== 'pending') return lastWrite;
     showToast(late
-      ? 'Clocked out at ' + hoursWord(autoOutHours) + ' — the clock stops a shift there by itself. ' +
+      ? 'Clocked out' + who + ' at ' + hoursWord(autoOutHours) + ' — the clock stops a shift there by itself. ' +
         'It goes to the office to check.'
       : status === 'pending'
-      ? 'Clocked out — ' + dur + '. Over ' + LONG_SHIFT_HOURS +
+      ? 'Clocked out' + who + ' — ' + dur + '. Over ' + LONG_SHIFT_HOURS +
         ' hours, so it goes to the office to check.'
-      : 'Clocked out — ' + dur, late ? 6000 : undefined);
-  };
+      : 'Clocked out' + who + ' — ' + dur, late || status === 'pending' ? 6000 : undefined);
+    return lastWrite;
+  }
 
   // ------------------------------------------------------------- the display
 
@@ -745,7 +884,8 @@
     const shift = myOpenShift();
 
     const badge = el('clockBadge');
-    if (badge) badge.textContent = shift ? (openPause(shift) ? 'Paused' : 'On the clock') : (myBreak() ? 'On break' : '');
+    if (badge) badge.textContent = shift ? (leavingNow(shift.id) ? (leaving.what === 'break' ? 'Going on break…' : 'Clocking out…')
+      : openPause(shift) ? 'Paused' : 'On the clock') : (myBreak() ? 'On break' : '');
 
     if (addingShift) {
       // Built once, then left alone. The clock redraws on every change from
@@ -835,7 +975,22 @@
     '</div>';
   }
 
+  // The few seconds after Clock out or Break, before anything is written:
+  // the time stopped where it was tapped, and one big way back.
+  function leavingHtml(e) {
+    const brk = leaving.what === 'break';
+    return '<div class="clock-live clock-leaving">' +
+      '<div class="clock-where">' + esc(e.targetName) + '</div>' +
+      '<div class="clock-elapsed">' + fmtDur(Math.max(0, leaving.atMs - startMsOf(e))) + '</div>' +
+      '<div class="clock-sub">' + (brk ? '🍔 Going on break — off the clock…' : 'Clocking out…') + '</div>' +
+      '<div class="clock-actions">' +
+        '<button class="btn btn-filled clock-big" onclick="undoClockOut(\'' + safeId(e.id) + '\')">↩ Undo — stay on the clock</button>' +
+      '</div>' +
+    '</div>';
+  }
+
   function liveHtml(e) {
+    if (leavingNow(e.id)) return leavingHtml(e);
     const p = openPause(e);
     const paid = paidMs(e), bill = billableMs(e);
     return '<div class="clock-live' + (p ? ' paused' : '') + '">' +
@@ -843,7 +998,7 @@
         (e.kind === 'storm' ? ' <span class="clock-kind">storm</span>' : '') +
         (OVERHEAD_LABEL[e.kind] ? ' <span class="clock-kind">not a job</span>' : '') + '</div>' +
       '<div class="clock-elapsed" data-live-entry="' + safeId(e.id) + '">' + fmtDur(paid) + '</div>' +
-      '<div class="clock-sub">in at ' + clockTime(e.startedAt) +
+      '<div class="clock-sub">' + inWords(e.startedAt) +
         (pausedMs(e) ? ' · ' + fmtDur(pausedMs(e)) + ' paused · ' + fmtDur(bill) + ' billable' : '') +
       '</div>' +
       (p ? '<div class="clock-pausenote">Paused for ' + esc(p.reason) +
@@ -863,9 +1018,12 @@
                   : '<button class="btn btn-accent clock-big" onclick="askPause(\'' + safeId(e.id) + '\')">Pause</button>')
               : '') +
             '<button class="btn clock-big clock-break-btn" onclick="takeBreak(\'' + safeId(e.id) + '\')">🍔 Break</button>' +
-            '<button class="btn clock-big" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' +
             '<div class="clock-hint">' + (canPause(e) ? '<b>Pause</b> — still paid, the customer isn’t charged. ' : '') +
               '<b>Break</b> — off the clock, unpaid.</div>' +
+            // Set apart from Pause and Break, and marked as the one that ends
+            // the day: the three used to sit together, alike, under a glove.
+            '<div class="clock-out-gap"></div>' +
+            '<button class="btn clock-big clock-out-btn" onclick="clockOut(\'' + safeId(e.id) + '\')">⏹ Clock out</button>' +
             '<button class="btn btn-sm" onclick="openJobPicker()">Switch to something else</button>' +
             '<button class="btn btn-sm" onclick="openWorker()">My hours</button>' +
           '</div>') +
@@ -878,12 +1036,18 @@
   function limitNoteHtml(e) {
     const s = limitState(e);
     if (!s) return '';
-    const at = clockTime(new Date(stopsAt(e)).toISOString());
-    return '<div class="clock-pausenote clock-limit">⏱ ' + (s === 2
+    return '<div class="clock-pausenote clock-limit">⏱ ' + esc(limitWords(e)) + '</div>';
+  }
+  // The same words, plain, for Home.
+  function limitWords(e) {
+    const s = limitState(e);
+    if (!s) return '';
+    const at = sinceWords(new Date(stopsAt(e)).toISOString());
+    return s === 2
       ? 'Over ' + hoursWord(autoOutHours) + '. The clock stops a shift by itself then, so this one ended at ' + at +
         ' and goes to the office to check — this phone shows it once it has signal. Still working? Clock out, then clock in again.'
-      : 'Still on? The clock stops this shift by itself at ' + at + ' (' + hoursWord(autoOutHours) +
-        ' on the clock). Still working then? Clock in again after.') + '</div>';
+      : 'Still working? This shift stops by itself at ' + at + ' (' + hoursWord(autoOutHours) +
+        ' on the clock). Done for the day? Clock out now.';
   }
 
   // The clock stopped their last shift by itself: said once, on their own
@@ -990,6 +1154,33 @@
   const rank = j => j.status === 'inprogress' || j.status === 'active' ? 0 : j.status === 'booked' ? 1
     : j.status === 'complete' ? 3 : 2;
 
+  // The jobs on a calendar today (any calendar this person sees), in the
+  // day's order, those this person is on first: id -> { day, time, at,
+  // mine }. The job they are on today is nearly always the one they clock
+  // into, so it goes at the top of the list.
+  function todaysJobs() {
+    const out = {};
+    if (!window.YDCalendar || !YDCalendar.nextForJobs) return out;
+    let next = {}, day = null;
+    try {
+      next = YDCalendar.nextForJobs(1) || {};
+      day = YDCalendar.day ? YDCalendar.day(dayStr(new Date())) : null;
+    } catch (e) { return out; }
+    // Theirs by name -- not a crew task nobody is on yet, which is every
+    // crew member's (calendar.js `open`).
+    const mineToday = {};
+    if (day && day.mineTimed) day.mineTimed.concat(day.mineAny || []).forEach(x => {
+      const id = x && x.o && x.o.ev && x.o.ev.jobId;
+      if (id && !x.open) mineToday[id] = true;
+    });
+    const t = dayStr(new Date());
+    let at = 0;
+    Object.keys(next).forEach(id => {
+      if (next[id] && next[id].day === t) out[id] = Object.assign({ at: (mineToday[id] ? 0 : 1000) + at++, mine: !!mineToday[id] }, next[id]);
+    });
+    return out;
+  }
+
   // With nothing typed this is EVERY active job, however many there are. The
   // usual case is clocking in to work already under way, and having to search
   // for that would be the wrong way round. Typing searches the lot, finished
@@ -998,24 +1189,35 @@
   function pickerList() {
     const search = ((el('clockSearch') || {}).value || '').trim().toLowerCase();
     const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]));
+    const today = todaysJobs();
+    const isToday = j => !!today[j.id];
+    const byDay = (a, b) => (isToday(a) ? 0 : 1) - (isToday(b) ? 0 : 1) ||
+      (isToday(a) && isToday(b) ? today[a.id].at - today[b.id].at : 0);
 
     const list = search
       ? jobs.filter(j => (j.name + ' ' + (j.address || '')).toLowerCase().indexOf(search) !== -1)
-            .sort((a, b) => rank(a) - rank(b) || String(a.name).localeCompare(b.name))
-      : jobs.filter(j => isLive(j.status))
-            .sort((a, b) => String(a.name).localeCompare(b.name));
+            .sort((a, b) => byDay(a, b) || rank(a) - rank(b) || String(a.name).localeCompare(b.name))
+      : jobs.filter(j => isLive(j.status) || isToday(j))
+            .sort((a, b) => byDay(a, b) || String(a.name).localeCompare(b.name));
 
     if (!list.length) {
       return '<p class="empty-msg">' + (search ? 'No job matches that.'
         : 'No booked or in-progress jobs. Search above for a quoted or finished one.') + '</p>';
     }
-    return list.map(j =>
-      '<button class="picker-job" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
+    const row = j => {
+      const t = today[j.id];
+      return '<button class="picker-job' + (t ? ' picker-today-job' : '') + '" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
         '<span class="picker-name">' + esc(j.name) + '</span>' +
         (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
+        (t ? '<span class="picker-today">📅 Today' + (t.time ? ' · ' + esc(t.time) : '') + (t.mine ? ' · you’re on it' : '') + '</span>' : '') +
         '<span class="picker-flag ' + esc(j.status || '') + '">' +
           esc(typeof statusLabel === 'function' ? statusLabel(j.status) : (j.status || 'job')) + '</span>' +
-      '</button>').join('');
+      '</button>';
+    };
+    const pinned = search ? [] : list.filter(isToday);
+    return (pinned.length ? '<p class="clock-lead picker-sub">On the calendar today</p>' + pinned.map(row).join('') +
+        (list.length > pinned.length ? '<p class="clock-lead picker-sub">Other jobs</p>' : '') : '') +
+      list.filter(j => pinned.indexOf(j) === -1).map(row).join('');
   }
 
   // ------------------------------------------------------------ owner views
@@ -1050,10 +1252,12 @@
               (p ? ' · paused (' + esc(p.reason) + ')' : '') +
               // Forgot to clock out, most likely: the clock stops it soon.
               (limitState(e) === 2 ? ' · ⏱ over ' + hoursWord(autoOutHours) + ' — being stopped'
-                : limitState(e) === 1 ? ' · ⏱ stops by itself at ' + clockTime(new Date(stopsAt(e)).toISOString()) : '') +
+                : limitState(e) === 1 ? ' · ⏱ still on? stops by itself at ' + sinceWords(new Date(stopsAt(e)).toISOString()) : '') +
+              // Begun on an earlier day: said, or 3h reads like this morning.
+              (new Date(e.startedAt).toDateString() !== new Date().toDateString() ? ' · ' + inWords(e.startedAt) : '') +
               '</span>' +
             (mayDecide(e) || e.uid === (me() || {}).uid
-              ? '<button class="btn btn-sm" onclick="clockOut(\'' + safeId(e.id) + '\')">Clock out</button>' : '') +
+              ? '<button class="btn btn-sm" onclick="clockOutWorker(\'' + safeId(e.id) + '\')">Clock out</button>' : '') +
           '</div>';
         }).join('')
       : '<p class="empty-msg">Nobody is on the clock.</p>') +
@@ -1345,8 +1549,11 @@
     if (!mayDecide(e)) return;
     const why = prompt('Why is this being rejected? The crew member sees this.');
     if (why === null) return;
-    const patch = { status: 'rejected', rejectedReason: why.trim(),
-                    approvedBy: (me() || {}).uid || '', approvedAt: nowIso() };
+    // Who turned it down and when, under their own names: written as
+    // approvedBy/approvedAt before, a rejected shift read as approved to
+    // anything that looked only at those. (Older rejected shifts keep them.)
+    const patch = { status: 'rejected', rejectedReason: why.trim().slice(0, 500),
+                    rejectedBy: (me() || {}).uid || '', rejectedAt: nowIso() };
     Object.assign(e, patch);
     // Waiting or turned down, it was never in the summary of old jobs'
     // labour, so nothing there changes.
@@ -1561,12 +1768,30 @@
     const all = Object.keys(people).map(uid => people[uid])
       .filter(u => u.uid !== ((me() || {}).uid));
 
-    const waiting = all.filter(u => u.role === 'pending' || u.active === false);
+    // Asking to join, at the top; switched off or refused, folded away at
+    // the foot -- a test account switched off weeks ago sat above the real
+    // crew, in the colour of something waiting on him.
+    const asking = all.filter(u => u.role === 'pending');
+    const off = all.filter(u => u.role !== 'pending' && u.active === false);
     const active = all.filter(u => (u.role === 'crew' || u.role === 'admin') && u.active);
+    const waitingRow = u => '<div class="crew-row waiting' + (u.role === 'pending' ? '' : ' crew-off-row') + '">' +
+      '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
+      '<span class="crew-mail">' + esc(u.email) + '</span>' +
+      '<span class="crew-state">' + (u.role === 'pending' ? 'wants access'
+        : u.role === 'denied' ? 'refused' : 'switched off') + '</span>' +
+      // Somebody refused is not offered the same filled-in button as a
+      // crew member switched off for the winter: theirs is plain, and
+      // asks before letting them in.
+      '<button class="btn btn-sm' + (u.role === 'denied' ? '' : ' btn-filled') +
+        '" onclick="approveCrew(\'' + safeId(u.uid) + '\')">' +
+        (u.role === 'pending' ? 'Let them in'
+          : u.role === 'denied' ? 'Let them in after all…' : 'Switch back on') + '</button>' +
+      (u.role === 'pending'
+        ? '<button class="btn btn-sm" onclick="denyCrew(\'' + safeId(u.uid) + '\')">Not them</button>' : '') +
+    '</div>';
 
     const badge = el('crewBadge');
-    if (badge) badge.textContent = waiting.filter(u => u.role === 'pending').length
-      ? waiting.filter(u => u.role === 'pending').length + ' asking to join' : '';
+    if (badge) badge.textContent = asking.length ? asking.length + ' asking to join' : '';
 
     // The owner's own row comes first, so their name can be changed too.
     const meRec = people[(me() || {}).uid];
@@ -1578,23 +1803,7 @@
             '<button class="btn btn-sm" onclick="renameWorker(\'' + safeId(meRec.uid) + '\')">Rename</button>' +
           '</div>'
         : '') +
-      (waiting.length
-        ? waiting.map(u => '<div class="crew-row waiting">' +
-            '<span class="crew-name">' + esc(u.name || u.email) + '</span>' +
-            '<span class="crew-mail">' + esc(u.email) + '</span>' +
-            '<span class="crew-state">' + (u.role === 'pending' ? 'wants access'
-              : u.role === 'denied' ? 'refused' : 'switched off') + '</span>' +
-            // Somebody refused is not offered the same filled-in button as a
-            // crew member switched off for the winter: theirs is plain, and
-            // asks before letting them in.
-            '<button class="btn btn-sm' + (u.role === 'denied' ? '' : ' btn-filled') +
-              '" onclick="approveCrew(\'' + safeId(u.uid) + '\')">' +
-              (u.role === 'pending' ? 'Let them in'
-                : u.role === 'denied' ? 'Let them in after all…' : 'Switch back on') + '</button>' +
-            (u.role === 'pending'
-              ? '<button class="btn btn-sm" onclick="denyCrew(\'' + safeId(u.uid) + '\')">Not them</button>' : '') +
-          '</div>').join('')
-        : '') +
+      asking.map(waitingRow).join('') +
       (active.length
         ? active.map(u => '<div class="crew-row">' +
             '<button class="crew-name linkish" onclick="openWorker(\'' + safeId(u.uid) + '\')">' +
@@ -1616,6 +1825,13 @@
           '</div>').join('')
         : '<p class="empty-msg">No crew yet. Send them the app link and ask them to ' +
           'sign in with Google — they will show up here to let in.</p>') +
+      // Kept open or shut across the redraws (this list is drawn again on
+      // every change to anybody's shift).
+      (off.length
+        ? '<details class="crew-off"' + (crewOffOpen ? ' open' : '') + ' ontoggle="crewOffToggled(this.open)">' +
+            '<summary>Switched off &amp; refused (' + off.length + ')</summary>' + off.map(waitingRow).join('') +
+          '</details>'
+        : '') +
       // The clock's own setting (see "the clock stops itself").
       '<div class="crew-row crew-setting">' +
         '<span class="crew-name">⏱ Forgot to clock out</span>' +
@@ -1625,6 +1841,9 @@
         '<button class="btn btn-sm" onclick="setAutoOutHours()">Change</button>' +
       '</div>';
   }
+
+  let crewOffOpen = false;
+  window.crewOffToggled = function (open) { crewOffOpen = !!open; };
 
   function setRole(uid, patch, msg) {
     if (!isOwner() || !people[uid]) return;
@@ -1864,7 +2083,7 @@
           '<td class="bold">' + money(w.cost) + '</td></tr>').join('') +
         '</tbody><tfoot><tr><td colspan="4" style="text-align:right;font-weight:700">Total</td>' +
         '<td style="font-weight:700">' + money(totalCost) + '</td></tr></tfoot></table></div>'
-      : '<p class="empty-msg">No approved hours on these days.</p>') +
+      : '<p class="empty-msg">No settled hours on these days.</p>') +
       whereItWentHtml(t.done) +
       (pending.length
         ? '<p class="hint">' + pending.length + ' shift' + (pending.length === 1 ? '' : 's') +
@@ -1913,7 +2132,9 @@
   // show up nowhere else at all, so without this the money spent on them would
   // be invisible -- which is the part of a wage bill worth watching, because
   // none of it is charged to anyone.
-  function whereItWentHtml(done) {
+  // `own`: a crew member's own page, which does not talk about charging
+  // customers -- that is the office's side of the same hours.
+  function whereItWentHtml(done, own) {
     if (!done.length) return '';
     const bucket = {};
     done.forEach(e => {
@@ -1932,12 +2153,12 @@
       .reduce((s, k) => s + bucket[k].cents, 0);
 
     return '<div class="went"><div class="went-head">Where the hours went</div>' +
-      rows.map(k => '<div class="went-row' + (bucket[k].billable ? '' : ' overhead') + '">' +
+      rows.map(k => '<div class="went-row' + (bucket[k].billable || own ? '' : ' overhead') + '">' +
         '<span>' + esc(k) + '</span>' +
         '<span>' + fmtDur(bucket[k].ms) + '</span>' +
         '<span class="went-cost">' + money(bucket[k].cents) + '</span>' +
       '</div>').join('') +
-      (overhead
+      (overhead && !own
         ? '<div class="went-note">' + money(overhead) +
           ' of this is not charged to any customer.</div>'
         : '') +
@@ -2021,6 +2242,9 @@
     // Somebody else's, for whoever settles their shifts: the times changed
     // by hand (the owner's own, too).
     const fixable = !askable && decides() && (isOwner() || !isMe);
+    // A crew member's own page: their hours and their pay, in their words --
+    // what a customer is charged is the office's side of it.
+    const own = isMe && !seesAll();
     el('wkHead').innerHTML =
       (editingWorker && (canName || canRate)
         ? '<div class="wk-edit">' +
@@ -2056,13 +2280,20 @@
     el('wkMain').innerHTML =
       olderNote(olderNow) +
 
-      '<div class="wk-cards">' +
-        wkCard('Paid', fmtDur(paid), 'what they worked') +
-        wkCard('Billable', fmtDur(bill), 'chargeable to customers') +
-        wkCard('Wages', money(owed), 'approved only', 'accent-top') +
-      '</div>' +
+      // Counted = settled by itself or approved (counts); the wages say so,
+      // not "approved only", which a self-settled shift is not.
+      (own
+        ? '<div class="wk-cards wk-two">' +
+            wkCard('Worked', fmtDur(paid), 'shifts that have gone through') +
+            wkCard('Pay', money(owed), 'not counting shifts still waiting', 'accent-top') +
+          '</div>'
+        : '<div class="wk-cards">' +
+            wkCard('Paid', fmtDur(paid), 'what they worked') +
+            wkCard('Billable', fmtDur(bill), 'chargeable to customers') +
+            wkCard('Wages', money(owed), 'counted shifts — not ones waiting', 'accent-top') +
+          '</div>') +
 
-      whereItWentHtml(approved) +
+      whereItWentHtml(approved, own) +
 
       (waiting.length
         ? '<div class="wk-waiting">' + waiting.length + ' shift' + (waiting.length === 1 ? '' : 's') +
@@ -2077,12 +2308,17 @@
         (fixable && people[workerUid]
           ? ' <button class="link-btn" onclick="addShiftFor(\'' + safeId(workerUid) + '\')">+ Add a shift ' +
               (isMe ? 'I' : 'they') + ' forgot to clock</button>' : '') + '</div>' +
+      // A table on a wide screen; on a phone each shift is a card of its
+      // own (the stylesheet shows one or the other) -- the table ran off
+      // the side and had to be scrolled sideways to reach Ask for a change.
       (inRange.length
-        ? '<div class="table-wrap"><table><thead><tr><th>When</th><th>What</th>' +
-          '<th>Paid</th><th>Billable</th><th></th>' + (askable || fixable ? '<th></th>' : '') + '</tr></thead><tbody>' +
+        ? '<div class="table-wrap wk-shifts"><table><thead><tr><th>When</th><th>What</th>' +
+          '<th>' + (own ? 'Hours' : 'Paid') + '</th>' + (own ? '' : '<th>Billable</th>') + '<th></th>' +
+          (askable || fixable ? '<th></th>' : '') + '</tr></thead><tbody>' +
           inRange.sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
-            .map(e => shiftRow(e, askable, fixable)).join('') +
-          '</tbody></table></div>'
+            .map(e => shiftRow(e, askable, fixable, own)).join('') +
+          '</tbody></table></div>' +
+          '<div class="wk-shiftcards">' + inRange.map(e => shiftCard(e, askable, fixable, own)).join('') + '</div>'
         : '<p class="empty-msg">No shifts on these days.</p>') +
       (askable ? myRequestsHtml(workerUid) : '');
   }
@@ -2172,7 +2408,14 @@
       (r.status === 'pending' ? ' <button class="link-btn" onclick="withdrawRequest(\'' + safeId(r.id) + '\')">withdraw</button>' : '') +
     '</div>').join('');
   }
-  window.askChange = function (id) { asking = id; renderWorker(); };
+  // The form opens above "Every shift", which on a phone is well up the
+  // page from the shift tapped: brought to the middle of the screen.
+  window.askChange = function (id) {
+    asking = id;
+    renderWorker();
+    const f = document.querySelector('#workerBody .wk-ask');
+    if (f && f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
   window.cancelRequest = function () { asking = null; renderWorker(); };
   window.sendRequest = function () {
     const e = entries[asking] || older[asking], u = me();
@@ -2341,7 +2584,57 @@
       '<div class="wk-card-sub">' + sub + '</div></div>';
   }
 
-  function shiftRow(e, askable, fixable) {
+  // What a shift's status says, and why one was turned down (the office's
+  // own words, which the crew member sees on that shift -- "Reject" asks
+  // for them saying so).
+  function flagWords(e) {
+    return running(e) ? 'on the clock'
+      : e.status === 'ok' ? 'counted'
+      : e.status === 'approved' ? 'approved'
+      : e.status === 'rejected' ? 'turned down'
+      : 'waiting';
+  }
+  const rejectedHtml = e => e.status === 'rejected'
+    ? '<span class="shift-why">✕ Turned down' + (e.rejectedReason ? ': “' + esc(e.rejectedReason) + '”' : '') + '</span>' : '';
+  // The button to ask for a change, or to change it (the office): the same
+  // rules for the table row and the phone's card.
+  function shiftAct(e, askable, fixable, big) {
+    const cls = big ? 'btn btn-sm' : 'link-btn';
+    if (askable) {
+      return running(e) || !e.endedAt || e.status === 'rejected' ? ''
+        : pendingFor(e.id) ? '<span class="muted">change asked</span>'
+        : '<button class="' + cls + '" onclick="askChange(\'' + safeId(e.id) + '\')">Ask for a change</button>';
+    }
+    if (fixable) {
+      return running(e) || !e.endedAt || e.status === 'rejected' || !mayDecide(e) ? ''
+        : '<button class="' + cls + '" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>';
+    }
+    return '';
+  }
+  // A shift on a phone: when, where, how long, its state -- and the button,
+  // full size.
+  function shiftCard(e, askable, fixable, own) {
+    const pause = pausedMs(e);
+    const when = new Date(e.startedAt);
+    const act = shiftAct(e, askable, fixable, true);
+    return '<div class="wk-sc shift-' + esc(e.status) + '">' +
+      '<div class="wk-sc-top"><b>' + when.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) + '</b>' +
+        '<span class="shift-flag ' + esc(e.status) + '">' + flagWords(e) + '</span></div>' +
+      '<div class="wk-sc-where">' + esc(e.targetName) + '</div>' +
+      '<div class="wk-sc-time">' + clockTime(e.startedAt) +
+        (!e.endedAt ? ' — still on'
+          : '–' + (new Date(e.endedAt).toDateString() !== when.toDateString()
+            ? new Date(e.endedAt).toLocaleDateString('en-US', { weekday: 'short' }) + ' ' : '') + clockTime(e.endedAt)) +
+        ' · <b>' + fmtDur(paidMs(e)) + '</b>' +
+        (!own && canPause(e) ? ' · ' + fmtDur(billableMs(e)) + ' billable' : '') + '</div>' +
+      (pause ? '<span class="shift-pause">' + fmtDur(pause) + ' paused</span>' : '') +
+      (autoStopped(e) ? '<span class="shift-pause">⏱ no clock-out — stopped by the clock</span>' : '') +
+      rejectedHtml(e) +
+      (act ? '<div class="wk-sc-act">' + act + '</div>' : '') +
+    '</div>';
+  }
+
+  function shiftRow(e, askable, fixable, own) {
     const pause = pausedMs(e);
     const when = new Date(e.startedAt);
     return '<tr class="shift-' + e.status + '">' +
@@ -2355,21 +2648,13 @@
         '</span></td>' +
       '<td class="bold">' + esc(e.targetName) +
         (pause ? '<span class="shift-pause">' + fmtDur(pause) + ' paused</span>' : '') +
-        (autoStopped(e) ? '<span class="shift-pause">⏱ no clock-out — stopped by the clock</span>' : '') + '</td>' +
+        (autoStopped(e) ? '<span class="shift-pause">⏱ no clock-out — stopped by the clock</span>' : '') +
+        rejectedHtml(e) + '</td>' +
       '<td>' + fmtDur(paidMs(e)) + '</td>' +
-      '<td>' + (canPause(e) ? fmtDur(billableMs(e)) : '—') + '</td>' +
-      '<td><span class="shift-flag ' + e.status + '">' +
-        (running(e) ? 'on the clock'
-          : e.status === 'ok' ? 'counted'
-          : e.status === 'approved' ? 'approved'
-          : e.status === 'rejected' ? 'rejected'
-          : 'waiting') + '</span></td>' +
+      (own ? '' : '<td>' + (canPause(e) ? fmtDur(billableMs(e)) : '—') + '</td>') +
+      '<td><span class="shift-flag ' + e.status + '">' + flagWords(e) + '</span></td>' +
       // Not on a rejected one: a change to it would still leave it rejected.
-      (askable ? '<td>' + (running(e) || !e.endedAt || e.status === 'rejected' ? ''
-        : pendingFor(e.id) ? '<span class="muted">change asked</span>'
-        : '<button class="link-btn" onclick="askChange(\'' + safeId(e.id) + '\')">Ask for a change</button>') + '</td>' : '') +
-      (fixable && !askable ? '<td>' + (running(e) || !e.endedAt || e.status === 'rejected' || !mayDecide(e) ? ''
-        : '<button class="link-btn" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>') + '</td>' : '') +
+      (askable || fixable ? '<td>' + shiftAct(e, askable, fixable, false) + '</td>' : '') +
     '</tr>';
   }
 
@@ -3043,18 +3328,28 @@
         live: Object.values(entries).filter(running)
           .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)))
           .map(e => ({ id: e.id, uid: e.uid, who: workerOf(e), where: e.targetName || '', kind: e.kind,
-                       ms: paidMs(e), paused: openPause(e) ? openPause(e).reason || 'paused' : '' })),
+                       ms: paidMs(e), paused: openPause(e) ? openPause(e).reason || 'paused' : '',
+                       // On a long time -- most likely a clock-out forgotten.
+                       long: limitState(e) > 0,
+                       since: new Date(e.startedAt).toDateString() !== new Date().toDateString() ? inWords(e.startedAt) : '' })),
         breaks: Object.keys(byUid).map(uid => breakOf(byUid[uid])).filter(Boolean)
           .map(b => ({ id: b.id, uid: b.uid, who: workerOf(b), where: b.targetName || '', ms: Date.now() - endMsOf(b) })),
       };
     },
     // This person's own clock: the shift running now, or the break they are
     // on, or neither.
+    // `leaving`: 'out' or 'break' in the seconds before a Clock out or Break
+    // is written (Undo); `ms` stops where it was tapped. `inWords`: "in at
+    // 7:02 AM", or "in Tue 3:05 PM" when it began on an earlier day.
+    // `note`: the clock's warning on a long shift.
     mine: () => {
       const s = myOpenShift(), b = s ? null : myBreak();
+      const out = s && leavingNow(s.id) ? leaving : null;
       return {
-        shift: s ? { id: s.id, where: s.targetName || '', kind: s.kind, since: clockTime(s.startedAt),
-                     ms: paidMs(s), paused: openPause(s) ? openPause(s).reason || 'paused' : '' } : null,
+        shift: s ? { id: s.id, where: s.targetName || '', kind: s.kind, targetId: s.targetId || '', since: sinceWords(s.startedAt),
+                     inWords: inWords(s.startedAt), leaving: out ? out.what : '',
+                     ms: out ? Math.max(0, out.atMs - startMsOf(s)) : paidMs(s), note: out ? '' : limitWords(s),
+                     canPause: canPause(s), paused: openPause(s) ? openPause(s).reason || 'paused' : '' } : null,
         onBreak: b ? { id: b.id, where: b.targetName || '', since: clockTime(b.endedAt), ms: Date.now() - endMsOf(b) } : null,
       };
     },
@@ -3308,6 +3603,9 @@
       // shift under that somebody.
       picking = false; clockingFor = null; pausingId = null; choosingWorker = false;
       addingShift = false; addFor = null; editingWorker = false; fixingId = null; fixingIn = null;
+      // A clock-out waiting on its Undo was sent by the sign-out itself
+      // (YDSignOutHooks); nothing of it is left for the next person.
+      if (leaving) { clearTimeout(leaving.timer); leaving = null; }
       autoOutHours = AUTO_OUT_DEFAULT;
       closeWorker();
       render();

@@ -1085,7 +1085,6 @@
     const e = u && Object.values(all).find(x => x.uid === u.uid && !x.endedAt && x.kind === 'job');
     return e ? e.targetId || '' : '';
   }
-  let sendingPhoto = false;
   window.rcPhoto = function () {
     let inp = el('rcPhotoInput');
     if (!inp) {
@@ -1098,20 +1097,174 @@
     inp.value = '';
     inp.click();
   };
+
+  // ------------------------------------- a photo kept until it has gone
+  //
+  // A receipt is photographed at the counter or in the truck, often with
+  // no signal -- and the photo used to be sent straight away or not at all
+  // ("Receipt: No connection"), which lost it. Now it is shrunk and kept on
+  // the phone first (IndexedDB, the way job photos are kept: jobphotos.js),
+  // then sent; with no signal it waits and goes by itself when the signal
+  // comes back, the app comes back on screen, or the person signs in again
+  // -- even if the app was closed in between. While any is waiting a small
+  // bar says so, instead of a message that is gone in two seconds.
+  //
+  // Sent at most once at a time, and only by whoever took it (the server
+  // files it under the person signed in). A read the server turns down for
+  // a reason of its own (not a receipt, say) is not tried again and again:
+  // it waits for "Try again" or "Throw away".
+  const RQ_DB = 'ydjobhub_receipts', RQ_STORE = 'queue';
+  const rq = {};               // id -> { id, by, mediaType, data, jobId, at, state, error, tries }
+  let rqDb = null, rqBusy = false;
+  function rqIdb() {
+    if (!rqDb) rqDb = new Promise((res, rej) => {
+      if (!window.indexedDB) { rej(new Error('no IndexedDB')); return; }
+      const r = indexedDB.open(RQ_DB, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(RQ_STORE, { keyPath: 'id' });
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    return rqDb;
+  }
+  function rqTx(mode, fn) {
+    return rqIdb().then(db => new Promise((res, rej) => {
+      const t = db.transaction(RQ_STORE, mode);
+      const out = fn(t.objectStore(RQ_STORE));
+      t.oncomplete = () => res(out && out.result);
+      t.onerror = () => rej(t.error);
+    }));
+  }
+  // Only what is kept is kept: the state words are this visit's.
+  const rqKeep = it => rqTx('readwrite', s => s.put({ id: it.id, by: it.by, mediaType: it.mediaType, data: it.data,
+    jobId: it.jobId, at: it.at, tries: it.tries || 0, failed: it.state === 'failed' ? it.error || 'Not read' : '' }))
+    .catch(e => console.warn('[receipts] photo kept in memory only:', e));
+  const rqDrop = id => rqTx('readwrite', s => s.delete(id)).catch(() => {});
+  const rqLoad = () => rqTx('readonly', s => s.getAll()).catch(() => []);
+  const myUid = () => ((me() || {}).uid || '');
+  const mineWaiting = () => Object.values(rq).filter(it => it.by === myUid());
+
   async function sendPhoto(f) {
-    if (!f || sendingPhoto) return;
-    if (!window.YDClaude || !window.YDSupplies || !window.YDSupplies.shrinkPhoto) { showToast('Not ready yet — try again in a moment'); return; }
-    sendingPhoto = true;
-    showToast('Reading the receipt…');
+    if (!f) return;
+    if (!window.YDSupplies || !window.YDSupplies.shrinkPhoto) { showToast('Not ready yet — try again in a moment'); return; }
+    if (!me()) { showToast('Sign in to send a receipt'); return; }
+    let photo;
+    try { photo = await window.YDSupplies.shrinkPhoto(f); }
+    catch (e) { showToast('Receipt: ' + (e.message || e)); return; }
+    const it = { id: 'rq' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), by: myUid(),
+                 mediaType: photo.mediaType, data: photo.data, jobId: clockedJob(), at: new Date().toISOString(),
+                 state: 'waiting', error: '', tries: 0 };
+    rq[it.id] = it;
+    await rqKeep(it);
+    drawSendBar();
+    sendQueued();
+  }
+
+  // Each of this person's waiting photos, one after another. `again`: the
+  // ones the server turned down are tried too (the person asked).
+  let rqAgain = false;         // asked again while a run was going: one more run after it
+  async function sendQueued(again) {
+    if (rqBusy || !me()) { if (rqBusy) rqAgain = rqAgain || 'more'; drawSendBar(); return; }
+    rqBusy = true;
+    const tried = new Set();
     try {
-      const photo = await window.YDSupplies.shrinkPhoto(f);
-      const r = await window.YDClaude.post('/receipts/photo', { mediaType: photo.mediaType, data: photo.data, jobId: clockedJob() });
-      showToast('🧾 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents) + ' — ' +
-        (r.what === 'added to' ? 'matched a receipt already there' : (sees() ? 'in Receipts to sort' : 'sent to the office')));
-    } catch (e) {
-      showToast('Receipt: ' + (e.message || e));
+      // One at a time, each once a run -- including one photographed while
+      // the one before it was still on its way.
+      for (;;) {
+        const it = mineWaiting().find(x => !tried.has(x.id) && (x.state !== 'failed' || again));
+        if (!it) break;
+        tried.add(it.id);
+        if (navigator.onLine === false || !window.YDClaude) { it.state = 'waiting'; continue; }
+        it.state = 'sending'; it.error = '';
+        drawSendBar();
+        try {
+          const r = await window.YDClaude.post('/receipts/photo', { mediaType: it.mediaType, data: it.data, jobId: it.jobId || '' });
+          delete rq[it.id];
+          rqDrop(it.id);
+          showToast('🧾 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents) + ' — ' +
+            (r.what === 'added to' ? 'matched a receipt already there' : (sees() ? 'in Receipts to sort' : 'sent to the office')), 5000);
+        } catch (e) {
+          const msg = String((e && e.message) || e || '');
+          it.tries = (it.tries || 0) + 1;
+          // No signal (or the sign-in could not be checked without it):
+          // waits, and goes by itself. Anything else the server said is
+          // kept to show, and waits for a tap.
+          const offline = navigator.onLine === false || /no connection|network|failed to fetch|load failed/i.test(msg) ||
+            (e && /network/.test(String(e.code || '')));
+          it.state = offline ? 'waiting' : 'failed';
+          it.error = offline ? '' : msg.slice(0, 200);
+          rqKeep(it);
+        }
+      }
     } finally {
-      sendingPhoto = false;
+      rqBusy = false;
+      drawSendBar();
+    }
+    // Asked for again while this run was going (signal came back, say):
+    // only for a photo this run did not get to try.
+    if (rqAgain) {
+      rqAgain = false;
+      if (mineWaiting().some(x => !tried.has(x.id) && x.state === 'waiting')) sendQueued();
     }
   }
+
+  // The bar: how many are waiting and why, with Try again / Throw away when
+  // one needs a tap. Hidden when nothing is waiting.
+  function drawSendBar() {
+    let bar = el('rcSendBar');
+    const list = mineWaiting();
+    if (!list.length) { if (bar) bar.hidden = true; return; }
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'rcSendBar';
+      bar.className = 'rc-sendbar';
+      bar.setAttribute('role', 'status');
+      document.body.appendChild(bar);
+    }
+    const sending = list.some(it => it.state === 'sending');
+    const failed = list.filter(it => it.state === 'failed');
+    const n = list.length;
+    const words = sending ? '🧾 Sending ' + (n === 1 ? 'the receipt' : n + ' receipts') + '…'
+      : failed.length ? '🧾 ' + (failed.length === 1 ? 'A receipt was' : failed.length + ' receipts were') + ' not read: ' + failed[0].error
+      : '🧾 ' + (n === 1 ? '1 receipt' : n + ' receipts') + ' waiting for signal — ' + (n === 1 ? 'it sends' : 'they send') + ' by itself';
+    const html = '<span class="rc-sendbar-t">' + esc(words) + '</span>' +
+      (sending ? '' : '<button class="btn btn-sm" onclick="rcSendAgain()">Try again</button>') +
+      (failed.length && !sending ? '<button class="btn btn-sm" onclick="rcThrowAway()">Throw away</button>' : '');
+    if (bar.innerHTML !== html) bar.innerHTML = html;
+    bar.classList.toggle('failed', !!failed.length && !sending);
+    bar.hidden = false;
+  }
+  window.rcSendAgain = function () { sendQueued(true); };
+  // Only the ones the server turned down: a photo still waiting for signal
+  // is never thrown away by this.
+  window.rcThrowAway = function () {
+    const failed = mineWaiting().filter(it => it.state === 'failed');
+    if (!failed.length || !confirm(failed.length === 1 ? 'Throw this receipt photo away? It was not read.'
+        : 'Throw these ' + failed.length + ' receipt photos away? They were not read.')) return;
+    failed.forEach(it => { delete rq[it.id]; rqDrop(it.id); });
+    drawSendBar();
+  };
+
+  // Whatever this phone kept from before (the app closed with one waiting).
+  let rqLoadedFor = null;
+  async function loadReceiptQueue() {
+    const uid = myUid();
+    if (!uid || rqLoadedFor === uid) { sendQueued(); return; }
+    rqLoadedFor = uid;
+    const items = await rqLoad();
+    (items || []).forEach(x => {
+      if (!x || !x.id || rq[x.id]) return;
+      rq[x.id] = Object.assign({}, x, { state: x.failed ? 'failed' : 'waiting', error: x.failed || '' });
+    });
+    drawSendBar();
+    sendQueued();
+  }
+  document.addEventListener('yd-auth', e => {
+    const a = e.detail || {};
+    if (a.mode === 'cloud' && a.user) loadReceiptQueue();
+    // Someone else signed in on this phone: their photos stay kept, unseen,
+    // until they sign in again.
+    else { rqLoadedFor = null; drawSendBar(); }
+  });
+  window.addEventListener('online', () => sendQueued());
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) sendQueued(); });
 })();
