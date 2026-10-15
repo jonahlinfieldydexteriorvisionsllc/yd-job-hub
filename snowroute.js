@@ -35,6 +35,13 @@
   const safe = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const onMap = a => !!a && a.lat != null && a.lng != null;
   const edits = () => typeof ydCan === 'function' && ydCan('snow', 'change');
+  // The bar plans the NEXT storm. While one is being worked it is only in
+  // the way of the stops (and its order no longer changes anything), so it
+  // is put away and the router is not asked.
+  const stormOn = () => {
+    const s = window.YDStorm && YDStorm.current();
+    return !!(s && s.status === 'open');
+  };
 
   function plan() {
     if (!window.YDStorm || !window.YDSnow) return null;
@@ -66,6 +73,7 @@
   }
 
   async function measure() {
+    if (stormOn()) { render(); return; }
     const p = plan();
     if (!p || !p.stops.length) { road = better = null; render(); return; }
     const mapped = p.stops.filter(s => onMap(s.a));
@@ -118,6 +126,8 @@
   function render() {
     const wrap = el('snowRouteWrap');
     if (!wrap) return;
+    wrap.hidden = stormOn();
+    if (wrap.hidden) { wrap.innerHTML = ''; return; }
     const p = plan();
     if (!p || !p.stops.length) { wrap.innerHTML = ''; return; }
     const mapped = p.stops.filter(s => onMap(s.a));
@@ -148,8 +158,10 @@
         '<span>' + head + '</span>' + (byHand ? '<span class="rc-tag">order set by hand</span>' : '') + '</div>' +
       '<div class="rt-strip"><div class="rt-stop start"><span class="rt-n">🏠</span><b>Start</b><small>' + esc(p.start.label || '') + '</small></div>' +
         stopsHtml + '</div>' +
-      (better ? '<div class="rt-better">A faster order: <b>' + miles(better.m) + ' mi · ' + mins(better.s) + '</b> — saves about ' +
-        mins(road.s - better.s) + '.' + (edits() ? ' <button class="btn btn-sm btn-filled" onclick="routeUseBetter()">Use this order</button>' : '') + '</div>' : '') +
+      // Only for whoever can take it: to anyone else it is a suggestion
+      // they can do nothing with.
+      (better && edits() ? '<div class="rt-better">A faster order: <b>' + miles(better.m) + ' mi · ' + mins(better.s) + '</b> — saves about ' +
+        mins(road.s - better.s) + '. <button class="btn btn-sm btn-filled" onclick="routeUseBetter()">Use this order</button></div>' : '') +
       (lost.length ? '<div class="hint">' + lost.length + ' account' + (lost.length === 1 ? ' is' : 's are') +
         ' not on the map, so ' + (lost.length === 1 ? 'it goes' : 'they go') + ' last and ' + (lost.length === 1 ? 'is' : 'are') + ' not measured.</div>' : '') +
       (byHand && edits() ? '<button class="link-btn" onclick="routeAuto()">Back to the worked-out order</button>' : '') +
@@ -184,6 +196,13 @@
     }, 300);
   }
   document.addEventListener('yd-route-order', refresh);
+  // A storm opening or closing (storm.js says so on every change; only the
+  // switch between the two matters here).
+  let wasOn = null;
+  document.addEventListener('yd-storm-changed', () => {
+    const on = stormOn();
+    if (on !== wasOn) { wasOn = on; refresh(); }
+  });
   document.addEventListener('yd-auth', e => { if (!(e.detail && e.detail.user)) { road = better = null; asked = ''; } });
 
   window.YDSnowRoute = { refresh: refresh, render: render };

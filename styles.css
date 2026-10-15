@@ -2769,3 +2769,102 @@
     .care-btns { width:100%; }
     .care-btns .btn { flex:1 1 auto; }
   }
+
+
+  /* ---- ux-b storm screen (15 Oct 2026) ---- */
+  /* Worked in a truck at night with gloves on: every control on a stop is
+     at least 44px, the stop being worked is found without scrolling for it,
+     and the end-of-night buttons sit well apart from the last stop. */
+
+  /* Scrolled to with a little room above (storm.js showCurrent), and clear
+     of the phone's tab bar below. */
+  #stormWrap, #stormWrap .stop { scroll-margin-top:12px; scroll-margin-bottom:84px; }
+
+  /* Finished stops fold to one line; a tap opens one. Full strength, not
+     faded: a faded line was hard to read at night. */
+  #stormWrap .stop.done, #stormWrap .stop.skipped { opacity:1; }
+  #stormWrap .stop.folded { padding:0; background:var(--surface-2); }
+  #stormWrap .stop-row { display:flex; align-items:center; gap:10px; width:100%; min-height:52px; padding:8px 12px;
+                         background:none; border:0; border-radius:inherit; font:inherit; color:inherit; text-align:left; cursor:pointer; }
+  #stormWrap .stop-row-main { flex:1; min-width:0; display:flex; flex-wrap:wrap; align-items:baseline; column-gap:10px; row-gap:2px; }
+  #stormWrap .stop-row-name { font-weight:700; font-size:15px; min-width:0; overflow-wrap:anywhere; }
+  #stormWrap .stop-row-name small { font-size:11px; font-weight:600; color:var(--muted); }
+  #stormWrap .stop-row-figs { font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  #stormWrap .stop.skipped .stop-num { background:var(--muted); }
+  #stormWrap .stop-chev { margin-left:auto; flex:none; width:28px; text-align:center; font-size:30px; line-height:1; color:var(--muted); }
+  #stormWrap .stop-chev.open { transform:rotate(90deg); }
+  #stormWrap .stop-head-btn { width:100%; min-height:44px; padding:0; background:none; border:0; font:inherit; color:inherit;
+                              text-align:left; cursor:pointer; }
+
+  /* The next stop to do stands out from the rest of the list. */
+  #stormWrap .stop.next { border-color:var(--brand-2); border-left-color:var(--brand-2); }
+
+  /* Reorder arrows big enough for a gloved thumb, at the end of the line --
+     the name wraps beside them rather than pushing them onto a line of their own. */
+  #stormWrap .stop-head { flex-wrap:nowrap; }
+  #stormWrap .stop-head .stop-name { flex:0 1 auto; min-width:0; overflow-wrap:anywhere; }
+  #stormWrap .stop-head .snow-tag { flex:none; }
+  #stormWrap .stop-move { margin-left:auto; gap:6px; flex:none; }
+  #stormWrap .stop-move button { width:44px; height:44px; font-size:15px; border-radius:9px; }
+
+  /* Directions: a real button on the stop being worked and the next one. */
+  #stormWrap .stop-dir { display:flex; align-items:center; justify-content:center; gap:8px; min-height:52px; margin-top:12px; max-width:440px;
+                         border:2px solid var(--brand); border-radius:10px; background:var(--surface); color:var(--brand);
+                         font-size:16px; font-weight:700; text-decoration:none; }
+  #stormWrap .stop-dir:active { background:var(--brand); color:#fff; }
+  html[data-night] #stormWrap .stop-dir { border-color:var(--brand-2); color:var(--brand-2); background:var(--surface-2); }
+
+  #stormWrap .stop-actions .btn { min-height:44px; padding:10px 14px; font-size:12px; }
+  #stormWrap .stop-skip { min-width:92px; }
+  #stormWrap .stop-undo-row { width:100%; display:flex; justify-content:flex-end; margin-top:4px; }
+  #stormWrap .stop-actions .stop-not-here { border-color:var(--border-strong); color:var(--muted); text-transform:none;
+                                            letter-spacing:.2px; font-size:13px; }
+
+  /* Salt in one tap. */
+  #stormWrap .salt-chips { display:flex; flex-wrap:wrap; gap:8px; width:100%; margin:-2px 0 12px; }
+  #stormWrap .salt-chip { min-height:44px; min-width:64px; padding:0 14px; border:2px solid var(--border-strong); border-radius:22px;
+                          background:var(--surface-2); color:var(--text); font:inherit; font-size:15px; font-weight:700;
+                          font-variant-numeric:tabular-nums; cursor:pointer; }
+  #stormWrap .salt-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  html[data-night] #stormWrap .salt-chip.on { background:var(--accent); border-color:var(--accent); color:#1a1208; }
+
+  /* The inches box still holding the storm's expected depth, not a measurement. */
+  #stormWrap .stepper-guess { display:block; margin-top:3px; font-size:12px; font-weight:700; letter-spacing:.2px;
+                              text-transform:none; color:#7a5410; }
+  #stormWrap .stepper:not(.is-guess) .stepper-guess { display:none; }
+  #stormWrap .stepper.is-guess .stepper-input { border:2px dashed #b07a12; background:#fff7e6; }
+  html[data-night] #stormWrap .stepper-guess { color:#f0b04a; }
+  html[data-night] #stormWrap .stepper.is-guess .stepper-input { border-color:#f0b04a; background:#2a2010; }
+
+  /* Why a stop is skipped: big buttons, two to a row. */
+  #stormWrap .skip-why { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; }
+  #stormWrap .skip-why-q { grid-column:1 / -1; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.9px; color:var(--muted); }
+  #stormWrap .stop-actions .skip-why-btn { min-height:56px; padding:8px; font-size:15px; text-transform:none; letter-spacing:.2px; }
+  #stormWrap .stop-actions .skip-why-cancel { grid-column:1 / -1; border-color:var(--border-strong); color:var(--muted); }
+
+  /* The end of the night, on rows of its own below a clear break. */
+  #stormWrap .storm-end { margin-top:30px; padding-top:20px; border-top:2px dashed var(--border-strong);
+                          display:flex; flex-direction:column; gap:16px; }
+  #stormWrap .storm-end-row { display:flex; }
+  #stormWrap .storm-end-btn { flex:1; max-width:440px; min-height:52px; font-size:13px; }
+  #stormWrap .storm-end .btn-danger { min-height:44px; }
+
+  /* Gold text dark enough to read (it was about 3.6:1 on white). */
+  #stormWrap .storm-onsite, #stormWrap .stop-notes { color:#7a5410; }
+  html[data-night] #stormWrap .storm-onsite, html[data-night] #stormWrap .stop-notes { color:#f0b04a; }
+
+  /* Snow tab headings: Start storm is the gold main button; the others are
+     outlined in white (in the brand colour they disappeared into the
+     purple heading). */
+  #panel-snow .section-head .btn { min-height:44px; }
+  #panel-snow .section-head .btn:not(.btn-accent):not(.btn-filled) { color:#fff; border-color:rgba(255,255,255,.6); background:transparent; }
+  /* Night mode's pale button text was landing on the gold, unreadable. */
+  html[data-night] #panel-snow .btn-accent { color:#1a1208; }
+
+  /* Snow accounts: the place on the route, and prices easy to read. */
+  .snow-route-n { display:inline-flex; align-items:center; justify-content:center; flex:none; min-width:24px; height:24px;
+                  padding:0 6px; border-radius:12px; background:var(--brand); color:#fff; font-size:12px; font-weight:700;
+                  font-variant-numeric:tabular-nums; }
+  html[data-night] .snow-route-n { background:var(--brand-2); color:#14101a; }
+  #snowAccountsWrap .snow-price { font-size:14px; font-weight:700; color:#7a5410; }
+  html[data-night] #snowAccountsWrap .snow-price { color:#f0b04a; }
