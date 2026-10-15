@@ -58,8 +58,9 @@
   // "mds" are one supplier; "Pavers - Holland" and "Pavers — Holland" one item.
   const key = s => norm(s).replace(/[^a-z0-9]+/g, '');
   // One collator, made once: localeCompare makes one per comparison, and a
-  // sort of 900 items is ~9,000 comparisons. Same order.
-  const collate = new Intl.Collator().compare;
+  // sort of 900 items is ~9,000 comparisons. Numbers in a name sort as
+  // numbers (15 Oct 2026): #8 stone before #57, a 6x9 paver before a 12x12.
+  const collate = new Intl.Collator(undefined, { numeric: true }).compare;
   const byName = (a, b) => collate(String(a.name || ''), String(b.name || ''));
   const thisYear = () => new Date().getFullYear();
   const two = n => (n < 10 ? '0' : '') + n;
@@ -319,10 +320,12 @@
           '<button id="supViewHub" class="sup-view" role="tab" onclick="supView(\'hub\')">📦 All supplies</button>' +
         '</div>' +
         '<input id="supSearch" class="sup-search" type="search" oninput="supSearch(this.value)" autocomplete="off">' +
+        // With one supplier open, its own card has these two for that
+        // supplier (renderResults hides the ones here).
         (edits() ? '<div class="field-actions sup-actions">' +
-          '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\')">+ Add an item</button>' +
+          '<button class="btn btn-sm btn-filled" id="supTopAdd" onclick="supEdit(\'item\', \'\')">+ Add an item</button>' +
           '<button class="btn btn-sm" onclick="supEdit(\'vendor\', \'\')">+ Add a supplier</button>' +
-          '<button class="btn btn-sm" onclick="supPriceList()">💲 Price list</button>' +
+          '<button class="btn btn-sm" id="supTopPrices" onclick="supPriceList()">💲 Price list</button>' +
         '</div>' : '') +
         '<div id="supResults"></div>';
       el('supSearch').value = search;
@@ -336,6 +339,54 @@
   // under Rentals & dumpsters in All supplies; the rental place is a supplier
   // like any other.
   const isRental = it => it.category === 'rental' || it.category === 'dumpster';
+
+  // A note on many of one supplier's items -- a rental sheet entered with
+  // the same "rates for 2026, delivery extra" on every line -- is said once,
+  // with the supplier, and left off those items (15 Oct 2026: one supplier's
+  // note showed 43 times down its list). The same for a shared price note.
+  // Worked out afresh at each drawing: vendor id -> { notes, priceNotes },
+  // each the shared text or ''.
+  let shared = {};
+  const SHARED_MIN = 3;       // on at least this many of its items, and at least half of them
+  function sharedNotes() {
+    const by = {}, out = {};
+    Object.values(items).forEach(it => {
+      if (!vendors[it.vendorId]) return;
+      const b = by[it.vendorId] = by[it.vendorId] || { n: 0, notes: {}, priceNotes: {} };
+      b.n++;
+      const t = String(it.notes || '').trim();
+      if (t) b.notes[t] = (b.notes[t] || 0) + 1;
+      const pn = String((prices[it.id] || {}).priceNotes || '').trim();
+      if (pn) b.priceNotes[pn] = (b.priceNotes[pn] || 0) + 1;
+    });
+    const most = (counts, n) => {
+      let best = '', c = 0;
+      Object.keys(counts).forEach(k => { if (counts[k] > c) { best = k; c = counts[k]; } });
+      return c >= SHARED_MIN && c * 2 >= n ? best : '';
+    };
+    Object.keys(by).forEach(vid => {
+      const s = { notes: most(by[vid].notes, by[vid].n), priceNotes: most(by[vid].priceNotes, by[vid].n) };
+      if (s.notes || s.priceNotes) out[vid] = s;
+    });
+    return out;
+  }
+  const sharedOf = it => (it && shared[it.vendorId]) || {};
+  // The shared notes, said once: on the supplier's card, and above a list of
+  // items from several suppliers (All supplies) for each one in it.
+  function sharedHtml(vid) {
+    const s = shared[vid];
+    if (!s) return '';
+    return (s.notes ? '<div class="sup-notes sup-shared"><b>On their items:</b> ' + esc(s.notes) + '</div>' : '') +
+      (s.priceNotes && seesPrices() ? '<div class="sup-pnotes sup-shared"><b>Their prices:</b> ' + esc(s.priceNotes) + '</div>' : '');
+  }
+  function sharedListHtml(list) {
+    const seen = {};
+    list.forEach(it => { if (shared[it.vendorId] && vendors[it.vendorId]) seen[it.vendorId] = true; });
+    return Object.keys(seen).map(vid => {
+      const inner = sharedHtml(vid);
+      return inner ? '<div class="sup-shared-for"><span class="sup-shared-v">' + esc(vendors[vid].name) + '</span>' + inner + '</div>' : '';
+    }).join('');
+  }
 
   // searchOnly: only the search words changed, so the tags and the search
   // index worked out for the last drawing still hold. Every other drawing
@@ -353,7 +404,11 @@
     if (sBox) sBox.placeholder = view === 'hub'
       ? (use ? 'Search ' + tagInfo(use).name.toLowerCase() : 'What do you need? e.g. seed, pavers, salt')
       : v ? 'Search what ' + v.name + ' sells' : shown === '-' ? 'Search these items' : 'Find a supplier — or something they sell';
+    const topAdd = el('supTopAdd'), topPrices = el('supTopPrices');
+    if (topAdd) topAdd.hidden = !!v;
+    if (topPrices) topPrices.hidden = !!v;
     foldLists = {};
+    shared = sharedNotes();
 
     if (!Object.keys(items).length && !Object.keys(vendors).length) {
       // Nothing has answered yet (a crew phone opening the tab for the first time).
@@ -431,7 +486,7 @@
         '<div class="sup-h">' + u.icon + ' ' + esc(u.name) + ' <span class="sup-group-count">' + mine.length + '</span></div>' +
         (use === 'rentals' ? '<div class="hint">What we rent and where to get it. Add one with “+ Add an item” and pick ' +
           '“Rentals” as its kind; the rental place is a supplier like any other.</div>' : '') +
-        bulkBarHtml(list, use) +
+        bulkBarHtml(list, use) + sharedListHtml(list) +
         (list.length ? itemsHtml('u:' + use, list, true, !!words.length)
           : '<p class="empty-msg">' + (words.length ? 'Nothing here matches “' + esc(search) + '”.' : 'Nothing here yet.') + '</p>');
     }
@@ -444,7 +499,7 @@
       }
       const byUse = {};
       list.slice(0, cap()).forEach(it => { const k = usesOf(it)[0]; (byUse[k] = byUse[k] || []).push(it); });
-      return bulkBarHtml(list, '') + allTags().filter(t => byUse[t]).map(t =>
+      return bulkBarHtml(list, '') + sharedListHtml(list.slice(0, cap())) + allTags().filter(t => byUse[t]).map(t =>
         '<div class="sup-group"><button class="sup-group-name"' + tagAttr(t) + '>' + tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>' +
           '<span class="sup-group-count">' + byUse[t].length + '</span></div>' +
         byUse[t].map(it => itemHtml(it, true)).join('')).join('') + moreHtml(list.length);
@@ -601,9 +656,9 @@
   }
 
   function linksHtml(v) {
-    // A supplier that only ships has nowhere to drive to, whatever address
-    // it has on file.
-    const map = v.address && waysOf(v).indexOf('shipped') === -1
+    // A supplier that only ships, or only takes orders online, has nowhere to
+    // drive to, whatever address it has on file.
+    const map = v.address && waysOf(v).indexOf('shipped') === -1 && waysOf(v).indexOf('online') === -1
       ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(v.address) : '';
     const tel = v.phone ? 'tel:' + String(v.phone).replace(/[^0-9+]/g, '') : '';
     const mail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email || '') ? 'mailto:' + v.email : '';
@@ -624,11 +679,12 @@
       ([v.address, v.hours].filter(Boolean).length
         ? '<div class="sup-where">' + esc([v.address, v.hours].filter(Boolean).join(' · ')) + '</div>' : '') +
       (v.notes ? '<div class="sup-notes">' + esc(v.notes) + '</div>' : '') +
+      sharedHtml(v.id) +
       '<div class="sup-links">' + linksHtml(v) +
-        (edits() ? '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\', \'' + safeId(v.id) + '\')">+ Add an item here</button>' : '') +
+        (edits() ? '<button class="btn btn-sm btn-filled" onclick="supEdit(\'item\', \'\', \'' + safeId(v.id) + '\')">+ Add an item to ' + esc(v.name) + '</button>' : '') +
         // Their own price sheet, as it comes: an Excel file or a CSV, with no
         // Supplier column needed.
-        (edits() ? '<button class="btn btn-sm btn-accent" onclick="supPriceList(\'' + safeId(v.id) + '\')">💲 Price list</button>' : '') +
+        (edits() ? '<button class="btn btn-sm btn-accent" onclick="supPriceList(\'' + safeId(v.id) + '\')">💲 ' + esc(v.name) + '’s price list</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -645,7 +701,7 @@
       (rates.length ? ' <span class="sup-per">· ' + rates.join(' · ') + '</span>' : '') +
       (p.year ? ' <span class="sup-year">' + p.year + ' price</span>' : '') +
       (prev ? ' ' + changeHtml(change(p.cents, prev.cents)) : '') +
-      (p.priceNotes ? '<div class="sup-pnotes">' + esc(p.priceNotes) + '</div>' : '') +
+      (p.priceNotes && String(p.priceNotes).trim() !== sharedOf(items[id]).priceNotes ? '<div class="sup-pnotes">' + esc(p.priceNotes) + '</div>' : '') +
     '</div>';
   }
 
@@ -664,7 +720,8 @@
         : '') +
       // So nobody drives to a supplier that only ships.
       (withVendor && v ? waysHtml(v) : '') +
-      (it.notes ? '<div class="sup-notes">' + esc(it.notes) + '</div>' : '') +
+      // A note its supplier's items all share is said with the supplier instead.
+      (it.notes && String(it.notes).trim() !== sharedOf(it).notes ? '<div class="sup-notes">' + esc(it.notes) + '</div>' : '') +
       // Its tags; one tap opens everything else with that tag.
       '<div class="sup-tags">' + usesOf(it).map(t => '<button class="sup-tag"' + tagAttr(t) + '>' +
         tagInfo(t).icon + ' ' + esc(tagInfo(t).name) + '</button>').join('') + '</div>' +
@@ -751,8 +808,27 @@
       const catRule = ((window.YDPricing && window.YDPricing.rules().categories) || {})[it.category] || {};
       editing.priceShown = priceShown;
       const hist = Array.isArray(p.history) ? p.history : [];
+      // The price first (15 Oct 2026: changing one meant scrolling past the
+      // whole item): what it costs, per what, for which year, under its name
+      // -- then the rest. The markup, waste and rental rates go with the kind
+      // of material, which comes before the tags that start from it.
+      const priceBox = '<fieldset class="sup-pricebox sup-pricefirst"><legend>Price — only you see this</legend>' +
+          '<div class="grid g3">' +
+            field('Price ($)', 'spPrice', priceShown.price, 'e.g. 12.50', 'decimal') +
+            field('Per', 'spPer', priceShown.per, it.unit || 'bag, yard, each') +
+            field('For year', 'spYear', priceShown.year, String(thisYear()), 'numeric') +
+          '</div>' +
+          '<div class="field"><span class="label">Price notes</span><textarea id="spNotes" rows="2" ' +
+            'placeholder="e.g. contractor price; less by the pallet; delivery extra">' + esc(priceShown.notes) + '</textarea></div>' +
+          (hist.length ? '<div class="sup-hist">Earlier: ' + hist.map(h =>
+            '<span>' + h.year + ' ' + fmtCents(h.cents) + '</span>').join('') + '</div>' : '') +
+          '<div class="hint">A price for a new year keeps the old one as history, so the change shows. ' +
+            'Fixing a price within the same year just replaces it.</div>' +
+        '</fieldset>';
+      const priceFirst = seesPrices();
       openModal(id ? 'Edit item' : 'Add an item',
         field('What it is', 'siName', it.name, 'e.g. Grass seed — sun & shade') +
+        (priceFirst ? priceBox : '') +
         '<div class="field"><span class="label">Supplier</span><select id="siVendor">' +
           '<option value="">— pick one —</option>' +
           vs.map(v => '<option value="' + esc(v.id) + '"' + (v.id === pick ? ' selected' : '') + '>' + esc(v.name) + '</option>').join('') +
@@ -768,13 +844,6 @@
         field('Also called (helps the search)', 'siAlso', it.also, 'e.g. seed, lawn seed, overseed') +
         '<div class="field"><span class="label">Notes for the crew</span><textarea id="siNotes" rows="2" ' +
           'placeholder="Which one to get, how much per job, anything to watch for">' + esc(it.notes || '') + '</textarea></div>' +
-        '<div class="field"><span class="label">Used for — tags</span><div class="sup-uses" id="siUses">' +
-          allTags().map(t => tagBoxHtml(t, usesShown.indexOf(t) !== -1)).join('') + '</div>' +
-          '<div class="sup-tag-add"><input id="siNewTag" placeholder="Add a tag — e.g. Snow removal" ' +
-            'onkeydown="if (event.key === \'Enter\') { event.preventDefault(); supAddTag(); }">' +
-            '<button class="btn btn-sm" onclick="supAddTag()">+ Add tag</button></div>' +
-          '<div class="hint">Where it shows in 📦 All supplies. Left alone, the tags follow the kind of material below; ' +
-          'untick everything to go back to that.</div></div>' +
         '<fieldset class="sup-pricebox"><legend>For estimates</legend>' +
           '<div class="field"><span class="label">Kind of material</span><select id="siCat" onchange="supCatPicked(this.value)">' +
             '<option value="">— pick one —</option>' +
@@ -788,13 +857,6 @@
           '</div>' +
           '<label class="chk"><input type="checkbox" id="siPallet"' + (it.pallet ? ' checked' : '') + '> Comes on a pallet (forklift delivery surcharge)</label>' +
           '<label class="chk"><input type="checkbox" id="siSpecial"' + (it.specialOrder ? ' checked' : '') + '> Special order (non-returnable — the estimate says so)</label>' +
-        '</fieldset>' +
-        '<fieldset class="sup-pricebox"><legend>Price — only you see this</legend>' +
-          '<div class="grid g3">' +
-            field('Price ($)', 'spPrice', priceShown.price, 'e.g. 12.50', 'decimal') +
-            field('Per', 'spPer', priceShown.per, it.unit || 'bag, yard, each') +
-            field('For year', 'spYear', priceShown.year, String(thisYear()), 'numeric') +
-          '</div>' +
           '<div class="grid g3">' +
             field('Markup %', 'spMarkup', priceShown.markup, catRule.markupPct != null ? catRule.markupPct + ' (its kind)' : 'its kind’s', 'decimal') +
             field('Waste %', 'spWaste', priceShown.waste, catRule.wastePct != null ? catRule.wastePct + ' (its kind)' : 'its kind’s', 'decimal') +
@@ -810,17 +872,24 @@
               RENTAL_RATES.map(([, label, f]) => field(label + ' ($)', 'spR' + f, priceShown[f], 'optional', 'decimal')).join('') +
             '</div>' +
           '</div>' +
-          '<div class="field"><span class="label">Price notes</span><textarea id="spNotes" rows="2" ' +
-            'placeholder="e.g. contractor price; less by the pallet; delivery extra">' + esc(priceShown.notes) + '</textarea></div>' +
-          (hist.length ? '<div class="sup-hist">Earlier: ' + hist.map(h =>
-            '<span>' + h.year + ' ' + fmtCents(h.cents) + '</span>').join('') + '</div>' : '') +
-          '<div class="hint">A price for a new year keeps the old one as history, so the change shows. ' +
-            'Fixing a price within the same year just replaces it.</div>' +
         '</fieldset>' +
+        '<div class="field"><span class="label">Used for — tags</span><div class="sup-uses" id="siUses">' +
+          allTags().map(t => tagBoxHtml(t, usesShown.indexOf(t) !== -1)).join('') + '</div>' +
+          '<div class="sup-tag-add"><input id="siNewTag" placeholder="Add a tag — e.g. Snow removal" ' +
+            'onkeydown="if (event.key === \'Enter\') { event.preventDefault(); supAddTag(); }">' +
+            '<button class="btn btn-sm" onclick="supAddTag()">+ Add tag</button></div>' +
+          '<div class="hint">Where it shows in 📦 All supplies. Left alone, the tags follow the kind of material above; ' +
+          'untick everything to go back to that.</div></div>' +
+        (priceFirst ? '' : priceBox) +
         actions(id ? 'supRemove(\'item\', \'' + safeId(id) + '\')' : ''));
     }
     const first = el(kind === 'vendor' ? 'svName' : 'siName');
     if (first && !id) first.focus();
+    // An item opened to change: the price is what is usually being changed,
+    // so it is ready to type over (not on a phone or iPad, where that would
+    // throw the keyboard up over the form).
+    const pr = kind !== 'vendor' && id ? el('spPrice') : null;
+    if (pr && window.matchMedia && matchMedia('(pointer: fine)').matches) { pr.focus(); pr.select(); }
   };
 
   // Picking Rentals (or Dumpsters) as the kind shows the half-day and week

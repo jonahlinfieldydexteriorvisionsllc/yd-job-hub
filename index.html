@@ -212,7 +212,9 @@
               <option value="complete">Complete</option>
             </select>
             <!-- The crew's page for a booked job (crewjobs.js): hide one, or
-                 see exactly what they see. -->
+                 see exactly what they see. Shown only while the job is booked
+                 or in progress -- the crew never see a bid or a finished job
+                 (styles.css hides the row by the status picked above). -->
             <div class="crew-view-row">
               <label class="chk"><input type="checkbox" id="crewHidden" onchange="markDirty()"> Hide from crew</label>
               <button type="button" class="link-btn" id="crewPreviewBtn" hidden onclick="previewCrewJob()">👷 What the crew see</button>
@@ -736,7 +738,10 @@
         <span class="section-badge accent" id="ppBadge"></span>
       </div>
       <div class="section-body">
-        <div class="add-area">
+        <!-- The list first; the form opens from "+ Add a contact", and from
+             Edit on a card, filled in (prospects.js openProspectForm). -->
+        <div class="pp-addbar"><button class="btn btn-sm btn-filled" id="ppAddBtn" onclick="openProspectForm()">+ Add a contact</button></div>
+        <div class="add-area" id="ppForm" hidden>
           <div class="grid g3">
             <div class="field"><span class="label">First name</span>
               <input id="ppFirst" autocomplete="off" onkeydown="if (event.key === 'Enter') saveProspect()"></div>
@@ -771,7 +776,7 @@
             <textarea id="ppNote" rows="2" placeholder="What they want, what you talked about, anything to remember"></textarea></div>
           <div class="field-actions">
             <button class="btn btn-filled" id="ppSaveBtn" onclick="saveProspect()">Add to the list</button>
-            <button class="btn btn-sm" id="ppCancelBtn" hidden onclick="cancelProspectEdit()">Cancel</button>
+            <button class="btn btn-sm" id="ppCancelBtn" onclick="cancelProspectEdit()">Close</button>
           </div>
           <div class="hint">Only the name is required. Everything else can wait until you know it.</div>
         </div>
