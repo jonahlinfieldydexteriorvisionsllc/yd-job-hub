@@ -1359,7 +1359,7 @@ def invoice_status(body):
 # What the sweep reads of each job -- not the whole record (estimate chats,
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber",
-                "acceptedSeenAt", "workStage"]
+                "acceptedSeenAt", "workStage", "qbFilled"]
 # An estimate with no answer this long after it was made (or last emailed)
 # is not asked about every hour for ever; opening the job still checks it
 # (estimate.js). A year, because a bid sent in November is often said yes to
@@ -1494,6 +1494,14 @@ def _sweep():
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: accepted estimates not brought in:", err)
+    try:
+        filled = fill_imported(jobs)
+        if filled:
+            print("quickbooks sweep: %d job(s) filled from their QuickBooks estimate" % filled)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: jobs not filled from QuickBooks:", err)
     return news
 
 
@@ -1543,8 +1551,10 @@ def _money_text(v):
         return ""
 
 
-def _estimate_notes(e):
-    """The estimate's lines, as the new job's notes."""
+def _lines_as_notes(e):
+    """What the first imports wrote into the job's notes: the estimate's
+    lines as text. Kept only to recognise those notes untouched (fill_imported),
+    now that the lines go into the job's estimate itself."""
     out = ["From QuickBooks estimate #%s, accepted%s%s." % (
         e.get("DocNumber") or e.get("Id"),
         (" " + str(e["AcceptedDate"])[:10]) if e.get("AcceptedDate") else "",
@@ -1564,33 +1574,228 @@ def _estimate_notes(e):
     return "\n".join(out)[:NOTES_MAX]
 
 
-def _job_from_estimate(e, cust, stamp):
+# ----------------------------------------- a QuickBooks estimate, read in full
+#
+# Jonah (15 Oct 2026): a job brought in from QuickBooks must carry everything
+# the estimate says -- "all notes line items and materials full list with
+# pricing" -- not just its price. So the estimate becomes the job's own
+# estimate (estimate.js, version 2), the way one built in Job Hub is:
+#  - each product line a line of work at the amount it was sold for, its
+#    description the scope;
+#  - the Material Fee line (his materials go on one line, listed in its
+#    description, "Screened topsoil: 2.5 cubic yards") taken apart into the
+#    materials, one line each, by name, quantity and unit. Joined to his
+#    Supplies on his device (estimate.js linkFromQb), which has the
+#    catalogue, and from there to Materials to Order;
+#  - the figures the customer said yes to kept as they are (fromQb):
+#    pricing.js adds no delivery, fuel or rule lines on top and takes the
+#    materials as the one amount QuickBooks had.
+# The terms lines every estimate ends with (Pricing rules -> the end of every
+# QuickBooks estimate) are the same on every job, so they are left out.
+
+MATERIAL_ITEM = re.compile(r"\bmaterials?\b", re.I)
+MATERIAL_BOILER = re.compile(r"^cost of materials? used in (a|the) project or service\.?$", re.I)
+_QTY = r"(\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
+_ABOUT = r"(?:approx(?:imately|\.)?\s*|about\s+|~\s*)?"
+_UNIT = r"([A-Za-z][A-Za-z./' ]*?)?"
+# After a "Name:" -- "3 tons", "20pcs.", "x1", "approx. 6 tons", "".
+_AMOUNT_ONLY = re.compile(r"^" + _ABOUT + r"x?\s*" + _QTY + r"\s*" + _UNIT + r"\.?$", re.I)
+# No colon, the amount at the end -- "Compacted Aggregate Base (6\") approx. 6 tons",
+# "... End Boulder approx. 2 tons + 1".
+_AMOUNT_AT_END = re.compile(r"^(.+?)\s+" + _ABOUT + r"x?" + _QTY + r"\s*" + _UNIT + r"\.?(?:\s*\+.*)?$", re.I)
+END_ALWAYS = ("terms of service",)
+WORK_ID = re.compile(r"[^A-Za-z0-9]")
+
+
+def _cents(v):
+    return int(round(_amount(v) * 100))
+
+
+def _qty_unit(qty, unit):
+    try:
+        q = float(str(qty).replace(",", ""))
+    except (TypeError, ValueError):
+        return None, ""
+    u = " ".join(str(unit or "").split()).strip(" .").lower()[:24]
+    return (int(q) if q == int(q) else q), u
+
+
+def _material(line):
+    """One line of a Material Fee's list -> (name, qty, unit), qty None when
+    it gives none ("Screened topsoil:"); None when the line is not a
+    material at all ("Material Delivery Included")."""
+    s = line.strip().lstrip("-•*·–— ").strip()
+    if not s or MATERIAL_BOILER.match(s):
+        return None
+    if ":" in s:
+        name, rest = (p.strip() for p in s.split(":", 1))
+        if name and not rest:
+            return name, None, ""
+        m = _AMOUNT_ONLY.match(rest)
+        if name and m:
+            q, u = _qty_unit(m.group(1), m.group(2))
+            return name, q, u
+    m = _AMOUNT_AT_END.match(s)
+    if m and m.group(1).strip(" ,:-"):
+        q, u = _qty_unit(m.group(2), m.group(3))
+        return m.group(1).strip(" ,:-"), q, u
+    return None
+
+
+def _flat_lines(lines):
+    """The estimate's lines, a bundle's lines in its place."""
+    for ln in lines or []:
+        if ln.get("DetailType") == "GroupLineDetail":
+            yield from _flat_lines((ln.get("GroupLineDetail") or {}).get("Line"))
+        else:
+            yield ln
+
+
+def _end_names():
+    """The products every estimate ends with (warranty, terms), lower case."""
+    try:
+        r = _db().collection("pricing").document("rules").get().to_dict() or {}
+    except Exception as err:                            # noqa: BLE001 -- the lines then come in with the rest
+        print("quickbooks import: pricing rules not read:", err)
+        r = {}
+    end = r.get("estimateEnd") or {}
+    names = [str(n) for n in list(end.get("items") or []) + list(end.get("businessItems") or [])]
+    return {" ".join(n.lower().split()) for n in names if n.strip()} | set(END_ALWAYS)
+
+
+def _hub_estimate(e, end_names, stamp):
+    """A QuickBooks estimate as the job's estimate (estimate.js v2), and the
+    words that belong in the job's notes rather than on a line."""
+    work, mats, words = [], [], []
+    materials_cents = 0
+    for n, ln in enumerate(_flat_lines(e.get("Line")), 1):
+        kind = ln.get("DetailType")
+        desc = str(ln.get("Description") or "").strip()
+        if kind == "SalesItemLineDetail":
+            d = ln.get("SalesItemLineDetail") or {}
+            item = str((d.get("ItemRef") or {}).get("name") or "").strip()
+            short = item.split(":")[-1].strip()
+            if " ".join(short.lower().split()) in end_names or " ".join(item.lower().split()) in end_names:
+                continue
+            if MATERIAL_ITEM.search(short):
+                materials_cents += _cents(ln.get("Amount"))
+                for row in desc.splitlines():
+                    got = _material(row)
+                    if got is None:
+                        s = row.strip().lstrip("-•*·–— ").strip()
+                        if s and not MATERIAL_BOILER.match(s):
+                            words.append(s)
+                        continue
+                    name, q, u = got
+                    mats.append({"id": "emqb%s%d" % (WORK_ID.sub("", str(e.get("Id"))), len(mats) + 1),
+                                 "name": name[:200], "qty": q, "unit": u, "wastePct": 0, "qbText": row.strip()[:300]})
+                continue
+            qty, rate = d.get("Qty"), d.get("UnitPrice")
+            title = short or "Work"
+            try:
+                if qty is not None and float(qty) != 1:
+                    title += " (%s × %s)" % (("%g" % float(qty)), _money_text(rate))
+            except (TypeError, ValueError):
+                pass
+            code = str((d.get("TaxCodeRef") or {}).get("value") or "")
+            work.append({"id": "ewqb%s%s" % (WORK_ID.sub("", str(ln.get("Id") or n)), WORK_ID.sub("", str(e.get("Id")))),
+                         "kind": "amount", "title": title[:200], "scope": desc[:6000], "amountCents": _cents(ln.get("Amount")),
+                         "qbItem": item[:100], "taxable": code not in ("", "NON")})
+        elif kind == "DiscountLineDetail":
+            dd = ln.get("DiscountLineDetail") or {}
+            title = "Discount" + ((" %g%%" % float(dd["DiscountPercent"])) if dd.get("PercentBased") and dd.get("DiscountPercent") else "")
+            work.append({"id": "ewqbd%d%s" % (n, WORK_ID.sub("", str(e.get("Id")))), "kind": "amount", "title": title,
+                         "scope": desc[:2000], "amountCents": -abs(_cents(ln.get("Amount"))), "taxable": False})
+        elif kind == "DescriptionOnly" and desc:
+            words.append(desc)
+    tax = _cents((e.get("TxnTaxDetail") or {}).get("TotalTax"))
+    est = {
+        "v": 2, "notes": "", "chat": [], "questions": [], "flags": [], "work": work, "materials": mats,
+        "spoilCuYd": None, "fuel": {}, "deliveryTown": "", "off": {}, "sent": [], "site": None, "payments": None,
+        "memo": ((e.get("CustomerMemo") or {}).get("value") or "").strip()[:4000],
+        "fromQb": {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or ""),
+                   "materialsCents": materials_cents, "taxCents": tax, "totalCents": _cents(e.get("TotalAmt")),
+                   "acceptedDate": str(e.get("AcceptedDate") or ""), "at": stamp},
+    }
+    return est, words
+
+
+def _hub_notes(e, words):
+    """The job's notes for an estimate brought in: where it came from, and any
+    words in it that are not a line of work or a material."""
+    head = "From QuickBooks estimate #%s, accepted%s%s." % (
+        e.get("DocNumber") or e.get("Id"),
+        (" " + str(e["AcceptedDate"])[:10]) if e.get("AcceptedDate") else "",
+        (" by " + str(e["AcceptedBy"])) if e.get("AcceptedBy") else "")
+    return "\n".join([head] + words)[:NOTES_MAX]
+
+
+STATE_ZIP = re.compile(r"^(.*?)[,\s]+([A-Z]{2})\.?\s+(\d{5})(?:-\d{4})?$")
+
+
+def _addr_parts(addr, name=""):
+    """An address as street, city, state, ZIP. QuickBooks keeps some as typed
+    on the form -- the customer's name on the first line, then the street,
+    then "Madison, WI  53714" -- with no city field (two jobs came in with the
+    customer's name for an address, Oct 2026)."""
+    addr = addr or {}
+    street, city = "", str(addr.get("City") or "").strip()
+    state, zipc = str(addr.get("CountrySubDivisionCode") or "").strip(), str(addr.get("PostalCode") or "").strip()
+    lines = [" ".join(str(addr.get("Line%d" % i) or "").split()) for i in range(1, 6)]
+    lines = [s for s in lines if s]
+    who = " ".join(str(name or "").lower().split())
+    for s in lines:
+        m = STATE_ZIP.match(s)
+        if m and not city:
+            before = m.group(1).strip(" ,")
+            # All on one line: "123 Main St, Madison, WI 53703".
+            if "," in before and not street:
+                street, before = (p.strip() for p in before.rsplit(",", 1))
+            city, state, zipc = before, m.group(2), m.group(3)
+        elif s.lower() == who or (not any(ch.isdigit() for ch in s) and not street and len(lines) > 1 and s is lines[0]):
+            continue                    # the customer's name (or a company name) above the street
+        elif not street:
+            street = s
+    return {"address": street, "city": city, "state": state, "zip": zipc}
+
+
+def _best_addr(e, cust, name):
+    """The job's address: where the work is (ShipAddr) before the billing
+    one, the estimate's before the customer's -- the first with a street."""
     cust = cust or {}
-    addr = e.get("ShipAddr") or cust.get("ShipAddr") or e.get("BillAddr") or cust.get("BillAddr") or {}
+    for a in (e.get("ShipAddr"), cust.get("ShipAddr"), e.get("BillAddr"), cust.get("BillAddr")):
+        parts = _addr_parts(a, name)
+        if parts["address"]:
+            return parts
+    return {"address": "", "city": "", "state": "", "zip": ""}
+
+
+def _job_from_estimate(e, cust, stamp, end_names):
+    cust = cust or {}
     name = (cust.get("DisplayName") or (e.get("CustomerRef") or {}).get("name") or "").strip()
-    total = float(e.get("TotalAmt") or 0)
+    est, words = _hub_estimate(e, end_names, stamp)
+    # The price before tax, as a job built in Job Hub has it (its estimate's
+    # total) -- the same figure, from the same lines.
+    price = (_cents(e.get("TotalAmt")) - est["fromQb"]["taxCents"]) / 100
     rec = _estimate_record(e, (e.get("CustomerRef") or {}).get("value"))
     rec["linked"] = True
-    return {
+    return dict(_best_addr(e, cust, name), **{
         "customerName": name or "Customer from QuickBooks",
         "firstName": str(cust.get("GivenName") or ""), "lastName": str(cust.get("FamilyName") or ""),
         "business": str(cust.get("CompanyName") or ""),
-        "address": str(addr.get("Line1") or ""), "city": str(addr.get("City") or ""),
-        "state": str(addr.get("CountrySubDivisionCode") or ""), "zip": str(addr.get("PostalCode") or ""),
         "phone": str(((cust.get("PrimaryPhone") or cust.get("Mobile") or {}).get("FreeFormNumber")) or ""),
         "email": str(((e.get("BillEmail") or cust.get("PrimaryEmailAddr") or {}).get("Address")) or ""),
-        # The accepted total is the job's price, kept as typed (the form's
-        # own estimate is empty, so nothing would set it).
-        "jobPrice": "%.2f" % total, "manualJobPrice": True, "baseJobPrice": total,
+        "jobPrice": "%.2f" % price, "manualJobPrice": False, "baseJobPrice": price,
         "estimateNumber": str(e.get("DocNumber") or ""), "quoteDate": str(e.get("TxnDate") or ""),
-        "notes": _estimate_notes(e), "referral": "", "qbInvoice": "", "qbInvoiced": False, "taxable": False,
+        "notes": _hub_notes(e, words), "referral": "", "qbInvoice": "", "qbInvoiced": False, "taxable": False,
         "serviceTypes": [], "labor": [], "materials": [], "orderItems": [], "proposals": [],
-        "payments": [], "additionalCosts": [],
+        "payments": [], "additionalCosts": [], "estimate": est,
         "jobStatus": "booked", "workStage": "scheduled", "workStageAt": stamp,
         "bidStage": "won", "bidStageAt": stamp,
         "qbEstimate": rec, "fromQuickBooks": {"estimateId": e.get("Id"), "at": stamp},
+        "qbFilled": {"estimateId": str(e.get("Id")), "at": stamp},
         "acceptedSeenAt": stamp, "lastModified": stamp,
-    }
+    })
 
 
 def _number(s):
@@ -1685,6 +1890,7 @@ def import_accepted(jobs):
     news = []
     newest = _parse_time(since)
     hold = None             # the first estimate whose job could not be made: looked at again next time
+    end_names = None        # the terms products, read once if anything is brought in
     for e in rows:
         t = _parse_time((e.get("MetaData") or {}).get("LastUpdatedTime"))
         if t and (not newest or t > newest):
@@ -1745,7 +1951,9 @@ def import_accepted(jobs):
                 raise
             except Exception as err:                    # noqa: BLE001
                 print("quickbooks import: customer %s not read: %s" % (cid, err))
-        job = _job_from_estimate(e, cust, stamp)
+        if end_names is None:
+            end_names = _end_names()
+        job = _job_from_estimate(e, cust, stamp, end_names)
         # One id per estimate: two sweeps at once make one job, not two.
         jid = "qb" + re.sub(r"[^A-Za-z0-9]", "", eid)
         try:
@@ -1784,6 +1992,83 @@ def import_accepted(jobs):
     ref.set({realm: {"since": _qb_time(end) if end else since, "seen": seen, "tries": tries,
                      "acceptedFrom": accepted_from, "at": _now().isoformat()}}, merge=True)
     return news
+
+
+FILL_MAX = 25               # jobs filled in one sweep
+
+
+def fill_imported(jobs):
+    """Jobs joined to an estimate made in QuickBooks before the import read
+    estimates in full -- brought in with their lines only as notes, or typed
+    in by hand and linked by number -- get the estimate itself (_hub_estimate),
+    once. A job whose estimate already has lines keeps it: that is his work
+    in Job Hub. Notes still exactly as the first import wrote them become the
+    short ones; an address that was only the customer's name (a free-form
+    QuickBooks address) is read again. qbFilled marks it done."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return 0
+    want = {}
+    for jid, j in jobs.items():
+        q = j.get("qbEstimate") or {}
+        if q.get("linked") and q.get("id") and q.get("env") == env and \
+                str((j.get("qbFilled") or {}).get("estimateId") or "") != str(q["id"]):
+            want[jid] = str(q["id"])
+            if len(want) >= FILL_MAX:
+                break
+    if not want:
+        return 0
+    db = _db()
+    refs = [db.collection("jobs").document(jid) for jid in want]
+    docs = {s.id: (s.to_dict() or {}) for s in db.get_all(refs) if s.exists}
+    estimates = _by_ids("Estimate", set(want.values()))
+    end_names = _end_names()
+    done = 0
+    for jid, eid in want.items():
+        j = docs.get(jid)
+        e = estimates.get(eid)
+        if j is None or e is None:
+            continue                    # gone, or QuickBooks did not answer: next hour
+        stamp = _stamp()
+        patch = {"qbFilled": {"estimateId": eid, "at": stamp}, "lastModified": stamp}
+        have = j.get("estimate") or {}
+        if not (have.get("work") or have.get("materials")):
+            est, words = _hub_estimate(e, end_names, stamp)
+            # Anything already on the job's estimate (notes from the site
+            # visit, a conversation) stays.
+            for k in ("notes", "chat", "questions", "flags", "sent", "site", "payments", "customerType"):
+                if have.get(k):
+                    est[k] = have[k]
+            patch["estimate"] = est
+            if str(j.get("notes") or "") == _lines_as_notes(e):
+                patch["notes"] = _hub_notes(e, words)
+            # The price the import set, before tax, now follows the estimate
+            # as on any job (the same figure); one he typed stays his.
+            if j.get("fromQuickBooks") and str(j.get("jobPrice") or "") == "%.2f" % _amount(e.get("TotalAmt")):
+                price = (_cents(e.get("TotalAmt")) - est["fromQb"]["taxCents"]) / 100
+                patch.update({"jobPrice": "%.2f" % price, "manualJobPrice": False, "baseJobPrice": price})
+        name = str(j.get("customerName") or "")
+        street = " ".join(str(j.get("address") or "").split())
+        if j.get("fromQuickBooks") and (not street or street.lower() == " ".join(name.lower().split())):
+            cust = None
+            cid = (e.get("CustomerRef") or {}).get("value")
+            if cid:
+                try:
+                    cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
+                except ReconnectNeeded:
+                    raise
+                except Exception as err:                # noqa: BLE001 -- the estimate's own address is tried
+                    print("quickbooks fill: customer %s not read: %s" % (cid, err))
+            parts = _best_addr(e, cust, name)
+            if parts["address"]:
+                patch.update(parts)
+                board = db.collection("jobBoard").document(jid)
+                if board.get().exists:
+                    board.set({"address": ", ".join(s for s in (parts["address"], parts["city"], parts["state"]) if s),
+                               "updatedAt": stamp}, merge=True)
+        db.collection("jobs").document(jid).set(patch, merge=True)
+        done += 1
+    return done
 
 
 def create_invoice(body):

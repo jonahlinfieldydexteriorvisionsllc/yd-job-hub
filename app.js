@@ -1341,6 +1341,51 @@ function bookedOrderItems(id, data) {
   return out;
 }
 
+// A job brought in from QuickBooks (quickbooks.py) carries its estimate's
+// lines, the materials by name as they were written there. On the owner's
+// device, once Supplies are here, each material is joined to the Supplies
+// item it clearly names (estimate.js linkFromQb) and Materials to Order is
+// filled from the list -- once (estimate.fromQb.linkedAt), through patchJob
+// like a move on the board. One open with typing in it waits for the next
+// look, so nothing typed is lost.
+const qbFilling = new Set(), qbWaiting = new Set();
+let qbScanned = false;
+function fillFromQb(id, data) {
+  const e = data && data.estimate;
+  if (!e || !e.fromQb || e.fromQb.linkedAt || qbFilling.has(id)) return;
+  if (!window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change') || !window.YDEstimate || !window.YDEstimate.linkFromQb) return;
+  if (!orderReady() || (id === currentJobId && dirty)) { qbWaiting.add(id); return; }
+  qbFilling.add(id);
+  setTimeout(() => {
+    try {
+      const linked = window.YDEstimate.linkFromQb(e);
+      if (!linked) return;
+      const patch = { estimate: linked };
+      if (!(data.orderItems || []).length && !isBidStatus(data.jobStatus)) {
+        const lines = window.YDEstimate.orderLines(linked, data.city || '');
+        if (lines.length) patch.orderItems = orderFromEstimate([], lines);
+      }
+      if (window.YDSync) window.YDSync.patchJob(id, patch);
+    } finally { qbFilling.delete(id); }
+  }, 0);
+}
+// Supplies arriving (or a form saved) lets the ones waiting go; the first
+// time, every job on this device is looked at -- one brought in while the
+// app was closed came with the first download, before Supplies.
+function fillWaitingFromQb() {
+  if (!orderReady()) return;
+  const ids = qbScanned ? [...qbWaiting] : getJobIndex().map(j => j.id);
+  qbScanned = true;
+  qbWaiting.clear();
+  ids.forEach(id => {
+    let d = null;
+    try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+    if (d) fillFromQb(id, d);
+  });
+}
+document.addEventListener('yd-supplies', fillWaitingFromQb);
+document.addEventListener('yd-pricing', fillWaitingFromQb);
+
 // ── What it costs (owner, and admins with Supplies) ──
 // From the Supplies price list: an item from the estimate knows its supply; a
 // line typed by hand is matched by its name, or linked by hand. Last year's

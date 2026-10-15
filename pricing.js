@@ -597,22 +597,36 @@
   // --------------------------------------------------------------- the lot
 
   // est: the estimate on the job; ctx: {rules, items, prices, fuel, city}.
+  // An estimate made in QuickBooks and accepted there (quickbooks.py
+  // _hub_estimate): the customer said yes to QuickBooks' figures, so they
+  // stand -- the materials as the one amount it had, its tax, and nothing
+  // added on top (no delivery, fuel or rule lines; its list is the whole
+  // list). The lines are still worked out at cost from Supplies, for what
+  // the job makes and what to order. `reprice` = he chose to price it by his
+  // own rules instead.
+  const asAccepted = est => !!(est && est.fromQb && typeof est.fromQb.materialsCents === 'number' && !est.fromQb.reprice);
+
   function price(est, ctx) {
     est = est || {};
+    const fixed = asAccepted(est);
     const takeoff = (est.materials || []).map(m => Object.assign(materialLine(m, ctx), { tree: m.tree || null }));
-    const added = ruleLines(est, takeoff, ctx).map(m => materialLine(m, ctx));
+    const added = fixed ? [] : ruleLines(est, takeoff, ctx).map(m => materialLine(m, ctx));
     const all = takeoff.concat(added);
     const work = (est.work || []).map(w => workLine(w, ctx));
     // Every line's crew-days, however it is priced: they are the days on
     // site (fuel) and what the profit per day is counted over.
     const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
-    const del = deliveries(all, est, ctx);
-    const fu = fuel(est, ctx, crewDays > 0 ? Math.ceil(trim(crewDays)) : null);
-    const materialsCents = all.reduce((s, l) => s + l.clientCents, 0) + del.clientCents + fu.clientCents;
+    const del = fixed ? { lines: [], clientCents: 0, problems: [] } : deliveries(all, est, ctx);
+    const fu = fixed ? { clientCents: 0, costCents: 0, problems: [], none: true } : fuel(est, ctx, crewDays > 0 ? Math.ceil(trim(crewDays)) : null);
+    const materialsCents = fixed ? est.fromQb.materialsCents
+      : all.reduce((s, l) => s + l.clientCents, 0) + del.clientCents + fu.clientCents;
     const laborCents = work.reduce((s, w) => s + w.cents, 0);
     const totalCents = materialsCents + laborCents;
     const problems = [];
-    all.forEach(l => l.problems.forEach(p => problems.push((l.name || 'A material') + ': ' + p)));
+    // Accepted in QuickBooks, a material with no cost here leaves the price as
+    // it is -- only what the job makes unknown -- so it is told apart.
+    const noCost = [];
+    all.forEach(l => l.problems.forEach(p => (fixed ? noCost : problems).push((l.name || 'A material') + ': ' + p)));
     (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labor line') + ': ' + p)));
     del.problems.forEach(p => problems.push('Delivery: ' + p));
     fu.problems.forEach(p => problems.push('Fuel: ' + p));
@@ -631,12 +645,17 @@
       materialCostCents: materialCost, deliveryCostCents: deliveryCost, fuelCostCents: fuelCost, laborCostCents: laborCost,
       marginPct: totalCents > 0 ? (totalCents - costCents) / totalCents * 100 : null,
       perDayCents: crewDays > 0 ? Math.round((totalCents - costCents) / crewDays) : null,
-      complete: !problems.length && dayCost !== null && work.every(w => w.crewDays > 0),
+      complete: !problems.length && !noCost.length && dayCost !== null && work.every(w => w.crewDays > 0),
     };
     // Sales tax to the customer (see KIND_TAX). totalCents stays the price
     // before tax -- the profit, the job's price and the dashboards are that;
     // grandCents is what the customer pays, and the payments are of it.
     const tax = salesTax(est, ctx, work, all, del, fu, totalCents);
+    if (fixed) {
+      // QuickBooks worked out the tax from the address; that is the tax.
+      Object.assign(tax, { cents: Math.round(num(est.fromQb.taxCents) || 0), underTen: false, materialsTaxCents: 0,
+        problems: [], fromQb: true });
+    }
     tax.problems.forEach(p => problems.push('Sales tax: ' + p));
     const grandCents = totalCents + tax.cents;
     return {
@@ -644,7 +663,7 @@
       materialsCents, laborCents, totalCents, tax, grandCents,
       payments: payments(grandCents, ctx.rules, { plan: est.payments, materialsCents: materialsCents + tax.materialsTaxCents }),
       specialOrder: all.filter(l => l.specialOrder && l.orderQty > 0).map(l => l.name),
-      problems,
+      problems, noCost, asAccepted: fixed,
     };
   }
 
@@ -1425,7 +1444,7 @@
   window.YDPricing = {
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
-    price, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
+    price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),

@@ -161,6 +161,9 @@
     // The plant-care line under QuickBooks, after the job's plants or its
     // care email were settled on the Job tab (plantcare.js).
     redrawCare: () => renderQb(),
+    // A job brought in from QuickBooks: its materials joined to Supplies
+    // (app.js fillFromQb).
+    linkFromQb: saved => linkFromQb(saved),
   };
 
   // What the estimate cost us, as it stood when it went to QuickBooks: kept
@@ -231,6 +234,9 @@
       o.fuel = Object.assign({}, e.fuel || {});
       o.deliveryTown = String(e.deliveryTown || '');
       o.off = Object.assign({}, e.off || {});
+      // Made in QuickBooks and accepted there (quickbooks.py _hub_estimate):
+      // the figures the customer said yes to, kept (pricing.js asAccepted).
+      if (e.fromQb && typeof e.fromQb === 'object') o.fromQb = clone(e.fromQb);
       // Where the job is on the map (from the miles lookup), for a town MDS
       // prices by zone; `at` is the address it was found for.
       // `zip` is the ZIP the map has for the address (checked before sending),
@@ -336,6 +342,7 @@
     wrap.innerHTML =
       jumpHtml() +
       (settled() ? '<div class="est-refold"><button class="link-btn" onclick="estUnfold(false)">▴ Fold the estimate back to one line</button></div>' : '') +
+      fromQbHtml(r, ro) +
       head +
 
       ((est.questions || []).length ? '<div class="est-questions"><b>Claude needs to know:</b><ul>' +
@@ -349,7 +356,9 @@
         : '<div class="empty-msg">No labor yet.</div>') + '</div>' +
       (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estAddWork()">+ Labor line</button></div>') +
 
-      '<h4 class="est-h est-jump-to" id="estJMats">Materials <span class="muted">— the takeoff; the customer sees the list and one total</span></h4>' +
+      '<h4 class="est-h est-jump-to" id="estJMats">Materials <span class="muted">' + (r && r.asAccepted
+        ? '— as listed on the QuickBooks estimate, ' + cents(r.materialsCents) + ' for all of them; each at what it costs you'
+        : '— the takeoff; the customer sees the list and one total') + '</span></h4>' +
       '<div class="est-mats">' + (est.materials.length ? est.materials.map((m, i) => matHtml(m, i, ro, r)).join('')
         : '<div class="empty-msg">No materials yet.</div>') + '</div>' +
       (ro ? '' : '<div class="field-actions">' +
@@ -478,6 +487,88 @@
         (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</span>' +
       '<span class="est-fold-act">' + link +
         '<button class="btn btn-sm" onclick="estUnfold(true)" aria-expanded="false">Show / edit ▾</button></span></div>';
+  }
+
+  // An estimate made in QuickBooks (quickbooks.py brought it in with the
+  // job): where it came from, that its figures are the customer's, and the
+  // way to price it by his own rules instead -- or back.
+  function fromQbHtml(r, ro) {
+    const q = est.fromQb;
+    if (!q) return '';
+    const said = (q.docNumber ? 'QuickBooks estimate #' + esc(q.docNumber) : 'a QuickBooks estimate') +
+      (q.acceptedDate ? ', accepted ' + esc(fmtDay(q.acceptedDate)) : '');
+    if (q.reprice) {
+      return '<div class="est-fromqb">From ' + said + '. Priced by your rules here, not as the customer accepted it' +
+        (num(q.totalCents) !== null ? ' (' + cents(q.totalCents) + ')' : '') + '.' +
+        (ro ? '' : ' <button class="link-btn" onclick="estReprice(false)">Back to QuickBooks’ figures</button>') + '</div>';
+    }
+    return '<div class="est-fromqb">From ' + said + ' — the prices are the ones the customer said yes to: ' +
+      'the materials as one figure, nothing added on top. Each material below shows what it costs you.' +
+      (ro ? '' : ' <button class="link-btn" onclick="estReprice(true)">Price it by my rules instead</button>') + '</div>';
+  }
+  function fmtDay(d) {
+    const t = new Date(String(d).slice(0, 10) + 'T12:00:00');
+    return isNaN(t) ? String(d) : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  window.estReprice = function (on) {
+    if (!changes() || !est.fromQb) return;
+    if (on && !confirm('Price this estimate by your rules? Its total will no longer be the ' +
+        (num(est.fromQb.totalCents) !== null ? cents(est.fromQb.totalCents) + ' ' : '') + 'the customer accepted in QuickBooks.')) return;
+    est.fromQb = Object.assign({}, est.fromQb, { reprice: !!on });
+    changed(true);
+  };
+
+  // A QuickBooks estimate's materials come in by name, as written there
+  // ("Screened topsoil: 2.5 cubic yards"). Each is joined to the one
+  // Supplies item it names -- every word of it in the item's name, and the
+  // quantity in a unit the item is sold or measured in -- so it has a cost,
+  // a supplier and a place on Materials to Order. When two items fit as
+  // well (three sizes of grass seed), or the unit is one the item is not
+  // sold by, it is left for him (🔎 Source it shows the near ones). Once:
+  // fromQb.linkedAt. Returns the estimate as saved with the links, or null
+  // when there is nothing to do.
+  function qbMatch(m, c) {
+    const bare = String(m.name || '').replace(/\s+[—–]\s.*$/, '').replace(/\([^)]*\)/g, ' ');
+    const want = nameWords(bare);
+    if (!want.length) return null;
+    const u = unitKey(m.unit), skip = P().NOT_FOR_ESTIMATES || [];
+    const fits = [];
+    Object.values(c.items).forEach(it => {
+      const pr = c.prices[it.id];
+      if (skip.indexOf(it.category) !== -1 || !pr || !(num(pr.cents) > 0)) return;
+      const have = nameWords(it.name + ' ' + (it.also || ''));
+      if (!want.every(w => have.indexOf(w) !== -1)) return;
+      const cov = num(it.coverage) > 0 ? num(it.coverage) : null;
+      const sold = unitKey(pr.per || it.unit);
+      const measured = cov ? unitKey(it.takeoffUnit) : sold;
+      // The estimate's quantity in the item's takeoff unit (what pricing.js
+      // reads): as it is, or -- given in what the item is sold by -- times
+      // what one covers.
+      const q = num(m.qty);
+      let qty = null;
+      if (u === measured || (!u && measured === 'each')) qty = q;
+      else if (cov && (u === sold || (!u && sold === 'each'))) qty = q === null ? null : Math.round(q * cov * 1000) / 1000;
+      else return;
+      fits.push({ id: it.id, qty: qty, unit: cov ? String(it.takeoffUnit || '') : String(pr.per || it.unit || ''), close: want.length / have.length });
+    });
+    if (!fits.length) return null;
+    fits.sort((a, b) => b.close - a.close);
+    return fits.length === 1 || fits[0].close - fits[1].close >= 0.25 ? fits[0] : null;
+  }
+  function linkFromQb(saved) {
+    if (!P() || !saved || !saved.fromQb || saved.fromQb.linkedAt) return null;
+    const c = catalog();
+    const out = clone(saved);
+    let n = 0;
+    out.materials = (out.materials || []).map(m => {
+      if (m.supplyId || m.plant) return m;
+      const hit = qbMatch(m, c);
+      if (!hit) return m;
+      n++;
+      return Object.assign({}, m, { supplyId: hit.id, qty: hit.qty, unit: hit.unit || m.unit });
+    });
+    out.fromQb = Object.assign({}, out.fromQb, { linkedAt: new Date().toISOString(), linked: n });
+    return out;
   }
 
   // On a phone the chat is part of the page, not a box of its own: its last
@@ -896,7 +987,11 @@
       f.innerHTML = 'Makes <b>' + perDay(w.profitPerDayCents) + '</b> after the crew' + vs;
     });
     r.takeoff.forEach(l => {
-      const a = el('estMA_' + safeId(l.id)); if (a) a.textContent = l.clientCents ? cents(l.clientCents) : '';
+      // Accepted in QuickBooks, a material's own line shows what it costs
+      // him -- the customer's figure is the one for all of them.
+      const a = el('estMA_' + safeId(l.id));
+      if (a) a.textContent = r.asAccepted ? (l.costTotalCents ? 'cost ' + cents(l.costTotalCents) : '')
+        : l.clientCents ? cents(l.clientCents) : '';
       const tx = el('estMT_' + safeId(l.id));
       if (tx) tx.textContent = taxNote(l, r, typeof (find(est.materials, safeId(l.id)) || {}).taxable === 'boolean');
       const o = el('estMO_' + safeId(l.id));
@@ -924,6 +1019,11 @@
         (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
           (toSource.length > 1 ? '<button class="btn btn-sm" onclick="estSource(\'all\')">🔎 Source all ' + toSource.length + ' unpriced materials</button>' : '') +
           '</div>' : '') +
+        ((r.noCost || []).length ? '<div class="est-problems"><b>No cost in Supplies yet</b> <span class="muted">— the price stays as ' +
+            'accepted; this is only for what the job makes and what to order. Pick each one’s item, or 🔎 Source it:</span><ul>' +
+            r.noCost.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
+          (toSource.length > 1 ? '<button class="btn btn-sm" onclick="estSource(\'all\')">🔎 Source all ' + toSource.length + '</button>' : '') +
+          '</div>' : '') +
         (r.specialOrder.length ? '<div class="warn">Special order (non-returnable — lock their selections first): ' + r.specialOrder.map(esc).join(', ') + '</div>' : '')
       : '';
     renderQb();
@@ -934,6 +1034,8 @@
   // with some planting has none (a building job, planting under 10%).
   function taxRowsHtml(r) {
     const t = r.tax || {};
+    if (t.fromQb) return t.cents > 0 ? '<div><span>Subtotal</span><b>' + cents(r.totalCents) + '</b></div>' +
+      '<div><span>Sales tax (as QuickBooks worked it out)</span><b>' + cents(t.cents) + '</b></div>' : '';
     if (t.underTen) return '<div class="est-taxnote">No sales tax: the planting and lawn work is under 10% of a building job ' +
       '(Wisconsin taxes none of it then — you pay the tax on its materials when you buy them).</div>';
     if (!(t.taxableCents > 0)) return '';
@@ -1148,6 +1250,10 @@
   function renderAuto(r) {
     const box = el('estAuto');
     if (!box) return;
+    if (r.asAccepted) {
+      box.innerHTML = '<p class="hint">Nothing — the customer accepted QuickBooks’ figures, so no delivery, fuel, dumpsters or markers go on top.</p>';
+      return;
+    }
     const ro = !changes(), off = est.off || {};
     const sw = (k, label) => '<label class="est-switch"><input type="checkbox"' + (off[k] ? '' : ' checked') + (ro ? ' disabled' : '') +
       ' onchange="estOff(\'' + k + '\', !this.checked)"> ' + label + '</label>';

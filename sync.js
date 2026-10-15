@@ -576,6 +576,8 @@
         // bid, which has no entry wherever it is saved.
         if (!(boardKnown.get(c.id) === NOT_ON_BOARD && !onBoard(c.data || {}))) boardKnown.delete(c.id);
         bookIfAccepted(c.id, c.data);
+        // Brought in from QuickBooks: its materials joined to Supplies (app.js).
+        if (typeof fillFromQb === 'function') fillFromQb(c.id, c.data);
         if (c.id === currentJobId) {
           openJobChanged = true;
           // What only the server writes -- QuickBooks' answers, the care
