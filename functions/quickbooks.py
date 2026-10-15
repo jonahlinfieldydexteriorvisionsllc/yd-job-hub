@@ -1359,7 +1359,7 @@ def invoice_status(body):
 # What the sweep reads of each job -- not the whole record (estimate chats,
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber",
-                "acceptedSeenAt", "workStage", "qbFilled"]
+                "acceptedSeenAt", "workStage", "qbFilled", "jobPrice"]
 # An estimate with no answer this long after it was made (or last emailed)
 # is not asked about every hour for ever; opening the job still checks it
 # (estimate.js). A year, because a bid sent in November is often said yes to
@@ -1494,6 +1494,14 @@ def _sweep():
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: accepted estimates not brought in:", err)
+    try:
+        joined = link_hand_jobs(jobs)
+        if joined:
+            print("quickbooks sweep: %d job(s) typed in by hand joined to their QuickBooks estimate" % joined)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: hand-typed jobs not looked for:", err)
     try:
         filled = fill_imported(jobs)
         if filled:
@@ -1950,6 +1958,28 @@ def import_accepted(jobs):
                              "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
             seen[eid] = jid
             continue
+        # Already a job here for this customer, typed in by hand with no
+        # number and not joined to any estimate (Oct 2026: three customers
+        # got a second job this way): that one, when it is the only such job
+        # and its price is this estimate's, or none yet.
+        who = _norm_name((e.get("CustomerRef") or {}).get("name"))
+        total = _amount(e.get("TotalAmt"))
+        same = [jid for jid, j in jobs.items() if who and _norm_name(j.get("customerName")) == who
+                and not (j.get("qbEstimate") or {}).get("id") and str(j.get("jobStatus") or "") != "complete"
+                and (_job_price(j) is None or abs(_job_price(j) - total) < 0.005)]
+        if len(same) == 1:
+            jid = same[0]
+            patch = {"qbEstimate": rec, "lastModified": stamp}
+            if not jobs[jid].get("acceptedSeenAt"):
+                patch["acceptedSeenAt"] = stamp
+            if not str(jobs[jid].get("estimateNumber") or "").strip() and e.get("DocNumber"):
+                patch["estimateNumber"] = str(e["DocNumber"])
+            db.collection("jobs").document(jid).set(patch, merge=True)
+            jobs[jid]["qbEstimate"] = rec
+            news.append({"jobId": jid, "kind": "linked", "name": str(jobs[jid].get("customerName") or "a customer"),
+                         "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+            seen[eid] = jid
+            continue
         cid = (e.get("CustomerRef") or {}).get("value")
         # The same estimate made again under a new number (copied and
         # re-sent, then accepted again: two jobs were made from one, Oct
@@ -2009,6 +2039,104 @@ def import_accepted(jobs):
     ref.set({realm: {"since": _qb_time(end) if end else since, "seen": seen, "tries": tries,
                      "acceptedFrom": accepted_from, "at": _now().isoformat()}}, merge=True)
     return news
+
+
+LOOK_AGAIN = datetime.timedelta(days=1)   # a job typed in by hand is looked for in QuickBooks once a day
+HAND_MAX = 10                             # and so many in one sweep
+
+
+def _norm_name(s):
+    return " ".join(str(s or "").lower().split())
+
+
+def _job_price(j):
+    try:
+        return round(float(str(j.get("jobPrice") or "").replace(",", "").replace("$", "").strip()), 2)
+    except ValueError:
+        return None
+
+
+def _sold(e):
+    """The customer said yes to it, however QuickBooks shows that: accepted,
+    or made into an invoice (Converted -- an estimate Jonah invoiced himself
+    is never marked accepted, Oct 2026)."""
+    status = (e or {}).get("TxnStatus") or ""
+    return _accepted(e) or status == "Converted" or (status == "Closed" and any(
+        (t or {}).get("TxnType") == "Invoice" for t in (e or {}).get("LinkedTxn") or []))
+
+
+def link_hand_jobs(jobs):
+    """Jobs typed in by hand -- booked or under way -- with no QuickBooks
+    estimate joined to them (Jonah, 15 Oct 2026: one such job had only its
+    price; it was typed in before the import, and its estimate was
+    invoiced in QuickBooks without ever being marked accepted, so nothing
+    brought it in). Each is looked for once a day: the customer of exactly
+    the same name, and of their estimates not already on a job, the one the
+    job names by number -- or else the one they said yes to for exactly the
+    job's price. Anything less certain is left alone. Joined as an import
+    is (linked), with its invoice; fill_imported then reads it in full."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return 0
+    now = _now()
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    db = _db()
+    ref = db.collection("integrations").document("quickbooksImport")
+    snap = ref.get()
+    state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
+    looked = {k: v for k, v in (state.get("looked") or {}).items()
+              if k in jobs and (_parse_time(v) or now) > now - datetime.timedelta(days=30)}
+    used = {str((j.get("qbEstimate") or {}).get("id")) for j in jobs.values()
+            if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
+    want = []
+    for jid, j in jobs.items():
+        if (j.get("qbEstimate") or {}).get("id") or str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active"):
+            continue
+        t = _parse_time(looked.get(jid))
+        if (t and now - t < LOOK_AGAIN) or not _norm_name(j.get("customerName")):
+            continue
+        want.append(jid)
+        if len(want) >= HAND_MAX:
+            break
+    done = 0
+    for jid in want:
+        j = jobs[jid]
+        looked[jid] = now.isoformat()
+        cust = _query_one("Customer", "DisplayName = '%s'" % _quote(" ".join(str(j["customerName"]).split())))
+        if not cust or _norm_name(cust.get("DisplayName")) != _norm_name(j.get("customerName")):
+            continue
+        pool = [e for e in _query("Estimate", "CustomerRef = '%s'" % _quote(cust["Id"])) if str(e.get("Id")) not in used]
+        nums = set(re.findall(r"\d{3,7}", str(j.get("estimateNumber") or "")))
+        pick = [e for e in pool if _number(e.get("DocNumber")) in nums]
+        if len(pick) != 1:
+            price = _job_price(j)
+            pick = [e for e in pool if _sold(e) and price is not None and abs(_amount(e.get("TotalAmt")) - price) < 0.005]
+        if len(pick) != 1:
+            continue
+        e = pick[0]
+        stamp = _stamp()
+        rec = _estimate_record(e, cust["Id"])
+        rec["linked"] = True
+        patch = {"qbEstimate": rec, "lastModified": stamp}
+        if not str(j.get("estimateNumber") or "").strip() and e.get("DocNumber"):
+            patch["estimateNumber"] = str(e["DocNumber"])
+        # Its invoice too, so what is still owed shows on the job.
+        inv_id = next((str(t.get("TxnId")) for t in e.get("LinkedTxn") or [] if (t or {}).get("TxnType") == "Invoice"), None)
+        if inv_id and not (j.get("qbInvoiceRef") or {}).get("id"):
+            try:
+                inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
+                if inv:
+                    patch["qbInvoiceRef"] = _invoice_record(inv)
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001 -- the estimate is joined all the same
+                print("quickbooks link: invoice %s not read: %s" % (inv_id, err))
+        db.collection("jobs").document(jid).set(patch, merge=True)
+        j["qbEstimate"] = rec           # so fill_imported reads it in this same sweep
+        used.add(str(e.get("Id")))
+        done += 1
+    ref.set({realm: {"looked": looked}}, merge=True)
+    return done
 
 
 FILL_MAX = 25               # jobs filled in one sweep
