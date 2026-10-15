@@ -1637,9 +1637,19 @@
   document.addEventListener('yd-cards-changed', () => {
     if (YDBoards.boards()[MAINT]) scheduleMaintSync();
     // The shop board, and the machine list's "marked the service done", are
-    // drawn from these cards.
-    if (equipmentShowing()) renderEquipment();
+    // drawn from these cards -- once nobody is sliding its columns along
+    // (app.js ydSliding).
+    redrawWhenStill();
   });
+  let stillTimer = 0;
+  function redrawWhenStill() {
+    if (stillTimer) return;
+    if (window.ydSliding && ydSliding()) {
+      stillTimer = setTimeout(() => { stillTimer = 0; redrawWhenStill(); }, 250);
+      return;
+    }
+    if (equipmentShowing()) renderEquipment();
+  }
 
   window.YDEquipment = {
     all: () => gear,

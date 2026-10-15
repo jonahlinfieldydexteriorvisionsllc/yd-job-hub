@@ -3090,12 +3090,23 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
     if (!home || !cls) return '';
     return home.id + ' ' + cls + ' ' + Array.prototype.indexOf.call(home.getElementsByClassName(cls), row);
   }
+  let slidAt = 0, pressed = false;
   document.addEventListener('scroll', e => {
     const row = e.target;
     if (!row || row.nodeType !== 1 || !row.matches(ROWS)) return;
+    slidAt = Date.now();
     const key = keyOf(row);
     if (key) places.set(key, row.scrollLeft);
   }, true);
+  // Someone sliding a row along right now: a finger or the mouse is down in
+  // one, or it moved a moment ago (a flick keeps going after the finger
+  // lifts). A screen that redraws by itself waits while this is so -- new
+  // rows put in under the finger stop the slide dead and it jumps back to
+  // where the last scroll said (Jonah, 15 Oct: the boards "cut back when
+  // you try to slide over to the right").
+  document.addEventListener('pointerdown', e => { pressed = !!(e.target.closest && e.target.closest(ROWS)); }, true);
+  ['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, () => { pressed = false; }, true));
+  window.ydSliding = () => pressed || Date.now() - slidAt < 500;
   function putBack(row) {
     const at = places.get(keyOf(row));
     if (at && !row.scrollLeft) row.scrollLeft = at;

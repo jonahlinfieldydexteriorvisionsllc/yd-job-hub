@@ -107,6 +107,7 @@
   let ready = false;        // boards have arrived from the server at least once
   let dragging = null;      // { boardId, cardId } while a card is dragged
   let drawFrame = 0;        // a redraw waiting for the next frame (redrawIfVisible)
+  let drawLater = 0;        // one waiting for a slide along the columns to end
   let cardsNews = 0;        // "cards changed" waiting to be told (cardsChanged)
 
   // The Maintenance board is made and kept in step by equipment.js, one card
@@ -335,6 +336,7 @@
     // Drawn now: a redraw already waiting for the next frame has nothing
     // left to do.
     if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
+    if (drawLater) { clearTimeout(drawLater); drawLater = 0; }
     whoNow = window.YDRemind ? YDRemind.who(people) : null;
     try { draw(); } finally { whoNow = null; }
   }
@@ -2460,8 +2462,14 @@
   // and the people -- dozens in a second, each a whole new board. So the
   // asks in one moment share a single draw at the next frame (a hidden tab
   // gets none until it is looked at, when switchTab draws it anyway).
+  // Not while the columns are being slid along (app.js ydSliding): drawn the
+  // moment they are still.
   function redrawIfVisible() {
-    if (drawFrame) return;
+    if (drawFrame || drawLater) return;
+    if (window.ydSliding && ydSliding()) {
+      drawLater = setTimeout(() => { drawLater = 0; redrawIfVisible(); }, 250);
+      return;
+    }
     drawFrame = requestAnimationFrame(() => {
       drawFrame = 0;
       const p = el('panel-boards');
