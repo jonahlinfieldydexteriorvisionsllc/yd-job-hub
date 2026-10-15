@@ -29,6 +29,7 @@
   let unsub = null, loaded = false;
   let view = 'todo';        // todo | owed | paid
   let editingRules = false;
+  let picking = '';         // the invoice whose job is being picked by hand
   const busy = {};          // id -> true while a reminder is being sent
 
   const el = id => document.getElementById(id);
@@ -64,27 +65,66 @@
     try { return JSON.parse(readJobBlob(inv.jobId) || 'null'); } catch (e) { return null; }
   }
 
+  // Jonah often makes the invoice before the work starts, to collect the
+  // deposit -- QuickBooks won't take a deposit on an estimate once it has
+  // been accepted (15 Oct 2026). So on a job here that isn't finished, an
+  // invoice with nothing paid is asking for the deposit (`deposit`), and one
+  // with the deposit paid is waiting for the job to be done. Once it is
+  // done, the bill for the rest is the first email after the deposit came
+  // in; emails before that were the deposit's, not reminders for the rest
+  // (`rest`). The same rule as functions/digest.py invoice_state -- change
+  // both together.
   function stateOf(inv) {
     if (!inv.open || !(Number(inv.balance) > 0)) return { kind: 'paid' };
-    const emails = (inv.emails || []).filter(Boolean).map(day).sort();
-    const hand = (inv.handReminders || []).map(h => day(h && h.at)).filter(Boolean).sort();
+    let emails = (inv.emails || []).filter(Boolean).map(day).sort();
+    let hand = (inv.handReminders || []).map(h => day(h && h.at)).filter(Boolean).sort();
     const job = jobOf(inv);
     const done = !!job && (typeof normStatus === 'function' ? normStatus(job.jobStatus, job) : job.jobStatus) === 'complete';
     const total = Number(inv.total) || 0, bal = Number(inv.balance) || 0;
-    if (job && !done && bal < total - 0.005) return { kind: 'waiting' };
+    const part = bal < total - 0.005;
+    if (job && !done && part) return { kind: 'waiting', job };
+    const deposit = !!job && !done;
     const dueDay = day(inv.dueDate || inv.txnDate);
     const late = dueDay ? daysBetween(dueDay, today()) : 0;
+    let since = '';
+    if (done && part && job.completedAt) {
+      const fin = day(job.completedAt);
+      const before = (inv.payments || []).map(p => p && p.date).filter(d => d && d <= fin).sort();
+      since = before.length ? before[before.length - 1] : '';
+    }
+    if (since) {
+      emails = emails.filter(d => d > since);
+      hand = hand.filter(d => d > since);
+    }
+    const base = { late, deposit, rest: !!since, job };
     // QuickBooks says it was emailed but not when (before Job Hub watched):
     // sent, no reminders yet.
-    if (!emails.length && !hand.length && inv.emailStatus !== 'EmailSent') return { kind: 'unsent', late };
-    if (day(inv.snoozeUntil) > today()) return { kind: 'later', next: day(inv.snoozeUntil), late, snoozed: true };
-    let start = dueDay || today();
-    if (done && day(job.completedAt) > start) start = day(job.completedAt);
+    if (!emails.length && !hand.length && (since || inv.emailStatus !== 'EmailSent')) return Object.assign(base, { kind: 'unsent' });
+    if (day(inv.snoozeUntil) > today()) return Object.assign(base, { kind: 'later', next: day(inv.snoozeUntil), snoozed: true });
+    let start;
+    if (since) start = (emails.length ? emails : hand)[0];
+    else {
+      start = dueDay || today();
+      if (done && day(job.completedAt) > start) start = day(job.completedAt);
+    }
     const count = Math.max(0, emails.length - 1) + hand.length;
     const last = emails.concat(hand).sort().slice(-1)[0];
-    if (count >= rules.max) return { kind: 'call', count, late, last };
+    if (count >= rules.max) return Object.assign(base, { kind: 'call', count, last });
     const next = count === 0 ? addDays(start, rules.firstAfterDays) : addDays(last, rules.everyDays);
-    return { kind: today() >= next ? 'due' : 'later', next, count, late, last };
+    return Object.assign(base, { kind: today() >= next ? 'due' : 'later', next, count, last });
+  }
+  // About what the deposit is: the job's own payment plan when its estimate
+  // can be priced here, else the usual share (Pricing rules -> payments).
+  function depositOf(inv, job) {
+    const total = Number(inv.total) || 0;
+    try {
+      const r = job && job.estimate && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(job.estimate, job.city || '') : null;
+      const first = r && r.payments && r.payments[0], grand = r && (r.grandCents || r.totalCents);
+      if (first && grand > 0 && r.payments.length > 1) return Math.round(total * first.cents / grand * 100) / 100;
+    } catch (e) { /* priced below instead */ }
+    const p = (window.YDPricing && YDPricing.rules && (YDPricing.rules() || {}).payments) || {};
+    const pct = Number(p.minDepositPct) > 0 ? Number(p.minDepositPct) : 50;
+    return Math.round(total * pct) / 100;
   }
   const wantsYou = st => st.kind === 'due' || st.kind === 'unsent' || st.kind === 'call';
 
@@ -122,15 +162,38 @@
       rulesHtml();
   }
 
-  function stateText(st) {
+  function stateText(st, inv) {
+    const dep = st.deposit ? 'Deposit' + (inv ? ' ' + money(depositOf(inv, st.job)) : '') : '';
     switch (st.kind) {
-      case 'unsent': return '<span class="inv-chip now">Not emailed yet — send it</span>';
-      case 'due': return '<span class="inv-chip now">' + (st.count ? 'Reminder ' + (st.count + 1) + ' due' : 'First reminder due') + '</span>';
-      case 'call': return '<span class="inv-chip now">' + st.count + ' reminders sent — time to call</span>';
+      case 'unsent': return '<span class="inv-chip now">' + (st.rest ? 'Job done — email the bill for the rest'
+        : st.deposit ? 'Not emailed yet — send it for the deposit' : 'Not emailed yet — send it') + '</span>';
+      case 'due': return '<span class="inv-chip now">' + (dep ? dep + ' not paid — ' : '') +
+        (st.count ? 'reminder ' + (st.count + 1) + ' due' : (dep ? 'first reminder due' : 'First reminder due')) + '</span>';
+      case 'call': return '<span class="inv-chip now">' + (dep ? dep + ' not paid — ' : '') + st.count + ' reminders sent — time to call</span>';
       case 'waiting': return '<span class="inv-chip info">Deposit paid — the rest is due when the job is done</span>';
-      case 'later': return '<span class="inv-chip later">' + (st.snoozed ? 'Put off until ' : 'Next reminder ') + esc(shortDay(st.next)) + '</span>';
+      case 'later': return '<span class="inv-chip later">' + (dep ? dep + ' · ' : '') + (st.snoozed ? 'Put off until ' : 'Next reminder ') + esc(shortDay(st.next)) + '</span>';
       default: return '<span class="inv-chip done">Paid</span>';
     }
+  }
+  // Which job here the invoice is for -- found by the job holding it, or the
+  // one open job of the customer's name; picked or changed by hand here.
+  function jobLineHtml(inv, st) {
+    const idx = typeof getJobIndex === 'function' ? getJobIndex() : [];
+    const j = inv.jobId ? idx.find(x => x.id === inv.jobId) : null;
+    const how = inv.jobBy === 'name' ? ' (same name)' : '';
+    if (picking === inv.id) {
+      const open = idx.filter(x => !x.lost && x.status !== 'quoting').sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return '<div class="inv-jobpick"><select id="invJobSel" class="searchable">' +
+        '<option value="">Not a job here (a storm, a one-off…)</option>' +
+        open.map(x => '<option value="' + esc(x.id) + '"' + (x.id === inv.jobId ? ' selected' : '') + '>' +
+          esc(x.name) + (x.est ? ' #' + esc(x.est) : '') + (x.status === 'complete' ? ' (finished)' : '') + '</option>').join('') +
+        '</select><button class="btn btn-sm btn-filled" onclick="invSetJob(\'' + safe(inv.id) + '\')">Save</button>' +
+        '<button class="btn btn-sm" onclick="invPickJob(\'\')">Cancel</button></div>';
+    }
+    return '<div class="inv-job">' + (j ? '🧱 ' + jobNameHtml(j.name, j.est) + '<span class="muted">' + esc(how) + '</span>'
+        : inv.jobId ? '🧱 A job not on this device' : '<span class="muted">No job here</span>') +
+      (changes() && st.kind !== 'paid' ? ' <button class="link-btn" onclick="invPickJob(\'' + safe(inv.id) + '\')">' + (inv.jobId ? 'Change' : 'Pick the job') + '</button>' : '') +
+    '</div>';
   }
   function rowHtml(inv, st) {
     const id = safe(inv.id);
@@ -138,8 +201,9 @@
     const facts = [];
     facts.push((emails.length ? 'Sent ' + shortDay(emails[0]) : inv.emailStatus === 'EmailSent' ? 'Emailed' : 'Not emailed') +
       (inv.viewed ? ' · 👀 opened' : ''));
-    if (inv.dueDate) facts.push('Due ' + shortDay(inv.dueDate) + (st.late > 0 && st.kind !== 'paid' && st.kind !== 'waiting'
+    if (inv.dueDate && !st.rest && st.kind !== 'waiting') facts.push('Due ' + shortDay(inv.dueDate) + (st.late > 0 && st.kind !== 'paid'
       ? ' · <b class="inv-late">' + st.late + ' day' + (st.late === 1 ? '' : 's') + ' late</b>' : ''));
+    (inv.payments || []).forEach(p => { if (p && p.amount > 0) facts.push('Paid ' + money(p.amount) + ' ' + shortDay(p.date)); });
     const hand = inv.handReminders || [];
     const rem = Math.max(0, emails.length - 1);
     if (rem || hand.length) {
@@ -154,7 +218,8 @@
         '<span class="inv-amt"><b>' + money(st.kind === 'paid' ? inv.total : inv.balance) + '</b>' +
           (st.kind !== 'paid' && Number(inv.balance) < Number(inv.total) - 0.005 ? '<small> of ' + money(inv.total) + '</small>' : '') + '</span></div>' +
       '<div class="inv-facts">' + facts.join(' · ') + '</div>' +
-      '<div class="inv-next">' + stateText(st) + '</div>' +
+      jobLineHtml(inv, st) +
+      '<div class="inv-next">' + stateText(st, inv) + '</div>' +
       '<div class="inv-acts">' +
         (can && st.kind !== 'waiting' ? '<button class="btn btn-sm' + (wantsYou(st) ? ' btn-filled' : '') + '" onclick="invRemind(\'' + id + '\')"' +
           (busy[inv.id] ? ' disabled' : '') + '>' + (busy[inv.id] ? 'Sending…' : st.kind === 'unsent' ? '📧 Email it' : '📧 Send reminder') + '</button>' : '') +
@@ -185,6 +250,24 @@
 
   // ------------------------------------------------------------- actions
 
+  window.invPickJob = function (id) {
+    picking = id || '';
+    render();
+    const sel = el('invJobSel');
+    if (sel && typeof makeSearchable === 'function') makeSearchable(sel);
+  };
+  // Picked by hand: kept whatever the hourly look would have said
+  // (quickbooks.py _inv_doc, jobBy 'hand').
+  window.invSetJob = function (id) {
+    const inv = invoices[id], sel = el('invJobSel');
+    if (!inv || !sel || !changes()) return;
+    inv.jobId = sel.value || null;
+    inv.jobBy = 'hand';
+    picking = '';
+    render();
+    Promise.resolve(window.YDDb.put('invoices', inv.id, { jobId: inv.jobId, jobBy: 'hand', updatedAt: new Date().toISOString() }))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
   window.invView = function (v) { view = ['todo', 'owed', 'paid'].indexOf(v) !== -1 ? v : 'todo'; render(); };
   // As search.js opens one: the job already in the form is just shown.
   window.invOpenJob = function (jobId) {

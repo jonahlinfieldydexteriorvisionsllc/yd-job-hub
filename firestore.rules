@@ -765,12 +765,14 @@ service cloud.firestore {
     // invoices -- every unpaid QuickBooks invoice, kept by the server's
     // hourly look (quickbooks.py sync_invoices): when it was emailed, when it
     // is due, the reminders sent. Billing reads it; a reminder noted by hand
-    // (a call, a text) or one put off is all anyone writes here.
+    // (a call, a text), one put off, or the job picked by hand is all anyone
+    // writes here.
     // ===================================================================
     match /invoices/{docId} {
       allow read: if canSee('billing');
       allow update: if canChange('billing')
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['handReminders', 'snoozeUntil', 'updatedAt']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['handReminders', 'snoozeUntil', 'jobId', 'jobBy', 'updatedAt'])
+        && (!('jobBy' in request.resource.data) || request.resource.data.jobBy in ['hand', 'job', 'name', null]);
     }
 
     match /receipts/{docId} {

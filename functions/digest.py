@@ -827,36 +827,57 @@ def _local_day(s):
 
 
 def invoice_state(inv, job, rules, today):
-    """{kind: paid|waiting|unsent|call|due|later, next, count, late} for one
-    invoice (invoices/{id}); `today` a date. The same rule as invoices.js
-    stateOf -- change both together."""
+    """{kind: paid|waiting|unsent|call|due|later, next, count, late, deposit,
+    rest} for one invoice (invoices/{id}); `today` a date. The same rule as
+    invoices.js stateOf -- change both together.
+
+    Jonah often makes the invoice before the work starts, to collect the
+    deposit (QuickBooks won't take a deposit on an estimate once it has been
+    accepted). So on a job here that isn't finished, an invoice with nothing
+    paid is asking for the deposit (`deposit`), and one with the deposit paid
+    is waiting for the job to be done. Once it is done, the bill for the rest
+    is the first email after the deposit came in; emails before that were
+    the deposit's and are not reminders for the rest (`rest`)."""
     if not inv.get("open") or not (float(inv.get("balance") or 0) > 0):
         return {"kind": "paid"}
     emails = sorted(_local_day(x) for x in inv.get("emails") or [] if x)
     hand = sorted(_local_day((h or {}).get("at")) for h in inv.get("handReminders") or [] if (h or {}).get("at"))
     done = bool(job) and status_of(job) == "complete"
     total, bal = float(inv.get("total") or 0), float(inv.get("balance") or 0)
-    # A deposit paid on a job not finished: the rest is due when it is done.
-    if job and not done and bal < total - 0.005:
+    part = bal < total - 0.005
+    if job and not done and part:
         return {"kind": "waiting"}
+    deposit = bool(job) and not done
     due_day = _local_day(inv.get("dueDate") or inv.get("txnDate"))
     late = (today - datetime.date.fromisoformat(due_day)).days if due_day else 0
+    since = ""
+    if done and part and job.get("completedAt"):
+        fin = _local_day(job.get("completedAt"))
+        before = [p.get("date") for p in inv.get("payments") or [] if p.get("date") and p["date"] <= fin]
+        since = before[-1] if before else ""
+    if since:
+        emails = [d for d in emails if d > since]
+        hand = [d for d in hand if d > since]
+    base = {"late": late, "deposit": deposit, "rest": bool(since)}
     # QuickBooks says it was emailed but not when (before Job Hub watched):
     # sent, with no reminders yet.
-    if not emails and not hand and inv.get("emailStatus") != "EmailSent":
-        return {"kind": "unsent", "late": late}
+    if not emails and not hand and (since or inv.get("emailStatus") != "EmailSent"):
+        return dict(base, kind="unsent")
     # Put off by hand ("Not yet"): nothing until that day.
     if _local_day(inv.get("snoozeUntil")) > today.isoformat():
-        return {"kind": "later", "next": _local_day(inv.get("snoozeUntil")), "late": late}
-    start = due_day or today.isoformat()
-    if done and _local_day(job.get("completedAt")) > start:
-        start = _local_day(job.get("completedAt"))
+        return dict(base, kind="later", next=_local_day(inv.get("snoozeUntil")))
+    if since:
+        start = (emails or hand)[0]
+    else:
+        start = due_day or today.isoformat()
+        if done and _local_day(job.get("completedAt")) > start:
+            start = _local_day(job.get("completedAt"))
     count = max(0, len(emails) - 1) + len(hand)
     if count >= rules["max"]:
-        return {"kind": "call", "count": count, "late": late}
-    base = datetime.date.fromisoformat(start if count == 0 else max(emails[-1:] + hand[-1:]))
-    nxt = base + datetime.timedelta(days=rules["firstAfterDays"] if count == 0 else rules["everyDays"])
-    return {"kind": "due" if today >= nxt else "later", "next": nxt.isoformat(), "count": count, "late": late}
+        return dict(base, kind="call", count=count)
+    at = datetime.date.fromisoformat(start if count == 0 else max(emails[-1:] + hand[-1:]))
+    nxt = at + datetime.timedelta(days=rules["firstAfterDays"] if count == 0 else rules["everyDays"])
+    return dict(base, kind="due" if today >= nxt else "later", next=nxt.isoformat(), count=count)
 
 
 def _invoice_reminders(jobs, today):
@@ -871,7 +892,7 @@ def _invoice_reminders(jobs, today):
             if st["kind"] in ("due", "unsent", "call"):
                 out.append({"name": inv.get("customerName") or "A customer", "doc": inv.get("docNumber") or "",
                             "balance": float(inv.get("balance") or 0), "kind": st["kind"], "late": st.get("late") or 0,
-                            "count": st.get("count") or 0})
+                            "count": st.get("count") or 0, "deposit": bool(st.get("deposit")), "rest": bool(st.get("rest"))})
     except Exception as e:      # noqa: BLE001 -- a summary without them beats none
         print("digest: invoice reminders not worked out:", e)
     return sorted(out, key=lambda x: -x["late"])
@@ -1261,8 +1282,10 @@ def build(slot, user, people, wx, cache):
     if (owner or access.get("billing") in ("see", "change")) and slot in ("morning", "evening") and remind:
         lines = []
         for x in remind[:10]:
-            what = ("not emailed yet — send it" if x["kind"] == "unsent"
+            what = ("job done — email the bill for the rest" if x["kind"] == "unsent" and x.get("rest")
+                    else "not emailed yet — send it" if x["kind"] == "unsent"
                     else "%d reminders sent — time to call" % x["count"] if x["kind"] == "call"
+                    else "deposit not paid — reminder due" if x.get("deposit")
                     else "reminder due")
             lines.append({"text": "💵 %s%s — $%s%s — %s" % (
                 x["name"], (" #" + x["doc"]) if x["doc"] else "", format(round(x["balance"], 2), ",.2f"),

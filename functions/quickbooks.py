@@ -2586,9 +2586,10 @@ def _add_email(emails, sent):
     return sorted(emails + [sent], key=lambda e: _when(e) or t)[-EMAILS_KEEP:]
 
 
-def _inv_doc(inv, have, job_id):
+def _inv_doc(inv, have, job_id, job_by=None):
     """What invoices/{id} keeps of a QuickBooks invoice. `have`: what it kept
-    before -- the times it was emailed are added to, never lost."""
+    before -- the times it was emailed are added to, never lost. A job picked
+    by hand (invoices.js) is kept whatever the sweep would have said."""
     env = _env("QB_ENV", "sandbox")
     emails = _add_email(list(have.get("emails") or []),
                         ((inv.get("DeliveryInfo") or {}).get("DeliveryTime")) or "")
@@ -2601,9 +2602,13 @@ def _inv_doc(inv, have, job_id):
         "total": total, "balance": bal, "open": bal > 0,
         "txnDate": str(inv.get("TxnDate") or ""), "dueDate": str(inv.get("DueDate") or ""),
         "emailStatus": str(inv.get("EmailStatus") or ""), "viewed": str(inv.get("EInvoiceStatus") or "") == "Viewed",
-        "emails": emails, "jobId": job_id or have.get("jobId") or None, "env": env,
+        "emails": emails, "env": env,
         "link": "%s/app/invoice?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), inv.get("Id")),
     }
+    if have.get("jobBy") == "hand":
+        rec["jobId"], rec["jobBy"] = have.get("jobId") or None, "hand"
+    else:
+        rec["jobId"], rec["jobBy"] = (job_id, job_by) if job_id else (None, None)
     if bal <= 0 and have.get("open", True):
         rec["paidAt"] = _now().isoformat()
     return rec
@@ -2611,8 +2616,46 @@ def _inv_doc(inv, have, job_id):
 
 def _inv_changed(rec, have):
     keys = ("docNumber", "customerName", "email", "total", "balance", "open", "txnDate", "dueDate",
-            "emailStatus", "viewed", "emails", "jobId")
+            "emailStatus", "viewed", "emails", "jobId", "jobBy", "payments")
     return any(rec.get(k) != have.get(k) for k in keys)
+
+
+def _payment_ids(inv):
+    return sorted(str(t.get("TxnId")) for t in inv.get("LinkedTxn") or []
+                  if t.get("TxnType") == "Payment" and t.get("TxnId"))
+
+
+def _payments_on(inv_id, pays):
+    """[{id, date, amount}] -- each QuickBooks payment's part paid on this
+    invoice, oldest first. When the deposit came in is what tells the bill
+    for the rest from the first one (invoices.js stateOf)."""
+    out = []
+    for pid, p in pays.items():
+        amt = sum(_amount(ln.get("Amount")) for ln in p.get("Line") or []
+                  if any(str(t.get("TxnId")) == str(inv_id) and t.get("TxnType") == "Invoice"
+                         for t in ln.get("LinkedTxn") or []))
+        if amt > 0:
+            out.append({"id": pid, "date": str(p.get("TxnDate") or ""), "amount": round(amt, 2)})
+    return sorted(out, key=lambda x: (x["date"], x["id"]))
+
+
+def _name_jobs(jobs, env):
+    """Customer name -> the one open job of that name, for an invoice no job
+    holds (made by hand in QuickBooks, for a job typed in by hand here). Two
+    open jobs of one name: neither -- a wrong guess is worse than none. A job
+    marked to take off (removeWhy) or already holding an invoice is never a
+    candidate."""
+    seen = {}
+    for jid, j in jobs.items():
+        ref = j.get("qbInvoiceRef") or {}
+        if j.get("removeWhy") or (ref.get("id") and ref.get("env") == env):
+            continue
+        if str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active"):
+            continue
+        key = _norm_name(j.get("customerName"))
+        if key:
+            seen.setdefault(key, []).append(jid)
+    return {k: v[0] for k, v in seen.items() if len(v) == 1}
 
 
 def sync_invoices(jobs):
@@ -2625,25 +2668,52 @@ def sync_invoices(jobs):
     db = _db()
     col = db.collection("invoices")
     have = {s.id: (s.to_dict() or {}) for s in col.where("open", "==", True).stream()}
+    # The job holding the invoice (its qbInvoiceRef) -- never one marked to
+    # take off, which may hold a copy of the same invoice (a duplicate job).
     by_inv = {str((j.get("qbInvoiceRef") or {}).get("id")): jid for jid, j in jobs.items()
-              if (j.get("qbInvoiceRef") or {}).get("id") and (j.get("qbInvoiceRef") or {}).get("env") == env}
+              if (j.get("qbInvoiceRef") or {}).get("id") and (j.get("qbInvoiceRef") or {}).get("env") == env
+              and not j.get("removeWhy")}
+    by_name = _name_jobs(jobs, env)
     news = []
     now_open = {str(i.get("Id")): i for i in _open_invoices()}
     # Open here, gone from the open list there: paid off (or deleted).
     gone = [i for i in have if i not in now_open]
     closed = _by_ids("Invoice", gone) if gone else {}
-    batch, n = db.batch(), 0
+    olds = {}
     for inv_id in list(now_open) + gone:
         old = have.get(inv_id)
         if old is None:
             snap = col.document(inv_id).get()
             old = (snap.to_dict() or {}) if snap.exists else {}
+        olds[inv_id] = old
+    # The payments on each, asked for only when the list of them changed.
+    want = {}
+    for inv_id, inv in list(now_open.items()) + list(closed.items()):
+        ids = _payment_ids(inv)
+        if ids != sorted(str(p.get("id")) for p in olds[inv_id].get("payments") or []):
+            want[inv_id] = ids
+    pays = _by_ids("Payment", [i for ids in want.values() for i in ids]) if want else {}
+    batch, n = db.batch(), 0
+    for inv_id in list(now_open) + gone:
+        old = olds[inv_id]
         inv = now_open.get(inv_id) or closed.get(inv_id)
         if inv is None:                                 # deleted in QuickBooks
             batch.set(col.document(inv_id), {"open": False, "deletedAt": _now().isoformat()}, merge=True)
             n += 1
             continue
-        rec = _inv_doc(inv, old, by_inv.get(inv_id))
+        if by_inv.get(inv_id):
+            link = (by_inv[inv_id], "job")
+        else:
+            nj = by_name.get(_norm_name((inv.get("CustomerRef") or {}).get("name")))
+            link = (nj, "name") if nj else (None, None)
+        rec = _inv_doc(inv, old, *link)
+        if inv_id in want:
+            got = {i: pays[i] for i in want[inv_id] if i in pays}
+            # A payment QuickBooks didn't answer for: keep what was known.
+            rec["payments"] = (_payments_on(inv_id, got) if len(got) == len(want[inv_id])
+                               else list(old.get("payments") or []))
+        else:
+            rec["payments"] = list(old.get("payments") or [])
         if not _inv_changed(rec, old):
             continue
         paid = round(_amount(old.get("balance")) - rec["balance"], 2) if old else 0
@@ -2684,7 +2754,8 @@ def invoice_remind(body, who=""):
     ref = _db().collection("invoices").document(inv_id)
     snap = ref.get()
     old = (snap.to_dict() or {}) if snap.exists else {}
-    rec = _inv_doc(sent, old, old.get("jobId"))
+    rec = _inv_doc(sent, old, old.get("jobId"), old.get("jobBy"))
+    rec["payments"] = list(old.get("payments") or [])
     stamp = _now().isoformat()
     # The send itself is an email, timed by QuickBooks when it says (then
     # this is the same one, and not added twice).
