@@ -608,7 +608,7 @@
       words: 'recurring repeat weekly monthly maintenance tasks',
       show: () => signedIn() && owner(),
       go: () => { switchTab('boards'); call('showBoard', 'crew'); call('openRecurring'); } },
-    { group: 'On this device', icon: '🔔', name: 'Notifications & summaries',
+    { group: 'On this device', icon: '🔔', name: 'Notification settings',
       hint: 'The daily summaries by email and on this device, and reminders',
       words: 'push email digest reminders alerts phone',
       show: () => signedIn(), go: () => call('openNotifications') },

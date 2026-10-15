@@ -723,7 +723,10 @@
   window.undoClockOut = undoLeaving;
   window.addEventListener('pagehide', () => { commitLeaving(); });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') commitLeaving(); });
-  // Signing out with one waiting: sent first (sign-out waits a moment for it).
+  // Signing out with one waiting: written BEFORE sign-out waits for unsent
+  // changes (YDSignOutFlush, firebase-init.js), so with no signal it is one
+  // of the changes it asks about rather than lost with the wiped cache.
+  (window.YDSignOutFlush = window.YDSignOutFlush || []).push(() => commitLeaving());
   (window.YDSignOutHooks = window.YDSignOutHooks || []).push(() => commitLeaving());
 
   // This person's break, while it is one: their last shift ended for a break,

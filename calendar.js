@@ -1378,7 +1378,7 @@
     const type = val('evType') || typeOfEv({}, c && cals[c.value]);
     hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this one.'
       : choice === '' ? YDRemind.usualHint(type, timed)
-      : 'To you and anyone on it. Phones need notifications switched on: ⋯ → Notifications &amp; summaries.';
+      : 'To you and anyone on it. Phones need notifications switched on: ⋯ → Notification settings.';
   };
   window.calJobChanged = function () {
     const id = val('evJob');

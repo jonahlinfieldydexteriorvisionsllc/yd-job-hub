@@ -271,7 +271,7 @@
           '<div class="storm-row-main">' +
             '<div class="storm-row-name">' + esc(stormTitle(s, id)) + '</div>' +
             '<div class="storm-row-sub">' +
-              (b ? b.lines.length + ' visits · ' + b.crewHours + ' crew hrs · ' +
+              (b ? b.lines.length + (b.lines.length === 1 ? ' visit · ' : ' visits · ') + b.crewHours + ' crew hrs · ' +
                    money(b.totalCents) + (b.saltCents ? ' (salt ' + money(b.saltCents) + ')' : '')
                  : 'billing not available') +
               (b && b.skipped && b.skipped.length ? ' · ' + b.skipped.length + ' skipped' : '') +

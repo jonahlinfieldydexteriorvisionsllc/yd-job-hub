@@ -3453,3 +3453,8 @@
   html[data-night] .hm-clock-note { background:rgba(201,146,47,.2); }
   html[data-night] .clock-out-btn, html[data-night] .hm-out { border-color:var(--neg); color:var(--neg); }
   html[data-night] .clock-out-btn:hover, html[data-night] .hm-out:hover { background:var(--neg-soft); }
+
+  /* ---- merge fixes (15 Oct 2026) ---- */
+  /* A storm's Delete sits apart from its QuickBooks buttons, at the far end of
+     the row -- one slip of the thumb must not land on it. */
+  .storm-row-actions .btn-danger { margin-left:auto; }

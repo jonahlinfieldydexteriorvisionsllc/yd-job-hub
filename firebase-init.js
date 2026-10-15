@@ -820,6 +820,11 @@ async function start() {
   //    shared phone after they signed out.
   const pause = ms => new Promise(r => setTimeout(() => r(false), ms));
   async function signOutFully() {
+    // 0. Anything held back for a moment (a clock-out waiting out its Undo,
+    //    timeclock.js) is written first, so the wait below covers it too.
+    for (const flush of (window.YDSignOutFlush || [])) {
+      try { flush(); } catch (e) { console.warn('[auth] sign-out flush failed', e); }
+    }
     const landed = await Promise.race([waitForPendingWrites(db).then(() => true, () => false), pause(4000)]);
     if (!landed && !confirm('Some changes on this device have not reached the cloud yet ' +
         '(no signal?).\n\nSigning out now will lose them. Sign out anyway?')) return false;
