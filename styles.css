@@ -335,7 +335,9 @@
   .cu-off { border:1px dashed var(--border-strong); border-radius:8px; padding:12px 14px; margin-bottom:12px; font-size:14px; line-height:1.5; }
   .cu-off .btn { margin-left:6px; }
   /* The views as buttons all in sight (phones: no sideways rows). */
-  .cu-views { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:6px; margin-bottom:10px; }
+  /* 132px: at 120 "👥 Customers 2" did not fit, and its icon sat on a line
+     of its own above the word. A phone sets its own three columns below. */
+  .cu-views { display:grid; grid-template-columns:repeat(auto-fill, minmax(132px, 1fr)); gap:6px; margin-bottom:10px; }
   .cu-view { min-height:44px; border:1.5px solid var(--border-strong); border-radius:8px; background:var(--surface);
              color:inherit; font:inherit; font-size:13.5px; font-weight:600; cursor:pointer; padding:6px 8px;
              display:flex; align-items:center; justify-content:center; gap:6px; }
@@ -1291,6 +1293,12 @@
   .cal-detail { --c:#6b7a8f; border-left:5px solid var(--c); padding-left:13px; }
   .cal-detail-cal { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:700;
     text-transform:uppercase; letter-spacing:.8px; color:var(--c); }
+  /* The kind's colour as words was unreadable for the light ones -- the
+     doctor's yellow 1.7:1, to-do lime 2.3:1 on white, pickup brown 3.1:1 on
+     dark (office test, 16 Oct 2026). The words take it mixed with the text
+     colour (darker by day, lighter at night); the bar beside them keeps the
+     colour itself. A browser without color-mix keeps the colour as it was. */
+  .cal-entry-time, .cal-entry-cal, .cal-detail-cal { color:color-mix(in srgb, var(--c) 45%, var(--text)); }
   .cal-detail-when { font-size:15px; font-weight:600; margin:6px 0 8px; line-height:1.5; }
   .cal-detail-line { font-size:14px; margin:6px 0; }
   .muted { color:var(--muted); font-weight:400; }
@@ -2528,6 +2536,10 @@
   .order-vendor { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin:12px 0 2px; padding:0 10px; font-size:13px; }
   .order-vendor:first-child { margin-top:0; }
   .order-vendor .link-btn { margin-left:auto; }
+  /* Copy the order and Their website kept together on the right: each
+     pushing itself right split the spare room, leaving Copy stranded in
+     the middle of the row. */
+  .order-vendor .link-btn ~ .link-btn { margin-left:0; }
   .cr-cost { font-size:12px; color:var(--muted); }
   .cr-cost b { color:var(--text); }
   .cr-special { font-size:11px; font-weight:700; color:#7a5410; background:#fbeccd; border-radius:8px; padding:1px 6px; }
