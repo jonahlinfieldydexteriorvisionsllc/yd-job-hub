@@ -430,6 +430,11 @@ def _is_crew_member(u):
     return u.get("crewMember") is True or (u.get("role") == "crew" and u.get("crewMember") is not False)
 
 
+def _whose(kind, cal_kind):
+    """remind.js eventIsMine: on the Crew schedule everything is the crew's."""
+    return "crew" if cal_kind == "crew" else kind
+
+
 def _is_mine(on, kind, maker, u):
     """remind.js isMine: theirs when they are on it; with nobody on it, a
     crew task is every crew member's and anything else whoever made it's --
@@ -564,7 +569,8 @@ def open_tasks(db, people, first, last, now):
                     give(sees, {"day": day, "kind": kind, "title": str(one.get("title") or one.get("jobName") or "An entry"),
                                 "where": cal.get("name") or "a calendar", "time": one.get("time") if timed else "",
                                 "on": names(on), "recurring": False, "undated": False, "machine": False},
-                         {cr.get("uid") for cr in on if isinstance(cr, dict)}, kind, ev.get("createdBy") or "")
+                         {cr.get("uid") for cr in on if isinstance(cr, dict)}, _whose(kind, cal.get("kind")),
+                         ev.get("createdBy") or "")
     except Exception as err:          # noqa: BLE001
         print("tasks: calendar entries not read:", err)
 
@@ -696,7 +702,7 @@ def _usual(db, people, since, now, cals, boards, prefs):
                         continue
                     kind = _type_of(one, cal_kind=cal.get("kind"))
                     on = {cr.get("uid") for cr in (one.get("crew") or []) if isinstance(cr, dict)}
-                    who = [u["uid"] for u in sees if _is_mine(on, kind, ev.get("createdBy") or "", u)]
+                    who = [u["uid"] for u in sees if _is_mine(on, _whose(kind, cal.get("kind")), ev.get("createdBy") or "", u)]
                     title = str(one.get("title") or one.get("jobName") or "Calendar")
                     if one.get("time") and not one.get("allDay"):
                         if day.isoformat() != str(one.get("date")):

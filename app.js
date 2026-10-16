@@ -4375,6 +4375,64 @@ document.addEventListener('click', e => {
   else watch();
 })();
 
+// The phone's Back (Android's button, an iPhone's swipe) closes the window in
+// front, not the whole app (crew testing, 16 Oct 2026: Back from a card or a
+// job page threw the person out of Job Hub). Each window that opens leaves a
+// step in the browser's history; Back takes that step and presses the
+// window's own close button, as Esc does -- so its closing work (a redraw, a
+// question about unsaved changes) still runs. A window closed any other way
+// (×, Save) takes its step back out quietly, so the next Back is the next
+// window's, or leaves the app as before.
+(function backClosesWindows() {
+  const isWin = o => o && o.classList && (o.classList.contains('modal-overlay') || o.classList.contains('sheet-overlay'));
+  const isOpen = o => isWin(o) && o.classList.contains('active');
+  let steps = 0;          // history steps this page added for open windows
+  let quietPops = 0;      // our own history.back() calls, not the person's Back
+  let byBack = 0;         // windows being closed by Back right now
+  let armed = null, armedAt = 0;
+  const seen = new MutationObserver(list => list.forEach(m => {
+    const o = m.target;
+    if (!isWin(o)) return;
+    const was = /(^|\s)active(\s|$)/.test(String(m.oldValue || '')), now = isOpen(o);
+    if (now && !was) {
+      try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { /* a sandboxed page: Back as before */ }
+    } else if (!now && was) {
+      if (byBack > 0) { byBack--; return; }
+      if (steps > 0) { steps--; quietPops++; history.back(); }
+    }
+  }));
+  window.addEventListener('popstate', () => {
+    if (quietPops > 0) { quietPops--; return; }
+    if (steps <= 0) return;
+    steps--;
+    const top = typeof topOverlay === 'function' ? topOverlay() : null;
+    const close = top && top.querySelector('.modal-close, .sheet-close');
+    if (!close) return;
+    // Something typed in it: the first Back says so and stays (the step is
+    // put back); a second one within a few seconds closes, as Esc does.
+    if (top.dataset.typed && !top.classList.contains('ask-overlay') && !(armed === top && Date.now() - armedAt < 4000)) {
+      armed = top; armedAt = Date.now();
+      try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { /* nothing to put back */ }
+      showToast('Something is typed in here — press Back again to close without saving');
+      return;
+    }
+    armed = null;
+    byBack++;
+    close.click();
+    // A close button that only asks first (unsaved changes) leaves the window
+    // open: it no longer has a step, so the next Back would leave the app --
+    // give it one back.
+    setTimeout(() => {
+      if (isOpen(top)) { byBack = Math.max(0, byBack - 1); try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { /* as before */ } }
+    }, 400);
+  });
+  function watch() {
+    seen.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
+  else watch();
+})();
+
 // ═══════════════════════════════════════════════════════════
 // SEARCHABLE DROPDOWNS
 // ═══════════════════════════════════════════════════════════

@@ -978,6 +978,11 @@
     // and the crew picked by tapping their names (the clock's people), so
     // the names match the time clock and the count is never mistyped.
     startForm = { inches: '', picked: {}, others: '', size: '2' };
+    // Whoever starts the storm is working it (crew testing, 16 Oct 2026: the
+    // form said "1 working" with nobody ticked, and saved no names) -- ticked
+    // to begin with, and untapped if they are only starting it for the crew.
+    const me = window.YDAuth && YDAuth.user && YDAuth.user.uid;
+    if (me && crewChoices().some(p => p.uid === me)) startForm.picked[me] = true;
     renderStormStart();
     const m = document.getElementById('stormStartModal');
     if (m) m.classList.add('active');

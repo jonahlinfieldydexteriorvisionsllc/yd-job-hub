@@ -234,10 +234,15 @@
   }
   // A calendar entry keeps the uid of whoever made it (from 12 Oct 2026; the
   // ones before are the owner's).
+  // Anything on the Crew schedule is the crew's -- with nobody on it, every
+  // crew member's, whatever it is (a pickup there is a crew pickup). Crew
+  // testing, 16 Oct 2026: "Pick up pavers at the yard" on the Crew schedule
+  // with nobody on it reached no crew member's day at all.
   function eventIsMine(ev, cal, who) {
     if (!ev || !who) return false;
     const on = (ev.crew || []).map(c => c && c.uid).filter(Boolean);
-    return isMine(on, typeOf(ev, { calKind: cal && cal.kind }), ev.createdBy || '', who);
+    const type = cal && cal.kind === 'crew' ? 'crew' : typeOf(ev, { calKind: cal && cal.kind });
+    return isMine(on, type, ev.createdBy || '', who);
   }
   // This person, as isMine wants them. `people`: uid -> user record, where
   // this device has them (the owner's and an admin's do; a crew phone knows
