@@ -260,6 +260,7 @@
   function saveOutreach(day) {
     if (!ownsOutreach() || !window.YDDb) return;
     outreach = Object.assign({}, outreach, { startDate: day || '' });
+    outreachSeq++;
     outreachEditing = false;
     renderOutreach();
     tellOutreach();
@@ -857,30 +858,42 @@
 
   // The outreach date lives in settings/outreach, which only the owner
   // reads (the rules: every settings record but a few is the owner's).
-  let unsubOut = null;
+  // Read as that one record: watching the whole settings collection sent this
+  // device every other settings record at start-up and again at each change
+  // to any of them, to use one. It is read when the owner signs in, when the
+  // app comes back to the front, and when the Contacts tab opens (at most once
+  // a minute); his own change here is applied at once, and a read that was
+  // already on its way when he saved is thrown away.
+  let outreachOn = false, outreachReadAt = 0, outreachSeq = 0;
+  function readOutreach(soon) {
+    if (!outreachOn || !window.YDDb || !ownsOutreach()) return;
+    if (soon && Date.now() - outreachReadAt < 60000) return;
+    outreachReadAt = Date.now();
+    const seq = ++outreachSeq;
+    Promise.resolve(window.YDDb.get('settings', 'outreach')).then(d => {
+      if (!outreachOn || seq !== outreachSeq) return;
+      const next = validDay(d && d.startDate) ? d.startDate : '';
+      const first = !outreachLoaded;
+      outreachLoaded = true;
+      if (first || next !== outreach.startDate) {
+        outreach = { startDate: next };
+        renderOutreach(); tellOutreach();
+      }
+    }).catch(() => { outreachReadAt = 0; /* offline with nothing kept: asked again next time */ });
+  }
   function startOutreach() {
-    if (unsubOut || !window.YDDb || !ownsOutreach()) return;
-    unsubOut = window.YDDb.watch('settings', (changes, meta) => {
-      // Every settings record comes through here; only one is this.
-      let ours = false;
-      changes.forEach(c => {
-        if (c.id !== 'outreach') return;
-        ours = true;
-        const d = c.type === 'removed' ? {} : (c.data || {});
-        outreach = { startDate: validDay(d.startDate) ? d.startDate : '' };
-      });
-      const first = !outreachLoaded && (ours || (meta && meta.fromCache === false));
-      if (first) outreachLoaded = true;
-      if (ours || first) { renderOutreach(); tellOutreach(); }
-    }, () => {});
+    if (outreachOn || !window.YDDb || !ownsOutreach()) return;
+    outreachOn = true;
+    readOutreach();
   }
   function stopOutreach() {
-    if (unsubOut) { try { unsubOut(); } catch (e) {} }
-    unsubOut = null; outreach = { startDate: '' }; outreachLoaded = false; outreachEditing = false;
+    outreachOn = false; outreachSeq++; outreachReadAt = 0;
+    outreach = { startDate: '' }; outreachLoaded = false; outreachEditing = false;
     renderOutreach(); tellOutreach();
   }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') readOutreach(true); });
 
-  window.YDProspects = { all: () => people, render: render, whenKey: whenKey, fromLostBid: fromLostBid,
+  window.YDProspects = { all: () => people, render: function () { render(); readOutreach(true); }, whenKey: whenKey, fromLostBid: fromLostBid,
     // For the calendar: the day outreach starts, and how many are due on a day.
     outreach: () => (ownsOutreach() && outreachLoaded && validDay(outreach.startDate)
       ? { start: outreach.startDate, due: day => dueList(day).length } : null) };
@@ -904,7 +917,7 @@
       if (panel && panel.classList.contains('active') && typeof switchTab === 'function') switchTab('home');
     }
 
-    if (owner && ownsOutreach()) startOutreach(); else if (unsubOut) stopOutreach();
+    if (owner && ownsOutreach()) startOutreach(); else if (outreachOn) stopOutreach();
     if (owner) start();
     else if (unsub) {
       // Access taken away (or signed out): stop listening and drop the list.

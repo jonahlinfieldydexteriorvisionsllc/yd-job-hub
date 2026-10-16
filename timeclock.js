@@ -3963,7 +3963,9 @@
     // raised it would otherwise end a late clock-out at the old limit.
     readAutoOut();
     clearInterval(autoOutTimer);
-    autoOutTimer = setInterval(readAutoOut, 5 * 60 * 1000);
+    // Not while the tab is hidden: coming back to it reads the limit anyway
+    // (visibilitychange, below), so a hidden tab need not wake up for it.
+    autoOutTimer = setInterval(() => { if (!document.hidden) readAutoOut(); }, 5 * 60 * 1000);
     // Everyone's shifts: only the recent ones live (see "older shifts"). A
     // phone still holding a firebase-init.js from before watchFrom watches
     // the whole collection, as it always did.
