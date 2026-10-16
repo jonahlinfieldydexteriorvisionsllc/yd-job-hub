@@ -503,8 +503,8 @@
     // above the calendar on a phone (the stylesheet shows one) -- built once.
     // My day has it in the page already.
     const anyTime = view === 'myday' ? '' : todayHtml();
-    wrap.innerHTML = '<div class="cal-shell">' +
-        '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml(anyTime) + '</aside>' +
+    wrap.innerHTML = filtersHtml() + '<div class="cal-shell">' +
+        '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml() + '</aside>' +
         '<div class="cal-main">' + topHtml() +
           // A phone has the side folded away behind ☰: the list goes on top.
           anyTime +
@@ -534,7 +534,7 @@
   function topHtml() {
     return '<div class="cal-top">' +
         '<div class="cal-nav">' +
-          '<button class="btn btn-sm cal-side-btn" onclick="calSide()" aria-label="Calendars">☰</button>' +
+          '<button class="btn btn-sm cal-side-btn" onclick="calSide()" aria-label="Pick a day">☰</button>' +
           '<button class="btn btn-sm" onclick="calToday()">Today</button>' +
           '<button class="cal-arrow" onclick="calStep(-1)" aria-label="Back">‹</button>' +
           '<button class="cal-arrow" onclick="calStep(1)" aria-label="Forward">›</button>' +
@@ -698,7 +698,7 @@
   // One thing on the "any time" list: a tick box when this person may tick
   // it off, its kind's colour down the side, a tap to open it. `sub`: a
   // second line (who is on it). `late`: from an earlier day, not done.
-  function todoRow(o, sub, late) {
+  function todoRow(o, sub, late, at) {
     const k = keyOf(o);
     // Someone else's, with no box to tick: whose it is, instead.
     const tickable = canTick(o), theirs = !tickable && o.task ? whoOn(o) : '';
@@ -706,6 +706,7 @@
     return '<div class="cal-todo' + (o.done ? ' done' : '') + (late ? ' late' : '') + '" style="--c:' + colorOf(o) + '">' +
       (tickable ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
+      (at ? '<span class="cal-todo-at">' + esc(at) + '</span>' : '') +
       '<button class="cal-todo-t" onclick="calClick(\'' + k + '\')">' + esc(o.title) +
         (sub ? '<small>' + esc(sub) + '</small>' : '') + '</button></div>';
   }
@@ -863,29 +864,72 @@
     showToast(on ? 'Done — ' + shortDay(o.doneKey || o.day) : 'Not done after all');
   };
 
-  // Down the side: the small month, the day's "any time" list (`anyTime`,
-  // built by render), then every calendar with a tick box.
-  function sideHtml(anyTime) {
-    return miniHtml() + anyTime +
-      '<div class="cal-side-head">Calendars</div>' +
-      '<div class="cal-checks">' + layers().map(l =>
-        '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
-          '<input type="checkbox"' + (hidden.has(l.id) ? '' : ' checked') + ' onchange="calSet(\'' + l.id + '\', this.checked)">' +
-          '<span class="cal-box"></span><span class="cal-check-name">' + esc(l.name) + '</span>' +
-          (isOwner() && !l.auto && (l.visibleTo || []).length ? '<span class="cal-shared">👥' + l.visibleTo.length + '</span>' : '') +
-        '</label>').join('') +
-        '<label class="cal-check mine"><input type="checkbox"' + (onlyMineOn ? ' checked' : '') + ' onchange="calOnlyMine()">' +
-          '<span class="cal-box"></span><span class="cal-check-name">👤 Only mine</span></label>' +
+  // Jonah (15 Oct 2026): "the checkmarks for the different calendars can go
+  // at the top under the tabs" -- "same with the color key". One row of tick
+  // chips and one of what each colour means, above the calendar. A phone has
+  // no room for two rows of chips above its days: they fold behind one
+  // button there (remembered per device), open on a computer.
+  let filtersOpen = (() => { try { return localStorage.getItem('ydjobhub_calFilters') === '1'; } catch (e) { return false; } })();
+  function filtersHtml() {
+    const off = hidden.size + (onlyMineOn ? 1 : 0);
+    return '<div class="cal-filters' + (filtersOpen ? ' open' : '') + '">' +
+      '<button class="btn btn-sm cal-filters-btn" onclick="calFilters()" aria-expanded="' + filtersOpen + '">Calendars &amp; colours' +
+        (off ? ' <span class="cal-filters-n">' + off + ' off</span>' : '') + ' <span aria-hidden="true">' + (filtersOpen ? '▾' : '▸') + '</span></button>' +
+      '<div class="cal-filters-body">' +
+        '<div class="cal-checks">' + layers().map(l =>
+          '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
+            '<input type="checkbox"' + (hidden.has(l.id) ? '' : ' checked') + ' onchange="calSet(\'' + l.id + '\', this.checked)">' +
+            '<span class="cal-box"></span><span class="cal-check-name">' + esc(l.name) + '</span>' +
+            (isOwner() && !l.auto && (l.visibleTo || []).length ? '<span class="cal-shared">👥' + l.visibleTo.length + '</span>' : '') +
+          '</label>').join('') +
+          '<label class="cal-check mine"><input type="checkbox"' + (onlyMineOn ? ' checked' : '') + ' onchange="calOnlyMine()">' +
+            '<span class="cal-box"></span><span class="cal-check-name">👤 Only mine</span></label>' +
+          (off ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
+          (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars</button>' : '') +
+        '</div>' +
+        // What each colour means (remind.js). Anything not marked keeps its
+        // calendar's colour.
+        '<div class="cal-key" aria-label="What the colours mean">' + YDRemind.TYPES.map(t =>
+          '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
+          '<span class="cal-key-dot"></span>' + esc(t.icon) + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
       '</div>' +
-      // What each colour means (remind.js). Anything not marked keeps its
-      // calendar's colour.
-      '<div class="cal-side-head">Colours</div>' +
-      '<div class="cal-key">' + YDRemind.TYPES.map(t => '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
-        '<span class="cal-key-dot"></span>' + t.icon + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
-      '<div class="cal-side-links">' +
-        (hidden.size || onlyMineOn ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
-        (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars</button>' : '') +
-      '</div>';
+    '</div>';
+  }
+  window.calFilters = function () {
+    filtersOpen = !filtersOpen;
+    try { localStorage.setItem('ydjobhub_calFilters', filtersOpen ? '1' : '0'); } catch (e) {}
+    render();
+  };
+
+  // Down the side on a computer: the small month, then the day's list --
+  // Jonah (15 Oct 2026): "along with the view of the calendar i want a
+  // sidebar with each task for the day and just the time its due", in view
+  // beside the whole calendar. Everything on the day picked (today when it
+  // is on screen), at its time, in order; then what is for any time that
+  // day; tasks from earlier days not ticked off at the head of today's.
+  // Ticked off right here. A phone has the "any time" list above its days
+  // instead (todayHtml), and its timed things are in the days themselves.
+  function sideHtml() {
+    return miniHtml() + dayListHtml();
+  }
+  function dayListHtml() {
+    if (view === 'myday') return '';
+    const day = dayForNew();
+    const items = occurrences(day, day).filter(o => o.auto !== 'storm' && !o.after);
+    const timed = items.filter(o => o.time).sort((a, b) => (minutesOf(a.time) || 0) - (minutesOf(b.time) || 0) || byKind(a, b));
+    const anyTime = items.filter(o => !o.time).sort(byKind);
+    const late = day === today() ? carried() : [];
+    const left = leftOf(items) + leftOf(late);
+    return '<div class="cal-daylist">' +
+      '<div class="cal-daylist-head">' + esc(longDay(day)) +
+        (items.length || late.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') + '</div>' +
+      lateHtml(late, null, true) +
+      timed.map(o => todoRow(o, '', false, fmtTime(o.time))).join('') +
+      (anyTime.length ? '<div class="cal-todo-group">Any time</div>' + anyTime.map(o => todoRow(o)).join('') : '') +
+      (!items.length ? '<div class="cal-today-none">' + (late.length ? 'Nothing else on this day.' : 'Nothing on this day.') + '</div>' : '') +
+      (adds() ? '<button class="link-btn cal-daylist-add" onclick="calAdd(\'' + day + '\')">+ Add to ' +
+        (day === today() ? 'today' : esc(shortDay(day))) + '</button>' : '') +
+    '</div>';
   }
 
   function miniHtml() {
@@ -1265,6 +1309,97 @@
     openOcc(o);
   }
 
+  // ------------------------------------------------------------- files
+  //
+  // Jonah (15 Oct 2026): "i want to be able to add attachments to calendar
+  // items" -- a plan, a quote, a photo of the spot. Each file goes to Cloud
+  // Storage at calendarFiles/{calendar}/{entry}/{id}-{name} (storage.rules:
+  // whoever may change that calendar adds and removes; anyone working for
+  // the business opens one -- only from an entry they can see, which is
+  // where the path is) and is listed on the entry as `files` [{id, name,
+  // path, type, size, by, at}] -- the entry as a whole, every date of a
+  // repeat. No address is kept: a download address works for anyone who
+  // has it, so it is asked for each time the entry is opened.
+  const FILE_MAX = 25 * 1024 * 1024;
+  const fileSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const isImage = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|gif|webp|heic)$/i.test(f.name || '');
+  function filesHtml(base, mayChange) {
+    const files = Array.isArray(base.files) ? base.files : [];
+    if (!files.length && !mayChange) return '';
+    return '<div class="cal-files">' +
+      files.map(f => '<div class="cal-file">' +
+        (isImage(f) ? '<a class="cal-file-pic" data-path="' + esc(f.path) + '" target="_blank" rel="noopener"><img alt="" data-path="' + esc(f.path) + '"></a>' : '') +
+        '<a class="cal-file-a" data-path="' + esc(f.path) + '" target="_blank" rel="noopener">📎 ' + esc(f.name || 'File') + '</a>' +
+        '<small>' + esc(fileSize(+f.size || 0)) + '</small>' +
+        (mayChange ? '<button type="button" class="cal-file-x" onclick="calFileRemove(\'' + safeKey(f.id) + '\')" aria-label="Remove ' + esc(f.name || 'the file') + '">✕</button>' : '') +
+      '</div>').join('') +
+      (mayChange ? '<label class="btn btn-sm cal-file-add">📎 Attach a file' +
+        '<input type="file" multiple hidden onchange="calFilesPicked(this)"></label>' : '') +
+    '</div>';
+  }
+  // The links are filled in once Storage says where each file is.
+  function fillFileLinks() {
+    if (!window.YDStore) return;
+    document.querySelectorAll('.cal-files [data-path]').forEach(n => {
+      window.YDStore.url(n.dataset.path).then(u => {
+        if (n.tagName === 'IMG') n.src = u; else n.href = u;
+      }).catch(() => {
+        if (n.tagName === 'A' && n.classList.contains('cal-file-a')) { n.classList.add('missing'); n.title = 'This file could not be found'; }
+      });
+    });
+  }
+  window.calFilesPicked = async function (input) {
+    const o = shown, picked = Array.from((input && input.files) || []);
+    if (input) input.value = '';
+    const cal = o && cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
+    if (!base || !picked.length || !editsCal(cal)) return;
+    if (!window.YDStore) { showToast('Files are still loading — try again in a moment'); return; }
+    if (navigator.onLine === false) { showToast('Attaching a file needs signal'); return; }
+    const added = [];
+    for (let i = 0; i < picked.length; i++) {
+      const f = picked[i];
+      if (f.size > FILE_MAX) { showToast(f.name + ' is over 25 MB — not attached'); continue; }
+      const id = newId('cf');
+      const name = String(f.name || 'file').replace(/[\\/#?\[\]*]+/g, '-').slice(-90);
+      const path = 'calendarFiles/' + o.calId + '/' + base.id + '/' + id + '-' + name.replace(/\s+/g, '-');
+      const what = picked.length > 1 ? ' (' + (i + 1) + ' of ' + picked.length + ')' : '';
+      try {
+        await window.YDStore.upload(path, f, f.type || 'application/octet-stream',
+          p => showToast('Attaching ' + name + what + ' — ' + Math.round(p * 100) + '%'));
+        added.push({ id: id, name: name, path: path, type: f.type || '', size: f.size, by: (me() || {}).uid || null, at: nowIso() });
+      } catch (e) {
+        showToast(name + ' was not attached' + (e && e.code === 'storage/unauthorized' ? ' — not allowed' : ' — try again'));
+      }
+    }
+    if (!added.length) return;
+    // The list as it is now, so a file another device added meanwhile stays.
+    const now = (events[o.calId] || {})[o.id];
+    if (!now) return;
+    const files = (Array.isArray(now.files) ? now.files : []).concat(added);
+    applyLocal(o.calId, o.id, { files: files });
+    write('calendars/' + o.calId + '/events', o.id, { files: files }, 'attaching');
+    showToast(added.length === 1 ? 'Attached' : added.length + ' files attached');
+    if (shown && shown.id === o.id) openOcc(shown);
+  };
+  window.calFileRemove = function (fid) {
+    const o = shown;
+    const cal = o && cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
+    if (!base || !editsCal(cal)) return;
+    const f = (base.files || []).find(x => x.id === fid);
+    if (!f || !confirm('Remove ' + (f.name || 'this file') + ' from the entry? It is deleted for good.')) return;
+    const files = (base.files || []).filter(x => x.id !== fid);
+    applyLocal(o.calId, o.id, { files: files });
+    write('calendars/' + o.calId + '/events', o.id, { files: files }, 'removing a file');
+    if (window.YDStore) window.YDStore.remove(f.path).catch(e => console.warn('[calendar] file not removed from storage:', e && (e.code || e.message)));
+    openOcc(o);
+  };
+  // An entry deleted for good takes its files with it.
+  function dropFiles(base) {
+    (Array.isArray(base && base.files) ? base.files : []).forEach(f => {
+      if (window.YDStore && f && f.path) window.YDStore.remove(f.path).catch(() => {});
+    });
+  }
+
   function openOcc(o) {
     const cal = cals[o.calId];
     const base = cal && (events[o.calId] || {})[o.id];
@@ -1308,6 +1443,7 @@
         (doneLine ? '<div class="cal-detail-line">' + esc(doneLine) + '</div>' : '') +
         (lateLine ? '<div class="cal-detail-line cal-late">' + esc(lateLine) + '</div>' : '') +
         (ev.notes ? '<div class="bd-notes">' + esc(ev.notes) + '</div>' : '') +
+        filesHtml(base, editsCal(cal)) +
       '</div>' +
       '<div class="field-actions">' +
         // A task is ticked off for this date (an appointment needs none).
@@ -1318,6 +1454,7 @@
         (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
         '<button class="btn btn-sm" onclick="closeCalModal()">Close</button>' +
       '</div>');
+    fillFileLinks();
   }
   const safeKey = s => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
 
@@ -1745,9 +1882,11 @@
       }, true);
       return;
     }
-    if (!confirm('Delete "' + (base.title || 'this') + '"' + (isRepeating(base) ? ' and every repeat of it' : '') + '?')) return;
+    if (!confirm('Delete "' + (base.title || 'this') + '"' + (isRepeating(base) ? ' and every repeat of it' : '') +
+        ((base.files || []).length ? ' and its ' + base.files.length + ' attached file' + (base.files.length === 1 ? '' : 's') : '') + '?')) return;
     delete events[ed.calId][ed.eventId];
     removeEvent(ed.calId, ed.eventId);
+    dropFiles(base);
     closeCalModal(); render();
   };
 
@@ -1948,6 +2087,7 @@
     }
     delete events[calId][base.id];
     removeEvent(calId, base.id);
+    dropFiles(base);
   }
 
   // ------------------------------------------------------------------ drag
