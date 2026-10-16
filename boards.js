@@ -969,7 +969,7 @@
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openCardDetail(\'' + board.id + '\', \'' + k.id + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
-        '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+        '<span class="bd-label" style="' + labelStyle(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
         esc(k.title || 'Untitled') + '</div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
@@ -1012,6 +1012,17 @@
   // plain hex colour is refused rather than trusted.
   function safeColor(c) {
     return /^#[0-9a-fA-F]{3,8}$/.test(String(c || '')) ? c : '#6b7a8f';
+  }
+  // A label's words on its own colour: white on a dark one, near-black on a
+  // light one. White on the amber "Soon" label measured 2.2:1 -- unreadable
+  // in sun (16 Oct 2026). Any colour can be picked, so it is worked out.
+  function labelStyle(c) {
+    const hex = safeColor(c).slice(1);
+    const full = hex.length < 6 ? hex.slice(0, 3).split('').map(x => x + x).join('') : hex.slice(0, 6);
+    const ch = i => { const v = parseInt(full.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const lum = 0.2126 * ch(0) + 0.7152 * ch(2) + 0.0722 * ch(4);
+    // The colour where white and near-black read equally well.
+    return '--c:' + safeColor(c) + ';color:' + (lum > 0.2 ? '#241a2c' : '#fff');
   }
 
   // A card can be colour-coded: a band of colour across its top, the way
@@ -1383,7 +1394,7 @@
       (editsBoard(board) ? '<div class="bd-detail-top">' +
         '<button class="btn btn-filled bd-edit-big" onclick="editCard()">✏️ Edit this card</button>' + crewBtn + '</div>' : '') +
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
-        '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+        '<span class="bd-label" style="' + labelStyle(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
         (type ? '<span>' + type.icon + ' ' + esc(type.name) + '</span>' : '') +
@@ -2081,7 +2092,7 @@
     if (ll) ll.innerHTML = draftLabels.length ? draftLabels.map((l, i) =>
       '<div class="bd-edit-label">' +
         '<div class="bd-edit-row">' +
-          '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name || 'Label') + '</span>' +
+          '<span class="bd-label" style="' + labelStyle(l.color) + '">' + esc(l.name || 'Label') + '</span>' +
           '<input class="bdLabelName" value="' + esc(l.name) + '" placeholder="Label name" ' +
             'oninput="this.previousElementSibling.textContent = this.value || \'Label\'" aria-label="Label name">' +
           '<button class="bd-edit-btn del" onclick="bdLabelRemove(' + i + ')" aria-label="Delete label">✕</button>' +
@@ -2560,6 +2571,8 @@
 
   window.YDBoards = {
     doneCol: doneColOf,
+    // A coloured chip's style with readable words on it (home.js too).
+    labelStyle: labelStyle,
     render: render,
     // One board's columns drawn on another tab -- the Maintenance board on
     // the Equipment tab (equipment.js): the same cards, drag and card window
