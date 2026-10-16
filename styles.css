@@ -4334,6 +4334,14 @@
   .cal-file-a { flex:1 1 160px; min-width:0; overflow-wrap:anywhere; font-weight:600; color:var(--brand-ink); text-decoration:none; }
   .cal-file-a:not([href]) { color:var(--muted); }
   .cal-file-a.missing { color:var(--muted); text-decoration:line-through; }
+  /* How a file stands, in words on its row (calendar.js fileState): no
+     hover on an iPad to read a title by. An inline-block, so the strike
+     through a file that is gone does not run through the words too. */
+  .cal-file-state { display:inline-block; width:100%; font-size:12px; font-weight:600; color:var(--muted); text-decoration:none; }
+  .cal-file-state:empty { display:none; }
+  .cal-file[data-state="offline"] .cal-file-state, .cal-file[data-state="failed"] .cal-file-state,
+  .cal-file[data-state="refused"] .cal-file-state, .cal-file[data-state="gone"] .cal-file-state { color:var(--st-now); }
+  .cal-file[data-state="offline"] .cal-file-a, .cal-file[data-state="failed"] .cal-file-a { cursor:pointer; }
   .cal-file small { color:var(--muted); font-size:12px; }
   .cal-file-pic { flex:none; }
   .cal-file-pic img { display:block; width:56px; height:56px; object-fit:cover; border-radius:8px; background:var(--surface-2); }

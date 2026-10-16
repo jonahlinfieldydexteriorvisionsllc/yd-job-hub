@@ -1372,9 +1372,13 @@
     const files = Array.isArray(base.files) ? base.files : [];
     if (!files.length && !mayChange) return '';
     return '<div class="cal-files">' +
-      files.map(f => '<div class="cal-file">' +
-        (isImage(f) ? '<a class="cal-file-pic" data-path="' + esc(f.path) + '" target="_blank" rel="noopener"><img alt="" data-path="' + esc(f.path) + '"></a>' : '') +
-        '<a class="cal-file-a" data-path="' + esc(f.path) + '" target="_blank" rel="noopener">📎 ' + esc(f.name || 'File') + '</a>' +
+      files.map(f => '<div class="cal-file" data-state="">' +
+        (isImage(f) ? '<a class="cal-file-pic" data-path="' + esc(f.path) + '" target="_blank" rel="noopener" onclick="calFileTap(event, this)">' +
+          '<img alt="" data-path="' + esc(f.path) + '"></a>' : '') +
+        '<a class="cal-file-a" data-path="' + esc(f.path) + '" target="_blank" rel="noopener" onclick="calFileTap(event, this)">📎 ' + esc(f.name || 'File') +
+          // How it is going, in words on the row: there is no hover on an
+          // iPad or a phone to read a title by.
+          '<span class="cal-file-state" aria-live="polite"></span></a>' +
         '<small>' + esc(fileSize(+f.size || 0)) + '</small>' +
         (mayChange ? '<button type="button" class="cal-file-x" onclick="calFileRemove(\'' + safeKey(f.id) + '\')" aria-label="Remove ' + esc(f.name || 'the file') + '">✕</button>' : '') +
       '</div>').join('') +
@@ -1382,17 +1386,90 @@
         '<input type="file" multiple hidden onchange="calFilesPicked(this)"></label>' : '') +
     '</div>';
   }
-  // The links are filled in once Storage says where each file is.
+  // The links are filled in once Storage says where each file is. Crew
+  // testing, 16 Oct 2026: with no signal a file was marked "could not be
+  // found" only in a title shown on hover -- an iPad has no hover -- and a
+  // tap on it did nothing. Now each row says in words how it stands
+  // (fileState), and a tap on one that has no address yet asks again
+  // (calFileTap); the rows still waiting are asked again too when the
+  // signal comes back.
   function fillFileLinks() {
-    if (!window.YDStore) return;
-    document.querySelectorAll('.cal-files [data-path]').forEach(n => {
-      window.YDStore.url(n.dataset.path).then(u => {
-        if (n.tagName === 'IMG') n.src = u; else n.href = u;
-      }).catch(() => {
-        if (n.tagName === 'A' && n.classList.contains('cal-file-a')) { n.classList.add('missing'); n.title = 'This file could not be found'; }
-      });
+    document.querySelectorAll('.cal-files .cal-file').forEach(row => {
+      const a = row.querySelector('.cal-file-a');
+      if (a && !a.getAttribute('href')) fileLink(row);
     });
   }
+  const FILE_SAY = {
+    asking: 'Getting it…',
+    offline: 'Can’t open with no signal — tap to try again',
+    gone: 'Not found — it may have been taken off',
+    refused: 'Not allowed to open it',
+    failed: 'Couldn’t open it — tap to try again',
+  };
+  function fileState(row, state) {
+    row.dataset.state = state || '';
+    const a = row.querySelector('.cal-file-a'), say = row.querySelector('.cal-file-state');
+    if (a) a.classList.toggle('missing', state === 'gone');
+    if (say) say.textContent = state ? FILE_SAY[state] || '' : '';
+  }
+  // Asks Storage for the row's address. Resolves with it, or '' when it
+  // could not be had (the row then says why). A phone with bars but no data
+  // gets no answer at all for a couple of minutes (Storage keeps trying), so
+  // after FILE_WAIT_MS the row says "no signal" -- and is filled in all the
+  // same if the answer comes after all.
+  const FILE_WAIT_MS = 10000;
+  function fileLink(row) {
+    if (row.dataset.state === 'asking' && row._asking) return row._asking;
+    const a = row.querySelector('.cal-file-a');
+    if (!a) return Promise.resolve('');
+    if (!window.YDStore || navigator.onLine === false) { fileState(row, 'offline'); return Promise.resolve(''); }
+    fileState(row, 'asking');
+    const ask = window.YDStore.url(a.dataset.path).then(u => {
+      row.querySelectorAll('[data-path]').forEach(n => { if (n.tagName === 'IMG') n.src = u; else n.href = u; });
+      fileState(row, '');
+      return u;
+    }, e => {
+      const code = (e && e.code) || '';
+      // No code at all: the Storage code itself could not be fetched.
+      fileState(row, code === 'storage/object-not-found' ? 'gone' : code === 'storage/unauthorized' ? 'refused'
+        : navigator.onLine === false || code === 'storage/retry-limit-exceeded' || !code ? 'offline' : 'failed');
+      return '';
+    });
+    const waited = new Promise(res => setTimeout(() => res(null), FILE_WAIT_MS));
+    const out = Promise.race([ask, waited]).then(u => {
+      if (u !== null) return u;
+      if (row.dataset.state === 'asking') fileState(row, 'offline');
+      return '';
+    });
+    row._asking = out;
+    out.then(() => { if (row._asking === out) row._asking = null; });
+    return out;
+  }
+  // A tap on a file: one with its address opens as any link does. One
+  // without (no signal when the entry was opened, or still being asked)
+  // asks again, and opens once it has it.
+  window.calFileTap = function (e, link) {
+    if (link.getAttribute('href')) return;
+    e.preventDefault();
+    const row = link.closest('.cal-file');
+    if (!row) return;
+    fileLink(row).then(u => {
+      if (!u) return;
+      // Opened straight away while the tap still counts as one (most
+      // browsers allow a new tab for a few seconds after it); where the
+      // browser says no, the row is ready for the next tap.
+      const w = window.open(u, '_blank');
+      if (w) { try { w.opener = null; } catch (err) { /* another site's window */ } }
+      else showToast('Ready — tap the file again to open it');
+    });
+  };
+  // The signal back with an entry open: its files that could not be had
+  // are asked for again.
+  window.addEventListener('online', () => {
+    document.querySelectorAll('.cal-files .cal-file').forEach(row => {
+      if (row.dataset.state === 'offline' || row.dataset.state === 'failed') fileLink(row);
+    });
+  });
   window.calFilesPicked = async function (input) {
     const o = shown, picked = Array.from((input && input.files) || []);
     if (input) input.value = '';
