@@ -1717,6 +1717,23 @@
   window.YDEquipment = {
     all: () => gear,
     countsMiles: countsMiles,
+    // services.js, "Your other lists": the types with how many machines are
+    // each (his own ones only -- Machine and Vehicle stay), and every machine
+    // of one type moved to another. A type of his exists only while a machine
+    // carries it, so moving them all is what merging or renaming it means.
+    types: () => typeList().map(k => ({ id: k, name: kindName(k), builtIn: !!KINDS[k],
+      count: Object.values(gear).filter(g => String(g.kind || '').trim().toLowerCase() === String(k).toLowerCase()).length })),
+    retype: (was, to) => {
+      if (!ydCan('equipment', 'change') || !was || !to || was === to) return 0;
+      let n = 0;
+      Object.values(gear).forEach(g => {
+        if (String(g.kind || '').trim().toLowerCase() !== String(was).toLowerCase()) return;
+        g.kind = to;
+        write(g.id, { kind: to }, 'changing its type');
+        n++;
+      });
+      return n;
+    },
     // A recurring task confirmed done (recurring.js): in the history as a
     // task, with the miles if given -- it does not move the next service.
     logTask: (id, what, miles, by) => {

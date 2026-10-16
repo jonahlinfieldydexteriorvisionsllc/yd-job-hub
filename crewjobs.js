@@ -428,7 +428,11 @@
           (long ? '<button class="link-btn cj-before-more" onclick="cjBeforeAll()">Show all</button>' : '') +
         '</div>' : '') +
       clockHtml(id, preview) +
-      ((j.services || []).length ? '<div class="cj-tags">' + j.services.map(s => '<span class="svc-tag">' + esc(s) + '</span>').join('') + '</div>' : '') +
+      // Each service a button: what it is, in words to tell the homeowner
+      // (services.js What we do).
+      ((j.services || []).length ? '<div class="cj-tags">' + j.services.map(s => '<button type="button" class="svc-tag svc-tag-btn" data-n="' + esc(s) +
+          '" onclick="openWhatWeDo(this.dataset.n)">' + esc(s) + ' ⓘ</button>').join('') +
+        '<div class="hint cj-tags-hint">Tap a service for how to describe it to the homeowner.</div></div>' : '') +
       sec('👷 Who is working', days.length ? days.slice(0, 12).map(x => '<div class="cj-day"><b>' +
           esc(new Date(x.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) + '</b>' +
           (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') + (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : '') + '</div>').join('') : '') +

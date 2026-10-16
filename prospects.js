@@ -342,6 +342,7 @@
       if (!v || !v.trim()) return;
       v = v.trim();
     }
+    if (window.YDServices) v = window.YDServices.canon(v);    // an old spelling is the name it became
     if (window.rememberService) rememberService(v);
     if (tags.indexOf(v) === -1) tags.push(v);
     sel.value = '';

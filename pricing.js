@@ -1536,6 +1536,19 @@
     showToast('“' + id + '” added — pick it on items in Supplies');
     renderRules();
   };
+  // One of his kinds moved onto another (renamed, or merged into one that is
+  // already there -- services.js "Your other lists"): every item of it moves,
+  // and its markup and waste go with it unless the kind it joins has its own.
+  // A built-in kind keeps its own rule. Returns how many items moved.
+  function mergeKind(was, to) {
+    if (!owner() || !was || !to || was === to || CATEGORY_NAME[was]) return 0;
+    const n = window.YDSupplies && window.YDSupplies.renameKind ? window.YDSupplies.renameKind(was, to) : 0;
+    const cats = Object.assign({}, rules.categories);
+    if (!CATEGORY_NAME[to]) cats[to] = rules.categories[to] || rules.categories[was] || null;
+    cats[was] = null;                  // null, not left out: the server merges the map
+    save({ categories: cats });
+    return n;
+  }
   // His own kind renamed everywhere: on every item that is that kind, and its
   // markup and waste moved across.
   window.prKindRename = async function (was) {
@@ -1546,11 +1559,7 @@
     let to = kindFor(typed);
     if (to === was && String(typed).trim() !== was) to = String(typed).replace(/\s+/g, ' ').trim().slice(0, 40);
     if (!to || to === was) return;
-    const n = window.YDSupplies && window.YDSupplies.renameKind ? window.YDSupplies.renameKind(was, to) : 0;
-    const cats = Object.assign({}, rules.categories);
-    cats[to] = rules.categories[to] || rules.categories[was] || null;
-    cats[was] = null;                  // null, not left out: the server merges the map
-    save({ categories: cats });
+    const n = mergeKind(was, to);
     showToast('Renamed — ' + n + ' item' + (n === 1 ? '' : 's') + ' moved to “' + kindName(to) + '”');
     renderRules();
   };
@@ -1602,6 +1611,8 @@
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
     endItems: which => endItems(rules, which), qbProduct, loadQbProducts,
+    // services.js, "Your other lists".
+    customKinds: () => customKinds(), mergeKind: mergeKind,
   };
 
   let authKey = null;

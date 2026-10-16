@@ -604,6 +604,7 @@
       c = customers[id];
       if (!c) return;
     }
+    if (window.YDServices) v = window.YDServices.canon(v);    // an old spelling is the name it became
     if (window.rememberService) rememberService(v);
     const tags = (c.tags || []).slice();
     if (tags.indexOf(v) === -1) tags.push(v);

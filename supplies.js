@@ -661,7 +661,7 @@
     let to = tagFor(typed);
     if (to === was && cleanTag(typed) !== was) to = cleanTag(typed);   // only the capitals changed
     if (!to || to === was) return;
-    const n = retag(Object.values(items).filter(it => usesOf(it).indexOf(was) !== -1), tags => tags.map(x => (x === was ? to : x)));
+    const n = retag(Object.values(items).filter(it => usesOf(it).indexOf(was) !== -1), tags => tags.map(x => (key(x) === key(was) ? to : x)));
     use = to;
     showToast(n + ' item' + (n === 1 ? '' : 's') + ' moved to “' + tagInfo(to).name + '”');
     renderResults();
@@ -2042,6 +2042,21 @@
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
     websiteUrl: websiteUrl,       // app.js, Materials to Order
     renameKind: renameKind,       // pricing.js, Pricing rules
+    // services.js, "Your other lists": his own tags with how many items carry
+    // each, and one tag moved onto another (or taken off every item: to '').
+    tagList: () => customTags().map(t => ({ name: t,
+      count: Object.values(items).filter(it => usesOf(it).indexOf(t) !== -1).length })),
+    tagTargets: () => USES.map(u => ({ id: u.id, name: u.name })).concat(customTags().map(t => ({ id: t, name: t }))),
+    tagFor: t => tagFor(t),
+    moveTag: (was, to) => {
+      if (!edits() || !was || was === to) return 0;
+      const n = retag(Object.values(items).filter(it => usesOf(it).indexOf(was) !== -1),
+        // By key: once the first item is retagged, another item's "winter Stuff"
+        // is no longer spelt like the first one's "Winter stuff".
+        tags => (to ? tags.map(x => (key(x) === key(was) ? to : x)) : tags.filter(x => key(x) !== key(was))));
+      redrawIfVisible();
+      return n;
+    },
   };
 
   let authKey = null;

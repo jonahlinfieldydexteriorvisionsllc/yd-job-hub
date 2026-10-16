@@ -187,6 +187,9 @@ service cloud.firestore {
         // The services typed in by hand and kept for reuse (app.js
         // rememberService): whoever fills in jobs or contacts.
         || (docId == 'services' && (canSee('jobs') || canSee('contacts')))
+        // The one services list (services.js): everyone who works here reads
+        // it -- the crew's "What we do" page says how to describe each one.
+        || (docId == 'serviceList' && isStaff())
         // Whether the customer list from QuickBooks is switched on
         // (customers.js): whoever sees Contacts. Only the owner switches it.
         || (docId == 'customers' && canSee('contacts'));
@@ -198,6 +201,14 @@ service cloud.firestore {
         || (docId == 'services' && (canChange('jobs') || canChange('contacts'))
             && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
                  .hasOnly(['custom', 'updatedAt']))
+        // An admin who fills in jobs or contacts may ADD a service to the one
+        // list (one typed on a job), never change, hide or merge one: those
+        // are the owner's words for the crew to say. Only to a list that is
+        // already there (the owner's device makes it).
+        || (docId == 'serviceList' && (canChange('jobs') || canChange('contacts')) && resource != null
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['services', 'updatedAt'])
+            && request.resource.data.services.diff(resource.data.services).changedKeys().size() == 0
+            && request.resource.data.services.diff(resource.data.services).removedKeys().size() == 0)
         // The board list the crew read to find Crew-tagged cards on boards
         // they are not on (names and columns only): kept up by whoever may
         // change boards.

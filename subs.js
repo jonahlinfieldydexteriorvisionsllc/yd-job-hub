@@ -609,12 +609,17 @@
     '</div>';
   }
 
-  // The services to pick from: the usual ones, then any typed in on any
-  // property, so a one-off name only has to be typed once.
+  // The services to pick from: the one services list (services.js) -- the
+  // same list as jobs and contacts -- then any typed in on any property, so a
+  // one-off name only has to be typed once. Until that list has been read,
+  // the usual ones here.
   function serviceChoices(p) {
-    const seen = SERVICES.slice();
+    const shared = window.YDServices && window.YDServices.names();
+    const seen = shared && shared.length ? shared.slice() : SERVICES.slice();
+    // (A name on the list but hidden, or an old spelling, is not offered again.)
+    const offered = n => !shared || !shared.length || !window.YDServices.known(n);
     Object.values(data.subs || {}).forEach(s => propsOf(s).forEach(x => (x.services || []).forEach(n => {
-      if (n && seen.indexOf(n) === -1) seen.push(n);
+      if (n && seen.indexOf(n) === -1 && offered(n)) seen.push(n);
     })));
     (p.services || []).forEach(n => { if (n && seen.indexOf(n) === -1) seen.push(n); });
     return seen;
@@ -821,8 +826,10 @@
   // (what is typed elsewhere in it stays).
   window.subSvcAdd = function () {
     const box = el('spSvcNew'), wrap = el('spSvcs');
-    const name = box ? box.value.trim().slice(0, 40) : '';
+    let name = box ? box.value.trim().slice(0, 40) : '';
     if (!name || !wrap) return;
+    // An old spelling of one on the list is that one (services.js).
+    if (window.YDServices) { name = window.YDServices.canon(name); window.YDServices.remember(name); }
     const have = Array.from(wrap.querySelectorAll('.spSvc')).find(i => i.value.toLowerCase() === name.toLowerCase());
     if (have) have.checked = true;
     else wrap.insertAdjacentHTML('beforeend', svcPill(name, true));
@@ -907,7 +914,9 @@
   // list: the subcontractors set up here, for Receipts' Subcontractor picker
   // (empty for anyone but the owner, who alone reads them).
   window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r), subOf: r => subOf(r),
-    list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })), forJob: forJob };
+    list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })), forJob: forJob,
+    // The usual ones, for the first fill of the one services list (services.js).
+    services: () => SERVICES.slice() };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

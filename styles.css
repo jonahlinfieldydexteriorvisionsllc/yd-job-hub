@@ -4332,3 +4332,48 @@
      -- the hardest text in the app to read in daylight. The usual muted
      grey (4.6:1) instead. */
   .empty-msg, .tag-none { color:var(--muted); }
+
+  /* ---- The one services list (services.js): the owner's screen and the
+     crew's "What we do". Folds per kind of work; every choice a button that
+     wraps onto the next line (no sideways rows on a phone). */
+  .svc-modal { max-width:760px; }
+  .svc-stats { display:flex; flex-wrap:wrap; gap:8px; margin:8px 0; font-size:13px; }
+  .svc-warn { color:var(--st-due-ink, var(--neg)); background:var(--st-due-soft, var(--neg-soft)); border-radius:12px; padding:2px 9px; font-weight:600; }
+  .svc-warn-sm { font-size:11px; margin-left:8px; }
+  .svc-ok { color:var(--pos); font-weight:600; }
+  .svc-acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .svc-acts .btn { min-height:36px; }
+  .svc-arrow { min-width:40px; }
+  .svc-search { width:100%; margin:10px 0 6px; }
+  .svc-group { border:1px solid var(--border); border-radius:8px; margin:8px 0; background:var(--surface); }
+  .svc-group > summary { cursor:pointer; padding:12px 14px; font-weight:700; display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-height:44px; }
+  .svc-group-name { flex:0 1 auto; }
+  .svc-count { font-size:11px; font-weight:700; color:var(--muted); background:var(--surface-2); border-radius:10px; padding:1px 8px; }
+  .svc-group-body { padding:0 12px 12px; }
+  .svc-card, .svc-read { border-top:1px solid var(--border); padding:10px 2px; }
+  .svc-card:first-child, .svc-read:first-child { border-top:none; }
+  .svc-card-h { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 10px; }
+  .svc-name { font-weight:700; font-size:15px; }
+  .svc-used { font-size:12px; }
+  .svc-summary { margin-top:4px; font-size:14px; }
+  .svc-read .svc-summary { font-weight:600; }
+  .svc-details { margin-top:4px; font-size:13px; white-space:pre-wrap; line-height:1.5; color:var(--text); }
+  .svc-card .svc-details { color:var(--muted); max-height:7.5em; overflow:hidden; }
+  .svc-alias { font-size:12px; margin-top:3px; }
+  .svc-none { font-size:13px; margin-top:4px; }
+  .svc-hidden { opacity:.65; }
+  .svc-focus { background:var(--st-info-soft, var(--surface-2)); border-radius:6px; padding-left:8px; padding-right:8px; }
+  .svc-editing { background:var(--surface-2); border-radius:8px; padding:10px; margin:6px 0; }
+  .svc-editing textarea { width:100%; min-height:110px; }
+  .svc-editing input, .svc-editing select { width:100%; }
+  .svc-qbtext { font-size:12px; margin:6px 0; white-space:pre-wrap; }
+  .svc-grow { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; border-top:1px solid var(--border); padding:8px 0; }
+  .svc-grow input { flex:1 1 180px; min-width:0; }
+  .svc-h3 { margin:18px 0 4px; font-size:16px; }
+  .svc-tag-btn { border:none; cursor:pointer; font-family:inherit; min-height:32px; }
+  .cj-tags-hint { flex-basis:100%; margin-top:2px; }
+  @media (max-width:720px) {
+    .svc-acts .btn { min-height:44px; flex:1 1 auto; }
+    .svc-arrow { flex:0 0 52px !important; }
+    .svc-tag-btn { min-height:40px; font-size:13px; }
+  }
