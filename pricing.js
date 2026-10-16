@@ -820,11 +820,116 @@
 
   // Not awaited: a write only settles when the server answers.
   function save(patch) {
+    const was = rules;
     rules = merged(Object.assign({}, rules, patch));
+    logRules(was, rules, patch);
     track(window.YDDb.put('pricing', 'rules', patch)).catch(e => {
       showToast(e && e.code === 'permission-denied' ? 'Only the owner changes the pricing rules' : 'Not saved yet — will retry');
     });
     changed();
+  }
+
+  // ------------------------------------------------- who changed what
+  //
+  // Every rule a save changed goes into the change history (changelog.js),
+  // one line per setting, in the words this screen uses. Worked out by
+  // comparing the rules before and after, so a new box on this screen is
+  // recorded without anyone remembering to.
+  //   path -> [what it is, how to show it, kind]
+  //   how: money | pct | num | list (of numbers) | moneyList | item | text | onOff
+  const RULE_WORDS = {
+    taxPct: ['Sales tax we pay on materials', 'pct', 'tax'],
+    customerTaxPct: ['Sales tax charged to customers', 'pct', 'tax'],
+    crewDayCents: ['Crew-day rate (crew cost)', 'money', 'labor'],
+    crewDayHours: ['Paid hours in a crew-day', 'num', 'labor'],
+    profitChoices: ['Profit per crew-day — the amounts', 'moneyList', 'labor'],
+    defaultProfitCents: ['Profit per crew-day — the usual one', 'money', 'labor'],
+    'profitCents.floor': ['Profit per crew-day — floor', 'money', 'labor'],
+    'profitCents.aim': ['Profit per crew-day — aim', 'money', 'labor'],
+    'profitCents.great': ['Profit per crew-day — great', 'money', 'labor'],
+    defaultProfit: ['Profit per crew-day — usual tier', 'text', 'labor'],
+    'delivery.palletCents': ['Pallet charge', 'money', 'delivery'],
+    'delivery.loadTons': ['Tons in a delivery load', 'num', 'delivery'],
+    'delivery.markupPct': ['Delivery markup', 'pct', 'delivery'],
+    'fuel.mpg': ['Truck miles per gallon', 'list', 'fuel'],
+    'fuel.bobcatGalPerDay': ['Loader gallons a day', 'num', 'fuel'],
+    'fuel.markupPct': ['Fuel markup', 'pct', 'fuel'],
+    'dumpster.supplyId': ['Dumpster item', 'item', 'dumpster'],
+    'dumpster.maxCuYd': ['Dumpster holds (cu yd)', 'num', 'dumpster'],
+    'markers.supplyId': ['Marker item', 'item', 'markers'],
+    'markers.count': ['Markers per job', 'num', 'markers'],
+    'planting.perPlant': ['Planting package — per plant', 'items', 'planting'],
+    'planting.perSingleTree': ['Planting package — per single-stem tree', 'items', 'planting'],
+    'planting.perMultiTree': ['Planting package — per multi-stem tree', 'items', 'planting'],
+    'payments.splitAboveCents': ['Three payments above', 'money', 'payments'],
+    'payments.twoText': ['Two-payment wording', 'text', 'payments'],
+    'payments.threeText': ['Three-payment wording', 'text', 'payments'],
+    'payments.warranty': ['Warranty wording', 'text', 'payments'],
+    'payments.minDepositPct': ['Smallest deposit', 'pct', 'payments'],
+    'payments.depositCoversMaterials': ['Deposit covers materials', 'onOff', 'payments'],
+    'estimateEnd.items': ['End lines — homes', 'textList', 'terms'],
+    'estimateEnd.businessItems': ['End lines — businesses', 'textList', 'terms'],
+    'shop.address': ['Shop address', 'text', 'other'],
+    autoDraft: ['Claude starts estimates by itself', 'onOff', 'other'],
+    autoCare: ['Plant-care email on Complete', 'onOff', 'other'],
+  };
+  const CAT_WORDS = { markupPct: ['Markup', 'pct'], wastePct: ['Waste', 'pct'], noTax: ['No tax on it', 'onOff'],
+                      customerTax: ['Tax to the customer', 'text'] };
+  const VENDOR_WORDS = { processingPct: ['Processing charge', 'pct'], cityDelivery: ['Delivers in the city', 'onOff'] };
+  function ruleText(v, how) {
+    const C = window.YDChangeLog;
+    const money = c => (C ? C.money(c) : String(c));
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return how === 'onOff' ? 'Off (usual)' : 'not set';
+    if (how === 'money') return typeof v === 'number' ? money(v) : String(v);
+    if (how === 'pct') return v + '%';
+    if (how === 'onOff') return v ? 'On' : 'Off';
+    if (how === 'moneyList') return [].concat(v).map(money).join(', ');
+    if (how === 'item' || how === 'items') {
+      const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog().items : {};
+      return [].concat(v).map(id => (cat[id] && cat[id].name) || id).join(', ');
+    }
+    if (Array.isArray(v)) return v.join(', ');
+    if (typeof v === 'object') return JSON.stringify(v);
+    return String(v);
+  }
+  // { 'delivery.rates.Madison': 5800, ... } -- arrays are one value each.
+  function leaves(v, path, out) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      Object.keys(v).forEach(k => leaves(v[k], path ? path + '.' + k : k, out));
+    } else out[path] = v;
+    return out;
+  }
+  function ruleLine(path, a, b) {
+    const parts = path.split('.');
+    let what, field, how, kind;
+    if (parts[0] === 'categories' && parts.length >= 3) {
+      const w = CAT_WORDS[parts[2]] || [parts[2], 'num'];
+      what = 'Material kind — ' + kindName(parts[1]); field = w[0]; how = w[1]; kind = parts[1];
+    } else if (parts[0] === 'vendors' && parts.length >= 3) {
+      const vs = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog().vendors : {};
+      const w = VENDOR_WORDS[parts[2]] || [parts[2], 'num'];
+      what = 'Supplier — ' + ((vs[parts[1]] && vs[parts[1]].name) || parts[1]); field = w[0]; how = w[1]; kind = 'supplier';
+    } else if (parts[0] === 'delivery' && parts[1] === 'rates' && parts.length >= 3) {
+      what = 'Delivery — ' + parts.slice(2).join('.'); field = 'Rate per load'; how = 'money'; kind = 'delivery';
+    } else {
+      const w = RULE_WORDS[path] || RULE_WORDS[parts[0]] || [path.replace(/\./g, ' — '), 'text', 'other'];
+      what = 'Pricing rules'; field = w[0]; how = w[1]; kind = w[2];
+    }
+    return { area: 'rule', access: 'jobs', kind: kind, what: what, field: field,
+             before: ruleText(a, how), after: ruleText(b, how), ref: { path: 'pricing', id: 'rules' } };
+  }
+  function logRules(was, now, patch) {
+    if (!window.YDChangeLog || !ready) return;   // before the rules arrive there is no "before"
+    const lines = [];
+    Object.keys(patch || {}).forEach(k => {
+      const a = leaves(was[k], k, {}), b = leaves(now[k], k, {});
+      Object.keys(Object.assign({}, a, b)).forEach(p => {
+        const x = a[p] == null || a[p] === '' ? null : a[p], y = b[p] == null || b[p] === '' ? null : b[p];
+        if (JSON.stringify(x) === JSON.stringify(y)) return;
+        lines.push(ruleLine(p, x, y));
+      });
+    });
+    if (lines.length) window.YDChangeLog.add(lines.slice(0, 60));
   }
 
   // "Saved ✓ 3:42 pm" at the top of the screen after each change -- every
@@ -1323,7 +1428,15 @@
 
   window.prClaude = function (v) {
     if (!owner()) return;
+    const was = claudeText;
     claudeText = String(v || '');
+    // The text is too long to keep twice: the history says it changed, and
+    // how long it was and is.
+    if (was !== null && was !== claudeText && window.YDChangeLog) {
+      const size = t => (t ? t.length.toLocaleString('en-US') + ' characters' : 'empty');
+      window.YDChangeLog.add({ area: 'rule', access: 'jobs', kind: 'claude', what: 'Claude’s takeoff rules',
+                               field: 'Text', before: size(was), after: size(claudeText), ref: { path: 'pricing', id: 'claude' } });
+    }
     track(window.YDDb.put('pricing', 'claude', { text: claudeText, updatedAt: new Date().toISOString() })).catch(e => {
       showToast(e && e.code === 'permission-denied' ? 'Only the owner changes the pricing rules' : 'Not saved yet — will retry');
     });

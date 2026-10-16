@@ -2982,6 +2982,13 @@
         .catch(e => console.warn('[clock] name not saved:', e.code || e.message));
     }
     if (canRate) {
+      // Into the change history (changelog.js) -- pay is the owner's to read.
+      const was = rateOf(workerUid);
+      if (was !== cents && window.YDChangeLog) {
+        window.YDChangeLog.add({ area: 'price', access: 'owner', kind: 'pay', what: 'Pay — ' + (name || whoIs(workerUid)),
+                                 field: 'Hourly rate', before: money(was) + '/hr', after: money(cents) + '/hr',
+                                 ref: { path: 'payRates', id: workerUid } });
+      }
       rates[workerUid] = cents;
       const uid = workerUid;
       if (!newRulesLive && isOwner()) {

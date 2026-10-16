@@ -492,7 +492,7 @@
     if (!confirm('Update the price list from this ' + (r.vendor || '') + ' receipt?\n\n' + lines.join('\n') +
         '\n\nEstimates are priced from these.')) return;
     let failed = 0;
-    ch.forEach(c => window.YDSupplies.setPrice(c.id, c.to, c.year).catch(e => {
+    ch.forEach(c => window.YDSupplies.setPrice(c.id, c.to, c.year, 'Receipt').catch(e => {
       if (!failed++) showToast(e && e.code === 'permission-denied' ? 'Price list not changed — not allowed' : 'Price list change not on the server yet');
     }));
     showToast(ch.length + ' price' + (ch.length === 1 ? '' : 's') + ' updated');

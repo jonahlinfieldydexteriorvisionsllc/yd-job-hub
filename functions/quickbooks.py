@@ -1191,6 +1191,43 @@ def _stage_patch(j, inv_rec, stamp):
     return {"workStage": want, "workStageAt": stamp}
 
 
+# The Jobs board's columns, as the app names them (boards.js).
+STAGE_WORDS = {"scheduled": "Scheduled", "inProgress": "In progress", "punchList": "Punch list",
+               "toInvoice": "Ready to invoice", "invoiced": "Invoiced", "paid": "Paid"}
+
+
+def _log_stage(job_id, job, stage):
+    """A job QuickBooks moved on (its invoice made, or paid off) goes into the
+    change history (changelog.js) the way a move made by hand does, by
+    'QuickBooks'. Never stops the move itself: a fault here is only printed."""
+    if not stage or not stage.get("workStage"):
+        return
+    try:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        try:
+            from zoneinfo import ZoneInfo
+            local = now.astimezone(ZoneInfo("America/Chicago"))
+        except Exception:                               # noqa: BLE001 -- no time zone data: UTC is near enough
+            local = now
+        ms = int(now.timestamp() * 1000)
+        job = job or {}
+        had = job.get("workStage")
+        num = _number(job.get("estimateNumber"))
+        name = str(job.get("customerName") or "A job") + (" #" + num if num else "")
+        rec = {
+            "at": _stamp(), "atMs": ms,
+            # The month as the app counts it -- Madison's, not UTC's.
+            "month": local.strftime("%Y-%m"),
+            "uid": "", "by": "QuickBooks", "area": "stage", "kind": "work", "access": "jobs",
+            "what": name[:300], "field": "Job stage",
+            "before": STAGE_WORDS.get(had, had or "—"), "after": STAGE_WORDS.get(stage["workStage"], stage["workStage"]),
+            "ref": {"path": "jobs", "id": job_id}, "refId": job_id, "via": "QuickBooks",
+        }
+        _db().collection("changeLog").document("cl%x%s" % (ms, secrets.token_hex(3))).set(rec)
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks: stage move not put in the change history:", err)
+
+
 def _invoice_record(inv):
     env = _env("QB_ENV", "sandbox")
     return {
@@ -1340,6 +1377,7 @@ def invoice_from_estimate(body):
     stage = _stage_patch(job, out, stamp)
     ref.set(dict({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"}, "lastModified": stamp}, **stage),
             merge=["qbInvoiceRef", "qbEstimate.status", "lastModified"] + sorted(stage))
+    _log_stage(job_id, job, stage)
     return out
 
 
@@ -1482,8 +1520,10 @@ def _sweep():
             # Paid off: a finished job moves to Paid on the Jobs board (and
             # one still in Ready to invoice to Invoiced) -- _stage_patch.
             stamp = _stamp()
-            patch = dict({"qbInvoiceRef": rec, "lastModified": stamp}, **_stage_patch(jobs[job_id], rec, stamp))
+            stage = _stage_patch(jobs[job_id], rec, stamp)
+            patch = dict({"qbInvoiceRef": rec, "lastModified": stamp}, **stage)
             db.collection("jobs").document(job_id).set(patch, merge=True)
+            _log_stage(job_id, jobs[job_id], stage)
             # A balance that went UP (the invoice was changed) is no payment.
             if paid > 0:
                 news.append({"jobId": job_id, "kind": "payment", "name": str(jobs[job_id].get("customerName") or "a customer"),

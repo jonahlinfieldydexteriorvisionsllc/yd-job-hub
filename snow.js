@@ -803,6 +803,7 @@
       ['snowAccounts', id, pub],
       ['snowAccounts/' + id + '/private', PRICING_DOC, priv],
     ])).catch(e => console.warn('[snow] account not yet on the server:', e.code || e.message));
+    logRates(name, id, existing ? pricing[id] : null, priv, !existing);
     pricing[id] = priv;
     accounts[id] = pub;
     render();
@@ -812,6 +813,35 @@
     btn.disabled = false;
     btn.textContent = 'Save account';
   };
+
+  // Who changed what (changelog.js): each of an account's prices this save
+  // changed, one line apiece. An account whose old prices this device never
+  // read says nothing rather than guess what they were.
+  function snowPrices(p) {
+    const C = window.YDChangeLog;
+    const pr = (p && p.pricing) || {};
+    const tiers = pr.tiers || {};
+    const tier = k => {
+      const t = tiers[k];
+      if (!t) return 'not set';
+      return t.mode === 'inherit' || typeof t.cents !== 'number' ? 'same as the tier below' : C.money(t.cents);
+    };
+    const out = { 'Visit 1–3"': tier('1-3'), 'Visit 4–6"': tier('4-6'), 'Visit 6"+': tier('6+'), 'Visit 9"+': tier('9+') };
+    out['Each inch above'] = pr.perInch && typeof pr.perInch.cents === 'number'
+      ? C.money(pr.perInch.cents) + ' over ' + (pr.perInch.aboveInches || 0) + '"' : 'off';
+    out['Salt'] = pr.salt && pr.salt.included ? C.money(pr.salt.portionCents || 0) : 'off';
+    out['Labor rate per hour'] = typeof (p && p.laborRateCents) === 'number' ? C.money(p.laborRateCents) : 'not set';
+    return out;
+  }
+  function logRates(name, id, was, now, isNew) {
+    const C = window.YDChangeLog;
+    if (!C || (!was && !isNew)) return;
+    const a = was ? snowPrices(was) : {}, b = snowPrices(now);
+    const lines = Object.keys(b).filter(k => a[k] !== b[k] && !(isNew && /^(not set|off|same as the tier below)$/.test(b[k])))
+      .map(k => ({ area: 'price', access: 'snow', kind: 'snow', what: 'Snow — ' + name, field: k,
+                   before: isNew ? 'new account' : a[k], after: b[k], ref: { path: 'snowAccounts', id: id } }));
+    if (lines.length) C.add(lines);
+  }
 
   // A snow season runs through the winter, so it is named for both years:
   // from July on it is this year's, before July last year's.

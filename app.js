@@ -2595,6 +2595,13 @@ function persistJob(announce) {
   }
   storageBroken = false;
   storageWarned = false;
+  // A status or stage changed on the form: into the change history
+  // (changelog.js). A brand-new job has no "before" and is not a move.
+  if (before !== null && window.YDChangeLog) {
+    let was = null;
+    try { was = JSON.parse(before); } catch (e) {}
+    if (was) window.YDChangeLog.jobMoved(currentJobId, was, data);
+  }
   // If this job also existed under the legacy raw key, drop it now that it's
   // saved under the new scheme (natural, one-at-a-time migration).
   if (STORAGE_PREFIX + currentJobId !== currentJobId && localStorage.getItem(currentJobId) !== null) {
