@@ -484,13 +484,13 @@
     });
     return out;
   }
-  function offerPrices(r, idxs) {
+  async function offerPrices(r, idxs) {
     const ch = priceChanges(r, idxs);
     if (!ch.length) return;
     const lines = ch.map(c => '• ' + c.name + ': ' + (c.from === null ? 'no price' : money(c.from)) + ' → ' + money(c.to) +
       (c.per ? ' a ' + c.per : '') + (c.unsure ? ' (the receipt doesn’t say per what — check)' : ''));
-    if (!confirm('Update the price list from this ' + (r.vendor || '') + ' receipt?\n\n' + lines.join('\n') +
-        '\n\nEstimates are priced from these.')) return;
+    if (!(await ydConfirm(lines.join('\n') + '\n\nEstimates are priced from these.',
+        { title: 'Update the price list from this ' + (r.vendor || '') + ' receipt?', ok: 'Update the prices', cancel: 'Leave them' }))) return;
     let failed = 0;
     ch.forEach(c => window.YDSupplies.setPrice(c.id, c.to, c.year, 'Receipt').catch(e => {
       if (!failed++) showToast(e && e.code === 'permission-denied' ? 'Price list not changed — not allowed' : 'Price list change not on the server yet');
@@ -498,13 +498,17 @@
     showToast(ch.length + ' price' + (ch.length === 1 ? '' : 's') + ' updated');
   }
 
-  window.rcUndo = function (rid, sid) {
+  window.rcUndo = async function (rid, sid) {
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
-    const r = receipts[rid];
-    const s = r && (r.splits || []).find(x => x.id === sid);
+    let r = receipts[rid];
+    let s = r && (r.splits || []).find(x => x.id === sid);
     if (!s) return;
     const onJob = destOf(s) === 'job';
-    if (!confirm('Take these lines back off ' + (onJob ? s.jobName : s.name || DEST_NAME[destOf(s)]) + '?')) return;
+    if (!(await ydConfirm('', { title: 'Take these lines back off ' + (onJob ? s.jobName : s.name || DEST_NAME[destOf(s)]) + '?', ok: 'Take them off' }))) return;
+    // The receipt as it is now -- it may have changed while the question was open.
+    r = receipts[rid];
+    s = r && (r.splits || []).find(x => x.id === sid);
+    if (!s) return;
     // A job deleted since has nothing left to take back; nothing else was
     // ever written anywhere but the receipt.
     if (onJob && readJobBlob(s.jobId)) {
@@ -552,27 +556,29 @@
   // books need (a subcontractor's bill is never set aside now; an old one is
   // a place, above).
   const deletableAside = r => isAside(r) && !heldHere(r);
-  window.rcDelete = function (rid) {
+  window.rcDelete = async function (rid) {
     const r = receipts[rid];
     if (!r || !owner()) return;
     const books = heldHere(r)
       ? '\n\nIt holds what went to ' + heldNames(r).join(', ') +
         ' — that is kept nowhere else, so it comes out of those totals.'
       : '';
-    if (!confirm('Delete this ' + (r.vendor || '') + ' receipt from the hub?' +
-      ((r.splits || []).some(s => destOf(s) === 'job') ? ' Lines already added to jobs stay on the jobs.' : '') + books)) return;
+    if (!(await ydConfirm('The email stays in Gmail.' +
+      ((r.splits || []).some(s => destOf(s) === 'job') ? ' Lines already added to jobs stay on the jobs.' : '') + books,
+      { title: 'Delete this ' + (r.vendor || '') + ' receipt from the hub?', ok: 'Delete', danger: true }))) return;
+    if (!receipts[rid]) return;
     drop([rid]);
     showToast('Deleted');
   };
-  window.rcDeleteAside = function () {
+  window.rcDeleteAside = async function () {
     const ids = Object.keys(receipts).filter(id => deletableAside(receipts[id]));
     if (!ids.length || !owner()) return;
-    if (!confirm('Delete all ' + ids.length + ' set-aside receipts from the hub?')) return;
+    if (!(await ydConfirm('Their emails stay in Gmail.', { title: 'Delete all ' + ids.length + ' set-aside receipts from the hub?', ok: 'Delete them', danger: true }))) return;
     drop(ids);
     showToast(ids.length + ' deleted');
   };
 
-  window.rcSkip = function (rid, why) {
+  window.rcSkip = async function (rid, why) {
     if (!why || !receipts[rid]) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); redraw(true); return; }
     // Personal purchases have no business in the hub at all (Jonah, 5 Oct).
@@ -597,7 +603,7 @@
         return;
       }
       if (owner()) {
-        if (!confirm('Personal — delete this ' + (r.vendor || '') + ' receipt from the hub?')) return;
+        if (!(await ydConfirm('Personal purchases are not kept in the hub.', { title: 'Delete this ' + (r.vendor || '') + ' receipt?', ok: 'Delete', danger: true }))) return;
         drop([rid]); showToast('Personal — deleted from the hub'); return;
       }
     }
@@ -616,10 +622,14 @@
   }
   // "Set aside" picked on a receipt: the whole of what is left of it, with
   // the note for why. Asked for, not required.
-  function setAside(rid, r) {
+  async function setAside(rid, r) {
     const box = el('rcWhy_' + rid);
     const why = cleanWhy(asideWhy[rid] != null ? asideWhy[rid] : (box ? box.value : ''));
-    if (!why && !confirm('Set it aside without a note for why?')) { if (box) box.focus(); return; }
+    if (!why && !(await ydConfirm('A few words now save wondering later.', { title: 'Set it aside without a note for why?', ok: 'Set it aside', cancel: 'Add a note' }))) {
+      const b = el('rcWhy_' + rid); if (b) b.focus(); return;
+    }
+    if (!receipts[rid]) return;
+    r = receipts[rid];
     receipts[rid] = Object.assign({}, r, { status: 'skipped', skipWhy: why });
     delete asideWhy[rid]; delete dest[rid]; delete ticked[rid]; delete splitting[rid];
     write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
@@ -627,13 +637,15 @@
     redraw(true);
   }
   // Changing the note on one already set aside.
-  window.rcAsideWhy = function (rid) {
-    const r = receipts[rid];
+  window.rcAsideWhy = async function (rid) {
+    let r = receipts[rid];
     if (!r || !isAside(r)) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
     const was = r.skippedBy === 'claude' ? '' : (WHY[r.skipWhy] || r.skipWhy || '');
-    const got = prompt('Why is it set aside?', was);
+    const got = await ydPrompt('', was, { title: 'Why is it set aside?', ok: 'Save' });
     if (got === null) return;
+    r = receipts[rid];
+    if (!r) return;
     const why = cleanWhy(got);
     // One Claude set aside as personal says so instead of a note; once a
     // person writes why, the note is what shows.
@@ -965,13 +977,16 @@
       (to ? ' at <b>' + esc(to) + '</b>' : ' — <b>no address set</b>, so they stay here') +
       ' <button class="link-btn" onclick="rcQbAddress()">' + (to ? 'Change' : 'Set it') + '</button></div>';
   }
-  window.rcQbAddress = function () {
+  window.rcQbAddress = async function () {
     if (!(window.YDAuth && window.YDAuth.isOwner)) return;
     const was = (state && state.qbForwardTo) || '';
-    const typed = prompt('The email address QuickBooks takes receipts at (blank: don\'t send them):', was);
+    const isAddress = v => /^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v);
+    const typed = await ydPrompt('Leave it blank and photo receipts are not sent to QuickBooks.', was, {
+      title: 'QuickBooks receipts address', type: 'email', ok: 'Save',
+      check: v => !v.trim() || isAddress(v.trim()) ? '' : 'That is not an email address' });
     if (typed === null) return;
     const to = typed.trim();
-    if (to && !/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(to)) { showToast('That is not an email address'); return; }
+    if (to && !isAddress(to)) return;
     state = Object.assign({}, state || {}, { qbForwardTo: to || null });
     Promise.resolve(window.YDDb.put('settings', 'receipts', { qbForwardTo: to || null }))
       .catch(e => console.warn('[receipts] address not yet on the server:', e && (e.code || e.message)));
@@ -1709,10 +1724,10 @@
   window.rcSendAgain = function () { sendQueued(true); };
   // Only the ones the server turned down: a photo still waiting for signal
   // is never thrown away by this.
-  window.rcThrowAway = function () {
+  window.rcThrowAway = async function () {
     const failed = mineWaiting().filter(it => it.state === 'failed');
-    if (!failed.length || !confirm(failed.length === 1 ? 'Throw this receipt photo away? It was not read.'
-        : 'Throw these ' + failed.length + ' receipt photos away? They were not read.')) return;
+    if (!failed.length || !(await ydConfirm(failed.length === 1 ? 'It was not read.' : 'They were not read.',
+        { title: failed.length === 1 ? 'Throw this receipt photo away?' : 'Throw these ' + failed.length + ' receipt photos away?', ok: 'Throw away', danger: true }))) return;
     failed.forEach(it => { delete rq[it.id]; rqDrop(it.id); });
     drawSendBar();
   };

@@ -633,27 +633,29 @@
     }
     return writes.length;
   }
-  const bigAsk = n => n <= 50 || confirm('That changes ' + n + ' items. Go ahead?');
-  window.supTagAll = function () {
+  const bigAsk = async n => n <= 50 || ydConfirm('That changes ' + n + ' items at once.', { title: 'Go ahead?', ok: 'Change them' });
+  window.supTagAll = async function () {
     if (!edits() || !bulkList.length) return;
-    const t = tagFor(prompt('Tag all ' + bulkList.length + ' with… (e.g. Snow removal, Drainage)') || '');
-    if (!t || !bigAsk(bulkList.length)) return;
-    const n = retag(bulkList, tags => tags.concat(t));
+    const list = bulkList.slice();
+    const t = tagFor(await ydPrompt('', '', { title: 'Tag all ' + list.length + ' with…', placeholder: 'e.g. Snow removal, Drainage', ok: 'Tag them' }) || '');
+    if (!t || !(await bigAsk(list.length))) return;
+    const n = retag(list, tags => tags.concat(t));
     showToast(n ? n + ' tagged “' + tagInfo(t).name + '”' : 'They already have that tag');
     renderResults();
   };
-  window.supUntagAll = function () {
-    if (!edits() || !use || !bulkList.length || !bigAsk(bulkList.length)) return;
-    const t = use;
+  window.supUntagAll = async function () {
+    if (!edits() || !use || !bulkList.length) return;
+    const t = use, list = bulkList.slice();
+    if (!(await bigAsk(list.length))) return;
     // An item left with no tag at all goes under Everything else rather than
     // springing back to the ones its kind gives.
-    const n = retag(bulkList, tags => { const left = tags.filter(x => x !== t); return left.length ? left : ['other']; });
+    const n = retag(list, tags => { const left = tags.filter(x => x !== t); return left.length ? left : ['other']; });
     showToast(n + ' untagged');
     renderResults();
   };
-  window.supRenameTag = function () {
+  window.supRenameTag = async function () {
     if (!edits() || !use || !tagInfo(use).custom) return;
-    const was = use, typed = prompt('Rename “' + was + '” to…', was) || '';
+    const was = use, typed = await ydPrompt('', was, { title: 'Rename “' + tagInfo(was).name + '”', ok: 'Rename', required: true }) || '';
     let to = tagFor(typed);
     if (to === was && cleanTag(typed) !== was) to = cleanTag(typed);   // only the capitals changed
     if (!to || to === was) return;
@@ -1000,11 +1002,12 @@
 
   // Picking Rentals (or Dumpsters) as the kind shows the half-day and week
   // rates, and a blank "Per" becomes "day".
-  window.supCatPicked = function (cat) {
+  window.supCatPicked = async function (cat) {
     const sel = el('siCat');
     if (cat === '__new' && sel) {
       // Typed in: one already on the list is just picked; a new one is added.
-      cat = categoryId(prompt('The new kind of material (e.g. Lighting, Irrigation)') || '') || '';
+      cat = categoryId(await ydPrompt('', '', { title: 'A new kind of material', placeholder: 'e.g. Lighting, Irrigation', ok: 'Add it' }) || '') || '';
+      if (sel !== el('siCat')) return;         // the form was closed meanwhile
       if (cat && !Array.from(sel.options).some(o => o.value === cat)) {
         const o = document.createElement('option');
         o.value = cat; o.textContent = cat;
@@ -1161,17 +1164,20 @@
     return same(ticked, usesFromKind(val('siCat'), name, val('siAlso'))) ? null : ticked;
   }
 
-  window.supRemove = function (kind, id) {
+  window.supRemove = async function (kind, id) {
     if (kind === 'vendor') {
       const v = vendors[id];
       const using = Object.values(items).filter(it => it.vendorId === id).length;
-      if (!v || !confirm('Delete ' + v.name + '?' + (using ? '\n\n' + using + ' item(s) will show “No supplier set” until you pick another.' : ''))) return;
+      if (!v || !(await ydConfirm(using ? using + ' item(s) will show “No supplier set” until you pick another.' : '',
+        { title: 'Delete ' + v.name + '?', ok: 'Delete', danger: true }))) return;
+      if (!vendors[id]) return;
       delete vendors[id];
       if (shown === id) shown = '';
       remove([['vendors', id]]);
     } else {
       const it = items[id];
-      if (!it || !confirm('Delete ' + it.name + '?')) return;
+      if (!it || !(await ydConfirm('Its price goes with it.', { title: 'Delete ' + it.name + '?', ok: 'Delete', danger: true }))) return;
+      if (!items[id]) return;
       delete items[id];
       delete prices[id];
       // The item and its price go together, or a price would be left behind
