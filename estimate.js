@@ -164,6 +164,18 @@
     // A job brought in from QuickBooks: its materials joined to Supplies
     // (app.js fillFromQb).
     linkFromQb: saved => linkFromQb(saved),
+    // The server filled the open job from QuickBooks while it had unsaved
+    // typing (sync.js): the lines taken in, what was typed kept -- or the
+    // next save put the empty estimate back over them (Oct 2026). Only into
+    // an estimate with no lines: one with lines is his.
+    takeQb(saved) {
+      if (!saved || !saved.fromQb || hasLines() || !((saved.work || []).length || (saved.materials || []).length)) return false;
+      const got = fromSaved(saved);
+      est.work = got.work; est.materials = got.materials; est.fromQb = got.fromQb;
+      if (!est.memo) est.memo = got.memo;
+      render();
+      return true;
+    },
   };
 
   // What the estimate cost us, as it stood when it went to QuickBooks: kept
@@ -319,7 +331,7 @@
     const fold = folded();
     wrap.dataset.folded = fold ? '1' : '';
     if (fold) {
-      wrap.innerHTML = '<div class="est-qb est-folded" id="estQb"></div>';
+      wrap.innerHTML = '<div class="est-qb est-folded" id="estQb"></div>' + workWordsHtml();
       renderQb();
       return;
     }
@@ -501,6 +513,28 @@
         '<button class="btn btn-sm ro-ok" onclick="estUnfold(true)" aria-expanded="false">' + (changes() ? 'Show / edit ▾' : 'Show ▾') + '</button></span></div>';
   }
 
+  // What the work is, line by line, in the words on the estimate the
+  // customer said yes to -- QuickBooks' own, for one made there. Jonah, 16
+  // Oct 2026: "when i say service descriptions i mean whats actually written
+  // on the qwuickbooks estimate" -- the folded estimate showed only its
+  // number and total, the words a tap away. Shown under it, in full.
+  function workWordsHtml() {
+    const lines = est.work.filter(w => String(w.scope || '').trim() || String(w.title || '').trim());
+    if (!lines.length) return '';
+    const q = est.fromQb;
+    const from = q ? 'as written on QuickBooks ' + (q.kind === 'invoice' ? 'invoice' : 'estimate') +
+      (q.docNumber ? ' #' + esc(q.docNumber) : '') : 'as written on the estimate';
+    return '<div class="est-words"><h4 class="est-h">🛠 The work <span class="muted">— ' + from + '</span></h4>' +
+      lines.map(w => '<div class="est-words-line"><b>' + esc(w.title || 'Work') + '</b>' +
+        (String(w.scope || '').trim() ? '<div class="est-words-text">' + esc(String(w.scope).trim()) + '</div>' : '') +
+        (String(w.crewNote || '').trim() ? '<div class="est-words-crew">👷 For the crew: ' + esc(String(w.crewNote).trim()) + '</div>' : '') +
+      '</div>').join('') + '</div>';
+  }
+  // A line brought in from QuickBooks (quickbooks.py _hub_estimate gives it
+  // an id ewqb…): its words are QuickBooks', put back every hour by the
+  // server (keep_qb_words), so they are shown, not edited, here.
+  const fromQbLine = w => !!(est.fromQb && /^ewqb/.test(String(w.id || '')));
+
   // An estimate made in QuickBooks (quickbooks.py brought it in with the
   // job): where it came from, that its figures are the customer's, and the
   // way to price it by his own rules instead -- or back.
@@ -666,8 +700,12 @@
       '<div class="est-nums">' + nums + '<div class="est-amt" id="estWA_' + id + '"></div></div>' +
       extra +
       '<div class="est-wprofit" id="estWF_' + id + '"></div>' +
-      '<textarea rows="3" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
-        ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>' +
+      (fromQbLine(w)
+        ? '<div class="est-scope-qb"><span class="muted">As written on the QuickBooks ' + (est.fromQb.kind === 'invoice' ? 'invoice' : 'estimate') +
+            ' — change it there; anything more for the crew goes in “Notes for the crew”.</span>' +
+            '<div class="est-words-text">' + (String(w.scope || '').trim() ? esc(String(w.scope).trim()) : '<span class="muted">No description on this line in QuickBooks.</span>') + '</div></div>'
+        : '<textarea rows="3" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
+            ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>') +
       crewNoteHtml(w, id, ro) +
       '<div class="est-meta">' + crewNoteAddHtml(w, id, ro) +
         taxPickHtml('work', id, w.taxable, ro) +

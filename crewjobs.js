@@ -180,9 +180,11 @@
       notes: noMoney(crewNotes(d.notes)).slice(0, 4000),
       // Each piece of work: its scope, Jonah's notes for the crew (never on
       // the estimate), and -- a service sold by the unit -- how much of it.
+      // The scope whole, as the customer was sent it (a QuickBooks line holds
+      // up to 4,000 characters; cut at 3,000, the end of a long one was lost).
       work: lines.map((w, i) => ({
         id: safe(w.id) || 'w' + i,
-        title: noMoney(w.title).slice(0, 200), scope: noMoney(w.scope).slice(0, 3000),
+        title: noMoney(w.title).slice(0, 200), scope: noMoney(w.scope).slice(0, 6000),
         crewNote: noMoney(w.crewNote).slice(0, 3000),
         days: numOr(w.crewDays),
         qty: w.kind === 'flat' ? numOr(w.qty) : null,

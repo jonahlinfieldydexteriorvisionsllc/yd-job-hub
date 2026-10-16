@@ -341,8 +341,10 @@ def _quickbooks(request, path, headers):
             jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
             with qb._holding_tokens():
                 news = qb.sync_invoices(jobs)
-                # And jobs tied to a QuickBooks estimate or invoice filled from it now.
+                # And jobs tied to a QuickBooks estimate or invoice filled from it now,
+                # each line in QuickBooks' words.
                 filled = qb.fill_imported(jobs)
+                qb.keep_qb_words(jobs)
             _tell_owner(news)
             result = {"ok": True, "filled": filled}
         elif path == "/qb/customer-save":

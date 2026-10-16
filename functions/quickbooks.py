@@ -1611,6 +1611,14 @@ def _sweep():
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: jobs not filled from QuickBooks:", err)
     try:
+        worded = keep_qb_words(jobs)
+        if worded:
+            print("quickbooks sweep: %d job(s) given QuickBooks' words again" % worded)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: QuickBooks' words not checked:", err)
+    try:
         invoiced = copy_invoices(jobs)
         if invoiced:
             print("quickbooks sweep: %d job(s) given the invoice made from an earlier copy" % invoiced)
@@ -2574,6 +2582,26 @@ def copy_invoices(jobs):
 
 
 FILL_MAX = 25               # jobs filled in one sweep
+# What a job's estimate already holds that a fill from QuickBooks keeps:
+# the site-visit notes, a conversation, what was sent.
+EST_KEEP = ("notes", "chat", "questions", "flags", "sent", "site", "payments", "customerType")
+
+
+def _job_estimate(have, doc, end_names, stamp, invoice_id=None):
+    """A QuickBooks estimate -- or invoice (invoice_id) -- as a job's estimate
+    (_hub_estimate), keeping what the job's estimate already had besides its
+    lines (EST_KEEP). Every fill goes through here, and so does a refill
+    (keep_qb_words), so they cannot differ."""
+    est, words = _hub_estimate(doc, end_names, stamp)
+    for k in EST_KEEP:
+        if have.get(k):
+            est[k] = have[k]
+    if invoice_id:
+        # Where it came from: the invoice, not an estimate.
+        est["fromQb"] = {"invoiceId": invoice_id, "docNumber": str(doc.get("DocNumber") or ""), "kind": "invoice",
+                         "materialsCents": est["fromQb"]["materialsCents"], "taxCents": est["fromQb"]["taxCents"],
+                         "totalCents": _cents(doc.get("TotalAmt")), "at": stamp}
+    return est, words
 
 
 def _fill_from_invoices(db, want_inv, docs, end_names):
@@ -2591,14 +2619,7 @@ def _fill_from_invoices(db, want_inv, docs, end_names):
         patch = {"qbFilled": dict(j.get("qbFilled") or {}, invoiceId=iid, at=stamp), "lastModified": stamp}
         have = j.get("estimate") or {}
         if not (have.get("work") or have.get("materials")):
-            est, words = _hub_estimate(inv, end_names, stamp)
-            for k in ("notes", "chat", "questions", "flags", "sent", "site", "payments", "customerType"):
-                if have.get(k):
-                    est[k] = have[k]
-            # Where it came from: the invoice, not an estimate.
-            est["fromQb"] = {"invoiceId": iid, "docNumber": str(inv.get("DocNumber") or ""), "kind": "invoice",
-                             "materialsCents": est["fromQb"]["materialsCents"], "taxCents": est["fromQb"]["taxCents"],
-                             "totalCents": _cents(inv.get("TotalAmt")), "at": stamp}
+            est, words = _job_estimate(have, inv, end_names, stamp, invoice_id=iid)
             patch["estimate"] = est
             # Words in the invoice that are no line of work or material go
             # under the notes he already has (never over them).
@@ -2662,12 +2683,9 @@ def fill_imported(jobs):
         patch = {"qbFilled": {"estimateId": eid, "at": stamp}, "lastModified": stamp}
         have = j.get("estimate") or {}
         if not (have.get("work") or have.get("materials")):
-            est, words = _hub_estimate(e, end_names, stamp)
             # Anything already on the job's estimate (notes from the site
             # visit, a conversation) stays.
-            for k in ("notes", "chat", "questions", "flags", "sent", "site", "payments", "customerType"):
-                if have.get(k):
-                    est[k] = have[k]
+            est, words = _job_estimate(have, e, end_names, stamp)
             patch["estimate"] = est
             if str(j.get("notes") or "") == _lines_as_notes(e):
                 patch["notes"] = _hub_notes(e, words)
@@ -2701,6 +2719,143 @@ def fill_imported(jobs):
             board = db.collection("jobBoard").document(jid)
             if board.get().exists:
                 board.set(dict(board_patch, updatedAt=stamp), merge=True)
+        db.collection("jobs").document(jid).set(patch, merge=True)
+        done += 1
+    return done
+
+
+# ----------------------------------- the work, in QuickBooks' own words
+#
+# Jonah (16 Oct 2026, after asking many times): "when i say service
+# descriptions i mean whats actually written on the qwuickbooks estimate" --
+# for the guys to read. A job made from a QuickBooks estimate (or filled from
+# its invoice) carries each line's Description as that line's scope, and the
+# crew's page shows it (crewjobs.js). Filling it once was not enough: a fill
+# is marked done (qbFilled), and a device holding the job -- open with typing
+# in it, or a copy it thought newer -- saved its own estimate over the filled
+# one, empty, and nothing ever filled it again (one job's, 15 Oct).
+# Nor did a description changed in QuickBooks after the job came in ever
+# reach it. So every hour each such job is held up against QuickBooks:
+#  - its estimate gone empty -> filled again, as the first time;
+#  - a line whose words are not QuickBooks' -> QuickBooks' words put back
+#    (the Job tab shows them read-only for that reason: Job Hub cannot change
+#    an estimate made in QuickBooks; notes for the crew go in "Notes for the
+#    crew", which this never touches).
+# A line is matched by its id (ewqb<line><estimate>), or -- an estimate sent
+# again as a copy to be e-signed has new ids -- by its QuickBooks product when
+# only one line on each side has it. Nothing else on the job is changed: not
+# a price, not a line he took off. Jobs made in Job Hub are not looked at --
+# their words went to QuickBooks from here.
+WORDS_MAX = 40              # jobs held up against QuickBooks in one sweep
+
+
+def _words_source(j, env):
+    """("Estimate"|"Invoice", id) whose words a job's lines are, or None."""
+    q, r, f = j.get("qbEstimate") or {}, j.get("qbInvoiceRef") or {}, j.get("qbFilled") or {}
+    if q.get("linked") and q.get("id") and q.get("env") == env and str(f.get("estimateId") or "") == str(q["id"]):
+        return "Estimate", str(q["id"])
+    if not q.get("linked") and r.get("id") and r.get("env") == env and str(f.get("invoiceId") or "") == str(r["id"]):
+        return "Invoice", str(r["id"])
+    return None
+
+
+def _same_words(a, b):
+    return str(a or "").strip() == str(b or "").strip()
+
+
+def _words_onto(work, qb_work):
+    """`work` (the job's lines) with QuickBooks' words on each line that is
+    one of QuickBooks' (qb_work, from _hub_estimate). Returns (lines, how many
+    changed, titles of QuickBooks lines found nowhere on the job)."""
+    work = [dict(w) for w in work or [] if isinstance(w, dict)]
+    by_id = {w.get("id"): w for w in work if w.get("id")}
+    used, pairs, missing = set(), [], []
+    for q in qb_work:
+        w = by_id.get(q["id"])
+        if w is not None:
+            used.add(id(w))
+            pairs.append((w, q))
+    for q in qb_work:
+        if any(p[1] is q for p in pairs):
+            continue
+        item = " ".join(str(q.get("qbItem") or "").lower().split())
+        here = [w for w in work if id(w) not in used and item and " ".join(str(w.get("qbItem") or "").lower().split()) == item]
+        there = [x for x in qb_work if " ".join(str(x.get("qbItem") or "").lower().split()) == item]
+        if len(here) == 1 and len(there) == 1:
+            used.add(id(here[0]))
+            pairs.append((here[0], q))
+        else:
+            missing.append(q.get("title") or "Work")
+    changed = 0
+    for w, q in pairs:
+        if not _same_words(w.get("scope"), q.get("scope")):
+            w["scope"] = q.get("scope") or ""
+            changed += 1
+        if not str(w.get("title") or "").strip() and q.get("title"):
+            w["title"] = q["title"]
+            changed += 1
+    return work, changed, missing
+
+
+def keep_qb_words(jobs):
+    """Every job made from QuickBooks (not quoting, not taken off) held up
+    against its estimate or invoice there: see above. Returns how many jobs
+    were changed."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return 0
+    want = {}
+    for jid, j in jobs.items():
+        if j.get("removeWhy") or j.get("deletedAt") or str(j.get("jobStatus") or "") == "quoting":
+            continue
+        src = _words_source(j, env)
+        if src:
+            want[jid] = src
+        if len(want) >= WORDS_MAX:
+            break
+    if not want:
+        return 0
+    db = _db()
+    docs = {s.id: (s.to_dict() or {}) for s in db.get_all([db.collection("jobs").document(jid) for jid in want]) if s.exists}
+    qb_docs = {}
+    for kind in ("Estimate", "Invoice"):
+        ids = {i for k, i in want.values() if k == kind}
+        if ids:
+            qb_docs.update({(kind, i): d for i, d in _by_ids(kind, ids).items()})
+    end_names = _end_names()
+    done = 0
+    for jid, (kind, qid) in want.items():
+        j, doc = docs.get(jid), qb_docs.get((kind, qid))
+        if j is None or doc is None:
+            continue                    # gone, or QuickBooks did not answer: next hour
+        # Fresh from the database: the sweep's own list may be a moment old.
+        if j.get("deletedAt") or j.get("removeWhy") or _words_source(j, env) != (kind, qid):
+            continue
+        have = j.get("estimate") or {}
+        stamp = _stamp()
+        if not (have.get("work") or have.get("materials")):
+            # Filled once, then saved over empty by a device: filled again.
+            est, _words = _job_estimate(have, doc, end_names, stamp, invoice_id=qid if kind == "Invoice" else None)
+            if not est["work"] and not est["materials"]:
+                continue
+            patch = {"estimate": est, "lastModified": stamp}
+            print("quickbooks words: %s's estimate was empty -- filled again from %s %s" % (jid, kind.lower(), qid))
+        else:
+            # Only an estimate that came from QuickBooks is QuickBooks' words;
+            # one he built here (and then joined to an estimate) is his.
+            if not have.get("fromQb"):
+                continue
+            qb_est, _words = _hub_estimate(doc, end_names, stamp)
+            work, changed, missing = _words_onto(have.get("work"), qb_est["work"])
+            if missing:
+                print("quickbooks words: %s: QuickBooks %s %s has lines not on the job: %s"
+                      % (jid, kind.lower(), qid, "; ".join(missing)[:300]))
+            if not changed:
+                continue
+            # The estimate as it is, only the lines' words changed.
+            est = dict(have, work=work)
+            patch = {"estimate": est, "lastModified": stamp}
+            print("quickbooks words: %s: %d line(s) given QuickBooks' words" % (jid, changed))
         db.collection("jobs").document(jid).set(patch, merge=True)
         done += 1
     return done

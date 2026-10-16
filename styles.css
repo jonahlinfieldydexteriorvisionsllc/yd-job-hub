@@ -4045,6 +4045,17 @@
      figures are the customer's (estimate.js fromQbHtml). */
   .est-fromqb { margin:0 0 12px; padding:9px 12px; border-radius:8px; border-left:4px solid var(--st-info);
     background:var(--st-info-soft); font-size:13.5px; line-height:1.45; }
+  /* The work in the words on the estimate, in full (estimate.js
+     workWordsHtml under the folded estimate; a QuickBooks line's words). */
+  .est-words { margin-top:12px; }
+  .est-words .est-h { margin-top:4px; }
+  .est-words-line { padding:8px 0; border-bottom:1px solid var(--border); }
+  .est-words-line:last-child { border-bottom:none; }
+  .est-words-text { margin-top:4px; font-size:14.5px; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.45; }
+  .est-words-crew { margin-top:6px; padding:6px 10px; border-radius:6px; background:var(--st-info-soft);
+    font-size:13.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .est-scope-qb { margin:6px 0; padding:8px 10px; border:1px solid var(--border); border-radius:8px; }
+  .est-scope-qb > .muted { display:block; font-size:12px; }
   /* What the job is, beside the customer's name, wherever the crew pick or
      see a job (app.js jobWhat). */
   .picker-what { font-weight:500; color:var(--muted); }

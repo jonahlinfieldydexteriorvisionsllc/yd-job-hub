@@ -508,6 +508,11 @@
   // -- so a stale snapshot can never wind a newer answer back.
   const EST_STEP = { Pending: 0, Accepted: 1, Rejected: 1, Closed: 2, Converted: 2 };
   const estStep = s => EST_STEP[s || 'Pending'] || 0;
+  // The estimate the server filled from QuickBooks (quickbooks.py), where
+  // this copy's has no lines at all: taken too. Kept back, it went up empty
+  // with qbFilled -- "filled" -- and the job had no work on it (Oct 2026).
+  const estHasLines = e => !!(e && ((e.work || []).length || (e.materials || []).length));
+  const qbFilledEstimate = (local, theirs) => !!(theirs.estimate && theirs.estimate.fromQb && estHasLines(theirs.estimate) && !estHasLines(local.estimate));
   function takeServerFields(local, theirs) {
     let took = false;
     SERVER_FIELDS.forEach(f => {
@@ -517,6 +522,11 @@
         (f === 'qbEstimate' && s.id && s.id === l.id && estStep(s.status) > estStep(l.status));
       if (ahead) { local[f] = s; took = true; }
     });
+    if (qbFilledEstimate(local, theirs)) {
+      // What was typed on the estimate here (its site notes) stays.
+      local.estimate = Object.assign({}, theirs.estimate, local.estimate && local.estimate.notes ? { notes: local.estimate.notes } : {});
+      took = true;
+    }
     return took;
   }
 
@@ -570,6 +580,7 @@
             if (c.id === currentJobId) {
               SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
               if (tookStage) { boardFields.workStage = local.workStage; boardFields.workStageAt = local.workStageAt; }
+              if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(local.estimate);
             }
             bookIfAccepted(c.id, local);
           }
@@ -600,6 +611,9 @@
           // or the next save would put the old values back.
           if (dirty) {
             SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
+            // And the estimate the server filled from QuickBooks, into one
+            // with no lines yet (estimate.js keeps what was typed).
+            if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(c.data && c.data.estimate);
             if (typeof mergeOpenPayments === 'function') mergeOpenPayments(c.data && c.data.payments);
             // And the stage the server moved it to with its invoice, or the
             // form's next save would put the card back in Ready to invoice.
