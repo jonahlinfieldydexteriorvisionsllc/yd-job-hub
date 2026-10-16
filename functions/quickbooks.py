@@ -2453,9 +2453,15 @@ def link_hand_jobs(jobs):
     used = {str((j.get("qbEstimate") or {}).get("id")) for j in jobs.values()
             if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
     want = []
+    # Finished jobs too (Jonah, 15 Oct 2026: link the finished jobs to their
+    # QuickBooks estimates and invoices so their work comes in) -- but only
+    # by their estimate number, never by price: a guess on a long-finished
+    # job would be wrong more often than right.
+    def finished(j):
+        return str(j.get("jobStatus") or "") == "complete" and bool(re.search(r"\d{3,7}", str(j.get("estimateNumber") or "")))
     for jid, j in jobs.items():
-        if (j.get("qbEstimate") or {}).get("id") or j.get("removeWhy") \
-                or str(j.get("jobStatus") or "") not in ("booked", "inprogress", "active"):
+        if (j.get("qbEstimate") or {}).get("id") or j.get("removeWhy") or j.get("deletedAt") \
+                or not (str(j.get("jobStatus") or "") in ("booked", "inprogress", "active") or finished(j)):
             continue
         t = _parse_time(looked.get(jid))
         if (t and now - t < LOOK_AGAIN) or not _norm_name(j.get("customerName")):
@@ -2478,7 +2484,7 @@ def link_hand_jobs(jobs):
                 and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] not in held]
         nums = set(re.findall(r"\d{3,7}", str(j.get("estimateNumber") or "")))
         pick = [e for e in pool if _number(e.get("DocNumber")) in nums]
-        if len(pick) != 1:
+        if len(pick) != 1 and not finished(j):
             price = _job_price(j)
             pick = [e for e in pool if _sold(e) and price is not None and abs(_amount(e.get("TotalAmt")) - price) < 0.005]
         if len(pick) != 1:
@@ -2881,6 +2887,15 @@ def sync_invoices(jobs):
             nj = by_name.get(_norm_name((inv.get("CustomerRef") or {}).get("name")))
             link = (nj, "name") if nj else (None, None)
         rec = _inv_doc(inv, old, *link)
+        # Tied to a job by hand on the Invoices list (Jonah, 15 Oct 2026:
+        # a job typed in by hand): the invoice goes on that job too, when the job
+        # holds none, so its work lines are filled from it (fill_imported).
+        hand = rec.get("jobId") if rec.get("jobBy") == "hand" else None
+        if hand and hand in jobs and not (jobs[hand].get("qbInvoiceRef") or {}).get("id") \
+                and not jobs[hand].get("removeWhy"):
+            db.collection("jobs").document(hand).set({"qbInvoiceRef": _invoice_record(inv), "lastModified": _stamp()},
+                                                     merge=True)
+            jobs[hand]["qbInvoiceRef"] = _invoice_record(inv)
         if inv_id in want:
             got = {i: pays[i] for i in want[inv_id] if i in pays}
             # A payment QuickBooks didn't answer for: keep what was known.
