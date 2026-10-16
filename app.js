@@ -4347,7 +4347,23 @@ document.addEventListener('click', e => {
   document.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
   document.addEventListener('input', e => {
     const o = e.target && e.target.closest && e.target.closest('.modal-overlay');
-    if (o) o.dataset.typed = '1';
+    if (!o) return;
+    // A window that saves each change itself (data-autosave: Pricing rules,
+    // Notification settings) saved a tick or a pick the moment it was made.
+    // Marking it made Esc say "press Esc again to close without saving" and
+    // a tap outside say "Save, or close it with ×" in a window with nothing
+    // unsaved and no Save button (office test, 16 Oct 2026).
+    if (o.hasAttribute('data-autosave') && typeof e.target.onchange === 'function' &&
+        /^(checkbox|radio|select-one|select-multiple)$/.test(e.target.type || '')) return;
+    o.dataset.typed = '1';
+  }, true);
+  // ...and a box there that saves itself is saved as it is left (its own
+  // onchange): nothing typed is waiting any more. A box that only fills in
+  // something to add (Pricing rules' "e.g. 750" beside + Add) has no
+  // onchange, so what is typed in it still counts.
+  document.addEventListener('change', e => {
+    const o = e.target && e.target.closest && e.target.closest('.modal-overlay[data-autosave]');
+    if (o && typeof e.target.onchange === 'function') delete o.dataset.typed;
   }, true);
   // Captured on the way down, so it runs before the backdrop's own handler
   // and can stop it.
