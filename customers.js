@@ -673,6 +673,12 @@
     return '<div class="cu-sync ok">✓ Same as QuickBooks</div>';
   }
 
+  // A job's status in words, the same on a customer's page and on To sort
+  // (which showed the stored "inprogress" / "complete").
+  function jobWord(j) {
+    const bid = typeof isBidStatus === 'function' && isBidStatus(j.jobStatus);
+    return bid ? (j.bidStage === 'lost' ? 'Lost bid' : 'Bid') : ({ booked: 'Booked', inprogress: 'In progress', complete: 'Done' }[j.jobStatus] || s(j.jobStatus));
+  }
   function workHtml(c) {
     let h = '';
     const jobs = jobsOf(c.id).sort((a, b) => s(b.quoteDate || b.lastModified).localeCompare(s(a.quoteDate || a.lastModified)));
@@ -681,8 +687,7 @@
       h += '<div class="cu-sec"><div class="cu-sec-h">Jobs &amp; bids' +
         (can('jobs', 'change') ? ' <button class="btn btn-sm" onclick="custStartBid(\'' + sid(c.id) + '\')">Start a bid</button>' : '') + '</div>' +
         (jobs.length ? jobs.map(j => {
-          const bid = typeof isBidStatus === 'function' && isBidStatus(j.jobStatus);
-          const word = bid ? (j.bidStage === 'lost' ? 'Lost bid' : 'Bid') : ({ booked: 'Booked', inprogress: 'In progress', complete: 'Done' }[j.jobStatus] || s(j.jobStatus));
+          const word = jobWord(j);
           return '<div class="cu-job"><button class="link-btn" onclick="custOpenJob(\'' + sid(j._id) + '\')">' +
             (typeof jobNameHtml === 'function' ? jobNameHtml(j.customerName, j.estimateNumber) : esc(j.customerName)) + '</button> ' +
             '<span class="muted">' + esc(word) + (j.quoteDate ? ' · ' + esc(niceDay(s(j.quoteDate).slice(0, 10))) : '') + '</span>' +
@@ -1041,7 +1046,7 @@
       ['contact', 'From the old Contacts list', prospectsToSort().map(p => ({ id: p.id, who: { name: p.name, email: p.email, phone: p.phone },
         line: [p.address, p.phone, p.email, p.contactWhen].filter(Boolean).join(' · '), canLead: true }))],
       ['job', 'Jobs and bids', jobsToSort().map(j => ({ id: j._id, who: whoOfJob(j), hand: j.customerBy === 'hand',
-        line: [j.estimateNumber ? '#' + j.estimateNumber : '', j.address, typeof isBidStatus === 'function' && isBidStatus(j.jobStatus) ? 'bid' : s(j.jobStatus)].filter(Boolean).join(' · '), canLead: true }))],
+        line: [j.estimateNumber ? '#' + j.estimateNumber : '', j.address, jobWord(j)].filter(Boolean).join(' · '), canLead: true }))],
       ['snow', 'Snow accounts', snowToSort().map(a => ({ id: a.id, who: { name: a.name, email: '', phone: '' }, line: s(a.address), canLead: false }))],
     ];
     let h = '<div class="hint">Each one tied to its customer once — then nothing is matched by name again. ' +
