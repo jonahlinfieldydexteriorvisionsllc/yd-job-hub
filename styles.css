@@ -1398,6 +1398,18 @@
   .cal-filters .cal-checks .link-btn { font-size:12.5px; padding:6px 4px; }
   .cal-filters .cal-key { flex-direction:row; flex-wrap:wrap; gap:4px 14px; padding:2px 4px; }
   .cal-filters .cal-key-i { font-size:12px; color:var(--muted); }
+  /* The colour key's fold (calendar.js calKey): on an iPad or a screen under
+     ~900px tall the key sits behind this chip, so the working day fits under
+     the ticks. A phone folds the whole row behind "Calendars & colours"
+     instead (below), and shows the key whenever that is open. */
+  .cal-key-btn { display:none; }
+  @media (min-width:901px) and (max-width:1199px), (min-width:901px) and (max-height:899px) {
+    .cal-key-btn { display:inline-flex; align-items:center; gap:4px; min-height:36px; padding:4px 12px; flex:none;
+      border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:999px;
+      font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+    .cal-key-btn[aria-expanded="true"] { border-color:var(--border-strong); background:var(--surface-2); }
+    .cal-filters .cal-key:not(.open) { display:none; }
+  }
   /* The day's list down the side (calendar.js dayListHtml): its time, then
      what it is. */
   .cal-daylist { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:8px 8px 10px; }
