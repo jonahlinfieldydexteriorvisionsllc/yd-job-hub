@@ -308,9 +308,10 @@ function openAppearance() {
 // phone must not leave client names and prices sitting in it.
 async function ydSignOut() {
   if (typeof dirty !== 'undefined' && dirty
-      && !confirm('You have unsaved changes on this job.\n\nSign out anyway?')) return;
-  if (!confirm('Sign out of YD Job Hub?\n\nYour jobs stay safe in the cloud. '
-             + 'This device will need to sign in again.')) return;
+      && !(await ydConfirm('You have unsaved changes on this job.\n\nSign out anyway?',
+        { title: 'Unsaved changes', ok: 'Sign out anyway', cancel: 'Stay', danger: true }))) return;
+  if (!(await ydConfirm('Your jobs stay safe in the cloud. This device will need to sign in again.',
+        { title: 'Sign out of YD Job Hub?', ok: 'Sign out' }))) return;
 
   closeHeaderMenu();
   // The full sign-out can stop to ask about changes that have not reached
@@ -749,11 +750,16 @@ function updateCtxBar() {
 // ═══════════════════════════════════════════════════════════
 // SERVICE TYPES
 // ═══════════════════════════════════════════════════════════
-function addServiceType() {
+async function addServiceType() {
   const sel = document.getElementById('serviceTypeSelect');
   let val = sel.value;
   if (!val) return;
-  if (val === '__custom') { val = prompt('Custom service type:'); if (!val || !val.trim()) { sel.value = ''; return; } val = val.trim(); }
+  if (val === '__custom') {
+    sel.value = '';
+    val = await ydPrompt('The service, in a word or two:', '', { title: 'Add a service', placeholder: 'e.g. Gutter cleaning', ok: 'Add' });
+    if (!val || !val.trim()) return;
+    val = val.trim();
+  }
   sel.value = '';
   rememberService(val);
   // Only a real change marks the job unsaved -- a cancelled custom type or a
@@ -1156,7 +1162,7 @@ function loadProposalFile(event) {
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       const data = JSON.parse(e.target.result);
       const est = data.estimateNumber ? String(data.estimateNumber) : '';
@@ -1165,7 +1171,8 @@ function loadProposalFile(event) {
       if (est) {
         const existing = proposals.find(p => String(p.data.estimateNumber || '') === est);
         if (existing) {
-          if (confirm('Estimate #' + est + ' is already imported.\n\nOK = replace it with this file · Cancel = keep both')) {
+          if (await ydConfirm('Estimate #' + est + ' is already imported. Replace it with this file, or keep both?',
+                { title: 'Already imported', ok: 'Replace it', cancel: 'Keep both' })) {
             proposals = proposals.filter(p => p.id !== existing.id);
             orderItems = orderItems.filter(m => m.proposalId !== existing.id);
           }
@@ -1304,15 +1311,15 @@ function showJobPrice() {
   shown.textContent = text;
   wrap.classList.toggle('formatted', isNumber && text !== raw);
 }
-function removeProposal(propId) {
-  if (!confirm('Remove this proposal? Its imported order items will also be removed.')) return;
+async function removeProposal(propId) {
+  if (!(await ydConfirm('Its imported order items are taken off too.', { title: 'Remove this proposal?', ok: 'Remove', danger: true }))) return;
   proposals = proposals.filter(p => p.id !== propId);
   orderItems = orderItems.filter(m => m.proposalId !== propId);
   syncJobPriceFromProposals(); renderProposal(); renderOrderList(); markDirty();
 }
-function editProposalLabel(propId) {
+async function editProposalLabel(propId) {
   const p = proposals.find(p => p.id === propId); if (!p) return;
-  const nl = prompt('Edit proposal label:', p.label);
+  const nl = await ydPrompt('', p.label, { title: 'Proposal label', ok: 'Save' });
   if (nl && nl.trim()) { p.label = nl.trim(); renderProposal(); markDirty(); }
 }
 function renderProposal() {
@@ -1649,8 +1656,8 @@ function copySupplierOrder(vid) {
   if (!o.lines.length) { showToast('Nothing left to order there'); return; }
   const text = 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + (o.where ? ' — job at ' + o.where : '') + '\n' + o.lines.join('\n');
   const done = () => showToast('Copied — paste it into an email or a text');
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => prompt('Copy this:', text));
-  else prompt('Copy this:', text);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => ydShowCopy(text));
+  else ydShowCopy(text);
 }
 // The order as an email to the supplier's order address (Supplies → Edit
 // supplier), opened in the phone's or computer's mail app to read and send.
@@ -1949,11 +1956,11 @@ function ordersTick(jobId, itemId) {
   flip(true);
   if (typeof showUndo === 'function') showUndo('Marked ordered', () => flip(false));
 }
-function ordersOpenJob(key) {
+async function ordersOpenJob(key) {
   const jobId = (getJobIndex().find(x => ordId(x.id) === key) || {}).id;
   if (!jobId) return;
   if (currentJobId === jobId) { switchTab('job'); return; }
-  if (dirty && !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+  if (!(await ydLeaveUnsavedJob())) return;
   loadJob(jobId);
   switchTab('job');
   const o = document.getElementById('orderListWrap');
@@ -1979,8 +1986,8 @@ function copyOrdersFor(vid) {
   if (!o.blocks.length) { showToast('Nothing left to order there'); return; }
   const text = 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + '\n\n' + o.text;
   const done = () => showToast('Copied — paste it into an email or a text');
-  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => prompt('Copy this:', text));
-  else prompt('Copy this:', text);
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => ydShowCopy(text));
+  else ydShowCopy(text);
 }
 function emailOrdersFor(vid) {
   const o = ordersTextFor(vid);
@@ -2219,14 +2226,16 @@ function addMaterial() {
   document.getElementById('matUnit').value = ''; document.getElementById('matDate').value = todayMD();
   renderMaterials(); markDirty();
 }
-function rmMaterial(id) {
+async function rmMaterial(id) {
   const at = materials.findIndex(e => e.id === id), row = materials[at];
   // A line put here from a receipt: the receipt keeps saying it went on this
   // job (receipts.js), and only its own Undo takes it back off both -- so
   // taking just the line off here is asked about first.
-  if (row && row.receiptId && !confirm('“' + (row.item || 'This line') + '” came from a receipt' +
+  if (row && row.receiptId && !(await ydConfirm('“' + (row.item || 'This line') + '” came from a receipt' +
       (row.location ? ' (' + row.location + ')' : '') + '. Taken off here, the receipt still says it went on this job — ' +
-      'to take the receipt off the job, use Undo on it under Receipts.\n\nTake just this line off?')) return;
+      'to take the receipt off the job, use Undo on it under Receipts.', { title: 'Take just this line off?', ok: 'Take it off' }))) return;
+  // The list may have changed while the question was open.
+  if (!materials.some(e => e.id === id)) return;
   materials = materials.filter(e => e.id !== id); renderMaterials(); markDirty();
   offerPutBack('“' + ((row && row.item) || 'Purchase') + '” removed', row, at, () => materials, renderMaterials);
 }
@@ -2914,12 +2923,12 @@ function patchJobAnywhere(id, patch) {
 // cloud's copy goes too (sync.js wraps this). Its photos are cleared by the
 // server's morning tidy (functions/tidy.py), which removes photos whose job
 // is gone.
-function purgeJob(id, sure) {
+async function purgeJob(id, sure) {
   const a = window.YDAuth || {};
   if (a.mode === 'cloud' && !a.isOwner) { showToast('Only the owner can delete a job for good'); return; }
   let name = 'this job';
   try { name = (JSON.parse(readJobBlob(id) || '{}').customerName || name).trim(); } catch (e) {}
-  if (!sure && !confirm('Delete ' + name + ' for good?\n\nIt cannot be brought back after this.')) return;
+  if (!sure && !(await ydConfirm('It cannot be brought back after this.', { title: 'Delete ' + name + ' for good?', ok: 'Delete for good', danger: true }))) return;
   localStorage.removeItem(STORAGE_PREFIX + id);
   localStorage.removeItem(id);   // also drop legacy-key copy if present
   saveJobIndex(getJobIndexAll().filter(j => j.id !== id));
@@ -2974,10 +2983,13 @@ function createJobRecord(fields) {
   saveJobIndex(idx); invalidateJobsCache();
   return id;
 }
-function newJob() {
-  if (dirty && !confirm('Start a new job? Unsaved changes will be lost.')) return;
+// True when a new job was started (false: the person kept the one open).
+async function newJob() {
+  if (dirty && !(await ydConfirm('Unsaved changes on the job open now will be lost.',
+      { title: 'Start a new job?', ok: 'Start a new one', cancel: 'Keep this one', danger: true }))) return false;
   clearJobForm();
   switchTab('job'); showToast('New job started');
+  return true;
 }
 // Empties the form without asking anything or moving anyone. newJob() puts
 // the unsaved-changes question in front of it; a delete does not need that
@@ -3052,12 +3064,13 @@ function removeBoxHtml() {
       ' <button class="link-btn" onclick="keepMarkedJob(\'' + String(d._id).replace(/[^A-Za-z0-9_-]/g, '') + '\')">Keep it</button></li>').join('') + '</ul>' +
     '<button class="btn btn-sm jl-remove-go" onclick="deleteMarkedJobs()">🗑 Delete these ' + list.length + '</button></div>';
 }
-function deleteMarkedJobs() {
+async function deleteMarkedJobs() {
   if (jobsReadOnly()) return;
   const list = markedJobs();
-  if (!list.length || !confirm('Move these ' + list.length + ' to Recently deleted?\n\n' +
+  if (!list.length || !(await ydConfirm(
       list.map(d => '• ' + (d.customerName || 'Job') + (d.estimateNumber ? ' #' + d.estimateNumber : '')).join('\n') +
-      '\n\nThey can be brought back from the foot of My Jobs for ' + DELETED_KEEP_DAYS + ' days.')) return;
+      '\n\nThey can be brought back from the foot of My Jobs for ' + DELETED_KEEP_DAYS + ' days.',
+      { title: 'Move these ' + list.length + ' to Recently deleted?', ok: 'Move them' }))) return;
   const ids = list.map(d => d._id).filter(id => window.deleteJob(id, true));
   const msg = ids.length + ' job' + (ids.length === 1 ? '' : 's') + ' moved to Recently deleted';
   if (typeof showUndo === 'function') showUndo(msg, () => ids.forEach(id => restoreJob(id, true))); else showToast(msg);
@@ -3509,11 +3522,12 @@ function importAllJobs(event) {
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = async function(e) {
     try {
       const backup = JSON.parse(e.target.result);
       if (!backup.jobs || !backup.index) throw new Error('bad file');
-      if (!confirm('Restore ' + backup.index.length + ' jobs? This merges into your current jobs.')) { event.target.value = ''; return; }
+      if (!(await ydConfirm('They are merged into your jobs: a job is taken from the backup only where this device has none, or an older copy.',
+            { title: 'Restore ' + backup.index.length + ' jobs?', ok: 'Restore' }))) { event.target.value = ''; return; }
       // A real merge: a job is taken from the backup only if this device does
       // not have it, or has an OLDER copy. Restoring a week-old backup used to
       // overwrite this week's edits, and sync then sent the old copies to
@@ -3676,6 +3690,205 @@ function showUndo(message, onUndo, ms) {
   return dismiss;
 }
 
+// ---- Questions in a window of the app's own ----------------------------
+//
+// The browser's own prompt() / confirm() / alert() boxes were used all over
+// the app. Some phone in-app browsers (the one a link in a text opens, say)
+// block them outright -- the button then does nothing at all -- and where
+// they do work they are tiny on a phone, cannot show a button per choice and
+// cannot say "that isn't a number" without losing what was typed. So every
+// question goes through one window here instead, styled like the rest of
+// the app, light or dark, with 44 px buttons.
+//
+// Each returns a Promise, so a caller waits for the answer with await:
+//   if (!(await ydConfirm('Delete it?', { ok: 'Delete', danger: true }))) return;
+//   const name = await ydPrompt('Name the new type', '');      // text, or null
+//   const pick = await ydChoose('How?', [{ id: 'call', label: 'Called' },
+//                  { id: 'other', label: 'Other', ask: 'How, in a few words' }]);
+//                                                  // { id, text } or null
+//   await ydAlert('Storm closed.\n\n...');
+// Escape, the ×, Cancel and a tap on the dark backdrop all answer "no"
+// (false / null) -- the same as Cancel on the old boxes, so nothing happens
+// by accident. A backdrop tap is ignored once something is typed (the
+// guardWindows rule below). Several can be open at once: the newest is in
+// front and answered first.
+//
+// opts for all four: title, ok (button words), cancel (button words, or
+// false for no Cancel), danger (the OK button is red and Cancel has the
+// focus, so Enter does not delete).
+// ydPrompt also: placeholder, type ('text' | 'number' | 'email' ...),
+// multiline, required (an empty answer is refused, not returned), check
+// (v => '' when fine, else the words to show under the box), select (start
+// with the text picked, for a copy box).
+let askSeq = 0;
+function ydAsk(opts) {
+  opts = opts || {};
+  return new Promise(resolve => {
+    const id = 'ydAsk' + (++askSeq);
+    const was = document.activeElement;
+    const m = document.createElement('div');
+    m.className = 'modal-overlay ask-overlay active';
+    m.id = id;
+    const box = document.createElement('div');
+    box.className = 'modal ask-modal';
+    box.setAttribute('role', opts.input || opts.choices ? 'dialog' : 'alertdialog');
+    box.setAttribute('aria-modal', 'true');
+    const head = document.createElement('div');
+    head.className = 'modal-head';
+    const h = document.createElement('h2');
+    h.id = id + 'T';
+    h.textContent = opts.title || (opts.input ? 'Type it in' : opts.choices ? 'Pick one' : opts.okOnly ? 'Job Hub' : 'Are you sure?');
+    box.setAttribute('aria-labelledby', h.id);
+    const x = document.createElement('button');
+    x.type = 'button';
+    x.className = 'modal-close';
+    x.setAttribute('aria-label', 'Cancel');
+    x.innerHTML = '&times;';
+    head.appendChild(h); head.appendChild(x);
+    const body = document.createElement('div');
+    body.className = 'modal-body';
+    if (opts.text) {
+      const p = document.createElement('div');
+      p.className = 'ask-text';
+      p.textContent = String(opts.text);     // newlines kept by the stylesheet
+      body.appendChild(p);
+    }
+    let field = null, err = null, picked = null, other = null;
+    if (opts.choices) {
+      const grid = document.createElement('div');
+      grid.className = 'ask-choices';
+      opts.choices.forEach(c => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'ask-choice' + (c.id === opts.value ? ' on' : '');
+        b.textContent = c.label;
+        if (c.hint) { const s = document.createElement('small'); s.textContent = c.hint; b.appendChild(s); }
+        b.onclick = () => {
+          // A choice that needs words ("Other") opens a box under the
+          // buttons; the rest answer with the one tap.
+          if (!c.ask) { finish({ id: c.id, text: null }); return; }
+          picked = c;
+          grid.querySelectorAll('.ask-choice').forEach(o => o.classList.toggle('on', o === b));
+          other.hidden = false;
+          field.placeholder = c.ask;
+          okBtn.hidden = false;
+          field.focus();
+        };
+        grid.appendChild(b);
+      });
+      body.appendChild(grid);
+    }
+    if (opts.input || opts.choices) {
+      field = document.createElement(opts.multiline ? 'textarea' : 'input');
+      field.className = 'ask-input';
+      // A number is asked in a plain box with the phone's number keys: a
+      // real number box quietly empties "$12" or "12 tons", and the answer
+      // would come back blank instead of being read or questioned.
+      if (!opts.multiline) field.type = opts.type && opts.type !== 'number' ? opts.type : 'text';
+      if (opts.type === 'number') field.inputMode = 'decimal';
+      if (opts.multiline) field.rows = 4;
+      field.value = opts.value != null && !opts.choices ? String(opts.value) : '';
+      field.placeholder = opts.placeholder || '';
+      field.setAttribute('aria-labelledby', h.id);
+      field.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !opts.multiline && !e.isComposing) { e.preventDefault(); okBtn.click(); }
+      });
+      field.addEventListener('input', () => { if (err) err.textContent = ''; });
+      err = document.createElement('div');
+      err.className = 'ask-error';
+      err.setAttribute('role', 'alert');
+      if (opts.choices) {
+        other = document.createElement('div');
+        other.className = 'ask-other';
+        other.hidden = true;
+        other.appendChild(field); other.appendChild(err);
+        body.appendChild(other);
+      } else {
+        body.appendChild(field); body.appendChild(err);
+      }
+    }
+    const acts = document.createElement('div');
+    acts.className = 'ask-actions';
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'btn';
+    cancelBtn.textContent = opts.cancel || 'Cancel';
+    const okBtn = document.createElement('button');
+    okBtn.type = 'button';
+    okBtn.className = 'btn btn-filled' + (opts.danger ? ' btn-danger' : '');
+    okBtn.textContent = opts.ok || (opts.choices ? 'Save' : 'OK');
+    if (opts.cancel !== false && !opts.okOnly) acts.appendChild(cancelBtn);
+    acts.appendChild(okBtn);
+    // Choices answer with a tap; OK only shows once a choice needs words.
+    if (opts.choices) okBtn.hidden = true;
+    body.appendChild(acts);
+    box.appendChild(head); box.appendChild(body);
+    m.appendChild(box);
+
+    let done = false;
+    function finish(answer) {
+      if (done) return;
+      done = true;
+      m.remove();
+      // Back to where the person was, so a keyboard user carries on.
+      if (was && was.focus && document.contains(was)) { try { was.focus({ preventScroll: true }); } catch (e) { /* gone */ } }
+      resolve(answer);
+    }
+    const no = () => finish(opts.input ? null : opts.choices ? null : opts.okOnly ? undefined : false);
+    okBtn.onclick = () => {
+      if (opts.okOnly) { finish(undefined); return; }
+      if (opts.choices) {
+        const t = field.value.trim();
+        if (!t) { err.textContent = 'Say it in a few words'; field.focus(); return; }
+        finish({ id: picked.id, text: t.slice(0, 500) });
+        return;
+      }
+      if (!opts.input) { finish(true); return; }
+      const v = field.value;
+      if (opts.required && !v.trim()) { err.textContent = 'Type something in first'; field.focus(); return; }
+      const bad = typeof opts.check === 'function' ? opts.check(v) : '';
+      if (bad) { err.textContent = bad; field.focus(); return; }
+      finish(v);
+    };
+    cancelBtn.onclick = no;
+    x.onclick = no;
+    // A tap on the backdrop is "no" -- unless something was typed, which
+    // guardWindows catches first and keeps.
+    let pressedOut = !window.PointerEvent;
+    m.addEventListener('pointerdown', e => { pressedOut = e.target === m; });
+    m.addEventListener('click', e => { if (e.target === m && pressedOut) no(); });
+    document.body.appendChild(m);
+    const first = field && !opts.choices ? field : (opts.danger && !opts.okOnly && opts.cancel !== false ? cancelBtn : okBtn.hidden ? null : okBtn);
+    setTimeout(() => {
+      if (!first) return;
+      try { first.focus({ preventScroll: true }); } catch (e) { first.focus(); }
+      if (field && first === field && (opts.select || field.value)) field.select();
+    }, 30);
+  });
+}
+function ydConfirm(text, opts) { return ydAsk(Object.assign({}, opts, { text: text })); }
+function ydPrompt(text, value, opts) {
+  return ydAsk(Object.assign({}, opts, { text: text, input: true, value: value == null ? '' : value }));
+}
+function ydChoose(text, choices, opts) { return ydAsk(Object.assign({}, opts, { text: text, choices: choices })); }
+function ydAlert(text, opts) { return ydAsk(Object.assign({ ok: 'OK' }, opts, { text: text, okOnly: true })); }
+// Text to copy by hand when the phone will not copy it for us: shown picked
+// in a box, ready for the phone's own Copy.
+function ydShowCopy(text, title) {
+  return ydAsk({ title: title || 'Copy this', text: 'Press and hold in the box, then Copy.', input: true, multiline: true,
+    value: text, select: true, ok: 'Done', cancel: false });
+}
+// The same question asked from a dozen places before opening another job.
+// True when it is fine to carry on: nothing unsaved, or the person said so.
+async function ydLeaveUnsavedJob() {
+  if (typeof dirty === 'undefined' || !dirty) return true;
+  return ydConfirm('The job open now has unsaved changes. Open this one anyway?',
+    { title: 'Unsaved changes', ok: 'Open it anyway', cancel: 'Stay here' });
+}
+window.ydAsk = ydAsk; window.ydConfirm = ydConfirm; window.ydPrompt = ydPrompt;
+window.ydChoose = ydChoose; window.ydAlert = ydAlert; window.ydShowCopy = ydShowCopy;
+window.ydLeaveUnsavedJob = ydLeaveUnsavedJob;
+
 // ---- No signal / still sending ----
 // Nothing used to tell the crew their taps were waiting for signal: every
 // change saves on the phone at once and goes when it can, which is right --
@@ -3813,8 +4026,8 @@ window.addEventListener('DOMContentLoaded', () => {
     bar.innerHTML = '<span>Job Hub has been updated.</span> <button type="button" class="btn btn-sm btn-filled" onclick="reloadForUpdate()">Reload</button>';
     document.body.appendChild(bar);
   }
-  window.reloadForUpdate = function () {
-    if (!safeToReload() && !confirm('Something here isn’t saved yet. Reload anyway?')) return;
+  window.reloadForUpdate = async function () {
+    if (!safeToReload() && !(await ydConfirm('Something here isn’t saved yet.', { title: 'Reload anyway?', ok: 'Reload', cancel: 'Not yet', danger: true }))) return;
     location.reload();
   };
   // Clear out a worker registered by an earlier visit, or it keeps serving the

@@ -252,8 +252,9 @@
     saveOutreach(v);
     showToast('Outreach starts ' + niceDate(v));
   };
-  window.clearOutreachDate = function () {
-    if (!confirm('Take the start date off? Nobody is listed as due, and the summary and calendar say nothing, until a date is set again.')) return;
+  window.clearOutreachDate = async function () {
+    if (!(await ydConfirm('Nobody is listed as due, and the summary and calendar say nothing, until a date is set again.',
+      { title: 'Take the start date off?', ok: 'Take it off' }))) return;
     saveOutreach(null);
   };
   function saveOutreach(day) {
@@ -331,13 +332,14 @@
   }
   document.addEventListener('yd-services', fillTagOptions);
 
-  window.addProspectTag = function () {
+  window.addProspectTag = async function () {
     const sel = el('ppTagSelect');
     let v = sel.value;
     if (!v) return;
     if (v === '__custom') {
-      v = prompt('What service?');
-      if (!v || !v.trim()) { sel.value = ''; return; }
+      sel.value = '';
+      v = await ydPrompt('The service, in a word or two:', '', { title: 'Add a service', placeholder: 'e.g. Gutter cleaning', ok: 'Add' });
+      if (!v || !v.trim()) return;
       v = v.trim();
     }
     if (window.rememberService) rememberService(v);
@@ -573,12 +575,23 @@
     write(id, patch, 'a note for ' + p.name);
     showToast('Note saved');
   };
+  // No "are you sure?": the note goes at once and Undo puts it back.
   window.removeProspectNote = function (id, at) {
     const p = people[id];
-    if (!p || !confirm('Remove this note?')) return;
+    if (!p) return;
+    const gone = (p.meetings || []).find(m => m.at === at);
+    if (!gone) return;
     p.meetings = (p.meetings || []).filter(m => m.at !== at);
     render();
     write(id, { meetings: p.meetings }, 'a note for ' + p.name);
+    const putBack = () => {
+      const q = people[id];
+      if (!q || (q.meetings || []).some(m => m.at === at)) return;
+      q.meetings = (q.meetings || []).concat([gone]).sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+      render();
+      write(id, { meetings: q.meetings }, 'a note for ' + q.name);
+    };
+    if (typeof showUndo === 'function') showUndo('Note removed', putBack); else showToast('Note removed');
   };
   // The notes as the bid's site-visit notes: oldest first, each with its day.
   function notesForBid(p) {
@@ -629,9 +642,10 @@
     if (n) { n.focus(); n.scrollIntoView({ block: 'nearest' }); }
   };
   // Closed, and emptied -- asked first when a new person was half typed in.
-  window.cancelProspectEdit = function () {
+  window.cancelProspectEdit = async function () {
     const typed = !editingId && (FORM.some(f => val(f)) || tags.length);
-    if (typed && !confirm('Throw away what’s typed?')) return;
+    if (typed && !(await ydConfirm('What is typed in for this new contact is thrown away.',
+      { title: 'Throw it away?', ok: 'Throw it away', cancel: 'Keep typing', danger: true }))) return;
     clearForm();
     showForm(false);
   };
@@ -713,11 +727,12 @@
     write(id, patch, 'status for ' + people[id].name);
   };
 
-  window.removeProspect = function (id) {
+  window.removeProspect = async function (id) {
     if (!ydCan('contacts', 'change')) return;
     const p = people[id];
     if (!p) return;
-    if (!confirm('Take ' + p.name + ' off the list? This cannot be undone.')) return;
+    if (!(await ydConfirm('This cannot be undone.', { title: 'Take ' + p.name + ' off the list?', ok: 'Take them off', danger: true }))) return;
+    if (!people[id]) return;           // gone while the question was open
     delete people[id];
     if (editingId === id) { clearForm(); showForm(false); }
     render();
@@ -764,17 +779,15 @@
   // They said yes. Carry across what is already written down rather than
   // typing the same details a second time.
 
-  window.prospectToJob = function (id) {
+  window.prospectToJob = async function (id) {
     const p = people[id];
     if (!p || typeof newJob !== 'function') return;
 
-    newJob();
-
-    // newJob() asks before throwing away an unsaved job, and simply returns if
-    // the answer is no. It clears `dirty` when it actually starts a new job, so
-    // a dirty flag still set here means the job on screen was kept -- and
-    // filling in these fields would overwrite the very work that was just
-    // rescued.
+    // newJob() asks before throwing away an unsaved job and answers false if
+    // the job on screen was kept -- filling in these fields then would
+    // overwrite the very work that was just rescued. It clears `dirty` when
+    // it actually starts a new job, so a dirty flag still set is a "kept" too.
+    if (!(await newJob())) return;
     if (typeof dirty !== 'undefined' && dirty) return;
 
     const set = (f, v) => { const n = el(f); if (n && v) n.value = v; };

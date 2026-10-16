@@ -4072,3 +4072,41 @@
     #jobListBody .jl-acts { flex:1 1 100%; justify-content:flex-start; }
     #jobListBody .jl-acts .jl-del { margin-left:auto; }
   }
+
+  /* The app's own question window (app.js ydAsk / ydConfirm / ydPrompt /
+     ydChoose / ydAlert), in place of the browser's prompt() and confirm()
+     boxes. In front of every other window -- it is usually asked from one,
+     the photo viewer included -- small and centred rather than the whole
+     phone screen, buttons 44 px tall and wide enough for a thumb. */
+  .modal-overlay.ask-overlay { z-index:4500; align-items:center; padding:16px; }
+  .modal.ask-modal { max-width:440px; }
+  .ask-modal .modal-head h2 { font-size:19px; }
+  .ask-modal .modal-body { padding:18px 20px; }
+  .ask-text { white-space:pre-line; line-height:1.5; font-size:15px; color:var(--text); max-height:55vh; overflow-y:auto; }
+  .ask-text + .ask-input, .ask-text + .ask-choices, .ask-text + .ask-actions, .ask-choices + .ask-other { margin-top:12px; }
+  .ask-input { font-size:16px; min-height:44px; }
+  textarea.ask-input { min-height:110px; resize:vertical; }
+  .ask-error { color:var(--neg); font-size:13px; font-weight:600; min-height:0; margin-top:6px; }
+  .ask-error:empty { display:none; }
+  .ask-other[hidden] { display:none; }
+  .ask-choices { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
+  .ask-choice { min-height:52px; padding:8px 10px; border-radius:10px; border:1.5px solid var(--border-strong);
+    background:var(--surface-2); color:var(--text); font:inherit; font-size:15px; font-weight:600; line-height:1.2; cursor:pointer;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; text-align:center; }
+  .ask-choice small { font-size:12px; font-weight:500; color:var(--muted); }
+  .ask-choice:hover, .ask-choice:focus-visible { border-color:var(--brand); }
+  .ask-choice.on { border-color:var(--brand); background:var(--brand); color:#fff; }
+  .ask-choice.on small { color:#fff; }
+  .ask-actions { display:flex; gap:10px; justify-content:flex-end; flex-wrap:wrap; margin-top:16px; }
+  .ask-actions .btn { min-height:44px; min-width:96px; font-size:13px; }
+  .ask-actions .btn[hidden] { display:none; }
+  /* The OK of a question that cannot be undone: red to look at, always. */
+  .ask-actions .btn.btn-danger, html[data-night] .ask-actions .btn.btn-danger { background:var(--neg); border-color:var(--neg); color:#fff; }
+  html[data-night] .ask-actions .btn.btn-danger { color:#1a0c08; }
+  @media (max-width:720px) {
+    .modal-overlay.ask-overlay { padding:12px 8px; }
+    .ask-modal .modal-body { padding:16px 14px; }
+    /* Two big buttons side by side, filling the width. */
+    .ask-actions .btn { flex:1 1 0; }
+    .ask-choices { grid-template-columns:repeat(2, 1fr); }
+  }
