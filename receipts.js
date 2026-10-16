@@ -144,13 +144,24 @@
     return (r.splits || []).length > 0 || (isSplit(rid, r) && tickedLines(rid, r).length < freeLines(r).length);
   }
 
+  // The jobs a receipt can be put on, open ones first. Left out: lost bids,
+  // jobs marked to be taken off (a second copy of a job) and ones in Recently
+  // deleted -- a long list of dead entries is what he scrolled past on every
+  // card (`dead`: a card's picker leaves them out, but still shows the one
+  // that card's receipt points at -- the job Claude suggested, the one picked).
+  // Jobs finished more than two months ago come after the recently finished.
   function jobsList() {
     const order = { inprogress: 0, booked: 1, quoting: 2, complete: 3 };
+    const oldBefore = Date.now() - 60 * 864e5;
     return (typeof loadAllJobs === 'function' ? loadAllJobs() : [])
       .filter(j => j && j._id)
-      .map(j => ({ id: j._id, name: (j.customerName || '').trim() || 'Untitled job',
-        est: String(j.estimateNumber || '').trim(), status: normStatus(j.jobStatus, j) }))
-      .sort((a, b) => (order[a.status] - order[b.status]) || a.name.localeCompare(b.name));
+      .map(j => {
+        const status = normStatus(j.jobStatus, j), done = status === 'complete' ? new Date(j.completedAt || '').getTime() : NaN;
+        return { id: j._id, name: (j.customerName || '').trim() || 'Untitled job', est: String(j.estimateNumber || '').trim(),
+          status: status, rank: order[status] + (done < oldBefore ? 1 : 0),
+          dead: !!(j.deletedAt || j.removeWhy || (status === 'quoting' && j.bidStage === 'lost')) };
+      })
+      .sort((a, b) => (a.rank - b.rank) || a.name.localeCompare(b.name));
   }
   function jobLabel(j) {
     return j.name + (j.est ? ' #' + j.est : '') + (j.status === 'complete' ? ' (complete)' : '');
@@ -925,7 +936,7 @@
       return '<div class="rc-assign">' +
         '<select class="searchable" id="rcJob_' + rid + '" onchange="rcPickJob(\'' + rid + '\', this.value)">' +
           '<option value="">Which job?</option>' +
-          jobs.map(j => '<option value="' + safeId(j.id) + '"' + (j.id === pick ? ' selected' : '') + '>' +
+          jobs.filter(j => !j.dead || j.id === pick || (r.suggest && r.suggest.jobId === j.id)).map(j => '<option value="' + safeId(j.id) + '"' + (j.id === pick ? ' selected' : '') + '>' +
             esc(jobLabel(j)) + '</option>').join('') +
         '</select>' + btn('Add ' + n + 'to job') + '</div>';
     }
@@ -1476,7 +1487,7 @@
     let list = Object.keys(b).filter(id => b[id]).map(id => ({ id, name: String(b[id].name || 'Job'),
       est: String(b[id].est || b[id].estimateNumber || ''), what: String(b[id].what || ''), status: b[id].status || '' }));
     // The office before the board has come down: its own jobs.
-    if (!list.length && sees()) list = jobsList().filter(j => j.status !== 'quoting')
+    if (!list.length && sees()) list = jobsList().filter(j => j.status !== 'quoting' && !j.dead)
       .map(j => ({ id: j.id, name: j.name, est: j.est, what: '', status: j.status }));
     const order = { inprogress: 0, booked: 1, scheduled: 1, complete: 3 };
     const rank = j => (order[j.status] != null ? order[j.status] : 2);
