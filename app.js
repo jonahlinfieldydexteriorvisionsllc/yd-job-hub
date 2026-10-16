@@ -2113,7 +2113,9 @@ function renderOrdersOverview() {
           : '<span class="muted">pick each one’s Supplies item on its job</span>') +
       '</div>' + body + '</div>';
   }).join('');
-  wrap.innerHTML = head + html +
+  // The suppliers side by side, as many as the screen holds (styles.css
+  // .ord-grid) -- he scrolled past every order to reach the next (16 Oct 2026).
+  wrap.innerHTML = head + '<div class="ord-grid">' + html + '</div>' +
     (prices && (grand || grandUnpriced) ? '<div class="order-cost">All of this comes to about <b>' + fmtMoney(grand / 100) + '</b> before tax' +
       (grandUnpriced ? ' · ' + grandUnpriced + ' line' + (grandUnpriced === 1 ? '' : 's') + ' without a price' : '') +
       '<div class="muted">Your cost from Supplies — not in any job’s numbers.</div></div>' : '');

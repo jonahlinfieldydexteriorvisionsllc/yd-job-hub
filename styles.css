@@ -2676,6 +2676,25 @@
   .ord-when { font-size:11.5px; font-weight:600; color:var(--muted); background:var(--surface-2); border-radius:8px; padding:1px 7px; }
   .ord-also { font-size:12px; }
   .ord-supplier .check-row { padding-left:18px; }
+  /* Side by side (Jonah, 16 Oct 2026: "the more i can see at once the
+     better"): the supplier cards fill the width in newspaper columns, each
+     card kept whole -- a tall card beside short ones leaves no hole, as a
+     grid's rows would. Wide screens get tighter rows; a phone keeps one
+     column and its roomier rows for the tick boxes. */
+  .ord-grid { columns:280px; column-gap:12px; }
+  .ord-grid .ord-supplier { -webkit-column-break-inside:avoid; page-break-inside:avoid; break-inside:avoid; }
+  /* In a narrow card Copy / Email / Their website wrap under the name: kept
+     left, together, rather than one pushed right and the last alone below. */
+  .ord-grid .order-vendor .link-btn { margin-left:0; }
+  .ord-grid .order-vendor { column-gap:12px; }
+  @media (min-width:721px) {
+    .ord-grid .ord-supplier { padding:8px 0 2px; }
+    .ord-grid .order-vendor { padding-bottom:5px; }
+    .ord-grid .ord-job { padding:6px 10px 1px; }
+    .ord-grid .check-row { gap:8px; padding:4px 10px 4px 16px; line-height:1.3; }
+    .ord-grid .cr-name { font-size:13.5px; }
+  }
+  @media (max-width:720px) { .ord-grid { columns:auto; } }
   .bd-draft { font-size:11px; font-weight:700; color:var(--brand-ink); }
   .cr-cost .link-btn, .order-vendor .link-btn, .cr-link .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
   .est-invoice { margin-top:10px; padding:10px 12px; border-radius:8px; border:1px dashed var(--border-strong); }
