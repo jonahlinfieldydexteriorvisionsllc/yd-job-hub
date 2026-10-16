@@ -877,7 +877,7 @@ window.forgetService = function (key) {
 function removeServiceType(idx) { serviceTypes.splice(idx, 1); renderServiceTypes(); markDirty(); }
 function renderServiceTypes() {
   const wrap = document.getElementById('serviceTypeTags');
-  if (!serviceTypes.length) { wrap.innerHTML = '<span style="color:#a096ad;font-size:12px;padding:4px">No service types</span>'; return; }
+  if (!serviceTypes.length) { wrap.innerHTML = '<span class="tag-none">No service types</span>'; return; }
   wrap.innerHTML = serviceTypes.map((s, i) => '<span class="svc-tag">' + esc(s) + '<button onclick="removeServiceType(' + i + ')">×</button></span>').join('');
 }
 

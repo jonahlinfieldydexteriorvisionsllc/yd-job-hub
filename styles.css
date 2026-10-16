@@ -4114,3 +4114,7 @@
   /* "due in 30 hours" on a machine: the light-mode green on dark mode's dark
      green background measured 2.2:1. */
   html[data-night] .eq-due.ok { color:var(--pos); }
+  /* "Nothing here yet" lines were a pale grey that measured 2.8:1 on white
+     -- the hardest text in the app to read in daylight. The usual muted
+     grey (4.6:1) instead. */
+  .empty-msg, .tag-none { color:var(--muted); }
