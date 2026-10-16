@@ -93,6 +93,16 @@ const BYPASS = [
   'api.open-meteo.com',
   // The Cloud Run server: live answers only (QuickBooks, Claude).
   'run.app',
+  // Job, receipt and calendar photos and files (Firebase Storage). Kept here
+  // they stayed on a shared phone after the person who could see them signed
+  // out; the browser's own cache still holds them for a while.
+  'firebasestorage.googleapis.com',
+  'storage.googleapis.com',
+  // Address look-ups and road routes for the snow route (snow.js,
+  // snowroute.js): live answers with customers' addresses in the address,
+  // and snowroute.js keeps its own copy for a day.
+  'nominatim.openstreetmap.org',
+  'router.project-osrm.org',
 ];
 
 // When the page itself last came from the saved copy because the network was

@@ -684,10 +684,18 @@ async function start() {
       // Several deletes as one unit -- a board and all its cards, say. Chaining
       // them (cards, then the board once the server confirms) never deleted
       // the board at all with no signal, because "confirmed" never came.
+      // Over 500 in one batch Firestore refuses the lot (a board with that
+      // many cards could never be deleted), so they go in chunks like putMany
+      // -- each chunk one unit, all of them committed at once.
       removeMany(entries) {
-        const batch = writeBatch(db);
-        entries.forEach(([path, id]) => batch.delete(doc(db, ...path.split('/'), id)));
-        return track(batch.commit());
+        const CHUNK = 400;
+        const commits = [];
+        for (let i = 0; i < entries.length; i += CHUNK) {
+          const batch = writeBatch(db);
+          entries.slice(i, i + CHUNK).forEach(([path, id]) => batch.delete(doc(db, ...path.split('/'), id)));
+          commits.push(batch.commit());
+        }
+        return track(Promise.all(commits));
       },
 
       // Every chunk is committed at once rather than one after another. A
@@ -852,7 +860,29 @@ async function start() {
       await terminate(db);
       await clearIndexedDbPersistence(db);
     } catch (e) { console.warn('[auth] could not clear the offline cache', e); }
+    await Promise.race([dropSavedData(), pause(3000)]);
     return true;
+  }
+  // 4. What the service worker saved from other sites goes too: job and
+  //    receipt photos (Firebase Storage) and address look-ups were kept in
+  //    the app's saved copies, and a shared phone held them after sign-out.
+  //    The app itself (this site's files) and the static files it needs to
+  //    start with no signal -- the Firebase SDK, the fonts, the spreadsheet
+  //    reader -- stay, or the next person could not open it in a truck.
+  const KEEP_HOSTS = ['www.gstatic.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdnjs.cloudflare.com'];
+  async function dropSavedData() {
+    if (!('caches' in window)) return;
+    try {
+      for (const name of await caches.keys()) {
+        const c = await caches.open(name);
+        for (const req of await c.keys()) {
+          let u = null;
+          try { u = new URL(req.url); } catch (e) { continue; }
+          if (u.origin === location.origin || KEEP_HOSTS.indexOf(u.hostname) !== -1) continue;
+          await c.delete(req);
+        }
+      }
+    } catch (e) { console.warn('[auth] could not clear saved files', e); }
   }
 
   // Wire the gate's buttons.
