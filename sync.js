@@ -88,7 +88,9 @@
   // crew job board -- or the job would be in one place on this device and
   // another everywhere else. If that job happens to be open in the form, the
   // form is brought along too, so its next save does not put the card back.
-  function patchJob(id, patch) {
+  // via: what moved it when it was not a person's own tap ('QuickBooks'),
+  // for the change history.
+  function patchJob(id, patch, via) {
     const raw = readJobBlob(id);
     if (!raw) return false;
     let data;
@@ -117,6 +119,9 @@
     if (window.YDPlants) patch = Object.assign({}, patch, window.YDPlants.patchExtras(data, patch));
     // A job finished from anywhere: its plant-care email (estimate.js).
     const finished = patch.jobStatus === 'complete' && data.jobStatus !== 'complete';
+    // Where it stood before, for the change history (changelog.js).
+    const was = { jobStatus: data.jobStatus, bidStage: data.bidStage, workStage: data.workStage,
+                  customerName: data.customerName, estimateNumber: data.estimateNumber };
     Object.assign(data, patch, { lastModified: new Date().toISOString() });
     if (finished && window.YDEstimate && window.YDEstimate.jobCompleted) window.YDEstimate.jobCompleted(id, data);
     try {
@@ -128,6 +133,7 @@
     const map = indexById();
     map[id] = buildIndexEntry(id, data);
     writeIndex(map);
+    if (window.YDChangeLog) window.YDChangeLog.jobMoved(id, was, data, via);
 
     if (id === currentJobId) {
       if (dirty) {
@@ -221,7 +227,7 @@
     booking.add(id);
     setTimeout(() => {
       const at = new Date().toISOString();
-      const ok = patchJob(id, { bidStage: 'won', bidStageAt: at, jobStatus: 'booked', workStage: 'scheduled', workStageAt: at });
+      const ok = patchJob(id, { bidStage: 'won', bidStageAt: at, jobStatus: 'booked', workStage: 'scheduled', workStageAt: at }, 'QuickBooks');
       booking.delete(id);
       if (ok) showToast((d.customerName || 'A customer') + ' accepted the estimate in QuickBooks — booked as a job', 6000);
     }, 0);

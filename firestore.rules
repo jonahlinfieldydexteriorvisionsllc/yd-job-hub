@@ -803,6 +803,31 @@ service cloud.firestore {
     }
 
     // ===================================================================
+    // Change history (changelog.js) -- who changed which price, job stage
+    // or pricing rule, and when. `access` says whose business it is: an
+    // admin reads the ones of areas they can see (asking "my area AND these
+    // months", which this rule can prove); pay ('owner') is the owner's
+    // alone. Written by whoever may change that area, as themselves; never
+    // edited afterwards. The server's own records (QuickBooks moving a job)
+    // come through the admin SDK, outside these rules.
+    // ===================================================================
+    match /changeLog/{logId} {
+      allow read: if isOwner()
+        || (resource.data.access in ['supplies', 'jobs', 'snow'] && canSee(resource.data.access));
+      allow create: if isStaff() && logId.matches('cl[a-z0-9]+')
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.keys().hasOnly(['at', 'atMs', 'month', 'uid', 'by', 'area', 'kind', 'access', 'what',
+             'field', 'before', 'after', 'ref', 'refId', 'via'])
+        && request.resource.data.area in ['price', 'stage', 'rule']
+        && request.resource.data.atMs is int
+        && request.resource.data.what is string && request.resource.data.what.size() <= 300
+        && ((request.resource.data.access == 'owner' && canChange('hours'))
+            || (request.resource.data.access in ['supplies', 'jobs', 'snow'] && canChange(request.resource.data.access)));
+      allow update: if false;
+      allow delete: if isOwner();
+    }
+
+    // ===================================================================
     // Anything not matched above is denied.
     // ===================================================================
     match /{document=**} {

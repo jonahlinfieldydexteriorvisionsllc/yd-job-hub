@@ -2955,11 +2955,44 @@
   }
   function writeBook(id, data) {
     data.updatedAt = new Date().toISOString();
+    logBook(id, book[id], data);
     book[id] = Object.assign({}, book[id] || {}, data);
     Promise.resolve(window.YDDb.put('priceBook', id, data)).catch(e => {
       console.warn('[estimate] price not saved:', (e && e.code) || e);
       showToast('A price could not be saved');
     });
+  }
+
+  // A service's price, minimum or adjustments changed: into the change
+  // history (changelog.js), kind 'service'. A brand-new service is recorded
+  // once it has a price.
+  function logBook(id, was, data) {
+    const C = window.YDChangeLog;
+    if (!C) return;
+    const o = was || {};
+    const n = Object.assign({}, o, data);
+    const name = n.name || 'A service';
+    const unitOf = p => (p.method === 'fixed' ? '' : p.method === 'crew' ? ' per crew-day' : p.unit ? ' per ' + p.unit : '');
+    const price = p => (Number.isInteger(p.priceCents) ? C.money(p.priceCents) + unitOf(p) : 'no price');
+    // An adjustment counts once it has an amount (a new blank one is not a change).
+    const factors = all => {
+      const list = (Array.isArray(all) ? all : []).filter(f => f && f.amount != null);
+      return list.length ? list.map(f => (f.name || 'adjustment') + ' ' + (f.how === 'pct' ? f.amount + '%' : C.money(f.amount)) +
+        (f.how === 'unit' ? ' per unit' : '')).join(', ') : 'none';
+    };
+    const lines = [];
+    const base = { area: 'price', access: 'jobs', kind: 'service', what: 'Service — ' + name, ref: { path: 'priceBook', id: id } };
+    if ('priceCents' in data || 'unit' in data || 'method' in data) {
+      if (price(o) !== price(n) && (was || Number.isInteger(n.priceCents))) lines.push(Object.assign({}, base, { field: 'Price', before: was ? price(o) : 'new', after: price(n) }));
+    }
+    if ('minimumCents' in data && (Number.isInteger(o.minimumCents) ? o.minimumCents : null) !== (Number.isInteger(n.minimumCents) ? n.minimumCents : null) && (was || Number.isInteger(n.minimumCents))) {
+      const m = c => (Number.isInteger(c) ? C.money(c) : 'none');
+      lines.push(Object.assign({}, base, { field: 'Minimum charge', before: m(o.minimumCents), after: m(n.minimumCents) }));
+    }
+    if ('factors' in data && was && factors(o.factors) !== factors(n.factors)) {
+      lines.push(Object.assign({}, base, { field: 'Adjustments', before: factors(o.factors), after: factors(n.factors) }));
+    }
+    if (lines.length) C.add(lines);
   }
 
   window.openPriceBook = function () {

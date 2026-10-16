@@ -162,6 +162,41 @@
     });
   }
 
+  // Who changed what (changelog.js): each part of an item's price that a
+  // change touched, as its own line in the change history -- "MDS — Grey
+  // pavers · Price: $3.10 per sq ft → $3.25 per sq ft". Worked out from the
+  // record before and after, so every way in (the price box, a price list,
+  // a receipt, an estimate's Source it) is told the same way. Notes and the
+  // year alone are not price changes and are left out.
+  const LOGGED = [['markupPct', 'Markup', 'pct'], ['wastePct', 'Waste', 'pct'], ['clientCents', 'Customer price each', 'cents'],
+                  ['halfDayCents', 'Half-day rate', 'cents'], ['weekendCents', 'Weekend rate', 'cents'],
+                  ['weekCents', 'Week rate', 'cents'], ['monthCents', 'Month rate', 'cents']];
+  function priceChanges(id, old, next, via) {
+    const C = window.YDChangeLog;
+    if (!C || !next) return [];
+    const o = old || {}, n = next;
+    const numOf = x => (typeof x === 'number' && isFinite(x) ? x : null);
+    const it = items[id] || {};
+    const v = vendors[it.vendorId];
+    const base = { area: 'price', access: 'supplies', what: (v ? v.name + ' — ' : '') + (it.name || 'An item'),
+                   kind: it.category || 'material', ref: { path: 'supplyPrices', id: id }, via: via || null };
+    const out = [];
+    // A device that has not heard the prices yet cannot say what it was.
+    const unknown = !old && !pricesReady;
+    const shownPrice = p => (p === o && unknown ? 'not known' : numOf(p.cents) == null ? 'no price' : C.money(p.cents) + (p.per ? ' per ' + p.per : ''));
+    if (numOf(o.cents) !== numOf(n.cents) || (numOf(n.cents) != null && (o.per || '') !== (n.per || ''))) {
+      out.push(Object.assign({}, base, { field: 'Price', before: shownPrice(o), after: shownPrice(n) }));
+    }
+    LOGGED.forEach(([k, label, how]) => {
+      const a = numOf(o[k]), b = numOf(n[k]);
+      if (a === b) return;
+      const say = x => (x == null ? (how === 'pct' ? 'the kind’s usual' : 'none') : how === 'pct' ? x + '%' : C.money(x));
+      out.push(Object.assign({}, base, { field: label, before: say(a), after: say(b) }));
+    });
+    return out;
+  }
+  const logPrices = list => { if (list.length && window.YDChangeLog) window.YDChangeLog.add(list); };
+
   // The estimate fields, typed: '' -> null (use the category's), else a number.
   // NaN for something that is not a number, so it can be refused.
   function parsePct(s) {
@@ -880,6 +915,10 @@
             '<span>' + h.year + ' ' + fmtCents(h.cents) + '</span>').join('') + '</div>' : '') +
           '<div class="hint">A price for a new year keeps the old one as history, so the change shows. ' +
             'Fixing a price within the same year just replaces it.</div>' +
+          // Every change to this price, who made it and when (changelog.js).
+          (id && window.YDChangeLog ? '<button type="button" class="link-btn" onclick="openChangeLog(\'' + safeId(id) + '\', ' +
+            esc(JSON.stringify(((vendors[it.vendorId] || {}).name ? vendors[it.vendorId].name + ' — ' : '') + (it.name || ''))) +
+            ')">🕘 Who changed this price</button>' : '') +
         '</fieldset>';
       const priceFirst = seesPrices();
       openModal(id ? 'Edit item' : 'Add an item',
@@ -1055,6 +1094,7 @@
         per: typed.per, year: year, priceNotes: typed.notes,
       }, pricingTouched ? Object.assign({ markupPct: markupPct, wastePct: wastePct, clientCents: clientCents },
                                         rentalRates) : {}));
+      logPrices(priceChanges(id, prices[id], next));
       prices[id] = next;
       write('supplyPrices', id, next);
     }
@@ -1605,6 +1645,8 @@
     if (!edits() || !plan || !plan.rows.length) return;
     const now = new Date().toISOString();
     const writes = [];
+    const logged = [];
+    let changedItems = 0;
     plan.newVendors.forEach(v => {
       const rec = { name: v.name, address: '', phone: '', hours: '', notes: '', updatedAt: now };
       vendors[v.id] = Object.assign({ id: v.id }, rec);
@@ -1637,16 +1679,27 @@
           cents: r.cents != null ? r.cents : undefined,
           per: c.per || null, year: r.year, priceNotes: c.priceNotes || null,
         }, pricing));
+        const said = priceChanges(r.id, prices[r.id], next, 'Price list');
+        if (said.length) { changedItems++; said.forEach(x => logged.push(x)); }
         prices[r.id] = next;
         writes.push(['supplyPrices', r.id, next]);
       }
     });
     const count = plan.rows.length;
+    const forVendor = planVendor && vendors[planVendor] ? vendors[planVendor].name : '';
     plan = null;
     Promise.resolve(window.YDDb.putMany(writes)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
       else console.warn('[supplies] import not yet on the server:', (e && e.code) || e);
     });
+    // Each item's change, and one line for the import as a whole -- so a
+    // year's new price sheet is one thing to find in the history.
+    if (changedItems) {
+      logged.push({ area: 'price', access: 'supplies', kind: 'import', via: 'Price list',
+                    what: 'Price list' + (forVendor ? ' — ' + forVendor : ''), field: 'Prices changed',
+                    before: null, after: changedItems + ' item' + (changedItems === 1 ? '' : 's') });
+    }
+    logPrices(logged);
     showToast(count + ' item' + (count === 1 ? '' : 's') + ' updated');
     closeSupModal(); renderResults();
   };
@@ -1810,8 +1863,10 @@
   }
   // A new price for one item, filed the way the price list files it (a
   // newer year moves the old price into its history). Not awaited.
-  function setPrice(id, cents, year) {
+  // via: what the change came from, for the change history ("Receipt").
+  function setPrice(id, cents, year, via) {
     const rec = applyPrice(prices[id], { cents: cents, year: year || thisYear() });
+    logPrices(priceChanges(id, prices[id], rec, via || null));
     prices[id] = rec;
     announce();
     return Promise.resolve(window.YDDb.put('supplyPrices', id, rec));
@@ -1904,6 +1959,7 @@
     if (o.cents > 0) {
       const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: per || null,
                                                year: thisYear(), priceNotes: String(o.note || '').slice(0, 300) || null });
+      logPrices(priceChanges(it.id, prices[it.id], next, 'Estimate'));
       prices[it.id] = next;
       writes.push(['supplyPrices', it.id, next]);
     }

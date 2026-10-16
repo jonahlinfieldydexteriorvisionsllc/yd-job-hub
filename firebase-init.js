@@ -616,6 +616,17 @@ async function start() {
         return out;
       },
 
+      // The same, for every condition in [[field, op, value], ...] at once --
+      // for a question the rules can only allow with two of them: an admin's
+      // change history is "my area AND these months" (changelog.js).
+      async listMatching(path, conds) {
+        const parts = path.split('/');
+        const snap = await getDocs(query(collection(db, ...parts), ...conds.map(([f, op, v]) => where(f, op, v))));
+        const out = {};
+        snap.forEach(d => { out[d.id] = d.data(); });
+        return out;
+      },
+
       async list(path) {
         const snap = await getDocs(collection(db, ...path.split('/')));
         const out = {};
