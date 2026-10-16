@@ -167,14 +167,16 @@
   function stateText(st, inv) {
     const dep = st.deposit ? 'Deposit' + (inv ? ' ' + money(depositOf(inv, st.job)) : '') : '';
     switch (st.kind) {
-      case 'unsent': return '<span class="inv-chip now">' + (st.rest ? 'Job done — email the bill for the rest'
+      // How soon, on the app's one scale: to do today orange, gone too long
+      // (time to call) red, waiting dashed, done an outline with a check.
+      case 'unsent': return '<span class="inv-chip due">' + (st.rest ? 'Job done — email the bill for the rest'
         : st.deposit ? 'Not emailed yet — send it for the deposit' : 'Not emailed yet — send it') + '</span>';
-      case 'due': return '<span class="inv-chip now">' + (dep ? dep + ' not paid — ' : '') +
+      case 'due': return '<span class="inv-chip due">' + (dep ? dep + ' not paid — ' : '') +
         (st.count ? 'reminder ' + (st.count + 1) + ' due' : (dep ? 'first reminder due' : 'First reminder due')) + '</span>';
       case 'call': return '<span class="inv-chip now">' + (dep ? dep + ' not paid — ' : '') + st.count + ' reminders sent — time to call</span>';
       case 'waiting': return '<span class="inv-chip info">Deposit paid — the rest is due when the job is done</span>';
       case 'later': return '<span class="inv-chip later">' + (dep ? dep + ' · ' : '') + (st.snoozed ? 'Put off until ' : 'Next reminder ') + esc(shortDay(st.next)) + '</span>';
-      default: return '<span class="inv-chip done">Paid</span>';
+      default: return '<span class="inv-chip done">✓ Paid</span>';
     }
   }
   // Which job here the invoice is for -- found by the job holding it, or the

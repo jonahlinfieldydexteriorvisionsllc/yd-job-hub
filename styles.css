@@ -19,17 +19,22 @@
        is nearly black (it is a background there), so words and links in it
        vanished -- this one stays readable in both. */
     --brand-ink:#66418f;
-    /* What a thing's STATE means, the same colour everywhere: needs doing
-       now / late, coming up soon, done, for information, not now (lost, not
-       interested, paused). Each has a soft background to sit on. Colours
-       that mean a KIND of thing (a board, a calendar, a card's type) are
-       separate and stay as they are. The text shades are a touch darker than
-       the fills so small words on the soft backgrounds still read. */
+    /* What a thing's STATE means, the same colour everywhere -- one warm
+       scale for how soon (Jonah, 15 Oct 2026: "a spectrum of yellows/orange/
+       &red" and "a gray for 'can be done whenever'"): late / needs doing now
+       red, due today orange, coming up yellow, whenever (and not now: lost,
+       paused) grey. Done is no colour at all -- an outline and a check --
+       and waiting on someone else a quiet slate, drawn dashed. Each has a
+       soft background to sit on; the text shades are darker than the fills
+       so small words on the soft backgrounds still read. Colours that mean
+       a KIND of thing (a quote appointment green, a crew task blue: remind.js
+       TYPES) are separate, and keep off this scale's meaning. */
     --st-now:#c8492b;   --st-now-soft:#f6ddd3;
-    --st-soon:#8a5d0e;  --st-soon-fill:#b7791f; --st-soon-soft:#fbeaca;
-    --st-done:#2f8f5b;  --st-done-ink:#1f6b43;  --st-done-soft:#d8ecdf;
-    --st-info:#2f6fd6;  --st-info-soft:#dde8fb;
-    --st-later:#56647a; --st-later-soft:#e6e9ee;
+    --st-due:#e8801f;   --st-due-ink:#9a4a00;   --st-due-soft:#fde4cc;
+    --st-soon:#7a5a00;  --st-soon-fill:#f2c230; --st-soon-soft:#fcf0c2;
+    --st-done:#4a5462;  --st-done-ink:#323a45;  --st-done-soft:transparent;
+    --st-info:#56647a;  --st-info-soft:#eef0f3;
+    --st-later:#5f6670; --st-later-fill:#8a8f98; --st-later-soft:#ebecee;
   }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -878,10 +883,11 @@
     --pos:#4fd68a; --pos-soft:#14301f; --neg:#ff7a5c; --neg-soft:#3a1a14;
     --brand-ink:#b99be3;
     --st-now:#ff7a5c;   --st-now-soft:#3a1a14;
-    --st-soon:#f0b04a;  --st-soon-fill:#d9962c; --st-soon-soft:#3a2c10;
-    --st-done:#4fd68a;  --st-done-ink:#4fd68a;  --st-done-soft:#14301f;
-    --st-info:#7aa7ef;  --st-info-soft:#16273f;
-    --st-later:#a3afc0; --st-later-soft:#262b33;
+    --st-due:#ff9a45;   --st-due-ink:#ffb06b;   --st-due-soft:#3a230f;
+    --st-soon:#f2c230;  --st-soon-fill:#d9ab1f; --st-soon-soft:#352c0e;
+    --st-done:#b9c1cc;  --st-done-ink:#d3d8df;  --st-done-soft:transparent;
+    --st-info:#a3afc0;  --st-info-soft:#22262d;
+    --st-later:#a0a5ad; --st-later-fill:#7c818a; --st-later-soft:#2a2c30;
     color-scheme: dark;
   }
   html[data-night] body { background:var(--bg); color:var(--text); }
@@ -1052,8 +1058,7 @@
   .bd-age, .bd-due, .bd-check, .bd-note { padding:2px 7px; border-radius:10px;
     background:var(--surface-2); border:1px solid var(--border); color:var(--muted); font-weight:600; }
   .bd-age.late, .bd-due.late { background:var(--neg-soft); color:var(--neg); border-color:transparent; }
-  .bd-due.today { background:#fbeaca; color:#9a6a12; border-color:transparent; }
-  html[data-night] .bd-due.today { background:#3a2c10; color:#f0b04a; }
+  .bd-due.today { background:var(--st-due-soft); color:var(--st-due-ink); border-color:transparent; }
   .bd-check.all { background:var(--pos-soft); color:var(--pos); border-color:transparent; }
   .bd-people { margin-left:auto; display:flex; gap:3px; }
   .bd-face { width:24px; height:24px; border-radius:50%; background:var(--brand); color:#fff;
@@ -1125,13 +1130,13 @@
   .bd-card { --surface:#ffffff; --surface-2:#f4f1f8; --text:#2b2433; --muted:#6f6480;
     --border:#e4dfeb; --border-strong:#cfc5dc; --pos:#2f8f5b; --pos-soft:#d8ecdf;
     --neg:#c8492b; --neg-soft:#f6ddd3; --brand-ink:#66418f;
-    --st-now:#c8492b; --st-now-soft:#f6ddd3; --st-soon:#8a5d0e; --st-soon-fill:#b7791f; --st-soon-soft:#fbeaca;
-    --st-done:#2f8f5b; --st-done-ink:#1f6b43; --st-done-soft:#d8ecdf; --st-info:#2f6fd6; --st-info-soft:#dde8fb;
-    --st-later:#56647a; --st-later-soft:#e6e9ee;
+    --st-now:#c8492b; --st-now-soft:#f6ddd3; --st-due:#e8801f; --st-due-ink:#9a4a00; --st-due-soft:#fde4cc;
+    --st-soon:#7a5a00; --st-soon-fill:#f2c230; --st-soon-soft:#fcf0c2;
+    --st-done:#4a5462; --st-done-ink:#323a45; --st-done-soft:transparent; --st-info:#56647a; --st-info-soft:#eef0f3;
+    --st-later:#5f6670; --st-later-fill:#8a8f98; --st-later-soft:#ebecee;
     background:#fff; color:var(--text); border-color:transparent;
     box-shadow:0 1px 2px rgba(0,0,0,.35); }
   .bd-card:hover { box-shadow:0 4px 14px rgba(0,0,0,.45); }
-  html[data-night] .bd-card .bd-due.today { background:#fbeaca; color:#9a6a12; }
   /* A colour-coded card: a band of its colour across the top. */
   .bd-card.covered { border-top:8px solid var(--cover); padding-top:8px; }
   .bd-swatch.none span { background:var(--surface);
@@ -1330,7 +1335,7 @@
   /* A day with many all-day things scrolls in its own box rather than pushing the hours off the screen. */
   .cg-allcell { border-left:1px solid var(--border); padding:2px; display:flex; flex-direction:column; gap:2px; min-width:0;
                 max-height:76px; overflow-y:auto; }
-  .cg-chip { --c:#6b7a8f; font-size:11.5px; font-weight:600; line-height:1.35; color:#fff; background:var(--c);
+  .cg-chip { --c:#6b7a8f; font-size:11.5px; font-weight:600; line-height:1.35; color:var(--ink, #fff); background:var(--c);
              border-radius:4px; padding:2px 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
   .cg-chip.done { opacity:.5; text-decoration:line-through; }
   .cg-body { position:relative; }
@@ -1340,7 +1345,7 @@
             background-image:repeating-linear-gradient(to bottom, var(--border) 0, var(--border) 1px, transparent 1px, transparent var(--h)); }
   .cg-col.today { background-color:rgba(201,146,47,.05); }
   .cg-ev { --c:#6b7a8f; position:absolute; z-index:1; overflow:hidden; cursor:pointer; border-radius:5px;
-           background:var(--c); color:#fff; padding:2px 6px; font-size:11.5px; line-height:1.25;
+           background:var(--c); color:var(--ink, #fff); padding:2px 6px; font-size:11.5px; line-height:1.25;
            box-shadow:0 0 0 1px var(--surface); -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
   .cg-ev.mv { cursor:grab; }
   .cg-ev-t { font-weight:700; overflow:hidden; overflow-wrap:anywhere; }
@@ -2535,8 +2540,8 @@
   @media (max-width:720px) { .rc-task { grid-template-columns:1fr 1fr; } }
   .cols2.single { grid-template-columns:1fr; }
   /* Card urgency and the board filter (boards.js) */
-  .bd-card.urg-urgent { box-shadow:inset 4px 0 0 var(--st-now); }
-  .bd-card.urg-high { box-shadow:inset 4px 0 0 #e07b24; }
+  .bd-card.urg-urgent { box-shadow:inset 4px 0 0 var(--st-due); }
+  .bd-card.urg-high { box-shadow:inset 4px 0 0 var(--st-soon-fill); }
   .bd-card.urg-low { opacity:.85; }
   .bd-filters { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 10px; }
   .bd-filter { border:1px solid var(--border-strong); background:var(--surface); color:var(--text); border-radius:16px; padding:5px 12px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
@@ -2544,8 +2549,9 @@
   .bd-urg-pick { display:flex; flex-wrap:wrap; gap:6px; }
   .bd-urg-opt { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border-strong); border-radius:8px; font-size:13px; cursor:pointer; }
   .bd-urg-opt small { color:var(--muted); }
-  .bd-urg-opt.urg-urgent { border-left:4px solid var(--st-now); }
-  .bd-urg-opt.urg-high { border-left:4px solid #e07b24; }
+  .bd-urg-opt.urg-urgent { border-left:4px solid var(--st-due); }
+  .bd-urg-opt.urg-high { border-left:4px solid var(--st-soon-fill); }
+  .bd-urg-opt.urg-low { border-left:4px solid var(--st-later-fill); }
   .bd-rain { display:flex; flex-direction:column; gap:14px; }
   .bd-rain-head { font-weight:700; font-size:14px; padding:4px 8px; border-left:4px solid var(--c); }
   .bd-rain-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; margin-top:6px; }
@@ -3180,9 +3186,9 @@
   /* Board cards stay white at night (see "the board itself" above), so the
      colours on them are the daytime ones. */
   .bd-urg { padding:2px 7px; border-radius:10px; font-weight:700; border:1px solid transparent; }
-  .bd-urg.urg-urgent { background:#fde3dc; color:var(--st-now, #c8492b); }
-  .bd-urg.urg-high { background:#fde9d2; color:#a8520f; }
-  .bd-urg.urg-low { background:#eef0f3; color:#56606e; }
+  .bd-urg.urg-urgent { background:var(--st-due-soft); color:var(--st-due-ink); }
+  .bd-urg.urg-high { background:var(--st-soon-soft); color:var(--st-soon); }
+  .bd-urg.urg-low { background:var(--st-later-soft); color:var(--st-later); }
   .bd-done-by { font-size:11px; color:#56606e; }
   .bd-said-no { font-size:11px; font-weight:700; color:var(--st-now, #c8492b); display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
   .bd-card-act { font:700 11px 'DM Sans',sans-serif; padding:3px 9px; min-height:28px; border-radius:14px; cursor:pointer;
@@ -3196,7 +3202,7 @@
   .bd-fold { display:none; margin-right:6px; }
   .bd-old-done { border-style:dashed; }
   .section-badge.eq-alert { background:var(--st-now, #c8492b); color:#fff; }
-  .section-badge.eq-soon { background:var(--st-soon, #e0a526); color:#3a2a08; }
+  .section-badge.eq-soon { background:var(--st-soon-fill, #f2c230); color:#2b2200; }
   @media (max-width:720px) {
     /* The board list: every board a button, three to a row, all in sight at
        once -- one tap to any board (Jonah, 15 Oct 2026: a sideways row was
@@ -3622,13 +3628,13 @@
   .rc-chipline { margin-top:8px; }
   .rc-chips { display:inline-flex; flex-wrap:wrap; gap:4px 6px; min-width:0; max-width:100%; }
   .rc-chip { display:inline-flex; align-items:center; gap:4px; max-width:100%; min-width:0; padding:2px 10px; border-radius:12px;
-    border:1px solid transparent; background:var(--st-done-soft); color:var(--st-done-ink);
+    border:1.5px solid var(--st-done); background:var(--st-done-soft); color:var(--st-done-ink);
     font:600 12px/1.5 'DM Sans',sans-serif; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .rc-chip b { font-weight:700; }
   .rc-chip .job-num { color:inherit; opacity:.8; }
   .rc-chip-amt { font-weight:700; opacity:.85; }
   button.rc-chip { cursor:pointer; }
-  button.rc-chip:hover, button.rc-chip:focus-visible { border-color:var(--st-done); }
+  button.rc-chip:hover, button.rc-chip:focus-visible { box-shadow:0 0 0 1.5px var(--st-done); }
   .rc-menu { position:relative; display:inline-block; flex:none; }
   .rc-menu > summary { list-style:none; }
   .rc-menu > summary::-webkit-details-marker { display:none; }
@@ -3767,7 +3773,7 @@
       top:auto; left:16px; transform:none; bottom:calc(16px + env(safe-area-inset-bottom, 0px)); text-align:left; }
   }
   /* Amber "Soon" chips: dark words, readable in sunlight (white was 2.2:1). */
-  .eq-urg.u-soon { color:#3a2a08; }
+  .eq-urg.u-soon { color:#2b2200; }
   /* All Jobs' figures two to a row on a phone, like Home's. */
   @media (max-width:720px) {
     #panel-dashboard .dash-totals { grid-template-columns:repeat(2, minmax(0, 1fr)); }
@@ -3803,7 +3809,7 @@
   .jl-remove-go { min-height:40px; }
   /* Receipt photos on to QuickBooks (receipts.js qbHtml). */
   .rc-qb { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:8px; }
-  .rc-qb-ok { background:var(--st-done-soft); color:var(--st-done-ink); }
+  .rc-qb-ok { background:var(--st-done-soft); color:var(--st-done-ink); border:1.5px solid var(--st-done); }
   .rc-qbaddr { font-size:13px; margin-top:6px; color:var(--muted); }
   /* The Equipment tab: a search over everything, then the shop board (the
      Maintenance board, boards.js columnsFor) or the machines (equipment.js). */
@@ -3841,8 +3847,9 @@
   html[data-night] .inv-views button.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
   .inv-row { display:flex; flex-direction:column; gap:6px; padding:12px; margin-bottom:8px; border-radius:12px;
     border:1.5px solid var(--border); border-left:5px solid var(--st-later); background:var(--surface); }
-  .inv-row.k-due, .inv-row.k-unsent, .inv-row.k-call { border-left-color:var(--st-now); }
-  .inv-row.k-waiting { border-left-color:var(--st-info); }
+  .inv-row.k-due, .inv-row.k-unsent { border-left-color:var(--st-due); }
+  .inv-row.k-call { border-left-color:var(--st-now); }
+  .inv-row.k-waiting { border-left:5px dashed var(--st-info); }
   .inv-row.k-paid { border-left-color:var(--st-done); }
   .inv-top { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
   .inv-who { min-width:0; overflow-wrap:anywhere; font-size:15px; }
@@ -3852,9 +3859,10 @@
   .inv-late { color:var(--st-now); }
   .inv-chip { display:inline-block; padding:3px 9px; border-radius:999px; font-size:12.5px; font-weight:600; }
   .inv-chip.now { background:var(--st-now-soft); color:var(--st-now); }
-  .inv-chip.info { background:var(--st-info-soft); color:var(--st-info); }
+  .inv-chip.due { background:var(--st-due-soft); color:var(--st-due-ink); }
+  .inv-chip.info { background:var(--st-info-soft); color:var(--st-info); border:1.5px dashed var(--st-info); }
   .inv-chip.later { background:var(--st-later-soft); color:var(--st-later); }
-  .inv-chip.done { background:var(--st-done-soft); color:var(--st-done-ink); }
+  .inv-chip.done { background:var(--st-done-soft); color:var(--st-done-ink); border:1.5px solid var(--st-done); }
   .inv-acts { display:flex; flex-wrap:wrap; gap:6px; }
   .inv-acts .btn { min-height:40px; }
   .inv-rules { font-size:13px; margin-top:12px; }

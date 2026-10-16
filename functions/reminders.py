@@ -28,6 +28,7 @@ reaches the owner's limit (autoclock.py), before the reminders.
 """
 
 import datetime
+import re
 
 from google.api_core.exceptions import AlreadyExists
 
@@ -387,24 +388,38 @@ def _card_reminders(db, people, since, now, boards):
 
 TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
-TYPES = {"bid": "📋", "appt": "🕑", "doctor": "🩺", "pickup": "🚚", "delivery": "🚛",
-         "todo": "✅", "crew": "👷", "personal": "🏠"}
+TYPES = {"bid": "QP", "appt": "🕑", "pickup": "🚚", "delivery": "🚛", "email": "✉️",
+         "todo": "✅", "crew": "👷", "doctor": "🩺", "personal": "🏠"}
 CREW_TYPES = {"crew"}
-BY_CALENDAR = {"visits": "bid", "schedule": "crew", "personal": "personal", "crew": "crew"}
+# The three calendars (remind.js typeOf, 15 Oct 2026): Crew schedule, My work,
+# Personal. Site visits / Work schedule were calendars before that.
+BY_CALENDAR = {"crew": "crew", "schedule": "crew", "visits": "bid", "work": "todo"}
+WORDS = (("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
+         ("email", re.compile(r"^\s*send\b|\be-?mail\b", re.I)),
+         ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)))
+DOCTOR_WORDS = re.compile(r"\b(doctor|dentist|dental|clinic|chiropract\w*|orthodont\w*|optometr\w*|dermatolog\w*|"
+                          r"physical therapy|check-?up|physical)\b|\bdr\.\s", re.I)
 DAY_LIST_MAX = 6                  # named in the 7 am buzz; the rest are "+N more"
 
 
 def _type_of(item, cal_kind=None, board_id=None):
-    """What a thing is -- picked, or by where it is (remind.js typeOf)."""
+    """What a thing is -- picked, or by where it is, then by its title
+    (remind.js typeOf)."""
     if item.get("type") in TYPES:
         return item["type"]
-    if cal_kind in BY_CALENDAR:
-        return BY_CALENDAR[cal_kind]
+    title = str(item.get("title") or "")
+    if cal_kind == "personal":
+        return "doctor" if DOCTOR_WORDS.search(title) else "personal"
+    if cal_kind in ("crew", "schedule"):
+        return "crew"
     if board_id == "pickups":
         return "pickup"
     if board_id == "crew" or "crew" in (item.get("labels") or []):
         return "crew"
-    return ""
+    for kind, words in WORDS:
+        if words.search(title):
+            return kind
+    return BY_CALENDAR.get(cal_kind, "")
 
 
 def _is_crew_member(u):
@@ -934,7 +949,7 @@ URGENT_TOLD = "urgent_told"     # reminderLog/urgent_told {cards: {"urgent_<boar
 
 
 def _urgent_cards(db, people, now, boards):
-    """A card marked 🔴 Urgent (boards.js) pings the owner's phone, once
+    """A card marked 🟠 Urgent (boards.js) pings the owner's phone, once
     (WISHLIST #1: "a new Urgent card pings Jonah's phone"). Not one he made
     himself, and not one already done.
 
@@ -969,7 +984,7 @@ def _urgent_cards(db, people, now, boards):
                     continue
                 if str(k.get("createdBy") or "").strip().lower() in names:
                     continue
-                note = {"push": {"title": "🔴 Urgent: " + str(k.get("title") or "a card")[:80],
+                note = {"push": {"title": "🟠 Urgent: " + str(k.get("title") or "a card")[:80],
                                  "body": (board.get("name") or "Boards") +
                                          ((" — from " + str(k.get("createdBy"))) if k.get("createdBy") else "")}}
                 for uid in owners:

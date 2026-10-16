@@ -1,11 +1,11 @@
-// Calendars: who is working where, site visits, follow-ups, personal life,
-// storms and anything else with a date -- each in its own colour, with one
-// view that lays all of it on top of each other.
+// Calendars: where the crew are working, Jonah's own work, his personal life,
+// storms and anything else with a date -- each kind of thing in its own
+// colour, with one view that lays all of it on top of each other.
 //
 // TWO KINDS OF LAYER, and the difference matters.
 //
 // STORED calendars live in calendars/{id} with their events in
-// calendars/{id}/events. Personal, Work schedule, Site visits, Follow-ups, and
+// calendars/{id}/events: the Crew schedule, My work and Personal (SEED), and
 // any the owner adds. Each carries a visibleTo list of crew uids, and the
 // security rules let a crew member read a calendar only when listed -- which is
 // what makes "the calendars I set specific guys to see" real rather than a
@@ -25,23 +25,30 @@
 (function () {
   'use strict';
 
-  // Fixed ids, so two devices seeding at the same moment write the same four
-  // calendars rather than eight.
+  // Jonah (15 Oct 2026): "i dont want a million separate calendars i just
+  // want tags and assigned colors for different things." Three calendars,
+  // and what each thing is is its kind (remind.js TYPES):
+  //   - the Crew schedule: "where the crews working, crew tasks, anything i
+  //     assign crew members to" -- the only one the crew see, kept shared
+  //     with everybody ticked as crew on Your Crew (shareCrewCal);
+  //   - My work: his own -- quote appointments (QP), pickups, emails to
+  //     send, things to do;
+  //   - Personal: "anything i do not to do with the business", doctor's
+  //     appointments yellow and the rest pink.
+  // "Admins can see all 3 calendars. Crew can only see crew calander." So
+  // none is ownerOnly any more; Personal is `seeOnly` -- an admin looks but
+  // never changes it. Fixed ids, so two devices seeding at the same moment
+  // write the same three rather than six. Site visits and Follow-ups were
+  // folded into My work that day (`mergedInto`; never shown again).
   const SEED = [
-    { id: 'schedule', name: 'Work schedule', color: '#2f6fd6', kind: 'schedule', order: 1,
-      about: 'Who is working which job on which day' },
-    { id: 'visits', name: 'Site visits', color: '#1a9c8c', kind: 'visits', order: 2,
-      about: 'Estimates and walk-throughs' },
-    { id: 'followups', name: 'Follow-ups', color: '#e07b24', kind: 'followups', order: 3,
-      about: 'Calls to make and things to chase' },
-    { id: 'personal', name: 'Personal', color: '#d94f8a', kind: 'personal', order: 4,
-      about: 'Yours only' },
-    // Jonah (12 Oct 2026): a crew task is seen by every crew member. An entry
-    // made one goes here, and this calendar is kept shared with everybody
-    // ticked as crew on Your Crew (shareCrewCal).
-    { id: 'crewtasks', name: 'Crew tasks', color: '#2f6fd6', kind: 'crew', order: 5,
-      about: 'Shared with every crew member' },
+    { id: 'schedule', name: 'My work', color: '#66418f', kind: 'work', order: 1,
+      about: 'Your own work: quote appointments, pickups, emails to send' },
+    { id: 'crewtasks', name: 'Crew schedule', color: '#2f6fd6', kind: 'crew', order: 2,
+      about: 'Where the crew are working and their tasks — the crew see this one' },
+    { id: 'personal', name: 'Personal', color: '#d94f8a', kind: 'personal', order: 3, seeOnly: true,
+      about: 'Not to do with the business — you, and admins can look' },
   ];
+  const WORK_CAL = 'schedule', PERSONAL_CAL = 'personal';
 
   // What an entry is (a bid appointment, a pickup...) and when it buzzes the
   // phone by itself: remind.js. For an all-day entry the time counts back
@@ -57,7 +64,7 @@
     // A deeper blue than the storm card on Home: white words must read on it.
     'auto:storms': { id: 'auto:storms', name: 'Storm nights', color: '#17809e', auto: true,
                      about: 'From the Snow tab' },
-    'auto:equipment': { id: 'auto:equipment', name: 'Equipment due', color: '#8a6d3b', auto: true,
+    'auto:equipment': { id: 'auto:equipment', name: 'Equipment due', color: '#6f6a2e', auto: true,
                         ownerOnly: true, about: 'Service dates from the Equipment tab' },
     'auto:cards': { id: 'auto:cards', name: 'Board due dates', color: '#6b7a8f', auto: true,
                     about: 'Cards with a due date' },
@@ -133,16 +140,17 @@
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const isPhone = () => window.matchMedia('(max-width:720px)').matches;
-  // An admin given Calendars sees every calendar except the owner's own ones
-  // (ownerOnly: Personal, and any other the owner marks private) -- and with
-  // "change" adds and edits events on them. Making, sharing and deleting
-  // calendars stays the owner's.
+  // An admin given Calendars sees every calendar except any the owner marks
+  // private (ownerOnly) -- and with "change" adds and edits events on them,
+  // but never on Personal (seeOnly). Making, sharing and deleting calendars
+  // stays the owner's.
   const seesAllCals = () => ydCan('calendars', 'see');
   // ...and anyone the owner ticked under "Who can add & change" on that one
   // calendar (`editors`; Jonah, 12 Oct 2026: "select specific calendars and
   // boards that the guys can change not just set it so they can change every
   // single one they have access to").
-  const editsCal = cal => !!cal && (isOwner() || (ydCan('calendars', 'change') && cal.ownerOnly === false) ||
+  const editsCal = cal => !!cal && (isOwner() ||
+    (ydCan('calendars', 'change') && cal.ownerOnly === false && cal.seeOnly !== true) ||
     (!!me() && (cal.editors || []).indexOf(me().uid) !== -1));
   const editableCals = () => storedCals().filter(editsCal);
   const adds = () => isOwner() || ydCan('calendars', 'change') || editableCals().length > 0;
@@ -1169,9 +1177,9 @@
   }
   // An entry's colour: its kind's (remind.js) when it has one, else its
   // calendar's. On the filled blocks a light colour (doctor's yellow) gets
-  // dark writing.
+  // dark writing (--ink; the tinted month bars keep the page's own).
   const colorOf = o => safeColor(o.color || o.layer.color);
-  const paint = o => '--c:' + colorOf(o) + (o.ink ? ';color:' + safeColor(o.ink) : '');
+  const paint = o => '--c:' + colorOf(o) + ';--ink:' + (o.ink ? safeColor(o.ink) : inkOn(colorOf(o)));
 
   // ------------------------------------------------------------- controls
 
@@ -1349,6 +1357,7 @@
   };
 
   function renderEditor() {
+    typeNote = '';
     const list = editableCals();
     if (!list.length) { showToast('Calendars are still loading'); return; }
     const base = editing.eventId ? (events[editing.calId] || {})[editing.eventId] || {} : {};
@@ -1378,7 +1387,8 @@
     // ones whatever their order, so saving reads them just the same.
     openModal(editing.eventId ? 'Edit' : 'Add to the calendar',
       '<div class="field"><span class="label">Title</span>' +
-        '<input id="evTitle" value="' + esc(ev.title || '') + '" placeholder="Leave blank to use the job’s name (below)"></div>' +
+        '<input id="evTitle" value="' + esc(ev.title || '') + '" placeholder="Leave blank to use the job’s name (below)"' +
+          ' oninput="calTitleChanged()"></div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Date</span>' +
           '<input type="date" id="evDate" value="' + esc(ev.date || editing.date || today()) + '"></div>' +
@@ -1427,7 +1437,7 @@
       '<div class="field" id="evCrewField"><span class="label">Who is on it</span>' +
         (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item" style="--c:' + personColor(p.uid) + '">' +
           '<input type="checkbox" class="evWho" value="' + p.uid + '"' + (chosen.has(p.uid) ? ' checked' : '') +
-            ' onchange="calWhoChanged()">' +
+            ' onchange="calWhoTicked(this)">' +
           '<span class="cal-face">' + esc(p.name) + '</span></label>').join('') + '</div>'
           : '<div class="hint">No crew accounts yet.</div>') +
         '<div class="hint" id="evShareHint"></div>' +
@@ -1468,13 +1478,59 @@
   // Picking what it is never touches the time: only the "Any time that
   // day" box does.
   window.calTypeChanged = function (byCalendar) {
-    if (byCalendar !== true && el('evType')) el('evType').dataset.picked = '1';
+    if (byCalendar !== true && el('evType')) {
+      el('evType').dataset.picked = '1';
+      // Jonah (15 Oct 2026): Personal is "anything i do not to do with the
+      // business" -- a doctor's appointment goes there, and business things
+      // go on My work. The calendar follows the kind picked, in sight (the
+      // note under the box says so), and can still be picked after.
+      const t = YDRemind.typeById(val('evType'));
+      const c = document.querySelector('input[name="evCal"]:checked');
+      const cal = c && cals[c.value];
+      if (t && cal) {
+        if (t.personal && cal.kind !== 'personal') moveTo(PERSONAL_CAL, 'Goes on Personal — it is not to do with the business.');
+        else if (!t.personal && cal.kind === 'personal') moveTo(WORK_CAL, 'Goes on ' + calName(WORK_CAL) + ' — Personal is for things not to do with the business.');
+      }
+    }
     calRemindHint();
     calTypeNote();
   };
+  const calName = id => (cals[id] && cals[id].name) || 'that calendar';
+  let typeNote = '';
+  // Ticks another calendar in the editor, with a word why under the kind.
+  function moveTo(calId, why) {
+    const r = document.querySelector('input[name="evCal"][value="' + calId + '"]');
+    if (!r || r.checked) return;
+    r.checked = true;
+    typeNote = why;
+    calCalChanged(false);
+  }
   window.calTypeNote = function () {
     const note = el('evTypeNote');
-    if (note) note.innerHTML = '';
+    if (note) note.textContent = typeNote;
+  };
+  // Until a kind is picked by hand, it follows the title as it is typed
+  // (remind.js typeOf: "Pickup mulch" a pickup, "Send the bid" an email
+  // to send).
+  window.calTitleChanged = function () {
+    const box = el('evType');
+    const c = document.querySelector('input[name="evCal"]:checked');
+    if (!box || box.dataset.picked || !c) return;
+    const want = typeOfEv({ title: val('evTitle') }, cals[c.value]);
+    if (box.value !== want) { box.value = want; calTypeChanged(true); }
+  };
+  // Jonah (15 Oct 2026): the Crew schedule has "anything i assign crew
+  // members to". Ticking a crew member on something on My work puts it on
+  // the Crew schedule, in sight; it can still be picked back.
+  window.calWhoTicked = function (box) {
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const cal = c && cals[c.value];
+    if (box && box.checked && cal && cal.kind === 'work' && cals[CREW_CAL] && editsCal(cals[CREW_CAL]) &&
+        people[box.value] && YDRemind.isCrewMember(people[box.value])) {
+      moveTo(CREW_CAL, 'Goes on the ' + calName(CREW_CAL) + ' — ' + firstName(personName(box.value)) + ' is on it.');
+      calTypeNote();
+    }
+    calWhoChanged();
   };
   // What "Usual" means for this entry as the form stands.
   window.calRemindHint = function () {
@@ -1483,7 +1539,7 @@
     const choice = val('evRemind');
     const timed = !el('evAllDay').checked && !!val('evTime');
     const c = document.querySelector('input[name="evCal"]:checked');
-    const type = val('evType') || typeOfEv({}, c && cals[c.value]);
+    const type = val('evType') || typeOfEv({ title: val('evTitle') }, c && cals[c.value]);
     hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this one.'
       : choice === '' ? YDRemind.usualHint(type, timed)
       : 'To you and anyone on it. Phones need notifications switched on: ⋯ → Notification settings.';
@@ -1500,14 +1556,17 @@
     const cal = c && cals[c.value];
     const hint = el('evShareHint');
     if (!cal || !hint) return;
-    // Until a kind is picked by hand, it follows the calendar (Site visits:
-    // a bid appointment; Work schedule: a crew task; Personal: personal).
+    // Until a kind is picked by hand, it follows the calendar and the title
+    // (the Crew schedule: a crew task; Personal: personal, or the doctor;
+    // My work: a pickup, an email, a to-do...).
     const box = el('evType');
-    if (byHand === true && box && !box.dataset.picked) {
+    if (byHand === true) typeNote = '';
+    if (byHand !== undefined && box && !box.dataset.picked) {
       const was = box.value;
-      box.value = typeOfEv({}, cal);
+      box.value = typeOfEv({ title: val('evTitle') }, cal);
       if (box.value !== was) calTypeChanged(true);
     }
+    calTypeNote();
     calRemindHint();
     calWhoChanged();
   };
@@ -1539,7 +1598,7 @@
     const n = (cal.visibleTo || []).length;
     const missing = unseeing(cal);
     const who = esc(names(missing));
-    hint.innerHTML = (cal.kind === 'personal' ? 'Personal is yours only — nobody else sees it.'
+    hint.innerHTML = (cal.kind === 'personal' ? 'Personal: you, and admins can look — never the crew.'
         : n ? esc(cal.name) + ' is shared with ' + esc(names(cal.visibleTo)) + '.'
         : esc(cal.name) + ' is not shared with anyone yet.') +
       (!missing.length ? ''
@@ -1547,7 +1606,7 @@
           // Personal is never shared; Crew tasks follows who is ticked as
           // crew on Your Crew (shareCrewCal would take anyone else off).
           (cal.kind === 'personal' ? ' Pick another calendar for them to see it.'
-            : cal.kind === 'crew' ? ' Crew tasks is shared with everyone ticked as a crew member on Your Crew.'
+            : cal.kind === 'crew' ? ' The Crew schedule is shared with everyone ticked as a crew member on Your Crew.'
             : isOwner() ? ' <button type="button" class="btn btn-sm btn-filled" onclick="calShareWith()">Share ' +
                 esc(cal.name) + ' with ' + who + '</button>'
             : ' Ask Jonah to share it with them.') +
@@ -1621,7 +1680,7 @@
       notes: el('evNotes').value.trim(),
       // Kept only when it is not what the calendar makes it anyway, so an
       // entry moved to another calendar takes on that one's.
-      type: YDRemind.typeById(val('evType')) && val('evType') !== typeOfEv({}, cals[calId]) ? val('evType') : null,
+      type: YDRemind.typeById(val('evType')) && val('evType') !== typeOfEv({ title: title }, cals[calId]) ? val('evType') : null,
       updatedAt: nowIso(),
     };
     // The reminder: the usual one, none, or a set time (and who asked for it).
@@ -2265,7 +2324,7 @@
         '<div class="cal-manage-row" style="--c:' + safeColor(c.color) + '">' +
           '<span class="cal-dot"></span>' +
           '<div class="cal-manage-name"><b>' + esc(c.name) + '</b><span class="muted">' +
-            (c.kind === 'personal' ? 'Only you'
+            (c.kind === 'personal' ? 'You — admins can look, nobody else'
               : (c.visibleTo || []).length ? 'Shared with ' + c.visibleTo.map(u => esc(firstName(personName(u)))).join(', ') +
                 ((c.editors || []).length ? ' · ' + c.editors.map(u => esc(firstName(personName(u)))).join(', ') + ' can change it' : '')
               : 'Only you so far') + '</span></div>' +
@@ -2292,7 +2351,8 @@
       '<div class="field"><span class="label">Colour</span><div class="bd-swatches">' +
         PALETTE.map(p => '<label class="bd-swatch" style="--c:' + p + '"><input type="radio" name="ccColor" value="' + p + '"' +
           (p === color ? ' checked' : '') + '><span></span></label>').join('') + '</div></div>' +
-      (c.kind === 'personal' ? '<div class="hint">Personal is never shared.</div>' :
+      (c.kind === 'personal' ? '<div class="hint">Personal is never shared with the crew. Admins with Calendars ' +
+          'access can look at it, and never change it.</div>' :
         '<div class="field"><span class="label">Who can see it</span>' +
           (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="ccShare" value="' +
               p.uid + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
@@ -2327,14 +2387,15 @@
       name: name,
       color: colorInput ? colorInput.value : PALETTE[0],
       kind: was ? was.kind : 'custom',
-      // Personal is never shared, whatever was ticked. Whoever may change it
-      // sees it too.
+      // Personal is never shared, whatever was ticked: admins look (seeOnly),
+      // nobody else. Whoever may change any other one sees it too.
       editors: was && was.kind === 'personal' ? []
         : Array.from(document.querySelectorAll('.ccEdit:checked')).map(i => i.value),
       // Always written, true or false: an admin's calendars are fetched by
       // asking for ownerOnly == false, and a calendar without the field at
       // all would be missing from their screen.
-      ownerOnly: was && was.kind === 'personal' ? true : !!(el('ccPrivate') && el('ccPrivate').checked),
+      ownerOnly: was && was.kind === 'personal' ? false : !!(el('ccPrivate') && el('ccPrivate').checked),
+      seeOnly: !!(was && was.kind === 'personal'),
       visibleTo: [],
       order: was && was.order != null ? was.order : Object.keys(cals).length + 1,
       updatedAt: nowIso(),
@@ -2461,7 +2522,9 @@
   function onCals(changes, meta) {
     calsHeard = true;
     changes.forEach(c => {
-      if (c.type === 'removed') {
+      // A calendar folded into another (15 Oct 2026: Site visits and
+      // Follow-ups into My work) is as good as gone: nothing of it shows.
+      if (c.type === 'removed' || (c.data && c.data.mergedInto)) {
         delete cals[c.id];
         if (eventUnsubs[c.id]) { eventUnsubs[c.id](); delete eventUnsubs[c.id]; }
         delete events[c.id];
@@ -2470,27 +2533,27 @@
         watchEvents(c.id);
       }
     });
-    // Seed the four starting calendars once the server has answered -- and
-    // only the ones missing, so a calendar the owner deleted is not resurrected
-    // unless it is one of the four built-ins.
+    // Seed the three calendars once the server has answered -- and only the
+    // ones missing, so a calendar the owner deleted is not resurrected
+    // unless it is one of the three.
     if (isOwner() && !seeded && meta && !meta.fromCache) {
       seeded = true;
       SEED.forEach(s => {
         if (cals[s.id]) return;
         const rec = { name: s.name, color: s.color, kind: s.kind, order: s.order, visibleTo: [],
-                      ownerOnly: s.kind === 'personal', updatedAt: nowIso() };
+                      ownerOnly: false, seeOnly: !!s.seeOnly, about: s.about, updatedAt: nowIso() };
         cals[s.id] = Object.assign({ id: s.id }, rec);
         write('calendars', s.id, rec, 'seeding');
         watchEvents(s.id);
       });
       // Calendars made before admins existed have no ownerOnly at all. Each
-      // is marked once: Personal private, the rest not. Until then an admin
-      // given Calendars would see none of them, since they are fetched by
-      // asking for ownerOnly == false.
+      // is marked once, not private. Until then an admin given Calendars
+      // would see none of them, since they are fetched by asking for
+      // ownerOnly == false.
       Object.values(cals).forEach(c => {
         if (typeof c.ownerOnly === 'boolean') return;
-        c.ownerOnly = c.kind === 'personal';
-        write('calendars', c.id, { ownerOnly: c.ownerOnly }, 'marking private or not');
+        c.ownerOnly = false;
+        write('calendars', c.id, { ownerOnly: false }, 'marking private or not');
       });
     }
     if (meta && !meta.fromCache) shareCrewCal();
@@ -2539,11 +2602,11 @@
       showToast('A crew task now — every crew member can see it');
       return;
     }
-    if (!cals[CREW_CAL]) { showToast('The Crew tasks calendar is still being set up — try again in a moment'); return; }
+    if (!cals[CREW_CAL]) { showToast('The Crew schedule is still being set up — try again in a moment'); return; }
     const next = Object.assign({}, o.ev || base, { type: null });
     applyChange(o.calId, base, o.ev ? o : Object.assign({}, o, { ev: base }), next, 'all', CREW_CAL);
     closeCalModal(); render();
-    showToast('Moved to Crew tasks — every crew member can see it');
+    showToast('Moved to the ' + cals[CREW_CAL].name + ' — every crew member can see it');
   };
 
   // Every calendar's entries, every board's cards, storms and people each

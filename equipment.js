@@ -57,16 +57,20 @@
   // How urgent a noted problem is, most urgent first. Worded the way it gets
   // said in the yard, because the point is that anyone picking up the keys
   // knows at a glance whether they can use the thing.
+  // The app's one scale for how soon (styles.css --st-*, Jonah 15 Oct
+  // 2026): red, orange, yellow, grey. `was`: the colour before then, so the
+  // Maintenance board's urgency labels still wearing it are brought over
+  // (one the owner recoloured himself is left alone).
   const URGENCY = [
-    { id: 'down', label: 'Out of service', hint: 'do not use it until it is fixed', color: '#d64545' },
-    { id: 'before', label: 'Before next use', hint: 'fix it before it goes out again', color: '#e07b24' },
-    { id: 'soon', label: 'Soon', hint: 'this week', color: '#e0a526' },
-    { id: 'whenever', label: 'When you have time', hint: 'not holding anything up', color: '#6b7a8f' },
+    { id: 'down', label: 'Out of service', hint: 'do not use it until it is fixed', color: '#c8492b', was: '#d64545' },
+    { id: 'before', label: 'Before next use', hint: 'fix it before it goes out again', color: '#e8801f', was: '#e07b24' },
+    { id: 'soon', label: 'Soon', hint: 'this week', color: '#f2c230', was: '#e0a526' },
+    { id: 'whenever', label: 'When you have time', hint: 'not holding anything up', color: '#8a8f98', was: '#6b7a8f' },
   ];
   const urgencyOf = id => URGENCY.find(u => u.id === id) || URGENCY[URGENCY.length - 1];
   // A problem's urgency as the boards' own card urgency (boards.js URGENCY),
   // so a machine out of service sorts to the top of Maintenance, shows under
-  // "🔴 Urgent & this week" and pings the owner like any urgent card
+  // "🟠 Urgent & this week" and pings the owner like any urgent card
   // (functions/reminders.py _urgent_cards).
   const CARD_URGENCY = { down: 'urgent', before: 'high', soon: 'normal', whenever: 'low' };
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
@@ -1446,8 +1450,15 @@
       .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }))
       .concat(labelIds.has(PART_LABEL.id) ? [] : [PART_LABEL])
       .concat(labelIds.has(LOG_LABEL.id) ? [] : [LOG_LABEL]);
-    if (missing.length) {
-      board.labels = (board.labels || []).concat(missing);
+    let recoloured = false;
+    const labels = (board.labels || []).map(l => {
+      const u = URGENCY.find(x => 'u-' + x.id === l.id);
+      if (!u || String(l.color || '').toLowerCase() !== u.was) return l;
+      recoloured = true;
+      return Object.assign({}, l, { color: u.color });
+    });
+    if (missing.length || recoloured) {
+      board.labels = labels.concat(missing);
       Promise.resolve(window.YDDb.put('boards', MAINT, { labels: board.labels }))
         .catch(e => console.warn('[equipment] labels not yet saved:', e.code || e.message));
     }

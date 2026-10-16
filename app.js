@@ -138,6 +138,19 @@ function round2(n) { return Math.round(((parseFloat(n)||0) + Number.EPSILON) * 1
 const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 function esc(s) { return s == null ? '' : String(s).replace(/[&<>"']/g, c => ESC_MAP[c]); }
 
+// The writing on a filled colour (a calendar block, a board label): white,
+// unless the colour is too light for white to read -- the doctor's yellow,
+// the to-do lime -- when it is near-black. Worked out from the colour, so a
+// colour picked later never comes out unreadable.
+function inkOn(hex) {
+  const m = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(String(hex || ''));
+  if (!m) return '#fff';
+  const h = m[1].length === 3 ? m[1].replace(/./g, c => c + c) : m[1];
+  const lin = i => { const v = parseInt(h.substr(i, 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(0) + 0.7152 * lin(2) + 0.0722 * lin(4);
+  return 1.05 / (L + 0.05) >= 3.2 ? '#fff' : '#1d1a14';
+}
+
 // ---- Dates: user types M/D, app supplies the current year ----
 function currentYear() { return new Date().getFullYear(); }
 function todayMD() { const d = new Date(); return (d.getMonth()+1) + '/' + d.getDate(); }
