@@ -558,6 +558,17 @@ function jobsReadOnly() {
 function applyJobsReadOnly() {
   document.documentElement.toggleAttribute('data-jobs-readonly', jobsReadOnly());
 }
+// The stylesheet stops taps, but not a keyboard: on a computer, or an iPad
+// with one, Tab still walked into the fields and typing changed them on
+// screen, the bar saying "Saving…" for ever while persistJob refused (office
+// test, 16 Oct 2026). So nothing there keeps the focus either -- except the
+// view-only buttons the stylesheet lets through (.eva-view-btn).
+document.addEventListener('focusin', e => {
+  const t = e.target;
+  if (!document.documentElement.hasAttribute('data-jobs-readonly') || !t || !t.closest || !t.matches) return;
+  if (!t.closest('#panel-job, #panel-tracking') || !t.matches('input, select, textarea, button') || t.matches('.eva-view-btn')) return;
+  t.blur();
+}, true);
 
 // ---- The More sheet ----
 //
