@@ -829,6 +829,18 @@
   <!-- ============ TAB 5: CONTACTS ============ -->
   <div class="tab-panel" id="panel-contacts">
 
+    <!-- The customer list from QuickBooks, which is also the call list
+         (customers.js). Hidden until the owner switches it on
+         (settings/customers.importOn); until then this tab is Contacts. -->
+    <div id="custOff" hidden></div>
+    <div class="section" id="custSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Customers</span>
+        <span class="section-badge accent" id="custBadge"></span>
+      </div>
+      <div class="section-body" id="custWrap"></div>
+    </div>
+
     <!-- Next season's outreach (prospects.js): the owner's start date, and
          from that day everyone on the list who is due to be reached. -->
     <div class="section" id="ppOutSection" hidden>
@@ -1218,6 +1230,7 @@
 <script src="./billing.js"></script>
 <script src="./weather.js"></script>
 <script src="./prospects.js"></script>
+<script src="./customers.js"></script>
 <script src="./timeclock.js"></script>
 <script src="./worklog.js"></script>
 <script src="./problems.js"></script>

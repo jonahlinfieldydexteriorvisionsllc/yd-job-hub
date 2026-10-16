@@ -1378,6 +1378,13 @@
     box.innerHTML = html;
   }
 
+  // The QuickBooks id of the customer the open job is tied to (customers.js),
+  // or '' -- a lead, nobody, or the list not switched on.
+  function hubCustomer() {
+    const id = typeof boardFields !== 'undefined' && boardFields ? boardFields.customerId : '';
+    return id && window.YDCustomers && YDCustomers.on() ? YDCustomers.qbIdFor(id) : '';
+  }
+
   // A home or a business: which list of warranty and terms products ends the
   // estimate (Pricing rules -- some notices are for homes only). From the
   // job's Business name unless set on this estimate.
@@ -2815,7 +2822,11 @@
       const parts = materialParts(r, work);
       const out = await askQb('/qb/estimate', {
         jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
-        estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
+        // The job's customer (customers.js) when this job has no QuickBooks
+        // customer of its own yet: the estimate goes to their profile, not to
+        // a new one made from however the name was typed.
+        estimateId: q.id || null, customerId: q.customerId || hubCustomer() || null,
+        env: q.env || (hubCustomer() ? 'production' : null),
         customer: { name: f('customerName'), email: to, phone: f('phone'), address: tidyCase(f('address')),
                     city: tidyCase(f('city')), state: stateWord(f('state')), zip: f('zip') },
         site: site,

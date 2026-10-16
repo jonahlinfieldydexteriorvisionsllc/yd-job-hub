@@ -281,8 +281,10 @@ def _quickbooks(request, path, headers):
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
                        "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
                        "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now")
+    # A customer's contact details, from the Customers tab: whoever may change Contacts.
+    contacts = path in ("/qb/customer-save", "/qb/customers-now")
     try:
-        uid = _caller(request, "billing", "change") if billing else _caller(request)
+        uid = _caller(request, "billing", "change") if billing else             _caller(request, "contacts", "change") if contacts else _caller(request)
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
 
@@ -340,6 +342,19 @@ def _quickbooks(request, path, headers):
                 filled = qb.fill_imported(jobs)
             _tell_owner(news)
             result = {"ok": True, "filled": filled}
+        elif path == "/qb/customer-save":
+            # A customer's details changed in Job Hub (customers.js): into
+            # QuickBooks now. {id, fields, was, force}
+            import customers
+            with qb._holding_tokens():
+                result = customers.save(body.get("id"), body.get("fields") or {}, body.get("was") or {},
+                                        force=body.get("force") is True)
+        elif path == "/qb/customers-now":
+            # The customer list brought up to date now, not at the next
+            # hourly look -- only once the owner has switched it on.
+            import customers
+            with qb._holding_tokens():
+                result = {"ok": True, "result": customers.sync()}
         else:
             return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     except PermissionError as e:

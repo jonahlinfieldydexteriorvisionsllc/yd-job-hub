@@ -24,7 +24,7 @@
   // email, when the estimate was first seen accepted); all are in app.js
   // BOARD_FIELDS so the form carries them.
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
-    'removeWhy', 'replacedBy', 'removeNote'];
+    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming

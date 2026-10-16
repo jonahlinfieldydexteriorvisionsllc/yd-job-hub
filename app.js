@@ -88,9 +88,12 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // was marked lost (askLostReason). deletedAt / deletedBy / deletedByName: a
 // job moved to Recently deleted (deleteJob) -- a form save must not bring it
 // back to life by leaving them out.
+// customerId / customerBy: the customer the job is for (customers.js) -- tied
+// by id, never by the spelling of a name; 'hand' when Jonah picked it.
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
-  'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName'];
+  'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
+  'customerId', 'customerBy'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
