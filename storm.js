@@ -38,6 +38,11 @@
   const opened = {};
   let skipping = null;
   let scrollWanted = false;
+  // The storm whose stops are being put in a new order on this phone
+  // (stopReorder), or null. The arrows show only then, so the rest of the
+  // time a customer's name has the card's whole width (Jonah, 15 Oct 2026:
+  // on a phone the arrows squeezed the names onto three lines).
+  let reordering = null;
   // How long the "Undo" after Arrive / Depart / Skip stays up.
   const UNDO_MS = 8000;
   // Salt chips for gloves: the usual amounts, one tap each.
@@ -317,6 +322,10 @@
     const done = list.filter(s => s.departedAt || s.skipped).length;
     const openStop = list.find(s => s.arrivedAt && !s.departedAt && !s.skipped);
     const next = list.find(s => !s.arrivedAt && !s.skipped);
+    // Reordering ends with its storm, or once fewer than two stops can move.
+    const movable = list.filter(movesFree).length;
+    if (reordering && (reordering !== storm.id || movable < 2)) reordering = null;
+    const ordering = !!reordering;
 
     wrap.innerHTML =
       '<div class="section">' +
@@ -339,7 +348,12 @@
               (storm.crewNames ? ' · ' + esc(storm.crewNames) : '') + '</span>' +
             (openStop ? '<span class="storm-onsite">on site at ' + esc(accountFor(openStop).name) + '</span>' : '') +
           '</div>' +
-          list.map(s => renderStop(s, next && next.id)).join('') +
+          orderBarHtml(movable, ordering) +
+          (ordering
+            ? list.map((s, i) => reorderRow(s, list[i - 1], list[i + 1])).join('') +
+              // A Done at the foot as well: a long route is scrolled through.
+              '<div class="stop-order stop-order-end"><button type="button" class="btn btn-filled stop-order-btn" onclick="stopReorder(false)">✓ Done reordering</button></div>'
+            : list.map(s => renderStop(s, next && next.id)).join('')) +
           // The end of the night, well apart from the last stop's buttons and
           // each on its own row: a thumb reaching for that stop's Depart must
           // not land on Close.
@@ -476,6 +490,59 @@
     '</div>';
   }
 
+  // ---------------------------------------------------------- reordering
+  //
+  // Only a stop nobody has started can move (see moveStop).
+  const movesFree = s => !!s && !s.arrivedAt && !s.skipped;
+
+  // "↕ Reorder stops" above the list, or -- while reordering -- what to do
+  // and Done. Offered only with two or more stops that can still move.
+  function orderBarHtml(movable, on) {
+    if (on) {
+      return '<div class="stop-order on" role="group" aria-label="Reorder stops">' +
+        '<span class="stop-order-say">Tap ▲ ▼ to move a stop. Ones already started stay where they are.</span>' +
+        '<button type="button" class="btn btn-filled btn-sm stop-order-btn" onclick="stopReorder(false)">✓ Done</button>' +
+      '</div>';
+    }
+    return movable >= 2
+      ? '<div class="stop-order"><button type="button" class="btn btn-sm stop-order-btn" onclick="stopReorder(true)">↕ Reorder stops</button></div>'
+      : '';
+  }
+
+  // A stop while reordering: one line -- its number, name and address (or
+  // how it went), and the arrows for one that can still move. `before` and
+  // `after` are its neighbours in the list: an arrow that would swap it with
+  // a started stop is shown greyed, as moveStop would refuse it.
+  function reorderRow(s, before, after) {
+    const a = accountFor(s), sid = safeId(s.id);
+    const state = s.skipped ? 'skipped' : s.departedAt ? 'done' : s.arrivedAt ? 'onsite' : 'todo';
+    const name = a.name || s.accountId;
+    const pass = num(s.pass, 1);
+    const moves = movesFree(s);
+    const sub = moves ? (a.address || '') : state === 'onsite' ? 'on site now' : rowFigures(s);
+    const arrow = (delta, ok, sign, word) => '<button type="button" data-move="' + delta + '" ' +
+      'onclick="moveStop(\'' + sid + '\',' + delta + ')" aria-label="Move ' + esc(name) + ' ' + word + '"' +
+      (ok ? '' : ' disabled') + '>' + sign + '</button>';
+    return '<div class="stop ' + state + ' stop-ro" id="stop-' + sid + '">' +
+      '<span class="stop-num">' + (num(s.order, 0) + 1) + '</span>' +
+      '<span class="stop-ro-main"><span class="stop-ro-name">' + esc(name) +
+          (pass > 1 ? ' <small>pass ' + pass + '</small>' : '') + '</span>' +
+        (sub ? '<span class="stop-ro-sub">' + esc(sub) + '</span>' : '') + '</span>' +
+      (moves ? '<span class="stop-move">' +
+          arrow(-1, movesFree(before), '&#9650;', 'earlier') +
+          arrow(1, movesFree(after), '&#9660;', 'later') +
+        '</span>' : '') +
+    '</div>';
+  }
+
+  window.stopReorder = function (on) {
+    reordering = on && storm ? storm.id : null;
+    skipping = null;              // a skip question left open is put away
+    // Back from it: to the stop being worked, as when the storm opens.
+    if (!reordering) scrollWanted = true;
+    render();
+  };
+
   function renderStop(s, nextId) {
     const a = accountFor(s);
     const sid = safeId(s.id);
@@ -543,13 +610,9 @@
     const head = finished && fixing !== s.id
       ? '<button type="button" class="stop-head stop-head-btn" onclick="stopOpen(\'' + sid + '\')" aria-expanded="true">' +
           headInner + '<span class="stop-chev open" aria-hidden="true">›</span></button>'
-      : '<div class="stop-head">' + headInner +
-          (!s.arrivedAt && !s.skipped
-            ? '<span class="stop-move">' +
-                '<button onclick="moveStop(\'' + sid + '\',-1)" title="Earlier" aria-label="Move earlier">&#9650;</button>' +
-                '<button onclick="moveStop(\'' + sid + '\',1)" title="Later" aria-label="Move later">&#9660;</button>' +
-              '</span>' : '') +
-        '</div>';
+      // No arrows here: they are in Reorder (reorderRow), so the name has
+      // the width.
+      : '<div class="stop-head">' + headInner + '</div>';
     // The big Directions button on the stop being worked and the next one.
     // The address is words, not a link: the little "maps" link that was on
     // every card did what Directions does, and a glove brushing the address
@@ -769,17 +832,33 @@
   //
   // Only stops not yet started can move. Once someone has arrived, the order
   // is a record of what happened rather than a plan.
+  //
+  // The arrows are shown only in Reorder (stopReorder), where the stop just
+  // moved is kept under the thumb that moved it: the list scrolls with it,
+  // so ▲ tapped again moves the same stop again -- not the one it swapped
+  // places with, which would otherwise now be under the thumb.
   window.moveStop = async function (id, delta) {
+    if (!storm) return;
     const list = Object.values(stops).sort((a, b) => a.order - b.order);
     const i = list.findIndex(s => s.id === id);
     const j = i + delta;
     if (i < 0 || j < 0 || j >= list.length) return;
     if (list[j].arrivedAt || list[j].skipped) { showToast('That stop is already done'); return; }
 
+    const rowTop = () => {
+      const n = document.getElementById('stop-' + safeId(id));
+      return n ? n.getBoundingClientRect().top : null;
+    };
+    const was = rowTop();
     const a = list[i], b = list[j];
     const ao = a.order, bo = b.order;
     a.order = bo; b.order = ao;                      // show it at once
     render();
+    const now = rowTop();
+    if (was != null && now != null && now !== was) window.scrollBy({ top: now - was, left: 0, behavior: 'instant' });
+    // A keyboard's place goes with it too.
+    const again = document.querySelector('#stop-' + safeId(id) + ' [data-move="' + delta + '"]');
+    if (again && !again.disabled && again.focus) again.focus({ preventScroll: true });
     writeSoon(window.YDDb.putMany([
       ['storms/' + storm.id + '/stops', a.id, { order: bo }],
       ['storms/' + storm.id + '/stops', b.id, { order: ao }],

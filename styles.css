@@ -3096,13 +3096,29 @@
   /* The next stop to do stands out from the rest of the list. */
   #stormWrap .stop.next { border-color:var(--brand-2); border-left-color:var(--brand-2); }
 
-  /* Reorder arrows big enough for a gloved thumb, at the end of the line --
-     the name wraps beside them rather than pushing them onto a line of their own. */
+  /* A stop's heading: the name wraps beside its tags rather than pushing
+     them onto a line of their own. */
   #stormWrap .stop-head { flex-wrap:nowrap; }
   #stormWrap .stop-head .stop-name { flex:0 1 auto; min-width:0; overflow-wrap:anywhere; }
   #stormWrap .stop-head .snow-tag { flex:none; }
+  /* Reorder (storm.js stopReorder): the ▲▼ arrows live only there, so the
+     rest of the time a customer's name has the card's whole width. Each stop
+     is one line then, arrows big enough for a gloved thumb at its end. */
+  #stormWrap .stop-order { display:flex; align-items:center; justify-content:flex-end; gap:10px; margin:2px 0 10px; }
+  #stormWrap .stop-order.on { justify-content:space-between; padding:10px 12px; border-radius:10px;
+                              background:var(--surface-2); border:1px solid var(--border); }
+  #stormWrap .stop-order-end { justify-content:center; margin:12px 0 4px; }
+  #stormWrap .stop-order-btn { min-height:44px; flex:none; }
+  #stormWrap .stop-order-end .stop-order-btn { width:100%; max-width:440px; }
+  #stormWrap .stop-order-say { font-size:13px; color:var(--muted); line-height:1.4; }
+  #stormWrap .stop.stop-ro { display:flex; align-items:center; gap:10px; padding:8px 10px 8px 12px; margin-bottom:6px; }
+  #stormWrap .stop-ro-main { flex:1 1 auto; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  #stormWrap .stop-ro-name { font-weight:700; font-size:15px; overflow-wrap:anywhere; }
+  #stormWrap .stop-ro-name small { font-size:11px; font-weight:600; color:var(--muted); }
+  #stormWrap .stop-ro-sub { font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
   #stormWrap .stop-move { margin-left:auto; gap:6px; flex:none; }
   #stormWrap .stop-move button { width:44px; height:44px; font-size:15px; border-radius:9px; }
+  #stormWrap .stop-move button:disabled { opacity:.3; cursor:default; }
 
   /* Directions: a real button on the stop being worked and the next one. */
   #stormWrap .stop-dir { display:flex; align-items:center; justify-content:center; gap:8px; min-height:52px; margin-top:12px; max-width:440px;
