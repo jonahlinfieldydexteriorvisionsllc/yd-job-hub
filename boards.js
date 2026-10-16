@@ -584,7 +584,18 @@
   // stripe -- a stripe alone means nothing to someone who never opened the
   // picker, or cannot tell red from orange. Normal says nothing.
   const URGENCY_CHIP = { urgent: '🟠 Today', high: '🟡 This week', low: '⚪ Whenever' };
-  function urgChipHtml(k) {
+  // A machine's problem already says how urgent it is, in its own words, on
+  // its label ("Before next use" -- equipment.js URGENCY); its card's urgency
+  // only sorts it. A second chip in the boards' words beside that label
+  // ("🟠 Today") said the same thing differently (Jonah, 16 Oct 2026: "why
+  // have a label and then label it something different").
+  const MACHINE_URGENCY = /^u-(down|before|soon|whenever)$/;
+  const urgencyLabel = (board, k) => {
+    const id = (k.labels || []).find(x => MACHINE_URGENCY.test(x));
+    return (id && board && (board.labels || []).find(l => l.id === id)) || null;
+  };
+  function urgChipHtml(k, board) {
+    if (urgencyLabel(board, k)) return '';
     const w = URGENCY_CHIP[k.urgency];
     return w ? '<span class="bd-urg urg-' + k.urgency + '" title="How urgent">' + w + '</span>' : '';
   }
@@ -1018,7 +1029,7 @@
       (inLastColumn ? '<div class="bd-card-line bd-done-by"><span class="bd-done-tick">✓</span> ' +
         esc(doneLine(k) || 'Done') + '</div>' : '') +
       '<div class="bd-card-foot">' +
-        (inLastColumn ? '' : urgChipHtml(k)) +
+        (inLastColumn ? '' : urgChipHtml(k, board)) +
         (k.due ? '<span class="bd-due' + dueState + '">📅 ' + dueLabel + (buzzes(board, k) && !inLastColumn ? ' 🔔' : '') + '</span>' : '') +
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
@@ -1053,7 +1064,7 @@
         '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-card-title">' + esc(k.title || 'Untitled') + '</div>' +
       '<div class="bd-card-line bd-wait-line">⏳ Saved on the machine — its card is on its way</div>' +
-      '<div class="bd-card-foot">' + urgChipHtml(k) + (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') + '</div>' +
+      '<div class="bd-card-foot">' + urgChipHtml(k, board) + (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') + '</div>' +
     '</div>';
   }
 
@@ -1960,11 +1971,19 @@
       '<div class="hint" id="cdRemindHint"></div>') +
       group('Sorting &amp; look', 'Urgency puts it higher in its column (and in “🟠 Urgent &amp; this week”); labels are for ' +
           'finding it (☔ Rain day…); the colour is only the band across the top — with none, it takes its kind’s.',
-        '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
+        // A machine's problem: how urgent is the problem's own (its label),
+        // set on the machine -- a picker here in the boards' words was a
+        // second name for it, and the machine put its own back anyway.
+        (urgencyLabel(board, k)
+          ? '<div class="field"><span class="label">How urgent</span><div class="bd-urg-machine">' +
+              '<span class="bd-label" style="--c:' + safeColor(urgencyLabel(board, k).color) + ';color:' +
+                inkOn(safeColor(urgencyLabel(board, k).color)) + '">' + esc(urgencyLabel(board, k).name) + '</span>' +
+              ' <small>— change it on the machine (Equipment tab)</small></div></div>'
+          : '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
           URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
             ((k.urgency || 'normal') === u ? ' checked' : '') + '><span>' + esc(name) + (hint ? ' <small>' + esc(hint) + '</small>' : '') +
             '</span></label>').join('') +
-        '</div></div>' +
+        '</div></div>') +
         '<div class="field"><span class="label">Labels</span><div class="bd-pick">' +
           (board.labels || []).map(l => '<label class="bd-pick-item" style="--c:' + safeColor(l.color) + '">' +
             '<input type="checkbox" class="cdLabel" value="' + l.id + '"' + (labelsOn.has(l.id) ? ' checked' : '') + '>' +
@@ -2191,7 +2210,8 @@
       remindMins: remind.remindMins, hasReminder: remind.hasReminder, remindUids: remind.remindUids,
       noReminder: remind.noReminder,
       type: type,
-      urgency: ((document.querySelector('input[name="cdUrg"]:checked') || {}).value) || 'normal',
+      // No picker on a machine's problem: it keeps the urgency it has.
+      urgency: ((document.querySelector('input[name="cdUrg"]:checked') || {}).value) || was.urgency || 'normal',
       labels: labels,
       color: pickedColor('cdColor'),
       assignees: assignees,

@@ -2749,6 +2749,9 @@
   .bd-urg-pick { display:flex; flex-wrap:wrap; gap:6px; }
   .bd-urg-opt { display:flex; align-items:center; gap:6px; padding:6px 10px; border:1px solid var(--border-strong); border-radius:8px; font-size:13px; cursor:pointer; }
   .bd-urg-opt small { color:var(--muted); }
+  /* A machine's problem: its own urgency, set on the machine (boards.js). */
+  .bd-urg-machine { font-size:13px; }
+  .bd-urg-machine small { color:var(--muted); }
   .bd-urg-opt.urg-urgent { border-left:4px solid var(--st-due); }
   .bd-urg-opt.urg-high { border-left:4px solid var(--st-soon-fill); }
   .bd-urg-opt.urg-low { border-left:4px solid var(--st-later-fill); }
