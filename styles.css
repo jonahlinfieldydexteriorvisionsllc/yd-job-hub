@@ -567,6 +567,14 @@
      squeezing a label onto two. */
   .appr-act { flex-wrap:wrap; }
   .appr-act .btn { white-space:nowrap; }
+  /* "Approve the N that look right" (timeclock.js approveLookRight), above
+     the cards; and the line on a card it left out, saying why. */
+  .appr-bulk { margin-bottom:14px; padding-bottom:14px; border-bottom:1px solid var(--border); }
+  .appr-bulk-btn { min-height:44px; }
+  .appr-check { margin-top:7px; font-size:12.5px; font-weight:600; line-height:1.45; padding:7px 11px;
+                border-radius:8px; color:var(--st-due-ink); background:var(--st-due-soft); }
+  .appr.appr-odd { border-left:4px solid var(--st-due); }
+  @media (max-width:720px) { .appr-bulk-btn { width:100%; white-space:normal; } }
   .crew-setting .crew-mail { flex:1 1 220px; }
   .wk-cards { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:14px; }
   .wk-card { border:1px solid var(--border); border-radius:8px; padding:12px 14px;
