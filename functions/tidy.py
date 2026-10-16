@@ -118,13 +118,11 @@ def run(now=None):
 # copies of it (jobBoard, jobCrew -- normally gone already) and its photos.
 #
 # Photos are kept by job (jobphotos.js: a record in jobPhotos, the picture
-# and its thumbnail in Storage). Any whose job no longer exists at all go too
-# -- that also clears a job the owner deleted for good from the app himself.
-# Only records over PHOTO_GRACE_DAYS old: a photo can reach the server just
-# before its brand-new job does.
+# and its thumbnail in Storage). Only the photos of the jobs cleared here go:
+# a photo whose job is missing for any other reason is never touched by
+# itself -- that is Jonah's call, not a sweep's.
 
 DELETED_KEEP_DAYS = 30           # the same in app.js
-PHOTO_GRACE_DAYS = 2
 STORAGE_BUCKET = "yd-job-hub.firebasestorage.app"
 
 
@@ -153,46 +151,37 @@ def _photo_files_gone(paths):
 
 def purge_jobs(now=None):
     """Deletes jobs in Recently deleted for more than DELETED_KEEP_DAYS, and
-    the photos of any job that is gone. Returns {"jobs": n, "photos": n}."""
+    their photos. Returns {"jobs": n, "photos": n}."""
     db = dg._db()
     now = now or dg._now()
     cutoff = now - datetime.timedelta(days=DELETED_KEEP_DAYS)
-    gone, alive = [], set()
+    gone = []
     for snap in db.collection("jobs").select(["deletedAt"]).stream():
         d = snap.to_dict() or {}
         t = _when(d.get("deletedAt")) if d.get("deletedAt") else None
         if t and t < cutoff:
             gone.append(snap.id)
-        else:
-            alive.add(snap.id)
+    photos, files = [], []
+    for n in range(0, len(gone), 10):
+        # Firestore "in" takes at most 10 values.
+        for snap in db.collection("jobPhotos").where("jobId", "in", gone[n:n + 10]).stream():
+            p = snap.to_dict() or {}
+            photos.append(snap.reference)
+            files += [x for x in (p.get("path"), p.get("thumbPath")) if x]
+    # The files first, then their records, then the jobs: whatever is left
+    # by a failure part way is found again tomorrow by the same job.
+    _photo_files_gone(files)
+    for n in range(0, len(photos), 400):
+        batch = db.batch()
+        for ref in photos[n:n + 400]:
+            batch.delete(ref)
+        batch.commit()
     for n in range(0, len(gone), 100):
         batch = db.batch()
         for jid in gone[n:n + 100]:
             batch.delete(db.collection("jobs").document(jid))
             batch.delete(db.collection("jobBoard").document(jid))
             batch.delete(db.collection("jobCrew").document(jid))
-        batch.commit()
-
-    photo_cut = now - datetime.timedelta(days=PHOTO_GRACE_DAYS)
-    photos, files = [], []
-    if not alive:
-        # No jobs read at all: something is wrong with the read, not every
-        # photo an orphan. Nothing is touched.
-        return {"jobs": len(gone), "photos": 0}
-    for snap in db.collection("jobPhotos").stream():
-        p = snap.to_dict() or {}
-        made = getattr(snap, "create_time", None)
-        if not p.get("jobId") or p["jobId"] in alive or (made is not None and made > photo_cut):
-            continue
-        photos.append(snap.reference)
-        files += [x for x in (p.get("path"), p.get("thumbPath")) if x]
-    # The files first: a record left behind is found again tomorrow, a file
-    # whose record is gone would never be.
-    _photo_files_gone(files)
-    for n in range(0, len(photos), 400):
-        batch = db.batch()
-        for ref in photos[n:n + 400]:
-            batch.delete(ref)
         batch.commit()
     out = {"jobs": len(gone), "photos": len(photos)}
     if gone or photos:
