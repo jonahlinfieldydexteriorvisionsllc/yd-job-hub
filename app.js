@@ -1259,7 +1259,9 @@ function offerPutBack(msg, row, at, list, redraw) {
 // not yet ordered; anything added by hand is never touched.
 function orderFields(l) {
   return { name: l.name, quantity: window.YDPricing.qtyText(l.orderQty, l.per), qty: l.orderQty, per: l.per || '',
-           supplyId: l.supplyId || null, vendorId: l.vendorId || null, specialOrder: !!l.specialOrder };
+           supplyId: l.supplyId || null, vendorId: l.vendorId || null, specialOrder: !!l.specialOrder,
+           // A whole bag bought, part of it used (grass seed): "1 bag (uses 3 lb)".
+           usesLb: typeof l.usedLb === 'number' && l.usedLb > 0 ? l.usedLb : null };
 }
 function orderFromEstimate(list, lines) {
   const keyOf = x => x.supplyId ? 's:' + x.supplyId : 'n:' + String(x.name || '').toLowerCase().trim();
@@ -1474,6 +1476,14 @@ function orderCost(it, cat) {
   const words = s => ' ' + String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ')
     .map(w => /(x|ch|sh|ss)es$/.test(w) ? w.slice(0, -2) : /[^s]s$/.test(w) ? w.slice(0, -1) : w).join(' ') + ' ';
   const typed = words(it.quantity);
+  // Pounds of something sold by the bag of a known weight ("Grass seed 3 lb"
+  // off QuickBooks): whole bags to buy -- 3 lb of a 50 lb bag is one bag.
+  const pk = window.YDMatch && YDMatch.pack ? YDMatch.pack(cat.items[sid], pr) : null;
+  if (!it.fromEstimate && pk && pk.lb && q !== null && / lb | pound /.test(typed) && typed.indexOf(words(per)) === -1) {
+    const bags = Math.ceil(q / pk.lb - 1e-9);
+    return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: false, bags: bags, usesLb: q,
+             cents: Math.round(bags * pr.cents) };
+  }
   const unitOff = !it.fromEstimate && typed.trim() !== '' && per !== '' && typed.indexOf(words(per)) === -1;
   return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: unitOff,
            cents: q === null || unitOff ? null : Math.round(q * pr.cents) };
@@ -1558,7 +1568,9 @@ function renderOrderList() {
     const askQty = c && c.sid && c.cents === null && !c.unitOff && typeof c.each === 'number' && !it.ordered;
     const opts = c && !c.sid && !it.ordered && linkingOrder !== it.id ? orderOptions(it, cat) : [];
     const costLine = !c ? '' : c.cents !== null
-      ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
+      ? '<span class="cr-cost">' + (c.bags ? esc(window.YDPricing ? YDPricing.qtyText(c.bags, c.per || 'bag') : c.bags + ' ' + (c.per || 'bag')) +
+          ' to buy (uses ' + esc(String(c.usesLb)) + ' lb) × ' : '') +
+        fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
         (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
       : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity</span>'
       : askQty ? '<span class="cr-cost">' + esc(cat.items[c.sid].name) + ' · ' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') +
@@ -1589,7 +1601,8 @@ function renderOrderList() {
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
         (costLine ? '<br>' + costLine : '') + picker +
       '</span>' +
-      (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '') +
+      (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) +
+        (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : '') +
       '<button class="remove-btn" onclick="rmOrderItem(\'' + it.id + '\')">×</button></div>';
   };
 

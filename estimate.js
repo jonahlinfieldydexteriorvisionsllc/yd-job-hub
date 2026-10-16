@@ -204,10 +204,22 @@
       const it = l.supplyId ? items[l.supplyId] : null;
       const line = { supplyId: l.supplyId || null, vendorId: (it && it.vendorId) || null,
                      name: (it && it.name) || l.name || '', orderQty: l.orderQty, per: l.per || '',
-                     costEachCents: num(l.costCents), specialOrder: !!l.specialOrder, plant: l.category === 'plant' };
+                     costEachCents: num(l.costCents), specialOrder: !!l.specialOrder, plant: l.category === 'plant',
+                     // A bag charged by the part used: how much of it the job uses.
+                     usedLb: l.partUse && l.usedLb ? l.usedLb : null };
       const k = line.supplyId ? 's:' + line.supplyId : 'n:' + line.name.toLowerCase().trim();
-      if (byKey[k]) byKey[k].orderQty = Math.round((byKey[k].orderQty + line.orderQty) * 1000) / 1000;
-      else { byKey[k] = line; out.push(line); }
+      if (byKey[k]) {
+        // Two lines of the same bag: bought together, so the bags are worked
+        // out from what both use, not rounded up once each.
+        const b = byKey[k];
+        if (b.usedLb !== null && line.usedLb !== null && l.packLb) {
+          b.usedLb = Math.round((b.usedLb + line.usedLb) * 100) / 100;
+          b.orderQty = Math.ceil(b.usedLb / l.packLb - 1e-9);
+        } else {
+          b.orderQty = Math.round((b.orderQty + line.orderQty) * 1000) / 1000;
+          b.usedLb = null;
+        }
+      } else { byKey[k] = line; out.push(line); }
     });
     return out;
   }
@@ -833,7 +845,9 @@
   // and 25 sorts per redraw. So the list is sorted and drawn once, kept until
   // Supplies or the kinds change (onCatalog), and each line's dropdown holds
   // only its own choice until someone goes to use it (fillPicker).
-  const NO_SUPPLY = '<option value="">— not in Supplies —</option>';
+  // Not "not in Supplies": a line nobody has joined yet may well be there
+  // (15 Oct 2026 -- he read it as Supplies not having the item).
+  const NO_SUPPLY = '<option value="">— pick from Supplies —</option>';
   const byText = new Intl.Collator(undefined, { numeric: true }).compare;   // #8 stone before #57, as in Supplies
   let supplyList = null;      // { html: every option, has: Set of their ids }
   function supplyOption(it, c, selected) {
@@ -962,9 +976,14 @@
         const mine = got.sure && got.sure.by === 'yours' && k === 0;
         return '<button type="button" class="btn btn-sm' + (k === 0 && got.sure ? ' btn-filled' : '') + '" onclick="estUseMatch(\'' + id + '\', \'' + safeId(sid) + '\')">' +
           (mine ? '✓ ' : '') + esc(it.name) +
-          (num(pr.cents) > 0 ? ' · ' + cents(pr.cents) + (pr.per ? '/' + esc(pr.per) : '') : '') +
+          (num(pr.cents) > 0 ? ' · ' + cents(pr.cents) + (pr.per ? '/' + esc(pr.per) : '') + perLbHtml(it, pr) : '') +
           (v ? ' <small>' + esc(v.name) + '</small>' : '') + (mine ? ' <small>(your pick before)</small>' : '') + '</button>';
       }).join('') + '</div></div>';
+  }
+  // A bag charged by the pound used: its price a pound, to compare mixes.
+  function perLbHtml(it, pr) {
+    const pk = window.YDMatch && YDMatch.pack ? YDMatch.pack(it, pr) : null;
+    return pk && pk.part && pk.lb && num(pr.cents) > 0 ? ' (' + cents(Math.round(pr.cents / pk.lb)) + '/lb)' : '';
   }
   // Picked: joined to the item, the quantity put in its unit where the units
   // meet (else left for him to fill), and remembered for these words.
@@ -981,6 +1000,16 @@
     changed(true);
     if (!f) showToast('Joined to ' + it.name + ' — put in how many' + (m.qbText ? ' (QuickBooks: ' + m.qbText + ')' : ''), 6000);
   };
+
+  // A bag bought whole and charged by the part used (grass seed): what the
+  // job uses and the price a pound -- "uses 3.3 lb · $4.14/lb from the 50 lb
+  // bag".
+  function partUseText(l) {
+    if (!l.partUse || !l.usedQty) return '';
+    const used = l.usedLb ? fmtQ(l.usedLb) + ' lb' : P().qtyText(l.usedQty, l.per);
+    return ' — charged for the ' + used + ' used' +
+      (l.perLbCents > 0 && l.packLb ? ' · ' + cents(Math.round(l.perLbCents)) + '/lb from the ' + fmtQ(l.packLb) + ' lb bag' : '');
+  }
 
   // Everything that depends on the numbers, redrawn without touching what is
   // being typed in.
@@ -1028,7 +1057,7 @@
               ? ' <button class="link-btn" onclick="estSource(\'' + safeId(l.id) + '\')">🔎 Source it</button>' : '')
           : l.orderQty ? esc((l.rentalPlan ? 'Rent ' + P().qtyText(l.orderQty, l.per) + ' — charged as ' + l.rentalPlan
                                              : 'Order ' + P().qtyText(l.orderQty, l.per)) +
-            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + (l.specialOrder ? ' · special order' : '')) : '';
+            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + partUseText(l) + (l.specialOrder ? ' · special order' : '')) : '';
       }
     });
     const toSource = canSource() ? r.takeoff.filter(l => unpriced(l) && !(found[foundKey(l.id)] || {}).busy) : [];
@@ -2300,6 +2329,11 @@
     m.name = String(g.name || (m.supplyId ? items[m.supplyId].name : '') || '');
     m.qty = num(g.qty);
     if (!m.supplyId) m.unit = String(g.unit || m.unit || '');
+    // Joined to Supplies, the quantity is in the item's own takeoff unit --
+    // a unit left from before ("3 lb" off QuickBooks) would be read wrongly
+    // (pricing.js takes "lb" on a bag of known weight as pounds of it).
+    else m.unit = /^(lbs?|pounds?)$/i.test(String(g.unit || '').trim()) && window.YDMatch &&
+      YDMatch.pack(items[m.supplyId], catalog().prices[m.supplyId]).lb ? 'lb' : '';
     if (m.plant) m.tree = g.tree === 'single' || g.tree === 'multi' ? g.tree : null;
     if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
     if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;

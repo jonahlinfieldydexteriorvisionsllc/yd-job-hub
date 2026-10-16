@@ -950,6 +950,17 @@
             field('One of these covers', 'siCover', show(it.coverage), 'e.g. 750 — blank if bought as measured', 'decimal') +
             field('…of what (the takeoff unit)', 'siTakeoff', it.takeoffUnit, 'e.g. sq ft, LF, plants') +
           '</div>' +
+          // A bag sold by weight and used a bit at a time (Jonah, 15 Oct 2026:
+          // "we always buy the biggest bag of grass seed so pricing should be
+          // based off of the cost per lb of that bag"). The weight is read off
+          // the name ("… 50 lb") unless typed here; seed is charged by the
+          // part used unless the tick says otherwise.
+          '<div class="grid g2">' +
+            field('Bag weight (lb)', 'siPackLb', show(it.packLb),
+              packHint(it), 'decimal') +
+            '<label class="chk"><input type="checkbox" id="siPartUse"' + (partUseOn(it) ? ' checked' : '') + '> ' +
+              'Price by the part we use (we keep the rest) — e.g. 3 lb of a 50 lb bag is charged as 3 lb</label>' +
+          '</div>' +
           '<label class="chk"><input type="checkbox" id="siPallet"' + (it.pallet ? ' checked' : '') + '> Comes on a pallet (forklift delivery surcharge)</label>' +
           '<label class="chk"><input type="checkbox" id="siSpecial"' + (it.specialOrder ? ' checked' : '') + '> Special order (non-returnable — the estimate says so)</label>' +
           '<div class="grid g3">' +
@@ -1013,6 +1024,17 @@
     const per = el('spPer'); if (rental && per && !per.value.trim() && cat === 'rental') per.value = 'day';
   };
 
+  // The bag weight read off the name, as the box's placeholder.
+  function packHint(it) {
+    const lb = window.YDMatch && YDMatch.packFromName ? YDMatch.packFromName(it.name) : null;
+    return lb ? lb + ' — from its name' : 'e.g. 50 — for a bag sold by weight';
+  }
+  // Ticked as he left it; untouched, on for seed (supplymatch.js pack).
+  function partUseOn(it) {
+    if (typeof it.partUse === 'boolean') return it.partUse;
+    return !!(window.YDMatch && YDMatch.pack && YDMatch.pack(it, prices[it.id]).part);
+  }
+
   function field(label, id, value, ph, mode) {
     return '<div class="field"><span class="label">' + label + '</span>' +
       '<input id="' + id + '" value="' + esc(value || '') + '" placeholder="' + esc(ph || '') + '"' +
@@ -1073,6 +1095,8 @@
     }
     const coverage = parsePct(val('siCover'));
     if (Number.isNaN(coverage) || coverage !== null && !(coverage > 0)) { showToast('“Covers” should be a number above 0, or blank'); return; }
+    const packTyped = parsePct(val('siPackLb'));
+    if (Number.isNaN(packTyped) || packTyped !== null && !(packTyped > 0)) { showToast('The bag weight should be a number of pounds above 0, or blank'); return; }
     const link = websiteUrl({ website: val('siLink') });
     if (val('siLink') && !link) { showToast('That link doesn’t look right — paste the page’s address'); return; }
 
@@ -1083,6 +1107,14 @@
                   pallet: !!(el('siPallet') && el('siPallet').checked),
                   specialOrder: !!(el('siSpecial') && el('siSpecial').checked),
                   usedFor: usedForFromForm(name), updatedAt: now };
+    // Kept only where he set something other than what the app works out by
+    // itself, so a renamed bag ("… 40 lb") or a change of kind still counts.
+    const fromName = window.YDMatch && YDMatch.packFromName ? YDMatch.packFromName(name) : null;
+    rec.packLb = packTyped !== null && packTyped !== fromName ? packTyped : null;
+    const partTick = el('siPartUse') ? !!el('siPartUse').checked : null;
+    const partAuto = !!(window.YDMatch && YDMatch.pack &&
+      YDMatch.pack(Object.assign({}, rec, { partUse: null }), { per: typed.per || (prices[editing.id] || {}).per }).part);
+    rec.partUse = partTick === null || partTick === partAuto ? null : partTick;
     items[id] = Object.assign({ id: id }, rec);
     write('supplies', id, rec);
     // Written only when the price box was actually changed. If this device
