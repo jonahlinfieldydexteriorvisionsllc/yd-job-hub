@@ -2255,6 +2255,14 @@
   html[data-jobs-readonly] #panel-job :is(input, select, textarea),
   html[data-jobs-readonly] #panel-tracking :is(input, select, textarea) { background:var(--surface-2); }
   html[data-jobs-readonly] #panel-job button, html[data-jobs-readonly] #panel-tracking button { opacity:.45; }
+  /* What only shows or copies something still works there (.ro-ok -- What
+     the customer sees, Show my numbers, Copy cost summary, the estimate's
+     section links, a photo); app.js lets them keep the focus. */
+  html[data-jobs-readonly] #panel-job .ro-ok, html[data-jobs-readonly] #panel-tracking .ro-ok { pointer-events:auto; opacity:1; }
+  /* And the screen says why the rest is grey (index.html). */
+  .ro-banner { display:none; }
+  html[data-jobs-readonly] .ro-banner { display:block; margin:0 0 12px; padding:10px 14px; border-radius:10px; font-size:14px;
+    border:1px solid var(--border-strong); background:var(--st-info-soft, var(--surface-2)); color:var(--text); }
 
   /* ---- an admin who may look at equipment or contacts but not change them:
      the editing controls are not offered at all (write() refuses as well) */
