@@ -4452,22 +4452,52 @@ document.addEventListener('click', e => {
   const isWin = o => o && o.classList && (o.classList.contains('modal-overlay') || o.classList.contains('sheet-overlay'));
   const isOpen = o => isWin(o) && o.classList.contains('active');
   let steps = 0;          // history steps this page added for open windows
-  let quietPops = 0;      // our own history.back() calls, not the person's Back
+  let quietPops = 0;      // our own steps back, not the person's Back
+  let held = 0;           // steps waiting for one of those to land
+  let goes = 0;           // how many steps back of our own have been taken
   let byBack = 0;         // windows being closed by Back right now
   let armed = null, armedAt = 0;
-  const seen = new MutationObserver(list => list.forEach(m => {
-    const o = m.target;
-    if (!isWin(o)) return;
-    const was = /(^|\s)active(\s|$)/.test(String(m.oldValue || '')), now = isOpen(o);
-    if (now && !was) {
-      try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { /* a sandboxed page: Back as before */ }
-    } else if (!now && was) {
-      if (byBack > 0) { byBack--; return; }
-      if (steps > 0) { steps--; quietPops++; history.back(); }
+  // Every window opened or closed in one moment is weighed together. One
+  // closed as another opens (a row of All settings opening its screen) keeps
+  // the step between them: a step back with a step added straight after it
+  // landed the browser on the page's own first entry -- the step back is
+  // aimed before the new one is added -- so the next Back left the app
+  // (regression test, 16 Oct 2026).
+  const seen = new MutationObserver(list => {
+    let opened = 0, closed = 0;
+    list.forEach(m => {
+      const o = m.target;
+      if (!isWin(o)) return;
+      const was = /(^|\s)active(\s|$)/.test(String(m.oldValue || '')), now = isOpen(o);
+      if (now && !was) opened++;
+      else if (!now && was) {
+        if (byBack > 0) { byBack--; return; }
+        if (steps - closed > 0) closed++;
+      }
+    });
+    const kept = Math.min(opened, closed);
+    opened -= kept; closed -= kept;
+    if (closed > 0) {
+      steps -= closed;
+      quietPops++;
+      const mine = ++goes;
+      history.go(-closed);
+      // Should that step back never be heard of, what waits on it goes anyway.
+      setTimeout(() => { if (mine === goes && quietPops > 0) { quietPops = 0; addSteps(0); } }, 1500);
     }
-  }));
+    if (opened > 0) addSteps(opened);
+  });
+  // A step for each window opened -- held while one of our own steps back is
+  // still on its way, which would otherwise take the new one with it.
+  function addSteps(n) {
+    held += n;
+    if (quietPops > 0) return;
+    for (; held > 0; held--) {
+      try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { held = 0; /* a sandboxed page: Back as before */ }
+    }
+  }
   window.addEventListener('popstate', () => {
-    if (quietPops > 0) { quietPops--; return; }
+    if (quietPops > 0) { quietPops--; addSteps(0); return; }
     if (steps <= 0) return;
     steps--;
     const top = typeof topOverlay === 'function' ? topOverlay() : null;
@@ -4477,7 +4507,7 @@ document.addEventListener('click', e => {
     // put back); a second one within a few seconds closes, as Esc does.
     if (top.dataset.typed && !top.classList.contains('ask-overlay') && !(armed === top && Date.now() - armedAt < 4000)) {
       armed = top; armedAt = Date.now();
-      try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { /* nothing to put back */ }
+      addSteps(1);
       showToast('Something is typed in here — press Back again to close without saving');
       return;
     }
@@ -4488,7 +4518,7 @@ document.addEventListener('click', e => {
     // open: it no longer has a step, so the next Back would leave the app --
     // give it one back.
     setTimeout(() => {
-      if (isOpen(top)) { byBack = Math.max(0, byBack - 1); try { history.pushState({ ydWin: true }, ''); steps++; } catch (e) { /* as before */ } }
+      if (isOpen(top)) { byBack = Math.max(0, byBack - 1); addSteps(1); }
     }, 400);
   });
   function watch() {
