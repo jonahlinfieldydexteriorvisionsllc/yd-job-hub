@@ -1115,7 +1115,7 @@
       const r = c.getBoundingClientRect();
       return e.clientY < r.top + r.height / 2;
     });
-    moveCard(boardId, cardId, col.dataset.col, before ? before.dataset.card : null);
+    moveByHand(boardId, cardId, col.dataset.col, before ? before.dataset.card : null);
   };
 
   function canMove(boardId) {
@@ -1141,12 +1141,16 @@
     return k.doneBy || k.doneByName ? { doneBy: null, doneByName: null, doneByAt: null } : {};
   }
 
+  // Moves a card, and says what happened: { toDone (it has just reached
+  // the done column), more (a window was opened to finish it off: a
+  // machine's service form, a recurring task's OK) }, or null when it did
+  // not move. A person's move goes through moveByHand below.
   function moveCard(boardId, cardId, col, beforeId) {
-    if (boardId === 'bids' || boardId === 'jobs') { moveJob(cardId, boardId, col); return; }
+    if (boardId === 'bids' || boardId === 'jobs') { moveJob(cardId, boardId, col); return null; }
     const set = cards[boardId] || {};
     const k = set[cardId];
     const board = boards[boardId];
-    if (!k || !board) return;
+    if (!k || !board) return null;
     // Cards with no column sit in the first one on screen, so they count
     // there too -- otherwise a card dropped among them was placed as if the
     // column were empty.
@@ -1164,7 +1168,7 @@
     if (idx === -1 || !inCol.length) order = inCol.length ? (inCol[inCol.length - 1].order || 0) + 1000 : 1000;
     else if (idx === 0) order = (inCol[0].order || 0) - 1000;
     else order = ((inCol[idx - 1].order || 0) + (inCol[idx].order || 0)) / 2;
-    if (k.column === col && k.order === order) return;
+    if (k.column === col && k.order === order) return null;
 
     const last = doneColOf(board);
     const patch = { column: col, order: order, updatedAt: nowIso(), updatedBy: myName() };
@@ -1176,6 +1180,10 @@
     render();
     if (openCard && openCard.cardId === cardId) renderCardDetail();
     writeCard(boardId, cardId, patch);
+    // The calendar and Home show cards too: told now, not only when the
+    // write comes back from the database.
+    cardsChanged();
+    let more = false;
     // A machine's "service due" card moved to Done: the service is logged on
     // the machine, with its hours or miles, so nothing is typed twice
     // (WISHLIST #2). Problem cards record themselves (equipment.js).
@@ -1184,6 +1192,7 @@
     if (toDone && boardId === MAINTENANCE && String(cardId).indexOf('eq-') === 0 && k.equipmentId && !k.issueId &&
         window.YDEquipment && YDEquipment.serviceFromBoard) {
       YDEquipment.serviceFromBoard(k.equipmentId);
+      more = true;
     }
     // A recurring task moved to Done by someone who confirms them (the owner,
     // an admin) is confirmed there and then -- otherwise it sat in Done
@@ -1192,7 +1201,80 @@
     if (toDone && k.recurring && !k.confirmedAt && editsBoards() &&
         typeof window.confirmRecurring === 'function') {
       window.confirmRecurring(cardId, boardId);
+      more = true;
     }
+    return { toDone: toDone, more: more };
+  }
+
+  // ------------------------------------------------- moved by a person
+  //
+  // A drag, the card window's "Move to", a tick on the calendar or on Home
+  // -- never the app keeping boards in step, which calls moveCard itself.
+  // Two things only a person's move gets:
+  //   - a card going to Done with its checklist not all ticked asks first
+  //     (crew testing, 16 Oct 2026: "☑ 0/2" went to Done without a word);
+  //   - a card that goes off the screen as it is done -- one in "Tagged Crew
+  //     on other boards" on Crew tasks, one in the Rain day view -- leaves
+  //     an Undo behind. It lives on another board, one a crew member may not
+  //     even see, and once the card window closed there was no way back to
+  //     it. A card that stays in sight in Done needs none: it is put back
+  //     the way it went. Nor one whose move opened a window to finish it
+  //     (a machine's service form, a recurring task's OK).
+  // Resolves true when it moved (or was handed on to be moved).
+  async function moveByHand(boardId, cardId, col, beforeId) {
+    if (boardId === 'bids' || boardId === 'jobs') { moveCard(boardId, cardId, col, beforeId); return true; }
+    let board = boards[boardId], k = (cards[boardId] || {})[cardId];
+    if (!board || !k) return false;
+    const last = doneColOf(board);
+    const doneName = (board.columns.find(c => c.id === last) || {}).name || 'Done';
+    if (last && col === last && colOf(board, k) !== last && !(await checklistOk(k, doneName))) return false;
+    // As it is now: it may have changed, or gone, while that was asked.
+    board = boards[boardId]; k = (cards[boardId] || {})[cardId];
+    if (!board || !k) return false;
+    const was = { column: colOf(board, k), order: k.order };
+    const seen = onScreen(boardId, cardId);
+    const r = moveCard(boardId, cardId, col, beforeId);
+    if (r && r.toDone && !r.more && seen && !onScreen(boardId, cardId)) {
+      const say = '“' + shortTitle(k.title) + '” moved to ' + doneName + ' on ' + (board.name || 'its board');
+      if (typeof showUndo === 'function') showUndo(say, () => undoDone(boardId, cardId, was), 9000);
+      else showToast(say);
+    }
+    return true;
+  }
+  const shortTitle = t => { t = String(t || '').trim() || 'The card'; return t.length > 40 ? t.slice(0, 38) + '…' : t; };
+  // Whether the card is drawn on the screen in front -- the Boards tab, or
+  // the Equipment tab's shop board.
+  function onScreen(boardId, cardId) {
+    return Array.from(document.querySelectorAll('.bd-card')).some(n =>
+      n.dataset.board === boardId && n.dataset.card === cardId && !!n.closest('.tab-panel.active'));
+  }
+  // Asked once, as the card goes to Done (the board's own done column,
+  // `doneName`: Done, Bought, Picked up...), when its checklist is not all
+  // ticked: "2 of 2 checklist items aren't ticked". True to go ahead.
+  async function checklistOk(k, doneName) {
+    const list = (Array.isArray(k.checklist) ? k.checklist : []).filter(Boolean);
+    const open = list.filter(i => !i.done).length;
+    if (!open) return true;
+    return !!(await ydConfirm(open + ' of ' + list.length + ' checklist item' + (list.length === 1 ? '' : 's') +
+        ' on “' + shortTitle(k.title) + '” ' + (open === 1 ? 'isn’t' : 'aren’t') + ' ticked.',
+      { title: 'Move it to ' + (doneName || 'Done') + ' anyway?', ok: 'Move it', cancel: 'Not yet' }));
+  }
+  // The Undo: back to the column it came from, where it was in it, not done
+  // -- unless it has been moved on (or deleted) since.
+  function undoDone(boardId, cardId, was) {
+    const board = boards[boardId], k = board && (cards[boardId] || {})[cardId];
+    if (!k) { showToast('That card is not there any more'); return; }
+    if (colOf(board, k) !== doneColOf(board)) return;
+    const patch = { column: was.column, doneAt: null, updatedAt: nowIso(), updatedBy: myName() };
+    // A card never placed had no order; the one it was given stays.
+    if (typeof was.order === 'number' && isFinite(was.order)) patch.order = was.order;
+    Object.assign(patch, doneByPatch(board, k, true, false, null));
+    Object.assign(k, patch);
+    render();
+    if (openCard && openCard.cardId === cardId) renderCardDetail();
+    writeCard(boardId, cardId, patch);
+    cardsChanged();
+    showToast('Put back in ' + ((board.columns.find(c => c.id === was.column) || {}).name || 'its column'));
   }
 
   // ------------------------------------------------------------- job cards
@@ -1643,7 +1725,7 @@
 
   window.moveCardFromSheet = function (col) {
     if (!openCard) return;
-    moveCard(openCard.boardId, openCard.cardId, col, null);
+    moveByHand(openCard.boardId, openCard.cardId, col, null);
   };
 
   window.toggleCheck = function (itemId, done) {
@@ -2650,7 +2732,9 @@
       if (!b || !(cards[boardId] || {})[cardId]) return false;
       // A board with no done column has nowhere to tick a card off to.
       if (done && !doneColOf(b)) return false;
-      moveCard(boardId, cardId, done ? doneColOf(b) : b.columns[0].id, null);
+      // A person's tick: a checklist not all ticked is asked about first,
+      // and the card moves (and the calendar is told) once they say so.
+      moveByHand(boardId, cardId, done ? doneColOf(b) : b.columns[0].id, null);
       return true;
     },
     // For the calendar: every stored card with a due date, with its board.
