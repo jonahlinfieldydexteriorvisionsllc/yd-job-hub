@@ -285,11 +285,14 @@
     if (m) m.classList.remove('active');
     form = null; pad = null;
   };
+  let asking = false;           // the "close without saving?" question is up
   document.addEventListener('keydown', e => {
-    if (e.key === 'Escape' && form && el('sgModal') && el('sgModal').classList.contains('active')) {
-      if (pad && pad.ink && !confirm('Close without saving the signature?')) return;
-      e.stopPropagation(); sgClose();
-    }
+    if (e.key !== 'Escape' || asking || !form || !el('sgModal') || !el('sgModal').classList.contains('active')) return;
+    e.stopPropagation();
+    if (!(pad && pad.ink)) { sgClose(); return; }
+    asking = true;
+    ydConfirm('Close without saving the signature?', { ok: 'Close it', cancel: 'Keep signing', danger: true })
+      .then(ok => { asking = false; if (ok) sgClose(); });
   }, true);
 
   const kindsFor = () => KINDS.filter(([k]) => k !== 'change' || can('jobs', 'change'));
@@ -624,7 +627,8 @@
   window.sgEmail = async function (id) {
     const d = docs[id];
     if (!d || !can('jobs', 'change')) return;
-    if (!confirm('Email the signed ' + (KIND_NAME[d.kind] || 'paper').toLowerCase() + ' PDF to the customer now?')) return;
+    if (!(await ydConfirm('Email the signed ' + (KIND_NAME[d.kind] || 'paper').toLowerCase() + ' PDF to the customer now?',
+      { title: 'Email a copy', ok: 'Email it' }))) return;
     showToast('Sending…');
     try {
       const r = await YDClaude.post('/docs/email', { docId: id });
@@ -635,7 +639,8 @@
   window.sgQb = async function (id) {
     const d = docs[id];
     if (!d || !can('billing', 'change')) return;
-    if (!confirm('Add this change order (' + money(d.amountCents) + ') to the job’s QuickBooks invoice, with the signed PDF attached?')) return;
+    if (!(await ydConfirm('Add this change order (' + money(d.amountCents) + ') to the job’s QuickBooks invoice, with the signed PDF attached?',
+      { title: 'Add to QuickBooks', ok: 'Add it' }))) return;
     showToast('Adding to QuickBooks…');
     try {
       const r = await YDClaude.post('/qb/change-order', { docId: id });
