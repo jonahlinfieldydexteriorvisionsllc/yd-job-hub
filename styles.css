@@ -4767,6 +4767,7 @@
     .sb-picks { grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .sb-meta .link-btn { min-height:44px; }
     .sub-props tr { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }
   /* ---- Customers & contacts (customers.js, 16 Oct): the whole call list,
      leads filled in one after another, Check the list, duplicates, Everyone,
      and "What for" found by typing. Every choice a button in sight. ---- */
