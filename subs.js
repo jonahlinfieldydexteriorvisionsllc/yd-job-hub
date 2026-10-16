@@ -9,12 +9,16 @@
 // the client, side by side, is nobody else's business, and a settings
 // document needs no new security rules:
 //   subs: { subId: { name, match, phone, email, notes, createdAt,
-//                    props: { propId: { jobId, client, address, every,
-//                                       everyText, perMonth, services[],
-//                                       theirCents, theirPer, ourCents,
-//                                       ourPer, from, to, off,
+//                    props: { propId: { jobId, customerId, client, address,
+//                                       every, everyText, perMonth,
+//                                       services[], theirCents, theirPer,
+//                                       ourCents, ourPer, from, to, off,
 //                                       doneOn, doneWhy } } } }
 //   paid: { receiptId: 'YYYY-MM-DD' }     bills marked paid here
+//   visitFix / rcFix / handVisits          each bill's client, mows, Count
+//                                          (see "every bill, and its client")
+// customerId: the client in the customer list (customers.js) -- their
+// name on a bill finds them, and what they owe is shown.
 // every: weekly | biweekly | monthly | other (everyText written in, perMonth
 // visits a month for the totals). *Per: visit | month. from/to: the season
 // as MM-DD. doneOn: the day its Done box was ticked; doneWhy: season (back
@@ -47,7 +51,8 @@
                     'Mulching', 'Snow removal'];
   const DUE_SOON_DAYS = 5;
 
-  let data = { subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {} };
+  const EMPTY = () => ({ subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {}, rcFix: {} });
+  let data = EMPTY();
   let visitsDoc = { visits: {}, scannedAt: '' };   // settings/subVisits (functions/subvisits.py)
   let checking = false;       // "Check their email now" is waiting on the server
   let addingVisit = '';       // subId while its "add a visit by hand" form is open
@@ -55,6 +60,15 @@
   let unsub = null;
   let open = {};              // subId -> its details are open
   let form = null;            // { kind: 'sub'|'prop', subId, propId }
+  // The bills (each one's client, below): what is open on the screen.
+  let openBills = {};         // subId -> the property whose bills show under the table
+  let changing = {};          // bill key -> its client buttons are open (Change)
+  let allProps = {};          // bill key -> every property offered, not only the likeliest
+  let finding = {};           // bill key -> "Another client…" is open
+  let findQ = {};             // bill key -> what is typed in it
+  let matchAll = {};          // subId -> every bill to match listed
+  let billsAll = {};          // subId -> every bill listed
+  let memo = { at: 0, bySub: {} };     // each subcontractor's bills, worked out
 
   const el = id => document.getElementById(id);
   const owner = () => !!(window.YDAuth && window.YDAuth.isOwner);
@@ -88,7 +102,7 @@
     };
     merge(data, JSON.parse(JSON.stringify(patch)));
   }
-  function put(patch, what) { applyLocal(patch); save(patch, what); render(); }
+  function put(patch, what) { applyLocal(patch); forget(); save(patch, what); render(); }
 
   // ------------------------------------------------------------- the money
 
@@ -281,16 +295,18 @@
   // payment with its bill only while the bill is still waiting to be sorted,
   // and theirs are filed here at once -- so a payment can arrive as a
   // receipt of its own.
-  function paidByPayment(bills) {
-    const done = new Set(), used = new Set();
+  // `by` says which payment paid which bill; `used`, the payments that did.
+  function pairPayments(bills) {
+    const done = new Set(), used = new Set(), by = {};
     const pays = bills.filter(isPayment);
     bills.filter(r => isBill(r) && !r.paid).sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
       .forEach(inv => {
         const p = pays.find(x => !used.has(x.id) && x.totalCents === inv.totalCents && String(x.date || '') >= String(inv.date || ''));
-        if (p) { used.add(p.id); done.add(inv.id); }
+        if (p) { used.add(p.id); done.add(inv.id); by[inv.id] = p.id; }
       });
-    return done;
+    return { paid: done, used: used, by: by };
   }
+  const paidByPayment = bills => pairPayments(bills).paid;
   const isPaid = (r, matched) => !!(r.paid || (data.paid || {})[r.id] || (matched && matched.has(r.id)));
   function owed(s) {
     const t = ymd(new Date());
@@ -363,42 +379,364 @@
   // manual thing built in avoids issues down the line"). The server reads
   // each subcontractor's invoice emails into settings/subVisits (functions/
   // subvisits.py): one visit per invoice {sub, date, service, address,
-  // cents}. Here each is put with a client -- by the address on it, else the
-  // client a visit of that service was last put with by hand -- and counted
-  // as mows: one for a visit, a month's worth (from how often) for a monthly
-  // bill (≈, a guess until set), none for other work. What Jonah sets by hand
-  // is kept beside them in settings/subcontractors and always wins:
-  //   visitFix:   { key: { prop, mows, skip } }
+  // cents, msgIds}. Each bill (below: a visit, a receipt, or both) is put
+  // with a client and counted as mows: one for a visit, a month's worth (from
+  // how often) for a monthly bill (≈, a guess until set), none for other
+  // work. What Jonah sets by hand is kept beside them in
+  // settings/subcontractors and always wins:
+  //   visitFix:   { visitKey: { prop, none, mows, skip, at } }
+  //   rcFix:      { receiptId: { prop, none, mows, skip, at } }
   //   handVisits: { id: { sub, prop, date, service, mows } }
-  //   svcProp:    { subId: { serviceKey: propId } }    learned from his picks
   // and a property's own mowsByHand {season, n} replaces its whole count.
+  // (svcProp -- the client a service last went to, kept before 16 Oct -- is
+  // no longer read: his picks themselves teach now, below.)
   const MOWING = /mow|lawn/i;
   const ABBR = { saint: 'st', street: 'st', drive: 'dr', avenue: 'ave', road: 'rd', lane: 'ln', court: 'ct',
                  circle: 'cir', boulevard: 'blvd', place: 'pl', parkway: 'pkwy', highway: 'hwy', terrace: 'ter',
                  trail: 'trl', north: 'n', south: 's', east: 'e', west: 'w' };
   const svcKeyOf = s => norm(s).replace(/ /g, '-').slice(0, 60);
-  // An address as house number + street name, the way two spellings of it
-  // agree ("120 Saint Marys Dr" is "120 St Marys Drive"). A rural fire
-  // number (N1234) counts as the number.
-  function addrKey(a) {
-    const t = norm(a).split(' ').filter(Boolean).map(w => ABBR[w] || w);
-    const i = t.findIndex(w => /^[nsew]?\d+$/.test(w));
-    if (i === -1) return '';
-    let rest = t.slice(i + 1).filter(w => !/^[nsew]$/.test(w));
-    if (rest[0] === 'st' && rest.length > 1) rest = rest.slice(1);   // "St Marys", "Saint Marys"
-    return rest.length ? t[i] + ' ' + rest[0] : '';
+  // Every address in a piece of text, each as house number + street name,
+  // the way two spellings of one agree ("120 Saint Marys Dr" is "120 St
+  // Marys Drive"). A rural fire number (N1234) counts as the number.
+  function addrKeysIn(text) {
+    const t = norm(text).split(' ').filter(Boolean).map(w => ABBR[w] || w);
+    const out = [];
+    t.forEach((w, i) => {
+      if (!/^[nsew]?\d+$/.test(w)) return;
+      let rest = t.slice(i + 1, i + 6).filter(x => !/^[nsew]$/.test(x));
+      if (rest[0] === 'st' && rest.length > 1) rest = rest.slice(1);   // "St Marys", "Saint Marys"
+      if (rest[0] && !/^\d+$/.test(rest[0]) && out.indexOf(w + ' ' + rest[0]) === -1) out.push(w + ' ' + rest[0]);
+    });
+    return out;
   }
-  function propForVisit(s, v) {
-    const fix = (data.visitFix || {})[v.key];
-    if (fix && 'prop' in fix) return fix.prop && (s.props || {})[fix.prop] ? fix.prop : null;
-    const k = addrKey(v.address);
-    if (k) {
-      const p = propsOf(s).find(x => addrKey(x.address) === k);
-      if (p) return p.id;
+
+  // ------------------------------------------------- every bill, and its client
+  //
+  // Jonah (16 Oct 2026), of his mowing subcontractor: "all bills from
+  // [them] get matched with the client the bill is for or if cant be
+  // matched once theyre sorted to [that] subcontractor then i select which
+  // client it was for. this needs to be done."
+  //
+  // ONE BILL, ONCE. A subcontractor's bill reaches Job Hub two ways, mostly
+  // both: the email reader keeps it as a receipt (filed to them, above), and
+  // their invoice emails are read for the visits (subvisits.py). The same
+  // email is then a receipt AND a visit. They are one bill when they came
+  // from the same email (a receipt's mail ids, a visit's msgIds) -- else the
+  // same amount read within PAIR_DAYS at an address that does not disagree.
+  // A reminder read as a second receipt joins the first by its invoice
+  // number (or: same amount, same due day, same subject); a payment goes
+  // with the bill it paid, and is never a cost of its own while they send
+  // bills at all (one payment for four bills would count them twice). A
+  // receipt Jonah sorted somewhere else in Receipts (a job, the shop) takes
+  // its visit with it: not theirs to put with a client.
+  //
+  // WHICH CLIENT, in this order:
+  //   1. by hand -- what Jonah picked always wins (visitFix / rcFix: {prop},
+  //      or {none: true} for "Not for a client");
+  //   2. the address -- the house number and street on the bill are one
+  //      property's (its own address, else its job's or its customer's); or
+  //      an address he put with one client before;
+  //   3. the name -- one property's client (or their customer / job name) is
+  //      named on the bill;
+  //   4. learned -- on a bill with no address, the same work for the same
+  //      amount went to one client when he picked.
+  // Only ONE property is a match: two that fit are no answer, and the bill
+  // waits under "Bills to match" with a button for each property. Nothing of
+  // this is stored: it is worked out again from the bills, the properties
+  // and his picks every time, so changing a pick un-teaches it, and the
+  // bills filed before this were matched the same way the moment it came in.
+  const PAY_DOCS = ['receipt', 'person_payment'];
+  const COST_DOCS = ['invoice', 'other', 'order_confirmation'];
+  const PAIR_DAYS = 3;                      // a receipt and a visit of one bill
+  const PAY_BEFORE_DAYS = 10, PAY_AFTER_DAYS = 120;   // a payment, around the bill it paid
+  const MATCH_SHOWN = 6, PROPS_SHOWN = 9, BILLS_SHOWN = 40;
+  const HOW = { hand: '✋ you picked it', address: '📍 by the address', name: '👤 by the name on it', learned: '🔁 like one you picked' };
+  // Words in a client's name that are not their name.
+  const NAME_SKIP = ['residence', 'home', 'house', 'property', 'family', 'rental', 'mr', 'mrs', 'ms', 'dr', 'jr', 'sr'].concat(FILLER);
+  const nameWords = n => norm(n).split(' ').filter(w => w.length > 1 && !/^\d+$/.test(w) && NAME_SKIP.indexOf(w) === -1);
+  const isDay = d => /^\d{4}-\d{2}-\d{2}$/.test(d || '');
+  const dayMs = d => (isDay(String(d || '').slice(0, 10)) ? Date.parse(String(d).slice(0, 10)) : NaN);
+  const apart = (a, b) => { const x = dayMs(a), y = dayMs(b); return isNaN(x) || isNaN(y) ? Infinity : Math.abs(x - y) / 864e5; };
+  const dayWords = d => (isDay(d) ? (d.slice(0, 4) === String(new Date().getFullYear()) ? fmtDateMD(d) : fmtDateMDY(d)) : '');
+
+  // "Invoice from <company> - <the work> - <the address>": Jobber's subject,
+  // read the way the server reads it (subvisits.parse).
+  function subjectParts(subject) {
+    const m = /^\s*(?:(?:re|fwd?|fw)\s*:\s*)*invoice(?:\s+#?\S+)?\s+from\s+(.+)$/i.exec(String(subject || ''));
+    if (!m) return null;
+    const parts = m[1].split(/\s+[-–—]\s+/).map(x => x.trim()).filter(Boolean);
+    return { service: parts[1] || '', address: parts.slice(2).join(' - ') };
+  }
+  const firstSubject = r => ((r.mail || []).find(x => x && subjectParts(x.subject)) || (r.mail || [])[0] || {}).subject || '';
+  // What a receipt says that can name a client or a place.
+  const receiptText = r => [r.jobHint, r.deliverTo, r.summary, r.po].concat((r.lines || []).map(l => l && l.name),
+    (r.mail || []).map(x => x && x.subject)).filter(Boolean).join(' ; ');
+  // A receipt of theirs: a bill or a payment; sorted somewhere else in
+  // Receipts (not theirs to match); or still to sort and not even called a
+  // subcontractor's (it may yet go on a job -- a sub who sells materials).
+  function roleOf(r) {
+    const sp = Array.isArray(r.splits) ? r.splits.filter(Boolean) : [];
+    return {
+      kind: PAY_DOCS.indexOf(r.docType) !== -1 ? 'payment' : COST_DOCS.indexOf(r.docType || 'other') !== -1 ? 'bill' : 'other',
+      elsewhere: sp.length > 0 && !sp.some(x => x.to === 'sub'),
+      pending: !sp.length && !!window.YDStages && YDStages.receipt(r).id === 'tosort' && r.kind !== 'subcontractor',
+    };
+  }
+  // What it cost them: the part filed to this subcontractor (with its tax),
+  // else the whole receipt.
+  function receiptCents(r, s) {
+    const sp = (r.splits || []).filter(x => x && x.to === 'sub' && (!x.subId || x.subId === s.id));
+    if (sp.length) return sp.reduce((t, x) => t + (x.cents || 0) + (x.taxCents || 0), 0);
+    return typeof r.totalCents === 'number' ? r.totalCents : null;
+  }
+
+  // Jobs and customers, read once for each working-out.
+  function lookups() {
+    const jobs = {};
+    let custs = {};
+    try { (typeof loadAllJobs === 'function' ? loadAllJobs() || [] : []).forEach(j => { if (j && j._id) jobs[j._id] = j; }); } catch (e) { /* not ready */ }
+    try { custs = (window.YDCustomers && YDCustomers.all && YDCustomers.all()) || {}; } catch (e) { /* not ready */ }
+    return { jobs: jobs, custs: custs, keys: {} };
+  }
+  const jobOf = (p, L) => (p.jobId && L.jobs[p.jobId]) || null;
+  const custOf = (p, L) => (p.customerId && L.custs[p.customerId]) ||
+    ((jobOf(p, L) || {}).customerId && L.custs[jobOf(p, L).customerId]) || null;
+  // Where a property is: its own address; with none, its job's or its
+  // customer's (where the work is first).
+  function propKeys(p, L) {
+    const own = addrKeysIn([p.address, p.street].filter(Boolean).join(' ; '));
+    if (own.length) return own;
+    const j = jobOf(p, L), c = custOf(p, L), ship = (c && c.ship) || {};
+    return addrKeysIn([j && j.address, ship.address || ship.street, c && (c.address || c.street)].filter(Boolean).join(' ; '));
+  }
+  // Where it is, in words (the first part of the address it goes by).
+  const placeOf = (p, L) => {
+    const j = jobOf(p, L), c = custOf(p, L), ship = (c && c.ship) || {};
+    return String(p.address || (j && j.address) || ship.address || (c && c.address) || '').split(',')[0];
+  };
+  const propNames = (p, L) => { const j = jobOf(p, L), c = custOf(p, L); return [p.client, c && c.name, c && c.business, j && j.customerName].filter(Boolean); };
+  // A client is named on a bill when every word of their name is on it --
+  // two words at least, or one of four letters or more ("Doe" alone is not
+  // enough to tell).
+  const namedOn = (p, b, L) => propNames(p, L).some(n => {
+    const w = nameWords(n);
+    return (w.length > 1 || (w.length === 1 && w[0].length >= 4)) && w.every(x => b.words.has(x));
+  });
+
+  function newBill(key, f) {
+    return Object.assign({ key: key, visitKey: '', handKey: '', rids: [], receipts: [], rcBill: null, paidBy: null, payOnly: false,
+      hand: false, date: '', sent: '', cents: null, service: '', address: '', text: '', link: '',
+      prop: null, none: false, how: '', from: '', elsewhere: false, skip: false, mows: 0, setMows: false, guess: false, counts: false }, f);
+  }
+  function addReceipt(b, r, s) {
+    b.rids.push(r.id); b.receipts.push(r);
+    if (r.role.elsewhere) b.elsewhere = true;
+    else if (!r.role.pending && r.role.kind === 'bill' && !b.rcBill) {
+      b.rcBill = r;
+      const c = receiptCents(r, s);
+      if (typeof c === 'number') b.cents = c;      // what the books hold
     }
-    const learned = ((data.svcProp || {})[s.id] || {})[svcKeyOf(v.service)];
-    return learned && (s.props || {})[learned] ? learned : null;
+    const sp = subjectParts(firstSubject(r)) || {};
+    if (!b.service) b.service = sp.service || ((r.lines || [])[0] || {}).name || r.summary || '';
+    if (!b.address) b.address = sp.address || '';
+    if (!b.date) b.date = r.date || '';
+    if (!b.link && r.link) b.link = r.link;
+    b.text += ' ; ' + receiptText(r);
   }
+  // A bill's picks: on its visit, and on each of its receipts. The newest
+  // pick wins; mows and Count are read from the visit first.
+  function fixOf(b) {
+    const list = (b.visitKey ? [(data.visitFix || {})[b.visitKey]] : []).concat(b.rids.map(id => (data.rcFix || {})[id])).filter(Boolean);
+    const pick = list.filter(f => f.none === true || (typeof f.prop === 'string' && f.prop))
+      .sort((a, c) => String(c.at || '').localeCompare(String(a.at || '')))[0] || null;
+    const field = k => { const f = list.find(x => x[k] != null); return f ? f[k] : null; };
+    return { pick: pick, mows: field('mows'), skip: field('skip') };
+  }
+
+  function computeBills(s) {
+    const L = lookups(), props = propsOf(s), propIds = s.props || {};
+    props.forEach(p => { L.keys[p.id] = propKeys(p, L); });
+    const rs = billsOf(s);
+    rs.forEach(r => { r.role = roleOf(r); });
+    const pay = pairPayments(rs);
+    const bills = [], byMsg = {}, info = [];
+    // Their invoice emails: one visit each.
+    Object.keys(visitsDoc.visits || {}).forEach(k => {
+      const v = visitsDoc.visits[k];
+      if (!v || v.sub !== s.id) return;
+      const b = newBill('v-' + k, { visitKey: k, date: v.date || v.sent || '', sent: v.sent || '',
+        cents: typeof v.cents === 'number' ? v.cents : null, service: v.service || '', address: v.address || '',
+        text: [v.subject, v.service, v.address].filter(Boolean).join(' ; ') });
+      (v.msgIds || []).forEach(id => { byMsg[id] = b; });
+      bills.push(b);
+    });
+    // Receipts: with the visit read from the same email; else with the
+    // other receipts of the same bill; else with a visit of the same amount
+    // a few days apart; else a bill of their own.
+    const loose = [];
+    rs.forEach(r => {
+      if (r.role.kind === 'payment') return;
+      const b = (r.mail || []).map(x => x && byMsg[x.id]).find(Boolean);
+      if (b) { addReceipt(b, r, s); return; }
+      if (r.role.elsewhere || r.role.pending) return;
+      if (r.role.kind === 'bill') loose.push(r); else info.push(r);
+    });
+    const groups = {};
+    loose.forEach(r => {
+      const subj = norm(String(firstSubject(r)).replace(/^\s*((re|fwd?|fw)\s*:\s*)+/i, ''));
+      // (The number however it is written: "A-77" is "A77".)
+      const g = norm(r.orderNo) ? 'o' + norm(r.orderNo).replace(/ /g, '')
+        : r.dueDate && subj && typeof r.totalCents === 'number' ? 'd' + r.dueDate + '|' + r.totalCents + '|' + subj : 'r' + r.id;
+      (groups[g] = groups[g] || []).push(r);
+    });
+    Object.keys(groups).forEach(g => {
+      const list = groups[g].sort((a, c) => String(a.date || '').localeCompare(String(c.date || '')) || String(a.id).localeCompare(String(c.id)));
+      const r = list[0], cents = receiptCents(r, s);
+      const keys = addrKeysIn((subjectParts(firstSubject(r)) || {}).address || '');
+      const near = b => Math.min(apart(b.date, r.date), apart(b.sent, r.date));
+      const fits = b => { const k = addrKeysIn(b.address); return !keys.length || !k.length || keys.some(x => k.indexOf(x) !== -1); };
+      const twin = typeof cents === 'number'
+        ? bills.filter(b => b.visitKey && !b.rids.length && b.cents === cents && near(b) <= PAIR_DAYS && fits(b)).sort((a, c) => near(a) - near(c))[0]
+        : null;
+      const b = twin || newBill('r-' + r.id, {});
+      if (!twin) bills.push(b);
+      list.forEach(x => addReceipt(b, x, s));
+    });
+    // Payments: with the bill they paid.
+    const ofRid = {};
+    bills.forEach(b => b.rids.forEach(id => { ofRid[id] = b; }));
+    Object.keys(pay.by).forEach(inv => {
+      const b = ofRid[inv], p = rs.find(r => r.id === pay.by[inv]);
+      if (b && p && !p.role.elsewhere) { b.paidBy = p; ofRid[p.id] = b; }
+    });
+    const billsAtAll = bills.length > 0;
+    const ref = b => b.sent || b.date;
+    rs.filter(r => r.role.kind === 'payment' && !pay.used.has(r.id) && !r.role.elsewhere)
+      .sort((a, c) => String(a.date || '').localeCompare(String(c.date || ''))).forEach(r => {
+        const cents = receiptCents(r, s), t = dayMs(r.date);
+        const b = typeof cents === 'number' && !isNaN(t) ? bills.filter(x => !x.rcBill && !x.paidBy && !x.elsewhere && x.cents === cents &&
+            t >= dayMs(ref(x)) - PAY_BEFORE_DAYS * 864e5 && t <= dayMs(ref(x)) + PAY_AFTER_DAYS * 864e5)
+          .sort((a, c) => String(ref(a)).localeCompare(String(ref(c))))[0] : null;
+        if (b) { b.paidBy = r; ofRid[r.id] = b; if (!b.link && r.link) b.link = r.link; return; }
+        // Paid on the spot by a subcontractor who sends no bills: the
+        // receipt is the bill. Otherwise it only says something was paid.
+        if (billsAtAll || r.role.pending) { info.push(r); return; }
+        const nb = newBill('r-' + r.id, { payOnly: true });
+        addReceipt(nb, r, s);
+        nb.cents = cents;
+        bills.push(nb);
+        ofRid[r.id] = nb;
+      });
+    // Visits added by hand: a client and mows, no bill.
+    Object.keys(data.handVisits || {}).forEach(k => {
+      const v = data.handVisits[k];
+      if (!v || v.sub !== s.id) return;
+      bills.push(newBill('h-' + k, { hand: true, handKey: k, date: v.date || '', service: v.service || 'Mow',
+        prop: propIds[v.prop] ? v.prop : null, how: 'hand', mows: +v.mows || 0, setMows: true }));
+    });
+
+    // What each says: its own address (the one in its subject), any other
+    // address in it, and its words -- not their own company's.
+    const own = new Set(words(s.name).concat(words(s.match)));
+    bills.forEach(b => {
+      b.siteKeys = addrKeysIn(b.address);
+      b.textKeys = b.siteKeys.length ? [] : addrKeysIn(b.text);
+      b.words = new Set(norm(b.text).split(' ').filter(w => w && !own.has(w)));
+    });
+    // 1. His picks.
+    bills.forEach(b => {
+      if (b.hand) return;
+      b.fix = fixOf(b);
+      b.skip = !!b.fix.skip;
+      const pk = b.fix.pick;
+      if (!pk || b.elsewhere) return;
+      if (pk.none) { b.none = true; b.how = 'hand'; }
+      else if (propIds[pk.prop]) { b.prop = pk.prop; b.how = 'hand'; }
+    });
+    // What his picks teach: an address, or (with none on the bill) the work
+    // and its amount, went to one client -- or to none.
+    const learnAddr = {}, learnSvc = {}, svcPicks = {};
+    const svcKey = b => svcKeyOf(b.service) + '|' + (b.cents == null ? '' : b.cents);
+    bills.forEach(b => {
+      if (b.hand || b.how !== 'hand' || b.elsewhere) return;
+      const to = b.none ? 'none' : b.prop;
+      const teach = (map, k) => { const m = map[k] = map[k] || {}; if (!(to in m) || String(b.date) > m[to]) m[to] = String(b.date || ''); };
+      if (b.siteKeys.length) b.siteKeys.forEach(k => teach(learnAddr, k));
+      else teach(learnSvc, svcKey(b));
+      if (!b.none) (svcPicks[svcKeyOf(b.service)] = svcPicks[svcKeyOf(b.service)] || {})[b.prop] = true;
+    });
+    const sure = maps => {
+      const m = {};
+      maps.filter(Boolean).forEach(x => Object.keys(x).forEach(k => {
+        if ((k === 'none' || propIds[k]) && (!(k in m) || x[k] > m[k])) m[k] = x[k];
+      }));
+      const ks = Object.keys(m);
+      return ks.length === 1 ? { to: ks[0], from: m[ks[0]] } : null;
+    };
+    const hits = keys => props.filter(p => (L.keys[p.id] || []).some(k => keys.indexOf(k) !== -1));
+    const auto = b => {
+      if (b.siteKeys.length) {
+        let c = hits(b.siteKeys);
+        if (c.length > 1) c = c.filter(p => namedOn(p, b, L));
+        if (c.length === 1) return { to: c[0].id, how: 'address' };
+        const l = sure(b.siteKeys.map(k => learnAddr[k]));
+        if (l) return { to: l.to, how: 'learned', from: l.from };
+      } else if (b.textKeys.length) {
+        const c = hits(b.textKeys);
+        if (c.length === 1) return { to: c[0].id, how: 'address' };
+      }
+      const n = props.filter(p => namedOn(p, b, L));
+      if (n.length === 1) return { to: n[0].id, how: 'name' };
+      if (!b.siteKeys.length) {
+        const l = sure([learnSvc[svcKey(b)]]);
+        if (l) return { to: l.to, how: 'learned', from: l.from };
+      }
+      return null;
+    };
+    // 2-4. The rest, by themselves.
+    bills.forEach(b => {
+      if (b.hand || b.how || b.elsewhere) return;
+      const m = auto(b);
+      if (!m) return;
+      if (m.to === 'none') b.none = true; else b.prop = m.to;
+      b.how = m.how; b.from = m.from || '';
+    });
+    bills.forEach(b => {
+      if (b.hand) return;
+      const p = b.prop ? propIds[b.prop] : null;
+      b.setMows = typeof b.fix.mows === 'number';
+      b.mows = b.setMows ? b.fix.mows : defaultMows(b, p);
+      b.guess = !b.setMows && /month/i.test(b.service || '') && MOWING.test(b.service || '');
+      // A cost of theirs, to count: not set aside here (Count), not
+      // "Not for a client", not sorted somewhere else in Receipts.
+      b.counts = !b.skip && !b.none && !b.elsewhere;
+    });
+    bills.sort((a, c) => String(c.date || '').localeCompare(String(a.date || '')) || String(a.key).localeCompare(String(c.key)));
+    return {
+      bills: bills, info: info, pay: pay, svcPicks: svcPicks, L: L, rcIndex: ofRid,
+      toMatch: bills.filter(b => !b.hand && b.counts && !b.prop),
+    };
+  }
+  // Worked out once for a moment's drawing (the cards ask many times), and
+  // again whenever anything changes.
+  function billsFor(s) {
+    if (Date.now() - memo.at > 1500) memo = { at: Date.now(), bySub: {} };
+    return memo.bySub[s.id] || (memo.bySub[s.id] = computeBills(s));
+  }
+  function forget() { memo = { at: 0, bySub: {} }; }
+  const subById = id => subsList().find(x => x.id === id) || null;
+  function billByKey(subId, key) {
+    const s = subById(subId);
+    const b = s ? billsFor(s).bills.find(x => x.key === key) : null;
+    return b ? { s: s, b: b } : null;
+  }
+  // Whether a bill falls in the season we are in (its client's season, or
+  // the usual one).
+  function billThisSeason(s, b) {
+    const p = (b.prop && (s.props || {})[b.prop]) || {};
+    return isDay(b.date) && seasonOf(p, +b.date.slice(0, 4), dayNum(b.date.slice(5))) === seasonNow(p);
+  }
+
   // Mows a visit is worth when nobody has said: one, a month's worth for a
   // monthly bill, none for work that is not mowing.
   function defaultMows(v, p) {
@@ -408,20 +746,9 @@
     return p.every === 'biweekly' ? 2 : p.every === 'monthly' ? 1
       : p.every === 'other' ? Math.max(1, Math.round(+p.perMonth || 1)) : 4;
   }
-  function visitsOf(s) {
-    const auto = Object.keys(visitsDoc.visits || {}).filter(k => (visitsDoc.visits[k] || {}).sub === s.id)
-      .map(k => Object.assign({ key: k }, visitsDoc.visits[k]));
-    const hand = Object.keys(data.handVisits || {}).filter(k => (data.handVisits[k] || {}).sub === s.id)
-      .map(k => Object.assign({ key: k, hand: true }, data.handVisits[k]));
-    return auto.concat(hand).map(v => {
-      const fix = v.hand ? {} : ((data.visitFix || {})[v.key] || {});
-      const prop = v.hand ? ((s.props || {})[v.prop] ? v.prop : null) : propForVisit(s, v);
-      const setMows = v.hand || typeof fix.mows === 'number';
-      const mows = v.hand ? (+v.mows || 0) : setMows ? fix.mows : defaultMows(v, prop ? s.props[prop] : null);
-      return Object.assign(v, { prop: prop, mows: mows, setMows: setMows, skip: !!fix.skip,
-        guess: !setMows && /month/i.test(v.service || '') && MOWING.test(v.service || '') });
-    }).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-  }
+  // Every bill and visit of theirs, newest first, each with its client and
+  // mows (what the mows and the schedule below count).
+  const visitsOf = s => billsFor(s).bills;
   const seasonNow = p => { const t = new Date(); return seasonOf(p, t.getFullYear(), (t.getMonth() + 1) * 100 + t.getDate()); };
   // This season's mows at one property, and the last one.
   function mowsFor(s, p, list) {
@@ -444,6 +771,11 @@
     if (!owner()) return;
     if (form && document.activeElement && wrap.contains(document.activeElement) &&
         /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName)) return;     // not under someone typing
+    forget();
+    // "Another client…" keeps its box (and what is in it) through a redraw:
+    // a receipt arriving must not take the words from under the fingers.
+    const act = document.activeElement;
+    const keepFind = act && act.id && /^sbFind-/.test(act.id) && wrap.contains(act) ? act.id : '';
     const now = new Date(), y = now.getFullYear(), m = now.getMonth();
     const list = subsList();
     const sugg = suggestions();
@@ -457,13 +789,21 @@
       list.map(s => subHtml(s, y, m)).join('') +
       (form && form.kind === 'sub' && !form.subId ? subFormHtml({}) :
         '<button class="btn btn-sm btn-accent" onclick="subEdit(\'\')">+ Add a subcontractor</button>');
+    if (keepFind) {
+      const n = el(keepFind);
+      if (n) { n.focus(); try { n.setSelectionRange(n.value.length, n.value.length); } catch (e) { /* not a text box */ } }
+    }
   }
 
   function subHtml(s, y, m) {
     const t = totals(s, y, m), st = seasonTotals(s, y), sf = seasonTotals(s, y, true), o = owed(s);
-    const props = propsOf(s), bills = billsOf(s);
+    const props = propsOf(s), B = billsFor(s);
     const monthName = new Date(y, m, 1).toLocaleDateString('en-US', { month: 'long' });
     const nVisits = n => n + ' visit' + (n === 1 ? '' : 's');
+    // What their bills came to this season, each counted once.
+    const cur = B.bills.filter(b => !b.hand && b.counts && billThisSeason(s, b));
+    const billed = cur.reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0);
+    const nBills = B.bills.filter(b => !b.hand).length;
     return '<div class="sub-card">' +
       '<div class="sub-head"><b>' + esc(s.name || 'Subcontractor') + '</b>' +
         (s.phone ? ' <a class="link-btn" href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '') +
@@ -475,29 +815,89 @@
         fig('Margin this month', props.length ? marginText(t) : '—') +
         fig('Season so far', props.length ? marginText(sf) + ' · ' + nVisits(sf.visits) : '—') +
         fig('Whole season', props.length ? marginText(st) + ' · ' + nVisits(st.visits) : '—') +
+        fig('Their bills this season', cur.length ? money(billed) + ' · ' + cur.length + ' bill' + (cur.length === 1 ? '' : 's') : 'none yet') +
         fig('Owed to them', o.count ? money(o.cents) + ' · ' + o.count + ' bill' + (o.count === 1 ? '' : 's') : 'nothing') +
       '</div>' +
       (o.late.length ? '<div class="sub-warn late">⚠️ Past due: ' + o.late.map(r => money(r.totalCents) + ' (due ' + fmtDateMD(r.dueDate) + ')').join(', ') + '</div>'
         : o.soon.length ? '<div class="sub-warn">Due soon: ' + o.soon.map(r => money(r.totalCents) + ' by ' + fmtDateMD(r.dueDate)).join(', ') + '</div>' : '') +
+      toMatchHtml(s, props, B) +
       '<details class="sub-more"' + (open[s.id] ? ' open' : '') + ' ontoggle="subToggle(\'' + sid(s.id) + '\', this.open)">' +
-        '<summary>Properties (' + props.length + '), visits and bills (' + bills.length + ')</summary>' +
-        propsHtml(s, props, y, m) +
-        visitsHtml(s, props) +
-        billsHtml(bills) +
+        '<summary>Properties (' + props.length + ') and their bills (' + nBills + ')</summary>' +
+        propsHtml(s, props, y, m, B) +
+        allBillsHtml(s, props, B) +
       '</details>' +
     '</div>';
   }
   const fig = (label, value) => '<div class="sub-fig"><span class="sub-fig-l">' + esc(label) + '</span><span class="sub-fig-v">' + value + '</span></div>';
 
-  function propsHtml(s, props, y, m) {
+  // ------------------------------------------------- a property's season
+  //
+  // From the start of its season to today, month by month, what its prices
+  // say (whole visits on real dates, as the cards count them).
+  function expectedSoFar(p, anchor) {
+    const t = new Date();
+    const from = /^(\d{2})-(\d{2})$/.exec(p.from || SEASON.from) || [0, '04', '15'];
+    let y = seasonNow(p), m = +from[1] - 1;
+    const out = { visits: 0, their: 0, ours: 0 };
+    for (let i = 0; i < 13; i++) {
+      if (y > t.getFullYear() || (y === t.getFullYear() && m > t.getMonth())) break;
+      const x = monthOf(p, y, m, anchor, y === t.getFullYear() && m === t.getMonth() ? t.getDate() : 0);
+      out.visits += x.visits; out.their += x.their; out.ours += x.ours;
+      if (++m > 11) { m = 0; y++; }
+    }
+    return out;
+  }
+  // What the client owes YD: their open QuickBooks invoices (invoices.js),
+  // found by the customer the property is tied to, or its job. null when it
+  // is tied to neither (nothing to go by).
+  function clientOwes(p, L) {
+    if (!window.YDInvoices || !YDInvoices.all) return null;
+    const c = custOf(p, L);
+    const qb = c && c.qbCustomerId ? String(c.qbCustomerId) : '';
+    if (!qb && !p.jobId) return null;
+    const list = Object.values(YDInvoices.all() || {}).filter(inv => inv && !inv.paidAt && !inv.deletedAt && inv.open !== false &&
+      Number(inv.balance) > 0 && ((qb && String(inv.customerId || '') === qb) || (p.jobId && inv.jobId === p.jobId)));
+    return { cents: Math.round(list.reduce((n, inv) => n + (Number(inv.balance) || 0), 0) * 100), n: list.length };
+  }
+  // A property this season: its bills and what they came to, what its
+  // prices say they should come to, what YD charges, and the margin -- by
+  // their bills when there are any.
+  function propFigures(s, p, B, anchors) {
+    const mine = B.bills.filter(b => b.prop === p.id);
+    const now = mine.filter(b => !b.hand && b.counts && billThisSeason(s, b));
+    const billed = now.reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0);
+    const exp = expectedSoFar(p, anchors[p.id]);
+    const theirSet = typeof p.theirCents === 'number', oursSet = typeof p.ourCents === 'number';
+    const cost = now.length ? billed : exp.their;
+    // A difference worth a look: a dollar, or a tenth of what was expected.
+    const diff = theirSet && now.length && Math.abs(billed - exp.their) >= Math.max(100, Math.round(exp.their / 10)) ? billed - exp.their : null;
+    return { mine: mine, now: now, billed: billed, noAmount: now.filter(b => typeof b.cents !== 'number').length,
+      exp: exp, theirSet: theirSet, oursSet: oursSet, cost: cost, diff: diff,
+      margin: oursSet ? exp.ours - cost : null, owes: clientOwes(p, B.L) };
+  }
+  const diffWords = (f, short) => (f.diff == null ? '' : '⚠️ ' + money(Math.abs(f.diff)) + (f.diff > 0 ? ' more' : ' less') +
+    (short ? '' : ' than their price says (' + money(f.exp.their) + ' for ' + f.exp.visits + ' visit' + (f.exp.visits === 1 ? '' : 's') + ')'));
+  function seasonCellHtml(s, p, f) {
+    return '<button class="link-btn sb-bills-btn" onclick="subPropBills(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\')">' +
+        (f.now.length ? money(f.billed) + ' · ' + f.now.length + ' bill' + (f.now.length === 1 ? '' : 's') : 'No bills yet') + '</button>' +
+      (f.theirSet ? '<div class="muted">their price: ' + money(f.exp.their) + '</div>' : '') +
+      (f.diff != null ? '<div class="sb-diff">' + diffWords(f, true) + '</div>' : '') +
+      (f.margin != null ? '<div class="muted">margin ' + marginText({ ours: f.exp.ours, their: f.cost }) + (f.now.length ? '' : ' (by price)') + '</div>' : '') +
+      (f.owes && f.owes.cents > 0 ? '<div class="sb-owes">client owes ' + money(f.owes.cents) + '</div>' : '');
+  }
+
+  function propsHtml(s, props, y, m, B) {
     // The property being edited gets its form under the table, not inside
-    // it: the table scrolls sideways on a phone, and a form in it did too.
+    // it (and on a phone each property is a card, not a sideways table).
     const editing = form && form.kind === 'prop' && form.subId === s.id && form.propId
       ? props.find(p => p.id === form.propId) : null;
     const list = visitsOf(s);
     const anchors = anchorsOf(s);
+    const S = sid(s.id);
+    const shown = openBills[s.id] && props.find(p => p.id === openBills[s.id]);
     const rows = props.map(p => {
       const x = monthOf(p, y, m, anchors[p.id]);
+      const P = sid(p.id);
       // A visit-priced property also shows what one visit makes.
       const each = p.theirPer !== 'month' && p.ourPer !== 'month' && typeof p.theirCents === 'number' && typeof p.ourCents === 'number'
         ? '<div class="muted">' + money(p.ourCents - p.theirCents) + ' a visit · ' + x.visits + ' this month</div>'
@@ -507,97 +907,232 @@
       // A done-for-the-season tick from an earlier season is history, not
       // this year's -- the box is clear again.
       const done = doneNow(p);
-      return (editing === p ? '<tr class="sub-editing"><td colspan="9"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
-        '<tr class="' + (p.off ? 'sub-off' : '') + (done ? ' sub-done' : '') + '">' +
-        '<td class="sub-done-cell"><label title="' + (done ? esc(DONE_WHY[p.doneWhy] || DONE_WHY.season) : 'Tick when done for the season or the service ended') + '">' +
-          '<input type="checkbox"' + (done ? ' checked' : '') + ' onchange="subPropDone(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\', this.checked)">' +
+      return (editing === p ? '<tr class="sub-editing"><td colspan="10"><b>' + esc(p.client || 'Client') + '</b> — editing below</td></tr>' :
+        '<tr class="' + (p.off ? 'sub-off' : '') + (done ? ' sub-done' : '') + (shown === p ? ' sb-open' : '') + '">' +
+        '<td class="sub-done-cell" data-l="Done"><label title="' + (done ? esc(DONE_WHY[p.doneWhy] || DONE_WHY.season) : 'Tick when done for the season or the service ended') + '">' +
+          '<input type="checkbox"' + (done ? ' checked' : '') + ' onchange="subPropDone(\'' + S + '\', \'' + P + '\', this.checked)">' +
           (done ? '<span>' + esc(fmtDateMD(p.doneOn)) + (p.doneWhy === 'ended' ? '<br>ended' : '') + '</span>' : '') + '</label></td>' +
-        '<td><b>' + esc(p.client || 'Client') + '</b>' + (p.address ? '<div class="muted">' + esc(p.address) + '</div>' : '') + '</td>' +
-        '<td>' + ((p.services || []).length ? esc(p.services.join(', ')) : '<span class="muted">—</span>') + '</td>' +
-        '<td class="sub-mows"><b>' + mw.n + '</b>' + (mw.byHand ? ' <span class="muted" title="Set by hand on the property (' + mw.counted +
+        '<td class="sub-client" data-l="Client"><b>' + esc(p.client || 'Client') + '</b>' + (p.address ? '<div class="muted">' + esc(p.address) + '</div>' : '') + '</td>' +
+        '<td data-l="What they do">' + ((p.services || []).length ? esc(p.services.join(', ')) : '<span class="muted">—</span>') + '</td>' +
+        '<td class="sub-mows" data-l="Mows"><b>' + mw.n + '</b>' + (mw.byHand ? ' <span class="muted" title="Set by hand on the property (' + mw.counted +
           ' from their invoices)">✎</span>' : '') + (mw.last ? '<div class="muted">last ' + esc(fmtDateMD(mw.last)) + '</div>' : '') + '</td>' +
-        '<td>' + esc(everyWords(p)) + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
-        '<td>' + money(p.theirCents) + ' ' + esc(PER[p.theirPer] || '') + '</td>' +
-        '<td>' + money(p.ourCents) + ' ' + esc(PER[p.ourPer] || '') + '</td>' +
-        '<td>' + (x.their || x.ours ? marginText(x) : '—') + each + '</td>' +
-        '<td><button class="link-btn" onclick="subProp(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\')">Edit</button></td></tr>');
+        '<td data-l="How often">' + esc(everyWords(p)) + '<div class="muted">' + esc((p.from || SEASON.from) + ' to ' + (p.to || SEASON.to)) + '</div></td>' +
+        '<td data-l="They charge">' + money(p.theirCents) + ' ' + esc(PER[p.theirPer] || '') + '</td>' +
+        '<td data-l="You charge">' + money(p.ourCents) + ' ' + esc(PER[p.ourPer] || '') + '</td>' +
+        '<td data-l="Margin this month">' + (x.their || x.ours ? marginText(x) : '—') + each + '</td>' +
+        '<td class="sub-season-cell" data-l="Season so far — their bills">' + seasonCellHtml(s, p, propFigures(s, p, B, anchors)) + '</td>' +
+        '<td class="sub-edit-cell"><button class="link-btn" onclick="subProp(\'' + S + '\', \'' + P + '\')">Edit</button></td></tr>');
     }).join('');
-    return '<div class="table-wrap"><table class="sub-table"><thead><tr><th>Done</th><th>Client</th><th>What they do</th>' +
+    return '<div class="table-wrap"><table class="sub-table sub-props"><thead><tr><th>Done</th><th>Client</th><th>What they do</th>' +
         '<th title="This season, from their invoices (and what you set by hand)">Mows</th><th>How often</th><th>They charge</th>' +
-        '<th>You charge</th><th>Margin this month</th><th></th></tr></thead><tbody>' +
-        (rows || '<tr><td colspan="9" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
+        '<th>You charge</th><th>Margin this month</th><th title="This season: what their bills came to, beside what their price says">Season so far</th><th></th></tr></thead><tbody>' +
+        (rows || '<tr><td colspan="10" class="muted">No properties yet.</td></tr>') + '</tbody></table></div>' +
+      (shown && editing !== shown ? propPanelHtml(s, shown, B, anchors) : '') +
       (editing ? propFormHtml(s, editing)
         : form && form.kind === 'prop' && form.subId === s.id && !form.propId ? propFormHtml(s, {})
-        : '<button class="btn btn-sm" onclick="subProp(\'' + sid(s.id) + '\', \'\')">+ Add a property</button>');
+        : '<button class="btn btn-sm" onclick="subProp(\'' + S + '\', \'\')">+ Add a property</button>');
   }
 
-  // Every visit their invoices show (and any added by hand), newest first:
-  // which client, how many mows, whether it counts -- each settable here.
-  const VISITS_SHOWN = 60;
-  function visitsHtml(s, props) {
-    const list = visitsOf(s);
-    const loose = list.filter(v => !v.prop && !v.skip && v.mows);
-    const pickProp = v => '<select onchange="subVisitProp(\'' + sid(s.id) + '\', \'' + sid(v.key) + '\', this.value, ' + !!v.hand + ')">' +
-      '<option value="">— which client? —</option>' + props.map(p => '<option value="' + sid(p.id) + '"' +
-        (p.id === v.prop ? ' selected' : '') + '>' + esc(p.client || 'Client') + '</option>').join('') + '</select>';
-    const row = v => '<tr class="' + (v.skip ? 'sub-off' : '') + (!v.prop && !v.skip && v.mows ? ' sub-loose' : '') + '">' +
-      '<td>' + esc(String(v.date || '').slice(0, 4) === String(new Date().getFullYear()) ? fmtDateMD(v.date) : fmtDateMDY(v.date)) + '</td>' +
-      '<td>' + esc(v.service || '') + (v.hand ? ' <span class="rc-tag">by hand</span>' : '') +
-        (v.address ? '<div class="muted">' + esc(v.address) + '</div>' : '') + '</td>' +
-      '<td>' + (typeof v.cents === 'number' ? money(v.cents) : '') + '</td>' +
-      '<td>' + pickProp(v) + '</td>' +
-      '<td><input class="sub-mow-in" type="number" min="0" step="1" inputmode="numeric" value="' + v.mows + '"' +
-        ' title="' + (v.setMows ? 'Set by hand' : v.guess ? 'A guess from how often — set it' : 'From the invoice') + '"' +
-        ' onchange="subVisitMows(\'' + sid(s.id) + '\', \'' + sid(v.key) + '\', this.value, ' + !!v.hand + ')">' +
-        (v.guess ? '<span class="muted" title="A month\'s worth, guessed from how often — set it to the real number">≈</span>' : '') + '</td>' +
-      '<td>' + (v.hand
-        ? '<button class="link-btn" onclick="subVisitRemove(\'' + sid(v.key) + '\')">Remove</button>'
-        : '<label class="sub-count"><input type="checkbox"' + (v.skip ? '' : ' checked') +
-          ' onchange="subVisitSkip(\'' + sid(v.key) + '\', !this.checked)"> Count</label>') + '</td></tr>';
+  // One property's bills: this season's with the figures, earlier ones
+  // folded. Each says how it was matched; a wrong one is changed right here.
+  function propPanelHtml(s, p, B, anchors) {
+    const f = propFigures(s, p, B, anchors);
+    const S = sid(s.id), P = sid(p.id), props = propsOf(s);
+    const cur = f.mine.filter(b => billThisSeason(s, b)), old = f.mine.filter(b => !billThisSeason(s, b));
+    const owes = f.owes == null
+      ? '<span class="muted">tie them to your customer list (Edit) to see it</span>'
+      : f.owes.cents > 0 ? money(f.owes.cents) + ' · ' + f.owes.n + ' open invoice' + (f.owes.n === 1 ? '' : 's') : 'nothing open';
+    return '<div class="sb-panel" id="sbP-' + S + '-' + P + '">' +
+      '<div class="sb-panel-h"><b>' + esc(p.client || 'Client') + '</b> — their bills' +
+        '<button class="link-btn" onclick="subPropBills(\'' + S + '\', \'\')">Close</button></div>' +
+      '<div class="sub-figs">' +
+        fig('Their bills this season', f.now.length ? money(f.billed) + ' · ' + f.now.length + ' bill' + (f.now.length === 1 ? '' : 's') +
+          (f.noAmount ? ' · ' + f.noAmount + ' with no amount' : '') : 'none yet') +
+        fig('By their price', f.theirSet ? money(f.exp.their) + ' · ' + f.exp.visits + ' visit' + (f.exp.visits === 1 ? '' : 's') : 'no price set') +
+        fig('You charge, so far', f.oursSet ? money(f.exp.ours) : 'no price set') +
+        fig('Margin so far', f.margin != null ? marginText({ ours: f.exp.ours, their: f.cost }) + (f.now.length ? ' · by their bills' : ' · by price') : '—') +
+        fig('Client owes', owes) +
+      '</div>' +
+      (f.diff != null ? '<div class="sub-warn">' + diffWords(f) + '</div>' : '') +
+      (cur.length ? cur.map(b => billRowHtml(s, b, props, B, 'list')).join('')
+        : '<p class="muted" style="margin:10px 0 0">No bills for them this season yet.</p>') +
+      (old.length ? '<details class="sb-old"><summary>Earlier seasons (' + old.length + ')</summary>' +
+        old.map(b => billRowHtml(s, b, props, B, 'list')).join('') + '</details>' : '') +
+    '</div>';
+  }
+
+  // ------------------------------------------------- the bills, drawn
+  //
+  // Bills no client could be told from: at the top of the card, out of the
+  // fold, each with a button for every property (the likeliest first).
+  function toMatchHtml(s, props, B) {
+    const list = B.toMatch;
+    if (!list.length) return '';
+    const shown = matchAll[s.id] ? list : list.slice(0, MATCH_SHOWN);
+    return '<div class="sb-match" id="sbMatch-' + sid(s.id) + '">' +
+      '<div class="sb-match-h">🧾 Bills to match (' + list.length + ')</div>' +
+      '<div class="sb-hint">No client could be told from ' + (list.length === 1 ? 'this bill' : 'these') +
+        '. Tap the client each was for — the next bill like it goes there by itself.</div>' +
+      shown.map(b => billRowHtml(s, b, props, B, 'match')).join('') +
+      (list.length > shown.length ? '<button class="btn btn-sm sb-more" onclick="subMatchMore(\'' + sid(s.id) + '\')">Show the other ' +
+        (list.length - shown.length) + '</button>' : '') +
+    '</div>';
+  }
+
+  const howWords = b => (b.how === 'learned' ? '🔁 like the one of ' + dayWords(b.from) : HOW[b.how] || '');
+  // Owed or paid: on a bill that came as an invoice receipt, as "Owed to
+  // them" counts it (Mark paid as before); a bill a payment went with is paid.
+  function stateHtml(b, B) {
+    const r = b.rcBill;
+    if (r && isBill(r)) {
+      const t = ymd(new Date()), paid = isPaid(r, B.pay.paid) || !!b.paidBy;
+      const byPayment = B.pay.paid.has(r.id) || r.paid || !!b.paidBy;
+      return (paid ? '<span class="rc-tag">Paid</span>'
+          : r.dueDate && r.dueDate < t ? '<span class="rc-tag rc-owed">Past due</span>'
+          : '<span class="rc-tag rc-owed">Owed' + (r.dueDate ? ' · due ' + fmtDateMD(r.dueDate) : '') + '</span>') +
+        (byPayment ? '' : '<button class="link-btn" onclick="subPaid(\'' + sid(r.id) + '\', ' + (paid ? 'false' : 'true') + ')">' + (paid ? 'Not paid' : 'Mark paid') + '</button>');
+    }
+    return b.paidBy || b.payOnly ? '<span class="rc-tag">Paid</span>' : '';
+  }
+  function mowsHtml(s, b) {
+    if (b.none || b.elsewhere) return '';
+    const S = sid(s.id), K = sid(b.key);
+    return '<label class="sb-mows">Mows <input class="sub-mow-in" type="number" min="0" step="1" inputmode="numeric" value="' + b.mows + '"' +
+        ' title="' + (b.setMows ? 'Set by hand' : b.guess ? 'A guess from how often — set it' : 'From the bill') + '"' +
+        ' onchange="subBillMows(\'' + S + '\', \'' + K + '\', this.value)">' +
+        (b.guess ? '<span class="muted" title="A month\'s worth, guessed from how often — set it to the real number">≈</span>' : '') + '</label>' +
+      (b.hand ? '' : '<label class="sub-count"><input type="checkbox"' + (b.skip ? '' : ' checked') +
+        ' onchange="subBillSkip(\'' + S + '\', \'' + K + '\', !this.checked)"> Count</label>');
+  }
+  // One bill: when, what, where, how much -- whose it is and how that was
+  // told -- and, while it is being picked, a button for each client.
+  function billRowHtml(s, b, props, B, mode) {
+    const S = sid(s.id), K = sid(b.key);
+    const p = b.prop ? (s.props || {})[b.prop] : null;
+    const picking = !b.hand && !b.elsewhere && (mode === 'match' || !!changing[b.key]);
+    const who = b.elsewhere ? '<span class="muted">Sorted somewhere else in Receipts — not theirs to match</span>'
+      : b.hand ? 'For <b>' + esc(p ? p.client || 'Client' : '—') + '</b> <span class="sb-how">✋ a visit you added</span>'
+      : b.none ? '<b>Not for a client</b> <span class="sb-how">' + esc(howWords(b)) + '</span>'
+      : p ? 'For <b>' + esc(p.client || 'Client') + '</b> <span class="sb-how">' + esc(howWords(b)) + '</span>'
+      : mode === 'match' ? '' : '<b class="sb-which">Which client?</b>';
+    const change = b.hand || b.elsewhere || mode === 'match' ? ''
+      : '<button class="link-btn" onclick="subBillChange(\'' + S + '\', \'' + K + '\')">' +
+        (changing[b.key] ? 'Close' : b.prop || b.none ? 'Change' : 'Pick the client') + '</button>';
+    const amount = typeof b.cents === 'number' ? money(b.cents) : '<span class="muted">no amount</span>';
+    return '<div class="sb-row' + (b.skip || b.elsewhere ? ' sb-off' : '') + (!b.hand && b.counts && !b.prop ? ' sb-loose' : '') + '">' +
+      '<div class="sb-line"><span class="sb-date">' + esc(dayWords(b.date)) + '</span>' +
+        '<span class="sb-what"><b>' + esc(b.service || (b.payOnly ? 'Payment' : 'Bill')) + '</b>' +
+          (b.address ? ' <span class="muted">' + esc(b.address) + '</span>' : '') + '</span>' +
+        '<span class="sb-amt">' + (b.hand ? '' : amount) + '</span></div>' +
+      '<div class="sb-meta">' + (who ? '<span class="sb-who">' + who + '</span>' : '') + change + stateHtml(b, B) +
+        (mode === 'match' ? '' : mowsHtml(s, b)) +
+        (b.link ? '<a class="link-btn" href="' + esc(b.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
+        (b.hand ? '<button class="link-btn" onclick="subVisitRemove(\'' + sid(b.handKey) + '\')">Remove</button>' : '') + '</div>' +
+      (picking ? picksHtml(s, b, props, B) : '') +
+    '</div>';
+  }
+  // The properties, the likeliest first: on the same street, named on the
+  // bill, given this work before, billed lately; done or off ones last.
+  function rankProps(s, b, props, B) {
+    const L = B.L, street = k => k.split(' ').slice(1).join(' ');
+    const streets = {};
+    b.siteKeys.concat(b.textKeys).forEach(k => { streets[street(k)] = true; });
+    const svc = B.svcPicks[svcKeyOf(b.service)] || {};
+    const lately = {};
+    B.bills.forEach(x => { if (x.prop && x.counts && apart(x.date, b.date) <= 45) lately[x.prop] = (lately[x.prop] || 0) + 1; });
+    return props.map(p => {
+      let score = 0, why = '';
+      if ((L.keys[p.id] || []).some(k => streets[street(k)])) { score += 40; why = 'same street'; }
+      if (propNames(p, L).some(n => nameWords(n).some(w => w.length >= 3 && b.words.has(w)))) { score += 30; why = why || 'name on the bill'; }
+      if (svc[p.id]) { score += 20; why = why || 'had this work before'; }
+      score += Math.min(lately[p.id] || 0, 4) * 2;
+      if (p.off || doneNow(p)) score -= 25;
+      return { p: p, score: score, why: why };
+    }).sort((a, c) => c.score - a.score || String(a.p.client || '').localeCompare(String(c.p.client || '')));
+  }
+  function picksHtml(s, b, props, B) {
+    const S = sid(s.id), K = sid(b.key);
+    const ranked = rankProps(s, b, props, B);
+    const many = ranked.length > PROPS_SHOWN && !allProps[b.key];
+    const shown = many ? ranked.slice(0, PROPS_SHOWN - 1) : ranked;
+    const chip = (to, inner, on, cls) => '<button type="button" class="sb-chip' + (on ? ' on' : '') + (cls ? ' ' + cls : '') +
+      '" onclick="subBillPick(\'' + S + '\', \'' + K + '\', \'' + sid(to) + '\')">' + inner + '</button>';
+    return '<div class="sb-picks">' +
+      shown.map(x => chip(x.p.id, esc(x.p.client || 'Client') + '<small>' +
+        esc([x.why, placeOf(x.p, B.L)].filter(Boolean).join(' · ') || (x.p.services || []).join(', ') || ' ') + '</small>', b.prop === x.p.id)).join('') +
+      (many ? '<button type="button" class="sb-chip sb-alt" onclick="subBillAllProps(\'' + K + '\')">All ' + ranked.length + ' clients…' +
+        '<small>of ' + esc(s.name || 'theirs') + '</small></button>' : '') +
+      '<button type="button" class="sb-chip sb-alt' + (finding[b.key] ? ' on' : '') + '" onclick="subBillFind(\'' + S + '\', \'' + K + '\')">🔎 Another client…' +
+        '<small>From your customer list</small></button>' +
+      chip('none', 'Not for a client<small>The shop, or other work</small>', b.none, 'sb-alt') +
+      (b.how === 'hand' ? chip('auto', '↺ Let Job Hub match it<small>By the address or the name</small>', false, 'sb-alt') : '') +
+    '</div>' + (finding[b.key] ? finderHtml(s, b) : '');
+  }
+  // "Another client…": the customer list, searched by name or street. One
+  // picked becomes a property of theirs (the same one again if it already is).
+  function finderHtml(s, b) {
+    const S = sid(s.id), K = sid(b.key);
+    return '<div class="sb-find"><input type="search" id="sbFind-' + K + '" value="' + esc(findQ[b.key] || '') + '"' +
+        ' placeholder="A customer’s name or street" autocomplete="off" oninput="subBillFindType(\'' + S + '\', \'' + K + '\', this.value)">' +
+      '<div class="sb-picks" id="sbFindRes-' + K + '">' + findResultsHtml(s, b, findQ[b.key] || '') + '</div></div>';
+  }
+  const FIND_SHOWN = 8;
+  function findResultsHtml(s, b, q) {
+    const S = sid(s.id), K = sid(b.key);
+    const want = norm(q).split(' ').filter(Boolean);
+    if (!want.length) return '<div class="sb-hint">Type a name or a street.</div>';
+    let custs = {};
+    try { custs = (window.YDCustomers && YDCustomers.all && YDCustomers.all()) || {}; } catch (e) { /* not ready */ }
+    const hits = Object.keys(custs).map(id => ({ id: id, c: custs[id] })).filter(x => x.c).filter(x => {
+      const ship = x.c.ship || {};
+      const hay = ' ' + norm([x.c.name, x.c.business, x.c.address, x.c.street, ship.address, ship.street].join(' ')) + ' ';
+      return want.every(w => hay.indexOf(' ' + w) !== -1);
+    }).sort((a, c) => String(a.c.name || '').localeCompare(String(c.c.name || ''))).slice(0, FIND_SHOWN);
+    const mine = {};
+    propsOf(s).forEach(p => { if (p.customerId) mine[p.customerId] = true; });
+    return hits.map(x => '<button type="button" class="sb-chip" onclick="subBillNewProp(\'' + S + '\', \'' + K + '\', \'' + sid(x.id) + '\')">' +
+        esc(x.c.name || x.c.business || 'Customer') + '<small>' +
+        esc(mine[x.id] ? 'already one of theirs' : String((x.c.ship || {}).address || x.c.address || '').split(',')[0] || ' ') + '</small></button>').join('') +
+      '<button type="button" class="sb-chip sb-alt" onclick="subBillNewProp(\'' + S + '\', \'' + K + '\', \'\')">＋ A new client: “' +
+        esc(String(q).trim().slice(0, 60)) + '”<small>Not in your customer list</small></button>';
+  }
+
+  // Every bill of theirs (and visit added by hand), newest first: which
+  // client, how many mows, whether it counts -- each settable here.
+  function allBillsHtml(s, props, B) {
+    const S = sid(s.id);
+    const list = B.bills;
+    const shown = billsAll[s.id] ? list : list.slice(0, BILLS_SHOWN);
     const today = ymd(new Date());
-    const form = addingVisit === s.id
+    const addForm = addingVisit === s.id
       ? '<div class="add-area sub-form"><div class="grid g4">' +
           '<div class="field"><span class="label">Date</span><input type="date" id="svDate" value="' + today + '"></div>' +
           '<div class="field"><span class="label">Client</span><select id="svProp">' + props.map(p => '<option value="' + sid(p.id) + '">' +
             esc(p.client || 'Client') + '</option>').join('') + '</select></div>' +
           '<div class="field"><span class="label">What</span><input id="svService" value="Mow"></div>' +
           '<div class="field"><span class="label">Mows</span><input id="svMows" type="number" min="0" step="1" value="1"></div>' +
-        '</div><div class="field-actions"><button class="btn btn-filled btn-sm" onclick="subVisitSave(\'' + sid(s.id) + '\')">Add it</button>' +
+        '</div><div class="field-actions"><button class="btn btn-filled btn-sm" onclick="subVisitSave(\'' + S + '\')">Add it</button>' +
           '<button class="btn btn-sm" onclick="subVisitCancel()">Cancel</button></div></div>'
       : '';
-    return '<div class="sub-visits"><div class="sub-bills-h">Visits from their invoices' +
+    const docWord = r => (isPayment(r) ? 'payment' : String(r.docType || 'other').replace(/_/g, ' '));
+    return '<div class="sub-visits"><div class="sub-bills-h">Every bill from them' +
         (visitsDoc.scannedAt ? ' <span class="muted">· email checked ' + esc(fmtDateMD(visitsDoc.scannedAt.slice(0, 10))) + '</span>' : '') +
         '<span class="sub-visit-acts"><button class="link-btn" onclick="subCheckEmail()"' + (checking ? ' disabled' : '') + '>' +
           (checking ? 'Checking…' : '📧 Check their email now') + '</button>' +
-        (props.length ? '<button class="link-btn" onclick="subVisitAdd(\'' + sid(s.id) + '\')">+ Add a visit by hand</button>' : '') +
-        '</span></div>' + form +
-      (loose.length ? '<div class="sub-warn">' + loose.length + ' visit' + (loose.length === 1 ? '' : 's') +
-        ' not matched to a client yet — pick who each was for and it counts (the next bill like it goes there by itself).</div>' : '') +
+        (props.length ? '<button class="link-btn" onclick="subVisitAdd(\'' + S + '\')">+ Add a visit by hand</button>' : '') +
+        '</span></div>' + addForm +
       (list.length
-        ? '<div class="table-wrap"><table class="sub-table sub-visit-table"><thead><tr><th>Date</th><th>What</th><th>Bill</th>' +
-            '<th>Client</th><th>Mows</th><th></th></tr></thead><tbody>' + list.slice(0, VISITS_SHOWN).map(row).join('') +
-            '</tbody></table></div>' + (list.length > VISITS_SHOWN ? '<p class="muted">The ' + VISITS_SHOWN + ' latest of ' + list.length + '.</p>' : '')
+        ? shown.map(b => billRowHtml(s, b, props, B, 'list')).join('') +
+          (list.length > shown.length ? '<button class="btn btn-sm sb-more" onclick="subBillsMore(\'' + S + '\')">Show all ' + list.length + '</button>' : '')
         : '<p class="muted" style="margin:8px 0 0">' + (visitsDoc.scannedAt
-            ? 'No invoices from them found in your email this year.'
+            ? 'No bills from them yet — in Receipts or in your email this year.'
             : 'Their invoices have not been read from your email yet — press Check their email now.') + '</p>') +
+      // A payment no bill could be found for, a refund, and the like: listed,
+      // counted nowhere.
+      (B.info.length ? '<div class="sb-info"><b>Also from them in Receipts</b> (not counted): ' + B.info.slice(0, 12).map(r =>
+        esc(dayWords(r.date)) + ' ' + esc(docWord(r)) + ' ' + money(r.totalCents) +
+        (r.link ? ' <a class="link-btn" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '')).join(' · ') + '</div>' : '') +
     '</div>';
-  }
-
-  function billsHtml(bills) {
-    if (!bills.length) return '<p class="muted" style="margin:12px 0 0">No bills from them in Receipts yet.</p>';
-    const t = ymd(new Date()), matched = paidByPayment(bills);
-    return '<div class="sub-bills"><div class="sub-bills-h">Their bills</div>' + bills.slice(0, 24).map(r => {
-      const pay = isPayment(r), bill = isBill(r), paid = isPaid(r, matched);
-      const state = pay ? '<span class="rc-tag">Receipt</span>'
-        : !bill ? '<span class="rc-tag">' + esc(String(r.docType || 'other').replace(/_/g, ' ')) + '</span>'
-        : paid ? '<span class="rc-tag">Paid</span>'
-        : r.dueDate && r.dueDate < t ? '<span class="rc-tag rc-owed">Past due</span>'
-        : '<span class="rc-tag rc-owed">Owed' + (r.dueDate ? ' · due ' + fmtDateMD(r.dueDate) : '') + '</span>';
-      return '<div class="sub-bill"><span>' + fmtDateMD(r.date) + ' · ' + esc(r.summary || r.orderNo || r.vendor || '') + '</span>' +
-        '<span><b>' + money(r.totalCents) + '</b> ' + state +
-        (bill && !(matched.has(r.id) || r.paid) ? ' <button class="link-btn" onclick="subPaid(\'' + sid(r.id) + '\', ' + (paid ? 'false' : 'true') + ')">' + (paid ? 'Not paid' : 'Mark paid') + '</button>' : '') +
-        (r.link ? ' <a class="link-btn" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') + '</span></div>';
-    }).join('') + '</div>';
   }
 
   function subFormHtml(s) {
@@ -633,8 +1168,23 @@
   const svcPill = (name, on) => '<label class="bd-pick-item"><input type="checkbox" class="spSvc" value="' + esc(name) + '"' +
     (on ? ' checked' : '') + '><span>' + esc(name) + '</span></label>';
 
+  // The client in the customer list (customers.js), when it is on: their
+  // name on a bill finds the property, and what they owe shows beside it.
+  function custFieldHtml(p) {
+    let custs = {};
+    try { custs = (window.YDCustomers && YDCustomers.all && YDCustomers.all()) || {}; } catch (e) { /* not ready */ }
+    const ids = Object.keys(custs).filter(id => custs[id]).sort((a, b) => String(custs[a].name || '').localeCompare(String(custs[b].name || '')));
+    if (!ids.length && !p.customerId) return '';
+    return '<div class="field"><span class="label">Client in your customer list</span><select id="spCust" class="searchable" onchange="subCustPicked()">' +
+      '<option value="">— not tied to a customer —</option>' +
+      (p.customerId && !custs[p.customerId] ? '<option value="' + sid(p.customerId) + '" selected>(a customer not in the list now)</option>' : '') +
+      ids.map(id => { const c = custs[id]; return '<option value="' + sid(id) + '"' + (id === p.customerId ? ' selected' : '') + '>' +
+        esc(c.name || c.business || 'Customer') + (c.address ? ' — ' + esc(String(c.address).split(',')[0]) : '') + '</option>'; }).join('') +
+      '</select></div>';
+  }
+
   function propFormHtml(s, p) {
-    const jobs = (typeof loadAllJobs === 'function' ? loadAllJobs() : [])
+    const jobs =(typeof loadAllJobs === 'function' ? loadAllJobs() : [])
       .filter(j => j && j._id).sort((a, b) => String(a.customerName || '').localeCompare(b.customerName || ''));
     const opt = (map, v) => Object.keys(map).map(k => '<option value="' + k + '"' + (k === v ? ' selected' : '') + '>' + map[k] + '</option>').join('');
     return '<div class="add-area sub-form">' +
@@ -642,9 +1192,10 @@
         '<option value="">— not linked to a job —</option>' +
         jobs.map(j => '<option value="' + sid(j._id) + '"' + (j._id === p.jobId ? ' selected' : '') + '>' + esc(j.customerName || 'Untitled job') +
           (j.address ? ' — ' + esc(j.address) : '') + '</option>').join('') + '</select></div>' +
+      custFieldHtml(p) +
       '<div class="field"><span class="label">Client</span><input id="spClient" value="' + esc(p.client || '') + '"></div>' +
-      // In its parts (addr.js); the one line is still what the invoice
-      // matching reads (addrKey).
+      // In its parts (addr.js); the one line is still what the bill
+      // matching reads (addrKeysIn).
       (window.YDAddr ? YDAddr.fieldsHtml('spA', p)
         : '<div class="field"><span class="label">Address</span><input id="spAddr" value="' + esc(p.address || '') + '"></div>') +
       '<div class="grid g2">' +
@@ -725,6 +1276,26 @@
     if (window.YDAddr && el('spAStreet')) {
       if (!v('spAStreet')) YDAddr.fill('spA', { street: j.address, city: j.city, state: j.state, zip: j.zip });
     } else if (el('spAddr') && !v('spAddr')) el('spAddr').value = [j.address, j.city].filter(Boolean).join(', ');
+    // The job's customer, when none is picked yet (only filled, never changed).
+    const cs = el('spCust');
+    if (cs && !cs.value && j.customerId && Array.prototype.some.call(cs.options, o => o.value === j.customerId)) {
+      cs.value = j.customerId;
+      cs.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
+  // A customer picked: their name and address fill the boxes still empty --
+  // where the work is (QuickBooks' ship-to) before where the bills go.
+  window.subCustPicked = function () {
+    const id = v('spCust');
+    let custs = {};
+    try { custs = (window.YDCustomers && YDCustomers.all && YDCustomers.all()) || {}; } catch (e) { /* not ready */ }
+    const c = id && custs[id];
+    if (!c) return;
+    if (!v('spClient')) el('spClient').value = c.name || c.business || '';
+    const at = c.ship && (c.ship.street || c.ship.address) ? c.ship : c;
+    if (window.YDAddr && el('spAStreet')) {
+      if (!v('spAStreet')) YDAddr.fill('spA', { street: at.street || at.address, city: at.city, state: at.state, zip: at.zip });
+    } else if (el('spAddr') && !v('spAddr')) el('spAddr').value = at.address || [at.street, at.city].filter(Boolean).join(', ');
   };
   window.subPropSave = function (subId, propId) {
     const s = (data.subs || {})[subId];
@@ -752,31 +1323,140 @@
         : null,
       from: from, to: to, off: !!(el('spOff') && el('spOff').checked), updatedAt: new Date().toISOString(),
     };
+    // Only when the box was there: with the customer list off, a tie made
+    // before is kept, not cleared.
+    if (el('spCust')) rec.customerId = v('spCust') || null;
     form = null;
     put({ subs: { [subId]: { props: { [pid]: rec } } } }, 'saving a property');
     showToast('Saved — ' + client);
   };
-  // ------------------------------------------------- visits, set by hand
-  window.subVisitProp = function (subId, key, propId, hand) {
-    const s = (data.subs || {})[subId];
-    if (!s) return;
-    propId = propId && (s.props || {})[propId] ? propId : '';
-    if (hand) { put({ handVisits: { [key]: { prop: propId || null } } }, 'moving a visit'); return; }
-    const patch = { visitFix: { [key]: { prop: propId } } };
-    // A bill with no address (a monthly one): the next bill for the same
-    // service goes to the same client by itself.
-    const v = (visitsDoc.visits || {})[key];
-    if (v && !addrKey(v.address) && propId) patch.svcProp = { [subId]: { [svcKeyOf(v.service)]: propId } };
-    put(patch, 'matching a visit');
+
+  // ------------------------------------------------- a bill's client, by hand
+  //
+  // A pick is kept on the bill's visit and on each of its receipts (one of
+  // them may come in later, or go): visitFix / rcFix {prop, none, at}.
+  function fixPatch(b, fields) {
+    const patch = {};
+    if (b.visitKey) patch.visitFix = { [b.visitKey]: fields };
+    if (b.rids.length) { patch.rcFix = {}; b.rids.forEach(id => { patch.rcFix[id] = fields; }); }
+    return patch;
+  }
+  // What a change replaces, for Undo.
+  function fixWas(b, keys) {
+    const was = o => { const out = {}; keys.forEach(k => { out[k] = o && o[k] != null ? o[k] : null; }); return out; };
+    const patch = {};
+    if (b.visitKey) patch.visitFix = { [b.visitKey]: was((data.visitFix || {})[b.visitKey]) };
+    if (b.rids.length) { patch.rcFix = {}; b.rids.forEach(id => { patch.rcFix[id] = was((data.rcFix || {})[id]); }); }
+    return patch;
+  }
+  const closePicks = key => { delete changing[key]; delete finding[key]; delete findQ[key]; delete allProps[key]; };
+  // to: a property, 'none' (Not for a client) or 'auto' (back to matching
+  // by itself). No question first: Undo puts it back.
+  window.subBillPick = function (subId, key, to) {
+    const x = billByKey(subId, key);
+    if (!x || x.b.hand || x.b.elsewhere) return;
+    const p = (x.s.props || {})[to];
+    if (to !== 'none' && to !== 'auto' && !p) return;
+    const was = fixWas(x.b, ['prop', 'none', 'at']), at = new Date().toISOString();
+    const fields = to === 'auto' ? { prop: null, none: null, at: null } : to === 'none' ? { prop: '', none: true, at: at } : { prop: to, none: null, at: at };
+    closePicks(key);
+    put(fixPatch(x.b, fields), 'matching a bill');
+    const said = to === 'none' ? 'Not for a client' : to === 'auto' ? 'Matched by Job Hub again' : 'For ' + (p.client || 'the client');
+    if (typeof showUndo === 'function') showUndo(said, () => put(was, 'putting a match back'));
+    else showToast(said);
   };
-  window.subVisitMows = function (subId, key, value, hand) {
+  window.subBillChange = function (subId, key) {
+    if (changing[key]) closePicks(key); else changing[key] = true;
+    render();
+  };
+  window.subBillAllProps = function (key) { allProps[key] = true; render(); };
+  window.subBillFind = function (subId, key) {
+    finding[key] = !finding[key];
+    render();
+    const n = el('sbFind-' + key);
+    if (n) n.focus();
+  };
+  // Typing in "Another client…": only its answers are drawn again.
+  window.subBillFindType = function (subId, key, value) {
+    findQ[key] = String(value || '');
+    const x = billByKey(subId, key), box = el('sbFindRes-' + key);
+    if (x && box) box.innerHTML = findResultsHtml(x.s, x.b, findQ[key]);
+  };
+  // A client from the customer list (or a new name typed in) becomes one of
+  // the subcontractor's properties, with the bill on it. Its address is the
+  // bill's own when it has one -- so the next bill there finds it -- else the
+  // customer's. How often and the prices are left for Jonah (Edit): nothing
+  // is guessed, so no visits are expected of it until he sets them.
+  window.subBillNewProp = function (subId, key, custId) {
+    const x = billByKey(subId, key);
+    if (!x || x.b.hand || x.b.elsewhere) return;
+    const s = x.s, b = x.b;
+    let custs = {};
+    try { custs = (window.YDCustomers && YDCustomers.all && YDCustomers.all()) || {}; } catch (e) { /* not ready */ }
+    const c = custId ? custs[custId] : null;
+    if (custId && !c) return;
+    const have = c && propsOf(s).find(p => p.customerId === custId);
+    if (have) { window.subBillPick(subId, key, have.id); return; }
+    const name = c ? (c.name || c.business || '') : String(findQ[key] || '').trim().slice(0, 80);
+    if (!name) { showToast('Type the client’s name'); return; }
+    const pid = newId('sp'), at = new Date().toISOString();
+    const where = c ? (c.ship && (c.ship.street || c.ship.address) ? c.ship : c) : {};
+    const theirs = addrKeysIn([where.address, where.street].filter(Boolean).join(' ; '));
+    const useBill = !!b.address && !b.siteKeys.some(k => theirs.indexOf(k) !== -1);
+    const rec = {
+      jobId: null, customerId: c ? custId : null, client: name,
+      address: useBill ? b.address : (where.address || [where.street, where.city].filter(Boolean).join(', ') || ''),
+      street: useBill ? b.address : (where.street || ''), city: useBill ? '' : (where.city || ''),
+      state: useBill ? '' : (where.state || ''), zip: useBill ? '' : (where.zip || ''),
+      every: 'other', everyText: 'Not set yet', perMonth: null,
+      theirCents: null, theirPer: 'visit', ourCents: null, ourPer: 'visit',
+      services: MOWING.test(b.service || '') ? ['Mowing'] : [],
+      from: SEASON.from, to: SEASON.to, off: false, fromBill: key, createdAt: at, updatedAt: at,
+    };
+    const was = fixWas(b, ['prop', 'none', 'at']);
+    const patch = fixPatch(b, { prop: pid, none: null, at: at });
+    patch.subs = { [subId]: { props: { [pid]: rec } } };
+    closePicks(key);
+    put(patch, 'adding a client from a bill');
+    const said = name + ' added to ' + (s.name || 'their') + ' clients — Edit it for the prices';
+    if (typeof showUndo === 'function') {
+      showUndo(said, () => put(Object.assign(was, { subs: { [subId]: { props: { [pid]: null } } } }), 'taking the client back off'));
+    } else showToast(said);
+  };
+  window.subBillMows = function (subId, key, value) {
+    const x = billByKey(subId, key);
+    if (!x) return;
     const n = String(value).trim() === '' ? null : Math.max(0, Math.round(+value));
     if (n != null && !isFinite(n)) { showToast('Mows as a number'); render(); return; }
-    if (hand) put({ handVisits: { [key]: { mows: n == null ? 0 : n } } }, 'setting mows');
-    // Cleared: back to what the invoice says.
-    else put({ visitFix: { [key]: { mows: n } } }, 'setting mows');
+    if (x.b.hand) put({ handVisits: { [x.b.handKey]: { mows: n == null ? 0 : n } } }, 'setting mows');
+    // Cleared: back to what the bill says.
+    else put(fixPatch(x.b, { mows: n }), 'setting mows');
   };
-  window.subVisitSkip = function (key, skip) { put({ visitFix: { [key]: { skip: !!skip } } }, skip ? 'not counting a visit' : 'counting a visit'); };
+  window.subBillSkip = function (subId, key, skip) {
+    const x = billByKey(subId, key);
+    if (!x || x.b.hand) return;
+    put(fixPatch(x.b, { skip: !!skip }), skip ? 'not counting a bill' : 'counting a bill');
+  };
+  window.subPropBills = function (subId, propId) {
+    openBills[subId] = propId && openBills[subId] !== propId ? propId : '';
+    open[subId] = true;
+    render();
+    const n = propId && el('sbP-' + sid(subId) + '-' + sid(propId));
+    if (n && n.scrollIntoView) n.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+  window.subMatchMore = function (subId) { matchAll[subId] = true; render(); };
+  window.subBillsMore = function (subId) { billsAll[subId] = true; render(); };
+  // From Home's "Waiting on you": the subcontractor's bills to match.
+  window.openSubBills = function (subId) {
+    if (typeof switchTab === 'function') switchTab('dashboard');
+    render();
+    setTimeout(() => {
+      const n = (subId && el('sbMatch-' + sid(subId))) || document.querySelector('.sb-match') || el('subsSection');
+      if (n && n.scrollIntoView) n.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 120);
+  };
+
+  // ------------------------------------------------- visits, set by hand
   // No question first: Undo puts it back.
   window.subVisitRemove = function (key) {
     const v = (data.handVisits || {})[key];
@@ -857,8 +1537,10 @@
   function stop() {
     if (unsub) { try { unsub(); } catch (e) {} }
     unsub = null; fresh = false; form = null; addingVisit = '';
-    data = { subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {} };
+    data = EMPTY();
     visitsDoc = { visits: {}, scannedAt: '' };
+    openBills = {}; changing = {}; allProps = {}; finding = {}; findQ = {}; matchAll = {}; billsAll = {};
+    forget();
   }
   function start() {
     stop();
@@ -875,41 +1557,53 @@
         const d = c.type === 'removed' ? {} : (c.data || {});
         if (c.id === 'subVisits') { visitsDoc = { visits: d.visits || {}, scannedAt: d.scannedAt || '' }; return; }
         if (c.id !== 'subcontractors') return;
-        data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {},
-                 visitFix: d.visitFix || {}, handVisits: d.handVisits || {}, svcProp: d.svcProp || {} };
+        data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {}, visitFix: d.visitFix || {},
+                 handVisits: d.handVisits || {}, svcProp: d.svcProp || {}, rcFix: d.rcFix || {} };
       });
       if (meta && meta.fromCache === false) fresh = true;
+      forget();
       fileBills();
-      const p = el('panel-dashboard');
-      if (p && p.classList.contains('active')) render();
-      // A job's subcontractor costs (forJob) may have moved.
+      quietRender();
+      // A job's subcontractor costs (forJob) may have moved, and Home's
+      // count of bills to match.
       document.dispatchEvent(new CustomEvent('yd-subs'));
     }, () => {});
   }
-  document.addEventListener('yd-receipts', () => {
-    fileBills();
-    const p = el('panel-dashboard');
-    if (p && p.classList.contains('active')) render();
-  });
+  // Drawn again for news from elsewhere only while All Jobs is in front, and
+  // not under someone typing in it (a mows box, "Another client…"): the
+  // next news, or their own change, draws it.
+  function quietRender() {
+    const p = el('panel-dashboard'), wrap = el('subsWrap'), a = document.activeElement;
+    if (!p || !p.classList.contains('active')) return;
+    if (wrap && a && wrap.contains(a) && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) return;
+    render();
+  }
+  document.addEventListener('yd-receipts', () => { forget(); fileBills(); quietRender(); });
+  // A customer's or a job's name and address find bills too, and what a
+  // client owes comes from the invoices.
+  ['yd-customers', 'yd-jobs-changed', 'yd-invoices'].forEach(ev => document.addEventListener(ev, () => { forget(); quietRender(); }));
 
   // What subcontractors have charged on one job this season so far: every
   // property here linked to that job, counted the way the cards above count
   // them (whole visits on real dates, their price). For Estimate vs actual
   // (jobcosts.js). null when no property is linked to the job -- or for
-  // anyone but the owner, who alone has the list.
+  // anyone but the owner, who alone has the list. billed / bills: what
+  // their bills for those properties came to this season, each once.
   function forJob(jobId) {
     if (!jobId || !owner()) return null;
     const now = new Date(), y = now.getFullYear();
-    const out = { cents: 0, ours: 0, visits: 0, subs: [] };
+    const out = { cents: 0, ours: 0, visits: 0, subs: [], billed: 0, bills: 0 };
     let linked = false;
     subsList().forEach(s => {
-      const anchors = anchorsOf(s);
+      const anchors = anchorsOf(s), B = billsFor(s);
       propsOf(s).filter(p => p.jobId === jobId).forEach(p => {
         linked = true;
         for (let m = 0; m <= now.getMonth(); m++) {
           const x = monthOf(p, y, m, anchors[p.id], m === now.getMonth() ? now.getDate() : 0);
           out.visits += x.visits; out.cents += x.their; out.ours += x.ours;
         }
+        const f = propFigures(s, p, B, anchors);
+        out.billed += f.billed; out.bills += f.now.length;
         const name = s.name || 'Subcontractor';
         if (out.subs.indexOf(name) === -1) out.subs.push(name);
       });
@@ -917,10 +1611,38 @@
     return linked ? out : null;
   }
 
+  // Bills no client could be told from, by subcontractor -- for Home's
+  // "Waiting on you". Only once their bills and Receipts have come from the
+  // server (a half-read list would count bills its receipt would have told).
+  function toMatch() {
+    if (!owner() || !fresh || !(window.YDReceipts && YDReceipts.loaded && YDReceipts.loaded())) return [];
+    return subsList().map(s => {
+      const list = billsFor(s).toMatch;
+      return { id: s.id, name: s.name || 'Subcontractor', n: list.length,
+        cents: list.reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0) };
+    }).filter(x => x.n);
+  }
+  // Whose bill a receipt is, in words, for its chip in Receipts: "for <the
+  // client>", "not for a client", "client to pick" -- or '' (not a
+  // subcontractor's bill, or not the owner's to see).
+  function clientOf(r) {
+    if (!owner() || !r || !r.id) return '';
+    const w = subOf(r), s = w && subById(w.id);
+    const b = s && billsFor(s).rcIndex[r.id];
+    if (!b || b.elsewhere || b.hand) return '';
+    if (b.none) return 'not for a client';
+    if (b.prop) return 'for ' + (((s.props || {})[b.prop] || {}).client || 'a client');
+    return b.counts ? 'client to pick' : '';
+  }
+
   // list: the subcontractors set up here, for Receipts' Subcontractor picker
   // (empty for anyone but the owner, who alone reads them).
   window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r), subOf: r => subOf(r),
     list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })), forJob: forJob,
+    toMatch: toMatch, clientOf: clientOf,
+    // Every bill of one subcontractor, each once, with its client and how
+    // that was told (for a screen that wants them; and for testing).
+    bills: subId => { const s = owner() && subById(subId); return s ? billsFor(s).bills : []; },
     // The usual ones, for the first fill of the one services list (services.js).
     services: () => SERVICES.slice() };
 

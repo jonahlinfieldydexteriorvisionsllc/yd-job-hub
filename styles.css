@@ -4703,3 +4703,68 @@
   .cc-tag-pick { width:40px; height:32px; padding:0 2px; border:1px solid var(--border); border-radius:6px; background:var(--surface); cursor:pointer; }
   .cc-tag-appt { font-size:13px; }
   .cc-tag-add { margin:0 0 6px; }
+  /* ---- Subcontractor bills: each one put with its client (subs.js, 16 Oct 2026) ---- */
+  /* Bills no client could be told from sit at the top of the card, out of
+     the fold; every choice is a button in sight (no dropdowns, no sideways
+     rows), two to a row on a phone. */
+  .sb-match { margin-top:10px; border:1.5px solid var(--accent); border-radius:10px; padding:10px 12px;
+              background:color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+  .sb-match-h { font-size:14.5px; font-weight:700; }
+  .sb-hint { font-size:12.5px; color:var(--muted); margin:2px 0 4px; }
+  .sb-row { border-top:1px solid var(--border); padding:9px 0; font-size:13.5px; }
+  .sb-match > .sb-row:first-of-type { border-top:none; }
+  .sb-row.sb-off { opacity:.6; }
+  .sb-row.sb-loose .sb-which { color:var(--accent-ink); }
+  .sb-line { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 10px; }
+  .sb-date { color:var(--muted); font-size:12.5px; white-space:nowrap; }
+  .sb-what { flex:1 1 180px; min-width:0; overflow-wrap:anywhere; }
+  .sb-what .muted { font-size:12.5px; }
+  .sb-amt { font-weight:700; white-space:nowrap; margin-left:auto; }
+  .sb-meta { display:flex; flex-wrap:wrap; align-items:center; gap:2px 10px; margin-top:3px; font-size:12.5px; }
+  .sb-meta .link-btn { display:inline-flex; align-items:center; min-height:36px; padding:0 6px; }
+  .sb-who { overflow-wrap:anywhere; }
+  .sb-how { font-size:11.5px; color:var(--muted); white-space:nowrap; }
+  .sb-mows { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); }
+  .sb-picks { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:6px; margin-top:8px; }
+  .sb-chip { min-height:44px; border:1.5px solid var(--border-strong); border-radius:8px; background:var(--surface); color:inherit;
+             font:inherit; font-size:13px; font-weight:600; cursor:pointer; padding:5px 8px; text-align:left; overflow-wrap:anywhere; }
+  .sb-chip small { display:block; font-weight:400; font-size:11px; color:var(--muted); overflow-wrap:anywhere; }
+  .sb-chip.sb-alt { border-style:dashed; }
+  .sb-chip.on { border-color:var(--brand); border-style:solid; background:var(--brand); color:#fff; }
+  .sb-chip.on small { color:rgba(255,255,255,.85); }
+  .sb-find { margin-top:8px; }
+  .sb-find input { width:100%; }
+  .sb-more { margin-top:8px; }
+  .sb-info { margin-top:10px; font-size:12.5px; color:var(--muted); overflow-wrap:anywhere; }
+  /* A property's season: their bills beside what their price says. */
+  .sb-bills-btn { font-weight:600; padding:0; min-height:32px; text-align:left; }
+  .sb-diff { font-size:12px; font-weight:700; color:var(--accent-ink); }
+  .sb-owes { font-size:12px; font-weight:600; color:#9a3b2a; }
+  html[data-night] .sb-owes { color:var(--neg); }
+  .sub-table tr.sb-open { background:color-mix(in srgb, var(--brand) 7%, transparent); }
+  .sb-panel { margin:10px 0; border:1px solid var(--border-strong); border-radius:10px; padding:10px 12px; background:var(--surface); }
+  .sb-panel-h { display:flex; align-items:center; gap:8px; font-size:14px; }
+  .sb-panel-h .link-btn { margin-left:auto; min-height:40px; }
+  .sb-old { margin-top:8px; }
+  .sb-old > summary { cursor:pointer; font-size:13px; font-weight:600; color:var(--muted); min-height:40px; display:flex; align-items:center; }
+  .sub-props td.sub-season-cell { min-width:170px; }
+  /* The properties as cards, each figure under its own label, wherever the
+     table would not fit (it scrolled sideways on a phone and an iPad). */
+  @media (max-width:1100px) {
+    .sub-props, .sub-props tbody { display:block; width:100%; }
+    .sub-props thead { display:none; }
+    .sub-props tr { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:8px 12px; padding:12px 0; border-bottom:1px solid var(--border); }
+    .sub-props td { display:block; padding:0; border:0; white-space:normal; font-size:13px; min-width:0; overflow-wrap:anywhere; }
+    .sub-props td[colspan] { grid-column:1 / -1; }
+    .sub-props td.sub-client { grid-column:1 / -2; order:-2; font-size:14px; }
+    .sub-props td.sub-season-cell { grid-column:1 / -1; min-width:0; }
+    .sub-props td.sub-edit-cell { order:-1; text-align:right; }
+    .sub-props td[data-l]::before { content:attr(data-l); display:block; font-size:9.5px; font-weight:700; letter-spacing:.6px;
+      text-transform:uppercase; color:var(--muted); margin-bottom:2px; }
+    .sub-props td.sub-client::before { display:none; }
+  }
+  @media (max-width:720px) {
+    .sb-picks { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .sb-meta .link-btn { min-height:44px; }
+    .sub-props tr { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  }

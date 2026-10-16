@@ -624,7 +624,8 @@
   }
 
   // What is waiting on this person: notes from the crew, hours to look at,
-  // changes the crew asked for, receipts to sort.
+  // changes the crew asked for, receipts to sort, subcontractor bills to
+  // put with a client.
   function waitingHtml() {
     if (!signedIn()) return '';
     const rows = [];
@@ -658,6 +659,14 @@
           (stuck ? '<b>' + stuck + ' need' + (stuck === 1 ? 's' : '') + ' you</b> · ' : '') + top + (open.length > 3 ? ' …' : ''), '',
           "switchTab('receipts')"));
       }
+    }
+    // Subcontractor bills no client could be told from (subs.js) -- the
+    // owner's, who alone has the subcontractors.
+    if (isOwner() && window.YDSubs && YDSubs.toMatch) {
+      any = true;
+      const subs = YDSubs.toMatch(), n = subs.reduce((t, x) => t + x.n, 0);
+      if (n) rows.push(line('🤝', '<b>' + plural(n, 'subcontractor bill') + ' to match to a client</b>',
+        subs.map(x => esc(x.name) + ' · ' + x.n).join(' · '), '', "openSubBills('" + safe(subs[0].id) + "')"));
     }
     // Invoices to chase (invoices.js): a reminder due, one never emailed,
     // or past its reminders -- for whoever may send them.
@@ -881,7 +890,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 
