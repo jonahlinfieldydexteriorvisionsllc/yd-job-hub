@@ -285,7 +285,7 @@
     const head = ['Date', 'Worker', 'Where', 'Type', 'Start', 'End', 'Hours worked', 'Billable hours',
                   'Paused minutes', 'Status'];
     const lines = [head.map(q).join(',')].concat(list.map(r => [
-      r.day, r.name, r.where, r.kind, clock(r.start), r.end ? clock(r.end) : '',
+      r.day, r.name, r.where, c.kindWord ? c.kindWord(r.kind) : r.kind, clock(r.start), r.end ? clock(r.end) : '',
       decHours(r.paid), decHours(r.billable), Math.round(r.paused / 60000),
       (r.live ? 'running' : r.pending ? 'waiting approval' : 'ok') +
         (c.autoStopped && c.autoStopped(r.e) ? ' (no clock-out: stopped by the clock)' : ''),

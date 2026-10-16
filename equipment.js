@@ -565,6 +565,7 @@
       (g.notes ? '<div class="eq-notes">' + esc(g.notes) + '</div>' : '') +
 
       issuesHtml(g) +
+      repairTimeHtml(g) +
       receiptsHtml(g) +
 
       '<div class="eq-loghead">Service history' +
@@ -629,6 +630,43 @@
   // from another device): receipts arrive whenever the mail is read, and a
   // redraw then wiped a half-typed service or problem.
   document.addEventListener('yd-receipts', () => {
+    if (openId && gear[openId] && !editingId && !notingIssue && !el('svWhat')) renderDetail();
+  });
+
+  // Time clocked on this machine as Equipment repair (timeclock.js, Jonah
+  // 15 Oct 2026: "in a couple years we'll have accurate time info on how
+  // long it takes to do every bit of maintenance"). Read from the shifts,
+  // never copied here. Only for whoever sees everyone's hours -- crew never
+  // see other people's hours. Settled shifts make the totals; ones still
+  // waiting for approval, or running now, are listed and marked.
+  const fmtHours = msec => {
+    const h = Math.round(msec / 360000) / 10;
+    return (h % 1 ? h.toFixed(1) : String(h)) + ' h';
+  };
+  function repairTimeHtml(g) {
+    if (!window.YDClock || !YDClock.repairsOn || !ydCan('hours', 'see')) return '';
+    const rows = YDClock.repairsOn(g.id);
+    if (!rows.length) return '';
+    const year = new Date().getFullYear();
+    const settled = rows.filter(r => r.settled);
+    const all = settled.reduce((t, r) => t + r.ms, 0);
+    const thisYear = settled.filter(r => new Date(r.at).getFullYear() === year).reduce((t, r) => t + r.ms, 0);
+    const waiting = rows.length - settled.length;
+    return '<div class="eq-loghead">🔧 Repair time <span class="muted">' + fmtHours(thisYear) + ' this year · ' +
+        fmtHours(all) + ' in all' + (waiting ? ' · ' + waiting + ' not approved yet' : '') + '</span></div>' +
+      '<div class="eq-log">' + rows.slice(0, 20).map(r => '<div class="eq-log-row eq-rp-row">' +
+        '<span class="eq-log-when">' + shortDate(r.at) + '</span>' +
+        '<span class="eq-log-what"><b>' + esc(r.who) + '</b>' +
+          (r.what ? '<span class="eq-log-sub">' + esc(r.what) + '</span>' : '') +
+          (r.running ? '<span class="eq-log-sub">On the clock now</span>'
+            : !r.settled ? '<span class="eq-log-sub">Waiting for approval</span>' : '') + '</span>' +
+        '<span class="eq-log-cost">' + (YDClock.fmtDur ? YDClock.fmtDur(r.ms) : fmtHours(r.ms)) + '</span>' +
+      '</div>').join('') + '</div>' +
+      (rows.length > 20 ? '<div class="hint">The newest 20 — every one is in the Work Log on the Clock tab.</div>' : '');
+  }
+  // A shift clocked while the machine is open shows on it -- not over a form
+  // being filled in (the same guard as for receipts).
+  document.addEventListener('yd-clock-changed', () => {
     if (openId && gear[openId] && !editingId && !notingIssue && !el('svWhat')) renderDetail();
   });
 

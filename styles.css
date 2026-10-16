@@ -3964,3 +3964,18 @@
     html[data-sidebar] .sb { display:none !important; }
     html[data-sidebar] body { padding-left:0; }
   }
+/* ---- Clock: four things that are not a job (shop / yard work, snow,
+   pickups + errands, equipment repair) sit two by two; a repair asks which
+   machine, then which problem, as a grid of buttons -- names on up to two
+   lines, never a sideways row. ---- */
+.picker-kinds { grid-template-columns:1fr 1fr; }
+.repair-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:8px; margin:6px 0 10px; }
+.repair-grid .picker-kind { min-height:56px; text-transform:none; letter-spacing:0; font-size:14px;
+  overflow-wrap:anywhere; }
+@media (max-width:520px) {
+  .repair-grid { grid-template-columns:1fr 1fr; }
+}
+/* Shifts waiting to be approved, moved to the top of the Clock tab. */
+#clockApproveSection.appr-first { border-left:4px solid var(--accent, #c9922f); }
+/* Equipment tab: the repair time clocked on a machine. */
+.eq-rp-row .eq-log-cost { font-variant-numeric:tabular-nums; }

@@ -52,7 +52,6 @@ DEFAULT_HOURS = 16
 MIN_HOURS, MAX_HOURS = 8, 24
 HOUR_MS = 3600 * 1000
 LONG_SHIFT_MS = 8 * HOUR_MS        # past this the office checks a shift (timeclock.js needsReview)
-OVERHEAD = {"snow": "Snow", "labor": "Labor", "receipts": "Receipts"}
 
 
 def limit_hours(db):
@@ -209,7 +208,7 @@ def _when(ms):
 
 
 def _place(e):
-    return str(e.get("targetName") or OVERHEAD.get(e.get("kind")) or "work")[:60]
+    return dg.shift_place(e)[:60]
 
 
 def tell(db, people, now):
