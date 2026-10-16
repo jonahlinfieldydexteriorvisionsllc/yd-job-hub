@@ -4072,3 +4072,16 @@
     #jobListBody .jl-acts { flex:1 1 100%; justify-content:flex-start; }
     #jobListBody .jl-acts .jl-del { margin-left:auto; }
   }
+
+  /* ---- interface deep dive (16 Oct 2026) ---- */
+  /* A weather alert's "!" made the job screens' header 17px wider than a
+     375px phone, so the ⋯ button was cut off and the whole page slid
+     sideways. The header row may not grow past the screen: the wordmark
+     gives way (it shrinks a little on the narrowest phones) rather than a
+     button falling off the edge. */
+  @media (max-width:420px) {
+    .header > div:first-child { min-width:0; flex:0 1 auto; overflow:hidden; }
+    .header-actions { flex:0 0 auto; gap:3px; }
+    html[data-tab="job"] .logo, html[data-tab="tracking"] .logo, html[data-tab="dashboard"] .logo { font-size:16px; }
+    html[data-tab="job"] .wx-chip, html[data-tab="tracking"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 5px; }
+  }
