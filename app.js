@@ -687,8 +687,21 @@ document.addEventListener('keydown', e => {
   if (menu && !menu.hidden) { closeHeaderMenu(); return; }
   const top = topOverlay();
   const close = top && top.querySelector('.modal-close, .sheet-close');
-  if (close) close.click();
+  if (!close) return;
+  // Something typed in it (guardWindows marks that): one Esc pressed out of
+  // habit threw a half-written card or account away without a word (16 Oct
+  // 2026). The first press says so; a second within a few seconds closes.
+  // Not the app's own one-line questions (ydAsk): Esc there is "no", as it
+  // was on the browser's boxes.
+  if (top.dataset.typed && !top.classList.contains('ask-overlay') && !(escArmed === top && Date.now() - escArmedAt < 4000)) {
+    escArmed = top; escArmedAt = Date.now();
+    showToast('Something is typed in here — press Esc again to close without saving');
+    return;
+  }
+  escArmed = null;
+  close.click();
 });
+let escArmed = null, escArmedAt = 0;
 
 // The open modal or sheet that is actually in front. Several can be open at
 // once (a worker's page over the clock, say), and which one shows is decided
@@ -1013,7 +1026,7 @@ window.forgetService = function (key) {
 function removeServiceType(idx) { serviceTypes.splice(idx, 1); renderServiceTypes(); markDirty(); }
 function renderServiceTypes() {
   const wrap = document.getElementById('serviceTypeTags');
-  if (!serviceTypes.length) { wrap.innerHTML = '<span style="color:#a096ad;font-size:12px;padding:4px">No service types</span>'; return; }
+  if (!serviceTypes.length) { wrap.innerHTML = '<span class="tag-none">No service types</span>'; return; }
   wrap.innerHTML = serviceTypes.map((s, i) => '<span class="svc-tag">' + esc(s) + '<button onclick="removeServiceType(' + i + ')">×</button></span>').join('');
 }
 
@@ -4401,7 +4414,8 @@ window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); 
 //
 // So, for every window: a tap on the backdrop is ignored once anything has
 // been typed in it since it opened, or when the press began inside the
-// window. The × and Escape still close it, deliberately.
+// window. The × still closes it, deliberately; Escape asks for a second
+// press first (the Escape handler above).
 // ---- A time box opens its scrolling list of times when clicked ----------
 //
 // On a computer the browser only opens the list of hours and minutes from

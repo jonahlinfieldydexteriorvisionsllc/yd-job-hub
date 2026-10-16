@@ -597,8 +597,10 @@
     return '<div class="sup-tiles">' + allTags().filter(t => count[t]).map(t =>
       '<button class="sup-tile"' + tagAttr(t) + '><span class="sup-tile-icon" aria-hidden="true">' + tagInfo(t).icon + '</span>' +
         '<b>' + esc(tagInfo(t).name) + '</b><small>' + count[t] + ' item' + (count[t] === 1 ? '' : 's') + '</small></button>').join('') +
-      '</div><div class="hint">Tags start from each item’s kind. Add your own on an item (Edit → Used for), ' +
-        'or search, then “🔖 Tag these” to tag everything found at once.</div>';
+      '</div>' +
+      // How to add tags -- only for whoever can (the crew have no Edit).
+      (edits() ? '<div class="hint">Tags start from each item’s kind. Add your own on an item (Edit → Used for), ' +
+        'or search, then “🔖 Tag these” to tag everything found at once.</div>' : '');
   }
 
   // Tagging many at once: everything a search (or a tag's page) shows.

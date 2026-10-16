@@ -634,7 +634,7 @@
     const list = YDEquipment.needs();
     const down = list.filter(x => x.issue && x.issue.urgency === 'down').length;
     const rows = list.map(x => line(x.issue ? '🔧' : '🛢️', '<b>' + esc(x.name) + '</b>' +
-        (x.issue ? ' <span class="hm-chip" style="--c:' + colour(x.issue.color) + '">' + esc(x.issue.label) + '</span>' : ''),
+        (x.issue ? ' <span class="hm-chip" style="' + '--c:' + colour(x.issue.color) + (typeof inkOn === 'function' ? ';color:' + inkOn(colour(x.issue.color)) : '') + '">' + esc(x.issue.label) + '</span>' : ''),
       (x.issue ? esc(x.issue.what) + (x.issue.more > 0 ? ' · +' + x.issue.more + ' more' : '') : '') +
         (x.due.state === 'overdue' || x.due.state === 'soon'
           ? (x.issue ? ' · ' : '') + '<span class="hm-due ' + x.due.state + '">Service ' + esc(x.due.text) + '</span>' : ''),

@@ -243,7 +243,10 @@
     if (!wrap) return;
     // Three parts, each redrawn on its own: the search box keeps its typing
     // and the add form its words while the board below changes.
-    if (!el('eqTop')) wrap.innerHTML = '<div id="eqTop"></div><div id="eqAdd"></div><div id="eqBody"></div>';
+    // Not "eqBody": that is the machine window's body (index.html), and a
+    // second element of the same id here sent a machine's page into the tab
+    // and left its window empty (16 Oct 2026).
+    if (!el('eqTop')) wrap.innerHTML = '<div id="eqTop"></div><div id="eqAdd"></div><div id="eqList"></div>';
     renderBadge();
     renderTop();
     renderBody();
@@ -273,7 +276,7 @@
   };
 
   function renderBody() {
-    const body = el('eqBody');
+    const body = el('eqList');
     if (!body) return;
     body.innerHTML = viewNow() === 'board' ? boardHtml() : machinesHtml();
   }

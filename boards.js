@@ -2120,7 +2120,7 @@
     if (ll) ll.innerHTML = draftLabels.length ? draftLabels.map((l, i) =>
       '<div class="bd-edit-label">' +
         '<div class="bd-edit-row">' +
-          '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name || 'Label') + '</span>' +
+          '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name || 'Label') + '</span>' +
           '<input class="bdLabelName" value="' + esc(l.name) + '" placeholder="Label name" ' +
             'oninput="this.previousElementSibling.textContent = this.value || \'Label\'" aria-label="Label name">' +
           '<button class="bd-edit-btn del" onclick="bdLabelRemove(' + i + ')" aria-label="Delete label">✕</button>' +

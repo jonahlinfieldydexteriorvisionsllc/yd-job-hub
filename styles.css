@@ -3923,7 +3923,7 @@
   .eq-urg-opt:has(input:checked) { outline:2px solid var(--c); }
   /* On the Equipment tab a card is added through its machine picker (+ Add a
      card above the board), not the columns' own plain add. */
-  #eqBody .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
+  #eqList .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
   .bd-done-pick { display:inline-flex; align-items:center; gap:4px; font-size:12.5px; white-space:nowrap; color:var(--muted); }
   .bd-done-none { display:flex; align-items:center; gap:6px; margin:6px 0 2px; font-size:13px; }
 
@@ -4287,3 +4287,48 @@
   .sg-acts { display:flex; flex-wrap:wrap; gap:6px; }
   .sg-open:not([href]) { opacity:.6; pointer-events:none; }
   .cj-sigs { margin-top:16px; }
+  /* ---- interface deep dive (16 Oct 2026) ---- */
+  /* A weather alert's "!" made the job screens' header 17px wider than a
+     375px phone, so the ⋯ button was cut off and the whole page slid
+     sideways. The header row may not grow past the screen: the wordmark
+     gives way (it shrinks a little on the narrowest phones) rather than a
+     button falling off the edge. */
+  @media (max-width:420px) {
+    .header > div:first-child { min-width:0; flex:0 1 auto; overflow:hidden; }
+    .header-actions { flex:0 0 auto; gap:3px; }
+    html[data-tab="job"] .logo, html[data-tab="tracking"] .logo, html[data-tab="dashboard"] .logo { font-size:16px; }
+    html[data-tab="job"] .wx-chip, html[data-tab="tracking"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 5px; }
+  }
+  /* The phone's board buttons, three to a row: on a 375px phone
+     "Maintenance" did not fit and broke as "Maintenanc / e". A touch smaller
+     and tighter there, so one-word board names stay whole. */
+  @media (max-width:400px) {
+    .bd-picker .bd-chip { font-size:11.5px; padding-right:5px; gap:3px; }
+    .bd-picker .bd-chip:not(.bd-add) { padding-left:5px; }
+  }
+  /* An iPad held upright (768px) fitted only nine of the twelve tabs and
+     hid Equipment, Contacts and All Jobs off the side of a sideways-scrolling
+     bar. Between phone and laptop the tabs now take two rows instead, every
+     one in sight and one tap away. */
+  @media (min-width:721px) and (max-width:1000px) {
+    .tab-bar { flex-wrap:wrap; overflow-x:visible; }
+    .tab-btn { flex:1 0 13%; min-width:0; }
+  }
+  /* The narrow-screen header rule shrinks every header button's text to
+     10px, which left the ⋯ menu a 31px sliver with a dot-sized glyph on an
+     iPad. It keeps its own size. */
+  @media (max-width:860px) {
+    .header-actions .btn-menu { font-size:16px; min-width:44px; min-height:38px; }
+  }
+  /* Dark mode: the done/skipped stop numbers and the red alert badges are
+     light colours there (green #4fd68a, grey, coral), and white on them
+     measured 1.9-2.6:1. Dark numbers instead. */
+  html[data-night] .stop.done .stop-num, html[data-night] #stormWrap .stop.skipped .stop-num { color:#10161a; }
+  html[data-night] .wxc-alert, html[data-night] .section-badge.eq-alert { color:#2a0d07; }
+  /* "due in 30 hours" on a machine: the light-mode green on dark mode's dark
+     green background measured 2.2:1. */
+  html[data-night] .eq-due.ok { color:var(--pos); }
+  /* "Nothing here yet" lines were a pale grey that measured 2.8:1 on white
+     -- the hardest text in the app to read in daylight. The usual muted
+     grey (4.6:1) instead. */
+  .empty-msg, .tag-none { color:var(--muted); }
