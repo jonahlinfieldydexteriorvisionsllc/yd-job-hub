@@ -717,8 +717,8 @@
     if (!(await ydConfirm((today ? today + ' finished today' + (before ? ', ' : '.') : '') +
                  (before ? before + ' finished before today' + (showOldDone[board.id] ? '.' : ' (not shown on the board — "Show the finished earlier" lists them).') : '') +
                  '\n\nThis cannot be undone.',
-                 { title: 'Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' + board.name + '" for good?',
-                   ok: 'Delete them', danger: true }))) return;
+                 { title: (gone.length === 1 ? 'Delete the finished card' : 'Delete all ' + gone.length + ' finished cards') + ' on "' + board.name + '" for good?',
+                   ok: gone.length === 1 ? 'Delete it' : 'Delete them', danger: true }))) return;
     if (!boards[boardId]) return;
     deleteCards(board, gone.map(k => k.id));
     showToast(gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' deleted');
@@ -803,8 +803,9 @@
         empty: earlier.length ? 'Nothing finished today' : '',
         foot: (earlier.length ? '<button class="bd-add-card bd-old-done" onclick="toggleOldDone(\'' + board.id + '\')">' +
             (showing ? 'Hide the ' + earlier.length + ' finished earlier' : 'Show the ' + earlier.length + ' finished earlier') + '</button>' : '') +
-          (clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + board.id + '\')">🗑 Delete all ' +
-            clear + ' done' + (earlier.length && !showing ? ' (incl. ' + earlier.length + ' not shown)' : '') + '</button>' : ''),
+          // "Delete all 1 done" read oddly: one card is "the 1 done".
+          (clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + board.id + '\')">🗑 Delete ' +
+            (clear === 1 ? 'the 1' : 'all ' + clear) + ' done' + (earlier.length && !showing ? ' (incl. ' + earlier.length + ' not shown)' : '') + '</button>' : ''),
       });
     }).join('');
   }

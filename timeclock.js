@@ -2364,14 +2364,16 @@
   // is only the form for setting it.
   //
   // Never shared with anyone, whatever is ticked here: who gets in and what
-  // they may do, the owner's Personal calendar, the QuickBooks connection,
-  // and the Problems screen.
+  // they may do, changing the owner's Personal calendar (since 15 Oct an
+  // admin with Calendars looks at it -- calendar.js seeOnly -- and the words
+  // below said they never would), the QuickBooks connection, and the
+  // Problems screen.
   const AREAS = [
     { id: 'jobs', label: 'Jobs & bids', hint: 'Job, Tracking and All Jobs; the Bids and Jobs boards; materials bought' },
     { id: 'snow', label: 'Snow', hint: 'Snow accounts and their prices; starting and running storms' },
     { id: 'billing', label: 'Billing', hint: 'Storm bills, invoices, season reports; sending to QuickBooks. Closing a storm also needs Crew hours & pay: See' },
     { id: 'hours', label: 'Crew hours & pay', hint: 'Everyone’s shifts and pay rates; approving shifts (never their own)' },
-    { id: 'calendars', label: 'Calendars', hint: 'Every shared calendar — never your Personal one' },
+    { id: 'calendars', label: 'Calendars', hint: 'Every calendar not marked private — your Personal one they can only look at' },
     { id: 'boards', label: 'Boards', hint: 'Every board and card, not only those shared with them' },
     // Jonah (12 Oct 2026): who sees and who changes each board is his to say
     // -- or an admin's he gives it to. Never a private board, never Private.
@@ -2379,7 +2381,7 @@
       levels: ['none', 'change'], words: { none: 'Off', change: 'On' } },
     { id: 'supplies', label: 'Supplies & prices', hint: 'What things cost; adding and editing supplies' },
     { id: 'equipment', label: 'Equipment', hint: 'Machines, services and problems' },
-    { id: 'contacts', label: 'Contacts', hint: 'People to call next season' },
+    { id: 'contacts', label: 'Contacts & customers', hint: 'The customer list and the people to call next season' },
   ];
   const LEVEL_WORDS = { none: 'Off', see: 'See', change: 'Change' };
   let accessUid = null;
@@ -2418,7 +2420,7 @@
                 (l === lv ? ' checked' : '') + ' onchange="accessPicked(this)">' + (a.words || LEVEL_WORDS)[l] + '</label>').join('') +
           '</div></div>';
       }).join('') + '</div>' +
-      '<div class="acc-never">Only you, always: letting people in and setting their access, your Personal calendar, ' +
+      '<div class="acc-never">Only you, always: letting people in and setting their access, changing your Personal calendar, ' +
         'the QuickBooks connection, and the Problems screen.</div>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveAccess()">' + (isAdmin ? 'Save access' : 'Make them an admin') + '</button>' +

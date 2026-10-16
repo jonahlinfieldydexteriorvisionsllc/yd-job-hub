@@ -566,6 +566,20 @@ function jobsReadOnly() {
 function applyJobsReadOnly() {
   document.documentElement.toggleAttribute('data-jobs-readonly', jobsReadOnly());
 }
+// The stylesheet stops taps, but not a keyboard: on a computer, or an iPad
+// with one, Tab still walked into the fields and typing changed them on
+// screen, the bar saying "Saving…" for ever while persistJob refused (office
+// test, 16 Oct 2026). So nothing there keeps the focus either -- except the
+// view-only buttons the stylesheet lets through (.eva-view-btn).
+function lockedJobControl(t) {
+  return !!(document.documentElement.hasAttribute('data-jobs-readonly') && t && t.closest && t.matches &&
+    t.closest('#panel-job, #panel-tracking') && t.matches('input, select, textarea, button') && !t.matches('.eva-view-btn'));
+}
+document.addEventListener('focusin', e => { if (lockedJobControl(e.target)) e.target.blur(); }, true);
+// And should one still have the focus (a browser that was in the
+// background when it was given it tells no one), typing, pasting or a drop
+// into it changes nothing.
+document.addEventListener('beforeinput', e => { if (lockedJobControl(e.target)) e.preventDefault(); }, true);
 
 // ---- The More sheet ----
 //
@@ -4344,7 +4358,23 @@ document.addEventListener('click', e => {
   document.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
   document.addEventListener('input', e => {
     const o = e.target && e.target.closest && e.target.closest('.modal-overlay');
-    if (o) o.dataset.typed = '1';
+    if (!o) return;
+    // A window that saves each change itself (data-autosave: Pricing rules,
+    // Notification settings) saved a tick or a pick the moment it was made.
+    // Marking it made Esc say "press Esc again to close without saving" and
+    // a tap outside say "Save, or close it with ×" in a window with nothing
+    // unsaved and no Save button (office test, 16 Oct 2026).
+    if (o.hasAttribute('data-autosave') && typeof e.target.onchange === 'function' &&
+        /^(checkbox|radio|select-one|select-multiple)$/.test(e.target.type || '')) return;
+    o.dataset.typed = '1';
+  }, true);
+  // ...and a box there that saves itself is saved as it is left (its own
+  // onchange): nothing typed is waiting any more. A box that only fills in
+  // something to add (Pricing rules' "e.g. 750" beside + Add) has no
+  // onchange, so what is typed in it still counts.
+  document.addEventListener('change', e => {
+    const o = e.target && e.target.closest && e.target.closest('.modal-overlay[data-autosave]');
+    if (o && typeof e.target.onchange === 'function') delete o.dataset.typed;
   }, true);
   // Captured on the way down, so it runs before the backdrop's own handler
   // and can stop it.

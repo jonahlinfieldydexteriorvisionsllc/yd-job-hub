@@ -189,7 +189,9 @@
     return { hasReminder: true, remindMins: parseInt(v, 10), noReminder: false,
              remindUids: Array.from(new Set(((was && was.remindUids) || []).concat(uid ? [uid] : []))) };
   }
-  // The line under the Remind box: what "Usual" means for this one.
+  // The line under the Remind box: what "Usual" means for this one. The
+  // ⋯ menu item is "Notification settings" (it was "Notifications &
+  // summaries" once; the words here had not followed).
   function usualHint(type, timed) {
     const when = usualWords(type, timed);
     if ((typeById(type) || {}).crew) {

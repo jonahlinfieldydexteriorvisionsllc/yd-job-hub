@@ -130,7 +130,12 @@
       t.paid += r.paid; t.billable += r.billable; return t;
     }, { paid: 0, billable: 0 });
     const notCounted = list.filter(r => !r.counted);
-    const days = new Set(list.map(r => r.day)).size;
+    // Days and Shifts count what the hours count: "8h · 4 days · 4 shifts"
+    // with three of them still running or waiting read as four days' work
+    // (office test, 16 Oct 2026). The ones left out are still listed below,
+    // and the line under the figures says how many.
+    const counted = list.filter(r => r.counted);
+    const days = new Set(counted.map(r => r.day)).size;
 
     const barHtml =
         (window.YDHoursRange ? YDHoursRange.barHtml('worklog') : '') +
@@ -173,7 +178,7 @@
             sumCard('Hours worked', c.fmtDur(totals.paid)) +
             sumCard('Billable', c.fmtDur(totals.billable)) +
             sumCard('Days', String(days)) +
-            sumCard('Shifts', String(list.length)) +
+            sumCard('Shifts', String(counted.length)) +
           '</div>' +
           (notCounted.length
             ? '<div class="hint">' + notCounted.length + ' shift' + (notCounted.length === 1 ? ' is' : 's are') +

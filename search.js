@@ -146,6 +146,12 @@
     return d.toLocaleDateString('en-US', opts);
   }
   const msOf = s => { const t = Date.parse(s || ''); return isFinite(t) ? t : 0; };
+  // "07:00" as "7am", "13:30" as "1:30pm" -- the way the calendar and the
+  // boards say a time (the card search alone said 07:00).
+  function clock12(t) {
+    const h = +t.slice(0, 2), m = +t.slice(3, 5);
+    return (h % 12 || 12) + (m ? ':' + t.slice(3, 5) : '') + (h >= 12 ? 'pm' : 'am');
+  }
   const dollars = cents => (typeof cents === 'number' && isFinite(cents)
     ? '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
   const joinDot = list => list.filter(Boolean).join(' · ');
@@ -367,10 +373,33 @@
   }
 
   const CONTACT_STATUS = { 'to-contact': 'To contact', contacted: 'Contacted', quoted: 'Quoted', won: 'Won', no: 'Not interested' };
+  // With the customer list switched on (customers.js) every QuickBooks
+  // customer, past one and lead is a contact too: none of them could be
+  // found here (office test, 16 Oct 2026 -- a past customer's name found
+  // nothing). Opened on their own page, as the Customers tab opens them.
+  const CUSTOMER_KIND = { lead: 'Lead', customer: 'Customer', past: 'Past customer' };
+  function buildCustomers() {
+    const C = window.YDCustomers;
+    if (!C || typeof C.on !== 'function' || !C.on()) return [];
+    const all = C.all() || {};
+    return Object.keys(all).map(id => {
+      const c = all[id] || {};
+      let kind = '';
+      try { kind = CUSTOMER_KIND[C.kindOf(c)] || ''; } catch (e) { /* worked out on its page */ }
+      return entry('contacts', {
+        title: c.name || '(no name)', tag: kind || 'Customer',
+        sub: joinDot([c.contactWhen, (c.tags || []).join(', '), c.address]),
+        nums: [c.phone, c.mobile],
+        more: [c.firstName, c.lastName, c.business, c.address, c.phone, c.mobile, c.email, c.note, (c.tags || []).join(' '),
+               c.contactWhen, (c.meetings || []).map(m => m && m.text).join(' ')],
+        open: () => { switchTab('contacts'); C.open(id); },
+      });
+    });
+  }
   function buildContacts() {
     const all = window.YDProspects.all() || {};
     const whenKey = window.YDProspects.whenKey || (() => 0);
-    return Object.keys(all).map(k => {
+    return buildCustomers().concat(Object.keys(all).map(k => {
       const p = all[k] || {};
       const id = p.id || k;
       return entry('contacts', {
@@ -382,7 +411,7 @@
         order: whenKey(p.contactWhen),
         open: () => openContact(id),
       });
-    });
+    }));
   }
 
   function buildSnow() {
@@ -472,7 +501,7 @@
         if (!k) return;
         const col = k.column || ((b.columns || [])[0] || {}).id || '';
         const isDone = !!done && col === done;
-        const due = k.due ? 'Due ' + dayWords(k.due) + (/^\d{2}:\d{2}$/.test(k.dueTime || '') ? ' ' + k.dueTime : '') : '';
+        const due = k.due ? 'Due ' + dayWords(k.due) + (/^\d{2}:\d{2}$/.test(k.dueTime || '') ? ' ' + clock12(k.dueTime) : '') : '';
         const labels = (k.labels || []).map(l => ((b.labels || []).find(x => x.id === l) || {}).name).filter(Boolean);
         out.push(entry('cards', {
           title: k.title || 'Card', tag: 'Card',
@@ -672,7 +701,7 @@
     'yd-supplies': ['supplies'], 'yd-equipment-changed': ['equipment'], 'yd-receipts': ['receipts'],
     'yd-cards-changed': ['cards', 'calendar'], 'yd-boards-changed': ['cards', 'calendar', 'settings'],
     'yd-calendar-changed': ['calendar'], 'yd-outreach': ['contacts'], 'yd-remind-me': ['calendar'],
-    'yd-prospects': ['contacts'], 'yd-snow-accounts': ['snow'],
+    'yd-prospects': ['contacts'], 'yd-customers': ['contacts'], 'yd-snow-accounts': ['snow'],
   };
   let redoTimer = null;
   Object.keys(CHANGES).forEach(ev => document.addEventListener(ev, () => {
