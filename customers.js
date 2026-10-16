@@ -471,8 +471,15 @@
       const k = kindOf(c);
       if (k === 'lead') counts.leads++; else if (k === 'past') counts.past++; else counts.customers++;
     });
+    // The chip counts everyone on the Call list (Jonah, 16 Oct 2026: "a full
+    // list of people im calling for next season") -- due now, coming up and
+    // no time set yet, as the list itself does; the tab's badge stays the ones
+    // due now.
+    let onCallList = 0;
     callable.forEach(c => {
-      if (callState(c).on) counts.call++;
+      const st = callState(c);
+      if (st.on) counts.call++;
+      if (!c.notInterested && (st.on || st.soon || (st.none && wantsCall(c)))) onCallList++;
       const f = snowFacts(c);
       if (f && f.onList) { snowAny++; if (!snowCalled(c)) counts.snow++; }
     });
@@ -490,7 +497,7 @@
     const tag = view === 'everyone' ? '' : tagPick;
     let html = '<div class="cu-views">' + VIEWS.map(([k, label]) =>
       '<button class="cu-view' + (view === k ? ' on' : '') + '" onclick="custView(\'' + k + '\')">' + label +
-      '<span class="cu-n">' + counts[k] + '</span></button>').join('') + '</div>';
+      '<span class="cu-n">' + (k === 'call' ? onCallList : counts[k]) + '</span></button>').join('') + '</div>';
     if (view !== 'sort' && view !== 'check') {
       html += '<div class="cu-find"><input id="custSearch" type="search" placeholder="' +
         (view === 'everyone' ? 'Search everyone — name, phone, email, street…' : 'Search name, phone, street, note…') +
