@@ -563,12 +563,15 @@ function applyJobsReadOnly() {
 // screen, the bar saying "Saving…" for ever while persistJob refused (office
 // test, 16 Oct 2026). So nothing there keeps the focus either -- except the
 // view-only buttons the stylesheet lets through (.eva-view-btn).
-document.addEventListener('focusin', e => {
-  const t = e.target;
-  if (!document.documentElement.hasAttribute('data-jobs-readonly') || !t || !t.closest || !t.matches) return;
-  if (!t.closest('#panel-job, #panel-tracking') || !t.matches('input, select, textarea, button') || t.matches('.eva-view-btn')) return;
-  t.blur();
-}, true);
+function lockedJobControl(t) {
+  return !!(document.documentElement.hasAttribute('data-jobs-readonly') && t && t.closest && t.matches &&
+    t.closest('#panel-job, #panel-tracking') && t.matches('input, select, textarea, button') && !t.matches('.eva-view-btn'));
+}
+document.addEventListener('focusin', e => { if (lockedJobControl(e.target)) e.target.blur(); }, true);
+// And should one still have the focus (a browser that was in the
+// background when it was given it tells no one), typing, pasting or a drop
+// into it changes nothing.
+document.addEventListener('beforeinput', e => { if (lockedJobControl(e.target)) e.preventDefault(); }, true);
 
 // ---- The More sheet ----
 //
