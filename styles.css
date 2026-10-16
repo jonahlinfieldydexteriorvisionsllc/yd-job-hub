@@ -4952,6 +4952,7 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     min-width:28px; min-height:28px; border-radius:14px; }
   .svt-chip button:hover, .jt-chip button:hover { background:var(--surface-2); color:var(--text); }
   .jt-chip.jt-hand { border-style:dashed; }
+  .jt-chip.jt-sug { border-style:dashed; border-color:var(--border-strong); font-weight:400; color:var(--muted); }
   .jt-chip small { color:var(--muted); font-size:11px; }
   .svt-pick { border:1px dashed var(--border-strong); background:var(--surface); color:var(--text); border-radius:16px; padding:6px 12px;
     font:inherit; font-size:13px; cursor:pointer; min-height:36px; }

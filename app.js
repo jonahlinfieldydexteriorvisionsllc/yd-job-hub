@@ -1580,8 +1580,8 @@ function renderJobTools() {
     if (!(g in at)) { at[g] = groups.length; groups.push({ name: g, list: [] }); }
     groups[at[g]].list.push(t);
   });
-  const chip = t => '<span class="jt-chip' + (t.eq ? ' jt-eq' : '') + (t.byHand ? ' jt-hand' : '') + '" title="' +
-      esc(t.byHand ? 'Added on this job' : 'From ' + t.from.join(', ')) + '">' +
+  const chip = t => '<span class="jt-chip' + (t.eq ? ' jt-eq' : '') + (t.byHand ? ' jt-hand' : '') + (t.sug ? ' jt-sug' : '') + '" title="' +
+      esc(t.byHand ? 'Added on this job' : (t.sug ? 'Suggested for ' : 'From ') + t.from.join(', ')) + '">' +
       esc((t.qty ? t.qty + ' × ' : '') + t.name) + (t.byHand ? ' <small>added here</small>' : '') +
       '<button type="button" data-k="' + esc(t.key) + '" onclick="jobToolOff(this.dataset.k)" aria-label="Not needed on this job">×</button></span>';
   const none = r.services.filter(v => !v.has);
@@ -1592,8 +1592,9 @@ function renderJobTools() {
         '</div><div class="jt-chips">' + g.list.map(chip).join('') + '</div>').join('')
       : '<p class="empty-msg">' + (serviceTypes.length || r.services.length ? 'No tools yet for this job’s services.' :
         'Add the job’s services above — the tools each one takes show here.') + '</p>') +
+    // Those services list their suggested tools (dashed) until he picks.
     (none.length ? '<div class="hint jt-none">No tools picked yet for: ' + none.map(pick).join(', ') +
-        (owner ? '' : ' (Jonah picks them under ⋯ → Services)') + '</div>' : '') +
+        ' — the dashed ones are suggested until ' + (owner ? 'you pick your own' : 'Jonah picks (⋯ → Services)') + '</div>' : '') +
     (r.dropped.length ? '<div class="hint jt-dropped">Not needed on this job: ' + r.dropped.map(t => '<button type="button" class="link-btn" data-k="' +
         esc(t.key) + '" onclick="jobToolBack(this.dataset.k)">' + esc(t.name) + ' ↺</button>').join(', ') + '</div>' : '') +
     '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="jobToolAdd()">+ Add a tool</button>' +

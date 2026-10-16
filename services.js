@@ -484,6 +484,15 @@
     return top && !tie ? best : null;
   }
 
+  // A service's starters as tools: one of his machines when exactly one goes
+  // by that name, else the generic name.
+  function starterTools(v) {
+    return starters(v.name, groupOf(v)).map(n => {
+      const like = machinesLike(n);
+      return like.length === 1 ? { eq: like[0].id, name: like[0].name, kind: like[0].kind } : { name: n, qty: null };
+    });
+  }
+
   // A job's tool list. d: the job (serviceTypes, estimate, tools {added,
   // dropped}). Answers { tools, dropped, services }:
   //   tools    [{ key, eq, name, kind, kindName, qty, from[], byHand }],
@@ -491,11 +500,12 @@
   //            order the services list them -- each once, the biggest count
   //   dropped  the ones taken off this job by hand (to put back)
   //   services [{ id, name, has }] the services it came from (has: tools picked)
+  //   (a tool with sug: from a service's suggestions, his own not yet picked)
   function toolsFor(d) {
     d = d || {};
     const eqs = machines(), eqKnown = Object.keys(eqs).length > 0;
     const out = [], byKey = {};
-    function add(t, why, byHand) {
+    function add(t, why, byHand, sug) {
       if (!t || (!t.eq && !s(t.name))) return;
       let e;
       if (t.eq) {
@@ -513,10 +523,12 @@
         if (e.qty && e.qty > (had.qty || 0)) { had.qty = e.qty; if (!e.eq) had.name = e.name; }
         if (why && had.from.indexOf(why) === -1) had.from.push(why);
         if (byHand) had.byHand = true;
+        if (!sug) had.sug = false;
         return;
       }
       e.from = why ? [why] : [];
       e.byHand = !!byHand;
+      e.sug = !!sug;
       byKey[e.key] = e;
       out.push(e);
     }
@@ -524,9 +536,12 @@
     const take = x => {
       if (!x || seen[x.id]) return;
       seen[x.id] = true;
-      const tools = Array.isArray(x.v.tools) ? x.v.tools : [];
-      services.push({ id: x.id, name: x.v.name, has: tools.length > 0 });
-      tools.forEach(t => add(t, x.v.name));
+      // Jonah: the job's list from day one -- a service whose tools were
+      // never picked (no tools field; an empty list saved is "none needed")
+      // brings its suggested ones, marked as such, until he picks his own.
+      const picked = Array.isArray(x.v.tools);
+      services.push({ id: x.id, name: x.v.name, has: picked });
+      (picked ? x.v.tools : starterTools(x.v)).forEach(t => add(t, x.v.name, false, !picked));
     };
     (Array.isArray(d.serviceTypes) ? d.serviceTypes : []).forEach(n => take(serviceOf(n)));
     (((d.estimate || {}).work) || []).forEach(w => take(serviceForLine(w)));
@@ -540,6 +555,7 @@
       if (!m) return true;
       e.from.forEach(f => { if (m.from.indexOf(f) === -1) m.from.push(f); });
       if (e.byHand) m.byHand = true;
+      if (!e.sug) m.sug = false;
       return false;
     });
     const drop = new Set((Array.isArray(own.dropped) ? own.dropped : []).map(String));
@@ -578,7 +594,9 @@
           '" onclick="svcToolEq(this.dataset.id)">' + (on ? '✓ ' : '＋ ') + esc(m.name) + '</button>';
       }).join('') + '</div>').join('');
     return '<div class="field svt" id="svcEdTools"><span class="label">🧰 Tools &amp; equipment it needs — every job with this service lists them for the crew</span>' +
-      '<div class="svt-chips svt-picked">' + (tools.length ? tools.map(chip).join('') : '<span class="muted">None picked yet.</span>') + '</div>' +
+      '<div class="svt-chips svt-picked">' + (tools.length ? tools.map(chip).join('') : '<span class="muted">' + (d.picked ? 'None needed.' :
+        'None picked yet — jobs list the suggested ones until you pick.') + '</span>') + '</div>' +
+      (!tools.length && !d.picked ? '<div><button type="button" class="link-btn" onclick="svcToolNone()">None needed for this service</button></div>' : '') +
       (sug.length ? '<div class="svt-sub">Suggested — tap to add' +
           (sug.length > 1 ? ' <button type="button" class="link-btn" onclick="svcToolAllSug()">Add all ' + sug.length + '</button>' : '') + '</div>' +
         '<div class="svt-chips">' + sug.map((x, i) => '<button type="button" class="svt-pick svt-sug" onclick="svcToolSug(' + i + ')">＋ ' + esc(x.name) +
@@ -606,11 +624,19 @@
   }
   function addDraftTool(t) {
     if (!draft) return;
+    draft.picked = true;
     draft.tools = cleanTools((draft.tools || []).concat([t]));
   }
   const sugTool = x => (x.eq ? { eq: x.eq.id, name: x.eq.name, kind: x.eq.kind } : { name: x.name, qty: null });
+  // Saved even when empty: an empty list is "none needed", not "not picked yet".
+  window.svcToolNone = function () {
+    if (!draft) return;
+    draft.tools = []; draft.picked = true;
+    rerenderEditor();
+  };
   window.svcToolOff = function (i) {
     if (!draft || !draft.tools) return;
+    draft.picked = true;
     draft.tools.splice(i, 1);
     rerenderEditor();
   };
@@ -886,13 +912,13 @@
   function manageHtml() {
     const all = Object.values(list.services).filter(v => v.active !== false);
     const noSummary = all.filter(v => !s(v.summary)).length;
-    const noTools = all.filter(v => !(v.tools || []).length).length;
+    const noTools = all.filter(v => !Array.isArray(v.tools)).length;
     return '<p class="hint">One list for jobs, contacts, customers and subcontractors. The <b>summary</b> is the one line the crew ' +
         'say to a homeowner; the <b>details</b> are what it includes. The crew read them under 🧰 What we do. ' +
         'The <b>tools</b> a service takes go on every job with it, for the crew to bring.</p>' +
       '<div class="svc-stats"><span>' + plural(all.length, 'service') + '</span>' +
         (noSummary ? '<span class="svc-warn">' + noSummary + ' still without a summary</span>' : '<span class="svc-ok">✓ every one has a summary</span>') +
-        (noTools ? '<span class="svc-warn">' + noTools + ' without tools</span>' : '<span class="svc-ok">✓ every one has its tools</span>') + '</div>' +
+        (noTools ? '<span class="svc-warn">' + noTools + ' with tools not yet picked</span>' : '<span class="svc-ok">✓ every one has its tools</span>') + '</div>' +
       '<div class="svc-acts">' +
         '<button class="btn btn-sm btn-filled" onclick="svcAdd()">+ Add a service</button>' +
         '<button class="btn btn-sm" onclick="svcMode(\'read\')">👀 What the crew see</button>' +
@@ -928,7 +954,8 @@
       ((v.aliases || []).length ? '<div class="muted svc-alias">Also written: ' + esc(v.aliases.join(', ')) + '</div>' : '') +
       (v.qbItemName ? '<div class="muted svc-alias">📗 QuickBooks: ' + esc(v.qbItemName) + '</div>' : '') +
       ((v.tools || []).length ? '<div class="svc-alias svt-line">🧰 ' + esc(toolsLine(v)) + '</div>'
-        : v.active !== false ? '<div class="muted svc-alias svt-line">🧰 No tools picked yet</div>' : '') +
+        : Array.isArray(v.tools) ? '<div class="muted svc-alias svt-line">🧰 None needed</div>'
+        : v.active !== false ? '<div class="muted svc-alias svt-line">🧰 No tools picked yet — jobs list the suggested ones</div>' : '') +
       '<div class="svc-acts">' +
         btn('✎ Edit', 'svcEdit(\'' + id + '\')') +
         (v.active !== false ? btn('🧰 Tools', 'svcEditTools(\'' + id + '\')') : '') +
@@ -1020,7 +1047,7 @@
     editing = id;
     draft = { name: v.name, group: groupOf(v), summary: v.summary || '', details: v.details || '',
               aliases: (v.aliases || []).join(', '), qbItemName: v.qbItemName || '',
-              tools: cleanTools(v.tools), toolText: '', eqOpen: !!eqOpen };
+              tools: cleanTools(v.tools), picked: Array.isArray(v.tools), toolText: '', eqOpen: !!eqOpen };
     openGroups[groupOf(v)] = true;
     render();
     return true;
@@ -1076,7 +1103,10 @@
     // A hand tool typed but not yet added with its button goes in too.
     if (s(draft.toolText)) { addDraftTool(parseTool(draft.toolText)); draft.toolText = ''; }
     const fields = { name: name, summary: s(draft.summary).slice(0, 200), details: String(draft.details || '').trim().slice(0, 4000),
-                     aliases: aliases, qbItemName: s(draft.qbItemName), tools: cleanTools(draft.tools), updatedAt: iso() };
+                     aliases: aliases, qbItemName: s(draft.qbItemName), updatedAt: iso() };
+    // Only once picked: a service whose tools were never touched keeps
+    // none saved, so its jobs go on listing the suggested ones.
+    if (draft.picked) fields.tools = cleanTools(draft.tools);
     if (draft.group !== groupOf(v)) {
       fields.group = draft.group;
       fields.order = servicesIn(draft.group).reduce((m, x) => Math.max(m, x.order || 0), 0) + 1;
