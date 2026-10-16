@@ -433,9 +433,12 @@
       ((j.services || []).length ? '<div class="cj-tags">' + j.services.map(s => '<button type="button" class="svc-tag svc-tag-btn" data-n="' + esc(s) +
           '" onclick="openWhatWeDo(this.dataset.n)">' + esc(s) + ' ⓘ</button>').join('') +
         '<div class="hint cj-tags-hint">Tap a service for how to describe it to the homeowner.</div></div>' : '') +
+      // A day with nobody put on the entry says "Anyone" rather than a date
+      // with no names, which read as if the names were missing.
       sec('👷 Who is working', days.length ? days.slice(0, 12).map(x => '<div class="cj-day"><b>' +
           esc(new Date(x.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) + '</b>' +
-          (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') + (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : '') + '</div>').join('') : '') +
+          (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') +
+          (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
       workHtml(j, sec) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +

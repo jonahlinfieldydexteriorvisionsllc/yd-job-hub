@@ -2972,7 +2972,10 @@
                      crew: (o.crew || []).map(c => {
                        const p = people[c.uid];
                        return (p && (p.name || p.email)) || c.name || '';
-                     }).filter(Boolean) }));
+                     }).filter(Boolean),
+                     // Nobody put on the entry at all -- anyone can do it --
+                     // as against people on it whose names are not known here.
+                     nobody: !(o.crew || []).length }));
     },
     // Home (see homeDay above). `ready`: the calendars have answered once.
     ready: () => calsHeard,
