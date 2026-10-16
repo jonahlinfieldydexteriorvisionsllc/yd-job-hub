@@ -2366,6 +2366,17 @@
   .cl-summary { margin-top:4px; font-weight:600; }
   .cl-result { margin-top:8px; white-space:pre-wrap; line-height:1.5; max-height:340px; overflow:auto; background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 11px; }
   .cl-drafts { display:flex; flex-wrap:wrap; gap:7px; margin-top:8px; }
+  /* the conversation on a card: Claude's rounds and Jonah's notes, oldest first */
+  .cl-box.again { border-color:#cdb8ea; background:color-mix(in srgb, #8e5bc7 5%, var(--surface)); }
+  .cl-talk { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+  .cl-msg { border:1px solid var(--border); border-radius:8px; padding:8px 10px; background:var(--surface); min-width:0; }
+  .cl-msg.me { border-color:#efd59c; background:color-mix(in srgb, #e0a526 8%, var(--surface)); }
+  .cl-msg-h { font-size:12px; font-weight:700; color:var(--text); }
+  .cl-msg-text { margin-top:4px; white-space:pre-wrap; line-height:1.5; overflow-wrap:anywhere; }
+  .cl-msg .cl-result { margin-top:6px; max-height:260px; }
+  .cl-earlier { align-self:flex-start; font-size:13px; }
+  .cl-compose { margin:10px 0 0; }
+  .cl-compose textarea { width:100%; min-height:72px; }
 
   /* ---- Receipts to sort (receipts.js) ---- */
   .rc-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; font-size:13px; }

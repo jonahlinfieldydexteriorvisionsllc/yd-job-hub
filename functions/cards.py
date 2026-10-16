@@ -313,11 +313,63 @@ def _card_prompt(board, card, records):
     if card.get("checklist"):
         lines.append("Checklist:\n" + "\n".join(("[x] " if i.get("done") else "[ ] ") + (i.get("text") or "")
                                                 for i in card["checklist"]))
-    prev = card.get("claude") or {}
-    if prev.get("status") == "needs_info":
-        lines.append("Last time you asked for: " + (prev.get("result") or "") +
-                     "\nThe card has been changed since; see if it now has what you need.")
+    talk = _talk(card)
+    if talk:
+        # Jonah, 16 Oct 2026: done again, Claude sees "what you did last time,
+        # the notes you gave me, and my new notes".
+        # The latest few, each cut to a length that keeps a card cheap: what
+        # matters is the last round and the notes since.
+        lines.append("What has happened on this card so far, oldest first -- your earlier rounds and "
+                     "Jonah's notes to you:")
+        for t in talk[-TALK_PROMPT:]:
+            if t.get("from") == "owner":
+                lines.append("[%s] Jonah wrote:\n%s" % (t.get("at") or "", str(t.get("text") or "")[:4000]))
+            else:
+                lines.append("[%s] You (%s): %s\n%s" % (t.get("at") or "", t.get("status") or "",
+                                                        t.get("summary") or "", str(t.get("result") or "")[:3000]))
+        lines.append("Jonah's newest notes say what he wants now. Do the card again with them in mind, "
+                     "building on what you did before rather than starting over.")
     return "\n".join(lines)
+
+
+TALK_KEEP = 30          # boards.js TALK_KEEP
+TALK_PROMPT = 8         # entries Claude is shown
+
+
+def _talk(card):
+    """The conversation on a card (boards.js talkOf): Claude's rounds and
+    Jonah's notes, oldest first. A round written before the conversation was
+    kept is the card's `claude` record; it counts as Claude's latest word."""
+    talk = [t for t in (card.get("claudeTalk") or []) if isinstance(t, dict) and t.get("from")]
+    prev = _legacy_round(card, talk)
+    if prev:
+        talk.append(prev)
+    talk.sort(key=lambda t: _parse_time(t.get("at")) or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
+    return talk[-TALK_KEEP:]
+
+
+def _legacy_round(card, talk):
+    """The card's `claude` record as a conversation entry, when the
+    conversation does not hold it yet."""
+    c = card.get("claude") or {}
+    if not c.get("status") or c.get("status") == "working" or not (c.get("result") or c.get("summary")):
+        return None
+    at = _parse_time(c.get("at"))
+    if any(t.get("from") == "claude" and _parse_time(t.get("at")) == at for t in talk):
+        return None
+    return {"id": "cl%d" % int(at.timestamp() * 1000) if at else "cl0", "from": "claude", "by": c.get("by") or "",
+            "at": c.get("at") or "", "status": c.get("status"), "summary": c.get("summary") or "",
+            "result": c.get("result") or ""}
+
+
+def _asked_again(card):
+    """Jonah pressed Send on the card (boards.js claudeSend) since Claude's
+    last word on it."""
+    asked = _parse_time(card.get("claudeAskedAt"))
+    if not asked:
+        return False
+    at = _parse_time((card.get("claude") or {}).get("at"))
+    return not at or asked > at
 
 
 def _run_tool(name, args, records, ctx):
@@ -421,7 +473,7 @@ def _candidates(db, only=None):
     """Cards to work, oldest first: not done, not opted out, and either never
     looked at, or waiting on information that has since been added to the
     card. A card Claude did, or said was not its, is left alone unless Jonah
-    taps "Ask Claude again" (which clears the record)."""
+    sends it back with "Send" (claudeAskedAt; what Claude did is kept)."""
     out = []
     if only:
         # "Ask Claude now" on one card: that board and that card, read by id
@@ -450,7 +502,9 @@ def _candidates(db, only=None):
             if k.get("column") == last or k.get("doneAt"):
                 continue
             prev = k.get("claude") or {}
-            if not only and prev.get("by") == "computer":
+            if not only and _asked_again(k) and prev.get("status") != "working":
+                pass                # sent back with his notes
+            elif not only and prev.get("by") == "computer":
                 if not _computer_card_is_free(k, prev):
                     continue
             elif not only and prev:
@@ -553,6 +607,15 @@ def run(client, only=None):
             "drafts": ctx["drafts"], "at": dg._now().isoformat(), "model": MODEL,
         }
         patch = {"claude": rec}
+        # Its round joins the conversation (with the round before it, when
+        # that was only ever in `claude`). ArrayUnion adds to what is there
+        # now, so a note Jonah sent while Claude worked is not lost; the app
+        # trims the list when he next writes to it.
+        rounds = [r for r in (_legacy_round(k, list(k.get("claudeTalk") or [])),) if r]
+        rounds.append({"id": "cl%d" % int(datetime.datetime.now().timestamp() * 1000), "from": "claude",
+                       "by": "server", "at": rec["at"], "status": rec["status"], "summary": rec["summary"],
+                       "result": rec["result"]})
+        patch["claudeTalk"] = firestore.ArrayUnion(rounds)
         after = dict(k)
         if ctx["checklist"]:
             base = len(k.get("checklist") or [])

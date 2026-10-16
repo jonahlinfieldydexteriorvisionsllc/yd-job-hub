@@ -1024,8 +1024,9 @@
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
         (k.recurring && typeof recurringBadge === 'function' ? recurringBadge(k, inLastColumn) : '') +
-        (isOwner() && k.claude && k.claude.status === 'done' ? '<span class="bd-claude" title="Claude did this — check it">🤖</span>' : '') +
-        (isOwner() && k.claude && k.claude.status === 'needs_info' ? '<span class="bd-claude ask" title="Claude needs something from you">🤖?</span>' : '') +
+        (isOwner() && askedAgain(k) ? '<span class="bd-claude" title="Sent back to Claude with your notes">🔁</span>'
+          : (isOwner() && k.claude && k.claude.status === 'done' ? '<span class="bd-claude" title="Claude did this — check it">🤖</span>' : '') +
+            (isOwner() && k.claude && k.claude.status === 'needs_info' ? '<span class="bd-claude ask" title="Claude needs something from you">🤖?</span>' : '')) +
         (isOwner() && k.claude && k.claude.status === 'working' ? '<span class="bd-claude" title="Claude at home is working on this">🖥…</span>' : '') +
         (isOwner() && k.claude && k.claude.status === 'waiting_ok' && !k.claude.approvedAt ? '<span class="bd-claude ask" title="Built — waiting for your OK">🖥 OK?</span>' : '') +
         '<span class="bd-people">' + (k.assignees || []).map(a =>
@@ -1640,57 +1641,153 @@
   // what is left is one small "Ask Claude" beside Close (claudeAskHtml),
   // which works as it always did.
   const claudeOwns = (board, k) => isOwner() && !board.virtual && board.id !== MAINTENANCE && !k.auto;
-  const claudeShown = k => cardRuns || computerAwake() || !!k.claude;
+  // The wish board is worked by Claude on the computer at home at the night
+  // run (the nightly-wishes task, midnight after each weekday): what is on it
+  // are changes to Job Hub itself, which the server never builds (cards.py
+  // SKIP_BOARDS). Every other board is the server's, which answers "Ask
+  // Claude now" at once.
+  const NIGHT_BOARD = 'wishes';
+  const atNight = board => !!board && board.id === NIGHT_BOARD;
+  const claudeShown = (board, k) => atNight(board) || cardRuns || computerAwake() || !!k.claude ||
+    (k.claudeTalk || []).length > 0;
   function claudeAskHtml(board, k) {
-    if (!claudeOwns(board, k) || claudeShown(k) || k.noClaude || colOf(board, k) === doneColOf(board)) return '';
+    if (!claudeOwns(board, k) || claudeShown(board, k) || k.noClaude || colOf(board, k) === doneColOf(board)) return '';
     return '<button class="btn btn-sm" onclick="claudeNow()">🤖 Ask Claude to do it</button>';
   }
+
+  // The conversation on a card. Jonah, 16 Oct 2026: "after you do them i can
+  // add notes and then ask you to do again so you can see what you did last
+  // time, the notes you gave me, and my new notes." `claudeTalk` keeps every
+  // round Claude finished and every note he sent it, oldest first; whoever
+  // works the card next (cards.py, the nightly task) reads all of it and adds
+  // its own round. "Send" here adds his note and asks again (claudeAskedAt).
+  // "Ask Claude again" used to clear what Claude did; nothing is cleared now.
+  const TALK_KEEP = 30;              // entries kept on a card, the newest
+  const TALK_SHOWN = 3;              // shown before "Show the N earlier"
+  const timeOf = s => { const t = Date.parse(s || ''); return isNaN(t) ? 0 : t; };
+  function talkOf(k) {
+    const talk = Array.isArray(k.claudeTalk) ? k.claudeTalk.filter(t => t && t.from) : [];
+    const c = k.claude;
+    // A round written before the conversation was kept (or by a runner that
+    // writes only `claude`) is still Claude's latest word: it shows, and the
+    // first note sent keeps it in the conversation.
+    if (c && c.status && c.status !== 'working' && (c.result || c.summary) &&
+        !talk.some(t => t.from === 'claude' && timeOf(t.at) === timeOf(c.at))) {
+      talk.push({ id: 'cl' + timeOf(c.at).toString(36), from: 'claude', by: c.by || '', at: c.at || '',
+                  status: c.status, summary: c.summary || '', result: c.result || '' });
+    }
+    // Times come from phones ('…Z') and from the server ('…-05:00'): compared
+    // as times, not as text.
+    return talk.sort((a, b) => timeOf(a.at) - timeOf(b.at));
+  }
+  // Asked again and not answered yet: the ask is newer than Claude's last word.
+  const askedAgain = k => !!k.claudeAskedAt && (!k.claude || !k.claude.at || timeOf(k.claudeAskedAt) > timeOf(k.claude.at));
+  const ROUND_WORDS = { done: 'did it', needs_info: 'needs something from you',
+                        waiting_ok: 'built it — waiting for your OK', not_mine: 'says it is not one it can do' };
+  function whenText(s) {
+    const t = timeOf(s);
+    return t ? new Date(t).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  }
+  function talkHtml(t) {
+    const when = whenText(t.at);
+    const at = when ? ' <span class="muted">· ' + esc(when) + '</span>' : '';
+    if (t.from === 'owner') {
+      return '<div class="cl-msg me"><div class="cl-msg-h">📝 ' + esc(t.by || 'You') + at + '</div>' +
+        '<div class="cl-msg-text">' + esc(t.text || '') + '</div></div>';
+    }
+    return '<div class="cl-msg claude ' + esc(t.status || '') + '"><div class="cl-msg-h">' +
+      (t.by === 'computer' || t.by === 'nightly' ? '🖥 Claude at home' : '🤖 Claude') +
+      (ROUND_WORDS[t.status] ? ' ' + esc(ROUND_WORDS[t.status]) : '') + at + '</div>' +
+      (t.summary ? '<div class="cl-summary">' + esc(t.summary) + '</div>' : '') +
+      (t.result ? '<div class="cl-result">' + esc(t.result) + '</div>' : '') + '</div>';
+  }
+  // Which cards show their earlier rounds, and what is typed in each card's
+  // notes box: kept through the redraws a change to the card brings (this
+  // visit only).
+  const talkOpen = {}, talkDrafts = {};
+  const talkKey = () => openCard ? openCard.boardId + '/' + openCard.cardId : '';
+  window.toggleTalk = function () { const key = talkKey(); if (!key) return; talkOpen[key] = !talkOpen[key]; renderCardDetail(); };
+  window.clNoteTyped = function (v) { const key = talkKey(); if (key) talkDrafts[key] = v; };
+  function talkListHtml(board, k) {
+    const talk = talkOf(k);
+    if (!talk.length) return '';
+    const key = board.id + '/' + k.id;
+    const hidden = talkOpen[key] ? 0 : Math.max(0, talk.length - TALK_SHOWN);
+    return '<div class="cl-talk">' +
+      (hidden ? '<button class="link-btn cl-earlier" onclick="toggleTalk()">Show the ' + hidden + ' earlier</button>'
+        : talk.length > TALK_SHOWN ? '<button class="link-btn cl-earlier" onclick="toggleTalk()">Show only the latest</button>' : '') +
+      talk.slice(hidden).map(talkHtml).join('') + '</div>';
+  }
+  function noteBoxHtml(board, k) {
+    const c = k.claude || {};
+    const answer = c.status === 'needs_info' && !askedAgain(k);
+    return '<div class="field cl-compose"><span class="label">' + (answer ? 'Your answer for Claude' : 'Your notes for Claude') +
+      '</span><textarea id="clNote" rows="3" oninput="clNoteTyped(this.value)" placeholder="' +
+      (answer ? 'What it asked for' : 'What to change or add — Claude sees what it did before, its notes and yours') + '">' +
+      esc(talkDrafts[board.id + '/' + k.id] || '') + '</textarea></div>';
+  }
+  const sendLabel = board => atNight(board) ? '🌙 Send — Claude does it tonight' : '📨 Send — Claude does it now';
+
   function claudeHtml(board, k) {
-    if (!claudeOwns(board, k) || !claudeShown(k)) return '';
+    if (!claudeOwns(board, k) || !claudeShown(board, k)) return '';
     const c = k.claude || null;
     const last = doneColOf(board);
     const finished = colOf(board, k) === last;
+    const night = atNight(board);
     const head = '<div class="bd-move-label">Claude</div>';
     if (k.noClaude) {
       return head + '<div class="cl-box muted">Claude leaves this card alone.' +
         '<div class="field-actions"><button class="btn btn-sm" onclick="claudeAllow(true)">Let Claude look at it</button></div></div>';
     }
-    if (!c) {
+    const talk = talkListHtml(board, k);
+    if (!c && !talk) {
       return head + '<div class="cl-box muted">' + (finished ? 'Done — Claude does not look at finished cards.'
+        : night ? 'Claude builds new wishes at the night run (midnight, Monday to Friday nights).'
         : computerAwake() ? 'Claude on the computer at home looks at new cards every 20 minutes and does the ones it can.'
         : cardRuns ? 'Claude looks at new cards at 7 am and 7 pm and does the ones it can by itself.'
         : 'Claude does a card only when you ask (switched on or off in Pricing rules → Claude).') +
         '<div class="field-actions">' +
-          (finished ? '' : '<button class="btn btn-sm btn-filled" onclick="claudeNow()">🤖 Ask Claude now</button>') +
+          (finished || night ? '' : '<button class="btn btn-sm btn-filled" onclick="claudeNow()">🤖 Ask Claude now</button>') +
           '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button>' +
         '</div></div>';
     }
-    const when = c.at ? new Date(c.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
-    const who = c.by === 'computer' ? '🖥 Claude at home' : '🤖 Claude';
-    if (c.status === 'working') {
+    const cc = c || {};
+    const when = cc.at ? new Date(cc.at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
+    const who = cc.by === 'computer' || cc.by === 'nightly' ? '🖥 Claude at home' : '🤖 Claude';
+    if (cc.status === 'working') {
       return head + '<div class="cl-box working"><div class="cl-title">' + who + ' is working on this' +
-        (when ? ' <span class="muted">· since ' + esc(when) + '</span>' : '') + '</div>' +
-        '<div class="hint">What it did shows here when it has finished.</div></div>';
+        (when ? ' <span class="muted">· since ' + esc(when) + '</span>' : '') + '</div>' + talk +
+        '<div class="hint">What it does shows here when it has finished; add notes then.</div></div>';
     }
-    const title = c.status === 'done' ? who + ' did this — check it'
-      : c.status === 'needs_info' ? who + ' needs something from you'
-      : c.status === 'waiting_ok' ? (c.approvedAt ? '🖥 Going live on the next check (within 20 minutes)'
+    const again = askedAgain(k);
+    // Sent on a server board: its answer comes within a minute or two, from
+    // the call already made -- a second Send then would run it twice. On the
+    // wish board the night is hours off, so more notes can still go in.
+    const waiting = again && !night;
+    const title = again ? (night ? '🌙 Sent — Claude does it again at the night run' : '📨 Sent — Claude is doing it again')
+      : cc.status === 'done' ? who + ' did this — check it'
+      : cc.status === 'needs_info' ? who + ' needs something from you'
+      : cc.status === 'waiting_ok' ? (cc.approvedAt ? '🖥 Going live on the next check (within 20 minutes)'
         : '🖥 Built — waiting for your OK to put it live')
-      : '🤖 Not one Claude can do';
-    return head + '<div class="cl-box ' + esc(c.status || '') + '">' +
-      '<div class="cl-title">' + title + (when ? ' <span class="muted">· ' + esc(when) + '</span>' : '') + '</div>' +
-      (c.summary ? '<div class="cl-summary">' + esc(c.summary) + '</div>' : '') +
-      (c.result ? '<div class="cl-result">' + esc(c.result) + '</div>' : '') +
-      ((c.drafts || []).length ? '<div class="cl-drafts">' + c.drafts.map(d =>
+      : cc.status === 'not_mine' ? '🤖 Not one Claude can do'
+      : '🤖 Claude';
+    return head + '<div class="cl-box ' + esc(again ? 'again' : cc.status || '') + '">' +
+      // Each round below carries its own time.
+      '<div class="cl-title">' + title + (when && !again && !talk ? ' <span class="muted">· ' + esc(when) + '</span>' : '') + '</div>' +
+      talk +
+      ((cc.drafts || []).length ? '<div class="cl-drafts">' + cc.drafts.map(d =>
         '<a class="btn btn-sm" href="' + esc(safeLink(d.link)) + '" target="_blank" rel="noopener">✉️ Draft to ' +
         esc(d.to || '') + '</a>').join('') + '</div>' : '') +
-      (c.status === 'needs_info' ? '<div class="hint">Add what it needs to the card (Edit → Notes) and ' +
-        (computerAwake() ? 'it looks again within 20 minutes' : cardRuns ? 'it looks again at the next run (7 am or 7 pm)'
-          : 'press Ask Claude again') + '.</div>' : '') +
+      (waiting ? '<div class="hint">Its answer shows here in a minute or two. Nothing yet? Ask again below.</div>'
+        : noteBoxHtml(board, k)) +
+      (cc.status === 'needs_info' && !again ? '<div class="hint">Type what it needs above and press Send — ' +
+        (night ? 'Claude picks it up at the night run.' : 'Claude does it straight away.') + '</div>' : '') +
       '<div class="field-actions">' +
-        (c.status === 'waiting_ok' && !c.approvedAt
+        (cc.status === 'waiting_ok' && !cc.approvedAt && !again
           ? '<button class="btn btn-sm btn-filled" onclick="claudeApprove()">✅ Put it live</button>' : '') +
-        '<button class="btn btn-sm" onclick="claudeAgain()">Ask Claude again</button>' +
+        (waiting ? '<button class="btn btn-sm" onclick="claudeNow()">🤖 Ask Claude now</button>'
+          : '<button class="btn btn-sm' + (cc.status === 'waiting_ok' && !cc.approvedAt && !again ? '' : ' btn-filled') +
+            '" onclick="claudeSend()">' + (again ? 'Add this note too' : sendLabel(board)) + '</button>') +
         '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button>' +
       '</div></div>';
   }
@@ -1727,19 +1824,50 @@
     claudePatch({ noClaude: !yes });
     showToast(yes ? 'Claude will look at this card' : 'Claude will leave this card alone');
   };
-  // Forgets what Claude did, so the next run (or Ask now) does it afresh.
-  window.claudeAgain = async function () {
-    const asked = openCard && openCard.boardId + '/' + openCard.cardId;
-    if (!asked || !(await ydConfirm('What it did before is replaced (drafts already in Gmail stay there).',
-      { title: 'Have Claude do this card again?', ok: 'Do it again' }))) return;
-    if (!openCard || openCard.boardId + '/' + openCard.cardId !== asked) return;
-    claudePatch({ claude: null });
-    showToast(computerAwake() || cardRuns ? 'Claude will look at it again on the next run'
-      : 'Cleared — press 🤖 Ask Claude now when you want it done');
+  // Jonah's note (if he typed one) goes into the conversation and Claude is
+  // asked again: what it did before stays, so it starts from all of it.
+  window.claudeSend = async function () {
+    const board = openCard && boards[openCard.boardId];
+    const k = board && (cards[board.id] || {})[openCard.cardId];
+    if (!k || !claudeOwns(board, k) || !window.YDDb) return;
+    if (k.claude && k.claude.status === 'working') { showToast('Claude is working on it — add notes once it has finished'); return; }
+    const key = board.id + '/' + k.id;
+    const box = el('clNote');
+    const text = String(box ? box.value : (talkDrafts[key] || '')).trim().slice(0, 4000);
+    const now = nowIso();
+    // talkOf carries Claude's latest round along when the card has no
+    // conversation yet, so that round is kept from here on.
+    const talk = talkOf(k);
+    if (text) talk.push({ id: 'tk' + Date.now().toString(36), from: 'owner', by: myName() || 'Jonah', at: now, text: text });
+    const patch = { claudeTalk: talk.slice(-TALK_KEEP), claudeAskedAt: now, updatedAt: now, updatedBy: myName() };
+    // A finished card is one Claude leaves alone -- and the morning tidy
+    // deletes it a week after it was done -- so it goes back on the list.
+    const done = doneColOf(board);
+    if (done && colOf(board, k) === done) {
+      const back = (board.columns || []).find(col => col.id !== done);
+      if (back) Object.assign(patch, { column: back.id, order: Date.now() });
+      Object.assign(patch, { doneAt: null }, doneByPatch(board, k, true, false, null));
+    }
+    Object.assign(k, patch);
+    delete talkDrafts[key];
+    render(); renderCardDetail();
+    const saved = Promise.resolve(window.YDDb.put('boards/' + board.id + '/cards', k.id, patch));
+    saved.catch(e => showToast(e && e.code === 'permission-denied' ? 'Not saved — not allowed'
+      : 'Saved on this device — it goes to Claude when there is signal'));
+    if (atNight(board)) {
+      showToast(patch.column ? 'Sent — back on the list; Claude does it at the night run' : 'Sent — Claude does it at the night run');
+      return;
+    }
+    // The server reads the card from the database, so the note has to be
+    // there before it is asked (a few seconds at most, not forever).
+    showToast('Sent — Claude is on it');
+    await Promise.race([saved.catch(() => {}), new Promise(r => setTimeout(r, 15000))]);
+    claudeNow({ boardId: board.id, cardId: k.id });
   };
-  window.claudeNow = async function () {
-    if (!openCard || !isOwner() || !window.YDClaude) return;
-    const ids = { boardId: openCard.boardId, cardId: openCard.cardId };
+  window.claudeNow = async function (given) {
+    if (!isOwner() || !window.YDClaude) return;
+    const ids = given && given.boardId ? given : openCard && { boardId: openCard.boardId, cardId: openCard.cardId };
+    if (!ids) return;
     showToast('Claude is on it — this can take a minute');
     try {
       const r = await window.YDClaude.post('/cards/now', ids);
