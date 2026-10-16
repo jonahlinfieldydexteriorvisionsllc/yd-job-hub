@@ -1328,7 +1328,28 @@
      The calendars and a small month down the left; Day / 3 days / Week as a
      time grid; Month; List. Narrower than 900 px the left side folds away
      behind ☰. */
-  .cal-shell { display:grid; grid-template-columns:200px minmax(0, 1fr); gap:18px; align-items:start; }
+  .cal-shell { display:grid; grid-template-columns:240px minmax(0, 1fr); gap:18px; align-items:start; }
+  /* The calendars to tick and what each colour means, in a row under the
+     tabs (Jonah, 15 Oct 2026). Open on a computer; behind one button on a
+     narrow screen (calendar.js filtersHtml). */
+  .cal-filters { margin:0 0 12px; display:flex; flex-direction:column; gap:6px; }
+  .cal-filters-btn { display:none; align-self:flex-start; }
+  .cal-filters-n { font-weight:700; color:var(--st-due-ink); }
+  .cal-filters-body { display:flex; flex-direction:column; gap:6px; }
+  .cal-filters .cal-checks { flex-direction:row; flex-wrap:wrap; align-items:center; gap:4px 6px; }
+  .cal-filters .cal-check { border:1px solid var(--border); background:var(--surface); border-radius:999px;
+    padding:4px 12px 4px 8px; min-height:36px; flex:none; }
+  .cal-filters .cal-check-name { flex:none; }
+  .cal-filters .cal-check.mine { margin-top:0; }
+  .cal-filters .cal-checks .link-btn { font-size:12.5px; padding:6px 4px; }
+  .cal-filters .cal-key { flex-direction:row; flex-wrap:wrap; gap:4px 14px; padding:2px 4px; }
+  .cal-filters .cal-key-i { font-size:12px; color:var(--muted); }
+  /* The day's list down the side (calendar.js dayListHtml): its time, then
+     what it is. */
+  .cal-daylist { border:1px solid var(--border); border-radius:10px; background:var(--surface); padding:8px 8px 10px; }
+  .cal-daylist-head { font-size:13.5px; font-weight:700; color:var(--text); padding:2px 2px 4px; display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; }
+  .cal-todo-at { flex:none; min-width:48px; font-size:11.5px; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .cal-daylist-add { display:block; font-size:12.5px; margin:8px 2px 0; }
   .cal-side { display:flex; flex-direction:column; gap:8px; min-width:0; }
   .cal-main { min-width:0; }
   .cal-side-btn { display:none; }
@@ -1603,7 +1624,9 @@
   .cal-key-dot { width:12px; height:12px; border-radius:3px; background:var(--c); flex:none; }
 
   @media (max-width:900px) {
-    .cal-side .cal-today { display:none; }
+    .cal-side .cal-today, .cal-side .cal-daylist { display:none; }
+    .cal-filters-btn { display:inline-flex; align-items:center; gap:4px; }
+    .cal-filters:not(.open) .cal-filters-body { display:none; }
     .cal-main > .cal-today { display:block; margin-bottom:10px; }
     .cal-todo { min-height:40px; }
     .cal-shell { grid-template-columns:minmax(0, 1fr); gap:12px; }
@@ -4148,3 +4171,17 @@
     #jobListBody .jl-acts { flex:1 1 100%; justify-content:flex-start; }
     #jobListBody .jl-acts .jl-del { margin-left:auto; }
   }
+
+  /* Files on a calendar entry (calendar.js filesHtml, 15 Oct 2026). */
+  .cal-files { display:flex; flex-direction:column; gap:6px; margin-top:12px; padding-top:10px; border-top:1px solid var(--border); }
+  .cal-file { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+  .cal-file-a { flex:1 1 160px; min-width:0; overflow-wrap:anywhere; font-weight:600; color:var(--brand-ink); text-decoration:none; }
+  .cal-file-a:not([href]) { color:var(--muted); }
+  .cal-file-a.missing { color:var(--muted); text-decoration:line-through; }
+  .cal-file small { color:var(--muted); font-size:12px; }
+  .cal-file-pic { flex:none; }
+  .cal-file-pic img { display:block; width:56px; height:56px; object-fit:cover; border-radius:8px; background:var(--surface-2); }
+  .cal-file-x { flex:none; width:36px; height:36px; border-radius:50%; border:1px solid var(--border); background:var(--surface);
+    color:var(--muted); cursor:pointer; font-size:14px; }
+  .cal-file-x:hover, .cal-file-x:focus-visible { color:var(--st-now); border-color:var(--st-now); }
+  .cal-file-add { align-self:flex-start; cursor:pointer; }
