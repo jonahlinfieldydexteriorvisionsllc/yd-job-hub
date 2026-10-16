@@ -1162,6 +1162,10 @@
   .bd-card:hover { box-shadow:0 4px 12px rgba(43,36,51,.14); }
   .bd-card.dragging { opacity:.45; transform:rotate(2deg); }
   .bd-card.done .bd-card-title { text-decoration:line-through; color:var(--muted); }
+  /* A problem noted on a machine whose card is still to come (boards.js
+     waitingCardHtml): dashed, the app's "waiting on someone else" look. */
+  .bd-card.bd-waiting { border:1.5px dashed var(--st-info, var(--muted)); box-shadow:none; opacity:.92; }
+  .bd-wait-line { color:var(--st-info, var(--muted)); font-weight:600; }
   .bd-card-title { font-weight:700; font-size:14px; line-height:1.3; }
   .bd-card-line { font-size:12px; margin-top:3px; color:var(--text); }
   .bd-card-line.muted { color:var(--muted); }

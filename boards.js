@@ -773,7 +773,10 @@
 
   // pick: which cards to draw -- the Boards tab's filter, unless another
   // screen narrows them its own way (the Equipment tab's search).
-  function columnsHtml(board, pick) {
+  // waiting: things that will be cards but are not yet (the Equipment tab's
+  // problems whose card the office's device has still to make), drawn among
+  // the cards by urgency, in the column they will start in.
+  function columnsHtml(board, pick, waiting) {
     pick = pick || (k => shows(board, k));
     if (board.virtual) {
       const grouped = jobCards(board);
@@ -790,9 +793,16 @@
     }
     const mine = Object.values(cards[board.id] || {}).filter(pick);
     const doneId = doneColOf(board);
+    // Never in the done column: what is waiting is not finished.
+    const openCols = board.columns.filter(c => c.id !== doneId);
+    const waitCol = k => (openCols.some(c => c.id === k.column) ? k.column : (openCols[0] || {}).id);
+    const toCome = (waiting || []).filter(pick).map(k => Object.assign({}, k, { column: waitCol(k) }));
     return board.columns.map(c => {
       const inCol = mine.filter(k => colOf(board, k) === c.id).sort(byPlace);
-      if (c.id !== doneId) return column(board, c, inCol.map(k => storedCardHtml(board, k, false)));
+      if (c.id !== doneId) {
+        return column(board, c, inCol.concat(toCome.filter(k => k.column === c.id)).sort(byPlace)
+          .map(k => (k.waiting ? waitingCardHtml(board, k) : storedCardHtml(board, k, false))));
+      }
       const recent = inCol.filter(onBoardWhenDone);
       const earlier = inCol.filter(k => !onBoardWhenDone(k));
       const showing = showOldDone[board.id] && earlier.length;
@@ -1027,6 +1037,25 @@
     '</div>';
   }
 
+  // Something that is not a card yet (columnsHtml's `waiting`): it looks
+  // like the card it will be -- labels, title, urgency -- but says it is on
+  // its way, and has nothing to drag, open or delete: there is no card to
+  // move. A tap opens its machine, where it was noted.
+  function waitingCardHtml(board, k) {
+    const labels = (k.labels || []).map(id => (board.labels || []).find(l => l.id === id)).filter(Boolean);
+    const urg = ['urgent', 'high', 'low'].indexOf(k.urgency) !== -1 ? ' urg-' + k.urgency : '';
+    const go = k.equipmentId ? 'if (window.openEquipment) openEquipment(\'' + safeId(k.equipmentId) + '\')' : '';
+    return '<div class="bd-card bd-waiting' + urg + '"' +
+        (go ? ' role="button" tabindex="0" onclick="' + go + '" onkeydown="if (event.key === \'Enter\') { ' + go + ' }"' : '') +
+        ' title="Saved on the machine. Its card is made on the board by Jonah’s Job Hub the next time it is open — until then it shows here.">' +
+      (labels.length ? '<div class="bd-labels">' + labels.map(l =>
+        '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+      '<div class="bd-card-title">' + esc(k.title || 'Untitled') + '</div>' +
+      '<div class="bd-card-line bd-wait-line">⏳ Saved on the machine — its card is on its way</div>' +
+      '<div class="bd-card-foot">' + urgChipHtml(k) + (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') + '</div>' +
+    '</div>';
+  }
+
   function personName(uid) {
     const p = people[uid];
     return p ? (p.name || p.email || 'Worker') : '';
@@ -1110,7 +1139,8 @@
     const { boardId, cardId } = dragging;
     dragging = null;
     // Work out which card it was dropped above, so the order sticks.
-    const siblings = Array.from(col.querySelectorAll('.bd-card')).filter(c => c.dataset.card !== cardId);
+    // (Not one still on its way -- it is not a card to drop beside.)
+    const siblings = Array.from(col.querySelectorAll('.bd-card:not(.bd-waiting)')).filter(c => c.dataset.card !== cardId);
     const before = siblings.find(c => {
       const r = c.getBoundingClientRect();
       return e.clientY < r.top + r.height / 2;
@@ -2606,12 +2636,15 @@
     // the Equipment tab (equipment.js): the same cards, drag and card window
     // as here, the cards narrowed by `match` (its search) instead of this
     // tab's filters. Empty when the board is not one this person sees.
-    columnsFor: (boardId, match) => {
+    // `waiting`: card-shaped things with no card yet ({ waiting: true, title,
+    // labels, urgency, column, order, equipmentId }), drawn among them.
+    columnsFor: (boardId, match, waiting) => {
       const b = boards[boardId];
       if (!b) return '';
       whoNow = window.YDRemind ? YDRemind.who(people) : null;
       try {
-        return '<div class="bd-cols" data-keep="eqbd-' + esc(b.id) + '">' + columnsHtml(b, k => !match || match(k)) + '</div>';
+        return '<div class="bd-cols" data-keep="eqbd-' + esc(b.id) + '">' +
+          columnsHtml(b, k => !match || match(k), (waiting || []).filter(k => k && k.waiting)) + '</div>';
       } finally { whoNow = null; }
     },
     editsBoard: id => !!boards[id] && editsBoard(boards[id]),
