@@ -813,7 +813,9 @@
     laborNote: '',
     items: {
       residential: 'Seasonal Services:Snow Removal:Residential Snow Removal',
-      commercial: 'Seasonal Services:Snow Removal:Commercial Snow Removal',
+      // There is no "Commercial Snow Removal" product in his QuickBooks (checked
+      // 16 Oct 2026); the one he put a business lot's clearing on is this.
+      commercial: 'Seasonal Services:Snow Removal:Snow Removal',
       salt: 'Seasonal Services:Snow Removal:Salt Application',
       labor: 'Labor',
     },
