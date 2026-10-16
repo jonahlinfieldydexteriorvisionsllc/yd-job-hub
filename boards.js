@@ -1940,7 +1940,8 @@
         // Time box's alone (Jonah, 15 Oct 2026).
         '<div class="field"><span class="label">What is it</span><select id="cdType" onchange="cardTypeChanged()">' +
           '<option value="">—</option>' +
-          YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
+          // A card is a thing to do: not a job's day (remind.js calOnly).
+          YDRemind.TYPES.filter(t => !t.calOnly).map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
             esc(cardTypeLabel(t)) + '</option>').join('') +
         '</select></div>' +
         (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +

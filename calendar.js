@@ -271,14 +271,14 @@
             title: (ic ? ic + ' ' : '') + name, name: name,
             color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
             // Has to be ticked off (remind.js isTask), or it is "not done".
-            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type), jobId: ev.jobId || base.jobId || '' }), after: key !== x.day,
+            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type) }), after: key !== x.day,
             // Ticked off on the "any time" list, date by date (a repeat too).
             done: !!mark, doneAt: (mark && mark.at) || '', doneKey: key,
             time: ev.allDay ? '' : ev.time, endTime: ev.allDay ? '' : ev.endTime,
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
-            // A job's day on the Work schedule: no tick box, never "not done".
-            jobDay: YDRemind.isJobDay({ calKind: cal.kind, typed: !!YDRemind.typeById(ev.type), jobId: ev.jobId || base.jobId || '' }),
+            // A job's day (picked as one): no tick box, never "not done".
+            jobDay: YDRemind.isJobDay(type, { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type) }),
           });
         });
       });
@@ -599,7 +599,12 @@
     topFold = false;          // open for the rest of this look
     return false;
   }
-  const isCrewOcc = o => !!(YDRemind.typeById(o.type) || {}).crew;
+  // The crew's: a crew task, or anything on the Crew schedule -- whose it is
+  // goes by the same rule (remind.js eventIsMine), or a pickup or a job's day
+  // there with nobody on it was nobody's on the owner's Home: not his, and
+  // not among the crew's either.
+  const isCrewOcc = o => !!(YDRemind.typeById(o.type) || {}).crew ||
+    (!o.auto && !!cals[o.calId] && cals[o.calId].kind === 'crew');
   // Who may tick a thing off. Jonah (15 Oct 2026): "Anyone a calendar is
   // shared with can tick anyone's task. Make this their own and 'anyone can
   // do' tasks only." So: whoever may change the calendar (or the card's
@@ -974,8 +979,8 @@
             '🎨 Colours <span aria-hidden="true">' + (keyOpen ? '▾' : '▸') + '</span></button>' +
         '</div>' +
         // What each colour means (remind.js). Anything not marked keeps its
-        // calendar's colour.
-        '<div class="cal-key' + (keyOpen ? ' open' : '') + '" id="calKey" aria-label="What the colours mean">' + YDRemind.TYPES.map(t =>
+        // calendar's colour -- a job's day too, which has none of its own.
+        '<div class="cal-key' + (keyOpen ? ' open' : '') + '" id="calKey" aria-label="What the colours mean">' + YDRemind.TYPES.filter(t => t.color).map(t =>
           '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
           '<span class="cal-key-dot"></span>' + esc(t.icon) + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
       '</div>' +
@@ -1988,9 +1993,11 @@
         .map(i => crew.find(p => p.uid === i.value)).filter(Boolean)
         .map(p => ({ uid: p.uid, name: p.name })),
       notes: el('evNotes').value.trim(),
-      // Kept only when it is not what the calendar makes it anyway, so an
-      // entry moved to another calendar takes on that one's.
-      type: YDRemind.typeById(val('evType')) && val('evType') !== typeOfEv({ title: title }, cals[calId]) ? val('evType') : null,
+      // Kept when it was picked by hand, or is not what the calendar and the
+      // title make it anyway; one that only followed them is left to follow
+      // them, so an entry moved to another calendar takes on that one's.
+      type: YDRemind.typeById(val('evType')) && (el('evType').dataset.picked ||
+        val('evType') !== typeOfEv({ title: title }, cals[calId])) ? val('evType') : null,
       updatedAt: nowIso(),
     };
     // The reminder: the usual one, none, or a set time (and who asked for it).

@@ -55,6 +55,12 @@
     // "Things not for Jonah to handle": on his calendar so he sees them all,
     // but they buzz only the people on them.
     { id: 'crew', icon: '👷', name: 'Crew task', timed: false, color: '#2f6fd6', crew: true },
+    // A day of work on a job -- who is working where. No tick box (Jonah,
+    // 15 Oct 2026: "schedules job days on calendar dont need a check mark
+    // for done"; the job is finished on the job itself). Only ever picked
+    // (isJobDay), only on a calendar (a card is a thing to do: `calOnly`),
+    // and drawn in its calendar's colour: it has none of its own.
+    { id: 'jobday', icon: '🔨', name: 'Job day — who is working where', timed: null, color: '', calOnly: true },
     { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true,
       personal: true },
     { id: 'personal', icon: '🏠', name: 'Personal', timed: null, color: '#d94f8a', personal: true },
@@ -121,20 +127,24 @@
   // A day of a job on the Work schedule is not one either (Jonah, 15 Oct 2026:
   // "schedules job days on calendar dont need a check mark for done") -- it
   // says who is working where, and the job is finished on the job itself.
-  // Something on the Work schedule picked as a pickup, a to-do and so on
-  // (`where.typed`: a kind of its own, not the calendar's) is still a task.
-  // Since the three calendars (15 Oct 2026) a job's day is an entry tied to
-  // a job (`where.jobId`) on the Crew schedule or My work that was not given
-  // a kind of its own -- "who is working where" -- while one tied to no job
-  // ("Pick up pavers") is a task to tick. (`schedule` stays for old copies.)
-  function isJobDay(where) {
+  // A job's day is the kind picked as one ("Job day" in the What is it box),
+  // never guessed from the entry being tied to a job: Jonah, 16 Oct 2026,
+  // "i have two items i marked at to do today yet the home page says I have
+  // 1 thing" -- a to-do tied to a customer's job ("take pictures at ...")
+  // showed ✅ To do that day in its box while it was counted as the job's
+  // day, and so was every other entry tied to a job (a pickup for one, a
+  // check to collect).
+  // What the box says is what it is. (Anything not given a kind on the old
+  // Work schedule, kind `schedule`, stays a job's day for old copies.)
+  // `where.typed`: a kind was picked, not taken from the calendar.
+  function isJobDay(type, where) {
     where = where || {};
-    if (where.typed) return false;
-    return where.calKind === 'schedule' || (!!where.jobId && (where.calKind === 'crew' || where.calKind === 'work'));
+    if (type === 'jobday') return true;
+    return !where.typed && where.calKind === 'schedule';
   }
   function isTask(type, timed, where) {
     where = where || {};
-    if (isJobDay(where)) return false;
+    if (isJobDay(type, where)) return false;
     const t = typeById(type);
     if (t) return !t.appointment && (t.id !== 'personal' || !!where.card);
     return !!where.card || where.calKind === 'followups' || !timed;

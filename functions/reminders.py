@@ -389,7 +389,7 @@ def _card_reminders(db, people, since, now, boards):
 TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
 TYPES = {"bid": "QP", "appt": "🕑", "pickup": "🚚", "delivery": "🚛", "email": "✉️",
-         "todo": "✅", "crew": "👷", "doctor": "🩺", "personal": "🏠"}
+         "todo": "✅", "crew": "👷", "jobday": "🔨", "doctor": "🩺", "personal": "🏠"}
 CREW_TYPES = {"crew"}
 # The three calendars (remind.js typeOf, 15 Oct 2026): Crew schedule, My work,
 # Personal. Site visits / Work schedule were calendars before that.
@@ -470,20 +470,20 @@ CARRY_DAYS = 14
 TICK_FROM = datetime.date(2026, 10, 14)
 
 
-def _is_job_day(cal_kind=None, typed=False, job_id=None):
-    """remind.js isJobDay: an entry tied to a job on the Crew schedule or My
-    work that was not given a kind of its own (and anything untyped on the old
-    Work schedule) -- who is working where, never a task to tick."""
-    if typed:
-        return False
-    return cal_kind == "schedule" or (bool(job_id) and cal_kind in ("crew", "work"))
+def _is_job_day(kind, cal_kind=None, typed=False):
+    """remind.js isJobDay: picked as a "Job day" (who is working where), never
+    guessed from the entry being tied to a job (16 Oct 2026: a to-do tied to
+    a job was left out of the count); anything given no kind on the old Work
+    schedule too. Never a task to tick."""
+    if kind == "jobday":
+        return True
+    return not typed and cal_kind == "schedule"
 
 
-def _is_task(kind, timed, card=False, cal_kind=None, typed=False, job_id=None):
+def _is_task(kind, timed, card=False, cal_kind=None, typed=False):
     """remind.js isTask. A job's day is not a task (Jonah, 15 Oct 2026:
-    "schedules job days on calendar dont need a check mark for done") unless
-    it was picked as a kind of its own (`typed`)."""
-    if _is_job_day(cal_kind, typed, job_id):
+    "schedules job days on calendar dont need a check mark for done")."""
+    if _is_job_day(kind, cal_kind, typed):
         return False
     if kind in TYPES:
         return kind not in APPOINTMENTS and (kind != "personal" or card)
@@ -572,8 +572,8 @@ def open_tasks(db, people, first, last, now):
                     if done.get(day.isoformat()):
                         continue
                     kind = _type_of(one, cal_kind=cal.get("kind"))
-                    if not _is_task(kind, timed, cal_kind=cal.get("kind"), typed=one.get("type") in TYPES,
-                                    job_id=one.get("jobId") or ev.get("jobId")) or to_come(day, timed and one.get("time")):
+                    if not _is_task(kind, timed, cal_kind=cal.get("kind"), typed=one.get("type") in TYPES) or \
+                            to_come(day, timed and one.get("time")):
                         continue
                     on = one.get("crew") or []
                     give(sees, {"day": day, "kind": kind, "title": str(one.get("title") or one.get("jobName") or "An entry"),
