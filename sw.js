@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v215';
+const CACHE = 'ydjobhub-v216';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -20,6 +20,7 @@ const SHELL = [
   './app.js',
   './changelog.js',
   './customers.js',
+  './services.js',
   './addr.js',
   './config.js',
   './firebase-init.js',
