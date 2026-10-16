@@ -603,7 +603,10 @@
       if (open.length) {
         const top = open.slice(0, 3).map(r => esc(r.vendor || 'Receipt') +
           (r.totalCents != null ? ' ' + fmtMoney((Number(r.totalCents) || 0) / 100) : '')).join(' · ');
-        rows.push(line('🧾', '<b>' + plural(open.length, 'receipt') + ' to sort</b>', top + (open.length > 3 ? ' …' : ''), '',
+        // Photos that could not go on their job by themselves say so first.
+        const stuck = YDReceipts.needsYou ? open.filter(YDReceipts.needsYou).length : 0;
+        rows.push(line('🧾', '<b>' + plural(open.length, 'receipt') + ' to sort</b>',
+          (stuck ? '<b>' + stuck + ' need' + (stuck === 1 ? 's' : '') + ' you</b> · ' : '') + top + (open.length > 3 ? ' …' : ''), '',
           "switchTab('receipts')"));
       }
     }

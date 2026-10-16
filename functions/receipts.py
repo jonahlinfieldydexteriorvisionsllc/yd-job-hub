@@ -1069,13 +1069,20 @@ def from_photo(client, body, uid, who):
     db = dg._db()
     jobs = _jobs(db)
     rid, what = _save(db, m, got, jobs)
+    lines, tax, total = lines_from(got)
+    sent_for = _sent_for(db, body, jobs, uid, who)
+    auto = {"state": "needs", "why": "", "at": now.isoformat()}
     # Only a receipt this photo made is marked as the photo's: one it matched
     # (the same order, already emailed and maybe sorted) keeps what it had.
     if what == "new":
-        extra = {"addedBy": uid, "addedByName": who, "source": "photo"}
-        job_id = str(body.get("jobId") or "")
-        if job_id and job_id in jobs:
-            extra["suggest"] = {"jobId": job_id, "why": "%s was clocked in on it" % who}
+        extra = {"addedBy": uid, "addedByName": who, "source": "photo", "sentFor": sent_for}
+        if sent_for["to"] == "job":
+            extra["suggest"] = {"jobId": sent_for["jobId"], "why": "%s %s" % (who, HOW_WORDS.get(sent_for["how"], "picked it"))}
+        auto["why"] = sent_for.pop("problem", "") or _auto_problem(db, rid, got, lines, tax, total, sent_for["to"])
+        if not auto["why"]:
+            auto["state"] = "ready"
+        extra["sentFor"] = sent_for
+        extra["auto"] = auto
         # The photo kept with it, then on to QuickBooks. Neither stops the
         # receipt being added: a failed send can be done again from Receipts.
         try:
@@ -1084,9 +1091,151 @@ def from_photo(client, body, uid, who):
             print("receipts: photo %s not kept: %s" % (rid, err))
         db.collection("receipts").document(rid).set(extra, merge=True)
         forward_to_qb(db, rid, raw, mime)
-    lines, tax, total = lines_from(got)
+    else:
+        # The same purchase was already here (its email came first). What
+        # the photo says it is for is kept beside it -- but only offered:
+        # that receipt was read from another copy, so nothing is added by
+        # itself, and one already sorted is left alone.
+        sent_for.pop("problem", "")
+        have = (db.collection("receipts").document(rid).get().to_dict() or {})
+        if have.get("status") == "new" and not have.get("splits") and not have.get("sentFor"):
+            auto["why"] = "this photo matched a receipt already here — check where it goes"
+            patch = {"sentFor": sent_for, "auto": auto}
+            if sent_for["to"] == "job":
+                patch["suggest"] = {"jobId": sent_for["jobId"], "why": "%s %s" % (who, HOW_WORDS.get(sent_for["how"], "picked it"))}
+            db.collection("receipts").document(rid).set(patch, merge=True)
+        else:
+            auto = {"state": "", "why": "", "at": now.isoformat()}
     return {"id": rid, "vendor": (got.get("vendor") or "").strip(), "totalCents": total, "lines": len(lines),
-            "summary": (got.get("summary") or "").strip(), "what": what}, usage
+            "summary": (got.get("summary") or "").strip(), "what": what,
+            "to": sent_for["to"], "name": sent_for.get("jobName") or sent_for.get("name") or "",
+            "auto": auto["state"], "why": auto["why"]}, usage
+
+
+# ------------------------------------------------ where a photo is for
+#
+# Jonah (15 Oct 2026): "upload images of paper receipts to jobs then they get
+# auto input into tracking (if auto input has questions or issue inputting it
+# stops + puts it as something for jonah to deal with)", and "receipts
+# uploaded when someone is clocked into a job auto go to that job. If theyre
+# clocked out or into anything that isnt a clients job they have to input
+# which specific job its for."
+#
+# So the app sends, with the photo, where it is for (sentFor): a job -- the
+# one the sender was clocked into, the one whose page the photo was taken
+# from, or one they picked -- or, for what is not a job's (fuel, the shop),
+# a vehicle, the shop or the office. Here it is only CHECKED: the job must
+# exist, the read must be clean (below), and it must not look like a receipt
+# already in. Then auto.state is 'ready' and the owner's device puts it on
+# the job through the very code the "Add to job" button runs (receipts.js
+# autoSort) -- one way of adding lines to a job, not two. Anything unsure is
+# 'needs' with why, and waits in Receipts to sort for Jonah.
+HOW_WORDS = {"clock": "was clocked in on it", "page": "sent it from the job's page", "picked": "said it's for this job"}
+PLACES_NOT_JOB = ("vehicle", "shop", "office")
+# A receipt's lines are allowed to miss its total by this much (rounding on
+# the paper) and still count as adding up.
+ADD_UP_CENTS = 3
+
+
+def _sent_for(db, body, jobs, uid, who):
+    """Where the sender says the photo is for, checked. A 'problem' key says
+    why it cannot go there by itself (taken off before it is saved)."""
+    to = str(body.get("forTo") or "").strip()
+    job_id = str(body.get("jobId") or "").strip()[:80]
+    how = str(body.get("how") or "").strip()
+    if not to and job_id:
+        to, how = "job", how or "clock"     # an older app: only the clocked-in job came
+    out = {"to": to if to in ("job",) + PLACES_NOT_JOB else "", "jobId": "", "jobName": "", "equipmentId": "",
+           "name": "", "how": how if how in HOW_WORDS else "picked", "by": uid, "byName": who}
+    if out["to"] == "job":
+        j = jobs.get(job_id)
+        out["jobId"] = job_id if j else ""
+        if not j:
+            out["problem"] = "the job it was sent for isn't in Job Hub any more"
+            return out
+        out["jobName"] = (j.get("customerName") or "").strip()[:120] or "Untitled job"
+        if j.get("removeWhy"):
+            out["problem"] = "the job it was sent for (%s) is marked to be taken off" % out["jobName"]
+    elif out["to"] == "vehicle":
+        eid = re.sub(r"[^A-Za-z0-9_-]", "", str(body.get("equipmentId") or ""))[:80]
+        g = db.collection("equipment").document(eid).get() if eid else None
+        if g is not None and g.exists:
+            out["equipmentId"], out["name"] = eid, ((g.to_dict() or {}).get("name") or "Vehicle")[:120]
+        else:
+            out["problem"] = "which vehicle it was for wasn't said"
+    elif out["to"]:
+        out["name"] = {"shop": "Shop overhead", "office": "Office overhead"}[out["to"]]
+    else:
+        out["problem"] = "nobody said which job it's for"
+    return out
+
+
+def read_problem(got, lines, tax, total):
+    """'' when what was read from the photo can go on a job without anyone
+    checking it, else why not -- in words for the Receipts tab. Every line
+    needs a quantity and a price that make its amount, and the lines and the
+    tax must make the total."""
+    if not (got.get("vendor") or "").strip():
+        return "the store's name couldn't be read"
+    if total <= 0:
+        return "the total couldn't be read"
+    items = [it for it in (got.get("items") or []) if str(it.get("name") or "").strip() or _cents(it.get("amount"))]
+    if not items:
+        return "only the total could be read, not the lines"
+    came = sum(_cents(it.get("amount")) for it in items) + tax
+    if abs(came - total) > ADD_UP_CENTS:
+        return "the lines and tax come to $%.2f but the receipt says $%.2f" % (came / 100, total / 100)
+    for it in items:
+        name = str(it.get("name") or "").strip()[:60]
+        if not name:
+            return "a line has no name"
+        qty, each, amt = it.get("qty"), _cents(it.get("unit_price")), _cents(it.get("amount"))
+        if not isinstance(qty, (int, float)) or qty <= 0 or not each:
+            return "“%s” has no quantity or price" % name
+        # Pennies of rounding per unit at most (3.5 tons at $41.99).
+        if abs(round(qty * each) - amt) > max(ADD_UP_CENTS, int(qty + 0.999)):
+            return "“%s”: %g × $%.2f isn't $%.2f" % (name, qty, each / 100, amt / 100)
+    return ""
+
+
+def _auto_problem(db, rid, got, lines, tax, total, to):
+    """Why this photo's receipt cannot be sorted by itself, or ''."""
+    if to == "job":
+        why = read_problem(got, lines, tax, total)
+    else:
+        # A vehicle, the shop or the office takes the receipt whole: only
+        # the store and the total matter.
+        why = "" if (got.get("vendor") or "").strip() and total > 0 else "the store or the total couldn't be read"
+    return why or _maybe_twin(db, rid, got.get("vendor"), total, _read_day(db, rid))
+
+
+def _read_day(db, rid):
+    return str(((db.collection("receipts").document(rid).get().to_dict()) or {}).get("date") or "")
+
+
+def _maybe_twin(db, rid, vendor, total, day):
+    """A receipt already in for the same store and amount within a few days
+    -- the email of this paper one, say, or the same photo sent twice from
+    two phones. Said, not decided: Jonah looks."""
+    key = vendor_key(vendor)
+    try:
+        d = datetime.date.fromisoformat(day)
+    except ValueError:
+        return ""
+    for s in db.collection("receipts").where("totalCents", "==", total).stream():
+        if s.id == rid:
+            continue
+        r = s.to_dict() or {}
+        if vendor_key(r.get("vendor")) != key:
+            continue
+        try:
+            near = abs((datetime.date.fromisoformat(str(r.get("date") or "")) - d).days) <= 3
+        except ValueError:
+            near = False
+        if near:
+            return "it may be the same purchase as the %s receipt of %s already in Receipts" % (
+                (r.get("vendor") or "store").strip()[:60], str(r.get("date") or "")[:10])
+    return ""
 
 
 def types_usage(used):

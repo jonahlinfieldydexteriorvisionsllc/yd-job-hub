@@ -262,12 +262,16 @@
   // A vehicle, the shop or the office: kept on the receipt, nothing changes
   // on a job. The vehicle's own page lists what was sorted to it
   // (equipment.js receiptsHtml).
-  function assignElsewhere(rid, r, to) {
-    let target;
-    if (to === 'vehicle') {
+  // `given`: where a photo was sent in for (autoSort), instead of what is
+  // picked on the card; `auto`: what to note on the receipt then.
+  function assignElsewhere(rid, r, to, given, auto) {
+    let target = given || null;
+    if (target) {
+      // Already said.
+    } else if (to === 'vehicle') {
       const id = chosenGear[rid];
       const g = id && gearList().find(x => x.id === id);
-      if (!g) { showToast('Pick the vehicle first'); return; }
+      if (!g) { showToast('Pick the vehicle first'); return false; }
       target = { equipmentId: g.id, name: g.name || 'Vehicle' };
     } else if (to === 'sub') {
       // One set up under Subcontractors (subs.js reads its bills by subId),
@@ -281,17 +285,19 @@
       target = { name: DEST_NAME[to] };
     }
     const p = portion(rid, r);
-    if (!p) return;
+    if (!p) return false;
     const splits = (r.splits || []).concat([Object.assign({
       id: 'sp' + Date.now().toString(36) + uid(), to: to, lines: p.idxs, cents: p.part, taxCents: p.tax,
       at: new Date().toISOString(), by: (me() || {}).uid || '',
-    }, target)]);
+    }, auto ? { auto: true } : {}, target)]);
     const status = p.last ? 'done' : (r.status === 'skipped' ? 'skipped' : 'new');
-    receipts[rid] = Object.assign({}, r, { splits, status });
+    receipts[rid] = Object.assign({}, r, { splits, status }, auto ? { auto } : {});
     delete ticked[rid];
-    write(rid, { splits, status });
-    showToast(money(p.part + p.tax) + ' → ' + target.name);
+    write(rid, Object.assign({ splits, status }, auto ? { auto } : {}));
+    showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ' ' : '') + money(p.part + p.tax) + ' → ' + target.name +
+      (auto ? ' (sent in for it)' : ''));
     redraw(true);
+    return true;
   }
 
   window.rcAssign = function (rid) {
@@ -304,8 +310,19 @@
     if (to !== 'job') { assignElsewhere(rid, r, to); return; }
     const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
     if (!jobId) { showToast('Pick the job first'); return; }
+    const done = addToJob(rid, r, jobId, null);
+    // After the toast has had its moment: a question about the price list.
+    if (done) setTimeout(() => offerPrices(r, done), 400);
+  };
+
+  // The lines (the ticked ones, else all that are left) and their tax onto
+  // a job's materials. The button above and a photo sent in for the job
+  // (autoSort, `auto` = what to note on the receipt) both come here, so a
+  // line added by itself is exactly the line the button would have added.
+  // Returns the lines' indexes, or null when nothing was added.
+  function addToJob(rid, r, jobId, auto) {
     const p = portion(rid, r);
-    if (!p) return;
+    if (!p) return null;
     const { idxs, lines, part, tax, last } = p;
 
     const sid = 'sp' + Date.now().toString(36) + uid();
@@ -332,23 +349,105 @@
       ticks = out.filter((it, i) => it !== list[i]).length;
       return out;
     });
-    if (!job) return;
-    const splits = (r.splits || []).concat([{
+    if (!job) return null;
+    const splits = (r.splits || []).concat([Object.assign({
       id: sid, to: 'job', jobId, jobName: (job.customerName || '').trim() || 'Untitled job',
       est: String(job.estimateNumber || '').trim(), lines: idxs, cents: part, taxCents: tax,
       at: new Date().toISOString(), by: (me() || {}).uid || '',
-    }]);
+    }, auto ? { auto: true } : {})]);
     const status = last ? 'done' : (r.status === 'skipped' ? 'skipped' : 'new');
     // Shown at once rather than when the server echoes it back.
-    receipts[rid] = Object.assign({}, r, { splits, status });
+    receipts[rid] = Object.assign({}, r, { splits, status }, auto ? { auto } : {});
     delete ticked[rid]; delete chosen[rid];
-    write(rid, { splits, status });
-    showToast(add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
-      splits[splits.length - 1].jobName + (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : ''));
+    write(rid, Object.assign({ splits, status }, auto ? { auto } : {}));
+    showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ': ' : '') +
+      add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
+      splits[splits.length - 1].jobName + (auto ? ' — sent in for it' : '') +
+      (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : ''), auto ? 5000 : undefined);
     redraw(true);
-    // After the toast has had its moment: a question about the price list.
-    setTimeout(() => offerPrices(r, idxs), 400);
-  };
+    return idxs;
+  }
+
+  // ------------------------------------------- a photo sent in for a job
+  //
+  // A receipt photo sent from a job (or by someone clocked into one) whose
+  // read the server found clean -- every line with a quantity and a price,
+  // the lines and tax making the total, nothing like it already in -- comes
+  // with auto.state 'ready' (functions/receipts.py). The first device that
+  // sorts receipts and sees it puts it on the job through addToJob above,
+  // the same as pressing Add to job: Tracking gets every line and the tax,
+  // and ⋯ → Undo takes it back off. Anything the server was unsure of is
+  // 'needs', with why, and waits in To sort for a person.
+  //
+  // Two of Jonah's devices may see it at once: it is claimed first, in one
+  // step on the server (YDDb.transact), so only one of them adds it. A
+  // transaction needs signal; with none, it waits for the next look.
+  const autoBusy = {};         // receipt id -> true while this device is on it (or has done it)
+  const autoReady = r => !!(r && r.status === 'new' && !(r.splits || []).length && r.auto && r.auto.state === 'ready');
+  function autoSoon() {
+    if (!sorts() || !loaded || !window.YDDb || !window.YDDb.transact) return;
+    Object.keys(receipts).forEach(id => { if (autoReady(receipts[id]) && !autoBusy[id]) autoSort(id); });
+  }
+  async function autoSort(rid) {
+    const r = receipts[rid];
+    const f = (r && r.sentFor) || {};
+    // The job reaches this device on its own; until then, the next look.
+    if (f.to === 'job' && !readJobBlob(f.jobId)) return;
+    if (navigator.onLine === false) return;
+    autoBusy[rid] = true;
+    const uidNow = (me() || {}).uid || '', at = new Date().toISOString();
+    let claimed = false;
+    try {
+      await window.YDDb.transact([['receipts', rid]], ([d]) => {
+        claimed = autoReady(d);
+        return [claimed ? { auto: Object.assign({}, d.auto, { state: 'adding', by: uidNow, at }) } : null];
+      });
+    } catch (e) {
+      // No signal after all: looked at again later. Refused outright: not
+      // asked again and again this visit -- a person sorts it.
+      if (!(e && e.code === 'permission-denied')) delete autoBusy[rid];
+      return;
+    }
+    if (!claimed) return;
+    const fresh = Object.assign({}, receipts[rid] || r, { splits: [], status: 'new' });
+    // Every line, whatever was ticked on this screen meanwhile.
+    delete ticked[rid]; delete splitting[rid];
+    const done = { state: 'done', why: '', by: uidNow, at: new Date().toISOString() };
+    let ok;
+    if (f.to === 'job') ok = !!addToJob(rid, fresh, f.jobId, done);
+    else if (f.to === 'vehicle' || f.to === 'shop' || f.to === 'office') {
+      ok = assignElsewhere(rid, fresh, f.to, f.to === 'vehicle'
+        ? { equipmentId: f.equipmentId || '', name: f.name || 'Vehicle' } : { name: f.name || DEST_NAME[f.to] }, done);
+    }
+    if (!ok) {
+      const auto = { state: 'needs', why: 'it could not be put on ' + (f.jobName || f.name || 'it') + ' by itself', by: uidNow, at };
+      receipts[rid] = Object.assign({}, receipts[rid] || r, { auto });
+      write(rid, { auto });
+      redraw(true);
+    }
+  }
+  // What the card says about a photo sent in for somewhere: where, by whom,
+  // and -- when it is waiting for a person -- why.
+  const STUCK_MS = 10 * 60 * 1000;
+  function sentForHtml(r) {
+    const f = r.sentFor, a = r.auto || {};
+    if (!f || r.status !== 'new') return '';
+    const where = f.to === 'job' ? (f.jobName ? '<b>' + esc(f.jobName) + '</b>' : 'a job')
+      : '<b>' + esc(f.name || DEST_NAME[f.to] || '') + '</b>';
+    const who = f.byName ? esc(f.byName) + ' sent it in for ' : 'Sent in for ';
+    // Claimed by a device that then went quiet (closed mid-way): a person's.
+    const stuck = a.state === 'adding' && Date.now() - new Date(a.at || 0).getTime() > STUCK_MS;
+    if (a.state === 'ready' || (a.state === 'adding' && !stuck)) {
+      return '<div class="rc-suggest">' + who + where + ' — adding it by itself…</div>';
+    }
+    if (a.state === 'needs' || stuck || (f.to && !a.state)) {
+      return '<div class="rc-needs"><b>Needs you:</b> ' + esc(stuck ? 'it was being added on another device that stopped — check it' : (a.why || 'check it')) +
+        '<div class="rc-needs-for">' + who + where + '</div></div>';
+    }
+    return '';
+  }
+  const needsYou = r => !!(r && r.status === 'new' && r.auto && (r.auto.state === 'needs' ||
+    (r.auto.state === 'adding' && Date.now() - new Date(r.auto.at || 0).getTime() > STUCK_MS)));
 
   // ------------------------------------------------- the price list follows
   //
@@ -661,7 +760,8 @@
       const n = (s.lines || []).length, amt = money((s.cents || 0) + (s.taxCents || 0));
       const title = (n ? n + ' line' + (n === 1 ? '' : 's') + (s.taxCents ? ' + tax' : '') + ', ' : '') + amt +
         (opens ? ' — tap for Undo' : '');
-      const inner = '✓ ' + splitWhere(s) + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
+      // Put there by itself, from a photo sent in for it (autoSort).
+      const inner = '✓ ' + splitWhere(s) + (s.auto ? ' <span class="rc-chip-auto">by itself</span>' : '') + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
       return opens
         ? '<button type="button" class="rc-chip" title="' + esc(title) + '" onclick="rcMenuOpen(\'' + where + rid + '\')">' + inner + '</button>'
         : '<span class="rc-chip" title="' + esc(title) + '">' + inner + '</span>';
@@ -731,8 +831,9 @@
       '</div>' +
       '<div class="rc-sum">' + summary +
         '<span class="muted">' + (summary ? '· ' : '') + esc(KIND[r.kind] || 'Other') + '</span></div>' +
-      (r.whose === 'unsure' ? '<div class="rc-note">Claude was not sure this one is for the business.</div>' : '') +
-      (sug && free.length && to === 'job' ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b>' +
+      sentForHtml(r) +
+      (r.whose === 'unsure' && !r.sentFor ? '<div class="rc-note">Claude was not sure this one is for the business.</div>' : '') +
+      (sug && free.length && to === 'job' && !r.sentFor ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b>' +
         (why ? ' — ' + esc(why) : '') + '</div>' : '') +
       (split && free.length ? '<div class="rc-hint">Tick the lines for one place, add them, then do the rest.' +
         ((r.splits || []).length ? '' : ' <button class="rc-link" onclick="rcSplit(\'' + rid + '\', false)">All one place after all</button>') +
@@ -831,13 +932,15 @@
     const f = r.qbForward || null;
     if (compact) return f && f.ok ? '<span class="rc-tag rc-qb-ok" title="Sent to QuickBooks">📤 QB</span>' : '';
     return '<div class="rc-qb">' +
-      (r.photoPath ? '<button class="btn btn-sm" onclick="rcPhoto(\'' + rid + '\')">🖼 Photo</button>' : '') +
+      (r.photoPath ? '<button class="btn btn-sm" onclick="rcViewPhoto(\'' + rid + '\')">🖼 Photo</button>' : '') +
       (f && f.ok ? '<span class="rc-tag rc-qb-ok">📤 Sent to QuickBooks ' + fmtDateMD(String(f.at || '').slice(0, 10)) + '</span>'
         : '<span class="rc-tag rc-owed">Not in QuickBooks yet' + (f && f.error ? ' — ' + esc(f.error) : '') + '</span>' +
           (sorts() && r.photoPath ? '<button class="btn btn-sm" onclick="rcToQb(\'' + rid + '\')">📤 Send to QuickBooks</button>' : '')) +
     '</div>';
   }
-  window.rcPhoto = async function (rid) {
+  // (Was rcPhoto, which the camera button below also defined -- the later
+  // one won, and 🖼 Photo opened the camera instead of the picture.)
+  window.rcViewPhoto = async function (rid) {
     const r = receipts[rid];
     if (!r || !r.photoPath || !window.YDStore) return;
     try { window.open(await window.YDStore.url(r.photoPath), '_blank', 'noopener'); }
@@ -944,7 +1047,9 @@
     if (!on) { badges(0); return; }
 
     const all = allReceipts();
-    const open = all.filter(r => r.status === 'new').sort(byNewest);
+    // The ones waiting on a person first: a photo that could not go on its
+    // job by itself says why at the top of the list.
+    const open = all.filter(r => r.status === 'new').sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
     const jobs = jobsList();
     badges(open.length);
 
@@ -1081,7 +1186,8 @@
     }, 0);
   });
   // The job list comes from jobs, which arrive and change on their own.
-  document.addEventListener('yd-jobs-changed', () => redraw());
+  document.addEventListener('yd-jobs-changed', () => { redraw(); autoSoon(); });
+  window.addEventListener('online', () => autoSoon());
 
   // ------------------------------------------------------------ data
 
@@ -1165,6 +1271,8 @@
       if (n || loaded) redraw();
       // Subcontractors (subs.js) file their own bills out of this list.
       document.dispatchEvent(new CustomEvent('yd-receipts'));
+      // Photos sent in for a job, read cleanly: onto it (autoSort).
+      if (loaded) autoSoon();
     };
     unsubs.push(window.YDDb.watchWhere('receipts', 'status', 'new', changes => {
       toSortHeard = true;
@@ -1188,6 +1296,8 @@
   // hourly run may have changed it (switched on, say) since the app opened.
   window.YDReceipts = {
     all: () => receipts,
+    // A photo that could not go where it was sent by itself (home.js).
+    needsYou: needsYou,
     loaded: () => loaded,
     render: () => {
       redraw(true);
@@ -1213,15 +1323,45 @@
   // ------------------------------------------------------ a paper receipt
   //
   // 📷 Add a receipt: the camera, then the server reads the photo the way an
-  // emailed receipt is read (receipts.py from_photo) and it lands in Receipts
-  // to sort. Someone clocked into a job sends that job along.
+  // emailed receipt is read (receipts.py from_photo) and it lands in Receipts.
+  //
+  // Every photo says where it is for (Jonah, 15 Oct 2026: "receipts uploaded
+  // when someone is clocked into a job auto go to that job. If theyre
+  // clocked out or into anything that isnt a clients job they have to input
+  // which specific job its for"):
+  //   - from a job's own page (the Job or Tracking tab, the crew job page):
+  //     that job, nothing to ask;
+  //   - clocked into a client's job: that job, said on the bar for a few
+  //     seconds with Change before it goes;
+  //   - otherwise (clocked out, or on Labor, Snow, Receipts, a storm): a
+  //     window asks first -- which job, or not for a job (a vehicle or fuel,
+  //     the shop, the office) -- and the camera opens on the answer.
+  // A clean read for a job then goes on the job by itself (autoSort above).
+  const HOLD_MS = 6000;
+  let nextFor = null;          // where the photo about to be taken is for
   function clockedJob() {
     const u = me();
     const all = window.YDClock && YDClock.entries ? YDClock.entries() : {};
-    const e = u && Object.values(all).find(x => x.uid === u.uid && !x.endedAt && x.kind === 'job');
-    return e ? e.targetId || '' : '';
+    const e = u && Object.values(all).find(x => x && x.uid === u.uid && x.status === 'running' && x.kind === 'job');
+    if (!e || !e.targetId) return null;
+    const b = boardJobs().find(j => j.id === e.targetId);
+    return { forTo: 'job', jobId: e.targetId, how: 'clock',
+             forName: (b && b.name) || (YDClock.label ? YDClock.label(e) : '') || 'the job' };
   }
-  window.rcPhoto = function () {
+  // The jobs anyone may file a receipt to: the crew's job list (jobBoard),
+  // which the office has too; bids are not on it.
+  function boardJobs() {
+    const b = (window.YDClock && YDClock.board && YDClock.board()) || {};
+    let list = Object.keys(b).filter(id => b[id]).map(id => ({ id, name: String(b[id].name || 'Job'),
+      est: String(b[id].est || b[id].estimateNumber || ''), what: String(b[id].what || ''), status: b[id].status || '' }));
+    // The office before the board has come down: its own jobs.
+    if (!list.length && sees()) list = jobsList().filter(j => j.status !== 'quoting')
+      .map(j => ({ id: j.id, name: j.name, est: j.est, what: '', status: j.status }));
+    const order = { inprogress: 0, booked: 1, scheduled: 1, complete: 3 };
+    const rank = j => (order[j.status] != null ? order[j.status] : 2);
+    return list.sort((a, c) => (rank(a) - rank(c)) || a.name.localeCompare(c.name));
+  }
+  function openCamera() {
     let inp = el('rcPhotoInput');
     if (!inp) {
       inp = document.createElement('input');
@@ -1232,6 +1372,160 @@
     }
     inp.value = '';
     inp.click();
+  }
+  // The button everywhere but a job's own page.
+  window.rcPhoto = function () {
+    if (!me()) { showToast('Sign in to send a receipt'); return; }
+    const c = clockedJob();
+    if (c) { nextFor = Object.assign({ hold: true }, c); openCamera(); return; }
+    openFor(null);
+  };
+  // A job's own page: that job. Not one only typed in and never saved --
+  // the server would not find it.
+  window.rcPhotoForJob = function (jobId, name) {
+    if (!me()) { showToast('Sign in to send a receipt'); return; }
+    jobId = String(jobId || '');
+    if (!jobId) { showToast('Open a job first'); return; }
+    const b = boardJobs().find(j => j.id === jobId);
+    if (!b && typeof readJobBlob === 'function' && !readJobBlob(jobId)) {
+      showToast('Save the job first, then add its receipts'); return;
+    }
+    nextFor = { forTo: 'job', jobId, how: 'page', forName: name || (b && b.name) || 'this job' };
+    openCamera();
+  };
+  // The Job / Tracking tab's button: the job open in the form.
+  window.rcPhotoThisJob = function () {
+    const id = typeof currentJobId !== 'undefined' ? currentJobId : '';
+    const box = el('customerName');
+    window.rcPhotoForJob(id, (box && box.value.trim()) || '');
+  };
+
+  // ------------------------------------------- which job is it for?
+  //
+  // Big buttons, every one in sight (Jonah: buttons, not lists that scroll
+  // sideways); a search box when there are many. `changing`: a photo already
+  // taken and held on the bar -- the answer goes to it, no camera.
+  let changing = null;         // queue id whose place is being changed
+  let pickVehicles = false;
+  let pickSearch = '';
+  let publicGear = null;       // settings/public.equipmentList, for those who do not see Equipment
+  let gearLoading = false;
+  function forModal() {
+    let m = el('rcForModal');
+    if (!m) {
+      m = document.createElement('div');
+      m.className = 'modal-overlay';
+      m.id = 'rcForModal';
+      m.onclick = ev => { if (ev.target === m) window.rcForClose(); };
+      m.innerHTML = '<div class="modal" style="max-width:560px"><div class="modal-head"><h2>🧾 What is this receipt for?</h2>' +
+        '<button class="modal-close" onclick="rcForClose()">&times;</button></div><div class="modal-body" id="rcForBody"></div></div>';
+      document.body.appendChild(m);
+    }
+    return m;
+  }
+  function openFor(queueId) {
+    changing = queueId || null;
+    pickVehicles = false; pickSearch = '';
+    forModal().classList.add('active');
+    drawFor();
+    if (!publicGear && !gearLoading && !gearList().length && window.YDDb) {
+      gearLoading = true;
+      Promise.resolve(window.YDDb.get('settings', 'public'))
+        .then(p => { publicGear = (p && p.equipmentList) || {}; })
+        .catch(() => { publicGear = null; })
+        .then(() => { gearLoading = false; if (pickVehicles) drawFor(); });
+    }
+  }
+  window.rcForClose = function () {
+    const m = el('rcForModal'); if (m) m.classList.remove('active');
+    // A held photo whose window was closed without an answer keeps the
+    // place it had, and goes.
+    if (changing && rq[changing]) { rq[changing].holdUntil = 0; rqKeep(rq[changing]); sendQueued(); }
+    changing = null;
+  };
+  function vehicles() {
+    const own = gearList();
+    if (own.length) return own.map(g => ({ id: g.id, name: g.name || 'Vehicle' }));
+    const src = publicGear || {};
+    return Object.keys(src).filter(id => src[id]).map(id => ({ id, name: String(src[id].name || 'Vehicle') }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+  function drawFor() {
+    const body = el('rcForBody');
+    if (!body) return;
+    const tap = (args, label, cls) => '<button type="button" class="rc-for-btn' + (cls ? ' ' + cls : '') +
+      '" onclick="rcForPick(' + args + ')">' + label + '</button>';
+    if (pickVehicles) {
+      const list = vehicles();
+      body.innerHTML = '<p class="rc-for-lead">Which vehicle or machine?</p>' +
+        (list.length ? '<div class="rc-for-grid">' + list.map(v => tap('\'vehicle\',\'' + safeId(v.id) + '\'', esc(v.name))).join('') + '</div>'
+          : '<p class="muted">' + (gearLoading ? 'Loading the vehicles…' : 'No vehicles listed yet.') + '</p>') +
+        '<div class="rc-for-grid">' + tap('\'vehicle\',\'\'', 'Not sure which') + '</div>' +
+        '<button type="button" class="link-btn" onclick="rcForBack()">← Back</button>';
+      return;
+    }
+    const all = boardJobs();
+    const words = pickSearch.toLowerCase().split(/\s+/).filter(Boolean);
+    const hit = j => words.every(w => (j.name + ' ' + j.est + ' ' + j.what).toLowerCase().indexOf(w) !== -1);
+    const open = all.filter(j => j.status !== 'complete' && hit(j)), done = all.filter(j => j.status === 'complete' && hit(j));
+    const cur = changing && rq[changing] && rq[changing].forTo === 'job' ? rq[changing].jobId : '';
+    const jobBtn = j => tap('\'job\',\'' + safeId(j.id) + '\'', esc(j.name) + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+      (j.what ? '<span class="rc-for-sub">' + esc(j.what) + '</span>' : ''), j.id === cur ? 'on' : '');
+    body.innerHTML =
+      '<p class="rc-for-lead">' + (changing ? 'Where does this receipt go?' : 'Pick where it goes, then take the photo.') + '</p>' +
+      (all.length > 8 ? '<input type="search" id="rcForFind" class="rc-for-find" placeholder="Find a job…" autocomplete="off" value="' +
+        esc(pickSearch) + '" oninput="rcForFind(this.value)">' : '') +
+      '<div class="rc-for-h">A job</div>' +
+      (open.length ? '<div class="rc-for-grid">' + open.map(jobBtn).join('') + '</div>'
+        : '<p class="muted">' + (all.length ? 'No open job matches.' : 'No jobs on the list yet.') + '</p>') +
+      (done.length ? '<details class="rc-for-done"' + (words.length ? ' open' : '') + '><summary>Finished jobs (' + done.length + ')</summary>' +
+        '<div class="rc-for-grid">' + done.map(jobBtn).join('') + '</div></details>' : '') +
+      '<div class="rc-for-h">Not for a job</div>' +
+      '<div class="rc-for-grid">' +
+        tap('\'vehicles\',\'\'', '🚚 A vehicle or fuel') + tap('\'shop\',\'\'', '🏠 The shop') + tap('\'office\',\'\'', '🗂 The office') +
+      '</div>';
+  }
+  window.rcForFind = function (text) {
+    pickSearch = String(text || '');
+    drawFor();
+    const f = el('rcForFind');
+    if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); }
+  };
+  window.rcForBack = function () { pickVehicles = false; drawFor(); };
+  window.rcForPick = function (to, id) {
+    if (to === 'vehicles') { pickVehicles = true; drawFor(); return; }
+    let f;
+    if (to === 'job') {
+      const j = boardJobs().find(x => x.id === id);
+      if (!j) return;
+      f = { forTo: 'job', jobId: j.id, how: 'picked', forName: j.name };
+    } else if (to === 'vehicle') {
+      const v = vehicles().find(x => x.id === id);
+      f = { forTo: 'vehicle', equipmentId: v ? v.id : '', how: 'picked', forName: v ? v.name : 'a vehicle' };
+    } else if (to === 'shop' || to === 'office') {
+      f = { forTo: to, how: 'picked', forName: to === 'shop' ? 'the shop' : 'the office' };
+    } else return;
+    const m = el('rcForModal'); if (m) m.classList.remove('active');
+    if (changing && rq[changing]) {
+      const it = rq[changing];
+      changing = null;
+      Object.assign(it, { forTo: '', jobId: '', equipmentId: '' }, f, { holdUntil: 0 });
+      rqKeep(it);
+      showToast('🧾 Receipt for ' + f.forName);
+      sendQueued();
+      return;
+    }
+    changing = null;
+    nextFor = f;
+    // Still the same tap: a phone opens the camera only from one.
+    openCamera();
+  };
+  // The bar's Change, for the photo held there.
+  window.rcChangeFor = function (id) {
+    const it = rq[id];
+    if (!it || it.state === 'sending') return;
+    it.holdUntil = Date.now() + 10 * 60 * 1000;    // held while the window is open
+    openFor(id);
   };
 
   // ------------------------------------- a photo kept until it has gone
@@ -1250,7 +1544,9 @@
   // a reason of its own (not a receipt, say) is not tried again and again:
   // it waits for "Try again" or "Throw away".
   const RQ_DB = 'ydjobhub_receipts', RQ_STORE = 'queue';
-  const rq = {};               // id -> { id, by, mediaType, data, jobId, at, state, error, tries }
+  // forTo/jobId/equipmentId/how/forName: where it is for (above);
+  // holdUntil: not sent before then -- the few seconds its Change is offered.
+  const rq = {};               // id -> { id, by, mediaType, data, forTo, jobId, ..., at, state, error, tries, holdUntil }
   let rqDb = null, rqBusy = false;
   function rqIdb() {
     if (!rqDb) rqDb = new Promise((res, rej) => {
@@ -1272,7 +1568,8 @@
   }
   // Only what is kept is kept: the state words are this visit's.
   const rqKeep = it => rqTx('readwrite', s => s.put({ id: it.id, by: it.by, mediaType: it.mediaType, data: it.data,
-    jobId: it.jobId, at: it.at, tries: it.tries || 0, failed: it.state === 'failed' ? it.error || 'Not read' : '' }))
+    jobId: it.jobId || '', forTo: it.forTo || '', equipmentId: it.equipmentId || '', how: it.how || '', forName: it.forName || '',
+    holdUntil: it.holdUntil || 0, at: it.at, tries: it.tries || 0, failed: it.state === 'failed' ? it.error || 'Not read' : '' }))
     .catch(e => console.warn('[receipts] photo kept in memory only:', e));
   const rqDrop = id => rqTx('readwrite', s => s.delete(id)).catch(() => {});
   const rqLoad = () => rqTx('readonly', s => s.getAll()).catch(() => []);
@@ -1283,17 +1580,30 @@
     if (!f) return;
     if (!window.YDSupplies || !window.YDSupplies.shrinkPhoto) { showToast('Not ready yet — try again in a moment'); return; }
     if (!me()) { showToast('Sign in to send a receipt'); return; }
+    // Where it is for was settled before the camera opened.
+    const where = nextFor || {};
+    nextFor = null;
     let photo;
     try { photo = await window.YDSupplies.shrinkPhoto(f); }
     catch (e) { showToast('Receipt: ' + (e.message || e)); return; }
     const it = { id: 'rq' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), by: myUid(),
-                 mediaType: photo.mediaType, data: photo.data, jobId: clockedJob(), at: new Date().toISOString(),
+                 mediaType: photo.mediaType, data: photo.data, forTo: where.forTo || '', jobId: where.jobId || '',
+                 equipmentId: where.equipmentId || '', how: where.how || '', forName: where.forName || '',
+                 holdUntil: where.hold ? Date.now() + HOLD_MS : 0, at: new Date().toISOString(),
                  state: 'waiting', error: '', tries: 0 };
     rq[it.id] = it;
     await rqKeep(it);
     drawSendBar();
     sendQueued();
   }
+  // A held photo goes when its moment is up.
+  let holdTimer = null;
+  function wakeForHeld() {
+    clearTimeout(holdTimer);
+    const next = mineWaiting().filter(x => x.holdUntil > Date.now()).map(x => x.holdUntil).sort((a, b) => a - b)[0];
+    if (next) holdTimer = setTimeout(() => sendQueued(), next - Date.now() + 50);
+  }
+  const held = it => (it.holdUntil || 0) > Date.now();
 
   // Each of this person's waiting photos, one after another. `again`: the
   // ones the server turned down are tried too (the person asked).
@@ -1306,18 +1616,18 @@
       // One at a time, each once a run -- including one photographed while
       // the one before it was still on its way.
       for (;;) {
-        const it = mineWaiting().find(x => !tried.has(x.id) && (x.state !== 'failed' || again));
+        const it = mineWaiting().find(x => !tried.has(x.id) && !held(x) && (x.state !== 'failed' || again));
         if (!it) break;
         tried.add(it.id);
         if (navigator.onLine === false || !window.YDClaude) { it.state = 'waiting'; continue; }
         it.state = 'sending'; it.error = '';
         drawSendBar();
         try {
-          const r = await window.YDClaude.post('/receipts/photo', { mediaType: it.mediaType, data: it.data, jobId: it.jobId || '' });
+          const r = await window.YDClaude.post('/receipts/photo', { mediaType: it.mediaType, data: it.data,
+            jobId: it.jobId || '', forTo: it.forTo || '', equipmentId: it.equipmentId || '', how: it.how || '' });
           delete rq[it.id];
           rqDrop(it.id);
-          showToast('🧾 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents) + ' — ' +
-            (r.what === 'added to' ? 'matched a receipt already there' : (sees() ? 'in Receipts to sort' : 'sent to the office')), 5000);
+          showToast(photoSaid(r, it), 6000);
         } catch (e) {
           const msg = String((e && e.message) || e || '');
           it.tries = (it.tries || 0) + 1;
@@ -1334,6 +1644,7 @@
     } finally {
       rqBusy = false;
       drawSendBar();
+      wakeForHeld();
     }
     // Asked for again while this run was going (signal came back, say):
     // only for a photo this run did not get to try.
@@ -1343,8 +1654,20 @@
     }
   }
 
+  // What the server did with it, for the person who sent it: on its job by
+  // itself, or waiting for Jonah, and why.
+  function photoSaid(r, it) {
+    const what = '🧾 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents);
+    if (r.what === 'added to') return what + ' — matched a receipt already there';
+    const where = r.name || it.forName || '';
+    if (r.auto === 'ready') return what + ' — going on ' + (where || 'its job') + (sees() ? '' : ' (Jonah sees it)');
+    if (r.why) return what + ' — ' + (sees() ? 'in Receipts to sort: ' : 'sent to Jonah to check: ') + r.why;
+    return what + ' — ' + (sees() ? 'in Receipts to sort' : 'sent to the office');
+  }
+
   // The bar: how many are waiting and why, with Try again / Throw away when
-  // one needs a tap. Hidden when nothing is waiting.
+  // one needs a tap. Hidden when nothing is waiting. A photo held for its
+  // few seconds says where it is going, with Change.
   function drawSendBar() {
     let bar = el('rcSendBar');
     const list = mineWaiting();
@@ -1359,11 +1682,25 @@
     const sending = list.some(it => it.state === 'sending');
     const failed = list.filter(it => it.state === 'failed');
     const n = list.length;
+    // The newest one not yet gone may still change where it is for.
+    const last = list.filter(it => it.state !== 'sending').sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    const hold = last && held(last) && !failed.length;
+    const changeBtn = last && !failed.length && last.forTo !== undefined
+      ? '<button class="btn btn-sm" onclick="rcChangeFor(\'' + safeId(last.id) + '\')">Change</button>' : '';
+    if (hold) {
+      const h = '<span class="rc-sendbar-t">🧾 Receipt for <b>' + esc(last.forName || 'the job') + '</b> — sending in a moment</span>' + changeBtn;
+      if (bar.innerHTML !== h) bar.innerHTML = h;
+      bar.classList.remove('failed');
+      bar.hidden = false;
+      return;
+    }
     const words = sending ? '🧾 Sending ' + (n === 1 ? 'the receipt' : n + ' receipts') + '…'
       : failed.length ? '🧾 ' + (failed.length === 1 ? 'A receipt was' : failed.length + ' receipts were') + ' not read: ' + failed[0].error
       : '🧾 ' + (n === 1 ? '1 receipt' : n + ' receipts') + ' waiting for signal — ' + (n === 1 ? 'it sends' : 'they send') + ' by itself';
     const html = '<span class="rc-sendbar-t">' + esc(words) + '</span>' +
       (sending ? '' : '<button class="btn btn-sm" onclick="rcSendAgain()">Try again</button>') +
+      // Waiting for signal: where it goes can still be changed.
+      (!sending && !failed.length ? changeBtn : '') +
       (failed.length && !sending ? '<button class="btn btn-sm" onclick="rcThrowAway()">Throw away</button>' : '');
     if (bar.innerHTML !== html) bar.innerHTML = html;
     bar.classList.toggle('failed', !!failed.length && !sending);
