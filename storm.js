@@ -550,17 +550,16 @@
                 '<button onclick="moveStop(\'' + sid + '\',1)" title="Later" aria-label="Move later">&#9660;</button>' +
               '</span>' : '') +
         '</div>';
-    // The big Directions button on the stop being worked and the next one;
-    // the small maps link stays on every card.
+    // The big Directions button on the stop being worked and the next one.
+    // The address is words, not a link: the little "maps" link that was on
+    // every card did what Directions does, and a glove brushing the address
+    // threw the driver out to the map mid-storm.
     const dirUrl = (state === 'onsite' || s.id === nextId) ? directionsUrl(a) : '';
+    const addr = [a.address || '', miles != null ? miles + ' mi' : ''].filter(Boolean).join(' · ');
 
     return '<div class="stop ' + state + (s.id === nextId ? ' next' : '') + '" id="' + elId + '">' +
       head +
-      '<a class="snow-addr" href="https://maps.google.com/?q=' +
-        encodeURIComponent(a.lat ? a.lat + ',' + a.lng : (a.address || '')) +
-        '" target="_blank" rel="noopener">' + esc(a.address || '') +
-        (miles != null ? ' · ' + miles + ' mi' : '') +
-        '<span class="snow-go">maps</span></a>' +
+      (addr ? '<div class="stop-addr">' + esc(addr) + '</div>' : '') +
       (dirUrl ? '<a class="stop-dir" href="' + esc(dirUrl) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
       (a.areaNotes ? '<div class="stop-notes">' + esc(a.areaNotes) + '</div>' : '') +
       (s.arrivedAt ? '<div class="stop-times">in ' + clockTime(s.arrivedAt) +

@@ -889,6 +889,7 @@
   .stop-name { font-weight:700; font-size:16px; }
   .stop-notes { margin-top:7px; font-size:14px; font-weight:600; color:var(--accent-dark); }
   .stop-times { margin-top:7px; font-size:12px; color:var(--muted); }
+  .stop-addr { margin-top:5px; font-size:13px; color:var(--muted); overflow-wrap:anywhere; }
   .stop-actions { display:flex; gap:8px; margin-top:12px; align-items:center; flex-wrap:wrap; }
 
   /* Deliberately large. These get pressed with gloves on, in the dark. */
