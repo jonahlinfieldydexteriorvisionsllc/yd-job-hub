@@ -1200,6 +1200,10 @@
   function profitHtml(r) {
     const p = r.profit;
     if (!p || !(r.totalCents > 0)) return '';
+    // Planned profit stays with whoever may change jobs: a look-only admin
+    // (a crew lead given Jobs "see") gets the estimate, not the margins --
+    // as before the look-only buttons were made to work (16 Oct 2026).
+    if (!(typeof ydCan === 'function' && ydCan('jobs', 'change'))) return '';
     if (!numbersShown) {
       return '<div class="est-planned-show"><button class="link-btn ro-ok" onclick="estNumbers()">📊 Show my numbers</button></div>';
     }
