@@ -2115,7 +2115,7 @@
     estPickSupply(id, sid);
   };
 
-  window.estUseFound = function (id, k) {
+  window.estUseFound = async function (id, k) {
     if (!canSource()) return;
     const f = found[foundKey(id)], o = f && f.options && f.options[k];
     const m = find(est.materials, id), l = lineOf(id);
@@ -2135,10 +2135,16 @@
     let coverage = o.coversQty > 0 ? o.coversQty : null, takeoffUnit = coverage ? o.coversUnit || unit : '';
     if (unit && unitKey(o.per) === unitKey(unit)) { coverage = null; takeoffUnit = ''; }
     else if (unit && o.per && !coverage) {
-      const a = window.prompt('How much does one ' + o.per + ' cover, in ' + unit + '?', '');
+      const read = a => num(String(a).replace(/[^0-9.]/g, ''));
+      const was = est;
+      const a = await ydPrompt('So the estimate orders the right number of them.', '', {
+        title: 'How much does one ' + o.per + ' cover, in ' + unit + '?', type: 'number', ok: 'Use it',
+        check: a => read(a) > 0 ? '' : 'A number above 0, please' });
       if (a === null) return;
-      const n = num(String(a).replace(/[^0-9.]/g, ''));
-      if (!(n > 0)) { showToast('That should be a number above 0'); return; }
+      // Another job opened, or this line gone, while it was asked.
+      if (est !== was || find(est.materials, id) !== m || found[foundKey(id)] !== f) return;
+      const n = read(a);
+      if (!(n > 0)) return;
       coverage = n; takeoffUnit = unit;
     }
     // The line's own (unpriced) item takes the price only when it is sold the
