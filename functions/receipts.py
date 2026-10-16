@@ -935,7 +935,9 @@ def _tally(db, m, purchase):
 
 
 def _jobs(db):
-    return {s.id: (s.to_dict() or {}) for s in db.collection("jobs").stream()}
+    # Not one in Recently deleted (app.js deleteJob): no receipt is suggested for it.
+    return {s.id: d for s in db.collection("jobs").stream()
+            for d in [s.to_dict() or {}] if not d.get("deletedAt")}
 
 
 # ---------------------------------------------------------------- a photo of one

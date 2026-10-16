@@ -202,7 +202,7 @@
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
     };
   }
-  const shows = d => SHOWN.indexOf(statusOf(d)) !== -1 && !d.crewHidden && !d.removeWhy;
+  const shows = d => SHOWN.indexOf(statusOf(d)) !== -1 && !d.crewHidden && !d.removeWhy && !d.deletedAt;
 
   // Called from sync.js with every job it sends up: the crew copy follows.
   // Only whoever may change jobs writes it (the rules say so too), and only
@@ -248,14 +248,15 @@
   // are seen to be right rather than rewritten without their units.
   async function reconcile(tries) {
     if (reconciled || !window.YDDb || typeof ydCan !== 'function' || !ydCan('jobs', 'change')) return;
-    if (typeof getJobIndex !== 'function' || typeof readJobBlob !== 'function') return;
+    if (typeof getJobIndexAll !== 'function' || typeof readJobBlob !== 'function') return;
     if (!catalogueReady() && (tries || 0) < 10) { setTimeout(() => reconcile((tries || 0) + 1), 3000); return; }
     reconciled = true;
     let have = {};
     try { have = await window.YDDb.list('jobCrew'); } catch (e) { reconciled = false; return; }
     const ready = catalogueReady();
     const ids = new Set();
-    getJobIndex().forEach(j => {
+    // Those in Recently deleted too, so a copy left behind is taken down.
+    getJobIndexAll().forEach(j => {
       let d = null;
       try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (e) { d = null; }
       if (!d) return;

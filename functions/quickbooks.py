@@ -1359,7 +1359,18 @@ def invoice_status(body):
 # What the sweep reads of each job -- not the whole record (estimate chats,
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber", "payments",
-                "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked"]
+                "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked",
+                "deletedAt"]
+
+
+def live_jobs(jobs):
+    """The jobs that are really there: not one in Recently deleted (app.js
+    deleteJob marks it deletedAt; tidy.purge_jobs deletes it for good 30 days
+    on). Nothing is asked of QuickBooks for it, filled into it, joined to it
+    or told about it while it waits there."""
+    return {k: v for k, v in (jobs or {}).items() if not v.get("deletedAt")}
+
+
 # An estimate with no answer this long after it was made (or last emailed)
 # is not asked about every hour for ever; opening the job still checks it
 # (estimate.js). A year, because a bid sent in November is often said yes to
@@ -1432,7 +1443,11 @@ def _sweep():
     db = _db()
     now = _now()
     news = []
-    jobs = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").select(SWEEP_FIELDS).stream()}
+    every = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").select(SWEEP_FIELDS).stream()}
+    # Jobs in Recently deleted are left out of everything -- except the
+    # import's look at which estimates are already a job here (import_accepted
+    # gets them all): a deleted job's estimate must not come back as a new job.
+    jobs = live_jobs(every)
     pending, unpaid = {}, {}             # QuickBooks id -> [job ids]
     for job_id, j in jobs.items():
         q = j.get("qbEstimate") or {}
@@ -1501,7 +1516,7 @@ def _sweep():
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: payments not brought in step:", err)
     try:
-        news += import_accepted(jobs)
+        news += import_accepted(every)
     except ReconnectNeeded:
         raise
     except Exception as err:                            # noqa: BLE001
@@ -2222,6 +2237,7 @@ def import_accepted(jobs):
         total = _amount(e.get("TotalAmt"))
         same = [jid for jid, j in jobs.items() if who and _norm_name(j.get("customerName")) == who
                 and not (j.get("qbEstimate") or {}).get("id") and str(j.get("jobStatus") or "") != "complete" and not j.get("removeWhy")
+                and not j.get("deletedAt")
                 and (_job_price(j) is None or abs(_job_price(j) - total) < 0.005)]
         if len(same) == 1:
             jid = same[0]

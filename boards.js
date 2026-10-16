@@ -270,13 +270,24 @@
 
   // Moving a job card changes the job. The status follows where it makes sense:
   // a bid marked Won becomes an active job and appears on the Jobs board.
-  function moveJob(jobId, boardId, col) {
+  // `why`: the reason a bid was lost ({lostReason, lostReasonText}), asked
+  // first whenever a bid goes to Lost (app.js askLostReason) -- Cancel and
+  // it stays where it was.
+  function moveJob(jobId, boardId, col, why) {
     const j = jobsList().find(x => x._id === jobId);
     if (!j) return;
     // A card dropped back where it was (a drag that changed its mind) is not
     // a move. Treating it as one restamped the job, which reset its age and
     // cleared the "untouched for a fortnight" warning on a bid going cold.
     if ((boardId === 'bids' ? bidColumn(j) : workColumn(j)) === col) return;
+    if (boardId === 'bids' && col === 'lost' && !why && typeof askLostReason === 'function') {
+      // The card goes back to its place while the question is open; the
+      // answer moves it.
+      render();
+      askLostReason({ name: (j.customerName || '').trim(), preset: turnedDown(j) ? 'qb' : '' },
+        w => moveJob(jobId, boardId, col, w));
+      return;
+    }
     const at = nowIso();
     let patch;
     if (boardId === 'bids') {
@@ -286,7 +297,8 @@
           patch.jobStatus = 'booked'; patch.workStage = 'scheduled'; patch.workStageAt = at;
         }
       } else if (col === 'lost') {
-        patch = { bidStage: 'lost', bidStageAt: at, jobStatus: 'quoting' };
+        patch = { bidStage: 'lost', bidStageAt: at, jobStatus: 'quoting', lostAt: at,
+                  lostReason: (why && why.lostReason) || null, lostReasonText: (why && why.lostReasonText) || null };
       } else {
         patch = { bidStage: col, bidStageAt: at, jobStatus: 'quoting' };
       }
@@ -304,7 +316,8 @@
       // turned down, to call next season (prospects.js).
       const contact = window.YDProspects && window.YDProspects.fromLostBid
         ? window.YDProspects.fromLostBid(jobId, Object.assign({}, j, patch)) : null;
-      showToast(name + ' marked lost — kept under Bids in My Jobs' +
+      const said = typeof lostWhy === 'function' ? lostWhy(patch) : '';
+      showToast(name + ' marked lost' + (said ? ' (' + said + ')' : '') + ' — kept under Bids in My Jobs' +
         (contact ? (contact.added ? ', and added to Contacts for next season' : ', and noted on their contact') : ''), 5000);
       render();
       return;

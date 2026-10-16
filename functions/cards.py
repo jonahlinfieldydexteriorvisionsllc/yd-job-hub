@@ -192,6 +192,8 @@ class Records:
     def find_jobs(self, query):
         out = []
         for jid, j in self._all("jobs").items():
+            if j.get("deletedAt"):          # in Recently deleted (app.js deleteJob)
+                continue
             if self._match(query, j.get("customerName"), j.get("address"), j.get("city"), j.get("zip"),
                            j.get("estimateNumber"), " ".join(j.get("serviceTypes") or [])):
                 out.append({"id": jid, "customer": j.get("customerName"), "number": j.get("estimateNumber"),
@@ -201,7 +203,7 @@ class Records:
 
     def get_job(self, job_id):
         j = self._all("jobs").get(job_id)
-        if not j:
+        if not j or j.get("deletedAt"):
             return None
         mats = [{"item": m.get("item"), "qty": m.get("qty"), "unit": m.get("unit"), "price": m.get("price"),
                  "from": m.get("location"), "date": m.get("date")} for m in (j.get("materials") or [])[:40]]

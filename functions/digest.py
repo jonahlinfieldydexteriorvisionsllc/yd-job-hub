@@ -586,7 +586,10 @@ def _storms():
 
 
 def _jobs():
-    return {s.id: (s.to_dict() or {}) for s in _db().collection("jobs").stream()}
+    """Every job, less those in Recently deleted (app.js deleteJob): not in
+    any summary, chase list or job-site weather while they wait there."""
+    return {s.id: d for s in _db().collection("jobs").stream()
+            for d in [s.to_dict() or {}] if not d.get("deletedAt")}
 
 
 def _recurring_overdue(today):
