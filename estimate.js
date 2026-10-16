@@ -1678,10 +1678,11 @@
       patch.qbEstimate = Object.assign({}, est0, { status: 'Closed' });
     }
     if (window.YDSync) window.YDSync.patchJob(jobId, patch);
-    if (currentJobId === jobId && r.docNumber &&
-        (el('qbInvoice').value.trim() !== String(r.docNumber) || !el('qbInvoiced').checked)) {
+    // The number goes in the box on the Job tab; that the job is Invoiced is
+    // its stage, worked out from qbInvoiceRef (app.js jobStage) -- the old
+    // "Invoiced in QuickBooks" tick is retired.
+    if (currentJobId === jobId && r.docNumber && el('qbInvoice').value.trim() !== String(r.docNumber)) {
       el('qbInvoice').value = r.docNumber;
-      el('qbInvoiced').checked = true;
       if (typeof updateCtxBar === 'function') updateCtxBar();
       if (typeof markDirty === 'function') markDirty();
     }

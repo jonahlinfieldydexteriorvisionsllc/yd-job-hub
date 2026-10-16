@@ -4072,3 +4072,26 @@
     #jobListBody .jl-acts { flex:1 1 100%; justify-content:flex-start; }
     #jobListBody .jl-acts .jl-del { margin-left:auto; }
   }
+
+  /* ── One stage per job (app.js jobStage / renderStageSteps) ──
+     The stage line on the Job tab: a tap button per stage, wrapping onto a
+     second line on a phone (never a sideways-scroll row). The job's own
+     stage is filled, the ones it has passed are ticked, Invoiced / Paid that
+     QuickBooks decides are greyed (disabled). */
+  .stage-steps { display:flex; flex-wrap:wrap; gap:6px; margin-top:2px; }
+  .stage-step { min-height:44px; padding:6px 12px; border-radius:22px; border:1.5px solid var(--border);
+    background:var(--surface); color:var(--text); font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+  .stage-step.past { color:var(--st-done-ink); border-color:var(--st-done-soft); background:var(--st-done-soft); }
+  .stage-step.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .stage-step.lost.on { background:var(--st-later); border-color:var(--st-later); }
+  .stage-step:disabled { opacity:.45; cursor:default; }
+  .stage-step:not(:disabled):not(.on):hover { border-color:var(--brand); }
+  .stage-note { margin-top:6px; }
+  .pill.invoiced { background:var(--st-info-soft); color:var(--st-info); }
+  .pill.paid { background:var(--st-done-soft); color:var(--st-done-ink); }
+  /* The retired Taxable box, still ticked on an old job (app.js billNoteHtml). */
+  .old-tax-note { font-size:12.5px; line-height:1.5; padding:8px 12px; margin:0 0 10px; border-radius:8px;
+    background:var(--st-soon-soft); color:var(--st-soon); }
+  @media (max-width:720px) {
+    .stage-step { flex:1 1 calc(33.333% - 6px); padding:6px 4px; font-size:12.5px; }
+  }
