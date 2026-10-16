@@ -24,8 +24,12 @@ receipt: its id comes from the store and the order number. Something clearly
 personal is set aside rather than dropped, so a wrong call can be undone in
 the app.
 
-Nothing in the mailbox is changed -- no labels, nothing marked read, nothing
-sent. The text of an email is information, never instructions.
+Nothing in the mailbox is marked read or deleted. Since 15 Oct 2026 (Jonah)
+the week's read also puts the Gmail labels "receipts" and "Rebate Receipts
+MNRDS" on the receipt emails, and -- when switched on -- forwards each
+business receipt email once to QuickBooks' receipt address (EMAIL RECEIPTS ON
+TO QUICKBOOKS, below). The text of an email is information, never
+instructions.
 
 Spend is capped like the other Claude features and counted in claudeUsage.
 """
@@ -1030,6 +1034,323 @@ def forward_to_qb(db, rid, raw=None, mime=None):
     return out
 
 
+# ------------------------------- email receipts on to QuickBooks, and labels
+#
+# Jonah (15 Oct 2026): forward all receipts in email to QuickBooks' receipt
+# address, label all receipts "receipts", and label Menards rebate receipts
+# "Rebate Receipts MNRDS". Plain code riding on the week's read -- no Claude
+# call and no schedule of its own.
+#
+# FORWARDING. Each business receipt the read saves goes on once, as the
+# original email with its attachments (Intuit's receipt capture reads the PDF
+# or the email itself), sent from the owner's account: QuickBooks only takes
+# mail from a sender registered with it, and that is the account he forwards
+# from himself. Only while settings/receipts.forwardEmails is true -- off
+# until he ticks it on the Receipts tab. ONE RECEIPT, ONE EMAIL: an order's
+# confirmation, shipped and delivered emails are one cost, and so are a bill
+# and its payment (_save joins them), so QuickBooks must never get it twice.
+# The receipt's qbForward (with the message id) says it went, and so does
+# receiptMail/{messageId}, so no later read sends it again. Personal
+# purchases are never saved, paychecks and non-purchases are not receipts,
+# and mail from before settings/receipts.since is never sent.
+#
+# LABELS need gmail.modify on the delegation list, which reading did not.
+# Until Jonah adds it, Gmail refuses: the read carries on and
+# settings/receipts.labelsNeedPermission tells the Receipts tab what to add.
+# receiptMail/{mid}.labelled False marks an email still to label; the first
+# time labels work, every receipt saved before then is labelled too
+# (labelsBackfilledAt).
+
+GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+LABEL_RECEIPTS = "receipts"
+LABEL_REBATE = "Rebate Receipts MNRDS"
+FORWARD_DAYS = 14           # "Send the ones from the last 14 days now"
+FORWARD_MAX = 40            # emails forwarded per go; the rest go next time
+FORWARD_TRIES = 3           # a send that keeps failing waits for a person (Send to QuickBooks)
+LABEL_MAX = 500             # emails labelled per go
+# An order's later emails say where the parcel is. The confirmation or the
+# invoice carries the prices, so that is the one forwarded.
+NOT_THE_BILL = re.compile(r"\b(shipped|shipping|on (its|the) way|out for delivery|delivered|tracking|"
+                          r"ready (for|to) pick ?up|awaiting pick ?up|pick up your order)\b", re.I)
+# Menards' 11% rebate. Every Menards email advertises the rebate and every
+# Menards receipt has rebate lines, so "rebate" in the text means nothing.
+# A REBATE RECEIPT names itself: "rebate" in the subject, or "rebate
+# receipt" / "mail-in rebate form" in what it says.
+MENARDS = re.compile(r"\bmenards\b", re.I)
+REBATE_SUBJECT = re.compile(r"\brebate", re.I)
+REBATE_RECEIPT = re.compile(r"\brebate\s+(receipt|form|certificate|slip)s?\b|"
+                            r"\bmail[- ]?in\s+rebate\s+(receipt|form)s?\b", re.I)
+
+
+def is_menards_rebate(frm, subject, text="", lines=None):
+    """A Menards rebate receipt (labelled "Rebate Receipts MNRDS")."""
+    words = " ".join([frm or "", subject or "", (text or "")[:4000]])
+    if not MENARDS.search(words):
+        return False
+    if REBATE_SUBJECT.search(subject or ""):
+        return True
+    if REBATE_RECEIPT.search(text or ""):
+        return True
+    return any(REBATE_RECEIPT.search(str((ln or {}).get("description") or (ln or {}).get("name") or ""))
+               for ln in (lines or []))
+
+
+def _token(scope):
+    try:
+        return dg._gmail_access_token(scope)
+    except Exception as e:      # noqa: BLE001 -- see _gmail
+        if "unauthorized" in str(e).lower():
+            raise NeedsPermission(str(e))
+        raise
+
+
+def _gmail_call(method, path, scope, body=None):
+    r = requests.request(method, GMAIL_API + path, headers={"Authorization": "Bearer " + _token(scope)},
+                         json=body, timeout=60)
+    if r.status_code in (401, 403):
+        raise NeedsPermission("gmail %s -> %d" % (path, r.status_code))
+    if r.status_code >= 300:
+        raise RuntimeError("gmail %s -> %d %s" % (path, r.status_code, r.text[:200]))
+    return r.json() if r.content else {}
+
+
+def forward_copy(raw, to, frm):
+    """The original email, every part and attachment as it came, addressed
+    to QuickBooks. Only its body is kept: the old sender, recipients,
+    message ids and signatures would make it look like someone else's mail."""
+    from email import message_from_bytes, policy
+    from email.header import Header, decode_header, make_header
+    msg = message_from_bytes(raw, policy=policy.compat32)
+    try:
+        subject = str(make_header(decode_header(str(msg.get("Subject") or ""))))
+    except Exception:           # noqa: BLE001 -- a badly encoded subject is sent as it came
+        subject = str(msg.get("Subject") or "")
+    for k in {k.lower() for k in msg.keys()}:
+        if not (k.startswith("content-") or k == "mime-version"):
+            del msg[k]
+    if "MIME-Version" not in msg:
+        msg["MIME-Version"] = "1.0"
+    msg["From"] = frm
+    msg["To"] = to
+    subject = re.sub(r"\s+", " ", subject if FWD_PREFIX.match(subject) else "Fwd: " + subject).strip()
+    msg["Subject"] = subject if subject.isascii() else Header(subject, "utf-8")
+    return msg.as_bytes()
+
+
+def _send_raw(raw):
+    """Send a whole email as it is. The upload form of the call takes the
+    big ones too (a receipt with a PDF can be several megabytes)."""
+    r = requests.post("https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=media",
+                      headers={"Authorization": "Bearer " + dg._gmail_access_token(),
+                               "Content-Type": "message/rfc822"},
+                      data=raw, timeout=120)
+    if r.status_code >= 300:
+        raise RuntimeError("Gmail said %d: %s" % (r.status_code, r.text[:200]))
+    return r.json() if r.content else {}
+
+
+def _since_ms(st):
+    try:
+        return int(datetime.datetime.fromisoformat(str(st.get("since"))).timestamp() * 1000)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_mail(r, floor_ms):
+    """Which of a receipt's emails goes: from after the floor, the bill
+    rather than the parcel's progress, the first that came."""
+    mail = sorted([m for m in (r.get("mail") or []) if m.get("id") and (m.get("at") or 0) >= floor_ms],
+                  key=lambda m: m.get("at") or 0)
+    good = [m for m in mail if not NOT_THE_BILL.search(m.get("subject") or "")]
+    return (good or mail or [None])[0]
+
+
+def forward_email(db, rid, to, since_ms, again=False):
+    """Forward one receipt's email to QuickBooks, once. Returns qbForward,
+    or None when there is nothing to send (a photo, sent already, no email
+    from after `since`, or failed too often and not asked `again`)."""
+    ref = db.collection("receipts").document(rid)
+    snap = ref.get()
+    r = (snap.to_dict() or {}) if snap.exists else {}
+    have = r.get("qbForward") or {}
+    if not r or have.get("ok") or r.get("photoPath") or r.get("source") == "photo":
+        return None
+    # Set aside (already entered, or not the business's after all) goes
+    # only when asked for that one receipt.
+    if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or r.get("status") == "skipped"):
+        return None
+    m = _pick_mail(r, since_ms or 0)
+    if not m:
+        return None
+    seen = db.collection("receiptMail").document(m["id"])
+    now = dg._now().isoformat()
+    sent = ((seen.get().to_dict() or {}).get("qbForward") or {})
+    if sent.get("at"):
+        # Sent before (the receipt record was made again, say): noted, not sent.
+        ref.update({"qbForward": {"ok": True, "at": sent["at"], "to": sent.get("to") or to,
+                                  "mid": m["id"], "via": "email"}})
+        return None
+    try:
+        raw = _b64(_gmail("/messages/" + m["id"], {"format": "raw"}).get("raw"))
+        if not raw:
+            raise RuntimeError("Gmail gave back an empty email")
+        _send_raw(forward_copy(raw, to, dg.OWNER_EMAIL))
+        out = {"ok": True, "at": now, "to": to, "mid": m["id"], "via": "email"}
+        seen.set({"qbForward": {"at": now, "to": to, "receiptId": rid}}, merge=True)
+    except Exception as err:                            # noqa: BLE001
+        print("receipts: email %s not sent to QuickBooks: %s" % (m["id"], err))
+        out = {"ok": False, "at": now, "error": str(err)[:200], "mid": m["id"], "via": "email",
+               "tries": (have.get("tries") or 0) + 1}
+    # Replaces the whole note, so a send that worked carries no old error.
+    ref.update({"qbForward": out})
+    return out
+
+
+def forward_one(db, rid):
+    """One receipt's email to QuickBooks now, asked for by a person (Send to
+    QuickBooks): even one that failed before or was set aside."""
+    st = db.collection("settings").document("receipts").get().to_dict() or {}
+    to = str(st.get("qbForwardTo") or "").strip()
+    if not to:
+        return {"ok": False, "error": "No QuickBooks receipt address set (Receipts → QuickBooks)"}
+    out = forward_email(db, rid, to, _since_ms(st) or 0, again=True)
+    if out is None:
+        r = db.collection("receipts").document(rid).get().to_dict() or {}
+        if (r.get("qbForward") or {}).get("ok"):
+            return r["qbForward"]
+        return {"ok": False, "error": "This receipt has no email from after reading started"}
+    return out
+
+
+def forward_emails(db, rids=(), days=None, st=None):
+    """Forward the receipts in `rids` (the ones the week's read just saved)
+    plus any whose send failed and may be tried again -- or, with `days`,
+    every receipt from email in that many days. Returns counts."""
+    st = st if st is not None else (db.collection("settings").document("receipts").get().to_dict() or {})
+    out = {"forwarded": 0, "forwardFailed": 0, "forwardLeft": 0}
+    to = str(st.get("qbForwardTo") or "").strip()
+    since_ms = _since_ms(st)
+    if not to or since_ms is None:
+        out["noAddress" if not to else "noStart"] = True
+        return out
+    floor = since_ms
+    want = list(dict.fromkeys(rids or []))
+    if days:
+        floor = max(floor, int(time.time() * 1000) - days * 86400000)
+        cutoff = (dg._now() - datetime.timedelta(days=days + 1)).isoformat()
+        for s in db.collection("receipts").where("createdAt", ">=", cutoff).stream():
+            d = s.to_dict() or {}
+            # Set aside (already entered, personal after all): not sent.
+            if d.get("status") != "skipped" and s.id not in want:
+                want.append(s.id)
+    for s in db.collection("receipts").where("qbForward.ok", "==", False).stream():
+        d = s.to_dict() or {}
+        if (d.get("qbForward") or {}).get("via") == "email" and s.id not in want:
+            want.append(s.id)
+    for rid in want:
+        if out["forwarded"] + out["forwardFailed"] >= FORWARD_MAX:
+            out["forwardLeft"] += 1
+            continue
+        got = forward_email(db, rid, to, floor)
+        if got:
+            out["forwarded" if got.get("ok") else "forwardFailed"] += 1
+    return out
+
+
+def _label_ids(names):
+    """Gmail's id for each label, made when it is not there yet."""
+    have = {(lb.get("name") or "").lower(): lb.get("id")
+            for lb in _gmail_call("GET", "/labels", GMAIL_MODIFY).get("labels") or []}
+    ids = {}
+    for n in names:
+        ids[n] = have.get(n.lower()) or _gmail_call(
+            "POST", "/labels", GMAIL_MODIFY,
+            {"name": n, "labelListVisibility": "labelShow", "messageListVisibility": "show"})["id"]
+    return ids
+
+
+def _add_label(lid, mids):
+    """The label on these emails. A batch with an email in it that has
+    since been deleted is refused whole, so then they go one at a time and
+    the gone ones are passed over."""
+    for i in range(0, len(mids), 1000):
+        chunk = mids[i:i + 1000]
+        try:
+            _gmail_call("POST", "/messages/batchModify", GMAIL_MODIFY, {"ids": chunk, "addLabelIds": [lid]})
+        except RuntimeError:
+            for mid in chunk:
+                try:
+                    _gmail_call("POST", "/messages/%s/modify" % mid, GMAIL_MODIFY, {"addLabelIds": [lid]})
+                except RuntimeError as e:
+                    print("receipts: could not label", mid, e)
+
+
+def label_mail(db, st=None):
+    """Put the labels on every receipt email still waiting for them.
+    Returns how many were labelled. Never raises: labels must never stop
+    the read."""
+    state = db.collection("settings").document("receipts")
+    st = st if st is not None else (state.get().to_dict() or {})
+    backfill = not st.get("labelsBackfilledAt")
+    try:
+        todo = {s.id: (s.to_dict() or {})
+                for s in db.collection("receiptMail").where("labelled", "==", False).limit(LABEL_MAX).stream()}
+        if backfill:
+            # Saved before labels existed: once, the first time they work.
+            for s in db.collection("receiptMail").where("outcome", "==", "receipt").stream():
+                d = s.to_dict() or {}
+                if "labelled" not in d and s.id not in todo:
+                    todo[s.id] = d
+        if not todo:
+            return 0
+        # Saved before rebates were looked for: a Menards receipt is opened
+        # once to see whether it is a rebate receipt.
+        old = [mid for mid, d in todo.items() if d.get("outcome") == "receipt" and "rebate" not in d
+               and d.get("receiptId")]
+        if old:
+            rs = {s.id: (s.to_dict() or {}) for s in
+                  db.get_all([db.collection("receipts").document(todo[m]["receiptId"]) for m in old]) if s.exists}
+            for mid in old:
+                if MENARDS.search(str((rs.get(todo[mid]["receiptId"]) or {}).get("vendor") or "")):
+                    try:
+                        m = _fetch(mid)
+                        todo[mid]["rebate"] = is_menards_rebate(m["from"], m["subject"], m["text"])
+                    except NeedsPermission:
+                        raise
+                    except Exception as e:      # noqa: BLE001 -- deleted since, most likely
+                        print("receipts: could not open", mid, "for its rebate:", e)
+        receipts_ids = [mid for mid, d in todo.items() if d.get("outcome") == "receipt"]
+        rebate_ids = [mid for mid, d in todo.items() if d.get("rebate")]
+        ids = _label_ids([LABEL_RECEIPTS] + ([LABEL_REBATE] if rebate_ids else []))
+        if receipts_ids:
+            _add_label(ids[LABEL_RECEIPTS], receipts_ids)
+        if rebate_ids:
+            _add_label(ids[LABEL_REBATE], rebate_ids)
+    except NeedsPermission as e:
+        print("receipts: labels not allowed yet:", e)
+        state.set({"labelsNeedPermission": True}, merge=True)
+        return 0
+    except Exception as e:      # noqa: BLE001
+        print("receipts: labelling failed:", e)
+        return 0
+    batch, n = db.batch(), 0
+    for mid, d in todo.items():
+        patch = {"labelled": True}
+        if "rebate" in d:
+            patch["rebate"] = bool(d["rebate"])
+        batch.set(db.collection("receiptMail").document(mid), patch, merge=True)
+        n += 1
+        if n % 400 == 0:
+            batch.commit()
+            batch = db.batch()
+    batch.commit()
+    done = {"labelsNeedPermission": False}
+    if backfill:
+        done["labelsBackfilledAt"] = dg._now().isoformat()
+    state.set(done, merge=True)
+    return len(todo)
+
+
 def from_photo(client, body, uid, who):
     """Returns ({id, vendor, total, lines, summary, what} or {error}, usage or None)."""
     mime = str(body.get("mediaType") or "").lower()
@@ -1279,7 +1600,7 @@ def _hold(db, m, got, card_id):
                 "subject": m["subject"][:300], "internalDate": m["internalDate"]})
 
 
-def _save_held(db, jobs_of, report):
+def _save_held(db, jobs_of, report, saved=None):
     """The week's read: the receipts held between reads, saved now -- after
     this run's own reads, so an order confirmation read in the same run makes
     the receipt and the pickup notice only adds to it."""
@@ -1297,7 +1618,12 @@ def _save_held(db, jobs_of, report):
             _seen(db, s.id, HELD if tries < MAX_TRIES else "error", why="save", tries=tries)
             report["errors"] += 1
             continue
-        _seen(db, s.id, "receipt", receiptId=rid, got=firestore.DELETE_FIELD)
+        # Read with no body kept: its sender, subject and lines say whether
+        # it is a Menards rebate receipt.
+        _seen(db, s.id, "receipt", receiptId=rid, got=firestore.DELETE_FIELD, labelled=False,
+              rebate=is_menards_rebate(m.get("from"), m.get("subject"), "", got.get("lines")))
+        if saved is not None:
+            saved.append(rid)
         report["added" if what == "added to" else "new"] += 1
 
 
@@ -1313,6 +1639,7 @@ def run(client, manual=False):
     people = None      # user records, read only if a paycheck turns up
     needs_permission = False
     read_state = {}    # when this was the week's read: when, and whether it left any behind
+    saved = []         # receipts this read saved or added to, for QuickBooks
     try:
         # Where reading starts. Set once -- the first run after it is missing
         # starts from that moment -- and moved only by hand.
@@ -1356,6 +1683,11 @@ def run(client, manual=False):
         allowed = max(0, min(MAX_READ_PER_RUN, left))
         to_read = _open_all(pending[:allowed])
         msgs = _open_all(fresh)
+        # Menards rebate receipts, whatever else the email turns out to be
+        # (a rebate receipt alone may not count as a purchase): labelled
+        # after the run, once each email's outcome is written.
+        rebates = [m["id"] for m in to_read + msgs
+                   if reading and is_menards_rebate(m.get("from"), m.get("subject"), m.get("text"))]
         # One that would not open is looked at again next run (an error, so
         # the week's read is not over) -- up to MAX_TRIES times, so a single
         # broken email cannot turn every half-hourly run into a full read.
@@ -1488,11 +1820,24 @@ def run(client, manual=False):
                     _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
-                _seen(db, m["id"], "receipt", receiptId=rid)
+                _seen(db, m["id"], "receipt", receiptId=rid, labelled=False,
+                      rebate=m["id"] in rebates)
+                saved.append(rid)
                 report["added" if what == "added to" else "new"] += 1
 
         if reading:
-            _save_held(db, jobs_of, report)
+            _save_held(db, jobs_of, report, saved)
+            # On to QuickBooks and the Gmail labels (above): neither may stop
+            # the read, and both are noted on the email, so a failure is
+            # tried again the next week.
+            try:
+                for mid in rebates:
+                    db.collection("receiptMail").document(mid).set({"rebate": True, "labelled": False}, merge=True)
+                if st_data.get("forwardEmails") is True:
+                    report.update(forward_emails(db, saved, st=st_data))
+            except Exception as e:      # noqa: BLE001
+                print("receipts: forwarding failed:", e)
+            report["labelled"] = label_mail(db, st_data)
             # The week's read got to its end. Anything it left -- over the
             # run's limit, not sorted (the day's limit, or the sorting call
             # failed), a read or save that failed, more mail than one run
