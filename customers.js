@@ -162,6 +162,17 @@
   const MONTH_RE = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/;
   const SEASON_RE = /\b(spring|summer|fall|autumn|winter)\b/;
   const validDay = v => /^\d{4}-\d{2}-\d{2}$/.test(s(v));
+  // The day, in the shop's own time, of something stored: a plain day stays
+  // as it is; a timestamp (kept in UTC, so a note written after about 7 pm in
+  // Wisconsin reads as TOMORROW if cut at 10 characters) is moved to the day
+  // it happened here.
+  function localDay(v) {
+    v = s(v);
+    if (!v) return '';
+    if (validDay(v)) return v;
+    const d = new Date(v);
+    return isNaN(d) ? '' : ymd(d);
+  }
   // Said the way people say it, with no date in it (crew testing, 16 Oct
   // 2026: "this month" was not understood): this / next week, this / next
   // month, this / next year, and "in 3 weeks", "in a couple of months" --
@@ -303,7 +314,7 @@
   function reachedFor(c, w) {
     const at = s(c.reachedAt);
     if (!at || isNaN(new Date(at))) return false;
-    if (at.slice(0, 10) < w.from) return false;
+    if (localDay(at) < w.from) return false;
     return !(c.whenSetAt && s(c.whenSetAt) > at);
   }
   function callState(c) {
@@ -436,34 +447,127 @@
     return { quotes: quotes, sold: sold, accounts: accounts, season: snowSeasonOf(quotes[0].date),
       onList: !sold && !accounts.length && !c.notInterested };
   }
-  const snowCalled = c => !!c.snowCalledAt && s(c.snowCalledAt).slice(0, 10) >= snowSeasonOf(today()) + '-07-01';
+  const snowCalled = c => !!c.snowCalledAt && localDay(c.snowCalledAt) >= snowSeasonOf(today()) + '-07-01';
   function quoteLine(q) {
     return (q.num ? '#' + esc(q.num) + ' · ' : '') + esc(niceDay(q.date)) + ' · ' + esc(QUOTE_WORD[q.status] || s(q.status).toLowerCase() || 'no answer yet');
   }
 
   // ------------------------------------------------------------ the list
-  function render() {
+  //
+  // The screen is four stacked parts, so a redraw touches only what changed:
+  //   #custViews  the view buttons and their counts
+  //   #custFind   the search row -- built once and left alone while it reads
+  //               the same (a rebuild every 150 ms of typing swallowed a
+  //               trailing space, lowercased the box and threw the caret to
+  //               the end: "mary a" came out "marya")
+  //   #custTags   the "What for" buttons
+  //   #custList   the list itself (typing in the search redraws only this)
+  // The tab is drawn only while it is on screen: the five snapshot feeds that
+  // arrive all day (jobs, invoices, contacts, snow, customers) used to redraw
+  // five hundred customers on every one, whatever tab he was on. A change
+  // that comes while it is hidden is remembered (`dirty`) and drawn on arrival.
+  let searchText = '';            // the search box as typed -- spaces and capitals kept
+  let findSig = '';               // the search row as last built
+  let dirty = false;              // something changed while the tab was hidden
+  let drawnDay = '';              // the day the list was last drawn (call lists change with the date)
+  let panelWatched = false;       // the arrival of the tab is being watched
+  const panelShown = () => {
+    if (!panelWatched) return true;     // no way to know: draw, as before
+    const p = el('panel-contacts');
+    return !!p && p.classList.contains('active');
+  };
+  // The ones counted on the "Check the list" button -- worked out once for
+  // the button and, in that view, again as the lines themselves (same figures).
+  let countedMemo = null;
+  function counted() {
+    const jobsRef = can('jobs', 'see') ? allJobs() : null;
+    if (countedMemo && countedMemo.ver === ver && countedMemo.jobs === jobsRef) return countedMemo.v;
+    const people = Object.values(customers).filter(inLists);
+    const v = {
+      dups: dupGroups(),
+      leadsMiss: people.filter(c => !isQb(c) && missingOf(c).length).length,
+      qb: qbTrouble().length,
+      names: jobsRef ? nameMismatches().length : 0,
+    };
+    countedMemo = { ver: ver, jobs: jobsRef, v: v };
+    return v;
+  }
+  const checkCount = () => { const v = counted(); return v.dups.groups.length + v.leadsMiss + v.qb + v.names; };
+
+  // The people lists: one row a person (a second QuickBooks profile and a
+  // sub-customer are on their main one's page). The call list and the snow
+  // quotes take a sub-customer too, under its parent's name -- a time to
+  // call or a snow quote of its own is not to be lost.
+  function peopleLists() {
+    const all = Object.values(customers);
+    return { people: all.filter(inLists), callable: all.filter(c => !isTwin(c)) };
+  }
+  // What is under the buttons for the view that is showing.
+  function listBodyHtml(people, callable, checks) {
+    if (view === 'sort') return sortHtml();
+    if (view === 'check') return checkHtml(checks);
+    const q = low(searchText), tag = view === 'everyone' ? '' : tagPick;
+    return view === 'call' ? callHtml(callable, q, tag) : view === 'snow' ? snowHtml(callable, q, tag)
+      : view === 'everyone' ? everyoneHtml(people, q)
+      : view === 'leads' ? leadsHtml(people.filter(c => kindOf(c) === 'lead'), q, tag)
+      : listHtml(people.filter(c => kindOf(c) === { customers: 'customer', past: 'past' }[view]), q, tag);
+  }
+  // Puts the list in. When a snapshot arrives (quiet) while he is typing in
+  // the "Add a lead" or "Fill in" form, that form stays exactly as it is --
+  // the caret stays where it was -- and only what is around it is redrawn.
+  function paintList(html, quiet) {
+    const box = el('custList');
+    if (!box) return;
+    const act = document.activeElement;
+    const form = quiet && act && box.contains(act) && act.closest ? act.closest('.cu-add, .cu-fill') : null;
+    if (form) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      const fresh = tmp.querySelector('.' + (form.classList.contains('cu-add') ? 'cu-add' : 'cu-fill'));
+      if (fresh) {
+        fresh.parentNode.replaceChild(form, fresh);
+        box.innerHTML = '';
+        while (tmp.firstChild) box.appendChild(tmp.firstChild);
+        return;
+      }
+    }
+    box.innerHTML = html;
+  }
+  // Typing in the search box: only the list under it is drawn again.
+  function renderListOnly() {
+    if (!isOn() || !loaded || !el('custList') || !panelShown() || view === 'sort' || view === 'check') { render(); return; }
+    const l = peopleLists();
+    paintList(listBodyHtml(l.people, l.callable, []), false);
+  }
+
+  // `quiet`: something changed under the page (a snapshot) rather than
+  // something being tapped -- a form being typed in is not rebuilt.
+  function render(quiet) {
     jobMap = null; famMap = null;
     applyOn();
     const wrap = el('custWrap');
     if (!wrap) return;
     if (!isOn()) { wrap.innerHTML = ''; renderOff(); return; }
     renderOff();
+    // A customer's page is a window of its own that can be open over any tab.
+    if (!panelShown()) { dirty = true; if (openId) renderPage(); return; }
+    dirty = false; drawnDay = today();
     if (!loaded) { wrap.innerHTML = '<p class="empty-msg">Loading the customer list…</p>'; return; }
     if (!Object.values(customers).some(isQb)) {
       wrap.innerHTML = '<p class="empty-msg">Waiting for the first read of your customers from QuickBooks — it happens at the next hourly look. ' +
         'Your Contacts list is below until then.</p>';
       return;
     }
-    // Something being typed (a search, a note) keeps its place.
-    const typing = document.activeElement && wrap.contains(document.activeElement) ? document.activeElement.id : null;
-    const all = Object.values(customers);
-    // The people lists: one row a person (a second QuickBooks profile and a
-    // sub-customer are on their main one's page). The call list and the snow
-    // quotes take a sub-customer too, under its parent's name -- a time to
-    // call or a snow quote of its own is not to be lost.
-    const people = all.filter(inLists);
-    const callable = all.filter(c => !isTwin(c));
+    // Something being typed (a note) keeps its place -- where its caret was.
+    const act = document.activeElement;
+    const typing = act && wrap.contains(act) ? act.id : null;
+    let caret = null;
+    try { if (typing) caret = [act.selectionStart, act.selectionEnd]; } catch (e) { /* not a text box */ }
+    if (!el('custList')) {
+      wrap.innerHTML = '<div id="custViews"></div><div id="custFind"></div><div id="custTags"></div><div id="custList"></div>';
+      findSig = '';
+    }
+    const l = peopleLists(), people = l.people, callable = l.callable;
     const ch = can('contacts', 'change');
     const counts = { call: 0, everyone: 0, customers: 0, leads: 0, past: 0, snow: 0, sort: sortCount(), check: 0 };
     let snowAny = 0;
@@ -484,8 +588,9 @@
       if (f && f.onList) { snowAny++; if (!snowCalled(c)) counts.snow++; }
     });
     counts.everyone = people.length + otherContacts().length;
-    const checks = ch ? checkLines() : [];
-    counts.check = checks.reduce((t, x) => t + (x.counts ? x.n : 0), 0);
+    // Only the Check view needs the lines themselves; the button needs the
+    // count of the ones that add up (worked out once, see counted()).
+    counts.check = ch ? checkCount() : 0;
     const badge = el('custBadge');
     if (badge) badge.textContent = counts.call ? counts.call + ' to call' : '';
     const VIEWS = [['call', '📞 Call list'], ['everyone', '📇 Everyone'], ['customers', '👥 Customers'], ['leads', '🌱 Leads'], ['past', '🕰 Past']]
@@ -493,31 +598,32 @@
       .concat(ch && counts.sort ? [['sort', '🧩 To sort']] : [])
       .concat(ch ? [['check', '🔍 Check the list']] : []);
     if (!VIEWS.some(v => v[0] === view)) view = 'call';
-    const q = s((el('custSearch') || {}).value).toLowerCase();
-    const tag = view === 'everyone' ? '' : tagPick;
-    let html = '<div class="cu-views">' + VIEWS.map(([k, label]) =>
+    el('custViews').innerHTML = '<div class="cu-views">' + VIEWS.map(([k, label]) =>
       '<button class="cu-view' + (view === k ? ' on' : '') + '" onclick="custView(\'' + k + '\')">' + label +
       '<span class="cu-n">' + (k === 'call' ? onCallList : counts[k]) + '</span></button>').join('') + '</div>';
-    if (view !== 'sort' && view !== 'check') {
-      html += '<div class="cu-find"><input id="custSearch" type="search" placeholder="' +
-        (view === 'everyone' ? 'Search everyone — name, phone, email, street…' : 'Search name, phone, street, note…') +
-        '" value="' + esc(q) + '" oninput="custSearchSoon()">' +
-        (view !== 'everyone' ? '<button class="btn btn-sm cu-tagbtn' + (tagPick ? ' on' : '') + '" onclick="custTagsOpen()">' +
-          (tagPick ? 'What for: ' + esc(tagPick) : 'What for: any') + ' ' + (tagsOpen ? '▴' : '▾') + '</button>' : '') +
-        (ch ? '<button class="btn btn-sm btn-filled" onclick="custAddLead()">+ Add a lead</button>' : '') + '</div>';
-      if (tagsOpen && view !== 'everyone') html += tagFilterHtml(view === 'call' || view === 'snow' ? callable : people);
-      html += view === 'call' ? callHtml(callable, q, tag) : view === 'snow' ? snowHtml(callable, q, tag)
-        : view === 'everyone' ? everyoneHtml(people, q)
-        : view === 'leads' ? leadsHtml(people.filter(c => kindOf(c) === 'lead'), q, tag)
-        : listHtml(people.filter(c => kindOf(c) === { customers: 'customer', past: 'past' }[view]), q, tag);
-    } else if (view === 'sort') {
-      html += sortHtml();
-    } else {
-      html += checkHtml(checks);
+    // The search row is left alone while it reads the same -- the text typed
+    // in it is `searchText`, put back when the row has to be built again.
+    const wantFind = view !== 'sort' && view !== 'check';
+    const findHtml = !wantFind ? '' : '<div class="cu-find"><input id="custSearch" type="search" placeholder="' +
+      (view === 'everyone' ? 'Search everyone — name, phone, email, street…' : 'Search name, phone, street, note…') +
+      '" oninput="custSearchSoon()">' +
+      (view !== 'everyone' ? '<button class="btn btn-sm cu-tagbtn' + (tagPick ? ' on' : '') + '" onclick="custTagsOpen()">' +
+        (tagPick ? 'What for: ' + esc(tagPick) : 'What for: any') + ' ' + (tagsOpen ? '▴' : '▾') + '</button>' : '') +
+      (ch ? '<button class="btn btn-sm btn-filled" onclick="custAddLead()">+ Add a lead</button>' : '') + '</div>';
+    if (findHtml !== findSig || (wantFind && !el('custSearch'))) {
+      el('custFind').innerHTML = findHtml;
+      findSig = findHtml;
+      const box = el('custSearch');
+      if (box) box.value = searchText;
     }
-    wrap.innerHTML = html;
+    el('custTags').innerHTML = wantFind && tagsOpen && view !== 'everyone' ? tagFilterHtml(view === 'call' || view === 'snow' ? callable : people) : '';
+    paintList(listBodyHtml(people, callable, view === 'check' ? checkLines() : []), quiet === true);
+    // A box that was rebuilt gets its focus and caret back.
     const back = typing && el(typing);
-    if (back) { back.focus(); try { back.setSelectionRange(back.value.length, back.value.length); } catch (e) { /* not a text box */ } }
+    if (back && document.activeElement !== back) {
+      back.focus();
+      try { if (caret && caret[0] != null) back.setSelectionRange(caret[0], caret[1]); } catch (e) { /* not a text box */ }
+    }
     if (openId) renderPage();
   }
 
@@ -657,7 +763,7 @@
           phone ? '<a href="tel:' + esc(telOf(phone)) + '">📞 ' + esc(phone) + '</a>' : ''].filter(Boolean).join(' &middot; ') + '</div>' +
       '</div>' +
       (can('contacts', 'change') ? '<div class="cu-act">' + (called
-        ? '<span class="pp-out-did">✓ Called ' + esc(niceDay(s(c.snowCalledAt).slice(0, 10))) + '</span> <button class="btn btn-sm" onclick="custSnowCalled(\'' + id + '\', false)">Not yet</button>'
+        ? '<span class="pp-out-did">✓ Called ' + esc(niceDay(localDay(c.snowCalledAt))) + '</span> <button class="btn btn-sm" onclick="custSnowCalled(\'' + id + '\', false)">Not yet</button>'
         : '<button class="btn btn-sm btn-filled" onclick="custSnowCalled(\'' + id + '\', true)">✓ Called about snow</button>') + '</div>' : '') +
     '</div>';
   }
@@ -669,7 +775,7 @@
   function lastTalk(c) {
     let at = s(c.reachedAt);
     (c.meetings || []).forEach(m => { if (s(m && m.at) > at) at = s(m.at); });
-    return at && !isNaN(new Date(at)) ? at.slice(0, 10) : '';
+    return localDay(at);
   }
   // mode: 'due' (Call now: "Reached out"), 'soon', 'done', 'no' (the call
   // list's other parts), 'none' (no time yet: "Set when"), '' (a plain list).
@@ -702,13 +808,21 @@
 
   window.custView = function (v) {
     view = v; showN = SHOW_STEP; tagsOpen = false;
+    if (v === 'sort' || v === 'check') searchText = '';      // these have no search row to show it in
     try { localStorage.setItem(VIEW_KEY, v); } catch (e) { /* private window */ }
     render();
   };
   window.custMore = function () { showN += SHOW_STEP; render(); };
-  window.custRender = function () { showN = SHOW_STEP; render(); };
   let searchTimer = null;
-  window.custSearchSoon = function () { clearTimeout(searchTimer); searchTimer = setTimeout(window.custRender, 150); };
+  window.custRender = function () { showN = SHOW_STEP; renderListOnly(); };
+  // What is typed is kept as typed (the box is not rebuilt); the list under it
+  // is drawn again once typing pauses.
+  window.custSearchSoon = function () {
+    const box = el('custSearch');
+    if (box) searchText = box.value;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(window.custRender, 150);
+  };
 
   // ------------------------------------------------------------ leads
   //
@@ -1238,7 +1352,7 @@
       h += '<div class="cu-sec">' + (r.contactWhen ? '<div class="cu-line"><span class="muted">When to call:</span> ' + esc(r.contactWhen) + '</div>' : '') +
         ((r.services || []).length ? '<div class="pp-svc">' + r.services.map(t => '<span class="svc-tag">' + esc(t) + '</span>').join('') + '</div>' : '') +
         (r.note ? '<div class="pp-note">' + esc(r.note) + '</div>' : '') +
-        (r.meetings || []).map(m => '<div class="pp-meet-item"><div class="pp-meet-when">' + esc(niceDay(s(m.at).slice(0, 10))) + '</div><div class="pp-meet-text">' + esc(m.text) + '</div></div>').join('') +
+        (r.meetings || []).map(m => '<div class="pp-meet-item"><div class="pp-meet-when">' + esc(niceDay(localDay(m.at))) + '</div><div class="pp-meet-text">' + esc(m.text) + '</div></div>').join('') +
         '<div class="hint">From the old Contacts list, not yet put onto a customer or made a lead.</div>' +
         (can('contacts', 'change') ? '<div class="cu-btns"><button class="btn btn-sm btn-filled" onclick="custGoSort()">Sort it onto a customer</button></div>' : '') + '</div>';
     } else if (kind === 'vendor') {
@@ -1309,19 +1423,17 @@
     return out.sort((a, b) => s(a.job.customerName).localeCompare(s(b.job.customerName)));
   }
   function checkLines() {
-    const people = Object.values(customers).filter(inLists);
-    const dups = dupGroups();
-    const leadsMiss = people.filter(c => !isQb(c) && missingOf(c).length).length;
+    const cnt = counted(), dups = cnt.dups;
     // word: [said of one, said of more]
     const lines = [
       { key: 'dups', icon: '👯', n: dups.groups.length, counts: true, word: ['person looks to be in the list twice', 'people look to be in the list twice'],
         none: 'Nobody looks to be in the list twice' },
-      { key: 'leads', icon: '🌱', n: leadsMiss, counts: true, word: ['lead is missing a phone, email or address', 'leads are missing a phone, email or address'],
+      { key: 'leads', icon: '🌱', n: cnt.leadsMiss, counts: true, word: ['lead is missing a phone, email or address', 'leads are missing a phone, email or address'],
         none: 'Every lead has a phone, email and address' },
-      { key: 'qb', icon: '🔄', n: qbTrouble().length, counts: true, word: ['change is not in QuickBooks yet — or was changed there too', 'changes are not in QuickBooks yet — or were changed there too'],
+      { key: 'qb', icon: '🔄', n: cnt.qb, counts: true, word: ['change is not in QuickBooks yet — or was changed there too', 'changes are not in QuickBooks yet — or were changed there too'],
         none: 'Every change is in QuickBooks' },
     ];
-    if (can('jobs', 'see')) lines.push({ key: 'names', icon: '🏷', n: nameMismatches().length, counts: true,
+    if (can('jobs', 'see')) lines.push({ key: 'names', icon: '🏷', n: cnt.names, counts: true,
       word: ['job’s name shares no word with its customer’s', 'jobs’ names share no word with their customer’s'], none: 'Every job’s name fits its customer' });
     lines.push(
       { key: 'nocontact', icon: '📵', n: noContact().length, counts: false, word: ['customer has no phone and no email', 'customers have no phone and no email'],
@@ -1866,7 +1978,7 @@
       (c.note ? '<div class="pp-note">' + esc(c.note) + '</div>' : '') +
       (ch ? '<textarea id="cuNote_' + id + '" rows="3" placeholder="What you talked about, what they want…" oninput="custNoteDraft(\'' + id + '\', this.value)">' + esc(drafts[c.id] || '') + '</textarea>' +
         '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="custSaveNote(\'' + id + '\')">Save note</button></div>' : '') +
-      meets.map(m => '<div class="pp-meet-item"><div class="pp-meet-when">' + esc(niceDay(s(m.at).slice(0, 10))) + '</div><div class="pp-meet-text">' + esc(m.text) + '</div></div>').join('') +
+      meets.map(m => '<div class="pp-meet-item"><div class="pp-meet-when">' + esc(niceDay(localDay(m.at))) + '</div><div class="pp-meet-text">' + esc(m.text) + '</div></div>').join('') +
       '</div>';
     h += familyHtml(c, ch);
     h += workHtml(c);
@@ -1980,7 +2092,7 @@
   function whenHtml(c, ch) {
     const st = callState(c), w = windowOf(c), id = sid(c.id);
     let h = '<div class="cu-sec"><div class="cu-sec-h">When to call</div>';
-    const reached = st.done ? ' · ✓ reached ' + esc(niceDay(s(c.reachedAt).slice(0, 10))) : '';
+    const reached = st.done ? ' · ✓ reached ' + esc(niceDay(localDay(c.reachedAt))) : '';
     h += '<div class="cu-when-now">' + (c.notInterested ? 'Not interested — off the call list.'
       : w ? '<b>' + esc(w.how === 'soon' ? w.label : whenText(w)) + '</b> <span class="muted">— ' + (st.on ? 'on the call list now' : 'on the call list from ' + esc(niceDay(w.from))) + reached + '</span>'
       : c.contactWhen ? 'Can’t tell when from “' + esc(c.contactWhen) + '” — pick one below.' : '<span class="muted">No time to call set.</span>') + '</div>';
@@ -2072,7 +2184,7 @@
           (i.link ? ' <a href="' + esc(i.link) + '" target="_blank" rel="noopener">QuickBooks ↗</a>' : '') + '</div>').join('')
           : '<div class="muted">No open invoices.</div>') + '</div>';
       const pays = [];
-      jobs.forEach(j => (j.payments || []).forEach(p => pays.push({ date: s(p.date || p.createdAt).slice(0, 10), amount: p.amount, label: p.label || p.method || '', job: j.customerName })));
+      jobs.forEach(j => (j.payments || []).forEach(p => pays.push({ date: localDay(p.date || p.createdAt), amount: p.amount, label: p.label || p.method || '', job: j.customerName })));
       if (pays.length) {
         pays.sort((a, b) => b.date.localeCompare(a.date));
         h += '<div class="cu-sec"><div class="cu-sec-h">Payments</div>' + pays.map(p => '<div class="cu-job">' + esc(niceDay(p.date)) + ' · ' +
@@ -2094,7 +2206,7 @@
       }
       if (sf) {
         h += '<div class="cu-quotes"><span class="muted">Snow quotes:</span>' + sf.quotes.map(q => '<div>' + quoteLine(q) + '</div>').join('') + '</div>' +
-          (sf.onList ? '<div class="cu-line muted">On the Snow quotes list — ' + (snowCalled(c) ? '✓ called ' + esc(niceDay(s(c.snowCalledAt).slice(0, 10))) : 'not called yet this season') + '.</div>' +
+          (sf.onList ? '<div class="cu-line muted">On the Snow quotes list — ' + (snowCalled(c) ? '✓ called ' + esc(niceDay(localDay(c.snowCalledAt))) : 'not called yet this season') + '.</div>' +
             (can('contacts', 'change') ? '<div class="cu-btns">' + (snowCalled(c)
               ? '<button class="btn btn-sm" onclick="custSnowCalled(\'' + sid(c.id) + '\', false)">Not called yet</button>'
               : '<button class="btn btn-sm btn-filled" onclick="custSnowCalled(\'' + sid(c.id) + '\', true)">✓ Called about snow</button>') + '</div>' : '') : '');
@@ -2314,7 +2426,7 @@
     if (svc.length && typeof serviceTypes !== 'undefined') { serviceTypes = svc.slice(); if (typeof renderServiceTypes === 'function') renderServiceTypes(); }
     if (typeof markDirty === 'function') markDirty();
     const notes = (c.meetings || []).slice().sort((a, b) => s(a.at).localeCompare(s(b.at)))
-      .map(m => niceDay(s(m.at).slice(0, 10)) + ': ' + m.text).join('\n\n');
+      .map(m => niceDay(localDay(m.at)) + ': ' + m.text).join('\n\n');
     if (notes && window.YDEstimate && YDEstimate.setNotes) YDEstimate.setNotes(notes, true);
     if (typeof switchTab === 'function') switchTab('job');
     showToast((c.name || 'They') + ' started as a bid');
@@ -2686,7 +2798,7 @@
       });
       ver++;
       if (!meta || meta.fromCache === false || Object.keys(customers).length) loaded = true;
-      render();
+      render(true);
       document.dispatchEvent(new CustomEvent('yd-customers'));
     }, err => {
       loaded = true;
@@ -2697,7 +2809,7 @@
   function stop() {
     if (unsub) { try { unsub(); } catch (e) { /* already gone */ } }
     unsub = null; customers = {}; merged = {}; loaded = false;
-    ver++; fill = null; addOpen = false; addDraft = {}; vendorsRead = null; checkPart = '';
+    ver++; fill = null; addOpen = false; addDraft = {}; vendorsRead = null; checkPart = ''; searchText = '';
   }
 
   window.YDCustomers = {
@@ -2719,11 +2831,15 @@
     stop(); confRead = false;
     if (ok) readConf(); else render();
   });
-  // Their jobs, invoices and snow accounts change under the page.
-  ['yd-jobs-changed', 'yd-invoices', 'yd-prospects', 'yd-snow-accounts'].forEach(ev => document.addEventListener(ev, () => { if (isOn()) render(); }));
+  // Their jobs, invoices and snow accounts change under the page. The first
+  // load sends all four in a burst: one redraw for the lot, and none at all
+  // while the tab is not on screen (render() remembers it for when it is).
+  let quietTimer = null;
+  const renderQuietly = () => { clearTimeout(quietTimer); quietTimer = setTimeout(() => render(true), 80); };
+  ['yd-jobs-changed', 'yd-invoices', 'yd-prospects', 'yd-snow-accounts'].forEach(ev => document.addEventListener(ev, () => { if (isOn()) renderQuietly(); }));
   // Everyone lists the suppliers and subcontractors; the services list feeds
   // the "What for" buttons.
-  ['yd-supplies', 'yd-subs'].forEach(ev => document.addEventListener(ev, () => { if (isOn() && view === 'everyone') render(); }));
+  ['yd-supplies', 'yd-subs'].forEach(ev => document.addEventListener(ev, () => { if (isOn() && view === 'everyone') renderQuietly(); }));
   document.addEventListener('yd-services', () => {
     if (!isOn()) return;
     Object.keys(tagFind).concat(Object.keys(tagAll), openId ? [openId] : [], addOpen ? ['add'] : []).forEach(ctx => {
@@ -2731,7 +2847,17 @@
       if (box) box.innerHTML = tagResHtml(ctx);
     });
   });
-  function boot() { render(); }
+  // The tab coming on screen draws what changed while it was away (or the
+  // day moved on: the call list depends on today's date).
+  function watchPanel() {
+    const p = el('panel-contacts');
+    if (!p || typeof MutationObserver !== 'function') return;
+    panelWatched = true;
+    new MutationObserver(() => {
+      if (panelShown() && (dirty || (drawnDay && drawnDay !== today()))) render();
+    }).observe(p, { attributes: true, attributeFilter: ['class'] });
+  }
+  function boot() { watchPanel(); render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
