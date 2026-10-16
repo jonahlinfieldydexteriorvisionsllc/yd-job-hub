@@ -556,8 +556,19 @@ document.addEventListener('keydown', e => {
   if (menu && !menu.hidden) { closeHeaderMenu(); return; }
   const top = topOverlay();
   const close = top && top.querySelector('.modal-close, .sheet-close');
-  if (close) close.click();
+  if (!close) return;
+  // Something typed in it (guardWindows marks that): one Esc pressed out of
+  // habit threw a half-written card or account away without a word (16 Oct
+  // 2026). The first press says so; a second within a few seconds closes.
+  if (top.dataset.typed && !(escArmed === top && Date.now() - escArmedAt < 4000)) {
+    escArmed = top; escArmedAt = Date.now();
+    showToast('Something is typed in here — press Esc again to close without saving');
+    return;
+  }
+  escArmed = null;
+  close.click();
 });
+let escArmed = null, escArmedAt = 0;
 
 // The open modal or sheet that is actually in front. Several can be open at
 // once (a worker's page over the clock, say), and which one shows is decided
