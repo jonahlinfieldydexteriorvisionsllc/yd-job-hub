@@ -519,6 +519,12 @@ function tidyHeaderMenu(m) {
   if (search) search.hidden = !(signedIn && typeof window.openSearch === 'function');
   const all = document.getElementById('menuSettings');
   if (all) all.hidden = !(signedIn && typeof window.openSettings === 'function');
+  // The sidebar preview: only where it can show (a laptop-wide window).
+  const side = document.getElementById('menuSidebar');
+  if (side) {
+    side.hidden = !sidebarFits();
+    side.textContent = sidebarStored(SIDEBAR_KEY) ? '▤ Back to the tab bar' : '🧭 Try the new sidebar (preview)';
+  }
   // A button's own computed display says whether it shows, whatever its
   // group or the closed menu around it are doing.
   m.querySelectorAll('.menu-group').forEach(g => {
@@ -3511,4 +3517,206 @@ function makeSearchable(sel) {
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go);
   else go();
+})();
+
+// ═══════════════════════════════════════════════════════════
+// SIDEBAR (PREVIEW)
+// ═══════════════════════════════════════════════════════════
+// Jonah, 15 Oct 2026: "Thirteen tabs is past what anyone scans, group them
+// ... make this and let me view it prior to implementing." So it is a
+// preview, switched on per computer from the ⋯ menu, and it changes nothing
+// for anyone who has not switched it on.
+//
+// It is a second way to look at the SAME tab bar, not a second set of tabs:
+// each entry calls switchTab() like the bar does, and shows or hides itself,
+// lights up and carries its count by copying the matching bar button. Every
+// module that hides a tab from somebody keeps doing it on the bar's button,
+// so the sidebar can never show a screen the bar would not. The bar itself is
+// only hidden by the stylesheet while the sidebar is up.
+//
+// Only on a laptop-wide window: a phone keeps its five tabs and More, and a
+// narrow window goes back to the bar by itself.
+const SIDEBAR_KEY = 'ydjobhub_sidebarPreview';
+const SIDEBAR_SMALL_KEY = 'ydjobhub_sidebarSmall';
+const SIDEBAR_MIN_WIDTH = 1024;
+// The groups, in the order they sit. Contacts has a group of its own --
+// People -- because the customer list (every QuickBooks customer, past ones
+// too) is coming and belongs beside it, not among the jobs.
+const SIDEBAR_GROUPS = [
+  { name: 'Today', tabs: ['home', 'calendar'] },
+  { name: 'Sales + jobs', tabs: ['job', 'tracking', 'dashboard', 'boards'] },
+  { name: 'Snow', tabs: ['snow'] },
+  { name: 'Crew', tabs: ['clock', 'crewjobs'] },
+  { name: 'Stuff', tabs: ['supplies', 'receipts', 'equipment'] },
+  { name: 'People', tabs: ['contacts'] }
+];
+
+function sidebarStored(key) {
+  try { return localStorage.getItem(key) === '1'; } catch (e) { return false; }
+}
+function sidebarStore(key, on) {
+  try { if (on) localStorage.setItem(key, '1'); else localStorage.removeItem(key); } catch (e) { /* private window: just this visit */ }
+}
+function sidebarFits() {
+  return !!(window.matchMedia && window.matchMedia('(min-width:' + SIDEBAR_MIN_WIDTH + 'px)').matches);
+}
+
+// The ⋯ menu entry and the sidebar's own "Back to the tab bar" both land here.
+function toggleSidebarPreview(on) {
+  if (typeof on !== 'boolean') on = !sidebarStored(SIDEBAR_KEY);
+  sidebarStore(SIDEBAR_KEY, on);
+  applySidebar();
+  if (typeof showToast === 'function') {
+    showToast(on ? 'Sidebar preview on — only on this computer. "Back to the tab bar" is at the foot of it.'
+      : 'Back to the tab bar.');
+  }
+}
+function toggleSidebarSmall() {
+  sidebarStore(SIDEBAR_SMALL_KEY, !sidebarStored(SIDEBAR_SMALL_KEY));
+  applySidebar();
+}
+
+(function () {
+  let built = false, watcher = null, queued = false;
+
+  // A bar button's words without its icon or its count ("Receipts", not
+  // "🧾Receipts3").
+  function labelOf(b) {
+    let t = '';
+    b.childNodes.forEach(n => { if (n.nodeType === 3) t += n.textContent; });
+    return t.trim();
+  }
+  function iconOf(b) {
+    const i = b.querySelector('.tab-icon');
+    return i ? i.textContent : '';
+  }
+  // Showing on the bar = not hidden by its module, and not hidden by the
+  // stylesheet either (a button's own display, not its parent's).
+  function barShows(b) {
+    return !!(b && !b.hidden && getComputedStyle(b).display !== 'none');
+  }
+
+  function build(nav) {
+    let html = '<div class="sb-top"><span class="sb-title">Screens</span>' +
+      '<button type="button" class="sb-small" onclick="toggleSidebarSmall()"></button></div>' +
+      '<div class="sb-list">';
+    SIDEBAR_GROUPS.forEach((g, gi) => {
+      html += '<div class="sb-group" role="group" aria-labelledby="sbHead' + gi + '">' +
+        '<div class="sb-head" id="sbHead' + gi + '">' + esc(g.name) + '</div>';
+      g.tabs.forEach(t => {
+        const b = document.getElementById(tabButtonId(t));
+        if (!b) return;
+        html += '<button type="button" class="sb-item" data-tab="' + t + '" onclick="switchTab(\'' + t + '\')">' +
+          '<span class="sb-icon" aria-hidden="true">' + esc(iconOf(b)) + '</span>' +
+          '<span class="sb-label">' + esc(labelOf(b)) + '</span>' +
+          '<span class="sb-count"></span></button>';
+      });
+      html += '</div>';
+    });
+    html += '</div><div class="sb-foot">' +
+      '<button type="button" class="sb-back" onclick="toggleSidebarPreview(false)" title="Back to the tab bar">' +
+      '<span class="sb-icon" aria-hidden="true">↩</span><span class="sb-label">Back to the tab bar</span></button>' +
+      '<div class="sb-note">Preview — only on this computer</div></div>';
+    nav.innerHTML = html;
+    // Up and down arrows walk the screens, as in any list of choices.
+    nav.addEventListener('keydown', e => {
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      const items = Array.prototype.filter.call(nav.querySelectorAll('.sb-item, .sb-back'), x => x.offsetParent !== null);
+      const at = items.indexOf(document.activeElement);
+      if (at === -1) return;
+      e.preventDefault();
+      const next = items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length];
+      if (next) next.focus();
+    });
+    built = true;
+  }
+
+  // Copy the bar onto the sidebar: which screens show, which is open, the
+  // counts, and the words More would say under each.
+  function sync() {
+    queued = false;
+    const nav = document.getElementById('sideNav');
+    if (!nav || !built) return;
+    const hints = crewView() ? TAB_HINT_CREW : TAB_HINT;
+    nav.querySelectorAll('.sb-item').forEach(item => {
+      const t = item.dataset.tab, b = document.getElementById(tabButtonId(t));
+      item.hidden = !barShows(b);
+      if (!b) return;
+      const on = b.classList.contains('active');
+      item.classList.toggle('active', on);
+      if (on) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
+      const label = labelOf(b);
+      const lab = item.querySelector('.sb-label');
+      if (lab && lab.textContent !== label) lab.textContent = label;
+      const c = b.querySelector('.tab-count');
+      const n = c ? c.textContent : '';
+      const count = item.querySelector('.sb-count');
+      if (count && count.textContent !== n) count.textContent = n;
+      // The hint on hover; narrowed to icons, the name has to be there too.
+      item.title = label + (hints[t] ? ' — ' + hints[t] : '') + (n ? ' (' + n + ')' : '');
+    });
+    // A heading with nothing under it for this person goes too.
+    nav.querySelectorAll('.sb-group').forEach(g => {
+      g.hidden = !g.querySelector('.sb-item:not([hidden])');
+    });
+    const small = document.documentElement.hasAttribute('data-sidebar-small');
+    const sm = nav.querySelector('.sb-small');
+    if (sm) {
+      sm.textContent = small ? '»' : '«';
+      sm.title = small ? 'Show the names' : 'Narrow it to icons';
+      sm.setAttribute('aria-label', sm.title);
+      sm.setAttribute('aria-expanded', small ? 'false' : 'true');
+    }
+  }
+  function later() {
+    if (queued) return;
+    queued = true;
+    setTimeout(sync, 0);
+  }
+
+  window.applySidebar = function () {
+    const nav = document.getElementById('sideNav');
+    const bar = document.querySelector('.tab-bar');
+    if (!nav || !bar) return;
+    const on = sidebarStored(SIDEBAR_KEY) && sidebarFits();
+    const root = document.documentElement;
+    root.toggleAttribute('data-sidebar', on);
+    root.toggleAttribute('data-sidebar-small', on && sidebarStored(SIDEBAR_SMALL_KEY));
+    nav.hidden = !on;
+    if (on) {
+      if (!built) build(nav);
+      if (!watcher) {
+        // Any module showing, hiding, lighting up or counting on a bar
+        // button; and sign-in deciding crew or owner (the stylesheet hides
+        // some buttons by that).
+        watcher = new MutationObserver(later);
+        watcher.observe(bar, { subtree: true, childList: true, characterData: true,
+          attributes: true, attributeFilter: ['hidden', 'class'] });
+        watcher.observe(root, { attributes: true, attributeFilter: ['data-crew'] });
+      }
+      sync();
+    } else if (watcher) {
+      watcher.disconnect();
+      watcher = null;
+    }
+  };
+
+  function start() {
+    applySidebar();
+    // Made narrower than a laptop (or wider again): back to the bar, and back.
+    if (window.matchMedia) {
+      const mq = window.matchMedia('(min-width:' + SIDEBAR_MIN_WIDTH + 'px)');
+      if (mq.addEventListener) mq.addEventListener('change', applySidebar);
+      else if (mq.addListener) mq.addListener(applySidebar);
+    }
+    // Belt and braces: not every browser tells a media query's change (a
+    // window resized while in the background), so a resize checks too --
+    // only acting when the answer has actually changed.
+    window.addEventListener('resize', () => {
+      const want = sidebarStored(SIDEBAR_KEY) && sidebarFits();
+      if (want !== document.documentElement.hasAttribute('data-sidebar')) applySidebar();
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
 })();

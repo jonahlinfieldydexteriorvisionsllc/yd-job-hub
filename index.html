@@ -62,6 +62,12 @@
 </head>
 <body>
 
+<!-- PREVIEW (Jonah, 15 Oct 2026): the screens in groups down the left on a
+     laptop, instead of the bar across the top. Off unless switched on in the
+     ⋯ menu on this computer; app.js (sidebar preview) fills it from the tab
+     bar's own buttons, so it shows exactly what the bar would. -->
+<nav class="sb" id="sideNav" hidden aria-label="Screens"></nav>
+
 <div class="page" id="app">
   <div class="header">
     <div>
@@ -106,6 +112,9 @@
             <div class="menu-head">App</div>
             <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">🔔 Notification settings</button>
             <button id="menuTheme" onclick="closeHeaderMenu(); openAppearance()">🌓 Appearance</button>
+            <!-- Laptop only (app.js tidyHeaderMenu): try the screens down the
+                 left instead of across the top, on this computer only. -->
+            <button id="menuSidebar" hidden onclick="closeHeaderMenu(); toggleSidebarPreview()">🧭 Try the new sidebar (preview)</button>
           </div>
           <div class="menu-group">
             <div class="menu-head">Data</div>
