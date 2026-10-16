@@ -872,12 +872,14 @@ service cloud.firestore {
 
     // `auto`: a receipt photo sent for a job is put on it by the sorting
     // device (receipts.js autoSort), which claims it, and says how it went,
-    // in that one field.
+    // in that one field. `statusChange`: who moved its one status (To sort /
+    // Filed / Set aside, stages.js) and when -- written beside `status`,
+    // whose stored words are unchanged.
     match /receipts/{docId} {
       allow read: if canSee('jobs');
       allow update: if canChange('jobs')
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['splits', 'status', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto'])
+             .hasOnly(['splits', 'status', 'statusChange', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto'])
         && request.resource.data.status in ['new', 'done', 'skipped'];
       allow create: if false;
       allow delete: if isOwner();

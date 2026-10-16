@@ -41,6 +41,7 @@ from firebase_admin import firestore
 
 import digest as dg
 import spend
+import stages
 
 # Lookups, drafts and short research: the mid-priced model does them well,
 # and a card run is the one Claude feature that runs without anyone asking.
@@ -247,7 +248,8 @@ class Records:
                             "model": g.get("model"), "year": g.get("year"), "serial": g.get("serial"),
                             "hours": g.get("hours"), "miles": g.get("miles"), "dueDate": g.get("dueDate"),
                             "dueHours": g.get("dueHours"),
-                            "openProblems": [i.get("what") for i in (g.get("issues") or []) if not i.get("doneAt")],
+                            "openProblems": [i.get("what") for i in (g.get("issues") or [])
+                                             if stages.issue_status(i) != "fixed"],
                             "recentServices": [{"at": e.get("at"), "what": e.get("what")} for e in last]})
         return out[:8]
 

@@ -859,7 +859,7 @@
     // A storm that has finished, or a job that has gone, is not somewhere to
     // go back to: the picker instead.
     const stormGone = b.kind === 'storm' && !(window.YDStorm && YDStorm.current() &&
-      YDStorm.current().id === b.targetId && YDStorm.current().status === 'open');
+      YDStorm.current().id === b.targetId && window.YDStages.stormOpen(YDStorm.current()));
     if (stormGone || (b.kind === 'job' && !board[b.targetId])) { window.openJobPicker(); return; }
     const was = fmtDur(Date.now() - endMsOf(b));
     clockInAgain(b);
@@ -1201,7 +1201,7 @@
         // otherwise this would clock someone into last week's storm.
         if (e.kind === 'storm') {
           const s = window.YDStorm && YDStorm.current();
-          if (!s || s.id !== e.targetId || s.status !== 'open') return;
+          if (!s || s.id !== e.targetId || !window.YDStages.stormOpen(s)) return;
         }
         seen[key] = 1; out.push(e);
       });
@@ -1280,7 +1280,7 @@
   // (eqc...) already has the problem id it will get (equipment.js).
   function openProblems(id) {
     const g = window.YDEquipment && ydCan('equipment', 'see') ? (YDEquipment.all() || {})[id] : null;
-    if (g) return (g.issues || []).filter(i => i && !i.doneAt)
+    if (g) return (g.issues || []).filter(i => i && window.YDStages.issueId(i) !== 'fixed')
       .map(i => ({ id: String(i.id), what: String(i.what || 'Problem') }));
     const B = window.YDBoards;
     if (!B || !B.cards || !B.boards) return [];
@@ -1379,7 +1379,7 @@
   function pickerHtml() {
     if (repairPick) return repairHtml();
     const storm = window.YDStorm && YDStorm.current();
-    const stormOpen = storm && storm.status === 'open';
+    const stormOpen = window.YDStages.stormOpen(storm);
 
     // Snow points at the open storm when there is one, so its pauses land on
     // the right customer's invoice. With no storm running it is still snow
@@ -1621,7 +1621,7 @@
     const waiting = Object.values(entries).filter(awaitingOwner)
       .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)));
     const asked = requestsHtml();
-    const nAsked = isOwner() ? Object.values(requests).filter(r => r.status === 'pending' && ASKABLE.indexOf(r.type) !== -1).length : 0;
+    const nAsked = isOwner() ? Object.values(requests).filter(r => isWaiting(r) && ASKABLE.indexOf(r.type) !== -1).length : 0;
     const badge = el('approveBadge');
     if (badge) badge.textContent = waiting.length + nAsked ? (waiting.length + nAsked) + ' waiting' : '';
     const sec = el('clockApproveSection');
@@ -2631,9 +2631,23 @@
   // applies it to the shift, hours and pay worked out again. The requests
   // are kept, not deleted (changeRequests in firestore.rules: crew file and
   // withdraw their own, only the owner decides).
+  //
+  // Each has ONE status (stages.js YDStages.request, Jonah 15 Oct 2026):
+  // Waiting -> Approved or Turned down, or Withdrawn by whoever asked --
+  // stored 'pending' / 'approved' / 'rejected' / 'withdrawn' as before (the
+  // rules check those words), and from now on with who moved it and when
+  // (statusChange) beside it. The crew see that on their own list.
   let requests = {};          // id -> request (the owner's queue, or a crew member's own)
   let asking = null;          // the shift a change is being asked for, on My hours
-  const pendingFor = id => Object.values(requests).find(r => r.targetId === id && r.status === 'pending');
+  function isWaiting(r) { return window.YDStages.waiting(r); }
+  // What a decision writes: the status, who and when (decidedBy/decidedAt as
+  // before, which older phones read), and the stamp.
+  function decided(status, extra) {
+    const by = (me() || {}).uid || '', at = nowIso();
+    return Object.assign({ status: status, decidedBy: by, decidedAt: at,
+      statusChange: Object.assign(window.YDStages.stamp(status), { at: at }) }, extra || {});
+  }
+  const pendingFor = id => Object.values(requests).find(r => r.targetId === id && isWaiting(r));
 
   function writeRequest(id, data, what) {
     Promise.resolve(window.YDDb.put('changeRequests', id, data)).catch(err => {
@@ -2698,15 +2712,22 @@
     const mineR = Object.values(requests).filter(r => r.requestedBy === uid && r.type === 'timeEntry')
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))).slice(0, 8);
     if (!mineR.length) return '';
-    return '<div class="wk-head">Changes you asked for</div>' + mineR.map(r => '<div class="wk-req ' + esc(r.status) + '">' +
-      new Date((r.before || {}).startedAt || r.createdAt).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) + ': ' +
-      clockTime((r.before || {}).startedAt) + '–' + clockTime((r.before || {}).endedAt) + ' → ' +
-      clockTime((r.after || {}).startedAt) + '–' + clockTime((r.after || {}).endedAt) + ' · <b>' +
-      ({ pending: 'waiting', approved: 'changed', rejected: 'turned down', withdrawn: 'withdrawn' }[r.status] || esc(r.status)) + '</b>' +
-      (r.status === 'rejected' && r.decidedReason ? ' — ' + esc(r.decidedReason) : '') +
-      (r.status === 'pending' ? ' <button class="link-btn" onclick="withdrawRequest(\'' + safeId(r.id) + '\')">withdraw</button>' : '') +
-    '</div>').join('');
+    return '<div class="wk-head">Changes you asked for</div>' + mineR.map(r => {
+      // Its one status, with when and who: "✓ Approved 10/14 · Jonah".
+      const st = window.YDStages.request(r);
+      return '<div class="wk-req ' + esc(st.id) + '">' +
+        new Date((r.before || {}).startedAt || r.createdAt).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' }) + ': ' +
+        clockTime((r.before || {}).startedAt) + '–' + clockTime((r.before || {}).endedAt) + ' → ' +
+        clockTime((r.after || {}).startedAt) + '–' + clockTime((r.after || {}).endedAt) + ' ' +
+        window.YDStages.chip(st, { nameOf: uid => uid === (me() || {}).uid ? 'you' : whoIsKnown(uid) }) +
+        (st.id === 'waiting' ? ' <button class="link-btn" onclick="withdrawRequest(\'' + safeId(r.id) + '\')">withdraw</button>' : '') +
+        (st.why ? '<div class="rq-why">Why not: ' + esc(st.why) + '</div>' : '') +
+      '</div>';
+    }).join('');
   }
+  // A name the clock knows, or '' (a crew phone knows few: the office's
+  // decision then says only when, unless it carries the name itself).
+  function whoIsKnown(uid) { const p = people[uid]; return (p && (p.name || p.email)) || ''; }
   // The form opens above "Every shift", which on a phone is well up the
   // page from the shift tapped: brought to the middle of the screen.
   window.askChange = function (id) {
@@ -2739,9 +2760,11 @@
   };
   window.withdrawRequest = function (id) {
     const r = requests[id];
-    if (!r || r.status !== 'pending') return;
-    r.status = 'withdrawn';
-    writeRequest(id, { status: 'withdrawn' }, 'withdrawing a request');
+    if (!r || !isWaiting(r)) return;
+    // Who withdrew it and when -- which it never said before.
+    const patch = { status: 'withdrawn', statusChange: window.YDStages.stamp('withdrawn') };
+    Object.assign(r, patch);
+    writeRequest(id, patch, 'withdrawing a request');
     renderWorker();
   };
 
@@ -2771,7 +2794,7 @@
   }
   function requestsHtml() {
     if (!isOwner()) return '';
-    const list = Object.values(requests).filter(r => r.status === 'pending' && ASKABLE.indexOf(r.type) !== -1)
+    const list = Object.values(requests).filter(r => isWaiting(r) && ASKABLE.indexOf(r.type) !== -1)
       .sort((a, b) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
     return list.map(r => {
       if (r.type === 'stopFigures') return stopRequestHtml(r);
@@ -2790,7 +2813,7 @@
   }
   window.approveRequest = function (id) {
     const r = requests[id];
-    if (!r || r.status !== 'pending' || !isOwner()) return;
+    if (!r || !isWaiting(r) || !isOwner()) return;
     if (r.type === 'stopFigures') { approveStopRequest(r); return; }
     const e = entries[r.targetId] || older[r.targetId];
     if (e || !windowed) { applyRequest(r, e); return; }
@@ -2805,7 +2828,7 @@
   };
   function applyRequest(r, e) {
     const id = r.id;
-    if (r.status !== 'pending') return;      // decided meanwhile
+    if (!isWaiting(r)) return;      // decided meanwhile
     if (!e) { showToast('That shift is no longer there'); return; }
     // The rules let a crew member file a request naming any shift, so the
     // shift must be the asker's own -- and still the one they looked at: a
@@ -2836,8 +2859,9 @@
     // From before the clock's cutoff, then or now: the summary of old jobs'
     // labour no longer adds up (marked after the shift's own write).
     if (wasOld || isOld(e)) markStale();
-    r.status = 'approved';
-    writeRequest(id, { status: 'approved', decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'approving a change');
+    const done = decided('approved');
+    Object.assign(r, done);
+    writeRequest(id, done, 'approving a change');
     render();
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
     showToast('Changed — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
@@ -2858,8 +2882,9 @@
     YDBilling.fixVisit(r.stormId, r.targetId, figure(a.inchesCleared), 'saltLbs' in a ? figure(a.saltLbs) : undefined, (me() || {}).uid || '',
                        { accountId: r.accountId || null, before: r.before || {} })
       .then(res => {
-        r.status = 'approved';
-        writeRequest(r.id, { status: 'approved', decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'approving a change');
+        const done = decided('approved');
+        Object.assign(r, done);
+        writeRequest(r.id, done, 'approving a change');
         render();
         showToast('Changed — ' + YDBilling.fixedWords(res), res.inQuickBooks || res.numbered ? 9000 : 3000);
       })
@@ -2867,13 +2892,14 @@
       .then(() => deciding.delete(r.id));
   }
   window.rejectRequest = async function (id) {
-    if (!requests[id] || requests[id].status !== 'pending' || !isOwner()) return;
+    if (!requests[id] || !isWaiting(requests[id]) || !isOwner()) return;
     const why = await ydPrompt('They see this.', '', { title: 'Why not?', ok: 'Turn it down', multiline: true });
     if (why === null) return;
     const r = requests[id];
-    if (!r || r.status !== 'pending') return;
-    r.status = 'rejected';
-    writeRequest(id, { status: 'rejected', decidedReason: why.trim().slice(0, 300), decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'turning down a change');
+    if (!r || !isWaiting(r)) return;
+    const done = decided('rejected', { decidedReason: why.trim().slice(0, 300) });
+    Object.assign(r, done);
+    writeRequest(id, done, 'turning down a change');
     render();
   };
 
@@ -3677,7 +3703,7 @@
     // own -- nobody settles their own pay) and changes the crew asked for.
     toDecide: () => ({
       shifts: Object.values(entries).filter(e => awaitingOwner(e) && mayDecide(e)).length,
-      asks: isOwner() ? Object.values(requests).filter(r => r.status === 'pending' && ASKABLE.indexOf(r.type) !== -1).length : 0,
+      asks: isOwner() ? Object.values(requests).filter(r => isWaiting(r) && ASKABLE.indexOf(r.type) !== -1).length : 0,
     }),
   };
 

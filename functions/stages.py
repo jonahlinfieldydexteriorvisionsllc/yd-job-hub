@@ -1,5 +1,6 @@
 """A job's ONE stage, as the app works it out (app.js jobStage) -- change both
-together.
+together. Below it, the same for receipts, equipment problems, crew change
+requests and storms (stages.js).
 
 Jonah, 15 Oct 2026: "One status per record, moving forward through fixed
 stages, instead of piles of yes/no boxes." A job used to say where it was in
@@ -88,3 +89,60 @@ def board_column(j):
     """A finished job's Jobs board column (toInvoice / invoiced / paid), or
     None for a job that is not finished."""
     return COLUMN_OF.get(stage_of(j))
+
+
+# ---------------------------------------------------------------------------
+# The other records' one status -- receipts, equipment problems, crew change
+# requests, storms. The app works each out the same way (stages.js) -- change
+# both together. Old records are read as they are; nothing is rewritten.
+#
+#   receipt:  tosort -> filed  (or aside, with the reason)
+#   problem:  open -> ordered -> atshop -> fixed  (and back to open)
+#   request:  waiting -> approved | turneddown  (or withdrawn)
+#   storm:    open -> closed | abandoned
+# ---------------------------------------------------------------------------
+
+# A receipt's stored status is 'new' / 'done' / 'skipped'. Two old set-aside
+# reasons were really places (before 9 and 13 Oct): read as filed.
+RECEIPT_LEGACY_PLACE = {"overhead": "shop", "subcontractor": "sub"}
+
+
+def receipt_status(r):
+    """'tosort' | 'filed' | 'aside'. 'new' (or no status at all) is still to
+    sort, even with some lines already filed; 'done' is filed; 'skipped' is
+    set aside -- unless its reason was one of the old places."""
+    r = r or {}
+    s = r.get("status")
+    if s == "done":
+        return "filed"
+    if s == "skipped":
+        return "filed" if r.get("skipWhy") in RECEIPT_LEGACY_PLACE else "aside"
+    return "tosort"
+
+
+def issue_status(i):
+    """A problem on a machine: 'open' | 'ordered' | 'atshop' | 'fixed'.
+    doneAt (fixed) and partAtShop (the part at the shop) win over `status`:
+    every device, old code or new, keeps those two in step; `status` adds
+    only what had no field of its own -- the part ordered."""
+    i = i or {}
+    if i.get("doneAt"):
+        return "fixed"
+    if i.get("partAtShop"):
+        return "atshop"
+    return "ordered" if i.get("status") == "ordered" else "open"
+
+
+def request_status(r):
+    """A crew change request: 'waiting' | 'approved' | 'turneddown' |
+    'withdrawn' (stored 'pending' / 'approved' / 'rejected' / 'withdrawn')."""
+    s = (r or {}).get("status")
+    return {"approved": "approved", "rejected": "turneddown", "withdrawn": "withdrawn"}.get(s, "waiting")
+
+
+def storm_status(s):
+    """'open' | 'closed' | 'abandoned'. Only a storm whose stored status is
+    'open' is open -- the crew can work no other (firestore.rules); anything
+    unknown is neither worked nor billed, so it reads as abandoned."""
+    st = (s or {}).get("status")
+    return st if st in ("open", "closed") else "abandoned"

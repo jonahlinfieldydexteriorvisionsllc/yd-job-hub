@@ -74,8 +74,10 @@
   // (functions/reminders.py _urgent_cards).
   const CARD_URGENCY = { down: 'urgent', before: 'high', soon: 'normal', whenever: 'low' };
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
-  // On the Maintenance board, a problem whose part has arrived says so.
+  // On the Maintenance board, a problem whose part has arrived says so --
+  // and one whose part is on its way.
   const PART_LABEL = { id: 'part-at-shop', name: 'Part at shop', color: '#2f8f5b' };
+  const ORDERED_LABEL = { id: 'part-ordered', name: 'Part ordered', color: '#56647a' };
   // A machine's service card someone moved to Done with no service logged
   // behind it (crew cannot log one; a form closed unsaved).
   const LOG_LABEL = { id: 'log-it', name: 'Log the service', color: '#3b7dd8' };
@@ -83,7 +85,17 @@
   // Problems are kept on the machine's record beside its service history, for
   // the same reason: a machine has a handful, and one document means one read
   // and a history that cannot half-load.
-  const openIssues = g => (g.issues || []).filter(i => !i.doneAt)
+  //
+  // Each has ONE status (Jonah, 15 Oct 2026: one status per record, not a
+  // pile of yes/no boxes): Open -> Part ordered -> Part at the shop -> Fixed,
+  // and back to Open when it was not fixed after all. stages.js says which
+  // (YDStages.issue) and what a move writes (issuePatch): `status` beside
+  // the old doneAt / partAtShop, kept in step for the board sync, the server
+  // and any phone still on the old code.
+  const stageOf = i => window.YDStages.issueId(i);
+  const isFixed = i => stageOf(i) === 'fixed';
+  const meWho = () => ({ uid: ((window.YDAuth && window.YDAuth.user) || {}).uid || '', name: whoAmI() });
+  const openIssues = g => (g.issues || []).filter(i => !isFixed(i))
     .sort((a, b) => rankOf(a.urgency) - rankOf(b.urgency) || String(a.at).localeCompare(String(b.at)));
   const worstIssue = g => openIssues(g)[0] || null;
 
@@ -355,6 +367,7 @@
     const now = new Date().toISOString();
     if (g && ydCan('equipment', 'change')) {
       const issue = { id: 'is' + Date.now().toString(36), what: what, urgency: u.id, note: note, partAtShop: false,
+                      status: 'open', statusChange: window.YDStages.stamp('open', meWho()),
                       at: now, by: whoAmI(), doneAt: null };
       g.issues = (g.issues || []).concat([issue]);
       write(g.id, { issues: g.issues }, 'noting a problem');
@@ -515,9 +528,11 @@
     const open = openIssues(g);
     if (!open.length) return '';
     const u = urgencyOf(open[0].urgency);
+    // Its status, once it is past Open: the part on order, or at the shop.
+    const st = window.YDStages.issue(open[0]);
     return '<div class="eq-issue" style="--c:' + u.color + '">' +
       '<span class="eq-urg u-' + esc(u.id) + '">' + esc(u.label) + '</span> ' + esc(open[0].what) +
-      (open[0].partAtShop ? ' <span class="eq-part-chip">part at shop</span>' : '') +
+      (st.id !== 'open' ? ' ' + window.YDStages.chip(st, { when: false }) : '') +
       (open.length > 1 ? ' <span class="eq-more">+' + (open.length - 1) + ' more</span>' : '') +
     '</div>';
   }
@@ -690,10 +705,25 @@
   // is whatever someone noticed -- a cracked hose, a tyre going soft, a blade
   // to sharpen. Each one also becomes a card on the Maintenance board.
 
+  // A problem's status as a row of tap buttons (wrapping on a phone): Open,
+  // Part ordered (so nobody orders it twice), Part at the shop (so the job
+  // can be booked in), Fixed -- which opens the service log, so the repair
+  // goes into the history (fixIssue). `onclick` gives each button's handler:
+  // an open problem's (issueStage), or the new-problem form's (isStagePick),
+  // which has no Fixed and calls Open "No part on order".
+  function stageStepsHtml(cur, onclick, withFixed) {
+    return '<div class="stage-steps eq-stage-steps">' + window.YDStages.ISSUE_STAGES
+      .filter(s => withFixed || s.id !== 'fixed')
+      .map(s => '<button type="button" class="stage-step' + (s.id === cur ? ' on' : '') + '" data-st="' + s.id + '"' +
+        (s.id === cur ? ' aria-current="step"' : '') + ' onclick="' + onclick(s.id) + '">' +
+        esc(s.id === 'open' && !withFixed ? 'No part on order' : s.name) + '</button>').join('') + '</div>';
+  }
+
   function issuesHtml(g) {
     const open = openIssues(g);
-    const fixed = (g.issues || []).filter(i => i.doneAt)
+    const fixed = (g.issues || []).filter(isFixed)
       .sort((a, b) => String(b.doneAt).localeCompare(String(a.doneAt))).slice(0, 5);
+    const S = window.YDStages;
     return '<div class="eq-loghead">Needs doing' +
         (notingIssue ? '' : '<button class="btn btn-sm btn-accent" onclick="noteIssue()">+ Note a part or service</button>') +
       '</div>' +
@@ -701,27 +731,27 @@
       (open.length
         ? '<div class="eq-issues">' + open.map(i => {
             const u = urgencyOf(i.urgency);
+            const st = S.issue(i);
+            const iid = safeId(i.id);
             return '<div class="eq-issue-row" style="--c:' + u.color + '">' +
               '<div class="eq-issue-main">' +
                 '<span class="eq-urg u-' + esc(u.id) + '">' + esc(u.label) + '</span>' +
                 '<div class="eq-issue-what">' + esc(i.what) + '</div>' +
                 (i.note ? '<div class="eq-issue-note">' + esc(i.note) + '</div>' : '') +
                 '<div class="eq-issue-meta">Noted ' + shortDate(i.at) + (i.by ? ' by ' + esc(i.by) : '') + '</div>' +
-                // Ticked when the part turns up, so nobody orders it twice
-                // and the job can be booked in.
-                '<label class="chk eq-part"><input type="checkbox"' + (i.partAtShop ? ' checked' : '') +
-                  ' onchange="togglePart(\'' + safeId(i.id) + '\', this.checked)"> Part at shop</label>' +
+                // Where it stands, once it is past Open: since when, and who said.
+                (st.id !== 'open' ? '<div class="eq-stage-line">' + S.chip(st) + '</div>' : '') +
+                stageStepsHtml(st.id, id => "issueStage('" + iid + "','" + id + "')", true) +
               '</div>' +
               '<div class="eq-issue-act">' +
-                '<button class="btn btn-sm btn-filled" onclick="fixIssue(\'' + i.id + '\')">Fixed</button>' +
-                '<button class="remove-btn" onclick="removeIssue(\'' + i.id + '\')" title="Delete">&times;</button>' +
+                '<button class="remove-btn" onclick="removeIssue(\'' + iid + '\')" title="Delete">&times;</button>' +
               '</div>' +
             '</div>';
           }).join('') + '</div>'
         : (notingIssue ? '' : '<p class="empty-msg">Nothing noted. If something is wrong with it, note it here so it does not get forgotten.</p>')) +
       (fixed.length
         ? '<div class="eq-fixed">Fixed recently: ' + fixed.map(i =>
-            esc(i.what) + ' <span class="muted">(' + shortDate(i.doneAt) + ')</span>' +
+            esc(i.what) + ' ' + S.chip(S.issue(i)) +
             ' <button class="link-btn" onclick="reopenIssue(\'' + safeId(i.id) + '\')" title="It was not actually fixed">Not fixed</button>').join(' · ') + '</div>'
         : '');
   }
@@ -737,7 +767,8 @@
       '</div></div>' +
       '<div class="field"><span class="label">Notes (optional)</span>' +
         '<input id="isNote" placeholder="part number, where to get it, who noticed"></div>' +
-      '<label class="chk"><input type="checkbox" id="isPart"> Part is already at the shop</label>' +
+      '<div class="field" id="isStage"><span class="label">The part</span>' +
+        stageStepsHtml('open', id => "isStagePick(this)", false) + '</div>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveIssue()">Save</button>' +
         '<button class="btn btn-sm" onclick="cancelIssue()">Cancel</button>' +
@@ -763,12 +794,17 @@
     const what = val('isWhat');
     if (!what) { showToast('Say what needs doing'); return; }
     const pick = document.querySelector('input[name="isUrg"]:checked');
+    // Where it starts: nothing on order yet, the part ordered, or already here.
+    const on = document.querySelector('#isStage .stage-step.on');
+    const stage = on && ['ordered', 'atshop'].indexOf(on.dataset.st) !== -1 ? on.dataset.st : 'open';
     const issue = {
       id: 'is' + Date.now().toString(36),
       what: what,
       urgency: pick ? pick.value : 'soon',
       note: val('isNote'),
-      partAtShop: !!(el('isPart') && el('isPart').checked),
+      partAtShop: stage === 'atshop',
+      status: stage,
+      statusChange: window.YDStages.stamp(stage, meWho()),
       at: new Date().toISOString(),
       by: whoAmI(),
       doneAt: null,
@@ -779,15 +815,25 @@
     write(g.id, { issues: g.issues }, 'noting a problem');
     showToast(urgencyOf(issue.urgency).label + ' — ' + what);
   };
+  // The new-problem form's part buttons: one lit at a time.
+  window.isStagePick = function (btn) {
+    if (!btn || !btn.parentNode) return;
+    btn.parentNode.querySelectorAll('.stage-step').forEach(b => {
+      b.classList.toggle('on', b === btn);
+      if (b === btn) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+    });
+  };
 
-  function setIssueDone(g, issueId, done) {
+  // One problem moved to another status: `status` and the old fields together
+  // (stages.js issuePatch). Reopening stamps reopenedAt, so a card left in
+  // Done from before is not read as a fresh "fixed" (syncMaintenance).
+  function setIssueStage(g, issueId, to) {
     g.issues = (g.issues || []).map(i => i.id === issueId
-      ? Object.assign({}, i, { doneAt: done ? new Date().toISOString() : null, doneBy: done ? whoAmI() : null },
-          // When it was reopened, so a card left in Done from before is not
-          // read as a fresh "fixed" (syncMaintenance).
-          done ? {} : { reopenedAt: new Date().toISOString() }) : i);
-    write(g.id, { issues: g.issues }, done ? 'marking a problem fixed' : 'reopening a problem');
+      ? Object.assign({}, i, window.YDStages.issuePatch(i, to, meWho())) : i);
+    write(g.id, { issues: g.issues }, to === 'fixed' ? 'marking a problem fixed' : 'moving a problem to ' + to);
   }
+  // Fixed, or back to Open -- the board sync's two moves.
+  function setIssueDone(g, issueId, done) { setIssueStage(g, issueId, done ? 'fixed' : 'open'); }
 
   // Ticked "Fixed" by mistake: back on the list, and its Maintenance card
   // back out of Done.
@@ -799,13 +845,19 @@
     showToast('Back on the list');
   };
 
-  window.togglePart = function (issueId, on) {
+  // A status button on an open problem. Fixed goes through the service log
+  // (fixIssue); the rest are one tap -- and the old "Part at shop" tick is
+  // the "Part at the shop" button now.
+  window.issueStage = function (issueId, to) {
     const g = gear[openId];
-    if (!g) return;
-    g.issues = (g.issues || []).map(i => i.id === issueId ? Object.assign({}, i, { partAtShop: !!on }) : i);
+    const i = g && (g.issues || []).find(x => x.id === issueId);
+    if (!i || ['open', 'ordered', 'atshop', 'fixed'].indexOf(to) === -1) return;
+    if (!ydCan('equipment', 'change')) { showToast('You can look at the machines but not change them'); return; }
+    if (to === 'fixed') { window.fixIssue(issueId); return; }
+    if (stageOf(i) === to) return;
+    setIssueStage(g, issueId, to);
     renderDetail(); renderEquipment();
-    write(g.id, { issues: g.issues }, on ? 'marking a part at the shop' : 'unmarking a part at the shop');
-    showToast(on ? 'Part at the shop' : 'Part not at the shop');
+    showToast({ open: 'Open — no part on order', ordered: 'Part ordered', atshop: 'Part at the shop' }[to]);
   };
 
   // "Fixed" used to tick the problem off and keep nothing of the repair. It
@@ -1054,8 +1106,11 @@
     if (fixed) {
       // Fixed on the day the repair was done, which may be before today.
       const doneAt = entry.at === localDay() ? new Date().toISOString() : entry.at + 'T12:00:00';
+      // Its status goes to Fixed with it (stages.js), said to be by whoever
+      // did the repair.
       patch.issues = (g.issues || []).map(i => i.id === fixed.id
-        ? Object.assign({}, i, { doneAt: doneAt, doneBy: entry.by || whoAmI(), serviceId: entry.id }) : i);
+        ? Object.assign({}, i, window.YDStages.issuePatch(i, 'fixed', { uid: meWho().uid, name: entry.by || whoAmI() }, doneAt),
+            { doneAt: doneAt, doneBy: entry.by || whoAmI(), serviceId: entry.id }) : i);
     }
 
     // A reading taken during a service is the machine's current reading, and
@@ -1463,6 +1518,7 @@
     const missing = URGENCY.filter(u => !labelIds.has('u-' + u.id))
       .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }))
       .concat(labelIds.has(PART_LABEL.id) ? [] : [PART_LABEL])
+      .concat(labelIds.has(ORDERED_LABEL.id) ? [] : [ORDERED_LABEL])
       .concat(labelIds.has(LOG_LABEL.id) ? [] : [LOG_LABEL]);
     let recoloured = false;
     const labels = (board.labels || []).map(l => {
@@ -1528,7 +1584,7 @@
           const done = k.column === lastCol;
           g.issues = (g.issues || []).concat([{
             id: issueId, what: k.what || String(k.title || '').replace(/^.*? — /, '') || 'See the card',
-            urgency: k.eqUrgency || 'soon', note: k.eqNote || '', partAtShop: false,
+            urgency: k.eqUrgency || 'soon', note: k.eqNote || '', partAtShop: false, status: done ? 'fixed' : 'open',
             at: k.createdAt || nowIso, by: k.createdBy || '', doneAt: done ? (k.doneAt || nowIso) : null,
             boardColumn: k.column || first,
           }]);
@@ -1574,13 +1630,16 @@
         // not made again.
         if (!k && i.doneAt) return;
         const u = urgencyOf(i.urgency);
+        // The part, as the card says it: at the shop (as it always said),
+        // or on order (status 'ordered', stages.js).
+        const ordered = !i.partAtShop && stageOf(i) === 'ordered';
         const want = {
           title: (g.name || 'Machine') + ' — ' + i.what,
           due: null,
-          notes: u.label + ' (' + u.hint + ').' + (i.partAtShop ? ' The part is at the shop.' : '') +
+          notes: u.label + ' (' + u.hint + ').' + (i.partAtShop ? ' The part is at the shop.' : ordered ? ' The part is on order.' : '') +
             (i.note ? '\n\n' + i.note : '') +
             '\n\nNoted ' + shortDate(i.at) + (i.by ? ' by ' + i.by : '') + '.',
-          labels: ['u-' + u.id].concat(i.partAtShop ? [PART_LABEL.id] : []),
+          labels: ['u-' + u.id].concat(i.partAtShop ? [PART_LABEL.id] : ordered ? [ORDERED_LABEL.id] : []),
           urgency: CARD_URGENCY[u.id] || 'normal',
           equipmentId: g.id, issueId: i.id, auto: true,
         };

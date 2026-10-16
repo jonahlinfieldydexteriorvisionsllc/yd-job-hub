@@ -279,12 +279,14 @@
 
     if (!off('auto:storms') && !onlyMine && !cardsOnly) {
       Object.values(storms).forEach(s => {
-        if (!s.startedAt || s.status === 'abandoned') return;
+        // Its one status (stages.js): an abandoned storm is not shown.
+        const st = window.YDStages.storm(s);
+        if (!s.startedAt || st.id === 'abandoned') return;
         const day = dayOf(new Date(s.startedAt));
         if (day < from || day > to) return;
         out.push({ day: day, layer: AUTO['auto:storms'], auto: 'storm', id: s.id,
           title: '❄️ ' + (s.label ? 'Storm — ' + s.label : 'Storm'),
-          time: fmtClock(s.startedAt), note: s.status === 'closed' ? 'Finished' : 'In progress' });
+          time: fmtClock(s.startedAt), note: st.name });
       });
     }
 

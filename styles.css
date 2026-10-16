@@ -2208,6 +2208,7 @@
   html[data-equipment-readonly] #eqModal .modal-body .btn,
   html[data-equipment-readonly] #eqModal .remove-btn,
   html[data-equipment-readonly] #eqModal .eq-part,
+  html[data-equipment-readonly] #eqModal .eq-stage-steps,
   html[data-contacts-readonly] #ppSection .add-area,
   html[data-contacts-readonly] #ppSection .remove-btn,
   html[data-contacts-readonly] #ppSection .pp-act .btn { display:none !important; }
@@ -4376,4 +4377,37 @@
     .svc-acts .btn { min-height:44px; flex:1 1 auto; }
     .svc-arrow { flex:0 0 52px !important; }
     .svc-tag-btn { min-height:40px; font-size:13px; }
+  }
+
+  /* ── One status per record (stages.js chip) ──
+     A receipt, a machine's problem, a crew change request, a storm: one chip
+     saying where it is, on the app's state scale -- red now, orange today,
+     yellow coming up, grey whenever / over, slate for information; done is
+     an outline and a check, waiting on someone else dashed. The date and who
+     ride inside it, quieter. Wraps rather than running off a phone. */
+  .stc { display:inline-flex; flex-wrap:wrap; align-items:center; gap:0 4px; max-width:100%; vertical-align:middle;
+    font-size:11.5px; font-weight:700; line-height:1.25; padding:2px 9px; border-radius:12px;
+    border:1.5px solid transparent; overflow-wrap:anywhere; }
+  .stc-now { background:var(--st-now-soft); color:var(--st-now); }
+  .stc-due { background:var(--st-due-soft); color:var(--st-due-ink); }
+  .stc-soon { background:var(--st-soon-soft); color:var(--st-soon); }
+  .stc-later { background:var(--st-later-soft); color:var(--st-later); }
+  .stc-info { background:var(--st-info-soft); color:var(--st-info); }
+  .stc-done { background:var(--st-done-soft); color:var(--st-done-ink); border-color:currentColor; }
+  .stc-wait { background:transparent; color:var(--st-info); border-color:currentColor; border-style:dashed; }
+  .stc-when { font-weight:500; opacity:.85; }
+  /* A machine's problem: where it stands, and a tap button per stage
+     (Open / Part ordered / Part at the shop / Fixed), wrapping on a phone. */
+  .eq-stage-line { margin-top:5px; }
+  .eq-stage-steps { margin-top:6px; }
+  .eq-stage-steps .stage-step { min-height:40px; font-size:12.5px; padding:5px 11px; }
+  .eq-fixed .stc { margin-left:4px; }
+  .rc-row .stc { flex:none; }
+  .storm-row-name .stc { margin-left:8px; }
+  .storm-gone { margin-top:12px; }
+  .storm-gone > summary { cursor:pointer; font-weight:600; font-size:14px; padding:10px 0; min-height:44px; }
+  .wk-req .stc { margin-left:4px; }
+  .rq-why { font-size:12.5px; color:var(--muted); margin-top:2px; }
+  @media (max-width:720px) {
+    .eq-stage-steps .stage-step { min-height:44px; flex:1 1 calc(50% - 6px); }
   }

@@ -40,7 +40,7 @@
   // is put away and the router is not asked.
   const stormOn = () => {
     const s = window.YDStorm && YDStorm.current();
-    return !!(s && s.status === 'open');
+    return window.YDStages.stormOpen(s);
   };
 
   function plan() {

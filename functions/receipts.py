@@ -49,6 +49,7 @@ from firebase_admin import firestore
 
 import digest as dg
 import spend
+import stages
 
 # Reading a receipt is copying what is printed: the mid-priced model does it
 # accurately at half the cost (Jonah, 7 Oct).
@@ -686,7 +687,7 @@ def _save(db, m, got, jobs):
         # notice must not wipe the prices the confirmation carried.
         says_more = (total and not have.get("totalCents")) or \
             (len(lines) > len(have.get("lines") or []) and fields["docType"] != "shipping_notice")
-        if not (have.get("splits") or []) and have.get("status") == "new" and says_more:
+        if not (have.get("splits") or []) and stages.receipt_status(have) == "tosort" and says_more:
             patch.update({k: v for k, v in fields.items() if k not in ("whose", "orderNo", "paid")})
             if m["threadId"]:
                 patch["link"] = gmail_link(m["threadId"])
@@ -1176,8 +1177,9 @@ def forward_email(db, rid, to, since_ms, again=False):
     if not r or have.get("ok") or r.get("photoPath") or r.get("source") == "photo":
         return None
     # Set aside (already entered, or not the business's after all) goes
-    # only when asked for that one receipt.
-    if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or r.get("status") == "skipped"):
+    # only when asked for that one receipt. Its one status (stages.py): an
+    # old one "set aside as overhead" is the shop's, filed, and goes.
+    if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or stages.receipt_status(r) == "aside"):
         return None
     m = _pick_mail(r, since_ms or 0)
     if not m:
@@ -1241,7 +1243,7 @@ def forward_emails(db, rids=(), days=None, st=None):
         for s in db.collection("receipts").where("createdAt", ">=", cutoff).stream():
             d = s.to_dict() or {}
             # Set aside (already entered, personal after all): not sent.
-            if d.get("status") != "skipped" and s.id not in want:
+            if stages.receipt_status(d) != "aside" and s.id not in want:
                 want.append(s.id)
     for s in db.collection("receipts").where("qbForward.ok", "==", False).stream():
         d = s.to_dict() or {}
@@ -1421,7 +1423,7 @@ def from_photo(client, body, uid, who):
         # itself, and one already sorted is left alone.
         sent_for.pop("problem", "")
         have = (db.collection("receipts").document(rid).get().to_dict() or {})
-        if have.get("status") == "new" and not have.get("splits") and not have.get("sentFor"):
+        if have and stages.receipt_status(have) == "tosort" and not have.get("splits") and not have.get("sentFor"):
             auto["why"] = "this photo matched a receipt already here — check where it goes"
             patch = {"sentFor": sent_for, "auto": auto}
             if sent_for["to"] == "job":
