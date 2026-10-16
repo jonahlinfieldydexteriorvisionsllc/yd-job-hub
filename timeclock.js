@@ -3658,6 +3658,26 @@
     return Object.assign({}, s, { byWorker: byWorker });
   }
 
+  // A job's shifts one by one, for its labour day by day (app.js
+  // openLabourDays): the ones forJob counts and the ones still waiting
+  // (`counted` false -- shown, never added in). Hours are worked out as
+  // sumJob works them, so a day adds up to what the job's total says. From
+  // before the cutoff they are here once the older shifts are read: the
+  // screen asks with olderFor(0) and is drawn again when they land.
+  function jobShifts(jobId) {
+    if (!jobId) return [];
+    return Object.values(known())
+      .filter(e => e.kind === 'job' && e.targetId === jobId && (counts(e) || awaitingOwner(e)) && startMsOf(e))
+      .map(e => ({
+        id: e.id, uid: e.uid, who: workerOf(e),
+        startMs: startMsOf(e), endMs: endMsOf(e),
+        day: YDHoursRange.dayStr(new Date(startMsOf(e))),
+        paid: counts(e) && e.paidHours != null ? e.paidHours : hours(paidMs(e)),
+        counted: counts(e), source: e.source || '', note: e.note || '',
+      }))
+      .sort((a, b) => a.startMs - b.startMs);
+  }
+
   function sumJob(jobId) {
     const out = { byWorker: {}, paidHours: 0, billableHours: 0, costCents: 0, pendingHours: 0 };
     let steady = true;
@@ -3774,6 +3794,7 @@
   window.YDClock = {
     stormDone: stormDone,
     forJob: forJob,
+    jobShifts: jobShifts,
     pausedMinutesAt: pausedMinutesAt,
     // Change requests: the owner's queue, or a crew member's own (storm.js
     // shows a crew member's storm-figure requests on the Snow tab).

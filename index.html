@@ -1104,6 +1104,18 @@
   </div>
 </div>
 
+<!-- A job's labour day by day: who was there each day, when, how long
+     (app.js openLabourDays, from Tracking → Labor Hours). -->
+<div class="modal-overlay" id="labDaysModal">
+  <div class="modal" style="max-width:720px">
+    <div class="modal-head">
+      <h2 id="labDaysTitle">Labor day by day</h2>
+      <button class="modal-close" onclick="closeLabourDays()">&times;</button>
+    </div>
+    <div class="modal-body" id="labDaysBody"></div>
+  </div>
+</div>
+
 <!-- An admin's access, area by area. Owner only; built by timeclock.js. -->
 <div class="modal-overlay" id="accessModal">
   <div class="modal" style="max-width:640px">

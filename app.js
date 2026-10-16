@@ -234,7 +234,22 @@ function entryHours(e) {
   if (e.hours !== undefined && e.hours !== null && e.hours !== '') {
     const h = parseFloat(e.hours); return isNaN(h) || h < 0 ? 0 : h;
   }
+  // Older jobs hold rows typed as a day with a start and an end ("08:15" to
+  // "11:30"). Those used to count as nothing at all, so a job typed in that
+  // way showed no labour and its whole price as profit.
+  const from = typedClock(e.start), to = typedClock(e.end);
+  if (from != null && to != null && to > from) return (to - from) / 60;
   return 0;
+}
+// A time as typed on a labour row -- "08:15", "8:15 pm" -- as minutes after
+// midnight; null when it is not a time.
+function typedClock(t) {
+  const m = /^\s*(\d{1,2}):(\d{2})\s*([ap])?\.?\s*m?\.?\s*$/i.exec(String(t == null ? '' : t));
+  if (!m) return null;
+  let h = +m[1];
+  const min = +m[2];
+  if (m[3]) { if (h === 12) h = 0; if (/p/i.test(m[3])) h += 12; }
+  return h < 24 && min < 60 ? h * 60 + min : null;
 }
 function fmtHrsMin(d) { if (!d || d <= 0) return '0h 0m'; const h = Math.floor(d); let m = Math.round((d-h)*60); if (m===60) return (h+1)+'h 0m'; return h+'h '+m+'m'; }
 // The minus goes in front of the dollar sign: an overpaid balance used to
@@ -2241,12 +2256,49 @@ function goToEva() {
 })();
 
 // How many distinct people worked this job, counting both the rows typed in
-// by hand and the crew who clocked into it.
+// by hand and the crew who clocked into it -- the people the labour table
+// lists, so "marco" typed in and Marco on the clock under his full name are one.
 function laborWorkerCount() {
-  const names = {};
-  labor.forEach(e => { if (e.worker) names[e.worker.trim().toLowerCase()] = 1; });
-  Object.keys(clockedLabor().byWorker).forEach(n => { names[n.trim().toLowerCase()] = 1; });
-  return Object.keys(names).length || labor.length;
+  return labourByPerson(currentJobId, labor).length || labor.length;
+}
+
+// Who worked on a job and for how long: approved clock time (forJob's sums,
+// the same as everywhere else) and the rows typed in by hand, one line a
+// person, with the days they were there. Jonah (16 Oct 2026): "an overall
+// labor hours count with a quantity for each person who worked on it".
+// A typed row names people as they were typed -- "marco", or "Marco, Sam,
+// Lee" for one row -- so a name that is the first name of exactly
+// one person on the clock is that person; a row for several people at once
+// cannot be split between them and stays a line of its own.
+function labourByPerson(jobId, rows) {
+  const clock = jobId && window.YDClock ? YDClock.forJob(jobId) : null;
+  const shifts = labourShifts(jobId);
+  const people = {};
+  const person = name => people[name] = people[name] ||
+    { name: name, hours: 0, billable: 0, typed: 0, days: new Set() };
+  const byWorker = (clock && clock.byWorker) || {};
+  Object.keys(byWorker).forEach(n => { const p = person(n); p.hours += byWorker[n].paid; p.billable += byWorker[n].billable; });
+  shifts.forEach(s => { if (s.counted) person(s.who).days.add(s.day); });
+  const onClock = Object.keys(people);
+  (rows || []).forEach(r => {
+    const h = entryHours(r), p = person(typedPerson(r.worker, onClock));
+    p.hours += h; p.billable += h; p.typed += h;
+    if (r.date && h > 0) p.days.add(r.date);
+  });
+  return Object.values(people).filter(p => p.hours > 0.004)
+    .sort((a, b) => b.hours - a.hours || a.name.localeCompare(b.name));
+}
+function labourShifts(jobId) {
+  return jobId && window.YDClock && YDClock.jobShifts ? YDClock.jobShifts(jobId) : [];
+}
+// The name a typed row is shown under: the one person on the clock whose
+// name, or first name, it is; otherwise as it was typed, capitalised.
+function typedPerson(typed, onClock) {
+  const t = String(typed || '').trim();
+  if (!t) return 'Not named';
+  const low = t.toLowerCase();
+  const same = (onClock || []).filter(n => n.toLowerCase() === low || n.trim().split(/\s+/)[0].toLowerCase() === low);
+  return same.length === 1 ? same[0] : t.charAt(0).toUpperCase() + t.slice(1);
 }
 
 // The old caption read "8.0 hrs x $25", which stops being true the moment any
@@ -2258,28 +2310,45 @@ function laborCostSub(totalHrs) {
   return totalHrs.toFixed(1) + ' hrs · ' + c.paidHours.toFixed(1) + ' from the clock';
 }
 
-// Hours the crew clocked into this job, shown above the hand-entered rows.
-// Pending shifts appear here too, marked, so they are not invisible while they
-// wait -- but they are not in any total that touches money.
-function clockedLaborHtml() {
+// The job's labour at the top of Labor Hours: the whole, then each person's
+// hours and days, the clock (Connecteam's shifts included) and the rows
+// typed in below together. A name, or Day by day, opens every day and every
+// shift behind the figures. Shifts still waiting for approval are said under
+// it but not counted -- they are not in any total that touches money.
+let labPeople = [];         // the people as last drawn; their buttons open labPeople[i]
+function labourSummaryHtml() {
   const c = clockedLabor();
-  const names = Object.keys(c.byWorker);
-  if (!names.length && !c.pendingHours) return '';
+  const list = labPeople = labourByPerson(currentJobId, labor);
+  if (!list.length && !c.pendingHours) return '';
 
   // Shifts from before last year are loaded on demand (timeclock.js): says
   // so while they are, or if they could not be read.
   const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
-  let h = '<div class="clocked-block"><div class="clocked-head">From the time clock</div>' + (older || '');
-  if (names.length) {
-    h += '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Paid</th><th>Billable</th></tr></thead><tbody>';
-    names.sort().forEach(n => {
-      const w = c.byWorker[n];
-      h += '<tr><td class="bold">' + esc(n) + '</td><td>' + fmtHrsMin(w.paid) +
-           '</td><td>' + fmtHrsMin(w.billable) + '</td></tr>';
+  let h = '<div class="clocked-block"><div class="clocked-head">Who worked on it</div>' + (older || '');
+  if (list.length) {
+    const days = new Set();
+    list.forEach(p => p.days.forEach(d => days.add(d)));
+    const total = list.reduce((s, p) => s + p.hours, 0);
+    const typed = list.reduce((s, p) => s + p.typed, 0);
+    // Billable is only worth a column when the clock paused somebody.
+    const paused = list.some(p => p.hours - p.billable > 0.01);
+    h += '<div class="lab-sum"><span class="lab-sum-total"><b>' + fmtHrsMin(total) + '</b> in all · ' +
+      list.length + (list.length === 1 ? ' person' : ' people') +
+      (days.size ? ' · ' + days.size + (days.size === 1 ? ' day' : ' days') : '') + '</span>' +
+      '<button type="button" class="btn btn-sm" onclick="openLabourDays()">📅 Day by day</button></div>';
+    h += '<div class="table-wrap"><table class="lab-people"><thead><tr><th>Person</th><th>Hours</th><th>Days</th>' +
+      (paused ? '<th>Billable</th>' : '') + '</tr></thead><tbody>';
+    list.forEach((p, i) => {
+      h += '<tr><td class="bold"><button type="button" class="linkish" onclick="openLabourDays(' + i + ')">' +
+        esc(p.name) + '</button></td><td>' + fmtHrsMin(p.hours) + '</td><td>' + (p.days.size || '—') + '</td>' +
+        (paused ? '<td>' + fmtHrsMin(p.billable) + '</td>' : '') + '</tr>';
     });
     h += '</tbody></table></div>';
-    h += '<div class="clocked-note">Billable leaves out paused time — fuel, salt, driving. ' +
-         'Paid is what the work cost you: ' + fmtMoney(c.costCents / 100) + '.</div>';
+    const bits = [];
+    if (c.paidHours) bits.push(fmtHrsMin(c.paidHours) + ' from the clock, wages ' + fmtMoney(c.costCents / 100));
+    if (typed > 0) bits.push(fmtHrsMin(typed) + ' typed in below');
+    if (paused) bits.push('billable leaves out paused time — fuel, salt, driving');
+    if (bits.length) h += '<div class="clocked-note">' + bits.join(' · ') + '.</div>';
   }
   if (c.pendingHours) {
     h += '<div class="clocked-pending">' + fmtHrsMin(c.pendingHours) +
@@ -2290,23 +2359,157 @@ function clockedLaborHtml() {
 
 function renderLabor() {
   const w = document.getElementById('laborTableWrap');
-  const clocked = clockedLaborHtml();
+  const summary = labourSummaryHtml();
   if (!labor.length) {
-    w.innerHTML = clocked +
-      '<p class="empty-msg">' + (clocked ? 'No hand-entered hours.' : 'No workers logged yet.') + '</p>';
+    w.innerHTML = summary +
+      '<p class="empty-msg">' + (summary ? 'No hours typed in by hand.' : 'No workers logged yet.') + '</p>';
   }
   else {
-    let h = '<div class="table-wrap"><table><thead><tr><th>Worker</th><th>Time</th><th></th></tr></thead><tbody>';
+    // The day, and the times, on rows that have them (older jobs' rows do).
+    const dated = labor.some(e => e.date || e.start);
+    let h = '<div class="lab-typed-head">Typed in by hand</div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Worker</th>' + (dated ? '<th>Day</th>' : '') +
+      '<th>Time</th><th></th></tr></thead><tbody>';
     labor.forEach(e => {
-      h += '<tr><td class="bold">' + esc(e.worker || '') + '</td><td>' + fmtHrsMin(entryHours(e)) + '</td>' +
+      h += '<tr><td class="bold">' + esc(e.worker || '') + '</td>' +
+        (dated ? '<td>' + esc(typedDayText(e)) + '</td>' : '') +
+        '<td>' + fmtHrsMin(entryHours(e)) + '</td>' +
         '<td><button class="remove-btn" onclick="rmLabor(\'' + e.id + '\')">×</button></td></tr>';
     });
     const totH = labor.reduce((s, e) => s + entryHours(e), 0);
-    h += '</tbody><tfoot><tr style="font-weight:700"><td style="text-align:right">Total:</td><td>' + fmtHrsMin(totH) + '</td><td></td></tr></tfoot></table></div>';
-    w.innerHTML = clocked + h;
+    h += '</tbody><tfoot><tr style="font-weight:700"><td style="text-align:right"' + (dated ? ' colspan="2"' : '') +
+      '>Total:</td><td>' + fmtHrsMin(totH) + '</td><td></td></tr></tfoot></table></div>';
+    w.innerHTML = summary + h;
   }
   updateBadges(); updateSummary();
+  renderLabourDays();
 }
+
+// "Wed, Mar 25 · 8:56 am – 11:00 am": a typed row's day and times, as much of
+// it as the row has.
+function typedDayText(e) {
+  const day = e.date ? labDayWords(e.date) : '';
+  const a = typedClock(e.start), b = typedClock(e.end);
+  const times = a != null && b != null ? labMinutesWords(a) + ' – ' + labMinutesWords(b) : '';
+  return [day, times].filter(Boolean).join(' · ');
+}
+// 'YYYY-MM-DD' as "Wed, Mar 25" (the year too when it is not this one).
+function labDayWords(ymd) {
+  const p = String(ymd || '').split('-').map(Number);
+  if (p.length !== 3 || !p[0]) return String(ymd || '');
+  const d = new Date(p[0], p[1] - 1, p[2]);
+  const o = { weekday: 'short', month: 'short', day: 'numeric' };
+  if (p[0] !== new Date().getFullYear()) o.year = 'numeric';
+  return d.toLocaleDateString('en-US', o);
+}
+function labMinutesWords(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  return (h % 12 || 12) + ':' + String(m).padStart(2, '0') + (h < 12 ? ' am' : ' pm');
+}
+function labClockWords(ms) {
+  const d = new Date(ms);
+  return labMinutesWords(d.getHours() * 60 + d.getMinutes());
+}
+
+// ── A job's labour day by day ──
+// Every day the job was worked, who was there, from when to when, and how
+// long. Jonah (16 Oct 2026): "click into a jobs labor hours and see the
+// exact break down per day per person". The clock's shifts and the typed
+// rows that carry a day; typed rows with no day close the list. Shifts still
+// waiting for approval are shown, marked, and not added in -- the same rule
+// as the job's totals, so the days add up to them.
+let labDaysWho = null;      // one person's name, or null for everyone
+function openLabourDays(i) {
+  labDaysWho = i != null && labPeople[i] ? labPeople[i].name : null;
+  const m = document.getElementById('labDaysModal');
+  if (!m) return;
+  m.classList.add('active');
+  renderLabourDays();
+}
+function closeLabourDays() {
+  const m = document.getElementById('labDaysModal');
+  if (m) m.classList.remove('active');
+}
+function labourDaysFor(i) {
+  labDaysWho = i != null && i >= 0 && labPeople[i] ? labPeople[i].name : null;
+  renderLabourDays();
+}
+function renderLabourDays() {
+  const m = document.getElementById('labDaysModal'), body = document.getElementById('labDaysBody');
+  if (!m || !body || !m.classList.contains('active')) return;
+  const people = labPeople = labourByPerson(currentJobId, labor);
+  if (labDaysWho && !people.some(p => p.name === labDaysWho)) labDaysWho = null;
+  const nameEl = document.getElementById('customerName');
+  const title = document.getElementById('labDaysTitle');
+  if (title) title.textContent = 'Labor day by day' + (nameEl && nameEl.value ? ' — ' + nameEl.value : '');
+
+  // Shifts from before the cutoff are read once, the first time they are
+  // looked for (timeclock.js); said while they come.
+  const state = window.YDClock && YDClock.olderFor ? YDClock.olderFor(0) : 'ready';
+  const shifts = labourShifts(currentJobId);
+  const onClock = [...new Set(people.map(p => p.name).concat(shifts.map(s => s.who)))];
+  const days = {}, undated = {};
+  const put = (day, who, item) => {
+    const d = days[day] = days[day] || {};
+    (d[who] = d[who] || []).push(item);
+  };
+  shifts.forEach(s => put(s.day, s.who, { at: s.startMs, times: labClockWords(s.startMs) + ' – ' + (s.endMs ? labClockWords(s.endMs) : 'now'),
+    hours: s.paid, counted: s.counted, note: s.note }));
+  labor.forEach(r => {
+    const who = typedPerson(r.worker, onClock), hours = entryHours(r);
+    if (!(hours > 0)) return;
+    const a = typedClock(r.start), b = typedClock(r.end);
+    if (r.date) put(r.date, who, { at: a != null ? a : 0, typed: true, hours: hours, counted: true, note: r.desc || '',
+      times: a != null && b != null ? labMinutesWords(a) + ' – ' + labMinutesWords(b) : '' });
+    else undated[who] = (undated[who] || 0) + hours;
+  });
+
+  const want = who => !labDaysWho || who === labDaysWho;
+  let h = '<div class="ld-pick">' +
+    '<button type="button" class="btn btn-sm' + (labDaysWho ? '' : ' btn-filled') + '" onclick="labourDaysFor(-1)">Everyone</button>' +
+    people.map((p, i) => '<button type="button" class="btn btn-sm' + (p.name === labDaysWho ? ' btn-filled' : '') +
+      '" onclick="labourDaysFor(' + i + ')">' + esc(p.name) + '</button>').join('') + '</div>';
+  if (window.YDClock && YDClock.olderNote) h += YDClock.olderNote(state);
+
+  let all = 0, dayCount = 0;
+  const sum = (list, counted) => list.reduce((s, x) => s + (x.counted === counted ? x.hours : 0), 0);
+  Object.keys(days).sort().forEach(day => {
+    const who = Object.keys(days[day]).filter(want).sort();
+    if (!who.length) return;
+    const dayTotal = who.reduce((s, w) => s + sum(days[day][w], true), 0);
+    const dayWait = who.reduce((s, w) => s + sum(days[day][w], false), 0);
+    all += dayTotal;
+    if (dayTotal > 0) dayCount++;
+    h += '<div class="ld-day"><div class="ld-day-head"><b>' + esc(labDayWords(day)) + '</b><span>' +
+      (dayTotal > 0 || !dayWait ? fmtHrsMin(dayTotal) : '') +
+      (dayWait ? (dayTotal > 0 ? ' + ' : '') + fmtHrsMin(dayWait) + ' waiting' : '') +
+      (labDaysWho ? '' : ' · ' + who.length + (who.length === 1 ? ' person' : ' people')) + '</span></div>';
+    who.forEach(w => {
+      const items = days[day][w].slice().sort((x, y) => x.at - y.at);
+      const done = sum(items, true), wait = sum(items, false);
+      const tags = (items.some(x => x.typed) ? '<span class="wl-tag">typed in</span>' : '') +
+        (wait ? '<span class="wl-tag wait">' + fmtHrsMin(wait) + ' waiting</span>' : '');
+      const notes = items.map(x => x.note).filter(Boolean);
+      h += '<div class="ld-row"><span class="ld-who">' + esc(w) + tags + '</span><span class="ld-hrs">' + (done > 0 ? fmtHrsMin(done) : '—') + '</span>' +
+        '<span class="ld-times">' + esc(items.map(x => x.times).filter(Boolean).join(' · ')) + '</span>' +
+        (notes.length ? '<span class="ld-note">' + esc(notes.join(' · ')) + '</span>' : '') + '</div>';
+    });
+    h += '</div>';
+  });
+  const loose = Object.keys(undated).filter(want).sort();
+  if (loose.length) {
+    const t = loose.reduce((s, w) => s + undated[w], 0);
+    all += t;
+    h += '<div class="ld-day"><div class="ld-day-head"><b>No day given</b><span>' + fmtHrsMin(t) + ' · typed in</span></div>' +
+      loose.map(w => '<div class="ld-row"><span class="ld-who">' + esc(w) + '</span><span class="ld-hrs">' + fmtHrsMin(undated[w]) + '</span></div>').join('') +
+      '</div>';
+  }
+  if (!dayCount && !loose.length) h += '<p class="empty-msg">No hours on this job yet.</p>';
+  else h += '<div class="ld-foot">' + (labDaysWho ? esc(labDaysWho) + ': ' : 'In all: ') + '<b>' + fmtHrsMin(all) + '</b>' +
+    (dayCount ? ' over ' + dayCount + (dayCount === 1 ? ' day' : ' days') : '') + '</div>';
+  body.innerHTML = h;
+}
+document.addEventListener('yd-clock-changed', renderLabourDays);
 function addLabor() {
   const worker = document.getElementById('labWorker').value.trim();
   const hours = document.getElementById('labHours').value;
