@@ -210,6 +210,12 @@
     const at = e => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
     canvas.onpointerdown = e => {
       e.preventDefault();
+      // Ink counts as typed (app.js guardWindows, backClosesWindows): a stray
+      // tap outside, or the phone's Back -- an iPad's swipe from the edge,
+      // right beside the box -- threw a customer's signature away without a
+      // word, where Esc asks first.
+      const win = canvas.closest('.modal-overlay');
+      if (win) win.dataset.typed = '1';
       canvas.setPointerCapture(e.pointerId);
       pad.down = true; pad.last = at(e);
       ctx.beginPath(); ctx.arc(pad.last.x, pad.last.y, 1.1, 0, Math.PI * 2); ctx.fillStyle = '#111'; ctx.fill();
