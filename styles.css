@@ -3826,7 +3826,7 @@
   .eq-urg-opt:has(input:checked) { outline:2px solid var(--c); }
   /* On the Equipment tab a card is added through its machine picker (+ Add a
      card above the board), not the columns' own plain add. */
-  #eqBody .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
+  #eqList .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
   .bd-done-pick { display:inline-flex; align-items:center; gap:4px; font-size:12.5px; white-space:nowrap; color:var(--muted); }
   .bd-done-none { display:flex; align-items:center; gap:6px; margin:6px 0 2px; font-size:13px; }
 
