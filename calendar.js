@@ -2556,7 +2556,7 @@
         write('calendars', c.id, { ownerOnly: false }, 'marking private or not');
       });
     }
-    if (meta && !meta.fromCache) shareCrewCal();
+    if (meta && !meta.fromCache) { shareCrewCal(); foldCalendars(); }
     redrawIfVisible();
     announce();
   }
@@ -2577,6 +2577,75 @@
     c.visibleTo = want;
     write('calendars', CREW_CAL, { visibleTo: want, updatedAt: nowIso() }, 'sharing Crew tasks');
   }
+  // Jonah (15 Oct 2026): three calendars, not five. Done once, by the
+  // owner's device, as soon as the calendars and the people have come from
+  // the server: the Work schedule becomes My work, Crew tasks the Crew
+  // schedule, Personal visible to admins (seeOnly -- they never change it);
+  // Site visits' entries move onto My work as quote appointments and
+  // Follow-ups' onto My work; anything on My work with a crew member on it
+  // moves to the Crew schedule ("anything i assign crew members to"), and
+  // anything marked personal to Personal. An entry is copied, read back from
+  // the server, and only then removed where it was -- so no signal, or a
+  // second device doing the same at the same moment, loses nothing (the
+  // copy keeps its id). The emptied calendars are marked mergedInto and
+  // never shown; nothing is deleted.
+  let folding = false, folded = false;
+  async function foldCalendars() {
+    if (folded || folding || !isOwner() || !peopleLoaded || !window.YDDb) return;
+    folding = true;
+    const raw = {};
+    for (const id of ['schedule', 'crewtasks', 'personal', 'visits', 'followups']) {
+      try { raw[id] = await window.YDDb.getFresh('calendars', id); } catch (e) { folding = false; return; }   // no signal: next time
+    }
+    const work = raw.schedule, crew = raw.crewtasks;
+    const toFold = ['visits', 'followups'].filter(id => raw[id] && !raw[id].mergedInto);
+    if (!work || !crew) { folding = false; return; }           // still being seeded
+    if (work.kind === 'work' && !toFold.length && crew.name !== 'Crew tasks' && (!raw.personal || raw.personal.seeOnly === true)) {
+      folded = true; folding = false; return;                   // done already: not asked again this visit
+    }
+    try {
+      const crewOn = e => (e.crew || []).some(c => c && people[c.uid] && YDRemind.isCrewMember(people[c.uid]));
+      const move = async (from, id, e, to, type) => {
+        const rec = Object.assign({}, e, { type: type || null, updatedAt: nowIso() });
+        delete rec.id;
+        if (to === from) { if ((e.type || null) !== (type || null)) await window.YDDb.put('calendars/' + from + '/events', id, { type: type || null, updatedAt: rec.updatedAt }); return; }
+        await window.YDDb.put('calendars/' + to + '/events', id, rec);
+        const back = await window.YDDb.getFresh('calendars/' + to + '/events', id);
+        if (back && back.title === e.title) await window.YDDb.remove('calendars/' + from + '/events', id);
+      };
+      const sources = (work.kind === 'work' ? [] : ['schedule']).concat(toFold);
+      for (const from of sources) {
+        const list = await window.YDDb.list('calendars/' + from + '/events');
+        for (const [id, e] of Object.entries(list)) {
+          let type = e.type || (from === 'visits' ? 'bid' : null), to = 'schedule';
+          if (type === 'personal' || type === 'doctor') { to = 'personal'; if (type === 'personal') type = null; }
+          else if (crewOn(e)) to = 'crewtasks';
+          await move(from, id, e, to, type);
+        }
+        if (from !== 'schedule') await window.YDDb.put('calendars', from, { mergedInto: 'schedule', updatedAt: nowIso() });
+      }
+      const seed = id => SEED.find(x => x.id === id);
+      if (work.kind !== 'work') {
+        const s = seed('schedule');
+        await window.YDDb.put('calendars', 'schedule', { name: s.name, kind: s.kind, color: s.color, order: s.order, about: s.about, updatedAt: nowIso() });
+      }
+      if (crew.name === 'Crew tasks') {
+        const s = seed('crewtasks');
+        await window.YDDb.put('calendars', 'crewtasks', { name: s.name, order: s.order, about: s.about, updatedAt: nowIso() });
+      }
+      if (raw.personal && raw.personal.seeOnly !== true) {
+        const s = seed('personal');
+        await window.YDDb.put('calendars', 'personal', { ownerOnly: false, seeOnly: true, editors: [], visibleTo: [], order: s.order, about: s.about, updatedAt: nowIso() });
+      }
+      folded = true;
+      showToast('Calendars folded into three: My work, the Crew schedule and Personal');
+    } catch (e) {
+      console.warn('[calendar] folding the calendars stopped — tried again next time:', e && (e.code || e.message));
+    } finally {
+      folding = false;
+    }
+  }
+
   // Whether every crew member can see this calendar already.
   function crewSees(cal) {
     if (!cal) return false;
@@ -2671,7 +2740,7 @@
     if (a.isOwner || a.isAdmin) {
       unsubPeople = window.YDDb.watch('users', (changes, meta) => {
         changes.forEach(c => { if (c.type === 'removed') delete people[c.id]; else people[c.id] = c.data; });
-        if (meta && !meta.fromCache) { peopleLoaded = true; shareCrewCal(); }
+        if (meta && !meta.fromCache) { peopleLoaded = true; shareCrewCal(); foldCalendars(); }
         redrawIfVisible();
         announce();
       }, () => {});
