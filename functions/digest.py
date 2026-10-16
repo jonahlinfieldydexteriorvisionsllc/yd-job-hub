@@ -722,7 +722,8 @@ def _task_lines(tasks, today, owner):
     import reminders        # not at the top: reminders imports this module
     out = []
     for t in tasks:
-        icon = reminders.TYPES.get(t["kind"]) or ""
+        # Its tag's icon as its calendar has it (a tag the owner made too).
+        icon = t.get("icon") or reminders.TYPES.get(t["kind"]) or ""
         who = ", ".join(n for n in t.get("on") or [] if n)
         text = (icon + " " if icon else "") + t["title"]
         if who:
@@ -1026,12 +1027,35 @@ def _shifts():
 
 # ---------------------------------------------------------------- building
 
+def _job_day(it):
+    """A day on a job -- who is working where: everything on the Job
+    schedule, or an entry picked as a job's day before it existed
+    (reminders._is_job_day, calendar.js isJobDay)."""
+    import reminders        # not at the top: reminders imports this module
+    ev, cal = it["ev"], it["cal"]
+    return reminders._is_job_day(reminders._type_of(ev, cal=cal), cal.get("kind"),
+                                 reminders._known_on(cal, ev.get("type")))
+
+
+def _tag_icon(it):
+    """The icon of an entry's tag, as its calendar has it ('' none)."""
+    import reminders        # not at the top: reminders imports this module
+    try:
+        if _job_day(it):
+            return reminders.TYPES["jobday"]
+        return (reminders._tag_of(reminders._type_of(it["ev"], cal=it["cal"]), it["cal"]) or {}).get("icon") or ""
+    except Exception:       # noqa: BLE001 -- a line without its icon beats no summary
+        return ""
+
+
 def _event_line(it, people, show_cal=True):
     ev = it["ev"]
     when = "All day" if (ev.get("allDay") or not ev.get("time")) else (
         _fmt_time(ev.get("time")) + (("–" + _fmt_time(ev.get("endTime"))) if ev.get("endTime") else ""))
     title = ev.get("title") or ev.get("jobName") or "Untitled"
-    bits = [title]
+    # Its tag's icon in front (16 Oct 2026: each calendar's own tags).
+    icon = _tag_icon(it)
+    bits = [(icon + " " if icon else "") + title]
     if ev.get("address"):
         bits.append(ev["address"])
     crew = [_name(people.get(c.get("uid"))) if people.get(c.get("uid")) else c.get("name", "")
@@ -1135,6 +1159,10 @@ def build(slot, user, people, wx, cache):
         if uid not in (it["cal"].get("visibleTo") or []):
             return False
         crew = it["ev"].get("crew") or []
+        # A day on the Job schedule: theirs when they are on it, or nobody is
+        # (the whole crew is there) -- calendar.js eventIsMine.
+        if it["cal"].get("kind") == "jobs":
+            return not crew or any(c.get("uid") == uid for c in crew)
         # A calendar shared with them only to look at (calendar.js lookOnly
         # -- Jonah's My work) is not their day: only what they are on.
         if it["cal"].get("lookOnly") is True and uid not in (it["cal"].get("editors") or []):
@@ -1144,12 +1172,23 @@ def build(slot, user, people, wx, cache):
     items = [it for it in cache["items"] if mine(it)]
     def day_items(d):
         return [it for it in items if it["day"] == d]
+    # Jonah (16 Oct 2026): "the job calendar will be solely for where the
+    # crew is working each day" -- a day's job days get a section of their
+    # own, above the rest of the day.
+    where_title = "Where the crew is working" if owner or sees("calendars") else "Where you’re working"
+
+    def job_section(title, lst):
+        if lst:
+            sections.append((title, [_event_line(it, people) for it in lst]))
 
     if slot == "morning":
         t = day_items(today)
-        if t or owner:
+        tj, tr = [it for it in t if _job_day(it)], [it for it in t if not _job_day(it)]
+        job_section(where_title + " today", tj)
+        if tr or owner:
             sections.append(("Today — " + _long_day(today),
-                             [_event_line(it, people) for it in t] or [{"text": "Nothing on the calendar."}]))
+                             [_event_line(it, people) for it in tr] or
+                             [{"text": "Nothing else on the calendar." if tj else "Nothing on the calendar."}]))
         if t:
             push_bits.append("%d on today" % len(t))
             personal = [it for it in t if it["cal"].get("kind") == "personal"]
@@ -1168,9 +1207,12 @@ def build(slot, user, people, wx, cache):
             push_bits.append("%d still on today" % len(rest))
     else:
         tm = day_items(tomorrow)
-        if tm or owner:
+        tj, tr = [it for it in tm if _job_day(it)], [it for it in tm if not _job_day(it)]
+        job_section(where_title + " tomorrow", tj)
+        if tr or owner:
             sections.append(("Tomorrow — " + _long_day(tomorrow),
-                             [_event_line(it, people) for it in tm] or [{"text": "Nothing on the calendar."}]))
+                             [_event_line(it, people) for it in tr] or
+                             [{"text": "Nothing else on the calendar." if tj else "Nothing on the calendar."}]))
         if tm:
             push_bits.append("%d on tomorrow" % len(tm))
 

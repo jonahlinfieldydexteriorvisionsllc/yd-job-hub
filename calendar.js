@@ -37,27 +37,47 @@
   //     appointments yellow and the rest pink.
   // "Admins can see all 3 calendars. Crew can only see crew calander." So
   // none is ownerOnly any more; Personal is `seeOnly` -- an admin looks but
-  // never changes it. Fixed ids, so two devices seeding at the same moment
+  // never changes it (the Job schedule, below, made a fourth on 16 Oct).
+  // Fixed ids, so two devices seeding at the same moment
   // write the same three rather than six. Site visits and Follow-ups were
   // folded into My work that day (`mergedInto`; never shown again).
   // A day later (16 Oct 2026): "Let the crew see My work. They can look but
   // not change anything." My work is `crewSees` (shared with every crew
   // member, as the Crew schedule is -- shareCrewCals) and `lookOnly` (those
   // it is shared with tick nothing off; firestore.rules hold the same).
+  // The same day: "within the calendars I want tags ... I want the separate
+  // calendars and within them have tags. The crew calendar should have tags
+  // and set colors for material pickups etc. and then the job calendar will
+  // be solely for where the crew is working each day." So a fourth, the Job
+  // schedule (kind `jobs`): every entry on it is a day on a job -- the job,
+  // who is working there, the days -- drawn in that job's colour; the crew
+  // see it and change nothing on it (crewSees, lookOnly). The Crew schedule
+  // keeps the crew's tasks, each tagged (remind.js CAL_TAGS): material
+  // pickup, delivery, equipment repair, shop / yard work, errand, crew task.
   const SEED = [
     { id: 'schedule', name: 'My work', color: '#66418f', kind: 'work', order: 1, crewSees: true, lookOnly: true,
       about: 'Your own work: quote appointments, pickups, emails to send — the crew can look' },
-    { id: 'crewtasks', name: 'Crew schedule', color: '#2f6fd6', kind: 'crew', order: 2,
-      about: 'Where the crew are working and their tasks — the crew see this one' },
-    { id: 'personal', name: 'Personal', color: '#d94f8a', kind: 'personal', order: 3, seeOnly: true,
+    { id: 'jobs', name: 'Job schedule', color: '#1a9c8c', kind: 'jobs', order: 2, crewSees: true, lookOnly: true,
+      about: 'Where the crew is working each day — the crew can look' },
+    { id: 'crewtasks', name: 'Crew schedule', color: '#2f6fd6', kind: 'crew', order: 3,
+      about: 'The crew’s tasks: pickups, deliveries, repairs, shop work, errands — the crew see this one' },
+    { id: 'personal', name: 'Personal', color: '#d94f8a', kind: 'personal', order: 4, seeOnly: true,
       about: 'Not to do with the business — you, and admins can look' },
   ];
-  const WORK_CAL = 'schedule', PERSONAL_CAL = 'personal';
+  const WORK_CAL = 'schedule', JOBS_CAL = 'jobs';
+  // Before the Job schedule (16 Oct 2026) the Crew schedule was second and
+  // Personal third: moved down one, once, when the Job schedule is made.
+  const OLD_ORDER = { crewtasks: 2, personal: 3 };
 
   // What an entry is (a bid appointment, a pickup...) and when it buzzes the
   // phone by itself: remind.js. For an all-day entry the time counts back
   // from 7 am that day.
-  const typeOfEv = (ev, cal) => YDRemind.typeOf(ev, { calKind: cal && cal.kind });
+  // Its tag on the calendar it is on (remind.js typeOf / tagOf): the
+  // calendar's own list decides.
+  const typeOfEv = (ev, cal) => YDRemind.typeOf(ev, { cal: cal });
+  const tagOfEv = (ev, cal) => YDRemind.tagOf(typeOfEv(ev, cal), cal);
+  // How an entry stands on its calendar, as remind.js reads it.
+  const whereOf = (ev, cal) => ({ cal: cal, calKind: cal && cal.kind, typed: YDRemind.knownOn(cal, ev && ev.type) });
   const isTimed = ev => !ev.allDay && !!ev.time;
   // At a set time and ending the next day no later than it started: work
   // past midnight (segOf draws it that way), not a two-day job.
@@ -236,6 +256,59 @@
   function saveHidden() {
     try { localStorage.setItem('ydjobhub_calHidden', JSON.stringify(Array.from(hidden))); } catch (e) {}
   }
+  // The tags switched off within a calendar ("calendarId:tagId"), as the
+  // calendars are: a tap on a tag in "Calendars & tags" hides that kind
+  // of thing from the calendar on this device, and "Show everything" brings
+  // it all back.
+  const tagKey = (calId, type) => calId + ':' + (type || '');
+  let tagsOff = (() => {
+    try { return new Set(JSON.parse(localStorage.getItem('ydjobhub_calTagsOff') || '[]')); } catch (e) { return new Set(); }
+  })();
+  function saveTagsOff() {
+    try { localStorage.setItem('ydjobhub_calTagsOff', JSON.stringify(Array.from(tagsOff))); } catch (e) { /* private window: just not kept */ }
+  }
+  // Only the tags still on a calendar this person sees count as switched
+  // off (one taken off a calendar's list since stays out of the count).
+  const tagsOffNow = () => storedCals().reduce((n, c) => n +
+    YDRemind.tagsOf(c).filter(t => tagsOff.has(tagKey(c.id, t.id))).length, 0);
+
+  // ------------------------------------------------------- a job's colour
+  //
+  // Every day of one job reads the same colour (Jonah, 16 Oct 2026: the job
+  // calendar "solely for where the crew is working each day"): the colour
+  // its card was given on the Bids and Jobs boards (cardColor) -- read from
+  // the job where this device has it (the owner's, an admin's), else from
+  // the copy kept on the entry (`jobColor`, kept in step by the owner's
+  // device: fillJobColors) for the crew, who cannot read jobs. A job given
+  // no colour gets one of JOB_COLORS, picked from its id, so it is the
+  // same on every phone and two jobs on one day are told apart.
+  const JOB_COLORS = ['#1a9c8c', '#3f51b5', '#8e5bc7', '#2e7d32', '#ad1457', '#00838f', '#6d4c41', '#5c6bc0', '#7b1fa2', '#558b2f'];
+  const isHex = c => /^#[0-9a-fA-F]{6}$/.test(String(c || ''));
+  let jobsSeen = null, jobsMap = {};
+  function jobById(id) {
+    const all = typeof loadAllJobs === 'function' && ydCan('jobs', 'see') ? loadAllJobs() : null;
+    if (!all) return null;
+    if (all !== jobsSeen) {
+      jobsSeen = all; jobsMap = {};
+      all.forEach(j => { if (j && j._id) jobsMap[j._id] = j; });
+    }
+    return jobsMap[id] || null;
+  }
+  function hashOf(s) {
+    let h = 0;
+    for (const ch of String(s || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return h;
+  }
+  // The colour a job's own card has, as this device knows it ('' none).
+  function cardColorOf(ev) {
+    const j = ev && ev.jobId ? jobById(ev.jobId) : null;
+    const own = j ? j.cardColor : ev && ev.jobColor;
+    return isHex(own) ? own : '';
+  }
+  function jobColorOf(ev, cal) {
+    if (!ev || !ev.jobId) return (cal && cal.color) || '';
+    return cardColorOf(ev) || JOB_COLORS[hashOf(ev.jobId) % JOB_COLORS.length];
+  }
 
   // Every occurrence of everything between two days, inclusive, as flat
   // entries ready to draw: { day, layer, title, time, ev, ... }. `ev` is the
@@ -259,26 +332,37 @@
           const ev = x.ev;
           if (onlyMine && !YDRemind.eventIsMine(ev, cal, w)) return;
           const name = ev.title || (ev.jobName ? ev.jobName : 'Untitled');
-          const type = typeOfEv(ev, cal), ic = YDRemind.icon(type);
+          const type = typeOfEv(ev, cal), tag = YDRemind.tagOf(type, cal) || null, ic = tag ? tag.icon : '';
+          const where = whereOf(ev, cal);
+          // A job's day (everything on the Job schedule; one picked as such
+          // before it existed): no tick box, never "not done".
+          const jobDay = YDRemind.isJobDay(type, where);
+          // A tag switched off in "Calendars & tags" (tagsOff) is not
+          // drawn -- on this screen; My day, Home and the counts read the
+          // whole day, as they do with a calendar switched off.
+          if (!everything && !jobDay && tagsOff.has(tagKey(cid, type))) return;
           // Work at a set time that runs past midnight into the next morning
           // is one thing, done or not on the day it starts: the piece after
           // midnight shares that day's tick (`doneKey`) and is not a second
           // task left undone (`after`).
           const night = overnight(ev), key = night ? ev.date : x.day;
           const mark = base.done && base.done[key];
+          // A job's day in its job's own colour, the same every day it is
+          // on (jobColorOf); anything else in its tag's.
+          const color = jobDay ? jobColorOf(ev, cal) : (tag && tag.color) || '';
           out.push({
             day: x.day, layer: cal, ev: ev, calId: cid, id: base.id, orig: x.orig,
             title: (ic ? ic + ' ' : '') + name, name: name,
-            color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
+            color: color, ink: !jobDay && tag && tag.ink ? tag.ink : '', type: type,
+            tagName: tag ? tag.name : '', crewTag: !!(tag && tag.crew),
             // Has to be ticked off (remind.js isTask), or it is "not done".
-            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type) }), after: key !== x.day,
+            task: YDRemind.isTask(type, isTimed(ev), where), after: key !== x.day,
             // Ticked off on the "any time" list, date by date (a repeat too).
             done: !!mark, doneAt: (mark && mark.at) || '', doneKey: key,
             time: ev.allDay ? '' : ev.time, endTime: ev.allDay ? '' : ev.endTime,
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
-            // A job's day (picked as one): no tick box, never "not done".
-            jobDay: YDRemind.isJobDay(type, { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type) }),
+            jobDay: jobDay,
           });
         });
       });
@@ -603,8 +687,9 @@
   // goes by the same rule (remind.js eventIsMine), or a pickup or a job's day
   // there with nobody on it was nobody's on the owner's Home: not his, and
   // not among the crew's either.
-  const isCrewOcc = o => !!(YDRemind.typeById(o.type) || {}).crew ||
-    (!o.auto && !!cals[o.calId] && cals[o.calId].kind === 'crew');
+  // A day on the Job schedule is the crew's as well: where they are working.
+  const isCrewOcc = o => (o.auto ? !!(YDRemind.typeById(o.type) || {}).crew : !!o.crewTag) ||
+    (!o.auto && !!cals[o.calId] && (cals[o.calId].kind === 'crew' || cals[o.calId].kind === 'jobs'));
   // Who may tick a thing off. Jonah (15 Oct 2026): "Anyone a calendar is
   // shared with can tick anyone's task. Make this their own and 'anyone can
   // do' tasks only." So: whoever may change the calendar (or the card's
@@ -650,10 +735,13 @@
     const all = occurrences(day, day).filter(o => !o.time && o.auto !== 'storm');
     const group = (label, list) => !list.length ? '' :
       (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + list.slice().sort(byKind).map(o => todoRow(o)).join('');
+    // Where the crew is working that day (the Job schedule) heads the list:
+    // not things to tick, but what the day is built round.
+    const jobs = all.filter(o => o.jobDay);
     // A calendar this person only looks at (the crew and Jonah's work): its
     // things last, in a group of their own, with no boxes to tick.
-    const look = all.filter(o => looksOnly(cals[o.calId]));
-    const items = all.filter(o => look.indexOf(o) === -1);
+    const look = all.filter(o => !o.jobDay && looksOnly(cals[o.calId]));
+    const items = all.filter(o => !o.jobDay && look.indexOf(o) === -1);
     const lookNames = Array.from(new Set(look.map(o => calName(o.calId))));
     const mine = items.filter(o => !isCrewOcc(o)), crew = items.filter(isCrewOcc);
     // Tasks from the days before that nobody ticked off, at the top -- on
@@ -664,11 +752,24 @@
       '<button class="cal-today-head" onclick="calTodayFold()" aria-expanded="' + !folded + '">✅ Any time ' +
         (day === today() ? 'today' : esc(shortDay(day))) + countHtml(dayCount(day)) +
         '<span class="cal-today-fold">' + (folded ? '▸' : '▾') + '</span></button>' +
-      '<div class="cal-today-body">' + lateHtml(late, null, true) +
-        (items.length ? group(crew.length && mine.length ? 'Yours' : late.length ? 'Today' : '', mine) + group('👷 Crew', crew)
-          : '<div class="cal-today-none">' + (late.length ? 'Nothing else for today.' : 'Nothing for any time this day.') + '</div>') +
+      '<div class="cal-today-body">' + lateHtml(late, null, true) + jobDaysHtml(jobs) +
+        (items.length ? group(crew.length && mine.length ? 'Yours' : late.length || jobs.length ? 'Today' : '', mine) + group('👷 Crew', crew)
+          : '<div class="cal-today-none">' + (late.length || jobs.length ? 'Nothing else for today.' : 'Nothing for any time this day.') + '</div>') +
         group('👀 ' + esc(lookNames.join(', ')) + ' — to look at', look) +
       '</div></div>';
+  }
+  // A day's job days, under one heading: the job (in its colour), who is
+  // there, and the time when it has one. `label`: the heading's words ('' for
+  // none: My day has its own).
+  function jobDaysHtml(list, label) {
+    if (!list.length) return '';
+    if (label === undefined) label = '🔨 Where the crew is working';
+    return (label ? '<div class="cal-todo-group cal-jobs-group">' + label + '</div>' : '') +
+      list.slice().sort((a, b) => String(to24(a.time || '')).localeCompare(String(to24(b.time || ''))) ||
+        String(a.name).localeCompare(String(b.name)))
+        // Nobody put on it: anyone on the crew (as the crew's job page says).
+        .map(o => todoRow(o, [(o.crew || []).length ? whoOn(o) : '👷 Anyone', o.address].filter(Boolean).join(' · '),
+          false, o.time ? fmtTimeRange(o.time, o.endTime || '') : '')).join('');
   }
 
   // ------------------------------------------------- not ticked off: carried
@@ -814,8 +915,12 @@
     const day = cursor, w = YDRemind.who(people);
     if (!w) return '';
     const all = occurrences(day, day, true);
-    const mine = all.filter(o => occIsMine(o, w));
-    const crew = all.filter(o => !occIsMine(o, w) && isCrewOcc(o));
+    // Where this person is working that day (the Job schedule) heads it,
+    // apart from what they have to do; the crew's job days head the crew's.
+    const mineJobs = all.filter(o => o.jobDay && occIsMine(o, w));
+    const crewJobs = all.filter(o => o.jobDay && !occIsMine(o, w) && isCrewOcc(o));
+    const mine = all.filter(o => !o.jobDay && occIsMine(o, w));
+    const crew = all.filter(o => !o.jobDay && !occIsMine(o, w) && isCrewOcc(o));
     const timed = list => list.filter(o => o.time).sort((a, b) => String(to24(a.time)).localeCompare(String(to24(b.time))));
     const untimed = list => list.filter(o => !o.time).sort(byKind);
     // A task at a set time is ticked off here too (an appointment needs no
@@ -843,13 +948,15 @@
     const count = countWords(countMemo[day] = tally(all, late, o => occIsMine(o, w), day));
     return '<div class="md cal-pan">' + nudgeHtml() +
       (count ? '<div class="md-count">' + esc(count) + '</div>' : '') +
+      (mineJobs.length ? '<div class="md-head md-jobs">🔨 Where you’re working</div>' + jobDaysHtml(mineJobs, '') : '') +
       (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done</div>' +
         lateMine.map(o => todoRow(o, [shortDay(o.day), whoOn(o)].filter(Boolean).join(' · '), !o.done)).join('') : '') +
-      (!mine.length ? '<p class="empty-msg">Nothing ' + (lateMine.length ? 'else ' : '') + 'of yours ' + which + '.</p>' :
+      (!mine.length ? (mineJobs.length ? '' : '<p class="empty-msg">Nothing ' + (lateMine.length ? 'else ' : '') + 'of yours ' + which + '.</p>') :
         (mineT.length ? '<div class="md-head">🕑 At set times</div>' + mineT.map(timedRow).join('') : '') +
         (mineU.length ? '<div class="md-head">✅ Any time ' + which + '</div>' +
           mineU.map(o => todoRow(o, whoOn(o))).join('') : '')) +
-      (crew.length || lateCrew.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
+      (crew.length || lateCrew.length || crewJobs.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
+        jobDaysHtml(crewJobs) +
         lateHtml(lateCrew, whoOn) +
         timed(crew).map(timedRow).join('') + untimed(crew).map(o => todoRow(o, whoOn(o))).join('') : '') +
       '</div>';
@@ -933,59 +1040,78 @@
   };
 
   // Jonah (15 Oct 2026): "the checkmarks for the different calendars can go
-  // at the top under the tabs" -- "same with the color key". One row of tick
-  // chips and one of what each colour means, above the calendar. A phone has
-  // no room for two rows of chips above its days: they fold behind one
+  // at the top under the tabs" -- "same with the color key". A day later:
+  // "within the calendars I want tags". So each calendar's tick is followed
+  // by its own tags, each in its colour -- the key to what the colours mean
+  // there -- and a tap on a tag hides that kind of thing (tagsOff) or shows
+  // it again. The worked-out layers (storms, machines, due cards) after. A
+  // phone has no room for all that above its days: it folds behind one
   // button there (remembered per device), open on a computer.
   let filtersOpen = (() => { try { return localStorage.getItem('ydjobhub_calFilters') === '1'; } catch (e) { return false; } })();
   // On an iPad (about 1024×768) or a laptop screen under ~900px tall the
   // ticks and the colour key together pushed the hours two-thirds of the way
-  // down the screen (office testing, 16 Oct 2026). The ticks stay; the key
-  // folds behind a small "Colours" chip there (styles.css says where),
-  // opened or shut as last left on this device.
+  // down the screen (office testing, 16 Oct 2026). The ticks stay, in one
+  // row; the tags fold behind a small "Tags" chip there (styles.css says
+  // where), opened or shut as last left on this device.
   let keyOpen = (() => { try { return localStorage.getItem('ydjobhub_calKey') === '1'; } catch (e) { return false; } })();
   window.calKey = function () {
     keyOpen = !keyOpen;
     try { localStorage.setItem('ydjobhub_calKey', keyOpen ? '1' : '0'); } catch (e) { /* private window: just not kept */ }
-    // Only the key and its chip change -- not the whole calendar, so the
+    // Only the tags and their chip change -- not the whole calendar, so the
     // hours stay scrolled where they were.
-    const key = document.getElementById('calKey'), btn = document.getElementById('calKeyBtn');
-    if (key) key.classList.toggle('open', keyOpen);
+    const box = document.querySelector('#calWrap .cal-filters'), btn = document.getElementById('calKeyBtn');
+    if (box) box.classList.toggle('tags-open', keyOpen);
     if (btn) {
       btn.setAttribute('aria-expanded', String(keyOpen));
       const arrow = btn.querySelector('span');
       if (arrow) arrow.textContent = keyOpen ? '▾' : '▸';
     }
   };
+  // One calendar's tick, or a worked-out layer's.
+  function tickHtml(l) {
+    return '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
+      '<input type="checkbox"' + (hidden.has(l.id) ? '' : ' checked') + ' onchange="calSet(\'' + safeKey(l.id) + '\', this.checked)">' +
+      '<span class="cal-box"></span><span class="cal-check-name">' + esc(l.name) + '</span>' +
+      (isOwner() && !l.auto && (l.visibleTo || []).length ? '<span class="cal-shared">👥' + l.visibleTo.length + '</span>' : '') +
+    '</label>';
+  }
+  // A calendar's tags, as switches. The Job schedule has none to pick: each
+  // job is its own colour there.
+  function tagSwitchesHtml(c) {
+    if (c.kind === 'jobs') return '<span class="cal-tags"><span class="cal-tags-note">🔨 Each job in its own colour</span></span>';
+    return '<span class="cal-tags" role="group" aria-label="' + esc(c.name) + ' — tags">' + YDRemind.tagsOf(c).map(t => {
+      const on = !tagsOff.has(tagKey(c.id, t.id));
+      return '<button type="button" class="cal-tag' + (on ? '' : ' off') + '" aria-pressed="' + on + '" style="--c:' + safeColor(t.color) + '"' +
+        ' onclick="calTagFilter(\'' + safeKey(c.id) + '\', \'' + safeKey(t.id) + '\')" title="' + (on ? 'Hide ' : 'Show ') + esc(t.name) + '">' +
+        '<span class="cal-tag-dot"></span>' + esc((t.icon ? t.icon + ' ' : '') + t.name) + '</button>';
+    }).join('') + '</span>';
+  }
   function filtersHtml() {
-    const off = hidden.size + (onlyMineOn ? 1 : 0);
-    return '<div class="cal-filters' + (filtersOpen ? ' open' : '') + '">' +
-      '<button class="btn btn-sm cal-filters-btn" onclick="calFilters()" aria-expanded="' + filtersOpen + '">Calendars &amp; colours' +
+    const off = hidden.size + (onlyMineOn ? 1 : 0) + tagsOffNow();
+    return '<div class="cal-filters' + (filtersOpen ? ' open' : '') + (keyOpen ? ' tags-open' : '') + '">' +
+      '<button class="btn btn-sm cal-filters-btn" onclick="calFilters()" aria-expanded="' + filtersOpen + '">Calendars &amp; tags' +
         (off ? ' <span class="cal-filters-n">' + off + ' off</span>' : '') + ' <span aria-hidden="true">' + (filtersOpen ? '▾' : '▸') + '</span></button>' +
       '<div class="cal-filters-body">' +
-        '<div class="cal-checks">' + layers().map(l =>
-          '<label class="cal-check" style="--c:' + safeColor(l.color) + '" title="' + esc(l.about || '') + '">' +
-            '<input type="checkbox"' + (hidden.has(l.id) ? '' : ' checked') + ' onchange="calSet(\'' + l.id + '\', this.checked)">' +
-            '<span class="cal-box"></span><span class="cal-check-name">' + esc(l.name) + '</span>' +
-            (isOwner() && !l.auto && (l.visibleTo || []).length ? '<span class="cal-shared">👥' + l.visibleTo.length + '</span>' : '') +
-          '</label>').join('') +
+        '<div class="cal-checks">' +
+          storedCals().map(c => '<div class="cal-tagrow' + (hidden.has(c.id) ? ' cal-off' : '') + '">' + tickHtml(c) + tagSwitchesHtml(c) + '</div>').join('') +
+          layers().filter(l => l.auto).map(tickHtml).join('') +
           '<label class="cal-check mine"><input type="checkbox"' + (onlyMineOn ? ' checked' : '') + ' onchange="calOnlyMine()">' +
             '<span class="cal-box"></span><span class="cal-check-name">👤 Only mine</span></label>' +
           (off ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
-          (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars</button>' : '') +
-          // The key's own fold: shown only where the stylesheet folds it
+          (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars &amp; tags</button>' : '') +
+          // The tags' own fold: shown only where the stylesheet folds them
           // (an iPad, a short laptop screen).
-          '<button type="button" class="cal-key-btn" id="calKeyBtn" onclick="calKey()" aria-controls="calKey" aria-expanded="' + keyOpen + '">' +
-            '🎨 Colours <span aria-hidden="true">' + (keyOpen ? '▾' : '▸') + '</span></button>' +
+          '<button type="button" class="cal-key-btn" id="calKeyBtn" onclick="calKey()" aria-expanded="' + keyOpen + '">' +
+            '🎨 Tags <span aria-hidden="true">' + (keyOpen ? '▾' : '▸') + '</span></button>' +
         '</div>' +
-        // What each colour means (remind.js). Anything not marked keeps its
-        // calendar's colour -- a job's day too, which has none of its own.
-        '<div class="cal-key' + (keyOpen ? ' open' : '') + '" id="calKey" aria-label="What the colours mean">' + YDRemind.TYPES.filter(t => t.color).map(t =>
-          '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
-          '<span class="cal-key-dot"></span>' + esc(t.icon) + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
       '</div>' +
     '</div>';
   }
+  window.calTagFilter = function (calId, tagId) {
+    const k = tagKey(calId, tagId);
+    if (tagsOff.has(k)) tagsOff.delete(k); else tagsOff.add(k);
+    saveTagsOff(); render();
+  };
   window.calFilters = function () {
     filtersOpen = !filtersOpen;
     try { localStorage.setItem('ydjobhub_calFilters', filtersOpen ? '1' : '0'); } catch (e) {}
@@ -1007,12 +1133,17 @@
     if (view === 'myday') return '';
     const day = dayForNew();
     const items = occurrences(day, day).filter(o => o.auto !== 'storm' && !o.after);
-    const timed = items.filter(o => o.time).sort((a, b) => (minutesOf(a.time) || 0) - (minutesOf(b.time) || 0) || byKind(a, b));
-    const anyTime = items.filter(o => !o.time).sort(byKind);
+    // Where the crew is working first (the Job schedule), then the day.
+    const jobs = items.filter(o => o.jobDay);
+    const timed = items.filter(o => o.time && !o.jobDay).sort((a, b) => (minutesOf(a.time) || 0) - (minutesOf(b.time) || 0) || byKind(a, b));
+    const anyTime = items.filter(o => !o.time && !o.jobDay).sort(byKind);
     const late = day === today() ? carried() : [];
     return '<div class="cal-daylist">' +
       '<div class="cal-daylist-head">' + esc(longDay(day)) + countHtml(dayCount(day)) + '</div>' +
+      jobDaysHtml(jobs) +
       lateHtml(late, null, true) +
+      // Under the job days, the rest needs a heading of its own.
+      (timed.length && (jobs.length || late.length) ? '<div class="cal-todo-group">At set times</div>' : '') +
       timed.map(o => todoRow(o, '', false, fmtTime(o.time))).join('') +
       (anyTime.length ? '<div class="cal-todo-group">Any time</div>' + anyTime.map(o => todoRow(o)).join('') : '') +
       (!items.length ? '<div class="cal-today-none">' + (late.length ? 'Nothing else on this day.' : 'Nothing on this day.') + '</div>' : '') +
@@ -1354,7 +1485,7 @@
     if (on) hidden.delete(id); else hidden.add(id);
     saveHidden(); render();
   };
-  window.calShowAll = function () { hidden = new Set(); onlyMineOn = false; saveHidden(); render(); };
+  window.calShowAll = function () { hidden = new Set(); tagsOff = new Set(); onlyMineOn = false; saveHidden(); saveTagsOff(); render(); };
   window.calOnlyMine = function () { onlyMineOn = !onlyMineOn; render(); };
 
   // ----------------------------------------------------------- open things
@@ -1577,7 +1708,8 @@
     const ev = o.ev || base;
     const when = ev.allDay || !ev.time ? 'Any time that day' : fmtTimeRange(ev.time, ev.endTime);
     const mapUrl = ev.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ev.address) : '';
-    const type = YDRemind.typeById(typeOfEv(ev, cal));
+    // Its tag, as its calendar has it (a name the owner gave it there).
+    const type = tagOfEv(ev, cal);
     // The reminder is the series' (a single date cannot have its own). The
     // usual one is said only when the entry is this person's by the same
     // rule the reminders go by (remind.js isMine) -- not just when they are
@@ -1602,7 +1734,7 @@
             (base.repeatUntil ? ' until ' + shortDay(base.repeatUntil) : '') +
             (o.changed ? ' · changed for this date' : '') + '</span>' : '') +
         '</div>' +
-        (type ? '<div class="cal-detail-line">' + type.icon + ' ' + esc(type.name) + '</div>' : '') +
+        (type ? '<div class="cal-detail-line cal-detail-tag" style="--t:' + safeColor(o.color || type.color || cal.color) + '"><span class="cal-tag-dot"></span>' + esc((type.icon ? type.icon + ' ' : '') + type.name) + '</div>' : '') +
         (ev.jobName ? '<div class="cal-detail-line">📋 ' + esc(ev.jobName) + '</div>' : '') +
         (ev.address ? '<a class="snow-addr" href="' + mapUrl + '" target="_blank" rel="noopener">📍 ' + esc(ev.address) +
           '<span class="snow-go">Directions</span></a>' : '') +
@@ -1619,7 +1751,9 @@
         (o.task && canTick(o) ? (mark ? '<button class="btn btn-sm" onclick="calDoneShown(false)">↩ Not done after all</button>'
           : '<button class="btn btn-filled" onclick="calDoneShown(true)">✅ Mark done</button>') : '') +
         (editsCal(cal) ? '<button class="btn' + (o.task && canTick(o) && !mark ? '' : ' btn-filled') + '" onclick="calEditShown()">Edit</button>' : '') +
-        (editsCal(cal) && !(type && type.crew) ? '<button class="btn btn-sm" onclick="calCrewTask()">👷 Make it a crew task</button>' : '') +
+        // Not on the Crew schedule already, nor a day on a job.
+        (editsCal(cal) && cal.kind !== 'crew' && cal.kind !== 'jobs' && !(type && type.crew)
+          ? '<button class="btn btn-sm" onclick="calCrewTask()">👷 Make it a crew task</button>' : '') +
         (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
         // The crew: the job's page made for them (crewjobs.js) -- the gate
         // code, the work, Directions -- a tap from the entry sending them there.
@@ -1680,9 +1814,13 @@
     const calId = editing.calId || (lastCal && cals[lastCal] ? lastCal : list[0].id);
     const crew = crewPeople();
     const chosen = new Set((ev.crew || []).map(c => c.uid));
-    const jobs = (typeof loadAllJobs === 'function' ? loadAllJobs() : [])
-      .filter(j => j && j._id && (j.jobStatus || 'quoting') !== 'complete')
+    // The jobs not finished -- and the entry's own job even if it is, so
+    // saving it again does not quietly untie it.
+    const jobs = editorJobs()
+      .filter(j => j && j._id && ((j.jobStatus || 'quoting') !== 'complete' || j._id === ev.jobId))
       .sort((a, b) => String(a.customerName || '').localeCompare(b.customerName || ''));
+    const ownJob = ev.jobId && !jobs.some(j => j._id === ev.jobId)
+      ? '<option value="' + esc(ev.jobId) + '" selected>' + esc(ev.jobName || 'This entry’s job') + '</option>' : '';
     // "Any time that day" is a box of its own, off unless ticked (Jonah, 15
     // Oct 2026: all the kinds, "and then just a box to check for any time
     // today"). A saved entry keeps what it had; a new one is at a set time --
@@ -1690,9 +1828,10 @@
     const allDay = editing.eventId ? (ev.allDay != null ? ev.allDay : !ev.time) : false;
     const startT = ev.time || editing.time || '07:00';
     const endT = ev.endTime || hhmm(minutesOf(startT) + 60);
-    // What it is, as it counts now: a site visit nobody marked is already a
-    // bid appointment, so the box says so.
+    // Its tag, as it counts now: an entry nobody tagged already reads as one
+    // by its title (remind.js typeOf), so that one is lit.
     const type = typeOfEv(ev, cals[calId]);
+    edCal = calId;
 
     // What it is called and when, first -- the two things every entry
     // needs, at the top of a phone's screen -- then which calendar, what
@@ -1722,17 +1861,21 @@
           ' onchange="calCalChanged(true)"><span><span class="cal-dot"></span>' + esc(c.name) + '</span></label>').join('') +
       '</div></div>' +
       // Jonah (12 Oct 2026): pick what it is -- some things are at a set time,
-      // some just need doing that day. It decides when the phone buzzes.
-      '<div class="field"><span class="label">What is it</span><select id="evType" onchange="calTypeChanged()"' +
-          (ev.type ? ' data-picked="1"' : '') + '>' +
-        '<option value="">—</option>' +
-        YDRemind.TYPES.map(t => '<option value="' + t.id + '"' + (t.id === type ? ' selected' : '') + '>' +
-          esc(typeLabel(t)) + '</option>').join('') +
-      '</select><div class="hint cal-type-note" id="evTypeNote"></div></div>' +
-      '<div class="field"><span class="label">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
+      // some just need doing that day. It decides when the phone buzzes. From
+      // 16 Oct each calendar has its own tags ("within the calendars I want
+      // tags"): a button each, in its colour, only the chosen calendar's
+      // (drawTagPick) -- buttons in sight, not a list to open. The one lit is
+      // kept in #evType; `picked` once tapped (until then it follows the
+      // title and the calendar).
+      '<div class="field" id="evTagField"><span class="label" id="evTagLabel">Tag — what it is</span>' +
+        '<input type="hidden" id="evType" value="' + esc(type) + '"' +
+          (YDRemind.knownOn(cals[calId], ev.type) ? ' data-picked="1"' : '') + '>' +
+        '<div class="cal-tagpick" id="evTagChips"></div>' +
+        '<div class="hint cal-type-note" id="evTypeNote"></div></div>' +
+      '<div class="field"><span class="label" id="evJobLabel">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
         '<option value="">— not about a job —</option>' +
-        jobs.map(j => '<option value="' + j._id + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
-          esc(jobPickName(j)) + '</option>').join('') +
+        jobs.map(j => '<option value="' + esc(j._id) + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
+          esc(jobPickName(j)) + '</option>').join('') + ownJob +
       '</select></div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Repeats</span><select id="evRepeat">' +
@@ -1747,7 +1890,7 @@
       '<div class="field"><span class="label">Remind</span><select id="evRemind" onchange="calRemindHint()">' +
         YDRemind.optionsHtml(base) + '</select>' +
         '<div class="hint" id="evRemindHint"></div></div>' +
-      '<div class="field" id="evCrewField"><span class="label">Who is on it</span>' +
+      '<div class="field" id="evCrewField"><span class="label" id="evCrewLabel">Who is on it</span>' +
         (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item" style="--c:' + personColor(p.uid) + '">' +
           '<input type="checkbox" class="evWho" value="' + p.uid + '"' + (chosen.has(p.uid) ? ' checked' : '') +
             ' onchange="calWhoTicked(this)">' +
@@ -1764,10 +1907,56 @@
     calRemindHint();
     calTypeNote();
   }
-  // What a kind is called in the "What is it" box: just its name. What it
+  // The tag buttons for the calendar picked: just each one's name. What it
   // is and whether it has a set time are two separate questions -- a pickup
   // can be at 9:00 or any time that day -- answered by two separate boxes.
-  const typeLabel = t => t.icon + ' ' + t.name;
+  // An entry tagged before each calendar had its own list keeps its tag,
+  // in sight with the calendar's own, until another is tapped.
+  // The Job schedule has none to pick: everything on it is a job's day.
+  let edCal = '';           // the calendar the editor's tags were drawn for
+  function drawTagPick() {
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const cal = c && cals[c.value];
+    const box = el('evTagChips'), label = el('evTagLabel');
+    if (!cal || !box) return;
+    const jobs = cal.kind === 'jobs';
+    if (label) label.textContent = jobs ? 'What it is' : 'Tag — what it is';
+    if (jobs) {
+      box.innerHTML = '<div class="cal-jobday-note">🔨 A day on a job — where the crew is working. ' +
+        'Pick the job below; it shows in the job’s own colour. No box to tick: the job is finished on the job itself.</div>';
+      return;
+    }
+    const current = val('evType');
+    const list = YDRemind.tagsOf(cal);
+    const own = current && !list.some(t => t.id === current) ? YDRemind.tagOf(current, cal) : null;
+    box.innerHTML = list.concat(own ? [Object.assign({ old: true }, own)] : []).map(t => {
+      const on = t.id === current, color = safeColor(t.color);
+      return '<button type="button" class="cal-tagpick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+        ' style="--c:' + color + ';--ink:' + (t.ink ? safeColor(t.ink) : inkOn(color)) + '"' +
+        ' onclick="calTagPick(\'' + safeKey(t.id) + '\')"><span class="cal-tag-dot"></span>' +
+        esc((t.icon ? t.icon + ' ' : '') + t.name) + (t.old ? ' <small>(from before)</small>' : '') + '</button>';
+    }).join('');
+  }
+  // A tag tapped: that is what it is now, whatever the title says.
+  window.calTagPick = function (id) {
+    const box = el('evType');
+    if (!box) return;
+    box.value = id;
+    box.dataset.picked = '1';
+    typeNote = '';
+    drawTagPick();
+    calRemindHint();
+    calTypeNote();
+  };
+  // The jobs the Job box offers: every job, where this device has them (the
+  // owner's, an admin's who sees jobs); else -- someone ticked to add to a
+  // calendar who cannot read jobs -- the crew's own copies of the jobs on
+  // the go (crewjobs.js), which have the name and what each one is.
+  function editorJobs() {
+    if (ydCan('jobs', 'see') && typeof loadAllJobs === 'function') return loadAllJobs() || [];
+    return window.YDCrewJobs && YDCrewJobs.list ? YDCrewJobs.list().map(j => ({ _id: j.id, customerName: j.name, crewWhat: j.what,
+      address: j.address, city: j.city, estimateNumber: j.est, jobStatus: j.status })) : [];
+  }
   // A job in the Job box: who, its number and where. Two jobs for the same
   // customer (a patio in the spring, beds in the fall) read the same by name
   // alone -- and the number or the street can be typed to find it.
@@ -1789,22 +1978,10 @@
     calTypeNote();
   };
   // Picking what it is never touches the time: only the "Any time that
-  // day" box does.
-  window.calTypeChanged = function (byCalendar) {
-    if (byCalendar !== true && el('evType')) {
-      el('evType').dataset.picked = '1';
-      // Jonah (15 Oct 2026): Personal is "anything i do not to do with the
-      // business" -- a doctor's appointment goes there, and business things
-      // go on My work. The calendar follows the kind picked, in sight (the
-      // note under the box says so), and can still be picked after.
-      const t = YDRemind.typeById(val('evType'));
-      const c = document.querySelector('input[name="evCal"]:checked');
-      const cal = c && cals[c.value];
-      if (t && cal) {
-        if (t.personal && cal.kind !== 'personal') moveTo(PERSONAL_CAL, 'Goes on Personal — it is not to do with the business.');
-        else if (!t.personal && cal.kind === 'personal') moveTo(WORK_CAL, 'Goes on ' + calName(WORK_CAL) + ' — Personal is for things not to do with the business.');
-      }
-    }
+  // day" box does -- nor, now each calendar has its own tags, the calendar:
+  // the tags shown are the calendar's, so a tag never moves an entry.
+  window.calTypeChanged = function () {
+    drawTagPick();
     calRemindHint();
     calTypeNote();
   };
@@ -1822,15 +1999,15 @@
     const note = el('evTypeNote');
     if (note) note.textContent = typeNote;
   };
-  // Until a kind is picked by hand, it follows the title as it is typed
-  // (remind.js typeOf: "Pickup mulch" a pickup, "Send the bid" an email
-  // to send).
+  // Until a tag is tapped, it follows the title as it is typed (remind.js
+  // typeOf: "Pickup mulch" a pickup, "Send the bid" an email to send; on
+  // the Crew schedule "Fix the trailer lights" an equipment repair).
   window.calTitleChanged = function () {
     const box = el('evType');
     const c = document.querySelector('input[name="evCal"]:checked');
     if (!box || box.dataset.picked || !c) return;
     const want = typeOfEv({ title: val('evTitle') }, cals[c.value]);
-    if (box.value !== want) { box.value = want; calTypeChanged(true); }
+    if (box.value !== want) { box.value = want; calTypeChanged(); }
   };
   // Jonah (15 Oct 2026): the Crew schedule has "anything i assign crew
   // members to". Ticking a crew member on something on My work puts it on
@@ -1852,33 +2029,79 @@
     const choice = val('evRemind');
     const timed = !el('evAllDay').checked && !!val('evTime');
     const c = document.querySelector('input[name="evCal"]:checked');
-    const type = val('evType') || typeOfEv({ title: val('evTitle') }, c && cals[c.value]);
+    const cal = c && cals[c.value];
+    const type = val('evType') || typeOfEv({ title: val('evTitle') }, cal);
     hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this one.'
-      : choice === '' ? YDRemind.usualHint(type, timed)
+      : choice === '' ? YDRemind.usualHint(type, timed, cal)
       : 'To you and anyone on it. Phones need notifications switched on: ⋯ → Notification settings.';
   };
   window.calJobChanged = function () {
     const id = val('evJob');
-    const j = id && (loadAllJobs() || []).find(x => x._id === id);
+    const j = id && editorJobs().find(x => x._id === id);
     const a = el('evAddr');
     if (j && a && !a.value.trim()) a.value = [j.address, j.city, j.state].filter(Boolean).join(', ');
+    jobTitleHint();
   };
+  // A job's name and what it is in a few words (app.js jobWhat / jobLabel):
+  // "Pat Smith · Paver patio" -- what a day on the Job schedule is called
+  // when its title is left blank.
+  function jobTitle(j) {
+    const name = j.customerName || 'Untitled job';
+    const what = typeof jobWhat === 'function' ? jobWhat(j) : '';
+    return typeof jobLabel === 'function' ? jobLabel(name, what) : name + (what ? ' · ' + what : '');
+  }
+  // The title box says what a blank title will be: the job's name (and, on
+  // the Job schedule, what it is).
+  function jobTitleHint() {
+    const t = el('evTitle');
+    const c = document.querySelector('input[name="evCal"]:checked');
+    const cal = c && cals[c.value];
+    if (!t || !cal) return;
+    const id = val('evJob');
+    const j = id && editorJobs().find(x => x._id === id);
+    t.placeholder = cal.kind === 'jobs'
+      ? (j ? jobTitle(j) + ' (from the job)' : 'Leave blank to use the job’s name and what it is')
+      : (j ? (j.customerName || 'Untitled job') + ' (from the job)' : 'Leave blank to use the job’s name (below)');
+  }
   // Says plainly whether the people being picked will actually see this.
   window.calCalChanged = function (byHand) {
     const c = document.querySelector('input[name="evCal"]:checked');
     const cal = c && cals[c.value];
     const hint = el('evShareHint');
     if (!cal || !hint) return;
-    // Until a kind is picked by hand, it follows the calendar and the title
-    // (the Crew schedule: a crew task; Personal: personal, or the doctor;
-    // My work: a pickup, an email, a to-do...).
+    // Another calendar, other tags. A tag tapped is kept when the new
+    // calendar has one of the same; otherwise the new calendar's guess from
+    // the title is lit -- and said so under the buttons, as a calendar
+    // picked never quietly changes what was picked. Until a tag is tapped,
+    // it simply follows the calendar and the title (the Crew schedule: a
+    // pickup, a repair... else a crew task; Personal: the doctor, else
+    // personal; My work: a pickup, an email... else a to-do).
     const box = el('evType');
+    const from = cals[edCal];
     if (byHand === true) typeNote = '';
-    if (byHand !== undefined && box && !box.dataset.picked) {
-      const was = box.value;
-      box.value = typeOfEv({ title: val('evTitle') }, cal);
-      if (box.value !== was) calTypeChanged(true);
+    if (byHand !== undefined && box && cal.id !== edCal) {
+      const was = box.value, picked = !!box.dataset.picked;
+      const keeps = picked && was && cal.kind !== 'jobs' && YDRemind.tagsOf(cal).some(t => t.id === was);
+      if (!keeps) {
+        box.value = typeOfEv({ title: val('evTitle') }, cal);
+        delete box.dataset.picked;
+        const before = picked && from && YDRemind.tagOf(was, from);
+        const now = YDRemind.tagOf(box.value, cal);
+        if (before && now && cal.kind !== 'jobs' && box.value !== was) {
+          // After any word on why the calendar changed (moveTo).
+          typeNote = [typeNote, '“' + before.name + '” is not one of ' + calName(cal.id) + '’s tags — it is ' +
+            (now.icon ? now.icon + ' ' : '') + now.name + ' there now. Tap another to change it.'].filter(Boolean).join(' ');
+        }
+      }
     }
+    edCal = cal.id;
+    drawTagPick();
+    // The Job schedule: the job is the point of the entry, and who is
+    // working there.
+    const jobs = cal.kind === 'jobs';
+    if (el('evJobLabel')) el('evJobLabel').textContent = jobs ? 'Job — which one they are working on' : 'Job';
+    if (el('evCrewLabel')) el('evCrewLabel').textContent = jobs ? 'Who is working there' : 'Who is on it';
+    jobTitleHint();
     calTypeNote();
     calRemindHint();
     calWhoChanged();
@@ -1953,8 +2176,20 @@
       return null;
     }
     const jobId = val('evJob');
-    const job = jobId ? (loadAllJobs() || []).find(j => j._id === jobId) : null;
-    const title = val('evTitle') || (job ? (job.customerName || 'Job') : '');
+    const job = jobId ? editorJobs().find(j => j._id === jobId) : null;
+    // The entry's own job when this device cannot list it (a finished job,
+    // or a phone that cannot read jobs): kept as it was, not dropped.
+    const was = ed.eventId ? (events[ed.calId] || {})[ed.eventId] : null;
+    const keptJob = !job && jobId && was && was.jobId === jobId ? { _id: jobId, customerName: was.jobName || '' } : null;
+    const theJob = job || keptJob;
+    const onJobs = !!cals[calId] && cals[calId].kind === 'jobs';
+    // Jonah (16 Oct 2026): the Job schedule is "solely for where the crew is
+    // working each day" -- an entry there is a day on a job, so it needs one.
+    if (onJobs && !theJob) { showToast('Pick the job — the Job schedule is where the crew is working'); return null; }
+    // Left blank, a day on the Job schedule is called by its job and what
+    // the job is ("Pat Smith · Paver patio"); anything else by the job's name.
+    const title = val('evTitle') || (job ? (onJobs ? jobTitle(job) : job.customerName || 'Job')
+      : keptJob ? (keptJob.customerName || 'Job') : '');
     if (!title) { showToast('Give it a title'); return null; }
     const date = val('evDate');
     if (!date) { showToast('Pick a date'); return null; }
@@ -1986,20 +2221,28 @@
       endTime: endT || null,
       repeat: repeat,
       repeatUntil: until || null,
-      jobId: job ? job._id : null,
-      jobName: job ? (job.customerName || 'Untitled job') : null,
+      jobId: theJob ? theJob._id : null,
+      jobName: theJob ? (theJob.customerName || 'Untitled job') : null,
       address: val('evAddr'),
       crew: Array.from(document.querySelectorAll('.evWho:checked'))
         .map(i => crew.find(p => p.uid === i.value)).filter(Boolean)
         .map(p => ({ uid: p.uid, name: p.name })),
       notes: el('evNotes').value.trim(),
-      // Kept when it was picked by hand, or is not what the calendar and the
-      // title make it anyway; one that only followed them is left to follow
-      // them, so an entry moved to another calendar takes on that one's.
-      type: YDRemind.typeById(val('evType')) && (el('evType').dataset.picked ||
+      // Its tag: kept when it was tapped, or is not what the calendar and
+      // the title make it anyway; one that only followed them is left to
+      // follow them, so an entry moved to another calendar takes on that
+      // one's. Only a tag this calendar knows (remind.js knownOn). On the
+      // Job schedule there is nothing to keep: it is a job's day.
+      type: !onJobs && YDRemind.knownOn(cals[calId], val('evType')) && (el('evType').dataset.picked ||
         val('evType') !== typeOfEv({ title: title }, cals[calId])) ? val('evType') : null,
       updatedAt: nowIso(),
     };
+    // The job's own colour, for the crew's phones (jobColorOf): they cannot
+    // read the job. Kept in step afterwards by the owner's (fillJobColors).
+    if (onJobs) {
+      rec.jobColor = job && ydCan('jobs', 'see') ? (isHex(job.cardColor) ? job.cardColor : null)
+        : was && was.jobId === rec.jobId ? was.jobColor || null : null;
+    }
     // The reminder: the usual one, none, or a set time (and who asked for it).
     const base = ed.eventId ? (events[ed.calId] || {})[ed.eventId] : null;
     Object.assign(rec, YDRemind.fromChoice(val('evRemind'), base, (me() || {}).uid));
@@ -2652,7 +2895,12 @@
                   c.visibleTo.map(u => esc(firstName(personName(u)))).join(', ')) +
                 (c.lookOnly === true ? ' can look' : '') +
                 ((c.editors || []).length ? ' · ' + c.editors.map(u => esc(firstName(personName(u)))).join(', ') + ' can change it' : '')
-              : 'Only you so far') + '</span></div>' +
+              : 'Only you so far') + '</span>' +
+            // Its tags at a glance (Edit changes them).
+            '<span class="cal-manage-tags">' + (c.kind === 'jobs' ? '<span class="muted">🔨 Job days, each in its job’s colour</span>'
+              : YDRemind.tagsOf(c).map(t => '<span class="cal-tag sm" style="--c:' + safeColor(t.color) + '"><span class="cal-tag-dot"></span>' +
+                  esc((t.icon ? t.icon + ' ' : '') + t.name) + '</span>').join('')) + '</span>' +
+          '</div>' +
           '<button class="btn btn-sm" onclick="calEditCal(\'' + c.id + '\')">Edit</button>' +
         '</div>').join('') + '</div>' +
       '<div class="hint">Storm nights, equipment service dates and board due dates appear by themselves — ' +
@@ -2676,6 +2924,7 @@
       '<div class="field"><span class="label">Colour</span><div class="bd-swatches">' +
         PALETTE.map(p => '<label class="bd-swatch" style="--c:' + p + '"><input type="radio" name="ccColor" value="' + p + '"' +
           (p === color ? ' checked' : '') + '><span></span></label>').join('') + '</div></div>' +
+      tagEditorHtml(c) +
       (c.kind === 'personal' ? '<div class="hint">Personal is never shared with the crew. Admins with Calendars ' +
           'access can look at it, and never change it.</div>' :
         '<div class="field"><span class="label">Who can see it</span>' +
@@ -2714,10 +2963,105 @@
       '</div>');
   };
 
+  // ------------------------------------------- a calendar's tags, by hand
+  //
+  // Jonah (16 Oct 2026): tags "and set colors" within each calendar. The
+  // owner changes any calendar's list here: renames one, gives it another
+  // colour (one of these, or any from the colour box), adds one, takes one
+  // off. Saved with the calendar as `tags` [{id, name, icon, color,
+  // appointment}] -- only once changed, so a calendar never touched keeps
+  // the list it started with (remind.js CAL_TAGS). An entry keeps its tag's
+  // id: renamed or recoloured, it follows; taken off, it reads as whatever
+  // the calendar makes of its title (remind.js typeOf). Each tag's colour
+  // stands out from the others; red, orange and grey are the urgency
+  // colours everywhere else in Job Hub, so none is offered here (the colour
+  // box still allows anything).
+  const TAG_COLORS = ['#2f8f5b', '#7a4fd1', '#8b5a2b', '#2a3d8f', '#13a7c4', '#8ab81e', '#0f766e', '#4d6b1a',
+                      '#a3369b', '#2f6fd6', '#d94f8a', '#f2c230', '#1a9c8c', '#66418f'];
+  let tagDraft = null;      // the tags being edited, or null (the Job schedule has none)
+  let tagsDirty = false;    // changed in this window: only then are they saved
+  function tagEditorHtml(c) {
+    tagsDirty = false;
+    if (c.kind === 'jobs') {
+      tagDraft = null;
+      return '<div class="field"><span class="label">Tags</span><div class="hint">Every entry here is a day on a job — ' +
+        'where the crew is working — shown in that job’s own colour (its card’s colour on the Jobs board). No tags to pick.</div></div>';
+    }
+    tagDraft = YDRemind.tagsOf(c.kind ? c : { kind: 'custom' })
+      .map(t => ({ id: t.id, name: t.name, icon: t.icon || '', color: isHex(t.color) ? t.color.toLowerCase() : '#6b7a8f', appointment: !!t.appointment }));
+    return '<div class="field"><span class="label">Tags — what an entry on it can be</span>' +
+      '<div class="cc-tags" id="ccTags">' + tagRowsHtml() + '</div>' +
+      '<button type="button" class="btn btn-sm cc-tag-add" onclick="calTagAdd()">+ Add a tag</button>' +
+      '<div class="hint">Each entry gets one tag, in its colour. Renamed or given another colour, its entries follow; ' +
+        'taken off, they go by their titles. Red, orange and grey mean late, today and whenever elsewhere in Job Hub — best left for those.</div></div>';
+  }
+  function tagRowsHtml() {
+    return tagDraft.map((t, i) => '<div class="cc-tag" style="--c:' + safeColor(t.color) + '">' +
+      '<div class="cc-tag-top"><span class="cc-tag-dot" aria-hidden="true"></span>' +
+        '<input class="cc-tag-icon" value="' + esc(t.icon) + '" maxlength="4" placeholder="🏷" aria-label="Icon (optional)"' +
+          ' oninput="calTagSet(' + i + ', \'icon\', this.value)">' +
+        '<input class="cc-tag-name" value="' + esc(t.name) + '" maxlength="40" placeholder="Name it" aria-label="Tag name"' +
+          ' oninput="calTagSet(' + i + ', \'name\', this.value)">' +
+        '<button type="button" class="cc-tag-x" onclick="calTagDrop(' + i + ')" aria-label="Take ' + esc(t.name || 'this tag') + ' off">✕</button>' +
+      '</div>' +
+      '<div class="cc-tag-colors">' + TAG_COLORS.map(col => '<button type="button" class="cc-tag-sw' + (col === t.color ? ' on' : '') +
+          '" style="--s:' + col + '" aria-label="Colour ' + col + '" aria-pressed="' + (col === t.color) + '"' +
+          ' onclick="calTagSet(' + i + ', \'color\', \'' + col + '\')"></button>').join('') +
+        '<input type="color" class="cc-tag-pick" value="' + safeColor(t.color) + '" aria-label="Another colour"' +
+          ' onchange="calTagSet(' + i + ', \'color\', this.value)">' +
+      '</div>' +
+      '<label class="chk cc-tag-appt"><input type="checkbox"' + (t.appointment ? ' checked' : '') +
+        ' onchange="calTagSet(' + i + ', \'appointment\', this.checked)"> Just happens at its time — nothing to tick off</label>' +
+    '</div>').join('');
+  }
+  window.calTagSet = function (i, field, value) {
+    const t = tagDraft && tagDraft[i];
+    if (!t) return;
+    if (field === 'color') { if (!isHex(value)) return; t.color = String(value).toLowerCase(); }
+    else if (field === 'appointment') t.appointment = !!value;
+    else if (field === 'name') t.name = String(value || '').slice(0, 40);
+    else if (field === 'icon') t.icon = String(value || '').trim().slice(0, 4);
+    tagsDirty = true;
+    // A colour redraws the rows (its swatch lit, the row's stripe); typing
+    // does not, so the box being typed in keeps its place.
+    if (field === 'color' && el('ccTags')) el('ccTags').innerHTML = tagRowsHtml();
+  };
+  window.calTagAdd = function () {
+    if (!tagDraft || !el('ccTags')) return;
+    const used = tagDraft.map(t => t.color);
+    tagDraft.push({ id: newId('tg'), name: '', icon: '', color: TAG_COLORS.find(c => used.indexOf(c) === -1) || TAG_COLORS[0],
+                    appointment: false });
+    tagsDirty = true;
+    el('ccTags').innerHTML = tagRowsHtml();
+    const boxes = document.querySelectorAll('#ccTags .cc-tag-name');
+    if (boxes.length) boxes[boxes.length - 1].focus();
+  };
+  window.calTagDrop = function (i) {
+    if (!tagDraft || !tagDraft[i] || !el('ccTags')) return;
+    if (tagDraft.length < 2) { showToast('A calendar keeps at least one tag'); return; }
+    tagDraft.splice(i, 1);
+    tagsDirty = true;
+    el('ccTags').innerHTML = tagRowsHtml();
+  };
+  // The tags as they will be saved, or null (with a word why) when one has
+  // no name. A built-in left nameless keeps its own.
+  function tagsToSave() {
+    const out = [];
+    for (const t of tagDraft) {
+      const b = YDRemind.typeById(t.id);
+      const name = String(t.name || '').trim() || (b ? b.name : '');
+      if (!name) { showToast('Give each tag a name'); return null; }
+      out.push({ id: t.id, name: name, icon: String(t.icon || ''), color: isHex(t.color) ? t.color : '#6b7a8f', appointment: !!t.appointment });
+    }
+    return out;
+  }
+
   window.calSaveCal = function (id) {
     if (!isOwner()) return;
     const name = val('ccName');
     if (!name) { showToast('Give it a name'); return; }
+    const tags = tagDraft && tagsDirty ? tagsToSave() : null;
+    if (tagDraft && tagsDirty && !tags) return;
     const was = id ? cals[id] : null;
     const cid = id || newId('cal');
     const colorInput = document.querySelector('input[name="ccColor"]:checked');
@@ -2747,6 +3091,7 @@
         : Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value);
       rec.visibleTo = Array.from(new Set(picked.concat(rec.editors)));
     }
+    if (tags) rec.tags = tags;
     cals[cid] = Object.assign({ id: cid }, was || {}, rec);
     write('calendars', cid, rec, 'saving ' + name);
     if (!eventUnsubs[cid]) watchEvents(cid);
@@ -2848,7 +3193,7 @@
         if (c.type === 'removed') delete set[c.id];
         else set[c.id] = Object.assign({ id: c.id }, c.data);
       });
-      if (meta && meta.fromCache === false) fillCrewUids(calId);
+      if (meta && meta.fromCache === false) { fillCrewUids(calId); if (calId === JOBS_CAL) fillJobColors(); }
       redrawIfVisible();
       announce();
     });
@@ -2886,11 +3231,12 @@
         watchEvents(c.id);
       }
     });
-    // Seed the three calendars once the server has answered -- and only the
+    // Seed the four calendars once the server has answered -- and only the
     // ones missing, so a calendar the owner deleted is not resurrected
-    // unless it is one of the three.
+    // unless it is one of the four.
     if (isOwner() && !seeded && meta && !meta.fromCache) {
       seeded = true;
+      const newJobs = !cals[JOBS_CAL];
       SEED.forEach(s => {
         if (cals[s.id]) return;
         const rec = { name: s.name, color: s.color, kind: s.kind, order: s.order, visibleTo: [],
@@ -2900,6 +3246,22 @@
         write('calendars', s.id, rec, 'seeding');
         watchEvents(s.id);
       });
+      // The Job schedule just made (16 Oct 2026): it goes second, so the
+      // Crew schedule and Personal move down one -- only where they are
+      // still where the seed put them -- and the Crew schedule's words say
+      // what it holds now (its job days have a calendar of their own).
+      if (newJobs) {
+        Object.keys(OLD_ORDER).forEach(id => {
+          const c = cals[id], s = SEED.find(x => x.id === id);
+          if (!c || !s) return;
+          const patch = {};
+          if (c.order === OLD_ORDER[id]) patch.order = s.order;
+          if (id === CREW_CAL && c.about === 'Where the crew are working and their tasks — the crew see this one') patch.about = s.about;
+          if (!Object.keys(patch).length) return;
+          Object.assign(c, patch);
+          write('calendars', id, Object.assign(patch, { updatedAt: nowIso() }), 'making room for the Job schedule');
+        });
+      }
       // My work as it was before 16 Oct (no crewSees at all): shared with
       // the crew to look at, once, as Jonah asked. Unticked later in its
       // settings, it stays unticked (the field is there then).
@@ -2920,9 +3282,71 @@
         write('calendars', c.id, { ownerOnly: false }, 'marking private or not');
       });
     }
-    if (meta && !meta.fromCache) { shareCrewCals(); foldCalendars(); }
+    if (meta && !meta.fromCache) { shareCrewCals(); foldCalendars(); moveJobDays(); }
     redrawIfVisible();
     announce();
+  }
+
+  // Jonah (16 Oct 2026): job days on a calendar of their own. Once, on the
+  // owner's device, as soon as the calendars have come from the server: an
+  // entry on the Crew schedule or My work picked as a "Job day" (type
+  // 'jobday' -- the only way one was ever marked) moves to the Job
+  // schedule: copied there under the same id with `movedFrom` (where it
+  // was), read back from the server, and only then removed where it was --
+  // so no signal, or a second device at the same moment, loses nothing, and
+  // a second run finds nothing left to move. Entries never given a kind
+  // stay where they are: they go by their titles now. Marked done on the
+  // Job schedule itself (jobDaysMovedAt, with how many).
+  let movingJobDays = false, jobDaysMoved = false;
+  async function moveJobDays() {
+    if (jobDaysMoved || movingJobDays || !isOwner() || !window.YDDb) return;
+    movingJobDays = true;
+    try {
+      const jobsCal = await window.YDDb.getFresh('calendars', JOBS_CAL);
+      if (!jobsCal) return;                                 // not on the server yet: next time
+      if (jobsCal.jobDaysMovedAt) { jobDaysMoved = true; return; }
+      let n = 0;
+      for (const from of [CREW_CAL, WORK_CAL]) {
+        const path = 'calendars/' + from + '/events';
+        const list = window.YDDb.listWhere ? await window.YDDb.listWhere(path, 'type', '==', 'jobday') : await window.YDDb.list(path);
+        for (const [id, e] of Object.entries(list || {})) {
+          if (!e || e.type !== 'jobday') continue;
+          const rec = Object.assign({}, e, { movedFrom: from, updatedAt: nowIso() });
+          delete rec.id;
+          await window.YDDb.put('calendars/' + JOBS_CAL + '/events', id, rec);
+          const back = await window.YDDb.getFresh('calendars/' + JOBS_CAL + '/events', id);
+          if (back && back.movedFrom === from) { await window.YDDb.remove(path, id); n++; }
+        }
+      }
+      await window.YDDb.put('calendars', JOBS_CAL, { jobDaysMovedAt: nowIso(), jobDaysMoved: n });
+      jobDaysMoved = true;
+      if (n) showToast(n === 1 ? 'One job day moved to the Job schedule' : n + ' job days moved to the Job schedule');
+    } catch (e) {
+      console.warn('[calendar] moving the job days stopped — tried again next time:', e && (e.code || e.message));
+    } finally {
+      movingJobDays = false;
+    }
+  }
+
+  // The job's colour on each day of it on the Job schedule (`jobColor`),
+  // for the crew's phones, which cannot read jobs (jobColorOf): put right
+  // by the owner's device whenever the entries or the jobs come in, so a
+  // job's card given another colour on the Jobs board is that colour on
+  // every phone. Written without updatedAt: it is not news for the owner's
+  // phone (functions/reminders.py _activity).
+  const jobColorAsked = new Set();
+  function fillJobColors() {
+    if (!isOwner() || !window.YDDb || !events[JOBS_CAL]) return;
+    Object.values(events[JOBS_CAL]).forEach(ev => {
+      const j = ev && ev.jobId ? jobById(ev.jobId) : null;
+      if (!j) return;                                       // a job this device does not have: left as it is
+      const want = isHex(j.cardColor) ? j.cardColor : null;
+      const key = ev.id + '|' + want;
+      if ((ev.jobColor || null) === want || jobColorAsked.has(key)) return;
+      jobColorAsked.add(key);
+      Promise.resolve(window.YDDb.put('calendars/' + JOBS_CAL + '/events', ev.id, { jobColor: want }))
+        .catch(e => console.warn('[calendar] a job day’s colour not yet on the server:', (e && e.code) || e));
+    });
   }
 
   // The Crew schedule -- and any calendar ticked "Every crew member sees it"
@@ -3014,32 +3438,19 @@
     }
   }
 
-  // Whether every crew member can see this calendar already.
-  function crewSees(cal) {
-    if (!cal) return false;
-    if (cal.kind === 'crew') return true;
-    const on = cal.visibleTo || [];
-    const crew = crewMemberUids();
-    return !cal.ownerOnly && crew.length > 0 && crew.every(uid => on.indexOf(uid) !== -1);
-  }
-
   // Jonah (12 Oct 2026): "click a button on a card on the boards or calendars
   // that marks it as a crew task so every profile marked as a crew member
-  // can view it." An entry on a calendar the crew already all see just
-  // becomes a crew task; anything else moves to the Crew tasks calendar
-  // (every date of a repeat), which they do.
+  // can view it." It moves to the Crew schedule (every date of a repeat),
+  // which every crew member sees and ticks off -- and, since each calendar
+  // has its own tags (16 Oct 2026), takes the tag its title gives it there
+  // (a pickup, a repair... else a crew task). Before, an entry on a
+  // calendar the crew could all see stayed put as a crew task -- on My
+  // work, which they only look at, nobody could have ticked it.
   window.calCrewTask = function () {
     const o = shown;
     const cal = o && cals[o.calId], base = cal && (events[o.calId] || {})[o.id];
-    if (!base || !editsCal(cal)) return;
-    if (crewSees(cal)) {
-      const next = Object.assign({}, o.ev, { type: cal.kind === 'crew' ? null : 'crew' });
-      applyChange(o.calId, base, o.ev ? o : Object.assign({}, o, { ev: base }), next, 'all');
-      closeCalModal(); render();
-      showToast('A crew task now — every crew member can see it');
-      return;
-    }
-    if (!cals[CREW_CAL]) { showToast('The Crew schedule is still being set up — try again in a moment'); return; }
+    if (!base || !editsCal(cal) || cal.kind === 'crew' || cal.kind === 'jobs') return;
+    if (!cals[CREW_CAL] || !editsCal(cals[CREW_CAL])) { showToast('The Crew schedule is still being set up — try again in a moment'); return; }
     const next = Object.assign({}, o.ev || base, { type: null });
     applyChange(o.calId, base, o.ev ? o : Object.assign({}, o, { ev: base }), next, 'all', CREW_CAL);
     closeCalModal(); render();
@@ -3139,7 +3550,9 @@
     return (o.crew || []).map(c => c && c.uid).filter(Boolean);
   }
   function forHome(o) {
-    const crewTask = isCrewOcc(o);
+    // A day on the Job schedule is the crew's, but no task: it goes with
+    // the schedule (homeDay), not in the lists of things anyone can do.
+    const crewTask = isCrewOcc(o) && !o.jobDay;
     return {
       o: o, title: o.title, day: o.day, done: !!o.done, color: colorOf(o), canTick: canTick(o), task: !!o.task,
       time: o.time ? fmtTimeRange(o.time, o.endTime || '') : o.jobDay ? 'All day' : '',
@@ -3200,7 +3613,10 @@
                      }).filter(Boolean),
                      // Nobody put on the entry at all -- anyone can do it --
                      // as against people on it whose names are not known here.
-                     nobody: !(o.crew || []).length }));
+                     nobody: !(o.crew || []).length,
+                     // A day on the Job schedule (who is working there), as
+                     // against a pickup or a to-do tied to the job.
+                     jobDay: !!o.jobDay }));
     },
     // Home (see homeDay above). `ready`: the calendars have answered once.
     ready: () => calsHeard,
@@ -3221,11 +3637,15 @@
     // The next day each job is on a calendar, from today on: job id ->
     // { day, time } (Home's list of jobs on the go). One pass for them all.
     nextForJobs: days => {
-      const from = today(), out = {};
+      const from = today(), out = {}, any = {};
+      // A day on the Job schedule is a day on the job; a pickup or a to-do
+      // tied to it counts only for a job with no such day ahead.
       occurrences(from, addDays(from, days || 60), true).forEach(o => {
         const id = o.ev && o.ev.jobId;
-        if (id && !out[id]) out[id] = { day: o.day, time: o.time ? fmtTimeRange(o.time) : '' };
+        const into = o.jobDay ? out : any;
+        if (id && !into[id]) into[id] = { day: o.day, time: o.time ? fmtTimeRange(o.time) : '' };
       });
+      Object.keys(any).forEach(id => { if (!out[id]) out[id] = any[id]; });
       return out;
     },
   };
@@ -3238,8 +3658,14 @@
     if (on) start(a); else stop();
     render();
   });
-  // Not the jobs: nothing drawn here reads them (an entry keeps its job's
-  // name), only the editor's job list, which is built as it opens.
+  // The jobs: only for the colour of each job's days on the Job schedule
+  // (jobColorOf) -- an entry keeps its job's name, and the editor's job
+  // list is built as it opens.
+  document.addEventListener('yd-jobs-changed', () => {
+    if (!Object.keys(events[JOBS_CAL] || {}).length) return;
+    fillJobColors();
+    redrawIfVisible();
+  });
   document.addEventListener('yd-cards-changed', redrawIfVisible);
   document.addEventListener('yd-boards-changed', redrawIfVisible);
   // The outreach date set or moved, or who is due changed (prospects.js).

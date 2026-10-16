@@ -1436,7 +1436,7 @@
   .cal-filters .cal-key-i { font-size:12px; color:var(--muted); }
   /* The colour key's fold (calendar.js calKey): on an iPad or a screen under
      ~900px tall the key sits behind this chip, so the working day fits under
-     the ticks. A phone folds the whole row behind "Calendars & colours"
+     the ticks. A phone folds the whole row behind "Calendars & tags"
      instead (below), and shows the key whenever that is open. */
   .cal-key-btn { display:none; }
   @media (min-width:901px) and (max-width:1199px), (min-width:901px) and (max-height:899px) {
@@ -4619,3 +4619,87 @@
     .stepper-label { flex:1 0 100%; }
     .stepper-input { flex:1 1 auto; min-width:0; }
   }
+
+  /* ---- Calendar tags (16 Oct 2026) ----
+     Jonah: "within the calendars I want tags ... and set colors". Each
+     calendar's tick in "Calendars & tags" is followed by its own tags, a tap
+     each to hide or show that kind of thing (calendar.js tagSwitchesHtml);
+     the entry editor's tag buttons, only the chosen calendar's (drawTagPick);
+     and the owner's tag list in Manage calendars → Edit (tagRowsHtml). */
+  /* Each calendar with its tags in a light band of its own, so it is plain
+     which tags are whose; short ones share a line. */
+  .cal-filters .cal-tagrow { flex:0 1 auto; max-width:100%; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;
+    min-width:0; padding:3px 8px 3px 3px; border-radius:22px; background:var(--surface-2); }
+  .cal-tags { display:contents; }
+  .cal-tagrow.cal-off .cal-tag, .cal-tagrow.cal-off .cal-tags-note { opacity:.45; }
+  .cal-tag { --c:#6b7a8f; display:inline-flex; align-items:center; gap:6px; min-height:32px; padding:3px 10px 3px 8px;
+    border-radius:999px; border:1px solid color-mix(in srgb, var(--c) 45%, var(--border)); font:inherit; font-size:12.5px;
+    font-weight:600; color:var(--text); background:color-mix(in srgb, var(--c) 12%, var(--surface)); cursor:pointer;
+    line-height:1.2; text-align:left; }
+  .cal-tag:hover { background:color-mix(in srgb, var(--c) 20%, var(--surface)); }
+  .cal-tag:focus-visible { outline:2px solid var(--brand-2); outline-offset:2px; }
+  .cal-tag-dot { width:10px; height:10px; border-radius:50%; background:var(--c); flex:none; border:2px solid var(--c); box-sizing:border-box; }
+  /* Switched off: faded, crossed out, the dot left hollow. */
+  .cal-tag.off { background:var(--surface); border-style:dashed; color:var(--muted); text-decoration:line-through; }
+  .cal-tag.off .cal-tag-dot { background:transparent; }
+  .cal-tag.sm { min-height:0; padding:1px 8px 1px 6px; font-size:11.5px; cursor:default; }
+  .cal-tags-note { font-size:12px; color:var(--muted); padding:0 4px; }
+  /* An iPad or a short laptop screen: the tags fold behind "🎨 Tags", and
+     the calendars' ticks sit in one row again. */
+  @media (min-width:901px) and (max-width:1199px), (min-width:901px) and (max-height:899px) {
+    .cal-filters:not(.tags-open) .cal-tagrow { padding:0; background:none; }
+    .cal-filters:not(.tags-open) .cal-tags { display:none; }
+  }
+  /* A phone: bigger to hit, two lines for a long name. */
+  @media (max-width:900px) {
+    .cal-tag { min-height:40px; font-size:13px; }
+    .cal-filters .cal-tagrow { flex:1 1 100%; border-radius:14px; padding:5px; }
+  }
+
+  /* A phone: the tags three to a row, a name on up to two lines (Jonah,
+     15 Oct 2026: buttons in sight, not a row to scroll), the calendar's
+     tick across the top of its own. */
+  @media (max-width:720px) {
+    .cal-filters .cal-tagrow { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:5px; }
+    .cal-filters .cal-tagrow > .cal-check, .cal-filters .cal-tags-note { grid-column:1 / -1; justify-self:start; }
+    .cal-tag { min-height:44px; font-size:12px; padding:4px 6px; gap:4px; line-height:1.15; }
+  }
+
+  /* The editor's tag buttons: the one picked filled in its colour. */
+  .cal-tagpick { display:flex; flex-wrap:wrap; gap:7px; }
+  .cal-tagpick-b { --c:#6b7a8f; --ink:#fff; display:inline-flex; align-items:center; gap:7px; min-height:44px; padding:7px 13px;
+    border-radius:22px; border:1.5px solid color-mix(in srgb, var(--c) 55%, var(--border-strong)); background:var(--surface);
+    color:var(--text); font:inherit; font-size:13.5px; font-weight:600; cursor:pointer; text-align:left; line-height:1.25; }
+  .cal-tagpick-b:hover { background:color-mix(in srgb, var(--c) 12%, var(--surface)); }
+  .cal-tagpick-b.on { background:var(--c); border-color:var(--c); color:var(--ink); }
+  .cal-tagpick-b.on .cal-tag-dot { background:var(--ink); border-color:var(--ink); }
+  .cal-tagpick-b small { font-weight:400; opacity:.85; }
+  .cal-tagpick-b:focus-visible { outline:2px solid var(--brand-2); outline-offset:2px; }
+  @media (max-width:720px) {
+    .cal-tagpick { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .cal-tagpick-b { justify-content:flex-start; }
+  }
+  .cal-jobday-note { font-size:13px; line-height:1.45; padding:8px 10px; border-radius:8px; color:var(--text);
+    background:var(--surface-2); border-left:4px solid #1a9c8c; }
+  .cal-detail-tag { display:flex; align-items:center; gap:8px; }
+  .cal-detail-tag .cal-tag-dot { background:var(--t); border-color:var(--t); }
+  .cal-jobs-group { color:var(--text); }
+
+  /* Manage calendars: each one's tags at a glance, and the owner's list. */
+  .cal-manage-tags { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+  .cc-tags { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
+  .cc-tag { --c:#6b7a8f; border:1px solid var(--border); border-left:5px solid var(--c); border-radius:8px; padding:8px 10px;
+    background:var(--surface); display:flex; flex-direction:column; gap:6px; }
+  .cc-tag-top { display:flex; align-items:center; gap:8px; }
+  .cc-tag-dot { width:14px; height:14px; border-radius:50%; background:var(--c); flex:none; }
+  .cc-tag-icon { width:52px; flex:none; text-align:center; }
+  .cc-tag-name { flex:1; min-width:0; }
+  .cc-tag-x { flex:none; width:40px; height:40px; border-radius:50%; border:1px solid var(--border); background:var(--surface);
+    color:var(--muted); font-size:15px; cursor:pointer; }
+  .cc-tag-x:hover { color:var(--st-now); border-color:var(--st-now); }
+  .cc-tag-colors { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .cc-tag-sw { --s:#6b7a8f; width:30px; height:30px; border-radius:50%; border:none; background:var(--s); cursor:pointer; padding:0; }
+  .cc-tag-sw.on { box-shadow:0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
+  .cc-tag-pick { width:40px; height:32px; padding:0 2px; border:1px solid var(--border); border-radius:6px; background:var(--surface); cursor:pointer; }
+  .cc-tag-appt { font-size:13px; }
+  .cc-tag-add { margin:0 0 6px; }

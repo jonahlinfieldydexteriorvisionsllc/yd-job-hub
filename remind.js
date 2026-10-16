@@ -45,6 +45,8 @@
   // a light colour.
   // `appointment`: it simply happens at its time -- nobody ticks it off
   // (isTask below).
+  // These are the tags every calendar's own list is made from (CAL_TAGS
+  // below); `calOnly`: not offered for a board card (boards.js).
   const TYPES = [
     { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true },
     { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#7a4fd1', appointment: true },
@@ -52,19 +54,145 @@
     { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
     { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
+    // The Crew schedule's own (Jonah, 16 Oct 2026: "The crew calendar should
+    // have tags and set colors for material pickups etc."), in the clock-in
+    // choices' words (timeclock.js: Shop / yard work, Equipment repair,
+    // Pickups + errands). Colours of their own, clear of every other tag's
+    // and of the urgency colours: deep teal, moss green, magenta.
+    { id: 'repair', icon: '🔧', name: 'Equipment repair', timed: false, color: '#0f766e', crew: true, calOnly: true },
+    { id: 'shop', icon: '🛠️', name: 'Shop / yard work', timed: false, color: '#4d6b1a', crew: true, calOnly: true },
+    // A check to collect, a part to drop off, the bank.
+    { id: 'errand', icon: '🧾', name: 'Errand', timed: false, color: '#a3369b', crew: true, calOnly: true },
     // "Things not for Jonah to handle": on his calendar so he sees them all,
     // but they buzz only the people on them.
     { id: 'crew', icon: '👷', name: 'Crew task', timed: false, color: '#2f6fd6', crew: true },
-    // A day of work on a job -- who is working where. No tick box (Jonah,
-    // 15 Oct 2026: "schedules job days on calendar dont need a check mark
-    // for done"; the job is finished on the job itself). Only ever picked
-    // (isJobDay), only on a calendar (a card is a thing to do: `calOnly`),
-    // and drawn in its calendar's colour: it has none of its own.
-    { id: 'jobday', icon: '🔨', name: 'Job day — who is working where', timed: null, color: '', calOnly: true },
+    // A day of work on a job -- who is working where: everything on the Job
+    // schedule (Jonah, 16 Oct 2026: "the job calendar will be solely for
+    // where the crew is working each day"). No tick box (15 Oct: "schedules
+    // job days on calendar dont need a check mark for done"; the job is
+    // finished on the job itself), only on a calendar (`calOnly`), and drawn
+    // in its job's colour (calendar.js jobColorOf): it has none of its own.
+    { id: 'jobday', icon: '🔨', name: 'Job day', timed: null, color: '', calOnly: true },
     { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true,
       personal: true },
     { id: 'personal', icon: '🏠', name: 'Personal', timed: null, color: '#d94f8a', personal: true },
   ];
+
+  // ------------------------------------------------- each calendar's tags
+  //
+  // Jonah (16 Oct 2026): "within the calendars I want tags ... I want the
+  // separate calendars and within them have tags." Each calendar has its own
+  // list -- what an entry on it can be, each with its colour -- and an entry
+  // carries one of them (`type`, its id). These are the lists a calendar
+  // starts with, by its kind; the owner changes any calendar's in ⚙ Manage
+  // calendars → Edit (rename, recolour, add, take off), stored on the
+  // calendar as `tags` [{id, name, icon, color, appointment}] only once
+  // edited. [id, the name it goes by there when not its own].
+  const CAL_TAGS = {
+    work: [['bid'], ['appt'], ['pickup'], ['delivery'], ['email'], ['todo']],
+    crew: [['pickup', 'Material pickup'], ['delivery'], ['repair'], ['shop'], ['errand'], ['crew']],
+    // The Job schedule: job days only -- no list to pick from.
+    jobs: [['jobday']],
+    personal: [['doctor'], ['personal']],
+  };
+  // A calendar the owner made has My work's list to start with.
+  CAL_TAGS.custom = CAL_TAGS.work;
+  // What an entry is when nothing better is known, on each kind.
+  const FALLBACK = { work: 'todo', custom: 'todo', crew: 'crew', jobs: 'jobday', personal: 'personal' };
+  const kindOfCal = cal => (cal && cal.kind) || '';
+  const startList = kind => CAL_TAGS[kind] || CAL_TAGS.work;
+  const isColor = c => /^#[0-9a-fA-F]{6}$/.test(String(c || ''));
+  // Whether the owner has made this calendar's list his own.
+  const edited = cal => !!cal && Array.isArray(cal.tags) && cal.tags.some(t => t && typeof t.id === 'string' && t.id);
+  // What a tag means on its calendar, whatever it is called there: on the
+  // Crew schedule everything is the crew's (eventIsMine says the same) --
+  // a pickup there is a crew pickup; on Personal everything is his own.
+  // The built-in Personal tag is his life, not a job to tick off: nothing
+  // to tick (`appointment`) unless he says otherwise in its settings.
+  function decorate(t, cal) {
+    const kind = kindOfCal(cal);
+    const out = Object.assign({}, t);
+    out.crew = kind === 'crew' || !!t.crew;
+    out.personal = kind === 'personal' || !!t.personal;
+    out.jobDay = t.id === 'jobday';
+    if (typeof out.appointment !== 'boolean') out.appointment = !!t.appointment || t.id === 'personal';
+    return out;
+  }
+  // One tag as the owner left it: his name, icon, colour and "nothing to
+  // tick off", over the built-in one of the same id. A built-in's dark
+  // writing goes with its own colour only (a new colour gets its own, by
+  // app.js inkOn, where it is drawn).
+  function fromStored(t, cal) {
+    const b = typeById(t.id);
+    const color = isColor(t.color) ? t.color : (b ? b.color : '#6b7a8f');
+    return decorate({
+      id: t.id,
+      name: String(t.name || (b && b.name) || 'Tag').slice(0, 40),
+      icon: String(t.icon != null ? t.icon : (b ? b.icon : '')).slice(0, 4),
+      color: color, ink: b && b.ink && b.color === color ? b.ink : '',
+      appointment: typeof t.appointment === 'boolean' ? t.appointment : undefined,
+      timed: b ? b.timed : null,
+      custom: !b,
+    }, cal);
+  }
+  // A calendar's tags, in its order: the owner's, else the list its kind
+  // starts with. The Job schedule's is always the one Job day. Worked out
+  // once per calendar record (the calendar draws every entry through it;
+  // a changed calendar arrives as a new record), and never changed by the
+  // caller.
+  const tagsMemo = new WeakMap();
+  function tagsOf(cal) {
+    const kind = kindOfCal(cal);
+    const memo = cal && typeof cal === 'object' ? tagsMemo.get(cal) : null;
+    if (memo && memo.kind === kind && memo.tags === cal.tags) return memo.list;
+    let list;
+    if (kind !== 'jobs' && edited(cal)) {
+      const seen = {};
+      list = cal.tags.filter(t => t && typeof t.id === 'string' && t.id && !seen[t.id] && (seen[t.id] = true))
+        .map(t => fromStored(t, cal));
+    } else {
+      list = startList(kind).map(([id, name]) => decorate(Object.assign({}, typeById(id), name ? { name: name } : {}), cal));
+    }
+    if (cal && typeof cal === 'object') tagsMemo.set(cal, { kind: kind, tags: cal.tags, list: list });
+    return list;
+  }
+  // Whether an entry's stored tag still means something on this calendar:
+  // one of its own; or a built-in of another calendar's (an entry moved
+  // here, or given a kind before each calendar had its own list), which
+  // keeps what it is -- unless the owner took that one off this calendar's
+  // list. A tag taken off (or one of another calendar's own making) reads
+  // as whatever the calendar makes of the entry's title.
+  function knownOn(cal, type) {
+    if (!type) return false;
+    if (!cal) return !!typeById(type);
+    if (kindOfCal(cal) === 'jobs') return type === 'jobday';
+    if (tagsOf(cal).some(t => t.id === type)) return true;
+    if (!typeById(type)) return false;
+    return !(edited(cal) && startList(kindOfCal(cal)).some(x => x[0] === type));
+  }
+  // Everything about one tag as it is on this calendar ({id, name, icon,
+  // color, ink, appointment, crew, personal, jobDay}), or null. Everything
+  // that decides how an entry behaves -- a task or not, a job's day, whose
+  // it is, its colour, the usual reminder -- reads its tag through here, so
+  // a tag the owner made works everywhere a built-in one does.
+  // functions/reminders.py _tag_of: the same.
+  function tagOf(type, cal) {
+    if (!cal) return typeById(type);
+    if (kindOfCal(cal) === 'jobs') return tagsOf(cal)[0];
+    const hit = tagsOf(cal).find(t => t.id === type);
+    if (hit) return hit;
+    return knownOn(cal, type) ? decorate(typeById(type), cal) : null;
+  }
+  // A guess at an entry's tag, as one this calendar has: its own of that
+  // id, else its usual one, else its first.
+  function onCalendar(cal, id) {
+    if (!id || !edited(cal)) return id;
+    const list = tagsOf(cal);
+    if (list.some(t => t.id === id)) return id;
+    const fb = FALLBACK[kindOfCal(cal)];
+    if (fb && list.some(t => t.id === fb)) return fb;
+    return list.length ? list[0].id : id;
+  }
   const TIMED_LEADS = [30];
   const LEADS = { bid: [60, 30] };
 
@@ -79,37 +207,61 @@
 
   const typeById = id => TYPES.find(t => t.id === id) || null;
 
-  // What a thing is. Nothing picked, it goes by where it is, then by its
-  // title. Jonah (15 Oct 2026) keeps three calendars: the Crew schedule
-  // (where the crew are working, crew tasks, anything a crew member is on --
-  // all crew tasks), Personal ("anything i do not to do with the business":
-  // personal, or a doctor's appointment when the title says so), and My work
-  // (quote appointments, pickups, emails to send): there the title tells a
-  // pickup, an email or a delivery, and anything else is a to-do. A card on
-  // Pickups -- made from a store's "ready for pickup" email -- is a pickup,
-  // and one on Crew tasks or tagged 👷 Crew a crew task. (Site visits and
-  // Work schedule were calendars before 15 Oct; kept so nothing old reads
-  // as nothing.) functions/reminders.py _type_of: the same rules.
-  const BY_CALENDAR = { crew: 'crew', schedule: 'crew', visits: 'bid', work: 'todo' };
+  // What a thing is: the tag picked for it (one this calendar knows --
+  // knownOn), else a guess by where it is and its title. Jonah keeps four
+  // calendars (16 Oct 2026), each with its own tags:
+  //   - the Job schedule: every entry a job's day, whatever it says;
+  //   - the Crew schedule: the title says a material pickup, a delivery, an
+  //     equipment repair, shop or yard work, or an errand (a check to
+  //     collect, the bank) -- in that order of asking, so "Pickup check
+  //     from ..." is an errand and "Pick up pavers at the yard" a pickup --
+  //     and anything else is a crew task;
+  //   - Personal ("anything i do not to do with the business"): a doctor's
+  //     appointment when the title says so, else personal;
+  //   - My work, and any calendar he makes: the title tells a pickup, an
+  //     email or a delivery, and anything else is a to-do.
+  // A card on Pickups -- made from a store's "ready for pickup" email -- is
+  // a pickup, and one on Crew tasks or tagged 👷 Crew a crew task. (Site
+  // visits and the Work schedule were calendars before 15 Oct; kept so
+  // nothing old reads as nothing.) functions/reminders.py _type_of: the same.
+  const BY_CALENDAR = { visits: 'bid', work: 'todo', custom: 'todo' };
   const WORDS = [
     ['pickup', /\bpick\s?-?\s?up\b/i],
     ['email', /^\s*send\b|\be-?mail\b/i],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
   ];
+  const CREW_WORDS = [
+    ['errand', /\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bchecks?\s+(?:from|for)\b|\bdeposit\b/i],
+    ['pickup', /\bpick\s?-?\s?up\b/i],
+    ['delivery', /\bdeliver(y|ies|ed)?\b/i],
+    ['repair', /\b(?:repair\w*|fix(?:ed|ing)?|service|oil change|tires?|broken|brakes?|grease)\b/i],
+    ['shop', /\b(?:shop|yard work|the yard)\b/i],
+  ];
   const DOCTOR_WORDS = /\b(doctor|dentist|dental|clinic|chiropract\w*|orthodont\w*|optometr\w*|dermatolog\w*|physical therapy|check-?up|physical)\b|\bdr\.\s/i;
-  function byWords(title) {
-    const hit = WORDS.find(w => w[1].test(title || ''));
+  function byWords(title, list) {
+    const hit = (list || WORDS).find(w => w[1].test(title || ''));
     return hit ? hit[0] : '';
   }
+  // `where`: { cal (the calendar itself: its own tags count), or calKind,
+  // or boardId (a card) }.
   function typeOf(item, where) {
-    if (item && typeById(item.type)) return item.type;
     where = where || {};
+    const cal = where.cal || (where.calKind ? { kind: where.calKind } : null);
+    const kind = kindOfCal(cal);
+    if (kind === 'jobs') return 'jobday';
+    const stored = item && item.type;
+    if (stored && (cal ? knownOn(cal, stored) : !!typeById(stored))) return stored;
     const title = (item && item.title) || '';
-    if (where.calKind === 'personal') return DOCTOR_WORDS.test(title) ? 'doctor' : 'personal';
-    if (where.calKind === 'crew' || where.calKind === 'schedule') return 'crew';
-    if (where.boardId === 'pickups') return 'pickup';
-    if (where.boardId === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
-    return byWords(title) || BY_CALENDAR[where.calKind] || '';
+    if (kind === 'schedule') return 'crew';             // the old Work schedule
+    if (!cal) {
+      if (where.boardId === 'pickups') return 'pickup';
+      if (where.boardId === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
+      return byWords(title);
+    }
+    const guess = kind === 'personal' ? (DOCTOR_WORDS.test(title) ? 'doctor' : 'personal')
+      : kind === 'crew' ? byWords(title, CREW_WORDS) || 'crew'
+      : byWords(title) || BY_CALENDAR[kind] || '';
+    return onCalendar(cal, guess);
   }
   // Whether a thing has to be ticked off as done. Jonah (14 Oct 2026): "make
   // tasks on the calendar have to be marked done or they get included in the
@@ -136,18 +288,25 @@
   // check to collect).
   // What the box says is what it is. (Anything not given a kind on the old
   // Work schedule, kind `schedule`, stays a job's day for old copies.)
+  // From 16 Oct 2026 job days have a calendar of their own, the Job
+  // schedule: everything on it is one.
   // `where.typed`: a kind was picked, not taken from the calendar.
   function isJobDay(type, where) {
     where = where || {};
-    if (type === 'jobday') return true;
-    return !where.typed && where.calKind === 'schedule';
+    const kind = where.calKind || kindOfCal(where.cal);
+    if (type === 'jobday' || kind === 'jobs') return true;
+    return !where.typed && kind === 'schedule';
   }
+  // `where.cal`: the calendar, whose own tags decide (a tag the owner made,
+  // or one he set to "nothing to tick off").
   function isTask(type, timed, where) {
     where = where || {};
     if (isJobDay(type, where)) return false;
-    const t = typeById(type);
-    if (t) return !t.appointment && (t.id !== 'personal' || !!where.card);
-    return !!where.card || where.calKind === 'followups' || !timed;
+    if (where.card) { const c = typeById(type); return c ? !c.appointment : true; }
+    const cal = where.cal || (where.calKind ? { kind: where.calKind } : null);
+    const t = cal ? tagOf(type, cal) : typeById(type);
+    if (t) return !t.appointment && (cal ? true : t.id !== 'personal');
+    return where.calKind === 'followups' || kindOfCal(cal) === 'followups' || !timed;
   }
   // How far back a task not ticked off is carried forward: a fortnight, so
   // something forgotten does not pile up for ever (the card stays on its
@@ -211,9 +370,10 @@
   // The line under the Remind box: what "Usual" means for this one. The
   // ⋯ menu item is "Notification settings" (it was "Notifications &
   // summaries" once; the words here had not followed).
-  function usualHint(type, timed) {
+  // `cal`: the calendar it is on (on the Crew schedule every tag is the crew's).
+  function usualHint(type, timed, cal) {
     const when = usualWords(type, timed);
-    if ((typeById(type) || {}).crew) {
+    if (((cal ? tagOf(type, cal) : typeById(type)) || {}).crew) {
       return 'Usual: ' + when + ', to the people on it — or, with nobody on it, to every crew member.';
     }
     if (autoOn === false) {
@@ -258,11 +418,13 @@
   // Anything on the Crew schedule is the crew's -- with nobody on it, every
   // crew member's, whatever it is (a pickup there is a crew pickup). Crew
   // testing, 16 Oct 2026: "Pick up pavers at the yard" on the Crew schedule
-  // with nobody on it reached no crew member's day at all.
+  // with nobody on it reached no crew member's day at all. A day on the Job
+  // schedule with nobody on it is the whole crew's too: they are all there.
   function eventIsMine(ev, cal, who) {
     if (!ev || !who) return false;
     const on = (ev.crew || []).map(c => c && c.uid).filter(Boolean);
-    const type = cal && cal.kind === 'crew' ? 'crew' : typeOf(ev, { calKind: cal && cal.kind });
+    const kind = kindOfCal(cal);
+    const type = kind === 'crew' || kind === 'jobs' ? 'crew' : typeOf(ev, { cal: cal });
     return isMine(on, type, ev.createdBy || '', who);
   }
   // This person, as isMine wants them. `people`: uid -> user record, where
@@ -313,6 +475,11 @@
 
   window.YDRemind = {
     TYPES: TYPES,
+    // Each calendar's tags (16 Oct 2026).
+    CAL_TAGS: CAL_TAGS,
+    tagsOf: tagsOf,
+    tagOf: tagOf,
+    knownOn: knownOn,
     isJobDay: isJobDay,
     typeById: typeById,
     typeOf: typeOf,

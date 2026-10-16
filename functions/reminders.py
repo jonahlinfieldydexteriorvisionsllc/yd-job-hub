@@ -388,38 +388,156 @@ def _card_reminders(db, people, since, now, boards):
 
 TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
+# The built-in tags, in remind.js TYPES order (the 7 am list is sorted by it):
+# id -> icon.
 TYPES = {"bid": "QP", "appt": "🕑", "pickup": "🚚", "delivery": "🚛", "email": "✉️",
-         "todo": "✅", "crew": "👷", "jobday": "🔨", "doctor": "🩺", "personal": "🏠"}
-CREW_TYPES = {"crew"}
-# The three calendars (remind.js typeOf, 15 Oct 2026): Crew schedule, My work,
-# Personal. Site visits / Work schedule were calendars before that.
-BY_CALENDAR = {"crew": "crew", "schedule": "crew", "visits": "bid", "work": "todo"}
+         "todo": "✅", "repair": "🔧", "shop": "🛠️", "errand": "🧾", "crew": "👷", "jobday": "🔨",
+         "doctor": "🩺", "personal": "🏠"}
+# The built-ins that are the crew's wherever they are (remind.js `crew`).
+CREW_TYPES = {"crew", "repair", "shop", "errand"}
+
+# Each calendar's own tags (remind.js CAL_TAGS, Jonah 16 Oct 2026: "within the
+# calendars I want tags"): the list each kind starts with -- the owner's own
+# list, once he edits it, is on the calendar as `tags` [{id, name, icon,
+# color, appointment}].
+CAL_TAGS = {
+    "work": ("bid", "appt", "pickup", "delivery", "email", "todo"),
+    "crew": ("pickup", "delivery", "repair", "shop", "errand", "crew"),
+    "jobs": ("jobday",),
+    "personal": ("doctor", "personal"),
+}
+CAL_TAGS["custom"] = CAL_TAGS["work"]
+FALLBACK = {"work": "todo", "custom": "todo", "crew": "crew", "jobs": "jobday", "personal": "personal"}
+# The guess by where it is, when the title says nothing (remind.js BY_CALENDAR).
+BY_CALENDAR = {"visits": "bid", "work": "todo", "custom": "todo"}
 WORDS = (("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
          ("email", re.compile(r"^\s*send\b|\be-?mail\b", re.I)),
          ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)))
+# On the Crew schedule, asked in this order: "Pickup check from ..." is an
+# errand, "Pick up pavers at the yard" a pickup (remind.js CREW_WORDS).
+CREW_WORDS = (("errand", re.compile(r"\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|"
+                                    r"\bchecks?\s+(?:from|for)\b|\bdeposit\b", re.I)),
+              ("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
+              ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
+              ("repair", re.compile(r"\b(?:repair\w*|fix(?:ed|ing)?|service|oil change|tires?|broken|brakes?|grease)\b", re.I)),
+              ("shop", re.compile(r"\b(?:shop|yard work|the yard)\b", re.I)))
 DOCTOR_WORDS = re.compile(r"\b(doctor|dentist|dental|clinic|chiropract\w*|orthodont\w*|optometr\w*|dermatolog\w*|"
                           r"physical therapy|check-?up|physical)\b|\bdr\.\s", re.I)
 DAY_LIST_MAX = 6                  # named in the 7 am buzz; the rest are "+N more"
 
 
-def _type_of(item, cal_kind=None, board_id=None):
-    """What a thing is -- picked, or by where it is, then by its title
-    (remind.js typeOf)."""
-    if item.get("type") in TYPES:
-        return item["type"]
-    title = str(item.get("title") or "")
-    if cal_kind == "personal":
-        return "doctor" if DOCTOR_WORDS.search(title) else "personal"
-    if cal_kind in ("crew", "schedule"):
-        return "crew"
-    if board_id == "pickups":
-        return "pickup"
-    if board_id == "crew" or "crew" in (item.get("labels") or []):
-        return "crew"
-    for kind, words in WORDS:
-        if words.search(title):
+def _by_words(title, words=WORDS):
+    for kind, w in words:
+        if w.search(title):
             return kind
-    return BY_CALENDAR.get(cal_kind, "")
+    return ""
+
+
+def _edited(cal):
+    """The owner has made this calendar's list his own (remind.js edited)."""
+    return isinstance((cal or {}).get("tags"), list) and \
+        any(isinstance(t, dict) and isinstance(t.get("id"), str) and t.get("id") for t in cal["tags"])
+
+
+def _tags_of(cal):
+    """A calendar's tags, in order: {id: tag}, each tag {id, icon,
+    appointment, crew} -- the owner's list, else the one its kind starts
+    with (remind.js tagsOf). On the Crew schedule every tag is the crew's;
+    the built-in Personal tag is nothing to tick off unless he said
+    otherwise; on the Job schedule there is only the job's day."""
+    cal = cal or {}
+    kind = cal.get("kind") or ""
+    out = {}
+
+    def one(tid, icon, appointment):
+        out[tid] = {"id": tid, "icon": icon,
+                    "appointment": appointment if isinstance(appointment, bool)
+                    else tid in APPOINTMENTS or tid == "personal",
+                    "crew": kind == "crew" or tid in CREW_TYPES}
+    if kind != "jobs" and _edited(cal):
+        for t in cal["tags"]:
+            if not isinstance(t, dict) or not isinstance(t.get("id"), str) or not t["id"] or t["id"] in out:
+                continue
+            icon = t.get("icon") if t.get("icon") is not None else TYPES.get(t["id"], "")
+            one(t["id"], str(icon or "")[:4], t.get("appointment"))
+    else:
+        for tid in CAL_TAGS.get(kind, CAL_TAGS["work"]):
+            one(tid, TYPES.get(tid, ""), None)
+    return out
+
+
+def _known_on(cal, kind):
+    """Whether an entry's stored tag still means something on its calendar
+    (remind.js knownOn): one of its own, or a built-in of another calendar's
+    -- unless the owner took that one off this calendar's list."""
+    if not kind:
+        return False
+    if cal is None:
+        return kind in TYPES
+    ck = cal.get("kind") or ""
+    if ck == "jobs":
+        return kind == "jobday"
+    if kind in _tags_of(cal):
+        return True
+    if kind not in TYPES:
+        return False
+    return not (_edited(cal) and kind in CAL_TAGS.get(ck, CAL_TAGS["work"]))
+
+
+def _tag_of(kind, cal):
+    """Everything about one tag on its calendar ({id, icon, appointment,
+    crew}), or None (remind.js tagOf)."""
+    if cal is None:
+        return {"id": kind, "icon": TYPES[kind], "appointment": kind in APPOINTMENTS,
+                "crew": kind in CREW_TYPES} if kind in TYPES else None
+    tags = _tags_of(cal)
+    if (cal.get("kind") or "") == "jobs":
+        return tags.get("jobday")
+    if kind in tags:
+        return tags[kind]
+    if _known_on(cal, kind):
+        return {"id": kind, "icon": TYPES[kind], "appointment": kind in APPOINTMENTS or kind == "personal",
+                "crew": (cal.get("kind") == "crew") or kind in CREW_TYPES}
+    return None
+
+
+def _type_of(item, cal_kind=None, board_id=None, cal=None):
+    """What a thing is -- its tag, if its calendar knows it, else a guess by
+    where it is and its title (remind.js typeOf). `cal`: the calendar itself,
+    whose own tags count."""
+    if cal is None and cal_kind:
+        cal = {"kind": cal_kind}
+    ck = (cal or {}).get("kind") or ""
+    if ck == "jobs":
+        return "jobday"
+    stored = item.get("type")
+    if stored and (_known_on(cal, stored) if cal is not None else stored in TYPES):
+        return stored
+    title = str(item.get("title") or "")
+    if ck == "schedule":                  # the old Work schedule
+        return "crew"
+    if cal is None:
+        if board_id == "pickups":
+            return "pickup"
+        if board_id == "crew" or "crew" in (item.get("labels") or []):
+            return "crew"
+        return _by_words(title)
+    if ck == "personal":
+        guess = "doctor" if DOCTOR_WORDS.search(title) else "personal"
+    elif ck == "crew":
+        guess = _by_words(title, CREW_WORDS) or "crew"
+    else:
+        guess = _by_words(title) or BY_CALENDAR.get(ck, "")
+    # A guess this calendar has (remind.js onCalendar): its own of that id,
+    # else its usual one, else its first.
+    if not guess or not _edited(cal):
+        return guess
+    tags = _tags_of(cal)
+    if guess in tags:
+        return guess
+    if FALLBACK.get(ck) in tags:
+        return FALLBACK[ck]
+    return next(iter(tags), guess)
 
 
 def _is_crew_member(u):
@@ -431,8 +549,9 @@ def _is_crew_member(u):
 
 
 def _whose(kind, cal_kind):
-    """remind.js eventIsMine: on the Crew schedule everything is the crew's."""
-    return "crew" if cal_kind == "crew" else kind
+    """remind.js eventIsMine: on the Crew schedule everything is the crew's,
+    and a day on the Job schedule is the whole crew's when nobody is on it."""
+    return "crew" if cal_kind in ("crew", "jobs") else kind
 
 
 def _is_mine(on, kind, maker, u):
@@ -471,23 +590,35 @@ TICK_FROM = datetime.date(2026, 10, 14)
 
 
 def _is_job_day(kind, cal_kind=None, typed=False):
-    """remind.js isJobDay: picked as a "Job day" (who is working where), never
-    guessed from the entry being tied to a job (16 Oct 2026: a to-do tied to
-    a job was left out of the count); anything given no kind on the old Work
-    schedule too. Never a task to tick."""
-    if kind == "jobday":
+    """remind.js isJobDay: everything on the Job schedule (16 Oct 2026: "the
+    job calendar will be solely for where the crew is working each day"), or
+    picked as a "Job day" before it existed -- never guessed from the entry
+    being tied to a job (a to-do tied to a job was left out of the count);
+    anything given no kind on the old Work schedule too. Never a task to
+    tick."""
+    if kind == "jobday" or cal_kind == "jobs":
         return True
     return not typed and cal_kind == "schedule"
 
 
-def _is_task(kind, timed, card=False, cal_kind=None, typed=False):
+def _is_task(kind, timed, card=False, cal_kind=None, typed=False, cal=None):
     """remind.js isTask. A job's day is not a task (Jonah, 15 Oct 2026:
-    "schedules job days on calendar dont need a check mark for done")."""
+    "schedules job days on calendar dont need a check mark for done"). On a
+    calendar, its own tags decide (`cal`): a tag the owner set to "nothing to
+    tick off" is not one."""
+    if cal is not None and not cal_kind:
+        cal_kind = cal.get("kind")
     if _is_job_day(kind, cal_kind, typed):
         return False
-    if kind in TYPES:
-        return kind not in APPOINTMENTS and (kind != "personal" or card)
-    return bool(card) or cal_kind == "followups" or not timed
+    if card:
+        return kind not in APPOINTMENTS
+    if cal is not None:
+        t = _tag_of(kind, cal)
+        if t:
+            return not t["appointment"]
+    elif kind in TYPES:
+        return kind not in APPOINTMENTS and kind != "personal"
+    return cal_kind == "followups" or not timed
 
 
 def _overnight(ev, timed):
@@ -571,12 +702,14 @@ def open_tasks(db, people, first, last, now):
                         continue
                     if done.get(day.isoformat()):
                         continue
-                    kind = _type_of(one, cal_kind=cal.get("kind"))
-                    if not _is_task(kind, timed, cal_kind=cal.get("kind"), typed=one.get("type") in TYPES) or \
+                    kind = _type_of(one, cal=cal)
+                    if not _is_task(kind, timed, cal_kind=cal.get("kind"), typed=_known_on(cal, one.get("type")), cal=cal) or \
                             to_come(day, timed and one.get("time")):
                         continue
                     on = one.get("crew") or []
-                    give(sees, {"day": day, "kind": kind, "title": str(one.get("title") or one.get("jobName") or "An entry"),
+                    tag = _tag_of(kind, cal) or {}
+                    give(sees, {"day": day, "kind": kind, "icon": tag.get("icon") or "",
+                                "title": str(one.get("title") or one.get("jobName") or "An entry"),
                                 "where": cal.get("name") or "a calendar", "time": one.get("time") if timed else "",
                                 "on": names(on), "recurring": False, "undated": False, "machine": False},
                          {cr.get("uid") for cr in on if isinstance(cr, dict)}, _whose(kind, cal.get("kind")),
@@ -616,7 +749,7 @@ def open_tasks(db, people, first, last, now):
                         # A machine's own card: the owner has the machine below.
                         and not (k.get("auto") and k.get("equipmentId") and u.get("role") == "owner")]
                 on = k.get("assignees") or []
-                give(sees, {"day": day, "kind": kind, "title": str(k.get("title") or "A card"),
+                give(sees, {"day": day, "kind": kind, "icon": TYPES.get(kind) or "", "title": str(k.get("title") or "A card"),
                             "where": board.get("name") or "a board", "time": t if timed else "", "on": names(on),
                             "recurring": bool(k.get("recurring")), "undated": bool(k.get("_undated")), "machine": False},
                      {a.get("uid") for a in on if isinstance(a, dict)}, kind,
@@ -637,7 +770,7 @@ def open_tasks(db, people, first, last, now):
                 except ValueError:
                     continue
                 for uid in owners:
-                    out[uid].append({"day": day, "kind": "", "title": "🚜 " + str(g.get("name") or "A machine") + " service due",
+                    out[uid].append({"day": day, "kind": "", "icon": "", "title": "🚜 " + str(g.get("name") or "A machine") + " service due",
                                      "where": "Equipment", "time": "", "on": [], "theirs": True, "recurring": False,
                                      "undated": False, "machine": True})
     except Exception as err:          # noqa: BLE001
@@ -682,12 +815,14 @@ def _usual(db, people, since, now, cals, boards, prefs):
         except Exception as err:      # noqa: BLE001
             print("reminders: usual push failed:", uid, key, err)
 
-    def timed(uids, kind, title, start, body, key, tag):
+    # `icon`: its tag's, as its calendar has it (one the owner made too).
+    def timed(uids, kind, title, start, body, key, tag, icon=None):
+        icon = TYPES.get(kind) if icon is None else icon
         for lead in TYPE_LEADS.get(kind, TIMED_LEADS):
             due = start - datetime.timedelta(minutes=lead)
             if since < due <= now:
                 for uid in uids:
-                    buzz(uid, "auto_%s_%s_%d" % (uid, key, lead), (TYPES.get(kind) or "🔔") + " " + title,
+                    buzz(uid, "auto_%s_%s_%d" % (uid, key, lead), (icon or "🔔") + " " + title,
                          _lead_words(lead) + " · " + body, tag)
 
     # Calendar entries: the ones starting about now, the repeats, and any
@@ -710,9 +845,13 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 for day, one in days:
                     if done.get(day.isoformat()):
                         continue
-                    kind = _type_of(one, cal_kind=cal.get("kind"))
+                    kind = _type_of(one, cal=cal)
+                    tag = _tag_of(kind, cal) or {}
                     on = {cr.get("uid") for cr in (one.get("crew") or []) if isinstance(cr, dict)}
                     who = [u["uid"] for u in sees if _is_mine(on, _whose(kind, cal.get("kind")), ev.get("createdBy") or "", u)]
+                    # A job's day says it is one, whatever it was once tagged.
+                    if _is_job_day(kind, cal.get("kind"), _known_on(cal, one.get("type"))):
+                        kind, tag = "jobday", dict(tag, icon=TYPES["jobday"])
                     title = str(one.get("title") or one.get("jobName") or "Calendar")
                     if one.get("time") and not one.get("allDay"):
                         if day.isoformat() != str(one.get("date")):
@@ -721,10 +860,10 @@ def _usual(db, people, since, now, cals, boards, prefs):
                         timed([u for u in who if u not in mine], kind, title, _start_of(one, day),
                               _words(one, cal, _start_of(one, day)),
                               "ev_%s_%s_%s" % (cal_id, eid, day.isoformat()),
-                              "yd-remind-%s_%s_%s" % (cal_id, eid, day.isoformat()))
+                              "yd-remind-%s_%s_%s" % (cal_id, eid, day.isoformat()), tag.get("icon") or "")
                     elif morning and day == today:
                         for uid in who:
-                            day_list[uid].append((kind, title))
+                            day_list[uid].append((kind, title, tag.get("icon") or "", bool(tag.get("crew"))))
     except Exception as err:          # noqa: BLE001
         print("reminders: usual calendar reminders not read:", err)
 
@@ -766,7 +905,7 @@ def _usual(db, people, since, now, cals, boards, prefs):
                         # A machine's own card: the machine is on the list already.
                         if k.get("auto") and k.get("equipmentId") and u.get("role") == "owner":
                             continue
-                        day_list[u["uid"]].append((kind, title))
+                        day_list[u["uid"]].append((kind, title, TYPES.get(kind) or "", kind in CREW_TYPES))
     except Exception as err:          # noqa: BLE001
         print("reminders: usual card reminders not read:", err)
 
@@ -779,7 +918,7 @@ def _usual(db, people, since, now, cals, boards, prefs):
             for s in db.collection("equipment").where("dueDate", "==", today.isoformat()).stream():
                 g = s.to_dict() or {}
                 for u in eq:
-                    day_list[u["uid"]].append(("", "🚜 " + str(g.get("name") or "A machine") + " service due"))
+                    day_list[u["uid"]].append(("", "🚜 " + str(g.get("name") or "A machine") + " service due", "", False))
     except Exception as err:          # noqa: BLE001
         print("reminders: equipment due not read:", err)
 
@@ -794,38 +933,48 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 if not t["theirs"]:
                     continue
                 if t["day"] < today:
-                    late[uid].append((t["kind"], t["title"]))
+                    late[uid].append((t["kind"], t["title"], t.get("icon") or ""))
                 elif t["undated"]:
-                    day_list[uid].append((t["kind"], t["title"]))
+                    day_list[uid].append((t["kind"], t["title"], t.get("icon") or "", t["kind"] in CREW_TYPES))
     except Exception as err:          # noqa: BLE001 -- the day's list still goes
         print("reminders: tasks from before not read:", err)
 
-    # The day's list, one buzz each.
+    # The day's list, one buzz each. Where they are working that day (the
+    # Job schedule) first -- it is not a thing to tick, so not in the count
+    # of things to do -- then what was not done before, then the day's.
     order = list(TYPES)
 
-    def named(kind, title):
-        return ((TYPES.get(kind) + " ") if TYPES.get(kind) else "") + title
+    def named(icon, title):
+        return (icon + " " if icon else "") + title
 
     for uid, items in day_list.items():
         old = late.get(uid) or []
         if not items and not old:
             continue
-        items.sort(key=lambda x: (x[0] in CREW_TYPES, order.index(x[0]) if x[0] in order else len(order), x[1].lower()))
+        jobs = sorted((x for x in items if x[0] == "jobday"), key=lambda x: x[1].lower())
+        items = [x for x in items if x[0] != "jobday"]
+        items.sort(key=lambda x: (x[3], order.index(x[0]) if x[0] in order else len(order), x[1].lower()))
         # The same thing left on several days (a repeat, a job over days)
         # is named once, with how many.
         seen = {}
-        for kind, title in old:
-            seen[(kind, title)] = seen.get((kind, title), 0) + 1
-        names = ["⏰ " + named(kind, title) + (" ×%d" % n if n > 1 else "") for (kind, title), n in seen.items()] + \
-            [named(kind, title) for kind, title in items]
+        for kind, title, icon in old:
+            seen[(icon, title)] = seen.get((icon, title), 0) + 1
+        names = [named(TYPES["jobday"], title) for _, title, _, _ in jobs] + \
+            ["⏰ " + named(icon, title) + (" ×%d" % n if n > 1 else "") for (icon, title), n in seen.items()] + \
+            [named(icon, title) for _, title, icon, _ in items]
         more = len(names) - DAY_LIST_MAX
         names = names[:DAY_LIST_MAX]
         if items:
             head = "✅ Today, any time: %d thing%s" % (len(items), "" if len(items) == 1 else "s")
             if old:
                 head += " · ⏰ %d not done before" % len(old)
-        else:
+        elif old:
             head = "⏰ %d thing%s not done from before" % (len(old), "" if len(old) == 1 else "s")
+        else:
+            head = ""
+        if jobs:
+            where = "%s %s" % (TYPES["jobday"], jobs[0][1] if len(jobs) == 1 else "%d job sites" % len(jobs))
+            head = where + (" · " + head if head else " today")
         buzz(uid, "auto_%s_day_%s" % (uid, today.isoformat()), head,
              " · ".join(names) + (" +%d more" % more if more > 0 else ""), "yd-day-" + today.isoformat())
     return out
