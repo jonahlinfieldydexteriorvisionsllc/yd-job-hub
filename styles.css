@@ -4312,7 +4312,10 @@
      one in sight and one tap away. */
   @media (min-width:721px) and (max-width:1000px) {
     .tab-bar { flex-wrap:wrap; overflow-x:visible; }
-    .tab-btn { flex:1 0 13%; min-width:0; }
+    /* --tabs-per-row: half the tabs showing (app.js), so the two rows are
+       even -- seven to a row left a crew iPad's eighth tab alone on a row
+       of its own, as wide as the screen. */
+    .tab-btn { flex:1 0 calc(100% / var(--tabs-per-row, 7) - 1px); min-width:0; }
   }
   /* The narrow-screen header rule shrinks every header button's text to
      10px, which left the ⋯ menu a 31px sliver with a dot-sized glyph on an
@@ -4376,4 +4379,13 @@
     .svc-acts .btn { min-height:44px; flex:1 1 auto; }
     .svc-arrow { flex:0 0 52px !important; }
     .svc-tag-btn { min-height:40px; font-size:13px; }
+  }
+  /* A stop's Inches / Salt boxes on a 320px phone: the label, two buttons
+     and the box did not fit side by side, and the + hung off the stop's card
+     (past the screen's edge in dark mode, where the buttons are bigger). The
+     label goes above them there, and the box takes the rest of the row. */
+  @media (max-width:360px) {
+    .stepper { flex-wrap:wrap; row-gap:6px; }
+    .stepper-label { flex:1 0 100%; }
+    .stepper-input { flex:1 1 auto; min-width:0; }
   }
