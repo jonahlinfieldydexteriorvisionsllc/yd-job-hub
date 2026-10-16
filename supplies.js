@@ -1828,7 +1828,8 @@
     const s = norm(u).replace(/\./g, '').replace(/\s+/g, ' ').trim();
     const table = [[/^(each|ea|pc|pcs|piece|pieces|unit|units)$/, 'each'], [/^(sq ?ft|sf|square f(ee|oo)t)$/, 'sqft'],
       [/^(lf|lin ?ft|linear f(ee|oo)t|ft|feet|foot)$/, 'lf'], [/^(tons?|t)$/, 'ton'],
-      [/^(yards?|yds?|cu ?yds?|cubic yards?)$/, 'yd'], [/^(cu ?ft|cubic f(ee|oo)t)$/, 'cuft'], [/^(gal|gallons?)$/, 'gal']];
+      [/^(yards?|yds?|cu ?yds?|cubic yards?)$/, 'yd'], [/^(cu ?ft|cubic f(ee|oo)t)$/, 'cuft'], [/^(gal|gallons?)$/, 'gal'],
+      [/^(days?|daily|per day|day rate)$/, 'day']];
     const hit = table.find(([re]) => re.test(s));
     return hit ? hit[1] : s.replace(/s$/, '');
   }

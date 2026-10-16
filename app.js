@@ -363,7 +363,7 @@ document.addEventListener('yd-auth', e => {
   // hand over screens that load empty and look broken. This is presentation
   // only; the rules are the enforcement.
   const noJobs = on && !ydCan('jobs', 'see');
-  ['tabJob', 'tabTracking', 'tabDashboard', 'matSeasonSection'].forEach(id => {
+  ['tabJob', 'tabTracking', 'tabDashboard', 'matSeasonSection', 'ordersSection'].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.hidden = noJobs;
   });
@@ -668,6 +668,7 @@ function switchTab(name) {
   // Labour is not redrawn while Tracking is hidden, so catch up on arrival.
   if (name === 'tracking' && typeof renderLabor === 'function') renderLabor();
   if (name === 'supplies' && !matSectionHidden()) renderMatDash();
+  if (name === 'supplies') renderOrdersOverview();
   if (toMaterials) {
     const m = document.getElementById('matSeasonSection');
     if (m && !m.hidden) m.scrollIntoView({ block: 'start' });
@@ -1464,7 +1465,9 @@ function orderCost(it, cat) {
   const pr = sid ? cat.prices[sid] : null;
   if (!pr || typeof pr.cents !== 'number') return { sid: sid, cents: null };
   const q = orderQtyOf(it);
-  const per = String(pr.per || cat.items[sid].unit || '').trim();
+  // A rental priced "per day" or "daily" is in days, as "3 days" typed on the line is.
+  const rawPer = String(pr.per || cat.items[sid].unit || '').trim();
+  const per = isDayUnit(rawPer) ? 'day' : rawPer;
   // A unit typed by hand that is not the one the price is per ("2 pallets"
   // of something priced by the sq ft) would make a wrong number: say so.
   // Word by word, plurals and full stops aside: "approx. 1.10 tons" is in tons.
@@ -1616,6 +1619,237 @@ function renderOrderList() {
   wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
   document.getElementById('orderBadge').textContent = ordered + '/' + total + ' ordered';
 }
+
+// ═══════════════════════════════════════════════════════════
+// ORDERS TO PLACE  (every job's Materials to Order, by supplier)
+// ═══════════════════════════════════════════════════════════
+// Jonah (Oct 2026): "One order list across booked jobs: Grouped by supplier,
+// so ordering for the week is one screen. however, orders of the same
+// material still need to be separated." So: one block per supplier, and in
+// it each job's lines under that job's name -- two jobs wanting road gravel
+// are two lines, never one added-up line, because they go to two places.
+// It is the per-job list read across jobs: the same supplier, cost and
+// order-page lookups (orderVendor, orderCost, orderSupply), and a tick here
+// is the same `ordered` on the same line as the tick on the job.
+const ORDERS_VIEW_KEY = 'ydjobhub_ordersView';
+// An id as it may sit in an onclick (letters, digits, - and _ only).
+const ordId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
+// Which line a tick means: its id, or -- an old line saved before lines had
+// ids -- its place on the job's list.
+const ordLineKey = (it, i) => it.id ? ordId(it.id) : 'ord-ix-' + i;
+let ordersView = (() => { try { return localStorage.getItem(ORDERS_VIEW_KEY) === 'week' ? 'week' : 'all'; } catch (e) { return 'all'; } })();
+function setOrdersView(v) {
+  ordersView = v === 'week' ? 'week' : 'all';
+  try { localStorage.setItem(ORDERS_VIEW_KEY, ordersView); } catch (e) { /* remembered for this visit only */ }
+  renderOrdersOverview();
+}
+// Booked and running jobs with something still to order. The job open in the
+// form is read from the form (what was just typed onto its list counts);
+// every other one from its saved copy. Bids are not ordered for, and a job
+// marked to take off (a duplicate) is not either.
+function ordersJobs() {
+  const next = window.YDCalendar && YDCalendar.nextForJobs ? YDCalendar.nextForJobs(60) : {};
+  const weekEnd = localYMD(new Date(Date.now() + 7 * 864e5));
+  return loadAllJobs().filter(d => {
+    const st = normStatus(d.jobStatus, d);
+    return (st === 'booked' || st === 'inprogress') && !d.removeWhy;
+  }).map(d => {
+    const open = d._id === currentJobId;
+    const items = (open ? orderItems : (Array.isArray(d.orderItems) ? d.orderItems : []))
+      .map((it, i) => it && typeof it === 'object' ? Object.assign({}, it, { _key: ordLineKey(it, i) }) : null)
+      .filter(it => it && !it.ordered && String(it.name || '').trim());
+    const when = next[d._id] || null;
+    const running = normStatus(d.jobStatus, d) === 'inprogress';
+    return { id: d._id, d: d, items: items, when: when, running: running,
+             // This week: under way now, or on a calendar within 7 days.
+             soon: running || !!(when && when.day <= weekEnd) };
+  }).filter(j => j.items.length)
+    .sort((a, b) => (a.when ? a.when.day : '9999') .localeCompare(b.when ? b.when.day : '9999') ||
+      String(a.d.customerName || '').localeCompare(String(b.d.customerName || '')));
+}
+function orderJobWhere(d) {
+  return [d.address, [d.city, d.state].filter(Boolean).join(', ')].map(s => String(s || '').trim()).filter(Boolean).join(', ');
+}
+function orderJobTitle(j) {
+  return (j.d.customerName || 'Untitled') + (String(j.d.estimateNumber || '').trim() ? ' #' + String(j.d.estimateNumber).trim() : '');
+}
+// One line as an order reads it: "3 tons — Road gravel (special order)".
+function orderLineText(it) {
+  return (it.quantity ? it.quantity + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : '');
+}
+// The blocks: supplier id ('' = no supplier yet) -> [{ job, lines }], in
+// the jobs' order (soonest first).
+function ordersBySupplier(jobs, cat) {
+  const groups = {};
+  jobs.forEach(j => {
+    const mine = {};
+    j.items.forEach(it => { const v = orderVendor(it, cat); (mine[v] = mine[v] || []).push(it); });
+    Object.keys(mine).forEach(v => { (groups[v] = groups[v] || []).push({ job: j, lines: mine[v] }); });
+  });
+  return groups;
+}
+function renderOrdersOverview() {
+  const wrap = document.getElementById('ordersWrap');
+  const sec = document.getElementById('ordersSection');
+  if (!wrap || !sec || sec.hidden) return;
+  const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {}, prices: {}, vendors: {} };
+  const prices = typeof ydCan === 'function' && ydCan('supplies', 'see') && Object.keys(cat.items).length > 0;
+  const canTick = !jobsReadOnly();
+  const thisYear = new Date().getFullYear();
+  const all = ordersJobs();
+  const soonCount = all.filter(j => j.soon).length;
+  const jobs = ordersView === 'week' ? all.filter(j => j.soon) : all;
+  const lineCount = list => list.reduce((n, j) => n + j.items.length, 0);
+  document.getElementById('ordersBadge').textContent = lineCount(all) ? lineCount(all) + ' to order' : '';
+  // Two tap buttons, not a dropdown or a sideways row (phones).
+  const pick = (v, label) => '<button type="button" class="btn btn-sm' + (ordersView === v ? ' btn-filled' : '') +
+    '" aria-pressed="' + (ordersView === v) + '" onclick="setOrdersView(\'' + v + '\')">' + label + '</button>';
+  const head = '<div class="orders-pick">' + pick('week', 'This week (' + soonCount + ' job' + (soonCount === 1 ? '' : 's') + ')') +
+    pick('all', 'All booked jobs (' + all.length + ')') + '</div>';
+  if (!jobs.length) {
+    wrap.innerHTML = head + '<p class="empty-msg">' + (all.length
+      ? 'Nothing to order for jobs under way or on the calendar in the next 7 days. “All booked jobs” shows the rest.'
+      : 'Nothing left to order on any booked job. A job’s list is on its Job tab, under Materials to Order.') + '</p>';
+    return;
+  }
+  const groups = ordersBySupplier(jobs, cat);
+  const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
+  const keys = Object.keys(groups).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || vname(a).localeCompare(vname(b)));
+  const siteOf = v => (window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl(cat.vendors[v]) : '');
+  // The same material on more than one job at a supplier: said beside each,
+  // so it can go on one call -- but as two lines, for two places.
+  const sameKey = it => orderSupply(it, cat) || (window.YDMatch ? YDMatch.keyOf(it.name) : String(it.name).toLowerCase().trim());
+  let grand = 0, grandUnpriced = 0;
+  const html = keys.map(v => {
+    const blocks = groups[v];
+    const onJobs = {};
+    blocks.forEach(b => b.lines.forEach(it => { const k = sameKey(it); if (k) (onJobs[k] = onJobs[k] || []).push(b.job); }));
+    let sum = 0, unpriced = 0, lines = 0;
+    const body = blocks.map(b => {
+      const j = b.job;
+      const what = typeof jobWhat === 'function' ? jobWhat(j.d) : '';
+      const when = j.when ? (j.running ? 'under way · ' : '') + 'on the calendar ' + fmtDateMD(j.when.day) : j.running ? 'under way' : '';
+      const rows = b.lines.map(it => {
+        lines++;
+        const c = prices ? orderCost(it, cat) : null;
+        if (c) { if (c.cents !== null) sum += c.cents; else unpriced++; }
+        const cost = !c ? '' : c.cents !== null
+          ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
+            (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
+          : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity on the job</span>'
+          : c.sid && typeof c.each === 'number' ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' — how many? (on the job)</span>'
+          : c.sid ? '<span class="cr-cost muted">no price in Supplies</span>'
+          : '<span class="cr-cost muted">not joined to a Supplies item — on the job</span>';
+        const sid = orderSupply(it, cat);
+        const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
+        const others = (onJobs[sameKey(it)] || []).filter(o => o.id !== j.id);
+        const also = others.length ? ' <span class="muted ord-also">· also on ' +
+          others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
+        return '<div class="check-row">' +
+          '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
+            ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\')">' +
+          '<span class="cr-name">' + esc(it.name) +
+            (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
+            (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
+            (cost ? '<br>' + cost : '') + '</span>' +
+          (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
+          '</div>';
+      }).join('');
+      return '<div class="ord-job"><button type="button" class="link-btn ord-job-name" onclick="ordersOpenJob(\'' + ordId(j.id) + '\')">' +
+          jobNameHtml(j.d.customerName, String(j.d.estimateNumber || '').trim()) + '</button>' +
+          (what ? ' <span class="muted">· ' + esc(what) + '</span>' : '') +
+          (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + '</div>' + rows;
+    }).join('');
+    grand += sum; grandUnpriced += unpriced;
+    const lead = v ? (cat.vendors[v] || {}).leadTime : '';
+    const vEsc = ordId(v);
+    return '<div class="ord-supplier">' +
+      '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
+        '<span class="muted">' + lines + ' line' + (lines === 1 ? '' : 's') + ' · ' + blocks.length + ' job' + (blocks.length === 1 ? '' : 's') +
+          (lead ? ' · takes ' + esc(lead) : '') + (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
+        (v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy this supplier’s order</button>' +
+          ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\')">✉️ Email the order</button>' : '') +
+          (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
+          : '<span class="muted">pick each one’s Supplies item on its job</span>') +
+      '</div>' + body + '</div>';
+  }).join('');
+  wrap.innerHTML = head + html +
+    (prices && (grand || grandUnpriced) ? '<div class="order-cost">All of this comes to about <b>' + fmtMoney(grand / 100) + '</b> before tax' +
+      (grandUnpriced ? ' · ' + grandUnpriced + ' line' + (grandUnpriced === 1 ? '' : 's') + ' without a price' : '') +
+      '<div class="muted">Your cost from Supplies — not in any job’s numbers.</div></div>' : '');
+}
+// Ticked here = ticked on the job. The job open in the form is ticked in the
+// form (its autosave writes it, and nothing typed there is lost); any other
+// through patchJob, the path a move on the board takes -- this device, the
+// cloud, the crew's copy.
+function ordersTick(jobId, itemId) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const flip = on => {
+    if (currentJobId && ordId(currentJobId) === jobId) {
+      const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+      if (it && !!it.ordered !== on) toggleOrderItem(it.id);
+    } else {
+      const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
+      let d = null;
+      try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+      if (!d || !window.YDSync) return;
+      const list = (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? Object.assign({}, o, { ordered: on }) : o);
+      window.YDSync.patchJob(id, { orderItems: list });
+    }
+    renderOrdersOverview();
+  };
+  flip(true);
+  if (typeof showUndo === 'function') showUndo('Marked ordered', () => flip(false));
+}
+function ordersOpenJob(key) {
+  const jobId = (getJobIndex().find(x => ordId(x.id) === key) || {}).id;
+  if (!jobId) return;
+  if (currentJobId === jobId) { switchTab('job'); return; }
+  if (dirty && !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+  loadJob(jobId);
+  switchTab('job');
+  const o = document.getElementById('orderListWrap');
+  if (o) setTimeout(() => o.scrollIntoView({ block: 'center' }), 50);
+}
+// One supplier's order across the jobs shown, job by job: each job's lines
+// under its name and address, so whoever takes it knows where each goes.
+function ordersTextFor(vid) {
+  const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
+  const all = ordersJobs();
+  const jobs = ordersView === 'week' ? all.filter(j => j.soon) : all;
+  const groups = ordersBySupplier(jobs, cat);
+  const v = Object.keys(groups).find(k => k && ordId(k) === vid);
+  const blocks = v ? groups[v] : [];
+  return { vendor: (cat.vendors || {})[v] || {}, blocks: blocks,
+    text: blocks.map(b => {
+      const where = orderJobWhere(b.job.d);
+      return orderJobTitle(b.job) + (where ? ' — ' + where : '') + '\n' + b.lines.map(it => '• ' + orderLineText(it)).join('\n');
+    }).join('\n\n') };
+}
+function copyOrdersFor(vid) {
+  const o = ordersTextFor(vid);
+  if (!o.blocks.length) { showToast('Nothing left to order there'); return; }
+  const text = 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + '\n\n' + o.text;
+  const done = () => showToast('Copied — paste it into an email or a text');
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => prompt('Copy this:', text));
+  else prompt('Copy this:', text);
+}
+function emailOrdersFor(vid) {
+  const o = ordersTextFor(vid);
+  if (!o.blocks.length) { showToast('Nothing left to order there'); return; }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.vendor.email || '')) { showToast('Add their order email first: Supplies → the supplier → Edit supplier'); return; }
+  const subject = 'Order for ' + o.blocks.length + ' job' + (o.blocks.length === 1 ? '' : 's') + ' — YD Exterior Visions';
+  const body = 'Hi,\n\nI’d like to order the following, kept apart by job:\n\n' + o.text +
+    '\n\nPlease let me know the total and when each can be delivered or picked up.\n\nThanks,\nJonah\nYD Exterior Visions';
+  location.href = 'mailto:' + encodeURIComponent(o.vendor.email) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+}
+// Drawn when Supplies is opened (switchTab) and whenever the jobs, Supplies
+// or the calendars change while it is on screen.
+function ordersOnScreen() {
+  const p = document.getElementById('panel-supplies');
+  if (p && p.classList.contains('active')) renderOrdersOverview();
+}
+['yd-jobs-changed', 'yd-supplies', 'yd-supply-aliases'].forEach(ev => document.addEventListener(ev, ordersOnScreen));
 
 // ═══════════════════════════════════════════════════════════
 // LABOR  (worker · hours · minutes — total per worker, no date)
@@ -1783,6 +2017,24 @@ function sameMaterial(a, b) {
   const hits = want.filter(w => have.some(h => h === w || h.startsWith(w) || w.startsWith(h))).length;
   return hits / want.length >= 0.6;
 }
+// Days as a quantity (Jonah, Oct 2026: "add days as a quantity option for
+// tracking materials in jobs") -- a skid steer for 3 days. Stored as 'day',
+// the word Supplies prices rentals per, so the two read the same.
+function isDayUnit(u) { return /^(days?|daily|per day)$/i.test(String(u || '').trim()); }
+// "3 days", "1 day", "4 ton": how a purchase's quantity reads.
+function qtyUnitText(qty, unit) {
+  const q = String(qty == null ? '' : qty).trim();
+  if (!q) return '';
+  if (isDayUnit(unit)) return q + ' ' + (parseFloat(q) === 1 ? 'day' : 'days');
+  return q + (unit ? ' ' + unit : '');
+}
+// The Price on a purchase is what was paid in all; for days, what that comes
+// to a day as well, to check against the rental's day rate in Supplies.
+function perDayHtml(e) {
+  const q = parseFloat(e.qty), p = parseFloat(e.price);
+  if (!isDayUnit(e.unit) || !(q > 0) || !(p > 0)) return '';
+  return ' <span class="muted">@ ' + fmtMoney(Math.round(p / q * 100) / 100) + '/day</span>';
+}
 function renderMaterials() {
   const w = document.getElementById('matTableWrap');
   if (!materials.length) { w.innerHTML = '<p class="empty-msg">No purchases yet.</p>'; }
@@ -1796,8 +2048,8 @@ function renderMaterials() {
       h += '<tr' + (co ? ' class="row-unquoted"' : '') + '><td>' + fmtDateMD(e.date) + '</td>' +
         '<td class="bold">' + esc(e.item) + (co ? '<span class="change-tag" title="Advisory — this purchase didn\'t match a quoted item. Verify before treating as a change order.">not quoted?</span>' : '') +
           (e.itemNo ? ' <span class="muted mat-itemno">#' + esc(e.itemNo) + '</span>' : '') + '</td>' +
-        '<td>' + (e.qty ? esc(String(e.qty)) + (e.unit ? ' ' + esc(e.unit) : '') : '—') +
-          (e.unitPrice ? ' <span class="muted">@ ' + fmtMoney(e.unitPrice) + '</span>' : '') + '</td>' +
+        '<td>' + (e.qty ? esc(qtyUnitText(e.qty, e.unit)) : '—') +
+          (e.unitPrice ? ' <span class="muted">@ ' + fmtMoney(e.unitPrice) + '</span>' : perDayHtml(e)) + '</td>' +
         '<td>' + esc(e.location || '—') +
           (mail ? ' <a class="mat-mail" href="' + esc(mail) + '" target="_blank" rel="noopener" title="Open the receipt email">✉️</a>' : '') + '</td>' +
         '<td class="bold">' + (e.price ? fmtMoney(e.price) : '—') + '</td>' +
@@ -2853,8 +3105,11 @@ function renderMatDash() {
         if (md < win.start || (win.end && md >= win.end)) return;
       }
       const price = parseFloat(m.price) || 0, qty = parseFloat(m.qty) || 0;
-      const cat = categorizeMaterialItem(m.item);
-      const c = cats[cat] = cats[cat] || { name: cat, unit: getCategoryUnit(cat), total: 0, qty: 0, count: 0, items: [] };
+      // Something had for days is a rental, whatever its name: its days never
+      // add into a pile of tons or yards.
+      const days = isDayUnit(m.unit);
+      const cat = days ? 'Rentals' : categorizeMaterialItem(m.item);
+      const c = cats[cat] = cats[cat] || { name: cat, unit: days ? 'days' : getCategoryUnit(cat), total: 0, qty: 0, count: 0, items: [] };
       c.total += price; c.qty += qty; c.count++;
       c.items.push({ job: d.customerName || 'Untitled', item: m.item, qty, unit: m.unit, price, from: m.location });
       grandTotal += price; purchaseCount++;
@@ -2876,7 +3131,7 @@ function renderMatDash() {
     const rows = c.items.map(it =>
       '<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f2eef7;font-size:13px">' +
         '<span>' + esc(it.item) + ' <span class="muted">— ' + esc(it.job) + (it.from ? ' · ' + esc(it.from) : '') + '</span></span>' +
-        '<span class="bold">' + (it.qty ? it.qty + (it.unit ? ' ' + it.unit : '') + ' · ' : '') + fmtMoney(it.price) + '</span></div>'
+        '<span class="bold">' + (it.qty ? esc(qtyUnitText(it.qty, it.unit)) + ' · ' : '') + fmtMoney(it.price) + '</span></div>'
     ).join('');
     return '<div class="cat-head" onclick="toggleMatCat(\'' + expId + '\')"><span class="cat-name">' + esc(c.name) + '</span>' +
       '<span class="cat-sub">' + (c.qty > 0 ? c.qty.toFixed(1) + ' ' + c.unit + ' · ' : '') + c.count + ' buy' + (c.count !== 1 ? 's' : '') + ' · <strong>' + fmtMoney(c.total) + '</strong></span></div>' +
@@ -2986,7 +3241,9 @@ function exportPurchasesCsv() {
   const cell = s => '"' + String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').replace(/"/g, '""') + '"';
   const rows = ['Date,Item,Quantity,Unit,Vendor,Price'];
   materials.forEach(m => {
-    rows.push([cell(fmtDateMDY(m.date)), cell(m.item), cell(m.qty || ''), cell(m.unit || ''),
+    // Days written out ("days"), so the sheet doesn't read "3 day".
+    const unit = isDayUnit(m.unit) ? qtyUnitText(m.qty || 0, m.unit).replace(/^\S+\s/, '') : (m.unit || '');
+    rows.push([cell(fmtDateMDY(m.date)), cell(m.item), cell(m.qty || ''), cell(unit),
       cell(m.location || ''), (parseFloat(m.price) || 0).toFixed(2)].join(','));
   });
   // The same two details as the snow billing export. The byte-order mark tells

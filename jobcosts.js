@@ -107,6 +107,8 @@
     const words = String(m.item || '');
     if (DELIVERY_WORDS.test(words)) return 'delivery';
     if (KIND_BUCKET[kind]) return KIND_BUCKET[kind];
+    // Had for so many days (the Unit "Day" on a purchase): a rental.
+    if (/^(days?|daily|per day)$/i.test(String(m.unit || '').trim())) return 'dumpsters';
     if (DUMP_WORDS.test(words)) return 'dumpsters';
     if (FUEL_WORDS.test(words)) return 'fuel';
     return 'materials';

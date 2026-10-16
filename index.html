@@ -551,6 +551,7 @@
                   <option value="gal">Gallon (gal)</option>
                   <option value="lb">Pound (lb)</option>
                   <option value="pallet">Pallet</option>
+                  <option value="day">Day (a rental)</option>
                 </select>
               </div>
             </div>
@@ -736,6 +737,17 @@
 
   <!-- ============ TAB: SUPPLIES ============ -->
   <div class="tab-panel" id="panel-supplies">
+    <!-- Everything still to order across the booked and running jobs, one
+         block per supplier, each job's lines kept apart (app.js
+         renderOrdersOverview). Reads the jobs, so not on crew phones. -->
+    <div class="section" id="ordersSection">
+      <div class="section-head">
+        <span class="section-title">📦 Orders to place</span>
+        <span class="section-badge" id="ordersBadge"></span>
+      </div>
+      <div class="section-body" id="ordersWrap"></div>
+    </div>
+
     <div class="section">
       <div class="section-head">
         <span class="section-title">Supplies — where to get it</span>
