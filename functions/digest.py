@@ -1627,10 +1627,19 @@ def _keep(uid, slot, d):
             s.reference.delete()
 
 
+def _gets_midday(user):
+    """Jonah (15 Oct 2026): "turn off midday summary for crew: leave on for
+    admins." The owner and admins have it as their settings say; a crew
+    member never (notify.js does not offer it to them)."""
+    return user.get("role") in ("owner", "admin")
+
+
 def _prefs_of(user, snap):
     p = dict(DEFAULT_PREFS["owner" if user.get("role") == "owner" else "crew"])
     if snap is not None and snap.exists:
         p.update({k: v for k, v in (snap.to_dict() or {}).items() if k in p})
+    if not _gets_midday(user):
+        p["midday"] = False
     return p
 
 
@@ -1717,6 +1726,9 @@ def run(slot, only_uid=None, dry=False):
         try:
             p = _prefs(u)
             if not only_uid and not p.get(slot):
+                continue
+            # Not even as a test send: a crew member has no midday summary.
+            if slot == "midday" and not _gets_midday(u):
                 continue
             d = build(slot, u, people, wx, cache)
             if not d:

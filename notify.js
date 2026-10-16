@@ -34,6 +34,8 @@
   const el = id => document.getElementById(id);
   const me = () => (window.YDAuth && window.YDAuth.user) || null;
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
+  // The midday summary is the owner's and the admins' (digest.py _gets_midday).
+  const middayFor = () => isOwner() || !!(window.YDAuth && (window.YDAuth.isAdmin || window.YDAuth.role === 'admin'));
   const endpoint = () => ((window.YD_CONFIG || {}).claudeEndpoint || '').replace(/\/+$/, '');
 
   async function server(path, body) {
@@ -215,7 +217,11 @@
           'a card or calendar entry added, changed, finished or ticked off by anyone but you — one buzz every few minutes at most') : '') +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Which updates</div>' +
-        SLOT_INFO.map(([k, label, hint]) => toggle(k, label, hint)).join('') +
+        // Jonah (15 Oct 2026): "turn off midday summary for crew: leave on for
+        // admins." A crew member is not offered it (functions/digest.py
+        // never sends it to them, whatever their setting says).
+        SLOT_INFO.filter(([k]) => k !== 'midday' || middayFor()).map(([k, label, hint]) => toggle(k, label, hint)).join('') +
+        (middayFor() ? '' : '<div class="hint">Midday summary: owners and admins only.</div>') +
         '<div class="hint">' + (isOwner()
           ? 'Yours has the weather, everything on today’s calendar (personal events included), bids to chase, ' +
             'and at the end of the day who worked where and for how long, and every task — yours and the crew’s — ' +

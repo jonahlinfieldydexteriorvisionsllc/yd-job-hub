@@ -94,8 +94,14 @@
   // summary as not done, and carried to the top of the next days' lists
   // (calendar.js todayHtml, functions/reminders.py open_tasks -- the same
   // rules) until it is ticked or deleted. `where`: { card, calKind }.
+  // A day of a job on the Work schedule is not one either (Jonah, 15 Oct 2026:
+  // "schedules job days on calendar dont need a check mark for done") -- it
+  // says who is working where, and the job is finished on the job itself.
+  // Something on the Work schedule picked as a pickup, a to-do and so on
+  // (`where.typed`: a kind of its own, not the calendar's) is still a task.
   function isTask(type, timed, where) {
     where = where || {};
+    if (where.calKind === 'schedule' && !where.typed) return false;
     const t = typeById(type);
     if (t) return !t.appointment && (t.id !== 'personal' || !!where.card);
     return !!where.card || where.calKind === 'followups' || !timed;

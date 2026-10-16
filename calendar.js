@@ -256,12 +256,14 @@
             title: (ic ? ic + ' ' : '') + name, name: name,
             color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
             // Has to be ticked off (remind.js isTask), or it is "not done".
-            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind }), after: key !== x.day,
+            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type) }), after: key !== x.day,
             // Ticked off on the "any time" list, date by date (a repeat too).
             done: !!mark, doneAt: (mark && mark.at) || '', doneKey: key,
             time: ev.allDay ? '' : ev.time, endTime: ev.allDay ? '' : ev.endTime,
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
+            // A job's day on the Work schedule: no tick box, never "not done".
+            jobDay: cal.kind === 'schedule' && !YDRemind.typeById(ev.type),
           });
         });
       });
@@ -580,14 +582,44 @@
     return false;
   }
   const isCrewOcc = o => !!(YDRemind.typeById(o.type) || {}).crew;
+  // Who may tick a thing off. Jonah (15 Oct 2026): "Anyone a calendar is
+  // shared with can tick anyone's task. Make this their own and 'anyone can
+  // do' tasks only." So: whoever may change the calendar (or the card's
+  // board) ticks anything; anyone else only what they are on, or what nobody
+  // is on. firestore.rules hold the same for calendar entries (crewUids).
   function canTick(o) {
-    if (o.auto === 'card') return true;            // the rules say who may move it
-    if (o.auto === 'recurring') return !!o.id;     // only once this week's card exists
+    if (o.auto === 'recurring' && !o.id) return false;  // only once this week's card exists
+    if (o.auto === 'card' || o.auto === 'recurring') {
+      if (window.YDBoards && YDBoards.editsBoard && YDBoards.editsBoard(o.auto === 'card' ? o.boardId : 'crew')) return true;
+      return onlyOnesOwn(onUids(o));
+    }
     if (o.auto) return false;                      // a machine is done by logging its service
-    // Whoever the calendar is shared with may tick a date off (the rules
-    // let them change `done` and nothing else).
     const cal = cals[o.calId], u = me();
-    return editsCal(cal) || !!(cal && u && (cal.visibleTo || []).indexOf(u.uid) !== -1);
+    // A job's day on the Work schedule is not ticked off (remind.js isTask).
+    if (cal && cal.kind === 'schedule' && !o.task) return false;
+    if (editsCal(cal)) return true;
+    if (!(cal && u && (cal.visibleTo || []).indexOf(u.uid) !== -1)) return false;
+    // The rules look at everyone on the entry, on any of its dates
+    // (crewUids); this date's own list on top.
+    const base = (events[o.calId] || {})[o.id];
+    return onlyOnesOwn(crewUidsOf(base || {})) && onlyOnesOwn(onUids(o));
+  }
+  // Theirs to tick: they are on it, or nobody is.
+  function onlyOnesOwn(uids) {
+    const u = me();
+    return !uids.length || (!!u && uids.indexOf(u.uid) !== -1);
+  }
+  // Everyone on an entry, on its own date or any changed date of a repeat --
+  // kept on the entry as `crewUids`, because the rules cannot look inside
+  // the list of {uid, name} in `crew`.
+  function crewUidsOf(ev) {
+    const out = [];
+    const add = list => (Array.isArray(list) ? list : []).forEach(c => {
+      if (c && c.uid && out.indexOf(c.uid) === -1) out.push(c.uid);
+    });
+    add(ev.crew);
+    Object.values(ev.exceptions || {}).forEach(x => { if (x && typeof x === 'object') add(x.crew); });
+    return out.sort();
   }
   function todayHtml() {
     const day = dayForNew();
@@ -636,7 +668,9 @@
     const d = o.doneAt ? new Date(o.doneAt) : null;
     return !!d && !isNaN(d) && dayOf(d) === today();
   }
-  const leftOf = list => list.filter(o => !o.done).length;
+  // A job's day on the Work schedule is on the lists but is not a thing
+  // to get done (remind.js isTask), so it is never counted as one.
+  const leftOf = list => list.filter(o => !o.done && !o.jobDay).length;
   // Above the calendar on a phone, a long list of them would push the days
   // off the screen: the side list shows the first few and the rest on a tap
   // (`short`). My day, which is the list, shows them all.
@@ -658,8 +692,11 @@
   // second line (who is on it). `late`: from an earlier day, not done.
   function todoRow(o, sub, late) {
     const k = keyOf(o);
+    // Someone else's, with no box to tick: whose it is, instead.
+    const tickable = canTick(o), theirs = !tickable && o.task ? whoOn(o) : '';
+    if (theirs && String(sub || '').indexOf(theirs) === -1) sub = [sub, theirs].filter(Boolean).join(' · ');
     return '<div class="cal-todo' + (o.done ? ' done' : '') + (late ? ' late' : '') + '" style="--c:' + colorOf(o) + '">' +
-      (canTick(o) ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
+      (tickable ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
       '<button class="cal-todo-t" onclick="calClick(\'' + k + '\')">' + esc(o.title) +
         (sub ? '<small>' + esc(sub) + '</small>' : '') + '</button></div>';
@@ -724,7 +761,7 @@
     const late = day === today() ? carried(true) : [];
     const lateMine = late.filter(o => occIsMine(o, w));
     const lateCrew = late.filter(o => !occIsMine(o, w) && isCrewOcc(o));
-    const left = mineU.filter(o => !o.done).length;
+    const left = leftOf(mineU);
     const which = day === today() ? 'today' : 'this day';
     return '<div class="md cal-pan">' + nudgeHtml() +
       (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done ' +
@@ -2366,6 +2403,13 @@
     // phone is told what the crew added or changed (functions/reminders.py
     // _activity), and the day's summary lists what was added.
     if (/\/events$/.test(path) && data && me()) data = Object.assign({}, data, { updatedAt: nowIso(), updatedBy: me().uid });
+    // Who is on it, as the rules read it (canTick): worked out from the
+    // entry as it will be once this merges in.
+    if (/\/events$/.test(path) && data && ('crew' in data || 'exceptions' in data)) {
+      const was = (events[path.split('/')[1]] || {})[id] || {};
+      const ex = data.exceptions === null ? {} : Object.assign({}, was.exceptions, data.exceptions);
+      data = Object.assign({}, data, { crewUids: crewUidsOf({ crew: 'crew' in data ? data.crew : was.crew, exceptions: ex }) });
+    }
     Promise.resolve(window.YDDb.put(path, id, data)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
       else console.warn('[calendar] ' + what + ' not yet on the server:', (e && e.code) || e);
@@ -2374,14 +2418,30 @@
 
   // --------------------------------------------------------------- loading
 
+  // Entries saved before crewUids existed (15 Oct 2026) get it from the
+  // owner's device, once each, from the server's copy -- until then the
+  // rules let anyone it is shared with tick them, as before.
+  const crewUidsAsked = new Set();
+  function fillCrewUids(calId) {
+    if (!isOwner() || !window.YDDb) return;
+    Object.values(events[calId] || {}).forEach(ev => {
+      const want = crewUidsOf(ev), have = (Array.isArray(ev.crewUids) ? ev.crewUids : []).slice().sort();
+      const key = calId + '/' + ev.id;
+      if (want.join(',') === have.join(',') || crewUidsAsked.has(key)) return;
+      crewUidsAsked.add(key);
+      Promise.resolve(window.YDDb.put('calendars/' + calId + '/events', ev.id, { crewUids: want }))
+        .catch(e => console.warn('[calendar] who is on an entry not yet on the server:', (e && e.code) || e));
+    });
+  }
   function watchEvents(calId) {
     if (eventUnsubs[calId] || !window.YDDb) return;
-    eventUnsubs[calId] = window.YDDb.watch('calendars/' + calId + '/events', changes => {
+    eventUnsubs[calId] = window.YDDb.watch('calendars/' + calId + '/events', (changes, meta) => {
       const set = events[calId] = events[calId] || {};
       changes.forEach(c => {
         if (c.type === 'removed') delete set[c.id];
         else set[c.id] = Object.assign({ id: c.id }, c.data);
       });
+      if (meta && meta.fromCache === false) fillCrewUids(calId);
       redrawIfVisible();
       announce();
     });
@@ -2582,7 +2642,7 @@
     const crewTask = isCrewOcc(o);
     return {
       o: o, title: o.title, day: o.day, done: !!o.done, color: colorOf(o), canTick: canTick(o), task: !!o.task,
-      time: o.time ? fmtTimeRange(o.time, o.endTime || '') : '',
+      time: o.time ? fmtTimeRange(o.time, o.endTime || '') : o.jobDay ? 'All day' : '',
       sub: [o.address, o.note, o.auto ? '' : o.layer.name].filter(Boolean).join(' · '),
       who: whoOn(o),
       // A crew task, and whether nobody is on it yet (anyone may do it).
@@ -2592,8 +2652,11 @@
   function homeDay(day) {
     const w = YDRemind.who(people);
     if (!w) return null;
-    const timed = list => list.filter(o => o.time).sort((a, b) => String(to24(a.time)).localeCompare(String(to24(b.time))));
-    const untimed = list => list.filter(o => !o.time).sort(byKind);
+    // A job's day with no set time goes with the schedule, not the things
+    // to get done (Home's "To do today" counts those).
+    const atTime = o => !!o.time || !!o.jobDay;
+    const timed = list => list.filter(atTime).sort((a, b) => String(to24(a.time || '')).localeCompare(String(to24(b.time || ''))));
+    const untimed = list => list.filter(o => !atTime(o)).sort(byKind);
     const all = occurrences(day, day, true);
     const mine = all.filter(o => occIsMine(o, w));
     const crew = all.filter(o => !occIsMine(o, w) && isCrewOcc(o));
