@@ -169,7 +169,10 @@
           (n.readAt ? '<button class="link-btn" onclick="markCrewNote(\'' + safe(n.id) + '\', false)">Mark unread</button>'
             : '<button class="link-btn" onclick="markCrewNote(\'' + safe(n.id) + '\', true)">Mark read</button>') +
           (n.jobId && typeof loadJob === 'function' ? '<button class="link-btn" onclick="openNoteJob(\'' + safe(n.jobId) + '\')">Open the job</button>' : '') +
-        '</div>' : '') +
+        '</div>'
+        // Whoever sent it: whether Jonah has seen it yet, so a note about
+        // running short is not sent twice or wondered about all morning.
+        : '<div class="note-acts muted">' + (n.readAt ? '✓ Jonah has seen it' : 'Not seen yet') + '</div>') +
       '</div>').join('') : '<p class="empty-msg">' + (isOwner() ? 'No notes from the crew yet.' : 'No notes sent yet.') + '</p>') +
       (isOwner() && unread().length > 1 ? '<div class="field-actions"><button class="btn btn-sm" onclick="markAllCrewNotes()">Mark all read</button></div>' : '') +
       (!isOwner() ? '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="openNoteForJonah()">+ New note</button></div>' : '');

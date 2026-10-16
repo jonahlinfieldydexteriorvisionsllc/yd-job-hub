@@ -571,7 +571,7 @@
 
   const two = n => String(n).padStart(2, '0');
 
-  window.submitAddShift = function () {
+  window.submitAddShift = async function () {
     const u = me();
     if (!u) return;
     const forUid = addFor || u.uid;
@@ -638,6 +638,20 @@
         repair = { equipmentId: targetId, equipmentName: machineName(targetId),
                    issueId: issue ? issue.id : null, issueWhat: issue ? issue.what : null };
       }
+    }
+
+    // Hours this person already has over the same time -- most likely the
+    // shift they did clock, typed in again, and the office would see the
+    // day twice. Asked, not refused: two shifts can touch.
+    const clash = Object.values(entries).find(e => e.uid === forUid && e.status !== 'rejected' &&
+      startMsOf(e) < endMs && (endMsOf(e) != null ? endMsOf(e) : Date.now()) > startMs);
+    if (clash) {
+      const to = endMsOf(clash);
+      const span = sinceWords(new Date(startMsOf(clash)).toISOString()) + ' – ' +
+        (to != null ? clockTime(new Date(to).toISOString()) : 'now');
+      if (!(await ydConfirm('It overlaps a shift already on the clock: ' + span + ', ' + whereOf(clash) + '.',
+          { title: 'Already on the clock then', ok: 'Send it in anyway', cancel: 'Go back' }))) return;
+      if (!addingShift) return;      // the form was closed meanwhile
     }
 
     const storm = kind === 'storm' && window.YDStorm ? YDStorm.current() : null;
@@ -1626,6 +1640,11 @@
     if (badge) badge.textContent = waiting.length + nAsked ? (waiting.length + nAsked) + ' waiting' : '';
     const sec = el('clockApproveSection');
     if (sec) sec.hidden = false;
+    // "Waiting for You" only to whoever approves. An admin who may only look
+    // at the hours read it over a list where every shift says "Waiting for
+    // the owner".
+    const title = sec && sec.querySelector('.section-title');
+    if (title) title.textContent = decides() ? 'Waiting for You' : 'Waiting for approval';
     placeApprovals(sec, waiting.some(mayDecide) || nAsked > 0);
 
     if (!waiting.length && !nAsked) {

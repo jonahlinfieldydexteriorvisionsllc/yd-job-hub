@@ -196,9 +196,9 @@
       return 'Usual: ' + when + ', to the people on it — or, with nobody on it, to every crew member.';
     }
     if (autoOn === false) {
-      return 'Usual: nothing — your automatic reminders are off (⋯ → Notifications &amp; summaries).';
+      return 'Usual: nothing — your automatic reminders are off (⋯ → Notification settings).';
     }
-    return 'Usual: ' + when + '. Phones need notifications switched on: ⋯ → Notifications &amp; summaries.';
+    return 'Usual: ' + when + '. Phones need notifications switched on: ⋯ → Notification settings.';
   }
 
   // Who counts as crew (Jonah, 12 Oct 2026: "mark profiles in the app as

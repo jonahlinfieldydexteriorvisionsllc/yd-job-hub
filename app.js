@@ -440,8 +440,16 @@ async function ydSignOut() {
   if (typeof dirty !== 'undefined' && dirty
       && !(await ydConfirm('You have unsaved changes on this job.\n\nSign out anyway?',
         { title: 'Unsaved changes', ok: 'Sign out anyway', cancel: 'Stay', danger: true }))) return;
-  if (!(await ydConfirm('Your jobs stay safe in the cloud. This device will need to sign in again.',
-        { title: 'Sign out of YD Job Hub?', ok: 'Sign out' }))) return;
+  // Signing out is not clocking out: a shift left running keeps running (the
+  // clock stops it only at its hour limit), so whoever is on the clock is
+  // told -- signing out at the end of the day looked like the same thing.
+  const mine = window.YDClock && YDClock.mine && !(window.YDAuth || {}).isOwner ? YDClock.mine() : null;
+  const onClock = mine && mine.shift && !mine.shift.leaving ? mine.shift : null;
+  const said = onClock
+    ? 'You are still on the clock (' + (onClock.where || 'working') + '). Signing out does not clock you out — the clock keeps running.\n\nThis device will need to sign in again.'
+    : crewView() ? 'Everything is kept in the cloud. This device will need to sign in again.'
+    : 'Your jobs stay safe in the cloud. This device will need to sign in again.';
+  if (!(await ydConfirm(said, { title: 'Sign out of YD Job Hub?', ok: 'Sign out', danger: !!onClock }))) return;
 
   closeHeaderMenu();
   // The full sign-out can stop to ask about changes that have not reached
@@ -4728,6 +4736,37 @@ function toggleSidebarSmall() {
       const want = sidebarStored(SIDEBAR_KEY) && sidebarFits();
       if (want !== document.documentElement.hasAttribute('data-sidebar')) applySidebar();
     });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+
+// An iPad held upright lays the tabs out in two rows (styles.css). Seven to a
+// row left a crew phone's eighth tab, Equipment, alone across the whole
+// second row. Half each instead: the bar is told how many tabs are showing,
+// and the stylesheet sizes them to fill two even rows (only between phone
+// and laptop widths).
+(function () {
+  let queued = false;
+  function count() {
+    queued = false;
+    const bar = document.querySelector('.tab-bar');
+    if (!bar) return;
+    const n = Array.from(bar.querySelectorAll('.tab-btn'))
+      .filter(b => !b.hidden && getComputedStyle(b).display !== 'none').length;
+    const perRow = n > 7 ? Math.ceil(n / 2) : Math.max(n, 1);
+    if (bar.style.getPropertyValue('--tabs-per-row') !== String(perRow)) bar.style.setProperty('--tabs-per-row', perRow);
+  }
+  function later() { if (!queued) { queued = true; setTimeout(count, 0); } }
+  function start() {
+    const bar = document.querySelector('.tab-bar');
+    if (!bar) return;
+    // Any module showing or hiding a tab, and sign-in deciding crew or owner
+    // (the stylesheet hides some tabs by that).
+    new MutationObserver(later).observe(bar, { subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+    new MutationObserver(later).observe(document.documentElement, { attributes: true, attributeFilter: ['data-crew'] });
+    window.addEventListener('resize', later);
+    count();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
