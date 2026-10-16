@@ -1552,9 +1552,15 @@ def _amount(v):
         return 0.0
 
 
-def _by_ids(entity, ids):
+def _by_ids(entity, ids, unasked=None):
     """{Id: record} for many estimates or invoices, IN_BATCH to a question,
-    rather than one question each."""
+    rather than one question each.
+
+    An id missing from the answer is either gone from QuickBooks or in a
+    batch QuickBooks did not answer -- not the same thing: a paid invoice
+    whose look failed is not a deleted one. Pass a set as `unasked` and the
+    ids of every batch that failed are added to it, so the caller can leave
+    those alone until the next look."""
     ids = sorted({str(i) for i in ids if str(i or "").strip()})
     out = {}
     for n in range(0, len(ids), IN_BATCH):
@@ -1565,6 +1571,8 @@ def _by_ids(entity, ids):
             raise
         except Exception as err:                        # noqa: BLE001 -- the rest are still asked
             print("quickbooks sweep: %s %s: %s" % (entity.lower(), ",".join(part), err))
+            if unasked is not None:
+                unasked.update(part)
             continue
         for r in rows:
             out[str(r.get("Id"))] = r
@@ -1583,7 +1591,7 @@ def _too_old(q, now):
     return bool(times) and now - max(times) > datetime.timedelta(days=SWEEP_MAX_AGE_DAYS)
 
 
-def sweep():
+def sweep(deadline=None):
     """Once an hour (the card run): every estimate out with a customer and
     every invoice not yet paid off is asked about in QuickBooks, so a "yes" or
     a payment shows on the job without Jonah opening it. Returns what changed,
@@ -1591,15 +1599,29 @@ def sweep():
 
     Asked in batches, the tokens read once (_holding_tokens), and only the
     fields it needs read of each job. An estimate with no answer after
-    SWEEP_MAX_AGE_DAYS is left alone."""
+    SWEEP_MAX_AGE_DAYS is left alone. `deadline` (time.monotonic()): after
+    it, no further step is started."""
+    news = []
     with _holding_tokens():
-        return _sweep()
+        try:
+            _sweep(news, deadline)
+        except Exception as err:                        # noqa: BLE001 -- see below
+            # A step that failed part way (QuickBooks wanting connecting
+            # again, or anything else) must not lose what was already found:
+            # a "yes" or a payment is written onto its job as it is seen, so
+            # it is never seen as news again -- if it isn't told now, it
+            # never is. With nothing found, the failure goes up as before.
+            if not news:
+                raise
+            print("quickbooks sweep: stopped part way (%s) -- telling the %d thing(s) found before" % (err, len(news)))
+    return news
 
 
-def _sweep():
+def _sweep(news, deadline=None):
+    """sweep's work; what changed is added to `news` as it is found."""
     tokens = _load_tokens()
     if not tokens or not tokens.get("refreshToken"):
-        return []
+        return news
     # Half-finished connections (Connect pressed, never come back) cleared.
     try:
         sweep_stale_states()
@@ -1608,7 +1630,6 @@ def _sweep():
     env = _env("QB_ENV", "sandbox")
     db = _db()
     now = _now()
-    news = []
     every = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").select(SWEEP_FIELDS).stream()}
     # Jobs in Recently deleted are left out of everything -- except the
     # import's look at which estimates are already a job here (import_accepted
@@ -1686,76 +1707,50 @@ def _sweep():
             if paid > 0:
                 news.append({"jobId": job_id, "kind": "payment", "name": str(jobs[job_id].get("customerName") or "a customer"),
                              "paid": paid, "balance": inv.get("Balance"), "docNumber": inv.get("DocNumber")})
-    try:
-        news += sync_invoices(jobs)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: invoices list not brought up to date:", err)
-    try:
-        sync_payments(jobs)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: payments not brought in step:", err)
-    try:
-        news += import_accepted(every)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: accepted estimates not brought in:", err)
-    try:
-        moved = snow_from_jobs(jobs)
-        if moved:
-            print("quickbooks sweep: %d snow contract(s) put on the Snow route" % moved)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: snow contracts not moved:", err)
-    try:
-        joined = link_hand_jobs(jobs)
-        if joined:
-            print("quickbooks sweep: %d job(s) typed in by hand joined to their QuickBooks estimate" % joined)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: hand-typed jobs not looked for:", err)
-    try:
-        filled = fill_imported(jobs)
-        if filled:
-            print("quickbooks sweep: %d job(s) filled from their QuickBooks estimate" % filled)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: jobs not filled from QuickBooks:", err)
-    try:
-        worded = keep_qb_words(jobs)
-        if worded:
-            print("quickbooks sweep: %d job(s) given QuickBooks' words again" % worded)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: QuickBooks' words not checked:", err)
-    try:
-        invoiced = copy_invoices(jobs)
-        if invoiced:
-            print("quickbooks sweep: %d job(s) given the invoice made from an earlier copy" % invoiced)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: copies' invoices not looked for:", err)
-    # The customer list (customers.py): who changed in QuickBooks since the
-    # last look, and Job Hub's edits that have not reached it yet. Off until
-    # the owner switches the first read on (settings/customers.importOn).
-    try:
+    def counted(what, n):
+        if n:
+            print("quickbooks sweep: " + what % n)
+
+    def customers_sync():
+        # The customer list (customers.py): who changed in QuickBooks since
+        # the last look, and Job Hub's edits that have not reached it yet.
+        # Off until the owner switches the first read on
+        # (settings/customers.importOn).
         import customers
         got = customers.sync()
         if got:
             print("quickbooks sweep: customers %s" % got)
-    except ReconnectNeeded:
-        raise
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: customers not brought in step:", err)
+
+    # The rest, each on its own: one that fails is logged and the next still
+    # runs. Past the run's deadline (main.py: the hourly request has only so
+    # long) no new step is started -- the next hour carries on.
+    later = [
+        ("invoices list not brought up to date", lambda: news.extend(sync_invoices(jobs) or [])),
+        ("payments not brought in step", lambda: sync_payments(jobs)),
+        ("accepted estimates not brought in", lambda: news.extend(import_accepted(every) or [])),
+        ("snow contracts not moved",
+         lambda: counted("%d snow contract(s) put on the Snow route", snow_from_jobs(jobs))),
+        ("hand-typed jobs not looked for",
+         lambda: counted("%d job(s) typed in by hand joined to their QuickBooks estimate", link_hand_jobs(jobs))),
+        ("jobs not filled from QuickBooks",
+         lambda: counted("%d job(s) filled from their QuickBooks estimate", fill_imported(jobs))),
+        ("QuickBooks' words not checked",
+         lambda: counted("%d job(s) given QuickBooks' words again", keep_qb_words(jobs))),
+        ("copies' invoices not looked for",
+         lambda: counted("%d job(s) given the invoice made from an earlier copy", copy_invoices(jobs))),
+        ("customers not brought in step", customers_sync),
+    ]
+    for n, (why, step) in enumerate(later):
+        if deadline is not None and time.monotonic() > deadline:
+            print("quickbooks sweep: out of time -- %d step(s) left for the next hour (first: %s)"
+                  % (len(later) - n, why.split(" not ")[0]))
+            break
+        try:
+            step()
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001
+            print("quickbooks sweep: %s:" % why, err)
     return news
 
 
@@ -2738,50 +2733,65 @@ def link_hand_jobs(jobs):
         want.append(jid)
         if len(want) >= HAND_MAX:
             break
+    # Each job is marked looked at before it is asked about, and the marks
+    # are saved however the run ends: one job QuickBooks always refuses (a
+    # name it cannot search for) used to stop the run there and leave the
+    # same first jobs to be asked again every hour, and the rest never.
     done = 0
-    for jid in want:
-        j = jobs[jid]
-        looked[jid] = now.isoformat()
-        cust = _query_one("Customer", "DisplayName = '%s'" % _quote(" ".join(str(j["customerName"]).split())))
-        if not cust or _norm_name(cust.get("DisplayName")) != _norm_name(j.get("customerName")):
-            continue
-        theirs = _query("Estimate", "CustomerRef = '%s'" % _quote(cust["Id"]))
-        # Not one already on a job -- nor a copy of one that is (the same
-        # estimate sent again to be e-signed): that work has its job.
-        held = [_lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] for x in theirs if str(x.get("Id")) in used]
-        pool = [x for x in theirs if str(x.get("Id")) not in used
-                and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] not in held]
-        nums = set(re.findall(r"\d{3,7}", str(j.get("estimateNumber") or "")))
-        pick = [e for e in pool if _number(e.get("DocNumber")) in nums]
-        if len(pick) != 1 and not finished(j):
-            price = _job_price(j)
-            pick = [e for e in pool if _sold(e) and price is not None and abs(_amount(e.get("TotalAmt")) - price) < 0.005]
-        if len(pick) != 1:
-            continue
-        e = pick[0]
-        stamp = _stamp()
-        rec = _estimate_record(e, cust["Id"])
-        rec["linked"] = True
-        patch = {"qbEstimate": rec, "lastModified": stamp}
-        if not str(j.get("estimateNumber") or "").strip() and e.get("DocNumber"):
-            patch["estimateNumber"] = str(e["DocNumber"])
-        # Its invoice too, so what is still owed shows on the job.
-        inv_id = next((str(t.get("TxnId")) for t in e.get("LinkedTxn") or [] if (t or {}).get("TxnType") == "Invoice"), None)
-        if inv_id and not (j.get("qbInvoiceRef") or {}).get("id"):
+    try:
+        for jid in want:
+            looked[jid] = now.isoformat()
             try:
-                inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
-                if inv:
-                    patch["qbInvoiceRef"] = _invoice_record(inv)
+                done += _link_hand_job(db, jid, jobs[jid], used, finished)
             except ReconnectNeeded:
                 raise
-            except Exception as err:                    # noqa: BLE001 -- the estimate is joined all the same
-                print("quickbooks link: invoice %s not read: %s" % (inv_id, err))
-        db.collection("jobs").document(jid).set(patch, merge=True)
-        j["qbEstimate"] = rec           # so fill_imported reads it in this same sweep
-        used.add(str(e.get("Id")))
-        done += 1
-    ref.set({realm: {"looked": looked}}, merge=True)
+            except Exception as err:                    # noqa: BLE001 -- one job's trouble never stops the rest
+                print("quickbooks link: %s not looked for: %s" % (jid, err))
+    finally:
+        ref.set({realm: {"looked": looked}}, merge=True)
     return done
+
+
+def _link_hand_job(db, jid, j, used, finished):
+    """link_hand_jobs for one job. Returns 1 when it was joined, else 0."""
+    cust = _query_one("Customer", "DisplayName = '%s'" % _quote(" ".join(str(j["customerName"]).split())))
+    if not cust or _norm_name(cust.get("DisplayName")) != _norm_name(j.get("customerName")):
+        return 0
+    theirs = _query("Estimate", "CustomerRef = '%s'" % _quote(cust["Id"]))
+    # Not one already on a job -- nor a copy of one that is (the same
+    # estimate sent again to be e-signed): that work has its job.
+    held = [_lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] for x in theirs if str(x.get("Id")) in used]
+    pool = [x for x in theirs if str(x.get("Id")) not in used
+            and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] not in held]
+    nums = set(re.findall(r"\d{3,7}", str(j.get("estimateNumber") or "")))
+    pick = [e for e in pool if _number(e.get("DocNumber")) in nums]
+    if len(pick) != 1 and not finished(j):
+        price = _job_price(j)
+        pick = [e for e in pool if _sold(e) and price is not None and abs(_amount(e.get("TotalAmt")) - price) < 0.005]
+    if len(pick) != 1:
+        return 0
+    e = pick[0]
+    stamp = _stamp()
+    rec = _estimate_record(e, cust["Id"])
+    rec["linked"] = True
+    patch = {"qbEstimate": rec, "lastModified": stamp}
+    if not str(j.get("estimateNumber") or "").strip() and e.get("DocNumber"):
+        patch["estimateNumber"] = str(e["DocNumber"])
+    # Its invoice too, so what is still owed shows on the job.
+    inv_id = next((str(t.get("TxnId")) for t in e.get("LinkedTxn") or [] if (t or {}).get("TxnType") == "Invoice"), None)
+    if inv_id and not (j.get("qbInvoiceRef") or {}).get("id"):
+        try:
+            inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
+            if inv:
+                patch["qbInvoiceRef"] = _invoice_record(inv)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                    # noqa: BLE001 -- the estimate is joined all the same
+            print("quickbooks link: invoice %s not read: %s" % (inv_id, err))
+    db.collection("jobs").document(jid).set(patch, merge=True)
+    j["qbEstimate"] = rec           # so fill_imported reads it in this same sweep
+    used.add(str(e.get("Id")))
+    return 1
 
 
 def copy_invoices(jobs):
@@ -2812,32 +2822,47 @@ def copy_invoices(jobs):
         want.append(jid)
         if len(want) >= HAND_MAX:
             break
+    # Marked before each is asked about and saved however the run ends (as
+    # link_hand_jobs): one refused question never holds up the rest.
     done = 0
-    for jid in want:
-        looked[jid] = now.isoformat()
-        q = jobs[jid]["qbEstimate"]
-        mine = _query_one("Estimate", "Id = '%s'" % _quote(q["id"]))
-        cid = (mine or {}).get("CustomerRef", {}).get("value")
-        if not mine or not cid:
-            continue
-        sig = _lines_sig(mine) + [round(_amount(mine.get("TotalAmt")), 2)]
-        copies = [x for x in _query("Estimate", "CustomerRef = '%s'" % _quote(cid))
-                  if str(x.get("Id")) != str(q["id"]) and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] == sig
-                  and any((t or {}).get("TxnType") == "Invoice" for t in x.get("LinkedTxn") or [])]
-        if len(copies) != 1:
-            continue
-        inv_id = next(str(t.get("TxnId")) for t in copies[0]["LinkedTxn"] if (t or {}).get("TxnType") == "Invoice")
-        inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
-        if not inv:
-            continue
-        stamp = _stamp()
-        db.collection("jobs").document(jid).set({"qbInvoiceRef": _invoice_record(inv), "lastModified": stamp}, merge=True)
-        done += 1
-    ref.set({realm: {"invLooked": looked}}, merge=True)
+    try:
+        for jid in want:
+            looked[jid] = now.isoformat()
+            try:
+                done += _copy_invoice(db, jid, jobs[jid]["qbEstimate"])
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                    # noqa: BLE001 -- one job's trouble never stops the rest
+                print("quickbooks copies: %s not looked at: %s" % (jid, err))
+    finally:
+        ref.set({realm: {"invLooked": looked}}, merge=True)
     return done
 
 
+def _copy_invoice(db, jid, q):
+    """copy_invoices for one job (q: its qbEstimate). Returns 1 when it was
+    given an invoice, else 0."""
+    mine = _query_one("Estimate", "Id = '%s'" % _quote(q["id"]))
+    cid = (mine or {}).get("CustomerRef", {}).get("value")
+    if not mine or not cid:
+        return 0
+    sig = _lines_sig(mine) + [round(_amount(mine.get("TotalAmt")), 2)]
+    copies = [x for x in _query("Estimate", "CustomerRef = '%s'" % _quote(cid))
+              if str(x.get("Id")) != str(q["id"]) and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] == sig
+              and any((t or {}).get("TxnType") == "Invoice" for t in x.get("LinkedTxn") or [])]
+    if len(copies) != 1:
+        return 0
+    inv_id = next(str(t.get("TxnId")) for t in copies[0]["LinkedTxn"] if (t or {}).get("TxnType") == "Invoice")
+    inv = _query_one("Invoice", "Id = '%s'" % _quote(inv_id))
+    if not inv:
+        return 0
+    stamp = _stamp()
+    db.collection("jobs").document(jid).set({"qbInvoiceRef": _invoice_record(inv), "lastModified": stamp}, merge=True)
+    return 1
+
+
 FILL_MAX = 25               # jobs filled in one sweep
+FILL_TRIES = 3              # looks at a job whose estimate/invoice can't be had, before it is left alone
 # What a job's estimate already holds that a fill from QuickBooks keeps:
 # the site-visit notes, a conversation, what was sent.
 EST_KEEP = ("notes", "chat", "questions", "flags", "sent", "site", "payments", "customerType")
@@ -2860,38 +2885,49 @@ def _job_estimate(have, doc, end_names, stamp, invoice_id=None):
     return est, words
 
 
-def _fill_from_invoices(db, want_inv, docs, end_names):
+def _fill_from_invoices(db, want_inv, docs, end_names, invoices, failed):
     """fill_imported's part for jobs tied to an invoice (see there): the
     estimate built from the invoice's lines when the job's own estimate is
     empty -- work he built in Job Hub is never replaced -- and the job marked
-    looked at either way (qbFilled.invoiceId), so it is read once."""
-    invoices = _by_ids("Invoice", set(want_inv.values()))
+    looked at either way (qbFilled.invoiceId), so it is read once. A job
+    whose fill went wrong is added to `failed`."""
     done = 0
     for jid, iid in want_inv.items():
         j, inv = docs.get(jid), invoices.get(iid)
         if j is None or inv is None:
             continue                    # gone, or QuickBooks did not answer: next hour
-        stamp = _stamp()
-        patch = {"qbFilled": dict(j.get("qbFilled") or {}, invoiceId=iid, at=stamp), "lastModified": stamp}
-        have = j.get("estimate") or {}
-        if not (have.get("work") or have.get("materials")):
-            est, words = _job_estimate(have, inv, end_names, stamp, invoice_id=iid)
-            patch["estimate"] = est
-            # Words in the invoice that are no line of work or material go
-            # under the notes he already has (never over them).
-            if words:
-                head = "From QuickBooks invoice #%s:" % (inv.get("DocNumber") or iid)
-                old = str(j.get("notes") or "").strip()
-                if head not in old:
-                    patch["notes"] = ((old + "\n\n") if old else "") + "\n".join([head] + words)
-                    patch["notes"] = patch["notes"][:NOTES_MAX]
-            if not str(j.get("crewWhat") or "").strip():
-                board = db.collection("jobBoard").document(jid)
-                if board.get().exists:
-                    board.set({"what": _what(est), "updatedAt": stamp}, merge=True)
-        db.collection("jobs").document(jid).set(patch, merge=True)
-        done += 1
+        try:
+            done += _fill_one_invoice(db, jid, j, iid, inv, end_names)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- one job's trouble never stops the rest
+            print("quickbooks fill: %s not filled from invoice %s: %s" % (jid, iid, err))
+            failed.add(jid)
     return done
+
+
+def _fill_one_invoice(db, jid, j, iid, inv, end_names):
+    """_fill_from_invoices for one job. Returns 1 (it is always marked)."""
+    stamp = _stamp()
+    patch = {"qbFilled": dict(j.get("qbFilled") or {}, invoiceId=iid, at=stamp), "lastModified": stamp}
+    have = j.get("estimate") or {}
+    if not (have.get("work") or have.get("materials")):
+        est, words = _job_estimate(have, inv, end_names, stamp, invoice_id=iid)
+        patch["estimate"] = est
+        # Words in the invoice that are no line of work or material go
+        # under the notes he already has (never over them).
+        if words:
+            head = "From QuickBooks invoice #%s:" % (inv.get("DocNumber") or iid)
+            old = str(j.get("notes") or "").strip()
+            if head not in old:
+                patch["notes"] = ((old + "\n\n") if old else "") + "\n".join([head] + words)
+                patch["notes"] = patch["notes"][:NOTES_MAX]
+        if not str(j.get("crewWhat") or "").strip():
+            board = db.collection("jobBoard").document(jid)
+            if board.get().exists:
+                board.set({"what": _what(est), "updatedAt": stamp}, merge=True)
+    db.collection("jobs").document(jid).set(patch, merge=True)
+    return 1
 
 
 def fill_imported(jobs):
@@ -2905,11 +2941,27 @@ def fill_imported(jobs):
     env = _env("QB_ENV", "sandbox")
     if env != "production":
         return 0
+    now = _now()
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    db = _db()
+    ref = db.collection("integrations").document("quickbooksImport")
+    snap = ref.get()
+    state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
+    # A job whose estimate (or invoice) QuickBooks no longer has -- deleted
+    # there -- or whose fill goes wrong every time was asked for every hour,
+    # for good, and took one of the FILL_MAX places each time: after
+    # FILL_TRIES it is left alone (fillMisses), until it is joined to
+    # another one.
+    misses = {k: v for k, v in (state.get("fillMisses") or {}).items() if k in jobs and isinstance(v, dict)}
+    def given_up(jid, src):
+        m = misses.get(jid) or {}
+        return m.get("src") == src and int(m.get("n") or 0) >= FILL_TRIES
     want, want_inv = {}, {}
     for jid, j in jobs.items():
         q = j.get("qbEstimate") or {}
         if q.get("linked") and q.get("id") and q.get("env") == env and not j.get("removeWhy") and \
-                str((j.get("qbFilled") or {}).get("estimateId") or "") != str(q["id"]):
+                str((j.get("qbFilled") or {}).get("estimateId") or "") != str(q["id"]) and \
+                not given_up(jid, "Estimate:%s" % q["id"]):
             want[jid] = str(q["id"])
         # A job tied to its QuickBooks INVOICE but no estimate -- typed in by
         # hand, its two estimates made into one invoice there -- is filled
@@ -2918,66 +2970,97 @@ def fill_imported(jobs):
         # 2026: "nothing from the descriptions of his services is in there").
         r = j.get("qbInvoiceRef") or {}
         if not q.get("linked") and r.get("id") and r.get("env") == env and not j.get("removeWhy") and \
-                str((j.get("qbFilled") or {}).get("invoiceId") or "") != str(r["id"]):
+                str((j.get("qbFilled") or {}).get("invoiceId") or "") != str(r["id"]) and \
+                not given_up(jid, "Invoice:%s" % r["id"]):
             want_inv[jid] = str(r["id"])
         if len(want) + len(want_inv) >= FILL_MAX:
             break
     if not want and not want_inv:
         return 0
-    db = _db()
     refs = [db.collection("jobs").document(jid) for jid in list(want) + list(want_inv)]
     docs = {s.id: (s.to_dict() or {}) for s in db.get_all(refs) if s.exists}
-    estimates = _by_ids("Estimate", set(want.values())) if want else {}
+    unasked_est, unasked_inv, failed = set(), set(), set()
+    estimates = _by_ids("Estimate", set(want.values()), unasked_est) if want else {}
+    invoices = _by_ids("Invoice", set(want_inv.values()), unasked_inv) if want_inv else {}
     end_names = _end_names()
-    done = _fill_from_invoices(db, want_inv, docs, end_names) if want_inv else 0
+    done = _fill_from_invoices(db, want_inv, docs, end_names, invoices, failed) if want_inv else 0
     for jid, eid in want.items():
         j = docs.get(jid)
         e = estimates.get(eid)
         if j is None or e is None:
             continue                    # gone, or QuickBooks did not answer: next hour
-        stamp = _stamp()
-        patch = {"qbFilled": {"estimateId": eid, "at": stamp}, "lastModified": stamp}
-        have = j.get("estimate") or {}
-        if not (have.get("work") or have.get("materials")):
-            # Anything already on the job's estimate (notes from the site
-            # visit, a conversation) stays.
-            est, words = _job_estimate(have, e, end_names, stamp)
-            patch["estimate"] = est
-            if str(j.get("notes") or "") == _lines_as_notes(e):
-                patch["notes"] = _hub_notes(e, words)
-            # The price the import set, before tax, now follows the estimate
-            # as on any job (the same figure); one he typed stays his.
-            if j.get("fromQuickBooks") and str(j.get("jobPrice") or "") == "%.2f" % _amount(e.get("TotalAmt")):
-                price = (_cents(e.get("TotalAmt")) - est["fromQb"]["taxCents"]) / 100
-                patch.update({"jobPrice": "%.2f" % price, "manualJobPrice": False, "baseJobPrice": price})
-        name = str(j.get("customerName") or "")
-        street = " ".join(str(j.get("address") or "").split())
-        if j.get("fromQuickBooks") and (not street or street.lower() == " ".join(name.lower().split())):
-            cust = None
-            cid = (e.get("CustomerRef") or {}).get("value")
-            if cid:
-                try:
-                    cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
-                except ReconnectNeeded:
-                    raise
-                except Exception as err:                # noqa: BLE001 -- the estimate's own address is tried
-                    print("quickbooks fill: customer %s not read: %s" % (cid, err))
-            parts = _best_addr(e, cust, name)
-            if parts["address"]:
-                patch.update(parts)
-        # The crew's clock list: the address read again, and what the job is.
-        board_patch = {}
-        if patch.get("address"):
-            board_patch["address"] = ", ".join(s for s in (patch["address"], patch.get("city"), patch.get("state")) if s)
-        if patch.get("estimate") and not str(j.get("crewWhat") or "").strip():
-            board_patch["what"] = _what(patch["estimate"])
-        if board_patch:
-            board = db.collection("jobBoard").document(jid)
-            if board.get().exists:
-                board.set(dict(board_patch, updatedAt=stamp), merge=True)
-        db.collection("jobs").document(jid).set(patch, merge=True)
-        done += 1
+        try:
+            done += _fill_one_estimate(db, jid, j, eid, e, end_names)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- one job's trouble never stops the rest
+            print("quickbooks fill: %s not filled from estimate %s: %s" % (jid, eid, err))
+            failed.add(jid)
+    # Misses counted: QuickBooks answered and had no such estimate or invoice,
+    # or the fill went wrong. A question QuickBooks did not answer is no miss.
+    changed = False
+    for kind, wanted, got, unasked in (("Estimate", want, estimates, unasked_est),
+                                       ("Invoice", want_inv, invoices, unasked_inv)):
+        for jid, qid in wanted.items():
+            if jid not in docs or qid in unasked or (qid in got and jid not in failed):
+                continue
+            src = "%s:%s" % (kind, qid)
+            m = misses.get(jid) or {}
+            n = (int(m.get("n") or 0) if m.get("src") == src else 0) + 1
+            misses[jid] = {"src": src, "n": n, "at": now.isoformat()}
+            changed = True
+            if n >= FILL_TRIES:
+                print("quickbooks fill: %s -- %s %s not to be had after %d tries; left alone"
+                      % (jid, kind.lower(), qid, n))
+    if changed:
+        ref.set({realm: {"fillMisses": misses}}, merge=True)
     return done
+
+
+def _fill_one_estimate(db, jid, j, eid, e, end_names):
+    """fill_imported for one job and its QuickBooks estimate. Returns 1."""
+    stamp = _stamp()
+    patch = {"qbFilled": {"estimateId": eid, "at": stamp}, "lastModified": stamp}
+    have = j.get("estimate") or {}
+    if not (have.get("work") or have.get("materials")):
+        # Anything already on the job's estimate (notes from the site
+        # visit, a conversation) stays.
+        est, words = _job_estimate(have, e, end_names, stamp)
+        patch["estimate"] = est
+        if str(j.get("notes") or "") == _lines_as_notes(e):
+            patch["notes"] = _hub_notes(e, words)
+        # The price the import set, before tax, now follows the estimate
+        # as on any job (the same figure); one he typed stays his.
+        if j.get("fromQuickBooks") and str(j.get("jobPrice") or "") == "%.2f" % _amount(e.get("TotalAmt")):
+            price = (_cents(e.get("TotalAmt")) - est["fromQb"]["taxCents"]) / 100
+            patch.update({"jobPrice": "%.2f" % price, "manualJobPrice": False, "baseJobPrice": price})
+    name = str(j.get("customerName") or "")
+    street = " ".join(str(j.get("address") or "").split())
+    if j.get("fromQuickBooks") and (not street or street.lower() == " ".join(name.lower().split())):
+        cust = None
+        cid = (e.get("CustomerRef") or {}).get("value")
+        if cid:
+            try:
+                cust = _query_one("Customer", "Id = '%s'" % _quote(cid))
+            except ReconnectNeeded:
+                raise
+            except Exception as err:                # noqa: BLE001 -- the estimate's own address is tried
+                print("quickbooks fill: customer %s not read: %s" % (cid, err))
+        parts = _best_addr(e, cust, name)
+        if parts["address"]:
+            patch.update(parts)
+    # The crew's clock list: the address read again, and what the job is.
+    board_patch = {}
+    if patch.get("address"):
+        board_patch["address"] = ", ".join(s for s in (patch["address"], patch.get("city"), patch.get("state")) if s)
+    if patch.get("estimate") and not str(j.get("crewWhat") or "").strip():
+        board_patch["what"] = _what(patch["estimate"])
+    if board_patch:
+        board = db.collection("jobBoard").document(jid)
+        if board.get().exists:
+            board.set(dict(board_patch, updatedAt=stamp), merge=True)
+    db.collection("jobs").document(jid).set(patch, merge=True)
+    return 1
 
 
 # ----------------------------------- the work, in QuickBooks' own words
@@ -3003,6 +3086,10 @@ def fill_imported(jobs):
 # a price, not a line he took off. Jobs made in Job Hub are not looked at --
 # their words went to QuickBooks from here.
 WORDS_MAX = 40              # jobs held up against QuickBooks in one sweep
+# Taken in turn, the one looked at longest ago first (wordsLooked, on
+# integrations/quickbooksImport.<realm>): always the first 40 in id order left
+# every job after them never looked at once there were more than 40. A
+# finished job's words matter less and change less: once a day is enough.
 
 
 def _words_source(j, env):
@@ -3060,61 +3147,90 @@ def keep_qb_words(jobs):
     env = _env("QB_ENV", "sandbox")
     if env != "production":
         return 0
-    want = {}
+    now = _now()
+    realm = (_load_tokens() or {}).get("realmId") or "none"
+    db = _db()
+    ref = db.collection("integrations").document("quickbooksImport")
+    snap = ref.get()
+    state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
+    looked = {k: v for k, v in (state.get("wordsLooked") or {}).items() if k in jobs}
+    cands = []
     for jid, j in jobs.items():
         if j.get("removeWhy") or j.get("deletedAt") or str(j.get("jobStatus") or "") == "quoting":
             continue
         src = _words_source(j, env)
-        if src:
-            want[jid] = src
-        if len(want) >= WORDS_MAX:
-            break
+        if not src:
+            continue
+        t = _parse_time(looked.get(jid))
+        if t and str(j.get("jobStatus") or "") == "complete" and now - t < LOOK_AGAIN:
+            continue
+        cands.append((t.isoformat() if t else "", jid, src))
+    # Never looked at first, then the one looked at longest ago.
+    want = {jid: src for _t, jid, src in sorted(cands)[:WORDS_MAX]}
     if not want:
         return 0
-    db = _db()
     docs = {s.id: (s.to_dict() or {}) for s in db.get_all([db.collection("jobs").document(jid) for jid in want]) if s.exists}
-    qb_docs = {}
+    qb_docs, unasked = {}, set()
     for kind in ("Estimate", "Invoice"):
         ids = {i for k, i in want.values() if k == kind}
         if ids:
-            qb_docs.update({(kind, i): d for i, d in _by_ids(kind, ids).items()})
+            missed = set()
+            qb_docs.update({(kind, i): d for i, d in _by_ids(kind, ids, missed).items()})
+            unasked.update((kind, i) for i in missed)
+    # Every job QuickBooks answered for has had its look -- one whose
+    # estimate is gone there too, or it would be first in line every hour.
+    stamp_looked = now.isoformat()
+    for jid, src in want.items():
+        if src not in unasked:
+            looked[jid] = stamp_looked
+    ref.set({realm: {"wordsLooked": looked}}, merge=True)
     end_names = _end_names()
     done = 0
     for jid, (kind, qid) in want.items():
         j, doc = docs.get(jid), qb_docs.get((kind, qid))
         if j is None or doc is None:
             continue                    # gone, or QuickBooks did not answer: next hour
-        # Fresh from the database: the sweep's own list may be a moment old.
-        if j.get("deletedAt") or j.get("removeWhy") or _words_source(j, env) != (kind, qid):
-            continue
-        have = j.get("estimate") or {}
-        stamp = _stamp()
-        if not (have.get("work") or have.get("materials")):
-            # Filled once, then saved over empty by a device: filled again.
-            est, _words = _job_estimate(have, doc, end_names, stamp, invoice_id=qid if kind == "Invoice" else None)
-            if not est["work"] and not est["materials"]:
-                continue
-            patch = {"estimate": est, "lastModified": stamp}
-            print("quickbooks words: %s's estimate was empty -- filled again from %s %s" % (jid, kind.lower(), qid))
-        else:
-            # Only an estimate that came from QuickBooks is QuickBooks' words;
-            # one he built here (and then joined to an estimate) is his.
-            if not have.get("fromQb"):
-                continue
-            qb_est, _words = _hub_estimate(doc, end_names, stamp)
-            work, changed, missing = _words_onto(have.get("work"), qb_est["work"])
-            if missing:
-                print("quickbooks words: %s: QuickBooks %s %s has lines not on the job: %s"
-                      % (jid, kind.lower(), qid, "; ".join(missing)[:300]))
-            if not changed:
-                continue
-            # The estimate as it is, only the lines' words changed.
-            est = dict(have, work=work)
-            patch = {"estimate": est, "lastModified": stamp}
-            print("quickbooks words: %s: %d line(s) given QuickBooks' words" % (jid, changed))
-        db.collection("jobs").document(jid).set(patch, merge=True)
-        done += 1
+        try:
+            done += _words_for(db, jid, j, kind, qid, doc, env, end_names)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- one job's trouble never stops the rest
+            print("quickbooks words: %s not checked: %s" % (jid, err))
     return done
+
+
+def _words_for(db, jid, j, kind, qid, doc, env, end_names):
+    """keep_qb_words for one job: 1 when it was changed, else 0."""
+    # Fresh from the database: the sweep's own list may be a moment old.
+    if j.get("deletedAt") or j.get("removeWhy") or _words_source(j, env) != (kind, qid):
+        return 0
+    have = j.get("estimate") or {}
+    stamp = _stamp()
+    if not (have.get("work") or have.get("materials")):
+        # Filled once, then saved over empty by a device: filled again.
+        est, _words = _job_estimate(have, doc, end_names, stamp, invoice_id=qid if kind == "Invoice" else None)
+        if not est["work"] and not est["materials"]:
+            return 0
+        patch = {"estimate": est, "lastModified": stamp}
+        print("quickbooks words: %s's estimate was empty -- filled again from %s %s" % (jid, kind.lower(), qid))
+    else:
+        # Only an estimate that came from QuickBooks is QuickBooks' words;
+        # one he built here (and then joined to an estimate) is his.
+        if not have.get("fromQb"):
+            return 0
+        qb_est, _words = _hub_estimate(doc, end_names, stamp)
+        work, changed, missing = _words_onto(have.get("work"), qb_est["work"])
+        if missing:
+            print("quickbooks words: %s: QuickBooks %s %s has lines not on the job: %s"
+                  % (jid, kind.lower(), qid, "; ".join(missing)[:300]))
+        if not changed:
+            return 0
+        # The estimate as it is, only the lines' words changed.
+        est = dict(have, work=work)
+        patch = {"estimate": est, "lastModified": stamp}
+        print("quickbooks words: %s: %d line(s) given QuickBooks' words" % (jid, changed))
+    db.collection("jobs").document(jid).set(patch, merge=True)
+    return 1
 
 
 # ------------------------------------------------ invoices and reminders
@@ -3266,7 +3382,12 @@ def sync_invoices(jobs):
     now_open = {str(i.get("Id")): i for i in _open_invoices()}
     # Open here, gone from the open list there: paid off (or deleted).
     gone = [i for i in have if i not in now_open]
-    closed = _by_ids("Invoice", gone) if gone else {}
+    # Asked for by id: paid off, or deleted. One whose question failed is
+    # neither -- it is left as it is until the next look, not marked deleted
+    # (that would lose its paidAt, and its payments would never reach the job).
+    unasked = set()
+    closed = _by_ids("Invoice", gone, unasked) if gone else {}
+    gone = [i for i in gone if i not in unasked]
     olds = {}
     for inv_id in list(now_open) + gone:
         old = have.get(inv_id)
@@ -3448,7 +3569,9 @@ def sync_payments(jobs, only=None):
         if inv.get("jobId") and not inv.get("deletedAt"):
             by_job.setdefault(inv["jobId"], []).append(inv)
     setup = None
-    today = _now().astimezone(datetime.timezone(datetime.timedelta(hours=-5))).date().isoformat()
+    # Chicago's day, summer or winter (a fixed five hours behind was an hour
+    # off all winter: a payment logged after 11 pm would be dated tomorrow).
+    today = _chicago_day()
     changed_jobs = 0
     for jid, j in jobs.items():
         if (only and jid != only) or j.get("removeWhy"):
@@ -3537,9 +3660,95 @@ def sync_payments(jobs, only=None):
             p.pop("qbError", None)
             left = round(left - amt, 2)
         if json.dumps(pays, sort_keys=True) != before:
-            db.collection("jobs").document(jid).set({"payments": pays, "lastModified": _stamp()}, merge=True)
-            changed_jobs += 1
+            if _write_payments(db, jid, json.loads(before), pays):
+                changed_jobs += 1
     return changed_jobs
+
+
+QB_PAY_FIELDS = ("qbPaymentId", "qbError", "qbSyncedAt")
+
+
+def _pay_key(p):
+    """How one payment entry is known in two copies of a job's list: its id
+    (every payment logged since ids were given), else what it says."""
+    if p.get("id"):
+        return "id:" + str(p["id"])
+    return "is:" + json.dumps({k: p.get(k) for k in ("date", "amount", "label", "notes")}, sort_keys=True, default=str)
+
+
+def _merge_payments(fresh, was, now):
+    """The job's payments as they are in the database NOW (`fresh`), with only
+    what this look changed between `was` (the list it read) and `now` (the
+    list it worked out) put onto it: the QuickBooks fields of an entry
+    (QB_PAY_FIELDS), entries brought in from QuickBooks, entries deleted
+    there. The sweep's list is minutes old by the time it writes, so a
+    payment a phone saved meanwhile -- just logged, or a note changed -- is
+    kept, never written over with the older list."""
+    was_by = {_pay_key(p): p for p in was}
+    now_by = {_pay_key(p): p for p in now}
+    out, seen, seen_qb = [], set(), set()
+    for f in fresh:
+        if not isinstance(f, dict):
+            continue
+        f, k = dict(f), _pay_key(f)
+        seen.add(k)
+        if k in was_by and k not in now_by:
+            continue                        # deleted in QuickBooks (sync_payments): gone here too
+        mine = now_by.get(k)
+        if mine is not None:
+            b = was_by.get(k) or {}
+            for field in QB_PAY_FIELDS:
+                if mine.get(field) == b.get(field):
+                    continue                # not changed by this look: as the database has it
+                if mine.get(field) is None:
+                    f.pop(field, None)
+                else:
+                    f[field] = mine[field]
+        if f.get("qbPaymentId"):
+            seen_qb.add(str(f["qbPaymentId"]))
+        out.append(f)
+    for p in now:
+        k = _pay_key(p)
+        if k in was_by or k in seen:
+            continue
+        if p.get("qbPaymentId") and str(p["qbPaymentId"]) in seen_qb:
+            continue                        # a phone tied it meanwhile
+        if p.get("fromQb"):
+            # The same payment logged on a phone meanwhile (not in the list
+            # this look read): tied to it, as sync_payments ties one it sees,
+            # rather than added beside it -- or the next look would send the
+            # phone's to QuickBooks as a second payment.
+            same = next((f for f in out if _pay_key(f) not in was_by and not f.get("qbPaymentId")
+                         and abs(_hub_amount(f) - _hub_amount(p)) < 1
+                         and _days_apart(f.get("date"), p.get("date")) <= MATCH_DAYS), None)
+            if same is not None:
+                same["qbPaymentId"] = str(p["qbPaymentId"])
+                same.pop("qbError", None)
+                seen_qb.add(str(p["qbPaymentId"]))
+                continue
+        out.append(dict(p))                 # brought in from QuickBooks by this look
+    return out
+
+
+def _write_payments(db, jid, was, now):
+    """sync_payments' change to one job's payments written onto the job as it
+    is at that moment (_merge_payments), in a transaction, so a phone's save
+    in between is never undone. Returns whether the job changed."""
+    ref = db.collection("jobs").document(jid)
+
+    @firestore.transactional
+    def put(tx):
+        snap = ref.get(transaction=tx)
+        if not snap.exists:
+            return False
+        fresh = [p for p in (snap.to_dict() or {}).get("payments") or [] if isinstance(p, dict)]
+        merged = _merge_payments(fresh, was, now)
+        if json.dumps(merged, sort_keys=True, default=str) == json.dumps(fresh, sort_keys=True, default=str):
+            return False
+        tx.set(ref, {"payments": merged, "lastModified": _stamp()}, merge=True)
+        return True
+
+    return put(db.transaction())
 
 
 def create_invoice(body):
