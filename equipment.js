@@ -812,11 +812,13 @@
     serviceForm(null, i);
   };
 
-  window.removeIssue = function (issueId) {
-    const g = gear[openId];
+  window.removeIssue = async function (issueId) {
+    let g = gear[openId];
     if (!g) return;
     const i = (g.issues || []).find(x => x.id === issueId);
-    if (!i || !confirm('Delete "' + i.what + '"? (Use Fixed instead if it was done — that keeps a record.)')) return;
+    if (!i || !(await ydConfirm('Use Fixed instead if it was done — that keeps a record.', { title: 'Delete "' + i.what + '"?', ok: 'Delete', danger: true }))) return;
+    g = gear[g.id];
+    if (!g || !(g.issues || []).some(x => x.id === issueId)) return;
     g.issues = (g.issues || []).filter(x => x.id !== issueId);
     renderDetail(); renderEquipment();
     write(g.id, { issues: g.issues }, 'deleting a problem');
@@ -1007,7 +1009,7 @@
     return '';
   }
 
-  window.saveService = function () {
+  window.saveService = async function () {
     const g = gear[openId];
     if (!g) return;
     const what = val('svWhat');
@@ -1015,10 +1017,15 @@
     if (editingEntry) { saveServiceChange(g, what); return; }
     const want = readingWanted(g);
     const box = want === 'miles' ? 'svMiles' : want === 'hours' ? 'svHours' : '';
-    if (box && num(box) == null && !confirm('No ' + want + ' reading this time? The next service is worked out from the ' +
-        want + ' — OK to save without it, Cancel to type it in.')) {
-      const b = el(box); if (b) b.focus();
-      return;
+    if (box && num(box) == null) {
+      const was = openId;
+      if (!(await ydConfirm('The next service is worked out from the ' + want + '.',
+          { title: 'No ' + want + ' reading this time?', ok: 'Save without it', cancel: 'Type it in' }))) {
+        const b = el(box); if (b) b.focus();
+        return;
+      }
+      // The form closed, or another machine opened, while it was asked.
+      if (openId !== was || !el('svWhat') || !gear[openId]) return;
     }
 
     const entry = {
@@ -1102,11 +1109,13 @@
     showToast('Changed — ' + what);
   }
 
-  window.removeService = function (entryId) {
-    const g = gear[openId];
+  window.removeService = async function (entryId) {
+    let g = gear[openId];
     if (!g) return;
     const entry = (g.service || []).find(e => e.id === entryId);
-    if (!entry || !confirm('Remove "' + entry.what + '" from the history?')) return;
+    if (!entry || !(await ydConfirm('', { title: 'Remove "' + entry.what + '" from the history?', ok: 'Remove', danger: true }))) return;
+    g = gear[g.id];
+    if (!g || !(g.service || []).some(e => e.id === entryId)) return;
     const service = (g.service || []).filter(e => e.id !== entryId);
     const patch = { service: service };
     // If this entry is where the machine's reading came from, the reading
@@ -1194,9 +1203,10 @@
       '<option value="__new">＋ A new type…</option>';
   }
   // "＋ A new type…": named here, kept on this machine when it is saved.
-  window.eqKindPicked = function (box) {
+  window.eqKindPicked = async function (box) {
     if (!box || box.value !== '__new') return;
-    const a = prompt('Name the new type — e.g. Trailer, Attachment, ATV, Snow plow', '');
+    const a = await ydPrompt('', '', { title: 'Name the new type', placeholder: 'e.g. Trailer, Attachment, ATV, Snow plow', ok: 'Add it' });
+    if (!box.isConnected) return;             // the form was closed meanwhile
     const name = String(a || '').trim().replace(/\s+/g, ' ').slice(0, 30);
     let pick = (gear[editingId] || {}).kind || 'machine';     // cancelled: as it was
     if (name) {
@@ -1279,10 +1289,11 @@
     showToast(name + ' saved');
   };
 
-  window.removeEquipment = function (id) {
+  window.removeEquipment = async function (id) {
     if (!ydCan('equipment', 'change')) return;
     const g = gear[id];
-    if (!g || !confirm('Remove ' + g.name + ' and its whole service history?')) return;
+    if (!g || !(await ydConfirm('This cannot be undone.', { title: 'Remove ' + g.name + ' and its whole service history?', ok: 'Remove', danger: true }))) return;
+    if (!gear[id]) return;
     delete gear[id];
     closeEquipment(); renderEquipment();
     if (!window.YDDb) return;

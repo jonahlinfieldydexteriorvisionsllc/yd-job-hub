@@ -1313,13 +1313,12 @@
   }
   const safeKey = s => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
 
-  window.calOpenJob = function (jobId) {
+  window.calOpenJob = async function (jobId) {
     closeCalModal();
     // Already the job in the form: just go to it. Loading it again would read
     // the saved copy over whatever has been typed and not yet saved.
     if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty &&
-        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(jobId);
     switchTab('job');
   };
@@ -1674,7 +1673,7 @@
     done(first.rec, first.calId);
   };
 
-  window.calRemove = function () {
+  window.calRemove = async function () {
     const ed = editing;
     if (!ed || !ed.eventId || !editsCal(cals[ed.calId])) return;
     const base = (events[ed.calId] || {})[ed.eventId];
@@ -1686,7 +1685,9 @@
       }, true);
       return;
     }
-    if (!confirm('Delete "' + (base.title || 'this') + '"' + (isRepeating(base) ? ' and every repeat of it' : '') + '?')) return;
+    if (!(await ydConfirm('', { title: 'Delete "' + (base.title || 'this') + '"' + (isRepeating(base) ? ' and every repeat of it' : '') + '?',
+      ok: 'Delete', danger: true }))) return;
+    if (editing !== ed || !(events[ed.calId] || {})[ed.eventId]) return;
     delete events[ed.calId][ed.eventId];
     removeEvent(ed.calId, ed.eventId);
     closeCalModal(); render();
@@ -2349,12 +2350,15 @@
     calManage(); render();
   };
 
-  window.calRemoveCal = function (id) {
+  window.calRemoveCal = async function (id) {
     if (!isOwner()) return;
     const c = cals[id];
+    if (!c || !(await ydConfirm('This cannot be undone.', { title: 'Delete the calendar "' + c.name + '"' +
+        (Object.keys(events[id] || {}).length ? ' and its ' + Object.keys(events[id] || {}).length + ' events' : '') + '?',
+        ok: 'Delete the calendar', danger: true }))) return;
+    if (!cals[id]) return;
+    // Its events as they are now, added to since the question was asked or not.
     const ids = Object.keys(events[id] || {});
-    if (!c || !confirm('Delete the calendar "' + c.name + '"' + (ids.length ? ' and its ' + ids.length + ' events' : '') +
-        '? This cannot be undone.')) return;
     if (eventUnsubs[id]) { eventUnsubs[id](); delete eventUnsubs[id]; }
     delete cals[id]; delete events[id];
     closeCalModal(); render();

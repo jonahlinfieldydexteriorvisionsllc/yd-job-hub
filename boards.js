@@ -680,7 +680,7 @@
   const doneToClear = board => Object.values(cards[board.id] || {})
     .filter(k => shows(board, k) && colOf(board, k) === doneColOf(board) && clearable(board, k));
 
-  window.deleteDoneCards = function (boardId) {
+  window.deleteDoneCards = async function (boardId) {
     const board = boards[boardId];
     if (!board || board.virtual || !runsBoard(board)) return;
     const gone = doneToClear(board);
@@ -689,10 +689,12 @@
     // today), so the question says how many of each -- "delete all 40" next
     // to "Nothing finished today" read as deleting things never seen.
     const today = gone.filter(onBoardWhenDone).length, before = gone.length - today;
-    if (!confirm('Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' + board.name + '" for good?\n\n' +
-                 (today ? today + ' finished today' + (before ? ', ' : '.') : '') +
+    if (!(await ydConfirm((today ? today + ' finished today' + (before ? ', ' : '.') : '') +
                  (before ? before + ' finished before today' + (showOldDone[board.id] ? '.' : ' (not shown on the board — "Show the finished earlier" lists them).') : '') +
-                 '\n\nThis cannot be undone.')) return;
+                 '\n\nThis cannot be undone.',
+                 { title: 'Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' + board.name + '" for good?',
+                   ok: 'Delete them', danger: true }))) return;
+    if (!boards[boardId]) return;
     deleteCards(board, gone.map(k => k.id));
     showToast(gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' deleted');
   };
@@ -729,11 +731,12 @@
     if (k.recurring && String(k.due || '') >= localDay()) return false;
     return true;
   }
-  window.bdDeleteCard = function (boardId, cardId) {
+  window.bdDeleteCard = async function (boardId, cardId) {
     const board = boards[boardId];
     const k = board && (cards[boardId] || {})[cardId];
     if (!k || board.virtual || !editsBoard(board)) return;
-    if (!confirm('Delete "' + (k.title || 'this card') + '"? This cannot be undone.')) return;
+    if (!(await ydConfirm('This cannot be undone.', { title: 'Delete "' + (k.title || 'this card') + '"?', ok: 'Delete', danger: true }))) return;
+    if (!boards[boardId] || !(cards[boardId] || {})[cardId]) return;
     deleteCards(board, [cardId]);
     showToast('Card deleted');
   };
@@ -1251,11 +1254,15 @@
       '</div>');
     jobEditTags();
   };
-  window.jobEditTagOn = function (sel) {
+  window.jobEditTagOn = async function (sel) {
     let v = sel.value;
     sel.value = '';
     if (!v || !jobEdit) return;
-    if (v === '__custom') { v = (prompt('What service?') || '').trim(); if (!v) return; }
+    if (v === '__custom') {
+      const was = jobEdit;
+      v = (await ydPrompt('The service, in a word or two:', '', { title: 'Add a service', placeholder: 'e.g. Gutter cleaning', ok: 'Add' }) || '').trim();
+      if (!v || jobEdit !== was) return;
+    }
     if (jobEdit.services.indexOf(v) === -1) jobEdit.services.push(v);
     jobEditTags();
   };
@@ -1306,13 +1313,12 @@
     closeBoardModal();
     moveJob(jobId, boardId, col);
   };
-  window.openJobFromBoard = function (jobId) {
+  window.openJobFromBoard = async function (jobId) {
     closeBoardModal();
     // Already the job in the form: just go to it. Loading it again would read
     // the saved copy over whatever has been typed and not yet saved.
     if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty &&
-        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(jobId);
     switchTab('job');
   };
@@ -1320,10 +1326,11 @@
   // A card on Bids or Jobs IS a job, so adding one makes the job: the
   // customer's name, in the column it was added to, then its editor for the
   // rest. The estimate is built on the Job tab ("Open the bid").
-  window.addJobCard = function (boardId, col) {
+  window.addJobCard = async function (boardId, col) {
     const board = boardById(boardId);
     if (!board || !board.virtual || !movesJobs() || typeof createJobRecord !== 'function') return;
-    const name = prompt(boardId === 'bids' ? 'Who is the bid for? (customer name)' : 'Who is the job for? (customer name)');
+    const name = await ydPrompt('The customer’s name — the rest comes next.', '',
+      { title: boardId === 'bids' ? 'Who is the bid for?' : 'Who is the job for?', placeholder: 'Customer name', ok: 'Add' });
     if (!name || !name.trim()) return;
     const at = nowIso();
     const fields = { customerName: name.trim() };
@@ -1417,10 +1424,10 @@
       '</div>');
   }
   // The card open in the window, deleted (with the same question as its 🗑).
-  window.bdDeleteOpen = function () {
+  window.bdDeleteOpen = async function () {
     if (!openCard) return;
     const b = openCard.boardId, c = openCard.cardId;
-    bdDeleteCard(b, c);
+    await bdDeleteCard(b, c);
     if (!(cards[b] || {})[c]) closeBoardModal();
   };
 
@@ -1567,10 +1574,14 @@
   // A change Claude at home built goes live only on the owner's say-so. The
   // whole record is written back, approval added: the save merges, and a
   // record written in pieces could keep a stale field.
-  window.claudeApprove = function () {
-    const k = openCard && (cards[openCard.boardId] || {})[openCard.cardId];
+  window.claudeApprove = async function () {
+    const k0 = openCard && (cards[openCard.boardId] || {})[openCard.cardId];
+    if (!k0 || !k0.claude || k0.claude.status !== 'waiting_ok') return;
+    const asked = openCard.boardId + '/' + openCard.cardId;
+    if (!(await ydConfirm('', { title: 'Put this change live for everyone using Job Hub?', ok: 'Put it live' }))) return;
+    // The same card still open and still waiting.
+    const k = openCard && openCard.boardId + '/' + openCard.cardId === asked && (cards[openCard.boardId] || {})[openCard.cardId];
     if (!k || !k.claude || k.claude.status !== 'waiting_ok') return;
-    if (!confirm('Put this change live for everyone using Job Hub?')) return;
     claudePatch({ claude: Object.assign({}, k.claude, { approvedAt: nowIso(), approvedBy: myName() }) });
     showToast('It goes live on the next check — within 20 minutes');
   };
@@ -1579,8 +1590,11 @@
     showToast(yes ? 'Claude will look at this card' : 'Claude will leave this card alone');
   };
   // Forgets what Claude did, so the next run (or Ask now) does it afresh.
-  window.claudeAgain = function () {
-    if (!confirm('Have Claude do this card again? What it did before is replaced (drafts already in Gmail stay there).')) return;
+  window.claudeAgain = async function () {
+    const asked = openCard && openCard.boardId + '/' + openCard.cardId;
+    if (!asked || !(await ydConfirm('What it did before is replaced (drafts already in Gmail stay there).',
+      { title: 'Have Claude do this card again?', ok: 'Do it again' }))) return;
+    if (!openCard || openCard.boardId + '/' + openCard.cardId !== asked) return;
     claudePatch({ claude: null });
     showToast(computerAwake() || cardRuns ? 'Claude will look at it again on the next run'
       : 'Cleared — press 🤖 Ask Claude now when you want it done');
@@ -2219,14 +2233,15 @@
     showToast(name + ' saved');
   };
 
-  window.removeBoard = function (id) {
+  window.removeBoard = async function (id) {
     const b = boards[id];
     // Maintenance follows the Equipment tab; Crew tasks holds the recurring
     // task list (recurring.js) -- deleting either would lose it.
     if (!b || !runsBoard(b) || id === MAINTENANCE || id === CREW_BOARD) return;
     const n = Object.keys(cards[id] || {}).length;
-    if (!confirm('Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') +
-                 '? This cannot be undone.')) return;
+    if (!(await ydConfirm('This cannot be undone.', { title: 'Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') + '?',
+                 ok: 'Delete the board', danger: true }))) return;
+    if (!boards[id]) return;
     const ids = Object.keys(cards[id] || {});
     if (cardUnsubs[id]) { cardUnsubs[id](); delete cardUnsubs[id]; }
     delete boards[id]; delete cards[id]; delete cardsLoaded[id];
