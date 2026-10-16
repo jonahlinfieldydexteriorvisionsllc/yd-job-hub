@@ -17,7 +17,9 @@
     --neg:#c8492b;
     --neg-soft:#f6ddd3;
     --text:#2b2433;
-    --muted:#7b7188;
+    /* Small grey words (Home's sub-lines, hints): 4.5:1 or better on the page
+       and the light panels (office testing, 16 Oct 2026: #7b7188 read 4.26:1). */
+    --muted:#6c637a;
     --border:#ded5e8;
     --border-strong:#c8bcd8;
     /* The brand purple as TEXT. The same as --brand by day; at night --brand

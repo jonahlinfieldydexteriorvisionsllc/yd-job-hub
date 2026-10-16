@@ -3392,6 +3392,12 @@ function renderDashboardSoon() {
   clearTimeout(dashSearchTimer);
   dashSearchTimer = setTimeout(renderDashboard, 180);
 }
+// "Owed to you" is the Invoices list's figure: drawn again when that list
+// arrives or changes, if All Jobs is on screen.
+document.addEventListener('yd-invoices', () => {
+  const dash = document.getElementById('panel-dashboard');
+  if (dash && dash.classList.contains('active')) renderDashboardSoon();
+});
 // All Jobs: the filters added since the page was written (index.html keeps
 // the first five) are put in once, here: where a job is on its board --
 // Ready to invoice, money still owed, lost bids -- and which year.
@@ -3518,14 +3524,25 @@ function renderDashboard() {
   document.getElementById('dashCount').textContent = rows.length + ' job' + (rows.length !== 1 ? 's' : '');
   const known = rows.filter(r => r.net != null);
   const totPrice = rows.reduce((s, r) => s + r.price, 0), totNet = known.reduce((s, r) => s + r.net, 0), totHrs = rows.reduce((s, r) => s + r.hrs, 0);
-  const totOwed = rows.reduce((s, r) => s + (r.owed > 0 ? r.owed : 0), 0);
+  // What is owed: the same figure as Home's tile -- every unpaid QuickBooks
+  // invoice on the Invoices list (ones tied to a job by hand, or not yet
+  // copied onto one, too), whatever the table is filtered to (the year filter
+  // is on by default, and last year's unpaid bill is still owed). Office
+  // testing, 16 Oct 2026: All Jobs said $6,752 while Home said $7,392. With a
+  // filter on, what the jobs shown owe is the line under it.
+  const rowOwed = rows.reduce((s, r) => s + (r.owed > 0 ? r.owed : 0), 0);
+  const filtered = !!(fSvc || fStatus || fSearch || (fYear && fYear !== 'all'));
+  const invOpen = typeof ydCan === 'function' && ydCan('billing', 'see') && window.YDInvoices
+    ? Object.values(YDInvoices.all() || {}).filter(i => i.open && Number(i.balance) > 0) : [];
+  const totOwed = invOpen.length ? Math.round(invOpen.reduce((s, i) => s + Number(i.balance), 0) * 100) / 100 : rowOwed;
+  const owedSub = filtered && invOpen.length && Math.abs(rowOwed - totOwed) >= 0.01 ? fmtMoney(rowOwed) + ' on the jobs shown' : '';
   const plannedN = known.filter(r => r.planned).length, unknownN = rows.length - known.length;
   document.getElementById('dashTotals').innerHTML = [
     { l: 'Jobs', v: rows.length, cls: '' }, { l: 'Total Booked', v: fmtMoney(totPrice), cls: 'accent-top' },
     { l: 'Est. Net Profit', v: fmtMoney(totNet), cls: 'pos-top',
       sub: [plannedN ? plannedN + ' planned, not yet costed' : '', unknownN ? unknownN + ' not known' : ''].filter(Boolean).join(' · ') },
     { l: 'Total Labor', v: fmtHrsMin(totHrs), cls: '' },
-  ].concat(totOwed > 0 ? [{ l: 'Owed to you', v: fmtMoney(totOwed), cls: 'neg-top' }] : [])
+  ].concat(totOwed > 0 ? [{ l: 'Owed to you', v: fmtMoney(totOwed), cls: 'neg-top', sub: owedSub }] : [])
     .map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.l + '</div><div class="summary-value">' + c.v + '</div>' +
       (c.sub ? '<div class="dash-sub">' + esc(c.sub) + '</div>' : '') + '</div>').join('');
 
