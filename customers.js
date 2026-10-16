@@ -107,6 +107,33 @@
   const MONTH_RE = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/;
   const SEASON_RE = /\b(spring|summer|fall|autumn|winter)\b/;
   const validDay = v => /^\d{4}-\d{2}-\d{2}$/.test(s(v));
+  // Said the way people say it, with no date in it (crew testing, 16 Oct
+  // 2026: "this month" was not understood): this / next week, this / next
+  // month, this / next year, and "in 3 weeks", "in a couple of months" --
+  // the week (Sunday to Saturday, as the calendar's weeks) or the month it
+  // falls in. And "next" before a month or a season is the next one that
+  // has not begun: "next fall" said in October is next year's (as the Fall
+  // button is), where "fall" alone is this one.
+  const REL_RE = /\b(this|next) (week|month|year)\b/;
+  const IN_RE = /\bin (\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|(?:a )?couple(?: of)?|(?:a )?few) (weeks?|months?)\b/;
+  const COUNT_WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  function countOf(w) {
+    if (/^\d+$/.test(w)) return +w;
+    if (/couple/.test(w)) return 2;
+    if (/few/.test(w)) return 3;
+    if (w === 'a' || w === 'an') return 1;
+    return COUNT_WORDS.indexOf(w) + 1;
+  }
+  const nextBefore = (t, at) => /\bnext $/.test(t.slice(0, at));
+  // The week (Sunday to Saturday) and the month a day is in.
+  function weekOf(d) {
+    const a = new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay());
+    return { from: ymd(a), to: ymd(new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6)) };
+  }
+  function monthOf(y, m) {                                 // m 1-12, may run past 12
+    const a = new Date(y, m - 1, 1);
+    return { from: ymd(a), to: lastDay(a.getFullYear(), a.getMonth() + 1) };
+  }
 
   function windowFromText(text) {
     const t = low(text);
@@ -121,24 +148,43 @@
     if (m < 1 || m > 12) m = 0;
     const name = t.match(MONTH_RE), season = t.match(SEASON_RE);
     let y = ym ? +ym[1] : 0;
-    if (!m && name) m = MONTHS.indexOf(name[1].slice(0, 3)) + 1;
+    const named = !m && !!name;
+    if (named) m = MONTHS.indexOf(name[1].slice(0, 3)) + 1;
     if (m) {
-      // No year: the next time that month comes round (this one if we are in it).
-      if (!y) y = m >= thisMonth ? thisYear : thisYear + 1;
+      // No year: the next time that month comes round (this one if we are
+      // in it) -- or, "next October", the next one still to begin.
+      if (!y) y = named && nextBefore(t, name.index) ? (m > thisMonth ? thisYear : thisYear + 1)
+        : m >= thisMonth ? thisYear : thisYear + 1;
       return { from: y + '-' + two(m) + '-01', to: lastDay(y, m), label: s(text) };
     }
     if (season) {
       const [a, b] = SEASON[season[1]];
       // No year: this one if we are in it or before it, else next year's.
       // Winter runs Dec-Feb: January and February belong to last December's.
+      // "Next spring": the next one still to begin.
       if (!y) {
-        if (a <= b) y = thisMonth <= b ? thisYear : thisYear + 1;
+        if (nextBefore(t, season.index)) y = thisMonth < a ? thisYear : thisYear + 1;
+        else if (a <= b) y = thisMonth <= b ? thisYear : thisYear + 1;
         else y = thisMonth <= b ? thisYear - 1 : thisYear;
       }
       return { from: y + '-' + two(a) + '-01', to: a > b ? lastDay(y + 1, b) : lastDay(y, b), label: s(text) };
     }
     if (y) return { from: y + '-01-01', to: y + '-12-31', label: s(text) };
-    return null;
+    const rel = t.match(REL_RE), inN = t.match(IN_RE);
+    let w = null;
+    if (rel) {
+      const k = rel[1] === 'next' ? 1 : 0;
+      if (rel[2] === 'week') w = weekOf(new Date(thisYear, thisMonth - 1, now.getDate() + 7 * k));
+      else if (rel[2] === 'month') w = monthOf(thisYear, thisMonth + k);
+      else w = { from: (thisYear + k) + '-01-01', to: (thisYear + k) + '-12-31' };
+    } else if (inN) {
+      const n = countOf(inN[1]);
+      if (n >= 1 && n <= 60) {
+        w = /^week/.test(inN[2]) ? weekOf(new Date(thisYear, thisMonth - 1, now.getDate() + 7 * n))
+          : monthOf(thisYear, thisMonth + n);
+      }
+    }
+    return w ? { from: w.from, to: w.to, label: s(text) } : null;
   }
   function windowOf(c) {
     const w = c.when;
@@ -602,7 +648,7 @@
         (w ? '<button class="cu-chip" onclick="custWhenPick(\'' + id + '\', \'none\', 0)">No time to call<small>off the call list</small></button>' : '') +
       '</div>' +
       '<details class="cu-when-words"' + (c.contactWhen && !c.when ? ' open' : '') + '><summary>Or write it in words</summary>' +
-        '<div class="cu-when"><input id="cuWhen" value="' + esc(c.contactWhen || '') + '" placeholder="e.g. after the first snow, early summer 2027" onkeydown="if (event.key === \'Enter\') custSaveWhen(\'' + id + '\')">' +
+        '<div class="cu-when"><input id="cuWhen" value="' + esc(c.contactWhen || '') + '" placeholder="e.g. next month, early summer 2027, in 3 weeks" onkeydown="if (event.key === \'Enter\') custSaveWhen(\'' + id + '\')">' +
         '<button class="btn btn-sm" onclick="custSaveWhen(\'' + id + '\')">Save</button></div></details>' +
       '<div class="cu-btns">' + (w && whenPicking ? '<button class="btn btn-sm" onclick="custWhenOpen(false)">Keep ' + esc(whenText(w)) + '</button>' : '') +
         '<button class="btn btn-sm" onclick="custNotInterested(\'' + id + '\', true)">Not interested</button></div>' +
@@ -779,7 +825,7 @@
     if (w) whenPicking = false;
     write(id, { contactWhen: v, whenSetAt: new Date().toISOString(), when: null }, 'when to call');
     render();
-    showToast(!v ? 'Time to call taken off' : w ? 'On the call list from ' + niceDay(w.from) : 'Saved — but no month, season or year in it, so it’s not on the call list');
+    showToast(!v ? 'Time to call taken off' : w ? 'On the call list from ' + niceDay(w.from) : 'Saved — but no month, season, year or “next month” in it, so it’s not on the call list');
   };
   // A button: the window it shows, saved. "none" takes the time off.
   window.custWhenPick = function (id, how, arg) {

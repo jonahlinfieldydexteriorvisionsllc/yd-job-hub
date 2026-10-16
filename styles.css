@@ -846,6 +846,18 @@
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .menu button.menu-danger { color:var(--neg); }
   .menu button.menu-danger:hover { background:var(--neg-soft); color:var(--neg); }
+  /* Crew testing, 16 Oct 2026: at about 768px tall the menu had to be
+     scrolled to reach Problems and Sign out. Where one column does not fit
+     and the screen is wide enough (app.js fitHeaderMenu adds .menu-two),
+     the groups sit side by side in two columns, with who is signed in and
+     Sign out across the foot of both -- the whole menu in view, nothing
+     hidden, the rows still a full thumb high. On a phone the list scrolls
+     as before, but Sign out is held at the bottom of it, always in reach. */
+  .menu-account { position:sticky; bottom:-6px; margin:0 -6px -6px; padding:0 6px 6px; background:var(--surface); }
+  .menu-account:has(> .menu-sep:not([hidden])) { box-shadow:0 -6px 8px -6px rgba(43,36,51,.18); }
+  .menu.menu-two { columns:2; column-gap:8px; min-width:0; }
+  .menu.menu-two .menu-group { break-inside:avoid; }
+  .menu.menu-two .menu-account { column-span:all; position:static; margin:0; padding:0; box-shadow:none; }
 
 
   /* a row of small actions hanging under a field */
@@ -1556,6 +1568,10 @@
   .md-head { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--muted);
              margin:14px 2px 2px; display:flex; align-items:center; gap:8px; }
   .md-head:first-child, .md-nudge + .md-head { margin-top:4px; }
+  /* The day's one count at the top of My day (calendar.js tally) -- the
+     same words Home and the day list down the side use. */
+  .md-count { font-size:14px; font-weight:700; color:var(--text); margin:4px 2px 0; }
+  .md-count + .md-head { margin-top:10px; }
   .md-head.md-crew { margin-top:22px; padding-top:12px; border-top:1px solid var(--border); }
   .md-row { --c:#6b7a8f; display:flex; gap:10px; align-items:center; width:100%;
             border-left:4px solid var(--c); border-radius:6px; background:var(--surface-2);
@@ -3181,6 +3197,12 @@
   #stormWrap .stop-move { margin-left:auto; gap:6px; flex:none; }
   #stormWrap .stop-move button { width:44px; height:44px; font-size:15px; border-radius:9px; }
   #stormWrap .stop-move button:disabled { opacity:.3; cursor:default; }
+  /* An arrow with nowhere to go (the first stop's ▲, the last one's ▼) is
+     not drawn; its place is kept so the other stays in line. One held back
+     by a started stop is greyed, and says why when tapped (storm.js). */
+  #stormWrap .stop-move-none { display:inline-block; width:44px; height:44px; flex:none; }
+  #stormWrap .stop-move button.stop-move-held { opacity:.35; cursor:not-allowed; border-style:dashed; }
+  #stormWrap .stop-move button.stop-move-held:active { background:var(--surface-2); color:var(--muted); }
 
   /* Directions: a real button on the stop being worked and the next one. */
   #stormWrap .stop-dir { display:flex; align-items:center; justify-content:center; gap:8px; min-height:52px; margin-top:12px; max-width:440px;
@@ -4336,6 +4358,14 @@
   .cal-file-a { flex:1 1 160px; min-width:0; overflow-wrap:anywhere; font-weight:600; color:var(--brand-ink); text-decoration:none; }
   .cal-file-a:not([href]) { color:var(--muted); }
   .cal-file-a.missing { color:var(--muted); text-decoration:line-through; }
+  /* How a file stands, in words on its row (calendar.js fileState): no
+     hover on an iPad to read a title by. An inline-block, so the strike
+     through a file that is gone does not run through the words too. */
+  .cal-file-state { display:inline-block; width:100%; font-size:12px; font-weight:600; color:var(--muted); text-decoration:none; }
+  .cal-file-state:empty { display:none; }
+  .cal-file[data-state="offline"] .cal-file-state, .cal-file[data-state="failed"] .cal-file-state,
+  .cal-file[data-state="refused"] .cal-file-state, .cal-file[data-state="gone"] .cal-file-state { color:var(--st-now); }
+  .cal-file[data-state="offline"] .cal-file-a, .cal-file[data-state="failed"] .cal-file-a { cursor:pointer; }
   .cal-file small { color:var(--muted); font-size:12px; }
   .cal-file-pic { flex:none; }
   .cal-file-pic img { display:block; width:56px; height:56px; object-fit:cover; border-radius:8px; background:var(--surface-2); }

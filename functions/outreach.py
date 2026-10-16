@@ -144,11 +144,52 @@ def _last_day(y, m):
     return (nxt - datetime.timedelta(days=1)).isoformat()
 
 
+# Said with no date in it (customers.js REL_RE / IN_RE): this / next week,
+# this / next month, this / next year, "in 3 weeks", "in a couple of
+# months" -- the week (Sunday to Saturday) or the month it falls in. "Next"
+# before a month or a season is the next one that has not begun.
+_REL = re.compile(r"\b(this|next) (week|month|year)\b", re.A)
+_IN = re.compile(r"\bin (\d{1,2}|an?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+                 r"(?:a )?couple(?: of)?|(?:a )?few) (weeks?|months?)\b", re.A)
+_COUNT_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"]
+_NEXT_BEFORE = re.compile(r"\bnext $", re.A)
+
+
+def _count_of(w):
+    if re.match(r"^\d+$", w, re.A):
+        return int(w)
+    if "couple" in w:
+        return 2
+    if "few" in w:
+        return 3
+    if w in ("a", "an"):
+        return 1
+    return _COUNT_WORDS.index(w) + 1 if w in _COUNT_WORDS else 0
+
+
+def _next_before(t, at):
+    return _NEXT_BEFORE.search(t[:at]) is not None
+
+
+def _week_of(d):
+    """The week (Sunday to Saturday) a day is in."""
+    a = d - datetime.timedelta(days=(d.weekday() + 1) % 7)
+    return {"from": a.isoformat(), "to": (a + datetime.timedelta(days=6)).isoformat()}
+
+
+def _month_of(y, m):
+    """The month m of year y, m 1-12 or past 12 (into the years after)."""
+    y, m = y + (m - 1) // 12, (m - 1) % 12 + 1
+    return {"from": "%04d-%02d-01" % (y, m), "to": _last_day(y, m)}
+
+
 def window_from_text(text, today):
     """{from, to} (YYYY-MM-DD) read out of the words of a time to call, or
-    None: a month (the next time it comes round, this one if we are in it),
-    a season (this one if we are in it or before it, else next year's;
-    winter is Dec-Feb), or a year alone."""
+    None: a month (the next time it comes round, this one if we are in it;
+    "next October" the next one still to begin), a season (this one if we
+    are in it or before it, else next year's; winter is Dec-Feb; "next
+    spring" the next one still to begin), a year alone, or this / next
+    week, month or year, or "in N weeks / months"."""
     t = " ".join(str(text or "").lower().split())
     if not t:
         return None
@@ -159,22 +200,42 @@ def window_from_text(text, today):
         m = 0
     name, season = _MONTH_WORD.search(t), _SEASON_WORD.search(t)
     y = int(ym.group(1)) if ym else 0
-    if not m and name:
+    named = not m and name is not None
+    if named:
         m = _MONTHS.index(name.group(1)[:3]) + 1
     if m:
         if not y:
-            y = today.year if m >= today.month else today.year + 1
+            if named and _next_before(t, name.start()):
+                y = today.year if m > today.month else today.year + 1
+            else:
+                y = today.year if m >= today.month else today.year + 1
         return {"from": "%04d-%02d-01" % (y, m), "to": _last_day(y, m)}
     if season:
         a, b = _SEASON_SPAN[season.group(1)]
         if not y:
-            if a <= b:
+            if _next_before(t, season.start()):
+                y = today.year if today.month < a else today.year + 1
+            elif a <= b:
                 y = today.year if today.month <= b else today.year + 1
             else:
                 y = today.year - 1 if today.month <= b else today.year
         return {"from": "%04d-%02d-01" % (y, a), "to": _last_day(y + 1, b) if a > b else _last_day(y, b)}
     if y:
         return {"from": "%04d-01-01" % y, "to": "%04d-12-31" % y}
+    rel, in_n = _REL.search(t), _IN.search(t)
+    if rel:
+        k = 1 if rel.group(1) == "next" else 0
+        if rel.group(2) == "week":
+            return _week_of(today + datetime.timedelta(days=7 * k))
+        if rel.group(2) == "month":
+            return _month_of(today.year, today.month + k)
+        return {"from": "%04d-01-01" % (today.year + k), "to": "%04d-12-31" % (today.year + k)}
+    if in_n:
+        n = _count_of(in_n.group(1))
+        if 1 <= n <= 60:
+            if in_n.group(2).startswith("week"):
+                return _week_of(today + datetime.timedelta(days=7 * n))
+            return _month_of(today.year, today.month + n)
     return None
 
 

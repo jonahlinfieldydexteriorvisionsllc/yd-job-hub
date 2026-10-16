@@ -677,7 +677,22 @@ function toggleHeaderMenu() {
   if (!m) return;
   if (m.hidden) tidyHeaderMenu(m);
   m.hidden = !m.hidden;
+  if (!m.hidden) fitHeaderMenu(m);
 }
+// Crew testing, 16 Oct 2026: at about 768px tall the owner's menu had to be
+// scrolled to reach Problems and Sign out. Where one column would not fit
+// the screen and there is room across, the groups go in two (styles.css
+// .menu-two) -- a short menu, the crew's, stays one column. A phone keeps
+// one column, scrolled, with Sign out held at its foot.
+function fitHeaderMenu(m) {
+  m.classList.remove('menu-two');
+  if (!window.matchMedia('(min-width:721px)').matches) return;
+  if (m.scrollHeight > m.clientHeight + 1) m.classList.add('menu-two');
+}
+window.addEventListener('resize', () => {
+  const m = document.getElementById('headerMenu');
+  if (m && !m.hidden) fitHeaderMenu(m);
+});
 function tidyHeaderMenu(m) {
   // Search and All settings come from search.js, when it is there.
   const signedIn = !!(window.YDAuth && window.YDAuth.user);

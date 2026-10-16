@@ -407,34 +407,40 @@
   // it reads as though it were theirs alone.
   const openCrew = x => !!(x && x.crewTask && x.open);
 
+  // A day's count in the calendar's words (calendar.js countWords).
+  const countWords = c => (window.YDCalendar && YDCalendar.countWords ? YDCalendar.countWords(c) : '');
+
   function myDayHtml(d) {
     if (!signedIn()) return '';
     const title = isOwner() ? '📅 My day' : '📅 Your day';
     const link = ['Calendar', "switchTab('calendar')"];
     if (d === 'loading' || !d) return card('day', title, '', link, empty('Loading…'));
-    const all = d.mineAny.concat(d.mineLate);
-    const left = all.filter(x => !x.done).length;
     const ownLate = d.mineLate.filter(x => !openCrew(x)), ownAny = d.mineAny.filter(x => !openCrew(x));
     const crewLate = d.mineLate.filter(openCrew), crewAny = d.mineAny.filter(openCrew);
-    const ownLeft = ownLate.concat(ownAny).filter(x => !x.done).length;
-    const crewLeft = crewLate.concat(crewAny).filter(x => !x.done).length;
+    // The day's one count, worked out by the calendar (calendar.js tally) and
+    // said in its words -- "3 to do today · 2 from earlier" -- so Home, My day
+    // and the calendar's day list give the same figure (crew testing, 16 Oct
+    // 2026: they said 4, 2 + 2, and 5). The lists below carry no figures of
+    // their own: a count for each part read as yet another number.
+    const c = d.count || null;
+    const left = c ? c.today + c.earlier : 0;
     // Reminders reach only a phone that has said yes to them (calendar.js,
     // the same note My day shows).
     const nudge = window.YDCalendar && YDCalendar.nudge ? YDCalendar.nudge() : '';
     const body = nudge +
-      sub('🕑 Schedule', d.mineTimed.length || null) +
+      sub('🕑 Schedule') +
       (d.mineTimed.length ? capped('mineT', d.mineTimed.map(timedRow), 8)
         : empty('Nothing at a set time today.')) +
       // What is late first: it was wanted sooner than today's, and a long
       // list must not fold it away under "Show all".
-      sub('✅ To do today', ownLeft || null) +
+      sub('✅ To do today') +
       (ownLate.length || ownAny.length ? capped('mineA', ownLate.map(x => todoRow(x, true)).concat(ownAny.map(x => todoRow(x, false))))
         : empty('Nothing else to get done today.')) +
       (crewLate.length || crewAny.length
-        ? sub('👷 Crew tasks — anyone can do these', crewLeft || null) +
+        ? sub('👷 Crew tasks — anyone can do these') +
           capped('mineC', crewLate.map(x => todoRow(x, true)).concat(crewAny.map(x => todoRow(x, false))))
         : '');
-    return card('day', title, left ? left + ' to do' : all.length ? 'all done' : '', link, body, left > 0);
+    return card('day', title, countWords(c), link, body, left > 0);
   }
 
   function crewDayHtml(d) {
@@ -446,12 +452,10 @@
     const link = null;
     if (d === 'loading' || !d) return card('crew', title, '', link, empty('Loading…'));
     const tasks = d.crewAny.concat(d.crewLate);
-    const left = tasks.filter(x => !x.done).length;
     // Nobody on it (anyone's to do) apart from someone's already: the rows
     // of the second say who.
     const openLate = d.crewLate.filter(openCrew), openAny = d.crewAny.filter(openCrew);
     const takenLate = d.crewLate.filter(x => !openCrew(x)), takenAny = d.crewAny.filter(x => !openCrew(x));
-    const leftOf = list => list.filter(x => !x.done).length || null;
     // Who is working right now: for whoever sees everyone's hours. A shift
     // on a long time (a clock-out forgotten, most likely) is marked.
     const now = window.YDClock && YDClock.onNow && can('hours', 'see') ? YDClock.onNow() : null;
@@ -462,17 +466,19 @@
       .concat(now.breaks.map(b => line('🍔', '<b>' + esc(b.who) + '</b> — on a break', esc(b.where), esc(dur(b.ms)),
         "switchTab('clock')", 'paused'))) : [];
     const body =
-      sub('🕑 Schedule', d.crewTimed.length || null) +
+      sub('🕑 Schedule') +
       (d.crewTimed.length ? capped('crewT', d.crewTimed.map(timedRow), 8)
         : empty('Nothing on the crew’s calendar at a set time.')) +
       (!tasks.length ? sub('✅ Crew tasks') + empty('No crew tasks for today.') :
-        (openLate.length || openAny.length ? sub('👷 Crew tasks — anyone can do these', leftOf(openLate.concat(openAny))) +
+        (openLate.length || openAny.length ? sub('👷 Crew tasks — anyone can do these') +
           capped('crewA', openLate.map(x => todoRow(x, true)).concat(openAny.map(x => todoRow(x, false)))) : '') +
-        (takenLate.length || takenAny.length ? sub('👤 Crew tasks someone is on', leftOf(takenLate.concat(takenAny))) +
+        (takenLate.length || takenAny.length ? sub('👤 Crew tasks someone is on') +
           capped('crewB', takenLate.map(x => todoRow(x, true)).concat(takenAny.map(x => todoRow(x, false)))) : '')) +
       (now ? sub('⏱️ On the clock now', now.live.length || null) +
         (onClock.length ? capped('onNow', onClock) : empty('Nobody is on the clock.')) : '');
-    const badge = now && now.live.length ? now.live.length + ' working' : left ? left + ' to do' : '';
+    // The crew's count by the same rule and words as My day's (calendar.js
+    // tally): their tasks, at a set time or not, and the ones from earlier.
+    const badge = now && now.live.length ? now.live.length + ' working' : countWords(d.crewCount || null);
     return card('crew', title, badge, link, body);
   }
 

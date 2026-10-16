@@ -511,8 +511,12 @@
 
   // A stop while reordering: one line -- its number, name and address (or
   // how it went), and the arrows for one that can still move. `before` and
-  // `after` are its neighbours in the list: an arrow that would swap it with
-  // a started stop is shown greyed, as moveStop would refuse it.
+  // `after` are its neighbours in the list. Crew testing, 16 Oct 2026: ▼ on
+  // the last stop did nothing at all, and ▲ into a stop being worked said
+  // "That stop is already done". So an arrow with nowhere to go (the first
+  // stop's ▲, the last one's ▼) is not there -- its place kept, so the other
+  // lines up -- and one that would swap with a started stop is greyed, and
+  // says why when it is tapped (moveStop), rather than nothing.
   function reorderRow(s, before, after) {
     const a = accountFor(s), sid = safeId(s.id);
     const state = s.skipped ? 'skipped' : s.departedAt ? 'done' : s.arrivedAt ? 'onsite' : 'todo';
@@ -520,19 +524,28 @@
     const pass = num(s.pass, 1);
     const moves = movesFree(s);
     const sub = moves ? (a.address || '') : state === 'onsite' ? 'on site now' : rowFigures(s);
-    const arrow = (delta, ok, sign, word) => '<button type="button" data-move="' + delta + '" ' +
-      'onclick="moveStop(\'' + sid + '\',' + delta + ')" aria-label="Move ' + esc(name) + ' ' + word + '"' +
-      (ok ? '' : ' disabled') + '>' + sign + '</button>';
+    const arrow = (delta, next, sign, word) => !next
+      ? '<span class="stop-move-none" aria-hidden="true"></span>'
+      : '<button type="button" data-move="' + delta + '" ' +
+        'onclick="moveStop(\'' + sid + '\',' + delta + ')" aria-label="Move ' + esc(name) + ' ' + word + '"' +
+        (movesFree(next) ? '' : ' class="stop-move-held" aria-disabled="true" title="' + esc(heldWords(next)) + '"') +
+        '>' + sign + '</button>';
     return '<div class="stop ' + state + ' stop-ro" id="stop-' + sid + '">' +
       '<span class="stop-num">' + (num(s.order, 0) + 1) + '</span>' +
       '<span class="stop-ro-main"><span class="stop-ro-name">' + esc(name) +
           (pass > 1 ? ' <small>pass ' + pass + '</small>' : '') + '</span>' +
         (sub ? '<span class="stop-ro-sub">' + esc(sub) + '</span>' : '') + '</span>' +
       (moves ? '<span class="stop-move">' +
-          arrow(-1, movesFree(before), '&#9650;', 'earlier') +
-          arrow(1, movesFree(after), '&#9660;', 'later') +
+          arrow(-1, before, '&#9650;', 'earlier') +
+          arrow(1, after, '&#9660;', 'later') +
         '</span>' : '') +
     '</div>';
+  }
+  // Why a stop cannot be moved past: in its own words, for the stop it is.
+  function heldWords(s) {
+    return s.skipped ? 'That stop was skipped — it stays where it is'
+      : s.departedAt ? 'That stop is done — it stays where it is'
+      : 'That stop is being worked — it stays where it is';
   }
 
   window.stopReorder = function (on) {
@@ -843,7 +856,10 @@
     const i = list.findIndex(s => s.id === id);
     const j = i + delta;
     if (i < 0 || j < 0 || j >= list.length) return;
-    if (list[j].arrivedAt || list[j].skipped) { showToast('That stop is already done'); return; }
+    // Started since the list was drawn (someone arrived), or the one it
+    // would swap with has been: said so, in the words for what it is.
+    if (!movesFree(list[i])) { showToast(heldWords(list[i]).replace('That stop', 'This stop')); return; }
+    if (!movesFree(list[j])) { showToast(heldWords(list[j])); return; }
 
     const rowTop = () => {
       const n = document.getElementById('stop-' + safeId(id));
