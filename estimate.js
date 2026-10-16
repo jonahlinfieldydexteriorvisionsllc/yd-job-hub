@@ -113,10 +113,14 @@
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim() };
   }
   let last = null;            // the last worked-out price, for the totals and QuickBooks
+  let priceRuns = 0;          // how many times it has been worked out (changed() compares)
+  let reuseLast = false;      // changed(false) is drawing the totals from the price it has just worked out
   function priced() {
+    if (reuseLast && last) return last;
     // The map point belongs to the address it was found for; a changed
     // address leaves it behind (the next miles lookup finds the new one).
     if (est.site && est.site.at !== siteKey()) est.site = null;
+    priceRuns++;
     last = P() ? P().price(est, ctx()) : null;
     return last;
   }
@@ -301,10 +305,19 @@
   }
 
   function changed(redraw) {
+    const ran = priceRuns;
     if (typeof syncJobPriceFromProposals === 'function') syncJobPriceFromProposals();
     if (typeof updateJobPriceSourceTag === 'function') updateJobPriceSourceTag();
     if (typeof markDirty === 'function') markDirty();
-    if (redraw) render(); else renderTotals();
+    if (redraw) render();
+    else {
+      // Keeping the job's price in step has just priced the estimate (unless
+      // the price is typed by hand), and nothing has changed since: the totals
+      // use that, instead of pricing it a second time at every key typed in
+      // a quantity or cost box.
+      reuseLast = priceRuns !== ran;
+      try { renderTotals(); } finally { reuseLast = false; }
+    }
     // The first lines in (or the last out) show or hide the old proposal box.
     if (redraw && typeof renderProposal === 'function') renderProposal();
   }
