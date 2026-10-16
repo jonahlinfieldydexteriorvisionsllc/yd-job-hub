@@ -1265,6 +1265,12 @@ def _invoice_lines(e, link_lines=False):
     return out
 
 
+def _chicago_day():
+    """Today's date where the business is (YYYY-MM-DD)."""
+    from zoneinfo import ZoneInfo
+    return _now().astimezone(ZoneInfo("America/Chicago")).date().isoformat()
+
+
 def invoice_from_estimate(body):
     """The job's invoice, made from its estimate the way Jonah does it in
     QuickBooks: one invoice for the whole job with every line of the estimate,
@@ -1309,7 +1315,11 @@ def invoice_from_estimate(body):
             raise RuntimeError("The customer turned this estimate down in QuickBooks")
         if not any(ln["DetailType"] == "SalesItemLineDetail" for ln in _invoice_lines(e)):
             raise RuntimeError("The estimate has nothing on it to invoice")
-        base = {"CustomerRef": e["CustomerRef"], "PrivateNote": _job_note(job_id)}
+        # Jonah (15 Oct 2026): "Invoices are due the day they are sent" -- with
+        # 7 days' grace before QuickBooks' late fees start (his QuickBooks
+        # late-fee setting). Made today, due today.
+        today = _chicago_day()
+        base = {"CustomerRef": e["CustomerRef"], "PrivateNote": _job_note(job_id), "TxnDate": today, "DueDate": today}
         if e.get("BillEmail"):
             base["BillEmail"] = e["BillEmail"]
         if e.get("ShipAddr"):
@@ -1358,6 +1368,14 @@ def invoice_from_estimate(body):
         to = str(((inv.get("BillEmail") or e.get("BillEmail") or {}).get("Address")) or "").strip()
         if not to:
             raise RuntimeError("Made in QuickBooks, but the customer has no email to send it to")
+        # Made earlier and never emailed until now: due the day it goes out.
+        today = _chicago_day()
+        if inv.get("EmailStatus") != "EmailSent" and str(inv.get("DueDate") or "") != today:
+            try:
+                inv = _call("POST", "invoice", body={"Id": inv["Id"], "SyncToken": inv["SyncToken"], "sparse": True,
+                                                     "DueDate": today}).get("Invoice") or inv
+            except RuntimeError as err:          # the bill still goes; its due date stays as it was
+                print("quickbooks: due date of invoice %s not moved to today: %s" % (inv.get("Id"), err))
         sent = _call("POST", "invoice/%s/send" % inv["Id"], params={"sendTo": to}, empty_body=True)
         inv = sent.get("Invoice") or inv
         sent_to = to
@@ -2773,6 +2791,12 @@ def _payments_on(inv_id, pays, names=None):
         amt = sum(_amount(ln.get("Amount")) for ln in p.get("Line") or []
                   if any(str(t.get("TxnId")) == str(inv_id) and t.get("TxnType") == "Invoice"
                          for t in ln.get("LinkedTxn") or []))
+        # Only money that came in: a QuickBooks "payment" can also just apply
+        # a credit memo to the invoice (a bad-debt write-off, 15 Oct 2026:
+        # TotalAmt 0) -- that is no payment, and must never reach the job's
+        # payments as one.
+        if p.get("TotalAmt") is not None:
+            amt = min(amt, _amount(p.get("TotalAmt")))
         if amt > 0:
             out.append({"id": pid, "date": str(p.get("TxnDate") or ""), "amount": round(amt, 2),
                         "method": (names or {}).get(str((p.get("PaymentMethodRef") or {}).get("value") or ""), "")})
@@ -3130,8 +3154,9 @@ def create_invoice(body):
     }
     if body.get("txnDate"):
         invoice["TxnDate"] = body["txnDate"]            # YYYY-MM-DD
-    if body.get("dueDate"):
-        invoice["DueDate"] = body["dueDate"]
+    # Due the day it is made unless the app says otherwise (Jonah: "Invoices
+    # are due the day they are sent").
+    invoice["DueDate"] = body.get("dueDate") or invoice.get("TxnDate") or _chicago_day()
     if body.get("memo"):
         invoice["CustomerMemo"] = {"value": str(body["memo"])[:1000]}
     if body.get("privateNote"):
