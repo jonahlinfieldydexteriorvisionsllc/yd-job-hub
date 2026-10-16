@@ -170,18 +170,19 @@
     if (!inv || !inv.id) return null;
     return inv.env && q && q.env && inv.env !== q.env ? null : inv;
   }
-  // Ready to invoice: the Jobs board's own column, unless QuickBooks already
-  // has an invoice for it (made from the estimate before anybody moved it).
+  // The job's one stage (app.js jobStage), the same answer the Job tab, the
+  // boards and All Jobs give.
+  const stageOf = j => (typeof jobStage === 'function' ? jobStage(j).id : '');
+  // Finished, not invoiced yet: no QuickBooks invoice, not marked Invoiced
+  // or Paid by hand.
   function needsInvoice(j) {
-    const col = B() && B().workColumn ? B().workColumn(j) : null;
-    return col === 'toInvoice' && !invoiceOf(j);
+    return stageOf(j) === 'finished' && !invoiceOf(j);
   }
   function owed(j) {
     const inv = invoiceOf(j);
     const bal = inv ? parseFloat(inv.balance) : NaN;
     if (!(bal > 0.004)) return 0;
-    const col = B() && B().workColumn ? B().workColumn(j) : null;
-    return col === 'paid' ? 0 : bal;
+    return stageOf(j) === 'paid' ? 0 : bal;
   }
 
   // ---------------------------------------------------------- the sections

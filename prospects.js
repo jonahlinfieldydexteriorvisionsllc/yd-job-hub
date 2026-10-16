@@ -468,6 +468,8 @@
   const digits = s => String(s || '').replace(/\D/g, '').slice(-10);
   function nextSpring(d) { return 'Spring ' + (d.getFullYear() + (d.getMonth() >= 2 ? 1 : 0)); }
   function fromLostBid(jobId, j) {
+    // The customer list switched on (customers.js): the bid's own customer.
+    if (window.YDCustomers && window.YDCustomers.on()) return window.YDCustomers.fromLostBid(jobId, j);
     if (!j || !window.YDDb || !ydCan('contacts', 'change')) return null;
     const name = String(j.customerName || '').trim() ||
       String(j.business || '').trim() || [j.firstName, j.lastName].filter(Boolean).join(' ').trim();

@@ -939,15 +939,25 @@
   // A receipt photo goes on to QuickBooks by itself (functions/receipts.py
   // forward_to_qb; Jonah, 15 Oct 2026): said here, with the photo, and Send
   // to QuickBooks when it did not go. compact: the one-line row.
+  // A receipt from email says so only once it has been sent, or tried
+  // (settings/receipts.forwardEmails; receipts.py forward_email).
   function qbHtml(r, rid, compact) {
-    if (!r.photoPath && r.source !== 'photo') return '';
     const f = r.qbForward || null;
+    if (!r.photoPath && r.source !== 'photo') return f && f.via === 'email' ? qbEmailHtml(r, rid, f, compact) : '';
     if (compact) return f && f.ok ? '<span class="rc-tag rc-qb-ok" title="Sent to QuickBooks">📤 QB</span>' : '';
     return '<div class="rc-qb">' +
       (r.photoPath ? '<button class="btn btn-sm" onclick="rcViewPhoto(\'' + rid + '\')">🖼 Photo</button>' : '') +
       (f && f.ok ? '<span class="rc-tag rc-qb-ok">📤 Sent to QuickBooks ' + fmtDateMD(String(f.at || '').slice(0, 10)) + '</span>'
         : '<span class="rc-tag rc-owed">Not in QuickBooks yet' + (f && f.error ? ' — ' + esc(f.error) : '') + '</span>' +
           (sorts() && r.photoPath ? '<button class="btn btn-sm" onclick="rcToQb(\'' + rid + '\')">📤 Send to QuickBooks</button>' : '')) +
+    '</div>';
+  }
+  function qbEmailHtml(r, rid, f, compact) {
+    if (compact) return f.ok ? '<span class="rc-tag rc-qb-ok" title="Its email was sent to QuickBooks">📤 QB</span>' : '';
+    return '<div class="rc-qb">' +
+      (f.ok ? '<span class="rc-tag rc-qb-ok">📤 Email sent to QuickBooks ' + fmtDateMD(String(f.at || '').slice(0, 10)) + '</span>'
+        : '<span class="rc-tag rc-owed">Not in QuickBooks yet' + (f.error ? ' — ' + esc(f.error) : '') + '</span>' +
+          (sorts() ? '<button class="btn btn-sm" onclick="rcToQb(\'' + rid + '\')">📤 Send to QuickBooks</button>' : '')) +
     '</div>';
   }
   // (Was rcPhoto, which the camera button below also defined -- the later
@@ -973,10 +983,62 @@
   function qbAddressHtml() {
     if (!(window.YDAuth && window.YDAuth.isOwner)) return '';
     const to = state && state.qbForwardTo;
+    const fwdOn = !!(state && state.forwardEmails === true);
+    const waiting = to ? emailsToSend().length : 0;
     return '<div class="rc-qbaddr">📤 Receipt photos go to QuickBooks' +
       (to ? ' at <b>' + esc(to) + '</b>' : ' — <b>no address set</b>, so they stay here') +
-      ' <button class="link-btn" onclick="rcQbAddress()">' + (to ? 'Change' : 'Set it') + '</button></div>';
+      ' <button class="link-btn" onclick="rcQbAddress()">' + (to ? 'Change' : 'Set it') + '</button></div>' +
+      (to ? '<div class="rc-qbaddr"><label><input type="checkbox"' + (fwdOn ? ' checked' : '') +
+        ' onchange="rcFwdEmails(this.checked)"> Forward email receipts to QuickBooks</label> ' +
+        '<span class="muted">' + (fwdOn ? '— each business receipt goes once, at the weekly read' : '— off: you forward them yourself') +
+        '</span>' + (waiting ? ' · ' + waiting + ' from the last ' + FWD_DAYS + ' days not sent yet ' +
+          '<button class="btn btn-sm" onclick="rcFwdRecent()"' + (fwdBusy ? ' disabled' : '') + '>' +
+          (fwdBusy ? 'Sending…' : '📤 Send the ones from the last ' + FWD_DAYS + ' days now') + '</button>' : '') +
+        '</div>' : '') +
+      (state && state.labelsNeedPermission ? '<div class="rc-note">🏷 Gmail labels ("receipts", "Rebate Receipts MNRDS") ' +
+        'need one permission: Admin console → Security → API controls → Domain-wide delegation → the Job Hub row → add ' +
+        '<b>https://www.googleapis.com/auth/gmail.modify</b>. Receipts are still read meanwhile; the ones already ' +
+        'read are labelled once it is added.</div>' : '');
   }
+  // Email receipts the server would send with "Send the ones from the last
+  // 14 days now" -- the same test as receipts.py forward_emails(days=14):
+  // from email (not a photo), not sent yet, not set aside, with an email
+  // from after reading started and inside the 14 days.
+  const FWD_DAYS = 14;
+  let fwdBusy = false;
+  function emailsToSend() {
+    const start = Date.parse((state && state.since) || '');
+    if (isNaN(start)) return [];
+    const floor = Math.max(start, Date.now() - FWD_DAYS * 864e5);
+    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && r.status !== 'skipped' &&
+      !(r.qbForward && r.qbForward.ok) && (r.mail || []).some(m => m && m.id && (m.at || 0) >= floor));
+  }
+  window.rcFwdEmails = function (on) {
+    if (!(window.YDAuth && window.YDAuth.isOwner)) return;
+    state = Object.assign({}, state || {}, { forwardEmails: !!on });
+    Promise.resolve(window.YDDb.put('settings', 'receipts', { forwardEmails: !!on }))
+      .catch(e => console.warn('[receipts] switch not yet on the server:', e && (e.code || e.message)));
+    showToast(on ? 'Email receipts will go to QuickBooks at the weekly read' : 'Email receipts stay with you — not forwarded');
+    redraw(true);
+  };
+  window.rcFwdRecent = async function () {
+    if (!(window.YDAuth && window.YDAuth.isOwner) || fwdBusy || !window.YDClaude) return;
+    const n = emailsToSend().length;
+    if (!n || !(await ydConfirm('Each goes once.', { title: 'Send ' + n + ' receipt email' + (n === 1 ? '' : 's') + ' to QuickBooks now?', ok: 'Send them' }))) return;
+    if (fwdBusy) return;
+    fwdBusy = true; redraw(true);
+    try {
+      const out = await window.YDClaude.post('/receipts/qb-forward-recent', {});
+      if (out.busy) showToast('Email is being read right now — try again in a few minutes');
+      else if (out.noAddress) showToast('Set the QuickBooks address first');
+      else showToast('📤 ' + (out.forwarded || 0) + ' sent to QuickBooks' +
+        (out.forwardFailed ? ' · ' + out.forwardFailed + ' could not go (see each receipt)' : '') +
+        (out.forwardLeft ? ' · ' + out.forwardLeft + ' more next time' : ''), 6000);
+    } catch (e) {
+      showToast('Not sent: ' + String((e && e.message) || e).slice(0, 120), 6000);
+    }
+    fwdBusy = false; redraw(true);
+  };
   window.rcQbAddress = async function () {
     if (!(window.YDAuth && window.YDAuth.isOwner)) return;
     const was = (state && state.qbForwardTo) || '';

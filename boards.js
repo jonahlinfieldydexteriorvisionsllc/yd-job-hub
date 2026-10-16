@@ -244,11 +244,11 @@
     if (st === 'booked') return 'scheduled';
     if (st === 'inprogress') return stage === 'punchList' ? 'punchList' : 'inProgress';
     if (st === 'complete') {
-      // A finished job with no end stage of its own yet (finished before the
-      // form set one): where its invoice says it is (sync.js finishedStage).
-      const col = COMPLETE_STAGES.indexOf(stage) !== -1 ? stage
-        : window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
-        : (j.qbInvoiced ? 'invoiced' : 'toInvoice');
+      // A finished job sits where its one stage says (app.js jobStage, via
+      // sync.js finishedStage): with a QuickBooks invoice, where QuickBooks
+      // says; without one, the column it was put in by hand.
+      const col = window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
+        : COMPLETE_STAGES.indexOf(stage) !== -1 ? stage : 'toInvoice';
       if (col === 'paid' && (daysSince(j.workStageAt) || 0) > SHOW_PAID_DAYS) return null;
       return col;
     }
@@ -303,6 +303,26 @@
         patch = { bidStage: col, bidStageAt: at, jobStatus: 'quoting' };
       }
     } else {
+      // QuickBooks holds this job's invoice, so it decides Invoiced or Paid
+      // (app.js jobStage). A finished job dragged between those columns
+      // would only jump back -- say why instead. One not finished yet may be
+      // dropped on any of them: it is finished, and lands where QuickBooks says.
+      const inv = typeof qbInvoiceOf === 'function' ? qbInvoiceOf(j) : null;
+      if (inv && COMPLETE_STAGES.indexOf(col) !== -1) {
+        const lands = window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j) : col;
+        const owed = typeof qbOwed === 'function' ? qbOwed(inv) : NaN;
+        const said = 'QuickBooks has invoice' + (inv.docNumber ? ' #' + inv.docNumber : '') +
+          (isFinite(owed) ? (owed > 0 ? ' with ' + fmtMoney(owed) + ' still owed' : ', paid in full') : '');
+        if (normStatusOf(j) === 'complete') {
+          render();
+          showToast(said + ' — it decides Invoiced or Paid. Log a payment on the job to move it on.', 6000);
+          return;
+        }
+        if (lands !== col) {
+          showToast(said + ' — so it goes to ' + ((JOBS.columns.find(c => c.id === lands) || {}).name || lands) + '.', 5000);
+          col = lands;
+        }
+      }
       patch = { workStage: col, workStageAt: at,
                 jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' };
     }
@@ -553,12 +573,17 @@
   // it, then as they were dragged. The filter bar narrows a board to what is urgent or
   // what is yours; ☔ Rain day shows the rain-day cards from every board you
   // can see, grouped by board (WISHLIST #1).
-  const URGENCY = [['urgent', '🔴 Urgent', 'today'], ['high', '🟠 High', 'this week'],
+  // One colour scale for how soon, everywhere (styles.css --st-*; Jonah,
+  // 15 Oct 2026: "a spectrum of yellows/orange/&red" plus "a gray for 'can
+  // be done whenever'"): red is late, orange today, yellow this week, grey
+  // whenever. Red is kept for late -- a due date gone by -- so an urgent card
+  // is orange until its day has passed.
+  const URGENCY = [['urgent', '🟠 Urgent', 'today'], ['high', '🟡 High', 'this week'],
                    ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
   // On the card itself urgency is said in words as well as the coloured
   // stripe -- a stripe alone means nothing to someone who never opened the
   // picker, or cannot tell red from orange. Normal says nothing.
-  const URGENCY_CHIP = { urgent: '🔴 Today', high: '🟠 This week', low: '⚪ Whenever' };
+  const URGENCY_CHIP = { urgent: '🟠 Today', high: '🟡 This week', low: '⚪ Whenever' };
   function urgChipHtml(k) {
     const w = URGENCY_CHIP[k.urgency];
     return w ? '<span class="bd-urg urg-' + k.urgency + '" title="How urgent">' + w + '</span>' : '';
@@ -619,7 +644,7 @@
   function filterBarHtml(board) {
     if (board.virtual) return '';
     const chip = (f, label) => '<button class="bd-filter' + (cardFilter === f ? ' on' : '') + '" onclick="setCardFilter(\'' + f + '\')">' + label + '</button>';
-    return '<div class="bd-filters">' + chip('urgent', '🔴 Urgent & this week') + chip('mine', '👤 Mine') + chip('rain', '☔ Rain day') + '</div>';
+    return '<div class="bd-filters">' + chip('urgent', '🟠 Urgent & this week') + chip('mine', '👤 Mine') + chip('rain', '☔ Rain day') + '</div>';
   }
   // Rain-day cards from every stored board this person can see, by board.
   function rainHtml() {
@@ -972,7 +997,7 @@
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openCardDetail(\'' + board.id + '\', \'' + k.id + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
-        '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+        '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
         esc(k.title || 'Untitled') + '</div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
@@ -1390,7 +1415,7 @@
       (editsBoard(board) ? '<div class="bd-detail-top">' +
         '<button class="btn btn-filled bd-edit-big" onclick="editCard()">✏️ Edit this card</button>' + crewBtn + '</div>' : '') +
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
-        '<span class="bd-label" style="--c:' + safeColor(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+        '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
         (type ? '<span>' + type.icon + ' ' + esc(type.name) + '</span>' : '') +
@@ -1692,7 +1717,7 @@
           YDRemind.optionsHtml(k) + '</select></div>' +
       '</div>' +
       '<div class="hint" id="cdRemindHint"></div>') +
-      group('Sorting &amp; look', 'Urgency puts it higher in its column (and in “🔴 Urgent &amp; this week”); labels are for ' +
+      group('Sorting &amp; look', 'Urgency puts it higher in its column (and in “🟠 Urgent &amp; this week”); labels are for ' +
           'finding it (☔ Rain day…); the colour is only the band across the top — with none, it takes its kind’s.',
         '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
           URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +

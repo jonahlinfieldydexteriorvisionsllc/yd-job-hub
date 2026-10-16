@@ -24,7 +24,7 @@
   // email, when the estimate was first seen accepted); all are in app.js
   // BOARD_FIELDS so the form carries them.
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
-    'removeWhy', 'replacedBy', 'removeNote'];
+    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -186,34 +186,32 @@
   // last three columns). Ten fields used to say where a job was and they
   // disagreed: the form set Complete and left the card wherever it was, the
   // invoice was made in QuickBooks and the card still said Ready to invoice.
-  // Now one rule, here, read by the form (app.js onStatusChange), the board
-  // (boards.js workColumn) and this file's patchJob; the server's twin is
-  // quickbooks.py _finished_stage. The stage only ever moves forward on its
-  // own -- a job Jonah marked Paid by hand (cash) stays Paid.
+  // Now the job has ONE stage (app.js jobStage; the server's twin is
+  // functions/stages.py stage_of), and a finished job's column is that
+  // stage: read by the form (app.js onStatusChange), the board (boards.js
+  // workColumn) and this file's patchJob. With a QuickBooks invoice,
+  // QuickBooks decides (owed: Invoiced, nothing owed: Paid); without one the
+  // column set by hand stands -- a job Jonah marked Paid (cash) stays Paid.
   const END_STAGES = { toInvoice: 0, invoiced: 1, paid: 2 };
   const statusOf = d => (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting'));
-  function invoiceStage(d) {
-    const r = d.qbInvoiceRef;
-    if (r && r.id) {
-      const bal = r.balance == null || r.balance === '' ? NaN : Number(r.balance);
-      return isFinite(bal) && bal <= 0 ? 'paid' : 'invoiced';
-    }
-    return d.qbInvoiced ? 'invoiced' : 'toInvoice';
-  }
+  const COLUMN_OF = { finished: 'toInvoice', invoiced: 'invoiced', paid: 'paid' };
   function finishedStage(d) {
-    const by = invoiceStage(d || {}), had = (d || {}).workStage;
-    return END_STAGES[had] != null && END_STAGES[had] > END_STAGES[by] ? had : by;
+    // Asked of a job finished or being finished, whatever its status says yet.
+    const s = jobStage(Object.assign({}, d || {}, { jobStatus: 'complete' }));
+    return COLUMN_OF[s.id] || 'toInvoice';
   }
   // The server moved a finished job on (quickbooks.py: invoice made, or paid
   // off) while this device holds a newer copy, or has the job open with
   // typing in it. Its stage is carried in only when this copy is finished
-  // too and not already as far along -- this device moving a job back to In
-  // progress, or marking it Paid by hand, is not undone.
+  // too -- this device moving a job back to In progress is not undone. With
+  // a QuickBooks invoice the server's column is QuickBooks' answer (stage_of),
+  // so it is taken either way (a payment taken off in QuickBooks moves a job
+  // from Paid back to Invoiced).
   function takeServerStage(local, theirs) {
     const s = theirs.workStage, l = local.workStage;
     if (END_STAGES[s] == null || !(theirs.qbInvoiceRef && theirs.qbInvoiceRef.id)) return false;
     if (statusOf(local) !== 'complete') return false;
-    if (END_STAGES[l] != null && END_STAGES[s] <= END_STAGES[l]) return false;
+    if (s === l) return false;
     local.workStage = s;
     local.workStageAt = theirs.workStageAt || new Date().toISOString();
     return true;

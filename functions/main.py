@@ -281,8 +281,10 @@ def _quickbooks(request, path, headers):
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
                        "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
                        "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now")
+    # A customer's contact details, from the Customers tab: whoever may change Contacts.
+    contacts = path in ("/qb/customer-save", "/qb/customers-now")
     try:
-        uid = _caller(request, "billing", "change") if billing else _caller(request)
+        uid = _caller(request, "billing", "change") if billing else             _caller(request, "contacts", "change") if contacts else _caller(request)
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
 
@@ -340,6 +342,19 @@ def _quickbooks(request, path, headers):
                 filled = qb.fill_imported(jobs)
             _tell_owner(news)
             result = {"ok": True, "filled": filled}
+        elif path == "/qb/customer-save":
+            # A customer's details changed in Job Hub (customers.js): into
+            # QuickBooks now. {id, fields, was, force}
+            import customers
+            with qb._holding_tokens():
+                result = customers.save(body.get("id"), body.get("fields") or {}, body.get("was") or {},
+                                        force=body.get("force") is True)
+        elif path == "/qb/customers-now":
+            # The customer list brought up to date now, not at the next
+            # hourly look -- only once the owner has switched it on.
+            import customers
+            with qb._holding_tokens():
+                result = {"ok": True, "result": customers.sync()}
         else:
             return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     except PermissionError as e:
@@ -664,8 +679,34 @@ def _receipts(request, path, headers):
         rid = str((request.get_json(silent=True) or {}).get("id") or "").strip()
         if not rid or not _db.collection("receipts").document(rid).get().exists:
             return (json.dumps({"error": "Which receipt?"}), 400, json_headers)
-        out = receipts.forward_to_qb(_db, rid)
+        r = _db.collection("receipts").document(rid).get().to_dict() or {}
+        # A photo goes as its picture; a receipt from email as that email.
+        if r.get("photoPath") or r.get("source") == "photo":
+            out = receipts.forward_to_qb(_db, rid)
+        else:
+            out = receipts.forward_one(_db, rid)
         return (json.dumps(out), 200 if out.get("ok") else 502, json_headers)
+    elif path == "/receipts/qb-forward-recent":
+        # "Send the ones from the last 14 days now" (Receipts tab): the email
+        # receipts not yet sent to QuickBooks. The owner's alone -- it sends
+        # mail from his account. One at a time with the read (same lock), so
+        # the two never send the same email.
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            _caller(request)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        if not receipts._claim(_db):
+            return (json.dumps({"busy": True}), 200, json_headers)
+        try:
+            out = receipts.forward_emails(_db, days=receipts.FORWARD_DAYS)
+        except Exception as e:                      # noqa: BLE001
+            print("receipts forward failed:", e)
+            return (json.dumps({"error": str(e)[:200]}), 500, json_headers)
+        finally:
+            _db.collection("settings").document("receipts").set({"runningSince": None}, merge=True)
+        return (json.dumps(out), 200, json_headers)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     try:

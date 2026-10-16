@@ -339,6 +339,7 @@
         const bid = typeof isBidStatus === 'function' ? isBidStatus(d.jobStatus) : d.jobStatus === 'quoting';
         const why = d.bidStage === 'lost' && typeof lostWhy === 'function' ? lostWhy(d) : '';
         const status = bid ? (d.bidStage === 'lost' ? 'Bid · lost' + (why ? ' (' + why + ')' : '') : 'Bid')
+          : typeof jobStage === 'function' ? jobStage(d).name   // its one stage (app.js), Invoiced and Paid included
           : typeof statusLabel === 'function' && typeof normStatus === 'function' ? statusLabel(normStatus(d.jobStatus, d)) : '';
         const est = String(d.estimateNumber || '').trim();
         const where = [d.address, d.city].filter(Boolean).join(', ');

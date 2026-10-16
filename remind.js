@@ -34,23 +34,30 @@
 
   // `timed`: whether it usually happens at a set time -- a hint only; the
   // entry's own "Any time that day" box (or a card's Time) decides, and
-  // picking a kind never changes it (Jonah, 15 Oct 2026). `color`: each kind has its own on the calendar (Jonah, 12 Oct:
-  // "a certain color for everything" -- crew blue, personal pink, doctors
-  // yellow, quotes green; the rest are ours to suggest). `ink`: dark
-  // writing on a light colour.
+  // picking a kind never changes it (Jonah, 15 Oct 2026). `color`: each kind has its own on the calendar. Jonah
+  // (15 Oct 2026): "i just want tags and assigned colors for different
+  // things" -- quote appointments green and marked "QP" ("to save lettering
+  // on the screen"), crew tasks blue, doctor's appointments yellow, the rest
+  // of Personal pink; the others ours to pick, as far apart as we could.
+  // Kinds never use the urgency colours' meaning (styles.css --st-*): late
+  // red, today orange, coming up yellow, whenever grey -- the doctor's
+  // yellow is his pick, and lives only on Personal. `ink`: dark writing on
+  // a light colour.
   // `appointment`: it simply happens at its time -- nobody ticks it off
   // (isTask below).
   const TYPES = [
-    { id: 'bid', icon: '📋', name: 'Bid appointment', timed: true, color: '#2f8f5b', appointment: true },
-    { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#8e5bc7', appointment: true },
-    { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true },
-    { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#e07b24' },
-    { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#8a6d3b' },
-    { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#1a9c8c' },
+    { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true },
+    { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#7a4fd1', appointment: true },
+    { id: 'pickup', icon: '🚚', name: 'Pickup', timed: false, color: '#8b5a2b' },
+    { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
+    { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b' },
+    { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
     // "Things not for Jonah to handle": on his calendar so he sees them all,
     // but they buzz only the people on them.
     { id: 'crew', icon: '👷', name: 'Crew task', timed: false, color: '#2f6fd6', crew: true },
-    { id: 'personal', icon: '🏠', name: 'Personal', timed: null, color: '#d94f8a' },
+    { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true,
+      personal: true },
+    { id: 'personal', icon: '🏠', name: 'Personal', timed: null, color: '#d94f8a', personal: true },
   ];
   const TIMED_LEADS = [30];
   const LEADS = { bid: [60, 30] };
@@ -66,20 +73,37 @@
 
   const typeById = id => TYPES.find(t => t.id === id) || null;
 
-  // What a thing is. Nothing picked, it goes by where it is: Site visits
-  // ("Estimates and walk-throughs") are bid appointments, the Work schedule
-  // (who is working which job) crew tasks, Personal personal; a card on
-  // Pickups -- made from a store's "ready for pickup" email -- is a material
-  // pickup, and one on Crew tasks or tagged 👷 Crew a crew task. Anything on
-  // the Crew tasks calendar is a crew task.
-  const BY_CALENDAR = { visits: 'bid', schedule: 'crew', personal: 'personal', crew: 'crew' };
+  // What a thing is. Nothing picked, it goes by where it is, then by its
+  // title. Jonah (15 Oct 2026) keeps three calendars: the Crew schedule
+  // (where the crew are working, crew tasks, anything a crew member is on --
+  // all crew tasks), Personal ("anything i do not to do with the business":
+  // personal, or a doctor's appointment when the title says so), and My work
+  // (quote appointments, pickups, emails to send): there the title tells a
+  // pickup, an email or a delivery, and anything else is a to-do. A card on
+  // Pickups -- made from a store's "ready for pickup" email -- is a pickup,
+  // and one on Crew tasks or tagged 👷 Crew a crew task. (Site visits and
+  // Work schedule were calendars before 15 Oct; kept so nothing old reads
+  // as nothing.) functions/reminders.py _type_of: the same rules.
+  const BY_CALENDAR = { crew: 'crew', schedule: 'crew', visits: 'bid', work: 'todo' };
+  const WORDS = [
+    ['pickup', /\bpick\s?-?\s?up\b/i],
+    ['email', /^\s*send\b|\be-?mail\b/i],
+    ['delivery', /\bdeliver(y|ies|ed)?\b/i],
+  ];
+  const DOCTOR_WORDS = /\b(doctor|dentist|dental|clinic|chiropract\w*|orthodont\w*|optometr\w*|dermatolog\w*|physical therapy|check-?up|physical)\b|\bdr\.\s/i;
+  function byWords(title) {
+    const hit = WORDS.find(w => w[1].test(title || ''));
+    return hit ? hit[0] : '';
+  }
   function typeOf(item, where) {
     if (item && typeById(item.type)) return item.type;
     where = where || {};
-    if (BY_CALENDAR[where.calKind]) return BY_CALENDAR[where.calKind];
+    const title = (item && item.title) || '';
+    if (where.calKind === 'personal') return DOCTOR_WORDS.test(title) ? 'doctor' : 'personal';
+    if (where.calKind === 'crew' || where.calKind === 'schedule') return 'crew';
     if (where.boardId === 'pickups') return 'pickup';
     if (where.boardId === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
-    return '';
+    return byWords(title) || BY_CALENDAR[where.calKind] || '';
   }
   // Whether a thing has to be ticked off as done. Jonah (14 Oct 2026): "make
   // tasks on the calendar have to be marked done or they get included in the
