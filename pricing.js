@@ -282,7 +282,14 @@
     const catRule = catRuleOf(r, cat);
     const per = String((pr && pr.per) || (it && it.unit) || m.unit || '').trim();
     const coverage = it && num(it.coverage) > 0 ? num(it.coverage) : null;
-    const takeoffUnit = coverage ? String(it.takeoffUnit || '').trim() : per;
+    // A bag sold by weight (grass seed): how many pounds one holds, and
+    // whether the job pays only for the part of it used -- Jonah (15 Oct
+    // 2026): "we always buy the biggest bag of grass seed so pricing should
+    // be based off of the cost per lb of that bag". A line in pounds
+    // ("Grass seed: 3 lb") is then worked out in bags from that weight.
+    const pk = it && window.YDMatch && window.YDMatch.pack ? window.YDMatch.pack(it, pr) : { lb: null, part: false };
+    const inLb = !!(pk.lb && /^(lbs?|pounds?|#)$/i.test(String(m.unit || '').trim()));
+    const takeoffUnit = inLb ? 'lb' : coverage ? String(it.takeoffUnit || '').trim() : per;
     const markupPct = first(m.markupPct, pr && pr.markupPct, catRule.markupPct);
     const wastePct = m.plant ? 0 : first(m.wastePct, pr && pr.wastePct, catRule.wastePct, 0);
     const qty = Math.max(0, num(m.qty) || 0);
@@ -291,9 +298,12 @@
     // days when there is a half-day rate.
     const rental = !!(it && pr && isDayUnit(per) && typeof pr.cents === 'number' &&
       ['halfDayCents', 'weekCents', 'monthCents'].some(k => typeof pr[k] === 'number'));
+    // What is used, in what it is sold by (a part of a bag, say); what is
+    // bought is that rounded up.
+    const used = inLb ? withWaste / pk.lb : coverage ? withWaste / coverage : withWaste;
     const orderQty = rental && typeof pr.halfDayCents === 'number'
       ? Math.ceil(withWaste * 2 - 1e-9) / 2
-      : roundUp(coverage ? withWaste / coverage : withWaste, per);
+      : roundUp(used, per);
 
     const costCents = it ? (pr && typeof pr.cents === 'number' ? pr.cents : null) : num(m.costCents);
     const vendorRule = it && it.vendorId ? (r.vendors || {})[it.vendorId] || {} : {};
@@ -306,6 +316,7 @@
       vendorId: it ? it.vendorId || null : null, cityDelivery: !!vendorRule.cityDelivery,
       pallet: !!(it && it.pallet), specialOrder: !!(it && it.specialOrder),
       delivery: m.delivery || 'auto', listed: m.listed !== false, auto: m.auto || null,
+      packLb: pk.lb, partUse: false, usedQty: null, usedLb: null,
     };
     if (m.supplyId && !it) out.problems.push('no longer in Supplies');
     if (!qty) return out;
@@ -329,8 +340,17 @@
       return out;
     }
     out.landedEachCents = Math.round(costCents * landing);
-    out.costTotalCents = Math.round(orderQty * out.landedEachCents);
-    out.clientCents = Math.round(orderQty * out.landedEachCents * (1 + markupPct / 100));
+    // Bought by the bag, charged by the part used: the rest of the bag stays
+    // on the shelf for the next job. Still a whole bag to buy (orderQty).
+    const charged = pk.part ? trim(used) : orderQty;
+    if (pk.part) {
+      out.partUse = true;
+      out.usedQty = Math.round(used * 1000) / 1000;
+      if (pk.lb) out.usedLb = Math.round(used * pk.lb * 100) / 100;
+      out.perLbCents = pk.lb ? costCents / pk.lb : null;     // the supplier's price a pound
+    }
+    out.costTotalCents = Math.round(charged * out.landedEachCents);
+    out.clientCents = Math.round(charged * out.landedEachCents * (1 + markupPct / 100));
     return out;
   }
 
@@ -735,7 +755,7 @@
   function materialsList(result, taxed) {
     return result.takeoff.concat(result.added)
       .filter(l => l.listed && l.orderQty > 0 && (taxed === undefined || !!l.taxed === taxed))
-      .map(l => l.name + ': ' + qtyText(l.orderQty, l.per));
+      .map(l => l.name + ': ' + (l.partUse && l.usedLb ? qtyText(l.usedLb, 'lb') : qtyText(l.orderQty, l.per)));
   }
 
   // The last lines of every QuickBooks estimate, in order: the QuickBooks

@@ -16,6 +16,26 @@
 //     6cm or XL; three grass seed mixes) or only some of the words do, the
 //     likely ones are offered as buttons -- "add to Supplies" is only for a
 //     material nothing in Supplies is close to.
+//
+// Jonah again (15 Oct 2026, night): five materials on a job "say not in
+// supplies even though ... MDS" has them -- his estimate says "4.5oz barrier
+// fabric", "Fabric pins", "Garden blend soil", "Straw erosion control blanket
+// 4x50", "Grass seed"; Supplies says "Needle punch fabric 4.5 oz", "Steel
+// fabric staples", "Garden mix (compost/topsoil blend)", "Straw erosion
+// blanket 4'×50'", "Madison Parks grass seed 50 lb". People in the trade
+// write the same thing many ways, so a name is now read the way he would:
+//   - sizes and weights are numbers, however written: 4x50 = 4'×50' = 4 x 50,
+//     4.5oz = 4.5 oz. A size that disagrees (4x50 against 8'×112.5') rules
+//     the item out; one that agrees puts it first;
+//   - a word inside a longer one counts (soil in topsoil), and so do two
+//     words run together (top soil = topsoil);
+//   - a short list of trade words that mean the same thing (barrier fabric,
+//     pins and staples, blend and mix, bark and mulch);
+//   - words that only describe ("control", "premium", "contractor") count
+//     for little, and what the thing IS (the last word: fabric, soil,
+//     blanket) counts double.
+// Joining by itself stays strict -- a wrong join is worse than a tap: only
+// the one item with every real word spelled out and a unit that fits.
 // Plain code: no Claude call.
 (function () {
   'use strict';
@@ -24,18 +44,87 @@
   // What a quantity is written in -- never a word of the name.
   const UNIT_WORDS = ['ton', 'tons', 'yard', 'yards', 'yd', 'yds', 'cu', 'cubic', 'sq', 'ft', 'square', 'feet', 'foot', 'lf',
     'linear', 'lb', 'lbs', 'pound', 'pounds', 'bag', 'bags', 'pc', 'pcs', 'piece', 'pieces', 'each', 'ea', 'roll', 'rolls',
-    'pallet', 'pallets', 'gal', 'gallon', 'gallons', 'box', 'boxes', 'bundle', 'bundles'];
+    'pallet', 'pallets', 'gal', 'gallon', 'gallons', 'box', 'boxes', 'bundle', 'bundles', 'oz', 'cm', 'mm'];
+  const OLD_UNIT_WORDS = UNIT_WORDS.slice(0, -3);
+  // Words that say what kind or how good, not what the thing is.
+  const FILLER = ['control', 'premium', 'quality', 'grade', 'heavy', 'duty', 'commercial', 'contractor', 'standard',
+    'regular', 'bulk', 'bagged', 'light', 'pro', 'professional', 'select', 'new', 'brand'];
+  // Trade words for the same thing (after plurals come off). Each way round.
+  const SAME = [['barrier', 'fabric'], ['geotextile', 'fabric'], ['pin', 'staple'], ['blend', 'mix'], ['bark', 'mulch'],
+    ['edging', 'edge'], ['poly', 'polymeric'], ['stake', 'spike'], ['seed', 'seeding'], ['stone', 'rock'],
+    ['flagstone', 'flag'], ['weed', 'landscape']];
+  const SYN = {};
+  SAME.forEach(([a, b]) => { (SYN[a] = SYN[a] || []).push(b); (SYN[b] = SYN[b] || []).push(a); });
 
+  const plural = w => (w.length > 3 && /[a-z]s$/.test(w) && !/ss$/.test(w)) ? w.slice(0, -1) : w;
   function words(s) {
     return String(s || '').toLowerCase()
       .replace(/[”″"]/g, ' in ').replace(/[^a-z0-9.]+/g, ' ').split(' ')
       .map(w => w.replace(/\.+$/, '').replace(/^\.+/, ''))
       .filter(w => w && STOP.indexOf(w) === -1 && UNIT_WORDS.indexOf(w) === -1 && !/^\d+(\.\d+)?$/.test(w))
-      .map(w => (w.length > 3 && /[a-z]s$/.test(w) && !/ss$/.test(w)) ? w.slice(0, -1) : w);
+      .map(plural);
   }
   // The name without its notes: "Screened topsoil (1") — finish grading".
   const bare = name => String(name || '').replace(/\s+[—–-]\s.*$/, '').replace(/\([^)]*\)/g, ' ').replace(/:.*$/, '');
-  const keyOf = name => words(bare(name)).join(' ');
+  // The key his picks are kept under: the words, then the sizes -- so
+  // "Contours 6cm" and "Contours 8cm" are never the same pick.
+  function keyOf(name) {
+    const sp = specs(bare(name));
+    const tail = Object.keys(sp.m).sort().map(k => sp.m[k] + k).concat(sp.sizes);
+    return words(sp.rest).concat(tail).join(' ');
+  }
+  // The key as kept before 16 Oct 2026 (sizes as written), so picks made then
+  // still count.
+  const oldKeyOf = name => String(bare(name) || '').toLowerCase().replace(/[”″"]/g, ' in ').replace(/[^a-z0-9.]+/g, ' ').split(' ')
+    .map(w => w.replace(/\.+$/, '').replace(/^\.+/, ''))
+    .filter(w => w && STOP.indexOf(w) === -1 && OLD_UNIT_WORDS.indexOf(w) === -1 && !/^\d+(\.\d+)?$/.test(w))
+    .map(plural).join(' ');
+
+  // Sizes and weights out of a name, as numbers: "4x50" / "4'×50'" -> size
+  // 4x50; "4.5oz" / "4.5 oz" -> oz 4.5; "50 lb" -> lb 50. rest: the name
+  // without them, for the words.
+  const MEASURE = { oz: 'oz', lb: 'lb', lbs: 'lb', '#': 'lb', pound: 'lb', pounds: 'lb', cm: 'cm', mm: 'mm', gal: 'gal',
+    gallon: 'gal', in: 'in', inch: 'in', '"': 'in', '”': 'in', '″': 'in' };
+  // A number as written: 4, 4.5, 3/4, 1-1/2.
+  const NUM = /(\d+-\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?)/.source;
+  const FT_IN = /\s*(?:'|′|’|ft|"|”|″|in)?/.source;
+  function n(s) {
+    const t = String(s).replace(/,/g, '');
+    const f = t.match(/^(?:(\d+)-)?(\d+)\/(\d+)$/);
+    const v = f ? (f[1] ? +f[1] : 0) + (+f[3] ? f[2] / f[3] : 0) : parseFloat(t);
+    return String(Math.round(v * 1000) / 1000);
+  }
+  const SIZE_RE = new RegExp(NUM + FT_IN + /\s*[x×X*]\s*/.source + NUM + FT_IN, 'g');
+  const MEASURE_RE = new RegExp(NUM + /\s*(oz|lbs?|#|pounds?|cm|mm|gal(?:lons?)?|inch|in(?![a-z])|"|”|″)(?![a-z])/.source, 'gi');
+  function specs(s) {
+    const out = { sizes: [], m: {} };
+    let rest = String(s || '').replace(SIZE_RE,
+      (all, a, b) => { out.sizes.push(n(a) + 'x' + n(b)); return ' '; });
+    rest = rest.replace(MEASURE_RE,
+      (all, a, u) => {
+        const k = MEASURE[u.toLowerCase()] || MEASURE[u.toLowerCase().replace(/s$/, '')] || (/^gal/i.test(u) ? 'gal' : null);
+        if (k && out.m[k] === undefined) out.m[k] = n(a);
+        return ' ';
+      });
+    out.rest = rest;
+    return out;
+  }
+  // -1: they disagree (rules the item out), 0: nothing to compare, else how
+  // many agree.
+  function specFit(a, b) {
+    let agree = 0;
+    for (const k of Object.keys(a.m)) {
+      if (b.m[k] === undefined) continue;
+      if (a.m[k] !== b.m[k]) return -1;
+      agree++;
+    }
+    if (a.sizes.length && b.sizes.length) {
+      const flip = z => z.split('x').reverse().join('x');
+      if (!a.sizes.some(z => b.sizes.indexOf(z) !== -1 || b.sizes.indexOf(flip(z)) !== -1)) return -1;
+      agree++;
+    }
+    return agree;
+  }
 
   // Two words are the same word: equal, or (5+ letters) one letter added,
   // dropped, changed or swapped -- "countours" is "contours".
@@ -51,6 +140,16 @@
     const [l, s] = a.length > b.length ? [a, b] : [b, a];
     return l.slice(i + 1) === s.slice(i);                                       // added / dropped
   }
+  // How well one word of his is in an item's words: 1 the word itself (or
+  // two of its words run together), 0.8 a trade word for the same thing, 0.7
+  // inside a longer word (soil in topsoil), else 0. exact: spelled out.
+  function credit(w, have) {
+    if (have.some(h => near(w, h))) return { c: 1, exact: true };
+    for (let i = 0; i + 1 < have.length; i++) if (have[i] + have[i + 1] === w) return { c: 1, exact: true };
+    if ((SYN[w] || []).some(s => have.some(h => near(s, h)))) return { c: 0.8 };
+    if (w.length >= 4 && have.some(h => h.length > w.length + 2 && (h.indexOf(w) === 0 || h.slice(-w.length) === w))) return { c: 0.7 };
+    return { c: 0 };
+  }
 
   // One unit, however it is written: "sq. ft" = "sf", "Tons" = "ton".
   function unitKey(u) {
@@ -58,16 +157,42 @@
     const table = [[/^(each|ea|pc|pcs|piece|pieces|unit|units)$/, 'each'], [/^(sq ?ft|sf|square f(ee|oo)t)$/, 'sqft'],
       [/^(lf|lin ?ft|linear f(ee|oo)t|ft|feet|foot)$/, 'lf'], [/^(tons?|t)$/, 'ton'],
       [/^(yards?|yds?|cu ?yds?|cubic yards?)$/, 'yd'], [/^(cu ?ft|cubic f(ee|oo)t)$/, 'cuft'], [/^(gal|gallons?)$/, 'gal'],
-      [/^(lbs?|pounds?)$/, 'lb'], [/^(bags?)$/, 'bag'], [/^(rolls?)$/, 'roll']];
+      [/^(lbs?|pounds?|#)$/, 'lb'], [/^(bags?)$/, 'bag'], [/^(rolls?)$/, 'roll']];
     const hit = table.find(([re]) => re.test(s));
     return hit ? hit[1] : s.replace(/s$/, '');
   }
-  const num = v => { const n = parseFloat(v); return isFinite(n) ? n : null; };
+  const num = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
+
+  // A bag (or box, pail) sold by weight: how many pounds one holds -- the
+  // item's own "Bag weight" in Supplies, else read off its name ("Madison
+  // Parks grass seed 50 lb"). Nothing for an item sold by the pound itself.
+  // part: priced by the part of it used, the rest kept for the next job
+  // (Jonah, 15 Oct 2026: "we always buy the biggest bag of grass seed so
+  // pricing should be based off of the cost per lb of that bag") -- the
+  // item's own tick, else on for seed.
+  function pack(it, pr) {
+    if (!it) return { lb: null, part: false };
+    const sold = unitKey((pr && pr.per) || it.unit);
+    const own = num(it.packLb);
+    const lb = sold === 'lb' ? null : own > 0 ? own : packFromName(it.name);
+    // Ticked (or not) on the item wins; untouched, seed in a bag of known
+    // weight is.
+    const part = typeof it.partUse === 'boolean' ? it.partUse : !!(lb && partByKind(it));
+    return { lb: lb > 0 ? lb : null, part: part };
+  }
+  function packFromName(name) {
+    const lb = specs(name).m.lb;
+    return lb !== undefined && num(lb) > 0 ? num(lb) : null;
+  }
+  // Seed is the one kind bought big and used a bit at a time by default; any
+  // other item can be ticked so in Supplies.
+  const partByKind = it => String(it.category || '').toLowerCase() === 'seed';
 
   // A material's quantity in what the item is measured in for estimates (its
   // takeoff unit when it covers an area, else what it is sold by): as it is,
-  // or -- given in what the item is sold by -- times what one covers. Null
-  // when the units don't meet ("100 lb" of something sold by the bag).
+  // or -- given in what the item is sold by -- times what one covers; or in
+  // pounds, for a bag whose weight is known. Null when the units don't meet
+  // ("100 lb" of something sold by the bag with no weight known).
   function fitQty(m, it, pr) {
     const cov = num(it.coverage) > 0 ? num(it.coverage) : null;
     const sold = unitKey((pr && pr.per) || it.unit);
@@ -76,6 +201,9 @@
     const unit = cov ? String(it.takeoffUnit || '') : String((pr && pr.per) || it.unit || '');
     if (u === measured || (!u && measured === 'each')) return { qty: q, unit: unit };
     if (cov && (u === sold || (!u && sold === 'each'))) return { qty: q === null ? null : Math.round(q * cov * 1000) / 1000, unit: unit };
+    // "Grass seed: 3 lb" of a 50 lb bag: kept in pounds (pricing.js works
+    // the bags from the bag's weight).
+    if (u === 'lb' && pack(it, pr).lb) return { qty: q, unit: 'lb' };
     return null;
   }
 
@@ -83,10 +211,9 @@
   // "Needle punch fabric 4.5 oz" (nothing but a size after it), not in
   // "Fabric pin" (a pin) -- so asked about fabric, the roll comes first.
   function isHeadOf(name, head) {
-    const toks = String(name || '').toLowerCase().replace(/[”″"']/g, ' ').split(/[^a-z0-9.]+/).filter(Boolean)
-      .map(w => (w.length > 3 && /[a-z]s$/.test(w) && !/ss$/.test(w)) ? w.slice(0, -1) : w);
+    const toks = String(name || '').toLowerCase().replace(/[”″"']/g, ' ').split(/[^a-z0-9.]+/).filter(Boolean).map(plural);
     for (let i = 0; i < toks.length; i++) {
-      if (!near(toks[i], head)) continue;
+      if (!near(toks[i], head) && !(SYN[head] || []).some(s => near(toks[i], s))) continue;
       const next = toks[i + 1];
       if (!next || /^\d/.test(next) || UNIT_WORDS.indexOf(next) !== -1 || /^(oz|in|mm|cm)$/.test(next)) return true;
     }
@@ -94,6 +221,17 @@
   }
 
   let aliases = {};           // key (keyOf) -> supply id, his picks
+  const itemWords = new Map();  // item -> {name, words, specs}, kept while its name is the same
+
+  function itemInfo(it) {
+    const text = String(it.name || '') + ' ' + String(it.also || '');
+    const got = itemWords.get(it.id);
+    if (got && got.text === text) return got;
+    const sp = specs(it.name);
+    const info = { text: text, words: words(sp.rest + ' ' + String(it.also || '')), specs: sp };
+    itemWords.set(it.id, info);
+    return info;
+  }
 
   // { sure: {id, qty, unit, by} | null, options: [id, ...] } for a material
   // {name, qty, unit}. cat: YDSupplies.catalog(). skip: kinds never offered
@@ -108,36 +246,70 @@
     const usable = it => it && skip.indexOf(it.category) === -1 &&
       (!seesPrices || (cat.prices[it.id] && num(cat.prices[it.id].cents) > 0));
     const key = keyOf(m.name);
-    const want = key ? key.split(' ') : [];
+    const wantSpecs = specs(bare(m.name));
+    const want = words(wantSpecs.rest);
     if (!want.length) return out;
-    const mine = aliases[key];
+    const mine = aliases[key] || aliases[oldKeyOf(m.name)];
     if (mine && usable(cat.items[mine])) {
       const f = fitQty(m, cat.items[mine], cat.prices && cat.prices[mine]);
       out.sure = { id: mine, qty: f ? f.qty : null, unit: f ? f.unit : '', by: 'yours', unitOff: !f };
       return out;
     }
-    const head = want[want.length - 1];          // what it is: sand, mulch, fabric, paver
+    const wantSpecN = Object.keys(wantSpecs.m).length + (wantSpecs.sizes.length ? 1 : 0);
+    // What it is: the last word that is more than a describing word (sand,
+    // mulch, fabric, blanket). It counts double; describing words a quarter.
+    const real = want.filter(w => FILLER.indexOf(w) === -1);
+    const head = (real.length ? real : want)[(real.length ? real : want).length - 1];
+    const weight = w => w === head ? 2 : FILLER.indexOf(w) !== -1 ? 0.25 : 1;
+    const total = want.reduce((s, w) => s + weight(w), 0);
     const scored = [];
     Object.values(cat.items).forEach(it => {
       if (!usable(it)) return;
-      const have = words(it.name + ' ' + (it.also || ''));
-      const hits = want.filter(w => have.some(h => near(w, h))).length;
-      if (!hits) return;
-      const score = hits / want.length;
-      const sharesHead = have.some(h => near(head, h));
-      if (score < 0.5 && !sharesHead) return;
-      scored.push({ it: it, full: hits === want.length, score: score + (sharesHead ? 0.1 : 0) + (isHeadOf(it.name, head) ? 0.2 : 0),
-                    extra: have.length - hits });
+      const info = itemInfo(it);
+      let got = 0, exact = true, headC = 0;
+      want.forEach(w => {
+        const c = credit(w, info.words);
+        got += c.c * weight(w);
+        if (w === head) headC = c.c;
+        if (!c.exact && FILLER.indexOf(w) === -1) exact = false;
+      });
+      if (!got) return;
+      const score = got / total;
+      if (score < 0.5 && headC < 0.7) return;
+      const fit = specFit(wantSpecs, info.specs);
+      if (fit < 0) return;                      // 4x50 is not 8x112.5
+      const p = pack(it, cat.prices && cat.prices[it.id]);
+      // Every real word spelled out, and every size he gave the item's own.
+      scored.push({ it: it, full: exact && fit === wantSpecN, pack: p, fam: (it.vendorId || '') + '|' + info.words.join(' '),
+                    score: score + fit * 0.15 + (isHeadOf(it.name, head) ? 0.2 : 0),
+                    extra: info.words.length - want.length });
     });
+    // Best first; the same product in several bag sizes, biggest bag first.
     scored.sort((a, b) => (b.full - a.full) || (b.score - a.score) || (a.extra - b.extra) ||
+      (a.fam === b.fam ? (b.pack.lb || 0) - (a.pack.lb || 0) : 0) ||
       String(a.it.name).length - String(b.it.name).length);
-    const full = scored.filter(x => x.full);
+    // A product bought by the bag and used a bit at a time (seed) is always
+    // bought in its biggest bag: the smaller bags of it are never offered.
+    const biggest = {};
+    scored.forEach(x => {
+      if (!x.pack.part || !x.pack.lb) return;
+      const b = biggest[x.fam];
+      if (!b || (x.pack.lb || 0) > (b.pack.lb || 0)) biggest[x.fam] = x;
+    });
+    const shown = scored.filter(x => !x.pack.part || !x.pack.lb || biggest[x.fam] === x);
+    const full = shown.filter(x => x.full);
     if (full.length === 1) {
       const it = full[0].it, f = fitQty(m, it, cat.prices && cat.prices[it.id]);
-      if (f) { out.sure = { id: it.id, qty: f.qty, unit: f.unit, by: 'name' }; return out; }
-      if (opts && opts.anyUnit) { out.sure = { id: it.id, qty: null, unit: '', by: 'name', unitOff: true }; return out; }
+      // With no unit to check (the order list, a line with no unit) it joins
+      // only a clear winner: "Fabric pins" is not "Fabric pin (light)" while
+      // a box of fabric staples is nearly as likely.
+      const next = shown.find(x => x !== full[0]);
+      const clear = !next || next.score < full[0].score - 0.25;
+      const unitGiven = !!unitKey(m.unit);
+      if (f && (unitGiven || clear)) { out.sure = { id: it.id, qty: f.qty, unit: f.unit, by: 'name' }; return out; }
+      if (opts && opts.anyUnit && clear) { out.sure = { id: it.id, qty: null, unit: '', by: 'name', unitOff: true }; return out; }
     }
-    out.options = scored.slice(0, 4).map(x => x.it.id);
+    out.options = shown.slice(0, 4).map(x => x.it.id);
     return out;
   }
 
@@ -174,5 +346,6 @@
     if (on) load();
   });
 
-  window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near };
+  window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
+                     pack: pack, packFromName: packFromName, partByKind: partByKind };
 })();
