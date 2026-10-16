@@ -4507,6 +4507,7 @@
   .rq-why { font-size:12.5px; color:var(--muted); margin-top:2px; }
   @media (max-width:720px) {
     .eq-stage-steps .stage-step { min-height:44px; flex:1 1 calc(50% - 6px); }
+  }
   /* A stop's Inches / Salt boxes on a 320px phone: the label, two buttons
      and the box did not fit side by side, and the + hung off the stop's card
      (past the screen's edge in dark mode, where the buttons are bigger). The
