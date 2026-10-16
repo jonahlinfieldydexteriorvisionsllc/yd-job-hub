@@ -130,9 +130,14 @@
             <button id="menuReport" hidden onclick="closeHeaderMenu(); reportProblem()">🆘 Something went wrong</button>
             <button id="menuProblems" hidden onclick="closeHeaderMenu(); openProblems()">⚠ Problems<span class="menu-count" id="problemsCount" hidden></span></button>
           </div>
-          <div class="menu-sep" id="menuAccountSep" hidden></div>
-          <div class="menu-who" id="menuWho" hidden></div>
-          <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
+          <!-- Who is signed in and Sign out, kept together: across the foot
+               of both columns where the menu is in two, and held at the
+               bottom of a menu that still has to scroll (styles.css). -->
+          <div class="menu-account">
+            <div class="menu-sep" id="menuAccountSep" hidden></div>
+            <div class="menu-who" id="menuWho" hidden></div>
+            <button class="menu-danger" id="menuSignOut" hidden onclick="ydSignOut()">Sign out</button>
+          </div>
         </div>
       </div>
       <input type="file" id="restoreInput" accept=".json" style="display:none" onchange="importAllJobs(event)">

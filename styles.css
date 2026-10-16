@@ -846,6 +846,18 @@
               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .menu button.menu-danger { color:var(--neg); }
   .menu button.menu-danger:hover { background:var(--neg-soft); color:var(--neg); }
+  /* Crew testing, 16 Oct 2026: at about 768px tall the menu had to be
+     scrolled to reach Problems and Sign out. Where one column does not fit
+     and the screen is wide enough (app.js fitHeaderMenu adds .menu-two),
+     the groups sit side by side in two columns, with who is signed in and
+     Sign out across the foot of both -- the whole menu in view, nothing
+     hidden, the rows still a full thumb high. On a phone the list scrolls
+     as before, but Sign out is held at the bottom of it, always in reach. */
+  .menu-account { position:sticky; bottom:-6px; margin:0 -6px -6px; padding:0 6px 6px; background:var(--surface); }
+  .menu-account:has(> .menu-sep:not([hidden])) { box-shadow:0 -6px 8px -6px rgba(43,36,51,.18); }
+  .menu.menu-two { columns:2; column-gap:8px; min-width:0; }
+  .menu.menu-two .menu-group { break-inside:avoid; }
+  .menu.menu-two .menu-account { column-span:all; position:static; margin:0; padding:0; box-shadow:none; }
 
 
   /* a row of small actions hanging under a field */
