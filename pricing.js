@@ -1202,19 +1202,30 @@
     [list[i], list[j]] = [list[j], list[i]];
     saveEnd(key, list);
   };
+  // No question first: Undo puts it back where it was.
   window.prEndRemove = function (key, i) {
     if (!owner()) return;
     const list = endItems(rules, key);
-    if (!confirm('Take “' + list[i] + '” off the end of new estimates?')) return;
+    const gone = list[i];
+    if (gone == null) return;
     list.splice(i, 1);
     saveEnd(key, list);
+    const putBack = () => {
+      const now = endItems(rules, key);
+      if (now.indexOf(gone) !== -1) return;
+      now.splice(Math.min(i, now.length), 0, gone);
+      saveEnd(key, now);
+    };
+    if (typeof showUndo === 'function') showUndo('“' + gone + '” taken off', putBack); else showToast('“' + gone + '” taken off');
   };
   // Start one list from the other (then take off what doesn't belong).
   window.prEndCopy = function (key) {
     if (!owner()) return;
     const other = END_LISTS.find(([x]) => x !== endKey(key))[0];
-    if (endItems(rules, key).length && !confirm('Replace this list with the other one?')) return;
+    // No question first: Undo puts the list back as it was.
+    const before = endItems(rules, key).slice();
     saveEnd(key, endItems(rules, other));
+    if (before.length && typeof showUndo === 'function') showUndo('List replaced', () => saveEnd(key, before));
   };
   window.prEndRecheck = function () { loadQbProducts(true); changed(); };
 
@@ -1501,29 +1512,36 @@
     save({ categories: cats });
   };
   // A new kind is listed once it has a markup: ask for it straight away.
-  window.prKindAdd = function () {
+  // One window with all three questions, each checked as it is answered.
+  window.prKindAdd = async function () {
     if (!owner()) return;
-    const id = kindFor(prompt('The new kind of material (e.g. Lighting, Irrigation)') || '');
+    const isNum = v => String(v).trim() === '' || num(v) !== null ? '' : 'That isn’t a number';
+    const a = await ydForm('', [
+      { id: 'name', label: 'The new kind of material', placeholder: 'e.g. Lighting, Irrigation', required: true,
+        check: v => {
+          const k = kindFor(v);
+          if (!k) return 'Type a name';
+          return CATEGORY_NAME[k] || (rules.categories[k] && rules.categories[k].markupPct != null)
+            ? '“' + kindName(k) + '” is already on the list' : '';
+        } },
+      { id: 'markup', label: 'Markup %', type: 'number', placeholder: 'Blank to set it later', check: isNum },
+      { id: 'waste', label: 'Waste %', type: 'number', placeholder: 'Blank for none', check: isNum },
+    ], { title: 'Add a kind of material', ok: 'Add it' });
+    if (!a) return;
+    const id = kindFor(a.name);
     if (!id) return;
-    if (CATEGORY_NAME[id] || (rules.categories[id] && rules.categories[id].markupPct != null)) {
-      showToast('“' + kindName(id) + '” is already on the list'); return;
-    }
-    const m = prompt('Markup % for ' + id + ' (blank to set it later)');
-    if (m == null) return;
-    const w = prompt('Waste % for ' + id + ' (blank for none)');
-    if (String(m).trim() !== '' && num(m) === null || w != null && String(w).trim() !== '' && num(w) === null) {
-      showToast('That isn’t a number'); return;
-    }
+    const m = a.markup, w = a.waste;
     // The whole map: save() replaces it on this device (the server merges).
-    save({ categories: Object.assign({}, rules.categories, { [id]: { markupPct: num(m), wastePct: w == null ? null : num(w), noTax: false } }) });
+    save({ categories: Object.assign({}, rules.categories, { [id]: { markupPct: num(m), wastePct: num(w), noTax: false } }) });
     showToast('“' + id + '” added — pick it on items in Supplies');
     renderRules();
   };
   // His own kind renamed everywhere: on every item that is that kind, and its
   // markup and waste moved across.
-  window.prKindRename = function (was) {
+  window.prKindRename = async function (was) {
     if (!owner() || !was || CATEGORY_NAME[was]) return;
-    const typed = prompt('Rename “' + was + '” to…', was);
+    const typed = await ydPrompt('Every item of this kind moves to the new name, with its markup and waste.', was,
+      { title: 'Rename “' + was + '”', ok: 'Rename', required: true });
     if (typed == null) return;
     let to = kindFor(typed);
     if (to === was && String(typed).trim() !== was) to = String(typed).replace(/\s+/g, ' ').trim().slice(0, 40);
@@ -1551,12 +1569,14 @@
   }
   let shownTowns = [];
   window.prTownAt = function (i, v) { if (shownTowns[i]) setTown(shownTowns[i], v); };
-  window.prTownAdd = function () {
-    const t = prompt('Town name (as the job’s city is written)');
-    if (!t || !t.trim()) return;
-    const v = prompt('Delivery rate per load to ' + t.trim() + ' ($)');
-    if (v == null || num(v) === null) return;
-    setTown(t.trim(), v);
+  window.prTownAdd = async function () {
+    const a = await ydForm('', [
+      { id: 'town', label: 'Town', placeholder: 'As the job’s city is written', required: true },
+      { id: 'rate', label: 'Delivery rate per load ($)', type: 'number', required: true,
+        check: v => num(v) === null ? 'That isn’t a number' : '' },
+    ], { title: 'Add a delivery town', ok: 'Add it' });
+    if (!a || !a.town.trim() || num(a.rate) === null) return;
+    setTown(a.town.trim(), a.rate);
     renderRules();
   };
   window.prListAdd = function (key, id) {

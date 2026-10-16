@@ -269,9 +269,9 @@
     clearTimeout(typingTimer);
     typingTimer = setTimeout(() => { view.max = SHOW_MAX; drawList(); }, 150);
   };
-  window.clOpenJob = function (id) {
+  window.clOpenJob = async function (id) {
     if (typeof loadJob !== 'function') return;
-    if (typeof dirty !== 'undefined' && dirty && !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     closeChangeLog();
     loadJob(id);
     if (typeof switchTab === 'function') switchTab('job');

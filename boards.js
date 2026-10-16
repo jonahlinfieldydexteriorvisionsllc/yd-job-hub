@@ -244,11 +244,11 @@
     if (st === 'booked') return 'scheduled';
     if (st === 'inprogress') return stage === 'punchList' ? 'punchList' : 'inProgress';
     if (st === 'complete') {
-      // A finished job with no end stage of its own yet (finished before the
-      // form set one): where its invoice says it is (sync.js finishedStage).
-      const col = COMPLETE_STAGES.indexOf(stage) !== -1 ? stage
-        : window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
-        : (j.qbInvoiced ? 'invoiced' : 'toInvoice');
+      // A finished job sits where its one stage says (app.js jobStage, via
+      // sync.js finishedStage): with a QuickBooks invoice, where QuickBooks
+      // says; without one, the column it was put in by hand.
+      const col = window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
+        : COMPLETE_STAGES.indexOf(stage) !== -1 ? stage : 'toInvoice';
       if (col === 'paid' && (daysSince(j.workStageAt) || 0) > SHOW_PAID_DAYS) return null;
       return col;
     }
@@ -303,6 +303,26 @@
         patch = { bidStage: col, bidStageAt: at, jobStatus: 'quoting' };
       }
     } else {
+      // QuickBooks holds this job's invoice, so it decides Invoiced or Paid
+      // (app.js jobStage). A finished job dragged between those columns
+      // would only jump back -- say why instead. One not finished yet may be
+      // dropped on any of them: it is finished, and lands where QuickBooks says.
+      const inv = typeof qbInvoiceOf === 'function' ? qbInvoiceOf(j) : null;
+      if (inv && COMPLETE_STAGES.indexOf(col) !== -1) {
+        const lands = window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j) : col;
+        const owed = typeof qbOwed === 'function' ? qbOwed(inv) : NaN;
+        const said = 'QuickBooks has invoice' + (inv.docNumber ? ' #' + inv.docNumber : '') +
+          (isFinite(owed) ? (owed > 0 ? ' with ' + fmtMoney(owed) + ' still owed' : ', paid in full') : '');
+        if (normStatusOf(j) === 'complete') {
+          render();
+          showToast(said + ' — it decides Invoiced or Paid. Log a payment on the job to move it on.', 6000);
+          return;
+        }
+        if (lands !== col) {
+          showToast(said + ' — so it goes to ' + ((JOBS.columns.find(c => c.id === lands) || {}).name || lands) + '.', 5000);
+          col = lands;
+        }
+      }
       patch = { workStage: col, workStageAt: at,
                 jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' };
     }
@@ -553,12 +573,17 @@
   // it, then as they were dragged. The filter bar narrows a board to what is urgent or
   // what is yours; ☔ Rain day shows the rain-day cards from every board you
   // can see, grouped by board (WISHLIST #1).
-  const URGENCY = [['urgent', '🔴 Urgent', 'today'], ['high', '🟠 High', 'this week'],
+  // One colour scale for how soon, everywhere (styles.css --st-*; Jonah,
+  // 15 Oct 2026: "a spectrum of yellows/orange/&red" plus "a gray for 'can
+  // be done whenever'"): red is late, orange today, yellow this week, grey
+  // whenever. Red is kept for late -- a due date gone by -- so an urgent card
+  // is orange until its day has passed.
+  const URGENCY = [['urgent', '🟠 Urgent', 'today'], ['high', '🟡 High', 'this week'],
                    ['normal', 'Normal', ''], ['low', '⚪ Low', 'whenever']];
   // On the card itself urgency is said in words as well as the coloured
   // stripe -- a stripe alone means nothing to someone who never opened the
   // picker, or cannot tell red from orange. Normal says nothing.
-  const URGENCY_CHIP = { urgent: '🔴 Today', high: '🟠 This week', low: '⚪ Whenever' };
+  const URGENCY_CHIP = { urgent: '🟠 Today', high: '🟡 This week', low: '⚪ Whenever' };
   function urgChipHtml(k) {
     const w = URGENCY_CHIP[k.urgency];
     return w ? '<span class="bd-urg urg-' + k.urgency + '" title="How urgent">' + w + '</span>' : '';
@@ -619,7 +644,7 @@
   function filterBarHtml(board) {
     if (board.virtual) return '';
     const chip = (f, label) => '<button class="bd-filter' + (cardFilter === f ? ' on' : '') + '" onclick="setCardFilter(\'' + f + '\')">' + label + '</button>';
-    return '<div class="bd-filters">' + chip('urgent', '🔴 Urgent & this week') + chip('mine', '👤 Mine') + chip('rain', '☔ Rain day') + '</div>';
+    return '<div class="bd-filters">' + chip('urgent', '🟠 Urgent & this week') + chip('mine', '👤 Mine') + chip('rain', '☔ Rain day') + '</div>';
   }
   // Rain-day cards from every stored board this person can see, by board.
   function rainHtml() {
@@ -680,7 +705,7 @@
   const doneToClear = board => Object.values(cards[board.id] || {})
     .filter(k => shows(board, k) && colOf(board, k) === doneColOf(board) && clearable(board, k));
 
-  window.deleteDoneCards = function (boardId) {
+  window.deleteDoneCards = async function (boardId) {
     const board = boards[boardId];
     if (!board || board.virtual || !runsBoard(board)) return;
     const gone = doneToClear(board);
@@ -689,10 +714,12 @@
     // today), so the question says how many of each -- "delete all 40" next
     // to "Nothing finished today" read as deleting things never seen.
     const today = gone.filter(onBoardWhenDone).length, before = gone.length - today;
-    if (!confirm('Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' + board.name + '" for good?\n\n' +
-                 (today ? today + ' finished today' + (before ? ', ' : '.') : '') +
+    if (!(await ydConfirm((today ? today + ' finished today' + (before ? ', ' : '.') : '') +
                  (before ? before + ' finished before today' + (showOldDone[board.id] ? '.' : ' (not shown on the board — "Show the finished earlier" lists them).') : '') +
-                 '\n\nThis cannot be undone.')) return;
+                 '\n\nThis cannot be undone.',
+                 { title: 'Delete all ' + gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' on "' + board.name + '" for good?',
+                   ok: 'Delete them', danger: true }))) return;
+    if (!boards[boardId]) return;
     deleteCards(board, gone.map(k => k.id));
     showToast(gone.length + ' finished card' + (gone.length === 1 ? '' : 's') + ' deleted');
   };
@@ -729,11 +756,12 @@
     if (k.recurring && String(k.due || '') >= localDay()) return false;
     return true;
   }
-  window.bdDeleteCard = function (boardId, cardId) {
+  window.bdDeleteCard = async function (boardId, cardId) {
     const board = boards[boardId];
     const k = board && (cards[boardId] || {})[cardId];
     if (!k || board.virtual || !editsBoard(board)) return;
-    if (!confirm('Delete "' + (k.title || 'this card') + '"? This cannot be undone.')) return;
+    if (!(await ydConfirm('This cannot be undone.', { title: 'Delete "' + (k.title || 'this card') + '"?', ok: 'Delete', danger: true }))) return;
+    if (!boards[boardId] || !(cards[boardId] || {})[cardId]) return;
     deleteCards(board, [cardId]);
     showToast('Card deleted');
   };
@@ -969,7 +997,7 @@
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
         'onclick="openCardDetail(\'' + board.id + '\', \'' + k.id + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
-        '<span class="bd-label" style="' + labelStyle(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+        '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
         esc(k.title || 'Untitled') + '</div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
@@ -1012,17 +1040,6 @@
   // plain hex colour is refused rather than trusted.
   function safeColor(c) {
     return /^#[0-9a-fA-F]{3,8}$/.test(String(c || '')) ? c : '#6b7a8f';
-  }
-  // A label's words on its own colour: white on a dark one, near-black on a
-  // light one. White on the amber "Soon" label measured 2.2:1 -- unreadable
-  // in sun (16 Oct 2026). Any colour can be picked, so it is worked out.
-  function labelStyle(c) {
-    const hex = safeColor(c).slice(1);
-    const full = hex.length < 6 ? hex.slice(0, 3).split('').map(x => x + x).join('') : hex.slice(0, 6);
-    const ch = i => { const v = parseInt(full.slice(i, i + 2), 16) / 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
-    const lum = 0.2126 * ch(0) + 0.7152 * ch(2) + 0.0722 * ch(4);
-    // The colour where white and near-black read equally well.
-    return '--c:' + safeColor(c) + ';color:' + (lum > 0.2 ? '#241a2c' : '#fff');
   }
 
   // A card can be colour-coded: a band of colour across its top, the way
@@ -1262,11 +1279,15 @@
       '</div>');
     jobEditTags();
   };
-  window.jobEditTagOn = function (sel) {
+  window.jobEditTagOn = async function (sel) {
     let v = sel.value;
     sel.value = '';
     if (!v || !jobEdit) return;
-    if (v === '__custom') { v = (prompt('What service?') || '').trim(); if (!v) return; }
+    if (v === '__custom') {
+      const was = jobEdit;
+      v = (await ydPrompt('The service, in a word or two:', '', { title: 'Add a service', placeholder: 'e.g. Gutter cleaning', ok: 'Add' }) || '').trim();
+      if (!v || jobEdit !== was) return;
+    }
     if (jobEdit.services.indexOf(v) === -1) jobEdit.services.push(v);
     jobEditTags();
   };
@@ -1317,13 +1338,12 @@
     closeBoardModal();
     moveJob(jobId, boardId, col);
   };
-  window.openJobFromBoard = function (jobId) {
+  window.openJobFromBoard = async function (jobId) {
     closeBoardModal();
     // Already the job in the form: just go to it. Loading it again would read
     // the saved copy over whatever has been typed and not yet saved.
     if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty &&
-        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(jobId);
     switchTab('job');
   };
@@ -1331,10 +1351,11 @@
   // A card on Bids or Jobs IS a job, so adding one makes the job: the
   // customer's name, in the column it was added to, then its editor for the
   // rest. The estimate is built on the Job tab ("Open the bid").
-  window.addJobCard = function (boardId, col) {
+  window.addJobCard = async function (boardId, col) {
     const board = boardById(boardId);
     if (!board || !board.virtual || !movesJobs() || typeof createJobRecord !== 'function') return;
-    const name = prompt(boardId === 'bids' ? 'Who is the bid for? (customer name)' : 'Who is the job for? (customer name)');
+    const name = await ydPrompt('The customer’s name — the rest comes next.', '',
+      { title: boardId === 'bids' ? 'Who is the bid for?' : 'Who is the job for?', placeholder: 'Customer name', ok: 'Add' });
     if (!name || !name.trim()) return;
     const at = nowIso();
     const fields = { customerName: name.trim() };
@@ -1394,7 +1415,7 @@
       (editsBoard(board) ? '<div class="bd-detail-top">' +
         '<button class="btn btn-filled bd-edit-big" onclick="editCard()">✏️ Edit this card</button>' + crewBtn + '</div>' : '') +
       (labels.length ? '<div class="bd-labels big">' + labels.map(l =>
-        '<span class="bd-label" style="' + labelStyle(l.color) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
+        '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
         (type ? '<span>' + type.icon + ' ' + esc(type.name) + '</span>' : '') +
@@ -1428,10 +1449,10 @@
       '</div>');
   }
   // The card open in the window, deleted (with the same question as its 🗑).
-  window.bdDeleteOpen = function () {
+  window.bdDeleteOpen = async function () {
     if (!openCard) return;
     const b = openCard.boardId, c = openCard.cardId;
-    bdDeleteCard(b, c);
+    await bdDeleteCard(b, c);
     if (!(cards[b] || {})[c]) closeBoardModal();
   };
 
@@ -1578,10 +1599,14 @@
   // A change Claude at home built goes live only on the owner's say-so. The
   // whole record is written back, approval added: the save merges, and a
   // record written in pieces could keep a stale field.
-  window.claudeApprove = function () {
-    const k = openCard && (cards[openCard.boardId] || {})[openCard.cardId];
+  window.claudeApprove = async function () {
+    const k0 = openCard && (cards[openCard.boardId] || {})[openCard.cardId];
+    if (!k0 || !k0.claude || k0.claude.status !== 'waiting_ok') return;
+    const asked = openCard.boardId + '/' + openCard.cardId;
+    if (!(await ydConfirm('', { title: 'Put this change live for everyone using Job Hub?', ok: 'Put it live' }))) return;
+    // The same card still open and still waiting.
+    const k = openCard && openCard.boardId + '/' + openCard.cardId === asked && (cards[openCard.boardId] || {})[openCard.cardId];
     if (!k || !k.claude || k.claude.status !== 'waiting_ok') return;
-    if (!confirm('Put this change live for everyone using Job Hub?')) return;
     claudePatch({ claude: Object.assign({}, k.claude, { approvedAt: nowIso(), approvedBy: myName() }) });
     showToast('It goes live on the next check — within 20 minutes');
   };
@@ -1590,8 +1615,11 @@
     showToast(yes ? 'Claude will look at this card' : 'Claude will leave this card alone');
   };
   // Forgets what Claude did, so the next run (or Ask now) does it afresh.
-  window.claudeAgain = function () {
-    if (!confirm('Have Claude do this card again? What it did before is replaced (drafts already in Gmail stay there).')) return;
+  window.claudeAgain = async function () {
+    const asked = openCard && openCard.boardId + '/' + openCard.cardId;
+    if (!asked || !(await ydConfirm('What it did before is replaced (drafts already in Gmail stay there).',
+      { title: 'Have Claude do this card again?', ok: 'Do it again' }))) return;
+    if (!openCard || openCard.boardId + '/' + openCard.cardId !== asked) return;
     claudePatch({ claude: null });
     showToast(computerAwake() || cardRuns ? 'Claude will look at it again on the next run'
       : 'Cleared — press 🤖 Ask Claude now when you want it done');
@@ -1689,7 +1717,7 @@
           YDRemind.optionsHtml(k) + '</select></div>' +
       '</div>' +
       '<div class="hint" id="cdRemindHint"></div>') +
-      group('Sorting &amp; look', 'Urgency puts it higher in its column (and in “🔴 Urgent &amp; this week”); labels are for ' +
+      group('Sorting &amp; look', 'Urgency puts it higher in its column (and in “🟠 Urgent &amp; this week”); labels are for ' +
           'finding it (☔ Rain day…); the colour is only the band across the top — with none, it takes its kind’s.',
         '<div class="field"><span class="label">How urgent</span><div class="bd-urg-pick">' +
           URGENCY.map(([u, name, hint]) => '<label class="bd-urg-opt urg-' + u + '"><input type="radio" name="cdUrg" value="' + u + '"' +
@@ -2092,7 +2120,7 @@
     if (ll) ll.innerHTML = draftLabels.length ? draftLabels.map((l, i) =>
       '<div class="bd-edit-label">' +
         '<div class="bd-edit-row">' +
-          '<span class="bd-label" style="' + labelStyle(l.color) + '">' + esc(l.name || 'Label') + '</span>' +
+          '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name || 'Label') + '</span>' +
           '<input class="bdLabelName" value="' + esc(l.name) + '" placeholder="Label name" ' +
             'oninput="this.previousElementSibling.textContent = this.value || \'Label\'" aria-label="Label name">' +
           '<button class="bd-edit-btn del" onclick="bdLabelRemove(' + i + ')" aria-label="Delete label">✕</button>' +
@@ -2230,14 +2258,15 @@
     showToast(name + ' saved');
   };
 
-  window.removeBoard = function (id) {
+  window.removeBoard = async function (id) {
     const b = boards[id];
     // Maintenance follows the Equipment tab; Crew tasks holds the recurring
     // task list (recurring.js) -- deleting either would lose it.
     if (!b || !runsBoard(b) || id === MAINTENANCE || id === CREW_BOARD) return;
     const n = Object.keys(cards[id] || {}).length;
-    if (!confirm('Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') +
-                 '? This cannot be undone.')) return;
+    if (!(await ydConfirm('This cannot be undone.', { title: 'Delete the board "' + b.name + '"' + (n ? ' and its ' + n + ' card' + (n === 1 ? '' : 's') : '') + '?',
+                 ok: 'Delete the board', danger: true }))) return;
+    if (!boards[id]) return;
     const ids = Object.keys(cards[id] || {});
     if (cardUnsubs[id]) { cardUnsubs[id](); delete cardUnsubs[id]; }
     delete boards[id]; delete cards[id]; delete cardsLoaded[id];
@@ -2571,8 +2600,6 @@
 
   window.YDBoards = {
     doneCol: doneColOf,
-    // A coloured chip's style with readable words on it (home.js too).
-    labelStyle: labelStyle,
     render: render,
     // One board's columns drawn on another tab -- the Maintenance board on
     // the Equipment tab (equipment.js): the same cards, drag and card window

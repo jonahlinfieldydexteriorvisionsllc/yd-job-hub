@@ -169,10 +169,9 @@
   // A job, on the Job tab -- as Home, the calendar and the boards open one:
   // the job already in the form is just shown (loading it again would read
   // the saved copy over whatever is typed and not yet saved).
-  function openJob(id) {
+  async function openJob(id) {
     if (typeof currentJobId !== 'undefined' && currentJobId === id) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty &&
-        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(id);
   }
   function openContact(id) {
@@ -340,6 +339,7 @@
         const bid = typeof isBidStatus === 'function' ? isBidStatus(d.jobStatus) : d.jobStatus === 'quoting';
         const why = d.bidStage === 'lost' && typeof lostWhy === 'function' ? lostWhy(d) : '';
         const status = bid ? (d.bidStage === 'lost' ? 'Bid · lost' + (why ? ' (' + why + ')' : '') : 'Bid')
+          : typeof jobStage === 'function' ? jobStage(d).name   // its one stage (app.js), Invoiced and Paid included
           : typeof statusLabel === 'function' && typeof normStatus === 'function' ? statusLabel(normStatus(d.jobStatus, d)) : '';
         const est = String(d.estimateNumber || '').trim();
         const where = [d.address, d.city].filter(Boolean).join(', ');

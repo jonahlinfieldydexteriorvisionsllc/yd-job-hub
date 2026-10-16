@@ -67,10 +67,12 @@
     render();
   };
 
-  window.payDelete = function (id) {
+  window.payDelete = async function (id) {
     const p = checks[id];
     if (!p || !owner()) return;
-    if (!confirm('Delete the ' + money(p.cents) + ' payment to ' + nameOf(p) + ' from the hub?')) return;
+    if (!(await ydConfirm('The payment itself is untouched — only its record here goes.',
+      { title: 'Delete the ' + money(p.cents) + ' payment to ' + nameOf(p) + ' from the hub?', ok: 'Delete', danger: true }))) return;
+    if (!checks[id]) return;
     delete checks[id];
     Promise.resolve(window.YDDb.remove('paychecks', id))
       .catch(e => console.warn('[paychecks] not deleted:', (e && e.code) || e));

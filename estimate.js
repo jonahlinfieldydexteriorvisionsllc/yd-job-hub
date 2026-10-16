@@ -523,10 +523,13 @@
     const t = new Date(String(d).slice(0, 10) + 'T12:00:00');
     return isNaN(t) ? String(d) : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
-  window.estReprice = function (on) {
+  window.estReprice = async function (on) {
     if (!changes() || !est.fromQb) return;
-    if (on && !confirm('Price this estimate by your rules? Its total will no longer be the ' +
-        (num(est.fromQb.totalCents) !== null ? cents(est.fromQb.totalCents) + ' ' : '') + 'the customer accepted in QuickBooks.')) return;
+    const was = est;
+    if (on && !(await ydConfirm('Its total will no longer be the ' +
+        (num(est.fromQb.totalCents) !== null ? cents(est.fromQb.totalCents) + ' ' : '') + 'the customer accepted in QuickBooks.',
+        { title: 'Price this estimate by your rules?', ok: 'Price it by my rules' }))) return;
+    if (est !== was || !est.fromQb) return;      // another job opened meanwhile
     est.fromQb = Object.assign({}, est.fromQb, { reprice: !!on });
     changed(true);
   };
@@ -1378,6 +1381,13 @@
     box.innerHTML = html;
   }
 
+  // The QuickBooks id of the customer the open job is tied to (customers.js),
+  // or '' -- a lead, nobody, or the list not switched on.
+  function hubCustomer() {
+    const id = typeof boardFields !== 'undefined' && boardFields ? boardFields.customerId : '';
+    return id && window.YDCustomers && YDCustomers.on() ? YDCustomers.qbIdFor(id) : '';
+  }
+
   // A home or a business: which list of warranty and terms products ends the
   // estimate (Pricing rules -- some notices are for homes only). From the
   // job's Business name unless set on this estimate.
@@ -1637,8 +1647,11 @@
     const to = (el('email').value || '').trim();
     const what = inv.id ? 'invoice #' + (inv.docNumber || '') : 'the invoice for the whole job (' + cents(total) + ') from estimate #' + (q.docNumber || '');
     if (email && !to && !inv.id) { showToast('Add the customer’s email on the job first'); return; }
-    if (!confirm((email ? 'Email ' + what + ' to ' + (to || 'the customer') + ' from QuickBooks?' : 'Make ' + what + ' in QuickBooks?') +
-      (inv.id ? '' : '\n\nIt closes the estimate in QuickBooks.'))) return;
+    const askedFor = currentJobId;
+    if (!(await ydConfirm(inv.id ? '' : 'It closes the estimate in QuickBooks.',
+      { title: email ? 'Email ' + what + ' to ' + (to || 'the customer') + ' from QuickBooks?' : 'Make ' + what + ' in QuickBooks?',
+        ok: email ? 'Email it' : 'Make it' }))) return;
+    if (currentJobId !== askedFor || invoicing) return;
     if (!(await realCompanyOrTest('This invoice'))) { showToast('Not made — QuickBooks is on the test company'); return; }
     if (typeof autosave === 'function') autosave();
     const jobId = currentJobId;
@@ -1651,8 +1664,9 @@
       afterInvoice(jobId, out);
       showToast((email ? 'Emailed from QuickBooks' : 'Made in QuickBooks') + (out.docNumber ? ' — invoice #' + out.docNumber : ''));
       // A yes from the customer: a bid still waiting to be booked is offered it.
-      if (currentJobId === jobId && typeof isBidStatus === 'function' && isBidStatus(jobStatus) &&
-          confirm('They said yes — book it as a job now?') && typeof makeItAJob === 'function') makeItAJob(jobId);
+      if (currentJobId === jobId && typeof isBidStatus === 'function' && isBidStatus(jobStatus) && typeof makeItAJob === 'function' &&
+          await ydConfirm('', { title: 'They said yes — book it as a job now?', ok: 'Book it', cancel: 'Not now' }) &&
+          currentJobId === jobId && isBidStatus(jobStatus)) makeItAJob(jobId);
     } catch (e) {
       showToast('QuickBooks: ' + (e.message || e));
     } finally {
@@ -1678,10 +1692,11 @@
       patch.qbEstimate = Object.assign({}, est0, { status: 'Closed' });
     }
     if (window.YDSync) window.YDSync.patchJob(jobId, patch);
-    if (currentJobId === jobId && r.docNumber &&
-        (el('qbInvoice').value.trim() !== String(r.docNumber) || !el('qbInvoiced').checked)) {
+    // The number goes in the box on the Job tab; that the job is Invoiced is
+    // its stage, worked out from qbInvoiceRef (app.js jobStage) -- the old
+    // "Invoiced in QuickBooks" tick is retired.
+    if (currentJobId === jobId && r.docNumber && el('qbInvoice').value.trim() !== String(r.docNumber)) {
       el('qbInvoice').value = r.docNumber;
-      el('qbInvoiced').checked = true;
       if (typeof updateCtxBar === 'function') updateCtxBar();
       if (typeof markDirty === 'function') markDirty();
     }
@@ -1778,7 +1793,7 @@
     changed(false);
   };
 
-  window.estWork = function (id, field, v) {
+  window.estWork = async function (id, field, v) {
     const w = find(est.work, id);
     if (!w || !changes()) return;
     if (field === 'crewDays' || field === 'qty') w[field] = num(v);
@@ -1786,9 +1801,12 @@
     else if (field === 'amount') w.amountCents = toCents(v);
     else if (field === 'profit') {
       if (v === '__other') {
-        const a = prompt('Profit per crew-day for this line ($)', '');
-        const c = a === null ? null : toCents(String(a).replace(/[$,\s]/g, ''));
-        if (c !== null && c >= 0) w.profit = c;
+        const read = a => toCents(String(a).replace(/[$,\s]/g, ''));
+        const a = await ydPrompt('', '', { title: 'Profit per crew-day for this line ($)', type: 'number', ok: 'Use it',
+          check: a => { const c = read(a); return c !== null && c >= 0 ? '' : 'A dollar amount, please'; } });
+        const c = a === null ? null : read(a);
+        const now = find(est.work, id);          // the estimate may have been swapped meanwhile
+        if (now && c !== null && c >= 0) now.profit = c;
         changed(true);                    // redrawn either way: the list shows what is chosen
         return;
       }
@@ -2105,7 +2123,7 @@
     estPickSupply(id, sid);
   };
 
-  window.estUseFound = function (id, k) {
+  window.estUseFound = async function (id, k) {
     if (!canSource()) return;
     const f = found[foundKey(id)], o = f && f.options && f.options[k];
     const m = find(est.materials, id), l = lineOf(id);
@@ -2125,10 +2143,16 @@
     let coverage = o.coversQty > 0 ? o.coversQty : null, takeoffUnit = coverage ? o.coversUnit || unit : '';
     if (unit && unitKey(o.per) === unitKey(unit)) { coverage = null; takeoffUnit = ''; }
     else if (unit && o.per && !coverage) {
-      const a = window.prompt('How much does one ' + o.per + ' cover, in ' + unit + '?', '');
+      const read = a => num(String(a).replace(/[^0-9.]/g, ''));
+      const was = est;
+      const a = await ydPrompt('So the estimate orders the right number of them.', '', {
+        title: 'How much does one ' + o.per + ' cover, in ' + unit + '?', type: 'number', ok: 'Use it',
+        check: a => read(a) > 0 ? '' : 'A number above 0, please' });
       if (a === null) return;
-      const n = num(String(a).replace(/[^0-9.]/g, ''));
-      if (!(n > 0)) { showToast('That should be a number above 0'); return; }
+      // Another job opened, or this line gone, while it was asked.
+      if (est !== was || find(est.materials, id) !== m || found[foundKey(id)] !== f) return;
+      const n = read(a);
+      if (!(n > 0)) return;
       coverage = n; takeoffUnit = unit;
     }
     // The line's own (unpriced) item takes the price only when it is sold the
@@ -2552,8 +2576,10 @@
     showToast('Put back as it was');
   };
 
-  window.estNewChat = function () {
-    if (!confirm('Start the conversation over? The estimate stays as it is.')) return;
+  window.estNewChat = async function () {
+    const was = est;
+    if (!(await ydConfirm('The estimate stays as it is.', { title: 'Start the conversation over?', ok: 'Start over' }))) return;
+    if (est !== was) return;
     est.chat = []; est.questions = []; est.flags = []; undo = null;
     changed(true);
   };
@@ -2587,19 +2613,24 @@
     } catch (e) { /* no answer: sent as typed, as before */ }
   }
   // Before anything goes to QuickBooks: fix the ZIP, or keep it on purpose.
-  function zipChecked() {
+  // Two buttons, so neither answer can be had by mistake: change it, or
+  // keep the typed one on purpose. × / Escape sends nothing.
+  async function zipChecked() {
     if (!zipWrong()) return true;
     const s = est.site, typed = (el('zip').value || '').trim();
     const where = [tidyCase(el('address').value), tidyCase(el('city').value)].filter(Boolean).join(', ');
-    if (confirm('The ZIP on this job is ' + (typed || 'empty') + ', but the map has ' + where + ' in ' + s.zip +
-      '.\n\nChange the job’s ZIP to ' + s.zip + '?')) {
+    const pick = await ydChoose('The ZIP on this job is ' + (typed || 'empty') + ', but the map has ' + where + ' in ' + s.zip + '.', [
+      { id: 'fix', label: 'Change it to ' + s.zip },
+      { id: 'keep', label: 'Send it with ' + (typed || 'no ZIP'), hint: 'as typed' },
+    ], { title: 'Check the ZIP', cancel: 'Don’t send yet' });
+    if (!pick || est.site !== s) return false;
+    if (pick.id === 'fix') {
       el('zip').value = s.zip;
       el('zip').dispatchEvent(new Event('input', { bubbles: true }));
       if (typeof markDirty === 'function') markDirty();
       s.at = siteKey();               // the same place on the map, under the corrected address
       return true;
     }
-    if (!confirm('Send it with ZIP ' + (typed || '(none)') + ' as typed?')) return false;
     s.zipOk = typed;
     return true;
   }
@@ -2730,9 +2761,11 @@
   async function realCompanyOrTest(what) {
     const c = await qbCompanyNow();
     if (!c || c.env === 'production') return true;
-    const typed = prompt('QuickBooks is connected to Intuit’s TEST company' + (c.name ? ' (“' + c.name + '”)' : '') +
+    const typed = await ydPrompt('QuickBooks is connected to Intuit’s TEST company' + (c.name ? ' (“' + c.name + '”)' : '') +
       ' — NOT your real QuickBooks.\n\n' + what + ' would only go to the test company: not your real books, and no customer sees it.\n\n' +
-      'Switch Job Hub to your real QuickBooks first. To send to the test company anyway, type TEST:');
+      'Switch Job Hub to your real QuickBooks first. To send to the test company anyway, type TEST:', '', {
+        title: 'This is the test company', ok: 'Send to the test company', cancel: 'Don’t send', danger: true,
+        check: v => v.trim().toUpperCase() === 'TEST' ? '' : 'Type TEST to send it to the test company' });
     return !!typed && typed.trim().toUpperCase() === 'TEST';
   }
 
@@ -2759,9 +2792,10 @@
       if (s && !s.missing) now = Math.round(Number(s.total) * 100);
     } catch (e) { return true; }
     if (now === null || !isFinite(now) || Math.abs(now - lastSent.totalCents) <= 100) return true;
-    return confirm('Estimate #' + (q.docNumber || '') + ' was changed in QuickBooks: it totals ' + cents(now) +
+    return ydConfirm('Estimate #' + (q.docNumber || '') + ' was changed in QuickBooks: it totals ' + cents(now) +
       ' there, but Job Hub last sent ' + cents(lastSent.totalCents) + '.\n\nSending from Job Hub replaces it with Job Hub’s ' +
-      'version — the changes made in QuickBooks will be lost. Make the same changes here first if you want to keep them.\n\nReplace it anyway?');
+      'version — the changes made in QuickBooks will be lost. Make the same changes here first if you want to keep them.',
+      { title: 'Replace it anyway?', ok: 'Replace it', cancel: 'Keep QuickBooks’ version', danger: true });
   }
 
   window.estToQB = async function (email) {
@@ -2769,20 +2803,26 @@
     const startJob = currentJobId;
     const r = priced();
     if (!r || !(r.totalCents > 0)) return;
-    if (r.problems.length && !confirm('Some of this isn’t priced yet:\n\n• ' + r.problems.slice(0, 8).join('\n• ') +
-      '\n\nSend it anyway?')) return;
+    if (r.problems.length) {
+      if (!(await ydConfirm('• ' + r.problems.slice(0, 8).join('\n• '),
+        { title: 'Some of this isn’t priced yet — send it anyway?', ok: 'Send it anyway', cancel: 'Not yet' }))) return;
+      if (currentJobId !== startJob || saving || qbAsking) return;
+    }
     qbAsking = true; renderQb();
     try { await zipKnown(); } finally { qbAsking = false; renderQb(); }
     if (currentJobId !== startJob) return;
-    if (!zipChecked()) return;
+    if (!(await zipChecked())) return;
+    if (currentJobId !== startJob) return;
     const f = id => (el(id).value || '').trim();
     if (!f('customerName')) { showToast('Add a customer name first'); return; }
     const to = f('email');
     const q = qb() || {};
     if (email) {
       if (!to) { showToast('Add the customer’s email on the job first'); return; }
-      if (!confirm((q.sentAt ? 'Email the updated estimate' : 'Email this estimate') + ' to ' + to +
-        ' from QuickBooks?\n\nTotal ' + cents(r.grandCents) + (r.tax.cents > 0 ? ' (with ' + cents(r.tax.cents) + ' sales tax)' : ''))) return;
+      // Goes to the customer, so it is asked every time.
+      if (!(await ydConfirm('Total ' + cents(r.grandCents) + (r.tax.cents > 0 ? ' (with ' + cents(r.tax.cents) + ' sales tax)' : ''),
+        { title: (q.sentAt ? 'Email the updated estimate' : 'Email this estimate') + ' to ' + to + ' from QuickBooks?', ok: 'Email it' }))) return;
+      if (currentJobId !== startJob || saving || qbAsking) return;
     }
     // Two questions for QuickBooks before anything is sent. A second tap, or
     // another job opened, while they are asked must not send twice or send
@@ -2815,7 +2855,11 @@
       const parts = materialParts(r, work);
       const out = await askQb('/qb/estimate', {
         jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
-        estimateId: q.id || null, customerId: q.customerId || null, env: q.env || null,
+        // The job's customer (customers.js) when this job has no QuickBooks
+        // customer of its own yet: the estimate goes to their profile, not to
+        // a new one made from however the name was typed.
+        estimateId: q.id || null, customerId: q.customerId || hubCustomer() || null,
+        env: q.env || (hubCustomer() ? 'production' : null),
         customer: { name: f('customerName'), email: to, phone: f('phone'), address: tidyCase(f('address')),
                     city: tidyCase(f('city')), state: stateWord(f('state')), zip: f('zip') },
         site: site,
@@ -3160,8 +3204,8 @@
     }
     renderBook();
   };
-  window.pbAdd = function () {
-    const name = prompt('The service (e.g. Artificial turf)');
+  window.pbAdd = async function () {
+    const name = await ydPrompt('', '', { title: 'Add a service to the price book', placeholder: 'e.g. Artificial turf', ok: 'Add it' });
     if (!name || !name.trim()) return;
     const id = newId('pb');
     writeBook(id, { name: name.trim(), method: 'unit', unit: 'sq ft', priceCents: null, minimumCents: null, factors: [],
@@ -3169,9 +3213,11 @@
                     qbItemId: null, qbItemName: null, active: true, createdAt: new Date().toISOString() });
     renderBook();
   };
-  window.pbRemove = function (id) {
+  window.pbRemove = async function (id) {
     const p = book[id];
-    if (!p || !confirm('Take “' + (p.name || '') + '” out of the price book? Estimates already made keep their lines.')) return;
+    if (!p || !(await ydConfirm('Estimates already made keep their lines.',
+      { title: 'Take “' + (p.name || '') + '” out of the price book?', ok: 'Take it out', danger: true }))) return;
+    if (!book[id]) return;
     delete book[id];
     Promise.resolve(window.YDDb.remove('priceBook', id)).catch(e => console.warn('[estimate] not removed:', (e && e.code) || e));
     renderBook();

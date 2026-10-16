@@ -178,9 +178,10 @@
 
   // ------------------------------------------------- reporting it by hand
 
-  window.reportProblem = function () {
-    const what = prompt('What went wrong?\n\nSay what you were trying to do. ' +
-      'This goes to the office with the details of what the app was doing.');
+  window.reportProblem = async function () {
+    const what = await ydPrompt('Say what you were trying to do. ' +
+      'This goes to the office with the details of what the app was doing.', '',
+      { title: 'What went wrong?', multiline: true, ok: 'Send it' });
     if (what === null) return;
     if (!what.trim()) return;
     // Reported by a person, so it bypasses the de-duplication: if they say it
@@ -326,9 +327,10 @@
       .catch(e => console.warn('[problems] status not saved:', e.code || e.message));
   }
 
-  window.deleteProblem = function (id) {
+  window.deleteProblem = async function (id) {
     if (!problems[id] || !isOwner()) return;
-    if (!confirm('Delete this report?')) return;
+    if (!(await ydConfirm('', { title: 'Delete this report?', ok: 'Delete', danger: true }))) return;
+    if (!problems[id]) return;
     delete problems[id];
     renderProblems();
     Promise.resolve(window.YDDb.remove('problems', id))

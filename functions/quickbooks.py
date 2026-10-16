@@ -54,6 +54,8 @@ import requests
 from firebase_admin import firestore
 from google.api_core.exceptions import AlreadyExists
 
+import stages
+
 # ---------------------------------------------------------------- config
 
 # Intuit publishes its OAuth endpoints in a discovery document and asks apps
@@ -1096,6 +1098,16 @@ def save_estimate(body):
         e = sent.get("Estimate") or e
         sent_to = email
 
+    # The job tied to that customer, and a lead it was tied to made the
+    # customer (customers.py) -- never in the way of the estimate itself.
+    try:
+        import customers
+        customers.estimate_made(job_id, customer_id)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                # noqa: BLE001
+        print("quickbooks: job %s not tied to customer %s: %s" % (job_id, customer_id, err))
+
     out = _estimate_record(e, customer_id)
     if sent_to:
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
@@ -1158,35 +1170,30 @@ def _stamp():
     return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (t.microsecond // 1000)
 
 
-# A finished job's place on the Jobs board follows its invoice (Jonah's
-# board: Ready to invoice -> Invoiced -> Paid). The app's sync.js
-# finishedStage is the same rule; both only ever move a job forward, and only
-# a job marked Complete -- the deposit invoice is usually made the day the
-# estimate is accepted, long before the work is done, and a job still being
-# worked keeps its own column (Punch list, say).
+# A finished job's place on the Jobs board is its one stage (stages.py
+# stage_of; app.js jobStage): with a QuickBooks invoice, QuickBooks decides --
+# owed: Invoiced, nothing owed: Paid. Only a job marked Finished -- the
+# deposit invoice is usually made the day the estimate is accepted, long
+# before the work is done, and a job still being worked keeps its own column
+# (Punch list, say). The column is written so devices still on older code
+# show the same; newer ones work it out themselves.
 END_STAGES = {"toInvoice": 0, "invoiced": 1, "paid": 2}
 
-
-def _job_status(j):
-    s = (j or {}).get("jobStatus") or "quoting"
-    if s == "active":
-        return "inprogress" if (j or {}).get("workStage") in ("inProgress", "punchList") else "booked"
-    return s
+_job_status = stages.status_of
 
 
 def _stage_patch(j, inv_rec, stamp):
-    """{workStage, workStageAt} to move a finished job on to where its
-    invoice (inv_rec: _invoice_record) says it is, or {} to leave it."""
+    """{workStage, workStageAt} to put a finished job where its invoice
+    (inv_rec: _invoice_record) says it is, or {} to leave it. QuickBooks is
+    the answer, so this can move a job back too (a payment taken off)."""
     if _job_status(j) != "complete" or not (inv_rec or {}).get("id"):
         return {}
-    bal = inv_rec.get("balance")
-    try:
-        paid = bal is not None and bal != "" and float(bal) <= 0
-    except (TypeError, ValueError):
-        paid = False
-    want = "paid" if paid else "invoiced"
-    had = (j or {}).get("workStage")
-    if had in END_STAGES and END_STAGES[had] >= END_STAGES[want]:
+    after = dict(j or {}, qbInvoiceRef=inv_rec)
+    # The invoice is from the other QuickBooks company: not this job's.
+    if not stages.qb_invoice_of(after):
+        return {}
+    want = stages.board_column(after)
+    if not want or (j or {}).get("workStage") == want:
         return {}
     return {"workStage": want, "workStageAt": stamp}
 
@@ -1593,6 +1600,18 @@ def _sweep():
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: copies' invoices not looked for:", err)
+    # The customer list (customers.py): who changed in QuickBooks since the
+    # last look, and Job Hub's edits that have not reached it yet. Off until
+    # the owner switches the first read on (settings/customers.importOn).
+    try:
+        import customers
+        got = customers.sync()
+        if got:
+            print("quickbooks sweep: customers %s" % got)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: customers not brought in step:", err)
     return news
 
 
@@ -1907,6 +1926,8 @@ def _job_from_estimate(e, cust, stamp, end_names):
         "jobStatus": "booked", "workStage": "scheduled", "workStageAt": stamp,
         "bidStage": "won", "bidStageAt": stamp,
         "qbEstimate": rec, "fromQuickBooks": {"estimateId": e.get("Id"), "at": stamp},
+        # Tied to the customer by QuickBooks' own id, not by the spelling of a name.
+        "customerId": str((e.get("CustomerRef") or {}).get("value") or "") or None, "customerBy": "auto",
         "qbFilled": {"estimateId": str(e.get("Id")), "at": stamp}, "snowChecked": True,
         "acceptedSeenAt": stamp, "lastModified": stamp,
     })

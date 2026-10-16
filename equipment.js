@@ -57,16 +57,20 @@
   // How urgent a noted problem is, most urgent first. Worded the way it gets
   // said in the yard, because the point is that anyone picking up the keys
   // knows at a glance whether they can use the thing.
+  // The app's one scale for how soon (styles.css --st-*, Jonah 15 Oct
+  // 2026): red, orange, yellow, grey. `was`: the colour before then, so the
+  // Maintenance board's urgency labels still wearing it are brought over
+  // (one the owner recoloured himself is left alone).
   const URGENCY = [
-    { id: 'down', label: 'Out of service', hint: 'do not use it until it is fixed', color: '#d64545' },
-    { id: 'before', label: 'Before next use', hint: 'fix it before it goes out again', color: '#e07b24' },
-    { id: 'soon', label: 'Soon', hint: 'this week', color: '#e0a526' },
-    { id: 'whenever', label: 'When you have time', hint: 'not holding anything up', color: '#6b7a8f' },
+    { id: 'down', label: 'Out of service', hint: 'do not use it until it is fixed', color: '#c8492b', was: '#d64545' },
+    { id: 'before', label: 'Before next use', hint: 'fix it before it goes out again', color: '#e8801f', was: '#e07b24' },
+    { id: 'soon', label: 'Soon', hint: 'this week', color: '#f2c230', was: '#e0a526' },
+    { id: 'whenever', label: 'When you have time', hint: 'not holding anything up', color: '#8a8f98', was: '#6b7a8f' },
   ];
   const urgencyOf = id => URGENCY.find(u => u.id === id) || URGENCY[URGENCY.length - 1];
   // A problem's urgency as the boards' own card urgency (boards.js URGENCY),
   // so a machine out of service sorts to the top of Maintenance, shows under
-  // "🔴 Urgent & this week" and pings the owner like any urgent card
+  // "🟠 Urgent & this week" and pings the owner like any urgent card
   // (functions/reminders.py _urgent_cards).
   const CARD_URGENCY = { down: 'urgent', before: 'high', soon: 'normal', whenever: 'low' };
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
@@ -815,11 +819,13 @@
     serviceForm(null, i);
   };
 
-  window.removeIssue = function (issueId) {
-    const g = gear[openId];
+  window.removeIssue = async function (issueId) {
+    let g = gear[openId];
     if (!g) return;
     const i = (g.issues || []).find(x => x.id === issueId);
-    if (!i || !confirm('Delete "' + i.what + '"? (Use Fixed instead if it was done — that keeps a record.)')) return;
+    if (!i || !(await ydConfirm('Use Fixed instead if it was done — that keeps a record.', { title: 'Delete "' + i.what + '"?', ok: 'Delete', danger: true }))) return;
+    g = gear[g.id];
+    if (!g || !(g.issues || []).some(x => x.id === issueId)) return;
     g.issues = (g.issues || []).filter(x => x.id !== issueId);
     renderDetail(); renderEquipment();
     write(g.id, { issues: g.issues }, 'deleting a problem');
@@ -1010,7 +1016,7 @@
     return '';
   }
 
-  window.saveService = function () {
+  window.saveService = async function () {
     const g = gear[openId];
     if (!g) return;
     const what = val('svWhat');
@@ -1018,10 +1024,15 @@
     if (editingEntry) { saveServiceChange(g, what); return; }
     const want = readingWanted(g);
     const box = want === 'miles' ? 'svMiles' : want === 'hours' ? 'svHours' : '';
-    if (box && num(box) == null && !confirm('No ' + want + ' reading this time? The next service is worked out from the ' +
-        want + ' — OK to save without it, Cancel to type it in.')) {
-      const b = el(box); if (b) b.focus();
-      return;
+    if (box && num(box) == null) {
+      const was = openId;
+      if (!(await ydConfirm('The next service is worked out from the ' + want + '.',
+          { title: 'No ' + want + ' reading this time?', ok: 'Save without it', cancel: 'Type it in' }))) {
+        const b = el(box); if (b) b.focus();
+        return;
+      }
+      // The form closed, or another machine opened, while it was asked.
+      if (openId !== was || !el('svWhat') || !gear[openId]) return;
     }
 
     const entry = {
@@ -1105,11 +1116,13 @@
     showToast('Changed — ' + what);
   }
 
-  window.removeService = function (entryId) {
-    const g = gear[openId];
+  window.removeService = async function (entryId) {
+    let g = gear[openId];
     if (!g) return;
     const entry = (g.service || []).find(e => e.id === entryId);
-    if (!entry || !confirm('Remove "' + entry.what + '" from the history?')) return;
+    if (!entry || !(await ydConfirm('', { title: 'Remove "' + entry.what + '" from the history?', ok: 'Remove', danger: true }))) return;
+    g = gear[g.id];
+    if (!g || !(g.service || []).some(e => e.id === entryId)) return;
     const service = (g.service || []).filter(e => e.id !== entryId);
     const patch = { service: service };
     // If this entry is where the machine's reading came from, the reading
@@ -1197,9 +1210,10 @@
       '<option value="__new">＋ A new type…</option>';
   }
   // "＋ A new type…": named here, kept on this machine when it is saved.
-  window.eqKindPicked = function (box) {
+  window.eqKindPicked = async function (box) {
     if (!box || box.value !== '__new') return;
-    const a = prompt('Name the new type — e.g. Trailer, Attachment, ATV, Snow plow', '');
+    const a = await ydPrompt('', '', { title: 'Name the new type', placeholder: 'e.g. Trailer, Attachment, ATV, Snow plow', ok: 'Add it' });
+    if (!box.isConnected) return;             // the form was closed meanwhile
     const name = String(a || '').trim().replace(/\s+/g, ' ').slice(0, 30);
     let pick = (gear[editingId] || {}).kind || 'machine';     // cancelled: as it was
     if (name) {
@@ -1282,10 +1296,11 @@
     showToast(name + ' saved');
   };
 
-  window.removeEquipment = function (id) {
+  window.removeEquipment = async function (id) {
     if (!ydCan('equipment', 'change')) return;
     const g = gear[id];
-    if (!g || !confirm('Remove ' + g.name + ' and its whole service history?')) return;
+    if (!g || !(await ydConfirm('This cannot be undone.', { title: 'Remove ' + g.name + ' and its whole service history?', ok: 'Remove', danger: true }))) return;
+    if (!gear[id]) return;
     delete gear[id];
     closeEquipment(); renderEquipment();
     if (!window.YDDb) return;
@@ -1449,8 +1464,15 @@
       .map(u => ({ id: 'u-' + u.id, name: u.label, color: u.color }))
       .concat(labelIds.has(PART_LABEL.id) ? [] : [PART_LABEL])
       .concat(labelIds.has(LOG_LABEL.id) ? [] : [LOG_LABEL]);
-    if (missing.length) {
-      board.labels = (board.labels || []).concat(missing);
+    let recoloured = false;
+    const labels = (board.labels || []).map(l => {
+      const u = URGENCY.find(x => 'u-' + x.id === l.id);
+      if (!u || String(l.color || '').toLowerCase() !== u.was) return l;
+      recoloured = true;
+      return Object.assign({}, l, { color: u.color });
+    });
+    if (missing.length || recoloured) {
+      board.labels = labels.concat(missing);
       Promise.resolve(window.YDDb.put('boards', MAINT, { labels: board.labels }))
         .catch(e => console.warn('[equipment] labels not yet saved:', e.code || e.message));
     }

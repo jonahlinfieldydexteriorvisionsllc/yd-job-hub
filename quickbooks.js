@@ -190,9 +190,10 @@
   };
 
   window.disconnectQuickBooks = async function () {
-    if (!confirm('Disconnect QuickBooks?\n\nNothing already in QuickBooks changes. ' +
+    if (!(await ydConfirm('Nothing already in QuickBooks changes. ' +
                  'Until it is connected again, estimates can’t be sent to QuickBooks, accepted ones and ' +
-                 'payments aren’t picked up, and snow billing goes back to being exported as a file.')) return;
+                 'payments aren’t picked up, and snow billing goes back to being exported as a file.',
+                 { title: 'Disconnect QuickBooks?', ok: 'Disconnect', danger: true }))) return;
     try { await ask('/qb/disconnect'); showToast('Disconnected'); }
     catch (e) { showToast(e.message); }
     refresh();
@@ -341,9 +342,9 @@
     const label = when.toLocaleDateString('en-US',
       { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 
-    if (!confirm('Raise ' + todo.length + ' invoice' + (todo.length === 1 ? '' : 's') +
-                 ' in QuickBooks for ' + label + '?' +
-                 (state.env === 'sandbox' ? '\n\nThis is the practice company.' : ''))) return;
+    if (!(await ydConfirm(state.env === 'sandbox' ? 'This is the practice company.' : '',
+                 { title: 'Raise ' + todo.length + ' invoice' + (todo.length === 1 ? '' : 's') + ' in QuickBooks for ' + label + '?',
+                   ok: 'Raise them' }))) return;
 
     const done = Object.assign({}, already);
     let made = 0, failed = 0;

@@ -248,13 +248,21 @@
             </select>
           </div>
           <div class="field">
-            <span class="label">Job Status</span>
-            <select id="jobStatusSelect" onchange="onStatusChange(); markDirty()">
+            <!-- The job's one stage (app.js jobStage / renderStageSteps):
+                 Bid -> Booked -> In progress -> Finished -> Invoiced -> Paid,
+                 a tap button each, in place of the old Status list and the
+                 "Invoiced in QuickBooks" tick. The list stays, hidden: the
+                 stage buttons set it, and the crew row below is shown or
+                 hidden by what it holds. -->
+            <span class="label">Stage</span>
+            <select id="jobStatusSelect" hidden aria-hidden="true" tabindex="-1" onchange="onStatusChange(); markDirty()">
               <option value="quoting">Bid</option>
               <option value="booked">Booked</option>
               <option value="inprogress">In progress</option>
-              <option value="complete">Complete</option>
+              <option value="complete">Finished</option>
             </select>
+            <div class="stage-steps" id="jobStageSteps" role="group" aria-label="Where the job is"></div>
+            <div class="stage-note hint" id="jobStageNote" hidden></div>
             <!-- The crew's page for a booked job (crewjobs.js): hide one, or
                  see exactly what they see. Shown only while the job is booked
                  or in progress -- the crew never see a bid or a finished job
@@ -308,17 +316,17 @@
         </div>
 
         <!-- The invoice belongs to a booked or finished job: on a bid the
-             two boxes are put away (unless something is already in them),
+             number box is put away (unless something is already in it),
              and once QuickBooks holds the invoice its number and what is
              owed show as a line instead of an empty box (app.js
              showJobQbFields). Hidden, never removed: the save still reads
-             them. -->
+             it. The "Invoiced in QuickBooks" tick and the "Taxable — WI
+             5.5%" box are retired (16 Oct 2026): the stage line says
+             Invoiced / Paid, and the estimate or the QuickBooks invoice
+             holds the tax (app.js jobStage, jobBill). -->
         <div class="grid g4 mt job-qb-row" style="align-items:end">
           <div class="field" id="qbInvoiceField"><span class="label">QuickBooks Invoice #</span><input id="qbInvoice" placeholder="QB invoice number" oninput="markDirty()"></div>
-          <label class="chk" id="qbInvoicedRow"><input type="checkbox" id="qbInvoiced" onchange="markDirty(); updateCtxBar()"> Invoiced in QuickBooks</label>
           <div class="job-qb-line" id="jobQbLine" hidden></div>
-          <label class="chk"><input type="checkbox" id="taxable" onchange="markDirty(); updateSummary()"> Taxable — WI 5.5% <span class="muted" style="font-weight:400">(landscaping svc)</span></label>
-          <div></div>
         </div>
 
         <div class="mt">
@@ -693,7 +701,7 @@
             <option value="quoting">Bids (not booked yet)</option>
             <option value="booked">Booked</option>
             <option value="inprogress">In progress</option>
-            <option value="complete">Complete</option>
+            <option value="complete">Finished (and invoiced, paid)</option>
           </select>
           <input id="dashSearch" placeholder="Search…" oninput="renderDashboardSoon()">
         </div>
@@ -828,6 +836,18 @@
 
   <!-- ============ TAB 5: CONTACTS ============ -->
   <div class="tab-panel" id="panel-contacts">
+
+    <!-- The customer list from QuickBooks, which is also the call list
+         (customers.js). Hidden until the owner switches it on
+         (settings/customers.importOn); until then this tab is Contacts. -->
+    <div id="custOff" hidden></div>
+    <div class="section" id="custSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Customers</span>
+        <span class="section-badge accent" id="custBadge"></span>
+      </div>
+      <div class="section-body" id="custWrap"></div>
+    </div>
 
     <!-- Next season's outreach (prospects.js): the owner's start date, and
          from that day everyone on the list who is due to be reached. -->
@@ -1218,6 +1238,7 @@
 <script src="./billing.js"></script>
 <script src="./weather.js"></script>
 <script src="./prospects.js"></script>
+<script src="./customers.js"></script>
 <script src="./timeclock.js"></script>
 <script src="./worklog.js"></script>
 <script src="./problems.js"></script>

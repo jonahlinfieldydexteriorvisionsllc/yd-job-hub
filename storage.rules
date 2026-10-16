@@ -2,7 +2,7 @@ rules_version = '2';
 
 // YD Job Hub -- who may read and add files in Cloud Storage.
 //
-// The only files are job photos (jobphotos.js): jobPhotos/{jobId}/{photoId}.jpg
+// Job photos (jobphotos.js): jobPhotos/{jobId}/{photoId}.jpg
 // and a small copy, {photoId}_t.jpg. Each photo's record (stage, who, when)
 // is jobPhotos/{photoId} in Firestore, guarded by firestore.rules.
 //
@@ -38,6 +38,28 @@ service firebase.storage {
     match /receiptPhotos/{file} {
       allow read: if staff() && (me().role == 'owner'
         || (me().role == 'admin' && me().get(['access', 'jobs'], 'none') in ['see', 'change']));
+    }
+
+    // Files on calendar entries (calendar.js, Jonah 15 Oct 2026: "add
+    // attachments to calendar items"): calendarFiles/{calId}/{eventId}/{file}.
+    // Added and removed by whoever may change that calendar's entries, as
+    // firestore.rules decide it: the owner, an admin with Calendars "change"
+    // on a calendar that is neither private nor Personal (seeOnly), anyone
+    // ticked as its editor. Opened by anyone working for the business, as
+    // job photos are -- the path is only on the entry, which only those who
+    // can see the calendar can read, and an entry moved to the Crew schedule
+    // keeps its files where they were.
+    function changesCal(calId) {
+      return staff() && (me().role == 'owner'
+        || (me().role == 'admin' && me().get(['access', 'calendars'], 'none') == 'change'
+            && firestore.get(/databases/(default)/documents/calendars/$(calId)).data.get('ownerOnly', true) == false
+            && firestore.get(/databases/(default)/documents/calendars/$(calId)).data.get('seeOnly', false) != true)
+        || request.auth.uid in firestore.get(/databases/(default)/documents/calendars/$(calId)).data.get('editors', []));
+    }
+    match /calendarFiles/{calId}/{eventId}/{file} {
+      allow read: if staff();
+      allow create: if changesCal(calId) && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if changesCal(calId);
     }
 
     match /jobPhotos/{jobId}/{file} {

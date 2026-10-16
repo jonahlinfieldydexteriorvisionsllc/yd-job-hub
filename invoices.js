@@ -167,14 +167,16 @@
   function stateText(st, inv) {
     const dep = st.deposit ? 'Deposit' + (inv ? ' ' + money(depositOf(inv, st.job)) : '') : '';
     switch (st.kind) {
-      case 'unsent': return '<span class="inv-chip now">' + (st.rest ? 'Job done — email the bill for the rest'
+      // How soon, on the app's one scale: to do today orange, gone too long
+      // (time to call) red, waiting dashed, done an outline with a check.
+      case 'unsent': return '<span class="inv-chip due">' + (st.rest ? 'Job done — email the bill for the rest'
         : st.deposit ? 'Not emailed yet — send it for the deposit' : 'Not emailed yet — send it') + '</span>';
-      case 'due': return '<span class="inv-chip now">' + (dep ? dep + ' not paid — ' : '') +
+      case 'due': return '<span class="inv-chip due">' + (dep ? dep + ' not paid — ' : '') +
         (st.count ? 'reminder ' + (st.count + 1) + ' due' : (dep ? 'first reminder due' : 'First reminder due')) + '</span>';
       case 'call': return '<span class="inv-chip now">' + (dep ? dep + ' not paid — ' : '') + st.count + ' reminders sent — time to call</span>';
       case 'waiting': return '<span class="inv-chip info">Deposit paid — the rest is due when the job is done</span>';
       case 'later': return '<span class="inv-chip later">' + (dep ? dep + ' · ' : '') + (st.snoozed ? 'Put off until ' : 'Next reminder ') + esc(shortDay(st.next)) + '</span>';
-      default: return '<span class="inv-chip done">Paid</span>';
+      default: return '<span class="inv-chip done">✓ Paid</span>';
     }
   }
   // Which job here the invoice is for -- found by the job holding it, or the
@@ -272,18 +274,20 @@
   };
   window.invView = function (v) { view = ['todo', 'owed', 'paid'].indexOf(v) !== -1 ? v : 'todo'; render(); };
   // As search.js opens one: the job already in the form is just shown.
-  window.invOpenJob = function (jobId) {
+  window.invOpenJob = async function (jobId) {
     if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty &&
-        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(jobId);
   };
   window.invRemind = async function (id) {
     const inv = invoices[id];
     if (!inv || !changes() || busy[id] || !window.YDClaude) return;
     const st = stateOf(inv);
-    if (!confirm((st.kind === 'unsent' ? 'Email' : 'Email a reminder of') + ' invoice' + (inv.docNumber ? ' #' + inv.docNumber : '') +
-        ' (' + money(inv.balance) + ' owed) to ' + (inv.email || inv.customerName) + ' from QuickBooks?')) return;
+    // Goes to the customer, so it is asked every time.
+    if (!(await ydConfirm('Invoice' + (inv.docNumber ? ' #' + inv.docNumber : '') + ' (' + money(inv.balance) + ' owed) goes to ' +
+        (inv.email || inv.customerName) + ' from QuickBooks.',
+        { title: st.kind === 'unsent' ? 'Email the invoice?' : 'Email a reminder?', ok: 'Email it' }))) return;
+    if (busy[id]) return;
     busy[id] = true; render();
     try {
       await window.YDClaude.post('/qb/invoice-remind', { id: inv.id });
@@ -295,13 +299,21 @@
     }
   };
   // A call or a text counts as a reminder too, so the next one is timed from it.
-  window.invHand = function (id) {
+  // How, as a button each -- one tap; Other takes a few words.
+  const HAND_WAYS = [{ id: 'Called', label: 'Called' }, { id: 'Texted', label: 'Texted' },
+    { id: 'In person', label: 'In person' }, { id: 'Emailed', label: 'Emailed', hint: 'myself, not from QuickBooks' },
+    { id: 'Left a message', label: 'Left a message' }, { id: 'other', label: 'Other', ask: 'How, in a few words' }];
+  window.invHand = async function (id) {
+    if (!invoices[id] || !changes()) return;
+    const at = new Date().toISOString();
+    const pick = await ydChoose('How did you remind ' + (invoices[id].customerName || 'them') + '?', HAND_WAYS,
+      { title: 'Reminded them yourself' });
+    if (!pick) return;
     const inv = invoices[id];
-    if (!inv || !changes()) return;
-    const how = prompt('How did you remind them? (e.g. Called, Texted)', 'Called');
-    if (how === null) return;
+    if (!inv) return;
+    const how = pick.id === 'other' ? pick.text : pick.id;
     const me = (window.YDAuth && window.YDAuth.user && (window.YDAuth.user.displayName || window.YDAuth.user.email)) || '';
-    const hand = (inv.handReminders || []).concat([{ at: new Date().toISOString(), how: String(how).trim().slice(0, 60) || 'By hand', by: me }]);
+    const hand = (inv.handReminders || []).concat([{ at: at, how: String(how).trim().slice(0, 60) || 'By hand', by: me }]);
     inv.handReminders = hand;
     render();
     Promise.resolve(window.YDDb.put('invoices', inv.id, { handReminders: hand, updatedAt: new Date().toISOString() }))

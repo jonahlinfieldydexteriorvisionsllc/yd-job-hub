@@ -175,13 +175,15 @@
   window.setInvoiceStart = async function () {
     if (!ydCan('billing', 'change')) { showToast('Only someone who can change billing can set this'); return; }
     const cfg = await invoicing();
-    const v = prompt('What is the next invoice number in QuickBooks?\n\n' +
-      'Each exported invoice takes the next number from here, so they carry on ' +
+    const read = v => parseInt(String(v).replace(/[^0-9]/g, ''), 10);
+    const v = await ydPrompt('Each exported invoice takes the next number from here, so they carry on ' +
       'in order. Storms already exported keep the numbers they were given.',
-      cfg.nextInvoiceNo != null ? String(cfg.nextInvoiceNo) : '');
+      cfg.nextInvoiceNo != null ? String(cfg.nextInvoiceNo) : '', {
+        title: 'Next invoice number in QuickBooks', type: 'number', ok: 'Save',
+        check: v => read(v) > 0 ? '' : 'That is not a number' });
     if (v === null) return;
-    const n = parseInt(String(v).replace(/[^0-9]/g, ''), 10);
-    if (!(n > 0)) { showToast('That is not a number'); return; }
+    const n = read(v);
+    if (!(n > 0)) return;
     invoiceSettings = Object.assign({}, cfg, { nextInvoiceNo: n });
     // Not awaited: the promise waits for the server, so with a weak signal the
     // screen hung here. The number is in place locally at once and the next
@@ -309,9 +311,11 @@
     const s = storms[id], b = billingCache[id];
     if (!s) return;
     const numbered = b && b.invoiceNos ? Object.keys(b.invoiceNos).length : 0;
-    if (!confirm('Delete the storm of ' + stormTitle(s, id) + '?\n\nIts stops and its billing are deleted with it' +
+    if (!(await ydConfirm('Its stops and its billing are deleted with it' +
       (b ? ' (' + b.lines.length + ' visits, ' + money(b.totalCents) + ')' : '') + '. This cannot be undone.' +
-      (numbered ? '\n\n' + numbered + ' invoice number(s) were handed out for it — anything already sent to QuickBooks stays there.' : ''))) return;
+      (numbered ? '\n\n' + numbered + ' invoice number(s) were handed out for it — anything already sent to QuickBooks stays there.' : ''),
+      { title: 'Delete the storm of ' + stormTitle(s, id) + '?', ok: 'Delete the storm', danger: true }))) return;
+    if (!storms[id]) return;
     let stops = {}, priv = {};
     try {
       [stops, priv] = await Promise.all([window.YDDb.list('storms/' + id + '/stops'), window.YDDb.list('storms/' + id + '/private')]);

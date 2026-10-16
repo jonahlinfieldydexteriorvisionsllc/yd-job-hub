@@ -613,15 +613,19 @@
   // Who tapped Arrive and Depart is saved with the time (arrivedBy /
   // departedBy, the uid): it tells this phone which stop is its own, and
   // the office who was there.
-  window.arriveStop = function (id) {
-    const s = stops[id];
+  window.arriveStop = async function (id) {
+    let s = stops[id];
     if (!storm || !s || s.arrivedAt || s.skipped) return;
     const me = myUid();
     // Still on site somewhere else: nearly always a forgotten Depart, or
     // Arrive tapped on the wrong card.
     const here = me && Object.values(stops).find(x => x.id !== id && x.arrivedAt && !x.departedAt && !x.skipped && x.arrivedBy === me);
-    if (here && !confirm('You are still on site at ' + nameOf(here) + ' — nobody has departed it.\n\n' +
-        'Arrive at ' + nameOf(s) + ' as well?')) return;
+    if (here) {
+      if (!(await ydConfirm('You are still on site at ' + nameOf(here) + ' — nobody has departed it.',
+          { title: 'Arrive at ' + nameOf(s) + ' as well?', ok: 'Arrive here too', cancel: 'Not yet' }))) return;
+      s = stops[id];
+      if (!storm || !s || s.arrivedAt || s.skipped) return;
+    }
     const at = new Date().toISOString();
     if (skipping === id) skipping = null;
     scrollWanted = id;                     // this card, now its boxes are open
@@ -644,8 +648,6 @@
   window.notHere = function (id) {
     const s = stops[id];
     if (!storm || !s || !s.arrivedAt || s.departedAt) return;
-    const canUndo = typeof showUndo === 'function';
-    if (!canUndo && !confirm('Take back the arrival at ' + nameOf(s) + '?')) return;
     // Never undefined in a write: a field that was missing comes back as null.
     const was = { arrivedAt: s.arrivedAt, arrivedBy: s.arrivedBy || null,
                   arriveLat: num(s.arriveLat, null), arriveLng: num(s.arriveLng, null) };
@@ -735,14 +737,16 @@
     render();
   };
   window.skipCancel = function () { skipping = null; render(); };
-  window.skipWhy = function (id, i) {
-    const s = stops[id];
+  window.skipWhy = async function (id, i) {
+    let s = stops[id];
     if (!storm || !s || s.arrivedAt) { skipping = null; render(); return; }
     let why = SKIP_REASONS[i];
     if (i === -1) {
-      const typed = prompt('Why is ' + nameOf(s) + ' being skipped?');
+      const typed = await ydPrompt('', '', { title: 'Why is ' + nameOf(s) + ' being skipped?', placeholder: 'In a few words', ok: 'Skip it' });
       if (typed === null) return;
       why = typed.trim().slice(0, 200) || 'Other';
+      s = stops[id];
+      if (!storm || !s || s.arrivedAt) { skipping = null; render(); return; }
     }
     if (!why) return;
     skipping = null;
@@ -792,8 +796,9 @@
     const list = Object.values(stops).sort((a, b) => a.order - b.order);
     const worked = list.filter(s => s.departedAt && !s.skipped);
     if (!worked.length) { showToast('Nothing to run again yet'); return; }
-    if (!confirm('Run the route again?\n\nThis adds another billed visit for each of the ' +
-                 worked.length + ' stops done so far.')) return;
+    if (!(await ydConfirm('This adds another billed visit for each of the ' + worked.length + ' stops done so far.',
+        { title: 'Run the route again?', ok: 'Run it again' }))) return;
+    if (!storm) return;
 
     const seen = {};
     list.forEach(s => { seen[s.accountId] = Math.max(seen[s.accountId] || 0, s.pass || 1); });
@@ -818,7 +823,8 @@
     if (!s) return;
     // Every pass is billed, so a stray tap here would charge the customer
     // for a visit nobody made.
-    if (!confirm('Add another billed visit to ' + nameOf(s) + '?\n\nIt goes at the end of the list.')) return;
+    if (!(await ydConfirm('It goes at the end of the list.', { title: 'Add another billed visit to ' + nameOf(s) + '?', ok: 'Add a visit' }))) return;
+    if (!storm || !stops[id]) return;
     // The next pass for this customer is one past the HIGHEST pass they have,
     // not one past the card that was tapped. Tapping it on a pass-1 card after
     // "Run the route again" had already made pass 2 used to write a blank
@@ -1048,25 +1054,30 @@
   window.abandonStorm = async function () {
     if (!ydCan('snow', 'change')) return;
     if (!storm) return;
-    if (!confirm('Abandon this storm?\n\nThe record stays, but it will not be billed.')) return;
+    if (!(await ydConfirm('The record stays, but it will not be billed.', { title: 'Abandon this storm?', ok: 'Abandon it', danger: true }))) return;
+    if (!storm) return;
     writeSoon(window.YDDb.put('storms', storm.id, { status: 'abandoned', closedAt: new Date().toISOString() }), 'abandon');
   };
 
   window.closeStorm = async function () {
     if (!ydCan('billing', 'change') || !ydCan('hours', 'see')) return;
     if (!storm) return;
-    const list = sortedStops();
+    let list = sortedStops();
     // Always asked, with where the route stands: closing is final (the crew
     // can no longer change a number) and the button is one tap away.
     const doneN = list.filter(s => s.departedAt && !s.skipped).length;
     const skippedN = list.filter(s => s.skipped).length;
     const onSiteN = list.filter(s => s.arrivedAt && !s.departedAt && !s.skipped).length;
     const openN = list.length - doneN - skippedN;
-    if (!confirm('Close this storm and work out the billing?\n\n' +
-        doneN + ' done · ' + skippedN + ' skipped · ' + openN + ' still open' +
+    const closing = storm.id;
+    if (!(await ydConfirm(doneN + ' done · ' + skippedN + ' skipped · ' + openN + ' still open' +
         (onSiteN ? ' (' + onSiteN + ' on site — nobody has departed)' : '') + '\n\n' +
         (openN ? 'Stops still open are left off the bill. ' : '') +
-        'Once it is closed, the crew can no longer change its numbers.')) return;
+        'Once it is closed, the crew can no longer change its numbers.',
+        { title: 'Close this storm and work out the billing?', ok: 'Close the storm' }))) return;
+    // The storm on screen may have changed while the question was open.
+    if (!storm || storm.id !== closing) return;
+    list = sortedStops();       // a stop departed while it was asked is billed too
 
     // Every customer visited must have a price before the bill is frozen. A
     // visit with no pricing loaded used to be left off the bill without a
@@ -1078,8 +1089,8 @@
     // (✏️ Fix the numbers) before anything is billed, never guessed.
     const noDepth = worked.filter(s => num(s.inchesCleared, num(storm.accumulationInches, null)) == null);
     if (noDepth.length) {
-      alert('No inches were put in for:\n\n' + noDepth.map(s => accountFor(s).name || s.accountId).join('\n') +
-        '\n\nOpen each one, tap ✏️ Fix the numbers, put in the inches, then close the storm.');
+      ydAlert(noDepth.map(s => accountFor(s).name || s.accountId).join('\n') +
+        '\n\nOpen each one, tap ✏️ Fix the numbers, put in the inches, then close the storm.', { title: 'No inches were put in for…' });
       return;
     }
     await YDSnow.refreshPricing(Array.from(new Set(worked.map(s => s.accountId))));
@@ -1091,9 +1102,10 @@
       return !p || (!(p.plowCents + p.saltCents > 0) && !hourly);
     };
     const unpriced = Array.from(new Set(worked.filter(noPrice).map(s => (accountFor(s).name || s.accountId))));
-    if (unpriced.length && !confirm('No price could be found for:\n\n' + unpriced.join('\n') +
-        '\n\nThey would be left off this storm’s bill. Close anyway?\n\n' +
-        '(Cancel, check their pricing on the Snow tab, then close again.)')) return;
+    if (unpriced.length && !(await ydConfirm(unpriced.join('\n') +
+        '\n\nThey would be left off this storm’s bill. Or go back, check their pricing on the Snow tab, then close again.',
+        { title: 'No price could be found for…', ok: 'Close anyway', cancel: 'Go back', danger: true }))) return;
+    if (!storm || storm.id !== closing) return;
 
     const lines = [];
     let revenue = 0, salt = 0, minutes = 0, pausedTotal = 0;
@@ -1154,12 +1166,11 @@
       ['storms/' + storm.id + '/private', 'billing', billing],
       ['storms', storm.id, { status: 'closed', closedAt: new Date().toISOString() }],
     ]), 'storm close');
-    alert('Storm closed.\n\n' +
-      lines.length + ' billable visit' + (lines.length === 1 ? '' : 's') + '\n' +
+    ydAlert(lines.length + ' billable visit' + (lines.length === 1 ? '' : 's') + '\n' +
       'Revenue: $' + (revenue / 100).toFixed(2) + '\n' +
       (salt ? 'of which salt: $' + (salt / 100).toFixed(2) + '\n' : '') +
       'Crew hours: ' + billing.crewHours + '\n' +
-      'Per crew-hour: $' + (billing.revenuePerCrewHourCents / 100).toFixed(2));
+      'Per crew-hour: $' + (billing.revenuePerCrewHourCents / 100).toFixed(2), { title: 'Storm closed' });
   };
 
   // ---------------------------------------------------------------- watching
@@ -1279,8 +1290,9 @@
 
   window.setStartPoint = async function () {
     if (!ydCan('snow', 'change')) { showToast('Changing this needs Snow access'); return; }
-    const addr = prompt('Where does the route start from?\n\n(your yard or wherever the truck leaves)',
-                        startPoint.label === 'Madison (yard not set)' ? '' : startPoint.label);
+    const addr = await ydPrompt('Your yard, or wherever the truck leaves from.',
+                        startPoint.label === 'Madison (yard not set)' ? '' : startPoint.label,
+                        { title: 'Where does the route start from?', placeholder: 'Street, town', ok: 'Save' });
     if (addr === null || !addr.trim()) return;
     showToast('Finding that address…');
     const geo = await window.YDSnowGeocode(addr.trim());
