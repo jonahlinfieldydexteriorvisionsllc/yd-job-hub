@@ -249,6 +249,8 @@
     if (!window.YDDb || !key) return;
     Promise.resolve(window.YDDb.get('settings', 'public')).then(pub => {
       if (watchKey !== key) return;
+      // The machines' names, for Equipment repair (same record, read anyway).
+      pubMachines = (pub && pub.equipmentList) || {};
       const h = pub && pub.clock && pub.clock.autoOutHours;
       const next = typeof h === 'number' && h >= AUTO_OUT_MIN && h <= AUTO_OUT_MAX ? h : AUTO_OUT_DEFAULT;
       if (next !== autoOutHours) { autoOutHours = next; render(); }
@@ -298,7 +300,19 @@
   // pause to withhold and the button is not offered.
   const BILLABLE_KINDS = ['job', 'storm'];
   const canPause = e => BILLABLE_KINDS.indexOf(e.kind) !== -1;
-  const OVERHEAD_LABEL = { snow: 'Snow', labor: 'Labor', receipts: 'Receipts' };
+  // The words the crew read. The stored kinds stay 'labor' and 'receipts' so
+  // every old shift still reads right; only what is SHOWN changed (Jonah,
+  // 15 Oct 2026: "Labor" and "Receipts" confused the crew). 'repair' is time
+  // on a machine (or the shop), kept apart so that in a few years each kind
+  // of repair has real hours behind it for budgeting. Paid, never billable.
+  const OVERHEAD_LABEL = { snow: 'Snow', labor: 'Shop / yard work', receipts: 'Pickups + errands', repair: 'Equipment repair' };
+  // Where a shift was, as it reads now. Shop and errand shifts stored the old
+  // words as their name, so theirs is always the label of their kind.
+  function whereOf(e) {
+    if (!e) return '';
+    if (e.kind === 'labor' || e.kind === 'receipts') return OVERHEAD_LABEL[e.kind];
+    return e.targetName || OVERHEAD_LABEL[e.kind] || 'Other';
+  }
   const openPause = e => (e.pauses || []).find(p => !p.endedAt) || null;
   // The rate on the user record is the old place for it, read until the move
   // to payRates has happened (see moveRates).
@@ -353,7 +367,9 @@
 
   // ---------------------------------------------------------------- clock in
 
-  window.clockInTo = function (kind, targetId, targetName) {
+  // `extra`: what a repair shift is on (repairFields) -- the machine, and the
+  // problem on it if one was picked. Nothing else rides along.
+  window.clockInTo = function (kind, targetId, targetName, extra) {
     const u = me();
     if (!u) return;
     // A clock-out still in its few seconds for Undo goes first, as tapped:
@@ -389,8 +405,9 @@
       status: 'running',
       createdBy: u.uid,
     };
+    if (kind === 'repair') Object.assign(rec, repairFields(extra));
     entries[id] = Object.assign({ id: id }, rec);
-    picking = false; clockingFor = null;
+    picking = false; clockingFor = null; repairPick = null;
     render();
     write(id, rec, 'clocking in');
     showToast('Clocked in — ' + targetName);
@@ -399,6 +416,7 @@
   window.openJobPicker = function (forUid) {
     clockingFor = forUid || null;
     picking = true;
+    repairPick = null;
     // The forgotten-shift form is drawn in the same place and takes priority,
     // so left open it would hide the picker that was just asked for.
     addingShift = false; addFor = null;
@@ -417,6 +435,7 @@
 
   window.openAddShift = function (forUid) {
     addFor = forUid || null;
+    loadMachines();
     addingShift = true;
     picking = false;
     render();
@@ -452,8 +471,33 @@
   // Picked at last: the "pick one" mark goes.
   window.asTargetPicked = function () {
     const f = el('asTargetField');
-    if (f && (el('asTarget') || {}).value) f.classList.remove('cl-missing');
+    const v = (el('asTarget') || {}).value || '';
+    if (f && v) f.classList.remove('cl-missing');
+    asRepairFill(v);
   };
+  // Under the choice, for a repair only: the machine's open problems (none
+  // picked = something else on it), or the shop's "what" box. Filled only
+  // when the choice changes, so nothing typed there is lost to a redraw.
+  let asRepairFor = '';
+  function asRepairFill(v) {
+    const box = el('asRepair');
+    if (!box || v === asRepairFor) return;
+    asRepairFor = v;
+    if (v.indexOf('repair|') !== 0) { box.innerHTML = ''; return; }
+    const id = v.slice(7);
+    if (id === 'shop') {
+      box.innerHTML = '<div class="field" id="asRepairWhatField"><span class="label">What were you repairing?</span>' +
+        '<input id="asRepairWhat" maxlength="120" placeholder="e.g. welding the trailer gate"></div>';
+      return;
+    }
+    const probs = openProblems(id);
+    box.innerHTML = probs.length
+      ? '<div class="field"><span class="label">Which problem?</span><select id="asIssue">' +
+          '<option value="">Something else on it</option>' +
+          probs.map(i => '<option value="' + esc(i.id) + '">' + esc(i.what) + '</option>').join('') +
+        '</select></div>'
+      : '';
+  }
 
   // Each choice carries only its kind and id; the name is looked up when the
   // shift is sent. Carrying the name too, split on '|', cut short any job whose
@@ -469,11 +513,16 @@
     const opt = j => '<option value="job|' + esc(j.id) + '">' + esc(jobName(j)) + (j.status === 'complete' ? ' (finished)' : '') + '</option>';
     // Nothing picked to start with. With Labor first and already chosen, a
     // shift sent without looking went in as Labor -- paid, but on no job.
+    const machines = machineList();
     return '<option value="">— Pick what you were on —</option>' +
-      '<option value="labor|labor">Labor</option>' +
+      '<option value="labor|labor">' + OVERHEAD_LABEL.labor + '</option>' +
       (storm && storm.id ? '<option value="storm|' + esc(storm.id) + '">❄ ' + esc(stormName(storm)) + '</option>' : '') +
       '<option value="snow|snow">Snow</option>' +
-      '<option value="receipts|receipts">Receipts</option>' +
+      '<option value="receipts|receipts">' + OVERHEAD_LABEL.receipts + '</option>' +
+      '<optgroup label="Equipment repair">' +
+        machines.map(m => '<option value="repair|' + esc(m.id) + '">🔧 ' + esc(m.name) + '</option>').join('') +
+        '<option value="repair|shop">🔧 The shop / other</option>' +
+      '</optgroup>' +
       (open.length ? '<optgroup label="Jobs">' + open.map(opt).join('') + '</optgroup>' : '') +
       (done.length ? '<optgroup label="Finished jobs">' + done.map(opt).join('') + '</optgroup>' : '');
   }
@@ -490,6 +539,7 @@
     const today = new Date();
     const iso = d => d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
     asOptions = targetOptions();
+    asRepairFor = '';
 
     // Says whose it is when it is filed for somebody else, so it cannot be
     // mistaken for one's own.
@@ -499,6 +549,8 @@
         : 'A shift you forgot to clock in for') + '</p>' +
       '<div class="field" id="asTargetField"><span class="label">What were you on?</span>' +
         '<select id="asTarget" class="searchable" onchange="asTargetPicked()">' + asOptions + '</select></div>' +
+      // A repair: which problem on the machine, or what in the shop.
+      '<div id="asRepair"></div>' +
       '<div class="field"><span class="label">Day</span>' +
         '<input type="date" id="asDate" value="' + iso(today) + '" max="' + iso(today) + '"></div>' +
       '<div class="grid g2">' +
@@ -541,7 +593,7 @@
         f.classList.add('cl-missing');
         if (f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' });
       }
-      showToast('Pick what you were on first — Labor, Snow, Receipts or a job');
+      showToast('Pick what you were on first — shop / yard work, snow, pickups, a repair or a job');
       return;
     }
     if (!day || !from || !to) { showToast('Fill in the day and both times'); return; }
@@ -568,8 +620,29 @@
       showToast('That is in the future'); return;
     }
 
+    // A repair: the machine and its problem, or what was done in the shop.
+    let repair = null;
+    if (kind === 'repair') {
+      if (targetId === 'shop') {
+        const what = String((el('asRepairWhat') || {}).value || '').trim();
+        if (!what) {
+          const f = el('asRepairWhatField');
+          if (f) { f.classList.add('cl-missing'); if (f.scrollIntoView) f.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+          showToast('Say what you were repairing'); return;
+        }
+        repair = { repairWhat: what };
+      } else {
+        const issueId = (el('asIssue') || {}).value || '';
+        const issue = issueId ? openProblems(targetId).find(i => i.id === issueId) : null;
+        repair = { equipmentId: targetId, equipmentName: machineName(targetId),
+                   issueId: issue ? issue.id : null, issueWhat: issue ? issue.what : null };
+      }
+    }
+
     const storm = kind === 'storm' && window.YDStorm ? YDStorm.current() : null;
-    const targetName = storm && storm.id === targetId ? stormName(storm) : nameFor(kind, targetId);
+    const targetName = storm && storm.id === targetId ? stormName(storm)
+      : repair ? repairName(repair.equipmentId, repair.equipmentName, repair.issueWhat, String(repair.repairWhat || '').slice(0, 120))
+      : nameFor(kind, targetId);
     const id = 'te' + Date.now().toString(36) + Math.floor(Math.random() * 1000);
     const rec = {
       uid: forUid,
@@ -588,13 +661,14 @@
     // crew_shifts) so it is approved while the day is remembered; one he
     // typed in himself needs no telling.
     if (!isOwner()) rec.notifiedAt = null;
+    if (repair) Object.assign(rec, repairFields(repair));
     entries[id] = Object.assign({ id: id }, rec);
     addingShift = false; addFor = null;
     render();
     write(id, rec, 'submitting a shift');
     showToast('Sent in — ' + fmtDur(endMs - startMs) + ' on ' + targetName);
   };
-  window.cancelJobPicker = function () { picking = false; clockingFor = null; render(); };
+  window.cancelJobPicker = function () { picking = false; clockingFor = null; repairPick = null; render(); };
 
   // ----------------------------------------------------------- pause/resume
 
@@ -782,8 +856,8 @@
       YDStorm.current().id === b.targetId && YDStorm.current().status === 'open');
     if (stormGone || (b.kind === 'job' && !board[b.targetId])) { window.openJobPicker(); return; }
     const was = fmtDur(Date.now() - endMsOf(b));
-    window.clockInTo(b.kind, b.targetId, b.targetName);
-    showToast('Back on — ' + b.targetName + ' (break ' + was + ')');
+    clockInAgain(b);
+    showToast('Back on — ' + whereOf(b) + ' (break ' + was + ')');
   };
   // "Done for the day" ends the break on the shift itself (breakOverAt), so
   // the office and the snow bill see it too -- on this phone alone, a storm
@@ -815,7 +889,7 @@
   window.clockOutWorker = function (id) {
     const e = entries[id];
     if (!e || !running(e) || !(mayDecide(e) || e.uid === (me() || {}).uid)) return;
-    if (!confirm('Clock out ' + workerOf(e) + '?\n\n' + (e.targetName || 'On the clock') + ' — ' + fmtDur(paidMs(e)) +
+    if (!confirm('Clock out ' + workerOf(e) + '?\n\n' + whereOf(e) + ' — ' + fmtDur(paidMs(e)) +
         ' so far (in ' + sinceWords(e.startedAt) + ').')) return;
     if (leavingNow(id)) { clearTimeout(leaving.timer); leaving = null; }
     finishClockOut(id);
@@ -940,6 +1014,7 @@
         asOptions = opts;
         sel.value = keep;
         if (sel.selectedIndex < 0) sel.selectedIndex = 0;   // that job has gone
+        asRepairFill(sel.value);
       }
       return;
     }
@@ -955,6 +1030,9 @@
       // across.
       const box = el('clockSearch');
       if (box && document.activeElement === box) { filterJobPicker(); return; }
+      // Typing what is being repaired in the shop: left alone the same way.
+      const note = el('rpNote');
+      if (note && document.activeElement === note) return;
       const typed = box ? box.value : '';
       wrap.innerHTML = pickerHtml();
       cardDrawn = null;
@@ -981,7 +1059,7 @@
       '<div class="clock-sub">since ' + clockTime(b.endedAt) + ' · off the clock, not paid</div>' +
       '<div class="clock-actions">' +
         '<button class="btn btn-filled clock-big" onclick="backFromBreak(\'' + id + '\')">Clock back in — ' +
-          esc(b.targetName) + '</button>' +
+          esc(whereOf(b)) + '</button>' +
         '<button class="btn btn-sm" onclick="openJobPicker()">Clock in to something else</button>' +
         '<button class="btn btn-sm" onclick="endBreakDay(\'' + id + '\')">Done for the day</button>' +
         // The same way out as when not on the clock at all: a shift that
@@ -1010,7 +1088,7 @@
   function leavingHtml(e) {
     const brk = leaving.what === 'break';
     return '<div class="clock-live clock-leaving">' +
-      '<div class="clock-where">' + esc(e.targetName) + '</div>' +
+      '<div class="clock-where">' + esc(whereOf(e)) + '</div>' +
       '<div class="clock-elapsed">' + fmtDur(Math.max(0, leaving.atMs - startMsOf(e))) + '</div>' +
       '<div class="clock-sub">' + (brk ? '🍔 Going on break — off the clock…' : 'Clocking out…') + '</div>' +
       '<div class="clock-actions">' +
@@ -1024,7 +1102,7 @@
     const p = openPause(e);
     const paid = paidMs(e), bill = billableMs(e);
     return '<div class="clock-live' + (p ? ' paused' : '') + '">' +
-      '<div class="clock-where">' + esc(e.targetName) +
+      '<div class="clock-where">' + esc(whereOf(e)) +
         (e.kind === 'storm' ? ' <span class="clock-kind">storm</span>' : '') +
         (OVERHEAD_LABEL[e.kind] ? ' <span class="clock-kind">not a job</span>' : '') + '</div>' +
       '<div class="clock-elapsed" data-live-entry="' + safeId(e.id) + '">' + fmtDur(paid) + '</div>' +
@@ -1089,9 +1167,9 @@
     const a = myAutoStop();
     if (!a) return '';
     return '<div class="clock-pausenote clock-limit">' + (a.autoReason === 'storm'
-      ? '❄️ The storm’s last property was done at ' + dayTime(a.endedAt) + ', so your shift on <b>' + esc(a.targetName) +
+      ? '❄️ The storm’s last property was done at ' + dayTime(a.endedAt) + ', so your shift on <b>' + esc(whereOf(a)) +
         '</b> ended then.' + (a.status === 'pending' ? ' Over ' + LONG_SHIFT_HOURS + ' hours, so it goes to the office to check.' : '')
-      : '⏱ Nobody clocked out of <b>' + esc(a.targetName) + '</b> (in ' +
+      : '⏱ Nobody clocked out of <b>' + esc(whereOf(a)) + '</b> (in ' +
       dayTime(a.startedAt) + '), so the clock stopped it at ' + hoursWord(a.autoLimitHours || autoOutHours) +
       ' — ' + dayTime(a.endedAt) + '. It goes to the office to check.') +
       '<div class="field-actions">' +
@@ -1108,7 +1186,8 @@
     mine().filter(e => e.endedAt)
       .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)))
       .forEach(e => {
-        const key = e.kind + ':' + e.targetId;
+        // A repair on another problem on the same machine is another place.
+        const key = e.kind + ':' + e.targetId + ':' + (e.issueId || '');
         if (seen[key] || out.length >= 3) return;
         if (e.kind === 'job' && !board[e.targetId]) return;   // job is gone
         // A storm is only somewhere to go back to while it is still running;
@@ -1121,9 +1200,21 @@
       });
     if (!out.length) return '';
     return '<div class="clock-recent"><p class="clock-lead">Back to where you were</p>' +
-      out.map(e => '<button class="btn" onclick="clockInTo(\'' + safeId(e.kind) + '\', \'' +
-        safeId(e.targetId) + '\')">' + esc(e.targetName) + '</button>').join('') + '</div>';
+      out.map(e => '<button class="btn" onclick="clockInLike(\'' + safeId(e.id) + '\')">' +
+        esc(whereOf(e)) + '</button>').join('') + '</div>';
   }
+
+  // Back on what an earlier shift was on: the same kind and place, and for a
+  // repair the same machine and problem. Shop and errand shifts take the
+  // words of today (their stored names are the old ones).
+  function clockInAgain(e) {
+    const name = e.kind === 'labor' || e.kind === 'receipts' ? '' : e.targetName;
+    window.clockInTo(e.kind, e.targetId, name, e.kind === 'repair' ? e : null);
+  }
+  window.clockInLike = function (id) {
+    const e = entries[id] || older[id];
+    if (e) clockInAgain(e);
+  };
 
   // Ids go into onclick handlers, and some of them come from crew phones. Only
   // the characters our own ids are made of get through; anything else could
@@ -1140,10 +1231,146 @@
   function nameFor(kind, id) {
     if (kind === 'job') return board[id] ? jobName(board[id]) : 'Job';
     if (kind === 'storm') return 'Tonight’s storm';
+    if (kind === 'repair') return repairName(id === 'shop' ? null : id, machineName(id), '', '');
     return OVERHEAD_LABEL[kind] || 'Other';
   }
 
+  // ------------------------------------------------------ equipment repair
+  //
+  // Clocking in to a repair asks which machine (or the shop), then which of
+  // its open problems, so the hours land on that machine and that problem.
+  // The Equipment tab adds them up per machine. Without the machine the
+  // hours would say nothing about what repairs cost us in time.
+
+  let repairPick = null;      // null; 'machine' (choosing one); or { id, name } (choosing its problem); 'shop'
+  let repairNote = '';        // what is being worked on in the shop, as typed
+  let pubMachines = null;     // settings/public.equipmentList: names the crew may read
+
+  // Whoever may see the machines reads them; the crew read the names the
+  // office publishes for them (equipment.js publishNames).
+  function machineList() {
+    const own = window.YDEquipment && ydCan('equipment', 'see') ? (YDEquipment.all() || {}) : null;
+    const src = own && Object.keys(own).length ? own : (pubMachines || {});
+    const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
+    return Object.keys(src).filter(id => src[id])
+      .map(id => ({ id: id, name: String(src[id].name || 'Machine') }))
+      .sort((a, b) => byName(a.name, b.name));
+  }
+  function machineName(id) {
+    return ((machineList().find(m => m.id === id) || {}).name) || '';
+  }
+  function loadMachines() {
+    if (!window.YDDb) return;
+    Promise.resolve(window.YDDb.get('settings', 'public')).then(pub => {
+      pubMachines = (pub && pub.equipmentList) || {};
+      if (repairPick || addingShift) render();
+    }).catch(() => { /* offline with nothing cached: whatever was read before */ });
+  }
+
+  // The problems still open on a machine: from the machine itself for those
+  // who read it, else from its cards on the Maintenance board (shared with
+  // the crew). A card added in the shop and not yet put on its machine
+  // (eqc...) already has the problem id it will get (equipment.js).
+  function openProblems(id) {
+    const g = window.YDEquipment && ydCan('equipment', 'see') ? (YDEquipment.all() || {})[id] : null;
+    if (g) return (g.issues || []).filter(i => i && !i.doneAt)
+      .map(i => ({ id: String(i.id), what: String(i.what || 'Problem') }));
+    const B = window.YDBoards;
+    if (!B || !B.cards || !B.boards) return [];
+    const b = (B.boards() || {}).maintenance, cs = (B.cards() || {}).maintenance || {};
+    const done = b && B.doneCol ? B.doneCol(b) : null;
+    const out = [], seen = {};
+    Object.keys(cs).forEach(cid => {
+      const k = cs[cid];
+      if (!k || k.equipmentId !== id || (done && k.column === done)) return;
+      const issueId = k.issueId || (cid.indexOf('eqc') === 0 ? 'is' + cid.slice(3) : '');
+      if (!issueId || seen[issueId]) return;
+      seen[issueId] = 1;
+      out.push({ id: String(issueId), what: String(k.what || String(k.title || '').replace(/^.*? — /, '') || 'Problem') });
+    });
+    return out;
+  }
+
+  function repairName(machineId, mName, issueWhat, note) {
+    const what = issueWhat || note;
+    return 'Repair — ' + (machineId ? (mName || 'Machine') : 'The shop') + (what ? ': ' + what : '');
+  }
+  // What a repair shift carries, every key always written (null when not
+  // known) so a switch from one repair to another never keeps the last one's.
+  function repairFields(x) {
+    x = x || {};
+    const str = (v, n) => (v == null || String(v).trim() === '' ? null : String(v).trim().slice(0, n));
+    return {
+      equipmentId: str(x.equipmentId, 80),
+      equipmentName: str(x.equipmentName, 80),
+      issueId: str(x.issueId, 80),
+      issueWhat: str(x.issueWhat, 120),
+      repairWhat: str(x.repairWhat, 120),
+    };
+  }
+
+  window.openRepairPick = function () {
+    repairPick = 'machine'; repairNote = '';
+    loadMachines();
+    render();
+  };
+  window.repairBack = function () {
+    repairPick = repairPick && repairPick !== 'machine' ? 'machine' : null;
+    render();
+  };
+  window.repairMachine = function (id) {
+    const m = machineList().find(x => x.id === id);
+    if (!m) return;
+    // Nothing open on it: straight on the clock, no second question.
+    if (!openProblems(id).length) { window.repairClockIn(id, ''); return; }
+    repairPick = { id: m.id, name: m.name };
+    render();
+  };
+  window.repairShop = function () { repairPick = 'shop'; render(); };
+  window.repairNoteTyped = function (v) { repairNote = String(v || ''); };
+  window.repairClockIn = function (machineId, issueId) {
+    const name = machineName(machineId);
+    const issue = issueId ? openProblems(machineId).find(i => i.id === issueId) : null;
+    const extra = { equipmentId: machineId, equipmentName: name, issueId: issue ? issue.id : null, issueWhat: issue ? issue.what : null };
+    window.clockInTo('repair', machineId, repairName(machineId, name, extra.issueWhat, ''), extra);
+  };
+  window.repairShopIn = function () {
+    const note = String((el('rpNote') || {}).value || repairNote || '').trim();
+    if (!note) { showToast('Say what you are working on first'); const b = el('rpNote'); if (b) b.focus(); return; }
+    window.clockInTo('repair', 'shop', repairName(null, '', '', note.slice(0, 120)), { repairWhat: note });
+  };
+
+  function repairHtml() {
+    const back = '<div class="field-actions"><button class="btn btn-sm" onclick="repairBack()">‹ Back</button>' +
+      '<button class="btn btn-sm" onclick="cancelJobPicker()">Cancel</button></div>';
+    if (repairPick === 'shop') {
+      return '<div class="picker"><p class="clock-lead">🔧 What are you working on in the shop?</p>' +
+        '<input id="rpNote" class="picker-search" maxlength="120" placeholder="e.g. sharpening mower blades, welding the trailer gate" ' +
+          'value="' + esc(repairNote) + '" oninput="repairNoteTyped(this.value)" onkeydown="if(event.key===\'Enter\')repairShopIn()">' +
+        '<button class="btn btn-filled clock-big" onclick="repairShopIn()">Clock in</button>' + back + '</div>';
+    }
+    if (repairPick && repairPick.id) {
+      const probs = openProblems(repairPick.id);
+      return '<div class="picker"><p class="clock-lead">🔧 ' + esc(repairPick.name) + ' — which problem?</p>' +
+        '<div class="repair-grid">' +
+          probs.map(i => '<button class="picker-kind" onclick="repairClockIn(\'' + safeId(repairPick.id) + '\', \'' +
+            safeId(i.id) + '\')">' + esc(i.what) + '</button>').join('') +
+          '<button class="picker-kind kind-labor" onclick="repairClockIn(\'' + safeId(repairPick.id) + '\', \'\')">' +
+            'Something else on it</button>' +
+        '</div>' + back + '</div>';
+    }
+    const list = machineList();
+    return '<div class="picker"><p class="clock-lead">🔧 What are you repairing?</p>' +
+      '<div class="repair-grid">' +
+        list.map(m => '<button class="picker-kind" onclick="repairMachine(\'' + safeId(m.id) + '\')">' + esc(m.name) + '</button>').join('') +
+        '<button class="picker-kind kind-labor" onclick="repairShop()">The shop / other</button>' +
+      '</div>' +
+      (list.length ? '' : '<p class="hint">No machines listed yet' + (pubMachines === null ? ' — still loading' : '') + '.</p>') +
+      back + '</div>';
+  }
+
   function pickerHtml() {
+    if (repairPick) return repairHtml();
     const storm = window.YDStorm && YDStorm.current();
     const stormOpen = storm && storm.status === 'open';
 
@@ -1162,8 +1389,11 @@
         (stormOpen
           ? kindBtn('storm', storm.id, 'Tonight’s storm', '❄️', 'kind-snow')
           : kindBtn('snow', 'snow', 'Snow', '❄️', 'kind-snow')) +
-        kindBtn('labor', 'labor', 'Labor', '🛠️', 'kind-labor') +
-        kindBtn('receipts', 'receipts', 'Receipts', '🧾', 'kind-receipts') +
+        kindBtn('labor', 'labor', OVERHEAD_LABEL.labor, '🛠️', 'kind-labor') +
+        kindBtn('receipts', 'receipts', OVERHEAD_LABEL.receipts, '🚚', 'kind-receipts') +
+        // Asks which machine next, so not straight onto the clock.
+        '<button class="picker-kind kind-labor" onclick="openRepairPick()"><span class="kind-icon">🔧</span>' +
+          OVERHEAD_LABEL.repair + '</button>' +
       '</div>' +
       '<p class="clock-lead picker-or">… or a job</p>' +
       '<input id="clockSearch" class="picker-search" placeholder="Search every job…" oninput="filterJobPicker()">' +
@@ -1275,7 +1505,7 @@
     wrap.innerHTML = (live.length || breaks.length
       ? breaks.map(b => '<div class="on-now paused">' +
           '<button class="on-who linkish" onclick="openWorker(\'' + safeId(b.uid) + '\')">' + esc(workerOf(b)) + '</button>' +
-          '<span class="on-where">' + esc(b.targetName) + '</span>' +
+          '<span class="on-where">' + esc(whereOf(b)) + '</span>' +
           '<span class="on-time">🍔 on break <span data-live-break="' + safeId(b.id) + '">' +
             fmtDur(Date.now() - endMsOf(b)) + '</span></span>' +
         '</div>').join('') +
@@ -1284,7 +1514,7 @@
           return '<div class="on-now' + (p ? ' paused' : '') + '">' +
             '<button class="on-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
               esc(workerOf(e)) + '</button>' +
-            '<span class="on-where">' + esc(e.targetName) + '</span>' +
+            '<span class="on-where">' + esc(whereOf(e)) + '</span>' +
             '<span class="on-time"><span data-live-entry="' + safeId(e.id) + '">' + fmtDur(paidMs(e)) + '</span>' +
               (p ? ' · paused (' + esc(p.reason) + ')' : '') +
               // Forgot to clock out, most likely: the clock stops it soon.
@@ -1332,7 +1562,7 @@
         return '<button class="picker-job" onclick="clockInWorker(\'' + safeId(uid) + '\')">' +
           '<span class="picker-name">' + esc(whoIs(uid)) + '</span>' +
           '<span class="picker-addr">' + (on
-            ? 'On the clock at ' + esc(on.targetName) + ' — this moves them'
+            ? 'On the clock at ' + esc(whereOf(on)) + ' — this moves them'
             : esc(people[uid].email || '')) + '</span>' +
         '</button>';
       }).join('') +
@@ -1357,6 +1587,24 @@
     if (card && card.scrollIntoView) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   };
 
+  // Shifts to approve go at the very top of the Clock tab, above his own
+  // clock, whenever there are any he can decide (Jonah, 15 Oct 2026: "show
+  // shifts for approval first on my clock tab"). With nothing to decide the
+  // section goes back to its place after On the Clock Now. Moved, not
+  // redrawn, so nothing inside it is lost.
+  function placeApprovals(sec, first) {
+    const panel = el('panel-clock');
+    if (!sec || !panel || sec.parentNode !== panel) return;
+    if (first) {
+      if (panel.firstElementChild !== sec) panel.insertBefore(sec, panel.firstElementChild);
+      sec.classList.add('appr-first');
+    } else if (sec.classList.contains('appr-first')) {
+      const after = el('clockOnNowSection');
+      if (after && after.parentNode === panel) panel.insertBefore(sec, after.nextSibling);
+      sec.classList.remove('appr-first');
+    }
+  }
+
   function renderApprovals() {
     const wrap = el('approveWrap');
     if (!wrap) return;
@@ -1371,6 +1619,7 @@
     if (badge) badge.textContent = waiting.length + nAsked ? (waiting.length + nAsked) + ' waiting' : '';
     const sec = el('clockApproveSection');
     if (sec) sec.hidden = false;
+    placeApprovals(sec, waiting.some(mayDecide) || nAsked > 0);
 
     if (!waiting.length && !nAsked) {
       wrap.innerHTML = '<p class="empty-msg">Nothing waiting. Ordinary clocked shifts ' +
@@ -1387,7 +1636,7 @@
         '<div class="appr-top">' +
           '<button class="appr-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
             esc(workerOf(e)) + '</button>' +
-          '<span class="appr-where">' + esc(e.targetName) + '</span>' +
+          '<span class="appr-where">' + esc(whereOf(e)) + '</span>' +
           '<span class="appr-why">' + whyFlagged(e) + '</span>' +
         '</div>' +
         (e.note ? '<div class="appr-note">“' + esc(e.note) + '”</div>' : '') +
@@ -2309,7 +2558,7 @@
           '</div>') +
 
       (live
-        ? '<div class="wk-live">On the clock now — <strong>' + esc(live.targetName) +
+        ? '<div class="wk-live">On the clock now — <strong>' + esc(whereOf(live)) +
           '</strong>, <span data-live-entry="' + safeId(live.id) + '">' + fmtDur(paidMs(live)) + '</span>' +
           (openPause(live) ? ' · paused for ' + esc(openPause(live).reason) : '') + '</div>'
         : '');
@@ -2423,7 +2672,7 @@
   function askHtml(e) {
     return '<div class="add-area wk-ask">' +
       '<div class="add-label">Ask for a change to ' + new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
-        ' · ' + esc(e.targetName || '') + ' (' + clockTime(e.startedAt) + '–' + clockTime(e.endedAt) + ')</div>' +
+        ' · ' + esc(whereOf(e)) + ' (' + clockTime(e.startedAt) + '–' + clockTime(e.endedAt) + ')</div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Should have started</span><input type="time" id="crStart" value="' + hm(e.startedAt) + '"></div>' +
         '<div class="field"><span class="label">Should have ended</span><input type="time" id="crEnd" value="' + hm(e.endedAt) + '"></div>' +
@@ -2658,7 +2907,7 @@
     return '<div class="wk-sc shift-' + esc(e.status) + '">' +
       '<div class="wk-sc-top"><b>' + when.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) + '</b>' +
         '<span class="shift-flag ' + esc(e.status) + '">' + flagWords(e) + '</span></div>' +
-      '<div class="wk-sc-where">' + esc(e.targetName) + '</div>' +
+      '<div class="wk-sc-where">' + esc(whereOf(e)) + '</div>' +
       '<div class="wk-sc-time">' + clockTime(e.startedAt) +
         (!e.endedAt ? ' — still on'
           : '–' + (new Date(e.endedAt).toDateString() !== when.toDateString()
@@ -2684,7 +2933,7 @@
           : '–' + (new Date(e.endedAt).toDateString() !== when.toDateString()
             ? new Date(e.endedAt).toLocaleDateString('en-US', { weekday: 'short' }) + ' ' : '') + clockTime(e.endedAt)) +
         '</span></td>' +
-      '<td class="bold">' + esc(e.targetName) +
+      '<td class="bold">' + esc(whereOf(e)) +
         (pause ? '<span class="shift-pause">' + fmtDur(pause) + ' paused</span>' : '') +
         (autoStopped(e) ? '<span class="shift-pause">⏱ no clock-out — stopped by the clock</span>' : '') +
         rejectedHtml(e) + '</td>' +
@@ -3355,7 +3604,20 @@
     // A job's name as it reads today when the job is still listed: jobs get
     // renamed, and the work log should not show one job under two names.
     label: e => (e.kind === 'job' && board[e.targetId] && jobName(board[e.targetId])) ||
-      e.targetName || OVERHEAD_LABEL[e.kind] || 'Other',
+      whereOf(e),
+    // The kind of shift in words (the work log's spreadsheet): the stored
+    // kinds are the old names.
+    kindWord: k => ({ job: 'Job', storm: 'Storm' })[k] || OVERHEAD_LABEL[k] || String(k || ''),
+    // Equipment repair time on one machine (equipment.js): every repair
+    // shift on it that was not turned down, newest first -- for whoever sees
+    // everyone's hours. Nobody else gets any (crew never see others' hours).
+    repairsOn: machineId => {
+      if (!seesAll() || !machineId) return [];
+      return Object.values(known()).filter(e => e && e.kind === 'repair' && e.equipmentId === machineId && e.status !== 'rejected')
+        .sort((a, b) => startMsOf(b) - startMsOf(a))
+        .map(e => ({ id: e.id, who: workerOf(e), at: e.startedAt, ms: paidMs(e), running: running(e),
+                     settled: counts(e), issueId: e.issueId || '', what: e.issueWhat || e.repairWhat || '' }));
+    },
     // Home (home.js). Who is on the clock now and who is on a break -- the
     // same people On now lists -- for whoever sees everyone's hours.
     onNow: () => {
@@ -3365,13 +3627,13 @@
       return {
         live: Object.values(entries).filter(running)
           .sort((a, b) => String(a.startedAt).localeCompare(String(b.startedAt)))
-          .map(e => ({ id: e.id, uid: e.uid, who: workerOf(e), where: e.targetName || '', kind: e.kind,
+          .map(e => ({ id: e.id, uid: e.uid, who: workerOf(e), where: whereOf(e), kind: e.kind,
                        ms: paidMs(e), paused: openPause(e) ? openPause(e).reason || 'paused' : '',
                        // On a long time -- most likely a clock-out forgotten.
                        long: limitState(e) > 0,
                        since: new Date(e.startedAt).toDateString() !== new Date().toDateString() ? inWords(e.startedAt) : '' })),
         breaks: Object.keys(byUid).map(uid => breakOf(byUid[uid])).filter(Boolean)
-          .map(b => ({ id: b.id, uid: b.uid, who: workerOf(b), where: b.targetName || '', ms: Date.now() - endMsOf(b) })),
+          .map(b => ({ id: b.id, uid: b.uid, who: workerOf(b), where: whereOf(b), ms: Date.now() - endMsOf(b) })),
       };
     },
     // This person's own clock: the shift running now, or the break they are
@@ -3384,11 +3646,11 @@
       const s = myOpenShift(), b = s ? null : myBreak();
       const out = s && leavingNow(s.id) ? leaving : null;
       return {
-        shift: s ? { id: s.id, where: s.targetName || '', kind: s.kind, targetId: s.targetId || '', since: sinceWords(s.startedAt),
+        shift: s ? { id: s.id, where: whereOf(s), kind: s.kind, targetId: s.targetId || '', since: sinceWords(s.startedAt),
                      inWords: inWords(s.startedAt), leaving: out ? out.what : '',
                      ms: out ? Math.max(0, out.atMs - startMsOf(s)) : paidMs(s), note: out ? '' : limitWords(s),
                      canPause: canPause(s), paused: openPause(s) ? openPause(s).reason || 'paused' : '' } : null,
-        onBreak: b ? { id: b.id, where: b.targetName || '', since: clockTime(b.endedAt), ms: Date.now() - endMsOf(b) } : null,
+        onBreak: b ? { id: b.id, where: whereOf(b), since: clockTime(b.endedAt), ms: Date.now() - endMsOf(b) } : null,
       };
     },
     // What is waiting for this person to decide: shifts to look at (not their

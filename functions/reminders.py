@@ -267,7 +267,7 @@ def crew_shifts(db, people=None, now=None):
         except AlreadyExists:
             continue
         who = (dg._name(people.get(e.get("uid"))) if people.get(e.get("uid")) else str(e.get("workerName") or "Someone")).split()[0]
-        body = str(e.get("targetName") or "")
+        body = dg.shift_place(e)
         try:
             a = datetime.datetime.fromtimestamp(float(e["startedMs"]) / 1000, dg.TZ)
             b = datetime.datetime.fromtimestamp(float(e["endedMs"]) / 1000, dg.TZ)

@@ -968,6 +968,22 @@ def _bids(jobs=None):
     return out
 
 
+# The words for the clock's kinds that are not a job (timeclock.js
+# OVERHEAD_LABEL -- change both). The stored kinds keep their first names
+# ('labor', 'receipts'), and those shifts stored the old words as their name,
+# so theirs is always read from here (Jonah, 15 Oct 2026: "Labor" and
+# "Receipts" confused the crew).
+SHIFT_KINDS = {"snow": "Snow", "labor": "Shop / yard work", "receipts": "Pickups + errands",
+               "repair": "Equipment repair"}
+
+
+def shift_place(e):
+    kind = e.get("kind")
+    if kind in ("labor", "receipts"):
+        return SHIFT_KINDS[kind]
+    return str(e.get("targetName") or SHIFT_KINDS.get(kind) or "Other")
+
+
 def _shifts():
     """Yesterday's and today's shifts, and any still running however old:
     who worked where and for how long (paid minutes).
@@ -997,8 +1013,7 @@ def _shifts():
             continue
         end = e.get("endedMs") or now_ms
         mins = max(0, (end - started) / 60000)
-        out.append({"uid": e.get("uid"), "who": e.get("workerName") or "", "where": e.get("targetName") or
-                    {"snow": "Snow", "labor": "Labor", "receipts": "Receipts"}.get(e.get("kind"), "Other"),
+        out.append({"uid": e.get("uid"), "who": e.get("workerName") or "", "where": shift_place(e),
                     "mins": mins, "running": not e.get("endedMs"), "status": e.get("status"),
                     "day": "today" if started >= today_ms else "yesterday" if started >= yday_ms else "earlier"})
     return out
