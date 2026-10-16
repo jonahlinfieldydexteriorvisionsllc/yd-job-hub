@@ -3161,6 +3161,12 @@
   #stormWrap .stop-move { margin-left:auto; gap:6px; flex:none; }
   #stormWrap .stop-move button { width:44px; height:44px; font-size:15px; border-radius:9px; }
   #stormWrap .stop-move button:disabled { opacity:.3; cursor:default; }
+  /* An arrow with nowhere to go (the first stop's ▲, the last one's ▼) is
+     not drawn; its place is kept so the other stays in line. One held back
+     by a started stop is greyed, and says why when tapped (storm.js). */
+  #stormWrap .stop-move-none { display:inline-block; width:44px; height:44px; flex:none; }
+  #stormWrap .stop-move button.stop-move-held { opacity:.35; cursor:not-allowed; border-style:dashed; }
+  #stormWrap .stop-move button.stop-move-held:active { background:var(--surface-2); color:var(--muted); }
 
   /* Directions: a real button on the stop being worked and the next one. */
   #stormWrap .stop-dir { display:flex; align-items:center; justify-content:center; gap:8px; min-height:52px; margin-top:12px; max-width:440px;
