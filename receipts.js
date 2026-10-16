@@ -811,7 +811,10 @@
       // Put there by itself, from a photo sent in for it (autoSort). In All
       // receipts the row's status chip carries the tick (✓ Filed); a card
       // still to sort ticks each part already filed.
-      const inner = (where === 'c' ? '✓ ' : '') + splitWhere(s) + (s.auto ? ' <span class="rc-chip-auto">by itself</span>' : '') + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
+      // A subcontractor's bill also says whose property it was for (subs.js).
+      const forWho = destOf(s) === 'sub' && window.YDSubs && YDSubs.clientOf ? YDSubs.clientOf(r.id ? r : Object.assign({ id: rid }, r)) : '';
+      const inner = (where === 'c' ? '✓ ' : '') + splitWhere(s) + (forWho ? ' <span class="rc-chip-auto">' + esc(forWho) + '</span>' : '') +
+        (s.auto ? ' <span class="rc-chip-auto">by itself</span>' : '') + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
       return opens
         ? '<button type="button" class="rc-chip" title="' + esc(title) + '" onclick="rcMenuOpen(\'' + where + rid + '\')">' + inner + '</button>'
         : '<span class="rc-chip" title="' + esc(title) + '">' + inner + '</span>';
