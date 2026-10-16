@@ -147,6 +147,23 @@ service cloud.firestore {
     match /pricing/{docId}   { allow read: if canSee('jobs');      allow write: if isOwner(); }
     match /contacts/{docId}  { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
     match /prospects/{docId} { allow read: if canSee('contacts');  allow write: if canChange('contacts'); }
+    // The customer list (customers.js; functions/customers.py keeps it in
+    // step with QuickBooks). Who sees it follows Contacts; no money is kept
+    // on it. A customer's id is their QuickBooks Id, written by the server;
+    // the app makes only leads ("ld..."), and may remove only those. What
+    // QuickBooks says about the record itself -- its id, version, when it
+    // was last worked for, a lead merged into a customer -- only the server
+    // writes.
+    match /customers/{docId} {
+      allow read: if canSee('contacts');
+      allow create: if canChange('contacts') && docId.matches('ld[a-z0-9]+')
+        && !request.resource.data.keys().hasAny(['qbCustomerId', 'qbActive', 'qbSyncToken', 'qbUpdatedAt',
+             'qbCreatedAt', 'qbParentId', 'qbFullName', 'lastWorkAt', 'mergedInto', 'mergedAt']);
+      allow update: if canChange('contacts')
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['qbCustomerId', 'qbActive',
+             'qbSyncToken', 'qbUpdatedAt', 'qbCreatedAt', 'qbParentId', 'qbFullName', 'lastWorkAt', 'mergedInto', 'mergedAt']);
+      allow delete: if canChange('contacts') && docId.matches('ld[a-z0-9]+');
+    }
     match /equipment/{docId} { allow read: if canSee('equipment'); allow write: if canChange('equipment'); }
 
     // settings/public holds harmless shared values (rounding rules, company
@@ -160,7 +177,10 @@ service cloud.firestore {
         || (docId == 'supplyAliases' && canSee('supplies'))
         // The services typed in by hand and kept for reuse (app.js
         // rememberService): whoever fills in jobs or contacts.
-        || (docId == 'services' && (canSee('jobs') || canSee('contacts')));
+        || (docId == 'services' && (canSee('jobs') || canSee('contacts')))
+        // Whether the customer list from QuickBooks is switched on
+        // (customers.js): whoever sees Contacts. Only the owner switches it.
+        || (docId == 'customers' && canSee('contacts'));
       allow write: if isOwner()
         || (docId == 'snow' && canChange('snow'))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canChange('billing'))

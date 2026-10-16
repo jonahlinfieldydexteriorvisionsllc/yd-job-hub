@@ -1096,6 +1096,16 @@ def save_estimate(body):
         e = sent.get("Estimate") or e
         sent_to = email
 
+    # The job tied to that customer, and a lead it was tied to made the
+    # customer (customers.py) -- never in the way of the estimate itself.
+    try:
+        import customers
+        customers.estimate_made(job_id, customer_id)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                # noqa: BLE001
+        print("quickbooks: job %s not tied to customer %s: %s" % (job_id, customer_id, err))
+
     out = _estimate_record(e, customer_id)
     if sent_to:
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
@@ -1538,6 +1548,18 @@ def _sweep():
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: copies' invoices not looked for:", err)
+    # The customer list (customers.py): who changed in QuickBooks since the
+    # last look, and Job Hub's edits that have not reached it yet. Off until
+    # the owner switches the first read on (settings/customers.importOn).
+    try:
+        import customers
+        got = customers.sync()
+        if got:
+            print("quickbooks sweep: customers %s" % got)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: customers not brought in step:", err)
     return news
 
 
@@ -1852,6 +1874,8 @@ def _job_from_estimate(e, cust, stamp, end_names):
         "jobStatus": "booked", "workStage": "scheduled", "workStageAt": stamp,
         "bidStage": "won", "bidStageAt": stamp,
         "qbEstimate": rec, "fromQuickBooks": {"estimateId": e.get("Id"), "at": stamp},
+        # Tied to the customer by QuickBooks' own id, not by the spelling of a name.
+        "customerId": str((e.get("CustomerRef") or {}).get("value") or "") or None, "customerBy": "auto",
         "qbFilled": {"estimateId": str(e.get("Id")), "at": stamp}, "snowChecked": True,
         "acceptedSeenAt": stamp, "lastModified": stamp,
     })

@@ -84,8 +84,11 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // see them vanish at the next save, or it reads the job again every hour.
 // removeWhy / replacedBy / removeNote: a job marked to be taken off -- a
 // duplicate, or a snow contract now on the Snow route (My Jobs: Delete these).
+// customerId / customerBy: the customer the job is for (customers.js) -- tied
+// by id, never by the spelling of a name; 'hand' when Jonah picked it.
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
-  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote'];
+  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
+  'customerId', 'customerBy'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
