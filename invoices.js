@@ -382,6 +382,8 @@
   window.YDInvoices = {
     all: () => invoices,
     stateOf: stateOf,
+    // About what a deposit is, as the list says it (Home's rows).
+    depositOf: depositOf,
     // What wants doing, most late first (Home).
     toDo: () => Object.values(invoices).map(inv => ({ inv, st: stateOf(inv) })).filter(x => wantsYou(x.st))
       .sort((a, b) => (b.st.late || 0) - (a.st.late || 0)),
