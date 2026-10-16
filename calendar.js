@@ -1455,12 +1455,20 @@
         (editsCal(cal) ? '<button class="btn' + (o.task && canTick(o) && !mark ? '' : ' btn-filled') + '" onclick="calEditShown()">Edit</button>' : '') +
         (editsCal(cal) && !(type && type.crew) ? '<button class="btn btn-sm" onclick="calCrewTask()">👷 Make it a crew task</button>' : '') +
         (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
+        // The crew: the job's page made for them (crewjobs.js) -- the gate
+        // code, the work, Directions -- a tap from the entry sending them there.
+        (!ydCan('jobs', 'see') && ev.jobId && window.YDCrewJobs && YDCrewJobs.list().some(j => j.id === ev.jobId)
+          ? '<button class="btn btn-sm" onclick="calOpenCrewJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
         '<button class="btn btn-sm" onclick="closeCalModal()">Close</button>' +
       '</div>');
     fillFileLinks();
   }
   const safeKey = s => String(s || '').replace(/[^A-Za-z0-9_-]/g, '');
 
+  window.calOpenCrewJob = function (jobId) {
+    closeCalModal();
+    if (typeof window.openCrewJob === 'function') window.openCrewJob(jobId);
+  };
   window.calOpenJob = async function (jobId) {
     closeCalModal();
     // Already the job in the form: just go to it. Loading it again would read

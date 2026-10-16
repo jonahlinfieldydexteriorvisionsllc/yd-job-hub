@@ -397,7 +397,8 @@
   }
 
   function pageHtml(id, j, preview) {
-    const where = [j.address, [j.city, j.state].filter(Boolean).join(', '), j.zip].filter(Boolean).join(', ');
+    // "Town, WI 12345", as an address is written (it read "WI, 12345").
+    const where = [j.address, j.city, [j.state, j.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
     const tel = String(j.phone || '').replace(/[^0-9+]/g, '');
     const days = window.YDCalendar && YDCalendar.forJob ? YDCalendar.forJob(id) : [];
     const sec = (title, body) => body ? '<div class="cj-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '';

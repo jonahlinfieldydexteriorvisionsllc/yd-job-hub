@@ -1711,7 +1711,10 @@
           // No signal (or the sign-in could not be checked without it):
           // waits, and goes by itself. Anything else the server said is
           // kept to show, and waits for a tap.
-          const offline = navigator.onLine === false || /no connection|network|failed to fetch|load failed/i.test(msg) ||
+          // "Could not confirm your sign-in" is claude.js saying the sign-in
+          // could not be checked -- on one bar of signal, where the phone
+          // still says it is online. It used to wait for a tap instead.
+          const offline = navigator.onLine === false || /no connection|network|failed to fetch|load failed|could not confirm your sign-in/i.test(msg) ||
             (e && /network/.test(String(e.code || '')));
           it.state = offline ? 'waiting' : 'failed';
           it.error = offline ? '' : msg.slice(0, 200);

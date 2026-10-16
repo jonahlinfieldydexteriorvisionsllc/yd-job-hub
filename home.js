@@ -310,6 +310,10 @@
       : { words: stops.length ? 'Every stop done' : 'Route starting', act: 'Snow ›', id: '', icon: '✅' };
     const m = signedIn() && window.YDClock && YDClock.mine ? YDClock.mine() : null;
     const onStorm = !!(m && m.shift && m.shift.kind === 'storm' && m.shift.targetId === s.id);
+    // Every stop done: the storm's shifts have ended at the last departure,
+    // and one started now would run on with nothing to stop it -- so no
+    // "Clock in to tonight's storm" until there is a stop to do again.
+    const allDone = stops.length > 0 && done === stops.length;
     return '<div class="hm-storm">' +
       '<button class="hm-alert" onclick="homeStop(\'' + safe(go.id) + '\')">' +
         '<span class="hm-storm-l1">❄️ <b>Storm under way</b>' + (s.label ? ' — ' + esc(s.label) : '') +
@@ -318,7 +322,7 @@
         '<span class="hm-storm-l2"><span class="hm-storm-what">' + go.icon + ' ' + esc(go.words) + '</span>' +
           '<span class="hm-alert-go">' + go.act + '</span></span>' +
       '</button>' +
-      (m && !onStorm && !(m.shift && m.shift.leaving) && typeof window.clockInTo === 'function'
+      (m && !onStorm && !allDone && !(m.shift && m.shift.leaving) && typeof window.clockInTo === 'function'
         ? '<button class="btn btn-filled hm-storm-in" onclick="homeStormIn()">⏱ ' +
             (m.shift ? 'Switch to tonight’s storm' : 'Clock in to tonight’s storm') + '</button>' : '') +
     '</div>';
