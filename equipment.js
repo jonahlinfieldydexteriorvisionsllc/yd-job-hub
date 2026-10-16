@@ -71,8 +71,12 @@
   // A problem's urgency as the boards' own card urgency (boards.js URGENCY),
   // so a machine out of service sorts to the top of Maintenance, shows under
   // "🟠 Urgent & this week" and pings the owner like any urgent card
-  // (functions/reminders.py _urgent_cards).
-  const CARD_URGENCY = { down: 'urgent', before: 'high', soon: 'normal', whenever: 'low' };
+  // (functions/reminders.py _urgent_cards). Matched by colour on the one
+  // scale: "Before next use" (orange) is 🟠 Today, as out of service is --
+  // it said "🟡 This week" on its card, for a machine that may be wanted
+  // tomorrow (regression pass, 16 Oct 2026) -- and "Soon" (yellow, "this
+  // week") is 🟡 This week.
+  const CARD_URGENCY = { down: 'urgent', before: 'urgent', soon: 'high', whenever: 'low' };
   const rankOf = id => { const i = URGENCY.findIndex(u => u.id === id); return i === -1 ? URGENCY.length : i; };
   // On the Maintenance board, a problem whose part has arrived says so --
   // and one whose part is on its way.

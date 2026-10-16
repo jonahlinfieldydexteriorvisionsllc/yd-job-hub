@@ -3983,8 +3983,12 @@
     html[data-tab="job"] .net-pill, html[data-tab="tracking"] .net-pill, html[data-tab="dashboard"] .net-pill {
       top:auto; left:16px; transform:none; bottom:calc(16px + env(safe-area-inset-bottom, 0px)); text-align:left; }
   }
-  /* Amber "Soon" chips: dark words, readable in sunlight (white was 2.2:1). */
+  /* Amber "Soon" chips: dark words, readable in sunlight (white was 2.2:1).
+     The orange "Before next use" (white 2.8:1) and the grey "When you have
+     time" (3.2:1) the same way. */
   .eq-urg.u-soon { color:#2b2200; }
+  .eq-urg.u-before { color:#2b1500; }
+  .eq-urg.u-whenever { color:#16191e; }
   /* All Jobs' figures two to a row on a phone, like Home's. */
   @media (max-width:720px) {
     #panel-dashboard .dash-totals { grid-template-columns:repeat(2, minmax(0, 1fr)); }

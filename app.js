@@ -4451,6 +4451,27 @@ document.addEventListener('click', e => {
 (function backClosesWindows() {
   const isWin = o => o && o.classList && (o.classList.contains('modal-overlay') || o.classList.contains('sheet-overlay'));
   const isOpen = o => isWin(o) && o.classList.contains('active');
+  // The ⋯ menu, the search and the week's weather float over the screen
+  // rather than being windows -- shown and hidden, with no × -- but on a
+  // phone they cover it just the same, and Back from one left the app
+  // (regression pass, 16 Oct 2026). Each gets a step too, closed its own way.
+  // In the order Esc takes them: the menu, the search, then a window, and
+  // the weather last (it gives way to a window in front of it).
+  const FLOATERS = {
+    headerMenu: () => closeHeaderMenu(),
+    srchPanel: () => { if (typeof closeSearch === 'function') closeSearch(); },
+    wxPanel: () => { if (typeof closeWeek === 'function') closeWeek(); },
+  };
+  const floating = id => { const f = document.getElementById(id); return f && !f.hidden ? f : null; };
+  function inFront() {
+    const first = ['headerMenu', 'srchPanel'].find(floating);
+    if (first) return { el: floating(first), close: FLOATERS[first] };
+    const top = typeof topOverlay === 'function' ? topOverlay() : null;
+    const x = top && top.querySelector('.modal-close, .sheet-close');
+    if (x) return { el: top, win: true, close: () => x.click() };
+    if (floating('wxPanel')) return { el: floating('wxPanel'), close: FLOATERS.wxPanel };
+    return null;
+  }
   let steps = 0;          // history steps this page added for open windows
   let quietPops = 0;      // our own steps back, not the person's Back
   let held = 0;           // steps waiting for one of those to land
@@ -4467,8 +4488,15 @@ document.addEventListener('click', e => {
     let opened = 0, closed = 0;
     list.forEach(m => {
       const o = m.target;
-      if (!isWin(o)) return;
-      const was = /(^|\s)active(\s|$)/.test(String(m.oldValue || '')), now = isOpen(o);
+      let was, now;
+      if (m.attributeName === 'hidden') {
+        if (!o || !FLOATERS[o.id]) return;
+        // No hidden attribute before means it was showing.
+        was = m.oldValue === null; now = !o.hidden;
+      } else {
+        if (!isWin(o)) return;
+        was = /(^|\s)active(\s|$)/.test(String(m.oldValue || '')); now = isOpen(o);
+      }
       if (now && !was) opened++;
       else if (!now && was) {
         if (byBack > 0) { byBack--; return; }
@@ -4500,12 +4528,12 @@ document.addEventListener('click', e => {
     if (quietPops > 0) { quietPops--; addSteps(0); return; }
     if (steps <= 0) return;
     steps--;
-    const top = typeof topOverlay === 'function' ? topOverlay() : null;
-    const close = top && top.querySelector('.modal-close, .sheet-close');
-    if (!close) return;
+    const front = inFront();
+    if (!front) return;
+    const top = front.el;
     // Something typed in it: the first Back says so and stays (the step is
     // put back); a second one within a few seconds closes, as Esc does.
-    if (top.dataset.typed && !top.classList.contains('ask-overlay') && !(armed === top && Date.now() - armedAt < 4000)) {
+    if (front.win && top.dataset.typed && !top.classList.contains('ask-overlay') && !(armed === top && Date.now() - armedAt < 4000)) {
       armed = top; armedAt = Date.now();
       addSteps(1);
       showToast('Something is typed in here — press Back again to close without saving');
@@ -4513,16 +4541,16 @@ document.addEventListener('click', e => {
     }
     armed = null;
     byBack++;
-    close.click();
+    front.close();
     // A close button that only asks first (unsaved changes) leaves the window
     // open: it no longer has a step, so the next Back would leave the app --
     // give it one back.
     setTimeout(() => {
-      if (isOpen(top)) { byBack = Math.max(0, byBack - 1); addSteps(1); }
+      if (front.win ? isOpen(top) : !top.hidden) { byBack = Math.max(0, byBack - 1); addSteps(1); }
     }, 400);
   });
   function watch() {
-    seen.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'], attributeOldValue: true });
+    seen.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class', 'hidden'], attributeOldValue: true });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
   else watch();

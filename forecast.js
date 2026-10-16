@@ -404,6 +404,8 @@
     open = false;
     draw();
   }
+  // The phone's Back closes it too (app.js backClosesWindows).
+  window.closeWeek = closeWeek;
   // Caught on the way down, before app.js's Escape handling: a window or
   // the ⋯ menu open in front is closed first by that press, not this panel.
   document.addEventListener('keydown', e => {
