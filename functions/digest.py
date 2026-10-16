@@ -42,6 +42,8 @@ from zoneinfo import ZoneInfo
 import requests
 from firebase_admin import firestore
 
+import stages
+
 TZ = ZoneInfo("America/Chicago")
 OWNER_EMAIL = "jonahlinfield@ydexteriorvisions.com"   # also the account mail is sent from
 HOME = {"lat": 43.0731, "lng": -89.4012, "name": "Madison"}
@@ -749,23 +751,23 @@ def qb_turned_down(q):
     return (q or {}).get("status") == "Rejected"
 
 
-def status_of(j):
-    """A job's status as the app reads it (app.js normStatus): the old
-    'active' is Booked or In progress by where the job sat on the Jobs board,
-    anything unknown is a bid."""
-    s = j.get("jobStatus") or "quoting"
-    if s == "active":
-        return "inprogress" if j.get("workStage") in ("inProgress", "punchList") else "booked"
-    return s if s in ("quoting", "booked", "inprogress", "complete") else "quoting"
+# A job's status (app.js normStatus) and its one stage (app.js jobStage)
+# live in stages.py, so the summaries, QuickBooks and the app give one answer.
+status_of = stages.status_of
 
 
 def _office(jobs):
     """Estimate work waiting on Jonah: drafts Claude built that he hasn't
     checked and sent, estimates a customer accepted that aren't booked yet,
     and money still owed on invoices made from estimates."""
-    drafts, accepted, owed, to_order = [], [], [], []
+    drafts, accepted, owed, to_order, to_bill = [], [], [], [], []
     for j in jobs.values():
         name = str(j.get("customerName") or "A bid")
+        # Finished, not invoiced yet (its one stage, stages.stage_of): no
+        # QuickBooks invoice and not marked Invoiced or Paid by hand. One on
+        # its way off the books (a duplicate, in Recently deleted) is not.
+        if stages.stage_of(j) == "finished" and not j.get("removeWhy") and not j.get("deletedAt"):
+            to_bill.append(str(j.get("customerName") or "A job"))
         e = j.get("estimate") or {}
         q = j.get("qbEstimate") or {}
         bid = (j.get("jobStatus") or "quoting") == "quoting" and j.get("bidStage") not in ("lost", "won")
@@ -786,7 +788,7 @@ def _office(jobs):
             if left:
                 to_order.append((name, len(left)))
     return {"drafts": sorted(drafts), "accepted": sorted(accepted), "owed": sorted(owed, key=lambda x: -x[1]),
-            "toOrder": sorted(to_order)}
+            "toOrder": sorted(to_order), "toBill": sorted(to_bill)}
 
 
 # When an invoice wants a reminder (Jonah, 15 Oct 2026: "track invoices &
@@ -1273,7 +1275,7 @@ def build(slot, user, people, wx, cache):
 
     # ---- estimates: drafts to check, yeses to book, money still owed
     office = cache.get("office") or {}
-    if sees("jobs") and slot in ("morning", "evening") and any(office.get(k) for k in ("drafts", "accepted", "owed", "toOrder")):
+    if sees("jobs") and slot in ("morning", "evening") and any(office.get(k) for k in ("drafts", "accepted", "owed", "toOrder", "toBill")):
         lines = []
         for n in office.get("accepted") or []:
             lines.append({"text": "✅ %s accepted the estimate — book it and make the invoice" % n})
@@ -1285,6 +1287,10 @@ def build(slot, user, people, wx, cache):
         chase = {str(x["doc"]) for x in cache.get("invoices") or [] if x.get("doc")}
         for n, bal, num in [o for o in office.get("owed") or [] if not (o[2] and str(o[2]) in chase)][:6]:
             lines.append({"text": "💵 %s owes $%s%s" % (n, format(round(bal, 2), ",.2f"), (" on invoice #%s" % num) if num else "")})
+        if office.get("toBill"):
+            t = office["toBill"]
+            lines.append({"text": "🧾 Finished, not invoiced yet: %s" % ", ".join(t[:6]) + (
+                " +%d more" % (len(t) - 6) if len(t) > 6 else "")})
         if office.get("toOrder"):
             t = office["toOrder"]
             lines.append({"text": "🛒 Materials still to order: %s" % ", ".join(

@@ -244,11 +244,11 @@
     if (st === 'booked') return 'scheduled';
     if (st === 'inprogress') return stage === 'punchList' ? 'punchList' : 'inProgress';
     if (st === 'complete') {
-      // A finished job with no end stage of its own yet (finished before the
-      // form set one): where its invoice says it is (sync.js finishedStage).
-      const col = COMPLETE_STAGES.indexOf(stage) !== -1 ? stage
-        : window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
-        : (j.qbInvoiced ? 'invoiced' : 'toInvoice');
+      // A finished job sits where its one stage says (app.js jobStage, via
+      // sync.js finishedStage): with a QuickBooks invoice, where QuickBooks
+      // says; without one, the column it was put in by hand.
+      const col = window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j)
+        : COMPLETE_STAGES.indexOf(stage) !== -1 ? stage : 'toInvoice';
       if (col === 'paid' && (daysSince(j.workStageAt) || 0) > SHOW_PAID_DAYS) return null;
       return col;
     }
@@ -303,6 +303,26 @@
         patch = { bidStage: col, bidStageAt: at, jobStatus: 'quoting' };
       }
     } else {
+      // QuickBooks holds this job's invoice, so it decides Invoiced or Paid
+      // (app.js jobStage). A finished job dragged between those columns
+      // would only jump back -- say why instead. One not finished yet may be
+      // dropped on any of them: it is finished, and lands where QuickBooks says.
+      const inv = typeof qbInvoiceOf === 'function' ? qbInvoiceOf(j) : null;
+      if (inv && COMPLETE_STAGES.indexOf(col) !== -1) {
+        const lands = window.YDSync && YDSync.finishedStage ? YDSync.finishedStage(j) : col;
+        const owed = typeof qbOwed === 'function' ? qbOwed(inv) : NaN;
+        const said = 'QuickBooks has invoice' + (inv.docNumber ? ' #' + inv.docNumber : '') +
+          (isFinite(owed) ? (owed > 0 ? ' with ' + fmtMoney(owed) + ' still owed' : ', paid in full') : '');
+        if (normStatusOf(j) === 'complete') {
+          render();
+          showToast(said + ' — it decides Invoiced or Paid. Log a payment on the job to move it on.', 6000);
+          return;
+        }
+        if (lands !== col) {
+          showToast(said + ' — so it goes to ' + ((JOBS.columns.find(c => c.id === lands) || {}).name || lands) + '.', 5000);
+          col = lands;
+        }
+      }
       patch = { workStage: col, workStageAt: at,
                 jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' };
     }

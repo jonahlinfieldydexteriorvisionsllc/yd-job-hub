@@ -45,7 +45,9 @@ let jobStatus = 'quoting';
 // everything between a won bid and a finished job; it is read as Booked or In
 // progress by where the job sat on the Jobs board, so nothing has to be
 // re-entered and old copies on other devices still show correctly.
-const JOB_STATUS = { quoting: 'Bid', booked: 'Booked', inprogress: 'In progress', complete: 'Complete' };
+// 'complete' reads "Finished": the stage line below calls it that, and the
+// two must never use different words for the same thing.
+const JOB_STATUS = { quoting: 'Bid', booked: 'Booked', inprogress: 'In progress', complete: 'Finished' };
 function normStatus(s, d) {
   if (s === 'active') {
     const stage = d && d.workStage;
@@ -60,6 +62,112 @@ function statusLabel(s) { return JOB_STATUS[s] || (s === 'active' ? 'Booked' : '
 // crew's clock.
 const isBidStatus = s => normStatus(s) === 'quoting';
 function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s) + '</span>'; }
+
+// ═══════════════════════════════════════════════════════════
+// ONE STAGE PER JOB
+// ═══════════════════════════════════════════════════════════
+// Jonah, 15 Oct 2026: "One status per record, moving forward through fixed
+// stages, instead of piles of yes/no boxes." A job used to say where it was
+// in four places that could disagree -- its status, the Jobs board column,
+// an "Invoiced in QuickBooks" tick and QuickBooks itself (the tick could say
+// yes with no invoice there, or no with one). Now there is ONE answer, worked
+// out here from what the job already holds, and every screen asks here:
+//
+//   Bid -> Booked -> In progress -> Finished -> Invoiced -> Paid   (or Lost, for a bid)
+//
+// - Bid / Lost / Booked / In progress / Finished come from jobStatus (and
+//   bidStage 'lost'), as they always did.
+// - Invoiced and Paid: when QuickBooks holds the job's invoice (qbInvoiceRef,
+//   from the same QuickBooks company as its estimate), QuickBooks decides --
+//   anything still owed is Invoiced, nothing owed is Paid. With no QuickBooks
+//   invoice they are set by hand: the Jobs board column (workStage
+//   'invoiced' / 'paid'), or the old tick (qbInvoiced) on jobs from before.
+// - Only a finished job is Invoiced or Paid. The invoice is often made when
+//   the estimate is accepted, for the deposit -- the job stays Booked or In
+//   progress until the work is done.
+//
+// Nothing is rewritten: old jobs read the same fields they always had. The
+// server works it out the same way (functions/stages.py stage_of) -- change
+// both together.
+const JOB_STAGES = [
+  { id: 'bid', name: 'Bid' }, { id: 'booked', name: 'Booked' }, { id: 'inprogress', name: 'In progress' },
+  { id: 'finished', name: 'Finished' }, { id: 'invoiced', name: 'Invoiced' }, { id: 'paid', name: 'Paid' },
+];
+const STAGE_NAMES = { bid: 'Bid', lost: 'Lost', booked: 'Booked', inprogress: 'In progress', finished: 'Finished', invoiced: 'Invoiced', paid: 'Paid' };
+// The Jobs board's last three columns, for a finished job's stage.
+const STAGE_COLUMN = { finished: 'toInvoice', invoiced: 'invoiced', paid: 'paid' };
+// The job's QuickBooks invoice, or null. One made in the other QuickBooks
+// company -- the test one, before the switch to the real books -- is not
+// this job's (estimate.js and home.js ignore it the same way).
+function qbInvoiceOf(d) {
+  const r = d && d.qbInvoiceRef, q = d && d.qbEstimate;
+  if (!r || !r.id) return null;
+  return r.env && q && q.env && r.env !== q.env ? null : r;
+}
+// What QuickBooks says is still owed on it; NaN when it has not said.
+function qbOwed(inv) {
+  const b = inv && inv.balance;
+  return b == null || b === '' ? NaN : Number(b);
+}
+// { id, name, qb (the QuickBooks invoice deciding Invoiced/Paid, or null),
+//   byHand (a finished job's stage picked by hand) }.
+function jobStage(d) {
+  d = d || {};
+  const st = normStatus(d.jobStatus, d);
+  const one = (id, qb, byHand) => ({ id: id, name: STAGE_NAMES[id], qb: qb || null, byHand: !!byHand });
+  if (st === 'quoting') return one(d.bidStage === 'lost' ? 'lost' : 'bid');
+  if (st !== 'complete') return one(st);
+  const inv = qbInvoiceOf(d);
+  if (inv) {
+    const owed = qbOwed(inv);
+    return one(isFinite(owed) && owed <= 0.004 ? 'paid' : 'invoiced', inv);
+  }
+  const ws = d.workStage;
+  if (ws === 'paid') return one('paid', null, true);
+  if (ws === 'invoiced' || d.qbInvoiced) return one('invoiced', null, true);
+  return one('finished');
+}
+// The stage as a coloured pill. A bid keeps its old colour class (quoting).
+function stagePill(stageId) {
+  const cls = stageId === 'bid' ? 'quoting' : stageId === 'finished' ? 'complete' : stageId;
+  return '<span class="pill ' + esc(cls) + '">' + esc(STAGE_NAMES[stageId] || STAGE_NAMES.bid) + '</span>';
+}
+
+// What the customer is billed, and the tax on it -- for Balance Due on
+// Tracking and the cost summary. The job's own "Taxable — WI 5.5%" box is
+// retired (it added 5.5% to the whole job and disagreed with the estimate's
+// own tax). The tax is the one QuickBooks or the estimate works out:
+// - a QuickBooks invoice: its total, tax and all (what the customer owes);
+// - else the estimate's sales tax (pricing.js), as sent to QuickBooks
+//   (est.sent), as brought in from it (est.fromQb), or as priced now;
+// - else an old job with the box ticked keeps its 5.5% -- its total does not
+//   change by itself -- with a line saying so and a button to stop it.
+// d: { jobPrice (number), estimate, city, qbInvoiceRef, qbEstimate, taxable }.
+const OLD_TAX_PCT = 5.5;    // what the retired box always added
+function estimateTaxCents(est, city) {
+  if (!est) return 0;
+  const sent = Array.isArray(est.sent) && est.sent.length ? est.sent[est.sent.length - 1] : null;
+  if (sent && isFinite(Number(sent.taxCents))) return Math.max(0, Math.round(Number(sent.taxCents)));
+  if (est.fromQb && isFinite(Number(est.fromQb.taxCents)) && !est.reprice) return Math.max(0, Math.round(Number(est.fromQb.taxCents)));
+  if (!((est.work || []).length || (est.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return 0;
+  try {
+    const r = YDEstimate.priceSaved(est, city || '');
+    return r && r.tax && r.tax.cents > 0 ? Math.round(r.tax.cents) : 0;
+  } catch (e) { return 0; }
+}
+function jobBill(d) {
+  const price = round2(Number(d.jobPrice) || 0);
+  const inv = qbInvoiceOf(d);
+  const total = inv ? Number(inv.total) : NaN;
+  if (inv && isFinite(total)) return { subtotal: price, tax: 0, total: round2(total), from: 'qb', inv: inv, oldBox: !!d.taxable };
+  const estTax = round2(estimateTaxCents(d.estimate, d.city) / 100);
+  if (estTax > 0) return { subtotal: price, tax: estTax, total: round2(price + estTax), from: 'estimate', inv: null, oldBox: !!d.taxable };
+  if (d.taxable) {
+    const tax = round2(price * OLD_TAX_PCT / 100);
+    return { subtotal: price, tax: tax, total: round2(price + tax), from: 'oldBox', inv: null, oldBox: true };
+  }
+  return { subtotal: price, tax: 0, total: price, from: '', inv: null, oldBox: false };
+}
 // Where the job sits on the Bids and Jobs boards. The form does not edit these,
 // but it must carry them: getJobData() rebuilds the record from scratch, so a
 // field it does not know about would be silently dropped by the next save, and
@@ -95,6 +203,12 @@ const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'car
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
   'customerId', 'customerBy'];
 let boardFields = {};
+// Two retired boxes, kept on the job as they were (no data lost, and a
+// device still on the old code keeps reading them): qbInvoiced, the old
+// "Invoiced in QuickBooks" tick (jobStage still reads it on a job with no
+// QuickBooks invoice), and taxable, the old "Taxable — WI 5.5%" box (jobBill).
+let qbInvoicedFlag = false;
+let oldTaxable = false;
 let manualJobPrice = false;
 let baseJobPrice = 0;
 let dirty = false;
@@ -743,15 +857,15 @@ if ('serviceWorker' in navigator) {
 }
 function updateCtxBar() {
   const name = (document.getElementById('customerName').value || '').trim();
-  // Invoiced: the box ticked by hand, or an invoice QuickBooks holds for it.
-  const invoiced = (document.getElementById('qbInvoiced') && document.getElementById('qbInvoiced').checked) ||
-    !!(boardFields.qbInvoiceRef && boardFields.qbInvoiceRef.id);
   // The name in a span of its own: on a phone a long name is cut short with
-  // "…", and the chip after it must not be cut off with it.
-  document.getElementById('ctxName').innerHTML = '<span class="ctx-name-text">' + esc(name || (currentJobId ? 'Untitled Job' : 'New Job')) + '</span>' +
-    (invoiced ? '<span class="qb-chip">QB Invoiced</span>' : '');
+  // "…", and the pill after it must not be cut off with it. The pill is the
+  // job's one stage (jobStage) -- it used to be the status plus a separate
+  // "QB Invoiced" chip that could disagree with it.
+  document.getElementById('ctxName').innerHTML = '<span class="ctx-name-text">' + esc(name || (currentJobId ? 'Untitled Job' : 'New Job')) + '</span>';
+  const stage = jobStage(formStageData());
   const st = document.getElementById('ctxStatus');
-  st.textContent = statusLabel(jobStatus); st.className = 'pill ' + jobStatus;
+  st.textContent = stage.name; st.className = 'pill ' + (stage.id === 'bid' ? 'quoting' : stage.id === 'finished' ? 'complete' : stage.id);
+  renderStageSteps();
   const dot = document.getElementById('ctxDot');
   dot.classList.remove('unsaved', 'error');
   if (storageBroken) { dot.classList.add('error'); document.getElementById('ctxDotText').textContent = 'Save failed'; }
@@ -919,9 +1033,7 @@ function onStatusChange() {
   // said "In progress" for a job the form called Complete. One rule with the
   // board and the server (sync.js finishedStage). Set before the save below.
   if (jobStatus === 'complete' && was !== 'complete' && window.YDSync && window.YDSync.finishedStage) {
-    const inv = document.getElementById('qbInvoiced');
-    boardFields.workStage = window.YDSync.finishedStage({ workStage: boardFields.workStage,
-      qbInvoiceRef: boardFields.qbInvoiceRef, qbInvoiced: !!(inv && inv.checked) });
+    boardFields.workStage = window.YDSync.finishedStage(Object.assign(formStageData(), { workStage: boardFields.workStage }));
     boardFields.workStageAt = at;
   }
   // Finished here: the plant-care email, as from the board (estimate.js).
@@ -960,33 +1072,32 @@ function showBidBanner() {
 }
 
 // The job's QuickBooks invoice (made from its estimate, quickbooks.py), or
-// null. One made in the other QuickBooks company -- the test one, before the
-// switch to the real books -- is not this job's; estimate.js ignores it the
-// same way.
-function jobQbInvoice() {
-  const r = boardFields.qbInvoiceRef, q = boardFields.qbEstimate;
-  if (!r || !r.id) return null;
-  return r.env && q && q.env && r.env !== q.env ? null : r;
+// null -- qbInvoiceOf, on the job open in the form.
+function formQbInvoice() { return qbInvoiceOf(boardFields); }
+// The open job, as much of it as its stage is worked out from (jobStage).
+function formStageData() {
+  return { jobStatus: jobStatus, bidStage: boardFields.bidStage, workStage: boardFields.workStage,
+    qbInvoiceRef: boardFields.qbInvoiceRef, qbEstimate: boardFields.qbEstimate, qbInvoiced: qbInvoicedFlag };
 }
-// The invoice boxes on the Job tab. A bid has no invoice yet, so "QuickBooks
-// Invoice #" and "Invoiced in QuickBooks" are put away on one -- unless
-// something is already in them. Once QuickBooks holds the invoice, a line
-// says its number and what is still owed, and the boxes go: the number box
-// only when it is empty or says the same number (one typed in by hand for
-// another invoice stays), the tick always (the invoice is the answer).
-// Only hidden, never removed -- getJobData() still reads both.
+// The invoice number box on the Job tab. A bid has no invoice yet, so
+// "QuickBooks Invoice #" is put away on one -- unless something is already
+// in it. Once QuickBooks holds the invoice, a line says its number and what
+// is still owed, and the box goes when it is empty or says the same number
+// (one typed in by hand for another invoice stays). Only hidden, never
+// removed -- getJobData() still reads it. The old "Invoiced in QuickBooks"
+// tick is gone: the stage line above says it (renderStageSteps).
 // Which boxes show is worked out again only when the job, its status or its
 // invoice changes (`again`, or a new key), never on a keystroke: clearing
 // the number on a bid must not make the box vanish under the cursor.
 let jobQbShownFor = null;
 function showJobQbFields(again) {
-  const box = document.getElementById('qbInvoice'), tick = document.getElementById('qbInvoiced');
-  const field = document.getElementById('qbInvoiceField'), row = document.getElementById('qbInvoicedRow');
+  const box = document.getElementById('qbInvoice');
+  const field = document.getElementById('qbInvoiceField');
   const line = document.getElementById('jobQbLine');
-  if (!box || !tick || !field || !row || !line) return;
-  const inv = jobQbInvoice(), bid = isBidStatus(jobStatus);
+  if (!box || !field || !line) return;
+  const inv = formQbInvoice(), bid = isBidStatus(jobStatus);
   if (inv) {
-    const owed = inv.balance == null || inv.balance === '' ? NaN : Number(inv.balance);
+    const owed = qbOwed(inv);
     const total = inv.total == null || inv.total === '' ? NaN : Number(inv.total);
     const what = isFinite(owed) ? (owed <= 0 ? 'paid in full' : fmtMoney(owed) + ' owed')
       : isFinite(total) ? fmtMoney(total) : '';
@@ -1001,11 +1112,100 @@ function showJobQbFields(again) {
   jobQbShownFor = key;
   const typed = box.value.trim();
   const fieldOff = inv ? (!typed || typed === String(inv.docNumber == null ? '' : inv.docNumber)) : (bid && !typed);
-  const rowOff = inv ? true : (bid && !tick.checked);
   // Never hide a box while it is being typed in.
-  const active = document.activeElement;
-  if (!(fieldOff && field.contains(active))) field.hidden = fieldOff;
-  if (!(rowOff && row.contains(active))) row.hidden = rowOff;
+  if (!(fieldOff && field.contains(document.activeElement))) field.hidden = fieldOff;
+}
+
+// The stage line on the Job tab, in place of the Status list and the
+// "Invoiced in QuickBooks" tick: Bid -> Booked -> In progress -> Finished ->
+// Invoiced -> Paid, one tap button each (they wrap on a phone -- never a
+// sideways-scroll row), the job's own stage lit, the ones it has passed
+// ticked. Lost sits beside Bid while the job is a bid. Invoiced and Paid are
+// QuickBooks' to say when it holds the invoice; tappable only when it does
+// not (cash, a check, a job invoiced some other way).
+function renderStageSteps() {
+  const wrap = document.getElementById('jobStageSteps');
+  if (!wrap) return;
+  const cur = jobStage(formStageData());
+  const ro = jobsReadOnly();
+  const at = cur.id === 'lost' ? 0 : JOB_STAGES.findIndex(s => s.id === cur.id);
+  const inv = formQbInvoice();
+  const qbSays = id => !!inv && (id === 'invoiced' || id === 'paid' || (id === 'finished' && !!cur.qb));
+  const btn = (s, i) => {
+    const on = s.id === cur.id;
+    const past = cur.id !== 'lost' && i >= 0 && i < at;
+    const locked = !on && (ro || qbSays(s.id));
+    return '<button type="button" class="stage-step' + (on ? ' on' : '') + (past ? ' past' : '') + (s.id === 'lost' ? ' lost' : '') + '"' +
+      (on ? ' aria-current="step"' : '') + (locked ? ' disabled' : '') +
+      ' onclick="pickStage(\'' + s.id + '\')">' + (past ? '✓ ' : '') + esc(s.name) + '</button>';
+  };
+  const bidish = cur.id === 'bid' || cur.id === 'lost';
+  wrap.innerHTML = bidish
+    ? btn(JOB_STAGES[0], 0) + btn({ id: 'lost', name: 'Lost' }, -1) + JOB_STAGES.slice(1).map((s, i) => btn(s, i + 1)).join('')
+    : JOB_STAGES.map(btn).join('');
+  // One line under it, only when it has something to say.
+  const note = document.getElementById('jobStageNote');
+  if (!note) return;
+  let say = '';
+  if (cur.qb) {
+    const owed = qbOwed(cur.qb);
+    say = (cur.id === 'paid' ? 'Paid' : 'Invoiced') + ' — from QuickBooks invoice' + (cur.qb.docNumber ? ' #' + esc(cur.qb.docNumber) : '') +
+      (isFinite(owed) && owed > 0 ? ' (' + fmtMoney(owed) + ' still owed — it moves to Paid once that is paid)' : '') + '.';
+  } else if (inv && !bidish) {
+    // The deposit invoice, made before the work is done.
+    say = 'QuickBooks has invoice' + (inv.docNumber ? ' #' + esc(inv.docNumber) : '') +
+      ' for this job — once it is Finished, Invoiced and Paid follow it.';
+  } else if (cur.byHand) {
+    say = esc(cur.name) + ' set by hand — QuickBooks has no invoice for this job.';
+  }
+  note.innerHTML = say;
+  note.hidden = !say;
+}
+// A stage button tapped. Moving between Bid, Booked, In progress and Finished
+// is the old Status list (onStatusChange, so the boards, the order list and
+// the plant-care email follow exactly as before); Invoiced / Paid by hand
+// set the finished job's Jobs board column.
+function pickStage(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const cur = jobStage(formStageData());
+  if (id === cur.id) return;
+  // Lost is a bid's end: the button shows only on a bid.
+  if (id === 'lost') { if (cur.id === 'bid') markBidLost(); return; }
+  // A lost bid back on the Bids board: they called back.
+  if (id === 'bid' && cur.id === 'lost') {
+    if (currentJobId) reopenBid();
+    else { boardFields.bidStage = 'followUp'; updateCtxBar(); }
+    return;
+  }
+  const inv = formQbInvoice();
+  if ((id === 'invoiced' || id === 'paid' || id === 'finished') && cur.qb) {
+    showToast('QuickBooks decides this one — invoice' + (cur.qb.docNumber ? ' #' + cur.qb.docNumber : '') +
+      '. Log the payment (Tracking → Payments) and it moves to Paid.', 6000);
+    return;
+  }
+  if ((id === 'invoiced' || id === 'paid') && inv) {
+    showToast('Tap Finished — QuickBooks has the invoice' + (inv.docNumber ? ' (#' + inv.docNumber + ')' : '') +
+      ', so Invoiced and Paid follow it.', 6000);
+    return;
+  }
+  const status = id === 'bid' ? 'quoting' : id === 'booked' ? 'booked' : id === 'inprogress' ? 'inprogress' : 'complete';
+  const at = new Date().toISOString();
+  // From a bid (or a lost one) to a job: it was won, as "Make it a job" does.
+  if (status !== 'quoting' && isBidStatus(jobStatus)) { boardFields.bidStage = 'won'; boardFields.bidStageAt = at; }
+  if (status !== jobStatus) {
+    document.getElementById('jobStatusSelect').value = status;
+    onStatusChange();
+  }
+  // A finished job's stage by hand (no QuickBooks invoice): its Jobs board
+  // column. Back to Finished also takes off the old tick, which would
+  // otherwise keep it Invoiced.
+  if (status === 'complete' && !inv) {
+    const col = STAGE_COLUMN[id];
+    if (boardFields.workStage !== col) { boardFields.workStage = col; boardFields.workStageAt = at; }
+    if (id === 'finished') qbInvoicedFlag = false;
+  }
+  markDirty();
+  updateCtxBar();
 }
 // A lost bid back on the board, in Follow up -- they called back.
 function reopenBid(id) {
@@ -2299,13 +2499,39 @@ function syncJobPriceWithAdditionalCosts() {
 // ═══════════════════════════════════════════════════════════
 // PAYMENTS RECEIVED
 // ═══════════════════════════════════════════════════════════
+// What the open job bills (jobBill), from the form.
+function formBill() {
+  return jobBill({ jobPrice: parseMoney(document.getElementById('jobPrice').value),
+    estimate: window.YDEstimate ? window.YDEstimate.get() : null, city: (document.getElementById('city') || {}).value || '',
+    qbInvoiceRef: boardFields.qbInvoiceRef, qbEstimate: boardFields.qbEstimate, taxable: oldTaxable });
+}
+// The retired "Taxable — WI 5.5%" box, still ticked on this job: one line
+// saying what it does now, and a button to be done with it. Its total is
+// never changed behind his back.
+function billNoteHtml(bill) {
+  if (!bill.oldBox) return '';
+  const edits = !jobsReadOnly();
+  const say = bill.from === 'oldBox'
+    ? 'This job has the old “Taxable — WI ' + OLD_TAX_PCT + '%” box ticked, so ' + OLD_TAX_PCT + '% is still added to its total. ' +
+      'That box is retired: the estimate or the QuickBooks invoice holds the tax now.'
+    : 'This job had the old “Taxable — WI ' + OLD_TAX_PCT + '%” box ticked. It is not used any more — the ' +
+      (bill.from === 'qb' ? 'QuickBooks invoice' : 'estimate') + '’s tax is.';
+  return '<div class="old-tax-note" role="note">' + say +
+    (edits ? ' <button type="button" class="link-btn" onclick="dropOldTaxBox()">' + (bill.from === 'oldBox' ? 'Stop adding it' : 'OK, clear it') + '</button>' : '') + '</div>';
+}
+function dropOldTaxBox() {
+  if (jobsReadOnly()) return;
+  oldTaxable = false;
+  markDirty();
+  updateSummary();
+}
 function renderPayments() {
   const w = document.getElementById('paymentsTableWrap');
-  const jobPrice = parseMoney(document.getElementById('jobPrice').value);
-  const taxable = document.getElementById('taxable').checked;
-  const tax = taxable ? round2(jobPrice * 0.055) : 0;
-  const invoiceTotal = round2(jobPrice + tax);
-  if (!payments.length) { w.innerHTML = '<p class="empty-msg">No payments logged yet.</p>'; }
+  const bill = formBill();
+  const jobPrice = bill.subtotal, tax = bill.tax;
+  const invoiceTotal = bill.total;
+  const billNote = billNoteHtml(bill);
+  if (!payments.length) { w.innerHTML = billNote + '<p class="empty-msg">No payments logged yet.</p>'; }
   else {
     let h = '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Label</th><th>Amount</th><th>Notes</th><th></th></tr></thead><tbody>';
     let recv = 0;
@@ -2319,17 +2545,21 @@ function renderPayments() {
     recv = round2(recv);
     const bal = round2(invoiceTotal - recv), paid = bal <= 0 && invoiceTotal > 0;
     let foot = '';
-    if (taxable) {
+    if (bill.from === 'qb') {
+      foot += '<tr style="font-weight:700"><td colspan="2" style="text-align:right">Invoice Total:</td><td>' + fmtMoney(invoiceTotal) + '</td><td colspan="2" class="muted" style="font-weight:500">QuickBooks' +
+        (bill.inv.docNumber ? ' #' + esc(bill.inv.docNumber) : '') + ', tax included</td></tr>';
+    } else if (tax > 0) {
       foot += '<tr><td colspan="2" style="text-align:right">Subtotal:</td><td>' + fmtMoney(jobPrice) + '</td><td colspan="2"></td></tr>';
-      foot += '<tr><td colspan="2" style="text-align:right">WI Tax 5.5%:</td><td>' + fmtMoney(tax) + '</td><td colspan="2"></td></tr>';
-      foot += '<tr style="font-weight:700"><td colspan="2" style="text-align:right">Invoice Total:</td><td>' + fmtMoney(invoiceTotal) + '</td><td colspan="2" class="muted" style="font-weight:500">matches QuickBooks</td></tr>';
+      foot += '<tr><td colspan="2" style="text-align:right">Sales tax:</td><td>' + fmtMoney(tax) + '</td><td colspan="2" class="muted">' +
+        (bill.from === 'estimate' ? 'from the estimate' : 'the old ' + OLD_TAX_PCT + '% box') + '</td></tr>';
+      foot += '<tr style="font-weight:700"><td colspan="2" style="text-align:right">Invoice Total:</td><td>' + fmtMoney(invoiceTotal) + '</td><td colspan="2"></td></tr>';
     }
     foot += '<tr style="font-weight:700"><td colspan="2" style="text-align:right">Received:</td><td>' + fmtMoney(recv) + '</td><td colspan="2"></td></tr>';
     foot += '<tr style="font-weight:700"><td colspan="2" style="text-align:right">Balance Due:</td>' +
       '<td style="color:' + (paid ? 'var(--pos)' : 'var(--neg)') + '">' + fmtMoney(bal) + '</td>' +
       '<td colspan="2">' + (paid ? '<span class="paid-chip">Paid in full</span>' : '') + '</td></tr>';
     h += '</tbody><tfoot>' + foot + '</tfoot></table></div>';
-    w.innerHTML = h;
+    w.innerHTML = billNote + h;
   }
   const recvTotal = round2(payments.reduce((s, p) => s + (parseFloat(p.amount) || 0), 0));
   const bal = round2(invoiceTotal - recvTotal);
@@ -2344,7 +2574,10 @@ function renderPayments() {
 // counted twice. Payments logged before PAYMENTS_FROM were already entered
 // in QuickBooks by hand and are only tied, never sent.
 const PAYMENTS_FROM = '2026-10-15T19:00:00.000Z';
-function jobQbInvoice(id) {
+// Its own name: it was called jobQbInvoice too, and being declared later in
+// this classic script it replaced the Job tab's one of that name, so the
+// "QuickBooks: invoice #… · $… owed" line never showed (16 Oct 2026).
+function jobHasQbInvoice(id) {
   if (boardFields.qbInvoiceRef && boardFields.qbInvoiceRef.id && id === currentJobId) return true;
   const all = window.YDInvoices && YDInvoices.all ? YDInvoices.all() : {};
   return Object.values(all).some(i => i && i.jobId === id && !i.deletedAt);
@@ -2353,7 +2586,7 @@ function payQbHtml(p) {
   if (p.qbPaymentId) return ' <span class="pay-qb ok" title="In QuickBooks">✓ ' + (p.fromQb ? 'from QuickBooks' : 'in QuickBooks') + '</span>';
   if (p.qbError) return ' <span class="pay-qb bad">⚠ ' + esc(p.qbError) + '</span>';
   if (String(p.createdAt || '') >= PAYMENTS_FROM) {
-    return jobQbInvoice(currentJobId) ? ' <span class="pay-qb wait">⏳ going to QuickBooks</span>'
+    return jobHasQbInvoice(currentJobId) ? ' <span class="pay-qb wait">⏳ going to QuickBooks</span>'
       : ' <span class="pay-qb">not in QuickBooks — this job has no invoice there yet</span>';
   }
   return '';
@@ -2374,7 +2607,7 @@ function addPayment() {
 // next hourly look. Whoever may not change billing waits for that look.
 let paySendTimer = 0;
 function sendPaymentSoon(jobId) {
-  if (!jobId || !jobQbInvoice(jobId) || !(typeof ydCan === 'function' && ydCan('billing', 'change')) || !window.YDClaude) return;
+  if (!jobId || !jobHasQbInvoice(jobId) || !(typeof ydCan === 'function' && ydCan('billing', 'change')) || !window.YDClaude) return;
   clearTimeout(paySendTimer);
   paySendTimer = setTimeout(async () => {
     try {
@@ -2582,8 +2815,9 @@ function getJobData() {
   d.quoteDate = (loadedQuoteDate && shownDate === fmtDateMD(loadedQuoteDate))
     ? loadedQuoteDate
     : readMD('quoteDate');
-  d.qbInvoiced = document.getElementById('qbInvoiced').checked;
-  d.taxable = document.getElementById('taxable').checked;
+  // The two retired boxes, kept as they were (see qbInvoicedFlag).
+  d.qbInvoiced = !!qbInvoicedFlag;
+  d.taxable = !!oldTaxable;
   // Kept off the crew's Jobs tab even while booked (crewjobs.js).
   d.crewHidden = !!(document.getElementById('crewHidden') || {}).checked;
   d.serviceTypes = serviceTypes.slice();
@@ -2604,8 +2838,8 @@ function loadJobData(d) {
   namePartsFromCustomer();
   loadedQuoteDate = d.quoteDate || '';
   document.getElementById('quoteDate').value = d.quoteDate ? fmtDateMD(d.quoteDate) : todayMD();
-  document.getElementById('qbInvoiced').checked = !!d.qbInvoiced;
-  document.getElementById('taxable').checked = !!d.taxable;
+  qbInvoicedFlag = !!d.qbInvoiced;
+  oldTaxable = !!d.taxable;
   const ch = document.getElementById('crewHidden'); if (ch) ch.checked = !!d.crewHidden;
   serviceTypes = Array.isArray(d.serviceTypes) ? d.serviceTypes.slice() : (d.serviceType ? [d.serviceType] : []);
   renderServiceTypes();
@@ -2703,11 +2937,12 @@ function rebuildJobIndex() {
       lost: isBidStatus(data.jobStatus || entry.status) && data.bidStage === 'lost',
       date: String(data.quoteDate || '').slice(0, 10),
       invoiced: isInvoiced(data),
+      stage: jobStage(data).id,
       deleted: !!data.deletedAt,
       lastModified: data.lastModified || entry.lastModified || ''
     };
     if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est || fresh.lost !== entry.lost ||
-        fresh.date !== entry.date || fresh.invoiced !== entry.invoiced || fresh.deleted !== !!entry.deleted) changed = true;
+        fresh.date !== entry.date || fresh.invoiced !== entry.invoiced || fresh.stage !== entry.stage || fresh.deleted !== !!entry.deleted) changed = true;
     return fresh;
   });
   if (changed) { saveJobIndex(idx); invalidateJobsCache(); }
@@ -2737,14 +2972,17 @@ function buildIndexEntry(id, data) {
     // makes, so jobs used to jump into this month on their own.
     date: String(data.quoteDate || '').slice(0, 10),
     invoiced: isInvoiced(data),
+    // Its one stage (jobStage), for the pill in My Jobs.
+    stage: jobStage(data).id,
     // In Recently deleted (deleteJob): kept, but left out of getJobIndex().
     deleted: !!data.deletedAt,
     lastModified: data.lastModified };
 }
-// Invoiced: the box ticked by hand, or an invoice made in QuickBooks
-// (qbInvoiceRef) -- the QB chip on All Jobs showed only the first.
+// QuickBooks holds an invoice for it (the QB chip on All Jobs). Whether the
+// job counts as Invoiced is its stage (jobStage) -- a deposit invoice on a
+// job still being worked does not make it Invoiced.
 function isInvoiced(data) {
-  return !!(data && (data.qbInvoiced || (data.qbInvoiceRef && data.qbInvoiceRef.id)));
+  return !!qbInvoiceOf(data);
 }
 // "Smith #1042": the name with the job's number beside it, escaped for HTML.
 function jobNameHtml(name, est) {
@@ -2953,7 +3191,8 @@ function duplicateJob(id) {
   // A copy is new work: nothing invoiced, nothing paid, not yet won. Carrying
   // those over put a second "Paid in full" job on the books, and a second
   // card at the original's place on the Bids and Jobs boards.
-  data.qbInvoice = ''; data.qbInvoiced = false;
+  // The retired Taxable box is not carried onto a new job.
+  data.qbInvoice = ''; data.qbInvoiced = false; data.taxable = false;
   data.payments = [];
   data.jobStatus = 'quoting';
   BOARD_FIELDS.forEach(f => { delete data[f]; });
@@ -3006,8 +3245,8 @@ function clearJobForm() {
   serviceTypes = []; jobStatus = 'quoting'; boardFields = {}; manualJobPrice = false; baseJobPrice = 0;
   storageBroken = false; storageWarned = false;
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = ''; });
-  document.getElementById('qbInvoiced').checked = false;
-  document.getElementById('taxable').checked = false;
+  qbInvoicedFlag = false;
+  oldTaxable = false;
   loadedQuoteDate = '';
   document.getElementById('quoteDate').value = todayMD();
   if (window.YDEstimate) window.YDEstimate.load(null);
@@ -3129,7 +3368,7 @@ function renderJobList() {
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
         '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
-          (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
+          (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
           // A bid with no price yet said "$0.00", which read as a free job.
           (j.price ? fmtMoney(j.price) : '<span class="muted">no price yet</span>') + '</div></div>' +
@@ -3209,7 +3448,8 @@ function renderDashboardSoon() {
 function ensureDashFilters() {
   const st = document.getElementById('dashStatus');
   if (st && !st.querySelector('option[value="toInvoice"]')) {
-    st.insertAdjacentHTML('beforeend', '<option value="toInvoice">Ready to invoice</option>' +
+    st.insertAdjacentHTML('beforeend', '<option value="toInvoice">Finished — not invoiced yet</option>' +
+      '<option value="invoiced">Invoiced</option><option value="paid">Paid</option>' +
       '<option value="owed">Owed money</option><option value="lost">Lost bids</option>');
   }
   if (!document.getElementById('dashYear') && st) {
@@ -3245,18 +3485,16 @@ function fillDashYears(years) {
 }
 // Where the job is on its board, in the board's words -- shown beside the
 // status, and left out where it only repeats it (Booked is Scheduled).
+// A finished job's column is its stage (Finished / Invoiced / Paid, shown
+// as the pill), so only the columns that add something are named: a bid's
+// place on the Bids board, Punch list.
 function dashStage(d, status) {
   if (isBidStatus(d.jobStatus) && d.bidStage === 'lost') return { id: 'lost', name: 'Lost' };
+  if (status === 'complete') return null;
   const st = window.YDBoards && YDBoards.stageOf ? YDBoards.stageOf(d) : null;
-  if (st) return st;
-  // Paid a while ago: off the Jobs board, but still paid.
-  if (status === 'complete' && window.YDSync && YDSync.finishedStage && window.YDBoards && YDBoards.jobColumnName) {
-    const id = YDSync.finishedStage(d);
-    return { id: id, name: YDBoards.jobColumnName(id) };
-  }
-  return null;
+  return st || null;
 }
-const DASH_SAME_AS_STATUS = { scheduled: 1, inProgress: 1, won: 1 };
+const DASH_SAME_AS_STATUS = { scheduled: 1, inProgress: 1, won: 1, toInvoice: 1, invoiced: 1, paid: 1 };
 // What the job makes. Real costs (materials bought, labour clocked or
 // entered) once there are any; until then what the estimate planned -- the
 // price less what its materials, delivery, fuel and crew-days cost
@@ -3301,7 +3539,8 @@ function renderDashboard() {
     const real = lab.cost + matCost > 0;
     const net = real ? round2(price - (lab.cost + matCost)) : dashPlannedNet(d, price);
     const stage = dashStage(d, status);
-    return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, hrs, matCost, net, planned: !real && net != null,
+    const jstage = jobStage(d);
+    return { id: d._id, jstage: jstage.id, qbStage: !!jstage.qb, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, hrs, matCost, net, planned: !real && net != null,
       invoiced: isInvoiced(d), owed: dashOwed(d), stage, lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', why: lostWhy(d), year: dashYearOf(d, status),
       plantBits: window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '' };
   });
@@ -3311,7 +3550,8 @@ function renderDashboard() {
   // Bids show only when Bids (or Lost bids) is picked: the totals are for
   // work actually booked.
   rows = rows.filter(r => fStatus === 'lost' ? r.lost
-    : fStatus === 'toInvoice' ? !!r.stage && r.stage.id === 'toInvoice'
+    : fStatus === 'toInvoice' ? r.jstage === 'finished'
+    : fStatus === 'invoiced' || fStatus === 'paid' ? r.jstage === fStatus
     : fStatus === 'owed' ? r.owed > 0
     : fStatus ? r.status === fStatus : r.status !== 'quoting');
   if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services + ' ' + r.est).toLowerCase().includes(fSearch));
@@ -3351,8 +3591,10 @@ function renderDashboard() {
   const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
   const stageHtml = r => r.stage && !DASH_SAME_AS_STATUS[r.stage.id] ? '<span class="dash-stage">' + esc(r.stage.name) + '</span>' : '';
   const statusHtml = r => (r.lost ? '<span class="pill lost">Lost</span>' + (r.why ? ' <span class="lost-why">' + esc(r.why) + '</span>' : '')
-      : statusPill(r.status) + stageHtml(r)) +
-    (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + r.plantBits;
+      : stagePill(r.jstage) + stageHtml(r)) +
+    // QuickBooks has an invoice for it -- said by the pill once it is
+    // Invoiced or Paid; before that (a deposit invoice) by the chip.
+    (r.invoiced && !r.qbStage ? '<span class="qb-chip" title="QuickBooks has an invoice for it">QB</span>' : '') + r.plantBits;
   const netHtml = r => r.net == null ? '<span class="muted" title="No costs recorded and no costed estimate yet">—</span>'
     : '<span style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '"' +
       (r.planned ? ' class="dash-planned" title="Planned, from the estimate — no real costs recorded yet"' : '') + '>' +
@@ -3571,9 +3813,10 @@ function copyCostSummary() {
   const laborCost = totalLaborCost();
   const totalMat = round2(materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0));
   const addCost = round2(getAdditionalCostsTotal());
-  const jobPrice = parseMoney(document.getElementById('jobPrice').value);
-  const taxable = document.getElementById('taxable').checked;
-  const tax = taxable ? round2(jobPrice * 0.055) : 0;
+  // The tax as QuickBooks or the estimate has it (jobBill) -- not the
+  // retired 5.5% box, unless an old job still has it ticked.
+  const bill = formBill();
+  const jobPrice = bill.subtotal;
   const net = round2(jobPrice - (laborCost + totalMat));
   const lines = [
     'YD Exterior Visions — Job Cost Summary',
@@ -3582,8 +3825,8 @@ function copyCostSummary() {
     qb ? 'QB Invoice #: ' + qb : null,
     '',
     'Job Price (subtotal): ' + fmtMoney(jobPrice),
-    taxable ? 'WI Tax 5.5%: ' + fmtMoney(tax) : null,
-    taxable ? 'Invoice Total: ' + fmtMoney(jobPrice + tax) : null,
+    bill.tax > 0 ? 'Sales tax: ' + fmtMoney(bill.tax) : null,
+    bill.total !== jobPrice ? 'Invoice Total: ' + fmtMoney(bill.total) + (bill.from === 'qb' ? ' (QuickBooks, tax included)' : '') : null,
     '',
     'Materials purchased: ' + fmtMoney(totalMat),
     'Labor cost: ' + fmtMoney(laborCost) + ' (' + totalHrs.toFixed(1) + ' hrs)',
