@@ -4106,3 +4106,11 @@
   @media (max-width:860px) {
     .header-actions .btn-menu { font-size:16px; min-width:44px; min-height:38px; }
   }
+  /* Dark mode: the done/skipped stop numbers and the red alert badges are
+     light colours there (green #4fd68a, grey, coral), and white on them
+     measured 1.9-2.6:1. Dark numbers instead. */
+  html[data-night] .stop.done .stop-num, html[data-night] #stormWrap .stop.skipped .stop-num { color:#10161a; }
+  html[data-night] .wxc-alert, html[data-night] .section-badge.eq-alert { color:#2a0d07; }
+  /* "due in 30 hours" on a machine: the light-mode green on dark mode's dark
+     green background measured 2.2:1. */
+  html[data-night] .eq-due.ok { color:var(--pos); }
