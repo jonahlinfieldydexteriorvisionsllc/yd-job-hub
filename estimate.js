@@ -353,7 +353,7 @@
 
     wrap.innerHTML =
       jumpHtml() +
-      (settled() ? '<div class="est-refold"><button class="link-btn" onclick="estUnfold(false)">▴ Fold the estimate back to one line</button></div>' : '') +
+      (settled() ? '<div class="est-refold"><button class="link-btn ro-ok" onclick="estUnfold(false)">▴ Fold the estimate back to one line</button></div>' : '') +
       fromQbHtml(r, ro) +
       head +
 
@@ -387,7 +387,7 @@
       '<div class="est-auto" id="estAuto"></div>' +
 
       '<div class="est-totals est-jump-to" id="estTotals"></div>' +
-      (hasLines() ? '<div class="field-actions"><button class="btn btn-sm" onclick="estToggleCustomer()">' +
+      (hasLines() ? '<div class="field-actions"><button class="btn btn-sm ro-ok" onclick="estToggleCustomer()">' +
         (showCustomer ? 'Hide what the customer sees' : '👁 What the customer sees') + '</button></div>' : '') +
       '<div id="estCustomer"></div>' +
 
@@ -452,7 +452,7 @@
   const JUMPS = [['estJNotes', 'Notes'], ['estJLabor', 'Labor'], ['estJMats', 'Materials'], ['estTotals', 'Totals'], ['estQb', 'QuickBooks']];
   function jumpHtml() {
     return '<nav class="est-jump" aria-label="Parts of the estimate">' +
-      JUMPS.map(([id, name]) => '<button type="button" onclick="estJump(\'' + id + '\')">' + name + '</button>').join('') + '</nav>';
+      JUMPS.map(([id, name]) => '<button type="button" class="ro-ok" onclick="estJump(\'' + id + '\')">' + name + '</button>').join('') + '</nav>';
   }
   function placeJump(wrap) {
     wrap = wrap || el('estimateWrap');
@@ -498,7 +498,7 @@
         (q.acceptedBy ? ' <span class="muted">by ' + esc(q.acceptedBy) + '</span>' : '') +
         (q.env === 'sandbox' ? ' <span class="est-sandbox">TEST COMPANY</span>' : '') + '</span>' +
       '<span class="est-fold-act">' + link +
-        '<button class="btn btn-sm" onclick="estUnfold(true)" aria-expanded="false">Show / edit ▾</button></span></div>';
+        '<button class="btn btn-sm ro-ok" onclick="estUnfold(true)" aria-expanded="false">' + (changes() ? 'Show / edit ▾' : 'Show ▾') + '</button></span></div>';
   }
 
   // An estimate made in QuickBooks (quickbooks.py brought it in with the
@@ -583,7 +583,7 @@
     const lastI = est.chat.length - 1;
     const older = Math.max(0, est.chat.length - CHAT_PHONE);
     return '<div class="est-chat' + (chatAll[currentJobId || ''] ? ' est-chat-all' : '') + '" id="estChat">' +
-        (older ? '<button type="button" class="link-btn est-chat-older" onclick="estChatAll()">Show the ' + older +
+        (older ? '<button type="button" class="link-btn est-chat-older ro-ok" onclick="estChatAll()">Show the ' + older +
           ' earlier message' + (older === 1 ? '' : 's') + '</button>' : '') +
         est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + (i < older ? ' est-msg-old' : '') + '">' +
           '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
@@ -682,7 +682,7 @@
   // or shut without drawing the estimate again (nothing in it prices).
   const moreOpen = {};        // line id -> its More is open
   function moreBtnHtml(id, says) {
-    return '<button type="button" class="est-more-btn" id="estMBt_' + id + '" aria-expanded="' + (moreOpen[id] ? 'true' : 'false') + '"' +
+    return '<button type="button" class="est-more-btn ro-ok" id="estMBt_' + id + '" aria-expanded="' + (moreOpen[id] ? 'true' : 'false') + '"' +
       ' onclick="estMore(\'' + id + '\')">' + (moreOpen[id] ? 'Less ▴' : 'More ▾') +
       (says ? ' <span class="est-more-says">· ' + esc(says) + '</span>' : '') + '</button>';
   }
@@ -1201,7 +1201,7 @@
     const p = r.profit;
     if (!p || !(r.totalCents > 0)) return '';
     if (!numbersShown) {
-      return '<div class="est-planned-show"><button class="link-btn" onclick="estNumbers()">📊 Show my numbers</button></div>';
+      return '<div class="est-planned-show"><button class="link-btn ro-ok" onclick="estNumbers()">📊 Show my numbers</button></div>';
     }
     const why = !p.complete ? '<p class="est-planned-why">Not final — ' +
       (r.problems.length ? 'some lines aren’t priced yet' : r.work.some(w => !w.crewDays) ? 'a labor line has no crew-days' : 'the crew-day rate isn’t set') + '.</p>' : '';
@@ -1209,7 +1209,7 @@
     const days = p.crewDays > 0 ? fmtQ(p.crewDays) + ' crew-day' + (p.crewDays === 1 ? '' : 's') : 'no crew-days yet';
     return '<div class="est-planned">' +
       '<div class="est-planned-h"><span>Planned profit <span class="muted">— only you see this</span></span>' +
-        '<button class="link-btn" onclick="estNumbers()">Hide</button></div>' +
+        '<button class="link-btn ro-ok" onclick="estNumbers()">Hide</button></div>' +
       '<table class="est-plan"><tbody>' +
         row('Material cost <small>what you pay, tax in</small>', cents(p.materialCostCents)) +
         (p.deliveryCostCents ? row('Delivery cost', cents(p.deliveryCostCents)) : '') +

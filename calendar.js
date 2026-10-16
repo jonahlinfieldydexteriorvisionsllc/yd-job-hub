@@ -872,6 +872,25 @@
   // no room for two rows of chips above its days: they fold behind one
   // button there (remembered per device), open on a computer.
   let filtersOpen = (() => { try { return localStorage.getItem('ydjobhub_calFilters') === '1'; } catch (e) { return false; } })();
+  // On an iPad (about 1024×768) or a laptop screen under ~900px tall the
+  // ticks and the colour key together pushed the hours two-thirds of the way
+  // down the screen (office testing, 16 Oct 2026). The ticks stay; the key
+  // folds behind a small "Colours" chip there (styles.css says where),
+  // opened or shut as last left on this device.
+  let keyOpen = (() => { try { return localStorage.getItem('ydjobhub_calKey') === '1'; } catch (e) { return false; } })();
+  window.calKey = function () {
+    keyOpen = !keyOpen;
+    try { localStorage.setItem('ydjobhub_calKey', keyOpen ? '1' : '0'); } catch (e) { /* private window: just not kept */ }
+    // Only the key and its chip change -- not the whole calendar, so the
+    // hours stay scrolled where they were.
+    const key = document.getElementById('calKey'), btn = document.getElementById('calKeyBtn');
+    if (key) key.classList.toggle('open', keyOpen);
+    if (btn) {
+      btn.setAttribute('aria-expanded', String(keyOpen));
+      const arrow = btn.querySelector('span');
+      if (arrow) arrow.textContent = keyOpen ? '▾' : '▸';
+    }
+  };
   function filtersHtml() {
     const off = hidden.size + (onlyMineOn ? 1 : 0);
     return '<div class="cal-filters' + (filtersOpen ? ' open' : '') + '">' +
@@ -888,10 +907,14 @@
             '<span class="cal-box"></span><span class="cal-check-name">👤 Only mine</span></label>' +
           (off ? '<button class="link-btn" onclick="calShowAll()">Show everything</button>' : '') +
           (isOwner() ? '<button class="link-btn" onclick="calManage()">⚙ Manage calendars</button>' : '') +
+          // The key's own fold: shown only where the stylesheet folds it
+          // (an iPad, a short laptop screen).
+          '<button type="button" class="cal-key-btn" id="calKeyBtn" onclick="calKey()" aria-controls="calKey" aria-expanded="' + keyOpen + '">' +
+            '🎨 Colours <span aria-hidden="true">' + (keyOpen ? '▾' : '▸') + '</span></button>' +
         '</div>' +
         // What each colour means (remind.js). Anything not marked keeps its
         // calendar's colour.
-        '<div class="cal-key" aria-label="What the colours mean">' + YDRemind.TYPES.map(t =>
+        '<div class="cal-key' + (keyOpen ? ' open' : '') + '" id="calKey" aria-label="What the colours mean">' + YDRemind.TYPES.map(t =>
           '<span class="cal-key-i" style="--c:' + safeColor(t.color) + '">' +
           '<span class="cal-key-dot"></span>' + esc(t.icon) + ' ' + esc(t.name) + '</span>').join('') + '</div>' +
       '</div>' +

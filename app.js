@@ -570,10 +570,13 @@ function applyJobsReadOnly() {
 // with one, Tab still walked into the fields and typing changed them on
 // screen, the bar saying "Saving…" for ever while persistJob refused (office
 // test, 16 Oct 2026). So nothing there keeps the focus either -- except the
-// view-only buttons the stylesheet lets through (.eva-view-btn).
+// buttons that only show or copy something, which the stylesheet lets
+// through (.ro-ok: What the customer sees, Show my numbers, Copy cost
+// summary, the estimate's section links...; jobcosts.js's .eva-view-btn).
+// A button marked so must write nothing: it is all a look-only admin has.
 function lockedJobControl(t) {
   return !!(document.documentElement.hasAttribute('data-jobs-readonly') && t && t.closest && t.matches &&
-    t.closest('#panel-job, #panel-tracking') && t.matches('input, select, textarea, button') && !t.matches('.eva-view-btn'));
+    t.closest('#panel-job, #panel-tracking') && t.matches('input, select, textarea, button') && !t.matches('.eva-view-btn, .ro-ok'));
 }
 document.addEventListener('focusin', e => { if (lockedJobControl(e.target)) e.target.blur(); }, true);
 // And should one still have the focus (a browser that was in the
@@ -1914,7 +1917,7 @@ function renderOrderList() {
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
     return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
         '<span class="muted">' + left + ' to order' + (lead && left ? ' · takes ' + esc(lead) : '') + '</span>' +
-        (v && left ? '<button class="link-btn" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' +
+        (v && left ? '<button class="link-btn ro-ok" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' +
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + esc(v) + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +

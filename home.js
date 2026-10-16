@@ -184,6 +184,27 @@
     if (!(bal > 0.004)) return 0;
     return stageOf(j) === 'paid' ? 0 : bal;
   }
+  // What the Invoices list says of a job's invoice -- the same rule
+  // (invoices.js stateOf), so Home never calls "owed" what that list calls
+  // "waiting": office testing, 16 Oct 2026, found a job in progress with its
+  // deposit paid listed here as money owed while the list said the rest is
+  // due when the job is done. Its own record when the list has one (fresher:
+  // the hourly look at QuickBooks writes it); else the job's copy of the
+  // invoice, which is enough for that first answer. null: no answer here.
+  function invState(j) {
+    const inv = invoiceOf(j), I = window.YDInvoices;
+    if (!inv || !I || typeof I.stateOf !== 'function') return null;
+    const rec = ((I.all && I.all()) || {})[inv.id];
+    const src = rec ? Object.assign({}, rec, { jobId: rec.jobId || j._id })
+      : { id: inv.id, open: true, balance: inv.balance, total: inv.total, jobId: j._id,
+          emails: inv.sentAt ? [inv.sentAt] : [], emailStatus: inv.sentAt ? 'EmailSent' : '' };
+    try {
+      const st = I.stateOf(src);
+      const bal = rec ? Number(rec.balance) || 0 : owed(j);
+      const deposit = st.deposit && I.depositOf ? I.depositOf(src, st.job) : 0;
+      return { st: st, bal: stageOf(j) === 'paid' ? 0 : bal, deposit: deposit };
+    } catch (e) { return null; }
+  }
 
   // ---------------------------------------------------------- the sections
 
@@ -495,8 +516,16 @@
     if (!seesJobs()) return '';
     const toInv = all.filter(needsInvoice)
       .sort((a, b) => String(a.workStageAt || a.lastModified || '').localeCompare(String(b.workStageAt || b.lastModified || '')));
-    const owing = all.map(j => ({ j: j, bal: owed(j) })).filter(x => x.bal > 0)
+    // Each job's invoice by the Invoices list's rule: paid there is off
+    // here; a deposit paid on a job not finished yet is waiting for the job,
+    // not on the customer, so it is listed apart and not as money owed.
+    const unpaid = all.map(j => {
+      const s = invState(j);
+      return { j: j, bal: s ? s.bal : owed(j), st: s ? s.st : null, deposit: s ? s.deposit : 0 };
+    }).filter(x => x.bal > 0.004 && !(x.st && x.st.kind === 'paid'))
       .sort((a, b) => String((invoiceOf(a.j) || {}).sentAt || '').localeCompare(String((invoiceOf(b.j) || {}).sentAt || '')));
+    const owing = unpaid.filter(x => !(x.st && x.st.kind === 'waiting'));
+    const waiting = unpaid.filter(x => x.st && x.st.kind === 'waiting');
     const total = toInv.reduce((s, j) => s + priceOf(j), 0);
     const invRow = j => {
       // How long it has waited: only when the board says when it was finished.
@@ -508,19 +537,28 @@
           (waited != null ? '<small class="hm-when' + (waited >= 7 ? ' late' : '') + '">Finished ' + esc(ago(waited)) + '</small>' : '') +
         '</span><span class="hm-job-r"><span class="hm-money">' + (priceOf(j) ? fmtMoney(priceOf(j)) : '—') + '</span></span></button>';
     };
-    const owedRow = ({ j, bal }) => {
+    // A deposit not paid yet on a job not finished is what is due now (the
+    // Invoices list says "Deposit $X not paid"): its figure, not the whole
+    // invoice's. `wait`: the deposit is in and the rest waits for the job.
+    const owedRow = ({ j, bal, st, deposit }, wait) => {
       const inv = invoiceOf(j);
       const whole = parseFloat(inv.total);
+      const dep = !wait && st && st.deposit && deposit > 0 && deposit < bal ? deposit : 0;
       return '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
         '<span class="hm-job-m">' + jobNameHtml(nameOf(j), numOf(j)) +
           '<small>Invoice' + (inv.docNumber ? ' #' + esc(inv.docNumber) : '') +
-            (whole > 0 ? ' · ' + fmtMoney(whole) + ' in all' : '') +
-            (inv.sentAt ? ' · sent ' + esc(ago(daysSince(inv.sentAt))) : '') + '</small></span>' +
-        '<span class="hm-job-r"><span class="hm-money owed">' + fmtMoney(bal) + '</span><small>owed</small></span></button>';
+            (wait ? ' · deposit paid — the rest is due when the job is done'
+              : (whole > 0 ? ' · ' + fmtMoney(whole) + ' in all' : '') +
+                (inv.sentAt ? ' · sent ' + esc(ago(daysSince(inv.sentAt))) : '')) + '</small></span>' +
+        (wait ? '<span class="hm-job-r"><span class="hm-money">' + fmtMoney(bal) + '</span><small>when done</small></span>'
+          : '<span class="hm-job-r"><span class="hm-money owed">' + fmtMoney(dep || bal) + '</span><small>' +
+            (dep ? 'deposit' : 'owed') + '</small></span>') + '</button>';
     };
     const body =
       (toInv.length ? capped('inv', toInv.map(invRow)) : empty('Nothing waiting to be invoiced.')) +
-      (owing.length ? sub('💵 Waiting on payment', owing.length) + capped('owed', owing.map(owedRow)) : '');
+      (owing.length ? sub('💵 Waiting on payment', owing.length) + capped('owed', owing.map(x => owedRow(x, false))) : '') +
+      (waiting.length ? sub('🔨 Deposit paid, job not done yet', waiting.length) +
+        capped('owedWait', waiting.map(x => owedRow(x, true)), 3) : '');
     return card('invoice', '🧾 Needs invoicing', toInv.length ? toInv.length + ' · ' + dollars(total) : '',
       ['Jobs board', "homeBoard('jobs')"], body, toInv.length > 0);
   }

@@ -291,7 +291,9 @@
       ? (busy[p.id] ? '<span class="jp-sending" data-jp-progress="' + safe(p.id) + '">Sending ' + Math.round((st.progress || 0) * 100) + '%</span>'
         : '<span class="jp-sending jp-wait">' + esc(st.error || 'Waiting for signal') + '</span>')
       : (p.deleteAsked ? '<span class="jp-asked">🗑 Delete?</span>' : '');
-    return '<button type="button" class="jp-thumb" onclick="jpOpen(\'' + safe(p.id) + '\')">' +
+    // ro-ok: looking at a photo still works on a look-only Job screen (the
+    // viewer offers changes only to whoever may make them).
+    return '<button type="button" class="jp-thumb ro-ok" onclick="jpOpen(\'' + safe(p.id) + '\')">' +
       (src ? '<img src="' + esc(src) + '" alt="" loading="lazy">' : '<span class="jp-noimg">📷</span>') + note +
       '<span class="jp-by">' + esc(p.pending ? (p.byName || 'Me') : nameOf(p)) + '</span></button>';
   }

@@ -275,6 +275,8 @@
     { id: 'cards', name: 'Cards', icon: '📌' },
     { id: 'calendar', name: 'Calendar', icon: '📅' },
     { id: 'receipts', name: 'Receipts', icon: '🧾' },
+    { id: 'invoices', name: 'Invoices', icon: '💵' },
+    { id: 'crew', name: 'Crew', icon: '👷' },
     { id: 'settings', name: 'Settings', icon: '⚙️' },
   ];
   const kindById = id => KINDS.find(k => k.id === id) || KINDS[0];
@@ -322,6 +324,21 @@
       allowed: () => signedIn() && can('jobs', 'see') && !!window.YDReceipts,
       about: () => 'Receipts — store, order #, items, job',
       build: buildReceipts,
+    },
+    // Office testing (16 Oct 2026): an invoice number or a crew member's
+    // name found nothing. The QuickBooks invoices for whoever sees billing
+    // (the Invoices list's own test); the people for whoever sees everyone's
+    // hours -- the owner, or an admin given Hours (their names are on
+    // the Clock tab's lists already).
+    invoices: {
+      allowed: () => signedIn() && can('billing', 'see') && !!(window.YDInvoices && YDInvoices.all),
+      about: () => 'Invoices — invoice #, customer, what is owed',
+      build: buildInvoices,
+    },
+    crew: {
+      allowed: () => signedIn() && (owner() || can('hours', 'see')) && !!(window.YDClock && YDClock.people),
+      about: () => 'Crew — name, email',
+      build: buildCrew,
     },
     settings: {
       allowed: () => true,
@@ -578,6 +595,71 @@
     });
   }
 
+  // Each unpaid (or lately paid) QuickBooks invoice, as the Invoices list on
+  // All Jobs has it: its number, the customer, what is still owed -- and
+  // where it stands by that list's own rule (YDInvoices.stateOf).
+  const INV_STATE = { unsent: 'Not emailed yet', due: 'Reminder due', call: 'Time to call', later: 'Owed',
+    waiting: 'Deposit paid — rest when done', paid: 'Paid' };
+  function buildInvoices() {
+    const all = YDInvoices.all() || {};
+    const jobs = typeof getJobIndex === 'function' && can('jobs', 'see') ? getJobIndex() : [];
+    return Object.keys(all).map(id => {
+      const inv = Object.assign({ id: id }, all[id] || {});
+      let st = { kind: inv.open && Number(inv.balance) > 0 ? 'later' : 'paid' };
+      try { if (YDInvoices.stateOf) st = YDInvoices.stateOf(inv) || st; } catch (e) { /* the plain reading stands */ }
+      const paid = st.kind === 'paid';
+      const j = inv.jobId ? jobs.find(x => x.id === inv.jobId) : null;
+      return entry('invoices', {
+        title: inv.customerName || 'A customer', tag: paid ? 'Paid' : 'Invoice',
+        sub: joinDot([inv.docNumber ? '#' + inv.docNumber : '',
+                      paid ? dollars(Math.round((Number(inv.total) || 0) * 100)) + ' paid'
+                        : dollars(Math.round((Number(inv.balance) || 0) * 100)) + ' owed',
+                      INV_STATE[st.kind] && !paid && st.kind !== 'later' ? INV_STATE[st.kind] : '',
+                      j && j.name !== inv.customerName ? j.name : '']),
+        nums: [inv.docNumber],
+        more: [inv.customerName, inv.email, j && j.name, j && j.est],
+        // Still owed first, the most late first; paid ones last.
+        order: (paid ? 1e6 : 0) - (Number(st.late) || 0),
+        open: () => openInvoice(id),
+      });
+    });
+  }
+  // On the Invoices list (All Jobs), the view that holds it, lit up.
+  function openInvoice(id) {
+    if (!window.YDInvoices || !YDInvoices.show) return;
+    YDInvoices.show(id);
+    later(() => reveal(el('invR_' + String(id).replace(/[^A-Za-z0-9_-]/g, ''))), 120);
+  }
+
+  // The people on Your Crew. Their own page (the hours they worked, as the
+  // Clock tab's lists open it) for whoever sees everyone's hours; someone
+  // asking to join or switched off is found on Your Crew, the owner's.
+  function buildCrew() {
+    const all = YDClock.people() || {};
+    const mine = (me() || {}).uid;
+    const ROLE = { owner: 'Owner', admin: 'Admin', crew: 'Crew', pending: 'Wants access', denied: 'Refused' };
+    return Object.keys(all).map(uid => {
+      const u = all[uid] || {};
+      const joined = (u.role === 'crew' || u.role === 'admin') && u.active !== false;
+      // Not yet let in, or switched off: Your Crew is the owner's.
+      if (!joined && !owner() && uid !== mine) return null;
+      const role = u.active === false && u.role !== 'pending' && u.role !== 'denied' ? 'Switched off' : ROLE[u.role] || 'Crew';
+      return entry('crew', {
+        title: (u.name || u.email || 'Worker') + (uid === mine ? ' (you)' : ''), name: u.name || u.email || '',
+        tag: role,
+        sub: joinDot([u.email, u.role === 'admin' && joined ? 'Admin' : '']),
+        more: [u.email, role],
+        order: joined ? 0 : 1,
+        open: () => openPerson(uid, joined || uid === mine),
+      });
+    }).filter(Boolean);
+  }
+  function openPerson(uid, theirPage) {
+    if (theirPage && can('hours', 'see') && fn('openWorker')) { switchTab('clock'); openWorker(uid); return; }
+    if (fn('openPeople')) openPeople();
+    else switchTab('clock');
+  }
+
   // ------------------------------------------------------------ settings
   //
   // Every setting in the app, with who may use it -- the same test the
@@ -697,11 +779,12 @@
   const allowedKinds = () => KINDS.filter(k => { try { return SOURCES[k.id].allowed(); } catch (e) { return false; } });
 
   const CHANGES = {
-    'yd-jobs-changed': ['jobs'], 'yd-jobs-restored': ['jobs'], 'yd-crew-jobs': ['jobs'],
+    'yd-jobs-changed': ['jobs', 'invoices'], 'yd-jobs-restored': ['jobs', 'invoices'], 'yd-crew-jobs': ['jobs'],
     'yd-supplies': ['supplies'], 'yd-equipment-changed': ['equipment'], 'yd-receipts': ['receipts'],
     'yd-cards-changed': ['cards', 'calendar'], 'yd-boards-changed': ['cards', 'calendar', 'settings'],
     'yd-calendar-changed': ['calendar'], 'yd-outreach': ['contacts'], 'yd-remind-me': ['calendar'],
     'yd-prospects': ['contacts'], 'yd-customers': ['contacts'], 'yd-snow-accounts': ['snow'],
+    'yd-invoices': ['invoices'], 'yd-clock-changed': ['crew'],
   };
   let redoTimer = null;
   Object.keys(CHANGES).forEach(ev => document.addEventListener(ev, () => {

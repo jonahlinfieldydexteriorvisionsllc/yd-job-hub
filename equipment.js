@@ -316,7 +316,38 @@
         (canAddCard() && !addingCard ? '<button class="btn btn-sm btn-filled" onclick="eqAddCard()">+ Add a card</button>' : '') + '</div>' +
       (found.length ? '<div class="eq-found">' + found.map(m => '<button class="btn btn-sm" onclick="openEquipment(\'' + safeId(m.id) + '\')">🚜 ' +
         esc(m.name) + '</button>').join('') + '</div>' : '') +
-      YDBoards.columnsFor(MAINT, words.length ? k => hits(cardText(k), words) : null);
+      YDBoards.columnsFor(MAINT, words.length ? k => hits(cardText(k), words) : null, waitingCards());
+  }
+
+  // Problems noted on a machine whose card is not on the board yet. Their
+  // cards are made by the device of whoever runs both the machines and the
+  // boards (syncMaintenance) -- so an admin who may change the machines but
+  // only look at the boards added one here and the board said "Nothing
+  // here" until Jonah's Job Hub was next open (office testing, 16 Oct 2026).
+  // Drawn from the machine's own record until then, marked as on their way,
+  // and never written from here: the card is that device's to make. Only
+  // once the board's cards have come from the server -- before that, every
+  // problem would look card-less.
+  function waitingCards() {
+    if (!seesGear() || !window.YDBoards || !YDBoards.cardsReady || !YDBoards.cardsReady(MAINT)) return [];
+    const have = (YDBoards.cards()[MAINT]) || {};
+    const out = [];
+    Object.values(gear).forEach(g => (g.issues || []).forEach(i => {
+      // A fixed one never gets a card made again (its card may have been
+      // deleted with the board's done cards).
+      if (!i || !i.id || i.doneAt || have['eqi-' + g.id + '-' + i.id]) return;
+      // From a shop card still being put on its machine: that card shows.
+      if (String(i.id).indexOf('is') === 0 && have['eqc' + String(i.id).slice(2)]) return;
+      const u = urgencyOf(i.urgency);
+      out.push({
+        waiting: true, id: 'eqw-' + g.id + '-' + i.id, equipmentId: g.id,
+        title: (g.name || 'Machine') + ' — ' + i.what, notes: i.note || '',
+        labels: ['u-' + u.id], urgency: CARD_URGENCY[u.id] || 'normal',
+        // Where its card will start (a shop card's column), last of its urgency.
+        column: i.boardColumn || '', order: Date.parse(i.at || '') || Date.now(),
+      });
+    }));
+    return out;
   }
 
   // + Add a card: which machine (or the shop), what, how urgent. Put on the

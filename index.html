@@ -190,6 +190,11 @@
   <!-- ============ TAB 1: JOB ============ -->
   <div class="tab-panel" id="panel-job">
 
+    <!-- An admin who may look at jobs but not change them (app.js
+         jobsReadOnly): the screen is locked, and says so -- a grey screen
+         with nothing to say why looked broken (office testing, 16 Oct 2026). -->
+    <p class="ro-banner" role="note">👀 You can look at jobs; changes are for Jonah — ask him if one needs changing.</p>
+
     <!-- A bid is not a job until it is booked (app.js isBidStatus). -->
     <div class="bid-banner" id="bidBanner" hidden>
       <span id="bidBannerText"><b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.</span>
@@ -271,7 +276,7 @@
                  (styles.css hides the row by the status picked above). -->
             <div class="crew-view-row">
               <label class="chk"><input type="checkbox" id="crewHidden" onchange="markDirty()"> Hide from crew</label>
-              <button type="button" class="link-btn" id="crewPreviewBtn" hidden onclick="previewCrewJob()">👷 What the crew see</button>
+              <button type="button" class="link-btn ro-ok" id="crewPreviewBtn" hidden onclick="previewCrewJob()">👷 What the crew see</button>
             </div>
             <!-- Whether the job has plants (so a care email is owed when it is
                  finished): worked out from the estimate and materials, or set
@@ -507,6 +512,9 @@
   <!-- ============ TAB 2: TRACKING ============ -->
   <div class="tab-panel" id="panel-tracking">
 
+    <!-- Look-only, as on the Job tab. -->
+    <p class="ro-banner" role="note">👀 You can look at jobs; changes are for Jonah — ask him if one needs changing.</p>
+
     <!-- Each list's form to add to it is folded behind its "+ Add ..." button
          (app.js openAddForm / closeAddForm): four forms always open made this
          screen near 6,000px tall on a phone. Once open, a form stays open
@@ -659,8 +667,8 @@
         <div class="fin-grid" id="financialsGrid" style="margin-top:14px"></div>
         <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">
           <span class="label" style="width:100%;margin-bottom:2px">Export</span>
-          <button class="btn btn-sm" onclick="copyCostSummary()">📋 Copy Cost Summary</button>
-          <button class="btn btn-sm" onclick="exportPurchasesCsv()">⬇ Export Purchases (CSV)</button>
+          <button class="btn btn-sm ro-ok" onclick="copyCostSummary()">📋 Copy Cost Summary</button>
+          <button class="btn btn-sm ro-ok" onclick="exportPurchasesCsv()">⬇ Export Purchases (CSV)</button>
         </div>
       </div>
     </div>
