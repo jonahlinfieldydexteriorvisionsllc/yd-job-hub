@@ -1540,6 +1540,10 @@
   .md-head { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.7px; color:var(--muted);
              margin:14px 2px 2px; display:flex; align-items:center; gap:8px; }
   .md-head:first-child, .md-nudge + .md-head { margin-top:4px; }
+  /* The day's one count at the top of My day (calendar.js tally) -- the
+     same words Home and the day list down the side use. */
+  .md-count { font-size:14px; font-weight:700; color:var(--text); margin:4px 2px 0; }
+  .md-count + .md-head { margin-top:10px; }
   .md-head.md-crew { margin-top:22px; padding-top:12px; border-top:1px solid var(--border); }
   .md-row { --c:#6b7a8f; display:flex; gap:10px; align-items:center; width:100%;
             border-left:4px solid var(--c); border-radius:6px; background:var(--surface-2);

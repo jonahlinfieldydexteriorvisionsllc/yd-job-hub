@@ -501,6 +501,7 @@
     // left to do.
     if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
     drawn = {};
+    countMemo = {};
     // The "any time" list goes in two places -- down the side on a computer,
     // above the calendar on a phone (the stylesheet shows one) -- built once.
     // My day has it in the page already.
@@ -640,12 +641,10 @@
     // Tasks from the days before that nobody ticked off, at the top -- on
     // today's list only (a later day's "earlier" has not happened yet).
     const late = day === today() ? carried() : [];
-    const left = leftOf(items) + leftOf(late);
     const folded = foldedNow();
     return '<div class="cal-today' + (folded ? ' folded' : '') + '">' +
       '<button class="cal-today-head" onclick="calTodayFold()" aria-expanded="' + !folded + '">✅ Any time ' +
-        (day === today() ? 'today' : esc(shortDay(day))) +
-        (items.length || late.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') +
+        (day === today() ? 'today' : esc(shortDay(day))) + countHtml(dayCount(day)) +
         '<span class="cal-today-fold">' + (folded ? '▸' : '▾') + '</span></button>' +
       '<div class="cal-today-body">' + lateHtml(late, null, true) +
         (items.length ? group(crew.length && mine.length ? 'Yours' : late.length ? 'Today' : '', mine) + group('👷 Crew', crew)
@@ -678,9 +677,54 @@
     const d = o.doneAt ? new Date(o.doneAt) : null;
     return !!d && !isNaN(d) && dayOf(d) === today();
   }
-  // A job's day on the Work schedule is on the lists but is not a thing
-  // to get done (remind.js isTask), so it is never counted as one.
-  const leftOf = list => list.filter(o => !o.done && !o.jobDay).length;
+  // ------------------------------------------------- how many left to do
+  //
+  // Crew testing, 16 Oct 2026: for the same person on the same day Home
+  // said "4 to do", the Week view's day list "5 to do", and My day "2 to do"
+  // with 2 more from earlier. Each counted its own way -- everyone's or just
+  // theirs, appointments or not, timed things or not, the calendars ticked
+  // in the side or all of them, the days before folded in or not. Now there
+  // is one count, in one set of words, wherever a day's figure shows (Home,
+  // My day, the day list down the side, the "any time" list on a phone):
+  //   - this person's own (remind.js isMine) -- the crew's tasks that are
+  //     not theirs are the crew's count, on Home's crew card;
+  //   - things that have to be ticked off (remind.js isTask, unchanged: an
+  //     appointment never is), at a set time or not, not ticked off yet;
+  //   - on every calendar, whatever is ticked in the side, as My day and
+  //     Home read the day -- so hiding a calendar does not change the figure;
+  //   - and apart from them, the ones carried from earlier days (carried).
+  // "3 to do today · 2 from earlier"; "all done" once there were some and
+  // none are left; nothing at all when there were none.
+  // `all`: the day's occurrences on every calendar; `late`: carried(true).
+  function tally(all, late, pick, day) {
+    const tasks = all.filter(o => o.task && !o.after && pick(o));
+    const earlier = late.filter(pick);
+    return { day: day, today: tasks.filter(o => !o.done).length, earlier: earlier.filter(o => !o.done).length,
+             any: tasks.length + earlier.length };
+  }
+  // This person's count for a day. Worked out once for each draw: the day
+  // list and the "any time" list both show it (countMemo, emptied by render).
+  let countMemo = {};
+  function dayCount(day) {
+    if (countMemo[day]) return countMemo[day];
+    const w = YDRemind.who(people);
+    if (!w) return null;
+    return (countMemo[day] = tally(occurrences(day, day, true), day === today() ? carried(true) : [],
+      o => occIsMine(o, w), day));
+  }
+  function countWords(c) {
+    if (!c) return '';
+    const parts = [];
+    if (c.today) parts.push(c.today + ' to do' + (c.day === today() ? ' today' : ''));
+    if (c.earlier) parts.push(c.earlier + ' from earlier');
+    return parts.join(' · ') || (c.any ? 'all done' : '');
+  }
+  // The count where the day's lists are headed. Its title says whose it is:
+  // a list down the side holds the crew's things too, for the owner.
+  function countHtml(c) {
+    const words = countWords(c);
+    return words ? ' <span class="cal-today-n" title="Yours — the same count as Home and My day">' + esc(words) + '</span>' : '';
+  }
   // Above the calendar on a phone, a long list of them would push the days
   // off the screen: the side list shows the first few and the rest on a tap
   // (`short`). My day, which is the list, shows them all.
@@ -772,16 +816,17 @@
     const late = day === today() ? carried(true) : [];
     const lateMine = late.filter(o => occIsMine(o, w));
     const lateCrew = late.filter(o => !occIsMine(o, w) && isCrewOcc(o));
-    const left = leftOf(mineU);
     const which = day === today() ? 'today' : 'this day';
+    // The day's one count (tally) at the top, as Home and the day list say
+    // it -- not a count of each part, which read as two different figures.
+    const count = countWords(countMemo[day] = tally(all, late, o => occIsMine(o, w), day));
     return '<div class="md cal-pan">' + nudgeHtml() +
-      (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done ' +
-        '<span class="cal-today-n">' + (leftOf(lateMine) || 'all ticked off') + '</span></div>' +
+      (count ? '<div class="md-count">' + esc(count) + '</div>' : '') +
+      (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done</div>' +
         lateMine.map(o => todoRow(o, [shortDay(o.day), whoOn(o)].filter(Boolean).join(' · '), !o.done)).join('') : '') +
       (!mine.length ? '<p class="empty-msg">Nothing ' + (lateMine.length ? 'else ' : '') + 'of yours ' + which + '.</p>' :
         (mineT.length ? '<div class="md-head">🕑 At set times</div>' + mineT.map(timedRow).join('') : '') +
-        (mineU.length ? '<div class="md-head">✅ Any time ' + which +
-          ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span></div>' +
+        (mineU.length ? '<div class="md-head">✅ Any time ' + which + '</div>' +
           mineU.map(o => todoRow(o, whoOn(o))).join('') : '')) +
       (crew.length || lateCrew.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
         lateHtml(lateCrew, whoOn) +
@@ -921,10 +966,8 @@
     const timed = items.filter(o => o.time).sort((a, b) => (minutesOf(a.time) || 0) - (minutesOf(b.time) || 0) || byKind(a, b));
     const anyTime = items.filter(o => !o.time).sort(byKind);
     const late = day === today() ? carried() : [];
-    const left = leftOf(items) + leftOf(late);
     return '<div class="cal-daylist">' +
-      '<div class="cal-daylist-head">' + esc(longDay(day)) +
-        (items.length || late.length ? ' <span class="cal-today-n">' + (left ? left + ' to do' : 'all done') + '</span>' : '') + '</div>' +
+      '<div class="cal-daylist-head">' + esc(longDay(day)) + countHtml(dayCount(day)) + '</div>' +
       lateHtml(late, null, true) +
       timed.map(o => todoRow(o, '', false, fmtTime(o.time))).join('') +
       (anyTime.length ? '<div class="cal-todo-group">Any time</div>' + anyTime.map(o => todoRow(o)).join('') : '') +
@@ -2955,11 +2998,16 @@
     // TICK_FROM, a fortnight back at most, and kept ticked for the day once
     // done), so Home never says something different from them.
     const late = day === today() ? carried(true) : [];
+    const crewOnly = o => !occIsMine(o, w) && isCrewOcc(o);
     return {
+      // The day's counts, by the one rule (tally): this person's, and the
+      // crew's that are not theirs (Home's crew card) -- in words by
+      // YDCalendar.countWords, so Home says what My day and the calendar say.
+      count: tally(all, late, o => occIsMine(o, w), day), crewCount: tally(all, late, crewOnly, day),
       mineTimed: timed(mine).map(forHome), mineAny: untimed(mine).map(forHome),
       crewTimed: timed(crew).map(forHome), crewAny: untimed(crew).map(forHome),
       mineLate: late.filter(o => occIsMine(o, w)).map(forHome),
-      crewLate: late.filter(o => !occIsMine(o, w) && isCrewOcc(o)).map(forHome),
+      crewLate: late.filter(crewOnly).map(forHome),
     };
   }
 
@@ -2991,6 +3039,9 @@
     ready: () => calsHeard,
     adds: () => adds(),
     day: homeDay,
+    // A day's count (homeDay's count / crewCount) in the words every screen
+    // uses: "3 to do today · 2 from earlier".
+    countWords: countWords,
     // Every entry this person can see between two dates, drawn as Home draws
     // them (search.js: one call instead of a day at a time, and entries put
     // on someone else are found too).
