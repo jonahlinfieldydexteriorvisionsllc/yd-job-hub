@@ -276,17 +276,40 @@ def customers_on(db=None):
     return bool(snap.exists and (snap.to_dict() or {}).get("importOn") is True)
 
 
+def _shown_as_other(cid, docs):
+    """customers.js isTwin: marked sameAs another customer that is in the
+    list, with no loop back to itself."""
+    seen, at = [cid], cid
+    while str((docs.get(at) or {}).get("sameAs") or ""):
+        to = str(docs[at]["sameAs"])
+        if to not in docs:
+            return at != cid
+        if to in seen:
+            return False
+        seen.append(to)
+        at = to
+    return at != cid
+
+
 def call_list(today, db=None):
     """(the customer list is in use -- switched on and read in from
     QuickBooks --, [(customer, window)] due today, soonest window first)."""
     db = db or firestore.client()
     any_qb, due_now = False, []
+    docs = {}
     for s in db.collection("customers").stream():
         c = s.to_dict() or {}
         if c.get("mergedInto"):
             continue
+        docs[s.id] = c
+    for cid, c in docs.items():
         if c.get("qbCustomerId"):
             any_qb = True
+        # A second QuickBooks profile marked the same person as another
+        # (customers.js sameAs) is not called twice: the app shows it as its
+        # main one (mainOf) -- while that one is in the list.
+        if _shown_as_other(cid, docs):
+            continue
         st, w = call_state(c, today)
         if st == "on":
             due_now.append((c, w))

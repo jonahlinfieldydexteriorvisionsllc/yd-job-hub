@@ -4767,4 +4767,82 @@
     .sb-picks { grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .sb-meta .link-btn { min-height:44px; }
     .sub-props tr { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+  /* ---- Customers & contacts (customers.js, 16 Oct): the whole call list,
+     leads filled in one after another, Check the list, duplicates, Everyone,
+     and "What for" found by typing. Every choice a button in sight. ---- */
+  .cu-tagbtn { white-space:nowrap; }
+  .cu-tagbtn.on { border-color:var(--brand); color:var(--brand-ink); }
+  .cu-tagfilter { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:6px; margin:0 0 10px; }
+  .cu-tagfilter.muted { display:block; font-size:13px; }
+  .cu-tagfilter .cu-chip { text-align:center; min-width:0; overflow-wrap:anywhere; }
+  .cu-callsum { font-size:13px; color:var(--muted); margin:2px 0 4px; }
+  .cu-when-h { font-weight:700; font-size:14px; margin:12px 0 2px; padding:6px 10px; border-radius:6px;
+               background:var(--st-info-soft); color:var(--st-info); }
+  .cu-talk { font-size:12.5px; color:var(--muted); margin-top:3px; }
+  .cu-miss { margin-top:4px; display:flex; flex-wrap:wrap; gap:4px; }
+  .cu-fillbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between;
+                border:1px dashed var(--border-strong); border-radius:8px; padding:8px 10px; margin:4px 0 8px; font-size:13.5px; }
+  .cu-fill, .cu-add { border:2px solid var(--brand); border-radius:10px; padding:10px 12px; margin:4px 0 12px; background:var(--surface); }
+  .cu-fill-h { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:14px; }
+  .cu-fill-who { margin-bottom:8px; font-size:14.5px; overflow-wrap:anywhere; }
+  .cu-want input { border-color:var(--st-due); box-shadow:0 0 0 1px var(--st-due) inset; }
+  .cu-add-part { margin:8px 0; }
+  .cu-add-part > .label { display:block; margin-bottom:4px; }
+  .cu-g3 { grid-template-columns:repeat(3, 1fr); }
+  .cu-dupwarn { border:1.5px solid #e2b04a; background:#fdf5e4; border-radius:8px; padding:8px 10px; margin:6px 0; font-size:13.5px; }
+  html[data-night] .cu-dupwarn { background:#3a2c10; }
+  .cu-dupwarn-one { display:flex; flex-wrap:wrap; gap:6px; align-items:center; justify-content:space-between; padding:5px 0;
+                    border-top:1px solid rgba(0,0,0,.08); overflow-wrap:anywhere; }
+  .cu-dupwarn-one .cu-btns { margin:0; }
+  .cu-tagfind { width:100%; margin:4px 0 6px; }
+  .cu-tag-res { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:6px; }
+  .cu-tag-res .cu-chip { text-align:center; }
+  .cu-tag-g { grid-column:1 / -1; font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-top:6px; }
+  .cu-tagnew { border-style:dashed; }
+  .cu-tagmore { color:var(--brand-ink); }
+  .cu-every-kinds { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:6px; margin:0 0 8px; }
+  .cu-every-kinds .cu-chip { text-align:center; min-width:0; overflow-wrap:break-word; padding-left:3px; padding-right:3px; }
+  .cu-dup-facts a, .cu-fam a, .cu-qblink { color:var(--brand-ink); }
+  .cu-reach { display:flex; flex-wrap:wrap; gap:6px; flex:0 0 auto; align-items:flex-start; justify-content:flex-end; max-width:290px; }
+  .cu-reach .btn { min-height:44px; display:inline-flex; align-items:center; text-decoration:none; }
+  .cu-noway { font-size:12.5px; }
+  .cu-kind.k-contact { background:var(--st-soon-soft); color:var(--st-soon); border-color:transparent; }
+  .cu-kind.k-vendor { background:#e3ecf8; color:#2a4f86; border-color:transparent; }
+  .cu-kind.k-sub { background:#efe6f7; color:var(--brand-ink); border-color:transparent; }
+  .cu-kind.k-team { background:var(--st-info-soft); color:var(--st-info); border-color:transparent; }
+  html[data-night] .cu-kind.k-vendor, html[data-night] .cu-kind.k-sub,
+  html[data-night] .cu-kind.k-contact, html[data-night] .cu-kind.k-team { background:var(--surface-2); color:var(--text); }
+  .cu-check { width:100%; min-height:48px; display:flex; align-items:center; gap:10px; text-align:left; font:inherit; font-size:14px; color:inherit;
+              background:var(--surface); border:1.5px solid var(--border-strong); border-radius:8px; padding:8px 12px; margin:6px 0 0; cursor:pointer; }
+  .cu-check.warn { border-color:var(--st-due); }
+  .cu-check.on { border-color:var(--brand); background:var(--surface-2); }
+  .cu-check.ok { border:0; background:none; min-height:0; padding:4px 2px; color:var(--pos); font-size:13.5px; cursor:default; }
+  .cu-check-i { font-size:18px; flex:0 0 auto; }
+  .cu-check-t { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .cu-check-go { flex:0 0 auto; color:var(--muted); font-size:16px; }
+  .cu-check-part { border:1.5px solid var(--brand); border-top:0; border-radius:0 0 8px 8px; padding:6px 12px 12px; margin-bottom:4px; }
+  .cu-line.warn { color:#9a6a12; }
+  .cu-dup { border:1px solid var(--border-strong); border-radius:10px; padding:10px; margin:10px 0; }
+  .cu-dup-why { font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; color:var(--st-due-ink); margin-bottom:6px; }
+  .cu-dup-one { border:1px solid var(--border); border-radius:8px; padding:8px 10px; margin:6px 0; overflow-wrap:anywhere; }
+  .cu-dup-one.main { border:2px solid var(--brand); }
+  .cu-dup-facts { font-size:13px; margin:4px 0; }
+  .cu-dup-one .cu-btns { margin:6px 0 0; }
+  .cu-dup-one .cu-chip { min-height:40px; }
+  .cu-dup-what { font-size:13px; margin-top:8px; }
+  .cu-dup-acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .cu-dup-acts .btn { min-height:44px; display:inline-flex; align-items:center; text-decoration:none; }
+  .cu-place { border-left:4px solid var(--brand); background:var(--surface-2); border-radius:6px; padding:8px 10px; margin:0 0 10px; font-size:13.5px; }
+  .cu-place .cu-btns { margin:6px 0 0; }
+  .cu-fam { border-top:1px solid var(--border); padding:8px 0; font-size:13.5px; overflow-wrap:anywhere; }
+  .cu-fam .cu-btns { margin:6px 0 0; }
+  .cu-qblink { font-size:12.5px; }
+  @media (max-width:720px) {
+    .cu-tagfilter, .cu-every-kinds { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .cu-tag-res { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .cu-g3 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .cu-reach { max-width:none; justify-content:flex-start; align-self:stretch; }
+    .cu-reach .btn { flex:1 1 0; justify-content:center; }
+    .cu-dup-acts .btn { flex:1 1 100%; justify-content:center; }
+    .cu-fillbar .btn { width:100%; min-height:44px; }
   }

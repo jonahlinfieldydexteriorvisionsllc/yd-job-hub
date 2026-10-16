@@ -401,18 +401,35 @@ def _snow_accounts(db, quotes, docs):
                 eid = ((s.to_dict() or {}).get("fromQb") or {}).get("estimateId")
                 if eid:
                     joined[s.reference.path.split("/")[1]] = str(eid)
-    # A lead an account was tied to may have become a QuickBooks customer.
-    leads = sorted({str(a["customerId"]) for a in accts.values() if str(a.get("customerId") or "").startswith("ld")})
+    # A lead an account was tied to may have become a QuickBooks customer --
+    # or been merged by hand into another lead that did (followed a few
+    # steps).
+    todo = {str(a["customerId"]) for a in accts.values() if str(a.get("customerId") or "").startswith("ld")}
     merged = {}
-    if leads:
-        for s in db.get_all([db.collection(COLL).document(x) for x in leads]):
-            if s.exists and (s.to_dict() or {}).get("mergedInto"):
-                merged[s.id] = str(s.to_dict()["mergedInto"])
+    for _ in range(5):
+        if not todo:
+            break
+        nxt = set()
+        for s in db.get_all([db.collection(COLL).document(x) for x in sorted(todo)]):
+            to = str((s.to_dict() or {}).get("mergedInto") or "") if s.exists else ""
+            if to:
+                merged[s.id] = to
+                if to.startswith("ld") and to not in merged:
+                    nxt.add(to)
+        todo = nxt
+
+    def final(cid):
+        seen = set()
+        while cid in merged and cid not in seen:
+            seen.add(cid)
+            cid = merged[cid]
+        return cid
+
     tied, by_est = {}, {}
     for aid, a in accts.items():
         if a.get("customerId"):
             cid = str(a["customerId"])
-            tied.setdefault(merged.get(cid, cid), []).append(aid)
+            tied.setdefault(final(cid), []).append(aid)
             continue
         for eid in ((a.get("fromQuickBooks") or {}).get("estimateId"), joined.get(aid)):
             if eid:
@@ -620,10 +637,23 @@ def estimate_made(job_id, qb_customer_id):
     if was and not was.startswith("ld"):
         # Tied by hand to another QuickBooks customer: his pick stands.
         return
-    lead = None
+    lead, chain = None, []
     if was:
         ls = db.collection(COLL).document(was).get()
         lead = (ls.to_dict() or {}) if ls.exists else None
+        chain = [was]
+        # A lead merged by hand into another lead (the duplicates list,
+        # customers.js) is that lead: followed, a few steps at most.
+        while lead and str(lead.get("mergedInto") or "").startswith("ld") and len(chain) <= 5:
+            nxt = str(lead["mergedInto"])
+            if nxt in chain:
+                break
+            ns = db.collection(COLL).document(nxt).get()
+            if not ns.exists:
+                break
+            chain.append(nxt)
+            lead = ns.to_dict() or {}
+        was = chain[-1]
     if lead and not lead.get("mergedInto"):
         cs = db.collection(COLL).document(qid).get()
         cust = (cs.to_dict() or {}) if cs.exists else {}
@@ -646,9 +676,10 @@ def estimate_made(job_id, qb_customer_id):
         carry.update(fromLead=was, updatedAt=now)
         db.collection(COLL).document(qid).set(carry, merge=True)
         db.collection(COLL).document(was).set({"mergedInto": qid, "mergedAt": now, "updatedAt": now}, merge=True)
-        # Every other job tied to the lead follows.
-        for s in db.collection("jobs").where("customerId", "==", was).stream():
-            if s.id != job_id:
-                s.reference.set({"customerId": qid, "lastModified": qb._stamp()}, merge=True)
+        # Every other job tied to the lead (or to a lead merged into it) follows.
+        for lid in chain:
+            for s in db.collection("jobs").where("customerId", "==", lid).stream():
+                if s.id != job_id:
+                    s.reference.set({"customerId": qid, "lastModified": qb._stamp()}, merge=True)
     db.collection("jobs").document(job_id).set(
         {"customerId": qid, "customerBy": job.get("customerBy") or "auto", "lastModified": qb._stamp()}, merge=True)
