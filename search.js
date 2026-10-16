@@ -146,6 +146,12 @@
     return d.toLocaleDateString('en-US', opts);
   }
   const msOf = s => { const t = Date.parse(s || ''); return isFinite(t) ? t : 0; };
+  // "07:00" as "7am", "13:30" as "1:30pm" -- the way the calendar and the
+  // boards say a time (the card search alone said 07:00).
+  function clock12(t) {
+    const h = +t.slice(0, 2), m = +t.slice(3, 5);
+    return (h % 12 || 12) + (m ? ':' + t.slice(3, 5) : '') + (h >= 12 ? 'pm' : 'am');
+  }
   const dollars = cents => (typeof cents === 'number' && isFinite(cents)
     ? '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '');
   const joinDot = list => list.filter(Boolean).join(' · ');
@@ -471,7 +477,7 @@
         if (!k) return;
         const col = k.column || ((b.columns || [])[0] || {}).id || '';
         const isDone = !!done && col === done;
-        const due = k.due ? 'Due ' + dayWords(k.due) + (/^\d{2}:\d{2}$/.test(k.dueTime || '') ? ' ' + k.dueTime : '') : '';
+        const due = k.due ? 'Due ' + dayWords(k.due) + (/^\d{2}:\d{2}$/.test(k.dueTime || '') ? ' ' + clock12(k.dueTime) : '') : '';
         const labels = (k.labels || []).map(l => ((b.labels || []).find(x => x.id === l) || {}).name).filter(Boolean);
         out.push(entry('cards', {
           title: k.title || 'Card', tag: 'Card',

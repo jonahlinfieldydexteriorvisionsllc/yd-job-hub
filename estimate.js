@@ -2804,8 +2804,11 @@
     const r = priced();
     if (!r || !(r.totalCents > 0)) return;
     if (r.problems.length) {
+      // Worded for the button pressed: "Put in QuickBooks, don't email yet"
+      // asked "send it anyway?" (office test, 16 Oct 2026).
       if (!(await ydConfirm('• ' + r.problems.slice(0, 8).join('\n• '),
-        { title: 'Some of this isn’t priced yet — send it anyway?', ok: 'Send it anyway', cancel: 'Not yet' }))) return;
+        { title: 'Some of this isn’t priced yet — ' + (email ? 'send it anyway?' : 'put it in QuickBooks anyway?'),
+          ok: email ? 'Send it anyway' : 'Put it in anyway', cancel: 'Not yet' }))) return;
       if (currentJobId !== startJob || saving || qbAsking) return;
     }
     qbAsking = true; renderQb();

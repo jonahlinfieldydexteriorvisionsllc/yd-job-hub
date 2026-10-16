@@ -855,11 +855,15 @@
       '</tr>';
     }).join('');
 
+    // The pounds (and old bags) of salt are added up too, as each row shows
+    // them: a season with salt put down but none billed separately read
+    // "—" in the total row (office test, 16 Oct 2026).
     const totals = ids.reduce((t, id) => {
       const a = acc[id];
       t.visits += a.visits; t.crewMin += a.crewMinutes; t.total += a.total; t.salt += a.salt;
+      t.lbs += a.lbs || 0; t.bags += a.bags || 0;
       return t;
-    }, { visits: 0, crewMin: 0, total: 0, salt: 0 });
+    }, { visits: 0, crewMin: 0, total: 0, salt: 0, lbs: 0, bags: 0 });
 
     wrap.innerHTML = picker + invoiceBar +
       '<div class="table-wrap"><table><thead><tr>' +
@@ -869,7 +873,10 @@
       '<tfoot><tr style="font-weight:700">' +
         '<td>All accounts</td><td>' + totals.visits + '</td><td></td><td></td>' +
         '<td>' + (totals.crewMin / 60).toFixed(1) + '</td><td></td>' +
-        '<td>' + (totals.salt ? money(totals.salt) : '—') + '</td><td></td>' +
+        '<td>' + (totals.salt || totals.lbs || totals.bags
+          ? (totals.salt ? money(totals.salt) : '') + (totals.lbs ? ' <span class="muted">' + totals.lbs.toLocaleString('en-US') + ' lb</span>' : '') +
+            (totals.bags ? ' <span class="muted">' + totals.bags + ' bags</span>' : '')
+          : '—') + '</td><td></td>' +
         '<td>' + money(totals.total) + '</td>' +
         '<td>' + (totals.crewMin ? money(Math.round(totals.total / (totals.crewMin / 60))) : '—') + '</td>' +
       '</tr></tfoot></table></div>' +

@@ -186,8 +186,12 @@
           '<button class="btn btn-sm" onclick="ntfTurnOff()">Turn off on this device</button>',
       off: '<p>Get a short notification on this device with each update. Tap it to open Job Hub.</p>' +
            '<button class="btn btn-filled" id="ntfDeviceBtn" onclick="ntfTurnOn()">Turn on notifications here</button>',
-      blocked: '<p class="ntf-warn">Notifications are blocked for Job Hub on this device. Allow them in the ' +
-               'phone’s settings (Settings → Notifications → Job Hub), then come back here.</p>',
+      // A computer has no Settings → Notifications → Job Hub: there it is the
+      // browser's own permission for the site (office test, 16 Oct 2026).
+      blocked: '<p class="ntf-warn">Notifications are blocked for Job Hub on this device. ' +
+               (window.matchMedia && window.matchMedia('(pointer: coarse)').matches
+                 ? 'Allow them in the device’s settings (Settings → Notifications → Job Hub), then come back here.'
+                 : 'Allow them in the browser: the icon at the left of the address bar → Notifications → Allow, then come back here.') + '</p>',
       'needs-home-screen': '<p class="ntf-warn">On an iPhone, notifications only work from the home-screen app. ' +
                'In Safari tap Share → Add to Home Screen, open Job Hub from there, and turn them on.</p>',
       unsupported: '<p class="ntf-warn">This browser cannot show notifications. The email summaries still work.</p>',

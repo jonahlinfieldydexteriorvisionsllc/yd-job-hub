@@ -920,6 +920,13 @@
     const size = people.length ? names.length : Math.max(1, parseInt(f.size, 10) || 1);
     return { size: Math.max(1, size), names: names.join(', ') };
   }
+  // Under the names: who is counted. With nobody tapped the storm is still
+  // started for one -- "1 working" read as if someone had been picked
+  // (office test, 16 Oct 2026), so it says so.
+  function countWords(crew) {
+    if (!crew.names && crewChoices().length) return 'Nobody tapped yet — counted as 1 working';
+    return crew.size + ' working' + (crew.names ? ' — ' + crew.names : '');
+  }
   function renderStormStart() {
     const body = document.getElementById('stormStartBody');
     if (!body || !startForm) return;
@@ -941,7 +948,7 @@
         : '<div class="stepper"><span class="stepper-label">How many people are working?</span>' +
             '<input class="stepper-input" inputmode="numeric" value="' + esc(f.size) + '" oninput="ssSet(\'size\', this.value)"></div>' +
           '<label class="ss-label">Who <span class="muted">(optional)</span><input value="' + esc(f.others) + '" oninput="ssSet(\'others\', this.value)"></label>') +
-      '<div class="ss-count" id="ssCount">' + crew.size + ' working' + (crew.names ? ' — ' + esc(crew.names) : '') + '</div>' +
+      '<div class="ss-count" id="ssCount">' + esc(countWords(crew)) + '</div>' +
       '<div class="field-actions"><button class="btn btn-filled clock-big" onclick="beginStorm()">❄ Start the storm</button>' +
         '<button class="btn" onclick="closeStormStart()">Cancel</button></div>';
   }
@@ -961,7 +968,7 @@
     const c = document.getElementById('ssCount');
     if (!c || !startForm) return;
     const crew = crewOf(startForm, crewChoices());
-    c.textContent = crew.size + ' working' + (crew.names ? ' — ' + crew.names : '');
+    c.textContent = countWords(crew);
   };
   window.ssSet = function (k, v) { if (startForm) { startForm[k] = v; if (k !== 'inches') renderStormStartCount(); } };
   window.ssNudge = function (by) {
