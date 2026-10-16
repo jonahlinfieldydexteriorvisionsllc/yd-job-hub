@@ -512,32 +512,24 @@
       : view === 'leads' ? leadsHtml(people.filter(c => kindOf(c) === 'lead'), q, tag)
       : listHtml(people.filter(c => kindOf(c) === { customers: 'customer', past: 'past' }[view]), q, tag);
   }
-  // Puts the list in. When a snapshot arrives (quiet) while he is typing in
-  // the "Add a lead" or "Fill in" form, that form stays exactly as it is --
-  // the caret stays where it was -- and only what is around it is redrawn.
-  function paintList(html, quiet) {
+  // A snapshot arriving (quiet) while he is typing in the "Add a lead" or "Fill
+  // in" form does not redraw the screen under his caret: it waits (`pendingQuiet`)
+  // and is drawn when he leaves the form. (A form is only ever redrawn for
+  // something he did -- a tap, a save -- never for something that came in.)
+  let pendingQuiet = false;
+  const inForm = () => {
+    const a = document.activeElement;
+    return !!(a && a.closest && a.closest('#custWrap .cu-add, #custWrap .cu-fill'));
+  };
+  function paintList(html) {
     const box = el('custList');
-    if (!box) return;
-    const act = document.activeElement;
-    const form = quiet && act && box.contains(act) && act.closest ? act.closest('.cu-add, .cu-fill') : null;
-    if (form) {
-      const tmp = document.createElement('div');
-      tmp.innerHTML = html;
-      const fresh = tmp.querySelector('.' + (form.classList.contains('cu-add') ? 'cu-add' : 'cu-fill'));
-      if (fresh) {
-        fresh.parentNode.replaceChild(form, fresh);
-        box.innerHTML = '';
-        while (tmp.firstChild) box.appendChild(tmp.firstChild);
-        return;
-      }
-    }
-    box.innerHTML = html;
+    if (box) box.innerHTML = html;
   }
   // Typing in the search box: only the list under it is drawn again.
   function renderListOnly() {
     if (!isOn() || !loaded || !el('custList') || !panelShown() || view === 'sort' || view === 'check') { render(); return; }
     const l = peopleLists();
-    paintList(listBodyHtml(l.people, l.callable, []), false);
+    paintList(listBodyHtml(l.people, l.callable, []));
   }
 
   // `quiet`: something changed under the page (a snapshot) rather than
@@ -551,6 +543,8 @@
     renderOff();
     // A customer's page is a window of its own that can be open over any tab.
     if (!panelShown()) { dirty = true; if (openId) renderPage(); return; }
+    if (quiet === true && inForm()) { pendingQuiet = true; return; }
+    pendingQuiet = false;
     dirty = false; drawnDay = today();
     if (!loaded) { wrap.innerHTML = '<p class="empty-msg">Loading the customer list…</p>'; return; }
     if (!Object.values(customers).some(isQb)) {
@@ -617,7 +611,7 @@
       if (box) box.value = searchText;
     }
     el('custTags').innerHTML = wantFind && tagsOpen && view !== 'everyone' ? tagFilterHtml(view === 'call' || view === 'snow' ? callable : people) : '';
-    paintList(listBodyHtml(people, callable, view === 'check' ? checkLines() : []), quiet === true);
+    paintList(listBodyHtml(people, callable, view === 'check' ? checkLines() : []));
     // A box that was rebuilt gets its focus and caret back.
     const back = typing && el(typing);
     if (back && document.activeElement !== back) {
@@ -2857,7 +2851,16 @@
       if (panelShown() && (dirty || (drawnDay && drawnDay !== today()))) render();
     }).observe(p, { attributes: true, attributeFilter: ['class'] });
   }
-  function boot() { watchPanel(); render(); }
+  // Leaving a form draws what came in while he was typing in it.
+  function watchForms() {
+    const wrap = el('custWrap');
+    if (!wrap) return;
+    wrap.addEventListener('focusout', () => {
+      if (!pendingQuiet) return;
+      setTimeout(() => { if (pendingQuiet && !inForm()) render(true); }, 0);
+    });
+  }
+  function boot() { watchPanel(); watchForms(); render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
