@@ -59,10 +59,12 @@
     return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   }
   // The job an invoice is on, as this device holds it (none for a storm's
-  // or one made by hand in QuickBooks).
+  // or one made by hand in QuickBooks). One in Recently deleted is none.
   function jobOf(inv) {
     if (!inv.jobId || typeof readJobBlob !== 'function') return null;
-    try { return JSON.parse(readJobBlob(inv.jobId) || 'null'); } catch (e) { return null; }
+    let d = null;
+    try { d = JSON.parse(readJobBlob(inv.jobId) || 'null'); } catch (e) { return null; }
+    return d && d.deletedAt ? null : d;
   }
 
   // Jonah often makes the invoice before the work starts, to collect the

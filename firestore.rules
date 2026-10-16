@@ -134,7 +134,14 @@ service cloud.firestore {
     // The business side -- the owner, and admins by area
     // Client names, phone numbers, pricing, costs, margins, estimates.
     // ===================================================================
-    match /jobs/{docId}      { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    // Deleting a job moves it to Recently deleted (app.js deleteJob) -- an
+    // update. Deleting one for good is the owner's alone (Jonah, 15 Oct
+    // 2026); the server clears old ones by itself (tidy.py).
+    match /jobs/{docId} {
+      allow read: if canSee('jobs');
+      allow create, update: if canChange('jobs');
+      allow delete: if isOwner();
+    }
     match /expenses/{docId}  { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
     match /estimates/{docId} { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
     // What the business charges, one entry per priced thing (estimate.js).

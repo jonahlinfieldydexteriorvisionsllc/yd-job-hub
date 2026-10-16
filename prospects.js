@@ -481,9 +481,12 @@
     const now = new Date();
     const services = (Array.isArray(j.serviceTypes) ? j.serviceTypes : []).map(s => String(s).trim()).filter(Boolean);
     const est = String(j.estimateNumber || '').trim();
+    // Why, in the words picked when it was marked lost (app.js lostWhy).
+    const why = (typeof lostWhy === 'function' ? lostWhy(j) : '').replace(/^Other: /, '');
     const line = 'Declined our bid' + (est ? ' #' + est : '') + (services.length ? ' for ' + services.join(', ') : '') +
-      ' on ' + now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + '.';
-    const entry = { at: now.toISOString(), jobId: jobId, est: est || null, services: services };
+      ' on ' + now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+      (why ? ' — why: ' + why : '') + '.';
+    const entry = { at: now.toISOString(), jobId: jobId, est: est || null, services: services, reason: j.lostReason || null };
     const address = [String(j.address || '').trim(),
       [j.city, [j.state, j.zip].filter(Boolean).join(' ')].map(s => String(s || '').trim()).filter(Boolean).join(', ')]
       .filter(Boolean).join(', ');

@@ -338,7 +338,8 @@
         const id = d._id;
         const name = String(d.customerName || [d.firstName, d.lastName].filter(Boolean).join(' ') || d.business || '').trim() || 'Untitled';
         const bid = typeof isBidStatus === 'function' ? isBidStatus(d.jobStatus) : d.jobStatus === 'quoting';
-        const status = bid ? (d.bidStage === 'lost' ? 'Bid · lost' : 'Bid')
+        const why = d.bidStage === 'lost' && typeof lostWhy === 'function' ? lostWhy(d) : '';
+        const status = bid ? (d.bidStage === 'lost' ? 'Bid · lost' + (why ? ' (' + why + ')' : '') : 'Bid')
           : typeof statusLabel === 'function' && typeof normStatus === 'function' ? statusLabel(normStatus(d.jobStatus, d)) : '';
         const est = String(d.estimateNumber || '').trim();
         const where = [d.address, d.city].filter(Boolean).join(', ');

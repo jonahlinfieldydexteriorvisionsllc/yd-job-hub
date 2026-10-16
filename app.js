@@ -84,8 +84,13 @@ function statusPill(s) { return '<span class="pill ' + s + '">' + statusLabel(s)
 // see them vanish at the next save, or it reads the job again every hour.
 // removeWhy / replacedBy / removeNote: a job marked to be taken off -- a
 // duplicate, or a snow contract now on the Snow route (My Jobs: Delete these).
+// lostReason / lostReasonText / lostAt: why a bid was lost, picked when it
+// was marked lost (askLostReason). deletedAt / deletedBy / deletedByName: a
+// job moved to Recently deleted (deleteJob) -- a form save must not bring it
+// back to life by leaving them out.
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
-  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote'];
+  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
+  'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName'];
 let boardFields = {};
 let manualJobPrice = false;
 let baseJobPrice = 0;
@@ -925,9 +930,14 @@ function showBidBanner() {
   // back, or booked if they ring after all.
   const lost = isBidStatus(jobStatus) && boardFields.bidStage === 'lost';
   const t = document.getElementById('bidBannerText'), r = document.getElementById('bidReopenBtn');
-  if (t) t.innerHTML = lost ? '<b>This bid was lost.</b> It is off the Bids board and the customer is on Contacts for next season.'
+  const why = lost ? lostWhy(boardFields) : '';
+  const edits = !jobsReadOnly();
+  if (t) t.innerHTML = lost ? '<b>This bid was lost' + (why ? ' — ' + esc(why) : '') + '.</b> It is off the Bids board and the customer is on Contacts for next season.' +
+      (edits ? ' <button type="button" class="link-btn" onclick="changeLostReason()">' + (why ? 'Change why' : 'Say why') + '</button>' : '')
     : '<b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.';
   if (r) r.hidden = !lost;
+  const l = document.getElementById('bidLostBtn');
+  if (l) l.hidden = lost || !edits;
   // Called whenever a job loads or its status changes: the invoice boxes
   // follow whether it is a bid.
   showJobQbFields(true);
@@ -986,7 +996,9 @@ function reopenBid(id) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   id = id || currentJobId;
   if (!id || !window.YDSync) return;
-  if (!window.YDSync.patchJob(id, { bidStage: 'followUp', bidStageAt: new Date().toISOString(), jobStatus: 'quoting' })) {
+  // No longer lost, so no reason for it either (the counts on All Jobs).
+  if (!window.YDSync.patchJob(id, { bidStage: 'followUp', bidStageAt: new Date().toISOString(), jobStatus: 'quoting',
+      lostReason: null, lostReasonText: null, lostAt: null })) {
     showToast('Could not put that bid back');
     return;
   }
@@ -994,6 +1006,128 @@ function reopenBid(id) {
   showToast('Back on the Bids board, under Follow up');
   if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
 }
+// ---- Why a bid was lost ------------------------------------------------------
+// Jonah (15 Oct 2026): "A reason when a bid is lost ... so you can see why you
+// lose bids." Asked with tap buttons every time a bid is marked lost -- on the
+// Bids board (dragged to Lost, or Mark lost on a card QuickBooks says was
+// turned down), from the Job tab and from My Jobs -- and changeable later from
+// the same places. Cancel leaves the bid as it was. Kept on the job:
+// lostReason (one of these ids), lostReasonText (the words for Other) and
+// lostAt. The words, never a price, also go on the customer's contact.
+const LOST_REASONS = [
+  { id: 'price', name: 'Price' },
+  { id: 'timing', name: 'Timing' },
+  { id: 'competitor', name: 'Went with someone else' },
+  { id: 'diy', name: 'Doing it themselves' },
+  { id: 'noReply', name: 'No reply' },
+  { id: 'dropped', name: 'Project dropped' },
+  { id: 'qb', name: 'Turned down in QuickBooks' },
+  { id: 'other', name: 'Other' },
+];
+function lostReasonName(id) { const r = LOST_REASONS.find(x => x.id === id); return r ? r.name : ''; }
+// The reason in words -- "Price", "Other: moving out of state" -- or '' for a
+// bid lost before reasons were asked.
+function lostWhy(d) {
+  if (!d || !d.lostReason) return '';
+  const text = String(d.lostReasonText || '').trim();
+  if (d.lostReason === 'other') return text ? 'Other: ' + text : 'Other';
+  return lostReasonName(d.lostReason) || '';
+}
+function lostChipHtml(d) {
+  const w = lostWhy(d);
+  return w ? '<span class="lost-why" title="Why it was lost">' + esc(w) + '</span>' : '';
+}
+// The question, in a window of its own: a button per reason, one tap and it
+// is done; Other opens a short box for the words. `opts`: name (whose bid),
+// preset (a reason already known -- QuickBooks says turned down -- shown
+// picked), text (Other's words so far), ok / cancel (button words).
+let lostAsking = null;     // { done } while the window is open
+function askLostReason(opts, done) {
+  opts = opts || {};
+  let m = document.getElementById('lostModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modal-overlay';
+    m.id = 'lostModal';
+    m.onclick = e => { if (e.target === m) closeLostReason(); };
+    document.body.appendChild(m);
+  }
+  lostAsking = { done: done };
+  const pre = LOST_REASONS.some(r => r.id === opts.preset) ? opts.preset : '';
+  m.innerHTML = '<div class="modal lost-modal" style="max-width:480px"><div class="modal-head"><h2>' + esc(opts.title || 'Why was the bid lost?') + '</h2>' +
+      '<button class="modal-close" onclick="closeLostReason()" aria-label="Cancel">&times;</button></div>' +
+    '<div class="modal-body">' +
+      (opts.name ? '<div class="lost-name">' + esc(opts.name) + '</div>' : '') +
+      '<div class="lost-opts">' + LOST_REASONS.map(r =>
+        '<button type="button" class="lost-opt' + (pre === r.id ? ' on' : '') + '" data-why="' + r.id + '" onclick="pickLostReason(\'' + r.id + '\')">' +
+          esc(r.name) + '</button>').join('') + '</div>' +
+      '<div class="lost-other" id="lostOtherRow"' + (pre === 'other' ? '' : ' hidden') + '>' +
+        '<input id="lostOtherText" maxlength="200" placeholder="Why, in a few words" value="' + esc(opts.text || '') + '" ' +
+          'onkeydown="if(event.key===\'Enter\'){event.preventDefault();saveLostOther()}">' +
+        '<button type="button" class="btn btn-sm btn-filled" onclick="saveLostOther()">' + esc(opts.ok || 'Mark lost') + '</button></div>' +
+      (pre && pre !== 'other' ? '<div class="hint" id="lostPreHint">' + esc(lostReasonName(pre)) + ' is picked already — tap it to keep it, or tap another.</div>' : '') +
+      '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="closeLostReason()">' + esc(opts.cancel || 'Cancel — not lost') + '</button></div>' +
+    '</div></div>';
+  m.classList.add('active');
+}
+function closeLostReason() {
+  lostAsking = null;
+  const m = document.getElementById('lostModal');
+  if (m) m.classList.remove('active');
+}
+function pickLostReason(id) {
+  if (id === 'other') {
+    const row = document.getElementById('lostOtherRow');
+    document.querySelectorAll('#lostModal .lost-opt').forEach(b => b.classList.toggle('on', b.dataset.why === 'other'));
+    const hint = document.getElementById('lostPreHint');
+    if (hint) hint.hidden = true;
+    if (row) { row.hidden = false; const box = document.getElementById('lostOtherText'); if (box) box.focus(); }
+    return;
+  }
+  finishLostReason(id, null);
+}
+function saveLostOther() {
+  const box = document.getElementById('lostOtherText');
+  const text = box ? box.value.trim() : '';
+  if (!text) { showToast('Say why in a few words'); if (box) box.focus(); return; }
+  finishLostReason('other', text.slice(0, 200));
+}
+function finishLostReason(id, text) {
+  const ask = lostAsking;
+  closeLostReason();
+  if (ask && ask.done) ask.done({ lostReason: id, lostReasonText: text || null });
+}
+// Mark lost from the Job tab or My Jobs: the same move as dragging the card
+// to Lost on the Bids board (boards.js), which asks why, puts the customer on
+// Contacts and says so.
+function markBidLost(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  id = id || currentJobId;
+  if (!id && typeof autosave === 'function') { autosave(); id = currentJobId; }
+  if (!id) return;
+  if (id === currentJobId && dirty) autosave();
+  if (window.bdMarkLost) window.bdMarkLost(id);
+  else showToast('Could not mark that bid lost');
+}
+// The reason changed afterwards. When it was lost stays as it was.
+function changeLostReason(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  id = id || currentJobId;
+  let d = null;
+  try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+  if (!d) return;
+  if (id === currentJobId && dirty) autosave();
+  askLostReason({ title: 'Why was the bid lost?', name: d.customerName || '', preset: d.lostReason, text: d.lostReasonText,
+    ok: 'Save', cancel: 'Cancel' }, why => {
+    const patch = Object.assign({}, why, d.lostAt ? {} : { lostAt: d.bidStageAt || new Date().toISOString() });
+    if (!patchJobAnywhere(id, patch)) { showToast('Could not change that'); return; }
+    invalidateJobsCache();
+    if (id === currentJobId) showBidBanner();
+    if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+    showToast('Why it was lost: ' + lostWhy(Object.assign({}, d, why)));
+  });
+}
+
 // Booking a bid: it becomes a job -- on the Jobs board, in the job list, on
 // the crew's clock -- and the bid is marked Won, the same as moving it there.
 function makeItAJob(id) {
@@ -1367,7 +1501,8 @@ const qbFilling = new Set(), qbWaiting = new Set();
 let qbScanned = false;
 function fillFromQb(id, data) {
   const e = data && data.estimate;
-  if (!e || !e.fromQb || e.fromQb.linkedAt || qbFilling.has(id)) return;
+  // Not one in Recently deleted: nothing of it should change while it waits.
+  if (!e || !e.fromQb || e.fromQb.linkedAt || qbFilling.has(id) || data.deletedAt) return;
   if (!window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change') || !window.YDEstimate || !window.YDEstimate.linkFromQb) return;
   if (!orderReady() || (id === currentJobId && dirty)) { qbWaiting.add(id); return; }
   qbFilling.add(id);
@@ -2491,8 +2626,22 @@ function loadJobData(d) {
   if (window.YDPlants) window.YDPlants.refresh();
 }
 
-function getJobIndex() { try { return JSON.parse(localStorage.getItem(STORAGE_PREFIX + 'index') || '[]'); } catch { return []; } }
-function saveJobIndex(idx) { localStorage.setItem(STORAGE_PREFIX + 'index', JSON.stringify(idx)); }
+// The job index holds every job on this device, those in Recently deleted
+// too (`deleted` on the entry): sync needs them all to know which copies it
+// already holds. getJobIndex() is the jobs that are really there -- what
+// every list, board, total and search reads -- so a deleted job drops out of
+// all of them at once without each having to remember to skip it.
+// getJobIndexAll() is the whole thing, for sync, backups and Recently deleted.
+function getJobIndexAll() { try { return JSON.parse(localStorage.getItem(STORAGE_PREFIX + 'index') || '[]'); } catch { return []; } }
+function getJobIndex() { return getJobIndexAll().filter(j => !j.deleted); }
+// Most callers read getJobIndex(), change it and save it back, so deleted
+// entries they never saw are kept -- while their job is still stored here.
+// A job deleted for good has had its copy removed first, so it goes.
+function saveJobIndex(idx) {
+  const have = new Set(idx.map(j => j.id));
+  const kept = getJobIndexAll().filter(j => j.deleted && !have.has(j.id) && readJobBlob(j.id) != null);
+  localStorage.setItem(STORAGE_PREFIX + 'index', JSON.stringify(idx.concat(kept)));
+}
 
 // Read a job blob, falling back to the legacy key scheme (older versions stored
 // the job under the raw id, e.g. "ydjob_abc", with no "ydjobhub_" prefix).
@@ -2518,7 +2667,7 @@ function migrateJobIndex() {
   try { localStorage.setItem(INDEX_VERSION_KEY, String(INDEX_VERSION)); } catch (e) {}
 }
 function rebuildJobIndex() {
-  let idx = getJobIndex();
+  let idx = getJobIndexAll();
   if (!idx.length) return;
   let changed = false;
   idx = idx.map(entry => {
@@ -2538,10 +2687,11 @@ function rebuildJobIndex() {
       lost: isBidStatus(data.jobStatus || entry.status) && data.bidStage === 'lost',
       date: String(data.quoteDate || '').slice(0, 10),
       invoiced: isInvoiced(data),
+      deleted: !!data.deletedAt,
       lastModified: data.lastModified || entry.lastModified || ''
     };
     if (fresh.price !== entry.price || fresh.city !== entry.city || fresh.services !== entry.services || fresh.status !== entry.status || fresh.name !== entry.name || fresh.est !== entry.est || fresh.lost !== entry.lost ||
-        fresh.date !== entry.date || fresh.invoiced !== entry.invoiced) changed = true;
+        fresh.date !== entry.date || fresh.invoiced !== entry.invoiced || fresh.deleted !== !!entry.deleted) changed = true;
     return fresh;
   });
   if (changed) { saveJobIndex(idx); invalidateJobsCache(); }
@@ -2570,7 +2720,10 @@ function buildIndexEntry(id, data) {
     // this month. lastModified moves with every QuickBooks check the server
     // makes, so jobs used to jump into this month on their own.
     date: String(data.quoteDate || '').slice(0, 10),
-    invoiced: isInvoiced(data), lastModified: data.lastModified };
+    invoiced: isInvoiced(data),
+    // In Recently deleted (deleteJob): kept, but left out of getJobIndex().
+    deleted: !!data.deletedAt,
+    lastModified: data.lastModified };
 }
 // Invoiced: the box ticked by hand, or an invoice made in QuickBooks
 // (qbInvoiceRef) -- the QB chip on All Jobs showed only the first.
@@ -2678,6 +2831,15 @@ function jobOnScreen() {
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);
   if (!raw) return;
+  // One in Recently deleted is not opened (an edit would bring it back
+  // without anyone meaning to): Restore it first.
+  let gone = false;
+  try { gone = !!JSON.parse(raw).deletedAt; } catch (e) {}
+  if (gone) {
+    if (currentJobId === id) clearJobForm();
+    if (!quiet) showToast('That job is in Recently deleted — restore it from the foot of My Jobs first');
+    return;
+  }
   currentJobId = id;
   loadingJob = true;
   try { loadJobData(JSON.parse(raw)); } catch (e) { console.error(e); showToast('Could not load job'); }
@@ -2685,19 +2847,85 @@ function loadJob(id, quiet) {
   jobOnScreen();
   if (!quiet) { closeManager(); switchTab('job'); }
 }
-// sure: already asked (Delete these N, below).
-function deleteJob(id, sure) {
-  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
-  if (!sure && !confirm('Delete this job permanently?')) return;
-  localStorage.removeItem(STORAGE_PREFIX + id);
-  localStorage.removeItem(id);   // also drop legacy-key copy if present
-  saveJobIndex(getJobIndex().filter(j => j.id !== id));
-  invalidateJobsCache();
+// Deleting a job moves it to Recently deleted (Jonah, 15 Oct 2026: "The ×
+// in My Jobs deletes for good. Move it to an archive with 'Recently
+// deleted' instead"). The job is kept whole, marked deletedAt, and leaves
+// every list, board, the crew's clock and the summaries; Restore puts it
+// back as it was. The owner can delete it for good from there, and the
+// server does so by itself 30 days on (functions/tidy.py purge_jobs).
+// Written through patchJob, like a board move, so every device and the
+// crew's copies follow. `quiet`: no Undo bar (Delete these N says it once).
+const DELETED_KEEP_DAYS = 30;     // the same in functions/tidy.py
+function deleteJob(id, quiet) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return false; }
+  const raw = readJobBlob(id);
+  if (!raw) return false;
+  let data; try { data = JSON.parse(raw); } catch (e) { return false; }
+  // Typing not yet saved goes in first: it is part of what Restore gives back.
+  if (id === currentJobId && dirty) autosave();
+  const a = window.YDAuth || {}, u = a.user || {};
+  const patch = { deletedAt: new Date().toISOString(), deletedBy: u.uid || null,
+    deletedByName: u.displayName || u.email || null };
+  if (!patchJobAnywhere(id, patch)) { showToast('Could not delete that job'); return false; }
   // Not newJob(): its "unsaved changes will be lost?" question, answered
   // Cancel, left the deleted job in the form, and the next autosave quietly
   // brought it back to life.
   if (currentJobId === id) clearJobForm();
-  renderJobList(); showToast('Job deleted');
+  invalidateJobsCache();
+  if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+  if (!quiet) {
+    const name = (data.customerName || 'Job').trim();
+    const msg = name + ' moved to Recently deleted (foot of My Jobs)';
+    if (typeof showUndo === 'function') showUndo(msg, () => restoreJob(id, true)); else showToast(msg);
+  }
+  return true;
+}
+// A job back from Recently deleted, as it was.
+function restoreJob(id, quiet) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  if (!patchJobAnywhere(id, { deletedAt: null, deletedBy: null, deletedByName: null })) {
+    showToast('Could not bring that job back');
+    return;
+  }
+  invalidateJobsCache();
+  if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+  if (!quiet) {
+    let name = 'The job';
+    try { name = (JSON.parse(readJobBlob(id) || '{}').customerName || name).trim(); } catch (e) {}
+    showToast(name + ' is back');
+  }
+}
+// The same change through sync.js when it is running (cloud, crew board,
+// crew copy), else on this device only -- a device not signed in keeps its
+// jobs to itself.
+function patchJobAnywhere(id, patch) {
+  if (window.YDSync && window.YDSync.patchJob) return window.YDSync.patchJob(id, patch);
+  try {
+    const d = JSON.parse(readJobBlob(id) || 'null');
+    if (!d) return false;
+    Object.assign(d, patch, { lastModified: new Date().toISOString() });
+    localStorage.setItem(STORAGE_PREFIX + id, JSON.stringify(d));
+    saveJobIndex(getJobIndexAll().filter(j => j.id !== id).concat([buildIndexEntry(id, d)]));
+    invalidateJobsCache();
+    return true;
+  } catch (e) { return false; }
+}
+// Deleted for good: the owner only, from Recently deleted, asked first. The
+// cloud's copy goes too (sync.js wraps this). Its photos are cleared by the
+// server's morning tidy (functions/tidy.py), which removes photos whose job
+// is gone.
+function purgeJob(id, sure) {
+  const a = window.YDAuth || {};
+  if (a.mode === 'cloud' && !a.isOwner) { showToast('Only the owner can delete a job for good'); return; }
+  let name = 'this job';
+  try { name = (JSON.parse(readJobBlob(id) || '{}').customerName || name).trim(); } catch (e) {}
+  if (!sure && !confirm('Delete ' + name + ' for good?\n\nIt cannot be brought back after this.')) return;
+  localStorage.removeItem(STORAGE_PREFIX + id);
+  localStorage.removeItem(id);   // also drop legacy-key copy if present
+  saveJobIndex(getJobIndexAll().filter(j => j.id !== id));
+  invalidateJobsCache();
+  if (currentJobId === id) clearJobForm();
+  renderJobList(); showToast(name + ' deleted for good');
 }
 function duplicateJob(id) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
@@ -2827,10 +3055,12 @@ function removeBoxHtml() {
 function deleteMarkedJobs() {
   if (jobsReadOnly()) return;
   const list = markedJobs();
-  if (!list.length || !confirm('Delete these ' + list.length + ' jobs for good?\n\n' +
-      list.map(d => '• ' + (d.customerName || 'Job') + (d.estimateNumber ? ' #' + d.estimateNumber : '')).join('\n'))) return;
-  list.forEach(d => window.deleteJob(d._id, true));
-  showToast(list.length + ' job' + (list.length === 1 ? '' : 's') + ' deleted');
+  if (!list.length || !confirm('Move these ' + list.length + ' to Recently deleted?\n\n' +
+      list.map(d => '• ' + (d.customerName || 'Job') + (d.estimateNumber ? ' #' + d.estimateNumber : '')).join('\n') +
+      '\n\nThey can be brought back from the foot of My Jobs for ' + DELETED_KEEP_DAYS + ' days.')) return;
+  const ids = list.map(d => d._id).filter(id => window.deleteJob(id, true));
+  const msg = ids.length + ' job' + (ids.length === 1 ? '' : 's') + ' moved to Recently deleted';
+  if (typeof showUndo === 'function') showUndo(msg, () => ids.forEach(id => restoreJob(id, true))); else showToast(msg);
 }
 function keepMarkedJob(id) {
   if (jobsReadOnly() || !window.YDSync) return;
@@ -2849,7 +3079,7 @@ function renderJobList() {
     '<button class="' + (jobListBids ? 'on' : '') + '" onclick="showJobListBids(true)">Bids (' + bidCount + ')</button></div>';
   if (fSvc) idx = idx.filter(j => (j.services || '').includes(fSvc));
   if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '') + ' ' + (j.est || '')).toLowerCase().includes(fSearch));
-  if (!idx.length) { body.innerHTML = removeBoxHtml() + switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>'; return; }
+  if (!idx.length) { body.innerHTML = removeBoxHtml() + switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>' + deletedBoxHtml(); return; }
 
   // Filed by the job's own date, newest first within a month -- not by
   // lastModified, which the server moves on every QuickBooks check.
@@ -2866,26 +3096,78 @@ function renderJobList() {
   const full = {};
   if (window.YDPlants) loadAllJobs().forEach(d => { full[d._id] = d; });
   const plantBits = j => full[j.id] ? window.YDPlants.badge(full[j.id]) + window.YDPlants.owedChip(full[j.id]) : '';
+  // Why a lost bid was lost, from the bid itself (the index does not carry
+  // it); tapped, it can be changed -- or given, on one lost before reasons
+  // were asked.
+  const lostBits = j => {
+    if (!j.lost) return '';
+    let d = null;
+    try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (e) {}
+    const why = lostWhy(d);
+    if (jobsReadOnly()) return why ? ' ' + lostChipHtml(d) : '';
+    return ' <button type="button" class="lost-why' + (why ? '' : ' none') + '" title="Change why it was lost" ' +
+      'onclick="event.stopPropagation(); changeLostReason(\'' + j.id + '\')">' + esc(why || 'Say why') + ' ✎</button>';
+  };
   body.innerHTML = removeBoxHtml() + switcher + keys.map(key => {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
       '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
         '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
-          (j.lost ? '<span class="pill lost">Lost</span>' : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
+          (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
           // A bid with no price yet said "$0.00", which read as a free job.
           (j.price ? fmtMoney(j.price) : '<span class="muted">no price yet</span>') + '</div></div>' +
       '<div class="jl-acts">' +
       (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + j.id + '\')">BACK ON THE BOARD</button>' : '') +
       (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + j.id + '\')">MAKE IT A JOB</button>' : '') +
+      (jobListBids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + j.id + '\')">MARK LOST</button>' : '') +
       // "DUP" meant nothing to anyone; and Delete sat right against it.
       '<button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')" title="Make a copy of this ' + (jobListBids ? 'bid' : 'job') + '">COPY</button>' +
-      '<button class="remove-btn jl-del" onclick="deleteJob(\'' + j.id + '\')" title="Delete this ' + (jobListBids ? 'bid' : 'job') +
+      '<button class="remove-btn jl-del" onclick="deleteJob(\'' + j.id + '\')" title="Move this ' + (jobListBids ? 'bid' : 'job') + ' to Recently deleted' +
         '" aria-label="Delete ' + esc(j.name || 'this job') + '">🗑 Delete</button></div></div>'
     ).join('');
     return '<div class="month-group"><div class="month-head" onclick="toggleMonth(\'' + key + '\')">' +
       '<span class="month-arrow' + (shut ? ' shut' : '') + '">▼</span> ' + key + ' (' + groups[key].length + ')</div>' + (shut ? '' : rows) + '</div>';
-  }).join('');
+  }).join('') + deletedBoxHtml();
+}
+// Recently deleted, at the foot of My Jobs (deleteJob): newest first, with
+// how long each has before it goes for good. Restore for whoever may change
+// jobs; Delete for good for the owner only.
+let deletedOpen = false;
+function toggleDeletedJobs() { deletedOpen = !deletedOpen; renderJobList(); }
+function deletedJobs() {
+  return getJobIndexAll().filter(j => j.deleted).map(j => {
+    let d = null;
+    try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (e) {}
+    return d && d.deletedAt ? Object.assign({}, d, { _id: j.id }) : null;
+  }).filter(Boolean).sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+}
+function deletedBoxHtml() {
+  const list = deletedJobs();
+  if (!list.length) return '';
+  const a = window.YDAuth || {};
+  const owner = a.mode !== 'cloud' || !!a.isOwner, edits = !jobsReadOnly();
+  const safe = id => String(id).replace(/[^A-Za-z0-9_-]/g, '');
+  const left = d => {
+    const t = new Date(d.deletedAt);
+    if (isNaN(t)) return '';
+    const n = DELETED_KEEP_DAYS - Math.floor((Date.now() - t.getTime()) / 864e5);
+    return n <= 0 ? 'goes for good at the next morning tidy' : n === 1 ? '1 day left' : n + ' days left';
+  };
+  const when = d => { const t = new Date(d.deletedAt); return isNaN(t) ? '' : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+  return '<div class="jl-deleted">' +
+    '<button type="button" class="jl-deleted-head" onclick="toggleDeletedJobs()" aria-expanded="' + deletedOpen + '">' +
+      '<span class="month-arrow' + (deletedOpen ? '' : ' shut') + '">▼</span> 🗑 Recently deleted (' + list.length + ')</button>' +
+    (deletedOpen ? '<div class="hint">Kept ' + DELETED_KEEP_DAYS + ' days, then deleted for good by itself. Off every list, board and the crew\'s clock meanwhile.</div>' +
+      list.map(d => '<div class="job-row jl-deleted-row"><div class="job-row-main">' +
+          '<div class="job-row-name">' + jobNameHtml(d.customerName || 'Untitled', String(d.estimateNumber || '').trim()) +
+            ' <span class="muted">' + (isBidStatus(d.jobStatus) ? 'bid' : 'job') + '</span></div>' +
+          '<div class="job-row-sub">Deleted ' + esc(when(d)) + (d.deletedByName ? ' by ' + esc(d.deletedByName) : '') + ' · ' + esc(left(d)) + '</div></div>' +
+        '<div class="jl-acts">' +
+          (edits ? '<button class="dup-btn" onclick="restoreJob(\'' + safe(d._id) + '\')">RESTORE</button>' : '') +
+          (owner && edits ? '<button class="remove-btn jl-del" onclick="purgeJob(\'' + safe(d._id) + '\')">Delete for good</button>' : '') +
+        '</div></div>').join('') : '') +
+  '</div>';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3004,7 +3286,7 @@ function renderDashboard() {
     const net = real ? round2(price - (lab.cost + matCost)) : dashPlannedNet(d, price);
     const stage = dashStage(d, status);
     return { id: d._id, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, hrs, matCost, net, planned: !real && net != null,
-      invoiced: isInvoiced(d), owed: dashOwed(d), stage, lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', year: dashYearOf(d, status),
+      invoiced: isInvoiced(d), owed: dashOwed(d), stage, lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', why: lostWhy(d), year: dashYearOf(d, status),
       plantBits: window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '' };
   });
   const fYear = fillDashYears(Array.from(new Set(rows.map(r => r.year))));
@@ -3045,12 +3327,15 @@ function renderDashboard() {
   // Finished jobs with plants still owing their care email, whatever the
   // filters show (plantcare.js).
   const careNote = window.YDPlants ? window.YDPlants.owedNoteHtml(jobsAll) : '';
-  if (!rows.length) { w.innerHTML = careNote + '<p class="empty-msg">No jobs match.</p>'; return; }
+  // Why bids were lost, this year and last -- open when Lost bids is picked.
+  const lostSum = lostReasonsHtml(jobsAll, fStatus === 'lost');
+  if (!rows.length) { w.innerHTML = careNote + lostSum + '<p class="empty-msg">No jobs match.</p>'; return; }
   const arrow = c => dashSort.col === c ? (dashSort.asc ? ' ▲' : ' ▼') : '';
   // Old jobs' clocked labour waiting on shifts from before last year.
   const older = window.YDClock && YDClock.oldLabourNote ? YDClock.oldLabourNote() : '';
   const stageHtml = r => r.stage && !DASH_SAME_AS_STATUS[r.stage.id] ? '<span class="dash-stage">' + esc(r.stage.name) + '</span>' : '';
-  const statusHtml = r => (r.lost ? '<span class="pill lost">Lost</span>' : statusPill(r.status) + stageHtml(r)) +
+  const statusHtml = r => (r.lost ? '<span class="pill lost">Lost</span>' + (r.why ? ' <span class="lost-why">' + esc(r.why) + '</span>' : '')
+      : statusPill(r.status) + stageHtml(r)) +
     (r.invoiced ? '<span class="qb-chip">QB</span>' : '') + r.plantBits;
   const netHtml = r => r.net == null ? '<span class="muted" title="No costs recorded and no costed estimate yet">—</span>'
     : '<span style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '"' +
@@ -3058,7 +3343,7 @@ function renderDashboard() {
       (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + (r.planned ? '<small> plan</small>' : '') + '</span>';
   const owedHtml = r => r.owed == null ? '<span class="muted">—</span>'
     : r.owed > 0 ? '<span class="dash-owed">' + fmtMoney(r.owed) + '</span>' : '<span class="muted">Paid</span>';
-  let h = careNote + (older || '') + '<table class="dash-table"><thead><tr>' +
+  let h = careNote + lostSum + (older || '') + '<table class="dash-table"><thead><tr>' +
     '<th style="cursor:pointer" onclick="sortDash(\'name\')">Customer' + arrow('name') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'city\')">Location' + arrow('city') + '</th>' +
     '<th>Services</th><th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +
@@ -3086,6 +3371,51 @@ function renderDashboard() {
   });
   h += '</tbody></table>';
   w.innerHTML = h + cardsHtml + '</div>';
+}
+
+// Why bids were lost (askLostReason): how many bids each reason cost this
+// year and last, by the year each was marked lost, with what they were worth
+// for whoever sees the money side (the owner, or an admin with Billing). A
+// bid lost before reasons were asked counts as "Not said". Folded unless
+// Lost bids is picked; once opened or closed by hand it stays that way.
+let lostSumOpen = null;
+function lostReasonsHtml(jobs, pickedLost) {
+  const lost = (jobs || []).filter(d => isBidStatus(d.jobStatus) && d.bidStage === 'lost');
+  if (!lost.length) return '';
+  const a = window.YDAuth || {};
+  const money = a.mode !== 'cloud' || !!a.isOwner || ydCan('billing', 'see');
+  const y = new Date().getFullYear();
+  const years = [y, y - 1];
+  const yearOf = d => {
+    const t = new Date(d.lostAt || d.bidStageAt || d.lastModified || '');
+    return isNaN(t) ? null : t.getFullYear();
+  };
+  const tally = {};                 // reason id ('' = not said) -> year -> {n, cents}
+  lost.forEach(d => {
+    const yr = yearOf(d);
+    if (years.indexOf(yr) === -1) return;
+    const id = LOST_REASONS.some(r => r.id === d.lostReason) ? d.lostReason : '';
+    const t = (tally[id] = tally[id] || {});
+    const c = (t[yr] = t[yr] || { n: 0, cents: 0 });
+    c.n += 1;
+    c.cents += Math.round((parseMoney(d.jobPrice || '') || 0) * 100);
+  });
+  const ids = LOST_REASONS.map(r => r.id).concat(['']).filter(id => tally[id]);
+  const count = yr => ids.reduce((s, id) => s + ((tally[id][yr] || {}).n || 0), 0);
+  const thisYear = count(y);
+  if (!ids.length) return '';
+  ids.sort((p, q) => ((tally[q][y] || {}).n || 0) - ((tally[p][y] || {}).n || 0) ||
+    ((tally[q][y - 1] || {}).n || 0) - ((tally[p][y - 1] || {}).n || 0));
+  const cell = c => !c ? '<span class="muted">—</span>'
+    : '<b>' + c.n + '</b>' + (money && c.cents ? ' <span class="muted">· ' + fmtMoney(c.cents / 100) + '</span>' : '');
+  const open = lostSumOpen == null ? pickedLost : lostSumOpen;
+  return '<details class="lost-sum"' + (open ? ' open' : '') + ' ontoggle="lostSumOpen = this.open">' +
+    '<summary>📉 Why bids were lost — ' + thisYear + ' this year, ' + count(y - 1) + ' last year</summary>' +
+    '<table class="lost-sum-table"><thead><tr><th>Why</th><th>' + y + '</th><th>' + (y - 1) + '</th></tr></thead><tbody>' +
+    ids.map(id => '<tr><td>' + esc(id ? lostReasonName(id) : 'Not said') + '</td><td>' + cell(tally[id][y]) + '</td><td>' + cell(tally[id][y - 1]) + '</td></tr>').join('') +
+    '</tbody></table>' +
+    (money ? '<div class="hint">The figure beside each count is what those bids were worth.</div>' : '') +
+  '</details>';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -3164,7 +3494,8 @@ function toggleMatCat(id) { document.getElementById(id).classList.toggle('shut')
 // BACKUP / RESTORE
 // ═══════════════════════════════════════════════════════════
 function exportAllJobs() {
-  const idx = getJobIndex(); const jobs = {};
+  // Every job, those in Recently deleted too: a backup is the last copy.
+  const idx = getJobIndexAll(); const jobs = {};
   idx.forEach(j => { const raw = readJobBlob(j.id); if (raw) jobs[j.id] = JSON.parse(raw); });
   const backup = { app: 'yd-job-hub', version: 2, exported: new Date().toISOString(), index: idx, jobs };
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
@@ -3188,7 +3519,7 @@ function importAllJobs(event) {
       // overwrite this week's edits, and sync then sent the old copies to
       // every other device too.
       const byId = {};
-      getJobIndex().forEach(j => { byId[j.id] = j; });
+      getJobIndexAll().forEach(j => { byId[j.id] = j; });
       const taken = [];
       for (const id of Object.keys(backup.jobs)) {
         const theirs = backup.jobs[id];

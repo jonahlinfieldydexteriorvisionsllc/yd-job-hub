@@ -328,12 +328,12 @@ def _quickbooks(request, path, headers):
             if not snap or not snap.exists:
                 raise RuntimeError("No such job")
             with qb._holding_tokens():
-                jobs = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
+                jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
                 qb.sync_invoices(jobs)
                 result = {"ok": True, "changed": qb.sync_payments({jid: snap.to_dict() or {}}, only=jid)}
         elif path == "/qb/invoices-now":
             # The Invoices list brought up to date now, not at the next hourly look.
-            jobs = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
+            jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
             with qb._holding_tokens():
                 news = qb.sync_invoices(jobs)
                 # And jobs tied to a QuickBooks estimate or invoice filled from it now.
@@ -428,6 +428,12 @@ def _digest(request, path, headers):
                 tidied = tidy.run()
             except Exception as e:                      # noqa: BLE001
                 print("tidy run failed:", e)
+            # And jobs in Recently deleted over 30 days, with their photos.
+            try:
+                import tidy
+                tidy.purge_jobs()
+            except Exception as e:                      # noqa: BLE001
+                print("tidy: deleted jobs not cleared:", e)
         try:
             return (json.dumps({"slot": slot, "report": digest.run(slot), "tidied": tidied}), 200, json_headers)
         except Exception as e:                          # noqa: BLE001

@@ -39,9 +39,11 @@
 
   // ---------------------------------------------------------------- helpers
 
+  // Every job on the device, those in Recently deleted too (app.js
+  // getJobIndexAll): they are still kept in step with the cloud.
   function indexById() {
     const map = {};
-    getJobIndex().forEach(j => { map[j.id] = j; });
+    getJobIndexAll().forEach(j => { map[j.id] = j; });
     return map;
   }
 
@@ -221,7 +223,7 @@
   function bookIfAccepted(id, d) {
     if (!d || booking.has(id) || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
     const q = d.qbEstimate || {};
-    if (!qbAccepted(q) || !isBidStatus(d.jobStatus) || d.bidStage === 'won') return;
+    if (!qbAccepted(q) || !isBidStatus(d.jobStatus) || d.bidStage === 'won' || d.deletedAt) return;
     const seenAt = d.acceptedSeenAt || q.syncedAt;
     if (d.bidStageAt && seenAt && String(d.bidStageAt) > String(seenAt)) return;
     booking.add(id);
@@ -350,8 +352,8 @@
   // A bid is not a job until it is booked (app.js isBidStatus), so it is not
   // on the crew's clock either: booking it puts it there.
   // Nor is a job marked to be taken off (a copy, or a snow contract now on the
-  // Snow route -- app.js removeBoxHtml).
-  const onBoard = d => !d.removeWhy && (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting')) !== 'quoting';
+  // Snow route -- app.js removeBoxHtml), nor one in Recently deleted.
+  const onBoard = d => !d.removeWhy && !d.deletedAt && (typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : (d.jobStatus || 'quoting')) !== 'quoting';
 
   // What this device knows the board holds for each job: the crew-visible
   // part of its entry, or NOT_ON_BOARD for none. A job missing from the map
@@ -440,7 +442,7 @@
       const board = await window.YDDb.list('jobBoard');
       const writes = [];
       const bids = new Set();
-      getJobIndex().forEach(j => {
+      getJobIndexAll().forEach(j => {
         const raw = readJobBlob(j.id);
         if (!raw) return;
         let d; try { d = JSON.parse(raw); } catch { return; }
@@ -487,7 +489,7 @@
   }
 
   function pushAllLocal() {
-    const idx = getJobIndex();
+    const idx = getJobIndexAll();
     const entries = [];
     idx.forEach(j => {
       const raw = readJobBlob(j.id);
@@ -617,7 +619,9 @@
       // edits here, do NOT overwrite them -- losing what someone just typed is
       // far worse than showing a slightly stale record. Say so instead.
       if (openJobChanged) {
-        const stillHere = !!readJobBlob(currentJobId);
+        // Moved to Recently deleted elsewhere counts as deleted here.
+        let stillHere = false;
+        try { const d = JSON.parse(readJobBlob(currentJobId) || 'null'); stillHere = !!d && !d.deletedAt; } catch (e) {}
         if (stillHere && dirty) {
           showToast('This job was changed on another device — your edits here are kept');
         } else if (stillHere) {
@@ -756,10 +760,12 @@
     return ok;
   };
 
-  const _deleteJob = window.deleteJob;
-  window.deleteJob = function (id) {
+  // Deleted for good (app.js purgeJob, from Recently deleted). Moving a job
+  // to Recently deleted is a patchJob like any other change.
+  const _purgeJob = window.purgeJob;
+  window.purgeJob = function (id) {
     const existed = !!readJobBlob(id);
-    _deleteJob.apply(this, arguments);
+    _purgeJob.apply(this, arguments);
     // Only reaches the cloud if the local delete actually happened (the user
     // may have cancelled the confirm). Before sync is running it waits in
     // pendingDeletes rather than being dropped.

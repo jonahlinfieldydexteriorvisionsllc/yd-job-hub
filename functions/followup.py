@@ -94,6 +94,8 @@ def draft(client, job_id):
     if not snap.exists:
         return {"error": "That job was not found"}, None
     j = snap.to_dict() or {}
+    if j.get("deletedAt"):
+        return {"error": "That bid is in Recently deleted"}, None
     if (j.get("jobStatus") or "quoting") != "quoting" or j.get("bidStage") in ("won", "lost"):
         return {"error": "That job is not a bid waiting on an answer any more"}, None
     # The customer already answered in QuickBooks: no "just following up"

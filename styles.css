@@ -4034,3 +4034,41 @@
   }
   /* A stage move lists several parts; struck through it was hard to read. */
   .cl-row.cl-stage-row .cl-before { text-decoration:none; }
+  /* Why a bid was lost (app.js askLostReason): a button per reason, all in
+     sight, three to a row on a phone, two lines for the long names. */
+  .lost-name { font-weight:700; margin:0 0 10px; }
+  .lost-opts { display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+  .lost-opt { min-height:52px; padding:6px 8px; border-radius:10px; border:1.5px solid var(--border-strong);
+    background:var(--surface-2); color:var(--text); font:inherit; font-size:14px; font-weight:600; line-height:1.2; cursor:pointer; }
+  .lost-opt:hover { border-color:var(--brand); }
+  .lost-opt.on { border-color:var(--brand); background:var(--brand); color:#fff; }
+  .lost-other { display:flex; gap:8px; margin-top:10px; }
+  .lost-other[hidden] { display:none; }
+  .lost-other input { flex:1; min-width:0; }
+  .lost-modal .field-actions { margin-top:14px; }
+  @media (max-width:720px) { .lost-opts { grid-template-columns:repeat(3, 1fr); } .lost-opt { min-height:56px; font-size:13.5px; } }
+  /* The reason beside a lost bid: grey like the Lost pill; a button where it
+     can be changed. */
+  .lost-why { display:inline-block; margin-left:4px; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:600;
+    background:var(--st-later-soft); color:var(--st-later); border:1px solid transparent; font-family:inherit; vertical-align:middle; }
+  button.lost-why { cursor:pointer; min-height:28px; }
+  button.lost-why:hover { border-color:var(--st-later); }
+  .lost-why.none { background:none; border:1px dashed var(--st-later); }
+  /* All Jobs: why bids were lost, this year and last. */
+  .lost-sum { margin:0 0 14px; padding:8px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+  .lost-sum summary { cursor:pointer; font-weight:700; min-height:32px; display:flex; align-items:center; }
+  .lost-sum-table { width:100%; margin-top:6px; }
+  .lost-sum-table td, .lost-sum-table th { padding:6px 8px; }
+  .lost-sum-table td:not(:first-child), .lost-sum-table th:not(:first-child) { text-align:right; white-space:nowrap; }
+  /* My Jobs: Recently deleted, at the foot (app.js deletedBoxHtml). */
+  .jl-deleted { margin-top:16px; padding-top:8px; border-top:1px solid var(--border); }
+  .jl-deleted-head { background:none; border:none; padding:8px 0; min-height:44px; font:inherit; font-weight:700; color:var(--muted); cursor:pointer; }
+  .jl-deleted-row .job-row-name { opacity:.8; }
+  /* My Jobs on a phone: a bid's buttons (Back on the board, Make it a job,
+     Mark lost, Copy, Delete) take a line of their own under the name, rather
+     than squeezing the name and its Lost reason into a sliver beside them. */
+  @media (max-width:720px) {
+    #jobListBody .job-row { flex-wrap:wrap; }
+    #jobListBody .jl-acts { flex:1 1 100%; justify-content:flex-start; }
+    #jobListBody .jl-acts .jl-del { margin-left:auto; }
+  }
