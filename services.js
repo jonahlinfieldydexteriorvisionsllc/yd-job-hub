@@ -11,7 +11,7 @@
 // Where it lives: ONE record, settings/serviceList --
 //   { groups:   { id: { name, order, active } },          the kinds of work
 //     services: { id: { name, group, summary, details, aliases[], qbItemName,
-//                       active, order, addedAt, addedBy } },
+//                       tools[], active, order, addedAt, addedBy } },
 //     seededAt, updatedAt }
 // One record rather than a collection: the whole list is a few dozen short
 // entries, everyone reads all of it at once (a picker, the crew's page), and
@@ -36,6 +36,9 @@
 // Also here, under "Your other lists": his own equipment types, supply tags
 // and material kinds -- each with how much uses it, rename and merge (and for
 // tags, take it off). Contacts' tags ARE this services list.
+//
+// And the TOOLS each service takes (16 Oct 2026, see "tools" below): picked
+// here once per service, put together into every job's tool list.
 
 (function () {
   'use strict';
@@ -289,6 +292,367 @@
     if (isOpen() && (fromHere || !editing)) render();
   }
 
+  // ------------------------------------------------------------ tools
+  //
+  // Jonah (16 Oct 2026): "have jobs auto compile a tool list based on what
+  // services the job has and make that list viewable by the crew on the
+  // front page of the job so they know what they need. i want tool list
+  // right by the material list."
+  //
+  // Each service says what it takes -- services[id].tools, a list of
+  //   { eq, name, kind }   one of his machines (Equipment), tied by its id.
+  //                        The name and type are kept beside it for a device
+  //                        that has not read the machines; where it has, the
+  //                        machine's own record wins, so a rename follows.
+  //   { name, qty }        a hand tool as typed; qty only when a number was
+  //                        typed in front ("2 wheelbarrows").
+  // A job's list is put together from its services every time it is shown
+  // (toolsFor) and never stored, so picking a service's tools once fills
+  // every job that has it, booked ones included. Only what is changed by
+  // hand on one job is kept on that job (app.js, job.tools {added, dropped}).
+
+  const TOOLS_MAX = 40;
+  // Where a few generic tool names start, by the words of a service's name
+  // (first match wins, as GUESS) or else its kind of work. Shown under
+  // "Suggested -- tap to add" until he adds them; never on a job by
+  // themselves. Generic names only -- his own machines are his to pick.
+  const STARTERS = [
+    [/artificial|synthetic/, ['Plate compactor', 'Power broom', 'Utility knives', 'String line', 'Rakes', 'Hand tamper', 'Wheelbarrows']],
+    [/patio|walkway|paver|\bpath|\bsteps?\b|driveway/, ['Skid steer', 'Plate compactor', 'Wet saw', 'Screed rails', 'String line', '4 ft level',
+      'Rubber mallet', 'Hand tamper', 'Shovels', 'Rakes', 'Wheelbarrows']],
+    [/wall/, ['Skid steer', 'Plate compactor', 'Wet saw', 'String line', '4 ft level', 'Torpedo level', 'Rubber mallet',
+      'Hand tamper', 'Shovels', 'Wheelbarrows', 'Caulk gun']],
+    [/fire ?pit|fireplace|kitchen/, ['Plate compactor', 'Wet saw', '4 ft level', 'Rubber mallet', 'Hand tamper', 'Shovels', 'Caulk gun']],
+    [/edging/, ['Bed edger', 'String line', 'Rubber mallet', 'Flat shovel', 'Wheelbarrows']],
+    [/mulch/, ['Pitchforks', 'Rakes', 'Wheelbarrows', 'Tarps', 'Bed edger']],
+    [/sod|seed|turf|lawn|restoration/, ['Skid steer', 'Sod cutter', 'Landscape rake', 'Lawn roller', 'Seed spreader', 'Rakes', 'Wheelbarrows', 'Hose']],
+    [/plant|shrub|garden|\bbeds?\b|landscap/, ['Shovels', 'Spades', 'Rakes', 'Wheelbarrows', 'Pruners', 'Tarps', 'Hose']],
+    [/drain|downspout|french|gutter/, ['Skid steer', 'Trenching shovel', 'Shovels', '4 ft level', 'Hacksaw', 'Tape measure', 'Wheelbarrows']],
+    [/grading|grade/, ['Skid steer', 'Laser level', 'Landscape rake', 'Rakes', 'Shovels', 'Wheelbarrows']],
+    [/light/, ['Drill', 'Trenching shovel', 'Wire strippers', 'Voltage tester']],
+    [/clean ?-?up|\bleaf|leaves|haul/, ['Leaf blowers', 'Rakes', 'Tarps', 'Pruners', 'Dump trailer']],
+    [/snow|\bice\b|salt|plow/, ['Plow truck', 'Snow blower', 'Salt spreader', 'Snow shovels', 'Ice melt scoops']],
+    [/\btrees?\b|stump/, ['Chainsaw', 'Stump grinder', 'Pole saw', 'Loppers', 'Rope', 'Dump trailer']],
+    [/mow|trim|maintenance|weed/, ['Mower', 'String trimmer', 'Edger', 'Leaf blower']],
+    [/cedar|pergola|structure|deck|fence/, ['Circular saw', 'Miter saw', 'Drill', 'Impact driver', 'Post hole digger', '4 ft level', 'Speed square', 'Ladder']],
+    [/pond|excavat|removal|demo/, ['Skid steer', 'Shovels', 'Wheelbarrows', 'Dump trailer']],
+  ];
+  // A name that says nothing ("Hardscaping"): the starters of its kind of work.
+  const GROUP_SAMPLE = { hardscape: 'patio', landscape: 'planting', lawn: 'mowing', drainage: 'drainage', seasonal: 'cleanup',
+                         snow: 'snow', trees: 'trees' };
+  function starters(name, group) {
+    const find = n => STARTERS.find(([re]) => re.test(s(n).toLowerCase()));
+    const hit = find(name) || (GROUP_SAMPLE[group] ? find(GROUP_SAMPLE[group]) : null);
+    return hit ? hit[1] : [];
+  }
+  // The words his own machine may go by, for a generic name: "Skid steer"
+  // is often a "Bobcat" on the machine list. Only phrases that cannot mean another machine ("blower"
+  // alone would also be the snow blower).
+  const SAME_AS = {
+    'skid steer': ['bobcat', 'skid', 'track loader', 'toolcat', 'dingo', 'mini loader'],
+    'plate compactor': ['compactor', 'plate tamper'],
+    'wet saw': ['tile saw', 'masonry saw', 'block saw', 'paver saw'],
+    'dump trailer': ['dump trailer'],
+    'snow blower': ['snowblower', 'snow thrower'],
+    'plow truck': ['plow'],
+    'salt spreader': ['salter', 'salt'],
+    'leaf blower': ['backpack blower', 'leaf blower'],
+    'string trimmer': ['weed eater', 'weedeater', 'weed whacker', 'weed wacker'],
+    'chainsaw': ['chain saw'],
+  };
+
+  // Words for matching: lower case, no punctuation, one of a plural.
+  const sing = w => w.length > 3 && /s$/.test(w) && !/ss$/.test(w) ? (/ies$/.test(w) ? w.slice(0, -3) + 'y' : w.slice(0, -1)) : w;
+  const wordsOf = t => s(t).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(sing);
+  const nameKey = n => wordsOf(n).join(' ');
+  const toolKey = t => (t && t.eq ? 'eq:' + t.eq : 'n:' + nameKey(t && t.name));
+  const posInt = v => { const n = parseInt(v, 10); return n > 0 && n < 1000 ? n : null; };
+
+  // "2 wheelbarrows" -> { name: 'wheelbarrows', qty: 2 }. A number with a
+  // unit after it is part of the name: "4 ft level", "6' level", "16 oz hammer".
+  const UNIT_WORDS = /^(ft|foot|feet|in|inch|inches|'|"|lb|lbs|oz|gal|gallon|gallons|v|volt|mm|cm|m|yd|yard|yards|ton|tons|amp|hp|cc|psi|pc|piece)\b/i;
+  function parseTool(text) {
+    const t = s(text).replace(/\s+/g, ' ').slice(0, 60);
+    const m = t.match(/^(\d{1,3})\s*[x×]?\s+(.+)$/i);
+    if (m && !UNIT_WORDS.test(m[2])) return { name: m[2].charAt(0).toUpperCase() + m[2].slice(1), qty: posInt(m[1]) };
+    return { name: t, qty: null };
+  }
+
+  // His machines by id: their own records where this device reads them,
+  // else the names the office publishes for the crew (settings/public
+  // equipmentList, equipment.js publishNames) -- an admin who fills in jobs
+  // without seeing Equipment gets the same names.
+  let pubMachines = null, pubAsked = false;
+  function machines() {
+    const g = window.YDEquipment && window.YDEquipment.all ? window.YDEquipment.all() || {} : {};
+    let src = g;
+    if (!Object.keys(g).length) {
+      if (!pubAsked && signedIn() && window.YDDb) {
+        pubAsked = true;
+        Promise.resolve(window.YDDb.get('settings', 'public')).then(p => {
+          pubMachines = (p && p.equipmentList) || {};
+          if (Object.keys(pubMachines).length) document.dispatchEvent(new CustomEvent('yd-tools'));
+        }).catch(() => { pubAsked = false; });
+      }
+      src = pubMachines || {};
+    }
+    const out = {};
+    Object.keys(src).forEach(id => { const m = src[id]; if (m && s(m.name)) out[id] = { id: id, name: s(m.name), kind: s(m.kind) }; });
+    return out;
+  }
+  // A machine's type in words ("Machine", "Trailer"), and where its group
+  // goes: in the order Equipment lists its types.
+  function eqTypes() {
+    try { return window.YDEquipment && window.YDEquipment.types ? window.YDEquipment.types() || [] : []; } catch (e) { return []; }
+  }
+  // Equipment's five groups, in its order (equipment.js) -- kept here too so
+  // the tool lists read the same before Equipment has loaded.
+  const EQ_KINDS = ['vehicle', 'machine', 'trailer', 'engine', 'electric'];
+  const EQ_NAMES = { vehicle: 'Vehicles', machine: 'Machines', trailer: 'Trailers', engine: 'Small engines', electric: 'Electric tools' };
+  function kindName(k) {
+    const t = eqTypes().find(x => String(x.id).toLowerCase() === s(k).toLowerCase());
+    if (t && t.name) return String(t.name);
+    if (EQ_NAMES[s(k).toLowerCase()]) return EQ_NAMES[s(k).toLowerCase()];
+    return k ? s(k).charAt(0).toUpperCase() + s(k).slice(1) : 'Equipment';
+  }
+  const kindsPlural = n => (/\s/.test(n) || /s$/i.test(n) ? n : /[^aeiou]y$/i.test(n) ? n.slice(0, -1) + 'ies' : n + 's');
+  function kindRank(k) {
+    const f = EQ_KINDS.indexOf(s(k).toLowerCase());
+    if (f !== -1) return f;
+    const i = eqTypes().findIndex(x => String(x.id).toLowerCase() === s(k).toLowerCase());
+    return i === -1 ? 900 : 100 + i;
+  }
+  // His machines a generic name means, by its words or what it also goes by.
+  function machinesLike(name) {
+    const phrases = [name].concat(SAME_AS[nameKey(name)] || []).map(wordsOf).filter(p => p.length);
+    return Object.values(machines()).filter(m => {
+      const have = new Set(wordsOf(m.name + ' ' + m.kind));
+      return phrases.some(p => p.every(w => have.has(w)));
+    });
+  }
+
+  // A service's tools as saved: each once, nothing undefined.
+  function cleanTools(arr) {
+    const out = [], seen = {};
+    (Array.isArray(arr) ? arr : []).forEach(t => {
+      if (!t || out.length >= TOOLS_MAX) return;
+      const e = t.eq ? { eq: safeId(t.eq), name: s(t.name).slice(0, 60) || 'Machine', kind: s(t.kind).slice(0, 40) }
+        : { name: s(t.name).slice(0, 60), qty: posInt(t.qty) };
+      if (!e.name && !e.eq) return;
+      const k = toolKey(e);
+      if (!k || k === 'n:' || seen[k]) return;
+      seen[k] = true;
+      out.push(e);
+    });
+    return out;
+  }
+
+  // The service a name means (its own name or an old spelling): { id, v }.
+  function serviceOf(name) {
+    const id = list && index[keyOf(name)];
+    return id && list.services[id] ? { id: id, v: list.services[id] } : null;
+  }
+  // The service an estimate's line of work is, when the job's own services
+  // do not say (a job brought in from QuickBooks often has none): its
+  // QuickBooks product, its heading as a service's name, else the one
+  // service whose name has the most words in the heading (a tie is none).
+  const VAGUE = new Set(['and', 'the', 'of', 'new', 'install', 'installation', 'service', 'work', 'repair', 'job', 'project', 'labor', 'labour']);
+  function serviceForLine(w) {
+    if (!list || !w) return null;
+    const title = s(w.title).replace(/\s*\([^)]*×[^)]*\)\s*$/, '');
+    const qbi = s(w.qbItem).toLowerCase();
+    const all = Object.entries(list.services).map(([id, v]) => ({ id: id, v: v }));
+    if (qbi) {
+      const same = all.filter(x => s(x.v.qbItemName).toLowerCase() === qbi);
+      if (same.length === 1) return same[0];
+      const last = qbi.split(':').pop().trim();
+      if (last && serviceOf(last)) return serviceOf(last);
+    }
+    if (title && serviceOf(title)) return serviceOf(title);
+    const tw = new Set(wordsOf(title));
+    if (!tw.size) return null;
+    let best = null, top = 0, tie = false;
+    all.filter(x => x.v.active !== false).forEach(x => {
+      const nw = wordsOf(x.v.name).filter(n => !VAGUE.has(n));
+      if (!nw.length) return;
+      const got = nw.filter(n => tw.has(n)).length;
+      // Every word of the name counts double, so "Retaining wall" beats "Wall".
+      const score = got ? got + (got === nw.length ? 10 : 0) : 0;
+      if (score > top) { top = score; best = x; tie = false; }
+      else if (score && score === top) tie = true;
+    });
+    return top && !tie ? best : null;
+  }
+
+  // A job's tool list. d: the job (serviceTypes, estimate, tools {added,
+  // dropped}). Answers { tools, dropped, services }:
+  //   tools    [{ key, eq, name, kind, kindName, qty, from[], byHand }],
+  //            machines first (by type, then name), then hand tools in the
+  //            order the services list them -- each once, the biggest count
+  //   dropped  the ones taken off this job by hand (to put back)
+  //   services [{ id, name, has }] the services it came from (has: tools picked)
+  function toolsFor(d) {
+    d = d || {};
+    const eqs = machines(), eqKnown = Object.keys(eqs).length > 0;
+    const out = [], byKey = {};
+    function add(t, why, byHand) {
+      if (!t || (!t.eq && !s(t.name))) return;
+      let e;
+      if (t.eq) {
+        const m = eqs[t.eq];
+        // A machine no longer in Equipment (sold) is not brought.
+        if (!m && eqKnown) return;
+        e = { key: 'eq:' + t.eq, eq: t.eq, name: m ? m.name : s(t.name), kind: m ? m.kind : s(t.kind) };
+      } else {
+        e = { key: 'n:' + nameKey(t.name), eq: '', name: s(t.name), kind: '' };
+        if (e.key === 'n:') return;
+      }
+      e.qty = posInt(t.qty);
+      const had = byKey[e.key];
+      if (had) {
+        if (e.qty && e.qty > (had.qty || 0)) { had.qty = e.qty; if (!e.eq) had.name = e.name; }
+        if (why && had.from.indexOf(why) === -1) had.from.push(why);
+        if (byHand) had.byHand = true;
+        return;
+      }
+      e.from = why ? [why] : [];
+      e.byHand = !!byHand;
+      byKey[e.key] = e;
+      out.push(e);
+    }
+    const services = [], seen = {};
+    const take = x => {
+      if (!x || seen[x.id]) return;
+      seen[x.id] = true;
+      const tools = Array.isArray(x.v.tools) ? x.v.tools : [];
+      services.push({ id: x.id, name: x.v.name, has: tools.length > 0 });
+      tools.forEach(t => add(t, x.v.name));
+    };
+    (Array.isArray(d.serviceTypes) ? d.serviceTypes : []).forEach(n => take(serviceOf(n)));
+    (((d.estimate || {}).work) || []).forEach(w => take(serviceForLine(w)));
+    const own = d.tools && typeof d.tools === 'object' ? d.tools : {};
+    (Array.isArray(own.added) ? own.added : []).forEach(t => add(t, '', true));
+    // A hand tool typed with a machine's name is that machine.
+    const eqNames = {};
+    out.forEach(e => { if (e.eq) eqNames[nameKey(e.name)] = e; });
+    const merged = out.filter(e => {
+      const m = !e.eq && eqNames[nameKey(e.name)];
+      if (!m) return true;
+      e.from.forEach(f => { if (m.from.indexOf(f) === -1) m.from.push(f); });
+      if (e.byHand) m.byHand = true;
+      return false;
+    });
+    const drop = new Set((Array.isArray(own.dropped) ? own.dropped : []).map(String));
+    merged.forEach(e => { e.kindName = e.eq ? kindName(e.kind) : ''; });
+    const kept = merged.filter(e => !drop.has(e.key) || e.byHand);
+    const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
+    const machinesFirst = kept.filter(e => e.eq).sort((a, b) => kindRank(a.kind) - kindRank(b.kind) ||
+      byName(a.kindName, b.kindName) || byName(a.name, b.name));
+    return { tools: machinesFirst.concat(kept.filter(e => !e.eq)),
+             dropped: merged.filter(e => drop.has(e.key) && !e.byHand), services: services };
+  }
+
+  // ---- In the service's editor: what it takes.
+  function toolsFieldHtml(d) {
+    const tools = d.tools || [];
+    const eqs = machines();
+    const has = {};
+    tools.forEach(t => { has[toolKey(t)] = true; });
+    const chip = (t, i) => {
+      const m = t.eq ? eqs[t.eq] : null;
+      const gone = t.eq && !m && Object.keys(eqs).length;
+      return '<span class="svt-chip' + (t.eq ? ' svt-eq' : '') + '">' +
+        esc((t.qty ? t.qty + ' × ' : '') + (m ? m.name : t.name)) + (gone ? ' <i>(no longer in Equipment)</i>' : '') +
+        '<button type="button" onclick="svcToolOff(' + i + ')" aria-label="Take it off">×</button></span>';
+    };
+    const sug = toolSuggestions(d);
+    // His machines, by type, to tap on and off.
+    const groups = {};
+    Object.values(eqs).forEach(m => { (groups[m.kind] = groups[m.kind] || []).push(m); });
+    const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
+    const eqHtml = Object.keys(groups).sort((a, b) => kindRank(a) - kindRank(b) || byName(kindName(a), kindName(b))).map(k =>
+      '<div class="svt-sub">' + esc(kindsPlural(kindName(k))) + '</div><div class="svt-chips">' +
+      groups[k].sort((a, b) => byName(a.name, b.name)).map(m => {
+        const on = !!has['eq:' + m.id];
+        return '<button type="button" class="svt-pick' + (on ? ' on' : '') + '" aria-pressed="' + on + '" data-id="' + esc(m.id) +
+          '" onclick="svcToolEq(this.dataset.id)">' + (on ? '✓ ' : '＋ ') + esc(m.name) + '</button>';
+      }).join('') + '</div>').join('');
+    return '<div class="field svt" id="svcEdTools"><span class="label">🧰 Tools &amp; equipment it needs — every job with this service lists them for the crew</span>' +
+      '<div class="svt-chips svt-picked">' + (tools.length ? tools.map(chip).join('') : '<span class="muted">None picked yet.</span>') + '</div>' +
+      (sug.length ? '<div class="svt-sub">Suggested — tap to add' +
+          (sug.length > 1 ? ' <button type="button" class="link-btn" onclick="svcToolAllSug()">Add all ' + sug.length + '</button>' : '') + '</div>' +
+        '<div class="svt-chips">' + sug.map((x, i) => '<button type="button" class="svt-pick svt-sug" onclick="svcToolSug(' + i + ')">＋ ' + esc(x.name) +
+          (x.eq && nameKey(x.eq.name) !== nameKey(x.name) ? ' <span class="svt-is">· your ' + esc(x.eq.name) + '</span>' : '') + '</button>').join('') + '</div>' : '') +
+      (eqHtml ? '<details class="svt-eqs"' + (d.eqOpen ? ' open' : '') + ' ontoggle="svcDraft(\'eqOpen\', this.open)"><summary>🚜 Your equipment (' +
+          Object.keys(eqs).length + ') — tap to add or take off</summary>' + eqHtml + '</details>' : '') +
+      '<div class="svt-add"><input id="svcEdTool" value="' + esc(d.toolText || '') + '" maxlength="60" placeholder="A hand tool — e.g. 4 ft level, 2 wheelbarrows" ' +
+        'oninput="svcDraft(\'toolText\', this.value)" onkeydown="if(event.key===\'Enter\'){event.preventDefault();svcToolType()}">' +
+        '<button type="button" class="btn btn-sm" onclick="svcToolType()">Add</button></div>' +
+    '</div>';
+  }
+  // The starters for this service not yet on it -- each tied to his machine
+  // when exactly one of his goes by that name (two wet saws: the generic
+  // name, and he picks which below if it matters).
+  function toolSuggestions(d) {
+    const has = {};
+    (d.tools || []).forEach(t => { has[toolKey(t)] = true; });
+    const out = [];
+    starters(d.name, d.group).forEach(n => {
+      const like = machinesLike(n);
+      if (like.some(m => has['eq:' + m.id]) || has['n:' + nameKey(n)]) return;
+      out.push({ name: n, eq: like.length === 1 ? like[0] : null });
+    });
+    return out;
+  }
+  function addDraftTool(t) {
+    if (!draft) return;
+    draft.tools = cleanTools((draft.tools || []).concat([t]));
+  }
+  const sugTool = x => (x.eq ? { eq: x.eq.id, name: x.eq.name, kind: x.eq.kind } : { name: x.name, qty: null });
+  window.svcToolOff = function (i) {
+    if (!draft || !draft.tools) return;
+    draft.tools.splice(i, 1);
+    rerenderEditor();
+  };
+  window.svcToolSug = function (i) {
+    const x = draft && toolSuggestions(draft)[i];
+    if (!x) return;
+    addDraftTool(sugTool(x));
+    rerenderEditor();
+  };
+  window.svcToolAllSug = function () {
+    if (!draft) return;
+    toolSuggestions(draft).forEach(x => addDraftTool(sugTool(x)));
+    rerenderEditor();
+  };
+  window.svcToolEq = function (id) {
+    const m = machines()[id];
+    if (!draft || !m) return;
+    const at = (draft.tools || []).findIndex(t => t.eq === id);
+    if (at !== -1) draft.tools.splice(at, 1);
+    else addDraftTool({ eq: m.id, name: m.name, kind: m.kind });
+    draft.eqOpen = true;
+    rerenderEditor();
+  };
+  window.svcToolType = function () {
+    if (!draft) return;
+    const box = el('svcEdTool');
+    const t = parseTool(box ? box.value : draft.toolText);
+    if (!t.name) return;
+    // Typed with the name of one of his machines: that machine.
+    const m = Object.values(machines()).find(x => nameKey(x.name) === nameKey(t.name));
+    addDraftTool(m ? { eq: m.id, name: m.name, kind: m.kind } : t);
+    draft.toolText = '';
+    rerenderEditor();
+    const again = el('svcEdTool');
+    if (again) again.focus({ preventScroll: true });
+  };
+  // The tools as one line, for a service's card and What we do.
+  function toolsLine(v) {
+    const eqs = machines();
+    return (v.tools || []).map(t => (t.qty ? t.qty + ' × ' : '') + (t.eq && eqs[t.eq] ? eqs[t.eq].name : t.name)).join(' · ');
+  }
+
   // ------------------------------------------------------------ who uses what
 
   // Every service name on a record, exactly as written, with the records:
@@ -512,6 +876,7 @@
         (s(v.summary) ? '<div class="svc-summary">' + esc(v.summary) + '</div>' : '') +
         (s(v.details) ? '<div class="svc-details">' + esc(v.details) + '</div>' : '') +
         (!s(v.summary) && !s(v.details) ? '<div class="muted svc-none">No description yet — ask Jonah.</div>' : '') +
+        ((v.tools || []).length ? '<div class="svc-alias svt-line">🧰 Bring: ' + esc(toolsLine(v)) + '</div>' : '') +
       '</div>').join(''), svs.length);
     }).join('');
     return out || '<p class="empty-msg">' + (search ? 'Nothing matches “' + esc(search) + '”.' : 'No services yet.') + '</p>';
@@ -521,10 +886,13 @@
   function manageHtml() {
     const all = Object.values(list.services).filter(v => v.active !== false);
     const noSummary = all.filter(v => !s(v.summary)).length;
+    const noTools = all.filter(v => !(v.tools || []).length).length;
     return '<p class="hint">One list for jobs, contacts, customers and subcontractors. The <b>summary</b> is the one line the crew ' +
-        'say to a homeowner; the <b>details</b> are what it includes. The crew read them under 🧰 What we do.</p>' +
+        'say to a homeowner; the <b>details</b> are what it includes. The crew read them under 🧰 What we do. ' +
+        'The <b>tools</b> a service takes go on every job with it, for the crew to bring.</p>' +
       '<div class="svc-stats"><span>' + plural(all.length, 'service') + '</span>' +
-        (noSummary ? '<span class="svc-warn">' + noSummary + ' still without a summary</span>' : '<span class="svc-ok">✓ every one has a summary</span>') + '</div>' +
+        (noSummary ? '<span class="svc-warn">' + noSummary + ' still without a summary</span>' : '<span class="svc-ok">✓ every one has a summary</span>') +
+        (noTools ? '<span class="svc-warn">' + noTools + ' without tools</span>' : '<span class="svc-ok">✓ every one has its tools</span>') + '</div>' +
       '<div class="svc-acts">' +
         '<button class="btn btn-sm btn-filled" onclick="svcAdd()">+ Add a service</button>' +
         '<button class="btn btn-sm" onclick="svcMode(\'read\')">👀 What the crew see</button>' +
@@ -559,8 +927,11 @@
       (s(v.details) ? '<div class="svc-details">' + esc(v.details) + '</div>' : '') +
       ((v.aliases || []).length ? '<div class="muted svc-alias">Also written: ' + esc(v.aliases.join(', ')) + '</div>' : '') +
       (v.qbItemName ? '<div class="muted svc-alias">📗 QuickBooks: ' + esc(v.qbItemName) + '</div>' : '') +
+      ((v.tools || []).length ? '<div class="svc-alias svt-line">🧰 ' + esc(toolsLine(v)) + '</div>'
+        : v.active !== false ? '<div class="muted svc-alias svt-line">🧰 No tools picked yet</div>' : '') +
       '<div class="svc-acts">' +
         btn('✎ Edit', 'svcEdit(\'' + id + '\')') +
+        (v.active !== false ? btn('🧰 Tools', 'svcEditTools(\'' + id + '\')') : '') +
         (v.active === false ? btn('Show again', 'svcShow(\'' + id + '\', true)')
           : btn('Merge into…', 'svcMerge(\'' + id + '\')') + btn('Hide', 'svcShow(\'' + id + '\', false)') +
             (i > 0 ? btn('▲', 'svcMove(\'' + id + '\', -1)', 'svc-arrow') : '') +
@@ -582,6 +953,7 @@
       '<div class="field"><span class="label">Details — what it includes, how we do it</span>' +
         '<textarea id="svcEdDetails" rows="5" maxlength="4000" placeholder="A few sentences: what is included, how we do it" oninput="svcDraft(\'details\', this.value)">' +
         esc(d.details) + '</textarea></div>' +
+      toolsFieldHtml(d) +
       qbFieldHtml(d) +
       '<div class="field"><span class="label">Other spellings (commas between) — typed anywhere, they become this one</span>' +
         '<input id="svcEdAliases" value="' + esc(d.aliases) + '" oninput="svcDraft(\'aliases\', this.value)"></div>' +
@@ -642,16 +1014,41 @@
     card.outerHTML = editorHtml(Object.assign({ id: editing }, list.services[editing]));
   }
   window.svcDraft = function (k, v) { if (draft) draft[k] = v; };
-  window.svcEdit = function (id) {
+  function startEdit(id, eqOpen) {
     const v = list && list.services[id];
-    if (!v || !owner()) return;
+    if (!v || !owner()) return false;
     editing = id;
     draft = { name: v.name, group: groupOf(v), summary: v.summary || '', details: v.details || '',
-              aliases: (v.aliases || []).join(', '), qbItemName: v.qbItemName || '' };
+              aliases: (v.aliases || []).join(', '), qbItemName: v.qbItemName || '',
+              tools: cleanTools(v.tools), toolText: '', eqOpen: !!eqOpen };
     openGroups[groupOf(v)] = true;
     render();
+    return true;
+  }
+  window.svcEdit = function (id) {
+    if (!startEdit(id)) return;
     const c = el('svcCard_' + safeId(id));
     if (c) { c.scrollIntoView({ block: 'nearest' }); const f = el('svcEdSummary'); if (f) f.focus({ preventScroll: true }); }
+  };
+  // The editor, scrolled to what the service takes (its card's 🧰 Tools),
+  // his machines unfolded to tap.
+  window.svcEditTools = function (id) {
+    if (!startEdit(id, true)) return;
+    const t = el('svcEdTools');
+    if (t) setTimeout(() => t.scrollIntoView({ block: 'start' }), 30);
+  };
+  // From a job (the Job tab's Tools box): one service's tools to pick. A
+  // name not yet on the list joins it first (as one typed on a job does).
+  window.openServiceTools = function (name) {
+    if (!owner()) { window.openWhatWeDo(name); return; }
+    if (!list) { showToast('The services list has not come through yet'); return; }
+    if (!known(name)) remember(name);
+    const id = index[keyOf(name)];
+    if (!id) return;
+    mode = 'manage'; search = ''; focusId = null;
+    editing = null; draft = null;
+    openWindow();
+    window.svcEditTools(id);
   };
   window.svcCancel = function () { editing = null; draft = null; render(); };
   window.svcSave = async function (id) {
@@ -676,8 +1073,10 @@
     // that say it still land here.
     const renamed = v.name !== name;
     if (renamed && keyOf(v.name) !== keyOf(name) && !aliases.some(x => keyOf(x) === keyOf(v.name))) aliases.push(v.name);
+    // A hand tool typed but not yet added with its button goes in too.
+    if (s(draft.toolText)) { addDraftTool(parseTool(draft.toolText)); draft.toolText = ''; }
     const fields = { name: name, summary: s(draft.summary).slice(0, 200), details: String(draft.details || '').trim().slice(0, 4000),
-                     aliases: aliases, qbItemName: s(draft.qbItemName), updatedAt: iso() };
+                     aliases: aliases, qbItemName: s(draft.qbItemName), tools: cleanTools(draft.tools), updatedAt: iso() };
     if (draft.group !== groupOf(v)) {
       fields.group = draft.group;
       fields.order = servicesIn(draft.group).reduce((m, x) => Math.max(m, x.order || 0), 0) + 1;
@@ -746,6 +1145,8 @@
     namesOf(v).forEach(n => { if (keyOf(n) !== keyOf(to.name) && !aliases.some(a => keyOf(a) === keyOf(n))) aliases.push(n); });
     const fields = { aliases: aliases, updatedAt: iso() };
     ['summary', 'details', 'qbItemName'].forEach(k => { if (!s(to[k]) && s(v[k])) fields[k] = v[k]; });
+    // Its tools join the kept one's (each once).
+    if ((v.tools || []).length) fields.tools = cleanTools((to.tools || []).concat(v.tools));
     write({ services: { [pick.id]: fields, [id]: null } }, 'merging ' + v.name);
     if (editing === id) { editing = null; draft = null; }
     changed(true);
@@ -863,24 +1264,11 @@
     changed(true);
   };
 
-  // ---- Your other lists: his own equipment types, supply tags and material
-  // kinds, each with how much uses it. Merge = everything of it moves onto
+  // ---- Your other lists: his own supply tags and material kinds, each with
+  // how much uses it. (Equipment types left this list on 16 Oct 2026: machines
+  // sit in five fixed groups on the Equipment tab, nothing of his to merge.) Merge = everything of it moves onto
   // another; rename = the same onto a new name. Always shown the count first.
   const OTHER = {
-    equipment: {
-      title: 'Equipment types', unit: ['machine', 'machines'],
-      ok: () => !!window.YDEquipment && can('equipment', 'change'),
-      rows: () => window.YDEquipment.types().filter(t => !t.builtIn),
-      targets: () => window.YDEquipment.types().map(t => ({ id: t.id, label: t.name })),
-      move: (was, to) => window.YDEquipment.retype(was, to),
-      // A name typed that is already a type (any capitals, or "Vehicles") is that type.
-      named: typed => {
-        const k = s(typed).toLowerCase();
-        const hit = window.YDEquipment.types().find(t => String(t.id).toLowerCase() === k || String(t.name).toLowerCase() === k);
-        return hit ? hit.id : typed;
-      },
-      none: 'None of your own yet — add one on a machine (Equipment → ✎ → Type).',
-    },
     tags: {
       title: 'Supply tags', unit: ['item', 'items'], drop: true,
       ok: () => !!(window.YDSupplies && window.YDSupplies.tagList) && can('supplies', 'change'),
@@ -918,8 +1306,8 @@
       return foldHtml({ id: '_o_' + k, name: L.title }, inner, rows.length);
     });
     if (!parts.length) return '';
-    return '<h3 class="svc-h3">Your other lists</h3><p class="hint">Your own types, tags and kinds. Contacts’ tags are the services above. ' +
-      'A type, tag or kind is only there while something carries it, so merging one moves everything it is on.</p>' + parts.join('');
+    return '<h3 class="svc-h3">Your other lists</h3><p class="hint">Your own tags and kinds. Contacts’ tags are the services above. ' +
+      'A tag or kind is only there while something carries it, so merging one moves everything it is on.</p>' + parts.join('');
   }
   window.svcOther = async function (which, name, how) {
     const L = OTHER[which];
@@ -960,6 +1348,12 @@
     list: () => list, ready: () => !!list,
     // The one line and the details for a name, for whoever shows a service.
     about: name => { const id = list && index[keyOf(name)]; return id ? list.services[id] : null; },
+    // A job's tools (the Job tab's box, the crew's copy of the job):
+    // toolsFor(job) -> { tools, dropped, services }; jobTools(job) the list.
+    toolsFor: toolsFor, jobTools: d => toolsFor(d).tools,
+    // For adding one by hand: his machines { id: { id, name, kind } }, a
+    // type's name in words, a typed tool read ("2 wheelbarrows"), a tool's key.
+    machines: machines, kindName: kindName, parseTool: parseTool, toolKey: toolKey,
   };
 
   let authKey = null;
@@ -975,6 +1369,7 @@
     if (k === authKey) return;
     authKey = k;
     list = null; index = {}; onServer = false; editing = null; draft = null; qb = null; qbErr = '';
+    pubMachines = null; pubAsked = false;
     if (on) load(true);
     else window.closeServices();
   });

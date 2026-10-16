@@ -162,12 +162,23 @@
     return top > 0 && !tie ? best : '';
   }
 
+  // The tools the job takes (services.js toolsFor: its services' tools,
+  // with what was changed by hand on the job), names and machine types
+  // only. Left out altogether until the services list has been read on this
+  // device: the copy is merged on the server, so the tools already there
+  // stay rather than being written over with none.
+  const servicesReady = () => !!(window.YDServices && YDServices.ready && YDServices.ready());
+  function toolsEntry(d) {
+    return YDServices.jobTools(d).slice(0, 60).map(t => ({
+      name: noMoney(t.name).slice(0, 80), kind: t.eq ? noMoney(t.kindName).slice(0, 40) : '', qty: t.qty || null }));
+  }
+
   // What a crew member may know about a job -- nothing else is copied.
   function crewEntry(d) {
     const est = d.estimate || {};
     const lines = (est.work || []).filter(w => w && (w.title || w.scope || w.crewNote)).slice(0, 40);
     const items = catalogue().items;
-    return {
+    const out = {
       name: String(d.customerName || '').trim() || 'Untitled job',
       // What the job is, in a few words (app.js jobWhat), beside the name.
       what: typeof jobWhat === 'function' ? noMoney(jobWhat(d)) : '',
@@ -203,6 +214,8 @@
         .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
     };
+    if (servicesReady()) out.tools = toolsEntry(d);
+    return out;
   }
   const shows = d => SHOWN.indexOf(statusOf(d)) !== -1 && !d.crewHidden && !d.removeWhy && !d.deletedAt;
 
@@ -251,10 +264,12 @@
   async function reconcile(tries) {
     if (reconciled || !window.YDDb || typeof ydCan !== 'function' || !ydCan('jobs', 'change')) return;
     if (typeof getJobIndexAll !== 'function' || typeof readJobBlob !== 'function') return;
-    if (!catalogueReady() && (tries || 0) < 10) { setTimeout(() => reconcile((tries || 0) + 1), 3000); return; }
+    // The services list too (each job's tools come from it).
+    if ((!catalogueReady() || !servicesReady()) && (tries || 0) < 10) { setTimeout(() => reconcile((tries || 0) + 1), 3000); return; }
     reconciled = true;
     let have = {};
     try { have = await window.YDDb.list('jobCrew'); } catch (e) { reconciled = false; return; }
+    serverHad = have;
     const ready = catalogueReady();
     const ids = new Set();
     // Those in Recently deleted too, so a copy left behind is taken down.
@@ -289,9 +304,41 @@
   // its own order), so each is written out with its keys sorted.
   const stable = v => JSON.stringify(v === undefined ? null : v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
     ? Object.keys(x).sort().reduce((o, key) => { o[key] = x[key]; return o; }, {}) : x);
+  // A copy from before the tools (16 Oct 2026) and a job with none are the
+  // same: no rewrite of every booked job just to say "no tools".
+  const EMPTY_LISTS = ['tools'];
   function sameEntry(a, b) {
-    return Object.keys(b).every(k => stable(a[k]) === stable(b[k]));
+    return Object.keys(b).every(k => {
+      const was = a[k] === undefined && EMPTY_LISTS.indexOf(k) !== -1 ? [] : a[k];
+      return stable(was) === stable(b[k]);
+    });
   }
+
+  // A service's tools changed (or a machine was renamed, sold, or the list
+  // of machines came in): every booked job's crew copy follows, without
+  // waiting for each job to be saved. Only the copies this device already
+  // looked after this session (sent), and only where the copy now differs
+  // (mirror compares) -- or, not yet written this session, differs from
+  // the server's.
+  let serverHad = null, refreshTimer = null;
+  function refreshAll() {
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      if (!reconciled || !servicesReady() || typeof ydCan !== 'function' || !ydCan('jobs', 'change')) return;
+      Object.keys(sent).forEach(id => {
+        if (typeof sent[id] !== 'string') return;
+        let d = null;
+        try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) { d = null; }
+        if (!d || !shows(d)) return;
+        const entry = crewEntry(d);
+        const sig = JSON.stringify(entry);
+        if (sent[id] === sig) return;
+        if (serverHad && serverHad[id] && sameEntry(serverHad[id], entry)) { sent[id] = sig; return; }
+        mirror(id, d);
+      });
+    }, 1500);
+  }
+  ['yd-services', 'yd-tools', 'yd-equipment-changed'].forEach(ev => document.addEventListener(ev, refreshAll));
 
   // ------------------------------------------------------------ the page
 
@@ -360,6 +407,72 @@
       sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest) : '') +
       (lines ? '' : sec('🚛 Haul away', haul));
   }
+
+  // ------------------------------------------------ the tools to bring
+  //
+  // Jonah (16 Oct 2026): the tool list "viewable by the crew on the front
+  // page of the job so they know what they need ... right by the material
+  // list". Above the work (whose materials sit under each line), so it is
+  // seen before the long scopes: machines by type, then hand tools, each a
+  // button to tap as it goes on the truck. The ticks are this phone's own,
+  // for today only (packing is every morning) -- never sent anywhere.
+  const PACKED = 'ydjobhub_toolsPacked';
+  const today = () => { const t = new Date(); return t.getFullYear() + '-' + (t.getMonth() + 1) + '-' + t.getDate(); };
+  function packedOf(id) {
+    try {
+      const p = JSON.parse(localStorage.getItem(PACKED) || 'null');
+      return p && p.day === today() && p.jobs && p.jobs[id] ? p.jobs[id] : {};
+    } catch (e) { return {}; }
+  }
+  function setPacked(id, key, on) {
+    try {
+      let p = JSON.parse(localStorage.getItem(PACKED) || 'null');
+      if (!p || p.day !== today()) p = { day: today(), jobs: {} };
+      const mine = p.jobs[id] || (p.jobs[id] = {});
+      if (on) mine[key] = 1; else delete mine[key];
+      localStorage.setItem(PACKED, JSON.stringify(p));
+    } catch (e) { /* private mode: the tick still shows until the page is closed */ }
+  }
+  const toolTick = t => String((t.kind || '') + '|' + t.name).toLowerCase();
+  const toolWords = t => (t.qty ? t.qty + ' × ' : '') + t.name;
+  const kindsWord = n => (/\s/.test(n) || /s$/i.test(n) ? n : /[^aeiou]y$/i.test(n) ? n.slice(0, -1) + 'ies' : n + 's');
+  function toolsHtml(id, j, preview) {
+    const tools = Array.isArray(j.tools) ? j.tools : null;
+    if (!tools || !tools.length) {
+      return preview ? '<div class="cj-sec"><div class="cj-h">🧰 Tools to bring</div><div class="muted">None yet — they come from the ' +
+        'job’s services (🧰 Tools for this Job, beside Materials to Order).</div></div>' : '';
+    }
+    const packed = preview ? {} : packedOf(id);
+    const groups = [], at = {};
+    tools.forEach(t => {
+      const g = t.kind ? kindsWord(t.kind) : 'Hand tools';
+      if (!(g in at)) { at[g] = groups.length; groups.push({ name: g, list: [] }); }
+      groups[at[g]].list.push(t);
+    });
+    const n = tools.filter(t => packed[toolTick(t)]).length;
+    return '<div class="cj-sec cj-tools" data-job="' + esc(safe(id)) + '"><div class="cj-h">🧰 Tools to bring' +
+        (preview ? '' : ' <span class="cj-tools-n">' + (n ? n + ' of ' + tools.length + ' packed' : tools.length) + '</span>') + '</div>' +
+      groups.map(g => '<div class="cj-sub">' + esc(g.name) + '</div><div class="cj-tool-chips">' + g.list.map(t => {
+        const on = !!packed[toolTick(t)];
+        return '<button type="button" class="cj-tool' + (on ? ' on' : '') + '" aria-pressed="' + on + '" data-k="' + esc(toolTick(t)) + '"' +
+          (preview ? ' disabled' : ' onclick="cjToolPacked(this)"') + '>' + (on ? '✓ ' : '') + esc(toolWords(t)) + '</button>';
+      }).join('') + '</div>').join('') +
+      (preview ? '' : '<div class="hint cj-tools-hint">Tap each one as it goes on the truck — the ticks stay on this phone, for today.</div>') +
+    '</div>';
+  }
+  // One tap: that button and the count, nothing else redrawn.
+  window.cjToolPacked = function (b) {
+    const box = b && b.closest('.cj-tools');
+    if (!box) return;
+    const id = box.dataset.job, on = !b.classList.contains('on');
+    setPacked(id, b.dataset.k, on);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.textContent = (on ? '✓ ' : '') + b.textContent.replace(/^✓ /, '');
+    const all = box.querySelectorAll('.cj-tool'), done = box.querySelectorAll('.cj-tool.on').length;
+    const cnt = box.querySelector('.cj-tools-n');
+    if (cnt) cnt.textContent = done ? done + ' of ' + all.length + ' packed' : String(all.length);
+  };
 
   // ------------------------------------------- on the clock, from the page
   //
@@ -442,6 +555,7 @@
           esc(new Date(x.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) + '</b>' +
           (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') +
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
+      toolsHtml(id, j, preview) +
       workHtml(j, sec) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +

@@ -388,6 +388,18 @@
           </div>
         </div>
       </div>
+
+      <!-- The tools the job takes, right by its materials: put together from
+           its services (services.js toolsFor), changed here for this job
+           only; the crew see the same list on their page (app.js
+           renderJobTools, crewjobs.js). -->
+      <div class="section" id="jobToolsSection">
+        <div class="section-head">
+          <span class="section-title">Tools for this Job</span>
+          <span class="section-badge" id="jobToolsBadge"></span>
+        </div>
+        <div class="section-body" id="jobToolsWrap"></div>
+      </div>
     </div>
   </div>
 

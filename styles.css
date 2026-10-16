@@ -4938,3 +4938,47 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .eq-cat-here { align-items:flex-start; flex-direction:column; gap:4px; }
   .eq-cat-here > div { width:100%; }
 }
+  /* Job tools (16 Oct 2026): what each service takes (services.js editor),
+     the job's list on the Job tab beside Materials to Order (app.js
+     renderJobTools), and "Tools to bring" on the crew's page of the job
+     (crewjobs.js) -- tap buttons that wrap, never a sideways row. */
+  .svt-chips, .jt-chips, .cj-tool-chips { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 8px; }
+  .svt-sub, .jt-sub { font-size:12px; font-weight:700; color:var(--muted); margin:8px 0 2px; }
+  .svt-chip, .jt-chip { display:inline-flex; align-items:center; gap:6px; background:var(--surface); border:1px solid var(--border-strong);
+    border-radius:16px; padding:4px 4px 4px 10px; font-size:13px; }
+  .svt-chip i { color:var(--neg); font-style:normal; font-size:12px; }
+  .svt-chip.svt-eq, .jt-chips .jt-eq { border-color:var(--brand-2); font-weight:600; }
+  .svt-chip button, .jt-chip button { border:0; background:none; color:var(--muted); font-size:17px; line-height:1; cursor:pointer;
+    min-width:28px; min-height:28px; border-radius:14px; }
+  .svt-chip button:hover, .jt-chip button:hover { background:var(--surface-2); color:var(--text); }
+  .jt-chip.jt-hand { border-style:dashed; }
+  .jt-chip small { color:var(--muted); font-size:11px; }
+  .svt-pick { border:1px dashed var(--border-strong); background:var(--surface); color:var(--text); border-radius:16px; padding:6px 12px;
+    font:inherit; font-size:13px; cursor:pointer; min-height:36px; }
+  .svt-pick.on { border-style:solid; border-color:var(--brand); background:var(--brand); color:#fff; }
+  .svt-is { color:var(--muted); font-size:12px; }
+  .svt-eqs { margin:6px 0 8px; border:1px solid var(--border); border-radius:8px; padding:0 10px; background:var(--surface); }
+  .svt-eqs > summary { cursor:pointer; font-weight:600; font-size:13px; padding:10px 0; min-height:40px; }
+  .svt-add { display:flex; gap:8px; }
+  .svt-add input { flex:1; min-width:0; }
+  .svt-line { color:var(--text); }
+  .jt-none, .jt-dropped { margin-top:6px; }
+  /* Materials and tools side by side; the old Proposal Import (a job with
+     no estimate) goes after them rather than pushing the tools down a row. */
+  #panel-job .cols2 > #jobToolsSection { order:1; }
+  #panel-job .cols2 > .section:has(#proposalContent) { order:2; }
+  .jt-none .link-btn, .jt-dropped .link-btn { font-size:inherit; }
+  #jobToolsWrap .field-actions { align-items:center; gap:10px; flex-wrap:wrap; }
+  .cj-tools-n { text-transform:none; letter-spacing:0; font-weight:600; color:var(--pos); margin-left:6px; }
+  .cj-tool { border:1px solid var(--border-strong); background:var(--surface-2); color:var(--text); border-radius:10px;
+    padding:8px 12px; font:inherit; font-size:14px; font-weight:600; cursor:pointer; min-height:44px; text-align:left; }
+  .cj-tool.on { background:var(--pos-soft); border-color:var(--pos); color:var(--text); }
+  .cj-tool:disabled { cursor:default; opacity:1; }
+  .cj-tools-hint { margin-top:2px; }
+  html[data-night] .cj-tool.on { background:color-mix(in srgb, var(--pos) 30%, transparent); }
+  html[data-night] .svt-pick.on { background:var(--brand-2); border-color:var(--brand-2); }
+  @media (max-width:720px) {
+    .svt-pick { min-height:44px; }
+    .svt-chip button, .jt-chip button { min-width:36px; min-height:36px; }
+    .cj-tool { flex:1 1 calc(50% - 6px); }
+  }

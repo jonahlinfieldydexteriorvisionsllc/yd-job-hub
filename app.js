@@ -982,8 +982,9 @@ async function addServiceType() {
 function removeServiceType(idx) { serviceTypes.splice(idx, 1); renderServiceTypes(); markDirty(); }
 function renderServiceTypes() {
   const wrap = document.getElementById('serviceTypeTags');
-  if (!serviceTypes.length) { wrap.innerHTML = '<span class="tag-none">No service types</span>'; return; }
+  if (!serviceTypes.length) { wrap.innerHTML = '<span class="tag-none">No service types</span>'; scheduleJobTools(); return; }
   wrap.innerHTML = serviceTypes.map((s, i) => '<span class="svc-tag">' + esc(s) + '<button onclick="removeServiceType(' + i + ')">×</button></span>').join('');
+  scheduleJobTools();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1515,7 +1516,8 @@ function renderProposal() {
   const sec = content.closest('.section'), pair = sec && sec.parentElement;
   const unused = !proposals.length && hasEstimate();
   if (sec) sec.hidden = unused;
-  if (pair) pair.classList.toggle('single', unused);
+  // The job's tools sit beside the materials when the proposal box goes.
+  if (pair) pair.classList.toggle('single', unused && !document.getElementById('jobToolsSection'));
   if (!proposals.length) {
     content.innerHTML = '<div class="upload-zone" onclick="document.getElementById(\'proposalFileInput\').click()">' +
       '<div class="uz-icon">📄</div><div class="uz-text">Import Proposal JSON</div>' +
@@ -1540,6 +1542,116 @@ function renderProposal() {
   status.textContent = proposals.length + ' proposal' + (proposals.length > 1 ? 's' : '');
   updateJobPriceSourceTag();
 }
+
+// ═══════════════════════════════════════════════════════════
+// TOOLS FOR THIS JOB (beside Materials to Order)
+// ═══════════════════════════════════════════════════════════
+// Jonah (16 Oct 2026): "have jobs auto compile a tool list based on what
+// services the job has and make that list viewable by the crew on the front
+// page of the job ... i want tool list right by the material list." The list
+// is put together from the job's services (and the estimate's lines of
+// work) by services.js toolsFor -- each service's tools are picked once in
+// ⋯ → Services. Only what is changed by hand on THIS job is kept on it:
+// job.tools = { added: [{ eq, name, kind } | { name, qty }], dropped: [key] }.
+// The crew see the result on their page of the job (crewjobs.js).
+let jobToolsOwn = { added: [], dropped: [] };
+function jobToolsFrom(t) {
+  t = t && typeof t === 'object' ? t : {};
+  return { added: Array.isArray(t.added) ? t.added.filter(x => x && (x.eq || x.name)).map(x => Object.assign({}, x)) : [],
+           dropped: Array.isArray(t.dropped) ? t.dropped.map(String) : [] };
+}
+function jobToolsNow() {
+  if (!window.YDServices || !window.YDServices.toolsFor) return null;
+  return window.YDServices.toolsFor({ serviceTypes: serviceTypes, tools: jobToolsOwn,
+    estimate: window.YDEstimate ? window.YDEstimate.get() : null });
+}
+let jobToolsTimer = null;
+function scheduleJobTools() { clearTimeout(jobToolsTimer); jobToolsTimer = setTimeout(renderJobTools, 250); }
+function renderJobTools() {
+  const wrap = document.getElementById('jobToolsWrap');
+  if (!wrap) return;
+  const r = jobToolsNow();
+  const badge = document.getElementById('jobToolsBadge');
+  if (!r) { wrap.innerHTML = ''; return; }
+  const owner = !!(window.YDAuth && window.YDAuth.isOwner);
+  const groups = [], at = {};
+  r.tools.forEach(t => {
+    const g = t.eq ? t.kindName : 'Hand tools';
+    if (!(g in at)) { at[g] = groups.length; groups.push({ name: g, list: [] }); }
+    groups[at[g]].list.push(t);
+  });
+  const chip = t => '<span class="jt-chip' + (t.eq ? ' jt-eq' : '') + (t.byHand ? ' jt-hand' : '') + '" title="' +
+      esc(t.byHand ? 'Added on this job' : 'From ' + t.from.join(', ')) + '">' +
+      esc((t.qty ? t.qty + ' × ' : '') + t.name) + (t.byHand ? ' <small>added here</small>' : '') +
+      '<button type="button" data-k="' + esc(t.key) + '" onclick="jobToolOff(this.dataset.k)" aria-label="Not needed on this job">×</button></span>';
+  const none = r.services.filter(v => !v.has);
+  const pick = v => owner ? '<button type="button" class="link-btn" data-n="' + esc(v.name) + '" onclick="openServiceTools(this.dataset.n)">' + esc(v.name) + ' ✎</button>'
+    : esc(v.name);
+  const html =
+    (r.tools.length ? groups.map(g => '<div class="jt-sub">' + esc(g.name === 'Hand tools' ? g.name : (/s$/i.test(g.name) || /\s/.test(g.name) ? g.name : g.name + 's')) +
+        '</div><div class="jt-chips">' + g.list.map(chip).join('') + '</div>').join('')
+      : '<p class="empty-msg">' + (serviceTypes.length || r.services.length ? 'No tools yet for this job’s services.' :
+        'Add the job’s services above — the tools each one takes show here.') + '</p>') +
+    (none.length ? '<div class="hint jt-none">No tools picked yet for: ' + none.map(pick).join(', ') +
+        (owner ? '' : ' (Jonah picks them under ⋯ → Services)') + '</div>' : '') +
+    (r.dropped.length ? '<div class="hint jt-dropped">Not needed on this job: ' + r.dropped.map(t => '<button type="button" class="link-btn" data-k="' +
+        esc(t.key) + '" onclick="jobToolBack(this.dataset.k)">' + esc(t.name) + ' ↺</button>').join(', ') + '</div>' : '') +
+    '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="jobToolAdd()">+ Add a tool</button>' +
+      (r.services.some(v => v.has) && owner ? '<span class="hint">Each service’s tools: ⋯ → Services → 🧰 Tools</span>' : '') + '</div>';
+  if (wrap.innerHTML !== html) wrap.innerHTML = html;
+  if (badge) badge.textContent = r.tools.length ? r.tools.length + ' tool' + (r.tools.length === 1 ? '' : 's') : '';
+}
+// ✕ on one: off this job only (a service's own list is left as it is).
+function jobToolOff(key) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const r = jobToolsNow(), t = r && r.tools.find(x => x.key === key);
+  if (!t) return;
+  const was = jobToolsFrom(jobToolsOwn);
+  jobToolsOwn.added = jobToolsOwn.added.filter(x => window.YDServices.toolKey(x) !== key);
+  if (t.from.length && jobToolsOwn.dropped.indexOf(key) === -1) jobToolsOwn.dropped.push(key);
+  renderJobTools(); markDirty();
+  const job = currentJobId;
+  showUndo('“' + t.name + '” taken off this job', () => {
+    if (currentJobId !== job || jobsReadOnly()) return;
+    jobToolsOwn = was; renderJobTools(); markDirty();
+  });
+}
+function jobToolBack(key) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  jobToolsOwn.dropped = jobToolsOwn.dropped.filter(k => k !== key);
+  renderJobTools(); markDirty();
+}
+// + Add a tool: one of his machines (by type), or a tool typed in.
+async function jobToolAdd() {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const S = window.YDServices;
+  if (!S || !S.machines) return;
+  const r = jobToolsNow() || { tools: [] };
+  const on = new Set(r.tools.map(t => t.key));
+  const eqs = Object.values(S.machines()).filter(m => !on.has('eq:' + m.id))
+    .sort((a, b) => S.kindName(a.kind).localeCompare(S.kindName(b.kind)) || a.name.localeCompare(b.name, 'en', { numeric: true }));
+  const choices = [{ id: '_typed', label: '✏️ Type one in', hint: 'a hand tool, or anything else', ask: 'e.g. 4 ft level, 2 wheelbarrows' }]
+    .concat(eqs.map(m => ({ id: m.id, label: m.name, hint: S.kindName(m.kind) })));
+  const pick = await ydChoose(eqs.length ? 'One of your machines, or type a tool in.' : 'Type the tool in.', choices, { title: 'Add a tool to this job', ok: 'Add' });
+  if (!pick) return;
+  let t;
+  if (pick.id === '_typed') {
+    t = S.parseTool(pick.text);
+    if (!t.name) return;
+    const m = Object.values(S.machines()).find(x => x.name.toLowerCase() === t.name.toLowerCase());
+    if (m) t = { eq: m.id, name: m.name, kind: m.kind };
+  } else {
+    const m = S.machines()[pick.id];
+    if (!m) return;
+    t = { eq: m.id, name: m.name, kind: m.kind };
+  }
+  if (!t.eq && t.qty == null) delete t.qty;
+  const key = S.toolKey(t);
+  jobToolsOwn.dropped = jobToolsOwn.dropped.filter(k => k !== key);
+  jobToolsOwn.added = jobToolsOwn.added.filter(x => S.toolKey(x) !== key).concat([t]);
+  renderJobTools(); markDirty();
+}
+['yd-services', 'yd-tools', 'yd-equipment-changed'].forEach(ev => document.addEventListener(ev, scheduleJobTools));
 
 // ═══════════════════════════════════════════════════════════
 // MATERIALS TO ORDER (checklist + progress)
@@ -2990,6 +3102,8 @@ function getJobData() {
   d.crewHidden = !!(document.getElementById('crewHidden') || {}).checked;
   d.serviceTypes = serviceTypes.slice();
   d.labor = labor; d.materials = materials; d.orderItems = orderItems;
+  // What was changed by hand in the job's tool list (the list itself is worked out).
+  d.tools = jobToolsFrom(jobToolsOwn);
   d.proposals = proposals; d.payments = payments; d.additionalCosts = additionalCosts;
   d.manualJobPrice = manualJobPrice; d.baseJobPrice = baseJobPrice; d.jobStatus = jobStatus;
   BOARD_FIELDS.forEach(f => { if (boardFields[f] != null) d[f] = boardFields[f]; });
@@ -3016,6 +3130,7 @@ function loadJobData(d) {
   const rawOrder = d.orderItems || d.quotedMaterials || [];
   // Kept whole: a receipt that ticked an item notes which order it was on it.
   orderItems = rawOrder.map(e => ({ ...e, id: e.id || uid(), proposalId: e.proposalId || null, name: e.name || '', quantity: e.quantity || '', ordered: !!e.ordered }));
+  jobToolsOwn = jobToolsFrom(d.tools);
   proposals = Array.isArray(d.proposals) ? d.proposals
             : (d.proposalData ? [{ id: uid(), label: d.proposalData.projectName || d.proposalData.title || 'Proposal', data: d.proposalData }] : []);
   payments = (d.payments || []).map(p => ({ ...p, id: p.id || uid() }));
@@ -3039,7 +3154,7 @@ function loadJobData(d) {
 
   syncStatusSelect(); updateJobHeadBadge();
   renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
-  renderProposal(); renderOrderList(); updateSummary();
+  renderProposal(); renderOrderList(); renderJobTools(); updateSummary();
   dirty = false; updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
 }
@@ -3414,6 +3529,7 @@ function clearJobForm() {
   currentJobId = null;
   jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
+  jobToolsOwn = { added: [], dropped: [] };
   serviceTypes = []; jobStatus = 'quoting'; boardFields = {}; manualJobPrice = false; baseJobPrice = 0;
   storageBroken = false; storageWarned = false;
   FIELDS.forEach(f => { const el = document.getElementById(f); if (el) el.value = ''; });
@@ -3429,7 +3545,7 @@ function clearJobForm() {
   dirty = false; updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
 }
-function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); }
+function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); scheduleJobTools(); }
 
 // ═══════════════════════════════════════════════════════════
 // JOB MANAGER MODAL
