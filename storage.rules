@@ -62,6 +62,18 @@ service firebase.storage {
       allow delete: if changesCal(calId);
     }
 
+    // Signed papers (signatures.js): jobDocs/{jobId}/{uid}/{docId}.pdf, made
+    // on the phone that collected the signature and written once. Whoever may
+    // see jobs opens any; a crew member the ones they collected.
+    match /jobDocs/{jobId}/{uid}/{file} {
+      allow read: if staff() && (request.auth.uid == uid || me().role == 'owner'
+        || (me().role == 'admin' && me().get(['access', 'jobs'], 'none') in ['see', 'change']));
+      allow create: if staff() && request.auth.uid == uid
+        && file.matches('sg[a-z0-9]+[.]pdf')
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType == 'application/pdf';
+    }
+
     match /jobPhotos/{jobId}/{file} {
       allow read: if staff();
       // A photo is shrunk on the phone to well under this; the cap stops a

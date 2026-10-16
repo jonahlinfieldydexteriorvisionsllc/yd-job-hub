@@ -54,6 +54,7 @@ const SHELL = [
   './crewnotes.js',
   './crewjobs.js',
   './jobphotos.js',
+  './signatures.js',
   './forecast.js',
   './search.js',
   './home.js',

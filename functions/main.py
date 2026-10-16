@@ -280,7 +280,7 @@ def _quickbooks(request, path, headers):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
                        "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
-                       "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now")
+                       "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now", "/qb/change-order")
     # A customer's contact details, from the Customers tab: whoever may change Contacts.
     contacts = path in ("/qb/customer-save", "/qb/customers-now")
     try:
@@ -333,6 +333,9 @@ def _quickbooks(request, path, headers):
                 jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
                 qb.sync_invoices(jobs)
                 result = {"ok": True, "changed": qb.sync_payments({jid: snap.to_dict() or {}}, only=jid)}
+        elif path == "/qb/change-order":
+            # A signed change order's price onto the job's invoice (signatures.js, his tap).
+            result = qb.add_change_order(body)
         elif path == "/qb/invoices-now":
             # The Invoices list brought up to date now, not at the next hourly look.
             jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
@@ -751,6 +754,36 @@ def _notes(request, path, headers):
         return (json.dumps({"error": "not sent yet — it goes within five minutes"}), 502, json_headers)
 
 
+# ------------------------------------------------------------ signed papers
+#
+# "Email a copy" of a signed change order or sign-off (signatures.js): whoever
+# may change jobs, on their tap -- never by itself.
+
+
+def _docs(request, path, headers):
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/docs/email":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request, "jobs", "change")
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    import jobdocs
+    body = request.get_json(silent=True) or {}
+    try:
+        who = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or ""
+        return (json.dumps(jobdocs.email_copy(_db, str(body.get("docId") or ""), who)), 200, json_headers)
+    except RuntimeError as e:
+        return (json.dumps({"error": str(e)}), 400, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("docs email failed:", e)
+        return (json.dumps({"error": "Not sent — try again in a minute"}), 502, json_headers)
+
+
 # ---------------------------------------------------------- subcontractors
 #
 # "Check their email now" on the Subcontractors section: the owner's alone,
@@ -1025,6 +1058,8 @@ def claude(request):
         return _geo(request, path, headers)
     if path.startswith("/supplies"):
         return _supplies(request, path, headers)
+    if path.startswith("/docs"):
+        return _docs(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

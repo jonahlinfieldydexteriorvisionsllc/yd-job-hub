@@ -718,6 +718,34 @@ service cloud.firestore {
       allow delete: if canChange('jobs');
     }
 
+    // Signed papers on a job (signatures.js; Jonah, 15 Oct 2026: change
+    // orders and sign-offs signed on the iPad, the PDF saved on the job). The
+    // record says what was signed, by whom, when, and the fingerprints of
+    // what was signed and of the PDF; the PDF itself is in Storage at `path`.
+    // Whoever may see jobs reads them all; the crew read the ones they
+    // collected. Anyone working collects a sign-off or "other"; a change
+    // order -- which can carry a price -- only whoever may change jobs. Once
+    // signed nothing about it changes: the phone only marks its PDF sent
+    // (pending false), and the server notes an email or QuickBooks.
+    match /jobDocs/{docId} {
+      allow read: if canSee('jobs') || (isStaff() && resource.data.by == request.auth.uid);
+      allow create: if isStaff() && docId.matches('sg[a-z0-9]+')
+        && request.resource.data.by == request.auth.uid
+        && request.resource.data.kind in ['change', 'signoff', 'other']
+        && (request.resource.data.kind != 'change' || canChange('jobs'))
+        && (!('amountCents' in request.resource.data) || request.resource.data.amountCents == null || canChange('jobs'))
+        && request.resource.data.jobId is string
+        && request.resource.data.jobId.size() > 0 && request.resource.data.jobId.size() <= 100
+        && request.resource.data.path == 'jobDocs/' + request.resource.data.jobId + '/' + request.auth.uid + '/' + docId + '.pdf'
+        && request.resource.data.signedName is string
+        && request.resource.data.signedName.size() > 0 && request.resource.data.signedName.size() <= 120
+        && request.resource.data.contentHash is string && request.resource.data.contentHash.size() == 64
+        && !('emailed' in request.resource.data) && !('qb' in request.resource.data);
+      allow update: if isStaff() && resource.data.by == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pending', 'sentAt'])
+        && request.resource.data.pending == false;
+    }
+
     // Notes from the crew to the owner (crewnotes.js; Jonah, 12 Oct 2026:
     // "leave note for jonah ... i get a notification"). Each person writes
     // and reads their own; the owner reads them all and marks them read. The

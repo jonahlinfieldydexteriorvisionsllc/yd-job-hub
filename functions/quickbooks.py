@@ -3184,3 +3184,71 @@ def sweep_stale_states():
             doc.reference.delete()
             removed += 1
     return removed
+
+
+# ------------------------------------------------- signed change orders
+#
+# Jonah (15 Oct 2026): change orders and sign-offs are signed on the iPad in
+# Job Hub (signatures.js). A signed change order with a price goes onto the
+# job's QuickBooks invoice -- "Add to QuickBooks", his tap, never by itself --
+# as a "Change order" line, with the signed PDF attached and sent along when
+# QuickBooks emails the invoice. No invoice yet: the estimate, while it is
+# still waiting for the customer (an accepted one is changed through its
+# invoice, which is where his deposits go). Added once: the paper notes it
+# (jobDocs/{id}.qb), and the request id stops a second tap adding it twice.
+
+CHANGE_ORDER_ITEM = "Change order"
+
+
+def add_change_order(body):
+    doc_id = str(body.get("docId") or "").strip()
+    if not re.fullmatch(r"sg[a-z0-9]+", doc_id):
+        raise RuntimeError("Which change order?")
+    db = _db()
+    ref = db.collection("jobDocs").document(doc_id)
+    doc = ref.get().to_dict() or {}
+    if doc.get("kind") != "change":
+        raise RuntimeError("That is not a signed change order")
+    if (doc.get("qb") or {}).get("ok"):
+        return doc["qb"]
+    cents = doc.get("amountCents")
+    if not isinstance(cents, int) or cents == 0:
+        raise RuntimeError("This change order has no price change to add")
+    if doc.get("pending") or not doc.get("path"):
+        raise RuntimeError("The signed PDF is still on the phone it was signed on — it goes up when that phone has signal")
+    job = (db.collection("jobs").document(str(doc.get("jobId") or "")).get().to_dict() or {})
+    env = _env("QB_ENV", "sandbox")
+    inv, est = job.get("qbInvoiceRef") or {}, job.get("qbEstimate") or {}
+    entity, txn = None, None
+    if inv.get("id") and (inv.get("env") or env) == env:
+        entity, txn = "Invoice", _query_one("Invoice", "Id = '%s'" % _quote(inv["id"]))
+    if not txn and est.get("id") and (est.get("env") or env) == env:
+        found = _query_one("Estimate", "Id = '%s'" % _quote(est["id"]))
+        if found and found.get("TxnStatus") in ("Accepted", "Closed", "Converted"):
+            raise RuntimeError("The estimate is already accepted — make the invoice first (Job tab), then add the change order to it")
+        if found:
+            entity, txn = "Estimate", found
+    if not txn:
+        raise RuntimeError("The job has no QuickBooks invoice or estimate yet — make one first")
+
+    signed = str(doc.get("signedAt") or "")[:10]
+    what = re.sub(r"\s+", " ", str(doc.get("what") or doc.get("title") or "").strip())
+    text = "CHANGE ORDER" + (": " + what if what else "") + \
+        ("\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if signed else "")
+    lines = [l for l in txn.get("Line") or [] if l.get("DetailType") != "SubTotalLineDetail"]
+    lines.append(_line(_item_named(CHANGE_ORDER_ITEM), cents, text))
+    upd = _call("POST", entity.lower(), body={"Id": txn["Id"], "SyncToken": txn["SyncToken"], "sparse": True, "Line": lines},
+                request_id=hashlib.sha1(("co|" + doc_id).encode()).hexdigest()).get(entity) or {}
+    out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),
+           "docNumber": str(upd.get("DocNumber") or txn.get("DocNumber") or ""),
+           "total": upd.get("TotalAmt"), "env": env}
+    try:
+        from firebase_admin import storage
+        pdf = storage.bucket("yd-job-hub.firebasestorage.app").blob(doc["path"]).download_as_bytes()
+        name = re.sub(r"[^A-Za-z0-9 ._-]+", "", "Change order signed %s.pdf" % signed).strip() or "Change order.pdf"
+        out["attachId"] = _upload(entity, txn["Id"], name, pdf)
+    except Exception as err:                            # noqa: BLE001 -- the line is on; the PDF can be attached by hand
+        print("change order %s: PDF not attached: %s" % (doc_id, err))
+        out["attachError"] = str(err)[:200]
+    ref.set({"qb": out}, merge=True)
+    return out

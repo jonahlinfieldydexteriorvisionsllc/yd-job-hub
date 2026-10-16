@@ -3090,6 +3090,7 @@ function showStorageError() {
 // whichever job is on the Job tab.
 function jobOnScreen() {
   if (window.YDJobPhotos) window.YDJobPhotos.jobShown(currentJobId);
+  if (window.YDSignatures) window.YDSignatures.jobShown(currentJobId);
 }
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);

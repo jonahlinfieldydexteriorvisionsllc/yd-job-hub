@@ -4248,3 +4248,42 @@
     color:var(--muted); cursor:pointer; font-size:14px; }
   .cal-file-x:hover, .cal-file-x:focus-visible { color:var(--st-now); border-color:var(--st-now); }
   .cal-file-add { align-self:flex-start; cursor:pointer; }
+
+  /* Signed papers (signatures.js, 15 Oct 2026): the window where the
+     customer signs, and the list on the job. */
+  .sg-modal { max-width:720px; }
+  .sg-for { margin:0 0 12px; color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
+  .sg-for b { color:var(--text); }
+  .sg-kinds { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; }
+  .sg-kind { display:flex; flex-direction:column; align-items:flex-start; gap:4px; min-height:84px; padding:14px; text-align:left;
+    border:1.5px solid var(--border-strong); border-radius:12px; background:var(--surface); color:var(--text); cursor:pointer;
+    font-family:'DM Sans',sans-serif; font-size:16px; }
+  .sg-kind small { color:var(--muted); font-size:13px; }
+  .sg-kind:hover, .sg-kind:focus-visible { border-color:var(--brand-ink); }
+  .sg-price { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .sg-sign { display:flex; align-items:center; gap:6px; min-height:44px; padding:0 12px; border:1px solid var(--border-strong);
+    border-radius:10px; cursor:pointer; font-weight:600; }
+  .sg-dollar { font-weight:700; color:var(--muted); }
+  .sg-price input[type=number] { width:140px; }
+  .sg-pad-wrap { position:relative; }
+  /* White on every theme: it is the paper being signed. */
+  .sg-pad { display:block; width:100%; height:220px; border:2px dashed var(--border-strong); border-radius:12px; background:#fff;
+    touch-action:none; cursor:crosshair; }
+  @media (min-width:700px) { .sg-pad { height:260px; } }
+  .sg-clear { position:absolute; top:8px; right:8px; }
+  .sg-agree { font-size:15px; }
+  .sg-start { margin-bottom:10px; }
+  .sg-list { display:flex; flex-direction:column; gap:8px; }
+  .sg-row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-start; justify-content:space-between; padding:10px 12px;
+    border:1px solid var(--border); border-left:4px solid var(--brand-ink); border-radius:10px; background:var(--surface); }
+  .sg-row-main { flex:1 1 240px; min-width:0; }
+  .sg-row-main small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+  .sg-row-what { font-size:13.5px; margin-top:2px; overflow-wrap:anywhere; }
+  .sg-amt { font-weight:700; font-variant-numeric:tabular-nums; }
+  .sg-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .sg-chip { font-size:12px; font-weight:600; padding:2px 9px; border-radius:999px; }
+  .sg-chip.wait { background:var(--st-soon-soft); color:var(--st-soon); }
+  .sg-chip.done { color:var(--st-done-ink); border:1.5px solid var(--st-done); }
+  .sg-acts { display:flex; flex-wrap:wrap; gap:6px; }
+  .sg-open:not([href]) { opacity:.6; pointer-events:none; }
+  .cj-sigs { margin-top:16px; }
