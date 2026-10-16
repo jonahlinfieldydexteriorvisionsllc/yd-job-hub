@@ -395,6 +395,31 @@
     draw();
     if (open) refresh(false);
   };
+  // The panel floats over whatever is on screen, so it closes the way a
+  // floating thing does: Escape, or a tap anywhere else. It used to stay
+  // open over the Job form -- across tabs too -- until the weather button
+  // was found and pressed again (office test, 16 Oct 2026).
+  function closeWeek() {
+    if (!open) return;
+    open = false;
+    draw();
+  }
+  // Caught on the way down, before app.js's Escape handling: a window or
+  // the ⋯ menu open in front is closed first by that press, not this panel.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape' || !open || e.isComposing) return;
+    const menu = document.getElementById('headerMenu');
+    if ((menu && !menu.hidden) || (typeof topOverlay === 'function' && topOverlay())) return;
+    closeWeek();
+  }, true);
+  // The weather button itself is left out: it toggles the panel on its own.
+  // Home's weather line only ever opens it, so it reopens straight after.
+  document.addEventListener('pointerdown', e => {
+    if (!open) return;
+    const t = e.target;
+    if (t && t.closest && t.closest('#wxPanel, #wxChip')) return;
+    closeWeek();
+  }, true);
   window.wxRefresh = function () { refresh(true); };
   window.wxDay = function (i) {
     sel = i;
