@@ -4110,3 +4110,7 @@
     .ask-actions .btn { flex:1 1 0; }
     .ask-choices { grid-template-columns:repeat(2, 1fr); }
   }
+  .ask-field + .ask-field { margin-top:12px; }
+  .ask-text + .ask-field, .ask-choices + .ask-field { margin-top:12px; }
+  .ask-field .label { display:block; margin-bottom:4px; }
+  .ask-field[hidden] { display:none; }

@@ -3713,56 +3713,101 @@ function showUndo(message, onUndo, ms) {
 // guardWindows rule below). Several can be open at once: the newest is in
 // front and answered first.
 //
-// opts for all four: title, ok (button words), cancel (button words, or
+// opts for all of them: title, ok (button words), cancel (button words, or
 // false for no Cancel), danger (the OK button is red and Cancel has the
 // focus, so Enter does not delete).
 // ydPrompt also: placeholder, type ('text' | 'number' | 'email' ...),
 // multiline, required (an empty answer is refused, not returned), check
 // (v => '' when fine, else the words to show under the box), select (start
 // with the text picked, for a copy box).
+// ydForm(text, fields, opts) asks several things at once -- a town and its
+// rate -- each field { id, label, value, placeholder, type, multiline,
+// required, check, hint }, and answers { id: typed, ... } or null.
 let askSeq = 0;
 function ydAsk(opts) {
   opts = opts || {};
   return new Promise(resolve => {
     const id = 'ydAsk' + (++askSeq);
     const was = document.activeElement;
-    const m = document.createElement('div');
-    m.className = 'modal-overlay ask-overlay active';
+    const make = (tag, cls, text) => {
+      const n = document.createElement(tag);
+      if (cls) n.className = cls;
+      if (text != null) n.textContent = String(text);
+      return n;
+    };
+    const m = make('div', 'modal-overlay ask-overlay active');
     m.id = id;
-    const box = document.createElement('div');
-    box.className = 'modal ask-modal';
-    box.setAttribute('role', opts.input || opts.choices ? 'dialog' : 'alertdialog');
+    const box = make('div', 'modal ask-modal');
+    const asksWords = !!(opts.input || opts.fields);
+    box.setAttribute('role', asksWords || opts.choices ? 'dialog' : 'alertdialog');
     box.setAttribute('aria-modal', 'true');
-    const head = document.createElement('div');
-    head.className = 'modal-head';
-    const h = document.createElement('h2');
+    const head = make('div', 'modal-head');
+    const h = make('h2', '', opts.title || (asksWords ? 'Type it in' : opts.choices ? 'Pick one' : opts.okOnly ? 'Job Hub' : 'Are you sure?'));
     h.id = id + 'T';
-    h.textContent = opts.title || (opts.input ? 'Type it in' : opts.choices ? 'Pick one' : opts.okOnly ? 'Job Hub' : 'Are you sure?');
     box.setAttribute('aria-labelledby', h.id);
-    const x = document.createElement('button');
+    const x = make('button', 'modal-close');
     x.type = 'button';
-    x.className = 'modal-close';
     x.setAttribute('aria-label', 'Cancel');
     x.innerHTML = '&times;';
     head.appendChild(h); head.appendChild(x);
-    const body = document.createElement('div');
-    body.className = 'modal-body';
-    if (opts.text) {
-      const p = document.createElement('div');
-      p.className = 'ask-text';
-      p.textContent = String(opts.text);     // newlines kept by the stylesheet
-      body.appendChild(p);
-    }
-    let field = null, err = null, picked = null, other = null;
+    const body = make('div', 'modal-body');
+    // Newlines in the words are kept by the stylesheet.
+    if (opts.text) body.appendChild(make('div', 'ask-text', opts.text));
+
+    const okBtn = make('button', 'btn btn-filled' + (opts.danger ? ' btn-danger' : ''), opts.ok || (opts.choices ? 'Save' : 'OK'));
+    okBtn.type = 'button';
+    const cancelBtn = make('button', 'btn', opts.cancel || 'Cancel');
+    cancelBtn.type = 'button';
+
+    // The boxes to type in: one for ydPrompt, several for ydForm, and for
+    // ydChoose one kept hidden until a choice that needs words is tapped.
+    const specs = opts.fields ? opts.fields
+      : opts.input ? [{ id: '_', value: opts.value, placeholder: opts.placeholder, type: opts.type, multiline: opts.multiline,
+                         required: opts.required, check: opts.check }]
+      : opts.choices ? [{ id: '_', required: true }] : [];
+    const boxes = specs.map((f, i) => {
+      const wrap = make('div', 'ask-field');
+      const input = make(f.multiline ? 'textarea' : 'input', 'ask-input');
+      input.id = id + 'F' + i;
+      // A number is asked in a plain box with the phone's number keys: a
+      // real number box quietly empties "$12" or "12 tons", and the answer
+      // would come back blank instead of being read or questioned.
+      if (!f.multiline) input.type = f.type && f.type !== 'number' ? f.type : 'text';
+      if (f.type === 'number') input.inputMode = 'decimal';
+      if (f.multiline) input.rows = 4;
+      input.value = f.value != null ? String(f.value) : '';
+      input.placeholder = f.placeholder || '';
+      if (f.label) {
+        const l = make('label', 'label', f.label);
+        l.htmlFor = input.id;
+        wrap.appendChild(l);
+      } else input.setAttribute('aria-labelledby', h.id);
+      wrap.appendChild(input);
+      if (f.hint) wrap.appendChild(make('div', 'hint', f.hint));
+      const err = make('div', 'ask-error');
+      err.setAttribute('role', 'alert');
+      wrap.appendChild(err);
+      input.addEventListener('keydown', e => {
+        if (e.key !== 'Enter' || f.multiline || e.isComposing) return;
+        e.preventDefault();
+        // Enter moves to the next box, and answers from the last one.
+        const next = boxes[i + 1];
+        if (next) next.input.focus(); else okBtn.click();
+      });
+      input.addEventListener('input', () => { err.textContent = ''; });
+      return { spec: f, wrap: wrap, input: input, err: err };
+    });
+
+    let picked = null;
     if (opts.choices) {
-      const grid = document.createElement('div');
-      grid.className = 'ask-choices';
+      const grid = make('div', 'ask-choices');
+      const other = boxes[0].wrap;
+      other.classList.add('ask-other');
+      other.hidden = true;
       opts.choices.forEach(c => {
-        const b = document.createElement('button');
+        const b = make('button', 'ask-choice' + (c.id === opts.value ? ' on' : ''), c.label);
         b.type = 'button';
-        b.className = 'ask-choice' + (c.id === opts.value ? ' on' : '');
-        b.textContent = c.label;
-        if (c.hint) { const s = document.createElement('small'); s.textContent = c.hint; b.appendChild(s); }
+        if (c.hint) b.appendChild(make('small', '', c.hint));
         b.onclick = () => {
           // A choice that needs words ("Other") opens a box under the
           // buttons; the rest answer with the one tap.
@@ -3770,57 +3815,21 @@ function ydAsk(opts) {
           picked = c;
           grid.querySelectorAll('.ask-choice').forEach(o => o.classList.toggle('on', o === b));
           other.hidden = false;
-          field.placeholder = c.ask;
+          boxes[0].input.placeholder = c.ask;
           okBtn.hidden = false;
-          field.focus();
+          boxes[0].input.focus();
         };
         grid.appendChild(b);
       });
       body.appendChild(grid);
+      // OK only shows once a choice needs words.
+      okBtn.hidden = true;
     }
-    if (opts.input || opts.choices) {
-      field = document.createElement(opts.multiline ? 'textarea' : 'input');
-      field.className = 'ask-input';
-      // A number is asked in a plain box with the phone's number keys: a
-      // real number box quietly empties "$12" or "12 tons", and the answer
-      // would come back blank instead of being read or questioned.
-      if (!opts.multiline) field.type = opts.type && opts.type !== 'number' ? opts.type : 'text';
-      if (opts.type === 'number') field.inputMode = 'decimal';
-      if (opts.multiline) field.rows = 4;
-      field.value = opts.value != null && !opts.choices ? String(opts.value) : '';
-      field.placeholder = opts.placeholder || '';
-      field.setAttribute('aria-labelledby', h.id);
-      field.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !opts.multiline && !e.isComposing) { e.preventDefault(); okBtn.click(); }
-      });
-      field.addEventListener('input', () => { if (err) err.textContent = ''; });
-      err = document.createElement('div');
-      err.className = 'ask-error';
-      err.setAttribute('role', 'alert');
-      if (opts.choices) {
-        other = document.createElement('div');
-        other.className = 'ask-other';
-        other.hidden = true;
-        other.appendChild(field); other.appendChild(err);
-        body.appendChild(other);
-      } else {
-        body.appendChild(field); body.appendChild(err);
-      }
-    }
-    const acts = document.createElement('div');
-    acts.className = 'ask-actions';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'btn';
-    cancelBtn.textContent = opts.cancel || 'Cancel';
-    const okBtn = document.createElement('button');
-    okBtn.type = 'button';
-    okBtn.className = 'btn btn-filled' + (opts.danger ? ' btn-danger' : '');
-    okBtn.textContent = opts.ok || (opts.choices ? 'Save' : 'OK');
+    boxes.forEach(b => body.appendChild(b.wrap));
+
+    const acts = make('div', 'ask-actions');
     if (opts.cancel !== false && !opts.okOnly) acts.appendChild(cancelBtn);
     acts.appendChild(okBtn);
-    // Choices answer with a tap; OK only shows once a choice needs words.
-    if (opts.choices) okBtn.hidden = true;
     body.appendChild(acts);
     box.appendChild(head); box.appendChild(body);
     m.appendChild(box);
@@ -3834,21 +3843,26 @@ function ydAsk(opts) {
       if (was && was.focus && document.contains(was)) { try { was.focus({ preventScroll: true }); } catch (e) { /* gone */ } }
       resolve(answer);
     }
-    const no = () => finish(opts.input ? null : opts.choices ? null : opts.okOnly ? undefined : false);
+    const no = () => finish(opts.okOnly ? undefined : asksWords || opts.choices ? null : false);
     okBtn.onclick = () => {
       if (opts.okOnly) { finish(undefined); return; }
-      if (opts.choices) {
-        const t = field.value.trim();
-        if (!t) { err.textContent = 'Say it in a few words'; field.focus(); return; }
-        finish({ id: picked.id, text: t.slice(0, 500) });
-        return;
-      }
-      if (!opts.input) { finish(true); return; }
-      const v = field.value;
-      if (opts.required && !v.trim()) { err.textContent = 'Type something in first'; field.focus(); return; }
-      const bad = typeof opts.check === 'function' ? opts.check(v) : '';
-      if (bad) { err.textContent = bad; field.focus(); return; }
-      finish(v);
+      if (!boxes.length) { finish(true); return; }
+      // Every box checked; the first with a problem gets the cursor.
+      let firstBad = null;
+      boxes.forEach(b => {
+        const v = b.input.value;
+        const f = b.spec;
+        const bad = f.required && !v.trim() ? (opts.choices ? 'Say it in a few words' : 'Type something in first')
+          : typeof f.check === 'function' ? f.check(v) : '';
+        b.err.textContent = bad || '';
+        if (bad && !firstBad) firstBad = b;
+      });
+      if (firstBad) { firstBad.input.focus(); return; }
+      if (opts.choices) { finish({ id: picked.id, text: boxes[0].input.value.trim().slice(0, 500) }); return; }
+      if (opts.input) { finish(boxes[0].input.value); return; }
+      const out = {};
+      boxes.forEach(b => { out[b.spec.id] = b.input.value; });
+      finish(out);
     };
     cancelBtn.onclick = no;
     x.onclick = no;
@@ -3858,15 +3872,17 @@ function ydAsk(opts) {
     m.addEventListener('pointerdown', e => { pressedOut = e.target === m; });
     m.addEventListener('click', e => { if (e.target === m && pressedOut) no(); });
     document.body.appendChild(m);
-    const first = field && !opts.choices ? field : (opts.danger && !opts.okOnly && opts.cancel !== false ? cancelBtn : okBtn.hidden ? null : okBtn);
+    const first = boxes.length && !opts.choices ? boxes[0].input
+      : opts.danger && !opts.okOnly && opts.cancel !== false ? cancelBtn : okBtn.hidden ? null : okBtn;
     setTimeout(() => {
-      if (!first) return;
+      if (!first || done) return;
       try { first.focus({ preventScroll: true }); } catch (e) { first.focus(); }
-      if (field && first === field && (opts.select || field.value)) field.select();
+      if (first.select && first.value && (opts.select || opts.input)) first.select();
     }, 30);
   });
 }
 function ydConfirm(text, opts) { return ydAsk(Object.assign({}, opts, { text: text })); }
+function ydForm(text, fields, opts) { return ydAsk(Object.assign({}, opts, { text: text, fields: fields })); }
 function ydPrompt(text, value, opts) {
   return ydAsk(Object.assign({}, opts, { text: text, input: true, value: value == null ? '' : value }));
 }
@@ -3886,7 +3902,7 @@ async function ydLeaveUnsavedJob() {
     { title: 'Unsaved changes', ok: 'Open it anyway', cancel: 'Stay here' });
 }
 window.ydAsk = ydAsk; window.ydConfirm = ydConfirm; window.ydPrompt = ydPrompt;
-window.ydChoose = ydChoose; window.ydAlert = ydAlert; window.ydShowCopy = ydShowCopy;
+window.ydChoose = ydChoose; window.ydAlert = ydAlert; window.ydShowCopy = ydShowCopy; window.ydForm = ydForm;
 window.ydLeaveUnsavedJob = ydLeaveUnsavedJob;
 
 // ---- No signal / still sending ----

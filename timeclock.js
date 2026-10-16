@@ -258,15 +258,16 @@
   }
 
   // The owner sets it on Your Crew.
-  window.setAutoOutHours = function () {
+  window.setAutoOutHours = async function () {
     if (!isOwner() || !window.YDDb) return;
-    const typed = prompt('After how many hours on the clock, with nobody clocking out, should a shift stop by itself?\n\n' +
-      'Between ' + AUTO_OUT_MIN + ' and ' + AUTO_OUT_MAX + '. The shift ends at that hour and goes to you to check.', String(autoOutHours));
+    const read = typed => Math.round(parseFloat(String(typed).replace(/[^0-9.]/g, '')) * 2) / 2;    // whole or half hours
+    const typed = await ydPrompt('After how many hours on the clock, with nobody clocking out, should a shift stop by itself? ' +
+      'The shift ends at that hour and goes to you to check.', String(autoOutHours), {
+        title: 'Stop a forgotten shift', type: 'number', ok: 'Save', placeholder: 'Hours',
+        check: v => read(v) >= AUTO_OUT_MIN && read(v) <= AUTO_OUT_MAX ? '' : 'Between ' + AUTO_OUT_MIN + ' and ' + AUTO_OUT_MAX + ' hours' });
     if (typed === null) return;
-    const h = Math.round(parseFloat(String(typed).replace(/[^0-9.]/g, '')) * 2) / 2;    // whole or half hours
-    if (!(h >= AUTO_OUT_MIN && h <= AUTO_OUT_MAX)) {
-      showToast('Pick a number of hours from ' + AUTO_OUT_MIN + ' to ' + AUTO_OUT_MAX); return;
-    }
+    const h = read(typed);
+    if (!(h >= AUTO_OUT_MIN && h <= AUTO_OUT_MAX)) return;
     autoOutHours = h;
     render();
     // Merged: the board list the crew read lives in the same record.
@@ -675,18 +676,23 @@
   window.askPause = function (id) { pausingId = id; render(); };
   window.cancelPause = function () { pausingId = null; render(); };
 
-  window.pauseClock = function (id, reason) {
-    const e = entries[id];
+  window.pauseClock = async function (id, reason) {
+    let e = entries[id];
     if (!e || !running(e) || openPause(e) || leavingNow(id)) return;
+    // The pause starts at the tap, not when the words are finished.
+    const at = nowIso();
     // "Other" says what, in a few words, so the office is not left guessing.
     // Cancel on that question is "never mind": the clock is not paused.
     if (reason === 'Other') {
-      const typed = prompt('What are you going to do?');
+      const typed = await ydPrompt('What are you going to do?', '', { title: 'Pause — other', placeholder: 'In a few words', ok: 'Pause' });
       if (typed === null) return;
       const what = typed.trim().slice(0, 60);
       if (what) reason = 'Other: ' + what;
+      // Clocked out or paused some other way while the box was open.
+      e = entries[id];
+      if (!e || !running(e) || openPause(e) || leavingNow(id)) return;
     }
-    e.pauses = (e.pauses || []).concat([{ startedAt: nowIso(), endedAt: null, reason: reason }]);
+    e.pauses = (e.pauses || []).concat([{ startedAt: at, endedAt: null, reason: reason }]);
     pausingId = null;
     render();
     write(id, { pauses: e.pauses }, 'pausing');
@@ -886,11 +892,12 @@
   // The office clocking somebody out from On the Clock Now: asked first,
   // with whose shift it is and how long it has run -- one row of several,
   // and a tap on the wrong one ended the wrong person's day.
-  window.clockOutWorker = function (id) {
+  window.clockOutWorker = async function (id) {
     const e = entries[id];
     if (!e || !running(e) || !(mayDecide(e) || e.uid === (me() || {}).uid)) return;
-    if (!confirm('Clock out ' + workerOf(e) + '?\n\n' + whereOf(e) + ' — ' + fmtDur(paidMs(e)) +
-        ' so far (in ' + sinceWords(e.startedAt) + ').')) return;
+    if (!(await ydConfirm(whereOf(e) + ' — ' + fmtDur(paidMs(e)) + ' so far (in ' + sinceWords(e.startedAt) + ').',
+        { title: 'Clock out ' + workerOf(e) + '?', ok: 'Clock out' }))) return;
+    if (!entries[id] || !running(entries[id])) return;      // clocked out meanwhile
     if (leavingNow(id)) { clearTimeout(leaving.timer); leaving = null; }
     finishClockOut(id);
   };
@@ -1730,7 +1737,7 @@
         '<button class="btn btn-sm" onclick="cancelFixTimes()">Cancel</button></div>' +
     '</div>';
   }
-  window.saveFixTimes = function (id) {
+  window.saveFixTimes = async function (id) {
     const e = entries[id] || older[id];
     if (!e || !mayDecide(e) || running(e)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
     const t = shiftTimes(e, (el('fxStart') || {}).value, (el('fxEnd') || {}).value);
@@ -1739,7 +1746,8 @@
     if (ms(t.start) === ms(e.startedAt) && ms(t.end) === ms(e.endedAt)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
     const patch = { startedAt: t.start, startedMs: ms(t.start), endedAt: t.end, endedMs: ms(t.end) };
     if (ms(t.end) - ms(t.start) > 20 * 3600000 &&
-        !confirm('That makes it ' + fmtDur(ms(t.end) - ms(t.start)) + ' long. Keep those times?')) return;
+        !(await ydConfirm('That makes it ' + fmtDur(ms(t.end) - ms(t.start)) + ' long.', { title: 'Keep those times?', ok: 'Keep them', cancel: 'Change them' }))) return;
+    if (fixingId !== e.id || running(e)) return;          // closed or changed while asked
     const next = Object.assign({}, e, patch);
     // A settled shift's figures follow its new length, at the rate it was
     // settled at (or theirs now, if it never was).
@@ -1830,11 +1838,12 @@
     showToast('Approved — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
   };
 
-  window.rejectShift = function (id) {
+  window.rejectShift = async function (id) {
+    if (!mayDecide(entries[id])) return;
+    const why = await ydPrompt('The crew member sees this.', '', { title: 'Why is it turned down?', placeholder: 'e.g. You were off that day', ok: 'Turn it down', multiline: true });
+    if (why === null) return;
     const e = entries[id];
     if (!mayDecide(e)) return;
-    const why = prompt('Why is this being rejected? The crew member sees this.');
-    if (why === null) return;
     // Who turned it down and when, under their own names: written as
     // approvedBy/approvedAt before, a rejected shift read as approved to
     // anything that looked only at those. (Older rejected shifts keep them.)
@@ -2143,11 +2152,12 @@
   // The name shown everywhere -- the clock, the work log, boards, calendars.
   // It starts as whatever the person's Google account is called, which is
   // often a nickname or an email address.
-  window.renameWorker = function (uid) {
+  window.renameWorker = async function (uid) {
     const u = people[uid];
     if (!u || !isOwner()) return;
     const now = u.name || u.email || '';
-    const name = prompt('What should ' + (now || 'this person') + ' be called in Job Hub?', now);
+    const name = await ydPrompt('What should ' + (now || 'this person') + ' be called in Job Hub?', now,
+      { title: 'Their name', ok: 'Save', required: true });
     if (name === null) return;
     // Runs of spaces squeezed to one: "Alex  Test" is not a second person.
     const clean = name.trim().replace(/\s+/g, ' ').slice(0, 60);
@@ -2163,16 +2173,16 @@
       ? ' is crew — they see every crew task' : ' is not crew any more'));
   };
 
-  window.approveCrew = function (uid) {
+  window.approveCrew = async function (uid) {
     const u = people[uid];
     if (!u) return;
     const who = u.name || u.email;
     // Letting in somebody already turned away is done on purpose or not at
     // all. Their row sits among people asking to join, and one stray tap on
     // it used to hand crew access to the very person who had been refused.
-    if (u.role === 'denied' && !confirm('Let ' + who + (u.name && u.email ? ' (' + u.email + ')' : '') +
-        ' in after all?\n\nYou refused them before. They will be able to sign in, ' +
-        'clock in and see the crew side of Job Hub.')) return;
+    if (u.role === 'denied' && !(await ydConfirm('You refused them before. They will be able to sign in, ' +
+        'clock in and see the crew side of Job Hub.',
+        { title: 'Let ' + who + (u.name && u.email ? ' (' + u.email + ')' : '') + ' in after all?', ok: 'Let them in' }))) return;
     // Switching someone back on keeps what they were: an admin switched off
     // for the winter comes back an admin, with the same access.
     if (u.role === 'admin' || u.role === 'crew') setRole(uid, { active: true }, who + ' switched back on');
@@ -2181,9 +2191,10 @@
 
   // Denied, not deleted: the record is the audit trail of who asked, and the
   // rules forbid deleting user records outright.
-  window.denyCrew = function (uid) {
+  window.denyCrew = async function (uid) {
     const u = people[uid];
-    if (!u || !confirm('Refuse access for ' + (u.email) + '?')) return;
+    if (!u || !(await ydConfirm('They cannot sign in to Job Hub. You can let them in later.',
+        { title: 'Refuse access for ' + u.email + '?', ok: 'Refuse', danger: true }))) return;
     setRole(uid, { role: 'denied', active: false }, 'Refused');
   };
 
@@ -2275,7 +2286,7 @@
     return out;
   }
 
-  window.saveAccess = function () {
+  window.saveAccess = async function () {
     const u = people[accessUid];
     if (!isOwner() || !u) return;
     if (!newRulesLive) {
@@ -2285,29 +2296,30 @@
     const access = accessFromForm();
     const wasAdmin = u.role === 'admin';
     const any = Object.values(access).some(l => l !== 'none');
-    if (!wasAdmin && !confirm('Make ' + (u.name || u.email) + ' an admin?\n\n' +
+    if (!wasAdmin && !(await ydConfirm(
         (any ? 'They will be able to ' + AREAS.filter(a => access[a.id] !== 'none')
           .map(a => a.levels ? 'set ' + a.label.toLowerCase() : (access[a.id] === 'change' ? 'change ' : 'see ') + a.label.toLowerCase()).join(', ') + '.'
-          : 'Nothing is ticked yet, so for now they will have the same screens as crew.'))) return;
+          : 'Nothing is ticked yet, so for now they will have the same screens as crew.'),
+        { title: 'Make ' + (u.name || u.email) + ' an admin?', ok: 'Make them an admin' }))) return;
     setRole(accessUid, { role: 'admin', access: access },
       (u.name || u.email) + (wasAdmin ? '’s access saved' : ' is now an admin'));
     closeAccess();
   };
 
-  window.makeCrew = function () {
+  window.makeCrew = async function () {
     const u = people[accessUid];
-    if (!isOwner() || !u || !confirm('Make ' + (u.name || u.email) + ' crew again?\n\n' +
-        'They lose every admin area and keep only their own clock and the crew screens.')) return;
+    if (!isOwner() || !u || !(await ydConfirm('They lose every admin area and keep only their own clock and the crew screens.',
+        { title: 'Make ' + (u.name || u.email) + ' crew again?', ok: 'Make them crew' }))) return;
     const none = {};
     AREAS.forEach(a => { none[a.id] = 'none'; });
     setRole(accessUid, { role: 'crew', access: none }, (u.name || u.email) + ' is crew again');
     closeAccess();
   };
 
-  window.removeCrew = function (uid) {
+  window.removeCrew = async function (uid) {
     const u = people[uid];
-    if (!u || !confirm('Switch off access for ' + (u.name || u.email) +
-        '?\n\nTheir hours are kept. You can switch them back on any time.')) return;
+    if (!u || !(await ydConfirm('Their hours are kept. You can switch them back on any time.',
+        { title: 'Switch off access for ' + (u.name || u.email) + '?', ok: 'Switch off' }))) return;
     setRole(uid, { active: false }, (u.name || u.email) + ' switched off');
   };
 
@@ -2854,11 +2866,12 @@
       .catch(err => showToast((err && err.message) || 'Not changed', 6000))
       .then(() => deciding.delete(r.id));
   }
-  window.rejectRequest = function (id) {
-    const r = requests[id];
-    if (!r || r.status !== 'pending' || !isOwner()) return;
-    const why = prompt('Why not? They see this.');
+  window.rejectRequest = async function (id) {
+    if (!requests[id] || requests[id].status !== 'pending' || !isOwner()) return;
+    const why = await ydPrompt('They see this.', '', { title: 'Why not?', ok: 'Turn it down', multiline: true });
     if (why === null) return;
+    const r = requests[id];
+    if (!r || r.status !== 'pending') return;
     r.status = 'rejected';
     writeRequest(id, { status: 'rejected', decidedReason: why.trim().slice(0, 300), decidedBy: (me() || {}).uid || '', decidedAt: nowIso() }, 'turning down a change');
     render();
