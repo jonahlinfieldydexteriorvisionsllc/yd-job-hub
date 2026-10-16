@@ -178,13 +178,17 @@
   }
 
   // wantNow: the estimate as it is now even when a version was sent.
-  function estimateSide(job, wantNow) {
+  // ctx.lean: the All Jobs table, which never shows what a sent estimate
+  // prices at today (only the job's own page does, in a hint) -- pricing every
+  // job's estimate for that figure made each redraw cost a pricing run a job.
+  function estimateSide(job, wantNow, ctx) {
     const rules = P() ? P().rules() : {};
     const est = job.estimate && typeof job.estimate === 'object' ? job.estimate : null;
     const out = { from: 'none', priceCents: null, crewDays: null, rateCents: num(rules.crewDayCents),
                   costs: {}, complete: true, problems: 0, sentAt: null, docNumber: null, nowCents: null, hand: {} };
     const sent = lastSent(est);
-    const r = hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '') : null;
+    const needNow = !(ctx && ctx.lean && sent && !wantNow);
+    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '') : null;
     if (sent && !wantNow) {
       const c = sent.cost, byKind = c.byKind || {};
       const dumps = (num(byKind.dumpster) || 0) + (num(byKind.rental) || 0);
@@ -227,13 +231,24 @@
   // Shifts on the job from the clock, by the day: how many days the crew
   // were there. Only when every counted hour is among them (an old job's
   // hours can come from the summary of old shifts, which has no dates).
-  function daysOnSite(id, paidHours) {
+  // The shifts that count, by job -- worked out once a redraw (ctx) instead of
+  // every job walking every shift on the books.
+  function shiftsByJob(C, ctx) {
+    if (ctx && ctx.byJob) return ctx.byJob;
+    const by = {};
+    Object.values(C.shifts() || {}).forEach(e => {
+      if (!e || e.kind !== 'job' || !e.targetId || !C.counts(e)) return;
+      (by[e.targetId] = by[e.targetId] || []).push(e);
+    });
+    if (ctx) ctx.byJob = by;
+    return by;
+  }
+  function daysOnSite(id, paidHours, ctx) {
     const C = window.YDClock;
     if (!C || !C.shifts || !C.counts || !C.startMsOf || !(paidHours > 0)) return null;
     const seen = {};
     let h = 0, n = 0;
-    Object.values(C.shifts() || {}).forEach(e => {
-      if (!e || e.kind !== 'job' || e.targetId !== id || !C.counts(e)) return;
+    (id ? shiftsByJob(C, ctx)[id] || [] : []).forEach(e => {
       const s = C.startMsOf(e);
       if (!s) return;
       seen[localYMD(new Date(s))] = true;
@@ -244,7 +259,7 @@
     return count && Math.abs(h - paidHours) <= 0.05 + n * 0.01 ? count : null;
   }
 
-  function actualSide(job, id, est) {
+  function actualSide(job, id, est, ctx) {
     const rules = P() ? P().rules() : {};
     const dayHours = num(rules.crewDayHours) > 0 ? num(rules.crewDayHours) : null;
     const rate = est.rateCents;
@@ -271,7 +286,7 @@
       lab.days = dayHours ? hours / dayHours : null;
       if (lab.days !== null && rate !== null) { lab.cents = Math.round(lab.days * rate); lab.basis = 'rate'; }
       else { lab.cents = wagesCents; lab.basis = 'wages'; }
-      lab.onSite = daysOnSite(id, clockHours);
+      lab.onSite = daysOnSite(id, clockHours, ctx);
     }
 
     // Purchases, then subcontractors, then what was typed in.
@@ -297,9 +312,9 @@
 
   // --------------------------------------------------------- side by side
 
-  function compare(job, id, wantNow) {
-    const e = estimateSide(job, wantNow);
-    const a = actualSide(job, id, e);
+  function compare(job, id, wantNow, ctx) {
+    const e = estimateSide(job, wantNow, ctx);
+    const a = actualSide(job, id, e, ctx);
     const filled = [];          // costs counted at the estimate's figure
     let recorded = a.labour.source !== 'none';
     let actCost = 0, estCost = e.has ? 0 : null;
@@ -635,13 +650,13 @@
     const jobs = typeof loadAllJobs === 'function' ? loadAllJobs() : [];
     const first = firstShifts(), now = new Date().getFullYear();
     const want = listYear === 'this' ? now : listYear === 'last' ? now - 1 : null;
-    const out = [];
+    const out = [], ctx = { lean: true, byJob: null };
     jobs.forEach(j => {
       if (!j || !j._id) return;
       const st = typeof normStatus === 'function' ? normStatus(j.jobStatus, j) : j.jobStatus;
       if (ORDER[st] === undefined || (listStatus && st !== listStatus)) return;
       if (want !== null && yearOf(j, first) !== want) return;
-      out.push(compare(j, j._id, !!basisNow[j._id]));
+      out.push(compare(j, j._id, !!basisNow[j._id], ctx));
     });
     return out;
   }
