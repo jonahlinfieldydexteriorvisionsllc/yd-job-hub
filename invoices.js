@@ -60,10 +60,21 @@
   }
   // The job an invoice is on, as this device holds it (none for a storm's
   // or one made by hand in QuickBooks). One in Recently deleted is none.
+  //
+  // A job's saved text is parsed only when it has changed: every redraw asked
+  // for every invoice's job, and Home asks again, and a job's text (estimate,
+  // photos list, notes) is large. Readers only look at what comes back.
+  const jobParsed = {};     // job id -> { raw, d } as last read
   function jobOf(inv) {
     if (!inv.jobId || typeof readJobBlob !== 'function') return null;
-    let d = null;
-    try { d = JSON.parse(readJobBlob(inv.jobId) || 'null'); } catch (e) { return null; }
+    const raw = readJobBlob(inv.jobId) || '';
+    let c = jobParsed[inv.jobId];
+    if (!c || c.raw !== raw) {
+      let d = null;
+      try { d = JSON.parse(raw || 'null'); } catch (e) { return null; }
+      c = jobParsed[inv.jobId] = { raw: raw, d: d };
+    }
+    const d = c.d;
     return d && d.deletedAt ? null : d;
   }
 
@@ -132,12 +143,24 @@
 
   // ------------------------------------------------------------- drawing
 
+  // Drawn only while All Jobs is on screen: the jobs feed fires all day, and
+  // each redraw works out every unpaid invoice's state. What came in while
+  // another tab was open is drawn when All Jobs opens (watchPanel, below).
+  let dirty = false, panelWatched = false;
+  const onScreen = () => {
+    if (!panelWatched) return true;
+    const p = el('panel-dashboard');
+    return !!(p && p.classList.contains('active'));
+  };
   function render() {
     const sec = el('invSection');
     if (!sec) return;
     sec.hidden = !sees();
     if (!sees()) return;
+    if (!onScreen()) { dirty = true; return; }
+    dirty = false;
     const wrap = el('invWrap');
+    const idx = typeof getJobIndex === 'function' ? getJobIndex() : [];
     const list = Object.values(invoices).map(inv => ({ inv, st: stateOf(inv) }));
     const open = list.filter(x => x.st.kind !== 'paid');
     const todo = open.filter(x => wantsYou(x.st));
@@ -159,7 +182,7 @@
       '<div class="inv-sum">' + (open.length ? '<b>' + money(owedTotal) + '</b> owed on ' + open.length + ' invoice' + (open.length === 1 ? '' : 's') : 'Nothing owed.') +
         (changes() ? ' <button class="link-btn" onclick="invCheckNow()">↻ Check QuickBooks now</button>' : '') + '</div>' +
       '<div class="inv-views">' + tab('todo', 'To do', todo.length) + tab('owed', 'All owed', open.length) + tab('paid', 'Paid', paid.length) + '</div>' +
-      (shown.length ? shown.map(x => rowHtml(x.inv, x.st)).join('')
+      (shown.length ? shown.map(x => rowHtml(x.inv, x.st, idx)).join('')
         : '<p class="empty-msg">' + (view === 'todo' ? 'No reminders due — nothing to chase today.' : view === 'paid' ? 'Nothing paid in the last month.' : 'Nothing owed.') + '</p>') +
       rulesHtml();
   }
@@ -181,8 +204,7 @@
   }
   // Which job here the invoice is for -- found by the job holding it, or the
   // one open job of the customer's name; picked or changed by hand here.
-  function jobLineHtml(inv, st) {
-    const idx = typeof getJobIndex === 'function' ? getJobIndex() : [];
+  function jobLineHtml(inv, st, idx) {
     const j = inv.jobId ? idx.find(x => x.id === inv.jobId) : null;
     const how = inv.jobBy === 'name' ? ' (same name)' : '';
     if (picking === inv.id) {
@@ -199,7 +221,7 @@
       (changes() && st.kind !== 'paid' ? ' <button class="link-btn" onclick="invPickJob(\'' + safe(inv.id) + '\')">' + (inv.jobId ? 'Change' : 'Pick the job') + '</button>' : '') +
     '</div>';
   }
-  function rowHtml(inv, st) {
+  function rowHtml(inv, st, idx) {
     const id = safe(inv.id);
     const emails = (inv.emails || []).filter(Boolean).sort();
     const facts = [];
@@ -222,7 +244,7 @@
         '<span class="inv-amt"><b>' + money(st.kind === 'paid' ? inv.total : inv.balance) + '</b>' +
           (st.kind !== 'paid' && Number(inv.balance) < Number(inv.total) - 0.005 ? '<small> of ' + money(inv.total) + '</small>' : '') + '</span></div>' +
       '<div class="inv-facts">' + facts.join(' · ') + '</div>' +
-      jobLineHtml(inv, st) +
+      jobLineHtml(inv, st, idx) +
       '<div class="inv-next">' + stateText(st, inv) + '</div>' +
       '<div class="inv-acts">' +
         (can && st.kind !== 'waiting' ? '<button class="btn btn-sm' + (wantsYou(st) ? ' btn-filled' : '') + '" onclick="invRemind(\'' + id + '\')"' +
@@ -412,7 +434,13 @@
   });
   // Which job is finished moves an invoice on (waiting -> reminders).
   document.addEventListener('yd-jobs-changed', render);
-  function boot() { render(); }
+  function watchPanel() {
+    const p = el('panel-dashboard');
+    if (!p || typeof MutationObserver !== 'function') return;
+    panelWatched = true;
+    new MutationObserver(() => { if (dirty && onScreen()) render(); }).observe(p, { attributes: true, attributeFilter: ['class'] });
+  }
+  function boot() { watchPanel(); render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
 })();
