@@ -403,7 +403,7 @@
       computerLine() +
       '<div class="bd-picker">' +
         list.map(b => '<button class="bd-chip' + (b.id === current ? ' on' : '') +
-          '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + b.id + '\')">' +
+          '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + safeId(b.id) + '\')">' +
           '<span class="bd-dot"></span><span class="bd-name">' + esc(b.name || 'Board') + '</span>' +
           (b.ownerOnly ? ' <span title="Private — only you">🔒</span>' : '') +
           (b.visibleTo && b.visibleTo.length && editsBoards()
@@ -416,18 +416,18 @@
         '<div class="bd-sub">' + boardSubtitle(board) + '</div>' +
         '<div class="bd-actions">' +
           (runsBoard(board)
-            ? '<button class="btn btn-sm" onclick="editBoard(\'' + board.id + '\')">Board settings</button>' : '') +
+            ? '<button class="btn btn-sm" onclick="editBoard(\'' + safeId(board.id) + '\')">Board settings</button>' : '') +
           (editsBoard(board)
-            ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + board.id + '\', \'' +
-              board.columns[0].id + '\')">+ Add card</button>' : '') +
+            ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + safeId(board.id) + '\', \'' +
+              safeId(board.columns[0].id) + '\')">+ Add card</button>' : '') +
           // The recurring crew tasks land here, on Crew tasks (recurring.js).
           // Named as the calendar's layer of them is, "Recurring crew tasks":
           // one thing, one name.
           (board.id === CREW_BOARD && isOwner() && typeof openRecurring === 'function'
             ? '<button class="btn btn-sm" onclick="openRecurring()">🔁 Recurring crew tasks</button>' : '') +
           (board.virtual && movesJobs()
-            ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + board.id + '\', \'' +
-              board.columns[0].id + '\')">' + (board.id === 'bids' ? '+ New bid' : '+ New job') + '</button>' : '') +
+            ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' +
+              safeId(board.columns[0].id) + '\')">' + (board.id === 'bids' ? '+ New bid' : '+ New job') + '</button>' : '') +
         '</div>' +
       '</div>' +
       (board.id === 'bids' ? followUpHtml() : '') +
@@ -665,7 +665,7 @@
   }
   function filterBarHtml(board) {
     if (board.virtual) return '';
-    const chip = (f, label) => '<button class="bd-filter' + (cardFilter === f ? ' on' : '') + '" onclick="setCardFilter(\'' + f + '\')">' + label + '</button>';
+    const chip = (f, label) => '<button class="bd-filter' + (cardFilter === f ? ' on' : '') + '" onclick="setCardFilter(\'' + safeId(f) + '\')">' + label + '</button>';
     return '<div class="bd-filters">' + chip('urgent', '🟠 Urgent & this week') + chip('mine', '👤 Mine') + chip('rain', '☔ Rain day') + '</div>';
   }
   // Rain-day cards from every stored board this person can see, by board.
@@ -833,10 +833,10 @@
       return column(board, c, listed.map(k => storedCardHtml(board, k, true)), {
         count: listed.length,
         empty: earlier.length ? 'Nothing finished today' : '',
-        foot: (earlier.length ? '<button class="bd-add-card bd-old-done" onclick="toggleOldDone(\'' + board.id + '\')">' +
+        foot: (earlier.length ? '<button class="bd-add-card bd-old-done" onclick="toggleOldDone(\'' + safeId(board.id) + '\')">' +
             (showing ? 'Hide the ' + earlier.length + ' finished earlier' : 'Show the ' + earlier.length + ' finished earlier') + '</button>' : '') +
           // "Delete all 1 done" read oddly: one card is "the 1 done".
-          (clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + board.id + '\')">🗑 Delete ' +
+          (clear ? '<button class="bd-add-card bd-del-done" onclick="deleteDoneCards(\'' + safeId(board.id) + '\')">🗑 Delete ' +
             (clear === 1 ? 'the 1' : 'all ' + clear) + ' done' + (earlier.length && !showing ? ' (incl. ' + earlier.length + ' not shown)' : '') + '</button>' : ''),
       });
     }).join('');
@@ -873,7 +873,7 @@
     const n = more.count != null ? more.count : cardHtml.length;
     const key = board.id + '|' + c.id;
     const shut = phoneWide() && (key in colOpen ? !colOpen[key] : n === 0);
-    return '<div class="bd-col' + (shut ? ' shut' : '') + '" data-board="' + board.id + '" data-col="' + c.id + '" ' +
+    return '<div class="bd-col' + (shut ? ' shut' : '') + '" data-board="' + esc(board.id) + '" data-col="' + esc(c.id) + '" ' +
         'ondragover="bdDragOver(event)" ondragleave="bdDragLeave(event)" ondrop="bdDrop(event)">' +
       '<div class="bd-col-head" onclick="bdToggleCol(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\', this)">' +
         '<span><span class="bd-fold" aria-hidden="true">' + (shut ? '▸' : '▾') + '</span>' + esc(c.name) + '</span>' +
@@ -883,10 +883,10 @@
         (cardHtml.join('') || '<div class="bd-empty">' + (more.empty || 'Nothing here') + '</div>') +
         (more.foot || '') +
         (editsBoard(board)
-          ? '<button class="bd-add-card" onclick="addCard(\'' + board.id + '\', \'' + c.id + '\')">+ Add a card</button>' : '') +
+          ? '<button class="bd-add-card" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">+ Add a card</button>' : '') +
         // Won, Lost and Paid are where jobs end up, not where they start.
         (board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1
-          ? '<button class="bd-add-card" onclick="addJobCard(\'' + board.id + '\', \'' + c.id + '\')">' +
+          ? '<button class="bd-add-card" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
             (board.id === 'bids' ? '+ Add a bid' : '+ Add a job') + '</button>' : '') +
       '</div>' +
     '</div>';
@@ -961,10 +961,10 @@
     const inv = j.qbInvoiceRef && j.qbInvoiceRef.id ? j.qbInvoiceRef : null;
     const paidUp = owedOf(j) !== null && owedOf(j) <= 0;
     const stop = 'event.stopPropagation(); ';
-    return '<div class="bd-card' + coverClass(j.cardColor) + '" draggable="true" data-board="' + board.id + '" data-card="' + j._id + '" ' +
+    return '<div class="bd-card' + coverClass(j.cardColor) + '" draggable="true" data-board="' + esc(board.id) + '" data-card="' + esc(j._id) + '" ' +
         coverStyle(j.cardColor) +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
-        'onclick="openJobCard(\'' + board.id + '\', \'' + j._id + '\')">' +
+        'onclick="openJobCard(\'' + safeId(board.id) + '\', \'' + safeId(j._id) + '\')">' +
       '<div class="bd-card-title">' + esc(j.customerName || 'Untitled job') +
         (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') +
         // 🌱 a job with plants (plantcare.js)
@@ -1027,9 +1027,9 @@
     const cover = k.color || YDRemind.color(cardType(board, k)) || null;
     return '<div class="bd-card' + (inLastColumn ? ' done' : '') + urg + coverClass(cover) + '" draggable="true" ' +
         coverStyle(cover) +
-        'data-board="' + board.id + '" data-card="' + k.id + '" ' +
+        'data-board="' + esc(board.id) + '" data-card="' + esc(k.id) + '" ' +
         'ondragstart="bdDragStart(event)" ondragend="bdDragEnd(event)" ' +
-        'onclick="openCardDetail(\'' + board.id + '\', \'' + k.id + '\')">' +
+        'onclick="openCardDetail(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
       '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
@@ -1056,7 +1056,7 @@
           '<span class="bd-face" title="' + esc(nameOn(a)) + '">' + esc(initials(nameOn(a))) + '</span>').join('') + '</span>' +
         (editsBoard(board) && cardDeletable(board, k, inLastColumn)
           ? '<button type="button" class="bd-card-del" title="Delete this card" aria-label="Delete this card" draggable="false" ' +
-            'onclick="event.stopPropagation(); bdDeleteCard(\'' + board.id + '\', \'' + k.id + '\')">🗑</button>' : '') +
+            'onclick="event.stopPropagation(); bdDeleteCard(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')">🗑</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -1351,13 +1351,13 @@
       '<div class="bd-move-label">Move to</div>' +
       '<div class="bd-move">' + board.columns.map(c =>
         '<button class="bd-move-btn' + (c.id === col ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
-        (c.id === col ? 'disabled' : 'onclick="moveJobFromSheet(\'' + jobId + '\', \'' + boardId + '\', \'' + c.id + '\')"') +
+        (c.id === col ? 'disabled' : 'onclick="moveJobFromSheet(\'' + safeId(jobId) + '\', \'' + safeId(boardId) + '\', \'' + safeId(c.id) + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       '<div class="bd-move-label">Card colour</div>' +
       '<div onchange="setJobCardColor(\'' + safeId(jobId) + '\')">' + colorPickHtml('jcColor', j.cardColor) + '</div>' +
       '<div class="field-actions">' +
-        (movesJobs() ? '<button class="btn btn-filled" onclick="editJobCard(\'' + boardId + '\', \'' + safeId(jobId) + '\')">Edit</button>' : '') +
-        '<button class="btn' + (movesJobs() ? ' btn-sm' : ' btn-filled') + '" onclick="openJobFromBoard(\'' + jobId + '\')">' +
+        (movesJobs() ? '<button class="btn btn-filled" onclick="editJobCard(\'' + safeId(boardId) + '\', \'' + safeId(jobId) + '\')">Edit</button>' : '') +
+        '<button class="btn' + (movesJobs() ? ' btn-sm' : ' btn-filled') + '" onclick="openJobFromBoard(\'' + safeId(jobId) + '\')">' +
           (boardId === 'bids' ? 'Open the bid' : 'Open the job') + '</button>' +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
@@ -1413,7 +1413,7 @@
       '<div class="field"><span class="label">Notes</span><textarea id="jeNotes" rows="3">' + esc(j.notes || '') + '</textarea></div>' +
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveJobCard()">Save</button>' +
-        '<button class="btn btn-sm" onclick="openJobCard(\'' + boardId + '\', \'' + safeId(jobId) + '\')">Cancel</button>' +
+        '<button class="btn btn-sm" onclick="openJobCard(\'' + safeId(boardId) + '\', \'' + safeId(jobId) + '\')">Cancel</button>' +
       '</div>');
     jobEditTags();
   };
@@ -1564,12 +1564,12 @@
       (k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +
       (list.length ? '<div class="bd-move-label">Checklist</div><div class="bd-checklist">' +
         list.map(i => '<label class="chk bd-chk"><input type="checkbox"' + (i.done ? ' checked' : '') +
-          ' onchange="toggleCheck(\'' + i.id + '\', this.checked)"><span' + (i.done ? ' class="struck"' : '') + '>' +
+          ' onchange="toggleCheck(\'' + safeId(i.id) + '\', this.checked)"><span' + (i.done ? ' class="struck"' : '') + '>' +
           esc(i.text) + '</span></label>').join('') + '</div>' : '') +
       '<div class="bd-move-label">Move to</div>' +
       '<div class="bd-move">' + board.columns.map(c =>
         '<button class="bd-move-btn' + (c.id === here ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
-        (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + c.id + '\')"') +
+        (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + safeId(c.id) + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       (inDone && doneLine(k) ? '<div class="hint">' + esc(doneLine(k)) + '</div>'
         : k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
@@ -2036,7 +2036,24 @@
           ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete card</button>' : '') +
       '</div>');
     cardRemindHint();
+    // What the editor showed, box by box: saveCard sends back only the boxes
+    // changed since, so whatever happened to the card meanwhile stands.
+    openCard.shown = openCard.cardId ? {
+      form: editorState(),
+      list: (k.checklist || []).map(i => ({ text: i.text, done: !!i.done })),
+    } : null;
     const t = el('cdTitle'); if (t) t.focus();
+  }
+  // The card editor's boxes as text, to tell which were changed.
+  function editorState() {
+    const ticked = sel => Array.from(document.querySelectorAll(sel)).map(i => i.value).sort().join('|');
+    return {
+      title: val('cdTitle'), type: val('cdType'), who: ticked('.cdWho:checked'), col: val('cdCol'),
+      when: [val('cdDue'), val('cdTime'), val('cdRemind')].join('|'),
+      urg: (document.querySelector('input[name="cdUrg"]:checked') || {}).value || '',
+      labels: ticked('.cdLabel:checked'), color: pickedColor('cdColor'), job: val('cdJob'),
+      notes: val('cdNotes'), list: val('cdList'),
+    };
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
   // Just its name (as on the calendar's editor, calendar.js typeLabel).
@@ -2177,16 +2194,26 @@
     const id = openCard.cardId || newId('cd');
     const was = (cards[board.id] || {})[id] || {};
 
+    // What the editor showed when it opened (renderCardEditor), for a card
+    // that is still here: only the boxes changed since then are saved.
+    const shown = openCard.cardId && openCard.shown && Object.keys(was).length ? openCard.shown : null;
+    // Each line's tick as the editor showed it.
+    const openedTick = new Map();
+    ((shown && shown.list) || []).forEach(o => { if (!openedTick.has(o.text)) openedTick.set(o.text, o.done); });
     // A copy, used up as lines are matched, so two lines that both say
     // "Sweep" keep two different ids and ticking one does not tick both.
     const oldList = (was.checklist || []).slice();
     const checklist = (el('cdList').value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean)
       .map((line, i) => {
-        const done = /^\[x\]\s*/i.test(line);
+        const marked = /^\[x\]\s*/i.test(line);
         const text = line.replace(/^\[x\]\s*/i, '');
         // Keep an item's id (and who ticked it) if the same line was there before.
         const at = oldList.findIndex(o => o.text === text);
         const prev = at === -1 ? null : oldList.splice(at, 1)[0];
+        // A tick left as the editor showed it keeps what it is now: someone
+        // may have ticked that item off on their phone meanwhile.
+        const keep = !!prev && openedTick.get(text) === marked;
+        const done = keep ? !!prev.done : marked;
         return { id: prev ? prev.id : 'ck' + i + Date.now().toString(36), text: text, done: done,
                  doneBy: done ? ((prev && prev.doneBy) || myName()) : null };
       });
@@ -2241,8 +2268,26 @@
       updatedBy: myName(),
     };
     Object.assign(rec, doneByPatch(board, was, !!openCard.cardId && colOf(board, was) === last, col === last, rec.doneAt));
+    // Only what was changed here goes back. Everything used to be written from
+    // what the editor showed when it opened, so Jonah saving a note put back
+    // a crew member's move to Done, or the ticks made meanwhile.
+    if (shown) {
+      const now = editorState(), at = shown.form;
+      const same = f => now[f] === at[f];
+      const drop = keys => keys.forEach(f => { delete rec[f]; });
+      if (same('title')) drop(['title']);
+      if (same('col')) drop(['column', 'order', 'doneAt', 'doneBy', 'doneByName', 'doneByAt']);
+      if (same('when')) drop(['due', 'dueTime', 'remindMins', 'hasReminder', 'remindUids', 'noReminder']);
+      if (same('type') && same('labels')) drop(['type', 'labels']);
+      if (same('urg')) drop(['urgency']);
+      if (same('color')) drop(['color']);
+      if (same('who')) drop(['assignees']);
+      if (same('job')) drop(['jobId', 'jobName', 'jobNum']);
+      if (same('notes')) drop(['notes']);
+      if (same('list')) drop(['checklist']);
+    }
     cards[board.id] = cards[board.id] || {};
-    cards[board.id][id] = Object.assign({ id: id }, rec);
+    cards[board.id][id] = Object.assign({ id: id }, was, rec);
     openCard.cardId = id;
     render(); renderCardDetail();
     writeCard(board.id, id, rec);
@@ -2343,7 +2388,7 @@
       '<div class="field-actions">' +
         '<button class="btn btn-filled" onclick="saveBoard()">Save</button>' +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Cancel</button>' +
-        (id && id !== MAINTENANCE && id !== CREW_BOARD ? '<button class="btn btn-sm" onclick="removeBoard(\'' + id + '\')">Delete board</button>' : '') +
+        (id && id !== MAINTENANCE && id !== CREW_BOARD ? '<button class="btn btn-sm" onclick="removeBoard(\'' + safeId(id) + '\')">Delete board</button>' : '') +
       '</div>');
     drawDrafts();
     const n = el('bdName'); if (n && !id) n.focus();
