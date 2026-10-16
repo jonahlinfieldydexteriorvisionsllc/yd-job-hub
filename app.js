@@ -440,8 +440,16 @@ async function ydSignOut() {
   if (typeof dirty !== 'undefined' && dirty
       && !(await ydConfirm('You have unsaved changes on this job.\n\nSign out anyway?',
         { title: 'Unsaved changes', ok: 'Sign out anyway', cancel: 'Stay', danger: true }))) return;
-  if (!(await ydConfirm('Your jobs stay safe in the cloud. This device will need to sign in again.',
-        { title: 'Sign out of YD Job Hub?', ok: 'Sign out' }))) return;
+  // Signing out is not clocking out: a shift left running keeps running (the
+  // clock stops it only at its hour limit), so whoever is on the clock is
+  // told -- signing out at the end of the day looked like the same thing.
+  const mine = window.YDClock && YDClock.mine && !(window.YDAuth || {}).isOwner ? YDClock.mine() : null;
+  const onClock = mine && mine.shift && !mine.shift.leaving ? mine.shift : null;
+  const said = onClock
+    ? 'You are still on the clock (' + (onClock.where || 'working') + '). Signing out does not clock you out — the clock keeps running.\n\nThis device will need to sign in again.'
+    : crewView() ? 'Everything is kept in the cloud. This device will need to sign in again.'
+    : 'Your jobs stay safe in the cloud. This device will need to sign in again.';
+  if (!(await ydConfirm(said, { title: 'Sign out of YD Job Hub?', ok: 'Sign out', danger: !!onClock }))) return;
 
   closeHeaderMenu();
   // The full sign-out can stop to ask about changes that have not reached
