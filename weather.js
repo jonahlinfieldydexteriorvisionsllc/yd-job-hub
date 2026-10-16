@@ -275,6 +275,19 @@
            '<div class="wx-lab">' + label + '</div></div>';
   }
 
+  // The forecast snowfall the cards last showed, per county, for the storm
+  // start form (storm.js) to show beside its box -- information only, never
+  // put into a stop. Read from what is already fetched: no request of its own.
+  window.YDWeather = {
+    snowForecast: () => Object.keys(COUNTY_POINTS).map(county => {
+      const pt = COUNTY_POINTS[county];
+      const key = 'pt:' + pt.lat.toFixed(3) + ',' + pt.lng.toFixed(3);
+      const c = cache[key];
+      if (!c || !c.data) return null;
+      return { county: county, snow24: c.data.snow24, snow48: c.data.snow48, age: ageText(key) };
+    }).filter(Boolean),
+  };
+
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     on = a.mode === 'cloud' && !!a.user;

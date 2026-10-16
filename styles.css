@@ -3002,14 +3002,6 @@
   #stormWrap .salt-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
   html[data-night] #stormWrap .salt-chip.on { background:var(--accent); border-color:var(--accent); color:#1a1208; }
 
-  /* The inches box still holding the storm's expected depth, not a measurement. */
-  #stormWrap .stepper-guess { display:block; margin-top:3px; font-size:12px; font-weight:700; letter-spacing:.2px;
-                              text-transform:none; color:#7a5410; }
-  #stormWrap .stepper:not(.is-guess) .stepper-guess { display:none; }
-  #stormWrap .stepper.is-guess .stepper-input { border:2px dashed #b07a12; background:#fff7e6; }
-  html[data-night] #stormWrap .stepper-guess { color:#f0b04a; }
-  html[data-night] #stormWrap .stepper.is-guess .stepper-input { border-color:#f0b04a; background:#2a2010; }
-
   /* Why a stop is skipped: big buttons, two to a row. */
   #stormWrap .skip-why { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; }
   #stormWrap .skip-why-q { grid-column:1 / -1; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.9px; color:var(--muted); }

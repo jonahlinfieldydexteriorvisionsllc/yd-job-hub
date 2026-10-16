@@ -295,7 +295,7 @@
     // Closing works out the bill, which takes each crew member's pauses off
     // the time on site -- so it needs everyone's hours as well as Billing.
     const bills = ydCan('billing', 'change') && ydCan('hours', 'see');
-    if (startBtn) startBtn.hidden = !runs || !!storm;
+    if (startBtn) startBtn.hidden = !startsStorms() || !!storm;
     // Where the NEXT storm's route starts is beside the point during one.
     const startRow = document.getElementById('snowStartRow');
     if (startRow) startRow.hidden = !!storm;
@@ -333,7 +333,8 @@
         '</div>' +
         '<div class="section-body">' +
           '<div class="storm-meta">' +
-            '<span><strong>' + storm.accumulationInches + '"</strong> expected</span>' +
+            (num(storm.accumulationInches, null) != null
+              ? '<span><strong>' + storm.accumulationInches + '"</strong> expected</span>' : '') +
             '<span><strong>' + storm.crewSize + '</strong> crew' +
               (storm.crewNames ? ' · ' + esc(storm.crewNames) : '') + '</span>' +
             (openStop ? '<span class="storm-onsite">on site at ' + esc(accountFor(openStop).name) + '</span>' : '') +
@@ -366,16 +367,14 @@
   // used to go back to the storm's expected depth each time, so a stop could
   // be billed at the wrong tier.
   const drafts = {};          // input id -> what is in the box
-  // `guess`: the box starts on the storm's expected depth, not a measurement.
-  // Until somebody touches it, it says so -- an untouched box is billed at
-  // whatever it shows. (Not required: whether to make it so is Jonah's call.)
-  function stepper(stopId, kind, label, value, step, guess) {
+  // The inches box starts EMPTY, like the salt box, and Depart waits for a
+  // number (Jonah, 15 Oct 2026). It used to start on the storm's expected
+  // depth, and an untouched box was billed at a forecast nobody measured.
+  function stepper(stopId, kind, label, value, step) {
     const inputId = 'st-' + kind + '-' + stopId;
     const shown = drafts[inputId] != null ? drafts[inputId] : value;
-    const guessing = guess && drafts[inputId] == null;
-    return '<div class="stepper' + (guessing ? ' is-guess' : '') + '">' +
-      '<span class="stepper-label">' + label +
-        (guess ? '<span class="stepper-guess">expected — check</span>' : '') + '</span>' +
+    return '<div class="stepper">' +
+      '<span class="stepper-label">' + label + '</span>' +
       '<button class="stepper-btn" onclick="nudge(\'' + inputId + '\',' + (-step) + ')" aria-label="Less">&minus;</button>' +
       '<input class="stepper-input" id="' + inputId + '" inputmode="decimal" value="' + esc(shown) + '" ' +
         'aria-label="' + esc(label) + '" oninput="stepperTyped(this)">' +
@@ -409,11 +408,8 @@
       b.setAttribute('aria-pressed', String(on));
     });
   }
-  // A box that has been touched is no longer a guess, and the chips follow
-  // what is in the salt box -- both without redrawing the card.
+  // The chips follow what is in the salt box, without redrawing the card.
   function touched(el) {
-    const box = el && el.closest && el.closest('.stepper');
-    if (box) box.classList.remove('is-guess');
     if (el && /^st-lbs-/.test(el.id)) markChips(el.id);
   }
 
@@ -517,8 +513,7 @@
       // steppers for gloved hands, and the field itself accepts typing for
       // anything the steppers make slow (13.5 inches, 11 bags).
       actions =
-        stepper(sid, 'inches', 'Inches cleared',
-                num(s.inchesCleared, storm.accumulationInches), 0.5, num(s.inchesCleared, null) == null) +
+        stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, ''), 0.5) +
         stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
         saltChips(sid, s) +
         '<button class="btn-stop depart" onclick="departStop(\'' + sid + '\')">Depart</button>' +
@@ -529,8 +524,7 @@
       // Departed with the wrong number in a box: put right while the storm
       // is still open (once it is closed, the bill is the office's).
       actions =
-        stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, storm.accumulationInches), 0.5,
-                num(s.inchesCleared, null) == null) +
+        stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, ''), 0.5) +
         stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
         saltChips(sid, s) +
         '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + sid + '\')">Save</button>' +
@@ -663,16 +657,31 @@
     });
   };
 
-  window.departStop = function (id) {
+  // Both boxes must hold a number before a stop is saved: what is in them is
+  // what the customer is billed. Says which one is missing and puts the
+  // cursor in it.
+  function boxesFilled(id) {
+    const empty = el => !el || el.value.trim() === '' || isNaN(parseFloat(el.value));
+    const inBox = document.getElementById('st-inches-' + id);
+    if (empty(inBox)) {
+      showToast('Put in the inches cleared here');
+      if (inBox) inBox.focus();
+      return false;
+    }
     const box = document.getElementById('st-lbs-' + id);
-    if (!box || box.value.trim() === '' || isNaN(parseFloat(box.value))) {
+    if (empty(box)) {
       showToast('Put in the salt used, in pounds — 0 if none');
       if (box) box.focus();
-      return;
+      return false;
     }
+    return true;
+  }
+
+  window.departStop = function (id) {
+    if (!boxesFilled(id)) return;
     const s = stops[id];
     if (!storm || !s || s.departedAt) return;
-    const inches = readStepper(id, 'inches', storm.accumulationInches);
+    const inches = readStepper(id, 'inches', 0);
     const lbs = readStepper(id, 'lbs', 0);
     delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
     const at = new Date().toISOString();
@@ -708,13 +717,8 @@
   window.saveFix = function (id) {
     const s = stops[id];
     if (!s || !storm) { fixing = null; render(); return; }
-    const box = document.getElementById('st-lbs-' + id);
-    if (!box || box.value.trim() === '' || isNaN(parseFloat(box.value))) {
-      showToast('Put in the salt used, in pounds — 0 if none');
-      if (box) box.focus();
-      return;
-    }
-    const inches = readStepper(id, 'inches', num(s.inchesCleared, storm.accumulationInches));
+    if (!boxesFilled(id)) return;
+    const inches = readStepper(id, 'inches', num(s.inchesCleared, 0));
     const lbs = readStepper(id, 'lbs', num(s.saltLbs, 0));
     delete drafts['st-inches-' + id]; delete drafts['st-lbs-' + id];
     fixing = null;
@@ -863,8 +867,19 @@
 
   // ---------------------------------------------------------------- lifecycle
 
+  // Who may start a storm: whoever can change Snow, and every admin whatever
+  // their Snow access (Jonah, 15 Oct 2026: "allow all admins to start
+  // storms"). Starting writes only the storm and its stops -- no prices, no
+  // billing -- so it gives an admin nothing they could not already see.
+  // Running the route again, abandoning and changing the route stay Snow
+  // change; closing stays Billing.
+  function startsStorms() {
+    const a = window.YDAuth || {};
+    return ydCan('snow', 'change') || (a.mode === 'cloud' && !!a.user && (a.isAdmin || a.role === 'admin'));
+  }
+
   window.startStorm = async function () {
-    if (!ydCan('snow', 'change')) return;
+    if (!startsStorms()) return;
     // A second storm started while one is open orphans the first: it stays
     // open forever, its stops unreachable from the interface, and it is never
     // billed. The realistic way in is tapping Start Storm, seeing nothing
@@ -904,10 +919,13 @@
     if (!body || !startForm) return;
     const f = startForm, people = crewChoices(), crew = crewOf(f, people);
     body.innerHTML =
-      '<div class="stepper"><span class="stepper-label">Snow expected (inches)</span>' +
+      '<div class="stepper"><span class="stepper-label">Snow expected (inches) <span class="muted">— optional</span></span>' +
         '<button class="stepper-btn" onclick="ssNudge(-1)">&minus;</button>' +
-        '<input class="stepper-input" id="ssInches" inputmode="decimal" value="' + esc(f.inches) + '" placeholder="4" oninput="ssSet(\'inches\', this.value)">' +
+        '<input class="stepper-input" id="ssInches" inputmode="decimal" value="' + esc(f.inches) + '" oninput="ssSet(\'inches\', this.value)">' +
         '<button class="stepper-btn" onclick="ssNudge(1)">+</button></div>' +
+      '<p class="hint">Empty puts every account on the route. A number leaves off the accounts that only ' +
+        'take bigger storms. Each stop’s inches are put in at the stop.</p>' +
+      forecastLine() +
       (people.length
         ? '<div class="ss-label">Who is working? <span class="muted">(tap)</span></div>' +
           '<div class="ss-crew">' + people.map(p => '<button class="ss-person' + (f.picked[p.uid] ? ' on' : '') + '" ' +
@@ -920,6 +938,18 @@
       '<div class="ss-count" id="ssCount">' + crew.size + ' working' + (crew.names ? ' — ' + esc(crew.names) : '') + '</div>' +
       '<div class="field-actions"><button class="btn btn-filled clock-big" onclick="beginStorm()">❄ Start the storm</button>' +
         '<button class="btn" onclick="closeStormStart()">Cancel</button></div>';
+  }
+  // What the weather cards on the Snow tab last said, as information beside
+  // the box -- never put into it, nor into any stop: the depth billed is the
+  // one measured at each property.
+  function forecastLine() {
+    const f = window.YDWeather && YDWeather.snowForecast ? YDWeather.snowForecast() : [];
+    const shown = f.filter(x => typeof x.snow24 === 'number' && isFinite(x.snow24));
+    if (!shown.length) return '';
+    const inch = n => (n >= 0.05 ? n.toFixed(1) : '0') + '"';
+    return '<p class="hint">Forecast, next 24 h: ' + shown.map(x => esc(x.county) + ' ' + inch(x.snow24) +
+        (typeof x.snow48 === 'number' && x.snow48 >= x.snow24 + 0.05 ? ' (' + inch(x.snow48) + ' over 48 h)' : '')).join(' · ') +
+      (shown[0].age ? ' <span class="muted">— ' + esc(shown[0].age) + '</span>' : '') + '</p>';
   }
   window.renderStormStartCount = function () {
     const c = document.getElementById('ssCount');
@@ -948,18 +978,27 @@
   };
 
   window.beginStorm = function () {
-    if (!startForm || !ydCan('snow', 'change')) return;
+    if (!startForm || !startsStorms()) return;
     if (storm) { closeStormStart(); showToast('A storm is already running — close it before starting another'); return; }
-    const inches = parseFloat(startForm.inches);
-    if (isNaN(inches) || inches <= 0) { showToast('How many inches are expected?'); const b = document.getElementById('ssInches'); if (b) b.focus(); return; }
+    // Expected depth is optional: empty puts every account on the route (one
+    // under its trigger is skipped at the stop, "Under trigger"). Typed, it
+    // must be a real depth.
+    const typed = String(startForm.inches == null ? '' : startForm.inches).trim();
+    const inches = typed === '' ? null : parseFloat(typed);
+    if (inches !== null && (isNaN(inches) || inches <= 0)) {
+      showToast('Expected inches: a number above 0, or leave it empty');
+      const b = document.getElementById('ssInches'); if (b) b.focus();
+      return;
+    }
     const crew = crewOf(startForm, crewChoices());
     const crewSize = crew.size, crewNames = crew.names;
     const accounts = window.YDSnow ? YDSnow.accounts() : {};
 
     const start = startPoint;
-    const route = buildRoute(accounts, inches, start, routeOrder);
+    const route = buildRoute(accounts, inches === null ? Infinity : inches, start, routeOrder);
     if (!route.length) {
-      showToast('No accounts trigger at ' + inches + '" — nothing to do tonight');
+      showToast(inches === null ? 'No active snow accounts — nothing to do tonight'
+        : 'No accounts trigger at ' + inches + '" — nothing to do tonight');
       return;
     }
     closeStormStart();
@@ -982,7 +1021,7 @@
       // and these records are what invoices are raised from.
       label: now.toLocaleDateString('en-US', { weekday: 'short', month: 'short',
                                                day: 'numeric', year: 'numeric' }) +
-             ' · ' + inches + '"',
+             (inches !== null ? ' · ' + inches + '"' : ''),
       startedAt: now.toISOString(),
       accumulationInches: inches,
       crewSize: crewSize,
@@ -1033,6 +1072,16 @@
     // visit with no pricing loaded used to be left off the bill without a
     // word -- and closing is final, so that customer was simply never charged.
     const worked = list.filter(s => !s.skipped && s.departedAt);
+    // The depth billed is the one put in at the stop. Depart has always
+    // asked for one, but a storm can now start with no expected depth, so a
+    // visit with no inches has nothing to fall back on: it is put right
+    // (✏️ Fix the numbers) before anything is billed, never guessed.
+    const noDepth = worked.filter(s => num(s.inchesCleared, num(storm.accumulationInches, null)) == null);
+    if (noDepth.length) {
+      alert('No inches were put in for:\n\n' + noDepth.map(s => accountFor(s).name || s.accountId).join('\n') +
+        '\n\nOpen each one, tap ✏️ Fix the numbers, put in the inches, then close the storm.');
+      return;
+    }
     await YDSnow.refreshPricing(Array.from(new Set(worked.map(s => s.accountId))));
     // A pricing record with every box blank counts as no price: it would
     // bill $0 -- unless the account is charged by the hour alone.

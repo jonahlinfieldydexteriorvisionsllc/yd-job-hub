@@ -154,7 +154,9 @@ service cloud.firestore {
     // 'quickbooksMap' are billing's. Everything else is the owner's.
     match /settings/{docId} {
       allow read:  if isOwner() || (isStaff() && docId == 'public')
-        || (docId == 'snow' && canSee('snow'))
+        // Every admin reads 'snow' too: they may start a storm, and its route
+        // starts from the yard in the order set here.
+        || (docId == 'snow' && (canSee('snow') || isAdmin()))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canSee('billing'))
         // Which Supplies item his words mean (supplymatch.js): whoever sees Supplies.
         || (docId == 'supplyAliases' && canSee('supplies'))
@@ -203,7 +205,11 @@ service cloud.firestore {
       // Starting and running a storm is Snow; closing it for billing, and
       // anything on it once closed, is Billing. Snow cannot close a storm or
       // touch (or reopen) one that is closed.
-      allow create: if canChange('snow');
+      // Every admin may START one, whatever their Snow access (Jonah, 15 Oct
+      // 2026): only an open storm, and it holds no prices -- the money is in
+      // private/, which this does not open.
+      allow create: if canChange('snow')
+        || (isAdmin() && request.resource.data.get('status', '') == 'open');
       allow update: if canChange('billing')
         || (canChange('snow') && resource.data.status != 'closed' && request.resource.data.status != 'closed');
       allow delete: if canChange('billing')
@@ -234,15 +240,21 @@ service cloud.firestore {
         // closes the storm the billing is locked and only they can touch it.
         // The stop id must look like one of ours (account id, maybe '-p2'): it
         // goes into buttons on the owner's screen.
+        //
+        // getAfter, not get: a storm is started as ONE batch -- the storm and
+        // its stops together -- and get() reads the storm as it was before the
+        // batch (not there yet), which refused the stops of a storm started by
+        // anyone without Billing. getAfter reads it as the batch leaves it; on
+        // a stop written by itself the two are the same.
         function stormOpen() {
-          return get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open';
+          return getAfter(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open';
         }
         allow create, update: if canChange('billing')
           || (canChange('snow') && stormOpen())
           || (isWorker()
               && stopId.matches('[A-Za-z0-9_-]+')
               && stopFiguresAreNumbers()
-              && get(/databases/$(database)/documents/storms/$(stormId)).data.status == 'open');
+              && stormOpen());
 
         allow delete: if canChange('billing') || (canChange('snow') && stormOpen());
       }
