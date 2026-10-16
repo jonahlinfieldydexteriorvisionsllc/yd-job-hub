@@ -216,7 +216,7 @@
     }
     if (st.kind === 'paid' && inv.paidAt) facts.push('Paid off ' + shortDay(inv.paidAt));
     const can = changes() && st.kind !== 'paid';
-    return '<div class="inv-row k-' + st.kind + '">' +
+    return '<div class="inv-row k-' + st.kind + '" id="invR_' + id + '">' +
       '<div class="inv-top"><span class="inv-who"><b>' + esc(inv.customerName || 'A customer') + '</b>' +
           (inv.docNumber ? ' <span class="muted">#' + esc(inv.docNumber) + '</span>' : '') + '</span>' +
         '<span class="inv-amt"><b>' + money(st.kind === 'paid' ? inv.total : inv.balance) + '</b>' +
@@ -384,6 +384,16 @@
     stateOf: stateOf,
     // About what a deposit is, as the list says it (Home's rows).
     depositOf: depositOf,
+    // Search (search.js): the list on All Jobs, on the view that holds this
+    // invoice; its row, to light up.
+    show: function (id) {
+      const inv = invoices[id];
+      if (typeof switchTab === 'function') switchTab('dashboard');
+      if (inv) { const st = stateOf(inv); view = st.kind === 'paid' ? 'paid' : wantsYou(st) ? 'todo' : 'owed'; }
+      picking = '';
+      render();
+      return el('invR_' + safe(id));
+    },
     // What wants doing, most late first (Home).
     toDo: () => Object.values(invoices).map(inv => ({ inv, st: stateOf(inv) })).filter(x => wantsYou(x.st))
       .sort((a, b) => (b.st.late || 0) - (a.st.late || 0)),
