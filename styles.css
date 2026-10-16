@@ -575,6 +575,14 @@
                 border-radius:8px; color:var(--st-due-ink); background:var(--st-due-soft); }
   .appr.appr-odd { border-left:4px solid var(--st-due); }
   @media (max-width:720px) { .appr-bulk-btn { width:100%; white-space:normal; } }
+  /* A shift's Approve / Change / Reject: one row on a phone, not Reject left
+     alone on a second (each card was ~280 px tall). Three buttons across,
+     Approve a little wider; "Change times" says just "Change" there. */
+  @media (max-width:720px) {
+    .appr-act.appr-act3 { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:8px; }
+    .appr-act.appr-act3 .btn { min-height:44px; padding:9px 6px; letter-spacing:.6px; }
+    .appr-act3 .appr-long { display:none; }
+  }
   .crew-setting .crew-mail { flex:1 1 220px; }
   .wk-cards { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-top:14px; }
   .wk-card { border:1px solid var(--border); border-radius:8px; padding:12px 14px;

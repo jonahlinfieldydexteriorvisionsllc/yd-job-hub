@@ -1691,9 +1691,11 @@
           : '') +
         (mayDecide(e) && fixingId === e.id && fixingIn === 'appr' ? fixHtml(e)
           : mayDecide(e)
-          ? '<div class="appr-act">' +
+          // One row of three on a phone too (appr-act3 in styles.css): the
+          // middle one says just "Change" there, so all three fit.
+          ? '<div class="appr-act appr-act3">' +
               '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
-              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>' +
+              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')" aria-label="Change times">Change<span class="appr-long"> times</span></button>' +
               '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
             '</div>'
           : '<div class="appr-act muted">' + (decides() ? 'Your own shift — the owner approves it' : 'Waiting for the owner') + '</div>') +
