@@ -313,14 +313,16 @@
   //
   // Filed the way Receipts sorts one to Subcontractors by hand: done, every
   // line (and the tax) in one split to them. A receipt's own fields are only
-  // splits/status/updatedAt/updatedBy here -- what the rules let a sorter change.
+  // splits/status/statusChange/updatedAt/updatedBy here -- what the rules let
+  // a sorter change. Its status goes to Filed, said to be by Job Hub
+  // (stages.js), so All receipts does not name whoever's device it was.
   function fileBills() {
     if (!owner() || !fresh || !window.YDReceipts || !YDReceipts.loaded || !YDReceipts.loaded() || !window.YDDb) return;
     const all = receiptsAll(), filed = data.filed || {}, now = {};
     const at = new Date().toISOString(), by = ((window.YDAuth && YDAuth.user) || {}).uid || '';
     Object.keys(all).forEach((id, n) => {
       const r = all[id];
-      const s = r.status === 'new' && !(r.splits || []).length && !filed[id] && r.kind === 'subcontractor' ? subFor(r) : null;
+      const s = window.YDStages.receipt(r).id === 'tosort' && !(r.splits || []).length && !filed[id] && r.kind === 'subcontractor' ? subFor(r) : null;
       if (!s) return;
       const lines = r.lines || [];
       const lineCents = lines.reduce((t, l) => t + (l.cents || 0), 0);
@@ -329,10 +331,14 @@
         cents: lines.length ? lineCents : Math.max(0, (r.totalCents || 0) - (r.taxCents || 0)),
         taxCents: r.taxCents || 0, at: at, by: 'Job Hub' };
       const patch = { status: 'done', splits: [split], updatedAt: at, updatedBy: by };
-      Object.assign(r, patch);
+      const stamp = window.YDStages.stamp('done', { uid: '', name: 'Job Hub' });
+      Object.assign(r, patch, { statusChange: stamp });
       now[id] = true;
       Promise.resolve(window.YDDb.put('receipts', id, patch))
         .catch(e => console.warn('[subs] bill not yet filed:', (e && e.code) || e));
+      // Apart, as receipts.js does: a refused stamp never unfiles the bill.
+      Promise.resolve(window.YDDb.put('receipts', id, { statusChange: stamp }))
+        .catch(e => console.warn('[subs] who filed it not saved:', (e && e.code) || e));
     });
     if (Object.keys(now).length) { applyLocal({ filed: now }); save({ filed: now }, 'noting filed bills'); }
   }

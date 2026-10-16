@@ -47,6 +47,7 @@ from google.api_core.exceptions import AlreadyExists
 from firebase_admin import firestore
 
 import digest as dg
+import stages
 
 DEFAULT_HOURS = 16
 MIN_HOURS, MAX_HOURS = 8, 24
@@ -174,8 +175,9 @@ def storm_done_ms(storm, stops):
             last = t
     if stops and last and all(st.get("departedAt") or st.get("skipped") for st in stops):
         return last
-    if (storm or {}).get("status") in ("closed", "abandoned"):
-        return last or (_ms(storm.get("closedAt")) if storm.get("closedAt") else None)
+    # Its one status (stages.py): anything but open is over.
+    if stages.storm_status(storm) != "open":
+        return last or (_ms(storm.get("closedAt")) if (storm or {}).get("closedAt") else None)
     return None
 
 

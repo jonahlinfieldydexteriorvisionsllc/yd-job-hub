@@ -252,7 +252,7 @@
     if (!storm || pastSaltFor === storm.id || !window.YDDb || !window.YDDb.list) return;
     const forId = pastSaltFor = storm.id;
     pastSalt = {};
-    Object.values(known).filter(x => x.id !== forId && x.status === 'closed')
+    Object.values(known).filter(x => x.id !== forId && window.YDStages.storm(x).id === 'closed')
       .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')))
       .slice(0, 3)
       .forEach(p => {
@@ -1111,6 +1111,9 @@
       crewSize: crewSize,
       crewNames: crewNames,
       status: 'open',
+      // Its one status (stages.js): Open -> Closed or Abandoned, each move
+      // saying who and when.
+      statusChange: window.YDStages.stamp('open'),
       startedBy: (window.YDAuth && window.YDAuth.user && window.YDAuth.user.email) || '',
       startPoint: start,
       stopCount: route.length,
@@ -1134,7 +1137,9 @@
     if (!storm) return;
     if (!(await ydConfirm('The record stays, but it will not be billed.', { title: 'Abandon this storm?', ok: 'Abandon it', danger: true }))) return;
     if (!storm) return;
-    writeSoon(window.YDDb.put('storms', storm.id, { status: 'abandoned', closedAt: new Date().toISOString() }), 'abandon');
+    // closedAt as before (autoclock.py and the summaries read it), and who.
+    const stamp = window.YDStages.stamp('abandoned');
+    writeSoon(window.YDDb.put('storms', storm.id, { status: 'abandoned', closedAt: stamp.at, statusChange: stamp }), 'abandon');
   };
 
   window.closeStorm = async function () {
@@ -1242,7 +1247,7 @@
 
     writeSoon(window.YDDb.putMany([
       ['storms/' + storm.id + '/private', 'billing', billing],
-      ['storms', storm.id, { status: 'closed', closedAt: new Date().toISOString() }],
+      ['storms', storm.id, (stamp => ({ status: 'closed', closedAt: stamp.at, statusChange: stamp }))(window.YDStages.stamp('closed'))],
     ]), 'storm close');
     ydAlert(lines.length + ' billable visit' + (lines.length === 1 ? '' : 's') + '\n' +
       'Revenue: $' + (revenue / 100).toFixed(2) + '\n' +
@@ -1344,7 +1349,7 @@
       // Pick the most recently started open storm rather than whichever
       // happened to arrive last, and say so if more than one is open -- an
       // orphan should be visible, not quietly ignored.
-      const open = Object.values(known).filter(s => s.status === 'open')
+      const open = Object.values(known).filter(window.YDStages.stormOpen)
         .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')));
       if (open.length > 1) {
         console.warn('[storm] %d storms are open at once', open.length);
@@ -1400,7 +1405,7 @@
   // customer's bill out again (billing.js fixVisit).
   function lastClosed() {
     const cutoff = Date.now() - 14 * 864e5;
-    return Object.values(known).filter(s => s.status === 'closed' && s.closedAt && Date.parse(s.closedAt) > cutoff)
+    return Object.values(known).filter(s => window.YDStages.storm(s).id === 'closed' && s.closedAt && Date.parse(s.closedAt) > cutoff)
       .sort((a, b) => String(b.closedAt).localeCompare(String(a.closedAt)))[0] || null;
   }
   const stormDay = s => {
@@ -1452,10 +1457,14 @@
     const inches = num(x.inchesCleared, null), lbs = num(x.saltLbs, null);
     const r = latestRequest(s.id, x.id);
     const asked = !!askedHere[s.id + '/' + x.id];
-    const status = r && r.status === 'pending' || (!r && asked) ? '<span class="muted">change asked</span>'
-      : r && r.status === 'approved' ? '<span class="muted">changed ✔</span>'
-      : r && r.status === 'rejected' ? '<span class="muted">turned down' + (r.decidedReason ? ' — ' + esc(r.decidedReason) : '') + '</span>' : '';
-    const canAsk = !(r && r.status === 'pending') && !(!r && asked);
+    // The last change asked for on this visit, by its one status (stages.js):
+    // Waiting, Approved, Turned down (and why), with when. Sent from this
+    // phone and not back yet: Waiting too. Withdrawn says nothing here.
+    const S = window.YDStages;
+    const st = r ? S.request(r) : asked ? S.request({ status: 'pending' }) : null;
+    const status = st && st.id !== 'withdrawn'
+      ? S.chip(st, { detail: st.why || '', nameOf: uid => uid === ((window.YDAuth && YDAuth.user) || {}).uid ? 'you' : '' }) : '';
+    const canAsk = !(st && st.id === 'waiting');
     return '<div class="ls-row">' +
       '<div class="ls-main"><b>' + esc(a.name || x.accountId) + '</b>' + (num(x.pass, 1) > 1 ? ' <span class="muted">pass ' + num(x.pass, 1) + '</span>' : '') +
         '<div class="muted">' + (inches != null ? inches + '"' : 'no depth') + (saltWords(x) ? ' · ' + saltWords(x) : '') +

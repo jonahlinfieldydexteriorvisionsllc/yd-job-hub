@@ -63,10 +63,10 @@
   // (Jonah: "when something is selected to be set aside have an area to add
   // a note for why"). 'overhead' (before 9 Oct) and 'subcontractor' (before
   // 13 Oct) were really places -- read back as the shop and Subcontractors
-  // (LEGACY_PLACE) -- and 'personal' is a place too.
-  const WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
-    alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
-  const LEGACY_PLACE = { overhead: 'shop', subcontractor: 'sub' };
+  // (stages.js RECEIPT_LEGACY_PLACE, legacyPlace below) -- and 'personal' is
+  // a place too. The words live in stages.js, which reads a receipt's one
+  // status from them.
+  const WHY = window.YDStages.RECEIPT_WHY;
   // Offered under the note box; anything else can be typed.
   const WHY_IDEAS = ['Already entered', 'Not a purchase', 'Duplicate of another receipt', 'Returned / refunded'];
 
@@ -158,15 +158,44 @@
 
   // ------------------------------------------------------------ writing
 
+  // A receipt's ONE status (Jonah, 15 Oct 2026): To sort -> Filed (a job, a
+  // vehicle, the shop, the office, a subcontractor) -- or Set aside, with the
+  // reason. stages.js reads it (YDStages.receipt); the stored words stay
+  // 'new' / 'done' / 'skipped', which the server's queries and the rules ask
+  // for. A change of status now also says who made it and when
+  // (statusChange) -- only when it IS a change: a few more lines put on a job
+  // from a receipt still to sort leave it as it was.
+  const stageOf = r => window.YDStages.receipt(r);
+  const toSortNow = r => !!r && stageOf(r).id === 'tosort';
+  function moved(r, patch, who) {
+    if (patch.status && (r && r.status) !== patch.status) patch.statusChange = window.YDStages.stamp(patch.status, who);
+    return patch;
+  }
+  // Put by itself (a photo sent in for a job): said so, rather than as the
+  // person whose device happened to do it.
+  const BY_ITSELF = { uid: '', name: 'Job Hub' };
+
   // Not awaited: a write only settles when the server answers, and a truck
   // with no signal would sit frozen. Firestore holds it until then.
+  //
+  // Who moved its status goes in a write of its own, after the sorting: the
+  // rules that allow it may reach the server a minute after this code does
+  // (or be rolled back), and a refused stamp must never take the sorting
+  // down with it -- a receipt whose lines went onto a job but which stayed
+  // "to sort" would be added twice. Lost, the stamp is only a date missing.
   function write(rid, data) {
+    const stamp = data.statusChange;
+    delete data.statusChange;
     data.updatedAt = new Date().toISOString();
     data.updatedBy = (me() || {}).uid || '';
     Promise.resolve(window.YDDb.put('receipts', rid, data)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved — not allowed');
       else console.warn('[receipts] not yet on the server:', (e && e.code) || e);
     });
+    if (stamp) {
+      Promise.resolve(window.YDDb.put('receipts', rid, { statusChange: stamp }))
+        .catch(e => console.warn('[receipts] who moved it not saved:', (e && e.code) || e));
+    }
   }
 
   // Change one job's materials (and its Materials to Order list) by a
@@ -291,9 +320,10 @@
       at: new Date().toISOString(), by: (me() || {}).uid || '',
     }, auto ? { auto: true } : {}, target)]);
     const status = p.last ? 'done' : (r.status === 'skipped' ? 'skipped' : 'new');
-    receipts[rid] = Object.assign({}, r, { splits, status }, auto ? { auto } : {});
+    const patch = moved(r, Object.assign({ splits, status }, auto ? { auto } : {}), auto ? BY_ITSELF : null);
+    receipts[rid] = Object.assign({}, r, patch);
     delete ticked[rid];
-    write(rid, Object.assign({ splits, status }, auto ? { auto } : {}));
+    write(rid, Object.assign({}, patch));
     showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ' ' : '') + money(p.part + p.tax) + ' → ' + target.name +
       (auto ? ' (sent in for it)' : ''));
     redraw(true);
@@ -356,10 +386,11 @@
       at: new Date().toISOString(), by: (me() || {}).uid || '',
     }, auto ? { auto: true } : {})]);
     const status = last ? 'done' : (r.status === 'skipped' ? 'skipped' : 'new');
+    const patch = moved(r, Object.assign({ splits, status }, auto ? { auto } : {}), auto ? BY_ITSELF : null);
     // Shown at once rather than when the server echoes it back.
-    receipts[rid] = Object.assign({}, r, { splits, status }, auto ? { auto } : {});
+    receipts[rid] = Object.assign({}, r, patch);
     delete ticked[rid]; delete chosen[rid];
-    write(rid, Object.assign({ splits, status }, auto ? { auto } : {}));
+    write(rid, Object.assign({}, patch));
     showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ': ' : '') +
       add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
       splits[splits.length - 1].jobName + (auto ? ' — sent in for it' : '') +
@@ -383,7 +414,7 @@
   // step on the server (YDDb.transact), so only one of them adds it. A
   // transaction needs signal; with none, it waits for the next look.
   const autoBusy = {};         // receipt id -> true while this device is on it (or has done it)
-  const autoReady = r => !!(r && r.status === 'new' && !(r.splits || []).length && r.auto && r.auto.state === 'ready');
+  const autoReady = r => !!(r && toSortNow(r) && !(r.splits || []).length && r.auto && r.auto.state === 'ready');
   function autoSoon() {
     if (!sorts() || !loaded || !window.YDDb || !window.YDDb.transact) return;
     Object.keys(receipts).forEach(id => { if (autoReady(receipts[id]) && !autoBusy[id]) autoSort(id); });
@@ -431,7 +462,7 @@
   const STUCK_MS = 10 * 60 * 1000;
   function sentForHtml(r) {
     const f = r.sentFor, a = r.auto || {};
-    if (!f || r.status !== 'new') return '';
+    if (!f || !toSortNow(r)) return '';
     const where = f.to === 'job' ? (f.jobName ? '<b>' + esc(f.jobName) + '</b>' : 'a job')
       : '<b>' + esc(f.name || DEST_NAME[f.to] || '') + '</b>';
     const who = f.byName ? esc(f.byName) + ' sent it in for ' : 'Sent in for ';
@@ -446,7 +477,7 @@
     }
     return '';
   }
-  const needsYou = r => !!(r && r.status === 'new' && r.auto && (r.auto.state === 'needs' ||
+  const needsYou = r => !!(r && toSortNow(r) && r.auto && (r.auto.state === 'needs' ||
     (r.auto.state === 'adding' && Date.now() - new Date(r.auto.at || 0).getTime() > STUCK_MS)));
 
   // ------------------------------------------------- the price list follows
@@ -517,8 +548,9 @@
     }
     const splits = (r.splits || []).filter(x => x.id !== sid);
     const status = r.status === 'skipped' ? 'skipped' : 'new';
-    receipts[rid] = Object.assign({}, r, { splits, status });
-    write(rid, { splits, status });
+    const patch = moved(r, { splits, status });
+    receipts[rid] = Object.assign({}, r, patch);
+    write(rid, Object.assign({}, patch));
     redraw(true);
   };
 
@@ -540,7 +572,7 @@
   // month totals read it from here); so is a receipt set aside as overhead,
   // or as a subcontractor's bill, before those places existed.
   const BOOKS = ['vehicle', 'shop', 'office', 'sub'];
-  const legacyPlace = r => (r.status === 'skipped' && LEGACY_PLACE[r.skipWhy]) || '';
+  const legacyPlace = r => stageOf(r).legacy || '';
   function heldNames(r) {
     const legacy = legacyPlace(r);
     return (r.splits || []).filter(s => BOOKS.indexOf(destOf(s)) !== -1)
@@ -550,8 +582,8 @@
   }
   const heldHere = r => heldNames(r).length > 0;
   // Set aside: skipped, and not one of the old reasons that were really a
-  // place. It counts nowhere.
-  const isAside = r => r.status === 'skipped' && !legacyPlace(r);
+  // place (stages.js). It counts nowhere.
+  const isAside = r => stageOf(r).id === 'aside';
   // What "Delete all set aside" may take: set aside, and holding nothing the
   // books need (a subcontractor's bill is never set aside now; an old one is
   // a place, above).
@@ -595,9 +627,10 @@
         const splits = (r.splits || []).concat([{ id: 'sp' + Date.now().toString(36) + uid(), to: 'personal', name: 'Personal',
           lines: p.idxs, cents: p.part, taxCents: p.tax, at: new Date().toISOString(), by: (me() || {}).uid || '' }]);
         const status = p.last ? 'done' : r.status;
-        receipts[rid] = Object.assign({}, r, { splits, status });
+        const patch = moved(r, { splits, status });
+        receipts[rid] = Object.assign({}, r, patch);
         delete ticked[rid];
-        write(rid, { splits, status });
+        write(rid, Object.assign({}, patch));
         showToast('Marked personal');
         redraw(true);
         return;
@@ -607,8 +640,9 @@
         drop([rid]); showToast('Personal — deleted from the hub'); return;
       }
     }
-    receipts[rid] = Object.assign({}, receipts[rid], { status: 'skipped', skipWhy: why });
-    write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
+    const patch = moved(receipts[rid], { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
+    receipts[rid] = Object.assign({}, receipts[rid], patch);
+    write(rid, Object.assign({}, patch));
     showToast('Set aside — All receipts → Set aside has it if that was wrong');
     redraw(true);
   };
@@ -630,9 +664,10 @@
     }
     if (!receipts[rid]) return;
     r = receipts[rid];
-    receipts[rid] = Object.assign({}, r, { status: 'skipped', skipWhy: why });
+    const patch = moved(r, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
+    receipts[rid] = Object.assign({}, r, patch);
     delete asideWhy[rid]; delete dest[rid]; delete ticked[rid]; delete splitting[rid];
-    write(rid, { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
+    write(rid, Object.assign({}, patch));
     showToast('Set aside — All receipts → Set aside has it');
     redraw(true);
   }
@@ -660,8 +695,9 @@
     if (!r) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
     const status = freeLines(r).length ? 'new' : 'done';
-    receipts[rid] = Object.assign({}, r, { status, skipWhy: '' });
-    write(rid, { status, skipWhy: '', skippedBy: '' });
+    const patch = moved(r, { status, skipWhy: '', skippedBy: '' });
+    receipts[rid] = Object.assign({}, r, patch);
+    write(rid, Object.assign({}, patch));
     redraw(true);
   };
 
@@ -772,8 +808,10 @@
       const n = (s.lines || []).length, amt = money((s.cents || 0) + (s.taxCents || 0));
       const title = (n ? n + ' line' + (n === 1 ? '' : 's') + (s.taxCents ? ' + tax' : '') + ', ' : '') + amt +
         (opens ? ' — tap for Undo' : '');
-      // Put there by itself, from a photo sent in for it (autoSort).
-      const inner = '✓ ' + splitWhere(s) + (s.auto ? ' <span class="rc-chip-auto">by itself</span>' : '') + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
+      // Put there by itself, from a photo sent in for it (autoSort). In All
+      // receipts the row's status chip carries the tick (✓ Filed); a card
+      // still to sort ticks each part already filed.
+      const inner = (where === 'c' ? '✓ ' : '') + splitWhere(s) + (s.auto ? ' <span class="rc-chip-auto">by itself</span>' : '') + (list.length > 1 ? ' <span class="rc-chip-amt">' + amt + '</span>' : '');
       return opens
         ? '<button type="button" class="rc-chip" title="' + esc(title) + '" onclick="rcMenuOpen(\'' + where + rid + '\')">' + inner + '</button>'
         : '<span class="rc-chip" title="' + esc(title) + '">' + inner + '</span>';
@@ -1010,7 +1048,7 @@
     const start = Date.parse((state && state.since) || '');
     if (isNaN(start)) return [];
     const floor = Math.max(start, Date.now() - FWD_DAYS * 864e5);
-    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && r.status !== 'skipped' &&
+    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && !isAside(r) &&
       !(r.qbForward && r.qbForward.ok) && (r.mail || []).some(m => m && m.id && (m.at || 0) >= floor));
   }
   window.rcFwdEmails = function (on) {
@@ -1057,17 +1095,20 @@
 
   function rowHtml(r) {
     const rid = safeId(r.id);
-    const aside = isAside(r), legacy = legacyPlace(r);
+    const st = stageOf(r);
+    const aside = st.id === 'aside', legacy = st.legacy || '';
     const legacyName = legacy === 'sub' ? ((subMatch(r) || {}).name || 'Subcontractor') : WHY[r.skipWhy];
-    const where = aside ? '<span class="rc-tag rc-aside-tag">Set aside</span>'
-      : legacy ? '<span class="rc-tag">' + (DEST.find(d => d[0] === legacy) || ['', ''])[1].split(' ')[0] + ' ' +
-          esc(legacyName || DEST_NAME[legacy]) + '</span>'
-      : r.status === 'new' ? '<span class="rc-tag rc-owed">To sort</span>' : '';
+    // Its one status, first: To sort (part filed, when some lines are),
+    // Filed -- with when and by whom -- or Set aside. An old receipt set
+    // aside "as overhead" before the shop was a place says the shop here.
+    const where = window.YDStages.chip(st, {
+      detail: legacy ? (DEST.find(d => d[0] === legacy) || ['', ''])[1].split(' ')[0] + ' ' + (legacyName || DEST_NAME[legacy])
+        : st.id === 'tosort' && st.part ? 'part filed' : '' });
     const why = aside ? asideText(r) : '';
     // Where it went sits in the row as a chip or two, not a bar under it.
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
         '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
-        esc(r.summary || '') + '</span>' + chipsHtml('h', rid, r) + where + qbHtml(r, rid, true) +
+        esc(r.summary || '') + '</span>' + where + chipsHtml('h', rid, r) + qbHtml(r, rid, true) +
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
@@ -1126,7 +1167,7 @@
     const all = allReceipts();
     // The ones waiting on a person first: a photo that could not go on its
     // job by itself says why at the top of the list.
-    const open = all.filter(r => r.status === 'new').sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
+    const open = all.filter(toSortNow).sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
     const jobs = jobsList();
     badges(open.length);
 
@@ -1197,7 +1238,7 @@
         : (olderState === 'failed' ? 'Receipts from before ' + esc(before) + ' could not be read just now. '
           : 'Receipts from before ' + esc(before) + ' are not loaded. ') +
           '<button class="link-btn" onclick="rcOlder()">' + (olderState === 'failed' ? 'Try again' : 'Show them') + '</button>') + '</p>';
-    const every = allReceipts().filter(r => r.status !== 'new');
+    const every = allReceipts().filter(r => !toSortNow(r));
     const shown = every.filter(r => inView(r) && matches(r, words)).sort(byNewest);
     const aside = every.filter(deletableAside);
     // Counted as sorted: what was put somewhere, not what was set aside.
@@ -1245,7 +1286,7 @@
     if (!p || !p.classList.contains('active')) {
       // Off screen, only the counts on the tab and on More need to be right.
       deferred = true;
-      badges(Object.values(receipts).filter(r => r.status === 'new').length);
+      badges(Object.values(receipts).filter(toSortNow).length);
       return;
     }
     const sec = el('rcSection');

@@ -1683,7 +1683,8 @@ def prefs_all(people):
 
 def _receipts_to_sort():
     """How many purchases read out of email are waiting to be put on a job --
-    counted by Firestore, not by reading every one."""
+    counted by Firestore, not by reading every one. Stored 'new' is To sort
+    (stages.receipt_status); the server writes it on every receipt it makes."""
     q = _db().collection("receipts").where("status", "==", "new")
     try:
         return int(q.count().get()[0][0].value)

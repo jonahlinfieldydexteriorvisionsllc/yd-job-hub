@@ -11,6 +11,9 @@
   const DUE_DAYS = 30;
 
   let storms = {};          // closed storms, id -> record
+  // Abandoned ones (stages.js: Open -> Closed or Abandoned), never billed:
+  // listed under the closed ones so they can be seen -- and deleted.
+  let abandoned = {};
   let billingCache = {};    // id -> billing record (owner only)
   let unsub = null;
 
@@ -225,9 +228,13 @@
     invoicing().then(() => { if (window.renderSeason) renderSeason(); });
     unsub = window.YDDb.watch('storms', changes => {
       changes.forEach(c => {
-        if (c.type === 'removed') { delete storms[c.id]; delete billingCache[c.id]; return; }
-        if (c.data.status === 'closed') storms[c.id] = Object.assign({ id: c.id }, c.data);
+        if (c.type === 'removed') { delete storms[c.id]; delete abandoned[c.id]; delete billingCache[c.id]; return; }
+        // Its one status: only a closed storm is billed.
+        const st = window.YDStages.storm(c.data).id;
+        if (st === 'closed') storms[c.id] = Object.assign({ id: c.id }, c.data);
         else delete storms[c.id];
+        if (st === 'abandoned') abandoned[c.id] = Object.assign({ id: c.id }, c.data);
+        else delete abandoned[c.id];
       });
       render();
     });
@@ -239,9 +246,10 @@
     const wrap = document.getElementById('stormHistoryWrap');
     if (!wrap) return;
     const ids = Object.keys(storms).sort().reverse();
+    const gone = Object.keys(abandoned).sort().reverse();
     const section = wrap.closest('.section');
-    if (section) section.hidden = !ids.length;
-    if (!ids.length) { wrap.innerHTML = ''; return; }
+    if (section) section.hidden = !ids.length && !gone.length;
+    if (!ids.length) { wrap.innerHTML = abandonedHtml(gone); return; }
 
     // All the bills at once, not one after another: each read waits on the
     // network, and every storm ever closed is listed (the season cards and
@@ -271,7 +279,8 @@
         const s = storms[id], b = billingCache[id];
         return '<div class="storm-row">' +
           '<div class="storm-row-main">' +
-            '<div class="storm-row-name">' + esc(stormTitle(s, id)) + '</div>' +
+            // Its one status, with when it was closed and by whom.
+            '<div class="storm-row-name">' + esc(stormTitle(s, id)) + window.YDStages.chip(window.YDStages.storm(s)) + '</div>' +
             '<div class="storm-row-sub">' +
               (b ? b.lines.length + (b.lines.length === 1 ? ' visit · ' : ' visits · ') + b.crewHours + ' crew hrs · ' +
                    money(b.totalCents) + (b.saltCents ? ' (salt ' + money(b.saltCents) + ')' : '')
@@ -291,9 +300,27 @@
               ? '<button class="btn btn-sm btn-danger" onclick="deleteStorm(\'' + id + '\')" title="Delete this storm">🗑 Delete</button>' : '') +
           '</div>' +
         '</div>';
-      }).join('');
+      }).join('') + abandonedHtml(gone);
 
     if (window.renderSeason) renderSeason();
+  }
+
+  // The abandoned storms, folded under the closed ones: when, who abandoned
+  // it, and -- for the owner -- Delete. Nothing in them is billed.
+  function abandonedHtml(gone) {
+    if (!gone.length) return '';
+    return '<details class="storm-gone"><summary>' + gone.length + ' abandoned storm' + (gone.length === 1 ? '' : 's') +
+        ' <span class="muted">— not billed</span></summary>' +
+      gone.map(id => {
+        const s = abandoned[id];
+        return '<div class="storm-row"><div class="storm-row-main"><div class="storm-row-name">' + esc(stormTitle(s, id)) +
+            window.YDStages.chip(window.YDStages.storm(s)) + '</div>' +
+            '<div class="storm-row-sub">' + esc(String(s.stopCount || 0)) + ' stops on its route</div></div>' +
+          '<div class="storm-row-actions">' +
+            (window.YDAuth && YDAuth.isOwner
+              ? '<button class="btn btn-sm btn-danger" onclick="deleteStorm(\'' + String(id).replace(/[^A-Za-z0-9_-]/g, '') + '\')" title="Delete this storm">🗑 Delete</button>' : '') +
+          '</div></div>';
+      }).join('') + '</details>';
   }
 
   function card(label, value, cls) {
@@ -308,14 +335,14 @@
   // stay there; the question says so when numbers were handed out.
   window.deleteStorm = async function (id) {
     if (!(window.YDAuth && YDAuth.isOwner) || !window.YDDb) return;
-    const s = storms[id], b = billingCache[id];
+    const s = storms[id] || abandoned[id], b = billingCache[id];
     if (!s) return;
     const numbered = b && b.invoiceNos ? Object.keys(b.invoiceNos).length : 0;
     if (!(await ydConfirm('Its stops and its billing are deleted with it' +
       (b ? ' (' + b.lines.length + ' visits, ' + money(b.totalCents) + ')' : '') + '. This cannot be undone.' +
       (numbered ? '\n\n' + numbered + ' invoice number(s) were handed out for it — anything already sent to QuickBooks stays there.' : ''),
       { title: 'Delete the storm of ' + stormTitle(s, id) + '?', ok: 'Delete the storm', danger: true }))) return;
-    if (!storms[id]) return;
+    if (!storms[id] && !abandoned[id]) return;
     let stops = {}, priv = {};
     try {
       [stops, priv] = await Promise.all([window.YDDb.list('storms/' + id + '/stops'), window.YDDb.list('storms/' + id + '/private')]);
@@ -323,7 +350,7 @@
     const gone = Object.keys(stops).map(k => ['storms/' + id + '/stops', k])
       .concat(Object.keys(priv).map(k => ['storms/' + id + '/private', k]))
       .concat([['storms', id]]);
-    delete storms[id]; delete billingCache[id];
+    delete storms[id]; delete abandoned[id]; delete billingCache[id];
     render();
     Promise.resolve(window.YDDb.removeMany(gone))
       .then(() => showToast('Storm deleted'))

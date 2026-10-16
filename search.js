@@ -244,7 +244,7 @@
   // Set aside when that is the only place it shows.
   function openReceipt(r) {
     switchTab('receipts');
-    if (r.status === 'new') { later(() => reveal(el('rc_' + String(r.id).replace(/[^A-Za-z0-9_-]/g, '')))); return; }
+    if (window.YDStages.receipt(r).id === 'tosort') { later(() => reveal(el('rc_' + String(r.id).replace(/[^A-Za-z0-9_-]/g, '')))); return; }
     const box = el('rcSearch');
     if (box) box.value = joinDot([r.vendor, r.orderNo || r.date]).replace(/ · /g, ' ');
     if (fn('rcView')) {
@@ -446,7 +446,8 @@
     const KIND = { machine: 'Machine', vehicle: 'Vehicle' };
     return Object.keys(gear).map(id => {
       const g = gear[id] || {};
-      const open = (g.issues || []).filter(i => i && !i.doneAt);
+      // Not fixed yet, by the problem's one status (stages.js).
+      const open = (g.issues || []).filter(i => i && window.YDStages.issueId(i) !== 'fixed');
       return entry('equipment', {
         title: g.name || 'Machine', tag: KIND[g.kind] || String(g.kind || 'Machine'),
         sub: joinDot([[g.year, g.make, g.model].filter(Boolean).join(' '), g.serial ? 'Serial ' + g.serial : '',
@@ -530,9 +531,12 @@
     const all = window.YDReceipts.all() || {};
     return Object.keys(all).map(id => {
       const r = Object.assign({ id: id }, all[id] || {});
-      const where = r.status === 'new' ? 'To sort'
+      // Its one status (stages.js): To sort, Filed to where, or Set aside.
+      const st = window.YDStages.receipt(r);
+      const where = st.id === 'tosort' ? 'To sort'
+        : st.id === 'aside' ? 'Set aside'
         : (r.splits || []).map(s => s && (s.jobName || s.name)).filter(Boolean).slice(0, 2).join(', ') ||
-          (r.status === 'skipped' ? 'Set aside' : '');
+          (st.legacy === 'shop' ? 'Shop overhead' : st.legacy === 'sub' ? 'Subcontractor' : 'Filed');
       return entry('receipts', {
         title: r.vendor || 'Receipt', tag: 'Receipt',
         sub: joinDot([dayWords(r.date), r.orderNo ? '#' + r.orderNo : '', dollars(r.totalCents), where]),

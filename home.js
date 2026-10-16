@@ -286,7 +286,7 @@
   // tab. Not on the storm's clock yet: one tap for that too.
   function stormHtml() {
     const s = window.YDStorm && YDStorm.current();
-    if (!s || s.status !== 'open') return '';
+    if (!window.YDStages.stormOpen(s)) return '';
     const stops = Object.values((YDStorm.stops && YDStorm.stops()) || {})
       .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
     const done = stops.filter(x => x.departedAt || x.skipped).length;
@@ -599,7 +599,7 @@
     const rcTab = el('tabReceipts');
     if (can('jobs', 'change') && window.YDReceipts && rcTab && !rcTab.hidden) {
       any = true;
-      const open = Object.values(YDReceipts.all() || {}).filter(r => r && r.status === 'new')
+      const open = Object.values(YDReceipts.all() || {}).filter(r => r && window.YDStages.receipt(r).id === 'tosort')
         .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
       if (open.length) {
         const top = open.slice(0, 3).map(r => esc(r.vendor || 'Receipt') +
@@ -794,7 +794,7 @@
   // the same shift the Clock tab would start).
   window.homeStormIn = function () {
     const s = window.YDStorm && YDStorm.current();
-    if (!s || s.status !== 'open' || typeof window.clockInTo !== 'function') return;
+    if (!window.YDStages.stormOpen(s) || typeof window.clockInTo !== 'function') return;
     window.clockInTo('storm', s.id);
     if (showing()) render();
   };
