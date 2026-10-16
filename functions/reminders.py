@@ -470,11 +470,20 @@ CARRY_DAYS = 14
 TICK_FROM = datetime.date(2026, 10, 14)
 
 
-def _is_task(kind, timed, card=False, cal_kind=None, typed=False):
-    """remind.js isTask. A job's day on the Work schedule is not a task
-    (Jonah, 15 Oct 2026: "schedules job days on calendar dont need a check
-    mark for done") unless it was picked as a kind of its own (`typed`)."""
-    if cal_kind == "schedule" and not typed:
+def _is_job_day(cal_kind=None, typed=False, job_id=None):
+    """remind.js isJobDay: an entry tied to a job on the Crew schedule or My
+    work that was not given a kind of its own (and anything untyped on the old
+    Work schedule) -- who is working where, never a task to tick."""
+    if typed:
+        return False
+    return cal_kind == "schedule" or (bool(job_id) and cal_kind in ("crew", "work"))
+
+
+def _is_task(kind, timed, card=False, cal_kind=None, typed=False, job_id=None):
+    """remind.js isTask. A job's day is not a task (Jonah, 15 Oct 2026:
+    "schedules job days on calendar dont need a check mark for done") unless
+    it was picked as a kind of its own (`typed`)."""
+    if _is_job_day(cal_kind, typed, job_id):
         return False
     if kind in TYPES:
         return kind not in APPOINTMENTS and (kind != "personal" or card)
@@ -563,7 +572,8 @@ def open_tasks(db, people, first, last, now):
                     if done.get(day.isoformat()):
                         continue
                     kind = _type_of(one, cal_kind=cal.get("kind"))
-                    if not _is_task(kind, timed, cal_kind=cal.get("kind"), typed=one.get("type") in TYPES) or to_come(day, timed and one.get("time")):
+                    if not _is_task(kind, timed, cal_kind=cal.get("kind"), typed=one.get("type") in TYPES,
+                                    job_id=one.get("jobId") or ev.get("jobId")) or to_come(day, timed and one.get("time")):
                         continue
                     on = one.get("crew") or []
                     give(sees, {"day": day, "kind": kind, "title": str(one.get("title") or one.get("jobName") or "An entry"),

@@ -264,14 +264,14 @@
             title: (ic ? ic + ' ' : '') + name, name: name,
             color: YDRemind.color(type), ink: YDRemind.ink(type), type: type,
             // Has to be ticked off (remind.js isTask), or it is "not done".
-            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type) }), after: key !== x.day,
+            task: YDRemind.isTask(type, isTimed(ev), { calKind: cal.kind, typed: !!YDRemind.typeById(ev.type), jobId: ev.jobId || base.jobId || '' }), after: key !== x.day,
             // Ticked off on the "any time" list, date by date (a repeat too).
             done: !!mark, doneAt: (mark && mark.at) || '', doneKey: key,
             time: ev.allDay ? '' : ev.time, endTime: ev.allDay ? '' : ev.endTime,
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
             // A job's day on the Work schedule: no tick box, never "not done".
-            jobDay: cal.kind === 'schedule' && !YDRemind.typeById(ev.type),
+            jobDay: YDRemind.isJobDay({ calKind: cal.kind, typed: !!YDRemind.typeById(ev.type), jobId: ev.jobId || base.jobId || '' }),
           });
         });
       });
@@ -606,8 +606,8 @@
     }
     if (o.auto) return false;                      // a machine is done by logging its service
     const cal = cals[o.calId], u = me();
-    // A job's day on the Work schedule is not ticked off (remind.js isTask).
-    if (cal && cal.kind === 'schedule' && !o.task) return false;
+    // A job's day is not ticked off (remind.js isJobDay / isTask).
+    if (cal && o.jobDay && !o.task) return false;
     if (editsCal(cal)) return true;
     if (!(cal && u && (cal.visibleTo || []).indexOf(u.uid) !== -1)) return false;
     // The rules look at everyone on the entry, on any of its dates

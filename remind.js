@@ -123,9 +123,18 @@
   // says who is working where, and the job is finished on the job itself.
   // Something on the Work schedule picked as a pickup, a to-do and so on
   // (`where.typed`: a kind of its own, not the calendar's) is still a task.
+  // Since the three calendars (15 Oct 2026) a job's day is an entry tied to
+  // a job (`where.jobId`) on the Crew schedule or My work that was not given
+  // a kind of its own -- "who is working where" -- while one tied to no job
+  // ("Pick up pavers") is a task to tick. (`schedule` stays for old copies.)
+  function isJobDay(where) {
+    where = where || {};
+    if (where.typed) return false;
+    return where.calKind === 'schedule' || (!!where.jobId && (where.calKind === 'crew' || where.calKind === 'work'));
+  }
   function isTask(type, timed, where) {
     where = where || {};
-    if (where.calKind === 'schedule' && !where.typed) return false;
+    if (isJobDay(where)) return false;
     const t = typeById(type);
     if (t) return !t.appointment && (t.id !== 'personal' || !!where.card);
     return !!where.card || where.calKind === 'followups' || !timed;
@@ -294,6 +303,7 @@
 
   window.YDRemind = {
     TYPES: TYPES,
+    isJobDay: isJobDay,
     typeById: typeById,
     typeOf: typeOf,
     isTask: isTask,
