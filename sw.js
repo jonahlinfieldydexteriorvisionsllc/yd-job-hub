@@ -19,6 +19,7 @@ const SHELL = [
   './styles.css',
   './app.js',
   './changelog.js',
+  './customers.js',
   './addr.js',
   './config.js',
   './firebase-init.js',
