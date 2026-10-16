@@ -336,8 +336,10 @@ def _quickbooks(request, path, headers):
             jobs = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
             with qb._holding_tokens():
                 news = qb.sync_invoices(jobs)
+                # And jobs tied to a QuickBooks estimate or invoice filled from it now.
+                filled = qb.fill_imported(jobs)
             _tell_owner(news)
-            result = {"ok": True}
+            result = {"ok": True, "filled": filled}
         else:
             return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     except PermissionError as e:

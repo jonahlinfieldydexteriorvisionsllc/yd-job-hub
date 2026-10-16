@@ -1367,7 +1367,12 @@ function fillFromQb(id, data) {
       const linked = window.YDEstimate.linkFromQb(e);
       if (!linked) return;
       const patch = { estimate: linked };
-      if (!(data.orderItems || []).length && !isBidStatus(data.jobStatus)) {
+      // An order list of bare names -- no amount, no supply, nothing ticked
+      // (one typed in before the estimate came in, Oct 2026) -- holds
+      // nothing the estimate doesn't: it is made again from the estimate.
+      const bareOrder = (data.orderItems || []).every(o => o && !o.ordered && !o.supplyId && !o.fromEstimate &&
+        !String(o.quantity || '').trim() && !(typeof o.qty === 'number'));
+      if (bareOrder && !isBidStatus(data.jobStatus)) {
         const lines = window.YDEstimate.orderLines(linked, data.city || '');
         if (lines.length) patch.orderItems = orderFromEstimate([], lines);
       }
@@ -1390,6 +1395,8 @@ function fillWaitingFromQb() {
   });
 }
 document.addEventListener('yd-supplies', fillWaitingFromQb);
+// A Supplies item picked for some words (supplymatch.js): the order list takes it.
+document.addEventListener('yd-supply-aliases', () => { if (document.getElementById('orderListWrap') && orderItems.length) renderOrderList(); });
 document.addEventListener('yd-pricing', fillWaitingFromQb);
 
 // ── What it costs (owner, and admins with Supplies) ──
@@ -1416,7 +1423,30 @@ function orderSupply(it, cat) {
     cat._byKey = { n: Object.keys(cat.items).length, map: m };
   }
   for (const k of want) if (cat._byKey.map[k]) return cat._byKey.map[k];
+  // Not the same name: an item he picked for these words before, or the one
+  // item with all of them (supplymatch.js) -- never a guess between several.
+  if (window.YDMatch) {
+    const skip = (window.YDPricing && YDPricing.NOT_FOR_ESTIMATES) || [];
+    const got = YDMatch.match({ name: full, unit: '' }, cat, skip, { anyUnit: true });
+    if (got.sure) return got.sure.id;
+  }
   return null;
+}
+// The items an unjoined order line most likely is, as buttons.
+function orderOptions(it, cat) {
+  if (!window.YDMatch) return [];
+  const skip = (window.YDPricing && YDPricing.NOT_FOR_ESTIMATES) || [];
+  return YDMatch.match({ name: String(it.name || ''), unit: '' }, cat, skip, { anyUnit: true }).options;
+}
+// How many, typed on the line: "4" or "4 yards".
+function setOrderQty(id, v) {
+  const it = orderItems.find(m => m.id === id);
+  if (!it) return;
+  it.quantity = String(v || '').trim();
+  const n = parseFloat(String(v || '').replace(/,/g, ''));
+  it.qty = isFinite(n) ? n : null;
+  markDirty();
+  renderOrderList();
 }
 function orderQtyOf(it) {
   if (typeof it.qty === 'number' && isFinite(it.qty)) return it.qty;
@@ -1442,7 +1472,12 @@ function orderCost(it, cat) {
 function linkOrderItem(id, sid) {
   const it = orderItems.find(m => m.id === id);
   linkingOrder = null;
-  if (it && sid) { it.supplyId = sid; markDirty(); }
+  if (it && sid) {
+    it.supplyId = sid;
+    // Kept for these words, on every job from now on (supplymatch.js).
+    if (window.YDMatch) YDMatch.remember(it.name, sid);
+    markDirty();
+  }
   renderOrderList();
 }
 // One supplier's part of the order as text, to paste into an email or a text.
@@ -1508,13 +1543,26 @@ function renderOrderList() {
   const row = it => {
     const c = prices ? orderCost(it, cat) : null;
     if (c && !it.ordered) { if (c.cents !== null) sum += c.cents; else unpriced++; }
+    // Joined but with no quantity yet: its price, and a box for how many --
+    // it said "no price in Supplies" for an item priced at $21.60 a ton
+    // (15 Oct 2026).
+    const askQty = c && c.sid && c.cents === null && !c.unitOff && typeof c.each === 'number' && !it.ordered;
+    const opts = c && !c.sid && !it.ordered && linkingOrder !== it.id ? orderOptions(it, cat) : [];
     const costLine = !c ? '' : c.cents !== null
       ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
         (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
       : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity</span>'
+      : askQty ? '<span class="cr-cost">' + esc(cat.items[c.sid].name) + ' · ' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') +
+          ' — how many? <input class="cr-qty-in" inputmode="decimal" placeholder="' + esc(c.per || 'each') + '" ' +
+          'onchange="setOrderQty(\'' + it.id + '\', this.value)"></span>'
       : c.sid ? '<span class="cr-cost muted">no price in Supplies</span>'
       : linkingOrder === it.id ? ''
-      : '<span class="cr-cost"><button class="link-btn" onclick="linkingOrder=\'' + it.id + '\'; renderOrderList()">no price — link to Supplies</button></span>';
+      : opts.length ? '<span class="cr-cost"><span class="muted">Which Supplies item is it?</span> ' + opts.map(sid =>
+          '<button class="btn btn-sm cr-opt" onclick="linkOrderItem(\'' + it.id + '\', \'' + esc(sid) + '\')">' + esc(cat.items[sid].name) +
+          (cat.prices[sid] && typeof cat.prices[sid].cents === 'number' ? ' · ' + fmtMoney(cat.prices[sid].cents / 100) +
+            (cat.prices[sid].per ? '/' + esc(cat.prices[sid].per) : '') : '') + '</button>').join(' ') +
+          ' <button class="link-btn" onclick="linkingOrder=\'' + it.id + '\'; renderOrderList()">Something else…</button></span>'
+      : '<span class="cr-cost"><span class="muted">Not in Supplies.</span> <button class="link-btn" onclick="linkingOrder=\'' + it.id + '\'; renderOrderList()">Pick it from Supplies</button></span>';
     const picker = linkingOrder === it.id
       ? '<div class="cr-link"><select class="searchable" onchange="linkOrderItem(\'' + it.id + '\', this.value)"><option value="">Which supply is it?</option>' +
           Object.values(cat.items).sort((a, b) => String(a.name).localeCompare(String(b.name)))

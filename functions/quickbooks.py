@@ -1699,6 +1699,9 @@ def _end_names():
     return {" ".join(n.lower().split()) for n in names if n.strip()} | set(END_ALWAYS)
 
 
+LATE_FEE = re.compile(r"\blate\s*fee", re.I)
+
+
 def _hub_estimate(e, end_names, stamp):
     """A QuickBooks estimate as the job's estimate (estimate.js v2), and the
     words that belong in the job's notes rather than on a line."""
@@ -1712,6 +1715,9 @@ def _hub_estimate(e, end_names, stamp):
             item = str((d.get("ItemRef") or {}).get("name") or "").strip()
             short = item.split(":")[-1].strip()
             if " ".join(short.lower().split()) in end_names or " ".join(item.lower().split()) in end_names:
+                continue
+            # QuickBooks' automatic late fees are charges on the bill, not work.
+            if LATE_FEE.search(item):
                 continue
             if MATERIAL_ITEM.search(short):
                 materials_cents += _cents(ln.get("Amount"))
@@ -2464,6 +2470,47 @@ def copy_invoices(jobs):
 FILL_MAX = 25               # jobs filled in one sweep
 
 
+def _fill_from_invoices(db, want_inv, docs, end_names):
+    """fill_imported's part for jobs tied to an invoice (see there): the
+    estimate built from the invoice's lines when the job's own estimate is
+    empty -- work he built in Job Hub is never replaced -- and the job marked
+    looked at either way (qbFilled.invoiceId), so it is read once."""
+    invoices = _by_ids("Invoice", set(want_inv.values()))
+    done = 0
+    for jid, iid in want_inv.items():
+        j, inv = docs.get(jid), invoices.get(iid)
+        if j is None or inv is None:
+            continue                    # gone, or QuickBooks did not answer: next hour
+        stamp = _stamp()
+        patch = {"qbFilled": dict(j.get("qbFilled") or {}, invoiceId=iid, at=stamp), "lastModified": stamp}
+        have = j.get("estimate") or {}
+        if not (have.get("work") or have.get("materials")):
+            est, words = _hub_estimate(inv, end_names, stamp)
+            for k in ("notes", "chat", "questions", "flags", "sent", "site", "payments", "customerType"):
+                if have.get(k):
+                    est[k] = have[k]
+            # Where it came from: the invoice, not an estimate.
+            est["fromQb"] = {"invoiceId": iid, "docNumber": str(inv.get("DocNumber") or ""), "kind": "invoice",
+                             "materialsCents": est["fromQb"]["materialsCents"], "taxCents": est["fromQb"]["taxCents"],
+                             "totalCents": _cents(inv.get("TotalAmt")), "at": stamp}
+            patch["estimate"] = est
+            # Words in the invoice that are no line of work or material go
+            # under the notes he already has (never over them).
+            if words:
+                head = "From QuickBooks invoice #%s:" % (inv.get("DocNumber") or iid)
+                old = str(j.get("notes") or "").strip()
+                if head not in old:
+                    patch["notes"] = ((old + "\n\n") if old else "") + "\n".join([head] + words)
+                    patch["notes"] = patch["notes"][:NOTES_MAX]
+            if not str(j.get("crewWhat") or "").strip():
+                board = db.collection("jobBoard").document(jid)
+                if board.get().exists:
+                    board.set({"what": _what(est), "updatedAt": stamp}, merge=True)
+        db.collection("jobs").document(jid).set(patch, merge=True)
+        done += 1
+    return done
+
+
 def fill_imported(jobs):
     """Jobs joined to an estimate made in QuickBooks before the import read
     estimates in full -- brought in with their lines only as notes, or typed
@@ -2475,22 +2522,31 @@ def fill_imported(jobs):
     env = _env("QB_ENV", "sandbox")
     if env != "production":
         return 0
-    want = {}
+    want, want_inv = {}, {}
     for jid, j in jobs.items():
         q = j.get("qbEstimate") or {}
         if q.get("linked") and q.get("id") and q.get("env") == env and not j.get("removeWhy") and \
                 str((j.get("qbFilled") or {}).get("estimateId") or "") != str(q["id"]):
             want[jid] = str(q["id"])
-            if len(want) >= FILL_MAX:
-                break
-    if not want:
+        # A job tied to its QuickBooks INVOICE but no estimate -- typed in by
+        # hand, its two estimates made into one invoice there -- is filled
+        # from the invoice: every
+        # line of work with its description, and the materials (Jonah, 15 Oct
+        # 2026: "nothing from the descriptions of his services is in there").
+        r = j.get("qbInvoiceRef") or {}
+        if not q.get("linked") and r.get("id") and r.get("env") == env and not j.get("removeWhy") and \
+                str((j.get("qbFilled") or {}).get("invoiceId") or "") != str(r["id"]):
+            want_inv[jid] = str(r["id"])
+        if len(want) + len(want_inv) >= FILL_MAX:
+            break
+    if not want and not want_inv:
         return 0
     db = _db()
-    refs = [db.collection("jobs").document(jid) for jid in want]
+    refs = [db.collection("jobs").document(jid) for jid in list(want) + list(want_inv)]
     docs = {s.id: (s.to_dict() or {}) for s in db.get_all(refs) if s.exists}
-    estimates = _by_ids("Estimate", set(want.values()))
+    estimates = _by_ids("Estimate", set(want.values())) if want else {}
     end_names = _end_names()
-    done = 0
+    done = _fill_from_invoices(db, want_inv, docs, end_names) if want_inv else 0
     for jid, eid in want.items():
         j = docs.get(jid)
         e = estimates.get(eid)

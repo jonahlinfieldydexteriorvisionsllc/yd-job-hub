@@ -495,7 +495,8 @@
   function fromQbHtml(r, ro) {
     const q = est.fromQb;
     if (!q) return '';
-    const said = (q.docNumber ? 'QuickBooks estimate #' + esc(q.docNumber) : 'a QuickBooks estimate') +
+    const what = q.kind === 'invoice' ? 'invoice' : 'estimate';
+    const said = (q.docNumber ? 'QuickBooks ' + what + ' #' + esc(q.docNumber) : 'a QuickBooks ' + what) +
       (q.acceptedDate ? ', accepted ' + esc(fmtDay(q.acceptedDate)) : '');
     if (q.reprice) {
       return '<div class="est-fromqb">From ' + said + '. Priced by your rules here, not as the customer accepted it' +
@@ -527,33 +528,14 @@
   // sold by, it is left for him (🔎 Source it shows the near ones). Once:
   // fromQb.linkedAt. Returns the estimate as saved with the links, or null
   // when there is nothing to do.
+  // The one Supplies item it is, by supplymatch.js: an item he picked for
+  // these words before, or the only one with all of them in a unit that
+  // fits. Anything less certain is left for him, with the likely ones
+  // offered under the line (matchHtml).
   function qbMatch(m, c) {
-    const bare = String(m.name || '').replace(/\s+[—–]\s.*$/, '').replace(/\([^)]*\)/g, ' ');
-    const want = nameWords(bare);
-    if (!want.length) return null;
-    const u = unitKey(m.unit), skip = P().NOT_FOR_ESTIMATES || [];
-    const fits = [];
-    Object.values(c.items).forEach(it => {
-      const pr = c.prices[it.id];
-      if (skip.indexOf(it.category) !== -1 || !pr || !(num(pr.cents) > 0)) return;
-      const have = nameWords(it.name + ' ' + (it.also || ''));
-      if (!want.every(w => have.indexOf(w) !== -1)) return;
-      const cov = num(it.coverage) > 0 ? num(it.coverage) : null;
-      const sold = unitKey(pr.per || it.unit);
-      const measured = cov ? unitKey(it.takeoffUnit) : sold;
-      // The estimate's quantity in the item's takeoff unit (what pricing.js
-      // reads): as it is, or -- given in what the item is sold by -- times
-      // what one covers.
-      const q = num(m.qty);
-      let qty = null;
-      if (u === measured || (!u && measured === 'each')) qty = q;
-      else if (cov && (u === sold || (!u && sold === 'each'))) qty = q === null ? null : Math.round(q * cov * 1000) / 1000;
-      else return;
-      fits.push({ id: it.id, qty: qty, unit: cov ? String(it.takeoffUnit || '') : String(pr.per || it.unit || ''), close: want.length / have.length });
-    });
-    if (!fits.length) return null;
-    fits.sort((a, b) => b.close - a.close);
-    return fits.length === 1 || fits[0].close - fits[1].close >= 0.25 ? fits[0] : null;
+    if (!window.YDMatch) return null;
+    const got = YDMatch.match(m, c, P().NOT_FOR_ESTIMATES || []);
+    return got.sure;
   }
   function linkFromQb(saved) {
     if (!P() || !saved || !saved.fromQb || saved.fromQb.linkedAt) return null;
@@ -952,9 +934,53 @@
         taxPickHtml('mat', id, m.taxable, ro) +
         (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
       (forWork ? moreBoxHtml(id, forWork) : '') +
+      (ro ? '' : matchHtml(m, id)) +
+      (m.supplyId && num(m.qty) === null && m.qbText
+        ? '<div class="est-match"><span class="muted">QuickBooks: ' + esc(m.qbText) + ' — put in how many</span></div>' : '') +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
     '</div>';
   }
+  // A material not joined to Supplies yet: the items it most likely is, as
+  // buttons (supplymatch.js) -- his earlier pick for these words first. Only
+  // when nothing is close does it say so (then 🔎 Source it / add to
+  // Supplies are the way).
+  function matchHtml(m, id) {
+    if (m.plant || m.supplyId || !String(m.name || '').trim() || !window.YDMatch) return '';
+    const c = catalog();
+    const got = YDMatch.match(m, c, P().NOT_FOR_ESTIMATES || []);
+    const ids = got.sure ? [got.sure.id].concat(got.options.filter(x => x !== got.sure.id)) : got.options;
+    const said = m.qbText ? '<span class="muted">QuickBooks: ' + esc(m.qbText) + '</span>' : '';
+    if (!ids.length) {
+      return '<div class="est-match">' + said + (said ? '<br>' : '') +
+        '<span class="muted">Nothing in Supplies is close — 🔎 Source it, or add it to Supplies.</span></div>';
+    }
+    return '<div class="est-match"><span class="est-match-q">Which Supplies item is this?</span>' + (said ? ' ' + said : '') +
+      '<div class="est-match-opts">' + ids.slice(0, 4).map((sid, k) => {
+        const it = c.items[sid], pr = c.prices[sid] || {};
+        if (!it) return '';
+        const v = c.vendors[it.vendorId];
+        const mine = got.sure && got.sure.by === 'yours' && k === 0;
+        return '<button type="button" class="btn btn-sm' + (k === 0 && got.sure ? ' btn-filled' : '') + '" onclick="estUseMatch(\'' + id + '\', \'' + safeId(sid) + '\')">' +
+          (mine ? '✓ ' : '') + esc(it.name) +
+          (num(pr.cents) > 0 ? ' · ' + cents(pr.cents) + (pr.per ? '/' + esc(pr.per) : '') : '') +
+          (v ? ' <small>' + esc(v.name) + '</small>' : '') + (mine ? ' <small>(your pick before)</small>' : '') + '</button>';
+      }).join('') + '</div></div>';
+  }
+  // Picked: joined to the item, the quantity put in its unit where the units
+  // meet (else left for him to fill), and remembered for these words.
+  window.estUseMatch = function (id, sid) {
+    const m = find(est.materials, id);
+    const c = catalog();
+    const it = c.items[sid];
+    if (!m || !it || !changes()) return;
+    const f = window.YDMatch ? YDMatch.fitQty(m, it, c.prices[sid]) : null;
+    if (window.YDMatch) YDMatch.remember(m.name, sid);
+    m.supplyId = sid;
+    if (f) { m.qty = f.qty; m.unit = f.unit || m.unit; }
+    else { m.qty = null; m.unit = ''; }
+    changed(true);
+    if (!f) showToast('Joined to ' + it.name + ' — put in how many' + (m.qbText ? ' (QuickBooks: ' + m.qbText + ')' : ''), 6000);
+  };
 
   // Everything that depends on the numbers, redrawn without touching what is
   // being typed in.
@@ -1782,6 +1808,8 @@
     const it = sid ? catalog().items[sid] : null;
     m.supplyId = it ? sid : null;
     if (it && !String(m.name || '').trim()) m.name = it.name || '';
+    // Picked by hand from the whole list: kept for these words too.
+    if (it && window.YDMatch) YDMatch.remember(m.name, sid);
     changed(true);
   };
 

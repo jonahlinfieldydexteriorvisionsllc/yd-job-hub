@@ -156,12 +156,16 @@ service cloud.firestore {
       allow read:  if isOwner() || (isStaff() && docId == 'public')
         || (docId == 'snow' && canSee('snow'))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canSee('billing'))
+        // Which Supplies item his words mean (supplymatch.js): whoever sees Supplies.
+        || (docId == 'supplyAliases' && canSee('supplies'))
         // The services typed in by hand and kept for reuse (app.js
         // rememberService): whoever fills in jobs or contacts.
         || (docId == 'services' && (canSee('jobs') || canSee('contacts')));
       allow write: if isOwner()
         || (docId == 'snow' && canChange('snow'))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canChange('billing'))
+        || (docId == 'supplyAliases' && canChange('supplies')
+            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasOnly(['map', 'updatedAt']))
         || (docId == 'services' && (canChange('jobs') || canChange('contacts'))
             && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
                  .hasOnly(['custom', 'updatedAt']))
