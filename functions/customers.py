@@ -31,9 +31,23 @@ are past customers) and is OFF until the owner switches it on
 his call to make. Only the real company: the test company's made-up
 customers must never land in his list.
 
+SNOW QUOTES (Jonah, 15 Oct 2026: a call list of who was quoted for snow
+this season or last and did not take it, instead of a spreadsheet). The
+same once-a-day reading of the estimates that finds who has been worked for
+lately also picks out the snow ones -- no extra question to QuickBooks -- and
+each customer quoted for snow gets `snow` {quotes, accounts, at}: every snow
+estimate of this season and last (id, number, date, QuickBooks' status,
+whether it was taken, the season) and the Snow accounts in Job Hub that are
+theirs. No money: a customer is read by whoever sees Contacts. A snow quote
+is an estimate with one of the Snow Removal products on it -- Intuit's API
+cannot read the "snow" tag Jonah puts on them.
+
 No Claude here: this is matching and copying, plain code (Jonah, 5 Oct 2026).
 QuickBooks reads stay tiny -- one question an hour, a few a day for who has
 been worked for lately -- against Intuit's 500,000 a month.
+
+Nothing that names a customer is ever printed to the logs -- only ids and
+counts.
 """
 
 import datetime
@@ -51,6 +65,14 @@ WORK_EVERY = datetime.timedelta(hours=20)             # who has been worked for:
 WORK_LOOKBACK_DAYS = 2 * 365 + 31                     # a little past "Past" (two years, customers.js)
 WORK_ENTITIES = ("Invoice", "Estimate", "SalesReceipt")
 PUSH_MAX = 20                                         # Job Hub edits sent to QuickBooks in one sweep
+
+# The products that make an estimate a snow quote: the three under "Snow
+# Removal" in his QuickBooks (Oct 2026). Matched on the product's own name --
+# the part after the last ":" of "Seasonal Services:Snow Removal:...". Salt
+# and the add-ons sit in the same group but are not a quote for snow on their
+# own.
+SNOW_PRODUCTS = ("residential snow removal", "snow removal", "snow removal - seasonal service")
+SNOW_SEASONS = 2                                      # this season and the one before
 
 # The contact details both sides may change. `address` (one line) is always
 # worked out from the parts, never sent.
@@ -235,14 +257,15 @@ def sync(force=False):
     state = dict(state, cursor=cursor or qb._qb_time(started))
     if not state.get("fullAt"):
         state["fullAt"] = now
-    out = {"read": len(rows), "written": len(writes), "work": 0, "pushed": 0}
+    out = {"read": len(rows), "written": len(writes), "work": 0, "snow": 0, "pushed": 0}
 
     # Who has been worked for in the last two years (the "Past" line,
     # customers.js): the newest invoice, estimate or sales receipt of each.
+    # The same reading picks out the snow quotes (the Snow quotes list).
     last = qb._parse_time(state.get("workAt"))
     if force or not last or started - last > WORK_EVERY:
         try:
-            got = last_work()
+            got, quotes = look_back()
             changed = {cid: d for cid, d in got.items() if work.get(cid) != d}
             if changed:
                 refs = [db.collection(COLL).document(cid) for cid in changed]
@@ -251,11 +274,12 @@ def sync(force=False):
                 out["work"] = len(there)
                 # Kept only for the ones written: one made later still gets its date.
                 work.update({cid: d for cid, d in changed.items() if cid in there})
+            out["snow"] = _write_snow(db, quotes, state, now)
             state.update(work=work, workAt=now)
         except qb.ReconnectNeeded:
             raise
         except Exception as err:                    # noqa: BLE001
-            print("customers: who was worked for lately not read:", err)
+            print("customers: who was worked for lately not read:", str(err)[:300])
     ref.set({realm: state}, merge=True)
 
     # Job Hub edits made with no signal (or refused for a moment): sent now.
@@ -264,22 +288,179 @@ def sync(force=False):
     except qb.ReconnectNeeded:
         raise
     except Exception as err:                        # noqa: BLE001
-        print("customers: edits not sent to QuickBooks:", err)
+        print("customers: edits not sent to QuickBooks:", str(err)[:300])
     return out
 
 
-def last_work():
-    """QuickBooks customer id -> the date (YYYY-MM-DD) of their newest
-    invoice, estimate or sales receipt in the last two years."""
+def look_back(today=None):
+    """One reading of the last two years' invoices, estimates and sales
+    receipts: (QuickBooks customer id -> the date, YYYY-MM-DD, of their
+    newest one; customer id -> their snow quotes of this season and last,
+    newest first)."""
+    today = today or _today()
     cutoff = (qb._now() - datetime.timedelta(days=WORK_LOOKBACK_DAYS)).date().isoformat()
-    best = {}
+    snow_from = "%d-07-01" % (season_of(today) - (SNOW_SEASONS - 1))
+    cutoff = min(cutoff, snow_from)
+    best, snow = {}, {}
     for entity in WORK_ENTITIES:
         for t in _all_pages(entity, "TxnDate >= '%s' orderby Id" % cutoff):
             cid = str((t.get("CustomerRef") or {}).get("value") or "")
             d = str(t.get("TxnDate") or "")[:10]
             if cid and d and d > best.get(cid, ""):
                 best[cid] = d
-    return best
+            if entity == "Estimate" and cid and d >= snow_from:
+                q = snow_quote(t)
+                if q:
+                    snow.setdefault(cid, []).append(q)
+    for qs in snow.values():
+        qs.sort(key=lambda q: (q["date"], q["id"]), reverse=True)
+    return best, snow
+
+
+def last_work():
+    """QuickBooks customer id -> the date (YYYY-MM-DD) of their newest
+    invoice, estimate or sales receipt in the last two years."""
+    return look_back()[0]
+
+
+# ---------------------------------------------------------------- snow quotes
+#
+# A snow season runs over the winter and is named by the year it starts in,
+# from July on -- the same as the Snow tab (snow.js seasonNow: "2026-27") and
+# the snow import (quickbooks._snow_season). A quote written in October 2025
+# is for the 2025-26 winter; one in January 2026 too.
+
+TZ_NAME = "America/Chicago"
+
+
+def _today():
+    from zoneinfo import ZoneInfo
+    return datetime.datetime.now(ZoneInfo(TZ_NAME)).date()
+
+
+def season_of(day):
+    """The start year of the snow season a day (a date, or "YYYY-MM-DD")
+    belongs to."""
+    if isinstance(day, str):
+        day = datetime.date.fromisoformat(day[:10])
+    return day.year if day.month >= 7 else day.year - 1
+
+
+def _product(name):
+    """A product's own name (the part after the last ":"), compared lower case
+    with its dashes and spaces evened out."""
+    short = str(name or "").split(":")[-1]
+    return " ".join(short.replace("–", "-").replace("—", "-").lower().split())
+
+
+def is_snow_quote(e):
+    """Whether an estimate is a quote for snow: one of the Snow Removal
+    products is on it."""
+    for ln in qb._flat_lines((e or {}).get("Line")):
+        if ln.get("DetailType") != "SalesItemLineDetail":
+            continue
+        ref = (ln.get("SalesItemLineDetail") or {}).get("ItemRef") or {}
+        if _product(ref.get("name")) in SNOW_PRODUCTS:
+            return True
+    return False
+
+
+def snow_quote(e):
+    """What a customer keeps of a snow estimate -- or None when it is not one.
+    `sold`: the customer said yes, however QuickBooks shows it (accepted, or
+    made into an invoice -- quickbooks._sold). No money on it (a customer is
+    read by whoever sees Contacts)."""
+    if not is_snow_quote(e):
+        return None
+    d = str(e.get("TxnDate") or "")[:10]
+    try:
+        season = season_of(d)
+    except ValueError:
+        return None
+    return {"id": str(e.get("Id") or ""), "num": str(e.get("DocNumber") or ""), "date": d,
+            "status": str(e.get("TxnStatus") or "Pending"), "sold": bool(qb._sold(e)), "season": season}
+
+
+def _snow_accounts(db, quotes, docs):
+    """Customer id -> the ids of the Snow accounts in Job Hub that are theirs
+    (switched-off accounts never count): tied to them by id (customerId --
+    "To sort", or the import that made it); or, for an account tied to nobody
+    yet, made from or joined to one of their snow estimates, or of the same
+    name or house number and street (the way the snow import joins an
+    account it finds -- quickbooks.snow_account)."""
+    coll = db.collection("snowAccounts")
+    accts = {s.id: (s.to_dict() or {}) for s in coll.stream()}
+    accts = {aid: a for aid, a in accts.items() if a.get("active") is not False}
+    untied = [aid for aid, a in accts.items() if not a.get("customerId")]
+    # The estimate an account was joined to is kept with its prices.
+    joined = {}
+    if untied:
+        refs = [coll.document(aid).collection("private").document("rates") for aid in untied]
+        for s in db.get_all(refs):
+            if s.exists:
+                eid = ((s.to_dict() or {}).get("fromQb") or {}).get("estimateId")
+                if eid:
+                    joined[s.reference.path.split("/")[1]] = str(eid)
+    # A lead an account was tied to may have become a QuickBooks customer.
+    leads = sorted({str(a["customerId"]) for a in accts.values() if str(a.get("customerId") or "").startswith("ld")})
+    merged = {}
+    if leads:
+        for s in db.get_all([db.collection(COLL).document(x) for x in leads]):
+            if s.exists and (s.to_dict() or {}).get("mergedInto"):
+                merged[s.id] = str(s.to_dict()["mergedInto"])
+    tied, by_est = {}, {}
+    for aid, a in accts.items():
+        if a.get("customerId"):
+            cid = str(a["customerId"])
+            tied.setdefault(merged.get(cid, cid), []).append(aid)
+            continue
+        for eid in ((a.get("fromQuickBooks") or {}).get("estimateId"), joined.get(aid)):
+            if eid:
+                by_est[str(eid)] = aid
+    out = {}
+    for cid, qs in quotes.items():
+        mine = list(tied.get(cid) or [])
+        mine += [by_est[q["id"]] for q in qs if q["id"] in by_est]
+        c = docs.get(cid) or {}
+        name = qb._norm_name(c.get("name"))
+        keys = {k for k in (qb._street_key(c.get("street") or c.get("address")),
+                            qb._street_key(((c.get("ship") or {}).get("street")) or ((c.get("ship") or {}).get("address"))))
+                if k}
+        for aid in untied:
+            a = accts[aid]
+            if (name and qb._norm_name(a.get("name")) == name) or \
+                    (keys and qb._street_key(a.get("street") or a.get("address")) in keys):
+                mine.append(aid)
+        out[cid] = sorted(set(mine))
+    return out
+
+
+def _write_snow(db, quotes, state, now):
+    """Each customer's snow quotes and accounts onto their record -- only
+    where something changed -- and taken off one who has none any more (the
+    seasons moved on). Returns how many were written."""
+    had = set(state.get("snowIds") or [])
+    ids = sorted(set(quotes) | had)
+    if not ids:
+        state["snowIds"] = []
+        return 0
+    docs = {s.id: (s.to_dict() or {}) for s in db.get_all([db.collection(COLL).document(cid) for cid in ids]) if s.exists}
+    accounts = _snow_accounts(db, {cid: qs for cid, qs in quotes.items() if cid in docs}, docs)
+    writes = []
+    for cid in ids:
+        if cid not in docs:
+            continue                              # not read from QuickBooks yet: the next look has it
+        cur = docs[cid].get("snow") or None
+        if cid not in quotes:
+            if cur:
+                writes.append((cid, {"snow": None, "updatedAt": now}))
+            continue
+        new = {"quotes": quotes[cid], "accounts": accounts.get(cid) or []}
+        if not cur or {"quotes": cur.get("quotes"), "accounts": cur.get("accounts")} != new:
+            writes.append((cid, {"snow": dict(new, at=now), "updatedAt": now}))
+    _write(db, writes)
+    state["snowIds"] = sorted(cid for cid in quotes if cid in docs)
+    return len(writes)
 
 
 # ---------------------------------------------------------------- Job Hub -> QuickBooks
@@ -401,7 +582,7 @@ def push_pending():
         except qb.ReconnectNeeded:
             raise
         except Exception as err:                    # noqa: BLE001
-            print("customers: %s not sent to QuickBooks: %s" % (s.id, err))
+            print("customers: %s not sent to QuickBooks: %s" % (s.id, str(err)[:300]))
     return done
 
 

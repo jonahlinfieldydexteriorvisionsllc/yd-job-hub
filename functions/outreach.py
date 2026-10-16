@@ -11,6 +11,15 @@ gives the count each morning while any are left.
 This reads the list exactly as prospects.js does (whenKey, isDue there):
 the two must agree, or the summary would count people the app does not
 show. Dates are Central time, like the rest of the summaries.
+
+Once the customer list from QuickBooks is switched on (settings/customers
+.importOn, and the first customers read in -- customers.js applyOn), the
+Contacts screen gives way to it and so does this: the count is the
+Customers tab's Call list. Each customer's time to call is a window
+(customers/{id}.when {from, to}, set with the season / month / "in about
+1-3 months" buttons, or read out of the words in contactWhen); they are due
+from the window's first day until "Reached out" is tapped. call_state here
+is customers.js callState, line for line -- change both.
 """
 
 import datetime
@@ -121,12 +130,144 @@ def due(today, db=None):
     return start, people
 
 
+# ---------------------------------------------------------------- the Customers tab's call list
+#
+# customers.js windowFromText / windowOf / reachedFor / callState, in Python.
+
+_SEASON_SPAN = {"spring": (3, 5), "summer": (6, 8), "fall": (9, 11), "autumn": (9, 11), "winter": (12, 2)}
+_YEAR_ANY = re.compile(r"\b((?:19|20)\d{2})\b", re.A)
+_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _last_day(y, m):
+    nxt = datetime.date(y + (m == 12), m % 12 + 1, 1)
+    return (nxt - datetime.timedelta(days=1)).isoformat()
+
+
+def window_from_text(text, today):
+    """{from, to} (YYYY-MM-DD) read out of the words of a time to call, or
+    None: a month (the next time it comes round, this one if we are in it),
+    a season (this one if we are in it or before it, else next year's;
+    winter is Dec-Feb), or a year alone."""
+    t = " ".join(str(text or "").lower().split())
+    if not t:
+        return None
+    ym = _YEAR_ANY.search(t)
+    iso, slash = _ISO.search(t), _SLASH.search(t)
+    m = int(iso.group(1)) if iso else int(slash.group(1)) if slash else 0
+    if m < 1 or m > 12:
+        m = 0
+    name, season = _MONTH_WORD.search(t), _SEASON_WORD.search(t)
+    y = int(ym.group(1)) if ym else 0
+    if not m and name:
+        m = _MONTHS.index(name.group(1)[:3]) + 1
+    if m:
+        if not y:
+            y = today.year if m >= today.month else today.year + 1
+        return {"from": "%04d-%02d-01" % (y, m), "to": _last_day(y, m)}
+    if season:
+        a, b = _SEASON_SPAN[season.group(1)]
+        if not y:
+            if a <= b:
+                y = today.year if today.month <= b else today.year + 1
+            else:
+                y = today.year - 1 if today.month <= b else today.year
+        return {"from": "%04d-%02d-01" % (y, a), "to": _last_day(y + 1, b) if a > b else _last_day(y, b)}
+    if y:
+        return {"from": "%04d-01-01" % y, "to": "%04d-12-31" % y}
+    return None
+
+
+def window_of(c, today):
+    w = c.get("when") or {}
+    if isinstance(w, dict) and _DAY.match(str(w.get("from") or "")) and _DAY.match(str(w.get("to") or w.get("from"))):
+        return {"from": w["from"], "to": w.get("to") or w["from"]}
+    return window_from_text(c.get("contactWhen"), today)
+
+
+def _reached_for(c, w):
+    at = str(c.get("reachedAt") or "").strip()
+    if not at or not _instant(at):
+        return False
+    if at[:10] < w["from"]:
+        return False
+    return not (c.get("whenSetAt") and str(c.get("whenSetAt")).strip() > at)
+
+
+def call_state(c, today):
+    """'on' (to call now), 'soon' (the window has not opened), 'done'
+    (reached since it opened), or None (no time to call, or not interested)."""
+    if c.get("notInterested"):
+        return None, None
+    w = window_of(c, today)
+    if not w:
+        return None, None
+    if w["from"] > today.isoformat():
+        return "soon", w
+    if _reached_for(c, w):
+        return "done", w
+    return "on", w
+
+
+def customers_on(db=None):
+    db = db or firestore.client()
+    snap = db.collection("settings").document("customers").get()
+    return bool(snap.exists and (snap.to_dict() or {}).get("importOn") is True)
+
+
+def call_list(today, db=None):
+    """(the customer list is in use -- switched on and read in from
+    QuickBooks --, [(customer, window)] due today, soonest window first)."""
+    db = db or firestore.client()
+    any_qb, due_now = False, []
+    for s in db.collection("customers").stream():
+        c = s.to_dict() or {}
+        if c.get("mergedInto"):
+            continue
+        if c.get("qbCustomerId"):
+            any_qb = True
+        st, w = call_state(c, today)
+        if st == "on":
+            due_now.append((c, w))
+    due_now.sort(key=lambda x: (x[1]["from"], str(x[0].get("name") or "").lower()))
+    return any_qb, due_now
+
+
+def _call_list_section(today, sections, push_bits, db):
+    """The Customers tab's call list in the morning summary. False when the
+    list is not in use (the Contacts list's outreach is told instead)."""
+    if not customers_on(db):
+        return False
+    in_use, people = call_list(today, db)
+    if not in_use:
+        return False
+    if not people:
+        return True
+    n = len(people)
+    lines = [{"text": "📞 %d %s to call — their time to call has come. The Call list on the Customers tab." % (
+        n, "customer" if n == 1 else "customers")}]
+    new = [c for c, w in people if w["from"] == today.isoformat()]
+    if new:
+        lines.append({"text": "Starting today:"})
+        for c in new[:NAMES_ON_THE_DAY]:
+            svc = ", ".join(str(x) for x in (c.get("tags") or [])[:3])
+            lines.append({"text": "%s%s" % (str(c.get("name") or "(no name)"), (" — " + svc) if svc else "")})
+        if len(new) > NAMES_ON_THE_DAY:
+            lines.append({"text": "…and %d more" % (len(new) - NAMES_ON_THE_DAY)})
+        push_bits.append("%d new to call" % len(new))
+    sections.append(("Call list", lines))
+    return True
+
+
 def add_to_summary(slot, owner, today, sections, push_bits, db=None):
     """The hook in digest.build: the owner's morning only. Never stops the
     summary going -- a fault here is printed and the rest goes out."""
     if not owner or slot != "morning":
         return
     try:
+        db = db or firestore.client()
+        if _call_list_section(today, sections, push_bits, db):
+            return
         start, people = due(today, db)
     except Exception as e:      # noqa: BLE001
         print("digest: outreach not read:", e)

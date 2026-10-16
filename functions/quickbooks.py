@@ -2128,6 +2128,10 @@ def snow_account(e, cust, end_names, stamp):
     have = next((aid for aid, a in accounts.items() if _norm_name(a.get("name")) == _norm_name(name)), None) or \
         next((aid for aid, a in accounts.items() if key and _street_key(a.get("street") or a.get("address")) == key), None)
     ref = {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or ""), "at": stamp}
+    # A new account is tied to its customer by QuickBooks' own id
+    # (customers.js reads customerId). One found by name or street is not:
+    # that is a guess, and the Customers tab's "To sort" ties it by hand.
+    cust_id = str((e.get("CustomerRef") or {}).get("value") or "") or None
     if have:
         db.collection("snowAccounts").document(have).collection("private").document("rates").set({"fromQb": ref}, merge=True)
         return have, False
@@ -2154,6 +2158,7 @@ def snow_account(e, cust, end_names, stamp):
         "active": True, "season": _snow_season(_now()), "minTriggerInches": 1, "serviceWindow": "standard",
         "areaNotes": notes, "vacationHolds": [], "driveSqFt": None, "walkSqFt": None, "saltApplies": salt,
         "fromQuickBooks": {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or "")},
+        "customerId": cust_id,
     }
     priv = {
         "phone": str(((cust.get("PrimaryPhone") or cust.get("Mobile") or {}).get("FreeFormNumber")) or ""),

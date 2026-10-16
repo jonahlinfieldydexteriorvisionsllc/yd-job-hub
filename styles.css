@@ -394,12 +394,29 @@
   .cu-chip.on small { color:rgba(255,255,255,.8); }
   .cu-counts .cu-chip { min-height:36px; }
   .cu-sort-find { margin-top:6px; width:100%; }
+  /* When to call: every choice a button in sight (no sideways rows). */
+  .cu-when-now { font-size:14px; margin-bottom:8px; overflow-wrap:anywhere; }
+  .cu-when-pick { display:flex; flex-direction:column; gap:8px; }
+  .cu-when-years { display:flex; flex-wrap:wrap; gap:6px; align-items:center; font-size:13px; }
+  .cu-when-years .cu-chip { text-align:center; }
+  .cu-when-grid { display:grid; gap:6px; }
+  .cu-when-grid .cu-chip { text-align:center; }
+  .cu-g4 { grid-template-columns:repeat(4, 1fr); }
+  .cu-g6 { grid-template-columns:repeat(6, 1fr); }
+  .cu-g2 { grid-template-columns:repeat(2, 1fr); }
+  .cu-when-words summary { cursor:pointer; min-height:44px; display:flex; align-items:center; font-size:13.5px; color:var(--muted); }
+  .cu-quotes { font-size:13px; margin-top:4px; }
+  .cu-quotes > div { padding:1px 0; }
+  .cu-act .pp-out-did { font-size:13px; font-weight:600; color:var(--pos); }
   @media (max-width:720px) {
     .cu-views { grid-template-columns:repeat(3, 1fr); }
     .cu-row { flex-direction:column; }
     .cu-act { align-self:stretch; }
     .cu-act .btn { width:100%; min-height:44px; }
     .cu-picks { grid-template-columns:repeat(2, 1fr); }
+    .cu-g4 { grid-template-columns:repeat(2, 1fr); }
+    .cu-g6 { grid-template-columns:repeat(4, 1fr); }
+    .cu-when-years .cu-chip { flex:1; }
   }
 
   /* ---- Time clock ------------------------------------------------------- */

@@ -90,10 +90,14 @@
   //
   // Jonah can rarely name a day: "usually its a season or within a couple
   // months". So the time to call is a window -- from, to -- and the call list
-  // shows someone once theirs has opened. Stored as when {from, to, label}
-  // when picked that way (the picker waits on his say -- see the report of
-  // 15 Oct); until then it is read out of the words typed in contactWhen,
-  // which still works as it always did.
+  // shows someone from the window's first day until "✓ Reached out" is
+  // tapped. Picked with tap buttons on the customer's page (his yes, 15 Oct
+  // 2026): Spring / Summer / Fall / Winter with the year, a month, or "In
+  // about 1–3 months" -- stored as when {from, to, label, how}, and the label
+  // as contactWhen too, so the words read the same everywhere. Words typed
+  // in still work (contactWhen, read by windowFromText), and so does every
+  // time to call written before the buttons. functions/outreach.py counts
+  // the morning summary's call list the same way -- change both.
   const two = n => String(n).padStart(2, '0');
   function ymd(d) { return d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate()); }
   const today = () => ymd(new Date());
@@ -138,9 +142,53 @@
   }
   function windowOf(c) {
     const w = c.when;
-    if (w && validDay(w.from) && validDay(w.to || w.from)) return { from: w.from, to: w.to || w.from, label: s(w.label) || s(c.contactWhen) };
+    if (w && validDay(w.from) && validDay(w.to || w.from)) return { from: w.from, to: w.to || w.from, label: s(w.label) || s(c.contactWhen), how: s(w.how) };
     return windowFromText(c.contactWhen);
   }
+
+  // ---- the buttons
+  const SEASON_BTNS = [['spring', 'Spring', 3, 5], ['summer', 'Summer', 6, 8], ['fall', 'Fall', 9, 11], ['winter', 'Winter', 12, 2]];
+  const MONTH_WORDS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  // The year a season or month beginning in month `a` next begins: this
+  // year while its first day is still to come, else next year -- and one
+  // more with "A year later". A season we are in has begun: "Fall" tapped in
+  // October is next fall (this one is "In about 1–3 months" or a month).
+  function nextYear(a, later) {
+    const y = new Date().getFullYear();
+    return (y + '-' + two(a) + '-01' > today() ? y : y + 1) + (later ? 1 : 0);
+  }
+  function seasonWindow(key, later) {
+    const b0 = SEASON_BTNS.find(x => x[0] === key);
+    if (!b0) return null;
+    const [, word, a, b] = b0, y = nextYear(a, later);
+    return { from: y + '-' + two(a) + '-01', to: a > b ? lastDay(y + 1, b) : lastDay(y, b),
+      label: word + ' ' + (a > b ? y + '–' + String(y + 1).slice(2) : y), how: 'season' };
+  }
+  function monthWindow(m, later) {
+    if (!(m >= 1 && m <= 12)) return null;
+    const y = nextYear(m, later);
+    return { from: y + '-' + two(m) + '-01', to: lastDay(y, m), label: MONTH_WORDS[m - 1] + ' ' + y, how: 'month' };
+  }
+  // n months on from a day, kept inside the month (Jan 31 + 1 = Feb 28).
+  function plusMonths(d, n) {
+    const t = new Date(d.getFullYear(), d.getMonth() + n, 1);
+    t.setDate(Math.min(d.getDate(), new Date(t.getFullYear(), t.getMonth() + 1, 0).getDate()));
+    return t;
+  }
+  // 1 to 3 months from the day it was tapped.
+  function soonWindow() {
+    const now = new Date();
+    return { from: ymd(plusMonths(now, 1)), to: ymd(plusMonths(now, 3)), label: 'In about 1–3 months', how: 'soon' };
+  }
+  // How a window reads in the lists: "In about 1–3 months" means nothing a
+  // month later, so that one says when it starts.
+  function whenText(w) {
+    if (!w) return '';
+    if (w.how === 'soon') return 'From ' + niceDay(w.from);
+    return w.label || windowWords(w);
+  }
+  let whenLater = false;          // "A year later" picked on the open page
+  let whenPicking = false;        // the buttons open on a customer who has a time already
   function niceDay(d) {
     return validDay(d) ? new Date(d + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
   }
@@ -197,6 +245,51 @@
   }
   const money = n => (typeof fmtMoney === 'function' ? fmtMoney(n) : '$' + (Number(n) || 0).toFixed(2));
 
+  // ------------------------------------------------------------ snow quotes
+  //
+  // Jonah (15 Oct 2026), instead of a spreadsheet: who was quoted for snow
+  // this season or last and didn't take it. The server's daily look at the
+  // estimates (functions/customers.py look_back) puts each snow quote on its
+  // customer -- snow {quotes [{id, num, date, status, sold, season}],
+  // accounts [Snow account ids that are theirs]}. No money on it.
+  //
+  // On the list: quoted for snow (a Snow Removal product on the estimate)
+  // this season or last; none of those quotes taken (accepted, or made into
+  // an invoice); no Snow account here that is theirs and switched on; not
+  // marked Not interested. "✓ Called about snow" (snowCalledAt) moves them
+  // under "Called this season" -- a new season brings them back.
+  // A season is named by the year it starts in, from July on (snow.js
+  // seasonNow, the Snow tab's "2026-27").
+  const snowSeasonOf = d => { const y = +s(d).slice(0, 4), m = +s(d).slice(5, 7); return m >= 7 ? y : y - 1; };
+  const seasonWord = y => y + '–' + String(y + 1).slice(2);
+  const QUOTE_WORD = { Pending: 'no answer yet', Rejected: 'turned down', Closed: 'closed', Accepted: 'accepted', Converted: 'invoiced' };
+  // Their Snow accounts, live when this person sees the Snow tab (an account
+  // tied or untied by hand since the server's last look counts at once).
+  function snowAccountsOf(c, fromServer) {
+    if (!can('snow', 'see') || !window.YDSnow) return fromServer;
+    const acc = YDSnow.accounts() || {};
+    if (!Object.keys(acc).length) return fromServer;            // not read yet
+    const live = fromServer.filter(id => acc[id] && acc[id].active !== false && (!acc[id].customerId || resolve(acc[id].customerId) === c.id));
+    snowOf(c.id).forEach(a => { if (a.active !== false && live.indexOf(a.id) === -1) live.push(a.id); });
+    return live;
+  }
+  function snowFacts(c) {
+    const sn = c && c.snow;
+    if (!sn || !Array.isArray(sn.quotes)) return null;
+    const cur = snowSeasonOf(today());
+    const quotes = sn.quotes.filter(q => q && validDay(q.date) && snowSeasonOf(q.date) >= cur - 1 && snowSeasonOf(q.date) <= cur)
+      .sort((a, b) => s(b.date).localeCompare(s(a.date)));
+    if (!quotes.length) return null;
+    const sold = quotes.some(q => q.sold === true);
+    const accounts = snowAccountsOf(c, Array.isArray(sn.accounts) ? sn.accounts : []);
+    return { quotes: quotes, sold: sold, accounts: accounts, season: snowSeasonOf(quotes[0].date),
+      onList: !sold && !accounts.length && !c.notInterested };
+  }
+  const snowCalled = c => !!c.snowCalledAt && s(c.snowCalledAt).slice(0, 10) >= snowSeasonOf(today()) + '-07-01';
+  function quoteLine(q) {
+    return (q.num ? '#' + esc(q.num) + ' · ' : '') + esc(niceDay(q.date)) + ' · ' + esc(QUOTE_WORD[q.status] || s(q.status).toLowerCase() || 'no answer yet');
+  }
+
   // ------------------------------------------------------------ the list
   function render() {
     jobMap = null;
@@ -214,17 +307,22 @@
     // Something being typed (a search, a note) keeps its place.
     const typing = document.activeElement && wrap.contains(document.activeElement) ? document.activeElement.id : null;
     const all = Object.values(customers);
-    const counts = { call: 0, customers: 0, leads: 0, past: 0, sort: sortCount() };
+    const counts = { call: 0, customers: 0, leads: 0, past: 0, snow: 0, sort: sortCount() };
+    let snowAny = 0;
     all.forEach(c => {
       const k = kindOf(c);
       if (k === 'lead') counts.leads++; else if (k === 'past') counts.past++; else counts.customers++;
       if (callState(c).on) counts.call++;
+      const f = snowFacts(c);
+      if (f && f.onList) { snowAny++; if (!snowCalled(c)) counts.snow++; }
     });
     const badge = el('custBadge');
     if (badge) badge.textContent = counts.call ? counts.call + ' to call' : '';
     const VIEWS = [['call', '📞 Call list'], ['customers', '👥 Customers'], ['leads', '🌱 Leads'], ['past', '🕰 Past']]
+      .concat(snowAny ? [['snow', '❄️ Snow quotes']] : [])
       .concat(can('contacts', 'change') && counts.sort ? [['sort', '🧩 To sort']] : []);
     if (view === 'sort' && !(can('contacts', 'change') && counts.sort)) view = 'call';
+    if (view === 'snow' && !snowAny) view = 'call';
     const q = s((el('custSearch') || {}).value).toLowerCase();
     const tag = s((el('custTag') || {}).value);
     let html = '<div class="cu-views">' + VIEWS.map(([k, label]) =>
@@ -237,7 +335,8 @@
         '<select id="custTag" onchange="custRender()"><option value="">Any service</option>' +
         Object.keys(tags).sort().map(t => '<option' + (t === tag ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' +
         (can('contacts', 'change') ? '<button class="btn btn-sm btn-filled" onclick="custAddLead()">+ Add a lead</button>' : '') + '</div>';
-      html += view === 'call' ? callHtml(all, q, tag) : listHtml(all.filter(c => kindOf(c) === { customers: 'customer', leads: 'lead', past: 'past' }[view]), q, tag);
+      html += view === 'call' ? callHtml(all, q, tag) : view === 'snow' ? snowHtml(all, q, tag)
+        : listHtml(all.filter(c => kindOf(c) === { customers: 'customer', leads: 'lead', past: 'past' }[view]), q, tag);
     } else {
       html += sortHtml();
     }
@@ -281,8 +380,42 @@
     if (!list.length) return '<p class="empty-msg">' + (q || tag ? 'Nobody matches that.' : 'Nobody here yet.') + '</p>';
     return list.slice(0, showN).map(c => rowHtml(c, windowOf(c), false)).join('') + more(list.length);
   }
+  // The Snow quotes list (snowFacts): this season's first, then last
+  // season's; the ones called this season folded at the bottom.
+  function snowHtml(all, q, tag) {
+    const cur = snowSeasonOf(today());
+    const list = all.filter(c => matches(c, q, tag)).map(c => [c, snowFacts(c)]).filter(x => x[1] && x[1].onList)
+      .sort((a, b) => s(b[1].quotes[0].date).localeCompare(s(a[1].quotes[0].date)) || byName(a[0], b[0]));
+    const open = list.filter(x => !snowCalled(x[0])), called = list.filter(x => snowCalled(x[0]));
+    let h = '<div class="hint">Quoted for snow in ' + esc(seasonWord(cur)) + ' or ' + esc(seasonWord(cur - 1)) +
+      ' and didn’t take it — turned down or never answered — with no Snow account here. From the Snow Removal products on their estimates.</div>';
+    if (!list.length) return h + '<p class="empty-msg">' + (q || tag ? 'Nobody matches that.' : 'Nobody — every snow quote was taken. ❄️') + '</p>';
+    [[cur, 'Quoted for ' + seasonWord(cur)], [cur - 1, 'Quoted for ' + seasonWord(cur - 1) + ' (last winter)']].forEach(([y, title]) => {
+      const rows = open.filter(x => x[1].season === y);
+      if (rows.length) h += '<div class="cu-sub">' + esc(title) + ' (' + rows.length + ')</div>' + rows.slice(0, showN).map(([c, f]) => snowRowHtml(c, f, false)).join('') + more(rows.length);
+    });
+    if (!open.length) h += '<p class="empty-msg">Everyone on it has been called this season. 🎉</p>';
+    if (called.length) h += '<details class="cu-fold"><summary>Called about snow this season (' + called.length + ')</summary>' +
+      called.map(([c, f]) => snowRowHtml(c, f, true)).join('') + '</details>';
+    return h;
+  }
+  function snowRowHtml(c, f, called) {
+    const k = kindOf(c), id = sid(c.id), phone = c.phone || c.mobile;
+    return '<div class="cu-row">' +
+      '<div class="cu-main">' +
+        '<button class="cu-name" onclick="openCustomer(\'' + id + '\')">' + esc(c.name || '(no name)') + '</button>' +
+        (k !== 'customer' ? ' <span class="cu-kind k-' + k + '">' + KIND_WORD[k] + '</span>' : '') +
+        '<div class="cu-quotes">' + f.quotes.map(q => '<div>❄️ ' + quoteLine(q) + '</div>').join('') + '</div>' +
+        '<div class="pp-contact">' + [c.address ? esc(c.address) : '',
+          phone ? '<a href="tel:' + esc(telOf(phone)) + '">📞 ' + esc(phone) + '</a>' : ''].filter(Boolean).join(' &middot; ') + '</div>' +
+      '</div>' +
+      (can('contacts', 'change') ? '<div class="cu-act">' + (called
+        ? '<span class="pp-out-did">✓ Called ' + esc(niceDay(s(c.snowCalledAt).slice(0, 10))) + '</span> <button class="btn btn-sm" onclick="custSnowCalled(\'' + id + '\', false)">Not yet</button>'
+        : '<button class="btn btn-sm btn-filled" onclick="custSnowCalled(\'' + id + '\', true)">✓ Called about snow</button>') + '</div>' : '') +
+    '</div>';
+  }
   function more(n) {
-    return n > showN ? '<button class="btn btn-sm cu-more" onclick="custMore()">Show ' + Math.min(SHOW_STEP, n - showN) + ' more of ' + (n - showN) + '</button>' : '';
+    return n > showN ?'<button class="btn btn-sm cu-more" onclick="custMore()">Show ' + Math.min(SHOW_STEP, n - showN) + ' more of ' + (n - showN) + '</button>' : '';
   }
   function telOf(v) { return String(v || '').replace(/[^0-9+]/g, ''); }
   function rowHtml(c, w, callable) {
@@ -292,7 +425,7 @@
       '<div class="cu-main">' +
         '<button class="cu-name" onclick="openCustomer(\'' + id + '\')">' + esc(c.name || '(no name)') + '</button>' +
         (k !== 'customer' ? ' <span class="cu-kind k-' + k + '">' + KIND_WORD[k] + '</span>' : '') +
-        (w ? ' <span class="pp-when">' + esc(w.label || windowWords(w)) + '</span>' : '') +
+        (w ? ' <span class="pp-when">' + esc(whenText(w)) + '</span>' : '') +
         (c.qbConflict ? ' <span class="cu-kind k-warn">Check details</span>' : '') +
         ((c.tags || []).length ? '<div class="pp-svc">' + c.tags.map(t => '<span class="svc-tag">' + esc(t) + '</span>').join('') + '</div>' : '') +
         '<div class="pp-contact">' + [c.address ? esc(c.address) : '',
@@ -337,6 +470,15 @@
     if (typeof showUndo === 'function') showUndo('Reached ' + (c.name || ''), () => { write(id, before, 'reached out'); render(); });
   };
 
+  window.custSnowCalled = function (id, on) {
+    const c = customers[id];
+    if (!c) return;
+    const before = { snowCalledAt: c.snowCalledAt || null };
+    write(id, { snowCalledAt: on ? new Date().toISOString() : null }, 'called about snow');
+    render();
+    if (on && typeof showUndo === 'function') showUndo('Called ' + (c.name || '') + ' about snow', () => { write(id, before, 'called about snow'); render(); });
+  };
+
   // ------------------------------------------------------------ a customer's page
   function ensureModal() {
     if (el('custModal')) return;
@@ -352,7 +494,7 @@
     id = resolve(id);
     if (!customers[id]) return;
     ensureModal();
-    openId = id; editing = false;
+    openId = id; editing = false; whenLater = false; whenPicking = false;
     renderPage(true);
     el('custModal').classList.add('active');
   };
@@ -399,18 +541,7 @@
         (ch ? '<button class="link-btn" onclick="custEdit(true)">✎ Change contact details</button>' : '')) +
       '</div>';
     // When to call
-    const st = callState(c), w = windowOf(c);
-    h += '<div class="cu-sec"><div class="cu-sec-h">When to call</div>' +
-      (ch ? '<div class="cu-when"><input id="cuWhen" value="' + esc(c.contactWhen || '') + '" placeholder="e.g. Spring 2027, Sept, early summer" onkeydown="if (event.key === \'Enter\') custSaveWhen(\'' + id + '\')">' +
-        '<button class="btn btn-sm" onclick="custSaveWhen(\'' + id + '\')">Save</button></div>'
-        : (c.contactWhen ? '<div>' + esc(c.contactWhen) + '</div>' : '')) +
-      '<div class="cu-line muted">' + (c.notInterested ? 'Not interested — off the call list.'
-        : w ? 'On the call list ' + esc(windowWords(w)) + (st.done ? ' · ✓ reached ' + esc(niceDay(s(c.reachedAt).slice(0, 10))) : st.on ? ' · due now' : '')
-        : c.contactWhen ? 'Can’t tell when from that — write a month, a season or a year.' : 'No time to call set.') + '</div>' +
-      (ch ? '<div class="cu-btns">' +
-        (st.on ? '<button class="btn btn-sm btn-filled" onclick="custReached(\'' + id + '\')">✓ Reached out</button>' : '') +
-        '<button class="btn btn-sm" onclick="custNotInterested(\'' + id + '\', ' + (!c.notInterested) + ')">' + (c.notInterested ? 'Back on the call list' : 'Not interested') + '</button></div>' : '') +
-      '</div>';
+    h += whenHtml(c, ch);
     // Tags
     h += '<div class="cu-sec"><div class="cu-sec-h">What for</div><div class="pp-svc">' +
       ((c.tags || []).length ? c.tags.map((t, i) => '<span class="svc-tag">' + esc(t) +
@@ -429,6 +560,54 @@
       h += '<div class="cu-sec"><button class="link-btn" onclick="custRemoveLead(\'' + id + '\')">🗑 Take this lead off the list</button></div>';
     }
     body.innerHTML = h;
+  }
+
+  // The time to call: where it stands, and -- with nothing set yet, or
+  // "Change when" tapped -- the buttons. Each button shows the window it
+  // saves (the next spring, the next March...), "A year later" moving them
+  // all a year on.
+  function whenHtml(c, ch) {
+    const st = callState(c), w = windowOf(c), id = sid(c.id);
+    let h = '<div class="cu-sec"><div class="cu-sec-h">When to call</div>';
+    const reached = st.done ? ' · ✓ reached ' + esc(niceDay(s(c.reachedAt).slice(0, 10))) : '';
+    h += '<div class="cu-when-now">' + (c.notInterested ? 'Not interested — off the call list.'
+      : w ? '<b>' + esc(w.how === 'soon' ? w.label : whenText(w)) + '</b> <span class="muted">— ' + (st.on ? 'on the call list now' : 'on the call list from ' + esc(niceDay(w.from))) + reached + '</span>'
+      : c.contactWhen ? 'Can’t tell when from “' + esc(c.contactWhen) + '” — pick one below.' : '<span class="muted">No time to call set.</span>') + '</div>';
+    if (!ch) return h + '</div>';
+    const picking = (whenPicking || !w) && !c.notInterested;
+    if (!picking) {
+      return h + '<div class="cu-btns">' +
+        (st.on ? '<button class="btn btn-sm btn-filled" onclick="custReached(\'' + id + '\')">✓ Reached out</button>' : '') +
+        (!c.notInterested ? '<button class="btn btn-sm" onclick="custWhenOpen(true)">Change when</button>' : '') +
+        '<button class="btn btn-sm" onclick="custNotInterested(\'' + id + '\', ' + (!c.notInterested) + ')">' + (c.notInterested ? 'Back on the call list' : 'Not interested') + '</button></div></div>';
+    }
+    const same = x => !!(w && x && x.from === w.from && x.to === w.to);
+    const btn = (x, onclick, big, small) => '<button class="cu-chip' + (same(x) ? ' on' : '') + '" onclick="' + onclick + '">' + big +
+      (small ? '<small>' + small + '</small>' : '') + '</button>';
+    const later = whenLater;
+    h += '<div class="cu-when-pick">' +
+      '<div class="cu-when-years"><span class="muted">Which one:</span>' +
+        '<button class="cu-chip' + (!later ? ' on' : '') + '" onclick="custWhenLater(false)">The next one</button>' +
+        '<button class="cu-chip' + (later ? ' on' : '') + '" onclick="custWhenLater(true)">A year later</button></div>' +
+      '<div class="cu-when-grid cu-g4">' + SEASON_BTNS.map(([k, word, a, b]) => {
+        const x = seasonWindow(k, later);
+        return btn(x, 'custWhenPick(\'' + id + '\', \'season\', \'' + k + '\')', esc(x.label), esc(MONTHS[a - 1].replace(/^./, m => m.toUpperCase()) + '–' + MONTHS[b - 1].replace(/^./, m => m.toUpperCase())));
+      }).join('') + '</div>' +
+      '<div class="cu-when-grid cu-g6">' + MONTH_WORDS.map((word, i) => {
+        const x = monthWindow(i + 1, later);
+        return btn(x, 'custWhenPick(\'' + id + '\', \'month\', ' + (i + 1) + ')', esc(word.slice(0, 3)), esc(x.from.slice(0, 4)));
+      }).join('') + '</div>' +
+      '<div class="cu-when-grid cu-g2">' +
+        btn(w && w.how === 'soon' ? w : null, 'custWhenPick(\'' + id + '\', \'soon\', 0)', 'In about 1–3 months', esc('from ' + niceDay(soonWindow().from))) +
+        (w ? '<button class="cu-chip" onclick="custWhenPick(\'' + id + '\', \'none\', 0)">No time to call<small>off the call list</small></button>' : '') +
+      '</div>' +
+      '<details class="cu-when-words"' + (c.contactWhen && !c.when ? ' open' : '') + '><summary>Or write it in words</summary>' +
+        '<div class="cu-when"><input id="cuWhen" value="' + esc(c.contactWhen || '') + '" placeholder="e.g. after the first snow, early summer 2027" onkeydown="if (event.key === \'Enter\') custSaveWhen(\'' + id + '\')">' +
+        '<button class="btn btn-sm" onclick="custSaveWhen(\'' + id + '\')">Save</button></div></details>' +
+      '<div class="cu-btns">' + (w && whenPicking ? '<button class="btn btn-sm" onclick="custWhenOpen(false)">Keep ' + esc(whenText(w)) + '</button>' : '') +
+        '<button class="btn btn-sm" onclick="custNotInterested(\'' + id + '\', true)">Not interested</button></div>' +
+      '</div>';
+    return h + '</div>';
   }
 
   function syncHtml(c) {
@@ -482,12 +661,27 @@
           esc(money(parseFloat(String(p.amount).replace(/[$,]/g, '')) || 0)) + (p.label ? ' <span class="muted">' + esc(p.label) + '</span>' : '') + '</div>').join('') + '</div>';
       }
     }
-    if (can('snow', 'see')) {
-      const snow = snowOf(c.id);
-      h += '<div class="cu-sec"><div class="cu-sec-h">Snow</div>' + (snow.length
-        ? snow.map(a => '<div class="cu-job">❄️ ' + esc(a.name || '') + (a.address ? ' <span class="muted">' + esc(a.address) + '</span>' : '') + '</div>').join('')
-        : '<div class="muted">No snow account.</div>' + (can('snow', 'change') && typeof openSnowForm === 'function'
-          ? '<button class="btn btn-sm" onclick="custToSnow(\'' + sid(c.id) + '\')">Make a snow account</button>' : '')) + '</div>';
+    // Snow: their accounts (Snow tab access), and their snow quotes of this
+    // season and last (on the customer, no money -- whoever sees Contacts).
+    const sf = snowFacts(c);
+    if (can('snow', 'see') || sf) {
+      h += '<div class="cu-sec"><div class="cu-sec-h">Snow</div>';
+      if (can('snow', 'see')) {
+        const snow = snowOf(c.id);
+        h += snow.length
+          ? snow.map(a => '<div class="cu-job">❄️ ' + esc(a.name || '') + (a.address ? ' <span class="muted">' + esc(a.address) + '</span>' : '') +
+              (a.active === false ? ' <span class="cu-kind">Switched off</span>' : '') + '</div>').join('')
+          : '<div class="muted">No snow account.</div>' + (can('snow', 'change') && typeof openSnowForm === 'function'
+            ? '<button class="btn btn-sm" onclick="custToSnow(\'' + sid(c.id) + '\')">Make a snow account</button>' : '');
+      }
+      if (sf) {
+        h += '<div class="cu-quotes"><span class="muted">Snow quotes:</span>' + sf.quotes.map(q => '<div>' + quoteLine(q) + '</div>').join('') + '</div>' +
+          (sf.onList ? '<div class="cu-line muted">On the Snow quotes list — ' + (snowCalled(c) ? '✓ called ' + esc(niceDay(s(c.snowCalledAt).slice(0, 10))) : 'not called yet this season') + '.</div>' +
+            (can('contacts', 'change') ? '<div class="cu-btns">' + (snowCalled(c)
+              ? '<button class="btn btn-sm" onclick="custSnowCalled(\'' + sid(c.id) + '\', false)">Not called yet</button>'
+              : '<button class="btn btn-sm btn-filled" onclick="custSnowCalled(\'' + sid(c.id) + '\', true)">✓ Called about snow</button>') + '</div>' : '') : '');
+      }
+      h += '</div>';
     }
     return h;
   }
@@ -581,11 +775,31 @@
     const v = s(n.value);
     if (v === s(c.contactWhen)) return;
     n.blur();
+    const w = windowFromText(v);
+    if (w) whenPicking = false;
     write(id, { contactWhen: v, whenSetAt: new Date().toISOString(), when: null }, 'when to call');
     render();
-    const w = windowFromText(v);
-    showToast(!v ? 'Time to call taken off' : w ? 'On the call list ' + windowWords(w) : 'Saved — but no month, season or year in it, so it’s not on the call list');
+    showToast(!v ? 'Time to call taken off' : w ? 'On the call list from ' + niceDay(w.from) : 'Saved — but no month, season or year in it, so it’s not on the call list');
   };
+  // A button: the window it shows, saved. "none" takes the time off.
+  window.custWhenPick = function (id, how, arg) {
+    const c = customers[id];
+    if (!c) return;
+    const w = how === 'season' ? seasonWindow(arg, whenLater) : how === 'month' ? monthWindow(+arg, whenLater)
+      : how === 'soon' ? soonWindow() : null;
+    if (how !== 'none' && !w) return;
+    const before = { when: c.when || null, contactWhen: c.contactWhen || '', whenSetAt: c.whenSetAt || null };
+    const words = w ? (w.how === 'soon' ? w.label + ' (' + windowWords(w) + ')' : w.label) : '';
+    whenPicking = false; whenLater = false;
+    write(id, { when: w, contactWhen: words, whenSetAt: new Date().toISOString() }, 'when to call');
+    render();
+    renderPage(true);
+    const say = w ? 'On the call list from ' + niceDay(w.from) : 'Time to call taken off';
+    if (typeof showUndo === 'function') showUndo(say, () => { write(id, before, 'when to call'); render(); renderPage(true); });
+    else showToast(say);
+  };
+  window.custWhenLater = function (on) { whenLater = !!on; renderPage(true); };
+  window.custWhenOpen = function (on) { whenPicking = !!on; whenLater = false; renderPage(true); };
   window.custNotInterested = function (id, on) { write(id, { notInterested: !!on }, 'not interested'); render(); };
   function tagOptions() {
     const src = el('serviceTypeSelect');
@@ -1011,12 +1225,23 @@
       { title: 'Bring in every customer from your real QuickBooks (about 500), and keep them in step both ways from now on?', ok: 'Bring them in' }))) return;
     if (conf.importOn === true) return;
     conf.importOn = true;
-    Promise.resolve(window.YDDb.put('settings', 'customers', { importOn: true, importOnAt: new Date().toISOString(),
-      importOnBy: (window.YDAuth.user && window.YDAuth.user.uid) || null })).catch(e => showToast('Not switched on: ' + ((e && e.code) || 'error')));
+    const saved = Promise.resolve(window.YDDb.put('settings', 'customers', { importOn: true, importOnAt: new Date().toISOString(),
+      importOnBy: (window.YDAuth.user && window.YDAuth.user.uid) || null }));
+    saved.catch(e => showToast('Not switched on: ' + ((e && e.code) || 'error')));
     start();
     render();
-    if (window.YDClaude) window.YDClaude.post('/qb/customers-now', {}).then(() => showToast('Customers brought in from QuickBooks'))
-      .catch(e => showToast('Switched on — QuickBooks: ' + ((e && e.message) || 'not reached') + '. They come in at the next hourly look.'));
+    if (!window.YDClaude || !navigator.onLine) { showToast('Switched on — they come in at the next hourly look'); return; }
+    // The server reads the switch itself: asked only once it is saved there
+    // (a write settles when the server has it), or it would find it still off.
+    const later = () => showToast('Switched on — they come in at the next hourly look');
+    Promise.race([saved.then(() => true), new Promise(r => setTimeout(() => r(false), 15000))]).then(ok => {
+      if (!ok) { later(); return; }
+      window.YDClaude.post('/qb/customers-now', {}).then(r => {
+        const got = r && r.result;
+        if (got && typeof got.read === 'number') showToast(got.read + ' customers read from QuickBooks');
+        else later();
+      }).catch(e => showToast('Switched on — QuickBooks: ' + ((e && e.message) || 'not reached') + '. They come in at the next hourly look.'));
+    }, () => { /* not saved: said above */ });
   };
 
   function readConf() {
@@ -1053,7 +1278,7 @@
   }
 
   window.YDCustomers = {
-    on: isOn, all: () => customers, kindOf: kindOf, windowOf: windowOf, windowFromText: windowFromText,
+    on: isOn, all: () => customers, kindOf: kindOf, windowOf: windowOf, windowFromText: windowFromText, snowFacts: snowFacts,
     fromLostBid: fromLostBid, qbIdFor: qbIdFor, open: id => window.openCustomer(id), render: render,
   };
   window.custRenderNow = render;
@@ -1069,7 +1294,7 @@
     if (ok) readConf(); else render();
   });
   // Their jobs, invoices and snow accounts change under the page.
-  ['yd-jobs-changed', 'yd-invoices', 'yd-prospects'].forEach(ev => document.addEventListener(ev, () => { if (isOn()) render(); }));
+  ['yd-jobs-changed', 'yd-invoices', 'yd-prospects', 'yd-snow-accounts'].forEach(ev => document.addEventListener(ev, () => { if (isOn()) render(); }));
   function boot() { render(); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
