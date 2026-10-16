@@ -224,6 +224,10 @@
   function bidColumn(j) {
     const stage = j.bidStage;
     const quoting = (j.jobStatus || 'quoting') === 'quoting';
+    // A snow bid said yes to is on the Snow route now (quickbooks.py
+    // snow_bids), not a job to book: off the board, like a lost bid -- it
+    // waits under "To take off" in My Jobs.
+    if (quoting && (j.removeWhy === 'snow' || (stage === 'won' && j.snowChecked))) return null;
     // Won and Lost only count while the job's status agrees. A lost bid whose
     // customer rang back and was set Active in the form used to sit in Lost on
     // this board AND in Scheduled on the Jobs board.
@@ -468,6 +472,12 @@
 
   const looksLikeEmail = s => /^[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}$/i.test(String(s || '').trim());
   const agoText = d => d === 0 ? 'today' : d === 1 ? 'yesterday' : d + ' days ago';
+  // A snow bid has no whole-job price: its 1–3" price per push is shown in
+  // its place (estimate.js), and never counted in a column's total.
+  function perPushText(j) {
+    const c = window.YDEstimate && YDEstimate.perPushCents ? YDEstimate.perPushCents(j) : null;
+    return c ? fmtMoney(c / 100) + ' per push' : '';
+  }
 
   function followUpHtml() {
     if (!movesJobs()) return '';
@@ -491,7 +501,8 @@
           '<div class="bd-chase-main" onclick="openJobCard(\'bids\', \'' + safeId(j._id) + '\')">' +
             '<div class="bd-chase-name">' + esc((j.customerName || 'Untitled job').trim()) +
               (j.estimateNumber ? ' <span class="job-num">#' + esc(j.estimateNumber) + '</span>' : '') +
-              (price ? ' · <span class="bd-money">' + fmtMoney(price) + '</span>' : '') + '</div>' +
+              (price ? ' · <span class="bd-money">' + fmtMoney(price) + '</span>'
+                : perPushText(j) ? ' · <span class="bd-money">' + perPushText(j) + '</span>' : '') + '</div>' +
             '<div class="bd-chase-line">' + (col === 'followUp' ? 'In Follow up since ' : 'In Sent — waiting since ') +
               (days === 0 ? 'today' : days === 1 ? 'yesterday' : (j.bidStageAt ? shortDay(localDay(new Date(j.bidStageAt))) : agoText(days)) +
                 ' (' + days + ' days)') +
@@ -985,7 +996,8 @@
             ? '🧾 ' + fmtMoney(owed) + ' still owed' + (inv && inv.docNumber ? ' on #' + esc(inv.docNumber) : '')
             : '✓ Paid in full in QuickBooks') + '</div>' : '') +
       '<div class="bd-card-foot">' +
-        (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>' : '') +
+        (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>'
+          : perPushText(j) ? '<span class="bd-money">' + perPushText(j) + '</span>' : '') +
         ageHtml(board, j, col, days, late) +
       '</div>' +
     '</div>';
@@ -1332,7 +1344,8 @@
       '<div class="bd-detail-sub">' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</div>' +
       (reach.length ? '<div class="bd-detail-line">' + reach.join(' · ') + '</div>' : '') +
       ((j.serviceTypes || []).length ? '<div class="bd-detail-line">' + esc(j.serviceTypes.join(', ')) + '</div>' : '') +
-      (parseMoney(j.jobPrice) ? '<div class="bd-detail-line bold">' + fmtMoney(parseMoney(j.jobPrice)) + '</div>' : '') +
+      (parseMoney(j.jobPrice) ? '<div class="bd-detail-line bold">' + fmtMoney(parseMoney(j.jobPrice)) + '</div>'
+        : perPushText(j) ? '<div class="bd-detail-line bold">' + perPushText(j) + '</div>' : '') +
       // Its plants and the care email they owe, with the buttons that settle it.
       (window.YDPlants ? YDPlants.sheetHtml(jobId, j) : '') +
       '<div class="bd-move-label">Move to</div>' +

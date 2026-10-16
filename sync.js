@@ -222,6 +222,9 @@
     if (!d || booking.has(id) || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
     const q = d.qbEstimate || {};
     if (!qbAccepted(q) || !isBidStatus(d.jobStatus) || d.bidStage === 'won' || d.deletedAt) return;
+    // A snow bid said yes to is a season's contract: it goes on the Snow
+    // route (quickbooks.py snow_bids, estimate.js), never on the job list.
+    if (q.snowBid || d.removeWhy === 'snow' || (window.YDEstimate && YDEstimate.isSnowJob && YDEstimate.isSnowJob(d))) return;
     const seenAt = d.acceptedSeenAt || q.syncedAt;
     if (d.bidStageAt && seenAt && String(d.bidStageAt) > String(seenAt)) return;
     booking.add(id);

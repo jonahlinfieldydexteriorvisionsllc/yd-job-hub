@@ -929,6 +929,70 @@ def _end_lines(body):
     return out
 
 
+# A snow bid (estimate.js, Jonah 16 Oct 2026: "i bid snow at the moment per
+# push") goes to QuickBooks the way he writes one himself: the visit -- what
+# is cleared, where, and the price per push by depth -- on his snow removal
+# product, salt per application on his salt product, each extra per visit,
+# and the hourly rate for long storms on Labor. The app writes the words
+# (the same text its "What the customer sees" shows); this side only finds
+# the products. They are his, under Seasonal Services : Snow Removal, so they
+# are looked up by their full names and never made here -- a missing one
+# stops the bid before a customer is made for nothing. No warranty or terms
+# lines, no lien-waiver notice and no payments message: snow is not
+# construction, and it is billed storm by storm.
+SNOW_LINE_KINDS = ("plow", "salt", "extra", "labor")
+SNOW_LINES_MAX = 20
+_snow_items = {}
+
+
+def _snow_item(full):
+    """The QuickBooks product with this full name ("Seasonal Services:Snow
+    Removal:Salt Application"), or with this name when that is all that is
+    given and only one product has it."""
+    full = ":".join(" ".join(p.split()) for p in str(full or "").split(":")).strip(":")
+    if not full:
+        raise RuntimeError("A snow bid line has no QuickBooks product — set them in Pricing rules → Snow bids.")
+    if full in _snow_items:
+        return _snow_items[full]
+    leaf = full.split(":")[-1]
+    rows = [i for i in _query("Item", "Name = '%s'" % _quote(leaf))
+            if i.get("Type") != "Category" and i.get("Active", True)]
+    low = lambda s: " ".join(str(s or "").lower().split())
+    hit = next((i for i in rows if low(i.get("FullyQualifiedName")) == low(full)), None)
+    if not hit and len(rows) == 1:
+        # Moved to another category since, or named without its category.
+        hit = rows[0]
+        if ":" in full:
+            print("quickbooks snow bid: %r found as %r" % (full, hit.get("FullyQualifiedName")))
+    if not hit:
+        raise RuntimeError('QuickBooks has no product called "%s". Add it there (under Seasonal Services → Snow '
+                           'Removal), or change the name in Pricing rules → Snow bids.' % full)
+    _snow_items[full] = hit["Id"]
+    return hit["Id"]
+
+
+def _snow_bid_lines(snow):
+    """A snow bid's lines, as the app worded them: [{kind, qbItem, text,
+    cents}]. The visit's line first; none of them taxed."""
+    out, plow = [], False
+    for ln in (snow.get("lines") or [])[:SNOW_LINES_MAX]:
+        kind = ln.get("kind") if isinstance(ln, dict) else None
+        text = str((ln or {}).get("text") or "").strip()
+        cents = max(0, int(_amount((ln or {}).get("cents"))))
+        if kind not in SNOW_LINE_KINDS or not text or cents <= 0:
+            continue
+        name = str(ln.get("qbItem") or "").strip()
+        # The hourly rate goes on Labor, as on the estimates he made by
+        # hand (made if missing, as for any labour line); every other
+        # product is his own, found by name.
+        item = _item_named(name or LABOR_ITEM) if kind == "labor" and ":" not in name else _snow_item(name)
+        out.append(_line(item, cents, text))
+        plow = plow or kind == "plow"
+    if not plow:
+        raise RuntimeError("The snow bid has no price per push yet")
+    return out
+
+
 LIEN_NOTICE_PDF = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lien_waiver_notice.pdf")
 LIEN_NOTICE_NAME = "Notice of Right to Receive Lien Waivers.pdf"
 
@@ -1036,13 +1100,18 @@ def save_estimate(body):
         raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
                            % existing["TxnStatus"].lower())
 
-    # A missing warranty or terms product is found before a customer is
-    # made for nothing.
-    ends = _end_lines(body)
-    customer_id = _customer_for(c, str(body.get("customerId") or "") if same else "")
-    lines = _estimate_lines(body)
+    # A snow bid (estimate.js): his snow products, his words, nothing else
+    # on it (_snow_bid_lines).
+    snow = body.get("snowBid") if isinstance(body.get("snowBid"), dict) else None
 
-    memo = str(body.get("memo") or "").strip()
+    # A missing warranty or terms product -- or snow product -- is found
+    # before a customer is made for nothing.
+    ends = [] if snow else _end_lines(body)
+    snow_lines = _snow_bid_lines(snow) if snow else None
+    customer_id = _customer_for(c, str(body.get("customerId") or "") if same else "")
+    lines = snow_lines if snow else _estimate_lines(body)
+
+    memo = "" if snow else str(body.get("memo") or "").strip()
     if len(memo) > MEMO_MAX:
         # Too long for the message box: it goes in as a line instead, where
         # the full text fits -- before the warranty and terms, which end it.
@@ -1078,7 +1147,7 @@ def save_estimate(body):
     # can be emailed; if QuickBooks won't take it, the estimate is saved but
     # not sent.
     notice = None
-    if body.get("lienNotice"):
+    if body.get("lienNotice") and not snow:
         try:
             notice = _attach_lien_notice(job_id, e["Id"])
         except ReconnectNeeded:
@@ -1109,6 +1178,10 @@ def save_estimate(body):
         print("quickbooks: job %s not tied to customer %s: %s" % (job_id, customer_id, err))
 
     out = _estimate_record(e, customer_id)
+    # Said either way, every time: a bid sent as a snow bid and later as an
+    # ordinary one (or back) must not keep the old answer -- it decides
+    # whether a yes books a job or goes on the Snow route (snow_bids).
+    out["snowBid"] = bool(snow)
     if sent_to:
         out.update(sentAt=_now().isoformat(), sentTo=sent_to)
     if notice:
@@ -1154,11 +1227,41 @@ def estimate_status(body):
     if not e:
         return {"missing": True}
     job_id = str(body.get("jobId") or "").strip()
-    if job_id and not _belongs(e, job_id):
+    job = None
+    if job_id and "/" not in job_id:
+        snap = _db().collection("jobs").document(job_id).get()
+        job = (snap.to_dict() or {}) if snap.exists else {}
+    if job_id and not _belongs(e, job_id, job):
         return {"missing": True, "error": "That QuickBooks estimate belongs to another job"}
     # acceptedDate rides on the record: Closed with it means accepted, then
     # invoiced (_accepted).
-    return _estimate_record(e)
+    rec = _estimate_record(e)
+    if job and (job.get("qbEstimate") or {}).get("snowBid"):
+        rec.update(_snow_bid_now(job_id, job, e, by_hand=body.get("snowYes") is True))
+    return rec
+
+
+def _snow_bid_now(job_id, job, e, by_hand=False):
+    """A snow bid looked at from its job (estimate.js): said yes to in
+    QuickBooks -- or, by_hand, said yes some other way ("Put them on the
+    Snow route") -- goes on the Snow route now, not at the next hourly
+    sweep. What it says goes back with the record, and the fields written on
+    the job (snowDone) go into the app's own copy, or its next save could
+    put the bid back before the server's copy reached it."""
+    out = {"snowBid": True}
+    if not (_accepted(e) or by_hand) or job.get("removeWhy") or job.get("snowChecked"):
+        return out
+    if _env("QB_ENV", "sandbox") != "production":
+        if by_hand:
+            out["snowError"] = "Not from the QuickBooks test company — only bids in your real QuickBooks go on the Snow route."
+        return out
+    got, patch = snow_bid_won(job_id, e, _stamp(), by_hand=by_hand)
+    if got:
+        out.update(snowDone=patch, snowAccount={"id": got[0], "made": got[1]})
+    else:
+        out["snowError"] = ("Its lines in QuickBooks aren't all snow work any more, so it wasn't put on the Snow route — "
+                            "add it there by hand, or book it as a job.")
+    return out
 
 
 def _stamp():
@@ -1534,6 +1637,9 @@ def _sweep():
             rec = _estimate_record(e)
             if (j.get("qbEstimate") or {}).get("linked"):
                 rec["linked"] = True
+            # A snow bid stays one (snow_bids, below).
+            if (j.get("qbEstimate") or {}).get("snowBid"):
+                rec["snowBid"] = True
             stamp = _stamp()
             patch = {"qbEstimate": rec, "lastModified": stamp}
             # The moment the yes was seen (sync.js bookIfAccepted: a bid moved
@@ -1544,9 +1650,21 @@ def _sweep():
             if _accepted(e):
                 patch["acceptedSeenAt"] = stamp
             db.collection("jobs").document(job_id).set(patch, merge=True)
+            j["qbEstimate"] = rec
+            # A snow bid said yes to goes on the Snow route just below, and
+            # the news is that, not "booked as a job" (the test company's
+            # never go there: its yes is told as it is).
+            if rec.get("snowBid") and _accepted(e) and env == "production":
+                continue
             news.append({"jobId": job_id, "kind": "estimate", "status": rec["status"], "accepted": _accepted(e),
                          "name": str(j.get("customerName") or "a customer"),
                          "docNumber": rec.get("docNumber"), "total": rec.get("total")})
+    try:
+        news += snow_bids(jobs, estimates)
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: snow bids not put on the Snow route:", err)
 
     invoices = _by_ids("Invoice", unpaid) if unpaid else {}
     for inv_id, job_ids in unpaid.items():
@@ -2029,11 +2147,23 @@ def _copy_of(e, held):
 # left priced as he set it (he folds salt and add-ons into each visit's
 # price). He tags snow estimates "snow" in QuickBooks, but Intuit's API
 # gives no tags (Oct 2026), so the products on it say what it is.
-SNOW_ITEM = re.compile(r"snow", re.I)
+SNOW_ITEM = re.compile(r"snow|plow", re.I)
 SALT_ITEM = re.compile(r"\bsalt", re.I)
-LABOR_ITEM = re.compile(r"\blabou?r\b", re.I)
+# Named LABOR_WORD, not LABOR_ITEM: under that name it replaced the "Labor"
+# product name above (_estimate_lines) when this file loaded, and a labour
+# line with no product chosen went to QuickBooks as a product called
+# "re.compile(...)" (Oct 2026).
+LABOR_WORD = re.compile(r"\blabou?r\b", re.I)
 SNOW_TIER = re.compile(r"(\d+(?:\.\d+)?)\s*(?:-|–|to)\s*(\d+(?:\.\d+)?)\s*(?:in(?:ch(?:es)?)?\b|\"|”)?\s*(?:→|->|:|=)?\s*\$\s*([\d,]+(?:\.\d+)?)", re.I)
-SNOW_PER_INCH = re.compile(r"(?:each|every|per)\s+(?:additional\s+)?inch[^$\n]*?(?:beyond|past|over|above)\s*(\d+(?:\.\d+)?)[^$\n]*?\$\s*([\d,]+(?:\.\d+)?)", re.I)
+# The deepest price, open-ended: "9in+ → $X".
+SNOW_TIER_UP = re.compile(r"(?<![\d.\-–])(\d+(?:\.\d+)?)\s*(?:in(?:ch(?:es)?)?|\"|”)?\s*\+\s*(?:in(?:ch(?:es)?)?\b)?\s*(?:→|->|:|=)\s*\$\s*([\d,]+(?:\.\d+)?)", re.I)
+# So much an inch past a depth, said either way round -- "each additional
+# inch beyond 3: +$Z" or, as Jonah writes it now, "For clearings of
+# quantities over 6in each aditional inch is billed at an additional $Z"
+# (16 Oct 2026; "additional" as it is sometimes typed, too).
+_SNOW_MORE = r"(?:ad+i?t+i?onal\s+)?"
+SNOW_PER_INCH = re.compile(r"(?:each|every|per)\s+" + _SNOW_MORE + r"inch[^$\n]*?\b(?:beyond|past|over|above)\s*(\d+(?:\.\d+)?)[^$\n]*?\$\s*([\d,]+(?:\.\d+)?)", re.I)
+SNOW_OVER_INCH = re.compile(r"\b(?:beyond|past|over|above)\s*(\d+(?:\.\d+)?)\s*(?:in(?:ch(?:es)?)?\b|\"|”)?[^$\n]*?(?:each|every|per)\s+" + _SNOW_MORE + r"inch[^$\n]*?\$\s*([\d,]+(?:\.\d+)?)", re.I)
 SNOW_HOURLY = re.compile(r"\$\s*([\d,]+(?:\.\d+)?)\s*/\s*(?:man[- ]?)?h(?:ou)?r", re.I)
 SNOW_BOILER = re.compile(r"^(priced per|\(for storms|\(during extended|\*price per|price is subject|estimated total)", re.I)
 
@@ -2051,7 +2181,7 @@ def _snow_lines(e, end_names):
             continue
         out.append((short, item, ln))
     plows = [x for x in out if SNOW_ITEM.search(x[1]) and not SALT_ITEM.search(x[0])]
-    if not plows or not all(SNOW_ITEM.search(i) or SALT_ITEM.search(i) or LABOR_ITEM.search(i) for _, i, _ in out):
+    if not plows or not all(SNOW_ITEM.search(i) or SALT_ITEM.search(i) or LABOR_WORD.search(i) for _, i, _ in out):
         return None
     return out
 
@@ -2074,7 +2204,7 @@ def _snow_terms(lines):
     for short, item, ln in lines:
         desc = str(ln.get("Description") or "")
         cents = _cents(ln.get("Amount"))
-        if LABOR_ITEM.search(item) and not SNOW_ITEM.search(item):
+        if LABOR_WORD.search(item) and not SNOW_ITEM.search(item):
             m = SNOW_HOURLY.search(desc)
             labor = _dollars_cents(m.group(1)) if m else labor
             continue
@@ -2084,14 +2214,23 @@ def _snow_terms(lines):
                            "cents": cents, "per": "application"})
             continue
         if ln is not main[2]:
-            extras.append({"name": short, "cents": cents, "per": "visit",
-                           "note": " ".join(s.strip() for s in desc.splitlines() if s.strip() and "$" not in s and not SNOW_BOILER.match(s.strip()))[:200]})
+            said = [s.strip() for s in desc.splitlines() if s.strip() and "$" not in s and not SNOW_BOILER.match(s.strip())]
+            name = short
+            # An extra on the same product as the visit itself (a bid made in
+            # Job Hub: "Back deck" / "*price per visit*") is named by its
+            # first line -- the product's name would only say "Snow Removal".
+            if item == main[1] and said and len(said[0]) <= 60:
+                name, said = said[0], said[1:]
+            extras.append({"name": name, "cents": cents, "per": "visit", "note": " ".join(said)[:200]})
             continue
         for lo, hi, dollars in SNOW_TIER.findall(desc):
             top = float(hi)
             label = "1-3" if top <= 3 else "4-6" if top <= 6 else "6+" if top <= 9 else "9+"
             tiers.setdefault(label, _dollars_cents(dollars))
-        m = SNOW_PER_INCH.search(desc)
+        for lo, dollars in SNOW_TIER_UP.findall(desc):
+            low = float(lo)
+            tiers.setdefault("9+" if low >= 9 else "6+" if low >= 6 else "4-6", _dollars_cents(dollars))
+        m = SNOW_PER_INCH.search(desc) or SNOW_OVER_INCH.search(desc)
         if m:
             per_inch = {"cents": _dollars_cents(m.group(2)) or 0, "aboveInches": float(m.group(1))}
         if "1-3" not in tiers:
@@ -2120,10 +2259,12 @@ def _snow_season(now):
     return "%d-%s" % (y, str(y + 1)[2:])
 
 
-def snow_account(e, cust, end_names, stamp):
+def snow_account(e, cust, end_names, stamp, crew_notes=""):
     """A snow estimate -> its Snow account: the one he has for this customer,
     joined to the estimate, or a new one priced from it. Returns
-    (account id, made) or None when the estimate is not snow work."""
+    (account id, made) or None when the estimate is not snow work.
+    crew_notes: a snow bid's notes for the crew (estimate.js), added to a new
+    account's area notes -- the crew read those on the route."""
     lines = _snow_lines(e, end_names)
     if not lines:
         return None
@@ -2144,6 +2285,10 @@ def snow_account(e, cust, end_names, stamp):
         db.collection("snowAccounts").document(have).collection("private").document("rates").set({"fromQb": ref}, merge=True)
         return have, False
     pricing, labor, extras, notes, salt = _snow_terms(lines)
+    crew = " ".join(str(crew_notes or "").split())
+    if crew:
+        notes = ((notes + " · ") if notes else "") + "For the crew: " + crew
+    notes = notes[:1000]
     base = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:40] or "account"
     aid, n = base, 2
     while aid in accounts:
@@ -2222,6 +2367,117 @@ def snow_from_jobs(jobs):
             done += 1
         db.collection("jobs").document(jid).set(patch, merge=True)
     return done
+
+
+# ------------------------------------------------- snow bids said yes to
+#
+# Jonah (16 Oct 2026): "it should know i bid snow at the moment per push". A
+# snow bid built in Job Hub (estimate.js: a price per push, salt per
+# application, extras per visit) goes to QuickBooks in his own words
+# (_snow_bid_lines), and its job's record says so (qbEstimate.snowBid). When
+# the customer says yes it is not a job -- nothing to book, no crew list, no
+# invoice for the whole: it is a season's contract, billed storm by storm. So
+# it becomes (or joins) their Snow account, priced from the estimate's own
+# lines exactly as an imported snow contract is (snow_account), and the bid
+# is marked done the way those are: bidStage 'won', and removeWhy 'snow' with
+# replacedBy 'snow:<account id>' -- off the Bids board, listed under "To take
+# off" in My Jobs, where he deletes it or keeps it. The owner's device never
+# books it (sync.js bookIfAccepted). Only from the real company: the test
+# company's customers are made up and must never reach the Snow route.
+SNOW_BIDS_MAX = 10
+
+
+def _customer_of(e):
+    """The QuickBooks customer an estimate is for, or None."""
+    cid = (e.get("CustomerRef") or {}).get("value")
+    if not cid:
+        return None
+    try:
+        return _query_one("Customer", "Id = '%s'" % _quote(cid))
+    except ReconnectNeeded:
+        raise
+    except Exception as err:                            # noqa: BLE001 -- the estimate's own name and address do
+        print("quickbooks snow: customer %s not read: %s" % (cid, err))
+        return None
+
+
+def _said_yes(q):
+    """A job's estimate record says the customer accepted (as _accepted)."""
+    q = q or {}
+    return q.get("status") == "Accepted" or (q.get("status") in ("Closed", "Converted") and bool(q.get("acceptedDate")))
+
+
+def snow_bid_won(job_id, e, stamp, end_names=None, by_hand=False):
+    """A snow bid the customer said yes to -> their Snow account, and the bid
+    marked done. Returns ((account id, made), the fields written on the job)
+    -- or (None, {}) when the estimate's lines are not all snow work (changed
+    in QuickBooks since, say): it is then left for him to book."""
+    db = _db()
+    crew = ""
+    try:
+        snap = db.collection("jobs").document(job_id).get(field_paths=["estimate.snow"])
+        est = (((snap.to_dict() or {}) if snap.exists else {}).get("estimate") or {})
+        crew = str((est.get("snow") or {}).get("crewNotes") or "")
+    except Exception as err:                            # noqa: BLE001 -- the account is made without them
+        print("quickbooks snow bid: %s notes not read: %s" % (job_id, err))
+    # The route is read by the crew: never a figure from the notes.
+    crew = re.sub(r"\$\s*[\d,]+(?:\.\d+)?", "$—", " ".join(crew.split()))[:500]
+    got = snow_account(e, _customer_of(e), end_names if end_names is not None else _end_names(), stamp, crew_notes=crew)
+    if not got:
+        return None, {}
+    aid, made = got
+    patch = {"snowChecked": True, "removeWhy": "snow", "replacedBy": "snow:" + aid,
+             "removeNote": ("They said yes" if by_hand else "Snow bid accepted") + " — on the Snow route" +
+                           ("" if made else " (they were there already; your prices kept)"),
+             "bidStage": "won", "bidStageAt": stamp}
+    db.collection("jobs").document(job_id).set(dict(patch, lastModified=stamp), merge=True)
+    return got, patch
+
+
+def snow_bids(jobs, have=None):
+    """Every snow bid accepted in QuickBooks and not on the Snow route yet
+    (snow_bid_won) -- the hourly sweep's, or one a device saw first (its
+    record already says Accepted, so the sweep's own look at waiting
+    estimates passes it by). have: estimates the sweep already read, by id.
+    Returns news for the owner's phone."""
+    env = _env("QB_ENV", "sandbox")
+    if env != "production":
+        return []
+    want = {}
+    for jid, j in jobs.items():
+        q = j.get("qbEstimate") or {}
+        if q.get("snowBid") and q.get("id") and q.get("env") == env and _said_yes(q) \
+                and not j.get("removeWhy") and not j.get("snowChecked"):
+            want[jid] = str(q["id"])
+    want = dict(list(want.items())[:SNOW_BIDS_MAX])
+    if not want:
+        return []
+    have = dict(have or {})
+    missing = {eid for eid in want.values() if eid not in have}
+    if missing:
+        have.update(_by_ids("Estimate", missing))
+    end_names = _end_names()
+    news = []
+    for jid, eid in want.items():
+        e, j = have.get(eid), jobs[jid]
+        if not (e and _belongs(e, jid, j) and _accepted(e)):
+            continue
+        stamp = _stamp()
+        got, patch = snow_bid_won(jid, e, stamp, end_names)
+        if got:
+            j.update(patch)
+            news.append({"jobId": jid, "kind": "snowAdded" if got[1] else "snowLinked",
+                         "name": str(j.get("customerName") or (e.get("CustomerRef") or {}).get("name") or "A customer"),
+                         "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+            continue
+        # Not snow work any more: an ordinary accepted bid, booked by the
+        # owner's device like any other -- and he is told it was accepted.
+        _db().collection("jobs").document(jid).set({"qbEstimate": {"snowBid": False}, "lastModified": stamp}, merge=True)
+        j["qbEstimate"] = dict(j.get("qbEstimate") or {}, snowBid=False)
+        news.append({"jobId": jid, "kind": "estimate", "status": e.get("TxnStatus") or "Accepted", "accepted": True,
+                     "name": str(j.get("customerName") or "a customer"),
+                     "docNumber": e.get("DocNumber"), "total": e.get("TotalAmt")})
+    return news
 
 
 def import_accepted(jobs):

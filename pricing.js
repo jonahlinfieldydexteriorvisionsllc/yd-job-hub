@@ -178,6 +178,9 @@
       // items: for homes; businessItems: for businesses (some notices are
       // for homes only).
       estimateEnd: { items: [], businessItems: [] },
+      // A snow bid's words and QuickBooks products (estimate.js snowLines):
+      // only what he changed is kept here -- blank is SNOW_BID's wording.
+      snowBid: {},
       shop: { address: '', lat: null, lng: null },
       // Claude starts an estimate by itself when the site-visit notes are
       // written (estimate.js). On unless switched off.
@@ -791,6 +794,47 @@
   // undefined: not known (yet); null: no such product in QuickBooks.
   const qbProduct = name => (qbProducts ? qbProducts[String(name || '').toLowerCase()] || null : undefined);
 
+  // A snow bid in QuickBooks (estimate.js snowLines), worded as Jonah words
+  // the snow estimates he makes there by hand (16 Oct 2026) until he words
+  // it otherwise in Pricing rules → Snow bids. {areas} is what gets cleared.
+  // The prices and the per-inch sentence are not here: the app writes those
+  // (QuickBooks reads them back when the customer says yes). The products are
+  // his own, by their full QuickBooks names; Job Hub never makes them.
+  const SNOW_BID = {
+    intro: 'Clearing of snow from {areas} at:',
+    pricedNote: 'Priced per snowfall & subject to change based on snow quantity',
+    stormNote: '(For storms our crews visit the home once for every 4-6 inches of snowfall to ensure you are able to get in and ' +
+      'out of your home and billing is done for each visit)',
+    // A business is not "your home": the same promise, in its words.
+    stormNoteBusiness: '(For storms our crews visit once for every 4-6 inches of snowfall to keep your lot and entrances open ' +
+      'and billing is done for each visit)',
+    saltPaw: 'paw-friendly ice melt spread on drive/walkways',
+    saltPlain: 'ice melt spread on drive/walkways',
+    laborNote: '',
+    items: {
+      residential: 'Seasonal Services:Snow Removal:Residential Snow Removal',
+      commercial: 'Seasonal Services:Snow Removal:Commercial Snow Removal',
+      salt: 'Seasonal Services:Snow Removal:Salt Application',
+      labor: 'Labor',
+    },
+  };
+  const SNOW_WORDS = [['intro', 'First line — what is cleared, then the address under it', '{areas} becomes what gets cleared'],
+    ['pricedNote', 'Above the prices', ''], ['stormNote', 'Under the prices — a home', ''],
+    ['stormNoteBusiness', 'Under the prices — a business', ''],
+    ['saltPaw', 'Salt line — paw-friendly', ''], ['saltPlain', 'Salt line — ordinary ice melt', ''],
+    ['laborNote', 'Under “Labor - $X/man hour”', 'optional']];
+  const SNOW_ITEMS = [['residential', 'A home’s visit'], ['commercial', 'A business’s visit'], ['salt', 'Salt'], ['labor', 'Labor per man-hour']];
+  // His words where he has set them, SNOW_BID's where not (blank = the usual).
+  function snowBid(r) {
+    const mine = (r && r.snowBid) || {}, items = mine.items || {};
+    const out = { items: {} };
+    Object.keys(SNOW_BID).forEach(k => {
+      if (k !== 'items') out[k] = String(mine[k] == null ? '' : mine[k]).trim() || SNOW_BID[k];
+    });
+    Object.keys(SNOW_BID.items).forEach(k => { out.items[k] = String(items[k] || '').trim() || SNOW_BID.items[k]; });
+    return out;
+  }
+
   // ------------------------------------------------------------- the rules doc
 
   let rules = blankRules();
@@ -890,6 +934,17 @@
     'estimateEnd.items': ['End lines — homes', 'textList', 'terms'],
     'estimateEnd.businessItems': ['End lines — businesses', 'textList', 'terms'],
     'shop.address': ['Shop address', 'text', 'other'],
+    'snowBid.intro': ['Snow bid — first line', 'text', 'snow'],
+    'snowBid.pricedNote': ['Snow bid — above the prices', 'text', 'snow'],
+    'snowBid.stormNote': ['Snow bid — under the prices (a home)', 'text', 'snow'],
+    'snowBid.stormNoteBusiness': ['Snow bid — under the prices (a business)', 'text', 'snow'],
+    'snowBid.saltPaw': ['Snow bid — paw-friendly salt line', 'text', 'snow'],
+    'snowBid.saltPlain': ['Snow bid — salt line', 'text', 'snow'],
+    'snowBid.laborNote': ['Snow bid — under the labor rate', 'text', 'snow'],
+    'snowBid.items.residential': ['Snow bid — QuickBooks product, a home', 'text', 'snow'],
+    'snowBid.items.commercial': ['Snow bid — QuickBooks product, a business', 'text', 'snow'],
+    'snowBid.items.salt': ['Snow bid — QuickBooks product, salt', 'text', 'snow'],
+    'snowBid.items.labor': ['Snow bid — QuickBooks product, labor', 'text', 'snow'],
     autoDraft: ['Claude starts estimates by itself', 'onOff', 'other'],
     autoCare: ['Plant-care email on Complete', 'onOff', 'other'],
   };
@@ -1284,6 +1339,7 @@
     ['rule', 'Added by rule', 'By rule'],
     ['payments', 'Payments & the message on the estimate', 'Payments'],
     ['end', 'The end of every QuickBooks estimate', 'Estimate end'],
+    ['snow', 'Snow bids — priced per push', 'Snow bids'],
     ['claude', 'Claude', 'Claude'],
     ['takeoff', 'What Claude knows about takeoff', 'Takeoff'],
   ];
@@ -1441,6 +1497,8 @@
         'split longer terms into more products). Change the wording in QuickBooks; the next estimate carries it.</p>' +
       endListHtml(ro) +
 
+      secHead('snow') + snowBidHtml(r, ro) +
+
       secHead('claude') +
       '<div class="pr-spend" id="prSpend">' + spendHtml() + '</div>' +
       '<label class="est-switch"><input type="checkbox"' + (r.autoDraft !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
@@ -1472,6 +1530,35 @@
       showToast(e && e.code === 'permission-denied' ? 'Only the owner changes the pricing rules' : 'Not saved yet — will retry');
     });
     showToast('Saved — Claude reads this from the next message');
+  };
+
+  // Snow bids: the words and the products (estimate.js snowLines). Each box
+  // shows what goes on the bid now; emptied, it is back to the usual.
+  function snowBidHtml(r, ro) {
+    const w = snowBid(r);
+    const dis = ro ? ' disabled' : '';
+    return '<p class="hint">A bid whose services are snow work (or switched to a snow bid on the estimate) is a price per push — ' +
+        'no miles, fuel, materials or crew-days. It goes to QuickBooks as you write snow estimates there: the first line says what is ' +
+        'cleared and where, then the prices by depth; salt, extras and labor on lines of their own. No warranty, terms or lien notice. ' +
+        'The prices and the per-inch sentence are written by the app. Empty a box to go back to the usual wording.</p>' +
+      SNOW_WORDS.map(([k, label, hint]) => '<label class="pr-field wide"><span>' + esc(label) + (hint ? ' <small class="muted">— ' + esc(hint) + '</small>' : '') +
+        '</span><textarea rows="' + (/^stormNote/.test(k) ? 3 : 2) + '"' + dis + ' onchange="prSnow(\'' + k + '\', this.value)">' +
+        esc(w[k]) + '</textarea></label>').join('') +
+      '<p class="hint">The QuickBooks products, by their full names (Category:Sub-category:Product). They must be in QuickBooks — ' +
+        'Job Hub never makes them; a missing one stops the bid before anything is sent.</p>' +
+      '<div class="pr-grid">' + SNOW_ITEMS.map(([k, label]) => '<label class="pr-field"><span>' + esc(label) + '</span>' +
+        '<input value="' + esc(w.items[k]) + '"' + dis + ' onchange="prSnowItem(\'' + k + '\', this.value)"></label>').join('') + '</div>';
+  }
+  // Kept only when it differs from the usual, so a better usual reaches him.
+  const ownWords = (v, usual) => { const t = String(v || '').trim(); return t === usual ? '' : t; };
+  window.prSnow = function (k, v) {
+    if (!owner() || !SNOW_WORDS.some(x => x[0] === k)) return;
+    save({ snowBid: Object.assign({}, rules.snowBid, { [k]: ownWords(v, SNOW_BID[k]) }) });
+  };
+  window.prSnowItem = function (k, v) {
+    if (!owner() || !(k in SNOW_BID.items)) return;
+    const items = Object.assign({}, (rules.snowBid || {}).items, { [k]: ownWords(v, SNOW_BID.items[k]) });
+    save({ snowBid: Object.assign({}, rules.snowBid, { items: items }) });
   };
 
   // path like 'delivery.markupPct'; kind: num | cents | text | id | list | bool
@@ -1611,6 +1698,8 @@
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
     endItems: which => endItems(rules, which), qbProduct, loadQbProducts,
+    // A snow bid's words and products (estimate.js).
+    snowBid: () => snowBid(rules),
     // services.js, "Your other lists".
     customKinds: () => customKinds(), mergeKind: mergeKind,
   };

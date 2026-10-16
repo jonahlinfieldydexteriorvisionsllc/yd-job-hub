@@ -475,9 +475,12 @@ def _model(db):
 
 def draft(client, d):
     """Returns (result, usage). result: {reply, updated, work, materials,
-    spoilCuYd, questions, flags} with every id checked; or {error}."""
+    spoilCuYd, questions, flags} with every id checked; or {error}. A snow
+    bid (d.snow) is talked about by draft_snow instead."""
     if not (d.get("chat") or []):
         return {"error": "Write a message first"}, None
+    if isinstance(d.get("snow"), dict):
+        return draft_snow(client, d)
     current = d.get("current") or {}
     on_estimate = [str(m.get("supplyId")) for m in current.get("materials") or [] if m.get("supplyId")]
     db = dg._db()
@@ -574,3 +577,166 @@ def draft(client, d):
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
             "catalogueSize": len(supply_ids), "model": model}, resp.usage
+
+
+# ----------------------------------------------------------------- snow bids
+#
+# Jonah (16 Oct 2026): "the built in estimate builder clearly doesnt
+# understand quoting snow and is asking the miles to job and back how much
+# salt will be used for the whole season when it should know i bid snow at
+# the moment per push." A snow bid (estimate.js) is a price sheet, not a
+# takeoff: a price per push by depth, salt per application, extras per visit,
+# maybe an hourly rate for long storms -- every figure his, typed in its box.
+# The app picks what gets cleared from his notes itself (plain words, no
+# Claude). Only when he talks to Claude about one does it come here: no
+# catalogue, no takeoff rules, no services list -- none of it is wanted --
+# and a smaller model, since all it may change is words.
+SNOW_MODEL = "claude-sonnet-5-5"
+# What gets cleared (estimate.js SNOW_AREAS): the ids Claude may give.
+SNOW_AREAS = {
+    "driveway": "driveway", "walkways": "walkways", "mailbox": "mailbox", "steps": "steps",
+    "sidewalk": "public sidewalk", "patio": "patio", "deck": "deck", "lot": "parking lot",
+    "entrances": "entrances", "dumpster": "dumpster area",
+}
+
+SNOW_SYSTEM = (
+    "You help Jonah Linfield of YD Exterior Visions LLC, a landscaping and snow removal company near Madison, "
+    "Wisconsin, with a SNOW REMOVAL bid, inside Job Hub, the company's app.\n\n"
+    "Snow is bid PER PUSH -- a price for each visit, each snowfall -- never as a project. A snow bid is: what gets "
+    "cleared (driveway, walkways, mailbox, steps...); a price per push by depth (1-3 in, 3-6 in, sometimes 6-9 in and "
+    "9 in+), or the 1-3 in price plus so much for each inch over a depth; salt or ice melt per application "
+    "(sometimes paw-friendly); extras per visit (a back deck, steps); sometimes a labour rate per man-hour for long "
+    "storms; residential or commercial. There is NO takeoff, NO materials, NO trip miles or fuel, NO crew-days, NO "
+    "dumpsters, NO season totals of salt or visits, NO deposit or payment plan -- never ask about any of them and "
+    "never bring them up.\n\n"
+    "Every price is Jonah's own: he types each one in its box. You never set, suggest, estimate or change a price "
+    "or say what one should be -- if he asks you to change one, tell him which box to type it in. What you can "
+    "change: which areas get cleared (`areas`, ids from the list given, and `areasOther` for anything else in a "
+    "few plain words), extras by NAME only (`extras`: the price box stays his to fill), and the notes for the crew "
+    "(`crewNotes`: what the crew should know on site -- never shown to the customer, never a price). Never invent "
+    "an area or an extra Jonah did not mention.\n\n"
+    "QuickBooks: Job Hub sends the bid itself -- the buttons under it are 'Put in QuickBooks, don't email yet' and "
+    "'Send through QuickBooks'; when he asks for either, the app does it.\n\n"
+    "`reply` answers his latest message: short and plain, like a colleague. When he asks for a change set updated "
+    "to true and give areas, areasOther, extras and crewNotes as they should now be (all of them, changed or not); "
+    "when he only asks something, updated is false and they are left as they are. `questions`: only what blocks a "
+    "right bid. `flags`: anything he should know but need not answer."
+)
+
+SNOW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string"},
+        "updated": {"type": "boolean"},
+        "areas": {"type": "array", "items": {"type": "string", "enum": sorted(SNOW_AREAS)}},
+        "areasOther": {"type": "string"},
+        "extras": {"type": "array", "items": {"type": "string"}},
+        "crewNotes": {"type": "string"},
+        "questions": {"type": "array", "items": {"type": "string"}},
+        "flags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["reply", "updated", "areas", "areasOther", "extras", "crewNotes", "questions", "flags"],
+    "additionalProperties": False,
+}
+# A figure written into the crew's notes: blanked, as the crew's page does.
+SNOW_MONEY = re.compile(r"\$\s*[\d,]+(?:\.\d+)?")
+
+
+def _money_said(v):
+    n = _num(v)
+    return ("$%.2f" % n) if n is not None and n > 0 else "(empty)"
+
+
+def _snow_text(s):
+    """The snow bid as it stands on screen, for Claude to talk about."""
+    s = s or {}
+    rows = ["Customer is: %s" % ("a business (commercial)" if s.get("type") == "commercial" else "a home (residential)")]
+    areas = [SNOW_AREAS[a] + " [" + a + "]" for a in (s.get("areas") or []) if a in SNOW_AREAS]
+    rows.append("What gets cleared: %s" % (", ".join(areas) or "(nothing picked yet)"))
+    if str(s.get("areasOther") or "").strip():
+        rows.append("Also cleared (in his words): %s" % str(s["areasOther"]).strip()[:300])
+    p = s.get("prices") or {}
+    pi = s.get("perInch") or {}
+    if s.get("mode") == "perInch":
+        rows.append("Priced as: the 1-3 in price %s, plus %s for each inch over 3 in" % (
+            _money_said(p.get("1-3")), _money_said(pi.get("dollars"))))
+    else:
+        rows.append("Price per push: 1-3 in %s; 3-6 in %s; 6-9 in %s; 9 in+ %s" % tuple(
+            _money_said(p.get(k)) for k in ("1-3", "4-6", "6+", "9+")))
+        if _num(pi.get("dollars")):
+            rows.append("Each inch over %s in: %s" % (pi.get("over") or 6, _money_said(pi.get("dollars"))))
+    salt = s.get("salt") or {}
+    rows.append("Salt per application: %s%s" % (_money_said(salt.get("dollars")),
+                                                " (paw-friendly ice melt)" if salt.get("paw") else ""))
+    for x in (s.get("extras") or [])[:20]:
+        rows.append("Extra per visit: %s %s" % (str((x or {}).get("name") or "")[:80], _money_said((x or {}).get("dollars"))))
+    if _num(s.get("laborDollars")):
+        rows.append("Labour for long storms: %s per man-hour" % _money_said(s.get("laborDollars")))
+    rows.append("Notes for the crew: %s" % (str(s.get("crewNotes") or "").strip()[:1500] or "(none)"))
+    rows.append("(The prices are Jonah's -- for talking about only; never change them.)")
+    return "\n".join(rows)
+
+
+def _snow_prompt(d):
+    chat = [m for m in (d.get("chat") or []) if isinstance(m, dict) and str(m.get("text") or "").strip()]
+    return "\n".join([
+        "Today is %s." % dg._long_day(dg._now().date()),
+        "Customer: %s" % (str(d.get("customer") or "").strip() or "(no name)"),
+        "Where: %s" % (str(d.get("location") or "").strip() or "(not given)"),
+        "Services: %s" % (", ".join(str(s) for s in d.get("services") or []) or "(not given)"),
+        "",
+        "JONAH'S NOTES FROM THE SITE VISIT:",
+        str(d.get("siteNotes") or "").strip()[:6000] or "(none written)",
+        "",
+        "Other notes on the job (context):",
+        str(d.get("jobNotes") or "").strip()[:2000] or "(none)",
+        "",
+        "THE SNOW BID AS IT STANDS:",
+        _snow_text(d.get("snow")),
+        "",
+        "Area ids you may use: " + ", ".join("%s = %s" % kv for kv in sorted(SNOW_AREAS.items())),
+        "",
+        "THE CONVERSATION SO FAR:",
+        _chat_text(chat[:-1]) or "(this is the first message)",
+        "",
+        "JONAH'S LATEST MESSAGE:",
+        str(chat[-1].get("text") or "")[:4000] if chat else "(none)",
+    ])
+
+
+def draft_snow(client, d):
+    """Talking about a snow bid. Returns (result, usage): {mode 'snow', reply,
+    updated, areas, areasOther, extras, crewNotes, questions, flags}."""
+    with client.beta.messages.stream(
+        model=SNOW_MODEL, max_tokens=8000,
+        system=[{"type": "text", "text": SNOW_SYSTEM}],
+        messages=[{"role": "user", "content": _snow_prompt(d)}],
+        thinking={"type": "adaptive"},
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": SNOW_SCHEMA}},
+        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+    ) as stream:
+        resp = stream.get_final_message()
+    if resp.stop_reason == "refusal":
+        return {"error": "Claude declined to do this one", "model": SNOW_MODEL}, resp.usage
+    if resp.stop_reason == "max_tokens":
+        return {"error": "That answer came out too long. Try again.", "model": SNOW_MODEL}, resp.usage
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    try:
+        got = json.loads(text)
+    except ValueError:
+        return {"error": "Claude's answer could not be read. Try again.", "model": SNOW_MODEL}, resp.usage
+    seen, extras = set(), []
+    for x in got.get("extras") or []:
+        name = " ".join(str(x or "").split())[:60]
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            extras.append(name)
+    return {"mode": "snow", "reply": str(got.get("reply") or "").strip(), "updated": bool(got.get("updated")),
+            "areas": [a for a in got.get("areas") or [] if a in SNOW_AREAS],
+            "areasOther": " ".join(str(got.get("areasOther") or "").split())[:300],
+            "extras": extras[:12],
+            # Never a figure for the crew's eyes, whatever was written.
+            "crewNotes": SNOW_MONEY.sub("$—", str(got.get("crewNotes") or "").strip())[:2000],
+            "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
+            "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
+            "model": SNOW_MODEL}, resp.usage

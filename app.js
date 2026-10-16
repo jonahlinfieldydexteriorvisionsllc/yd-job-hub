@@ -3544,7 +3544,7 @@ function renderJobList() {
           (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
           // A bid with no price yet said "$0.00", which read as a free job.
-          (j.price ? fmtMoney(j.price) : '<span class="muted">no price yet</span>') + '</div></div>' +
+          (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div></div>' +
       '<div class="jl-acts">' +
       (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + j.id + '\')">BACK ON THE BOARD</button>' : '') +
       (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + j.id + '\')">MAKE IT A JOB</button>' : '') +
@@ -3601,6 +3601,16 @@ function deletedBoxHtml() {
 // ═══════════════════════════════════════════════════════════
 // ALL JOBS DASHBOARD
 // ═══════════════════════════════════════════════════════════
+// A snow bid has no whole-job price: it is priced per push (estimate.js),
+// its jobPrice is left empty so no total ever counts it, and its 1–3"
+// price per visit is shown where its price would be.
+function perPushText(d) {
+  const c = d && window.YDEstimate && YDEstimate.perPushCents ? YDEstimate.perPushCents(d) : null;
+  return c ? fmtMoney(c / 100) + ' per push' : '';
+}
+function perPushOfJob(id) {
+  try { return perPushText(JSON.parse(readJobBlob(id) || 'null')); } catch (e) { return ''; }
+}
 function loadAllJobs() {
   if (_jobsCache) return _jobsCache;
   _jobsCache = getJobIndex().map(j => { try { return { ...JSON.parse(readJobBlob(j.id)), _id: j.id }; } catch { return null; } }).filter(Boolean);
@@ -3719,7 +3729,7 @@ function renderDashboard() {
     const net = real ? round2(price - (lab.cost + matCost)) : dashPlannedNet(d, price);
     const stage = dashStage(d, status);
     const jstage = jobStage(d);
-    return { id: d._id, jstage: jstage.id, qbStage: !!jstage.qb, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, hrs, matCost, net, planned: !real && net != null,
+    return { id: d._id, jstage: jstage.id, qbStage: !!jstage.qb, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, push: price ? '' : perPushText(d), hrs, matCost, net, planned: !real && net != null,
       invoiced: isInvoiced(d), owed: dashOwed(d), stage, lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', why: lostWhy(d), year: dashYearOf(d, status),
       plantBits: window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '' };
   });
@@ -3805,12 +3815,12 @@ function renderDashboard() {
     h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
       '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
       '<td>' + statusHtml(r) + '</td>' +
-      '<td class="bold">' + (r.price ? fmtMoney(r.price) : '<span class="muted">—</span>') + '</td>' +
+      '<td class="bold">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">—</span>') + '</td>' +
       '<td class="bold">' + owedHtml(r) + '</td>' +
       '<td class="bold">' + netHtml(r) + '</td></tr>';
     cardsHtml += '<button type="button" class="dash-card" onclick="loadJob(\'' + r.id + '\')">' +
       '<span class="dash-card-top"><span class="dash-card-name">' + jobNameHtml(r.name, r.est) + '</span>' +
-        '<span class="dash-card-price">' + (r.price ? fmtMoney(r.price) : '<span class="muted">no price yet</span>') + '</span></span>' +
+        '<span class="dash-card-price">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">no price yet</span>') + '</span></span>' +
       '<span class="dash-card-status">' + statusHtml(r) + '</span>' +
       ((r.city || r.services) ? '<span class="dash-card-sub">' + esc([r.city, r.services].filter(Boolean).join(' · ')) + '</span>' : '') +
       '<span class="dash-card-nums"><span>Net ' + netHtml(r) + '</span>' +

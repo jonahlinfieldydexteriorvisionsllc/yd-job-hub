@@ -4847,3 +4847,40 @@
     .cu-dup-acts .btn { flex:1 1 100%; justify-content:center; }
     .cu-fillbar .btn { width:100%; min-height:44px; }
   }
+  /* ---------------------------------------------------------------- Snow bids
+     A bid priced per push (estimate.js renderSnow, 16 Oct 2026): tap buttons
+     for who it is for and what gets cleared (.stage-step, wrapping -- never a
+     sideways row), a $ box per price with his own accounts' prices offered
+     under it, and the customer's view as QuickBooks will show it. */
+  .snb-toggle { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin:0 0 10px; padding:8px 12px;
+    border-radius:8px; border:1px dashed var(--border-strong); background:var(--surface-2); font-size:13px; }
+  .snb-on .snb-toggle { border-style:solid; border-color:var(--st-info); }
+  .snb-toggle .est-switch { min-width:0; }
+  .snb-talk { margin:2px 0 8px; font-size:13px; }
+  .snb { display:flex; flex-direction:column; gap:4px; }
+  .snb-sec { display:flex; flex-direction:column; gap:6px; margin-top:10px; }
+  .snb-said { font-size:12px; }
+  .snb-other { width:100%; max-width:520px; }
+  .snb-modes { margin-bottom:6px; }
+  .snb-prices { display:flex; flex-wrap:wrap; gap:10px 18px; margin-bottom:4px; }
+  .snb-price { display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .snb-price label { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
+  .snb-money { display:inline-flex; align-items:center; gap:4px; font-size:15px; font-weight:700; color:var(--text); }
+  .snb-money input { width:110px; font-size:16px; }
+  .snb-yours { font-size:12px; max-width:280px; }
+  .snb-yours .link-btn { font-size:12.5px; font-weight:600; }
+  .snb-extras { display:flex; flex-direction:column; gap:6px; margin-bottom:6px; }
+  .snb-extra { display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; }
+  .snb-xname { flex:1 1 200px; min-width:0; max-width:360px; }
+  .snb-crew { margin-top:12px; }
+  .snb-probs { margin-top:12px; }
+  .snb-won { margin-top:8px; padding:9px 12px; border-radius:8px; border-left:4px solid var(--st-info); background:var(--st-info-soft);
+    font-size:13.5px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .snb-sum .est-words-line b { margin-right:6px; }
+  @media (max-width:720px) {
+    .snb .stage-step { flex:1 1 calc(33.333% - 6px); }
+    .snb-modes .stage-step { flex:1 1 calc(50% - 6px); }
+    .snb-prices { flex-direction:column; gap:12px; }
+    .snb-money input { width:100%; max-width:200px; }
+    .snb-yours { max-width:none; }
+  }

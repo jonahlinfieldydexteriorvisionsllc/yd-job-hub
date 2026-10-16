@@ -83,8 +83,11 @@
   function blank() {
     // payments: this estimate's own schedule ([{label, how: pct|amount|rest,
     // value}]), or null for the usual (pricing.js payments).
+    // snow: a snow bid's price sheet (cleanSnow); snowBid, when set by hand,
+    // says whether it is one (left out = from the services, snowOf).
     return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
-             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null, payments: null };
+             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null, payments: null,
+             snow: null };
   }
   function cleanPlan(list) {
     if (!Array.isArray(list) || !list.length) return null;
@@ -138,8 +141,15 @@
       render();
       autoCheck();
     },
-    hasLines: () => hasLines(),
-    hasMaterials: () => est.materials.length > 0,
+    // A snow bid has no takeoff (any lines from before it was one are kept,
+    // not used): nothing for the job's price or Materials to Order.
+    hasLines: () => !snowNow() && hasLines(),
+    hasMaterials: () => !snowNow() && est.materials.length > 0,
+    // Whether a job's saved estimate is a snow bid, and its 1–3" price per
+    // push -- shown where a bid's price is (boards, My Jobs, All Jobs), and
+    // never added into a total: a snow bid has no whole-job price.
+    isSnowJob: d => !!d && snowOf((d.estimate && typeof d.estimate === 'object') ? d.estimate : {}, d.serviceTypes, d.jobStatus, d.qbEstimate),
+    perPushCents: d => perPushOf(d),
     // Notes brought in from elsewhere (a contact's meeting notes, prospects.js);
     // `auto` lets Claude start the estimate from them as if they had been typed.
     setNotes(text, auto) {
@@ -149,9 +159,15 @@
       if (typeof markDirty === 'function') markDirty();
       if (auto) window.estNotesDone();
     },
-    totalDollars: () => { const r = priced(); return r ? r.totalCents / 100 : 0; },
+    totalDollars: () => { if (snowNow()) return 0; const r = priced(); return r ? r.totalCents / 100 : 0; },
     book: () => book,
-    orderLines: orderLines,
+    // Nothing to order for a snow bid. A saved one (a job not open) is known
+    // by its hand-set switch: one that is snow by its services alone has no
+    // lines to order from anyway.
+    orderLines: (saved, city) => {
+      if (saved === undefined ? snowNow() : !!(saved && saved.snowBid === true)) return [];
+      return orderLines(saved, city);
+    },
     jobCompleted: (id, data) => jobCompleted(id, data),
     // Any job's saved estimate priced the way this screen prices it, for a
     // job that is not open (Estimate vs actual, jobcosts.js): the same
@@ -251,6 +267,9 @@
     // A home or a business, when set by hand (whoFor); left out = from the
     // job's Business name.
     if (e.customerType === 'home' || e.customerType === 'business') o.customerType = e.customerType;
+    // A snow bid: switched by hand either way, and its price sheet.
+    if (e.snowBid === true || e.snowBid === false) o.snowBid = e.snowBid;
+    o.snow = cleanSnow(e.snow);
     if (e.v === 2) {
       o.work = (Array.isArray(e.work) ? e.work : []).map(w => Object.assign({ id: newId('ew'), kind: 'crew' }, w));
       o.materials = (Array.isArray(e.materials) ? e.materials : []).map(m => Object.assign({ id: newId('em') }, m));
@@ -323,6 +342,10 @@
     if (!sees()) return;
     if (!P()) { wrap.innerHTML = '<p class="empty-msg">Loading…</p>'; return; }
     const ro = !changes();
+    // A snow bid is a price sheet, not a takeoff: drawn on its own.
+    drawnSnow = snowNow();
+    wrap.classList.toggle('snb-on', drawnSnow);
+    if (drawnSnow) { renderSnow(wrap, ro); return; }
     const r = priced();
     const rules = P().rules();
     const notReady = num(rules.crewDayCents) === null || num(rules.taxPct) === null;
@@ -337,6 +360,7 @@
     }
 
     const head =
+      snowToggleHtml(ro) +
       (notReady ? '<div class="est-warnbox">Your pricing rules aren’t set up yet, so nothing can be priced. ' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : 'Ask Jonah to set them.') + '</div>' : '') +
 
@@ -502,7 +526,11 @@
   // The folded estimate's line: its number, the answer, the total, and the
   // way back in.
   function foldedHtml(q, status) {
-    const total = q.total != null ? fmtMoney(Number(q.total) || 0) : last && last.grandCents > 0 ? cents(last.grandCents) : '';
+    // A snow bid's QuickBooks total is only its lines added up: what it is
+    // is its price per push.
+    const push = snowNow() ? perPushNow() : null;
+    const total = push ? cents(push) + ' per push'
+      : q.total != null ? fmtMoney(Number(q.total) || 0) : last && last.grandCents > 0 ? cents(last.grandCents) : '';
     const link = q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
       ? '<a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open in QuickBooks</a>' : '';
     return '<div class="est-fold-line"><span class="est-fold-what"><b>Estimate' + (q.docNumber ? ' #' + esc(q.docNumber) : '') + '</b>' +
@@ -612,8 +640,10 @@
     const c = el('estChat');
     if (c) c.classList.add('est-chat-all');
   };
-  function chatHtml(ro) {
-    if (!est.chat.length && !busyHere()) return '';
+  // open: drawn even with nothing said yet (a snow bid's "Talk to Claude").
+  function chatHtml(ro, open) {
+    if (!est.chat.length && !busyHere() && !open) return '';
+    const snow = snowNow();
     const lastI = est.chat.length - 1;
     const older = Math.max(0, est.chat.length - CHAT_PHONE);
     return '<div class="est-chat' + (chatAll[currentJobId || ''] ? ' est-chat-all' : '') + '" id="estChat">' +
@@ -626,13 +656,16 @@
             (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
             '</div>' : '') +
         '</div>').join('') +
-        (busyHere() ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">Working on it — a first build can take a minute or two. ' +
-          'You can open another job meanwhile; it lands on this one.</div></div>'
+        (busyHere() ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">' +
+          (snow ? 'Working on it…' : 'Working on it — a first build can take a minute or two. ' +
+          'You can open another job meanwhile; it lands on this one.') + '</div></div>'
           : queued.indexOf(currentJobId) !== -1 ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">' +
             'Waiting its turn — finishing another estimate first.</div></div>' : '') +
       '</div>' +
       (ro ? '' : '<div class="est-send">' +
-        '<textarea id="estMsg" rows="2" placeholder="Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “4 crew-days”" ' +
+        '<textarea id="estMsg" rows="2" placeholder="' + (snow
+          ? 'Talk to Claude about this bid — “they want the back steps too”, “add the deck as an extra”'
+          : 'Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “4 crew-days”') + '" ' +
           'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
         '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (busyHere() ? '…' : 'Send') + '</button>' +
       '</div>' +
@@ -1454,8 +1487,11 @@
     if (!box) return;
     const q = qb(), inv = qbInv();
     const can = sends() && changes();
-    const r = last;
-    const ready = r && r.totalCents > 0;
+    // A snow bid: its lines added up (what QuickBooks will total), ready
+    // once nothing it needs is missing; never an invoice for the whole.
+    const snow = snowNow();
+    const r = snow ? snowSum() : last;
+    const ready = snow ? !snowProblems().length : r && r.totalCents > 0;
     const when = s => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
     const status = q ? ({ Pending: 'Waiting on the customer', Accepted: '✅ Accepted', Closed: 'Made into an invoice',
       Converted: 'Made into an invoice', Rejected: 'Turned down' }[q.status] || q.status || '') : '';
@@ -1465,12 +1501,16 @@
     const drawnFolded = !!(wrap && wrap.dataset.folded === '1');
     if (wrap && drawnFolded !== folded()) { render(); return; }
     if (drawnFolded) {
-      box.innerHTML = foldedHtml(q, status) + invoiceHtml(q, inv, can, when) + careHtml(when);
+      box.innerHTML = foldedHtml(q, status) + (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when));
       return;
     }
     if (can) askCompany();
     const testCo = qbCompany && qbCompany.env && qbCompany.env !== 'production';
-    const closed = !!(q && q.id && (q.status === 'Closed' || q.status === 'Converted' || (inv && inv.id)));
+    // Said yes to (or on the Snow route already), a snow bid is not sent
+    // again: its prices are the account's now.
+    const closed = !!(q && q.id && (q.status === 'Closed' || q.status === 'Converted' || (inv && inv.id) ||
+      (snow && (isAccepted(q) || snowWon()))));
+    const push = snow ? perPushNow() : null;
     // One button stands out -- the next thing to do: the invoice once the
     // customer has said yes, else sending the estimate. The rest are plain.
     const yes = !!(q && q.id && q.status === 'Accepted' && !(inv && inv.id));
@@ -1479,7 +1519,7 @@
         (qbCompany.name ? ' (“' + esc(qbCompany.name) + '”)' : '') + ', not your real QuickBooks. Bids sent from here go nowhere real — ' +
         'switch to your real company first.</div>' : '') +
       (q && q.id ? '<div class="est-qb-line"><b>QuickBooks estimate' + (q.docNumber ? ' #' + esc(q.docNumber) : '') + '</b>' +
-        (q.total != null ? ' · ' + fmtMoney(Number(q.total) || 0) : '') +
+        (push ? ' · ' + cents(push) + ' per push' : q.total != null ? ' · ' + fmtMoney(Number(q.total) || 0) : '') +
         (status ? ' · ' + esc(status) : '') +
         (q.sentAt ? ' · emailed ' + esc(when(q.sentAt)) + (q.sentTo ? ' to ' + esc(q.sentTo) : '') : ' · not emailed yet') +
         (q.acceptedBy ? ' · accepted by ' + esc(q.acceptedBy) : '') +
@@ -1489,7 +1529,7 @@
       (can && closed
         ? (q.link && /^https:\/\/[a-z.]*qbo\.intuit\.com\//.test(q.link)
           ? '<div class="field-actions est-qb-acts"><a class="btn btn-sm" href="' + esc(q.link) + '" target="_blank" rel="noopener">Open the estimate</a></div>' : '')
-      : can ? whoHtml() + '<div class="field-actions est-qb-acts">' +
+      : can ? (snow ? '' : whoHtml()) + '<div class="field-actions est-qb-acts">' +
         '<button class="btn btn-sm' + (yes ? '' : ' btn-filled') + '" onclick="estToQB(true)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
           (saving || qbAsking ? 'Working…' : q && q.id ? (q.sentAt ? '✉️ Update & re-send' : '✉️ Email it from QuickBooks') : '✉️ Send through QuickBooks') + '</button>' +
         '<button class="btn btn-sm" onclick="estToQB(false)"' + (saving || qbAsking || !ready ? ' disabled' : '') + '>' +
@@ -1500,8 +1540,7 @@
           (checking ? 'Checking…' : 'Check for an answer') + '</button>' : '') +
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
       sentHtml(when) +
-      invoiceHtml(q, inv, can, when) +
-      careHtml(when);
+      (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when));
   }
 
   // QuickBooks' total against Job Hub's, said on the row while it differs by
@@ -1517,6 +1556,8 @@
     const changedHere = !!(lastSent && lastSent.totalCents > 0 && Math.abs(lastSent.totalCents - r.grandCents) > 100);
     return '<div class="est-qb-diff" role="note">⚠ QuickBooks’ total is <b>' + cents(there) + '</b> — Job Hub’s is <b>' + cents(r.grandCents) + '</b>. ' +
       (changedHere && !closed ? 'The estimate has changed here since it last went to QuickBooks — update it (below) to send the new total.'
+        // A snow bid has no tax and no payments: only a change made there.
+        : snowNow() ? 'It was changed in QuickBooks.'
         : 'QuickBooks works out the sales tax from the job’s address, or it was changed in QuickBooks. ' +
           'The payments are each a share of the total, so they still add up.') + '</div>';
   }
@@ -1684,7 +1725,9 @@
 
   window.estInvoice = async function (email) {
     const q = qb(), inv = qbInv() || {};
-    if (!q || !q.id || invoicing || !sends() || !changes()) return;
+    // A snow bid is billed storm by storm from the Snow account, never one
+    // invoice for the whole.
+    if (!q || !q.id || invoicing || !sends() || !changes() || snowNow()) return;
     const total = Math.round((Number(q.total) || 0) * 100);
     const to = (el('email').value || '').trim();
     const what = inv.id ? 'invoice #' + (inv.docNumber || '') : 'the invoice for the whole job (' + cents(total) + ') from estimate #' + (q.docNumber || '');
@@ -1798,6 +1841,694 @@
     return [payWords(pays), terms, warranty]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
+
+  // ------------------------------------------------------------- snow bids
+  //
+  // Jonah, 16 Oct 2026: "the built in estimate builder clearly doesnt
+  // understand quoting snow and is asking the miles to job and back how much
+  // salt will be used for the whole season when it should know i bid snow at
+  // the moment per push." A snow bid is a price sheet, not a takeoff: what
+  // gets cleared, a price per push by depth (or the 1–3" price and so much an
+  // inch over 3"), salt per application, extras per visit, an hourly rate for
+  // long storms. No miles, fuel, materials, dumpsters, crew-days, season salt
+  // or payment plan. Every figure is his: the boxes start empty, with his own
+  // Snow accounts' prices offered beside them to tap. It goes to QuickBooks
+  // in the words and products of the snow estimates he writes by hand
+  // (snowLines; the words in Pricing rules → Snow bids), and a yes puts the
+  // customer on the Snow route (quickbooks.py snow_bids) -- never on the job
+  // list. A bid is a snow bid when its services are all snow work (one with
+  // a takeoff already built stays as it is), or once sent as one -- or when
+  // switched by hand, which always wins.
+  //
+  // est.snow (cleanSnow): { mode: tiers|perInch, tiers {'1-3','4-6','6+','9+'}
+  //   (cents; '4-6' is the 3–6" price), deeper (6–9"/9"+ boxes out),
+  //   perInchCents, saltCents, paw, extras [{id, name, cents}], laborCents,
+  //   areas [ids], areasOther, areasSet (picked by hand), type
+  //   (residential|commercial, null = from the Business name), crewNotes }.
+  // The area ids are estimates.py SNOW_AREAS too (Claude may give them).
+  const SNOW_AREAS = [['driveway', 'Driveway'], ['walkways', 'Walkways'], ['mailbox', 'Mailbox'], ['steps', 'Steps'],
+    ['sidewalk', 'Public sidewalk'], ['patio', 'Patio'], ['deck', 'Deck'], ['lot', 'Parking lot'],
+    ['entrances', 'Entrances'], ['dumpster', 'Dumpster area']];
+  const SNOW_AREA_IDS = SNOW_AREAS.map(a => a[0]);
+  // What his notes say, for each: "drive/walkways", "the walks", "mailbox".
+  const SNOW_AREA_WORDS = {
+    driveway: /\bdrive ?ways?\b|\bdrive\b/i, walkways: /\bwalk ?ways?\b|\bwalks?\b|\bpaths?\b/i,
+    mailbox: /\bmail ?box(es)?\b/i, steps: /\bsteps?\b|\bstairs?\b|\bstoops?\b/i, sidewalk: /\bside ?walks?\b/i,
+    patio: /\bpatios?\b/i, deck: /\bdecks?\b/i, lot: /\bparking\b/i, entrances: /\bentrances?\b|\bentry\b|\bdoorways?\b/i,
+    dumpster: /\bdumpsters?\b/i,
+  };
+  const PAW_WORDS = /\bpaws?\b|\bpets?\b|\bdogs?\b/i;
+  // [key, on screen, on the estimate (as he writes it), its deepest inch].
+  const SNOW_TIERS = [['1-3', '1–3"', '1-3in', 3], ['4-6', '3–6"', '3-6in', 6], ['6+', '6–9"', '6-9in', 9], ['9+', '9"+', '9in+', null]];
+  // A service that is snow work (services.js files these under Snow & ice).
+  const SNOW_SERVICE = /snow|\bice\b|salt|plow/i;
+  let drawnSnow = false;      // the estimate on screen was drawn as a snow bid
+  const snowChatOpen = {};    // job id -> "Talk to Claude" opened on its snow bid
+
+  const svcNow = () => (typeof serviceTypes !== 'undefined' && Array.isArray(serviceTypes) ? serviceTypes : []);
+  const statusNow = () => (typeof jobStatus !== 'undefined' ? jobStatus : null);
+  function snowAuto(services, status) {
+    const list = (Array.isArray(services) ? services : []).map(s => String(s || '').trim()).filter(Boolean);
+    if (!list.length) return false;
+    if (status != null && typeof isBidStatus === 'function' && !isBidStatus(status)) return false;
+    return list.every(n => SNOW_SERVICE.test(n) ||
+      ((window.YDServices && YDServices.about && YDServices.about(n)) || {}).group === 'snow');
+  }
+  // e: an estimate as saved; q: the job's QuickBooks record.
+  function snowOf(e, services, status, q) {
+    e = e || {};
+    if (e.snowBid === true || e.snowBid === false) return e.snowBid;
+    if (q && q.snowBid) return true;
+    if ((e.work || []).length || (e.materials || []).length || e.fromQb) return false;
+    return snowAuto(services, status);
+  }
+  const snowNow = () => snowOf(est, svcNow(), statusNow(), qb());
+  function perPushOf(d) {
+    if (!d) return null;
+    const e = d.estimate && typeof d.estimate === 'object' ? d.estimate : {};
+    if (!snowOf(e, d.serviceTypes, d.jobStatus, d.qbEstimate)) return null;
+    const c = num(((e.snow || {}).tiers || {})['1-3']);
+    return c > 0 ? c : null;
+  }
+  const perPushNow = () => perPushOf({ estimate: est, serviceTypes: svcNow(), jobStatus: statusNow(), qbEstimate: qb() });
+
+  function cleanSnow(s) {
+    if (!s || typeof s !== 'object') return null;
+    const c = v => { const n = num(v); return n !== null && n > 0 ? Math.round(n) : null; };
+    const t = s.tiers || {};
+    return {
+      mode: s.mode === 'perInch' ? 'perInch' : 'tiers',
+      tiers: { '1-3': c(t['1-3']), '4-6': c(t['4-6']), '6+': c(t['6+']), '9+': c(t['9+']) },
+      deeper: !!s.deeper,
+      perInchCents: c(s.perInchCents),
+      saltCents: c(s.saltCents),
+      paw: s.paw === true ? true : s.paw === false ? false : null,
+      extras: (Array.isArray(s.extras) ? s.extras : []).filter(x => x && typeof x === 'object').slice(0, 12)
+        .map(x => ({ id: safeId(x.id) || newId('sx'), name: String(x.name || '').slice(0, 60), cents: c(x.cents) })),
+      laborCents: c(s.laborCents),
+      areas: SNOW_AREA_IDS.filter(id => (Array.isArray(s.areas) ? s.areas : []).indexOf(id) !== -1),
+      areasOther: String(s.areasOther || '').slice(0, 300),
+      areasSet: !!s.areasSet,
+      type: s.type === 'commercial' || s.type === 'residential' ? s.type : null,
+      crewNotes: String(s.crewNotes || '').slice(0, 2000),
+    };
+  }
+  function snowObj() {
+    if (!est.snow) est.snow = cleanSnow({});
+    return est.snow;
+  }
+  // A home or a business: set by hand, else the job's Business name says.
+  function snowType(s, biz) {
+    if (s && s.type) return s.type;
+    const b = biz != null ? biz : (el('business') && el('business').value) || '';
+    return String(b).trim() ? 'commercial' : 'residential';
+  }
+  // The depth the per-inch price starts over: 3" with the 1–3" price alone,
+  // else past the deepest price given (none past an open-ended 9"+).
+  function snowOver(s) {
+    if (s.mode === 'perInch') return 3;
+    return s.tiers['9+'] ? null : s.tiers['6+'] ? 9 : 6;
+  }
+  const money2 = c => '$' + ((Number(c) || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // "driveway, walkways, and mailbox" -- as he writes it.
+  function areasText(s) {
+    const list = SNOW_AREAS.filter(([id]) => s.areas.indexOf(id) !== -1).map(([, label]) => label.toLowerCase());
+    String(s.areasOther || '').split(/[,;]+/).map(x => x.trim()).filter(Boolean).forEach(x => list.push(x));
+    if (list.length < 3) return list.join(' and ');
+    return list.slice(0, -1).join(', ') + ', and ' + list[list.length - 1];
+  }
+  // His words (Pricing rules → Snow bids; pricing.js holds the defaults).
+  const snowWordsCfg = () => (P() && P().snowBid ? P().snowBid() : { items: {} });
+
+  // The estimate's lines, as QuickBooks will show them -- the one place the
+  // words are made: the customer view and what is sent both use this. The
+  // per-inch sentence is fixed (its figure is read back when the customer
+  // says yes, quickbooks.py _snow_terms); the rest are his to word.
+  function snowLines(s, site) {
+    const w = snowWordsCfg(), items = w.items || {};
+    const biz = snowType(s) === 'commercial';
+    const plowItem = biz ? items.commercial : items.residential;
+    const tiers = s.mode === 'perInch' ? SNOW_TIERS.slice(0, 1) : SNOW_TIERS;
+    const tierLines = tiers.filter(t => s.tiers[t[0]] > 0).map(t => t[2] + ' → ' + money2(s.tiers[t[0]]));
+    const over = snowOver(s);
+    const per = over && s.perInchCents > 0
+      ? (over === 3 ? 'Each additional inch beyond 3in: +' + money2(s.perInchCents)
+        : 'For clearings of quantities over ' + over + 'in each additional inch is billed at an additional ' + money2(s.perInchCents))
+      : '';
+    // Nothing picked yet (it cannot be sent so): a gap the eye catches.
+    const intro = String(w.intro || '').replace(/\{areas\}/g, areasText(s) || '…').replace(/\s+/g, ' ').trim();
+    const head = [intro, site].filter(Boolean).join('\n');
+    const prices = [w.pricedNote].concat(tierLines, [biz ? w.stormNoteBusiness : w.stormNote]).filter(Boolean).join('\n');
+    const out = [{ kind: 'plow', qbItem: plowItem || '', title: '1–3" per push', cents: s.tiers['1-3'] || 0,
+                   text: [head, prices, per].filter(Boolean).join('\n\n') }];
+    if (s.saltCents > 0) {
+      out.push({ kind: 'salt', qbItem: items.salt || '', title: 'Salt per application', cents: s.saltCents,
+                 text: (s.paw ? w.saltPaw : w.saltPlain) + '\n\n*price per application*' });
+    }
+    s.extras.forEach(x => {
+      const name = String(x.name || '').trim();
+      if (name && x.cents > 0) out.push({ kind: 'extra', qbItem: plowItem || '', title: name, cents: x.cents, text: name + '\n\n*price per visit*' });
+    });
+    if (s.laborCents > 0) {
+      out.push({ kind: 'labor', qbItem: items.labor || 'Labor', title: 'Labor per man-hour', cents: s.laborCents,
+                 text: 'Labor - ' + money2(s.laborCents) + '/man hour' + (w.laborNote ? '\n' + w.laborNote : '') });
+    }
+    return out;
+  }
+  // QuickBooks adds the lines up; that is all the total is.
+  function snowSum() {
+    const t = snowLines(snowObj(), siteLine()).reduce((a, l) => a + (l.cents || 0), 0);
+    return { totalCents: t, grandCents: t };
+  }
+  // What it needs before it can go: nothing guessed for him.
+  function snowProblems() {
+    const s = snowObj(), out = [];
+    if (!(s.tiers['1-3'] > 0)) out.push('Put in the 1–3" price per push');
+    if (s.mode === 'perInch' && !(s.perInchCents > 0)) out.push('Put in the price for each inch over 3"');
+    if (!areasText(s)) out.push('Pick what gets cleared');
+    if (!siteLine()) out.push('Add the job’s address — it goes on the bid');
+    s.extras.forEach(x => {
+      const name = String(x.name || '').trim();
+      if (name && !(x.cents > 0)) out.push(name + ': put in its price per visit');
+      else if (!name && x.cents > 0) out.push('An extra has a price but no name');
+    });
+    return out;
+  }
+
+  // His own Snow accounts' prices for a box (snow.js has what this person
+  // may read: the owner, or whoever may see Snow or Billing). The same kind
+  // of customer first; all of them when none of those has one. Never put in
+  // a box by itself -- only offered, to tap.
+  function snowYours(key, type, over) {
+    const S = window.YDSnow;
+    if (!S || !S.accounts || !S.pricing) return null;
+    const acc = S.accounts() || {}, pr = S.pricing() || {};
+    const valueOf = p => {
+      const pricing = p.pricing || {}, tiers = pricing.tiers || {};
+      if (key === 'salt') {
+        const x = (Array.isArray(p.extras) ? p.extras : []).find(x => x && /salt/i.test(x.name || '') && num(x.cents) > 0);
+        return x ? num(x.cents) : null;
+      }
+      if (key === 'labor') return num(p.laborRateCents) > 0 ? num(p.laborRateCents) : null;
+      if (key === 'perInch') {
+        const pi = pricing.mode === 'tieredPlusPerInch' && pricing.perInch;
+        return pi && num(pi.cents) > 0 && Number(pi.aboveInches) === over ? num(pi.cents) : null;
+      }
+      const t = tiers[key];
+      return t && t.mode !== 'inherit' && num(t.cents) > 0 ? num(t.cents) : null;
+    };
+    const pick = kind => Object.keys(acc)
+      .filter(id => acc[id] && acc[id].active !== false && pr[id] && (kind === null || (acc[id].type === 'commercial') === kind))
+      .map(id => valueOf(pr[id])).filter(v => v !== null).sort((a, b) => a - b);
+    let vals = pick(type === 'commercial'), every = false;
+    if (!vals.length) { vals = pick(null); every = true; }
+    if (!vals.length) return null;
+    return { lo: vals[0], hi: vals[vals.length - 1], mid: vals[Math.floor((vals.length - 1) / 2)], n: vals.length,
+             who: every ? 'Your snow accounts' : type === 'commercial' ? 'Your commercial accounts' : 'Your residential accounts' };
+  }
+  // The accounts' prices are fetched with the Snow tab's list; any not in
+  // yet are fetched once, for the suggestions.
+  let snowPricesAsked = false;
+  function askSnowPrices() {
+    const S = window.YDSnow;
+    if (snowPricesAsked || !S || !S.refreshPricing || !S.accounts) return;
+    const acc = S.accounts() || {};
+    if (!Object.keys(acc).length) return;            // not in yet: asked at the next drawing
+    snowPricesAsked = true;
+    const pr = S.pricing() || {};
+    const missing = Object.keys(acc).filter(id => !pr[id]);
+    if (!missing.length) return;
+    Promise.resolve(S.refreshPricing(missing)).then(() => {
+      if (snowNow() && jobShown() && !typingHere()) render();
+    }, () => {});
+  }
+
+  function snowToggleHtml(ro) {
+    const on = snowNow();
+    const auto = est.snowBid !== true && est.snowBid !== false;
+    // On a bid, or wherever it is switched on already.
+    if (!on && auto && !(typeof isBidStatus === 'function' && isBidStatus(statusNow()))) return '';
+    const said = auto ? (on ? (qb() && qb().snowBid ? 'sent as one' : 'from the services') : '')
+      : 'set by hand' + (ro ? '' : ' · <button type="button" class="link-btn" onclick="estSnowBid(null)">let the services decide</button>');
+    return '<div class="snb-toggle"><label class="est-switch"><input type="checkbox"' + (on ? ' checked' : '') + (ro ? ' disabled' : '') +
+      ' onchange="estSnowBid(this.checked)"> ❄️ Snow bid — priced per push</label>' +
+      (said ? '<span class="muted">' + said + '</span>' : '') + '</div>';
+  }
+
+  function renderSnow(wrap, ro) {
+    const s = snowObj();
+    askSnowPrices();
+    const fold = folded();
+    wrap.dataset.folded = fold ? '1' : '';
+    if (fold) {
+      wrap.innerHTML = '<div class="est-qb est-folded" id="estQb"></div>' + snowSummaryHtml(s);
+      renderQb();
+      return;
+    }
+    const chatOpen = !!(est.chat.length || busyHere() || snowChatOpen[currentJobId || '']);
+    wrap.innerHTML =
+      (settled() ? '<div class="est-refold"><button class="link-btn ro-ok" onclick="estUnfold(false)">▴ Fold the bid back to one line</button></div>' : '') +
+      snowToggleHtml(ro) +
+      '<div class="field"><span class="label">Notes from the site visit — what gets cleared, anything to know' +
+        (ro ? '' : ' <button class="link-btn est-today" onclick="estNoteToday()">+ today’s date</button>') + '</span>' +
+        '<textarea id="estNotes" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" onblur="estNotesDone()" ' +
+        'placeholder="Drive and front walk, mailbox. Long drive with a turnaround. They have a dog — paw-friendly melt.">' +
+        esc(est.notes) + '</textarea></div>' +
+      ((est.questions || []).length ? '<div class="est-questions"><b>Claude asks:</b><ul>' +
+        est.questions.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
+      ((est.flags || []).length ? '<div class="est-flags"><b>Flags:</b><ul>' + est.flags.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
+      chatHtml(ro, chatOpen) +
+      (!chatOpen && !ro ? '<div class="snb-talk"><button type="button" class="link-btn" onclick="estSnowChat()">💬 Talk to Claude about this bid</button></div>' : '') +
+      snowFormHtml(s, ro) +
+      ((est.work.length || est.materials.length) ? '<p class="hint">' + (est.work.length + est.materials.length) +
+        ' labor & material line' + (est.work.length + est.materials.length === 1 ? ' is' : 's are') +
+        ' kept from before it was a snow bid — left off, and back if it’s switched off.</p>' : '') +
+      '<div id="snbProbs">' + snowProbsHtml() + '</div>' +
+      '<h4 class="est-h">What the customer sees</h4><div id="snbPreview">' + snowPreviewHtml(s) + '</div>' +
+      '<div class="est-qb est-jump-to" id="estQb"></div>';
+    const log = el('estChat'); if (log) log.scrollTop = log.scrollHeight;
+    renderQb();
+    drawn(wrap);
+  }
+
+  // A tap button: on, or not.
+  const snowChip = (on, act, label, ro) => '<button type="button" class="stage-step' + (on ? ' on' : '') + '"' + (ro ? ' disabled' : '') +
+    ' aria-pressed="' + (on ? 'true' : 'false') + '" onclick="' + act + '">' + label + '</button>';
+  function yoursHtml(field, key, cur, y, ro) {
+    if (!y) return '';
+    const range = y.lo === y.hi ? cents(y.lo) : cents(y.lo) + '–' + cents(y.hi);
+    return '<div class="snb-yours"><span class="muted">' + esc(y.who) + ' (' + y.n + '): ' + range +
+        (y.n > 2 && y.lo !== y.hi ? ', most ' + cents(y.mid) : '') + '</span>' +
+      (ro || cur === y.mid ? '' : ' <button type="button" class="link-btn" onclick="estSnowUse(\'' + field + '\', \'' + key + '\', ' + y.mid + ')">Use ' +
+        cents(y.mid) + '</button>') + '</div>';
+  }
+  function moneyBox(field, key, cur, label, ro, y, hint) {
+    return '<div class="snb-price"><label><span>' + label + (hint ? ' <small class="muted">' + hint + '</small>' : '') + '</span>' +
+      '<span class="snb-money">$<input inputmode="decimal" value="' + esc(cur > 0 ? (cur / 100).toFixed(2) : '') + '" placeholder="0.00"' +
+        (ro ? ' readonly' : '') + ' oninput="estSnowSet(\'' + field + '\', \'' + key + '\', this.value)"></span></label>' +
+      yoursHtml(field, key, cur, y, ro) + '</div>';
+  }
+  function snowFormHtml(s, ro) {
+    const type = snowType(s), over = snowOver(s);
+    const t = s.tiers;
+    const deeper = s.mode === 'tiers' && (s.deeper || t['6+'] > 0 || t['9+'] > 0);
+    const tierBox = ([k, label]) => moneyBox('tier', k, t[k], label + ' per push', ro, snowYours(k, type));
+    return '<div class="snb">' +
+      '<div class="snb-sec"><span class="label">Customer is</span><div class="stage-steps">' +
+        snowChip(type === 'residential', "estSnowTap('type', 'residential')", '🏠 A home', ro) +
+        snowChip(type === 'commercial', "estSnowTap('type', 'commercial')", '🏢 A business', ro) + '</div>' +
+        '<span class="muted snb-said">' + (s.type ? 'set by hand' + (ro ? '' : ' · <button type="button" class="link-btn" onclick="estSnowTap(\'type\', \'\')">from the job</button>')
+          : 'from the job’s Business name') + '</span></div>' +
+
+      '<div class="snb-sec"><span class="label">What gets cleared</span><div class="stage-steps">' +
+        SNOW_AREAS.map(([id, label]) => snowChip(s.areas.indexOf(id) !== -1, "estSnowTap('area', '" + id + "')", esc(label), ro)).join('') + '</div>' +
+        '<input class="snb-other" value="' + esc(s.areasOther) + '" placeholder="Anything else — e.g. side door path, garage apron"' + (ro ? ' readonly' : '') +
+          ' oninput="estSnowSet(\'other\', \'\', this.value)">' +
+        (!ro && String(est.notes || '').trim() ? '<button type="button" class="link-btn" onclick="estDraftFromNotes()">Pick them from my notes</button>' : '') + '</div>' +
+
+      '<h4 class="est-h">Price per push <span class="muted">— per visit, each snowfall</span></h4>' +
+      '<div class="stage-steps snb-modes">' +
+        snowChip(s.mode === 'tiers', "estSnowTap('mode', 'tiers')", 'By depth — 1–3", 3–6"…', ro) +
+        snowChip(s.mode === 'perInch', "estSnowTap('mode', 'perInch')", '1–3" + each inch over 3"', ro) + '</div>' +
+      '<div class="snb-prices">' +
+        (s.mode === 'perInch' ? tierBox(SNOW_TIERS[0]) +
+            moneyBox('perInch', '', s.perInchCents, 'Each inch over 3"', ro, snowYours('perInch', type, 3))
+          : SNOW_TIERS.slice(0, deeper ? 4 : 2).map(tierBox).join('') +
+            (over ? moneyBox('perInch', '', s.perInchCents, 'Each inch over ' + over + '"', ro, snowYours('perInch', type, over), 'if you charge it') : '')) +
+      '</div>' +
+      (s.mode === 'tiers' && !deeper && !ro ? '<button type="button" class="link-btn" onclick="estSnowTap(\'deeper\')">+ Prices for 6–9" and 9"+</button>' : '') +
+
+      '<h4 class="est-h">Salt <span class="muted">— each application; leave empty for none</span></h4>' +
+      '<div class="snb-prices">' + moneyBox('salt', '', s.saltCents, 'Salt per application', ro, snowYours('salt', type)) + '</div>' +
+      '<div class="stage-steps">' + snowChip(!!s.paw, "estSnowTap('paw')", '🐾 Paw-friendly ice melt', ro) + '</div>' +
+
+      '<h4 class="est-h">Extras <span class="muted">— each visit, e.g. a back deck</span></h4>' +
+      (s.extras.length ? '<div class="snb-extras">' + s.extras.map(x => '<div class="snb-extra">' +
+          '<input class="snb-xname" value="' + esc(x.name) + '" placeholder="What — e.g. Back deck"' + (ro ? ' readonly' : '') +
+            ' oninput="estSnowSet(\'xname\', \'' + safeId(x.id) + '\', this.value)">' +
+          '<span class="snb-money">$<input inputmode="decimal" value="' + esc(x.cents > 0 ? (x.cents / 100).toFixed(2) : '') + '" placeholder="0.00"' +
+            (ro ? ' readonly' : '') + ' oninput="estSnowSet(\'xcents\', \'' + safeId(x.id) + '\', this.value)"></span>' +
+          (ro ? '' : '<button type="button" class="bd-edit-btn del" onclick="estSnowTap(\'xdel\', \'' + safeId(x.id) + '\')" aria-label="Remove">✕</button>') +
+        '</div>').join('') + '</div>' : '') +
+      (ro ? '' : '<button type="button" class="btn btn-sm" onclick="estSnowTap(\'xadd\')">+ Add an extra</button>') +
+
+      '<h4 class="est-h">Long storms <span class="muted">— labor per man-hour, if you charge it</span></h4>' +
+      '<div class="snb-prices">' + moneyBox('labor', '', s.laborCents, 'Labor per man-hour', ro, snowYours('labor', type)) + '</div>' +
+
+      '<div class="est-crewnote snb-crew"><span>👷 Notes for the crew — not on the bid; they go on the Snow account when it’s accepted</span>' +
+        '<textarea rows="2"' + (ro ? ' readonly' : '') + ' placeholder="Where the snow goes, what to watch for — the gate code, the low wall by the drive"' +
+        ' oninput="estSnowSet(\'crew\', \'\', this.value)">' + esc(s.crewNotes) + '</textarea></div>' +
+    '</div>';
+  }
+  function snowProbsHtml() {
+    const p = snowProblems();
+    return p.length ? '<div class="est-problems snb-probs"><b>Before it can go to QuickBooks:</b><ul>' +
+      p.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>' : '';
+  }
+  function snowPreviewHtml(s) {
+    const lines = snowLines(s, siteLine());
+    const total = lines.reduce((a, l) => a + (l.cents || 0), 0);
+    const q = qb();
+    return '<div class="cv snb-cv"><div class="cv-head"><b>' + esc((el('customerName') && el('customerName').value) || 'Customer') + '</b>' +
+        (q && q.docNumber ? ' · Estimate #' + esc(q.docNumber) : '') + '</div>' +
+      lines.map(l => '<div class="cv-line"><div class="cv-text"><div class="cv-scope">' + esc(l.text) + '</div></div>' +
+        '<div class="cv-amt">' + (l.cents > 0 ? cents(l.cents) : '—') + '</div></div>').join('') +
+      '<div class="cv-total"><span>Total</span><b>' + cents(total) + '</b></div>' +
+      '<div class="hint">Laid out as QuickBooks will show it: each line its own price, billed for each visit. ' +
+        'No warranty, terms or payment lines on a snow bid.</div></div>';
+  }
+  // Said yes to: the bid in one look, under its QuickBooks line.
+  function snowSummaryHtml(s) {
+    const lines = snowLines(s, '');
+    const areas = areasText(s);
+    const row = (what, c) => '<div class="est-words-line"><b>' + esc(what) + '</b> ' + cents(c) + '</div>';
+    return '<div class="est-words snb-sum"><h4 class="est-h">❄️ The snow bid <span class="muted">— per push</span></h4>' +
+      (s.mode === 'perInch' ? SNOW_TIERS.slice(0, 1) : SNOW_TIERS).filter(t => s.tiers[t[0]] > 0)
+        .map(t => row(t[1] + ' per push', s.tiers[t[0]])).join('') +
+      (snowOver(s) && s.perInchCents > 0 ? row('Each inch over ' + snowOver(s) + '"', s.perInchCents) : '') +
+      lines.filter(l => l.kind !== 'plow' && l.cents > 0).map(l => row(l.title, l.cents)).join('') +
+      (areas ? '<div class="est-words-text">Clears the ' + esc(areas) + '.</div>' : '') +
+      (String(s.crewNotes || '').trim() ? '<div class="est-words-crew">👷 For the crew: ' + esc(s.crewNotes.trim()) + '</div>' : '') +
+    '</div>';
+  }
+  // On the Snow route already: the server marked the bid done.
+  function snowWon() {
+    const b = typeof boardFields !== 'undefined' && boardFields ? boardFields : {};
+    return b.removeWhy === 'snow' || /^snow:/.test(String(b.replacedBy || ''));
+  }
+  function snowWonHtml(q, can) {
+    if (!q || !q.id) return '';
+    if (snowWon()) {
+      return '<div class="snb-won">❄️ On the Snow route — their Snow account is priced from this bid. ' +
+        '<button type="button" class="btn btn-sm ro-ok" onclick="switchTab(\'snow\')">Open Snow</button></div>';
+    }
+    if (isAccepted(q)) {
+      return '<div class="snb-won">❄️ They said yes — Job Hub puts them on the Snow route. ' +
+        (can ? '<button type="button" class="btn btn-sm btn-filled" onclick="estSnowYes()"' + (checking ? ' disabled' : '') + '>' +
+          (checking ? 'Working…' : 'Do it now') + '</button>' : '') + '</div>';
+    }
+    if ((q.status || 'Pending') === 'Pending' && can) {
+      return '<div class="est-invoice-quiet"><button type="button" class="link-btn" onclick="estSnowYes()"' + (checking ? ' disabled' : '') + '>' +
+        (checking ? 'Working…' : 'Said yes another way? Put them on the Snow route') + '</button></div>';
+    }
+    return '';
+  }
+
+  // What the job's price is when it becomes a snow bid: nothing -- it has
+  // no whole-job total (the price per push is shown instead, never added
+  // into any total). One typed in by hand stays.
+  function clearJobPrice() {
+    if (typeof manualJobPrice === 'undefined' || manualJobPrice) return;
+    const box = el('jobPrice');
+    if (!box || !box.value) return;
+    box.value = '';
+    try { baseJobPrice = 0; } catch (e) { /* app.js not loaded */ }
+    if (typeof updateJobPriceSourceTag === 'function') updateJobPriceSourceTag();
+    if (typeof updateSummary === 'function') updateSummary();
+  }
+  // Switched by hand (true/false), or back to the services' say (null).
+  window.estSnowBid = async function (on) {
+    if (!changes()) return;
+    const was = est;
+    if (on === null) delete est.snowBid;
+    else {
+      if (on && hasLines() && !(await ydConfirm('Its labor and materials lines are kept — left off while it’s a snow bid, and back if you switch it off.',
+        { title: 'Make this a snow bid, priced per push?', ok: 'Make it a snow bid' }))) { render(); return; }
+      if (est !== was) return;
+      est.snowBid = !!on;
+    }
+    if (snowNow()) { snowObj(); clearJobPrice(); }
+    changed(true);
+  };
+  function snowChanged() {
+    if (typeof markDirty === 'function') markDirty();
+    render();
+  }
+  // Typed in a box: kept, and what depends on it caught up once the typing
+  // pauses -- the box under the fingers is never drawn again.
+  let snowTimer = null;
+  function snowTyped() {
+    if (typeof markDirty === 'function') markDirty();
+    clearTimeout(snowTimer);
+    snowTimer = setTimeout(() => {
+      if (!snowNow()) return;
+      const p = el('snbPreview'); if (p) p.innerHTML = snowPreviewHtml(snowObj());
+      const b = el('snbProbs'); if (b) b.innerHTML = snowProbsHtml();
+      renderQb();
+    }, 400);
+  }
+  const posCents = v => { const c = toCents(String(v == null ? '' : v).replace(/[$,\s]/g, '')); return c !== null && c > 0 ? c : null; };
+  window.estSnowSet = function (field, key, v) {
+    if (!changes() || !snowNow()) return;
+    const s = snowObj();
+    const x = key ? s.extras.find(e => safeId(e.id) === key) : null;
+    if (field === 'tier' && key in s.tiers) s.tiers[key] = posCents(v);
+    else if (field === 'perInch') s.perInchCents = posCents(v);
+    else if (field === 'salt') s.saltCents = posCents(v);
+    else if (field === 'labor') s.laborCents = posCents(v);
+    else if (field === 'xname' && x) x.name = String(v || '').slice(0, 60);
+    else if (field === 'xcents' && x) x.cents = posCents(v);
+    else if (field === 'other') s.areasOther = String(v || '').slice(0, 300);
+    else if (field === 'crew') s.crewNotes = String(v || '').slice(0, 2000);
+    else return;
+    snowTyped();
+  };
+  window.estSnowUse = function (field, key, c) {
+    if (!changes() || !snowNow() || !(Number(c) > 0)) return;
+    const s = snowObj();
+    if (field === 'tier' && key in s.tiers) s.tiers[key] = Math.round(c);
+    else if (field === 'perInch') s.perInchCents = Math.round(c);
+    else if (field === 'salt') s.saltCents = Math.round(c);
+    else if (field === 'labor') s.laborCents = Math.round(c);
+    else return;
+    snowChanged();
+  };
+  window.estSnowTap = function (what, v) {
+    if (!changes() || !snowNow()) return;
+    const s = snowObj();
+    if (what === 'type') s.type = v === 'commercial' || v === 'residential' ? v : null;
+    else if (what === 'area' && SNOW_AREA_IDS.indexOf(v) !== -1) {
+      const i = s.areas.indexOf(v);
+      if (i === -1) s.areas = SNOW_AREA_IDS.filter(id => id === v || s.areas.indexOf(id) !== -1);
+      else s.areas.splice(i, 1);
+      s.areasSet = true;
+    } else if (what === 'mode') s.mode = v === 'perInch' ? 'perInch' : 'tiers';
+    else if (what === 'paw') s.paw = !s.paw;
+    else if (what === 'deeper') s.deeper = true;
+    else if (what === 'xadd') {
+      if (s.extras.length >= 12) { showToast('That’s as many extras as one bid takes'); return; }
+      s.extras.push({ id: newId('sx'), name: '', cents: null });
+      snowChanged();
+      const boxes = document.querySelectorAll('#estimateWrap .snb-xname');
+      if (boxes.length) boxes[boxes.length - 1].focus();
+      return;
+    } else if (what === 'xdel') {
+      const at = s.extras.findIndex(x => safeId(x.id) === v);
+      if (at === -1) return;
+      const gone = s.extras.splice(at, 1)[0], jobAt = currentJobId, loadAt = loads;
+      snowChanged();
+      const back = () => {
+        if ((jobAt ? currentJobId !== jobAt : loads !== loadAt) || !snowNow()) { showToast('Another job is open — nothing put back'); return; }
+        const list = snowObj().extras;
+        if (!list.some(x => x.id === gone.id)) { list.splice(Math.min(at, list.length), 0, gone); snowChanged(); }
+      };
+      const msg = 'Removed “' + (String(gone.name || '').trim() || 'the extra') + '”';
+      if (typeof showUndo === 'function') showUndo(msg, back); else showToast(msg);
+      return;
+    } else return;
+    snowChanged();
+  };
+  window.estSnowChat = function () {
+    snowChatOpen[currentJobId || ''] = true;
+    render();
+    const b = el('estMsg'); if (b) b.focus();
+  };
+
+  // What gets cleared, from the words of his notes (plain matching, no
+  // Claude): on leaving the notes only while he has not picked any himself,
+  // and only ever adding -- a chip he took off stays off.
+  function snowFromNotes(asked) {
+    const s = snowObj(), words = String(est.notes || '');
+    let n = 0;
+    if (!s.areasSet || asked) {
+      SNOW_AREAS.forEach(([id]) => {
+        if (SNOW_AREA_WORDS[id].test(words) && s.areas.indexOf(id) === -1) { s.areas.push(id); n++; }
+      });
+      s.areas = SNOW_AREA_IDS.filter(id => s.areas.indexOf(id) !== -1);
+    }
+    if (s.paw === null && PAW_WORDS.test(words)) { s.paw = true; n++; }
+    if (n) snowChanged();
+    if (asked) showToast(n ? 'Picked from your notes — check what gets cleared' : 'Nothing more in your notes to pick — tap what gets cleared');
+  }
+
+  // The snow bid as Claude reads it (estimates.py draft_snow). d: the job's
+  // saved copy when it is not the open one.
+  function snowForClaude(e, d) {
+    const s = e.snow || cleanSnow({});
+    const dollars = c => (c > 0 ? c / 100 : null);
+    const prices = {};
+    SNOW_TIERS.forEach(t => { prices[t[0]] = dollars(s.tiers[t[0]]); });
+    return { type: snowType(s, d ? d.business || '' : null), areas: s.areas.slice(), areasOther: s.areasOther, mode: s.mode,
+             prices: prices, perInch: { dollars: dollars(s.perInchCents), over: snowOver(s) },
+             salt: { dollars: dollars(s.saltCents), paw: !!s.paw },
+             extras: s.extras.map(x => ({ name: x.name, dollars: dollars(x.cents) })),
+             laborDollars: dollars(s.laborCents), crewNotes: s.crewNotes };
+  }
+  // Claude's answer about a snow bid: only words -- what gets cleared, the
+  // extras' names (their prices stay his to fill), the crew's notes.
+  function applySnow(e, r) {
+    if (!e.snow) e.snow = cleanSnow({});
+    const s = e.snow, did = !!r.updated;
+    if (did) {
+      s.areas = SNOW_AREA_IDS.filter(id => (r.areas || []).indexOf(id) !== -1);
+      s.areasOther = String(r.areasOther || '').slice(0, 300);
+      s.areasSet = true;
+      s.crewNotes = String(r.crewNotes || '').slice(0, 2000);
+      (r.extras || []).forEach(n => {
+        const name = String(n || '').trim().slice(0, 60);
+        if (name && s.extras.length < 12 && !s.extras.some(x => String(x.name || '').trim().toLowerCase() === name.toLowerCase())) {
+          s.extras.push({ id: newId('sx'), name: name, cents: null });
+        }
+      });
+    }
+    e.questions = (r.questions || []).map(String);
+    e.flags = (r.flags || []).map(String);
+    e.chat.push({ role: 'assistant', text: String(r.reply || (did ? 'Updated the bid.' : 'No change.')),
+                  at: new Date().toISOString(), changed: did });
+    return did;
+  }
+
+  // What QuickBooks' answer says of a snow bid (quickbooks.py _snow_bid_now),
+  // taken off the record so none of it lands in qbEstimate: the fields the
+  // server wrote on the job (into this device's copy too), and what to say.
+  function snowAnswer(r) {
+    const out = { patch: null, said: '', done: false };
+    if (!r || typeof r !== 'object') return out;
+    const done = r.snowDone, acct = r.snowAccount, err = r.snowError;
+    delete r.snowDone; delete r.snowAccount; delete r.snowError;
+    const name = (el('customerName') && el('customerName').value.trim()) || 'They';
+    if (done && typeof done === 'object') {
+      out.patch = {};
+      ['snowChecked', 'removeWhy', 'replacedBy', 'removeNote', 'bidStage', 'bidStageAt'].forEach(k => {
+        if (done[k] !== undefined) out.patch[k] = done[k];
+      });
+      out.said = '❄️ ' + name + (acct && acct.made === false ? ' — joined to their Snow account (your prices there kept)'
+        : ' is on the Snow route — their account is priced from this bid');
+      out.done = true;
+    } else if (err) out.said = '❄️ ' + err;
+    else if (r.snowBid && isAccepted(r)) {
+      out.said = 'QuickBooks says: accepted' + (r.env && r.env !== 'production'
+        ? ' — but this is the test company, so nothing goes on the Snow route' : ' — it goes on the Snow route at the next hourly look');
+    }
+    return out;
+  }
+  window.estSnowYes = async function () {
+    const q = qb(), jobId = currentJobId;
+    if (!q || !q.id || checking || !sends() || !changes() || !snowNow()) return;
+    if (!isAccepted(q) && !(await ydConfirm('Their Snow account is made from this bid, priced as it is, and the bid comes off the Bids board. ' +
+        'QuickBooks still shows the estimate as waiting — mark it accepted there too if you like.',
+        { title: 'They said yes — put them on the Snow route?', ok: 'Put them on the route' }))) return;
+    if (currentJobId !== jobId || checking) return;
+    checking = true; renderQb();
+    try {
+      const r = await askQb('/qb/estimate-status', { estimateId: q.id, jobId: jobId, env: q.env || null, snowYes: true });
+      if (r.missing) { showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
+      const sn = snowAnswer(r);
+      afterQb(jobId, r, false, sn.patch);
+      showToast(sn.said || 'Nothing changed', 7000);
+    } catch (e) {
+      showToast('QuickBooks: ' + (e.message || e));
+    } finally {
+      checking = false; renderQb();
+    }
+  };
+
+  // Into QuickBooks in his own words and products (snowLines). No ZIP
+  // lookup and no trip -- what is on the job is checked as it is.
+  async function snowToQB(email) {
+    const startJob = currentJobId;
+    const probs = snowProblems();
+    if (probs.length) { showToast(probs[0]); return; }
+    if (!(await zipChecked())) return;
+    if (currentJobId !== startJob) return;
+    const f = id => (el(id).value || '').trim();
+    if (!f('customerName')) { showToast('Add a customer name first'); return; }
+    const to = f('email'), q = qb() || {};
+    const s = snowObj(), site = siteLine();
+    const lines = snowLines(s, site);
+    const total = lines.reduce((a, l) => a + (l.cents || 0), 0);
+    if (email) {
+      if (!to) { showToast('Add the customer’s email on the job first'); return; }
+      if (!(await ydConfirm(cents(s.tiers['1-3']) + ' per push (1–3")' + (s.saltCents > 0 ? ', salt ' + cents(s.saltCents) + ' per application' : ''),
+        { title: (q.sentAt ? 'Email the updated snow bid' : 'Email this snow bid') + ' to ' + to + ' from QuickBooks?', ok: 'Email it' }))) return;
+      if (currentJobId !== startJob || saving || qbAsking) return;
+    }
+    qbAsking = true; renderQb();
+    let real = false, same = true;
+    try {
+      real = await realCompanyOrTest(email ? 'Emailing this snow bid' : 'This snow bid');
+      if (real && q.id) same = await qbUnchanged(q);
+    } finally { qbAsking = false; renderQb(); }
+    if (!real) { showToast('Not sent — QuickBooks is on the test company'); return; }
+    if (!same) return;
+    if (currentJobId !== startJob) { showToast('Another job was opened — nothing was sent'); return; }
+    if (typeof autosave === 'function') autosave();
+    const jobId = currentJobId;
+    if (!jobId) { showToast('Save the job first'); return; }
+    saving = true; renderQb();
+    try {
+      const out = await askQb('/qb/estimate', {
+        jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
+        estimateId: q.id || null, customerId: q.customerId || hubCustomer() || null,
+        env: q.env || (hubCustomer() ? 'production' : null),
+        customer: { name: f('customerName'), email: to, phone: f('phone'), address: tidyCase(f('address')),
+                    city: tidyCase(f('city')), state: stateWord(f('state')), zip: f('zip') },
+        site: site,
+        snowBid: { commercial: snowType(s) === 'commercial',
+                   lines: lines.map(l => ({ kind: l.kind, qbItem: l.qbItem || '', text: l.text, cents: l.cents })) },
+        // Nothing of an ordinary estimate goes with it: no takeoff, no
+        // payments message, no warranty or terms, no lien-waiver notice.
+        work: [], memo: '', endItems: [], lienNotice: false, totalCents: total,
+      });
+      const version = { at: new Date().toISOString(), emailed: !!email, docNumber: out.docNumber || null, snow: true,
+        totalCents: total, taxCents: 0, materialsCents: 0, materials: [],
+        work: lines.filter(l => l.cents > 0).map(l => ({ title: l.title, cents: l.cents })) };
+      if (currentJobId === jobId) {
+        est.sent = (est.sent || []).concat([version]).slice(-SENT_KEEP);
+        if (typeof markDirty === 'function') markDirty();
+      } else {
+        const d = savedJob(jobId);
+        if (d && window.YDSync) {
+          const e = fromSaved(d.estimate || {});
+          e.sent = (e.sent || []).concat([version]).slice(-SENT_KEEP);
+          e.chat = e.chat.slice(-CHAT_KEEP);
+          window.YDSync.patchJob(jobId, { estimate: clone(e) });
+        }
+      }
+      afterQb(jobId, out, email);
+      showToast(email ? 'Emailed from QuickBooks' + (out.docNumber ? ' — estimate #' + out.docNumber : '')
+        : 'Saved in QuickBooks' + (out.docNumber ? ' as estimate #' + out.docNumber : ''));
+    } catch (e) {
+      showToast('QuickBooks: ' + (e.message || e));
+    } finally {
+      saving = false; renderQb();
+    }
+  }
+
+  // The bid's services decide whether it is a snow bid (until switched by
+  // hand): a service added or taken off draws it the right way.
+  (function watchServices() {
+    const t = el('serviceTypeTags');
+    if (!t || typeof MutationObserver !== 'function') return;
+    new MutationObserver(() => {
+      if (!el('estimateWrap') || !P() || snowNow() === drawnSnow) return;
+      if (jobShown() && !typingHere()) render(); else stale = true;
+    }).observe(t, { childList: true, subtree: true });
+  })();
+  // His Snow accounts arrived: their prices are offered beside the boxes.
+  document.addEventListener('yd-snow-accounts', () => {
+    if (P() && snowNow() && jobShown() && !typingHere()) render();
+  });
 
   // --------------------------------------------------------------- editing
 
@@ -2279,6 +3010,7 @@
   const BUILD_ASK = 'Build the estimate from my site-visit notes.';
   window.estDraftFromNotes = function () {
     if (!String(est.notes || '').trim()) { showToast('Write your notes from the site visit first'); const n = el('estNotes'); if (n) n.focus(); return; }
+    if (snowNow()) { snowFromNotes(true); return; }
     draftMsg = BUILD_ASK;
     window.estSend();
   };
@@ -2292,6 +3024,10 @@
   const autoAsked = {};       // job id -> already started by itself (this session)
   function autoOn() { return !!(P() && P().rules().autoDraft !== false); }
   window.estNotesDone = function () {
+    // A snow bid's notes are read by the app itself -- what gets cleared --
+    // never sent to Claude for a takeoff (Jonah, 16 Oct 2026: code over
+    // Claude, and snow is priced per push).
+    if (snowNow()) { if (notesTyped && changes()) snowFromNotes(false); return; }
     // Only notes written (or changed) on this visit: tapping in and out of an
     // old bid's notes is not asking for an estimate.
     if (!notesTyped || !autoOn() || !changes() || hasLines() || est.chat.length) return;
@@ -2331,6 +3067,7 @@
     const services = d ? (Array.isArray(d.serviceTypes) ? d.serviceTypes.slice() : [])
       : (typeof serviceTypes !== 'undefined' ? serviceTypes.slice() : []);
     return { customer: v('customerName'), city: v('city'), notes: v('notes'), services: services,
+             status: d ? d.jobStatus : statusNow(),
              location: [v('address'), [v('city'), v('state')].filter(Boolean).join(', ')].filter(Boolean).join(', '),
              estimate: d ? fromSaved(d.estimate || {}) : est, data: d };
   }
@@ -2503,6 +3240,7 @@
     if (!job || !asked || asked.role !== 'user') { askNext(); return; }
     building = jobId;
     if (jobId === currentJobId) render();
+    const snowy = snowOf(e0, job.services, job.status, job.data ? job.data.qbEstimate : qb());
     try {
       const r = await window.YDClaude.post('/estimate/draft', {
         jobId: jobId,
@@ -2512,7 +3250,10 @@
         jobNotes: job.notes,
         siteNotes: String(e0.notes || '').trim(),
         chat: e0.chat.slice(-CHAT_SEND).map(m => ({ role: m.role, text: m.text })),
-        current: currentForClaude(e0, job.city),
+        // A snow bid is talked about as one (estimates.py draft_snow): its
+        // price sheet, and no takeoff to price.
+        current: snowy ? { work: [], materials: [] } : currentForClaude(e0, job.city),
+        snow: snowy ? snowForClaude(e0, job.data) : undefined,
         // This copy of the app can take just the lines that change (less for
         // Claude to write, so cheaper and quicker).
         patchOk: true,
@@ -2534,6 +3275,7 @@
   // Claude's answer onto an estimate: the lines merged by id, its questions
   // and flags, its reply in the conversation. Returns whether it changed lines.
   function apply(e, r) {
+    if (r.mode === 'snow') return applySnow(e, r);
     const patch = r.mode === 'patch';
     const spoil = num(r.spoilCuYd) !== null ? (num(r.spoilCuYd) || null) : e.spoilCuYd;
     const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length ||
@@ -2553,7 +3295,7 @@
   function land(jobId, r) {
     if (jobId === currentJobId) {
       const before = { jobId: jobId, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd,
-                       questions: est.questions.slice(), flags: est.flags.slice() };
+                       questions: est.questions.slice(), flags: est.flags.slice(), snow: est.snow ? clone(est.snow) : null };
       // Undo only ever undoes the change it is shown beside.
       undo = apply(est, r) ? before : null;
       changed(true);
@@ -2572,7 +3314,8 @@
     // Through JSON, as the form's save does: Firestore refuses a write with
     // an undefined anywhere in it.
     const patch = { estimate: clone(e) };
-    const total = P() ? P().price(e, ctx(d.city || '')).totalCents : 0;
+    // A snow bid has no whole-job price to follow.
+    const total = P() && !snowOf(e, d.serviceTypes, d.jobStatus, d.qbEstimate) ? P().price(e, ctx(d.city || '')).totalCents : 0;
     if (!d.manualJobPrice && total > 0) {
       const extra = (d.additionalCosts || []).reduce((s, x) => s + (parseFloat(x.materialCost) || 0) + (parseFloat(x.laborCost) || 0), 0);
       patch.baseJobPrice = total / 100;
@@ -2610,6 +3353,7 @@
     if (!undo || undo.jobId !== currentJobId || !changes()) return;
     est.work = undo.work; est.materials = undo.materials; est.spoilCuYd = undo.spoilCuYd;
     est.questions = undo.questions || []; est.flags = undo.flags || [];
+    if (undo.snow !== undefined) est.snow = undo.snow;
     const lastMsg = est.chat[est.chat.length - 1];
     if (lastMsg && lastMsg.role === 'assistant') lastMsg.changed = false;
     est.chat.push({ role: 'user', text: '(Undid that change.)', at: new Date().toISOString(), changed: false });
@@ -2645,7 +3389,7 @@
   // against: it is looked up once, just before sending.
   async function zipKnown() {
     const s = est.site, key = siteKey(), jobId = currentJobId;
-    if (!s || s.at !== key || s.zip || s.zipLooked === key || !jobId || !window.YDClaude) return;
+    if (snowNow() || !s || s.at !== key || s.zip || s.zipLooked === key || !jobId || !window.YDClaude) return;
     s.zipLooked = key;
     try {
       const r = await window.YDClaude.post('/estimate/trip', {
@@ -2690,6 +3434,8 @@
   // visit (trippedFor). Never on an estimate the customer has said yes to:
   // its price is agreed, and miles landing on it would move it.
   function tripWanted() {
+    // A snow bid has no trip: it is priced per push, not by the miles.
+    if (snowNow()) return false;
     if (!currentJobId || !hasLines() || !changes() || settled() || !navigator.onLine) return false;
     if (!window.YDClaude || !window.YDClaude.available()) return false;
     if (!(el('address') && el('address').value.trim())) return false;
@@ -2728,7 +3474,7 @@
     return !!(w && a && w.contains(a) && /INPUT|TEXTAREA|SELECT/.test(a.tagName));
   };
   window.estFindMiles = async function (asked) {
-    if (tripping || !changes() || !window.YDClaude) return;
+    if (tripping || !changes() || !window.YDClaude || snowNow()) return;
     if (!asked && !navigator.onLine) return;
     const addr = (el('address').value || '').trim();
     if (!addr) { if (asked) showToast('Add the job’s address first'); return; }
@@ -2842,6 +3588,8 @@
 
   window.estToQB = async function (email) {
     if (saving || qbAsking || !sends() || !changes()) return;
+    // A snow bid goes in his snow products and words (snowToQB).
+    if (snowNow()) return snowToQB(email);
     const startJob = currentJobId;
     const r = priced();
     if (!r || !(r.totalCents > 0)) return;
@@ -2992,12 +3740,14 @@
   // (acceptedSeenAt, once, never moved -- the server's hourly check does the
   // same): a bid moved after that (marked lost after all) is left where it
   // was put, however often QuickBooks is asked again (sync.js bookIfAccepted).
-  function afterQb(jobId, r, emailed) {
+  // extra: more fields for the same save -- what the server wrote on the job
+  // when it put a snow bid on the Snow route (snowAnswer).
+  function afterQb(jobId, r, emailed, extra) {
     const open = currentJobId === jobId;
     const was = (open ? qb() : null) || {};
     const merged = Object.assign({}, was, r);
     Object.keys(merged).forEach(k => { if (merged[k] === undefined) merged[k] = null; });
-    const patch = { qbEstimate: merged };
+    const patch = Object.assign({}, extra || {}, { qbEstimate: merged });
     const stored = savedJob(jobId) || {};
     const before = open ? qb() : stored.qbEstimate;
     const seenAt = stored.acceptedSeenAt || (open && typeof boardFields !== 'undefined' && boardFields.acceptedSeenAt);
@@ -3037,9 +3787,13 @@
       if (currentJobId !== jobId) return;
       if (r.missing) { if (!quiet) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
       const wasBid = stillBid(jobId);
+      // A snow bid said yes to was put on the Snow route by that same look
+      // (quickbooks.py _snow_bid_now): said so, and never booked.
+      const sn = snowAnswer(r);
       // Accepted books the bid by itself, on the owner's device (sync.js
       // bookIfAccepted, which this save passes through) -- no question asked.
-      afterQb(jobId, r, false);
+      afterQb(jobId, r, false, sn.patch);
+      if (sn.said) { if (!quiet || sn.done) showToast(sn.said, 7000); return; }
       // Asked by hand, the answer is always said: by the booking, when this
       // answer booked it (a moment after the save), else here -- an accepted
       // bid can stay a bid (another device's job to book, or it was moved

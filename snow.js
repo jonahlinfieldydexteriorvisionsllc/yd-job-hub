@@ -65,11 +65,16 @@
 
     let base = 0;
     if (pr.mode === 'tieredPlusPerInch' && pr.perInch && inches > pr.perInch.aboveInches) {
-      const first = resolveTier(pr.tiers, '1-3');
+      // So much an inch on top of the price for the depth it starts over:
+      // the 1–3" price for "each inch beyond 3", the 3–6" price for "each
+      // additional inch over 6" (Jonah's snow bids, 16 Oct 2026) -- an 8"
+      // clear there is the 3–6" price and two inches, never less than 6".
+      const above = pr.perInch.aboveInches;
+      const from = resolveTier(pr.tiers, above <= 3 ? '1-3' : above <= 6 ? '4-6' : above <= 9 ? '6+' : '9+');
       // Rounded to whole cents: depths come in half inches, and $12.25 an inch
       // over half an inch is 612.5 cents -- a total no invoice line can show,
       // so the printed lines stopped adding up to the stored total.
-      base = (first.cents || 0) +
+      base = (from.cents || 0) +
              Math.round((pr.perInch.cents || 0) * (inches - pr.perInch.aboveInches));
     } else {
       const label = inches <= 3 ? '1-3' : inches <= 6 ? '4-6' : inches <= 9 ? '6+' : '9+';
@@ -116,6 +121,9 @@
     // An imported record can say per-inch with no per-inch amount; one such
     // record used to stop the whole account list drawing.
     if (pr.mode === 'tieredPlusPerInch' && pr.perInch) {
+      // Over 6": the 3–6" price is part of it too.
+      const second = resolveTier(pr.tiers, '4-6');
+      if (pr.perInch.aboveInches > 3 && second.cents && second.cents !== first.cents) s += ' / ' + cents(second.cents);
       s += ' + ' + cents(pr.perInch.cents) + '/in over ' + pr.perInch.aboveInches + '"';
     } else {
       const second = resolveTier(pr.tiers, '4-6');
