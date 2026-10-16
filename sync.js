@@ -533,6 +533,45 @@
     return took;
   }
 
+  // Someone is in one of the open job's boxes (the Job or Tracking tab, the
+  // estimate and its chat with Claude included). The form is not rebuilt
+  // under them: the cursor jumped, and what was half typed went.
+  function formBusy() {
+    const a = document.activeElement;
+    if (!a || a === document.body || !a.closest || !a.closest('#panel-job, #panel-tracking')) return false;
+    return /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || !!a.isContentEditable;
+  }
+  // The open job brought up to date from its stored copy, keeping a message
+  // to Claude typed and not yet sent (estimate.js keeps it only in memory,
+  // and loading the job empties the chat box).
+  function reloadOpenJob() {
+    const box = document.getElementById('estMsg');
+    const draft = box ? box.value : '';
+    loadJob(currentJobId, true);
+    if (draft && typeof estMsgInput === 'function') {
+      estMsgInput(draft);
+      const again = document.getElementById('estMsg');
+      if (again) again.value = draft;
+    }
+  }
+  // Changed elsewhere while someone was in one of its boxes: brought up to
+  // date as soon as they leave them, if nothing has been typed since (typing
+  // keeps theirs, as when the change came in with edits already made).
+  let freeTimer = null;
+  function reloadWhenFree() {
+    if (freeTimer) return;
+    const id = currentJobId;
+    freeTimer = setInterval(() => {
+      if (currentJobId === id && formBusy()) return;
+      clearInterval(freeTimer); freeTimer = null;
+      if (currentJobId !== id) return;
+      if (dirty) { showToast('This job was changed on another device — your edits here are kept'); return; }
+      let d = null;
+      try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+      if (d && !d.deletedAt) reloadOpenJob();
+    }, 1500);
+  }
+
   function applyRemote(changes) {
     if (!changes.length) return;
     applyingRemote = true;
@@ -540,9 +579,15 @@
     try {
       const map = indexById();
       let openJobChanged = false;
+      // Whether anything on this device changed. Most snapshots are this
+      // device's own autosave coming back round; rewriting the index and
+      // telling a dozen screens to redraw for it (each re-reading every job)
+      // cost most of a second after every pause in typing, worst on the iPad.
+      let touched = false;
 
       changes.forEach(c => {
         if (c.type === 'removed') {
+          touched = true;
           localStorage.removeItem(STORAGE_PREFIX + c.id);
           delete map[c.id];
           boardKnown.delete(c.id);
@@ -578,6 +623,7 @@
           if (pays && pays.changed) local.payments = pays.list;
           if (c.id === currentJobId && typeof mergeOpenPayments === 'function') mergeOpenPayments((c.data || {}).payments);
           if (tookFields || tookStage || (pays && pays.changed)) {
+            touched = true;
             try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(local)); } catch (e) {}
             map[c.id] = buildIndexEntry(c.id, local);
             if (c.id === currentJobId) {
@@ -599,6 +645,7 @@
           console.warn('[sync] no room on this device for', c.id);
           return;
         }
+        touched = true;
         map[c.id] = buildIndexEntry(c.id, c.data);
         // Changed on another device: what the board holds for it is unknown
         // here until this device next sends it -- except a bid that stays a
@@ -607,12 +654,20 @@
         bookIfAccepted(c.id, c.data);
         // Brought in from QuickBooks: its materials joined to Supplies (app.js).
         if (typeof fillFromQb === 'function') fillFromQb(c.id, c.data);
+        // The crew's page for it follows what the server or another device
+        // wrote (crewjobs.js; it checks the server's copy first).
+        if (window.YDCrewJobs && YDCrewJobs.remote) {
+          try { YDCrewJobs.remote(c.id); } catch (e) { console.warn('[sync] crew copy not checked for', c.id, e); }
+        }
         if (c.id === currentJobId) {
           openJobChanged = true;
           // What only the server writes -- QuickBooks' answers, the care
           // email -- goes into the open form even when it has unsaved edits,
-          // or the next save would put the old values back.
-          if (dirty) {
+          // or the next save would put the old values back. The same while
+          // someone is in one of the form's boxes (the form is not reloaded
+          // under them -- reloadWhenFree): what they type next is saved over
+          // this copy with these carried in.
+          if (dirty || formBusy()) {
             SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
             // And the estimate the server filled from QuickBooks, into one
             // with no lines yet (estimate.js keeps what was typed).
@@ -628,6 +683,7 @@
         }
       });
 
+      if (!touched) return;
       writeIndex(map);
 
       // The job open on screen changed somewhere else. If there are unsaved
@@ -639,8 +695,10 @@
         try { const d = JSON.parse(readJobBlob(currentJobId) || 'null'); stillHere = !!d && !d.deletedAt; } catch (e) {}
         if (stillHere && dirty) {
           showToast('This job was changed on another device — your edits here are kept');
+        } else if (stillHere && formBusy()) {
+          reloadWhenFree();
         } else if (stillHere) {
-          loadJob(currentJobId, true);
+          reloadOpenJob();
         } else if (dirty) {
           // Deleted elsewhere while being edited here. The edits win, as
           // above: the autosave already on its way puts the job back.
@@ -661,8 +719,10 @@
       refreshVisible();
     } finally {
       applyingRemote = false;
+      // In here, so a snapshot that changed nothing (the return above) still
+      // sends up the copies this device kept as newer.
+      keepOurs.forEach(queuePush);
     }
-    keepOurs.forEach(queuePush);
   }
 
   // ---------------------------------------------------------------- startup
@@ -769,18 +829,30 @@
   // starts. Each wrapper does the original thing first, then mirrors it.
 
   const _persistJob = window.persistJob;
+  let savedTimer = null;
   window.persistJob = function (announce) {
     const ok = _persistJob.apply(this, arguments);
-    if (ok) queuePush(currentJobId);
+    if (ok) {
+      queuePush(currentJobId);
+      // The other screens that draw from jobs (search, the calendar's job
+      // colours, subcontractors, receipts...) hear of the save once typing
+      // pauses. They used to hear of it only from its echo off the cloud,
+      // which applyRemote now passes over without redrawing anything.
+      clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => document.dispatchEvent(new CustomEvent('yd-jobs-changed')), 1500);
+    }
     return ok;
   };
 
   // Deleted for good (app.js purgeJob, from Recently deleted). Moving a job
   // to Recently deleted is a patchJob like any other change.
   const _purgeJob = window.purgeJob;
-  window.purgeJob = function (id) {
+  window.purgeJob = async function (id) {
     const existed = !!readJobBlob(id);
-    _purgeJob.apply(this, arguments);
+    // app.js purgeJob waits for its "Delete for good?" window. Checked before
+    // that answer, the job was always still here, so the cloud copy was never
+    // deleted and the job came back on the next snapshot.
+    await _purgeJob.apply(this, arguments);
     // Only reaches the cloud if the local delete actually happened (the user
     // may have cancelled the confirm). Before sync is running it waits in
     // pendingDeletes rather than being dropped.

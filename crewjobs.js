@@ -340,6 +340,34 @@
   }
   ['yd-services', 'yd-tools', 'yd-equipment-changed'].forEach(ev => document.addEventListener(ev, refreshAll));
 
+  // A job changed on another device or by the server (sync.js applyRemote):
+  // QuickBooks' words kept in step, an estimate filled from QuickBooks. The
+  // crew copy was only ever written by the device that saved the job, so
+  // what the server wrote never reached the crew's page. A moment later --
+  // after the device that made the change has written its copy -- the
+  // server's copy is looked at, and written only when it differs, so the
+  // laptop and the iPad do not both rewrite every save the other made.
+  // With no signal it is left to that device, or this one's next launch.
+  const remoteWait = {};
+  function remote(id) {
+    if (!reconciled || !id || !window.YDDb || typeof ydCan !== 'function' || !ydCan('jobs', 'change')) return;
+    clearTimeout(remoteWait[id]);
+    remoteWait[id] = setTimeout(async () => {
+      delete remoteWait[id];
+      let d = null;
+      try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) { d = null; }
+      if (!d) return;               // gone: the delete takes its copy down
+      if (shows(d) && needsCatalogue(d) && !catalogueReady()) return;
+      const want = shows(d) ? crewEntry(d) : null;
+      const sig = want ? JSON.stringify(want) : null;
+      if (sent[id] === sig) return;
+      let have = null;
+      try { have = await window.YDDb.getFresh('jobCrew', id); } catch (e) { return; }
+      if (want ? have && sameEntry(have, want) : !have) { sent[id] = sig; return; }
+      mirror(id, d);
+    }, 5000);
+  }
+
   // ------------------------------------------------------------ the page
 
   function mapUrl(j) {
@@ -594,6 +622,7 @@
   let pageId = null, pagePreview = false;    // the job whose page is open
   function afterPage(id, j, preview) {
     pageId = id; pagePreview = !!preview;
+    pageSig = preview ? '' : sigOf(j);
     const bar = el('cjBar');
     if (bar) bar.innerHTML = barHtml(id, j, preview);
     if (window.YDJobPhotos) YDJobPhotos.mount(el('cjPhotos'), id);
@@ -618,6 +647,42 @@
     if (bar && bar.innerHTML !== b) bar.innerHTML = b;
   }
   document.addEventListener('yd-clock-changed', freshClock);
+
+  // The job's crew copy changed while its page is open (Jonah changed the
+  // work, QuickBooks' words came in): the page is drawn again, where it was
+  // scrolled to. Not while a box on it is being typed in -- then once that
+  // is left. A copy that only got a new time stamp is left alone.
+  let pageSig = '', pageWaiting = false;
+  const sigOf = j => { const o = Object.assign({}, j || {}); delete o.updatedAt; return JSON.stringify(o); };
+  function freshPage() {
+    if (!pageOpen() || !pageId || pagePreview) return;
+    const m = el('crewJobModal');
+    const a = document.activeElement;
+    if (a && m.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) {
+      if (!pageWaiting) {
+        pageWaiting = true;
+        a.addEventListener('blur', () => { pageWaiting = false; setTimeout(freshPage, 0); }, { once: true });
+      }
+      return;
+    }
+    const j = jobs[pageId];
+    const body = m.querySelector('.modal-body');
+    if (!body) return;
+    if (!j) {
+      body.innerHTML = '<p class="empty-msg">This job is no longer on your list.</p>';
+      const bar = el('cjBar'); if (bar) bar.innerHTML = '';
+      pageSig = '';
+      return;
+    }
+    if (sigOf(j) === pageSig) return;
+    const scrollers = [m, m.querySelector('.modal'), body];
+    const tops = scrollers.map(n => (n ? n.scrollTop : 0));
+    const opened = !!(el('cjBefore') && !el('cjBefore').classList.contains('cj-folded'));
+    body.innerHTML = pageHtml(pageId, j, false);
+    afterPage(pageId, j, false);
+    if (opened && el('cjBefore')) el('cjBefore').classList.remove('cj-folded');
+    scrollers.forEach((n, i) => { if (n) n.scrollTop = tops[i]; });
+  }
 
   window.cjClockIn = function (id) {
     const j = jobs[id];
@@ -694,8 +759,13 @@
     stop();
     if (!window.YDDb || !a.user || a.mode !== 'cloud') return;
     unsub = window.YDDb.watch('jobCrew', changes => {
-      changes.forEach(c => { if (c.type === 'removed') delete jobs[c.id]; else jobs[c.id] = c.data || {}; });
+      let pageChanged = false;
+      changes.forEach(c => {
+        if (c.id === pageId) pageChanged = true;
+        if (c.type === 'removed') delete jobs[c.id]; else jobs[c.id] = c.data || {};
+      });
       render();
+      if (pageChanged) freshPage();
     }, () => render());
   }
 
@@ -721,7 +791,7 @@
 
   // workFor: the estimate shows which line it would put each material under
   // (estimate.js, "For the crew, this is for").
-  window.YDCrewJobs = { mirror: mirror, render: render, entry: crewEntry, workFor: workFor,
+  window.YDCrewJobs = { mirror: mirror, remote: remote, render: render, entry: crewEntry, workFor: workFor,
     // The crew's booked and in-progress jobs, as their Jobs tab lists them
     // (a crew phone; empty for anyone who has the Job tab instead).
     list: () => listed() };

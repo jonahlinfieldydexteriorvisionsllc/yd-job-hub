@@ -32,6 +32,10 @@ const MATERIAL_CATEGORIES = [
 ];
 
 let currentJobId = null;
+// The last job worked on, put in the form the first time a job screen is
+// shown (switchTab) rather than at launch: the app opens on Home, and
+// building the whole job form and its estimate there was work nobody saw.
+let launchJobId = null;
 let labor = [];
 let materials = [];
 let orderItems = [];
@@ -854,6 +858,12 @@ function switchTab(name) {
   const changed = !was || was.id !== 'panel-' + name;
   // The stylesheet uses this to show the job controls only on job screens.
   document.documentElement.dataset.tab = name;
+  // First time on a job screen: the last job worked on goes in the form.
+  if (launchJobId && ['job', 'tracking', 'dashboard'].indexOf(name) !== -1) {
+    const id = launchJobId;
+    launchJobId = null;
+    if (!currentJobId) loadJob(id, true);
+  }
   // Matched by id, not by position: the buttons are not in the same order as
   // TABS, and matching by position lit up the wrong button on a laptop.
   const activeBtn = tabButtonId(name);
@@ -1530,10 +1540,10 @@ function renderProposal() {
     const cnt = orderItems.filter(m => m.proposalId === p.id).length;
     html += '<div class="prop-card"><div style="flex:1;min-width:0">' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><strong style="font-size:15px">' + esc(p.label) + '</strong>' +
-        '<button class="dup-btn" onclick="editProposalLabel(\'' + p.id + '\')">EDIT</button></div>' +
+        '<button class="dup-btn" onclick="editProposalLabel(\'' + ordId(p.id) + '\')">EDIT</button></div>' +
         '<div style="font-size:12px;color:var(--muted);margin-top:4px">' + (total > 0 ? '<strong>' + fmtMoney(total) + '</strong>' : 'No total') +
         ' · ' + cnt + ' material' + (cnt !== 1 ? 's' : '') + '</div></div>' +
-      '<button class="btn btn-sm btn-danger" onclick="removeProposal(\'' + p.id + '\')">Remove</button></div>';
+      '<button class="btn btn-sm btn-danger" onclick="removeProposal(\'' + ordId(p.id) + '\')">Remove</button></div>';
   });
   html += '<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">' +
     '<button class="btn btn-filled btn-sm" onclick="document.getElementById(\'proposalFileInput\').click()">+ Add Another</button>' +
@@ -2015,17 +2025,17 @@ function renderOrderList() {
       : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity</span>'
       : askQty ? '<span class="cr-cost">' + esc(cat.items[c.sid].name) + ' · ' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') +
           ' — how many? <input class="cr-qty-in" inputmode="decimal" placeholder="' + esc(c.per || 'each') + '" ' +
-          'onchange="setOrderQty(\'' + it.id + '\', this.value)"></span>'
+          'onchange="setOrderQty(\'' + ordId(it.id) + '\', this.value)"></span>'
       : c.sid ? '<span class="cr-cost muted">no price in Supplies</span>'
       : linkingOrder === it.id ? ''
       : opts.length ? '<span class="cr-cost"><span class="muted">Which Supplies item is it?</span> ' + opts.map(sid =>
-          '<button class="btn btn-sm cr-opt" onclick="linkOrderItem(\'' + it.id + '\', \'' + esc(sid) + '\')">' + esc(cat.items[sid].name) +
+          '<button class="btn btn-sm cr-opt" onclick="linkOrderItem(\'' + ordId(it.id) + '\', \'' + ordId(sid) + '\')">' + esc(cat.items[sid].name) +
           (cat.prices[sid] && typeof cat.prices[sid].cents === 'number' ? ' · ' + fmtMoney(cat.prices[sid].cents / 100) +
             (cat.prices[sid].per ? '/' + esc(cat.prices[sid].per) : '') : '') + '</button>').join(' ') +
-          ' <button class="link-btn" onclick="linkingOrder=\'' + it.id + '\'; renderOrderList()">Something else…</button></span>'
-      : '<span class="cr-cost"><span class="muted">Not in Supplies.</span> <button class="link-btn" onclick="linkingOrder=\'' + it.id + '\'; renderOrderList()">Pick it from Supplies</button></span>';
+          ' <button class="link-btn" onclick="linkingOrder=\'' + ordId(it.id) + '\'; renderOrderList()">Something else…</button></span>'
+      : '<span class="cr-cost"><span class="muted">Not in Supplies.</span> <button class="link-btn" onclick="linkingOrder=\'' + ordId(it.id) + '\'; renderOrderList()">Pick it from Supplies</button></span>';
     const picker = linkingOrder === it.id
-      ? '<div class="cr-link"><select class="searchable" onchange="linkOrderItem(\'' + it.id + '\', this.value)"><option value="">Which supply is it?</option>' +
+      ? '<div class="cr-link"><select class="searchable" onchange="linkOrderItem(\'' + ordId(it.id) + '\', this.value)"><option value="">Which supply is it?</option>' +
           Object.values(cat.items).sort((a, b) => String(a.name).localeCompare(String(b.name)))
             .map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>').join('') +
         '</select> <button class="link-btn" onclick="linkingOrder=null; renderOrderList()">Cancel</button></div>' : '';
@@ -2033,7 +2043,7 @@ function renderOrderList() {
     const sid = !it.ordered ? orderSupply(it, cat) : null;
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
     return '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
-      '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + it.id + '\')">' +
+      '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') +
@@ -2043,7 +2053,7 @@ function renderOrderList() {
       '</span>' +
       (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) +
         (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : '') +
-      '<button class="remove-btn" onclick="rmOrderItem(\'' + it.id + '\')">×</button></div>';
+      '<button class="remove-btn" onclick="rmOrderItem(\'' + ordId(it.id) + '\')">×</button></div>';
   };
 
   // By supplier, so each call or email covers one place.
@@ -2060,8 +2070,8 @@ function renderOrderList() {
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
     return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
         '<span class="muted">' + left + ' to order' + (lead && left ? ' · takes ' + esc(lead) : '') + '</span>' +
-        (v && left ? '<button class="link-btn ro-ok" onclick="copySupplierOrder(\'' + esc(v) + '\')">📋 Copy the order</button>' +
-          ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + esc(v) + '\')">✉️ Email the order</button>' : '') +
+        (v && left ? '<button class="link-btn ro-ok" onclick="copySupplierOrder(\'' + ordId(v) + '\')">📋 Copy the order</button>' +
+          ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + ordId(v) + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +
       list.map(row).join('');
@@ -2489,7 +2499,7 @@ function renderLabor() {
       h += '<tr><td class="bold">' + esc(e.worker || '') + '</td>' +
         (dated ? '<td>' + esc(typedDayText(e)) + '</td>' : '') +
         '<td>' + fmtHrsMin(entryHours(e)) + '</td>' +
-        '<td><button class="remove-btn" onclick="rmLabor(\'' + e.id + '\')">×</button></td></tr>';
+        '<td><button class="remove-btn" onclick="rmLabor(\'' + ordId(e.id) + '\')">×</button></td></tr>';
     });
     const totH = labor.reduce((s, e) => s + entryHours(e), 0);
     h += '</tbody><tfoot><tr style="font-weight:700"><td style="text-align:right"' + (dated ? ' colspan="2"' : '') +
@@ -2696,7 +2706,7 @@ function renderMaterials() {
         '<td>' + esc(e.location || '—') +
           (mail ? ' <a class="mat-mail" href="' + esc(mail) + '" target="_blank" rel="noopener" title="Open the receipt email">✉️</a>' : '') + '</td>' +
         '<td class="bold">' + (e.price ? fmtMoney(e.price) : '—') + '</td>' +
-        '<td><button class="remove-btn" onclick="rmMaterial(\'' + e.id + '\')">×</button></td></tr>';
+        '<td><button class="remove-btn" onclick="rmMaterial(\'' + ordId(e.id) + '\')">×</button></td></tr>';
     });
     h += '</tbody></table></div>';
     w.innerHTML = h;
@@ -2744,7 +2754,7 @@ function renderAdditionalCosts() {
         '<td>' + esc(e.from || '—') + '</td>' +
         '<td>' + (mat ? fmtMoney(mat) : '—') + '</td><td>' + (lab ? fmtMoney(lab) : '—') + '</td>' +
         '<td class="bold">' + fmtMoney(mat + lab) + '</td>' +
-        '<td><button class="remove-btn" onclick="rmAdditionalCost(\'' + e.id + '\')">×</button></td></tr>';
+        '<td><button class="remove-btn" onclick="rmAdditionalCost(\'' + ordId(e.id) + '\')">×</button></td></tr>';
     });
     h += '</tbody><tfoot><tr style="font-weight:700"><td colspan="3" style="text-align:right">Totals:</td>' +
       '<td>' + fmtMoney(matSum) + '</td><td>' + fmtMoney(labSum) + '</td><td>' + fmtMoney(matSum + labSum) + '</td><td></td></tr></tfoot></table></div>';
@@ -2821,7 +2831,7 @@ function renderPayments() {
       const how = [p.method, p.notes].filter(Boolean).join(' · ');
       h += '<tr><td>' + fmtDateMD(p.date) + '</td><td class="bold">' + esc(p.label || '') + '</td>' +
         '<td class="bold">' + fmtMoney(amt) + '</td><td>' + esc(how || '—') + payQbHtml(p) + '</td>' +
-        '<td><button class="remove-btn" onclick="rmPayment(\'' + p.id + '\')">×</button></td></tr>';
+        '<td><button class="remove-btn" onclick="rmPayment(\'' + ordId(p.id) + '\')">×</button></td></tr>';
     });
     recv = round2(recv);
     const bal = round2(invoiceTotal - recv), paid = bal <= 0 && invoiceTotal > 0;
@@ -3279,8 +3289,9 @@ function persistJob(announce) {
   const data = getJobData();
   if (!currentJobId) { currentJobId = uid(); jobOnScreen(); }
   const before = localStorage.getItem(STORAGE_PREFIX + currentJobId);
+  const json = JSON.stringify(data);
   try {
-    localStorage.setItem(STORAGE_PREFIX + currentJobId, JSON.stringify(data));
+    localStorage.setItem(STORAGE_PREFIX + currentJobId, json);
     let idx = getJobIndex().filter(j => j.id !== currentJobId);
     idx.unshift(buildIndexEntry(currentJobId, data));
     saveJobIndex(idx);
@@ -3311,9 +3322,22 @@ function persistJob(announce) {
   if (STORAGE_PREFIX + currentJobId !== currentJobId && localStorage.getItem(currentJobId) !== null) {
     try { localStorage.removeItem(currentJobId); } catch {}
   }
-  invalidateJobsCache();
+  cacheSavedJob(currentJobId, json, data);
   if (announce) showToast('Job saved');
   return true;
+}
+// The job just saved swapped into the list every screen reads (loadAllJobs),
+// in its place at the top as the index has it -- in a NEW list, since some
+// screens (calendar.js jobById) rebuild their lookups only when the list
+// itself is a different one. Throwing the whole list away instead made the
+// next screen to draw re-read and re-parse every job after each pause in
+// typing. Its own parsed copy, so later typing in the form never shows in
+// the list before it is saved.
+function cacheSavedJob(id, json, data) {
+  if (!_jobsCache || data.deletedAt) { invalidateJobsCache(); return; }
+  let copy;
+  try { copy = Object.assign(JSON.parse(json), { _id: id }); } catch (e) { invalidateJobsCache(); return; }
+  _jobsCache = [copy].concat(_jobsCache.filter(j => j._id !== id));
 }
 
 // Is this form genuinely blank? Used to stop a brand-new record being created
@@ -3528,6 +3552,7 @@ async function newJob() {
 // the job on screen was deleted on another device.
 function clearJobForm() {
   currentJobId = null;
+  launchJobId = null;     // a new job was asked for: not the last one
   jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
   jobToolsOwn = { added: [], dropped: [] };
@@ -3651,24 +3676,24 @@ function renderJobList() {
     const why = lostWhy(d);
     if (jobsReadOnly()) return why ? ' ' + lostChipHtml(d) : '';
     return ' <button type="button" class="lost-why' + (why ? '' : ' none') + '" title="Change why it was lost" ' +
-      'onclick="event.stopPropagation(); changeLostReason(\'' + j.id + '\')">' + esc(why || 'Say why') + ' ✎</button>';
+      'onclick="event.stopPropagation(); changeLostReason(\'' + ordId(j.id) + '\')">' + esc(why || 'Say why') + ' ✎</button>';
   };
   body.innerHTML = removeBoxHtml() + switcher + keys.map(key => {
     const shut = collapsedMonths[key];
     const rows = groups[key].map(j =>
-      '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + j.id + '\')">' +
+      '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + ordId(j.id) + '\')">' +
         '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
           (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
           // A bid with no price yet said "$0.00", which read as a free job.
           (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div></div>' +
       '<div class="jl-acts">' +
-      (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + j.id + '\')">BACK ON THE BOARD</button>' : '') +
-      (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + j.id + '\')">MAKE IT A JOB</button>' : '') +
-      (jobListBids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + j.id + '\')">MARK LOST</button>' : '') +
+      (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +
+      (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + ordId(j.id) + '\')">MAKE IT A JOB</button>' : '') +
+      (jobListBids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + ordId(j.id) + '\')">MARK LOST</button>' : '') +
       // "DUP" meant nothing to anyone; and Delete sat right against it.
-      '<button class="dup-btn" onclick="duplicateJob(\'' + j.id + '\')" title="Make a copy of this ' + (jobListBids ? 'bid' : 'job') + '">COPY</button>' +
-      '<button class="remove-btn jl-del" onclick="deleteJob(\'' + j.id + '\')" title="Move this ' + (jobListBids ? 'bid' : 'job') + ' to Recently deleted' +
+      '<button class="dup-btn" onclick="duplicateJob(\'' + ordId(j.id) + '\')" title="Make a copy of this ' + (jobListBids ? 'bid' : 'job') + '">COPY</button>' +
+      '<button class="remove-btn jl-del" onclick="deleteJob(\'' + ordId(j.id) + '\')" title="Move this ' + (jobListBids ? 'bid' : 'job') + ' to Recently deleted' +
         '" aria-label="Delete ' + esc(j.name || 'this job') + '">🗑 Delete</button></div></div>'
     ).join('');
     return '<div class="month-group"><div class="month-head" onclick="toggleMonth(\'' + key + '\')">' +
@@ -3815,6 +3840,19 @@ function dashPlannedNet(d, price) {
     return round2(price - r.profit.costCents / 100);
   } catch (err) { return null; }
 }
+// The same, kept per job until the job, its price or town changes -- or the
+// rules, Supplies' prices or the fuel prices do (the events below): pricing
+// a whole estimate for every job at each All Jobs redraw was most of its time.
+const dashNetKept = new Map();
+function dashPlannedNetKept(d, price) {
+  const key = (d.lastModified || '') + '|' + price + '|' + (d.city || '');
+  const k = dashNetKept.get(d._id);
+  if (k && k.key === key) return k.v;
+  const v = dashPlannedNet(d, price);
+  dashNetKept.set(d._id, { key: key, v: v });
+  return v;
+}
+['yd-pricing', 'yd-supplies'].forEach(ev => document.addEventListener(ev, () => dashNetKept.clear()));
 // Money still owed on the job's QuickBooks invoice; null with no invoice.
 function dashOwed(d) {
   const r = d.qbInvoiceRef;
@@ -3835,20 +3873,15 @@ function renderDashboard() {
   svcSel.innerHTML = '<option value="">All Services</option>' + [...set].sort().map(s => '<option>' + esc(s) + '</option>').join('');
   svcSel.value = prevSvc;
   const fSvc = svcSel.value, fStatus = document.getElementById('dashStatus').value, fSearch = (document.getElementById('dashSearch').value || '').toLowerCase().trim();
+  // What the filters look at first, for every job; the figures that cost
+  // something to work out (clocked labour, the estimate priced by the
+  // rules) only for the jobs left showing. Every job used to be priced in
+  // full and then most of them filtered away.
   let rows = jobsAll.map(d => {
-    // Clocked shifts included, exactly as the job's own Tracking figures do.
-    const lab = jobLabour(d._id, d.labor);
-    const hrs = lab.hours;
-    const matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
-    const price = parseMoney(d.jobPrice || '');
     const status = normStatus(d.jobStatus, d);
-    const real = lab.cost + matCost > 0;
-    const net = real ? round2(price - (lab.cost + matCost)) : dashPlannedNet(d, price);
-    const stage = dashStage(d, status);
     const jstage = jobStage(d);
-    return { id: d._id, jstage: jstage.id, qbStage: !!jstage.qb, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price, push: price ? '' : perPushText(d), hrs, matCost, net, planned: !real && net != null,
-      invoiced: isInvoiced(d), owed: dashOwed(d), stage, lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', why: lostWhy(d), year: dashYearOf(d, status),
-      plantBits: window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '' };
+    return { d: d, id: d._id, jstage: jstage.id, qbStage: !!jstage.qb, name: d.customerName || 'Untitled', est: String(d.estimateNumber || '').trim(), city: [d.city, d.state].filter(Boolean).join(', '), services: (d.serviceTypes || []).join(', '), status, price: parseMoney(d.jobPrice || ''),
+      invoiced: isInvoiced(d), owed: dashOwed(d), lost: isBidStatus(d.jobStatus) && d.bidStage === 'lost', year: dashYearOf(d, status) };
   });
   const fYear = fillDashYears(Array.from(new Set(rows.map(r => r.year))));
   if (fYear && fYear !== 'all') rows = rows.filter(r => String(r.year) === fYear);
@@ -3861,6 +3894,21 @@ function renderDashboard() {
     : fStatus === 'owed' ? r.owed > 0
     : fStatus ? r.status === fStatus : r.status !== 'quoting');
   if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services + ' ' + r.est).toLowerCase().includes(fSearch));
+  rows.forEach(r => {
+    const d = r.d;
+    // Clocked shifts included, exactly as the job's own Tracking figures do.
+    const lab = jobLabour(d._id, d.labor);
+    r.hrs = lab.hours;
+    r.matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
+    const real = lab.cost + r.matCost > 0;
+    r.net = real ? round2(r.price - (lab.cost + r.matCost)) : dashPlannedNetKept(d, r.price);
+    r.planned = !real && r.net != null;
+    r.push = r.price ? '' : perPushText(d);
+    r.stage = dashStage(d, r.status);
+    r.why = lostWhy(d);
+    r.plantBits = window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '';
+    delete r.d;
+  });
   // Unknown figures (no profit worked out, no invoice) sort below every
   // known one, whichever way round.
   const sortVal = (r, c) => c === 'owed' ? (r.owed == null ? null : r.owed) : r[c];
@@ -3929,13 +3977,13 @@ function renderDashboard() {
   // at 720px): the seven-column table was wider than the screen.
   let cardsHtml = '<div class="dash-cards">';
   rows.forEach(r => {
-    h += '<tr style="cursor:pointer" onclick="loadJob(\'' + r.id + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
+    h += '<tr style="cursor:pointer" onclick="loadJob(\'' + ordId(r.id) + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
       '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
       '<td>' + statusHtml(r) + '</td>' +
       '<td class="bold">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">—</span>') + '</td>' +
       '<td class="bold">' + owedHtml(r) + '</td>' +
       '<td class="bold">' + netHtml(r) + '</td></tr>';
-    cardsHtml += '<button type="button" class="dash-card" onclick="loadJob(\'' + r.id + '\')">' +
+    cardsHtml += '<button type="button" class="dash-card" onclick="loadJob(\'' + ordId(r.id) + '\')">' +
       '<span class="dash-card-top"><span class="dash-card-name">' + jobNameHtml(r.name, r.est) + '</span>' +
         '<span class="dash-card-price">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">no price yet</span>') + '</span></span>' +
       '<span class="dash-card-status">' + statusHtml(r) + '</span>' +
@@ -4543,9 +4591,16 @@ window.addEventListener('DOMContentLoaded', () => {
   migrateJobIndex();   // repair index entries from older versions (prices, fields, key scheme)
 
   // The last job worked on is put in the form, ready on the Job tab -- but
-  // quietly: the app opens on Home now, not on the job.
+  // only when a job screen is first shown (switchTab, launchJobId): the app
+  // opens on Home, and building the form there at every launch slowed the
+  // start on the iPad (and asked QuickBooks about that job each time).
   const idx = getJobIndex();
-  if (idx.length) { idx.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || '')); loadJob(idx[0].id, true); }
+  if (idx.length) {
+    idx.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
+    launchJobId = idx[0].id;
+    const onScreen = document.querySelector('.tab-panel.active');
+    if (onScreen && ['panel-job', 'panel-tracking', 'panel-dashboard'].indexOf(onScreen.id) !== -1) { launchJobId = null; loadJob(idx[0].id, true); }
+  }
 
   // Ask the browser to keep our data (reduces iOS/Safari eviction)
   if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }
