@@ -1635,17 +1635,36 @@
         ' with nobody clocking out land here, and changes the crew ask for.</p>';
       return;
     }
-    wrap.innerHTML = asked + waiting.map(e => {
+    // The plain ones, approved with one tap (approveLookRight) -- offered
+    // only when there are two or more, since one has its own Approve.
+    const byPerson = shiftsByPerson(waiting.map(e => e.uid));
+    const plain = lookRight(waiting, byPerson);
+    const decidable = waiting.filter(mayDecide).length;
+    const bulk = plain.length >= 2
+      ? '<div class="appr-bulk">' +
+          '<button class="btn btn-filled appr-bulk-btn" onclick="approveLookRight()">✓ Approve the ' + plain.length + ' that look right</button>' +
+          '<div class="hint">' + (plain.length < decidable ? plain.length + ' of ' + decidable + ' · ' : '') +
+            fmtDur(plain.reduce((s, e) => s + paidMs(e), 0)) + ' · ' +
+            money(plain.reduce((s, e) => s + costOf(paidMs(e), rateOf(e.uid)), 0)) + '. ' +
+            'Any typed in by the crew, stopped by the clock, over ' + Math.round(LONG_RUN_MS / 3600000) +
+            ' hours or overlapping another of their shifts waits for you to check on its own.</div>' +
+        '</div>'
+      : '';
+    wrap.innerHTML = bulk + asked + waiting.map(e => {
       // Chargeable, not merely unpaused: a long Labor day is not billable to
       // anybody, however few pauses it had.
       const paid = paidMs(e), bill = chargeableMs(e), pause = pausedMs(e);
-      return '<div class="appr">' +
+      // What the card does not already say about why it was left out of the
+      // one-tap approval.
+      const odd = mayDecide(e) ? oddities(e, byPerson[e.uid]).filter(o => o.shown) : [];
+      return '<div class="appr' + (odd.length ? ' appr-odd' : '') + '">' +
         '<div class="appr-top">' +
           '<button class="appr-who linkish" onclick="openWorker(\'' + safeId(e.uid) + '\')">' +
             esc(workerOf(e)) + '</button>' +
           '<span class="appr-where">' + esc(whereOf(e)) + '</span>' +
           '<span class="appr-why">' + whyFlagged(e) + '</span>' +
         '</div>' +
+        odd.map(o => '<div class="appr-check">⚠ Check this one: ' + esc(o.words) + '</div>').join('') +
         (e.note ? '<div class="appr-note">“' + esc(e.note) + '”</div>' : '') +
         '<div class="appr-times">' + spanWords(e) +
           (e.changedAt ? ' <span class="muted">· times changed by the office</span>' : '') + '</div>' +
@@ -1672,9 +1691,11 @@
           : '') +
         (mayDecide(e) && fixingId === e.id && fixingIn === 'appr' ? fixHtml(e)
           : mayDecide(e)
-          ? '<div class="appr-act">' +
+          // One row of three on a phone too (appr-act3 in styles.css): the
+          // middle one says just "Change" there, so all three fit.
+          ? '<div class="appr-act appr-act3">' +
               '<button class="btn btn-filled btn-sm" onclick="approveShift(\'' + safeId(e.id) + '\')">Approve</button>' +
-              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')">Change times</button>' +
+              '<button class="btn btn-sm" onclick="fixTimes(\'' + safeId(e.id) + '\')" aria-label="Change times">Change<span class="appr-long"> times</span></button>' +
               '<button class="btn btn-sm" onclick="rejectShift(\'' + safeId(e.id) + '\')">Reject</button>' +
             '</div>'
           : '<div class="appr-act muted">' + (decides() ? 'Your own shift — the owner approves it' : 'Waiting for the owner') + '</div>') +
@@ -1810,9 +1831,11 @@
     if (old && !building) markStale();
   }
 
-  window.approveShift = function (id) {
-    const e = entries[id];
-    if (!mayDecide(e)) return;
+  // One shift approved, as it now reads: written, and kept on this device's
+  // copies. Says whether it is one from before the cutoff (see markStale).
+  // `at`: the moment, the same on every shift approved together, which is
+  // how their Undo knows them (approveLookRight).
+  function approveOne(e, at) {
     const patch = {
       status: 'approved',
       rateCents: rateOf(e.uid),
@@ -1824,19 +1847,135 @@
       // never drift from what was approved.
       costCents: costOf(paidMs(e), rateOf(e.uid)),
       approvedBy: (me() || {}).uid || '',
-      approvedAt: nowIso(),
+      approvedAt: at || nowIso(),
     };
     Object.assign(e, patch);
-    patchOlder(id, patch);
-    write(id, patch, 'approving');
+    patchOlder(e.id, patch);
+    write(e.id, patch, 'approving');
+    return isOld(e);
+  }
+
+  window.approveShift = function (id) {
+    const e = entries[id];
+    if (!mayDecide(e)) return;
     // One from before the cutoff now counts on its job: the summary of old
     // jobs' labour has to take it in (after the shift's own write, so the
     // owner's device never sums from the shift as it was).
-    if (isOld(e)) markStale();
+    if (approveOne(e)) markStale();
     render();
     if (typeof refreshJobLabour === 'function') refreshJobLabour();
     showToast('Approved — ' + fmtDur(paidMs(e)) + ' for ' + workerOf(e));
   };
+
+  // ------------------------------------------- approving the plain ones at once
+  //
+  // Jonah (15 Oct 2026): "Approve all that look right", with an Undo -- a
+  // pile of shifts a little over eight hours took a tap each, ~50 of them
+  // after a busy week. Only a shift with nothing odd about it goes in that
+  // pile. Each of these is left for him to read and approve one at a time:
+  //
+  //   typed in by the worker themselves -- the times are their recollection,
+  //     which is exactly where a mistake lands (one the office typed in, or
+  //     his own, is already the office's word)
+  //   stopped by the clock with nobody clocking out -- the end is the clock's
+  //     guess, not when they stopped (one a storm's last property ended is
+  //     the storm's real end, and goes in)
+  //   over LONG_RUN_MS (ten hours) -- where the clock itself says a forgotten
+  //     clock-out is the likely story; storms have no hour limit, so not them
+  //   over the same minutes as another of their shifts -- the same hours
+  //     would be paid twice
+  //
+  // The last two are said on the card itself (the first two already are).
+  const typedByThem = e => e.source === 'manual' && (e.createdBy || e.uid) === e.uid &&
+    e.uid !== (me() || {}).uid;
+  const GRACE_MS = 60000;      // a switch between jobs: one ends as the next begins
+  // `theirs`: this person's other shifts (all of them, for a list of many).
+  function overlapOf(e, theirs) {
+    const s = startMsOf(e), end = endMsOf(e) != null ? endMsOf(e) : Date.now();
+    return (theirs || Object.values(known()).filter(o => o.uid === e.uid)).find(o => {
+      if (!o || o.id === e.id || o.status === 'rejected') return false;
+      const os = startMsOf(o), oe = endMsOf(o) != null ? endMsOf(o) : Date.now();
+      return os && os < end - GRACE_MS && s < oe - GRACE_MS;
+    }) || null;
+  }
+  // What is odd about a waiting shift: [] when nothing is. `theirs` as above.
+  function oddities(e, theirs) {
+    const out = [];
+    if (typedByThem(e)) out.push({ shown: false, words: 'typed in by hand' });
+    const clockGuess = autoStopped(e) && e.autoReason !== 'storm';
+    if (clockGuess) out.push({ shown: false, words: 'stopped by the clock' });
+    // (One the clock stopped is long because nobody clocked out, and its
+    // card says so already.)
+    else if (!noHourLimit(e) && paidMs(e) > LONG_RUN_MS) {
+      out.push({ shown: true, words: 'over ' + Math.round(LONG_RUN_MS / 3600000) + ' hours — was a clock-out forgotten?' });
+    }
+    const other = overlapOf(e, theirs);
+    if (other) out.push({ shown: true, words: 'overlaps another shift of theirs, ' + spanWords(other) + ' (' + whereOf(other) + ')' });
+    return out;
+  }
+  // Each person's shifts, for the waiting list's overlap checks -- gathered
+  // once, rather than every shift walked again for every card.
+  function shiftsByPerson(uids) {
+    const want = {}, out = {};
+    uids.forEach(u => { want[u] = true; out[u] = []; });
+    Object.values(known()).forEach(o => { if (o && want[o.uid]) out[o.uid].push(o); });
+    return out;
+  }
+  // The waiting shifts this person may approve with nothing odd about them.
+  function lookRight(waiting, byPerson) {
+    const list = (waiting || Object.values(entries).filter(awaitingOwner)).filter(mayDecide);
+    const by = byPerson || shiftsByPerson(list.map(e => e.uid));
+    return list.filter(e => !oddities(e, by[e.uid]).length);
+  }
+
+  window.approveLookRight = function () {
+    // Worked out again at the tap, not taken from the screen: a shift turned
+    // down or changed on another device since it was drawn is not swept up.
+    const list = lookRight();
+    if (!list.length) { showToast('None left that look right — check the rest one at a time'); render(); return; }
+    const at = nowIso();
+    // As each shift was, so Undo can put it back exactly: the fields approval
+    // writes, null where there was nothing (a write may not carry undefined).
+    const keys = ['status', 'rateCents', 'paidHours', 'billableHours', 'costCents', 'approvedBy', 'approvedAt'];
+    const before = {};
+    let old = false, paid = 0, cost = 0;
+    list.forEach(e => {
+      before[e.id] = {};
+      keys.forEach(k => { before[e.id][k] = e[k] === undefined ? null : e[k]; });
+      if (approveOne(e, at)) old = true;
+      paid += paidMs(e);
+      cost += e.costCents;
+    });
+    if (old) markStale();
+    render();
+    if (typeof refreshJobLabour === 'function') refreshJobLabour();
+    const msg = 'Approved ' + list.length + ' shifts — ' + fmtDur(paid) + ', ' + money(cost);
+    if (typeof showUndo === 'function') showUndo(msg, () => unapprove(before, at), 10000);
+    else showToast(msg);
+  };
+  // Undo: each one back to waiting as it was -- unless it has been changed
+  // since (turned down, its times put right, approved again on another
+  // device), which is left as it now is.
+  function unapprove(before, at) {
+    let back = 0, old = false;
+    Object.keys(before).forEach(id => {
+      const e = entries[id] || older[id];
+      if (!e || e.status !== 'approved' || e.approvedAt !== at || !mayDecide(e)) return;
+      const patch = before[id];
+      Object.assign(e, patch);
+      patchOlder(id, patch);
+      write(id, patch, 'taking back an approval');
+      if (isOld(e)) old = true;
+      back++;
+    });
+    if (old) markStale();
+    render();
+    if (typeof refreshJobLabour === 'function') refreshJobLabour();
+    const n = Object.keys(before).length;
+    showToast(back === n ? 'Back in Waiting for You'
+      : back ? back + ' of ' + n + ' back in Waiting for You — the rest were changed since'
+      : 'Not taken back — they were changed since');
+  }
 
   window.rejectShift = async function (id) {
     if (!mayDecide(entries[id])) return;

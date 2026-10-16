@@ -1418,7 +1418,7 @@ function syncJobPriceFromProposals() {
 function onJobPriceManualEdit() { manualJobPrice = true; baseJobPrice = parseMoney(document.getElementById('jobPrice').value) - getAdditionalCostsTotal(); updateJobPriceSourceTag(); }
 function updateJobPriceSourceTag() {
   const tag = document.getElementById('jobPriceSourceTag');
-  if (manualJobPrice) { tag.textContent = '(manual)'; tag.style.color = 'var(--accent-dark)'; }
+  if (manualJobPrice) { tag.textContent = '(manual)'; tag.style.color = 'var(--accent-ink)'; }
   else if (proposals.length || hasEstimate()) { tag.textContent = hasEstimate() ? '(from estimate)' : '(auto)'; tag.style.color = 'var(--pos)'; }
   else tag.textContent = '';
 }
