@@ -436,6 +436,10 @@
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '') +
       sec('🗒 Notes', j.notes ? '<div class="cj-text">' + marked(j.notes) + '</div>' : '') +
+      // A paper receipt for this job: it goes on the job by itself
+      // (receipts.js rcPhotoForJob) -- no asking which job.
+      (preview ? '' : '<div class="cj-receipt"><button class="btn cj-go-btn" onclick="rcPhotoForJob(\'' + safe(id) + '\')">' +
+        '🧾 Add a receipt for this job</button></div>') +
       '<div class="cj-photos" id="cjPhotos" data-job="' + safe(id) + '"></div>' +
     '</div>';
   }

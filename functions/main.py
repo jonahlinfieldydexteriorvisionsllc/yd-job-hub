@@ -614,8 +614,10 @@ def _receipts(request, path, headers):
         manual = True
     elif path == "/receipts/photo":
         # A paper receipt photographed in the app. Anyone on the crew may send
-        # one (Jonah, 6 Oct 2026); it only lands in Receipts to sort, and the
-        # reply tells them what was read -- they never see the list itself.
+        # one (Jonah, 6 Oct 2026); it lands in Receipts, and the reply tells
+        # them what was read -- they never see the list itself. The job (or
+        # vehicle) it is sent for is checked in receipts.from_photo
+        # (_sent_for): it must exist, else the receipt waits for Jonah.
         if origin_blocked(request):
             return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
         try:
