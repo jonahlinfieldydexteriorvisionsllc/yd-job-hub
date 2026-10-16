@@ -26,6 +26,7 @@ import datetime
 import hmac
 import json
 import os
+import time
 
 import anthropic
 import firebase_admin
@@ -68,6 +69,9 @@ MODEL = "claude-sonnet-5-5"
 # not enough on the boards yet, more useful next year). The switch is on
 # Pricing rules -> Claude; "Ask Claude now" on a card works either way.
 CARD_HOURS = (7, 19)
+# The hourly /cards/run request: no new step (QuickBooks look, cards) is
+# started after this many seconds. Cloud Run and the scheduler give it 900.
+RUN_BUDGET = 600
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
 # The live app only. A local copy (localhost) never needs to call the real
 # server: its signed-in screens are tested against a fake database.
@@ -438,9 +442,17 @@ def _digest(request, path, headers):
     if path == "/digest/run":
         if not _from_scheduler(request):
             return (json.dumps({"error": "not allowed"}), 403, json_headers)
-        # Once a day, before the morning summary: finished cards done more
-        # than a week ago are deleted (tidy.py). Whatever happens, the
-        # summary still goes.
+        # The summary FIRST, on time (it used to wait behind the clean-up
+        # below, photo by photo).
+        try:
+            report, failed = digest.run(slot), None
+        except Exception as e:                          # noqa: BLE001
+            print("digest run failed:", e)
+            report, failed = None, str(e)
+        # Then, once a day after the morning summary: finished cards done
+        # more than a week ago are deleted (tidy.py), and jobs in Recently
+        # deleted over 30 days, with their photos. Whatever happens there,
+        # the summary has gone.
         tidied = None
         if slot == "morning":
             try:
@@ -448,17 +460,14 @@ def _digest(request, path, headers):
                 tidied = tidy.run()
             except Exception as e:                      # noqa: BLE001
                 print("tidy run failed:", e)
-            # And jobs in Recently deleted over 30 days, with their photos.
             try:
                 import tidy
                 tidy.purge_jobs()
             except Exception as e:                      # noqa: BLE001
                 print("tidy: deleted jobs not cleared:", e)
-        try:
-            return (json.dumps({"slot": slot, "report": digest.run(slot), "tidied": tidied}), 200, json_headers)
-        except Exception as e:                          # noqa: BLE001
-            print("digest run failed:", e)
-            return (json.dumps({"error": str(e)}), 500, json_headers)
+        if failed is not None:
+            return (json.dumps({"error": failed}), 500, json_headers)
+        return (json.dumps({"slot": slot, "report": report, "tidied": tidied}), 200, json_headers)
 
     if path == "/digest/preview":
         if origin_blocked(request):
@@ -510,22 +519,28 @@ def _cards(request, path, headers):
         only = (board_id, card_id)
     else:
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    # The hourly run asks QuickBooks about estimates out with customers and
+    # invoices not yet paid off (quickbooks.sweep): a "yes" or a payment
+    # reaches the job, and Jonah's phone, without him looking. That comes
+    # FIRST -- it is the part that matters every hour; Claude's cards (slow:
+    # a web search each) only get the time left. The request has RUN_BUDGET
+    # seconds in all: past it nothing new is started, so it ends well inside
+    # Cloud Run's limit instead of being cut off half way.
+    deadline = time.monotonic() + RUN_BUDGET
+    if only is None or only == "skip":
+        try:
+            _tell_owner(qb_sweep_news(deadline))
+        except Exception as e:                      # noqa: BLE001
+            print("quickbooks sweep failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
     try:
-        if only != "skip":
+        if only is None and time.monotonic() > deadline:
+            report = [{"skipped": "out of time after the QuickBooks look -- the next card run takes them"}]
+        elif only != "skip":
             report = cards.run(_claude(), only)
     except Exception as e:                          # noqa: BLE001
         print("cards run failed:", e)
         failed = str(e)
-    # The hourly run also asks QuickBooks about estimates out with customers
-    # and invoices not yet paid off (quickbooks.sweep): a "yes" or a payment
-    # reaches the job, and Jonah's phone, without him looking. Whatever
-    # happened with the cards.
-    if only is None or only == "skip":
-        try:
-            _tell_owner(qb_sweep_news())
-        except Exception as e:                      # noqa: BLE001
-            print("quickbooks sweep failed:", e)
     if failed is not None:
         return (json.dumps({"error": failed}), 500, json_headers)
     return (json.dumps({"report": report}), 200, json_headers)
@@ -550,9 +565,9 @@ def _card_hour():
     return datetime.datetime.now(ZoneInfo("America/Chicago")).hour in hours
 
 
-def qb_sweep_news():
+def qb_sweep_news(deadline=None):
     import quickbooks
-    return quickbooks.sweep()
+    return quickbooks.sweep(deadline)
 
 
 def _money(v):

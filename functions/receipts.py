@@ -765,7 +765,7 @@ def _board(db, board_id):
     if snap.exists:
         return board_id, snap.to_dict() or {}
     if board_id == PICKUPS:
-        now = dg._now().isoformat()
+        now = _app_time()
         board = {"name": "Pickups", "color": "#e07b24", "order": 3, "visibleTo": [], "ownerOnly": False,
                  "columns": [{"id": "pk0", "name": "Ready to pick up"}, {"id": "pk1", "name": "Picked up"}],
                  "labels": DEFAULT_LABELS, "createdAt": now, "updatedAt": now}
@@ -776,8 +776,17 @@ def _board(db, board_id):
     return None, None
 
 
+def _app_time():
+    """Now as the app writes a time on a card or a board (JavaScript's
+    toISOString: UTC, ending Z). The app and the summaries compare these as
+    text: a card stamped in Chicago time ("...T00:30:00-05:00") sorted before
+    that morning's "...T05:00:00.000Z" and was missed from "Added today"."""
+    t = datetime.datetime.now(datetime.timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (t.microsecond // 1000)
+
+
 def _new_card(board, title, notes, **more):
-    now = dg._now().isoformat()
+    now = _app_time()
     col = (board.get("columns") or [{"id": ""}])[0]["id"]
     card = {"title": title[:200], "column": col, "order": int(time.time() * 1000), "due": None,
             "labels": [], "color": None, "assignees": [], "jobId": None, "jobName": None, "jobNum": None,

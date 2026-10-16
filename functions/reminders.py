@@ -138,15 +138,38 @@ def run():
         print("reminders: settings not read:", err)
         prefs = {}
     first, last = _near(since, now)
-    cals = _read_calendars(db, first, last)
-    boards = _read_boards(db, first, last)
-    sent = _set_reminders(db, people, cals, since, now)
-    sent.extend(_urgent_cards(db, people, now, boards))
-    sent.extend(_card_reminders(db, people, since, now, boards))
-    sent.extend(_usual(db, people, since, now, cals, boards, prefs))
-    sent.extend(_activity(db, people, now, cals, boards, prefs))
-    sent.extend(crew_notes(db, people, now))
-    sent.extend(crew_shifts(db, people, now))
+    # Each part on its own: one that fails is logged and the rest still go
+    # (one bad entry used to stop the whole run -- the 7 am list with it).
+    # A part that needs the calendars or the boards waits for the next run
+    # when they could not be read, rather than go out without them: the
+    # 7 am list is sent once, so it must not go short.
+    try:
+        cals = _read_calendars(db, first, last)
+    except Exception as err:              # noqa: BLE001
+        print("reminders: calendars not read:", err)
+        cals = None
+    try:
+        boards = _read_boards(db, first, last)
+    except Exception as err:              # noqa: BLE001
+        print("reminders: boards not read:", err)
+        boards = None
+    steps = [
+        ("set reminders", (cals,), lambda: _set_reminders(db, people, cals, since, now)),
+        ("urgent cards", (boards,), lambda: _urgent_cards(db, people, now, boards)),
+        ("card reminders", (boards,), lambda: _card_reminders(db, people, since, now, boards)),
+        ("usual reminders", (cals, boards), lambda: _usual(db, people, since, now, cals, boards, prefs)),
+        ("crew activity", (cals, boards), lambda: _activity(db, people, now, cals, boards, prefs)),
+        ("crew notes", (), lambda: crew_notes(db, people, now)),
+        ("crew shifts", (), lambda: crew_shifts(db, people, now)),
+    ]
+    sent = []
+    for what, needs, step in steps:
+        if any(x is None for x in needs):
+            continue
+        try:
+            sent.extend(step() or [])
+        except Exception as err:          # noqa: BLE001
+            print("reminders: %s failed:" % what, err)
     sent.extend(clocked.get("told") or [])
     if clocked.get("stopped"):
         sent.append({"clockStopped": clocked["stopped"]})

@@ -623,8 +623,12 @@ def _day_record(today, people):
     [(what, where, who)]. The app writes times as ISO ...Z; a day is
     Central time."""
     db = _db()
-    start = datetime.datetime(today.year, today.month, today.day, tzinfo=TZ)
-    start_z = start.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    # The day's first moment AS TEXT, for the database's range questions:
+    # the app writes UTC ("...T05:00:00.000Z" is Chicago's midnight), but a
+    # time written in Chicago's own offset ("...T00:30:00-05:00", the
+    # server's older stamps) sorts before that and was missed. Asking from
+    # the bare date catches both; on_day() below then keeps only today's.
+    start_z = _day(today)
 
     def when(iso):
         try:
@@ -1681,13 +1685,18 @@ DEFAULT_PREFS = {
 KEEP_DAYS = 14
 
 
+def _kept_id(uid, slot, today):
+    """summaries/{this}: one person's summary of one slot on one day."""
+    return "%s_%s_%s" % (uid, _day(today), slot)
+
+
 def _keep(uid, slot, d):
     """The summary as sent, for the app's Summaries screen (notify.js). The
     email's own page, so the app shows exactly what the email would. A
     person's older than KEEP_DAYS are cleared as the new one goes in."""
     db = _db()
     today = _now().date()
-    db.collection("summaries").document("%s_%s_%s" % (uid, _day(today), slot)).set({
+    db.collection("summaries").document(_kept_id(uid, slot, today)).set({
         "uid": uid, "slot": slot, "day": _day(today), "at": _now().isoformat(),
         "subject": d.get("subject") or "", "push": d.get("push") or {}, "html": to_html(d)})
     cutoff = _day(today - datetime.timedelta(days=KEEP_DAYS))
@@ -1785,11 +1794,28 @@ def run(slot, only_uid=None, dry=False):
     if slot not in SLOTS:
         raise ValueError("unknown slot")
     people = _people()
+    # Already sent today (kept in summaries/, _keep): Cloud Scheduler calls
+    # again when a run is slow to answer, and that second call sent everybody
+    # the same summary twice. A test send from the app is never held back.
+    sent = set()
+    if not only_uid and not dry:
+        try:
+            db, today = _db(), _now().date()
+            ids = {_kept_id(uid, slot, today): uid for uid in people}
+            if ids:
+                sent = {ids[s.id] for s in db.get_all([db.collection("summaries").document(i) for i in ids])
+                        if s.exists and s.id in ids}
+        except Exception as e:          # noqa: BLE001 -- not knowing, everyone gets theirs
+            print("digest: could not check which summaries went already:", e)
+            sent = set()
     wx = weather()
     cache = _cache(slot, people)
     report = []
     for uid, u in people.items():
         if only_uid and uid != only_uid:
+            continue
+        if uid in sent:
+            report.append({"uid": uid, "skipped": "already sent"})
             continue
         # Each person on their own. One odd record or setting used to raise
         # straight out of this loop, and everybody after that person got no

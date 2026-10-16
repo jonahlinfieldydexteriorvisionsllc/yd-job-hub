@@ -39,6 +39,12 @@ what clocking out then would give (over eight hours: the office checks it).
 Only the person is told. The phones on the storm do the same the moment they
 see the last departure (timeclock.js YDClock.stormDone); this catches the
 phones that are off.
+
+A storm shift whose storm is OVER (closed, abandoned, or gone) and gives no
+end after the shift began (storm_rule) has no storm left to wait for, and
+used to run for ever: the usual hour limit is its safety net (autoReason
+'hours', the office checks it). A storm still open keeps no limit, as Jonah
+asked.
 """
 
 import datetime
@@ -95,17 +101,19 @@ def start_ms(e):
     return _ms(e.get("startedAt")) if e.get("startedAt") else None
 
 
-def stop_patch(e, hours, now_ms, storm_end=None):
+def stop_patch(e, hours, now_ms, storm_end=None, by_hours=False):
     """What stopping this shift writes, or None when it is not one to stop:
     no longer running (clocked out meanwhile, or already stopped), no start
     to go by, or not yet past the limit. A storm shift has no limit: it stops
-    only at `storm_end`, the moment its storm's work was done."""
+    only at `storm_end`, the moment its storm's work was done -- unless
+    `by_hours`: its storm is over without an end to give it (see above), and
+    the hour limit stops it like any other shift."""
     if e.get("status") != "running" or e.get("endedAt") or e.get("endedMs") is not None:
         return None
     start = start_ms(e)
     if not start:
         return None
-    storm = e.get("kind") == "storm"
+    storm = e.get("kind") == "storm" and not by_hours
     if storm:
         # Clocked in after the last property (cleanup, the drive back): left
         # running, for the storm's closing -- or their own clock-out -- to end.
@@ -145,7 +153,7 @@ def stop_patch(e, hours, now_ms, storm_end=None):
     }
 
 
-def _stop(db, ref, hours, now_ms, storm_end=None):
+def _stop(db, ref, hours, now_ms, storm_end=None, by_hours=False):
     """Stops one shift in a transaction: read again, and written only if it
     is still running. A clock-out landing from the phone at the same moment
     wins, and is never overwritten."""
@@ -155,7 +163,7 @@ def _stop(db, ref, hours, now_ms, storm_end=None):
         snap = ref.get(transaction=tx)
         if not snap.exists:
             return None
-        patch = stop_patch(snap.to_dict() or {}, hours, now_ms, storm_end)
+        patch = stop_patch(snap.to_dict() or {}, hours, now_ms, storm_end, by_hours)
         if patch:
             tx.update(ref, patch)
         return patch
@@ -182,26 +190,50 @@ def storm_done_ms(storm, stops):
 
 
 def _storm_ends(db, running):
-    """{storm id: when its work was done} for the storms someone is still
-    clocked in to, read once each."""
+    """{storm id: {end: when its work was done (storm_done_ms), over: no
+    longer open}} for the storms someone is still clocked in to, read once
+    each. A shift with no storm id, or one no storm can have, has no storm:
+    over, with no end. A storm that could not be read is left out -- its
+    shifts wait for the next run."""
     out = {}
     ids = set()
     for s in running:
         e = s.to_dict() or {}
-        if e.get("kind") == "storm" and e.get("targetId"):
-            ids.add(str(e.get("targetId")))
+        if e.get("kind") == "storm":
+            ids.add(str(e.get("targetId") or ""))
     for sid in ids:
-        if "/" in sid:
+        if not sid or "/" in sid:
+            out[sid] = {"end": None, "over": True}
             continue
         try:
             ref = db.collection("storms").document(sid)
             snap = ref.get()
             storm = (snap.to_dict() or {}) if snap.exists else {"status": "abandoned"}
             stops = [x.to_dict() or {} for x in ref.collection("stops").stream()]
-            out[sid] = storm_done_ms(storm, stops)
+            out[sid] = {"end": storm_done_ms(storm, stops), "over": stages.storm_status(storm) != "open"}
         except Exception as err:      # noqa: BLE001 -- that storm waits for the next run
             print("autoclock: storm not read:", sid, err)
     return out
+
+
+def storm_rule(e, st):
+    """(storm_end, by_hours) for one running storm shift, from its storm's
+    _storm_ends entry `st`. A storm still open: its end when its work is
+    done, else none -- no limit, as before. A storm that is over: the end
+    its work gives (storm_done_ms), as before, when that came after the
+    shift began; otherwise -- no departure and no closing time to go by, or
+    a shift begun after the last property (the cleanup, the drive back) --
+    the hour limit, so it cannot run for ever. Not the closing time for
+    that last one: the storm may be closed while they are still driving
+    back, and the limit's stop is checked by the office (pending), where a
+    stop at the closing could be cutting their time short unseen."""
+    end = st.get("end")
+    if not st.get("over"):
+        return end, False
+    start = start_ms(e)
+    if end and start and end > start:
+        return end, False
+    return None, True
 
 
 def _when(ms):
@@ -294,13 +326,18 @@ def run(db=None, people=None, now=None):
     storm_ends = _storm_ends(db, running)
     for s in running:
         e = s.to_dict() or {}
-        storm_end = storm_ends.get(str(e.get("targetId") or "")) if e.get("kind") == "storm" else None
+        storm_end, by_hours = None, False
+        if e.get("kind") == "storm":
+            st = storm_ends.get(str(e.get("targetId") or ""))
+            if st is None:
+                continue                  # its storm was not read: the next run
+            storm_end, by_hours = storm_rule(e, st)
         # Looked at without a transaction first: nearly every running shift
         # is nowhere near the limit, and only one that is gets the careful write.
-        if not stop_patch(e, hours, now_ms, storm_end):
+        if not stop_patch(e, hours, now_ms, storm_end, by_hours):
             continue
         try:
-            if _stop(db, s.reference, hours, now_ms, storm_end):
+            if _stop(db, s.reference, hours, now_ms, storm_end, by_hours):
                 stopped.append(s.id)
                 print("autoclock: stopped", s.id, "storm done" if storm_end else "at %s hours" % hours)
         except Exception as err:      # noqa: BLE001 -- the next one, and the next run, still go
