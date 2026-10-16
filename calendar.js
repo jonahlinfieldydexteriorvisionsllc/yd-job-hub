@@ -29,8 +29,8 @@
   // want tags and assigned colors for different things." Three calendars,
   // and what each thing is is its kind (remind.js TYPES):
   //   - the Crew schedule: "where the crews working, crew tasks, anything i
-  //     assign crew members to" -- the only one the crew see, kept shared
-  //     with everybody ticked as crew on Your Crew (shareCrewCal);
+  //     assign crew members to" -- kept shared with everybody ticked as
+  //     crew on Your Crew (shareCrewCals);
   //   - My work: his own -- quote appointments (QP), pickups, emails to
   //     send, things to do;
   //   - Personal: "anything i do not to do with the business", doctor's
@@ -40,9 +40,13 @@
   // never changes it. Fixed ids, so two devices seeding at the same moment
   // write the same three rather than six. Site visits and Follow-ups were
   // folded into My work that day (`mergedInto`; never shown again).
+  // A day later (16 Oct 2026): "Let the crew see My work. They can look but
+  // not change anything." My work is `crewSees` (shared with every crew
+  // member, as the Crew schedule is -- shareCrewCals) and `lookOnly` (those
+  // it is shared with tick nothing off; firestore.rules hold the same).
   const SEED = [
-    { id: 'schedule', name: 'My work', color: '#66418f', kind: 'work', order: 1,
-      about: 'Your own work: quote appointments, pickups, emails to send' },
+    { id: 'schedule', name: 'My work', color: '#66418f', kind: 'work', order: 1, crewSees: true, lookOnly: true,
+      about: 'Your own work: quote appointments, pickups, emails to send — the crew can look' },
     { id: 'crewtasks', name: 'Crew schedule', color: '#2f6fd6', kind: 'crew', order: 2,
       about: 'Where the crew are working and their tasks — the crew see this one' },
     { id: 'personal', name: 'Personal', color: '#d94f8a', kind: 'personal', order: 3, seeOnly: true,
@@ -153,6 +157,9 @@
     (ydCan('calendars', 'change') && cal.ownerOnly === false && cal.seeOnly !== true) ||
     (!!me() && (cal.editors || []).indexOf(me().uid) !== -1));
   const editableCals = () => storedCals().filter(editsCal);
+  // Shared with this person to look at only (`lookOnly`): they tick nothing
+  // off on it, and its things are not on their lists of things to do.
+  const looksOnly = cal => !!cal && cal.lookOnly === true && !editsCal(cal);
   const adds = () => isOwner() || ydCan('calendars', 'change') || editableCals().length > 0;
   const two = n => String(n).padStart(2, '0');
   const nowIso = () => new Date().toISOString();
@@ -609,6 +616,7 @@
     // A job's day is not ticked off (remind.js isJobDay / isTask).
     if (cal && o.jobDay && !o.task) return false;
     if (editsCal(cal)) return true;
+    if (looksOnly(cal)) return false;
     if (!(cal && u && (cal.visibleTo || []).indexOf(u.uid) !== -1)) return false;
     // The rules look at everyone on the entry, on any of its dates
     // (crewUids); this date's own list on top.
@@ -634,9 +642,14 @@
   }
   function todayHtml() {
     const day = dayForNew();
-    const items = occurrences(day, day).filter(o => !o.time && o.auto !== 'storm');
+    const all = occurrences(day, day).filter(o => !o.time && o.auto !== 'storm');
     const group = (label, list) => !list.length ? '' :
       (label ? '<div class="cal-todo-group">' + label + '</div>' : '') + list.slice().sort(byKind).map(o => todoRow(o)).join('');
+    // A calendar this person only looks at (the crew and Jonah's work): its
+    // things last, in a group of their own, with no boxes to tick.
+    const look = all.filter(o => looksOnly(cals[o.calId]));
+    const items = all.filter(o => look.indexOf(o) === -1);
+    const lookNames = Array.from(new Set(look.map(o => calName(o.calId))));
     const mine = items.filter(o => !isCrewOcc(o)), crew = items.filter(isCrewOcc);
     // Tasks from the days before that nobody ticked off, at the top -- on
     // today's list only (a later day's "earlier" has not happened yet).
@@ -649,6 +662,7 @@
       '<div class="cal-today-body">' + lateHtml(late, null, true) +
         (items.length ? group(crew.length && mine.length ? 'Yours' : late.length ? 'Today' : '', mine) + group('👷 Crew', crew)
           : '<div class="cal-today-none">' + (late.length ? 'Nothing else for today.' : 'Nothing for any time this day.') + '</div>') +
+        group('👀 ' + esc(lookNames.join(', ')) + ' — to look at', look) +
       '</div></div>';
   }
 
@@ -670,7 +684,9 @@
     const from = [addDays(t, -YDRemind.CARRY_DAYS), YDRemind.TICK_FROM].sort()[1];
     const to = addDays(t, -1);
     if (from > to) return [];
-    return occurrences(from, to, everything).filter(o => o.task && !o.after && (!o.done || doneToday(o)))
+    // Not what someone only looks at: Jonah's to-dos are not theirs to carry.
+    return occurrences(from, to, everything).filter(o => o.task && !o.after && (!o.done || doneToday(o)) &&
+        !looksOnly(cals[o.calId]))
       .sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || a.day.localeCompare(b.day) || byKind(a, b));
   }
   function doneToday(o) {
@@ -1891,14 +1907,16 @@
     const missing = unseeing(cal);
     const who = esc(names(missing));
     hint.innerHTML = (cal.kind === 'personal' ? 'Personal: you, and admins can look — never the crew.'
-        : n ? esc(cal.name) + ' is shared with ' + esc(names(cal.visibleTo)) + '.'
+        : n ? esc(cal.name) + ' is shared with ' + esc(names(cal.visibleTo)) +
+            (cal.lookOnly === true ? ' — to look at; they can’t tick anything off.' : '.')
         : esc(cal.name) + ' is not shared with anyone yet.') +
       (!missing.length ? ''
         : '<div class="cal-share-ask">⚠ <b>' + who + '</b> can’t see ' + esc(cal.name) + ', so won’t see this entry.' +
-          // Personal is never shared; Crew tasks follows who is ticked as
-          // crew on Your Crew (shareCrewCal would take anyone else off).
+          // Personal is never shared; the Crew schedule (and My work) follow
+          // who is ticked as crew on Your Crew (shareCrewCals would take
+          // anyone else off).
           (cal.kind === 'personal' ? ' Pick another calendar for them to see it.'
-            : cal.kind === 'crew' ? ' The Crew schedule is shared with everyone ticked as a crew member on Your Crew.'
+            : sharedWithCrew(cal) ? ' ' + esc(cal.name) + ' is shared with everyone ticked as a crew member on Your Crew.'
             : isOwner() ? ' <button type="button" class="btn btn-sm btn-filled" onclick="calShareWith()">Share ' +
                 esc(cal.name) + ' with ' + who + '</button>'
             : ' Ask Jonah to share it with them.') +
@@ -2623,7 +2641,9 @@
           '<span class="cal-dot"></span>' +
           '<div class="cal-manage-name"><b>' + esc(c.name) + '</b><span class="muted">' +
             (c.kind === 'personal' ? 'You — admins can look, nobody else'
-              : (c.visibleTo || []).length ? 'Shared with ' + c.visibleTo.map(u => esc(firstName(personName(u)))).join(', ') +
+              : (c.visibleTo || []).length ? (sharedWithCrew(c) ? 'Every crew member' : 'Shared with ' +
+                  c.visibleTo.map(u => esc(firstName(personName(u)))).join(', ')) +
+                (c.lookOnly === true ? ' can look' : '') +
                 ((c.editors || []).length ? ' · ' + c.editors.map(u => esc(firstName(personName(u)))).join(', ') + ' can change it' : '')
               : 'Only you so far') + '</span></div>' +
           '<button class="btn btn-sm" onclick="calEditCal(\'' + c.id + '\')">Edit</button>' +
@@ -2652,12 +2672,25 @@
       (c.kind === 'personal' ? '<div class="hint">Personal is never shared with the crew. Admins with Calendars ' +
           'access can look at it, and never change it.</div>' :
         '<div class="field"><span class="label">Who can see it</span>' +
+          // Every crew member, kept so by itself (shareCrewCals) -- or the
+          // people picked by hand. Two separate answers, so one never
+          // quietly undoes the other: with the crew tick on, the picks are
+          // put away rather than shown and then overwritten.
+          (c.kind === 'crew' ? '' :
+            '<label class="chk"><input type="checkbox" id="ccCrewSees"' + (c.crewSees === true ? ' checked' : '') +
+              ' onchange="document.getElementById(\'ccShareBox\').hidden = this.checked"> 👷 Every crew member ' +
+              '(everyone ticked as crew on Your Crew, now and later)</label>') +
+          '<div id="ccShareBox"' + (c.kind !== 'crew' && c.crewSees === true ? ' hidden' : '') + '>' +
           (crew.length ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="ccShare" value="' +
               p.uid + '"' + (shared.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') + '</div>' +
-            '<div class="hint">Anyone ticked sees every event on this calendar, including the address, and can tick ' +
-            'a day’s entry off as done.' + (c.kind === 'crew' ? ' Everyone ticked as a crew member on Your Crew sees ' +
-            'this one by itself.' : '') + '</div>'
+            '<div class="hint">Anyone ticked sees every event on this calendar, including the address.' +
+            (c.kind === 'crew' ? ' Everyone ticked as a crew member on Your Crew sees this one by itself.' : '') + '</div>'
             : '<div class="hint">No crew accounts yet. Once someone signs in and you approve them, they appear here.</div>') +
+          '</div>' +
+          '<label class="chk"><input type="checkbox" id="ccLookOnly"' + (c.lookOnly === true ? ' checked' : '') +
+            '> 👀 Look only — they see it, and can’t tick anything off or change it</label>' +
+          '<div class="hint">Unticked, anyone it is shared with can tick off a day’s entry that is theirs or that ' +
+            'nobody is on. Whoever is under “Who can add &amp; change” always can.</div>' +
         '</div>' +
         (crew.length ? '<div class="field"><span class="label">Who can add &amp; change</span>' +
           '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="ccEdit" value="' +
@@ -2699,8 +2732,13 @@
       updatedAt: nowIso(),
     };
     if (!(was && was.kind === 'personal')) {
-      rec.visibleTo = Array.from(new Set(Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value)
-        .concat(rec.editors)));
+      rec.crewSees = !!(el('ccCrewSees') && el('ccCrewSees').checked);
+      rec.lookOnly = !!(el('ccLookOnly') && el('ccLookOnly').checked);
+      // Every crew member: shared with them straight away, as the owner's
+      // device keeps it from now on (shareCrewCals).
+      const picked = rec.crewSees && peopleLoaded ? crewMemberUids()
+        : Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value);
+      rec.visibleTo = Array.from(new Set(picked.concat(rec.editors)));
     }
     cals[cid] = Object.assign({ id: cid }, was || {}, rec);
     write('calendars', cid, rec, 'saving ' + name);
@@ -2831,6 +2869,13 @@
         delete events[c.id];
       } else {
         cals[c.id] = Object.assign({ id: c.id }, c.data);
+        // "My work" is Jonah's: on anyone else's screen it says whose, or
+        // the crew read it as their own. Only on this screen -- nobody but
+        // the owner writes a calendar (firestore.rules).
+        if (c.id === WORK_CAL && !isOwner() && cals[c.id].name === 'My work') {
+          cals[c.id].name = 'Jonah’s work';
+          cals[c.id].about = 'Jonah’s own work: quote appointments, pickups, emails to send';
+        }
         watchEvents(c.id);
       }
     });
@@ -2842,11 +2887,22 @@
       SEED.forEach(s => {
         if (cals[s.id]) return;
         const rec = { name: s.name, color: s.color, kind: s.kind, order: s.order, visibleTo: [],
-                      ownerOnly: false, seeOnly: !!s.seeOnly, about: s.about, updatedAt: nowIso() };
+                      ownerOnly: false, seeOnly: !!s.seeOnly, crewSees: !!s.crewSees, lookOnly: !!s.lookOnly,
+                      about: s.about, updatedAt: nowIso() };
         cals[s.id] = Object.assign({ id: s.id }, rec);
         write('calendars', s.id, rec, 'seeding');
         watchEvents(s.id);
       });
+      // My work as it was before 16 Oct (no crewSees at all): shared with
+      // the crew to look at, once, as Jonah asked. Unticked later in its
+      // settings, it stays unticked (the field is there then).
+      const work = cals[WORK_CAL], ws = SEED.find(s => s.id === WORK_CAL);
+      if (work && work.kind === 'work' && work.crewSees === undefined) {
+        work.crewSees = true; work.lookOnly = true;
+        const patch = { crewSees: true, lookOnly: true, updatedAt: nowIso() };
+        if (work.about === 'Your own work: quote appointments, pickups, emails to send') work.about = patch.about = ws.about;
+        write('calendars', WORK_CAL, patch, 'sharing My work with the crew to look at');
+      }
       // Calendars made before admins existed have no ownerOnly at all. Each
       // is marked once, not private. Until then an admin given Calendars
       // would see none of them, since they are fetched by asking for
@@ -2857,26 +2913,30 @@
         write('calendars', c.id, { ownerOnly: false }, 'marking private or not');
       });
     }
-    if (meta && !meta.fromCache) { shareCrewCal(); foldCalendars(); }
+    if (meta && !meta.fromCache) { shareCrewCals(); foldCalendars(); }
     redrawIfVisible();
     announce();
   }
 
-  // The Crew tasks calendar is shared with exactly the people ticked as crew
-  // on Your Crew (remind.js isCrewMember) -- put right by the owner's device
-  // whenever either list comes in from the server, so ticking someone shares
-  // it with them and unticking (or switching them off) takes it away.
+  // The Crew schedule -- and any calendar ticked "Every crew member sees it"
+  // (`crewSees`: My work, 16 Oct 2026) -- is shared with exactly the people
+  // ticked as crew on Your Crew (remind.js isCrewMember), and whoever may
+  // change it: put right by the owner's device whenever either list comes in
+  // from the server, so ticking someone shares it with them and unticking
+  // (or switching them off) takes it away.
   const CREW_CAL = 'crewtasks';
   function crewMemberUids() {
     return Object.keys(people).filter(uid => people[uid].active && YDRemind.isCrewMember(people[uid])).sort();
   }
-  function shareCrewCal() {
-    const c = cals[CREW_CAL];
-    if (!isOwner() || !peopleLoaded || !c) return;
-    const want = Array.from(new Set(crewMemberUids().concat(c.editors || []))).sort();
-    if (same(want, (c.visibleTo || []).slice().sort())) return;
-    c.visibleTo = want;
-    write('calendars', CREW_CAL, { visibleTo: want, updatedAt: nowIso() }, 'sharing Crew tasks');
+  const sharedWithCrew = c => !!c && c.kind !== 'personal' && (c.kind === 'crew' || c.crewSees === true);
+  function shareCrewCals() {
+    if (!isOwner() || !peopleLoaded) return;
+    storedCals().filter(sharedWithCrew).forEach(c => {
+      const want = Array.from(new Set(crewMemberUids().concat(c.editors || []))).sort();
+      if (same(want, (c.visibleTo || []).slice().sort())) return;
+      c.visibleTo = want;
+      write('calendars', c.id, { visibleTo: want, updatedAt: nowIso() }, 'sharing ' + (c.name || 'a calendar') + ' with the crew');
+    });
   }
   // Jonah (15 Oct 2026): three calendars, not five. Done once, by the
   // owner's device, as soon as the calendars and the people have come from
@@ -3041,7 +3101,7 @@
     if (a.isOwner || a.isAdmin) {
       unsubPeople = window.YDDb.watch('users', (changes, meta) => {
         changes.forEach(c => { if (c.type === 'removed') delete people[c.id]; else people[c.id] = c.data; });
-        if (meta && !meta.fromCache) { peopleLoaded = true; shareCrewCal(); foldCalendars(); }
+        if (meta && !meta.fromCache) { peopleLoaded = true; shareCrewCals(); foldCalendars(); }
         redrawIfVisible();
         announce();
       }, () => {});

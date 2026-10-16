@@ -1135,6 +1135,10 @@ def build(slot, user, people, wx, cache):
         if uid not in (it["cal"].get("visibleTo") or []):
             return False
         crew = it["ev"].get("crew") or []
+        # A calendar shared with them only to look at (calendar.js lookOnly
+        # -- Jonah's My work) is not their day: only what they are on.
+        if it["cal"].get("lookOnly") is True and uid not in (it["cal"].get("editors") or []):
+            return any(c.get("uid") == uid for c in crew)
         return not crew or any(c.get("uid") == uid for c in crew)
 
     items = [it for it in cache["items"] if mine(it)]

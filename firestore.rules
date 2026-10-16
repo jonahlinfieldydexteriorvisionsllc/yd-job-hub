@@ -661,8 +661,11 @@ service cloud.firestore {
         // on the entry, on any of its dates (calendar.js crewUidsOf). An
         // entry saved before crewUids existed has none until the owner's
         // device fills it in, and is tickable by all as before.
+        // Not on a calendar shared to look at only (lookOnly -- My work,
+        // Jonah 16 Oct 2026: "They can look but not change anything").
         allow update: if isWorker()
           && request.auth.uid in get(/databases/$(database)/documents/calendars/$(calId)).data.visibleTo
+          && get(/databases/$(database)/documents/calendars/$(calId)).data.get('lookOnly', false) != true
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['done', 'updatedAt', 'updatedBy'])
           && (resource.data.get('crewUids', []).size() == 0
               || request.auth.uid in resource.data.get('crewUids', []));
