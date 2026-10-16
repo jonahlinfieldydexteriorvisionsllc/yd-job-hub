@@ -489,17 +489,21 @@
 
   function buildEquipment() {
     const gear = window.YDEquipment.all() || {};
+    const E = window.YDEquipment;
+    // Its group's name (Vehicle, Machine, Trailer, Small engine, Electric
+    // tool -- equipment.js), whatever its stored kind.
     const KIND = { machine: 'Machine', vehicle: 'Vehicle' };
+    const kindOf = g => (E.category && E.categoryOf ? E.category(E.categoryOf(g)).one : KIND[g.kind] || String(g.kind || 'Machine'));
     return Object.keys(gear).map(id => {
       const g = gear[id] || {};
       // Not fixed yet, by the problem's one status (stages.js).
       const open = (g.issues || []).filter(i => i && window.YDStages.issueId(i) !== 'fixed');
       return entry('equipment', {
-        title: g.name || 'Machine', tag: KIND[g.kind] || String(g.kind || 'Machine'),
+        title: g.name || 'Machine', tag: kindOf(g),
         sub: joinDot([[g.year, g.make, g.model].filter(Boolean).join(' '), g.serial ? 'Serial ' + g.serial : '',
                       open.length ? open.length + ' problem' + (open.length === 1 ? '' : 's') : '']),
         nums: [g.serial],
-        more: [g.make, g.model, g.year, g.serial, KIND[g.kind] || g.kind, g.notes, (g.issues || []).map(i => i && i.what).join(' ')],
+        more: [g.make, g.model, g.year, g.serial, kindOf(g), g.notes, (g.issues || []).map(i => i && i.what).join(' ')],
         open: () => openMachine(id),
       });
     });

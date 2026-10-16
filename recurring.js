@@ -308,8 +308,13 @@
 
   function machineOptions(sel) {
     const gear = window.YDEquipment ? YDEquipment.all() : {};
-    return '<option value="">— none —</option>' + Object.values(gear).sort((a, b) => String(a.name).localeCompare(String(b.name)))
-      .map(g => '<option value="' + esc(g.id) + '"' + (g.id === sel ? ' selected' : '') + '>' + esc(g.name || 'Machine') + '</option>').join('');
+    const list = Object.values(gear).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    const opt = g => '<option value="' + esc(g.id) + '"' + (g.id === sel ? ' selected' : '') + '>' + esc(g.name || 'Machine') + '</option>';
+    // In the Equipment tab's five groups (equipment.js byCategory).
+    const groups = window.YDEquipment && YDEquipment.byCategory ? YDEquipment.byCategory(list) : null;
+    return '<option value="">— none —</option>' + (groups
+      ? groups.map(gr => '<optgroup label="' + esc(gr.cat.icon + ' ' + gr.cat.many) + '">' + gr.items.map(opt).join('') + '</optgroup>').join('')
+      : list.map(opt).join(''));
   }
   function renderList() {
     const body = el('recurBody');

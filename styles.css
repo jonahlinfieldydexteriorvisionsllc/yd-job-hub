@@ -4884,3 +4884,57 @@
     .snb-money input { width:100%; max-width:200px; }
     .snb-yours { max-width:none; }
   }
+/* ---- Equipment categories (Jonah, 16 Oct 2026): the five groups --
+   Vehicles, Machines, Trailers, Small engines, Electric tools
+   (equipment.js CATEGORIES). Headings over the Machines list, a count on
+   each group's button, the five as tap buttons on the form and a machine's
+   page, "Check these" for what the sort could not place, the clock's
+   repair picker under the same headings, and meter boxes only for the
+   groups that go by them. ---- */
+.eq-cat-h { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 10px; margin:18px 0 8px; padding-bottom:5px;
+  border-bottom:1.5px solid var(--border-strong); }
+.eq-check + .eq-cat-h, .eq-tools + .eq-cat-h { margin-top:4px; }
+.eq-cat-name { font-size:15px; font-weight:700; color:var(--text); }
+.eq-cat-n { font-size:12px; font-weight:700; color:var(--muted); font-variant-numeric:tabular-nums; }
+.eq-cat-now { font-size:12px; font-weight:700; color:var(--st-now); }
+.eq-chip-n { font-size:11px; font-weight:700; opacity:.75; font-variant-numeric:tabular-nums; }
+/* The group buttons' names are longer than the old types' ("Small
+   engines"): in plain letters, wrapping onto a second line on a phone. */
+#eqWrap .eq-filters .btn { text-transform:none; letter-spacing:0; }
+@media (max-width:720px) {
+  #eqWrap .eq-tools .eq-filters .btn { white-space:normal; overflow-wrap:anywhere; }
+}
+.eq-cat-pick { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:6px; }
+.eq-cat-btn { display:flex; align-items:center; justify-content:center; text-align:center; min-height:44px; padding:6px 8px;
+  border-radius:10px; border:1.5px solid var(--border-strong); background:var(--surface); color:var(--text);
+  font:600 13.5px 'DM Sans',sans-serif; line-height:1.2; cursor:pointer; overflow-wrap:anywhere; }
+.eq-cat-btn.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--brand-2); color:#140f18; }
+/* The group its name points to, on "Check these": dashed, not lit. */
+.eq-cat-btn.said { border-style:dashed; border-color:var(--brand); }
+.eq-cat-opt input { position:absolute; opacity:0; pointer-events:none; }
+.eq-cat-opt { position:relative; }
+.eq-cat-opt:focus-within { outline:3px solid var(--brand); outline-offset:2px; }
+#eqKindField.cl-missing .eq-cat-btn { border-color:var(--neg); }
+.eq-cat-pick-sm .eq-cat-btn { min-height:40px; font-size:12.5px; padding:4px 6px; }
+.eq-cat-here { display:flex; align-items:center; gap:10px; margin:12px 0 4px; }
+.eq-cat-here-l { flex:none; font-size:11px; font-weight:700; letter-spacing:.8px; text-transform:uppercase; color:var(--muted); }
+.eq-cat-here > div { flex:1; min-width:0; }
+.eq-check { margin:0 0 14px; padding:10px 12px; border-radius:10px; border:1px solid var(--border-strong);
+  border-left:4px solid var(--st-soon); background:var(--surface-2); }
+.eq-check-h { font-weight:700; font-size:14.5px; }
+.eq-check .hint { margin:2px 0 8px; }
+.eq-check-row { padding:8px 0; border-top:1px solid var(--border); }
+.eq-check-name { margin-bottom:6px; font-size:14px; }
+.eq-check-nudge { display:block; width:100%; margin:0 0 10px; padding:9px 12px; min-height:44px; text-align:left; cursor:pointer;
+  border-radius:10px; border:1px solid var(--border-strong); border-left:4px solid var(--st-soon); background:var(--surface-2);
+  color:var(--text); font:600 14px 'DM Sans',sans-serif; }
+.eq-m-off { display:none !important; }
+.eq-m-more { margin:2px 0 6px; }
+.repair-cat { margin:10px 0 2px; font-size:12px; font-weight:700; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); }
+@media (max-width:720px) {
+  /* Three to a row, names on up to two lines -- never a row to swipe. */
+  .eq-cat-pick { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  .eq-cat-here { align-items:flex-start; flex-direction:column; gap:4px; }
+  .eq-cat-here > div { width:100%; }
+}

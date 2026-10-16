@@ -22,31 +22,112 @@
 (function () {
   'use strict';
 
-  const KINDS = { machine: 'Machine', vehicle: 'Vehicle' };
-  // Jonah's own types (Trailer, Attachment, ATV...) are stored on the machine
-  // itself as the name he typed; the list is whatever the machines carry, so
-  // a type exists as long as something has it and needs no list of its own.
-  // Nothing hangs on the type but grouping: miles or hours comes from the
-  // machine's own readings (countsMiles).
-  const RESERVED_TYPES = ['all', 'everything', 'warranty', 'under warranty'];
-  let newTypes = [];                // typed in the edit form, not yet on a saved machine
-  const kindName = k => KINDS[k] || String(k || '');
-  function typeList() {
-    const seen = {}, out = [];
-    Object.keys(KINDS).concat(Object.values(gear).map(g => g.kind), newTypes).forEach(k => {
-      const key = String(k || '').trim().toLowerCase();
-      if (!key || seen[key]) return;
-      seen[key] = true;
-      out.push(KINDS[key] ? key : String(k).trim());
-    });
-    return out.slice(0, 2).concat(out.slice(2).sort((a, b) => a.localeCompare(b)));
+  // ------------------------------------------------------------ the groups
+  //
+  // Jonah, 16 Oct 2026: "equipment should have these categories: vehicles,
+  // machines, trailers, small engines, & electric tools. electric tools will
+  // include our milwaukee battery powered tools and wetsaws etc. small
+  // engines will have all of our chainsaws, compactor etc." Exactly these
+  // five, in this order, and every piece of equipment is in one of them.
+  //
+  // Kept in the machine's own `kind` -- the field that always said what a
+  // machine is ('machine' / 'vehicle' are stored as they always were), the
+  // one the crew's list (settings/public.equipmentList), Receipts and the
+  // search already read -- so nothing anywhere can hold a second answer to
+  // the same question. Types typed in before (a `kind` of "Trailer",
+  // "Attachment"...) are folded into the five once, on the owner's device
+  // (sortIntoGroups below); what it was is kept beside it in `kindBefore`.
+  // `kindHow` says how the group was chosen: 'words' (from its name),
+  // 'kind' (its old type), 'check' (the words could not tell -- listed
+  // under "Check these" until someone taps a group) or 'hand'.
+  const CATEGORIES = [
+    { id: 'vehicle', one: 'Vehicle', many: 'Vehicles', icon: '🚚' },
+    { id: 'machine', one: 'Machine', many: 'Machines', icon: '🚜' },
+    // No emoji is a trailer: the hitch it hangs on.
+    { id: 'trailer', one: 'Trailer', many: 'Trailers', icon: '🔗' },
+    { id: 'engine', one: 'Small engine', many: 'Small engines', icon: '⛽' },
+    { id: 'electric', one: 'Electric tool', many: 'Electric tools', icon: '🔋' },
+  ];
+  const CAT_IDS = CATEGORIES.map(c => c.id);
+  const isCatId = k => CAT_IDS.indexOf(String(k || '')) !== -1;
+  const catById = id => CATEGORIES.find(c => c.id === id) || CATEGORIES[1];
+
+  // What a name says it is, from the words in it -- or null when it says
+  // nothing. In this order: a trailer is a trailer whatever pulls it ("ATV
+  // trailer"); battery / Milwaukee / M18 / electric / wet saw make it an
+  // electric tool even where a small engine's word is there too ("battery
+  // blower") -- Jonah's rule; then the big machines (a zero-turn or riding
+  // mower is a machine you sit on, not a small engine); then the small
+  // engines; the vehicles; and last the words that are mostly corded or
+  // battery tools (a drill, a grinder) but say less. Punctuation is read
+  // as a space, so "F-150", "F150" and "MT-100" are all found.
+  const WORDS = [
+    ['trailer', /\btrailers?\b/],
+    ['electric', /\b(battery|batteries|cordless|corded|electric|plug in|milwaukee|m18|m12|dewalt|makita|ego|wet ?saw|tile saw|\d{2} ?v|\d{2} volt)\b/],
+    ['machine', /\b(skid ?steer|skidsteer|bobcat|mt ?\d{2,3}|excavator|mini ex|loader|tractor|backhoe|dozer|bulldozer|forklift|telehandler|atv|utv|side by side|rado|dingo|gator|kubota|mule|polaris|can am|rzr|zero turn|riding mower|rider|ride on)\b/],
+    ['engine', /\b(chain ?saw|chainsaw|compactor|tamper|rammer|jumping jack|blower|blowers|trimmer|weed ?eater|weedeater|weed ?wh?acker|edger|mower|auger|post hole|generator|light tower|tiller|rototiller|sod cutter|brush ?cutter|power washer|pressure washer|stihl|echo|husqvarna|honda|kohler|briggs|cut ?off saw|concrete saw|demo saw|quick ?cut|quickie|pole saw|aerator|dethatcher|power rake|seeder|overseeder|trencher|stump grinder|snow ?blower|snowblower|log splitter|splitter|water pump|trash pump|power broom|small engines?)\b/],
+    ['vehicle', /\b(truck|trucks|pickup|pick up|van|car|suv|f ?\d50|ram|silverado|sierra|tacoma|tundra|ranger|ford|chevy|chevrolet|gmc|dodge|toyota|jeep|vehicle|vehicles)\b/],
+    ['electric', /\b(drill|drills|impact|driver|grinder|circular saw|circ saw|sawzall|reciprocating saw|recip saw|jig ?saw|miter saw|mitre saw|table saw|band saw|rotary hammer|hammer drill|heat gun|multi ?tool|oscillating|vacuum|shop vac|work light|radio|charger|laser|polisher|router|planer|nailer|compressor|power tools?|saw|saws)\b/],
+  ];
+  function wordsSay(text) {
+    const t = ' ' + String(text || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ') + ' ';
+    const hit = WORDS.find(w => w[1].test(t));
+    return hit ? hit[0] : null;
   }
-  // "Trailer" -> "Trailers", "Battery" -> "Batteries"; a phrase is left alone.
-  const plural = k => {
-    const n = kindName(k);
-    if (/\s/.test(n) || /s$/i.test(n)) return n;
-    return /[^aeiou]y$/i.test(n) ? n.slice(0, -1) + 'ies' : n + 's';
+  // The group the sort gives a machine that has none of the five yet:
+  // { id, how }. Its old type was Machine or Vehicle, a type he typed, or
+  // nothing. A Vehicle stays a Vehicle unless its name says trailer: the
+  // one choice that still means the same -- a name saying otherwise (an
+  // ATV kept as a vehicle, say) puts it on "Check these" instead of moving
+  // it behind his back. A Machine was the only other choice there was, so
+  // its name decides.
+  function sortOne(g) {
+    const old = String(g.kind || '').trim(), oldKey = old.toLowerCase();
+    const said = wordsSay([g.name, isCatId(oldKey) ? '' : old, g.make, g.model].join(' '));
+    if (oldKey === 'vehicle') {
+      if (said === 'trailer') return { id: 'trailer', how: 'words' };
+      return { id: 'vehicle', how: !said ? 'kind' : said === 'vehicle' ? 'words' : 'check' };
+    }
+    if (said) return { id: said, how: 'words' };
+    if (isCatId(oldKey) && oldKey !== 'machine') return { id: oldKey, how: 'kind' };
+    return { id: 'machine', how: 'check' };
+  }
+  // The group a machine is in -- a record, or a {name, kind} entry of the
+  // crew's list. One not sorted yet (a type typed on a phone still on the
+  // old code) shows where the sort would put it.
+  function catOf(g) {
+    if (!g) return 'machine';
+    const k = String(g.kind || '').trim().toLowerCase();
+    if (isCatId(k)) return k;
+    return sortOne(g).id;
+  }
+  const kindName = k => catById(isCatId(k) ? k : catOf({ kind: k })).one;
+  // Items in the five groups, in their order, each group keeping the items'
+  // own order; empty groups left out. `recOf` gives an item's record (or
+  // {name, kind}) when the items are not records themselves.
+  function byCategory(items, recOf) {
+    const of = recOf || (x => x);
+    return CATEGORIES.map(c => ({ cat: c, items: (items || []).filter(x => catOf(of(x)) === c.id) }))
+      .filter(gr => gr.items.length);
+  }
+
+  // Which meters a group goes by (Jonah's own split: hours for machines and
+  // small engines, miles for vehicles, dates for every one). Trailers go by
+  // date -- bearings, tires, registration -- and most battery tools by date
+  // or nothing. Only which boxes are shown: a reading or interval already on
+  // a machine is always shown and kept, whatever its group.
+  const METERS = { vehicle: ['miles'], machine: ['hours'], engine: ['hours'], trailer: [], electric: [] };
+  const usesMeter = (g, m) => METERS[catOf(g)].indexOf(m) !== -1 ||
+    (m === 'hours' ? (g.hours != null || g.intervalHours != null || g.dueHours != null)
+                   : (g.miles != null || g.intervalMiles != null || g.dueMiles != null));
+  const METER_HINT = {
+    vehicle: 'A truck goes by miles and months — set either or both.',
+    machine: 'A machine goes by its hour meter and by months — set either or both.',
+    engine: 'A small engine goes by running hours (if it has a meter) and by months.',
+    trailer: 'A trailer goes by date — bearings, tires, registration.',
+    electric: 'Most electric tools go by date, or need nothing at all.',
   };
+
   // Serviced by the mile: a vehicle, or anything with miles on it and no
   // hour meter, or a miles interval.
   const countsMiles = g => !!g && (g.kind === 'vehicle' || g.intervalMiles != null || (g.miles != null && g.hours == null));
@@ -246,12 +327,16 @@
       if (addingCard) renderAdd();
     }).catch(() => { publicNames = null; });
   }
+  // In name order; `kind` is its group (one of the five).
   function machineList() {
     const src = seesGear() ? gear : (publicNames || {});
     const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
-    return Object.keys(src).filter(id => src[id]).map(id => ({ id: id, name: String(src[id].name || 'Machine'), kind: String(src[id].kind || '') }))
+    return Object.keys(src).filter(id => src[id]).map(id => ({ id: id, name: String(src[id].name || 'Machine'), kind: catOf(src[id]) }))
       .sort((a, b) => byName(a.name, b.name));
   }
+  // The words a machine is found by: its name and its group, both ways
+  // ("trailer", "small engines").
+  const groupWords = k => { const c = catById(k); return c.one + ' ' + c.many; };
   const machineName = id => ((machineList().find(m => m.id === id) || {}).name || '');
 
   window.renderEquipment = function () {
@@ -300,7 +385,7 @@
   // What a card is about, for the search: its words and its machine's name.
   function cardText(k) {
     const m = k.equipmentId ? machineList().find(x => x.id === k.equipmentId) : null;
-    return [k.title, k.notes, m && m.name, m && m.kind].join(' ');
+    return [k.title, k.notes, m && m.name, m && groupWords(m.kind)].join(' ');
   }
   const canAddCard = () => (seesGear() && ydCan('equipment', 'change')) ||
     !!(window.YDBoards && YDBoards.editsBoard && YDBoards.editsBoard(MAINT));
@@ -313,13 +398,19 @@
     }
     const words = searchWords();
     // The machines the search names, a tap from their page.
-    const found = words.length && seesGear() ? machineList().filter(m => hits(m.name + ' ' + m.kind, words)).slice(0, 6) : [];
+    const found = words.length && seesGear() ? machineList().filter(m => hits(m.name + ' ' + groupWords(m.kind), words)).slice(0, 6) : [];
+    const unsure = checkList();
     return '<div class="eq-bd-head"><span class="muted">' + (words.length
         ? 'The cards for “' + esc(eqSearch.trim()) + '”.'
         : 'What needs doing on every machine, the most urgent first — the Maintenance board, the same as on Boards.') + '</span>' +
         (canAddCard() && !addingCard ? '<button class="btn btn-sm btn-filled" onclick="eqAddCard()">+ Add a card</button>' : '') + '</div>' +
-      (found.length ? '<div class="eq-found">' + found.map(m => '<button class="btn btn-sm" onclick="openEquipment(\'' + safeId(m.id) + '\')">🚜 ' +
-        esc(m.name) + '</button>').join('') + '</div>' : '') +
+      // The machines the sort could not place wait on the Machines side; a
+      // line here so they are not missed by someone who lives on the board.
+      (unsure.length && !words.length ? '<button type="button" class="eq-check-nudge" onclick="eqShow(\'machines\')">⚠ ' +
+        unsure.length + ' machine' + (unsure.length === 1 ? '' : 's') + ' to put in a group — check ' +
+        (unsure.length === 1 ? 'it' : 'them') + ' ›</button>' : '') +
+      (found.length ? '<div class="eq-found">' + found.map(m => '<button class="btn btn-sm" onclick="openEquipment(\'' + safeId(m.id) + '\')">' +
+        catById(m.kind).icon + ' ' + esc(m.name) + '</button>').join('') + '</div>' : '') +
       YDBoards.columnsFor(MAINT, words.length ? k => hits(cardText(k), words) : null, waitingCards());
   }
 
@@ -374,13 +465,18 @@
     const list = machineList();
     // The search names one machine: it is the one picked.
     const words = searchWords();
-    const only = words.length ? list.filter(m => hits(m.name + ' ' + m.kind, words)) : [];
+    const only = words.length ? list.filter(m => hits(m.name + ' ' + groupWords(m.kind), words)) : [];
     const pre = only.length === 1 ? only[0].id : '';
+    // In the five groups, each its own block (and its icon and name on each
+    // line, which is what the type-to-search list shows -- "trailer" finds
+    // every trailer).
     box.innerHTML = '<div class="eq-addcard">' +
       '<div class="field"><span class="label">Which machine</span><select id="ecMachine" class="searchable">' +
         '<option value="">— Pick the machine —</option><option value="__shop">The shop — not one machine</option>' +
-        list.map(m => '<option value="' + esc(m.id) + '"' + (m.id === pre ? ' selected' : '') + '>' + esc(m.name) +
-          (m.kind ? ' (' + esc(kindName(m.kind)) + ')' : '') + '</option>').join('') + '</select></div>' +
+        byCategory(list, m => ({ kind: m.kind })).map(gr => '<optgroup label="' + esc(gr.cat.icon + ' ' + gr.cat.many) + '">' +
+          gr.items.map(m => '<option value="' + esc(m.id) + '"' + (m.id === pre ? ' selected' : '') + '>' +
+            esc(gr.cat.icon + ' ' + m.name + ' (' + gr.cat.one + ')') + '</option>').join('') + '</optgroup>').join('') +
+        '</select></div>' +
       '<div class="field"><span class="label">What needs doing</span><input id="ecWhat" autocomplete="off" placeholder="e.g. Hydraulic leak at the bucket cylinder"></div>' +
       '<div class="field"><span class="label">How urgent</span><div class="eq-urg-pick">' +
         URGENCY.map(u => '<label class="eq-urg-opt" style="--c:' + u.color + '"><input type="radio" name="ecUrg" value="' + u.id + '"' +
@@ -451,22 +547,18 @@
     // The search: a machine's name, type, make, model, number, or what is
     // wrong with it.
     const words = searchWords();
-    const all = Object.values(gear).filter(g => !words.length ||
-      hits([g.name, kindName(g.kind), g.make, g.model, g.year, g.serial, g.plate, g.notes]
-        .concat(openIssues(g).map(i => i.what)).join(' '), words));
-    const types = typeList();
-    // Types are listed once whatever their case ("trailer", "Trailer":
-    // typeList), so a machine is in its type's list whatever case it has.
-    const sameType = (k, f) => String(k || '').trim().toLowerCase() === String(f || '').trim().toLowerCase();
-    // A type whose last machine was changed or removed: back to everything.
-    if (filter !== 'all' && filter !== 'warranty') {
-      const now = types.find(t => sameType(t, filter));
-      filter = now || 'all';
-    }
-    // In three groups, each in name order, so a machine keeps its place in
-    // its group while its meter creeps up. What must not go out -- out of
-    // service, to be fixed before it is used, or past its service -- comes
-    // first; then a service coming up or any other problem; then the rest.
+    const matches = g => !words.length ||
+      hits([g.name, groupWords(catOf(g)), g.make, g.model, g.year, g.serial, g.plate, g.notes]
+        .concat(openIssues(g).map(i => i.what)).join(' '), words);
+    const all = Object.values(gear).filter(matches);
+    // Anything but the five, Everything and the warranty list (an old saved
+    // type filter): back to everything.
+    if (filter !== 'all' && filter !== 'warranty' && !isCatId(filter)) filter = 'all';
+    // Within its group, the machines that must not go out -- out of
+    // service, to be fixed before it is used, or past its service -- come
+    // first; then a service coming up or any other problem; then the rest,
+    // each lot in name order, so a machine keeps its place while its meter
+    // creeps up.
     const groupOf = g => {
       const w = worstIssue(g), state = due(g).state;
       if ((w && (w.urgency === 'down' || w.urgency === 'before')) || state === 'overdue') return 0;
@@ -481,40 +573,116 @@
     };
     const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
     const list = all
-      .filter(g => filter === 'all' || sameType(g.kind, filter))
+      .filter(g => filter === 'all' || catOf(g) === filter)
       .map(g => ({ g, group: groupOf(g), rank: rank(g) }))
       .sort((a, b) => a.group - b.group || a.rank - b.rank || byName(String(a.g.name || ''), String(b.g.name || '')) ||
         String(a.g.id).localeCompare(String(b.g.id)));
-    // A heading over each group -- only when something needs looking at;
-    // a yard with nothing due is just the list.
-    const GROUP_HEAD = ['Needs attention now', 'Coming up', 'Everything else'];
-    const headed = list.some(x => x.group < 2);
-    const cards = list.map((x, i) =>
-      (headed && (i === 0 || list[i - 1].group !== x.group)
-        ? '<div class="eq-group-h eq-group-' + x.group + '">' + GROUP_HEAD[x.group] + '</div>' : '') +
-      card(x.g)).join('');
+    // Under the five groups' headings (Jonah, 16 Oct 2026), each with how
+    // many it holds -- and, in the "act now" colour, how many of them must
+    // not go out as they are.
+    const cards = byCategory(list, x => x.g).map(gr => {
+      const now = gr.items.filter(x => x.group === 0).length;
+      return '<div class="eq-cat-h" data-cat="' + gr.cat.id + '"><span class="eq-cat-name">' + gr.cat.icon + ' ' + esc(gr.cat.many) + '</span>' +
+          '<span class="eq-cat-n">' + gr.items.length + '</span>' +
+          (now ? '<span class="eq-cat-now">' + now + ' need' + (now === 1 ? 's' : '') + ' attention now</span>' : '') + '</div>' +
+        gr.items.map(x => card(x.g)).join('');
+    }).join('');
+    // How many each group holds, for its button (the search left out: the
+    // buttons say what is in the yard).
+    const counts = {};
+    Object.values(gear).forEach(g => { const c = catOf(g); counts[c] = (counts[c] || 0) + 1; });
+    const total = Object.keys(gear).length;
+    const n = k => '<span class="eq-chip-n">' + (k || 0) + '</span>';
 
-    // + Add first, outside the strip of type filters: in the same place on a
-    // phone (where the filters swipe sideways and an Add at their end
-    // scrolled out of reach) and on a computer.
+    // + Add first, then the groups as buttons, all in sight -- three to a
+    // row on a phone, never a row to swipe along.
     return '<div class="eq-tools">' +
         '<button class="btn btn-sm btn-accent eq-add" onclick="editEquipment(\'\')">+ Add</button>' +
         '<div class="filter-bar eq-filters">' +
-          ['all'].concat(types, ['warranty']).map(f =>
+          ['all'].concat(CAT_IDS, ['warranty']).map(f =>
             '<button class="btn btn-sm' + (filter === f ? ' btn-filled' : '') +
             '" onclick="filterEquipment(' + esc(JSON.stringify(f)) + ')">' +
-            (f === 'all' ? 'Everything' : f === 'warranty' ? '🛡 Under warranty' : esc(plural(f))) + '</button>').join('') +
+            (f === 'all' ? 'Everything ' + n(total) : f === 'warranty' ? '🛡 Under warranty'
+              : catById(f).icon + ' ' + esc(catById(f).many) + ' ' + n(counts[f])) + '</button>').join('') +
         '</div>' +
       '</div>' +
+      (filter === 'warranty' ? '' : checkHtml(matches)) +
       (filter === 'warranty' ? warrantyHtml()
         : list.length
         ? cards
-        : words.length ? '<p class="empty-msg">No machine matches “' + esc(eqSearch.trim()) + '”.</p>'
+        : words.length ? '<p class="empty-msg">No machine matches “' + esc(eqSearch.trim()) + '”' +
+            (filter !== 'all' ? ' in ' + esc(catById(filter).many) : '') + '.</p>'
+        : filter !== 'all' ? '<p class="empty-msg">No ' + esc(catById(filter).many.toLowerCase()) + ' yet.</p>'
         : '<p class="empty-msg">Nothing here yet. Add a machine or a truck and start ' +
           'writing down what gets done to it.</p>');
   }
 
   window.filterEquipment = function (f) { filter = f; renderEquipment(); };
+
+  // ---------------------------------------------------- "Check these"
+  //
+  // What the sort could not place from the words in its name (or a Vehicle
+  // whose name says otherwise), each with the five groups as buttons: one
+  // tap puts it in a group for good. Only for whoever may change the
+  // machines; the rest see each one where it was put.
+  function checkList() {
+    if (!seesGear() || !ydCan('equipment', 'change')) return [];
+    const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
+    return Object.values(gear).filter(g => g.kindHow === 'check')
+      .sort((a, b) => byName(String(a.name || ''), String(b.name || '')));
+  }
+  function catButtons(g, small) {
+    const cur = catOf(g), said = g.kindHow === 'check' ? wordsSay([g.name, g.make, g.model].join(' ')) : null;
+    return '<div class="eq-cat-pick' + (small ? ' eq-cat-pick-sm' : '') + '" role="group" aria-label="Which group">' +
+      CATEGORIES.map(c => '<button type="button" class="eq-cat-btn' + (c.id === cur ? ' on' : '') +
+        (said && said === c.id && said !== cur ? ' said' : '') + '"' + (c.id === cur ? ' aria-pressed="true"' : ' aria-pressed="false"') +
+        ' onclick="eqSetCat(\'' + safeId(g.id) + '\',\'' + c.id + '\')">' + c.icon + ' ' + esc(c.one) + '</button>').join('') +
+    '</div>';
+  }
+  function checkHtml(matches) {
+    const rows = checkList().filter(matches || (() => true));
+    if (!rows.length) return '';
+    return '<div class="eq-check"><div class="eq-check-h">⚠ Check these ' + rows.length + '</div>' +
+      '<p class="hint">Job Hub could not tell from ' + (rows.length === 1 ? 'its name which group this is' : 'their names which group each is') +
+        ' in. Tap the right one — the lit one if it is already right.</p>' +
+      rows.map(g => {
+        const was = String(g.kindBefore || '').trim();
+        const said = wordsSay([g.name, g.make, g.model].join(' '));
+        return '<div class="eq-check-row"><div class="eq-check-name">' +
+            '<button type="button" class="link-btn" onclick="openEquipment(\'' + safeId(g.id) + '\')"><b>' + esc(g.name || 'Machine') + '</b></button>' +
+            (was && was.toLowerCase() !== catOf(g) ? ' <span class="muted">— was “' + esc(was) + '”</span>' : '') +
+            (said && said !== catOf(g) ? ' <span class="muted">· its name says ' + esc(catById(said).one) + '</span>' : '') +
+          '</div>' + catButtons(g, true) + '</div>';
+      }).join('') + '</div>';
+  }
+
+  // A machine put in a group by hand: on the "Check these" list, its own
+  // page, or the edit form. A tap on the group it is already in is the
+  // "yes, that's right" that takes it off the list.
+  window.eqSetCat = function (id, cat) {
+    const g = gear[id];
+    if (!g || !isCatId(cat)) return;
+    if (!ydCan('equipment', 'change')) { showToast('You can look at the machines but not change them'); return; }
+    const was = catOf(g);
+    if (was === cat && g.kindHow !== 'check' && isCatId(String(g.kind || ''))) return;
+    const patch = { kind: cat, kindHow: 'hand' };
+    // A type typed before the five, kept the once (the sort keeps it the same way).
+    if (g.kindBefore === undefined && !isCatId(String(g.kind || '').toLowerCase())) patch.kindBefore = String(g.kind || '');
+    Object.assign(g, patch);
+    write(g.id, patch, 'putting it in a group');
+    if (openId === id && !editingId) {
+      // Not over a service or problem being typed on its page: only the
+      // group buttons and the line under the name change.
+      if (!notingIssue && !el('svWhat')) renderDetail();
+      else {
+        const pick = el('eqCatHere'); if (pick) pick.innerHTML = catButtons(g);
+        const sub = el('eqSubCat'); if (sub) sub.textContent = catById(cat).one;
+      }
+    }
+    renderEquipment();
+    scheduleMaintSync();      // the crew's list of names and groups (publishNames)
+    showToast((g.name || 'Machine') + (was === cat ? ' — stays in ' : ' → ') + catById(cat).many);
+  };
 
   // "Marked done on the board" -- the service card sits in Done but nothing
   // was logged, so the machine still counts toward its old due point.
@@ -526,7 +694,8 @@
   }
 
   // The whole card opens the machine -- by a tap, or by Tab then Enter (or
-  // Space) for a keyboard, as the service history's rows do.
+  // Space) for a keyboard, as the service history's rows do. Its group is
+  // the heading it sits under, so the card does not say it again.
   function card(g) {
     const d = due(g);
     const l = last(g);
@@ -535,7 +704,6 @@
         'onkeydown="if(event.target===this&&(event.key===\'Enter\'||event.key===\' \')){event.preventDefault();openEquipment(\'' + id + '\')}">' +
       '<div class="eq-top">' +
         '<span class="eq-name">' + esc(g.name) + '</span>' +
-        '<span class="eq-kind">' + esc(kindName(g.kind)) + '</span>' +
         '<span class="eq-due ' + d.state + '">' + d.text + '</span>' +
       '</div>' +
       (g.make || g.model || g.year
@@ -582,7 +750,7 @@
     renderDetail();
   };
   window.closeEquipment = function () {
-    openId = null; editingId = null; notingIssue = false; newTypes = [];
+    openId = null; editingId = null; notingIssue = false;
     const m = el('eqModal');
     if (m) m.classList.remove('active');
   };
@@ -599,23 +767,31 @@
       String(b.at || '').localeCompare(String(a.at || '')));
     const spent = log.reduce((s, e) => s + (e.costCents || 0), 0);
 
+    const cat = catById(catOf(g));
     body.innerHTML =
       '<div class="eq-head">' +
         '<div>' +
-          '<div class="eq-sub">' + esc(kindName(g.kind)) +
+          '<div class="eq-sub">' + cat.icon + ' <span id="eqSubCat">' + esc(cat.one) + '</span>' +
             (g.year || g.make || g.model
               ? ' · ' + esc([g.year, g.make, g.model].filter(Boolean).join(' ')) : '') +
           '</div>' +
+          // Trailers carry a VIN too.
           (g.serial ? '<div class="eq-serial">' +
-            (g.kind === 'vehicle' ? 'VIN ' : 'Serial ') + esc(g.serial) + '</div>' : '') +
+            (cat.id === 'vehicle' || cat.id === 'trailer' ? 'VIN ' : 'Serial ') + esc(g.serial) + '</div>' : '') +
         '</div>' +
         '<button class="btn btn-sm" onclick="editEquipment(\'' + g.id + '\')">Edit</button>' +
       '</div>' +
+      // Its group, one tap to move it to another (only for whoever may
+      // change the machines; the rest read it above).
+      (ydCan('equipment', 'change') ? '<div class="eq-cat-here"><span class="eq-cat-here-l">Group</span><div id="eqCatHere">' +
+        catButtons(g) + '</div></div>' : '') +
 
+      // Only the meters it goes by (its group's, or one it already has a
+      // reading for): a trailer or a battery drill has neither.
       '<div class="eq-cards">' +
         eqCard('Next service', d.text, d.state) +
-        eqCard('Hours', g.hours != null ? round1(g.hours) : '—', '') +
-        eqCard('Miles', g.miles != null ? fmtNum(g.miles) : '—', '') +
+        (usesMeter(g, 'hours') ? eqCard('Hours', g.hours != null ? round1(g.hours) : '—', '') : '') +
+        (usesMeter(g, 'miles') ? eqCard('Miles', g.miles != null ? fmtNum(g.miles) : '—', '') : '') +
         eqCard('Spent on it', spent ? money(spent) : '—', '') +
       '</div>' +
 
@@ -951,6 +1127,11 @@
     const iso = localDay();
     const has = v => (v == null ? '' : esc(String(v)));
     const what = e ? e.what : (fixing ? fixing.what : '');
+    // The reading boxes its group goes by (or that this entry or machine
+    // already has); the others behind "+ Hours or miles" -- a trailer's
+    // bearings or a battery saw's blade want neither.
+    const showH = usesMeter(g, 'hours') || !!(e && e.hours != null);
+    const showM = usesMeter(g, 'miles') || !!(e && e.miles != null);
 
     body.insertAdjacentHTML('afterbegin',
       '<div class="add-area" id="eqServiceForm">' +
@@ -967,19 +1148,24 @@
         '<div class="field"><span class="label">What was done</span>' +
           '<input id="svWhat" placeholder="e.g. oil and filter, new blades" value="' + has(what) + '"></div>' +
         '<div class="grid g3">' +
-          '<div class="field"><span class="label">' + (e ? 'Hours then' : 'Hours now') +
+          '<div class="field eq-m' + (showH ? '' : ' eq-m-off') + '"><span class="label">' + (e ? 'Hours then' : 'Hours now') +
             (!e && readingWanted(g) === 'hours' ? ' <b class="eq-need">*</b>' : '') + '</span>' +
             '<input id="svHours" inputmode="decimal" value="' + (e ? has(e.hours) : '') + '" placeholder="' +
             (g.hours != null ? 'last ' + round1(g.hours) : 'optional') + '"></div>' +
-          '<div class="field"><span class="label">' + (e ? 'Miles then' : 'Miles now') +
+          '<div class="field eq-m' + (showM ? '' : ' eq-m-off') + '"><span class="label">' + (e ? 'Miles then' : 'Miles now') +
             (!e && readingWanted(g) === 'miles' ? ' <b class="eq-need">*</b>' : '') + '</span>' +
             '<input id="svMiles" inputmode="numeric" value="' + (e ? has(e.miles) : '') + '" placeholder="' +
             (g.miles != null ? 'last ' + fmtNum(g.miles) : 'optional') + '"></div>' +
           '<div class="field"><span class="label">Who did it</span>' +
             '<input id="svBy" placeholder="you, or the shop" value="' + (e ? has(e.by) : '') + '"></div>' +
         '</div>' +
-        '<div class="hint">Putting the hours or miles in is what lets the next service ' +
-          'be worked out. Leave them blank if this machine goes by date.</div>' +
+        (showH || showM
+          ? '<div class="hint">Putting the ' + (showH && showM ? 'hours or miles' : showH ? 'hours' : 'miles') +
+              ' in is what lets the next service be worked out. Leave ' + (showH && showM ? 'them' : 'it') +
+              ' blank if this one goes by date.</div>'
+          : '<div class="hint">' + esc(catById(catOf(g)).many) + ' go by date — no hours or miles needed.</div>') +
+        (!showH || !showM ? '<button type="button" class="link-btn eq-m-more" onclick="eqShowMeters(this)">+ ' +
+          (!showH && !showM ? 'Hours or miles' : !showH ? 'Hours' : 'Miles') + ' too</button>' : '') +
         '<div class="eq-parts-head">Parts <span class="muted">— list any with a warranty, so it can be found when one fails</span></div>' +
         '<div id="svParts"></div>' +
         '<button class="btn btn-sm" type="button" onclick="addPartRow()">+ Add a part</button>' +
@@ -1244,13 +1430,19 @@
     if (title) title.textContent = id ? 'Edit ' + (g.name || '') : 'Add a machine or vehicle';
     if (!body) return;
 
+    metersAll = false;
+    const cur = id ? catOf(g) : '';
     body.innerHTML =
-      '<div class="grid g2">' +
-        '<div class="field"><span class="label">Name</span>' +
-          '<input id="eqName" value="' + esc(g.name || '') + '" placeholder="e.g. Toro 60\" or the F-250"></div>' +
-        '<div class="field"><span class="label">What is it</span>' +
-          '<select id="eqKind" onchange="eqKindPicked(this)">' + kindOptions(g.kind || 'machine') + '</select></div>' +
-      '</div>' +
+      '<div class="field"><span class="label">Name</span>' +
+        '<input id="eqName" value="' + esc(g.name || '') + '" placeholder="e.g. Toro 60\" or the F-250"></div>' +
+      // The five groups as buttons, one of them picked (Jonah's five; a new
+      // machine starts with none, so nothing lands in a group unasked).
+      '<div class="field" id="eqKindField"><span class="label">What is it</span>' +
+        '<div class="eq-cat-pick eq-cat-form" role="radiogroup" aria-label="What is it">' +
+        CATEGORIES.map(c => '<label class="eq-cat-btn eq-cat-opt' + (c.id === cur ? ' on' : '') + '">' +
+          '<input type="radio" name="eqKind" value="' + c.id + '"' + (c.id === cur ? ' checked' : '') + ' onchange="eqKindPicked()">' +
+          '<span>' + c.icon + ' ' + esc(c.one) + '</span></label>').join('') +
+        '</div></div>' +
       '<div class="grid g3">' +
         '<div class="field"><span class="label">Year</span><input id="eqYear" inputmode="numeric" value="' + esc(g.year || '') + '"></div>' +
         '<div class="field"><span class="label">Make</span><input id="eqMake" value="' + esc(g.make || '') + '"></div>' +
@@ -1261,25 +1453,31 @@
         '<div class="field"><span class="label">Bought for</span><input id="eqPrice" inputmode="decimal" value="' +
           (g.priceCents != null ? (g.priceCents / 100) : '') + '" placeholder="$"></div>' +
       '</div>' +
-      '<div class="grid g2">' +
-        '<div class="field"><span class="label">Hours now</span><input id="eqHours" inputmode="decimal" value="' +
-          (g.hours != null ? g.hours : '') + '" placeholder="leave blank if it has no hour meter"></div>' +
-        '<div class="field"><span class="label">Miles now</span><input id="eqMiles" inputmode="numeric" value="' +
-          (g.miles != null ? g.miles : '') + '" placeholder="vehicles only"></div>' +
-      '</div>' +
 
+      // Each meter's reading beside its interval, shown for the groups that
+      // go by it (eqMeterBoxes) -- or whenever it already has a number in
+      // it, so nothing stored is ever out of sight.
       '<div class="eq-loghead">How often it needs servicing</div>' +
-      '<div class="grid g3">' +
-        '<div class="field"><span class="label">Every X hours</span><input id="eqIntHours" inputmode="decimal" value="' +
-          (g.intervalHours != null ? g.intervalHours : '') + '" placeholder="e.g. 50"></div>' +
-        '<div class="field"><span class="label">Every X miles</span><input id="eqIntMiles" inputmode="numeric" value="' +
-          (g.intervalMiles != null ? g.intervalMiles : '') + '" placeholder="e.g. 5000"></div>' +
-        '<div class="field"><span class="label">Every X days</span><input id="eqIntDays" inputmode="numeric" value="' +
-          (g.intervalDays != null ? g.intervalDays : '') + '" placeholder="e.g. 180"></div>' +
+      '<div id="eqMeterBox">' +
+        '<div class="grid g2 eq-m" data-m="hours">' +
+          '<div class="field"><span class="label">Hours now</span><input id="eqHours" inputmode="decimal" value="' +
+            (g.hours != null ? g.hours : '') + '" placeholder="leave blank if it has no hour meter"></div>' +
+          '<div class="field"><span class="label">Every X hours</span><input id="eqIntHours" inputmode="decimal" value="' +
+            (g.intervalHours != null ? g.intervalHours : '') + '" placeholder="e.g. 50"></div>' +
+        '</div>' +
+        '<div class="grid g2 eq-m" data-m="miles">' +
+          '<div class="field"><span class="label">Miles now</span><input id="eqMiles" inputmode="numeric" value="' +
+            (g.miles != null ? g.miles : '') + '" placeholder="what the odometer says"></div>' +
+          '<div class="field"><span class="label">Every X miles</span><input id="eqIntMiles" inputmode="numeric" value="' +
+            (g.intervalMiles != null ? g.intervalMiles : '') + '" placeholder="e.g. 5000"></div>' +
+        '</div>' +
+        '<div class="grid g2">' +
+          '<div class="field"><span class="label">Every X days</span><input id="eqIntDays" inputmode="numeric" value="' +
+            (g.intervalDays != null ? g.intervalDays : '') + '" placeholder="e.g. 180"></div>' +
+        '</div>' +
+        '<div class="hint" id="eqMeterHint"></div>' +
+        '<button type="button" class="link-btn eq-m-more" id="eqMeterMore" onclick="eqShowMeters(this)"></button>' +
       '</div>' +
-      '<div class="hint">Fill in whichever fits. A mower wears by hours, a truck by miles, ' +
-        'a filter by months — set any or all of them and the next service works itself out ' +
-        'each time you log one.</div>' +
 
       '<div class="field"><span class="label">Notes</span>' +
         '<textarea id="eqNotes" rows="2" placeholder="anything worth remembering about it">' +
@@ -1290,38 +1488,57 @@
         '<button class="btn btn-sm" onclick="cancelEquipmentEdit()">Cancel</button>' +
         (id ? '<button class="btn btn-sm" onclick="removeEquipment(\'' + id + '\')">Remove</button>' : '') +
       '</div>';
+    eqMeterBoxes();
     const n = el('eqName'); if (n) n.focus();
   };
 
-  function kindOptions(selected) {
-    const sel = String(selected || '').toLowerCase();
-    return typeList().map(k => '<option value="' + esc(k) + '"' + (String(k).toLowerCase() === sel ? ' selected' : '') + '>' +
-      esc(kindName(k)) + '</option>').join('') +
-      '<option value="__new">＋ A new type…</option>';
-  }
-  // "＋ A new type…": named here, kept on this machine when it is saved.
-  window.eqKindPicked = async function (box) {
-    if (!box || box.value !== '__new') return;
-    const a = await ydPrompt('', '', { title: 'Name the new type', placeholder: 'e.g. Trailer, Attachment, ATV, Snow plow', ok: 'Add it' });
-    if (!box.isConnected) return;             // the form was closed meanwhile
-    const name = String(a || '').trim().replace(/\s+/g, ' ').slice(0, 30);
-    let pick = (gear[editingId] || {}).kind || 'machine';     // cancelled: as it was
-    if (name) {
-      const key = name.toLowerCase();
-      // "Vehicles" is the Vehicle type, not a second one with the same button.
-      const same = k => String(k).toLowerCase() === key || kindName(k).toLowerCase() === key || plural(k).toLowerCase() === key;
-      const builtIn = Object.keys(KINDS).find(same);
-      const have = typeList().find(same);
-      if (RESERVED_TYPES.indexOf(key) !== -1) showToast('Pick another name — “' + name + '” is already a filter');
-      else if (builtIn || have) pick = builtIn || have;
-      else { newTypes.push(name); pick = name; }
+  // The group picked on the form, '' while none is.
+  const pickedKind = () => { const r = document.querySelector('input[name="eqKind"]:checked'); return r && isCatId(r.value) ? r.value : ''; };
+  let metersAll = false;      // "+ Hours or miles too" pressed on the open form
+  // A group picked: lit, and the meter boxes that fit it shown. Nothing typed
+  // is cleared or hidden -- a box with a number in it always shows.
+  window.eqKindPicked = function () {
+    const k = pickedKind();
+    document.querySelectorAll('#eqKindField .eq-cat-opt').forEach(l => {
+      const r = l.querySelector('input');
+      l.classList.toggle('on', !!(r && r.checked));
+    });
+    const f = el('eqKindField'); if (f && k) f.classList.remove('cl-missing');
+    eqMeterBoxes();
+  };
+  window.eqMeterBoxes = function () {
+    const box = el('eqMeterBox');
+    if (!box) return;
+    const k = pickedKind();
+    const filled = ids => ids.some(i => val(i) !== '');
+    const show = {
+      hours: metersAll || !k || METERS[k].indexOf('hours') !== -1 || filled(['eqHours', 'eqIntHours']),
+      miles: metersAll || !k || METERS[k].indexOf('miles') !== -1 || filled(['eqMiles', 'eqIntMiles']),
+    };
+    box.querySelectorAll('.eq-m[data-m]').forEach(r => r.classList.toggle('eq-m-off', !show[r.dataset.m]));
+    const hint = el('eqMeterHint');
+    if (hint) {
+      hint.textContent = k ? METER_HINT[k] + ' The next service works itself out each time you log one.'
+        : 'Fill in whichever fits. A mower wears by hours, a truck by miles, a filter by months — ' +
+          'the next service works itself out each time you log one.';
     }
-    box.innerHTML = kindOptions(pick);
+    const more = el('eqMeterMore');
+    if (more) {
+      more.hidden = show.hours && show.miles;
+      more.textContent = '+ ' + (!show.hours && !show.miles ? 'Hours or miles' : !show.hours ? 'Hours' : 'Miles') + ' too';
+    }
+  };
+  // The meter boxes a group does not go by, shown after all (an ATV kept
+  // with the machines that has an odometer, say).
+  window.eqShowMeters = function (btn) {
+    const box = (btn && btn.closest && btn.closest('.add-area, #eqMeterBox')) || document;
+    if (box.id === 'eqMeterBox') { metersAll = true; window.eqMeterBoxes(); return; }
+    box.querySelectorAll('.eq-m-off').forEach(n => n.classList.remove('eq-m-off'));
+    if (btn) btn.remove();
   };
 
   window.cancelEquipmentEdit = function () {
     editingId = null;
-    newTypes = [];                  // a type named but not used goes
     if (openId && gear[openId]) renderDetail();
     else closeEquipment();
   };
@@ -1329,12 +1546,19 @@
   window.saveEquipment = function () {
     const name = val('eqName');
     if (!name) { showToast('Give it a name'); return; }
+    // Every machine is in one of the five: the form says which, never a default.
+    const kind = pickedKind();
+    if (!kind) {
+      const f = el('eqKindField'); if (f) { f.classList.add('cl-missing'); if (f.scrollIntoView) f.scrollIntoView({ block: 'nearest' }); }
+      showToast('Pick what it is — ' + CATEGORIES.map(c => c.one).join(', '));
+      return;
+    }
     const id = editingId || ('eq' + Date.now().toString(36));
     const was = gear[id] || {};
 
     const rec = {
       name: name,
-      kind: (val('eqKind') && val('eqKind') !== '__new') ? val('eqKind') : 'machine',
+      kind: kind,
       year: val('eqYear'), make: val('eqMake'), model: val('eqModel'),
       serial: val('eqSerial'),
       priceCents: num('eqPrice') != null ? Math.round(num('eqPrice') * 100) : null,
@@ -1345,6 +1569,14 @@
       service: was.service || [],
       addedAt: was.addedAt || new Date().toISOString(),
     };
+    // Picked by a person: a new machine, or a group changed here. Saved
+    // with the group it already had, it keeps how that was chosen -- the
+    // button lit on its own is not someone saying "yes" to a sort they
+    // never looked at ("Check these" asks for that tap).
+    if (!editingId || catOf(was) !== kind || !isCatId(String(was.kind || ''))) {
+      rec.kindHow = 'hand';
+      if (editingId && was.kindBefore === undefined && !isCatId(String(was.kind || '').toLowerCase())) rec.kindBefore = String(was.kind || '');
+    }
 
     // A machine added with a reading and an interval already knows when it is
     // next due, rather than looking like nothing is scheduled until the first
@@ -1379,8 +1611,10 @@
     // interval, the same way the hours and miles ones above do.
     else rec.dueDate = null;
 
-    gear[id] = Object.assign({ id: id }, rec);
-    editingId = null; openId = id; newTypes = [];     // the saved machine carries its type now
+    // Merged over what was there, as the database does (put merges): the
+    // fields this form never shows (problems, the sort's kindBefore) stay.
+    gear[id] = Object.assign({ id: id }, was, rec);
+    editingId = null; openId = id;
     renderDetail(); renderEquipment();
     write(id, rec, 'saving ' + name);
     showToast(name + ' saved');
@@ -1424,6 +1658,7 @@
         else gear[c.id] = Object.assign({ id: c.id }, c.data);
       });
       if (meta && !meta.fromCache) gearLoaded = true;
+      sortIntoGroups();
       renderEquipment();
       // Home lists what needs a look (needs(), below).
       document.dispatchEvent(new CustomEvent('yd-equipment-changed'));
@@ -1477,7 +1712,9 @@
   function publishNames() {
     if (!ydCan('equipment', 'change') || !gearLoaded || !window.YDDb) return;
     const list = {};
-    Object.values(gear).forEach(g => { list[g.id] = { name: String(g.name || 'Machine'), kind: String(g.kind || '') }; });
+    // `kind` is its group, always one of the five (catOf), so the crew's
+    // pickers group them the same way.
+    Object.values(gear).forEach(g => { list[g.id] = { name: String(g.name || 'Machine'), kind: catOf(g) }; });
     const sigOf = l => JSON.stringify(Object.keys(l || {}).filter(id => l[id]).sort().map(id => [id, l[id].name, l[id].kind]));
     const sig = sigOf(list);
     if (sig === namesSig) return;
@@ -1488,6 +1725,56 @@
       Object.keys(had).forEach(id => { if (!list[id]) list[id] = null; });
       return window.YDDb.put('settings', 'public', { equipmentList: list, equipmentListAt: new Date().toISOString() });
     }).catch(e => { namesSig = null; console.warn('[equipment] names for the crew not yet saved:', e && (e.code || e.message)); });
+  }
+
+  // ------------------------------------------- sorting into the five groups
+  //
+  // Once, on the owner's device, after the machines have come from the
+  // server: every machine not yet in a group is given one (sortOne), what
+  // it was kept in `kindBefore`, how in `kindHow`, all as one batch; then
+  // settings/equipment.categoriesAt says it is done. Safe twice: a machine
+  // with a `kindHow` is never sorted again. After that, only a machine whose
+  // `kind` is none of the five (a type typed on a phone still on the old
+  // code) is folded in -- a Machine or Vehicle added since was someone's
+  // choice and is left as it is.
+  let sortTried = false;
+  function sortIntoGroups() {
+    if (sortTried || !isOwner() || !gearLoaded || !ydCan('equipment', 'change') || !window.YDDb || !window.YDDb.getFresh) return;
+    sortTried = true;
+    Promise.resolve(window.YDDb.getFresh('settings', 'equipment')).then(s => {
+      const done = !!(s && s.categoriesAt);
+      const entries = [];
+      let unsure = 0;
+      Object.values(gear).forEach(g => {
+        if (g.kindHow) return;
+        if (done && isCatId(String(g.kind || ''))) return;
+        const r = sortOne(g);
+        const patch = { kind: r.id, kindBefore: String(g.kind == null ? '' : g.kind), kindHow: r.how };
+        if (r.how === 'check') unsure++;
+        Object.assign(g, patch);
+        entries.push(['equipment', g.id, patch]);
+      });
+      if (!entries.length && done) return;
+      if (entries.length) {
+        renderEquipment();
+        scheduleMaintSync();      // the crew's list carries the groups
+        if (!done) showToast('Your ' + entries.length + ' machine' + (entries.length === 1 ? ' is' : 's are') +
+          ' sorted into Vehicles, Machines, Trailers, Small engines and Electric tools' +
+          (unsure ? ' — ' + unsure + ' to check (Equipment → Machines)' : ''), 7000);
+      }
+      // The flag only once the machines have gone up: a sort half-sent is
+      // finished next time (those with a kindHow are skipped).
+      return Promise.resolve(entries.length ? window.YDDb.putMany(entries) : null).then(() => {
+        if (done) return;
+        return window.YDDb.put('settings', 'equipment', { categoriesAt: new Date().toISOString(),
+          categoriesSorted: entries.length, categoriesToCheck: unsure });
+      });
+    }).catch(e => {
+      // No signal (getFresh needs the server) or refused: tried again on the
+      // next load from the server.
+      sortTried = false;
+      console.warn('[equipment] groups not sorted yet:', e && (e.code || e.message));
+    });
   }
 
   function scheduleMaintSync() {
@@ -1811,21 +2098,34 @@
   window.YDEquipment = {
     all: () => gear,
     countsMiles: countsMiles,
-    // services.js, "Your other lists": the types with how many machines are
-    // each (his own ones only -- Machine and Vehicle stay), and every machine
-    // of one type moved to another. A type of his exists only while a machine
-    // carries it, so moving them all is what merging or renaming it means.
-    types: () => typeList().map(k => ({ id: k, name: kindName(k), builtIn: !!KINDS[k],
-      count: Object.values(gear).filter(g => String(g.kind || '').trim().toLowerCase() === String(k).toLowerCase()).length })),
+    // The five groups, for every list of machines (the clock's repair
+    // picker, the recurring tasks, the search): [{id, one, many, icon}] in
+    // their order; the group of a machine record or a crew-list {name,
+    // kind} entry; a group by id (Machine for anything else); the singular
+    // name of a stored kind; and items grouped (empty groups left out).
+    categories: () => CATEGORIES.map(c => Object.assign({}, c)),
+    categoryOf: catOf,
+    category: id => Object.assign({}, catById(id)),
+    kindName: kindName,
+    byCategory: byCategory,
+    // services.js, "Your other lists": the groups with how many machines
+    // each holds -- all five are Jonah's fixed ones (builtIn), so there are
+    // none of his own to rename there any more -- and every machine of one
+    // group moved to another.
+    types: () => CATEGORIES.map(c => ({ id: c.id, name: c.one, builtIn: true,
+      count: Object.values(gear).filter(g => catOf(g) === c.id).length })),
     retype: (was, to) => {
-      if (!ydCan('equipment', 'change') || !was || !to || was === to) return 0;
+      if (!ydCan('equipment', 'change') || !isCatId(to) || !was || was === to) return 0;
       let n = 0;
       Object.values(gear).forEach(g => {
-        if (String(g.kind || '').trim().toLowerCase() !== String(was).toLowerCase()) return;
-        g.kind = to;
-        write(g.id, { kind: to }, 'changing its type');
+        if (catOf(g) !== was && String(g.kind || '').trim().toLowerCase() !== String(was).toLowerCase()) return;
+        const patch = { kind: to, kindHow: 'hand' };
+        if (g.kindBefore === undefined && !isCatId(String(g.kind || '').toLowerCase())) patch.kindBefore = String(g.kind || '');
+        Object.assign(g, patch);
+        write(g.id, patch, 'changing its group');
         n++;
       });
+      if (n) { renderEquipment(); scheduleMaintSync(); }
       return n;
     },
     // A recurring task confirmed done (recurring.js): in the history as a
@@ -1887,7 +2187,7 @@
       // Access taken away (or signed out): stop listening, and nothing of
       // the machines stays on this device's screen.
       try { unsub(); } catch (err) {}
-      unsub = null; gear = {}; gearLoaded = false;
+      unsub = null; gear = {}; gearLoaded = false; sortTried = false;
       renderEquipment();
     }
   });

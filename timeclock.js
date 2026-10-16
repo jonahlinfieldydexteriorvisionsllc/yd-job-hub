@@ -514,16 +514,17 @@
     const opt = j => '<option value="job|' + esc(j.id) + '">' + esc(jobName(j)) + (j.status === 'complete' ? ' (finished)' : '') + '</option>';
     // Nothing picked to start with. With Labor first and already chosen, a
     // shift sent without looking went in as Labor -- paid, but on no job.
-    const machines = machineList();
+    // Repairs by the five groups; each line says its group too, as the
+    // type-to-search list shows only the lines ("trailer" finds them all).
+    const rep = (m, cat) => '<option value="repair|' + esc(m.id) + '">🔧 ' + esc(m.name) + (cat ? ' — ' + esc(cat.one) : '') + '</option>';
     return '<option value="">— Pick what you were on —</option>' +
       '<option value="labor|labor">' + OVERHEAD_LABEL.labor + '</option>' +
       (storm && storm.id ? '<option value="storm|' + esc(storm.id) + '">❄ ' + esc(stormName(storm)) + '</option>' : '') +
       '<option value="snow|snow">Snow</option>' +
       '<option value="receipts|receipts">' + OVERHEAD_LABEL.receipts + '</option>' +
-      '<optgroup label="Equipment repair">' +
-        machines.map(m => '<option value="repair|' + esc(m.id) + '">🔧 ' + esc(m.name) + '</option>').join('') +
-        '<option value="repair|shop">🔧 The shop / other</option>' +
-      '</optgroup>' +
+      machineGroups().map(gr => '<optgroup label="' + esc('Equipment repair' + (gr.cat ? ' — ' + gr.cat.many : '')) + '">' +
+        gr.items.map(m => rep(m, gr.cat)).join('') + '</optgroup>').join('') +
+      '<optgroup label="Equipment repair — the shop"><option value="repair|shop">🔧 The shop / other</option></optgroup>' +
       (open.length ? '<optgroup label="Jobs">' + open.map(opt).join('') + '</optgroup>' : '') +
       (done.length ? '<optgroup label="Finished jobs">' + done.map(opt).join('') + '</optgroup>' : '');
   }
@@ -1273,9 +1274,18 @@
     const own = window.YDEquipment && ydCan('equipment', 'see') ? (YDEquipment.all() || {}) : null;
     const src = own && Object.keys(own).length ? own : (pubMachines || {});
     const byName = new Intl.Collator('en-US', { numeric: true, sensitivity: 'base' }).compare;
+    const E = window.YDEquipment;
     return Object.keys(src).filter(id => src[id])
-      .map(id => ({ id: id, name: String(src[id].name || 'Machine') }))
+      .map(id => ({ id: id, name: String(src[id].name || 'Machine'), kind: E && E.categoryOf ? E.categoryOf(src[id]) : '' }))
       .sort((a, b) => byName(a.name, b.name));
+  }
+  // The machines in Jonah's five groups (Vehicles, Machines, Trailers, Small
+  // engines, Electric tools -- equipment.js), each group in name order; one
+  // unnamed lot if equipment.js is not there.
+  function machineGroups() {
+    const list = machineList(), E = window.YDEquipment;
+    if (!E || !E.byCategory) return [{ cat: null, items: list }];
+    return E.byCategory(list, m => ({ kind: m.kind }));
   }
   function machineName(id) {
     return ((machineList().find(m => m.id === id) || {}).name) || '';
@@ -1380,13 +1390,16 @@
             'Something else on it</button>' +
         '</div>' + back + '</div>';
     }
-    const list = machineList();
+    const groups = machineGroups();
+    const any = groups.some(gr => gr.items.length);
+    // Under the five groups' headings, buttons all in sight.
     return '<div class="picker"><p class="clock-lead">🔧 What are you repairing?</p>' +
-      '<div class="repair-grid">' +
-        list.map(m => '<button class="picker-kind" onclick="repairMachine(\'' + safeId(m.id) + '\')">' + esc(m.name) + '</button>').join('') +
-        '<button class="picker-kind kind-labor" onclick="repairShop()">The shop / other</button>' +
-      '</div>' +
-      (list.length ? '' : '<p class="hint">No machines listed yet' + (pubMachines === null ? ' — still loading' : '') + '.</p>') +
+      groups.map(gr => (gr.cat ? '<div class="repair-cat">' + gr.cat.icon + ' ' + esc(gr.cat.many) + '</div>' : '') +
+        '<div class="repair-grid">' +
+          gr.items.map(m => '<button class="picker-kind" onclick="repairMachine(\'' + safeId(m.id) + '\')">' + esc(m.name) + '</button>').join('') +
+        '</div>').join('') +
+      '<div class="repair-grid"><button class="picker-kind kind-labor" onclick="repairShop()">The shop / other</button></div>' +
+      (any ? '' : '<p class="hint">No machines listed yet' + (pubMachines === null ? ' — still loading' : '') + '.</p>') +
       back + '</div>';
   }
 
