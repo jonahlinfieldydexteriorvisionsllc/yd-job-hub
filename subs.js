@@ -697,9 +697,11 @@
     fileBills();
     showToast('Saved — ' + name);
   };
-  window.subRemove = function (id) {
+  window.subRemove = async function (id) {
     const s = (data.subs || {})[id];
-    if (!s || !confirm('Remove ' + (s.name || 'this subcontractor') + ' and its properties? Their bills stay in Receipts.')) return;
+    if (!s || !(await ydConfirm('Their bills stay in Receipts.', { title: 'Remove ' + (s.name || 'this subcontractor') + ' and its properties?',
+      ok: 'Remove', danger: true }))) return;
+    if (!(data.subs || {})[id]) return;
     form = null;
     put({ subs: { [id]: null } }, 'removing');
   };
@@ -764,10 +766,12 @@
     else put({ visitFix: { [key]: { mows: n } } }, 'setting mows');
   };
   window.subVisitSkip = function (key, skip) { put({ visitFix: { [key]: { skip: !!skip } } }, skip ? 'not counting a visit' : 'counting a visit'); };
+  // No question first: Undo puts it back.
   window.subVisitRemove = function (key) {
     const v = (data.handVisits || {})[key];
-    if (!v || !confirm('Remove this visit you added?')) return;
+    if (!v) return;
     put({ handVisits: { [key]: null } }, 'removing a visit');
+    if (typeof showUndo === 'function') showUndo('Visit removed', () => put({ handVisits: { [key]: v } }, 'putting a visit back'));
   };
   window.subVisitAdd = function (subId) { addingVisit = subId; open[subId] = true; render(); };
   window.subVisitCancel = function () { addingVisit = ''; render(); };
@@ -825,9 +829,9 @@
     box.value = '';
     box.focus();
   };
-  window.subPropRemove = function (subId, propId) {
+  window.subPropRemove = async function (subId, propId) {
     const p = (((data.subs || {})[subId] || {}).props || {})[propId];
-    if (!p || !confirm('Remove ' + (p.client || 'this property') + '?')) return;
+    if (!p || !(await ydConfirm('', { title: 'Remove ' + (p.client || 'this property') + '?', ok: 'Remove', danger: true }))) return;
     form = null;
     put({ subs: { [subId]: { props: { [propId]: null } } } }, 'removing a property');
   };

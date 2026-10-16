@@ -188,9 +188,9 @@
     render();
   };
   window.markAllCrewNotes = function () { unread().forEach(n => window.markCrewNote(n.id, true)); };
-  window.openNoteJob = function (jobId) {
+  window.openNoteJob = async function (jobId) {
     const m = el('notesListModal'); if (m) m.classList.remove('active');
-    if (typeof dirty !== 'undefined' && dirty && !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     loadJob(jobId);
     switchTab('job');
   };

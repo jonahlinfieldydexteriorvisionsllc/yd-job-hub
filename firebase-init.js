@@ -837,8 +837,12 @@ async function start() {
       try { flush(); } catch (e) { console.warn('[auth] sign-out flush failed', e); }
     }
     const landed = await Promise.race([waitForPendingWrites(db).then(() => true, () => false), pause(4000)]);
-    if (!landed && !confirm('Some changes on this device have not reached the cloud yet ' +
-        '(no signal?).\n\nSigning out now will lose them. Sign out anyway?')) return false;
+    // The app's own window when it has loaded (app.js), else the browser's.
+    const sure = (text, title) => typeof window.ydConfirm === 'function'
+      ? window.ydConfirm(text, { title: title, ok: 'Sign out anyway', cancel: 'Stay signed in', danger: true })
+      : Promise.resolve(confirm(title + '\n\n' + text));
+    if (!landed && !(await sure('Some changes on this device have not reached the cloud yet (no signal?). ' +
+        'Signing out now will lose them.', 'Sign out anyway?'))) return false;
     for (const hook of (window.YDSignOutHooks || [])) {
       try { await Promise.race([Promise.resolve().then(hook), pause(2000)]); }
       catch (e) { console.warn('[auth] sign-out tidy-up failed', e); }

@@ -144,9 +144,10 @@
     }
 
     // Never silently destroy something already written.
-    if (notes.value.trim() &&
-        !confirm('This will replace what is currently in Job Notes.\n\nCarry on?')) {
-      return;
+    if (notes.value.trim()) {
+      const before = currentJobId;
+      if (!(await ydConfirm('The draft replaces what is in Job Notes now.', { title: 'Replace the Job Notes?', ok: 'Draft it' }))) return;
+      if (currentJobId !== before || btn.disabled) return;
     }
 
     const original = btn.textContent;
@@ -191,10 +192,10 @@
         showToast('Claude sent back nothing — Job Notes were left as they were');
         return;
       }
-      if (notes.value.trim() !== asked &&
-          !confirm('Job Notes were changed while the draft was being written.\n\n' +
-                   'Replace them with the draft anyway?')) {
-        return;
+      if (notes.value.trim() !== asked) {
+        if (!(await ydConfirm('Job Notes were changed while the draft was being written.',
+            { title: 'Replace them with the draft anyway?', ok: 'Replace them', cancel: 'Keep mine', danger: true }))) return;
+        if (currentJobId !== forJob) { showToast('A different job is open now — the draft was not put in it'); return; }
       }
       notes.value = text;
       markDirty();

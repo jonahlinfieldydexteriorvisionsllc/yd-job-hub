@@ -236,8 +236,9 @@
   }
 
   window.jpRetry = id => { const it = queue[id]; if (it) send(it); };
-  window.jpDiscard = id => {
-    if (!queue[id] || queue[id].by !== myUid() || !confirm('Throw this photo away? It has not been sent.')) return;
+  window.jpDiscard = async id => {
+    if (!queue[id] || queue[id].by !== myUid() || !(await ydConfirm('It has not been sent.', { title: 'Throw this photo away?', ok: 'Throw it away', danger: true }))) return;
+    if (!queue[id]) return;
     if (status[id] && status[id].preview) URL.revokeObjectURL(status[id].preview);
     delete queue[id]; delete status[id];
     qDrop(id);
@@ -428,9 +429,10 @@
     drawAll(); drawViewer();
     if (ask) showToast('Jonah will see you asked');
   };
-  window.jpDelete = id => {
+  window.jpDelete = async id => {
     const p = photos[id];
-    if (!p || !changesJobs() || !confirm('Delete this photo for good?')) return;
+    if (!p || !changesJobs() || !(await ydConfirm('It cannot be brought back.', { title: 'Delete this photo for good?', ok: 'Delete', danger: true }))) return;
+    if (!photos[id]) return;
     // The record first, so it leaves every screen at once; the files after.
     // A file left behind by a dropped signal costs pennies and harms nothing.
     Promise.resolve(window.YDDb.remove('jobPhotos', id)).catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed to delete photos' : 'Not deleted yet — will retry'));

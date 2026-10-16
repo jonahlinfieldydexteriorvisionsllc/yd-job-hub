@@ -746,9 +746,9 @@
   // A job, on the Job tab -- the same way the calendar and the boards open
   // one: the job already in the form is just shown (loading it again would
   // throw away what is typed and not yet saved).
-  window.homeOpenJob = function (id) {
+  window.homeOpenJob = async function (id) {
     if (typeof currentJobId !== 'undefined' && currentJobId === id) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty && !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(id);
   };
   window.homeMachine = function (id) {

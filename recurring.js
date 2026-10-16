@@ -236,7 +236,7 @@
   // Confirmed done by the owner or an admin. A task about a machine goes in
   // its service history (not as a service -- it does not move the next one).
   // The card may still be on Maintenance (one done before the move).
-  window.confirmRecurring = function (cardId, boardId) {
+  window.confirmRecurring = async function (cardId, boardId) {
     if (!confirms() || !window.YDBoards) return;
     const all = YDBoards.cards();
     const where = boardId || ((all[CREW] || {})[cardId] ? CREW : MAINT);
@@ -249,10 +249,14 @@
     // Anything serviced by the mile (a vehicle, or one of Jonah's own types
     // with miles on it -- equipment.js countsMiles).
     if (g && (YDEquipment.countsMiles ? YDEquipment.countsMiles(g) : g.kind === 'vehicle')) {
-      const a = prompt('Miles on ' + (g.name || 'it') + ' now? (blank if you don’t know)', g.miles != null ? String(g.miles) : '');
+      const a = await ydPrompt('Leave it blank if you don’t know.', g.miles != null ? String(g.miles) : '',
+        { title: 'Miles on ' + (g.name || 'it') + ' now?', type: 'number', ok: 'Confirm it' });
       if (a === null) return;
       const n = parseInt(String(a).replace(/[^0-9]/g, ''), 10);
       miles = n > 0 ? n : null;
+      // Confirmed by someone else while the box was open.
+      const now = ((YDBoards.cards()[where]) || {})[cardId];
+      if (!now || now.confirmedAt) return;
     }
     const at = new Date().toISOString();
     const patch = { confirmedAt: at, confirmedBy: me.uid || '', column: doneCol(board), doneAt: k.doneAt || at,
@@ -362,9 +366,9 @@
     save({ [id]: t });
     renderList(); sync(); redrawCalendar();
   };
-  window.rcAdd = function () {
+  window.rcAdd = async function () {
     if (!owner()) return;
-    const what = prompt('What needs doing? (e.g. Grease the loader)');
+    const what = await ydPrompt('', '', { title: 'What needs doing?', placeholder: 'e.g. Grease the loader', ok: 'Add it' });
     if (!what || !what.trim()) return;
     save({ [newId()]: { what: what.trim(), every: 'week', season: 'all', days: 7, from: ymd(new Date()), machineId: null, off: false } });
     renderList(); sync(); redrawCalendar();
@@ -377,9 +381,11 @@
     renderList(); sync(); redrawCalendar();
     showToast('Added — pick the truck and trailer for each, if you like');
   };
-  window.rcRemove = function (id) {
+  window.rcRemove = async function (id) {
     const tasks = tasksNow();
-    if (!owner() || !tasks[id] || !confirm('Remove “' + tasks[id].what + '”? Cards already done stay on the board.')) return;
+    if (!owner() || !tasks[id] || !(await ydConfirm('Cards already done stay on the board.',
+      { title: 'Remove “' + tasks[id].what + '”?', ok: 'Remove', danger: true }))) return;
+    if (!tasksNow()[id]) return;
     save({ [id]: null });      // merged saves keep a key left out
     renderList(); sync(); redrawCalendar();
   };

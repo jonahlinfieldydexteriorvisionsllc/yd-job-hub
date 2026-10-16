@@ -169,10 +169,9 @@
   // A job, on the Job tab -- as Home, the calendar and the boards open one:
   // the job already in the form is just shown (loading it again would read
   // the saved copy over whatever is typed and not yet saved).
-  function openJob(id) {
+  async function openJob(id) {
     if (typeof currentJobId !== 'undefined' && currentJobId === id) { switchTab('job'); return; }
-    if (typeof dirty !== 'undefined' && dirty &&
-        !confirm('The job open now has unsaved changes. Open this one anyway?')) return;
+    if (!(await ydLeaveUnsavedJob())) return;
     if (typeof loadJob === 'function') loadJob(id);
   }
   function openContact(id) {
