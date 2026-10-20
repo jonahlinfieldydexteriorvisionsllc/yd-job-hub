@@ -3185,10 +3185,11 @@
     const forJob = currentJobId;
     if (!forJob) { showToast('Save the job first'); return; }
     if (queued.indexOf(forJob) !== -1) return;
-    // "Put it in QuickBooks" / "send it to them" is a button press, not a
-    // question: done here in code, with no Claude call to pay for.
-    const qbWant = sends() ? qbAsk(text) : null;
-    if (qbWant) { qbFromChat(text, qbWant); return; }
+    // "Put it in QuickBooks" / "send it to them": Claude only builds the
+    // estimate -- Jonah puts it in and sends it himself with the buttons,
+    // after adding tags in QuickBooks (20 Oct 2026). Answered here in code,
+    // with no Claude call to pay for.
+    if (qbAsk(text)) { qbFromChat(text); return; }
     est.chat.push({ role: 'user', text: text, at: new Date().toISOString(), changed: false });
     draftMsg = '';
     // Saved now rather than in a second: the answer may come back after
@@ -3204,8 +3205,9 @@
   };
 
   // 'put' (into QuickBooks, not emailed), 'email' (through QuickBooks to the
-  // customer -- estToQB still asks before it emails), or null: anything else
-  // goes to Claude. Only a clear instruction counts: it needs a doing word.
+  // customer), or null: anything else goes to Claude. Either one is answered
+  // with which button to tap (qbFromChat) -- the chat never sends.
+  // Only a clear instruction counts: it needs a doing word.
   // Only a message that IS the instruction counts -- "put it in QuickBooks",
   // "ok send it to them", "put it in qb but don't email it". A sentence that
   // only mentions QuickBooks ("before you put it in QuickBooks, change...",
@@ -3230,24 +3232,14 @@
     if (new RegExp('^(and|then|and then) (e-?mail|send)( it)?' + WHO + '$').test(rest)) return 'email';
     return null;
   }
-  async function qbFromChat(text, want) {
-    const jobId = currentJobId, at = new Date().toISOString();
-    const reply = { role: 'assistant', at: at, changed: false,
-                    // Worded to stand on its own: if another job is opened
-                    // before QuickBooks answers, this is what stays.
-                    text: want === 'email' ? 'Sending it through QuickBooks — the result shows under the estimate.'
-                      : 'Putting it in QuickBooks, not emailed — the result shows under the estimate.' };
-    est.chat.push({ role: 'user', text: text, at: at, changed: false }, reply);
+  function qbFromChat(text) {
+    const at = new Date().toISOString();
+    est.chat.push({ role: 'user', text: text, at: at, changed: false },
+      { role: 'assistant', at: at, changed: false,
+        text: 'I only build the estimate — I don’t put it in QuickBooks or send it. When it’s ready, tap ' +
+              '“Put in QuickBooks, don’t email yet” under the estimate, add your tags in QuickBooks, and send it from there ' +
+              '(or tap “Send through QuickBooks” to email it straight away).' });
     draftMsg = '';
-    changed(true);
-    const before = JSON.stringify(qb() || {});
-    await window.estToQB(want === 'email');
-    if (currentJobId !== jobId) return;
-    const q = qb() || {};
-    reply.text = JSON.stringify(q) === before
-      ? (q.id ? 'Nothing changed in QuickBooks.' : 'It didn’t go to QuickBooks — see the buttons under the estimate.')
-      : 'Done — QuickBooks estimate' + (q.docNumber ? ' #' + q.docNumber : '') +
-        (q.sentAt && want === 'email' ? ', emailed' + (q.sentTo ? ' to ' + q.sentTo : '') : ', not emailed') + '.';
     changed(true);
   }
 
