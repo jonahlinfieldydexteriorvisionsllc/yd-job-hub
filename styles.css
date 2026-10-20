@@ -4075,6 +4075,8 @@
     font-size:13.5px; white-space:pre-wrap; overflow-wrap:anywhere; }
   .est-scope-qb { margin:6px 0; padding:8px 10px; border:1px solid var(--border); border-radius:8px; }
   .est-scope-qb > .muted { display:block; font-size:12px; }
+  /* QuickBooks' amount beside one changed here (estimate.js qbAmountHtml). */
+  .est-qbamt { margin:2px 0 6px; font-size:12.5px; color:var(--muted); }
   /* What the job is, beside the customer's name, wherever the crew pick or
      see a job (app.js jobWhat). */
   .picker-what { font-weight:500; color:var(--muted); }

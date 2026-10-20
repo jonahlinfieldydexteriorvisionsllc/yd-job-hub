@@ -3074,22 +3074,55 @@ def _fill_one_estimate(db, jid, j, eid, e, end_names):
 # in it, or a copy it thought newer -- saved its own estimate over the filled
 # one, empty, and nothing ever filled it again (one job's, 15 Oct).
 # Nor did a description changed in QuickBooks after the job came in ever
-# reach it. So every hour each such job is held up against QuickBooks:
+# reach it -- nor a line added there (a change order on the invoice), nor a
+# line re-priced, so the job's total was no longer what the customer is
+# billed. So every hour each such job is held up against QuickBooks and
+# follows it:
 #  - its estimate gone empty -> filled again, as the first time;
-#  - a line whose words are not QuickBooks' -> QuickBooks' words put back
-#    (the Job tab shows them read-only for that reason: Job Hub cannot change
-#    an estimate made in QuickBooks; notes for the crew go in "Notes for the
-#    crew", which this never touches).
-# A line is matched by its id (ewqb<line><estimate>), or -- an estimate sent
-# again as a copy to be e-signed has new ids -- by its QuickBooks product when
-# only one line on each side has it. Nothing else on the job is changed: not
-# a price, not a line he took off. Jobs made in Job Hub are not looked at --
-# their words went to QuickBooks from here.
+#  - what it follows is its invoice once it has one -- what the customer is
+#    billed, where a change order goes -- else its estimate. An invoice line
+#    that reads like one of the estimate's (the same product and words, or
+#    amount) is that line; the rest were added on the invoice. An invoice
+#    that does not look like the estimate's (most of its lines not on it --
+#    a deposit-only invoice) is not followed: it would take every line off;
+#  - each line's words are QuickBooks' (the Job tab shows them read-only for
+#    that reason: Job Hub cannot change an estimate made in QuickBooks;
+#    notes for the crew go in "Notes for the crew", never touched here);
+#  - every QuickBooks line the job has seen is remembered in its estimate
+#    (fromQb.lines: the job's line id -> where it is in QuickBooks, and its
+#    amount, product and words there last time). It travels with the lines,
+#    so a device saving an older copy saves the older memory with it and the
+#    next look puts things right. A line QuickBooks has that the job never
+#    saw is added; one it saw that is not on the job was taken off here and
+#    stays off; one it saw in QuickBooks that is gone from there is taken
+#    off the job;
+#  - a line's amount follows QuickBooks when QuickBooks' changed since the
+#    last look (AMOUNTS_FOLLOW); one changed here and not there stays his;
+#  - the materials figure and the tax are QuickBooks' (pricing.js takes the
+#    estimate as accepted); a material named there the job never saw is
+#    added to its list -- nothing is taken off the list, nothing joined to
+#    Supplies is touched;
+#  - the job's price follows the new total unless he typed his own, as it
+#    does when the estimate changes on the Job tab.
+# Crew notes, crew-days and Supplies links are never touched. A line is the
+# job's line by where it was in QuickBooks last time, else by its id
+# (ewqb<line><estimate>), else -- an estimate sent again as a copy to be
+# e-signed has new ids -- by what it says. The first look at a job only
+# remembers: every job matched QuickBooks on 16 Oct, so a line missing from
+# a job then was one he took off -- except a line only on the invoice, which
+# nothing read before, and which is added. Jobs made in Job Hub are not
+# looked at -- their lines went to QuickBooks from here.
 WORDS_MAX = 40              # jobs held up against QuickBooks in one sweep
 # Taken in turn, the one looked at longest ago first (wordsLooked, on
 # integrations/quickbooksImport.<realm>): always the first 40 in id order left
 # every job after them never looked at once there were more than 40. A
 # finished job's words matter less and change less: once a day is enough.
+# "changed": a line's amount follows QuickBooks when it changed there since
+# the last look -- one he changed in Job Hub stays until then. "always": the
+# job's amounts are put back to QuickBooks' every look.
+AMOUNTS_FOLLOW = "changed"
+MATS_SEEN_MAX = 200         # material names remembered on one job
+QB_LINE = re.compile(r"^ewqb")
 
 
 def _words_source(j, env):
@@ -3102,42 +3135,241 @@ def _words_source(j, env):
     return None
 
 
-def _same_words(a, b):
-    return str(a or "").strip() == str(b or "").strip()
+def _invoice_too(j, env):
+    """The invoice of a job made from a QuickBooks estimate, which its lines
+    then follow (above); None when it has none."""
+    q, r = j.get("qbEstimate") or {}, j.get("qbInvoiceRef") or {}
+    if q.get("linked") and r.get("id") and r.get("env") == env:
+        return str(r["id"])
+    return None
 
 
-def _words_onto(work, qb_work):
-    """`work` (the job's lines) with QuickBooks' words on each line that is
-    one of QuickBooks' (qb_work, from _hub_estimate). Returns (lines, how many
-    changed, titles of QuickBooks lines found nowhere on the job)."""
-    work = [dict(w) for w in work or [] if isinstance(w, dict)]
-    by_id = {w.get("id"): w for w in work if w.get("id")}
-    used, pairs, missing = set(), [], []
-    for q in qb_work:
-        w = by_id.get(q["id"])
-        if w is not None:
-            used.add(id(w))
-            pairs.append((w, q))
-    for q in qb_work:
-        if any(p[1] is q for p in pairs):
+def _ikey(s):
+    return " ".join(str(s or "").lower().split())
+
+
+def _wsig(s):
+    """A line's words, short, to know them again (fromQb.lines)."""
+    return hashlib.sha1(" ".join(str(s or "").split()).encode()).hexdigest()[:12]
+
+
+def _reads_as(w):
+    """A line as _pair_by_reading compares it."""
+    return {"key": w.get("id"), "item": _ikey(w.get("qbItem")), "cents": w.get("amountCents"), "words": _wsig(w.get("scope"))}
+
+
+def _pair_by_reading(lines, cands):
+    """Each of `lines` (QuickBooks' lines, _hub_estimate) paired with one of
+    `cands` ({key, item, cents, words}) that reads the same: the same
+    product and words, else the same product and amount, else the only one
+    of that product on each side. {line id: cand key}."""
+    out, used = {}, set()
+    for same in (lambda l, c: c["words"] == _wsig(l.get("scope")),
+                 lambda l, c: c["cents"] == l.get("amountCents")):
+        for l in lines:
+            if l["id"] in out:
+                continue
+            item = _ikey(l.get("qbItem"))
+            hit = next((c for c in cands if c["key"] not in used and c["item"] == item and same(l, c)), None)
+            if hit:
+                out[l["id"]] = hit["key"]
+                used.add(hit["key"])
+    for l in lines:
+        if l["id"] in out:
             continue
-        item = " ".join(str(q.get("qbItem") or "").lower().split())
-        here = [w for w in work if id(w) not in used and item and " ".join(str(w.get("qbItem") or "").lower().split()) == item]
-        there = [x for x in qb_work if " ".join(str(x.get("qbItem") or "").lower().split()) == item]
+        item = _ikey(l.get("qbItem"))
+        here = [c for c in cands if c["key"] not in used and c["item"] == item]
+        there = [x for x in lines if x["id"] not in out and _ikey(x.get("qbItem")) == item]
         if len(here) == 1 and len(there) == 1:
-            used.add(id(here[0]))
-            pairs.append((here[0], q))
+            out[l["id"]] = here[0]["key"]
+            used.add(here[0]["key"])
+    return out
+
+
+def _qb_now(doc, inv, end_names, stamp):
+    """What a job follows in QuickBooks now (see above): (lines, materials,
+    figures, follows, materials the job was made from). `doc` is the estimate
+    it was made from (or the invoice it was filled from), `inv` its invoice
+    or None. An invoice line that is one of the estimate's carries `was`, that
+    line's id. `follows` names the invoice when it is the invoice."""
+    est, _w = _hub_estimate(doc, end_names, stamp)
+    lines, mats, figs, follows = est["work"], est["materials"], est["fromQb"], None
+    if inv is not None:
+        got, _w = _hub_estimate(inv, end_names, stamp)
+        was = _pair_by_reading(got["work"], [_reads_as(l) for l in lines])
+        if was and len(was) * 2 >= len(lines):
+            for l in got["work"]:
+                if l["id"] in was:
+                    l["was"] = was[l["id"]]
+            lines, mats, figs = got["work"], got["materials"], got["fromQb"]
+            follows = {"kind": "invoice", "id": str(inv.get("Id")), "docNumber": str(inv.get("DocNumber") or "")}
         else:
-            missing.append(q.get("title") or "Work")
-    changed = 0
-    for w, q in pairs:
-        if not _same_words(w.get("scope"), q.get("scope")):
-            w["scope"] = q.get("scope") or ""
-            changed += 1
-        if not str(w.get("title") or "").strip() and q.get("title"):
-            w["title"] = q["title"]
-            changed += 1
-    return work, changed, missing
+            print("quickbooks words: invoice %s does not read like estimate %s (%d of %d lines on it) -- the estimate is followed"
+                  % (inv.get("Id"), doc.get("Id"), len(was), len(lines)))
+    return lines, mats, figs, follows, est["materials"]
+
+
+def _follow_qb(have, lines, mats, figs, follows, base_mats):
+    """The job's estimate `have` (from QuickBooks) brought into line with what
+    QuickBooks has now (_qb_now). Returns (estimate, what was done, as words
+    for the log). Changes nothing on a job that already matches."""
+    fq = dict(have.get("fromQb") or {})
+    prior = fq.get("lines") if isinstance(fq.get("lines"), dict) else None
+    first = prior is None
+    prior = {k: v for k, v in (prior or {}).items() if isinstance(v, dict)}
+    work = [dict(w) for w in have.get("work") or [] if isinstance(w, dict)]
+    on_job = {w.get("id"): w for w in work if w.get("id")}
+    said = []
+
+    # Which of the job's lines each QuickBooks line is: where it was in
+    # QuickBooks last time, else its own id (or, on the invoice, the
+    # estimate line's), else what it says.
+    key_of, claimed = {}, set()
+    by_q = {str(v.get("q")): k for k, v in prior.items() if v.get("q")}
+    for l in lines:
+        for ref in (l["id"], l.get("was")):
+            if not ref:
+                continue
+            k = by_q.get(ref) or (ref if ref in on_job or ref in prior else None)
+            if k and k not in claimed:
+                key_of[l["id"]] = k
+                claimed.add(k)
+                break
+    left = [l for l in lines if l["id"] not in key_of]
+    if left:
+        cands = []
+        for w in work:
+            k = w.get("id")
+            if k in claimed or not QB_LINE.match(str(k or "")):
+                continue                # a line he added here is never QuickBooks'
+            p = prior.get(k) or {}
+            r = _reads_as(w)
+            cands.append({"key": k, "item": p.get("i", r["item"]), "cents": p.get("c", r["cents"]), "words": p.get("w", r["words"])})
+        cands += [{"key": k, "item": p.get("i", ""), "cents": p.get("c"), "words": p.get("w")}
+                  for k, p in prior.items() if k not in claimed and k not in on_job]
+        got = _pair_by_reading(left, cands)
+        key_of.update(got)
+        claimed.update(got.values())
+
+    # Gone from QuickBooks since the last look: off the job too.
+    now_keys = {key_of.get(l["id"]) for l in lines}
+    gone = [k for k in prior if k not in now_keys and k in on_job]
+    if gone:
+        work = [w for w in work if w.get("id") not in gone]
+        said.append("taken off (gone from QuickBooks): " + "; ".join(str(on_job[k].get("title") or "Work") for k in gone))
+
+    memory, after = {}, None
+    for l in lines:
+        k = key_of.get(l["id"])
+        if k is None:
+            # Never matched: new in QuickBooks -- unless this is the first
+            # look, when only a line on the invoice alone is (above).
+            k = l.get("was") or l["id"]
+            if first and not (follows and not l.get("was")):
+                said.append("not on the job, left off: " + str(l.get("title") or "Work"))
+                memory[k] = {"q": l["id"], "c": l.get("amountCents"), "i": _ikey(l.get("qbItem")), "w": _wsig(l.get("scope"))}
+                continue
+            line = {x: y for x, y in l.items() if x != "was"}
+            line["id"] = k
+            # After the line before it in QuickBooks; the first, before the
+            # first of QuickBooks' lines.
+            if after:
+                at = next((i + 1 for i, w in enumerate(work) if w.get("id") == after), None)
+            else:
+                at = next((i for i, w in enumerate(work) if QB_LINE.match(str(w.get("id") or ""))), None)
+            work.insert(at if at is not None else len(work), line)
+            said.append("added: %s (%s)" % (line.get("title") or "Work", _money_text((line.get("amountCents") or 0) / 100)))
+            after = k
+        elif k in on_job and k not in gone:
+            w = next(x for x in work if x.get("id") == k)
+            if str(w.get("scope") or "").strip() != str(l.get("scope") or "").strip():
+                w["scope"] = l.get("scope") or ""
+                said.append("words: " + str(w.get("title") or "Work"))
+            t, qt = str(w.get("title") or "").strip(), str(l.get("title") or "").strip()
+            if qt and (not t or (t != qt and PRICED_AS.sub("", t) == PRICED_AS.sub("", qt))):
+                w["title"] = qt
+            p = prior.get(k)
+            qc = l.get("amountCents")
+            if w.get("kind") == "amount" and w.get("amountCents") != qc and \
+                    (AMOUNTS_FOLLOW == "always" or p is None or p.get("c") != qc):
+                said.append("amount: %s %s -> %s" % (w.get("title") or "Work", _money_text((w.get("amountCents") or 0) / 100),
+                                                     _money_text((qc or 0) / 100)))
+                w["amountCents"] = qc
+            after = k
+        # else: taken off here; stays off.
+        memory[k] = {"q": l["id"], "c": l.get("amountCents"), "i": _ikey(l.get("qbItem")), "w": _wsig(l.get("scope"))}
+
+    # The materials: one named in QuickBooks the job never saw goes on.
+    have_mats = [dict(m) for m in have.get("materials") or [] if isinstance(m, dict)]
+    seen_m = fq.get("matsSeen") if isinstance(fq.get("matsSeen"), list) else [_ikey(m.get("name")) for m in base_mats]
+    seen_set = set(seen_m) | {_ikey(m.get("name")) for m in have_mats}
+    ids = {m.get("id") for m in have_mats}
+    added_m = []
+    for m in mats:
+        n = _ikey(m.get("name"))
+        if not n or n in seen_set:
+            continue
+        mid, i = m.get("id"), 1
+        while mid in ids:
+            mid = "%sa%d" % (m.get("id"), i)
+            i += 1
+        ids.add(mid)
+        seen_set.add(n)
+        have_mats.append(dict(m, id=mid))
+        added_m.append(m.get("name"))
+    if added_m:
+        said.append("materials added: " + "; ".join(added_m))
+        fq.pop("linkedAt", None)        # his device joins the new ones to Supplies (estimate.js linkFromQb)
+    seen_m = list(dict.fromkeys(list(seen_m) + [_ikey(m.get("name")) for m in mats if _ikey(m.get("name"))]))[-MATS_SEEN_MAX:]
+
+    # QuickBooks' figures: what pricing.js takes the estimate at.
+    fq["materialsCents"] = int(figs.get("materialsCents") or 0)
+    fq["taxCents"] = int(figs.get("taxCents") or 0)
+    fq["totalCents"] = sum(int(l.get("amountCents") or 0) for l in lines) + fq["materialsCents"] + fq["taxCents"]
+    if follows:
+        fq["follows"] = follows
+    else:
+        fq.pop("follows", None)
+    fq["lines"], fq["matsSeen"] = memory, seen_m
+    return dict(have, work=work, materials=have_mats, fromQb=fq), said
+
+
+def _pre_tax(est):
+    """An estimate from QuickBooks' price before tax, as pricing.js works it
+    out -- its lines' amounts and the materials figure -- or None when a line
+    is priced some other way here (its kind changed) or he chose to price it
+    by his own rules."""
+    fq = (est or {}).get("fromQb") or {}
+    if fq.get("reprice") or not isinstance(fq.get("materialsCents"), (int, float)):
+        return None
+    total = int(fq["materialsCents"])
+    for w in (est or {}).get("work") or []:
+        if w.get("kind") != "amount" or not isinstance(w.get("amountCents"), (int, float)):
+            return None
+        total += int(round(w["amountCents"]))
+    return total
+
+
+def _float(v):
+    try:
+        return float(str(v).replace(",", "").replace("$", "")) if str(v or "").strip() else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _price_patch(j, old, new):
+    """The job's price following its estimate's new total (app.js
+    syncJobPriceFromProposals: the estimate's total plus the job's added
+    costs), unless he typed his own -- one still equal to the old total was
+    the estimate's, and follows."""
+    a, b = _pre_tax(old), _pre_tax(new)
+    if b is None or a == b:
+        return {}
+    extra = sum(_float(x.get("materialCost")) + _float(x.get("laborCost"))
+                for x in j.get("additionalCosts") or [] if isinstance(x, dict))
+    if j.get("manualJobPrice") and not (a is not None and str(j.get("jobPrice") or "") == "%.2f" % (a / 100 + extra)):
+        return {}
+    return {"jobPrice": "%.2f" % (b / 100 + extra), "baseJobPrice": b / 100, "manualJobPrice": False}
 
 
 def keep_qb_words(jobs):
@@ -3164,15 +3396,16 @@ def keep_qb_words(jobs):
         t = _parse_time(looked.get(jid))
         if t and str(j.get("jobStatus") or "") == "complete" and now - t < LOOK_AGAIN:
             continue
-        cands.append((t.isoformat() if t else "", jid, src))
+        cands.append((t.isoformat() if t else "", jid, src, _invoice_too(j, env) if src[0] == "Estimate" else None))
     # Never looked at first, then the one looked at longest ago.
-    want = {jid: src for _t, jid, src in sorted(cands)[:WORDS_MAX]}
+    want = {jid: (src, inv) for _t, jid, src, inv in sorted(cands)[:WORDS_MAX]}
     if not want:
         return 0
     docs = {s.id: (s.to_dict() or {}) for s in db.get_all([db.collection("jobs").document(jid) for jid in want]) if s.exists}
     qb_docs, unasked = {}, set()
     for kind in ("Estimate", "Invoice"):
-        ids = {i for k, i in want.values() if k == kind}
+        ids = {i for (k, i), inv in want.values() if k == kind} | \
+              ({inv for _src, inv in want.values() if inv} if kind == "Invoice" else set())
         if ids:
             missed = set()
             qb_docs.update({(kind, i): d for i, d in _by_ids(kind, ids, missed).items()})
@@ -3180,18 +3413,22 @@ def keep_qb_words(jobs):
     # Every job QuickBooks answered for has had its look -- one whose
     # estimate is gone there too, or it would be first in line every hour.
     stamp_looked = now.isoformat()
-    for jid, src in want.items():
-        if src not in unasked:
+    def asked(src, inv):
+        return src not in unasked and not (inv and ("Invoice", inv) in unasked)
+    for jid, (src, inv) in want.items():
+        if asked(src, inv):
             looked[jid] = stamp_looked
     ref.set({realm: {"wordsLooked": looked}}, merge=True)
     end_names = _end_names()
     done = 0
-    for jid, (kind, qid) in want.items():
+    for jid, ((kind, qid), inv_id) in want.items():
         j, doc = docs.get(jid), qb_docs.get((kind, qid))
-        if j is None or doc is None:
+        if j is None or doc is None or not asked((kind, qid), inv_id):
             continue                    # gone, or QuickBooks did not answer: next hour
         try:
-            done += _words_for(db, jid, j, kind, qid, doc, env, end_names)
+            # An invoice QuickBooks no longer has: the estimate alone.
+            done += _words_for(db, jid, j, kind, qid, doc, env, end_names,
+                               inv_id, qb_docs.get(("Invoice", inv_id)) if inv_id else None)
         except ReconnectNeeded:
             raise
         except Exception as err:                        # noqa: BLE001 -- one job's trouble never stops the rest
@@ -3199,36 +3436,42 @@ def keep_qb_words(jobs):
     return done
 
 
-def _words_for(db, jid, j, kind, qid, doc, env, end_names):
+def _words_for(db, jid, j, kind, qid, doc, env, end_names, inv_id=None, inv=None):
     """keep_qb_words for one job: 1 when it was changed, else 0."""
     # Fresh from the database: the sweep's own list may be a moment old.
-    if j.get("deletedAt") or j.get("removeWhy") or _words_source(j, env) != (kind, qid):
+    if j.get("deletedAt") or j.get("removeWhy") or _words_source(j, env) != (kind, qid) or \
+            (_invoice_too(j, env) if kind == "Estimate" else None) != inv_id:
         return 0
     have = j.get("estimate") or {}
     stamp = _stamp()
+    patch, said = {}, []
     if not (have.get("work") or have.get("materials")):
         # Filled once, then saved over empty by a device: filled again.
         est, _words = _job_estimate(have, doc, end_names, stamp, invoice_id=qid if kind == "Invoice" else None)
         if not est["work"] and not est["materials"]:
             return 0
-        patch = {"estimate": est, "lastModified": stamp}
-        print("quickbooks words: %s's estimate was empty -- filled again from %s %s" % (jid, kind.lower(), qid))
-    else:
+        said.append("its estimate was empty -- filled again from %s %s" % (kind.lower(), qid))
+        patch["estimate"] = have = est
+    elif not have.get("fromQb"):
         # Only an estimate that came from QuickBooks is QuickBooks' words;
         # one he built here (and then joined to an estimate) is his.
-        if not have.get("fromQb"):
-            return 0
-        qb_est, _words = _hub_estimate(doc, end_names, stamp)
-        work, changed, missing = _words_onto(have.get("work"), qb_est["work"])
-        if missing:
-            print("quickbooks words: %s: QuickBooks %s %s has lines not on the job: %s"
-                  % (jid, kind.lower(), qid, "; ".join(missing)[:300]))
-        if not changed:
-            return 0
-        # The estimate as it is, only the lines' words changed.
-        est = dict(have, work=work)
-        patch = {"estimate": est, "lastModified": stamp}
-        print("quickbooks words: %s: %d line(s) given QuickBooks' words" % (jid, changed))
+        return 0
+    lines, mats, figs, follows, base_mats = _qb_now(doc, inv, end_names, stamp)
+    est, more = _follow_qb(have, lines, mats, figs, follows, base_mats)
+    if est != have or patch:
+        patch["estimate"] = est
+        patch.update(_price_patch(j, j.get("estimate") or {}, est))
+    if not patch:
+        return 0
+    said += more
+    print("quickbooks words: %s (%s %s%s): %s" % (jid, kind.lower(), qid, (", invoice %s" % follows["id"]) if follows else "",
+                                                   "; ".join(said)[:600] or "noted what QuickBooks has"))
+    # The crew's clock list says what the job is: its first lines' titles.
+    if not str(j.get("crewWhat") or "").strip() and _what(est) != _what(j.get("estimate") or {}):
+        board = db.collection("jobBoard").document(jid)
+        if board.get().exists:
+            board.set({"what": _what(est), "updatedAt": stamp}, merge=True)
+    patch["lastModified"] = stamp
     db.collection("jobs").document(jid).set(patch, merge=True)
     return 1
 

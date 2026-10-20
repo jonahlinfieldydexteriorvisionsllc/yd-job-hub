@@ -563,8 +563,7 @@
     const lines = est.work.filter(w => String(w.scope || '').trim() || String(w.title || '').trim());
     if (!lines.length) return '';
     const q = est.fromQb;
-    const from = q ? 'as written on QuickBooks ' + (q.kind === 'invoice' ? 'invoice' : 'estimate') +
-      (q.docNumber ? ' #' + esc(q.docNumber) : '') : 'as written on the estimate';
+    const from = q ? 'as written on QuickBooks ' + esc(qbDocName(q)) : 'as written on the estimate';
     return '<div class="est-words"><h4 class="est-h">🛠 The work <span class="muted">— ' + from + '</span></h4>' +
       lines.map(w => '<div class="est-words-line"><b>' + esc(w.title || 'Work') + '</b>' +
         (String(w.scope || '').trim() ? '<div class="est-words-text">' + esc(String(w.scope).trim()) + '</div>' : '') +
@@ -575,6 +574,24 @@
   // an id ewqb…): its words are QuickBooks', put back every hour by the
   // server (keep_qb_words), so they are shown, not edited, here.
   const fromQbLine = w => !!(est.fromQb && /^ewqb/.test(String(w.id || '')));
+  // Where the job's lines are written in QuickBooks now: its invoice once
+  // the server follows that (fromQb.follows -- a change order goes on the
+  // invoice), else the estimate or invoice it was made from.
+  function qbDocName(q) {
+    const f = q && q.follows;
+    if (f && f.kind === 'invoice') return 'invoice' + (f.docNumber ? ' #' + f.docNumber : '');
+    return (q && q.kind === 'invoice' ? 'invoice' : 'estimate') + (q && q.docNumber ? ' #' + q.docNumber : '');
+  }
+  // A QuickBooks line's amount changed here: his, kept -- with QuickBooks'
+  // beside it, so the two are never told apart only by the total. It goes
+  // back to QuickBooks' when it is changed there (fromQb.lines holds what
+  // QuickBooks had at the last look).
+  function qbAmountHtml(w) {
+    const seen = fromQbLine(w) && est.fromQb.lines && est.fromQb.lines[w.id];
+    const c = seen ? num(seen.c) : null;
+    if (c === null || c === num(w.amountCents)) return '';
+    return '<div class="est-qbamt">QuickBooks has ' + cents(c) + ' for this line — yours is kept until it’s changed there.</div>';
+  }
 
   // An estimate made in QuickBooks (quickbooks.py brought it in with the
   // job): where it came from, that its figures are the customer's, and the
@@ -584,7 +601,10 @@
     if (!q) return '';
     const what = q.kind === 'invoice' ? 'invoice' : 'estimate';
     const said = (q.docNumber ? 'QuickBooks ' + what + ' #' + esc(q.docNumber) : 'a QuickBooks ' + what) +
-      (q.acceptedDate ? ', accepted ' + esc(fmtDay(q.acceptedDate)) : '');
+      (q.acceptedDate ? ', accepted ' + esc(fmtDay(q.acceptedDate)) : '') +
+      // Invoiced since: the job's lines follow the invoice (a change order
+      // added there comes onto the job by itself).
+      (q.follows && q.follows.kind === 'invoice' ? '; its lines now follow ' + esc(qbDocName(q)) : '');
     if (q.reprice) {
       return '<div class="est-fromqb">From ' + said + '. Priced by your rules here, not as the customer accepted it' +
         (num(q.totalCents) !== null ? ' (' + cents(q.totalCents) + ')' : '') + '.' +
@@ -744,10 +764,10 @@
           WORK_KINDS.map(([k, n]) => '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + n + '</option>').join('') +
         '</select>' + moves('work', id, i, est.work.length, ro) + '</div>' +
       '<div class="est-nums">' + nums + '<div class="est-amt" id="estWA_' + id + '"></div></div>' +
-      extra +
+      (kind === 'amount' ? qbAmountHtml(w) : '') + extra +
       '<div class="est-wprofit" id="estWF_' + id + '"></div>' +
       (fromQbLine(w)
-        ? '<div class="est-scope-qb"><span class="muted">As written on the QuickBooks ' + (est.fromQb.kind === 'invoice' ? 'invoice' : 'estimate') +
+        ? '<div class="est-scope-qb"><span class="muted">As written on QuickBooks ' + esc(qbDocName(est.fromQb)) +
             ' — change it there; anything more for the crew goes in “Notes for the crew”.</span>' +
             '<div class="est-words-text">' + (String(w.scope || '').trim() ? esc(String(w.scope).trim()) : '<span class="muted">No description on this line in QuickBooks.</span>') + '</div></div>'
         : '<textarea rows="3" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
