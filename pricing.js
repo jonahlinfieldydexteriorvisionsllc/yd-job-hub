@@ -331,8 +331,11 @@
     if (costCents === null) { out.problems.push(it ? 'no price in Supplies' : 'no cost'); return out; }
     if (markupPct === null) { out.problems.push('no markup set for ' + kindName(cat) + ' (⋯ → Pricing rules)'); return out; }
     if (num(r.taxPct) === null) { out.problems.push('sales tax % not set'); return out; }
-    // A category can be set as not taxed when bought (a rental, say).
-    const tax = catRule.noTax ? 0 : pct(r.taxPct);
+    // A category can be set as not taxed when bought (a rental, say). A cost
+    // typed onto the line from a quote that already has the tax in it
+    // (m.taxIn, Jonah 20 Oct 2026: "the prices for the turf and the airdrain
+    // already include tax") is not taxed a second time.
+    const tax = catRule.noTax || (!it && m.taxIn) ? 0 : pct(r.taxPct);
     const landing = (1 + tax) * (1 + pct(vendorRule.processingPct));
     const rent = rental ? rentalCents(pr, orderQty) : null;
     if (rent) {

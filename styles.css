@@ -3946,6 +3946,8 @@
   .est-mtop { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:end; gap:6px 8px; }
   .est-mfields { display:flex; flex-wrap:wrap; gap:6px 8px; align-items:flex-end; min-width:0; }
   .est-mxs { display:contents; }
+  .est-mfields label.est-taxin { display:flex; flex-direction:row; align-items:center; gap:6px; font-size:12px; color:var(--muted); min-height:36px; }
+  .est-mfields label.est-taxin input { width:auto; min-width:0; margin:0; }
   /* "Fabric, restraint, geogrid & other hardscape" drew the Kind picker
      wide enough to push it onto a second row on its own. */
   .est-mxs select { max-width:190px; }
@@ -3966,6 +3968,12 @@
     .est-mend > .est-amt, .est-mend > .est-moves { order:1; }
     .est-mxs { order:2; display:flex; flex-wrap:wrap; gap:6px 8px; align-items:flex-end; flex:1 1 100%; }
     .est-mxs select { max-width:100%; }
+    /* A typed-in line's boxes stay inside its card: the kind list's longest
+       name made the row wider than a phone (the Kind box ran off the edge). */
+    .est-mxs { min-width:0; }
+    .est-mxs label { max-width:100%; min-width:0; }
+    .est-mxs label select { width:100%; }
+    .est-mxs label.est-taxin { flex:1 1 100%; min-height:44px; }
     /* No box scrolling inside the page: the notes, scopes and the message
        grow with what is in them (estimate.js grow), up to most of a screen. */
     #estimateWrap #estNotes, #estimateWrap #estMemo, #estimateWrap .est-scope, #estimateWrap .est-crewnote textarea { max-height:70vh; }

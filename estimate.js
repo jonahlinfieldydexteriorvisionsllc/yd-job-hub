@@ -1015,6 +1015,10 @@
         '<label><span>Qty' + (unit ? ' (' + esc(unit) + ')' : '') + '</span>' + on('qty', m.qty, '', '', 'decimal') + '</label>';
       extra = (it ? '' : '<label><span>Unit</span>' + on('unit', m.unit, 'each', '') + '</label>' +
           '<label><span>Cost each</span>' + on('cost', dollarsIn(m.costCents), '0.00', 'est-money', 'decimal') + '</label>' +
+          // A quote with the sales tax already in it: your tax on purchases
+          // is not added again (pricing.js).
+          '<label class="est-taxin"><input type="checkbox"' + (m.taxIn ? ' checked' : '') + dis +
+            ' onchange="estMat(\'' + id + '\', \'taxIn\', this.checked)"> Cost includes tax</label>' +
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
             kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
           '</select></label>') +
@@ -2626,6 +2630,7 @@
     if (field === 'qty') m.qty = num(v);
     else if (field === 'cost') m.costCents = toCents(v);
     else if (field === 'tree') m.tree = v || null;
+    else if (field === 'taxIn') { if (v) m.taxIn = true; else delete m.taxIn; }
     else if (field === 'delivery' || field === 'category') { m[field] = v; changed(true); return; }
     else if (field === 'name') { m.name = String(v); wordsChanged(); return; }
     // Which line the crew's page lists it under: nothing to re-price.
