@@ -76,6 +76,9 @@
   // and the part of it Claude is sent with each message (ask).
   const CHAT_KEEP = 60;
   const CHAT_SEND = 30;
+  // A message about the photos ("look at the pics of the back yard"): the
+  // site-visit photos go with it (ask).
+  const PHOTO_WORDS = /\b(photos?|pics?|pictures?|images?|snaps?|snapshots?)\b/i;
   // Each version put in QuickBooks, as it went: when, the total, each line's
   // amount, whether it was emailed -- so a customer ringing about "the
   // estimate you sent" can be answered from the job.
@@ -301,8 +304,11 @@
   function fromSaved(e) {
     const o = blank();
     o.notes = String(e.notes || '');
-    o.chat = (Array.isArray(e.chat) ? e.chat : []).filter(m => m && m.text)
-      .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed }));
+    o.chat = (Array.isArray(e.chat) ? e.chat : []).filter(m => m && m.text).map(m => {
+      const c = { role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed };
+      if (num(m.photos) > 0) c.photos = num(m.photos);       // site photos it looked at (apply)
+      return c;
+    });
     o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
     o.flags = Array.isArray(e.flags) ? e.flags.map(String) : [];
     o.memo = String(e.memo || '');
@@ -707,6 +713,7 @@
         est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + (i < older ? ' est-msg-old' : '') + '">' +
           '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
           '<div class="est-text">' + esc(m.text) + '</div>' +
+          (m.role === 'assistant' && m.photos ? '<div class="est-did">📷 Looked at ' + m.photos + ' site photo' + (m.photos === 1 ? '' : 's') + '</div>' : '') +
           (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate' +
             (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
             '</div>' : '') +
@@ -720,7 +727,7 @@
       (ro ? '' : '<div class="est-send">' +
         '<textarea id="estMsg" rows="2" placeholder="' + (snow
           ? 'Talk to Claude about this bid — “they want the back steps too”, “add the deck as an extra”'
-          : 'Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “4 crew-days”') + '" ' +
+          : 'Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “look at the photos of the slope”') + '" ' +
           'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
         '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (busyHere() ? '…' : 'Send') + '</button>' +
       '</div>' +
@@ -3313,6 +3320,11 @@
     building = jobId;
     if (jobId === currentJobId) render();
     const snowy = snowOf(e0, job.services, job.status, job.data ? job.data.qbEstimate : qb());
+    // The site-visit (Before) photos go with the first build and with a
+    // message about them (estimates.py _photos) -- not every message: each
+    // photo costs (Jonah, 21 Oct 2026).
+    const firstBuild = !(e0.work.length || e0.materials.length);
+    const photos = !snowy && (firstBuild || PHOTO_WORDS.test(String(asked.text || '')));
     try {
       const r = await window.YDClaude.post('/estimate/draft', {
         jobId: jobId,
@@ -3329,6 +3341,7 @@
         // This copy of the app can take just the lines that change (less for
         // Claude to write, so cheaper and quicker).
         patchOk: true,
+        photos: photos,
       });
       land(jobId, r);
     } catch (e) {
@@ -3359,8 +3372,12 @@
     }
     e.questions = (r.questions || []).map(String);
     e.flags = (r.flags || []).map(String);
-    e.chat.push({ role: 'assistant', text: String(r.reply || (did ? 'Updated the estimate.' : 'No change.')),
-                  at: new Date().toISOString(), changed: did });
+    const msg = { role: 'assistant', text: String(r.reply || (did ? 'Updated the estimate.' : 'No change.')),
+                  at: new Date().toISOString(), changed: did };
+    // How many site photos it looked at for this answer (none: left off --
+    // a field set to undefined would make the whole save fail).
+    if (num(r.photos) > 0) msg.photos = num(r.photos);
+    e.chat.push(msg);
     return did;
   }
 

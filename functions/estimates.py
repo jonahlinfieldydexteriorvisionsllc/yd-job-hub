@@ -31,6 +31,8 @@ Claude does not set. Nothing is kept on the server; the conversation is saved
 with the job.
 """
 
+import base64
+import io
 import json
 import re
 import time
@@ -463,6 +465,80 @@ def _patching(d):
     return d.get("patchOk") is True and bool((cur.get("work") or []) or (cur.get("materials") or []))
 
 
+# ----------------------------------------------------------------- photos
+#
+# Jonah (21 Oct 2026): Claude here should see the bid's photos -- "send the
+# before/site-visit photos when it builds the estimate and when I ask about
+# them, shrunk to keep the cost down". The app asks (photos: true) on the
+# first build and when his message is about the photos; the server reads the
+# job's Before photos itself from Storage (jobphotos.js), so a phone on one
+# bar never sends them a second time. Claude is paid for by the pixel: each
+# is shrunk to PHOTO_PX on its long side, about a third of what the 1600 px
+# copy the job keeps would cost.
+PHOTO_BUCKET = "yd-job-hub.firebasestorage.app"
+PHOTO_MAX = 8              # the newest Before photos sent with one message
+PHOTO_PX = 1024
+
+
+def _shrink(raw):
+    """A JPEG at most PHOTO_PX on its long side; the photo as it is when it
+    cannot be read (Claude then shrinks it itself, at the higher price)."""
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw)).convert("RGB")
+        im.thumbnail((PHOTO_PX, PHOTO_PX))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=80, optimize=True)
+        return buf.getvalue()
+    except Exception as e:                          # noqa: BLE001
+        print("estimates: photo sent unshrunk:", e)
+        return raw
+
+
+def _photos(db, job_id):
+    """The job's Before photos as [(caption, base64 JPEG)], the newest
+    PHOTO_MAX in the order they were taken, and how many it has in all.
+    Not ones someone asked to have deleted."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", str(job_id or "")):
+        return [], 0
+    recs = []
+    for s in db.collection("jobPhotos").where("jobId", "==", job_id).stream():
+        p = s.to_dict() or {}
+        if p.get("stage") == "before" and p.get("path") and not p.get("deleteAsked"):
+            recs.append(p)
+    recs.sort(key=lambda p: str(p.get("at") or ""))
+    if not recs:
+        return [], 0
+    from firebase_admin import storage
+    bucket = storage.bucket(PHOTO_BUCKET)
+    out = []
+    for p in recs[-PHOTO_MAX:]:
+        try:
+            raw = bucket.blob(p["path"]).download_as_bytes()
+        except Exception as e:                      # noqa: BLE001
+            print("estimates: photo not read:", p.get("path"), e)
+            continue
+        out.append((str(p.get("caption") or "").strip()[:200], base64.b64encode(_shrink(raw)).decode("ascii")))
+    return out, len(recs)
+
+
+def _photo_blocks(photos, total):
+    """The photos as the first part of the message: what they are, then each
+    with its caption."""
+    if not photos:
+        return []
+    more = " -- the newest %d of %d" % (len(photos), total) if total > len(photos) else ""
+    blocks = [{"type": "text", "text": (
+        "PHOTOS FROM THE SITE VISIT (%d%s), taken by Jonah or the crew. Use them with his notes to understand the "
+        "site -- what is there now, access for the loader, slopes, what has to come out, the state of what is being "
+        "replaced. Never take a measurement from a photo that his notes do not give: ask for it instead. Say what "
+        "you saw in them only where it matters to the estimate." % (len(photos), more))}]
+    for i, (caption, data) in enumerate(photos, 1):
+        blocks.append({"type": "text", "text": "Photo %d%s" % (i, ": " + caption if caption else "")})
+        blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}})
+    return blocks
+
+
 # ----------------------------------------------------------------- the call
 
 def _model(db):
@@ -516,9 +592,12 @@ def draft(client, d):
          "cache_control": {"type": "ephemeral", "ttl": "1h"}},
     ]
     first = len(d.get("chat") or []) <= 1
+    # The site-visit photos, when the app asks for them (the first build, or
+    # a message about them) -- never cached: they come after the rules.
+    photos, photos_total = _photos(db, d.get("jobId")) if d.get("photos") is True else ([], 0)
     with client.beta.messages.stream(
         model=model, max_tokens=64000, system=system,
-        messages=[{"role": "user", "content": _prompt(d)}],
+        messages=[{"role": "user", "content": _photo_blocks(photos, photos_total) + [{"type": "text", "text": _prompt(d)}]}],
         thinking={"type": "adaptive"},
         # The first build is the careful one; a follow-up ("make it 18x20")
         # should come back while he is still looking at the screen.
@@ -578,6 +657,7 @@ def draft(client, d):
             "spoilCuYd": max(0.0, round(_num(got.get("spoilCuYd")) or 0, 1)),
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
+            "photos": len(photos), "photosTotal": photos_total,
             "catalogueSize": len(supply_ids), "model": model}, resp.usage
 
 
