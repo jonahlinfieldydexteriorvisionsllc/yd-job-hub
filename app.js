@@ -3969,7 +3969,7 @@ function dashPlannedNet(d, price) {
   const e = d.estimate;
   if (!price || !e || !((e.work || []).length || (e.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return null;
   try {
-    const r = YDEstimate.priceSaved(e, d.city || '');
+    const r = YDEstimate.priceSaved(e, d.city || '', d._id);
     if (!r || !r.profit || !r.profit.complete) return null;
     return round2(price - r.profit.costCents / 100);
   } catch (err) { return null; }

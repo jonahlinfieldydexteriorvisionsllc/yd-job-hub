@@ -188,7 +188,7 @@
                   costs: {}, complete: true, problems: 0, sentAt: null, docNumber: null, nowCents: null, hand: {} };
     const sent = lastSent(est);
     const needNow = !(ctx && ctx.lean && sent && !wantNow);
-    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '') : null;
+    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '', job._id) : null;
     if (sent && !wantNow) {
       const c = sent.cost, byKind = c.byKind || {};
       const dumps = (num(byKind.dumpster) || 0) + (num(byKind.rental) || 0);

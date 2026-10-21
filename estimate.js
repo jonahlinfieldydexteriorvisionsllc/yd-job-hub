@@ -106,11 +106,25 @@
     return c || { items: {}, prices: {}, vendors: {}, pricesReady: false };
   }
   // city: the job's town for the delivery rate -- the form's, unless a job
-  // that is not open is being priced.
-  function ctx(city) {
+  // that is not open is being priced. e/jobId: for an estimate accepted in
+  // QuickBooks, whose lines carry no crew-days, the job's own days -- what
+  // its fuel is counted over (pricing.js fuel).
+  function ctx(city, e, jobId) {
     const c = catalog();
     return { rules: P().rules(), items: c.items, prices: c.prices, fuel: P().fuelPrices(), book: book,
-             city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim() };
+             city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim(),
+             jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null };
+  }
+  // A job's days: each day someone was clocked in on it, and each day still
+  // ahead on the Job schedule -- a drive from the shop and back for each
+  // (Jonah, 21 Oct 2026). null when there are none yet.
+  function jobDaysOf(jobId) {
+    const days = new Set();
+    try {
+      if (window.YDClock && YDClock.jobShifts) YDClock.jobShifts(jobId).forEach(s => { if (s.day) days.add(s.day); });
+      if (window.YDCalendar && YDCalendar.forJob) (YDCalendar.forJob(jobId, 180) || []).forEach(o => { if (o.jobDay && o.day) days.add(o.day); });
+    } catch (err) { /* the clock or the calendar not started yet: counted on the next pricing */ }
+    return days.size || null;
   }
   let last = null;            // the last worked-out price, for the totals and QuickBooks
   let priceRuns = 0;          // how many times it has been worked out (changed() compares)
@@ -121,7 +135,7 @@
     // address leaves it behind (the next miles lookup finds the new one).
     if (est.site && est.site.at !== siteKey()) est.site = null;
     priceRuns++;
-    last = P() ? P().price(est, ctx()) : null;
+    last = P() ? P().price(est, ctx(undefined, est, currentJobId)) : null;
     return last;
   }
   const busyHere = () => !!building && building === currentJobId;
@@ -198,7 +212,12 @@
     // job that is not open (Estimate vs actual, jobcosts.js): the same
     // pricing.js price() with the same Supplies, rules and price book --
     // never a second copy of the sums. null before pricing.js is there.
-    priceSaved: (saved, city) => (P() ? P().price(fromSaved(saved || {}), ctx(city == null ? '' : city)) : null),
+    // jobId: the job it is on (its days, for one accepted in QuickBooks).
+    priceSaved: (saved, city, jobId) => {
+      if (!P()) return null;
+      const e = fromSaved(saved || {});
+      return P().price(e, ctx(city == null ? '' : city, e, jobId));
+    },
     // The plant-care line under QuickBooks, after the job's plants or its
     // care email were settled on the Job tab (plantcare.js).
     redrawCare: () => renderQb(),
@@ -1191,8 +1210,8 @@
         (r.problems.length ? '<div class="est-problems"><b>Not priced yet:</b><ul>' + r.problems.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
           (toSource.length > 1 ? '<button class="btn btn-sm" onclick="estSource(\'all\')">🔎 Source all ' + toSource.length + ' unpriced materials</button>' : '') +
           '</div>' : '') +
-        ((r.noCost || []).length ? '<div class="est-problems"><b>No cost in Supplies yet</b> <span class="muted">— the price stays as ' +
-            'accepted; this is only for what the job makes and what to order. Pick each one’s item, or 🔎 Source it:</span><ul>' +
+        ((r.noCost || []).length ? '<div class="est-problems"><b>Costs not known yet</b> <span class="muted">— the price stays as ' +
+            'accepted; this is only for what the job makes and what to order. A material: pick its item, or 🔎 Source it:</span><ul>' +
             r.noCost.map(p => '<li>' + esc(p) + '</li>').join('') + '</ul>' +
           (toSource.length > 1 ? '<button class="btn btn-sm" onclick="estSource(\'all\')">🔎 Source all ' + toSource.length + '</button>' : '') +
           '</div>' : '') +
@@ -1448,30 +1467,33 @@
         (d.deliveryZone ? 'Zone: from the address' : 'Town: from the job') + '</option>' +
         towns.map(t => '<option' + (t === est.deliveryTown ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' : '') +
       '<b>' + delAmt + '</b></div>');
-    if (r.asAccepted) {
-      box.innerHTML = '<p class="hint">The customer accepted QuickBooks’ figures, so nothing goes on top of the price — no fuel, ' +
-        'dumpsters or markers. What MDS charges to deliver is counted in what the job makes:</p>' + rows.join('');
-      return;
-    }
-    // Fuel
+    // Fuel: a drive from the shop and back each day of the job, both trucks.
+    // The miles look themselves up from the job's address (autoTrip) -- no
+    // button to press (Jonah, 21 Oct 2026); a number typed in the box stays
+    // his. Accepted in QuickBooks: at cost, over the job's own days.
     const f = r.fuel, fu = est.fuel || {};
     const fp = P().fuelPrices() || {};
+    const hasAddr = !!(el('address') && el('address').value.trim());
+    const missed = !tripping && tripMissed[currentJobId] && tripMissed[currentJobId] === siteKey();
+    const milesNote = tripping ? 'Looking up the miles…'
+      : missed ? 'Couldn’t find this address on the map — type the miles. <button type="button" class="link-btn" onclick="estFindMiles(true)">Try again</button>'
+      : !hasAddr ? 'Add the job’s address and the miles fill in by themselves.'
+      : num(fu.miles) === null ? ''
+      : (fu.milesAt ? 'by road from your shop · ' : '') + 'there and back each day';
+    const fuelAmt = r.asAccepted ? (f.costCents ? 'cost ' + cents(f.costCents) : '') : (f.clientCents ? cents(f.clientCents) : '');
     rows.push('<div class="est-arow" data-auto="fuel">' + sw('fuel', 'Fuel') + '<span class="est-adesc">' + (off.fuel ? 'off' :
         '<label>Miles each way <input inputmode="decimal" value="' + esc(fu.miles == null ? '' : fu.miles) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'miles\', this.value)"></label>' +
-        // Looked up by itself once the job has an address (autoTrip); the
-        // button is for looking again.
-        '<button class="btn btn-sm est-miles-btn" onclick="estFindMiles(true)"' + (tripping ? ' disabled' : '') + '>' +
-          (tripping ? 'Looking…' : num(fu.miles) !== null ? 'Check again' : 'Find miles') + '</button>' +
-        (!tripping && num(fu.miles) === null && tripMissed[currentJobId] && tripMissed[currentJobId] === siteKey()
-          ? '<small class="est-miles-miss">Couldn’t find the miles by itself — type them, or press Find miles.</small>' : '') +
-        '<label>Days <input inputmode="decimal" placeholder="' + esc(f.days == null ? '' : f.days) + '" value="' + esc(fu.jobDays == null ? '' : fu.jobDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'jobDays\', this.value)"></label>' +
+        '<small class="est-miles-note">' + milesNote + '</small>' +
+        '<label>' + (r.asAccepted ? 'Days (clocked + on the Job schedule)' : 'Days') + ' <input inputmode="decimal" placeholder="' + esc(f.days == null ? '' : f.days) + '" value="' + esc(fu.jobDays == null ? '' : fu.jobDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'jobDays\', this.value)"></label>' +
         '<label>Loader days <input inputmode="decimal" placeholder="' + esc(f.bobcatDays == null ? '' : f.bobcatDays) + '" value="' + esc(fu.bobcatDays == null ? '' : fu.bobcatDays) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'bobcatDays\', this.value)"></label>' +
         '<label>Gas $/gal <input inputmode="decimal" placeholder="' + esc(num(fp.gasCents) !== null ? (fp.gasCents / 100).toFixed(2) : '') + '" value="' + esc(fu.gasCents == null ? '' : (fu.gasCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'gasCents\', this.value)"></label>' +
         '<label>Diesel <input inputmode="decimal" placeholder="' + esc(num(fp.dieselCents) !== null ? (fp.dieselCents / 100).toFixed(2) : '') + '" value="' + esc(fu.dieselCents == null ? '' : (fu.dieselCents / 100).toFixed(2)) + '"' + (ro ? ' disabled' : '') + ' oninput="estFuel(\'dieselCents\', this.value)"></label>' +
-        (fp.asOf ? '<small class="muted">prices week of ' + esc(fp.asOf) + '</small>' : '')) +
-      '</span><b>' + (f.clientCents ? cents(f.clientCents) : '') + '</b></div>');
-    // Dumpsters, planting package, markers: lines the rules added.
-    [['dumpsters', 'Dumpsters'], ['planting', 'Planting package'], ['markers', 'Layout markers']].forEach(([k, label]) => {
+        (fp.asOf ? '<small class="muted">prices week of ' + esc(fp.asOf) + '</small>' : '') +
+        (r.asAccepted && f.problems.length ? ' <span class="bad">⚠ ' + esc(f.problems.join(' · ')) + '</span>' : '')) +
+      '</span><b>' + fuelAmt + '</b></div>');
+    // Dumpsters, planting package, markers: lines the rules added (none on
+    // one accepted in QuickBooks: its list is the whole list).
+    if (!r.asAccepted) [['dumpsters', 'Dumpsters'], ['planting', 'Planting package'], ['markers', 'Layout markers']].forEach(([k, label]) => {
       const ls = r.added.filter(l => l.auto === k);
       const sum = ls.reduce((s, l) => s + l.clientCents, 0);
       const probs = [].concat.apply([], ls.map(l => l.problems));
@@ -1480,7 +1502,8 @@
         ls.map(l => esc(l.name) + ' — ' + esc(P().qtyText(l.orderQty, l.per))).join('; ') +
         (probs.length ? ' <span class="bad">⚠ ' + esc(probs.join(' · ')) + '</span>' : '')) + '</span><b>' + (sum ? cents(sum) : '') + '</b></div>');
     });
-    const html = rows.join('');
+    const html = (r.asAccepted ? '<p class="hint">The customer accepted QuickBooks’ figures, so nothing goes on top of the price. ' +
+      'What delivery and fuel cost you is counted in what the job makes:</p>' : '') + rows.join('');
     // Someone typing in one of the boxes here (miles, days, gas...): the
     // boxes stay as they are. Rebuilt, they took the focus -- and the iPad's
     // keyboard -- away at every key, and turned the 4 just typed for gas
@@ -1496,8 +1519,8 @@
         if (!live.contains(a)) { live.innerHTML = row.innerHTML; return; }
         const amt = live.querySelector(':scope > b'), now = row.querySelector(':scope > b');
         if (amt && now) amt.textContent = now.textContent;
-        const btn = live.querySelector('.est-miles-btn'), nb = row.querySelector('.est-miles-btn');
-        if (btn && nb) { btn.disabled = nb.disabled; btn.textContent = nb.textContent; }
+        const note = live.querySelector('.est-miles-note'), nn = row.querySelector('.est-miles-note');
+        if (note && nn) note.innerHTML = nn.innerHTML;
       });
       return;
     }
@@ -2611,6 +2634,12 @@
     if (!changes()) return;
     est.fuel = Object.assign({}, est.fuel);
     est.fuel[field] = /Cents$/.test(field) ? toCents(v) : num(v);
+    // Miles typed in are his, and stay when the address changes; the box
+    // emptied, they are looked up again.
+    if (field === 'miles') {
+      delete est.fuel.milesAt;
+      if (est.fuel.miles === null && currentJobId) { delete trippedFor[currentJobId]; autoTrip(); }
+    }
     changed(false);
   };
 
@@ -3476,9 +3505,9 @@
   // change it, with a signal -- and this address not looked up already this
   // visit (trippedFor). Never on an estimate the customer has said yes to:
   // its price is agreed, and miles landing on it would move it -- except
-  // one accepted in QuickBooks, whose price stands whatever is found: it
-  // still needs its map point for the MDS zone its delivery costs (21 Oct
-  // 2026), though not miles (fuel is not counted on it).
+  // one accepted in QuickBooks, whose price stands whatever is found: its
+  // delivery and fuel are counted at cost (21 Oct 2026), so it needs the
+  // map point (the MDS zone) and the miles all the same.
   function tripWanted() {
     // A snow bid has no trip: it is priced per push, not by the miles.
     if (snowNow()) return false;
@@ -3487,7 +3516,9 @@
     if (!window.YDClaude || !window.YDClaude.available()) return false;
     if (!(el('address') && el('address').value.trim())) return false;
     const needSite = zonedTown() && !(est.site && est.site.at === siteKey());
-    const needMiles = !fixed && num((est.fuel || {}).miles) === null && !(est.off || {}).fuel;
+    // Miles looked up for another address (it was changed) are looked up again.
+    const fu = est.fuel || {};
+    const needMiles = (num(fu.miles) === null || (fu.milesAt && fu.milesAt !== siteKey())) && !(est.off || {}).fuel;
     return (needSite || needMiles) && trippedFor[currentJobId] !== siteKey();
   }
   function autoTrip() {
@@ -3511,6 +3542,86 @@
     autoTrip();
   });
   window.addEventListener('online', () => { if (jobShown()) autoTrip(); });
+
+  // Every other job too: its miles and map point looked up by themselves,
+  // without anyone opening it (Jonah, 21 Oct 2026: "instead of pressing find
+  // miles on estimates the hub just does it automatically"). On the owner's
+  // device, one job at a time, each address once a visit, written through
+  // patchJob like a move on the board. The rules are tripWanted's: never an
+  // estimate the customer said yes to in Job Hub (its price would move), nor
+  // a snow bid, nor the open job (autoTrip does that one, on the screen).
+  const TRIPS_MAX = 30;           // lookups a visit, at most
+  const tripTried = {};           // job id -> the address looked up this visit
+  let tripsRunning = false, tripsTimer = null;
+  const siteKeyOf = d => ['address', 'city', 'zip'].map(f => String(d[f] || '').trim().toLowerCase()).join('|');
+  function zonedTownOf(city) {
+    const rates = (P().rules().delivery || {}).rates || {};
+    const base = P().placeKey(city || '');
+    return !!base && Object.keys(rates).some(k => P().placeKey(k).indexOf(base + ' ') === 0);
+  }
+  function settledJob(d) {
+    const q = d.qbEstimate, inv = d.qbInvoiceRef;
+    return !!(q && q.id && (['Accepted', 'Closed', 'Converted'].indexOf(q.status) !== -1 || (inv && inv.id)));
+  }
+  function tripNeed(id, d) {
+    if (!d || d.deletedAt || d.removeWhy || id === currentJobId || d.bidStage === 'lost') return false;
+    const e = d.estimate;
+    if (!e || typeof e !== 'object' || !((e.work || []).length || (e.materials || []).length)) return false;
+    if (snowOf(e, d.serviceTypes, d.jobStatus, d.qbEstimate) || !String(d.address || '').trim()) return false;
+    if (!P().asAccepted(e) && settledJob(d)) return false;
+    const key = siteKeyOf(d);
+    if (tripTried[id] === key) return false;
+    const fu = e.fuel || {};
+    const needMiles = (num(fu.miles) === null || (fu.milesAt && fu.milesAt !== key)) && !(e.off || {}).fuel;
+    const needSite = zonedTownOf(d.city) && !e.deliveryTown && !(e.site && e.site.at === key);
+    return needMiles || needSite;
+  }
+  function tripsForAll() {
+    clearTimeout(tripsTimer);
+    tripsTimer = setTimeout(runTrips, 4000);
+  }
+  async function runTrips() {
+    if (tripsRunning || !P() || !P().ready() || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
+    if (!navigator.onLine || !window.YDClaude || !window.YDClaude.available() || !window.YDSync || typeof getJobIndex !== 'function') return;
+    tripsRunning = true;
+    try {
+      let n = 0;
+      for (const j of getJobIndex()) {
+        if (n >= TRIPS_MAX || !navigator.onLine) break;
+        let d = null;
+        try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (err) {}
+        if (!tripNeed(j.id, d)) continue;
+        const key = siteKeyOf(d);
+        tripTried[j.id] = key;
+        n++;
+        let r = null;
+        try {
+          r = await window.YDClaude.post('/estimate/trip', { jobId: j.id, address: String(d.address).trim(),
+            city: String(d.city || '').trim(), state: String(d.state || '').trim(), zip: String(d.zip || '').trim() });
+        } catch (err) { continue; }
+        // Read again: the job may have changed, or been opened, meanwhile.
+        let now = null;
+        try { now = JSON.parse(readJobBlob(j.id) || 'null'); } catch (err) {}
+        if (!now || !now.estimate || j.id === currentJobId || siteKeyOf(now) !== key) continue;
+        const e = clone(now.estimate);
+        let got = false;
+        if (r && Array.isArray(r.point) && typeof r.point[0] === 'number' && typeof r.point[1] === 'number') {
+          e.site = { lat: r.point[0], lng: r.point[1], at: key, zip: /^\d{5}/.test(String(r.zip || '')) ? String(r.zip).slice(0, 5) : null,
+                     zipOk: e.site && e.site.at === key ? e.site.zipOk || null : null };
+          got = true;
+        }
+        const fu = e.fuel || {};
+        if (r && num(r.miles) !== null && (num(fu.miles) === null || (fu.milesAt && fu.milesAt !== key))) {
+          e.fuel = Object.assign({}, fu, { miles: Math.round(num(r.miles) * 10) / 10, milesAt: key });
+          got = true;
+        }
+        if (got) window.YDSync.patchJob(j.id, { estimate: e });
+        await new Promise(res => setTimeout(res, 1500));
+      }
+    } finally { tripsRunning = false; }
+  }
+  ['yd-jobs-changed', 'yd-pricing'].forEach(ev => document.addEventListener(ev, tripsForAll));
+  window.addEventListener('online', tripsForAll);
   // An automatic lookup that found no miles says so beside the box, rather
   // than leaving it empty with no word why. job id -> the address it was for.
   const tripMissed = {};
@@ -3546,8 +3657,12 @@
         if (zipWrong()) showToast('Check the ZIP: the map has this address in ' + est.site.zip, 6000);
       }
       if (num(r.miles) !== null) {
-        // Miles typed by hand stay; only an empty box is filled.
-        if (asked || num((est.fuel || {}).miles) === null) est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10 });
+        // Miles typed by hand stay; an empty box is filled, and miles looked
+        // up for the address before it changed are replaced (milesAt).
+        const was = est.fuel || {};
+        if (asked || num(was.miles) === null || (was.milesAt && was.milesAt !== key)) {
+          est.fuel = Object.assign({}, est.fuel, { miles: Math.round(num(r.miles) * 10) / 10, milesAt: key });
+        }
         changed(asked || !typingHere());
         // Found by itself: kept straight away, as Claude's answers are (land),
         // so opening another job a moment later does not lose them.

@@ -421,7 +421,10 @@
       if (zone && zone.key) { key = zone.key; out.deliveryZone = zone.key; }
     }
     if (!key) {
-      out.problems.push(zone ? town + ' has ' + zone.zones.length + ' MDS delivery zones — pick one on the estimate (or press Find miles)'
+      // The map point is looked up by itself once the job has an address
+      // (estimate.js autoTrip / tripsForAll); until it lands, or if the map
+      // cannot find it, the zone can be picked by hand.
+      out.problems.push(zone ? town + ' has ' + zone.zones.length + ' MDS delivery zones — waiting for the job’s map point (or pick the zone on the estimate)'
         : town ? 'no delivery rate for ' + town + ' — pick the town on the estimate, or get a quote'
         : 'no town on the job, so no delivery rate');
     }
@@ -444,8 +447,11 @@
   }
 
   // Fuel: both trucks there and back every day on site, the loader's diesel
-  // for the days it runs, marked up. Miles are one way, by road.
-  function fuel(est, ctx, autoDays) {
+  // for the days it runs, marked up. Miles are one way, by road, from the
+  // shop (Pricing rules → shop address), looked up by themselves.
+  // own: the job's own days stand in for crew-days (one accepted in
+  // QuickBooks has none) -- what the problem says when there are none.
+  function fuel(est, ctx, autoDays, own) {
     const r = ctx.rules, f = est.fuel || {}, rf = r.fuel || {}, prices = ctx.fuel || {};
     const out = { clientCents: 0, problems: [], miles: num(f.miles), days: first(f.jobDays, autoDays),
                   bobcatDays: null, gasCents: first(f.gasCents, prices.gasCents),
@@ -453,7 +459,10 @@
     out.bobcatDays = first(f.bobcatDays, out.days);
     if ((est.off || {}).fuel) return out;
     if (out.miles === null) { out.problems.push('miles to the job not known yet'); return out; }
-    if (!(out.days > 0)) { out.problems.push('no days on site yet (set the crew-days)'); return out; }
+    if (!(out.days > 0)) {
+      out.problems.push(own ? 'no days on the job yet (put it on the Job schedule, or type the days)' : 'no days on site yet (set the crew-days)');
+      return out;
+    }
     if (out.gasCents === null) { out.problems.push('no gas price'); return out; }
     const mpg = (rf.mpg || []).map(num).filter(n => n > 0);
     if (!mpg.length) { out.problems.push('truck mpg not set'); return out; }
@@ -628,9 +637,11 @@
   // stand -- the materials as the one amount it had, its tax, and nothing
   // added on top (no delivery, fuel or rule lines; its list is the whole
   // list). The lines are still worked out at cost from Supplies, for what
-  // the job makes and what to order -- and so is what MDS charges to bring
+  // the job makes and what to order -- and so are what MDS charges to bring
   // them (Jonah, 21 Oct 2026: "none of the materials contain delivery
-  // fees"): counted in what the job costs, never added to its price.
+  // fees") and the fuel, a drive from the shop and back each day of the job
+  // (worked on the clock, or on the Job schedule: ctx.jobDays): counted in
+  // what the job costs, never added to its price.
   // `reprice` = he chose to price it by his own rules instead.
   const asAccepted = est => !!(est && est.fromQb && typeof est.fromQb.materialsCents === 'number' && !est.fromQb.reprice);
 
@@ -645,7 +656,8 @@
     // site (fuel) and what the profit per day is counted over.
     const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
     const del = deliveries(all, est, ctx);
-    const fu = fixed ? { clientCents: 0, costCents: 0, problems: [], none: true } : fuel(est, ctx, crewDays > 0 ? Math.ceil(trim(crewDays)) : null);
+    const crewTrips = crewDays > 0 ? Math.ceil(trim(crewDays)) : null;
+    const fu = fixed ? fuel(est, ctx, num(ctx.jobDays) > 0 ? num(ctx.jobDays) : crewTrips, true) : fuel(est, ctx, crewTrips);
     const materialsCents = fixed ? est.fromQb.materialsCents
       : all.reduce((s, l) => s + l.clientCents, 0) + del.clientCents + fu.clientCents;
     const laborCents = work.reduce((s, w) => s + w.cents, 0);
@@ -657,7 +669,7 @@
     all.forEach(l => l.problems.forEach(p => (fixed ? noCost : problems).push((l.name || 'A material') + ': ' + p)));
     (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labor line') + ': ' + p)));
     del.problems.forEach(p => (fixed ? noCost : problems).push('Delivery: ' + p));
-    fu.problems.forEach(p => problems.push('Fuel: ' + p));
+    fu.problems.forEach(p => (fixed ? noCost : problems).push('Fuel: ' + p));
     // What the job makes once everything is paid for: the materials at what
     // they cost landed, delivery and fuel at cost, the crew at the crew-day
     // rate -- and that per crew-day. Only Jonah sees it. Not exact until every

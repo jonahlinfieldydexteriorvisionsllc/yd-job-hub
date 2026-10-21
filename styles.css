@@ -3964,6 +3964,9 @@
   .est-qb-diff b { color:var(--st-soon); }
   .est-invoice-quiet { margin-top:8px; font-size:13px; }
   .est-miles-miss { color:var(--st-soon); font-size:12px; }
+  /* Where the miles came from, beside the box (no button: they look themselves up). */
+  .est-miles-note { color:var(--muted); font-size:12px; align-self:center; }
+  .est-miles-note .link-btn { font-size:12px; }
   /* Phone-only pieces, hidden on a wider screen */
   .est-jump, .est-chat-older { display:none; }
   @media (max-width:720px) {
