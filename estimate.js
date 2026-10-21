@@ -79,6 +79,21 @@
   // A message about the photos ("look at the pics of the back yard"): the
   // site-visit photos go with it (ask).
   const PHOTO_WORDS = /\b(photos?|pics?|pictures?|images?|snaps?|snapshots?)\b/i;
+  // The photos he names by their number on the job (jobphotos.js): "photo 7",
+  // "photos 3 and 5", "pics 2-4", "picture #12". Only after a photo word, so
+  // "make it 18x20" or "estimate #1673" are never photos.
+  function photoNumsIn(text) {
+    const out = new Set();
+    const re = /\b(?:photos?|pics?|pictures?|images?|snaps?)\s*((?:#?\s*\d+\s*(?:,|&|and|-|–|to|through|thru)?\s*)+)/gi;
+    let m;
+    while ((m = re.exec(String(text || '')))) {
+      m[1].replace(/(\d+)\s*(?:-|–|to|through|thru)\s*#?\s*(\d+)/gi, (all, a, b) => {
+        for (let i = +a; i <= Math.min(+b, +a + 30); i++) out.add(i);
+        return ' ';
+      }).replace(/\d+/g, n => { out.add(+n); return ' '; });
+    }
+    return [...out].filter(n => n >= 1 && n <= 9999).sort((a, b) => a - b).slice(0, 40);
+  }
   // Each version put in QuickBooks, as it went: when, the total, each line's
   // amount, whether it was emailed -- so a customer ringing about "the
   // estimate you sent" can be answered from the job.
@@ -307,6 +322,7 @@
     o.chat = (Array.isArray(e.chat) ? e.chat : []).filter(m => m && m.text).map(m => {
       const c = { role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed };
       if (num(m.photos) > 0) c.photos = num(m.photos);       // site photos it looked at (apply)
+      if (Array.isArray(m.photoNums) && m.photoNums.length) c.photoNums = m.photoNums.filter(Number.isInteger).slice(0, 40);
       return c;
     });
     o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
@@ -691,6 +707,16 @@
     return out;
   }
 
+  // The photos an answer looked at, by their numbers on the job: "photo 7",
+  // "photos 3, 5 and 7", or for many "8 photos (12–19)".
+  function photosSeenText(m) {
+    const ns = Array.isArray(m.photoNums) ? m.photoNums : [];
+    if (!ns.length) return m.photos + ' site photo' + (m.photos === 1 ? '' : 's');
+    if (ns.length === 1) return 'photo ' + ns[0];
+    if (ns.length <= 6) return 'photos ' + ns.slice(0, -1).join(', ') + ' and ' + ns[ns.length - 1];
+    return ns.length + ' photos (' + ns[0] + '–' + ns[ns.length - 1] + ')';
+  }
+
   // On a phone the chat is part of the page, not a box of its own: its last
   // few messages, and the earlier ones behind a tap (styles.css hides them
   // there; a wider screen keeps the whole conversation in its scrolling box).
@@ -713,7 +739,7 @@
         est.chat.map((m, i) => '<div class="est-msg ' + (m.role === 'assistant' ? 'claude' : 'me') + (i < older ? ' est-msg-old' : '') + '">' +
           '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
           '<div class="est-text">' + esc(m.text) + '</div>' +
-          (m.role === 'assistant' && m.photos ? '<div class="est-did">📷 Looked at ' + m.photos + ' site photo' + (m.photos === 1 ? '' : 's') + '</div>' : '') +
+          (m.role === 'assistant' && m.photos ? '<div class="est-did">📷 Looked at ' + photosSeenText(m) + '</div>' : '') +
           (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate' +
             (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
             '</div>' : '') +
@@ -727,7 +753,7 @@
       (ro ? '' : '<div class="est-send">' +
         '<textarea id="estMsg" rows="2" placeholder="' + (snow
           ? 'Talk to Claude about this bid — “they want the back steps too”, “add the deck as an extra”'
-          : 'Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “look at the photos of the slope”') + '" ' +
+          : 'Talk to Claude about this estimate — “make it 18x20”, “add a fire pit”, “look at photo 7 — is that slope too steep?”') + '" ' +
           'oninput="estMsgInput(this.value)" onkeydown="estMsgKey(event)">' + esc(draftMsg) + '</textarea>' +
         '<button class="btn btn-filled" onclick="estSend()"' + (building ? ' disabled' : '') + '>' + (busyHere() ? '…' : 'Send') + '</button>' +
       '</div>' +
@@ -3320,11 +3346,13 @@
     building = jobId;
     if (jobId === currentJobId) render();
     const snowy = snowOf(e0, job.services, job.status, job.data ? job.data.qbEstimate : qb());
-    // The site-visit (Before) photos go with the first build and with a
-    // message about them (estimates.py _photos) -- not every message: each
-    // photo costs (Jonah, 21 Oct 2026).
+    // The newest site-visit (Before) photos go with the first build and with
+    // a message about the photos; the ones he names by number ("photo 7")
+    // with a message that names them (estimates.py _photos) -- not every
+    // message: each photo costs (Jonah, 21 Oct 2026).
     const firstBuild = !(e0.work.length || e0.materials.length);
-    const photos = !snowy && (firstBuild || PHOTO_WORDS.test(String(asked.text || '')));
+    const photoNums = snowy ? [] : photoNumsIn(asked.text);
+    const photos = !snowy && (firstBuild || (!photoNums.length && PHOTO_WORDS.test(String(asked.text || ''))));
     try {
       const r = await window.YDClaude.post('/estimate/draft', {
         jobId: jobId,
@@ -3342,6 +3370,7 @@
         // Claude to write, so cheaper and quicker).
         patchOk: true,
         photos: photos,
+        photoNums: photoNums,
       });
       land(jobId, r);
     } catch (e) {
@@ -3374,9 +3403,11 @@
     e.flags = (r.flags || []).map(String);
     const msg = { role: 'assistant', text: String(r.reply || (did ? 'Updated the estimate.' : 'No change.')),
                   at: new Date().toISOString(), changed: did };
-    // How many site photos it looked at for this answer (none: left off --
-    // a field set to undefined would make the whole save fail).
+    // Which of the job's photos it looked at for this answer, by number (none:
+    // left off -- a field set to undefined would make the whole save fail).
     if (num(r.photos) > 0) msg.photos = num(r.photos);
+    const seen = (Array.isArray(r.photoNums) ? r.photoNums : []).filter(Number.isInteger);
+    if (seen.length) msg.photoNums = seen;
     e.chat.push(msg);
     return did;
   }

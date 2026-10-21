@@ -138,6 +138,12 @@
         if (img.close) img.close();
         const item = { id: newId(), jobId: forJob, stage: stage, full: full.blob, thumb: thumb.blob,
                        w: full.w, h: full.h, by: myUid(), byName: myName(), at: new Date().toISOString() };
+        // Its number: the next after the job's highest -- known only once the
+        // job's photos have come (else it is given one later; see numbered).
+        if (forJob === jobId && loaded) {
+          const nums = ordered().map(p => p.num).filter(Number.isInteger);
+          item.num = (nums.length ? Math.max(...nums) : 0) + 1;
+        }
         queue[item.id] = item;
         status[item.id] = { progress: 0, preview: URL.createObjectURL(item.thumb) };
         await qSave(item);
@@ -200,11 +206,13 @@
   // published, say), the photo goes back on the queue with its addresses,
   // and the next try only files the record.
   function fileRecord(item, base) {
-    Promise.resolve(window.YDDb.put('jobPhotos', item.id, {
+    const rec = {
       jobId: item.jobId, stage: item.stage, caption: '',
       path: base + '.jpg', thumbPath: base + '_t.jpg', url: item.url, thumbUrl: item.thumbUrl,
       w: item.w, h: item.h, by: item.by, byName: item.byName, at: item.at, deleteAsked: null,
-    })).catch(e => {
+    };
+    if (Number.isInteger(item.num)) rec.num = item.num;     // left off when not known yet (never undefined)
+    Promise.resolve(window.YDDb.put('jobPhotos', item.id, rec)).catch(e => {
       console.warn('[photos] record not saved:', (e && e.code) || e);
       queue[item.id] = item;
       status[item.id] = { progress: 1, waiting: true, preview: URL.createObjectURL(item.thumb),
@@ -274,6 +282,38 @@
 
   // ------------------------------------------------------------- drawing
 
+  // Every photo on a job has its own number -- 1, 2, 3 in the order taken --
+  // so Jonah can say "look at photo 7", to Claude or to the crew (21 Oct
+  // 2026). It is kept on the record (`num`): a photo deleted later never
+  // renumbers the rest. A new photo takes the next after the job's highest;
+  // one that came in without a number (taken before the job's photos had
+  // loaded, or before 21 Oct) or with one an earlier photo already has is
+  // given the next free one, in the order taken -- shown so at once, and
+  // written by whoever may change jobs. estimates.py _numbered does the same.
+  const byTaken = (a, b) => String(a.at || '') < String(b.at || '') ? -1 : String(a.at || '') > String(b.at || '') ? 1
+    : a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  function numbered(list) {
+    const used = new Set(), num = {}, rest = [];
+    list.slice().sort(byTaken).forEach(p => {
+      const n = p.num;
+      if (Number.isInteger(n) && n >= 1 && !used.has(n)) { used.add(n); num[p.id] = n; }
+      else rest.push(p);
+    });
+    let next = used.size ? Math.max(...used) : 0;
+    rest.forEach(p => { num[p.id] = ++next; });
+    return num;
+  }
+  // Photos given a number only here (none kept, or one already taken): kept
+  // on their records, once the server has answered for the job.
+  function keepNumbers(list, num) {
+    if (!loaded || !changesJobs()) return;
+    list.forEach(p => {
+      if (p.pending || p.num === num[p.id] || !photos[p.id]) return;
+      photos[p.id].num = num[p.id];          // asked once, not at every redraw
+      patch(p.id, { num: num[p.id] });
+    });
+  }
+
   function ordered() {
     const list = Object.keys(photos).map(id => Object.assign({ id: id }, photos[id]));
     // Only this person's waiting photos: on a shared phone the next person
@@ -282,7 +322,9 @@
     Object.values(queue).forEach(q => {
       if (q.jobId === jobId && q.by === myUid() && !photos[q.id]) list.push(Object.assign({ pending: true }, q));
     });
-    return list.sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
+    const num = numbered(list);
+    keepNumbers(list, num);
+    return list.map(p => Object.assign(p, { num: num[p.id] })).sort(byTaken);
   }
   function thumbHtml(p) {
     const st = status[p.id] || {};
@@ -293,8 +335,9 @@
       : (p.deleteAsked ? '<span class="jp-asked">🗑 Delete?</span>' : '');
     // ro-ok: looking at a photo still works on a look-only Job screen (the
     // viewer offers changes only to whoever may make them).
-    return '<button type="button" class="jp-thumb ro-ok" onclick="jpOpen(\'' + safe(p.id) + '\')">' +
+    return '<button type="button" class="jp-thumb ro-ok" onclick="jpOpen(\'' + safe(p.id) + '\')" aria-label="Photo ' + p.num + '">' +
       (src ? '<img src="' + esc(src) + '" alt="" loading="lazy">' : '<span class="jp-noimg">📷</span>') + note +
+      '<span class="jp-num">' + p.num + '</span>' +
       '<span class="jp-by">' + esc(p.pending ? (p.byName || 'Me') : nameOf(p)) + '</span></button>';
   }
   function draw(container) {
@@ -361,6 +404,7 @@
     const ago = p.deleteAsked ? 'Delete asked by ' + esc(p.deleteAsked.name || 'the crew') + (p.deleteAsked.at ? ' · ' + esc(when(p.deleteAsked.at)) : '') : '';
     viewerEl().innerHTML =
       '<div class="jp-v-top">' +
+        '<b class="jp-v-num">Photo ' + p.num + '</b>' +
         '<span class="jp-chip jp-' + esc(p.stage) + '">' + esc(STAGE_NAME[p.stage] || '') + '</span>' +
         '<span class="jp-v-who">📷 ' + esc(p.pending ? (p.byName || 'Me') : nameOf(p)) + ' · ' + esc(when(p.at)) + '</span>' +
         '<button type="button" class="jp-v-x" onclick="jpClose()" aria-label="Close">&times;</button>' +

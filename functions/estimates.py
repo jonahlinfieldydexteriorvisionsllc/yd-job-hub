@@ -477,6 +477,7 @@ def _patching(d):
 # copy the job keeps would cost.
 PHOTO_BUCKET = "yd-job-hub.firebasestorage.app"
 PHOTO_MAX = 8              # the newest Before photos sent with one message
+PHOTO_NAMED_MAX = 12       # photos he names by number ("look at photo 7"), at most
 PHOTO_PX = 1024
 
 
@@ -495,48 +496,93 @@ def _shrink(raw):
         return raw
 
 
-def _photos(db, job_id):
-    """The job's Before photos as [(caption, base64 JPEG)], the newest
-    PHOTO_MAX in the order they were taken, and how many it has in all.
-    Not ones someone asked to have deleted."""
+def _numbered(recs):
+    """Each photo's number on its job (jobphotos.js numbered): its own `num`,
+    unless an earlier photo has it; the rest after the highest, in the order
+    taken. recs carry their record id as `_id`."""
+    used, out, rest = set(), {}, []
+    for p in sorted(recs, key=lambda p: (str(p.get("at") or ""), str(p.get("_id") or ""))):
+        n = p.get("num")
+        if isinstance(n, (int, float)) and not isinstance(n, bool) and n == int(n) and n >= 1 and int(n) not in used:
+            used.add(int(n))
+            out[p["_id"]] = int(n)
+        else:
+            rest.append(p)
+    nxt = max(used) if used else 0
+    for p in rest:
+        nxt += 1
+        out[p["_id"]] = nxt
+    return out
+
+
+def _photos(db, job_id, newest=True, nums=()):
+    """The job's photos to show Claude, as [(number, stage, caption, base64
+    JPEG)] in number order: the ones he named by number (any stage), and --
+    `newest` -- the newest PHOTO_MAX Before photos. Not ones someone asked to
+    have deleted. Also: how many Before photos the job has, and the numbers he
+    named that it has no photo for."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", str(job_id or "")):
-        return [], 0
+        return [], 0, []
     recs = []
     for s in db.collection("jobPhotos").where("jobId", "==", job_id).stream():
         p = s.to_dict() or {}
-        if p.get("stage") == "before" and p.get("path") and not p.get("deleteAsked"):
-            recs.append(p)
-    recs.sort(key=lambda p: str(p.get("at") or ""))
-    if not recs:
-        return [], 0
+        p["_id"] = s.id
+        recs.append(p)
+    number = _numbered(recs)
+    usable = [p for p in recs if p.get("path") and not p.get("deleteAsked")]
+    before = sorted([p for p in usable if p.get("stage") == "before"], key=lambda p: number[p["_id"]])
+    want = {number[p["_id"]]: p for p in usable if number[p["_id"]] in set(nums)}
+    missing = sorted(n for n in set(nums) if n not in want)
+    picked = dict(list(sorted(want.items()))[:PHOTO_NAMED_MAX])
+    if newest:
+        for p in before[-PHOTO_MAX:]:
+            picked.setdefault(number[p["_id"]], p)
+    if not picked:
+        return [], len(before), missing
     from firebase_admin import storage
     bucket = storage.bucket(PHOTO_BUCKET)
     out = []
-    for p in recs[-PHOTO_MAX:]:
+    for n in sorted(picked):
+        p = picked[n]
         try:
             raw = bucket.blob(p["path"]).download_as_bytes()
         except Exception as e:                      # noqa: BLE001
             print("estimates: photo not read:", p.get("path"), e)
             continue
-        out.append((str(p.get("caption") or "").strip()[:200], base64.b64encode(_shrink(raw)).decode("ascii")))
-    return out, len(recs)
+        out.append((n, str(p.get("stage") or ""), str(p.get("caption") or "").strip()[:200],
+                    base64.b64encode(_shrink(raw)).decode("ascii")))
+    return out, len(before), missing
 
 
-def _photo_blocks(photos, total):
+def _photo_blocks(photos, total, newest=True, missing=()):
     """The photos as the first part of the message: what they are, then each
-    with its caption."""
-    if not photos:
+    under its number on the job (Jonah calls them by it), with its caption."""
+    if not photos and not missing:
         return []
-    more = " -- the newest %d of %d" % (len(photos), total) if total > len(photos) else ""
-    blocks = [{"type": "text", "text": (
-        "PHOTOS FROM THE SITE VISIT (%d%s), taken by Jonah or the crew. Use them with his notes to understand the "
-        "site -- what is there now, access for the loader, slopes, what has to come out, the state of what is being "
-        "replaced. Never take a measurement from a photo that his notes do not give: ask for it instead. Say what "
-        "you saw in them only where it matters to the estimate." % (len(photos), more))}]
-    for i, (caption, data) in enumerate(photos, 1):
-        blocks.append({"type": "text", "text": "Photo %d%s" % (i, ": " + caption if caption else "")})
+    shown = sum(1 for p in photos if p[1] == "before")
+    more = " -- the newest %d of its %d Before photos" % (shown, total) if newest and total > shown else ""
+    text = ("PHOTOS OF THE JOB (%d%s), taken by Jonah or the crew, each under its number on the job -- Jonah refers "
+            "to them by it (\"photo 7\"). Use them with his notes to understand the site -- what is there now, "
+            "access for the loader, slopes, what has to come out, the state of what is being replaced. Never take a "
+            "measurement from a photo that his notes do not give: ask for it instead. Say what you saw in them only "
+            "where it matters to the estimate." % (len(photos), more))
+    if missing:
+        text += " There is no photo %s on this job." % ", ".join(str(n) for n in missing)
+    blocks = [{"type": "text", "text": text}]
+    for n, stage, caption, data in photos:
+        label = "Photo %d%s%s" % (n, " (%s)" % stage.capitalize() if stage else "", ": " + caption if caption else "")
+        blocks.append({"type": "text", "text": label})
         blocks.append({"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}})
     return blocks
+
+
+def _photo_nums(v):
+    """The photo numbers the app read in his message (estimate.js photoNumsIn)."""
+    out = []
+    for x in (v if isinstance(v, list) else [])[:40]:
+        if isinstance(x, (int, float)) and not isinstance(x, bool) and x == int(x) and 1 <= x <= 9999:
+            out.append(int(x))
+    return sorted(set(out))
 
 
 # ----------------------------------------------------------------- the call
@@ -592,12 +638,15 @@ def draft(client, d):
          "cache_control": {"type": "ephemeral", "ttl": "1h"}},
     ]
     first = len(d.get("chat") or []) <= 1
-    # The site-visit photos, when the app asks for them (the first build, or
-    # a message about them) -- never cached: they come after the rules.
-    photos, photos_total = _photos(db, d.get("jobId")) if d.get("photos") is True else ([], 0)
+    # The photos, when the app asks for them: the newest site-visit ones (the
+    # first build, or a message about the photos) and any he names by number
+    # -- never cached: they come after the rules.
+    newest, nums = d.get("photos") is True, _photo_nums(d.get("photoNums"))
+    photos, photos_total, missing = _photos(db, d.get("jobId"), newest, nums) if newest or nums else ([], 0, [])
     with client.beta.messages.stream(
         model=model, max_tokens=64000, system=system,
-        messages=[{"role": "user", "content": _photo_blocks(photos, photos_total) + [{"type": "text", "text": _prompt(d)}]}],
+        messages=[{"role": "user", "content": _photo_blocks(photos, photos_total, newest, missing) +
+                   [{"type": "text", "text": _prompt(d)}]}],
         thinking={"type": "adaptive"},
         # The first build is the careful one; a follow-up ("make it 18x20")
         # should come back while he is still looking at the screen.
@@ -657,7 +706,7 @@ def draft(client, d):
             "spoilCuYd": max(0.0, round(_num(got.get("spoilCuYd")) or 0, 1)),
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
-            "photos": len(photos), "photosTotal": photos_total,
+            "photos": len(photos), "photosTotal": photos_total, "photoNums": [p[0] for p in photos],
             "catalogueSize": len(supply_ids), "model": model}, resp.usage
 
 
