@@ -1730,6 +1730,44 @@ function orderFromEstimate(list, lines) {
   });
   return out;
 }
+// A line made from the estimate before its material was joined to Supplies
+// is in the estimate's words and units, with no supplier: a QuickBooks job's
+// "215 square feet" of "4.5oz barrier fabric" (the list was filled two
+// minutes before the join, 15 Oct 2026) came to $19,608 at the roll price.
+// Once the material is joined -- or moved to another item -- its line, not
+// yet ordered, is made again from the estimate: the item, its supplier, and
+// how many to buy in what it is sold by. Lines typed by hand and lines
+// already ordered are left as they are. picks: [{name, sid, was}], the
+// materials just joined (was: the item it had before). null = nothing moved.
+function rejoinOrderLines(list, lines, picks) {
+  const fresh = {};
+  lines.forEach(l => { if (l.supplyId) fresh[l.supplyId] = l; });
+  const still = sid => lines.some(l => l.supplyId === sid);
+  const have = {};
+  list.forEach(it => { if (it && it.fromEstimate && it.supplyId) have[it.supplyId] = true; });
+  const pickFor = it => it && it.fromEstimate && !it.ordered ? picks.find(p => fresh[p.sid] && p.sid !== it.supplyId &&
+    (it.supplyId ? !!p.was && it.supplyId === p.was && !still(p.was)
+      : String(it.name || '').toLowerCase().trim() === String(p.name || '').toLowerCase().trim())) : null;
+  let moved = false;
+  const out = [];
+  list.forEach(it => {
+    const p = pickFor(it);
+    if (!p) { out.push(it); return; }
+    moved = true;
+    if (have[p.sid]) return;                 // already on the list under its item
+    have[p.sid] = true;
+    out.push(Object.assign({}, it, orderFields(fresh[p.sid])));
+  });
+  return moved ? out : null;
+}
+// A material joined on the open job's estimate (estimate.js): its line here follows.
+function ydOrderJoined(name, sid, was) {
+  if (!orderItems.length || jobsReadOnly() || !window.YDEstimate || !orderReady()) return;
+  const out = rejoinOrderLines(orderItems, window.YDEstimate.orderLines(), [{ name: name, sid: sid, was: was || null }]);
+  if (!out) return;
+  orderItems = out;
+  renderOrderList(); markDirty();
+}
 // Order quantities need the pricing rules (waste) and Supplies (what one of
 // a thing covers, what it is sold by). Booked straight after the app opens,
 // before they have arrived, the list would come out in takeoff units -- so it
@@ -1831,9 +1869,18 @@ function fillFromQb(id, data) {
       // nothing the estimate doesn't: it is made again from the estimate.
       const bareOrder = (data.orderItems || []).every(o => o && !o.ordered && !o.supplyId && !o.fromEstimate &&
         !String(o.quantity || '').trim() && !(typeof o.qty === 'number'));
-      if (bareOrder && !isBidStatus(data.jobStatus)) {
+      if (!isBidStatus(data.jobStatus)) {
         const lines = window.YDEstimate.orderLines(linked, data.city || '');
-        if (lines.length) patch.orderItems = orderFromEstimate([], lines);
+        if (bareOrder && lines.length) patch.orderItems = orderFromEstimate([], lines);
+        else if (lines.length) {
+          // A list already filled from the estimate before the join: the
+          // lines just joined are made again in what they are sold by.
+          // linkFromQb keeps the materials in their places: the same index is the same line.
+          const picks = (linked.materials || []).filter((m, i) => m && m.supplyId && !((e.materials || [])[i] || {}).supplyId)
+            .map(m => ({ name: m.name, sid: m.supplyId }));
+          const out = picks.length ? rejoinOrderLines(data.orderItems || [], lines, picks) : null;
+          if (out) patch.orderItems = out;
+        }
       }
       if (window.YDSync) window.YDSync.patchJob(id, patch);
     } finally { qbFilling.delete(id); }
@@ -1934,9 +1981,80 @@ function orderCost(it, cat) {
     return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: false, bags: bags, usesLb: q,
              cents: Math.round(bags * pr.cents) };
   }
-  const unitOff = !it.fromEstimate && typed.trim() !== '' && per !== '' && typed.indexOf(words(per)) === -1;
+  // A line made from the estimate says its own unit (`per`): the price's,
+  // unless the line was made before its material was joined to Supplies.
+  const U = window.YDMatch ? YDMatch.unitKey : (s => String(s || '').toLowerCase().trim());
+  const lineUnit = it.fromEstimate ? String(it.per || '').trim() : orderUnitWords(it.quantity);
+  const item = cat.items[sid];
+  const cov = Number(item.coverage) > 0 ? Number(item.coverage) : null;
+  // A bare number of something sold in packs of a count -- "81" fabric pins,
+  // sold by the box of 500 -- could be pins or boxes: it is asked, not
+  // taken as 81 boxes (one job's came to $5,265, 21 Oct 2026). A bare
+  // number of rolls or strips (covering an area or a length) is still rolls.
+  const MEASURES = ['sqft', 'lf', 'yd', 'ton', 'cuft', 'gal', 'lb', 'day'];
+  const packOfCount = !!(cov && cov > 1 && item.takeoffUnit && MEASURES.indexOf(U(item.takeoffUnit)) === -1);
+  const unitOff = per !== '' && (it.fromEstimate
+    ? lineUnit !== '' && U(lineUnit) !== U(per) && !(isDayUnit(lineUnit) && per === 'day')
+    : typed.trim() !== '' ? typed.indexOf(words(per)) === -1 && U(lineUnit) !== U(per) : packOfCount && U(per) !== U(item.takeoffUnit));
+  // In what one of it covers -- square feet of fabric sold by the roll, feet
+  // of edging sold in 20' strips: how many to buy, the way the estimate
+  // rounds them. Any other unit that is not the price's is said, never
+  // multiplied (21 Oct 2026: 215 sq ft × $91.20 a roll = $19,608).
+  if (unitOff && cov && q !== null && q > 0 && lineUnit && U(lineUnit) === U(item.takeoffUnit)) {
+    const buy = window.YDPricing ? YDPricing.roundUp(q / cov, per) : Math.ceil(q / cov - 1e-9);
+    return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: false, buy: buy,
+             cents: Math.round(buy * pr.cents) };
+  }
   return { sid: sid, each: pr.cents, per: per, year: pr.year || null, unitOff: unitOff,
            cents: q === null || unitOff ? null : Math.round(q * pr.cents) };
+}
+// What bringing the lines still to order costs us, by supplier: the
+// estimate's own delivery sums (estimate.js orderDelivery) on the order --
+// a truck per bulk or pallet material from a supplier that delivers by town
+// (MDS). Jonah, 21 Oct 2026: "none of the materials contain delivery fees".
+// saved: the job's estimate when it is not the open one.
+// -> { vendorId: {cents, loads, names, problems} }
+function orderDeliveries(items, cat, saved, city) {
+  if (!window.YDEstimate || !window.YDEstimate.orderDelivery) return {};
+  const lines = items.filter(it => it && !it.ordered).map(it => {
+    const c = orderCost(it, cat);
+    return { supplyId: c.sid, qty: c.buy || c.bags || (c.unitOff ? null : orderQtyOf(it)) };
+  }).filter(l => l.supplyId && l.qty > 0);
+  const d = lines.length ? window.YDEstimate.orderDelivery(lines, saved, city) : null;
+  if (!d) return {};
+  // Only what stops a delivery being priced (no town, a zone to pick).
+  const problems = d.problems.filter(p => /town|rate|zone/.test(p));
+  const out = {};
+  d.lines.forEach(l => {
+    const v = (cat.items[l.supplyId] || {}).vendorId || '';
+    const o = out[v] = out[v] || { cents: 0, loads: 0, names: [], problems: problems };
+    o.cents += l.costCents || 0;
+    o.loads += l.loads;
+    o.names.push(l.name + (l.loads > 1 ? ' ×' + l.loads : '') + (l.pallet ? ' + pallet' : ''));
+  });
+  return out;
+}
+// Opening the job looks up where it is (estimate.js autoTrip), which finds a
+// Madison zone by itself; the problem says what else would.
+function orderDeliveryRow(dv) {
+  if (!dv || !dv.loads) return '';
+  const stuck = dv.problems.length > 0;
+  return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivery — ' + dv.loads + ' load' + (dv.loads === 1 ? '' : 's') +
+    ': ' + esc(dv.names.join(', ')) + '<br>' +
+    (stuck ? '<span class="cr-cost warn-text">Not priced yet: ' + esc(dv.problems.join(' · ')) + '</span>'
+      : '<span class="cr-cost">their delivery charge = <b>' + fmtMoney(dv.cents / 100) + '</b></span>') + '</span></div>';
+}
+// The unit a quantity typed by hand is in: "632 sq ft" -> "sq ft",
+// "approx. 1.10 tons" -> "tons", "376 sq ft (4 pallets)" -> "sq ft".
+function orderUnitWords(s) {
+  return String(s || '').toLowerCase().replace(/^\s*(approx\.?|about|~)?\s*[\d.,\/]+\s*/, '').replace(/\(.*$/, '').trim();
+}
+// How much of a line to ask the supplier for: what to buy when the line is
+// in what the item covers ("1 roll (for 215 square feet)"), else as typed.
+function orderAmountText(it, cat) {
+  const c = cat && cat.prices && Object.keys(cat.prices).length ? orderCost(it, cat) : null;
+  if (c && c.buy && window.YDPricing) return YDPricing.qtyText(c.buy, c.per) + ' (for ' + String(it.quantity || '').trim() + ')';
+  return String(it.quantity || '');
 }
 function linkOrderItem(id, sid) {
   const it = orderItems.find(m => m.id === id);
@@ -1952,8 +2070,7 @@ function linkOrderItem(id, sid) {
 // One supplier's part of the order as text, to paste into an email or a text.
 function supplierOrder(vid) {
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
-  const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid)
-    .map(it => (it.quantity ? it.quantity + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : ''));
+  const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid).map(it => orderLineText(it, cat));
   const v = (cat.vendors || {})[vid] || {};
   const f = id => ((document.getElementById(id) || {}).value || '').trim();
   const where = [f('address'), [f('city'), f('state')].filter(Boolean).join(', ')].filter(Boolean).join(', ');
@@ -2020,6 +2137,7 @@ function renderOrderList() {
     const costLine = !c ? '' : c.cents !== null
       ? '<span class="cr-cost">' + (c.bags ? esc(window.YDPricing ? YDPricing.qtyText(c.bags, c.per || 'bag') : c.bags + ' ' + (c.per || 'bag')) +
           ' to buy (uses ' + esc(String(c.usesLb)) + ' lb) × ' : '') +
+        (c.buy ? esc(YDPricing.qtyText(c.buy, c.per)) + ' to buy for ' + esc(String(it.quantity || '').trim()) + ' × ' : '') +
         fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
         (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
       : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity</span>'
@@ -2064,19 +2182,24 @@ function renderOrderList() {
   const grouped = keys.length > 1 || keys[0] !== '';
   // A supplier ordered from online: its site, and how long it takes to come.
   const siteOf = v => (window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl(cat.vendors[v]) : '');
+  // What the supplier charges to bring what is still to order.
+  const dels = prices ? orderDeliveries(orderItems, cat) : {};
+  let delSum = 0;
   wrap.innerHTML = keys.map(v => {
     const list = groups[v];
     const left = list.filter(it => !it.ordered).length;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
+    if (dels[v]) delSum += dels[v].cents;
     return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
         '<span class="muted">' + left + ' to order' + (lead && left ? ' · takes ' + esc(lead) : '') + '</span>' +
         (v && left ? '<button class="link-btn ro-ok" onclick="copySupplierOrder(\'' + ordId(v) + '\')">📋 Copy the order</button>' +
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + ordId(v) + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +
-      list.map(row).join('');
+      list.map(row).join('') + orderDeliveryRow(dels[v]);
   }).join('') +
-    (prices && (sum || unpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney(sum / 100) + '</b> before tax' +
+    (prices && (sum || unpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney((sum + delSum) / 100) + '</b> before tax' +
+      (delSum ? ', with ' + fmtMoney(delSum / 100) + ' of delivery' : '') +
       (unpriced ? ' · ' + unpriced + ' line' + (unpriced === 1 ? '' : 's') + ' without a price' : '') +
       '<div class="muted">Your cost from Supplies — only you see this, and it isn’t in the job’s numbers.</div></div>' : '');
   wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
@@ -2136,9 +2259,11 @@ function orderJobWhere(d) {
 function orderJobTitle(j) {
   return (j.d.customerName || 'Untitled') + (String(j.d.estimateNumber || '').trim() ? ' #' + String(j.d.estimateNumber).trim() : '');
 }
-// One line as an order reads it: "3 tons — Road gravel (special order)".
-function orderLineText(it) {
-  return (it.quantity ? it.quantity + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : '');
+// One line as an order reads it: "3 tons — Road gravel (special order)";
+// "1 roll (for 215 square feet) — …" when the line is in what it covers.
+function orderLineText(it, cat) {
+  const amt = orderAmountText(it, cat);
+  return (amt ? amt + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : '');
 }
 // The blocks: supplier id ('' = no supplier yet) -> [{ job, lines }], in
 // the jobs' order (soonest first).
@@ -2183,6 +2308,11 @@ function renderOrdersOverview() {
   // so it can go on one call -- but as two lines, for two places.
   const sameKey = it => orderSupply(it, cat) || (window.YDMatch ? YDMatch.keyOf(it.name) : String(it.name).toLowerCase().trim());
   let grand = 0, grandUnpriced = 0;
+  // Each job's delivery from each supplier (the open job's from the form).
+  const dels = {};
+  if (prices) jobs.forEach(j => {
+    dels[j.id] = orderDeliveries(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city);
+  });
   const html = keys.map(v => {
     const blocks = groups[v];
     const onJobs = {};
@@ -2197,7 +2327,8 @@ function renderOrdersOverview() {
         const c = prices ? orderCost(it, cat) : null;
         if (c) { if (c.cents !== null) sum += c.cents; else unpriced++; }
         const cost = !c ? '' : c.cents !== null
-          ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
+          ? '<span class="cr-cost">' + (c.buy ? esc(YDPricing.qtyText(c.buy, c.per)) + ' to buy × ' : '') +
+            fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
             (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
           : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity on the job</span>'
           : c.sid && typeof c.each === 'number' ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' — how many? (on the job)</span>'
@@ -2218,10 +2349,13 @@ function renderOrdersOverview() {
           (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
           '</div>';
       }).join('');
+      const dv = (dels[j.id] || {})[v];
+      if (dv) sum += dv.cents;
       return '<div class="ord-job"><button type="button" class="link-btn ord-job-name" onclick="ordersOpenJob(\'' + ordId(j.id) + '\')">' +
           jobNameHtml(j.d.customerName, String(j.d.estimateNumber || '').trim()) + '</button>' +
           (what ? ' <span class="muted">· ' + esc(what) + '</span>' : '') +
-          (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + '</div>' + rows;
+          (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + '</div>' + rows +
+        orderDeliveryRow(dv);
     }).join('');
     grand += sum; grandUnpriced += unpriced;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
@@ -2241,7 +2375,7 @@ function renderOrdersOverview() {
   wrap.innerHTML = head + '<div class="ord-grid">' + html + '</div>' +
     (prices && (grand || grandUnpriced) ? '<div class="order-cost">All of this comes to about <b>' + fmtMoney(grand / 100) + '</b> before tax' +
       (grandUnpriced ? ' · ' + grandUnpriced + ' line' + (grandUnpriced === 1 ? '' : 's') + ' without a price' : '') +
-      '<div class="muted">Your cost from Supplies — not in any job’s numbers.</div></div>' : '');
+      '<div class="muted">Your cost from Supplies, and what the suppliers charge to deliver — not in any job’s numbers.</div></div>' : '');
 }
 // Ticked here = ticked on the job. The job open in the form is ticked in the
 // form (its autosave writes it, and nothing typed there is lost); any other
@@ -2288,7 +2422,7 @@ function ordersTextFor(vid) {
   return { vendor: (cat.vendors || {})[v] || {}, blocks: blocks,
     text: blocks.map(b => {
       const where = orderJobWhere(b.job.d);
-      return orderJobTitle(b.job) + (where ? ' — ' + where : '') + '\n' + b.lines.map(it => '• ' + orderLineText(it)).join('\n');
+      return orderJobTitle(b.job) + (where ? ' — ' + where : '') + '\n' + b.lines.map(it => '• ' + orderLineText(it, cat)).join('\n');
     }).join('\n\n') };
 }
 function copyOrdersFor(vid) {

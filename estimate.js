@@ -172,6 +172,27 @@
       if (saved === undefined ? snowNow() : !!(saved && saved.snowBid === true)) return [];
       return orderLines(saved, city);
     },
+    // What bringing a job's order costs us (app.js, both order lists): the
+    // same pricing.js deliveries() its estimate is priced with, on what is
+    // still to order -- so a list typed by hand is counted too. lines:
+    // [{supplyId, qty (in what it is sold by)}]. saved: the job's estimate
+    // when it is not the open one (its town, map point, a material marked
+    // picked up, delivery switched off). null before pricing.js is there.
+    orderDelivery: (lines, saved, city) => {
+      if (!P() || !P().deliveries) return null;
+      const e = saved === undefined ? est : fromSaved(saved || {});
+      const c = ctx(saved === undefined ? undefined : city || '');
+      const vendors = c.rules.vendors || {};
+      const how = sid => ((e.materials || []).find(m => m.supplyId === sid) || {}).delivery || 'auto';
+      const shaped = (lines || []).map((l, i) => {
+        const it = l.supplyId ? c.items[l.supplyId] : null;
+        if (!it || !(num(l.qty) > 0)) return null;
+        return { id: 'ord' + i, supplyId: l.supplyId, name: it.name || '', orderQty: num(l.qty),
+                 per: String((c.prices[l.supplyId] || {}).per || it.unit || '').trim(), pallet: !!it.pallet, auto: null,
+                 cityDelivery: !!(vendors[it.vendorId] || {}).cityDelivery, delivery: how(l.supplyId) };
+      }).filter(Boolean);
+      return P().deliveries(shaped, e, c);
+    },
     jobCompleted: (id, data) => jobCompleted(id, data),
     // Any job's saved estimate priced the way this screen prices it, for a
     // job that is not open (Estimate vs actual, jobcosts.js): the same
@@ -369,6 +390,8 @@
     if (fold) {
       wrap.innerHTML = '<div class="est-qb est-folded" id="estQb"></div>' + workWordsHtml();
       renderQb();
+      // One accepted in QuickBooks still looks up its map point (its MDS zone).
+      autoTrip();
       return;
     }
 
@@ -1085,10 +1108,13 @@
     if (!m || !it || !changes()) return;
     const f = window.YDMatch ? YDMatch.fitQty(m, it, c.prices[sid]) : null;
     if (window.YDMatch) YDMatch.remember(m.name, sid);
+    const was = m.supplyId || null;
     m.supplyId = sid;
     if (f) { m.qty = f.qty; m.unit = f.unit || m.unit; }
     else { m.qty = null; m.unit = ''; }
     changed(true);
+    // Its line on Materials to Order follows (app.js).
+    if (typeof ydOrderJoined === 'function') ydOrderJoined(m.name, sid, was);
     if (!f) showToast('Joined to ' + it.name + ' — put in how many' + (m.qbText ? ' (QuickBooks: ' + m.qbText + ')' : ''), 6000);
   };
 
@@ -1400,28 +1426,33 @@
   function renderAuto(r) {
     const box = el('estAuto');
     if (!box) return;
-    if (r.asAccepted) {
-      box.innerHTML = '<p class="hint">Nothing — the customer accepted QuickBooks’ figures, so no delivery, fuel, dumpsters or markers go on top.</p>';
-      return;
-    }
     const ro = !changes(), off = est.off || {};
     const sw = (k, label) => '<label class="est-switch"><input type="checkbox"' + (off[k] ? '' : ' checked') + (ro ? ' disabled' : '') +
       ' onchange="estOff(\'' + k + '\', !this.checked)"> ' + label + '</label>';
     const rows = [];
-    // Delivery
+    // Delivery. Accepted in QuickBooks: nothing goes on the price, but what
+    // MDS charges to bring it is what the job costs -- shown at cost.
     const d = r.delivery;
     const rates = (P().rules().delivery || {}).rates || {};
     const towns = Object.keys(rates).filter(k => num(rates[k]) !== null).sort();
     // A zone picked from the address (Madison) is shown, and can be changed.
     const needTown = d.problems.some(p => /town|rate|zone/.test(p)) || est.deliveryTown || d.deliveryZone;
+    const delCost = d.lines.reduce((s, l) => s + (l.costCents || 0), 0);
+    const delAmt = r.asAccepted ? (delCost ? 'cost ' + cents(delCost) : '') : (d.clientCents ? cents(d.clientCents) : '');
     rows.push('<div class="est-arow" data-auto="delivery">' + sw('delivery', 'Delivery') + '<span class="est-adesc">' +
       (off.delivery ? 'off' : d.lines.length ? d.lines.map(l => esc(l.name) + ' — ' + l.loads + ' load' + (l.loads === 1 ? '' : 's') + (l.pallet ? ' + pallet' : '')).join('; ')
         : 'nothing delivered') +
-      (d.deliveryZone && !off.delivery && d.lines.length ? ' · <b>' + esc(d.deliveryZone) + '</b> (from the address)' : '') + '</span>' +
+      (d.deliveryZone && !off.delivery && d.lines.length ? ' · <b>' + esc(d.deliveryZone) + '</b> (from the address)' : '') +
+      (r.asAccepted && !off.delivery && d.problems.length ? ' <span class="bad">⚠ ' + esc(d.problems.join(' · ')) + '</span>' : '') + '</span>' +
       (needTown && !off.delivery ? '<select' + (ro ? ' disabled' : '') + ' onchange="estSet(\'deliveryTown\', this.value)"><option value="">' +
         (d.deliveryZone ? 'Zone: from the address' : 'Town: from the job') + '</option>' +
         towns.map(t => '<option' + (t === est.deliveryTown ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' : '') +
-      '<b>' + (d.clientCents ? cents(d.clientCents) : '') + '</b></div>');
+      '<b>' + delAmt + '</b></div>');
+    if (r.asAccepted) {
+      box.innerHTML = '<p class="hint">The customer accepted QuickBooks’ figures, so nothing goes on top of the price — no fuel, ' +
+        'dumpsters or markers. What MDS charges to deliver is counted in what the job makes:</p>' + rows.join('');
+      return;
+    }
     // Fuel
     const f = r.fuel, fu = est.fuel || {};
     const fp = P().fuelPrices() || {};
@@ -2644,11 +2675,13 @@
     const m = find(est.materials, id);
     if (!m || !changes()) return;
     const it = sid ? catalog().items[sid] : null;
+    const was = m.supplyId || null;
     m.supplyId = it ? sid : null;
     if (it && !String(m.name || '').trim()) m.name = it.name || '';
     // Picked by hand from the whole list: kept for these words too.
     if (it && window.YDMatch) YDMatch.remember(m.name, sid);
     changed(true);
+    if (it && typeof ydOrderJoined === 'function') ydOrderJoined(m.name, sid, was);
   };
 
   // ------------------------------------------- typed-in items into Supplies
@@ -3442,15 +3475,19 @@
   // zone needs, on a job with an address and an id, open to someone who may
   // change it, with a signal -- and this address not looked up already this
   // visit (trippedFor). Never on an estimate the customer has said yes to:
-  // its price is agreed, and miles landing on it would move it.
+  // its price is agreed, and miles landing on it would move it -- except
+  // one accepted in QuickBooks, whose price stands whatever is found: it
+  // still needs its map point for the MDS zone its delivery costs (21 Oct
+  // 2026), though not miles (fuel is not counted on it).
   function tripWanted() {
     // A snow bid has no trip: it is priced per push, not by the miles.
     if (snowNow()) return false;
-    if (!currentJobId || !hasLines() || !changes() || settled() || !navigator.onLine) return false;
+    const fixed = !!(P() && P().asAccepted(est));
+    if (!currentJobId || !hasLines() || !changes() || (settled() && !fixed) || !navigator.onLine) return false;
     if (!window.YDClaude || !window.YDClaude.available()) return false;
     if (!(el('address') && el('address').value.trim())) return false;
     const needSite = zonedTown() && !(est.site && est.site.at === siteKey());
-    const needMiles = num((est.fuel || {}).miles) === null && !(est.off || {}).fuel;
+    const needMiles = !fixed && num((est.fuel || {}).miles) === null && !(est.off || {}).fuel;
     return (needSite || needMiles) && trippedFor[currentJobId] !== siteKey();
   }
   function autoTrip() {

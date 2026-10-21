@@ -628,8 +628,10 @@
   // stand -- the materials as the one amount it had, its tax, and nothing
   // added on top (no delivery, fuel or rule lines; its list is the whole
   // list). The lines are still worked out at cost from Supplies, for what
-  // the job makes and what to order. `reprice` = he chose to price it by his
-  // own rules instead.
+  // the job makes and what to order -- and so is what MDS charges to bring
+  // them (Jonah, 21 Oct 2026: "none of the materials contain delivery
+  // fees"): counted in what the job costs, never added to its price.
+  // `reprice` = he chose to price it by his own rules instead.
   const asAccepted = est => !!(est && est.fromQb && typeof est.fromQb.materialsCents === 'number' && !est.fromQb.reprice);
 
   function price(est, ctx) {
@@ -642,7 +644,7 @@
     // Every line's crew-days, however it is priced: they are the days on
     // site (fuel) and what the profit per day is counted over.
     const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
-    const del = fixed ? { lines: [], clientCents: 0, problems: [] } : deliveries(all, est, ctx);
+    const del = deliveries(all, est, ctx);
     const fu = fixed ? { clientCents: 0, costCents: 0, problems: [], none: true } : fuel(est, ctx, crewDays > 0 ? Math.ceil(trim(crewDays)) : null);
     const materialsCents = fixed ? est.fromQb.materialsCents
       : all.reduce((s, l) => s + l.clientCents, 0) + del.clientCents + fu.clientCents;
@@ -654,7 +656,7 @@
     const noCost = [];
     all.forEach(l => l.problems.forEach(p => (fixed ? noCost : problems).push((l.name || 'A material') + ': ' + p)));
     (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labor line') + ': ' + p)));
-    del.problems.forEach(p => problems.push('Delivery: ' + p));
+    del.problems.forEach(p => (fixed ? noCost : problems).push('Delivery: ' + p));
     fu.problems.forEach(p => problems.push('Fuel: ' + p));
     // What the job makes once everything is paid for: the materials at what
     // they cost landed, delivery and fuel at cost, the crew at the crew-day
@@ -1699,6 +1701,8 @@
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
     price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
+    // What bringing a job's order costs (estimate.js orderDelivery): the same sums.
+    deliveries,
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
