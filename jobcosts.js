@@ -174,7 +174,7 @@
   }
   // Its own add-ons and the change orders on its QuickBooks invoice.
   function addOnsCents(job) {
-    const qb = ((job.qbInvoiceRef || {}).changes || []).reduce((s, c) => s + (c && typeof c.cents === 'number' ? c.cents : 0), 0);
+    const qb = (typeof job.qbChangesIn === 'number' && !job.qbChangesOff ? (job.qbInvoiceRef || {}).changes || [] : []).reduce((s, c) => s + (c && typeof c.cents === 'number' ? c.cents : 0), 0);
     return (Array.isArray(job.additionalCosts) ? job.additionalCosts : [])
       .reduce((s, e) => s + (toCents(e && e.materialCost) || 0) + (toCents(e && e.laborCost) || 0), 0) + qb;
   }

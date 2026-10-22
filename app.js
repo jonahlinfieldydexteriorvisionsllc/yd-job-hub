@@ -203,11 +203,12 @@ function jobBill(d) {
 // customerId / customerBy: the customer the job is for (customers.js) -- tied
 // by id, never by the spelling of a name; 'hand' when Jonah picked it.
 // qbChangesIn: the change orders on its QuickBooks invoice already in its
-// price, in cents (quickbooks.py _price_follows).
+// price, in cents; qbChangesOff: they were put in by hand, so never counted
+// (quickbooks.py _price_follows).
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
-  'customerId', 'customerBy', 'qbChangesIn'];
+  'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old
@@ -2956,18 +2957,22 @@ async function rmMaterial(id) {
 // was made from the estimate, typed in there or a signed change order sent
 // from here (quickbooks.py _invoice_changes) -- are add-ons too: in its
 // price, and in the table below, read-only (they change in QuickBooks). The
-// server moves the saved price with them (qbChangesIn).
-const qbChangesOf = ref => (ref && Array.isArray(ref.changes) ? ref.changes : []).filter(c => c && typeof c.cents === 'number');
-const qbChangesTotal = ref => qbChangesOf(ref).reduce((s, c) => s + c.cents, 0) / 100;
+// server moves the saved price with them (qbChangesIn) -- only once it has,
+// and never on a job whose change orders were put in by hand before
+// (qbChangesOff: add-ons typed for them, or a price already the invoice's).
+// d: the job, or the open job's boardFields.
+const qbChangesOf = d => (d && typeof d.qbChangesIn === 'number' && !d.qbChangesOff && d.qbInvoiceRef &&
+  Array.isArray(d.qbInvoiceRef.changes) ? d.qbInvoiceRef.changes : []).filter(c => c && typeof c.cents === 'number');
+const qbChangesTotal = d => qbChangesOf(d).reduce((s, c) => s + c.cents, 0) / 100;
 // A saved job's add-ons, its own and its invoice's (a job not open:
 // estimate.js, jobcosts.js).
 function addOnsOf(d) {
   return ((d && d.additionalCosts) || []).reduce((s, e) => s + (parseFloat(e && e.materialCost) || 0) + (parseFloat(e && e.laborCost) || 0), 0) +
-    qbChangesTotal(d && d.qbInvoiceRef);
+    qbChangesTotal(d);
 }
 function renderAdditionalCosts() {
   const w = document.getElementById('addCostTableWrap');
-  const ref = boardFields.qbInvoiceRef || {}, fromQb = qbChangesOf(ref);
+  const ref = boardFields.qbInvoiceRef || {}, fromQb = qbChangesOf(boardFields);
   if (!additionalCosts.length && !fromQb.length) { w.innerHTML = '<p class="empty-msg">No additional costs yet.</p>'; }
   else {
     let h = '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>From</th><th>Mat</th><th>Labor</th><th>Total</th><th></th></tr></thead><tbody>';
@@ -3016,7 +3021,7 @@ function rmAdditionalCost(id) {
 }
 function getAdditionalCostsTotal() {
   return additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0) +
-    qbChangesTotal(boardFields.qbInvoiceRef);
+    qbChangesTotal(boardFields);
 }
 // The open job's invoice record (with its change orders) came in from the
 // server while the job was open -- sync.js, which has put it in boardFields:
@@ -3269,7 +3274,7 @@ function updateSummary() {
   const totalHrs = totalLaborHours();
   const totalMat = materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
   const totalAddCost = getAdditionalCostsTotal();
-  const addOnLines = additionalCosts.length + qbChangesOf(boardFields.qbInvoiceRef).length;
+  const addOnLines = additionalCosts.length + qbChangesOf(boardFields).length;
   const jobPrice = parseMoney(document.getElementById('jobPrice').value);
   const est = document.getElementById('estimateNumber').value.trim();
   const coTotal = materials.filter(e => isChangeOrder(e.item)).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);

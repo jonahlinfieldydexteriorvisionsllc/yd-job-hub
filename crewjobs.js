@@ -217,8 +217,11 @@
   // _invoice_changes): work the crew must know about, after the rest, in
   // QuickBooks' words -- never what it costs.
   function changeWork(d) {
+    // Only those the job counts (app.js qbChangesOf): one whose change
+    // orders were put in by hand has them in its own lines already.
     const ref = d.qbInvoiceRef || {};
-    return (Array.isArray(ref.changes) ? ref.changes : []).filter(c => c && (c.name || c.words)).slice(0, 20).map((c, i) => {
+    const counted = typeof d.qbChangesIn === 'number' && !d.qbChangesOff;
+    return (counted && Array.isArray(ref.changes) ? ref.changes : []).filter(c => c && (c.name || c.words)).slice(0, 20).map((c, i) => {
       const name = String(c.name || c.item || '');
       return { id: 'co' + (safe(c.id) || i), title: noMoney(/change order/i.test(name) ? name : 'Change order — ' + name).slice(0, 200),
                scope: noMoney(c.words).slice(0, 6000), crewNote: '', days: null, qty: null, unit: '' };

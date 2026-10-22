@@ -24,7 +24,7 @@
   // email, when the estimate was first seen accepted); all are in app.js
   // BOARD_FIELDS so the form carries them.
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
-    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn'];
+    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -521,17 +521,13 @@
     // The change orders on its invoice the server has put in the price
     // (quickbooks.py _price_follows): this copy's price, saved after the
     // server's, moves by the same -- or the push would take them back out.
+    // One whose change orders were put in by hand (qbChangesOff) is never
+    // moved by them.
     const cin = theirs.qbChangesIn;
     if (typeof cin === 'number' && cin !== local.qbChangesIn) {
       const price = parseMoney(local.jobPrice || '');
-      let had = typeof local.qbChangesIn === 'number' ? local.qbChangesIn : null;
-      if (had === null) {
-        // The first time, the server took a price already at the invoice's as
-        // having them in.
-        const sub = ((theirs.qbInvoiceRef || {}).subtotal);
-        had = typeof sub === 'number' && Math.abs(price - sub) < 0.005 ? cin : 0;
-      }
-      if (price > 0 && cin !== had) local.jobPrice = (price + (cin - had) / 100).toFixed(2);
+      const had = typeof local.qbChangesIn === 'number' ? local.qbChangesIn : 0;
+      if (!theirs.qbChangesOff && !local.qbChangesOff && price > 0 && cin !== had) local.jobPrice = (price + (cin - had) / 100).toFixed(2);
       local.qbChangesIn = cin;
       took = true;
     }

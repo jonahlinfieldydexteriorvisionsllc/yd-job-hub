@@ -1344,6 +1344,11 @@ def _invoice_record(inv):
     the change orders on it (_invoice_changes)."""
     env = _env("QB_ENV", "sandbox")
     tax = _amount((inv.get("TxnTaxDetail") or {}).get("TotalTax"))
+    # QuickBooks' automatic late fees are charges on the bill, not the work's
+    # price: left out of what it comes to.
+    tax += sum(_amount(ln.get("Amount")) for ln in _flat_lines(inv.get("Line"))
+               if ln.get("DetailType") == "SalesItemLineDetail"
+               and LATE_FEE.search(str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "")))
     return {
         "id": inv.get("Id"), "docNumber": inv.get("DocNumber"),
         "total": inv.get("TotalAmt"), "balance": inv.get("Balance"), "dueDate": inv.get("DueDate"),
@@ -1419,28 +1424,47 @@ def _price_of(v):
 def _price_follows(j, rec):
     """What a job's patch carries besides its invoice record `rec`: the
     change orders on the invoice not yet in its price, added to it, and
-    qbChangesIn (cents) saying they are in. Taken off the invoice, taken off
-    the price. The first time, a job whose price already is the invoice's
-    (the change order put in by hand) has them in already. {} when nothing
-    moves."""
+    qbChangesIn (cents) saying they are in -- app.js counts exactly those
+    with the add-ons. Taken off the invoice, taken off the price. A job
+    whose change orders were already put in by hand (_changes_by_hand, the
+    first time they are seen) is left as it is for good (qbChangesOff): its
+    price never moves by them, and any gap shows as the invoice's figure
+    under its price (app.js). {} when nothing moves."""
+    if j.get("qbChangesOff"):
+        return {}
     now = sum(int(c.get("cents") or 0) for c in rec.get("changes") or [] if isinstance(c, dict))
     had = j.get("qbChangesIn")
     if isinstance(had, bool) or not isinstance(had, (int, float)):
         had = None
     if had is not None and int(had) == now:
         return {}
-    out = {"qbChangesIn": now}
     price = _price_of(j.get("jobPrice"))
-    if price is None:
-        return out
     if had is None:
-        sub = rec.get("subtotal")
-        if isinstance(sub, (int, float)) and abs(price - sub) < 0.005:
-            return out
+        if _changes_by_hand(j, rec, price):
+            return {"qbChangesIn": 0, "qbChangesOff": True}
         had = 0
-    if now != int(had):
+    out = {"qbChangesIn": now}
+    if price is not None and now != int(had):
         out["jobPrice"] = "%.2f" % round(price + (now - int(had)) / 100, 2)
     return out
+
+
+def _changes_by_hand(j, rec, price):
+    """The first look at a job with change orders on its invoice: are they in
+    its price already? -- add-ons typed on the job (his own record of the
+    extra work, Oct 2026: one job's six add-ons were the invoice's two added
+    lines in other words), its estimate filled from this very invoice (every
+    line of it, the added ones too), or a price already the invoice's."""
+    if not rec.get("changes"):
+        return False
+    if any(isinstance(a, dict) for a in j.get("additionalCosts") or []):
+        return True
+    iid = str(rec.get("id") or "")
+    filled = (j.get("qbFilled") or {}).get("invoiceId"), (((j.get("estimate") or {}).get("fromQb")) or {}).get("invoiceId")
+    if iid and iid in [str(x) for x in filled if x]:
+        return True
+    sub = rec.get("subtotal")
+    return price is not None and isinstance(sub, (int, float)) and abs(price - sub) < 0.005
 
 
 def _invoice_lines(e, link_lines=False):
