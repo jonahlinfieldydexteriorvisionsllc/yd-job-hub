@@ -344,9 +344,10 @@
   // its own order), so each is written out with its keys sorted.
   const stable = v => JSON.stringify(v === undefined ? null : v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
     ? Object.keys(x).sort().reduce((o, key) => { o[key] = x[key]; return o; }, {}) : x);
-  // A copy from before the tools (16 Oct 2026) and a job with none are the
-  // same: no rewrite of every booked job just to say "no tools".
-  const EMPTY_LISTS = ['tools'];
+  // A copy from before the tools (16 Oct 2026) or the rentals (21 Oct) and a
+  // job with none are the same: no rewrite of every booked job just to say
+  // "no tools" or "no rentals".
+  const EMPTY_LISTS = ['tools', 'rentals'];
   function sameEntry(a, b) {
     return Object.keys(b).every(k => {
       const was = a[k] === undefined && EMPTY_LISTS.indexOf(k) !== -1 ? [] : a[k];
