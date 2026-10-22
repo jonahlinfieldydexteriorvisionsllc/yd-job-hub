@@ -628,6 +628,15 @@ def _spend(db, day, used, task, count_field=None):
             print("receipts: could not record usage:", e)
 
 
+def _dropped_personal(d):
+    """An email read as personal from 5 to 21 Oct 2026, when personal
+    purchases were noted as read and never written (outcome "personal", no
+    receipt). Jonah (22 Oct 2026) wants those brought in too, filed under
+    Personal: whichever read finds one again -- the week's, or the pull of
+    the whole year -- reads it again. Once saved it carries its receiptId."""
+    return bool(d) and d.get("outcome") == "personal" and not d.get("receiptId")
+
+
 def _seen(db, mid, outcome, **extra):
     data = {"at": dg._now().isoformat(), "outcome": outcome}
     data.update(extra)
@@ -1780,9 +1789,11 @@ def run(client, manual=False):
         done = {s.id: (s.to_dict() or {})
                 for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
         # Already judged to be a purchase, but not yet read (the run's limit),
-        # or the read failed: read these without asking again.
+        # or the read failed -- or a personal one dropped under the old rule
+        # (_dropped_personal): read these without asking again.
         pending = [i for i in ids if done.get(i, {}).get("outcome") == "queued"
-                   or (done.get(i, {}).get("outcome") == "error" and (done[i].get("tries") or 0) < MAX_TRIES)]
+                   or (done.get(i, {}).get("outcome") == "error" and (done[i].get("tries") or 0) < MAX_TRIES)
+                   or _dropped_personal(done.get(i))]
         # Never looked at -- or would not open last time, and not yet given up on.
         unseen = [i for i in ids if i not in done
                   or (done[i].get("outcome") == "unopened" and (done[i].get("tries") or 0) < MAX_TRIES)]
