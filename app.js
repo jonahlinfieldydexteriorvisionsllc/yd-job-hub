@@ -926,7 +926,10 @@ function switchTab(name) {
 // summary opened nothing.
 // The end of the day (eod.js): the crew's reminder opens their list, the
 // owner's "it is in" opens the reports.
-const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports' };
+// Every piece of work on a job ticked off (workdone.js): the Jobs board,
+// where its card has "Mark it finished".
+const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
+  jobsboard: 'openJobsBoard' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }

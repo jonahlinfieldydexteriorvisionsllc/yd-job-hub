@@ -999,6 +999,13 @@
     showToast(r && r.error ? r.error : 'QuickBooks still has estimate' + num +
       ' — delete it there first, or move the bid to Lost', 6000);
   };
+  // The Jobs board, from a notification (app.js NOTIFICATION_WINDOWS: every
+  // piece of work on a job ticked off -- its card asks to mark it finished).
+  window.openJobsBoard = function () {
+    if (!seesJobs()) return;
+    if (typeof switchTab === 'function') switchTab('boards');
+    if (window.showBoard) showBoard('jobs');
+  };
   // A one-tap move from a button on a job's card.
   window.bdMoveJob = function (jobId, boardId, col) {
     if (!movesJobs() || (boardId !== 'bids' && boardId !== 'jobs')) return;

@@ -378,6 +378,8 @@
       // The end of the day (eod.js): the list itself, or the owner's reports.
       else if (want === 'eod' && window.openEndOfDay) window.openEndOfDay();
       else if (want === 'eodreports' && window.openEodReports) window.openEodReports();
+      // Every piece of work on a job ticked off (workdone.js): the Jobs board.
+      else if (want === 'jobsboard' && window.openJobsBoard) window.openJobsBoard();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
         const btn = el(tabButtonId(want));
         if (btn && !btn.hidden) switchTab(want);

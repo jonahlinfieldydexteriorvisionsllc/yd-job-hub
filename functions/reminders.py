@@ -161,6 +161,9 @@ def run():
         ("crew activity", (cals, boards), lambda: _activity(db, people, now, cals, boards, prefs)),
         ("crew notes", (), lambda: crew_notes(db, people, now)),
         ("crew shifts", (), lambda: crew_shifts(db, people, now)),
+        # A job whose every piece of work is ticked off: the owner asked
+        # whether to mark it finished (workdone.js).
+        ("work done", (), lambda: work_done(db, people, now)),
         # End-of-day reports in (the owner told), and the day's reminder to
         # whoever has not sent theirs (endofday.py).
         ("end of day", (), lambda: _end_of_day(db, people, now)),
@@ -263,6 +266,64 @@ def crew_notes(db, people=None, now=None):
             s.reference.update({"notifiedAt": now.isoformat()})
         except Exception as err:          # noqa: BLE001
             print("reminders: note not stamped:", s.id, err)
+    return out
+
+
+# How far back the work-done run looks for ticks: the run is every five
+# minutes; this covers the server being down a while.
+WORK_DONE_HOURS = 6
+
+
+def work_done(db, people=None, now=None):
+    """A job whose every piece of work the crew have ticked off (workdone.js):
+    the owner is asked, once, whether to mark it finished -- a buzz like a
+    crew note's (Jonah, 22 Oct 2026: yes to a notification). The pieces are
+    the job's crew page (jobCrew/{id}.work -- the very list the crew tick
+    from), and a job has one only while it is booked or in progress and
+    shown to the crew, so a finished job is never asked about. Once per
+    finish: reminderLog workdone_<job>_<last tick's time> -- a piece taken
+    back and ticked again is a new finish, and asks again."""
+    people = people if people is not None else dg._people()
+    now = now or dg._now()
+    owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
+    out = []
+    since = _iso_z(now - datetime.timedelta(hours=WORK_DONE_HOURS))
+    try:
+        recent = list(db.collection("workDone").where("updatedAt", ">=", since).stream())
+    except Exception as err:              # noqa: BLE001
+        print("reminders: work done not read:", err)
+        return out
+    for s in recent:
+        lines = (s.to_dict() or {}).get("lines") or {}
+        try:
+            page = db.collection("jobCrew").document(s.id).get()
+        except Exception as err:          # noqa: BLE001
+            print("reminders: crew page not read:", s.id, err)
+            continue
+        if not page.exists:
+            continue
+        c = page.to_dict() or {}
+        ids = [str(w.get("id")) for w in (c.get("work") or []) if isinstance(w, dict) and w.get("id")]
+        ticks = [lines.get(i) for i in ids]
+        if not ids or not all(isinstance(t, dict) and t.get("done") is True for t in ticks):
+            continue
+        last = max(ticks, key=lambda t: str(t.get("at") or ""))
+        try:
+            db.collection("reminderLog").document(
+                "workdone_%s_%s" % (s.id, re.sub(r"[^0-9A-Za-z]", "", str(last.get("at") or "")))).create({"at": now.isoformat()})
+        except AlreadyExists:
+            continue
+        name = str(c.get("name") or "a job").strip()[:60]
+        who = str(last.get("by") or "").split()[0] if str(last.get("by") or "").strip() else ""
+        body = "All %d piece%s of work done%s — mark it finished?" % (
+            len(ids), "" if len(ids) == 1 else "s", (" (last one by %s)" % who) if who else "")
+        for uid in owners:
+            try:
+                out.append({"uid": uid, "workDone": s.id, "phones": dg.send_push(
+                    uid, {"push": {"title": "✅ Everything on %s is ticked" % name, "body": body}},
+                    tag="yd-workdone-" + s.id, ttl=24 * 3600, opens="jobsboard")})
+            except Exception as err:      # noqa: BLE001
+                print("reminders: work done push failed:", uid, err)
     return out
 
 
