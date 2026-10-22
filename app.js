@@ -1188,6 +1188,16 @@ async function pickStage(id, photosChecked) {
     else { boardFields.bidStage = 'followUp'; updateCtxBar(); }
     return;
   }
+  // Booked from a bid, or a job back to a bid: the same moves as Make it a
+  // job and Back to a bid, which say so with an Undo. A form never saved and
+  // still empty has no job to move -- only its status changes, as before.
+  if ((id === 'booked' && (cur.id === 'bid' || cur.id === 'lost')) || id === 'bid') {
+    if (!currentJobId) autosave();
+    if (currentJobId) {
+      if (id === 'booked') makeItAJob(currentJobId); else backToBid(currentJobId);
+      return;
+    }
+  }
   const inv = formQbInvoice();
   if ((id === 'invoiced' || id === 'paid' || id === 'finished') && cur.qb) {
     showToast('QuickBooks decides this one — invoice' + (cur.qb.docNumber ? ' #' + cur.qb.docNumber : '') +
@@ -1369,18 +1379,90 @@ function changeLostReason(id) {
 
 // Booking a bid: it becomes a job -- on the Jobs board, in the job list, on
 // the crew's clock -- and the bid is marked Won, the same as moving it there.
+// It says so with an Undo, which puts the bid back exactly as it was.
 function makeItAJob(id) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   id = id || currentJobId;
   if (!id && typeof autosave === 'function') { autosave(); id = currentJobId; }
   if (!id || !window.YDSync) return;
+  if (id === currentJobId && dirty) autosave();
+  const was = jobMoveSnapshot(id);
   const at = new Date().toISOString();
   if (!window.YDSync.patchJob(id, { jobStatus: 'booked', bidStage: 'won', bidStageAt: at, workStage: 'scheduled', workStageAt: at })) {
     showToast('Could not make that a job');
     return;
   }
   if (id === currentJobId) { jobStatus = 'booked'; syncStatusSelect(); updateCtxBar(); }
-  showToast('Booked — it is a job now, on the Jobs board and in your job list');
+  showUndo('Booked — ' + whoseJob(was) + ' a job now, on the Jobs board',
+    () => putJobBack(id, was, 'Back to a bid, as it was'), 10000);
+  if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+}
+
+// ---- Back to a bid -------------------------------------------------------------
+// Jonah (22 Oct 2026), of a bid booked by mistake: turn it "back into a bid
+// and have an undo button for that". A job booked by mistake goes back two ways:
+// the Undo on the bar that said it was booked (makeItAJob), which puts back
+// exactly what the booking changed; or, any time later, the Bid step on the
+// Job tab or "Back to a bid" in My Jobs (backToBid), with an Undo of its own.
+// What a booking changes, so it can be put back. The Materials to Order list
+// is among them: booking fills it from the estimate (sync.js patchJob).
+const JOB_MOVE_FIELDS = ['jobStatus', 'bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'orderItems'];
+function jobMoveSnapshot(id) {
+  let d = null;
+  try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+  if (!d) return null;
+  const was = { name: (d.customerName || '').trim() };
+  JOB_MOVE_FIELDS.forEach(f => { was[f] = d[f] == null ? null : d[f]; });
+  if (!was.jobStatus) was.jobStatus = 'quoting';
+  return was;
+}
+const whoseJob = was => (was && was.name ? was.name + ' is' : 'it is');
+// The job as the snapshot says. The order list goes back too -- unless a line
+// was ticked ordered in between: that order is real, so the list stays.
+function putJobBack(id, was, said) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  if (!was || !window.YDSync) { showToast('Could not undo that'); return; }
+  if (id === currentJobId && dirty) autosave();
+  let d = null;
+  try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+  if (!d) { showToast('Could not undo that'); return; }
+  const patch = {};
+  JOB_MOVE_FIELDS.forEach(f => { if (f !== 'orderItems') patch[f] = was[f]; });
+  const now = d.orderItems || [], before = was.orderItems || [];
+  const orderedSince = now.some(o => o && o.ordered && !before.some(b => b && b.id === o.id && b.ordered));
+  if (!orderedSince && JSON.stringify(now) !== JSON.stringify(before)) patch.orderItems = before;
+  // A bid whose estimate the customer accepted in QuickBooks is dated now, or
+  // sync.js bookIfAccepted would book it again at once.
+  if (isBidStatus(patch.jobStatus) && window.YDSync.qbAccepted && window.YDSync.qbAccepted(d.qbEstimate)) {
+    patch.bidStageAt = new Date().toISOString();
+  }
+  if (!window.YDSync.patchJob(id, patch)) { showToast('Could not undo that'); return; }
+  showToast(said + (orderedSince ? ' — Materials to Order kept, a line on it is ordered' : ''), 5000);
+  if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+}
+// A job back on the Bids board: under Sent -- waiting when QuickBooks emailed
+// its estimate, else Bid to send; off the Jobs board. The order lines the
+// estimate put on Materials to Order go too, unless ordered -- booking it
+// again fills them from the estimate as it is then (bookedOrderItems fills a
+// list holding none).
+function backToBid(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  id = id || currentJobId;
+  if (!id || !window.YDSync) return;
+  if (id === currentJobId && dirty) autosave();
+  let d = null;
+  try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+  if (!d || isBidStatus(d.jobStatus)) return;
+  const was = jobMoveSnapshot(id);
+  const sent = !!(d.qbEstimate && d.qbEstimate.sentAt);
+  const patch = { jobStatus: 'quoting', bidStage: sent ? 'sent' : 'toSend', bidStageAt: new Date().toISOString(),
+                  workStage: null, workStageAt: null };
+  const list = d.orderItems || [];
+  const kept = list.filter(o => !(o && o.fromEstimate && !o.ordered));
+  if (kept.length !== list.length) patch.orderItems = kept;
+  if (!window.YDSync.patchJob(id, patch)) { showToast('Could not put that back to a bid'); return; }
+  showUndo('Back to a bid — ' + whoseJob(was) + ' on the Bids board under ' +
+    (sent ? 'Sent — waiting' : 'Bid to send'), () => putJobBack(id, was, 'A job again, as it was'), 10000);
   if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
 }
 function updateJobHeadBadge() {
@@ -4067,6 +4149,7 @@ function renderJobList() {
       (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +
       (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + ordId(j.id) + '\')">MAKE IT A JOB</button>' : '') +
       (jobListBids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + ordId(j.id) + '\')">MARK LOST</button>' : '') +
+      (!jobListBids && j.stage === 'booked' && !jobsReadOnly() ? '<button class="dup-btn" onclick="backToBid(\'' + ordId(j.id) + '\')" title="Put it back on the Bids board">BACK TO A BID</button>' : '') +
       // "DUP" meant nothing to anyone; and Delete sat right against it.
       '<button class="dup-btn" onclick="duplicateJob(\'' + ordId(j.id) + '\')" title="Make a copy of this ' + (jobListBids ? 'bid' : 'job') + '">COPY</button>' +
       '<button class="remove-btn jl-del" onclick="deleteJob(\'' + ordId(j.id) + '\')" title="Move this ' + (jobListBids ? 'bid' : 'job') + ' to Recently deleted' +

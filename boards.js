@@ -341,11 +341,21 @@
       patch = { workStage: col, workStageAt: at,
                 jobStatus: col === 'scheduled' ? 'booked' : ACTIVE_STAGES.indexOf(col) !== -1 ? 'inprogress' : 'complete' };
     }
+    // A bid booked by a move to Won can be undone, as from Make it a job
+    // (app.js putJobBack): what it was, taken before the move.
+    const was = patch.jobStatus === 'booked' && boardId === 'bids' && typeof jobMoveSnapshot === 'function'
+      ? jobMoveSnapshot(jobId) : null;
     if (!window.YDSync || !window.YDSync.patchJob(jobId, patch)) {
       showToast('Could not move that job');
       return;
     }
     const name = (j.customerName || 'Job').trim();
+    if (was && typeof showUndo === 'function' && typeof putJobBack === 'function') {
+      showUndo(name + ' → Won — booked, now on the Jobs board',
+        () => putJobBack(jobId, was, 'Back to a bid, as it was'), 10000);
+      render();
+      return;
+    }
     if (boardId === 'bids' && col === 'lost') {
       // Off the board; the customer onto Contacts, tagged with what they
       // turned down, to call next season (prospects.js).
