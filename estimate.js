@@ -293,7 +293,11 @@
     // estimate (base gravel for the patio and for the walk, or a planting-
     // package item also in the takeoff) is one order of both.
     const out = [], byKey = {};
-    r.takeoff.concat(r.added).filter(l => l.orderQty > 0).forEach(l => {
+    // A line of work written in with the materials is not a thing to buy
+    // (workNotOrdered) -- unless he said it is a material after all.
+    const work = {};
+    (e.materials || []).forEach(m => { if (workNotOrdered(m)) work[m.id] = true; });
+    r.takeoff.filter(l => !work[l.id]).concat(r.added).filter(l => l.orderQty > 0).forEach(l => {
       const it = l.supplyId ? items[l.supplyId] : null;
       const line = { supplyId: l.supplyId || null, vendorId: (it && it.vendorId) || null,
                      name: (it && it.name) || l.name || '', orderQty: l.orderQty, per: l.per || '',
@@ -316,6 +320,14 @@
     });
     return out;
   }
+  // A material whose name says it is work -- "Bed excavation to 5" depth",
+  // "Small pine tree removal" (supplymatch.js readsAsWork) -- and that is
+  // not joined to a Supplies item (an item is a thing to buy, whatever its
+  // name). The rule is only words, so he can say it is a material after all
+  // (orderIt, on the line).
+  const readsAsWork = m => !!(m && !m.plant && !m.supplyId && window.YDMatch && YDMatch.readsAsWork &&
+    YDMatch.readsAsWork(m.name));
+  const workNotOrdered = m => readsAsWork(m) && m.orderIt !== true;
 
   // An estimate saved by the first version (price-book lines and one message)
   // comes in as flat labour lines, so nothing typed is lost.
@@ -1162,12 +1174,33 @@
         taxPickHtml('mat', id, m.taxable, ro) + allInChip(m) +
         (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
       (forWork ? moreBoxHtml(id, forWork) : '') +
-      (ro ? '' : matchHtml(m, id)) +
+      (readsAsWork(m) ? workNoteHtml(m, id, ro) : ro ? '' : matchHtml(m, id)) +
       (m.supplyId && num(m.qty) === null && m.qbText
         ? '<div class="est-match"><span class="muted">QuickBooks: ' + esc(m.qbText) + ' — put in how many</span></div>' : '') +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
     '</div>';
   }
+  // A line that reads as work (readsAsWork) says so in place of "Which
+  // Supplies item is this?", and why it is not on Materials to Order -- with
+  // his say either way.
+  function workNoteHtml(m, id, ro) {
+    if (m.orderIt === true) {
+      return '<div class="est-match"><span class="muted">You said this is a material, so it goes on Materials to Order.</span>' +
+        (ro ? '' : ' <button type="button" class="link-btn" onclick="estOrderIt(\'' + id + '\', false)">No — it’s work, leave it off</button>') + '</div>';
+    }
+    return '<div class="est-match"><span class="est-match-q">🛠 This reads as work, not a material</span> ' +
+      '<span class="muted">— it is not put on Materials to Order.</span>' +
+      (m.qbText ? ' <span class="muted">QuickBooks: ' + esc(m.qbText) + '</span>' : '') +
+      (ro ? '' : ' <button type="button" class="link-btn" onclick="estOrderIt(\'' + id + '\', true)">It’s a material — order it</button>') + '</div>';
+  }
+  window.estOrderIt = function (id, on) {
+    const m = find(est.materials, id);
+    if (!m || !changes()) return;
+    if (on) m.orderIt = true; else delete m.orderIt;
+    changed(true);
+    // Its line on a Materials to Order already made comes or goes (app.js).
+    if (typeof ydOrderWorkSaid === 'function') ydOrderWorkSaid(m.name, !!on);
+  };
   // A material not joined to Supplies yet: the items it most likely is, as
   // buttons (supplymatch.js) -- his earlier pick for these words first. Only
   // when nothing is close does it say so (then 🔎 Source it / add to
@@ -2968,7 +3001,10 @@
   const found = {};                 // jobId|lineId -> {busy, local[], options[], note, error, web}
   const foundKey = id => (currentJobId || 'new') + '|' + safeId(id);
   const canSource = () => changes() && ydCan('supplies', 'change') && !!(window.YDClaude && window.YDClaude.post);
-  const unpriced = l => l.problems.some(p => p === 'no price in Supplies' || p === 'no cost');
+  // A line of work among the materials is nothing to go and buy: no web
+  // search is paid for to find where it is sold (workNotOrdered).
+  const unpriced = l => l.problems.some(p => p === 'no price in Supplies' || p === 'no cost') &&
+    !workNotOrdered(find(est.materials, l.id));
   const STOP_WORDS = ['the', 'a', 'and', 'of', 'for', 'with', 'in', 'x', 'per', 'or', 'to'];
   const nameWords = s => String(s || '').toLowerCase().replace(/[”″"]/g, ' in ').replace(/[^a-z0-9.]+/g, ' ').split(' ')
     .map(w => w.replace(/\.$/, '')).filter(w => w && STOP_WORDS.indexOf(w) === -1)

@@ -1406,11 +1406,14 @@ function loadProposalFile(event) {
       const isFirst = proposals.length === 0;
       proposals.push({ id: propId, label, data });
 
-      let matCount = 0;
+      let matCount = 0, workLeft = 0;
       if (Array.isArray(data.materials)) {
         data.materials.forEach(m => {
-          orderItems.push({ id: uid(), proposalId: propId,
-            name: typeof m === 'string' ? m : (m.name || m.item || m.description || JSON.stringify(m)),
+          const name = typeof m === 'string' ? m : (m.name || m.item || m.description || JSON.stringify(m));
+          // A line of work in the file's material list is no thing to buy
+          // (supplymatch.js readsAsWork); the proposal keeps it as written.
+          if (window.YDMatch && YDMatch.readsAsWork && YDMatch.readsAsWork(name)) { workLeft++; return; }
+          orderItems.push({ id: uid(), proposalId: propId, name,
             quantity: (m && m.quantity) ? m.quantity : '', ordered: false });
           matCount++;
         });
@@ -1431,7 +1434,8 @@ function loadProposalFile(event) {
       // Import summary + missing-price warning
       const total = getProposalTotal(data);
       const who = (data.client && data.client.name) || data.clientName || document.getElementById('customerName').value.trim() || 'client';
-      let summary = 'Imported ' + who + ' · ' + matCount + ' material' + (matCount !== 1 ? 's' : '');
+      let summary = 'Imported ' + who + ' · ' + matCount + ' material' + (matCount !== 1 ? 's' : '') +
+        (workLeft ? ' (' + workLeft + ' line' + (workLeft !== 1 ? 's' : '') + ' of work left off the order)' : '');
       summary += total > 0 ? ' · ' + fmtMoney(total) : ' · ⚠ no price in file';
       showToast(summary);
     } catch (err) { showToast('Could not read that JSON — check the file'); console.error(err); }
@@ -1791,6 +1795,26 @@ function ydOrderJoined(name, sid, was) {
   if (!orderItems.length || jobsReadOnly() || !window.YDEstimate || !orderReady()) return;
   const out = rejoinOrderLines(orderItems, window.YDEstimate.orderLines(), [{ name: name, sid: sid, was: was || null }]);
   if (!out) return;
+  orderItems = out;
+  renderOrderList(); markDirty();
+}
+// A line on the open job's estimate that reads as work, said by hand to be a
+// material after all -- or work after all (estimate.js estOrderIt): on a
+// list already made from the estimate its line comes, or goes while it is
+// not ordered. A list not made yet takes it when the job is booked.
+function ydOrderWorkSaid(name, on) {
+  if (!orderItems.some(it => it.fromEstimate) || jobsReadOnly() || !window.YDEstimate || !orderReady()) return;
+  const key = String(name || '').toLowerCase().trim();
+  const same = it => it && it.fromEstimate && !it.supplyId && String(it.name || '').toLowerCase().trim() === key;
+  let out;
+  if (on) {
+    const l = window.YDEstimate.orderLines().find(x => !x.supplyId && String(x.name || '').toLowerCase().trim() === key);
+    if (!l || orderItems.some(same)) return;
+    out = orderItems.concat([Object.assign({ id: uid(), proposalId: null, ordered: false, fromEstimate: true }, orderFields(l))]);
+  } else {
+    out = orderItems.filter(it => !(same(it) && !it.ordered));
+    if (out.length === orderItems.length) return;
+  }
   orderItems = out;
   renderOrderList(); markDirty();
 }

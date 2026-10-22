@@ -1855,6 +1855,44 @@ _AMOUNT_AT_END = re.compile(r"^(.+?)\s+" + _ABOUT + r"x?" + _QTY + r"\s*" + _UNI
 END_ALWAYS = ("terms of service",)
 WORK_ID = re.compile(r"[^A-Za-z0-9]")
 
+# A line of WORK in a Material Fee's list. One estimate listed "Existing
+# vegetation removal — complete, including root systems 632 sq ft", "Small
+# pine tree removal — ..." and "Bed excavation to 5\" depth ..." beside the
+# fabric and the stone; each came in as a material and went onto the job's
+# Materials to Order (Jonah, 21 Oct 2026: the job's services "listed as to be
+# ordered"). Such a line goes with the words that are no line of work or
+# material (the job's notes) instead. What a thing IS is the last word of its
+# name before any note -- after a dash, a comma, in brackets, or "to / of /
+# with ..." -- (removal, excavation), or the name starts by saying what to do
+# ("Remove the old sod"). Only words that are never something bought count:
+# edging, mulch, seed, planting and rental are things to buy as often as
+# work, so they never do ("Dumpster — spoils removal" is a dumpster).
+# supplymatch.js readsAsWork is the same rule -- keep the two the same.
+WORK_HEADS = frozenset((
+    "removal", "excavation", "extraction", "demolition", "demo", "installation", "install",
+    "grading", "regrading", "hauling", "haul-off", "cleanup", "clean-up", "preparation", "prep", "labor", "labour",
+    "tilling", "rototilling", "trenching", "digging", "compaction", "aeration", "dethatching", "pruning", "trimming",
+    "mowing", "stripping", "restoration", "repair", "grinding", "service", "work"))
+WORK_VERBS = frozenset((
+    "remove", "excavate", "install", "haul", "dig", "trench", "till", "rototill", "demolish",
+    "extract", "regrade", "dethatch", "aerate", "prune", "prep", "prepare"))
+_NOTE_CUT = re.compile(r"\s[—–-]\s|[,:;(]|\s(?:to|of|for|with|including|below|above|after|before|around|along|at|in|on"
+                       r"|from|into|under|behind|and|&)\s")
+
+
+def _reads_as_work(name):
+    lead = _NOTE_CUT.split(re.sub(r"\([^)]*\)", " ", str(name or "").lower()), 1)[0]
+    ws = [re.sub(r"^[^a-z]+|[^a-z-]+$", "", w) for w in lead.split()]
+    ws = [w for w in ws if re.search(r"[a-z]", w)]
+    if not ws:
+        return False
+    if ws[0] in WORK_VERBS:
+        return True
+    head = ws[-1]
+    if head not in WORK_HEADS and head.endswith("s"):
+        head = head[:-1]
+    return head in WORK_HEADS
+
 
 def _cents(v):
     return int(round(_amount(v) * 100))
@@ -1936,7 +1974,9 @@ def _hub_estimate(e, end_names, stamp):
                 materials_cents += _cents(ln.get("Amount"))
                 for row in desc.splitlines():
                     got = _material(row)
-                    if got is None:
+                    # Not a material -- no amount to it, or a line of work
+                    # (_reads_as_work): the words go in the notes.
+                    if got is None or _reads_as_work(got[0]):
                         s = row.strip().lstrip("-•*·–— ").strip()
                         if s and not MATERIAL_BOILER.match(s):
                             words.append(s)
@@ -2885,6 +2925,17 @@ def _job_estimate(have, doc, end_names, stamp, invoice_id=None):
     return est, words
 
 
+def _words_under(old, head, words):
+    """A job's notes with the words of what it was filled from that are no
+    line of work or material -- a line of work written among the materials,
+    say -- under the notes he already has (never over them), once (head).
+    None when there is nothing to add."""
+    old = str(old or "").strip()
+    if not words or head in old:
+        return None
+    return (((old + "\n\n") if old else "") + "\n".join([head] + words))[:NOTES_MAX]
+
+
 def _fill_from_invoices(db, want_inv, docs, end_names, invoices, failed):
     """fill_imported's part for jobs tied to an invoice (see there): the
     estimate built from the invoice's lines when the job's own estimate is
@@ -2914,14 +2965,9 @@ def _fill_one_invoice(db, jid, j, iid, inv, end_names):
     if not (have.get("work") or have.get("materials")):
         est, words = _job_estimate(have, inv, end_names, stamp, invoice_id=iid)
         patch["estimate"] = est
-        # Words in the invoice that are no line of work or material go
-        # under the notes he already has (never over them).
-        if words:
-            head = "From QuickBooks invoice #%s:" % (inv.get("DocNumber") or iid)
-            old = str(j.get("notes") or "").strip()
-            if head not in old:
-                patch["notes"] = ((old + "\n\n") if old else "") + "\n".join([head] + words)
-                patch["notes"] = patch["notes"][:NOTES_MAX]
+        notes = _words_under(j.get("notes"), "From QuickBooks invoice #%s:" % (inv.get("DocNumber") or iid), words)
+        if notes is not None:
+            patch["notes"] = notes
         if not str(j.get("crewWhat") or "").strip():
             board = db.collection("jobBoard").document(jid)
             if board.get().exists:
@@ -3029,6 +3075,13 @@ def _fill_one_estimate(db, jid, j, eid, e, end_names):
         patch["estimate"] = est
         if str(j.get("notes") or "") == _lines_as_notes(e):
             patch["notes"] = _hub_notes(e, words)
+        else:
+            # A job typed in by hand and joined to the estimate keeps its
+            # notes; the estimate's other words go under them, as for an
+            # invoice -- they were lost (Oct 2026).
+            notes = _words_under(j.get("notes"), "From QuickBooks estimate #%s:" % (e.get("DocNumber") or eid), words)
+            if notes is not None:
+                patch["notes"] = notes
         # The price the import set, before tax, now follows the estimate
         # as on any job (the same figure); one he typed stays his.
         if j.get("fromQuickBooks") and str(j.get("jobPrice") or "") == "%.2f" % _amount(e.get("TotalAmt")):

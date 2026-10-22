@@ -221,6 +221,37 @@
     return false;
   }
 
+  // A line of WORK written among the materials. A QuickBooks estimate's
+  // Material Fee listed "Existing vegetation removal — complete, including
+  // root systems 632 sq ft", "Small pine tree removal — ..." and "Bed
+  // excavation to 5" depth ..." beside the fabric and the stone, and every
+  // one of them went onto the job's Materials to Order (Jonah, 21 Oct 2026:
+  // the job's services "listed as to be ordered"). What a thing IS is the
+  // last word of its name before any note -- after a dash, a comma, in
+  // brackets, or "to / of / with ..." -- (removal, excavation), or the name
+  // starts by saying what to do ("Remove the old sod"). Only words that are
+  // never something bought count: edging, mulch, seed, planting and rental
+  // are things to buy as often as work, so they never do ("Dumpster —
+  // spoils removal" is a dumpster). None of the 907 Supplies items read as
+  // work (22 Oct 2026). functions/quickbooks.py _reads_as_work is the same rule -- keep
+  // the two the same.
+  const WORK_HEADS = ['removal', 'excavation', 'extraction', 'demolition', 'demo', 'installation', 'install',
+    'grading', 'regrading', 'hauling', 'haul-off', 'cleanup', 'clean-up', 'preparation', 'prep', 'labor', 'labour',
+    'tilling', 'rototilling', 'trenching', 'digging', 'compaction', 'aeration', 'dethatching', 'pruning', 'trimming',
+    'mowing', 'stripping', 'restoration', 'repair', 'grinding', 'service', 'work'];
+  const WORK_VERBS = ['remove', 'excavate', 'install', 'haul', 'dig', 'trench', 'till', 'rototill', 'demolish',
+    'extract', 'regrade', 'dethatch', 'aerate', 'prune', 'prep', 'prepare'];
+  const NOTE_CUT = /\s[—–-]\s|[,:;(]|\s(?:to|of|for|with|including|below|above|after|before|around|along|at|in|on|from|into|under|behind|and|&)\s/;
+  function readsAsWork(name) {
+    const lead = String(name || '').toLowerCase().replace(/\([^)]*\)/g, ' ').split(NOTE_CUT)[0];
+    const ws = lead.split(/\s+/).map(w => w.replace(/^[^a-z]+|[^a-z-]+$/g, '')).filter(w => /[a-z]/.test(w));
+    if (!ws.length) return false;
+    if (WORK_VERBS.indexOf(ws[0]) !== -1) return true;
+    let head = ws[ws.length - 1];
+    if (WORK_HEADS.indexOf(head) === -1 && /s$/.test(head)) head = head.slice(0, -1);
+    return WORK_HEADS.indexOf(head) !== -1;
+  }
+
   let aliases = {};           // key (keyOf) -> supply id, his picks
   const itemWords = new Map();  // item -> {name, words, specs}, kept while its name is the same
 
@@ -348,5 +379,5 @@
   });
 
   window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
-                     pack: pack, packFromName: packFromName, partByKind: partByKind };
+                     pack: pack, packFromName: packFromName, partByKind: partByKind, readsAsWork: readsAsWork };
 })();
