@@ -2047,7 +2047,7 @@
   // est.snow (cleanSnow): { mode: tiers|perInch, tiers {'1-3','4-6','6+','9+'}
   //   (cents; '4-6' is the 3–6" price), deeper (6–9"/9"+ boxes out),
   //   perInchCents, saltCents, paw, extras [{id, name, cents}], laborCents,
-  //   areas [ids], areasOther, areasSet (picked by hand), type
+  //   stormNote (this bid's words under the prices; '' = his usual), areas [ids], areasOther, areasSet (picked by hand), type
   //   (residential|commercial, null = from the Business name), crewNotes }.
   // The area ids are estimates.py SNOW_AREAS too (Claude may give them).
   const SNOW_AREAS = [['driveway', 'Driveway'], ['walkways', 'Walkways'], ['mailbox', 'Mailbox'], ['steps', 'Steps'],
@@ -2110,6 +2110,8 @@
       extras: (Array.isArray(s.extras) ? s.extras : []).filter(x => x && typeof x === 'object').slice(0, 12)
         .map(x => ({ id: safeId(x.id) || newId('sx'), name: String(x.name || '').slice(0, 60), cents: c(x.cents) })),
       laborCents: c(s.laborCents),
+      // This bid's own words under the prices; '' = his usual (Pricing rules).
+      stormNote: String(s.stormNote || '').slice(0, 600),
       areas: SNOW_AREA_IDS.filter(id => (Array.isArray(s.areas) ? s.areas : []).indexOf(id) !== -1),
       areasOther: String(s.areasOther || '').slice(0, 300),
       areasSet: !!s.areasSet,
@@ -2143,6 +2145,16 @@
   }
   // His words (Pricing rules → Snow bids; pricing.js holds the defaults).
   const snowWordsCfg = () => (P() && P().snowBid ? P().snowBid() : { items: {} });
+  // The sentence under the prices: his usual one for a home or a business,
+  // unless this bid says its own (an assisted living kept open all storm is
+  // not "once for every 4-6 inches"). Kept starting "(For storms" so the
+  // reading-back on acceptance (quickbooks.py SNOW_BOILER) leaves it out of
+  // the crew's words.
+  function snowUsualStorm(s) {
+    const w = snowWordsCfg();
+    return (snowType(s) === 'commercial' ? w.stormNoteBusiness : w.stormNote) || '';
+  }
+  const snowStormNote = s => String(s.stormNote || '').trim() || snowUsualStorm(s);
 
   // The estimate's lines, as QuickBooks will show them -- the one place the
   // words are made: the customer view and what is sent both use this. The
@@ -2162,7 +2174,7 @@
     // Nothing picked yet (it cannot be sent so): a gap the eye catches.
     const intro = String(w.intro || '').replace(/\{areas\}/g, areasText(s) || '…').replace(/\s+/g, ' ').trim();
     const head = [intro, site].filter(Boolean).join('\n');
-    const prices = [w.pricedNote].concat(tierLines, [biz ? w.stormNoteBusiness : w.stormNote]).filter(Boolean).join('\n');
+    const prices = [w.pricedNote].concat(tierLines, [snowStormNote(s)]).filter(Boolean).join('\n');
     const out = [{ kind: 'plow', qbItem: plowItem || '', title: '1–3" per push', cents: s.tiers['1-3'] || 0,
                    text: [head, prices, per].filter(Boolean).join('\n\n') }];
     if (s.saltCents > 0) {
@@ -2341,6 +2353,10 @@
             (over ? moneyBox('perInch', '', s.perInchCents, 'Each inch over ' + over + '"', ro, snowYours('perInch', type, over), 'if you charge it') : '')) +
       '</div>' +
       (s.mode === 'tiers' && !deeper && !ro ? '<button type="button" class="link-btn" onclick="estSnowTap(\'deeper\')">+ Prices for 6–9" and 9"+</button>' : '') +
+      '<div class="field snb-storm"><span class="label">Under the prices — what this bid says about storms <small class="muted">' +
+        (String(s.stormNote || '').trim() ? 'this bid’s own words' + (ro ? '' : ' · <button type="button" class="link-btn" onclick="estSnowTap(\'storm\')">back to my usual words</button>')
+          : 'your usual words (Pricing rules → Snow bids)') + '</small></span>' +
+        '<textarea rows="3"' + (ro ? ' readonly' : '') + ' oninput="estSnowSet(\'storm\', \'\', this.value)">' + esc(snowStormNote(s)) + '</textarea></div>' +
 
       '<h4 class="est-h">Salt <span class="muted">— each application; leave empty for none</span></h4>' +
       '<div class="snb-prices">' + moneyBox('salt', '', s.saltCents, 'Salt per application', ro, snowYours('salt', type)) + '</div>' +
@@ -2474,6 +2490,8 @@
     else if (field === 'xcents' && x) x.cents = posCents(v);
     else if (field === 'other') s.areasOther = String(v || '').slice(0, 300);
     else if (field === 'crew') s.crewNotes = String(v || '').slice(0, 2000);
+    // Typed back to his usual words: the usual again (it follows his rules).
+    else if (field === 'storm') s.stormNote = String(v || '').trim() === snowUsualStorm(s).trim() ? '' : String(v || '').slice(0, 600);
     else return;
     snowTyped();
   };
@@ -2499,6 +2517,7 @@
     } else if (what === 'mode') s.mode = v === 'perInch' ? 'perInch' : 'tiers';
     else if (what === 'paw') s.paw = !s.paw;
     else if (what === 'deeper') s.deeper = true;
+    else if (what === 'storm') s.stormNote = '';
     else if (what === 'xadd') {
       if (s.extras.length >= 12) { showToast('That’s as many extras as one bid takes'); return; }
       s.extras.push({ id: newId('sx'), name: '', cents: null });
