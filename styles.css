@@ -5025,3 +5025,18 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     .svt-chip button, .jt-chip button { min-width:36px; min-height:36px; }
     .cj-tool { flex:1 1 calc(50% - 6px); }
   }
+  /* Finishing a job: its Before and After photos first (jobphotos.js
+     readyToFinish). What is there and what is missing, one row each, then
+     the photo buttons for what is missing -- side by side even on a phone,
+     where the job's own Photos section lays its three out in a grid. */
+  .jpf .ask-text { overflow:visible; max-height:none; }   /* short words; a stray scrollbar showed */
+  .jpf-rows { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+  .jpf-row { flex:1 1 140px; display:flex; align-items:center; gap:8px; min-height:44px; padding:6px 10px; border-radius:10px;
+    border:1.5px dashed var(--border-strong); color:var(--muted); font-size:14px; font-weight:600; }
+  .jpf-row.ok { border-style:solid; border-color:var(--pos); background:var(--pos-soft); color:var(--text); }
+  html[data-night] .jpf-row.ok { background:color-mix(in srgb, var(--pos) 25%, transparent); }
+  .jpf-note { margin-top:8px; }
+  .jpf-note[hidden] { display:none; }
+  .jp-add.jpf-add { display:flex; margin:12px 0 0; }
+  .jpf-add .jp-btn[hidden] { display:none; }
+  .jpf-add .jp-btn { flex-direction:row; }

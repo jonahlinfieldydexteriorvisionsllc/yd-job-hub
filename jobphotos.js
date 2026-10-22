@@ -41,6 +41,7 @@
   const status = {};       // id -> { progress, waiting, error, preview (object URL) }
   const busy = {};         // id -> being sent right now
   let viewing = null;      // id open in the viewer
+  const queueWatchers = new Set();  // told whenever the photos on screen or waiting here change
 
   // ------------------------------------------------------------ names, dates
 
@@ -373,6 +374,8 @@
   }
   function drawAll() {
     mounts.forEach(c => { if (!c.isConnected) mounts.delete(c); else draw(c); });
+    // The "photos first" window counts this phone's waiting photos too.
+    queueWatchers.forEach(fn => fn());
   }
   // Only the percentage, so a big upload does not redraw the grid 50 times.
   function drawProgress(id) {
@@ -493,6 +496,172 @@
     drawAll();
   };
 
+  // ------------------------------------- finishing a job: its photos first
+  //
+  // Jonah (21 Oct 2026): "when job is marked complete it prompts to add
+  // photos. job cannot be marked complete until there is a minimum of 1
+  // before and 1 after photo allow only Jonah to mark it complete without
+  // photos." Every way a job becomes Finished asks here first -- the stage
+  // buttons on the Job tab (app.js pickStage) and a move on the Jobs board
+  // (boards.js moveJob: a drag, the card's Move to, a one-tap button) -- and
+  // nothing about the job changes until the answer is yes, so Cancel leaves
+  // it exactly as it was. With both photos on the job it goes straight
+  // through, no window. Otherwise the window says what is missing, with Add
+  // before / Add after photo buttons right in it; only the owner gets
+  // "Finish it without photos".
+  // A photo counts when it is on the job and nobody has asked for it to be
+  // deleted. One still waiting on this phone for signal counts too: it is
+  // taken, just not sent yet. With no signal it goes by what this phone
+  // knows (Firestore's own copy, and this phone's waiting photos).
+  // Not in the database rules: they cannot look through a job's photos
+  // (other documents), and a photo still on a phone has no record there yet
+  // -- such a rule would refuse the whole job save of someone finishing a job
+  // in a truck with no signal.
+  const NEEDED = ['before', 'after'];
+  const SERVER_WAIT_MS = 4000;  // how long a missing photo waits for the server's word before the window opens
+  let finishing = null;         // the job being checked right now (one at a time)
+
+  // Resolves true when job `id` may be marked Finished now. opts.name: the
+  // customer's name, for the window's words.
+  function readyToFinish(id, opts) {
+    opts = opts || {};
+    return new Promise(resolve => {
+      // A second tap while the first is still being answered is the same ask.
+      if (finishing) { resolve(false); return; }
+      finishing = id || '-';
+      const owner = !!(window.YDAuth && YDAuth.isOwner);
+      const recs = {};          // the job's photo records, as this phone knows them
+      const canLook = !!(id && signedIn() && window.YDDb && window.YDDb.watchWhere);
+      // `sure`: what this phone has is the answer -- the server has said, or
+      // there is no signal and its own copy has been read.
+      let sure = !canLook;
+      let waited = false, win = null, stop = null, done = false;
+      const have = () => {
+        const n = { before: 0, after: 0, sending: 0 };
+        Object.keys(recs).forEach(k => {
+          const p = recs[k];
+          if (!p.deleteAsked && n[p.stage] != null) n[p.stage]++;
+        });
+        Object.values(queue).forEach(q => {
+          if (!id || q.jobId !== id || q.by !== myUid() || recs[q.id] || n[q.stage] == null) return;
+          n[q.stage]++;
+          n.sending++;
+        });
+        return n;
+      };
+      const enough = n => NEEDED.every(k => n[k] > 0);
+      const timer = setTimeout(() => { waited = true; update(); }, SERVER_WAIT_MS);
+      const slow = setTimeout(() => { if (!done && !win) showToast('Checking the job’s photos…'); }, 700);
+
+      function finish(ok) {
+        if (done) return;
+        done = true;
+        finishing = null;
+        clearTimeout(timer); clearTimeout(slow);
+        if (stop) { try { stop(); } catch (e) { /* already gone */ } }
+        queueWatchers.delete(update);
+        if (win) win.remove();
+        resolve(ok);
+      }
+      function update() {
+        if (done) return;
+        const n = have();
+        if (!win) {
+          if (enough(n)) { finish(true); return; }
+          if (!sure && !waited) return;     // a moment more for the server's word
+          open();
+        }
+        drawFinish(n);
+      }
+
+      // Built once and then only filled in: a redraw while the phone's photo
+      // picker is open must not swap the file box out from under it.
+      function open() {
+        const name = String(opts.name || '').trim();
+        win = document.createElement('div');
+        win.className = 'modal-overlay ask-overlay active';
+        win.innerHTML =
+          '<div class="modal ask-modal jpf" role="dialog" aria-modal="true" aria-labelledby="jpfTitle">' +
+            '<div class="modal-head"><h2 id="jpfTitle">Photos before it’s finished</h2>' +
+              '<button type="button" class="modal-close" aria-label="Cancel">&times;</button></div>' +
+            '<div class="modal-body">' +
+              '<div class="ask-text" data-jpf-say></div>' +
+              '<div class="jpf-rows" data-jpf-rows></div>' +
+              '<div class="hint jpf-note" data-jpf-note hidden></div>' +
+              (id ? '<div class="jp-add jpf-add">' + NEEDED.map(k =>
+                '<label class="btn jp-btn jp-btn-' + k + '" data-jpf-add="' + k + '">📷 Add <span class="jp-btn-what">' + k + ' photo</span>' +
+                '<input type="file" accept="image/*" multiple hidden data-job="' + safe(id) + '" onchange="jpPicked(this, \'' + k + '\')"></label>').join('') +
+                '</div>' : '') +
+              '<div class="ask-actions">' +
+                '<button type="button" class="btn" data-jpf="cancel">Cancel</button>' +
+                (owner ? '<button type="button" class="btn" data-jpf="skip">Finish it without photos</button>' : '') +
+                '<button type="button" class="btn btn-filled" data-jpf="finish">✓ Mark it finished</button>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+        win.setAttribute('data-name', name);
+        win.querySelector('.modal-close').onclick = () => finish(false);
+        // A tap on the backdrop is Cancel, as on the app's other questions
+        // (once a photo has been picked, guardWindows keeps the window open).
+        let pressedOut = !window.PointerEvent;
+        win.addEventListener('pointerdown', e => { pressedOut = e.target === win; });
+        win.addEventListener('click', e => {
+          if (e.target === win) { if (pressedOut) finish(false); return; }
+          const b = e.target.closest('[data-jpf]');
+          const what = b && b.getAttribute('data-jpf');
+          if (what === 'cancel') finish(false);
+          else if (what === 'finish' && enough(have())) finish(true);
+          else if (what === 'skip' && owner) finish(true);
+        });
+        document.body.appendChild(win);
+        setTimeout(() => {
+          const first = win && win.querySelector('.jpf-add label:not([hidden]), [data-jpf="cancel"]');
+          if (first && !done) { try { first.focus({ preventScroll: true }); } catch (e) { /* older browser */ } }
+        }, 30);
+      }
+      function drawFinish(n) {
+        const ok = enough(n), name = win.getAttribute('data-name');
+        const whose = name ? esc(name) + '’s job' : 'This job';
+        win.querySelector('[data-jpf-say]').innerHTML = ok
+          ? 'Both are on it now — it can be marked Finished.'
+          : !id ? 'Save the job first, then add its photos: a job is marked Finished once it has at least one Before and one After photo.'
+          : whose + ' can be marked Finished once it has at least one Before and one After photo.' +
+            (owner ? '' : ' Only Jonah can finish a job without them.');
+        win.querySelector('[data-jpf-rows]').innerHTML = NEEDED.map(k =>
+          '<div class="jpf-row' + (n[k] ? ' ok' : '') + '"><span class="jp-chip jp-' + k + '">' + STAGE_NAME[k] + '</span>' +
+          '<span>' + (n[k] ? '✓ ' + n[k] + ' photo' + (n[k] === 1 ? '' : 's') : 'None yet') + '</span></div>').join('');
+        const notes = [];
+        if (n.sending) notes.push(n.sending === 1 ? '1 of them is still sending from this phone — it counts.'
+          : n.sending + ' of them are still sending from this phone — they count.');
+        if (navigator.onLine === false) notes.push('No signal — going by the photos this phone knows about.');
+        else if (!sure && id) notes.push('No word from the server yet — going by the photos this phone knows about.');
+        const note = win.querySelector('[data-jpf-note]');
+        note.textContent = notes.join(' ');
+        note.hidden = !notes.length;
+        win.querySelectorAll('[data-jpf-add]').forEach(l => { l.hidden = ok || n[l.getAttribute('data-jpf-add')] > 0; });
+        win.querySelector('[data-jpf="finish"]').hidden = !ok;
+        const skip = win.querySelector('[data-jpf="skip"]');
+        if (skip) skip.hidden = ok;
+      }
+
+      if (canLook) {
+        stop = window.YDDb.watchWhere('jobPhotos', 'jobId', id, (changes, meta) => {
+          changes.forEach(c => {
+            if (c.type === 'removed' || !c.data || c.data.jobId !== id) delete recs[c.id];
+            else recs[c.id] = c.data;
+          });
+          if (!meta || !meta.fromCache || navigator.onLine === false) sure = true;
+          update();
+        }, () => { sure = true; update(); });
+        // Answered before the watch was even handed back: stop it now.
+        if (done) { try { stop(); } catch (e) { /* already gone */ } }
+      }
+      if (done) return;
+      queueWatchers.add(update);
+      update();
+    });
+  }
+
   // ----------------------------------------------- the Job tab (office)
 
   // Called by app.js whenever the job on the Job tab changes (opened, new,
@@ -532,6 +701,6 @@
   window.addEventListener('online', sendWaiting);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendWaiting(); });
 
-  window.YDJobPhotos = { mount: mount, jobShown: jobShown,
+  window.YDJobPhotos = { mount: mount, jobShown: jobShown, readyToFinish: readyToFinish,
                          waiting: () => Object.values(queue).filter(q => q.by === myUid()).length };
 })();

@@ -277,7 +277,10 @@
   // `why`: the reason a bid was lost ({lostReason, lostReasonText}), asked
   // first whenever a bid goes to Lost (app.js askLostReason) -- Cancel and
   // it stays where it was.
-  function moveJob(jobId, boardId, col, why) {
+  // `photosOk`: a job being finished was asked about its Before and After
+  // photos already (app.js photosLetFinish) -- the same way: Cancel and it
+  // stays where it was.
+  function moveJob(jobId, boardId, col, why, photosOk) {
     const j = jobsList().find(x => x._id === jobId);
     if (!j) return;
     // A card dropped back where it was (a drag that changed its mind) is not
@@ -290,6 +293,14 @@
       render();
       askLostReason({ name: (j.customerName || '').trim(), preset: turnedDown(j) ? 'qb' : '' },
         w => moveJob(jobId, boardId, col, w));
+      return;
+    }
+    // Into Ready to invoice, Invoiced or Paid from anywhere before them is
+    // finishing the job: only with its photos (or by the owner).
+    if (boardId === 'jobs' && COMPLETE_STAGES.indexOf(col) !== -1 && normStatusOf(j) !== 'complete' && !photosOk &&
+        typeof photosLetFinish === 'function') {
+      render();
+      photosLetFinish(jobId, (j.customerName || '').trim()).then(ok => { if (ok) moveJob(jobId, boardId, col, why, true); });
       return;
     }
     const at = nowIso();
@@ -884,7 +895,10 @@
     const add = editsBoard(board)
       ? '<button class="bd-add-card bd-add-top" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">+ Add a card</button>'
       // Won, Lost and Paid are where jobs end up, not where they start.
-      : board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1
+      // A job added as finished has no photos yet, and only the owner may
+      // finish one without them (addJobCard).
+      : board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1 &&
+        (board.id !== 'jobs' || COMPLETE_STAGES.indexOf(c.id) === -1 || isOwner())
         ? '<button class="bd-add-card bd-add-top" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
           (board.id === 'bids' ? '+ Add a bid' : '+ Add a job') + '</button>'
         : '';
@@ -1502,6 +1516,19 @@
   window.addJobCard = async function (boardId, col) {
     const board = boardById(boardId);
     if (!board || !board.virtual || !movesJobs() || typeof createJobRecord !== 'function') return;
+    // Added as finished: a new job has no photos, and a job is Finished only
+    // with a Before and an After photo -- or by the owner, who is asked.
+    if (boardId === 'jobs' && COMPLETE_STAGES.indexOf(col) !== -1) {
+      if (!isOwner()) {
+        showToast('A job is finished only once it has a Before and an After photo — add it to In progress, then add its photos', 6000);
+        return;
+      }
+      const how = await ydChoose('A new job has no photos yet, and a job is marked Finished only once it has a Before and an After photo.',
+        [{ id: 'inProgress', label: 'Add it to In progress', hint: 'then add its photos' },
+         { id: col, label: 'Add it finished without photos' }], { title: 'Photos before it’s finished' });
+      if (!how) return;
+      col = how.id;
+    }
     const name = await ydPrompt('The customer’s name — the rest comes next.', '',
       { title: boardId === 'bids' ? 'Who is the bid for?' : 'Who is the job for?', placeholder: 'Customer name', ok: 'Add' });
     if (!name || !name.trim()) return;

@@ -1147,11 +1147,25 @@ function renderStageSteps() {
   note.innerHTML = say;
   note.hidden = !say;
 }
+// A job is marked Finished only with at least one Before and one After photo
+// on it, or by the owner (Jonah, 21 Oct 2026) -- jobphotos.js readyToFinish
+// asks, with the buttons to add them. Resolves true to go ahead. Asked by
+// every way a job is finished: the stage buttons here and a move on the
+// Jobs board (boards.js moveJob).
+function photosLetFinish(jobId, name) {
+  if (window.YDJobPhotos && YDJobPhotos.readyToFinish) return YDJobPhotos.readyToFinish(jobId, { name: name });
+  // The photos part of the app did not load, so no photo can be added:
+  // only the owner may finish it, just as the owner may without photos.
+  if (window.YDAuth && YDAuth.isOwner) return Promise.resolve(true);
+  showToast('Job Hub could not check the job’s photos — reload it and try again', 6000);
+  return Promise.resolve(false);
+}
 // A stage button tapped. Moving between Bid, Booked, In progress and Finished
 // is the old Status list (onStatusChange, so the boards, the order list and
 // the plant-care email follow exactly as before); Invoiced / Paid by hand
 // set the finished job's Jobs board column.
-function pickStage(id) {
+// photosChecked: the photos were asked about already (photosLetFinish).
+async function pickStage(id, photosChecked) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   const cur = jobStage(formStageData());
   if (id === cur.id) return;
@@ -1175,6 +1189,18 @@ function pickStage(id) {
     return;
   }
   const status = id === 'bid' ? 'quoting' : id === 'booked' ? 'booked' : id === 'inprogress' ? 'inprogress' : 'complete';
+  // Finished only with its photos -- asked before anything changes, so
+  // Cancel leaves the job exactly as it was. A job never saved yet is saved
+  // first, so the photos have a job to go on.
+  if (status === 'complete' && jobStatus !== 'complete' && !photosChecked) {
+    if (!currentJobId && !jobIsEmpty()) autosave();
+    const asked = currentJobId;
+    const name = (document.getElementById('customerName').value || '').trim();
+    if (!(await photosLetFinish(asked, name))) return;
+    // Another job opened meanwhile: this answer was not about it.
+    if (currentJobId !== asked) return;
+    return pickStage(id, true);
+  }
   const at = new Date().toISOString();
   // From a bid (or a lost one) to a job: it was won, as "Make it a job" does.
   if (status !== 'quoting' && isBidStatus(jobStatus)) { boardFields.bidStage = 'won'; boardFields.bidStageAt = at; }
