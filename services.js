@@ -12,6 +12,7 @@
 //   { groups:   { id: { name, order, active } },          the kinds of work
 //     services: { id: { name, group, summary, details, howTo, aliases[], qbItemName,
 //                       tools[], active, order, addedAt, addedBy } },
+//     paint:    [{ id, color, means }],                 the marking paint colours' key
 //     seededAt, updatedAt }
 // One record rather than a collection: the whole list is a few dozen short
 // entries, everyone reads all of it at once (a picker, the crew's page), and
@@ -51,7 +52,14 @@
 // version"). Jonah's own words, written with Claude over the winter (his
 // answer: "i will work with claude to explain how we do it and claude will
 // write it in"): this file never makes any up. Until one is written, the
-// crew see nothing for it and Jonah sees "not written yet".
+// crew see nothing for it and Jonah sees "not written yet". He wants them as
+// simple bullet points (22 Oct): one step a line, shown as a list.
+//
+// THE MARKING PAINT KEY (paint). Jonah (22 Oct 2026): "Im also gonna start
+// using marking paint on jobsites that is color coded so the guys know what
+// to do." Each colour he uses and what it means, in his words -- set here by
+// him (empty until he does; nothing is assumed), shown on every job's page
+// for the crew and in each mark-out to-do (markout.js).
 
 (function () {
   'use strict';
@@ -73,6 +81,27 @@
   // How long a how-we-do-it may be: a page of steps, never a manual (it is
   // copied onto every booked job's page for the crew).
   const HOW_MAX = 6000;
+  // A how-we-do-it as a list: one point a line, any bullet or number typed
+  // in front taken off (Jonah, 22 Oct: "simple bullet points").
+  const BULLET = /^\s*(?:[•●▪·*–-]\s+|\d{1,2}[.)]\s+)/;
+  function pointsHtml(text) {
+    const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    return lines.length ? '<ul class="svc-points">' + lines.map(l => '<li>' + esc(l.replace(BULLET, '')) + '</li>').join('') + '</ul>' : '';
+  }
+  // The marking paint colours there are and how each is drawn (names, not
+  // business numbers); what each one MEANS is his, in the list (paint).
+  const PAINT = [['white', 'White', '#ffffff'], ['pink', 'Pink', '#ff4fa3'], ['red', 'Red', '#e53935'], ['orange', 'Orange', '#ff8a1c'],
+                 ['yellow', 'Yellow', '#ffd60a'], ['green', 'Green', '#2fb344'], ['blue', 'Blue', '#1e6fe0'],
+                 ['purple', 'Purple', '#8e44ad'], ['black', 'Black', '#222222']];
+  const PAINT_MAX = 12;
+  const paintOf = c => PAINT.find(p => p[0] === c) || null;
+  function cleanPaint(arr) {
+    return (Array.isArray(arr) ? arr : []).filter(p => p && paintOf(p.color)).slice(0, PAINT_MAX)
+      .map((p, i) => ({ id: safeId(p.id) || 'pt' + i, color: p.color, means: s(p.means).slice(0, 160) }));
+  }
+  // The key as the crew read it: the colours given a meaning.
+  const paintKey = () => (list ? (list.paint || []).filter(p => s(p.means))
+    .map(p => ({ color: p.color, name: paintOf(p.color)[1], hex: paintOf(p.color)[2], means: p.means })) : []);
 
   // The kinds of work it starts with. Names, not business numbers; Jonah can
   // rename, add, reorder and hide them.
@@ -128,6 +157,7 @@
     Object.entries((d && d.groups) || {}).forEach(([id, g]) => { if (g && g.name) out.groups[id] = g; });
     Object.entries((d && d.services) || {}).forEach(([id, v]) => { if (v && s(v.name)) out.services[id] = v; });
     if (!Object.keys(out.groups).length) GROUPS.forEach(([id, name], i) => { out.groups[id] = { name: name, order: i, active: true }; });
+    out.paint = cleanPaint(d && d.paint);
     return out;
   }
   function reindex() {
@@ -262,6 +292,7 @@
   function write(patch, what) {
     patch = Object.assign({}, patch, { updatedAt: iso() });
     if (list) { applyLocal({ groups: patch.groups || {}, services: patch.services || {} }); reindex(); }
+    if (list && patch.paint) list.paint = cleanPaint(patch.paint);
     if (!window.YDDb) return;
     Promise.resolve(window.YDDb.put('settings', DOC, patch)).catch(e => {
       if (e && e.code === 'permission-denied') showToast('Not saved to the services list — not allowed');
@@ -890,7 +921,7 @@
   window.closeServices = function () {
     const m = el('svcModal');
     if (m) m.classList.remove('active');
-    editing = null; draft = null; focusId = null;
+    editing = null; draft = null; focusId = null; paintRows = null; paintNew = [];
   };
   window.svcSearch = function (v) {
     search = String(v || '');
@@ -933,9 +964,13 @@
   // folded under them, how we do it (the crew's, once Jonah has written it).
   function readHtml() {
     const anyHow = Object.values(list.services).some(v => v && v.active !== false && s(v.howTo));
+    const key = paintKey();
     return '<p class="hint">What each service is, in words to use with a homeowner. ' +
       'The first line is the short version; under it, what it includes.' +
       (anyHow ? ' “👷 How we do it” is for us, not the homeowner: the way we do the work on site.' : '') + '</p>' +
+      (key.length ? '<div class="svc-paint-key"><div class="svc-paint-h">🎨 Paint on the ground</div>' + key.map(k =>
+        '<div class="svc-paint-line"><span class="paint-dot" style="background:' + k.hex + '"></span><b>' + esc(k.name) + '</b> — ' +
+        esc(k.means) + '</div>').join('') + '</div>' : '') +
       (owner() ? '<div class="svc-acts"><button class="btn btn-sm" onclick="svcMode(\'manage\')">✎ Back to changing the list</button></div>' : '') +
       searchBox('Search the services') + '<div id="svcResults">' + readGroupsHtml() + '</div>';
   }
@@ -949,7 +984,7 @@
         (s(v.details) ? '<div class="svc-details">' + esc(v.details) + '</div>' : '') +
         (!s(v.summary) && !s(v.details) ? '<div class="muted svc-none">No description yet — ask Jonah.</div>' : '') +
         (s(v.howTo) ? '<details class="svc-how"' + (v.id === focusId ? ' open' : '') + '><summary>👷 How we do it</summary>' +
-          '<div class="svc-how-text">' + esc(s(v.howTo)) + '</div></details>' : '') +
+          '<div class="svc-how-text">' + pointsHtml(v.howTo) + '</div></details>' : '') +
         ((v.tools || []).length ? '<div class="svc-alias svt-line">🧰 Bring: ' + esc(toolsLine(v)) + '</div>' : '') +
       '</div>').join(''), svs.length);
     }).join('');
@@ -975,6 +1010,7 @@
         '<button class="btn btn-sm" onclick="svcMode(\'read\')">👀 What the crew see</button>' +
       '</div>' +
       searchBox('Search the services') + '<div id="svcResults">' + manageGroupsHtml() + '</div>' +
+      '<div id="svcPaint">' + paintHtml() + '</div>' +
       offListHtml() + groupsEditorHtml() + otherListsHtml();
   }
   function manageGroupsHtml() {
@@ -1034,7 +1070,7 @@
         '<textarea id="svcEdDetails" rows="5" maxlength="4000" placeholder="A few sentences: what is included" oninput="svcDraft(\'details\', this.value)">' +
         esc(d.details) + '</textarea></div>' +
       '<div class="field svc-how-field"><span class="label">👷 How we do it — for the crew only, never the customer. Shows under this kind of work on every job’s page.</span>' +
-        '<textarea id="svcEdHow" rows="7" maxlength="' + HOW_MAX + '" placeholder="Not written yet. The steps on site, in order: how deep we dig, what goes down and how it is compacted, the checks before we leave." ' +
+        '<textarea id="svcEdHow" rows="7" maxlength="' + HOW_MAX + '" placeholder="Not written yet. One step a line — each shows as a bullet point:&#10;Dig 10 in below finished grade&#10;Fabric down, overlap 12 in&#10;Base in 2 in lifts, compact each one" ' +
         'oninput="svcDraft(\'howTo\', this.value)">' + esc(d.howTo) + '</textarea></div>' +
       toolsFieldHtml(d) +
       qbFieldHtml(d) +
@@ -1234,6 +1270,84 @@
     putService(id, blank(name, guessGroup(name), nextOrder()), 'adding ' + name);
     search = '';
     window.svcEdit(id);
+  };
+
+  // ---- The marking paint colours (the owner's screen): each colour and what
+  // it means. Saved as each box is left; a colour with no meaning yet is
+  // kept on the screen, not on the list.
+  let paintRows = null;     // the rows drawn in the window
+  let paintNew = [];        // colours added here and not on the list yet
+  // Drawn from the list as it is now (another device may have changed it),
+  // plus the colours added here and not saved yet -- so a save never puts
+  // back an old copy of the key.
+  function paintNow() {
+    const have = new Set((list.paint || []).map(p => p.id));
+    paintNew = paintNew.filter(p => !have.has(p.id));
+    return (list.paint || []).map(p => Object.assign({}, p)).concat(paintNew);
+  }
+  function paintHtml() {
+    paintRows = paintNow();
+    const opts = c => PAINT.map(p => '<option value="' + p[0] + '"' + (p[0] === c ? ' selected' : '') + '>' + p[1] + '</option>').join('');
+    return '<h3 class="svc-h3">🎨 Marking paint colours</h3>' +
+      '<p class="hint">What each colour you paint on a job means. The crew see this key on every job’s page, and it goes on each mark-out to-do.</p>' +
+      (paintRows.length ? paintRows.map((p, i) => '<div class="svc-paint-row">' +
+          '<span class="paint-dot" style="background:' + paintOf(p.color)[2] + '"></span>' +
+          '<select aria-label="Colour" onchange="svcPaint(' + i + ', \'color\', this.value)">' + opts(p.color) + '</select>' +
+          '<input id="svcPaint_' + i + '" value="' + esc(p.means) + '" maxlength="160" placeholder="What it means — e.g. dig out for the patio"' +
+            ' oninput="svcPaintType(' + i + ', this.value)" onchange="svcPaint(' + i + ', \'means\', this.value)">' +
+          '<button type="button" class="btn btn-sm svc-arrow" aria-label="Take this colour off" onclick="svcPaintOff(' + i + ')">×</button>' +
+        '</div>').join('')
+        : '<p class="empty-msg">Not set yet — add each colour you use and what it means.</p>') +
+      (paintRows.length < PAINT_MAX ? '<div class="svc-acts"><button type="button" class="btn btn-sm" onclick="svcPaintAdd()">+ Add a colour</button></div>' : '');
+  }
+  function redrawPaint() { const b = el('svcPaint'); if (b && list) b.innerHTML = paintHtml(); }
+  // Saved, and the pages that show the key told (not this window: it is
+  // being typed in).
+  function savePaint() {
+    write({ paint: cleanPaint(paintRows.filter(p => s(p.means))) }, 'the paint key');
+    document.dispatchEvent(new CustomEvent('yd-services'));
+  }
+  window.svcPaintAdd = function () {
+    if (!owner() || !list) return;
+    // The next colour not on the key yet, to change if it is not the one.
+    const used = paintNow().map(p => p.color);
+    const next = PAINT.find(p => used.indexOf(p[0]) === -1) || PAINT[0];
+    paintNew.push({ id: 'pt' + Date.now().toString(36), color: next[0], means: '' });
+    redrawPaint();
+    const box = el('svcPaint_' + (paintRows.length - 1));
+    if (box) box.focus();
+  };
+  window.svcPaintType = function (i, v) { if (paintRows && paintRows[i]) paintRows[i].means = String(v || ''); };
+  // The row drawn at i, in the key as it is now (by its id).
+  function paintRowAt(i) {
+    const was = paintRows && paintRows[i];
+    if (!was || !list) return null;
+    paintRows = paintNow();
+    return paintRows.find(p => p.id === was.id) || null;
+  }
+  window.svcPaint = function (i, k, v) {
+    const row = owner() ? paintRowAt(i) : null;
+    if (!row) return;
+    if (k === 'color' && paintOf(v)) row.color = v;
+    else if (k === 'means') row.means = s(v).slice(0, 160);
+    // Saved first: the redraw is drawn from the list.
+    savePaint();
+    if (k === 'color') redrawPaint();
+  };
+  window.svcPaintOff = function (i) {
+    const row = owner() ? paintRowAt(i) : null;
+    if (!row) return;
+    const gone = paintRows.splice(paintRows.indexOf(row), 1)[0];
+    paintNew = paintNew.filter(p => p.id !== gone.id);
+    savePaint();
+    redrawPaint();
+    if (s(gone.means)) showUndo(paintOf(gone.color)[1] + ' taken off the key', () => {
+      if (!list) return;
+      paintRows = paintNow();
+      paintRows.splice(Math.min(i, paintRows.length), 0, gone);
+      savePaint();
+      redrawPaint();
+    });
   };
 
   // Merge: pick the one to keep. This one's name and old spellings become
@@ -1466,6 +1580,8 @@
     // text, byHand } or null; and the services to pick one from by hand,
     // by kind of work: [{ name, services: [{ id, name, written }] }].
     howToFor: howToFor,
+    // The marking paint key: [{ color, name, hex, means }] (only colours given a meaning).
+    paint: paintKey,
     pickList: () => (list ? groupsSorted(true).map(g => ({ name: g.name,
       services: servicesIn(g.id).map(v => ({ id: v.id, name: v.name, written: !!s(v.howTo) })) }))
       .filter(g => g.services.length) : []),
@@ -1486,7 +1602,7 @@
     }
     if (k === authKey) return;
     authKey = k;
-    list = null; index = {}; onServer = false; editing = null; draft = null; qb = null; qbErr = '';
+    list = null; index = {}; onServer = false; editing = null; draft = null; qb = null; qbErr = ''; paintRows = null; paintNew = [];
     pubMachines = null; pubAsked = false;
     if (on) load(true);
     else window.closeServices();

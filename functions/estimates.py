@@ -106,8 +106,9 @@ SYSTEM = (
     "app prices in but never shows the customer -- don't name it in a scope). Follow Jonah's rules "
     "below for how a scope is built and what every estimate says.\n"
     "- `crew` on each labour line is the same work told to the crew, for the job's page they read on "
-    "site: 2 to 4 short lines -- what to do on THIS job, with the sizes, depths, quantities and "
-    "particulars that matter there (where it goes, what to protect, access, what gets picked up). "
+    "site: 1 to 4 short bullet points, each line starting with '• ' -- what we are installing or doing "
+    "on THIS job, how much and where ('• Installing 120 ft of steel edging around 3 garden beds'), "
+    "with the depths and particulars that matter there (what to protect, access, what gets picked up). "
     "No selling words or why it is good for the customer, no prices, no crew-days. How the company "
     "does each kind of work is written for the crew separately, so don't explain the standard "
     "method -- only what is particular to this job. A line whose crew notes are marked as Jonah's "
@@ -1012,3 +1013,96 @@ def draft_snow(client, d):
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
             "model": SNOW_MODEL}, resp.usage
+
+
+# ----------------------------------------------------------------- crew notes
+#
+# Jonah (22 Oct 2026): "there needs to be specific notes per job for each
+# service not just the basic of how to do ... simple bullet points with
+# instructions. like a description of were installing _ amount of edging
+# around _ garden beds." An estimate built in Job Hub gets them from the call
+# that builds it (`crew` above). A job made in QuickBooks has no such call, so
+# when it is booked the app sends its lines here once (his yes, 22 Oct: "yes,
+# automatically", about a cent or two a job): each line's words as the
+# customer read them and the materials for it, and Claude gives back a few
+# bullets per line for the crew. Writes nothing -- the app puts them in the
+# lines' notes for the crew that are still empty, never over his own.
+CREW_MODEL = "claude-sonnet-5-5"
+CREW_SYSTEM = (
+    "You write the crew's notes for jobs of YD Exterior Visions LLC, a landscaping and hardscaping company near "
+    "Madison, Wisconsin. The crew read them on site, on a phone, on the job's page.\n\n"
+    "For each piece of work you are given, write what the crew are doing on THIS job as 1 to 4 short bullet points, "
+    "each line starting with '• ': what we are installing or doing, how much, and where -- for example "
+    "'• Installing 120 ft of steel edging around 3 garden beds' or '• 3 cu yd of brown mulch, 3 in deep, in the front "
+    "beds'. Take the sizes, quantities, products and places from the customer's wording and the materials listed for "
+    "that piece of work. Never invent a measurement, a product or a place. No selling words, no why it is good or how "
+    "long it lasts, no warranties, no prices or payment terms, no crew-days. Don't explain the standard method of "
+    "doing the work -- the crew have that separately. Where the wording gives the crew nothing particular, one bullet "
+    "saying what the work is. Give an entry for every piece of work, by its id."
+)
+CREW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "lines": {"type": "array", "items": {
+            "type": "object",
+            "properties": {"id": {"type": "string"}, "crew": {"type": "string"}},
+            "required": ["id", "crew"],
+            "additionalProperties": False,
+        }},
+    },
+    "required": ["lines"],
+    "additionalProperties": False,
+}
+CREW_LINES_MAX = 20
+
+
+def _crew_prompt(d):
+    rows = []
+    if str(d.get("siteNotes") or "").strip():
+        rows += ["Site notes for the whole job (where things are, what to watch):",
+                 str(d.get("siteNotes")).strip()[:3000], ""]
+    rows.append("THE WORK:")
+    for w in (d.get("lines") or [])[:CREW_LINES_MAX]:
+        if not isinstance(w, dict):
+            continue
+        rows.append("- id %s | %s%s" % (str(w.get("id") or "")[:40], str(w.get("title") or "Work")[:200],
+                                       (" | %s %s" % (w.get("qty"), str(w.get("unit") or "")[:20])) if _num(w.get("qty")) else ""))
+        rows.append("  customer's wording: " + (str(w.get("scope") or "").strip()[:4000].replace("\n", "\n  ") or "(none)"))
+        mats = [m for m in (w.get("materials") or [])[:40] if isinstance(m, dict) and str(m.get("name") or "").strip()]
+        if mats:
+            rows.append("  materials for it: " + "; ".join(
+                "%s%s" % (str(m.get("name"))[:120], (" -- %s %s" % (m.get("qty"), str(m.get("unit") or "")[:20])) if _num(m.get("qty")) else "")
+                for m in mats))
+    return "\n".join(rows)
+
+
+def crew_notes(client, d):
+    """The crew's notes for a job's lines. Returns (result, usage): {lines:
+    [{id, crew}]} for the ids asked about, or {error}."""
+    asked = [str(w.get("id") or "") for w in (d.get("lines") or [])[:CREW_LINES_MAX] if isinstance(w, dict) and w.get("id")]
+    if not asked:
+        return {"error": "No work to write notes for", "model": CREW_MODEL}, None
+    with client.beta.messages.stream(
+        model=CREW_MODEL, max_tokens=6000,
+        system=[{"type": "text", "text": CREW_SYSTEM}],
+        messages=[{"role": "user", "content": _crew_prompt(d)}],
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": CREW_SCHEMA}},
+        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+    ) as stream:
+        resp = stream.get_final_message()
+    if resp.stop_reason == "refusal":
+        return {"error": "Claude declined to do this one", "model": CREW_MODEL}, resp.usage
+    if resp.stop_reason == "max_tokens":
+        return {"error": "That answer came out too long. Try again.", "model": CREW_MODEL}, resp.usage
+    text = next((b.text for b in resp.content if b.type == "text"), "")
+    try:
+        got = json.loads(text)
+    except ValueError:
+        return {"error": "Claude's answer could not be read. Try again.", "model": CREW_MODEL}, resp.usage
+    out = []
+    for x in got.get("lines") or []:
+        lid = str((x or {}).get("id") or "")
+        crew = SNOW_MONEY.sub("$—", str((x or {}).get("crew") or "").strip())[:1500]
+        if lid in asked and crew and not any(o["id"] == lid for o in out):
+            out.append({"id": lid, "crew": crew})
+    return {"lines": out, "model": CREW_MODEL}, resp.usage

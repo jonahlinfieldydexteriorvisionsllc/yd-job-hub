@@ -1038,6 +1038,7 @@ function onStatusChange() {
   showBidBanner();
   updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
+  if (window.YDMarkOut) window.YDMarkOut.refresh();
 }
 function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; showBidBanner(); }
 function showBidBanner() {
@@ -3522,6 +3523,7 @@ function loadJobData(d) {
   renderProposal(); renderOrderList(); renderJobTools(); updateSummary();
   dirty = false; updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
+  if (window.YDMarkOut) window.YDMarkOut.refresh();
 }
 
 // The job index holds every job on this device, those in Recently deleted
@@ -3924,6 +3926,7 @@ function clearJobForm() {
   renderProposal(); renderOrderList(); updateSummary();
   dirty = false; updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
+  if (window.YDMarkOut) window.YDMarkOut.refresh();
 }
 function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); scheduleJobTools(); }
 

@@ -511,6 +511,25 @@
         (m.how ? ' <span class="muted">(' + esc(m.how) + ')</span>' : '') +
       '</td><td class="cj-q">' + esc(fmtQty(m.qty, m.unit)) + '</td></tr>').join('') + '</tbody></table>';
   }
+  // Points to do, one a line, as a list -- Jonah (22 Oct 2026): "simple
+  // bullet points with instructions". A how-we-do-it always (`always`; a
+  // bullet or number typed in front is taken off); notes for the crew when
+  // every line of them is a point (Claude writes them so), else as written.
+  const BULLET = /^\s*(?:[•●▪·*–-]\s+|\d{1,2}[.)]\s+)/;
+  function pointsHtml(text, always) {
+    const lines = String(text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return '';
+    if (!always && !lines.every(l => BULLET.test(l))) return '<div class="cj-text">' + marked(text) + '</div>';
+    return '<ul class="cj-points">' + lines.map(l => '<li>' + marked(l.replace(BULLET, '')) + '</li>').join('') + '</ul>';
+  }
+  // What each colour of marking paint on the ground means (services.js,
+  // Jonah's key; nothing until he sets it).
+  function paintHtml() {
+    const key = window.YDServices && YDServices.paint ? YDServices.paint() : [];
+    return key.length ? '<div class="cj-paint">' + key.map(k => '<div class="cj-paint-line"><span class="paint-dot" style="background:' +
+      k.hex + '"></span><b>' + esc(k.name) + '</b> — ' + esc(k.means) + '</div>').join('') + '</div>' : '';
+  }
+
   // What is folded open or shut on a page (a line's how-we-do-it, the
   // customer's words), kept while it is drawn again -- a crew copy changing
   // under an open page must not snap them all back. job|line|which -> open.
@@ -547,12 +566,12 @@
           (w.qty > 0 ? ' <span class="cj-big">' + esc(fmtQty(w.qty, w.unit)) + '</span>' : '') +
           (w.days ? ' <span class="muted">· ' + esc(fmtNum(w.days)) + ' crew-day' + (w.days === 1 ? '' : 's') + '</span>' : '') +
         '</div>' +
-        (w.crewNote ? '<div class="cj-crewnote"><div class="cj-crewnote-h">👷 For the crew</div><div class="cj-text">' +
-          marked(w.crewNote) + '</div></div>' : '') +
+        (w.crewNote ? '<div class="cj-crewnote"><div class="cj-crewnote-h">📋 On this job</div>' +
+          pointsHtml(w.crewNote, false) + '</div>' : '') +
         (mine.length ? '<div class="cj-sub">Materials for this</div>' + matTable(mine) : '') +
         (how ? (again ? '<div class="cj-how cj-how-again">👷 How we do it — ' + esc(how.name) + ': as above</div>'
           : '<details class="cj-how"' + foldAttr(k + '|how', true) + '><summary>👷 How we do it — ' + esc(how.name) + '</summary>' +
-              '<div class="cj-text">' + marked(how.text) + '</div></details>') : '') +
+              pointsHtml(how.text, true) + '</details>') : '') +
         (opts.extra ? opts.extra(w) : '') +
         // Until there is anything for the crew on a line, the customer's
         // words are all it has -- said on the fold, which still opens on a tap.
@@ -564,7 +583,8 @@
     const rest = mats.filter(m => !m.work || !ids[m.work]);
     const haul = (j.spoil > 0 ? '<div class="cj-haul">🚛 About <b class="cj-m">' + esc(fmtNum(j.spoil)) + ' cu yd</b> of soil and debris to haul away</div>' : '') +
       (j.brush > 0 ? '<div class="cj-haul">🌿 About <b class="cj-m">' + esc(fmtNum(j.brush)) + ' cu yd</b> of brush — its own dumpster, no soil or rock in it</div>' : '');
-    return sec(opts.title || '🛠 The work', lines + (lines ? haul : '')) +
+    return sec('🎨 Paint on the ground', paintHtml()) +
+      sec(opts.title || '🛠 The work', lines + (lines ? haul : '')) +
       sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest) : '') +
       (lines ? '' : sec('🚛 Haul away', haul));
   }
@@ -813,6 +833,9 @@
     if (bar && bar.innerHTML !== b) bar.innerHTML = b;
   }
   document.addEventListener('yd-clock-changed', freshClock);
+  // The services list came in or changed (a how-we-do-it, the paint key):
+  // an open page is drawn again with it.
+  document.addEventListener('yd-services', () => { pageSig = ''; freshPage(); });
 
   // The job's crew copy changed while its page is open (Jonah changed the
   // work, QuickBooks' words came in): the page is drawn again, where it was

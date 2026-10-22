@@ -364,6 +364,8 @@
       // Made in QuickBooks and accepted there (quickbooks.py _hub_estimate):
       // the figures the customer said yes to, kept (pricing.js asAccepted).
       if (e.fromQb && typeof e.fromQb === 'object') o.fromQb = clone(e.fromQb);
+      // The lines already sent to Claude for the crew's notes (crewWrite).
+      if (Array.isArray(e.crewAsked)) o.crewAsked = e.crewAsked.slice(-80);
       // Where the job is on the map (from the miles lookup), for a town MDS
       // prices by zone; `at` is the address it was found for.
       // `zip` is the ZIP the map has for the address (checked before sending),
@@ -663,7 +665,17 @@
       C.workPageHtml(parts, { key: 'job:' + (currentJobId || ''), extra: mine ? howTodoHtml : null,
         title: '🛠 The work <span class="est-words-from">— as the crew read it; what the customer was told (' + from + ') under each line</span>',
         sec: (title, body) => body ? '<div class="est-words-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '' }) +
+      crewBtnHtml() +
     '</div>';
+  }
+  // Claude writing the crew's notes for this job (crewWrite), or the way to
+  // ask it to: the lines with none, and its own again -- never his.
+  function crewBtnHtml() {
+    if (!changes()) return '';
+    if (crewHere) return '<p class="hint est-crew-busy">✨ Claude is writing the crew’s notes…</p>';
+    const some = est.work.some(w => w && (String(w.title || '').trim() || String(w.scope || '').trim()) && (crewEmpty(w) || w.crewNoteBy === 'claude'));
+    return some ? '<div class="est-crew-again"><button type="button" class="btn btn-sm" onclick="estCrewNotes()">✨ Write the crew’s notes</button>' +
+      '<span class="hint">Claude writes the lines with none (and its own again) — never over yours.</span></div>' : '';
   }
   // Under a piece of work, for Jonah: its kind of work's how-we-do-it, when
   // it is not written yet -- the crew see nothing for it until it is.
@@ -963,7 +975,7 @@
     return '<div class="est-crewnote"><span>👷 Notes for the crew — not on the estimate; the crew see them on the job’s page' +
         (w.crewNoteBy === 'claude' && String(w.crewNote || '').trim() ? '. <b>Written by Claude</b> from your notes — change anything and they’re yours' : '') + '</span>' +
       '<textarea rows="2" id="estCN_' + id + '"' + (ro ? ' readonly' : '') +
-        ' placeholder="Anything the crew need to know for this work — depths, where things go, what to watch out for"' +
+        ' placeholder="What we’re doing on this job, a point a line — • Installing 120 ft of edging around 3 garden beds"' +
         ' oninput="estWork(\'' + id + '\', \'crewNote\', this.value)">' + esc(w.crewNote || '') + '</textarea></div>';
   }
   window.estCrewNote = function (id) {
@@ -4165,6 +4177,125 @@
     } finally { tripsRunning = false; }
   }
   ['yd-jobs-changed', 'yd-pricing'].forEach(ev => document.addEventListener(ev, tripsForAll));
+
+  // ------------------------------------------------ the crew's notes, by Claude
+  //
+  // Jonah (22 Oct 2026): "there needs to be specific notes per job for each
+  // service ... simple bullet points ... were installing _ amount of edging
+  // around _ garden beds" -- and, asked, "yes, automatically" for jobs made
+  // in QuickBooks (an estimate built here gets them from the build). So on
+  // his device, every booked or in-progress job's lines with no notes for
+  // the crew go to Claude once (/estimate/crew: the words as the customer
+  // read them, the materials for each line, the site notes), one job at a
+  // time, and the bullets come back as Claude's (crewNoteBy 'claude') --
+  // never over his own words, never into a line he emptied by hand
+  // (crewNoteBy 'hand'). est.crewAsked: the lines already sent, so a line
+  // added later is sent then and an answer of nothing is not asked twice.
+  // "✨ Write the crew’s notes" on the job sends them again by hand.
+  const CREW_MAX = 8;                 // jobs a visit, at most
+  const crewTried = {};               // job id -> sent this visit
+  let crewRunning = false, crewTimer = null, crewHere = false;
+  const crewEmpty = w => !String(w.crewNote || '').trim() && w.crewNoteBy !== 'hand';
+  function crewWanted(d, again) {
+    const e = d && d.estimate;
+    if (!e || typeof e !== 'object' || e.v !== 2) return [];
+    const asked = Array.isArray(e.crewAsked) ? e.crewAsked : [];
+    return (e.work || []).filter(w => w && w.id && (String(w.title || '').trim() || String(w.scope || '').trim()) &&
+      (again ? crewEmpty(w) || w.crewNoteBy === 'claude' : crewEmpty(w) && asked.indexOf(w.id) === -1));
+  }
+  function crewNeed(id, d) {
+    if (!d || d.deletedAt || d.removeWhy || crewTried[id]) return false;
+    const st = typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : d.jobStatus;
+    if (st !== 'booked' && st !== 'inprogress') return false;
+    if (snowOf(d.estimate || {}, d.serviceTypes, d.jobStatus, d.qbEstimate)) return false;
+    return crewWanted(d, false).length > 0;
+  }
+  // What is sent: each line as the crew's page has it (its words, how much,
+  // its materials -- dollar figures already blanked), and the site notes.
+  function crewAsk(d, lines) {
+    const parts = window.YDCrewJobs && YDCrewJobs.workParts ? YDCrewJobs.workParts(d) : null;
+    const want = new Set(lines.map(w => safeId(w.id)));
+    const work = parts ? parts.work.filter(w => want.has(w.id)) : lines.map(w => ({ id: safeId(w.id), title: w.title, scope: w.scope }));
+    return { siteNotes: String((d.estimate || {}).notes || '').slice(0, 3000),
+             lines: work.slice(0, 20).map(w => ({ id: w.id, title: w.title || '', scope: w.scope || '', qty: w.qty || null, unit: w.unit || '',
+               materials: parts ? parts.materials.filter(m => m.work === w.id).map(m => ({ name: m.name, qty: m.qty, unit: m.unit })) : [] })) };
+  }
+  // Claude's bullets onto an estimate's lines: only where the line's notes
+  // are still empty -- or, sent again by hand, still Claude's.
+  function crewTake(e, sent, got, again) {
+    const by = {};
+    (got || []).forEach(x => { if (x && x.id && String(x.crew || '').trim()) by[x.id] = String(x.crew).trim().slice(0, 3000); });
+    let n = 0;
+    e.work.forEach(w => {
+      const said = by[safeId(w.id)];
+      if (!said || !(crewEmpty(w) || (again && w.crewNoteBy === 'claude'))) return;
+      w.crewNote = said; w.crewNoteBy = 'claude'; n++;
+    });
+    e.crewAsked = Array.from(new Set((Array.isArray(e.crewAsked) ? e.crewAsked : []).concat(sent))).slice(-80);
+    return n;
+  }
+  function crewForAll() {
+    clearTimeout(crewTimer);
+    crewTimer = setTimeout(runCrew, 6000);
+  }
+  async function runCrew() {
+    if (crewRunning || !window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change')) return;
+    if (!navigator.onLine || !window.YDClaude || !window.YDClaude.available() || !window.YDSync || typeof getJobIndex !== 'function') return;
+    if (!window.YDSync.jobsHeard || !window.YDSync.jobsHeard()) return;
+    crewRunning = true;
+    try {
+      let n = 0;
+      for (const j of getJobIndex()) {
+        if (n >= CREW_MAX || !navigator.onLine) break;
+        let d = null;
+        try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (err) {}
+        if (!crewNeed(j.id, d)) continue;
+        crewTried[j.id] = true;
+        n++;
+        await crewWrite(j.id, d, false);
+        await new Promise(res => setTimeout(res, 1500));
+      }
+    } finally { crewRunning = false; }
+  }
+  // One job's lines to Claude and back into the job: the open one through
+  // the form (it is saved with it), any other through patchJob, read again
+  // first (it may have changed meanwhile). Answers how many lines got notes,
+  // or null when it could not be done.
+  async function crewWrite(id, d, again) {
+    const lines = crewWanted(d, again);
+    if (!lines.length) return 0;
+    const sent = lines.map(w => w.id);
+    if (id === currentJobId) { crewHere = true; render(); }
+    let r = null;
+    try { r = await window.YDClaude.post('/estimate/crew', Object.assign({ jobId: id }, crewAsk(d, lines))); }
+    catch (err) { r = null; }
+    if (id === currentJobId) crewHere = false;
+    if (!r || r.error) { if (id === currentJobId) render(); return null; }
+    if (id === currentJobId) {
+      const n = crewTake(est, sent, r.lines, again);
+      changed(true);
+      return n;
+    }
+    let now = null;
+    try { now = JSON.parse(readJobBlob(id) || 'null'); } catch (err) {}
+    if (!now || !now.estimate) return null;
+    const e = clone(now.estimate);
+    const n = crewTake(e, sent, r.lines, again);
+    window.YDSync.patchJob(id, { estimate: e });
+    return n;
+  }
+  // By hand, on the job: the lines with no notes, and Claude's own again.
+  window.estCrewNotes = async function () {
+    if (!changes() || crewHere || !currentJobId) return;
+    if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) { showToast('No signal — try again when there is'); return; }
+    if (typeof autosave === 'function' && typeof dirty !== 'undefined' && dirty) autosave();
+    const d = { estimate: est, serviceTypes: jobLike().serviceTypes, qbInvoiceRef: jobLike().qbInvoiceRef };
+    if (!crewWanted(d, true).length) { showToast('Every line already has your own notes for the crew'); return; }
+    const n = await crewWrite(currentJobId, d, true);
+    showToast(n === null ? 'Claude could not write them just now — try again' : n ? 'Crew notes written for ' + n + ' line' + (n === 1 ? '' : 's') : 'Nothing new to write');
+  };
+  ['yd-jobs-changed'].forEach(ev => document.addEventListener(ev, crewForAll));
+  window.addEventListener('online', crewForAll);
   window.addEventListener('online', tripsForAll);
   // An automatic lookup that found no miles says so beside the box, rather
   // than leaving it empty with no word why. job id -> the address it was for.
