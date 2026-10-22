@@ -199,7 +199,10 @@ service cloud.firestore {
         || (docId == 'serviceList' && isStaff())
         // Whether the customer list from QuickBooks is switched on
         // (customers.js): whoever sees Contacts. Only the owner switches it.
-        || (docId == 'customers' && canSee('contacts'));
+        || (docId == 'customers' && canSee('contacts'))
+        // The end-of-day list (eod.js): what to fill in and who gets it.
+        // Everyone who works here reads it; only the owner changes it.
+        || (docId == 'endOfDay' && isStaff());
       allow write: if isOwner()
         || (docId == 'snow' && canChange('snow'))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canChange('billing'))
@@ -779,6 +782,35 @@ service cloud.firestore {
         && request.resource.data.text.size() <= 2000
         && request.resource.data.readAt == null && request.resource.data.notifiedAt == null
         && noteId.matches('cn[a-z0-9]+');
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+      allow delete: if isOwner();
+    }
+
+    // End-of-day reports (eod.js; Jonah, 22 Oct 2026: an end-of-day list for
+    // the crew lead -- the day's photos, what got done, what's left, anything
+    // important, questions -- "i want to be able to add more things to this").
+    // One per person per day, id {uid}_{day}. Each person writes and reads
+    // their own, and every send of it is new to the owner again: unread and
+    // not yet told. The owner reads them all, marks them read, may remove one.
+    // The server stamps notifiedAt when it has told him (not bound by these
+    // rules).
+    match /endOfDay/{reportId} {
+      allow read: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
+      allow create, update: if isStaff()
+        && request.resource.data.uid == request.auth.uid
+        && (resource == null || resource.data.uid == request.auth.uid)
+        && request.resource.data.day is string
+        && request.resource.data.day.matches('20[0-9][0-9]-[01][0-9]-[0-3][0-9]')
+        && reportId == request.auth.uid + '_' + request.resource.data.day
+        && request.resource.data.keys().hasOnly(['uid', 'by', 'day', 'jobs', 'jobIds', 'items', 'answers', 'photos',
+             'sentAt', 'sentCount', 'readAt', 'notifiedAt', 'updatedAt'])
+        && request.resource.data.sentAt is string
+        && request.resource.data.answers is map
+        && request.resource.data.jobIds is list && request.resource.data.jobIds.size() <= 30
+        && request.resource.data.items is list && request.resource.data.items.size() <= 30
+        && request.resource.data.get('readAt', null) == null
+        && request.resource.data.get('notifiedAt', null) == null;
       allow update: if isOwner()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
       allow delete: if isOwner();

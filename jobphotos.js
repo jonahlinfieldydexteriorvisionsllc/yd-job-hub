@@ -702,5 +702,11 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendWaiting(); });
 
   window.YDJobPhotos = { mount: mount, jobShown: jobShown, readyToFinish: readyToFinish,
-                         waiting: () => Object.values(queue).filter(q => q.by === myUid()).length };
+                         waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
+                         // This person's photos still on this phone, for the end
+                         // of the day's count of the day's photos (eod.js).
+                         queued: () => Object.values(queue).filter(q => q.by === myUid())
+                           .map(q => ({ id: q.id, jobId: q.jobId, stage: q.stage, at: q.at })),
+                         // Told whenever a photo is added here or finishes sending.
+                         onChange: fn => { queueWatchers.add(fn); return () => queueWatchers.delete(fn); } };
 })();

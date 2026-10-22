@@ -161,6 +161,9 @@ def run():
         ("crew activity", (cals, boards), lambda: _activity(db, people, now, cals, boards, prefs)),
         ("crew notes", (), lambda: crew_notes(db, people, now)),
         ("crew shifts", (), lambda: crew_shifts(db, people, now)),
+        # End-of-day reports in (the owner told), and the day's reminder to
+        # whoever has not sent theirs (endofday.py).
+        ("end of day", (), lambda: _end_of_day(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -261,6 +264,11 @@ def crew_notes(db, people=None, now=None):
         except Exception as err:          # noqa: BLE001
             print("reminders: note not stamped:", s.id, err)
     return out
+
+
+def _end_of_day(db, people, now):
+    import endofday
+    return endofday.run(db, people, now)
 
 
 def crew_shifts(db, people=None, now=None):

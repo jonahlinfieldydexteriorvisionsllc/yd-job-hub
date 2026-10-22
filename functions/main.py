@@ -764,8 +764,16 @@ def _notes(request, path, headers):
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
     import reminders
+    import endofday
     try:
-        return (json.dumps({"sent": len(reminders.crew_notes(_db))}), 200, json_headers)
+        # An end-of-day report (eod.js) asks the same way: whatever is waiting
+        # to be told, of either, goes now.
+        sent = len(reminders.crew_notes(_db))
+        try:
+            sent += len(endofday.tell_owner(_db))
+        except Exception as e:                      # noqa: BLE001 -- the notes were still told
+            print("end-of-day ping failed:", e)
+        return (json.dumps({"sent": sent}), 200, json_headers)
     except Exception as e:                          # noqa: BLE001
         print("notes ping failed:", e)
         return (json.dumps({"error": "not sent yet — it goes within five minutes"}), 502, json_headers)

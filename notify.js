@@ -375,6 +375,9 @@
       const want = location.hash.slice(1);
       if (want === 'summary') window.openSummaries();
       else if (want === 'notes' && window.openCrewNotes) window.openCrewNotes();
+      // The end of the day (eod.js): the list itself, or the owner's reports.
+      else if (want === 'eod' && window.openEndOfDay) window.openEndOfDay();
+      else if (want === 'eodreports' && window.openEodReports) window.openEodReports();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
         const btn = el(tabButtonId(want));
         if (btn && !btn.hidden) switchTab(want);

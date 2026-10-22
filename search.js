@@ -724,6 +724,10 @@
         call('openPeople');
         later(() => reveal(document.querySelector('#clockCrewSection .crew-setting')), 260);
       } },
+    { group: 'People & the clock', icon: '📋', name: 'End-of-day list',
+      hint: 'What the crew fill in before going home — the day’s photos, what got done, what’s left, questions — and who gets it',
+      words: 'end of day eod daily report summary crew lead photos questions recap wrap up',
+      show: () => signedIn() && owner(), go: () => call('openEodSettings') },
     { group: 'Boards & calendars', icon: '📅', name: 'Calendars',
       hint: 'Add a calendar, its colour, who sees it and who may change it',
       words: 'manage calendars share colour color personal',

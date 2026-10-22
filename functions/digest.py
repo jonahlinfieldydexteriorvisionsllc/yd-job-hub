@@ -1272,6 +1272,13 @@ def build(slot, user, people, wx, cache):
         if done:
             push_bits.append("%d done today" % len(done))
 
+    # ---- the end of the day (endofday.py; Jonah, 22 Oct 2026): the owner's
+    # gets each report in -- or whose is not -- and anyone on the list,
+    # whether theirs went.
+    if cache.get("eod"):
+        import endofday
+        endofday.add_to_summary(cache["eod"], owner, uid, sections, push_bits)
+
     # ---- tasks not ticked off. Jonah (14 Oct 2026): "make tasks on the
     # calendar have to be marked done or they get included in the end day
     # summary. This goes for all tasks. Appointments are different." Each
@@ -1766,6 +1773,14 @@ def _cache(slot="morning", people=None):
         people = people if people is not None else _people()
         cache["record"] = _day_record(today, people)
         cache["open"] = _open_tasks(people)
+    # The end-of-day reports (endofday.py): the evening's for today, the
+    # morning's for yesterday.
+    try:
+        import endofday
+        cache["eod"] = endofday.for_summary(slot, today, people if people is not None else _people())
+    except Exception as e:      # noqa: BLE001 -- a summary without them beats none
+        print("digest: end of day not read:", e)
+        cache["eod"] = None
     # The day the weather tables are for: tomorrow in the evening summary,
     # today otherwise. Every town and every job site in one forecast call.
     day = today + datetime.timedelta(days=1) if slot == "evening" else today

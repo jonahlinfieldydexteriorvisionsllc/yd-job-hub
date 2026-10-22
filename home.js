@@ -394,6 +394,27 @@
     return card('clock', '⏱️ Your clock', badge, ['Clock', "switchTab('clock')"], body, true);
   }
 
+  // The end-of-day list (eod.js), for whoever gets it: from mid-afternoon on
+  // a day they worked -- or once they are off the clock -- until it is sent;
+  // then that it went. Yesterday's too, if it never did.
+  function eodHtml() {
+    const E = window.YDEndOfDay;
+    const rows = signedIn() && E && E.forMe ? E.forMe() : [];
+    if (!rows.length) return '';
+    const items = E.items ? E.items() : [];
+    const what = items.slice(0, 4).map(it => (it.kind === 'photos' ? '📷 Photos' : it.label)).join(' · ') + (items.length > 4 ? ' …' : '');
+    const todo = rows.find(r => r.state === 'todo'), late = rows.find(r => r.state === 'late'), sent = rows.find(r => r.state === 'sent');
+    const body =
+      (todo ? '<div class="hm-eod-what">Before you go: ' + esc(what) + '</div>' +
+        '<div class="hm-actions"><button class="btn btn-filled hm-big" onclick="openEndOfDay(\'' + safe(todo.day) + '\')">📋 Fill in today’s end of day</button></div>' : '') +
+      (sent ? '<div class="hm-eod-sent">✓ ' + (sent.pending ? 'Saved — it goes to Jonah when this phone has signal'
+          : 'Sent to Jonah at ' + esc(new Date(sent.sentAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }))) +
+        ' <button class="link-btn" onclick="openEndOfDay(\'' + safe(sent.day) + '\')">Change it</button></div>' : '') +
+      (late ? '<div class="hm-eod-late"><span class="hm-late">Yesterday’s end of day wasn’t sent.</span> ' +
+        '<button class="btn btn-sm" onclick="openEndOfDay(\'' + safe(late.day) + '\')">Send yesterday’s</button></div>' : '');
+    return card('eod', '📋 End of day', todo || late ? 'To do' : 'Sent', null, body, !!(todo || late));
+  }
+
   // The day: what is mine (at set times, then for any time today and what
   // is late), and the crew's that is not mine.
   function dayData() {
@@ -475,11 +496,23 @@
         (takenLate.length || takenAny.length ? sub('👤 Crew tasks someone is on') +
           capped('crewB', takenLate.map(x => todoRow(x, true)).concat(takenAny.map(x => todoRow(x, false)))) : '')) +
       (now ? sub('⏱️ On the clock now', now.live.length || null) +
-        (onClock.length ? capped('onNow', onClock) : empty('Nobody is on the clock.')) : '');
+        (onClock.length ? capped('onNow', onClock) : empty('Nobody is on the clock.')) : '') +
+      eodCrewHtml();
     // The crew's count by the same rule and words as My day's (calendar.js
     // tally): their tasks, at a set time or not, and the ones from earlier.
     const badge = now && now.live.length ? now.live.length + ' working' : countWords(d.crewCount || null);
     return card('crew', title, badge, link, body);
+  }
+
+  // The owner's: whose end of day is in today, of those on the list who
+  // worked (eod.js). A tap opens theirs, or the list of them.
+  function eodCrewHtml() {
+    const list = isOwner() && window.YDEndOfDay && YDEndOfDay.crewToday ? YDEndOfDay.crewToday() : [];
+    if (!list.length) return '';
+    return sub('📋 End of day') + list.map(x => line(x.sent ? '✅' : '⏳',
+      '<b>' + esc(x.who) + '</b> — ' + (x.sent ? 'sent' + (x.read ? '' : ', not read yet') : 'not in yet'),
+      '', x.sent ? esc(new Date(x.sentAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) : '',
+      "openEodReports('" + (x.sent ? safe(x.id) : '') + "')", x.sent ? '' : 'paused')).join('');
   }
 
   // Booked and in progress, with the next day each is on the calendar.
@@ -636,6 +669,15 @@
         esc(String(n.text).slice(0, 140)) + (String(n.text).length > 140 ? '…' : ''),
         esc(n.at ? dayWords(localYMD(new Date(n.at))) : ''), 'openCrewNotes()')));
     }
+    // End-of-day reports in and not read yet (eod.js): a tap opens that one.
+    if (isOwner() && window.YDEndOfDay && YDEndOfDay.unread) {
+      any = true;
+      YDEndOfDay.unread().forEach(r => rows.push(line('📋', '<b>' + esc(r.who) + '’s end of day</b>' +
+          (r.day !== today() ? ' · ' + esc(dayWords(r.day)) : ''),
+        esc(String(r.words).slice(0, 140)) + (String(r.words).length > 140 ? '…' : ''),
+        esc(r.at ? new Date(r.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : ''),
+        "openEodReports('" + safe(r.id) + "')")));
+    }
     if (can('hours', 'change') && window.YDClock && YDClock.toDecide) {
       any = true;
       const t = YDClock.toDecide();
@@ -737,8 +779,8 @@
     // the work and the money. The crew: their clock, their day, the rest of
     // the crew, their jobs.
     const cards = crewish
-      ? [clockHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
-      : [waitingHtml(), clockHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
+      ? [clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
+      : [waitingHtml(), clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
     return greetingHtml() + actionsHtml() + stormHtml() + statsHtml(all) +
       '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
   }
@@ -890,7 +932,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

@@ -895,7 +895,15 @@
         .catch(e => console.warn('[clock] break end kept on this phone only:', (e && e.code) || e));
     }
     render();
+    if (b) doneForDay(b);
   };
+  // This person's own day has ended (Clock out, or Done for the day after a
+  // break): the end-of-day list opens if they get one (eod.js).
+  function doneForDay(e) {
+    const u = me();
+    if (!u || !e || e.uid !== u.uid) return;
+    document.dispatchEvent(new CustomEvent('yd-clocked-out', { detail: { uid: e.uid, kind: e.kind || '' } }));
+  }
 
   // This person's own Clock out (the Clock tab, Home): a few seconds to
   // take it back (see "a few seconds to take it back").
@@ -921,6 +929,7 @@
     if (!e || !running(e)) return Promise.resolve();
     const late = limitState(e) === 2;
     const status = endShift(id, undefined, undefined, atMs);
+    doneForDay(e);
     // Worked out after: past the limit, it ended at the limit.
     const dur = fmtDur(paidMs(e));
     const who = e.uid === (me() || {}).uid ? '' : ' ' + workerOf(e);

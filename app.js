@@ -636,6 +636,8 @@ function openMore() {
     ? [{ label: '📝 Leave a note for Jonah', hint: 'He gets it as a notification',
          call: 'closeMore(); openNoteForJonah()' },
        { label: '📝 Your notes', hint: 'The notes you have sent', call: 'closeMore(); openCrewNotes()' }]
+    : []).concat(signedIn && window.YDEndOfDay && YDEndOfDay.menu()
+    ? [YDEndOfDay.menu()].map(x => ({ label: x.label, hint: x.hint, call: 'closeMore(); ' + x.call }))
     : []).concat(signedIn && typeof window.openServices === 'function'
     ? [(window.YDAuth.isOwner
         ? { label: '🧰 Services', hint: 'The services list, by kind of work, and what to tell a homeowner' }
@@ -922,7 +924,9 @@ function switchTab(name) {
 // windows rather than a tab. Those too are kept in the address while sign-in
 // is still going on -- the summary one used to be dropped there, so a tapped
 // summary opened nothing.
-const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes' };
+// The end of the day (eod.js): the crew's reminder opens their list, the
+// owner's "it is in" opens the reports.
+const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
@@ -3746,6 +3750,7 @@ function showStorageError() {
 function jobOnScreen() {
   if (window.YDJobPhotos) window.YDJobPhotos.jobShown(currentJobId);
   if (window.YDSignatures) window.YDSignatures.jobShown(currentJobId);
+  if (window.YDEndOfDay) window.YDEndOfDay.jobShown(currentJobId);
 }
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);
