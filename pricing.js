@@ -1358,7 +1358,7 @@
   const DEFAULT_MONTH_CAP_CENTS = 2000;
   const TASK_NAME = { estimate: 'Estimates', card: 'Board cards', receipt: 'Reading receipts',
     receiptTriage: 'Sorting email', receiptphoto: 'Receipt photos', care: 'Plant-care emails',
-    followup: 'Follow-up emails', source: 'Finding prices', pricesheet: 'Price sheets', estimate_scope: 'Scopes of work' };
+    followup: 'Follow-up emails', posts: 'Social posts', source: 'Finding prices', pricesheet: 'Price sheets', estimate_scope: 'Scopes of work' };
   // This month's days only (the screen shows the month and today): the
   // records are named by their UTC day, so asked for by name from the 1st.
   function loadSpend() {

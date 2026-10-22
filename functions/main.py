@@ -871,13 +871,15 @@ def _subs(request, path, headers):
 
 def _followup(request, path, headers):
     # The same guard writes the plant-care email (care.py): a draft in the
-    # owner's Gmail from one job, for whoever may change jobs, counted.
+    # owner's Gmail from one job, for whoever may change jobs, counted. And a
+    # finished job's social posts (posts.py), onto his My to-dos.
     import care
     import followup
+    import posts
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path not in ("/followup/draft", "/care/draft"):
+    if path not in ("/followup/draft", "/care/draft", "/posts/draft"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
@@ -893,19 +895,22 @@ def _followup(request, path, headers):
         day = _check_and_count_usage(uid)
     except RuntimeError as e:
         return (json.dumps({"error": str(e)}), 429, json_headers)
-    task = "care" if path == "/care/draft" else "followup"
+    task = "care" if path == "/care/draft" else "posts" if path == "/posts/draft" else "followup"
     try:
         if task == "care":
             result, usage = care.draft(_claude(), job_id, auto=body.get("auto") is True)
+        elif task == "posts":
+            result, usage = posts.draft(_claude(), job_id, auto=body.get("auto") is True)
         else:
             result, usage = followup.draft(_claude(), job_id)
     except anthropic.RateLimitError:
         return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
     except Exception as e:                          # noqa: BLE001
         print("%s draft failed: %s" % (task, e))
-        return (json.dumps({"error": "The email could not be written. Try again."}), 502, json_headers)
+        return (json.dumps({"error": ("The posts" if task == "posts" else "The email") + " could not be written. Try again."}),
+                502, json_headers)
     if usage is not None:
-        _record_spend(day, task, usage, care.MODEL if task == "care" else followup.MODEL)
+        _record_spend(day, task, usage, care.MODEL if task == "care" else posts.MODEL if task == "posts" else followup.MODEL)
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
@@ -1112,7 +1117,7 @@ def claude(request):
         return _subs(request, path, headers)
     if path.startswith("/notes"):
         return _notes(request, path, headers)
-    if path.startswith("/followup") or path.startswith("/care"):
+    if path.startswith("/followup") or path.startswith("/care") or path.startswith("/posts"):
         return _followup(request, path, headers)
     if path.startswith("/estimate"):
         return _estimate(request, path, headers)

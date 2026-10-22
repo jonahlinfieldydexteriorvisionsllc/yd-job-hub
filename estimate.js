@@ -2056,7 +2056,7 @@
     const drawnFolded = !!(wrap && wrap.dataset.folded === '1');
     if (wrap && drawnFolded !== folded()) { render(); return; }
     if (drawnFolded) {
-      box.innerHTML = foldedHtml(q, status) + (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when));
+      box.innerHTML = foldedHtml(q, status) + (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when) + postsHtml(when));
       return;
     }
     if (can) askCompany();
@@ -2096,7 +2096,7 @@
           (checking ? 'Checking…' : 'Check for an answer') + '</button>' : '') +
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
       sentHtml(when) +
-      (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when));
+      (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when) + postsHtml(when));
   }
 
   // The estimate was deleted in QuickBooks (quickbooks.py _deleted_record:
@@ -2162,6 +2162,64 @@
       ' <button class="btn btn-sm" onclick="estCareEmail()"' + (careBusy[currentJobId] ? ' disabled' : '') + '>' +
         (careBusy[currentJobId] ? 'Writing…' : c ? 'Write it again' : 'Write it now') + '</button></div>';
   }
+  // Social posts about a finished job (posts.py; Jonah, 21 Oct 2026: "Build
+  // something that auto build posts when a job is marked complete"): Claude
+  // writes one for each place onto his My to-dos, once when the job is
+  // finished (jobCompleted), and again whenever he presses the button.
+  const postsBusy = {};       // job id -> being written
+  function postsHtml(when) {
+    if (!changes() || snowNow()) return '';
+    const p = (typeof boardFields !== 'undefined' && boardFields.postsDraft) || null;
+    const done = typeof jobStatus !== 'undefined' && jobStatus === 'complete';
+    if (!p && !done) return '';
+    return '<div class="est-care">📣 ' + (p
+        ? 'Social posts written ' + esc(when(p.at)) + ' — on your My to-dos (Google, Facebook, Nextdoor, Pinterest, Yelp).'
+        : 'Social posts for this job: press the button and Claude writes one each for Google, Facebook, Nextdoor, Pinterest and Yelp onto your My to-dos.') +
+      ' <button class="btn btn-sm" onclick="estPosts()"' + (postsBusy[currentJobId] ? ' disabled' : '') + '>' +
+        (postsBusy[currentJobId] ? 'Writing…' : p ? 'Write them again' : 'Write the posts') + '</button></div>';
+  }
+  async function writePosts(jobId, byItself) {
+    if (postsBusy[jobId] || !window.YDClaude) return;
+    postsBusy[jobId] = true; renderQb();
+    try {
+      const r = await window.YDClaude.post('/posts/draft', { jobId: jobId, auto: !!byItself });
+      if (r.skipped) return;
+      if (window.YDSync) window.YDSync.patchJob(jobId, { postsDraft: { at: new Date().toISOString(), cardId: r.cardId || null } });
+      showToast('📣 The social posts are on your My to-dos — copy each into its place');
+    } catch (e) {
+      showToast((byItself ? 'The social posts weren’t written: ' : 'Social posts: ') + (e.message || e));
+    } finally {
+      delete postsBusy[jobId]; renderQb();
+    }
+  }
+  window.estPosts = function () {
+    if (!changes()) return;
+    // The server reads the job from the database: what was just typed goes up first.
+    if ((!currentJobId || (typeof dirty !== 'undefined' && dirty)) && typeof autosave === 'function') autosave();
+    const id = currentJobId;
+    if (!id || postsBusy[id]) return;
+    Promise.resolve(window.YDSync && window.YDSync.sendNow ? window.YDSync.sendNow(id) : true)
+      .then(sent => {
+        if (sent) writePosts(id, false);
+        else showToast('📣 The social posts wait for a signal — press “Write the posts” again later');
+      });
+  };
+  // A job marked Complete: its posts, once, written by Claude with no one
+  // asking -- a snow contract or a job with no work on it has none.
+  function postsCompleted(jobId, data) {
+    if (data.postsDraft) return;
+    const e = data.estimate || {};
+    if (snowOf(e, data.serviceTypes, data.jobStatus, data.qbEstimate)) return;
+    if (!(e.work || []).some(w => w && (String(w.title || '').trim() || String(w.scope || '').trim()))) return;
+    if (!window.YDClaude || !window.YDClaude.available() || !navigator.onLine) {
+      setTimeout(() => showToast('📣 The social posts for ' + (String(data.customerName || '').trim() || 'this job') +
+        ' wait for a signal — press “Write the posts” on the job later', 7000), 0);
+      return;
+    }
+    Promise.resolve()
+      .then(() => (window.YDSync && window.YDSync.sendNow ? window.YDSync.sendNow(jobId) : false))
+      .then(sent => { if (sent) writePosts(jobId, true); });
+  }
   async function writeCare(jobId, byItself) {
     if (careBusy[jobId] || !window.YDClaude) return;
     careBusy[jobId] = true; renderQb();
@@ -2201,7 +2259,9 @@
   // Claude can't write it straight away, he is told so here; the toast waits
   // a moment, or the board's own "moved to ..." would cover it.
   function jobCompleted(jobId, data) {
-    if (!changes() || !data || data.careEmail || data.careDone) return;
+    if (!changes() || !data) return;
+    postsCompleted(jobId, data);
+    if (data.careEmail || data.careDone) return;
     const hasPlants = window.YDPlants ? window.YDPlants.has(data) : plantsIn(data.estimate).length > 0;
     if (!hasPlants) return;
     const why = !carePlants(data.estimate) ? 'no plants on its estimate for Claude to write from — send it yourself'

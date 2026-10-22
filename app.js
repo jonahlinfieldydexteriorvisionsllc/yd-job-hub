@@ -320,7 +320,7 @@ function jobBill(d) {
 // qbChangesIn: the change orders on its QuickBooks invoice already in its
 // price, in cents; qbChangesOff: they were put in by hand, so never counted
 // (quickbooks.py _price_follows).
-const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
+const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
   'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff'];
