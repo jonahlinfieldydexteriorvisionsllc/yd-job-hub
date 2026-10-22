@@ -207,7 +207,9 @@
   // Floating point makes 5 x 1.2 come out as 6.000000000000001, and a plain
   // ceil would then order 7. Trim to a millionth before rounding up.
   const trim = x => Math.round(x * 1e6) / 1e6;
-  const isTon = unit => /^\s*(ton|tons|t)\s*$/i.test(String(unit || ''));
+  // "$2,345.10", for a problem worded with a figure in it.
+  const fmtCents = c => '$' + (Math.round(c) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const isTon =unit => /^\s*(ton|tons|t)\s*$/i.test(String(unit || ''));
   // Sold loose by the ton or the yard -- the stuff a delivery truck dumps.
   const isBulk = unit => isTon(unit) || /^\s*(yard|yards|yd|yds|cu ?yd|cubic yards?)\s*$/i.test(String(unit || ''));
 
@@ -328,6 +330,8 @@
       // materials figure, as the layout markers' does.
       delivery: m.delivery || 'auto', listed: m.listed !== false && !NOT_LISTED.includes(cat), auto: m.auto || null,
       packLb: pk.lb, partUse: false, usedQty: null, usedLb: null,
+      // The labour line whose all-in price already covers it (workLine).
+      allInOf: m.allInOf || null,
     };
     if (m.supplyId && !it) out.problems.push('no longer in Supplies');
     if (!qty) return out;
@@ -440,14 +444,18 @@
     const byMaterial = {};
     want.forEach(l => {
       const k = l.supplyId || l.id;
-      (byMaterial[k] = byMaterial[k] || { name: l.name, per: l.per, qty: 0, pallet: l.pallet }).qty += l.orderQty;
+      const m = byMaterial[k] = byMaterial[k] || { name: l.name, per: l.per, qty: 0, pallet: l.pallet, parts: [] };
+      m.qty += l.orderQty;
+      // Which lines ride on it, and how much of each: an all-in price covers
+      // its own materials' share of the truck (allInParts).
+      m.parts.push({ id: l.id, qty: l.orderQty });
     });
     Object.keys(byMaterial).forEach(k => {
       const m = byMaterial[k];
       const loads = isTon(m.per) && num(d.loadTons) > 0 ? Math.max(1, Math.ceil(trim(m.qty / num(d.loadTons)))) : 1;
       const cost = rate === null ? 0 : loads * (rate + (m.pallet ? num(d.palletCents) || 0 : 0));
       const client = Math.round(cost * (1 + pct(d.markupPct)));
-      out.lines.push({ supplyId: k, name: m.name, loads: loads, pallet: m.pallet, costCents: cost, clientCents: client });
+      out.lines.push({ supplyId: k, name: m.name, loads: loads, pallet: m.pallet, costCents: cost, clientCents: client, parts: m.parts });
       out.clientCents += client;
     });
     if (num(d.markupPct) === null) out.problems.push('delivery markup % not set');
@@ -529,10 +537,52 @@
     return defaultProfitCents(r);
   }
 
-  function workLine(w, ctx) {
+  // What an all-in line's price covers besides its labour: the materials
+  // marked as in it, at what the customer pays for them, and their share of
+  // any delivery (by quantity, when a truck also brings material that is
+  // not in it).
+  function allInParts(w, all, del) {
+    const inside = all.filter(l => l.allInOf && l.allInOf === w.id);
+    const ids = {};
+    inside.forEach(l => { ids[l.id] = true; });
+    let deliveryCents = 0;
+    del.lines.forEach(d => {
+      const parts = d.parts || [];
+      const total = parts.reduce((s, p) => s + p.qty, 0);
+      const mine = parts.filter(p => ids[p.id]).reduce((s, p) => s + p.qty, 0);
+      if (total > 0 && mine > 0) deliveryCents += Math.round(d.clientCents * mine / total);
+    });
+    return { materialsCents: inside.reduce((s, l) => s + l.clientCents, 0), deliveryCents: deliveryCents,
+             count: inside.length, unpriced: inside.filter(l => l.problems.length).map(l => l.name || 'a material') };
+  }
+
+  function workLine(w, ctx, inside) {
     const r = ctx.rules, out = { id: w.id, cents: 0, problems: [], crewDays: null, costCents: null, profitPerDayCents: null };
     const days = num(w.crewDays), dayCost = num(r.crewDayCents);
-    if (w.kind === 'flat') {
+    if (w.kind === 'allin') {
+      // All in (Jonah, 21 Oct 2026: "i want the labor plus materials for the
+      // paving to total 5616 ... calculate materials then minus that from 5616
+      // and make that figure the price of labor"): his price for the work
+      // WITH the materials marked as in it. The materials stay on the
+      // materials line at their own price; this line is what is left, so the
+      // two together come to his figure. More labour he wants on the same
+      // line, outside that figure (the wall's labour on the patio's line), is
+      // added on top. Its crew-days, if any, are how long it takes -- for his
+      // profit per day and the fuel.
+      const target = num(w.allInCents), add = Math.max(0, num(w.addCents) || 0);
+      const p = inside || { materialsCents: 0, deliveryCents: 0, count: 0, unpriced: [] };
+      const mats = p.materialsCents + p.deliveryCents;
+      out.allIn = { cents: target, materialsCents: p.materialsCents, deliveryCents: p.deliveryCents,
+                    count: p.count, addCents: add, labourCents: null };
+      if (target === null) out.problems.push('needs its all-in price');
+      else if (p.unpriced.length) out.problems.push('its all-in can’t be split until ' + p.unpriced.join(', ') + ' is priced');
+      else if (mats > target) out.problems.push('the materials in its all-in come to ' + fmtCents(mats) +
+        ' — more than the all-in ' + fmtCents(target));
+      else {
+        out.allIn.labourCents = Math.round(target - mats);
+        out.cents = Math.round(target - mats + add);
+      }
+    } else if (w.kind === 'flat') {
       // By the unit, then his adjustments for this job (Services: "turf
       // pricing is all based on sq footage and then adjusted based on
       // factors") -- each a % of the price, so much more per unit, or a set
@@ -659,11 +709,13 @@
     const takeoff = (est.materials || []).map(m => Object.assign(materialLine(m, ctx), { tree: m.tree || null }));
     const added = fixed ? [] : ruleLines(est, takeoff, ctx).map(m => materialLine(m, ctx));
     const all = takeoff.concat(added);
-    const work = (est.work || []).map(w => workLine(w, ctx));
+    const del = deliveries(all, est, ctx);
+    // An all-in line is priced after its materials: it is what is left of
+    // his figure once they are charged.
+    const work = (est.work || []).map(w => workLine(w, ctx, w.kind === 'allin' ? allInParts(w, all, del) : null));
     // Every line's crew-days, however it is priced: they are the days on
     // site (fuel) and what the profit per day is counted over.
     const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
-    const del = deliveries(all, est, ctx);
     const crewTrips = crewDays > 0 ? Math.ceil(trim(crewDays)) : null;
     const fu = fixed ? fuel(est, ctx, num(ctx.jobDays) > 0 ? num(ctx.jobDays) : crewTrips, true) : fuel(est, ctx, crewTrips);
     const materialsCents = fixed ? est.fromQb.materialsCents
@@ -780,10 +832,21 @@
   }
   // taxed: true -> only the materials taxed, false -> only those not, left
   // out -> all of them (the two QuickBooks materials lines, sales tax).
+  // One product on two lines -- the edging inside the patio's all-in price
+  // and the edging for the beds -- is one line for the customer, the two
+  // amounts added together.
   function materialsList(result, taxed) {
-    return result.takeoff.concat(result.added)
+    const rows = [], byName = {};
+    result.takeoff.concat(result.added)
       .filter(l => l.listed && l.orderQty > 0 && (taxed === undefined || !!l.taxed === taxed))
-      .map(l => l.name + ': ' + (l.partUse && l.usedLb ? qtyText(l.usedLb, 'lb') : qtyText(l.orderQty, l.per)));
+      .forEach(l => {
+        const lb = !!(l.partUse && l.usedLb);
+        const q = lb ? l.usedLb : l.orderQty, unit = lb ? 'lb' : l.per;
+        const key = String(l.name || '').trim().toLowerCase() + '|' + String(unit || '').trim().toLowerCase();
+        if (byName[key]) { byName[key].q += q; return; }
+        rows.push(byName[key] = { name: l.name, q: q, unit: unit });
+      });
+    return rows.map(x => x.name + ': ' + qtyText(trim(x.q), x.unit));
   }
 
   // The last lines of every QuickBooks estimate, in order: the QuickBooks

@@ -2890,6 +2890,11 @@
   .est-svcnotes div { white-space:pre-wrap; padding:4px 0 0 2px; }
   .est-wprofit { font-size:12.5px; margin:4px 0; }
   .est-wprofit:empty { display:none; }
+  /* An all-in line's split: what its materials come to, the labor left. */
+  .est-allin { font-size:12.5px; margin:4px 0; }
+  .est-allin:empty { display:none; }
+  /* A material whose price is in an all-in line: said, not tapped. */
+  .est-chip.est-chip-allin { cursor:default; color:var(--brand-ink); }
   .est-good { color:var(--pos); font-weight:600; }
   .est-low { color:var(--neg); font-weight:600; }
   .est-profit { margin-top:6px; padding:8px 10px; border-radius:8px; background:var(--surface-2); border:1px solid var(--border); font-size:13.5px; }

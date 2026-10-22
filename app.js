@@ -4779,11 +4779,13 @@ window.addEventListener('DOMContentLoaded', () => {
       });
     });
   }
-  // Nothing typed and unsaved, no window open, nothing still to send.
+  // Nothing typed and unsaved, no window open, nothing still to send, and no
+  // answer still coming from Claude or QuickBooks (a reload would lose it).
   function safeToReload() {
     if (typeof dirty !== 'undefined' && dirty) return false;
     if (document.querySelector('.modal-overlay.active')) return false;
     try { if (window.YDDb && YDDb.pending && YDDb.pending() > 0) return false; } catch (e) { /* treat as fine */ }
+    try { if (window.YDClaude && YDClaude.busy && YDClaude.busy()) return false; } catch (e) { /* treat as fine */ }
     return true;
   }
   function showUpdateBar() {

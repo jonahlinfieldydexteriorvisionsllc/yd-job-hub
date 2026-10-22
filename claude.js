@@ -28,12 +28,19 @@
     '/qb/estimate', '/qb/estimate-invoice', '/qb/invoice'];
   const waitFor = path => (LONG_PATHS.indexOf(path) !== -1 ? LONG_MS : SHORT_MS);
 
+  // How many asks are still waiting for their answer. The page never reloads
+  // itself for an update while one is (app.js safeToReload): Jonah's message
+  // to Claude about an estimate (21 Oct 2026) went unanswered because the
+  // app reloaded for a new version while Claude was still working on it.
+  let inFlight = 0;
+
   // fetch + read the answer, given up after `ms`. Resolves { res, payload };
   // rejects with words a person can act on.
   async function send(url, init, ms) {
     const ctl = typeof AbortController === 'function' ? new AbortController() : null;
     let timedOut = false;
     const timer = ctl ? setTimeout(() => { timedOut = true; ctl.abort(); }, ms) : null;
+    inFlight++;
     try {
       let res;
       try {
@@ -47,6 +54,7 @@
       }
       return { res: res, payload: payload };
     } finally {
+      inFlight--;
       if (timer) clearTimeout(timer);
     }
   }
@@ -54,6 +62,8 @@
     ' seconds — check the signal and try again.';
 
   window.YDClaude = {
+    busy: () => inFlight > 0,
+
     available() {
       // Drafting a scope writes into a job: the owner, or an admin who may
       // change jobs. The server checks the same.

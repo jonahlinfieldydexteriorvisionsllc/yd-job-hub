@@ -17,12 +17,15 @@
 //
 // THE ESTIMATE lives on the job as `estimate`:
 //   { v: 2, notes, chat, questions, flags,
-//     work:      [{id, title, scope, kind: crew|flat|amount, crewDays, profit,
+//     work:      [{id, title, scope, kind: crew|flat|amount|allin, crewDays, profit,
 //                  priceId, qty, unit, rateCents, amountCents, qbItem,
+//                  allInCents, addCents (allin: his price WITH the materials
+//                  marked as in it, and labour added outside it),
 //                  crewNote (the crew's page only)}],
 //     materials: [{id, supplyId, name, qty, unit, plant, tree, costCents,
 //                  category, delivery: auto|pickup|rides,
-//                  forWork (a work id, 'none', or unset = worked out)}],
+//                  forWork (a work id, 'none', or unset = worked out),
+//                  allInOf (the allin work line whose price covers it)}],
 //     spoilCuYd, fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
 //     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo }
 // saved with the form like the materials list. What QuickBooks has is
@@ -721,7 +724,15 @@
   // few messages, and the earlier ones behind a tap (styles.css hides them
   // there; a wider screen keeps the whole conversation in its scrolling box).
   const CHAT_PHONE = 4;
+  const UNANSWERED_MS = 6 * 60 * 1000;
   const chatAll = {};         // job id -> its earlier messages shown on a phone
+  window.estAskAgain = function () {
+    if (!changes() || !currentJobId || busyHere() || queued.indexOf(currentJobId) !== -1) return;
+    const lastM = est.chat[est.chat.length - 1];
+    if (!lastM || lastM.role !== 'user') return;
+    if (building) { queued.push(currentJobId); render(); return; }
+    ask(currentJobId);
+  };
   window.estChatAll = function () {
     chatAll[currentJobId || ''] = true;
     const c = el('estChat');
@@ -733,6 +744,12 @@
     const snow = snowNow();
     const lastI = est.chat.length - 1;
     const older = Math.max(0, est.chat.length - CHAT_PHONE);
+    // His message with no answer and nothing working on it -- longer ago
+    // than any answer takes (claude.js waits five minutes), so not one still
+    // coming to another device: asked again with a tap, not retyped.
+    const lastM = est.chat[lastI];
+    const unanswered = !ro && lastM && lastM.role === 'user' && !busyHere() && queued.indexOf(currentJobId) === -1 &&
+      (!lastM.at || Date.now() - Date.parse(lastM.at) > UNANSWERED_MS);
     return '<div class="est-chat' + (chatAll[currentJobId || ''] ? ' est-chat-all' : '') + '" id="estChat">' +
         (older ? '<button type="button" class="link-btn est-chat-older ro-ok" onclick="estChatAll()">Show the ' + older +
           ' earlier message' + (older === 1 ? '' : 's') + '</button>' : '') +
@@ -748,7 +765,9 @@
           (snow ? 'Working on it…' : 'Working on it — a first build can take a minute or two. ' +
           'You can open another job meanwhile; it lands on this one.') + '</div></div>'
           : queued.indexOf(currentJobId) !== -1 ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">' +
-            'Waiting its turn — finishing another estimate first.</div></div>' : '') +
+            'Waiting its turn — finishing another estimate first.</div></div>'
+          : unanswered ? '<div class="est-msg claude"><div class="est-who">✨ Claude</div><div class="est-text muted">' +
+            'No answer came back to this one. <button class="link-btn" onclick="estAskAgain()">Ask again</button></div></div>' : '') +
       '</div>' +
       (ro ? '' : '<div class="est-send">' +
         '<textarea id="estMsg" rows="2" placeholder="' + (snow
@@ -770,7 +789,10 @@
 
   // How a labour line is priced (pricing.js workLine). Jonah, 13 Oct 2026: not
   // everything is a goal profit per day -- turf is by the sq ft, adjusted.
-  const WORK_KINDS = [['crew', 'By crew-days'], ['flat', 'By the unit (a service)'], ['amount', 'Fixed price']];
+  // All in (21 Oct 2026): his price for the work WITH its materials -- the
+  // line is what is left once the materials marked as in it are charged.
+  const WORK_KINDS = [['crew', 'By crew-days'], ['flat', 'By the unit (a service)'], ['amount', 'Fixed price (labor only)'],
+                      ['allin', 'All in — with its materials']];
   const perDay = c => fmtMoney(Math.round(c / 100)).replace(/\.00$/, '') + '/day';
 
   function workHtml(w, i, ro) {
@@ -806,6 +828,12 @@
         '<label><span>Price per ' + esc(w.unit || 'unit') + '</span>' + on('rate', dollarsIn(w.rateCents), '0.00', 'est-money', 'decimal') + '</label>' +
         '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
       extra = adjustHtml(w, svc, ro);
+    } else if (kind === 'allin') {
+      nums = '<label><span>All-in price ($)</span>' + on('allIn', dollarsIn(w.allInCents), 'labor + its materials', 'est-money', 'decimal') + '</label>' +
+        '<label><span>+ Labor not in it ($)</span>' + on('add', dollarsIn(w.addCents), 'optional', 'est-money', 'decimal') + '</label>' +
+        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
+      // How the figure splits, filled by renderTotals.
+      extra = '<div class="est-allin" id="estWI_' + id + '"></div>';
     } else {
       nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', 'est-money', 'decimal') + '</label>' +
         '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
@@ -904,6 +932,26 @@
       est.work.map(w => '<option value="' + esc(safeId(w.id)) + '"' + (cur && cur === w.id ? ' selected' : '') + '>' + esc(title(w)) + '</option>').join('') +
       '<option value="none"' + (cur === 'none' ? ' selected' : '') + '>The whole job</option>' +
     '</select></label>';
+  }
+
+  // Whether an all-in labour line's price already covers this material
+  // (pricing.js workLine 'allin'). Asked only when there is such a line;
+  // said on the line itself when it is in one, so it is never hidden.
+  const allInLines = () => est.work.filter(w => w.kind === 'allin');
+  const lineTitle = w => String(w.title || '').trim() || 'Labor line ' + (est.work.indexOf(w) + 1);
+  function allInHtml(m, id, dis) {
+    const lines = allInLines();
+    if (!lines.length) return '';
+    return '<label class="est-for"><span>💵 Its price is in</span><select' + dis +
+        ' onchange="estMat(\'' + id + '\', \'allInOf\', this.value)">' +
+      '<option value="">Charged on its own</option>' +
+      lines.map(w => '<option value="' + esc(safeId(w.id)) + '"' + (m.allInOf === w.id ? ' selected' : '') + '>' +
+        esc(lineTitle(w)) + '’s all-in price</option>').join('') +
+    '</select></label>';
+  }
+  function allInChip(m) {
+    const w = m.allInOf ? allInLines().find(x => x.id === m.allInOf) : null;
+    return w ? '<span class="est-chip est-chip-allin" title="Its price is part of this line’s all-in figure">In ' + esc(lineTitle(w)) + '’s all-in</span>' : '';
   }
 
   // What a material's More button says when its line was picked by hand.
@@ -1106,12 +1154,12 @@
     }
     // Under the line, on one row: what is ordered, its sales tax, and More
     // (which line of labor it is for, on the crew's page).
-    const forWork = forWorkHtml(m, id, dis);
+    const forWork = forWorkHtml(m, id, dis) + allInHtml(m, id, dis);
     return '<div class="est-mrow">' +
       '<div class="est-mtop"><div class="est-mfields">' + head + (extra ? '<span class="est-mxs">' + extra + '</span>' : '') + '</div>' +
         '<div class="est-mend"><div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div></div>' +
       '<div class="est-meta"><div class="est-order" id="estMO_' + id + '"></div>' +
-        taxPickHtml('mat', id, m.taxable, ro) +
+        taxPickHtml('mat', id, m.taxable, ro) + allInChip(m) +
         (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
       (forWork ? moreBoxHtml(id, forWork) : '') +
       (ro ? '' : matchHtml(m, id)) +
@@ -1180,6 +1228,34 @@
       (l.perLbCents > 0 && l.packLb ? ' · ' + cents(Math.round(l.perLbCents)) + '/lb from the ' + fmtQ(l.packLb) + ' lb bag' : '');
   }
 
+  // How an all-in figure splits (pricing.js workLine): what the materials in
+  // it come to, and the labour left -- the labour is what the line charges.
+  function allInSplitHtml(a) {
+    if (!a) return '';
+    if (!a.count) {
+      return '<span class="muted">No materials are in its all-in price yet, so all of it is labor. ' +
+        'Pick “Its price is in …” under a material’s More ▾ (or ask Claude).</span>';
+    }
+    const mats = a.materialsCents + a.deliveryCents;
+    return 'The ' + a.count + ' material' + (a.count === 1 ? '' : 's') + ' in it come to <b>' + cents(mats) + '</b>' +
+      (a.deliveryCents ? ' (' + cents(a.deliveryCents) + ' of it delivery)' : '') +
+      (a.labourCents === null || a.cents === null ? ''
+        : ' → labor <b>' + cents(a.labourCents) + '</b> of the ' + cents(a.cents) +
+          (a.addCents ? ', + ' + cents(a.addCents) + ' not in it' : '')) + '.';
+  }
+  // The same split in words, put under Claude's answer in the conversation
+  // when it changed the estimate -- the sum it never does itself.
+  function allInSays(r, e) {
+    return r.work.map((w, i) => {
+      const a = w.allIn;
+      if (!a || a.labourCents === null || a.cents === null) return '';
+      const t = String((e.work[i] || {}).title || '').trim() || 'The all-in line';
+      return t + ': ' + cents(a.cents) + ' all-in − ' + cents(a.materialsCents + a.deliveryCents) + ' for its ' + a.count +
+        ' material' + (a.count === 1 ? '' : 's') + ' = ' + cents(a.labourCents) + ' labor' +
+        (a.addCents ? ', + ' + cents(a.addCents) + ' not in the all-in = ' + cents(w.cents) + ' on the line' : '') + '.';
+    }).filter(Boolean).join('\n');
+  }
+
   // Everything that depends on the numbers, redrawn without touching what is
   // being typed in.
   function renderTotals() {
@@ -1192,6 +1268,8 @@
       const p = el('estWP_' + safeId(w.id)); if (p) p.textContent = w.problems.join(' · ');
       const tx = el('estWT_' + safeId(w.id));
       if (tx) tx.textContent = taxNote(w, r, typeof (est.work[i] || {}).taxable === 'boolean');
+      const ai = el('estWI_' + safeId(w.id));
+      if (ai) ai.innerHTML = allInSplitHtml(w.allIn);
       // What a line priced by the unit (or a fixed price) makes per crew-day
       // once the crew is paid, against his usual -- only he sees it.
       const f = el('estWF_' + safeId(w.id));
@@ -2684,6 +2762,8 @@
     if (field === 'crewDays' || field === 'qty') w[field] = num(v);
     else if (field === 'rate') w.rateCents = toCents(v);
     else if (field === 'amount') w.amountCents = toCents(v);
+    else if (field === 'allIn') w.allInCents = toCents(v);
+    else if (field === 'add') w.addCents = toCents(v);
     else if (field === 'profit') {
       if (v === '__other') {
         const read = a => toCents(String(a).replace(/[$,\s]/g, ''));
@@ -2697,7 +2777,11 @@
       }
       w.profit = v === '' ? null : Number(v);
     }
-    else if (field === 'kind') { w.kind = v; changed(true); return; }
+    else if (field === 'kind') {
+      // A fixed price turned all-in keeps its figure as the all-in one.
+      if (v === 'allin' && num(w.allInCents) === null && num(w.amountCents) !== null) w.allInCents = w.amountCents;
+      w.kind = v; changed(true); return;
+    }
     else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product, notes for the crew
     changed(false);
   };
@@ -2730,6 +2814,9 @@
     else if (field === 'name') { m.name = String(v); wordsChanged(); return; }
     // Which line the crew's page lists it under: nothing to re-price.
     else if (field === 'forWork') { m.forWork = v ? String(v) : null; if (typeof markDirty === 'function') markDirty(); return; }
+    // In an all-in price or not: the line's labour moves with it, and the
+    // chip on the line says so.
+    else if (field === 'allInOf') { m.allInOf = v ? String(v) : null; changed(true); return; }
     else m[field] = String(v);                               // the unit: it prices
     changed(false);
   };
@@ -3189,14 +3276,26 @@
 
   function currentForClaude(e, city) {
     const r = P() ? P().price(e, ctx(city)) : null;
+    const dollars = c => (num(c) === null ? null : num(c) / 100);
+    // What the app prices each line at, for Claude to talk about (it never
+    // sets one): the line's labour, an all-in line's split, and what each
+    // material comes to for the customer.
     return {
-      work: e.work.map(w => ({ id: w.id, title: w.title || '', scope: w.scope || '', kind: w.kind || 'crew',
-        crewDays: num(w.crewDays), priceId: w.priceId || null, qty: num(w.qty),
-        factors: (Array.isArray(w.adjust) ? w.adjust : []).map(a => a.id),
-        amountDollars: num(w.amountCents) === null ? null : w.amountCents / 100 })),
-      materials: e.materials.map(m => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
+      work: e.work.map((w, i) => {
+        const p = r ? r.work[i] : null, a = p && p.allIn;
+        return { id: w.id, title: w.title || '', scope: w.scope || '', kind: w.kind || 'crew',
+          crewDays: num(w.crewDays), priceId: w.priceId || null, qty: num(w.qty),
+          factors: (Array.isArray(w.adjust) ? w.adjust : []).map(a => a.id),
+          amountDollars: dollars(w.amountCents), allInDollars: dollars(w.allInCents), addDollars: dollars(w.addCents),
+          priced: p && p.cents ? p.cents / 100 : null,
+          allInSplit: a && a.labourCents !== null ? { materials: (a.materialsCents + a.deliveryCents) / 100, count: a.count,
+                                                      labour: a.labourCents / 100 } : null };
+      }),
+      materials: e.materials.map((m, i) => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
         unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
-        costEachDollars: num(m.costCents) === null ? null : m.costCents / 100, delivery: m.delivery || 'auto' })),
+        costEachDollars: num(m.costCents) === null ? null : m.costCents / 100, delivery: m.delivery || 'auto',
+        allInOf: m.allInOf && e.work.some(w => w.id === m.allInOf && w.kind === 'allin') ? m.allInOf : '',
+        customerDollars: r && r.takeoff[i] && r.takeoff[i].clientCents ? r.takeoff[i].clientCents / 100 : null })),
       spoilCuYd: num(e.spoilCuYd),
       totals: r ? { materials: r.materialsCents / 100, labour: r.laborCents / 100, total: r.totalCents / 100,
                     crewDays: r.crewDays, notPriced: r.problems.slice(0, 20) } : null,
@@ -3211,7 +3310,7 @@
     const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
     w.title = String(g.title || '');
     w.scope = String(g.scope || '');
-    w.kind = ['crew', 'flat', 'amount'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
+    w.kind = ['crew', 'flat', 'amount', 'allin'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
     // Crew-days on any line: priced by them, or (by the unit, fixed) how
     // long it takes -- for his profit per day and the fuel.
     if (num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
@@ -3234,7 +3333,25 @@
       if (num(g.qty) !== null) w.qty = num(g.qty);
     }
     if (w.kind === 'amount' && num(g.amountDollars) > 0) w.amountCents = Math.round(num(g.amountDollars) * 100);
+    if (w.kind === 'allin') {
+      if (num(g.allInDollars) > 0) w.allInCents = Math.round(num(g.allInDollars) * 100);
+      // Labour outside the all-in: as given now, none when it gives none.
+      w.addCents = num(g.addDollars) > 0 ? Math.round(num(g.addDollars) * 100) : null;
+    }
     return w;
+  }
+  // Which all-in line each material's price is in. Claude names a line it
+  // is adding in the same answer by its title (it has no id yet); one that
+  // names no all-in line here is charged on its own.
+  function joinAllIn(e) {
+    const lines = e.work.filter(w => w.kind === 'allin');
+    const key = s => String(s || '').trim().toLowerCase();
+    e.materials.forEach(m => {
+      if (!m.allInOf) return;
+      if (lines.some(w => w.id === m.allInOf)) return;
+      const w = lines.find(x => key(x.title) === key(m.allInOf));
+      m.allInOf = w ? w.id : null;
+    });
   }
   function mergeMaterials(got, e) {
     return (got || []).map(g => matLine(g, g.id ? e.materials.find(m => m.id === g.id) : null));
@@ -3255,6 +3372,8 @@
     if (m.plant) m.tree = g.tree === 'single' || g.tree === 'multi' ? g.tree : null;
     if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
     if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
+    // An all-in line's id or title (joinAllIn makes it an id), or none.
+    if (typeof g.allInOf === 'string') m.allInOf = g.allInOf.trim() || null;
     return m;
   }
   // Only what changed (r.mode 'patch', estimates.py): the lines given are
@@ -3390,7 +3509,7 @@
 
   // Claude's answer onto an estimate: the lines merged by id, its questions
   // and flags, its reply in the conversation. Returns whether it changed lines.
-  function apply(e, r) {
+  function apply(e, r, city) {
     if (r.mode === 'snow') return applySnow(e, r);
     const patch = r.mode === 'patch';
     const spoil = num(r.spoilCuYd) !== null ? (num(r.spoilCuYd) || null) : e.spoilCuYd;
@@ -3400,11 +3519,18 @@
       e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
       e.materials = patch ? patchLines(e.materials, r.materials, r.removed, matLine) : mergeMaterials(r.materials, e);
       e.spoilCuYd = spoil;
+      joinAllIn(e);
     }
     e.questions = (r.questions || []).map(String);
     e.flags = (r.flags || []).map(String);
-    const msg = { role: 'assistant', text: String(r.reply || (did ? 'Updated the estimate.' : 'No change.')),
-                  at: new Date().toISOString(), changed: did };
+    let text = String(r.reply || (did ? 'Updated the estimate.' : 'No change.'));
+    // An all-in line's split, worked out by the app, under the answer: what
+    // Jonah asked for is a sum, and the sum is the app's to do.
+    if (did && P() && e.work.some(w => w.kind === 'allin')) {
+      const says = allInSays(P().price(e, ctx(city, e)), e);
+      if (says) text += '\n\n🧮 ' + says.replace(/\n/g, '\n🧮 ');
+    }
+    const msg = { role: 'assistant', text: text, at: new Date().toISOString(), changed: did };
     // Which of the job's photos it looked at for this answer, by number (none:
     // left off -- a field set to undefined would make the whole save fail).
     if (num(r.photos) > 0) msg.photos = num(r.photos);
@@ -3431,7 +3557,7 @@
     const d = savedJob(jobId);
     if (!d) return;
     const e = fromSaved(d.estimate || {});
-    apply(e, r);
+    apply(e, r, d.city || '');
     e.chat = e.chat.slice(-CHAT_KEEP);
     // Through JSON, as the form's save does: Firestore refuses a write with
     // an undefined anywhere in it.

@@ -143,6 +143,8 @@
     const lines = (work || []).filter(Boolean);
     if (!m || m.forWork === 'none' || !lines.length) return '';
     if (m.forWork && lines.some(w => w.id === m.forWork)) return m.forWork;
+    // In a line's all-in price: that line's material.
+    if (m.allInOf && lines.some(w => w.id === m.allInOf)) return m.allInOf;
     if (lines.length === 1) return lines[0].id || '';
     const it = m.supplyId && items ? items[m.supplyId] : null;
     const kind = m.plant ? 'plant' : (it && it.category) || m.category || '';

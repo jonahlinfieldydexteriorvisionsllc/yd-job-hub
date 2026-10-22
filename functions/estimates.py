@@ -52,8 +52,11 @@ SYSTEM = (
     "the company's app, with Jonah: he gives you his notes from the site visit and talks to you "
     "about the estimate.\n\n"
     "How the work is split -- this matters more than anything else here:\n"
-    "- You do the takeoff and the words. The app does every dollar. You never see costs and never "
-    "set a price.\n"
+    "- You do the takeoff and the words. The app does every dollar. You never see supplier costs "
+    "and never set or work out a price -- every sum is the app's.\n"
+    "- A material's name is what the customer reads on the estimate's materials list: the product "
+    "itself (the catalogue item's name when it has one), never a supplier, a 'Paving -' style "
+    "prefix, or where it goes and how many of it are for what -- that belongs in the scope.\n"
     "- Materials: pick each one from the SUPPLIES CATALOGUE by its id and give the NET quantity the "
     "job needs, in the takeoff unit shown for that item, worked out from the measurements (show "
     "nothing of the arithmetic to the customer). Do NOT add waste or over-order -- the app adds "
@@ -73,8 +76,25 @@ SYSTEM = (
     "and only those. A FIXED-price service is kind 'flat' with qty 1. Work priced by crew-days is "
     "kind 'crew': follow that service's notes, if it has any. crewDays are Jonah's call: give them "
     "only if he said them, or if he asked you to suggest them (then say in a flag that it is your "
-    "guess); otherwise 0 and you ask. On a 'flat' line, crewDays is how long the work takes (for "
-    "his profit check and fuel) -- the same rule. kind 'amount' is a figure Jonah gave.\n"
+    "guess); otherwise 0 and ask once in questions -- don't repeat it in every reply. On a 'flat', "
+    "'amount' or 'allin' line, crewDays is how long the work takes (for his profit check and fuel) "
+    "-- the same rule.\n"
+    "- Two ways Jonah gives a dollar figure for a line, and they are different:\n"
+    "  * kind 'amount' (amountDollars): a figure for the LABOUR only ('assume lighting install at "
+    "$2,100'). The materials on the estimate are charged on top of it, as usual.\n"
+    "  * kind 'allin' (allInDollars): a figure that INCLUDES the materials ('the paving should total "
+    "$5,616 including install and materials', 'labour plus materials for the patio = $5,616'). "
+    "Keep that work's materials on the estimate as usual, and set allInOf on each of them to that "
+    "line's id (or, for a line you are adding in this answer, its exact title). The app works out "
+    "what those materials come to, subtracts it from allInDollars, and makes the rest the line's "
+    "labour -- so the line plus its materials come to his figure exactly. Never do that "
+    "subtraction yourself, never take materials off to make a figure 'include' them, never ask him "
+    "to do the sum, and never say you can't. Materials he says are NOT in that figure stay on the "
+    "estimate with allInOf ''. Labour for other work he wants shown on the same line but not inside "
+    "the figure (a wall's labour on the patio's line) goes in addDollars when he gave its amount; "
+    "if he didn't, ask him for it once. allInDollars and addDollars are 0 on every other kind.\n"
+    "  The estimate below shows what the app prices each line and material at; use those figures "
+    "when he asks what something comes to, and never change one yourself.\n"
     "- The scope on each labour line is what the customer reads: a short heading-style title, "
     "then the scope of work in short plain paragraphs, no prices, no crew-days, no markup, no "
     "tier numbers, and no rented equipment (a mini-excavator or jumping jack is a takeoff line the "
@@ -130,14 +150,17 @@ SCHEMA = {
                 "id": {"type": "string"},
                 "title": {"type": "string"},
                 "scope": {"type": "string"},
-                "kind": {"type": "string", "enum": ["crew", "flat", "amount"]},
+                "kind": {"type": "string", "enum": ["crew", "flat", "amount", "allin"]},
                 "crewDays": {"type": "number"},
                 "priceId": {"type": "string"},
                 "qty": {"type": "number"},
                 "factors": {"type": "array", "items": {"type": "string"}},
                 "amountDollars": {"type": "number"},
+                "allInDollars": {"type": "number"},
+                "addDollars": {"type": "number"},
             },
-            "required": ["id", "title", "scope", "kind", "crewDays", "priceId", "qty", "factors", "amountDollars"],
+            "required": ["id", "title", "scope", "kind", "crewDays", "priceId", "qty", "factors", "amountDollars",
+                         "allInDollars", "addDollars"],
             "additionalProperties": False,
         }},
         "materials": {"type": "array", "items": {
@@ -152,8 +175,10 @@ SCHEMA = {
                 "tree": {"type": "string", "enum": ["none", "single", "multi"]},
                 "costEachDollars": {"type": "number"},
                 "delivery": {"type": "string", "enum": ["auto", "pickup", "rides"]},
+                "allInOf": {"type": "string"},
             },
-            "required": ["id", "supplyId", "name", "qty", "unit", "plant", "tree", "costEachDollars", "delivery"],
+            "required": ["id", "supplyId", "name", "qty", "unit", "plant", "tree", "costEachDollars", "delivery",
+                         "allInOf"],
             "additionalProperties": False,
         }},
         "spoilCuYd": {"type": "number"},
@@ -396,8 +421,22 @@ def _current_text(cur):
                 bits.append("factors %s" % ", ".join(str(f) for f in (w.get("factors") or [])[:20]))
             if _num(w.get("crewDays")):
                 bits.append("crewDays %s" % w.get("crewDays"))
+        elif kind == "allin":
+            bits.append("all-in $%s (labour + the materials marked allInOf this line)" % w.get("allInDollars"))
+            if _num(w.get("addDollars")):
+                bits.append("+ $%s labour not in the all-in" % w.get("addDollars"))
+            split = w.get("allInSplit") or {}
+            if split:
+                bits.append("the app's split: its %s materials come to $%s, so its labour is $%s" % (
+                    split.get("count"), split.get("materials"), split.get("labour")))
+            if _num(w.get("crewDays")):
+                bits.append("crewDays %s" % w.get("crewDays"))
         else:
-            bits.append("amount $%s" % w.get("amountDollars"))
+            bits.append("amount $%s (labour only)" % w.get("amountDollars"))
+            if _num(w.get("crewDays")):
+                bits.append("crewDays %s" % w.get("crewDays"))
+        if _num(w.get("priced")):
+            bits.append("the line comes to $%s" % w.get("priced"))
         rows.append("- " + " | ".join(bits) + "\n  scope: " + str(w.get("scope") or "")[:3000].replace("\n", "\n  "))
     if len(rows) == 1:
         rows.append("(none yet)")
@@ -412,6 +451,10 @@ def _current_text(cur):
             bits.append("cost each $%s (entered by hand -- priced)" % m.get("costEachDollars"))
         if m.get("delivery") and m.get("delivery") != "auto":
             bits.append("delivery %s" % m["delivery"])
+        if m.get("allInOf"):
+            bits.append("allInOf %s" % m["allInOf"])
+        if _num(m.get("customerDollars")):
+            bits.append("$%s to the customer" % m.get("customerDollars"))
         rows.append("- " + " | ".join(bits))
     if len(rows) == n:
         rows.append("(none yet)")
@@ -668,7 +711,7 @@ def draft(client, d):
 
     work = []
     for w in got.get("work") or []:
-        kind = w.get("kind") if w.get("kind") in ("crew", "flat", "amount") else "crew"
+        kind = w.get("kind") if w.get("kind") in ("crew", "flat", "amount", "allin") else "crew"
         pid = str(w.get("priceId") or "")
         # A 'flat' line only for a service that has a price (by the unit or
         # fixed); its adjustments only from that service's own list.
@@ -684,10 +727,16 @@ def draft(client, d):
             "qty": max(0.0, round(_num(w.get("qty")) or 0, 2)),
             "factors": [str(f) for f in (w.get("factors") or []) if str(f) in own][:20] if svc else [],
             "amountDollars": max(0.0, round(_num(w.get("amountDollars")) or 0, 2)),
+            "allInDollars": max(0.0, round(_num(w.get("allInDollars")) or 0, 2)) if kind == "allin" else 0.0,
+            "addDollars": max(0.0, round(_num(w.get("addDollars")) or 0, 2)) if kind == "allin" else 0.0,
         })
+    # An all-in line a material's price is in: an id on the estimate, or the
+    # title of a line given in this answer (the app joins it to its new id).
+    allin_refs = {i for i in work_ids} | {w["title"].lower() for w in work if w["kind"] == "allin" and w["title"]}
     materials = []
     for m in got.get("materials") or []:
         sid = str(m.get("supplyId") or "")
+        ref = str(m.get("allInOf") or "").strip()[:200]
         materials.append({
             "id": str(m.get("id") or "") if str(m.get("id") or "") in mat_ids else "",
             "supplyId": sid if sid in supply_ids and not m.get("plant") else "",
@@ -698,6 +747,7 @@ def draft(client, d):
             "tree": m.get("tree") if m.get("tree") in ("single", "multi") else "none",
             "costEachDollars": max(0.0, round(_num(m.get("costEachDollars")) or 0, 2)),
             "delivery": m.get("delivery") if m.get("delivery") in ("pickup", "rides") else "auto",
+            "allInOf": ref if ref in allin_refs or ref.lower() in allin_refs else "",
         })
     patching = _patching(d)
     removed = [str(i) for i in got.get("removed") or [] if str(i) in work_ids or str(i) in mat_ids] if patching else []
