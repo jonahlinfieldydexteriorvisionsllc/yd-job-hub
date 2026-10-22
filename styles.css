@@ -4978,6 +4978,10 @@
   .sb-bills-btn { font-weight:600; padding:0; min-height:32px; text-align:left; }
   .sb-diff { font-size:12px; font-weight:700; color:var(--accent-ink); }
   .sb-owes { font-size:12px; font-weight:600; color:#9a3b2a; }
+  /* What the client paid (QuickBooks), and who the subcontractor is there. */
+  .sb-paid { font-size:12px; font-weight:600; color:var(--pos); }
+  .sb-sec-h { margin:14px 0 2px; font-size:13px; font-weight:700; }
+  .sub-payees { margin-top:8px; font-size:12.5px; overflow-wrap:anywhere; }
   html[data-night] .sb-owes { color:var(--neg); }
   .sub-table tr.sb-open { background:color-mix(in srgb, var(--brand) 7%, transparent); }
   .sb-panel { margin:10px 0; border:1px solid var(--border-strong); border-radius:10px; padding:10px 12px; background:var(--surface); }

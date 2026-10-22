@@ -17,6 +17,10 @@
 //   paid: { receiptId: 'YYYY-MM-DD' }     bills marked paid here
 //   visitFix / rcFix / handVisits          each bill's client, mows, Count
 //                                          (see "every bill, and its client")
+//   invFix: { qbInvoiceId: {skip, at} }    a client's invoice counted or not,
+//                                          by hand (see "what the client paid")
+//   subs[id].qbPayees: [{type, id, name}]  who they are in QuickBooks, by hand
+//                                          (null: found by their name)
 // customerId: the client in the customer list (customers.js) -- their
 // name on a bill finds them, and what they owe is shown.
 // every: weekly | biweekly | monthly | other (everyText written in, perMonth
@@ -51,9 +55,14 @@
                     'Mulching', 'Snow removal'];
   const DUE_SOON_DAYS = 5;
 
-  const EMPTY = () => ({ subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {}, rcFix: {} });
+  const EMPTY = () => ({ subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {}, rcFix: {}, invFix: {} });
   let data = EMPTY();
-  let visitsDoc = { visits: {}, scannedAt: '' };   // settings/subVisits (functions/subvisits.py)
+  let visitsDoc = { visits: {}, payments: {}, scannedAt: '' };   // settings/subVisits (functions/subvisits.py)
+  // settings/subClients (functions/subclients.py): each property's client in
+  // QuickBooks -- invoices and payments -- and the money paid to each
+  // subcontractor, read every hour.
+  const NO_CLIENTS = () => ({ customers: {}, payees: {}, paidOut: {}, readAt: '' });
+  let clientsDoc = NO_CLIENTS();
   let checking = false;       // "Check their email now" is waiting on the server
   let addingVisit = '';       // subId while its "add a visit by hand" form is open
   let fresh = false;          // from the server, not just this device's copy
@@ -439,7 +448,9 @@
   //   3. the name -- one property's client (or their customer / job name) is
   //      named on the bill;
   //   4. learned -- on a bill with no address, the same work for the same
-  //      amount went to one client when he picked.
+  //      amount went to one client when he picked;
+  //   5. their price -- on a bill with no address, the amount is what one
+  //      property is priced at by them (22 Oct 2026).
   // Only ONE property is a match: two that fit are no answer, and the bill
   // waits under "Bills to match" with a button for each property. Nothing of
   // this is stored: it is worked out again from the bills, the properties
@@ -449,8 +460,15 @@
   const COST_DOCS = ['invoice', 'other', 'order_confirmation'];
   const PAIR_DAYS = 3;                      // a receipt and a visit of one bill
   const PAY_BEFORE_DAYS = 10, PAY_AFTER_DAYS = 120;   // a payment, around the bill it paid
+  // A payment can be the bill plus tax or a card fee (a bill paid with the
+  // sales tax added at the bank): up to this share more is still that bill.
+  const PAY_EXTRA = 0.1;
+  // The same money told twice -- their payment receipt email and the bank's
+  // line in QuickBooks a day or two later.
+  const SAME_PAY_DAYS = 5;
   const MATCH_SHOWN = 6, PROPS_SHOWN = 9, BILLS_SHOWN = 40;
-  const HOW = { hand: '✋ you picked it', address: '📍 by the address', name: '👤 by the name on it', learned: '🔁 like one you picked' };
+  const HOW = { hand: '✋ you picked it', address: '📍 by the address', name: '👤 by the name on it', learned: '🔁 like one you picked',
+                price: '💲 by their price' };
   // Words in a client's name that are not their name.
   const NAME_SKIP = ['residence', 'home', 'house', 'property', 'family', 'rental', 'mr', 'mrs', 'ms', 'dr', 'jr', 'sr'].concat(FILLER);
   const nameWords = n => norm(n).split(' ').filter(w => w.length > 1 && !/^\d+$/.test(w) && NAME_SKIP.indexOf(w) === -1);
@@ -488,6 +506,48 @@
     const sp = (r.splits || []).filter(x => x && x.to === 'sub' && (!x.subId || x.subId === s.id));
     if (sp.length) return sp.reduce((t, x) => t + (x.cents || 0) + (x.taxCents || 0), 0);
     return typeof r.totalCents === 'number' ? r.totalCents : null;
+  }
+  // An invoice number however it is written ("A-77" is "a77"), or ''.
+  const noOf = n => norm(n).replace(/ /g, '');
+  // Whether a payment could be this bill: the same amount, or the bill with
+  // tax or a fee on top (PAY_EXTRA).
+  const withExtra = (bill, paid) => typeof bill === 'number' && typeof paid === 'number' && paid >= bill &&
+    paid <= Math.round(bill * (1 + PAY_EXTRA));
+
+  // Every payment to them, each once. A payment is told in up to three
+  // places: a payment receipt the email reader kept in Receipts, their
+  // payment receipt email read for the visits (subvisits.py), and the money
+  // out in QuickBooks (subclients.py -- the bank's line, a day or two
+  // later). The email read both ways is the receipt (the same message); a
+  // QuickBooks line for the same amount within SAME_PAY_DAYS of one already
+  // here is that one. Receipts already put with their bill (pairPayments)
+  // are not handed back -- but still stand for their QuickBooks line.
+  function paymentsOf(s, rs, pay) {
+    const out = [], told = [], mail = new Set();
+    rs.forEach(r => (r.mail || []).forEach(m => { if (m && m.id) mail.add(m.id); }));
+    rs.filter(r => r.role.kind === 'payment' && !r.role.elsewhere).forEach(r => {
+      const p = { key: r.id, r: r, date: r.date || '', cents: receiptCents(r, s), invoiceNo: noOf(r.orderNo),
+        link: r.link || '', what: 'Payment', src: 'receipt' };
+      told.push(p);
+      if (!pay.used.has(r.id)) out.push(p);
+    });
+    Object.keys(visitsDoc.payments || {}).forEach(k => {
+      const v = visitsDoc.payments[k];
+      if (!v || v.sub !== s.id || (v.msgIds || []).some(id => mail.has(id))) return;
+      const p = { key: k, date: v.date || v.sent || '', cents: typeof v.cents === 'number' ? v.cents : null,
+        invoiceNo: noOf(v.invoiceNo), what: 'Payment' + (v.invoiceNo ? ' for their invoice #' + v.invoiceNo : ''),
+        text: v.subject || '', src: 'email' };
+      told.push(p); out.push(p);
+    });
+    ((clientsDoc.paidOut || {})[s.id] || []).forEach(q => {
+      if (!q || typeof q.cents !== 'number' || q.cents <= 0) return;
+      const same = told.find(p => !p.qb && p.cents === q.cents && apart(p.date, q.date) <= SAME_PAY_DAYS);
+      if (same) { same.qb = q; return; }
+      const p = { key: 'q' + sid(q.id), qb: q, date: q.date || '', cents: q.cents, invoiceNo: '',
+        what: 'Paid — ' + (q.type || 'in QuickBooks') + (q.account ? ', ' + q.account : ''), text: q.memo || '', src: 'qb' };
+      told.push(p); out.push(p);
+    });
+    return out.sort((a, c) => String(a.date).localeCompare(String(c.date)) || String(a.key).localeCompare(String(c.key)));
   }
 
   // Jobs and customers, read once for each working-out.
@@ -609,24 +669,34 @@
       const b = ofRid[inv], p = rs.find(r => r.id === pay.by[inv]);
       if (b && p && !p.role.elsewhere) { b.paidBy = p; ofRid[p.id] = b; }
     });
-    const billsAtAll = bills.length > 0;
+    // The rest -- a payment receipt in Receipts, a payment receipt email of
+    // theirs (subvisits.py), money paid to them in QuickBooks (subclients.py),
+    // each payment once (paymentsOf) -- with the bill of the same amount
+    // (or that amount with tax or a card fee on top), from a little before
+    // the bill to a few months after it; the bill its invoice number names
+    // first, and never a bill with another number.
     const ref = b => b.sent || b.date;
-    rs.filter(r => r.role.kind === 'payment' && !pay.used.has(r.id) && !r.role.elsewhere)
-      .sort((a, c) => String(a.date || '').localeCompare(String(c.date || ''))).forEach(r => {
-        const cents = receiptCents(r, s), t = dayMs(r.date);
-        const b = typeof cents === 'number' && !isNaN(t) ? bills.filter(x => !x.rcBill && !x.paidBy && !x.elsewhere && x.cents === cents &&
-            t >= dayMs(ref(x)) - PAY_BEFORE_DAYS * 864e5 && t <= dayMs(ref(x)) + PAY_AFTER_DAYS * 864e5)
-          .sort((a, c) => String(ref(a)).localeCompare(String(ref(c))))[0] : null;
-        if (b) { b.paidBy = r; ofRid[r.id] = b; if (!b.link && r.link) b.link = r.link; return; }
-        // Paid on the spot by a subcontractor who sends no bills: the
-        // receipt is the bill. Otherwise it only says something was paid.
-        if (billsAtAll || r.role.pending) { info.push(r); return; }
-        const nb = newBill('r-' + r.id, { payOnly: true });
-        addReceipt(nb, r, s);
-        nb.cents = cents;
-        bills.push(nb);
-        ofRid[r.id] = nb;
-      });
+    const billNo = b => noOf((b.receipts.find(r => noOf(r.orderNo)) || {}).orderNo);
+    paymentsOf(s, rs, pay).forEach(p => {
+      const t = dayMs(p.date);
+      const fits = x => !x.paidBy && !x.payOnly && !x.hand && !x.elsewhere && typeof x.cents === 'number' &&
+        !(x.rcBill && isPaid(x.rcBill, pay.paid)) && withExtra(x.cents, p.cents) &&
+        !(p.invoiceNo && billNo(x) && billNo(x) !== p.invoiceNo) &&
+        t >= dayMs(ref(x)) - PAY_BEFORE_DAYS * 864e5 && t <= dayMs(ref(x)) + PAY_AFTER_DAYS * 864e5;
+      const cand = isNaN(t) || typeof p.cents !== 'number' ? [] : bills.filter(fits)
+        .sort((a, c) => (a.cents === p.cents ? 0 : 1) - (c.cents === p.cents ? 0 : 1) || String(ref(a)).localeCompare(String(ref(c))));
+      const b = (p.invoiceNo && cand.find(x => billNo(x) === p.invoiceNo)) || cand[0];
+      if (b) { b.paidBy = p; if (p.r) ofRid[p.r.id] = b; if (!b.link && p.link) b.link = p.link; return; }
+      if (p.r && p.r.role.pending) { info.push(p.r); return; }
+      // No bill of theirs for it (paid on the spot, or the bill's email is
+      // gone): money paid to them is a cost all the same -- the payment is
+      // the bill, put with a client like any other. A payment in Receipts
+      // keeps its picks on the receipt; the others on their own key.
+      const nb = newBill('p-' + p.key, { payOnly: true, visitKey: p.r ? '' : p.key, date: p.date, cents: p.cents,
+        service: p.r ? '' : p.what, link: p.link || '', text: p.text || '', paidBy: p });
+      if (p.r) { addReceipt(nb, p.r, s); nb.cents = p.cents; ofRid[p.r.id] = nb; }
+      bills.push(nb);
+    });
     // Visits added by hand: a client and mows, no bill.
     Object.keys(data.handVisits || {}).forEach(k => {
       const v = data.handVisits[k];
@@ -690,6 +760,13 @@
       if (!b.siteKeys.length) {
         const l = sure([learnSvc[svcKey(b)]]);
         if (l) return { to: l.to, how: 'learned', from: l.from };
+        // 5. Their price: a bill (or a payment with no bill) for exactly what
+        // ONE property is priced at by them -- a visit, or a month on a bill
+        // for a month's work. Never over the bill's own address (its
+        // subject's) when that is no property's: that one is somewhere new.
+        const priced = typeof b.cents === 'number' ? props.filter(p => !p.off && p.theirCents === b.cents &&
+          (p.theirPer !== 'month' || /month/i.test(b.service || ''))) : [];
+        if (priced.length === 1) return { to: priced[0].id, how: 'price' };
       }
       return null;
     };
@@ -802,8 +879,14 @@
     const nVisits = n => n + ' visit' + (n === 1 ? '' : 's');
     // What their bills came to this season, each counted once.
     const cur = B.bills.filter(b => !b.hand && b.counts && billThisSeason(s, b));
-    const billed = cur.reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0);
+    const centsOf = list => list.reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0);
+    const billed = centsOf(cur);
+    const unpaid = cur.filter(b => !billPaid(b, B)), paidOut = billed - centsOf(unpaid);
     const nBills = B.bills.filter(b => !b.hand).length;
+    // What the clients paid YD this season (QuickBooks), every property.
+    const anchors = anchorsOf(s);
+    const pf = props.map(p => propFigures(s, p, B, anchors)).filter(f => f.qb);
+    const clientsPaid = pf.reduce((n, f) => n + f.qb.paid, 0), clientsOwe = pf.reduce((n, f) => n + f.qb.owes, 0);
     return '<div class="sub-card">' +
       '<div class="sub-head"><b>' + esc(s.name || 'Subcontractor') + '</b>' +
         (s.phone ? ' <a class="link-btn" href="tel:' + esc(s.phone) + '">' + esc(s.phone) + '</a>' : '') +
@@ -816,8 +899,14 @@
         fig('Season so far', props.length ? marginText(sf) + ' · ' + nVisits(sf.visits) : '—') +
         fig('Whole season', props.length ? marginText(st) + ' · ' + nVisits(st.visits) : '—') +
         fig('Their bills this season', cur.length ? money(billed) + ' · ' + cur.length + ' bill' + (cur.length === 1 ? '' : 's') : 'none yet') +
-        fig('Owed to them', o.count ? money(o.cents) + ' · ' + o.count + ' bill' + (o.count === 1 ? '' : 's') : 'nothing') +
+        fig('You paid them this season', cur.length ? money(paidOut) : '—') +
+        // This season's bills no payment went with (and not marked paid) --
+        // their emails and QuickBooks tell the payments now, not only
+        // Receipts.
+        fig('Owed to them', unpaid.length ? money(centsOf(unpaid)) + ' · ' + unpaid.length + ' bill' + (unpaid.length === 1 ? '' : 's') : 'nothing') +
+        (pf.length ? fig('Clients paid you this season', money(clientsPaid) + (clientsOwe > 0 ? ' · ' + money(clientsOwe) + ' owed' : '')) : '') +
       '</div>' +
+      payeesHtml(s) +
       (o.late.length ? '<div class="sub-warn late">⚠️ Past due: ' + o.late.map(r => money(r.totalCents) + ' (due ' + fmtDateMD(r.dueDate) + ')').join(', ') + '</div>'
         : o.soon.length ? '<div class="sub-warn">Due soon: ' + o.soon.map(r => money(r.totalCents) + ' by ' + fmtDateMD(r.dueDate)).join(', ') + '</div>' : '') +
       toMatchHtml(s, props, B) +
@@ -859,30 +948,102 @@
       Number(inv.balance) > 0 && ((qb && String(inv.customerId || '') === qb) || (p.jobId && inv.jobId === p.jobId)));
     return { cents: Math.round(list.reduce((n, inv) => n + (Number(inv.balance) || 0), 0) * 100), n: list.length };
   }
+  // ------------------------------------------------- what the client paid
+  //
+  // Jonah (22 Oct 2026): "pull the rest of [the client's] payments from qb".
+  // settings/subClients (functions/subclients.py) holds every invoice and
+  // payment of each property's customer in QuickBooks -- found by the
+  // customer's QuickBooks id, never by name -- brought up to date every
+  // hour. Of a client's invoices this season, the ones for the
+  // subcontractor's work count here: a line naming what they do at the
+  // property (its services), or, with none ticked, lawn work. A snow invoice
+  // to the same client is YD's own work, not theirs. Each invoice's Count box
+  // says otherwise by hand (invFix {invoiceId: {skip}}).
+  function qbCustOf(p, L) {
+    const all = clientsDoc.customers || {}, c = custOf(p, L);
+    // (A customer from QuickBooks is kept under its QuickBooks id: with the
+    // customer list not read yet, the tie itself still finds them.)
+    const id = c && c.qbCustomerId ? String(c.qbCustomerId) : all[p.customerId] ? String(p.customerId) : '';
+    return id && all[id] ? { id: id, c: all[id] } : null;
+  }
+  function isWorkLine(ln, p) {
+    const text = norm((ln.item || '') + ' ' + (ln.desc || ''));
+    const svc = (p.services || []).map(norm).filter(Boolean);
+    return svc.length ? svc.some(w => text.indexOf(w) !== -1) : MOWING.test(text);
+  }
+  // A customer with two of their properties: an invoice is the one whose
+  // address it names, else the first one's.
+  function invoiceIsFor(s, p, q, inv, L) {
+    const twins = propsOf(s).filter(x => x.id !== p.id && (qbCustOf(x, L) || {}).id === q.id);
+    if (!twins.length) return true;
+    const all = [p].concat(twins).sort((a, c) => String(a.id).localeCompare(String(c.id)));
+    const keys = addrKeysIn((inv.lines || []).map(l => l.desc).join(' ; '));
+    const at = all.filter(x => (L.keys[x.id] || propKeys(x, L)).some(k => keys.indexOf(k) !== -1));
+    return (at[0] || all[0]).id === p.id;
+  }
+  function clientFigures(s, p, L) {
+    const q = qbCustOf(p, L);
+    if (!q) return null;
+    const cur = seasonNow(p), fix = data.invFix || {};
+    const list = (q.c.invoices || []).filter(inv => inv && isDay(inv.date) &&
+        seasonOf(p, +inv.date.slice(0, 4), dayNum(inv.date.slice(5))) === cur && invoiceIsFor(s, p, q, inv, L))
+      .map(inv => {
+        const work = (inv.lines || []).filter(ln => isWorkLine(ln, p));
+        const f = fix[inv.id] || {}, auto = work.length > 0;
+        // Counted by hand with none of its lines their work: all of it is.
+        const lines = work.length ? work : inv.lines || [];
+        return { inv: inv, work: work, auto: auto, byHand: typeof f.skip === 'boolean',
+          counts: typeof f.skip === 'boolean' ? !f.skip : auto, workCents: lines.reduce((n, ln) => n + (ln.cents || 0), 0) };
+      }).sort((a, c) => String(c.inv.date).localeCompare(String(a.inv.date)));
+    const on = list.filter(x => x.counts), ids = {};
+    on.forEach(x => { ids[x.inv.id] = true; });
+    const sum = f => on.reduce((n, x) => n + f(x), 0);
+    // The payments on the invoices counted, each with what it paid on them.
+    const pays = (q.c.payments || []).map(pm => Object.assign({}, pm, {
+      here: (pm.on || []).filter(o => ids[o.inv]).reduce((n, o) => n + (o.cents || 0), 0) })).filter(pm => pm.here > 0);
+    return { qbId: q.id, name: q.c.name || '', list: list, on: on, pays: pays,
+      charged: sum(x => x.workCents), total: sum(x => x.inv.total || 0),
+      paid: sum(x => Math.max(0, (x.inv.total || 0) - (x.inv.balance || 0))), owes: sum(x => x.inv.balance || 0),
+      open: on.filter(x => (x.inv.balance || 0) > 0).length };
+  }
+  // Paid to them: a bill a payment went with, a payment that is the bill,
+  // or one marked paid here.
+  const billPaid = (b, B) => !!(b.paidBy || b.payOnly || (b.rcBill && isPaid(b.rcBill, B.pay.paid)) ||
+    (b.visitKey && (data.paid || {})[b.visitKey]));
+
   // A property this season: its bills and what they came to, what its
-  // prices say they should come to, what YD charges, and the margin -- by
-  // their bills when there are any.
+  // prices say they should come to, what YD charged the client, and the
+  // margin -- their bills when there are any (else their price), against
+  // what the client was billed for the work in QuickBooks when that is
+  // known (else YD's price).
   function propFigures(s, p, B, anchors) {
     const mine = B.bills.filter(b => b.prop === p.id);
     const now = mine.filter(b => !b.hand && b.counts && billThisSeason(s, b));
     const billed = now.reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0);
+    const paidOut = now.filter(b => billPaid(b, B)).reduce((n, b) => n + (typeof b.cents === 'number' ? b.cents : 0), 0);
     const exp = expectedSoFar(p, anchors[p.id]);
     const theirSet = typeof p.theirCents === 'number', oursSet = typeof p.ourCents === 'number';
     const cost = now.length ? billed : exp.their;
     // A difference worth a look: a dollar, or a tenth of what was expected.
     const diff = theirSet && now.length && Math.abs(billed - exp.their) >= Math.max(100, Math.round(exp.their / 10)) ? billed - exp.their : null;
-    return { mine: mine, now: now, billed: billed, noAmount: now.filter(b => typeof b.cents !== 'number').length,
-      exp: exp, theirSet: theirSet, oursSet: oursSet, cost: cost, diff: diff,
-      margin: oursSet ? exp.ours - cost : null, owes: clientOwes(p, B.L) };
+    const qb = clientFigures(s, p, B.L), byQb = !!(qb && qb.on.length);
+    const ours = byQb ? qb.charged : exp.ours;
+    return { mine: mine, now: now, billed: billed, paidOut: paidOut, noAmount: now.filter(b => typeof b.cents !== 'number').length,
+      exp: exp, theirSet: theirSet, oursSet: oursSet, cost: cost, diff: diff, qb: qb, byQb: byQb, ours: ours,
+      margin: byQb || oursSet ? ours - cost : null,
+      owes: qb ? { cents: qb.owes, n: qb.open } : clientOwes(p, B.L) };
   }
   const diffWords = (f, short) => (f.diff == null ? '' : '⚠️ ' + money(Math.abs(f.diff)) + (f.diff > 0 ? ' more' : ' less') +
     (short ? '' : ' than their price says (' + money(f.exp.their) + ' for ' + f.exp.visits + ' visit' + (f.exp.visits === 1 ? '' : 's') + ')'));
+  // How the margin was worked out, in a few words.
+  const marginHow = f => (f.byQb ? (f.now.length ? '' : ' (their side by price)') : f.now.length ? ' (your side by price)' : ' (by price)');
   function seasonCellHtml(s, p, f) {
     return '<button class="link-btn sb-bills-btn" onclick="subPropBills(\'' + sid(s.id) + '\', \'' + sid(p.id) + '\')">' +
         (f.now.length ? money(f.billed) + ' · ' + f.now.length + ' bill' + (f.now.length === 1 ? '' : 's') : 'No bills yet') + '</button>' +
       (f.theirSet ? '<div class="muted">their price: ' + money(f.exp.their) + '</div>' : '') +
       (f.diff != null ? '<div class="sb-diff">' + diffWords(f, true) + '</div>' : '') +
-      (f.margin != null ? '<div class="muted">margin ' + marginText({ ours: f.exp.ours, their: f.cost }) + (f.now.length ? '' : ' (by price)') + '</div>' : '') +
+      (f.byQb ? '<div class="sb-paid">client paid ' + money(f.qb.paid) + '</div>' : '') +
+      (f.margin != null ? '<div class="muted">margin ' + marginText({ ours: f.ours, their: f.cost }) + marginHow(f) + '</div>' : '') +
       (f.owes && f.owes.cents > 0 ? '<div class="sb-owes">client owes ' + money(f.owes.cents) + '</div>' : '');
   }
 
@@ -939,26 +1100,64 @@
     const f = propFigures(s, p, B, anchors);
     const S = sid(s.id), P = sid(p.id), props = propsOf(s);
     const cur = f.mine.filter(b => billThisSeason(s, b)), old = f.mine.filter(b => !billThisSeason(s, b));
-    const owes = f.owes == null
-      ? '<span class="muted">tie them to your customer list (Edit) to see it</span>'
+    const tieWords = '<span class="muted">' + (custOf(p, B.L) || p.customerId
+      ? 'not read from QuickBooks yet — it is read every hour' : 'tie them to your customer list (Edit) to see it') + '</span>';
+    const owes = f.owes == null ? tieWords
       : f.owes.cents > 0 ? money(f.owes.cents) + ' · ' + f.owes.n + ' open invoice' + (f.owes.n === 1 ? '' : 's') : 'nothing open';
+    const q = f.qb, nInv = q ? q.on.length : 0;
+    const stillOwed = f.billed - f.paidOut;
     return '<div class="sb-panel" id="sbP-' + S + '-' + P + '">' +
-      '<div class="sb-panel-h"><b>' + esc(p.client || 'Client') + '</b> — their bills' +
+      '<div class="sb-panel-h"><b>' + esc(p.client || 'Client') + '</b> — this season' +
         '<button class="link-btn" onclick="subPropBills(\'' + S + '\', \'\')">Close</button></div>' +
       '<div class="sub-figs">' +
+        fig('Margin so far', f.margin != null ? marginText({ ours: f.ours, their: f.cost }) + esc(marginHow(f)) : '—') +
+        fig('Client paid you', q ? money(q.paid) + (nInv ? ' of ' + money(q.total) : '') : tieWords) +
+        fig('Client owes', owes) +
+        fig('You billed them for the work', q && nInv ? money(q.charged) + ' · ' + nInv + ' invoice' + (nInv === 1 ? '' : 's') + ' · before tax'
+          : f.oursSet ? money(f.exp.ours) + ' by your price' : 'no price set') +
         fig('Their bills this season', f.now.length ? money(f.billed) + ' · ' + f.now.length + ' bill' + (f.now.length === 1 ? '' : 's') +
           (f.noAmount ? ' · ' + f.noAmount + ' with no amount' : '') : 'none yet') +
+        fig('You paid them', f.now.length ? money(f.paidOut) + (stillOwed > 0 ? ' · ' + money(stillOwed) + ' not paid yet' : '') : '—') +
         fig('By their price', f.theirSet ? money(f.exp.their) + ' · ' + f.exp.visits + ' visit' + (f.exp.visits === 1 ? '' : 's') : 'no price set') +
-        fig('You charge, so far', f.oursSet ? money(f.exp.ours) : 'no price set') +
-        fig('Margin so far', f.margin != null ? marginText({ ours: f.exp.ours, their: f.cost }) + (f.now.length ? ' · by their bills' : ' · by price') : '—') +
-        fig('Client owes', owes) +
       '</div>' +
       (f.diff != null ? '<div class="sub-warn">' + diffWords(f) + '</div>' : '') +
+      '<div class="sb-sec-h">Their bills</div>' +
       (cur.length ? cur.map(b => billRowHtml(s, b, props, B, 'list')).join('')
-        : '<p class="muted" style="margin:10px 0 0">No bills for them this season yet.</p>') +
+        : '<p class="muted" style="margin:6px 0 0">No bills for them this season yet.</p>') +
       (old.length ? '<details class="sb-old"><summary>Earlier seasons (' + old.length + ')</summary>' +
         old.map(b => billRowHtml(s, b, props, B, 'list')).join('') + '</details>' : '') +
+      (q ? clientInvoicesHtml(s, p, q) : '') +
     '</div>';
+  }
+  // The client's invoices this season, from QuickBooks: what each was, paid
+  // or owed, and whether it counts as the subcontractor's work (by hand).
+  function clientInvoicesHtml(s, p, q) {
+    const today = ymd(new Date());
+    const payOf = {};
+    q.pays.forEach(pm => (pm.on || []).forEach(o => { (payOf[o.inv] = payOf[o.inv] || []).push(pm); }));
+    const row = x => {
+      const inv = x.inv, bal = inv.balance || 0;
+      const what = (x.work.length ? x.work : inv.lines || []).map(l => String(l.item || '').split(':').pop() || 'Line')
+        .filter((n, i, a) => a.indexOf(n) === i).join(', ');
+      const state = bal <= 0 ? '<span class="rc-tag">Paid</span>'
+        : '<span class="rc-tag rc-owed">' + (inv.due && inv.due < today ? 'Past due' : 'Owes') + ' ' + money(bal) + '</span>';
+      const paidWords = (payOf[inv.id] || []).map(pm => 'paid ' + esc(dayWords(pm.date)) + (pm.method ? ' · ' + esc(pm.method) : '')).join('; ');
+      return '<div class="sb-row' + (x.counts ? '' : ' sb-off') + '">' +
+        '<div class="sb-line"><span class="sb-date">' + esc(dayWords(inv.date)) + '</span>' +
+          '<span class="sb-what"><b>#' + esc(inv.doc || inv.id) + '</b> <span class="muted">' + esc(what) + '</span></span>' +
+          '<span class="sb-amt">' + money(inv.total) + '</span></div>' +
+        '<div class="sb-meta">' + state + (paidWords ? '<span class="muted">' + paidWords + '</span>' : '') +
+          (x.counts && x.workCents !== inv.total ? '<span class="muted">' + money(x.workCents) + ' for the work</span>' : '') +
+          '<label class="sub-count" title="' + (x.byHand ? 'Set by hand' : x.auto ? 'Their kind of work is on it' : 'None of its lines is their kind of work') + '">' +
+            '<input type="checkbox"' + (x.counts ? ' checked' : '') + ' onchange="subInvCount(\'' + sid(inv.id) + '\', this.checked, ' + x.auto + ')"> Count</label>' +
+          (inv.link ? '<a class="link-btn" href="' + esc(inv.link) + '" target="_blank" rel="noopener">QuickBooks</a>' : '') + '</div>' +
+      '</div>';
+    };
+    return '<div class="sb-sec-h">Your invoices to them <span class="muted">· QuickBooks' +
+        (clientsDoc.readAt ? ', read ' + esc(fmtDateMD(clientsDoc.readAt.slice(0, 10))) + ' ' +
+          esc(new Date(clientsDoc.readAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })) : '') + '</span></div>' +
+      (q.list.length ? q.list.map(row).join('')
+        : '<p class="muted" style="margin:6px 0 0">No invoices to them this season in QuickBooks.</p>');
   }
 
   // ------------------------------------------------- the bills, drawn
@@ -982,17 +1181,25 @@
   const howWords = b => (b.how === 'learned' ? '🔁 like the one of ' + dayWords(b.from) : HOW[b.how] || '');
   // Owed or paid: on a bill that came as an invoice receipt, as "Owed to
   // them" counts it (Mark paid as before); a bill a payment went with is paid.
+  // The day a payment went with it, when one did.
+  const paidOn = b => (b.paidBy && isDay(String(b.paidBy.date || '').slice(0, 10)) ? ' ' + esc(fmtDateMD(String(b.paidBy.date).slice(0, 10))) : '');
   function stateHtml(b, B) {
     const r = b.rcBill;
     if (r && isBill(r)) {
       const t = ymd(new Date()), paid = isPaid(r, B.pay.paid) || !!b.paidBy;
       const byPayment = B.pay.paid.has(r.id) || r.paid || !!b.paidBy;
-      return (paid ? '<span class="rc-tag">Paid</span>'
+      return (paid ? '<span class="rc-tag">Paid' + paidOn(b) + '</span>'
           : r.dueDate && r.dueDate < t ? '<span class="rc-tag rc-owed">Past due</span>'
           : '<span class="rc-tag rc-owed">Owed' + (r.dueDate ? ' · due ' + fmtDateMD(r.dueDate) : '') + '</span>') +
         (byPayment ? '' : '<button class="link-btn" onclick="subPaid(\'' + sid(r.id) + '\', ' + (paid ? 'false' : 'true') + ')">' + (paid ? 'Not paid' : 'Mark paid') + '</button>');
     }
-    return b.paidBy || b.payOnly ? '<span class="rc-tag">Paid</span>' : '';
+    if (b.paidBy || b.payOnly) return '<span class="rc-tag">Paid' + paidOn(b) + '</span>';
+    // A bill from their invoice email: paid when a payment went with it, or
+    // marked paid here (by hand -- a payment none of the three told).
+    if (!b.visitKey || b.hand) return '';
+    const byHand = !!(data.paid || {})[b.visitKey];
+    return (byHand ? '<span class="rc-tag">Paid</span>' : '<span class="rc-tag rc-owed">Not paid yet</span>') +
+      '<button class="link-btn" onclick="subPaid(\'' + sid(b.visitKey) + '\', ' + (byHand ? 'false' : 'true') + ')">' + (byHand ? 'Not paid' : 'Mark paid') + '</button>';
   }
   function mowsHtml(s, b) {
     if (b.none || b.elsewhere) return '';
@@ -1135,6 +1342,35 @@
     '</div>';
   }
 
+  // Who they are in QuickBooks, for the money paid to them
+  // (functions/subclients.py): found by their name among the vendors and
+  // customers -- the bank feed books their withdrawals to whichever name it
+  // was given -- or kept by hand (qbPayees). Under the card's figures.
+  function payeesHtml(s) {
+    if (!clientsDoc.readAt) return '';
+    const got = ((clientsDoc.payees || {})[s.id] || {}).list || [];
+    const n = ((clientsDoc.paidOut || {})[s.id] || []).length;
+    return '<div class="sub-payees">💵 Money paid to them, from QuickBooks: ' + (got.length
+      ? got.map(x => esc(x.name || x.id) + ' <span class="muted">(' + (x.type === 'Vendor' ? 'vendor' : 'customer') + ')</span>').join(', ') +
+        ' · ' + n + ' payment' + (n === 1 ? '' : 's') + ' since ' + esc(String(clientsDoc.from || '').slice(0, 4) || 'last year')
+      : '<span class="muted">no vendor or customer there by their name (the words in Edit)</span>') + '</div>';
+  }
+  // In Edit: a tick for each of those names; one unticked is never read for
+  // them again (kept by hand), and "by their name again" lets them be found.
+  function payeePicksHtml(s) {
+    if (!s.id) return '';
+    const found = ((clientsDoc.payees || {})[s.id] || {}).list || [];
+    const hand = Array.isArray(s.qbPayees) ? s.qbPayees : null;
+    const all = found.concat((hand || []).filter(h => !found.some(f => f.type === h.type && String(f.id) === String(h.id))));
+    if (!all.length && !hand) return '';
+    const on = x => !hand || hand.some(h => h.type === x.type && String(h.id) === String(x.id));
+    return '<div class="field"><span class="label">Money paid to them in QuickBooks — under these names</span><div class="bd-pick" id="sbPayees">' +
+      all.map(x => '<label class="bd-pick-item"><input type="checkbox" class="sbPayee" data-type="' + esc(x.type) + '" data-id="' + esc(String(x.id)) +
+        '" data-name="' + esc(x.name || '') + '"' + (on(x) ? ' checked' : '') + '><span>' + esc(x.name || x.id) + ' (' +
+        (x.type === 'Vendor' ? 'vendor' : 'customer') + ')</span></label>').join('') + '</div>' +
+      (hand ? '<button class="link-btn" onclick="subPayeesAuto(\'' + sid(s.id) + '\')">↺ Find them by their name again</button>' : '') + '</div>';
+  }
+
   function subFormHtml(s) {
     return '<div class="add-area sub-form">' +
       '<div class="grid g2">' +
@@ -1144,6 +1380,7 @@
         '<div class="field"><span class="label">Email</span><input id="sbEmail" inputmode="email" value="' + esc(s.email || '') + '"></div>' +
       '</div>' +
       '<div class="field"><span class="label">Notes</span><input id="sbNotes" value="' + esc(s.notes || '') + '" placeholder="Terms, late fee, who to call"></div>' +
+      payeePicksHtml(s) +
       '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="subSave(\'' + sid(s.id || '') + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="subCancel()">Cancel</button>' +
         (s.id ? '<button class="btn btn-sm btn-danger" onclick="subRemove(\'' + sid(s.id) + '\')">Remove</button>' : '') + '</div>' +
@@ -1253,6 +1490,11 @@
     const rec = { name: name, match: v('sbMatch') || matchOf(name), phone: v('sbPhone'), email: v('sbEmail'), notes: v('sbNotes'),
                   updatedAt: new Date().toISOString() };
     if (!id) { rec.createdAt = rec.updatedAt; rec.props = {}; }
+    // The QuickBooks names: kept by hand once one is unticked (or they were
+    // by hand already); all ticked as found leaves them found by name.
+    const boxes = Array.from(document.querySelectorAll('.sbPayee'));
+    const ticked = boxes.filter(b => b.checked).map(b => ({ type: b.dataset.type, id: b.dataset.id, name: b.dataset.name || '' }));
+    if (boxes.length && (ticked.length < boxes.length || Array.isArray(((data.subs || {})[id] || {}).qbPayees))) rec.qbPayees = ticked;
     form = null;
     open[subId] = true;
     put({ subs: { [subId]: rec } }, 'saving ' + name);
@@ -1482,8 +1724,11 @@
     checking = true; render();
     try {
       const r = await YDClaude.post('/subs/scan', { full: !visitsDoc.scannedAt });
-      const n = ((r && r.report) || {}).new || 0;
-      showToast(n ? n + ' new visit' + (n === 1 ? '' : 's') + ' from their invoices' : 'Nothing new in their email');
+      const rep = (r && r.report) || {}, n = rep.new || 0, np = rep.payments || 0;
+      const news = [n ? n + ' new bill' + (n === 1 ? '' : 's') : '', np ? np + ' new payment' + (np === 1 ? '' : 's') : ''].filter(Boolean);
+      // (Their clients were read from QuickBooks on the same press.)
+      showToast((news.length ? news.join(' and ') + ' from their emails' : 'Nothing new in their email') +
+        (rep.clientsError ? ' — ' + rep.clientsError : ''));
     } catch (e) {
       showToast(e.message || 'Their email could not be read just now');
     } finally {
@@ -1531,6 +1776,18 @@
   window.subPaid = function (receiptId, paid) {
     put({ paid: { [receiptId]: paid ? ymd(new Date()) : null } }, 'marking a bill');
   };
+  window.subPayeesAuto = function (subId) {
+    if (!(data.subs || {})[subId]) return;
+    form = null;
+    put({ subs: { [subId]: { qbPayees: null, updatedAt: new Date().toISOString() } } }, 'finding them by name');
+    showToast('Found by their name at the next QuickBooks look (within the hour)');
+  };
+  // A client's invoice counted as the subcontractor's work, or not. The
+  // same as Job Hub would say by itself is no say at all (back to automatic).
+  window.subInvCount = function (invId, on, auto) {
+    put({ invFix: { [invId]: on === auto ? null : { skip: !on, at: new Date().toISOString() } } },
+      on ? 'counting an invoice' : 'not counting an invoice');
+  };
 
   // ---------------------------------------------------------------- loading
 
@@ -1538,7 +1795,8 @@
     if (unsub) { try { unsub(); } catch (e) {} }
     unsub = null; fresh = false; form = null; addingVisit = '';
     data = EMPTY();
-    visitsDoc = { visits: {}, scannedAt: '' };
+    visitsDoc = { visits: {}, payments: {}, scannedAt: '' };
+    clientsDoc = NO_CLIENTS();
     openBills = {}; changing = {}; allProps = {}; finding = {}; findQ = {}; matchAll = {}; billsAll = {};
     forget();
   }
@@ -1547,18 +1805,22 @@
     if (!owner() || !window.YDDb) { render(); return; }
     unsub = window.YDDb.watch('settings', (changes, meta) => {
       // Every settings record comes through here -- the email reader writes
-      // settings/receipts every half hour -- and only two are ours. Anything
+      // settings/receipts every half hour -- and only three are ours. Anything
       // else changing is no reason to file bills or redraw, unless this is
       // the first word from the server (what `fresh` waits for).
-      const ours = changes.some(c => c.id === 'subcontractors' || c.id === 'subVisits');
+      const ours = changes.some(c => c.id === 'subcontractors' || c.id === 'subVisits' || c.id === 'subClients');
       const first = !fresh && !!meta && meta.fromCache === false;
       if (!ours && !first) return;
       changes.forEach(c => {
         const d = c.type === 'removed' ? {} : (c.data || {});
-        if (c.id === 'subVisits') { visitsDoc = { visits: d.visits || {}, scannedAt: d.scannedAt || '' }; return; }
+        if (c.id === 'subVisits') { visitsDoc = { visits: d.visits || {}, payments: d.payments || {}, scannedAt: d.scannedAt || '' }; return; }
+        if (c.id === 'subClients') {
+          clientsDoc = { customers: d.customers || {}, payees: d.payees || {}, paidOut: d.paidOut || {}, from: d.from || '', readAt: d.readAt || '' };
+          return;
+        }
         if (c.id !== 'subcontractors') return;
         data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {}, visitFix: d.visitFix || {},
-                 handVisits: d.handVisits || {}, svcProp: d.svcProp || {}, rcFix: d.rcFix || {} };
+                 handVisits: d.handVisits || {}, svcProp: d.svcProp || {}, rcFix: d.rcFix || {}, invFix: d.invFix || {} };
       });
       if (meta && meta.fromCache === false) fresh = true;
       forget();
@@ -1635,11 +1897,27 @@
     return b.counts ? 'client to pick' : '';
   }
 
+  // Whose bill a receipt is, for a screen that acts on it (a to-do to bill
+  // the client, say): the subcontractor, the property, its customer and how
+  // that was told -- matched the way the Subcontractors section matches it
+  // (address, name, his picks, their price). null when it is no
+  // subcontractor's bill, or no client could be told yet.
+  function billClient(r) {
+    if (!owner() || !r || !r.id) return null;
+    const w = subOf(r), s = w && subById(w.id);
+    const B = s && billsFor(s), b = B && B.rcIndex[r.id];
+    if (!b || b.elsewhere || b.hand || b.none || !b.prop) return null;
+    const p = Object.assign({ id: b.prop }, (s.props || {})[b.prop] || {}), c = custOf(p, B.L);
+    return { subId: s.id, subName: s.name || '', propId: b.prop, client: p.client || '', address: p.address || '',
+      customerId: p.customerId || ((jobOf(p, B.L) || {}).customerId) || null, qbCustomerId: (c && c.qbCustomerId) || null,
+      jobId: p.jobId || null, how: b.how, cents: b.cents, date: b.date, service: b.service, billKey: b.key };
+  }
+
   // list: the subcontractors set up here, for Receipts' Subcontractor picker
   // (empty for anyone but the owner, who alone reads them).
   window.YDSubs = { render: render, data: () => data, subFor: r => subFor(r), subOf: r => subOf(r),
     list: () => subsList().map(s => ({ id: s.id, name: s.name || '' })), forJob: forJob,
-    toMatch: toMatch, clientOf: clientOf,
+    toMatch: toMatch, clientOf: clientOf, billClient: billClient,
     // Every bill of one subcontractor, each once, with its client and how
     // that was told (for a screen that wants them; and for testing).
     bills: subId => { const s = owner() && subById(subId); return s ? billsFor(s).bills : []; },

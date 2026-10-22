@@ -841,12 +841,24 @@ def _subs(request, path, headers):
     import subvisits
     body = request.get_json(silent=True) or {}
     try:
-        return (json.dumps({"report": subvisits.scan(_db, full=bool(body.get("full")))}), 200, json_headers)
+        report = subvisits.scan(_db, full=bool(body.get("full")))
     except receipts.NeedsPermission:
         return (json.dumps({"error": "Reading email is not switched on"}), 403, json_headers)
     except Exception as e:                          # noqa: BLE001
         print("subs scan failed:", e)
         return (json.dumps({"error": "Their email could not be read just now"}), 502, json_headers)
+    # And their clients' invoices and payments, and what was paid to them,
+    # from QuickBooks now (subclients.py) -- not at the next hourly look. The
+    # email's news stands if QuickBooks can't be asked just now.
+    try:
+        import quickbooks as qb
+        import subclients
+        with qb._holding_tokens():
+            report["clients"] = subclients.sync(_db)
+    except Exception as e:                          # noqa: BLE001
+        print("subs clients not read:", e)
+        report["clientsError"] = "QuickBooks could not be asked just now"
+    return (json.dumps({"report": report}), 200, json_headers)
 
 
 # ---------------------------------------------------------------- follow-ups

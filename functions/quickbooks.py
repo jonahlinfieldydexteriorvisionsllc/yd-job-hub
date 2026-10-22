@@ -1984,6 +1984,12 @@ def _sweep(news, deadline=None):
         if got:
             print("quickbooks sweep: customers %s" % got)
 
+    def sub_clients():
+        # A subcontractor's clients: what each was billed and paid, and what
+        # was paid to the subcontractor (subclients.py, for subs.js).
+        import subclients
+        counted("%d subcontractor client(s) read", subclients.sync(db))
+
     # The rest, each on its own: one that fails is logged and the next still
     # runs. Past the run's deadline (main.py: the hourly request has only so
     # long) no new step is started -- the next hour carries on.
@@ -2002,6 +2008,7 @@ def _sweep(news, deadline=None):
         ("copies' invoices not looked for",
          lambda: counted("%d job(s) given the invoice made from an earlier copy", copy_invoices(jobs))),
         ("customers not brought in step", customers_sync),
+        ("subcontractors' clients not read", sub_clients),
     ]
     for n, (why, step) in enumerate(later):
         if deadline is not None and time.monotonic() > deadline:

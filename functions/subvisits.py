@@ -19,9 +19,19 @@ Which client a visit was for, and how many mows it was, the app works out
 from the properties (subs.js), and Jonah can set either by hand there. What
 he sets lives in settings/subcontractors, so nothing here ever overwrites it.
 
-Kept in settings/subVisits {visits: {key: visit}, scannedAt} -- the
-owner's alone, like the subcontractors themselves (firestore.rules: settings
-are the owner's unless named otherwise).
+Their payment receipts too (Jonah, 22 Oct 2026: "my receipts from paying
+[his mowing subcontractor]"): Jobber emails one for every invoice paid,
+
+    Receipt for payment from <Company> - Oct 12, 2026
+    Receipt for your payment to <Company>: Oct 20, 2026
+
+and each becomes one payment {date, cents, invoiceNo, subject}. The app puts
+a payment with the bill it paid (subs.js), so a bill shows as paid.
+
+Kept in settings/subVisits {visits: {key: visit}, payments: {key: payment},
+scannedAt, yearReadAt} -- the owner's alone, like the subcontractors
+themselves (firestore.rules: settings are the owner's unless named
+otherwise).
 """
 
 import datetime
@@ -36,6 +46,12 @@ MAX_PER_SUB = 400           # invoices looked at per subcontractor per run
 
 AMOUNT = re.compile(r"\$\s?([\d,]+\.\d{2})")
 DUE = re.compile(r"\bdue(?: on)?\s+([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})", re.I)
+DAY = re.compile(r"\b([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})\b")
+# "Receipt for payment from <Company> - Oct 12, 2026" / "Receipt for your
+# payment to <Company>: Oct 20, 2026" -- the company, then the day.
+RECEIPT = re.compile(r"^receipt for (?:your )?payment (?:from|to)\s+(.+?)(?:\s*[-–—:]\s*([A-Za-z]{3}[a-z]*\.?\s+\d{1,2},?\s+\d{4}))?\s*$",
+                     re.I)
+INVOICE_NO = re.compile(r"\binvoice\s*#\s*([A-Za-z0-9-]{1,20})", re.I)
 MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun",
                                       "jul", "aug", "sep", "oct", "nov", "dec"], 1)}
 PREFIX = re.compile(r"^\s*((re|fwd?|fw)\s*:\s*)+", re.I)
@@ -64,14 +80,18 @@ def _query_name(sub):
     return '(%s OR "%s")' % ("".join(w), " ".join(w)) if len(w) > 1 else (w[0] if w else "")
 
 
-def _due(snippet):
-    m = DUE.search(snippet or "")
+def _day_of(m):
+    """"Oct 12, 2026" (a match of DUE or DAY) as 2026-10-12, or ''."""
     if not m or m.group(1).lower()[:3] not in MONTHS:
         return ""
     try:
         return datetime.date(int(m.group(3)), MONTHS[m.group(1).lower()[:3]], int(m.group(2))).isoformat()
     except ValueError:
         return ""
+
+
+def _due(snippet):
+    return _day_of(DUE.search(snippet or ""))
 
 
 def parse(subject, snippet, internal_ms, sub):
@@ -100,6 +120,24 @@ def parse(subject, snippet, internal_ms, sub):
             "cents": cents, "subject": s[:200]}
 
 
+def parse_payment(subject, snippet, internal_ms, sub):
+    """One payment from one payment receipt email, or None when it is not a
+    receipt for paying this subcontractor. The day is the one in the
+    subject (when the money went), else the day the email came."""
+    s = PREFIX.sub("", subject or "").strip()
+    m = RECEIPT.match(s)
+    if not m or not names_match(sub, m.group(1)):
+        return None
+    amount = AMOUNT.search(snippet or "")
+    cents = int(round(float(amount.group(1).replace(",", "")) * 100)) if amount else None
+    sent = datetime.datetime.fromtimestamp(int(internal_ms) / 1000, dg.TZ).date().isoformat()
+    day = _day_of(DAY.search(m.group(2) or "")) or sent
+    no = INVOICE_NO.search(snippet or "")
+    key = "p" + hashlib.sha1(("%s|%s|%s" % (s.lower(), cents, day)).encode()).hexdigest()[:16]
+    return {"key": key, "date": day, "sent": sent, "cents": cents, "invoiceNo": no.group(1) if no else "",
+            "subject": s[:200]}
+
+
 def _since(have, full, now):
     start = datetime.date(now.year, 1, 1)
     if full:
@@ -112,8 +150,9 @@ def _since(have, full, now):
 
 
 def scan(db, full=False):
-    """Look for every subcontractor's invoices since the last look (since the
-    start of the year the first time, or when `full`). Returns a report."""
+    """Look for every subcontractor's invoices and payment receipts since the
+    last look (since the start of the year the first time, or when `full`).
+    Returns a report."""
     now = dg._now()
     cfg = db.collection("settings").document("subcontractors").get()
     subs = ((cfg.to_dict() or {}).get("subs") or {}) if cfg.exists else {}
@@ -121,11 +160,18 @@ def scan(db, full=False):
     snap = ref.get()
     have = (snap.to_dict() or {}) if snap.exists else {}
     visits = have.get("visits") or {}
+    pays = have.get("payments") or {}
     seen = set()
-    for v in visits.values():
+    for v in list(visits.values()) + list(pays.values()):
         seen.update((v or {}).get("msgIds") or [])
+    # Until 22 Oct 2026 every look that found nothing new wrote an EMPTY
+    # visits map with merge -- which Firestore takes as "replace the map",
+    # so the year's visits were lost half an hour after they were read (and
+    # each later look only reached back a few days). The year is read once
+    # more, in full, to bring them back; yearReadAt says it was.
+    full = full or not have.get("yearReadAt")
     since = _since(have, full, now)
-    found, report = {}, {"subs": 0, "looked": 0, "new": 0}
+    found, paid, report = {}, {}, {"subs": 0, "looked": 0, "new": 0, "payments": 0}
     for sid, sub in subs.items():
         if not sub or not (sub.get("name") or sub.get("match")):
             continue
@@ -133,27 +179,41 @@ def scan(db, full=False):
         name = _query_name(sub)
         if not name:
             continue
-        query = '%s subject:invoice after:%s -in:sent -in:drafts -in:chats' % (name, since.strftime("%Y/%m/%d"))
+        query = '%s subject:(invoice OR receipt) after:%s -in:sent -in:drafts -in:chats' % (name, since.strftime("%Y/%m/%d"))
         for mid in rc._list_ids(query)[:MAX_PER_SUB]:
             if mid in seen:
                 continue
             msg = rc._gmail("/messages/" + mid, {"format": "metadata", "metadataHeaders": ["Subject"]})
             report["looked"] += 1
             subject = rc._header(msg, "Subject")
-            v = parse(subject, msg.get("snippet") or "", msg.get("internalDate") or 0, sub)
+            snippet, when = msg.get("snippet") or "", msg.get("internalDate") or 0
+            v = parse(subject, snippet, when, sub)
+            into, have_map, count = found, visits, "new"
+            if not v:
+                v = parse_payment(subject, snippet, when, sub)
+                into, have_map, count = paid, pays, "payments"
             if not v:
                 continue
             v["sub"] = sid
             key = v.pop("key")
-            old = visits.get(key) or found.get(key)
+            old = have_map.get(key) or into.get(key)
             if old:
                 # The same invoice again (a reminder): only the email is new.
                 ids = list((old.get("msgIds") or [])) + [mid]
-                found[key] = dict(old, msgIds=ids[-6:])
+                into[key] = dict(old, msgIds=ids[-6:])
                 continue
             v["msgIds"] = [mid]
             v["foundAt"] = now.isoformat()
-            found[key] = v
-            report["new"] += 1
-    ref.set({"visits": found, "scannedAt": now.isoformat()}, merge=True)
+            into[key] = v
+            report[count] += 1
+    # Only what was found is written into the maps (an empty one would
+    # replace them -- see above).
+    patch = {"scannedAt": now.isoformat()}
+    if found:
+        patch["visits"] = found
+    if paid:
+        patch["payments"] = paid
+    if full:
+        patch["yearReadAt"] = now.isoformat()
+    ref.set(patch, merge=True)
     return report
