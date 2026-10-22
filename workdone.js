@@ -173,6 +173,8 @@
   let toldTimer = 0;
   function changed() {
     fresh();
+    // A first tick on a Booked job puts it In progress (startTicked).
+    startTicked();
     // Home, the boards, My Jobs and the crew's lists redraw on this.
     clearTimeout(toldTimer);
     toldTimer = setTimeout(() => document.dispatchEvent(new CustomEvent('yd-workdone')), 60);
@@ -264,6 +266,48 @@
     asked[id] = true;
     Promise.resolve(YDDb.get(PATH, id)).then(d => { if (d && !ticks[id]) { ticks[id] = d; changed(); } }).catch(() => {});
   }
+
+  // ------------------------------------------------ the first tick starts the job
+  //
+  // Jonah (22 Oct 2026): "when the crew tick the first piece on a Booked
+  // job, move it to In progress by itself." Done the way a job accepted in
+  // QuickBooks books itself (sync.js bookIfAccepted): through the app's own
+  // save (YDSync.patchJob -- the job, its crew page, the clock's list, the
+  // change history), on a device that may change jobs -- the one that
+  // ticked, or the owner's when it sees someone else's tick (only one
+  // device acts on each tick). Only a tick newer than the job's last move
+  // counts: a job put back to Booked by hand after it stays Booked until a
+  // piece is ticked again.
+  const starting = new Set();
+  function startTicked() {
+    const a = window.YDAuth;
+    if (!a || !a.user || typeof ydCan !== 'function' || !ydCan('jobs', 'change') || typeof loadAllJobs !== 'function' ||
+        !window.YDSync || !YDSync.patchJob) return;
+    Object.keys(ticks).forEach(id => {
+      if (starting.has(id)) return;
+      const lines = (ticks[id] && ticks[id].lines) || {};
+      const j = loadAllJobs().find(x => x && x._id === id);
+      if (!j || statusOf(j) !== 'booked' || j.deletedAt || j.removeWhy) return;
+      const on = new Set(linesOfJob(j).map(w => w.id));
+      const since = String(j.workStageAt || '');
+      const t = Object.keys(lines).map(k => Object.assign({ line: k }, lines[k]))
+        .filter(x => x.done === true && on.has(x.line) && String(x.at || '') > since && (x.uid === a.user.uid || a.isOwner))
+        .sort((x, y) => String(x.at).localeCompare(String(y.at)))[0];
+      if (!t) return;
+      starting.add(id);
+      setTimeout(() => {
+        const ok = YDSync.patchJob(id, { workStage: 'inProgress', workStageAt: new Date().toISOString(), jobStatus: 'inprogress' },
+          firstName(t.by) + '’s first tick');
+        starting.delete(id);
+        if (ok && typeof showToast === 'function') {
+          showToast((String(j.customerName || '').trim() || 'A job') + ' is In progress — ' + firstName(t.by) + ' ticked off the first piece', 5000);
+        }
+      }, 0);
+    });
+  }
+  // The jobs came in after the ticks (a fresh start): looked at again.
+  let startTimer = 0;
+  document.addEventListener('yd-jobs-changed', () => { clearTimeout(startTimer); startTimer = setTimeout(startTicked, 300); });
 
   // ------------------------------------------------ watching
   function stop() {
