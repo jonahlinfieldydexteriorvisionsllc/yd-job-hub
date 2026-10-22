@@ -49,6 +49,9 @@
   // Things we buy to work with, not to install: kept in Supplies (where to
   // get one) but never on an estimate, and never in the list Claude reads.
   const NOT_FOR_ESTIMATES = ['tools'];
+  // Priced on an estimate but never named to the customer (materialLine
+  // `listed`): what is hired for the job, not part of what it leaves behind.
+  const NOT_LISTED = ['rental'];
   const CATEGORY_NAME = {};
   CATEGORIES.forEach(([id, name]) => { CATEGORY_NAME[id] = name; });
 
@@ -318,7 +321,12 @@
       landedEachCents: null, clientCents: 0, problems: [],
       vendorId: it ? it.vendorId || null : null, cityDelivery: !!vendorRule.cityDelivery,
       pallet: !!(it && it.pallet), specialOrder: !!(it && it.specialOrder),
-      delivery: m.delivery || 'auto', listed: m.listed !== false, auto: m.auto || null,
+      // `listed`: named in what the customer reads (materialsList -- the
+      // customer's view and QuickBooks). A rental -- the mini-excavator, the
+      // jumping jack -- never is (Jonah, 21 Oct 2026: "rental items dont go on
+      // the estimate as visible to client"): what it costs stays in the
+      // materials figure, as the layout markers' does.
+      delivery: m.delivery || 'auto', listed: m.listed !== false && !NOT_LISTED.includes(cat), auto: m.auto || null,
       packLb: pk.lb, partUse: false, usedQty: null, usedLb: null,
     };
     if (m.supplyId && !it) out.problems.push('no longer in Supplies');

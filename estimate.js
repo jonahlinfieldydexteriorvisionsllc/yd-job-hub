@@ -1226,7 +1226,9 @@
               ? ' <button class="link-btn" onclick="estSource(\'' + safeId(l.id) + '\')">🔎 Source it</button>' : '')
           : l.orderQty ? esc((l.rentalPlan ? 'Rent ' + P().qtyText(l.orderQty, l.per) + ' — charged as ' + l.rentalPlan
                                              : 'Order ' + P().qtyText(l.orderQty, l.per)) +
-            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + partUseText(l) + (l.specialOrder ? ' · special order' : '')) : '';
+            (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + partUseText(l) + (l.specialOrder ? ' · special order' : '') +
+            // A rental is priced in, never named to the customer (pricing.js NOT_LISTED).
+            (l.category === 'rental' ? ' · not shown to the customer' : '')) : '';
       }
     });
     const toSource = canSource() ? r.takeoff.filter(l => unpriced(l) && !(found[foundKey(l.id)] || {}).busy) : [];
