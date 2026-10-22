@@ -23,13 +23,16 @@
 //                  marked as in it, and labour added outside it),
 //                  crewNote (the crew's page only)}],
 //     materials: [{id, supplyId, name, qty, unit, plant, tree, costCents,
-//                  category, delivery: auto|pickup|rides,
+//                  category, delivery: auto (his rules: pricing.js wayOf) |
+//                  delivered|pickup|rides (set by hand on the line),
 //                  forWork (a work id, 'none', or unset = worked out),
 //                  allInOf (the allin work line whose price covers it),
 //                  handPicked (its Supplies item picked by him on the line:
 //                  Claude's answers keep it)}],
 //     spoilCuYd (soil, rock, debris), brushCuYd (brush only), fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
-//     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo }
+//     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo,
+//     ways: 'rules' (priced by his delivered-or-picked-up rules from the
+//     start; one sent before them has none and keeps its trucks) }
 // saved with the form like the materials list. What QuickBooks has is
 // `qbEstimate`, written by the server and patched in here, carried through
 // form saves (BOARD_FIELDS). When the estimate has lines, the job price
@@ -110,7 +113,7 @@
     // says whether it is one (left out = from the services, snowOf).
     return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
              spoilCuYd: null, brushCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null, payments: null,
-             snow: null };
+             snow: null, ways: 'rules' };
   }
   function cleanPlan(list) {
     if (!Array.isArray(list) || !list.length) return null;
@@ -134,7 +137,7 @@
   // its fuel is counted over (pricing.js fuel).
   function ctx(city, e, jobId) {
     const c = catalog();
-    return { rules: P().rules(), items: c.items, prices: c.prices, fuel: P().fuelPrices(), book: book,
+    return { rules: P().rules(), items: c.items, prices: c.prices, vendors: c.vendors || {}, fuel: P().fuelPrices(), book: book,
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim(),
              jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null };
   }
@@ -162,6 +165,25 @@
     return last;
   }
   const busyHere = () => !!building && building === currentJobId;
+
+  // An order list's lines (app.js), shaped as pricing.js prices lines, with
+  // their ways worked out the one way everywhere (pricing.js waysFor). A
+  // line's way set by hand: on the order line, else on the estimate's line
+  // for the same material (by item, else by name).
+  function orderShaped(lines, e, c) {
+    const key = s => String(s || '').toLowerCase().trim();
+    const mats = e.materials || [];
+    const shaped = (lines || []).map((l, i) => {
+      const m = l.supplyId ? mats.find(x => x.supplyId === l.supplyId) : mats.find(x => !x.supplyId && key(x.name) === key(l.name));
+      // A joined line is counted in what its item is sold by; one not
+      // joined, in its own unit ("4 tons" is still bulk).
+      const it = l.supplyId ? c.items[l.supplyId] : null;
+      return { id: 'ord' + i, supplyId: l.supplyId || null, name: (it && it.name) || l.name || '', orderQty: num(l.qty) || 0,
+               per: l.supplyId ? '' : l.per || '',
+               hand: ['delivered', 'pickup'].indexOf(l.hand) !== -1 ? l.hand : handWay(m) };
+    });
+    return P().waysFor(shaped, e, c);
+  }
 
   const hasLines = () => est.work.length > 0 || est.materials.length > 0;
 
@@ -215,20 +237,24 @@
     // [{supplyId, qty (in what it is sold by)}]. saved: the job's estimate
     // when it is not the open one (its town, map point, a material marked
     // picked up, delivery switched off). null before pricing.js is there.
+    // lines may carry `hand`: the way set by hand on the order line, which
+    // wins over the estimate's.
     orderDelivery: (lines, saved, city) => {
       if (!P() || !P().deliveries) return null;
       const e = saved === undefined ? est : fromSaved(saved || {});
       const c = ctx(saved === undefined ? undefined : city || '');
-      const vendors = c.rules.vendors || {};
-      const how = sid => ((e.materials || []).find(m => m.supplyId === sid) || {}).delivery || 'auto';
-      const shaped = (lines || []).map((l, i) => {
-        const it = l.supplyId ? c.items[l.supplyId] : null;
-        if (!it || !(num(l.qty) > 0)) return null;
-        return { id: 'ord' + i, supplyId: l.supplyId, name: it.name || '', orderQty: num(l.qty),
-                 per: String((c.prices[l.supplyId] || {}).per || it.unit || '').trim(), pallet: !!it.pallet, auto: null,
-                 cityDelivery: !!(vendors[it.vendorId] || {}).cityDelivery, delivery: how(l.supplyId) };
-      }).filter(Boolean);
+      const shaped = orderShaped(lines, e, c).filter(l => l.supplyId && c.items[l.supplyId] && l.orderQty > 0);
       return P().deliveries(shaped, e, c);
+    },
+    // Delivered or picked up, for each line of a job's order list -- the
+    // way set by hand on the order line, else on the estimate's line for
+    // that material, else his rules (pricing.js wayOf): [{supplyId, name,
+    // qty, hand}] -> [{way, wayBy, wayWhy, vendorName}] in the same order.
+    orderWays: (lines, saved, city) => {
+      if (!P() || !P().waysFor) return [];
+      const e = saved === undefined ? est : fromSaved(saved || {});
+      const c = ctx(saved === undefined ? undefined : city || '');
+      return orderShaped(lines, e, c).map(l => ({ way: l.way, wayBy: l.wayBy, wayWhy: l.wayWhy, vendorName: l.vendorName || '' }));
     },
     jobCompleted: (id, data) => jobCompleted(id, data),
     // Any job's saved estimate priced the way this screen prices it, for a
@@ -346,6 +372,12 @@
     o.flags = Array.isArray(e.flags) ? e.flags.map(String) : [];
     o.memo = String(e.memo || '');
     o.sent = Array.isArray(e.sent) ? e.sent.slice(-SENT_KEEP) : [];
+    // Delivered or picked up by his rules (Jonah, 22 Oct 2026) -- except a
+    // bid already sent before there were rules: the customer has its price,
+    // so it keeps the deliveries it was priced with (pricing.js settleWays).
+    // Not sent yet, it takes the rules, and says so once it is saved -- so
+    // sending it later never moves its price.
+    o.ways = e.ways === 'rules' || !o.sent.length ? 'rules' : null;
     o.payments = cleanPlan(e.payments);
     // A home or a business, when set by hand (whoFor); left out = from the
     // job's Business name.
@@ -1108,6 +1140,59 @@
     return w ? 'for ' + (String(w.title || '').trim() || 'Labor line ' + (est.work.indexOf(w) + 1)) : '';
   }
 
+  // Delivered or picked up (pricing.js wayOf; Jonah, 22 Oct 2026): worked
+  // out from his rules, it is a chip saying which and why, and a tap brings
+  // out the choice. Set by hand -- the odd time a material goes the other way
+  // -- the choice stays out, with the way back to his rules. Picked up, it
+  // carries no delivery charge. Drawn by renderTotals, as the whole job
+  // settles it (a small thing rides on a supplier's truck).
+  const wayOpen = {};         // line id -> its choice brought out
+  const WAY_WORDS = { delivered: '🚚 Delivered', pickup: '🏪 We pick it up', rides: '🚚 On another load' };
+  const handWay = m => (m && ['delivered', 'pickup', 'rides'].indexOf(m.delivery) !== -1 ? m.delivery : null);
+  function wayPickHtml(l, m, ro) {
+    if (!l || !l.way) return '';
+    const id = safeId(l.id), hand = handWay(m), dis = ro ? ' disabled' : '';
+    if (!hand && !wayOpen[id]) {
+      return '<button type="button" class="est-chip est-chip-way"' + dis + ' onclick="estWayOpen(\'' + id + '\')"' +
+        ' title="Worked out from your rules — tap to set it by hand">' + WAY_WORDS[l.way] +
+        ' <span class="muted">· ' + esc(l.wayWhy) + '</span>' + (ro ? '' : ' ▾') + '</button>';
+    }
+    // "On another load" only where a load is the question: a bulk load or
+    // a pallet from a supplier who delivers by town (or picked so before).
+    const choices = [['delivered', '🚚 Delivered'], ['pickup', '🏪 We pick it up']].concat(
+      hand === 'rides' || (l.cityDelivery && (l.pallet || P().isBulk(l.per))) ? [['rides', 'On another load']] : []);
+    return '<span class="est-way-pick">' + choices.map(([k, n]) => {
+      const on = (hand || l.way) === k;
+      return '<button type="button" class="est-way-btn' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' + dis +
+        ' onclick="estWay(\'' + id + '\', \'' + k + '\')">' + n + '</button>';
+    }).join('') +
+      (hand ? ' <span class="muted">set by hand</span>' + (ro ? '' : ' <button type="button" class="link-btn" onclick="estWay(\'' + id + '\', \'auto\')">↺ back to my rules (' +
+          esc(String(rulesWay(m, l).way === 'pickup' ? 'picked up' : 'delivered')) + ')</button>')
+        : ' <span class="muted">' + esc(l.wayWhy) + '</span>') + '</span>';
+  }
+  // What his rules alone would say for a line set by hand (the ↺ button).
+  function rulesWay(m, l) {
+    const c = catalog(), it = m.supplyId ? c.items[m.supplyId] : null;
+    const v = it && it.vendorId ? (c.vendors || {})[it.vendorId] : null;
+    return P().wayOf({ name: l.name, also: it ? [it.name, it.also].filter(Boolean).join(' ') : '', category: l.category, per: l.per,
+      pallet: l.pallet, cityDelivery: l.cityDelivery, buyWays: v && v.buyWays, vendorName: v && v.name, itemWay: it && it.getWay });
+  }
+  window.estWayOpen = function (id) {
+    id = safeId(id);
+    if (!changes() || !find(est.materials, id)) return;
+    wayOpen[id] = true;
+    renderTotals();
+  };
+  window.estWay = function (id, v) {
+    id = safeId(id);
+    const m = find(est.materials, id);
+    if (!m || !changes() || ['auto', 'delivered', 'pickup', 'rides'].indexOf(v) === -1) return;
+    m.delivery = v;
+    if (v === 'auto') delete wayOpen[id];
+    // A truck more or less moves the price.
+    changed(false);
+  };
+
   // Sales tax on a line (pricing.js salesTax): worked out from what the line
   // is, or set by hand -- the line shows which, and why when a building job's
   // little bit of planting goes untaxed. Worked out, it is a small chip
@@ -1262,7 +1347,6 @@
       ' oninput="estMat(\'' + id + '\', \'' + f + '\', this.value)">';
     const line = r ? r.takeoff.find(l => l.id === m.id) : null;
     const unit = line ? line.takeoffUnit : (m.unit || '');
-    const vRule = it && it.vendorId ? (P().rules().vendors || {})[it.vendorId] || {} : {};
     // Every line starts the same way -- what it is, its name, how many --
     // and ends with its amount and ↑ ↓ ✕ at the right. What only some lines
     // have (a typed-in item's unit, cost and kind; a plant's cost and tree;
@@ -1290,13 +1374,7 @@
             ' onchange="estMat(\'' + id + '\', \'taxIn\', this.checked)"> Cost includes tax</label>' +
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
             kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
-          '</select></label>') +
-        // Only a truck of bulk material or a pallet is a delivery of its own.
-        (vRule.cityDelivery && it && (it.pallet || P().isBulk(line ? line.per : it.unit))
-          ? '<label><span>Delivery</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'delivery\', this.value)">' +
-          [['auto', 'Delivered'], ['pickup', 'We pick it up'], ['rides', 'Rides on another load']].map(([k, n]) =>
-            '<option value="' + k + '"' + ((m.delivery || 'auto') === k ? ' selected' : '') + '>' + n + '</option>').join('') +
-          '</select></label>' : '');
+          '</select></label>');
     }
     // Under the line, on one row: what is ordered, its sales tax, and More
     // (which line of labor it is for, on the crew's page).
@@ -1305,6 +1383,7 @@
       '<div class="est-mtop"><div class="est-mfields">' + head + (extra ? '<span class="est-mxs">' + extra + '</span>' : '') + '</div>' +
         '<div class="est-mend"><div class="est-amt" id="estMA_' + id + '"></div>' + moves('mat', id, i, est.materials.length, ro) + '</div></div>' +
       '<div class="est-meta"><div class="est-order" id="estMO_' + id + '"></div>' +
+        '<span class="est-way" id="estWY_' + id + '"></span>' +
         taxPickHtml('mat', id, m.taxable, ro) + allInChip(m) +
         (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
       (forWork ? moreBoxHtml(id, forWork) : '') +
@@ -1526,6 +1605,8 @@
         : l.clientCents ? cents(l.clientCents) : '';
       const tx = el('estMT_' + safeId(l.id));
       if (tx) tx.textContent = taxNote(l, r, typeof (find(est.materials, safeId(l.id)) || {}).taxable === 'boolean');
+      const wy = el('estWY_' + safeId(l.id));
+      if (wy) wy.innerHTML = wayPickHtml(l, find(est.materials, safeId(l.id)), !changes());
       const o = el('estMO_' + safeId(l.id));
       if (o) {
         o.className = 'est-order' + (l.problems.length ? ' bad' : '');
@@ -3747,7 +3828,9 @@
       YDMatch.pack(items[m.supplyId], catalog().prices[m.supplyId]).lb ? 'lb' : '';
     if (m.plant) m.tree = g.tree === 'single' || g.tree === 'multi' ? g.tree : null;
     if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
-    if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
+    // Only what Jonah said for this job ("we'll pick up the edgers"); left
+    // on auto, his rules say (pricing.js wayOf).
+    if (['delivered', 'pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
     // An all-in line's id or title (joinAllIn makes it an id), or none.
     if (typeof g.allInOf === 'string') m.allInOf = g.allInOf.trim() || null;
     if (e) seedAsBought(m, e, said);

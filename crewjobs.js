@@ -123,7 +123,12 @@
   // A job with work on it takes each piece's how-we-do-it from the services
   // list (services.js), so its copy waits for that too.
   const needsServices = d => ((d.estimate || {}).work || []).some(w => w && (w.title || w.scope || w.crewNote));
-  const partsReady = d => (!needsCatalogue(d) || catalogueReady()) && (!needsServices(d) || servicesReady());
+  // His delivered-or-picked-up rules (pricing.js) too: before they come, a
+  // material's way would be worked out from the starting list.
+  const pricingReady = () => !window.YDPricing || !YDPricing.ready || YDPricing.ready();
+  const needsWays = d => ((d.estimate || {}).materials || []).length > 0 || (d.orderItems || []).length > 0;
+  const partsReady = d => (!needsCatalogue(d) || catalogueReady()) && (!needsServices(d) || servicesReady()) &&
+    (!needsWays(d) || pricingReady());
 
   // ---------------------------------------- which piece of work a material is for
   //
@@ -227,6 +232,51 @@
     return out;
   }
 
+  // ------------------------------------------------ delivered or picked up
+  //
+  // Jonah (22 Oct 2026): every material is delivered or picked up -- by his
+  // rules, or set by hand on the estimate or the order list (pricing.js
+  // wayOf, the one place it is worked out). The crew see which beside each
+  // material, and what we pick up listed on its own by the supplier to get
+  // it from (shop, hours, directions), as the rentals are: from the order
+  // list when the job has one (what is really being bought), else the
+  // estimate. lines: [{supplyId, name, qty, hand}] -> ways, same order.
+  function waysOf(d, lines) {
+    if (!lines.length || !window.YDEstimate || !YDEstimate.orderWays) return [];
+    try { return YDEstimate.orderWays(lines, d.estimate || {}, d.city || '') || []; } catch (e) { return []; }
+  }
+  // A material's way set by hand on the job's order list: the same here.
+  function orderHand(d, m) {
+    const key = s => String(s || '').toLowerCase().trim();
+    const o = (d.orderItems || []).find(x => x && (x.way === 'delivered' || x.way === 'pickup') &&
+      (m.supplyId ? x.supplyId === m.supplyId : key(x.name) === key(m.name)));
+    return o ? o.way : null;
+  }
+  const wayWords = w => !w ? '' : w.way === 'pickup' ? 'pick up' : w.way === 'rides'
+    ? 'comes on ' + (w.vendorName ? noMoney(w.vendorName).slice(0, 60) + '’s' : 'the supplier’s') + ' truck' : 'delivered';
+  function pickupsEntry(d, items) {
+    const est = d.estimate || {}, out = [];
+    const order = (d.orderItems || []).filter(o => o && o.name && !isRental(o, items)).slice(0, 120);
+    const src = order.length
+      ? order.map(o => ({ supplyId: o.supplyId || null, name: o.name, qty: numOr(o.qty) || 1, hand: o.way || null,
+                          vendorId: o.vendorId || (o.supplyId && items[o.supplyId] ? items[o.supplyId].vendorId : null),
+                          amount: noMoney(o.quantity || '').slice(0, 30), ordered: !!o.ordered }))
+      : (est.materials || []).filter(m => m && m.name && !isRental(m, items)).slice(0, 120).map(m => ({
+          supplyId: m.supplyId || null, name: m.name, qty: numOr(m.qty) || 1,
+          vendorId: m.supplyId && items[m.supplyId] ? items[m.supplyId].vendorId : null,
+          amount: noMoney(fmtQty(numOr(m.qty), unitOf(m))).slice(0, 30), ordered: false }));
+    const ways = waysOf(d, src);
+    const shops = {};
+    src.forEach((l, i) => {
+      if (!ways[i] || ways[i].way !== 'pickup') return;
+      const k = l.vendorId || '';
+      if (!shops[k]) { shops[k] = { shop: shopOf(l.vendorId), items: [] }; out.push(shops[k]); }
+      shops[k].items.push({ name: noMoney((l.supplyId && items[l.supplyId] && items[l.supplyId].name) || l.name).slice(0, 200),
+                            amount: l.amount, ordered: l.ordered });
+    });
+    return out;
+  }
+
   // The change orders on the job's QuickBooks invoice (quickbooks.py
   // _invoice_changes): work the crew must know about, after the rest, in
   // QuickBooks' words -- never what it costs.
@@ -261,6 +311,8 @@
     const lines = workLines(d);
     const items = catalogue().items;
     const svcs = servicesReady();
+    const mats = (est.materials || []).filter(m => m && m.name && !isRental(m, items)).slice(0, 120);
+    const ways = waysOf(d, mats.map(m => ({ supplyId: m.supplyId || null, name: m.name, qty: numOr(m.qty) || 1, hand: orderHand(d, m) })));
     return {
       // Each piece of work: its scope, the notes for the crew (never on
       // the estimate), and -- a service sold by the unit -- how much of it.
@@ -285,11 +337,12 @@
       // The takeoff: how much of each, in the unit it is measured in, and
       // which piece of work it is for (an id from `work`; '' the whole job).
       // (Rentals have their own section: `rentals`.)
-      materials: (est.materials || []).filter(m => m && m.name && !isRental(m, items)).slice(0, 120)
-        .map(m => ({ name: noMoney(m.name).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
+      // Each with whether it is delivered or picked up (waysOf).
+      materials: mats.map((m, i) => ({ name: noMoney(m.name).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
                      plant: !!m.plant, tree: m.plant && (m.tree === 'single' || m.tree === 'multi') ? m.tree : '',
                      work: safe(workFor(m, lines, items)),
-                     how: m.delivery === 'pickup' ? 'pick up' : m.delivery === 'rides' ? 'rides on a delivery' : '' })),
+                     how: ways.length ? wayWords(ways[i])
+                       : m.delivery === 'pickup' ? 'pick up' : m.delivery === 'rides' ? 'rides on a delivery' : '' })),
       // Soil and debris to haul away (cu yd), as the estimate has it.
       spoil: numOr(est.spoilCuYd),
       // Brush only: it goes in a dumpster of its own.
@@ -321,6 +374,8 @@
         .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
       rentals: rentalsEntry(d, items),
+      // What we pick up ourselves, by the supplier to get it from.
+      pickups: pickupsEntry(d, items),
     };
     if (servicesReady()) out.tools = toolsEntry(d);
     return out;
@@ -369,6 +424,7 @@
   }
   document.addEventListener('yd-supplies', partsCame);
   document.addEventListener('yd-services', partsCame);
+  document.addEventListener('yd-pricing', partsCame);
 
   // Once per session on the device that runs the jobs: every booked or
   // in-progress job has its crew copy, and nothing else does. It waits (up
@@ -378,7 +434,7 @@
     if (reconciled || !window.YDDb || typeof ydCan !== 'function' || !ydCan('jobs', 'change')) return;
     if (typeof getJobIndexAll !== 'function' || typeof readJobBlob !== 'function') return;
     // The services list too (each job's tools come from it).
-    if ((!catalogueReady() || !servicesReady()) && (tries || 0) < 10) { setTimeout(() => reconcile((tries || 0) + 1), 3000); return; }
+    if ((!catalogueReady() || !servicesReady() || !pricingReady()) && (tries || 0) < 10) { setTimeout(() => reconcile((tries || 0) + 1), 3000); return; }
     reconciled = true;
     let have = {};
     try { have = await window.YDDb.list('jobCrew'); } catch (e) { reconciled = false; return; }
@@ -417,10 +473,10 @@
   // its own order), so each is written out with its keys sorted.
   const stable = v => JSON.stringify(v === undefined ? null : v, (k, x) => x && typeof x === 'object' && !Array.isArray(x)
     ? Object.keys(x).sort().reduce((o, key) => { o[key] = x[key]; return o; }, {}) : x);
-  // A copy from before the tools (16 Oct 2026) or the rentals (21 Oct) and a
-  // job with none are the same: no rewrite of every booked job just to say
-  // "no tools" or "no rentals".
-  const EMPTY_LISTS = ['tools', 'rentals'];
+  // A copy from before the tools (16 Oct 2026), the rentals (21 Oct) or the
+  // pickups (22 Oct) and a job with none are the same: no rewrite of every
+  // booked job just to say "no tools", "no rentals" or "nothing to pick up".
+  const EMPTY_LISTS = ['tools', 'rentals', 'pickups'];
   function sameEntry(a, b) {
     return Object.keys(b).every(k => {
       const was = a[k] === undefined && EMPTY_LISTS.indexOf(k) !== -1 ? [] : a[k];
@@ -452,7 +508,8 @@
       });
     }, 1500);
   }
-  ['yd-services', 'yd-tools', 'yd-equipment-changed'].forEach(ev => document.addEventListener(ev, refreshAll));
+  // ...and his delivered-or-picked-up rules, or an item's own way in Supplies.
+  ['yd-services', 'yd-tools', 'yd-equipment-changed', 'yd-pricing', 'yd-supplies'].forEach(ev => document.addEventListener(ev, refreshAll));
 
   // A job changed on another device or by the server (sync.js applyRemote):
   // QuickBooks' words kept in step, an estimate filled from QuickBooks. The
@@ -638,6 +695,31 @@
     }).join('') + '</div>';
   }
 
+  // ------------------------------------------------ materials to pick up
+  //
+  // What we fetch ourselves (pickupsEntry), each supplier once: what to get
+  // there, the shop's address and hours, Directions and Call -- a gloved
+  // thumb's size, as for the rentals. ✓ when it is ticked as ordered.
+  function pickupsHtml(j, preview) {
+    const list = Array.isArray(j.pickups) ? j.pickups : [];
+    if (!list.length) return '';
+    return '<div class="cj-sec cj-rentals cj-pickups"><div class="cj-h">🏪 Materials to pick up</div>' + list.map(p => {
+      const s = p.shop || {}, tel = String(s.phone || '').replace(/[^0-9+]/g, '');
+      return '<div class="cj-rental">' +
+        '<div class="cj-rental-where">At <b>' + esc(s.name || 'no supplier set') + '</b>' +
+          (s.address ? ' — ' + esc(s.address) : s.name ? ' <span class="warn-text">· no address for it in Supplies yet' +
+            (preview ? ' (Supplies → the supplier → Edit supplier)' : '') + '</span>' : '') +
+          (s.hours ? '<div class="muted">Open ' + esc(s.hours) + '</div>' : '') + '</div>' +
+        '<table class="cj-table"><tbody>' + (p.items || []).map(x => '<tr><td>' + (x.ordered ? '✓ ' : '') + esc(x.name) +
+          '</td><td class="cj-q">' + esc(x.amount || '') + '</td></tr>').join('') + '</tbody></table>' +
+        (s.address || tel ? '<div class="cj-go">' +
+          (s.address ? '<a class="btn cj-go-btn" href="' + esc(dirTo(s.address)) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
+          (tel ? '<a class="btn cj-go-btn" href="tel:' + esc(tel) + '">📞 Call<span class="cj-go-sub">' + esc(s.phone) + '</span></a>' : '') +
+        '</div>' : '') +
+      '</div>';
+    }).join('') + '</div>';
+  }
+
   // ------------------------------------------------ the tools to bring
   //
   // Jonah (16 Oct 2026): the tool list "viewable by the crew on the front
@@ -786,6 +868,7 @@
           (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') +
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
       rentalsHtml(j, days, preview) +
+      pickupsHtml(j, preview) +
       toolsHtml(id, j, preview) +
       workHtml(j, sec, { key: id, ticks: { job: id, preview: preview } }) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>

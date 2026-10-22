@@ -173,6 +173,10 @@
       // brush may go in a bigger box (up to 20 yd: ruleLines); with
       // none set, brush rides in the soil boxes.
       dumpster: { supplyId: null, maxCuYd: null, brushSupplyId: null, brushMaxCuYd: null },
+      // Which materials are delivered and which we pick up (wayOf): null
+      // until he changes them on Pricing rules -- then STARTING_WAYS, the
+      // list he gave, is what they are.
+      getWays: null,
       markers: { supplyId: null, count: null },
       // His usual grass seed: what a line of plain "grass seed" is, and what
       // Claude uses unless he names another (supplymatch.js usualSeed) --
@@ -220,6 +224,138 @@
   const isTon =unit => /^\s*(ton|tons|t)\s*$/i.test(String(unit || ''));
   // Sold loose by the ton or the yard -- the stuff a delivery truck dumps.
   const isBulk = unit => isTon(unit) || /^\s*(yard|yards|yd|yds|cu ?yd|cubic yards?)\s*$/i.test(String(unit || ''));
+
+  // ---------------------------------------------- delivered or picked up
+  //
+  // Jonah (22 Oct 2026): "set assumed delivery vs pickup for specific
+  // materials. All bulk rock/soil are delivered. All online items assume
+  // delivery since we cannot pickup. Fabric is always picked up, chalkstones
+  // are always picked up, grass seed is always picked up, poly edging is
+  // always picked up. Boulders are always delivered. Allow me to specify if
+  // theres a special occasion where we pickup a material that is typically
+  // delivered. All turf and turf drain tiles are delivered."
+  //
+  // Every material is brought to the job (🚚 'delivered') or fetched by us
+  // (🏪 'pickup') -- or, a small thing from a supplier whose truck is coming
+  // to the job anyway, comes on that truck ('rides'). The first of these that
+  // says decides:
+  //   1. the line itself, set by hand (the estimate, the order list) -- the
+  //      odd time a material goes the other way
+  //   2. the item in Supplies (getWay)
+  //   3. a supplier nobody can drive to (online only, ships to us): delivered
+  //   4. words in its name ("fabric" picked up, "boulder" delivered)
+  //   5. its kind of material
+  //   6. sold loose by the ton or the yard: his bulk rule
+  //   7. none of them: as before there were rules -- a bulk load or a pallet
+  //      from a supplier who delivers by town is delivered, the rest picked up
+  //      (and a small thing rides on that supplier's truck: settleWays).
+  // Picked up, it costs nothing to bring; delivered, a bulk load or a pallet
+  // from a supplier who delivers by town gets its truck (deliveries()).
+  // 3 to 6 are his, on Pricing rules (rules.getWays); until he changes them,
+  // they are the list he gave. Words are whole words, an s or es after them
+  // allowed, a space also matching none or a dash: "chalk stone" finds
+  // "Chalkstones", "turf" never finds "Turfstone".
+  const STARTING_WAYS = {
+    shipped: true,
+    bulk: 'delivered',
+    kinds: { seed: 'pickup', dumpster: 'delivered' },
+    delivered: ['boulder', 'turf', 'air drain'],
+    pickup: ['fabric', 'weed barrier', 'chalk stone', 'grass seed', 'poly edging'],
+  };
+  const WAYS = ['delivered', 'pickup'];
+  const HAND_WAYS = ['delivered', 'pickup', 'rides'];
+  const wayRules = r => (r && r.getWays && typeof r.getWays === 'object' ? r.getWays : STARTING_WAYS);
+  const wordRes = {};
+  function saysWord(text, word) {
+    const w = String(word || '').toLowerCase().trim();
+    if (!w) return false;
+    const re = wordRes[w] || (wordRes[w] = new RegExp('(^|[^a-z0-9])' +
+      w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[\\s-]*') + '(s|es)?(?![a-z0-9])', 'i'));
+    return re.test(String(text || ''));
+  }
+  // x: { name, also, category, per, pallet, cityDelivery, buyWays,
+  // vendorName, itemWay (Supplies), hand (the line's own) } ->
+  // { way, by: hand|item|shipped|words|kind|bulk|usual, why (in words) }.
+  function wayOf(x, r) {
+    const g = wayRules(r);
+    if (HAND_WAYS.indexOf(x.hand) !== -1) return { way: x.hand, by: 'hand', why: 'set by hand on this line' };
+    if (WAYS.indexOf(x.itemWay) !== -1) return { way: x.itemWay, by: 'item', why: 'set on the item in Supplies' };
+    if (g.shipped !== false && (x.buyWays || []).some(w => w === 'online' || w === 'shipped')) {
+      return { way: 'delivered', by: 'shipped', why: (x.vendorName || 'its supplier') + ' ships it — no counter to pick it up from' };
+    }
+    const text = [x.name, x.also].filter(Boolean).join(' ');
+    let hit = null;
+    WAYS.forEach(way => (Array.isArray(g[way]) ? g[way] : []).forEach(w => {
+      if (saysWord(text, w) && (!hit || String(w).trim().length > hit.word.length)) hit = { way: way, word: String(w).trim() };
+    }));
+    if (hit) return { way: hit.way, by: 'words', why: 'your rule for “' + hit.word + '”' };
+    const k = x.category && g.kinds ? g.kinds[x.category] : null;
+    if (WAYS.indexOf(k) !== -1) return { way: k, by: 'kind', why: 'your rule for ' + kindName(x.category) };
+    if (isBulk(x.per) && WAYS.indexOf(g.bulk) !== -1) {
+      return { way: g.bulk, by: 'bulk', why: 'bulk — sold loose by the ' + (isTon(x.per) ? 'ton' : 'yard') };
+    }
+    if (x.cityDelivery && (isBulk(x.per) || x.pallet)) {
+      return { way: 'delivered', by: 'usual', why: (x.pallet ? 'a pallet' : 'a bulk load') + ' from ' + (x.vendorName || 'a supplier who delivers') };
+    }
+    return { way: 'pickup', by: 'usual', why: 'no rule for it — picked up' };
+  }
+  const vendorsOf = ctx => ctx.vendors || (window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog().vendors || {} : {});
+  // A priced line's way (the materialLine shape), from its item, its
+  // supplier and the hand pick on the line ('auto' or none: the rules). A
+  // rental has none: it has its own place on the crew's page, picked up at
+  // the rental shop.
+  function setWay(out, it, hand, ctx) {
+    out.way = null; out.wayBy = null; out.wayWhy = '';
+    if (out.category === 'rental') return out;
+    const v = it && it.vendorId ? vendorsOf(ctx)[it.vendorId] || null : null;
+    // Its words: the line's name (what the customer reads) and the item's own.
+    const w = wayOf({ name: out.name, also: it ? [it.name, it.also].filter(Boolean).join(' ') : '', category: out.category, per: out.per, pallet: out.pallet,
+      cityDelivery: out.cityDelivery, buyWays: v && v.buyWays, vendorName: v && v.name, itemWay: it && it.getWay, hand: hand }, ctx.rules);
+    out.way = w.way; out.wayBy = w.by; out.wayWhy = w.why; out.vendorName = v ? String(v.name || '') : '';
+    return out;
+  }
+  // What only the whole job shows. A bid sent before these rules keeps the
+  // trucks it was priced with: the customer has that price (and QuickBooks
+  // has the last word once it is sent) -- a delivered line can still be
+  // switched by hand. And a small thing nothing decided, from a supplier
+  // whose truck is coming to this job, comes on that truck.
+  const truckable = l => !!l.cityDelivery && l.orderQty > 0 && !l.auto && (isBulk(l.per) || !!l.pallet);
+  const sentBefore = est => !!est && Array.isArray(est.sent) && est.sent.length > 0 && est.ways !== 'rules';
+  function settleWays(all, est) {
+    if (sentBefore(est)) all.forEach(l => {
+      if (l.way && l.way !== 'delivered' && l.wayBy !== 'hand' && truckable(l)) {
+        l.way = 'delivered'; l.wayBy = 'sent'; l.wayWhy = 'priced with its delivery when the bid was sent';
+      }
+    });
+    const trucks = {};
+    all.forEach(l => { if (l.way === 'delivered' && l.vendorId && truckable(l)) trucks[l.vendorId] = true; });
+    all.forEach(l => {
+      if (l.wayBy === 'usual' && l.way === 'pickup' && l.vendorId && trucks[l.vendorId]) {
+        l.way = 'rides'; l.wayWhy = 'comes on ' + (l.vendorName || 'the supplier') + '’s truck';
+      }
+    });
+    return all;
+  }
+  // Delivered or not, for a line from before there were ways (a caller that
+  // has not worked them out): as the hand pick said.
+  const wayNow = l => l.way || (l.delivery === 'pickup' || l.delivery === 'rides' ? l.delivery : 'delivered');
+  // The ways of lines that are not an estimate's priced lines -- the order
+  // list's (estimate.js orderWays): [{id, supplyId, name, orderQty, per,
+  // hand}] -> the same, each with way/wayBy/wayWhy.
+  function waysFor(lines, est, ctx) {
+    const vs = ctx.rules.vendors || {};
+    const out = (lines || []).map(l => {
+      const it = l.supplyId ? ctx.items[l.supplyId] || null : null;
+      const pr = l.supplyId ? ctx.prices[l.supplyId] || null : null;
+      const o = Object.assign({}, l, {
+        name: l.name || (it && it.name) || '', category: (it && it.category) || l.category || 'other',
+        per: String(l.per || (pr && pr.per) || (it && it.unit) || '').trim(), pallet: !!(it && it.pallet),
+        vendorId: it ? it.vendorId || null : null, cityDelivery: !!(it && (vs[it.vendorId] || {}).cityDelivery), auto: null,
+      });
+      return setWay(o, it, l.hand, ctx);
+    });
+    return settleWays(out, est);
+  }
 
   // Order quantities: by the quarter ton for tons, whole units otherwise.
   function roundUp(q, unit) {
@@ -341,6 +477,8 @@
       // The labour line whose all-in price already covers it (workLine).
       allInOf: m.allInOf || null,
     };
+    // Delivered or picked up (wayOf); the whole job settles it (price()).
+    setWay(out, it, m.delivery, ctx);
     if (m.supplyId && !it) out.problems.push('no longer in Supplies');
     if (!qty) return out;
     if (fixedEach !== null) {                   // priced to the customer per piece (the markers)
@@ -448,8 +586,8 @@
     // fabric, restraint, nails, a few bags of poly sand -- ride along or are
     // picked up and never carry a delivery of their own (Jonah, 6 Oct 2026),
     // and neither does what the rules add (markers, the planting package).
-    const want = lines.filter(l => l.cityDelivery && l.orderQty > 0 && !l.auto && (isBulk(l.per) || l.pallet) &&
-      l.delivery !== 'pickup' && l.delivery !== 'rides');
+    // Nor does anything we pick up ourselves (wayOf).
+    const want = lines.filter(l => truckable(l) && wayNow(l) === 'delivered');
     if (!want.length) return out;
     const town = est.deliveryTown || ctx.city || '';
     const rates = d.rates || {};
@@ -739,7 +877,7 @@
     const fixed = asAccepted(est);
     const takeoff = (est.materials || []).map(m => Object.assign(materialLine(m, ctx), { tree: m.tree || null }));
     const added = fixed ? [] : ruleLines(est, takeoff, ctx).map(m => materialLine(m, ctx));
-    const all = takeoff.concat(added);
+    const all = settleWays(takeoff.concat(added), est);
     const del = deliveries(all, est, ctx);
     // An all-in line is priced after its materials: it is what is left of
     // his figure once they are charged.
@@ -1082,6 +1220,7 @@
     if (how === 'money') return typeof v === 'number' ? money(v) : String(v);
     if (how === 'pct') return v + '%';
     if (how === 'onOff') return v ? 'On' : 'Off';
+    if (how === 'way') return v === 'delivered' ? 'Delivered' : v === 'pickup' ? 'Picked up' : String(v);
     if (how === 'moneyList') return [].concat(v).map(money).join(', ');
     if (how === 'item' || how === 'items') {
       const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog().items : {};
@@ -1110,6 +1249,12 @@
       what = 'Supplier — ' + ((vs[parts[1]] && vs[parts[1]].name) || parts[1]); field = w[0]; how = w[1]; kind = 'supplier';
     } else if (parts[0] === 'delivery' && parts[1] === 'rates' && parts.length >= 3) {
       what = 'Delivery — ' + parts.slice(2).join('.'); field = 'Rate per load'; how = 'money'; kind = 'delivery';
+    } else if (parts[0] === 'getWays' && parts.length >= 2) {
+      what = 'Delivered or picked up';
+      field = parts[1] === 'kinds' ? kindName(parts.slice(2).join('.'))
+        : ({ shipped: 'Online or shipped suppliers — delivered', bulk: 'Bulk (by the ton or yard)',
+             delivered: 'Words — delivered', pickup: 'Words — picked up' })[parts[1]] || parts[1];
+      how = parts[1] === 'shipped' ? 'onOff' : 'way'; kind = 'delivery';
     } else {
       const w = RULE_WORDS[path] || RULE_WORDS[parts[0]] || [path.replace(/\./g, ' — '), 'text', 'other'];
       what = 'Pricing rules'; field = w[0]; how = w[1]; kind = w[2];
@@ -1121,7 +1266,8 @@
     if (!window.YDChangeLog || !ready) return;   // before the rules arrive there is no "before"
     const lines = [];
     Object.keys(patch || {}).forEach(k => {
-      const a = leaves(was[k], k, {}), b = leaves(now[k], k, {});
+      // The ways before he first changed them were the starting list.
+      const a = leaves(k === 'getWays' ? wayRules(was) : was[k], k, {}), b = leaves(now[k], k, {});
       Object.keys(Object.assign({}, a, b)).forEach(p => {
         const x = a[p] == null || a[p] === '' ? null : a[p], y = b[p] == null || b[p] === '' ? null : b[p];
         if (JSON.stringify(x) === JSON.stringify(y)) return;
@@ -1466,6 +1612,7 @@
     ['materials', 'Materials & sales tax', 'Materials'],
     ['suppliers', 'Suppliers', 'Suppliers'],
     ['delivery', 'Delivery', 'Delivery'],
+    ['getways', 'Delivered or picked up', 'Picked up?'],
     ['fuel', 'Fuel', 'Fuel'],
     ['rule', 'Added by rule', 'By rule'],
     ['payments', 'Payments & the message on the estimate', 'Payments'],
@@ -1590,6 +1737,8 @@
         (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="prTownAdd()">+ Add a town</button></div>') +
       '</details>' +
 
+      secHead('getways') + waysHtml(r, ro) +
+
       secHead('fuel') + '<div class="pr-grid">' +
         box('Truck mpg (each truck, comma between)', (r.fuel.mpg || []).join(', '), "prSet('fuel.mpg', this.value, 'list')", 'every truck makes the round trip every day') +
         box('Loader diesel (gallons a day)', r.fuel.bobcatGalPerDay, "prSet('fuel.bobcatGalPerDay', this.value, 'num')") +
@@ -1651,6 +1800,69 @@
     const again = body.querySelector('.pr-index-links');
     if (again && stripAt) again.scrollLeft = stripAt;
   }
+
+  // Delivered or picked up (wayOf): which way each material is got, by his
+  // rules, in the order they are tried.
+  const WAY_PICK = [['', '— no rule'], ['delivered', '🚚 Delivered'], ['pickup', '🏪 Picked up']];
+  function waysHtml(r, ro) {
+    const g = wayRules(r), dis = ro ? ' disabled' : '';
+    const sel = (cur, on, at) => '<select' + dis + (at || '') + ' onchange="' + on + '">' + WAY_PICK.map(([k, n]) =>
+      '<option value="' + k + '"' + ((cur || '') === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>';
+    const words = way => '<div class="pr-field wide"><span>' + (way === 'delivered' ? '🚚 Delivered' : '🏪 Picked up') +
+        ' when its name says</span><div class="pr-chips">' +
+      ((Array.isArray(g[way]) ? g[way] : []).map((w, i) => '<span class="pr-chip">' + esc(w) +
+        (ro ? '' : ' <button class="link-btn" aria-label="Take off ' + esc(w) + '" onclick="prWayWordOff(\'' + way + '\', ' + i + ')">✕</button>') +
+        '</span>').join('') || '<span class="muted">none</span>') +
+      (ro ? '' : ' <input class="pr-way-add" inputmode="text" placeholder="+ add a word" onchange="prWayWordAdd(\'' + way + '\', this.value)">') +
+      '</div></div>';
+    return '<p class="hint">Whether each material is brought to the job (🚚) or we fetch it (🏪). Picked up, it carries no delivery charge; ' +
+        'delivered, a bulk load or a pallet from a supplier who delivers by town gets its truck (Delivery, above). The first of these that ' +
+        'fits a material decides: <b>the line itself</b> — 🚚 / 🏪 on the estimate or the order list, for the odd time it goes the other way; ' +
+        '<b>the item</b> in Supplies (Edit → How we get it); then the rules below, top to bottom. Bids already sent keep the delivery they were priced with.</p>' +
+      '<label class="est-switch"><input type="checkbox"' + (g.shipped !== false ? ' checked' : '') + dis +
+        ' onchange="prWaySet(\'shipped\', this.checked)"> Anything from a supplier we can’t drive to (🌐 online only, 📦 ships to us — ' +
+        'ticked on the supplier in Supplies) is delivered</label>' +
+      words('delivered') + words('pickup') +
+      '<details class="pr-towns"><summary>By kind of material (' + Object.keys(g.kinds || {}).filter(k => WAYS.indexOf(g.kinds[k]) !== -1).length + ' set)</summary>' +
+        '<div class="pr-town-list">' + allKinds().filter(([id]) => id !== 'rental' && NOT_FOR_ESTIMATES.indexOf(id) === -1).map(([id, name]) =>
+          '<label><span>' + esc(name) + '</span>' + sel((g.kinds || {})[id], 'prWayKind(this.dataset.k, this.value)', ' data-k="' + esc(id) + '"') + '</label>').join('') +
+        '</div><p class="hint">Rentals are left out: the crew’s page has them on their own, with the shop to pick them up from.</p></details>' +
+      '<div class="pr-grid"><label class="pr-field"><span>Sold loose by the ton or the yard (bulk rock, soil, mulch, sand)</span>' +
+        sel(g.bulk, 'prWaySet(\'bulk\', this.value)') + '</label></div>' +
+      '<p class="hint">Nothing above fits it: a bulk load or a pallet from a supplier who delivers by town is delivered; a small thing from ' +
+        'a supplier whose truck is coming to the job anyway comes on that truck; anything else is picked up.</p>';
+  }
+  // Saved whole each time (the first change copies the starting list), a
+  // kind with no rule as null: the server merges maps.
+  function saveWays(change) {
+    if (!owner()) return;
+    const g = JSON.parse(JSON.stringify(wayRules(rules)));
+    g.kinds = g.kinds || {};
+    WAYS.forEach(w => { if (!Array.isArray(g[w])) g[w] = []; });
+    change(g);
+    save({ getWays: g });
+  }
+  window.prWaySet = function (k, v) {
+    saveWays(g => { g[k] = k === 'shipped' ? !!v : (WAYS.indexOf(v) !== -1 ? v : null); });
+  };
+  window.prWayKind = function (kind, v) {
+    if (!kind) return;
+    saveWays(g => { g.kinds[kind] = WAYS.indexOf(v) !== -1 ? v : null; });
+  };
+  window.prWayWordAdd = function (way, v) {
+    const w = String(v || '').replace(/[^\w\s'&-]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 40);
+    if (WAYS.indexOf(way) === -1 || !w) return;
+    // A word is in one list only: put under the other, it moves.
+    saveWays(g => {
+      WAYS.forEach(x => { g[x] = g[x].filter(y => String(y).toLowerCase() !== w); });
+      g[way] = g[way].concat([w]);
+    });
+    renderRules();
+  };
+  window.prWayWordOff = function (way, i) {
+    if (WAYS.indexOf(way) === -1) return;
+    saveWays(g => { g[way] = g[way].filter((y, j) => j !== i); });
+  };
 
   window.prClaude = function (v) {
     if (!owner()) return;
@@ -1770,7 +1982,15 @@
     const cats = Object.assign({}, rules.categories);
     if (!CATEGORY_NAME[to]) cats[to] = rules.categories[to] || rules.categories[was] || null;
     cats[was] = null;                  // null, not left out: the server merges the map
-    save({ categories: cats });
+    const patch = { categories: cats };
+    // Its delivered-or-picked-up rule goes with it.
+    const g = rules.getWays;
+    if (g && g.kinds && WAYS.indexOf(g.kinds[was]) !== -1) {
+      const kinds = Object.assign({}, g.kinds, { [was]: null });
+      if (!CATEGORY_NAME[to] && WAYS.indexOf(kinds[to]) === -1) kinds[to] = g.kinds[was];
+      patch.getWays = Object.assign({}, g, { kinds: kinds });
+    }
+    save(patch);
     return n;
   }
   // His own kind renamed everywhere: on every item that is that kind, and its
@@ -1833,6 +2053,9 @@
     price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
     // What bringing a job's order costs (estimate.js orderDelivery): the same sums.
     deliveries,
+    // Delivered or picked up: one material's way by the rules (Supplies
+    // shows it), and lines that are not an estimate's (the order list).
+    wayOf: x => wayOf(x, rules), waysFor,
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),

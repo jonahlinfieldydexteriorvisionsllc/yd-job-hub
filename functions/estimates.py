@@ -115,12 +115,14 @@ SYSTEM = (
     "own: give them back word for word unless his latest message asks to change what the crew are "
     "told.\n"
     "- Never invent measurements or work Jonah did not mention. When something needed is "
-    "missing or doubtful (a dimension, a colour, pickup or delivery, access for the loader), put "
+    "missing or doubtful (a dimension, a colour, access for the loader), put "
     "it in questions -- short, only what blocks a right estimate. Put anything Jonah should "
     "know but need not answer (a guess you made, a special-order item, an over-4-ft wall) in "
     "flags. Never substitute a product he named; flag it.\n"
-    "- Delivery: 'pickup' when Jonah says the crew picks it up, 'rides' when it comes on another "
-    "material's load, otherwise 'auto'.\n\n"
+    "- Delivery: 'auto' -- the app's rules (Jonah's) say which materials are delivered and which "
+    "the crew picks up; never ask about it. Only when he says otherwise for this job: 'pickup' when "
+    "he says the crew picks it up, 'delivered' when he says it is delivered this time, 'rides' when "
+    "it comes on another material's load.\n\n"
     "QuickBooks: you only build the estimate -- you never put it in QuickBooks or send it, "
     "and never say you have. Jonah does that himself with the buttons under the estimate "
     "('Put in QuickBooks, don't email yet' creates or updates it there under this customer, "
@@ -189,7 +191,7 @@ SCHEMA = {
                 "plant": {"type": "boolean"},
                 "tree": {"type": "string", "enum": ["none", "single", "multi"]},
                 "costEachDollars": {"type": "number"},
-                "delivery": {"type": "string", "enum": ["auto", "pickup", "rides"]},
+                "delivery": {"type": "string", "enum": ["auto", "delivered", "pickup", "rides"]},
                 "allInOf": {"type": "string"},
             },
             "required": ["id", "supplyId", "name", "qty", "unit", "plant", "tree", "costEachDollars", "delivery",
@@ -835,7 +837,7 @@ def draft(client, d):
             "plant": bool(m.get("plant")),
             "tree": m.get("tree") if m.get("tree") in ("single", "multi") else "none",
             "costEachDollars": max(0.0, round(_num(m.get("costEachDollars")) or 0, 2)),
-            "delivery": m.get("delivery") if m.get("delivery") in ("pickup", "rides") else "auto",
+            "delivery": m.get("delivery") if m.get("delivery") in ("delivered", "pickup", "rides") else "auto",
             "allInOf": ref if ref in allin_refs or ref.lower() in allin_refs else "",
         })
     patching = _patching(d)

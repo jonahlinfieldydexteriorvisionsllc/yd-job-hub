@@ -2315,9 +2315,10 @@ function orderCost(it, cat) {
 // -> { vendorId: {cents, loads, names, problems} }
 function orderDeliveries(items, cat, saved, city) {
   if (!window.YDEstimate || !window.YDEstimate.orderDelivery) return {};
+  // Each line as it is got (orderWaysOf): one we pick up brings no truck.
   const lines = items.filter(it => it && !it.ordered).map(it => {
     const c = orderCost(it, cat);
-    return { supplyId: c.sid, qty: c.buy || c.bags || (c.unitOff ? null : orderQtyOf(it)) };
+    return { supplyId: c.sid, qty: c.buy || c.bags || (c.unitOff ? null : orderQtyOf(it)), name: it.name || '', hand: it.way || null };
   }).filter(l => l.supplyId && l.qty > 0);
   const d = lines.length ? window.YDEstimate.orderDelivery(lines, saved, city) : null;
   if (!d) return {};
@@ -2333,6 +2334,37 @@ function orderDeliveries(items, cat, saved, city) {
   });
   return out;
 }
+// Delivered or picked up (Jonah, 22 Oct 2026): each line of a job's order
+// list, by his rules (pricing.js wayOf), else the way set on the estimate's
+// line, else the way set by hand on the order line itself (`way`:
+// 'delivered' | 'pickup' -- the odd time a material goes the other way).
+// saved/city: the job's estimate and town when it is not the open job.
+// -> [{way, wayBy, wayWhy, vendorName}], in the order of items.
+function orderWaysOf(items, cat, saved, city) {
+  if (!window.YDEstimate || !window.YDEstimate.orderWays || !window.YDPricing) return [];
+  const lines = items.map(it => ({ supplyId: orderSupply(it, cat), name: it.name || '', qty: orderQtyOf(it) || 1,
+                                   per: it.per || orderUnitWords(it.quantity), hand: it.way || null }));
+  try { return window.YDEstimate.orderWays(lines, saved, city) || []; } catch (e) { return []; }
+}
+// The line's 🚚 / 🏪, two buttons -- one tap sets it by hand; set by hand,
+// ↺ goes back to the rules. call: the onclick, with % where the way goes.
+function orderWayHtml(w, hand, call, ro) {
+  if (!w || !w.way) return '';
+  const cur = w.way === 'rides' ? 'delivered' : w.way;
+  const b = (k, label) => '<button type="button" class="ord-way-btn' + (cur === k ? ' on' : '') + '" aria-pressed="' + (cur === k) + '"' +
+    (ro ? ' disabled' : ' onclick="' + call.replace('%', k) + '"') + '>' + label + '</button>';
+  return '<span class="ord-way-row"><span class="ord-way" role="group" aria-label="Delivered or picked up">' +
+      b('delivered', '🚚 Delivered') + b('pickup', '🏪 We pick it up') + '</span>' +
+    ' <span class="muted ord-way-why">' + esc(hand ? 'set by hand' : w.wayBy === 'hand' ? 'set by hand on the estimate' : w.wayWhy || '') + '</span>' +
+    (hand && !ro ? ' <button type="button" class="link-btn" onclick="' + call.replace('%', '') + '">↺ back to the rules</button>' : '') + '</span>';
+}
+// One line set by hand on the open job's list (or back to the rules).
+function setOrderWay(it, v) {
+  if (!it || jobsReadOnly()) return;
+  if (v === 'delivered' || v === 'pickup') it.way = v; else delete it.way;
+  renderOrderList(); markDirty();
+}
+function orderWayAt(i, v) { setOrderWay(orderItems[i], v); }
 // Opening the job looks up where it is (estimate.js autoTrip), which finds a
 // Madison zone by itself; the problem says what else would.
 function orderDeliveryRow(dv) {
@@ -2369,7 +2401,8 @@ function linkOrderItem(id, sid) {
 // One supplier's part of the order as text, to paste into an email or a text.
 function supplierOrder(vid) {
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
-  const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid).map(it => orderLineText(it, cat));
+  const ways = orderWaysOf(orderItems, cat);
+  const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid).map(it => orderLineText(it, cat, ways[orderItems.indexOf(it)]));
   const v = (cat.vendors || {})[vid] || {};
   const f = id => ((document.getElementById(id) || {}).value || '').trim();
   const where = [f('address'), [f('city'), f('state')].filter(Boolean).join(', ')].filter(Boolean).join(', ');
@@ -2424,6 +2457,7 @@ function renderOrderList() {
   const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {}, prices: {}, vendors: {} };
   const prices = typeof ydCan === 'function' && ydCan('supplies', 'see') && Object.keys(cat.items).length > 0;
   const thisYear = new Date().getFullYear();
+  const ways = orderWaysOf(orderItems, cat);
   let sum = 0, unpriced = 0;
   const row = it => {
     const c = prices ? orderCost(it, cat) : null;
@@ -2459,6 +2493,9 @@ function renderOrderList() {
     // The product's own page, from Supplies, for what is ordered online.
     const sid = !it.ordered ? orderSupply(it, cat) : null;
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
+    // Delivered or picked up, and the switch for the odd time it goes the other way.
+    const wi = orderItems.indexOf(it);
+    const way = orderWayHtml(ways[wi], it.way === 'delivered' || it.way === 'pickup', 'orderWayAt(' + wi + ', \'%\')', jobsReadOnly());
     return '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
@@ -2466,7 +2503,7 @@ function renderOrderList() {
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') +
         // Ticked by a receipt sorted onto this job: which order it was.
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
-        (costLine ? '<br>' + costLine : '') + picker +
+        (costLine ? '<br>' + costLine : '') + picker + (way ? '<br>' + way : '') +
       '</span>' +
       (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) +
         (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : '') +
@@ -2579,9 +2616,11 @@ function orderJobTitle(j) {
 }
 // One line as an order reads it: "3 tons — Road gravel (special order)";
 // "1 roll (for 215 square feet) — …" when the line is in what it covers.
-function orderLineText(it, cat) {
+// w: its way (orderWaysOf) -- what we pick up ourselves says so, so the
+// supplier has it at the counter rather than on the truck.
+function orderLineText(it, cat, w) {
   const amt = orderAmountText(it, cat);
-  return (amt ? amt + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : '');
+  return (amt ? amt + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : '') + (w && w.way === 'pickup' ? ' (we’ll pick it up)' : '');
 }
 // The blocks: supplier id ('' = no supplier yet) -> [{ job, lines }], in
 // the jobs' order (soonest first).
@@ -2641,6 +2680,10 @@ function renderOrdersOverview() {
     const k = alsoKey(v, it);
     if (k) (onJobs[k] = onJobs[k] || []).push(b.job);
   })));
+  // Each line's way, job by job (the open job's from the form), in the
+  // order of the job's lines still to order.
+  const ways = {};
+  jobs.forEach(j => { ways[j.id] = orderJobWays(j, cat); });
   // Each job's delivery from each supplier (the open job's from the form).
   const dels = {};
   if (prices) jobs.forEach(j => {
@@ -2661,6 +2704,8 @@ function renderOrdersOverview() {
     const sid = orderSupply(it, cat);
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
     const others = (onJobs[alsoKey(v, it)] || []).filter(o => o.id !== j.id);
+    const way = orderWayHtml((ways[j.id] || [])[j.items.indexOf(it)], it.way === 'delivered' || it.way === 'pickup',
+      'ordersWay(\'' + ordId(j.id) + '\', \'' + it._key + '\', \'%\')', !canTick);
     const also = others.length ? ' <span class="muted ord-also">· also on ' +
       others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
     return { c: c, html: '<div class="check-row">' +
@@ -2669,7 +2714,7 @@ function renderOrdersOverview() {
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
-        (cost ? '<br>' + cost : '') + '</span>' +
+        (cost ? '<br>' + cost : '') + (way ? '<br>' + way : '') + '</span>' +
       (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
       '</div>' };
   };
@@ -2787,6 +2832,28 @@ function ordersTick(jobId, itemId) {
   flip(true);
   if (typeof showUndo === 'function') showUndo('Marked ordered', () => flip(false));
 }
+// A line's way set by hand here = on the job, as a tick is (ordersTick).
+function ordersWay(jobId, itemId, v) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const set = o => { const n = Object.assign({}, o); if (v === 'delivered' || v === 'pickup') n.way = v; else delete n.way; return n; };
+  if (currentJobId && ordId(currentJobId) === jobId) {
+    const at = orderItems.findIndex((m, i) => ordLineKey(m, i) === itemId);
+    if (at === -1) return;
+    orderItems[at] = set(orderItems[at]);
+    renderOrderList(); markDirty();
+  } else {
+    const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
+    let d = null;
+    try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+    if (!d || !window.YDSync) return;
+    window.YDSync.patchJob(id, { orderItems: (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? set(o) : o) });
+  }
+  renderOrdersOverview();
+}
+// One job's lines still to order (ordersJobs), each with its way.
+function orderJobWays(j, cat) {
+  return orderWaysOf(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city);
+}
 async function ordersOpenJob(key) {
   const jobId = (getJobIndex().find(x => ordId(x.id) === key) || {}).id;
   if (!jobId) return;
@@ -2811,11 +2878,13 @@ function ordersTextFor(vid, jobKey) {
   const blocks = (v ? groups[v] : []).filter(b => !jobKey || ordId(b.job.id) === jobKey);
   const single = blocks.length === 1 ? blocks[0] : null;
   const where = single ? orderJobWhere(single.job.d) : '';
+  const jobWays = {};
+  const wayIn = (b, it) => (jobWays[b.job.id] = jobWays[b.job.id] || orderJobWays(b.job, cat))[b.job.items.indexOf(it)];
   return { vendor: (cat.vendors || {})[v] || {}, blocks: blocks, one: !!where, where: where,
-    lines: single ? single.lines.map(it => orderLineText(it, cat)) : [],
+    lines: single ? single.lines.map(it => orderLineText(it, cat, wayIn(single, it))) : [],
     text: blocks.map(b => {
       const where = orderJobWhere(b.job.d);
-      return orderJobTitle(b.job) + (where ? ' — ' + where : '') + '\n' + b.lines.map(it => '• ' + orderLineText(it, cat)).join('\n');
+      return orderJobTitle(b.job) + (where ? ' — ' + where : '') + '\n' + b.lines.map(it => '• ' + orderLineText(it, cat, wayIn(b, it))).join('\n');
     }).join('\n\n') };
 }
 function copyOrdersFor(vid, jobKey) {

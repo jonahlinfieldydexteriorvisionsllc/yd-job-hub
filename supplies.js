@@ -727,6 +727,27 @@
     { id: 'far', chip: '🗺 Not local', label: 'Not local — a long way off, plan ahead' },
   ];
   const waysOf = v => (v && Array.isArray(v.buyWays) ? v.buyWays : []).filter(w => BUY_WAYS.some(b => b.id === w));
+
+  // Delivered or picked up (Jonah, 22 Oct 2026): this item always one way,
+  // or as his rules on Pricing rules say (pricing.js wayOf -- shown, worked
+  // out from the item as it is saved). An estimate or order line can still
+  // go the other way for one job.
+  function wayFieldHtml(it, p) {
+    const P = window.YDPricing;
+    let now = '';
+    if (P && P.wayOf && it.name) {
+      const v = it.vendorId ? vendors[it.vendorId] : null;
+      const vr = ((P.rules().vendors || {})[it.vendorId]) || {};
+      const w = P.wayOf({ name: it.name, also: it.also, category: it.category, per: (p && p.per) || it.unit, pallet: !!it.pallet,
+        cityDelivery: !!vr.cityDelivery, buyWays: v && v.buyWays, vendorName: v && v.name });
+      now = ' — now ' + (w.way === 'pickup' ? 'picked up' : 'delivered') + ' (' + w.why + ')';
+    }
+    const opt = (k, n) => '<option value="' + k + '"' + ((it.getWay || '') === k ? ' selected' : '') + '>' + esc(n) + '</option>';
+    return '<div class="field"><span class="label">How we get it</span><select id="siWay">' +
+      opt('', 'By my rules (Pricing rules → Delivered or picked up)' + now) + opt('delivered', '🚚 Always delivered') +
+      opt('pickup', '🏪 Always picked up') + '</select>' +
+      '<div class="hint">Picked up, an estimate charges no delivery for it. One job that goes the other way: switch it on that estimate’s or order’s line.</div></div>';
+  }
   // Only a real web address becomes a link: http(s) only, and a bare
   // "theirsite.com" gets https:// in front.
   function websiteUrl(v) {
@@ -966,6 +987,7 @@
               'Price by the part we use (we keep the rest) — e.g. 3 lb of a 50 lb bag is charged as 3 lb</label>' +
           '</div>' +
           '<label class="chk"><input type="checkbox" id="siPallet"' + (it.pallet ? ' checked' : '') + '> Comes on a pallet (forklift delivery surcharge)</label>' +
+          wayFieldHtml(it, p) +
           '<label class="chk"><input type="checkbox" id="siSpecial"' + (it.specialOrder ? ' checked' : '') + '> Special order (non-returnable — the estimate says so)</label>' +
           '<div class="grid g3">' +
             field('Markup %', 'spMarkup', priceShown.markup, catRule.markupPct != null ? catRule.markupPct + ' (its kind)' : 'its kind’s', 'decimal') +
@@ -1111,6 +1133,8 @@
                   category: val('siCat') || null, coverage: coverage, takeoffUnit: val('siTakeoff'),
                   pallet: !!(el('siPallet') && el('siPallet').checked),
                   specialOrder: !!(el('siSpecial') && el('siSpecial').checked),
+                  // null: his rules say (pricing.js wayOf).
+                  getWay: ['delivered', 'pickup'].indexOf(val('siWay')) !== -1 ? val('siWay') : null,
                   usedFor: usedForFromForm(name), updatedAt: now };
     // Kept only where he set something other than what the app works out by
     // itself, so a renamed bag ("… 40 lb") or a change of kind still counts.
@@ -1221,6 +1245,7 @@
     takeoffUnit: ['takeoff unit', 'covers what', 'of what'],
     pallet: ['pallet', 'on a pallet', 'palletized', 'comes on a pallet'],
     specialOrder: ['special order'],
+    getWay: ['how we get it', 'delivered or picked up', 'delivery or pickup', 'pickup or delivery'],
     markupPct: ['markup', 'markup pct'],
     wastePct: ['waste', 'waste pct'],
     clientEach: ['customer price each', 'customer price', 'client price each'],
@@ -1379,6 +1404,14 @@
         const yn = yesNo(c[k]);
         if (yn === undefined) bad = label + ' should be yes or no'; else extra[k] = yn;
       });
+      // Delivered, picked up, or "rules" (his rules say: Pricing rules).
+      if (c.getWay) {
+        const w = String(c.getWay).toLowerCase();
+        if (/deliver/.test(w)) extra.getWay = 'delivered';
+        else if (/pick/.test(w)) extra.getWay = 'pickup';
+        else if (/rule/.test(w)) extra.getWay = null;
+        else bad = '“how we get it” should be delivered, picked up or rules';
+      }
       [['markupPct', 'markup'], ['wastePct', 'waste']].forEach(([k, label]) => {
         if (!c[k]) return;
         const n = parsePct(c[k]);
@@ -1756,7 +1789,7 @@
     };
     const head = ['id', 'Supplier', 'Item', 'Item #', 'Comes in', 'Price', 'Per', 'Year',
                   'Previous price', 'Previous year', 'Change', 'Where', 'Also called', 'Notes', 'Price notes',
-                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'Markup %', 'Waste %', 'Customer price each', 'Link', 'Used for',
+                  'Category', 'Covers', 'Takeoff unit', 'Pallet', 'Special order', 'How we get it', 'Markup %', 'Waste %', 'Customer price each', 'Link', 'Used for',
                   'Half day', 'Weekend', 'Week', 'Month'];
     const catName = id => (id ? ((categories().find(c => c[0] === id) || [])[1]) || id : '');
     const yn = b => (b ? 'yes' : '');
@@ -1775,6 +1808,7 @@
           pct != null ? (pct > 0 ? '+' : '') + pct.toFixed(1) + '%' : '',
           cell(it.where, true), cell(it.also, true), cell(it.notes, true), cell(p.priceNotes, true),
           cell(catName(it.category), true), n(it.coverage), cell(it.takeoffUnit, true), yn(it.pallet), yn(it.specialOrder),
+          it.getWay === 'delivered' ? 'delivered' : it.getWay === 'pickup' ? 'picked up' : '',
           n(p.markupPct), n(p.wastePct), typeof p.clientCents === 'number' ? (p.clientCents / 100).toFixed(2) : '',
           cell(it.link, true), cell(usesOf(it).map(t => tagInfo(t).name).join('; '), true)]
           .concat(RENTAL_RATES.map(([k]) => (typeof p[k] === 'number' ? (p[k] / 100).toFixed(2) : ''))).join(',');

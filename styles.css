@@ -3673,6 +3673,25 @@
   .est-chip:disabled { cursor:default; }
   .est-chip .muted { color:inherit; }
   .est-chip-k { font-weight:700; }
+  /* Delivered or picked up (estimate.js wayPickHtml, app.js orderWayHtml):
+     a chip saying which, or two tap buttons -- big enough for a thumb on a phone. */
+  .est-way:empty { display:none; }
+  .est-chip.est-chip-way { color:var(--text); }
+  .est-way-pick, .ord-way-row { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 6px; }
+  .ord-way-row { margin-top:3px; }
+  .ord-way { display:inline-flex; }
+  .est-way-btn, .ord-way-btn { font:inherit; font-size:12px; line-height:1.2; min-height:28px; padding:3px 10px; cursor:pointer;
+    border:1px solid var(--border); background:var(--surface); color:var(--text); }
+  .est-way-btn { border-radius:12px; }
+  .ord-way-btn:first-child { border-radius:12px 0 0 12px; }
+  .ord-way-btn:last-child { border-radius:0 12px 12px 0; border-left:0; }
+  .est-way-btn.on, .ord-way-btn.on { background:var(--brand); border-color:var(--brand); color:#fff; font-weight:600; }
+  .est-way-btn:disabled, .ord-way-btn:disabled { cursor:default; opacity:.8; }
+  .ord-way-why { font-size:12px; }
+  .pr-way-add { width:9.5em; font-size:13px; padding:3px 8px; }
+  @media (max-width: 640px) {
+    .est-way-btn, .ord-way-btn { min-height:40px; padding:6px 12px; font-size:13px; }
+  }
   .est-more-btn { font:inherit; font-size:12px; color:var(--brand); background:none; border:0; padding:3px 2px; cursor:pointer; min-height:26px; text-align:left; }
   .est-more-btn:hover { text-decoration:underline; }
   .est-more-says { color:var(--muted); }
