@@ -26,7 +26,7 @@
 //                  category, delivery: auto|pickup|rides,
 //                  forWork (a work id, 'none', or unset = worked out),
 //                  allInOf (the allin work line whose price covers it)}],
-//     spoilCuYd, fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
+//     spoilCuYd (soil, rock, debris), brushCuYd (brush only), fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
 //     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo }
 // saved with the form like the materials list. What QuickBooks has is
 // `qbEstimate`, written by the server and patched in here, carried through
@@ -107,7 +107,7 @@
     // snow: a snow bid's price sheet (cleanSnow); snowBid, when set by hand,
     // says whether it is one (left out = from the services, snowOf).
     return { v: 2, notes: '', chat: [], questions: [], flags: [], work: [], materials: [],
-             spoilCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null, payments: null,
+             spoilCuYd: null, brushCuYd: null, fuel: {}, deliveryTown: '', off: {}, memo: '', sent: [], site: null, payments: null,
              snow: null };
   }
   function cleanPlan(list) {
@@ -355,6 +355,7 @@
       o.work = (Array.isArray(e.work) ? e.work : []).map(w => Object.assign({ id: newId('ew'), kind: 'crew' }, w));
       o.materials = (Array.isArray(e.materials) ? e.materials : []).map(m => Object.assign({ id: newId('em') }, m));
       o.spoilCuYd = num(e.spoilCuYd);
+      o.brushCuYd = num(e.brushCuYd);
       o.fuel = Object.assign({}, e.fuel || {});
       o.deliveryTown = String(e.deliveryTown || '');
       o.off = Object.assign({}, e.off || {});
@@ -506,8 +507,11 @@
         '<button class="btn btn-sm" onclick="estAddMat(true)">+ Plant</button>' +
         (canAddSupplies() && typedLines().length && !toSup
           ? '<button class="btn btn-sm" onclick="estToSupplies()">➕ Add typed-in items to Supplies (' + typedLines().length + ')</button>' : '') +
-        '<label class="est-inline">Spoil to haul away <input inputmode="decimal" value="' + esc(est.spoilCuYd == null ? '' : est.spoilCuYd) + '" ' +
+        '<label class="est-inline">Soil, rock & debris to haul away <input inputmode="decimal" value="' + esc(est.spoilCuYd == null ? '' : est.spoilCuYd) + '" ' +
           'oninput="estSet(\'spoilCuYd\', this.value)"> cu yd</label>' +
+        // Brush has a bigger dumpster of its own (pricing.js ruleLines).
+        '<label class="est-inline">Brush only <input inputmode="decimal" value="' + esc(est.brushCuYd == null ? '' : est.brushCuYd) + '" ' +
+          'oninput="estSet(\'brushCuYd\', this.value)"> cu yd</label>' +
       '</div>') +
       '<div id="estToSup">' + toSupHtml() + '</div>' +
 
@@ -2786,7 +2790,7 @@
 
   window.estSet = function (field, v) {
     if (!changes()) return;
-    if (field === 'spoilCuYd') est.spoilCuYd = num(v);
+    if (field === 'spoilCuYd' || field === 'brushCuYd') est[field] = num(v);
     else if (field === 'deliveryTown') est.deliveryTown = String(v || '');
     changed(field === 'deliveryTown');
   };
@@ -3351,7 +3355,7 @@
         costEachDollars: num(m.costCents) === null ? null : m.costCents / 100, delivery: m.delivery || 'auto',
         allInOf: m.allInOf && e.work.some(w => w.id === m.allInOf && w.kind === 'allin') ? m.allInOf : '',
         customerDollars: r && r.takeoff[i] && r.takeoff[i].clientCents ? r.takeoff[i].clientCents / 100 : null })),
-      spoilCuYd: num(e.spoilCuYd),
+      spoilCuYd: num(e.spoilCuYd), brushCuYd: num(e.brushCuYd),
       totals: r ? { materials: r.materialsCents / 100, labour: r.laborCents / 100, total: r.totalCents / 100,
                     crewDays: r.crewDays, notPriced: r.problems.slice(0, 20) } : null,
     };
@@ -3568,12 +3572,14 @@
     if (r.mode === 'snow') return applySnow(e, r);
     const patch = r.mode === 'patch';
     const spoil = num(r.spoilCuYd) !== null ? (num(r.spoilCuYd) || null) : e.spoilCuYd;
+    const brush = num(r.brushCuYd) !== null ? (num(r.brushCuYd) || null) : e.brushCuYd;
     const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length ||
-      (patch && ((r.removed || []).length || spoil !== e.spoilCuYd))));
+      (patch && ((r.removed || []).length || spoil !== e.spoilCuYd || brush !== e.brushCuYd))));
     if (did) {
       e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
       e.materials = patch ? patchLines(e.materials, r.materials, r.removed, matLine) : mergeMaterials(r.materials, e);
       e.spoilCuYd = spoil;
+      e.brushCuYd = brush;
       joinAllIn(e);
     }
     e.questions = (r.questions || []).map(String);
@@ -3597,7 +3603,7 @@
 
   function land(jobId, r) {
     if (jobId === currentJobId) {
-      const before = { jobId: jobId, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd,
+      const before = { jobId: jobId, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd, brushCuYd: est.brushCuYd,
                        questions: est.questions.slice(), flags: est.flags.slice(), snow: est.snow ? clone(est.snow) : null };
       // Undo only ever undoes the change it is shown beside.
       undo = apply(est, r) ? before : null;
@@ -3654,7 +3660,7 @@
 
   window.estUndo = function () {
     if (!undo || undo.jobId !== currentJobId || !changes()) return;
-    est.work = undo.work; est.materials = undo.materials; est.spoilCuYd = undo.spoilCuYd;
+    est.work = undo.work; est.materials = undo.materials; est.spoilCuYd = undo.spoilCuYd; est.brushCuYd = undo.brushCuYd;
     est.questions = undo.questions || []; est.flags = undo.flags || [];
     if (undo.snow !== undefined) est.snow = undo.snow;
     const lastMsg = est.chat[est.chat.length - 1];

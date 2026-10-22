@@ -251,6 +251,8 @@
                      how: m.delivery === 'pickup' ? 'pick up' : m.delivery === 'rides' ? 'rides on a delivery' : '' })),
       // Soil and debris to haul away (cu yd), as the estimate has it.
       spoil: numOr(est.spoilCuYd),
+      // Brush only: it goes in a dumpster of its own.
+      brush: numOr(est.brushCuYd),
       order: (d.orderItems || []).filter(o => o && o.name && !isRental(o, items)).slice(0, 120)
         .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
@@ -473,7 +475,8 @@
       '</div>';
     }).join('');
     const rest = mats.filter(m => !m.work || !ids[m.work]);
-    const haul = j.spoil > 0 ? '<div class="cj-haul">🚛 About <b class="cj-m">' + esc(fmtNum(j.spoil)) + ' cu yd</b> of soil and debris to haul away</div>' : '';
+    const haul = (j.spoil > 0 ? '<div class="cj-haul">🚛 About <b class="cj-m">' + esc(fmtNum(j.spoil)) + ' cu yd</b> of soil and debris to haul away</div>' : '') +
+      (j.brush > 0 ? '<div class="cj-haul">🌿 About <b class="cj-m">' + esc(fmtNum(j.brush)) + ' cu yd</b> of brush — its own dumpster, no soil or rock in it</div>' : '');
     return sec('🛠 The work', lines + (lines ? haul : '')) +
       sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest) : '') +
       (lines ? '' : sec('🚛 Haul away', haul));

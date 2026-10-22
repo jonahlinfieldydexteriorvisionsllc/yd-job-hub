@@ -168,7 +168,11 @@
       vendors: {},                 // vendor id -> { processingPct, cityDelivery }
       delivery: { rates: {}, palletCents: null, loadTons: null, markupPct: null },
       fuel: { mpg: [], bobcatGalPerDay: null, markupPct: null },
-      dumpster: { supplyId: null, maxCuYd: null },
+      // Soil, rock and debris: the dumpster company takes at most 10 cu yd of
+      // those in a box (Jonah, 22 Oct 2026). Brush only -- branches, shrubs,
+      // yard waste -- may go in a bigger box of its own (up to 20 yd); with
+      // none set, brush rides in the soil boxes.
+      dumpster: { supplyId: null, maxCuYd: null, brushSupplyId: null, brushMaxCuYd: null },
       markers: { supplyId: null, count: null },
       planting: { perPlant: [], perSingleTree: [], perMultiTree: [] },
       // minDepositPct: the smallest deposit (50 unless set);
@@ -379,14 +383,20 @@
   // layout markers. `off` names any the estimate has switched off.
   function ruleLines(est, lines, ctx) {
     const r = ctx.rules, off = est.off || {}, out = [];
-    const add = (supplyId, qty, auto, listed) => {
-      if (supplyId && qty > 0) out.push({ id: 'auto-' + auto + '-' + supplyId, supplyId, qty, auto, listed });
+    const add = (supplyId, qty, auto, listed, tag) => {
+      if (supplyId && qty > 0) out.push({ id: 'auto-' + auto + (tag || '') + '-' + supplyId, supplyId, qty, auto, listed });
     };
-    // Dumpsters: never more soil in a box than it takes.
-    const spoil = num(est.spoilCuYd);
-    if (!off.dumpsters && spoil > 0 && r.dumpster && r.dumpster.supplyId && num(r.dumpster.maxCuYd) > 0 &&
-        !lines.some(l => l.category === 'dumpster')) {
-      add(r.dumpster.supplyId, Math.ceil(trim(spoil / num(r.dumpster.maxCuYd))), 'dumpsters', true);
+    // Dumpsters: never more in a box than it may take -- soil, rock and
+    // debris in theirs; brush only in its own bigger one, when there is one
+    // (otherwise it goes in with the soil). A dumpster put on the takeoff by
+    // hand stands instead of all of them.
+    const d = r.dumpster || {};
+    const spoil = Math.max(0, num(est.spoilCuYd) || 0), brush = Math.max(0, num(est.brushCuYd) || 0);
+    const brushBox = !!(d.brushSupplyId && num(d.brushMaxCuYd) > 0);
+    if (!off.dumpsters && !lines.some(l => l.category === 'dumpster')) {
+      const soil = spoil + (brushBox ? 0 : brush);
+      if (soil > 0 && d.supplyId && num(d.maxCuYd) > 0) add(d.supplyId, Math.ceil(trim(soil / num(d.maxCuYd))), 'dumpsters', true);
+      if (brushBox && brush > 0) add(d.brushSupplyId, Math.ceil(trim(brush / num(d.brushMaxCuYd))), 'dumpsters', true, '-brush');
     }
     // Planting package: so much per plant, a watering bag per single-trunk
     // tree, a ring per multi-trunk or evergreen.
@@ -1010,6 +1020,8 @@
     'fuel.markupPct': ['Fuel markup', 'pct', 'fuel'],
     'dumpster.supplyId': ['Dumpster item', 'item', 'dumpster'],
     'dumpster.maxCuYd': ['Dumpster holds (cu yd)', 'num', 'dumpster'],
+    'dumpster.brushSupplyId': ['Brush dumpster item', 'item', 'dumpster'],
+    'dumpster.brushMaxCuYd': ['Brush dumpster holds (cu yd)', 'num', 'dumpster'],
     'markers.supplyId': ['Marker item', 'item', 'markers'],
     'markers.count': ['Markers per job', 'num', 'markers'],
     'planting.perPlant': ['Planting package — per plant', 'items', 'planting'],
@@ -1558,8 +1570,10 @@
 
       secHead('rule') +
       '<div class="pr-grid">' +
-        '<label class="pr-field"><span>Dumpster (from Supplies)</span>' + pick('dumpster.supplyId', r.dumpster.supplyId, i => i.category === 'dumpster') + '</label>' +
-        box('Most cubic yards of spoil in one', r.dumpster.maxCuYd, "prSet('dumpster.maxCuYd', this.value, 'num')") +
+        '<label class="pr-field"><span>Dumpster for soil, rock & debris (from Supplies)</span>' + pick('dumpster.supplyId', r.dumpster.supplyId, i => i.category === 'dumpster') + '</label>' +
+        box('Most cubic yards of soil or rock in one', r.dumpster.maxCuYd, "prSet('dumpster.maxCuYd', this.value, 'num')") +
+        '<label class="pr-field"><span>Dumpster for brush only (from Supplies)</span>' + pick('dumpster.brushSupplyId', r.dumpster.brushSupplyId, i => i.category === 'dumpster') + '</label>' +
+        box('Most cubic yards of brush in one', r.dumpster.brushMaxCuYd, "prSet('dumpster.brushMaxCuYd', this.value, 'num')") +
         '<label class="pr-field"><span>Layout markers (from Supplies)</span>' + pick('markers.supplyId', r.markers.supplyId) + '</label>' +
         box('Markers per paver / wall / edging job', r.markers.count, "prSet('markers.count', this.value, 'num')") +
       '</div>' +

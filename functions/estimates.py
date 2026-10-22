@@ -62,8 +62,11 @@ SYSTEM = (
     "nothing of the arithmetic to the customer). Do NOT add waste or over-order -- the app adds "
     "each item's waste and rounds up to what can be bought. Do NOT add delivery, fuel, dumpsters, "
     "the planting package (soil, fertiliser, watering bags/rings) or layout markers: the app adds "
-    "those by rule. For dumpsters, give spoilCuYd: the cubic yards of soil and debris to haul away "
-    "(excavation, sod, demolition). A material not in the catalogue goes in with an empty "
+    "those by rule. For dumpsters, give spoilCuYd: the cubic yards of soil, rock and debris to haul "
+    "away (excavation, sod, demolition, old stone) -- and, apart from it, brushCuYd: the cubic yards "
+    "of brush ONLY (branches, shrubs, roots, yard waste with no soil or rock in it), which goes in a "
+    "bigger box of its own. Each is the whole job's figure; 0 when there is none. Never count the "
+    "dumpsters yourself. A material not in the catalogue goes in with an empty "
     "supplyId and a clear name, and a flag saying it needs adding to Supplies.\n"
     "- Plants are materials with plant=true, a name with size (e.g. 'Autumn Blaze maple, 2 in "
     "caliper'), the count, tree='single' for a single-trunk tree, 'multi' for multi-trunk or "
@@ -136,8 +139,8 @@ WHOLE = ("HOW TO GIVE THE LINES: the WHOLE estimate as it should now be -- every
          "material, the ones you did not change included. `removed` is empty.")
 PATCH = ("HOW TO GIVE THE LINES: ONLY what changes. In work and materials give just the lines you add "
          "(empty id) or change (their id, every field as the line should now be); a line you do not "
-         "give stays exactly as it is. Put the id of every line to take off in `removed`. spoilCuYd is "
-         "the whole job's figure as it should now be.")
+         "give stays exactly as it is. Put the id of every line to take off in `removed`. spoilCuYd and "
+         "brushCuYd are the whole job's figures as they should now be.")
 
 SCHEMA = {
     "type": "object",
@@ -182,11 +185,12 @@ SCHEMA = {
             "additionalProperties": False,
         }},
         "spoilCuYd": {"type": "number"},
+        "brushCuYd": {"type": "number"},
         "questions": {"type": "array", "items": {"type": "string"}},
         "flags": {"type": "array", "items": {"type": "string"}},
         "removed": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["reply", "updated", "work", "materials", "spoilCuYd", "questions", "flags", "removed"],
+    "required": ["reply", "updated", "work", "materials", "spoilCuYd", "brushCuYd", "questions", "flags", "removed"],
     "additionalProperties": False,
 }
 
@@ -458,7 +462,8 @@ def _current_text(cur):
         rows.append("- " + " | ".join(bits))
     if len(rows) == n:
         rows.append("(none yet)")
-    rows.append("Spoil to haul away: %s cu yd" % (cur.get("spoilCuYd") if _num(cur.get("spoilCuYd")) else "not set"))
+    rows.append("Soil, rock and debris to haul away (spoilCuYd): %s cu yd" % (cur.get("spoilCuYd") if _num(cur.get("spoilCuYd")) else "not set"))
+    rows.append("Brush only to haul away (brushCuYd): %s cu yd" % (cur.get("brushCuYd") if _num(cur.get("brushCuYd")) else "none"))
     t = cur.get("totals") or {}
     if t:
         rows.append("What the app prices it at now (for talking about it -- never change prices yourself): "
@@ -755,6 +760,7 @@ def draft(client, d):
             "mode": "patch" if patching else "whole", "removed": removed,
             "work": work, "materials": materials,
             "spoilCuYd": max(0.0, round(_num(got.get("spoilCuYd")) or 0, 1)),
+            "brushCuYd": max(0.0, round(_num(got.get("brushCuYd")) or 0, 1)),
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
             "photos": len(photos), "photosTotal": photos_total, "photoNums": [p[0] for p in photos],
