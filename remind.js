@@ -50,6 +50,14 @@
   const TYPES = [
     { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true },
     { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#7a4fd1', appointment: true },
+    // Jonah (22 Oct 2026): "add a phone call tag for calendar items". A call
+    // usually has its time, and buzzes before it as an appointment does --
+    // but it is a call to MAKE ("Call in ... material orders", "Call <a
+    // customer>"): ticked off when made, carried to the next days when not,
+    // as those entries were as to-dos before the tag existed. Orchid: as far
+    // from every other tag's colour and the urgency colours as there was
+    // room for; white writing reads on it.
+    { id: 'phone', icon: '📞', name: 'Phone call', timed: true, color: '#c026d3' },
     { id: 'pickup', icon: '🚚', name: 'Pickup', timed: false, color: '#8b5a2b' },
     { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
     { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b' },
@@ -89,14 +97,22 @@
   // calendar as `tags` [{id, name, icon, color, appointment}] only once
   // edited. [id, the name it goes by there when not its own].
   const CAL_TAGS = {
-    work: [['bid'], ['appt'], ['pickup'], ['delivery'], ['email'], ['todo']],
+    work: [['bid'], ['appt'], ['phone'], ['pickup'], ['delivery'], ['email'], ['todo']],
     crew: [['pickup', 'Material pickup'], ['delivery'], ['repair'], ['shop'], ['errand'], ['crew']],
     // The Job schedule: job days only -- no list to pick from.
     jobs: [['jobday']],
-    personal: [['doctor'], ['personal']],
+    personal: [['doctor'], ['phone'], ['personal']],
   };
   // A calendar the owner made has My work's list to start with.
   CAL_TAGS.custom = CAL_TAGS.work;
+  // Built-in tags put on a kind's starting list after 16 Oct 2026, when the
+  // owner could first make a calendar's list his own. A list he saved
+  // before one of these existed never offered it -- it was not taken off --
+  // so it joins his list (tagsOf) until he saves the list again having
+  // seen it: the calendar's `tagsSeen` says which built-ins his editor
+  // offered (calendar.js calSaveCal); one missing from a list saved after
+  // that was taken off. A new built-in on a starting list: add its id here.
+  const ADDED_LATER = ['phone'];
   // What an entry is when nothing better is known, on each kind.
   const FALLBACK = { work: 'todo', custom: 'todo', crew: 'crew', jobs: 'jobday', personal: 'personal' };
   const kindOfCal = cal => (cal && cal.kind) || '';
@@ -135,8 +151,29 @@
       custom: !b,
     }, cal);
   }
-  // A calendar's tags, in its order: the owner's, else the list its kind
-  // starts with. The Job schedule's is always the one Job day. Worked out
+  // The built-ins of its kind's starting list his own list was made
+  // without: each goes in after the one before it on the starting list
+  // (or first, when his list has none of those). `seen`: the calendar's
+  // tagsSeen, or null for a list saved before there was such a thing.
+  function addLater(list, kind, seen, cal) {
+    const start = startList(kind);
+    start.forEach(([id, name], i) => {
+      if (list.some(t => t.id === id)) return;
+      if (seen ? seen.indexOf(id) !== -1 : ADDED_LATER.indexOf(id) === -1) return;
+      const b = typeById(id);
+      if (!b) return;
+      let at = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const k = list.findIndex(t => t.id === start[j][0]);
+        if (k !== -1) { at = k + 1; break; }
+      }
+      list.splice(at, 0, decorate(Object.assign({}, b, name ? { name: name } : {}), cal));
+    });
+    return list;
+  }
+  // A calendar's tags, in its order: the owner's (with any built-in added
+  // since he made it), else the list its kind starts with. The Job
+  // schedule's is always the one Job day. Worked out
   // once per calendar record (the calendar draws every entry through it;
   // a changed calendar arrives as a new record), and never changed by the
   // caller.
@@ -144,16 +181,16 @@
   function tagsOf(cal) {
     const kind = kindOfCal(cal);
     const memo = cal && typeof cal === 'object' ? tagsMemo.get(cal) : null;
-    if (memo && memo.kind === kind && memo.tags === cal.tags) return memo.list;
+    if (memo && memo.kind === kind && memo.tags === cal.tags && memo.seen === cal.tagsSeen) return memo.list;
     let list;
     if (kind !== 'jobs' && edited(cal)) {
       const seen = {};
-      list = cal.tags.filter(t => t && typeof t.id === 'string' && t.id && !seen[t.id] && (seen[t.id] = true))
-        .map(t => fromStored(t, cal));
+      list = addLater(cal.tags.filter(t => t && typeof t.id === 'string' && t.id && !seen[t.id] && (seen[t.id] = true))
+        .map(t => fromStored(t, cal)), kind, Array.isArray(cal.tagsSeen) ? cal.tagsSeen : null, cal);
     } else {
       list = startList(kind).map(([id, name]) => decorate(Object.assign({}, typeById(id), name ? { name: name } : {}), cal));
     }
-    if (cal && typeof cal === 'object') tagsMemo.set(cal, { kind: kind, tags: cal.tags, list: list });
+    if (cal && typeof cal === 'object') tagsMemo.set(cal, { kind: kind, tags: cal.tags, seen: cal.tagsSeen, list: list });
     return list;
   }
   // Whether an entry's stored tag still means something on this calendar:
@@ -216,20 +253,35 @@
   //     collect, the bank) -- in that order of asking, so "Pickup check
   //     from ..." is an errand and "Pick up pavers at the yard" a pickup --
   //     and anything else is a crew task;
-  //   - Personal ("anything i do not to do with the business"): a doctor's
-  //     appointment when the title says so, else personal;
-  //   - My work, and any calendar he makes: the title tells a pickup, an
-  //     email or a delivery, and anything else is a to-do.
+  //   - Personal ("anything i do not to do with the business"): a phone
+  //     call when the title says so ("Call the dentist" is a call to make,
+  //     not the dentist), else a doctor's appointment when it says so, else
+  //     personal;
+  //   - My work, and any calendar he makes: the title tells a phone call, a
+  //     pickup, an email or a delivery, and anything else is a to-do. A
+  //     title STARTING "Call ..." / "Phone ..." is a call whatever else it
+  //     says ("Call the yard about the delivery"); one that only mentions a
+  //     call further on ("<a business> call", "Pat -- call back") is one
+  //     when it says nothing else ("Send the bid, then call" is an email).
   // A card on Pickups -- made from a store's "ready for pickup" email -- is
   // a pickup, and one on Crew tasks or tagged 👷 Crew a crew task. (Site
   // visits and the Work schedule were calendars before 15 Oct; kept so
   // nothing old reads as nothing.) functions/reminders.py _type_of: the same.
   const BY_CALENDAR = { visits: 'bid', work: 'todo', custom: 'todo' };
+  // "Call ...", "Calling ...", "Callback ...", "Phone ..." -- not "Phone
+  // bill", "Phone plan" and the like, which are not calls.
+  const PHONE_FIRST = /^\s*(?:call(?:s|ing|ed)?|call\s?-?\s?backs?|phone(?:d|\s?-?\s?calls?)?)\b(?!\s+(?:bills?|plans?|cases?|chargers?|payments?|repairs?|upgrades?|numbers?)\b)/i;
+  // "Phone call with ...", "Zoom call", "call back", "return ...'s call",
+  // and a title ending in "call".
+  const PHONE_ANY = /\b(?:phone|zoom|video|conference|facetime)\s?-?\s?calls?\b|\bcall\s?-?\s?backs?\b|\breturn(?:ed)?\b.{0,40}\bcalls?\b|\bcalls?\s*[.!?]?\s*$/i;
   const WORDS = [
+    ['phone', PHONE_FIRST],
     ['pickup', /\bpick\s?-?\s?up\b/i],
     ['email', /^\s*send\b|\be-?mail\b/i],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
+    ['phone', PHONE_ANY],
   ];
+  const isCall = title => PHONE_FIRST.test(title || '') || PHONE_ANY.test(title || '');
   const CREW_WORDS = [
     ['errand', /\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bchecks?\s+(?:from|for)\b|\bdeposit\b/i],
     ['pickup', /\bpick\s?-?\s?up\b/i],
@@ -258,7 +310,7 @@
       if (where.boardId === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
       return byWords(title);
     }
-    const guess = kind === 'personal' ? (DOCTOR_WORDS.test(title) ? 'doctor' : 'personal')
+    const guess = kind === 'personal' ? (isCall(title) ? 'phone' : DOCTOR_WORDS.test(title) ? 'doctor' : 'personal')
       : kind === 'crew' ? byWords(title, CREW_WORDS) || 'crew'
       : byWords(title) || BY_CALENDAR[kind] || '';
     return onCalendar(cal, guess);
@@ -477,6 +529,9 @@
     TYPES: TYPES,
     // Each calendar's tags (16 Oct 2026).
     CAL_TAGS: CAL_TAGS,
+    // The built-ins a calendar of this kind starts with: what the tag editor
+    // offered, saved as its tagsSeen (ADDED_LATER).
+    startIds: kind => startList(kind).map(x => x[0]),
     tagsOf: tagsOf,
     tagOf: tagOf,
     knownOn: knownOn,

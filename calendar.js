@@ -2000,8 +2000,9 @@
     if (note) note.textContent = typeNote;
   };
   // Until a tag is tapped, it follows the title as it is typed (remind.js
-  // typeOf: "Pickup mulch" a pickup, "Send the bid" an email to send; on
-  // the Crew schedule "Fix the trailer lights" an equipment repair).
+  // typeOf: "Pickup mulch" a pickup, "Send the bid" an email to send, "Call
+  // Pat back" a phone call; on the Crew schedule "Fix the trailer lights"
+  // an equipment repair).
   window.calTitleChanged = function () {
     const box = el('evType');
     const c = document.querySelector('input[name="evCal"]:checked');
@@ -2074,8 +2075,9 @@
     // the title is lit -- and said so under the buttons, as a calendar
     // picked never quietly changes what was picked. Until a tag is tapped,
     // it simply follows the calendar and the title (the Crew schedule: a
-    // pickup, a repair... else a crew task; Personal: the doctor, else
-    // personal; My work: a pickup, an email... else a to-do).
+    // pickup, a repair... else a crew task; Personal: a phone call, the
+    // doctor, else personal; My work: a phone call, a pickup, an email...
+    // else a to-do).
     const box = el('evType');
     const from = cals[edCal];
     if (byHand === true) typeNote = '';
@@ -2976,7 +2978,7 @@
   // stands out from the others; red, orange and grey are the urgency
   // colours everywhere else in Job Hub, so none is offered here (the colour
   // box still allows anything).
-  const TAG_COLORS = ['#2f8f5b', '#7a4fd1', '#8b5a2b', '#2a3d8f', '#13a7c4', '#8ab81e', '#0f766e', '#4d6b1a',
+  const TAG_COLORS = ['#2f8f5b', '#7a4fd1', '#c026d3', '#8b5a2b', '#2a3d8f', '#13a7c4', '#8ab81e', '#0f766e', '#4d6b1a',
                       '#a3369b', '#2f6fd6', '#d94f8a', '#f2c230', '#1a9c8c', '#66418f'];
   let tagDraft = null;      // the tags being edited, or null (the Job schedule has none)
   let tagsDirty = false;    // changed in this window: only then are they saved
@@ -3091,7 +3093,10 @@
         : Array.from(document.querySelectorAll('.ccShare:checked')).map(i => i.value);
       rec.visibleTo = Array.from(new Set(picked.concat(rec.editors)));
     }
-    if (tags) rec.tags = tags;
+    // With the built-ins this list was made knowing about, so one added to
+    // the app later still joins it, and one he took off stays off
+    // (remind.js ADDED_LATER).
+    if (tags) { rec.tags = tags; rec.tagsSeen = YDRemind.startIds(rec.kind); }
     cals[cid] = Object.assign({ id: cid }, was || {}, rec);
     write('calendars', cid, rec, 'saving ' + name);
     if (!eventUnsubs[cid]) watchEvents(cid);

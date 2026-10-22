@@ -413,7 +413,7 @@ TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
 # The built-in tags, in remind.js TYPES order (the 7 am list is sorted by it):
 # id -> icon.
-TYPES = {"bid": "QP", "appt": "🕑", "pickup": "🚚", "delivery": "🚛", "email": "✉️",
+TYPES = {"bid": "QP", "appt": "🕑", "phone": "📞", "pickup": "🚚", "delivery": "🚛", "email": "✉️",
          "todo": "✅", "repair": "🔧", "shop": "🛠️", "errand": "🧾", "crew": "👷", "jobday": "🔨",
          "doctor": "🩺", "personal": "🏠"}
 # The built-ins that are the crew's wherever they are (remind.js `crew`).
@@ -424,18 +424,33 @@ CREW_TYPES = {"crew", "repair", "shop", "errand"}
 # list, once he edits it, is on the calendar as `tags` [{id, name, icon,
 # color, appointment}].
 CAL_TAGS = {
-    "work": ("bid", "appt", "pickup", "delivery", "email", "todo"),
+    "work": ("bid", "appt", "phone", "pickup", "delivery", "email", "todo"),
     "crew": ("pickup", "delivery", "repair", "shop", "errand", "crew"),
     "jobs": ("jobday",),
-    "personal": ("doctor", "personal"),
+    "personal": ("doctor", "phone", "personal"),
 }
 CAL_TAGS["custom"] = CAL_TAGS["work"]
+# Built-ins put on a starting list after 16 Oct 2026 (remind.js
+# ADDED_LATER): a list the owner saved before one existed never offered it,
+# so it joins his list -- until he saves it again having seen it (the
+# calendar's `tagsSeen`: the built-ins his editor offered).
+ADDED_LATER = ("phone",)
 FALLBACK = {"work": "todo", "custom": "todo", "crew": "crew", "jobs": "jobday", "personal": "personal"}
 # The guess by where it is, when the title says nothing (remind.js BY_CALENDAR).
 BY_CALENDAR = {"visits": "bid", "work": "todo", "custom": "todo"}
-WORDS = (("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
+# Jonah (22 Oct 2026): "add a phone call tag for calendar items". A title
+# starting "Call ..." / "Phone ..." is a call whatever else it says; one
+# that only mentions a call further on is one when it says nothing else
+# (remind.js PHONE_FIRST / PHONE_ANY -- keep them the same).
+PHONE_FIRST = re.compile(r"^\s*(?:call(?:s|ing|ed)?|call\s?-?\s?backs?|phone(?:d|\s?-?\s?calls?)?)\b"
+                         r"(?!\s+(?:bills?|plans?|cases?|chargers?|payments?|repairs?|upgrades?|numbers?)\b)", re.I)
+PHONE_ANY = re.compile(r"\b(?:phone|zoom|video|conference|facetime)\s?-?\s?calls?\b|\bcall\s?-?\s?backs?\b|"
+                       r"\breturn(?:ed)?\b.{0,40}\bcalls?\b|\bcalls?\s*[.!?]?\s*$", re.I)
+WORDS = (("phone", PHONE_FIRST),
+         ("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
          ("email", re.compile(r"^\s*send\b|\be-?mail\b", re.I)),
-         ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)))
+         ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
+         ("phone", PHONE_ANY))
 # On the Crew schedule, asked in this order: "Pickup check from ..." is an
 # errand, "Pick up pavers at the yard" a pickup (remind.js CREW_WORDS).
 CREW_WORDS = (("errand", re.compile(r"\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|"
@@ -483,6 +498,18 @@ def _tags_of(cal):
                 continue
             icon = t.get("icon") if t.get("icon") is not None else TYPES.get(t["id"], "")
             one(t["id"], str(icon or "")[:4], t.get("appointment"))
+        # A built-in his list was made without (remind.js addLater): after
+        # the one before it on the starting list, else first.
+        seen = cal.get("tagsSeen") if isinstance(cal.get("tagsSeen"), list) else None
+        start = CAL_TAGS.get(kind, CAL_TAGS["work"])
+        for i, tid in enumerate(start):
+            if tid in out or tid not in TYPES or (tid in seen if seen is not None else tid not in ADDED_LATER):
+                continue
+            ids = list(out)
+            at = next((ids.index(p) + 1 for p in reversed(start[:i]) if p in out), 0)
+            rest = {k: out.pop(k) for k in ids[at:]}
+            one(tid, TYPES[tid], None)
+            out.update(rest)
     else:
         for tid in CAL_TAGS.get(kind, CAL_TAGS["work"]):
             one(tid, TYPES.get(tid, ""), None)
@@ -546,7 +573,9 @@ def _type_of(item, cal_kind=None, board_id=None, cal=None):
             return "crew"
         return _by_words(title)
     if ck == "personal":
-        guess = "doctor" if DOCTOR_WORDS.search(title) else "personal"
+        # "Call the dentist" is a call to make, not the dentist.
+        guess = "phone" if PHONE_FIRST.search(title) or PHONE_ANY.search(title) \
+            else "doctor" if DOCTOR_WORDS.search(title) else "personal"
     elif ck == "crew":
         guess = _by_words(title, CREW_WORDS) or "crew"
     else:
