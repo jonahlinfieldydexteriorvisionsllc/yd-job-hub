@@ -109,6 +109,11 @@ RECEIPT_LEGACY_PLACE = {"overhead": "shop", "subcontractor": "sub", "personal": 
 # receipts dont get deleted"): a receipt filed only there is kept, but never
 # counted or sent on to QuickBooks.
 RECEIPT_OFF_BOOKS = ("personal",)
+# Places QuickBooks must never get as an expense: everything off the books,
+# and a loan payment (Jonah, 22 Oct 2026) -- counted in Job Hub under its own
+# name, but mostly paying back what was borrowed, which is not a cost.
+# QuickBooks has it from the bank. Keep the same as stages.js.
+RECEIPT_NOT_TO_QB = ("personal", "loan")
 
 
 def receipt_status(r):
@@ -124,16 +129,30 @@ def receipt_status(r):
     return "tosort"
 
 
-def receipt_off_books(r):
-    """True for a filed receipt whose every place is off the books (only
-    Personal, so far): kept in Job Hub, never sent to QuickBooks."""
+def _filed_places(r):
+    """Where a filed receipt went (its splits, and an old set-aside reason
+    that was really a place); [] for one still to sort or set aside."""
     r = r or {}
     if receipt_status(r) != "filed":
-        return False
+        return []
     places = [(s.get("to") or "job") for s in (r.get("splits") or []) if isinstance(s, dict)]
     if r.get("status") == "skipped":
         places.append(RECEIPT_LEGACY_PLACE.get(r.get("skipWhy")))
+    return places
+
+
+def receipt_off_books(r):
+    """True for a filed receipt whose every place is off the books (only
+    Personal, so far): kept in Job Hub, never counted or sent to QuickBooks."""
+    places = _filed_places(r)
     return bool(places) and all(p in RECEIPT_OFF_BOOKS for p in places)
+
+
+def receipt_not_to_qb(r):
+    """True for a filed receipt whose every place QuickBooks must not get as
+    an expense (Personal, a loan payment): never sent on to QuickBooks."""
+    places = _filed_places(r)
+    return bool(places) and all(p in RECEIPT_NOT_TO_QB for p in places)
 
 
 def issue_status(i):

@@ -156,7 +156,10 @@ def _reading_due(st):
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
-         "utilities_and_phone", "other"]
+         "utilities_and_phone", "loan_payment", "other"]
+# A payment on a loan (Jonah, 22 Oct 2026): offered for 🏦 Loan payment on the
+# Receipts tab, and never sent to QuickBooks as an expense (_not_for_qb).
+LOAN_KIND = "loan_payment"
 
 # ---------------------------------------------------------------- what Claude is told
 
@@ -208,6 +211,9 @@ YYYY-MM-DD, or "". po: a PO number or job name written on the order, exactly as 
 - order_number: the order, invoice or receipt number exactly as printed, or "". For a \
 payment confirmation, the number of the invoice it pays.
 - vendor: the business that sold it ("Home Depot", "Menards", "the stone yard").
+- kind: loan_payment for a payment on a loan or financing agreement (a truck, trailer or \
+machine loan, a business loan or line of credit) -- never for paying a supplier's invoice or a \
+credit card bill.
 - whose: "personal" for things clearly for a household (groceries, clothes, entertainment, \
 personal care, a service at Jonah's own home); "business" for anything a landscaping company \
 buys or pays for; "unsure" otherwise.
@@ -1147,8 +1153,9 @@ def forward_to_qb(db, rid, raw=None, mime=None):
 # and its payment (_save joins them), so QuickBooks must never get it twice.
 # The receipt's qbForward (with the message id) says it went, and so does
 # receiptMail/{messageId}, so no later read sends it again. Personal
-# purchases (filed only under Personal: stages.receipt_off_books) are never
-# sent, paychecks and non-purchases are not receipts, and mail from before
+# purchases and loan payments (filed only there, or read as a loan payment
+# and not yet sorted: _not_for_qb) are never sent unless asked for one by
+# one, paychecks and non-purchases are not receipts, and mail from before
 # settings/receipts.since is never sent. Nor do personal ones get the
 # "receipts" label (receiptMail outcome "personal"); a Menards rebate one
 # still gets the rebate label.
@@ -1180,6 +1187,17 @@ MENARDS = re.compile(r"\bmenards\b", re.I)
 REBATE_SUBJECT = re.compile(r"\brebate", re.I)
 REBATE_RECEIPT = re.compile(r"\brebate\s+(receipt|form|certificate|slip)s?\b|"
                             r"\bmail[- ]?in\s+rebate\s+(receipt|form)s?\b", re.I)
+
+
+def _tag_rebate(db, rid):
+    """The purchase a Menards rebate receipt is for gets the 🎟 Rebate tag
+    (receipts.js RECEIPT_TAGS), so All receipts → 🎟 Rebate lists every one
+    to claim. Only ever added, when the rebate email is read: taken off by
+    hand on the Receipts tab, it stays off. Never stops the read."""
+    try:
+        db.collection("receipts").document(rid).update({"tags": firestore.ArrayUnion(["rebate"])})
+    except Exception as e:      # noqa: BLE001
+        print("receipts: rebate tag not added to", rid, e)
 
 
 def is_menards_rebate(frm, subject, text="", lines=None):
@@ -1266,6 +1284,20 @@ def _pick_mail(r, floor_ms):
     return (good or mail or [None])[0]
 
 
+def _not_for_qb(r):
+    """True for a receipt QuickBooks must not get as an expense: filed only
+    under Personal or as a loan payment (stages.receipt_not_to_qb) -- or
+    read as a loan payment and not sorted yet. The week's read forwards what
+    it saves before anyone has sorted it, so a loan payment is held back by
+    what it was read as; filed somewhere else by hand, it goes when asked
+    (Send to QuickBooks, or the last 14 days). Keep the same as receipts.js
+    notForQb."""
+    r = r or {}
+    if stages.receipt_not_to_qb(r):
+        return True
+    return r.get("kind") == LOAN_KIND and stages.receipt_status(r) == "tosort" and not (r.get("splits") or [])
+
+
 def forward_email(db, rid, to, since_ms, again=False):
     """Forward one receipt's email to QuickBooks, once. Returns qbForward,
     or None when there is nothing to send (a photo, sent already, no email
@@ -1276,12 +1308,13 @@ def forward_email(db, rid, to, since_ms, again=False):
     have = r.get("qbForward") or {}
     if not r or have.get("ok") or r.get("photoPath") or r.get("source") == "photo":
         return None
-    # Set aside (already entered, or not the business's after all), or
-    # filed only under Personal, goes only when asked for that one receipt.
-    # Its one status (stages.py): an old one "set aside as overhead" is the
-    # shop's, filed, and goes.
+    # Set aside (already entered, or not the business's after all), filed
+    # only under Personal or as a loan payment, or read as a loan payment and
+    # not sorted yet, goes only when asked for that one receipt. Its one
+    # status (stages.py): an old one "set aside as overhead" is the shop's,
+    # filed, and goes.
     if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or stages.receipt_status(r) == "aside"
-                      or stages.receipt_off_books(r)):
+                      or _not_for_qb(r)):
         return None
     m = _pick_mail(r, since_ms or 0)
     if not m:
@@ -1344,8 +1377,9 @@ def forward_emails(db, rids=(), days=None, st=None):
         cutoff = (dg._now() - datetime.timedelta(days=days + 1)).isoformat()
         for s in db.collection("receipts").where("createdAt", ">=", cutoff).stream():
             d = s.to_dict() or {}
-            # Set aside (already entered), or filed only under Personal: not sent.
-            if stages.receipt_status(d) != "aside" and not stages.receipt_off_books(d) and s.id not in want:
+            # Set aside (already entered), filed only under Personal or as a
+            # loan payment, or a loan payment still to sort: not sent.
+            if stages.receipt_status(d) != "aside" and not _not_for_qb(d) and s.id not in want:
                 want.append(s.id)
     for s in db.collection("receipts").where("qbForward.ok", "==", False).stream():
         d = s.to_dict() or {}
@@ -1495,6 +1529,9 @@ def from_photo(client, body, uid, who):
     if got.get("doc_type") == "person_payment":
         return {"error": "That's a payment to a person, not a receipt — not added"}, usage
     personal = got.get("whose") == "personal"
+    # A loan payment likewise waits for a person and never goes to
+    # QuickBooks as an expense (_not_for_qb).
+    loan = got.get("kind") == LOAN_KIND
     db = dg._db()
     jobs = _jobs(db)
     rid, what = _save(db, m, got, jobs)
@@ -1507,7 +1544,7 @@ def from_photo(client, body, uid, who):
         extra = {"addedBy": uid, "addedByName": who, "source": "photo", "sentFor": sent_for}
         if sent_for["to"] == "job":
             extra["suggest"] = {"jobId": sent_for["jobId"], "why": "%s %s" % (who, HOW_WORDS.get(sent_for["how"], "picked it"))}
-        auto["why"] = sent_for.pop("problem", "") or (PERSONAL_WHY if personal else "") \
+        auto["why"] = sent_for.pop("problem", "") or (PERSONAL_WHY if personal else LOAN_WHY if loan else "") \
             or _auto_problem(db, rid, got, lines, tax, total, sent_for["to"])
         if not auto["why"]:
             auto["state"] = "ready"
@@ -1520,7 +1557,7 @@ def from_photo(client, body, uid, who):
         except Exception as err:                        # noqa: BLE001
             print("receipts: photo %s not kept: %s" % (rid, err))
         db.collection("receipts").document(rid).set(extra, merge=True)
-        if not personal:
+        if not personal and not loan:
             forward_to_qb(db, rid, raw, mime)
     else:
         # The same purchase was already here (its email came first). What
@@ -1564,6 +1601,7 @@ def from_photo(client, body, uid, who):
 HOW_WORDS = {"clock": "was clocked in on it", "page": "sent it from the job's page", "picked": "said it's for this job"}
 # Why a photo Claude read as a household's waits for a person (from_photo).
 PERSONAL_WHY = "it looks like a personal purchase — say where it goes (not sent to QuickBooks)"
+LOAN_WHY = "it looks like a loan payment — say where it goes (not sent to QuickBooks)"
 PLACES_NOT_JOB = ("vehicle", "shop", "office")
 # A receipt's lines are allowed to miss its total by this much (rounding on
 # the paper) and still count as adding up.
@@ -1738,8 +1776,11 @@ def _save_held(db, jobs_of, report, saved=None):
             continue
         # Read with no body kept: its sender, subject and lines say whether
         # it is a Menards rebate receipt.
+        rebate = is_menards_rebate(m.get("from"), m.get("subject"), "", got.get("lines"))
         _seen(db, s.id, "personal" if personal else "receipt", receiptId=rid, got=firestore.DELETE_FIELD,
-              labelled=False, rebate=is_menards_rebate(m.get("from"), m.get("subject"), "", got.get("lines")))
+              labelled=False, rebate=rebate)
+        if rebate:
+            _tag_rebate(db, rid)
         if personal:
             report["personal"] += 1
             continue
@@ -1951,6 +1992,8 @@ def run(client, manual=False):
                     continue
                 _seen(db, m["id"], "personal" if personal else "receipt", receiptId=rid, labelled=False,
                       rebate=m["id"] in rebates)
+                if m["id"] in rebates:
+                    _tag_rebate(db, rid)
                 if personal:
                     report["personal"] += 1
                     continue

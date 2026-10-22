@@ -5,8 +5,9 @@
 // every line, the tax and the total, and a job it thinks the purchase is for
 // when the delivery address or a name on the order says so. This screen is
 // where each one is sorted: to a job, a vehicle, shop overhead, office
-// overhead, property overhead, a subcontractor, personal -- or set aside,
-// with a note saying why (PLACE_LIST below).
+// overhead, property overhead, a subcontractor, a loan payment, personal --
+// or set aside, with a note saying why (PLACE_LIST below). Tags on the whole
+// receipt (a rebate to claim, a warranty...) come on top of that (RECEIPT_TAGS).
 //
 // "Add to job" puts the ticked lines into that job's materials (Tracking),
 // one materials line per receipt line, plus that job's share of the sales
@@ -56,7 +57,7 @@
     materials: 'Materials', plants: 'Plants', dump_and_disposal: 'Dump & disposal',
     equipment_and_repairs: 'Equipment & repairs', fuel: 'Fuel', tools: 'Tools', rental: 'Rental',
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
-    insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', other: 'Other',
+    insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', other: 'Other',
   };
   // Why a receipt was set aside, in the words of the old pick list. Only read
   // back now: since 13 Oct `skipWhy` is the note typed when it was set aside
@@ -91,6 +92,14 @@
   // is off the books: never in the month totals, never sent to QuickBooks
   // (stages.js RECEIPT_OFF_BOOKS, which says which places those are).
   //
+  // Jonah, 22 Oct 2026: "add loan payments as a tag for receipts". A loan
+  // payment (a truck or a machine) is the business's money, counted under
+  // its own name ("Loan payments" in a month's totals), filed by the
+  // lender's name -- but never sent to QuickBooks as an expense, since most
+  // of it pays back what was borrowed, which is not a cost (stages.js
+  // RECEIPT_NOT_TO_QB). One the email reader reads as a loan payment comes
+  // with this place already picked.
+  //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
   // is one more row, and every list below follows.
@@ -101,6 +110,7 @@
     { id: 'office', chip: '🗂 Office overhead', name: 'Office overhead', view: '🗂 Office', total: 'Office' },
     { id: 'property', chip: '🌳 Property overhead', name: 'Property overhead', view: '🌳 Property', total: 'Property' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
+    { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
     { id: 'personal', chip: '👤 Personal', name: 'Personal', view: '👤 Personal', total: 'Personal' },
   ];
   // (A phone that picked up this file before the new stages.js, on one bar
@@ -109,7 +119,8 @@
   const DEST = PLACE_LIST.map(p => [p.id, p.chip]).concat([['aside', '🗄 Set aside']]);
   const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'vehicle',
-    office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop' };
+    office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop',
+    loan_payment: 'loan' };
   const destOf = s => s.to || 'job';
   const dest = {};            // receipt id -> where it is going, once picked
   const chosenGear = {};      // receipt id -> vehicle picked
@@ -338,6 +349,10 @@
       const s = id && subsKnown().find(x => x.id === id);
       target = s ? { subId: s.id, name: s.name || r.vendor || 'Subcontractor' }
         : { name: (r.vendor || '').trim() || 'Subcontractor' };
+    } else if (to === 'loan') {
+      // By the lender's name, so the truck's loan and the machine's are told
+      // apart in the list.
+      target = { name: (r.vendor || '').trim() || DEST_NAME.loan };
     } else {
       target = { name: DEST_NAME[to] };
     }
@@ -803,6 +818,131 @@
   }
   const splitPlace = s => destOf(s) === 'job' ? (s.jobName || 'the job') : (s.name || DEST_NAME[destOf(s)] || '');
 
+  // ------------------------------------------------------------ tags
+  //
+  // Where a receipt's money went is per line (its splits): one receipt can
+  // already be in several places -- some lines on a job, the rest to the
+  // shop -- and each line counts once. A TAG is something else (Jonah, 22
+  // Oct 2026: "allow multiple tags for receipts"): a label on the whole
+  // receipt that moves no money and counts nowhere -- a Menards rebate still
+  // to claim, a warranty to keep, something to take back, a question for
+  // the accountant, or one of his own. As many as he likes on one receipt,
+  // and each a filter under All receipts. Stored on the receipt as `tags`: a
+  // starter tag by its id, his own by the words typed, spelt as first typed
+  // (the way Supplies keeps its "Used for" tags). A Menards rebate receipt's
+  // purchase gets 🎟 Rebate by itself when its email is read (receipts.py
+  // _tag_rebate); taken off here, it stays off.
+  const RECEIPT_TAGS = [
+    { id: 'rebate', icon: '🎟', name: 'Rebate', also: ['rebates', 'menards rebate', 'mail in rebate', 'mail-in rebate'] },
+    { id: 'warranty', icon: '🛡', name: 'Warranty', also: ['warranties', 'guarantee'] },
+    { id: 'return', icon: '↩', name: 'To return', also: ['return', 'returns', 'take back'] },
+    { id: 'accountant', icon: '🧮', name: 'For the accountant', also: ['accountant', 'taxes', 'cpa', 'tax question'] },
+  ];
+  const TAG_BY_ID = {};
+  RECEIPT_TAGS.forEach(t => { TAG_BY_ID[t.id] = t; });
+  const TAGS_MAX = 20;        // firestore.rules takes no more on one receipt
+  const cleanTag = s => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, 40);
+  const tagKey = s => cleanTag(s).toLowerCase();
+  function tagsOf(r) {
+    return (Array.isArray(r && r.tags) ? r.tags : []).map(cleanTag).filter((t, i, a) => t && a.indexOf(t) === i);
+  }
+  // His own tags on the receipts loaded, by key, spelt as first seen.
+  function ownTags() {
+    const out = {};
+    Object.values(receipts).forEach(r => tagsOf(r).forEach(t => {
+      if (!TAG_BY_ID[t] && !out[tagKey(t)]) out[tagKey(t)] = t;
+    }));
+    return out;
+  }
+  // Words typed -> the tag they are: a starter one by its name or a word for
+  // it ("rebates"), one of his already in use however it is capitalised, or a
+  // new one as typed.
+  function tagFor(text) {
+    const t = cleanTag(text), k = tagKey(t);
+    if (!k) return '';
+    const hit = RECEIPT_TAGS.find(x => x.id === k || tagKey(x.name) === k || x.also.indexOf(k) !== -1);
+    if (hit) return hit.id;
+    return ownTags()[k] || t;
+  }
+  const tagInfo = t => TAG_BY_ID[t] || { id: t, icon: '🔖', name: t };
+  const tagLabel = t => tagInfo(t).icon + ' ' + tagInfo(t).name;
+  // What a search finds a receipt by (All receipts, and the app's search).
+  const tagNames = r => tagsOf(r).map(t => tagInfo(t).name).join(' ');
+  // Every tag to pick from: the starter ones, then his own A to Z.
+  const allTags = () => RECEIPT_TAGS.map(t => t.id).concat(Object.values(ownTags()).sort((a, b) => a.localeCompare(b)));
+
+  let tagging = '';           // the receipt whose tags are open ('c' card / 'h' row + its id), kept through a redraw
+  const tagTyped = {};        // receipt id -> a tag of his own being typed
+  // The chips, where the receipt is shown.
+  function tagChipsHtml(r) {
+    return tagsOf(r).map(t => '<span class="rc-rtag">' + esc(tagLabel(t)) + '</span>').join('');
+  }
+  // The button that opens the tags -- for whoever sorts receipts. A row in
+  // All receipts has room for the label only.
+  function tagBtn(where, rid) {
+    if (!sorts()) return '';
+    const open = tagging === where + rid;
+    return '<button type="button" class="btn btn-sm' + (open ? ' btn-filled' : '') + '" aria-expanded="' + open + '"' +
+      (where === 'h' ? ' title="Tags" aria-label="Tags"' : '') +
+      ' onclick="rcTags(\'' + where + rid + '\')">' + (where === 'h' ? '🏷' : '🏷 Tags') + '</button>';
+  }
+  // Open: every tag as a button to tap on or off (on a phone they wrap, all
+  // in sight), and a box for one of his own.
+  function tagEditHtml(where, rid, r) {
+    if (tagging !== where + rid || !sorts()) return '';
+    const on = tagsOf(r);
+    const list = allTags();
+    on.forEach(t => { if (list.indexOf(t) === -1) list.push(t); });
+    return '<div class="rc-tagedit">' +
+      '<div class="rc-tagpick">' + list.map(t => {
+        const isOn = on.indexOf(t) !== -1;
+        return '<button type="button" class="rc-dest-chip' + (isOn ? ' on' : '') + '" aria-pressed="' + isOn + '"' +
+          ' data-tag="' + esc(t) + '" onclick="rcTagToggle(\'' + rid + '\', this.dataset.tag)">' + esc(tagLabel(t)) + '</button>';
+      }).join('') + '</div>' +
+      '<div class="rc-assign">' +
+        '<input class="rc-why" id="rcTagNew_' + where + rid + '" maxlength="40" autocomplete="off" placeholder="A tag of your own…"' +
+          ' value="' + esc(tagTyped[rid] || '') + '" oninput="rcTagTyped(\'' + rid + '\', this.value)"' +
+          ' onkeydown="if(event.key===\'Enter\'){event.preventDefault();rcTagAdd(\'' + where + '\',\'' + rid + '\')}">' +
+        '<button type="button" class="btn btn-sm" onclick="rcTagAdd(\'' + where + '\',\'' + rid + '\')">Add</button>' +
+        '<button type="button" class="btn btn-sm btn-filled" onclick="rcTags(\'\')">Done</button>' +
+      '</div>' +
+      '<div class="rc-hint">Tap to put a tag on or take it off — as many as you like. Tags move no money; ' +
+        'each one is a filter under All receipts.</div>' +
+    '</div>';
+  }
+  window.rcTags = function (key) {
+    tagging = key && key !== tagging ? key : '';
+    redraw(true);
+  };
+  window.rcTagTyped = function (rid, text) { tagTyped[rid] = text; };
+  function setTags(rid, r, next) {
+    if (next.length > TAGS_MAX) { showToast('That’s ' + TAGS_MAX + ' tags on one receipt — take one off first'); return false; }
+    const tags = next.length ? next : null;
+    receipts[rid] = Object.assign({}, r, { tags });
+    write(rid, { tags });
+    redraw(true);
+    return true;
+  }
+  window.rcTagToggle = function (rid, t) {
+    const r = receipts[rid];
+    if (!r || !sorts() || !t) return;
+    const have = tagsOf(r);
+    setTags(rid, r, have.indexOf(t) !== -1 ? have.filter(x => x !== t) : have.concat([t]));
+  };
+  window.rcTagAdd = function (where, rid) {
+    const r = receipts[rid];
+    if (!r || !sorts()) return;
+    const t = tagFor(tagTyped[rid] || '');
+    const box = () => el('rcTagNew_' + where + rid);
+    if (!t) { if (box()) box().focus(); return; }
+    const have = tagsOf(r);
+    delete tagTyped[rid];
+    if (have.indexOf(t) === -1 && !setTags(rid, r, have.concat([t]))) { tagTyped[rid] = t; return; }
+    if (have.indexOf(t) !== -1) { showToast(tagLabel(t) + ' is on it already'); redraw(true); }
+    // Ready for the next one.
+    if (box()) box().focus();
+  };
+
   // ------------------------------------------------- what was done with it
   //
   // Where a receipt went shows as a small chip ("✓ Added to the Smith job");
@@ -920,7 +1060,7 @@
         '<span class="rc-vendor">' + esc(r.vendor || 'Receipt') + '</span>' +
         (r.orderNo ? '<span class="rc-tag">#' + esc(r.orderNo) + '</span>' : '') +
         '<span class="rc-tag">' + fmtDateMD(r.date) + '</span>' +
-        (owed ? '<span class="rc-tag rc-owed">Owed</span>' : '') +
+        (owed ? '<span class="rc-tag rc-owed">Owed</span>' : '') + tagChipsHtml(r) +
         '<span class="rc-total">' + money(r.totalCents) + '</span>' +
       '</div>' +
       '<div class="rc-sum">' + summary +
@@ -945,8 +1085,9 @@
       (sortable && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
-        deleteBtn(rid) + menuHtml('c', rid, r) +
+        tagBtn('c', rid) + deleteBtn(rid) + menuHtml('c', rid, r) +
       '</div>' +
+      tagEditHtml('c', rid, r) +
       qbHtml(r, rid) +
     '</div>';
   }
@@ -986,6 +1127,11 @@
       return '<div class="rc-assign">' + btn('Mark ' + (n || ((r.splits || []).length ? 'the rest ' : '')) + 'personal') + '</div>' +
         '<div class="rc-hint">Kept under All receipts → 👤 Personal. Never counted as a business cost or sent to QuickBooks.</div>';
     }
+    if (to === 'loan') {
+      return '<div class="rc-assign">' + btn('Add ' + n + 'to loan payments') + '</div>' +
+        '<div class="rc-hint">Counted under All receipts → 🏦 Loans, by the lender’s name. Never sent to QuickBooks as an ' +
+        'expense: most of a loan payment pays back what was borrowed, which isn’t a cost.</div>';
+    }
     if (to === 'sub') {
       // The owner picks which of his subcontractors (the one whose name the
       // store has, to start with); anyone else files it by the store's name.
@@ -1023,11 +1169,21 @@
   // to QuickBooks when it did not go. compact: the one-line row.
   // A receipt from email says so only once it has been sent, or tried
   // (settings/receipts.forwardEmails; receipts.py forward_email).
+  // Kept from QuickBooks: filed only where it must not go as an expense
+  // (Personal, a loan payment: stages.js noQb), or read as a loan payment
+  // and not sorted yet -- the server holds those back too (receipts.py
+  // _not_for_qb; keep the two the same).
+  function notForQb(r) {
+    const st = stageOf(r);
+    if (st.noQb || st.offBooks) return true;
+    return r.kind === 'loan_payment' && st.id === 'tosort' && !(r.splits || []).length;
+  }
   function qbHtml(r, rid, compact) {
     const f = r.qbForward || null;
-    // Filed as Personal and never sent: it is not meant to go, so it is not
-    // "not in QuickBooks yet" either -- only its photo is offered.
-    if (!(f && f.ok) && stageOf(r).offBooks) {
+    // Filed as Personal or a loan payment and never sent: it is not meant
+    // to go, so it is not "not in QuickBooks yet" either -- only its photo
+    // is offered.
+    if (!(f && f.ok) && notForQb(r)) {
       return r.photoPath && !compact ? '<div class="rc-qb"><button class="btn btn-sm" onclick="rcViewPhoto(\'' + rid + '\')">🖼 Photo</button></div>' : '';
     }
     if (!r.photoPath && r.source !== 'photo') return f && f.via === 'email' ? qbEmailHtml(r, rid, f, compact) : '';
@@ -1090,15 +1246,15 @@
   // Email receipts the server would send with "Send the ones from the last
   // 14 days now" -- the same test as receipts.py forward_emails(days=14):
   // from email (not a photo), not sent yet, not set aside, not filed only
-  // as Personal, with an email from after reading started and inside the 14
-  // days.
+  // as Personal or a loan payment (notForQb), with an email from after
+  // reading started and inside the 14 days.
   const FWD_DAYS = 14;
   let fwdBusy = false;
   function emailsToSend() {
     const start = Date.parse((state && state.since) || '');
     if (isNaN(start)) return [];
     const floor = Math.max(start, Date.now() - FWD_DAYS * 864e5);
-    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && !isAside(r) && !stageOf(r).offBooks &&
+    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && !isAside(r) && !notForQb(r) &&
       !(r.qbForward && r.qbForward.ok) && (r.mail || []).some(m => m && m.id && (m.at || 0) >= floor));
   }
   window.rcFwdEmails = function (on) {
@@ -1158,14 +1314,16 @@
     // Where it went sits in the row as a chip or two, not a bar under it.
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
         '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
-        esc(r.summary || '') + '</span>' + where + chipsHtml('h', rid, r) + qbHtml(r, rid, true) +
+        esc(r.summary || '') + (tagsOf(r).length ? ' ' + tagChipsHtml(r) : '') + '</span>' +
+        where + chipsHtml('h', rid, r) + qbHtml(r, rid, true) +
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
         (r.status === 'skipped' && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
-        menuHtml('h', rid, r) + deleteBtn(rid, true) +
+        tagBtn('h', rid) + menuHtml('h', rid, r) + deleteBtn(rid, true) +
       '</div>' +
-      (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '');
+      (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '') +
+      tagEditHtml('h', rid, r);
   }
 
   function stateHtml() {
@@ -1269,8 +1427,13 @@
   // A place's own filter: every receipt with something there, whatever it
   // came to (a $0 line still went there).
   const goesTo = (r, p) => stageOf(r).places.indexOf(p) !== -1;
-  const inView = r => view === 'all' ? inAll(r) : view === 'skipped' ? isAside(r) : goesTo(r, view);
+  // A tag's filter ('tag:' + the tag): every receipt carrying it, wherever
+  // it went -- one still to sort too, set aside or Personal.
+  const viewTag = () => view.indexOf('tag:') === 0 ? view.slice(4) : '';
+  const inView = r => viewTag() ? tagsOf(r).indexOf(viewTag()) !== -1
+    : view === 'all' ? inAll(r) : view === 'skipped' ? isAside(r) : goesTo(r, view);
   window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
+  window.rcViewTag = function (t) { const tag = cleanTag(t); if (tag) { view = 'tag:' + tag; renderHistory(); } };
   // Typing in the search box redraws only the list under it, so the box keeps
   // its focus and what was typed.
   window.rcSearchNow = function () { renderHistory(); };
@@ -1280,7 +1443,7 @@
     const hay = [r.vendor, r.orderNo, r.summary, r.date,
       (r.lines || []).map(l => l.name + ' ' + (l.itemNo || '')).join(' '),
       (r.splits || []).map(x => (x.jobName || x.name || '') + ' ' + (x.est || '') + ' ' + DEST_NAME[destOf(x)]).join(' '),
-      isAside(r) ? 'set aside ' + asideText(r) : ''].join(' ').toLowerCase();
+      tagNames(r), isAside(r) ? 'set aside ' + asideText(r) : ''].join(' ').toLowerCase();
     return words.every(w => hay.indexOf(w) !== -1);
   }
 
@@ -1302,17 +1465,28 @@
           : 'Receipts from before ' + esc(before) + ' are not loaded. ') +
           '<button class="link-btn" onclick="rcOlder()">' + (olderState === 'failed' ? 'Try again' : 'Show them') + '</button>') + '</p>';
     const every = allReceipts().filter(r => !toSortNow(r));
-    const shown = every.filter(r => inView(r) && matches(r, words)).sort(byNewest);
+    // A tag's filter looks at the ones still to sort as well.
+    const shown = (viewTag() ? allReceipts() : every).filter(r => inView(r) && matches(r, words)).sort(byNewest);
     const aside = every.filter(deletableAside);
     // Counted as sorted: what the business put somewhere -- not what was set
     // aside, nor what went only to Personal.
     const counted = every.filter(inAll).length;
     el('rcHistBadge').textContent = counted ? String(counted) : '';
+    // The tags on any receipt here, each a filter of its own on a line under
+    // the places (the one being looked at stays, even with none left).
+    const inUse = Object.create(null);
+    allReceipts().forEach(r => tagsOf(r).forEach(t => { inUse[t] = (inUse[t] || 0) + 1; }));
+    if (viewTag() && !inUse[viewTag()]) inUse[viewTag()] = 0;
+    const tagOrder = allTags().filter(t => t in inUse).concat(Object.keys(inUse).filter(t => allTags().indexOf(t) === -1));
     el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
       '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') + '" onclick="rcView(\'' + v + '\')">' +
       VIEWS[v] + '</button>').join('') +
       (view === 'skipped' && aside.length && owner()
-        ? '<button class="btn btn-sm rc-del" onclick="rcDeleteAside()">🗑 Delete all ' + aside.length + ' set aside</button>' : '');
+        ? '<button class="btn btn-sm rc-del" onclick="rcDeleteAside()">🗑 Delete all ' + aside.length + ' set aside</button>' : '') +
+      (tagOrder.length ? '<div class="rc-tagbar"><span class="muted">Tags:</span>' + tagOrder.map(t =>
+        '<button class="btn btn-sm' + (viewTag() === t ? ' btn-filled' : '') + '" data-tag="' + esc(t) + '"' +
+        ' onclick="rcViewTag(this.dataset.tag)">' + esc(tagLabel(t)) + ' <span class="rc-tagn">' + inUse[t] + '</span></button>').join('') +
+        '</div>' : '');
 
     if (!shown.length) {
       wrap.innerHTML = '<p class="empty-msg">' + (words.length ? 'Nothing matches.' : 'Nothing here yet.') + '</p>' + olderHtml;
@@ -1329,7 +1503,8 @@
       let m = months[months.length - 1];
       if (!m || m.key !== key) { m = { key, rows: [], cents: 0, by: {} }; months.push(m); }
       m.rows.push(r);
-      m.cents += view === 'skipped' ? (r.totalCents || 0)
+      // A tag is on the whole receipt: its whole total.
+      m.cents += view === 'skipped' || viewTag() ? (r.totalCents || 0)
         : view === 'all' ? business(r) : amountTo(r, view);
       PLACES.forEach(p => { m.by[p] = (m.by[p] || 0) + amountTo(r, p); });
     });
@@ -1345,7 +1520,13 @@
 
   // A snapshot arriving while a job is being chosen would rebuild the list
   // under the person's finger and lose what they typed into the picker. Hold
-  // it until they move on.
+  // it until they move on. The same for a tag being typed on a row of All
+  // receipts.
+  function choosing() {
+    const a = document.activeElement, sec = el('rcSection'), hist = el('rcHistory');
+    if (!a || a === document.body) return false;
+    return !!((sec && sec.contains(a)) || (hist && hist.contains(a) && a.tagName === 'INPUT'));
+  }
   function redraw(force) {
     const p = el('panel-receipts');
     if (!p || !p.classList.contains('active')) {
@@ -1354,8 +1535,7 @@
       badges(allReceipts().filter(toSortNow).length);
       return;
     }
-    const sec = el('rcSection');
-    if (!force && sec && sec.contains(document.activeElement) && document.activeElement !== document.body) {
+    if (!force && choosing()) {
       deferred = true;
       return;
     }
@@ -1363,10 +1543,7 @@
     render();
   }
   document.addEventListener('focusout', () => {
-    if (deferred) setTimeout(() => {
-      const sec = el('rcSection');
-      if (!sec || !sec.contains(document.activeElement)) redraw();
-    }, 0);
+    if (deferred) setTimeout(() => { if (!choosing()) redraw(); }, 0);
   });
   // The job list comes from jobs, which arrive and change on their own.
   document.addEventListener('yd-jobs-changed', () => { redraw(); autoSoon(); });
@@ -1487,6 +1664,8 @@
     },
     // A photo that could not go where it was sent by itself (home.js).
     needsYou: needsYou,
+    // A receipt's tags by name, for the app's search (search.js).
+    tagNames: tagNames,
     loaded: () => loaded,
     render: () => {
       redraw(true);

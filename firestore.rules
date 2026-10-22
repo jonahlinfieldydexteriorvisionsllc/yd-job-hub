@@ -948,13 +948,17 @@ service cloud.firestore {
     // device (receipts.js autoSort), which claims it, and says how it went,
     // in that one field. `statusChange`: who moved its one status (To sort /
     // Filed / Set aside, stages.js) and when -- written beside `status`,
-    // whose stored words are unchanged.
+    // whose stored words are unchanged. `tags`: the whole receipt's extra
+    // labels (Rebate, Warranty, his own -- receipts.js RECEIPT_TAGS), a short
+    // list of words, or null when the last one is taken off.
     match /receipts/{docId} {
       allow read: if canSee('jobs');
       allow update: if canChange('jobs')
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['splits', 'status', 'statusChange', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto'])
-        && request.resource.data.status in ['new', 'done', 'skipped'];
+             .hasOnly(['splits', 'status', 'statusChange', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto', 'tags'])
+        && request.resource.data.status in ['new', 'done', 'skipped']
+        && (!('tags' in request.resource.data) || request.resource.data.tags == null
+            || (request.resource.data.tags is list && request.resource.data.tags.size() <= 20));
       allow create: if false;
       allow delete: if isOwner();
     }

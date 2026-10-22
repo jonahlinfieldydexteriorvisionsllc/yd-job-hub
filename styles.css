@@ -4011,6 +4011,17 @@
   .rc-chip-amt { font-weight:700; opacity:.85; }
   button.rc-chip { cursor:pointer; }
   button.rc-chip:hover, button.rc-chip:focus-visible { box-shadow:0 0 0 1.5px var(--st-done); }
+  /* Tags on the whole receipt (receipts.js RECEIPT_TAGS): a plain label, not
+     the green "where it went" chip; the picker's buttons wrap, all in sight. */
+  .rc-rtag { display:inline-block; padding:1px 8px; border-radius:10px; border:1px solid var(--border-strong);
+    background:var(--surface-2); color:var(--text); font:600 11px/1.6 'DM Sans',sans-serif; white-space:nowrap; }
+  .rc-row-main .rc-rtag { margin-right:4px; }
+  .rc-tagedit { margin-top:8px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); }
+  .rc-tagpick { display:flex; flex-wrap:wrap; gap:6px; }
+  .rc-tagedit .rc-why { flex:1 1 180px; width:auto; min-width:0; }
+  .rc-tagbar { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .rc-tagn { font-weight:400; opacity:.75; }
+  @media (max-width:720px) { .rc-tagedit .btn, .rc-tagbar .btn { min-height:44px; } }
   .rc-menu { position:relative; display:inline-block; flex:none; }
   .rc-menu > summary { list-style:none; }
   .rc-menu > summary::-webkit-details-marker { display:none; }

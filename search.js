@@ -592,7 +592,8 @@
         sub: joinDot([dayWords(r.date), r.orderNo ? '#' + r.orderNo : '', dollars(r.totalCents), where]),
         nums: [r.orderNo],
         more: [r.summary, r.date, (r.lines || []).map(l => l && (l.name + ' ' + (l.itemNo || ''))).join(' '),
-               (r.splits || []).map(s => s && [s.jobName, s.name, s.est].filter(Boolean).join(' ')).join(' ')],
+               (r.splits || []).map(s => s && [s.jobName, s.name, s.est].filter(Boolean).join(' ')).join(' '),
+               window.YDReceipts.tagNames ? window.YDReceipts.tagNames(r) : ''],
         order: -msOf(r.date),
         open: () => openReceipt(r),
       });

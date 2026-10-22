@@ -80,6 +80,14 @@
   // kept, but counted in none of the business's totals and never sent on to
   // QuickBooks (`offBooks` below; stages.py receipt_off_books).
   const RECEIPT_OFF_BOOKS = ['personal'];
+  // Places QuickBooks must never get as an expense (`noQb` below;
+  // stages.py receipt_not_to_qb): everything off the books, and a loan
+  // payment (Jonah, 22 Oct 2026: "add loan payments as a tag for
+  // receipts"). A loan payment is the business's money and is counted --
+  // under its own name -- but most of it is paying back what was borrowed,
+  // which is not a cost; QuickBooks has it from the bank, where the
+  // principal and the interest are split.
+  const RECEIPT_NOT_TO_QB = ['personal', 'loan'];
   // The old set-aside pick list's words, read back as the reason.
   const RECEIPT_WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
@@ -93,9 +101,10 @@
       if (legacy) places.push(legacy);
       const where = unique(places);
       const offBooks = where.length > 0 && where.every(p => RECEIPT_OFF_BOOKS.indexOf(p) !== -1);
+      const noQb = where.length > 0 && where.every(p => RECEIPT_NOT_TO_QB.indexOf(p) !== -1);
       // When it was filed: the last line put somewhere, if nothing better.
       const last = splits.slice().sort((a, b) => String((b || {}).at || '').localeCompare(String((a || {}).at || '')))[0] || {};
-      return dated(one('filed', 'Filed', 'done', { places: where, legacy: legacy, offBooks: offBooks }),
+      return dated(one('filed', 'Filed', 'done', { places: where, legacy: legacy, offBooks: offBooks, noQb: noQb }),
         r, r.status, last.at, last.by && last.by !== 'Job Hub' ? last.by : '', last.by === 'Job Hub' ? 'Job Hub' : '');
     }
     if (r.status === 'skipped') {
@@ -243,7 +252,7 @@
     receipt: receipt, issue: issue, issueId: issueId, issuePatch: issuePatch, request: request, waiting: waiting,
     storm: storm, stormOpen: stormOpen, stamp: stamp, chip: chip, whenWho: whenWho,
     RECEIPT_STAGES: RECEIPT_STAGES, RECEIPT_WHY: RECEIPT_WHY, RECEIPT_LEGACY_PLACE: RECEIPT_LEGACY_PLACE,
-    RECEIPT_OFF_BOOKS: RECEIPT_OFF_BOOKS,
+    RECEIPT_OFF_BOOKS: RECEIPT_OFF_BOOKS, RECEIPT_NOT_TO_QB: RECEIPT_NOT_TO_QB,
     ISSUE_STAGES: ISSUE_STAGES, REQUEST_STAGES: REQUEST_STAGES, STORM_STAGES: STORM_STAGES,
   };
 })();
