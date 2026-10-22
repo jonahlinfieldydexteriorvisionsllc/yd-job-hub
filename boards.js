@@ -515,6 +515,10 @@
       '+ days ago with no answer moved to Follow up', 6000);
   }
   document.addEventListener('yd-jobs-changed', () => { clearTimeout(followTimer); followTimer = setTimeout(autoFollowUp, 1500); });
+  // A start with every job already in step brings no "changed" at all, and a
+  // bid can pass its two days with the app sat open: looked at once a minute
+  // too (a pass over the jobs in memory, nothing asked of the server).
+  setInterval(autoFollowUp, 60000);
 
   // Bids sat in "Bid to send" long enough that writing them is late.
   const lateToWrite = j => bidColumn(j) === 'toSend' && bidDays(j) >= WRITE_AFTER_DAYS && !turnedDown(j);
