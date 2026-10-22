@@ -430,6 +430,32 @@ def _call(method, path, params=None, body=None, request_id=None, empty_body=Fals
         return resp.json() if resp.content else {}
 
 
+# A record QuickBooks hands back as just made, though it was made longer ago
+# than this, is its answer to an earlier request with the same request id.
+REPLAY_AFTER = datetime.timedelta(seconds=30)
+
+
+def _make(entity, body, request_id):
+    """A new estimate or invoice, made under a request id -- and really there.
+
+    QuickBooks answers a request id it has seen before with what it made
+    then, so a retry or a second press never makes two. It does that even
+    when the record has since been DELETED there: 22 Oct 2026, Jonah deleted
+    estimate #1688 and put the bid in again; QuickBooks answered with the
+    deleted #1688, made nothing, and Job Hub said it was saved. An answer made
+    more than a moment ago is such a replay -- if QuickBooks no longer has
+    it, it is made again under a new request id."""
+    path = entity.lower()
+    made = _call("POST", path, body=body, request_id=request_id).get(entity) or {}
+    created = _parse_time((made.get("MetaData") or {}).get("CreateTime"))
+    if made.get("Id") and created and _now() - created > REPLAY_AFTER \
+            and not _query_one(entity, "Id = '%s'" % _quote(made["Id"])):
+        print("quickbooks: %s %s was made earlier and deleted since; making it again" % (path, made["Id"]))
+        again = hashlib.sha1((request_id + "|" + _now().isoformat()).encode()).hexdigest()
+        made = _call("POST", path, body=body, request_id=again).get(entity) or {}
+    return made
+
+
 # ---------------------------------------------------------------- endpoints
 
 
@@ -1135,13 +1161,12 @@ def save_estimate(body):
                     "TxnDate": existing.get("TxnDate")})
         if existing.get("DocNumber"):
             est["DocNumber"] = existing["DocNumber"]
-        saved = _call("POST", "estimate", body=est)
+        e = _call("POST", "estimate", body=est).get("Estimate") or {}
     else:
         # The request id is worked out before the number is given, so a
         # retry is still recognised if another estimate was made meanwhile.
         key = hashlib.sha1(("est|" + job_id + json.dumps(est, sort_keys=True)).encode()).hexdigest()
-        saved = _call("POST", "estimate", body=_numbered("Estimate", est), request_id=key)
-    e = saved.get("Estimate") or {}
+        e = _make("Estimate", _numbered("Estimate", est), key)
 
     # A home's estimate carries the lien-waiver notice, attached before it
     # can be emailed; if QuickBooks won't take it, the estimate is saved but
@@ -1215,6 +1240,30 @@ def _estimate_record(e, customer_id=None):
     }
 
 
+def _deleted_record(q):
+    """What a job keeps of its estimate once it is deleted in QuickBooks: what
+    it was, under `deleted`, and whose it was (a new one goes to the same
+    customer). No `id` -- so everything asking "is there a QuickBooks
+    estimate?" says no: the Job tab offers to put it in again, the bid shows
+    as drafted, and nothing chases or checks an estimate that isn't there."""
+    gone = {k: q.get(k) for k in ("id", "docNumber", "total", "sentAt", "sentTo") if q.get(k) is not None}
+    gone["at"] = _now().isoformat()
+    out = {"deleted": gone, "env": q.get("env")}
+    for k in ("customerId", "snowBid"):
+        if q.get(k):
+            out[k] = q[k]
+    return out
+
+
+def _mark_deleted(job_id, q):
+    """The job's estimate record replaced -- not merged into, which would keep
+    the deleted estimate's id -- by _deleted_record."""
+    rec = _deleted_record(q)
+    _db().collection("jobs").document(job_id).update({"qbEstimate": rec, "lastModified": _stamp()})
+    print("quickbooks: estimate %s of job %s is deleted in QuickBooks" % (q.get("id"), job_id))
+    return rec
+
+
 def estimate_status(body):
     """Where the estimate stands in QuickBooks now: Pending, Accepted,
     Closed (made into an invoice), Rejected."""
@@ -1224,13 +1273,18 @@ def estimate_status(body):
     if not _same_company(body):
         return {"missing": True, "error": "That estimate is in the QuickBooks test company, not the one connected now"}
     e = _query_one("Estimate", "Id = '%s'" % _quote(est_id))
-    if not e:
-        return {"missing": True}
     job_id = str(body.get("jobId") or "").strip()
     job = None
     if job_id and "/" not in job_id:
         snap = _db().collection("jobs").document(job_id).get()
         job = (snap.to_dict() or {}) if snap.exists else {}
+    if not e:
+        # Deleted in QuickBooks. Asked from its job, the job is told: it has
+        # no QuickBooks estimate now, and the Job tab offers to put it in again.
+        q = (job or {}).get("qbEstimate") or {}
+        if job and str(q.get("id")) == est_id and q.get("env") == _env("QB_ENV", "sandbox"):
+            return {"missing": True, "deleted": _mark_deleted(job_id, q)}
+        return {"missing": True}
     if job_id and not _belongs(e, job_id, job):
         return {"missing": True, "error": "That QuickBooks estimate belongs to another job"}
     # acceptedDate rides on the record: Closed with it means accepted, then
@@ -1567,7 +1621,7 @@ def invoice_from_estimate(body):
         for way, new in ways:
             try:
                 rid = hashlib.sha1(("inv|est|" + e["Id"] + ("" if way == "whole" else "|" + way)).encode()).hexdigest()
-                inv = _call("POST", "invoice", body=new, request_id=rid).get("Invoice") or {}
+                inv = _make("Invoice", new, rid)
                 if way != "whole":
                     print("quickbooks: invoice for estimate %s made with link '%s' after: %s" % (e["Id"], way, first_error))
                 break
@@ -1766,11 +1820,20 @@ def _sweep(news, deadline=None):
         if r.get("id") and r.get("env") == env and _amount(r.get("balance")) > 0:
             unpaid.setdefault(str(r["id"]), []).append(job_id)
 
-    estimates = _by_ids("Estimate", pending) if pending else {}
+    unasked = set()
+    estimates = _by_ids("Estimate", pending, unasked) if pending else {}
     for est_id, job_ids in pending.items():
         e = estimates.get(est_id)
         for job_id in job_ids:
             j = jobs[job_id]
+            # Deleted in QuickBooks (asked, and not in the answer): the job
+            # no longer has one (_mark_deleted). Not news -- Jonah did it.
+            if not e and est_id not in unasked:
+                try:
+                    j["qbEstimate"] = _mark_deleted(job_id, j.get("qbEstimate") or {})
+                except Exception as err:                # noqa: BLE001 -- the rest go on
+                    print("quickbooks sweep: job %s not told its estimate is deleted: %s" % (job_id, err))
+                continue
             if not (e and _belongs(e, job_id, j) and (e.get("TxnStatus") or "Pending") != "Pending"):
                 continue
             rec = _estimate_record(e)
@@ -4026,8 +4089,7 @@ def create_invoice(body):
 
     # The request id is worked out first (above), so a retry is recognised
     # whatever number this one is given.
-    created = _call("POST", "invoice", body=_numbered("Invoice", invoice), request_id=request_id)
-    inv = created.get("Invoice") or {}
+    inv = _make("Invoice", _numbered("Invoice", invoice), request_id)
     return {
         "id": inv.get("Id"),
         "docNumber": inv.get("DocNumber"),

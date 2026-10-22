@@ -536,6 +536,9 @@
       if (s == null || f === 'qbChangesIn') return;
       const ahead = l == null ||
         (f === 'qbEstimate' && s.id && s.id === l.id && estStep(s.status) > estStep(l.status)) ||
+        // The estimate this copy has was deleted in QuickBooks since
+        // (quickbooks.py _deleted_record).
+        (f === 'qbEstimate' && !s.id && s.deleted && l.id && String(s.deleted.id) === String(l.id)) ||
         // The invoice as QuickBooks has it now: its balance, its change orders.
         (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || ''));
       if (ahead) { local[f] = s; took = true; }

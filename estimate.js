@@ -1992,6 +1992,7 @@
       (testCo ? '<div class="est-testco">⚠️ QuickBooks is connected to Intuit’s <b>TEST company</b>' +
         (qbCompany.name ? ' (“' + esc(qbCompany.name) + '”)' : '') + ', not your real QuickBooks. Bids sent from here go nowhere real — ' +
         'switch to your real company first.</div>' : '') +
+      deletedHtml(q, when) +
       (q && q.id ? '<div class="est-qb-line"><b>QuickBooks estimate' + (q.docNumber ? ' #' + esc(q.docNumber) : '') + '</b>' +
         (push ? ' · ' + cents(push) + ' per push' : q.total != null ? ' · ' + fmtMoney(Number(q.total) || 0) : '') +
         (status ? ' · ' + esc(status) : '') +
@@ -2015,6 +2016,18 @@
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
       sentHtml(when) +
       (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when));
+  }
+
+  // The estimate was deleted in QuickBooks (quickbooks.py _deleted_record:
+  // the job keeps what it was under `deleted`, with no id). The buttons
+  // below are the first-time ones again, and make a new estimate.
+  function deletedHtml(q, when) {
+    const d = q && !q.id && q.deleted;
+    if (!d) return '';
+    const total = d.total != null ? ' (' + fmtMoney(Number(d.total) || 0) + ')' : '';
+    return '<div class="est-qb-diff" role="note">⚠ QuickBooks estimate' + (d.docNumber ? ' #' + esc(d.docNumber) : '') + total +
+      ' was deleted in QuickBooks' + (d.at ? ' — seen ' + esc(when(d.at)) : '') + '. ' +
+      (sends() ? 'Put it in again below; QuickBooks gives it a new number.' : '') + '</div>';
   }
 
   // QuickBooks' total against Job Hub's, said on the row while it differs by
@@ -2925,7 +2938,7 @@
     checking = true; renderQb();
     try {
       const r = await askQb('/qb/estimate-status', { estimateId: q.id, jobId: jobId, env: q.env || null, snowYes: true });
-      if (r.missing) { showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
+      if (r.missing) { if (!goneFromQb(jobId, r)) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
       const sn = snowAnswer(r);
       afterQb(jobId, r, false, sn.patch);
       showToast(sn.said || 'Nothing changed', 7000);
@@ -4620,6 +4633,8 @@
     const was = (open ? qb() : null) || {};
     const merged = Object.assign({}, was, r);
     Object.keys(merged).forEach(k => { if (merged[k] === undefined) merged[k] = null; });
+    // Made again after the last one was deleted in QuickBooks: that is over.
+    if (merged.id) delete merged.deleted;
     const patch = Object.assign({}, extra || {}, { qbEstimate: merged });
     const stored = savedJob(jobId) || {};
     const before = open ? qb() : stored.qbEstimate;
@@ -4649,6 +4664,18 @@
     renderQb();
   }
 
+  // QuickBooks answered that the job's estimate is deleted there (the server
+  // has already put `deleted` on the job): onto this device's copy too, so
+  // the Job tab offers to put it in again now. True when that was the answer.
+  function goneFromQb(jobId, r) {
+    if (!r || !r.deleted) return false;
+    if (window.YDSync) window.YDSync.patchJob(jobId, { qbEstimate: r.deleted });
+    const d = r.deleted.deleted || {};
+    showToast('Estimate' + (d.docNumber ? ' #' + d.docNumber : '') + ' was deleted in QuickBooks — put it in again from the estimate', 7000);
+    renderQb();
+    return true;
+  }
+
   window.estCheck = async function (quiet) {
     const q = qb();
     const jobId = currentJobId;
@@ -4658,7 +4685,7 @@
     try {
       const r = await askQb('/qb/estimate-status', { estimateId: q.id, jobId: jobId, env: q.env || null });
       if (currentJobId !== jobId) return;
-      if (r.missing) { if (!quiet) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
+      if (r.missing) { if (!goneFromQb(jobId, r) && !quiet) showToast(r.error || 'That estimate is no longer in QuickBooks'); return; }
       const wasBid = stillBid(jobId);
       // A snow bid said yes to was put on the Snow route by that same look
       // (quickbooks.py _snow_bid_now): said so, and never booked.
