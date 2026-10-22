@@ -90,5 +90,82 @@
     set('State', p.state || (p.street || p.city ? '' : 'WI')); set('Zip', p.zip);
   }
 
+  // ------------------------------------------------ filled in as you type
+  //
+  // Jonah (21 Oct 2026): "link google maps so when typing in an address it
+  // can be autofilled". Typing a street (five letters or more) brings up to
+  // five addresses near Madison under the box (the server's /geo/suggest,
+  // functions/geo.py) -- one tap fills the street, city, state and ZIP.
+  // Typing on by hand is never in the way: the list only offers, and goes
+  // with Escape, a tap elsewhere, or no signal. Every street box of the
+  // address forms (`${prefix}Street`) and the Job tab's (#address, #city,
+  // #state, #zip).
+  const boxesOf = input => {
+    if (!input || input.tagName !== 'INPUT') return null;
+    if (input.id === 'address' && el('city') && el('zip')) return { street: input, city: el('city'), state: el('state'), zip: el('zip') };
+    const m = /^(.+)Street$/.exec(input.id || '');
+    return m && el(m[1] + 'City') ? { street: input, city: el(m[1] + 'City'), state: el(m[1] + 'State'), zip: el(m[1] + 'Zip') } : null;
+  };
+  const asked = {};           // what was typed -> its suggestions (this session)
+  let sugTimer = 0, sugFor = null, sugBox = null;
+  function closeSug() {
+    clearTimeout(sugTimer);
+    if (sugBox) sugBox.remove();
+    sugBox = null; sugFor = null;
+  }
+  function showSug(b, hits) {
+    closeSug();
+    if (!hits.length || document.activeElement !== b.street) return;
+    sugFor = b;
+    sugBox = document.createElement('div');
+    sugBox.className = 'addr-sug';
+    sugBox.setAttribute('role', 'listbox');
+    const e = typeof esc === 'function' ? esc : (s => String(s));
+    sugBox.innerHTML = hits.map((h, i) => '<button type="button" class="addr-sug-btn" data-i="' + i + '"><b>' + e(h.street) + '</b>' +
+      '<span>' + e([h.city, [h.state, h.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ')) + '</span></button>').join('');
+    // Picked before the box loses its focus (a tap's mousedown), so the pick is never lost.
+    sugBox.addEventListener('mousedown', ev => ev.preventDefault());
+    sugBox.addEventListener('click', ev => {
+      const btn = ev.target.closest('.addr-sug-btn');
+      if (btn) pick(b, hits[+btn.dataset.i]);
+    });
+    const field = b.street.closest('.field') || b.street.parentNode;
+    field.parentNode.insertBefore(sugBox, field.nextSibling);
+  }
+  // The pick fills the boxes as typing would (their own oninput runs: the
+  // Job tab's "unsaved" mark, a form's checks).
+  function pick(b, h) {
+    closeSug();
+    if (!h) return;
+    [['street', h.street], ['city', h.city], ['state', h.state], ['zip', h.zip]].forEach(([k, v]) => {
+      const box = b[k];
+      if (!box || !v) return;
+      box.value = v;
+      box.dataset.addrFilled = '1';
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      delete box.dataset.addrFilled;
+    });
+  }
+  async function ask(b, q) {
+    if (asked[q]) { showSug(b, asked[q]); return; }
+    let r = null;
+    try { r = await window.YDClaude.post('/geo/suggest', { q: q }); } catch (e) { return; }
+    asked[q] = (r && r.hits) || [];
+    if (b.street.value.trim() === q) showSug(b, asked[q]);
+  }
+  document.addEventListener('input', ev => {
+    const b = boxesOf(ev.target);
+    if (!b || ev.target.dataset.addrFilled) return;
+    clearTimeout(sugTimer);
+    const q = b.street.value.replace(/\s+/g, ' ').trim();
+    if (q.length < 5 || !/[a-z]/i.test(q) || !navigator.onLine || !window.YDClaude || !window.YDClaude.available ||
+        !window.YDClaude.available()) { closeSug(); return; }
+    sugTimer = setTimeout(() => ask(b, q), 400);
+  });
+  document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && sugBox) closeSug(); }, true);
+  document.addEventListener('focusout', ev => {
+    if (sugFor && ev.target === sugFor.street) setTimeout(() => { if (sugFor && document.activeElement !== sugFor.street) closeSug(); }, 150);
+  });
+
   window.YDAddr = { split: split, partsOf: partsOf, lineOf: lineOf, fieldsHtml: fieldsHtml, read: read, fill: fill };
 })();

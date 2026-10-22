@@ -1010,18 +1010,29 @@ def _geo(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path != "/geo/find":
+    if path not in ("/geo/find", "/geo/suggest"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
-    try:
+    # Addresses are typed on jobs and snow accounts -- and, for the
+    # suggestions as one is typed (addr.js), on contacts and suppliers too.
+    areas = ("snow", "jobs") if path == "/geo/find" else ("snow", "jobs", "contacts", "supplies")
+    who = None
+    for area in areas:
         try:
-            _caller(request, "snow", "change")
-        except PermissionError:
-            _caller(request, "jobs", "change")
-    except PermissionError as e:
-        return (json.dumps({"error": str(e)}), 401, json_headers)
+            who = _caller(request, area, "change")
+            break
+        except PermissionError as e:
+            why = e
+    if who is None:
+        return (json.dumps({"error": str(why)}), 401, json_headers)
     d = request.get_json(silent=True) or {}
+    if path == "/geo/suggest":
+        try:
+            return (json.dumps({"hits": geo.suggest(d.get("q"))}), 200, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("geo suggest failed:", e)
+            return (json.dumps({"error": "The map could not be reached just now"}), 502, json_headers)
     try:
         hit = geo.find(d.get("street"), d.get("city"), d.get("state") or "WI", d.get("zip"))
     except Exception as e:                          # noqa: BLE001

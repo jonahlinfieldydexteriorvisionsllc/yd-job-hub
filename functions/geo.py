@@ -10,6 +10,7 @@ Census does not know (a brand-new subdivision).
 Plain lookups, no Claude.
 """
 
+import re
 import time
 
 import requests
@@ -95,3 +96,69 @@ def find(street, city="", state="WI", zip_=""):
     if not reached:
         raise RuntimeError("The map services could not be reached")
     return None
+
+# ------------------------------------------------------------ as you type
+#
+# Jonah (21 Oct 2026): "link google maps so when typing in an address it can
+# be autofilled using google maps if possible." Google's needs a key with
+# billing on his account; until he wants that, OpenStreetMap's data through
+# Photon -- made for search-as-you-type, no key -- with what is near Madison
+# first. It often knows the road but not the house, so the house number
+# typed is kept on a road it finds.
+PHOTON_URL = "https://photon.komoot.io/api/"
+NEAR = {"lat": 43.07, "lon": -89.40}
+# Only southern Wisconsin -- Dane, Green, Rock and the counties around them
+# (minLon, minLat, maxLon, maxLat): a street of the same name in Orlando is
+# never the one meant.
+AREA = "-90.8,42.4,-88.4,43.9"
+STATE_CODES = {
+    "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR", "California": "CA", "Colorado": "CO",
+    "Connecticut": "CT", "Delaware": "DE", "District of Columbia": "DC", "Florida": "FL", "Georgia": "GA",
+    "Hawaii": "HI", "Idaho": "ID", "Illinois": "IL", "Indiana": "IN", "Iowa": "IA", "Kansas": "KS",
+    "Kentucky": "KY", "Louisiana": "LA", "Maine": "ME", "Maryland": "MD", "Massachusetts": "MA",
+    "Michigan": "MI", "Minnesota": "MN", "Mississippi": "MS", "Missouri": "MO", "Montana": "MT",
+    "Nebraska": "NE", "Nevada": "NV", "New Hampshire": "NH", "New Jersey": "NJ", "New Mexico": "NM",
+    "New York": "NY", "North Carolina": "NC", "North Dakota": "ND", "Ohio": "OH", "Oklahoma": "OK",
+    "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD",
+    "Tennessee": "TN", "Texas": "TX", "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
+    "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"}
+# "5020 Peach Bl...", "N1234 County Rd X": the house (or fire) number first.
+HOUSE_NO = re.compile(r"^\s*([NSEW]?\d+[A-Za-z]?)\s+\S")
+
+
+def suggest(q, limit=5):
+    """[{street, city, state, zip, lat, lng}] that begin like `q`, nearest
+    Madison first, in the US only. Raises when Photon cannot be reached."""
+    q = re.sub(r"\s+", " ", str(q or "")).strip()[:120]
+    if len(q) < 4:
+        return []
+    m = HOUSE_NO.match(q)
+    typed_no = m.group(1) if m else ""
+    r = requests.get(PHOTON_URL, timeout=6, headers={"User-Agent": UA},
+                     params=dict(NEAR, q=q, limit=12, lang="en", bbox=AREA))
+    r.raise_for_status()
+    out, seen = [], set()
+    for f in r.json().get("features") or []:
+        p = f.get("properties") or {}
+        if str(p.get("countrycode") or "").upper() != "US":
+            continue
+        road = p.get("street") or (p.get("name") if p.get("osm_key") == "highway" else "")
+        if not road:
+            continue
+        # Another house on the street is not the one being typed.
+        if typed_no and p.get("housenumber") and str(p["housenumber"]).lower() != typed_no.lower():
+            continue
+        no = str(p.get("housenumber") or typed_no or "").strip()
+        city = p.get("city") or p.get("town") or p.get("village") or p.get("locality") or ""
+        hit = {"street": (no + " " + road).strip(), "city": city, "state": STATE_CODES.get(p.get("state"), ""),
+               "zip": str(p.get("postcode") or "")[:10]}
+        key = (hit["street"].lower(), hit["city"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        coords = ((f.get("geometry") or {}).get("coordinates") or [None, None])
+        hit["lng"], hit["lat"] = coords[0], coords[1]
+        out.append(hit)
+        if len(out) >= limit:
+            break
+    return out
