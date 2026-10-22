@@ -242,12 +242,23 @@
     });
   }
 
+  // The estimate's pieces of work the crew's page lists (one with no words
+  // at all is not work to do).
+  const workLines = d => (((d && d.estimate) || {}).work || []).filter(w => w && (w.title || w.scope || w.crewNote)).slice(0, 40);
+  // Each piece of work as { id, title } -- the lines the crew tick off
+  // (workdone.js), the same ids and order as the page: the estimate's, then
+  // the invoice's change orders.
+  function lineList(d) {
+    return workLines(d).map((w, i) => ({ id: safe(w.id) || 'w' + i, title: noMoney(w.title).slice(0, 200) }))
+      .concat(changeWork(d || {}).map(c => ({ id: c.id, title: c.title })));
+  }
+
   // The work, laid out for doing it: each piece of work, the takeoff, the
   // soil to haul. The crew's copy carries it, and the Job tab draws the same
   // (estimate.js workWordsHtml) -- one version for the crew and the office.
   function workParts(d) {
     const est = d.estimate || {};
-    const lines = (est.work || []).filter(w => w && (w.title || w.scope || w.crewNote)).slice(0, 40);
+    const lines = workLines(d);
     const items = catalogue().items;
     const svcs = servicesReady();
     return {
@@ -547,12 +558,16 @@
   // copy made before lines had ids -- follows under its own heading.
   // opts: { key (the job, for what is folded), extra(w) (the Job tab's
   // own lines under a piece of work, for Jonah), title (the work's heading,
-  // as the Job tab says it) }.
+  // as the Job tab says it), ticks: { job, preview } (each piece of work's
+  // ✓ Done, workdone.js -- under its heading, and how far the job is over
+  // the lot) }.
   function workHtml(j, sec, opts) {
     opts = opts || {};
     const work = j.work || [], mats = j.materials || [];
     const ids = {}, howSeen = {};
     work.forEach(w => { if (w.id) ids[w.id] = true; });
+    const W = opts.ticks && opts.ticks.job && window.YDWorkDone ? window.YDWorkDone : null;
+    if (W) W.page(opts.ticks.job, W.linesOfCopy(j));
     const lines = work.map((w, i) => {
       const mine = w.id ? mats.filter(m => m.work === w.id) : [];
       const k = (opts.key || '') + '|' + (w.id || 'w' + i);
@@ -561,11 +576,13 @@
       const again = how && howSeen[how.name];
       if (how) howSeen[how.name] = true;
       const told = String(w.scope || '').trim();
-      return '<div class="cj-work">' +
+      const done = W && w.id ? W.isDone(opts.ticks.job, w.id) : false;
+      return '<div class="cj-work' + (done ? ' wd-work-done' : '') + '">' +
         '<div class="cj-work-h"><b>' + esc(w.title || 'Work') + '</b>' +
           (w.qty > 0 ? ' <span class="cj-big">' + esc(fmtQty(w.qty, w.unit)) + '</span>' : '') +
           (w.days ? ' <span class="muted">· ' + esc(fmtNum(w.days)) + ' crew-day' + (w.days === 1 ? '' : 's') + '</span>' : '') +
         '</div>' +
+        (W && w.id ? W.lineHtml(opts.ticks.job, w, { preview: !!opts.ticks.preview }) : '') +
         (w.crewNote ? '<div class="cj-crewnote"><div class="cj-crewnote-h">📋 On this job</div>' +
           pointsHtml(w.crewNote, false) + '</div>' : '') +
         (mine.length ? '<div class="cj-sub">Materials for this</div>' + matTable(mine) : '') +
@@ -584,7 +601,7 @@
     const haul = (j.spoil > 0 ? '<div class="cj-haul">🚛 About <b class="cj-m">' + esc(fmtNum(j.spoil)) + ' cu yd</b> of soil and debris to haul away</div>' : '') +
       (j.brush > 0 ? '<div class="cj-haul">🌿 About <b class="cj-m">' + esc(fmtNum(j.brush)) + ' cu yd</b> of brush — its own dumpster, no soil or rock in it</div>' : '');
     return sec('🎨 Paint on the ground', paintHtml()) +
-      sec(opts.title || '🛠 The work', lines + (lines ? haul : '')) +
+      sec(opts.title || '🛠 The work', (W && lines ? W.sumHtml(opts.ticks.job, W.linesOfCopy(j)) : '') + lines + (lines ? haul : '')) +
       sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest) : '') +
       (lines ? '' : sec('🚛 Haul away', haul));
   }
@@ -770,7 +787,7 @@
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
       rentalsHtml(j, days, preview) +
       toolsHtml(id, j, preview) +
-      workHtml(j, sec, { key: id }) +
+      workHtml(j, sec, { key: id, ticks: { job: id, preview: preview } }) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '') +
@@ -923,6 +940,15 @@
 
   // ------------------------------------------------------- the Jobs tab
 
+  // How far a job's work is ticked off (workdone.js), on its row: from the
+  // first tick, or once it is under way.
+  function progressHtml(j) {
+    if (!window.YDWorkDone) return '';
+    const p = YDWorkDone.progress(j.id, YDWorkDone.linesOfCopy(j));
+    return p.total && (p.any || j.status === 'inprogress') ? YDWorkDone.barHtml(p, 'wd-row') : '';
+  }
+  document.addEventListener('yd-workdone', () => { if (Object.keys(jobs).length) render(); });
+
   // In progress first, then booked; A to Z within each.
   function listed() {
     return Object.keys(jobs).map(id => Object.assign({ id: id }, jobs[id]))
@@ -938,7 +964,7 @@
     wrap.innerHTML = list.length ? list.map(j => '<button class="cj-row" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
         '<span class="cj-row-name"><b>' + esc(j.name) + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
           (j.what ? '<span class="cj-row-what">' + esc(j.what) + '</span>' : '') +
-          '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small></span>' +
+          '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small>' + progressHtml(j) + '</span>' +
         '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></button>').join('')
       : '<p class="empty-msg">No booked jobs right now.</p>';
   }
@@ -985,6 +1011,11 @@
     // from a job (workParts(job)), drawn as on the crew's page
     // (workPageHtml(parts, { key, extra, sec })) -- one version for everyone.
     workParts: workParts,
+    // Each piece of work on a job as { id, title }: the lines the crew
+    // tick off (workdone.js).
+    lines: lineList,
+    // How far a crew copy's work is, for Home's list of the crew's jobs.
+    progressHtml: progressHtml,
     workPageHtml: (parts, opts) => workHtml(parts || {}, (opts && opts.sec) ||
       ((title, body) => body ? '<div class="cj-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : ''), opts),
     // The crew's booked and in-progress jobs, as their Jobs tab lists them

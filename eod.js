@@ -441,7 +441,19 @@
         : '<p class="muted eod-none">No job clocked ' + (form.day === today() ? 'today' : 'that day') + ' — add the ones you worked on.</p>') +
       (others.length ? '<select class="eod-addjob" onchange="eodAddJob(this.value)" aria-label="Add a job">' +
         '<option value="">＋ Add a job…</option>' +
-        others.map(j => '<option value="' + safe(j.id) + '">' + esc(j.name) + '</option>').join('') + '</select>' : '');
+        others.map(j => '<option value="' + safe(j.id) + '">' + esc(j.name) + '</option>').join('') + '</select>' : '') +
+      tickedHtml(myUid(), form.day, form.jobs);
+  }
+  // The work this person ticked off that day on the job pages (workdone.js),
+  // job by job -- a start on "what got done", and Jonah sees it with the report.
+  function tickedHtml(uid, day, named) {
+    const list = window.YDWorkDone && YDWorkDone.tickedOn && uid ? YDWorkDone.tickedOn(day, uid) : [];
+    if (!list.length) return '';
+    const by = {}, order = [];
+    list.slice().reverse().forEach(t => { if (!by[t.jobId]) { by[t.jobId] = []; order.push(t.jobId); } by[t.jobId].push(t.title); });
+    const nameOf = id => ((named || []).find(j => j && j.id === id) || {}).name || YDWorkDone.jobName(id);
+    return '<div class="eod-ticked"><div class="eod-ticked-h">✅ Ticked off as done</div>' + order.map(id =>
+      '<div class="eod-ticked-row"><b>' + esc(nameOf(id)) + '</b> — ' + esc(by[id].join(', ')) + '</div>').join('') + '</div>';
   }
   window.eodAddJob = function (id) {
     if (!form || !id) return;
@@ -764,7 +776,7 @@
       : !owner && !opts.job && r.uid === myUid() && onList(myUid()) && r.day >= addDays(today(), -DRAFT_DAYS)
       ? '<div class="eod-rep-acts"><button type="button" class="link-btn" onclick="eodChange(\'' + safe(r.day) + '\')">Change it</button></div>' : '';
     return '<div class="eod-rep' + (unreadOne ? ' unread' : '') + '" id="eodRep_' + safe(r.id) + '">' +
-      '<div class="eod-rep-h">' + head + '</div>' + jobLine + rows + acts + '</div>';
+      '<div class="eod-rep-h">' + head + '</div>' + jobLine + (opts.job ? '' : tickedHtml(r.uid, r.day, jobs)) + rows + acts + '</div>';
   }
 
   function renderList() {

@@ -3939,6 +3939,11 @@ function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); schedul
 // JOB MANAGER MODAL
 // ═══════════════════════════════════════════════════════════
 function openManager() { populateServiceFilter(); renderJobList(); document.getElementById('managerModal').classList.add('active'); }
+// A piece of work ticked off (workdone.js): My Jobs' counts, while it is open.
+document.addEventListener('yd-workdone', () => {
+  const m = document.getElementById('managerModal');
+  if (m && m.classList.contains('active')) renderJobList();
+});
 function closeManager() { document.getElementById('managerModal').classList.remove('active'); }
 function toggleMonth(key) { collapsedMonths[key] = !collapsedMonths[key]; renderJobList(); }
 function populateServiceFilter() {
@@ -4026,8 +4031,13 @@ function renderJobList() {
   // 🌱 on a job with plants, and the care email it still owes (plantcare.js)
   // -- from the whole job, which the index does not carry.
   const full = {};
-  if (window.YDPlants) loadAllJobs().forEach(d => { full[d._id] = d; });
-  const plantBits = j => full[j.id] ? window.YDPlants.badge(full[j.id]) + window.YDPlants.owedChip(full[j.id]) : '';
+  if (window.YDPlants || window.YDWorkDone) loadAllJobs().forEach(d => { full[d._id] = d; });
+  const plantBits = j => full[j.id] && window.YDPlants ? window.YDPlants.badge(full[j.id]) + window.YDPlants.owedChip(full[j.id]) : '';
+  // How far the crew have ticked off its work (workdone.js).
+  const workBits = j => {
+    const p = full[j.id] && window.YDWorkDone ? YDWorkDone.ofJob(full[j.id]) : null;
+    return p ? YDWorkDone.barHtml(p, 'wd-row') : '';
+  };
   // Why a lost bid was lost, from the bid itself (the index does not carry
   // it); tapped, it can be changed -- or given, on one lost before reasons
   // were asked.
@@ -4048,7 +4058,8 @@ function renderJobList() {
           (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
         '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
           // A bid with no price yet said "$0.00", which read as a free job.
-          (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div></div>' +
+          (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div>' +
+        workBits(j) + '</div>' +
       '<div class="jl-acts">' +
       (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +
       (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + ordId(j.id) + '\')">MAKE IT A JOB</button>' : '') +

@@ -717,6 +717,38 @@ service cloud.firestore {
       allow write: if canChange('jobs');
     }
 
+    // The work on a job ticked off as it is done (workdone.js; Jonah, 22 Oct
+    // 2026: "a punch list for each service in the estimate so crew can mark
+    // when something is complete"). One document per job: lines = { line id:
+    // { done, uid, by, at, title } }, `last` = the one line a write changes.
+    // Anyone working reads them. Anyone working ticks or unticks a line --
+    // only that one line per write, only as themselves -- on a job with a
+    // crew page (booked or in progress, not hidden); whoever may change jobs,
+    // on any job. Removing the lot is for whoever may change jobs.
+    function tickOk(t) {
+      return t is map && t.keys().hasOnly(['done', 'uid', 'by', 'at', 'title'])
+        && t.done is bool && t.uid == request.auth.uid
+        && t.by is string && t.by.size() <= 80
+        && t.at is string && t.at.size() <= 40
+        && t.get('title', '') is string && t.get('title', '').size() <= 200;
+    }
+    match /workDone/{jobId} {
+      allow read: if isStaff();
+      allow create, update: if isStaff()
+        && (canChange('jobs') || exists(/databases/$(database)/documents/jobCrew/$(jobId)))
+        && request.resource.data.keys().hasOnly(['lines', 'last', 'updatedAt'])
+        && request.resource.data.updatedAt is string && request.resource.data.updatedAt.size() <= 40
+        && request.resource.data.last is string && request.resource.data.last.size() > 0
+        && request.resource.data.last.size() <= 100
+        && request.resource.data.lines is map && request.resource.data.lines.size() <= 100
+        && ((resource == null
+             && request.resource.data.lines.keys().hasOnly([request.resource.data.last]))
+          || (resource != null
+             && request.resource.data.lines.diff(resource.data.lines).affectedKeys().hasOnly([request.resource.data.last])))
+        && tickOk(request.resource.data.lines[request.resource.data.last]);
+      allow delete: if canChange('jobs');
+    }
+
     // Photos on a job (jobphotos.js; Jonah, 12 Oct 2026: the crew upload
     // photos on the job page, each marked before / during / after, showing
     // who took it). The picture is in Cloud Storage (storage.rules); this is

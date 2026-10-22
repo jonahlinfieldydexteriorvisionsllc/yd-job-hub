@@ -1023,6 +1023,24 @@
     const n = Number(r.balance);
     return isFinite(n) ? n : null;
   }
+  // How far the crew have ticked off the job's work (workdone.js): "3 of 5
+  // done" over a thin bar. In the Punch list column, what is still not
+  // ticked -- the punch list itself. Every piece ticked on a job not yet
+  // finished: Jonah is asked, never answered for (finishing still wants
+  // its photos -- moveJob asks for them).
+  function workDoneHtml(j, col) {
+    const p = window.YDWorkDone ? YDWorkDone.ofJob(j) : null;
+    if (!p) return '';
+    const stop = 'event.stopPropagation(); ';
+    return '<div class="bd-card-line bd-wd">' + YDWorkDone.barHtml(p, 'wd-card') + '</div>' +
+      (col === 'punchList' && !p.all && p.left.length
+        ? '<div class="bd-card-line bd-wd-left">Still to do: ' + esc(p.left.slice(0, 4).join(', ')) +
+          (p.left.length > 4 ? ' and ' + (p.left.length - 4) + ' more' : '') + '</div>' : '') +
+      (p.all && p.underWay
+        ? '<div class="bd-card-line bd-wd-all">Everything is ticked — mark it finished?' +
+          (movesJobs() ? ' <button type="button" class="bd-card-act strong" draggable="false" onclick="' + stop +
+            'bdMoveJob(\'' + safeId(j._id) + '\', \'jobs\', \'toInvoice\')">Mark it finished</button>' : '') + '</div>' : '');
+  }
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     const days = daysSince(since);
@@ -1054,6 +1072,7 @@
         (window.YDPlants ? YDPlants.badge(j) : '') + '</div>' +
       (showWhere ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
+      (board.id === 'jobs' ? workDoneHtml(j, col) : '') +
       // Finished, with plants, and the care email not done yet.
       (window.YDPlants && YDPlants.owed(j) ? '<div class="bd-card-line bd-care">🌱 Care email owed</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
@@ -3191,6 +3210,8 @@
     render();
   });
   document.addEventListener('yd-jobs-changed', redrawIfVisible);
+  // A piece of work ticked off (workdone.js): the Jobs board's counts.
+  document.addEventListener('yd-workdone', redrawIfVisible);
   // This person's own record has come in (remind.js): which cards are theirs
   // can change with it -- on a crew phone it is how their own cards are known.
   document.addEventListener('yd-remind-me', redrawIfVisible);

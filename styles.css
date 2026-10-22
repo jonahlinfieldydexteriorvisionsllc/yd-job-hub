@@ -5234,3 +5234,39 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     .eod-acts .btn { flex:1 1 100%; }
     .eod-who { grid-template-columns:1fr 1fr; }
   }
+
+  /* Work done (22 Oct 2026, workdone.js): each piece of work on the crew's
+     page ticked off with one big button; "3 of 5 done" over a thin bar
+     wherever a job is shown. */
+  .wd-line { display:flex; align-items:center; flex-wrap:wrap; gap:6px 10px; margin:8px 0 6px; }
+  .wd-btn { flex:1 1 100%; display:flex; align-items:center; justify-content:center; gap:10px; min-height:50px;
+    font:700 16px 'DM Sans',sans-serif; text-transform:none; letter-spacing:0; border:2px dashed var(--pos); color:var(--pos);
+    background:transparent; border-radius:10px; }
+  .wd-btn:disabled { opacity:.6; cursor:default; }
+  .wd-box { width:22px; height:22px; border:2px solid var(--pos); border-radius:5px; flex:none; }
+  .wd-line.on { padding:8px 12px; border-radius:10px; background:var(--pos-soft, #d8ecdf); }
+  .wd-done { font-weight:800; font-size:15px; color:var(--pos); }
+  .wd-who { font-size:13.5px; color:var(--text); }
+  .wd-undo { margin-left:auto; font-size:13px; min-height:36px; }
+  .cj-work.wd-work-done { border-left:4px solid var(--pos); padding-left:10px; }
+  .wd-prog { display:inline-flex; flex-direction:column; gap:3px; min-width:120px; max-width:220px; }
+  .wd-prog-w { font-size:12.5px; font-weight:700; color:var(--pos); white-space:nowrap; }
+  .wd-bar { display:block; height:5px; border-radius:3px; background:var(--border); overflow:hidden; }
+  .wd-bar i { display:block; height:100%; background:var(--pos); border-radius:3px; }
+  .wd-prog.wd-row { display:flex; margin-top:4px; }
+  .wd-prog.wd-card { display:flex; max-width:none; }
+  .wd-sum { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; margin:2px 0 8px; }
+  .wd-sum .wd-prog { min-width:180px; }
+  .wd-sum .wd-prog-w { font-size:14px; }
+  .wd-sum-all { font-size:13px; font-weight:700; color:var(--pos); }
+  .bd-wd-left { font-size:11.5px; color:var(--text); }
+  .bd-wd-all { font-size:11.5px; font-weight:700; color:var(--pos); }
+  .eod-ticked { margin:10px 0 2px; padding:8px 10px; border-radius:8px; background:var(--pos-soft, #d8ecdf); font-size:13.5px; }
+  .eod-ticked-h { font-weight:700; color:var(--pos); margin-bottom:2px; }
+  .eod-ticked-row { padding:1px 0; }
+  /* The Job tab's Work done panel (an open estimate on a job under way):
+     the office's ticks are a size smaller than the crew's. */
+  .est-wd { margin:0 0 14px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface-2); }
+  .est-wd-line { padding:6px 0; border-top:1px solid var(--border); }
+  .est-wd-line .wd-line { margin:4px 0 0; }
+  .est-wd .wd-btn, .est-words .wd-btn { flex:0 1 auto; min-height:38px; font-size:14px; padding:4px 14px; }

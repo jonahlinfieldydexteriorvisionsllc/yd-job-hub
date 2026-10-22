@@ -488,6 +488,7 @@
       jumpHtml() +
       (settled() ? '<div class="est-refold"><button class="link-btn ro-ok" onclick="estUnfold(false)">▴ Fold the estimate back to one line</button></div>' : '') +
       fromQbHtml(r, ro) +
+      workDonePanelHtml() +
       head +
 
       ((est.questions || []).length ? '<div class="est-questions"><b>Claude needs to know:</b><ul>' +
@@ -661,12 +662,46 @@
     const q = est.fromQb;
     const from = q ? 'QuickBooks ' + (q.kind === 'invoice' ? 'invoice' : 'estimate') + (q.docNumber ? ' #' + esc(q.docNumber) : '') : 'the estimate';
     const mine = window.YDAuth && window.YDAuth.isOwner;
+    // Each piece of work ticked off by the crew (workdone.js): who and when,
+    // and the office may tick or untick one too (wdWanted).
+    const ticks = wdWanted() ? { job: currentJobId } : null;
     return '<div class="est-words">' +
-      C.workPageHtml(parts, { key: 'job:' + (currentJobId || ''), extra: mine ? howTodoHtml : null,
+      C.workPageHtml(parts, { key: 'job:' + (currentJobId || ''), extra: mine ? howTodoHtml : null, ticks: ticks,
         title: '🛠 The work <span class="est-words-from">— as the crew read it; what the customer was told (' + from + ') under each line</span>',
         sec: (title, body) => body ? '<div class="est-words-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '' }) +
       crewBtnHtml() +
     '</div>';
+  }
+  // The work ticked off by the crew (workdone.js) at the top of an open
+  // estimate on a job past bidding: each piece, who ticked it and when, and
+  // a tick or untick by hand. (The folded estimate has the same under each
+  // line of the work -- workWordsHtml.)
+  // A job booked or under way has its ticks; a finished one only if any
+  // were made (an old job's lines were never ticked -- a row of buttons
+  // there would only be noise). Not a bid: nothing is being done yet.
+  // (An older job's ticks are read once -- want -- and it is drawn again.)
+  function wdWanted() {
+    const W = window.YDWorkDone;
+    if (!W || !currentJobId || typeof jobStatus === 'undefined' || typeof normStatus !== 'function') return false;
+    const st = normStatus(jobStatus);
+    if (st === 'quoting') return false;
+    W.want(currentJobId);
+    return st === 'booked' || st === 'inprogress' || W.has(currentJobId);
+  }
+  document.addEventListener('yd-workdone', () => {
+    if (!el('estimateWrap') || !P() || snowNow() || !jobShown()) return;
+    const want = wdWanted() && !!window.YDCrewJobs && YDCrewJobs.lines(jobLike()).length > 0;
+    if (!!el('estimateWrap').querySelector('[data-wd]') === want) return;
+    if (!typingHere()) render(); else stale = true;
+  });
+  function workDonePanelHtml() {
+    const W = window.YDWorkDone, C = window.YDCrewJobs;
+    if (!C || !C.lines || !wdWanted()) return '';
+    const lines = C.lines(jobLike());
+    if (!lines.length) return '';
+    W.page(currentJobId, lines);
+    return '<div class="est-wd"><div class="cj-h">✅ Work done — ticked off by the crew</div>' + W.sumHtml(currentJobId, lines) +
+      lines.map(w => '<div class="est-wd-line"><b>' + esc(w.title || 'Work') + '</b>' + W.lineHtml(currentJobId, w) + '</div>').join('') + '</div>';
   }
   // Claude writing the crew's notes for this job (crewWrite), or the way to
   // ask it to: the lines with none, and its own again -- never his.

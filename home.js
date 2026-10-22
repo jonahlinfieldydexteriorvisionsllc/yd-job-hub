@@ -497,11 +497,25 @@
           capped('crewB', takenLate.map(x => todoRow(x, true)).concat(takenAny.map(x => todoRow(x, false)))) : '')) +
       (now ? sub('⏱️ On the clock now', now.live.length || null) +
         (onClock.length ? capped('onNow', onClock) : empty('Nobody is on the clock.')) : '') +
+      tickedTodayHtml() +
       eodCrewHtml();
     // The crew's count by the same rule and words as My day's (calendar.js
     // tally): their tasks, at a set time or not, and the ones from earlier.
     const badge = now && now.live.length ? now.live.length + ' working' : countWords(d.crewCount || null);
     return card('crew', title, badge, link, body);
+  }
+
+  // The work the crew ticked off today (workdone.js), newest first: who,
+  // what, on which job. For whoever sees the jobs (a tap opens the job).
+  function tickedTodayHtml() {
+    if (!seesJobs() || !window.YDWorkDone || !YDWorkDone.tickedOn) return '';
+    const list = YDWorkDone.tickedOn(today());
+    if (!list.length) return '';
+    const names = {};
+    jobs().forEach(j => { names[j._id] = nameOf(j); });
+    return sub('✅ Work ticked off today', list.length) + capped('ticked', list.map(t => line('✅',
+      '<b>' + esc(String(t.by || 'Someone').split(/\s+/)[0]) + '</b> — ' + esc(t.title),
+      esc(names[t.jobId] || 'A job'), esc(YDWorkDone.whenWords(t.at)), "homeOpenJob('" + safe(t.jobId) + "')")), 4);
   }
 
   // The owner's: whose end of day is in today, of those on the list who
@@ -532,9 +546,11 @@
         : !signedIn() || statusOf(j) === 'booked' ? ''
         : '<small class="hm-when none">No more days on the calendar</small>';
       const about = [whereOf(j), servicesOf(j)].filter(Boolean).join(' · ');
+      // How far the crew have ticked the work off (workdone.js).
+      const p = window.YDWorkDone ? YDWorkDone.ofJob(j) : null;
       return '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
         '<span class="hm-job-m">' + jobNameHtml(nameOf(j), numOf(j)) +
-          (about ? '<small>' + esc(about) + '</small>' : '') + when + '</span>' +
+          (about ? '<small>' + esc(about) + '</small>' : '') + when + (p ? YDWorkDone.barHtml(p, 'wd-row') : '') + '</span>' +
         '<span class="hm-job-r">' +
           (priceOf(j) ? '<span class="hm-money">' + fmtMoney(priceOf(j)) + '</span>' : '') + '</span></button>';
     };
@@ -678,6 +694,14 @@
         esc(r.at ? new Date(r.at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : ''),
         "openEodReports('" + safe(r.id) + "')")));
     }
+    // A job whose every piece of work is ticked off (workdone.js): mark it
+    // finished? Never done for him -- the Jobs board's card has the button
+    // (which asks for the photos first).
+    if (can('jobs', 'change') && window.YDWorkDone && YDWorkDone.allDone) {
+      any = true;
+      YDWorkDone.allDone().forEach(x => rows.push(line('✅', '<b>Everything on ' + esc(nameOf(x.j)) + ' is ticked</b>',
+        'All ' + x.p.total + ' pieces of work done — mark it finished?', '', "homeBoard('jobs')")));
+    }
     if (can('hours', 'change') && window.YDClock && YDClock.toDecide) {
       any = true;
       const t = YDClock.toDecide();
@@ -759,6 +783,7 @@
           '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small>' +
           (mineToday[j.id] ? '<small class="hm-when you">👷 You’re on it today</small>'
             : n ? '<small class="hm-when">📅 ' + esc(dayWords(n.day)) + (n.time ? ' · ' + esc(n.time) : '') + '</small>' : '') +
+          (YDCrewJobs.progressHtml ? YDCrewJobs.progressHtml(j) : '') +
         '</span><span class="hm-job-r"><span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></span></button>';
     });
     return card('cjobs', '🧰 Jobs', list.length || '', ['Jobs', "switchTab('crewjobs')"],
@@ -932,7 +957,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 
