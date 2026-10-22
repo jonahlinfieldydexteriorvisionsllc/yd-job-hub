@@ -1279,6 +1279,14 @@
     margin:-4px -2px -2px 0; opacity:.45; filter:grayscale(1); min-width:28px; min-height:28px; }
   .bd-card-del:hover, .bd-card-del:focus-visible { opacity:1; filter:none; }
   @media (pointer: coarse) { .bd-card-del { opacity:.7; min-width:36px; min-height:36px; } }
+  /* A bid's own 🗑 (boards.js jobCardHtml), at the right end of its foot as
+     on stored cards -- a job card has no faces there to push it over. */
+  .bd-card-del.bd-end { margin-left:auto; }
+  /* An open bid with a QuickBooks estimate: why it has no Delete
+     (boards.js bidTiedHtml). */
+  .bd-qb-tied { font-size:13px; margin:14px 0 0; }
+  .bd-qb-tied .link-btn { background:none; border:0; padding:0 2px; min-height:36px; color:var(--brand-ink);
+    font:inherit; text-decoration:underline; cursor:pointer; }
   /* Done: delete every finished card on the board for good */
   .bd-del-done { border-style:solid; color:#ffb3a1; border-color:rgba(255,179,161,.55); }
   .bd-del-done:hover, html[data-night] .bd-del-done:hover { color:#fff; border-color:#fff; background:rgba(200,73,43,.35); }

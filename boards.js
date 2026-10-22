@@ -940,6 +940,65 @@
     if (!movesJobs()) return;
     moveJob(jobId, 'bids', 'lost');
   };
+
+  // The bid's QuickBooks estimate, when it has a real one. One made in
+  // Intuit's TEST company (env 'sandbox' -- a real bid went there on 13 Oct
+  // 2026) is no estimate any customer saw. A record with no company on it
+  // counts as real: it cannot be told apart, and keeping Delete off by
+  // mistake only leaves Lost.
+  function qbEstimateOf(j) {
+    const q = j && j.qbEstimate;
+    return q && q.id && q.env !== 'sandbox' ? q : null;
+  }
+  // Jonah, 22 Oct 2026: "bids should be deletable from their card on the
+  // board even after being marked sent unless theres an actual qb estimate
+  // tied to it." Whatever column it is in, while it is still a bid: a Won
+  // card is a booked job now (deleted from My Jobs like any job). One with
+  // a QuickBooks estimate is what the customer has, or will have, in their
+  // email -- it is lost, not deleted, unless that estimate goes first.
+  function bidDeletable(j) {
+    return movesJobs() && QUOTING_STAGES.indexOf(bidColumn(j)) !== -1 && !qbEstimateOf(j);
+  }
+  // To Recently deleted -- the app's own delete (app.js deleteJob), with its
+  // Undo bar and Restore from the foot of My Jobs; never deleted for good.
+  // `goneFromQb`: QuickBooks has just said its estimate is no longer there
+  // (bdBidGoneFromQb).
+  window.bdDeleteBid = async function (jobId, goneFromQb) {
+    const ok = j => !!j && (goneFromQb ? movesJobs() && QUOTING_STAGES.indexOf(bidColumn(j)) !== -1 : bidDeletable(j));
+    const j = jobsList().find(x => x._id === jobId);
+    if (!ok(j) || typeof deleteJob !== 'function') return;
+    const name = String(j.customerName || '').trim();
+    const days = typeof DELETED_KEEP_DAYS === 'number' ? DELETED_KEEP_DAYS : 30;
+    if (!(await ydConfirm((goneFromQb ? 'QuickBooks no longer has its estimate. ' : '') +
+        'It goes to Recently deleted at the foot of My Jobs, and can be brought back from there for ' + days + ' days.',
+        { title: 'Delete the bid' + (name ? ' for ' + name : '') + '?', ok: 'Delete', danger: true }))) return;
+    // As it is now: it may have been put in QuickBooks, or moved on, on
+    // another device while that was asked.
+    const now = jobsList().find(x => x._id === jobId);
+    if (!ok(now)) { showToast('That bid has changed — have another look before deleting it'); return; }
+    closeBoardModal();
+    if (deleteJob(jobId)) render();
+  };
+  // "Delete the estimate in QuickBooks first": nothing tells Job Hub an
+  // estimate was deleted there -- the bid keeps its id -- so one look
+  // settles it. Only QuickBooks answering that it has no such estimate
+  // counts; a look that failed, or one at the other company (an `error`),
+  // does not. No job id goes with it: this is a look only, never a change
+  // to the job (the Job tab's check also books a yes).
+  window.bdBidGoneFromQb = async function (jobId) {
+    const j = jobsList().find(x => x._id === jobId);
+    const q = j && qbEstimateOf(j);
+    if (!q || !movesJobs() || !ydCan('billing', 'change') || !window.YDClaude || !YDClaude.post) return;
+    const num = q.docNumber ? ' #' + q.docNumber : '';
+    if (!navigator.onLine) { showToast('No signal — QuickBooks can be asked once you are back online'); return; }
+    showToast('Asking QuickBooks about estimate' + num + '…');
+    let r;
+    try { r = await YDClaude.post('/qb/estimate-status', { estimateId: q.id, env: q.env || null }); }
+    catch (e) { showToast('QuickBooks: ' + ((e && e.message) || e)); return; }
+    if (r && r.missing && !r.error) { window.bdDeleteBid(jobId, true); return; }
+    showToast(r && r.error ? r.error : 'QuickBooks still has estimate' + num +
+      ' — delete it there first, or move the bid to Lost', 6000);
+  };
   // A one-tap move from a button on a job's card.
   window.bdMoveJob = function (jobId, boardId, col) {
     if (!movesJobs() || (boardId !== 'bids' && boardId !== 'jobs')) return;
@@ -1023,6 +1082,12 @@
         (price ? '<span class="bd-money">' + fmtMoney(price) + '</span>'
           : perPushText(j) ? '<span class="bd-money">' + perPushText(j) + '</span>' : '') +
         ageHtml(board, j, col, days, late) +
+        // Its own 🗑, as every stored card has (Jonah, 13 Oct: "all cards
+        // should have a delete button visible without actually clicking
+        // edit") -- on a bid that may be deleted (bidDeletable).
+        (board.id === 'bids' && bidDeletable(j)
+          ? '<button type="button" class="bd-card-del bd-end" title="Delete this bid" aria-label="Delete this bid" draggable="false" ' +
+            'onclick="' + stop + 'bdDeleteBid(\'' + safeId(j._id) + '\')">🗑</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -1379,13 +1444,32 @@
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
       '<div class="bd-move-label">Card colour</div>' +
       '<div onchange="setJobCardColor(\'' + safeId(jobId) + '\')">' + colorPickHtml('jcColor', j.cardColor) + '</div>' +
+      (boardId === 'bids' ? bidTiedHtml(j) : '') +
       '<div class="field-actions">' +
         (movesJobs() ? '<button class="btn btn-filled" onclick="editJobCard(\'' + safeId(boardId) + '\', \'' + safeId(jobId) + '\')">Edit</button>' : '') +
         '<button class="btn' + (movesJobs() ? ' btn-sm' : ' btn-filled') + '" onclick="openJobFromBoard(\'' + safeId(jobId) + '\')">' +
           (boardId === 'bids' ? 'Open the bid' : 'Open the job') + '</button>' +
+        // Beside Close, as on every stored card's window (bdDeleteOpen).
+        (boardId === 'bids' && bidDeletable(j)
+          ? '<button class="btn btn-sm" onclick="bdDeleteBid(\'' + safeId(jobId) + '\')">🗑 Delete</button>' : '') +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
   };
+  // Why an open bid has no Delete: it is a QuickBooks estimate. Said in one
+  // line where the Delete would be, so its absence is not a puzzle -- with
+  // the way out (Lost is in the Move to row above), and, for whoever may use
+  // QuickBooks, a look for when the estimate has been deleted there.
+  function bidTiedHtml(j) {
+    const q = qbEstimateOf(j);
+    if (!q || !movesJobs() || QUOTING_STAGES.indexOf(bidColumn(j)) === -1) return '';
+    const num = String(q.docNumber || j.estimateNumber || '').trim();
+    const yes = acceptedToBook(j);
+    return '<div class="hint bd-qb-tied">🧾 No Delete: it’s QuickBooks estimate' + (num ? ' #' + esc(num) : '') +
+        (yes ? ', accepted there — book it, or move it to Lost.' : ' — move it to Lost, or delete the estimate in QuickBooks first.') +
+      (ydCan('billing', 'change') && !yes
+        ? ' <button type="button" class="link-btn" onclick="bdBidGoneFromQb(\'' + safeId(j._id) + '\')">Deleted it in QuickBooks? Check</button>' : '') +
+    '</div>';
+  }
 
   // Editing a bid or job from its card (Jonah, 9 Oct 2026: "bid cards need
   // to be editable"): who, where, how to reach them, what work, the notes --
