@@ -1689,6 +1689,13 @@
     color:var(--accent-dark, #8a6216); white-space:nowrap; }
   .cj-crewnote { margin:8px 0 2px; padding:8px 10px; border-left:3px solid var(--accent); border-radius:6px; background:var(--surface-2); }
   .cj-crewnote-h { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:2px; }
+  /* Rentals to pick up (crewjobs.js rentalsHtml): each its own card, so it
+     is not read past as one more material. */
+  .cj-rental { margin:8px 0; padding:10px 12px; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:8px; background:var(--surface); }
+  .cj-rental-h { font-size:15.5px; margin-bottom:4px; }
+  .cj-rental-where { font-size:14px; line-height:1.45; margin-bottom:8px; }
+  .cj-rental-ok { font-size:12px; font-weight:700; color:var(--pos); white-space:nowrap; }
+  .cj-rental .cj-go { margin-bottom:0; }
   .cj-sub { font-size:12px; font-weight:700; color:var(--muted); margin:10px 0 2px; }
   .cj-m { font-weight:700; color:var(--brand-ink); }
   html[data-night] .cj-m { color:var(--brand-2); }

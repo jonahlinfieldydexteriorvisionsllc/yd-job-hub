@@ -173,6 +173,44 @@
       name: noMoney(t.name).slice(0, 80), kind: t.eq ? noMoney(t.kindName).slice(0, 40) : '', qty: t.qty || null }));
   }
 
+  // ------------------------------------------------ rentals
+  //
+  // Jonah (21 Oct 2026): "rentals always need to be specially noted for the
+  // crew with where to pick them up and for how long." A rental (Supplies
+  // kind 'rental': the mini-excavator, the jumping jack) is on the estimate
+  // and priced in, never shown to the customer (pricing.js NOT_LISTED); here
+  // it gets its own section on the crew's page instead of a line among the
+  // materials: what, how long, and the shop -- name, address, phone, hours
+  // -- with directions. Whether it is reserved (its order line ticked).
+  const isRental = (m, items) => {
+    const it = m && m.supplyId ? items[m.supplyId] : null;
+    return String((it && it.category) || (m && m.category) || '').toLowerCase() === 'rental';
+  };
+  function shopOf(vid) {
+    const v = vid ? (catalogue().vendors || {})[vid] : null;
+    if (!v) return null;
+    return { name: String(v.name || '').slice(0, 80), address: String(v.address || '').slice(0, 200),
+             phone: String(v.phone || '').slice(0, 40), hours: String(v.hours || '').slice(0, 120) };
+  }
+  function rentalsEntry(d, items) {
+    const est = d.estimate || {}, out = [], seen = {};
+    const orderOf = sid => (d.orderItems || []).find(o => o && o.supplyId === sid);
+    (est.materials || []).filter(m => m && m.name && isRental(m, items)).slice(0, 20).forEach(m => {
+      const it = m.supplyId ? items[m.supplyId] : null;
+      const o = m.supplyId ? orderOf(m.supplyId) : null;
+      if (m.supplyId) seen[m.supplyId] = true;
+      out.push({ name: noMoney((it && it.name) || m.name).slice(0, 200), days: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
+                 shop: shopOf(it && it.vendorId), reserved: !!(o && o.ordered) });
+    });
+    // One put on the order list by hand, not on the estimate.
+    (d.orderItems || []).filter(o => o && o.name && o.supplyId && !seen[o.supplyId] && isRental(o, items)).slice(0, 10).forEach(o => {
+      const it = items[o.supplyId];
+      out.push({ name: noMoney(it.name || o.name).slice(0, 200), days: numOr(o.qty), unit: noMoney(o.per || '').slice(0, 30),
+                 shop: shopOf(it.vendorId), reserved: !!o.ordered });
+    });
+    return out;
+  }
+
   // What a crew member may know about a job -- nothing else is copied.
   function crewEntry(d) {
     const est = d.estimate || {};
@@ -203,16 +241,18 @@
       })),
       // The takeoff: how much of each, in the unit it is measured in, and
       // which piece of work it is for (an id from `work`; '' the whole job).
-      materials: (est.materials || []).filter(m => m && m.name).slice(0, 120)
+      // (Rentals have their own section: `rentals`.)
+      materials: (est.materials || []).filter(m => m && m.name && !isRental(m, items)).slice(0, 120)
         .map(m => ({ name: noMoney(m.name).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
                      plant: !!m.plant, tree: m.plant && (m.tree === 'single' || m.tree === 'multi') ? m.tree : '',
                      work: safe(workFor(m, lines, items)),
                      how: m.delivery === 'pickup' ? 'pick up' : m.delivery === 'rides' ? 'rides on a delivery' : '' })),
       // Soil and debris to haul away (cu yd), as the estimate has it.
       spoil: numOr(est.spoilCuYd),
-      order: (d.orderItems || []).filter(o => o && o.name).slice(0, 120)
+      order: (d.orderItems || []).filter(o => o && o.name && !isRental(o, items)).slice(0, 120)
         .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
+      rentals: rentalsEntry(d, items),
     };
     if (servicesReady()) out.tools = toolsEntry(d);
     return out;
@@ -436,6 +476,38 @@
       (lines ? '' : sec('🚛 Haul away', haul));
   }
 
+  // ------------------------------------------------ rentals to pick up
+  //
+  // Each rental with how long it is for, the shop it comes from (Directions
+  // and a call button, a gloved thumb's size, as for the job), its hours,
+  // and -- when the job is on the schedule -- the day to have it by: the
+  // job's first day ahead. A shop with no address in Supplies says so, so
+  // nobody drives off guessing which branch.
+  const dirTo = a => 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(a);
+  function rentalsHtml(j, days, preview) {
+    const list = Array.isArray(j.rentals) ? j.rentals : [];
+    if (!list.length) return '';
+    const first = (days || []).find(x => x.jobDay) || null;
+    const when = first ? new Date(first.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+    return '<div class="cj-sec cj-rentals"><div class="cj-h">🚜 Rentals to pick up</div>' + list.map(r => {
+      const s = r.shop || {}, tel = String(s.phone || '').replace(/[^0-9+]/g, '');
+      const long = r.days > 0 ? fmtQty(r.days, /^(day|days|daily|per day)$/i.test(r.unit || '') || !r.unit ? (r.days === 1 ? 'day' : 'days') : r.unit) : '';
+      return '<div class="cj-rental">' +
+        '<div class="cj-rental-h"><b>' + esc(r.name) + '</b>' + (long ? ' <span class="cj-big">' + esc(long) + '</span>' : '') +
+          (r.reserved ? ' <span class="cj-rental-ok">✓ reserved</span>' : '') + '</div>' +
+        '<div class="cj-rental-where">Pick up at <b>' + esc(s.name || 'the rental shop') + '</b>' +
+          (s.address ? ' — ' + esc(s.address) : ' <span class="warn-text">· no address for it in Supplies yet' +
+            (preview ? ' (Supplies → the supplier → Edit supplier)' : ' — ask Jonah which one') + '</span>') +
+          (s.hours ? '<div class="muted">Open ' + esc(s.hours) + '</div>' : '') +
+          (when ? '<div>Have it for <b>' + esc(when) + '</b> — the first day on the schedule</div>' : '') + '</div>' +
+        (s.address || tel ? '<div class="cj-go">' +
+          (s.address ? '<a class="btn cj-go-btn" href="' + esc(dirTo(s.address)) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
+          (tel ? '<a class="btn cj-go-btn" href="tel:' + esc(tel) + '">📞 Call<span class="cj-go-sub">' + esc(s.phone) + '</span></a>' : '') +
+        '</div>' : '') +
+      '</div>';
+    }).join('') + '</div>';
+  }
+
   // ------------------------------------------------ the tools to bring
   //
   // Jonah (16 Oct 2026): the tool list "viewable by the crew on the front
@@ -583,6 +655,7 @@
           esc(new Date(x.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) + '</b>' +
           (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') +
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
+      rentalsHtml(j, days, preview) +
       toolsHtml(id, j, preview) +
       workHtml(j, sec) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>

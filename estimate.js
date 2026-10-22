@@ -1228,7 +1228,7 @@
                                              : 'Order ' + P().qtyText(l.orderQty, l.per)) +
             (l.wastePct ? ' (+' + fmtQ(l.wastePct) + '% waste)' : '') + partUseText(l) + (l.specialOrder ? ' · special order' : '') +
             // A rental is priced in, never named to the customer (pricing.js NOT_LISTED).
-            (l.category === 'rental' ? ' · not shown to the customer' : '')) : '';
+            (l.category === 'rental' ? ' · not shown to the customer — on the crew’s page with where to pick it up' : '')) : '';
       }
     });
     const toSource = canSource() ? r.takeoff.filter(l => unpriced(l) && !(found[foundKey(l.id)] || {}).busy) : [];
