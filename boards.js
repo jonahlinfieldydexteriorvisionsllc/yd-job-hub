@@ -491,6 +491,31 @@
         !acceptedToBook(b.j) && !turnedDown(b.j))
       .sort((a, b) => b.days - a.days);
   }
+  // Sent and no answer: to Follow up by itself (Jonah, 21 Oct 2026: "sent -
+  // waiting cards on jobs board should auto move to follow up after a
+  // couple days"). On the owner's device once the jobs are the server's,
+  // through the app's own save (sync.js patchJob, as a bid accepted in
+  // QuickBooks books itself). Once per bid (autoFollowUpAt): one he puts
+  // back in "Sent — waiting" by hand -- "give me a week" -- stays there.
+  const FOLLOW_UP_AFTER_DAYS = 2;
+  let followTimer = 0;
+  function autoFollowUp() {
+    const a = window.YDAuth;
+    if (!a || !a.isOwner || !movesJobs() || !window.YDSync || !YDSync.patchJob || !YDSync.jobsHeard || !YDSync.jobsHeard()) return;
+    const due = jobsList().filter(j => bidColumn(j) === 'sent' && !j.autoFollowUpAt && !j.deletedAt &&
+      bidDays(j) >= FOLLOW_UP_AFTER_DAYS && !acceptedToBook(j) && !turnedDown(j));
+    if (!due.length) return;
+    const at = nowIso();
+    let n = 0;
+    due.forEach(j => {
+      if (YDSync.patchJob(j._id, { bidStage: 'followUp', bidStageAt: at, autoFollowUpAt: at },
+        'Sent ' + FOLLOW_UP_AFTER_DAYS + ' days with no answer')) n++;
+    });
+    if (n) showToast('📨 ' + n + ' bid' + (n === 1 ? '' : 's') + ' sent ' + FOLLOW_UP_AFTER_DAYS +
+      '+ days ago with no answer moved to Follow up', 6000);
+  }
+  document.addEventListener('yd-jobs-changed', () => { clearTimeout(followTimer); followTimer = setTimeout(autoFollowUp, 1500); });
+
   // Bids sat in "Bid to send" long enough that writing them is late.
   const lateToWrite = j => bidColumn(j) === 'toSend' && bidDays(j) >= WRITE_AFTER_DAYS && !turnedDown(j);
   function toWrite() {
