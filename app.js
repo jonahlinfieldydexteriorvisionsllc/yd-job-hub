@@ -168,10 +168,15 @@ function bidQbEstimate(d) {
   const q = d && d.qbEstimate;
   return q && q.id && q.env !== 'sandbox' ? q : null;
 }
-// When QuickBooks last emailed it (from QuickBooks itself: emailedAt; from
-// Job Hub's Send: sentAt), or ''.
+// QuickBooks has emailed it -- from QuickBooks itself or from Job Hub's Send.
+function bidEmailed(q) {
+  return !!q && (q.emailStatus === 'EmailSent' || !!q.sentAt);
+}
+// When it last went (emailedAt: QuickBooks' own time, kept since 22 Oct
+// 2026; sentAt: Job Hub's Send), or '' -- records from before say only
+// that it was emailed.
 function bidEmailedAt(q) {
-  if (!q || (q.emailStatus !== 'EmailSent' && !q.sentAt)) return '';
+  if (!bidEmailed(q)) return '';
   const times = [q.emailedAt, q.sentAt].filter(t => t && !isNaN(new Date(t)));
   return times.sort((a, b) => new Date(b) - new Date(a))[0] || '';
 }
@@ -185,14 +190,14 @@ function bidWhere(d) {
   const q = bidQbEstimate(d);
   const num = String((q && q.docNumber) || d.estimateNumber || '').trim();
   const emailedAt = bidEmailedAt(q);
-  const one = (id, more) => Object.assign({ id: id, num: num, q: q, emailed: !!emailedAt, at: '', followUp: false }, more || {});
+  const one = (id, more) => Object.assign({ id: id, num: num, q: q, emailed: bidEmailed(q), at: '', followUp: false }, more || {});
   if (stage === 'lost') return one('lost');
   if (stage === 'won') return one('won');
   if (stage === 'sent' || stage === 'followUp') {
     // Moved to Follow up later: bidStageAt is that move, not the send.
     return one('sent', { followUp: stage === 'followUp', at: emailedAt || (stage === 'sent' ? String(d.bidStageAt || '') : '') });
   }
-  if (q && !emailedAt) return one('inQb');
+  if (q && !bidEmailed(q)) return one('inQb');
   // Emailed once, then put back by hand (to change it and send it again).
   return one('working', { at: emailedAt });
 }
@@ -217,7 +222,7 @@ function bidStandWords(w) {
   if (w.id === 'inQb') return { text: '🧾 In QuickBooks' + num + ' — not sent yet',
     title: 'In QuickBooks, not emailed yet — once it is emailed from QuickBooks it moves to Sent by itself' };
   if (w.id === 'working') return { text: '✏️ Being worked on',
-    title: w.at ? 'QuickBooks emailed estimate' + num + ' on ' + bidDay(w.at) + ', and it was put back to work on' : 'Not in QuickBooks yet' };
+    title: w.emailed ? 'QuickBooks emailed estimate' + num + (w.at ? ' on ' + bidDay(w.at) : '') + ', and it was put back to work on' : 'Not in QuickBooks yet' };
   const s = BID_STANDS[w.id];
   return { text: s ? (s.icon ? s.icon + ' ' : '') + s.name : '', title: '' };
 }
@@ -1172,7 +1177,7 @@ function bidBannerHtml(w) {
   if (w.id === 'inQb') return '<b>This bid is in QuickBooks as estimate' + num + ' — not sent yet.</b> ' +
     'Once it is emailed from QuickBooks it moves to Sent by itself.';
   if (w.id === 'won') return '<b>This bid was said yes to.</b> ' + where;
-  return '<b>This bid is being worked on.</b> ' + (w.at ? 'QuickBooks emailed estimate' + num + ' on ' + day + ' — send it again once it is changed. ' : '') + where;
+  return '<b>This bid is being worked on.</b> ' + (w.emailed ? 'QuickBooks emailed estimate' + num + (day ? ' on ' + day : '') + ' — send it again once it is changed. ' : '') + where;
 }
 function showBidBanner() {
   const b = document.getElementById('bidBanner');
