@@ -2380,6 +2380,12 @@
   .ssel-empty { padding:10px 12px; font-size:13px; color:var(--muted); }
   .ssel-more { padding:9px 12px; font-size:13px; color:var(--muted); font-style:italic; cursor:default; }
   .filter-bar .ssel { flex:1 1 170px; }
+  /* A window clips what spills over its edges (for its round corners), so
+     a list opened low in one -- the services on a bid or job card -- was cut
+     off at the window's bottom. While a list is open nothing is clipped; the
+     heading keeps the corners itself. */
+  .modal:has(.ssel-list:not([hidden])) { overflow:visible; }
+  .modal-head { border-radius:12px 12px 0 0; }
 
   /* a supplier's items that their uploaded sheet left out */
   .sup-missing { margin:8px 0; padding:8px 11px; border-radius:8px; background:var(--surface-2);

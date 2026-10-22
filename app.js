@@ -5139,6 +5139,23 @@ document.addEventListener('click', e => {
 // The real <select> stays in the page, hidden, with its id, value and
 // onchange. Picking sets its value and fires its own change event, so every
 // handler that already reads it carries on unchanged.
+//
+// The open list is shown again whenever the part of the screen that can be
+// seen changes -- a phone's keyboard comes up a moment after the box is
+// tapped, over where the list just opened (reveal, below).
+let sselOpenReveal = null;
+if (window.visualViewport) window.visualViewport.addEventListener('resize', () => { if (sselOpenReveal) sselOpenReveal(); });
+// What scrolls when a list needs room: the nearest box that scrolls by
+// itself, or one fixed over the page (a window), or null for the page.
+function scrollerOf(n) {
+  for (let p = n.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && p.scrollHeight > p.clientHeight) return p;
+    // Never the page under a window: it does not move what is on screen.
+    if (cs.position === 'fixed') return p;
+  }
+  return null;
+}
 function makeSearchable(sel) {
   if (!sel || sel.dataset.ssel) return;
   sel.dataset.ssel = '1';
@@ -5177,10 +5194,14 @@ function makeSearchable(sel) {
   const custom = () => Array.prototype.find.call(sel.options, o => o.value === '__custom') || null;
 
   function sync() {
-    const o = sel.options[sel.selectedIndex];
-    box.value = o && o.value !== '' ? label(o) : '';
     box.placeholder = blank() ? label(blank()) : 'Search…';
     box.disabled = sel.disabled;
+    // Being typed in: what is typed stays, and the matches are found again
+    // in the options as they are now. The services list arriving from the
+    // server (or changed on another device) used to wipe the box mid-word.
+    if (!list.hidden && document.activeElement === box) { open(box.value); return; }
+    const o = sel.options[sel.selectedIndex];
+    box.value = o && o.value !== '' ? label(o) : '';
   }
 
   // At most SHOWN_MAX matches are drawn. The Supplies list (~900 items) drew
@@ -5214,11 +5235,37 @@ function makeSearchable(sel) {
       : '<div class="ssel-empty">Nothing matches “' + esc(typed) + '”</div>';
     list.hidden = false;
     box.setAttribute('aria-expanded', 'true');
+    sselOpenReveal = reveal;
+    reveal();
+  }
+
+  // The list opens under the box. Low in a window (the bid and job card's
+  // services), or with a phone's keyboard up over the bottom half, it was
+  // out of sight: the window -- or the page -- moves up just far enough to
+  // show it, never so far that the box being typed in leaves the top.
+  function reveal() {
+    if (list.hidden || !wrap.isConnected) return;
+    const vv = window.visualViewport, sc = scrollerOf(wrap);
+    let top = vv ? vv.offsetTop : 0, bottom = top + (vv ? vv.height : window.innerHeight);
+    if (!sc) {
+      // On the page, a phone's tab bar along the bottom covers what is
+      // there, and a bar stuck along the top (the Job tab's name) the top.
+      const bar = document.querySelector('.tab-bar');
+      if (bar && getComputedStyle(bar).position === 'fixed' && bar.offsetHeight) bottom = Math.min(bottom, bar.getBoundingClientRect().top);
+      const stuck = document.elementsFromPoint(box.getBoundingClientRect().left + 10, top + 2)
+        .find(e => /^(fixed|sticky)$/.test(getComputedStyle(e).position) && !e.contains(box));
+      if (stuck) top = Math.max(top, stuck.getBoundingClientRect().bottom);
+    }
+    const by = Math.min(list.getBoundingClientRect().bottom + 8 - bottom, box.getBoundingClientRect().top - top - 8);
+    if (by <= 0) return;
+    if (sc) sc.scrollTop += by;
+    else window.scrollBy(0, by);
   }
 
   function close() {
     list.hidden = true;
     box.setAttribute('aria-expanded', 'false');
+    if (sselOpenReveal === reveal) sselOpenReveal = null;
     sync();
   }
 

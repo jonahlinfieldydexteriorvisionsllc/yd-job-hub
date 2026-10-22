@@ -1393,10 +1393,33 @@
   // to the job itself through patchJob, like a move, so every device and the
   // Job tab follow. The estimate and the money stay on the Job tab.
   let jobEdit = null;       // { boardId, jobId, services } while the editor is open
-  function serviceChoices() {
-    const sel = el('serviceTypeSelect');
-    return sel ? Array.prototype.filter.call(sel.options, o => o.value && o.value !== '__custom').map(o => o.value) : [];
+  // The services to pick from, as the Job tab offers them: the one list
+  // (services.js), by kind of work. It is a dropdown you can type into
+  // (app.js makeSearchable -- Jonah, 21 Oct 2026: "when adding a bid card
+  // make select service searchable"), so a few letters find the service and
+  // a name not on the list is typed straight in ("+ Add …"), through
+  // "Something else…" at the end.
+  function serviceOptionsHtml() {
+    const src = el('serviceTypeSelect');
+    const opt = o => '<option value="' + esc(o.value) + '">' + esc(o.textContent) + '</option>';
+    // Not its placeholder, its "Custom…", or a name typed on the Job tab
+    // that was only there for a moment.
+    const real = o => o.value && o.value !== '__custom' && !o.dataset.typed;
+    const body = src ? Array.prototype.map.call(src.children, n => {
+      if (n.tagName === 'OPTGROUP') {
+        const inside = Array.prototype.filter.call(n.children, real);
+        return inside.length ? '<optgroup label="' + esc(n.label) + '">' + inside.map(opt).join('') + '</optgroup>' : '';
+      }
+      return n.tagName === 'OPTION' && real(n) ? opt(n) : '';
+    }).join('') : '';
+    return '<option value="">+ Add a service…</option>' + body + '<option value="__custom">Something else…</option>';
   }
+  // The list changed while the editor is up (a service added on another
+  // device, or here a moment ago): the picker follows.
+  document.addEventListener('yd-services', () => {
+    const sel = el('jeTagPick');
+    if (sel && jobEdit) { sel.innerHTML = serviceOptionsHtml(); sel.value = ''; }
+  });
   function jobEditTags() {
     const w = el('jeTags');
     if (!w) return;
@@ -1428,9 +1451,8 @@
       '<div class="grid g2">' + box('jePhone', 'Phone', j.phone, ' type="tel"') +
         box('jeEmail', 'Email', j.email, ' type="email" autocapitalize="off"') + '</div>' +
       '<div class="field"><span class="label">Services</span><div class="tag-box" id="jeTags"></div>' +
-        '<select id="jeTagPick" onchange="jobEditTagOn(this)" style="margin-top:6px"><option value="">+ Add a service…</option>' +
-          serviceChoices().map(s => '<option>' + esc(s) + '</option>').join('') +
-          '<option value="__custom">Something else…</option></select></div>' +
+        '<select id="jeTagPick" class="searchable" onchange="jobEditTagOn(this)" style="margin-top:6px">' +
+          serviceOptionsHtml() + '</select></div>' +
       (bid ? '<div class="field"><span class="label">Site-visit notes</span>' +
         '<textarea id="jeSite" rows="5" placeholder="What you saw, measured and talked about — Claude builds the estimate from these">' +
         esc(((j.estimate || {}).notes) || '') + '</textarea></div>' : '') +
@@ -1450,7 +1472,11 @@
       v = (await ydPrompt('The service, in a word or two:', '', { title: 'Add a service', placeholder: 'e.g. Gutter cleaning', ok: 'Add' }) || '').trim();
       if (!v || jobEdit !== was) return;
     }
-    if (jobEdit.services.indexOf(v) === -1) jobEdit.services.push(v);
+    // As on the Job tab (app.js addServiceType): an old spelling is the name
+    // it became, and a new name joins the list for next time.
+    if (window.YDServices) v = window.YDServices.canon(v);
+    if (window.rememberService) window.rememberService(v);
+    if (!jobEdit.services.some(x => String(x).toLowerCase() === v.toLowerCase())) jobEdit.services.push(v);
     jobEditTags();
   };
   window.jobEditTagOff = function (i) { if (jobEdit) { jobEdit.services.splice(i, 1); jobEditTags(); } };
