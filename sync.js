@@ -851,8 +851,12 @@
     // The general watcher: it also reports the moment the server first
     // confirms the cached copy, even when nothing changed, which the board
     // tidy-up below has to wait for.
+    // Each watch answers for itself only: a refusal from one already given
+    // up (a start-up race) must not take down the one now running.
+    const mine = ++watchGen;
     unsubscribe = window.YDDb.watch('jobs',
       (changes, meta) => {
+        if (mine !== watchGen) return;
         noteCloudIds(changes);
         applyRemote(changes);
         // Firestore always delivers a cached snapshot FIRST, even when online,
@@ -870,7 +874,7 @@
         // and deleted the lot, leaving the crew nothing to clock in to.
         if (!boardReconciled) { boardReconciled = true; reconcileBoard(); }
       },
-      () => { setCloudState('offline'); watchAgain(); }
+      () => { if (mine !== watchGen) return; setCloudState('offline'); watchAgain(); }
     );
   }
   // A watch the server refused is over for good -- Firestore ends it. Seen
@@ -880,7 +884,7 @@
   // the server arrived all session. So it is started again, a little later
   // each time (3 s, 6 s ... up to a minute); saves made meanwhile wait in
   // `unsent` as they do with no signal.
-  let watchTries = 0, watchTimer = 0;
+  let watchTries = 0, watchTimer = 0, watchGen = 0;
   function watchAgain() {
     if (unsubscribe) { try { unsubscribe(); } catch (e) {} }
     unsubscribe = null;
