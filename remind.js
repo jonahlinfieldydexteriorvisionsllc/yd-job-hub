@@ -46,9 +46,11 @@
   // `appointment`: it simply happens at its time -- nobody ticks it off
   // (isTask below).
   // These are the tags every calendar's own list is made from (CAL_TAGS
-  // below); `calOnly`: not offered for a board card (boards.js).
+  // below); `calOnly`: not offered for a board card (boards.js). `place`:
+  // where one is usually done -- in the office or out (PLACES below); none
+  // where it could be either.
   const TYPES = [
-    { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true },
+    { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true, place: 'out' },
     { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#7a4fd1', appointment: true },
     // Jonah (22 Oct 2026): "add a phone call tag for calendar items" -- and
     // "calls dont always have set times tho they can be something to do at
@@ -60,7 +62,7 @@
     // as those entries were as to-dos before the tag existed. Orchid: as far
     // from every other tag's colour and the urgency colours as there was
     // room for; white writing reads on it.
-    { id: 'phone', icon: '📞', name: 'Phone call', timed: null, color: '#c026d3' },
+    { id: 'phone', icon: '📞', name: 'Phone call', timed: null, color: '#c026d3', place: 'office' },
     // Jonah (22 Oct 2026): "make material pickup tag option for the
     // calendar". It was always a material pickup in his words ("a quote
     // appointment or a material pickup", 12 Oct; a store's "ready for
@@ -68,7 +70,7 @@
     // board cards said only "Pickup" -- one tag under two names. One name
     // now, everywhere; the id stays 'pickup', so every entry and card
     // already tagged keeps its tag.
-    { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#8b5a2b' },
+    { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#8b5a2b', place: 'out' },
     // And then (22 Oct): "pickups are a thing we do often. So there should
     // be material, rental, parts, check, and equipment (as in our
     // equipment)". Each its own tag, on My work and the Crew schedule,
@@ -78,12 +80,12 @@
     // tag's and the urgency colours (ΔE ≥ 15 from all of them; deep rust,
     // salmon, kraft tan, dark olive brown); dark writing on the two light
     // ones.
-    { id: 'rental', icon: '🔑', name: 'Rental pickup', timed: false, color: '#702018' },
-    { id: 'parts', icon: '🔩', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10' },
-    { id: 'check', icon: '💵', name: 'Check pickup', timed: false, color: '#c8a880', ink: '#2b1d0e' },
-    { id: 'equipment', icon: '🚜', name: 'Equipment pickup', timed: false, color: '#504028' },
+    { id: 'rental', icon: '🔑', name: 'Rental pickup', timed: false, color: '#702018', place: 'out' },
+    { id: 'parts', icon: '🔩', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10', place: 'out' },
+    { id: 'check', icon: '💵', name: 'Check pickup', timed: false, color: '#c8a880', ink: '#2b1d0e', place: 'out' },
+    { id: 'equipment', icon: '🚜', name: 'Equipment pickup', timed: false, color: '#504028', place: 'out' },
     { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
-    { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b' },
+    { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b', place: 'office' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
     // The Crew schedule's own (Jonah, 16 Oct 2026: "The crew calendar should
     // have tags and set colors for material pickups etc."), in the clock-in
@@ -94,7 +96,7 @@
     { id: 'shop', icon: '🛠️', name: 'Shop / yard work', timed: false, color: '#4d6b1a', crew: true, calOnly: true },
     // The bank, the post office, something to drop off (a check to collect
     // is a Check pickup).
-    { id: 'errand', icon:'🧾', name: 'Errand', timed: false, color: '#a3369b', crew: true, calOnly: true },
+    { id: 'errand', icon:'🧾', name: 'Errand', timed: false, color: '#a3369b', crew: true, calOnly: true, place: 'out' },
     // "Things not for Jonah to handle": on his calendar so he sees them all,
     // but they buzz only the people on them.
     { id: 'crew', icon: '👷', name: 'Crew task', timed: false, color: '#2f6fd6', crew: true },
@@ -106,7 +108,7 @@
     // in its job's colour (calendar.js jobColorOf): it has none of its own.
     { id: 'jobday', icon: '🔨', name: 'Job day', timed: null, color: '', calOnly: true },
     { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true,
-      personal: true },
+      personal: true, place: 'out' },
     { id: 'personal', icon: '🏠', name: 'Personal', timed: null, color: '#d94f8a', personal: true },
   ];
 
@@ -118,7 +120,7 @@
   // carries one of them (`type`, its id). These are the lists a calendar
   // starts with, by its kind; the owner changes any calendar's in ⚙ Manage
   // calendars → Edit (rename, recolour, add, take off), stored on the
-  // calendar as `tags` [{id, name, icon, color, appointment}] only once
+  // calendar as `tags` [{id, name, icon, color, appointment, place}] only once
   // edited. [id, the name it goes by there when not its own].
   const CAL_TAGS = {
     work: [['bid'], ['appt'], ['phone'], ['pickup'], ['rental'], ['parts'], ['check'], ['equipment'], ['delivery'], ['email'], ['todo']],
@@ -140,6 +142,45 @@
   // Every kind of pickup: one with no date is ready now -- on the day's list
   // every day until it is picked up (boards.js pickupsWaiting).
   const PICKUPS = ['pickup', 'rental', 'parts', 'check', 'equipment'];
+
+  // ------------------------------------------- where it is done
+  //
+  // Jonah (22 Oct 2026): "calendar items should have a tag for office like
+  // stuff that i do at home vs stuff i do out of the home and my dashboard
+  // should have side by side for the to do list of stuff to do in the
+  // office and stuff to do while im out". Where is its own question, beside
+  // the tag and never welded to it: what a thing is (a call, a pickup) and
+  // where it gets done are answered apart, and picking one never changes
+  // the other. An entry or a card keeps `place` -- 'office', 'out' or
+  // 'either' -- only once someone picks it; until then it goes by its tag's
+  // usual place (TYPES `place`, or what the owner set for that tag in
+  // ⚙ Manage → Edit): an email or a call is office work, a quote
+  // appointment or a pickup is out; a to-do, an appointment or a delivery
+  // could be either, so it is, until he says. functions/reminders.py
+  // _place_of: the same. 💻 and 🚗 rather than 🏠 and 🚚, which are the
+  // Personal and Material pickup tags' own.
+  // `list`: the heading of its list on the owner's Home.
+  const PLACES = [
+    { id: 'office', icon: '💻', name: 'Office (at home)', list: 'To do in the office' },
+    { id: 'out', icon: '🚗', name: 'Out', list: 'To do while I’m out' },
+    { id: 'either', icon: '', name: 'Either', list: 'Either place' },
+  ];
+  // The places a tag can usually be (none: either).
+  const USUAL_PLACES = ['office', 'out'];
+  // A tag's usual place on its calendar ('' = either). `cal` null: the
+  // built-in's (a board card has no calendar).
+  function usualPlace(type, cal) {
+    const t = cal ? tagOf(type, cal) : typeById(type);
+    return (t && USUAL_PLACES.indexOf(t.place) !== -1 && t.place) || '';
+  }
+  // Where a thing is done: 'office', 'out' or '' (either) -- picked on it,
+  // else its tag's usual place.
+  function placeOf(item, type, cal) {
+    const own = item && item.place;
+    if (own === 'office' || own === 'out') return own;
+    if (own === 'either') return '';
+    return usualPlace(type, cal);
+  }
   // What an entry is when nothing better is known, on each kind.
   const FALLBACK = { work: 'todo', custom: 'todo', crew: 'crew', jobs: 'jobday', personal: 'personal' };
   const kindOfCal = cal => (cal && cal.kind) || '';
@@ -161,10 +202,11 @@
     if (typeof out.appointment !== 'boolean') out.appointment = !!t.appointment || t.id === 'personal';
     return out;
   }
-  // One tag as the owner left it: his name, icon, colour and "nothing to
-  // tick off", over the built-in one of the same id. A built-in's dark
-  // writing goes with its own colour only (a new colour gets its own, by
-  // app.js inkOn, where it is drawn).
+  // One tag as the owner left it: his name, icon, colour, "nothing to
+  // tick off" and where it is usually done, over the built-in one of the
+  // same id. A built-in's dark writing goes with its own colour only (a new
+  // colour gets its own, by app.js inkOn, where it is drawn). A list saved
+  // before tags had a place takes the built-in's ('' = either).
   function fromStored(t, cal) {
     const b = typeById(t.id);
     const color = isColor(t.color) ? t.color : (b ? b.color : '#6b7a8f');
@@ -175,6 +217,7 @@
       color: color, ink: b && b.ink && b.color === color ? b.ink : '',
       appointment: typeof t.appointment === 'boolean' ? t.appointment : undefined,
       timed: b ? b.timed : null,
+      place: typeof t.place === 'string' ? (USUAL_PLACES.indexOf(t.place) !== -1 ? t.place : '') : (b && b.place) || '',
       custom: !b,
     }, cal);
   }
@@ -595,6 +638,12 @@
     startIds: kind => startList(kind).map(x => x[0]),
     // Every kind of pickup (22 Oct 2026): one with no date is ready now.
     isPickup: id => PICKUPS.indexOf(id) !== -1,
+    // Where it is done (22 Oct 2026): the choices, a thing's place, and a
+    // tag's usual one.
+    PLACES: PLACES,
+    place: id => PLACES.find(p => p.id === id) || null,
+    placeOf: placeOf,
+    usualPlace: usualPlace,
     tagsOf: tagsOf,
     tagOf: tagOf,
     knownOn: knownOn,

@@ -3082,6 +3082,24 @@
   .hm-todo { min-height:40px; margin-top:6px; }
   .hm-todo .cal-todo-t { font-size:14px; }
   .hm-late { color:var(--neg); font-weight:700; }
+  /* The owner's day (home.js placesHtml): his to-dos in the office and out
+     side by side once the card is wide enough, the schedule beside them on
+     a wide screen; one under the other on a phone, the office's first. The
+     card's own width decides (a container query), not the window's. */
+  .hm-places { container-type:inline-size; }
+  .hm-day-grid { display:grid; grid-template-columns:minmax(0, 1fr); column-gap:20px;
+    grid-template-areas:"sched" "office" "out" "either"; align-items:start; }
+  .hm-day-sched { grid-area:sched; }
+  .hm-day-office { grid-area:office; }
+  .hm-day-out { grid-area:out; }
+  .hm-day-either { grid-area:either; }
+  .hm-day-either .hm-sub { font-size:10.5px; }
+  @container (min-width:540px) {
+    .hm-day-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); grid-template-areas:"sched sched" "office out" "either either"; }
+  }
+  @container (min-width:960px) {
+    .hm-day-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); grid-template-areas:"sched office out" "sched either either"; }
+  }
 
   /* A line that goes somewhere (who is on the clock, what is waiting) */
   .hm-line { display:flex; align-items:center; gap:10px; width:100%; text-align:left; cursor:pointer; min-height:44px;
@@ -3793,6 +3811,19 @@
   @media (min-width:721px) {
     .hm-grid { display:block; columns:360px 3; column-gap:18px; }
     .hm-grid > .section { display:block; width:100%; margin:0 0 18px; break-inside:avoid; -webkit-column-break-inside:avoid; page-break-inside:avoid; }
+  }
+  /* The owner's: Waiting on you, and his day beside it two thirds wide on a
+     wide screen -- room for his office and out lists side by side (home.js
+     html, placesHtml); one under the other on anything narrower. */
+  .hm-lead { display:grid; grid-template-columns:minmax(0, 1fr); gap:18px; margin:0 0 18px; align-items:start; }
+  .hm-lead-side { display:grid; grid-template-columns:minmax(0, 1fr); gap:18px; align-items:start; }
+  .hm-lead .section { margin-bottom:0; }
+  @media (min-width:1000px) {
+    .hm-lead { grid-template-columns:minmax(0, 1fr) minmax(0, 2fr); }
+  }
+  @media (max-width:720px) {
+    .hm-lead, .hm-lead-side { gap:16px; }
+    .hm-lead { margin-bottom:16px; }
   }
 
   /* The calendar: the crew's three views, big enough for a thumb */
@@ -4853,6 +4884,20 @@
     .cal-tagpick { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .cal-tagpick-b { justify-content:flex-start; }
   }
+  /* Where it is done (calendar.js drawPlacePick, boards.js drawCardPlace):
+     three buttons in one plain colour -- the tag above has the colours --
+     all three in a row on a phone too. */
+  .cal-placepick-b { --c:#4a5568; --ink:#fff; }
+  @media (max-width:720px) {
+    .cal-placepick { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .cal-placepick-b { justify-content:center; text-align:center; padding:7px 8px; }
+  }
+  /* A tag's usual place, in Manage → Edit. */
+  .cc-tag-place { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:13px; }
+  .cc-tag-place > span { color:var(--muted); }
+  .cc-tag-pl { min-height:36px; padding:4px 12px; border-radius:18px; border:1.5px solid var(--border-strong); background:var(--surface);
+    color:var(--text); font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
+  .cc-tag-pl.on { background:#4a5568; border-color:#4a5568; color:#fff; }
   .cal-jobday-note { font-size:13px; line-height:1.45; padding:8px 10px; border-radius:8px; color:var(--text);
     background:var(--surface-2); border-left:4px solid #1a9c8c; }
   .cal-detail-tag { display:flex; align-items:center; gap:8px; }

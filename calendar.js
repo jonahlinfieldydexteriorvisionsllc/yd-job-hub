@@ -363,6 +363,8 @@
             crew: ev.crew || [], address: ev.address || '', jobName: ev.jobName || '',
             multi: !!(ev.endDate && ev.endDate > ev.date), changed: x.changed,
             jobDay: jobDay,
+            // Done in the office or out (remind.js placeOf): Home's two lists.
+            place: jobDay ? '' : YDRemind.placeOf(ev, type, cal),
           });
         });
       });
@@ -410,7 +412,7 @@
           time: time, task: YDRemind.isTask(type, !!time, { card: true }),
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
           title: ic + ' ' + (x.card.title || 'Card'), note: x.board.name,
-          crew: x.card.assignees || [] });
+          crew: x.card.assignees || [], place: YDRemind.placeOf(x.card, type) });
       });
       // A pickup with no date is ready now: today's, every day until it is
       // picked up (boards.js pickupsWaiting).
@@ -422,7 +424,7 @@
             color: YDRemind.color(x.type), ink: YDRemind.ink(x.type), type: x.type, time: '', task: true, undated: true,
             auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
             title: YDRemind.icon(x.type) + ' ' + (x.card.title || 'Card'), note: x.board.name + ' · ready to pick up',
-            crew: x.card.assignees || [] });
+            crew: x.card.assignees || [], place: YDRemind.placeOf(x.card, x.type) });
         });
       }
     }
@@ -447,7 +449,8 @@
       // Shown done once the day has come and nobody is left to reach.
       out.push({ day: oi.start, layer: AUTO['auto:outreach'], auto: 'outreach', id: 'outreach', done: !n && oi.start <= today(),
         title: '📞 Start reaching out for next season', name: 'Start reaching out for next season',
-        note: n ? n + (n === 1 ? ' person' : ' people') + ' to reach — Contacts' : 'Contacts tab' });
+        // Calls to make: office work, as a 📞 Phone call is.
+        note: n ? n + (n === 1 ? ' person' : ' people') + ' to reach — Contacts' : 'Contacts tab', place: 'office' });
     }
 
     // All-day first, then by time, then by calendar, so a day reads top to
@@ -1710,6 +1713,9 @@
     const mapUrl = ev.address ? 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(ev.address) : '';
     // Its tag, as its calendar has it (a name the owner gave it there).
     const type = tagOfEv(ev, cal);
+    // In the office or out (not asked on the Job or Crew schedule).
+    const place = cal.kind === 'jobs' || cal.kind === 'crew' ? null
+      : YDRemind.place(YDRemind.placeOf(ev, type ? type.id : '', cal));
     // The reminder is the series' (a single date cannot have its own). The
     // usual one is said only when the entry is this person's by the same
     // rule the reminders go by (remind.js isMine) -- not just when they are
@@ -1735,6 +1741,7 @@
             (o.changed ? ' · changed for this date' : '') + '</span>' : '') +
         '</div>' +
         (type ? '<div class="cal-detail-line cal-detail-tag" style="--t:' + safeColor(o.color || type.color || cal.color) + '"><span class="cal-tag-dot"></span>' + esc((type.icon ? type.icon + ' ' : '') + type.name) + '</div>' : '') +
+        (place ? '<div class="cal-detail-line">' + esc(place.icon + ' ' + place.name) + '</div>' : '') +
         (ev.jobName ? '<div class="cal-detail-line">📋 ' + esc(ev.jobName) + '</div>' : '') +
         (ev.address ? '<a class="snow-addr" href="' + mapUrl + '" target="_blank" rel="noopener">📍 ' + esc(ev.address) +
           '<span class="snow-go">Directions</span></a>' : '') +
@@ -1872,6 +1879,15 @@
           (YDRemind.knownOn(cals[calId], ev.type) ? ' data-picked="1"' : '') + '>' +
         '<div class="cal-tagpick" id="evTagChips"></div>' +
         '<div class="hint cal-type-note" id="evTypeNote"></div></div>' +
+      // Where it is done -- in the office or out -- its own question beside
+      // the tag (Jonah, 22 Oct 2026: "stuff that i do at home vs stuff i do
+      // out of the home"). Kept in #evPlace; `picked` once tapped (or saved
+      // so), until then it follows the tag lit above (drawPlacePick).
+      '<div class="field" id="evPlaceField"><span class="label">Where — in the office or out</span>' +
+        '<input type="hidden" id="evPlace" value="' + esc(YDRemind.place(ev.place) ? ev.place : '') + '"' +
+          (YDRemind.place(ev.place) ? ' data-picked="1"' : '') + '>' +
+        '<div class="cal-tagpick cal-placepick" id="evPlaceChips"></div>' +
+        '<div class="hint" id="evPlaceNote"></div></div>' +
       '<div class="field"><span class="label" id="evJobLabel">Job</span><select id="evJob" class="searchable" onchange="calJobChanged()">' +
         '<option value="">— not about a job —</option>' +
         jobs.map(j => '<option value="' + esc(j._id) + '"' + (j._id === ev.jobId ? ' selected' : '') + '>' +
@@ -1919,6 +1935,7 @@
     const cal = c && cals[c.value];
     const box = el('evTagChips'), label = el('evTagLabel');
     if (!cal || !box) return;
+    drawPlacePick(cal);
     const jobs = cal.kind === 'jobs';
     if (label) label.textContent = jobs ? 'What it is' : 'Tag — what it is';
     if (jobs) {
@@ -1947,6 +1964,36 @@
     drawTagPick();
     calRemindHint();
     calTypeNote();
+  };
+  // Where it is done: three buttons, the one lit kept in #evPlace. Until
+  // one is tapped it is the tag's usual place (an email or a call in the
+  // office, a pickup out; a to-do either), said under them -- a tag tapped
+  // then moves it with it. Once tapped, no tag changes it.
+  // Not asked on the Job schedule (a day where the crew works) or the Crew
+  // schedule (the crew's, not on anyone's office-or-out list); kept as it
+  // was all the same.
+  function drawPlacePick(cal) {
+    const box = el('evPlace'), chips = el('evPlaceChips'), field = el('evPlaceField'), note = el('evPlaceNote');
+    if (!box || !chips || !cal) return;
+    if (field) field.hidden = cal.kind === 'jobs' || cal.kind === 'crew';
+    const type = val('evType') || typeOfEv({ title: val('evTitle') }, cal);
+    const usual = YDRemind.usualPlace(type, cal);
+    if (!box.dataset.picked) box.value = usual || 'either';
+    chips.innerHTML = YDRemind.PLACES.map(p => {
+      const on = p.id === box.value;
+      return '<button type="button" class="cal-tagpick-b cal-placepick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+        ' onclick="calPlacePick(\'' + p.id + '\')">' + esc((p.icon ? p.icon + ' ' : '') + p.name) + '</button>';
+    }).join('');
+    const tag = usual && !box.dataset.picked ? YDRemind.tagOf(type, cal) : null;
+    if (note) note.textContent = tag ? 'Goes by its tag, ' + (tag.icon ? tag.icon + ' ' : '') + tag.name + ', until you tap one.' : '';
+  }
+  window.calPlacePick = function (id) {
+    const box = el('evPlace');
+    const c = document.querySelector('input[name="evCal"]:checked');
+    if (!box || !YDRemind.place(id)) return;
+    box.value = id;
+    box.dataset.picked = '1';
+    drawPlacePick(c && cals[c.value]);
   };
   // The jobs the Job box offers: every job, where this device has them (the
   // owner's, an admin's who sees jobs); else -- someone ticked to add to a
@@ -2237,6 +2284,9 @@
       // Job schedule there is nothing to keep: it is a job's day.
       type: !onJobs && YDRemind.knownOn(cals[calId], val('evType')) && (el('evType').dataset.picked ||
         val('evType') !== typeOfEv({ title: title }, cals[calId])) ? val('evType') : null,
+      // Where it is done: kept once picked; until then left to follow its
+      // tag (remind.js placeOf), whatever tag it is given later.
+      place: !onJobs && el('evPlace') && el('evPlace').dataset.picked && YDRemind.place(val('evPlace')) ? val('evPlace') : null,
       updatedAt: nowIso(),
     };
     // The job's own colour, for the crew's phones (jobColorOf): they cannot
@@ -2348,7 +2398,8 @@
 
   // The fields that make up one date of an entry -- what a single-date
   // change keeps.
-  const OCC_FIELDS = ['date', 'endDate', 'allDay', 'time', 'endTime', 'title', 'jobId', 'jobName', 'address', 'crew', 'notes', 'type'];
+  const OCC_FIELDS = ['date', 'endDate', 'allDay', 'time', 'endTime', 'title', 'jobId', 'jobName', 'address', 'crew', 'notes', 'type',
+                      'place'];
   function pick(o, keys) {
     const out = {};
     keys.forEach(k => { out[k] = o[k] === undefined ? null : o[k]; });
@@ -2970,10 +3021,11 @@
   // Jonah (16 Oct 2026): tags "and set colors" within each calendar. The
   // owner changes any calendar's list here: renames one, gives it another
   // colour (one of these, or any from the colour box), adds one, takes one
-  // off. Saved with the calendar as `tags` [{id, name, icon, color,
-  // appointment}] -- only once changed, so a calendar never touched keeps
-  // the list it started with (remind.js CAL_TAGS). An entry keeps its tag's
-  // id: renamed or recoloured, it follows; taken off, it reads as whatever
+  // off, and says where each is usually done (22 Oct 2026). Saved with
+  // the calendar as `tags` [{id, name, icon, color, appointment, place}] --
+  // only once changed, so a calendar never touched keeps the list it
+  // started with (remind.js CAL_TAGS). An entry keeps its tag's id:
+  // renamed or recoloured, it follows; taken off, it reads as whatever
   // the calendar makes of its title (remind.js typeOf). Each tag's colour
   // stands out from the others; red, orange and grey are the urgency
   // colours everywhere else in Job Hub, so none is offered here (the colour
@@ -2982,15 +3034,18 @@
                       '#13a7c4', '#8ab81e', '#0f766e', '#4d6b1a', '#a3369b', '#2f6fd6', '#d94f8a', '#f2c230', '#1a9c8c', '#66418f'];
   let tagDraft = null;      // the tags being edited, or null (the Job schedule has none)
   let tagsDirty = false;    // changed in this window: only then are they saved
+  let tagKind = '';         // the kind of calendar whose tags are being edited
   function tagEditorHtml(c) {
     tagsDirty = false;
+    tagKind = c.kind || 'custom';
     if (c.kind === 'jobs') {
       tagDraft = null;
       return '<div class="field"><span class="label">Tags</span><div class="hint">Every entry here is a day on a job — ' +
         'where the crew is working — shown in that job’s own colour (its card’s colour on the Jobs board). No tags to pick.</div></div>';
     }
     tagDraft = YDRemind.tagsOf(c.kind ? c : { kind: 'custom' })
-      .map(t => ({ id: t.id, name: t.name, icon: t.icon || '', color: isHex(t.color) ? t.color.toLowerCase() : '#6b7a8f', appointment: !!t.appointment }));
+      .map(t => ({ id: t.id, name: t.name, icon: t.icon || '', color: isHex(t.color) ? t.color.toLowerCase() : '#6b7a8f', appointment: !!t.appointment,
+                   place: t.place || '' }));
     return '<div class="field"><span class="label">Tags — what an entry on it can be</span>' +
       '<div class="cc-tags" id="ccTags">' + tagRowsHtml() + '</div>' +
       '<button type="button" class="btn btn-sm cc-tag-add" onclick="calTagAdd()">+ Add a tag</button>' +
@@ -3014,6 +3069,16 @@
       '</div>' +
       '<label class="chk cc-tag-appt"><input type="checkbox"' + (t.appointment ? ' checked' : '') +
         ' onchange="calTagSet(' + i + ', \'appointment\', this.checked)"> Just happens at its time — nothing to tick off</label>' +
+      // Where one is usually done: what an entry with this tag goes by on
+      // Home's office-and-out lists until it is given its own (remind.js
+      // placeOf). Either: no usual place.
+      // Not on the Crew schedule: the crew's, on nobody's office-or-out list.
+      (tagKind === 'crew' ? '' : '<div class="cc-tag-place"><span>Usually done:</span>' +
+        YDRemind.PLACES.map(p => {
+          const on = (t.place || 'either') === p.id;
+          return '<button type="button" class="cc-tag-pl' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+            ' onclick="calTagSet(' + i + ', \'place\', \'' + p.id + '\')">' + esc((p.icon ? p.icon + ' ' : '') + p.name) + '</button>';
+        }).join('') + '</div>') +
     '</div>').join('');
   }
   window.calTagSet = function (i, field, value) {
@@ -3023,16 +3088,17 @@
     else if (field === 'appointment') t.appointment = !!value;
     else if (field === 'name') t.name = String(value || '').slice(0, 40);
     else if (field === 'icon') t.icon = String(value || '').trim().slice(0, 4);
+    else if (field === 'place') { if (!YDRemind.place(value)) return; t.place = value === 'either' ? '' : value; }
     tagsDirty = true;
-    // A colour redraws the rows (its swatch lit, the row's stripe); typing
-    // does not, so the box being typed in keeps its place.
-    if (field === 'color' && el('ccTags')) el('ccTags').innerHTML = tagRowsHtml();
+    // A colour or a place redraws the rows (its button lit, the row's
+    // stripe); typing does not, so the box being typed in keeps its place.
+    if ((field === 'color' || field === 'place') && el('ccTags')) el('ccTags').innerHTML = tagRowsHtml();
   };
   window.calTagAdd = function () {
     if (!tagDraft || !el('ccTags')) return;
     const used = tagDraft.map(t => t.color);
     tagDraft.push({ id: newId('tg'), name: '', icon: '', color: TAG_COLORS.find(c => used.indexOf(c) === -1) || TAG_COLORS[0],
-                    appointment: false });
+                    appointment: false, place: '' });
     tagsDirty = true;
     el('ccTags').innerHTML = tagRowsHtml();
     const boxes = document.querySelectorAll('#ccTags .cc-tag-name');
@@ -3053,7 +3119,10 @@
       const b = YDRemind.typeById(t.id);
       const name = String(t.name || '').trim() || (b ? b.name : '');
       if (!name) { showToast('Give each tag a name'); return null; }
-      out.push({ id: t.id, name: name, icon: String(t.icon || ''), color: isHex(t.color) ? t.color : '#6b7a8f', appointment: !!t.appointment });
+      // `place` always written ('' = either), so a list saved from here
+      // says what he left it as, not the built-in's (remind.js fromStored).
+      out.push({ id: t.id, name: name, icon: String(t.icon || ''), color: isHex(t.color) ? t.color : '#6b7a8f', appointment: !!t.appointment,
+                 place: t.place === 'office' || t.place === 'out' ? t.place : '' });
     }
     return out;
   }
@@ -3565,6 +3634,8 @@
       who: whoOn(o),
       // A crew task, and whether nobody is on it yet (anyone may do it).
       crewTask: crewTask, open: crewTask && !onUids(o).length,
+      // In the office, out, or '' -- either (remind.js placeOf).
+      place: o.place || '',
     };
   }
   function homeDay(day) {

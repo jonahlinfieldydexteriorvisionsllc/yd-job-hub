@@ -1726,6 +1726,8 @@
     const list = k.checklist || [];
     const here = colOf(board, k);
     const type = YDRemind.typeById(cardType(board, k));
+    // In the office or out: picked on it, or its kind's usual place.
+    const place = YDRemind.place(YDRemind.placeOf(k, type ? type.id : ''));
     // The usual reminder only for a card that is this person's (remind.js).
     const remind = !k.due ? '' : YDRemind.line(k, type ? type.id : '', !!k.dueTime, isMineCard(board, k));
     // Jonah (12 Oct 2026): a button that makes it a crew task, "so every
@@ -1748,6 +1750,7 @@
       '<div class="bd-detail-meta">' +
         '<span>📌 ' + esc(board.name) + '</span>' +
         (type ? '<span>' + type.icon + ' ' + esc(type.name) + '</span>' : '') +
+        (place ? '<span>' + place.icon + ' ' + esc(place.name) + '</span>' : '') +
         (k.due ? '<span>📅 ' + dueText(k) + (remind ? ' · ' + esc(remind.replace('Reminder: ', '')) : '') + '</span>' : '') +
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
@@ -2137,7 +2140,8 @@
       (sub ? '<div class="bd-ed-sub">' + sub + '</div>' : '') + body + '</div>';
     openModal(openCard.cardId ? 'Edit card' : 'New card on ' + esc(board.name),
       '<div class="field"><span class="label">What needs doing</span>' +
-        '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"></div>' +
+        '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"' +
+          ' oninput="cardPlaceFollow()"></div>' +
       group('What it is &amp; who is on it', 'The kind gives the card its colour. ' +
           '👷 A crew task can be seen by every crew member, from any board that is not private.',
         // What it is gives the card its colour; whether it has a time is the
@@ -2148,6 +2152,15 @@
           YDRemind.TYPES.filter(t => !t.calOnly).map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
             esc(cardTypeLabel(t)) + '</option>').join('') +
         '</select></div>' +
+        // Where it is done -- in the office or out (Jonah, 22 Oct 2026: "stuff
+        // that i do at home vs stuff i do out of the home"): its own
+        // question beside what it is. Kept in #cdPlace; `picked` once tapped
+        // (or saved so), until then it goes by the kind (drawCardPlace).
+        '<div class="field"><span class="label">Where — in the office or out</span>' +
+          '<input type="hidden" id="cdPlace" value="' + esc(YDRemind.place(k.place) ? k.place : '') + '"' +
+            (YDRemind.place(k.place) ? ' data-picked="1"' : '') + '>' +
+          '<div class="cal-tagpick cal-placepick" id="cdPlaceChips"></div>' +
+          '<div class="hint" id="cdPlaceNote"></div></div>' +
         (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +
           crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="cdWho" value="' + p.uid + '"' +
             (chosen.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') +
@@ -2227,6 +2240,7 @@
           ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete card</button>' : '') +
       '</div>');
     cardRemindHint();
+    drawCardPlace();
     // What the editor showed, box by box: saveCard sends back only the boxes
     // changed since, so whatever happened to the card meanwhile stands.
     openCard.shown = openCard.cardId ? {
@@ -2244,6 +2258,8 @@
       urg: (document.querySelector('input[name="cdUrg"]:checked') || {}).value || '',
       labels: ticked('.cdLabel:checked'), color: pickedColor('cdColor'), job: val('cdJob'),
       notes: val('cdNotes'), list: val('cdList'),
+      // Only a place picked counts: one that follows the kind is no change.
+      place: el('cdPlace') && el('cdPlace').dataset.picked ? val('cdPlace') : '',
     };
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
@@ -2260,6 +2276,37 @@
       if (box) box.checked = true;
     }
     cardRemindHint();
+    drawCardPlace();
+  };
+  // Where it is done: three buttons, the one lit kept in #cdPlace. Until one
+  // is tapped it is the kind's usual place (an email or a call in the
+  // office, a pickup out; a to-do either), said under them; once tapped, no
+  // kind picked changes it (calendar.js drawPlacePick, the same).
+  function drawCardPlace() {
+    const box = el('cdPlace'), chips = el('cdPlaceChips'), note = el('cdPlaceNote');
+    const board = openCard && boards[openCard.boardId];
+    if (!box || !chips || !board) return;
+    const type = val('cdType') || YDRemind.typeOf({ title: val('cdTitle'),
+      labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) }, { boardId: board.id });
+    const usual = YDRemind.usualPlace(type);
+    if (!box.dataset.picked) box.value = usual || 'either';
+    chips.innerHTML = YDRemind.PLACES.map(p => {
+      const on = p.id === box.value;
+      return '<button type="button" class="cal-tagpick-b cal-placepick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+        ' onclick="cardPlacePick(\'' + p.id + '\')">' + esc((p.icon ? p.icon + ' ' : '') + p.name) + '</button>';
+    }).join('');
+    const t = usual && !box.dataset.picked ? YDRemind.typeById(type) : null;
+    if (note) note.textContent = t ? 'Goes by what it is, ' + cardTypeLabel(t) + ', until you tap one.' : '';
+  }
+  // With no kind picked, a new card's title says what it is ("Call Pat"):
+  // the place follows it as it is typed, until one is tapped.
+  window.cardPlaceFollow = function () { if (!val('cdType')) drawCardPlace(); };
+  window.cardPlacePick = function (id) {
+    const box = el('cdPlace');
+    if (!box || !YDRemind.place(id)) return;
+    box.value = id;
+    box.dataset.picked = '1';
+    drawCardPlace();
   };
   window.cardRemindHint = function () {
     const hint = el('cdRemindHint');
@@ -2445,6 +2492,9 @@
       remindMins: remind.remindMins, hasReminder: remind.hasReminder, remindUids: remind.remindUids,
       noReminder: remind.noReminder,
       type: type,
+      // Where it is done: kept once picked; until then left to follow its
+      // kind (remind.js placeOf).
+      place: el('cdPlace') && el('cdPlace').dataset.picked && YDRemind.place(val('cdPlace')) ? val('cdPlace') : null,
       // No picker on a machine's problem: it keeps the urgency it has.
       urgency: ((document.querySelector('input[name="cdUrg"]:checked') || {}).value) || was.urgency || 'normal',
       labels: labels,
@@ -2473,6 +2523,7 @@
       if (same('col')) drop(['column', 'order', 'doneAt', 'doneBy', 'doneByName', 'doneByAt']);
       if (same('when')) drop(['due', 'dueTime', 'remindMins', 'hasReminder', 'remindUids', 'noReminder']);
       if (same('type') && same('labels')) drop(['type', 'labels']);
+      if (same('place')) drop(['place']);
       if (same('urg')) drop(['urgency']);
       if (same('color')) drop(['color']);
       if (same('who')) drop(['assignees']);

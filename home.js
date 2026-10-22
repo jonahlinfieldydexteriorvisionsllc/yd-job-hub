@@ -448,6 +448,9 @@
     // Reminders reach only a phone that has said yes to them (calendar.js,
     // the same note My day shows).
     const nudge = window.YDCalendar && YDCalendar.nudge ? YDCalendar.nudge() : '';
+    if (isOwner() && window.YDRemind && YDRemind.place) {
+      return card('day', title, countWords(c), link, nudge + placesHtml(d, ownLate, ownAny, crewLate, crewAny), left > 0);
+    }
     const body = nudge +
       sub('🕑 Schedule') +
       (d.mineTimed.length ? capped('mineT', d.mineTimed.map(timedRow), 8)
@@ -462,6 +465,37 @@
           capped('mineC', crewLate.map(x => todoRow(x, true)).concat(crewAny.map(x => todoRow(x, false))))
         : '');
     return card('day', title, countWords(c), link, body, left > 0);
+  }
+
+  // The owner's day with his to-dos split by where they get done. Jonah (22
+  // Oct 2026): "my dashboard should have side by side for the to do list of
+  // stuff to do in the office and stuff to do while im out". Two lists --
+  // to do in the office, to do while out -- side by side where the card is
+  // wide enough (a laptop: it is two thirds of Home's width there, html;
+  // on a wider screen the schedule sits beside them too), one under the
+  // other on a phone, the office's first. What could be done in either place (no place picked, and a tag
+  // with no usual one) is a small list under them. Each list has its late
+  // ones first, as the one list had; a tick does what it did (todoRow), and
+  // the one count in the head is unchanged. Only his: the crew's day is the
+  // crew's tasks, done out (Your day, unchanged for everyone else).
+  function placesHtml(d, ownLate, ownAny, crewLate, crewAny) {
+    const rows = ownLate.map(x => [x, true]).concat(ownAny.map(x => [x, false]));
+    const of = id => rows.filter(r => (r[0].place || '') === id).map(r => todoRow(r[0], r[1]));
+    const office = of('office'), out = of('out'), either = of('');
+    const head = id => { const p = YDRemind.place(id); return (p.icon ? p.icon + ' ' : '') + p.list; };
+    return '<div class="hm-places"><div class="hm-day-grid">' +
+      '<div class="hm-day-sched">' + sub('🕑 Schedule') +
+        (d.mineTimed.length ? capped('mineT', d.mineTimed.map(timedRow), 8) : empty('Nothing at a set time today.')) + '</div>' +
+      '<div class="hm-day-office">' + sub(head('office')) +
+        (office.length ? capped('mineO', office) : empty('Nothing for the office today.')) + '</div>' +
+      '<div class="hm-day-out">' + sub(head('out')) +
+        (out.length ? capped('mineOut', out) : empty('Nothing to get done out today.')) + '</div>' +
+      (either.length ? '<div class="hm-day-either">' + sub(head('either')) + capped('mineE', either) + '</div>' : '') +
+      '</div></div>' +
+      (crewLate.length || crewAny.length
+        ? sub('👷 Crew tasks — anyone can do these') +
+          capped('mineC', crewLate.map(x => todoRow(x, true)).concat(crewAny.map(x => todoRow(x, false))))
+        : '');
   }
 
   function crewDayHtml(d) {
@@ -803,11 +837,22 @@
     // the crew, hours to look at, receipts -- then his day, the crew's, and
     // the work and the money. The crew: their clock, their day, the rest of
     // the crew, their jobs.
+    const top = greetingHtml() + actionsHtml() + stormHtml() + statsHtml(all);
+    // The owner's day is wide (placesHtml: his office and out lists side by
+    // side), so on a wide screen it takes two thirds of the width beside
+    // Waiting on you, and the rest flow in columns under them. A phone has
+    // them one under the other, in the same order as before.
+    if (!crewish && isOwner()) {
+      const side = [waitingHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
+      const day = myDayHtml(d);
+      return top + '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
+        '<div class="hm-grid">' + [crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()]
+          .filter(Boolean).join('') + '</div>';
+    }
     const cards = crewish
       ? [clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
       : [waitingHtml(), clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
-    return greetingHtml() + actionsHtml() + stormHtml() + statsHtml(all) +
-      '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
+    return top + '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
   }
 
   function render() {
