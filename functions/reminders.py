@@ -446,16 +446,21 @@ PHONE_FIRST = re.compile(r"^\s*(?:call(?:s|ing|ed)?|call\s?-?\s?backs?|phone(?:d
                          r"(?!\s+(?:bills?|plans?|cases?|chargers?|payments?|repairs?|upgrades?|numbers?)\b)", re.I)
 PHONE_ANY = re.compile(r"\b(?:phone|zoom|video|conference|facetime)\s?-?\s?calls?\b|\bcall\s?-?\s?backs?\b|"
                        r"\breturn(?:ed)?\b.{0,40}\bcalls?\b|\bcalls?\s*[.!?]?\s*$", re.I)
+PICKUP_WORDS = re.compile(r"\bpick\s?-?\s?up\b", re.I)
+# A check to collect, the bank, a drop-off (remind.js ERRAND_WORDS).
+ERRAND_WORDS = re.compile(r"\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|"
+                          r"\bchecks?\s+(?:from|for)\b|\bdeposit\b", re.I)
+# (tag, the words that say it[, the words that say it is not]): on My work a
+# pickup of a check, or at the bank, is no material pickup -- a to-do.
 WORDS = (("phone", PHONE_FIRST),
-         ("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
+         ("pickup", PICKUP_WORDS, ERRAND_WORDS),
          ("email", re.compile(r"^\s*send\b|\be-?mail\b", re.I)),
          ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
          ("phone", PHONE_ANY))
 # On the Crew schedule, asked in this order: "Pickup check from ..." is an
 # errand, "Pick up pavers at the yard" a pickup (remind.js CREW_WORDS).
-CREW_WORDS = (("errand", re.compile(r"\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|"
-                                    r"\bchecks?\s+(?:from|for)\b|\bdeposit\b", re.I)),
-              ("pickup", re.compile(r"\bpick\s?-?\s?up\b", re.I)),
+CREW_WORDS = (("errand", ERRAND_WORDS),
+              ("pickup", PICKUP_WORDS),
               ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
               ("repair", re.compile(r"\b(?:repair\w*|fix(?:ed|ing)?|service|oil change|tires?|broken|brakes?|grease)\b", re.I)),
               ("shop", re.compile(r"\b(?:shop|yard work|the yard)\b", re.I)))
@@ -465,8 +470,8 @@ DAY_LIST_MAX = 6                  # named in the 7 am buzz; the rest are "+N mor
 
 
 def _by_words(title, words=WORDS):
-    for kind, w in words:
-        if w.search(title):
+    for kind, w, *unless in words:
+        if w.search(title) and not (unless and unless[0].search(title)):
             return kind
     return ""
 

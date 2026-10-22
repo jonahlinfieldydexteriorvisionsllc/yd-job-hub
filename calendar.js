@@ -2000,7 +2000,7 @@
     if (note) note.textContent = typeNote;
   };
   // Until a tag is tapped, it follows the title as it is typed (remind.js
-  // typeOf: "Pickup mulch" a pickup, "Send the bid" an email to send, "Call
+  // typeOf: "Pickup mulch" a material pickup, "Send the bid" an email to send, "Call
   // Pat back" a phone call; on the Crew schedule "Fix the trailer lights"
   // an equipment repair).
   window.calTitleChanged = function () {

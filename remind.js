@@ -58,7 +58,14 @@
     // from every other tag's colour and the urgency colours as there was
     // room for; white writing reads on it.
     { id: 'phone', icon: '📞', name: 'Phone call', timed: true, color: '#c026d3' },
-    { id: 'pickup', icon: '🚚', name: 'Pickup', timed: false, color: '#8b5a2b' },
+    // Jonah (22 Oct 2026): "make material pickup tag option for the
+    // calendar". It was always a material pickup in his words ("a quote
+    // appointment or a material pickup", 12 Oct; a store's "ready for
+    // pickup" order) and the Crew schedule called it that, while My work and
+    // board cards said only "Pickup" -- one tag under two names. One name
+    // now, everywhere; the id stays 'pickup', so every entry and card
+    // already tagged keeps its tag.
+    { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#8b5a2b' },
     { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
     { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
@@ -98,7 +105,7 @@
   // edited. [id, the name it goes by there when not its own].
   const CAL_TAGS = {
     work: [['bid'], ['appt'], ['phone'], ['pickup'], ['delivery'], ['email'], ['todo']],
-    crew: [['pickup', 'Material pickup'], ['delivery'], ['repair'], ['shop'], ['errand'], ['crew']],
+    crew: [['pickup'], ['delivery'], ['repair'], ['shop'], ['errand'], ['crew']],
     // The Job schedule: job days only -- no list to pick from.
     jobs: [['jobday']],
     personal: [['doctor'], ['phone'], ['personal']],
@@ -258,11 +265,14 @@
   //     not the dentist), else a doctor's appointment when it says so, else
   //     personal;
   //   - My work, and any calendar he makes: the title tells a phone call, a
-  //     pickup, an email or a delivery, and anything else is a to-do. A
-  //     title STARTING "Call ..." / "Phone ..." is a call whatever else it
-  //     says ("Call the yard about the delivery"); one that only mentions a
-  //     call further on ("<a business> call", "Pat -- call back") is one
-  //     when it says nothing else ("Send the bid, then call" is an email).
+  //     material pickup, an email or a delivery, and anything else is a
+  //     to-do. A title STARTING "Call ..." / "Phone ..." is a call whatever
+  //     else it says ("Call the yard about the delivery"); one that only
+  //     mentions a call further on ("<a business> call", "Pat -- call back")
+  //     is one when it says nothing else ("Send the bid, then call" is an
+  //     email). A pickup of a check, or at the bank, is no material pickup:
+  //     the Crew schedule calls that an errand, and My work, with no errand
+  //     tag, a to-do.
   // A card on Pickups -- made from a store's "ready for pickup" email -- is
   // a pickup, and one on Crew tasks or tagged 👷 Crew a crew task. (Site
   // visits and the Work schedule were calendars before 15 Oct; kept so
@@ -274,24 +284,29 @@
   // "Phone call with ...", "Zoom call", "call back", "return ...'s call",
   // and a title ending in "call".
   const PHONE_ANY = /\b(?:phone|zoom|video|conference|facetime)\s?-?\s?calls?\b|\bcall\s?-?\s?backs?\b|\breturn(?:ed)?\b.{0,40}\bcalls?\b|\bcalls?\s*[.!?]?\s*$/i;
+  const PICKUP_WORDS = /\bpick\s?-?\s?up\b/i;
+  // A check to collect, the bank, a drop-off.
+  const ERRAND_WORDS = /\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bchecks?\s+(?:from|for)\b|\bdeposit\b/i;
+  // [tag, the words that say it, the words that say it is not] -- asked in
+  // this order, the first that fits.
   const WORDS = [
     ['phone', PHONE_FIRST],
-    ['pickup', /\bpick\s?-?\s?up\b/i],
+    ['pickup', PICKUP_WORDS, ERRAND_WORDS],
     ['email', /^\s*send\b|\be-?mail\b/i],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
     ['phone', PHONE_ANY],
   ];
   const isCall = title => PHONE_FIRST.test(title || '') || PHONE_ANY.test(title || '');
   const CREW_WORDS = [
-    ['errand', /\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bchecks?\s+(?:from|for)\b|\bdeposit\b/i],
-    ['pickup', /\bpick\s?-?\s?up\b/i],
+    ['errand', ERRAND_WORDS],
+    ['pickup', PICKUP_WORDS],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
     ['repair', /\b(?:repair\w*|fix(?:ed|ing)?|service|oil change|tires?|broken|brakes?|grease)\b/i],
     ['shop', /\b(?:shop|yard work|the yard)\b/i],
   ];
   const DOCTOR_WORDS = /\b(doctor|dentist|dental|clinic|chiropract\w*|orthodont\w*|optometr\w*|dermatolog\w*|physical therapy|check-?up|physical)\b|\bdr\.\s/i;
   function byWords(title, list) {
-    const hit = (list || WORDS).find(w => w[1].test(title || ''));
+    const hit = (list || WORDS).find(w => w[1].test(title || '') && !(w[2] && w[2].test(title || '')));
     return hit ? hit[0] : '';
   }
   // `where`: { cal (the calendar itself: its own tags count), or calKind,
