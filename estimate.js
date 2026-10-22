@@ -639,23 +639,49 @@
         '<button class="btn btn-sm ro-ok" onclick="estUnfold(true)" aria-expanded="false">' + (changes() ? 'Show / edit ▾' : 'Show ▾') + '</button></span></div>';
   }
 
-  // What the work is, line by line, in the words on the estimate the
-  // customer said yes to -- QuickBooks' own, for one made there. Jonah, 16
-  // Oct 2026: "when i say service descriptions i mean whats actually written
-  // on the qwuickbooks estimate" -- the folded estimate showed only its
-  // number and total, the words a tap away. Shown under it, in full.
+  // What the work is, line by line, under the estimate the customer said
+  // yes to. Jonah, 16 Oct 2026: "when i say service descriptions i mean
+  // whats actually written on the qwuickbooks estimate" -- the folded
+  // estimate showed only its number and total. Then (21 Oct) the crew get
+  // "what to do" first and the customer's words one tap away, and his admin
+  // "should see the same version": so this is the crew's page for the work
+  // (crewjobs.js), drawn from the same parts -- what to do, then "What the
+  // customer was told" (QuickBooks' own words, for a job made there) folded
+  // under each line. Jonah also sees, under a line, a how-we-do-it still to
+  // write (only he writes them).
+  // (With the invoice's change orders, which the crew's page lists after the work.)
+  const jobLike = () => ({ estimate: est, serviceTypes: typeof serviceTypes !== 'undefined' && Array.isArray(serviceTypes) ? serviceTypes : [],
+                           qbInvoiceRef: qbInv() });
   function workWordsHtml() {
-    const lines = est.work.filter(w => String(w.scope || '').trim() || String(w.title || '').trim());
-    if (!lines.length) return '';
+    const C = window.YDCrewJobs;
+    if (!C || !C.workParts || !est.work.some(w => String(w.scope || '').trim() || String(w.title || '').trim())) return '';
+    const parts = C.workParts(jobLike());
     const q = est.fromQb;
-    const from = q ? 'as written on QuickBooks ' + (q.kind === 'invoice' ? 'invoice' : 'estimate') +
-      (q.docNumber ? ' #' + esc(q.docNumber) : '') : 'as written on the estimate';
-    return '<div class="est-words"><h4 class="est-h">🛠 The work <span class="muted">— ' + from + '</span></h4>' +
-      lines.map(w => '<div class="est-words-line"><b>' + esc(w.title || 'Work') + '</b>' +
-        (String(w.scope || '').trim() ? '<div class="est-words-text">' + esc(String(w.scope).trim()) + '</div>' : '') +
-        (String(w.crewNote || '').trim() ? '<div class="est-words-crew">👷 For the crew: ' + esc(String(w.crewNote).trim()) + '</div>' : '') +
-      '</div>').join('') + '</div>';
+    const from = q ? 'QuickBooks ' + (q.kind === 'invoice' ? 'invoice' : 'estimate') + (q.docNumber ? ' #' + esc(q.docNumber) : '') : 'the estimate';
+    const mine = window.YDAuth && window.YDAuth.isOwner;
+    return '<div class="est-words">' +
+      C.workPageHtml(parts, { key: 'job:' + (currentJobId || ''), extra: mine ? howTodoHtml : null,
+        title: '🛠 The work <span class="est-words-from">— as the crew read it; what the customer was told (' + from + ') under each line</span>',
+        sec: (title, body) => body ? '<div class="est-words-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '' }) +
+    '</div>';
   }
+  // Under a piece of work, for Jonah: its kind of work's how-we-do-it, when
+  // it is not written yet -- the crew see nothing for it until it is.
+  function howTodoHtml(part) {
+    const S = window.YDServices;
+    const w = est.work.find(x => safeId(x.id) === part.id);
+    if (!w || !S || !S.ready || !S.ready()) return '';
+    const how = S.howToFor(w, jobLike());
+    if (!how || how.text) return '';
+    return '<div class="est-howline est-how-todo">👷 How we do it — ' + esc(how.name) + ': <span class="est-how-no">not written yet</span>' +
+      ' <button class="link-btn ro-ok" data-s="' + esc(how.id) + '" onclick="openServiceHowTo(this.dataset.s)">✎ Write it</button></div>';
+  }
+  // The services list changed (a how-we-do-it written, a service renamed):
+  // the lines that show them are drawn again.
+  document.addEventListener('yd-services', () => {
+    if (!el('estimateWrap') || !P() || snowNow()) return;
+    if (jobShown() && !typingHere()) render(); else stale = true;
+  });
   // A line brought in from QuickBooks (quickbooks.py _hub_estimate gives it
   // an id ewqb…): its words are QuickBooks', put back every hour by the
   // server (keep_qb_words), so they are shown, not edited, here.
@@ -874,11 +900,14 @@
         : '<textarea rows="3" class="est-scope" placeholder="Scope of work the customer reads for this line"' + (ro ? ' readonly' : '') +
             ' oninput="estWork(\'' + id + '\', \'scope\', this.value)">' + esc(w.scope || '') + '</textarea>') +
       crewNoteHtml(w, id, ro) +
+      howLineHtml(w) +
       '<div class="est-meta">' + crewNoteAddHtml(w, id, ro) +
         taxPickHtml('work', id, w.taxable, ro) +
-        moreBtnHtml(id, qbName ? 'QuickBooks: ' + qbName : '') + '</div>' +
+        moreBtnHtml(id, [qbName ? 'QuickBooks: ' + qbName : '',
+          w.service === 'none' ? 'No how-we-do-it' : w.service ? 'Service picked' : ''].filter(Boolean).join(' · ')) + '</div>' +
       moreBoxHtml(id, '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
-        ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>') +
+        ' onfocus="estLoadQbItems()" oninput="estWork(\'' + id + '\', \'qbItem\', this.value)"></div>' +
+        servicePickHtml(w, id, ro)) +
       '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
   }
@@ -920,9 +949,14 @@
     return ro || !crewNoteShut(w, id) ? '' : '<span class="est-crewnote-add"><button class="link-btn" onclick="estCrewNote(\'' + id + '\')">' +
       '👷 + Notes for the crew</button></span>';
   }
+  // Claude writes them from his site notes when it builds the estimate
+  // (crewNoteBy 'claude', estimates.py `crew`) and may write them again
+  // while they are still its own; once Jonah types in the box they are his
+  // (crewNoteBy 'hand') and Claude changes them only when he asks it to.
   function crewNoteHtml(w, id, ro) {
     if (crewNoteShut(w, id)) return '';
-    return '<div class="est-crewnote"><span>👷 Notes for the crew — not on the estimate; the crew see them on the job’s page</span>' +
+    return '<div class="est-crewnote"><span>👷 Notes for the crew — not on the estimate; the crew see them on the job’s page' +
+        (w.crewNoteBy === 'claude' && String(w.crewNote || '').trim() ? '. <b>Written by Claude</b> from your notes — change anything and they’re yours' : '') + '</span>' +
       '<textarea rows="2" id="estCN_' + id + '"' + (ro ? ' readonly' : '') +
         ' placeholder="Anything the crew need to know for this work — depths, where things go, what to watch out for"' +
         ' oninput="estWork(\'' + id + '\', \'crewNote\', this.value)">' + esc(w.crewNote || '') + '</textarea></div>';
@@ -933,6 +967,48 @@
     const box = el('estCN_' + safeId(id));
     if (box) box.focus();
   };
+
+  // How we do this kind of work (services.js howTo): the crew read it under
+  // the line. Which service it comes from -- one whose whole name is in the
+  // heading, or picked by hand under More (w.service: a service's id, or
+  // 'none'; the line's tools follow the same pick) -- and whether it is
+  // written yet. Nothing when no service goes with the line.
+  function howLineHtml(w) {
+    const S = window.YDServices;
+    if (!S || !S.ready || !S.ready() || !S.howToFor) return '';
+    const how = S.howToFor(w, jobLike());
+    if (!how) return '';
+    const mine = window.YDAuth && window.YDAuth.isOwner;
+    return '<div class="est-howline">👷 How we do it — ' + esc(how.name) + (how.byHand ? ' <span class="muted">(picked)</span>' : '') + ': ' +
+      (how.text ? '<span class="est-how-ok">✓ written — the crew read it under this line</span>'
+        : '<span class="est-how-no">not written yet</span>' +
+          (mine ? ' <button class="link-btn ro-ok" data-s="' + esc(how.id) + '" onclick="openServiceHowTo(this.dataset.s)">✎ Write it</button>' : '')) +
+    '</div>';
+  }
+  // Under More: the service the line is, by hand -- for when the heading
+  // says nothing a service is called ("Garden Bed Installation") or says the
+  // wrong one. "Worked out" goes back to the heading.
+  function servicePickHtml(w, id, ro) {
+    const S = window.YDServices;
+    if (!S || !S.ready || !S.ready() || !S.pickList) return '';
+    const auto = S.howToFor(Object.assign({}, w, { service: '' }), jobLike());
+    const groups = S.pickList();
+    const picked = w.service || '';
+    const listed = groups.some(g => g.services.some(v => v.id === picked));
+    const opt = (v, label, on) => '<option value="' + esc(v) + '"' + (on ? ' selected' : '') + '>' + esc(label) + '</option>';
+    // A pick that is hidden from the pickers now: still shown as it is. (One
+    // merged away is gone from the list, and the heading decides again.)
+    const all = (S.list && S.list() && S.list().services) || {};
+    const gone = picked && picked !== 'none' && !listed && all[picked] ? all[picked] : null;
+    return '<div class="est-qbitem est-svcpick"><span>Service — what the crew read under “How we do it” (and its tools)</span>' +
+      '<select' + (ro ? ' disabled' : '') + ' onchange="estWork(\'' + id + '\', \'service\', this.value)">' +
+        opt('', 'Worked out from the heading: ' + (auto ? auto.name : 'none'), !picked || (picked !== 'none' && !listed && !gone)) +
+        (gone ? opt(picked, gone.name + ' (hidden)', true) : '') +
+        groups.map(g => '<optgroup label="' + esc(g.name) + '">' +
+          g.services.map(v => opt(v.id, v.name + (v.written ? ' ✓' : ''), picked === v.id)).join('') + '</optgroup>').join('') +
+        opt('none', 'None — no how-we-do-it for this line', picked === 'none') +
+      '</select></div>';
+  }
 
   // Which piece of work a material is for, so the crew's page lists it
   // under that line (crewjobs.js workFor). Left on Auto it is worked out from
@@ -2903,7 +2979,19 @@
       if (v === 'allin' && num(w.allInCents) === null && num(w.amountCents) !== null) w.allInCents = w.amountCents;
       w.kind = v; changed(true); return;
     }
-    else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product, notes for the crew
+    // The service the line is, by hand (its how-we-do-it and its tools), or
+    // back to the one its heading names. Nothing to re-price.
+    else if (field === 'service') {
+      if (v) w.service = String(v); else delete w.service;
+      if (typeof markDirty === 'function') markDirty();
+      if (typeof scheduleJobTools === 'function') scheduleJobTools();
+      render();
+      return;
+    }
+    // Typed in: the notes for the crew are his now -- Claude no longer
+    // rewrites them unless he asks it to (workLine).
+    else if (field === 'crewNote') { w.crewNote = String(v); w.crewNoteBy = 'hand'; wordsChanged(); return; }
+    else { w[field] = String(v); wordsChanged(); return; }      // title, scope, QuickBooks product
     changed(false);
   };
   window.estPickPrice = function (id, pid) {
@@ -3424,7 +3512,10 @@
           amountDollars: dollars(w.amountCents), allInDollars: dollars(w.allInCents), addDollars: dollars(w.addCents),
           priced: p && p.cents ? p.cents / 100 : null,
           allInSplit: a && a.labourCents !== null ? { materials: (a.materialsCents + a.deliveryCents) / 100, count: a.count,
-                                                      labour: a.labourCents / 100 } : null };
+                                                      labour: a.labourCents / 100 } : null,
+          // The notes for the crew on the line, and whether they are his own
+          // words (typed by him) or still Claude's.
+          crew: String(w.crewNote || '').slice(0, 1500), crewMine: crewNoteMine(w) };
       }),
       materials: e.materials.map((m, i) => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
         unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
@@ -3443,10 +3534,28 @@
   function mergeWork(got, e) {
     return (got || []).map(g => workLine(g, g.id ? e.work.find(w => w.id === g.id) : null));
   }
+  // A line's notes for the crew are Jonah's own once he has typed in them
+  // (crewNoteBy 'hand'), or when written before Claude wrote any (no mark).
+  const crewNoteMine = w => w.crewNoteBy === 'hand' || (!w.crewNoteBy && !!String(w.crewNote || '').trim());
+  // His latest message is about what the crew are told ("tell the guys to
+  // mind the sprinkler heads"): then Claude may change his own notes too.
+  let crewAsked = false;
+  const CREW_WORDS = /\b(crew|guys)\b/i;
   function workLine(g, was) {
     const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
     w.title = String(g.title || '');
     w.scope = String(g.scope || '');
+    // The same work told to the crew (Jonah, 21 Oct 2026: yes to Claude
+    // writing "a 2–4 line crew version per line" when it builds the
+    // estimate). Written into the line's notes for the crew while they are
+    // empty or still Claude's; his own words only when he asked about the
+    // crew -- and they stay his. Nothing said keeps what is there.
+    const crew = String(g.crew || '').trim().slice(0, 3000);
+    if (crew && (!crewNoteMine(w) || crewAsked)) {
+      const his = crewNoteMine(w);
+      w.crewNote = crew;
+      w.crewNoteBy = his ? 'hand' : 'claude';
+    }
     w.kind = ['crew', 'flat', 'amount', 'allin'].indexOf(g.kind) !== -1 ? g.kind : w.kind || 'crew';
     // Crew-days on any line: priced by them, or (by the unit, fixed) how
     // long it takes -- for his profit per day and the fuel.
@@ -3701,7 +3810,10 @@
       (patch && ((r.removed || []).length || spoil !== e.spoilCuYd || brush !== e.brushCuYd))));
     const said = [];
     if (did) {
+      const lastAsk = e.chat.filter(m => m.role === 'user').slice(-1)[0];
+      crewAsked = !!(lastAsk && CREW_WORDS.test(String(lastAsk.text || '')));
       e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
+      crewAsked = false;
       e.materials = patch ? patchLines(e.materials, r.materials, r.removed, (g, was) => matLine(g, was, e, said))
         : mergeMaterials(r.materials, e, said);
       e.spoilCuYd = spoil;

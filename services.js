@@ -10,7 +10,7 @@
 //
 // Where it lives: ONE record, settings/serviceList --
 //   { groups:   { id: { name, order, active } },          the kinds of work
-//     services: { id: { name, group, summary, details, aliases[], qbItemName,
+//     services: { id: { name, group, summary, details, howTo, aliases[], qbItemName,
 //                       tools[], active, order, addedAt, addedBy } },
 //     seededAt, updatedAt }
 // One record rather than a collection: the whole list is a few dozen short
@@ -39,6 +39,19 @@
 //
 // And the TOOLS each service takes (16 Oct 2026, see "tools" below): picked
 // here once per service, put together into every job's tool list.
+//
+// HOW WE DO IT (howTo). Jonah (16 Oct 2026): "service description for crew
+// needs to be optimized for service. the crew doesnt need descriptions of
+// why fabric holds up over many seasons etc." The summary and details are
+// for the homeowner; howTo is for the crew only -- the steps on site, the
+// depths, what goes down in what order, the checks before leaving. Written
+// once per service and shown under every piece of work of that kind on the
+// crew's page for a job (crewjobs.js), and on the Job tab -- one version for
+// the crew and the office alike (21 Oct: his admin "should see the same
+// version"). Jonah's own words, written with Claude over the winter (his
+// answer: "i will work with claude to explain how we do it and claude will
+// write it in"): this file never makes any up. Until one is written, the
+// crew see nothing for it and Jonah sees "not written yet".
 
 (function () {
   'use strict';
@@ -57,6 +70,9 @@
   const mayAdd = () => owner() || can('jobs', 'change') || can('contacts', 'change');
   const plural = (n, one, many) => n + ' ' + (n === 1 ? one : (many || one + 's'));
   const wide = () => window.innerWidth > 720;
+  // How long a how-we-do-it may be: a page of steps, never a manual (it is
+  // copied onto every booked job's page for the crew).
+  const HOW_MAX = 6000;
 
   // The kinds of work it starts with. Names, not business numbers; Jonah can
   // rename, add, reorder and hide them.
@@ -216,7 +232,7 @@
   }
   function blank(name, group, order) {
     const who = window.YDAuth && window.YDAuth.user ? (window.YDAuth.user.email || '') : '';
-    return { name: name, group: group, summary: '', details: '', aliases: [], qbItemName: '', active: true,
+    return { name: name, group: group, summary: '', details: '', howTo: '', aliases: [], qbItemName: '', active: true,
              order: order, addedAt: iso(), addedBy: who };
   }
   function newId(name) {
@@ -456,9 +472,18 @@
   // do not say (a job brought in from QuickBooks often has none): its
   // QuickBooks product, its heading as a service's name, else the one
   // service whose name has the most words in the heading (a tie is none).
+  //
+  // Picked by hand on the estimate line (w.service: a service's id, or
+  // 'none') wins -- for its tools and its how-we-do-it alike. `strict` (the
+  // how-we-do-it): only a service whose whole name is in the heading -- a
+  // wrong how-to on the crew's page misleads, where a wrong tool suggestion
+  // is only one more thing in the truck ("Garden Bed Installation" is not a
+  // "Raised Garden Bed").
   const VAGUE = new Set(['and', 'the', 'of', 'new', 'install', 'installation', 'service', 'work', 'repair', 'job', 'project', 'labor', 'labour']);
-  function serviceForLine(w) {
+  function serviceForLine(w, strict) {
     if (!list || !w) return null;
+    if (w.service === 'none') return null;
+    if (w.service && list.services[w.service]) return { id: w.service, v: list.services[w.service] };
     const title = s(w.title).replace(/\s*\([^)]*×[^)]*\)\s*$/, '');
     const qbi = s(w.qbItem).toLowerCase();
     const all = Object.entries(list.services).map(([id, v]) => ({ id: id, v: v }));
@@ -476,12 +501,30 @@
       const nw = wordsOf(x.v.name).filter(n => !VAGUE.has(n));
       if (!nw.length) return;
       const got = nw.filter(n => tw.has(n)).length;
+      if (strict && got !== nw.length) return;
       // Every word of the name counts double, so "Retaining wall" beats "Wall".
       const score = got ? got + (got === nw.length ? 10 : 0) : 0;
       if (score > top) { top = score; best = x; tie = false; }
       else if (score && score === top) tie = true;
     });
     return top && !tie ? best : null;
+  }
+
+  // The how-we-do-it for one piece of work on a job (the crew's page, the Job
+  // tab): its service (picked by hand, else one whose whole name is in the
+  // heading), else -- a job with one piece of work and one service -- that
+  // service. d: the job (serviceTypes, estimate). Answers { id, name, text,
+  // byHand } -- text '' while it is not written -- or null.
+  function howToFor(w, d) {
+    if (!list || !w) return null;
+    let x = serviceForLine(w, true);
+    const picked = w.service === 'none' || !!(w.service && list.services[w.service]);
+    if (!x && !picked) {
+      const work = (((d || {}).estimate || {}).work || []).filter(l => l && (s(l.title) || s(l.scope) || s(l.crewNote)));
+      const svs = Array.isArray((d || {}).serviceTypes) ? d.serviceTypes : [];
+      if (work.length === 1 && svs.length === 1) x = serviceOf(svs[0]);
+    }
+    return x ? { id: x.id, name: x.v.name, text: s(x.v.howTo), byHand: picked } : null;
   }
 
   // A service's starters as tools: one of his machines when exactly one goes
@@ -872,7 +915,7 @@
   const matches = v => {
     const words = search.toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return true;
-    const text = [v.name, v.summary, v.details].concat(v.aliases || []).join(' ').toLowerCase();
+    const text = [v.name, v.summary, v.details, v.howTo].concat(v.aliases || []).join(' ').toLowerCase();
     return words.every(w => text.indexOf(w) !== -1);
   };
   const searchBox = ph => '<input class="svc-search" type="search" placeholder="' + ph + '" value="' + esc(search) +
@@ -886,10 +929,13 @@
       (extra || '') + '</summary><div class="svc-group-body">' + inner + '</div></details>';
   }
 
-  // ---- What we do (everyone): the summary to say, then the details.
+  // ---- What we do (everyone): the summary to say, then the details; and,
+  // folded under them, how we do it (the crew's, once Jonah has written it).
   function readHtml() {
+    const anyHow = Object.values(list.services).some(v => v && v.active !== false && s(v.howTo));
     return '<p class="hint">What each service is, in words to use with a homeowner. ' +
-      'The first line is the short version; under it, what it includes.</p>' +
+      'The first line is the short version; under it, what it includes.' +
+      (anyHow ? ' “👷 How we do it” is for us, not the homeowner: the way we do the work on site.' : '') + '</p>' +
       (owner() ? '<div class="svc-acts"><button class="btn btn-sm" onclick="svcMode(\'manage\')">✎ Back to changing the list</button></div>' : '') +
       searchBox('Search the services') + '<div id="svcResults">' + readGroupsHtml() + '</div>';
   }
@@ -902,6 +948,8 @@
         (s(v.summary) ? '<div class="svc-summary">' + esc(v.summary) + '</div>' : '') +
         (s(v.details) ? '<div class="svc-details">' + esc(v.details) + '</div>' : '') +
         (!s(v.summary) && !s(v.details) ? '<div class="muted svc-none">No description yet — ask Jonah.</div>' : '') +
+        (s(v.howTo) ? '<details class="svc-how"' + (v.id === focusId ? ' open' : '') + '><summary>👷 How we do it</summary>' +
+          '<div class="svc-how-text">' + esc(s(v.howTo)) + '</div></details>' : '') +
         ((v.tools || []).length ? '<div class="svc-alias svt-line">🧰 Bring: ' + esc(toolsLine(v)) + '</div>' : '') +
       '</div>').join(''), svs.length);
     }).join('');
@@ -913,11 +961,14 @@
     const all = Object.values(list.services).filter(v => v.active !== false);
     const noSummary = all.filter(v => !s(v.summary)).length;
     const noTools = all.filter(v => !Array.isArray(v.tools)).length;
+    const noHow = all.filter(v => !s(v.howTo)).length;
     return '<p class="hint">One list for jobs, contacts, customers and subcontractors. The <b>summary</b> is the one line the crew ' +
         'say to a homeowner; the <b>details</b> are what it includes. The crew read them under 🧰 What we do. ' +
+        '<b>How we do it</b> is for the crew only — the steps on site — and shows under that kind of work on every job’s page. ' +
         'The <b>tools</b> a service takes go on every job with it, for the crew to bring.</p>' +
       '<div class="svc-stats"><span>' + plural(all.length, 'service') + '</span>' +
         (noSummary ? '<span class="svc-warn">' + noSummary + ' still without a summary</span>' : '<span class="svc-ok">✓ every one has a summary</span>') +
+        (noHow ? '<span class="svc-warn">' + noHow + ' with “how we do it” not written yet</span>' : '<span class="svc-ok">✓ every one has how we do it</span>') +
         (noTools ? '<span class="svc-warn">' + noTools + ' with tools not yet picked</span>' : '<span class="svc-ok">✓ every one has its tools</span>') + '</div>' +
       '<div class="svc-acts">' +
         '<button class="btn btn-sm btn-filled" onclick="svcAdd()">+ Add a service</button>' +
@@ -951,6 +1002,8 @@
         '<span class="muted svc-used">' + (used.total ? 'on ' + esc(used.text) : 'not on any record yet') + '</span></div>' +
       (s(v.summary) ? '<div class="svc-summary">' + esc(v.summary) + '</div>' : '<div class="svc-summary muted">No summary yet</div>') +
       (s(v.details) ? '<div class="svc-details">' + esc(v.details) + '</div>' : '') +
+      (s(v.howTo) ? '<div class="svc-howline"><b>👷 How we do it:</b> <span class="svc-how-text">' + esc(s(v.howTo)) + '</span></div>'
+        : v.active !== false ? '<div class="muted svc-alias svc-howline">👷 How we do it — not written yet</div>' : '') +
       ((v.aliases || []).length ? '<div class="muted svc-alias">Also written: ' + esc(v.aliases.join(', ')) + '</div>' : '') +
       (v.qbItemName ? '<div class="muted svc-alias">📗 QuickBooks: ' + esc(v.qbItemName) + '</div>' : '') +
       ((v.tools || []).length ? '<div class="svc-alias svt-line">🧰 ' + esc(toolsLine(v)) + '</div>'
@@ -958,7 +1011,7 @@
         : v.active !== false ? '<div class="muted svc-alias svt-line">🧰 No tools picked yet — jobs list the suggested ones</div>' : '') +
       '<div class="svc-acts">' +
         btn('✎ Edit', 'svcEdit(\'' + id + '\')') +
-        (v.active !== false ? btn('🧰 Tools', 'svcEditTools(\'' + id + '\')') : '') +
+        (v.active !== false ? btn('👷 How we do it', 'svcEditHow(\'' + id + '\')') + btn('🧰 Tools', 'svcEditTools(\'' + id + '\')') : '') +
         (v.active === false ? btn('Show again', 'svcShow(\'' + id + '\', true)')
           : btn('Merge into…', 'svcMerge(\'' + id + '\')') + btn('Hide', 'svcShow(\'' + id + '\', false)') +
             (i > 0 ? btn('▲', 'svcMove(\'' + id + '\', -1)', 'svc-arrow') : '') +
@@ -977,9 +1030,12 @@
       '<div class="field"><span class="label">Kind of work</span><select id="svcEdGroup" onchange="svcDraft(\'group\', this.value)">' + opts + '</select></div>' +
       '<div class="field"><span class="label">Summary — one line the crew can say</span>' +
         '<input id="svcEdSummary" value="' + esc(d.summary) + '" maxlength="200" placeholder="One line the crew can say" oninput="svcDraft(\'summary\', this.value)"></div>' +
-      '<div class="field"><span class="label">Details — what it includes, how we do it</span>' +
-        '<textarea id="svcEdDetails" rows="5" maxlength="4000" placeholder="A few sentences: what is included, how we do it" oninput="svcDraft(\'details\', this.value)">' +
+      '<div class="field"><span class="label">Details — what it includes, to tell a homeowner</span>' +
+        '<textarea id="svcEdDetails" rows="5" maxlength="4000" placeholder="A few sentences: what is included" oninput="svcDraft(\'details\', this.value)">' +
         esc(d.details) + '</textarea></div>' +
+      '<div class="field svc-how-field"><span class="label">👷 How we do it — for the crew only, never the customer. Shows under this kind of work on every job’s page.</span>' +
+        '<textarea id="svcEdHow" rows="7" maxlength="' + HOW_MAX + '" placeholder="Not written yet. The steps on site, in order: how deep we dig, what goes down and how it is compacted, the checks before we leave." ' +
+        'oninput="svcDraft(\'howTo\', this.value)">' + esc(d.howTo) + '</textarea></div>' +
       toolsFieldHtml(d) +
       qbFieldHtml(d) +
       '<div class="field"><span class="label">Other spellings (commas between) — typed anywhere, they become this one</span>' +
@@ -1045,7 +1101,7 @@
     const v = list && list.services[id];
     if (!v || !owner()) return false;
     editing = id;
-    draft = { name: v.name, group: groupOf(v), summary: v.summary || '', details: v.details || '',
+    draft = { name: v.name, group: groupOf(v), summary: v.summary || '', details: v.details || '', howTo: v.howTo || '',
               aliases: (v.aliases || []).join(', '), qbItemName: v.qbItemName || '',
               tools: cleanTools(v.tools), picked: Array.isArray(v.tools), toolText: '', eqOpen: !!eqOpen };
     openGroups[groupOf(v)] = true;
@@ -1063,6 +1119,30 @@
     if (!startEdit(id, true)) return;
     const t = el('svcEdTools');
     if (t) setTimeout(() => t.scrollIntoView({ block: 'start' }), 30);
+  };
+  // The editor, at its how-we-do-it box, ready to type in.
+  window.svcEditHow = function (id) {
+    if (!startEdit(id)) return;
+    const t = el('svcEdHow');
+    if (!t) return;
+    setTimeout(() => { t.scrollIntoView({ block: 'center' }); t.focus({ preventScroll: true }); }, 30);
+  };
+  // From a job (the Job tab, a piece of work whose how-we-do-it is not
+  // written): that service's box. By id, or a name -- one not yet on the
+  // list joins it first, as one typed on a job does.
+  window.openServiceHowTo = function (idOrName) {
+    if (!owner()) return;
+    if (!list) { showToast('The services list has not come through yet'); return; }
+    let id = list.services[idOrName] ? idOrName : null;
+    if (!id) {
+      if (!known(idOrName)) remember(idOrName);
+      id = index[keyOf(idOrName)];
+    }
+    if (!id) return;
+    mode = 'manage'; search = ''; focusId = null;
+    editing = null; draft = null;
+    openWindow();
+    window.svcEditHow(id);
   };
   // From a job (the Job tab's Tools box): one service's tools to pick. A
   // name not yet on the list joins it first (as one typed on a job does).
@@ -1103,6 +1183,7 @@
     // A hand tool typed but not yet added with its button goes in too.
     if (s(draft.toolText)) { addDraftTool(parseTool(draft.toolText)); draft.toolText = ''; }
     const fields = { name: name, summary: s(draft.summary).slice(0, 200), details: String(draft.details || '').trim().slice(0, 4000),
+                     howTo: String(draft.howTo || '').trim().slice(0, HOW_MAX),
                      aliases: aliases, qbItemName: s(draft.qbItemName), updatedAt: iso() };
     // Only once picked: a service whose tools were never touched keeps
     // none saved, so its jobs go on listing the suggested ones.
@@ -1174,7 +1255,7 @@
     const aliases = (to.aliases || []).slice();
     namesOf(v).forEach(n => { if (keyOf(n) !== keyOf(to.name) && !aliases.some(a => keyOf(a) === keyOf(n))) aliases.push(n); });
     const fields = { aliases: aliases, updatedAt: iso() };
-    ['summary', 'details', 'qbItemName'].forEach(k => { if (!s(to[k]) && s(v[k])) fields[k] = v[k]; });
+    ['summary', 'details', 'howTo', 'qbItemName'].forEach(k => { if (!s(to[k]) && s(v[k])) fields[k] = v[k]; });
     // Its tools join the kept one's (each once).
     if ((v.tools || []).length) fields.tools = cleanTools((to.tools || []).concat(v.tools));
     write({ services: { [pick.id]: fields, [id]: null } }, 'merging ' + v.name);
@@ -1381,6 +1462,13 @@
     // A job's tools (the Job tab's box, the crew's copy of the job):
     // toolsFor(job) -> { tools, dropped, services }; jobTools(job) the list.
     toolsFor: toolsFor, jobTools: d => toolsFor(d).tools,
+    // A piece of work's how-we-do-it: howToFor(line, job) -> { id, name,
+    // text, byHand } or null; and the services to pick one from by hand,
+    // by kind of work: [{ name, services: [{ id, name, written }] }].
+    howToFor: howToFor,
+    pickList: () => (list ? groupsSorted(true).map(g => ({ name: g.name,
+      services: servicesIn(g.id).map(v => ({ id: v.id, name: v.name, written: !!s(v.howTo) })) }))
+      .filter(g => g.services.length) : []),
     // For adding one by hand: his machines { id: { id, name, kind } }, a
     // type's name in words, a typed tool read ("2 wheelbarrows"), a tool's key.
     machines: machines, kindName: kindName, parseTool: parseTool, toolKey: toolKey,

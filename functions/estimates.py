@@ -7,7 +7,9 @@ turns that into estimate lines, and he keeps talking to it ("make the patio
 Claude and plain code is deliberate:
 
   * Claude does the reading and judgement -- which labour lines the job
-    needs and the scope of work the customer reads for each; which materials
+    needs, the scope of work the customer reads for each and the same work
+    told to the crew in a few lines (`crew`, Jonah's yes of 21 Oct 2026:
+    the crew get what to do, not why it is good); which materials
     from Supplies, and how much of each (a 16x20 patio is 320 sq ft of
     pavers; 6 in of base under it is about 8.3 tons of gravel); what is
     missing or doubtful.
@@ -103,6 +105,14 @@ SYSTEM = (
     "tier numbers, and no rented equipment (a mini-excavator or jumping jack is a takeoff line the "
     "app prices in but never shows the customer -- don't name it in a scope). Follow Jonah's rules "
     "below for how a scope is built and what every estimate says.\n"
+    "- `crew` on each labour line is the same work told to the crew, for the job's page they read on "
+    "site: 2 to 4 short lines -- what to do on THIS job, with the sizes, depths, quantities and "
+    "particulars that matter there (where it goes, what to protect, access, what gets picked up). "
+    "No selling words or why it is good for the customer, no prices, no crew-days. How the company "
+    "does each kind of work is written for the crew separately, so don't explain the standard "
+    "method -- only what is particular to this job. A line whose crew notes are marked as Jonah's "
+    "own: give them back word for word unless his latest message asks to change what the crew are "
+    "told.\n"
     "- Never invent measurements or work Jonah did not mention. When something needed is "
     "missing or doubtful (a dimension, a colour, pickup or delivery, access for the loader), put "
     "it in questions -- short, only what blocks a right estimate. Put anything Jonah should "
@@ -161,9 +171,10 @@ SCHEMA = {
                 "amountDollars": {"type": "number"},
                 "allInDollars": {"type": "number"},
                 "addDollars": {"type": "number"},
+                "crew": {"type": "string"},
             },
             "required": ["id", "title", "scope", "kind", "crewDays", "priceId", "qty", "factors", "amountDollars",
-                         "allInDollars", "addDollars"],
+                         "allInDollars", "addDollars", "crew"],
             "additionalProperties": False,
         }},
         "materials": {"type": "array", "items": {
@@ -497,7 +508,10 @@ def _current_text(cur):
                 bits.append("crewDays %s" % w.get("crewDays"))
         if _num(w.get("priced")):
             bits.append("the line comes to $%s" % w.get("priced"))
-        rows.append("- " + " | ".join(bits) + "\n  scope: " + str(w.get("scope") or "")[:3000].replace("\n", "\n  "))
+        crew = str(w.get("crew") or "").strip()[:1500]
+        rows.append("- " + " | ".join(bits) + "\n  scope: " + str(w.get("scope") or "")[:3000].replace("\n", "\n  ") +
+                    ("\n  crew%s: %s" % (" (Jonah's own)" if w.get("crewMine") else "", crew.replace("\n", "\n  "))
+                     if crew else ""))
     if len(rows) == 1:
         rows.append("(none yet)")
     rows.append("MATERIALS:")
@@ -800,6 +814,9 @@ def draft(client, d):
             "amountDollars": max(0.0, round(_num(w.get("amountDollars")) or 0, 2)),
             "allInDollars": max(0.0, round(_num(w.get("allInDollars")) or 0, 2)) if kind == "allin" else 0.0,
             "addDollars": max(0.0, round(_num(w.get("addDollars")) or 0, 2)) if kind == "allin" else 0.0,
+            # The crew's version of the line (estimate.js puts it in the
+            # line's notes for the crew while those are not his own).
+            "crew": str(w.get("crew") or "").strip()[:1500],
         })
     # An all-in line a material's price is in: an id on the estimate, or the
     # title of a line given in this answer (the app joins it to its new id).

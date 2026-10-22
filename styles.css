@@ -1692,6 +1692,22 @@
     color:var(--accent-dark, #8a6216); white-space:nowrap; }
   .cj-crewnote { margin:8px 0 2px; padding:8px 10px; border-left:3px solid var(--accent); border-radius:6px; background:var(--surface-2); }
   .cj-crewnote-h { font-size:12px; font-weight:700; color:var(--muted); margin-bottom:2px; }
+  /* What to do first (22 Oct): how we do that kind of work (services.js
+     howTo), open; what the customer was told (the scope), folded -- each a
+     summary a thumb can hit. */
+  .cj-how, .cj-told { margin:8px 0 2px; border-radius:6px; }
+  .cj-how { padding:0 10px; border-left:3px solid var(--brand); background:var(--surface-2); }
+  .cj-how > summary, .cj-told > summary { cursor:pointer; min-height:40px; display:flex; align-items:center; flex-wrap:wrap; gap:0 6px;
+    font-size:13px; font-weight:700; }
+  .cj-how > summary { color:var(--brand-ink, var(--brand)); }
+  .cj-how > .cj-text { padding-bottom:8px; }
+  .cj-how-again { font-size:13px; font-weight:700; padding:8px 10px; }
+  .cj-told { padding:0 10px; border:1px dashed var(--border-strong, var(--border)); }
+  .cj-told > summary { color:var(--muted); }
+  .cj-told[open] > summary { color:var(--text); }
+  .cj-told > .cj-text { padding-bottom:8px; }
+  .cj-told-only { font-weight:500; }
+  html[data-night] .cj-how > summary { color:var(--brand-2); }
   /* Rentals to pick up (crewjobs.js rentalsHtml): each its own card, so it
      is not read past as one more material. */
   .cj-rental { margin:8px 0; padding:10px 12px; border:1px solid var(--border); border-left:4px solid var(--accent); border-radius:8px; background:var(--surface); }
@@ -2598,6 +2614,16 @@
   .est-crewnote-add .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-size:12.5px; cursor:pointer; text-decoration:underline; }
   .est-crewnote { display:flex; flex-direction:column; gap:3px; font-size:12px; color:var(--muted); }
   .est-crewnote textarea { width:100%; font-size:14px; border-color:var(--accent); }
+  /* A line's how-we-do-it (services.js howTo): which service, written or not. */
+  .est-howline { margin:4px 0 2px; font-size:12.5px; color:var(--muted); }
+  .est-howline .link-btn { background:none; border:0; padding:0 2px; color:var(--brand-ink); font:inherit; font-weight:700;
+    cursor:pointer; text-decoration:underline; min-height:32px; }
+  .est-how-no { font-weight:700; color:var(--st-due-ink, var(--st-due)); }
+  .est-how-ok { font-weight:700; color:var(--pos); }
+  .est-qbitem.est-svcpick { flex-direction:column; align-items:stretch; gap:3px; margin-top:8px; }
+  .est-svcpick select { width:100%; max-width:440px; font-size:13px; min-height:40px; }
+  .est-words-sec { margin-top:10px; }
+  .est-words-from { font-weight:500; text-transform:none; letter-spacing:0; }
   .est-for { display:flex; flex-wrap:wrap; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
   .est-for select { font-size:13px; padding-top:3px; padding-bottom:3px; width:auto; max-width:100%; }
   /* Source it: prices found for a material with none */
@@ -4615,6 +4641,17 @@
   .svc-card .svc-details { color:var(--muted); max-height:7.5em; overflow:hidden; }
   .svc-alias { font-size:12px; margin-top:3px; }
   .svc-none { font-size:13px; margin-top:4px; }
+  /* How we do it (the crew's, services.js howTo): folded under a service on
+     What we do; its start on the owner's card; its own box in the editor. */
+  .svc-how { margin-top:6px; border-left:3px solid var(--brand); background:var(--surface-2); border-radius:6px; padding:0 10px; }
+  .svc-how > summary { cursor:pointer; min-height:40px; display:flex; align-items:center; font-size:13px; font-weight:700;
+    color:var(--brand-ink, var(--brand)); }
+  .svc-how-text { font-size:13px; white-space:pre-wrap; line-height:1.5; overflow-wrap:anywhere; }
+  .svc-how > .svc-how-text { padding-bottom:8px; }
+  .svc-howline { margin-top:4px; font-size:12.5px; }
+  .svc-card .svc-howline:not(.muted) { max-height:4.6em; overflow:hidden; }
+  .svc-how-field textarea { min-height:150px; border-color:var(--brand); }
+  html[data-night] .svc-how > summary { color:var(--brand-2); }
   .svc-hidden { opacity:.65; }
   .svc-focus { background:var(--st-info-soft, var(--surface-2)); border-radius:6px; padding-left:8px; padding-right:8px; }
   .svc-editing { background:var(--surface-2); border-radius:8px; padding:10px; margin:6px 0; }

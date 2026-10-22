@@ -31,6 +31,16 @@
 // for the crew and the materials for it underneath -- and any measurement
 // written in a note is in bold. Which line a material is for is worked out
 // from the words (workFor) unless Jonah picked it on the estimate.
+//
+// WHAT TO DO FIRST (Jonah, 16 Oct 2026: "the crew doesnt need descriptions
+// of why fabric holds up over many seasons"; his answers 21 Oct). Each
+// piece of work shows what the crew do: how much, the notes for the crew on
+// that line (his, or Claude's from his site notes), the materials, and how
+// we do that kind of work (services.js howTo -- once he has written it).
+// The customer's wording -- the scope as the customer read it -- is folded
+// under "What the customer was told", one tap away, never gone. The office
+// reads the same page (estimate.js puts it on the Job tab): his admin
+// "should see the same version".
 
 (function () {
   'use strict';
@@ -110,6 +120,10 @@
     return !!c.pricesReady || Object.keys(c.prices || {}).length > 0 || !ydCan('supplies', 'see');
   }
   const needsCatalogue = d => ((d.estimate || {}).materials || []).some(m => m && m.supplyId && !m.plant);
+  // A job with work on it takes each piece's how-we-do-it from the services
+  // list (services.js), so its copy waits for that too.
+  const needsServices = d => ((d.estimate || {}).work || []).some(w => w && (w.title || w.scope || w.crewNote));
+  const partsReady = d => (!needsCatalogue(d) || catalogueReady()) && (!needsServices(d) || servicesReady());
 
   // ---------------------------------------- which piece of work a material is for
   //
@@ -228,34 +242,35 @@
     });
   }
 
-  // What a crew member may know about a job -- nothing else is copied.
-  function crewEntry(d) {
+  // The work, laid out for doing it: each piece of work, the takeoff, the
+  // soil to haul. The crew's copy carries it, and the Job tab draws the same
+  // (estimate.js workWordsHtml) -- one version for the crew and the office.
+  function workParts(d) {
     const est = d.estimate || {};
     const lines = (est.work || []).filter(w => w && (w.title || w.scope || w.crewNote)).slice(0, 40);
     const items = catalogue().items;
-    const out = {
-      name: String(d.customerName || '').trim() || 'Untitled job',
-      // What the job is, in a few words (app.js jobWhat), beside the name.
-      what: typeof jobWhat === 'function' ? noMoney(jobWhat(d)) : '',
-      address: d.address || '', city: d.city || '', state: d.state || '', zip: d.zip || '',
-      phone: d.phone || '',
-      status: statusOf(d),
-      est: String(d.estimateNumber || '').trim(),
-      services: (d.serviceTypes || []).slice(0, 20),
-      siteNotes: noMoney(est.notes).slice(0, 8000),
-      notes: noMoney(crewNotes(d.notes)).slice(0, 4000),
-      // Each piece of work: its scope, Jonah's notes for the crew (never on
+    const svcs = servicesReady();
+    return {
+      // Each piece of work: its scope, the notes for the crew (never on
       // the estimate), and -- a service sold by the unit -- how much of it.
       // The scope whole, as the customer was sent it (a QuickBooks line holds
       // up to 4,000 characters; cut at 3,000, the end of a long one was lost).
-      work: lines.map((w, i) => ({
-        id: safe(w.id) || 'w' + i,
-        title: noMoney(w.title).slice(0, 200), scope: noMoney(w.scope).slice(0, 6000),
-        crewNote: noMoney(w.crewNote).slice(0, 3000),
-        days: numOr(w.crewDays),
-        qty: w.kind === 'flat' ? numOr(w.qty) : null,
-        unit: w.kind === 'flat' ? noMoney(w.unit).slice(0, 30) : '',
-      })).concat(changeWork(d)),
+      work: lines.map((w, i) => {
+        const o = {
+          id: safe(w.id) || 'w' + i,
+          title: noMoney(w.title).slice(0, 200), scope: noMoney(w.scope).slice(0, 6000),
+          crewNote: noMoney(w.crewNote).slice(0, 3000),
+          days: numOr(w.crewDays),
+          qty: w.kind === 'flat' ? numOr(w.qty) : null,
+          unit: w.kind === 'flat' ? noMoney(w.unit).slice(0, 30) : '',
+        };
+        // How we do this kind of work (services.js), only once Jonah has
+        // written it: until then a copy is the same as one made before
+        // there was such a thing, and no booked job is rewritten to say so.
+        const how = svcs ? YDServices.howToFor(w, d) : null;
+        if (how && how.text) o.how = { name: noMoney(how.name).slice(0, 80), text: noMoney(how.text).slice(0, 6000) };
+        return o;
+      }).concat(changeWork(d)),
       // The takeoff: how much of each, in the unit it is measured in, and
       // which piece of work it is for (an id from `work`; '' the whole job).
       // (Rentals have their own section: `rentals`.)
@@ -268,6 +283,29 @@
       spoil: numOr(est.spoilCuYd),
       // Brush only: it goes in a dumpster of its own.
       brush: numOr(est.brushCuYd),
+    };
+  }
+
+  // What a crew member may know about a job -- nothing else is copied.
+  function crewEntry(d) {
+    const est = d.estimate || {};
+    const items = catalogue().items;
+    const parts = workParts(d);
+    const out = {
+      name: String(d.customerName || '').trim() || 'Untitled job',
+      // What the job is, in a few words (app.js jobWhat), beside the name.
+      what: typeof jobWhat === 'function' ? noMoney(jobWhat(d)) : '',
+      address: d.address || '', city: d.city || '', state: d.state || '', zip: d.zip || '',
+      phone: d.phone || '',
+      status: statusOf(d),
+      est: String(d.estimateNumber || '').trim(),
+      services: (d.serviceTypes || []).slice(0, 20),
+      siteNotes: noMoney(est.notes).slice(0, 8000),
+      notes: noMoney(crewNotes(d.notes)).slice(0, 4000),
+      work: parts.work,
+      materials: parts.materials,
+      spoil: parts.spoil,
+      brush: parts.brush,
       order: (d.orderItems || []).filter(o => o && o.name && !isRental(o, items)).slice(0, 120)
         .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
@@ -291,14 +329,15 @@
       Promise.resolve(window.YDDb.remove('jobCrew', id)).catch(() => {});
       return;
     }
-    if (!force && needsCatalogue(d) && !catalogueReady()) {
+    if (!force && !partsReady(d)) {
       waiting[id] = d;
       if (!waitTimer) waitTimer = setTimeout(() => flushWaiting(true), 30000);
       return;
     }
     delete waiting[id];
-    // Sent before Supplies arrived (its units missing): sent again when it does.
-    if (force && needsCatalogue(d) && !catalogueReady()) forced[id] = d; else delete forced[id];
+    // Sent before Supplies or the services list arrived (its units or its
+    // how-we-do-it missing): sent again when they do.
+    if (force && !partsReady(d)) forced[id] = d; else delete forced[id];
     const entry = crewEntry(d);
     const sig = JSON.stringify(entry);
     if (sent[id] === sig) return;
@@ -310,11 +349,15 @@
     clearTimeout(waitTimer); waitTimer = null;
     Object.keys(waiting).forEach(id => { const d = waiting[id]; delete waiting[id]; mirror(id, d, force); });
   }
-  document.addEventListener('yd-supplies', () => {
-    if (!catalogueReady()) return;
-    if (Object.keys(waiting).length) flushWaiting(false);
-    Object.keys(forced).forEach(id => { const d = forced[id]; delete forced[id]; mirror(id, d); });
-  });
+  // Supplies or the services list came in: the copies waiting for them go
+  // up (each only once what it needs is here).
+  function partsCame() {
+    Object.keys(waiting).forEach(id => { const d = waiting[id]; if (!partsReady(d)) return; delete waiting[id]; mirror(id, d); });
+    if (!Object.keys(waiting).length) { clearTimeout(waitTimer); waitTimer = null; }
+    Object.keys(forced).forEach(id => { const d = forced[id]; if (!partsReady(d)) return; delete forced[id]; mirror(id, d); });
+  }
+  document.addEventListener('yd-supplies', partsCame);
+  document.addEventListener('yd-services', partsCame);
 
   // Once per session on the device that runs the jobs: every booked or
   // in-progress job has its crew copy, and nothing else does. It waits (up
@@ -329,7 +372,6 @@
     let have = {};
     try { have = await window.YDDb.list('jobCrew'); } catch (e) { reconciled = false; return; }
     serverHad = have;
-    const ready = catalogueReady();
     const ids = new Set();
     // Those in Recently deleted too, so a copy left behind is taken down.
     getJobIndexAll().forEach(j => {
@@ -338,9 +380,10 @@
       if (!d) return;
       ids.add(j.id);
       if (shows(d)) {
-        // Supplies never came: a copy already on the server keeps its units
-        // rather than being rewritten without them.
-        if (!ready && have[j.id] && needsCatalogue(d)) return;
+        // Supplies or the services list never came: a copy already on the
+        // server keeps its units and how-we-do-it rather than being
+        // rewritten without them.
+        if (have[j.id] && !partsReady(d)) return;
         const entry = crewEntry(d);
         // Already right on the server: only remember it, write nothing.
         if (have[j.id] && sameEntry(have[j.id], entry)) { sent[j.id] = JSON.stringify(entry); return; }
@@ -417,7 +460,7 @@
       let d = null;
       try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) { d = null; }
       if (!d) return;               // gone: the delete takes its copy down
-      if (shows(d) && needsCatalogue(d) && !catalogueReady()) return;
+      if (shows(d) && !partsReady(d)) return;
       const want = shows(d) ? crewEntry(d) : null;
       const sig = want ? JSON.stringify(want) : null;
       if (sent[id] === sig) return;
@@ -468,31 +511,60 @@
         (m.how ? ' <span class="muted">(' + esc(m.how) + ')</span>' : '') +
       '</td><td class="cj-q">' + esc(fmtQty(m.qty, m.unit)) + '</td></tr>').join('') + '</tbody></table>';
   }
-  // The work, line by line: the heading (with how much, for work sold by
-  // the unit), the scope, Jonah's notes for the crew, and the materials for
-  // that line. Whatever is for the whole job -- or a copy made before lines
-  // had ids -- follows under its own heading.
-  function workHtml(j, sec) {
+  // What is folded open or shut on a page (a line's how-we-do-it, the
+  // customer's words), kept while it is drawn again -- a crew copy changing
+  // under an open page must not snap them all back. job|line|which -> open.
+  const folds = {};
+  function foldAttr(key, open) {
+    const on = key in folds ? folds[key] : open;
+    return ' data-k="' + esc(key) + '" ontoggle="cjFold(this)"' + (on ? ' open' : '');
+  }
+  window.cjFold = function (d) { if (d && d.dataset.k) folds[d.dataset.k] = d.open; };
+
+  // The work, line by line -- what to do first: the heading (with how much,
+  // for work sold by the unit), the notes for the crew, the materials for
+  // that line, and how we do that kind of work; then, folded, what the
+  // customer was told (the scope). Whatever is for the whole job -- or a
+  // copy made before lines had ids -- follows under its own heading.
+  // opts: { key (the job, for what is folded), extra(w) (the Job tab's
+  // own lines under a piece of work, for Jonah), title (the work's heading,
+  // as the Job tab says it) }.
+  function workHtml(j, sec, opts) {
+    opts = opts || {};
     const work = j.work || [], mats = j.materials || [];
-    const ids = {};
+    const ids = {}, howSeen = {};
     work.forEach(w => { if (w.id) ids[w.id] = true; });
-    const lines = work.map(w => {
+    const lines = work.map((w, i) => {
       const mine = w.id ? mats.filter(m => m.work === w.id) : [];
+      const k = (opts.key || '') + '|' + (w.id || 'w' + i);
+      const how = w.how && w.how.text ? w.how : null;
+      // Two pieces of the same kind of work: its how-we-do-it once.
+      const again = how && howSeen[how.name];
+      if (how) howSeen[how.name] = true;
+      const told = String(w.scope || '').trim();
       return '<div class="cj-work">' +
         '<div class="cj-work-h"><b>' + esc(w.title || 'Work') + '</b>' +
           (w.qty > 0 ? ' <span class="cj-big">' + esc(fmtQty(w.qty, w.unit)) + '</span>' : '') +
           (w.days ? ' <span class="muted">· ' + esc(fmtNum(w.days)) + ' crew-day' + (w.days === 1 ? '' : 's') + '</span>' : '') +
         '</div>' +
-        (w.scope ? '<div class="cj-text">' + marked(w.scope) + '</div>' : '') +
         (w.crewNote ? '<div class="cj-crewnote"><div class="cj-crewnote-h">👷 For the crew</div><div class="cj-text">' +
           marked(w.crewNote) + '</div></div>' : '') +
         (mine.length ? '<div class="cj-sub">Materials for this</div>' + matTable(mine) : '') +
+        (how ? (again ? '<div class="cj-how cj-how-again">👷 How we do it — ' + esc(how.name) + ': as above</div>'
+          : '<details class="cj-how"' + foldAttr(k + '|how', true) + '><summary>👷 How we do it — ' + esc(how.name) + '</summary>' +
+              '<div class="cj-text">' + marked(how.text) + '</div></details>') : '') +
+        (opts.extra ? opts.extra(w) : '') +
+        // Until there is anything for the crew on a line, the customer's
+        // words are all it has -- said on the fold, which still opens on a tap.
+        (told ? '<details class="cj-told"' + foldAttr(k + '|told', false) + '><summary>📄 What the customer was told' +
+            (!w.crewNote && !how ? ' <span class="cj-told-only">— the only words on this line so far</span>' : '') + '</summary>' +
+            '<div class="cj-text">' + marked(told) + '</div></details>' : '') +
       '</div>';
     }).join('');
     const rest = mats.filter(m => !m.work || !ids[m.work]);
     const haul = (j.spoil > 0 ? '<div class="cj-haul">🚛 About <b class="cj-m">' + esc(fmtNum(j.spoil)) + ' cu yd</b> of soil and debris to haul away</div>' : '') +
       (j.brush > 0 ? '<div class="cj-haul">🌿 About <b class="cj-m">' + esc(fmtNum(j.brush)) + ' cu yd</b> of brush — its own dumpster, no soil or rock in it</div>' : '');
-    return sec('🛠 The work', lines + (lines ? haul : '')) +
+    return sec(opts.title || '🛠 The work', lines + (lines ? haul : '')) +
       sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest) : '') +
       (lines ? '' : sec('🚛 Haul away', haul));
   }
@@ -678,7 +750,7 @@
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
       rentalsHtml(j, days, preview) +
       toolsHtml(id, j, preview) +
-      workHtml(j, sec) +
+      workHtml(j, sec, { key: id }) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '') +
@@ -886,6 +958,12 @@
   // workFor: the estimate shows which line it would put each material under
   // (estimate.js, "For the crew, this is for").
   window.YDCrewJobs = { mirror: mirror, remote: remote, render: render, entry: crewEntry, workFor: workFor,
+    // The work as the crew read it, for the Job tab (estimate.js): the parts
+    // from a job (workParts(job)), drawn as on the crew's page
+    // (workPageHtml(parts, { key, extra, sec })) -- one version for everyone.
+    workParts: workParts,
+    workPageHtml: (parts, opts) => workHtml(parts || {}, (opts && opts.sec) ||
+      ((title, body) => body ? '<div class="cj-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : ''), opts),
     // The crew's booked and in-progress jobs, as their Jobs tab lists them
     // (a crew phone; empty for anyone who has the Job tab instead).
     list: () => listed() };
