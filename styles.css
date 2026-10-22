@@ -3610,6 +3610,9 @@
   .est-meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; font-size:12px; color:var(--muted); min-height:26px; }
   .est-meta .est-order { flex:1 1 220px; min-width:0; }
   .est-meta .est-crewnote-add { flex:1 1 auto; }
+  /* "Its materials in this price": one line for the customer (customerLines). */
+  .est-withmats { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; cursor:pointer; }
+  .est-withmats input { width:16px; height:16px; }
   .est-meta .est-tax { margin:0 0 0 auto; gap:6px; }
   .est-meta .est-tax select { width:auto; font-size:13px; padding:3px 28px 3px 8px; background-position:right 9px center; }
   .est-chip { display:inline-flex; align-items:center; gap:4px; font:inherit; font-size:12px; line-height:1.2; color:var(--muted);

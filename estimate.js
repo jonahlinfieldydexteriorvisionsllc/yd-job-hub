@@ -903,6 +903,11 @@
       howLineHtml(w) +
       '<div class="est-meta">' + crewNoteAddHtml(w, id, ro) +
         taxPickHtml('work', id, w.taxable, ro) +
+        // One line for the customer: this work with its own materials
+        // (customerLines). Not an all-in line, whose split is its own.
+        (kind === 'allin' ? '' : '<label class="est-withmats" title="The materials the crew’s page lists under this line go into its price on the customer’s copy and QuickBooks, instead of the Materials line">' +
+          '<input type="checkbox"' + (w.withMats ? ' checked' : '') + dis + ' onchange="estWork(\'' + id + '\', \'withMats\', this.checked)"> ' +
+          'Its materials in this price</label>') +
         moreBtnHtml(id, [qbName ? 'QuickBooks: ' + qbName : '',
           w.service === 'none' ? 'No how-we-do-it' : w.service ? 'Service picked' : ''].filter(Boolean).join(' · ')) + '</div>' +
       moreBoxHtml(id, '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
@@ -1683,28 +1688,88 @@
   // The materials as the customer reads them: one line, or two when some
   // are taxed and some are not (planting materials on a patio job) -- each
   // with what is on it. The same split goes to QuickBooks.
-  function materialParts(r, work) {
-    if (!(r.materialsCents > 0)) return [];
-    const taxedCents = r.tax ? r.tax.materialsCents : 0;
+  // rest: the materials still on the Materials line once some went into a
+  // work line's price (customerLines) -- {takeoff, added, cents, taxedCents}.
+  function materialParts(r, work, rest) {
+    const src = rest || r;
+    const total = rest ? rest.cents : r.materialsCents;
+    if (!(total > 0)) return [];
+    const taxedCents = rest ? rest.taxedCents : (r.tax ? r.tax.materialsCents : 0);
     const one = work.length === 1 && work[0].title ? 'Materials: ' + work[0].title : 'Materials';
-    if (!(taxedCents > 0)) return [{ head: one, list: P().materialsList(r), cents: r.materialsCents, taxed: false }];
-    if (taxedCents >= r.materialsCents) return [{ head: one, list: P().materialsList(r), cents: r.materialsCents, taxed: true }];
-    return [{ head: 'Materials', list: P().materialsList(r, false), cents: r.materialsCents - taxedCents, taxed: false },
-            { head: 'Planting & lawn materials', list: P().materialsList(r, true), cents: taxedCents, taxed: true }];
+    if (!(taxedCents > 0)) return [{ head: one, list: P().materialsList(src), cents: total, taxed: false }];
+    if (taxedCents >= total) return [{ head: one, list: P().materialsList(src), cents: total, taxed: true }];
+    return [{ head: 'Materials', list: P().materialsList(src, false), cents: total - taxedCents, taxed: false },
+            { head: 'Planting & lawn materials', list: P().materialsList(src, true), cents: taxedCents, taxed: true }];
   }
+
+  // The estimate as the customer reads it -- here and in QuickBooks, from
+  // the one place. A work line ticked "Its materials in this price"
+  // (w.withMats; Jonah, 22 Oct 2026: "material and install for the steel
+  // edging should be one line item separated from the granite one") is
+  // priced with its own materials -- the ones the crew's page lists under it
+  // (crewjobs.js workFor: picked on the material, else by the words) -- and
+  // their share of any delivery; they leave the Materials line and are named
+  // under the line's description instead. A material taxed differently from
+  // the line stays on the Materials line, so the tax still comes out right.
+  function customerLines(r) {
+    const items = catalog().items;
+    const lines = est.work.filter(w => w && (w.title || w.scope || w.crewNote));
+    const workFor = window.YDCrewJobs && YDCrewJobs.workFor ? YDCrewJobs.workFor : (m => m.forWork || '');
+    const taxedOf = {}, moved = {};
+    est.work.forEach((w, i) => { taxedOf[w.id] = !!(r.work[i] && r.work[i].taxed); });
+    const wants = {};
+    est.work.forEach(w => { if (w.withMats && w.kind !== 'allin') wants[w.id] = true; });
+    est.materials.forEach(m => {
+      const l = r.takeoff.find(x => x.id === m.id);
+      if (!l || !(l.clientCents > 0)) return;
+      const wid = workFor(m, lines, items);
+      if (wid && wants[wid] && !!l.taxed === taxedOf[wid]) moved[l.id] = wid;
+    });
+    // Their share of a truck that also brings other material, by quantity.
+    const delOf = {};
+    let movedCents = 0, movedTaxed = 0;
+    ((r.delivery && r.delivery.lines) || []).forEach(d => {
+      const parts = d.parts || [], all = parts.reduce((s, p) => s + p.qty, 0);
+      if (!(all > 0)) return;
+      parts.forEach(p => {
+        const wid = moved[p.id];
+        if (!wid) return;
+        const c = Math.round(d.clientCents * p.qty / all);
+        delOf[wid] = (delOf[wid] || 0) + c;
+        movedCents += c;
+        if (taxedOf[wid]) movedTaxed += c;
+      });
+    });
+    const named = l => l.name + ': ' + (l.partUse && l.usedLb ? P().qtyText(l.usedLb, 'lb') : P().qtyText(l.orderQty, l.per));
+    const work = est.work.map((w, i) => {
+      const mine = r.takeoff.filter(l => moved[l.id] === w.id);
+      const matsCents = mine.reduce((s, l) => s + l.clientCents, 0);
+      movedCents += matsCents;
+      if (taxedOf[w.id]) movedTaxed += matsCents;
+      return { id: w.id, title: w.title || '', scope: scopeBody(w), cents: r.work[i].cents + matsCents + (delOf[w.id] || 0),
+               qbItem: w.qbItem || '', taxable: taxedOf[w.id],
+               includes: mine.filter(l => l.listed && l.orderQty > 0).map(named) };
+    }).filter(w => w.cents > 0 || w.scope.trim());
+    if (!Object.keys(moved).length) return { work: work, parts: materialParts(r, work) };
+    const rest = { takeoff: r.takeoff.filter(l => !moved[l.id]), added: r.added, cents: r.materialsCents - movedCents,
+                   taxedCents: Math.max(0, (r.tax ? r.tax.materialsCents : 0) - movedTaxed) };
+    return { work: work, parts: materialParts(r, work, rest) };
+  }
+  // A line's description with the materials in its price named after it.
+  const withIncludes = w => w.scope.trim() + (w.includes && w.includes.length
+    ? (w.scope.trim() ? '\n\n' : '') + 'Materials included: ' + w.includes.join('; ') : '');
   function renderCustomer(r) {
     const box = el('estCustomer');
     if (!box) return;
     if (!showCustomer || !r) { box.innerHTML = ''; return; }
     const site = siteLine();
-    const work = est.work.map((w, i) => ({ title: w.title || '', scope: scopeBody(w), cents: r.work[i].cents }))
-      .filter(w => w.cents > 0 || w.scope.trim());
+    const cl = customerLines(r), work = cl.work;
     const rows = work.map((w, i) => '<div class="cv-line"><div class="cv-text">' +
         (w.title ? '<b>' + esc(w.title.toUpperCase()) + '</b>' : '') +
         (i === 0 && site ? '<div>' + esc(site) + '</div>' : '') +
-        (w.scope.trim() ? '<div class="cv-scope">' + esc(w.scope.trim()) + '</div>' : '') +
+        (withIncludes(w) ? '<div class="cv-scope">' + esc(withIncludes(w)) + '</div>' : '') +
       '</div><div class="cv-amt">' + cents(w.cents) + '</div></div>');
-    materialParts(r, work).forEach(m => {
+    cl.parts.forEach(m => {
       rows.push('<div class="cv-line"><div class="cv-text"><b>' + esc(m.head) + '</b>' +
         '<div class="cv-scope">' + m.list.map(esc).join('<br>') + '</div></div>' +
         '<div class="cv-amt">' + cents(m.cents) + '</div></div>');
@@ -2979,6 +3044,8 @@
       if (v === 'allin' && num(w.allInCents) === null && num(w.amountCents) !== null) w.allInCents = w.amountCents;
       w.kind = v; changed(true); return;
     }
+    // The customer reads this line with its materials in its price (customerLines).
+    else if (field === 'withMats') { if (v) w.withMats = true; else delete w.withMats; changed(true); return; }
     // The service the line is, by hand (its how-we-do-it and its tools), or
     // back to the one its heading names. Nothing to re-price.
     else if (field === 'service') {
@@ -4281,10 +4348,11 @@
     try {
       // Each line taxed or not (pricing.js salesTax): QuickBooks works out the
       // tax on the taxed ones from the job's address.
-      const work = est.work.map((w, i) => ({ title: w.title || '', scope: scopeBody(w), cents: r.work[i].cents, qbItem: w.qbItem || '',
-                                             taxable: !!r.work[i].taxed }))
-        .filter(w => w.cents > 0 || w.scope.trim());
-      const parts = materialParts(r, work);
+      // A line with its materials in its price (customerLines) goes as one
+      // line, the materials named in its description.
+      const cl = customerLines(r);
+      const work = cl.work.map(w => ({ title: w.title, scope: withIncludes(w), cents: w.cents, qbItem: w.qbItem, taxable: w.taxable }));
+      const parts = cl.parts;
       const out = await askQb('/qb/estimate', {
         jobId: jobId, email: !!email, testOk: !!(qbCompany && qbCompany.env !== 'production'),
         // The job's customer (customers.js) when this job has no QuickBooks
