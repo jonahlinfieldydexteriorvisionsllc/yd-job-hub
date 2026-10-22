@@ -189,6 +189,73 @@
   // other item can be ticked so in Supplies.
   const partByKind = it => String(it.category || '').toLowerCase() === 'seed';
 
+  // ------------------------------------------------------------- grass seed
+  //
+  // Jonah (22 Oct 2026): "grass seed in jobs is always madison park priced
+  // from the largest bag size unless otherwise specified". Which seed is his
+  // usual one is his to set (Pricing rules -> Materials: pricing/rules
+  // .seed.supplyId); the code only knows what grass seed is, that a name like
+  // "Grass seed" names none in particular, and that seed is bought in its
+  // biggest bag. Claude had put the 5 lb bag on two estimates: $5.04 a pound
+  // where the 50 lb bag he buys is $4.14.
+  const SEED_WORDS = ['seed', 'seeding', 'overseed', 'overseeding', 'reseed', 'reseeding'];
+  // Words that say only "grass seed", never which one.
+  const PLAIN_SEED = SEED_WORDS.concat(['grass', 'lawn', 'turf', 'mix', 'blend', 'quality', 'premium', 'standard',
+    'regular', 'bulk', 'bagged', 'new']);
+  // "Grass seed", "Lawn seed mix", "Grass seed — front yard": a seed named by
+  // nothing but those words, so his usual one is it.
+  function plainSeed(name) {
+    const ws = words(specs(bare(name)).rest);
+    return ws.some(w => SEED_WORDS.indexOf(w) !== -1) && ws.every(w => PLAIN_SEED.indexOf(w) !== -1);
+  }
+  // A Supplies item that is grass seed: of the seed kind, and seed by what
+  // it is (the last word of its name: seed, mix) -- not the straw blanket,
+  // the straw bale or the seed-starter fertiliser filed beside it.
+  function isGrassSeed(it) {
+    if (!it || String(it.category || '').toLowerCase() !== 'seed') return false;
+    const ws = itemInfo(it).bareWords;
+    return ws.length > 0 && ['seed', 'seeding', 'mix', 'blend'].indexOf(ws[ws.length - 1]) !== -1;
+  }
+  // One product in its several bag sizes: the same supplier and the same
+  // words once the sizes are out ("Madison Parks grass seed" 5, 20, 50 lb).
+  const famOf = it => (it.vendorId || '') + '|' + itemInfo(it).nameWords.join(' ');
+  // The biggest bag of the product an item is -- itself when it is not
+  // bought by the bag and used a bit at a time, or is the biggest already.
+  // Priced bags only, where prices can be seen.
+  function biggestBag(id, cat) {
+    const it = cat && cat.items ? cat.items[id] : null;
+    if (!it) return id;
+    const prices = cat.prices || {};
+    const p = pack(it, prices[id]);
+    if (!p.part || !p.lb) return id;
+    const seesPrices = Object.keys(prices).length > 0;
+    const fam = famOf(it);
+    let best = id, lb = p.lb;
+    Object.keys(cat.items).forEach(k => {
+      const o = cat.items[k];
+      if (k === id || !o || famOf(o) !== fam) return;
+      if (seesPrices && !(prices[k] && num(prices[k].cents) > 0)) return;
+      const q = pack(o, prices[k]);
+      if (q.part && q.lb > lb) { best = k; lb = q.lb; }
+    });
+    return best;
+  }
+  // His usual grass seed, in its biggest bag; null until he sets one.
+  function usualSeed(cat) {
+    const r = window.YDPricing && window.YDPricing.rules ? window.YDPricing.rules() : null;
+    const id = r && r.seed ? r.seed.supplyId : null;
+    if (!id || !cat || !cat.items || !cat.items[id]) return null;
+    return biggestBag(id, cat);
+  }
+  // Whether his words name an item: the first word of its name that says
+  // which one it is -- its brand ("shady", "quick", "pennington"); "shade"
+  // is near enough to "shady". Grass, seed, mix and sizes say nothing.
+  function namedIn(it, text) {
+    const own = itemInfo(it).bareWords.filter(w => PLAIN_SEED.indexOf(w) === -1 && FILLER.indexOf(w) === -1);
+    if (!own.length) return false;
+    return words(text).some(w => near(w, own[0]));
+  }
+
   // A material's quantity in what the item is measured in for estimates (its
   // takeoff unit when it covers an area, else what it is sold by): as it is,
   // or -- given in what the item is sold by -- times what one covers; or in
@@ -260,7 +327,11 @@
     const got = itemWords.get(it.id);
     if (got && got.text === text) return got;
     const sp = specs(it.name);
-    const info = { text: text, words: words(sp.rest + ' ' + String(it.also || '')), specs: sp };
+    // nameWords: the name's own, without what it is also called (one
+    // product's bag sizes are told apart by them -- famOf); bareWords: and
+    // without its notes ("Seed Mix (by the lb)"), for what it is.
+    const info = { text: text, words: words(sp.rest + ' ' + String(it.also || '')), nameWords: words(sp.rest),
+                   bareWords: words(specs(bare(it.name)).rest), specs: sp };
     itemWords.set(it.id, info);
     return info;
   }
@@ -281,7 +352,11 @@
     const wantSpecs = specs(bare(m.name));
     const want = words(wantSpecs.rest);
     if (!want.length) return out;
-    const mine = aliases[key] || aliases[oldKeyOf(m.name)];
+    // "Grass seed" that names no seed is his usual one (below), whatever was
+    // picked for those words on some job before.
+    let usual = plainSeed(m.name) ? usualSeed(cat) : null;
+    if (usual && !usable(cat.items[usual])) usual = null;
+    const mine = usual ? null : aliases[key] || aliases[oldKeyOf(m.name)];
     if (mine && usable(cat.items[mine])) {
       const f = fitQty(m, cat.items[mine], cat.prices && cat.prices[mine]);
       out.sure = { id: mine, qty: f ? f.qty : null, unit: f ? f.unit : '', by: 'yours', unitOff: !f };
@@ -312,7 +387,7 @@
       if (fit < 0) return;                      // 4x50 is not 8x112.5
       const p = pack(it, cat.prices && cat.prices[it.id]);
       // Every real word spelled out, and every size he gave the item's own.
-      scored.push({ it: it, full: exact && fit === wantSpecN, pack: p, fam: (it.vendorId || '') + '|' + info.words.join(' '),
+      scored.push({ it: it, full: exact && fit === wantSpecN, pack: p, fam: famOf(it),
                     score: score + fit * 0.15 + (isHeadOf(it.name, head) ? 0.2 : 0),
                     extra: info.words.length - want.length });
     });
@@ -329,6 +404,14 @@
       if (!b || (x.pack.lb || 0) > (b.pack.lb || 0)) biggest[x.fam] = x;
     });
     const shown = scored.filter(x => !x.pack.part || !x.pack.lb || biggest[x.fam] === x);
+    // His usual seed in its biggest bag is it; the other seeds stay offered
+    // after it, for a job that wants another.
+    if (usual) {
+      const f = fitQty(m, cat.items[usual], cat.prices && cat.prices[usual]);
+      out.sure = { id: usual, qty: f ? f.qty : null, unit: f ? f.unit : '', by: 'usual', unitOff: !f };
+      out.options = [usual].concat(shown.map(x => x.it.id).filter(id => id !== usual)).slice(0, 4);
+      return out;
+    }
     const full = shown.filter(x => x.full);
     if (full.length === 1) {
       const it = full[0].it, f = fitQty(m, it, cat.prices && cat.prices[it.id]);
@@ -349,6 +432,9 @@
   function remember(name, supplyId) {
     const key = keyOf(name);
     if (!key || !supplyId) return;
+    // Another seed picked for plain "grass seed" is for that job (a shady
+    // yard); the next job's is his usual one again.
+    if (plainSeed(name)) return;
     if (aliases[key] === supplyId) return;
     aliases[key] = supplyId;
     // Every list showing these words takes the pick at once (app.js order list).
@@ -379,5 +465,7 @@
   });
 
   window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
-                     pack: pack, packFromName: packFromName, partByKind: partByKind, readsAsWork: readsAsWork };
+                     pack: pack, packFromName: packFromName, partByKind: partByKind, readsAsWork: readsAsWork,
+                     plainSeed: plainSeed, isGrassSeed: isGrassSeed, famOf: famOf, biggestBag: biggestBag,
+                     usualSeed: usualSeed, namedIn: namedIn };
 })();

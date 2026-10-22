@@ -288,7 +288,8 @@ def kinds_for(words, on_estimate):
 # Five minutes: long enough for a back-and-forth, short enough that a price
 # list loaded just before building an estimate is soon seen.
 CATALOGUE_SECONDS = 300
-SUPPLY_FIELDS = ["name", "category", "coverage", "takeoffUnit", "unit", "specialOrder", "also", "notes"]
+SUPPLY_FIELDS = ["name", "category", "coverage", "takeoffUnit", "unit", "specialOrder", "also", "notes",
+                 "vendorId", "packLb", "partUse"]
 _held = {"at": None, "items": None, "per": None}
 
 
@@ -315,11 +316,62 @@ def _supplies(db, fresh=()):
     return items, per
 
 
-def catalogue(kinds=None, keep_ids=(), supplies=None):
+# Grass seed is bought in its biggest bag and charged by the pound of it used
+# (Jonah, 15 Oct 2026; and 22 Oct: "grass seed in jobs is always madison
+# park priced from the largest bag size unless otherwise specified"). Claude
+# had picked the 5 lb bag; now it sees each such product once, in that bag.
+# The same rule as the app's (supplymatch.js pack / famOf / biggestBag).
+_LB = re.compile(r"(\d+(?:\.\d+)?)\s*(?:lbs?|#|pounds?)(?![a-z])", re.I)
+
+
+def _bag_lb(it, per):
+    """How many pounds one bag of an item holds; None for an item sold by the
+    pound itself or of no known weight."""
+    if re.fullmatch(r"\s*(lbs?|pounds?|#)\s*", str(per or it.get("unit") or ""), re.I):
+        return None
+    own = _num(it.get("packLb"))
+    if own and own > 0:
+        return own
+    m = _LB.search(str(it.get("name") or ""))
+    return float(m.group(1)) if m and float(m.group(1)) > 0 else None
+
+
+def _part_bag(it, per):
+    """The bag's weight when the item is bought by the bag and used a bit at a
+    time: its own tick, else seed of a known bag weight."""
+    lb = _bag_lb(it, per)
+    if not lb:
+        return None
+    part = it.get("partUse") if isinstance(it.get("partUse"), bool) else str(it.get("category") or "").lower() == "seed"
+    return lb if part else None
+
+
+def _family(it):
+    """One product in its several bag sizes: the supplier and the name's words
+    without the weight."""
+    words = re.findall(r"[a-z0-9]+", _LB.sub(" ", str(it.get("name") or "").lower()))
+    return "%s|%s" % (it.get("vendorId") or "", " ".join(words))
+
+
+def _smaller_bags(items, per):
+    """The ids of every bag that is not its product's biggest."""
+    big, bags = {}, []
+    for sid, it in items:
+        lb = _part_bag(it, per.get(sid))
+        if lb:
+            fam = _family(it)
+            bags.append((sid, fam))
+            if fam not in big or lb > big[fam][1]:
+                big[fam] = (sid, lb)
+    return {sid for sid, fam in bags if big[fam][0] != sid}
+
+
+def catalogue(kinds=None, keep_ids=(), supplies=None, usual_seed=""):
     """Supplies as Claude sees them: what, in what unit -- no costs, no
     tools, one short line each; only the kinds given (all when None), plus
-    any item in keep_ids. `supplies` is _supplies()'s answer when the caller
-    has it. Returns (text, ids)."""
+    any item in keep_ids; a bag of seed only in its product's biggest bag.
+    usual_seed: Jonah's usual grass seed, marked. `supplies` is _supplies()'s
+    answer when the caller has it. Returns (text, ids)."""
     items_by_id, per = supplies if supplies is not None else _supplies(dg._db(), keep_ids)
     rows, ids = [], set()
     items = list(items_by_id.items())
@@ -328,6 +380,8 @@ def catalogue(kinds=None, keep_ids=(), supplies=None):
     if kinds is not None:
         items = [kv for kv in items if kv[1].get("category") not in TRIMMED_KINDS
                  or kv[1].get("category") in kinds or kv[0] in keep_ids]
+    smaller = _smaller_bags(items, per)
+    items = [kv for kv in items if kv[0] not in smaller or kv[0] in keep_ids]
     # A kind Jonah added himself is stored as its own name (pricing.js kindFor).
     def kind_name(c, missing):
         return CATEGORY_NAMES.get(c) or (str(c).strip() if c else "") or missing
@@ -348,6 +402,8 @@ def catalogue(kinds=None, keep_ids=(), supplies=None):
         if coverage > 0:
             row += " (1 %s = %g)" % (per.get(sid) or it.get("unit") or "unit", coverage)
         extra = []
+        if sid == usual_seed:
+            extra.append("Jonah's usual grass seed")
         if it.get("specialOrder"):
             extra.append("special order")
         if it.get("also"):
@@ -457,6 +513,8 @@ def _current_text(cur):
             bits.append("delivery %s" % m["delivery"])
         if m.get("allInOf"):
             bits.append("allInOf %s" % m["allInOf"])
+        if m.get("handPicked") is True:
+            bits.append("item picked by Jonah on the line -- keep it")
         if _num(m.get("customerDollars")):
             bits.append("$%s to the customer" % m.get("customerDollars"))
         rows.append("- " + " | ".join(bits))
@@ -666,10 +724,18 @@ def draft(client, d):
                       " ".join(str(m.get("text") or "") for m in (d.get("chat") or [])[-30:]
                                if m.get("role") == "user")])
     kinds = kinds_for(words, kinds_on)
-    cat_text, supply_ids = catalogue(kinds, on_estimate, supplies)
+    # His usual grass seed (the app's Pricing rules, in its biggest bag).
+    usual = str(d.get("usualSeed") or "")
+    usual = usual if usual in supplies[0] and supplies[0][usual].get("category") not in NOT_FOR_ESTIMATES else ""
+    cat_text, supply_ids = catalogue(kinds, on_estimate + ([usual] if usual else []), supplies, usual)
     if kinds is not None:
         cat_text += ("\n\n(Only the kinds of material this job's notes call for are listed. If it "
                      "needs something not here, add it with an empty supplyId and a clear name.)")
+    if usual:
+        cat_text += ("\n\nGRASS SEED: whenever the job needs grass seed and Jonah has not named another seed for "
+                     "it, use %s (%s), his usual. A seed sold in bags is listed in its biggest bag only: it is "
+                     "bought that way and the app charges the job for the part used." % (
+                         usual, supplies[0][usual].get("name")))
     book = price_book()
     model = _model(db)
     work_ids = {str(w.get("id")) for w in current.get("work") or [] if w.get("id")}

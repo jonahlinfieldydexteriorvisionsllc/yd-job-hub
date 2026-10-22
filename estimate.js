@@ -25,7 +25,9 @@
 //     materials: [{id, supplyId, name, qty, unit, plant, tree, costCents,
 //                  category, delivery: auto|pickup|rides,
 //                  forWork (a work id, 'none', or unset = worked out),
-//                  allInOf (the allin work line whose price covers it)}],
+//                  allInOf (the allin work line whose price covers it),
+//                  handPicked (its Supplies item picked by him on the line:
+//                  Claude's answers keep it)}],
 //     spoilCuYd (soil, rock, debris), brushCuYd (brush only), fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
 //     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo }
 // saved with the form like the materials list. What QuickBooks has is
@@ -1178,7 +1180,7 @@
         taxPickHtml('mat', id, m.taxable, ro) + allInChip(m) +
         (forWork ? moreBtnHtml(id, forWorkSays(m)) : '') + '</div>' +
       (forWork ? moreBoxHtml(id, forWork) : '') +
-      (readsAsWork(m) ? workNoteHtml(m, id, ro) : ro ? '' : matchHtml(m, id)) +
+      (readsAsWork(m) ? workNoteHtml(m, id, ro) : ro ? '' : matchHtml(m, id) + seedPickHtml(m, id)) +
       (m.supplyId && num(m.qty) === null && m.qbText
         ? '<div class="est-match"><span class="muted">QuickBooks: ' + esc(m.qbText) + ' — put in how many</span></div>' : '') +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
@@ -1225,10 +1227,12 @@
         if (!it) return '';
         const v = c.vendors[it.vendorId];
         const mine = got.sure && got.sure.by === 'yours' && k === 0;
+        const usual = got.sure && got.sure.by === 'usual' && k === 0;
         return '<button type="button" class="btn btn-sm' + (k === 0 && got.sure ? ' btn-filled' : '') + '" onclick="estUseMatch(\'' + id + '\', \'' + safeId(sid) + '\')">' +
-          (mine ? '✓ ' : '') + esc(it.name) +
+          (mine || usual ? '✓ ' : '') + esc(it.name) +
           (num(pr.cents) > 0 ? ' · ' + cents(pr.cents) + (pr.per ? '/' + esc(pr.per) : '') + perLbHtml(it, pr) : '') +
-          (v ? ' <small>' + esc(v.name) + '</small>' : '') + (mine ? ' <small>(your pick before)</small>' : '') + '</button>';
+          (v ? ' <small>' + esc(v.name) + '</small>' : '') + (mine ? ' <small>(your pick before)</small>' : '') +
+          (usual ? ' <small>(your usual seed)</small>' : '') + '</button>';
       }).join('') + '</div></div>';
   }
   // A bag charged by the pound used: its price a pound, to compare mixes.
@@ -1247,12 +1251,73 @@
     if (window.YDMatch) YDMatch.remember(m.name, sid);
     const was = m.supplyId || null;
     m.supplyId = sid;
+    m.handPicked = true;
     if (f) { m.qty = f.qty; m.unit = f.unit || m.unit; }
     else { m.qty = null; m.unit = ''; }
     changed(true);
     // Its line on Materials to Order follows (app.js).
     if (typeof ydOrderJoined === 'function') ydOrderJoined(m.name, sid, was);
     if (!f) showToast('Joined to ' + it.name + ' — put in how many' + (m.qbText ? ' (QuickBooks: ' + m.qbText + ')' : ''), 6000);
+  };
+
+  // A grass seed line: the other seeds in Supplies as buttons, each in its
+  // biggest bag with its price a pound, his usual one marked. A tap is his
+  // pick for this job, which Claude's answers keep (handPicked); the next
+  // job is his usual seed again.
+  function seedPickHtml(m, id) {
+    const M = window.YDMatch;
+    if (m.plant || !m.supplyId || !M || !M.isGrassSeed) return '';
+    const c = catalog(), it = c.items[m.supplyId];
+    if (!it || !M.isGrassSeed(it)) return '';
+    const seesPrices = Object.keys(c.prices).length > 0;
+    const usual = M.usualSeed(c);
+    const ids = [];
+    Object.keys(c.items).forEach(k => {
+      if (!M.isGrassSeed(c.items[k]) || (seesPrices && !(num((c.prices[k] || {}).cents) > 0))) return;
+      const b = M.biggestBag(k, c);
+      if (b !== m.supplyId && ids.indexOf(b) === -1) ids.push(b);
+    });
+    if (!ids.length) return '';
+    ids.sort((a, b) => (b === usual) - (a === usual) || String(c.items[a].name).localeCompare(String(c.items[b].name)));
+    return '<div class="est-match"><span class="muted">🌱 Another seed for this job:</span><div class="est-match-opts">' +
+      ids.map(sid => {
+        const o = c.items[sid], pr = c.prices[sid], v = c.vendors[o.vendorId];
+        const each = seedPriceText(o, pr);
+        return '<button type="button" class="btn btn-sm" title="' + esc(o.name) + '" onclick="estPickSeed(\'' + id + '\', \'' + safeId(sid) + '\')">' +
+          esc(seedShort(o.name)) + (each ? ' · ' + each : '') +
+          (v || sid === usual ? ' <small>' + [v ? esc(v.name) : '', sid === usual ? 'your usual' : ''].filter(Boolean).join(' · ') + '</small>' : '') +
+          '</button>';
+      }).join('') + '</div></div>';
+  }
+  // A seed by its own name, so two fit across a phone: "Madison Parks" of
+  // "Madison Parks grass seed 50 lb" (every button is the biggest bag).
+  function seedShort(name) {
+    const s = String(name || '').replace(/\([^)]*\)/g, ' ').replace(/\b\d+(\.\d+)?\s*(lbs?|#|pounds?)(?![a-z])/gi, ' ')
+      .replace(/\b(grass\s+)?seed(\s+(mix|blend))?\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    return s || String(name || '');
+  }
+  // Seeds compared by the pound: a bag's price over its weight, or the price
+  // of one sold by the pound.
+  function seedPriceText(it, pr) {
+    if (!pr || !(num(pr.cents) > 0)) return '';
+    const pk = YDMatch.pack(it, pr);
+    return pk.lb ? cents(Math.round(pr.cents / pk.lb)) + '/lb' : cents(pr.cents) + (pr.per ? '/' + esc(pr.per) : '');
+  }
+  window.estPickSeed = function (id, sid) {
+    const m = find(est.materials, id);
+    const c = catalog(), it = c.items[sid], M = window.YDMatch;
+    if (!m || !it || !M || !changes()) return;
+    const was = m.supplyId || null, from = was ? c.items[was] : null;
+    // The amount carried over in the new seed's measure (seedAsBought); else asked for.
+    const f = from ? M.fitQty({ qty: m.qty, unit: m.unit || measuredIn(from, c.prices[was]) }, it, c.prices[sid]) : null;
+    if (!String(m.name || '').trim() || (from && m.name === from.name)) m.name = it.name || '';
+    m.supplyId = sid;
+    m.handPicked = true;
+    if (f) { m.qty = f.qty; m.unit = M.unitKey(f.unit) === 'lb' ? 'lb' : ''; }
+    else { m.qty = null; m.unit = ''; }
+    changed(true);
+    if (typeof ydOrderJoined === 'function') ydOrderJoined(m.name, sid, was);
+    if (!f) showToast('Now ' + it.name + ' — put in how many ' + (measuredIn(it, c.prices[sid]) || 'of it'), 6000);
   };
 
   // A bag bought whole and charged by the part used (grass seed): what the
@@ -2884,6 +2949,8 @@
     const it = sid ? catalog().items[sid] : null;
     const was = m.supplyId || null;
     m.supplyId = it ? sid : null;
+    // His pick: Claude's answers keep it (seedAsBought, matLine).
+    if (it) m.handPicked = true; else delete m.handPicked;
     if (it && !String(m.name || '').trim()) m.name = it.name || '';
     // Picked by hand from the whole list: kept for these words too.
     if (it && window.YDMatch) YDMatch.remember(m.name, sid);
@@ -3030,7 +3097,7 @@
     const want = nameWords(bare);
     if (!want.length) return [];
     const c = catalog(), skip = P().NOT_FOR_ESTIMATES || [];
-    return Object.values(c.items)
+    let ids = Object.values(c.items)
       .filter(it => it.id !== l.supplyId && skip.indexOf(it.category) === -1 && c.prices[it.id] && num(c.prices[it.id].cents) > 0)
       .map(it => {
         const have = nameWords(it.name + ' ' + (it.also || ''));
@@ -3039,7 +3106,16 @@
       })
       .filter(x => x.hit >= Math.min(2, want.length) && x.score >= 0.6)
       .sort((a, b) => b.score - a.score || String(a.it.name).length - String(b.it.name).length)
-      .slice(0, 3).map(x => x.it.id);
+      .map(x => x.it.id);
+    // Seed is offered in its biggest bag only (the shortest names were the
+    // 5 lb bags), and plain "grass seed" gets his usual one first.
+    const M = window.YDMatch;
+    if (M && M.biggestBag) {
+      ids = ids.map(id => M.biggestBag(id, c)).filter((id, i, a) => a.indexOf(id) === i && id !== l.supplyId);
+      const usual = M.plainSeed(bare) ? M.usualSeed(c) : null;
+      if (usual && usual !== l.supplyId && num((c.prices[usual] || {}).cents) > 0) ids = [usual].concat(ids.filter(id => id !== usual));
+    }
+    return ids.slice(0, 3);
   }
   const lineOf = id => (last || priced()).takeoff.find(l => safeId(l.id) === id) || null;
 
@@ -3354,6 +3430,8 @@
         unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
         costEachDollars: num(m.costCents) === null ? null : m.costCents / 100, delivery: m.delivery || 'auto',
         allInOf: m.allInOf && e.work.some(w => w.id === m.allInOf && w.kind === 'allin') ? m.allInOf : '',
+        // The item he picked on the line himself: Claude keeps it.
+        handPicked: !!(m.handPicked && m.supplyId),
         customerDollars: r && r.takeoff[i] && r.takeoff[i].clientCents ? r.takeoff[i].clientCents / 100 : null })),
       spoilCuYd: num(e.spoilCuYd), brushCuYd: num(e.brushCuYd),
       totals: r ? { materials: r.materialsCents / 100, labour: r.laborCents / 100, total: r.totalCents / 100,
@@ -3412,14 +3490,17 @@
       m.allInOf = w ? w.id : null;
     });
   }
-  function mergeMaterials(got, e) {
-    return (got || []).map(g => matLine(g, g.id ? e.materials.find(m => m.id === g.id) : null));
+  function mergeMaterials(got, e, said) {
+    return (got || []).map(g => matLine(g, g.id ? e.materials.find(m => m.id === g.id) : null, e, said));
   }
-  function matLine(g, was) {
+  // said: what the app changed of Claude's answer, for its flags.
+  function matLine(g, was, e, said) {
     const items = catalog().items;
     const m = was ? clone(was) : { id: newId('em'), delivery: 'auto' };
     m.plant = !!g.plant;
     m.supplyId = !m.plant && g.supplyId && items[g.supplyId] ? g.supplyId : null;
+    // Another item than the one he picked on the line: Claude's pick now.
+    if (!was || was.supplyId !== m.supplyId) delete m.handPicked;
     m.name = String(g.name || (m.supplyId ? items[m.supplyId].name : '') || '');
     m.qty = num(g.qty);
     if (!m.supplyId) m.unit = String(g.unit || m.unit || '');
@@ -3433,8 +3514,48 @@
     if (['pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
     // An all-in line's id or title (joinAllIn makes it an id), or none.
     if (typeof g.allInOf === 'string') m.allInOf = g.allInOf.trim() || null;
+    if (e) seedAsBought(m, e, said);
     return m;
   }
+
+  // Grass seed as Jonah buys it (22 Oct 2026: "grass seed in jobs is always
+  // madison park priced from the largest bag size unless otherwise
+  // specified"): seed Claude puts on a line is his usual seed (Pricing rules)
+  // unless his notes or messages name the one it picked, and always in its
+  // biggest bag -- Claude's 5 lb bag priced seed at $5.04 a pound where the
+  // 50 lb bag he buys is $4.14. A seed he picked on the line himself
+  // (handPicked) is his and is never changed.
+  function seedAsBought(m, e, said) {
+    const M = window.YDMatch;
+    if (!m.supplyId || m.handPicked || !M || !M.biggestBag) return;
+    const c = catalog(), it = c.items[m.supplyId];
+    if (!it) return;
+    let sid = M.biggestBag(m.supplyId, c), swapped = false;
+    const usual = M.isGrassSeed(it) ? M.usualSeed(c) : null;
+    if (usual && c.items[usual] && M.famOf(c.items[usual]) !== M.famOf(it) && !M.namedIn(it, hisWords(e))) {
+      sid = usual; swapped = true;
+    }
+    if (sid === m.supplyId) return;
+    // The amount in the new item's measure: square feet stay square feet,
+    // pounds of seed become pounds of the bag. Where they don't meet (square
+    // feet of a seed sold by the pound with no coverage), Claude's pick stays.
+    const f = M.fitQty({ qty: m.qty, unit: m.unit || measuredIn(it, c.prices[m.supplyId]) }, c.items[sid], c.prices[sid]);
+    if (!f) return;
+    // What the customer reads follows the item, unless it says something else.
+    if (!String(m.name || '').trim() || m.name === it.name) m.name = c.items[sid].name || '';
+    m.supplyId = sid;
+    m.qty = f.qty;
+    m.unit = M.unitKey(f.unit) === 'lb' ? 'lb' : '';
+    if (swapped && said) {
+      said.push('🌱 Grass seed: your usual ' + c.items[sid].name + ', not the ' + it.name + ' Claude picked — you didn’t name it. ' +
+        'Tap another seed under the line to change it.');
+    }
+  }
+  // What one of an item is measured in for estimates (supplymatch.js fitQty):
+  // what it covers, or what it is sold by.
+  const measuredIn = (it, pr) => num(it.coverage) > 0 ? String(it.takeoffUnit || '') : String((pr && pr.per) || it.unit || '');
+  // Jonah's own words about the job: his site-visit notes and his messages.
+  const hisWords = e => [e.notes].concat((e.chat || []).filter(x => x.role === 'user').map(x => x.text)).join(' \n ');
   // Only what changed (r.mode 'patch', estimates.py): the lines given are
   // changed in place or added at the end, the ids in r.removed come off, and
   // every other line stays exactly as it is.
@@ -3551,6 +3672,9 @@
         patchOk: true,
         photos: photos,
         photoNums: photoNums,
+        // His usual grass seed in its biggest bag (Pricing rules): the one
+        // Claude uses unless he names another (estimates.py).
+        usualSeed: snowy || !window.YDMatch || !YDMatch.usualSeed ? null : YDMatch.usualSeed(catalog()),
       });
       land(jobId, r);
     } catch (e) {
@@ -3575,15 +3699,17 @@
     const brush = num(r.brushCuYd) !== null ? (num(r.brushCuYd) || null) : e.brushCuYd;
     const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length ||
       (patch && ((r.removed || []).length || spoil !== e.spoilCuYd || brush !== e.brushCuYd))));
+    const said = [];
     if (did) {
       e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
-      e.materials = patch ? patchLines(e.materials, r.materials, r.removed, matLine) : mergeMaterials(r.materials, e);
+      e.materials = patch ? patchLines(e.materials, r.materials, r.removed, (g, was) => matLine(g, was, e, said))
+        : mergeMaterials(r.materials, e, said);
       e.spoilCuYd = spoil;
       e.brushCuYd = brush;
       joinAllIn(e);
     }
     e.questions = (r.questions || []).map(String);
-    e.flags = (r.flags || []).map(String);
+    e.flags = (r.flags || []).map(String).concat(said);
     let text = String(r.reply || (did ? 'Updated the estimate.' : 'No change.'));
     // An all-in line's split, worked out by the app, under the answer: what
     // Jonah asked for is a sum, and the sum is the app's to do.

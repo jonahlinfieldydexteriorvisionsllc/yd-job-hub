@@ -174,6 +174,10 @@
       // none set, brush rides in the soil boxes.
       dumpster: { supplyId: null, maxCuYd: null, brushSupplyId: null, brushMaxCuYd: null },
       markers: { supplyId: null, count: null },
+      // His usual grass seed: what a line of plain "grass seed" is, and what
+      // Claude uses unless he names another (supplymatch.js usualSeed) --
+      // always in its biggest bag.
+      seed: { supplyId: null },
       planting: { perPlant: [], perSingleTree: [], perMultiTree: [] },
       // minDepositPct: the smallest deposit (50 unless set);
       // depositCoversMaterials: the deposit is at least the Materials figure
@@ -1024,6 +1028,7 @@
     'dumpster.brushMaxCuYd': ['Brush dumpster holds (cu yd)', 'num', 'dumpster'],
     'markers.supplyId': ['Marker item', 'item', 'markers'],
     'markers.count': ['Markers per job', 'num', 'markers'],
+    'seed.supplyId': ['Usual grass seed', 'item', 'material'],
     'planting.perPlant': ['Planting package — per plant', 'items', 'planting'],
     'planting.perSingleTree': ['Planting package — per single-stem tree', 'items', 'planting'],
     'planting.perMultiTree': ['Planting package — per multi-stem tree', 'items', 'planting'],
@@ -1423,6 +1428,13 @@
     }));
     return i => kinds.has(i.category);
   }
+  // The usual grass seed's picker: each grass seed in Supplies once, in its
+  // biggest bag (the one it is bought and priced by) -- and the one chosen.
+  function seedPick(r, cat) {
+    const M = window.YDMatch;
+    if (!M || !M.isGrassSeed || !cat || !cat.items) return i => i.category === 'seed';
+    return i => i.id === r.seed.supplyId || (M.isGrassSeed(i) && M.biggestBag(i.id, cat) === i.id);
+  }
   function supplyName(id) {
     const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {} };
     return (cat.items[id] || {}).name || '(gone from Supplies)';
@@ -1508,6 +1520,10 @@
         box('Sales tax on purchases (%)', r.taxPct, "prSet('taxPct', this.value, 'num')", 'added to every material cost before markup') +
         box('Sales tax charged to customers (%)', r.customerTaxPct, "prSet('customerTaxPct', this.value, 'num')",
           'on planting, sod, seed, mulch and lawn care — state + county where the job is') +
+        '<label class="pr-field"><span>Grass seed when a job doesn’t name one (from Supplies)</span>' +
+          pick('seed.supplyId', r.seed.supplyId, seedPick(r, cat)) +
+          '<small>Priced by the pound from its biggest bag. Claude uses it unless you name another seed; ' +
+          'any estimate line can be given another seed by hand.</small></label>' +
       '</div>' +
       '<p class="hint">Wisconsin taxes landscaping and lawn care to the customer (labor and materials); patios, walls, walks, ' +
         'drainage, grading and snow are not taxed (you pay the tax when you buy their materials). On an estimate, each line is ' +
