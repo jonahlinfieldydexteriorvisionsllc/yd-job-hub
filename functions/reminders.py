@@ -413,19 +413,23 @@ TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
 # The built-in tags, in remind.js TYPES order (the 7 am list is sorted by it):
 # id -> icon.
-TYPES = {"bid": "QP", "appt": "🕑", "phone": "📞", "pickup": "🚚", "delivery": "🚛", "email": "✉️",
-         "todo": "✅", "repair": "🔧", "shop": "🛠️", "errand": "🧾", "crew": "👷", "jobday": "🔨",
-         "doctor": "🩺", "personal": "🏠"}
+TYPES = {"bid": "QP", "appt": "🕑", "phone": "📞", "pickup": "🚚", "rental": "🔑", "parts": "🔩", "check": "💵",
+         "equipment": "🚜", "delivery": "🚛", "email": "✉️", "todo": "✅", "repair": "🔧", "shop": "🛠️",
+         "errand": "🧾", "crew": "👷", "jobday": "🔨", "doctor": "🩺", "personal": "🏠"}
 # The built-ins that are the crew's wherever they are (remind.js `crew`).
 CREW_TYPES = {"crew", "repair", "shop", "errand"}
+# Every kind of pickup (Jonah, 22 Oct 2026: "material, rental, parts, check,
+# and equipment (as in our equipment)"): one with no date is ready now
+# (remind.js PICKUPS).
+PICKUPS = ("pickup", "rental", "parts", "check", "equipment")
 
 # Each calendar's own tags (remind.js CAL_TAGS, Jonah 16 Oct 2026: "within the
 # calendars I want tags"): the list each kind starts with -- the owner's own
 # list, once he edits it, is on the calendar as `tags` [{id, name, icon,
 # color, appointment}].
 CAL_TAGS = {
-    "work": ("bid", "appt", "phone", "pickup", "delivery", "email", "todo"),
-    "crew": ("pickup", "delivery", "repair", "shop", "errand", "crew"),
+    "work": ("bid", "appt", "phone") + PICKUPS + ("delivery", "email", "todo"),
+    "crew": PICKUPS + ("delivery", "repair", "shop", "errand", "crew"),
     "jobs": ("jobday",),
     "personal": ("doctor", "phone", "personal"),
 }
@@ -434,7 +438,7 @@ CAL_TAGS["custom"] = CAL_TAGS["work"]
 # ADDED_LATER): a list the owner saved before one existed never offered it,
 # so it joins his list -- until he saves it again having seen it (the
 # calendar's `tagsSeen`: the built-ins his editor offered).
-ADDED_LATER = ("phone",)
+ADDED_LATER = ("phone", "rental", "parts", "check", "equipment")
 FALLBACK = {"work": "todo", "custom": "todo", "crew": "crew", "jobs": "jobday", "personal": "personal"}
 # The guess by where it is, when the title says nothing (remind.js BY_CALENDAR).
 BY_CALENDAR = {"visits": "bid", "work": "todo", "custom": "todo"}
@@ -446,21 +450,45 @@ PHONE_FIRST = re.compile(r"^\s*(?:call(?:s|ing|ed)?|call\s?-?\s?backs?|phone(?:d
                          r"(?!\s+(?:bills?|plans?|cases?|chargers?|payments?|repairs?|upgrades?|numbers?)\b)", re.I)
 PHONE_ANY = re.compile(r"\b(?:phone|zoom|video|conference|facetime)\s?-?\s?calls?\b|\bcall\s?-?\s?backs?\b|"
                        r"\breturn(?:ed)?\b.{0,40}\bcalls?\b|\bcalls?\s*[.!?]?\s*$", re.I)
-PICKUP_WORDS = re.compile(r"\bpick\s?-?\s?up\b", re.I)
-# A check to collect, the bank, a drop-off (remind.js ERRAND_WORDS).
-ERRAND_WORDS = re.compile(r"\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|"
-                          r"\bchecks?\s+(?:from|for)\b|\bdeposit\b", re.I)
-# (tag, the words that say it[, the words that say it is not]): on My work a
-# pickup of a check, or at the bank, is no material pickup -- a to-do.
+# Which pickup a title tells (remind.js PICKUP_WORDS / ERRAND_WORDS /
+# CHECK_WORDS / PICKUP_KINDS / pickupOf -- keep them the same): a check to
+# collect, else -- said to be a pickup, not a pickup truck -- a rental,
+# parts or one of our machines, else materials; one at the bank or the post
+# office is none of ours.
+PICKUP_WORDS = re.compile(r"\bpick\s?-?\s?up\b(?!\s+trucks?\b)", re.I)
+ERRAND_WORDS = re.compile(r"\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bdeposit\b", re.I)
+CHECK_WORDS = re.compile(r"\bchecks?\s+from\b|\b(?:pick\s?-?\s?up|get|grab|collect)\s+(?:(?:the|a|his|her|their|my|our)\s+)?"
+                         r"(?:\S+['’]s\s+)?(?:checks?|cheques?|payments?)\b(?!-)|\bcheques?\b", re.I)
+PICKUP_KINDS = (("rental", re.compile(r"\brent(?:al|als|ed|ing)?\b", re.I)),
+                ("parts", re.compile(r"\bparts?\b|\bfilters?\b|\bblades?\b|\bbelts?\b|\bhoses?\b|\btires?\b|"
+                                     r"\bbatter(?:y|ies)\b|\bspark\s?plugs?\b|\bbearings?\b", re.I)),
+                ("equipment", re.compile(r"\bequipment\b|\bmachines?\b|\bmowers?\b|\btrailers?\b|\btrucks?\b|"
+                                         r"\bskid\s?-?\s?steers?\b|\bloaders?\b|\bexcavators?\b|\bmini\s?-?\s?ex\b|"
+                                         r"\btractors?\b|\bblowers?\b|\btrimmers?\b|\bsalters?\b|\bspreaders?\b|"
+                                         r"\baerators?\b|\bfrom\s+(?:the\s+)?(?:repair|shop|dealer)\b", re.I)))
+
+
+def _pickup_of(title):
+    if CHECK_WORDS.search(title):
+        return "check"
+    if not PICKUP_WORDS.search(title):
+        return ""
+    hit = next((kind for kind, w in PICKUP_KINDS if w.search(title)), "")
+    return hit or ("" if ERRAND_WORDS.search(title) else "pickup")
+
+
+# (tag, the words that say it -- or a function telling which tag), asked in
+# this order (remind.js WORDS).
 WORDS = (("phone", PHONE_FIRST),
-         ("pickup", PICKUP_WORDS, ERRAND_WORDS),
+         ("pickup", _pickup_of),
          ("email", re.compile(r"^\s*send\b|\be-?mail\b", re.I)),
          ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
          ("phone", PHONE_ANY))
-# On the Crew schedule, asked in this order: "Pickup check from ..." is an
-# errand, "Pick up pavers at the yard" a pickup (remind.js CREW_WORDS).
-CREW_WORDS = (("errand", ERRAND_WORDS),
-              ("pickup", PICKUP_WORDS),
+# On the Crew schedule, asked in this order: "Pickup check from ..." is a
+# check pickup, "Drop off at the bank" an errand, "Pick up pavers at the
+# yard" a material pickup (remind.js CREW_WORDS).
+CREW_WORDS = (("pickup", _pickup_of),
+              ("errand", ERRAND_WORDS),
               ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
               ("repair", re.compile(r"\b(?:repair\w*|fix(?:ed|ing)?|service|oil change|tires?|broken|brakes?|grease)\b", re.I)),
               ("shop", re.compile(r"\b(?:shop|yard work|the yard)\b", re.I)))
@@ -470,9 +498,10 @@ DAY_LIST_MAX = 6                  # named in the 7 am buzz; the rest are "+N mor
 
 
 def _by_words(title, words=WORDS):
-    for kind, w, *unless in words:
-        if w.search(title) and not (unless and unless[0].search(title)):
-            return kind
+    for kind, how in words:
+        got = how(title) if callable(how) else kind if how.search(title) else ""
+        if got:
+            return got
     return ""
 
 
@@ -783,12 +812,12 @@ def open_tasks(db, people, first, last, now):
                    ref.where("due", ">=", first.isoformat()).where("due", "<=", last.isoformat()).stream()}
             if first <= today <= last:
                 # The pickups with no date: on Pickups, where every card is
-                # one, and any card elsewhere marked a pickup.
-                q = ref.where("due", "==", None) if b.id == "pickups" else ref.where("type", "==", "pickup")
+                # one, and any card elsewhere marked a pickup of any kind.
+                q = ref.where("due", "==", None) if b.id == "pickups" else ref.where("type", "in", list(PICKUPS))
                 for s in q.stream():
                     k = s.to_dict() or {}
                     made = _when(k.get("createdAt")) if k.get("createdAt") else None
-                    if not k.get("due") and _type_of(k, board_id=b.id) == "pickup" and not (made and made < made_since):
+                    if not k.get("due") and _type_of(k, board_id=b.id) in PICKUPS and not (made and made < made_since):
                         got[s.id] = dict(k, due=today.isoformat(), _undated=True)
             for cid, k in got.items():
                 if k.get("doneAt"):

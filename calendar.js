@@ -419,9 +419,9 @@
         YDBoards.pickupsWaiting().forEach(x => {
           if (onlyMine && !YDRemind.cardIsMine(x.card, x.board, w)) return;
           out.push({ day: t, layer: Object.assign({}, AUTO['auto:cards'], { color: x.board.color }),
-            color: YDRemind.color('pickup'), type: 'pickup', time: '', task: true, undated: true,
+            color: YDRemind.color(x.type), ink: YDRemind.ink(x.type), type: x.type, time: '', task: true, undated: true,
             auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
-            title: YDRemind.icon('pickup') + ' ' + (x.card.title || 'Card'), note: x.board.name + ' · ready to pick up',
+            title: YDRemind.icon(x.type) + ' ' + (x.card.title || 'Card'), note: x.board.name + ' · ready to pick up',
             crew: x.card.assignees || [] });
         });
       }
@@ -2978,8 +2978,8 @@
   // stands out from the others; red, orange and grey are the urgency
   // colours everywhere else in Job Hub, so none is offered here (the colour
   // box still allows anything).
-  const TAG_COLORS = ['#2f8f5b', '#7a4fd1', '#c026d3', '#8b5a2b', '#2a3d8f', '#13a7c4', '#8ab81e', '#0f766e', '#4d6b1a',
-                      '#a3369b', '#2f6fd6', '#d94f8a', '#f2c230', '#1a9c8c', '#66418f'];
+  const TAG_COLORS = ['#2f8f5b', '#7a4fd1', '#c026d3', '#8b5a2b', '#702018', '#f09888', '#c8a880', '#504028', '#2a3d8f',
+                      '#13a7c4', '#8ab81e', '#0f766e', '#4d6b1a', '#a3369b', '#2f6fd6', '#d94f8a', '#f2c230', '#1a9c8c', '#66418f'];
   let tagDraft = null;      // the tags being edited, or null (the Job schedule has none)
   let tagsDirty = false;    // changed in this window: only then are they saved
   function tagEditorHtml(c) {

@@ -69,6 +69,19 @@
     // now, everywhere; the id stays 'pickup', so every entry and card
     // already tagged keeps its tag.
     { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#8b5a2b' },
+    // And then (22 Oct): "pickups are a thing we do often. So there should
+    // be material, rental, parts, check, and equipment (as in our
+    // equipment)". Each its own tag, on My work and the Crew schedule,
+    // after the material one. 🚜 is our own equipment everywhere in Job Hub
+    // (the Equipment tab), so a rental is the 🔑; 💵 is money coming in, as
+    // on Home and Invoices. Colours: the free places left among every other
+    // tag's and the urgency colours (ΔE ≥ 15 from all of them; deep rust,
+    // salmon, kraft tan, dark olive brown); dark writing on the two light
+    // ones.
+    { id: 'rental', icon: '🔑', name: 'Rental pickup', timed: false, color: '#702018' },
+    { id: 'parts', icon: '🔩', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10' },
+    { id: 'check', icon: '💵', name: 'Check pickup', timed: false, color: '#c8a880', ink: '#2b1d0e' },
+    { id: 'equipment', icon: '🚜', name: 'Equipment pickup', timed: false, color: '#504028' },
     { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
     { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
@@ -79,8 +92,9 @@
     // and of the urgency colours: deep teal, moss green, magenta.
     { id: 'repair', icon: '🔧', name: 'Equipment repair', timed: false, color: '#0f766e', crew: true, calOnly: true },
     { id: 'shop', icon: '🛠️', name: 'Shop / yard work', timed: false, color: '#4d6b1a', crew: true, calOnly: true },
-    // A check to collect, a part to drop off, the bank.
-    { id: 'errand', icon: '🧾', name: 'Errand', timed: false, color: '#a3369b', crew: true, calOnly: true },
+    // The bank, the post office, something to drop off (a check to collect
+    // is a Check pickup).
+    { id: 'errand', icon:'🧾', name: 'Errand', timed: false, color: '#a3369b', crew: true, calOnly: true },
     // "Things not for Jonah to handle": on his calendar so he sees them all,
     // but they buzz only the people on them.
     { id: 'crew', icon: '👷', name: 'Crew task', timed: false, color: '#2f6fd6', crew: true },
@@ -107,8 +121,8 @@
   // calendar as `tags` [{id, name, icon, color, appointment}] only once
   // edited. [id, the name it goes by there when not its own].
   const CAL_TAGS = {
-    work: [['bid'], ['appt'], ['phone'], ['pickup'], ['delivery'], ['email'], ['todo']],
-    crew: [['pickup'], ['delivery'], ['repair'], ['shop'], ['errand'], ['crew']],
+    work: [['bid'], ['appt'], ['phone'], ['pickup'], ['rental'], ['parts'], ['check'], ['equipment'], ['delivery'], ['email'], ['todo']],
+    crew: [['pickup'], ['rental'], ['parts'], ['check'], ['equipment'], ['delivery'], ['repair'], ['shop'], ['errand'], ['crew']],
     // The Job schedule: job days only -- no list to pick from.
     jobs: [['jobday']],
     personal: [['doctor'], ['phone'], ['personal']],
@@ -122,7 +136,10 @@
   // seen it: the calendar's `tagsSeen` says which built-ins his editor
   // offered (calendar.js calSaveCal); one missing from a list saved after
   // that was taken off. A new built-in on a starting list: add its id here.
-  const ADDED_LATER = ['phone'];
+  const ADDED_LATER = ['phone', 'rental', 'parts', 'check', 'equipment'];
+  // Every kind of pickup: one with no date is ready now -- on the day's list
+  // every day until it is picked up (boards.js pickupsWaiting).
+  const PICKUPS = ['pickup', 'rental', 'parts', 'check', 'equipment'];
   // What an entry is when nothing better is known, on each kind.
   const FALLBACK = { work: 'todo', custom: 'todo', crew: 'crew', jobs: 'jobday', personal: 'personal' };
   const kindOfCal = cal => (cal && cal.kind) || '';
@@ -258,22 +275,23 @@
   // knownOn), else a guess by where it is and its title. Jonah keeps four
   // calendars (16 Oct 2026), each with its own tags:
   //   - the Job schedule: every entry a job's day, whatever it says;
-  //   - the Crew schedule: the title says a material pickup, a delivery, an
-  //     equipment repair, shop or yard work, or an errand (a check to
-  //     collect, the bank) -- in that order of asking, so "Pickup check
-  //     from ..." is an errand and "Pick up pavers at the yard" a pickup --
+  //   - the Crew schedule: the title says a pickup (which kind: pickupOf),
+  //     an errand (the bank, a drop-off), a delivery, an equipment repair,
+  //     or shop or yard work -- in that order of asking, so "Pickup check
+  //     from ..." is a check pickup, "Pick up the mower from repair" one of
+  //     our machines and "Pick up pavers at the yard" a material pickup --
   //     and anything else is a crew task;
   //   - Personal ("anything i do not to do with the business"): a phone
   //     call when the title says so ("Call the dentist" is a call to make,
   //     not the dentist), else a doctor's appointment when it says so, else
   //     personal;
   //   - My work, and any calendar he makes: the title tells a phone call, a
-  //     material pickup, an email or a delivery, and anything else is a
-  //     to-do. A title STARTING "Call ..." / "Phone ..." is a call whatever
-  //     else it says ("Call the yard about the delivery"); one that only
-  //     mentions a call further on ("<a business> call", "Pat -- call back")
-  //     is one when it says nothing else ("Send the bid, then call" is an
-  //     email). A pickup of a check, or at the bank, is no material pickup:
+  //     pickup (which kind: pickupOf), an email or a delivery, and anything
+  //     else is a to-do. A title STARTING "Call ..." / "Phone ..." is a call
+  //     whatever else it says ("Call the yard about the delivery"); one
+  //     that only mentions a call further on ("<a business> call", "Pat --
+  //     call back") is one when it says nothing else ("Send the bid, then
+  //     call" is an email). A pickup at the bank is none of the pickups:
   //     the Crew schedule calls that an errand, and My work, with no errand
   //     tag, a to-do.
   // A card on Pickups -- made from a store's "ready for pickup" email -- is
@@ -287,30 +305,55 @@
   // "Phone call with ...", "Zoom call", "call back", "return ...'s call",
   // and a title ending in "call".
   const PHONE_ANY = /\b(?:phone|zoom|video|conference|facetime)\s?-?\s?calls?\b|\bcall\s?-?\s?backs?\b|\breturn(?:ed)?\b.{0,40}\bcalls?\b|\bcalls?\s*[.!?]?\s*$/i;
-  const PICKUP_WORDS = /\bpick\s?-?\s?up\b/i;
-  // A check to collect, the bank, a drop-off.
-  const ERRAND_WORDS = /\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bchecks?\s+(?:from|for)\b|\bdeposit\b/i;
-  // [tag, the words that say it, the words that say it is not] -- asked in
-  // this order, the first that fits.
+  // "Pick up", "Pickup", "Pick-up" -- not a pickup truck.
+  const PICKUP_WORDS = /\bpick\s?-?\s?up\b(?!\s+trucks?\b)/i;
+  // The bank, the post office, a drop-off.
+  const ERRAND_WORDS = /\berrands?\b|\bbank\b|\bpost office\b|\bdrop(?:ped|ping)?\s?-?\s?off\b|\bdeposit\b/i;
+  // A check to collect says so without "pick up": "Check from Pat", "Get
+  // Pat's check", "Collect the payment".
+  const CHECK_WORDS = /\bchecks?\s+from\b|\b(?:pick\s?-?\s?up|get|grab|collect)\s+(?:(?:the|a|his|her|their|my|our)\s+)?(?:\S+['’]s\s+)?(?:checks?|cheques?|payments?)\b(?!-)|\bcheques?\b/i;
+  // Said to be a pickup: a rental, parts, or one of our own machines (from
+  // the repair shop, a job) -- asked in that order, so "Pick up blades for
+  // the mower" is parts and "Pick up the rented mower" a rental -- else
+  // materials.
+  const PICKUP_KINDS = [
+    ['rental', /\brent(?:al|als|ed|ing)?\b/i],
+    ['parts', /\bparts?\b|\bfilters?\b|\bblades?\b|\bbelts?\b|\bhoses?\b|\btires?\b|\bbatter(?:y|ies)\b|\bspark\s?plugs?\b|\bbearings?\b/i],
+    ['equipment', /\bequipment\b|\bmachines?\b|\bmowers?\b|\btrailers?\b|\btrucks?\b|\bskid\s?-?\s?steers?\b|\bloaders?\b|\bexcavators?\b|\bmini\s?-?\s?ex\b|\btractors?\b|\bblowers?\b|\btrimmers?\b|\bsalters?\b|\bspreaders?\b|\baerators?\b|\bfrom\s+(?:the\s+)?(?:repair|shop|dealer)\b/i],
+  ];
+  // Which pickup a title tells (PICKUPS), or '' -- none, or one at the bank
+  // or the post office, which is no pickup of ours.
+  function pickupOf(title) {
+    if (CHECK_WORDS.test(title)) return 'check';
+    if (!PICKUP_WORDS.test(title)) return '';
+    const hit = PICKUP_KINDS.find(k => k[1].test(title));
+    return hit ? hit[0] : ERRAND_WORDS.test(title) ? '' : 'pickup';
+  }
+  // [tag, the words that say it -- or a function telling which tag] --
+  // asked in this order, the first that fits.
   const WORDS = [
     ['phone', PHONE_FIRST],
-    ['pickup', PICKUP_WORDS, ERRAND_WORDS],
+    ['pickup', pickupOf],
     ['email', /^\s*send\b|\be-?mail\b/i],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
     ['phone', PHONE_ANY],
   ];
   const isCall = title => PHONE_FIRST.test(title || '') || PHONE_ANY.test(title || '');
   const CREW_WORDS = [
+    ['pickup', pickupOf],
     ['errand', ERRAND_WORDS],
-    ['pickup', PICKUP_WORDS],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
     ['repair', /\b(?:repair\w*|fix(?:ed|ing)?|service|oil change|tires?|broken|brakes?|grease)\b/i],
     ['shop', /\b(?:shop|yard work|the yard)\b/i],
   ];
   const DOCTOR_WORDS = /\b(doctor|dentist|dental|clinic|chiropract\w*|orthodont\w*|optometr\w*|dermatolog\w*|physical therapy|check-?up|physical)\b|\bdr\.\s/i;
   function byWords(title, list) {
-    const hit = (list || WORDS).find(w => w[1].test(title || '') && !(w[2] && w[2].test(title || '')));
-    return hit ? hit[0] : '';
+    title = title || '';
+    for (const [id, how] of list || WORDS) {
+      const got = typeof how === 'function' ? how(title) : how.test(title) ? id : '';
+      if (got) return got;
+    }
+    return '';
   }
   // `where`: { cal (the calendar itself: its own tags count), or calKind,
   // or boardId (a card) }.
@@ -550,6 +593,8 @@
     // The built-ins a calendar of this kind starts with: what the tag editor
     // offered, saved as its tagsSeen (ADDED_LATER).
     startIds: kind => startList(kind).map(x => x[0]),
+    // Every kind of pickup (22 Oct 2026): one with no date is ready now.
+    isPickup: id => PICKUPS.indexOf(id) !== -1,
     tagsOf: tagsOf,
     tagOf: tagOf,
     knownOn: knownOn,

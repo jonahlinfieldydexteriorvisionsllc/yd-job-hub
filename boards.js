@@ -3159,6 +3159,8 @@
     // for a fortnight at most (remind.js CARRY_DAYS) after the card was made,
     // as functions/reminders.py open_tasks does. One picked up today stays
     // on today's list, ticked, so a slip of the finger can be put back.
+    // Any kind of pickup the same (22 Oct: rental, parts, a check, one of
+    // our machines): ready and waiting until somebody goes for it.
     pickupsWaiting: () => {
       const out = [];
       const since = Date.now() - YDRemind.CARRY_DAYS * 864e5;
@@ -3167,12 +3169,13 @@
         if (!b || b.virtual) return;
         const last = doneColOf(b);
         Object.values(cards[bid]).forEach(k => {
-          if (k.due || cardType(b, k) !== 'pickup') return;
+          const type = cardType(b, k);
+          if (k.due || !YDRemind.isPickup(type)) return;
           const done = colOf(b, k) === last;
           if (done && !finishedToday(k)) return;
           const made = k.createdAt ? new Date(k.createdAt).getTime() : NaN;
           if (isFinite(made) && made < since) return;
-          out.push({ board: b, card: k, done: done });
+          out.push({ board: b, card: k, done: done, type: type });
         });
       });
       return out;
