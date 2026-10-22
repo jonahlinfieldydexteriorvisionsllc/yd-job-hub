@@ -2749,6 +2749,25 @@
     .ord-grid .check-row.ord-delivery .cr-name { padding-left:27px; }
   }
   @media (max-width:720px) { .ord-grid { columns:auto; } }
+  /* By job (Jonah, 21 Oct 2026: "separated by job then by vendor"): the
+     job heads its card, each supplier in it is a shaded bar with its own
+     Copy / Email, and the job's total closes the card. The two sets of
+     buttons above (grouped / which jobs) sit side by side, wrapping on a
+     phone. */
+  .orders-picks { display:flex; flex-wrap:wrap; gap:8px 18px; margin-bottom:12px; }
+  .orders-picks .orders-pick { margin-bottom:0; }
+  /* A phone: each pair shares one row, half the width each, so the four
+     buttons take two rows rather than three. */
+  @media (max-width:720px) {
+    .orders-picks { flex-direction:column; }
+    .orders-picks .orders-pick { flex-wrap:nowrap; }
+    .orders-picks .orders-pick .btn { flex:1 1 0; min-width:0; white-space:normal; line-height:1.2; }
+  }
+  .ord-grid .ord-job.ord-job-head { padding:0 10px 6px; border-bottom:1px solid var(--border); font-size:14px; }
+  .ord-count { font-size:12px; }
+  .ord-grid .order-vendor.ord-sub { margin:8px 0 2px; padding:5px 10px; background:var(--surface-2); font-size:13px; }
+  .ord-job-total { margin:6px 10px 4px; padding-top:6px; border-top:1px dashed var(--border); font-size:12.5px; color:var(--muted); }
+  .ord-job-total b { color:var(--text); }
   .bd-draft { font-size:11px; font-weight:700; color:var(--brand-ink); }
   .cr-cost .link-btn, .order-vendor .link-btn, .cr-link .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }
   .est-invoice { margin-top:10px; padding:10px 12px; border-radius:8px; border:1px dashed var(--border-strong); }

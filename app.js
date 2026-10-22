@@ -2268,13 +2268,19 @@ function renderOrderList() {
     const left = list.filter(it => !it.ordered).length;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
     if (dels[v]) delSum += dels[v].cents;
+    // What this supplier's part still to order comes to, with its delivery
+    // (the rows add themselves to `sum` as they are drawn).
+    const before = sum;
+    const rows = list.map(row).join('');
+    const vSum = sum - before + (dels[v] ? dels[v].cents : 0);
     return (grouped ? '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'Other') + '</b>' +
-        '<span class="muted">' + left + ' to order' + (lead && left ? ' · takes ' + esc(lead) : '') + '</span>' +
+        '<span class="muted">' + left + ' to order' + (lead && left ? ' · takes ' + esc(lead) : '') +
+          (prices && vSum && keys.length > 1 ? ' · about ' + fmtMoney(vSum / 100) : '') + '</span>' +
         (v && left ? '<button class="link-btn ro-ok" onclick="copySupplierOrder(\'' + ordId(v) + '\')">📋 Copy the order</button>' +
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + ordId(v) + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +
-      list.map(row).join('') + orderDeliveryRow(dels[v]);
+      rows + orderDeliveryRow(dels[v]);
   }).join('') +
     (prices && (sum || unpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney((sum + delSum) / 100) + '</b> before tax' +
       (delSum ? ', with ' + fmtMoney(delSum / 100) + ' of delivery' : '') +
@@ -2285,17 +2291,22 @@ function renderOrderList() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// ORDERS TO PLACE  (every job's Materials to Order, by supplier)
+// ORDERS TO PLACE  (every job's Materials to Order, by job then supplier)
 // ═══════════════════════════════════════════════════════════
 // Jonah (Oct 2026): "One order list across booked jobs: Grouped by supplier,
 // so ordering for the week is one screen. however, orders of the same
-// material still need to be separated." So: one block per supplier, and in
-// it each job's lines under that job's name -- two jobs wanting road gravel
+// material still need to be separated." Then (21 Oct 2026): "supplies list
+// should be separated by job then by vendor." So it shows each job, and in
+// it each supplier's lines with that supplier's delivery to the job and what
+// it comes to -- one delivery is one job from one supplier. "By supplier"
+// keeps the first way round (each supplier, every job's lines under it) for
+// one call that covers several jobs. Either way two jobs wanting road gravel
 // are two lines, never one added-up line, because they go to two places.
 // It is the per-job list read across jobs: the same supplier, cost and
 // order-page lookups (orderVendor, orderCost, orderSupply), and a tick here
 // is the same `ordered` on the same line as the tick on the job.
 const ORDERS_VIEW_KEY = 'ydjobhub_ordersView';
+const ORDERS_BY_KEY = 'ydjobhub_ordersBy';
 // An id as it may sit in an onclick (letters, digits, - and _ only).
 const ordId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
 // Which line a tick means: its id, or -- an old line saved before lines had
@@ -2305,6 +2316,14 @@ let ordersView = (() => { try { return localStorage.getItem(ORDERS_VIEW_KEY) ===
 function setOrdersView(v) {
   ordersView = v === 'week' ? 'week' : 'all';
   try { localStorage.setItem(ORDERS_VIEW_KEY, ordersView); } catch (e) { /* remembered for this visit only */ }
+  renderOrdersOverview();
+}
+// By job (his ask) unless this device was last set to By supplier. Its own
+// choice: which jobs are shown never changes how they are grouped.
+let ordersBy = (() => { try { return localStorage.getItem(ORDERS_BY_KEY) === 'supplier' ? 'supplier' : 'job'; } catch (e) { return 'job'; } })();
+function setOrdersBy(v) {
+  ordersBy = v === 'supplier' ? 'supplier' : 'job';
+  try { localStorage.setItem(ORDERS_BY_KEY, ordersBy); } catch (e) { /* remembered for this visit only */ }
   renderOrdersOverview();
 }
 // Booked and running jobs with something still to order. The job open in the
@@ -2354,6 +2373,11 @@ function ordersBySupplier(jobs, cat) {
   });
   return groups;
 }
+// The suppliers in the order shown: by name, the lines with none yet last.
+function ordersSupplierSort(cat) {
+  const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
+  return (a, b) => (a ? 0 : 1) - (b ? 0 : 1) || vname(a).localeCompare(vname(b));
+}
 function renderOrdersOverview() {
   const wrap = document.getElementById('ordersWrap');
   const sec = document.getElementById('ordersSection');
@@ -2367,11 +2391,16 @@ function renderOrdersOverview() {
   const jobs = ordersView === 'week' ? all.filter(j => j.soon) : all;
   const lineCount = list => list.reduce((n, j) => n + j.items.length, 0);
   document.getElementById('ordersBadge').textContent = lineCount(all) ? lineCount(all) + ' to order' : '';
-  // Two tap buttons, not a dropdown or a sideways row (phones).
-  const pick = (v, label) => '<button type="button" class="btn btn-sm' + (ordersView === v ? ' btn-filled' : '') +
-    '" aria-pressed="' + (ordersView === v) + '" onclick="setOrdersView(\'' + v + '\')">' + label + '</button>';
-  const head = '<div class="orders-pick">' + pick('week', 'This week (' + soonCount + ' job' + (soonCount === 1 ? '' : 's') + ')') +
-    pick('all', 'All booked jobs (' + all.length + ')') + '</div>';
+  // Tap buttons, not a dropdown or a sideways row (phones) -- two questions,
+  // two sets: how it is grouped, and which jobs.
+  const pick = (cur, v, label, fn) => '<button type="button" class="btn btn-sm' + (cur === v ? ' btn-filled' : '') +
+    '" aria-pressed="' + (cur === v) + '" onclick="' + fn + '(\'' + v + '\')">' + label + '</button>';
+  const head = '<div class="orders-picks">' +
+    '<div class="orders-pick" role="group" aria-label="Grouped">' + pick(ordersBy, 'job', 'By job', 'setOrdersBy') +
+      pick(ordersBy, 'supplier', 'By supplier', 'setOrdersBy') + '</div>' +
+    '<div class="orders-pick" role="group" aria-label="Which jobs">' +
+      pick(ordersView, 'week', 'This week (' + soonCount + ' job' + (soonCount === 1 ? '' : 's') + ')', 'setOrdersView') +
+      pick(ordersView, 'all', 'All booked jobs (' + all.length + ')', 'setOrdersView') + '</div></div>';
   if (!jobs.length) {
     wrap.innerHTML = head + '<p class="empty-msg">' + (all.length
       ? 'Nothing to order for jobs under way or on the calendar in the next 7 days. “All booked jobs” shows the rest.'
@@ -2380,67 +2409,83 @@ function renderOrdersOverview() {
   }
   const groups = ordersBySupplier(jobs, cat);
   const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
-  const keys = Object.keys(groups).sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || vname(a).localeCompare(vname(b)));
+  const bySupplier = ordersSupplierSort(cat);
   const siteOf = v => (window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl(cat.vendors[v]) : '');
-  // The same material on more than one job at a supplier: said beside each,
-  // so it can go on one call -- but as two lines, for two places.
+  // The same material from the same supplier on more than one job: said
+  // beside each, so it can go on one call -- but as two lines, for two places.
   const sameKey = it => orderSupply(it, cat) || (window.YDMatch ? YDMatch.keyOf(it.name) : String(it.name).toLowerCase().trim());
-  let grand = 0, grandUnpriced = 0;
+  const alsoKey = (v, it) => { const k = sameKey(it); return k ? v + '|' + k : ''; };
+  const onJobs = {};
+  Object.keys(groups).forEach(v => groups[v].forEach(b => b.lines.forEach(it => {
+    const k = alsoKey(v, it);
+    if (k) (onJobs[k] = onJobs[k] || []).push(b.job);
+  })));
   // Each job's delivery from each supplier (the open job's from the form).
   const dels = {};
   if (prices) jobs.forEach(j => {
     dels[j.id] = orderDeliveries(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city);
   });
-  const html = keys.map(v => {
+  // One line still to order, ticked here as on its job. -> { html, c }
+  // (c: what it costs, null where prices are not shown).
+  const rowOf = (it, j, v) => {
+    const c = prices ? orderCost(it, cat) : null;
+    const cost = !c ? '' : c.cents !== null
+      ? '<span class="cr-cost">' + (c.buy ? esc(YDPricing.qtyText(c.buy, c.per)) + ' to buy × ' : '') +
+        fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
+        (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
+      : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity on the job</span>'
+      : c.sid && typeof c.each === 'number' ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' — how many? (on the job)</span>'
+      : c.sid ? '<span class="cr-cost muted">no price in Supplies</span>'
+      : '<span class="cr-cost muted">not joined to a Supplies item — on the job</span>';
+    const sid = orderSupply(it, cat);
+    const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
+    const others = (onJobs[alsoKey(v, it)] || []).filter(o => o.id !== j.id);
+    const also = others.length ? ' <span class="muted ord-also">· also on ' +
+      others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
+    return { c: c, html: '<div class="check-row">' +
+      '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
+        ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\')">' +
+      '<span class="cr-name">' + esc(it.name) +
+        (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
+        (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
+        (cost ? '<br>' + cost : '') + '</span>' +
+      (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
+      '</div>' };
+  };
+  // A job's name (opens it), what the work is and when it is.
+  const jobHead = (j, cls, extra) => {
+    const what = typeof jobWhat === 'function' ? jobWhat(j.d) : '';
+    const when = j.when ? (j.running ? 'under way · ' : '') + 'on the calendar ' + fmtDateMD(j.when.day) : j.running ? 'under way' : '';
+    return '<div class="ord-job' + (cls ? ' ' + cls : '') + '"><button type="button" class="link-btn ord-job-name" onclick="ordersOpenJob(\'' + ordId(j.id) + '\')">' +
+        jobNameHtml(j.d.customerName, String(j.d.estimateNumber || '').trim()) + '</button>' +
+        (what ? ' <span class="muted">· ' + esc(what) + '</span>' : '') +
+        (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + (extra || '') + '</div>';
+  };
+  const n = (k, word) => k + ' ' + word + (k === 1 ? '' : 's');
+  let grand = 0, grandUnpriced = 0;
+
+  // BY SUPPLIER: one card per supplier, each job's lines under its name.
+  const supplierCards = () => Object.keys(groups).sort(bySupplier).map(v => {
     const blocks = groups[v];
-    const onJobs = {};
-    blocks.forEach(b => b.lines.forEach(it => { const k = sameKey(it); if (k) (onJobs[k] = onJobs[k] || []).push(b.job); }));
     let sum = 0, unpriced = 0, lines = 0;
     const body = blocks.map(b => {
       const j = b.job;
-      const what = typeof jobWhat === 'function' ? jobWhat(j.d) : '';
-      const when = j.when ? (j.running ? 'under way · ' : '') + 'on the calendar ' + fmtDateMD(j.when.day) : j.running ? 'under way' : '';
       const rows = b.lines.map(it => {
         lines++;
-        const c = prices ? orderCost(it, cat) : null;
-        if (c) { if (c.cents !== null) sum += c.cents; else unpriced++; }
-        const cost = !c ? '' : c.cents !== null
-          ? '<span class="cr-cost">' + (c.buy ? esc(YDPricing.qtyText(c.buy, c.per)) + ' to buy × ' : '') +
-            fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' = <b>' + fmtMoney(c.cents / 100) + '</b>' +
-            (c.year && c.year < thisYear ? ' <span class="warn-text">' + esc(c.year) + ' price</span>' : '') + '</span>'
-          : c.unitOff ? '<span class="cr-cost warn-text">priced per ' + esc(c.per) + ' — check the quantity on the job</span>'
-          : c.sid && typeof c.each === 'number' ? '<span class="cr-cost">' + fmtMoney(c.each / 100) + '/' + esc(c.per || 'each') + ' — how many? (on the job)</span>'
-          : c.sid ? '<span class="cr-cost muted">no price in Supplies</span>'
-          : '<span class="cr-cost muted">not joined to a Supplies item — on the job</span>';
-        const sid = orderSupply(it, cat);
-        const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
-        const others = (onJobs[sameKey(it)] || []).filter(o => o.id !== j.id);
-        const also = others.length ? ' <span class="muted ord-also">· also on ' +
-          others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
-        return '<div class="check-row">' +
-          '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
-            ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\')">' +
-          '<span class="cr-name">' + esc(it.name) +
-            (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
-            (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
-            (cost ? '<br>' + cost : '') + '</span>' +
-          (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
-          '</div>';
+        const r = rowOf(it, j, v);
+        if (r.c) { if (r.c.cents !== null) sum += r.c.cents; else unpriced++; }
+        return r.html;
       }).join('');
       const dv = (dels[j.id] || {})[v];
       if (dv) sum += dv.cents;
-      return '<div class="ord-job"><button type="button" class="link-btn ord-job-name" onclick="ordersOpenJob(\'' + ordId(j.id) + '\')">' +
-          jobNameHtml(j.d.customerName, String(j.d.estimateNumber || '').trim()) + '</button>' +
-          (what ? ' <span class="muted">· ' + esc(what) + '</span>' : '') +
-          (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + '</div>' + rows +
-        orderDeliveryRow(dv);
+      return jobHead(j) + rows + orderDeliveryRow(dv);
     }).join('');
     grand += sum; grandUnpriced += unpriced;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
     const vEsc = ordId(v);
     return '<div class="ord-supplier">' +
       '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
-        '<span class="muted">' + lines + ' line' + (lines === 1 ? '' : 's') + ' · ' + blocks.length + ' job' + (blocks.length === 1 ? '' : 's') +
+        '<span class="muted">' + n(lines, 'line') + ' · ' + n(blocks.length, 'job') +
           (lead ? ' · takes ' + esc(lead) : '') + (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
         (v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy this supplier’s order</button>' +
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\')">✉️ Email the order</button>' : '') +
@@ -2448,8 +2493,51 @@ function renderOrdersOverview() {
           : '<span class="muted">pick each one’s Supplies item on its job</span>') +
       '</div>' + body + '</div>';
   }).join('');
-  // The suppliers side by side, as many as the screen holds (styles.css
+
+  // BY JOB: one card per job, its lines under each supplier -- with that
+  // supplier's delivery to the job and what it comes to -- and the job's
+  // total. Copy / Email give one supplier this job's part (one delivery);
+  // a supplier on other jobs shown too also offers its whole order.
+  const jobCards = () => jobs.map(j => {
+    const mine = {};
+    j.items.forEach(it => { const v = orderVendor(it, cat); (mine[v] = mine[v] || []).push(it); });
+    const vs = Object.keys(mine).sort(bySupplier);
+    let jobSum = 0, jobUnpriced = 0, jobDel = 0;
+    const body = vs.map(v => {
+      let sum = 0;
+      const rows = mine[v].map(it => {
+        const r = rowOf(it, j, v);
+        if (r.c) { if (r.c.cents !== null) sum += r.c.cents; else jobUnpriced++; }
+        return r.html;
+      }).join('');
+      const dv = (dels[j.id] || {})[v];
+      if (dv) { sum += dv.cents; jobDel += dv.cents; }
+      jobSum += sum;
+      const lead = v ? (cat.vendors[v] || {}).leadTime : '';
+      const vEsc = ordId(v), jEsc = ordId(j.id);
+      const onJobsHere = (groups[v] || []).length;
+      return '<div class="order-vendor ord-sub"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
+          '<span class="muted">' + n(mine[v].length, 'line') + (lead ? ' · takes ' + esc(lead) : '') +
+            (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
+          (v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">📋 Copy</button>' +
+            ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">✉️ Email</button>' : '') +
+            (onJobsHere > 1 ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy all ' + onJobsHere + ' jobs’ order</button>' : '') +
+            (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
+            : '<span class="muted">pick each one’s Supplies item on the job</span>') +
+        '</div>' + rows + orderDeliveryRow(dv);
+    }).join('');
+    grand += jobSum; grandUnpriced += jobUnpriced;
+    const named = vs.filter(Boolean).length;
+    const counts = ' <span class="muted ord-count">· ' + n(j.items.length, 'line') + (named ? ' · ' + n(named, 'supplier') : '') + '</span>';
+    const total = prices && (jobSum || jobUnpriced) ? '<div class="ord-job-total">This job comes to about <b>' + fmtMoney(jobSum / 100) + '</b> before tax' +
+      (jobDel ? ', with ' + fmtMoney(jobDel / 100) + ' of delivery' : '') +
+      (jobUnpriced ? ' · ' + n(jobUnpriced, 'line') + ' without a price' : '') + '</div>' : '';
+    return '<div class="ord-supplier ord-jobcard">' + jobHead(j, 'ord-job-head', counts) + body + total + '</div>';
+  }).join('');
+
+  // The cards side by side, as many as the screen holds (styles.css
   // .ord-grid) -- he scrolled past every order to reach the next (16 Oct 2026).
+  const html = ordersBy === 'supplier' ? supplierCards() : jobCards();
   wrap.innerHTML = head + '<div class="ord-grid">' + html + '</div>' +
     (prices && (grand || grandUnpriced) ? '<div class="order-cost">All of this comes to about <b>' + fmtMoney(grand / 100) + '</b> before tax' +
       (grandUnpriced ? ' · ' + grandUnpriced + ' line' + (grandUnpriced === 1 ? '' : 's') + ' without a price' : '') +
@@ -2490,34 +2578,47 @@ async function ordersOpenJob(key) {
 }
 // One supplier's order across the jobs shown, job by job: each job's lines
 // under its name and address, so whoever takes it knows where each goes.
-function ordersTextFor(vid) {
+// jobKey: only that job's part -- one delivery. One job with an address is
+// worded as the Job tab's Copy the order words it (copySupplierOrder); with
+// no address it keeps the job's name, so the lines never come with no place.
+function ordersTextFor(vid, jobKey) {
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
   const all = ordersJobs();
   const jobs = ordersView === 'week' ? all.filter(j => j.soon) : all;
   const groups = ordersBySupplier(jobs, cat);
   const v = Object.keys(groups).find(k => k && ordId(k) === vid);
-  const blocks = v ? groups[v] : [];
-  return { vendor: (cat.vendors || {})[v] || {}, blocks: blocks,
+  const blocks = (v ? groups[v] : []).filter(b => !jobKey || ordId(b.job.id) === jobKey);
+  const single = blocks.length === 1 ? blocks[0] : null;
+  const where = single ? orderJobWhere(single.job.d) : '';
+  return { vendor: (cat.vendors || {})[v] || {}, blocks: blocks, one: !!where, where: where,
+    lines: single ? single.lines.map(it => orderLineText(it, cat)) : [],
     text: blocks.map(b => {
       const where = orderJobWhere(b.job.d);
       return orderJobTitle(b.job) + (where ? ' — ' + where : '') + '\n' + b.lines.map(it => '• ' + orderLineText(it, cat)).join('\n');
     }).join('\n\n') };
 }
-function copyOrdersFor(vid) {
-  const o = ordersTextFor(vid);
+function copyOrdersFor(vid, jobKey) {
+  const o = ordersTextFor(vid, jobKey);
   if (!o.blocks.length) { showToast('Nothing left to order there'); return; }
-  const text = 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + '\n\n' + o.text;
+  const text = o.one
+    ? 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + (o.where ? ' — job at ' + o.where : '') + '\n' + o.lines.join('\n')
+    : 'Order' + (o.vendor.name ? ' for ' + o.vendor.name : '') + '\n\n' + o.text;
   const done = () => showToast('Copied — paste it into an email or a text');
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, () => ydShowCopy(text));
   else ydShowCopy(text);
 }
-function emailOrdersFor(vid) {
-  const o = ordersTextFor(vid);
+function emailOrdersFor(vid, jobKey) {
+  const o = ordersTextFor(vid, jobKey);
   if (!o.blocks.length) { showToast('Nothing left to order there'); return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.vendor.email || '')) { showToast('Add their order email first: Supplies → the supplier → Edit supplier'); return; }
-  const subject = 'Order for ' + o.blocks.length + ' job' + (o.blocks.length === 1 ? '' : 's') + ' — YD Exterior Visions';
-  const body = 'Hi,\n\nI’d like to order the following, kept apart by job:\n\n' + o.text +
-    '\n\nPlease let me know the total and when each can be delivered or picked up.\n\nThanks,\nJonah\nYD Exterior Visions';
+  const subject = o.one
+    ? 'Order' + (o.where ? ' — ' + o.where : '') + ' — YD Exterior Visions'
+    : 'Order for ' + o.blocks.length + ' job' + (o.blocks.length === 1 ? '' : 's') + ' — YD Exterior Visions';
+  const body = o.one
+    ? 'Hi,\n\nI’d like to order the following' + (o.where ? ' for a job at ' + o.where : '') + ':\n\n' + o.lines.map(l => '• ' + l).join('\n') +
+      '\n\nPlease let me know the total and when it can be delivered or picked up.\n\nThanks,\nJonah\nYD Exterior Visions'
+    : 'Hi,\n\nI’d like to order the following, kept apart by job:\n\n' + o.text +
+      '\n\nPlease let me know the total and when each can be delivered or picked up.\n\nThanks,\nJonah\nYD Exterior Visions';
   location.href = 'mailto:' + encodeURIComponent(o.vendor.email) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
 // Drawn when Supplies is opened (switchTab) and whenever the jobs, Supplies
