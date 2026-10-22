@@ -20,9 +20,11 @@ and whenever he taps "Check email now" (/receipts/now), this:
      order matches one.
 
 The same order arriving three times (confirmed, shipped, delivered) is one
-receipt: its id comes from the store and the order number. Something clearly
-personal is set aside rather than dropped, so a wrong call can be undone in
-the app.
+receipt: its id comes from the store and the order number. A store's "your
+order is ready for pickup" email is no receipt at all: it makes a card on the
+Pickups board, and the order confirmation is the receipt (PICKUP_NOTICE).
+Something clearly personal is set aside rather than dropped, so a wrong call
+can be undone in the app.
 
 Nothing in the mailbox is marked read or deleted. Since 15 Oct 2026 (Jonah)
 the week's read also puts the Gmail labels "receipts" and "Rebate Receipts
@@ -82,16 +84,47 @@ SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
 # checking once a week" -- the AI costs money). The half-hourly run still
 # makes cards from forwarded emails (plain code, free), and still reads an
 # order waiting at a store when the email comes in: a pickup card a week late
-# is no use, and one such email is a fraction of a cent (its receipt is
-# saved with the week's read -- HELD, below). Everything else
+# is no use, and one such email is a fraction of a cent. Everything else
 # waits for the weekly read; "Check email now" in the app reads it all at
 # once. settings/receipts.readEveryDays changes the gap.
 READ_EVERY_DAYS = 7
+# "Order is ready" / "order is available": Menards' "Hurry In - Your Order is
+# Available - MADI..." and "Menards Reminder: Your Order is Ready - MADI..."
+# say neither "pickup" nor "pick up", and their cards waited for the week's
+# read.
 PICKUP_SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
                  "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+card@") + " "
                  "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+crew@") + " "
                  "subject:(\"ready for pickup\" OR \"ready for pick up\" OR \"ready to pick up\" OR "
-                 "\"awaiting pickup\" OR \"waiting for pickup\" OR \"pick up your order\")")
+                 "\"awaiting pickup\" OR \"waiting for pickup\" OR \"pick up your order\" OR "
+                 "\"order is ready\" OR \"order is available\")")
+
+# A store saying an order is waiting to be collected is never a receipt
+# (Jonah, 21 Oct 2026: "stop pulling orders for pickup from menards as
+# receipts when they are obviously not receipts"). Menards sends up to three
+# for one order -- "Your Order is Ready for Pick Up", "Hurry In - Your Order
+# is Available", "Menards Reminder: Your Order is Ready" -- with no prices,
+# or only some; its "Order Confirmation", sent when the order was placed and
+# paid for, is the receipt. Home Depot's and Lowe's "ready for pickup" emails
+# are the same. A notice makes (or reminds) its Pickups card and nothing
+# else. Told by the subject, in plain code, as well as by what the read made
+# of it, so a notice read as something else is still caught.
+PICKUP_NOTICE = re.compile(r"\b(ready (for|to) (in[- ]store |curbside )?pick[- ]?up|awaiting pick[- ]?up|"
+                           r"waiting for pick[- ]?up|pick[- ]?up your order|"
+                           r"order is (ready|available)(?!\s+(to|for)\s+(ship|deliver)))", re.I)
+# What the purchase record calls itself. An email named so is the receipt
+# even when it also says the order is ready, or the read took it for a
+# pickup notice: an order confirmation is never lost to the rule above.
+THE_RECEIPT = re.compile(r"\b(order confirmation|confirmation of (your )?order|receipt|invoice|"
+                         r"thank you for (your|the) (order|purchase))", re.I)
+
+
+def pickup_notice(subject, got=None):
+    """Whether an email only says an order is waiting at the store -- a
+    Pickups card, never a receipt."""
+    if THE_RECEIPT.search(subject or ""):
+        return False
+    return bool(PICKUP_NOTICE.search(subject or "")) or (got or {}).get("doc_type") == "ready_for_pickup"
 
 
 def search_for(since_epoch, query=SEARCH):
@@ -1079,9 +1112,10 @@ FORWARD_MAX = 40            # emails forwarded per go; the rest go next time
 FORWARD_TRIES = 3           # a send that keeps failing waits for a person (Send to QuickBooks)
 LABEL_MAX = 500             # emails labelled per go
 # An order's later emails say where the parcel is. The confirmation or the
-# invoice carries the prices, so that is the one forwarded.
-NOT_THE_BILL = re.compile(r"\b(shipped|shipping|on (its|the) way|out for delivery|delivered|tracking|"
-                          r"ready (for|to) pick ?up|awaiting pick ?up|pick up your order)\b", re.I)
+# invoice carries the prices, so that is the one forwarded. (A pickup notice,
+# pickup_notice, is never forwarded either -- receipts saved before 21 Oct
+# 2026 can still hold one.)
+NOT_THE_BILL = re.compile(r"\b(shipped|shipping|on (its|the) way|out for delivery|delivered|tracking)\b", re.I)
 # Menards' 11% rebate. Every Menards email advertises the rebate and every
 # Menards receipt has rebate lines, so "rebate" in the text means nothing.
 # A REBATE RECEIPT names itself: "rebate" in the subject, or "rebate
@@ -1171,7 +1205,8 @@ def _pick_mail(r, floor_ms):
     rather than the parcel's progress, the first that came."""
     mail = sorted([m for m in (r.get("mail") or []) if m.get("id") and (m.get("at") or 0) >= floor_ms],
                   key=lambda m: m.get("at") or 0)
-    good = [m for m in mail if not NOT_THE_BILL.search(m.get("subject") or "")]
+    good = [m for m in mail if not NOT_THE_BILL.search(m.get("subject") or "")
+            and not pickup_notice(m.get("subject"))]
     return (good or mail or [None])[0]
 
 
@@ -1595,13 +1630,14 @@ def _open_all(ids):
     return [out[i] for i in ids if i in out]
 
 
-# Between the weekly reads an order waiting at a store is read at once, for
-# its card -- but its receipt waits for the week's read. Saved straight away
-# from a pickup notice (which often lists no prices) and sorted onto a job
-# before the order confirmation came, the receipt never got the prices: a
-# sorted receipt is not rewritten. What Claude read is kept with the email
-# (receiptMail, outcome HELD -- server-only), so the weekly read saves it
-# without paying to read it again.
+# Between the weekly reads the emails PICKUP_SEARCH finds are read at once,
+# for their cards. A pickup notice is then done with: it is never a receipt.
+# One that turns out to be a receipt after all (an order confirmation that
+# also says the order is ready) waits for the week's read like every other:
+# saved straight away and sorted onto a job, it would miss what the week's
+# other emails about the order add -- a sorted receipt is not rewritten.
+# What Claude read is kept with the email (receiptMail, outcome HELD --
+# server-only), so the weekly read saves it without paying to read it again.
 HELD = "held"
 
 
@@ -1620,6 +1656,12 @@ def _save_held(db, jobs_of, report, saved=None):
         m, got = d.get("mail") or {}, d.get("got") or {}
         if not m.get("id") or not got:
             _seen(db, s.id, "error", why="held read missing")
+            continue
+        if pickup_notice(m.get("subject"), got):
+            # Held before pickup notices stopped being receipts (21 Oct
+            # 2026): its card was made when it came, and that is all.
+            _seen(db, s.id, "pickup", got=firestore.DELETE_FIELD)
+            report["notReceipts"] += 1
             continue
         try:
             rid, what = _save(db, m, got, jobs_of())
@@ -1789,18 +1831,26 @@ def run(client, manual=False):
                     _seen(db, m["id"], "error", why=err, tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
+                notice = pickup_notice(m["subject"], got)
                 # The sender's track record, for sorting its next email by code.
-                _tally(db, m, bool(got.get("is_purchase"))
+                _tally(db, m, bool(got.get("is_purchase")) or notice
                        or got.get("doc_type") in ("person_payment", "ready_for_pickup"))
                 card = None
                 try:
-                    if got.get("doc_type") == "ready_for_pickup":
-                        # A card for whoever goes to get it. The order itself
-                        # still counts as a receipt below (same order #, so
-                        # it joins the receipt the order already made).
+                    if notice or got.get("doc_type") == "ready_for_pickup":
+                        # A card for whoever goes to get it.
                         card = pickup_card(db, m, got, jobs_of())
                         if card:
                             report["pickups"] += 1
+                    if notice:
+                        # And nothing else: the order's confirmation is its
+                        # receipt (PICKUP_NOTICE). Not held, not saved, not
+                        # added to the order's receipt either, where it could
+                        # be the email labelled "receipts" or sent on to
+                        # QuickBooks.
+                        _seen(db, m["id"], "pickup", cardId=card or "", subject=m["subject"][:200])
+                        report["notReceipts"] += 1
+                        continue
                     if got.get("doc_type") == "person_payment":
                         # A paycheck, not a receipt: filed for the Clock tab.
                         if people is None:
@@ -1820,8 +1870,8 @@ def run(client, manual=False):
                         report["personal"] += 1
                         continue
                     if not reading:
-                        # Between the week's reads: the card now, the receipt
-                        # with the week's read (HELD).
+                        # Between the week's reads: the receipt waits for the
+                        # week's read (HELD).
                         _hold(db, m, got, card)
                         report["held"] += 1
                         continue
