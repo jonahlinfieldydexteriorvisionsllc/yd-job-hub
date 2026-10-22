@@ -861,6 +861,7 @@
         // snapshot is positive proof of being connected; a cached one just
         // tells us nothing new, so leave the state alone.
         if (meta.fromCache) return;
+        watchTries = 0;
         setCloudState('synced');
         if (meta.size > 0) markMigrated();
         // The crew's job board is tidied only once this device holds what the
@@ -869,8 +870,25 @@
         // and deleted the lot, leaving the crew nothing to clock in to.
         if (!boardReconciled) { boardReconciled = true; reconcileBoard(); }
       },
-      () => setCloudState('offline')
+      () => { setCloudState('offline'); watchAgain(); }
     );
+  }
+  // A watch the server refused is over for good -- Firestore ends it. Seen
+  // at start-up (22 Oct 2026: "Missing or insufficient permissions" on the
+  // owner's laptop, before the sign-in had settled), and `watching` then
+  // kept every later start away: no job changed on another device or by
+  // the server arrived all session. So it is started again, a little later
+  // each time (3 s, 6 s ... up to a minute); saves made meanwhile wait in
+  // `unsent` as they do with no signal.
+  let watchTries = 0, watchTimer = 0;
+  function watchAgain() {
+    if (unsubscribe) { try { unsubscribe(); } catch (e) {} }
+    unsubscribe = null;
+    watching = false;
+    clearTimeout(watchTimer);
+    watchTimer = setTimeout(() => {
+      if (window.YDAuth && window.YDAuth.user && window.YDDb && ydCan('jobs', 'see')) startSync();
+    }, Math.min(60000, 3000 * Math.pow(2, watchTries++)));
   }
 
   // ---------------------------------------------------------------- wrapping
@@ -975,6 +993,6 @@
     // server no longer has -- never on a device still filling its list).
     jobsHeard: () => boardReconciled,
     inCloud: id => cloudJobIds.has(id),
-    stop:() => { if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },
+    stop:() => { clearTimeout(watchTimer); if (unsubscribe) unsubscribe(); watching = false; setCloudState('off'); },
   };
 })();
