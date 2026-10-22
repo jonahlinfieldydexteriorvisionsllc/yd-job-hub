@@ -23,8 +23,10 @@ The same order arriving three times (confirmed, shipped, delivered) is one
 receipt: its id comes from the store and the order number. A store's "your
 order is ready for pickup" email is no receipt at all: it makes a card on the
 Pickups board, and the order confirmation is the receipt (PICKUP_NOTICE).
-Something clearly personal is set aside rather than dropped, so a wrong call
-can be undone in the app.
+Something clearly personal is kept and filed under Personal by itself (Jonah,
+21 Oct 2026: "personal receipts dont get deleted" -- from 5 Oct until then
+they were never written): off the books, never sent to QuickBooks, and Undo
+in the app puts it back to sort when the call was wrong (_file_personal).
 
 Nothing in the mailbox is marked read or deleted. Since 15 Oct 2026 (Jonah)
 the week's read also puts the Gmail labels "receipts" and "Rebate Receipts
@@ -735,6 +737,48 @@ def _save(db, m, got, jobs):
     return rid, "new"
 
 
+def _b36(n):
+    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+    out = ""
+    while True:
+        n, d = divmod(n, 36)
+        out = digits[d] + out
+        if not n:
+            return out
+
+
+def _file_personal(db, rid, got):
+    """A purchase Claude read as clearly a household's (groceries, clothes,
+    a service at Jonah's own home): kept, and filed whole under Personal by
+    itself -- the same split the app's "Mark personal" makes (receipts.js
+    assignElsewhere), so ⋯ → Undo there puts it back to sort. Off the books:
+    never counted, never sent to QuickBooks (stages.receipt_off_books).
+
+    Only a receipt that is still to sort with nothing filed, and that was
+    itself read as personal: one a person has sorted, or that an earlier
+    email about the same order called the business's, is left as it is.
+    Returns True when the receipt is (now) filed only under Personal."""
+    if got.get("whose") != "personal":
+        return False
+    ref = db.collection("receipts").document(rid)
+    snap = ref.get()
+    r = (snap.to_dict() or {}) if snap.exists else {}
+    if stages.receipt_off_books(r):
+        return True
+    if not r or r.get("whose") != "personal" or r.get("splits") or stages.receipt_status(r) != "tosort":
+        return False
+    lines = r.get("lines") or []
+    tax = int(r.get("taxCents") or 0)
+    cents = sum(int(ln.get("cents") or 0) for ln in lines) if lines else max(0, int(r.get("totalCents") or 0) - tax)
+    now = dg._now().isoformat()
+    split = {"id": "sp" + _b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
+             "to": "personal", "name": "Personal", "lines": list(range(len(lines))), "cents": cents, "taxCents": tax,
+             "at": now, "by": "Job Hub", "auto": True}
+    ref.update({"splits": [split], "status": "done", "updatedAt": now, "updatedBy": "",
+                "statusChange": {"to": "done", "at": now, "by": "", "name": "Job Hub"}})
+    return True
+
+
 def _same_bill(db, f):
     """The unsorted receipt this one is the same cost as, or None.
 
@@ -1094,8 +1138,11 @@ def forward_to_qb(db, rid, raw=None, mime=None):
 # and its payment (_save joins them), so QuickBooks must never get it twice.
 # The receipt's qbForward (with the message id) says it went, and so does
 # receiptMail/{messageId}, so no later read sends it again. Personal
-# purchases are never saved, paychecks and non-purchases are not receipts,
-# and mail from before settings/receipts.since is never sent.
+# purchases (filed only under Personal: stages.receipt_off_books) are never
+# sent, paychecks and non-purchases are not receipts, and mail from before
+# settings/receipts.since is never sent. Nor do personal ones get the
+# "receipts" label (receiptMail outcome "personal"); a Menards rebate one
+# still gets the rebate label.
 #
 # LABELS need gmail.modify on the delegation list, which reading did not.
 # Until Jonah adds it, Gmail refuses: the read carries on and
@@ -1220,10 +1267,12 @@ def forward_email(db, rid, to, since_ms, again=False):
     have = r.get("qbForward") or {}
     if not r or have.get("ok") or r.get("photoPath") or r.get("source") == "photo":
         return None
-    # Set aside (already entered, or not the business's after all) goes
-    # only when asked for that one receipt. Its one status (stages.py): an
-    # old one "set aside as overhead" is the shop's, filed, and goes.
-    if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or stages.receipt_status(r) == "aside"):
+    # Set aside (already entered, or not the business's after all), or
+    # filed only under Personal, goes only when asked for that one receipt.
+    # Its one status (stages.py): an old one "set aside as overhead" is the
+    # shop's, filed, and goes.
+    if not again and ((have.get("tries") or 0) >= FORWARD_TRIES or stages.receipt_status(r) == "aside"
+                      or stages.receipt_off_books(r)):
         return None
     m = _pick_mail(r, since_ms or 0)
     if not m:
@@ -1286,8 +1335,8 @@ def forward_emails(db, rids=(), days=None, st=None):
         cutoff = (dg._now() - datetime.timedelta(days=days + 1)).isoformat()
         for s in db.collection("receipts").where("createdAt", ">=", cutoff).stream():
             d = s.to_dict() or {}
-            # Set aside (already entered, personal after all): not sent.
-            if stages.receipt_status(d) != "aside" and s.id not in want:
+            # Set aside (already entered), or filed only under Personal: not sent.
+            if stages.receipt_status(d) != "aside" and not stages.receipt_off_books(d) and s.id not in want:
                 want.append(s.id)
     for s in db.collection("receipts").where("qbForward.ok", "==", False).stream():
         d = s.to_dict() or {}
@@ -1429,12 +1478,14 @@ def from_photo(client, body, uid, who):
         return {"error": "The receipt couldn't be read (%s) — try a clearer photo" % (err or "no answer")}, usage
     if not got.get("is_purchase"):
         return {"error": "That doesn't look like a receipt"}, usage
-    # As for email: a personal purchase is never kept, and a bank transfer is
-    # a paycheck, not a receipt.
-    if got.get("whose") == "personal":
-        return {"error": "That looks like a personal purchase — not added"}, usage
+    # A bank transfer is a paycheck, not a receipt. A personal purchase is
+    # kept (Jonah, 21 Oct 2026: "personal receipts dont get deleted" -- it
+    # used to be turned away), but whoever took the photo said where it was
+    # for: it is never put there by itself, nor sent on to QuickBooks, and
+    # waits in Receipts to sort for a person to say.
     if got.get("doc_type") == "person_payment":
         return {"error": "That's a payment to a person, not a receipt — not added"}, usage
+    personal = got.get("whose") == "personal"
     db = dg._db()
     jobs = _jobs(db)
     rid, what = _save(db, m, got, jobs)
@@ -1447,7 +1498,8 @@ def from_photo(client, body, uid, who):
         extra = {"addedBy": uid, "addedByName": who, "source": "photo", "sentFor": sent_for}
         if sent_for["to"] == "job":
             extra["suggest"] = {"jobId": sent_for["jobId"], "why": "%s %s" % (who, HOW_WORDS.get(sent_for["how"], "picked it"))}
-        auto["why"] = sent_for.pop("problem", "") or _auto_problem(db, rid, got, lines, tax, total, sent_for["to"])
+        auto["why"] = sent_for.pop("problem", "") or (PERSONAL_WHY if personal else "") \
+            or _auto_problem(db, rid, got, lines, tax, total, sent_for["to"])
         if not auto["why"]:
             auto["state"] = "ready"
         extra["sentFor"] = sent_for
@@ -1459,7 +1511,8 @@ def from_photo(client, body, uid, who):
         except Exception as err:                        # noqa: BLE001
             print("receipts: photo %s not kept: %s" % (rid, err))
         db.collection("receipts").document(rid).set(extra, merge=True)
-        forward_to_qb(db, rid, raw, mime)
+        if not personal:
+            forward_to_qb(db, rid, raw, mime)
     else:
         # The same purchase was already here (its email came first). What
         # the photo says it is for is kept beside it -- but only offered:
@@ -1500,6 +1553,8 @@ def from_photo(client, body, uid, who):
 # autoSort) -- one way of adding lines to a job, not two. Anything unsure is
 # 'needs' with why, and waits in Receipts to sort for Jonah.
 HOW_WORDS = {"clock": "was clocked in on it", "page": "sent it from the job's page", "picked": "said it's for this job"}
+# Why a photo Claude read as a household's waits for a person (from_photo).
+PERSONAL_WHY = "it looks like a personal purchase — say where it goes (not sent to QuickBooks)"
 PLACES_NOT_JOB = ("vehicle", "shop", "office")
 # A receipt's lines are allowed to miss its total by this much (rounding on
 # the paper) and still count as adding up.
@@ -1665,6 +1720,7 @@ def _save_held(db, jobs_of, report, saved=None):
             continue
         try:
             rid, what = _save(db, m, got, jobs_of())
+            personal = _file_personal(db, rid, got)
         except Exception as e:      # noqa: BLE001
             tries = (d.get("tries") or 0) + 1
             print("receipts: could not save held", s.id, e)
@@ -1673,8 +1729,11 @@ def _save_held(db, jobs_of, report, saved=None):
             continue
         # Read with no body kept: its sender, subject and lines say whether
         # it is a Menards rebate receipt.
-        _seen(db, s.id, "receipt", receiptId=rid, got=firestore.DELETE_FIELD, labelled=False,
-              rebate=is_menards_rebate(m.get("from"), m.get("subject"), "", got.get("lines")))
+        _seen(db, s.id, "personal" if personal else "receipt", receiptId=rid, got=firestore.DELETE_FIELD,
+              labelled=False, rebate=is_menards_rebate(m.get("from"), m.get("subject"), "", got.get("lines")))
+        if personal:
+            report["personal"] += 1
+            continue
         if saved is not None:
             saved.append(rid)
         report["added" if what == "added to" else "new"] += 1
@@ -1863,12 +1922,6 @@ def run(client, manual=False):
                         _seen(db, m["id"], "not_purchase", subject=m["subject"][:200])
                         report["notReceipts"] += 1
                         continue
-                    # Jonah's call: personal purchases take up room in the
-                    # hub for nothing. Noted as read, never written.
-                    if got.get("whose") == "personal":
-                        _seen(db, m["id"], "personal")
-                        report["personal"] += 1
-                        continue
                     if not reading:
                         # Between the week's reads: the receipt waits for the
                         # week's read (HELD).
@@ -1876,13 +1929,20 @@ def run(client, manual=False):
                         report["held"] += 1
                         continue
                     rid, what = _save(db, m, got, jobs_of())
+                    # Personal purchases are kept now, filed under Personal
+                    # (Jonah, 21 Oct 2026, reversing his 5 Oct "never
+                    # written"); they never go on to QuickBooks.
+                    personal = _file_personal(db, rid, got)
                 except Exception as e:      # noqa: BLE001
                     print("receipts: could not save", m["id"], e)
                     _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
-                _seen(db, m["id"], "receipt", receiptId=rid, labelled=False,
+                _seen(db, m["id"], "personal" if personal else "receipt", receiptId=rid, labelled=False,
                       rebate=m["id"] in rebates)
+                if personal:
+                    report["personal"] += 1
+                    continue
                 saved.append(rid)
                 report["added" if what == "added to" else "new"] += 1
 

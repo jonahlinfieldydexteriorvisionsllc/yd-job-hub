@@ -7,7 +7,8 @@
 // jobStage). The same idea for the rest:
 //
 //   Receipt:    To sort -> Filed (to a job, a vehicle, the shop, the office,
-//               a subcontractor) -- or Set aside, with the reason
+//               the property, a subcontractor, or Personal) -- or Set
+//               aside, with the reason
 //   Problem:    Open -> Part ordered -> Part at the shop -> Fixed (and back
 //               to Open when it was not fixed after all)
 //   Change ask: Waiting -> Approved or Turned down (or Withdrawn by whoever
@@ -66,12 +67,19 @@
   // ---------------------------------------------------------------- receipts
   //
   // Stored status: 'new' (to sort -- some lines may already be filed, the
-  // rest waiting), 'done' (every line filed), 'skipped' (set aside). Two
+  // rest waiting), 'done' (every line filed), 'skipped' (set aside). Three
   // old set-aside reasons were really places (receipts.js): 'overhead'
   // (before 9 Oct) is the shop, 'subcontractor' (before 13 Oct) a
-  // subcontractor -- those read as Filed. A receipt with no status, or one
-  // this code does not know, is still to sort.
-  const RECEIPT_LEGACY_PLACE = { overhead: 'shop', subcontractor: 'sub' };
+  // subcontractor, and 'personal' (before 21 Oct, when Personal became a
+  // place a receipt is kept in rather than a reason to drop it) Personal --
+  // those read as Filed. A receipt with no status, or one this code does
+  // not know, is still to sort.
+  const RECEIPT_LEGACY_PLACE = { overhead: 'shop', subcontractor: 'sub', personal: 'personal' };
+  // Places that are not a cost of the business (Jonah, 21 Oct 2026:
+  // "personal receipts dont get deleted"): a receipt filed only there is
+  // kept, but counted in none of the business's totals and never sent on to
+  // QuickBooks (`offBooks` below; stages.py receipt_off_books).
+  const RECEIPT_OFF_BOOKS = ['personal'];
   // The old set-aside pick list's words, read back as the reason.
   const RECEIPT_WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
@@ -83,9 +91,11 @@
     const legacy = r.status === 'skipped' ? (RECEIPT_LEGACY_PLACE[r.skipWhy] || '') : '';
     if (r.status === 'done' || legacy) {
       if (legacy) places.push(legacy);
+      const where = unique(places);
+      const offBooks = where.length > 0 && where.every(p => RECEIPT_OFF_BOOKS.indexOf(p) !== -1);
       // When it was filed: the last line put somewhere, if nothing better.
       const last = splits.slice().sort((a, b) => String((b || {}).at || '').localeCompare(String((a || {}).at || '')))[0] || {};
-      return dated(one('filed', 'Filed', 'done', { places: unique(places), legacy: legacy }),
+      return dated(one('filed', 'Filed', 'done', { places: where, legacy: legacy, offBooks: offBooks }),
         r, r.status, last.at, last.by && last.by !== 'Job Hub' ? last.by : '', last.by === 'Job Hub' ? 'Job Hub' : '');
     }
     if (r.status === 'skipped') {
@@ -233,6 +243,7 @@
     receipt: receipt, issue: issue, issueId: issueId, issuePatch: issuePatch, request: request, waiting: waiting,
     storm: storm, stormOpen: stormOpen, stamp: stamp, chip: chip, whenWho: whenWho,
     RECEIPT_STAGES: RECEIPT_STAGES, RECEIPT_WHY: RECEIPT_WHY, RECEIPT_LEGACY_PLACE: RECEIPT_LEGACY_PLACE,
+    RECEIPT_OFF_BOOKS: RECEIPT_OFF_BOOKS,
     ISSUE_STAGES: ISSUE_STAGES, REQUEST_STAGES: REQUEST_STAGES, STORM_STAGES: STORM_STAGES,
   };
 })();

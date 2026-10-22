@@ -3941,8 +3941,11 @@
   .rc-menu-list button { display:block; width:100%; text-align:left; background:none; border:0; border-radius:6px;
     padding:10px 12px; font:600 13px 'DM Sans',sans-serif; color:var(--text); cursor:pointer; overflow-wrap:anywhere; }
   .rc-menu-list button:hover, .rc-menu-list button:focus-visible { background:var(--surface-2); }
-  .rc-menu-list .rc-menu-del { color:var(--neg); }
   .rc-foot .rc-menu { margin-left:auto; }
+  /* 🗑 Delete at the far end of a card, away from the email and the
+     sorting buttons; ⋯ beside it when there is one. */
+  .rc-foot .rc-del { margin-left:auto; }
+  .rc-foot .rc-del + .rc-menu { margin-left:0; }
   /* In a row the chips are the row's own items, so the amount and ⋯ sit
      beside the last of them rather than on a line of their own. */
   .rc-row .rc-chips { display:contents; }

@@ -102,9 +102,13 @@ def board_column(j):
 #   storm:    open -> closed | abandoned
 # ---------------------------------------------------------------------------
 
-# A receipt's stored status is 'new' / 'done' / 'skipped'. Two old set-aside
-# reasons were really places (before 9 and 13 Oct): read as filed.
-RECEIPT_LEGACY_PLACE = {"overhead": "shop", "subcontractor": "sub"}
+# A receipt's stored status is 'new' / 'done' / 'skipped'. Three old set-aside
+# reasons were really places (before 9, 13 and 21 Oct): read as filed.
+RECEIPT_LEGACY_PLACE = {"overhead": "shop", "subcontractor": "sub", "personal": "personal"}
+# Places that are not a cost of the business (Jonah, 21 Oct 2026: "personal
+# receipts dont get deleted"): a receipt filed only there is kept, but never
+# counted or sent on to QuickBooks.
+RECEIPT_OFF_BOOKS = ("personal",)
 
 
 def receipt_status(r):
@@ -118,6 +122,18 @@ def receipt_status(r):
     if s == "skipped":
         return "filed" if r.get("skipWhy") in RECEIPT_LEGACY_PLACE else "aside"
     return "tosort"
+
+
+def receipt_off_books(r):
+    """True for a filed receipt whose every place is off the books (only
+    Personal, so far): kept in Job Hub, never sent to QuickBooks."""
+    r = r or {}
+    if receipt_status(r) != "filed":
+        return False
+    places = [(s.get("to") or "job") for s in (r.get("splits") or []) if isinstance(s, dict)]
+    if r.get("status") == "skipped":
+        places.append(RECEIPT_LEGACY_PLACE.get(r.get("skipWhy")))
+    return bool(places) and all(p in RECEIPT_OFF_BOOKS for p in places)
 
 
 def issue_status(i):

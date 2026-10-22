@@ -5,8 +5,8 @@
 // every line, the tax and the total, and a job it thinks the purchase is for
 // when the delivery address or a name on the order says so. This screen is
 // where each one is sorted: to a job, a vehicle, shop overhead, office
-// overhead, personal, a subcontractor -- or set aside, with a note saying
-// why (DEST below).
+// overhead, property overhead, a subcontractor, personal -- or set aside,
+// with a note saying why (PLACE_LIST below).
 //
 // "Add to job" puts the ticked lines into that job's materials (Tracking),
 // one materials line per receipt line, plus that job's share of the sales
@@ -83,11 +83,31 @@
   // aside" is the last choice: not a place -- nothing set aside counts
   // anywhere ("anything set aside clearly doesnt have a category and doesnt
   // matter") -- but chosen the same way, with a note for why.
-  const DEST = [['job', '📋 Job'], ['vehicle', '🚚 Vehicle'], ['shop', '🏠 Shop overhead'],
-                ['office', '🗂 Office overhead'], ['sub', '🤝 Subcontractor'], ['personal', '👤 Personal'],
-                ['aside', '🗄 Set aside']];
-  const DEST_NAME = { job: 'Job', vehicle: 'Vehicle', shop: 'Shop overhead', office: 'Office overhead',
-    sub: 'Subcontractor', personal: 'Personal', aside: 'Set aside' };
+  //
+  // Jonah, 21 Oct 2026: "add tag for receipts for personal and one for
+  // property overhead. personal receipts dont get deleted". Property
+  // overhead is a cost of the business like the shop and the office.
+  // Personal is a place a receipt is KEPT in (it used to be deleted), but it
+  // is off the books: never in the month totals, never sent to QuickBooks
+  // (stages.js RECEIPT_OFF_BOOKS, which says which places those are).
+  //
+  // Every place is one row here -- its chip on a card, its name, its filter
+  // under All receipts and its name in a month's totals -- so another place
+  // is one more row, and every list below follows.
+  const PLACE_LIST = [
+    { id: 'job', chip: '📋 Job', name: 'Job', view: '📋 Jobs', total: 'Jobs' },
+    { id: 'vehicle', chip: '🚚 Vehicle', name: 'Vehicle', view: '🚚 Vehicles', total: 'Vehicles' },
+    { id: 'shop', chip: '🏠 Shop overhead', name: 'Shop overhead', view: '🏠 Shop', total: 'Shop' },
+    { id: 'office', chip: '🗂 Office overhead', name: 'Office overhead', view: '🗂 Office', total: 'Office' },
+    { id: 'property', chip: '🌳 Property overhead', name: 'Property overhead', view: '🌳 Property', total: 'Property' },
+    { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
+    { id: 'personal', chip: '👤 Personal', name: 'Personal', view: '👤 Personal', total: 'Personal' },
+  ];
+  // (A phone that picked up this file before the new stages.js, on one bar
+  // of signal, still knows Personal is off the books.)
+  const offBooks = id => (window.YDStages.RECEIPT_OFF_BOOKS || ['personal']).indexOf(id) !== -1;
+  const DEST = PLACE_LIST.map(p => [p.id, p.chip]).concat([['aside', '🗄 Set aside']]);
+  const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'vehicle',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop' };
   const destOf = s => s.to || 'job';
@@ -102,6 +122,9 @@
   function defaultDest(r) {
     if (r.kind === 'subcontractor') return 'sub';
     if (r.suggest && r.suggest.jobId) return 'job';
+    // Claude read it as clearly a household's (a photo still to sort --
+    // the email reader files those itself, functions/receipts.py).
+    if (r.whose === 'personal') return 'personal';
     // A subcontractor that also sells materials keeps those for the jobs.
     if ((!r.kind || r.kind === 'other') && subMatch(r)) return 'sub';
     return DEST_OF_KIND[r.kind] || 'job';
@@ -138,12 +161,6 @@
     const free = freeLines(r);
     return ticked[rid] && isSplit(rid, r) ? free.filter(i => ticked[rid].has(i)) : free;
   }
-  // "Personal" for part of the receipt -- some of it sorted already, or split
-  // up with only some lines ticked -- rather than the whole of it.
-  function partlyPersonal(rid, r) {
-    return (r.splits || []).length > 0 || (isSplit(rid, r) && tickedLines(rid, r).length < freeLines(r).length);
-  }
-
   // The jobs a receipt can be put on, open ones first. Left out: lost bids,
   // jobs marked to be taken off (a second copy of a job) and ones in Recently
   // deleted -- a long list of dead entries is what he scrolled past on every
@@ -299,9 +316,9 @@
     return { free, idxs, lines, part, tax, last };
   }
 
-  // A vehicle, the shop or the office: kept on the receipt, nothing changes
-  // on a job. The vehicle's own page lists what was sorted to it
-  // (equipment.js receiptsHtml).
+  // A vehicle, the shop, the office, the property, a subcontractor or
+  // Personal: kept on the receipt, nothing changes on a job. The vehicle's
+  // own page lists what was sorted to it (equipment.js receiptsHtml).
   // `given`: where a photo was sent in for (autoSort), instead of what is
   // picked on the card; `auto`: what to note on the receipt then.
   function assignElsewhere(rid, r, to, given, auto) {
@@ -347,7 +364,6 @@
     if (!r) return;
     const to = dest[rid] || defaultDest(r);
     if (to === 'aside') { setAside(rid, r); return; }
-    if (to === 'personal') { window.rcSkip(rid, 'personal'); return; }
     if (to !== 'job') { assignElsewhere(rid, r, to); return; }
     const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
     if (!jobId) { showToast('Pick the job first'); return; }
@@ -428,7 +444,7 @@
   const autoReady = r => !!(r && toSortNow(r) && !(r.splits || []).length && r.auto && r.auto.state === 'ready');
   function autoSoon() {
     if (!sorts() || !loaded || !window.YDDb || !window.YDDb.transact) return;
-    Object.keys(receipts).forEach(id => { if (autoReady(receipts[id]) && !autoBusy[id]) autoSort(id); });
+    Object.keys(receipts).forEach(id => { if (autoReady(receipts[id]) && !autoBusy[id] && !leaving[id]) autoSort(id); });
   }
   async function autoSort(rid) {
     const r = receipts[rid];
@@ -578,17 +594,18 @@
       .catch(e => console.warn('[receipts] not deleted:', (e && e.code) || e));
     redraw(true);
   }
-  // What went to a vehicle, the shop, the office or a subcontractor is kept
-  // on the receipt and nowhere else (a vehicle's page, Subcontractors and the
-  // month totals read it from here); so is a receipt set aside as overhead,
-  // or as a subcontractor's bill, before those places existed.
-  const BOOKS = ['vehicle', 'shop', 'office', 'sub'];
+  // What went anywhere but a job -- a vehicle, the shop, the office, the
+  // property, a subcontractor, Personal -- is kept on the receipt and
+  // nowhere else (a vehicle's page, Subcontractors and the month totals
+  // read it from here); so is a receipt set aside as overhead, as a
+  // subcontractor's bill or as personal, before those were places.
+  const HELD_HERE = PLACE_LIST.map(p => p.id).filter(id => id !== 'job');
   const legacyPlace = r => stageOf(r).legacy || '';
   function heldNames(r) {
     const legacy = legacyPlace(r);
-    return (r.splits || []).filter(s => BOOKS.indexOf(destOf(s)) !== -1)
+    return (r.splits || []).filter(s => HELD_HERE.indexOf(destOf(s)) !== -1)
       .map(s => s.name || DEST_NAME[destOf(s)])
-      .concat(legacy === 'shop' ? ['shop overhead'] : legacy === 'sub' ? ['a subcontractor'] : [])
+      .concat(legacy ? [legacy === 'sub' ? 'a subcontractor' : DEST_NAME[legacy]] : [])
       .filter((n, i, a) => a.indexOf(n) === i);
   }
   const heldHere = r => heldNames(r).length > 0;
@@ -597,65 +614,72 @@
   const isAside = r => stageOf(r).id === 'aside';
   // What "Delete all set aside" may take: set aside, and holding nothing the
   // books need (a subcontractor's bill is never set aside now; an old one is
-  // a place, above).
+  // a place, above) -- nor anything personal, which is kept.
   const deletableAside = r => isAside(r) && !heldHere(r);
+
+  // 🗑 Delete sits on every receipt (Jonah, 21 Oct 2026: "there should be a
+  // delete button not just a set aside button"; it used to hide behind ⋯).
+  // One tap, then a few seconds of Undo (app.js showUndo: "a quicker, kinder
+  // answer to a slip than 'Are you sure?'"). Only the app's server can make
+  // a receipt, so one deleted can never be put back by the app: nothing is
+  // deleted until the Undo has run out -- until then it is only off the
+  // screen (`leaving`). Closing the app in that time lets it go; signing out
+  // keeps it. A receipt holding what went somewhere other than a job asks
+  // first as well: that part lives nowhere else.
+  const UNDO_MS = 8000;
+  const leaving = {};         // receipt id -> true while its Undo is on screen
+  let leavingBatch = null;    // { ids, timer } of the delete whose Undo is showing
+  function flushLeaving() {
+    const b = leavingBatch;
+    if (!b) return;
+    leavingBatch = null;
+    clearTimeout(b.timer);
+    const ids = b.ids.filter(id => leaving[id]);
+    ids.forEach(id => { delete leaving[id]; });
+    if (ids.length) drop(ids);
+  }
+  function forgetLeaving() {
+    if (leavingBatch) clearTimeout(leavingBatch.timer);
+    leavingBatch = null;
+    Object.keys(leaving).forEach(id => { delete leaving[id]; });
+  }
+  function dropSoon(ids, say) {
+    // A second delete replaces the first one's bar, and its Undo with it.
+    flushLeaving();
+    if (!ids.length) return;
+    const b = { ids: ids.slice(), timer: null };
+    ids.forEach(id => { leaving[id] = true; delete ticked[id]; delete chosen[id]; delete splitting[id]; });
+    b.timer = setTimeout(() => { if (leavingBatch === b) flushLeaving(); }, UNDO_MS);
+    leavingBatch = b;
+    const back = () => {
+      if (leavingBatch !== b) return;
+      leavingBatch = null;
+      clearTimeout(b.timer);
+      b.ids.forEach(id => { delete leaving[id]; });
+      redraw(true);
+    };
+    if (typeof showUndo === 'function') showUndo(say, back, UNDO_MS); else showToast(say);
+    redraw(true);
+  }
+  window.addEventListener('pagehide', flushLeaving);
+
   window.rcDelete = async function (rid) {
     const r = receipts[rid];
-    if (!r || !owner()) return;
-    const books = heldHere(r)
-      ? '\n\nIt holds what went to ' + heldNames(r).join(', ') +
-        ' — that is kept nowhere else, so it comes out of those totals.'
-      : '';
-    if (!(await ydConfirm('The email stays in Gmail.' +
-      ((r.splits || []).some(s => destOf(s) === 'job') ? ' Lines already added to jobs stay on the jobs.' : '') + books,
-      { title: 'Delete this ' + (r.vendor || '') + ' receipt from the hub?', ok: 'Delete', danger: true }))) return;
-    if (!receipts[rid]) return;
-    drop([rid]);
-    showToast('Deleted');
+    if (!r || !owner() || leaving[rid]) return;
+    if (heldHere(r) && !(await ydConfirm('What went to ' + heldNames(r).join(', ') +
+        ' is kept on this receipt and nowhere else, so it comes out of those totals. The email stays in Gmail.',
+        { title: 'Delete this ' + (r.vendor || '') + ' receipt from the hub?', ok: 'Delete', danger: true }))) return;
+    if (!receipts[rid] || leaving[rid]) return;
+    const onJobs = (r.splits || []).some(s => destOf(s) === 'job');
+    dropSoon([rid], '🗑 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents) + ' deleted' +
+      (onJobs ? ' — its lines stay on the jobs' : ''));
   };
   window.rcDeleteAside = async function () {
-    const ids = Object.keys(receipts).filter(id => deletableAside(receipts[id]));
+    const ids = allReceipts().filter(deletableAside).map(r => r.id);
     if (!ids.length || !owner()) return;
     if (!(await ydConfirm('Their emails stay in Gmail.', { title: 'Delete all ' + ids.length + ' set-aside receipts from the hub?', ok: 'Delete them', danger: true }))) return;
-    drop(ids);
-    showToast(ids.length + ' deleted');
-  };
-
-  window.rcSkip = async function (rid, why) {
-    if (!why || !receipts[rid]) return;
-    if (!sorts()) { showToast('You can look at jobs but not change them'); redraw(true); return; }
-    // Personal purchases have no business in the hub at all (Jonah, 5 Oct).
-    // Part of a receipt already sorted elsewhere keeps the receipt, though --
-    // a vehicle's or the shop's share lives nowhere else -- so the rest is
-    // noted as personal and the receipt is done. So does a receipt split up
-    // with only some of its lines ticked: those lines are personal, and the
-    // rest still waits to be sorted (it used to delete the whole receipt).
-    if (why === 'personal') {
-      const r = receipts[rid];
-      if (partlyPersonal(rid, r)) {
-        const p = portion(rid, r);
-        if (!p) return;
-        const splits = (r.splits || []).concat([{ id: 'sp' + Date.now().toString(36) + uid(), to: 'personal', name: 'Personal',
-          lines: p.idxs, cents: p.part, taxCents: p.tax, at: new Date().toISOString(), by: (me() || {}).uid || '' }]);
-        const status = p.last ? 'done' : r.status;
-        const patch = moved(r, { splits, status });
-        receipts[rid] = Object.assign({}, r, patch);
-        delete ticked[rid];
-        write(rid, Object.assign({}, patch));
-        showToast('Marked personal');
-        redraw(true);
-        return;
-      }
-      if (owner()) {
-        if (!(await ydConfirm('Personal purchases are not kept in the hub.', { title: 'Delete this ' + (r.vendor || '') + ' receipt?', ok: 'Delete', danger: true }))) return;
-        drop([rid]); showToast('Personal — deleted from the hub'); return;
-      }
-    }
-    const patch = moved(receipts[rid], { status: 'skipped', skipWhy: why, skippedBy: (me() || {}).uid || '' });
-    receipts[rid] = Object.assign({}, receipts[rid], patch);
-    write(rid, Object.assign({}, patch));
-    showToast('Set aside — All receipts → Set aside has it if that was wrong');
-    redraw(true);
+    const still = ids.filter(id => receipts[id] && !leaving[id]);
+    dropSoon(still, '🗑 ' + still.length + ' set-aside receipt' + (still.length === 1 ? '' : 's') + ' deleted');
   };
 
   // The note, as typed: never one of the old reasons' own words, which are
@@ -740,6 +764,8 @@
         showToast((found ? found + ' receipt' + (found === 1 ? '' : 's') + ' found'
           + (rep.waiting ? ' — ' + rep.waiting + ' more on the next check' : '')
           : 'No new receipts' + (rep.waiting ? ' yet — ' + rep.waiting + ' waiting for the next check' : ''))
+          // Clearly a household's: kept, and filed under Personal by itself.
+          + (rep.personal ? ' · ' + rep.personal + ' personal, filed under 👤 Personal' : '')
           + (rep.byCode ? ' · ' + rep.byCode + ' sorted by the app, no Claude' : ''));
       }
     } catch (e) {
@@ -780,11 +806,12 @@
   // ------------------------------------------------- what was done with it
   //
   // Where a receipt went shows as a small chip ("✓ Added to the Smith job");
-  // taking it back, and deleting the receipt, sit behind ⋯ -- or a tap on
-  // the chip, which opens the same menu. A green bar with its own Undo on
-  // every sorted receipt doubled the height of All receipts, and a 🗑 on
-  // every row was one slip of the thumb from gone. Undo is there for as long
-  // as it ever was; it is only out of the way.
+  // taking it back sits behind ⋯ -- or a tap on the chip, which opens the
+  // same menu. A green bar with its own Undo on every sorted receipt doubled
+  // the height of All receipts. Undo is there for as long as it ever was; it
+  // is only out of the way. Delete was behind ⋯ too (a 🗑 on every row was
+  // one slip of the thumb from gone), and Jonah could not find it: it is a
+  // button of its own again, and a slip now has its Undo (dropSoon).
   //
   // `where` tells a card in To sort ('c') from a row in All receipts ('h'):
   // the same receipt can be in both.
@@ -796,11 +823,14 @@
         'onclick="rcMenuClose(); rcUndo(\'' + rid + '\',\'' + safeId(s.id) + '\')">↩ Undo — take it off ' +
         esc(splitPlace(s)) + '</button>'));
     }
-    if (owner()) {
-      items.push('<button type="button" class="rc-menu-del" onclick="rcMenuClose(); rcDelete(\'' + rid + '\')">' +
-        '🗑 Delete this receipt</button>');
-    }
     return items;
+  }
+  // The owner's alone (rules). `small`: a row in All receipts, where it is
+  // the bin and nothing more.
+  function deleteBtn(rid, small) {
+    return owner() ? '<button type="button" class="btn btn-sm rc-del"' +
+      (small ? ' title="Delete this receipt" aria-label="Delete this receipt"' : '') +
+      ' onclick="rcDelete(\'' + rid + '\')">' + (small ? '🗑' : '🗑 Delete') + '</button>' : '';
   }
   function menuHtml(where, rid, r) {
     const items = menuItems(rid, r);
@@ -915,7 +945,7 @@
       (sortable && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
-        menuHtml('c', rid, r) +
+        deleteBtn(rid) + menuHtml('c', rid, r) +
       '</div>' +
       qbHtml(r, rid) +
     '</div>';
@@ -953,8 +983,8 @@
         '</select>' + btn('Add ' + n + 'to vehicle') + '</div>';
     }
     if (to === 'personal') {
-      return '<div class="rc-assign">' + btn(partlyPersonal(rid, r) ? 'Mark ' + (n || 'the rest ') + 'personal'
-        : (owner() ? 'Personal — delete it' : 'Personal — set it aside')) + '</div>';
+      return '<div class="rc-assign">' + btn('Mark ' + (n || ((r.splits || []).length ? 'the rest ' : '')) + 'personal') + '</div>' +
+        '<div class="rc-hint">Kept under All receipts → 👤 Personal. Never counted as a business cost or sent to QuickBooks.</div>';
     }
     if (to === 'sub') {
       // The owner picks which of his subcontractors (the one whose name the
@@ -995,6 +1025,11 @@
   // (settings/receipts.forwardEmails; receipts.py forward_email).
   function qbHtml(r, rid, compact) {
     const f = r.qbForward || null;
+    // Filed as Personal and never sent: it is not meant to go, so it is not
+    // "not in QuickBooks yet" either -- only its photo is offered.
+    if (!(f && f.ok) && stageOf(r).offBooks) {
+      return r.photoPath && !compact ? '<div class="rc-qb"><button class="btn btn-sm" onclick="rcViewPhoto(\'' + rid + '\')">🖼 Photo</button></div>' : '';
+    }
     if (!r.photoPath && r.source !== 'photo') return f && f.via === 'email' ? qbEmailHtml(r, rid, f, compact) : '';
     if (compact) return f && f.ok ? '<span class="rc-tag rc-qb-ok" title="Sent to QuickBooks">📤 QB</span>' : '';
     return '<div class="rc-qb">' +
@@ -1054,15 +1089,16 @@
   }
   // Email receipts the server would send with "Send the ones from the last
   // 14 days now" -- the same test as receipts.py forward_emails(days=14):
-  // from email (not a photo), not sent yet, not set aside, with an email
-  // from after reading started and inside the 14 days.
+  // from email (not a photo), not sent yet, not set aside, not filed only
+  // as Personal, with an email from after reading started and inside the 14
+  // days.
   const FWD_DAYS = 14;
   let fwdBusy = false;
   function emailsToSend() {
     const start = Date.parse((state && state.since) || '');
     if (isNaN(start)) return [];
     const floor = Math.max(start, Date.now() - FWD_DAYS * 864e5);
-    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && !isAside(r) &&
+    return allReceipts().filter(r => !r.photoPath && r.source !== 'photo' && !isAside(r) && !stageOf(r).offBooks &&
       !(r.qbForward && r.qbForward.ok) && (r.mail || []).some(m => m && m.id && (m.at || 0) >= floor));
   }
   window.rcFwdEmails = function (on) {
@@ -1127,7 +1163,7 @@
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
         (r.status === 'skipped' && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
-        menuHtml('h', rid, r) +
+        menuHtml('h', rid, r) + deleteBtn(rid, true) +
       '</div>' +
       (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '');
   }
@@ -1153,8 +1189,10 @@
 
   const byNewest = (a, b) => String(b.date || '').localeCompare(String(a.date || '')) ||
     String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  // Every receipt on the screen: not one deleted a moment ago, while its
+  // Undo is showing.
   function allReceipts() {
-    return Object.keys(receipts).map(id => Object.assign({ id }, receipts[id]));
+    return Object.keys(receipts).filter(id => !leaving[id]).map(id => Object.assign({ id }, receipts[id]));
   }
 
   // The count on the tab, and a dot on More for a phone, where Receipts sits
@@ -1200,16 +1238,20 @@
 
   // Set aside is only ever found here, under its own filter (Jonah, 13 Oct
   // 2026: set-aside receipts "shouldnt exist" in the rest of the screen):
-  // All leaves out what was set aside and put nowhere.
-  const VIEWS = { all: 'All', job: '📋 Jobs', vehicle: '🚚 Vehicles', shop: '🏠 Shop', office: '🗂 Office',
-    sub: '🤝 Subcontractors', skipped: '🗄 Set aside' };
+  // All leaves out what was set aside and put nowhere. Personal has its own
+  // filter too, and All -- what the business spent -- leaves out a receipt
+  // that went only there.
+  const VIEWS = PLACE_LIST.reduce((o, p) => (o[p.id] = p.view, o), { all: 'All' });
+  VIEWS.skipped = '🗄 Set aside';
   let view = 'all';
   // The places the books count (month totals), and what each is called there.
-  const PLACES = ['job', 'vehicle', 'shop', 'office', 'sub'];
-  const PLACE_NAME = { job: 'Jobs', vehicle: 'Vehicles', shop: 'Shop', office: 'Office', sub: 'Subcontractors' };
+  const PLACES = PLACE_LIST.map(p => p.id).filter(id => !offBooks(id));
+  const OFF_BOOKS = PLACE_LIST.map(p => p.id).filter(offBooks);
+  const PLACE_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.total, o), {});
   // What a receipt put to one place, tax share included. A receipt set aside
-  // as overhead (before 9 Oct), or as a subcontractor's bill (before 13 Oct),
-  // counts its unsorted rest as the shop's or the subcontractor's.
+  // as overhead (before 9 Oct), as a subcontractor's bill (before 13 Oct) or
+  // as personal (before 21 Oct) counts its unsorted rest as the shop's, the
+  // subcontractor's or Personal's.
   function amountTo(r, to) {
     const splits = r.splits || [];
     let c = splits.filter(s => destOf(s) === to).reduce((t, s) => t + (s.cents || 0) + (s.taxCents || 0), 0);
@@ -1219,8 +1261,15 @@
     return c;
   }
   const placed = r => PLACES.reduce((t, p) => t + amountTo(r, p), 0);
-  const inView = r => view === 'all' ? (!isAside(r) || placed(r) > 0)
-    : view === 'skipped' ? isAside(r) : amountTo(r, view) > 0;
+  // What a filed receipt cost the business: all of it, but for what went
+  // to Personal; set aside, only what was put somewhere first.
+  const business = r => isAside(r) ? placed(r)
+    : Math.max(0, (r.totalCents || 0) - OFF_BOOKS.reduce((t, p) => t + amountTo(r, p), 0));
+  const inAll = r => isAside(r) ? placed(r) > 0 : !stageOf(r).offBooks;
+  // A place's own filter: every receipt with something there, whatever it
+  // came to (a $0 line still went there).
+  const goesTo = (r, p) => stageOf(r).places.indexOf(p) !== -1;
+  const inView = r => view === 'all' ? inAll(r) : view === 'skipped' ? isAside(r) : goesTo(r, view);
   window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
   // Typing in the search box redraws only the list under it, so the box keeps
   // its focus and what was typed.
@@ -1255,8 +1304,9 @@
     const every = allReceipts().filter(r => !toSortNow(r));
     const shown = every.filter(r => inView(r) && matches(r, words)).sort(byNewest);
     const aside = every.filter(deletableAside);
-    // Counted as sorted: what was put somewhere, not what was set aside.
-    const counted = every.filter(r => !isAside(r) || placed(r) > 0).length;
+    // Counted as sorted: what the business put somewhere -- not what was set
+    // aside, nor what went only to Personal.
+    const counted = every.filter(inAll).length;
     el('rcHistBadge').textContent = counted ? String(counted) : '';
     el('rcHistBar').innerHTML = Object.keys(VIEWS).map(v =>
       '<button class="btn btn-sm' + (view === v ? ' btn-filled' : '') + '" onclick="rcView(\'' + v + '\')">' +
@@ -1270,8 +1320,9 @@
     }
     // By month, newest first, each with what it came to -- and, under All,
     // what of it went where (for the books: jobs, vehicles, shop, office,
-    // subcontractors). What was set aside counts in none of them, nor in
-    // All's month total.
+    // property, subcontractors). What was set aside counts in none of them,
+    // nor in All's month total; nor does what went to Personal, whose own
+    // filter adds up only that.
     const months = [];
     shown.slice(0, 300).forEach(r => {
       const key = String(r.date || '').slice(0, 7);
@@ -1279,7 +1330,7 @@
       if (!m || m.key !== key) { m = { key, rows: [], cents: 0, by: {} }; months.push(m); }
       m.rows.push(r);
       m.cents += view === 'skipped' ? (r.totalCents || 0)
-        : view === 'all' ? (isAside(r) ? placed(r) : (r.totalCents || 0)) : amountTo(r, view);
+        : view === 'all' ? business(r) : amountTo(r, view);
       PLACES.forEach(p => { m.by[p] = (m.by[p] || 0) + amountTo(r, p); });
     });
     const split = m => view !== 'all' ? '' : PLACES.filter(p => m.by[p]).map(p =>
@@ -1300,7 +1351,7 @@
     if (!p || !p.classList.contains('active')) {
       // Off screen, only the counts on the tab and on More need to be right.
       deferred = true;
-      badges(Object.values(receipts).filter(toSortNow).length);
+      badges(allReceipts().filter(toSortNow).length);
       return;
     }
     const sec = el('rcSection');
@@ -1389,6 +1440,7 @@
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
     unsubs = []; receipts = {}; state = null; loaded = false;
+    forgetLeaving();
     toSort = {}; recent = {}; older = {}; since = ''; olderState = '';
     toSortHeard = false; recentHeard = false;
   }
@@ -1427,7 +1479,12 @@
   // Opening Receipts also re-reads when email was last checked: the half-
   // hourly run may have changed it (switched on, say) since the app opened.
   window.YDReceipts = {
-    all: () => receipts,
+    all: () => {
+      if (!Object.keys(leaving).length) return receipts;
+      const out = {};
+      Object.keys(receipts).forEach(id => { if (!leaving[id]) out[id] = receipts[id]; });
+      return out;
+    },
     // A photo that could not go where it was sent by itself (home.js).
     needsYou: needsYou,
     loaded: () => loaded,
