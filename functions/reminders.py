@@ -161,8 +161,8 @@ def run():
         ("crew activity", (cals, boards), lambda: _activity(db, people, now, cals, boards, prefs)),
         ("crew notes", (), lambda: crew_notes(db, people, now)),
         ("crew shifts", (), lambda: crew_shifts(db, people, now)),
-        # A job whose every piece of work is ticked off: the owner asked
-        # whether to mark it finished (workdone.js).
+        # A job whose every piece of work is ticked off: a to-do on the
+        # owner's My to-dos to go and look at it (workdone.js).
         ("work done", (), lambda: work_done(db, people, now)),
         # End-of-day reports in (the owner told), and the day's reminder to
         # whoever has not sent theirs (endofday.py).
@@ -276,16 +276,16 @@ WORK_DONE_HOURS = 6
 
 def work_done(db, people=None, now=None):
     """A job whose every piece of work the crew have ticked off (workdone.js):
-    the owner is asked, once, whether to mark it finished -- a buzz like a
-    crew note's (Jonah, 22 Oct 2026: yes to a notification). The pieces are
-    the job's crew page (jobCrew/{id}.work -- the very list the crew tick
-    from), and a job has one only while it is booked or in progress and
-    shown to the crew, so a finished job is never asked about. Once per
-    finish: reminderLog workdone_<job>_<last tick's time> -- a piece taken
-    back and ticked again is a new finish, and asks again."""
-    people = people if people is not None else dg._people()
+    a to-do on the owner's My to-dos to go and look at it. Jonah (22 Oct
+    2026): "when a jobs last piece is ticked instead of notifying my phone
+    just put something in my to do to lookat the job." The pieces are the
+    job's crew page (jobCrew/{id}.work -- the very list the crew tick from),
+    and a job has one only while it is booked or in progress and shown to
+    the crew, so a finished job is never asked about. Each finish is looked
+    at once (reminderLog workdone_<job>_<last tick's time>); its card is the
+    job's own (_look_card), so a piece taken back and ticked again makes no
+    second card while the first is still on his list."""
     now = now or dg._now()
-    owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
     out = []
     since = _iso_z(now - datetime.timedelta(hours=WORK_DONE_HOURS))
     try:
@@ -303,28 +303,78 @@ def work_done(db, people=None, now=None):
         if not page.exists:
             continue
         c = page.to_dict() or {}
-        ids = [str(w.get("id")) for w in (c.get("work") or []) if isinstance(w, dict) and w.get("id")]
-        ticks = [lines.get(i) for i in ids]
-        if not ids or not all(isinstance(t, dict) and t.get("done") is True for t in ticks):
+        work = [w for w in (c.get("work") or []) if isinstance(w, dict) and w.get("id")]
+        ticks = [lines.get(str(w["id"])) for w in work]
+        if not work or not all(isinstance(t, dict) and t.get("done") is True for t in ticks):
             continue
         last = max(ticks, key=lambda t: str(t.get("at") or ""))
-        try:
-            db.collection("reminderLog").document(
-                "workdone_%s_%s" % (s.id, re.sub(r"[^0-9A-Za-z]", "", str(last.get("at") or "")))).create({"at": now.isoformat()})
-        except AlreadyExists:
+        seen = db.collection("reminderLog").document(
+            "workdone_%s_%s" % (s.id, re.sub(r"[^0-9A-Za-z]", "", str(last.get("at") or ""))))
+        if seen.get().exists:
             continue
-        name = str(c.get("name") or "a job").strip()[:60]
-        who = str(last.get("by") or "").split()[0] if str(last.get("by") or "").strip() else ""
-        body = "All %d piece%s of work done%s — mark it finished?" % (
-            len(ids), "" if len(ids) == 1 else "s", (" (last one by %s)" % who) if who else "")
-        for uid in owners:
-            try:
-                out.append({"uid": uid, "workDone": s.id, "phones": dg.send_push(
-                    uid, {"push": {"title": "✅ Everything on %s is ticked" % name, "body": body}},
-                    tag="yd-workdone-" + s.id, ttl=24 * 3600, opens="jobsboard")})
-            except Exception as err:      # noqa: BLE001
-                print("reminders: work done push failed:", uid, err)
+        # Marked seen only once it is on his list (or already was): a card
+        # that could not be made is tried again at the next run. Two runs at
+        # once cannot make two -- the card's id is the job's.
+        try:
+            cid = _look_card(db, s.id, c, work, ticks, last, now)
+        except Exception as err:          # noqa: BLE001
+            print("reminders: look-at card not made:", s.id, err)
+            continue
+        if cid is None:
+            continue
+        seen.set({"at": now.isoformat()})
+        if cid:
+            out.append({"workDone": s.id, "card": cid})
     return out
+
+
+def _first(name):
+    return str(name or "").strip().split(" ")[0] if str(name or "").strip() else ""
+
+
+def _look_card(db, job_id, page, work, ticks, last, now):
+    """The job's "look at it" card on My to-dos (boards/todo): due today, in
+    the column he named Today (else the first), linked to the job. One per
+    job -- its id is the job's (lk<jobId>): while one is still on his list
+    (not done) nothing more is made; once it is done or deleted, the next
+    finish puts it back. Returns the card id when made, "" when his card for
+    it is still open, None when there is no My to-dos board to put it on."""
+    bref = db.collection("boards").document("todo")
+    snap = bref.get()
+    cols = ((snap.to_dict() or {}).get("columns") or []) if snap.exists else []
+    cols = [col for col in cols if isinstance(col, dict) and col.get("id")]
+    if not cols:
+        return None
+    today = next((col["id"] for col in cols if str(col.get("name") or "").strip().lower() == "today"), cols[0]["id"])
+    done_col = cols[-1]["id"]
+    cid = "lk" + re.sub(r"[^A-Za-z0-9_-]", "", job_id)
+    ref = bref.collection("cards").document(cid)
+    have = ref.get()
+    if have.exists:
+        cur = have.to_dict() or {}
+        if not cur.get("doneAt") and cur.get("column") != done_col:
+            return ""
+    name = str(page.get("name") or "").strip() or "Untitled job"
+    num = str(page.get("est") or "").strip()
+    stamp = _iso_z(now)
+    pieces = ["• %s — %s" % (str(w.get("title") or "Work").strip()[:120], _first(t.get("by")) or "ticked")
+              for w, t in zip(work, ticks)]
+    who = _first(last.get("by"))
+    ref.set({
+        "title": ("👀 Look at %s%s — every piece is ticked" % (name, (" #" + num) if num else ""))[:200],
+        "notes": ("Every piece of work on the job is ticked off%s. Go and have a look; when it is right, mark it "
+                  "finished on the Jobs board (it asks for the before and after photos).\n\n"
+                  % ((" — the last one by " + who) if who else "") + "\n".join(pieces))[:5000],
+        "checklist": [], "column": today, "order": int(now.timestamp() * 1000),
+        "due": now.date().isoformat(), "dueTime": None,
+        "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False,
+        "type": None, "urgency": "normal", "labels": [], "color": None, "assignees": [],
+        "jobId": job_id, "jobName": name, "jobNum": num or None,
+        # His to do, not one for Claude's card runs (cards.py).
+        "noClaude": True, "lookAt": job_id,
+        "doneAt": None, "createdAt": stamp, "createdBy": "Job Hub", "updatedAt": stamp, "updatedBy": "Job Hub",
+    })
+    return cid
 
 
 def _end_of_day(db, people, now):
