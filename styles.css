@@ -3801,6 +3801,12 @@
   .price-wrap.formatted:not(:focus-within) .price-shown { display:flex; }
   .price-wrap.formatted:not(:focus-within) input { color:transparent; }
   @media (max-width:720px) { .price-shown { font-size:16px; } }
+  /* What the job's QuickBooks invoice comes to, under the price when the two
+     differ (app.js showInvoicePrice); change orders from the invoice in the
+     Additional costs table, with their words (renderAdditionalCosts). */
+  .price-qb { margin-top:6px; font-size:12px; line-height:1.4; color:var(--accent-ink); }
+  .price-qb[hidden] { display:none; }
+  .addcost-words { font-size:12px; font-weight:400; white-space:pre-line; margin-top:2px; max-width:420px; }
 
   /* Tracking: each add form folded behind its "+ Add ..." button (app.js
      openAddForm). */

@@ -172,9 +172,11 @@
     const price = toCents(parseMoney(job.jobPrice || ''));
     return price > 0 ? price - addOnsCents(job) : null;
   }
+  // Its own add-ons and the change orders on its QuickBooks invoice.
   function addOnsCents(job) {
+    const qb = ((job.qbInvoiceRef || {}).changes || []).reduce((s, c) => s + (c && typeof c.cents === 'number' ? c.cents : 0), 0);
     return (Array.isArray(job.additionalCosts) ? job.additionalCosts : [])
-      .reduce((s, e) => s + (toCents(e && e.materialCost) || 0) + (toCents(e && e.laborCost) || 0), 0);
+      .reduce((s, e) => s + (toCents(e && e.materialCost) || 0) + (toCents(e && e.laborCost) || 0), 0) + qb;
   }
 
   // wantNow: the estimate as it is now even when a version was sent.

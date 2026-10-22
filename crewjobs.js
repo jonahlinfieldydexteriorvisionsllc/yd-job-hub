@@ -213,6 +213,18 @@
     return out;
   }
 
+  // The change orders on the job's QuickBooks invoice (quickbooks.py
+  // _invoice_changes): work the crew must know about, after the rest, in
+  // QuickBooks' words -- never what it costs.
+  function changeWork(d) {
+    const ref = d.qbInvoiceRef || {};
+    return (Array.isArray(ref.changes) ? ref.changes : []).filter(c => c && (c.name || c.words)).slice(0, 20).map((c, i) => {
+      const name = String(c.name || c.item || '');
+      return { id: 'co' + (safe(c.id) || i), title: noMoney(/change order/i.test(name) ? name : 'Change order — ' + name).slice(0, 200),
+               scope: noMoney(c.words).slice(0, 6000), crewNote: '', days: null, qty: null, unit: '' };
+    });
+  }
+
   // What a crew member may know about a job -- nothing else is copied.
   function crewEntry(d) {
     const est = d.estimate || {};
@@ -240,7 +252,7 @@
         days: numOr(w.crewDays),
         qty: w.kind === 'flat' ? numOr(w.qty) : null,
         unit: w.kind === 'flat' ? noMoney(w.unit).slice(0, 30) : '',
-      })),
+      })).concat(changeWork(d)),
       // The takeoff: how much of each, in the unit it is measured in, and
       // which piece of work it is for (an id from `work`; '' the whole job).
       // (Rentals have their own section: `rentals`.)

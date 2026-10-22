@@ -3626,7 +3626,9 @@
     // A snow bid has no whole-job price to follow.
     const total = P() && !snowOf(e, d.serviceTypes, d.jobStatus, d.qbEstimate) ? P().price(e, ctx(d.city || '')).totalCents : 0;
     if (!d.manualJobPrice && total > 0) {
-      const extra = (d.additionalCosts || []).reduce((s, x) => s + (parseFloat(x.materialCost) || 0) + (parseFloat(x.laborCost) || 0), 0);
+      // Its add-ons and its invoice's change orders (app.js addOnsOf).
+      const extra = typeof addOnsOf === 'function' ? addOnsOf(d)
+        : (d.additionalCosts || []).reduce((s, x) => s + (parseFloat(x.materialCost) || 0) + (parseFloat(x.laborCost) || 0), 0);
       patch.baseJobPrice = total / 100;
       patch.jobPrice = (total / 100 + extra).toFixed(2);
     }

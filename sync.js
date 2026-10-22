@@ -24,7 +24,7 @@
   // email, when the estimate was first seen accepted); all are in app.js
   // BOARD_FIELDS so the form carries them.
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
-    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy'];
+    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -518,11 +518,30 @@
   const qbFilledEstimate = (local, theirs) => !!(theirs.estimate && theirs.estimate.fromQb && estHasLines(theirs.estimate) && !estHasLines(local.estimate));
   function takeServerFields(local, theirs) {
     let took = false;
+    // The change orders on its invoice the server has put in the price
+    // (quickbooks.py _price_follows): this copy's price, saved after the
+    // server's, moves by the same -- or the push would take them back out.
+    const cin = theirs.qbChangesIn;
+    if (typeof cin === 'number' && cin !== local.qbChangesIn) {
+      const price = parseMoney(local.jobPrice || '');
+      let had = typeof local.qbChangesIn === 'number' ? local.qbChangesIn : null;
+      if (had === null) {
+        // The first time, the server took a price already at the invoice's as
+        // having them in.
+        const sub = ((theirs.qbInvoiceRef || {}).subtotal);
+        had = typeof sub === 'number' && Math.abs(price - sub) < 0.005 ? cin : 0;
+      }
+      if (price > 0 && cin !== had) local.jobPrice = (price + (cin - had) / 100).toFixed(2);
+      local.qbChangesIn = cin;
+      took = true;
+    }
     SERVER_FIELDS.forEach(f => {
       const s = theirs[f], l = local[f];
-      if (s == null) return;
+      if (s == null || f === 'qbChangesIn') return;
       const ahead = l == null ||
-        (f === 'qbEstimate' && s.id && s.id === l.id && estStep(s.status) > estStep(l.status));
+        (f === 'qbEstimate' && s.id && s.id === l.id && estStep(s.status) > estStep(l.status)) ||
+        // The invoice as QuickBooks has it now: its balance, its change orders.
+        (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || ''));
       if (ahead) { local[f] = s; took = true; }
     });
     if (qbFilledEstimate(local, theirs)) {
@@ -630,6 +649,8 @@
               SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
               if (tookStage) { boardFields.workStage = local.workStage; boardFields.workStageAt = local.workStageAt; }
               if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(local.estimate);
+              // Its invoice's change orders: the add-ons table and the price.
+              if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
             }
             bookIfAccepted(c.id, local);
           }
@@ -672,6 +693,9 @@
             // And the estimate the server filled from QuickBooks, into one
             // with no lines yet (estimate.js keeps what was typed).
             if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(c.data && c.data.estimate);
+            // The change orders on its invoice: the add-ons table and the
+            // price box (base + add-ons) come to what the server saved.
+            if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
             if (typeof mergeOpenPayments === 'function') mergeOpenPayments(c.data && c.data.payments);
             // And the stage the server moved it to with its invoice, or the
             // form's next save would put the card back in Ready to invoice.

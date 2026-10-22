@@ -1339,14 +1339,108 @@ def _log_stage(job_id, job, stage):
 
 
 def _invoice_record(inv):
+    """What a job keeps of its QuickBooks invoice (qbInvoiceRef). subtotal:
+    what it comes to before tax -- the job's price is before tax; changes:
+    the change orders on it (_invoice_changes)."""
     env = _env("QB_ENV", "sandbox")
+    tax = _amount((inv.get("TxnTaxDetail") or {}).get("TotalTax"))
     return {
         "id": inv.get("Id"), "docNumber": inv.get("DocNumber"),
         "total": inv.get("TotalAmt"), "balance": inv.get("Balance"), "dueDate": inv.get("DueDate"),
+        "subtotal": round(_amount(inv.get("TotalAmt")) - tax, 2), "changes": _invoice_changes(inv),
         "emailStatus": inv.get("EmailStatus"), "env": env,
         "link": "%s/app/invoice?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), inv.get("Id")),
         "syncedAt": _now().isoformat(),
     }
+
+
+# ------------------------------------------- change orders on the invoice
+#
+# Jonah (22 Oct 2026): "his price in quickbooks is the accurate price" -- a
+# job showed its estimate's price while its invoice had two change-order
+# lines added in QuickBooks (more topsoil, more installation) and came to
+# more. Lines added to an invoice after it was made from the
+# estimate -- typed in there, or a signed change order sent from Job Hub
+# (add_change_order) -- never reached the job. Now each one is kept on the
+# job's invoice record (changes) and counted with the job's add-ons
+# (app.js), which go on top of its price: in the price box, the Additional
+# costs table (read-only, "from QuickBooks invoice #N") and the crew's page
+# with its words. The job's price moves with them once (qbChangesIn: the
+# cents already in it), and back again if a line is taken off the invoice.
+
+def _invoice_changes(inv):
+    """The lines on an invoice that are not its estimate's, as [{id, item,
+    name, words, cents, kind}]: kind 'material' for a materials product,
+    else 'work'. Only an invoice made from an estimate can tell -- its own
+    lines name the estimate they came from (LinkedTxn); one made by hand
+    has nothing to tell them apart by (the job was filled from it, and any
+    gap shows as the invoice's price beside the job's, app.js). A discount
+    is never one: QuickBooks names no estimate on a discount line even when
+    it came from one. Late fees are QuickBooks' charges, not work."""
+    if not any(t.get("TxnType") == "Estimate" for t in inv.get("LinkedTxn") or []):
+        return []
+    from_est = lambda ln: any(t.get("TxnType") == "Estimate" for t in ln.get("LinkedTxn") or [])
+    sold = [ln for ln in _flat_lines(inv.get("Line")) if ln.get("DetailType") == "SalesItemLineDetail"]
+    # Linked as a whole with no line naming the estimate: nothing tells the
+    # estimate's lines from new ones -- every line would look added and the
+    # price would double. None is taken (the gap shows instead, app.js).
+    if not any(from_est(ln) for ln in sold):
+        return []
+    out = []
+    for ln in sold:
+        if from_est(ln):
+            continue
+        item = str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "").strip()
+        short = item.split(":")[-1].strip()
+        cents = _cents(ln.get("Amount"))
+        if LATE_FEE.search(item) or not cents:
+            continue
+        said = [s.strip() for s in str(ln.get("Description") or "").splitlines() if s.strip()]
+        out.append({"id": str(ln.get("Id") or ""), "item": short[:100], "name": (said[0] if said else short or "Change order")[:200],
+                    "words": "\n".join(said[1:])[:2000], "cents": cents,
+                    "kind": "material" if MATERIAL_ITEM.search(short) else "work"})
+    return out
+
+
+def _price_of(v):
+    """A job's price box as a number ("6237.66", 6237.66) -- None when it holds
+    none ("", "TBD")."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v or "").replace("$", "").replace(",", "").strip()
+    try:
+        return float(s) if s else None
+    except ValueError:
+        return None
+
+
+def _price_follows(j, rec):
+    """What a job's patch carries besides its invoice record `rec`: the
+    change orders on the invoice not yet in its price, added to it, and
+    qbChangesIn (cents) saying they are in. Taken off the invoice, taken off
+    the price. The first time, a job whose price already is the invoice's
+    (the change order put in by hand) has them in already. {} when nothing
+    moves."""
+    now = sum(int(c.get("cents") or 0) for c in rec.get("changes") or [] if isinstance(c, dict))
+    had = j.get("qbChangesIn")
+    if isinstance(had, bool) or not isinstance(had, (int, float)):
+        had = None
+    if had is not None and int(had) == now:
+        return {}
+    out = {"qbChangesIn": now}
+    price = _price_of(j.get("jobPrice"))
+    if price is None:
+        return out
+    if had is None:
+        sub = rec.get("subtotal")
+        if isinstance(sub, (int, float)) and abs(price - sub) < 0.005:
+            return out
+        had = 0
+    if now != int(had):
+        out["jobPrice"] = "%.2f" % round(price + (now - int(had)) / 100, 2)
+    return out
 
 
 def _invoice_lines(e, link_lines=False):
@@ -1526,7 +1620,7 @@ def invoice_status(body):
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber", "payments",
                 "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked",
-                "deletedAt"]
+                "deletedAt", "qbChangesIn"]
 
 
 def live_jobs(jobs):
@@ -1701,6 +1795,11 @@ def _sweep(news, deadline=None):
             stamp = _stamp()
             stage = _stage_patch(jobs[job_id], rec, stamp)
             patch = dict({"qbInvoiceRef": rec, "lastModified": stamp}, **stage)
+            # A change order added to the invoice moves its balance: the
+            # price follows (from the job as it is now, not as the sweep
+            # began -- a price is never moved twice).
+            if rec.get("changes") or "qbChangesIn" in jobs[job_id]:
+                patch.update(_price_follows(db.collection("jobs").document(job_id).get().to_dict() or {}, rec))
             db.collection("jobs").document(job_id).set(patch, merge=True)
             _log_stage(job_id, jobs[job_id], stage)
             # A balance that went UP (the invoice was changed) is no payment.
@@ -3211,21 +3310,25 @@ def keep_qb_words(jobs):
     for jid, j in jobs.items():
         if j.get("removeWhy") or j.get("deletedAt") or str(j.get("jobStatus") or "") == "quoting":
             continue
-        src = _words_source(j, env)
-        if not src:
+        # Its words' source, and its invoice -- whatever made the job: the
+        # change orders on an invoice are every job's (_invoice_for).
+        src, inv = _words_source(j, env), _invoice_of(j, env)
+        if not src and not inv:
             continue
         t = _parse_time(looked.get(jid))
         if t and str(j.get("jobStatus") or "") == "complete" and now - t < LOOK_AGAIN:
             continue
-        cands.append((t.isoformat() if t else "", jid, src))
+        cands.append((t.isoformat() if t else "", jid, src, inv))
     # Never looked at first, then the one looked at longest ago.
-    want = {jid: src for _t, jid, src in sorted(cands)[:WORDS_MAX]}
+    want = {jid: (src, inv) for _t, jid, src, inv in sorted(cands)[:WORDS_MAX]}
     if not want:
         return 0
     docs = {s.id: (s.to_dict() or {}) for s in db.get_all([db.collection("jobs").document(jid) for jid in want]) if s.exists}
     qb_docs, unasked = {}, set()
     for kind in ("Estimate", "Invoice"):
-        ids = {i for k, i in want.values() if k == kind}
+        ids = {src[1] for src, _inv in want.values() if src and src[0] == kind}
+        if kind == "Invoice":
+            ids |= {inv for _src, inv in want.values() if inv}
         if ids:
             missed = set()
             qb_docs.update({(kind, i): d for i, d in _by_ids(kind, ids, missed).items()})
@@ -3233,23 +3336,58 @@ def keep_qb_words(jobs):
     # Every job QuickBooks answered for has had its look -- one whose
     # estimate is gone there too, or it would be first in line every hour.
     stamp_looked = now.isoformat()
-    for jid, src in want.items():
-        if src not in unasked:
+    for jid, (src, inv) in want.items():
+        if (not src or src not in unasked) and (not inv or ("Invoice", inv) not in unasked):
             looked[jid] = stamp_looked
     ref.set({realm: {"wordsLooked": looked}}, merge=True)
     end_names = _end_names()
     done = 0
-    for jid, (kind, qid) in want.items():
-        j, doc = docs.get(jid), qb_docs.get((kind, qid))
-        if j is None or doc is None:
-            continue                    # gone, or QuickBooks did not answer: next hour
+    for jid, (src, inv) in want.items():
+        j = docs.get(jid)
+        if j is None:
+            continue                    # gone
         try:
-            done += _words_for(db, jid, j, kind, qid, doc, env, end_names)
+            doc = qb_docs.get(src) if src else None
+            if doc is not None:         # else QuickBooks did not answer: next hour
+                done += _words_for(db, jid, j, src[0], src[1], doc, env, end_names)
+            doc = qb_docs.get(("Invoice", inv)) if inv else None
+            if doc is not None:
+                done += _invoice_for(db, jid, j, doc)
         except ReconnectNeeded:
             raise
         except Exception as err:                        # noqa: BLE001 -- one job's trouble never stops the rest
             print("quickbooks words: %s not checked: %s" % (jid, err))
     return done
+
+
+def _invoice_of(j, env):
+    """The id of a job's QuickBooks invoice in this company, or None."""
+    r = j.get("qbInvoiceRef") or {}
+    return str(r["id"]) if r.get("id") and r.get("env") == env else None
+
+
+def _invoice_for(db, jid, j, inv):
+    """keep_qb_words' look at a job's invoice: its record brought up to date
+    -- what it comes to before tax, the change orders on it -- and the
+    job's price with them (_price_follows). The balance stays as the job has
+    it: the sweep tells a payment by the balance moving. 1 when the job was
+    changed."""
+    old = j.get("qbInvoiceRef") or {}
+    if j.get("deletedAt") or j.get("removeWhy") or str(old.get("id") or "") != str(inv.get("Id")):
+        return 0
+    rec = dict(_invoice_record(inv), balance=old.get("balance"))
+    same = all(rec.get(k) == old.get(k) for k in ("total", "subtotal", "changes", "docNumber", "dueDate", "emailStatus"))
+    follow = _price_follows(j, rec)
+    if same and not follow:
+        return 0
+    patch = dict(follow, lastModified=_stamp())
+    if not same:
+        patch["qbInvoiceRef"] = rec
+    if "jobPrice" in follow:
+        print("quickbooks invoice: %s: price %s -> %s (change orders on invoice %s)"
+              % (jid, j.get("jobPrice"), follow["jobPrice"], inv.get("DocNumber") or inv.get("Id")))
+    db.collection("jobs").document(jid).set(patch, merge=True)
+    return 1
 
 
 def _words_for(db, jid, j, kind, qid, doc, env, end_names):

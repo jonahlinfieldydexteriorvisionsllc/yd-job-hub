@@ -202,10 +202,12 @@ function jobBill(d) {
 // back to life by leaving them out.
 // customerId / customerBy: the customer the job is for (customers.js) -- tied
 // by id, never by the spelling of a name; 'hand' when Jonah picked it.
+// qbChangesIn: the change orders on its QuickBooks invoice already in its
+// price, in cents (quickbooks.py _price_follows).
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
-  'customerId', 'customerBy'];
+  'customerId', 'customerBy', 'qbChangesIn'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old
@@ -1536,6 +1538,31 @@ function showJobPrice() {
   const text = isNumber ? fmtMoney(parseFloat(bare)) : '';
   shown.textContent = text;
   wrap.classList.toggle('formatted', isNumber && text !== raw);
+  showInvoicePrice(isNumber ? parseFloat(bare) : null);
+}
+// The job's QuickBooks invoice is what the customer pays (Jonah, 22 Oct 2026:
+// "his price in quickbooks is the accurate price"). Its change orders are
+// counted with the add-ons (qbChangesTotal), so the price box comes to the
+// invoice; when it still does not -- a discount changed there, a line's
+// amount edited, a job whose invoice was made by hand -- the invoice's
+// figure shows under the box, with one tap to make it the price.
+function showInvoicePrice(price) {
+  const el = document.getElementById('jobPriceQb');
+  if (!el) return;
+  const ref = boardFields.qbInvoiceRef || {};
+  const sub = typeof ref.subtotal === 'number' ? ref.subtotal : null;
+  const off = sub !== null && sub > 0 && (price === null || Math.abs(price - sub) >= 0.005);
+  el.hidden = !off;
+  if (!off) { el.innerHTML = ''; return; }
+  el.innerHTML = 'QuickBooks invoice' + (ref.docNumber ? ' #' + esc(String(ref.docNumber)) : '') + ' comes to <b>' + fmtMoney(sub) +
+    '</b> before tax' + (jobsReadOnly() ? '' : ' · <button type="button" class="link-btn" onclick="useInvoicePrice()">Make it the price</button>');
+}
+function useInvoicePrice() {
+  const sub = (boardFields.qbInvoiceRef || {}).subtotal;
+  if (typeof sub !== 'number' || !(sub > 0) || jobsReadOnly()) return;
+  document.getElementById('jobPrice').value = sub.toFixed(2);
+  onJobPriceManualEdit(); updateSummary(); markDirty();
+  showToast('Price set to the invoice’s ' + fmtMoney(sub) + ' — kept by hand (manual)');
 }
 async function removeProposal(propId) {
   if (!(await ydConfirm('Its imported order items are taken off too.', { title: 'Remove this proposal?', ok: 'Remove', danger: true }))) return;
@@ -2925,12 +2952,36 @@ async function rmMaterial(id) {
 // ═══════════════════════════════════════════════════════════
 // ADDITIONAL COSTS  (now with From / Vendor)
 // ═══════════════════════════════════════════════════════════
+// Change orders on the job's QuickBooks invoice -- lines added to it after it
+// was made from the estimate, typed in there or a signed change order sent
+// from here (quickbooks.py _invoice_changes) -- are add-ons too: in its
+// price, and in the table below, read-only (they change in QuickBooks). The
+// server moves the saved price with them (qbChangesIn).
+const qbChangesOf = ref => (ref && Array.isArray(ref.changes) ? ref.changes : []).filter(c => c && typeof c.cents === 'number');
+const qbChangesTotal = ref => qbChangesOf(ref).reduce((s, c) => s + c.cents, 0) / 100;
+// A saved job's add-ons, its own and its invoice's (a job not open:
+// estimate.js, jobcosts.js).
+function addOnsOf(d) {
+  return ((d && d.additionalCosts) || []).reduce((s, e) => s + (parseFloat(e && e.materialCost) || 0) + (parseFloat(e && e.laborCost) || 0), 0) +
+    qbChangesTotal(d && d.qbInvoiceRef);
+}
 function renderAdditionalCosts() {
   const w = document.getElementById('addCostTableWrap');
-  if (!additionalCosts.length) { w.innerHTML = '<p class="empty-msg">No additional costs yet.</p>'; }
+  const ref = boardFields.qbInvoiceRef || {}, fromQb = qbChangesOf(ref);
+  if (!additionalCosts.length && !fromQb.length) { w.innerHTML = '<p class="empty-msg">No additional costs yet.</p>'; }
   else {
     let h = '<div class="table-wrap"><table><thead><tr><th>Date</th><th>Description</th><th>From</th><th>Mat</th><th>Labor</th><th>Total</th><th></th></tr></thead><tbody>';
     let matSum = 0, labSum = 0;
+    fromQb.forEach(c => {
+      const amt = c.cents / 100, mat = c.kind === 'material' ? amt : 0, lab = mat ? 0 : amt;
+      matSum += mat; labSum += lab;
+      h += '<tr class="addcost-qb"><td>—</td><td><b>' + esc(c.name || c.item || 'Change order') + '</b>' +
+          (c.words ? '<div class="muted addcost-words">' + esc(c.words) + '</div>' : '') + '</td>' +
+        '<td>🧾 QuickBooks invoice' + (ref.docNumber ? ' #' + esc(String(ref.docNumber)) : '') + '</td>' +
+        '<td>' + (mat ? fmtMoney(mat) : '—') + '</td><td>' + (lab ? fmtMoney(lab) : '—') + '</td>' +
+        '<td class="bold">' + fmtMoney(amt) + '</td>' +
+        '<td><span class="muted" title="Change it on the invoice in QuickBooks">QB</span></td></tr>';
+    });
     additionalCosts.forEach(e => {
       const mat = parseFloat(e.materialCost) || 0, lab = parseFloat(e.laborCost) || 0;
       matSum += mat; labSum += lab;
@@ -2963,7 +3014,18 @@ function rmAdditionalCost(id) {
   additionalCosts = additionalCosts.filter(e => e.id !== id); renderAdditionalCosts(); markDirty();
   offerPutBack('“' + ((row && row.name) || 'Add-on') + '” removed', row, at, () => additionalCosts, renderAdditionalCosts);
 }
-function getAdditionalCostsTotal() { return additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0); }
+function getAdditionalCostsTotal() {
+  return additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0) +
+    qbChangesTotal(boardFields.qbInvoiceRef);
+}
+// The open job's invoice record (with its change orders) came in from the
+// server while the job was open -- sync.js, which has put it in boardFields:
+// the table, the price box and the summary follow.
+function ydInvoiceChanged() {
+  // Not under someone typing a price: their figure is theirs.
+  if (!document.getElementById('addCostTableWrap') || (document.activeElement || {}).id === 'jobPrice') return;
+  renderAdditionalCosts();
+}
 function syncJobPriceWithAdditionalCosts() {
   const newTotal = (parseFloat(baseJobPrice) || 0) + getAdditionalCostsTotal();
   const el = document.getElementById('jobPrice');
@@ -3207,6 +3269,7 @@ function updateSummary() {
   const totalHrs = totalLaborHours();
   const totalMat = materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
   const totalAddCost = getAdditionalCostsTotal();
+  const addOnLines = additionalCosts.length + qbChangesOf(boardFields.qbInvoiceRef).length;
   const jobPrice = parseMoney(document.getElementById('jobPrice').value);
   const est = document.getElementById('estimateNumber').value.trim();
   const coTotal = materials.filter(e => isChangeOrder(e.item)).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
@@ -3214,7 +3277,7 @@ function updateSummary() {
   document.getElementById('summaryGrid').innerHTML = [
     { label: 'Total Labor', value: fmtHrsMin(totalHrs), sub: laborWorkerCount() + ' worker' + (laborWorkerCount() !== 1 ? 's' : ''), cls: '' },
     { label: 'Total Materials', value: fmtMoney(totalMat), sub: coTotal > 0 ? fmtMoney(coTotal) + ' unquoted' : materials.length + ' purchases', cls: '' },
-    { label: 'Add-ons Billed', value: fmtMoney(totalAddCost), sub: additionalCosts.length + ' line' + (additionalCosts.length !== 1 ? 's' : ''), cls: '' },
+    { label: 'Add-ons Billed', value: fmtMoney(totalAddCost), sub: addOnLines + ' line' + (addOnLines !== 1 ? 's' : ''), cls: '' },
     { label: 'Job Price', value: jobPrice > 0 ? fmtMoney(jobPrice) : '—', sub: est ? 'Est #' + est : 'No estimate #', cls: 'accent-top' },
   ].map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.label + '</div><div class="summary-value">' + c.value + '</div><div class="summary-sub">' + c.sub + '</div></div>').join('');
 
@@ -3331,7 +3394,8 @@ function loadJobData(d) {
   payments = (d.payments || []).map(p => ({ ...p, id: p.id || uid() }));
   additionalCosts = (d.additionalCosts || []).map(e => ({ ...e, id: e.id || uid() }));
   manualJobPrice = !!d.manualJobPrice;
-  const addOns = additionalCosts.reduce((s, e) => s + (parseFloat(e.materialCost) || 0) + (parseFloat(e.laborCost) || 0), 0);
+  // Its own add-ons and the change orders on its QuickBooks invoice.
+  const addOns = addOnsOf(d);
   if (d.baseJobPrice !== undefined && d.baseJobPrice !== null && d.baseJobPrice !== '') baseJobPrice = parseFloat(d.baseJobPrice) || 0;
   else baseJobPrice = parseMoney(d.jobPrice || '') - addOns;
   // The saved price is the one every other screen shows. Something that set

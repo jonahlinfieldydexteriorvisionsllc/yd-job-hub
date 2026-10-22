@@ -307,6 +307,9 @@
               <input id="jobPrice" placeholder="$0.00" oninput="onJobPriceManualEdit(); updateSummary(); markDirty()">
               <span class="price-shown" id="jobPriceShown" aria-hidden="true"></span>
             </div>
+            <!-- What the job's QuickBooks invoice comes to, when the price
+                 is not that (app.js showInvoicePrice). -->
+            <div class="price-qb" id="jobPriceQb" hidden></div>
           </div>
         </div>
 
