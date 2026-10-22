@@ -1222,6 +1222,9 @@
   .bd-add-card { background:none; border:1.5px dashed var(--border-strong); border-radius:8px;
     color:var(--muted); font:600 12px 'DM Sans',sans-serif; padding:9px; cursor:pointer; min-height:40px; }
   .bd-add-card:hover { color:var(--brand-ink); border-color:var(--brand); }
+  /* A column's own add, under its heading (boards.js column): outside the
+     scrolling body, so it never scrolls away. */
+  .bd-add-top { flex:none; margin:9px 9px 0; min-height:44px; }
 
   /* card and job sheets */
   .bd-detail-sub { font-size:14px; color:var(--muted); }
@@ -1256,7 +1259,7 @@
   @media (max-width:720px) {
     .bd-col { flex-basis:84vw; max-height:none; }
     .bd-actions { width:100%; }
-    .bd-actions .btn { flex:1; }
+    .bd-actions .btn { flex:1; min-height:44px; }
   }
 
   /* ---- the board itself: dark, with white cards (Jonah's ask, the Trello
@@ -3511,6 +3514,9 @@
     .bd-fold { display:inline-block; }
     .bd-col.shut .bd-col-body, .bd-col.shut .bd-col-total { display:none; }
     .bd-col.shut .bd-col-head { border-bottom-color:transparent; }
+    /* A folded column keeps its add button; the gap under it stands in for
+       the body's padding. */
+    .bd-col.shut .bd-add-top { margin-bottom:9px; }
   }
 
   /* My Jobs: Copy and Delete apart, Delete plainly a delete. */

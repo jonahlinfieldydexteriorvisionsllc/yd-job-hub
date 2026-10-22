@@ -417,17 +417,20 @@
         '<div class="bd-actions">' +
           (runsBoard(board)
             ? '<button class="btn btn-sm" onclick="editBoard(\'' + safeId(board.id) + '\')">Board settings</button>' : '') +
+          // The whole board's add: the card window opens on the first column,
+          // with the Column box there to pick another. Named as each column's
+          // own button is -- one thing, one name.
           (editsBoard(board)
-            ? '<button class="btn btn-sm btn-filled" onclick="addCard(\'' + safeId(board.id) + '\', \'' +
-              safeId(board.columns[0].id) + '\')">+ Add card</button>' : '') +
+            ? '<button class="btn btn-sm btn-filled bd-add-board" onclick="addCard(\'' + safeId(board.id) + '\', \'' +
+              safeId(board.columns[0].id) + '\')">+ Add a card</button>' : '') +
           // The recurring crew tasks land here, on Crew tasks (recurring.js).
           // Named as the calendar's layer of them is, "Recurring crew tasks":
           // one thing, one name.
           (board.id === CREW_BOARD && isOwner() && typeof openRecurring === 'function'
             ? '<button class="btn btn-sm" onclick="openRecurring()">🔁 Recurring crew tasks</button>' : '') +
           (board.virtual && movesJobs()
-            ? '<button class="btn btn-sm btn-filled" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' +
-              safeId(board.columns[0].id) + '\')">' + (board.id === 'bids' ? '+ New bid' : '+ New job') + '</button>' : '') +
+            ? '<button class="btn btn-sm btn-filled bd-add-board" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' +
+              safeId(board.columns[0].id) + '\')">' + (board.id === 'bids' ? '+ Add a bid' : '+ Add a job') + '</button>' : '') +
         '</div>' +
       '</div>' +
       (board.id === 'bids' ? followUpHtml() : '') +
@@ -873,21 +876,28 @@
     const n = more.count != null ? more.count : cardHtml.length;
     const key = board.id + '|' + c.id;
     const shut = phoneWide() && (key in colOpen ? !colOpen[key] : n === 0);
+    // The add button is at the TOP of the column, under its heading and
+    // outside the part that scrolls, so it is always in reach (Jonah, 21 Oct
+    // 2026: "i shouldnt have to scroll to the bottom of the board to add
+    // one"). A folded column on a phone keeps it too: one tap to add to an
+    // empty column, without unfolding it first.
+    const add = editsBoard(board)
+      ? '<button class="bd-add-card bd-add-top" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">+ Add a card</button>'
+      // Won, Lost and Paid are where jobs end up, not where they start.
+      : board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1
+        ? '<button class="bd-add-card bd-add-top" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
+          (board.id === 'bids' ? '+ Add a bid' : '+ Add a job') + '</button>'
+        : '';
     return '<div class="bd-col' + (shut ? ' shut' : '') + '" data-board="' + esc(board.id) + '" data-col="' + esc(c.id) + '" ' +
         'ondragover="bdDragOver(event)" ondragleave="bdDragLeave(event)" ondrop="bdDrop(event)">' +
       '<div class="bd-col-head" onclick="bdToggleCol(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\', this)">' +
         '<span><span class="bd-fold" aria-hidden="true">' + (shut ? '▸' : '▾') + '</span>' + esc(c.name) + '</span>' +
         '<span class="bd-count">' + n + '</span></div>' +
       (more.total ? '<div class="bd-col-total" title="What the jobs in this column are worth">' + esc(more.total) + '</div>' : '') +
+      add +
       '<div class="bd-col-body">' +
         (cardHtml.join('') || '<div class="bd-empty">' + (more.empty || 'Nothing here') + '</div>') +
         (more.foot || '') +
-        (editsBoard(board)
-          ? '<button class="bd-add-card" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">+ Add a card</button>' : '') +
-        // Won, Lost and Paid are where jobs end up, not where they start.
-        (board.virtual && movesJobs() && ['won', 'lost', 'paid'].indexOf(c.id) === -1
-          ? '<button class="bd-add-card" onclick="addJobCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
-            (board.id === 'bids' ? '+ Add a bid' : '+ Add a job') + '</button>' : '') +
       '</div>' +
     '</div>';
   }
@@ -2245,7 +2255,10 @@
     const rec = {
       title: title,
       column: col,
-      order: was.column === col && was.order != null ? was.order : endOrder(board.id, col),
+      // A new card goes in at the top of its column, where its add button
+      // is -- at the end of a long column it was out of sight once saved.
+      order: was.column === col && was.order != null ? was.order
+        : openCard.cardId ? endOrder(board.id, col) : startOrder(board.id, col),
       due: due,
       dueTime: dueTime,
       remindMins: remind.remindMins, hasReminder: remind.hasReminder, remindUids: remind.remindUids,
@@ -2288,8 +2301,14 @@
     }
     cards[board.id] = cards[board.id] || {};
     cards[board.id][id] = Object.assign({ id: id }, was, rec);
+    const added = !openCard.cardId;
     openCard.cardId = id;
-    render(); renderCardDetail();
+    render();
+    // Brought into sight behind the card window, so it is there on closing
+    // it even if the column had been scrolled down.
+    const drawn = added && document.querySelector('#boardsWrap .bd-card[data-card="' + id + '"]');
+    if (drawn && drawn.scrollIntoView) drawn.scrollIntoView({ block: 'nearest' });
+    renderCardDetail();
     writeCard(board.id, id, rec);
   };
 
@@ -2297,6 +2316,11 @@
     const board = boards[boardId];
     const inCol = Object.values(cards[boardId] || {}).filter(k => board ? colOf(board, k) === col : k.column === col);
     return inCol.length ? Math.max.apply(null, inCol.map(k => k.order || 0)) + 1000 : 1000;
+  }
+  function startOrder(boardId, col) {
+    const board = boards[boardId];
+    const inCol = Object.values(cards[boardId] || {}).filter(k => board ? colOf(board, k) === col : k.column === col);
+    return inCol.length ? Math.min.apply(null, inCol.map(k => k.order || 0)) - 1000 : 1000;
   }
 
   function crewPeople() {
