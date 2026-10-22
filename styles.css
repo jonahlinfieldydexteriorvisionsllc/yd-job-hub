@@ -2715,6 +2715,25 @@
   .jl-switch { display:flex; gap:6px; margin-bottom:10px; }
   .jl-switch button { border:1px solid var(--border-strong); background:var(--surface); color:var(--text); border-radius:16px; padding:5px 14px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
   .jl-switch button.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  /* My Jobs -> Bids: Working on / Sent / Lost / All (app.js BID_VIEWS) --
+     every choice in sight, one tap each, never a row that scrolls sideways. */
+  .jl-bid-views { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:6px; }
+  .jl-bid-views button { min-height:44px; padding:5px 6px; border-radius:10px; line-height:1.2; }
+  .jl-bid-views .jl-n { font-weight:500; opacity:.85; }
+  .jl-bid-search { margin:-4px 0 8px; }
+  /* Where a bid stands (app.js bidStandHtml): My Jobs, the Bids board cards */
+  .bid-at { display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:20px; white-space:nowrap; vertical-align:1px; }
+  .bid-at.working { background:var(--st-info-soft); color:var(--st-info); }
+  .bid-at.inQb { background:var(--st-due-soft); color:var(--st-due-ink); }
+  .bid-at.sent { background:var(--pos-soft); color:#1d6a3d; }
+  .bid-at.sent.by-hand { background:transparent; border:1px dashed currentColor; }
+  .bid-at.won { background:var(--pos-soft); color:#1d6a3d; }
+  html[data-night] .bid-at.sent, html[data-night] .bid-at.won { color:var(--pos); }
+  /* Board cards stay light at night (.bd-card's own colours). */
+  html[data-night] .bd-card .bid-at.sent, html[data-night] .bd-card .bid-at.won { color:#1d6a3d; }
+  @media (max-width: 480px) {
+    .bid-at { white-space:normal; }
+  }
   /* Materials to Order: by supplier, with what it costs (app.js renderOrderList) */
   .order-vendor { display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; margin:12px 0 2px; padding:0 10px; font-size:13px; }
   .order-vendor:first-child { margin-top:0; }

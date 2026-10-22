@@ -1226,9 +1226,11 @@ def _estimate_record(e, customer_id=None):
     """What the job keeps of its QuickBooks estimate. acceptedDate tells an
     estimate accepted and then invoiced (Closed) from one closed unaccepted
     (_accepted); txnDate is the estimate's own date, which the hourly sweep
-    stops asking about after SWEEP_MAX_AGE_DAYS."""
+    stops asking about after SWEEP_MAX_AGE_DAYS. emailedAt is when QuickBooks
+    last emailed it -- from Job Hub or from QuickBooks itself -- and is left
+    out (not cleared) while it has never been, so the app's copy keeps it."""
     env = _env("QB_ENV", "sandbox")
-    return {
+    rec = {
         "id": e.get("Id"), "docNumber": e.get("DocNumber"),
         "customerId": customer_id or (e.get("CustomerRef") or {}).get("value"),
         "total": e.get("TotalAmt"), "status": e.get("TxnStatus") or "Pending",
@@ -1238,6 +1240,23 @@ def _estimate_record(e, customer_id=None):
         "link": "%s/app/estimate?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), e.get("Id")),
         "syncedAt": _now().isoformat(),
     }
+    emailed = _emailed_at(e)
+    if emailed:
+        rec["emailedAt"] = emailed
+    return rec
+
+
+def _emailed_at(e):
+    """When QuickBooks last emailed the estimate (DeliveryInfo -- it keeps
+    only the latest), as the app writes times (2026-10-22T18:22:14.000Z), or
+    None. Its own text carries the company's offset; the app compares some
+    stamps as text, so they must all be in one shape."""
+    if (e or {}).get("EmailStatus") != "EmailSent":
+        return None
+    t = _parse_time(((e.get("DeliveryInfo") or {}).get("DeliveryTime")) or "")
+    if not t:
+        return None
+    return t.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
 
 def _deleted_record(q):
@@ -1756,7 +1775,7 @@ def _too_old(q, now):
     from the later of the estimate's own date and when it was last emailed
     (a re-sent estimate is a live one), else from when it was last looked at
     (records from before txnDate was kept)."""
-    times = [t for t in (_parse_time(q.get(k)) if q.get(k) else None for k in ("txnDate", "sentAt")) if t]
+    times = [t for t in (_parse_time(q.get(k)) if q.get(k) else None for k in ("txnDate", "sentAt", "emailedAt")) if t]
     if not times and q.get("syncedAt"):
         t = _parse_time(q.get("syncedAt"))
         times = [t] if t else []
@@ -1789,25 +1808,17 @@ def sweep(deadline=None):
     return news
 
 
-def _sweep(news, deadline=None):
-    """sweep's work; what changed is added to `news` as it is found."""
-    tokens = _load_tokens()
-    if not tokens or not tokens.get("refreshToken"):
-        return news
-    # Half-finished connections (Connect pressed, never come back) cleared.
-    try:
-        sweep_stale_states()
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks sweep: old connection attempts not cleared:", err)
+def check_estimates(jobs, news):
+    """Every estimate still waiting for an answer asked about in QuickBooks,
+    IN_BATCH to a question: a yes or a no goes onto its job and into `news`
+    (for his phone), and so does one emailed since the last look. The hourly
+    sweep's, and the Bids list's when it is looked at (/qb/estimates-now), so
+    a bid Jonah has just emailed from QuickBooks says Sent there at once.
+    jobs: live_jobs, SWEEP_FIELDS of each; their records are updated in place."""
     env = _env("QB_ENV", "sandbox")
     db = _db()
     now = _now()
-    every = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").select(SWEEP_FIELDS).stream()}
-    # Jobs in Recently deleted are left out of everything -- except the
-    # import's look at which estimates are already a job here (import_accepted
-    # gets them all): a deleted job's estimate must not come back as a new job.
-    jobs = live_jobs(every)
-    pending, unpaid = {}, {}             # QuickBooks id -> [job ids]
+    pending = {}                         # QuickBooks id -> [job ids]
     for job_id, j in jobs.items():
         q = j.get("qbEstimate") or {}
         # A lost bid is still asked about: a customer who said no in the fall
@@ -1816,9 +1827,6 @@ def _sweep(news, deadline=None):
         if q.get("id") and q.get("env") == env and (q.get("status") or "Pending") == "Pending" \
                 and not _too_old(q, now):
             pending.setdefault(str(q["id"]), []).append(job_id)
-        r = j.get("qbInvoiceRef") or {}
-        if r.get("id") and r.get("env") == env and _amount(r.get("balance")) > 0:
-            unpaid.setdefault(str(r["id"]), []).append(job_id)
 
     unasked = set()
     estimates = _by_ids("Estimate", pending, unasked) if pending else {}
@@ -1834,7 +1842,16 @@ def _sweep(news, deadline=None):
                 except Exception as err:                # noqa: BLE001 -- the rest go on
                     print("quickbooks sweep: job %s not told its estimate is deleted: %s" % (job_id, err))
                 continue
-            if not (e and _belongs(e, job_id, j) and (e.get("TxnStatus") or "Pending") != "Pending"):
+            if not (e and _belongs(e, job_id, j)):
+                continue
+            if (e.get("TxnStatus") or "Pending") == "Pending":
+                # No answer yet -- but perhaps emailed since, from QuickBooks
+                # itself (Jonah adds his tags there and sends it there).
+                patch = _emailed_patch(j, e, _stamp())
+                if patch:
+                    db.collection("jobs").document(job_id).set(patch, merge=True)
+                    j["qbEstimate"] = dict(j.get("qbEstimate") or {}, **patch["qbEstimate"])
+                    j.update({k: v for k, v in patch.items() if k != "qbEstimate"})
                 continue
             rec = _estimate_record(e)
             if (j.get("qbEstimate") or {}).get("linked"):
@@ -1867,6 +1884,66 @@ def _sweep(news, deadline=None):
         raise
     except Exception as err:                            # noqa: BLE001
         print("quickbooks sweep: snow bids not put on the Snow route:", err)
+
+    return news
+
+
+# Where a bid sits before it goes out (boards.js BIDS columns). One emailed
+# from QuickBooks moves on to Sent; one Jonah has put anywhere else is left.
+BID_UNSENT = ("", "siteVisit", "toSend")
+
+
+def _emailed_patch(j, e, stamp):
+    """What to write on a job whose estimate (e, still waiting for an answer)
+    QuickBooks has emailed since the job last heard -- or {}.
+
+    Jonah (22 Oct 2026): "after a bid is sent it should be marked as sent".
+    He adds his tags in QuickBooks and emails it from there, and Job Hub only
+    heard of an estimate again once it was answered, so a bid he had sent sat
+    under "Bid to send" for good. Now the record follows QuickBooks, and the
+    first time the estimate is seen emailed a bid still waiting to go out
+    moves to Sent, dated when it went. Only that once: a bid he moves back by
+    hand afterwards (to send it again, changed) stays where he put it."""
+    if (e or {}).get("EmailStatus") != "EmailSent":
+        return {}
+    q = j.get("qbEstimate") or {}
+    at = _emailed_at(e)
+    was_sent = q.get("emailStatus") == "EmailSent"
+    if was_sent and (not at or q.get("emailedAt") == at):
+        return {}
+    rec = {"emailStatus": "EmailSent", "syncedAt": _now().isoformat()}
+    if at:
+        rec["emailedAt"] = at
+    patch = {"qbEstimate": rec, "lastModified": stamp}
+    if not was_sent and stages.status_of(j) == "quoting" and str(j.get("bidStage") or "") in BID_UNSENT:
+        patch.update(bidStage="sent", bidStageAt=at or stamp)
+    return patch
+
+
+def _sweep(news, deadline=None):
+    """sweep's work; what changed is added to `news` as it is found."""
+    tokens = _load_tokens()
+    if not tokens or not tokens.get("refreshToken"):
+        return news
+    # Half-finished connections (Connect pressed, never come back) cleared.
+    try:
+        sweep_stale_states()
+    except Exception as err:                            # noqa: BLE001
+        print("quickbooks sweep: old connection attempts not cleared:", err)
+    env = _env("QB_ENV", "sandbox")
+    db = _db()
+    every = {snap.id: (snap.to_dict() or {}) for snap in db.collection("jobs").select(SWEEP_FIELDS).stream()}
+    # Jobs in Recently deleted are left out of everything -- except the
+    # import's look at which estimates are already a job here (import_accepted
+    # gets them all): a deleted job's estimate must not come back as a new job.
+    jobs = live_jobs(every)
+    check_estimates(jobs, news)
+
+    unpaid = {}                          # QuickBooks id -> [job ids]
+    for job_id, j in jobs.items():
+        r = j.get("qbInvoiceRef") or {}
+        if r.get("id") and r.get("env") == env and _amount(r.get("balance")) > 0:
+            unpaid.setdefault(str(r["id"]), []).append(job_id)
 
     invoices = _by_ids("Invoice", unpaid) if unpaid else {}
     for inv_id, job_ids in unpaid.items():

@@ -4650,10 +4650,19 @@
       // Back to waiting (changed and sent again): the next yes is news.
       patch.acceptedSeenAt = null;
     }
-    const stage = currentJobId === jobId ? boardFields.bidStage : null;
-    if (emailed && (typeof jobStatus === 'undefined' || jobStatus === 'quoting') &&
+    // Emailed -- from here, or from QuickBooks itself, seen for the first
+    // time (Jonah adds his tags in QuickBooks and sends it there): a bid
+    // still waiting to go out moves to Sent, dated when it went. Only that
+    // once, as the server's hourly look does (quickbooks.py _emailed_patch):
+    // a bid put back by hand afterwards stays where it was put. The job's
+    // own place and status -- the form's when it is the one open.
+    const stage = open ? boardFields.bidStage : stored.bidStage;
+    const status = open && typeof jobStatus !== 'undefined' ? jobStatus : stored.jobStatus;
+    const nowEmailed = r.emailStatus === 'EmailSent' && !(before && before.emailStatus === 'EmailSent');
+    if ((emailed || nowEmailed) && (typeof isBidStatus !== 'function' || isBidStatus(status)) &&
         ['won', 'lost', 'sent', 'followUp'].indexOf(stage) === -1) {
-      patch.bidStage = 'sent'; patch.bidStageAt = new Date().toISOString();
+      patch.bidStage = 'sent';
+      patch.bidStageAt = (!emailed && r.emailedAt) || new Date().toISOString();
     }
     if (window.YDSync) window.YDSync.patchJob(jobId, patch);
     if (currentJobId === jobId && r.docNumber && el('estimateNumber').value.trim() !== String(r.docNumber)) {

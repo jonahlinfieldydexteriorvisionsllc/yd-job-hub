@@ -142,6 +142,8 @@
         // Keep what is being typed; just carry the move into it.
         if (patch.jobStatus) { jobStatus = patch.jobStatus; syncStatusSelect(); updateCtxBar(); }
         BOARD_FIELDS.forEach(f => { if (f in patch) boardFields[f] = patch[f]; });
+        // Where the bid stands, on its banner (app.js bidWhere).
+        if (typeof showBidBanner === 'function') showBidBanner();
       } else {
         loadJob(id, true);
       }
@@ -214,6 +216,21 @@
     if (s === l) return false;
     local.workStage = s;
     local.workStageAt = theirs.workStageAt || new Date().toISOString();
+    return true;
+  }
+
+  // A bid QuickBooks has emailed moves to Sent once, on the server
+  // (quickbooks.py _emailed_patch). A copy saved here meanwhile -- or the
+  // form open with typing in it -- would put it back under "Bid to send",
+  // so the move is carried in, like the stage above: only onto a bid still
+  // waiting to go out, and only a move newer than where it was put.
+  const BID_UNSENT = ['', 'siteVisit', 'toSend'];
+  function takeServerSent(local, theirs) {
+    if (theirs.bidStage !== 'sent' || !isBidStatus(local.jobStatus)) return false;
+    if (BID_UNSENT.indexOf(String(local.bidStage || '')) === -1) return false;
+    if (String(theirs.bidStageAt || '') <= String(local.bidStageAt || '')) return false;
+    local.bidStage = 'sent';
+    local.bidStageAt = theirs.bidStageAt;
     return true;
   }
 
@@ -535,7 +552,10 @@
       const s = theirs[f], l = local[f];
       if (s == null || f === 'qbChangesIn') return;
       const ahead = l == null ||
-        (f === 'qbEstimate' && s.id && s.id === l.id && estStep(s.status) > estStep(l.status)) ||
+        (f === 'qbEstimate' && s.id && s.id === l.id && (estStep(s.status) > estStep(l.status) ||
+          // Emailed since (quickbooks.py _emailed_patch), with no answer lost.
+          (estStep(s.status) === estStep(l.status) && s.emailStatus === 'EmailSent' &&
+            (l.emailStatus !== 'EmailSent' || String(s.emailedAt || '') > String(l.emailedAt || ''))))) ||
         // The estimate this copy has was deleted in QuickBooks since
         // (quickbooks.py _deleted_record).
         (f === 'qbEstimate' && !s.id && s.deleted && l.id && String(s.deleted.id) === String(l.id)) ||
@@ -636,17 +656,20 @@
         if (mine && theirs && mine > theirs) {
           const tookFields = takeServerFields(local, c.data || {});
           const tookStage = takeServerStage(local, c.data || {});
+          const tookSent = takeServerSent(local, c.data || {});
           // The QuickBooks side of its payments (app.js mergePayments).
           const pays = typeof mergePayments === 'function' ? mergePayments(local.payments, (c.data || {}).payments) : null;
           if (pays && pays.changed) local.payments = pays.list;
           if (c.id === currentJobId && typeof mergeOpenPayments === 'function') mergeOpenPayments((c.data || {}).payments);
-          if (tookFields || tookStage || (pays && pays.changed)) {
+          if (tookFields || tookStage || tookSent || (pays && pays.changed)) {
             touched = true;
             try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(local)); } catch (e) {}
             map[c.id] = buildIndexEntry(c.id, local);
             if (c.id === currentJobId) {
               SERVER_FIELDS.forEach(f => { if (local[f] != null) boardFields[f] = local[f]; });
               if (tookStage) { boardFields.workStage = local.workStage; boardFields.workStageAt = local.workStageAt; }
+              if (tookSent) { boardFields.bidStage = local.bidStage; boardFields.bidStageAt = local.bidStageAt; }
+              if (typeof showBidBanner === 'function') showBidBanner();
               if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(local.estimate);
               // Its invoice's change orders: the add-ons table and the price.
               if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
@@ -702,6 +725,10 @@
             if (takeServerStage(form, c.data || {})) {
               boardFields.workStage = form.workStage; boardFields.workStageAt = form.workStageAt;
             }
+            // And a bid QuickBooks emailed, moved to Sent.
+            const bid = { bidStage: boardFields.bidStage, bidStageAt: boardFields.bidStageAt, jobStatus: jobStatus };
+            if (takeServerSent(bid, c.data || {})) { boardFields.bidStage = bid.bidStage; boardFields.bidStageAt = bid.bidStageAt; }
+            if (typeof showBidBanner === 'function') showBidBanner();
           }
         }
       });

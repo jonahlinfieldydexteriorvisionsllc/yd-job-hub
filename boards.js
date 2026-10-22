@@ -419,6 +419,10 @@
     if (!current || !boardById(current)) current = rememberedBoard(list);
     const board = boardById(current);
     refreshComputer();
+    // The Bids board looked at: QuickBooks asked now whether any bid has
+    // been emailed or answered (app.js bidsFromQbNow -- a few minutes apart).
+    const shown = el('panel-boards');
+    if (board.id === 'bids' && shown && shown.classList.contains('active') && typeof bidsFromQbNow === 'function') bidsFromQbNow();
 
     wrap.innerHTML =
       computerLine() +
@@ -1051,6 +1055,16 @@
           (movesJobs() ? ' <button type="button" class="bd-card-act strong" draggable="false" onclick="' + stop +
             'bdMoveJob(\'' + safeId(j._id) + '\', \'jobs\', \'toInvoice\')">Mark it finished</button>' : '') + '</div>' : '');
   }
+  // Where a bid stands (app.js bidWhere), in the words My Jobs -> Bids and
+  // the Job tab use: put in QuickBooks but not emailed yet, or when it was
+  // sent. Not on a plain card still being worked on -- its column says so --
+  // nor on Won/Lost ones.
+  function bidStandLine(j, col) {
+    if (typeof bidWhere !== 'function' || col === 'won' || col === 'lost') return '';
+    const w = bidWhere(j);
+    if (!w || (w.id !== 'inQb' && w.id !== 'sent')) return '';
+    return '<div class="bd-card-line">' + bidStandHtml(w) + '</div>';
+  }
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     const days = daysSince(since);
@@ -1087,6 +1101,7 @@
       (window.YDPlants && YDPlants.owed(j) ? '<div class="bd-card-line bd-care">🌱 Care email owed</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
       (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
+      (board.id === 'bids' ? bidStandLine(j, col) : '') +
       (board.id === 'bids' && acceptedToBook(j)
         ? '<div class="bd-card-line bd-draft">✅ Accepted in QuickBooks — book it</div>' : '') +
       (board.id === 'bids' && turnedDown(j)

@@ -137,6 +137,116 @@ function stagePill(stageId) {
   return '<span class="pill ' + esc(cls) + '">' + esc(STAGE_NAMES[stageId] || STAGE_NAMES.bid) + '</span>';
 }
 
+// ═══════════════════════════════════════════════════════════
+// WHERE A BID STANDS
+// ═══════════════════════════════════════════════════════════
+// Jonah, 22 Oct 2026: "after a bid is sent it should be marked as sent when
+// im going into the bids area and looking at bids im actively working on."
+// One answer, asked by My Jobs -> Bids, the Bids board's cards and the Job
+// tab's bid banner, so they never say it in different words:
+//
+//   working  Being worked on -- not in QuickBooks yet (Site visit, Bid to send)
+//   inQb     In QuickBooks, not sent yet -- he adds his tags there and emails
+//            it from there; put in QuickBooks is NOT sent
+//   sent     Sent (or Follow up) -- dated when QuickBooks emailed it
+//   won      Said yes (a snow bid now on the Snow route)
+//   lost     Lost
+//
+// It reads where the bid sits on the Bids board (bidStage) -- moved by hand,
+// or to Sent by itself the first time QuickBooks is seen to have emailed it
+// (quickbooks.py _emailed_patch, estimate.js afterQb) -- and the QuickBooks
+// estimate itself. An estimate from the QuickBooks test company is not a
+// real one (boards.js qbEstimateOf reads it the same way).
+const BID_STANDS = {
+  working: { name: 'Being worked on', icon: '✏️' },
+  inQb: { name: 'In QuickBooks — not sent yet', icon: '🧾' },
+  sent: { name: 'Sent', icon: '✉️' },
+  won: { name: 'Said yes', icon: '✅' },
+  lost: { name: 'Lost', icon: '' },
+};
+function bidQbEstimate(d) {
+  const q = d && d.qbEstimate;
+  return q && q.id && q.env !== 'sandbox' ? q : null;
+}
+// When QuickBooks last emailed it (from QuickBooks itself: emailedAt; from
+// Job Hub's Send: sentAt), or ''.
+function bidEmailedAt(q) {
+  if (!q || (q.emailStatus !== 'EmailSent' && !q.sentAt)) return '';
+  const times = [q.emailedAt, q.sentAt].filter(t => t && !isNaN(new Date(t)));
+  return times.sort((a, b) => new Date(b) - new Date(a))[0] || '';
+}
+// { id (a BID_STANDS key), num (its estimate number), at (sent: when),
+//   emailed (QuickBooks emailed it), followUp, q } -- or null for a job
+// that is not a bid.
+function bidWhere(d) {
+  d = d || {};
+  if (!isBidStatus(d.jobStatus)) return null;
+  const stage = String(d.bidStage || '');
+  const q = bidQbEstimate(d);
+  const num = String((q && q.docNumber) || d.estimateNumber || '').trim();
+  const emailedAt = bidEmailedAt(q);
+  const one = (id, more) => Object.assign({ id: id, num: num, q: q, emailed: !!emailedAt, at: '', followUp: false }, more || {});
+  if (stage === 'lost') return one('lost');
+  if (stage === 'won') return one('won');
+  if (stage === 'sent' || stage === 'followUp') {
+    // Moved to Follow up later: bidStageAt is that move, not the send.
+    return one('sent', { followUp: stage === 'followUp', at: emailedAt || (stage === 'sent' ? String(d.bidStageAt || '') : '') });
+  }
+  if (q && !emailedAt) return one('inQb');
+  // Emailed once, then put back by hand (to change it and send it again).
+  return one('working', { at: emailedAt });
+}
+function bidDay(t) {
+  const d = t ? new Date(t) : null;
+  return d && !isNaN(d) ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+}
+// The words for it, short: "✉️ Sent Oct 22", "🧾 In QuickBooks #1234 — not
+// sent yet". title: the longer say, for hovering.
+function bidStandWords(w) {
+  if (!w) return { text: '', title: '' };
+  const num = w.num ? ' #' + w.num : '';
+  if (w.id === 'sent') {
+    const day = bidDay(w.at);
+    // On the board as sent, but QuickBooks has not emailed its estimate:
+    // moved by hand (handed over, or sent some other way).
+    const byHand = w.q && !w.emailed;
+    return { text: '✉️ ' + (byHand ? 'Marked sent' : 'Sent') + (day ? ' ' + day : '') + (w.followUp ? ' · follow up' : ''),
+      title: byHand ? 'Moved to Sent by hand — QuickBooks has not emailed estimate' + num
+        : w.emailed ? 'QuickBooks emailed estimate' + num + (day ? ' on ' + day : '') : 'Sent' + (day ? ' ' + day : '') };
+  }
+  if (w.id === 'inQb') return { text: '🧾 In QuickBooks' + num + ' — not sent yet',
+    title: 'In QuickBooks, not emailed yet — once it is emailed from QuickBooks it moves to Sent by itself' };
+  if (w.id === 'working') return { text: '✏️ Being worked on',
+    title: w.at ? 'QuickBooks emailed estimate' + num + ' on ' + bidDay(w.at) + ', and it was put back to work on' : 'Not in QuickBooks yet' };
+  const s = BID_STANDS[w.id];
+  return { text: s ? (s.icon ? s.icon + ' ' : '') + s.name : '', title: '' };
+}
+function bidStandHtml(w) {
+  const s = bidStandWords(w);
+  if (!s.text) return '';
+  return '<span class="bid-at ' + esc(w.id) + (w.id === 'sent' && w.q && !w.emailed ? ' by-hand' : '') + '"' +
+    (s.title ? ' title="' + esc(s.title) + '"' : '') + '>' + esc(s.text) + '</span>';
+}
+// Jonah emails a bid from QuickBooks itself, after adding his tags there,
+// and the hourly look (quickbooks.py sweep) was the only way Job Hub heard
+// of it -- so a bid he had just sent still said "not sent yet". Looking at
+// the bids asks QuickBooks now (/qb/estimates-now): at most every few
+// minutes, only while some bid has an estimate out, and only for whoever
+// may use QuickBooks. What it changes comes back like any change (sync.js).
+const BIDS_QB_EVERY_MS = 5 * 60000;
+let bidsQbAskedAt = 0;
+function bidsFromQbNow() {
+  if (Date.now() - bidsQbAskedAt < BIDS_QB_EVERY_MS || navigator.onLine === false) return;
+  if (!window.YDClaude || !window.YDClaude.post || !(typeof ydCan === 'function' && ydCan('billing', 'change'))) return;
+  const out = loadAllJobs().some(d => {
+    const w = !d.deletedAt && bidWhere(d);
+    return w && w.q && (w.q.status || 'Pending') === 'Pending';
+  });
+  if (!out) return;
+  bidsQbAskedAt = Date.now();
+  window.YDClaude.post('/qb/estimates-now', {}).catch(e => console.warn('[bids] QuickBooks not asked:', e && e.message));
+}
+
 // What the customer is billed, and the tax on it -- for Balance Due on
 // Tracking and the cost summary. The job's own "Taxable — WI 5.5%" box is
 // retired (it added 5.5% to the whole job and disagreed with the estimate's
@@ -1045,6 +1155,25 @@ function onStatusChange() {
   if (window.YDMarkOut) window.YDMarkOut.refresh();
 }
 function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; showBidBanner(); }
+// The Job tab's bid banner: where the bid stands (bidWhere), in the words
+// My Jobs -> Bids and the Bids board use.
+function bidBannerHtml(w) {
+  const where = 'It is on the Bids board, not in your job list, until you book it.';
+  if (!w) return '<b>This is a bid.</b> ' + where;
+  const num = w.num ? ' #' + esc(w.num) : '';
+  const day = esc(bidDay(w.at));
+  if (w.id === 'sent') {
+    const col = w.followUp ? 'Follow up' : 'Sent — waiting';
+    if (w.q && !w.emailed) return '<b>This bid is marked sent' + (day ? ' (' + day + ')' : '') + '</b> — but QuickBooks has not emailed estimate' + num +
+      '. It is on the Bids board under “' + col + '”.';
+    return '<b>This bid was sent' + (day ? ' ' + day : '') + '</b>' + (w.emailed ? ' — QuickBooks emailed estimate' + num : '') +
+      '. It is on the Bids board under “' + col + '” until they answer.';
+  }
+  if (w.id === 'inQb') return '<b>This bid is in QuickBooks as estimate' + num + ' — not sent yet.</b> ' +
+    'Once it is emailed from QuickBooks it moves to Sent by itself.';
+  if (w.id === 'won') return '<b>This bid was said yes to.</b> ' + where;
+  return '<b>This bid is being worked on.</b> ' + (w.at ? 'QuickBooks emailed estimate' + num + ' on ' + day + ' — send it again once it is changed. ' : '') + where;
+}
 function showBidBanner() {
   const b = document.getElementById('bidBanner');
   if (b) b.hidden = !isBidStatus(jobStatus);
@@ -1056,7 +1185,7 @@ function showBidBanner() {
   const edits = !jobsReadOnly();
   if (t) t.innerHTML = lost ? '<b>This bid was lost' + (why ? ' — ' + esc(why) : '') + '.</b> It is off the Bids board and the customer is on Contacts for next season.' +
       (edits ? ' <button type="button" class="link-btn" onclick="changeLostReason()">' + (why ? 'Change why' : 'Say why') + '</button>' : '')
-    : '<b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.';
+    : bidBannerHtml(bidWhere(Object.assign({}, boardFields, { jobStatus: jobStatus, estimateNumber: (document.getElementById('estimateNumber') || {}).value })));
   if (r) r.hidden = !lost;
   const l = document.getElementById('bidLostBtn');
   if (l) l.hidden = lost || !edits;
@@ -4036,6 +4165,35 @@ function populateServiceFilter() {
 }
 let jobListBids = false;
 function showJobListBids(on) { jobListBids = !!on; renderJobList(); }
+// My Jobs -> Bids, by where each bid stands (bidWhere): the ones still being
+// worked on first, and a switch to see the sent ones, the lost ones, or all
+// of them -- remembered on this device. Each view lists its sections in
+// BID_SECTIONS' order. A search looks through every bid, whatever the view.
+const BID_VIEWS = [
+  { id: 'working', name: 'Working on', stands: ['working', 'inQb'] },
+  { id: 'sent', name: 'Sent', stands: ['sent'] },
+  { id: 'lost', name: 'Lost', stands: ['lost'] },
+  { id: 'all', name: 'All', stands: null },
+];
+const BID_SECTIONS = [
+  { id: 'working', name: 'Being worked on' },
+  { id: 'inQb', name: 'In QuickBooks — not sent yet' },
+  { id: 'sent', name: 'Sent — waiting for an answer' },
+  { id: 'won', name: 'Said yes' },
+  { id: 'lost', name: 'Lost' },
+];
+const BID_VIEW_KEY = STORAGE_PREFIX + 'bidView';
+let bidView = null;
+function bidViewNow() {
+  if (!bidView) { try { bidView = localStorage.getItem(BID_VIEW_KEY) || ''; } catch (e) { bidView = ''; } }
+  return BID_VIEWS.some(v => v.id === bidView) ? bidView : BID_VIEWS[0].id;
+}
+function showBidView(id) {
+  bidView = id;
+  try { localStorage.setItem(BID_VIEW_KEY, id); } catch (e) {}
+  renderJobList();
+}
+const bidInView = (view, w) => !view.stands || view.stands.indexOf(w.id) !== -1;
 // The day a job is filed under in My Jobs: its own date; a job with none
 // (very old ones) keeps the day this device first listed it, remembered
 // here, so it does not drift with every save as lastModified does.
@@ -4098,7 +4256,13 @@ function renderJobList() {
     '<button class="' + (jobListBids ? 'on' : '') + '" onclick="showJobListBids(true)">Bids (' + bidCount + ')</button></div>';
   if (fSvc) idx = idx.filter(j => (j.services || '').includes(fSvc));
   if (fSearch) idx = idx.filter(j => (j.name + ' ' + (j.city || '') + ' ' + (j.services || '') + ' ' + (j.est || '')).toLowerCase().includes(fSearch));
-  if (!idx.length) { body.innerHTML = removeBoxHtml() + switcher + '<p class="empty-msg">' + (jobListBids ? 'No bids.' : 'No jobs found.') + '</p>' + deletedBoxHtml(); return; }
+  // The whole job, which the index does not carry: 🌱 on a job with plants
+  // and the care email it still owes (plantcare.js), how far the crew have
+  // ticked off its work (workdone.js), and where a bid stands (bidWhere).
+  const full = {};
+  loadAllJobs().forEach(d => { full[d._id] = d; });
+  if (jobListBids) { renderBidList(body, idx, full, switcher, !!(fSearch || fSvc)); return; }
+  if (!idx.length) { body.innerHTML = removeBoxHtml() + switcher + '<p class="empty-msg">No jobs found.</p>' + deletedBoxHtml(); return; }
 
   // Filed by the job's own date, newest first within a month -- not by
   // lastModified, which the server moves on every QuickBooks check.
@@ -4110,51 +4274,76 @@ function renderJobList() {
       (groups[key] = groups[key] || []).push(j);
     });
   const keys = Object.keys(groups).sort((a, b) => { const [ma, ya] = a.split(' '), [mb, yb] = b.split(' '); return yb - ya || MONTHS.indexOf(mb) - MONTHS.indexOf(ma); });
-  // 🌱 on a job with plants, and the care email it still owes (plantcare.js)
-  // -- from the whole job, which the index does not carry.
-  const full = {};
-  if (window.YDPlants || window.YDWorkDone) loadAllJobs().forEach(d => { full[d._id] = d; });
-  const plantBits = j => full[j.id] && window.YDPlants ? window.YDPlants.badge(full[j.id]) + window.YDPlants.owedChip(full[j.id]) : '';
-  // How far the crew have ticked off its work (workdone.js).
-  const workBits = j => {
-    const p = full[j.id] && window.YDWorkDone ? YDWorkDone.ofJob(full[j.id]) : null;
-    return p ? YDWorkDone.barHtml(p, 'wd-row') : '';
-  };
-  // Why a lost bid was lost, from the bid itself (the index does not carry
-  // it); tapped, it can be changed -- or given, on one lost before reasons
-  // were asked.
-  const lostBits = j => {
-    if (!j.lost) return '';
-    let d = null;
-    try { d = JSON.parse(readJobBlob(j.id) || 'null'); } catch (e) {}
-    const why = lostWhy(d);
-    if (jobsReadOnly()) return why ? ' ' + lostChipHtml(d) : '';
-    return ' <button type="button" class="lost-why' + (why ? '' : ' none') + '" title="Change why it was lost" ' +
-      'onclick="event.stopPropagation(); changeLostReason(\'' + ordId(j.id) + '\')">' + esc(why || 'Say why') + ' ✎</button>';
-  };
-  body.innerHTML = removeBoxHtml() + switcher + keys.map(key => {
-    const shut = collapsedMonths[key];
-    const rows = groups[key].map(j =>
-      '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + ordId(j.id) + '\')">' +
-        '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' +
-          (j.lost ? '<span class="pill lost">Lost</span>' + lostBits(j) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status))) + plantBits(j) + '</div>' +
-        '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
-          // A bid with no price yet said "$0.00", which read as a free job.
-          (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div>' +
-        workBits(j) + '</div>' +
-      '<div class="jl-acts">' +
-      (jobListBids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +
-      (jobListBids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + ordId(j.id) + '\')">MAKE IT A JOB</button>' : '') +
-      (jobListBids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + ordId(j.id) + '\')">MARK LOST</button>' : '') +
-      (!jobListBids && j.stage === 'booked' && !jobsReadOnly() ? '<button class="dup-btn" onclick="backToBid(\'' + ordId(j.id) + '\')" title="Put it back on the Bids board">BACK TO A BID</button>' : '') +
-      // "DUP" meant nothing to anyone; and Delete sat right against it.
-      '<button class="dup-btn" onclick="duplicateJob(\'' + ordId(j.id) + '\')" title="Make a copy of this ' + (jobListBids ? 'bid' : 'job') + '">COPY</button>' +
-      '<button class="remove-btn jl-del" onclick="deleteJob(\'' + ordId(j.id) + '\')" title="Move this ' + (jobListBids ? 'bid' : 'job') + ' to Recently deleted' +
-        '" aria-label="Delete ' + esc(j.name || 'this job') + '">🗑 Delete</button></div></div>'
-    ).join('');
-    return '<div class="month-group"><div class="month-head" onclick="toggleMonth(\'' + key + '\')">' +
-      '<span class="month-arrow' + (shut ? ' shut' : '') + '">▼</span> ' + key + ' (' + groups[key].length + ')</div>' + (shut ? '' : rows) + '</div>';
+  body.innerHTML = removeBoxHtml() + switcher + keys.map(key =>
+    jobListGroupHtml(key, key + ' (' + groups[key].length + ')', groups[key].map(j => jobRowHtml(j, full[j.id], false)).join(''))
+  ).join('') + deletedBoxHtml();
+}
+// A folding group of rows: a month of jobs, or one kind of bid.
+function jobListGroupHtml(key, head, rows) {
+  const shut = collapsedMonths[key];
+  return '<div class="month-group"><div class="month-head" onclick="toggleMonth(\'' + key + '\')">' +
+    '<span class="month-arrow' + (shut ? ' shut' : '') + '">▼</span> ' + esc(head) + '</div>' + (shut ? '' : rows) + '</div>';
+}
+// My Jobs -> Bids: the view switch (BID_VIEWS), then a section for each
+// kind of bid (BID_SECTIONS), newest first -- the sent ones by when they
+// went. filtered: a search or a service picked, which looks through every
+// bid whatever the view.
+function renderBidList(body, idx, full, switcher, filtered) {
+  const view = BID_VIEWS.find(v => v.id === bidViewNow());
+  const rows = idx.map(j => ({ j, w: bidWhere(full[j.id] || { jobStatus: j.status, bidStage: j.lost ? 'lost' : '' }) || { id: 'working' } }));
+  const views = '<div class="jl-switch jl-bid-views" role="group" aria-label="Which bids">' + BID_VIEWS.map(v =>
+    '<button type="button" class="' + (v.id === view.id && !filtered ? 'on' : '') + '" onclick="showBidView(\'' + v.id + '\')">' +
+      esc(v.name) + ' <span class="jl-n">(' + rows.filter(r => bidInView(v, r.w)).length + ')</span></button>').join('') + '</div>';
+  const shown = filtered ? rows : rows.filter(r => bidInView(view, r.w));
+  const head = removeBoxHtml() + switcher + views +
+    (filtered ? '<p class="hint jl-bid-search">Every bid that matches, whichever is picked above.</p>' : '');
+  bidsFromQbNow();
+  if (!shown.length) {
+    body.innerHTML = head + '<p class="empty-msg">' + (filtered || !idx.length ? 'No bids.' :
+      view.id === 'working' ? 'Nothing being worked on — every bid has gone out.' : 'No bids here.') + '</p>' + deletedBoxHtml();
+    return;
+  }
+  const when = r => r.w.id === 'sent' && r.w.at ? localYMD(new Date(r.w.at)) : jobListDay(r.j);
+  body.innerHTML = head + BID_SECTIONS.map(sec => {
+    const list = shown.filter(r => r.w.id === sec.id)
+      .sort((a, b) => when(b).localeCompare(when(a)) || String(a.j.name || '').localeCompare(String(b.j.name || '')));
+    if (!list.length) return '';
+    return jobListGroupHtml('bids-' + sec.id, sec.name + ' (' + list.length + ')', list.map(r => jobRowHtml(r.j, full[r.j.id], true, r.w)).join(''));
   }).join('') + deletedBoxHtml();
+}
+// One row of My Jobs: a job, or a bid (bids) with where it stands (w).
+function jobRowHtml(j, d, bids, w) {
+  const plants = d && window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '';
+  // How far the crew have ticked off its work (workdone.js).
+  const p = d && window.YDWorkDone ? YDWorkDone.ofJob(d) : null;
+  const work = p ? YDWorkDone.barHtml(p, 'wd-row') : '';
+  const pill = j.lost ? '<span class="pill lost">Lost</span>' + lostBitsHtml(j, d)
+    : bids && w ? bidStandHtml(w) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status));
+  return '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + ordId(j.id) + '\')">' +
+      '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' + pill + plants + '</div>' +
+      '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
+        // A bid with no price yet said "$0.00", which read as a free job.
+        (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div>' +
+      work + '</div>' +
+    '<div class="jl-acts">' +
+    (bids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +
+    (bids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + ordId(j.id) + '\')">MAKE IT A JOB</button>' : '') +
+    (bids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + ordId(j.id) + '\')">MARK LOST</button>' : '') +
+    (!bids && j.stage === 'booked' && !jobsReadOnly() ? '<button class="dup-btn" onclick="backToBid(\'' + ordId(j.id) + '\')" title="Put it back on the Bids board">BACK TO A BID</button>' : '') +
+    // "DUP" meant nothing to anyone; and Delete sat right against it.
+    '<button class="dup-btn" onclick="duplicateJob(\'' + ordId(j.id) + '\')" title="Make a copy of this ' + (bids ? 'bid' : 'job') + '">COPY</button>' +
+    '<button class="remove-btn jl-del" onclick="deleteJob(\'' + ordId(j.id) + '\')" title="Move this ' + (bids ? 'bid' : 'job') + ' to Recently deleted' +
+      '" aria-label="Delete ' + esc(j.name || 'this job') + '">🗑 Delete</button></div></div>';
+}
+// Why a lost bid was lost, from the bid itself (the index does not carry
+// it); tapped, it can be changed -- or given, on one lost before reasons
+// were asked.
+function lostBitsHtml(j, d) {
+  if (!j.lost) return '';
+  const why = lostWhy(d || null);
+  if (jobsReadOnly()) return why ? ' ' + lostChipHtml(d) : '';
+  return ' <button type="button" class="lost-why' + (why ? '' : ' none') + '" title="Change why it was lost" ' +
+    'onclick="event.stopPropagation(); changeLostReason(\'' + ordId(j.id) + '\')">' + esc(why || 'Say why') + ' ✎</button>';
 }
 // Recently deleted, at the foot of My Jobs (deleteJob): newest first, with
 // how long each has before it goes for good. Restore for whoever may change

@@ -284,7 +284,8 @@ def _quickbooks(request, path, headers):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
                        "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
-                       "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now", "/qb/change-order")
+                       "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now", "/qb/change-order",
+                       "/qb/estimates-now")
     # A customer's contact details, from the Customers tab: whoever may change Contacts.
     contacts = path in ("/qb/customer-save", "/qb/customers-now")
     try:
@@ -351,6 +352,15 @@ def _quickbooks(request, path, headers):
                 qb.keep_qb_words(jobs)
             _tell_owner(news)
             result = {"ok": True, "filled": filled}
+        elif path == "/qb/estimates-now":
+            # The Bids list looked at (app.js bidsFromQbNow): every estimate
+            # still out asked about now, not at the next hourly look -- so a
+            # bid just emailed from QuickBooks says Sent, and a yes is told.
+            jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
+            with qb._holding_tokens():
+                news = qb.check_estimates(jobs, [])
+            _tell_owner(news)
+            result = {"ok": True, "news": len(news)}
         elif path == "/qb/customer-save":
             # A customer's details changed in Job Hub (customers.js): into
             # QuickBooks now. {id, fields, was, force}
