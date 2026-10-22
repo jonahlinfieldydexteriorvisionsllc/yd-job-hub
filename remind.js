@@ -50,14 +50,17 @@
   const TYPES = [
     { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true },
     { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#7a4fd1', appointment: true },
-    // Jonah (22 Oct 2026): "add a phone call tag for calendar items". A call
-    // usually has its time, and buzzes before it as an appointment does --
-    // but it is a call to MAKE ("Call in ... material orders", "Call <a
+    // Jonah (22 Oct 2026): "add a phone call tag for calendar items" -- and
+    // "calls dont always have set times tho they can be something to do at
+    // any time during a day or can be scheduled". So no usual time either
+    // way (`timed` null): one at a set time buzzes before it as an
+    // appointment does; one for any time that day is in the 7 am list. Either
+    // way it is a call to MAKE ("Call in ... material orders", "Call <a
     // customer>"): ticked off when made, carried to the next days when not,
     // as those entries were as to-dos before the tag existed. Orchid: as far
     // from every other tag's colour and the urgency colours as there was
     // room for; white writing reads on it.
-    { id: 'phone', icon: '📞', name: 'Phone call', timed: true, color: '#c026d3' },
+    { id: 'phone', icon: '📞', name: 'Phone call', timed: null, color: '#c026d3' },
     // Jonah (22 Oct 2026): "make material pickup tag option for the
     // calendar". It was always a material pickup in his words ("a quote
     // appointment or a material pickup", 12 Oct; a store's "ready for
