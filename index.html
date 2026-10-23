@@ -205,6 +205,8 @@
     <!-- A bid is not a job until it is booked (app.js isBidStatus). -->
     <div class="bid-banner" id="bidBanner" hidden>
       <span id="bidBannerText"><b>This is a bid.</b> It is on the Bids board, not in your job list, until you book it.</span>
+      <!-- The other bids being worked on, a tap each (app.js openBidSwitch). -->
+      <button class="btn btn-sm" id="bidSwitchBtn" onclick="openBidSwitch()" hidden>📋 Other bids</button>
       <button class="btn btn-sm" id="bidReopenBtn" onclick="reopenBid()" hidden>Back on the Bids board</button>
       <button class="btn btn-sm" id="bidLostBtn" onclick="markBidLost()" hidden>Mark lost</button>
       <button class="btn btn-sm btn-filled" onclick="makeItAJob()">Make it a job</button>

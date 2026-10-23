@@ -4540,6 +4540,15 @@
     background:var(--surface-2); color:var(--text); font:inherit; font-size:14px; font-weight:600; line-height:1.2; cursor:pointer; }
   .lost-opt:hover { border-color:var(--brand); }
   .lost-opt.on { border-color:var(--brand); background:var(--brand); color:#fff; }
+  /* "Other bids" (app.js openBidSwitch): one big button a bid, the one open
+     now marked and not a button. */
+  .bsw-list { display:flex; flex-direction:column; gap:8px; }
+  .bsw-item { display:flex; flex-direction:column; align-items:flex-start; gap:2px; width:100%; min-height:52px; text-align:left;
+    padding:9px 12px; border-radius:10px; border:1.5px solid var(--border-strong); background:var(--surface); color:var(--text);
+    font:inherit; font-size:15px; cursor:pointer; }
+  .bsw-item:hover { border-color:var(--brand); }
+  .bsw-item small { font-size:12.5px; color:var(--muted); }
+  .bsw-item.on { cursor:default; border-color:var(--brand); background:color-mix(in srgb, var(--brand) 10%, var(--surface)); }
   .lost-other { display:flex; gap:8px; margin-top:10px; }
   .lost-other[hidden] { display:none; }
   .lost-other input { flex:1; min-width:0; }

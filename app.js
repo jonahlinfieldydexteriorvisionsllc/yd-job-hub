@@ -1194,9 +1194,75 @@ function showBidBanner() {
   if (r) r.hidden = !lost;
   const l = document.getElementById('bidLostBtn');
   if (l) l.hidden = lost || !edits;
+  const s = document.getElementById('bidSwitchBtn');
+  if (s) {
+    const others = isBidStatus(jobStatus) ? activeBids().filter(d => d._id !== currentJobId).length : 0;
+    s.hidden = !others;
+    s.textContent = '📋 Other bids (' + others + ')';
+  }
   // Called whenever a job loads or its status changes: the invoice boxes
   // follow whether it is a bid.
   showJobQbFields(true);
+}
+
+// Jonah (21 Oct 2026): "when building a bid there should be a bids button so
+// i can quickly switch between bids actively being worked on". The bids not
+// sent yet -- ✏️ being worked on, 🧾 in QuickBooks not sent -- the one
+// changed last first; "📋 Other bids" on the bid banner opens them, a tap
+// each, opened the way a tap on Home opens a job (unsaved changes asked
+// about first). Sent ones are waiting on the customer, not being worked on:
+// they stay on the Bids board.
+function activeBids() {
+  return loadAllJobs().filter(d => {
+    if (!d || !d._id || d.deletedAt || d.removeWhy) return false;
+    const w = bidWhere(d);
+    return !!w && (w.id === 'working' || w.id === 'inQb');
+  }).sort((a, b) => String(b.lastModified || '').localeCompare(String(a.lastModified || '')));
+}
+// "changed today", "changed yesterday", "changed 4 days ago" -- by the day.
+function bidChangedWords(iso) {
+  const t = iso ? new Date(iso) : null;
+  if (!t || isNaN(t)) return '';
+  const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const n = Math.max(0, Math.round((day(new Date()) - day(t)) / 864e5));
+  return 'changed ' + (n === 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago');
+}
+function openBidSwitch() {
+  let m = document.getElementById('bidSwitchModal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modal-overlay';
+    m.id = 'bidSwitchModal';
+    m.onclick = e => { if (e.target === m) closeBidSwitch(); };
+    document.body.appendChild(m);
+  }
+  const list = activeBids();
+  const idOf = id => String(id).replace(/[^A-Za-z0-9_-]/g, '');
+  m.innerHTML = '<div class="modal bsw-modal" style="max-width:520px"><div class="modal-head"><h2>Bids being worked on</h2>' +
+      '<button class="modal-close" onclick="closeBidSwitch()" aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body">' +
+      (list.length ? '<div class="bsw-list">' + list.map(d => {
+        const on = d._id === currentJobId;
+        const where = [d.address, d.city].map(x => String(x || '').trim()).filter(Boolean).join(', ');
+        const small = [bidStandWords(bidWhere(d)).text, where, on ? 'open now' : bidChangedWords(d.lastModified)].filter(Boolean).join(' · ');
+        return '<button type="button" class="bsw-item' + (on ? ' on' : '') + '"' +
+          (on ? ' disabled' : ' onclick="switchToBid(\'' + idOf(d._id) + '\')"') + '>' +
+          '<b>' + esc(jobLabel(String(d.customerName || '').trim() || 'Untitled bid', jobWhat(d))) + '</b>' +
+          (small ? '<small>' + esc(small) + '</small>' : '') + '</button>';
+      }).join('') + '</div>' : '<p class="muted">No bids are being worked on right now.</p>') +
+      '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="closeBidSwitch()">Close</button></div>' +
+    '</div></div>';
+  m.classList.add('active');
+}
+function closeBidSwitch() {
+  const m = document.getElementById('bidSwitchModal');
+  if (m) m.classList.remove('active');
+}
+async function switchToBid(id) {
+  closeBidSwitch();
+  if (id === currentJobId) return;
+  if (!(await ydLeaveUnsavedJob())) return;
+  loadJob(id);
 }
 
 // The job's QuickBooks invoice (made from its estimate, quickbooks.py), or
