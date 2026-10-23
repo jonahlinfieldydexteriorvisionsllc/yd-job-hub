@@ -55,7 +55,7 @@
                     'Mulching', 'Snow removal'];
   const DUE_SOON_DAYS = 5;
 
-  const EMPTY = () => ({ subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {}, rcFix: {}, invFix: {} });
+  const EMPTY = () => ({ subs: {}, paid: {}, filed: {}, visitFix: {}, handVisits: {}, svcProp: {}, rcFix: {}, invFix: {}, billTodos: {}, billTodosFrom: '' });
   let data = EMPTY();
   let visitsDoc = { visits: {}, payments: {}, scannedAt: '' };   // settings/subVisits (functions/subvisits.py)
   // settings/subClients (functions/subclients.py): each property's client in
@@ -366,6 +366,102 @@
         .catch(e => console.warn('[subs] who filed it not saved:', (e && e.code) || e));
     });
     if (Object.keys(now).length) { applyLocal({ filed: now }); save({ filed: now }, 'noting filed bills'); }
+  }
+
+  // ------------------------------------------- a to-do to bill the client
+  //
+  // Jonah (21 Oct 2026): "whenever [his mowing] subcontractor payment
+  // receipt comes in for mowing make to do item to bill the client it was
+  // for." Each new bill of a subcontractor's -- their invoice email for a
+  // visit, a bill in Receipts, or a payment to them with no bill -- once it
+  // is put with a client (its address, the client's name, his pick, their
+  // price: computeBills) puts one card on My to-dos (boards/todo), due today:
+  // "💵 Bill <client>". A client charged by the month gets one card a month,
+  // not one a visit. Made once: billTodos {key: {card, at}} remembers it, so
+  // a card he finished or deleted never comes back. Only bills from when this
+  // was first switched on (billTodosFrom, written the first time) -- the
+  // season's earlier ones were billed already. A bill no client could be told
+  // from waits in "Bills to match"; its card is made once he picks the client.
+  // Plain code, on the owner's device (the one place the matching lives).
+  const BILL_LATE_DAYS = 7;       // their email can come a few days after the visit
+  const BILL_TODOS_MAX = 20;      // cards made at one go
+  let todoBusy = false;
+  async function billTodos() {
+    if (todoBusy || !owner() || !fresh || !window.YDReceipts || !YDReceipts.loaded || !YDReceipts.loaded() || !window.YDDb) return;
+    if (!data.billTodosFrom) {
+      const from = { billTodosFrom: new Date().toISOString() };
+      applyLocal(from); save(from, 'starting bill to-dos');
+      return;
+    }
+    const start = Date.parse(data.billTodosFrom);
+    if (isNaN(start)) return;
+    // A bill dated from then on -- or a visit dated a little before whose
+    // email only came after (Jobber can send it days later).
+    const startDay = ymd(new Date(start)), lateDay = ymd(new Date(start - BILL_LATE_DAYS * 864e5));
+    const isNew = b => b.date >= startDay || (b.date >= lateDay && b.visitKey &&
+      Date.parse(((visitsDoc.visits || {})[b.visitKey] || {}).foundAt || '') >= start);
+    const made = data.billTodos || {}, want = [], keys = {};
+    subsList().forEach(s => {
+      billsFor(s).bills.forEach(b => {
+        if (b.hand || !b.counts || !b.prop || !isDay(b.date) || !isNew(b)) return;
+        const p = (s.props || {})[b.prop];
+        if (!p) return;
+        const monthly = p.ourPer === 'month';
+        const key = (sid(s.id) + '_' + (monthly ? 'm' + sid(b.prop) + '_' + b.date.slice(0, 7) : sid(b.key))).slice(0, 120);
+        if (made[key] || keys[key]) return;
+        keys[key] = true;
+        want.push({ key: key, s: s, b: b, p: p, monthly: monthly });
+      });
+    });
+    if (!want.length) return;
+    todoBusy = true;
+    try {
+      const board = await window.YDDb.getFresh('boards', 'todo');
+      const cols = ((board && board.columns) || []).filter(c => c && c.id);
+      if (!cols.length) return;
+      const col = (cols.find(c => String(c.name || '').trim().toLowerCase() === 'today') || cols[0]).id;
+      const at = new Date().toISOString(), today = ymd(new Date()), note = {};
+      want.slice(0, BILL_TODOS_MAX).forEach((w, i) => {
+        const id = 'sb' + Date.now().toString(36) + i.toString(36) + Math.random().toString(36).slice(2, 5);
+        const card = billCard(w, col, at, today, i);
+        Promise.resolve(window.YDDb.put('boards/todo/cards', id, card))
+          .catch(e => console.warn('[subs] bill to-do not yet on the server:', (e && e.code) || e));
+        note[w.key] = { card: id, at: at };
+      });
+      applyLocal({ billTodos: note });
+      save({ billTodos: note }, 'noting bill to-dos');
+    } catch (e) {
+      console.warn('[subs] bill to-dos not made:', (e && e.code) || e);
+    } finally {
+      todoBusy = false;
+    }
+  }
+  const shortDay = d => { const t = new Date(d + 'T12:00:00'); return isNaN(t) ? d : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); };
+  const monthName = d => { const t = new Date(d + 'T12:00:00'); return isNaN(t) ? d : t.toLocaleDateString('en-US', { month: 'long' }); };
+  function billCard(w, col, at, today, i) {
+    const s = w.s, b = w.b, p = w.p;
+    const client = String(p.client || '').trim() || 'the client';
+    const what = String(b.service || '').trim() || ((p.services || [])[0]) || 'mowing';
+    const where = String(b.address || p.address || '').trim();
+    const theirs = typeof b.cents === 'number' ? ' — their bill ' + money(b.cents) : '';
+    const ours = typeof p.ourCents === 'number' ? 'You charge ' + money(p.ourCents) + ' ' + (PER[p.ourPer] || '') + '.' : 'No price of yours is set for this property (All Jobs → Subcontractors).';
+    const title = w.monthly
+      ? '💵 Bill ' + client + ' for ' + monthName(b.date) + ' — ' + what
+      : '💵 Bill ' + client + ' — ' + what + ' ' + shortDay(b.date);
+    const notes = (s.name || 'The subcontractor') + ' did ' + what + (where ? ' at ' + where : '') + ' on ' + shortDay(b.date) + theirs + '.\n' +
+      ours + '\n' + (w.monthly ? 'They are billed by the month: bill ' + client + ' for ' + monthName(b.date) + ' in QuickBooks.'
+        : 'Bill ' + client + ' for it in QuickBooks.') +
+      (b.how && b.how !== 'hand' ? '\n\n(Put with ' + client + ' by ' + ({ address: 'the address', name: 'their name', learned: 'your earlier picks', price: 'their price' }[b.how] || b.how) +
+        ' — if that’s wrong, change it under All Jobs → Subcontractors.)' : '');
+    return {
+      title: title.slice(0, 200), notes: notes.slice(0, 5000), checklist: [], column: col, order: Date.now() + i,
+      due: today, dueTime: null, remindMins: null, hasReminder: false, remindUids: [], noReminder: false,
+      type: null, urgency: 'normal', labels: [], color: null, assignees: [],
+      jobId: p.jobId || null, jobName: client, jobNum: null,
+      // His to-do, not one for Claude's card runs (cards.py).
+      noClaude: true, subBill: { sub: s.id, prop: b.prop, bill: b.key },
+      doneAt: null, createdAt: at, createdBy: 'Job Hub', updatedAt: at, updatedBy: 'Job Hub',
+    };
   }
 
   // Stores the email reader called subcontractors that are not set up here.
@@ -1820,11 +1916,13 @@
         }
         if (c.id !== 'subcontractors') return;
         data = { subs: d.subs || {}, paid: d.paid || {}, filed: d.filed || {}, visitFix: d.visitFix || {},
-                 handVisits: d.handVisits || {}, svcProp: d.svcProp || {}, rcFix: d.rcFix || {}, invFix: d.invFix || {} };
+                 handVisits: d.handVisits || {}, svcProp: d.svcProp || {}, rcFix: d.rcFix || {}, invFix: d.invFix || {},
+                 billTodos: d.billTodos || {}, billTodosFrom: d.billTodosFrom || '' };
       });
       if (meta && meta.fromCache === false) fresh = true;
       forget();
       fileBills();
+      billTodos();
       quietRender();
       // A job's subcontractor costs (forJob) may have moved, and Home's
       // count of bills to match.
@@ -1840,7 +1938,7 @@
     if (wrap && a && wrap.contains(a) && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) return;
     render();
   }
-  document.addEventListener('yd-receipts', () => { forget(); fileBills(); quietRender(); });
+  document.addEventListener('yd-receipts', () => { forget(); fileBills(); billTodos(); quietRender(); });
   // A customer's or a job's name and address find bills too, and what a
   // client owes comes from the invoices.
   ['yd-customers', 'yd-jobs-changed', 'yd-invoices'].forEach(ev => document.addEventListener(ev, () => { forget(); quietRender(); }));
