@@ -1228,7 +1228,7 @@
       // Finished, with plants, and the care email not done yet.
       (window.YDPlants && YDPlants.owed(j) ? '<div class="bd-card-line bd-care">🌱 Care email owed</div>' : '') +
       // Claude's draft is waiting to be checked and sent (estimate.js).
-      (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">✨ Estimate drafted — check it & send</div>' : '') +
+      (board.id === 'bids' && hasDraft(j) ? '<div class="bd-card-line bd-draft">📝 Estimate ready — check it & send</div>' : '') +
       (board.id === 'bids' ? bidStandLine(j, col) : '') +
       (board.id === 'bids' && acceptedToBook(j)
         ? '<div class="bd-card-line bd-draft">✅ Accepted in QuickBooks — book it</div>' : '') +

@@ -939,7 +939,7 @@
       const usual = P().defaultProfitCents ? P().defaultProfitCents() : null;
       const mine = P().profitOf ? P().profitOf(w) : null;
       const opts = choices.indexOf(mine) === -1 && mine !== null ? choices.concat([mine]).sort((a, b) => a - b) : choices;
-      nums = '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'your call', '', 'decimal') + '</label>' +
+      nums = '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>' +
         '<label><span>Profit per crew-day</span><select' + dis + ' onchange="estWork(\'' + id + '\', \'profit\', this.value)">' +
           (opts.length ? opts.map(c => '<option value="' + c + '"' + (c === mine ? ' selected' : '') + '>' + perDay(c) +
             (c === usual ? ' (usual)' : '') + '</option>').join('') : '<option value="">— set them in Pricing rules —</option>') +
@@ -956,17 +956,17 @@
         '</select></label>' +
         '<label><span>Qty' + (w.unit ? ' (' + esc(w.unit) + ')' : '') + '</span>' + on('qty', w.qty, '', '', 'decimal') + '</label>' +
         '<label><span>Price per ' + esc(w.unit || 'unit') + '</span>' + on('rate', dollarsIn(w.rateCents), '0.00', 'est-money', 'decimal') + '</label>' +
-        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
+        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
       extra = adjustHtml(w, svc, ro);
     } else if (kind === 'allin') {
       nums = '<label><span>All-in price ($)</span>' + on('allIn', dollarsIn(w.allInCents), 'labor + its materials', 'est-money', 'decimal') + '</label>' +
         '<label><span>+ Labor not in it ($)</span>' + on('add', dollarsIn(w.addCents), 'optional', 'est-money', 'decimal') + '</label>' +
-        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
+        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
       // How the figure splits, filled by renderTotals.
       extra = '<div class="est-allin" id="estWI_' + id + '"></div>';
     } else {
       nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', 'est-money', 'decimal') + '</label>' +
-        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'for your profit', '', 'decimal') + '</label>';
+        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
     }
     // The QuickBooks product is rarely changed: under More, named on the
     // button when it has one so it is never hidden without a word.

@@ -374,11 +374,14 @@
   }
   // [tag, the words that say it -- or a function telling which tag] --
   // asked in this order, the first that fits.
+  // "Quote the Smith patio", "Site visit at ..." -- a quote appointment.
+  const BID_WORDS = /^\s*(?:quote|estimate|bid)\b|\b(?:site visit|walk ?-?through|quote appointment)\b/i;
   const WORDS = [
     ['phone', PHONE_FIRST],
     ['pickup', pickupOf],
     ['email', /^\s*send\b|\be-?mail\b/i],
     ['delivery', /\bdeliver(y|ies|ed)?\b/i],
+    ['bid', BID_WORDS],
     ['phone', PHONE_ANY],
   ];
   const isCall = title => PHONE_FIRST.test(title || '') || PHONE_ANY.test(title || '');

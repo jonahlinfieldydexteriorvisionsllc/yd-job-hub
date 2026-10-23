@@ -735,7 +735,7 @@
     const no = (Array.isArray(g.no) ? g.no : []).map(x => (x && x.j ? x.j : x)).filter(j => j && j._id);
     const body = !open.length && !no.length ? empty('No bids open right now.') :
       (yes.length ? sub('✅ Said yes in QuickBooks — book it', yes.length) + capped('bidY', yes.map(j => row(j, 'Open it and press Make it a job'))) : '') +
-      (drafted.length ? sub('✨ Estimate drafted — check it & send', drafted.length) + capped('bidD', drafted.map(j => row(j, servicesOf(j)))) : '') +
+      (drafted.length ? sub('📝 Estimate ready — check it & send', drafted.length) + capped('bidD', drafted.map(j => row(j, servicesOf(j)))) : '') +
       (chase.length ? sub('📨 Due a follow-up', chase.length) + capped('bidC', chase.map(x =>
         row(x.j, (x.col === 'followUp' ? 'In Follow up · ' : '') + sentWords(x.j), x.days >= 14))) : '') +
       (waiting.length ? sub('🕑 Waiting on the customer', waiting.length) + capped('bidW', waiting.map(j => row(j, sentWords(j)))) : '') +

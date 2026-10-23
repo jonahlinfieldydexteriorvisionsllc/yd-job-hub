@@ -609,6 +609,8 @@ WORDS = (("phone", PHONE_FIRST),
          ("pickup", _pickup_of),
          ("email", re.compile(r"^\s*send\b|\be-?mail\b", re.I)),
          ("delivery", re.compile(r"\bdeliver(y|ies|ed)?\b", re.I)),
+         # "Quote the Smith patio", "Site visit at ..." (remind.js BID_WORDS).
+         ("bid", re.compile(r"^\s*(?:quote|estimate|bid)\b|\b(?:site visit|walk ?-?through|quote appointment)\b", re.I)),
          ("phone", PHONE_ANY))
 # On the Crew schedule, asked in this order: "Pickup check from ..." is a
 # check pickup, "Drop off at the bank" an errand, "Pick up pavers at the
