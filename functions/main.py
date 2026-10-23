@@ -356,9 +356,20 @@ def _quickbooks(request, path, headers):
             # The Bids list looked at (app.js bidsFromQbNow): every estimate
             # still out asked about now, not at the next hourly look -- so a
             # bid just emailed from QuickBooks says Sent, and a yes is told.
-            jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})
+            every = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
+            jobs = qb.live_jobs(every)
             with qb._holding_tokens():
                 news = qb.check_estimates(jobs, [])
+                # And an estimate said yes to in QuickBooks itself becomes its
+                # job now too, not at the next hourly look -- which runs 7 am
+                # to 7 pm only (22 Oct 2026: a bid accepted at 9 pm waited
+                # until morning to be a job). The same import as the sweep's, handed
+                # every job, deleted ones too (import_accepted: a deleted
+                # job's estimate never comes back as a new job).
+                try:
+                    news.extend(qb.import_accepted(every) or [])
+                except Exception as err:            # noqa: BLE001 -- the hourly look tries again
+                    print("estimates-now: accepted estimates not brought in:", err)
             _tell_owner(news)
             result = {"ok": True, "news": len(news)}
         elif path == "/qb/customer-save":
