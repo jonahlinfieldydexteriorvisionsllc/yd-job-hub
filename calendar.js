@@ -1844,13 +1844,15 @@
     // needs, at the top of a phone's screen -- then which calendar, what
     // kind of thing and which job, and the rest. The boxes are the same
     // ones whatever their order, so saving reads them just the same.
-    openModal(editing.eventId ? 'Edit' : 'Add to the calendar',
+    // Beside the form on a wide screen: everything already on that date
+    // (drawEvDay, the "That day" column).
+    openModal(editing.eventId ? 'Edit' : 'Add to the calendar', '<div class="ev-split"><div class="ev-form">' +
       '<div class="field"><span class="label">Title</span>' +
         '<input id="evTitle" value="' + esc(ev.title || '') + '" placeholder="Leave blank to use the job’s name (below)"' +
           ' oninput="calTitleChanged()"></div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Date</span>' +
-          '<input type="date" id="evDate" value="' + esc(ev.date || editing.date || today()) + '"></div>' +
+          '<input type="date" id="evDate" value="' + esc(ev.date || editing.date || today()) + '" onchange="calEvDayDraw()"></div>' +
         '<div class="field"><span class="label">Until (for more than one day)</span>' +
           '<input type="date" id="evEnd" value="' + esc(ev.endDate || '') + '"></div>' +
       '</div>' +
@@ -1918,10 +1920,14 @@
         '<input id="evAddr" value="' + esc(ev.address || '') + '" placeholder="Filled in from the job, or type one"></div>' +
       '<div class="field"><span class="label">Notes</span>' +
         '<textarea id="evNotes" rows="3" placeholder="What to bring, gate code, who to ask for">' + esc(ev.notes || '') + '</textarea></div>' +
-      '<div class="field-actions" id="evActions">' + editorActions() + '</div>');
+      '<div class="field-actions" id="evActions">' + editorActions() + '</div>' +
+      '</div><aside class="ev-day" id="evDay" aria-label="That day on the calendars"></aside></div>');
+    const box = el('calModal') && el('calModal').querySelector('.modal');
+    if (box) box.classList.add('ev-wide');
     calCalChanged();
     calRemindHint();
     calTypeNote();
+    drawEvDay();
   }
   // The tag buttons for the calendar picked: just each one's name. What it
   // is and whether it has a set time are two separate questions -- a pickup
@@ -1987,6 +1993,32 @@
     const tag = usual && !box.dataset.picked ? YDRemind.tagOf(type, cal) : null;
     if (note) note.textContent = tag ? 'Goes by its tag, ' + (tag.icon ? tag.icon + ' ' : '') + tag.name + ', until you tap one.' : '';
   }
+  // Jonah (22 Oct 2026): "when adding something on pc to the calendar have
+  // the that days schedule and all tasks me and the crew have for that day
+  // visible while im filling out the calendar item". Everything on the date
+  // in the Date box -- every calendar and the cards, whatever is switched off
+  // in the side, as My day reads it -- at set times first, then where the
+  // crew is working, then for any time that day, each with its calendar (or
+  // board) and who is on it; ticked-off ones crossed out. The entry being
+  // edited is left out. It follows the Date box. A wide screen only
+  // (styles.css .ev-day): on a phone the form is the whole window.
+  function drawEvDay() {
+    const box = el('evDay');
+    if (!box) return;
+    const day = val('evDate') || today();
+    const self = editing && editing.eventId ? editing.calId + '/' + editing.eventId : '';
+    const all = occurrences(day, day, true).filter(o => !self || (o.calId + '/' + o.id) !== self);
+    const row = o => '<div class="ev-day-row' + (o.done ? ' done' : '') + '" style="--c:' + safeColor(o.color || (o.layer && o.layer.color)) + '">' +
+      '<span class="ev-day-t">' + esc(o.time ? fmtTimeRange(o.time, o.endTime || '') : '') + '</span>' +
+      '<span class="ev-day-w"><b>' + esc(o.title || '') + '</b>' +
+        '<small>' + esc([o.auto === 'card' ? o.note : o.layer && o.layer.name, whoOn(o)].filter(Boolean).join(' · ')) + '</small></span></div>';
+    const part = (head, list) => list.length ? '<div class="ev-day-sub">' + head + '</div>' + list.map(row).join('') : '';
+    const timed = all.filter(o => o.time), jobs = all.filter(o => !o.time && o.jobDay), rest = all.filter(o => !o.time && !o.jobDay);
+    box.innerHTML = '<div class="ev-day-h">📅 ' + esc(longDay(day)) + '</div>' +
+      (all.length ? part('🕑 At set times', timed) + part('🔨 Where the crew is working', jobs) + part('✅ Any time that day', rest)
+        : '<p class="ev-day-none">Nothing on the calendars yet that day.</p>');
+  }
+  window.calEvDayDraw = drawEvDay;
   window.calPlacePick = function (id) {
     const box = el('evPlace');
     const c = document.querySelector('input[name="evCal"]:checked');
@@ -3207,6 +3239,9 @@
   function openModal(title, html) {
     const m = el('calModal'), t = el('calModalTitle'), b = el('calModalBody');
     if (!m || !b) return;
+    // Only the entry editor is wide (renderEditor puts it back).
+    const box = m.querySelector('.modal');
+    if (box) box.classList.remove('ev-wide');
     if (t) t.innerHTML = title;
     b.innerHTML = html;
     m.classList.add('active');
