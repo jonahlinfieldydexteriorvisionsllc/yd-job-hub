@@ -2191,16 +2191,25 @@
   const carePlants = e => (window.YDPlants ? window.YDPlants.found({ estimate: e }).estPlants : plantsIn(e).length);
   const careBusy = {};        // job id -> being written
   function careOn() { return !!(P() && P().rules().autoCare !== false); }
+  // Artificial turf on this estimate (plantcare.js), or the job set to
+  // "Yes — artificial turf" on the Job tab, and not set to "No turf".
+  function careTurf() {
+    const pick = el('turf') ? el('turf').value : '';
+    if (pick === 'no') return false;
+    return pick === 'yes' || !!(window.YDPlants && YDPlants.turfFound && YDPlants.turfFound({ estimate: est }).estTurf > 0);
+  }
   function careHtml(when) {
-    const plants = carePlants(est);
-    if (!plants || !changes()) return '';
+    const plants = carePlants(est), turf = careTurf();
+    if ((!plants && !turf) || !changes()) return '';
     const c = (typeof boardFields !== 'undefined' && boardFields.careEmail) || null;
     // Settled by hand, or the job set to "No plants" on the Job tab (plantcare.js).
     const done = (typeof boardFields !== 'undefined' && boardFields.careDone) || null;
-    const setNo = el('plants') && el('plants').value === 'no';
-    const count = plants + ' plant' + (plants === 1 ? '' : 's') + ' on this job. ';
-    return '<div class="est-care">🌱 ' + (c
-        ? 'Plant-care email drafted ' + esc(when(c.at)) + ' — in your Gmail Drafts to read and send.'
+    const setNo = el('plants') && el('plants').value === 'no' && !turf;
+    const count = (plants ? plants + ' plant' + (plants === 1 ? '' : 's') : '') + (plants && turf ? ' and ' : '') +
+      (turf ? (plants ? 'artificial turf' : 'Artificial turf') : '') + ' on this job. ';
+    const word = plants && turf ? 'Care' : turf ? 'Turf-care' : 'Plant-care';
+    return '<div class="est-care">' + (turf && !plants ? '🟩 ' : '🌱 ') + (c
+        ? word + ' email drafted ' + esc(when(c.at)) + ' — in your Gmail Drafts to read and send.'
         : done && done.how === 'self' ? count + 'You sent the care email yourself.'
         : done && done.how === 'notNeeded' ? count + 'Marked: no care email needed.'
         : setNo ? count + 'The job is set to “No plants”, so no care email is asked for when it’s finished.'
@@ -2277,9 +2286,9 @@
       if (r.skipped) return;
       const note ={ at: new Date().toISOString(), draftId: r.draftId || null, subject: r.subject || '' };
       if (window.YDSync) window.YDSync.patchJob(jobId, { careEmail: note });
-      showToast('🌱 Plant-care email' + (r.to ? ' to ' + r.to : '') + ' is in your Gmail Drafts — read it and send');
+      showToast('🌱 Care email' + (r.to ? ' to ' + r.to : '') + ' is in your Gmail Drafts — read it and send');
     } catch (e) {
-      showToast((byItself ? 'The plant-care email wasn’t written: ' : 'Plant-care email: ') + (e.message || e));
+      showToast((byItself ? 'The care email wasn’t written: ' : 'Care email: ') + (e.message || e));
     } finally {
       delete careBusy[jobId]; renderQb();
     }
@@ -2296,7 +2305,7 @@
     Promise.resolve(window.YDSync && window.YDSync.sendNow ? window.YDSync.sendNow(id) : true)
       .then(sent => {
         if (sent) writeCare(id, false);
-        else showToast('🌱 The plant-care email waits for a signal — press “Write it now” again later');
+        else showToast('🌱 The care email waits for a signal — press “Write it now” again later');
       });
   };
   // A job marked Complete (sync.js patchJob, or the form's status): its care
@@ -2310,16 +2319,19 @@
     if (!changes() || !data) return;
     postsCompleted(jobId, data);
     if (data.careEmail || data.careDone) return;
+    // Plants or artificial turf (plantcare.js): one care email for both.
     const hasPlants = window.YDPlants ? window.YDPlants.has(data) : plantsIn(data.estimate).length > 0;
-    if (!hasPlants) return;
-    const why = !carePlants(data.estimate) ? 'no plants on its estimate for Claude to write from — send it yourself'
+    const hasTurf = !!(window.YDPlants && window.YDPlants.turfHas && window.YDPlants.turfHas(data));
+    if (!hasPlants && !hasTurf) return;
+    const what = hasPlants && hasTurf ? 'has plants and turf' : hasTurf ? 'has artificial turf' : 'has plants';
+    const why = !carePlants(data.estimate) && !hasTurf ? 'no plants on its estimate for Claude to write from — send it yourself'
       : !careOn() ? 'Claude drafts it when you press “Write it now” on the job'
       : !/@/.test(String(data.email || '')) ? 'add their email to the job, then press “Write it now”'
       : !window.YDClaude || !window.YDClaude.available() || !navigator.onLine ? 'it waits for a signal — press “Write it now” on the job later'
       : '';
     if (why) {
       const name = String(data.customerName || '').trim() || 'This job';
-      setTimeout(() => showToast('🌱 ' + name + ' is finished and has plants — the care email is owed (' + why + ')', 7000), 0);
+      setTimeout(() => showToast('🌱 ' + name + ' is finished and ' + what + ' — the care email is owed (' + why + ')', 7000), 0);
       return;
     }
     // The server reads the finished job from the database, so the job goes up
@@ -2330,7 +2342,7 @@
       .then(() => (window.YDSync && window.YDSync.sendNow ? window.YDSync.sendNow(jobId) : false))
       .then(sent => {
         if (sent) writeCare(jobId, true);
-        else showToast('🌱 The plant-care email waits for a signal — press “Write it now” on the job later');
+        else showToast('🌱 The care email waits for a signal — press “Write it now” on the job later');
       });
   }
 

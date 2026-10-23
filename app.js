@@ -321,7 +321,7 @@ function jobBill(d) {
 // price, in cents; qbChangesOff: they were put in by hand, so never counted
 // (quickbooks.py _price_follows).
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'autoFollowUpAt', 'acceptedSeenAt',
-  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
+  'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
   'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff'];
 let boardFields = {};
@@ -3771,9 +3771,9 @@ function updateSummary() {
 // SAVE / LOAD
 // ═══════════════════════════════════════════════════════════
 // plants: Jonah's own Yes / No on whether the job has plants ('' = worked
-// out, plantcare.js).
+// out, plantcare.js); turf: the same for artificial turf.
 // crewWhat: what the job is in a few words, typed by hand (jobWhat).
-const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice','plants','crewWhat'];
+const FIELDS = ['customerName','firstName','lastName','business','address','city','state','zip','phone','email','jobPrice','estimateNumber','referral','notes','qbInvoice','plants','turf','crewWhat'];
 
 // A few words on what the job is, beside the customer's name wherever the
 // crew pick or see a job (Jonah, 15 Oct 2026: "so my crew doesn't have to
@@ -3831,7 +3831,7 @@ function getJobData() {
   if (window.YDEstimate) d.estimate = window.YDEstimate.get();
   // Whether it has plants, worked out again from all of the above, so the
   // server's summary can read it (plantcare.js).
-  if (window.YDPlants) d.hasPlants = window.YDPlants.has(d);
+  if (window.YDPlants) { d.hasPlants = window.YDPlants.has(d); d.hasTurf = window.YDPlants.turfHas(d); }
   d.lastModified = new Date().toISOString();
   return d;
 }

@@ -163,7 +163,7 @@
   // sent it himself), 'notNeeded', or 'old' (finished before care emails were
   // tracked, nothing done about it).
   function state(d) {
-    if (!d || statusOf(d) !== 'complete' || !has(d)) return null;
+    if (!d || statusOf(d) !== 'complete' || !cares(d)) return null;
     if (d.careEmail) return 'drafted';
     if (d.careDone && d.careDone.how) return d.careDone.how === 'notNeeded' ? 'notNeeded' : 'self';
     return d.completedAt ? 'owed' : 'old';
@@ -179,8 +179,66 @@
     if (patch.jobStatus === 'complete' && statusOf(data) !== 'complete') extra.completedAt = new Date().toISOString();
     const after = Object.assign({}, data, patch, extra);
     extra.hasPlants = has(after);
+    extra.hasTurf = turfHas(after);
     return extra;
   }
+
+  // --------------------------------------------------- does it have turf?
+  //
+  // Jonah (21 Oct 2026): "turf jobs once completed automatically draft a care
+  // email to the client." Turf is artificial turf (the "Artificial Turf"
+  // service, priced by the sq ft): worked out the same way, in code, from a
+  // labour line's heading, a material, or the job's services -- and his own
+  // Yes / No on the Job tab (job `turf`) always wins. Saved as `hasTurf`. One
+  // care email per job covers whatever went in: plants, turf, or both
+  // (care.py), so `careEmail` / `careDone` / `completedAt` are shared.
+  //
+  // "Turfstone" pavers, "Turf Builder" fertiliser and turf-type fescue seed
+  // are not artificial turf.
+  const TURF_WORDS = /\b(artificial|synthetic|fake)\s+(turf|grass|lawn)\b|\bputting\s+greens?\b|\bturf\b/i;
+  const NOT_TURF = /\bturf[\s-]*(builder|type)\b|\bfescue\b|\bseed|\bfertili[sz]|\bsod\b|\bweed/i;
+  function readsLikeTurf(text) {
+    const t = String(text || '');
+    return !!t.trim() && TURF_WORDS.test(t) && !NOT_TURF.test(t);
+  }
+  // { yes, why, estTurf }: estTurf = the estimate's turf lines, which are
+  // what Claude writes the turf part of the email from (care.py turf_of).
+  function turfFound(d) {
+    const out = { yes: false, why: [], estTurf: 0 };
+    if (!d) return out;
+    const sup = supplies();
+    const e = d.estimate || {};
+    let work = 0, mats = 0;
+    (Array.isArray(e.work) ? e.work : []).forEach(w => { if (w && readsLikeTurf(w.title)) work++; });
+    (Array.isArray(e.materials) ? e.materials : []).forEach(m => {
+      if (!m) return;
+      const it = m.supplyId ? sup.items[m.supplyId] : null;
+      if (readsLikeTurf(m.name || (it && it.name))) mats++;
+    });
+    out.estTurf = work + mats;
+    if (work) out.why.push(work === 1 ? 'a turf line on the estimate' : work + ' turf lines on the estimate');
+    if (mats) out.why.push(mats === 1 ? 'turf among the materials' : mats + ' turf materials');
+    if ((Array.isArray(d.serviceTypes) ? d.serviceTypes : []).some(readsLikeTurf)) out.why.push('the Artificial Turf service');
+    out.yes = out.why.length > 0;
+    return out;
+  }
+  function turfHas(d) {
+    if (!d) return false;
+    if (d.turf === 'yes') return true;
+    if (d.turf === 'no') return false;
+    return turfFound(d).yes;
+  }
+  // A care email is owed for this job once it is finished: plants or turf.
+  const cares = d => has(d) || turfHas(d);
+  // What the email is called for this job.
+  function careWord(d) {
+    const p = has(d), t = turfHas(d);
+    return p && t ? 'Care' : t ? 'Turf-care' : 'Plant-care';
+  }
+  // Whether Claude has something to write from: plants on the estimate, or
+  // turf (its care is the same whatever the product, so a turf job set by
+  // hand is enough).
+  const canWrite = d => found(d).estPlants > 0 || turfHas(d);
 
   // ----------------------------------------------------------- the pieces
 
@@ -188,7 +246,8 @@
     const t = new Date(s);
     return isNaN(t) ? '' : t.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
-  const badge = d => has(d) ? ' <span class="plant-badge" title="This job has plants">🌱</span>' : '';
+  const badge = d => (has(d) ? ' <span class="plant-badge" title="This job has plants">🌱</span>' : '') +
+    (turfHas(d) ? ' <span class="plant-badge" title="This job has artificial turf">🟩</span>' : '');
   const owedChip = d => owed(d) ? ' <span class="care-chip">🌱 Care email owed</span>' : '';
 
   // The buttons that settle it, for a job not open on the Job tab as much as
@@ -203,18 +262,20 @@
   // The Jobs board card's sheet (boards.js openJobCard).
   function sheetHtml(jobId, d) {
     if (!sees()) return '';
-    const s = state(d);
+    const s = state(d), word = careWord(d);
     if (s === 'owed') {
-      // Claude writes it from the estimate's plants (care.py), when it has some.
+      // Claude writes it from the estimate's plants and the turf (care.py).
       const how = !changes() ? ''
-        : found(d).estPlants > 0 ? ' Open the job to have Claude write it, or:' : ' Send it yourself, then:';
-      return '<div class="care-sheet owed">🌱 <b>Plant-care email owed</b> — finished ' + esc(when(d.completedAt)) + '.' + how +
+        : canWrite(d) ? ' Open the job to have Claude write it, or:' : ' Send it yourself, then:';
+      return '<div class="care-sheet owed">🌱 <b>' + word + ' email owed</b> — finished ' + esc(when(d.completedAt)) + '.' + how +
         (changes() ? '<div class="field-actions">' + settleButtons(jobId) + '</div>' : '') + '</div>';
     }
-    if (s === 'drafted') return '<div class="care-sheet">🌱 Plant-care email drafted ' + esc(when(d.careEmail.at)) + '.</div>';
-    if (s === 'self') return '<div class="care-sheet">🌱 Plant-care email sent by you ' + esc(when(d.careDone.at)) + '.</div>';
-    if (s === 'notNeeded') return '<div class="care-sheet">🌱 No plant-care email needed for this job.</div>';
-    return has(d) ? '<div class="care-sheet">🌱 This job has plants.</div>' : '';
+    if (s === 'drafted') return '<div class="care-sheet">🌱 ' + word + ' email drafted ' + esc(when(d.careEmail.at)) + '.</div>';
+    if (s === 'self') return '<div class="care-sheet">🌱 ' + word + ' email sent by you ' + esc(when(d.careDone.at)) + '.</div>';
+    if (s === 'notNeeded') return '<div class="care-sheet">🌱 No ' + word.toLowerCase() + ' email needed for this job.</div>';
+    return has(d) && turfHas(d) ? '<div class="care-sheet">🌱 This job has plants and artificial turf.</div>'
+      : has(d) ? '<div class="care-sheet">🌱 This job has plants.</div>'
+      : turfHas(d) ? '<div class="care-sheet">🟩 This job has artificial turf.</div>' : '';
   }
 
   // Above All Jobs: every finished job still owing one, whatever the filters.
@@ -223,7 +284,7 @@
     const list = (jobs || []).filter(owed)
       .sort((a, b) => String(a.completedAt || '').localeCompare(String(b.completedAt || '')));
     if (!list.length) return '';
-    return '<div class="care-note">🌱 <b>Plant-care email owed</b> (' + list.length + '): ' +
+    return '<div class="care-note">🌱 <b>Care email owed</b> (' + list.length + '): ' +
       list.map(d => '<button class="link-btn" onclick="loadJob(\'' + safe(d._id) + '\')">' +
         (typeof jobNameHtml === 'function' ? jobNameHtml(d.customerName, String(d.estimateNumber || '').trim()) : esc(d.customerName || 'Untitled')) +
         '</button>').join(', ') + '</div>';
@@ -239,6 +300,7 @@
   let shownKey = '';
   function refresh() {
     const banner = el('careBanner'), why = el('plantsWhy'), auto = el('plantsAutoOpt'), head = el('plantsHeadBadge');
+    const tWhy = el('turfWhy'), tAuto = el('turfAutoOpt');
     if (!banner && !why) return;
     const d = sees() ? openJob() : null;
     if (!d) {
@@ -254,32 +316,39 @@
         : f.yes ? 'Found: ' + f.why.join(' · ') : f.unsure && d.hasPlants === true ? 'Supplies still loading…' : '';
     }
     if (head) head.hidden = !yes;
+    const tf = turfFound(d);
+    if (tAuto) tAuto.textContent = 'Auto — ' + (tf.yes ? 'has turf' : 'no turf found');
+    if (tWhy) {
+      tWhy.textContent = d.turf === 'yes' ? 'Set by you: this job has artificial turf'
+        : d.turf === 'no' ? 'Set by you: no turf' : tf.yes ? 'Found: ' + tf.why.join(' · ') : '';
+    }
     if (!banner) return;
     const s = state(d);
     // The estimate's own plant-care line follows when where it stands
     // changes (finished, settled, set to No plants) -- not at every key.
-    const now = [typeof currentJobId !== 'undefined' ? currentJobId : '', s, d.plants, statusOf(d)].join('|');
+    const now = [typeof currentJobId !== 'undefined' ? currentJobId : '', s, d.plants, d.turf, statusOf(d)].join('|');
     if (now !== shownKey) { shownKey = now; redrawEstimateCare(); }
     banner.hidden = !s;
     banner.className = 'care-banner' + (s === 'owed' ? ' owed' : '');
     if (!s) { banner.innerHTML = ''; return; }
     const id = (typeof currentJobId !== 'undefined' && currentJobId) || '';
-    const write = changes() && f.estPlants > 0
+    const write = changes() && canWrite(d)
       ? '<button class="btn btn-sm btn-filled" onclick="estCareEmail()">✨ Write it now</button>' : '';
+    const word = careWord(d), what = has(d) && turfHas(d) ? 'plants and artificial turf' : turfHas(d) ? 'artificial turf' : 'plants';
     const undo = changes() ? ' <button class="link-btn" onclick="careUndo(\'' + safe(id) + '\')">Undo</button>' : '';
     if (s === 'owed') {
-      banner.innerHTML = '<span>🌱 <b>Plant-care email owed.</b> This job has plants and was finished ' + esc(when(d.completedAt)) + '.' +
-        (changes() && !f.estPlants ? ' <span class="muted">Claude writes it from the estimate’s “+ Plant” lines and Plants items, and this job has none — send it yourself.</span>' : '') +
+      banner.innerHTML = '<span>🌱 <b>' + word + ' email owed.</b> This job has ' + what + ' and was finished ' + esc(when(d.completedAt)) + '.' +
+        (changes() && !canWrite(d) ? ' <span class="muted">Claude writes it from the estimate’s “+ Plant” lines and Plants items, and this job has none — send it yourself.</span>' : '') +
         '</span><span class="care-btns">' + write + settleButtons(id) + '</span>';
     } else if (s === 'old') {
-      banner.innerHTML = '<span>🌱 This job has plants and was finished before care emails were tracked.</span>' +
+      banner.innerHTML = '<span>🌱 This job has ' + what + ' and was finished before care emails were tracked.</span>' +
         (changes() ? '<span class="care-btns"><button class="btn btn-sm" onclick="careStillNeeded(\'' + safe(id) + '\')">It still needs one</button></span>' : '');
     } else if (s === 'drafted') {
-      banner.innerHTML = '<span>🌱 Plant-care email drafted ' + esc(when(d.careEmail.at)) + ' — in your Gmail Drafts to read and send.</span>';
+      banner.innerHTML = '<span>🌱 ' + word + ' email drafted ' + esc(when(d.careEmail.at)) + ' — in your Gmail Drafts to read and send.</span>';
     } else if (s === 'self') {
-      banner.innerHTML = '<span>🌱 Plant-care email sent by you' + (d.careDone.at ? ' ' + esc(when(d.careDone.at)) : '') + '.' + undo + '</span>';
+      banner.innerHTML = '<span>🌱 ' + word + ' email sent by you' + (d.careDone.at ? ' ' + esc(when(d.careDone.at)) : '') + '.' + undo + '</span>';
     } else {
-      banner.innerHTML = '<span>🌱 No plant-care email needed for this job' + (d.careDone.at ? ' (' + esc(when(d.careDone.at)) + ')' : '') + '.' + undo + '</span>';
+      banner.innerHTML = '<span>🌱 No ' + word.toLowerCase() + ' email needed for this job' + (d.careDone.at ? ' (' + esc(when(d.careDone.at)) + ')' : '') + '.' + undo + '</span>';
     }
   }
   // Typing changes the job a little at a time: worked out again once it
@@ -288,7 +357,7 @@
   function refreshSoon() { clearTimeout(soon); soon = setTimeout(refresh, 500); }
 
   // His Yes / No / Auto on the Job tab (a form field, saved with the job).
-  window.plantsPicked = function () {
+  window.plantsPicked = window.turfPicked = function () {
     if (typeof markDirty === 'function') markDirty();
     refresh();
   };
@@ -365,5 +434,12 @@
     owedNoteHtml: owedNoteHtml,
     refresh: refresh,
     readsLikePlant: readsLikePlant,
+    // Artificial turf -- the same care email (care.py).
+    turfFound: turfFound,
+    turfHas: turfHas,
+    cares: cares,
+    careWord: careWord,
+    canWrite: canWrite,
+    readsLikeTurf: readsLikeTurf,
   };
 })();

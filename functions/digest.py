@@ -930,7 +930,7 @@ def _care_section(owed, sections, push_bits):
             return "recently"
         t = (t if t.tzinfo else t.replace(tzinfo=TZ)).astimezone(TZ)
         return t.strftime("%b ") + str(t.day)
-    sections.append(("Plant-care emails owed", care.summary_lines(owed, day_of)))
+    sections.append(("Care emails owed (plants / turf)", care.summary_lines(owed, day_of)))
     push_bits.append("%d care email%s owed" % (len(owed), "" if len(owed) == 1 else "s"))
 
 

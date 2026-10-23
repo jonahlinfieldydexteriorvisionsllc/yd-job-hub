@@ -302,6 +302,18 @@
               </label>
               <span class="plants-why" id="plantsWhy"></span>
             </div>
+            <!-- Artificial turf: the same care email when it is finished
+                 (plantcare.js). -->
+            <div class="plants-row">
+              <label class="plants-pick"><span>🟩 Turf</span>
+                <select id="turf" onchange="turfPicked()">
+                  <option value="" id="turfAutoOpt">Auto</option>
+                  <option value="yes">Yes — artificial turf</option>
+                  <option value="no">No turf</option>
+                </select>
+              </label>
+              <span class="plants-why" id="turfWhy"></span>
+            </div>
           </div>
           <div class="field">
             <span class="label">Job Price <span id="jobPriceSourceTag" style="font-size:9px;color:var(--pos);margin-left:4px"></span></span>

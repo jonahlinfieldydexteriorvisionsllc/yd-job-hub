@@ -11,9 +11,16 @@ Claude writes the care guide for exactly those plants, for southern Wisconsin
 and the time of year they went in. The job is read here from Firestore, not
 taken from the app: the app only says WHICH job, so the email cannot be steered
 by whatever a browser sends, and the address it goes to is the one on the job.
+
+Artificial turf (Jonah, 21 Oct 2026: "turf jobs once completed automatically
+draft a care email to the client"): the same email, for a job with turf -- one
+email covering the plants, the turf, or both. Turf is found the app's way
+(plantcare.js readsLikeTurf): a labour line's heading or a material that reads
+like artificial turf, the Artificial Turf service, or his own Yes on the job.
 """
 
 import json
+import re
 
 from google.api_core.exceptions import AlreadyExists
 
@@ -49,6 +56,27 @@ SYSTEM = (
     "given says so, and then in its own words. Sign off with 'Jonah' on one line and 'YD "
     "Exterior Visions' on the next; add no phone number, website or address. The subject is "
     "short, e.g. 'Caring for your new plants'."
+)
+
+# Added to the instructions when the job has artificial turf.
+TURF_SYSTEM = (
+    "\n\nThis job ALSO (or only) had ARTIFICIAL TURF installed -- write its care too, under its own "
+    "heading (and if there are no plants, the whole email is about the turf; then ignore the plant "
+    "instructions above and call it a turf-care email):\n"
+    "- The first few weeks: let the infill settle; brush it if the fibres look flat.\n"
+    "- Regular care: rinse with a hose now and then (dust, pollen, pets); blow or rake off leaves "
+    "and debris with a leaf blower or a plastic leaf rake -- never a metal rake; brush the fibres "
+    "against the grain with a stiff (not wire) brush every few weeks, more where it is walked on.\n"
+    "- Pets, if it could matter: pick up solids, hose the spot; an enzyme turf cleaner for odour.\n"
+    "- Keep off it: grills, fire pits, smokers and hot ash; cigarettes; fireworks; sharp tools; "
+    "car or trailer traffic. Reflected sun from a low-E window can melt fibres -- tell them to get "
+    "in touch if they ever see a shiny or melted patch.\n"
+    "- Winter here: let snow melt off by itself; if it must be cleared, a plastic shovel or a "
+    "broom, leaving a little snow on top -- no metal blades, no salt or ice melt on it.\n"
+    "- Spills: blot, rinse; a mild soap for sticky ones.\n"
+    "- When to get in touch: seams lifting, edges coming up, low spots, or puddles that stay.\n"
+    "Name the turf products only as given. The subject then reads e.g. 'Caring for your new turf' "
+    "(or 'Caring for your new plants and turf')."
 )
 
 SCHEMA = {
@@ -113,6 +141,43 @@ def supply_plants(j, get_item=None):
     return out
 
 
+# The app's own words for artificial turf (plantcare.js TURF_WORDS /
+# NOT_TURF): "Turfstone" pavers, "Turf Builder" and turf-type fescue are not.
+TURF_WORDS = re.compile(r"\b(artificial|synthetic|fake)\s+(turf|grass|lawn)\b|\bputting\s+greens?\b|\bturf\b", re.I)
+NOT_TURF = re.compile(r"\bturf[\s-]*(builder|type)\b|\bfescue\b|\bseed|\bfertili[sz]|\bsod\b|\bweed", re.I)
+
+
+def reads_like_turf(text):
+    t = str(text or "")
+    return bool(t.strip()) and bool(TURF_WORDS.search(t)) and not NOT_TURF.search(t)
+
+
+def turf_of(j):
+    """[(text, qty, unit)] of the turf that went in: the estimate's labour
+    lines whose heading reads like turf (with the start of their scope) and
+    its turf materials. A job set to turf by hand, or with only the service,
+    gets one plain line so the email can still be written."""
+    est = j.get("estimate") or {}
+    out = []
+    for w in est.get("work") or []:
+        if isinstance(w, dict) and reads_like_turf(w.get("title")):
+            scope = " ".join(str(w.get("scope") or "").split())[:400]
+            out.append((str(w.get("title")).strip()[:120] + (": " + scope if scope else ""), 0, ""))
+    for m in est.get("materials") or []:
+        if isinstance(m, dict) and reads_like_turf(m.get("name")):
+            try:
+                qty = float(m.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            out.append((str(m.get("name")).strip()[:120], qty, str(m.get("unit") or "")[:20]))
+    if out:
+        return out
+    services = [x for x in (j.get("serviceTypes") or []) if reads_like_turf(x)]
+    if j.get("turf") == "yes" or j.get("hasTurf") is True or services:
+        return [("Artificial turf", 0, "")]
+    return []
+
+
 def is_owed(j):
     """A finished job with plants whose care email is still owed (the app's
     plantcare.js says the same): marked Complete since care emails were
@@ -126,6 +191,11 @@ def is_owed(j):
     done = j.get("careDone")
     if j.get("careEmail") or (isinstance(done, dict) and done.get("how")):
         return False
+    # Artificial turf owes the same email: the app's saved answer, else the
+    # job's own words.
+    turf = j.get("hasTurf")
+    if turf is True or (not isinstance(turf, bool) and j.get("turf") != "no" and turf_of(j)):
+        return True
     has = j.get("hasPlants")
     if isinstance(has, bool):
         return has
@@ -165,21 +235,25 @@ def _warranty():
     return str(((rules.get("payments") or {}).get("warranty")) or "").strip()[:1500]
 
 
-def _prompt(j, plants):
+def _prompt(j, plants, turf=()):
     first = str(j.get("firstName") or "").strip()
     lines = [
         "Today is %s." % dg._long_day(dg._now().date()),
         "Customer: %s%s" % ((j.get("customerName") or "").strip() or "(no name)",
                             (" (first name %s)" % first) if first else ""),
         "Town: %s" % ((j.get("city") or "").strip() or "(not given)"),
-        "Plants installed:",
+        "Plants installed:" if plants else "Plants installed: none -- this email is about the artificial turf only.",
     ]
     for name, qty, tree in plants:
         q = ("%g x " % qty) if qty else ""
         kind = {"single": " (single-trunk tree)", "multi": " (multi-trunk tree or evergreen)"}.get(tree, "")
         lines.append("- %s%s%s" % (q, name, kind))
+    if turf:
+        lines.append("Artificial turf installed:")
+        for text, qty, unit in turf:
+            lines.append("- %s%s" % (text, (" (%g %s)" % (qty, unit)).replace(" )", ")") if qty else ""))
     w = _warranty()
-    lines.append("\nThe company's warranty text (mention a plant warranty only if this covers plants):\n%s" % (w or "(none)"))
+    lines.append("\nThe company's warranty text (mention a warranty only if this covers what was installed):\n%s" % (w or "(none)"))
     return "\n".join(lines)
 
 
@@ -199,9 +273,11 @@ def draft(client, job_id, auto=False):
     if not snap.exists:
         return {"error": "That job was not found"}, None
     j = snap.to_dict() or {}
-    plants = plants_of(j) + supply_plants(j)
-    if not plants:
-        return {"error": "There are no plants on this job's estimate"}, None
+    # A job set to "No plants" / "No turf" by hand gets nothing on that side.
+    plants = [] if j.get("plants") == "no" else plants_of(j) + supply_plants(j)
+    turf = [] if j.get("turf") == "no" else turf_of(j)
+    if not plants and not turf:
+        return {"error": "There are no plants or artificial turf on this job's estimate"}, None
     to = (j.get("email") or "").strip()
     if not cards.EMAIL_RE.match(to):
         return {"error": "This job has no email address. Add one to the job first."}, None
@@ -215,7 +291,7 @@ def draft(client, job_id, auto=False):
         except AlreadyExists:
             return {"skipped": True}, None
     try:
-        result = _write(client, job_id, j, plants, to)
+        result = _write(client, job_id, j, plants, to, turf)
     except Exception:
         # Not written after all: the claim goes, so the next try is not
         # mistaken for a duplicate.
@@ -227,10 +303,10 @@ def draft(client, job_id, auto=False):
     return result
 
 
-def _write(client, job_id, j, plants, to):
-    resp =client.beta.messages.create(
-        model=MODEL, max_tokens=8000, system=SYSTEM,
-        messages=[{"role": "user", "content": _prompt(j, plants)}],
+def _write(client, job_id, j, plants, to, turf=()):
+    resp = client.beta.messages.create(
+        model=MODEL, max_tokens=8000, system=SYSTEM + (TURF_SYSTEM if turf else ""),
+        messages=[{"role": "user", "content": _prompt(j, plants, turf)}],
         thinking={"type": "adaptive"},
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
@@ -250,7 +326,7 @@ def _write(client, job_id, j, plants, to):
     if saved.get("error"):
         return {"error": saved["error"].split(". Put the full")[0] + "."}, resp.usage
     note = {"at": dg._now().isoformat(), "draftId": saved.get("draftId"), "subject": saved.get("subject"),
-            "plants": len(plants)}
+            "plants": len(plants), "turf": len(turf)}
     import quickbooks
     dg._db().collection("jobs").document(job_id).set({"careEmail": note, "lastModified": quickbooks._stamp()}, merge=True)
     print("care: drafted for job", job_id)
