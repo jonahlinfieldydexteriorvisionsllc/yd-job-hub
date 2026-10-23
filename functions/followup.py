@@ -15,9 +15,17 @@ bid the customer has already answered in QuickBooks.
 
 import datetime
 import json
+import re
+
+import requests
 
 import cards
 import digest as dg
+
+# Reading the owner's mail, to find the email a bid went out in (the same
+# permission the receipts reader has: receipts.GMAIL_READ).
+GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
+GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 # Writing a short email: the mid-priced model writes it as well (Jonah, 7 Oct:
 # no Claude feature should cost more than it needs to).
@@ -86,6 +94,53 @@ def _prompt(j):
     return "\n".join(lines)
 
 
+def _gmail(path, params=None):
+    token = dg._gmail_access_token(GMAIL_READ)
+    r = requests.get(GMAIL_API + path, headers={"Authorization": "Bearer " + token}, params=params, timeout=30)
+    if r.status_code >= 300:
+        raise RuntimeError("gmail %s -> %d" % (path, r.status_code))
+    return r.json()
+
+
+def _header(m, name):
+    for h in ((m.get("payload") or {}).get("headers") or []):
+        if str(h.get("name") or "").lower() == name.lower():
+            return str(h.get("value") or "")
+    return ""
+
+
+def estimate_thread(j, to):
+    """The email thread the bid went out in, in the owner's Gmail, as
+    cards.draft_email's `reply` ({threadId, subject, inReplyTo, references}),
+    or None. Jonah (22 Oct 2026): "follow up emails should always be sent in
+    the same thread as the estimate". QuickBooks emails an estimate with him
+    copied (BillEmailBcc), so his copy is in his mailbox: the newest thread to
+    the customer whose subject names the estimate's number. Its first subject
+    is the thread's; the answer goes after its last message (not a draft)."""
+    num = str((j.get("qbEstimate") or {}).get("docNumber") or j.get("estimateNumber") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,20}", num):
+        return None
+    says = re.compile(r"(?<![A-Za-z0-9])" + re.escape(num) + r"(?![A-Za-z0-9])")
+    found = []
+    for t in (_gmail("/threads", {"q": 'to:%s subject:"%s" -in:draft newer_than:2y' % (to, num),
+                                  "maxResults": 10}).get("threads") or []):
+        full = _gmail("/threads/" + t["id"], {"format": "metadata",
+                                              "metadataHeaders": ["Subject", "Message-ID", "To"]})
+        sent = [m for m in full.get("messages") or [] if "DRAFT" not in (m.get("labelIds") or [])]
+        if not sent:
+            continue
+        subject = _header(sent[0], "Subject")
+        if not says.search(subject) or to.lower() not in _header(sent[0], "To").lower():
+            continue
+        ids = [i for i in (_header(m, "Message-ID") for m in sent) if i]
+        if ids:
+            found.append((int(sent[-1].get("internalDate") or 0), {
+                "threadId": t["id"], "subject": subject, "inReplyTo": ids[-1],
+                # The whole chain, as mail does it -- bounded, the newest kept.
+                "references": " ".join(ids[-20:])}))
+    return max(found, key=lambda x: x[0])[1] if found else None
+
+
 def draft(client, job_id):
     """Write and save one follow-up. Returns (result, usage) -- result is
     {draftId, link, to, subject} or {error}; usage is the tokens spent, or None
@@ -127,9 +182,19 @@ def draft(client, job_id):
     if not subject or not body:
         return {"error": "Claude's answer was empty. Try again."}, resp.usage
 
-    saved = cards.draft_email(to, subject, body)
+    # In the estimate's own thread when it can be found: the customer sees
+    # it under the bid, not as a stranger's new email. Its subject is then
+    # the estimate's ("Re: ..."); Gmail keeps a draft in a thread only so.
+    try:
+        reply = estimate_thread(j, to)
+    except Exception as err:        # noqa: BLE001 -- a new email still beats none
+        print("followup: estimate thread not looked up:", err)
+        reply = None
+    if reply:
+        subject = reply["subject"] if re.match(r"(?i)re:", reply["subject"]) else "Re: " + reply["subject"]
+    saved = cards.draft_email(to, subject, body, reply)
     if saved.get("error"):
         return {"error": saved["error"].split(". Put the full")[0] + "."}, resp.usage
-    print("followup: drafted for job", job_id)
+    print("followup: drafted for job", job_id, "in the estimate thread" if reply else "as a new email")
     return {"draftId": saved.get("draftId"), "link": saved.get("link"), "to": to,
-            "subject": saved.get("subject")}, resp.usage
+            "subject": saved.get("subject"), "inThread": bool(reply)}, resp.usage

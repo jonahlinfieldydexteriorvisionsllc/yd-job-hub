@@ -259,10 +259,12 @@ class Records:
 EMAIL_RE = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[a-z]{2,}$", re.I)
 
 
-def draft_email(to, subject, body):
+def draft_email(to, subject, body, reply=None):
     """Saved in the owner's Drafts through the same domain-wide delegation the
     summaries are sent with, but with permission to draft (gmail.compose).
-    Nothing is sent."""
+    Nothing is sent. `reply`: {threadId, inReplyTo, references} -- the draft
+    is an answer inside that email thread (followup.py: a bid's follow-up in
+    the thread its estimate went out in), its subject that thread's."""
     to = (to or "").strip()
     if not EMAIL_RE.match(to):
         return {"error": "That is not one email address. Use the owner's address and say in the body who it is for."}
@@ -270,15 +272,24 @@ def draft_email(to, subject, body):
     msg["To"] = to
     msg["From"] = dg.OWNER_EMAIL
     msg["Subject"] = (subject or "").strip()[:200]
+    # Gmail keeps a draft in a thread only with the thread's id, a matching
+    # subject and these two headers; the customer's own mail sorts it in
+    # under the estimate by the same headers.
+    if reply and reply.get("inReplyTo"):
+        msg["In-Reply-To"] = reply["inReplyTo"]
+        msg["References"] = reply.get("references") or reply["inReplyTo"]
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     try:
         token = dg._gmail_access_token(GMAIL_COMPOSE)
     except Exception as e:      # noqa: BLE001
         print("cards: gmail compose not allowed:", e)
         return {"error": "Saving drafts is not switched on yet. Put the full email in your result instead."}
+    message = {"raw": raw}
+    if reply and reply.get("threadId"):
+        message["threadId"] = reply["threadId"]
     r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
                       headers={"Authorization": "Bearer " + token},
-                      json={"message": {"raw": raw}}, timeout=30)
+                      json={"message": message}, timeout=30)
     if r.status_code >= 300:
         print("cards: draft failed", r.status_code, r.text[:300])
         return {"error": "Gmail would not save the draft. Put the full email in your result instead."}

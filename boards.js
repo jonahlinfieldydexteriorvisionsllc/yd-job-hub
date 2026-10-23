@@ -606,7 +606,11 @@
       if (!window.YDSync || !window.YDSync.patchJob(jobId, { followUps: ups })) {
         showToast('Draft saved in Gmail, but this device could not note it on the job');
       } else {
-        showToast('Follow-up saved in Gmail Drafts — read it and send it from there');
+        // In the estimate's own email thread when the server found it
+        // (functions/followup.py estimate_thread), said so either way.
+        showToast(data.inThread === false
+          ? 'Follow-up saved in Gmail Drafts as a new email — the estimate’s email wasn’t found in your Gmail'
+          : 'Follow-up saved in Gmail Drafts, as a reply under the estimate email — read it and send it from there');
       }
     } catch (e) {
       showToast('Could not write the email: ' + e.message);
