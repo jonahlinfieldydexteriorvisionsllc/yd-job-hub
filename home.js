@@ -219,6 +219,7 @@
     return '<div class="hm-top">' +
       '<div class="hm-hello"><div class="hm-hi">' + esc(hello + (name ? ', ' + name : '')) + '</div>' +
         '<div class="hm-date">' + esc(date) + '</div></div>' +
+      jotHtml() +
       (crewish ? '' : weatherHtml()) +
     '</div>' + (crewish ? weatherLineHtml() : '');
   }
@@ -473,9 +474,29 @@
   // the Inbox board (boards.js), newest first -- each sorted onto a board
   // with a tap ("Sort" shows a button a board), or deleted. The owner's.
   let sortOpen = '';         // the note whose board buttons are showing
+
+  // The box to jot one in is the first thing under his name, not in the
+  // card (Jonah, 23 Oct 2026: "add a note should be on the top easily
+  // accesible right when opening the app on mobile") -- Home is what the
+  // app opens on, and on a phone the card sat under the figures and
+  // Waiting on you, off the first screen. On a wide screen it comes after
+  // the greeting and the weather, beside them where there is room
+  // (styles.css .hm-jot). How many wait is a tap down to them.
+  function jotHtml() {
+    if (!isOwner() || !window.YDBoards || !YDBoards.inbox) return '';
+    const n = YDBoards.inbox().length;
+    return '<div class="hm-jot">' +
+      '<div class="hm-note-add"><input id="hmNoteBox" maxlength="500" placeholder="📝 Jot a note — sort it later" ' +
+        'enterkeyhint="done" onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" autocomplete="off">' +
+        '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">Add</button></div>' +
+      (n ? '<button type="button" class="hm-jot-n" onclick="homeGo(\'notes\')">' + n + (n === 1 ? ' note' : ' notes') + ' to sort ↓</button>' : '') +
+    '</div>';
+  }
+  // The notes waiting -- only when there are some.
   function notesHtml() {
     if (!isOwner() || !window.YDBoards || !YDBoards.inbox) return '';
     const list = YDBoards.inbox();
+    if (!list.length) return '';
     const targets = sortOpen ? YDBoards.sortTargets() : [];
     const rows = list.map(k => {
       const open = k.id === sortOpen;
@@ -488,11 +509,7 @@
             ' onclick="homeNoteTo(\'' + safe(k.id) + '\', \'' + safe(b.id) + '\')">' + esc(b.name || 'Board') + '</button>').join('') + '</div>' : '') +
         '</div>';
     });
-    return card('notes', '📝 Notes to sort', list.length || '', ['Board', "homeBoard('inbox')"],
-      '<div class="hm-note-add"><input id="hmNoteBox" maxlength="500" placeholder="Jot it down — sort it onto a board later" ' +
-        'onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" autocomplete="off">' +
-        '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">Add</button></div>' +
-      (rows.length ? capped('notes', rows, 6) : empty('Nothing to sort.')));
+    return card('notes', '📝 Notes to sort', list.length, ['Board', "homeBoard('inbox')"], capped('notes', rows, 6));
   }
   window.homeNoteAdd = function () {
     const box = el('hmNoteBox');
@@ -500,6 +517,8 @@
     if (!text) { if (box) box.focus(); return; }
     if (!YDBoards.inboxAdd(text)) { showToast('Notes can’t be saved just yet — still loading'); return; }
     box.value = '';
+    // On a phone the list is screens below the box: say it went in.
+    showToast('Note saved — sort it later');
     render();
     const again = el('hmNoteBox');
     if (again) again.focus();

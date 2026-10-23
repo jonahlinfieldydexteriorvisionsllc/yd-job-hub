@@ -3057,6 +3057,13 @@
   .hm-wx-t b { font-size:18px; }
   .hm-wx-t small { display:block; font-size:12px; color:var(--muted); margin-top:1px; }
   .hm-wx-t small.hm-wx-alert { color:var(--neg); font-weight:700; }
+  /* The owner's jot box (home.js jotHtml): after the greeting and the
+     weather on a wide screen (beside them where there is room), straight
+     under his name on a phone. */
+  .hm-jot { order:3; flex:1 1 100%; max-width:560px; }
+  .hm-jot .hm-note-add { margin:0; }
+  .hm-jot-n { display:inline-flex; align-items:center; min-height:36px; margin-top:2px; padding:4px 2px;
+    background:none; border:none; cursor:pointer; font:600 13px 'DM Sans',sans-serif; color:var(--brand-ink); }
   .hm-actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 14px; }
   .hm-body .hm-actions { margin:10px 0 2px; }
   .hm-big { min-width:170px; font-size:14px; padding:12px 24px; }
@@ -3180,6 +3187,7 @@
     .hm-card .section-badge { font-size:10px; letter-spacing:.4px; padding:3px 8px; }
     .hm-link { font-size:10px; letter-spacing:.4px; padding:4px 8px; }
     .hm-wx { width:100%; }
+    .hm-jot { order:0; max-width:none; }
     .hm-stats { grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; }
     .hm-stat { padding:10px 12px; }
     .hm-stat-n { font-size:22px; }
@@ -3191,6 +3199,7 @@
   }
 
   html[data-night] .hm-hi { color:#c9a9ec; }
+  html[data-night] .hm-jot-n { color:var(--brand-2); }
   html[data-night] .hm-wx, html[data-night] .hm-stat { box-shadow:none; }
   html[data-night] .hm-more, html[data-night] .hm-alert .hm-alert-go { color:var(--brand-2); }
   html[data-night] .hm-job-m small.hm-when { color:var(--brand-2); }
