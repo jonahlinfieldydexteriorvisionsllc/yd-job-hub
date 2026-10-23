@@ -1580,6 +1580,8 @@
     // text, byHand } or null; and the services to pick one from by hand,
     // by kind of work: [{ name, services: [{ id, name, written }] }].
     howToFor: howToFor,
+    // The service a piece of work is (profit by service): { id, name } or null.
+    serviceFor: w => { const x = serviceForLine(w); return x ? { id: x.id, name: x.v.name || '' } : null; },
     // The marking paint key: [{ color, name, hex, means }] (only colours given a meaning).
     paint: paintKey,
     pickList: () => (list ? groupsSorted(true).map(g => ({ name: g.name,

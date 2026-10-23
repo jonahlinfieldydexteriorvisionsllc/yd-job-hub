@@ -267,6 +267,13 @@
       const e = fromSaved(saved || {});
       return P().price(e, ctx(city == null ? '' : city, e, jobId));
     },
+    // The same, split by piece of work (profit by service, jobcosts.js):
+    // { lines: [{ title, service, priceCents, costCents, profitCents, crewDays, complete, ... }], rest } or null.
+    splitSaved: (saved, city, jobId) => {
+      if (!P()) return null;
+      const e = fromSaved(saved || {});
+      return serviceSplit(e, P().price(e, ctx(city == null ? '' : city, e, jobId)));
+    },
     // The plant-care line under QuickBooks, after the job's plants or its
     // care email were settled on the Job tab (plantcare.js).
     redrawCare: () => renderQb(),
@@ -1780,8 +1787,49 @@
         row('Profit', cents(p.cents), 'est-plan-big') +
         row('Profit margin', p.marginPct === null ? '—' : (Math.round(p.marginPct * 10) / 10) + '%') +
         row('Profit per crew-day', p.perDayCents === null ? '— put in crew-days' : perDay(p.perDayCents)) +
-      '</tbody></table>' + why +
+      '</tbody></table>' + why + serviceRowsHtml(est, r) +
     '</div>';
+  }
+  // Each piece of work: its labour and materials, what it costs and what it
+  // makes (pricing.js byLine). Shown once there are two or more: with one,
+  // the table above is that line.
+  function serviceSplit(e, r) {
+    if (!P() || !P().byLine || !r) return null;
+    const items = catalog().items;
+    const workFor = window.YDCrewJobs && YDCrewJobs.workFor ? YDCrewJobs.workFor : null;
+    const split = P().byLine(e, r, workFor ? (m, lines) => workFor(m, lines, items) : null);
+    split.lines.forEach(l => {
+      const s = window.YDServices && YDServices.serviceFor ? YDServices.serviceFor(l.w) : null;
+      l.service = s ? s.name : '';
+    });
+    return split;
+  }
+  function serviceRowsHtml(e, r) {
+    const split = serviceSplit(e, r);
+    if (!split) return '';
+    const lines = split.lines.filter(l => l.priceCents > 0 || l.costCents > 0);
+    if (lines.length < 2) return '';
+    const pctTxt = m => m === null ? '' : ' · ' + Math.round(m) + '%';
+    const one = l => {
+      const name = l.title || l.service || 'A piece of work';
+      const svc = l.service && l.service.toLowerCase() !== name.toLowerCase() ? ' <span class="muted">(' + esc(l.service) + ')</span>' : '';
+      const cls = l.profitCents < 0 ? 'est-svc-bad' : 'est-svc-good';
+      return '<div class="est-svc">' +
+        '<div class="est-svc-h"><span><b>' + esc(name) + '</b>' + svc + (l.complete ? '' : ' <span class="muted" title="Not final: a line or material isn’t priced, or no crew-days">?</span>') + '</span>' +
+          '<span class="' + cls + '">' + cents(l.profitCents) + pctTxt(l.marginPct) + '</span></div>' +
+        '<div class="est-svc-sub">Labor ' + cents(l.laborCents) + ' + materials ' + cents(l.materialsCents) +
+          ' = ' + cents(l.priceCents) + ' · cost ' + cents(l.costCents) +
+          (l.perDayCents !== null ? ' · ' + perDay(l.perDayCents) : ' · no crew-days') + '</div></div>';
+    };
+    const rest = split.rest;
+    const restHtml = Math.abs(rest.priceCents) > 100 || Math.abs(rest.costCents) > 100
+      ? '<div class="est-svc est-svc-rest"><div class="est-svc-h"><span>Not under a piece of work</span><span>' + cents(rest.profitCents) + '</span></div>' +
+        '<div class="est-svc-sub">' + cents(rest.priceCents) + ' · cost ' + cents(rest.costCents) +
+          (rest.materials.length ? ' — ' + esc(rest.materials.slice(0, 6).join(', ')) + (rest.materials.length > 6 ? '…' : '') +
+            '. Pick “For the crew, this is for” on a material to count it under a line.' : '') + '</div></div>'
+      : '';
+    return '<div class="est-svcs"><div class="est-svcs-h">By piece of work</div>' + lines.map(one).join('') + restHtml +
+      '<p class="est-planned-why">Materials go with the line the crew’s page lists them under; fuel by crew-days. All Jobs → Estimate vs actual adds these up by service.</p></div>';
   }
 
   // The estimate as the customer will read it in QuickBooks -- the same lines

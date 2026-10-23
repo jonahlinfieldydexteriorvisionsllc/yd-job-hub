@@ -771,7 +771,82 @@
       '<p class="hint">Tap a job for its side by side on Tracking. * a cost not recorded yet (no receipts, no hours), counted at the estimate’s figure so it never reads as profit. ' +
       (anyShaky ? '? after an estimated profit: that job’s estimate isn’t complete — some lines aren’t priced or it has no crew-days — so that profit isn’t the whole story. ' : '') +
       'In-progress jobs are so far. A job’s year is when the crew first clocked in, else its date.</p>';
-    wrap.innerHTML = h;
+    wrap.innerHTML = h + servicesHtml(list);
+  }
+
+  // ------------------------------------------------ profit by service
+  //
+  // Jonah (21 Oct 2026): "i want to see profit per service so i can start
+  // tracking what services bring in the best profits". Every piece of work on
+  // the jobs picked above, from each job's estimate split by line
+  // (estimate.js splitSaved -> pricing.js byLine), added up by the service it
+  // is (services.js; else its heading). Planned figures -- what the estimate
+  // says the work makes -- since hours and receipts are kept per job, not per
+  // piece of work. Margins: only whoever may change jobs (as on the estimate).
+  const splitKept = new Map();
+  function splitOf(job) {
+    const key = (job.lastModified || '') + '|' + (job.city || '');
+    const k = splitKept.get(job._id);
+    if (k && k.key === key) return k.v;
+    let v = null;
+    try { v = hasLines(job.estimate) && window.YDEstimate && YDEstimate.splitSaved ? YDEstimate.splitSaved(job.estimate, job.city || '', job._id) : null; }
+    catch (e) { v = null; }
+    splitKept.set(job._id, { key: key, v: v });
+    return v;
+  }
+  ['yd-pricing', 'yd-supplies', 'yd-services'].forEach(ev => document.addEventListener(ev, () => splitKept.clear()));
+  // "Paver patio (120 × $14.00)" and "paver patio" are the same service.
+  const serviceKey = name => String(name || '').replace(/\s*\([^)]*×[^)]*\)\s*$/, '').trim();
+  let servicesOpen = false;
+  window.evaServicesFold = function () { servicesOpen = !servicesOpen; renderList(); };
+  function servicesHtml(list) {
+    if (!(typeof ydCan === 'function' && ydCan('jobs', 'change'))) return '';
+    const groups = {};
+    list.forEach(m => {
+      const split = splitOf(m.job);
+      if (!split) return;
+      split.lines.forEach(l => {
+        if (!(l.priceCents > 0)) return;
+        const name = serviceKey(l.service || l.title) || 'Untitled work';
+        const k = name.toLowerCase();
+        const g = groups[k] || (groups[k] = { name: name, jobs: new Set(), price: 0, cost: 0, days: 0, dayProfit: 0, shaky: 0 });
+        g.jobs.add(m.id);
+        g.price += l.priceCents; g.cost += l.costCents;
+        if (l.crewDays > 0) { g.days += l.crewDays; g.dayProfit += l.profitCents; }
+        if (!l.complete) g.shaky++;
+      });
+    });
+    const rows = Object.values(groups);
+    if (!rows.length) return '';
+    // Best first: what a crew-day on it makes, then the profit.
+    const perDayOf = g => g.days > 0 ? g.dayProfit / g.days : null;
+    rows.sort((a, b) => {
+      const pa = perDayOf(a), pb = perDayOf(b);
+      if (pa !== null && pb !== null && pa !== pb) return pb - pa;
+      if (pa === null && pb !== null) return 1;
+      if (pb === null && pa !== null) return -1;
+      return (b.price - b.cost) - (a.price - a.cost);
+    });
+    const c = v => money(Math.round(v));
+    const anyShaky = rows.some(g => g.shaky);
+    let h = '<div class="eva-svc"><button type="button" class="link-btn eva-svc-toggle" onclick="evaServicesFold()" aria-expanded="' + servicesOpen + '">' +
+      '📊 Profit by service — ' + plural(rows.length, 'service', 'services') + ' on these jobs ' + (servicesOpen ? '▴' : '▾') + '</button>';
+    if (!servicesOpen) return h + '</div>';
+    h += '<div class="table-wrap"><table class="eva-list eva-svc-table"><thead><tr><th>Service</th><th>Jobs</th><th>Price</th>' +
+      '<th>Planned profit</th><th>Margin</th><th>Per crew-day</th></tr></thead><tbody>' +
+      rows.map(g => {
+        const profit = g.price - g.cost, pd = perDayOf(g);
+        return '<tr><td class="bold">' + esc(g.name) + (g.shaky ? '<span class="eva-star" title="Some of its lines aren’t priced or have no crew-days">?</span>' : '') + '</td>' +
+          '<td data-l="Jobs">' + g.jobs.size + '</td>' +
+          '<td data-l="Price">' + c(g.price) + '</td>' +
+          '<td data-l="Planned profit"><span class="' + (profit < 0 ? 'eva-bad' : 'eva-good') + '">' + c(profit) + '</span></td>' +
+          '<td data-l="Margin">' + (g.price > 0 ? Math.round(profit / g.price * 100) + '%' : '—') + '</td>' +
+          '<td data-l="Per crew-day">' + (pd !== null ? c(pd) : '<span class="muted">no crew-days</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      '<p class="hint">From each job’s estimate as it is now, split by its pieces of work: labor, its materials (the ones the crew’s page lists under it) and fuel by crew-days, less what they cost. Best per crew-day first. ' +
+      (anyShaky ? '? some of that service’s lines aren’t priced or have no crew-days, so its profit isn’t the whole story. ' : '') +
+      'Materials under no piece of work aren’t counted here.</p>';
+    return h + '</div>';
   }
 
   // ------------------------------------------------------------ actions

@@ -936,6 +936,93 @@
     };
   }
 
+  // What each piece of work on an estimate brings in and costs (Jonah, 21 Oct
+  // 2026: "show me labor/materials for each service being done and i want to
+  // see profit per service so i can start tracking what services bring in the
+  // best profits"). The same price() result split by work line, never sums of
+  // its own:
+  //   - its labour: the line's price;
+  //   - its materials: the ones the crew's page lists under it (workFor --
+  //     picked on the material, its all-in line, else by the words), at the
+  //     customer's price and at cost, with their share of each truck by
+  //     quantity;
+  //   - fuel (price and cost) shared by crew-days, the days it is there;
+  //   - the crew at the crew-day rate for its own crew-days.
+  // What no line takes (a material under none, fuel with no crew-days
+  // anywhere, a cent of rounding) is `rest`, so the lines and rest always add
+  // up to the job's price and profit. An estimate accepted in QuickBooks has
+  // one materials figure: it is shared by what each line's materials cost.
+  // r: price(est, ...). workFor(m, lines) -> work line id or ''.
+  function byLine(est, r, rulesNow, workFor) {
+    const dayCost = num((rulesNow || {}).crewDayCents);
+    const ws = est.work || [];
+    const lines = ws.map((w, i) => ({ id: w.id, title: w.title || '', w: w,
+      laborCents: r.work[i] ? r.work[i].cents : 0, materialsCents: 0, materialCostCents: 0,
+      deliveryCostCents: 0, fuelCostCents: 0, fuelCents: 0, laborCostCents: 0,
+      crewDays: r.work[i] && r.work[i].crewDays > 0 ? r.work[i].crewDays : 0,
+      problems: r.work[i] ? r.work[i].problems.length : 0, count: 0 }));
+    const byId = {};
+    lines.forEach(l => { if (l.id) byId[l.id] = l; });
+    const named = ws.filter(w => w && (w.title || w.scope));
+    const owner = {};
+    const mats = r.takeoff.concat(r.added);
+    const src = {};
+    (est.materials || []).forEach(m => { src[m.id] = m; });
+    mats.forEach(l => {
+      const wid = workFor ? workFor(src[l.id] || l, named) : '';
+      const line = wid && byId[wid];
+      if (!line) return;
+      owner[l.id] = line;
+      line.materialsCents += l.clientCents || 0;
+      line.materialCostCents += l.costTotalCents || 0;
+      line.problems += l.problems.length;
+      line.count++;
+    });
+    ((r.delivery && r.delivery.lines) || []).forEach(d => {
+      const parts = d.parts || [], all = parts.reduce((s, p) => s + p.qty, 0);
+      if (!(all > 0)) return;
+      parts.forEach(p => {
+        const line = owner[p.id];
+        if (!line) return;
+        line.materialsCents += Math.round((d.clientCents || 0) * p.qty / all);
+        line.deliveryCostCents += Math.round((d.costCents || 0) * p.qty / all);
+      });
+    });
+    const days = lines.reduce((s, l) => s + l.crewDays, 0);
+    if (days > 0) {
+      lines.forEach(l => {
+        l.fuelCents = Math.round((r.fuel.clientCents || 0) * l.crewDays / days);
+        l.fuelCostCents = Math.round((r.fuel.costCents || 0) * l.crewDays / days);
+      });
+    }
+    if (r.asAccepted) {
+      // QuickBooks' one materials figure, shared by cost.
+      const costAll = r.profit.materialCostCents + r.profit.deliveryCostCents;
+      lines.forEach(l => {
+        l.materialsCents = costAll > 0 ? Math.round(r.materialsCents * (l.materialCostCents + l.deliveryCostCents) / costAll) : 0;
+        l.fuelCents = 0;
+      });
+    }
+    const out = lines.map(l => {
+      l.materialsCents += l.fuelCents;
+      l.laborCostCents = dayCost !== null ? Math.round(l.crewDays * dayCost) : 0;
+      const priceCents = l.laborCents + l.materialsCents;
+      const costCents = l.materialCostCents + l.deliveryCostCents + l.fuelCostCents + l.laborCostCents;
+      return { id: l.id, title: l.title, w: l.w, laborCents: l.laborCents, materialsCents: l.materialsCents,
+        priceCents: priceCents, costCents: costCents, profitCents: priceCents - costCents,
+        materialCostCents: l.materialCostCents, deliveryCostCents: l.deliveryCostCents,
+        fuelCostCents: l.fuelCostCents, laborCostCents: l.laborCostCents, crewDays: l.crewDays, materials: l.count,
+        marginPct: priceCents > 0 ? (priceCents - costCents) / priceCents * 100 : null,
+        perDayCents: l.crewDays > 0 ? Math.round((priceCents - costCents) / l.crewDays) : null,
+        complete: !l.problems && l.crewDays > 0 && dayCost !== null };
+    });
+    const sumP = out.reduce((s, l) => s + l.priceCents, 0), sumC = out.reduce((s, l) => s + l.costCents, 0);
+    const restPrice = r.totalCents - sumP, restCost = r.profit.costCents - sumC;
+    const rest = { priceCents: restPrice, costCents: restCost, profitCents: restPrice - restCost,
+      materials: mats.filter(l => !owner[l.id] && ((l.clientCents || 0) > 0 || (l.costTotalCents || 0) > 0)).map(l => l.name || 'a material') };
+    return { lines: out, rest: rest };
+  }
+
   // Which lines are taxed, and the tax. Each work line and material line is
   // marked `taxed` (what goes to QuickBooks as taxable); the materials figure
   // splits into its taxed and untaxed parts, delivery going with its material
@@ -2051,6 +2138,8 @@
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
     price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
+    // Each work line's price, cost and profit (estimate.js, jobcosts.js).
+    byLine: (est, r, workFor) => byLine(est, r, rules, workFor),
     // What bringing a job's order costs (estimate.js orderDelivery): the same sums.
     deliveries,
     // Delivered or picked up: one material's way by the rules (Supplies
