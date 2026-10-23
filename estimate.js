@@ -497,7 +497,7 @@
         (ro ? '' : ' <button class="link-btn est-today" onclick="estNoteToday()">+ today’s date</button>') + '</span>' +
         '<textarea id="estNotes" rows="5" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" onblur="estNotesDone()" ' +
         'placeholder="16x20 patio off the back door, Tahoe in Cascade, 2 steps down. 40 ft of Belgian edging along the beds (we pick it up). Tear out the old deck, ~12x14. Clay soil.">' +
-        esc(est.notes) + '</textarea></div>' +
+        esc(est.notes) + '</textarea>' + snapHtml(ro) + '</div>' +
       (!ro && !hasLines() && !est.chat.length
         ? '<div class="field-actions"><button class="btn btn-filled" onclick="estDraftFromNotes()"' + (building ? ' disabled' : '') + '>' +
             (busyHere() ? 'Claude is working…' : building ? 'Claude is busy with another estimate…'
@@ -2733,7 +2733,7 @@
         (ro ? '' : ' <button class="link-btn est-today" onclick="estNoteToday()">+ today’s date</button>') + '</span>' +
         '<textarea id="estNotes" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estNotesInput(this.value)" onblur="estNotesDone()" ' +
         'placeholder="Drive and front walk, mailbox. Long drive with a turnaround. They have a dog — paw-friendly melt.">' +
-        esc(est.notes) + '</textarea></div>' +
+        esc(est.notes) + '</textarea>' + snapHtml(ro) + '</div>' +
       ((est.questions || []).length ? '<div class="est-questions"><b>Claude asks:</b><ul>' +
         est.questions.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
       ((est.flags || []).length ? '<div class="est-flags"><b>Flags:</b><ul>' + est.flags.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
@@ -3193,6 +3193,44 @@
     n.focus();
     try { n.setSelectionRange(n.value.length, n.value.length); } catch (e) {}
   };
+  // A photo from the site visit, taken from the bid itself. Jonah (21 Oct
+  // 2026): "button on bid notes to take a photo that auto uploads photo to
+  // job hub so i can do that with my phone or the ipad and not have to sift
+  // through my icloud photos". The camera opens straight away (`capture`; a
+  // computer offers its files) and the picture goes on the job as a Before
+  // photo -- the site photos Claude looks at when it builds the bid
+  // (functions/estimates.py _photos) -- through the job's own photo queue
+  // (jobphotos.js jpPicked: shrunk, kept on the phone, sent when there is
+  // signal). The line beside it says how many the job has.
+  function snapWords(n) {
+    return n ? '📷 ' + n + ' site photo' + (n === 1 ? '' : 's') + ' on this job — Claude looks at them when it builds the bid.'
+      : 'It goes on the job as a Before photo — Claude looks at those when it builds the bid.';
+  }
+  function snapHtml(ro) {
+    if (ro || !currentJobId || typeof window.jpPicked !== 'function') return '';
+    const n = window.YDJobPhotos && YDJobPhotos.count ? YDJobPhotos.count(currentJobId, 'before') : null;
+    return '<div class="est-snap"><label class="btn btn-sm est-snap-btn">📷 Take a photo' +
+        '<input type="file" accept="image/*" capture="environment" hidden data-job="' + esc(currentJobId) + '"' +
+        ' onchange="estSnap(this)"></label>' +
+      '<span class="est-snap-n" data-est-snap>' + esc(snapWords(n)) + '</span></div>';
+  }
+  window.estSnap = function (input) {
+    const n = (input.files || []).length;
+    if (!n || typeof window.jpPicked !== 'function') return;
+    // Said only for photos it took in: jpPicked says itself why one was not
+    // (signed out, a file it could not read).
+    const waiting = () => (window.YDJobPhotos && YDJobPhotos.waiting ? YDJobPhotos.waiting() : 0);
+    const before = waiting();
+    Promise.resolve(window.jpPicked(input, 'before')).then(() => {
+      if (waiting() > before) showToast(n === 1 ? 'Photo added to the job (Before)' : n + ' photos added to the job (Before)');
+    });
+  };
+  // The count follows the photos as they are taken, sent and come in.
+  function snapCount() {
+    const s = document.querySelector('[data-est-snap]');
+    if (s && window.YDJobPhotos && YDJobPhotos.count) s.textContent = snapWords(YDJobPhotos.count(currentJobId, 'before'));
+  }
+  window.addEventListener('load', () => { if (window.YDJobPhotos && YDJobPhotos.onChange) YDJobPhotos.onChange(snapCount); });
   window.estMemoInput = function (v) { est.memo = v; if (typeof markDirty === 'function') markDirty(); };
 
   window.estSet = function (field, v) {

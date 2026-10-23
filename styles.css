@@ -2815,6 +2815,11 @@
   .ss-count { margin:14px 0 4px; font-size:14px; font-weight:600; }
   /* Site-visit notes: start a dated entry (estimate.js estNoteToday) */
   .est-today { background:none; border:0; padding:0 0 0 6px; color:var(--brand-ink); font:inherit; font-size:12px; font-weight:700; text-transform:none; letter-spacing:0; text-decoration:underline; cursor:pointer; }
+  /* A site photo straight from the bid's notes (estimate.js snapHtml): a
+     thumb-sized button, and how many the job has beside it. */
+  .est-snap { display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px; margin-top:8px; }
+  .est-snap-btn { min-height:44px; display:inline-flex; align-items:center; font-size:14px; padding:8px 16px; cursor:pointer; }
+  .est-snap-n { font-size:12.5px; color:var(--muted); flex:1 1 200px; }
   /* Contacts: meeting notes (prospects.js) */
   .pp-meet { margin:8px 0; padding:10px; border-radius:8px; background:var(--surface-2); }
   .pp-meet textarea { width:100%; font-size:16px; }

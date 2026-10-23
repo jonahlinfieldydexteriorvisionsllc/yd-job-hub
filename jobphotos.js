@@ -708,5 +708,15 @@
                          queued: () => Object.values(queue).filter(q => q.by === myUid())
                            .map(q => ({ id: q.id, jobId: q.jobId, stage: q.stage, at: q.at })),
                          // Told whenever a photo is added here or finishes sending.
-                         onChange: fn => { queueWatchers.add(fn); return () => queueWatchers.delete(fn); } };
+                         onChange: fn => { queueWatchers.add(fn); return () => queueWatchers.delete(fn); },
+                         // How many photos the job on screen has (of one stage),
+                         // this phone's waiting ones too; null for any other job
+                         // (only the job shown is watched). The bid's "Take a
+                         // photo" button says it (estimate.js snapHtml).
+                         count: (id, stage) => {
+                           if (!id || id !== jobId) return null;
+                           const of = p => !stage || p.stage === stage;
+                           return Object.values(photos).filter(of).length + Object.values(queue)
+                             .filter(q => q.jobId === id && q.by === myUid() && !photos[q.id] && of(q)).length;
+                         } };
 })();
