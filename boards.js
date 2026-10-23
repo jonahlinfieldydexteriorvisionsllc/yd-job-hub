@@ -388,6 +388,49 @@
     return boards[id] || null;
   }
 
+  // ------------------------------------------------------------ board groups
+  //
+  // Jonah (21 Oct 2026): "make grouping for boards so theres not so many at
+  // the top". With GROUP_FROM boards or more, the top is a button a group --
+  // Work, Mine, Plans, each saying how many boards it holds -- and under them
+  // only the boards of the group open: the one the board on screen is in,
+  // or the one tapped. A board's group is its own (`group`, picked in Board
+  // settings), else where the app's own boards belong by what they are for
+  // (GROUP_OF), else Mine. Fewer boards (a crew phone) stay one row.
+  const GROUPS = [['work', '🛠 Work'], ['mine', '📋 Mine'], ['plans', '💡 Plans']];
+  const GROUP_OF = { bids: 'work', jobs: 'work', crew: 'work', pickups: 'work', maintenance: 'work',
+                     todo: 'mine', tobuy: 'mine', winter: 'plans', wishes: 'plans', 'claude-home': 'plans' };
+  const GROUP_FROM = 7;
+  const groupOf = b => (GROUPS.some(g => g[0] === (b && b.group)) ? b.group : GROUP_OF[b && b.id] || 'mine');
+  let groupOpen = '';        // a group tapped this visit ('' = the board on screen's)
+  function chipHtml(b) {
+    return '<button class="bd-chip' + (b.id === current ? ' on' : '') +
+      '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + safeId(b.id) + '\')">' +
+      '<span class="bd-dot"></span><span class="bd-name">' + esc(b.name || 'Board') + '</span>' +
+      (b.ownerOnly ? ' <span title="Private — only you">🔒</span>' : '') +
+      (b.visibleTo && b.visibleTo.length && editsBoards()
+        ? '<span class="bd-shared" title="Shared with crew">👥 ' + b.visibleTo.length + '</span>' : '') +
+      '</button>';
+  }
+  function pickerHtml(list, board) {
+    const add = editsBoards() ? '<button class="bd-chip bd-add" onclick="editBoard(\'\')">+ New board</button>' : '';
+    if (list.length < GROUP_FROM) return '<div class="bd-picker">' + list.map(chipHtml).join('') + add + '</div>';
+    const groups = GROUPS.filter(g => list.some(b => groupOf(b) === g[0]));
+    const open = groups.some(g => g[0] === groupOpen) ? groupOpen : groupOf(board);
+    return '<div class="bd-groups" role="group" aria-label="Board groups">' + groups.map(([id, name]) => {
+        const on = id === open;
+        return '<button type="button" class="bd-group' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+          ' onclick="bdGroup(\'' + id + '\')">' + esc(name) +
+          ' <span class="bd-group-n">' + list.filter(b => groupOf(b) === id).length + '</span></button>';
+      }).join('') + '</div>' +
+      '<div class="bd-picker">' + list.filter(b => groupOf(b) === open).map(chipHtml).join('') + add + '</div>';
+  }
+  window.bdGroup = function (id) {
+    if (!GROUPS.some(g => g[0] === id)) return;
+    groupOpen = id;
+    render();
+  };
+
   // ---------------------------------------------------------------- render
 
   function render() {
@@ -426,16 +469,7 @@
 
     wrap.innerHTML =
       computerLine() +
-      '<div class="bd-picker">' +
-        list.map(b => '<button class="bd-chip' + (b.id === current ? ' on' : '') +
-          '" style="--c:' + safeColor(b.color) + '" onclick="showBoard(\'' + safeId(b.id) + '\')">' +
-          '<span class="bd-dot"></span><span class="bd-name">' + esc(b.name || 'Board') + '</span>' +
-          (b.ownerOnly ? ' <span title="Private — only you">🔒</span>' : '') +
-          (b.visibleTo && b.visibleTo.length && editsBoards()
-            ? '<span class="bd-shared" title="Shared with crew">👥 ' + b.visibleTo.length + '</span>' : '') +
-          '</button>').join('') +
-        (editsBoards() ? '<button class="bd-chip bd-add" onclick="editBoard(\'\')">+ New board</button>' : '') +
-      '</div>' +
+      pickerHtml(list, board) +
       '<div class="bd-head" style="--c:' + safeColor(board.color) + '">' +
         '<div class="bd-title">' + esc(board.name) + '</div>' +
         '<div class="bd-sub">' + boardSubtitle(board) + '</div>' +
@@ -1291,6 +1325,7 @@
   }
   window.showBoard = function (id) {
     current = id;
+    groupOpen = '';
     try { localStorage.setItem('ydjobhub_board', id); } catch (e) {}
     render();
   };
@@ -2623,6 +2658,12 @@
       '<div class="field"><span class="label">Colour</span><div class="bd-swatches">' +
         PALETTE.map(c => '<label class="bd-swatch" style="--c:' + c + '" title="' + colorName(c) + '"><input type="radio" name="bdColor" value="' + c + '"' +
           ' aria-label="' + colorName(c) + '"' + (c === color ? ' checked' : '') + '><span></span></label>').join('') + '</div></div>' +
+      // Which group it is under at the top of Boards (pickerHtml).
+      '<div class="field"><span class="label">Group — where it sits at the top of Boards</span><div class="bd-group-pick">' +
+        GROUPS.map(([g, gname]) => '<label class="bd-pick-item"><input type="radio" name="bdGroup" value="' + g + '"' +
+          // A new board: the group on screen.
+          (g === (id ? groupOf(b) : groupOpen || groupOf(boardById(current))) ? ' checked' : '') + '><span>' + esc(gname) + '</span></label>').join('') +
+      '</div></div>' +
       (id ? '' :
         '<div class="field"><span class="label">Start from</span><select id="bdTemplate" onchange="bdTemplateChanged()">' +
           Object.keys(TEMPLATES).map(t => '<option value="' + t + '"' + (t === 'crew' ? ' selected' : '') + '>' +
@@ -2806,10 +2847,12 @@
       id: l.id || 'lb' + i + stamp, name: String(l.name).trim(), color: safeColor(l.color),
     }));
     const colorInput = document.querySelector('input[name="bdColor"]:checked');
+    const groupInput = document.querySelector('input[name="bdGroup"]:checked');
 
     const rec = {
       name: name,
       color: colorInput ? colorInput.value : PALETTE[0],
+      group: groupInput && GROUPS.some(g => g[0] === groupInput.value) ? groupInput.value : groupOf(was),
       columns: columns,
       doneColumn: doneColumn,
       labels: labels,

@@ -1153,6 +1153,18 @@
 
   /* ---- shared chips ---- */
   .bd-picker, .cal-layers { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:14px; }
+  /* The board groups over the boards (boards.js pickerHtml): one button a
+     group, the open one filled; its boards in the row under it. */
+  .bd-groups { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px; }
+  .bd-group { min-height:44px; padding:6px 16px; border-radius:22px; border:1.5px solid var(--border-strong); background:var(--surface);
+    color:var(--text); font:inherit; font-size:14px; font-weight:700; cursor:pointer; }
+  .bd-group.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .bd-group-n { font-size:11.5px; font-weight:600; opacity:.75; margin-left:2px; }
+  .bd-group-pick { display:flex; flex-wrap:wrap; gap:6px; }
+  @media (max-width:720px) {
+    .bd-groups { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:6px; }
+    .bd-group { padding:6px 4px; font-size:13px; border-radius:10px; }
+  }
   .bd-chip, .cal-chip { --c:#6b7a8f; display:inline-flex; align-items:center; gap:7px;
     min-height:40px; padding:7px 13px; border-radius:20px; cursor:pointer;
     font:600 13px 'DM Sans',sans-serif; color:var(--text);
