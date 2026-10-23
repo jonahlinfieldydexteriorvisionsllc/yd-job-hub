@@ -467,6 +467,47 @@
     return card('day', title, countWords(c), link, body, left > 0);
   }
 
+  // Notes to sort later (Jonah, 22 Oct 2026: "notes list on dashboard that
+  // i can then sort when i get home so i dont have to select the proper
+  // board whenever im out and about"): a box to type in, and the notes on
+  // the Inbox board (boards.js), newest first -- each sorted onto a board
+  // with a tap ("Sort" shows a button a board), or deleted. The owner's.
+  let sortOpen = '';         // the note whose board buttons are showing
+  function notesHtml() {
+    if (!isOwner() || !window.YDBoards || !YDBoards.inbox) return '';
+    const list = YDBoards.inbox();
+    const targets = sortOpen ? YDBoards.sortTargets() : [];
+    const rows = list.map(k => {
+      const open = k.id === sortOpen;
+      return '<div class="hm-note' + (open ? ' open' : '') + '">' +
+        '<div class="hm-note-top"><span class="hm-note-t">' + esc(k.title || '') +
+          (k.notes ? '<small>' + esc(String(k.notes).slice(0, 140)) + '</small>' : '') + '</span>' +
+          '<button type="button" class="btn btn-sm hm-note-sort" onclick="homeNoteSort(\'' + safe(k.id) + '\')">' + (open ? 'Close' : 'Sort ▸') + '</button>' +
+          '<button type="button" class="hm-note-x" onclick="homeNoteDrop(\'' + safe(k.id) + '\')" aria-label="Delete this note">✕</button></div>' +
+        (open ? '<div class="hm-note-to">' + targets.map(b => '<button type="button" class="hm-note-b" style="--c:' + colour(b.color) + '"' +
+            ' onclick="homeNoteTo(\'' + safe(k.id) + '\', \'' + safe(b.id) + '\')">' + esc(b.name || 'Board') + '</button>').join('') + '</div>' : '') +
+        '</div>';
+    });
+    return card('notes', '📝 Notes to sort', list.length || '', ['Board', "homeBoard('inbox')"],
+      '<div class="hm-note-add"><input id="hmNoteBox" maxlength="500" placeholder="Jot it down — sort it onto a board later" ' +
+        'onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" autocomplete="off">' +
+        '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">Add</button></div>' +
+      (rows.length ? capped('notes', rows, 6) : empty('Nothing to sort.')));
+  }
+  window.homeNoteAdd = function () {
+    const box = el('hmNoteBox');
+    const text = box ? box.value.trim() : '';
+    if (!text) { if (box) box.focus(); return; }
+    if (!YDBoards.inboxAdd(text)) { showToast('Notes can’t be saved just yet — still loading'); return; }
+    box.value = '';
+    render();
+    const again = el('hmNoteBox');
+    if (again) again.focus();
+  };
+  window.homeNoteSort = function (id) { sortOpen = sortOpen === id ? '' : id; render(); };
+  window.homeNoteTo = function (id, boardId) { sortOpen = ''; YDBoards.inboxSort(id, boardId); render(); };
+  window.homeNoteDrop = async function (id) { await YDBoards.inboxDrop(id); render(); };
+
   // The owner's day with his to-dos split by where they get done. Jonah (22
   // Oct 2026): "my dashboard should have side by side for the to do list of
   // stuff to do in the office and stuff to do while im out". Two lists --
@@ -843,7 +884,7 @@
     // Waiting on you, and the rest flow in columns under them. A phone has
     // them one under the other, in the same order as before.
     if (!crewish && isOwner()) {
-      const side = [waitingHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
+      const side = [waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
       const day = myDayHtml(d);
       return top + '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
         '<div class="hm-grid">' + [crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()]
@@ -871,7 +912,16 @@
     // Drawn again only when something on it changed: the clock and every
     // other screen tell Home of changes it does not show, and replacing the
     // page under a thumb loses the tap.
-    if (out !== lastHtml || !wrap.firstChild) { wrap.innerHTML = out; lastHtml = out; }
+    if (out !== lastHtml || !wrap.firstChild) {
+      // A note half typed (notesHtml) is kept through the redraw, with the
+      // cursor where it was.
+      const nb = el('hmNoteBox');
+      const typed = nb ? { v: nb.value, focus: document.activeElement === nb, at: nb.selectionStart } : null;
+      wrap.innerHTML = out; lastHtml = out;
+      const again = typed && el('hmNoteBox');
+      if (again && typed.v) again.value = typed.v;
+      if (again && typed.focus) { again.focus(); try { again.setSelectionRange(typed.at, typed.at); } catch (e) {} }
+    }
     manageTicker();
   }
   // Many changes arrive together (a whole calendar, every card on a board):

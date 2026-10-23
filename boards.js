@@ -399,7 +399,7 @@
   // (GROUP_OF), else Mine. Fewer boards (a crew phone) stay one row.
   const GROUPS = [['work', '🛠 Work'], ['mine', '📋 Mine'], ['plans', '💡 Plans']];
   const GROUP_OF = { bids: 'work', jobs: 'work', crew: 'work', pickups: 'work', maintenance: 'work',
-                     todo: 'mine', tobuy: 'mine', winter: 'plans', wishes: 'plans', 'claude-home': 'plans' };
+                     todo: 'mine', tobuy: 'mine', inbox: 'mine', winter: 'plans', wishes: 'plans', 'claude-home': 'plans' };
   const GROUP_FROM = 7;
   const groupOf = b => (GROUPS.some(g => g[0] === (b && b.group)) ? b.group : GROUP_OF[b && b.id] || 'mine');
   let groupOpen = '';        // a group tapped this visit ('' = the board on screen's)
@@ -882,6 +882,67 @@
     deleteCards(board, [cardId]);
     showToast('Card deleted');
   };
+
+  // ----------------------------------------------------------- notes to sort
+  //
+  // Jonah (22 Oct 2026): "notes list on dashboard that i can then sort when
+  // i get home so i dont have to select the proper board whenever im out
+  // and about". A note typed on Home (home.js notesHtml) goes on the Inbox
+  // board with no other question -- made here the first time: his alone
+  // (private), under Mine, one column. At home each is sorted: a tap on a
+  // board moves it there (a card at the top of its first column, its words
+  // as written), or it is deleted. It is an ordinary board too, so a note
+  // can also be opened, changed or moved there by hand.
+  const INBOX = 'inbox';
+  function ensureInbox() {
+    if (boards[INBOX]) return boards[INBOX];
+    if (!isOwner()) return null;
+    const rec = {
+      name: '📥 Notes to sort', color: '#6b7a8f', order: 0.5, group: 'mine', ownerOnly: true, visibleTo: [], editors: [],
+      columns: [{ id: 'in0', name: 'To sort' }], doneColumn: '', labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
+    };
+    boards[INBOX] = Object.assign({ id: INBOX }, rec);
+    write('boards', INBOX, rec, 'making the notes inbox');
+    watchCards(INBOX);
+    return boards[INBOX];
+  }
+  // A new card on `boardId` (top of its first column) with these words: the
+  // first line its title, the rest its notes. Every field a card has, set.
+  function newCardOn(boardId, text, was) {
+    const board = boards[boardId];
+    const lines = String(text || '').trim().split(/\r?\n/);
+    const col = board.columns[0].id;
+    const id = newId('cd');
+    const rec = {
+      title: lines[0].slice(0, 200), column: col, order: startOrder(boardId, col),
+      due: null, dueTime: null, remindMins: null, hasReminder: false, remindUids: [], noReminder: false,
+      type: null, urgency: 'normal', labels: [], color: null, assignees: [], jobId: null, jobName: null, jobNum: null,
+      notes: [lines.slice(1).join('\n').trim(), (was && was.notes) || ''].filter(Boolean).join('\n\n'), checklist: [],
+      doneAt: null, createdAt: (was && was.createdAt) || nowIso(), createdBy: (was && was.createdBy) || myName(),
+      updatedAt: nowIso(), updatedBy: myName(),
+    };
+    cards[boardId] = cards[boardId] || {};
+    cards[boardId][id] = Object.assign({ id: id }, rec);
+    writeCard(boardId, id, rec);
+    return id;
+  }
+  function inboxAdd(text) {
+    const board = ensureInbox();
+    if (!board || !String(text || '').trim()) return false;
+    newCardOn(INBOX, text);
+    redrawIfVisible(); cardsChanged();
+    return true;
+  }
+  // Onto the board it belongs on: made there, then taken off the inbox.
+  function inboxSort(cardId, boardId) {
+    const k = (cards[INBOX] || {})[cardId], to = boards[boardId];
+    if (!k || !to || to.virtual || boardId === INBOX || !editsBoard(to)) return false;
+    newCardOn(boardId, k.title, k);
+    deleteCards(boards[INBOX], [cardId]);
+    redrawIfVisible(); cardsChanged();
+    showToast('Moved to ' + to.name);
+    return true;
+  }
 
   // Done cards finished before today, shown again on asking ("Show the N
   // finished earlier"), per board, until the app is reloaded.
@@ -3253,6 +3314,16 @@
   window.YDBoards = {
     doneCol: doneColOf,
     render: render,
+    // The notes to sort (22 Oct 2026; home.js notesHtml): the ones on the
+    // Inbox board, newest first; add one; sort one onto a board; the boards
+    // a note can go to (any but Bids, Jobs and the Inbox, that this person
+    // may change).
+    inbox: () => Object.values(cards[INBOX] || {}).filter(k => k && k.id && !k.doneAt)
+      .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+    inboxAdd: inboxAdd,
+    inboxSort: inboxSort,
+    inboxDrop: id => window.bdDeleteCard(INBOX, id),
+    sortTargets: () => visibleBoards().filter(b => !b.virtual && b.id !== INBOX && editsBoard(b)),
     // One board's columns drawn on another tab -- the Maintenance board on
     // the Equipment tab (equipment.js): the same cards, drag and card window
     // as here, the cards narrowed by `match` (its search) instead of this

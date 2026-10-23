@@ -3099,6 +3099,22 @@
   .hm-todo { min-height:40px; margin-top:6px; }
   .hm-todo .cal-todo-t { font-size:14px; }
   .hm-late { color:var(--neg); font-weight:700; }
+  /* Notes to sort (home.js notesHtml): a box to jot in, each note with its
+     Sort / ✕, and the boards as buttons once Sort is tapped. */
+  .hm-note-add { display:flex; gap:8px; margin:6px 0 4px; }
+  .hm-note-add input { flex:1; min-width:0; min-height:44px; }
+  .hm-note { margin-top:6px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); }
+  .hm-note-top { display:flex; align-items:center; gap:8px; }
+  .hm-note-t { flex:1; min-width:0; font-size:14px; overflow-wrap:anywhere; }
+  .hm-note-t small { display:block; color:var(--muted); font-size:12px; margin-top:2px; }
+  .hm-note-sort { flex:none; min-height:40px; }
+  .hm-note-x { flex:none; width:40px; height:40px; border-radius:50%; border:1px solid var(--border); background:var(--surface);
+    color:var(--muted); font-size:15px; cursor:pointer; }
+  .hm-note-to { display:grid; grid-template-columns:repeat(auto-fill, minmax(118px, 1fr)); gap:6px; margin-top:8px; }
+  .hm-note-b { --c:#6b7a8f; min-height:44px; padding:6px 8px; border-radius:8px; border:1.5px solid var(--border-strong);
+    border-left:5px solid var(--c); background:var(--surface); color:var(--text); font:inherit; font-size:13px; font-weight:600;
+    text-align:left; cursor:pointer; overflow-wrap:anywhere; }
+  .hm-note-b:hover { border-color:var(--c); }
   /* The owner's day (home.js placesHtml): his to-dos in the office and out
      side by side once the card is wide enough, the schedule beside them on
      a wide screen; one under the other on a phone, the office's first. The
