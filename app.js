@@ -320,12 +320,17 @@ function jobBill(d) {
 // qbChangesIn: the change orders on its QuickBooks invoice already in its
 // price, in cents; qbChangesOff: they were put in by hand, so never counted
 // (quickbooks.py _price_follows).
+// The follow-up plan (boards.js CHASE_STEPS, functions/followup.py): chase
+// {start, done: {step: {at, by, how}}, stoppedAt} is the app's (calls and
+// texts ticked); chaseDrafts {step: {at, link, ...}}, chaseLostCard and
+// thanksEmail are the server's (emails drafted, the "mark it lost?" card,
+// the thank-you once paid).
 // careDecidedAt: when Plants / Turf were settled by themselves as the bid
 // became a job (plantcare.js decide); null once picked by hand.
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'autoFollowUpAt', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
-  'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt'];
+  'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseLostCard', 'thanksEmail'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old

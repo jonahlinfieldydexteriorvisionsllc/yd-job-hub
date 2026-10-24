@@ -553,6 +553,22 @@ def _cards(request, path, headers):
             _tell_owner(qb_sweep_news(deadline))
         except Exception as e:                      # noqa: BLE001
             print("quickbooks sweep failed:", e)
+        # The follow-up plan (followup.py auto): email steps that are due
+        # drafted, "mark it lost?" cards, thank-yous for jobs paid off. After
+        # QuickBooks (an answer there takes a bid off the plan), inside the
+        # same spending limits as everything Claude does.
+        try:
+            import spend
+            import followup
+            why = spend.over_cap(_db)
+            if why:
+                print("followups: not drafted --", why)
+            elif time.monotonic() < deadline:
+                day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+                _tell_owner(followup.auto(_claude(), deadline,
+                                          lambda usage: _record_spend(day, "followup", usage, followup.MODEL)))
+        except Exception as e:                      # noqa: BLE001
+            print("followups failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
     try:
         if only is None and time.monotonic() > deadline:
@@ -637,6 +653,9 @@ def _tell_owner(news):
             title = "❄ Snow contract accepted"
             body = ("%s accepted estimate%s — added to the Snow route." if n["kind"] == "snowAdded"
                     else "%s accepted estimate%s — joined to their Snow account (your prices kept).") % (n["name"], num)
+        elif n["kind"] == "followup":
+            # The follow-up plan (followup.auto): its own words.
+            title, body = n["title"], n["body"]
         elif n["kind"] == "linked":
             title = "✅ Estimate accepted"
             body = "%s accepted estimate%s %s in QuickBooks — linked to their job here." % (n["name"], num, _money(n.get("total")))

@@ -5467,3 +5467,10 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   /* A card just added: lit for a moment so the eye finds it on the board
      once the window has closed (boards.js saveCard). */
   .bd-card.bd-just-added { box-shadow:0 0 0 3px var(--brand-2, #c9922f); transition:box-shadow .4s; }
+
+  /* The follow-up plan's steps on a bid to chase (boards.js chaseStepsHtml). */
+  .bd-chase-steps { flex:1 1 100%; display:flex; flex-direction:column; gap:6px; padding:2px 0 4px; }
+  .bd-step { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+  .bd-step-w { font-size:13px; font-weight:600; margin-right:4px; }
+  .bd-chase-steps .link-btn { align-self:flex-start; font-size:12px; }
+  .bd-chase-row { flex-wrap:wrap; }

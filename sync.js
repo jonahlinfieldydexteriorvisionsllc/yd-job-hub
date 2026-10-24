@@ -24,7 +24,8 @@
   // email, when the estimate was first seen accepted); all are in app.js
   // BOARD_FIELDS so the form carries them.
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
-    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff'];
+    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff',
+    'chaseDrafts', 'chaseLostCard', 'thanksEmail'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -551,6 +552,12 @@
     SERVER_FIELDS.forEach(f => {
       const s = theirs[f], l = local[f];
       if (s == null || f === 'qbChangesIn') return;
+      // The follow-up emails the server drafted, one more at a time
+      // (followup.py auto): every one it has is kept with this copy's.
+      if (f === 'chaseDrafts' && l && typeof s === 'object') {
+        if (Object.keys(s).some(k => !(k in l))) { local[f] = Object.assign({}, l, s); took = true; }
+        return;
+      }
       const ahead = l == null ||
         (f === 'qbEstimate' && s.id && s.id === l.id && (estStep(s.status) > estStep(l.status) ||
           // Emailed since (quickbooks.py _emailed_patch), with no answer lost.

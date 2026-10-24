@@ -795,6 +795,13 @@
         esc(String(n.text).slice(0, 140)) + (String(n.text).length > 140 ? '…' : ''),
         esc(n.at ? dayWords(localYMD(new Date(n.at))) : ''), 'openCrewNotes()')));
     }
+    // The follow-up plan's calls and texts for today (boards.js).
+    const calls = window.YDBoards && YDBoards.chaseToDo && can('jobs', 'change') ? YDBoards.chaseToDo() : 0;
+    if (calls) {
+      any = true;
+      rows.push(line('📞', '<b>' + calls + ' follow-up call' + (calls === 1 ? '' : 's') + ' / text' + (calls === 1 ? '' : 's') + '</b>',
+        'Bids with no answer yet — the call or text is one tap on the Bids board', '', "homeBoard('bids')"));
+    }
     // End-of-day reports in and not read yet (eod.js): a tap opens that one.
     if (isOwner() && window.YDEndOfDay && YDEndOfDay.unread) {
       any = true;

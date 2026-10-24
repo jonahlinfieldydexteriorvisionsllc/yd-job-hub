@@ -519,9 +519,73 @@
 
   // How long a bid has sat in its column, in whole days.
   const bidDays = j => daysSince(j.bidStageAt || j.lastModified) || 0;
+
+  // THE FOLLOW-UP PLAN (Jonah, 23 Oct 2026: "a system for following up that
+  // includes calling and texting. Like a tried and true best process").
+  // Days since the bid went out: day 2 call + email 1, day 5 text, day 7
+  // email 2, day 10 call, day 14 the last email, day 15 a "mark it lost?"
+  // card. The emails are drafted into Gmail by themselves (functions/
+  // followup.py auto, every hour 7 am - 7 pm), never sent; the calls and
+  // texts are his, listed here with a tap to call or to open a text already
+  // written, and ticked off. The same table and rules are in followup.py
+  // (STEPS, open_steps) -- change both.
+  const CHASE_STEPS = [
+    { id: 'call1', day: 2, kind: 'call' },
+    { id: 'email1', day: 2, kind: 'email', n: 1 },
+    { id: 'text1', day: 5, kind: 'text' },
+    { id: 'email2', day: 7, kind: 'email', n: 2 },
+    { id: 'call2', day: 10, kind: 'call' },
+    { id: 'email3', day: 14, kind: 'email', n: 3, last: true },
+    { id: 'lost', day: 15, kind: 'decide' },
+  ];
+  // Bids out before the plan existed start it from here (followup.py PLAN_FROM).
+  const PLAN_FROM = Date.parse('2026-10-22T05:00:00Z');
+  function chaseStart(j) {
+    const c = j.chase || {};
+    let t = Date.parse(c.start || '');
+    if (!isFinite(t)) {
+      const q = j.qbEstimate || {};
+      const got = [Date.parse(q.sentAt || q.emailedAt || '')];
+      const auto = Date.parse(j.autoFollowUpAt || '');
+      if (isFinite(auto)) got.push(auto - 2 * 864e5);
+      if (j.bidStage === 'sent') got.push(Date.parse(j.bidStageAt || ''));
+      const ok = got.filter(isFinite);
+      if (!ok.length) return null;
+      t = Math.min.apply(null, ok);
+    }
+    return Math.max(t, PLAN_FROM);
+  }
+  // Whole calendar days since it went (day 0 the day it went).
+  const calDays = t => Math.round((Date.parse(localDay() + 'T12:00:00') - Date.parse(localDay(new Date(t)) + 'T12:00:00')) / 864e5);
+  const chasingBid = j => !j.deletedAt && !j.removeWhy && normStatusOf(j) === 'quoting' &&
+    (j.bidStage === 'sent' || j.bidStage === 'followUp') && !acceptedToBook(j) && !turnedDown(j) && !(j.chase || {}).stoppedAt;
+  function chaseDoneIds(j) {
+    const out = new Set(Object.keys(((j.chase || {}).done) || {}).concat(Object.keys(j.chaseDrafts || {})));
+    (Array.isArray(j.followUps) ? j.followUps : []).forEach(f => { if (f && f.step) out.add(f.step); });
+    if (j.chaseLostCard) out.add('lost');
+    return out;
+  }
+  // The steps waiting now. Calls and texts are one lane, emails another: in
+  // each, a step not done is passed over once the next is due, so a bid
+  // found late is never asked for three things at once; once the last day
+  // has come, only the "mark it lost?" question is left.
+  function chaseOpen(j) {
+    const start = chaseStart(j);
+    if (start == null || !chasingBid(j)) return [];
+    const days = calDays(start);
+    const due = CHASE_STEPS.filter(s => s.day <= days);
+    const done = chaseDoneIds(j);
+    if (due.some(s => s.kind === 'decide')) return due.filter(s => s.kind === 'decide' && !done.has(s.id));
+    const lane = s => s.kind === 'email' ? 'email' : 'phone';
+    const latest = {};
+    due.forEach(s => { latest[lane(s)] = s.id; });
+    return due.filter(s => latest[lane(s)] === s.id && !done.has(s.id));
+  }
+  // Calls and texts waiting on him today (Home).
+  const chaseToDo = () => jobsList().reduce((n, j) => n + chaseOpen(j).filter(s => s.kind === 'call' || s.kind === 'text').length, 0);
   function toChase() {
     return jobsList().map(j => ({ j, col: bidColumn(j), days: bidDays(j) }))
-      .filter(b => b.col in CHASE_AFTER_DAYS && b.days >= CHASE_AFTER_DAYS[b.col] &&
+      .filter(b => (b.col in CHASE_AFTER_DAYS && b.days >= CHASE_AFTER_DAYS[b.col] || chaseOpen(b.j).length) &&
         !acceptedToBook(b.j) && !turnedDown(b.j))
       .sort((a, b) => b.days - a.days);
   }
@@ -542,7 +606,10 @@
     const at = nowIso();
     let n = 0;
     due.forEach(j => {
-      if (YDSync.patchJob(j._id, { bidStage: 'followUp', bidStageAt: at, autoFollowUpAt: at },
+      // When it went out, kept for the follow-up plan: bidStageAt moves now.
+      const chase = Object.assign({}, j.chase || {});
+      if (!chase.start) chase.start = new Date(chaseStart(j) || Date.parse(j.bidStageAt || '') || Date.now()).toISOString();
+      if (YDSync.patchJob(j._id, { bidStage: 'followUp', bidStageAt: at, autoFollowUpAt: at, chase: chase },
         'Sent ' + FOLLOW_UP_AFTER_DAYS + ' days with no answer')) n++;
     });
     if (n) showToast('📨 ' + n + ' bid' + (n === 1 ? '' : 's') + ' sent ' + FOLLOW_UP_AFTER_DAYS +
@@ -579,8 +646,11 @@
     // list disagreed. Each row says which column the bid is in.
     return '<div class="bd-chase">' +
       '<div class="bd-chase-head">📨 Time to chase <span class="bd-count">' + list.length + '</span>' +
-        '<span class="bd-chase-sub">Sent ' + CHASE_AFTER_DAYS.sent + ' or more days ago with no answer, or moved to Follow up — oldest first. ' +
-        'The email is saved in Gmail Drafts for you to read and send.</span></div>' +
+        '<span class="bd-chase-sub">Bids with no answer, oldest first. The plan: day 2 a call and an email, day 5 a text, ' +
+        'day 7 a second email, day 10 a call, day 14 a last email, then "mark it lost?". The emails are written into your ' +
+        'Gmail Drafts by themselves (never sent); the calls and texts are a tap each below.' +
+        (isOwner() ? ' <button class="link-btn" onclick="chaseReviewLink()">Google review link for thank-yous</button>' : '') +
+        '</span></div>' +
       list.map(({ j, col, days }) => {
         const price = parseMoney(j.jobPrice);
         const ups = (Array.isArray(j.followUps) ? j.followUps : []).filter(f => f && f.at);
@@ -599,7 +669,7 @@
                 ' (' + days + ' days)') +
               (last ? ' · follow-up drafted ' + agoText(lastDays || 0) +
                 (ups.length > 1 ? ' (' + ups.length + ' so far)' : '') : '') + '</div>' +
-          '</div>' +
+          '</div>' + chaseStepsHtml(j) +
           '<div class="bd-chase-act">' +
             (last && /^https:\/\/mail\.google\.com\//.test(String(last.link || ''))
               ? '<a class="btn btn-sm" href="' + esc(last.link) + '" target="_blank" rel="noopener">Open draft</a>' : '') +
@@ -613,6 +683,78 @@
       }).join('') +
     '</div>';
   }
+
+  // Today's steps of the plan on a bid's row: a tap to call or to open a
+  // text already written (his phone's own Messages, where he can change it
+  // before it goes), then ticked done -- or the email the hourly run is
+  // drafting, or the question at the end.
+  const STEP_WORDS = { call1: '📞 Call — first follow-up', call2: '📞 Call again', text1: '📱 Text',
+    email1: '✉️ Email 1', email2: '✉️ Email 2', email3: '✉️ Last email', lost: '❓ No answer after the follow-ups' };
+  const telOf = p => String(p || '').replace(/[^\d+]/g, '');
+  function textFor(j) {
+    const first = String(j.firstName || (j.customerName || '').trim().split(/\s+/)[0] || '').trim();
+    const what = String(j.crewWhat || (j.serviceTypes || [])[0] || 'project').toLowerCase();
+    return 'Hi' + (first ? ' ' + first : '') + ', it’s Jonah with YD Exterior Visions. Just making sure you got the estimate for the ' +
+      what + '. Happy to answer any questions or change anything — just let me know.';
+  }
+  function chaseStepsHtml(j) {
+    const open = chaseOpen(j);
+    if (!open.length || !movesJobs()) return '';
+    const id = safeId(j._id), tel = telOf(j.phone);
+    const rows = open.map(s => {
+      const word = '<span class="bd-step-w">' + esc(STEP_WORDS[s.id] || s.id) + '</span>';
+      const tick = (how, label) => '<button class="btn btn-sm" onclick="chaseMark(\'' + id + '\', \'' + s.id + '\', \'' + how + '\')">' + label + '</button>';
+      if (s.kind === 'call') {
+        return word + (tel ? '<a class="btn btn-sm btn-filled" href="tel:' + esc(tel) + '">📞 Call</a>' : '<span class="bd-chase-none">No phone on the job</span>') +
+          tick('talked', '✓ Talked') + tick('voicemail', '✓ Left a message') + tick('skipped', 'Skip');
+      }
+      if (s.kind === 'text') {
+        return word + (tel ? '<a class="btn btn-sm btn-filled" href="sms:' + esc(tel) + '?&body=' + esc(encodeURIComponent(textFor(j))) + '">📱 Text</a>'
+          : '<span class="bd-chase-none">No phone on the job</span>') + tick('sent', '✓ Texted') + tick('skipped', 'Skip');
+      }
+      if (s.kind === 'email') {
+        return word + (looksLikeEmail(j.email) ? '<span class="bd-chase-none">Being written into your Gmail Drafts — within the hour</span>'
+          : '<span class="bd-chase-none">No email on the job</span>') + tick('skipped', 'Skip');
+      }
+      return word + '<button class="btn btn-sm btn-filled" onclick="chaseLost(\'' + id + '\')">Mark it lost</button>' +
+        tick('keep', 'Keep it open');
+    });
+    return '<div class="bd-chase-steps">' + rows.map(r => '<div class="bd-step">' + r + '</div>').join('') +
+      '<button class="link-btn" onclick="chaseStop(\'' + id + '\')">They answered — stop the follow-ups</button></div>';
+  }
+  function chasePatch(jobId, change, words) {
+    const j = jobsList().find(x => x._id === jobId);
+    if (!j || !movesJobs() || !window.YDSync) return;
+    const chase = Object.assign({}, j.chase || {});
+    if (!chase.start) chase.start = new Date(chaseStart(j) || Date.now()).toISOString();
+    change(chase);
+    if (!YDSync.patchJob(jobId, { chase: chase })) { showToast('Could not save that'); return; }
+    if (words) showToast(words);
+    render();
+  }
+  window.chaseMark = function (jobId, step, how) {
+    chasePatch(jobId, c => { c.done = Object.assign({}, c.done || {}, { [step]: { at: nowIso(), by: myName() || null, how: how } }); },
+      how === 'skipped' ? 'Skipped' : 'Noted');
+  };
+  window.chaseStop = function (jobId) {
+    chasePatch(jobId, c => { c.stoppedAt = nowIso(); c.stoppedBy = myName() || null; },
+      'Follow-ups stopped — move the bid along when you know where it stands');
+  };
+  window.chaseLost = function (jobId) { moveJob(jobId, 'bids', 'lost'); };
+  // The link the thank-you email asks for a review with, once a job is paid
+  // off (followup.py thanks; settings/followUp, the owner's).
+  window.chaseReviewLink = async function () {
+    if (!isOwner() || !window.YDDb) return;
+    const now = (await Promise.resolve(window.YDDb.get('settings', 'followUp')).catch(() => null)) || {};
+    const got = await ydPrompt('Paste the link from Google Business Profile → "Ask for reviews". The thank-you email that ' +
+      'goes into your Drafts when a job is paid off puts it in for the customer.',
+      now.reviewLink || '', { title: 'Google review link', placeholder: 'https://g.page/r/…/review' });
+    if (got == null) return;
+    const link = String(got).trim();
+    if (link && !/^https:\/\/[^\s]+$/.test(link)) { showToast('That isn’t a web link (it starts https://)'); return; }
+    write('settings', 'followUp', { reviewLink: link, updatedAt: nowIso() }, 'the review link');
+    showToast(link ? 'Saved — thank-you emails will carry it' : 'Removed');
+  };
 
   window.writeFollowUp = async function (jobId) {
     if (!movesJobs() || drafting[jobId]) return;
@@ -633,10 +775,13 @@
       if (!res.ok || data.error) throw new Error(data.error || ('failed (' + res.status + ')'));
       // Read the job again: it may have changed while Claude was writing.
       const now = jobsList().find(x => x._id === jobId) || j;
-      const ups = (Array.isArray(now.followUps) ? now.followUps : []).concat([{
+      // Written now by hand: it is the plan's email due, if one is (so the
+      // hourly run does not write the same one again).
+      const step = chaseOpen(now).find(x => x.kind === 'email');
+      const ups = (Array.isArray(now.followUps) ? now.followUps : []).concat([Object.assign({
         at: nowIso(), draftId: data.draftId || null, link: data.link || null,
         subject: data.subject || '', by: myName() || null,
-      }]);
+      }, step ? { step: step.id } : {})]);
       if (!window.YDSync || !window.YDSync.patchJob(jobId, { followUps: ups })) {
         showToast('Draft saved in Gmail, but this device could not note it on the job');
       } else {
@@ -3393,6 +3538,8 @@
     // Inbox board, newest first; add one; sort one onto a board; the boards
     // a note can go to (any but Bids, Jobs and the Inbox, that this person
     // may change).
+    // Follow-up calls and texts waiting today (the plan above).
+    chaseToDo: chaseToDo,
     inbox: () => Object.values(cards[inboxId()] || {}).filter(k => k && k.id && !k.doneAt)
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
     // Whether this person jots notes of their own: the owner, or anyone who
