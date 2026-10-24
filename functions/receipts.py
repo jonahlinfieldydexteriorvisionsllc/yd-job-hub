@@ -762,7 +762,7 @@ def _b36(n):
             return out
 
 
-def _file_personal(db, rid, got):
+def _file_personal(db, rid, got, m=None):
     """A purchase Claude read as clearly a household's (groceries, clothes,
     a service at Jonah's own home): kept, and filed whole under Personal by
     itself -- the same split the app's "Mark personal" makes (receipts.js
@@ -774,6 +774,8 @@ def _file_personal(db, rid, got):
     email about the same order called the business's, is left as it is.
     Returns True when the receipt is (now) filed only under Personal."""
     if got.get("whose") != "personal":
+        return False
+    if _a_subs_bill(db, got, m):
         return False
     ref = db.collection("receipts").document(rid)
     snap = ref.get()
@@ -795,12 +797,25 @@ def _file_personal(db, rid, got):
 
 
 def _same_bill(db, f):
-    """The unsorted receipt this one is the same cost as, or None.
+    """The receipt this one is the same cost as, or None.
 
     A bill and then the receipt for paying it are one cost, but they rarely
     share an order number: the bill often has none, the payment names the
-    invoice. Same store, same amount, within ten days, and no order numbers
-    that disagree, is the same bill. A monthly bill a month later is not.
+    invoice. Same store, same amount, within two weeks, and no order numbers
+    that disagree -- and then one of these:
+      - the same order / invoice number;
+      - one is a bill not yet paid and the other the payment (an invoice
+        then its receipt), whichever came first;
+      - both are bills not yet paid and say the same due date (the bill,
+        then its "3 days overdue" reminder).
+    A monthly bill a month later is not the same bill, nor is next week's
+    bill of the same amount (a different due date).
+
+    Found whatever has been done with it since (Jonah, 24 Oct 2026: his
+    mowing subcontractor's bill was filed, then the payment for it came in
+    as a second receipt -- one cost counted twice). When several fit, the
+    one with the same number, else the oldest: a payment pays the oldest
+    bill first.
     """
     if not f["totalCents"]:
         return None
@@ -809,20 +824,63 @@ def _same_bill(db, f):
         day = datetime.date.fromisoformat(f["date"])
     except ValueError:
         return None
-    for s in db.collection("receipts").where("status", "==", "new").stream():
+    paid = _is_payment(f)
+    best = None
+    for s in db.collection("receipts").where("totalCents", "==", f["totalCents"]).stream():
         r = s.to_dict() or {}
-        if vendor_key(r.get("vendor")) != key or r.get("totalCents") != f["totalCents"]:
-            continue
-        if r.get("orderNo") and f["orderNo"] and _norm(r["orderNo"]) != _norm(f["orderNo"]):
-            continue
-        if r.get("splits"):
+        if vendor_key(r.get("vendor")) != key:
             continue
         try:
-            if abs((datetime.date.fromisoformat(r.get("date") or "") - day).days) <= 10:
-                return s
+            if abs((datetime.date.fromisoformat(r.get("date") or "") - day).days) > MATCH_DAYS:
+                continue
         except ValueError:
             continue
-    return None
+        num, theirs = _norm(f.get("orderNo")), _norm(r.get("orderNo"))
+        if num and theirs:
+            if num != theirs:
+                continue
+            return s
+        was_paid = _is_payment(r)
+        # The payment is dated on or after the bill it pays; and a bill
+        # already marked paid has had its payment.
+        bill, pay = (r, f) if paid else (f, r)
+        bill_then_payment = paid != was_paid and not bill.get("paid") and             str(pay.get("date") or "") >= str(bill.get("date") or "")
+        same_due = not paid and not was_paid and f.get("dueDate") and f.get("dueDate") == r.get("dueDate")
+        # Two unsorted ones with nothing to tell them apart (the rule before):
+        # the same cost read twice.
+        both_new = r.get("status") == "new" and not r.get("splits") and paid == was_paid and             r.get("docType") == f.get("docType") and not paid
+        if not (bill_then_payment or same_due or both_new):
+            continue
+        if best is None or str(r.get("date") or "") < str((best.to_dict() or {}).get("date") or ""):
+            best = s
+    return best
+
+
+MATCH_DAYS = 14
+
+
+def _is_payment(r):
+    """A record of money paid (a receipt, a payment confirmation), as against
+    a bill still to pay."""
+    return bool(r.get("paid")) or r.get("docType") in ("receipt", "payment_confirmation", "order_confirmation")
+
+
+def _a_subs_bill(db, got, m):
+    """Whether this email is a bill from one of Jonah's subcontractors (set up
+    on All Jobs -> Subcontractors): their bills are for his clients' places,
+    never his household's, however the email reads."""
+    try:
+        subs = ((db.collection("settings").document("subcontractors").get().to_dict() or {}).get("subs") or {})
+    except Exception:       # noqa: BLE001
+        return False
+    if not subs:
+        return False
+    import subvisits        # here, not at the top: subvisits imports this file
+    names = [got.get("vendor") or "", (m or {}).get("from") or ""]
+    head = re.match(r"^\s*(?:(?:re|fwd?|fw)\s*:\s*)*invoice from\s+(.+?)\s+[-–—]\s", (m or {}).get("subject") or "", re.I)
+    if head:
+        names.append(head.group(1))
+    return any(subvisits.names_match(sub or {}, n) for sub in subs.values() for n in names if n)
 
 
 # ---------------------------------------------------------------- cards from email
@@ -1767,7 +1825,7 @@ def _save_held(db, jobs_of, report, saved=None):
             continue
         try:
             rid, what = _save(db, m, got, jobs_of())
-            personal = _file_personal(db, rid, got)
+            personal = _file_personal(db, rid, got, m)
         except Exception as e:      # noqa: BLE001
             tries = (d.get("tries") or 0) + 1
             print("receipts: could not save held", s.id, e)
@@ -1984,7 +2042,7 @@ def run(client, manual=False):
                     # Personal purchases are kept now, filed under Personal
                     # (Jonah, 21 Oct 2026, reversing his 5 Oct "never
                     # written"); they never go on to QuickBooks.
-                    personal = _file_personal(db, rid, got)
+                    personal = _file_personal(db, rid, got, m)
                 except Exception as e:      # noqa: BLE001
                     print("receipts: could not save", m["id"], e)
                     _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1)
