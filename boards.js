@@ -2275,12 +2275,11 @@
           '👷 A crew task can be seen by every crew member, from any board that is not private.',
         // What it is gives the card its colour; whether it has a time is the
         // Time box's alone (Jonah, 15 Oct 2026).
-        '<div class="field"><span class="label">What is it</span><select id="cdType" onchange="cardTypeChanged()">' +
-          '<option value="">—</option>' +
-          // A card is a thing to do: not a job's day (remind.js calOnly).
-          YDRemind.TYPES.filter(t => !t.calOnly).map(t => '<option value="' + t.id + '"' + (t.id === cardType(board, k) ? ' selected' : '') + '>' +
-            esc(cardTypeLabel(t)) + '</option>').join('') +
-        '</select></div>' +
+        // Tap buttons, not a drop-down (Jonah, 23 Oct 2026: as the
+        // calendar's tags). The one lit is kept in #cdType.
+        '<div class="field"><span class="label">What is it</span>' +
+          '<input type="hidden" id="cdType" value="' + esc(cardType(board, k) || '') + '">' +
+          '<div class="cal-tagpick" id="cdTypeChips"></div></div>' +
         // Where it is done -- in the office or out (Jonah, 22 Oct 2026: "stuff
         // that i do at home vs stuff i do out of the home"): its own
         // question beside what it is. Kept in #cdPlace; `picked` once tapped
@@ -2368,6 +2367,7 @@
         (openCard.cardId && cardDeletable(board, k, colOf(board, k) === doneColOf(board))
           ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete card</button>' : '') +
       '</div>');
+    drawCardType();
     cardRemindHint();
     drawCardPlace();
     // What the editor showed, box by box: saveCard sends back only the boxes
@@ -2398,6 +2398,26 @@
   // A crew task is the crew's: picking it tags the card 👷 Crew, so the crew
   // can see it from any board and it is listed on Crew tasks with the rest.
   // Picking what it is never clears a time.
+  // The kinds as buttons, coloured as on the board; tapping one is the
+  // same as picking it was from the old list (cardTypeChanged).
+  function drawCardType() {
+    const box = el('cdType'), chips = el('cdTypeChips');
+    if (!box || !chips) return;
+    chips.innerHTML = YDRemind.TYPES.filter(t => !t.calOnly).map(t => {
+      const on = t.id === box.value, color = safeColor(t.color);
+      return '<button type="button" class="cal-tagpick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+        ' style="--c:' + color + ';--ink:' + (t.ink ? safeColor(t.ink) : inkOn(color)) + '"' +
+        ' onclick="cardTypePick(\'' + safeId(t.id) + '\')"><span class="cal-tag-dot"></span>' +
+        esc(cardTypeLabel(t)) + '</button>';
+    }).join('');
+  }
+  window.cardTypePick = function (id) {
+    const box = el('cdType');
+    if (!box || !YDRemind.typeById(id)) return;
+    box.value = id;
+    drawCardType();
+    cardTypeChanged();
+  };
   window.cardTypeChanged = function () {
     const t = YDRemind.typeById(val('cdType'));
     if (t && t.crew) {
@@ -2441,11 +2461,6 @@
     const hint = el('cdRemindHint');
     const board = openCard && boards[openCard.boardId];
     if (!hint || !board) return;
-    const box = el('cdType'), timed = /^\d{2}:\d{2}$/.test(val('cdTime'));
-    if (box) Array.prototype.forEach.call(box.options, o => {
-      const t = YDRemind.typeById(o.value);
-      if (t) o.textContent = cardTypeLabel(t, timed);
-    });
     const choice = val('cdRemind');
     const type = val('cdType') || YDRemind.typeOf({ labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) },
       { boardId: board.id });
@@ -2669,8 +2684,24 @@
     // it even if the column had been scrolled down.
     const drawn = added && document.querySelector('#boardsWrap .bd-card[data-card="' + id + '"]');
     if (drawn && drawn.scrollIntoView) drawn.scrollIntoView({ block: 'nearest' });
-    renderCardDetail();
     writeCard(board.id, id, rec);
+    if (!added) { renderCardDetail(); return; }
+    // A new card: the window closes on Save (Jonah, 23 Oct 2026 -- it
+    // stayed open on the card and needed a Close tap every time). The card
+    // is in sight on the board, lit for a moment, to tap if more is wanted;
+    // Undo takes it off again for whoever may delete cards here.
+    closeBoardModal();
+    if (drawn) {
+      drawn.classList.add('bd-just-added');
+      setTimeout(() => drawn.classList.remove('bd-just-added'), 2500);
+    }
+    const canUndo = editsBoard(board);
+    if (typeof showUndo === 'function' && canUndo) {
+      showUndo('Card added to ' + ((board.columns.find(c => c.id === col) || {}).name || board.name), () => {
+        deleteCards(board, [id]);
+        render();
+      });
+    } else showToast('Card added');
   };
 
   function endOrder(boardId, col) {

@@ -157,6 +157,7 @@
   let drag = null;          // an entry being dragged
   let justDragged = 0;      // a drag ends in a click; that click opens nothing
   let gridScroll = null;     // where the hours were scrolled to (null: not yet)
+  let wantScroll = null;     // where an entry just saved wants them (bringIntoSight)
   let drawFrame = 0;        // a redraw waiting for the next frame (redrawIfVisible)
 
   const el = id => document.getElementById(id);
@@ -591,6 +592,8 @@
     // not where it was.
     const old = wrap.querySelector('.cg-scroll');
     if (old && old.clientHeight && old.dataset.placed) gridScroll = old.scrollTop;
+    // ...unless an entry just saved asked for its hour (bringIntoSight).
+    if (wantScroll != null) { gridScroll = wantScroll; wantScroll = null; }
     // Drawn now: a redraw already waiting for the next frame has nothing
     // left to do.
     if (drawFrame) { cancelAnimationFrame(drawFrame); drawFrame = 0; }
@@ -1304,6 +1307,21 @@
     }
     if (s.clientHeight) s.dataset.placed = '1';
     s.addEventListener('scroll', () => { if (s.clientHeight) { gridScroll = s.scrollTop; s.dataset.placed = '1'; } }, { passive: true });
+  }
+
+  // An entry just saved at a set time: the hours are scrolled to it when it
+  // would be out of sight (Jonah, 23 Oct 2026 -- at night the grid sat at
+  // midnight and a 7 am entry just added could not be seen). Left alone
+  // when it is already on screen, so the grid does not jump.
+  function bringIntoSight(rec) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec((rec && !rec.allDay && rec.time) || '');
+    if (!m) return;
+    const top = (Number(m[1]) + Number(m[2]) / 60) * HOUR;
+    const s = document.querySelector('#calBody .cg-scroll');
+    const h = s && s.clientHeight ? s.clientHeight : 6 * HOUR;
+    const at = gridScroll != null ? gridScroll : (s ? s.scrollTop : 0);
+    if (top >= at && top + HOUR <= at + h) return;
+    wantScroll = Math.max(0, top - HOUR);
   }
 
   // On a phone the hours fill the screen from where they start down to the
@@ -2342,6 +2360,7 @@
       lastCal = calId;
       closeCalModal();
       cursor = rec.date; selected = rec.date; miniMonth = rec.date.slice(0, 8) + '01';
+      bringIntoSight(rec);
       render();
       showToast('Saved to ' + cals[calId].name);
     };

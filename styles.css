@@ -5463,3 +5463,7 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .est-svc-rest .est-svc-h { color:var(--muted); }
   .eva-svc { margin-top:14px; }
   .eva-svc-toggle { font-weight:700; }
+
+  /* A card just added: lit for a moment so the eye finds it on the board
+     once the window has closed (boards.js saveCard). */
+  .bd-card.bd-just-added { box-shadow:0 0 0 3px var(--brand-2, #c9922f); transition:box-shadow .4s; }
