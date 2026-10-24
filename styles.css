@@ -5492,3 +5492,10 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     .pl-tasks { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .pl-tasks .pl-chip { border-radius:10px; text-align:left; }
   }
+
+  /* Someone other than the owner has two buttons by the note box ("Add for
+     me", "For Jonah", home.js jotHtml): the box gets the whole width and
+     the buttons share the line under it, so it is not squeezed to a word. */
+  .hm-note-add.two { flex-wrap:wrap; }
+  .hm-note-add.two input { flex:1 1 100%; }
+  .hm-note-add.two .btn { flex:1 1 0; }

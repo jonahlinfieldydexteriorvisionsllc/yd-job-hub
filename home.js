@@ -263,7 +263,9 @@
     if (signedIn() && window.YDCalendar && YDCalendar.adds && YDCalendar.adds()) {
       out.push('<button class="btn btn-sm" onclick="homeAddEntry()">＋ Calendar<span class="hide-phone"> entry</span></button>');
     }
-    if (signedIn() && !isOwner() && typeof openNoteForJonah === 'function') {
+    // Not when the note box at the top already has "For Jonah" (jotHtml).
+    const jotsToJonah = window.YDBoards && YDBoards.jots && YDBoards.jots() && window.YDCrewNotes && YDCrewNotes.send;
+    if (signedIn() && !isOwner() && !jotsToJonah && typeof openNoteForJonah === 'function') {
       out.push('<button class="btn btn-sm" onclick="openNoteForJonah()">📝 Note for Jonah</button>');
     }
     if (signedIn() && typeof rcPhoto === 'function') {
@@ -492,7 +494,7 @@
     const n = YDBoards.inbox().length;
     const toJonah = !isOwner() && window.YDCrewNotes && YDCrewNotes.send;
     return '<div class="hm-jot">' +
-      '<div class="hm-note-add"><input id="hmNoteBox" maxlength="500" placeholder="📝 Jot a note — sort it later" ' +
+      '<div class="hm-note-add' + (toJonah ? ' two' : '') + '"><input id="hmNoteBox" maxlength="500" placeholder="📝 Jot a note — sort it later" ' +
         'enterkeyhint="done" onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" autocomplete="off">' +
         '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">' + (toJonah ? 'Add for me' : 'Add') + '</button>' +
         (toJonah ? '<button type="button" class="btn" onclick="homeNoteJonah()">📨 For Jonah</button>' : '') + '</div>' +
