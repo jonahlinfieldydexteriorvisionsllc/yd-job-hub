@@ -113,12 +113,21 @@
   };
 
   window.sendNoteForJonah = function () {
-    const u = me();
     const text = ((el('noteText') || {}).value || '').trim().slice(0, MAX_LEN);
-    if (!u || !window.YDDb) return;
+    if (!me() || !window.YDDb) return;
     if (!text) { showToast('Write the note first'); return; }
     const jobId = (el('noteJob') || {}).value || '';
     const job = jobId ? (jobChoices().find(j => j.id === jobId) || (forJob && forJob.id === jobId ? forJob : null)) : null;
+    send(text, job ? jobId : '', job ? (job.name || null) : null);
+    closeNoteForJonah();
+  };
+  // A note to Jonah, from the window above or straight from the box at the
+  // top of Home (home.js homeNoteJonah). True when it is on its way.
+  function send(text, jobId, jobName) {
+    const u = me();
+    text = String(text || '').trim().slice(0, MAX_LEN);
+    if (!u || !window.YDDb || !text) return false;
+    const job = jobId ? { name: jobName } : null;
     const id = newId();
     const rec = { uid: u.uid, by: myName(), text: text, jobId: jobId || null, jobName: job ? (job.name || null) : null,
                   at: nowIso(), readAt: null, notifiedAt: null };
@@ -129,10 +138,10 @@
       if (e && e.code === 'permission-denied') showToast('Not sent — not allowed');
       else console.warn('[notes] not yet on the server:', (e && e.code) || e);
     });
-    closeNoteForJonah();
     showToast(navigator.onLine === false ? 'Saved — it goes to Jonah when you have signal' : 'Sent to Jonah');
     render();
-  };
+    return true;
+  }
   // Tell the owner now rather than at the next five-minute run.
   function ping() {
     if (!window.YDClaude || !YDClaude.available || !YDClaude.available()) return;
@@ -227,7 +236,7 @@
     if (k !== key) { key = k; if (on) start(a); else stop(); }
   });
 
-  window.YDCrewNotes = { unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name),
+  window.YDCrewNotes = { send: text => send(text, '', null), unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name),
     // The owner's unread notes, newest first (Home).
     unreadList: () => unread().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
       .map(n => ({ id: n.id, by: n.by || 'Someone', text: n.text || '', jobId: n.jobId || '', jobName: n.jobName || '', at: n.at || '' })) };

@@ -482,19 +482,26 @@
   // Waiting on you, off the first screen. On a wide screen it comes after
   // the greeting and the weather, beside them where there is room
   // (styles.css .hm-jot). How many wait is a tap down to them.
+  //
+  // Anyone else who may change boards (Cesar, 23 Oct 2026) has the same box
+  // for notes of their own, and a second button that sends it to Jonah as a
+  // note for him (crewnotes.js: on his Home under Waiting on you, and a
+  // buzz on his phone) -- "make it so cesar can make notes ... for me to do".
   function jotHtml() {
-    if (!isOwner() || !window.YDBoards || !YDBoards.inbox) return '';
+    if (!signedIn() || !window.YDBoards || !YDBoards.inbox || !YDBoards.jots || !YDBoards.jots()) return '';
     const n = YDBoards.inbox().length;
+    const toJonah = !isOwner() && window.YDCrewNotes && YDCrewNotes.send;
     return '<div class="hm-jot">' +
       '<div class="hm-note-add"><input id="hmNoteBox" maxlength="500" placeholder="📝 Jot a note — sort it later" ' +
         'enterkeyhint="done" onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" autocomplete="off">' +
-        '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">Add</button></div>' +
-      (n ? '<button type="button" class="hm-jot-n" onclick="homeGo(\'notes\')">' + n + (n === 1 ? ' note' : ' notes') + ' to sort ↓</button>' : '') +
+        '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">' + (toJonah ? 'Add for me' : 'Add') + '</button>' +
+        (toJonah ? '<button type="button" class="btn" onclick="homeNoteJonah()">📨 For Jonah</button>' : '') + '</div>' +
+      (n ?'<button type="button" class="hm-jot-n" onclick="homeGo(\'notes\')">' + n + (n === 1 ? ' note' : ' notes') + ' to sort ↓</button>' : '') +
     '</div>';
   }
   // The notes waiting -- only when there are some.
   function notesHtml() {
-    if (!isOwner() || !window.YDBoards || !YDBoards.inbox) return '';
+    if (!signedIn() || !window.YDBoards || !YDBoards.inbox || !YDBoards.jots || !YDBoards.jots()) return '';
     const list = YDBoards.inbox();
     if (!list.length) return '';
     const targets = sortOpen ? YDBoards.sortTargets() : [];
@@ -522,6 +529,15 @@
     render();
     const again = el('hmNoteBox');
     if (again) again.focus();
+  };
+  // The note in the box, sent to Jonah instead (crewnotes.js).
+  window.homeNoteJonah = function () {
+    const box = el('hmNoteBox');
+    const text = box ? box.value.trim() : '';
+    if (!text) { if (box) box.focus(); return; }
+    if (!window.YDCrewNotes || !YDCrewNotes.send || !YDCrewNotes.send(text)) { showToast('Not sent — try again in a moment'); return; }
+    box.value = '';
+    render();
   };
   window.homeNoteSort = function (id) { sortOpen = sortOpen === id ? '' : id; render(); };
   window.homeNoteTo = function (id, boardId) { sortOpen = ''; YDBoards.inboxSort(id, boardId); render(); };
@@ -911,7 +927,7 @@
     }
     const cards = crewish
       ? [clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
-      : [waitingHtml(), clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
+      : [waitingHtml(), notesHtml(), clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
     return top + '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
   }
 

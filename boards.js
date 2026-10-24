@@ -378,7 +378,7 @@
   function visibleBoards() {
     // A board the crew only see Crew-tagged cards of (loadCrewBoards) is not
     // one of theirs to open: those cards show on Crew tasks.
-    const stored = Object.values(boards).filter(b => !b.crewOnly).sort((a, b) =>
+    const stored = Object.values(boards).filter(b => !b.crewOnly && !othersInbox(b)).sort((a, b) =>
       (a.order || 0) - (b.order || 0) || String(a.name || '').localeCompare(b.name || ''));
     return seesJobs() ? [BIDS, JOBS].concat(stored) : stored;
   }
@@ -893,18 +893,32 @@
   // board moves it there (a card at the top of its first column, its words
   // as written), or it is deleted. It is an ordinary board too, so a note
   // can also be opened, changed or moved there by hand.
+  //
+  // An admin who may change boards jots notes too (Jonah, 23 Oct 2026: "add
+  // note jot to cesar dashboard"): his own inbox, 'inbox-<uid>', made the
+  // first time like this one but not private (the rules keep a private board
+  // the owner's) -- under Mine, and left off everyone else's list of boards
+  // (visibleBoards).
   const INBOX = 'inbox';
+  const inboxId = () => isOwner() ? INBOX : me() ? 'inbox-' + me().uid : null;
+  const othersInbox = b => /^inbox-/.test(b.id) && b.id !== inboxId();
   function ensureInbox() {
-    if (boards[INBOX]) return boards[INBOX];
-    if (!isOwner()) return null;
+    const id = inboxId();
+    if (!id) return null;
+    if (boards[id]) return boards[id];
+    // Not before the boards have come from the server: a board already
+    // there must not be made over again.
+    if (!isOwner() && (!editsBoards() || !ready)) return null;
     const rec = {
-      name: '📥 Notes to sort', color: '#6b7a8f', order: 0.5, group: 'mine', ownerOnly: true, visibleTo: [], editors: [],
+      name: isOwner() ? '📥 Notes to sort' : '📥 My notes to sort', color: '#6b7a8f', order: 0.5, group: 'mine',
+      ownerOnly: isOwner(), visibleTo: [], editors: [],
       columns: [{ id: 'in0', name: 'To sort' }], doneColumn: '', labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
     };
-    boards[INBOX] = Object.assign({ id: INBOX }, rec);
-    write('boards', INBOX, rec, 'making the notes inbox');
-    watchCards(INBOX);
-    return boards[INBOX];
+    if (!isOwner()) rec.inboxOf = me().uid;
+    boards[id] = Object.assign({ id: id }, rec);
+    write('boards', id, rec, 'making the notes inbox');
+    watchCards(id);
+    return boards[id];
   }
   // A new card on `boardId` (top of its first column) with these words: the
   // first line its title, the rest its notes. Every field a card has, set.
@@ -929,16 +943,17 @@
   function inboxAdd(text) {
     const board = ensureInbox();
     if (!board || !String(text || '').trim()) return false;
-    newCardOn(INBOX, text);
+    newCardOn(board.id, text);
     redrawIfVisible(); cardsChanged();
     return true;
   }
   // Onto the board it belongs on: made there, then taken off the inbox.
   function inboxSort(cardId, boardId) {
-    const k = (cards[INBOX] || {})[cardId], to = boards[boardId];
-    if (!k || !to || to.virtual || boardId === INBOX || !editsBoard(to)) return false;
+    const id = inboxId();
+    const k = (cards[id] || {})[cardId], to = boards[boardId];
+    if (!k || !to || to.virtual || /^inbox/.test(boardId) || !editsBoard(to)) return false;
     newCardOn(boardId, k.title, k);
-    deleteCards(boards[INBOX], [cardId]);
+    deleteCards(boards[id], [cardId]);
     redrawIfVisible(); cardsChanged();
     showToast('Moved to ' + to.name);
     return true;
@@ -1987,7 +2002,12 @@
   // (Jonah, 9 Oct) -- a box on every card explaining that was only clutter:
   // what is left is one small "Ask Claude" beside Close (claudeAskHtml),
   // which works as it always did.
-  const claudeOwns = (board, k) => isOwner() && !board.virtual && board.id !== MAINTENANCE && !k.auto;
+  // The owner's on every board; on the wish board also anyone who may change
+  // its cards (Jonah, 24 Oct 2026: "make claude wishboard accessible by
+  // Cesar") -- it is worked at the night run on the computer at home, so a
+  // note sent there spends nothing on the spot.
+  const claudeOwns = (board, k) => (isOwner() || (atNight(board) && editsBoard(board))) &&
+    !board.virtual && board.id !== MAINTENANCE && !k.auto;
   // The wish board is worked by Claude on the computer at home at the night
   // run (the nightly-wishes task, midnight after each weekday): what is on it
   // are changes to Job Hub itself, which the server never builds (cards.py
@@ -2086,6 +2106,16 @@
       return head + '<div class="cl-box muted">Claude leaves this card alone.' +
         '<div class="field-actions"><button class="btn btn-sm" onclick="claudeAllow(true)">Let Claude look at it</button></div></div>';
     }
+    // A wish someone else put on the board is built once Jonah says yes
+    // (wishFrom, saveCard): the night run takes his wishes, and his OK.
+    if (k.wishFrom && !k.ownerOkAt) {
+      const from = esc(String(k.wishFrom.name || 'someone').split(' ')[0]);
+      return head + '<div class="cl-box">' + (isOwner()
+        ? 'A wish from ' + from + '. Claude builds it at the night run once you OK it.' +
+          '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="claudeWishOk()">✅ OK — Claude can build it</button>' +
+          '<button class="btn btn-sm" onclick="claudeAllow(false)">Not for Claude</button></div>'
+        : 'Waiting for Jonah’s OK — Claude builds it at the night run once he says yes.') + '</div>';
+    }
     const talk = talkListHtml(board, k);
     if (!c && !talk) {
       return head + '<div class="cl-box muted">' + (finished ? 'Done — Claude does not look at finished cards.'
@@ -2173,6 +2203,17 @@
   };
   // Jonah's note (if he typed one) goes into the conversation and Claude is
   // asked again: what it did before stays, so it starts from all of it.
+  window.claudeWishOk = function () {
+    const board = openCard && boards[openCard.boardId];
+    const k = board && (cards[board.id] || {})[openCard.cardId];
+    if (!k || !isOwner()) return;
+    const now = nowIso();
+    const patch = { ownerOkAt: now, updatedAt: now, updatedBy: myName() };
+    Object.assign(k, patch);
+    write('boards/' + board.id + '/cards', k.id, patch, 'the OK for Claude');
+    render(); renderCardDetail();
+    showToast('OK — Claude builds it at the night run');
+  };
   window.claudeSend = async function () {
     const board = openCard && boards[openCard.boardId];
     const k = board && (cards[board.id] || {})[openCard.cardId];
@@ -2656,6 +2697,9 @@
       updatedBy: myName(),
     };
     Object.assign(rec, doneByPatch(board, was, !!openCard.cardId && colOf(board, was) === last, col === last, rec.doneAt));
+    // A wish put on the wish board by someone other than Jonah waits for his
+    // OK before Claude builds it (claudeHtml).
+    if (!openCard.cardId && atNight(board) && !isOwner() && me()) rec.wishFrom = { uid: me().uid, name: myName() };
     // Only what was changed here goes back. Everything used to be written from
     // what the editor showed when it opened, so Jonah saving a note put back
     // a crew member's move to Done, or the ticks made meanwhile.
@@ -3349,12 +3393,16 @@
     // Inbox board, newest first; add one; sort one onto a board; the boards
     // a note can go to (any but Bids, Jobs and the Inbox, that this person
     // may change).
-    inbox: () => Object.values(cards[INBOX] || {}).filter(k => k && k.id && !k.doneAt)
+    inbox: () => Object.values(cards[inboxId()] || {}).filter(k => k && k.id && !k.doneAt)
       .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''))),
+    // Whether this person jots notes of their own: the owner, or anyone who
+    // may change boards (their inbox is made on the first note).
+    jots: () => isOwner() || editsBoards(),
+    inboxId: inboxId,
     inboxAdd: inboxAdd,
     inboxSort: inboxSort,
-    inboxDrop: id => window.bdDeleteCard(INBOX, id),
-    sortTargets: () => visibleBoards().filter(b => !b.virtual && b.id !== INBOX && editsBoard(b)),
+    inboxDrop: id => window.bdDeleteCard(inboxId(), id),
+    sortTargets: () => visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && editsBoard(b)),
     // One board's columns drawn on another tab -- the Maintenance board on
     // the Equipment tab (equipment.js): the same cards, drag and card window
     // as here, the cards narrowed by `match` (its search) instead of this

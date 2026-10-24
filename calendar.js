@@ -1960,6 +1960,7 @@
     const box = el('evTagChips'), label = el('evTagLabel');
     if (!cal || !box) return;
     drawPlacePick(cal);
+    forJonah(cal);
     const jobs = cal.kind === 'jobs';
     if (label) label.textContent = jobs ? 'What it is' : 'Tag — what it is';
     if (jobs) {
@@ -1977,6 +1978,20 @@
         ' onclick="calTagPick(\'' + safeKey(t.id) + '\')"><span class="cal-tag-dot"></span>' +
         esc((t.icon ? t.icon + ' ' : '') + t.name) + (t.old ? ' <small>(from before)</small>' : '') + '</button>';
     }).join('');
+  }
+  // Someone else adding to Jonah's own calendar (My work) is putting it there
+  // for him to do (Jonah, 23 Oct 2026: "make it so cesar can make notes or
+  // calendar items for me to do"): a new entry there starts with Jonah
+  // ticked as who is on it, so it is his -- on his day, and his reminder --
+  // not the maker's. Untick him (or tick others) as wanted.
+  function forJonah(cal) {
+    if (isOwner() || !editing || editing.eventId || !cal || cal.kind !== 'work') return;
+    if (document.querySelector('.evWho:checked')) return;
+    const owner = Object.keys(people).find(uid => people[uid] && people[uid].role === 'owner');
+    const box = owner && document.querySelector('.evWho[value="' + owner + '"]');
+    if (!box) return;
+    box.checked = true;
+    if (typeof window.calWhoTicked === 'function') window.calWhoTicked(box);
   }
   // A tag tapped: that is what it is now, whatever the title says.
   window.calTagPick = function (id) {
