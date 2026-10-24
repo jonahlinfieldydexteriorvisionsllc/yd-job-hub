@@ -807,6 +807,23 @@ service cloud.firestore {
     // and reads their own; the owner reads them all and marks them read. The
     // server stamps notifiedAt when it has told him (not bound by these
     // rules).
+    // How long each piece of work took (production.js; Jonah, 23 Oct 2026:
+    // "detailed ... 2 dedicated years of this level of tracking would lead to
+    // estimates that can fully build themselves"). Anyone on the crew logs
+    // their own and may change or delete it; whoever sees jobs reads them
+    // all; the owner may change or delete any.
+    match /productionLog/{logId} {
+      allow read: if isOwner() || canSee('jobs') || (isStaff() && resource.data.uid == request.auth.uid);
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid
+        && logId.matches('pl[a-z0-9]+')
+        && request.resource.data.hours is number && request.resource.data.hours > 0 && request.resource.data.hours <= 24
+        && request.resource.data.people is int && request.resource.data.people >= 1 && request.resource.data.people <= 20;
+      allow update: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.hours is number && request.resource.data.hours > 0 && request.resource.data.hours <= 24);
+      allow delete: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
+    }
+
     match /crewNotes/{noteId} {
       allow read: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
       allow create: if isStaff() && request.resource.data.uid == request.auth.uid

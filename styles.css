@@ -5474,3 +5474,21 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .bd-step-w { font-size:13px; font-weight:600; margin-right:4px; }
   .bd-chase-steps .link-btn { align-self:flex-start; font-size:12px; }
   .bd-chase-row { flex-wrap:wrap; }
+
+  /* How long it took (production.js): tap chips, numbers, the totals. */
+  .pl-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .pl-chip { min-height:44px; padding:6px 12px; border:1px solid var(--border); border-radius:999px; background:var(--surface);
+    color:var(--text); font:inherit; font-size:14px; cursor:pointer; }
+  .pl-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .pl-row { display:flex; align-items:center; gap:8px; }
+  .pl-row input { max-width:160px; }
+  .pl-unit { color:var(--muted); font-size:13px; }
+  .pl-done { margin-bottom:10px; }
+  .pl-move input#plMaterial { margin-bottom:6px; }
+  .pl-grow { cursor:pointer; }
+  .pl-entry { padding:6px 0; border-top:1px solid var(--border); font-size:13px; }
+  .wd-log { display:block; margin-top:6px; font-size:13px; }
+  @media (max-width:720px) {
+    .pl-tasks { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .pl-tasks .pl-chip { border-radius:10px; text-align:left; }
+  }

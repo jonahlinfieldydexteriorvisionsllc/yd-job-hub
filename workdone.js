@@ -133,12 +133,22 @@
         '<span class="wd-done">✅ Done</span><span class="wd-who">' + esc2(firstName(t.by)) +
           (t.at ? ' · ' + esc2(whenWords(t.at)) : '') + '</span>' +
         (can ? '<button type="button" class="link-btn wd-undo ro-ok" onclick="wdTick(this, false)">Not done yet</button>' : '') +
+        logHtml(id, line, can) +
       '</div>';
     }
     return '<div class="wd-line"' + attrs + '>' +
       '<button type="button" class="btn wd-btn ro-ok"' + (can ? ' onclick="wdTick(this, true)"' : ' disabled') + '>' +
         '<span class="wd-box" aria-hidden="true"></span>Mark this done</button>' +
+      logHtml(id, line, can) +
     '</div>';
+  }
+  // How long it took (production.js): logged so far, and a way to log some
+  // -- a day's part of a long piece, or the whole once done.
+  function logHtml(jobId, lineId, can) {
+    if (!can || !window.YDProduction) return '';
+    const n = YDProduction.forLine(jobId, lineId).length;
+    return '<button type="button" class="link-btn wd-log ro-ok" onclick="plLog(this)">⏱ ' +
+      (n ? 'Time logged ×' + n + ' — log more' : 'Log time') + '</button>';
   }
   // Over the work on a page: how far the job is (data-wd-sum: redrawn in
   // place too).
@@ -215,6 +225,8 @@
     const [id, line] = String(box.dataset.wd).split('|');
     const title = box.dataset.t || 'That';
     if (!setLine(id, line, on, title)) return;
+    // Ticked done: how long it took (production.js), with Skip.
+    if (on && window.YDProduction) YDProduction.ask(id, line, title, { done: true });
     const name = title.length > 40 ? title.slice(0, 40) + '…' : title;
     const msg = on ? '✅ ' + name + ' — done' : name + ' — not done yet';
     if (typeof showUndo === 'function') showUndo(msg, () => setLine(id, line, !on, title));
@@ -308,6 +320,8 @@
   // The jobs came in after the ticks (a fresh start): looked at again.
   let startTimer = 0;
   document.addEventListener('yd-jobs-changed', () => { clearTimeout(startTimer); startTimer = setTimeout(startTicked, 300); });
+  // Time logged (production.js): each line's count follows.
+  document.addEventListener('yd-production', fresh);
 
   // ------------------------------------------------ watching
   function stop() {
