@@ -320,10 +320,12 @@ function jobBill(d) {
 // qbChangesIn: the change orders on its QuickBooks invoice already in its
 // price, in cents; qbChangesOff: they were put in by hand, so never counted
 // (quickbooks.py _price_follows).
+// careDecidedAt: when Plants / Turf were settled by themselves as the bid
+// became a job (plantcare.js decide); null once picked by hand.
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'autoFollowUpAt', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
-  'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff'];
+  'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old
@@ -3831,7 +3833,24 @@ function getJobData() {
   if (window.YDEstimate) d.estimate = window.YDEstimate.get();
   // Whether it has plants, worked out again from all of the above, so the
   // server's summary can read it (plantcare.js).
-  if (window.YDPlants) { d.hasPlants = window.YDPlants.has(d); d.hasTurf = window.YDPlants.turfHas(d); }
+  if (window.YDPlants) {
+    // A job (not a bid) still on Auto: Plants / Turf settled now, and the
+    // boxes show it (plantcare.js decide).
+    // Picked by hand since: cleared on the job too (a save merges).
+    if (boardFields.careDecidedAt === null) d.careDecidedAt = null;
+    const settled = window.YDPlants.decide ? window.YDPlants.decide(d) : {};
+    let changed = false;
+    ['plants', 'turf'].forEach(f => {
+      if (!settled[f]) return;
+      d[f] = settled[f];
+      const box = document.getElementById(f);
+      if (box && box.value !== settled[f]) { box.value = settled[f]; changed = true; }
+      boardFields.careDecidedAt = d.careDecidedAt = new Date().toISOString();
+    });
+    // Shown on opening the job: saved like any other change.
+    if (changed && typeof markDirty === 'function') setTimeout(markDirty, 0);
+    d.hasPlants = window.YDPlants.has(d); d.hasTurf = window.YDPlants.turfHas(d);
+  }
   d.lastModified = new Date().toISOString();
   return d;
 }

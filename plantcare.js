@@ -178,6 +178,12 @@
     const extra = {};
     if (patch.jobStatus === 'complete' && statusOf(data) !== 'complete') extra.completedAt = new Date().toISOString();
     const after = Object.assign({}, data, patch, extra);
+    // Booked just now (or still on Auto since): Plants / Turf written down.
+    const settled = decide(after);
+    if (settled.plants || settled.turf) {
+      Object.assign(extra, settled, { careDecidedAt: new Date().toISOString() });
+      Object.assign(after, settled);
+    }
     extra.hasPlants = has(after);
     extra.hasTurf = turfHas(after);
     return extra;
@@ -228,6 +234,45 @@
     if (d.turf === 'no') return false;
     return turfFound(d).yes;
   }
+  // ------------------------------------- settled the moment it is a job
+  //
+  // Jonah (23 Oct 2026): "turf and plant status should be decided the moment
+  // a job is accepted -- if it has no turf or plants on the scope or in it
+  // then mark those as no." So once a bid is booked (any way: the Job tab,
+  // the board, QuickBooks accepted) and Plants / Turf are still on Auto, the
+  // answer is written down as Yes or No -- from the estimate's lines and
+  // materials, the services, what was bought, and the words of its scope.
+  // His own pick on the Job tab still changes it at any time. Left on Auto
+  // only while there is nothing to judge from yet (a QuickBooks import whose
+  // estimate has not been read in) or Supplies is still loading.
+  //
+  // A scope sentence about taking plants out ("remove the existing shrubs")
+  // is not a planting job.
+  const TAKING_OUT = /\b(remov\w*|tear(ing)?\s*out|rip(ping)?\s*out|dig(ging)?\s*out|haul\w*|dispos\w*|clear(ing)?|cut(ting)?\s*down|grind\w*|stumps?|trim\w*|prun\w*|existing)\b/i;
+  function scopeSays(d, reads) {
+    const e = d.estimate || {};
+    return (Array.isArray(e.work) ? e.work : []).some(w => w && [w.title].concat(String(w.scope || '').split(/[.\n;•]+/))
+      .some(t => reads(t) && !TAKING_OUT.test(String(t || ''))));
+  }
+  const accepted = d => statusOf(d) !== 'quoting' && !d.removeWhy && !d.deletedAt;
+  function judgeable(d) {
+    const e = d.estimate || {};
+    return (Array.isArray(e.work) && e.work.length > 0) || (Array.isArray(e.materials) && e.materials.length > 0) ||
+      (Array.isArray(d.serviceTypes) && d.serviceTypes.length > 0) || (Array.isArray(d.materials) && d.materials.length > 0);
+  }
+  // { plants?: 'yes'|'no', turf?: 'yes'|'no' } for the answers still on Auto
+  // on an accepted job; {} when there is nothing to settle.
+  function decide(d) {
+    const out = {};
+    if (!d || !accepted(d) || !judgeable(d)) return out;
+    if (!d.plants) {
+      const f = found(d);
+      if (!f.unsure) out.plants = f.yes || scopeSays(d, readsLikePlant) ? 'yes' : 'no';
+    }
+    if (!d.turf) out.turf = turfFound(d).yes || scopeSays(d, readsLikeTurf) ? 'yes' : 'no';
+    return out;
+  }
+
   // A care email is owed for this job once it is finished: plants or turf.
   const cares = d => has(d) || turfHas(d);
   // What the email is called for this job.
@@ -311,7 +356,8 @@
     const f = found(d), yes = has(d);
     if (auto) auto.textContent = 'Auto — ' + (f.yes || (f.unsure && d.hasPlants === true) ? 'has plants' : 'no plants found');
     if (why) {
-      why.textContent = d.plants === 'yes' ? 'Set by you: this job has plants'
+      why.textContent = d.plants && d.careDecidedAt ? 'Settled when it became a job' + (d.plants === 'yes' ? ': has plants' : ': no plants on its estimate or scope') + ' — change it here'
+        : d.plants === 'yes' ? 'Set by you: this job has plants'
         : d.plants === 'no' ? 'Set by you: no plants — no care email asked for'
         : f.yes ? 'Found: ' + f.why.join(' · ') : f.unsure && d.hasPlants === true ? 'Supplies still loading…' : '';
     }
@@ -319,7 +365,8 @@
     const tf = turfFound(d);
     if (tAuto) tAuto.textContent = 'Auto — ' + (tf.yes ? 'has turf' : 'no turf found');
     if (tWhy) {
-      tWhy.textContent = d.turf === 'yes' ? 'Set by you: this job has artificial turf'
+      tWhy.textContent = d.turf && d.careDecidedAt ? 'Settled when it became a job' + (d.turf === 'yes' ? ': has turf' : ': no turf on its estimate or scope') + ' — change it here'
+        : d.turf === 'yes' ? 'Set by you: this job has artificial turf'
         : d.turf === 'no' ? 'Set by you: no turf' : tf.yes ? 'Found: ' + tf.why.join(' · ') : '';
     }
     if (!banner) return;
@@ -358,6 +405,8 @@
 
   // His Yes / No / Auto on the Job tab (a form field, saved with the job).
   window.plantsPicked = window.turfPicked = function () {
+    // Picked by hand now: no longer "settled when it became a job".
+    if (typeof boardFields === 'object' && boardFields) boardFields.careDecidedAt = null;
     if (typeof markDirty === 'function') markDirty();
     refresh();
   };
@@ -428,6 +477,7 @@
     state: state,
     owed: owed,
     patchExtras: patchExtras,
+    decide: decide,
     badge: badge,
     owedChip: owedChip,
     sheetHtml: sheetHtml,
