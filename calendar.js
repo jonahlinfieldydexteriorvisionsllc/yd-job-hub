@@ -403,7 +403,7 @@
         // A recurring task's card is drawn by the Crew tasks layer below.
         if (x.card.recurring && window.YDRecurring && YDRecurring.visible()) return;
         if (onlyMine && !YDRemind.cardIsMine(x.card, x.board, w)) return;
-        const type = YDRemind.typeOf(x.card, { boardId: x.board.id });
+        const type = YDRemind.typeOf(x.card, { board: x.board });
         const ic = YDRemind.icon(type) || '📌';
         // A card with a time sits at that hour (an hour long); without one,
         // with the day's all-day entries.

@@ -541,6 +541,31 @@ CREW_TYPES = {"crew", "repair", "shop", "errand"}
 # and equipment (as in our equipment)"): one with no date is ready now
 # (remind.js PICKUPS).
 PICKUPS = ("pickup", "rental", "parts", "check", "equipment")
+# Each board's kinds (Jonah, 26 Oct 2026: no "material pickup" or "bid" on
+# the purchase board): what a card on it can be -- the board's own `kinds`
+# once the owner changed it in Board settings, else what it starts with
+# here; none on a board whose cards are not things to go and do. A private
+# board offers nothing of the crew's. remind.js BOARD_KINDS: the same.
+WORK_KINDS = ("bid", "appt", "phone", "pickup", "rental", "parts", "check", "equipment", "delivery", "email", "todo", "crew")
+OWN_KINDS = ("bid", "appt", "phone", "pickup", "rental", "parts", "check", "equipment", "delivery", "email", "todo",
+             "doctor", "personal")
+BOARD_KINDS = {
+    "todo": WORK_KINDS,
+    "inbox": OWN_KINDS,
+    "crew": ("pickup", "rental", "parts", "check", "equipment", "delivery", "repair", "shop", "errand", "crew"),
+    "pickups": PICKUPS,
+    "maintenance": ("repair", "parts", "equipment"),
+    "tobuy": (), "wishes": (), "claude-home": (), "winter": (),
+}
+
+
+def _board_kinds(board_id, board):
+    """The kinds a card on this board can be (remind.js boardKinds)."""
+    board = board or {}
+    private = board.get("ownerOnly") is True
+    own = board.get("kinds")
+    ids = own if isinstance(own, list) else BOARD_KINDS.get(board_id, OWN_KINDS if private else WORK_KINDS)
+    return [k for k in ids if k in TYPES and k != "jobday" and not (private and k in CREW_TYPES)]
 # Where each built-in is usually done -- in the office or out; the rest
 # could be either (remind.js TYPES `place`, Jonah 22 Oct 2026: "stuff that
 # i do at home vs stuff i do out of the home"). An entry or card picked one
@@ -729,10 +754,10 @@ def _place_of(item, kind, cal=None):
     return place if place in PLACES else ""
 
 
-def _type_of(item, cal_kind=None, board_id=None, cal=None):
+def _type_of(item, cal_kind=None, board_id=None, cal=None, board=None):
     """What a thing is -- its tag, if its calendar knows it, else a guess by
     where it is and its title (remind.js typeOf). `cal`: the calendar itself,
-    whose own tags count."""
+    whose own tags count; `board`: a card's board, whose own kinds count."""
     if cal is None and cal_kind:
         cal = {"kind": cal_kind}
     ck = (cal or {}).get("kind") or ""
@@ -749,7 +774,9 @@ def _type_of(item, cal_kind=None, board_id=None, cal=None):
             return "pickup"
         if board_id == "crew" or "crew" in (item.get("labels") or []):
             return "crew"
-        return _by_words(title)
+        # A guess from the title only as one of the board's own kinds.
+        guess = _by_words(title)
+        return guess if guess in _board_kinds(board_id, board) else ""
     if ck == "personal":
         # "Call the dentist" is a call to make, not the dentist.
         guess = "phone" if PHONE_FIRST.search(title) or PHONE_ANY.search(title) \
@@ -962,7 +989,7 @@ def open_tasks(db, people, first, last, now):
                 for s in q.stream():
                     k = s.to_dict() or {}
                     made = _when(k.get("createdAt")) if k.get("createdAt") else None
-                    if not k.get("due") and _type_of(k, board_id=b.id) in PICKUPS and not (made and made < made_since):
+                    if not k.get("due") and _type_of(k, board_id=b.id, board=board) in PICKUPS and not (made and made < made_since):
                         got[s.id] = dict(k, due=today.isoformat(), _undated=True)
             for cid, k in got.items():
                 if k.get("doneAt"):
@@ -973,7 +1000,7 @@ def open_tasks(db, people, first, last, now):
                     continue
                 t = str(k.get("dueTime") or "")
                 timed = len(t) == 5 and t[2] == ":"
-                kind = _type_of(k, board_id=b.id)
+                kind = _type_of(k, board_id=b.id, board=board)
                 if not _is_task(kind, timed, card=True) or to_come(day, timed and t):
                     continue
                 sees = [u for u in people.values() if _sees_board(u, board, k)
@@ -1118,7 +1145,7 @@ def _usual(db, people, since, now, cals, boards, prefs):
                     day = datetime.date.fromisoformat(due_on)
                 except ValueError:
                     continue
-                kind = _type_of(k, board_id=board_id)
+                kind = _type_of(k, board_id=board_id, board=board)
                 on = {a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)}
                 maker = by_name.get(str(k.get("createdBy") or "").strip().lower(), "")
                 who = [u for u in sees if _is_mine(on, kind, maker, u)]

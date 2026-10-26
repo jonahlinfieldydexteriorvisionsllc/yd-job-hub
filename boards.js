@@ -184,7 +184,7 @@
   function isMineCard(board, k) {
     return YDRemind.cardIsMine(k, board, whoNow || YDRemind.who(people));
   }
-  const cardType = (board, k) => YDRemind.typeOf(k, { boardId: board.id });
+  const cardType = (board, k) => YDRemind.typeOf(k, { board: board });
   // A card with no column shows in the first one, so everything that works
   // out where a card sits has to read it the same way.
   function colOf(board, k) {
@@ -2023,7 +2023,10 @@
     // profile marked as a crew member can view it" -- the 👷 Crew tag, which
     // the crew can read from any board that is not private.
     const crewTask = !!(type && type.crew);
-    const crewBtn = !editsBoard(board) || board.id === CREW_BOARD ? ''
+    // Not on a private board (the crew never see it), nor on one whose cards
+    // are not things to go and do (no kinds: To buy, the wish list).
+    const crewOk = board.ownerOnly !== true && (crewTask || YDRemind.boardKinds(board).length > 0);
+    const crewBtn = !editsBoard(board) || board.id === CREW_BOARD || !crewOk ? ''
       : '<button class="btn btn-sm" onclick="cardCrewTask(' + (crewTask ? 'false' : 'true') + ')">' +
           (crewTask ? 'Not a crew task' : '👷 Make it a crew task') + '</button>';
     const inDone = here === doneColOf(board);
@@ -2439,11 +2442,24 @@
     const board = boards[openCard.boardId];
     if (!board) return;
     const k = openCard.cardId ? (cards[board.id] || {})[openCard.cardId] : {};
-    const crew = crewPeople();
     pickJobs = jobsList();
     const linked = k.jobId ? pickJobs.find(j => j._id === k.jobId) : null;
     const chosen = new Set((k.assignees || []).map(a => a.uid));
     const labelsOn = new Set(k.labels || []);
+    // A private board is his alone but for whoever he shares it with: only
+    // they can be put on a card there, and nothing of the crew's is offered
+    // (the 👷 Crew label, a crew task) -- the crew never see it. Whatever a
+    // card already has stays, so saving never drops it.
+    const priv = board.ownerOnly === true;
+    const sharedWith = new Set((board.visibleTo || []).concat(board.editors || []));
+    const crew = crewPeople().filter(p => !priv || sharedWith.has(p.uid) || chosen.has(p.uid));
+    const labelList = (board.labels || []).filter(l => !priv || l.id !== CREW_LABEL.id || labelsOn.has(l.id));
+    // What it is: one of this board's own kinds (remind.js boardKinds), and
+    // no such box at all on a board with none -- To buy, the wish list. A
+    // card's own kind from before stays as it is.
+    const kinds = YDRemind.boardKinds(board);
+    const kindNow = YDRemind.typeById(k.type) ? k.type : (cardType(board, k) || '');
+    const crewKind = kinds.some(t => t.crew);
 
     // The boxes come in four groups, each headed with what it is for. Kind,
     // labels, urgency and colour all looked like ways of marking a card and
@@ -2457,32 +2473,40 @@
       '<div class="field"><span class="label">What needs doing</span>' +
         '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"' +
           ' oninput="cardPlaceFollow()"></div>' +
-      group('What it is &amp; who is on it', 'The kind gives the card its colour. ' +
-          '👷 A crew task can be seen by every crew member, from any board that is not private.',
+      // The kind's box keeps its value even where it is not shown, so a card
+      // keeps the kind it has.
+      (kinds.length ? '' : '<input type="hidden" id="cdType" value="' + esc(kindNow) + '">') +
+      (!kinds.length && !crew.length ? '' :
+      group(kinds.length ? 'What it is &amp; who is on it' : 'Who is on it',
+        (kinds.length ? 'The kind gives the card its colour.' : '') +
+          (crewKind ? ' 👷 A crew task can be seen by every crew member, from any board that is not private.' : ''),
         // What it is gives the card its colour; whether it has a time is the
         // Time box's alone (Jonah, 15 Oct 2026).
         // Tap buttons, not a drop-down (Jonah, 23 Oct 2026: as the
         // calendar's tags). The one lit is kept in #cdType.
+        (!kinds.length ? '' :
         '<div class="field"><span class="label">What is it</span>' +
-          '<input type="hidden" id="cdType" value="' + esc(cardType(board, k) || '') + '">' +
+          '<input type="hidden" id="cdType" value="' + esc(kindNow) + '">' +
           '<div class="cal-tagpick" id="cdTypeChips"></div></div>' +
         // Where it is done -- in the office or out (Jonah, 22 Oct 2026: "stuff
         // that i do at home vs stuff i do out of the home"): its own
         // question beside what it is. Kept in #cdPlace; `picked` once tapped
-        // (or saved so), until then it goes by the kind (drawCardPlace).
+        // (or saved so), until then it goes by the kind (drawCardPlace). Not
+        // on a board of no kinds: a thing to buy or a wish is not a job to
+        // go and do in either place.
         '<div class="field"><span class="label">Where — in the office or out</span>' +
           '<input type="hidden" id="cdPlace" value="' + esc(YDRemind.place(k.place) ? k.place : '') + '"' +
             (YDRemind.place(k.place) ? ' data-picked="1"' : '') + '>' +
           '<div class="cal-tagpick cal-placepick" id="cdPlaceChips"></div>' +
-          '<div class="hint" id="cdPlaceNote"></div></div>' +
+          '<div class="hint" id="cdPlaceNote"></div></div>') +
         (crew.length ? '<div class="field"><span class="label">Who is on it</span><div class="bd-pick">' +
           crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="cdWho" value="' + p.uid + '"' +
             (chosen.has(p.uid) ? ' checked' : '') + '><span>' + esc(p.name) + '</span></label>').join('') +
           '</div>' +
-          (board.visibleTo && board.visibleTo.length ? '' :
+          (priv || (board.visibleTo && board.visibleTo.length) ? '' :
             '<div class="hint">This board is not shared with anyone yet, so the people you pick ' +
             'here will not see it until you share it in Board settings.</div>') +
-        '</div>' : '')) +
+        '</div>' : ''))) +
       group('When', 'Where it sits on the board, the day it is due, and the buzz on the phone.',
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Column</span><select id="cdCol">' +
@@ -2517,7 +2541,7 @@
             '</span></label>').join('') +
         '</div></div>') +
         '<div class="field"><span class="label">Labels</span><div class="bd-pick">' +
-          (board.labels || []).map(l => '<label class="bd-pick-item" style="--c:' + safeColor(l.color) + '">' +
+          labelList.map(l => '<label class="bd-pick-item" style="--c:' + safeColor(l.color) + '">' +
             '<input type="checkbox" class="cdLabel" value="' + l.id + '"' + (labelsOn.has(l.id) ? ' checked' : '') + '>' +
             '<span class="bd-label">' + esc(l.name) + '</span></label>').join('') +
         '</div></div>' +
@@ -2586,10 +2610,16 @@
   // Picking what it is never clears a time.
   // The kinds as buttons, coloured as on the board; tapping one is the
   // same as picking it was from the old list (cardTypeChanged).
+  // Only the board's own kinds (remind.js boardKinds) -- and a card's kind
+  // from before that is not one of them, so it shows what the card is.
   function drawCardType() {
     const box = el('cdType'), chips = el('cdTypeChips');
-    if (!box || !chips) return;
-    chips.innerHTML = YDRemind.TYPES.filter(t => !t.calOnly).map(t => {
+    const board = openCard && boards[openCard.boardId];
+    if (!box || !chips || !board) return;
+    const list = YDRemind.boardKinds(board);
+    const now = YDRemind.typeById(box.value);
+    if (now && !list.some(t => t.id === now.id)) list.push(now);
+    chips.innerHTML = list.map(t => {
       const on = t.id === box.value, color = safeColor(t.color);
       return '<button type="button" class="cal-tagpick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
         ' style="--c:' + color + ';--ink:' + (t.ink ? safeColor(t.ink) : inkOn(color)) + '"' +
@@ -2599,7 +2629,7 @@
   }
   window.cardTypePick = function (id) {
     const box = el('cdType');
-    if (!box || !YDRemind.typeById(id)) return;
+    if (!box || !YDRemind.typeById(id) || !el('cdTypeChips')) return;
     box.value = id;
     drawCardType();
     cardTypeChanged();
@@ -2622,7 +2652,7 @@
     const board = openCard && boards[openCard.boardId];
     if (!box || !chips || !board) return;
     const type = val('cdType') || YDRemind.typeOf({ title: val('cdTitle'),
-      labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) }, { boardId: board.id });
+      labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) }, { board: board });
     const usual = YDRemind.usualPlace(type);
     if (!box.dataset.picked) box.value = usual || 'either';
     chips.innerHTML = YDRemind.PLACES.map(p => {
@@ -2649,7 +2679,7 @@
     if (!hint || !board) return;
     const choice = val('cdRemind');
     const type = val('cdType') || YDRemind.typeOf({ labels: Array.from(document.querySelectorAll('.cdLabel:checked')).map(i => i.value) },
-      { boardId: board.id });
+      { board: board });
     hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this card.'
       : choice === '' ? YDRemind.usualHint(type, /^\d{2}:\d{2}$/.test(val('cdTime'))) +
           ((YDRemind.typeById(type) || {}).crew ? '' : ' Only for a card that is yours: you are on it, or you made it and nobody else is.')
@@ -2808,7 +2838,7 @@
     if (picked === 'crew' && labels.indexOf(CREW_LABEL.id) === -1) labels.push(CREW_LABEL.id);
     // Kept only when it is not what the board and labels make it anyway (a
     // card on Pickups is a pickup, one tagged 👷 Crew a crew task).
-    const type = picked && picked !== YDRemind.typeOf({ labels: labels }, { boardId: board.id }) ? picked : null;
+    const type = picked && picked !== YDRemind.typeOf({ labels: labels }, { board: board }) ? picked : null;
 
     const rec = {
       title: title,
@@ -2917,7 +2947,7 @@
   // adding, removing and reordering can redraw the lists without losing what
   // has been typed. Each keeps its id from when it was made: renaming a column
   // keeps its cards, and deleting the middle one moves only ITS cards.
-  let draftCols = [], draftLabels = [];
+  let draftCols = [], draftLabels = [], draftKinds = [];
 
   window.editBoard = function (id) {
     if (!editsBoards() || (id && !runsBoard(boards[id]))) return;
@@ -2932,6 +2962,7 @@
       .map(c => ({ id: c.id || null, name: c.name, done: id ? c.id === doneNow : false }));
     if (!id) markDraftDone();
     draftLabels = (b.labels || DEFAULT_LABELS).map(l => ({ id: l.id, name: l.name, color: l.color }));
+    draftKinds = id ? YDRemind.boardKinds(b).map(t => t.id) : YDRemind.templateKinds('crew', { ownerOnly: false });
 
     openModal(id ? 'Board settings' : 'New board',
       '<div class="field"><span class="label">Name</span>' +
@@ -2963,6 +2994,14 @@
         '<div id="bdLabelList" class="bd-edit-list"></div>' +
         '<button class="btn btn-sm" onclick="bdLabelAdd()">+ Add a label</button>' +
       '</div>' +
+      // What a card on it can be (remind.js boardKinds): the kinds its card
+      // editor offers. None lit: no What is it box on its cards.
+      '<div class="field"><span class="label">What a card on it can be</span>' +
+        '<div class="cal-tagpick" id="bdKindChips"></div>' +
+        '<div class="hint">Tap a kind to offer it on this board’s cards, tap again to take it off. With none lit, ' +
+          'its cards have no “What is it” box. <button type="button" class="link-btn" onclick="bdKindsUsual()">' +
+          'Back to the usual for this board</button></div>' +
+      '</div>' +
       // Who sees a board and who may change it: the owner's, or an admin's
       // with Board sharing (setsSharing; firestore.rules refuse anyone else).
       // Any other admin sees who it is shared with, and the rest of the
@@ -2972,7 +3011,7 @@
         // Private: the owner's alone (firestore.rules). Only the owner sets
         // it -- an admin cannot hide a board from the person who runs it.
         (isOwner() && id !== MAINTENANCE && id !== CREW_BOARD
-          ? '<label class="chk"><input type="checkbox" id="bdPrivate"' + (b.ownerOnly ? ' checked' : '') + '> ' +
+          ? '<label class="chk"><input type="checkbox" id="bdPrivate"' + (b.ownerOnly ? ' checked' : '') + ' onchange="bdDrawKinds()"> ' +
             '🔒 Private — only you (admins don’t see it unless you tick them below)</label>' : '') +
         (crew.length
           ? '<div class="bd-pick">' + crew.map(p => '<label class="bd-pick-item"><input type="checkbox" class="bdShare" value="' +
@@ -3002,7 +3041,39 @@
         (id && id !== MAINTENANCE && id !== CREW_BOARD ? '<button class="btn btn-sm" onclick="removeBoard(\'' + safeId(id) + '\')">Delete board</button>' : '') +
       '</div>');
     drawDrafts();
+    bdDrawKinds();
     const n = el('bdName'); if (n && !id) n.focus();
+  };
+
+  // The board being edited as it would be saved, as far as its kinds go:
+  // a private one offers nothing of the crew's.
+  function draftBoard() {
+    const b = (editingBoard && boards[editingBoard]) || { id: editingBoard || '' };
+    const p = el('bdPrivate');
+    return Object.assign({}, b, { ownerOnly: p ? p.checked : b.ownerOnly === true });
+  }
+  window.bdDrawKinds = function () {
+    const box = el('bdKindChips');
+    if (!box) return;
+    const b = draftBoard();
+    box.innerHTML = YDRemind.TYPES.filter(t => YDRemind.fitsBoard(t.id, b)).map(t => {
+      const on = draftKinds.indexOf(t.id) !== -1, color = safeColor(t.color);
+      return '<button type="button" class="cal-tagpick-b' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
+        ' style="--c:' + color + ';--ink:' + (t.ink ? safeColor(t.ink) : inkOn(color)) + '"' +
+        ' onclick="bdKindToggle(\'' + safeId(t.id) + '\')"><span class="cal-tag-dot"></span>' +
+        esc(cardTypeLabel(t)) + '</button>';
+    }).join('');
+  };
+  window.bdKindToggle = function (id) {
+    if (!YDRemind.typeById(id)) return;
+    const at = draftKinds.indexOf(id);
+    if (at === -1) draftKinds.push(id); else draftKinds.splice(at, 1);
+    bdDrawKinds();
+  };
+  window.bdKindsUsual = function () {
+    const b = draftBoard();
+    draftKinds = editingBoard ? YDRemind.startKinds(b) : YDRemind.templateKinds(val('bdTemplate') || 'crew', b);
+    bdDrawKinds();
   };
 
   // What an admin is shown in place of the sharing controls.
@@ -3109,6 +3180,8 @@
     draftCols = t.columns.map(n => ({ id: null, name: n }));
     markDraftDone();
     drawDrafts();
+    draftKinds = YDRemind.templateKinds(val('bdTemplate'), draftBoard());
+    bdDrawKinds();
   };
 
   window.saveBoard = function () {
@@ -3155,6 +3228,22 @@
     // ownerOnly == false (start()).
     if (isOwner()) rec.ownerOnly = !!(el('bdPrivate') && el('bdPrivate').checked);
     else if (!editingBoard) rec.ownerOnly = false;
+    // What a card on it can be: kept only when it is not what the board
+    // starts with anyway (null: follow that), so a kind added to the app's
+    // usual lists later reaches the boards nobody changed.
+    const after = Object.assign({ id: id }, was, rec);
+    const kinds = YDRemind.TYPES.map(t => t.id).filter(k => draftKinds.indexOf(k) !== -1 && YDRemind.fitsBoard(k, after));
+    const usual = YDRemind.startKinds(after);
+    rec.kinds = kinds.length === usual.length && usual.every(k => kinds.indexOf(k) !== -1) ? null : kinds;
+    // The ☔ Rain day and 👷 Crew labels go on every board by themselves
+    // (start()); one taken off here stays off.
+    const ids = list => (list || []).map(l => l.id);
+    const off = new Set(was.labelsOff || []);
+    [RAIN.id, CREW_LABEL.id].forEach(f => {
+      if (ids(labels).indexOf(f) !== -1) off.delete(f);
+      else if (ids(was.labels).indexOf(f) !== -1) off.add(f);
+    });
+    if (off.size || (was.labelsOff || []).length) rec.labelsOff = Array.from(off);
     boards[id] = Object.assign({ id: id }, was, rec);
     write('boards', id, rec, 'saving the board');
 
@@ -3361,15 +3450,20 @@
       if (!Object.keys(boards).length) seedOnce();
       if (!boards[WISHES]) wishesOnce();
       // Every board gets the ☔ Rain day label, so any card can be tagged for
-      // a wet day (boards made before it existed included).
+      // a wet day (boards made before it existed included) -- unless it was
+      // taken off the board in Board settings (`labelsOff`, saveBoard): it
+      // came straight back before, on To buy as anywhere.
+      const takenOff = (b, id) => (b.labelsOff || []).indexOf(id) !== -1;
       Object.values(boards).forEach(b => {
-        if (b.virtual || (b.labels || []).some(l => l.id === RAIN.id || /rain/i.test(l.name || ''))) return;
+        if (b.virtual || takenOff(b, RAIN.id) || (b.labels || []).some(l => l.id === RAIN.id || /rain/i.test(l.name || ''))) return;
         b.labels = (b.labels || []).concat([RAIN]);
         write('boards', b.id, { labels: b.labels }, 'rain day label');
       });
-      // And the 👷 Crew label, with the one id the crew's reading rule knows.
+      // And the 👷 Crew label, with the one id the crew's reading rule knows
+      // -- not on a private board, which the crew never see.
       Object.values(boards).forEach(b => {
-        if (b.virtual || b.crewOnly || (b.labels || []).some(l => l.id === CREW_LABEL.id)) return;
+        if (b.virtual || b.crewOnly || b.ownerOnly === true || takenOff(b, CREW_LABEL.id) ||
+            (b.labels || []).some(l => l.id === CREW_LABEL.id)) return;
         b.labels = (b.labels || []).concat([CREW_LABEL]);
         write('boards', b.id, { labels: b.labels }, 'crew label');
       });

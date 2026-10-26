@@ -300,6 +300,54 @@
     if (fb && list.some(t => t.id === fb)) return fb;
     return list.length ? list[0].id : id;
   }
+  // ------------------------------------------------- each board's kinds
+  //
+  // Jonah (26 Oct 2026): "purchase board doesnt need to have the 'what is
+  // it' section when making cards ... the 'material pickup' or 'bid' tag
+  // options show up which shouldnt be a thing". Every board offered all
+  // fourteen kinds -- a quote appointment or the doctor on To buy. Now a
+  // board offers the kinds that fit what it is for, as each calendar has its
+  // own tags; none at all on a board whose cards are not things to go and do
+  // (a purchase list, the wish list, Claude's board, winter plans), and then
+  // the card has no What is it box. The owner changes any board's in Board
+  // settings, kept as the board's `kinds` [ids] ([] = none) only once it
+  // differs from what the board starts with here. A private board offers no
+  // crew kind: the crew never see it. functions/reminders.py _board_kinds:
+  // the same.
+  const WORK_KINDS = ['bid', 'appt', 'phone', 'pickup', 'rental', 'parts', 'check', 'equipment', 'delivery', 'email', 'todo', 'crew'];
+  // A private list of his own: his work, his life, never the crew's.
+  const OWN_KINDS = ['bid', 'appt', 'phone', 'pickup', 'rental', 'parts', 'check', 'equipment', 'delivery', 'email', 'todo',
+    'doctor', 'personal'];
+  const BOARD_KINDS = {
+    todo: WORK_KINDS,
+    inbox: OWN_KINDS,
+    crew: ['pickup', 'rental', 'parts', 'check', 'equipment', 'delivery', 'repair', 'shop', 'errand', 'crew'],
+    pickups: PICKUPS,
+    maintenance: ['repair', 'parts', 'equipment'],
+    tobuy: [], wishes: [], 'claude-home': [], winter: [],
+  };
+  // What a new board starts with, by the template it is made from (boards.js
+  // TEMPLATES).
+  const TEMPLATE_KINDS = { crew: BOARD_KINDS.crew, admin: WORK_KINDS, blank: WORK_KINDS, tobuy: [] };
+  const isPrivate = b => !!b && b.ownerOnly === true;
+  // Never a job's day on a card (the Job schedule's alone); on a private
+  // board, nothing of the crew's.
+  const fitsBoard = (id, b) => id !== 'jobday' && !!typeById(id) && !(isPrivate(b) && typeById(id).crew);
+  // What a board starts with: its own by id, else a private board's or an
+  // open one's.
+  function startKinds(b) {
+    const id = b && b.id;
+    const list = Object.prototype.hasOwnProperty.call(BOARD_KINDS, id) ? BOARD_KINDS[id]
+      : isPrivate(b) ? OWN_KINDS : WORK_KINDS;
+    return list.filter(k => fitsBoard(k, b));
+  }
+  // The kinds a card on this board can be, as tags, in order.
+  function boardKinds(b) {
+    const ids = b && Array.isArray(b.kinds) ? b.kinds.filter(k => fitsBoard(k, b)) : startKinds(b);
+    return ids.map(typeById);
+  }
+  const boardOffers = (b, id) => !!id && boardKinds(b).some(t => t.id === id);
+
   const TIMED_LEADS = [30];
   const LEADS = { bid: [60, 30] };
 
@@ -402,7 +450,7 @@
     return '';
   }
   // `where`: { cal (the calendar itself: its own tags count), or calKind,
-  // or boardId (a card) }.
+  // or board (a card's board: its own kinds count), or boardId }.
   function typeOf(item, where) {
     where = where || {};
     const cal = where.cal || (where.calKind ? { kind: where.calKind } : null);
@@ -413,9 +461,13 @@
     const title = (item && item.title) || '';
     if (kind === 'schedule') return 'crew';             // the old Work schedule
     if (!cal) {
-      if (where.boardId === 'pickups') return 'pickup';
-      if (where.boardId === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
-      return byWords(title);
+      const board = where.board || { id: where.boardId };
+      if (board.id === 'pickups') return 'pickup';
+      if (board.id === 'crew' || (item && (item.labels || []).indexOf('crew') !== -1)) return 'crew';
+      // A guess from the title only as one of the board's own kinds: "Pick
+      // up a new trailer" on To buy is a thing to buy, not a material pickup.
+      const guess = byWords(title);
+      return boardOffers(board, guess) ? guess : '';
     }
     const guess = kind === 'personal' ? (isCall(title) ? 'phone' : DOCTOR_WORDS.test(title) ? 'doctor' : 'personal')
       : kind === 'crew' ? byWords(title, CREW_WORDS) || 'crew'
@@ -570,7 +622,7 @@
     if (!card || !who) return false;
     const on = (card.assignees || []).map(a => a && a.uid).filter(Boolean);
     const maker = who.makerOf ? who.makerOf(card.createdBy) : '';
-    return isMine(on, typeOf(card, { boardId: board && board.id }), maker, who);
+    return isMine(on, typeOf(card, { board: board }), maker, who);
   }
   // A calendar entry keeps the uid of whoever made it (from 12 Oct 2026; the
   // ones before are the owner's).
@@ -653,6 +705,13 @@
     isJobDay: isJobDay,
     typeById: typeById,
     typeOf: typeOf,
+    // Each board's kinds (26 Oct 2026): what a card on it can be, what it
+    // starts with (by board, or by the template a new one is made from), and
+    // whether a kind can be on it at all.
+    boardKinds: boardKinds,
+    startKinds: startKinds,
+    templateKinds: (tpl, b) => (TEMPLATE_KINDS[tpl] || WORK_KINDS).filter(k => fitsBoard(k, b)),
+    fitsBoard: fitsBoard,
     isTask: isTask,
     CARRY_DAYS: CARRY_DAYS,
     TICK_FROM: TICK_FROM,
