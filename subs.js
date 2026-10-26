@@ -292,10 +292,14 @@
     const sp = (r.splits || []).find(x => x && x.to === 'sub' && x.subId && (data.subs || {})[x.subId]);
     return sp ? Object.assign({ id: sp.subId }, data.subs[sp.subId]) : subFor(r);
   }
+  // One set aside in Receipts counts for nothing here either -- a second copy
+  // of a bill set aside as a duplicate is not money owed twice. (An old bill
+  // set aside "subcontractor" is filed to them: YDStages says so.)
+  const setAside = r => !!(window.YDStages && YDStages.receipt(r).id === 'aside');
   function billsOf(s) {
     const all = receiptsAll();
     return Object.keys(all).map(id => Object.assign({ id: id }, all[id]))
-      .filter(r => { const w = subOf(r); return w && w.id === s.id; })
+      .filter(r => { if (setAside(r)) return false; const w = subOf(r); return w && w.id === s.id; })
       .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
   }
   const isPayment = r => r.docType === 'receipt' || r.docType === 'person_payment';
