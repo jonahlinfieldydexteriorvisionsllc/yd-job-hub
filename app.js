@@ -2220,16 +2220,18 @@ function bookedOrderItems(id, data) {
 // lines, the materials by name as they were written there. On the owner's
 // device, once Supplies are here, each material is joined to the Supplies
 // item it clearly names (estimate.js linkFromQb) and Materials to Order is
-// filled from the list -- once (estimate.fromQb.linkedAt), through patchJob
+// filled from the list -- once, and again for the materials still not joined
+// whenever the matching learns more (estimate.js linkDue), through patchJob
 // like a move on the board. One open with typing in it waits for the next
 // look, so nothing typed is lost.
 const qbFilling = new Set(), qbWaiting = new Set();
 let qbScanned = false;
 function fillFromQb(id, data) {
   const e = data && data.estimate;
+  if (!window.YDEstimate || !window.YDEstimate.linkDue) return;
   // Not one in Recently deleted: nothing of it should change while it waits.
-  if (!e || !e.fromQb || e.fromQb.linkedAt || qbFilling.has(id) || data.deletedAt) return;
-  if (!window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change') || !window.YDEstimate || !window.YDEstimate.linkFromQb) return;
+  if (!window.YDEstimate.linkDue(e) || qbFilling.has(id) || data.deletedAt) return;
+  if (!window.YDAuth || !window.YDAuth.isOwner || !ydCan('jobs', 'change') || !window.YDEstimate.linkFromQb) return;
   if (!orderReady() || (id === currentJobId && dirty)) { qbWaiting.add(id); return; }
   qbFilling.add(id);
   setTimeout(() => {

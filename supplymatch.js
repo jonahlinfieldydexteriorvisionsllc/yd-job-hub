@@ -36,6 +36,27 @@
 //     blanket) counts double.
 // Joining by itself stays strict -- a wrong join is worse than a tap: only
 // the one item with every real word spelled out and a unit that fits.
+//
+// Jonah (26 Oct 2026), on a job from QuickBooks: "items in her job we get
+// from mds that arent linked". 14 of its 15 materials were in Supplies
+// and none joined: "Rochester Concrete Products Reno Pavers" (Supplies: "Reno
+// 6cm paver"), "Polymeric Jointing Sand — Beige" (three colours fit; the one
+// word that told them apart was after the dash, and notes were dropped),
+// "Techniseal Structure Bond Adhesive: 2 canisters" ("Structurebond foam
+// adhesive", by the can), "Grand Fire Pit Kit, Four-Layer" ("Grand fire pit,
+// 4 layers"). So:
+//   - a maker's name says who makes it, not what it is: never needed for a
+//     join, only used to choose between items that all fit (MAKERS);
+//   - when several items fit, the notes choose -- a colour after a dash, a
+//     word in brackets -- if they name exactly one of them;
+//   - two of his words run together are one of the item's ("structure bond"
+//     = structurebond), as one of his can be two of the item's;
+//   - counts are numbers however written (four-layer = 4 layers), and a
+//     count that disagrees rules an item out like a size does;
+//   - a can is a canister, and a bag, can or pail of a thing sold each is
+//     one of it.
+// And a job's materials are joined again whenever this gets better
+// (estimate.js LINK_V), not only once when the job comes in.
 // Plain code: no Claude call.
 (function () {
   'use strict';
@@ -46,9 +67,19 @@
     'linear', 'lb', 'lbs', 'pound', 'pounds', 'bag', 'bags', 'pc', 'pcs', 'piece', 'pieces', 'each', 'ea', 'roll', 'rolls',
     'pallet', 'pallets', 'gal', 'gallon', 'gallons', 'box', 'boxes', 'bundle', 'bundles', 'oz', 'cm', 'mm'];
   const OLD_UNIT_WORDS = UNIT_WORDS.slice(0, -3);
-  // Words that say what kind or how good, not what the thing is.
+  // Words that say what kind or how good, not what the thing is. "Kit" says
+  // how it comes ("Grand fire pit kit" is the fire pit).
   const FILLER = ['control', 'premium', 'quality', 'grade', 'heavy', 'duty', 'commercial', 'contractor', 'standard',
-    'regular', 'bulk', 'bagged', 'light', 'pro', 'professional', 'select', 'new', 'brand'];
+    'regular', 'bulk', 'bagged', 'light', 'pro', 'professional', 'select', 'new', 'brand', 'kit'];
+  // Who makes it. His estimates name the maker; Supplies mostly names only
+  // the product ("Reno 6cm paver", "Structurebond foam adhesive"). Longest
+  // first, so "rochester concrete products" goes before "rochester".
+  const MAKERS = ['rochester concrete products', 'rochester concrete', 'rochester', 'rcp', 'county materials', 'techniseal',
+    'techo-bloc', 'techo bloc', 'belgard', 'unilock', 'versa-lok', 'versa lok', 'alliance', 'gator', 'nds', 'necessories',
+    'borgert', 'quikrete', 'sakrete', 'dewitt', 'oatey', 'border concepts', 'vigoro', 'scotts', 'pennington']
+    .sort((a, b) => b.length - a.length);
+  // A bag, can or pail of a thing sold each is one of it.
+  const ONE_EACH = ['bag', 'can', 'pail', 'bucket', 'tube', 'jug', 'bottle', 'cartridge', 'kit'];
   // Trade words for the same thing (after plurals come off). Each way round.
   const SAME = [['barrier', 'fabric'], ['geotextile', 'fabric'], ['pin', 'staple'], ['blend', 'mix'], ['bark', 'mulch'],
     ['edging', 'edge'], ['poly', 'polymeric'], ['stake', 'spike'], ['seed', 'seeding'], ['stone', 'rock'],
@@ -96,9 +127,16 @@
   }
   const SIZE_RE = new RegExp(NUM + FT_IN + /\s*[x×X*]\s*/.source + NUM + FT_IN, 'g');
   const MEASURE_RE = new RegExp(NUM + /\s*(oz|lbs?|#|pounds?|cm|mm|gal(?:lons?)?|inch|in(?![a-z])|"|”|″)(?![a-z])/.source, 'gi');
+  // How many of something a kit has -- "4 layers", "Four-Layer", "3 courses":
+  // the 3-layer fire pit is not the 4-layer one.
+  const COUNT_RE = new RegExp(NUM + /\s*-?\s*(layer|course|tier)s?(?![a-z])/.source, 'gi');
+  const NUM_WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve'];
+  const NUM_WORD_RE = new RegExp('\\b(' + NUM_WORDS.join('|') + ')\\b', 'gi');
   function specs(s) {
     const out = { sizes: [], m: {} };
-    let rest = String(s || '').replace(SIZE_RE,
+    let rest = String(s || '').replace(NUM_WORD_RE, w => String(NUM_WORDS.indexOf(w.toLowerCase()) + 1))
+      .replace(COUNT_RE, (all, a, k) => { k = k.toLowerCase(); if (out.m[k] === undefined) out.m[k] = n(a); return ' '; })
+      .replace(SIZE_RE,
       (all, a, b) => { out.sizes.push(n(a) + 'x' + n(b)); return ' '; });
     rest = rest.replace(MEASURE_RE,
       (all, a, u) => {
@@ -150,6 +188,30 @@
     if (w.length >= 4 && have.some(h => h.length > w.length + 2 && (h.indexOf(w) === 0 || h.slice(-w.length) === w))) return { c: 0.7 };
     return { c: 0 };
   }
+  // His word i and the one beside it, run together, are one of the item's:
+  // "Structure Bond" is "Structurebond", "top soil" is "topsoil". Spelled
+  // exactly, and never a lone letter: "flexible T-shaped" run together is
+  // one letter off "flexible", which the L-shaped edging has too.
+  function runTogether(want, i, have) {
+    const pairs = [];
+    if (i + 1 < want.length && want[i].length > 1 && want[i + 1].length > 1) pairs.push(want[i] + want[i + 1]);
+    if (i > 0 && want[i - 1].length > 1 && want[i].length > 1) pairs.push(want[i - 1] + want[i]);
+    return pairs.some(p => have.indexOf(p) !== -1);
+  }
+
+  // The makers named in some words, as words ("rochester concrete product").
+  const flat = s => ' ' + String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() + ' ';
+  function makerWords(name) {
+    let t = flat(name);
+    const out = [];
+    MAKERS.forEach(p => {
+      const f = flat(p);
+      if (t.indexOf(f) === -1) return;
+      t = t.split(f).join(' ');
+      words(p).forEach(w => { if (out.indexOf(w) === -1) out.push(w); });
+    });
+    return out;
+  }
 
   // One unit, however it is written: "sq. ft" = "sf", "Tons" = "ton".
   function unitKey(u) {
@@ -157,7 +219,7 @@
     const table = [[/^(each|ea|pc|pcs|piece|pieces|unit|units)$/, 'each'], [/^(sq ?ft|sf|square f(ee|oo)t)$/, 'sqft'],
       [/^(lf|lin ?ft|linear ?ft|linear f(ee|oo)t|ft|feet|foot)$/, 'lf'], [/^(tons?|t)$/, 'ton'],
       [/^(yards?|yds?|cu ?yds?|cubic yards?)$/, 'yd'], [/^(cu ?ft|cubic f(ee|oo)t)$/, 'cuft'], [/^(gal|gallons?)$/, 'gal'],
-      [/^(lbs?|pounds?|#)$/, 'lb'], [/^(bags?)$/, 'bag'], [/^(rolls?)$/, 'roll'],
+      [/^(lbs?|pounds?|#)$/, 'lb'], [/^(bags?)$/, 'bag'], [/^(rolls?)$/, 'roll'], [/^(cans?|canisters?)$/, 'can'],
       [/^(days?|daily|per day|day rate)$/, 'day']];
     const hit = table.find(([re]) => re.test(s));
     return hit ? hit[1] : s.replace(/s$/, '');
@@ -267,7 +329,7 @@
     const measured = cov ? unitKey(it.takeoffUnit) : sold;
     const u = unitKey(m.unit), q = num(m.qty);
     const unit = cov ? String(it.takeoffUnit || '') : String((pr && pr.per) || it.unit || '');
-    if (u === measured || (!u && measured === 'each')) return { qty: q, unit: unit };
+    if (u === measured || (!u && measured === 'each') || (measured === 'each' && ONE_EACH.indexOf(u) !== -1)) return { qty: q, unit: unit };
     if (cov && (u === sold || (!u && sold === 'each'))) return { qty: q === null ? null : Math.round(q * cov * 1000) / 1000, unit: unit };
     // "Grass seed: 3 lb" of a 50 lb bag: kept in pounds (pricing.js works
     // the bags from the bag's weight).
@@ -331,7 +393,7 @@
     // product's bag sizes are told apart by them -- famOf); bareWords: and
     // without its notes ("Seed Mix (by the lb)"), for what it is.
     const info = { text: text, words: words(sp.rest + ' ' + String(it.also || '')), nameWords: words(sp.rest),
-                   bareWords: words(specs(bare(it.name)).rest), specs: sp };
+                   bareWords: words(specs(bare(it.name)).rest), specs: sp, maker: makerWords(it.name) };
     itemWords.set(it.id, info);
     return info;
   }
@@ -363,22 +425,34 @@
       return out;
     }
     const wantSpecN = Object.keys(wantSpecs.m).length + (wantSpecs.sizes.length ? 1 : 0);
-    // What it is: the last word that is more than a describing word (sand,
-    // mulch, fabric, blanket). It counts double; describing words a quarter.
-    const real = want.filter(w => FILLER.indexOf(w) === -1);
+    // Who makes it, the describing words ("kit": the fire pit kit, not its
+    // coping) and the words of his notes ("— Beige", "(behind wall)"):
+    // never needed, but they choose between items that all fit.
+    const maker = makerWords(m.name);
+    const optional = w => FILLER.indexOf(w) !== -1 || maker.indexOf(w) !== -1;
+    const choosing = [];
+    want.filter(optional).concat(words(specs(m.name).rest).filter(w => want.indexOf(w) === -1))
+      .forEach(w => { if (choosing.indexOf(w) === -1) choosing.push(w); });
+    // What it is: the last word that is more than a describing word or a
+    // maker (sand, mulch, fabric, blanket). It counts double, and is always
+    // needed; describing words and makers a quarter.
+    const real = want.filter(w => !optional(w));
     const head = (real.length ? real : want)[(real.length ? real : want).length - 1];
-    const weight = w => w === head ? 2 : FILLER.indexOf(w) !== -1 ? 0.25 : 1;
+    const weight = w => w === head ? 2 : optional(w) ? 0.25 : 1;
     const total = want.reduce((s, w) => s + weight(w), 0);
     const scored = [];
     Object.values(cat.items).forEach(it => {
       if (!usable(it)) return;
       const info = itemInfo(it);
+      // Another maker's: a Belgard paver is not the Rochester one he named.
+      if (maker.length && info.maker.length && !info.maker.some(w => maker.indexOf(w) !== -1)) return;
       let got = 0, exact = true, headC = 0;
-      want.forEach(w => {
-        const c = credit(w, info.words);
+      want.forEach((w, i) => {
+        let c = credit(w, info.words);
+        if (!c.exact && runTogether(want, i, info.words)) c = { c: 1, exact: true };
         got += c.c * weight(w);
         if (w === head) headC = c.c;
-        if (!c.exact && FILLER.indexOf(w) === -1) exact = false;
+        if (!c.exact && (w === head || !optional(w))) exact = false;
       });
       if (!got) return;
       const score = got / total;
@@ -388,11 +462,13 @@
       const p = pack(it, cat.prices && cat.prices[it.id]);
       // Every real word spelled out, and every size he gave the item's own.
       scored.push({ it: it, full: exact && fit === wantSpecN, pack: p, fam: famOf(it),
+                    pick: choosing.filter(w => credit(w, info.words).exact).length,
                     score: score + fit * 0.15 + (isHeadOf(it.name, head) ? 0.2 : 0),
                     extra: info.words.length - want.length });
     });
-    // Best first; the same product in several bag sizes, biggest bag first.
-    scored.sort((a, b) => (b.full - a.full) || (b.score - a.score) || (a.extra - b.extra) ||
+    // Best first -- among the ones that fit, the one his maker and notes name;
+    // the same product in several bag sizes, biggest bag first.
+    scored.sort((a, b) => (b.full - a.full) || (a.full ? b.pick - a.pick : 0) || (b.score - a.score) || (a.extra - b.extra) ||
       (a.fam === b.fam ? (b.pack.lb || 0) - (a.pack.lb || 0) : 0) ||
       String(a.it.name).length - String(b.it.name).length);
     // A product bought by the bag and used a bit at a time (seed) is always
@@ -412,14 +488,17 @@
       out.options = [usual].concat(shown.map(x => x.it.id).filter(id => id !== usual)).slice(0, 4);
       return out;
     }
+    // The one that fits -- or, of several, the one his maker or notes name
+    // more of than any other ("Polymeric sand — Beige" of three colours).
     const full = shown.filter(x => x.full);
-    if (full.length === 1) {
-      const it = full[0].it, f = fitQty(m, it, cat.prices && cat.prices[it.id]);
+    const win = full.length === 1 || (full.length > 1 && full[0].pick > full[1].pick) ? full[0] : null;
+    if (win) {
+      const it = win.it, f = fitQty(m, it, cat.prices && cat.prices[it.id]);
       // With no unit to check (the order list, a line with no unit) it joins
       // only a clear winner: "Fabric pins" is not "Fabric pin (light)" while
       // a box of fabric staples is nearly as likely.
-      const next = shown.find(x => x !== full[0]);
-      const clear = !next || next.score < full[0].score - 0.25;
+      const next = shown.find(x => x !== win);
+      const clear = !next || (next.full ? next.pick < win.pick : next.score < win.score - 0.25);
       const unitGiven = !!unitKey(m.unit);
       if (f && (unitGiven || clear)) { out.sure = { id: it.id, qty: f.qty, unit: f.unit, by: 'name' }; return out; }
       if (opts && opts.anyUnit && clear) { out.sure = { id: it.id, qty: null, unit: '', by: 'name', unitOff: true }; return out; }

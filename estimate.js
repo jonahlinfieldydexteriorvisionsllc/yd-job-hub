@@ -280,6 +280,7 @@
     // A job brought in from QuickBooks: its materials joined to Supplies
     // (app.js fillFromQb).
     linkFromQb: saved => linkFromQb(saved),
+    linkDue: e => linkDue(e),
     // The server filled the open job from QuickBooks while it had unsaved
     // typing (sync.js): the lines taken in, what was typed kept -- or the
     // next save put the empty estimate back over them (Oct 2026). Only into
@@ -812,9 +813,12 @@
   // quantity in a unit the item is sold or measured in -- so it has a cost,
   // a supplier and a place on Materials to Order. When two items fit as
   // well (three sizes of grass seed), or the unit is one the item is not
-  // sold by, it is left for him (🔎 Source it shows the near ones). Once:
-  // fromQb.linkedAt. Returns the estimate as saved with the links, or null
-  // when there is nothing to do.
+  // sold by, it is left for him (🔎 Source it shows the near ones). Once per
+  // version of the matching (LINK_V): when supplymatch.js learns to read more
+  // (26 Oct 2026: makers' names, colours after a dash), the jobs already in
+  // are joined again -- only the materials still not joined and with no cost
+  // he typed; nothing he joined is touched. Returns the estimate as saved
+  // with the links, or null when there is nothing to do.
   // The one Supplies item it is, by supplymatch.js: an item he picked for
   // these words before, or the only one with all of them in a unit that
   // fits. Anything less certain is left for him, with the likely ones
@@ -824,19 +828,22 @@
     const got = YDMatch.match(m, c, P().NOT_FOR_ESTIMATES || []);
     return got.sure;
   }
+  const LINK_V = 2;
+  const linkDue = e => !!(e && e.fromQb && (!e.fromQb.linkedAt || (num(e.fromQb.linkedV) || 1) < LINK_V));
   function linkFromQb(saved) {
-    if (!P() || !saved || !saved.fromQb || saved.fromQb.linkedAt) return null;
+    if (!P() || !linkDue(saved)) return null;
     const c = catalog();
     const out = clone(saved);
     let n = 0;
     out.materials = (out.materials || []).map(m => {
-      if (m.supplyId || m.plant) return m;
+      if (m.supplyId || m.plant || num(m.costCents) > 0) return m;
       const hit = qbMatch(m, c);
-      if (!hit) return m;
+      if (!hit || hit.unitOff) return m;
       n++;
       return Object.assign({}, m, { supplyId: hit.id, qty: hit.qty, unit: hit.unit || m.unit });
     });
-    out.fromQb = Object.assign({}, out.fromQb, { linkedAt: new Date().toISOString(), linked: n });
+    out.fromQb = Object.assign({}, out.fromQb, { linkedAt: new Date().toISOString(), linkedV: LINK_V,
+                                                 linked: (num(saved.fromQb.linked) || 0) + n });
     return out;
   }
 
