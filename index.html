@@ -21,6 +21,17 @@
       }
     } catch (e) {}
   })();
+  // The sidebar before the first paint too (app.js SIDEBAR sets it properly
+  // and keeps it right as the window changes; same width, same keys), so a
+  // laptop never shows the tab bar for a moment first.
+  (function () {
+    try {
+      if (!window.matchMedia || !window.matchMedia('(min-width:1024px)').matches) return;
+      if (localStorage.getItem('ydjobhub_sidebarOff') === '1') return;
+      document.documentElement.setAttribute('data-sidebar', '');
+      if (localStorage.getItem('ydjobhub_sidebarSmall') === '1') document.documentElement.setAttribute('data-sidebar-small', '');
+    } catch (e) {}
+  })();
   // A file of the app that did not download (a dropped signal in the middle
   // of an update) leaves the app half there: every later file throws "esc is
   // not defined" and nothing works (Problems, 13 Oct). Heard from here, the
@@ -62,10 +73,10 @@
 </head>
 <body>
 
-<!-- PREVIEW (Jonah, 15 Oct 2026): the screens in groups down the left on a
-     laptop, instead of the bar across the top. Off unless switched on in the
-     ⋯ menu on this computer; app.js (sidebar preview) fills it from the tab
-     bar's own buttons, so it shows exactly what the bar would. -->
+<!-- The screens in groups down the left on a laptop-wide window, instead of
+     the bar across the top (Jonah, 26 Oct 2026: everyone's laptop layout;
+     phones and narrow windows keep the bar). app.js (SIDEBAR) fills it from
+     the tab bar's own buttons, so it shows exactly what the bar would. -->
 <nav class="sb" id="sideNav" hidden aria-label="Screens"></nav>
 
 <div class="page" id="app">
@@ -117,9 +128,9 @@
             <div class="menu-head">App</div>
             <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">🔔 Notification settings</button>
             <button id="menuTheme" onclick="closeHeaderMenu(); openAppearance()">🌓 Appearance</button>
-            <!-- Laptop only (app.js tidyHeaderMenu): try the screens down the
-                 left instead of across the top, on this computer only. -->
-            <button id="menuSidebar" hidden onclick="closeHeaderMenu(); toggleSidebarPreview()">🧭 Try the new sidebar (preview)</button>
+            <!-- Laptop only (app.js tidyHeaderMenu): the tab bar instead of
+                 the sidebar on this computer, or the sidebar back. -->
+            <button id="menuSidebar" hidden onclick="closeHeaderMenu(); toggleSidebar()">▤ Tab bar instead (this computer)</button>
           </div>
           <div class="menu-group">
             <div class="menu-head">Data</div>

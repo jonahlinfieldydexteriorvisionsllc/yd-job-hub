@@ -4422,12 +4422,13 @@
   .cr-opt { margin:4px 4px 0 0; min-height:36px; }
   .cr-qty-in { width:90px; margin-left:4px; }
 
-  /* ---- Sidebar PREVIEW (app.js "SIDEBAR (PREVIEW)") ----
+  /* ---- Sidebar (app.js "SIDEBAR") ----
      The screens in groups down the left of a laptop instead of the bar
      across the top. Everything here sits under html[data-sidebar], which
-     app.js sets only when the preview is switched on in the ⋯ menu AND the
-     window is at least 1024px wide -- so without it the normal layout is
-     untouched, and phones never see any of it. */
+     app.js (and index.html's first script) set only when the window is at
+     least 1024px wide and this computer has not picked the tab bar in the
+     ⋯ menu -- so without it the normal layout is untouched, and phones
+     never see any of it. */
   html[data-sidebar] { --sb-w:220px; }
   html[data-sidebar][data-sidebar-small] { --sb-w:64px; }
   html[data-sidebar] body { padding-left:var(--sb-w); }
@@ -4448,38 +4449,33 @@
   html[data-sidebar] .sb-group + .sb-group { margin-top:6px; }
   html[data-sidebar] .sb-head { padding:5px 12px 3px; font-size:10.5px; font-weight:700; letter-spacing:1.3px;
     text-transform:uppercase; color:rgba(255,255,255,.55); white-space:nowrap; }
-  html[data-sidebar] .sb-item,
-  html[data-sidebar] .sb-back { position:relative; display:flex; align-items:center; gap:10px; width:100%;
+  html[data-sidebar] .sb-item { position:relative; display:flex; align-items:center; gap:10px; width:100%;
     min-height:38px; padding:6px 10px; border:none; border-left:4px solid transparent; border-radius:8px;
     background:none; color:#ddcdf0; font-size:14px; font-weight:600; text-align:left; cursor:pointer;
     transition:background .12s, color .12s; }
   html[data-sidebar] .sb-item[hidden], html[data-sidebar] .sb-group[hidden] { display:none; }
   @media (hover:hover) {
-    html[data-sidebar] .sb-item:hover, html[data-sidebar] .sb-back:hover,
+    html[data-sidebar] .sb-item:hover,
     html[data-sidebar] .sb-small:hover { background:rgba(255,255,255,.1); color:#fff; }
   }
   html[data-sidebar] .sb-item.active { color:#fff; background:rgba(201,146,47,.22); border-left-color:var(--accent); }
-  html[data-sidebar] .sb-item:focus-visible, html[data-sidebar] .sb-back:focus-visible,
+  html[data-sidebar] .sb-item:focus-visible,
   html[data-sidebar] .sb-small:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
   html[data-sidebar] .sb-icon { flex:none; width:24px; text-align:center; font-size:18px; line-height:1; }
   html[data-sidebar] .sb-label { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   html[data-sidebar] .sb-count:empty { display:none; }
   html[data-sidebar] .sb-count { flex:none; min-width:20px; padding:1px 6px; border-radius:10px; text-align:center;
     background:var(--accent); color:#3a2a08; font-size:11px; font-weight:700; }
-  html[data-sidebar] .sb-foot { padding:8px; border-top:1px solid rgba(255,255,255,.14); }
-  html[data-sidebar] .sb-back { font-size:13px; color:rgba(255,255,255,.75); }
-  html[data-sidebar] .sb-note { padding:2px 12px 6px; font-size:11px; color:rgba(255,255,255,.5); }
 
   /* Narrowed to icons: names in each button's hover text instead, a thin
      line where each heading was, the count on the icon's corner. */
-  html[data-sidebar-small] .sb-title, html[data-sidebar-small] .sb-label,
-  html[data-sidebar-small] .sb-note { display:none; }
+  html[data-sidebar-small] .sb-title, html[data-sidebar-small] .sb-label { display:none; }
   html[data-sidebar-small] .sb-top { justify-content:center; padding:12px 0 6px; }
   html[data-sidebar-small] .sb-list { padding:0 6px 10px; }
   html[data-sidebar-small] .sb-head { height:1px; margin:6px 8px; padding:0; overflow:hidden; font-size:0;
     background:rgba(255,255,255,.2); }
   html[data-sidebar-small] .sb-group + .sb-group { margin-top:4px; }
-  html[data-sidebar-small] .sb-item, html[data-sidebar-small] .sb-back { justify-content:center; padding:8px 0;
+  html[data-sidebar-small] .sb-item { justify-content:center; padding:8px 0;
     border-left-width:3px; }
   html[data-sidebar-small] .sb-count { position:absolute; top:2px; right:2px; min-width:16px; padding:0 4px;
     font-size:9.5px; }

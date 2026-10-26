@@ -847,11 +847,12 @@ function tidyHeaderMenu(m) {
   if (search) search.hidden = !(signedIn && typeof window.openSearch === 'function');
   const all = document.getElementById('menuSettings');
   if (all) all.hidden = !(signedIn && typeof window.openSettings === 'function');
-  // The sidebar preview: only where it can show (a laptop-wide window).
+  // Sidebar or tab bar on this computer: only where the sidebar can show (a
+  // laptop-wide window).
   const side = document.getElementById('menuSidebar');
   if (side) {
     side.hidden = !sidebarFits();
-    side.textContent = sidebarStored(SIDEBAR_KEY) ? '▤ Back to the tab bar' : '🧭 Try the new sidebar (preview)';
+    side.textContent = sidebarStored(SIDEBAR_OFF_KEY) ? '🧭 Use the sidebar' : '▤ Tab bar instead (this computer)';
   }
   // A button's own computed display says whether it shows, whatever its
   // group or the closed menu around it are doing.
@@ -5972,12 +5973,14 @@ function makeSearchable(sel) {
 })();
 
 // ═══════════════════════════════════════════════════════════
-// SIDEBAR (PREVIEW)
+// SIDEBAR
 // ═══════════════════════════════════════════════════════════
 // Jonah, 15 Oct 2026: "Thirteen tabs is past what anyone scans, group them
-// ... make this and let me view it prior to implementing." So it is a
-// preview, switched on per computer from the ⋯ menu, and it changes nothing
-// for anyone who has not switched it on.
+// ... make this and let me view it prior to implementing." It was a preview
+// switched on per computer until 26 Oct: "Make the sidebar everyone's laptop
+// layout (wide screens); phones and narrow windows keep the bottom tabs."
+// So every window wide enough has it; the ⋯ menu still lets one computer
+// keep the tab bar instead (SIDEBAR_OFF_KEY).
 //
 // It is a second way to look at the SAME tab bar, not a second set of tabs:
 // each entry calls switchTab() like the bar does, and shows or hides itself,
@@ -5987,10 +5990,14 @@ function makeSearchable(sel) {
 // only hidden by the stylesheet while the sidebar is up.
 //
 // Only on a laptop-wide window: a phone keeps its five tabs and More, and a
-// narrow window goes back to the bar by itself.
-const SIDEBAR_KEY = 'ydjobhub_sidebarPreview';
+// narrow window goes back to the bar by itself. index.html's first script
+// sets the same attributes before the page is drawn (keep the two the same),
+// so a laptop never flashes the bar first.
+const SIDEBAR_OFF_KEY = 'ydjobhub_sidebarOff';
 const SIDEBAR_SMALL_KEY = 'ydjobhub_sidebarSmall';
 const SIDEBAR_MIN_WIDTH = 1024;
+// The preview's switch, left on computers that tried it: nothing reads it now.
+try { localStorage.removeItem('ydjobhub_sidebarPreview'); } catch (e) { /* private window */ }
 // The groups, in the order they sit. Contacts has a group of its own --
 // People -- because the customer list (every QuickBooks customer, past ones
 // too) is coming and belongs beside it, not among the jobs.
@@ -6012,15 +6019,15 @@ function sidebarStore(key, on) {
 function sidebarFits() {
   return !!(window.matchMedia && window.matchMedia('(min-width:' + SIDEBAR_MIN_WIDTH + 'px)').matches);
 }
+const sidebarWanted = () => sidebarFits() && !sidebarStored(SIDEBAR_OFF_KEY);
 
-// The ⋯ menu entry and the sidebar's own "Back to the tab bar" both land here.
-function toggleSidebarPreview(on) {
-  if (typeof on !== 'boolean') on = !sidebarStored(SIDEBAR_KEY);
-  sidebarStore(SIDEBAR_KEY, on);
+// The ⋯ menu: the tab bar instead on this computer, or the sidebar back.
+function toggleSidebar(on) {
+  if (typeof on !== 'boolean') on = sidebarStored(SIDEBAR_OFF_KEY);
+  sidebarStore(SIDEBAR_OFF_KEY, !on);
   applySidebar();
   if (typeof showToast === 'function') {
-    showToast(on ? 'Sidebar preview on — only on this computer. "Back to the tab bar" is at the foot of it.'
-      : 'Back to the tab bar.');
+    showToast(on ? 'Sidebar on.' : 'The tab bar on this computer. ⋯ → "Use the sidebar" brings it back.');
   }
 }
 function toggleSidebarSmall() {
@@ -6065,15 +6072,12 @@ function toggleSidebarSmall() {
       });
       html += '</div>';
     });
-    html += '</div><div class="sb-foot">' +
-      '<button type="button" class="sb-back" onclick="toggleSidebarPreview(false)" title="Back to the tab bar">' +
-      '<span class="sb-icon" aria-hidden="true">↩</span><span class="sb-label">Back to the tab bar</span></button>' +
-      '<div class="sb-note">Preview — only on this computer</div></div>';
+    html += '</div>';
     nav.innerHTML = html;
     // Up and down arrows walk the screens, as in any list of choices.
     nav.addEventListener('keydown', e => {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
-      const items = Array.prototype.filter.call(nav.querySelectorAll('.sb-item, .sb-back'), x => x.offsetParent !== null);
+      const items = Array.prototype.filter.call(nav.querySelectorAll('.sb-item'), x => x.offsetParent !== null);
       const at = items.indexOf(document.activeElement);
       if (at === -1) return;
       e.preventDefault();
@@ -6130,7 +6134,7 @@ function toggleSidebarSmall() {
     const nav = document.getElementById('sideNav');
     const bar = document.querySelector('.tab-bar');
     if (!nav || !bar) return;
-    const on = sidebarStored(SIDEBAR_KEY) && sidebarFits();
+    const on = sidebarWanted();
     const root = document.documentElement;
     root.toggleAttribute('data-sidebar', on);
     root.toggleAttribute('data-sidebar-small', on && sidebarStored(SIDEBAR_SMALL_KEY));
@@ -6165,8 +6169,7 @@ function toggleSidebarSmall() {
     // window resized while in the background), so a resize checks too --
     // only acting when the answer has actually changed.
     window.addEventListener('resize', () => {
-      const want = sidebarStored(SIDEBAR_KEY) && sidebarFits();
-      if (want !== document.documentElement.hasAttribute('data-sidebar')) applySidebar();
+      if (sidebarWanted() !== document.documentElement.hasAttribute('data-sidebar')) applySidebar();
     });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
