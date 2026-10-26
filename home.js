@@ -509,11 +509,19 @@
     const targets = sortOpen ? YDBoards.sortTargets() : [];
     const rows = list.map(k => {
       const open = k.id === sortOpen;
+      // Where it most likely goes (boards.js noteSuggest: its words, plain
+      // code), a tap to put it there -- "Somewhere else" is every board.
+      const s = YDBoards.noteSuggest ? YDBoards.noteSuggest(String(k.title || '') + ' ' + String(k.notes || '')) : null;
+      const said = s ? [esc(s.boardName || 'Board'), s.kind ? s.kind.icon + ' ' + esc(s.kind.name) : '',
+        s.job ? '📐 ' + esc(s.job.name) : '', s.people.length ? '👤 ' + s.people.map(p => esc(p.name)).join(', ') : '']
+        .filter(Boolean).join(' · ') : '';
       return '<div class="hm-note' + (open ? ' open' : '') + '">' +
         '<div class="hm-note-top"><span class="hm-note-t">' + esc(k.title || '') +
           (k.notes ? '<small>' + esc(String(k.notes).slice(0, 140)) + '</small>' : '') + '</span>' +
-          '<button type="button" class="btn btn-sm hm-note-sort" onclick="homeNoteSort(\'' + safe(k.id) + '\')">' + (open ? 'Close' : 'Sort ▸') + '</button>' +
+          '<button type="button" class="btn btn-sm hm-note-sort" onclick="homeNoteSort(\'' + safe(k.id) + '\')">' +
+            (open ? 'Close' : s ? 'Somewhere else ▸' : 'Sort ▸') + '</button>' +
           '<button type="button" class="hm-note-x" onclick="homeNoteDrop(\'' + safe(k.id) + '\')" aria-label="Delete this note">✕</button></div>' +
+        (s && !open ? '<button type="button" class="btn btn-filled hm-note-go" onclick="homeNoteGo(\'' + safe(k.id) + '\')">→ ' + said + '</button>' : '') +
         (open ? '<div class="hm-note-to">' + targets.map(b => '<button type="button" class="hm-note-b" style="--c:' + colour(b.color) + '"' +
             ' onclick="homeNoteTo(\'' + safe(k.id) + '\', \'' + safe(b.id) + '\')">' + esc(b.name || 'Board') + '</button>').join('') + '</div>' : '') +
         '</div>';
@@ -543,6 +551,16 @@
   };
   window.homeNoteSort = function (id) { sortOpen = sortOpen === id ? '' : id; render(); };
   window.homeNoteTo = function (id, boardId) { sortOpen = ''; YDBoards.inboxSort(id, boardId); render(); };
+  // The note to where it most likely goes (noteSuggest), with its kind, job
+  // and crew member.
+  window.homeNoteGo = function (id) {
+    const k = (YDBoards.inbox() || []).find(x => x.id === id);
+    const s = k && YDBoards.noteSuggest(String(k.title || '') + ' ' + String(k.notes || ''));
+    if (!s) return;
+    sortOpen = '';
+    YDBoards.inboxSort(id, s.boardId, s);
+    render();
+  };
   window.homeNoteDrop = async function (id) { await YDBoards.inboxDrop(id); render(); };
 
   // The owner's day with his to-dos split by where they get done. Jonah (22

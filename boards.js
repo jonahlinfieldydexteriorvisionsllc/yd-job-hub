@@ -1080,7 +1080,8 @@
   }
   // A new card on `boardId` (top of its first column) with these words: the
   // first line its title, the rest its notes. Every field a card has, set.
-  function newCardOn(boardId, text, was) {
+  // `more`: its kind (type), job and people, when a sorted note said them.
+  function newCardOn(boardId, text, was, more) {
     const board = boards[boardId];
     const lines = String(text || '').trim().split(/\r?\n/);
     const col = board.columns[0].id;
@@ -1093,6 +1094,11 @@
       doneAt: null, createdAt: (was && was.createdAt) || nowIso(), createdBy: (was && was.createdBy) || myName(),
       updatedAt: nowIso(), updatedBy: myName(),
     };
+    if (more) {
+      if (more.type) rec.type = more.type;
+      if (more.job && more.job.id) Object.assign(rec, { jobId: more.job.id, jobName: more.job.name, jobNum: more.job.num || null });
+      if (more.people && more.people.length) rec.assignees = more.people.map(p => ({ uid: p.uid, name: p.name }));
+    }
     cards[boardId] = cards[boardId] || {};
     cards[boardId][id] = Object.assign({ id: id }, rec);
     writeCard(boardId, id, rec);
@@ -1105,12 +1111,107 @@
     redrawIfVisible(); cardsChanged();
     return true;
   }
+  // ----------------------------------------------------- where a note goes
+  //
+  // Jonah (26 Oct 2026, on the AI ideas card: "build them in your order ...
+  // 1 self-sorting quick notes"): each note to sort comes with where it most
+  // likely goes -- the board, what kind of card, and the customer's job when
+  // the note names one -- a tap to put it there, or anywhere else as before.
+  // Plain words, no Claude ("code over Claude"): a note it cannot place
+  // simply offers every board, as it always did. First rule that fits wins.
+  const MACHINE_WORDS = /\b(truck|trailer|skid ?steer|bobcat|mower|plow|loader|excavator|mini ?ex|atv|utv|jumping jack|compactor|chainsaw|blower|trimmer|spreader|tractor)\b/;
+  const FIX_WORDS = /\b(fix|repair|broken|broke|leak|leaking|oil|tires?|brakes?|grease|service|blade|battery|hydraulics?|filter|won'?t start|check engine|registration|plates?)\b/;
+  // Words a customer's name can be that are also the work (a Mrs Stone, a
+  // Mr Wall): never taken as the name.
+  const NOT_A_NAME = new Set(('stone rock wall walls patio mulch soil sand gravel green brown black white field wood ' +
+    'lawn tree trees grass seed snow salt plow price rice young king long short hill lake river park brook ' +
+    'call pick order send email text quote bid job jobs work today tomorrow monday tuesday wednesday thursday ' +
+    'friday saturday sunday week next this that with from for and the rental rentals removal building buildings ' +
+    'property properties management services service apartments apartment landscaping construction concrete ' +
+    'homes home house sun prairie madison verona fitchburg middleton monona oregon stoughton waunakee deforest ' +
+    'mount horeb cottage grove mcfarland').split(' '));
+  const wordsOfNote = s => ' ' + String(s || '').toLowerCase().replace(/[’']/g, "'").replace(/[^a-z0-9' ]+/g, ' ')
+    .replace(/\s+/g, ' ').trim() + ' ';
+  const nameWords = s => String(s || '').toLowerCase().replace(/[^a-z ]+/g, ' ').split(/\s+/)
+    .filter(w => w.length >= 3 && !NOT_A_NAME.has(w));
+  // The one job the note names: a last name or business name in its words
+  // (or a first name no other job shares), an open job before a finished one.
+  function noteJob(t) {
+    const jobs = jobsList().filter(j => !j.removeWhy && !j.deletedAt);
+    const firsts = {};
+    jobs.forEach(j => nameWords(j.firstName || String(j.customerName || '').split(' ')[0]).forEach(w => { firsts[w] = (firsts[w] || 0) + 1; }));
+    const scored = jobs.map(j => {
+      // A surname is one word: a name with more after it ("Lori A - snow
+      // removal for ...") is a description, not a name.
+      const parts = String(j.customerName || '').trim().split(/\s+/);
+      const last = nameWords(String(j.lastName || (parts.length > 1 && parts.length <= 3 ? parts[parts.length - 1] : '')).split(/[\s-]+/)[0]);
+      const biz = nameWords(j.businessName || j.business || '').filter(w => w.length >= 5);
+      const first = nameWords(j.firstName || parts[0]).filter(w => firsts[w] === 1);
+      const inIt = w => t.indexOf(' ' + w + ' ') !== -1;
+      const score = (last.some(inIt) || biz.some(inIt) ? 2 : 0) + (first.some(inIt) ? 1 : 0) + (parts.length === 1 && nameWords(parts[0]).some(inIt) ? 2 : 0);
+      const open = ['complete'].indexOf(String(j.jobStatus || '')) === -1 && !j.lostAt ? 1 : 0;
+      return { j: j, score: score, open: open };
+    }).filter(x => x.score > 0).sort((a, b) => (b.score - a.score) || (b.open - a.open));
+    if (!scored.length) return null;
+    const best = scored[0];
+    if (scored[1] && scored[1].score === best.score && scored[1].open === best.open) return null;
+    return { id: best.j._id, name: String(best.j.customerName || '').trim() || 'A job', num: String(best.j.estimateNumber || '').trim() || null };
+  }
+  function machineNamed(t) {
+    const gear = window.YDEquipment && YDEquipment.all ? Object.values(YDEquipment.all() || {}) : [];
+    return gear.some(g => nameWords(g && g.name).some(w => w.length >= 3 && t.indexOf(' ' + w + ' ') !== -1));
+  }
+  // The crew member a note names (never the owner): for the card's people.
+  function crewNamed(t) {
+    return crewPeople().filter(p => p.role !== 'owner')
+      .filter(p => nameWords(String(p.name || '').split(' ')[0]).some(w => t.indexOf(' ' + w + ' ') !== -1));
+  }
+  function noteSuggest(text) {
+    const t = wordsOfNote(text);
+    const has = re => re.test(t);
+    const targets = visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && editsBoard(b));
+    const on = id => targets.find(b => b.id === id) || null;
+    const named = re => targets.find(b => re.test(String(b.name || '').toLowerCase())) || null;
+    const kindOn = (b, id) => id && YDRemind.boardKinds(b).some(k => k.id === id) ? id : null;
+    const job = noteJob(t);
+    const machine = has(MACHINE_WORDS) || machineNamed(t);
+    const crew = crewNamed(t);
+    let b = null, kind = null;
+    if (has(/\b(job ?hub|the app|in the app|wish ?list|feature)\b/) && (b = on('wishes'))) {
+      // About the app itself.
+    } else if (machine && has(FIX_WORDS) && (b = on('maintenance'))) {
+      // A machine or vehicle to see to.
+    } else if (has(/\b(pick ?up|grab|collect)\b/) && (b = on('pickups'))) {
+      kind = has(/\brent(al|ed)?\b/) ? 'rental' : has(/\bparts?\b/) ? 'parts' : has(/\b(check|cheque|payment)\b/) ? 'check'
+        : machine ? 'equipment' : 'pickup';
+    } else if ((crew.length || has(/\b(crew|the guys)\b/)) && (b = on('crew'))) {
+      kind = 'crew';
+    } else if (!job && has(/\b(buy|purchase|get a new|need a new)\b/) && (b = on('tobuy'))) {
+      // Something to buy for the business.
+    } else if (has(/\b(this winter|over the winter|over winter|next season|before spring|next year)\b/) && (b = on('winter'))) {
+      // For the winter.
+    } else if (!job && has(/\b(doctor|dentist|haircut|birthday|dinner|gym|vacation|flight|mom|dad)\b/) && (b = named(/personal/))) {
+      // His own life.
+    } else if ((b = on('todo'))) {
+      kind = has(/\b(call|phone|ring|voicemail|text)\b/) ? 'phone'
+        : has(/\b(email|send|reply)\b/) ? 'email'
+        : has(/\b(quote|estimate|bid|measure)\b/) ? 'bid'
+        : has(/\b(schedule|appointment|meet|meeting|walk ?around|site visit)\b/) ? 'appt'
+        : has(/\bdeliver(y|ed)?\b/) ? 'delivery' : 'todo';
+    }
+    if (!b) return null;
+    const type = kindOn(b, kind);
+    return { boardId: b.id, boardName: b.name, type: type, kind: type ? YDRemind.typeById(type) : null,
+             job: b.id === 'wishes' || b.id === 'tobuy' ? null : job,
+             people: b.id === 'crew' || b.id === 'maintenance' ? crew.map(p => ({ uid: p.uid, name: p.name })) : [] };
+  }
   // Onto the board it belongs on: made there, then taken off the inbox.
-  function inboxSort(cardId, boardId) {
+  // `more`: what the suggestion added (its kind, the job, the crew member).
+  function inboxSort(cardId, boardId, more) {
     const id = inboxId();
     const k = (cards[id] || {})[cardId], to = boards[boardId];
     if (!k || !to || to.virtual || /^inbox/.test(boardId) || !editsBoard(to)) return false;
-    newCardOn(boardId, k.title, k);
+    newCardOn(boardId, k.title, k, more);
     deleteCards(boards[id], [cardId]);
     redrawIfVisible(); cardsChanged();
     showToast('Moved to ' + to.name);
@@ -3683,6 +3784,7 @@
     inboxId: inboxId,
     inboxAdd: inboxAdd,
     inboxSort: inboxSort,
+    noteSuggest: noteSuggest,
     inboxDrop: id => window.bdDeleteCard(inboxId(), id),
     sortTargets: () => visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && editsBoard(b)),
     // One board's columns drawn on another tab -- the Maintenance board on
