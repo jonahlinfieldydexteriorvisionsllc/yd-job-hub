@@ -833,8 +833,11 @@
     const rcTab = el('tabReceipts');
     if (can('jobs', 'change') && window.YDReceipts && rcTab && !rcTab.hidden) {
       any = true;
-      const open = Object.values(YDReceipts.all() || {}).filter(r => r && window.YDStages.receipt(r).id === 'tosort')
-        .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      const waiting = Object.values(YDReceipts.all() || {}).filter(r => r && window.YDStages.receipt(r).id === 'tosort');
+      // The year's email pull (receipts.js `pulled`) on a quieter line of its
+      // own: a year of old receipts is not this week's to-do.
+      const open = waiting.filter(r => !r.pulled).sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      const old = waiting.length - open.length;
       if (open.length) {
         const top = open.slice(0, 3).map(r => esc(r.vendor || 'Receipt') +
           (r.totalCents != null ? ' ' + fmtMoney((Number(r.totalCents) || 0) / 100) : '')).join(' · ');
@@ -843,6 +846,18 @@
         rows.push(line('🧾', '<b>' + plural(open.length, 'receipt') + ' to sort</b>',
           (stuck ? '<b>' + stuck + ' need' + (stuck === 1 ? 's' : '') + ' you</b> · ' : '') + top + (open.length > 3 ? ' …' : ''), '',
           "switchTab('receipts')"));
+      }
+      if (old) rows.push(line('📥', '<b>' + plural(old, 'receipt') + ' from earlier this year</b>', 'From the email pull — put each on its job', '',
+        "switchTab('receipts')"));
+    }
+    // Prices a receipt said differently (supplies.js Prices to check): only
+    // whoever may change the price list is waited on.
+    if (can('supplies', 'change') && window.YDSupplies && YDSupplies.catalog) {
+      const checks = Object.values(YDSupplies.catalog().prices || {}).filter(p => p && p.check).length;
+      if (checks) {
+        any = true;
+        rows.push(line('💲', '<b>' + plural(checks, 'price') + ' to check</b>', 'A receipt said a different price than the price list', '',
+          "switchTab('supplies')"));
       }
     }
     // Subcontractor bills no client could be told from (subs.js) -- the

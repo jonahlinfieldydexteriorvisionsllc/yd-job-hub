@@ -507,8 +507,70 @@
       return;
     }
     const words = norm(search).split(/\s+/).filter(Boolean);
-    box.innerHTML = view === 'hub' ? hubHtml(words) : shown ? oneVendorHtml(v, words) : vendorListHtml(words);
+    box.innerHTML = (edits() && !words.length && !shown ? checksHtml() : '') +
+      (view === 'hub' ? hubHtml(words) : shown ? oneVendorHtml(v, words) : vendorListHtml(words));
   }
+
+  // ---- Prices to check: a receipt said a different price (receipts.js
+  // checkPrices). Jonah, 26 Oct 2026: "when numbers dont line up they should
+  // be submitted for review so i can ensure there wasnt a mistake made".
+  // Each waits on its item's price (supplyPrices `check`) until he takes the
+  // receipt's price or keeps his own -- estimates never use it before that.
+  let checksOpen = false;
+  function checksList() {
+    return Object.keys(prices).filter(id => prices[id] && prices[id].check && items[id])
+      .map(id => ({ id: id, it: items[id], pr: prices[id], c: prices[id].check }))
+      .sort((a, b) => String(b.c.date || '').localeCompare(String(a.c.date || '')));
+  }
+  function checksHtml() {
+    const list = checksList();
+    if (!list.length) return '';
+    const cash = c => typeof c === 'number' ? fmtMoney(c / 100) : 'no price';
+    const row = x => {
+      const v = vendors[x.it.vendorId];
+      const per = x.c.per ? '/' + esc(x.c.per) : '';
+      const mine = typeof x.pr.cents === 'number' ? x.pr.cents : null;
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(x.c.date || '')
+        ? new Date(x.c.date + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+      return '<div class="sup-check">' +
+        '<div><b>' + esc(x.it.name) + '</b>' + (v ? ' <span class="muted">· ' + esc(v.name) + '</span>' : '') + '</div>' +
+        '<div>Receipt: <b>' + cash(x.c.cents) + per + '</b>' +
+          (x.c.unsure ? ' <span class="warn-text">(it doesn’t say per what — check)</span>' : '') +
+          ' · price list: ' + cash(mine) + (x.pr.per ? '/' + esc(x.pr.per) : '') +
+          (x.pr.asOf ? ' <span class="muted">(set ' + esc(x.pr.asOf) + ')</span>' : '') + '</div>' +
+        '<div class="muted">' + esc([x.c.vendor, x.c.orderNo ? '#' + x.c.orderNo : '', day, x.c.where].filter(Boolean).join(' · ')) +
+          (x.c.link ? ' · <a class="link-btn" href="' + esc(x.c.link) + '" target="_blank" rel="noopener">the email</a>' : '') + '</div>' +
+        '<div class="sup-check-acts"><button class="btn btn-sm btn-filled" onclick="supCheckUse(\'' + safeId(x.id) + '\')">Use ' +
+          cash(x.c.cents) + per + '</button> <button class="btn btn-sm" onclick="supCheckKeep(\'' + safeId(x.id) + '\')">Keep ' +
+          cash(mine) + '</button></div></div>';
+    };
+    return '<details class="sup-checks"' + (checksOpen ? ' open' : '') + ' ontoggle="supChecksOpen(this.open)">' +
+      '<summary>💲 <b>Prices to check (' + list.length + ')</b> — a receipt said a different price</summary>' +
+      '<p class="hint">Estimates are priced from the price list. Use the receipt’s price if it is right; keep yours if that ' +
+        'receipt was a one-off or was read wrong.</p>' + list.map(row).join('') + '</details>';
+  }
+  window.supChecksOpen = open => { checksOpen = !!open; };
+  // Its check done with: gone here at once, and on the server (not awaited).
+  function clearCheck(id) {
+    if (prices[id]) prices[id] = Object.assign({}, prices[id], { check: null });
+    Promise.resolve(window.YDDb.put('supplyPrices', id, { check: null }))
+      .catch(e => console.warn('[supplies] price check not cleared yet:', (e && e.code) || e));
+  }
+  window.supCheckUse = function (id) {
+    const x = prices[id], c = x && x.check;
+    if (!c || !edits() || typeof c.cents !== 'number') return;
+    setPrice(id, c.cents, c.year, 'Receipt').catch(e => showToast(e && e.code === 'permission-denied'
+      ? 'Price not changed — not allowed' : 'Price change not on the server yet'));
+    clearCheck(id);
+    showToast((items[id] ? items[id].name + ': ' : '') + fmtMoney(c.cents / 100) + (c.per ? '/' + c.per : '') + ' on the price list');
+    renderResults();
+  };
+  window.supCheckKeep = function (id) {
+    if (!prices[id] || !prices[id].check || !edits()) return;
+    clearCheck(id);
+    showToast('Kept your price');
+    renderResults();
+  };
 
   // ---- Suppliers: one line each; tap one for its card and what it sells.
 

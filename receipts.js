@@ -52,6 +52,8 @@
   const ticked = {};          // receipt id -> Set of line indexes, once changed by hand
   const chosen = {};          // receipt id -> job id picked
   const splitting = {};       // receipt id -> true once "Split across jobs" is pressed
+  const PULL_PAGE = 20;       // the year's pulled receipts shown at a time (pulledHtml)
+  let pullShown = 0;          // how many of them are shown; 0 = folded
 
   const KIND = {
     materials: 'Materials', plants: 'Plants', dump_and_disposal: 'Dump & disposal',
@@ -206,6 +208,8 @@
   // from a receipt still to sort leave it as it was.
   const stageOf = r => window.YDStages.receipt(r);
   const toSortNow = r => !!r && stageOf(r).id === 'tosort';
+  // To sort and from the new mail -- not from the year's pull (pulledHtml).
+  const newToSort = r => toSortNow(r) && !r.pulled;
   function moved(r, patch, who) {
     if (patch.status && (r && r.status) !== patch.status) patch.statusChange = window.YDStages.stamp(patch.status, who);
     return patch;
@@ -259,19 +263,41 @@
     return Object.assign(job, patch);
   }
 
-  // Ticks "ordered" on the Materials to Order items this split's lines are
-  // (app.js sameMaterial: plain word matching, no Claude), noting the order;
-  // Undo takes back only the ticks it made.
-  function tickOrdered(list, lineNames, info) {
-    return list.map(it => (!it.ordered && lineNames.some(n => sameMaterial(it.name, n)))
+  // Ticks "ordered" on the Materials to Order items this split's lines are,
+  // noting the order and what was paid for each (Jonah, 26 Oct 2026: "mark
+  // which items are on the receipt as purchased and update the price of the
+  // items to exactly what was spent"): the same Supplies item when both say
+  // which, else the same words (app.js sameMaterial: plain word matching, no
+  // Claude). Each receipt line ticks one item -- a second line of the same
+  // thing (two loads of topsoil) adds to what that item cost. `lines`:
+  // [{name, sid, cents}]. Undo takes back only the ticks it made.
+  function tickOrdered(list, lines, info) {
+    const paid = {};
+    lines.forEach(l => {
+      const fits = it => l.sid && it.supplyId ? it.supplyId === l.sid : sameMaterial(it.name, l.name);
+      const ks = list.map((it, k) => k).filter(k => !list[k].ordered && fits(list[k]));
+      if (!ks.length) return;
+      const k = ks.find(x => !(x in paid));
+      const at = k === undefined ? ks[0] : k;
+      paid[at] = (paid[at] || 0) + (Number(l.cents) || 0);
+    });
+    return list.map((it, k) => k in paid
       ? Object.assign({}, it, { ordered: true, orderNo: info.orderNo, orderedFrom: info.vendor,
-        orderReceiptId: info.rid, orderSplitId: info.sid })
+        orderReceiptId: info.rid, orderSplitId: info.sid, paidCents: paid[k] })
       : it);
   }
   function untickOrdered(list, sid) {
     return list.map(it => it.orderSplitId === sid
-      ? Object.assign({}, it, { ordered: false, orderNo: null, orderedFrom: null, orderReceiptId: null, orderSplitId: null })
+      ? Object.assign({}, it, { ordered: false, orderNo: null, orderedFrom: null, orderReceiptId: null, orderSplitId: null,
+        paidCents: null })
       : it);
+  }
+  // Which Supplies item a receipt line is (its supplier's item number, or its
+  // name), or ''.
+  function supplyOf(r, l) {
+    const S = window.YDSupplies;
+    const it = S && S.findSupply ? S.findSupply(r.vendor, l.itemNo, l.name) : null;
+    return (it && it.id) || '';
   }
 
   // ------------------------------------------------------------ actions
@@ -383,9 +409,11 @@
     const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
     if (!jobId) { showToast('Pick the job first'); return; }
     const done = addToJob(rid, r, jobId, null);
-    // After the toast has had its moment: a question about the price list.
-    if (done) setTimeout(() => offerPrices(r, done), 400);
+    // After the toast has had its moment: any price that is not the price
+    // list's, to Supplies → Prices to check.
+    if (done) setTimeout(() => checkPrices(rid, r, done, (receipts[rid] && lastJobName(receipts[rid])) || ''), 400);
   };
+  const lastJobName = r => { const s = (r.splits || []).filter(x => x && x.to === 'job').slice(-1)[0]; return s ? s.jobName || '' : ''; };
 
   // The lines (the ticked ones, else all that are left) and their tax onto
   // a job's materials. The button above and a photo sent in for the job
@@ -417,7 +445,8 @@
 
     let ticks = 0;
     const job = changeJob(jobId, list => list.concat(add), list => {
-      const out = tickOrdered(list, idxs.map(i => lines[i].name), { orderNo: r.orderNo || '', vendor: r.vendor || '', rid, sid });
+      const out = tickOrdered(list, idxs.map(i => ({ name: lines[i].name, sid: supplyOf(r, lines[i]), cents: lines[i].cents })),
+        { orderNo: r.orderNo || '', vendor: r.vendor || '', rid, sid });
       ticks = out.filter((it, i) => it !== list[i]).length;
       return out;
     });
@@ -526,8 +555,9 @@
   //
   // A line on a receipt that is one of our supplies (its supplier's item
   // number, or its name) and cost something different from the price list
-  // offers to update the list -- Jonah (6 Oct 2026): ask each time. What the
-  // estimates are priced from then stays what he actually pays.
+  // goes to Prices to check (checkPrices, below) -- Jonah (6 Oct 2026): never
+  // changed without him. What the estimates are priced from then stays what
+  // he actually pays.
   const wordsOf = s => ' ' + String(s || '').toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ')
     .map(w => /(x|ch|sh|ss)es$/.test(w) ? w.slice(0, -2) : /[^s]s$/.test(w) ? w.slice(0, -1) : w).join(' ') + ' ';
   const EACH = [' ', ' each ', ' ea ', ' unit ', ' piece ', ' pc '];
@@ -557,18 +587,31 @@
     });
     return out;
   }
-  async function offerPrices(r, idxs) {
+  // A price on a receipt that is not the price list's goes to Supplies →
+  // Prices to check, for a look before estimates use it (Jonah, 26 Oct 2026:
+  // "when numbers dont line up they should be submitted for review so i can
+  // ensure there wasnt a mistake made"). It was a question there and then,
+  // which a year of old receipts would have asked a hundred times. It waits
+  // on the item's own price (supplyPrices `check`, supplies.js); a newer
+  // receipt's check is never replaced by an older one's.
+  function checkPrices(rid, r, idxs, where) {
     const ch = priceChanges(r, idxs);
     if (!ch.length) return;
-    const lines = ch.map(c => '• ' + c.name + ': ' + (c.from === null ? 'no price' : money(c.from)) + ' → ' + money(c.to) +
-      (c.per ? ' a ' + c.per : '') + (c.unsure ? ' (the receipt doesn’t say per what — check)' : ''));
-    if (!(await ydConfirm(lines.join('\n') + '\n\nEstimates are priced from these.',
-        { title: 'Update the price list from this ' + (r.vendor || '') + ' receipt?', ok: 'Update the prices', cancel: 'Leave them' }))) return;
-    let failed = 0;
-    ch.forEach(c => window.YDSupplies.setPrice(c.id, c.to, c.year, 'Receipt').catch(e => {
-      if (!failed++) showToast(e && e.code === 'permission-denied' ? 'Price list not changed — not allowed' : 'Price list change not on the server yet');
-    }));
-    showToast(ch.length + ' price' + (ch.length === 1 ? '' : 's') + ' updated');
+    const prices = window.YDSupplies.catalog().prices;
+    let n = 0, failed = 0;
+    ch.forEach(c => {
+      const was = (prices[c.id] || {}).check;
+      if (was && was.date && r.date && r.date < was.date) return;
+      n++;
+      Promise.resolve(window.YDDb.put('supplyPrices', c.id, { check: {
+        cents: c.to, per: c.per || '', year: c.year, from: c.from, unsure: !!c.unsure, receiptId: rid,
+        vendor: r.vendor || '', orderNo: r.orderNo || '', date: r.date || '', where: where || '', link: r.link || '',
+        at: new Date().toISOString(), by: (me() || {}).uid || '',
+      } })).catch(e => {
+        if (!failed++) showToast(e && e.code === 'permission-denied' ? 'Price check not saved — not allowed' : 'Price check not on the server yet');
+      });
+    });
+    if (n) showToast('💲 ' + n + ' price' + (n === 1 ? '' : 's') + ' on this receipt differ from the price list — Supplies → Prices to check', 5000);
   }
 
   window.rcUndo = async function (rid, sid) {
@@ -1377,7 +1420,8 @@
     const all = allReceipts();
     // The ones waiting on a person first: a photo that could not go on its
     // job by itself says why at the top of the list.
-    const open = all.filter(toSortNow).sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
+    const open = all.filter(newToSort).sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
+    const old = all.filter(r => toSortNow(r) && r.pulled).sort(byNewest);
     const jobs = jobsList();
     badges(open.length);
 
@@ -1386,11 +1430,37 @@
       (sorts() ? '<button class="btn btn-sm" onclick="rcCheckNow()"' + (checking ? ' disabled' : '') + '>' +
         (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml() + qbAddressHtml();
     el('rcList').innerHTML = !loaded ? '<p class="empty-msg">Loading receipts…</p>'
-      : open.length ? open.map(r => cardHtml(r, jobs)).join('') +
-        '<datalist id="rcWhyIdeas">' + WHY_IDEAS.map(w => '<option value="' + esc(w) + '">').join('') + '</datalist>'
-      : '<p class="empty-msg">Nothing to sort. Receipts that arrive by email show up here by themselves.</p>';
+      : (open.length ? open.map(r => cardHtml(r, jobs)).join('')
+        : '<p class="empty-msg">Nothing ' + (old.length ? 'new ' : '') + 'to sort. Receipts that arrive by email show up here by themselves.</p>') +
+        pulledHtml(old, jobs) +
+        '<datalist id="rcWhyIdeas">' + WHY_IDEAS.map(w => '<option value="' + esc(w) + '">').join('') + '</datalist>';
     renderHistory();
   }
+
+  // The year's pull (Jonah, 26 Oct 2026: "pull all receipts from email for
+  // this year"; functions/receipts.py marks what it saves `pulled`): bought
+  // before Job Hub read his email, so kept under the new mail, folded, a
+  // page at a time -- a year of old receipts must not bury this week's, nor
+  // the count on the tab.
+  function pulledHtml(old, jobs) {
+    const p = (state && state.pull) || null;
+    const going = !!(p && p.cursor && !p.doneAt);
+    if (!old.length && !going) return '';
+    const upto = going ? new Date(p.cursor * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    const n = Math.min(old.length, pullShown);
+    return '<div class="rc-pull"><div class="rc-pull-head"><b>📥 Earlier this year</b> — ' +
+        (old.length ? old.length + ' to sort' : 'none to sort yet') +
+        (going ? ' <span class="muted">· still reading your email: up to ' + esc(upto) + ' so far</span>' : '') + '</div>' +
+      '<p class="hint">Bought before Job Hub started reading your email (5 Oct). Put each on its job as usual: its lines go on ' +
+        'the job, Materials to Order is ticked with what was paid, and any price that differs from Supplies goes to ' +
+        'Supplies → Prices to check. None of these goes to QuickBooks — they are in it already.</p>' +
+      old.slice(0, n).map(r => cardHtml(r, jobs)).join('') +
+      (n < old.length ? '<button class="btn btn-sm" onclick="rcPullMore()">' +
+        (n ? 'Show ' + Math.min(PULL_PAGE, old.length - n) + ' more' : 'Show them, ' + PULL_PAGE + ' at a time') + '</button>' : '') +
+      (n ? ' <button class="link-btn" onclick="rcPullFold()">Fold them away</button>' : '') + '</div>';
+  }
+  window.rcPullMore = function () { pullShown += PULL_PAGE; redraw(true); };
+  window.rcPullFold = function () { pullShown = 0; redraw(true); };
 
   // ------------------------------------------------------------ All receipts
 
@@ -1532,7 +1602,7 @@
     if (!p || !p.classList.contains('active')) {
       // Off screen, only the counts on the tab and on More need to be right.
       deferred = true;
-      badges(allReceipts().filter(toSortNow).length);
+      badges(allReceipts().filter(newToSort).length);
       return;
     }
     if (!force && choosing()) {

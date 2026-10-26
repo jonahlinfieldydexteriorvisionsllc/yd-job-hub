@@ -2547,7 +2547,15 @@ function renderOrderList() {
     // (15 Oct 2026).
     const askQty = c && c.sid && c.cents === null && !c.unitOff && typeof c.each === 'number' && !it.ordered;
     const opts = c && !c.sid && !it.ordered && linkingOrder !== it.id ? orderOptions(it, cat) : [];
-    const costLine = !c ? '' : c.cents !== null
+    // Ticked by a receipt sorted onto this job (receipts.js tickOrdered):
+    // what was actually paid for it, and what the price list made it when
+    // that is not the same (Jonah, 26 Oct 2026: "update the price of the
+    // items to exactly what was spent").
+    const paid = it.ordered && typeof it.paidCents === 'number' && it.paidCents > 0;
+    const listSaid = paid && c && c.cents !== null && Math.abs(c.cents - it.paidCents) > Math.max(100, c.cents * 0.02);
+    const costLine = paid ? '<span class="cr-cost">Paid <b>' + fmtMoney(it.paidCents / 100) + '</b>' +
+        (listSaid ? ' <span class="muted">(the price list made it ' + fmtMoney(c.cents / 100) + ')</span>' : '') + '</span>'
+      : !c ? '' : c.cents !== null
       ? '<span class="cr-cost">' + (c.bags ? esc(window.YDPricing ? YDPricing.qtyText(c.bags, c.per || 'bag') : c.bags + ' ' + (c.per || 'bag')) +
           ' to buy (uses ' + esc(String(c.usesLb)) + ' lb) × ' : '') +
         (c.buy ? esc(YDPricing.qtyText(c.buy, c.per)) + ' to buy for ' + esc(String(it.quantity || '').trim()) + ' × ' : '') +

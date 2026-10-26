@@ -690,8 +690,9 @@ def _save_paycheck(db, m, got, people):
     return pid
 
 
-def _save(db, m, got, jobs):
-    """Write (or add to) the receipt for one email. Returns what happened."""
+def _save(db, m, got, jobs, extra=None):
+    """Write (or add to) the receipt for one email. Returns what happened.
+    `extra`: fields a NEW receipt also carries (the year's pull: `pulled`)."""
     rid = receipt_id(got.get("vendor"), got.get("order_number"), m["id"])
     ref = db.collection("receipts").document(rid)
     lines, tax, total = lines_from(got)
@@ -744,11 +745,11 @@ def _save(db, m, got, jobs):
         ref.update(patch)
         return ref.id, "added to"
     # A photographed paper receipt has no email to link to.
-    ref.set(dict(fields, **{
+    ref.set(dict(fields, **dict({
         "status": "new", "skipWhy": "", "skippedBy": "",
         "splits": [], "mail": [mail], "link": gmail_link(m["threadId"]) if m["threadId"] else "",
         "createdAt": dg._now().isoformat(), "model": MODEL,
-    }))
+    }, **(extra or {}))))
     return rid, "new"
 
 
@@ -1847,6 +1848,169 @@ def _save_held(db, jobs_of, report, saved=None):
         report["added" if what == "added to" else "new"] += 1
 
 
+# ------------------------------------------------------------ the year's pull
+#
+# Jonah (26 Oct 2026): "pull all receipts from email for this year". Reading
+# started at `since` (5 Oct) because every purchase before it was already in
+# QuickBooks. The pull reads the mail from the start of the year up to
+# `since` once, a few days of it at a time, through the same sorting and
+# reading as the week's read, as its own daily allowance lets it. What it
+# saves is marked `pulled` (the app keeps those apart from new mail) and is
+# never sent to QuickBooks: forward_email sends only an email from after
+# `since`, and the pull never moves `since`. Store "ready for pickup"
+# notices and crew pay in that old mail are noted and passed over -- a
+# pickup card for a March order is no use, and the pay was paid.
+#
+# settings/receipts.pull: {from (YYYY-MM-DD), cursor (epoch seconds: read up
+# to here), step (days a run asks Gmail for), startedAt, doneAt, counts}.
+# Started by setting `cursor` (and `from`); done once `cursor` reaches `since`.
+PULL_SEARCH = SEARCH.replace("after:%d ", "after:%d before:%d ", 1)
+PULL_STEP_DAYS = 7
+PULL_READS_PER_DAY = 150    # the pull's own reads a day, apart from MAX_READ_PER_DAY
+PULLED_PASS = "pulled_pass"
+
+
+def _pull_budget(db):
+    day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    snap = db.collection("claudeUsage").document(day).get()
+    used = (snap.to_dict() or {}).get("pullReads", 0) if snap.exists else 0
+    if spend.over_cap(db):
+        return day, 0
+    return day, PULL_READS_PER_DAY - used
+
+
+def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of):
+    """One step of the year's pull (above), when one is going. Returns what
+    it did, or None."""
+    p = st_data.get("pull") or {}
+    try:
+        cursor = float(p.get("cursor"))
+    except (TypeError, ValueError):
+        return None
+    if p.get("doneAt"):
+        return None
+    state = db.collection("settings").document("receipts")
+    if cursor >= since_epoch:
+        state.set({"pull": {"doneAt": dg._now().isoformat()}}, merge=True)
+        return {"done": True}
+    step = max(1, int(p.get("step") or PULL_STEP_DAYS))
+    upto = min(since_epoch, cursor + step * 86400)
+    ids = _list_ids(PULL_SEARCH % (int(cursor), int(upto)))
+    # A stretch with more mail than one listing holds: a shorter stretch
+    # next run, so nothing past MAX_LIST is passed over.
+    if len(ids) >= MAX_LIST and step > 1:
+        state.set({"pull": {"step": max(1, step // 2)}}, merge=True)
+        return {"narrowed": max(1, step // 2)}
+    done = {s.id: (s.to_dict() or {})
+            for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
+    pending = [i for i in ids if done.get(i, {}).get("outcome") == "queued"
+               or (done.get(i, {}).get("outcome") == "error" and (done[i].get("tries") or 0) < MAX_TRIES)
+               or _dropped_personal(done.get(i))]
+    unseen = [i for i in ids if i not in done
+              or (done[i].get("outcome") == "unopened" and (done[i].get("tries") or 0) < MAX_TRIES)]
+    out = {"from": datetime.datetime.fromtimestamp(cursor, dg.TZ).strftime("%Y-%m-%d"),
+           "to": datetime.datetime.fromtimestamp(upto, dg.TZ).strftime("%Y-%m-%d"),
+           "found": len(ids), "saved": 0, "read": 0, "passed": 0, "waiting": 0}
+    if not pending and not unseen:
+        # This stretch is read: on to the next, a full week again.
+        state.set({"pull": {"cursor": upto, "step": PULL_STEP_DAYS,
+                            "doneAt": dg._now().isoformat() if upto >= since_epoch else None}}, merge=True)
+        out["next"] = True
+        return out
+    day, left = _pull_budget(db)
+    if left <= 0:
+        out["waiting"] = len(pending) + len(unseen)
+        return out
+    allowed = min(MAX_READ_PER_RUN, left)
+    fresh = unseen[:MAX_TRIAGE]
+    to_read = _open_all(pending[:allowed])
+    msgs = _open_all(fresh)
+    opened = {m["id"] for m in to_read} | {m["id"] for m in msgs}
+    for i in pending[:allowed]:
+        if i not in opened:
+            _seen(db, i, "error", why="open", tries=(done.get(i, {}).get("tries") or 0) + 1)
+    for i in fresh:
+        if i not in opened:
+            _seen(db, i, "unopened", tries=(done.get(i, {}).get("tries") or 0) + 1)
+    records = _sender_records(db, msgs) if msgs else {}
+    ask = []
+    for m in msgs:
+        verdict = by_code(m, records.get(sender_key(m["from"])))
+        if verdict == "skip":
+            _seen(db, m["id"], "not_purchase", subject=m["subject"][:200], byCode=True, pulled=True)
+        elif verdict == "read":
+            to_read.append(m)
+        else:
+            ask.append(m)
+    if ask:
+        try:
+            keep, used, err = triage(client, ask)
+            _spend(db, day, used, "receiptTriage")
+            if err:
+                raise RuntimeError(err)
+        except (anthropic.APIStatusError, anthropic.APIConnectionError, RuntimeError) as e:
+            # Nothing marked as looked at: sorted again next run.
+            print("receipts: pull sorting failed:", e)
+            out["sortFailed"] = True
+            keep, ask = set(), []
+        for i, m in enumerate(ask):
+            if i in keep:
+                to_read.append(m)
+            else:
+                _seen(db, m["id"], "not_purchase", subject=m["subject"][:200], pulled=True)
+                _tally(db, m, False)
+    for m in to_read[allowed:]:
+        _seen(db, m["id"], "queued", subject=m["subject"][:200], pulled=True)
+    out["waiting"] = max(0, len(to_read) - allowed)
+    to_read = to_read[:allowed]
+
+    def one(m):
+        return m, read_receipt(client, m, bank)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(one, m): m for m in to_read}
+        for fut in concurrent.futures.as_completed(futures):
+            m = futures[fut]
+            prev = done.get(m["id"]) or {}
+            try:
+                _, (got, used, err) = fut.result()
+            except (anthropic.APIStatusError, anthropic.APIConnectionError, NeedsPermission, RuntimeError) as e:
+                print("receipts: pull read failed:", e)
+                _seen(db, m["id"], "error", why="read", tries=(prev.get("tries") or 0) + 1, pulled=True)
+                continue
+            _spend(db, day, used, "receiptPull", "pullReads")
+            out["read"] += 1
+            if err:
+                _seen(db, m["id"], "error", why=err, tries=(prev.get("tries") or 0) + 1, pulled=True)
+                continue
+            _tally(db, m, bool(got.get("is_purchase")) or got.get("doc_type") in ("person_payment", "ready_for_pickup"))
+            if pickup_notice(m["subject"], got) or got.get("doc_type") in ("ready_for_pickup", "person_payment"):
+                _seen(db, m["id"], PULLED_PASS, why=got.get("doc_type") or "pickup notice", subject=m["subject"][:200])
+                out["passed"] += 1
+                continue
+            if not got.get("is_purchase"):
+                _seen(db, m["id"], "not_purchase", subject=m["subject"][:200], pulled=True)
+                continue
+            try:
+                rid, what = _save(db, m, got, jobs_of(), extra={"pulled": True})
+                personal = _file_personal(db, rid, got, m)
+            except Exception as e:      # noqa: BLE001
+                print("receipts: pull could not save", m["id"], e)
+                _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1, pulled=True)
+                continue
+            rebate = is_menards_rebate(m.get("from"), m.get("subject"), m.get("text"))
+            _seen(db, m["id"], "personal" if personal else "receipt", receiptId=rid, labelled=False,
+                  rebate=rebate, pulled=True)
+            if rebate:
+                _tag_rebate(db, rid)
+            out["saved"] += 1
+    state.set({"pull": {"counts": {"read": firestore.Increment(out["read"]),
+                                   "saved": firestore.Increment(out["saved"]),
+                                   "passed": firestore.Increment(out["passed"])},
+                        "lastAt": dg._now().isoformat()}}, merge=True)
+    return out
+
+
 def run(client, manual=False):
     """Look for new receipts. Returns a short report; the receipts themselves
     land in Firestore for the app."""
@@ -2086,6 +2250,17 @@ def run(client, manual=False):
                           "readBacklog": bool(report["waiting"] or report["errors"] or untriaged
                                               or (sort_failed and sort_fails < MAX_TRIES)
                                               or len(unseen) > len(fresh) or len(pending) > allowed)}
+        # The year's pull, a step each half-hourly run -- not on "Check email
+        # now", which is for the new mail and should be quick.
+        if not manual:
+            try:
+                pulled = _pull_pass(client, db, st_data, since_epoch, bank, jobs_of)
+                if pulled:
+                    report["pull"] = pulled
+            except NeedsPermission:
+                raise
+            except Exception as e:      # noqa: BLE001 -- the usual read is never lost to it
+                print("receipts: the year's pull failed:", e)
         return report
     except NeedsPermission as e:
         print("receipts: gmail read not allowed:", e)
