@@ -39,6 +39,8 @@
   // things" -- quote appointments green and marked "QP" ("to save lettering
   // on the screen"), crew tasks blue, doctor's appointments yellow, the rest
   // of Personal pink; the others ours to pick, as far apart as we could.
+  // The icons are his picks of 26 Oct 2026 ("QP" became 📝, and 📲 📧 🧱 ⚙️
+  // 🚚 🏚️ 💊 🙋); functions/reminders.py TYPES has the same.
   // Kinds never use the urgency colours' meaning (styles.css --st-*): late
   // red, today orange, coming up yellow, whenever grey -- the doctor's
   // yellow is his pick, and lives only on Personal. `ink`: dark writing on
@@ -50,7 +52,7 @@
   // where one is usually done -- in the office or out (PLACES below); none
   // where it could be either.
   const TYPES = [
-    { id: 'bid', icon: 'QP', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true, place: 'out' },
+    { id: 'bid', icon: '📝', name: 'Quote appointment', timed: true, color: '#2f8f5b', appointment: true, place: 'out' },
     { id: 'appt', icon: '🕑', name: 'Appointment', timed: true, color: '#7a4fd1', appointment: true },
     // Jonah (22 Oct 2026): "add a phone call tag for calendar items" -- and
     // "calls dont always have set times tho they can be something to do at
@@ -62,7 +64,7 @@
     // as those entries were as to-dos before the tag existed. Orchid: as far
     // from every other tag's colour and the urgency colours as there was
     // room for; white writing reads on it.
-    { id: 'phone', icon: '📞', name: 'Phone call', timed: null, color: '#c026d3', place: 'office' },
+    { id: 'phone', icon: '📲', name: 'Phone call', timed: null, color: '#c026d3', place: 'office' },
     // Jonah (22 Oct 2026): "make material pickup tag option for the
     // calendar". It was always a material pickup in his words ("a quote
     // appointment or a material pickup", 12 Oct; a store's "ready for
@@ -70,7 +72,7 @@
     // board cards said only "Pickup" -- one tag under two names. One name
     // now, everywhere; the id stays 'pickup', so every entry and card
     // already tagged keeps its tag.
-    { id: 'pickup', icon: '🚚', name: 'Material pickup', timed: false, color: '#8b5a2b', place: 'out' },
+    { id: 'pickup', icon: '🧱', name: 'Material pickup', timed: false, color: '#8b5a2b', place: 'out' },
     // And then (22 Oct): "pickups are a thing we do often. So there should
     // be material, rental, parts, check, and equipment (as in our
     // equipment)". Each its own tag, on My work and the Crew schedule,
@@ -81,11 +83,11 @@
     // salmon, kraft tan, dark olive brown); dark writing on the two light
     // ones.
     { id: 'rental', icon: '🔑', name: 'Rental pickup', timed: false, color: '#702018', place: 'out' },
-    { id: 'parts', icon: '🔩', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10', place: 'out' },
+    { id: 'parts', icon: '⚙️', name: 'Parts pickup', timed: false, color: '#f09888', ink: '#3a1a10', place: 'out' },
     { id: 'check', icon: '💵', name: 'Check pickup', timed: false, color: '#c8a880', ink: '#2b1d0e', place: 'out' },
     { id: 'equipment', icon: '🚜', name: 'Equipment pickup', timed: false, color: '#504028', place: 'out' },
-    { id: 'delivery', icon: '🚛', name: 'Delivery', timed: false, color: '#2a3d8f' },
-    { id: 'email', icon: '✉️', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b', place: 'office' },
+    { id: 'delivery', icon: '🚚', name: 'Delivery', timed: false, color: '#2a3d8f' },
+    { id: 'email', icon: '📧', name: 'Email to send', timed: false, color: '#13a7c4', ink: '#04313b', place: 'office' },
     { id: 'todo', icon: '✅', name: 'To do that day', timed: false, color: '#8ab81e', ink: '#1d2600' },
     // The Crew schedule's own (Jonah, 16 Oct 2026: "The crew calendar should
     // have tags and set colors for material pickups etc."), in the clock-in
@@ -93,7 +95,7 @@
     // Pickups + errands). Colours of their own, clear of every other tag's
     // and of the urgency colours: deep teal, moss green, magenta.
     { id: 'repair', icon: '🔧', name: 'Equipment repair', timed: false, color: '#0f766e', crew: true, calOnly: true },
-    { id: 'shop', icon: '🛠️', name: 'Shop / yard work', timed: false, color: '#4d6b1a', crew: true, calOnly: true },
+    { id: 'shop', icon: '🏚️', name: 'Shop / yard work', timed: false, color: '#4d6b1a', crew: true, calOnly: true },
     // The bank, the post office, something to drop off (a check to collect
     // is a Check pickup).
     { id: 'errand', icon:'🧾', name: 'Errand', timed: false, color: '#a3369b', crew: true, calOnly: true, place: 'out' },
@@ -107,9 +109,9 @@
     // finished on the job itself), only on a calendar (`calOnly`), and drawn
     // in its job's colour (calendar.js jobColorOf): it has none of its own.
     { id: 'jobday', icon: '🔨', name: 'Job day', timed: null, color: '', calOnly: true },
-    { id: 'doctor', icon: '🩺', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true,
+    { id: 'doctor', icon: '💊', name: 'Doctor’s appointment', timed: true, color: '#f2c230', ink: '#2b2200', appointment: true,
       personal: true, place: 'out' },
-    { id: 'personal', icon: '🏠', name: 'Personal', timed: null, color: '#d94f8a', personal: true },
+    { id: 'personal', icon: '🙋', name: 'Personal', timed: null, color: '#d94f8a', personal: true },
   ];
 
   // ------------------------------------------------- each calendar's tags
@@ -157,8 +159,8 @@
   // ⚙ Manage → Edit): an email or a call is office work, a quote
   // appointment or a pickup is out; a to-do, an appointment or a delivery
   // could be either, so it is, until he says. functions/reminders.py
-  // _place_of: the same. 💻 and 🚗 rather than 🏠 and 🚚, which are the
-  // Personal and Material pickup tags' own.
+  // _place_of: the same. 💻 and 🚗 are no tag's own icon, so a place is never
+  // read as a tag.
   // `list`: the heading of its list on the owner's Home.
   const PLACES = [
     { id: 'office', icon: '💻', name: 'Office (at home)', list: 'To do in the office' },

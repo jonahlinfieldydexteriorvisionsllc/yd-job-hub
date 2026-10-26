@@ -31,7 +31,7 @@
   //   - the Crew schedule: "where the crews working, crew tasks, anything i
   //     assign crew members to" -- kept shared with everybody ticked as
   //     crew on Your Crew (shareCrewCals);
-  //   - My work: his own -- quote appointments (QP), pickups, emails to
+  //   - My work: his own -- quote appointments (📝), pickups, emails to
   //     send, things to do;
   //   - Personal: "anything i do not to do with the business", doctor's
   //     appointments yellow and the rest pink.
@@ -449,8 +449,8 @@
       const n = oi.due(oi.start);
       // Shown done once the day has come and nobody is left to reach.
       out.push({ day: oi.start, layer: AUTO['auto:outreach'], auto: 'outreach', id: 'outreach', done: !n && oi.start <= today(),
-        title: '📞 Start reaching out for next season', name: 'Start reaching out for next season',
-        // Calls to make: office work, as a 📞 Phone call is.
+        title: '📲 Start reaching out for next season', name: 'Start reaching out for next season',
+        // Calls to make: office work, as a 📲 Phone call is.
         note: n ? n + (n === 1 ? ' person' : ' people') + ' to reach — Contacts' : 'Contacts tab', place: 'office' });
     }
 
@@ -1431,7 +1431,7 @@
         '<div class="cal-entry-title">' + esc(o.title) + '</div>' +
         '<div class="cal-entry-sub">' +
           '<span class="cal-entry-cal">' + esc(o.layer.name) + '</span>' +
-          (o.jobName && o.jobName !== (o.name || o.title) ? ' · 📋 ' + esc(o.jobName) : '') +
+          (o.jobName && o.jobName !== (o.name || o.title) ? ' · 📐 ' + esc(o.jobName) : '') +
           (o.address ? ' · ' + esc(o.address) : '') +
           (o.note ? ' · ' + esc(o.note) : '') +
         '</div>' +
@@ -1760,7 +1760,7 @@
         '</div>' +
         (type ? '<div class="cal-detail-line cal-detail-tag" style="--t:' + safeColor(o.color || type.color || cal.color) + '"><span class="cal-tag-dot"></span>' + esc((type.icon ? type.icon + ' ' : '') + type.name) + '</div>' : '') +
         (place ? '<div class="cal-detail-line">' + esc(place.icon + ' ' + place.name) + '</div>' : '') +
-        (ev.jobName ? '<div class="cal-detail-line">📋 ' + esc(ev.jobName) + '</div>' : '') +
+        (ev.jobName ? '<div class="cal-detail-line">📐 ' + esc(ev.jobName) + '</div>' : '') +
         (ev.address ? '<a class="snow-addr" href="' + mapUrl + '" target="_blank" rel="noopener">📍 ' + esc(ev.address) +
           '<span class="snow-go">Directions</span></a>' : '') +
         ((ev.crew || []).length ? '<div class="cal-detail-line">👷 ' + ev.crew.map(c =>

@@ -394,7 +394,7 @@
       body = '<div class="hm-clock"><div class="hm-clock-where">Not on the clock</div></div>' +
         '<div class="hm-actions"><button class="btn btn-filled hm-big" onclick="homeClockIn()">Clock in</button></div>';
     }
-    return card('clock', '⏱️ Your clock', badge, ['Clock', "switchTab('clock')"], body, true);
+    return card('clock', '🕒 Your clock', badge, ['Clock', "switchTab('clock')"], body, true);
   }
 
   // The end-of-day list (eod.js), for whoever gets it: from mid-afternoon on
@@ -607,7 +607,7 @@
           capped('crewA', openLate.map(x => todoRow(x, true)).concat(openAny.map(x => todoRow(x, false)))) : '') +
         (takenLate.length || takenAny.length ? sub('👤 Crew tasks someone is on') +
           capped('crewB', takenLate.map(x => todoRow(x, true)).concat(takenAny.map(x => todoRow(x, false)))) : '')) +
-      (now ? sub('⏱️ On the clock now', now.live.length || null) +
+      (now ? sub('🕒 On the clock now', now.live.length || null) +
         (onClock.length ? capped('onNow', onClock) : empty('Nobody is on the clock.')) : '') +
       tickedTodayHtml() +
       eodCrewHtml();

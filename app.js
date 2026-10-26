@@ -950,9 +950,9 @@ const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'sn
 // table is a laptop screen), and Boards and Supplies' on the crew's (their
 // cards and crew tasks for the day are on Home). All three are in More.
 const PHONE_TABS = ['home', 'crewjobs', 'job', 'snow', 'clock', 'calendar'];
-const TAB_LABEL = { home: '🏠 Home', crewjobs: '🧰 Jobs', job: '📋 Job', snow: '❄️ Snow', clock: '⏱️ Clock',
+const TAB_LABEL = { home: '🏡 Home', crewjobs: '🧰 Jobs', job: '📐 Job', snow: '❄️ Snow', clock: '🕒 Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
-  equipment: '🚜 Equipment', tracking: '🔨 Tracking',
+  equipment: '🚜 Equipment', tracking: '📈 Tracking',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
 const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
   supplies: 'What we use, where to buy it, and what the season has cost',

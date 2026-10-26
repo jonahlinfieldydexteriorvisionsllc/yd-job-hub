@@ -267,7 +267,7 @@
   // what its screen holds.
 
   const KINDS = [
-    { id: 'jobs', name: 'Jobs', icon: '📋' },
+    { id: 'jobs', name: 'Jobs', icon: '📐' },
     { id: 'contacts', name: 'Contacts', icon: '📇' },
     { id: 'snow', name: 'Snow', icon: '❄️' },
     { id: 'supplies', name: 'Supplies', icon: '🛒' },

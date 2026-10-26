@@ -532,9 +532,9 @@ TIMED_LEADS = (30,)
 TYPE_LEADS = {"bid": (60, 30)}
 # The built-in tags, in remind.js TYPES order (the 7 am list is sorted by it):
 # id -> icon.
-TYPES = {"bid": "QP", "appt": "🕑", "phone": "📞", "pickup": "🚚", "rental": "🔑", "parts": "🔩", "check": "💵",
-         "equipment": "🚜", "delivery": "🚛", "email": "✉️", "todo": "✅", "repair": "🔧", "shop": "🛠️",
-         "errand": "🧾", "crew": "👷", "jobday": "🔨", "doctor": "🩺", "personal": "🏠"}
+TYPES = {"bid": "📝", "appt": "🕑", "phone": "📲", "pickup": "🧱", "rental": "🔑", "parts": "⚙️", "check": "💵",
+         "equipment": "🚜", "delivery": "🚚", "email": "📧", "todo": "✅", "repair": "🔧", "shop": "🏚️",
+         "errand": "🧾", "crew": "👷", "jobday": "🔨", "doctor": "💊", "personal": "🙋"}
 # The built-ins that are the crew's wherever they are (remind.js `crew`).
 CREW_TYPES = {"crew", "repair", "shop", "errand"}
 # Every kind of pickup (Jonah, 22 Oct 2026: "material, rental, parts, check,

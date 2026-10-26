@@ -1432,7 +1432,7 @@
         (stormOpen
           ? kindBtn('storm', storm.id, 'Tonight’s storm', '❄️', 'kind-snow')
           : kindBtn('snow', 'snow', 'Snow', '❄️', 'kind-snow')) +
-        kindBtn('labor', 'labor', OVERHEAD_LABEL.labor, '🛠️', 'kind-labor') +
+        kindBtn('labor', 'labor', OVERHEAD_LABEL.labor, '🏚️', 'kind-labor') +
         kindBtn('receipts', 'receipts', OVERHEAD_LABEL.receipts, '🚚', 'kind-receipts') +
         // Asks which machine next, so not straight onto the clock.
         '<button class="picker-kind kind-labor" onclick="openRepairPick()"><span class="kind-icon">🔧</span>' +
