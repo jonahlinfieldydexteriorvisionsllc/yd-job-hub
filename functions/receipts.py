@@ -1879,10 +1879,30 @@ def _pull_budget(db):
     return day, PULL_READS_PER_DAY - used
 
 
+PULL_STEPS_PER_RUN = 4      # stretches one run may finish and go on from
+
+
 def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of):
-    """One step of the year's pull (above), when one is going. Returns what
-    it did, or None."""
-    p = st_data.get("pull") or {}
+    """The year's pull (above) for one run, when one is going: a stretch,
+    and on to the next while the last was finished. Returns what it did, or
+    None."""
+    p = dict(st_data.get("pull") or {})
+    outs = []
+    for _ in range(PULL_STEPS_PER_RUN):
+        out = _pull_step(client, db, p, since_epoch, bank, jobs_of)
+        if out is None:
+            break
+        outs.append(out)
+        if not out.get("next") or out.get("done"):
+            break
+        p.update({"cursor": out["cursor"], "step": PULL_STEP_DAYS})
+    if not outs:
+        return None
+    return outs[0] if len(outs) == 1 else {"steps": outs}
+
+
+def _pull_step(client, db, p, since_epoch, bank, jobs_of):
+    """One stretch of the year's pull. Returns what it did, or None."""
     try:
         cursor = float(p.get("cursor"))
     except (TypeError, ValueError):
@@ -1915,7 +1935,7 @@ def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of):
         # This stretch is read: on to the next, a full week again.
         state.set({"pull": {"cursor": upto, "step": PULL_STEP_DAYS,
                             "doneAt": dg._now().isoformat() if upto >= since_epoch else None}}, merge=True)
-        out["next"] = True
+        out.update({"next": True, "cursor": upto, "done": upto >= since_epoch})
         return out
     day, left = _pull_budget(db)
     if left <= 0:
