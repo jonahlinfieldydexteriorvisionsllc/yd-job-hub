@@ -740,7 +740,7 @@ function openMore() {
   const wrap = document.getElementById('moreItems');
   const sheet = document.getElementById('moreSheet');
   if (!wrap || !sheet) return;
-  const hidden = TABS.filter(n => PHONE_TABS.indexOf(n) === -1)
+  const hidden = TABS.filter(n => phoneBar().indexOf(n) === -1)
     .filter(n => {
       const b = document.getElementById(tabButtonId(n));
       return b && !b.hidden;
@@ -951,6 +951,9 @@ const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'sn
 // table is a laptop screen), and Boards and Supplies' on the crew's (their
 // cards and crew tasks for the day are on Home). All three are in More.
 const PHONE_TABS = ['home', 'crewjobs', 'job', 'snow', 'clock', 'calendar'];
+// Snow is on a phone's bar only while a storm is going (styles.css; storm.js
+// sets data-storm-on): otherwise it is listed in More with the rest.
+const phoneBar = () => document.documentElement.hasAttribute('data-storm-on') ? PHONE_TABS : PHONE_TABS.filter(n => n !== 'snow');
 const TAB_LABEL = { home: '🏡 Home', crewjobs: '🧰 Jobs', job: '📐 Job', snow: '❄️ Snow', clock: '🕒 Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
   equipment: '🚜 Equipment', tracking: '📈 Tracking',

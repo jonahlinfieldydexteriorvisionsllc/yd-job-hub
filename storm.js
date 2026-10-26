@@ -1386,6 +1386,10 @@
       const openOne = open[0] || null;
       const changedStorm = (openOne && openOne.id) !== (storm && storm.id);
       storm = openOne;
+      // A storm going: the Snow tab is on a phone's bar again (Jonah, 26 Oct
+      // 2026: "snow tab doesnt need to be on main nav on mobile" -- only
+      // while there is one to work; styles.css, app.js phoneBar).
+      document.documentElement.toggleAttribute('data-storm-on', !!storm);
       // A stop being fixed belongs to the storm it was on (stop ids repeat
       // from storm to storm).
       if (changedStorm) fixing = null;

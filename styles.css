@@ -928,6 +928,10 @@
        DOM -- switchTab finds a tab's button by its id, and More lists them
        from there -- they are just not on the bar. */
     #tabTracking, #tabContacts, #tabEquipment, #tabDashboard { display:none; }
+    /* Snow too, but for while a storm is going (storm.js data-storm-on;
+       Jonah, 26 Oct 2026: "snow tab doesnt need to be on main nav on mobile"):
+       then it is a tap away on every phone. Otherwise it is in More. */
+    html:not([data-storm-on]) #tabSnow { display:none; }
     .tab-more { display:block; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
   }
