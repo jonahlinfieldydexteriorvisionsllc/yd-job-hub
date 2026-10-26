@@ -104,11 +104,9 @@ SYSTEM = (
     "then the scope of work in short plain paragraphs, no prices, no crew-days, no markup, no "
     "tier numbers, and no rented equipment (a mini-excavator or jumping jack is a takeoff line the "
     "app prices in but never shows the customer -- don't name it in a scope). A scope is only the "
-    "work: no thank-you, greeting or sign-off ('Thank you for the opportunity...', 'We look forward "
-    "to...') -- a thank-you goes in the email that goes with the estimate, never on it -- and never "
-    "'YD Exterior Visions LLC is insured' or licensed: the Warranty and Terms lines at the end of "
-    "every estimate already say that. This holds even where Jonah's rules below say otherwise "
-    "(his word, 26 Oct 2026). Follow his rules below for how a scope is built and what every "
+    "work: no thank-you, greeting or sign-off -- a thank-you goes in the email that goes with the "
+    "estimate, never on it -- and no 'YD Exterior Visions LLC is insured': the Terms lines at the end "
+    "of every estimate say it. Follow Jonah's rules below for how a scope is built and what every "
     "estimate says.\n"
     "- `crew` on each labour line is the same work told to the crew, for the job's page they read on "
     "site: 1 to 4 short bullet points, each line starting with '• ' -- what we are installing or doing "
@@ -485,87 +483,6 @@ def _num(v):
         return None
 
 
-# Jonah (26 Oct 2026): "why does claude put a thank you for quoting a job on
-# the first line item ... that line should go in the email not the
-# estimate", and "no reason for insured language in the box for services. we
-# have warranty and other line items for that purpose." Both came from his
-# own rules text (pricing/claude: "Opening line -- thank the client", the
-# insured closing line). SYSTEM now says no; this takes out what slips
-# through anyway before a line is saved: a thank-you opening the words under
-# the heading, a thank-you or "we look forward" closing the scope, and an
-# "is insured" sentence anywhere. estimate.js cleanScope does the same before
-# a line goes to the customer -- keep the two the same.
-_GREETING = re.compile(
-    r"^(thank you\b|thanks\b(?! to\b)|we (truly |sincerely |really |greatly )?appreciate\b|"
-    r"(we're|we are) (so |very |truly )?(pleased|grateful|excited|happy|thrilled|glad|honou?red)\b|"
-    r"it('s| is) (a|our) pleasure\b)", re.I)
-_SIGN_OFF = re.compile(
-    r"^(thank you\b|thanks\b(?! to\b)|we (truly |sincerely |really |greatly )?appreciate\b|we look forward\b|"
-    r"(please )?(don't|do not) hesitate\b|(please )?feel free to\b)", re.I)
-_INSURED = re.compile(
-    r"^(yd exterior visions( llc)?|we)( is| are|'re) (fully |properly )?"
-    r"(licensed,? (and |& )?insured|insured,? (and |& )?licensed|insured|licensed)( and bonded)?[.!]?$", re.I)
-# Where one sentence ends and the next begins ("...project. This covers").
-_SENTENCE_END = re.compile(r"[.!?]+\s+(?=[A-Z0-9\"'“(])")
-
-
-def _sentences(line):
-    """A line cut into its sentences, each with the space after it."""
-    out, at = [], 0
-    for m in _SENTENCE_END.finditer(line):
-        out.append(line[at:m.end()])
-        at = m.end()
-    if at < len(line):
-        out.append(line[at:])
-    return out
-
-
-def _plain(s):
-    return s.strip().replace("’", "'")
-
-
-def _heading(line):
-    """A heading line ("Lawn Restoration - Topsoil, Seed & Straw"), not words."""
-    s = line.strip()
-    return bool(s) and len(s) <= 120 and not re.search(r"[.!?:]$", s) and not _GREETING.match(_plain(s))
-
-
-def clean_scope(text):
-    """The scope without a thank-you, sign-off or "insured" sentence. A scope
-    with none of them comes back exactly as it was."""
-    text = str(text or "")
-    lines = text.split("\n")
-    parts = [_sentences(l) for l in lines]
-    drop = [[_INSURED.match(_plain(p)) is not None for p in ps] for ps in parts]
-    words = [i for i, l in enumerate(lines) if l.strip() and not _heading(l)]
-    if words:
-        first, last = words[0], words[-1]
-        for j, p in enumerate(parts[first]):
-            if drop[first][j] or not p.strip():
-                continue
-            if not _GREETING.match(_plain(p)):
-                break
-            drop[first][j] = True
-        for j in range(len(parts[last]) - 1, -1, -1):
-            p = parts[last][j]
-            if drop[last][j] or not p.strip():
-                continue
-            if not _SIGN_OFF.match(_plain(p)):
-                break
-            drop[last][j] = True
-    if not any(any(d) for d in drop):
-        return text
-    out = []
-    for l, ps, ds in zip(lines, parts, drop):
-        if not any(ds):
-            out.append(l)
-            continue
-        kept = "".join(p for p, d in zip(ps, ds) if not d).strip()
-        if kept:
-            out.append(kept)
-    return re.sub(r"\n[ \t]*\n(?:[ \t]*\n)+", "\n\n", "\n".join(out)).strip()
-
-
 def _current_text(cur):
     """The estimate as it stands on screen, for Claude to change."""
     cur = cur or {}
@@ -894,7 +811,7 @@ def draft(client, d):
         work.append({
             "id": str(w.get("id") or "") if str(w.get("id") or "") in work_ids else "",
             "title": str(w.get("title") or "").strip()[:200],
-            "scope": clean_scope(str(w.get("scope") or "").strip())[:6000],
+            "scope": str(w.get("scope") or "").strip()[:6000],
             "kind": "flat" if kind == "flat" and svc else ("crew" if kind == "flat" else kind),
             "crewDays": max(0.0, round(_num(w.get("crewDays")) or 0, 2)),
             "priceId": pid if svc else "",

@@ -1860,62 +1860,10 @@
     return s.replace(/(^|[\s,\-\/(])([a-z])/g, (m, before, letter) => before + letter.toUpperCase());
   }
   const stateWord = s => /^[a-z]{2}$/i.test(String(s || '').trim()) ? String(s).trim().toUpperCase() : tidyCase(s);
-  // Jonah (26 Oct 2026): a thank-you belongs in the email, not on an
-  // estimate line, and the Warranty and Terms lines already say we are
-  // insured. The server takes them out of what Claude writes
-  // (estimates.py clean_scope); this takes them out of any line still
-  // holding one before it goes to the customer: a thank-you opening the
-  // words under the heading, a thank-you or "we look forward" closing the
-  // scope, an "is insured" sentence anywhere. Keep the two the same.
-  const GREETING = /^(thank you\b|thanks\b(?! to\b)|we (truly |sincerely |really |greatly )?appreciate\b|(we're|we are) (so |very |truly )?(pleased|grateful|excited|happy|thrilled|glad|honou?red)\b|it('s| is) (a|our) pleasure\b)/i;
-  const SIGN_OFF = /^(thank you\b|thanks\b(?! to\b)|we (truly |sincerely |really |greatly )?appreciate\b|we look forward\b|(please )?(don't|do not) hesitate\b|(please )?feel free to\b)/i;
-  const INSURED = /^(yd exterior visions( llc)?|we)( is| are|'re) (fully |properly )?(licensed,? (and |& )?insured|insured,? (and |& )?licensed|insured|licensed)( and bonded)?[.!]?$/i;
-  const SENTENCE_END = /[.!?]+\s+(?=[A-Z0-9"'“(])/g;
-  function sentencesOf(line) {
-    const out = [];
-    let at = 0, m;
-    SENTENCE_END.lastIndex = 0;
-    while ((m = SENTENCE_END.exec(line))) { out.push(line.slice(at, m.index + m[0].length)); at = m.index + m[0].length; }
-    if (at < line.length) out.push(line.slice(at));
-    return out;
-  }
-  const plainWords = s => s.trim().replace(/’/g, "'");
-  const headingLine = l => { const s = l.trim(); return !!s && s.length <= 120 && !/[.!?:]$/.test(s) && !GREETING.test(plainWords(s)); };
-  function cleanScope(text) {
-    text = String(text || '');
-    const lines = text.split('\n');
-    const parts = lines.map(sentencesOf);
-    const drop = parts.map(ps => ps.map(p => INSURED.test(plainWords(p))));
-    const words = lines.map((l, i) => l.trim() && !headingLine(l) ? i : -1).filter(i => i >= 0);
-    if (words.length) {
-      const first = words[0], last = words[words.length - 1];
-      for (let j = 0; j < parts[first].length; j++) {
-        const p = parts[first][j];
-        if (drop[first][j] || !p.trim()) continue;
-        if (!GREETING.test(plainWords(p))) break;
-        drop[first][j] = true;
-      }
-      for (let j = parts[last].length - 1; j >= 0; j--) {
-        const p = parts[last][j];
-        if (drop[last][j] || !p.trim()) continue;
-        if (!SIGN_OFF.test(plainWords(p))) break;
-        drop[last][j] = true;
-      }
-    }
-    if (!drop.some(ds => ds.some(Boolean))) return text;
-    const out = [];
-    lines.forEach((l, i) => {
-      if (!drop[i].some(Boolean)) { out.push(l); return; }
-      const kept = parts[i].filter((p, j) => !drop[i][j]).join('').trim();
-      if (kept) out.push(kept);
-    });
-    return out.join('\n').replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n').trim();
-  }
   // A scope often starts with its line's own title, which the estimate
-  // already shows as the line's heading -- once is enough. A QuickBooks
-  // line's words are what the customer was sent: shown as they are.
+  // already shows as the line's heading -- once is enough.
   function scopeBody(w) {
-    const scope = (fromQbLine(w) ? String(w.scope || '') : cleanScope(w.scope)).trim();
+    const scope = String(w.scope || '').trim();
     const words = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const first = scope.split('\n')[0];
     return words(w.title) && words(first) === words(w.title) ? scope.slice(first.length).trim() : scope;
