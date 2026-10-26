@@ -281,6 +281,8 @@ STEPS = [
 AUTO_MAX = 4
 # The hours (Chicago) a follow-up email goes out in: the morning.
 SEND_HOURS = range(8, 12)
+# How far back a customer's unanswered email holds the plan's emails.
+WROTE_DAYS = 45
 # Bids sent before the plan existed start it from here, rather than all at
 # their last step on the first morning.
 PLAN_FROM = datetime.datetime(2026, 10, 22, 5, 0, tzinfo=datetime.timezone.utc)
@@ -522,7 +524,8 @@ def _send_step(client, ref, jid, j, s, to, spent):
     Any doubt about his mailbox and nothing is sent."""
     name = (j.get("customerName") or "").strip() or "A customer"
     marks = [d for d in (j.get("chaseDrafts") or {}).values() if isinstance(d, dict)]
-    since = max(t for t in (chase_start(j), _when((j.get("chase") or {}).get("resumeAt"))) if t)
+    resumed = _when((j.get("chase") or {}).get("resumeAt"))
+    since = max(t for t in (chase_start(j), resumed) if t)
     # A send that may have gone out with no record of it (the record's write
     # failed): counted as sent, never sent twice.
     pending = j.get("chaseSending") or {}
@@ -531,17 +534,35 @@ def _send_step(client, ref, jid, j, s, to, spent):
                     "chaseSending": firestore.DELETE_FIELD, "lastModified": _stamp()})
         return None, False
     try:
-        wrote = _found("from:%s -in:sent -in:drafts -in:chats" % to, since)
+        # Their newest email: since the bid went out, or in the weeks before
+        # it with no answer from him after it -- a customer waiting on his
+        # reply never gets "did you get a chance to look?" (26 Oct 2026: two
+        # customers had written before the plan began and were unanswered or
+        # upset). Nothing from before he said "Keep emailing them" counts.
+        wrote = _found("from:%s -in:sent -in:drafts -in:chats" % to,
+                       resumed or min(since, dg._now() - datetime.timedelta(days=WROTE_DAYS)))
+        unanswered = bool(wrote) and wrote["at"] <= since and not _found("in:sent to:%s" % to, wrote["at"])
         last = max([since + datetime.timedelta(hours=20)] + [t for t in (_when(d.get("at")) for d in marks) if t])
         mine = _found("in:sent to:%s" % to, last, {d.get("messageId") for d in marks if d.get("messageId")})
     except Exception as err:        # noqa: BLE001
         print("followup: mailbox not read for", jid, "-- nothing sent:", err)
         return None, False
-    if wrote:
+    was = j.get("chaseHeard") or {}
+    if wrote and (wrote["at"] > since or unanswered):
+        if was.get("messageId") == wrote["id"]:
+            return None, False          # held for this email already, and he was told
         ref.update({"chaseHeard": {"at": _iso(wrote["at"]), "subject": (wrote["subject"] or "")[:200],
-                                   "messageId": wrote["id"], "foundAt": _stamp()}, "lastModified": _stamp()})
+                                   "messageId": wrote["id"], "unanswered": unanswered, "foundAt": _stamp()},
+                    "lastModified": _stamp()})
+        if unanswered:
+            return {"kind": "followup", "jobId": jid, "title": "✋ %s is waiting on your answer" % name,
+                    "body": "Their email of %s has no reply from you, so the automatic follow-ups for this bid are held."
+                            % wrote["at"].astimezone(dg.TZ).strftime("%b %d").replace(" 0", " ")}, False
         return {"kind": "followup", "jobId": jid, "title": "✋ %s wrote back" % name,
                 "body": "The automatic follow-up emails for this bid are stopped — read what they said and move the bid along."}, False
+    if was.get("unanswered"):
+        # He has answered the email that held it: the plan carries on.
+        ref.update({"chaseHeard": firestore.DELETE_FIELD, "lastModified": _stamp()})
     if mine:
         ref.update({"chaseDrafts." + s["id"]: {"at": _stamp(), "byHand": True, "emailedAt": _iso(mine["at"])},
                     "lastModified": _stamp()})
@@ -607,8 +628,11 @@ def auto(client, deadline=None, spent=None):
                 # One email to a person a run: the same customer's two bids
                 # (or a second step) wait for the next hour, when this one's
                 # email counts as emailed since.
+                # Held because they wrote back: until he says carry on. Held
+                # because their email had no answer: looked at again, so his
+                # reply lets the plan carry on by itself.
                 elif (s["kind"] == "email" and morning and to and to.lower() not in mailed
-                      and drafted < AUTO_MAX and not heard(j)):
+                      and drafted < AUTO_MAX and (not heard(j) or heard(j).get("unanswered"))):
                     item, asked = _send_step(client, ref, jid, j, s, to, spent)
                     drafted += 1 if asked else 0
                     mailed.add(to.lower())

@@ -715,8 +715,10 @@
       if (s.kind === 'email') {
         const h = chaseHeardOf(j);
         if (h) {
-          return word + '<span class="bd-chase-none">✋ They wrote back ' + esc(agoText(daysSince(h.at) || 0)) +
-            (h.subject ? ' (“' + esc(String(h.subject).slice(0, 60)) + '”)' : '') + ' — the emails have stopped</span>' +
+          return word + '<span class="bd-chase-none">✋ ' + (h.unanswered
+              ? 'Their email of ' + esc(agoText(daysSince(h.at) || 0)) + ' has no reply from you — the emails wait until you answer it'
+              : 'They wrote back ' + esc(agoText(daysSince(h.at) || 0)) +
+                (h.subject ? ' (“' + esc(String(h.subject).slice(0, 60)) + '”)' : '') + ' — the emails have stopped') + '</span>' +
             '<button class="btn btn-sm" onclick="chaseResume(\'' + id + '\')">Keep emailing them</button>' + tick('skipped', 'Skip');
         }
         return word + (looksLikeEmail(j.email) ? '<span class="bd-chase-none">Sends itself from your Gmail in the morning (8 to noon)</span>'
