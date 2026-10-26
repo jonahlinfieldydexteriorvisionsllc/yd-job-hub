@@ -1878,7 +1878,7 @@
         ' onchange="calAllDayChanged()"> Any time that day — no set time</label>' +
       '<div class="grid g2" id="evTimes"' + (allDay ? ' hidden' : '') + '>' +
         '<div class="field"><span class="label">Starts</span>' +
-          '<input type="time" id="evTime" value="' + esc(startT) + '" onchange="calRemindHint()"></div>' +
+          '<input type="time" id="evTime" value="' + esc(startT) + '" data-was="' + esc(startT) + '" onchange="calStartMoved(); calRemindHint()"></div>' +
         '<div class="field"><span class="label">Ends</span>' +
           '<input type="time" id="evEndTime" value="' + esc(endT) + '"></div>' +
       '</div>' +
@@ -2134,6 +2134,20 @@
       calTypeNote();
     }
     calWhoChanged();
+  };
+  // A start time moved: the end moves with it, keeping how long it was
+  // (Jonah, 26 Oct 2026: "just like on google calendar when the start time
+  // gets changed the end time gets changed"). With no end after the old
+  // start, an hour. Never past midnight; the end can still be changed by hand.
+  window.calStartMoved = function () {
+    const s = el('evTime'), e = el('evEndTime');
+    if (!s || !e || !s.value) return;
+    const mins = t => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? +m[1] * 60 + +m[2] : null; };
+    const was = mins(s.dataset.was), now = mins(s.value), end = mins(e.value);
+    const long = was !== null && end !== null && end > was ? end - was : 60;
+    const to = Math.min(now + long, 23 * 60 + 59);
+    e.value = String(Math.floor(to / 60)).padStart(2, '0') + ':' + String(to % 60).padStart(2, '0');
+    s.dataset.was = s.value;
   };
   // What "Usual" means for this entry as the form stands.
   window.calRemindHint = function () {
