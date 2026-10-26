@@ -2368,7 +2368,10 @@ function orderCost(it, cat) {
   // number of rolls or strips (covering an area or a length) is still rolls.
   const MEASURES = ['sqft', 'lf', 'yd', 'ton', 'cuft', 'gal', 'lb', 'day'];
   const packOfCount = !!(cov && cov > 1 && item.takeoffUnit && MEASURES.indexOf(U(item.takeoffUnit)) === -1);
-  const unitOff = per !== '' && (it.fromEstimate
+  // "5 bags" of Edgebond, sold each: a bag, can or pail of a thing sold each
+  // is one of it (supplymatch.js ONE_EACH).
+  const oneEach = U(per) === 'each' && !!window.YDMatch && !!YDMatch.oneEach && YDMatch.oneEach(lineUnit);
+  const unitOff = per !== '' && !oneEach && (it.fromEstimate
     ? lineUnit !== '' && U(lineUnit) !== U(per) && !(isDayUnit(lineUnit) && per === 'day')
     : typed.trim() !== '' ? typed.indexOf(words(per)) === -1 && U(lineUnit) !== U(per) : packOfCount && U(per) !== U(item.takeoffUnit));
   // In what one of it covers -- square feet of fabric sold by the roll, feet

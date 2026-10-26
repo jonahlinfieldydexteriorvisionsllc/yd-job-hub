@@ -544,6 +544,7 @@
   });
 
   window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
+                     oneEach: u => ONE_EACH.indexOf(unitKey(u)) !== -1,
                      pack: pack, packFromName: packFromName, partByKind: partByKind, readsAsWork: readsAsWork,
                      plainSeed: plainSeed, isGrassSeed: isGrassSeed, famOf: famOf, biggestBag: biggestBag,
                      usualSeed: usualSeed, namedIn: namedIn };
