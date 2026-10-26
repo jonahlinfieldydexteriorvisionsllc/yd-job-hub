@@ -487,25 +487,29 @@ def _contact(db, ref, j, known):
     email, phone = (j.get("email") or "").strip(), (j.get("phone") or "").strip()
     if cards.EMAIL_RE.match(email) and phone:
         return email
-    cid = str(j.get("customerId") or (j.get("qbEstimate") or {}).get("customerId") or "").strip()
-    if cid and cid not in known:
-        try:
-            snap = db.collection("customers").document(cid).get()
-            known[cid] = (snap.to_dict() or {}) if snap.exists else {}
-        except Exception as err:    # noqa: BLE001
-            print("followup: customer", cid, "not read:", err)
-            known[cid] = {}
-    c = known.get(cid) or {}
+    # The customer the job is tied to, then its estimate's QuickBooks
+    # customer: a job tied by hand to a lead with no email (a bid on the
+    # plan, 26 Oct 2026) still has its QuickBooks one.
+    q_cid = str((j.get("qbEstimate") or {}).get("customerId") or "").strip()
     patch = {}
-    if not cards.EMAIL_RE.match(email) and cards.EMAIL_RE.match((c.get("email") or "").strip()):
-        patch["email"] = email = c["email"].strip()
-    if not phone and (c.get("phone") or "").strip():
-        patch["phone"] = c["phone"].strip()
+    for cid in dict.fromkeys(x for x in (str(j.get("customerId") or "").strip(), q_cid) if x):
+        if cid not in known:
+            try:
+                snap = db.collection("customers").document(cid).get()
+                known[cid] = (snap.to_dict() or {}) if snap.exists else {}
+            except Exception as err:    # noqa: BLE001
+                print("followup: customer", cid, "not read:", err)
+                known[cid] = {}
+        c = known[cid]
+        if not cards.EMAIL_RE.match(email) and cards.EMAIL_RE.match((c.get("email") or "").strip()):
+            patch["email"] = email = c["email"].strip()
+        if not phone and (c.get("phone") or "").strip():
+            patch["phone"] = phone = c["phone"].strip()
     if patch:
         patch["lastModified"] = _stamp()
         ref.update(patch)
         j.update(patch)
-        print("followup: filled", ", ".join(k for k in patch if k != "lastModified"), "on", ref.id, "from customer", cid)
+        print("followup: filled", ", ".join(k for k in patch if k != "lastModified"), "on", ref.id)
     return email if cards.EMAIL_RE.match(email) else ""
 
 
