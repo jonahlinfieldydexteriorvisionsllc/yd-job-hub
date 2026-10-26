@@ -25,7 +25,7 @@
   // BOARD_FIELDS so the form carries them.
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
     'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff',
-    'chaseDrafts', 'chaseLostCard', 'thanksEmail'];
+    'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail'];
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming

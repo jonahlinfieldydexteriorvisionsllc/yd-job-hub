@@ -522,20 +522,22 @@
 
   // THE FOLLOW-UP PLAN (Jonah, 23 Oct 2026: "a system for following up that
   // includes calling and texting. Like a tried and true best process").
-  // Days since the bid went out: day 2 call + email 1, day 5 text, day 7
-  // email 2, day 10 call, day 14 the last email, day 15 a "mark it lost?"
-  // card. The emails are drafted into Gmail by themselves (functions/
-  // followup.py auto, every hour 7 am - 7 pm), never sent; the calls and
-  // texts are his, listed here with a tap to call or to open a text already
-  // written, and ticked off. The same table and rules are in followup.py
-  // (STEPS, open_steps) -- change both.
+  // Days since the bid went out: day 2 call + email 1, day 5 a quick
+  // check-in email (a text until 26 Oct 2026), day 7 email 3, day 10 call,
+  // day 14 the last email, day 15 a "mark it lost?" card. The emails send
+  // themselves from his Gmail in the morning (functions/followup.py auto;
+  // Jonah, 26 Oct 2026: "i want the follow up automated apart from making a
+  // call") -- not once the customer has written back (chaseHeard), and not
+  // when he has emailed them himself since the last one. The calls are his,
+  // listed here with a tap to call, and ticked off. The same table and rules
+  // are in followup.py (STEPS, open_steps) -- change both.
   const CHASE_STEPS = [
     { id: 'call1', day: 2, kind: 'call' },
     { id: 'email1', day: 2, kind: 'email', n: 1 },
-    { id: 'text1', day: 5, kind: 'text' },
-    { id: 'email2', day: 7, kind: 'email', n: 2 },
+    { id: 'text1', day: 5, kind: 'email', n: 2, short: true },
+    { id: 'email2', day: 7, kind: 'email', n: 3 },
     { id: 'call2', day: 10, kind: 'call' },
-    { id: 'email3', day: 14, kind: 'email', n: 3, last: true },
+    { id: 'email3', day: 14, kind: 'email', n: 4, last: true },
     { id: 'lost', day: 15, kind: 'decide' },
   ];
   // Bids out before the plan existed start it from here (followup.py PLAN_FROM).
@@ -581,8 +583,16 @@
     due.forEach(s => { latest[lane(s)] = s.id; });
     return due.filter(s => latest[lane(s)] === s.id && !done.has(s.id));
   }
-  // Calls and texts waiting on him today (Home).
-  const chaseToDo = () => jobsList().reduce((n, j) => n + chaseOpen(j).filter(s => s.kind === 'call' || s.kind === 'text').length, 0);
+  // What the customer wrote him since the bid went out (the server's
+  // chaseHeard), unless he chose to keep emailing since (chase.resumeAt):
+  // the automatic emails wait. followup.py heard() is the same.
+  function chaseHeardOf(j) {
+    const h = j.chaseHeard || {};
+    const at = Date.parse(h.at || ''), resumed = Date.parse((j.chase || {}).resumeAt || '');
+    return isFinite(at) && !(isFinite(resumed) && resumed > at) ? h : null;
+  }
+  // Calls waiting on him today (Home).
+  const chaseToDo = () => jobsList().reduce((n, j) => n + chaseOpen(j).filter(s => s.kind === 'call').length, 0);
   function toChase() {
     return jobsList().map(j => ({ j, col: bidColumn(j), days: bidDays(j) }))
       .filter(b => (b.col in CHASE_AFTER_DAYS && b.days >= CHASE_AFTER_DAYS[b.col] || chaseOpen(b.j).length) &&
@@ -646,9 +656,10 @@
     // list disagreed. Each row says which column the bid is in.
     return '<div class="bd-chase">' +
       '<div class="bd-chase-head">📨 Time to chase <span class="bd-count">' + list.length + '</span>' +
-        '<span class="bd-chase-sub">Bids with no answer, oldest first. The plan: day 2 a call and an email, day 5 a text, ' +
-        'day 7 a second email, day 10 a call, day 14 a last email, then "mark it lost?". The emails are written into your ' +
-        'Gmail Drafts by themselves (never sent); the calls and texts are a tap each below.' +
+        '<span class="bd-chase-sub">Bids with no answer, oldest first. The plan: day 2 a call and an email, day 5 a quick ' +
+        'check-in email, day 7 another email, day 10 a call, day 14 a last email, then "mark it lost?". The emails send ' +
+        'themselves from your Gmail in the morning, in the estimate’s thread — not once the customer has written back, and ' +
+        'not when you’ve emailed them yourself since the last one. The calls are a tap each below.' +
         (isOwner() ? ' <button class="link-btn" onclick="chaseReviewLink()">Google review link for thank-yous</button>' : '') +
         '</span></div>' +
       list.map(({ j, col, days }) => {
@@ -667,12 +678,12 @@
             '<div class="bd-chase-line">' + (col === 'followUp' ? 'In Follow up since ' : 'In Sent — waiting since ') +
               (days === 0 ? 'today' : days === 1 ? 'yesterday' : (j.bidStageAt ? shortDay(localDay(new Date(j.bidStageAt))) : agoText(days)) +
                 ' (' + days + ' days)') +
-              (last ? ' · follow-up drafted ' + agoText(lastDays || 0) +
+              (last ? ' · follow-up ' + (last.sent ? 'sent ' : 'drafted ') + agoText(lastDays || 0) +
                 (ups.length > 1 ? ' (' + ups.length + ' so far)' : '') : '') + '</div>' +
           '</div>' + chaseStepsHtml(j) +
           '<div class="bd-chase-act">' +
             (last && /^https:\/\/mail\.google\.com\//.test(String(last.link || ''))
-              ? '<a class="btn btn-sm" href="' + esc(last.link) + '" target="_blank" rel="noopener">Open draft</a>' : '') +
+              ? '<a class="btn btn-sm" href="' + esc(last.link) + '" target="_blank" rel="noopener">' + (last.sent ? 'Open the email' : 'Open draft') + '</a>' : '') +
             (email
               ? '<button class="btn btn-sm btn-filled" ' + (busy ? 'disabled' : '') +
                 ' onclick="writeFollowUp(\'' + safeId(j._id) + '\')">' +
@@ -684,19 +695,12 @@
     '</div>';
   }
 
-  // Today's steps of the plan on a bid's row: a tap to call or to open a
-  // text already written (his phone's own Messages, where he can change it
-  // before it goes), then ticked done -- or the email the hourly run is
-  // drafting, or the question at the end.
-  const STEP_WORDS = { call1: '📞 Call — first follow-up', call2: '📞 Call again', text1: '📱 Text',
-    email1: '✉️ Email 1', email2: '✉️ Email 2', email3: '✉️ Last email', lost: '❓ No answer after the follow-ups' };
+  // Today's steps of the plan on a bid's row: a tap to call, then ticked
+  // done -- or the email the hourly run sends in the morning, or the
+  // question at the end.
+  const STEP_WORDS = { call1: '📞 Call — first follow-up', call2: '📞 Call again', text1: '✉️ Quick check-in email',
+    email1: '✉️ Email 1', email2: '✉️ Email 3', email3: '✉️ Last email', lost: '❓ No answer after the follow-ups' };
   const telOf = p => String(p || '').replace(/[^\d+]/g, '');
-  function textFor(j) {
-    const first = String(j.firstName || (j.customerName || '').trim().split(/\s+/)[0] || '').trim();
-    const what = String(j.crewWhat || (j.serviceTypes || [])[0] || 'project').toLowerCase();
-    return 'Hi' + (first ? ' ' + first : '') + ', it’s Jonah with YD Exterior Visions. Just making sure you got the estimate for the ' +
-      what + '. Happy to answer any questions or change anything — just let me know.';
-  }
   function chaseStepsHtml(j) {
     const open = chaseOpen(j);
     if (!open.length || !movesJobs()) return '';
@@ -708,13 +712,15 @@
         return word + (tel ? '<a class="btn btn-sm btn-filled" href="tel:' + esc(tel) + '">📞 Call</a>' : '<span class="bd-chase-none">No phone on the job</span>') +
           tick('talked', '✓ Talked') + tick('voicemail', '✓ Left a message') + tick('skipped', 'Skip');
       }
-      if (s.kind === 'text') {
-        return word + (tel ? '<a class="btn btn-sm btn-filled" href="sms:' + esc(tel) + '?&body=' + esc(encodeURIComponent(textFor(j))) + '">📱 Text</a>'
-          : '<span class="bd-chase-none">No phone on the job</span>') + tick('sent', '✓ Texted') + tick('skipped', 'Skip');
-      }
       if (s.kind === 'email') {
-        return word + (looksLikeEmail(j.email) ? '<span class="bd-chase-none">Being written into your Gmail Drafts — within the hour</span>'
-          : '<span class="bd-chase-none">No email on the job</span>') + tick('skipped', 'Skip');
+        const h = chaseHeardOf(j);
+        if (h) {
+          return word + '<span class="bd-chase-none">✋ They wrote back ' + esc(agoText(daysSince(h.at) || 0)) +
+            (h.subject ? ' (“' + esc(String(h.subject).slice(0, 60)) + '”)' : '') + ' — the emails have stopped</span>' +
+            '<button class="btn btn-sm" onclick="chaseResume(\'' + id + '\')">Keep emailing them</button>' + tick('skipped', 'Skip');
+        }
+        return word + (looksLikeEmail(j.email) ? '<span class="bd-chase-none">Sends itself from your Gmail in the morning (8 to noon)</span>'
+          : '<span class="bd-chase-none">No email on the job — taken from QuickBooks if their customer has one</span>') + tick('skipped', 'Skip');
       }
       return word + '<button class="btn btn-sm btn-filled" onclick="chaseLost(\'' + id + '\')">Mark it lost</button>' +
         tick('keep', 'Keep it open');
@@ -735,6 +741,11 @@
   window.chaseMark = function (jobId, step, how) {
     chasePatch(jobId, c => { c.done = Object.assign({}, c.done || {}, { [step]: { at: nowIso(), by: myName() || null, how: how } }); },
       how === 'skipped' ? 'Skipped' : 'Noted');
+  };
+  // They wrote back but he wants the emails to carry on: only mail after now
+  // stops them again (followup.py heard).
+  window.chaseResume = function (jobId) {
+    chasePatch(jobId, c => { c.resumeAt = nowIso(); }, 'The follow-up emails will carry on');
   };
   window.chaseStop = function (jobId) {
     chasePatch(jobId, c => { c.stoppedAt = nowIso(); c.stoppedBy = myName() || null; },

@@ -268,25 +268,12 @@ def draft_email(to, subject, body, reply=None):
     to = (to or "").strip()
     if not EMAIL_RE.match(to):
         return {"error": "That is not one email address. Use the owner's address and say in the body who it is for."}
-    msg = MIMEText(body or "", "plain", "utf-8")
-    msg["To"] = to
-    msg["From"] = dg.OWNER_EMAIL
-    msg["Subject"] = (subject or "").strip()[:200]
-    # Gmail keeps a draft in a thread only with the thread's id, a matching
-    # subject and these two headers; the customer's own mail sorts it in
-    # under the estimate by the same headers.
-    if reply and reply.get("inReplyTo"):
-        msg["In-Reply-To"] = reply["inReplyTo"]
-        msg["References"] = reply.get("references") or reply["inReplyTo"]
-    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    message, subject = _message(to, subject, body, reply)
     try:
         token = dg._gmail_access_token(GMAIL_COMPOSE)
     except Exception as e:      # noqa: BLE001
         print("cards: gmail compose not allowed:", e)
         return {"error": "Saving drafts is not switched on yet. Put the full email in your result instead."}
-    message = {"raw": raw}
-    if reply and reply.get("threadId"):
-        message["threadId"] = reply["threadId"]
     r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/drafts",
                       headers={"Authorization": "Bearer " + token},
                       json={"message": message}, timeout=30)
@@ -295,8 +282,46 @@ def draft_email(to, subject, body, reply=None):
         return {"error": "Gmail would not save the draft. Put the full email in your result instead."}
     d = r.json()
     msg_id = (d.get("message") or {}).get("id", "")
-    return {"ok": True, "draftId": d.get("id"), "to": to, "subject": msg["Subject"],
+    return {"ok": True, "draftId": d.get("id"), "to": to, "subject": subject,
             "link": "https://mail.google.com/mail/u/%s/#drafts?compose=%s" % (dg.OWNER_EMAIL, msg_id)}
+
+
+def send_mail(to, subject, body, reply=None):
+    """Sent from the owner's Gmail, as he would send it himself (the summaries'
+    gmail.send permission) -- for the follow-up plan's emails, which go out
+    by themselves (followup.py auto; Jonah, 26 Oct 2026). `reply` as in
+    draft_email: inside the estimate's thread. {messageId, threadId} or
+    {error}."""
+    to = (to or "").strip()
+    if not EMAIL_RE.match(to):
+        return {"error": "not one email address"}
+    message, subject = _message(to, subject, body, reply)
+    r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                      headers={"Authorization": "Bearer " + dg._gmail_access_token(dg.GMAIL_SEND)},
+                      json=message, timeout=30)
+    if r.status_code >= 300:
+        print("cards: send failed", r.status_code, r.text[:300])
+        return {"error": "Gmail would not send it (%d)" % r.status_code}
+    d = r.json()
+    return {"messageId": d.get("id"), "threadId": d.get("threadId"), "subject": subject}
+
+
+def _message(to, subject, body, reply):
+    """The email as Gmail takes it ({raw, threadId?}), and its subject."""
+    msg = MIMEText(body or "", "plain", "utf-8")
+    msg["To"] = to
+    msg["From"] = dg.OWNER_EMAIL
+    msg["Subject"] = (subject or "").strip()[:200]
+    # Gmail keeps a message in a thread only with the thread's id, a matching
+    # subject and these two headers; the customer's own mail sorts it in
+    # under the estimate by the same headers.
+    if reply and reply.get("inReplyTo"):
+        msg["In-Reply-To"] = reply["inReplyTo"]
+        msg["References"] = reply.get("references") or reply["inReplyTo"]
+    out = {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()}
+    if reply and reply.get("threadId"):
+        out["threadId"] = reply["threadId"]
+    return out, msg["Subject"]
 
 
 # ---------------------------------------------------------------- one card

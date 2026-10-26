@@ -3,6 +3,7 @@
 The Bids board lists the bids waiting on an answer; "Write the email" on one
 comes here. Claude writes a short follow-up from the job itself and it is
 saved in the owner's Gmail Drafts -- never sent. He reads it and sends it.
+The follow-up plan's own emails (auto, below) are sent by themselves.
 
 The job is read here from Firestore, not taken from the app: the app only says
 WHICH job. That way the email cannot be steered by whatever a browser sends,
@@ -89,7 +90,7 @@ def _prompt(j):
         lines.append("Quote date: %s" % j.get("quoteDate"))
     earlier = [f for f in (j.get("followUps") or []) if isinstance(f, dict)]
     if earlier:
-        lines.append("Follow-ups already drafted: %d, the last %s days ago, subject \"%s\"." % (
+        lines.append("Follow-ups already written: %d, the last %s days ago, subject \"%s\"." % (
             len(earlier), _days_since(earlier[-1].get("at")), earlier[-1].get("subject") or ""))
     lines.append("\nJonah's notes on the job (context only):\n%s" % ((j.get("notes") or "").strip()[:3000] or "(none)"))
     return "\n".join(lines)
@@ -100,11 +101,16 @@ def _step_words(step):
     if not step:
         return ""
     if step.get("last"):
-        return ("\n\nThis is the LAST follow-up (number 3). Say kindly that you will close out the "
+        return ("\n\nThis is the LAST follow-up (number %d). Say kindly that you will close out the "
                 "file for now unless they would like to go ahead or talk it over, and that the door "
-                "stays open. Short.")
-    if step.get("n") == 2:
-        return "\n\nThis is follow-up number 2: shorter and lighter than the first."
+                "stays open. Short." % step.get("n", 4))
+    if step.get("short"):
+        return ("\n\nThis is a quick check-in in place of a text message: two or three short "
+                "sentences, no more -- did they get a chance to look at the estimate, and any "
+                "questions. Sign off as usual.")
+    if (step.get("n") or 1) > 1:
+        return ("\n\nThis is follow-up number %d: shorter and lighter than the first; offer to go "
+                "over it or adjust the scope." % step["n"])
     return "\n\nThis is the first follow-up email; Jonah may also have tried calling."
 
 
@@ -158,27 +164,49 @@ def estimate_thread(j, to):
 def draft(client, job_id, step=None):
     """Write and save one follow-up. Returns (result, usage) -- result is
     {draftId, link, to, subject} or {error}; usage is the tokens spent, or None
-    when Claude was never asked. `step`: the plan's email step when the
-    hourly run drafts it (auto, below) -- which of the three it is."""
+    when Claude was never asked. `step`: the plan's email step it is written
+    for, if any (the plan's own are sent by auto, below)."""
     snap = dg._db().collection("jobs").document(job_id).get()
     if not snap.exists:
         return {"error": "That job was not found"}, None
     j = snap.to_dict() or {}
+    why = _not_waiting(j)
+    if why:
+        return {"error": why}, None
+    to = (j.get("email") or "").strip()
+    if not cards.EMAIL_RE.match(to):
+        return {"error": "This job has no email address. Add one to the job first."}, None
+    got, usage = _write(client, j, to, step)
+    if got.get("error"):
+        return got, usage
+    saved = cards.draft_email(to, got["subject"], got["body"], got["reply"])
+    if saved.get("error"):
+        return {"error": saved["error"].split(". Put the full")[0] + "."}, usage
+    print("followup: drafted for job", job_id, "in the estimate thread" if got["reply"] else "as a new email")
+    return {"draftId": saved.get("draftId"), "link": saved.get("link"), "to": to,
+            "subject": saved.get("subject"), "inThread": bool(got["reply"])}, usage
+
+
+def _not_waiting(j):
+    """Why this job gets no follow-up, or '' -- it is not a bid waiting on an
+    answer."""
     if j.get("deletedAt"):
-        return {"error": "That bid is in Recently deleted"}, None
+        return "That bid is in Recently deleted"
     if (j.get("jobStatus") or "quoting") != "quoting" or j.get("bidStage") in ("won", "lost"):
-        return {"error": "That job is not a bid waiting on an answer any more"}, None
+        return "That job is not a bid waiting on an answer any more"
     # The customer already answered in QuickBooks: no "just following up"
     # email to someone who said no -- or yes (the chase rule, digest.py).
     q = j.get("qbEstimate") or {}
     if dg.qb_turned_down(q):
-        return {"error": "The customer turned this estimate down in QuickBooks — mark the bid lost instead"}, None
+        return "The customer turned this estimate down in QuickBooks — mark the bid lost instead"
     if dg.qb_accepted(q):
-        return {"error": "The customer accepted this estimate in QuickBooks — book it instead"}, None
-    to = (j.get("email") or "").strip()
-    if not cards.EMAIL_RE.match(to):
-        return {"error": "This job has no email address. Add one to the job first."}, None
+        return "The customer accepted this estimate in QuickBooks — book it instead"
+    return ""
 
+
+def _write(client, j, to, step):
+    """Claude writes the follow-up: ({subject, body, reply} or {error}, usage).
+    `reply` is the estimate's email thread when it is found (else None)."""
     resp = client.beta.messages.create(
         model=MODEL, max_tokens=4000, system=SYSTEM,
         messages=[{"role": "user", "content": _prompt(j) + _step_words(step)}],
@@ -207,12 +235,7 @@ def draft(client, job_id, step=None):
         reply = None
     if reply:
         subject = reply["subject"] if re.match(r"(?i)re:", reply["subject"]) else "Re: " + reply["subject"]
-    saved = cards.draft_email(to, subject, body, reply)
-    if saved.get("error"):
-        return {"error": saved["error"].split(". Put the full")[0] + "."}, resp.usage
-    print("followup: drafted for job", job_id, "in the estimate thread" if reply else "as a new email")
-    return {"draftId": saved.get("draftId"), "link": saved.get("link"), "to": to,
-            "subject": saved.get("subject"), "inThread": bool(reply)}, resp.usage
+    return {"subject": subject, "body": body, "reply": reply}, resp.usage
 
 
 # ---------------------------------------------------------------- the follow-up plan
@@ -227,30 +250,37 @@ def draft(client, job_id, step=None):
 # usual contractor cadence: a phone call first (the warmest, and most quotes
 # are won by whoever calls back), an email the same day, then lighter
 # touches spread out, then one clear last note, then a decision:
-#   day 2   call (voicemail if no answer)   email 1 (drafted by itself)
-#   day 5   text
-#   day 7   email 2, shorter (drafted by itself)
+#   day 2   call (voicemail if no answer)   email 1
+#   day 5   a quick check-in email (was a text: Jonah, 26 Oct 2026)
+#   day 7   email 3, shorter
 #   day 10  call
-#   day 14  last email -- "I'll close out the file unless..." (drafted)
+#   day 14  last email -- "I'll close out the file unless..."
 #   day 15  a "mark it lost?" card on My to-dos (never marked lost by itself)
-# Emails are only ever DRAFTS in his Gmail, under the estimate's email.
-# Calls and texts are his to make: the app lists them with a tap to call or
-# to open a text already written, and he ticks them done (boards.js). A
-# step is passed over once the next call or text (or the next email) is due, so a bid
-# found late is not sent three emails at once; once the last step is due,
-# only it is open. The same table is in boards.js (CHASE_STEPS) -- change both.
+# The emails SEND THEMSELVES from his Gmail in the estimate's thread (Jonah,
+# 26 Oct 2026: "i want the follow up automated apart from making a call"),
+# in the morning (SEND_HOURS) -- but never once the customer has written to
+# him since the bid went out (chaseHeard), and a step is counted done
+# without sending when he has emailed them himself since the last one.
+# The calls are his: the app lists them with a tap to call, and he ticks
+# them done (boards.js). A step is passed over once the next call (or the
+# next email) is due, so a bid found late is not sent three emails at once;
+# once the last step is due, only it is open. The same table is in boards.js
+# (CHASE_STEPS) -- change both. text1 keeps the id it had as a text, so one
+# already texted counts as done.
 STEPS = [
     {"id": "call1", "day": 2, "kind": "call"},
     {"id": "email1", "day": 2, "kind": "email", "n": 1},
-    {"id": "text1", "day": 5, "kind": "text"},
-    {"id": "email2", "day": 7, "kind": "email", "n": 2},
+    {"id": "text1", "day": 5, "kind": "email", "n": 2, "short": True},
+    {"id": "email2", "day": 7, "kind": "email", "n": 3},
     {"id": "call2", "day": 10, "kind": "call"},
-    {"id": "email3", "day": 14, "kind": "email", "n": 3, "last": True},
+    {"id": "email3", "day": 14, "kind": "email", "n": 4, "last": True},
     {"id": "lost", "day": 15, "kind": "decide"},
 ]
-# Drafted by the hourly run at most this many at a time (Claude is asked for
+# Sent by the hourly run at most this many at a time (Claude is asked for
 # each; the rest wait for the next hour).
 AUTO_MAX = 4
+# The hours (Chicago) a follow-up email goes out in: the morning.
+SEND_HOURS = range(8, 12)
 # Bids sent before the plan existed start it from here, rather than all at
 # their last step on the first morning.
 PLAN_FROM = datetime.datetime(2026, 10, 22, 5, 0, tzinfo=datetime.timezone.utc)
@@ -307,8 +337,8 @@ def chasing(j):
 
 
 def done_steps(j):
-    """Step ids done: ticked in the app (chase.done), or drafted here
-    (chaseDrafts), or its card made (chaseLostCard)."""
+    """Step ids done: ticked in the app (chase.done), or sent, drafted or
+    counted done here (chaseDrafts), or its card made (chaseLostCard)."""
     out = set(((j.get("chase") or {}).get("done") or {}).keys())
     out |= set((j.get("chaseDrafts") or {}).keys())
     out |= {f.get("step") for f in (j.get("followUps") or []) if isinstance(f, dict) and f.get("step")}
@@ -403,7 +433,7 @@ def _lost_card(db, job_id, j):
     num = str(j.get("estimateNumber") or "").strip()
     card = receipts._new_card(
         board, "No answer from %s after the follow-ups — mark it lost?" % name,
-        "Two calls, a text and three emails since the bid went out, and no answer. "
+        "Two calls and four emails since the bid went out, and no answer. "
         "Mark the bid lost on the Bids board, or move it back to Sent if you want to keep after it.",
         jobId=job_id, jobName=name, jobNum=num or None, noClaude=True,
         createdBy="Job Hub (follow-ups)", updatedBy="Job Hub (follow-ups)")
@@ -417,12 +447,130 @@ def _stamp():
     return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (t.microsecond // 1000)
 
 
+def _iso(t):
+    """A datetime as the app writes times (JavaScript's toISOString)."""
+    t = t.astimezone(datetime.timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (t.microsecond // 1000)
+
+
+def heard(j):
+    """What the customer wrote him since the bid went out (chaseHeard, found by
+    auto), unless he has chosen to keep emailing since (chase.resumeAt,
+    boards.js chaseResume). boards.js chaseHeardOf is the same."""
+    h = j.get("chaseHeard") or {}
+    at = _when(h.get("at"))
+    resumed = _when((j.get("chase") or {}).get("resumeAt"))
+    return h if at and not (resumed and resumed > at) else None
+
+
+def _found(q, after, skip=()):
+    """The newest message in his mailbox matching Gmail search `q` that came
+    after `after`, as {id, at, subject}, or None. Ids in `skip` don't count."""
+    for m in (_gmail("/messages", {"q": "%s after:%d" % (q, int(after.timestamp())), "maxResults": 10})
+              .get("messages") or []):
+        if m.get("id") in skip:
+            continue
+        full = _gmail("/messages/" + m["id"], {"format": "metadata", "metadataHeaders": ["Subject"]})
+        at = datetime.datetime.fromtimestamp(int(full.get("internalDate") or 0) / 1000, datetime.timezone.utc)
+        if at > after:          # Gmail's after: is to the second; this is exact
+            return {"id": m["id"], "at": at, "subject": _header(full, "Subject")}
+    return None
+
+
+def _contact(db, ref, j, known):
+    """The email the plan writes to: the job's, else its QuickBooks
+    customer's (customers/{id}, customers.py) -- which is then written onto
+    the job, with the customer's phone when the job has none, so the call
+    button has it too. 26 Oct 2026: 5 of 9 bids on the plan had no email on
+    the job and were quietly never written to. '' when there is none.
+    `known`: customers already read this run."""
+    email, phone = (j.get("email") or "").strip(), (j.get("phone") or "").strip()
+    if cards.EMAIL_RE.match(email) and phone:
+        return email
+    cid = str(j.get("customerId") or (j.get("qbEstimate") or {}).get("customerId") or "").strip()
+    if cid and cid not in known:
+        try:
+            snap = db.collection("customers").document(cid).get()
+            known[cid] = (snap.to_dict() or {}) if snap.exists else {}
+        except Exception as err:    # noqa: BLE001
+            print("followup: customer", cid, "not read:", err)
+            known[cid] = {}
+    c = known.get(cid) or {}
+    patch = {}
+    if not cards.EMAIL_RE.match(email) and cards.EMAIL_RE.match((c.get("email") or "").strip()):
+        patch["email"] = email = c["email"].strip()
+    if not phone and (c.get("phone") or "").strip():
+        patch["phone"] = c["phone"].strip()
+    if patch:
+        patch["lastModified"] = _stamp()
+        ref.update(patch)
+        j.update(patch)
+        print("followup: filled", ", ".join(k for k in patch if k != "lastModified"), "on", ref.id, "from customer", cid)
+    return email if cards.EMAIL_RE.match(email) else ""
+
+
+def _send_step(client, ref, jid, j, s, to, spent):
+    """One email step of the plan, now that it is due: held because the
+    customer has written to him since the bid went out (chaseHeard, he is
+    told once), counted done without sending because he has emailed them
+    himself since the last step, or written and sent in the estimate's
+    thread. Returns (news for his phone or None, whether Claude was asked).
+    Any doubt about his mailbox and nothing is sent."""
+    name = (j.get("customerName") or "").strip() or "A customer"
+    marks = [d for d in (j.get("chaseDrafts") or {}).values() if isinstance(d, dict)]
+    since = max(t for t in (chase_start(j), _when((j.get("chase") or {}).get("resumeAt"))) if t)
+    # A send that may have gone out with no record of it (the record's write
+    # failed): counted as sent, never sent twice.
+    pending = j.get("chaseSending") or {}
+    if pending.get("step") == s["id"]:
+        ref.update({"chaseDrafts." + s["id"]: {"at": pending.get("at") or _stamp(), "sent": True, "unconfirmed": True},
+                    "chaseSending": firestore.DELETE_FIELD, "lastModified": _stamp()})
+        return None, False
+    try:
+        wrote = _found("from:%s -in:sent -in:drafts -in:chats" % to, since)
+        last = max([since + datetime.timedelta(hours=20)] + [t for t in (_when(d.get("at")) for d in marks) if t])
+        mine = _found("in:sent to:%s" % to, last, {d.get("messageId") for d in marks if d.get("messageId")})
+    except Exception as err:        # noqa: BLE001
+        print("followup: mailbox not read for", jid, "-- nothing sent:", err)
+        return None, False
+    if wrote:
+        ref.update({"chaseHeard": {"at": _iso(wrote["at"]), "subject": (wrote["subject"] or "")[:200],
+                                   "messageId": wrote["id"], "foundAt": _stamp()}, "lastModified": _stamp()})
+        return {"kind": "followup", "jobId": jid, "title": "✋ %s wrote back" % name,
+                "body": "The automatic follow-up emails for this bid are stopped — read what they said and move the bid along."}, False
+    if mine:
+        ref.update({"chaseDrafts." + s["id"]: {"at": _stamp(), "byHand": True, "emailedAt": _iso(mine["at"])},
+                    "lastModified": _stamp()})
+        return None, False
+    ref.update({"chaseSending": {"step": s["id"], "at": _stamp()}})
+    got, usage = _write(client, j, to, s)
+    if spent and usage is not None:
+        spent(usage)
+    sent = cards.send_mail(to, got["subject"], got["body"], got["reply"]) if not got.get("error") else got
+    if sent.get("error"):
+        print("followup: not sent for", jid, sent["error"])
+        ref.update({"chaseSending": firestore.DELETE_FIELD})
+        return None, True
+    at = _stamp()
+    rec = {"at": at, "sent": True, "messageId": sent.get("messageId"), "threadId": sent.get("threadId"),
+           "subject": sent.get("subject") or "", "inThread": bool(got["reply"]),
+           "link": "https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, sent.get("threadId") or "")}
+    ref.update({"chaseDrafts." + s["id"]: rec, "chaseSending": firestore.DELETE_FIELD,
+                "followUps": firestore.ArrayUnion([dict(rec, by="Job Hub (follow-ups)", step=s["id"])]),
+                "lastModified": at})
+    print("followup: sent", s["id"], "for job", jid, "in the estimate thread" if got["reply"] else "as a new email")
+    return {"kind": "followup", "jobId": jid, "title": "✉️ Follow-up sent",
+            "body": "%s — follow-up %d went out from your Gmail%s." % (
+                name, s.get("n") or 1, " in the estimate's thread" if got["reply"] else "")}, True
+
+
 def auto(client, deadline=None, spent=None):
     """The hourly part (main.py /cards/run): every bid's email step that is
-    due drafted, the "mark it lost?" card made, and a thank-you drafted for a
-    job paid off. `spent(usage)` records what each Claude call cost. Returns
-    news for the owner's phone (main._tell_owner, kind "followup"). settings/followUp {auto: false}
-    switches it off; {reviewLink} goes in the thank-you."""
+    due sent (in the morning, SEND_HOURS), the "mark it lost?" card made, and
+    a thank-you drafted for a job paid off. `spent(usage)` records what each
+    Claude call cost. Returns news for the owner's phone (main._tell_owner,
+    kind "followup"). settings/followUp {auto: false} switches it off;
+    {reviewLink} goes in the thank-you."""
     import time
     db = dg._db()
     news = []
@@ -433,7 +581,8 @@ def auto(client, deadline=None, spent=None):
     if conf.get("auto") is False:
         return news
     link = (conf.get("reviewLink") or "").strip()
-    drafted = 0
+    morning = dg._now().astimezone(dg.TZ).hour in SEND_HOURS
+    drafted, known, mailed = 0, {}, set()
     for snap in db.collection("jobs").stream():
         if deadline and time.monotonic() > deadline:
             break
@@ -442,29 +591,25 @@ def auto(client, deadline=None, spent=None):
         ref = db.collection("jobs").document(jid)
         name = (j.get("customerName") or "").strip()
         if (j.get("jobStatus") or "quoting") == "quoting":
-            for s in open_steps(j):
+            steps = open_steps(j)
+            to = _contact(db, ref, j, known) if steps else ""
+            for s in steps:
                 if s["kind"] == "decide":
                     cid = _lost_card(db, jid, j)
                     if cid:
                         ref.update({"chaseLostCard": {"cardId": cid, "at": _stamp()}, "lastModified": _stamp()})
                         news.append({"kind": "followup", "jobId": jid, "title": "❓ No answer after the follow-ups",
                                      "body": "%s — mark the bid lost? A card is on My to-dos." % (name or "A bid")})
-                elif s["kind"] == "email" and drafted < AUTO_MAX and cards.EMAIL_RE.match((j.get("email") or "").strip()):
-                    result, usage = draft(client, jid, step=s)
-                    drafted += 1
-                    if spent and usage is not None:
-                        spent(usage)
-                    if result.get("error"):
-                        print("followup: auto draft refused for", jid, result["error"])
-                        continue
-                    at = _stamp()
-                    rec = {"at": at, "draftId": result.get("draftId"), "link": result.get("link"),
-                           "subject": result.get("subject") or ""}
-                    ref.update({"chaseDrafts." + s["id"]: rec,
-                                "followUps": firestore.ArrayUnion([dict(rec, by="Job Hub (follow-ups)", step=s["id"])]),
-                                "lastModified": at})
-                    news.append({"kind": "followup", "jobId": jid, "title": "✉️ Follow-up email drafted",
-                                 "body": "%s — follow-up %d is in Gmail Drafts to read and send." % (name or "A bid", s.get("n") or 1)})
+                # One email to a person a run: the same customer's two bids
+                # (or a second step) wait for the next hour, when this one's
+                # email counts as emailed since.
+                elif (s["kind"] == "email" and morning and to and to.lower() not in mailed
+                      and drafted < AUTO_MAX and not heard(j)):
+                    item, asked = _send_step(client, ref, jid, j, s, to, spent)
+                    drafted += 1 if asked else 0
+                    mailed.add(to.lower())
+                    if item:
+                        news.append(item)
             continue
         # Finished and paid off since THANKS_FROM: the thank-you.
         if j.get("workStage") != "paid" or j.get("thanksEmail") or drafted >= AUTO_MAX:
