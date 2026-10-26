@@ -2234,9 +2234,17 @@
   function postsHtml(when) {
     if (!changes() || snowNow()) return '';
     const p = (typeof boardFields !== 'undefined' && boardFields.postsDraft) || null;
-    const done = typeof jobStatus !== 'undefined' && jobStatus === 'complete';
-    if (!p && !done) return '';
-    return '<div class="est-care">📣 ' + (p
+    const st = typeof jobStatus !== 'undefined' ? jobStatus : '';
+    const done = st === 'complete';
+    // Jonah, 26 Oct 2026: a "Don't post" tick on the job -- no posts written
+    // by themselves when it is finished, and never in the week's "ready to
+    // post" card (posts.py weekly). Tickable before it is finished too.
+    const no = !!(typeof boardFields !== 'undefined' && boardFields.noPost);
+    const tick = '<label class="chk est-nopost"><input type="checkbox"' + (no ? ' checked' : '') +
+      ' onchange="estNoPost(this.checked)"> 🚫 Don’t post this job — no social posts, not in the week’s photos</label>';
+    if (!p && !done) return st === 'booked' || st === 'inprogress' ? '<div class="est-care">' + tick + '</div>' : '';
+    if (no) return '<div class="est-care">' + tick + '</div>';
+    return '<div class="est-care">' + tick + '</div><div class="est-care">📣 ' + (p
         ? 'Social posts written ' + esc(when(p.at)) + ' — on your My to-dos (Google, Facebook, Nextdoor, Pinterest, Yelp).'
         : 'Social posts for this job: press the button and Claude writes one each for Google, Facebook, Nextdoor, Pinterest and Yelp onto your My to-dos.') +
       ' <button class="btn btn-sm" onclick="estPosts()"' + (postsBusy[currentJobId] ? ' disabled' : '') + '>' +
@@ -2256,6 +2264,13 @@
       delete postsBusy[jobId]; renderQb();
     }
   }
+  window.estNoPost = function (on) {
+    if (!changes() || !currentJobId) return;
+    if (typeof boardFields !== 'undefined') boardFields.noPost = !!on;
+    if (window.YDSync && window.YDSync.patchJob) window.YDSync.patchJob(currentJobId, { noPost: !!on });
+    showToast(on ? '🚫 This job won’t be posted' : 'This job can be posted again');
+    renderQb();
+  };
   window.estPosts = function () {
     if (!changes()) return;
     // The server reads the job from the database: what was just typed goes up first.
@@ -2271,7 +2286,7 @@
   // A job marked Complete: its posts, once, written by Claude with no one
   // asking -- a snow contract or a job with no work on it has none.
   function postsCompleted(jobId, data) {
-    if (data.postsDraft) return;
+    if (data.postsDraft || data.noPost) return;
     const e = data.estimate || {};
     if (snowOf(e, data.serviceTypes, data.jobStatus, data.qbEstimate)) return;
     if (!(e.work || []).some(w => w && (String(w.title || '').trim() || String(w.scope || '').trim()))) return;

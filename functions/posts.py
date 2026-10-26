@@ -128,7 +128,9 @@ def draft(client, job_id, auto=False):
         return {"error": "This job has no work on its estimate to write about"}, None
     claim = None
     if auto:
-        if j.get("postsDraft"):
+        # Ticked "Don't post" on the job: nothing written by itself (by hand,
+        # "Write the posts" still writes them).
+        if j.get("postsDraft") or j.get("noPost"):
             return {"skipped": True}, None
         claim = db.collection("reminderLog").document("posts_" + job_id)
         try:
@@ -198,3 +200,150 @@ def _write(client, db, job_id, j, facts):
                                                 "lastModified": stamp}, merge=True)
     print("posts: written for job", job_id)
     return {"cardId": card_id, "photos": len(photos)}, resp.usage
+
+
+# ------------------------------------------------------------ the week's posts
+#
+# Jonah (26 Oct 2026): "build steps 1-2 in Job Hub first (the weekly 'ready
+# to post' card with up to 3 After photos per job, caption and hashtags)".
+# Friday evening (main.py, after the evening summary): the jobs finished in
+# the seven days to today and not ticked "Don't post" on the job (noPost),
+# each with up to WEEK_PHOTOS After photos -- one card on his My to-dos
+# (pw<date>) with every job's words for Pinterest and Yelp, the work and the
+# town and 8-12 hashtags, and its photos to save and upload. Once a week (a
+# claim in reminderLog, as draft above); nothing is posted from here.
+# Next, once two weeks of these read well: a Saturday routine on his
+# computer that fills in the Yelp and Pinterest pages (his yes on the card).
+WEEK_PHOTOS = 3
+WEEK_DAYS = 7
+
+WEEK_SYSTEM = (
+    "You write the words to go with photos of finished jobs that YD Exterior Visions LLC, a landscaping "
+    "and hardscaping company near Madison, Wisconsin, posts on Pinterest and Yelp. The owner, Jonah, "
+    "posts them himself.\n\n"
+    "For each job give:\n"
+    "- caption: 1-2 sentences, under 220 characters, that someone searching would find: the kind of "
+    "project, what it was built with, and the town with WI (e.g. 'Paver patio with a seating wall in "
+    "Verona, WI, built with Reno pavers on a compacted base.'). Plain and specific, no emojis.\n"
+    "- hashtags: 8 to 12, each starting with #, no spaces inside: a few for the work (#PaverPatio), "
+    "one or two for the town or area (#VeronaWI #MadisonLandscaping), one for Wisconsin.\n\n"
+    "Rules, all of them: never name the customer, never give a street or house number -- the town "
+    "only. Never mention any price. Never invent anything not given: no materials, sizes or claims "
+    "beyond the facts. Give every job you are given, by its jobId."
+)
+
+WEEK_SCHEMA = {
+    "type": "object",
+    "properties": {"jobs": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"jobId": {"type": "string"}, "caption": {"type": "string"},
+                       "hashtags": {"type": "array", "items": {"type": "string"}}},
+        "required": ["jobId", "caption", "hashtags"],
+        "additionalProperties": False,
+    }}},
+    "required": ["jobs"],
+    "additionalProperties": False,
+}
+
+
+def _week_photos(db, job_id):
+    """Up to WEEK_PHOTOS After photos, newest first: {url, thumb}."""
+    out = []
+    try:
+        for s in db.collection("jobPhotos").where("jobId", "==", job_id).stream():
+            p = s.to_dict() or {}
+            if p.get("stage") == "after" and not p.get("deleteAsked") and str(p.get("url") or "").startswith("https://"):
+                out.append((str(p.get("at") or ""), {"url": str(p["url"]),
+                                                      "thumb": str(p.get("thumbUrl") or p["url"])}))
+    except Exception as err:                        # noqa: BLE001 -- the job is left off
+        print("posts: week photos not read for", job_id, err)
+    return [x for _, x in sorted(out, key=lambda t: t[0], reverse=True)[:WEEK_PHOTOS]]
+
+
+def _tag(t):
+    t = re.sub(r"[^A-Za-z0-9]", "", str(t or ""))
+    return "#" + t if t else ""
+
+
+def weekly(client, today=None):
+    """The week's "ready to post" card (above). Returns (result, usage):
+    result {cardId, jobs} / {skipped} / {none} / {error}; usage is None
+    when Claude was never asked."""
+    import datetime
+    import spend
+    db = dg._db()
+    today = today or dg._now().date()
+    start = today - datetime.timedelta(days=WEEK_DAYS - 1)
+    claim = db.collection("reminderLog").document("postweek_" + today.isoformat())
+    if claim.get().exists:
+        return {"skipped": True}, None
+    picked = []
+    for s in db.collection("jobs").where("completedAt", ">=", start.isoformat()).stream():
+        j = s.to_dict() or {}
+        done = str(j.get("completedAt") or "")[:10]
+        if not (start.isoformat() <= done <= today.isoformat()) or j.get("noPost") or j.get("removeWhy"):
+            continue
+        photos = _week_photos(db, s.id)
+        facts = _facts(j)
+        if photos and (facts["work"] or facts["services"]):
+            picked.append((s.id, j, facts, photos))
+    if not picked:
+        return {"none": True}, None
+    if spend.over_cap(db):
+        return {"error": "over the day's Claude limit"}, None
+    try:
+        claim.create({"at": dg._now().isoformat(), "jobs": [p[0] for p in picked]})
+    except AlreadyExists:
+        return {"skipped": True}, None
+    try:
+        resp = client.beta.messages.create(
+            model=MODEL, max_tokens=6000, system=WEEK_SYSTEM,
+            messages=[{"role": "user", "content": "The jobs:\n" + json.dumps(
+                [dict(f, jobId=jid) for jid, _, f, _ in picked], ensure_ascii=False)}],
+            thinking={"type": "adaptive"},
+            output_config={"effort": "medium", "format": {"type": "json_schema", "schema": WEEK_SCHEMA}},
+            betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+        )
+        text = next((b.text for b in resp.content if b.type == "text"), "")
+        got = {str(x.get("jobId")): x for x in (json.loads(text).get("jobs") or []) if isinstance(x, dict)}
+    except Exception:
+        claim.delete()
+        raise
+    jobs, lines = [], []
+    for jid, j, f, photos in picked:
+        x = got.get(jid) or {}
+        caption = MONEY.sub("", str(x.get("caption") or "")).strip()[:300]
+        tags = [t for t in dict.fromkeys(_tag(t) for t in (x.get("hashtags") or [])) if t][:12]
+        if not caption:
+            continue
+        title = (str(j.get("customerName") or "").strip() or "A job") + (" — " + f["town"] if f["town"] else "")
+        jobs.append({"jobId": jid, "title": title[:120], "caption": caption, "hashtags": tags, "photos": photos})
+        lines.append("=== " + title + " ===\n" + caption + "\n" + " ".join(tags))
+    if not jobs:
+        claim.delete()
+        return {"error": "Claude's answer was empty"}, resp.usage
+    import quickbooks
+    stamp = quickbooks._stamp()
+    board = db.collection("boards").document("todo").get()
+    cols = ((board.to_dict() or {}).get("columns") or []) if board.exists else []
+    col = next((c.get("id") for c in cols if isinstance(c, dict) and c.get("id")), "admin0")
+    card_id = "pw" + today.strftime("%Y%m%d")
+    week = start.strftime("%b ") + str(start.day)
+    db.collection("boards").document("todo").collection("cards").document(card_id).set({
+        "title": ("📸 " + str(len(jobs)) + " job" + ("" if len(jobs) == 1 else "s") + " ready to post — week of " + week)[:200],
+        "notes": ("Pinterest and Yelp: save each job's photos (tap one to open it full size), upload them and "
+                  "paste its words. Tick each job off as it goes up. Nothing is posted by Job Hub.\n\n"
+                  + "\n\n".join(lines))[:9000],
+        "checklist": [{"id": "pwj" + re.sub(r"[^A-Za-z0-9]", "", x["jobId"])[:20], "text": x["title"], "done": False,
+                       "doneBy": None} for x in jobs],
+        "postWeek": {"from": start.isoformat(), "to": today.isoformat(), "jobs": jobs},
+        "column": col, "order": int(dg._now().timestamp() * 1000), "due": None, "dueTime": None,
+        "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False,
+        "type": None, "urgency": "normal", "labels": [], "color": None, "assignees": [],
+        "jobId": None, "jobName": None, "jobNum": None,
+        # His to do, not one for Claude's card runs (cards.py).
+        "noClaude": True,
+        "doneAt": None, "createdAt": stamp, "createdBy": "Job Hub", "updatedAt": stamp, "updatedBy": "Job Hub",
+    })
+    print("posts: the week's card", card_id, "with", len(jobs), "jobs")
+    return {"cardId": card_id, "jobs": len(jobs)}, resp.usage

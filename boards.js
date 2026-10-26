@@ -2060,7 +2060,7 @@
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
-      (k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +
+      (k.postWeek ? postWeekHtml(k.postWeek) : k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +
       (list.length ? '<div class="bd-move-label">Checklist</div><div class="bd-checklist">' +
         list.map(i => '<label class="chk bd-chk"><input type="checkbox"' + (i.done ? ' checked' : '') +
           ' onchange="toggleCheck(\'' + safeId(i.id) + '\', this.checked)"><span' + (i.done ? ' class="struck"' : '') + '>' +
@@ -2085,6 +2085,34 @@
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
   }
+  // The week's finished jobs to post (functions/posts.py weekly; Jonah, 26 Oct
+  // 2026: "the weekly 'ready to post' card with up to 3 After photos per job,
+  // caption and hashtags"): each job's words with a Copy button, and its
+  // photos -- a tap opens one full size, to save it and upload it.
+  const httpsOnly = u => /^https:\/\/[^\s"'<>]+$/.test(String(u || '')) ? String(u) : '';
+  const postWords = j => String(j.caption || '') + (j.hashtags && j.hashtags.length ? '\n\n' + j.hashtags.join(' ') : '');
+  function postWeekHtml(pw) {
+    const jobs = Array.isArray(pw.jobs) ? pw.jobs : [];
+    return '<div class="hint">Save each job’s photos (tap one to open it full size), upload them to Pinterest and Yelp, and ' +
+        'paste its words. Tick each job off below as it goes up. Nothing is posted by Job Hub.</div>' +
+      jobs.map((j, i) => '<div class="bd-post">' +
+        '<div class="bd-post-h"><b>' + esc(j.title || 'A job') + '</b></div>' +
+        '<div class="bd-post-text">' + esc(postWords(j)) + '</div>' +
+        '<button class="btn btn-sm" onclick="bdCopyPost(' + i + ')">📋 Copy the words</button>' +
+        '<div class="bd-post-photos">' + (j.photos || []).map(p => httpsOnly(p.url)
+          ? '<a href="' + esc(httpsOnly(p.url)) + '" target="_blank" rel="noopener"><img src="' + esc(httpsOnly(p.thumb) || httpsOnly(p.url)) +
+            '" alt="After photo" loading="lazy"></a>' : '').join('') + '</div></div>').join('');
+  }
+  window.bdCopyPost = function (i) {
+    const board = openCard && boards[openCard.boardId];
+    const k = board && (cards[board.id] || {})[openCard.cardId];
+    const j = k && k.postWeek && (k.postWeek.jobs || [])[i];
+    if (!j) return;
+    const text = postWords(j);
+    Promise.resolve(navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : Promise.reject())
+      .then(() => showToast('Copied — paste it with the photos'), () => showToast('Could not copy — press and hold the words to copy them'));
+  };
+
   // The card open in the window, deleted (with the same question as its 🗑).
   window.bdDeleteOpen = async function () {
     if (!openCard) return;

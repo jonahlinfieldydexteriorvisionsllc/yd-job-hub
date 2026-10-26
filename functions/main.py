@@ -486,9 +486,22 @@ def _digest(request, path, headers):
                 tidy.purge_jobs()
             except Exception as e:                      # noqa: BLE001
                 print("tidy: deleted jobs not cleared:", e)
+        # Friday evening, after the summary: the week's finished jobs ready
+        # to post, with their After photos (posts.py weekly).
+        posted = None
+        if slot == "evening" and digest._now().weekday() == 4:
+            try:
+                import posts
+                result, usage = posts.weekly(_claude())
+                if usage is not None:
+                    _record_spend(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), "posts", usage,
+                                  posts.MODEL)
+                posted = result
+            except Exception as e:                      # noqa: BLE001
+                print("the week's posts not made:", e)
         if failed is not None:
             return (json.dumps({"error": failed}), 500, json_headers)
-        return (json.dumps({"slot": slot, "report": report, "tidied": tidied}), 200, json_headers)
+        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted}), 200, json_headers)
 
     if path == "/digest/preview":
         if origin_blocked(request):

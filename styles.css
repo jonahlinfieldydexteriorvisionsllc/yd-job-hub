@@ -5505,3 +5505,12 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .sup-checks summary { cursor:pointer; min-height:40px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
   .sup-check { border-top:1px solid var(--border); padding:9px 0; font-size:14px; display:grid; gap:3px; overflow-wrap:anywhere; }
   .sup-check-acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:4px; }
+
+  /* ---- The week's "ready to post" card (boards.js postWeekHtml): each job's
+     words and its After photos. ---- */
+  .bd-post { border-top:1px solid var(--border); padding:10px 0; display:grid; gap:6px; }
+  .bd-post-text { white-space:pre-wrap; font-size:14px; overflow-wrap:anywhere; }
+  .bd-post .btn { justify-self:start; }
+  .bd-post-photos { display:flex; flex-wrap:wrap; gap:6px; }
+  .bd-post-photos img { width:96px; height:96px; object-fit:cover; border-radius:8px; display:block; }
+  .est-nopost { font-size:14px; }
