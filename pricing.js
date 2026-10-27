@@ -155,8 +155,14 @@
       crewDayCents: null,
       // How many paid hours -- the whole crew's together -- make one
       // crew-day: what turns the clock's hours into crew-days on Estimate vs
-      // actual (jobcosts.js). His to say (3 people x 8 hours = 24, say);
-      // nothing is assumed until he does.
+      // actual (jobcosts.js) and for the finished jobs Claude is shown
+      // (functions/pastjobs.py). He counts it per person (Jonah, 27 Oct
+      // 2026: "7hrs per crew member assuming a 1hr lunch" -- lunch is a
+      // clock-out, so off the clock too), so he sets the people in a crew
+      // and the hours each, and crewDayHours is their product, saved with
+      // them (prCrewDay). Nothing is assumed until he sets both.
+      crewPeople: null,
+      crewPersonHours: null,
       crewDayHours: null,
       // Profit per crew-day: his own amounts, as many as he likes, and the
       // usual one (null until he sets them: then the old three are used).
@@ -1286,6 +1292,8 @@
     taxPct: ['Sales tax we pay on materials', 'pct', 'tax'],
     customerTaxPct: ['Sales tax charged to customers', 'pct', 'tax'],
     crewDayCents: ['Crew-day rate (crew cost)', 'money', 'labor'],
+    crewPeople: ['People in a crew', 'num', 'labor'],
+    crewPersonHours: ['Paid hours each in a crew-day', 'num', 'labor'],
     crewDayHours: ['Paid hours in a crew-day', 'num', 'labor'],
     profitChoices: ['Profit per crew-day — the amounts', 'moneyList', 'labor'],
     defaultProfitCents: ['Profit per crew-day — the usual one', 'money', 'labor'],
@@ -1797,8 +1805,11 @@
 
       secHead('labor') + '<div class="pr-grid">' +
         box('Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')", 'what a crew-day costs, for estimating') +
-        box('Hours in a crew-day', r.crewDayHours, "prSet('crewDayHours', this.value, 'num')",
-          'paid hours of the whole crew together — 3 people × 8 hours = 24. Turns clocked hours into crew-days on Estimate vs actual') +
+        box('People in a crew', r.crewPeople, "prCrewDay('crewPeople', this.value)", 'the people in one crew-day') +
+        box('Hours each in a crew-day', r.crewPersonHours, "prCrewDay('crewPersonHours', this.value)",
+          'paid hours a person works in a day, lunch left out' +
+          (num(r.crewDayHours) > 0 ? ' — a crew-day is ' + num(r.crewDayHours) + ' paid hours. Turns clocked hours into crew-days'
+            : '. With both set, clocked hours are turned into crew-days')) +
       '</div>' +
       profitChoicesHtml(r, ro) +
       // Services priced by the unit, with their adjustments and his notes on
@@ -2058,6 +2069,18 @@
     const [head, sub] = path.split('.');
     if (sub) save({ [head]: Object.assign({}, rules[head], { [sub]: val }) });
     else save({ [head]: val });
+  };
+  // People in a crew or hours each: the crew-day's paid hours are saved with
+  // them, so what reads crewDayHours (jobcosts.js, pastjobs.py) never
+  // multiplies for itself. Either one emptied empties it.
+  window.prCrewDay = function (k, v) {
+    if (!owner() || (k !== 'crewPeople' && k !== 'crewPersonHours')) return;
+    const n = num(v);
+    if (String(v).trim() !== '' && !(n > 0)) { showToast('That isn’t a number'); renderRules(); return; }
+    const parts = Object.assign({ crewPeople: rules.crewPeople, crewPersonHours: rules.crewPersonHours }, { [k]: n });
+    const total = num(parts.crewPeople) > 0 && num(parts.crewPersonHours) > 0
+      ? Math.round(num(parts.crewPeople) * num(parts.crewPersonHours) * 100) / 100 : null;
+    save({ [k]: n, crewDayHours: total });
   };
   window.prCat = function (id, k, v) {
     if (!owner()) return;

@@ -20,8 +20,9 @@
 // THE ACTUAL SIDE is what the app already holds about the job:
 //   labour     approved clock shifts on it and hours typed in on Tracking
 //              (YDClock.forJob -- the same figures as Labor Hours), turned
-//              into crew-days by pricing/rules.crewDayHours (his to set;
-//              nothing assumed) and costed at the crew-day rate the job was
+//              into crew-days by pricing/rules.crewDayHours (people in a
+//              crew x hours each, his to set; nothing assumed) and costed
+//              at the crew-day rate the job was
 //              bid with, so a job done in the time it was bid for shows no
 //              labour difference. What the crew were actually paid (pay
 //              rates) is shown beside it.
@@ -506,8 +507,8 @@
     const l = m.act.labour, rate = m.est.rateCents;
     const avg = l.clockHours > 0 && l.wagesCents > 0 ? l.wagesCents / l.hours : null;
     const guess = avg && rate ? Math.round(rate / avg) : null;
-    return '<div class="eva-setup">Set <b>Hours in a crew-day</b> in Pricing rules — the paid hours of the whole crew together ' +
-      '(3 people × 8 hours = 24) — and the clock’s hours show here as crew-days, costed like the estimate.' +
+    return '<div class="eva-setup">Set <b>People in a crew</b> and <b>Hours each in a crew-day</b> in Pricing rules ' +
+      'and the clock’s hours show here as crew-days, costed like the estimate.' +
       (guess ? ' At the ' + esc(money(Math.round(avg))) + ' an hour paid on this job, your ' + esc(money(rate)) + ' crew-day rate is about ' + guess + ' hours.' : '') +
       (isOwner() ? ' <button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : '') + '</div>';
   }

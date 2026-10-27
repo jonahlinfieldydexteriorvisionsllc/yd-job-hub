@@ -24,8 +24,9 @@ actualSide): the clock's approved shifts on the job (kind 'job', status ok or
 approved) at their paid hours -- clock-in to clock-out, a pause included: the
 crew are paid through it and the job had them that long -- plus the labour
 hours typed on the job, divided by Hours in a crew-day (pricing/rules
-.crewDayHours: the whole crew's paid hours in one crew-day, 3 people x 8 hours
-= 24). Nothing is assumed when that is not set: the hours are given, no
+.crewDayHours: the whole crew's paid hours in one crew-day -- People in a crew
+x Hours each, saved together by the Pricing rules screen). Nothing is assumed
+when that is not set: the hours are given, no
 crew-days. A figure set by hand on Estimate vs actual (costByHand.act.crewDays)
 wins.
 
