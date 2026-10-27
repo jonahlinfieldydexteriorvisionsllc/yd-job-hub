@@ -820,9 +820,11 @@
     let any = false;
     if (isOwner() && window.YDCrewNotes && YDCrewNotes.unreadList) {
       any = true;
-      YDCrewNotes.unreadList().forEach(n => rows.push(line('📝', '<b>' + esc(n.by) + '</b>' + (n.jobName ? ' · ' + esc(n.jobName) : ''),
+      // A job issue (jobissues.js) opens its job, where it is handled.
+      YDCrewNotes.unreadList().forEach(n => rows.push(line(n.kind === 'issue' ? '⚠️' : '📝', '<b>' + esc(n.by) + '</b>' + (n.jobName ? ' · ' + esc(n.jobName) : ''),
         esc(String(n.text).slice(0, 140)) + (String(n.text).length > 140 ? '…' : ''),
-        esc(n.at ? dayWords(localYMD(new Date(n.at))) : ''), 'openCrewNotes()')));
+        esc(n.at ? dayWords(localYMD(new Date(n.at))) : ''),
+        n.kind === 'issue' && n.jobId && typeof jiOpenJob === 'function' ? "jiOpenJob('" + ordId(n.jobId) + "')" : 'openCrewNotes()')));
     }
     // The follow-up plan's calls for today (boards.js); its emails send themselves.
     const calls = window.YDBoards && YDBoards.chaseToDo && can('jobs', 'change') ? YDBoards.chaseToDo() : 0;

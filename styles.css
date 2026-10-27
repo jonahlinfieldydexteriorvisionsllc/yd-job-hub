@@ -5572,3 +5572,48 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .cj-row-name .bd-place { margin-right:2px; }
   html[data-night] .cj-group, html[data-night] .cj-row-name small.cj-row-days { color:var(--brand-2); }
   html[data-night] .cj-row-name small.cj-row-days.none { color:var(--muted); }
+
+  /* ---- Job issues (jobissues.js): the crew lead notes too much or too
+     little material, equipment we didn't have, a job that ran long -- all
+     taps; Jonah sees them on the job, under the material on its estimate,
+     and on All Jobs with what keeps coming up. ---- */
+  .ji-job { font-weight:700; margin:0 0 10px; overflow-wrap:anywhere; }
+  .ji-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:6px; margin:2px 0 8px; }
+  .ji-btn { min-height:48px; padding:8px 10px; border-radius:10px; border:1.5px solid var(--border); background:var(--surface-2);
+    color:var(--text); cursor:pointer; font-family:'DM Sans',sans-serif; font-size:14px; font-weight:600; line-height:1.25;
+    text-align:left; overflow-wrap:anywhere; display:flex; flex-direction:column; justify-content:center; }
+  .ji-btn small { font-size:12px; font-weight:400; color:var(--muted); margin-top:2px; }
+  .ji-btn:hover { border-color:var(--brand); }
+  .ji-btn.on { border-color:var(--brand); background:var(--brand); color:#fff; }
+  .ji-btn.on small { color:rgba(255,255,255,.85); }
+  .ji-kind { flex-direction:row; align-items:center; justify-content:flex-start; gap:8px; }
+  .ji-ico { font-size:20px; line-height:1; flex:0 0 auto; }
+  .ji-text { width:100%; }
+  .ji-big { width:100%; margin:2px 0 8px; }
+  .ji-big .cj-go-sub { text-transform:none; letter-spacing:0; }
+  .ji-list { display:flex; flex-direction:column; gap:8px; }
+  .ji-row { border-left:4px solid var(--st-due); background:var(--surface-2); border-radius:6px; padding:9px 12px; }
+  .ji-row.handled { border-left-color:var(--border-strong); opacity:.75; }
+  .ji-top { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; font-size:13px; }
+  .ji-chip { font-weight:700; color:var(--st-due-ink); }
+  .ji-row.handled .ji-chip { color:var(--muted); }
+  .ji-about { font-size:14px; margin-top:4px; overflow-wrap:anywhere; }
+  .ji-note { font-size:14px; margin-top:4px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .ji-acts { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-top:6px; font-size:13px; }
+  .ji-acts .btn { min-height:40px; }
+  .ji-done { font-weight:700; color:var(--pos); }
+  .ji-under { margin-top:4px; font-size:12.5px; color:var(--st-due-ink); font-weight:600; }
+  .ji-under .muted { font-weight:400; }
+  .ji-pats { display:flex; flex-direction:column; gap:6px; }
+  .ji-pat { display:flex; gap:10px; align-items:flex-start; padding:8px 10px; border-radius:8px; border:1px solid var(--border); background:var(--surface); }
+  .ji-pat.many { border-color:var(--st-due); background:var(--st-due-soft); }
+  .ji-pat-n { flex:0 0 auto; min-width:4.2em; font-weight:800; font-size:13px; color:var(--st-due-ink); }
+  .ji-pat-t { flex:1 1 auto; min-width:0; font-size:14px; overflow-wrap:anywhere; }
+  .ji-pat-t small { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
+  .note-row.note-issue { border-left-color:var(--st-due); }
+  @media (max-width:720px) {
+    .ji-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .ji-acts .btn { min-height:44px; }
+  }
+  html[data-night] .ji-btn.on { background:var(--brand-2); border-color:var(--brand-2); color:#0c0a0e; }
+  html[data-night] .ji-btn.on small { color:rgba(12,10,14,.75); }

@@ -338,7 +338,12 @@
       // which piece of work it is for (an id from `work`; '' the whole job).
       // (Rentals have their own section: `rentals`.)
       // Each with whether it is delivered or picked up (waysOf).
+      // Its Supplies item and kind of material go too (no price in either:
+      // Supplies' items are the crew's to read), so an issue the crew lead
+      // notes about it (jobissues.js) says which item and kind it was.
       materials: mats.map((m, i) => ({ name: noMoney(m.name).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
+                     supplyId: m.supplyId ? safe(m.supplyId) : null,
+                     kind: m.plant ? 'plant' : String((m.supplyId && items[m.supplyId] && items[m.supplyId].category) || m.category || '').slice(0, 40),
                      plant: !!m.plant, tree: m.plant && (m.tree === 'single' || m.tree === 'multi') ? m.tree : '',
                      work: safe(workFor(m, lines, items)),
                      how: ways.length ? wayWords(ways[i])
@@ -605,11 +610,14 @@
     return out + esc(s.slice(last));
   }
 
-  function matTable(list) {
+  // extra(m): the Job tab's own words under a material (jobissues.js -- what
+  // the crew said about it), never on the crew's page.
+  function matTable(list, extra) {
     return '<table class="cj-table"><tbody>' + list.map(m =>
       '<tr><td>' + (m.plant ? '🌱 ' : '') + esc(m.name) +
         (m.tree ? ' <span class="muted">(' + (m.tree === 'single' ? 'single-trunk tree' : 'multi-trunk or evergreen tree') + ')</span>' : '') +
         (m.how ? ' <span class="muted">(' + esc(m.how) + ')</span>' : '') +
+        (extra ? extra(m) : '') +
       '</td><td class="cj-q">' + esc(fmtQty(m.qty, m.unit)) + '</td></tr>').join('') + '</tbody></table>';
   }
   // Points to do, one a line, as a list -- Jonah (22 Oct 2026): "simple
@@ -650,7 +658,7 @@
   // own lines under a piece of work, for Jonah), title (the work's heading,
   // as the Job tab says it), ticks: { job, preview } (each piece of work's
   // ✓ Done, workdone.js -- under its heading, and how far the job is over
-  // the lot) }.
+  // the lot), matExtra(m) (the Job tab's own words under a material) }.
   function workHtml(j, sec, opts) {
     opts = opts || {};
     const work = j.work || [], mats = j.materials || [];
@@ -675,7 +683,7 @@
         (W && w.id ? W.lineHtml(opts.ticks.job, w, { preview: !!opts.ticks.preview }) : '') +
         (w.crewNote ? '<div class="cj-crewnote"><div class="cj-crewnote-h">📋 On this job</div>' +
           pointsHtml(w.crewNote, false) + '</div>' : '') +
-        (mine.length ? '<div class="cj-sub">Materials for this</div>' + matTable(mine) : '') +
+        (mine.length ? '<div class="cj-sub">Materials for this</div>' + matTable(mine, opts.matExtra) : '') +
         (how ? (again ? '<div class="cj-how cj-how-again">👷 How we do it — ' + esc(how.name) + ': as above</div>'
           : '<details class="cj-how"' + foldAttr(k + '|how', true) + '><summary>👷 How we do it — ' + esc(how.name) + '</summary>' +
               pointsHtml(how.text, true) + '</details>') : '') +
@@ -692,7 +700,7 @@
       (j.brush > 0 ? '<div class="cj-haul">🌿 About <b class="cj-m">' + esc(fmtNum(j.brush)) + ' cu yd</b> of brush — its own dumpster, no soil or rock in it</div>' : '');
     return sec('🎨 Paint on the ground', paintHtml()) +
       sec(opts.title || '🛠 The work', (W && lines ? W.sumHtml(opts.ticks.job, W.linesOfCopy(j)) : '') + lines + (lines ? haul : '')) +
-      sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest) : '') +
+      sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest, opts.matExtra) : '') +
       (lines ? '' : sec('🚛 Haul away', haul));
   }
 
@@ -843,14 +851,15 @@
       (!preview && s && !s.leaving ? '<small>On the clock at ' + esc(s.where || 'another job') + ' — this moves you here</small>' : '') +
     '</div>';
   }
-  // The bar along the foot: a photo, a note, the clock -- always in reach
-  // however far down the page they have read.
+  // The bar along the foot: a photo, a note, a job issue, the clock --
+  // always in reach however far down the page they have read.
   function barHtml(id, j, preview) {
     const s = myShift();
     const on = !preview && onThisJob(s, id);
     const off = preview ? ' disabled' : '';
     return '<button class="cj-bar-btn" onclick="cjPhoto()"' + off + '>📷<span>Photo</span></button>' +
       '<button class="cj-bar-btn" onclick="cjNote(\'' + safe(id) + '\')"' + off + '>📝<span>Note</span></button>' +
+      (window.YDJobIssues ? '<button class="cj-bar-btn" onclick="cjIssue(\'' + safe(id) + '\')"' + off + '>⚠️<span>Issue</span></button>' : '') +
       (on ? '<button class="cj-bar-btn cj-bar-on" onclick="cjToClock()">✅<span>On the clock</span></button>'
         : '<button class="cj-bar-btn cj-bar-in" onclick="cjClockIn(\'' + safe(id) + '\')"' + off + '>⏱<span>' +
             (!preview && s && !s.leaving ? 'Switch here' : 'Clock in') + '</span></button>');
@@ -909,6 +918,9 @@
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '') +
       sec('🗒 Notes', j.notes ? '<div class="cj-text">' + marked(j.notes) + '</div>' : '') +
+      // Too much rock, no dump trailer, took a day longer -- noted for Jonah
+      // and the next bid (jobissues.js), with what they noted here before.
+      '<div class="cj-sec cj-issues" id="cjIssues" data-job="' + safe(id) + '"></div>' +
       // A paper receipt for this job: it goes on the job by itself
       // (receipts.js rcPhotoForJob) -- no asking which job.
       (preview ? '' : '<div class="cj-receipt"><button class="btn cj-go-btn" onclick="rcPhotoForJob(\'' + safe(id) + '\')">' +
@@ -946,6 +958,7 @@
     const bar = el('cjBar');
     if (bar) bar.innerHTML = barHtml(id, j, preview);
     if (window.YDJobPhotos) YDJobPhotos.mount(el('cjPhotos'), id);
+    if (window.YDJobIssues) YDJobIssues.mount(el('cjIssues'), id, j, preview);
     // What the signed PDF says about the job: the crew have no job form.
     if (window.YDSignatures && el('cjSigs') && j) {
       YDSignatures.mount(el('cjSigs'), id, {
@@ -1021,6 +1034,11 @@
   window.cjNote = function (id) {
     const j = jobs[id];
     if (window.openNoteForJonah) openNoteForJonah(id, (j && j.name) || '');
+  };
+  // A job issue, from the job's own materials and pieces of work.
+  window.cjIssue = function (id) {
+    const j = jobs[id];
+    if (j && window.YDJobIssues) YDJobIssues.open(id, j.name || '', j);
   };
   // The photos are at the foot of the page, under Before / During / After:
   // brought into view and lit up, so the right button is the next tap.

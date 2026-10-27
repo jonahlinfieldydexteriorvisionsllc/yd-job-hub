@@ -254,8 +254,12 @@ def crew_notes(db, people=None, now=None):
         except AlreadyExists:
             continue
         who = (dg._name(people.get(n.get("uid"))) if people.get(n.get("uid")) else str(n.get("by") or "Someone")).split()[0]
-        head = "📝 %s%s" % (who, (" · " + str(n.get("jobName"))[:50]) if n.get("jobName") else "")
-        for uid in owners:
+        # A job issue (jobissues.js) is a note of its own kind: its own mark.
+        head = "%s %s%s" % ("⚠️" if n.get("kind") == "issue" else "📝", who,
+                            (" · " + str(n.get("jobName"))[:50]) if n.get("jobName") else "")
+        # One the owner wrote himself (a job issue he was told on the
+        # phone) is his already: stamped, never buzzed back at him.
+        for uid in [u for u in owners if u != n.get("uid")]:
             try:
                 out.append({"uid": uid, "note": s.id, "phones": dg.send_push(
                     uid, {"push": {"title": head, "body": str(n.get("text") or "")[:180]}},

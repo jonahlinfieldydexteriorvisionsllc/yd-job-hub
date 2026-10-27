@@ -707,6 +707,8 @@
     const ticks = wdWanted() ? { job: currentJobId } : null;
     return '<div class="est-words">' +
       C.workPageHtml(parts, { key: 'job:' + (currentJobId || ''), extra: mine ? howTodoHtml : null, ticks: ticks,
+        // Under each material, what the crew lead said about it (jobissues.js).
+        matExtra: window.YDJobIssues ? (m => YDJobIssues.matHtml(currentJobId, m)) : null,
         title: '🛠 The work <span class="est-words-from">— as the crew read it; what the customer was told (' + from + ') under each line</span>',
         sec: (title, body) => body ? '<div class="est-words-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '' }) +
       crewBtnHtml() +
@@ -1421,6 +1423,9 @@
       (m.supplyId && num(m.qty) === null && m.qbText
         ? '<div class="est-match"><span class="muted">QuickBooks: ' + esc(m.qbText) + ' — put in how many</span></div>' : '') +
       '<div class="est-source" id="estMS_' + id + '">' + sourceHtml(m.id) + '</div>' +
+      // What the crew lead said about it on this job -- too much, ran short
+      // (jobissues.js). A bid has none: nothing has been worked yet.
+      (window.YDJobIssues ? YDJobIssues.matHtml(currentJobId, m) : '') +
     '</div>';
   }
   // A line that reads as work (readsAsWork) says so in place of "Which
@@ -5366,6 +5371,12 @@
   }
   document.addEventListener('yd-supplies', onCatalog);
   document.addEventListener('yd-pricing', onCatalog);
+  // A job issue on the open job came or was handled: it shows under its
+  // material (jobissues.js tells only when the open job's changed).
+  document.addEventListener('yd-job-issues', () => {
+    if (!el('estimateWrap') || !P() || snowNow()) return;
+    if (jobShown() && !typingHere()) render(); else stale = true;
+  });
   // The Job tab opened (app.js switchTab sets its class): drawn now if
   // anything changed while it was hidden -- and on a phone, the boxes drawn
   // while it was hidden are sized to what is in them now they can be measured.

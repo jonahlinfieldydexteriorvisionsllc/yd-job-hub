@@ -4172,6 +4172,7 @@ function jobOnScreen() {
   if (window.YDJobPhotos) window.YDJobPhotos.jobShown(currentJobId);
   if (window.YDSignatures) window.YDSignatures.jobShown(currentJobId);
   if (window.YDEndOfDay) window.YDEndOfDay.jobShown(currentJobId);
+  if (window.YDJobIssues) window.YDJobIssues.jobShown(currentJobId);
 }
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);

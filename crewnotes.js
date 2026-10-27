@@ -13,6 +13,10 @@
 // stamps notifiedAt so nothing is told twice. The owner reads them under
 // 📝 Notes from the crew (⋯ menu, More, and a notification opens it) and
 // marks them read; a crew member sees the ones they sent.
+//
+// A JOB ISSUE (jobissues.js) is a note of its own kind -- kind 'issue' and
+// an `issue` record beside the usual fields -- so it is told the same way
+// and needs no rule of its own. Its readAt means Jonah has handled it.
 
 (function () {
   'use strict';
@@ -123,14 +127,15 @@
   };
   // A note to Jonah, from the window above or straight from the box at the
   // top of Home (home.js homeNoteJonah). True when it is on its way.
-  function send(text, jobId, jobName) {
+  // `more`: what a job issue carries beside the note ({kind, issue}).
+  function send(text, jobId, jobName, more) {
     const u = me();
     text = String(text || '').trim().slice(0, MAX_LEN);
     if (!u || !window.YDDb || !text) return false;
     const job = jobId ? { name: jobName } : null;
     const id = newId();
-    const rec = { uid: u.uid, by: myName(), text: text, jobId: jobId || null, jobName: job ? (job.name || null) : null,
-                  at: nowIso(), readAt: null, notifiedAt: null };
+    const rec = Object.assign({ uid: u.uid, by: myName(), text: text, jobId: jobId || null, jobName: job ? (job.name || null) : null,
+                  at: nowIso(), readAt: null, notifiedAt: null }, more || {});
     notes[id] = Object.assign({ id: id }, rec);
     // Never awaited: with no signal the write waits on the phone and goes
     // when it can (a write only settles when the server has it).
@@ -138,7 +143,8 @@
       if (e && e.code === 'permission-denied') showToast('Not sent — not allowed');
       else console.warn('[notes] not yet on the server:', (e && e.code) || e);
     });
-    showToast(navigator.onLine === false ? 'Saved — it goes to Jonah when you have signal' : 'Sent to Jonah');
+    // (Jonah himself only ever writes a job issue -- kept on the job.)
+    showToast(isOwner() ? 'Saved on the job' : navigator.onLine === false ? 'Saved — it goes to Jonah when you have signal' : 'Sent to Jonah');
     render();
     return true;
   }
@@ -151,6 +157,7 @@
   // ----------------------------------------------------- the owner's list
 
   const unread = () => Object.values(notes).filter(n => !n.readAt);
+  const isIssue = n => !!n && n.kind === 'issue';
   window.openCrewNotes = function () {
     modal('notesListModal', isOwner() ? '📝 Notes from the crew' : '📝 Your notes to Jonah');
     render();
@@ -168,22 +175,25 @@
     if (!m || !m.classList.contains('active')) return;
     const body = m.querySelector('.modal-body');
     const list = Object.values(notes).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    // A job issue says "handled" where a note says "read" -- the one word
+    // for it everywhere it is shown (jobissues.js says the same).
     body.innerHTML = (list.length ? list.slice(0, 100).map(n =>
-      '<div class="note-row' + (n.readAt ? ' read' : '') + '">' +
-        '<div class="note-head"><b>' + esc(n.by || 'Someone') + '</b>' +
+      '<div class="note-row' + (n.readAt ? ' read' : '') + (isIssue(n) ? ' note-issue' : '') + '">' +
+        '<div class="note-head">' + (isIssue(n) ? '⚠️ ' : '') + '<b>' + esc(n.by || 'Someone') + '</b>' +
           (n.jobName ? ' · ' + esc(n.jobName) : '') +
           '<span class="muted"> · ' + esc(when(n.at)) + '</span></div>' +
         '<div class="note-text">' + esc(n.text || '') + '</div>' +
         (isOwner() ? '<div class="note-acts">' +
-          (n.readAt ? '<button class="link-btn" onclick="markCrewNote(\'' + safe(n.id) + '\', false)">Mark unread</button>'
-            : '<button class="link-btn" onclick="markCrewNote(\'' + safe(n.id) + '\', true)">Mark read</button>') +
+          (n.readAt ? '<button class="link-btn" onclick="markCrewNote(\'' + safe(n.id) + '\', false)">' + (isIssue(n) ? 'Not handled after all' : 'Mark unread') + '</button>'
+            : '<button class="link-btn" onclick="markCrewNote(\'' + safe(n.id) + '\', true)">' + (isIssue(n) ? '✓ Mark handled' : 'Mark read') + '</button>') +
           (n.jobId && typeof loadJob === 'function' ? '<button class="link-btn" onclick="openNoteJob(\'' + safe(n.jobId) + '\')">Open the job</button>' : '') +
         '</div>'
         // Whoever sent it: whether Jonah has seen it yet, so a note about
         // running short is not sent twice or wondered about all morning.
-        : '<div class="note-acts muted">' + (n.readAt ? '✓ Jonah has seen it' : 'Not seen yet') + '</div>') +
+        : '<div class="note-acts muted">' + (isIssue(n) ? (n.readAt ? '✓ Jonah has handled it' : 'Not handled yet')
+            : n.readAt ? '✓ Jonah has seen it' : 'Not seen yet') + '</div>') +
       '</div>').join('') : '<p class="empty-msg">' + (isOwner() ? 'No notes from the crew yet.' : 'No notes sent yet.') + '</p>') +
-      (isOwner() && unread().length > 1 ? '<div class="field-actions"><button class="btn btn-sm" onclick="markAllCrewNotes()">Mark all read</button></div>' : '') +
+      (isOwner() && unread().filter(n => !isIssue(n)).length > 1 ? '<div class="field-actions"><button class="btn btn-sm" onclick="markAllCrewNotes()">Mark all read</button></div>' : '') +
       (!isOwner() ? '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="openNoteForJonah()">+ New note</button></div>' : '');
   }
   function when(iso) {
@@ -199,7 +209,8 @@
     Promise.resolve(window.YDDb.put('crewNotes', id, { readAt: n.readAt })).catch(() => {});
     render();
   };
-  window.markAllCrewNotes = function () { unread().forEach(n => window.markCrewNote(n.id, true)); };
+  // Notes only: a job issue stays until it is handled, one by one.
+  window.markAllCrewNotes = function () { unread().filter(n => !isIssue(n)).forEach(n => window.markCrewNote(n.id, true)); };
   window.openNoteJob = async function (jobId) {
     const m = el('notesListModal'); if (m) m.classList.remove('active');
     if (!(await ydLeaveUnsavedJob())) return;
@@ -209,12 +220,16 @@
 
   // ---------------------------------------------------------------- wiring
 
-  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; notes = {}; }
+  // Whether the list has come once (jobissues.js says "none yet" only
+  // then, not while it is still on its way).
+  let loaded = false;
+  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; notes = {}; loaded = false; }
   function start(a) {
     stop();
     if (!window.YDDb || !a.user || a.mode !== 'cloud') return;
     const take = changes => {
       changes.forEach(c => { if (c.type === 'removed') delete notes[c.id]; else notes[c.id] = Object.assign({ id: c.id }, c.data); });
+      loaded = true;
       render();
     };
     // The owner reads them all; anyone else only their own (the rules
@@ -239,5 +254,13 @@
   window.YDCrewNotes = { send: text => send(text, '', null), unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name),
     // The owner's unread notes, newest first (Home).
     unreadList: () => unread().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
-      .map(n => ({ id: n.id, by: n.by || 'Someone', text: n.text || '', jobId: n.jobId || '', jobName: n.jobName || '', at: n.at || '' })) };
+      .map(n => ({ id: n.id, by: n.by || 'Someone', text: n.text || '', jobId: n.jobId || '', jobName: n.jobName || '', at: n.at || '',
+                   kind: n.kind || '' })),
+    // Job issues (jobissues.js): one sent from here, so it is told like any
+    // note; every issue this device can read (the owner's all, anyone
+    // else's their own), as copies; and handled or not (readAt).
+    sendIssue: (text, jobId, jobName, issue) => !!jobId && send(text, jobId, jobName, { kind: 'issue', issue: issue }),
+    issues: () => Object.values(notes).filter(isIssue).map(n => JSON.parse(JSON.stringify(n))),
+    handled: (id, on) => window.markCrewNote(id, on),
+    loaded: () => loaded };
 })();
