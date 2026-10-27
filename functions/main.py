@@ -740,6 +740,33 @@ def _receipts(request, path, headers):
         if usage is not None:
             _record_spend(day, "receiptphoto", usage, receipts.MODEL)
         return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+    elif path == "/receipts/read-again":
+        # "📖 Read it again" on a receipt still to sort that was read wrong
+        # (receipts.read_again): one Claude read, inside the day's limits.
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            uid = _caller(request, "jobs", "change")
+            day = _check_and_count_usage(uid)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        except RuntimeError as e:
+            return (json.dumps({"error": str(e)}), 429, json_headers)
+        rid = str((request.get_json(silent=True) or {}).get("id") or "").strip()
+        if not rid:
+            return (json.dumps({"error": "Which receipt?"}), 400, json_headers)
+        try:
+            result, usage = receipts.read_again(_claude(), _db, rid)
+        except receipts.NeedsPermission:
+            return (json.dumps({"error": "Reading email is not switched on."}), 403, json_headers)
+        except anthropic.RateLimitError:
+            return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("receipt read-again failed:", e)
+            return (json.dumps({"error": "It could not be read again. Try once more."}), 502, json_headers)
+        if usage is not None:
+            _record_spend(day, "receipts", usage, receipts.MODEL)
+        return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     elif path == "/receipts/qb-send":
         # A receipt photo sent to QuickBooks again (receipts.forward_to_qb) --
         # one whose send failed, or sent before the address was set.

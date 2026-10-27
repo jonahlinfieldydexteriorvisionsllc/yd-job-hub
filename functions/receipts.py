@@ -161,6 +161,44 @@ KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "f
 # Receipts tab, and never sent to QuickBooks as an expense (_not_for_qb).
 LOAN_KIND = "loan_payment"
 
+# Jonah, 26 Oct 2026: "most oreilly receipts are for vehicle parts so those
+# would go under vehicle expenses -- every air filter, oil filter, oil, all
+# that goes under equipment maintenance costs". Plain words, not Claude
+# (kind_of): an auto-parts store's receipt is the vehicles'; one that is only
+# filters, oil and the like -- from any store -- is upkeep (Equipment &
+# repairs). Both go to 🚚 Vehicle on the Receipts tab (receipts.js
+# DEST_OF_KIND); QuickBooks files them under Vehicle Expenses > Repairs &
+# Maintenance.
+AUTO_PARTS = re.compile(r"\b(o ?reilly|autozone|auto zone|napa auto|advance auto|carquest|carparts|rockauto)\b")
+UPKEEP = re.compile(r"\b(oil|oils|\d+w ?\d+|filter element|(air|oil|fuel|cabin|hydraulic|transmission|engine) filters?|"
+                    r"grease|lube|lubricant|coolant|antifreeze|anti freeze|def|diesel exhaust fluid|"
+                    r"(hydraulic|transmission|power steering|brake) fluid|atf|spark plugs?)\b")
+# Oil and filters that are not a machine's upkeep: a deck's finish, a
+# kitchen's, the house's furnace, the landscaping filter fabric -- and the
+# parts and tools that only carry the word (an oil pan, a filter wrench).
+NOT_UPKEEP = re.compile(r"\b(linseed|teak|deck|stain|olive|cooking|vegetable|canola|essential|furnace|hvac|"
+                        r"pool|water|fridge|refrigerator|vacuum|fabric|sock|silt|cloth|"
+                        r"pan|pump|gasket|seal|sensor|switch|cooler|housing|hose|wrench|cap)\b")
+# Lines that are not goods (shipping, a core charge, the gap to the total).
+NOT_GOODS = re.compile(r"\b(shipping|delivery|freight|handling|fee|fees|surcharge|core|deposit|tax|discount|"
+                       r"not itemised)\b")
+LEFT_AS_READ = ("loan_payment", "subcontractor", "insurance", "office_and_software",
+                "utilities_and_phone", "fuel")
+
+
+def kind_of(got, lines):
+    """What the purchase was: Claude's word for it, unless his rule above
+    says otherwise."""
+    kind = got.get("kind") if got.get("kind") in KINDS else "other"
+    if kind in LEFT_AS_READ or got.get("whose") == "personal" or got.get("doc_type") == "person_payment":
+        return kind
+    goods = [_norm(l.get("name")) for l in lines if (l.get("cents") or 0) > 0 and not NOT_GOODS.search(_norm(l.get("name")))]
+    if goods and all(UPKEEP.search(g) and not NOT_UPKEEP.search(g) for g in goods):
+        return "equipment_and_repairs"
+    if AUTO_PARTS.search(_norm(got.get("vendor"))):
+        return "vehicle"
+    return kind
+
 # ---------------------------------------------------------------- what Claude is told
 
 TRIAGE_SYSTEM = """You sort incoming email for YD Exterior Visions LLC, a landscaping, \
@@ -202,6 +240,10 @@ dollars (quantity times unit price), not the unit price. qty is 0 when not shown
 printed: ton, yd, bag, ea, pallet, sq ft, gal.
 - name: what the item is, as a person would say it, with the size or colour if printed \
 ("Holland paver 6x9 charcoal", "Washed 3/4 stone"). Leave out SKU noise; item_number holds it.
+- One thing sold as a set or kit of separately priced pieces (the store marks the lines as one set: \
+"Included in SET-...", "part of kit"): keep each piece as its own line with its own price, name each \
+as a piece of that one set ("Tailgate handle set, piece 1 of 2"), and count it as ONE thing bought in \
+the summary -- never "two handles".
 - unit_price: the price of one unit as printed, in dollars; 0 when not shown.
 - tax: the sales tax in dollars, 0 if none is shown. total: what was charged in all.
 - fulfilment: "delivery" or "pickup" when the email says which, else "". delivery_date: the \
@@ -704,7 +746,7 @@ def _save(db, m, got, jobs, extra=None):
         "date": got.get("date") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("date") or "") else
         datetime.datetime.fromtimestamp(m["internalDate"] / 1000, dg.TZ).strftime("%Y-%m-%d"),
         "docType": got.get("doc_type") or "other",
-        "kind": got.get("kind") if got.get("kind") in KINDS else "other",
+        "kind": kind_of(got, lines),
         "whose": got.get("whose") or "unsure",
         "paid": bool(got.get("paid")),
         "lines": lines, "taxCents": tax, "totalCents": total,
@@ -751,6 +793,61 @@ def _save(db, m, got, jobs, extra=None):
         "createdAt": dg._now().isoformat(), "model": MODEL,
     }, **(extra or {}))))
     return rid, "new"
+
+
+# A notice that an order shipped or arrived: it carries no prices, so it is
+# never the email a receipt is read again from.
+SHIP_SUBJECT = re.compile(r"\b(shipped|delivered|on (its|the) way|out for delivery|tracking|shipment|ready for pickup)\b",
+                          re.I)
+
+
+def read_again(client, db, rid):
+    """A receipt read wrong, read once more by today's rules ("📖 Read it
+    again" on the Receipts tab; Jonah, 26 Oct 2026: a tailgate handle set of
+    two priced pieces was read as "two tailgate handles"). Only while
+    nothing on it is sorted -- a sorted one carries his choices, which are
+    put back to sort first (⋯ → Undo). Read from its first email that is
+    not a shipping notice: the order or the bill is the one with the prices.
+    What the receipt says is replaced as a later, fuller email would replace
+    it (_save); which store, whose, paid and the order number stay.
+    Returns ({ok, summary, lines} or {error}, usage or None)."""
+    ref = db.collection("receipts").document(rid)
+    snap = ref.get()
+    if not snap.exists:
+        return {"error": "That receipt is gone."}, None
+    r = snap.to_dict() or {}
+    if (r.get("splits") or []) or stages.receipt_status(r) != "tosort":
+        return {"error": "It is sorted already — take it back off first (⋯ → Undo), then read it again."}, None
+    mails = sorted((x for x in (r.get("mail") or []) if x.get("id")), key=lambda x: x.get("at") or 0)
+    if not mails:
+        return {"error": "This one came from a photo, not an email — there is nothing to read again."}, None
+    pick = next((x for x in mails if not SHIP_SUBJECT.search(x.get("subject") or "")), mails[0])
+    m = _fetch(pick["id"])
+    st = db.collection("settings").document("receipts").get()
+    got, used, err = read_receipt(client, m, ((st.to_dict() or {}) if st.exists else {}).get("bankName") or "")
+    usage = types_usage(used)
+    if err or not got:
+        return {"error": "It could not be read again (%s) — try once more." % (err or "no answer")}, usage
+    if got.get("is_purchase") is False:
+        return {"error": "This time it read as not a purchase — left as it was."}, usage
+    lines, tax, total = lines_from(got)
+    patch = {
+        "vendor": (got.get("vendor") or "").strip()[:120] or r.get("vendor") or "",
+        "docType": got.get("doc_type") or r.get("docType") or "other",
+        "kind": kind_of(got, lines),
+        "lines": lines, "taxCents": tax, "totalCents": total,
+        "summary": (got.get("summary") or "").strip()[:200],
+        "readAgainAt": dg._now().isoformat(), "updatedAt": dg._now().isoformat(), "model": MODEL,
+    }
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("date") or ""):
+        patch["date"] = got["date"]
+    # Sorted (or deleted) by someone while Claude was reading: theirs stands.
+    now = ref.get()
+    have = (now.to_dict() or {}) if now.exists else {}
+    if not now.exists or (have.get("splits") or []) or stages.receipt_status(have) != "tosort":
+        return {"error": "It was sorted while it was being read — nothing changed."}, usage
+    ref.update(patch)
+    return {"ok": True, "summary": patch["summary"], "lines": len(lines), "totalCents": total}, usage
 
 
 def _b36(n):

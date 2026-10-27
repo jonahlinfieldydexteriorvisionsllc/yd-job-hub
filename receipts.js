@@ -1005,9 +1005,29 @@
       (r.splits || []).forEach(s => items.push('<button type="button" ' +
         'onclick="rcMenuClose(); rcUndo(\'' + rid + '\',\'' + safeId(s.id) + '\')">↩ Undo — take it off ' +
         esc(splitPlace(s)) + '</button>'));
+      // Read wrong (Jonah, 26 Oct 2026: a tailgate handle set read as "two
+      // handles"): read its email once more by today's rules. Only while
+      // nothing on it is sorted -- functions/receipts.py read_again.
+      if (!(r.splits || []).length && (r.mail || []).length && stageOf(r).id === 'tosort') {
+        items.push('<button type="button" onclick="rcMenuClose(); rcReadAgain(\'' + rid + '\')">📖 Read it again</button>');
+      }
     }
     return items;
   }
+  let readingAgain = '';      // the receipt being read again, one at a time
+  window.rcReadAgain = async function (rid) {
+    if (!sorts() || !window.YDClaude || readingAgain) return;
+    readingAgain = rid;
+    showToast('Reading the email again…', 30000);
+    try {
+      const out = await window.YDClaude.post('/receipts/read-again', { id: rid });
+      showToast('📖 Read again' + (out && out.summary ? ': ' + String(out.summary).slice(0, 120) : ''), 6000);
+    } catch (e) {
+      showToast(String((e && e.message) || e).slice(0, 160), 7000);
+    } finally {
+      readingAgain = '';
+    }
+  };
   // The owner's alone (rules). `small`: a row in All receipts, where it is
   // the bin and nothing more.
   function deleteBtn(rid, small) {
