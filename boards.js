@@ -763,20 +763,8 @@
       'Follow-ups stopped — move the bid along when you know where it stands');
   };
   window.chaseLost = function (jobId) { moveJob(jobId, 'bids', 'lost'); };
-  // The link the thank-you email asks for a review with, once a job is paid
-  // off (followup.py thanks; settings/followUp, the owner's).
-  window.chaseReviewLink = async function () {
-    if (!isOwner() || !window.YDDb) return;
-    const now = (await Promise.resolve(window.YDDb.get('settings', 'followUp')).catch(() => null)) || {};
-    const got = await ydPrompt('Paste the link from Google Business Profile → "Ask for reviews". The thank-you email that ' +
-      'goes into your Drafts when a job is paid off puts it in for the customer.',
-      now.reviewLink || '', { title: 'Google review link', placeholder: 'https://g.page/r/…/review' });
-    if (got == null) return;
-    const link = String(got).trim();
-    if (link && !/^https:\/\/[^\s]+$/.test(link)) { showToast('That isn’t a web link (it starts https://)'); return; }
-    write('settings', 'followUp', { reviewLink: link, updatedAt: nowIso() }, 'the review link');
-    showToast(link ? 'Saved — thank-you emails will carry it' : 'Removed');
-  };
+  // The "Google review link for thank-yous" button above: chaseReviewLink
+  // is in thanks.js, with the rest of the thank-you once a job is paid off.
 
   window.writeFollowUp = async function (jobId) {
     if (!movesJobs() || drafting[jobId]) return;

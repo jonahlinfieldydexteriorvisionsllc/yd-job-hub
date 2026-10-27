@@ -327,7 +327,8 @@ function jobBill(d) {
 // (calls ticked, "keep emailing them"); chaseDrafts {step: {at, sent | byHand
 // | draftId, link, ...}}, chaseHeard {at, subject} (the customer wrote back),
 // chaseLostCard and thanksEmail are the server's (emails sent, the "mark it
-// lost?" card, the thank-you once paid).
+// lost?" card, the thank-you once paid: thanks.js); noThanks is his tick
+// "Don't send a thank-you" on the job.
 // careDecidedAt: when Plants / Turf were settled by themselves as the bid
 // became a job (plantcare.js decide); null once picked by hand.
 // jobLine {key, at, by}: where Jonah put a booked job in line by hand
@@ -336,7 +337,7 @@ const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'car
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
   'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail',
-  'noPost', 'jobLine'];
+  'noPost', 'noThanks', 'jobLine'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old

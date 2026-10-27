@@ -296,8 +296,16 @@ def send_mail(to, subject, body, reply=None):
     if not EMAIL_RE.match(to):
         return {"error": "not one email address"}
     message, subject = _message(to, subject, body, reply)
+    # No permission to send: certainly nothing went, so the caller may try
+    # again later (an error after Gmail is asked is left to raise -- it may
+    # have gone, and a claim on it must stay).
+    try:
+        token = dg._gmail_access_token(dg.GMAIL_SEND)
+    except Exception as e:      # noqa: BLE001
+        print("cards: gmail send not allowed:", e)
+        return {"error": "Gmail sending is not switched on"}
     r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                      headers={"Authorization": "Bearer " + dg._gmail_access_token(dg.GMAIL_SEND)},
+                      headers={"Authorization": "Bearer " + token},
                       json=message, timeout=30)
     if r.status_code >= 300:
         print("cards: send failed", r.status_code, r.text[:300])

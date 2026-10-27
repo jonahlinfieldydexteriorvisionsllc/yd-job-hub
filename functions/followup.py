@@ -3,7 +3,8 @@
 The Bids board lists the bids waiting on an answer; "Write the email" on one
 comes here. Claude writes a short follow-up from the job itself and it is
 saved in the owner's Gmail Drafts -- never sent. He reads it and sends it.
-The follow-up plan's own emails (auto, below) are sent by themselves.
+The follow-up plan's own emails (auto, below) are sent by themselves, and so
+is the thank-you once a job is paid off (the end of this file).
 
 The job is read here from Firestore, not taken from the app: the app only says
 WHICH job. That way the email cannot be steered by whatever a browser sends,
@@ -20,9 +21,11 @@ import re
 
 import requests
 from firebase_admin import firestore
+from google.api_core.exceptions import AlreadyExists
 
 import cards
 import digest as dg
+import stages
 
 # Reading the owner's mail, to find the email a bid went out in (the same
 # permission the receipts reader has: receipts.GMAIL_READ).
@@ -286,9 +289,6 @@ WROTE_DAYS = 45
 # Bids sent before the plan existed start it from here, rather than all at
 # their last step on the first morning.
 PLAN_FROM = datetime.datetime(2026, 10, 22, 5, 0, tzinfo=datetime.timezone.utc)
-# A thank-you is drafted only for jobs paid off from this day on -- not for
-# every job paid this season.
-THANKS_FROM = "2026-10-24"
 
 
 def _when(iso):
@@ -368,59 +368,6 @@ def open_steps(j):
     for s in due:
         latest[lane(s)] = s["id"]
     return [s for s in due if latest[lane(s)] == s["id"] and s["id"] not in done]
-
-
-THANKS_SYSTEM = (
-    "You write a short thank-you email for Jonah Linfield, owner of YD Exterior Visions LLC, a "
-    "landscaping, hardscaping and snow removal company near Madison, Wisconsin. The customer's "
-    "job is finished and paid in full. Thank them, in Jonah's plain, friendly voice -- a working "
-    "contractor, not a salesman. First name if there is one. Mention the work in a few words. "
-    "Then ask, once and lightly, whether they would leave a Google review -- it helps a small "
-    "local business. Three to six short sentences.\n\n"
-    "Rules: never invent a fact, date or promise the job does not give. Jonah's job notes are "
-    "context only: never quote costs or measurements. If a review link is given, put it on its "
-    "own line exactly as given; if none is given, put the line [Your Google review link] where it "
-    "goes, for Jonah to paste. Sign off with 'Jonah' on one line and 'YD Exterior Visions' on the "
-    "next. The subject is short and warm (e.g. 'Thank you from YD Exterior Visions')."
-)
-
-
-def _thanks_prompt(j, link):
-    return "\n".join([
-        "Customer: %s" % ((j.get("customerName") or "").strip() or "(no name)"),
-        "Services: %s" % (", ".join(j.get("serviceTypes") or []) or "(not given)"),
-        "What the crew did: %s" % ((j.get("crewWhat") or "").strip() or "(not given)"),
-        "Google review link: %s" % (link or "(none given)"),
-        "\nJonah's notes on the job (context only):\n%s" % ((j.get("notes") or "").strip()[:2000] or "(none)"),
-    ])
-
-
-def thanks(client, job_id, j, link):
-    """The thank-you and review ask for a job paid off, into Gmail Drafts.
-    Returns (result, usage) like draft()."""
-    to = (j.get("email") or "").strip()
-    if not cards.EMAIL_RE.match(to):
-        return {"error": "no email on the job"}, None
-    resp = client.beta.messages.create(
-        model=MODEL, max_tokens=3000, system=THANKS_SYSTEM,
-        messages=[{"role": "user", "content": _thanks_prompt(j, link)}],
-        thinking={"type": "adaptive"},
-        output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
-        betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-    )
-    text = next((b.text for b in resp.content if b.type == "text"), "")
-    try:
-        got = json.loads(text) if resp.stop_reason != "refusal" else {}
-    except ValueError:
-        got = {}
-    subject, body = (got.get("subject") or "").strip(), (got.get("body") or "").strip()
-    if not subject or not body:
-        return {"error": "Claude's answer was empty"}, resp.usage
-    saved = cards.draft_email(to, subject, body)
-    if saved.get("error"):
-        return {"error": saved["error"]}, resp.usage
-    return {"draftId": saved.get("draftId"), "link": saved.get("link"), "to": to,
-            "subject": saved.get("subject")}, resp.usage
 
 
 def _lost_card(db, job_id, j):
@@ -589,25 +536,30 @@ def _send_step(client, ref, jid, j, s, to, spent):
                 name, s.get("n") or 1, " in the estimate's thread" if got["reply"] else "")}, True
 
 
-def auto(client, deadline=None, spent=None):
+def auto(client, deadline=None, spent=None, claude=True):
     """The hourly part (main.py /cards/run): every bid's email step that is
     due sent (in the morning, SEND_HOURS), the "mark it lost?" card made, and
-    a thank-you drafted for a job paid off. `spent(usage)` records what each
-    Claude call cost. Returns news for the owner's phone (main._tell_owner,
-    kind "followup"). settings/followUp {auto: false} switches it off;
-    {reviewLink} goes in the thank-you."""
+    the thank-you sent for a job paid off (thank-you section below).
+    `spent(usage)` records what each Claude call cost; `claude` False (the
+    day's Claude spending limit reached) leaves the bids' emails, which
+    Claude writes, for later -- the thank-you is plain code and still goes.
+    Returns news for the owner's phone (main._tell_owner, kind "followup").
+    settings/followUp {auto: false} switches it all off."""
     import time
     db = dg._db()
     news = []
     try:
         conf = db.collection("settings").document("followUp").get().to_dict() or {}
+        read = True
     except Exception:           # noqa: BLE001
-        conf = {}
+        conf, read = {}, False
     if conf.get("auto") is False:
         return news
-    link = (conf.get("reviewLink") or "").strip()
     morning = dg._now().astimezone(dg.TZ).hour in SEND_HOURS
     drafted, known, mailed = 0, {}, set()
+    # His settings unread, no thank-you this run: "no review link" would
+    # be a guess.
+    thanks = _ThanksRun(db, conf, morning, known, mailed) if read else None
     for snap in db.collection("jobs").stream():
         if deadline and time.monotonic() > deadline:
             break
@@ -631,7 +583,7 @@ def auto(client, deadline=None, spent=None):
                 # Held because they wrote back: until he says carry on. Held
                 # because their email had no answer: looked at again, so his
                 # reply lets the plan carry on by itself.
-                elif (s["kind"] == "email" and morning and to and to.lower() not in mailed
+                elif (s["kind"] == "email" and claude and morning and to and to.lower() not in mailed
                       and drafted < AUTO_MAX and (not heard(j) or heard(j).get("unanswered"))):
                     item, asked = _send_step(client, ref, jid, j, s, to, spent)
                     drafted += 1 if asked else 0
@@ -639,21 +591,386 @@ def auto(client, deadline=None, spent=None):
                     if item:
                         news.append(item)
             continue
-        # Finished and paid off since THANKS_FROM: the thank-you.
-        if j.get("workStage") != "paid" or j.get("thanksEmail") or drafted >= AUTO_MAX:
-            continue
-        if str(j.get("workStageAt") or "")[:10] < THANKS_FROM or not cards.EMAIL_RE.match((j.get("email") or "").strip()):
-            continue
-        result, usage = thanks(client, jid, j, link)
-        drafted += 1
-        if spent and usage is not None:
-            spent(usage)
-        if result.get("error"):
-            print("followup: thank-you not drafted for", jid, result["error"])
-            continue
-        at = _stamp()
-        ref.update({"thanksEmail": {"at": at, "draftId": result.get("draftId"), "link": result.get("link"),
-                                    "subject": result.get("subject") or ""}, "lastModified": at})
-        news.append({"kind": "followup", "jobId": jid, "title": "🙏 Thank-you drafted",
-                     "body": "%s paid in full — a thank-you with the review ask is in Gmail Drafts." % (name or "A customer")})
-    return news
+        # Finished and paid off: the thank-you.
+        item = thanks.job(ref, jid, j) if thanks else None
+        if item:
+            news.append(item)
+    return news + (thanks.end() if thanks else [])
+
+
+# ---------------------------------------------------------------- the thank-you
+#
+# Jonah (26 Oct 2026): "routine so when a final payment is recieved for an
+# invoice in quickbooks email is sent thanking for choosing us and requesting
+# a review" -- SENT by itself, as he chose for the follow-ups the same day (it
+# was drafted into Gmail Drafts from 24 Oct). A job is thanked once it is:
+#   - finished and paid off in QuickBooks: its invoice owes nothing and the
+#     sweep has moved it to Paid (workStage 'paid', workStageAt when). A job
+#     dragged to Paid by hand, with no QuickBooks invoice, is not "a final
+#     payment received" -- "Send it now" on the job is for that;
+#   - paid on or after the day this went live (settings/followUp.thanksFrom,
+#     written by the first run that finds a job paid off -- the jobs paid
+#     before are never emailed in a batch), and no more than
+#     THANKS_WITHIN_DAYS ago (an email added months later sends nothing out
+#     of the blue);
+#   - not ticked "Don't send a thank-you" on the job (noThanks);
+#   - and his Google review link is saved (settings/followUp.reviewLink).
+#     With none nothing goes: the job says "held" and he is told once to add
+#     it; the morning after he does, they go.
+# To the job's email, else its QuickBooks customer's (_contact, as the
+# follow-ups) -- never his own, the crew's or a test address -- in the
+# morning (SEND_HOURS), one email to a person a run and THANKS_MAX a run,
+# from his Gmail, so an answer comes straight to him. Not when he has asked
+# them for a review himself since the job was finished (that counts as done);
+# if his mailbox can't be read, nothing goes. Plain code writes it -- the same
+# few warm lines each time, no Claude to pay for -- in his words once he
+# changes them (settings/followUp thanksSubject / thanksBody, {name} {work}
+# {link}). settings/followUp.thanksSend false puts it in his Gmail Drafts
+# instead, for him to send.
+#
+# Never twice: before Gmail is asked, reminderLog/thanks_<job> is CREATED (it
+# fails when it is there already) -- two runs, or the morning run and "Send
+# it now" at the same moment, cannot both get past it, and a device saving
+# an old copy of the job over its record cannot bring the email back. Only a
+# send Gmail certainly did not take (refused, or no permission) gives the
+# claim back. The job's thanksEmail is what the app shows: {at, to, subject,
+# sentAt, messageId, threadId, link} sent; {draftId, link} drafted; {byHand,
+# emailedAt} he asked them himself; {unconfirmed} a send whose answer never
+# came back; {held: noLink | noEmail | notCustomer} waiting, and why.
+THANKS_MAX = 4
+THANKS_WITHIN_DAYS = 30
+# A claim younger than this with nothing recorded is a send happening now
+# (the other of the run and the button), not one that died half way.
+CLAIM_FRESH = datetime.timedelta(minutes=10)
+THANKS_SUBJECT = "Thank you from YD Exterior Visions"
+THANKS_BODY = (
+    "Hi {name},\n\n"
+    "Thank you for choosing YD Exterior Visions for your {work}. It was a pleasure working with you, "
+    "and I hope you enjoy it for years to come.\n\n"
+    "If you have a minute, a Google review would mean a lot to a small local business like ours:\n"
+    "{link}\n\n"
+    "And if anything ever comes up, just reply to this email.\n\n"
+    "Thanks again,\n"
+    "Jonah\n"
+    "YD Exterior Visions"
+)
+# Never thanked: the company's own addresses, made-up ones, and a test job.
+NOT_A_CUSTOMER = re.compile(r"(?i)ydexteriorvisions|@example\.(com|org|net)$|\.(test|invalid|example|localhost)$")
+TEST_JOB = re.compile(r"(?i)\btest\b")
+# A customer name that is a business, not a person: "Hi there".
+COMPANY = re.compile(r"(?i)\b(llc|inc|corp|co|company|properties|property|management|mgmt|apartments?|condos?|"
+                     r"hoa|association|church|school|group|partners|holdings|services|realty|homes|builders|"
+                     r"construction|city|village|town|county|club|center|centre)\b|\d")
+# Lines of an estimate that are not the work: no "thank you for your discount".
+NOT_WORK = re.compile(r"(?i)discount|terms|warranty|notice|deposit|\bfee\b|change order")
+
+
+def thanks_done(rec):
+    """Whether a thank-you has gone, been drafted, or been sent by hand.
+    thanks.js done() is the same."""
+    rec = rec or {}
+    return bool(rec.get("sentAt") or rec.get("draftId") or rec.get("byHand") or rec.get("unconfirmed"))
+
+
+def paid_at(j):
+    """When a finished job was paid off in QuickBooks (workStageAt, set by the
+    sweep when it moved it to Paid), or None: not paid there."""
+    if j.get("deletedAt") or j.get("removeWhy") or j.get("workStage") != "paid":
+        return None
+    if stages.stage_of(j) != "paid" or not stages.qb_invoice_of(j):
+        return None
+    return _when(j.get("workStageAt"))
+
+
+def _first_name(j, cust):
+    """Who the email says hi to: the first name on the job or its customer,
+    else the first word of a person's name, else '' (a business: "there")."""
+    # "mary" typed in small letters is still "Mary".
+    cap = lambda s: s[:1].upper() + s[1:] if s.islower() else s
+    first = str(j.get("firstName") or "").strip() or str((cust or {}).get("firstName") or "").strip()
+    if first:
+        return cap(first[:40])
+    name = re.sub(r"\s+", " ", str(j.get("customerName") or "")).strip()
+    if not name or str(j.get("business") or "").strip() or COMPANY.search(name):
+        return ""
+    two = re.match(r"^([A-Za-z][A-Za-z'-]+) (?:&|and) ([A-Za-z][A-Za-z'-]+) [A-Za-z'-]+$", name)
+    if two:
+        return "%s & %s" % (cap(two.group(1)), cap(two.group(2)))
+    words = name.split(" ")
+    return cap(words[0]) if len(words) <= 4 and re.fullmatch(r"[A-Za-z][A-Za-z'-]+", words[0]) else ""
+
+
+def _work_words(j):
+    """The work in a few words, as the app names a job (app.js jobWhat): what
+    was typed for the crew, else the estimate's first line or two of work,
+    else its services -- with Title Case put in a sentence's case."""
+    what = str(j.get("crewWhat") or "").strip()
+    if not what:
+        titles = [re.sub(r"\s*\([^)]*×[^)]*\)\s*$", "", str(w.get("title") or "")).strip()
+                  for w in ((j.get("estimate") or {}).get("work") or []) if isinstance(w, dict)]
+        pick = [t for t in titles if t and not NOT_WORK.search(t)] or \
+            [str(s).strip() for s in (j.get("serviceTypes") or []) if str(s).strip()]
+        if pick:
+            what = pick[0]
+            if len(pick) > 1 and pick[1].lower() != pick[0].lower() and len(what + " & " + pick[1]) <= 40:
+                what += " & " + pick[1]
+    words = [w.lower() if re.fullmatch(r"[A-Z][a-z']+", w) else w for w in what[:60].split()]
+    return " ".join(words) or "project"
+
+
+def thanks_words(j, link, conf, cust=None):
+    """(subject, body) of the thank-you for job `j`: his words when he has
+    written his own (settings/followUp), else THANKS_SUBJECT / THANKS_BODY.
+    {name}, {work} and {link} are filled in; a body without {link} gets the
+    link at the end, as the email is there to ask for the review."""
+    subject = str(conf.get("thanksSubject") or "").strip() or THANKS_SUBJECT
+    body = str(conf.get("thanksBody") or "").strip() or THANKS_BODY
+    if "{link}" not in body:
+        body += "\n\n{link}"
+    fill = {"{name}": _first_name(j, cust) or "there", "{work}": _work_words(j), "{link}": link}
+    for k, v in fill.items():
+        subject, body = subject.replace(k, v if k != "{link}" else ""), body.replace(k, v)
+    return re.sub(r"\s+", " ", subject).strip()[:200] or THANKS_SUBJECT, body
+
+
+def _staff_emails(db):
+    """Every address of the people who work here (users/*), and his own --
+    never sent a thank-you. None when they cannot be read: then nothing goes."""
+    out = {dg.OWNER_EMAIL.lower()}
+    try:
+        for s in db.collection("users").stream():
+            e = str((s.to_dict() or {}).get("email") or "").strip().lower()
+            if e:
+                out.add(e)
+    except Exception as err:        # noqa: BLE001
+        print("followup: the people here not read -- no thank-yous this run:", err)
+        return None
+    return out
+
+
+def _not_customer(to, j, staff):
+    return to.lower() in staff or bool(NOT_A_CUSTOMER.search(to)) or \
+        bool(TEST_JOB.search(str(j.get("customerName") or "")))
+
+
+def _hold(ref, j, why):
+    """The thank-you waits, and why, on the job (the app says so on the job
+    and on Home). Written only when the reason is new, so he is told once:
+    True then."""
+    was = j.get("thanksEmail") or {}
+    if was.get("held") == why:
+        return False
+    at = _stamp()
+    rec = {"held": why, "at": at}
+    ref.update({"thanksEmail": rec, "lastModified": at})
+    j["thanksEmail"] = rec
+    return True
+
+
+def _from_log(ref, j, log):
+    """A thank-you claimed before (reminderLog) that the job does not show --
+    its record was lost (an old copy of the job saved over it, or the write
+    after sending failed) or one is being sent this moment: the job is told
+    what the log knows, and nothing is sent again. A draft that died half way
+    is let go (another draft harms nobody)."""
+    got = log.get()
+    d = (got.to_dict() or {}) if got.exists else {}
+    if thanks_done(j.get("thanksEmail")) or not d:
+        return
+    claimed = _when(d.get("at"))
+    if not d.get("sentAt") and not d.get("draftId"):
+        if claimed and dg._now() - claimed < CLAIM_FRESH:
+            return
+        if d.get("mode") == "draft":
+            log.delete()
+            return
+    at = _stamp()
+    rec = {k: d[k] for k in ("to", "subject", "sentAt", "messageId", "threadId", "link", "draftId", "sentBy") if d.get(k)}
+    rec["at"] = at
+    if not rec.get("sentAt") and not rec.get("draftId"):
+        rec.update(sentAt=d.get("at") or at, unconfirmed=True)
+    ref.update({"thanksEmail": rec, "lastModified": at})
+    j["thanksEmail"] = rec
+
+
+def send_thanks(db, ref, jid, j, to, link, conf, cust=None, by=None):
+    """Claim, then send (or draft) one job's thank-you. Returns (record,
+    None), or (None, why): "already" when it was claimed before."""
+    subject, body = thanks_words(j, link, conf, cust)
+    mode = "draft" if conf.get("thanksSend") is False else "send"
+    log = db.collection("reminderLog").document("thanks_" + jid)
+    try:
+        # The same clock _from_log reads it by.
+        log.create({"job": jid, "at": _iso(dg._now()), "to": to, "mode": mode, "by": by or "auto"})
+    except AlreadyExists:
+        _from_log(ref, j, log)
+        return None, "already"
+    try:
+        got = cards.draft_email(to, subject, body) if mode == "draft" else cards.send_mail(to, subject, body)
+    except Exception as err:        # noqa: BLE001 -- Gmail may have it: the claim stays
+        print("followup: thank-you for", jid, "-- no answer from Gmail:", err)
+        return None, "Gmail did not answer — look in your Sent mail before trying again"
+    if got.get("error"):
+        log.delete()                # certainly not sent: it may be tried again
+        print("followup: thank-you for", jid, "not", mode, "--", got["error"])
+        return None, got["error"]
+    at = _stamp()
+    rec = {"at": at, "to": to, "subject": got.get("subject") or subject}
+    if mode == "draft":
+        rec.update(draftId=got.get("draftId"), link=got.get("link"))
+    else:
+        rec.update(sentAt=at, messageId=got.get("messageId"), threadId=got.get("threadId"),
+                   link="https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, got.get("threadId") or ""))
+    if by:
+        rec["sentBy"] = by
+    rec = {k: v for k, v in rec.items() if v is not None}
+    ref.update({"thanksEmail": rec, "lastModified": at})
+    j["thanksEmail"] = rec
+    try:
+        log.update(dict(rec, done=True))
+    except Exception as err:        # noqa: BLE001 -- the claim alone still stops a second one
+        print("followup: thank-you log for", jid, "not updated:", err)
+    print("followup: thank-you", "drafted" if mode == "draft" else "sent", "for job", jid)
+    return rec, None
+
+
+class _ThanksRun:
+    """The thank-yous of one hourly run (auto, above): each job looked at with
+    job(); end() says what he should be told once."""
+
+    def __init__(self, db, conf, morning, known, mailed):
+        self.db, self.conf, self.morning, self.known, self.mailed = db, conf, morning, known, mailed
+        self.link = str(conf.get("reviewLink") or "").strip()
+        self.start = str(conf.get("thanksFrom") or "")[:10]
+        self.today = dg._now().astimezone(dg.TZ).date()
+        self.staff = False          # not read yet
+        self.done = 0
+        self.want_link = []
+
+    def _start(self):
+        """The first day thank-yous go by themselves: the day the first run
+        found a job paid off, kept in settings/followUp.thanksFrom."""
+        if not self.start:
+            self.start = self.today.isoformat()
+            self.db.collection("settings").document("followUp").set({"thanksFrom": self.start}, merge=True)
+            print("followup: thank-yous go by themselves for jobs paid from", self.start)
+        return self.start
+
+    def job(self, ref, jid, j):
+        """One job: sent, drafted, held, or nothing. News for his phone, or None."""
+        paid = paid_at(j)
+        if not paid or j.get("noThanks") or thanks_done(j.get("thanksEmail")):
+            return None
+        day = paid.astimezone(dg.TZ).date()
+        if (self.today - day).days > THANKS_WITHIN_DAYS or day.isoformat() < self._start():
+            return None
+        name = (j.get("customerName") or "").strip() or "A customer"
+        if not self.link:
+            self.want_link.append(jid)
+            _hold(ref, j, "noLink")
+            return None
+        to = _contact(self.db, ref, j, self.known)
+        if not to:
+            if _hold(ref, j, "noEmail"):
+                return {"kind": "followup", "jobId": jid, "title": "🙏 No email for a thank-you",
+                        "body": "%s paid in full, but there's no email on the job or its QuickBooks customer — "
+                                "add one and the thank-you goes the next morning." % name}
+            return None
+        if self.staff is False:
+            self.staff = _staff_emails(self.db)
+        if self.staff is None:
+            return None
+        if _not_customer(to, j, self.staff):
+            if _hold(ref, j, "notCustomer"):
+                return {"kind": "followup", "jobId": jid, "title": "🙏 No thank-you sent",
+                        "body": "%s paid in full — the email on it (%s) is yours, the crew's or a test address." % (name, to)}
+            return None
+        if not self.morning or to.lower() in self.mailed or self.done >= THANKS_MAX:
+            return None
+        # He asked them for a review himself since the job was finished: that
+        # is the thank-you. His mailbox unreadable: nothing goes.
+        since = min([t for t in (_when(j.get("completedAt")), paid - datetime.timedelta(days=14)) if t])
+        try:
+            mine = _found('in:sent to:%s {"a review" "google review" "review us"}' % to, since)
+        except Exception as err:    # noqa: BLE001
+            print("followup: mailbox not read for", jid, "-- no thank-you sent:", err)
+            return None
+        self.mailed.add(to.lower())
+        if mine:
+            at = _stamp()
+            rec = {"byHand": True, "emailedAt": _iso(mine["at"]), "to": to, "at": at}
+            ref.update({"thanksEmail": rec, "lastModified": at})
+            return None
+        cust = self.known.get(str(j.get("customerId") or "")) or \
+            self.known.get(str((j.get("qbEstimate") or {}).get("customerId") or ""))
+        rec, why = send_thanks(self.db, ref, jid, j, to, self.link, self.conf, cust)
+        if not rec:
+            return None
+        self.done += 1
+        if rec.get("draftId"):
+            return {"kind": "followup", "jobId": jid, "title": "🙏 Thank-you drafted",
+                    "body": "%s paid in full — a thank-you with your review link is in your Gmail Drafts." % name}
+        return {"kind": "followup", "jobId": jid, "title": "🙏 Thank-you sent",
+                "body": "%s paid in full — a thank-you with your review link went to %s." % (name, to)}
+
+    def end(self):
+        """Told once: thank-yous are waiting on the review link. Once there is
+        a link the mark goes, so a link taken off later is told again."""
+        ref = self.db.collection("settings").document("followUp")
+        told = self.conf.get("linkToldAt")
+        if self.want_link and not told:
+            ref.set({"linkToldAt": _stamp()}, merge=True)
+            n = len(self.want_link)
+            return [{"kind": "followup", "jobId": "thanks-link", "title": "🔗 Add your Google review link",
+                     "body": "%d job%s paid off — the thank-you%s wait%s for your review link. Add it (Bids board, or "
+                             "⋯ → All settings → Follow-ups & thank-yous) and %s the next morning." % (
+                                 n, "" if n == 1 else "s", "" if n == 1 else "s", "s" if n == 1 else "",
+                                 "it goes" if n == 1 else "they go")}]
+        if self.link and told:
+            ref.set({"linkToldAt": firestore.DELETE_FIELD}, merge=True)
+        return []
+
+
+def thanks_now(job_id, uid):
+    """"Send it now" on a finished job (the owner, or whoever may change
+    billing; main.py /followup/thanks): the thank-you goes at once -- any
+    hour, whenever it was paid, paid in QuickBooks or not -- but never twice,
+    never with "Don't send a thank-you" ticked, and only with the review link
+    saved. Drafted instead when he has chosen that. {ok, sent | drafted, to,
+    at} or {error}."""
+    db = dg._db()
+    ref = db.collection("jobs").document(job_id)
+    snap = ref.get()
+    if not snap.exists:
+        return {"error": "That job was not found"}
+    j = snap.to_dict() or {}
+    if j.get("deletedAt") or j.get("removeWhy") or stages.status_of(j) != "complete":
+        return {"error": "Only a finished job gets a thank-you"}
+    if j.get("noThanks"):
+        return {"error": "This job is ticked “Don’t send a thank-you” — untick it first"}
+    if thanks_done(j.get("thanksEmail")):
+        return {"error": "This job’s thank-you has gone already"}
+    try:
+        conf = db.collection("settings").document("followUp").get().to_dict() or {}
+    except Exception:           # noqa: BLE001
+        return {"error": "Your settings could not be read — try again"}
+    link = str(conf.get("reviewLink") or "").strip()
+    if not link:
+        return {"error": "Add your Google review link first", "needLink": True}
+    known = {}
+    to = _contact(db, ref, j, known)
+    if not to:
+        return {"error": "There's no email on the job or its QuickBooks customer — add one first"}
+    staff = _staff_emails(db)
+    if staff is None:
+        return {"error": "Could not check the address — try again"}
+    if _not_customer(to, j, staff):
+        return {"error": "%s is your own, the crew’s or a test address" % to}
+    cust = known.get(str(j.get("customerId") or "")) or known.get(str((j.get("qbEstimate") or {}).get("customerId") or ""))
+    rec, why = send_thanks(db, ref, job_id, j, to, link, conf, cust, by=uid)
+    if why == "already":
+        return {"error": "This job’s thank-you has gone already", "record": j.get("thanksEmail")}
+    if why:
+        return {"error": why}
+    return {"ok": True, "sent": bool(rec.get("sentAt")), "drafted": bool(rec.get("draftId")),
+            "to": to, "at": rec["at"], "record": rec}

@@ -575,19 +575,28 @@ def _cards(request, path, headers):
         except Exception as e:                      # noqa: BLE001
             print("quickbooks sweep failed:", e)
         # The follow-up plan (followup.py auto): email steps that are due
-        # drafted, "mark it lost?" cards, thank-yous for jobs paid off. After
-        # QuickBooks (an answer there takes a bid off the plan), inside the
-        # same spending limits as everything Claude does.
+        # sent, "mark it lost?" cards, thank-yous for jobs paid off. After
+        # QuickBooks (an answer there takes a bid off the plan, and a payment
+        # there is what a thank-you waits for). The bids' emails are Claude's
+        # writing, inside the same spending limits as everything Claude does;
+        # the thank-you is plain code and goes whatever the day's spend.
         try:
             import spend
             import followup
             why = spend.over_cap(_db)
             if why:
-                print("followups: not drafted --", why)
-            elif time.monotonic() < deadline:
+                print("followups: no Claude-written emails this run --", why)
+            if time.monotonic() < deadline:
+                client = None
+                if not why:
+                    try:
+                        client = _claude()
+                    except Exception as e:          # noqa: BLE001
+                        print("followups: Claude not reachable --", e)
                 day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-                _tell_owner(followup.auto(_claude(), deadline,
-                                          lambda usage: _record_spend(day, "followup", usage, followup.MODEL)))
+                _tell_owner(followup.auto(client, deadline,
+                                          lambda usage: _record_spend(day, "followup", usage, followup.MODEL),
+                                          claude=client is not None))
         except Exception as e:                      # noqa: BLE001
             print("followups failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
@@ -957,18 +966,29 @@ def _followup(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path not in ("/followup/draft", "/care/draft", "/posts/draft"):
+    if path not in ("/followup/draft", "/care/draft", "/posts/draft", "/followup/thanks"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    # "Send it now" on a finished job: the thank-you goes from the owner's
+    # Gmail to the customer, so it is for whoever may send bills -- and no
+    # Claude is asked (plain code writes it), so nothing is counted.
+    thanks = path == "/followup/thanks"
     try:
-        uid = _caller(request, "jobs", "change")
+        uid = _caller(request, "billing", "change") if thanks else _caller(request, "jobs", "change")
     except PermissionError as e:
         return (json.dumps({"error": str(e)}), 401, json_headers)
     body = request.get_json(silent=True) or {}
     job_id = str(body.get("jobId") or "")
     if not job_id or "/" in job_id:
         return (json.dumps({"error": "which job?"}), 400, json_headers)
+    if thanks:
+        try:
+            result = followup.thanks_now(job_id, uid)
+        except Exception as e:                      # noqa: BLE001
+            print("thank-you send failed:", e)
+            return (json.dumps({"error": "The thank-you could not be sent. Try again."}), 502, json_headers)
+        return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
     try:
         day = _check_and_count_usage(uid)
     except RuntimeError as e:

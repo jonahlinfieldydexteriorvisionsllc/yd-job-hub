@@ -2149,7 +2149,7 @@
     const drawnFolded = !!(wrap && wrap.dataset.folded === '1');
     if (wrap && drawnFolded !== folded()) { render(); return; }
     if (drawnFolded) {
-      box.innerHTML = foldedHtml(q, status) + (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when) + postsHtml(when));
+      box.innerHTML = foldedHtml(q, status) + (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + thanksHtml() + careHtml(when) + postsHtml(when));
       return;
     }
     if (can) askCompany();
@@ -2189,7 +2189,7 @@
           (checking ? 'Checking…' : 'Check for an answer') + '</button>' : '') +
       '</div>' : (q ? '' : '<div class="hint">Sending estimates needs Billing access.</div>')) +
       sentHtml(when) +
-      (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + careHtml(when) + postsHtml(when));
+      (snow ? snowWonHtml(q, can) : invoiceHtml(q, inv, can, when) + thanksHtml() + careHtml(when) + postsHtml(when));
   }
 
   // The estimate was deleted in QuickBooks (quickbooks.py _deleted_record:
@@ -2221,6 +2221,16 @@
         : snowNow() ? 'It was changed in QuickBooks.'
         : 'QuickBooks works out the sales tax from the job’s address, or it was changed in QuickBooks. ' +
           'The payments are each a share of the total, so they still add up.') + '</div>';
+  }
+
+  // The thank-you once the job is paid off (thanks.js; functions/followup.py
+  // sends it): where it stands, "Don't send a thank-you", "Send it now".
+  function thanksHtml() {
+    if (!window.YDThanks || !currentJobId || typeof boardFields === 'undefined') return '';
+    return YDThanks.lineHtml(Object.assign({}, boardFields, {
+      _id: currentJobId, jobStatus: typeof jobStatus !== 'undefined' ? jobStatus : '',
+      email: el('email') ? el('email').value : '', customerName: el('customerName') ? el('customerName').value : '',
+    }), currentJobId);
   }
 
   // ------------------------------------------------------ plant-care email

@@ -577,7 +577,11 @@
         // (quickbooks.py _deleted_record).
         (f === 'qbEstimate' && !s.id && s.deleted && l.id && String(s.deleted.id) === String(l.id)) ||
         // The invoice as QuickBooks has it now: its balance, its change orders.
-        (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || ''));
+        (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || '')) ||
+        // Where the thank-you stands (followup.py): each record the server
+        // writes is newer -- held, then sent -- and an older one pushed back
+        // over "sent" would show it as still to go.
+        (f === 'thanksEmail' && String(s.at || '') > String(l.at || ''));
       if (ahead) { local[f] = s; took = true; }
     });
     if (qbFilledEstimate(local, theirs)) {
