@@ -107,6 +107,8 @@
   .remove-btn:hover { color:var(--neg); background:var(--neg-soft); }
   .dup-btn { background:none; border:none; cursor:pointer; color:var(--muted); font-size:11px; font-weight:700; padding:3px 6px; letter-spacing:.5px; border-radius:4px; }
   .dup-btn:hover { color:var(--brand-2); background:var(--surface-2); }
+  /* The one move a row is most likely waiting for (a bid's Mark sent). */
+  .dup-btn.strong { color:var(--brand-ink); }
 
   /* ---- Context bar (current job) ---- */
   .ctx-bar { display:flex; align-items:center; gap:10px; padding:9px 16px; background:var(--brand); color:#fff; border-radius:8px; margin:16px 0 0; flex-wrap:wrap; box-shadow:0 2px 6px rgba(71,44,100,.22); }

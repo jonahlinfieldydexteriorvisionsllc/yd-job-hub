@@ -1717,7 +1717,7 @@ def invoice_status(body):
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber", "payments",
                 "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked",
-                "deletedAt", "qbChangesIn"]
+                "deletedAt", "qbChangesIn", "customerId", "quoteDate"]
 
 
 def live_jobs(jobs):
@@ -2980,7 +2980,10 @@ def import_accepted(jobs):
 
 
 LOOK_AGAIN = datetime.timedelta(days=1)   # a job typed in by hand is looked for in QuickBooks once a day
+LOOK_AGAIN_BID = datetime.timedelta(minutes=10)   # a bid: on every hourly look, and the Bids list's
 HAND_MAX = 10                             # and so many in one sweep
+BID_EST_BEFORE = datetime.timedelta(days=3)    # a bid's estimate is dated no earlier than this before the bid
+BID_EST_WITHIN = datetime.timedelta(days=60)   # (a bid with no date: an estimate this recent)
 
 
 def _norm_name(s):
@@ -3003,7 +3006,13 @@ def _sold(e):
         (t or {}).get("TxnType") == "Invoice" for t in (e or {}).get("LinkedTxn") or []))
 
 
-def link_hand_jobs(jobs):
+def _is_open_bid(j):
+    """A bid still out (not lost): link_hand_jobs looks for the estimate
+    Jonah made for it in QuickBooks by hand."""
+    return str(j.get("jobStatus") or "") == "quoting" and str(j.get("bidStage") or "") != "lost"
+
+
+def link_hand_jobs(jobs, bids_only=False):
     """Jobs typed in by hand -- booked or under way -- with no QuickBooks
     estimate joined to them (Jonah, 15 Oct 2026: one such job had only its
     price; it was typed in before the import, and its estimate was
@@ -3012,7 +3021,15 @@ def link_hand_jobs(jobs):
     the same name, and of their estimates not already on a job, the one the
     job names by number -- or else the one they said yes to for exactly the
     job's price. Anything less certain is left alone. Joined as an import
-    is (linked), with its invoice; fill_imported then reads it in full."""
+    is (linked), with its invoice; fill_imported then reads it in full.
+
+    Bids too (Jonah, 26 Oct 2026: "check qb for when a bid is sent match it
+    to bid in job hub and mark that job as sent"): a bid typed in here whose
+    estimate he then made in QuickBooks by hand was never joined to it, so
+    the hourly look never saw it emailed and it sat as not sent. A bid is
+    looked for every time (LOOK_AGAIN_BID) -- the hourly sweep and the Bids
+    list (bids_only) -- and joined once it is certain (_link_hand_job);
+    one already emailed moves to Sent as a joined one would."""
     env = _env("QB_ENV", "sandbox")
     if env != "production":
         return 0
@@ -3026,7 +3043,7 @@ def link_hand_jobs(jobs):
               if k in jobs and (_parse_time(v) or now) > now - datetime.timedelta(days=30)}
     used = {str((j.get("qbEstimate") or {}).get("id")) for j in jobs.values()
             if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
-    want = []
+    due = []
     # Finished jobs too (Jonah, 15 Oct 2026: link the finished jobs to their
     # QuickBooks estimates and invoices so their work comes in) -- but only
     # by their estimate number, never by price: a guess on a long-finished
@@ -3034,15 +3051,19 @@ def link_hand_jobs(jobs):
     def finished(j):
         return str(j.get("jobStatus") or "") == "complete" and bool(re.search(r"\d{3,7}", str(j.get("estimateNumber") or "")))
     for jid, j in jobs.items():
+        bid = _is_open_bid(j)
         if (j.get("qbEstimate") or {}).get("id") or j.get("removeWhy") or j.get("deletedAt") \
-                or not (str(j.get("jobStatus") or "") in ("booked", "inprogress", "active") or finished(j)):
+                or not (bid or (not bids_only and (str(j.get("jobStatus") or "") in ("booked", "inprogress", "active")
+                                                   or finished(j)))):
             continue
         t = _parse_time(looked.get(jid))
-        if (t and now - t < LOOK_AGAIN) or not _norm_name(j.get("customerName")):
+        if (t and now - t < (LOOK_AGAIN_BID if bid else LOOK_AGAIN)) \
+                or not (_norm_name(j.get("customerName")) or j.get("customerId")):
             continue
-        want.append(jid)
-        if len(want) >= HAND_MAX:
-            break
+        due.append((t or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc), jid))
+    # The longest unasked first, so bids (asked every look) never keep the
+    # finished jobs waiting for good, nor those the bids.
+    want = [jid for _, jid in sorted(due)[:HAND_MAX]]
     # Each job is marked looked at before it is asked about, and the marks
     # are saved however the run ends: one job QuickBooks always refuses (a
     # name it cannot search for) used to stop the run there and leave the
@@ -3062,10 +3083,56 @@ def link_hand_jobs(jobs):
     return done
 
 
+def _job_customer(db, j):
+    """The QuickBooks customer a job is for: the one it is tied to in
+    Customers (customerId -- its QuickBooks id, or the customer record's
+    qbCustomerId), else the one of exactly the same name, or None. A bid
+    named by a first name only is a customer QuickBooks knows by the whole
+    name: the name alone never found them."""
+    cid = str(j.get("customerId") or "").strip()
+    if cid:
+        qid = ""
+        try:
+            snap = db.collection("customers").document(cid).get()
+            if snap.exists:
+                qid = str((snap.to_dict() or {}).get("qbCustomerId") or "")
+        except Exception as err:                        # noqa: BLE001 -- the id itself, or the name, is tried
+            print("quickbooks link: customer record %s not read: %s" % (cid, err))
+        qid = qid or (cid if cid.isdigit() else "")
+        if qid:
+            cust = _query_one("Customer", "Id = '%s'" % _quote(qid))
+            if cust:
+                return cust
+    name = " ".join(str(j.get("customerName") or "").split())
+    if not name:
+        return None
+    cust = _query_one("Customer", "DisplayName = '%s'" % _quote(name))
+    return cust if cust and _norm_name(cust.get("DisplayName")) == _norm_name(name) else None
+
+
+def _bid_estimate(j, pool, now):
+    """The one estimate in `pool` made for a bid that names none by number:
+    still waiting for an answer, and dated no earlier than a few days before
+    the bid (BID_EST_BEFORE; a bid with no date: within BID_EST_WITHIN) -- an
+    old unanswered estimate of the same customer is other work. More than one
+    (or none) is not certain: left alone."""
+    try:
+        start = datetime.date.fromisoformat(str(j.get("quoteDate") or "")[:10]) - BID_EST_BEFORE
+    except ValueError:
+        start = (now - BID_EST_WITHIN).date()
+    def dated(e):
+        try:
+            return datetime.date.fromisoformat(str(e.get("TxnDate") or "")[:10]) >= start
+        except ValueError:
+            return False
+    pick = [e for e in pool if (e.get("TxnStatus") or "Pending") == "Pending" and dated(e)]
+    return pick[0] if len(pick) == 1 else None
+
+
 def _link_hand_job(db, jid, j, used, finished):
     """link_hand_jobs for one job. Returns 1 when it was joined, else 0."""
-    cust = _query_one("Customer", "DisplayName = '%s'" % _quote(" ".join(str(j["customerName"]).split())))
-    if not cust or _norm_name(cust.get("DisplayName")) != _norm_name(j.get("customerName")):
+    cust = _job_customer(db, j)
+    if not cust:
         return 0
     theirs = _query("Estimate", "CustomerRef = '%s'" % _quote(cust["Id"]))
     # Not one already on a job -- nor a copy of one that is (the same
@@ -3075,7 +3142,16 @@ def _link_hand_job(db, jid, j, used, finished):
             and _lines_sig(x) + [round(_amount(x.get("TotalAmt")), 2)] not in held]
     nums = set(re.findall(r"\d{3,7}", str(j.get("estimateNumber") or "")))
     pick = [e for e in pool if _number(e.get("DocNumber")) in nums]
-    if len(pick) != 1 and not finished(j):
+    bid = _is_open_bid(j)
+    if bid:
+        # A bid: the estimate it names by number -- or, naming none, the
+        # one made for it (_bid_estimate). Never by price: a bid's price is
+        # still moving. One naming a number QuickBooks does not have is left
+        # alone rather than guessed.
+        if len(pick) != 1 and not nums:
+            one = _bid_estimate(j, pool, _now())
+            pick = [one] if one else []
+    elif len(pick) != 1 and not finished(j):
         price = _job_price(j)
         pick = [e for e in pool if _sold(e) and price is not None and abs(_amount(e.get("TotalAmt")) - price) < 0.005]
     if len(pick) != 1:
@@ -3085,6 +3161,11 @@ def _link_hand_job(db, jid, j, used, finished):
     rec = _estimate_record(e, cust["Id"])
     rec["linked"] = True
     patch = {"qbEstimate": rec, "lastModified": stamp}
+    if bid:
+        # Already emailed from QuickBooks: the bid moves to Sent, dated when
+        # it went, as one joined from the start does (_emailed_patch -- the
+        # job has no estimate record yet, so this is the first time).
+        patch.update({k: v for k, v in _emailed_patch(j, e, stamp).items() if k in ("bidStage", "bidStageAt")})
     if not str(j.get("estimateNumber") or "").strip() and e.get("DocNumber"):
         patch["estimateNumber"] = str(e["DocNumber"])
     # Its invoice too, so what is still owed shows on the job.

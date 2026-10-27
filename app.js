@@ -243,9 +243,11 @@ let bidsQbAskedAt = 0;
 function bidsFromQbNow() {
   if (Date.now() - bidsQbAskedAt < BIDS_QB_EVERY_MS || navigator.onLine === false) return;
   if (!window.YDClaude || !window.YDClaude.post || !(typeof ydCan === 'function' && ydCan('billing', 'change'))) return;
+  // A bid with no estimate joined yet counts too: the server looks for the
+  // one Jonah made for it in QuickBooks by hand (quickbooks.py link_hand_jobs).
   const out = loadAllJobs().some(d => {
     const w = !d.deletedAt && bidWhere(d);
-    return w && w.q && (w.q.status || 'Pending') === 'Pending';
+    return w && (w.q ? (w.q.status || 'Pending') === 'Pending' : w.id !== 'lost' && w.id !== 'won');
   });
   if (!out) return;
   bidsQbAskedAt = Date.now();
@@ -1449,6 +1451,29 @@ async function pickStage(id, photosChecked) {
   }
   markDirty();
   updateCtxBar();
+}
+// Jonah (26 Oct 2026): "have mark bid sent button when looking at all
+// bids." A bid he sent some way Job Hub cannot see (from QuickBooks before
+// it was joined, by hand, by text) moves to Sent with one tap from My Jobs
+// -> Bids or its card on the Bids board -- the same move as dragging it
+// there (dated now; the follow-up plan counts from it). Undo puts it back.
+function markBidSent(id) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  if (!id || !window.YDSync) return;
+  const d = loadAllJobs().find(x => x._id === id) || {};
+  const was = { bidStage: d.bidStage || null, bidStageAt: d.bidStageAt || null };
+  if (!window.YDSync.patchJob(id, { bidStage: 'sent', bidStageAt: new Date().toISOString(), jobStatus: 'quoting' })) {
+    showToast('Could not mark that bid sent');
+    return;
+  }
+  const redraw = () => {
+    if (id === currentJobId && typeof showBidBanner === 'function') showBidBanner();
+    if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
+  };
+  redraw();
+  showUndo('Marked sent — it is under Sent now', () => {
+    if (window.YDSync.patchJob(id, was)) redraw();
+  });
 }
 // A lost bid back on the board, in Follow up -- they called back.
 function reopenBid(id) {
@@ -4509,6 +4534,8 @@ function jobRowHtml(j, d, bids, w) {
         (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div>' +
       work + '</div>' +
     '<div class="jl-acts">' +
+    (bids && w && (w.id === 'working' || w.id === 'inQb') && !j.lost && !jobsReadOnly()
+      ? '<button class="dup-btn strong" onclick="markBidSent(\'' + ordId(j.id) + '\')" title="Move it to Sent — you sent it">MARK SENT</button>' : '') +
     (bids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +
     (bids && !jobsReadOnly() ? '<button class="dup-btn" onclick="makeItAJob(\'' + ordId(j.id) + '\')">MAKE IT A JOB</button>' : '') +
     (bids && !j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="markBidLost(\'' + ordId(j.id) + '\')">MARK LOST</button>' : '') +

@@ -1465,7 +1465,12 @@
     if (typeof bidWhere !== 'function' || col === 'won' || col === 'lost') return '';
     const w = bidWhere(j);
     if (!w || (w.id !== 'inQb' && w.id !== 'sent')) return '';
-    return '<div class="bd-card-line">' + bidStandHtml(w) + '</div>';
+    // In QuickBooks but not emailed from there: sent some other way, one
+    // tap moves it on (app.js markBidSent -- the same as dragging it to Sent).
+    const mark = w.id === 'inQb' && movesJobs() && typeof markBidSent === 'function'
+      ? ' <button type="button" class="bd-card-act" draggable="false" onclick="event.stopPropagation(); markBidSent(\'' +
+        safeId(j._id) + '\')">Mark sent</button>' : '';
+    return '<div class="bd-card-line">' + bidStandHtml(w) + mark + '</div>';
   }
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
