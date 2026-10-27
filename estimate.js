@@ -238,13 +238,14 @@
     // when it is not the open one (its town, map point, a material marked
     // picked up, delivery switched off). null before pricing.js is there.
     // lines may carry `hand`: the way set by hand on the order line, which
-    // wins over the estimate's.
+    // wins over the estimate's. A line not joined to Supplies is let in: when
+    // it is delivered, there is no supplier to price that by, and it says so.
     orderDelivery: (lines, saved, city) => {
       if (!P() || !P().deliveries) return null;
       const e = saved === undefined ? est : fromSaved(saved || {});
       const c = ctx(saved === undefined ? undefined : city || '');
-      const shaped = orderShaped(lines, e, c).filter(l => l.supplyId && c.items[l.supplyId] && l.orderQty > 0);
-      return P().deliveries(shaped, e, c);
+      const shaped = orderShaped(lines, e, c).filter(l => l.orderQty > 0);
+      return P().deliveries(shaped, e, c, { order: true });
     },
     // Delivered or picked up, for each line of a job's order list -- the
     // way set by hand on the order line, else on the estimate's line for
@@ -1255,6 +1256,8 @@
   const handWay = m => (m && ['delivered', 'pickup', 'rides'].indexOf(m.delivery) !== -1 ? m.delivery : null);
   function wayPickHtml(l, m, ro) {
     if (!l || !l.way) return '';
+    // A dumpster is always delivered (pricing.js wayOf): nothing to pick.
+    if (l.wayBy === 'dumpster') return '<span class="est-chip est-chip-way">' + WAY_WORDS.delivered + ' <span class="muted">· ' + esc(l.wayWhy) + '</span></span>';
     const id = safeId(l.id), hand = handWay(m), dis = ro ? ' disabled' : '';
     if (!hand && !wayOpen[id]) {
       return '<button type="button" class="est-chip est-chip-way"' + dis + ' onclick="estWayOpen(\'' + id + '\')"' +
@@ -2108,7 +2111,10 @@
     const delCost = d.lines.reduce((s, l) => s + (l.costCents || 0), 0);
     const delAmt = r.asAccepted ? (delCost ? 'cost ' + cents(delCost) : '') : (d.clientCents ? cents(d.clientCents) : '');
     rows.push('<div class="est-arow" data-auto="delivery">' + sw('delivery', 'Delivery') + '<span class="est-adesc">' +
-      (off.delivery ? 'off' : d.lines.length ? d.lines.map(l => esc(l.name) + ' — ' + l.loads + ' load' + (l.loads === 1 ? '' : 's') + (l.pallet ? ' + pallet' : '')).join('; ')
+      (off.delivery ? 'off' : d.lines.length ? d.lines.map(l => esc(l.name) + ' — ' +
+          (l.free ? 'free or in their prices'
+            : l.charge ? 'brings ' + esc((l.items || []).join(', '))
+            : l.loads + ' load' + (l.loads === 1 ? '' : 's') + (l.pallet ? ' + pallet' : ''))).join('; ')
         : 'nothing delivered') +
       (d.deliveryZone && !off.delivery && d.lines.length ? ' · <b>' + esc(d.deliveryZone) + '</b> (from the address)' : '') +
       (r.asAccepted && !off.delivery && d.problems.length ? ' <span class="bad">⚠ ' + esc(d.problems.join(' · ')) + '</span>' : '') + '</span>' +

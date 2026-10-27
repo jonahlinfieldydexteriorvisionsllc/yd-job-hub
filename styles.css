@@ -5660,3 +5660,14 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   }
   html[data-night] .ji-btn.on { background:var(--brand-2); border-color:var(--brand-2); color:#0c0a0e; }
   html[data-night] .ji-btn.on small { color:rgba(12,10,14,.75); }
+
+  /* Order lists: a line not bought (app.js orderNotBought) -- its name
+     struck like an ordered one, what it means kept readable. A supplier's
+     delivery charge set from under its delivery (orderDeliveryRow), and on
+     Pricing rules → Suppliers. */
+  .check-row.not-bought .cr-name .cr-cost { display:inline-block; color:var(--muted); }
+  .check-row.not-bought .cr-name .cr-cost b { color:var(--pos); }
+  .ord-nb-btn { color:var(--muted); }
+  .ord-delivery .cr-qty-in { width:80px; }
+  .pr-del { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 8px; }
+  .pr-del-amt { display:inline-flex; align-items:center; gap:2px; }

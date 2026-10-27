@@ -283,11 +283,20 @@
       w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[\\s-]*') + '(s|es)?(?![a-z0-9])', 'i'));
     return re.test(String(text || ''));
   }
+  // A dumpster is always dropped off at the job and hauled away -- before
+  // anything else, a hand pick included (Jonah, 27 Oct 2026: "all dumpsters
+  // get delivered they shouldnt be getting marked at we pick it up"). Lines
+  // typed in or off QuickBooks are often not joined to the dumpster in
+  // Supplies, so its words count as much as its kind. Bringing it is in its
+  // price: it never carries a delivery of its own (deliveries()).
+  const isDumpster = x => x.category === 'dumpster' || saysWord([x.name, x.also].filter(Boolean).join(' '), 'dumpster') ||
+    saysWord([x.name, x.also].filter(Boolean).join(' '), 'roll off');
   // x: { name, also, category, per, pallet, cityDelivery, buyWays,
   // vendorName, itemWay (Supplies), hand (the line's own) } ->
-  // { way, by: hand|item|shipped|words|kind|bulk|usual, why (in words) }.
+  // { way, by: dumpster|hand|item|shipped|words|kind|bulk|usual, why (in words) }.
   function wayOf(x, r) {
     const g = wayRules(r);
+    if (isDumpster(x)) return { way: 'delivered', by: 'dumpster', why: 'a dumpster — dropping it off and hauling it away are in its price' };
     if (HAND_WAYS.indexOf(x.hand) !== -1) return { way: x.hand, by: 'hand', why: 'set by hand on this line' };
     if (WAYS.indexOf(x.itemWay) !== -1) return { way: x.itemWay, by: 'item', why: 'set on the item in Supplies' };
     if (g.shipped !== false && (x.buyWays || []).some(w => w === 'online' || w === 'shipped')) {
@@ -587,18 +596,77 @@
     return out;
   }
 
-  // One delivery per delivered material: a material is one truck however
-  // little of it there is, and another truck for every so many tons of it.
-  function deliveries(lines, est, ctx) {
-    const r = ctx.rules, d = r.delivery || {}, out = { lines: [], clientCents: 0, problems: [] };
+  // One delivery per delivered material from a supplier who delivers by town
+  // (MDS): a material is one truck however little of it there is, and
+  // another truck for every so many tons of it. Any other supplier who
+  // brings what it sells charges its own way, set on Pricing rules →
+  // Suppliers: a set charge each time it delivers to a job, or nothing (free,
+  // or in its prices) -- Jonah, 27 Oct 2026: "stuff marked to be delivered
+  // but dont include a delivery fee ... it keeps happening". Something
+  // delivered whose charge is not known is a problem, never a silent $0.
+  // opts.order: an order list -- what bringing it will cost us, so a bid
+  // already sent counts every supplier's charge too.
+  // -> { lines: [{supplyId, supplyIds, vendorId, name, loads, pallet, free,
+  //      charge, items, costCents, clientCents, parts}], clientCents,
+  //      problems, problemsOf: {vendorId ('' = not joined): [text]},
+  //      unset: {vendorId: [names delivered with no charge set]}, deliveryZone }
+  function deliveries(lines, est, ctx, opts) {
+    const r = ctx.rules, d = r.delivery || {}, out = { lines: [], clientCents: 0, problems: [], problemsOf: {}, unset: {} };
     if ((est.off || {}).delivery) return out;
+    const say = (p, vid) => { out.problems.push(p); (out.problemsOf[vid || ''] = out.problemsOf[vid || ''] || []).push(p); };
     // A delivery is a truck of bulk material or a pallet. Small things --
     // fabric, restraint, nails, a few bags of poly sand -- ride along or are
     // picked up and never carry a delivery of their own (Jonah, 6 Oct 2026),
     // and neither does what the rules add (markers, the planting package).
-    // Nor does anything we pick up ourselves (wayOf).
-    const want = lines.filter(l => truckable(l) && wayNow(l) === 'delivered');
-    if (!want.length) return out;
+    // Nor does anything we pick up ourselves (wayOf), nor a dumpster.
+    const want = lines.filter(l => truckable(l) && wayNow(l) === 'delivered' && l.wayBy !== 'dumpster');
+    // Delivered, but not a town truck's load. Counted from 27 Oct 2026: a bid
+    // sent before keeps the price it went out at (QuickBooks has the last
+    // word on it); its order list counts them.
+    const sent = Array.isArray(est.sent) && est.sent.length > 0;
+    const own = !(opts && opts.order) && sent ? []
+      : lines.filter(l => l.way === 'delivered' && l.wayBy !== 'dumpster' && l.orderQty > 0 && !l.auto && !truckable(l));
+    // From a supplier who delivers by town, it comes on that supplier's
+    // truck to the job -- or is that truck, when no other is coming (a
+    // boulder sold each, say).
+    const truckFrom = {};
+    want.forEach(l => { truckFrom[l.vendorId] = true; });
+    own.filter(l => l.cityDelivery).forEach(l => {
+      if (!truckFrom[l.vendorId]) { truckFrom[l.vendorId] = true; want.push(l); }
+    });
+    if (want.length) townTrucks(want, est, ctx, out);
+    // Everyone else's, by supplier: one delivery from each to the job.
+    const vs = r.vendors || {}, names = vendorsOf(ctx);
+    const by = {};
+    own.filter(l => !l.cityDelivery).forEach(l => { const k = l.vendorId || ''; (by[k] = by[k] || []).push(l); });
+    Object.keys(by).forEach(k => {
+      const ls = by[k], vr = vs[k] || {};
+      const items = ls.map(l => l.name || 'a material');
+      if (!k) {
+        say(items.join(', ') + (ls.length === 1 ? ' is' : ' are') + ' delivered but not joined to a Supplies item — no supplier to price the delivery', '');
+        return;
+      }
+      const vname = String((names[k] && names[k].name) || ls[0].vendorName || 'the supplier');
+      const base = { supplyId: ls[0].supplyId || null, supplyIds: ls.map(l => l.supplyId).filter(Boolean), vendorId: k,
+                     pallet: false, items: items, parts: ls.map(l => ({ id: l.id, qty: l.orderQty })) };
+      if (vr.deliveryFree) {
+        out.lines.push(Object.assign(base, { name: vname, loads: 0, free: true, costCents: 0, clientCents: 0 }));
+        return;
+      }
+      const cost = num(vr.deliveryCents);
+      if (cost === null) { out.unset[k] = items; say('no delivery charge set for ' + vname + ' (Pricing rules → Suppliers)', k); return; }
+      const client = Math.round(cost * (1 + pct(d.markupPct)));
+      out.lines.push(Object.assign(base, { name: vname + ' delivery', loads: 1, charge: true, costCents: cost, clientCents: client }));
+      out.clientCents += client;
+      if (cost > 0 && num(d.markupPct) === null && out.problems.indexOf('delivery markup % not set') === -1) say('delivery markup % not set', k);
+    });
+    return out;
+  }
+  // The trucks of a supplier who delivers by town (MDS), into out.
+  function townTrucks(want, est, ctx, out) {
+    const r = ctx.rules, d = r.delivery || {};
+    const vids = want.map(l => l.vendorId || '').filter((v, i, a) => a.indexOf(v) === i);
+    const sayAll = p => { out.problems.push(p); vids.forEach(v => { (out.problemsOf[v] = out.problemsOf[v] || []).push(p); }); };
     const town = est.deliveryTown || ctx.city || '';
     const rates = d.rates || {};
     // A town taken off the list is stored as null (saves merge, so a key
@@ -615,7 +683,7 @@
       // The map point is looked up by itself once the job has an address
       // (estimate.js autoTrip / tripsForAll); until it lands, or if the map
       // cannot find it, the zone can be picked by hand.
-      out.problems.push(zone ? town + ' has ' + zone.zones.length + ' MDS delivery zones — waiting for the job’s map point (or pick the zone on the estimate)'
+      sayAll(zone ? town + ' has ' + zone.zones.length + ' MDS delivery zones — waiting for the job’s map point (or pick the zone on the estimate)'
         : town ? 'no delivery rate for ' + town + ' — pick the town on the estimate, or get a quote'
         : 'no town on the job, so no delivery rate');
     }
@@ -623,7 +691,7 @@
     const byMaterial = {};
     want.forEach(l => {
       const k = l.supplyId || l.id;
-      const m = byMaterial[k] = byMaterial[k] || { name: l.name, per: l.per, qty: 0, pallet: l.pallet, parts: [] };
+      const m = byMaterial[k] = byMaterial[k] || { name: l.name, per: l.per, qty: 0, pallet: l.pallet, vendorId: l.vendorId || '', parts: [] };
       m.qty += l.orderQty;
       // Which lines ride on it, and how much of each: an all-in price covers
       // its own materials' share of the truck (allInParts).
@@ -634,11 +702,11 @@
       const loads = isTon(m.per) && num(d.loadTons) > 0 ? Math.max(1, Math.ceil(trim(m.qty / num(d.loadTons)))) : 1;
       const cost = rate === null ? 0 : loads * (rate + (m.pallet ? num(d.palletCents) || 0 : 0));
       const client = Math.round(cost * (1 + pct(d.markupPct)));
-      out.lines.push({ supplyId: k, name: m.name, loads: loads, pallet: m.pallet, costCents: cost, clientCents: client, parts: m.parts });
+      out.lines.push({ supplyId: k, supplyIds: [k], vendorId: m.vendorId, name: m.name, loads: loads, pallet: m.pallet,
+                       items: [m.name], costCents: cost, clientCents: client, parts: m.parts });
       out.clientCents += client;
     });
-    if (num(d.markupPct) === null) out.problems.push('delivery markup % not set');
-    return out;
+    if (num(d.markupPct) === null) sayAll('delivery markup % not set');
   }
 
   // Fuel: both trucks there and back every day on site, the loader's diesel
@@ -1087,7 +1155,8 @@
     });
     const bySupply = {};
     all.forEach(l => { if (l.taxable && l.supplyId) bySupply[l.supplyId] = true; });
-    del.lines.forEach(d => { d.taxable = !!bySupply[d.supplyId]; });
+    // A supplier's own delivery brings several things: taxed when any is.
+    del.lines.forEach(d => { d.taxable = (d.supplyIds || [d.supplyId]).some(s => !!bySupply[s]); });
     fu.taxable = leans;
     let taxedMat = all.filter(l => l.taxable).reduce((s, l) => s + l.clientCents, 0) +
       del.lines.filter(d => d.taxable).reduce((s, d) => s + d.clientCents, 0) + (fu.taxable ? fu.clientCents || 0 : 0);
@@ -1344,7 +1413,8 @@
   };
   const CAT_WORDS = { markupPct: ['Markup', 'pct'], wastePct: ['Waste', 'pct'], noTax: ['No tax on it', 'onOff'],
                       customerTax: ['Tax to the customer', 'text'] };
-  const VENDOR_WORDS = { processingPct: ['Processing charge', 'pct'], cityDelivery: ['Delivers in the city', 'onOff'] };
+  const VENDOR_WORDS = { processingPct: ['Processing charge', 'pct'], cityDelivery: ['Delivers in the city', 'onOff'],
+                         deliveryCents: ['Delivery charge to a job', 'money'], deliveryFree: ['Delivery free or in their prices', 'onOff'] };
   function ruleText(v, how) {
     const C = window.YDChangeLog;
     const money = c => (C ? C.money(c) : String(c));
@@ -1854,14 +1924,18 @@
         '(Edit → For estimates → Kind of material), where you can add one too.</p>' +
 
       secHead('suppliers') +
-      (vendors.length ? '<table class="pr-table"><thead><tr><th>Supplier</th><th>Card/processing fee %</th><th>Delivers by town (one load per material)</th></tr></thead><tbody>' +
+      (vendors.length ? '<table class="pr-table"><thead><tr><th>Supplier</th><th>Card/processing fee %</th><th>Delivery to a job</th></tr></thead><tbody>' +
         vendors.map(v => {
           const vr = r.vendors[v.id] || {};
           return '<tr><td>' + esc(v.name || '') + '</td><td><input inputmode="decimal" value="' + esc(vr.processingPct == null ? '' : vr.processingPct) + '"' +
             (ro ? ' disabled' : '') + ' onchange="prVendor(\'' + esc(v.id) + '\', \'processingPct\', this.value)"></td>' +
-            '<td><input type="checkbox"' + (vr.cityDelivery ? ' checked' : '') + (ro ? ' disabled' : '') +
-            ' onchange="prVendor(\'' + esc(v.id) + '\', \'cityDelivery\', this.checked)"></td></tr>';
-        }).join('') + '</tbody></table>' : '<p class="muted">No suppliers in Supplies yet.</p>') +
+            '<td>' + vendorDeliveryHtml(v.id, vr, ro) + '</td></tr>';
+        }).join('') + '</tbody></table>' +
+        '<p class="hint">How each supplier charges to bring an order to a job. <b>By town</b>: the MDS book — one load per bulk material ' +
+          'or pallet, at the town’s rate below. <b>A set charge</b>: what they charge each time they deliver to a job, whatever is on it. ' +
+          '<b>Free or in their prices</b>: online stores that ship free, a dumpster company. Anything marked 🚚 Delivered from a supplier ' +
+          'with none of these says so on the estimate and the order list instead of costing $0.</p>'
+        : '<p class="muted">No suppliers in Supplies yet.</p>') +
 
       secHead('delivery') + '<div class="pr-grid">' +
         box('Pallet / boulder surcharge per load ($)', dollars(r.delivery.palletCents), "prSet('delivery.palletCents', this.value, 'cents')") +
@@ -2168,6 +2242,48 @@
     vs[id] = Object.assign({}, vs[id], { [k]: k === 'cityDelivery' ? !!v : num(v) });
     save({ vendors: vs });
   };
+  // How a supplier charges to bring an order to a job (deliveries()): one of
+  // by town (cityDelivery), a set charge each delivery (deliveryCents), free
+  // or in their prices (deliveryFree) -- or not set. Also set from under an
+  // order list's delivery that has no price (app.js), where the gap shows.
+  const chargeOpen = {};      // supplier id -> "A set charge" picked, no amount typed yet
+  function deliveryHow(vid, vr) {
+    vr = vr || {};
+    return vr.cityDelivery ? 'town' : vr.deliveryFree ? 'free' : num(vr.deliveryCents) !== null || chargeOpen[vid] ? 'charge' : '';
+  }
+  const DELIVERY_HOWS = [['', 'Not set yet'], ['town', 'By town (MDS book)'], ['charge', 'A set charge each delivery'], ['free', 'Free, or in their prices']];
+  function vendorDeliveryHtml(vid, vr, ro) {
+    const how = deliveryHow(vid, vr), id = String(vid).replace(/[^A-Za-z0-9_-]/g, '');
+    return '<span class="pr-del"><select' + (ro ? ' disabled' : '') + ' aria-label="How they charge to deliver" onchange="prDelivery(\'' + id + '\', this.value)">' +
+        DELIVERY_HOWS.map(([k, n]) => '<option value="' + k + '"' + (k === how ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>' +
+      (how === 'charge' ? ' <label class="pr-del-amt">$<input id="prDel_' + id + '" inputmode="decimal" placeholder="per delivery" value="' +
+        dollars((vr || {}).deliveryCents) + '"' + (ro ? ' disabled' : '') + ' onchange="prDeliveryCents(\'' + id + '\', this.value)"></label>' : '') + '</span>';
+  }
+  function setVendorDelivery(vid, how, cents) {
+    if (!owner() || !vid) return false;
+    const vs = Object.assign({}, rules.vendors);
+    const was = vs[vid] || {};
+    chargeOpen[vid] = how === 'charge';
+    // Each way clears the others (null: saves merge, so a key left out stays).
+    vs[vid] = Object.assign({}, was, {
+      cityDelivery: how === 'town',
+      deliveryFree: how === 'free' ? true : null,
+      deliveryCents: how === 'charge' ? (cents !== undefined ? cents : num(was.deliveryCents)) : null,
+    });
+    save({ vendors: vs });
+    return true;
+  }
+  window.prDelivery = function (vid, how) {
+    if (!setVendorDelivery(vid, how)) return;
+    renderRules();
+    const box = how === 'charge' ? el('prDel_' + vid) : null;
+    if (box && !box.value) box.focus();
+  };
+  window.prDeliveryCents = function (vid, v) {
+    const c = cents(v);
+    if (v !== '' && (c === null || c < 0)) { showToast('Type their delivery charge in dollars, like 75'); return; }
+    setVendorDelivery(vid, 'charge', c);
+  };
   // Blank takes the town off (null: see deliveries()).
   function setTown(town, v) {
     if (!owner()) return;
@@ -2213,6 +2329,10 @@
     // Delivered or picked up: one material's way by the rules (Supplies
     // shows it), and lines that are not an estimate's (the order list).
     wayOf: x => wayOf(x, rules), waysFor,
+    // How a supplier charges to deliver, set from an order list's delivery
+    // that has no price (app.js). setVendorDelivery: owner only.
+    deliveryHow: vid => deliveryHow(vid, (rules.vendors || {})[vid]),
+    setVendorDelivery,
     profitChoices: () => profitChoices(rules), defaultProfitCents: () => defaultProfitCents(rules),
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),

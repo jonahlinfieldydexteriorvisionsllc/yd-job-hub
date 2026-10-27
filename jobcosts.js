@@ -312,8 +312,12 @@
     });
 
     const price = toCents(parseMoney(job.jobPrice || ''));
+    // Materials quoted and paid for but never bought (app.js orderNotBought):
+    // never spent, so never counted -- even while the materials are taken at
+    // the estimate's figure for want of receipts.
+    const notBought = typeof notBoughtCents === 'function' ? notBoughtCents(job.orderItems) : { cents: 0, count: 0, unpriced: 0 };
     return { labour: lab, costs: costs, lines: lines, sub: sub, priceCents: price > 0 ? price : null,
-             addOnsCents: addOnsCents(job), buys: buys.length };
+             addOnsCents: addOnsCents(job), buys: buys.length, notBought: notBought };
   }
 
   // --------------------------------------------------------- side by side
@@ -336,7 +340,7 @@
       const ev = e.costs[k] != null ? e.costs[k] : null, av = a.costs[k];
       if (estCost !== null && ev !== null) estCost += ev;
       if (av.source !== 'none') { recorded = true; actCost += av.cents; }
-      else if (ev > 0) { actCost += ev; filled.push(k); }
+      else if (ev > 0) { actCost += k === 'materials' ? Math.max(0, ev - a.notBought.cents) : ev; filled.push(k); }
     });
     if (!recorded) actCost = null;
 
@@ -555,6 +559,9 @@
         ' ' + esc(money(p.cents))).join(' · ');
       parts.push('<li><b>' + esc(name) + ':</b> ' + shown + (list.length > 25 ? ' · and ' + (list.length - 25) + ' more' : '') + '</li>');
     });
+    if (a.notBought.count) parts.push('<li><b>Not bought</b> (quoted and paid for): ' + plural(a.notBought.count, 'line', 'lines') +
+      (a.notBought.cents ? ', about ' + esc(money(a.notBought.cents)) + ' at Supplies prices' : '') +
+      ' — never counted as spent, so it stays as profit</li>');
     if (a.sub) parts.push('<li><b>Subcontractors</b> (' + esc(a.sub.subs.join(', ')) + '): ' + plural(a.sub.visits, 'visit', 'visits') +
       ' this season so far, ' + esc(money(a.sub.cents)) + ' to them, ' + esc(money(a.sub.ours)) + ' from the client</li>');
     // Everything typed in by hand, with its note.

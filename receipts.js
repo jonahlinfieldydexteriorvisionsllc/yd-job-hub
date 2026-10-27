@@ -284,7 +284,10 @@
     const paid = {};
     lines.forEach(l => {
       const fits = it => l.sid && it.supplyId ? it.supplyId === l.sid : sameMaterial(it.name, l.name);
-      const ks = list.map((it, k) => k).filter(k => !list[k].ordered && fits(list[k]));
+      // A line marked not bought (app.js orderNotBought) was bought after
+      // all -- but another line of the same thing still to order comes first.
+      const ks = list.map((it, k) => k).filter(k => !list[k].ordered && fits(list[k]))
+        .sort((a, b) => (list[a].notBought ? 1 : 0) - (list[b].notBought ? 1 : 0) || a - b);
       if (!ks.length) return;
       const k = ks.find(x => !(x in paid));
       const at = k === undefined ? ks[0] : k;
@@ -292,7 +295,7 @@
     });
     return list.map((it, k) => k in paid
       ? Object.assign({}, it, { ordered: true, orderNo: info.orderNo, orderedFrom: info.vendor,
-        orderReceiptId: info.rid, orderSplitId: info.sid, paidCents: paid[k] })
+        orderReceiptId: info.rid, orderSplitId: info.sid, paidCents: paid[k], notBought: null })
       : it);
   }
   function untickOrdered(list, sid) {

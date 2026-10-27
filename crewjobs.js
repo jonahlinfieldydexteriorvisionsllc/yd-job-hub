@@ -256,7 +256,7 @@
     ? 'comes on ' + (w.vendorName ? noMoney(w.vendorName).slice(0, 60) + '’s' : 'the supplier’s') + ' truck' : 'delivered';
   function pickupsEntry(d, items) {
     const est = d.estimate || {}, out = [];
-    const order = (d.orderItems || []).filter(o => o && o.name && !isRental(o, items)).slice(0, 120);
+    const order = (d.orderItems || []).filter(o => o && o.name && !o.notBought && !isRental(o, items)).slice(0, 120);
     const src = order.length
       ? order.map(o => ({ supplyId: o.supplyId || null, name: o.name, qty: numOr(o.qty) || 1, hand: o.way || null,
                           vendorId: o.vendorId || (o.supplyId && items[o.supplyId] ? items[o.supplyId].vendorId : null),
@@ -385,7 +385,8 @@
       materials: parts.materials,
       spoil: parts.spoil,
       brush: parts.brush,
-      order: (d.orderItems || []).filter(o => o && o.name && !isRental(o, items)).slice(0, 120)
+      // A line not bought (app.js orderNotBought) is nothing for them to look for.
+      order: (d.orderItems || []).filter(o => o && o.name && !o.notBought && !isRental(o, items)).slice(0, 120)
         .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
       rentals: rentalsEntry(d, items),

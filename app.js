@@ -2060,7 +2060,46 @@ function addOrderItem() {
   document.getElementById('orderItemName').value = ''; document.getElementById('orderItemQty').value = '';
   renderOrderList(); markDirty();
 }
-function toggleOrderItem(id) { const it = orderItems.find(m => m.id === id); if (it) { it.ordered = !it.ordered; renderOrderList(); markDirty(); } }
+function toggleOrderItem(id) {
+  const it = orderItems.find(m => m.id === id);
+  if (!it) return;
+  it.ordered = !it.ordered;
+  // Ticked as ordered: bought after all.
+  if (it.ordered) delete it.notBought;
+  renderOrderList(); markDirty();
+}
+// Quoted and paid for, but never bought (Jonah, 27 Oct 2026: "materials on
+// jobs that we quote but dont end up purchasing but still get paid for ...
+// so the cost for it goes into profit"): off both order lists, bringing no
+// delivery, and not counted as spent on Estimate vs actual (jobcosts.js) --
+// what the customer paid for it stays in the job's price. A receipt that
+// turns up for it after all ticks it as ordered (receipts.js tickOrdered).
+// `notBought`: {at, by} on the order line.
+function notBoughtMark() {
+  const own = window.YDRemind && YDRemind.me && YDRemind.me();
+  const u = window.YDAuth && window.YDAuth.user;
+  return { at: new Date().toISOString(), by: (own && own.name) || (u && (u.displayName || u.email)) || '' };
+}
+function orderNotBought(id, on) {
+  if (jobsReadOnly()) return;
+  const it = orderItems.find(m => m.id === id);
+  if (!it) return;
+  if (on) { it.notBought = notBoughtMark(); it.ordered = false; } else delete it.notBought;
+  renderOrderList(); markDirty();
+  renderOrdersOverview();
+}
+// The cost of the lines a job did not buy, from Supplies (orderCost), in
+// cents: what Estimate vs actual leaves out of what was spent.
+function notBoughtCents(items) {
+  const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : null;
+  if (!cat || !Array.isArray(items)) return { cents: 0, count: 0, unpriced: 0 };
+  return items.filter(it => it && it.notBought).reduce((s, it) => {
+    const c = orderCost(it, cat);
+    if (c.cents === null) s.unpriced++; else s.cents += c.cents;
+    s.count++;
+    return s;
+  }, { cents: 0, count: 0, unpriced: 0 });
+}
 function rmOrderItem(id) {
   const at = orderItems.findIndex(m => m.id === id), row = orderItems[at];
   orderItems = orderItems.filter(m => m.id !== id); renderOrderList(); markDirty();
@@ -2423,27 +2462,42 @@ function orderCost(it, cat) {
 // estimate's own delivery sums (estimate.js orderDelivery) on the order --
 // a truck per bulk or pallet material from a supplier that delivers by town
 // (MDS). Jonah, 21 Oct 2026: "none of the materials contain delivery fees".
+// Every other supplier's own charge too (Pricing rules → Suppliers), and
+// anything delivered whose charge is not known says so rather than adding
+// nothing (Jonah, 27 Oct 2026: "stuff marked to be delivered but dont
+// include a delivery fee ... it keeps happening").
 // saved: the job's estimate when it is not the open one.
-// -> { vendorId: {cents, loads, names, problems} }
+// -> { vendorId ('' = not joined to Supplies): {cents, loads, names,
+//      problems, free, unset} }
 function orderDeliveries(items, cat, saved, city) {
   if (!window.YDEstimate || !window.YDEstimate.orderDelivery) return {};
   // Each line as it is got (orderWaysOf): one we pick up brings no truck.
-  const lines = items.filter(it => it && !it.ordered).map(it => {
+  // One not joined to Supplies still counts: delivered, it has no supplier
+  // to price that by. Nor does a line he did not buy (notBought) bring one.
+  const lines = items.filter(it => it && !it.ordered && !it.notBought).map(it => {
     const c = orderCost(it, cat);
-    return { supplyId: c.sid, qty: c.buy || c.bags || (c.unitOff ? null : orderQtyOf(it)), name: it.name || '', hand: it.way || null };
-  }).filter(l => l.supplyId && l.qty > 0);
+    return { supplyId: c.sid || null, name: it.name || '', hand: it.way || null,
+             qty: c.sid ? c.buy || c.bags || (c.unitOff ? null : orderQtyOf(it)) : orderQtyOf(it) || 1,
+             per: c.sid ? '' : it.per || orderUnitWords(it.quantity) };
+  }).filter(l => l.qty > 0);
   const d = lines.length ? window.YDEstimate.orderDelivery(lines, saved, city) : null;
   if (!d) return {};
-  // Only what stops a delivery being priced (no town, a zone to pick).
-  const problems = d.problems.filter(p => /town|rate|zone/.test(p));
   const out = {};
+  const of = v => out[v] = out[v] || { cents: 0, loads: 0, names: [], problems: [], free: false, unset: false };
   d.lines.forEach(l => {
-    const v = (cat.items[l.supplyId] || {}).vendorId || '';
-    const o = out[v] = out[v] || { cents: 0, loads: 0, names: [], problems: problems };
+    const o = of(l.vendorId || (cat.items[l.supplyId] || {}).vendorId || '');
     o.cents += l.costCents || 0;
     o.loads += l.loads;
-    o.names.push(l.name + (l.loads > 1 ? ' ×' + l.loads : '') + (l.pallet ? ' + pallet' : ''));
+    if (l.free) o.free = true;
+    o.names.push(l.free || l.charge ? (l.items || []).join(', ') : l.name + (l.loads > 1 ? ' ×' + l.loads : '') + (l.pallet ? ' + pallet' : ''));
   });
+  // Only what stops a delivery being priced (no town, a zone to pick, no
+  // charge for the supplier, not joined) -- the markup is not ours to pay.
+  Object.keys(d.problemsOf || {}).forEach(v => {
+    const ps = d.problemsOf[v].filter(p => !/markup/.test(p));
+    if (ps.length) of(v).problems = ps;
+  });
+  Object.keys(d.unset || {}).forEach(v => { const o = of(v); o.unset = true; o.names = o.names.concat(d.unset[v]); });
   return out;
 }
 // Delivered or picked up (Jonah, 22 Oct 2026): each line of a job's order
@@ -2462,6 +2516,8 @@ function orderWaysOf(items, cat, saved, city) {
 // ↺ goes back to the rules. call: the onclick, with % where the way goes.
 function orderWayHtml(w, hand, call, ro) {
   if (!w || !w.way) return '';
+  // A dumpster is always delivered (pricing.js wayOf): nothing to pick.
+  if (w.wayBy === 'dumpster') return '<span class="ord-way-row"><span class="muted">🚚 Delivered · ' + esc(w.wayWhy || '') + '</span></span>';
   const cur = w.way === 'rides' ? 'delivered' : w.way;
   const b = (k, label) => '<button type="button" class="ord-way-btn' + (cur === k ? ' on' : '') + '" aria-pressed="' + (cur === k) + '"' +
     (ro ? ' disabled' : ' onclick="' + call.replace('%', k) + '"') + '>' + label + '</button>';
@@ -2478,14 +2534,50 @@ function setOrderWay(it, v) {
 }
 function orderWayAt(i, v) { setOrderWay(orderItems[i], v); }
 // Opening the job looks up where it is (estimate.js autoTrip), which finds a
-// Madison zone by itself; the problem says what else would.
-function orderDeliveryRow(dv) {
-  if (!dv || !dv.loads) return '';
-  const stuck = dv.problems.length > 0;
+// Madison zone by itself; the problem says what else would. A supplier with
+// no charge set gets the box for it right here (owner): set once, it counts
+// on every job and estimate from then on.
+function orderDeliveryRow(dv, vid, vname) {
+  if (!dv || (!dv.loads && !dv.free && !dv.problems.length)) return '';
+  const what = esc(dv.names.join(', '));
+  const id = ordId(vid);
+  if (dv.unset && vid) {
+    const owner = !!(window.YDAuth && window.YDAuth.isOwner);
+    return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivered: ' + what + '<br>' +
+      '<span class="cr-cost warn-text">Not priced yet — no delivery charge set for ' + esc(vname || 'this supplier') + '.</span> ' +
+      (owner ? '<span class="cr-cost">Their charge each delivery: $<input class="cr-qty-in" inputmode="decimal" placeholder="75" ' +
+          'aria-label="Their delivery charge" onchange="setOrderDeliveryCharge(\'' + id + '\', this.value)"> ' +
+          '<button type="button" class="link-btn" onclick="setOrderDeliveryFree(\'' + id + '\')">Free, or in their prices</button></span>'
+        : '<span class="muted">Jonah sets it on Pricing rules → Suppliers.</span>') + '</span></div>';
+  }
+  if (dv.problems.length) {
+    return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivery' + (what ? ': ' + what : '') + '<br>' +
+      '<span class="cr-cost warn-text">Not priced yet: ' + esc(dv.problems.join(' · ')) + '</span></span></div>';
+  }
+  if (!dv.loads) {
+    return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivered: ' + what + '<br>' +
+      '<span class="cr-cost muted">' + esc(vname || 'Their') + ' delivery is free, or in their prices</span></span></div>';
+  }
   return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivery — ' + dv.loads + ' load' + (dv.loads === 1 ? '' : 's') +
-    ': ' + esc(dv.names.join(', ')) + '<br>' +
-    (stuck ? '<span class="cr-cost warn-text">Not priced yet: ' + esc(dv.problems.join(' · ')) + '</span>'
-      : '<span class="cr-cost">their delivery charge = <b>' + fmtMoney(dv.cents / 100) + '</b></span>') + '</span></div>';
+    ': ' + what + '<br><span class="cr-cost">their delivery charge = <b>' + fmtMoney(dv.cents / 100) + '</b></span></span></div>';
+}
+// Set from the box under a delivery with no price (owner): what that
+// supplier charges each time it delivers to a job, or nothing.
+function setOrderDeliveryCharge(vid, v) {
+  const c = Math.round(parseFloat(String(v || '').replace(/[$,\s]/g, '')) * 100);
+  if (!isFinite(c) || c < 0) { showToast('Type their delivery charge in dollars, like 75'); return; }
+  if (!window.YDPricing || !YDPricing.setVendorDelivery || !YDPricing.setVendorDelivery(vid, 'charge', c)) return;
+  showToast('Saved — ' + fmtMoney(c / 100) + ' a delivery, on every job from now on (Pricing rules → Suppliers)');
+  orderListsRedraw();
+}
+function setOrderDeliveryFree(vid) {
+  if (!window.YDPricing || !YDPricing.setVendorDelivery || !YDPricing.setVendorDelivery(vid, 'free')) return;
+  showToast('Saved — their delivery is free or in their prices (Pricing rules → Suppliers)');
+  orderListsRedraw();
+}
+function orderListsRedraw() {
+  if (document.getElementById('orderListWrap')) renderOrderList();
+  renderOrdersOverview();
 }
 // The unit a quantity typed by hand is in: "632 sq ft" -> "sq ft",
 // "approx. 1.10 tons" -> "tons", "376 sq ft (4 pallets)" -> "sq ft".
@@ -2514,7 +2606,7 @@ function linkOrderItem(id, sid) {
 function supplierOrder(vid) {
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
   const ways = orderWaysOf(orderItems, cat);
-  const lines = orderItems.filter(it => !it.ordered && orderVendor(it, cat) === vid).map(it => orderLineText(it, cat, ways[orderItems.indexOf(it)]));
+  const lines = orderItems.filter(it => !it.ordered && !it.notBought && orderVendor(it, cat) === vid).map(it => orderLineText(it, cat, ways[orderItems.indexOf(it)]));
   const v = (cat.vendors || {})[vid] || {};
   const f = id => ((document.getElementById(id) || {}).value || '').trim();
   const where = [f('address'), [f('city'), f('state')].filter(Boolean).join(', ')].filter(Boolean).join(', ');
@@ -2561,9 +2653,12 @@ function renderOrderList() {
       : 'No items yet — import a proposal or add manually.') + '</p>';
     prog.innerHTML = ''; document.getElementById('orderBadge').textContent = ''; return;
   }
-  const ordered = orderItems.filter(m => m.ordered).length, total = orderItems.length;
+  // A line he did not buy is settled, as an ordered one is.
+  const notBought = orderItems.filter(m => !m.ordered && m.notBought).length;
+  const ordered = orderItems.filter(m => m.ordered).length + notBought, total = orderItems.length;
   const pct = Math.round(ordered / total * 100);
-  prog.innerHTML = '<div class="progress-label"><span>Ordered</span><span>' + ordered + ' / ' + total + '</span></div>' +
+  prog.innerHTML = '<div class="progress-label"><span>Ordered' + (notBought ? ' <span class="muted">(' + notBought + ' not bought)</span>' : '') +
+      '</span><span>' + ordered + ' / ' + total + '</span></div>' +
     '<div class="progress"><div class="progress-fill" style="width:' + pct + '%"></div></div>';
 
   const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {}, prices: {}, vendors: {} };
@@ -2573,20 +2668,26 @@ function renderOrderList() {
   let sum = 0, unpriced = 0;
   const row = it => {
     const c = prices ? orderCost(it, cat) : null;
-    if (c && !it.ordered) { if (c.cents !== null) sum += c.cents; else unpriced++; }
+    // Ordered, or not bought at all (orderNotBought): nothing left to do on it.
+    const nb = !it.ordered && !!it.notBought;
+    const settled = it.ordered || nb;
+    if (c && !settled) { if (c.cents !== null) sum += c.cents; else unpriced++; }
     // Joined but with no quantity yet: its price, and a box for how many --
     // it said "no price in Supplies" for an item priced at $21.60 a ton
     // (15 Oct 2026).
-    const askQty = c && c.sid && c.cents === null && !c.unitOff && typeof c.each === 'number' && !it.ordered;
-    const opts = c && !c.sid && !it.ordered && linkingOrder !== it.id ? orderOptions(it, cat) : [];
+    const askQty = c && c.sid && c.cents === null && !c.unitOff && typeof c.each === 'number' && !settled;
+    const opts = c && !c.sid && !settled && linkingOrder !== it.id ? orderOptions(it, cat) : [];
     // Ticked by a receipt sorted onto this job (receipts.js tickOrdered):
     // what was actually paid for it, and what the price list made it when
     // that is not the same (Jonah, 26 Oct 2026: "update the price of the
     // items to exactly what was spent").
     const paid = it.ordered && typeof it.paidCents === 'number' && it.paidCents > 0;
     const listSaid = paid && c && c.cents !== null && Math.abs(c.cents - it.paidCents) > Math.max(100, c.cents * 0.02);
+    const ro = jobsReadOnly();
     const costLine = paid ? '<span class="cr-cost">Paid <b>' + fmtMoney(it.paidCents / 100) + '</b>' +
         (listSaid ? ' <span class="muted">(the price list made it ' + fmtMoney(c.cents / 100) + ')</span>' : '') + '</span>'
+      : nb ? '<span class="cr-cost">Not bought — ' + (c && c.cents !== null ? 'its <b>' + fmtMoney(c.cents / 100) + '</b> cost stays' : 'what it would have cost stays') +
+          ' in the job as profit' + (ro ? '' : ' <button type="button" class="link-btn" onclick="orderNotBought(\'' + ordId(it.id) + '\', false)">↺ Buying it after all</button>') + '</span>'
       : !c ? '' : c.cents !== null
       ? '<span class="cr-cost">' + (c.bags ? esc(window.YDPricing ? YDPricing.qtyText(c.bags, c.per || 'bag') : c.bags + ' ' + (c.per || 'bag')) +
           ' to buy (uses ' + esc(String(c.usesLb)) + ' lb) × ' : '') +
@@ -2611,12 +2712,14 @@ function renderOrderList() {
             .map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + '</option>').join('') +
         '</select> <button class="link-btn" onclick="linkingOrder=null; renderOrderList()">Cancel</button></div>' : '';
     // The product's own page, from Supplies, for what is ordered online.
-    const sid = !it.ordered ? orderSupply(it, cat) : null;
+    const sid = !settled ? orderSupply(it, cat) : null;
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
-    // Delivered or picked up, and the switch for the odd time it goes the other way.
+    // Delivered or picked up, and the switch for the odd time it goes the
+    // other way -- then "Didn't buy it" for a line still to order.
     const wi = orderItems.indexOf(it);
-    const way = orderWayHtml(ways[wi], it.way === 'delivered' || it.way === 'pickup', 'orderWayAt(' + wi + ', \'%\')', jobsReadOnly());
-    return '<div class="check-row' + (it.ordered ? ' done' : '') + '">' +
+    const way = nb ? '' : orderWayHtml(ways[wi], it.way === 'delivered' || it.way === 'pickup', 'orderWayAt(' + wi + ', \'%\')', ro) +
+      (ro || it.ordered ? '' : ' <button type="button" class="link-btn ord-nb-btn" onclick="orderNotBought(\'' + ordId(it.id) + '\', true)">✗ Didn’t buy it</button>');
+    return '<div class="check-row' + (settled ? ' done' : '') + (nb ? ' not-bought' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
@@ -2640,12 +2743,12 @@ function renderOrderList() {
   const siteOf = v => (window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl(cat.vendors[v]) : '');
   // What the supplier charges to bring what is still to order.
   const dels = prices ? orderDeliveries(orderItems, cat) : {};
-  let delSum = 0;
+  let delSum = 0, delUnpriced = 0;
   wrap.innerHTML = keys.map(v => {
     const list = groups[v];
-    const left = list.filter(it => !it.ordered).length;
+    const left = list.filter(it => !it.ordered && !it.notBought).length;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
-    if (dels[v]) delSum += dels[v].cents;
+    if (dels[v]) { delSum += dels[v].cents; if (dels[v].problems.length) delUnpriced++; }
     // What this supplier's part still to order comes to, with its delivery
     // (the rows add themselves to `sum` as they are drawn).
     const before = sum;
@@ -2658,11 +2761,12 @@ function renderOrderList() {
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + ordId(v) + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +
-      rows + orderDeliveryRow(dels[v]);
+      rows + orderDeliveryRow(dels[v], v, vname(v));
   }).join('') +
-    (prices && (sum || unpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney((sum + delSum) / 100) + '</b> before tax' +
+    (prices && (sum || unpriced || delUnpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney((sum + delSum) / 100) + '</b> before tax' +
       (delSum ? ', with ' + fmtMoney(delSum / 100) + ' of delivery' : '') +
       (unpriced ? ' · ' + unpriced + ' line' + (unpriced === 1 ? '' : 's') + ' without a price' : '') +
+      (delUnpriced ? ' · <span class="warn-text">' + delUnpriced + (delUnpriced === 1 ? ' delivery' : ' deliveries') + ' not priced yet</span>' : '') +
       '<div class="muted">Your cost from Supplies — only you see this, and it isn’t in the job’s numbers.</div></div>' : '');
   wrap.querySelectorAll('select.searchable').forEach(s => { if (typeof makeSearchable === 'function') makeSearchable(s); });
   document.getElementById('orderBadge').textContent = ordered + '/' + total + ' ordered';
@@ -2718,7 +2822,7 @@ function ordersJobs() {
     const open = d._id === currentJobId;
     const items = (open ? orderItems : (Array.isArray(d.orderItems) ? d.orderItems : []))
       .map((it, i) => it && typeof it === 'object' ? Object.assign({}, it, { _key: ordLineKey(it, i) }) : null)
-      .filter(it => it && !it.ordered && String(it.name || '').trim());
+      .filter(it => it && !it.ordered && !it.notBought && String(it.name || '').trim());
     const when = next[d._id] || null;
     const running = normStatus(d.jobStatus, d) === 'inprogress';
     return { id: d._id, d: d, items: items, when: when, running: running,
@@ -2825,7 +2929,8 @@ function renderOrdersOverview() {
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
     const others = (onJobs[alsoKey(v, it)] || []).filter(o => o.id !== j.id);
     const way = orderWayHtml((ways[j.id] || [])[j.items.indexOf(it)], it.way === 'delivered' || it.way === 'pickup',
-      'ordersWay(\'' + ordId(j.id) + '\', \'' + it._key + '\', \'%\')', !canTick);
+      'ordersWay(\'' + ordId(j.id) + '\', \'' + it._key + '\', \'%\')', !canTick) +
+      (canTick ? ' <button type="button" class="link-btn ord-nb-btn" onclick="ordersNotBought(\'' + ordId(j.id) + '\', \'' + it._key + '\')">✗ Didn’t buy it</button>' : '');
     const also = others.length ? ' <span class="muted ord-also">· also on ' +
       others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
     return { c: c, html: '<div class="check-row">' +
@@ -2848,7 +2953,7 @@ function renderOrdersOverview() {
         (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + (extra || '') + '</div>';
   };
   const n = (k, word) => k + ' ' + word + (k === 1 ? '' : 's');
-  let grand = 0, grandUnpriced = 0;
+  let grand = 0, grandUnpriced = 0, grandDelUnpriced = 0;
 
   // BY SUPPLIER: one card per supplier, each job's lines under its name.
   const supplierCards = () => Object.keys(groups).sort(bySupplier).map(v => {
@@ -2863,8 +2968,8 @@ function renderOrdersOverview() {
         return r.html;
       }).join('');
       const dv = (dels[j.id] || {})[v];
-      if (dv) sum += dv.cents;
-      return jobHead(j) + rows + orderDeliveryRow(dv);
+      if (dv) { sum += dv.cents; if (dv.problems.length) grandDelUnpriced++; }
+      return jobHead(j) + rows + orderDeliveryRow(dv, v, vname(v));
     }).join('');
     grand += sum; grandUnpriced += unpriced;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
@@ -2888,7 +2993,7 @@ function renderOrdersOverview() {
     const mine = {};
     j.items.forEach(it => { const v = orderVendor(it, cat); (mine[v] = mine[v] || []).push(it); });
     const vs = Object.keys(mine).sort(bySupplier);
-    let jobSum = 0, jobUnpriced = 0, jobDel = 0;
+    let jobSum = 0, jobUnpriced = 0, jobDel = 0, jobDelUnpriced = 0;
     const body = vs.map(v => {
       let sum = 0;
       const rows = mine[v].map(it => {
@@ -2897,7 +3002,7 @@ function renderOrdersOverview() {
         return r.html;
       }).join('');
       const dv = (dels[j.id] || {})[v];
-      if (dv) { sum += dv.cents; jobDel += dv.cents; }
+      if (dv) { sum += dv.cents; jobDel += dv.cents; if (dv.problems.length) jobDelUnpriced++; }
       jobSum += sum;
       const lead = v ? (cat.vendors[v] || {}).leadTime : '';
       const vEsc = ordId(v), jEsc = ordId(j.id);
@@ -2910,14 +3015,16 @@ function renderOrdersOverview() {
             (onJobsHere > 1 ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy all ' + onJobsHere + ' jobs’ order</button>' : '') +
             (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
             : '<span class="muted">pick each one’s Supplies item on the job</span>') +
-        '</div>' + rows + orderDeliveryRow(dv);
+        '</div>' + rows + orderDeliveryRow(dv, v, vname(v));
     }).join('');
     grand += jobSum; grandUnpriced += jobUnpriced;
     const named = vs.filter(Boolean).length;
     const counts = ' <span class="muted ord-count">· ' + n(j.items.length, 'line') + (named ? ' · ' + n(named, 'supplier') : '') + '</span>';
-    const total = prices && (jobSum || jobUnpriced) ? '<div class="ord-job-total">This job comes to about <b>' + fmtMoney(jobSum / 100) + '</b> before tax' +
+    const total = prices && (jobSum || jobUnpriced || jobDelUnpriced) ? '<div class="ord-job-total">This job comes to about <b>' + fmtMoney(jobSum / 100) + '</b> before tax' +
       (jobDel ? ', with ' + fmtMoney(jobDel / 100) + ' of delivery' : '') +
-      (jobUnpriced ? ' · ' + n(jobUnpriced, 'line') + ' without a price' : '') + '</div>' : '';
+      (jobUnpriced ? ' · ' + n(jobUnpriced, 'line') + ' without a price' : '') +
+      (jobDelUnpriced ? ' · <span class="warn-text">' + jobDelUnpriced + (jobDelUnpriced === 1 ? ' delivery' : ' deliveries') + ' not priced yet</span>' : '') + '</div>' : '';
+    grandDelUnpriced += jobDelUnpriced;
     return '<div class="ord-supplier ord-jobcard">' + jobHead(j, 'ord-job-head', counts) + body + total + '</div>';
   }).join('');
 
@@ -2925,8 +3032,9 @@ function renderOrdersOverview() {
   // .ord-grid) -- he scrolled past every order to reach the next (16 Oct 2026).
   const html = ordersBy === 'supplier' ? supplierCards() : jobCards();
   wrap.innerHTML = head + '<div class="ord-grid">' + html + '</div>' +
-    (prices && (grand || grandUnpriced) ? '<div class="order-cost">All of this comes to about <b>' + fmtMoney(grand / 100) + '</b> before tax' +
+    (prices && (grand || grandUnpriced || grandDelUnpriced) ? '<div class="order-cost">All of this comes to about <b>' + fmtMoney(grand / 100) + '</b> before tax' +
       (grandUnpriced ? ' · ' + grandUnpriced + ' line' + (grandUnpriced === 1 ? '' : 's') + ' without a price' : '') +
+      (grandDelUnpriced ? ' · <span class="warn-text">' + grandDelUnpriced + (grandDelUnpriced === 1 ? ' delivery' : ' deliveries') + ' not priced yet</span>' : '') +
       '<div class="muted">Your cost from Supplies, and what the suppliers charge to deliver — not in any job’s numbers.</div></div>' : '');
 }
 // Ticked here = ticked on the job. The job open in the form is ticked in the
@@ -2969,6 +3077,27 @@ function ordersWay(jobId, itemId, v) {
     window.YDSync.patchJob(id, { orderItems: (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? set(o) : o) });
   }
   renderOrdersOverview();
+}
+// Not bought, set here = on the job (orderNotBought), with Undo: the line
+// leaves this list at once.
+function ordersNotBought(jobId, itemId) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const mark = on => {
+    if (currentJobId && ordId(currentJobId) === jobId) {
+      const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+      if (it) orderNotBought(it.id, on);
+    } else {
+      const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
+      let d = null;
+      try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+      if (!d || !window.YDSync) return;
+      const set = o => { const n = Object.assign({}, o); if (on) { n.notBought = notBoughtMark(); n.ordered = false; } else delete n.notBought; return n; };
+      window.YDSync.patchJob(id, { orderItems: (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? set(o) : o) });
+      renderOrdersOverview();
+    }
+  };
+  mark(true);
+  if (typeof showUndo === 'function') showUndo('Not bought — its cost stays in the job as profit', () => mark(false));
 }
 // One job's lines still to order (ordersJobs), each with its way.
 function orderJobWays(j, cat) {
