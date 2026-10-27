@@ -508,6 +508,7 @@
     if (view === 'check') return checkHtml(checks);
     const q = low(searchText), tag = view === 'everyone' ? '' : tagPick;
     return view === 'call' ? callHtml(callable, q, tag) : view === 'snow' ? snowHtml(callable, q, tag)
+      : view === 'nextyear' ? nyHtml(q, tag)
       : view === 'everyone' ? everyoneHtml(people, q)
       : view === 'leads' ? leadsHtml(people.filter(c => kindOf(c) === 'lead'), q, tag)
       : listHtml(people.filter(c => kindOf(c) === { customers: 'customer', past: 'past' }[view]), q, tag);
@@ -535,7 +536,7 @@
   // `quiet`: something changed under the page (a snapshot) rather than
   // something being tapped -- a form being typed in is not rebuilt.
   function render(quiet) {
-    jobMap = null; famMap = null;
+    jobMap = null; famMap = null; nyMemo = null;
     applyOn();
     const wrap = el('custWrap');
     if (!wrap) return;
@@ -563,7 +564,7 @@
     }
     const l = peopleLists(), people = l.people, callable = l.callable;
     const ch = can('contacts', 'change');
-    const counts = { call: 0, everyone: 0, customers: 0, leads: 0, past: 0, snow: 0, sort: sortCount(), check: 0 };
+    const counts = { call: 0, nextyear: nyCount(), everyone: 0, customers: 0, leads: 0, past: 0, snow: 0, sort: sortCount(), check: 0 };
     let snowAny = 0;
     people.forEach(c => {
       const k = kindOf(c);
@@ -587,7 +588,7 @@
     counts.check = ch ? checkCount() : 0;
     const badge = el('custBadge');
     if (badge) badge.textContent = counts.call ? counts.call + ' to call' : '';
-    const VIEWS = [['call', '📞 Call list'], ['everyone', '📇 Everyone'], ['customers', '👥 Customers'], ['leads', '🌱 Leads'], ['past', '🕰 Past']]
+    const VIEWS = [['call', '📞 Call list'], ['nextyear', '📆 Contact in ' + nyYear()], ['everyone', '📇 Everyone'], ['customers', '👥 Customers'], ['leads', '🌱 Leads'], ['past', '🕰 Past']]
       .concat(snowAny ? [['snow', '❄️ Snow quotes']] : [])
       .concat(ch && counts.sort ? [['sort', '🧩 To sort']] : [])
       .concat(ch ? [['check', '🔍 Check the list']] : []);
@@ -610,7 +611,8 @@
       const box = el('custSearch');
       if (box) box.value = searchText;
     }
-    el('custTags').innerHTML = wantFind && tagsOpen && view !== 'everyone' ? tagFilterHtml(view === 'call' || view === 'snow' ? callable : people) : '';
+    el('custTags').innerHTML = wantFind && tagsOpen && view !== 'everyone' ? tagFilterHtml(view === 'call' || view === 'snow' ? callable
+      : view === 'nextyear' ? nyRows().filter(r => r.state === 'on' || r.state === 'chasing').map(r => ({ tags: r.services })) : people) : '';
     paintList(listBodyHtml(people, callable, view === 'check' ? checkLines() : []));
     // A box that was rebuilt gets its focus and caret back.
     const back = typing && el(typing);
@@ -761,6 +763,483 @@
         : '<button class="btn btn-sm btn-filled" onclick="custSnowCalled(\'' + id + '\', true)">✓ Called about snow</button>') + '</div>' : '') +
     '</div>';
   }
+  // ------------------------------------------------------------ contact next year
+  //
+  // Jonah (26 Oct 2026): "add all clients bid this year that didnt decline or
+  // accept to call next year. have spot in customers thats just a list of
+  // people to contact next year. note the service they were bid for."
+  //
+  // Worked out from the bids each time it is drawn -- nothing is written on
+  // anyone until he taps. On it: everyone bid in the year whose bid neither
+  // said yes (won, booked, accepted in QuickBooks) nor no (lost, turned down
+  // in QuickBooks): sent with no answer -- and bids he marked lost for "No
+  // reply", who never said no either. Snow bids too, marked snow. A bid still
+  // inside its follow-up plan (boards.js CHASE_STEPS) sits under a heading
+  // of its own until the plan has run its course: its emails are still going
+  // out. A bid never sent got no price, so it is not on it (listed folded,
+  // to put on by hand).
+  //
+  // One row a person: their bids are found by customer, the way everything
+  // here is tied (a lead merged in, a second QuickBooks profile and a
+  // sub-customer are them); a bid tied to nobody by the customer it surely
+  // is (same email, phone or exact name -- as To sort says), else on its own.
+  //
+  // Which year: the bids of the season gone by, to call in the next one --
+  // from July, this year's bids (called next year); before July, last
+  // year's (the year he is calling them in). Buttons pick another year.
+  // By hand, kept on the person per year they are called in (contactYears
+  // {"2027": {on, at, by, doneAt, reachedWas}}): on false -- taken off the
+  // list; on true -- put on it by hand; doneAt -- "Reached out" tapped here
+  // (reachedWas: the reach before it). Reached in that year itself, from
+  // anywhere (reachedAt), counts as reached too.
+  const NY_FROM_MONTH = 7;
+  const NY_SORT_KEY = 'ydjobhub_custNySort';
+  let nySort = 'service';         // 'service' | 'date'
+  try { nySort = localStorage.getItem(NY_SORT_KEY) === 'date' ? 'date' : 'service'; } catch (e) { /* private window */ }
+  let nyPick = 0;                 // a bid year picked on its buttons (0: the usual one)
+  let nyFinding = null;           // "+ Put someone on it": what is typed (null: closed)
+  let nyMemo = null;
+  function nyUsual() {
+    const d = new Date();
+    return d.getMonth() + 1 >= NY_FROM_MONTH ? d.getFullYear() : d.getFullYear() - 1;
+  }
+  const nyBidYear = () => nyPick || nyUsual();
+  const nyYear = () => nyBidYear() + 1;                   // the year they are called in
+  // A QuickBooks estimate in Intuit's test company is none a customer saw.
+  const realQb = j => (j.qbEstimate && j.qbEstimate.env !== 'sandbox' ? j.qbEstimate : {});
+  // What the customer said to a bid: 'yes', 'no', 'noReply' (marked lost,
+  // "No reply"), 'open' (sent, no answer) or 'unsent' (it never went out).
+  function bidAnswer(j) {
+    if (j.removeWhy === 'snow') return 'yes';               // a snow bid said yes to: on the Snow route
+    const bid = typeof isBidStatus === 'function' ? isBidStatus(j.jobStatus) : (j.jobStatus || 'quoting') === 'quoting';
+    if (!bid || j.bidStage === 'won') return 'yes';
+    const q = realQb(j), sync = window.YDSync || {};
+    if (sync.qbAccepted ? sync.qbAccepted(q) : q.status === 'Accepted') return 'yes';
+    if (j.bidStage === 'lost') return j.lostReason === 'noReply' ? 'noReply' : 'no';
+    if (q.status === 'Rejected') return 'no';
+    const sent = j.bidStage === 'sent' || j.bidStage === 'followUp' || !!q.sentAt || !!(q.deleted && q.deleted.sentAt);
+    return sent ? 'open' : 'unsent';
+  }
+  // The day of the bid: its Bid date, else the day it was emailed or moved.
+  function bidDay(j) {
+    const q = realQb(j);
+    return localDay(j.quoteDate) || localDay(q.sentAt) || localDay(j.bidStageAt) || localDay(j.lastModified);
+  }
+  // The person a bid is for, as the lists show them ('' for nobody here).
+  // A bid untied by hand ("Not theirs") is never tied again by itself.
+  function nyPersonOf(j, by) {
+    let id = j.customerId ? resolve(s(j.customerId)) : '';
+    if (!customers[id]) {
+      const lead = resolve('ld' + s(j._id).toLowerCase().replace(/[^a-z0-9]/g, ''));      // newLeadFromJob's
+      id = customers[lead] ? lead : '';
+    }
+    if (!id && !(j.customerBy === 'hand' && !j.customerId)) {
+      const g = guess(by(), whoOfJob(j));
+      if (g.sure && customers[resolve(g.sure)]) id = resolve(g.sure);
+    }
+    if (!id) return '';
+    id = mainOf(id);
+    const c = customers[id];
+    return c && isFolded(c) ? parentOf(c).id : id;
+  }
+  // A bid tied to nobody: one row with any other bid of the same email,
+  // phone or name.
+  const looseKey = j => 'j_' + (low(j.email) || (digits(j.phone).length === 10 ? digits(j.phone) : '') ||
+    low(j.customerName) || s(j._id)).replace(/[^a-z0-9]/g, '');
+  // His picks for a year: on the person and on the ones shown with them;
+  // the newest on / off wins.
+  function nyPickFor(c, Y) {
+    const out = {};
+    [c].concat(family(c.id).map(id => customers[id]).filter(Boolean)).forEach(x => {
+      const p = (x.contactYears || {})[Y];
+      if (!p || typeof p !== 'object') return;
+      if (typeof p.on === 'boolean' && s(p.at) >= s(out.at)) { out.on = p.on; out.at = p.at; }
+      if (s(p.doneAt) > s(out.doneAt)) out.doneAt = p.doneAt;
+    });
+    return out;
+  }
+  const nySnow = j => !!(window.YDEstimate && YDEstimate.isSnowJob && YDEstimate.isSnowJob(j));
+  const nyChase = j => (window.YDBoards && YDBoards.chaseState ? YDBoards.chaseState(j) : null);
+
+  function nyRows() {
+    const B = nyBidYear(), Y = String(B + 1), day = today();
+    const jobsRef = allJobs();
+    if (nyMemo && nyMemo.ver === ver && nyMemo.jobs === jobsRef && nyMemo.B === B && nyMemo.day === day) return nyMemo.rows;
+    let idx = null;
+    const by = () => idx || (idx = index());
+    const rows = {}, yes = {};
+    const rowOf = (key, c) => rows[key] || (rows[key] = { key: key, c: c || null, open: [], unsent: [] });
+    jobsRef.forEach(j => {
+      if (!j || !j._id || j.deletedAt || (j.removeWhy && j.removeWhy !== 'snow')) return;
+      const d = bidDay(j);
+      if (d.slice(0, 4) !== String(B)) return;
+      const a = bidAnswer(j);
+      if (a === 'no') return;
+      const pid = nyPersonOf(j, by), key = pid || looseKey(j);
+      if (a === 'yes') { yes[key] = (yes[key] || 0) + 1; return; }
+      const r = rowOf(key, pid ? customers[pid] : null);
+      if (a === 'unsent') r.unsent.push(j);
+      else r.open.push({ j: j, answer: a, day: d, snow: nySnow(j), chase: a === 'open' ? nyChase(j) : null });
+    });
+    // Put on it by hand.
+    Object.values(customers).forEach(c => {
+      const p = (c.contactYears || {})[Y];
+      if (!p || p.on !== true) return;
+      let id = mainOf(c.id);
+      const m = customers[id];
+      if (m && isFolded(m)) id = parentOf(m).id;
+      if (customers[id]) rowOf(id, customers[id]);
+    });
+    const yearFrom = Y + '-01-01';
+    const out = Object.values(rows).map(r => {
+      const c = r.c;
+      r.pick = c ? nyPickFor(c, Y) : {};
+      r.hand = r.pick.on === true;
+      r.yes = yes[r.key] || 0;
+      r.open.sort((a, b) => b.day.localeCompare(a.day));
+      r.unsent.sort((a, b) => bidDay(b).localeCompare(bidDay(a)));
+      // The services they were bid for (their newest bid's first); a bid
+      // with none picked says what its estimate is for; someone put on by
+      // hand, what they are tagged for.
+      const svc = [];
+      const add = t => { t = s(t); if (t && !svc.some(x => low(x) === low(t))) svc.push(t); };
+      r.open.forEach(b => (b.j.serviceTypes || []).forEach(add));
+      r.open.forEach(b => { if (!(b.j.serviceTypes || []).length && typeof jobWhat === 'function') add(jobWhat(b.j)); });
+      if (!r.open.length) {
+        if (c) (c.tags || []).forEach(add);
+        r.unsent.forEach(j => (j.serviceTypes || []).forEach(add));
+      }
+      r.services = svc;
+      r.snow = r.open.some(b => b.snow);
+      r.chasing = r.open.some(b => b.chase && b.chase.on);
+      r.lastDay = r.open.length ? r.open[0].day : '';
+      r.reached = !c ? '' : s(r.pick.doneAt) || (localDay(c.reachedAt) >= yearFrom ? s(c.reachedAt) : '');
+      r.state = r.pick.on === false ? 'off' : c && c.notInterested ? 'no' : r.reached ? 'done'
+        : !r.open.length && !r.hand ? 'unsent' : r.chasing ? 'chasing' : 'on';
+      return r;
+    });
+    nyMemo = { ver: ver, jobs: jobsRef, B: B, day: day, rows: out };
+    return out;
+  }
+  // The ones to call (the count on its button): on it, chased or not.
+  const nyCount = () => nyRows().filter(r => r.state === 'on' || r.state === 'chasing').length;
+  function nyMatches(r, q, tag) {
+    if (tag && !r.services.concat(r.c ? r.c.tags || [] : []).some(t => low(t) === low(tag))) return false;
+    if (!q) return true;
+    if (r.c && matches(r.c, q, '')) return true;
+    const jobs = r.open.map(b => b.j).concat(r.unsent);
+    const hay = jobs.map(j => [j.customerName, j.phone, j.email, j.address, j.city, j.estimateNumber].join(' ')).join(' ') + ' ' + r.services.join(' ');
+    return low(hay).indexOf(q) !== -1;
+  }
+  function nyName(r) {
+    if (r.c) return shownName(r.c);
+    const j = (r.open[0] || {}).j || r.unsent[0] || {};
+    return s(j.customerName) || '(no name)';
+  }
+  // A bid's price, for whoever sees Billing: a snow bid's is per push.
+  function nyPrice(j) {
+    if (!can('billing', 'see')) return '';
+    if (nySnow(j)) return typeof perPushText === 'function' ? perPushText(j) : '';
+    const n = parseFloat(String(j.jobPrice || '').replace(/[$,]/g, ''));
+    return n > 0 ? money(n) : '';
+  }
+  // The season to call them in, for one tap: spring -- fall for snow -- of
+  // the year they are called in, while it has not ended.
+  function nySeason(r) {
+    const Y = nyYear(), b0 = SEASON_BTNS.find(x => x[0] === (r.snow ? 'fall' : 'spring'));
+    const w = { from: Y + '-' + two(b0[2]) + '-01', to: lastDay(Y, b0[3]), label: b0[1] + ' ' + Y, how: 'season' };
+    return w.to >= today() ? w : null;
+  }
+
+  function nyHtml(q, tag) {
+    const Y = nyYear(), B = nyBidYear(), ch = can('contacts', 'change');
+    const groups = { on: [], chasing: [], done: [], no: [], off: [], unsent: [] };
+    nyRows().filter(r => nyMatches(r, q, tag)).forEach(r => groups[r.state].push(r));
+    let h = '';
+    if (can('jobs', 'see')) {
+      const ys = [];
+      for (let y = nyUsual() - 1; y <= new Date().getFullYear(); y++) ys.push(y);
+      h += '<div class="cu-ny-pick">' + ys.map(y => '<button class="cu-chip' + (y === B ? ' on' : '') + '" onclick="custNyYear(' + y + ')">Bid in ' + y +
+        '<small>called in ' + (y + 1) + '</small></button>').join('') + '</div>';
+      h += '<div class="hint">Everyone bid in ' + B + ' who hasn’t said yes or no — sent with no answer, or marked lost for “No reply”. ' +
+        'Snow bids too. Nothing is saved on anyone until you tap a button.</div>';
+    } else {
+      h += '<div class="hint">The bids show for whoever sees Jobs. Here: the ones put on it by hand.</div>';
+    }
+    const n = groups.on.length + groups.chasing.length;
+    h += '<div class="cu-callsum">' + [n + ' to call in ' + Y, groups.chasing.length ? groups.chasing.length + ' of them still being followed up' : '',
+      groups.done.length ? groups.done.length + ' reached' : ''].filter(Boolean).join(' · ') + '</div>';
+    if (ch) h += nyAddHtml();
+    h += '<div class="cu-ny-pick cu-ny-sort">' + [['service', 'By service'], ['date', 'By bid date']].map(([k, w]) =>
+      '<button class="cu-chip' + (nySort === k ? ' on' : '') + '" onclick="custNySort(\'' + k + '\')">' + w + '</button>').join('') + '</div>';
+    h += '<div class="cu-sub">📆 To call in ' + Y + ' (' + groups.on.length + ')</div>';
+    if (!groups.on.length) {
+      h += '<p class="empty-msg">' + (q || tag ? 'Nobody matches that.' : groups.chasing.length
+        ? 'Everyone is still in their follow-up plan — they come here when it ends.' : 'Nobody — every bid of ' + B + ' got an answer.') + '</p>';
+    } else {
+      // By service: under the first one they were bid for (the "What for"
+      // button finds them by any). By bid date: oldest first, a month a heading.
+      // (The ones with no bid date / no service last.)
+      const head = nySort === 'date'
+        ? r => (r.lastDay ? { key: r.lastDay.slice(0, 7), title: 'Bid in ' + MONTH_WORDS[+r.lastDay.slice(5, 7) - 1] + ' ' + r.lastDay.slice(0, 4) } : { key: '', last: 1, title: 'Put on by hand' })
+        : r => (r.services[0] ? { key: low(r.services[0]), title: r.services[0] } : { key: '', last: 1, title: 'Service not noted' });
+      const rows = groups.on.map(r => [head(r), r]).sort((a, b) => (a[0].last || 0) - (b[0].last || 0) || a[0].key.localeCompare(b[0].key) ||
+        (nySort === 'date' ? a[1].lastDay.localeCompare(b[1].lastDay) : 0) || nyName(a[1]).localeCompare(nyName(b[1])));
+      let last = null, shown = 0;
+      rows.forEach(([g, r]) => {
+        if (shown >= showN) return;
+        if (last !== g.key) {
+          h += '<div class="cu-when-h">' + esc(g.title) + ' <span class="muted">(' + rows.filter(x => x[0].key === g.key).length + ')</span></div>';
+          last = g.key;
+        }
+        h += nyRowHtml(r);
+        shown++;
+      });
+      h += more(rows.length);
+    }
+    if (groups.chasing.length) {
+      h += '<div class="cu-sub">📨 Still being followed up (' + groups.chasing.length + ')</div>' +
+        '<div class="hint">Their follow-up emails are still going out. Each comes up to the list above by itself when its plan ends.</div>' +
+        groups.chasing.sort((a, b) => a.lastDay.localeCompare(b.lastDay) || nyName(a).localeCompare(nyName(b))).slice(0, showN).map(nyRowHtml).join('') + more(groups.chasing.length);
+    }
+    const fold = (rows, title, sortBy) => (rows.length ? '<details class="cu-fold"><summary>' + title + ' (' + rows.length + ')</summary>' +
+      rows.sort(sortBy || ((a, b) => nyName(a).localeCompare(nyName(b)))).map(nyRowHtml).join('') + '</details>' : '');
+    h += fold(groups.done, '✓ Reached', (a, b) => s(b.reached).localeCompare(s(a.reached)));
+    h += fold(groups.no, '✋ Not interested');
+    h += fold(groups.off, 'Taken off the list');
+    if (groups.unsent.length) {
+      h += '<details class="cu-fold"><summary>Bid never sent — no price went to them (' + groups.unsent.length + ')</summary>' +
+        '<div class="hint">Site visits and bids of ' + B + ' that never went out. Put one on the list if you want to call them.</div>' +
+        groups.unsent.sort((a, b) => nyName(a).localeCompare(nyName(b))).map(nyRowHtml).join('') + '</details>';
+    }
+    return h;
+  }
+
+  function nyRowHtml(r) {
+    const c = r.c, k = sid(r.key), ch = can('contacts', 'change');
+    const j0 = (r.open[0] || {}).j || r.unsent[0] || {};
+    const kind = c ? kindOf(c) : '';
+    const phone = (c && (s(c.phone) || s(c.mobile))) || s(j0.phone);
+    const email = (c && s(c.email)) || s(j0.email);
+    const addr = (c && s(c.address)) || [s(j0.address), s(j0.city)].filter(Boolean).join(', ');
+    const tel = telOf(phone);
+    // Their time to call, when it is now or still to come (the Call list).
+    const cs = c ? callState(c) : {};
+    const w = cs.on || cs.soon ? cs.w : null;
+    const open = c ?'openCustomer(\'' + sid(c.id) + '\')' : 'custOpenJob(\'' + sid(j0._id) + '\')';
+    const many = r.open.length > 1;
+    const bidLine = b => {
+      const j = b.j, num = s(j.estimateNumber) || s(realQb(j).docNumber), price = nyPrice(j);
+      const st = b.answer === 'noReply' ? 'Marked lost — no reply'
+        : b.chase && b.chase.on ? 'Being followed up — day ' + b.chase.day + ' of ' + b.chase.last : 'No answer';
+      const heard = b.chase && b.chase.heard ? ' · 💬 wrote back ' + niceDay(localDay(b.chase.heard)) : '';
+      const svc = (j.serviceTypes || []).join(', ');
+      return '<div class="cu-ny-bid"><button class="link-btn" onclick="custOpenJob(\'' + sid(j._id) + '\')">' + (num ? 'Bid #' + esc(num) : 'The bid') + '</button>' +
+        ' · ' + esc(niceDay(b.day)) + (price ? ' · <span class="cu-money">' + esc(price) + '</span>' : '') +
+        ' · <span class="muted">' + esc(st + heard) + '</span>' + (many && svc ? ' <span class="muted">— ' + esc(svc) + '</span>' : '') + '</div>';
+    };
+    const btn = (label, fn, arg, filled) => '<button class="btn btn-sm' + (filled ? ' btn-filled' : '') + '" onclick="' + fn + '(\'' + k + '\'' +
+      (arg === undefined ? '' : ', ' + arg) + ')">' + label + '</button>';
+    let act = '';
+    if (ch) {
+      if (r.state === 'on' || r.state === 'chasing') {
+        const sea = !w ? nySeason(r) : null;
+        act = btn('✓ Reached out', 'custNyDone', true, true) + (sea ? btn('📅 ' + esc(sea.label), 'custNyWhen') : '') +
+          btn('Not interested', 'custNyNot', true) + btn('Take off', 'custNyOff', true);
+      } else if (r.state === 'done') {
+        act = r.pick.doneAt ? btn('Not reached yet', 'custNyDone', false) : '';
+      } else if (r.state === 'no') act = btn('Interested after all', 'custNyNot', false);
+      else if (r.state === 'off') act = btn('Put back on', 'custNyOff', false);
+      else if (r.state === 'unsent') act = btn('+ Put on the list', 'custNyOn');
+    }
+    const said = r.state === 'done' ? '✓ Reached ' + niceDay(localDay(r.reached))
+      : r.state === 'off' && r.pick.at ? 'Taken off ' + niceDay(localDay(r.pick.at)) : '';
+    return '<div class="cu-row">' +
+      '<div class="cu-main">' +
+        '<button class="cu-name" onclick="' + open + '">' + esc(nyName(r)) + '</button>' +
+        (c && kind !== 'customer' ? ' <span class="cu-kind k-' + kind + '">' + KIND_WORD[kind] + '</span>' : '') +
+        (!c ? ' <span class="cu-kind">Not tied to a customer</span>' : '') +
+        (r.snow ? ' <span class="cu-kind k-snow">❄️ Snow</span>' : '') +
+        (r.hand && !r.open.length ? ' <span class="cu-kind">Put on by hand</span>' : '') +
+        (w ? ' <span class="pp-when">' + (cs.on ? '📞 Call list now' : '📅 ' + esc(whenText(w))) + '</span>' : '') +
+        (r.services.length ? '<div class="pp-svc">' + r.services.map(t => '<span class="svc-tag">' + esc(t) + '</span>').join('') + '</div>'
+          : '<div class="cu-ny-also">No service noted on the bid</div>') +
+        r.open.map(bidLine).join('') +
+        (!r.open.length ? r.unsent.map(j => '<div class="cu-ny-bid"><button class="link-btn" onclick="custOpenJob(\'' + sid(j._id) + '\')">' +
+          (s(j.estimateNumber) ? 'Bid #' + esc(j.estimateNumber) : 'The bid') + '</button> · ' + esc(niceDay(bidDay(j))) + ' · <span class="muted">never sent</span></div>').join('') : '') +
+        (r.yes ? '<div class="cu-ny-also">Said yes to ' + (r.yes === 1 ? 'another bid' : r.yes + ' other bids') + ' in ' + nyBidYear() + '</div>' : '') +
+        (said ? '<div class="cu-ny-also">' + esc(said) + '</div>' : '') +
+        (addr ? '<div class="pp-contact">' + esc(addr) + '</div>' : '') +
+        (act ? '<div class="cu-ny-act">' + act + '</div>' : '') +
+      '</div>' +
+      '<div class="cu-reach">' +
+        (tel ? '<a class="btn btn-sm" href="tel:' + esc(tel) + '" title="' + esc(phone) + '">📞 Call</a><a class="btn btn-sm" href="sms:' + esc(tel) + '">💬 Text</a>' : '') +
+        (email ? '<a class="btn btn-sm" href="mailto:' + esc(email) + '" title="' + esc(email) + '">✉️ Email</a>' : '') +
+        (!tel && !email ? '<span class="muted cu-noway">No phone or email</span>' : '') +
+      '</div>' +
+    '</div>';
+  }
+
+  // ---- putting someone on it by hand: found by name, phone, email or street
+  function nyAddHtml() {
+    if (nyFinding === null) {
+      return '<div class="cu-btns"><button class="btn btn-sm" onclick="custNyFindOpen(true)">+ Put someone on it by hand</button></div>';
+    }
+    return '<div class="cu-add"><div class="cu-fill-h"><b>Put someone on the list for ' + nyYear() + '</b>' +
+      '<button class="link-btn" onclick="custNyFindOpen(false)">Close</button></div>' +
+      '<input id="cuNyFind" type="search" autocomplete="off" placeholder="Type a name, phone, email or street…" value="' + esc(nyFinding) +
+      '" oninput="custNyFind(this.value)">' +
+      '<div class="cu-picks" id="cuNyFound">' + nyFoundHtml() + '</div></div>';
+  }
+  function nyFoundHtml() {
+    const q = low(nyFinding);
+    if (q.length < 2) return '';
+    const on = {};
+    nyRows().forEach(r => { if (r.c && (r.state === 'on' || r.state === 'chasing')) on[r.c.id] = true; });
+    const hits = Object.values(customers).filter(c => inLists(c) && matches(c, q, '')).sort(byName).slice(0, 8);
+    if (!hits.length) return '<span class="muted">Nobody by that — add them as a lead first (Leads → + Add a lead).</span>';
+    return hits.map(c => '<button class="cu-chip" onclick="custNyOn(\'' + sid(c.id) + '\')"' + (on[c.id] ? ' disabled' : '') + '>' +
+      esc(shownName(c)) + '<small>' + esc(on[c.id] ? 'on the list already' : (c.address ? c.address.split(',')[0] : (c.phone || c.mobile || KIND_WORD[kindOf(c)]))) +
+      '</small></button>').join('');
+  }
+  window.custNyFindOpen = function (on) {
+    nyFinding = on ? '' : null;
+    render();
+    const n = on && el('cuNyFind');
+    if (n) n.focus();
+  };
+  window.custNyFind = function (v) {
+    nyFinding = v;
+    const box = el('cuNyFound');
+    if (box) box.innerHTML = nyFoundHtml();
+  };
+  window.custNyYear = function (y) { nyPick = +y === nyUsual() ? 0 : +y; showN = SHOW_STEP; nyMemo = null; render(); };
+  window.custNySort = function (v) {
+    nySort = v === 'date' ? 'date' : 'service';
+    try { localStorage.setItem(NY_SORT_KEY, nySort); } catch (e) { /* private window */ }
+    render();
+  };
+
+  // The person a row's button acts on. A row tied to nobody is tied first,
+  // as a turned-down bid is (fromLostBid): the customer it surely is was
+  // taken already, so a lead is made from the bid and its bids tied to it.
+  function nyIdFor(k) {
+    const r = (nyMemo ? nyMemo.rows : nyRows()).find(x => sid(x.key) === k);
+    if (r && r.c) return r.c.id;
+    if (!r) { const id = idOf(k); return customers[id] ? mainOf(id) : null; }
+    if (!can('contacts', 'change')) return null;
+    const jobs = r.open.map(b => b.j).concat(r.unsent);
+    if (!jobs.length) return null;
+    const id = newLeadFromJob(jobs[0]);
+    if (can('jobs', 'change') && window.YDSync) jobs.forEach(j => YDSync.patchJob(j._id, { customerId: id, customerBy: 'auto' }));
+    return id;
+  }
+  // This year's pick on someone changed -- the whole map written, so what
+  // is on screen is what is saved -- and the way back.
+  function nyPatch(id, change) {
+    const c = customers[id], Y = String(nyYear());
+    const was = (c.contactYears || {})[Y] || null;
+    const next = Object.assign({}, was || {}, change);
+    return { map: Object.assign({}, c.contactYears || {}, { [Y]: next }), Y: Y, was: was, next: next };
+  }
+  function nyBack(id, p, more) {
+    return () => {
+      const cur = Object.assign({}, (customers[id] || {}).contactYears || {});
+      // A key added since is cleared (the save merges, so leaving it out
+      // would keep it).
+      let back = null;
+      if (p.was) { back = {}; Object.keys(p.next).forEach(x => { back[x] = null; }); Object.assign(back, p.was); }
+      cur[p.Y] = back;
+      write(id, Object.assign({ contactYears: cur }, more || {}), 'the contact list');
+      render();
+    };
+  }
+  const meUid = () => (window.YDAuth && window.YDAuth.user && window.YDAuth.user.uid) || null;
+  const nySay = (msg, undo) => { if (typeof showUndo === 'function') showUndo(msg, undo); else showToast(msg); };
+  // "✓ Reached out": reached for this list, and for the call list as well.
+  window.custNyDone = function (k, on) {
+    const id = nyIdFor(k), c = id && customers[id];
+    if (!c) return;
+    const nowIso = new Date().toISOString();
+    const was = (c.contactYears || {})[String(nyYear())] || {};
+    // The reach before this tap is kept with it (reachedWas): "Not reached
+    // yet" puts it back -- the reach the tap wrote would still count as
+    // reached in the year otherwise.
+    const p = nyPatch(id, on ? { doneAt: nowIso, reachedWas: c.reachedAt || null } : { doneAt: null, reachedWas: null });
+    const data = { contactYears: p.map };
+    if (on) data.reachedAt = nowIso;
+    else if (was.doneAt && s(c.reachedAt) === s(was.doneAt)) data.reachedAt = was.reachedWas || null;
+    const before = { reachedAt: c.reachedAt || null };
+    write(id, data, 'the contact list');
+    render();
+    if (on) nySay('Reached ' + (c.name || ''), nyBack(id, p, before));
+  };
+  // Put on the Call list for the season (one tap, the window written then).
+  window.custNyWhen = function (k) {
+    const r = (nyMemo ? nyMemo.rows : nyRows()).find(x => sid(x.key) === k);
+    const w = r && nySeason(r);
+    const id = w && nyIdFor(k), c = id && customers[id];
+    if (!c) return;
+    const before = { when: c.when || null, contactWhen: c.contactWhen || '', whenSetAt: c.whenSetAt || null };
+    write(id, { when: w, contactWhen: w.label, whenSetAt: new Date().toISOString() }, 'when to call');
+    render();
+    nySay('On the call list from ' + niceDay(w.from), () => { write(id, before, 'when to call'); render(); });
+  };
+  window.custNyNot = function (k, on) {
+    const id = nyIdFor(k), c = id && customers[id];
+    if (!c) return;
+    const before = { notInterested: !!c.notInterested };
+    write(id, { notInterested: !!on }, 'not interested');
+    render();
+    nySay(on ? (c.name || 'They') + ' — not interested' : (c.name || 'They') + ' back on the lists', () => { write(id, before, 'not interested'); render(); });
+  };
+  // Taken off this year's list -- or back on it (by hand when no bid puts
+  // them there).
+  window.custNyOff = function (k, off) {
+    const r = (nyMemo ? nyMemo.rows : nyRows()).find(x => sid(x.key) === k);
+    const id = nyIdFor(k), c = id && customers[id];
+    if (!c) return;
+    const p = nyPatch(id, { on: off ? false : (r && r.open.length ? null : true), at: new Date().toISOString(), by: meUid() });
+    write(id, { contactYears: p.map }, 'the contact list');
+    render();
+    nySay(off ? (c.name || 'They') + ' taken off the ' + p.Y + ' list' : (c.name || 'They') + ' back on the ' + p.Y + ' list', nyBack(id, p));
+  };
+  window.custNyOn = function (k) {
+    const id = nyIdFor(k), c = id && customers[id];
+    if (!c) return;
+    const p = nyPatch(id, { on: true, at: new Date().toISOString(), by: meUid() });
+    write(id, { contactYears: p.map }, 'the contact list');
+    if (nyFinding !== null) nyFinding = null;
+    render();
+    nySay((c.name || 'They') + ' put on the ' + p.Y + ' list', nyBack(id, p));
+  };
+  // On a customer's page: where they stand on the list, and the button.
+  function nyPageHtml(c, ch) {
+    if (isFolded(c)) return '';
+    const Y = nyYear(), r = nyRows().find(x => x.c && x.c.id === c.id), k = sid(r ? r.key : c.id);
+    const btn = (label, fn, arg) => '<button class="btn btn-sm" onclick="' + fn + '(\'' + k + '\'' + (arg === undefined ? '' : ', ' + arg) + ')">' + label + '</button>';
+    let line, act = '';
+    const st = r ? r.state : 'none';
+    if (st === 'on' || st === 'chasing') {
+      const nums = r.open.map(b => s(b.j.estimateNumber) ? '#' + s(b.j.estimateNumber) : '').filter(Boolean);
+      line = 'On it — ' + (r.open.length ? 'bid' + (nums.length ? ' ' + nums.join(', ') : '') + (r.services.length ? ' for ' + r.services.join(', ') : '') +
+        (st === 'chasing' ? ', still being followed up' : ', no answer') : 'put on by hand');
+      act = btn('Take off', 'custNyOff', true);
+    } else if (st === 'done') {
+      line = '✓ Reached ' + niceDay(localDay(r.reached));
+    } else if (st === 'off') {
+      line = 'Taken off it' + (r.pick.at ? ' ' + niceDay(localDay(r.pick.at)) : '');
+      act = btn('Put back on', 'custNyOff', false);
+    } else if (st === 'no') {
+      line = 'Not interested — off it';
+    } else {
+      line = 'Not on it' + (r && r.unsent.length ? ' — their bid never went out' : '');
+      act = btn('+ Put them on it', 'custNyOn');
+    }
+    return '<div class="cu-sec"><div class="cu-sec-h">📆 Contact in ' + Y + '</div><div class="cu-line">' + esc(line) + '</div>' +
+      (ch && act ? '<div class="cu-btns">' + act + '</div>' : '') + '</div>';
+  }
+
   function more(n) {
     return n > showN ?'<button class="btn btn-sm cu-more" onclick="custMore()">Show ' + Math.min(SHOW_STEP, n - showN) + ' more of ' + (n - showN) + '</button>' : '';
   }
@@ -1724,7 +2203,7 @@
   // the same as -- as the server carries a lead onto its new QuickBooks
   // customer (customers.py estimate_made): lists joined, notes added, the
   // time to call (as one) and the rest only where the main one has none.
-  const HUB_KEYS = ['tags', 'note', 'meetings', 'reachedAt', 'declined', 'notInterested', 'fromProspect', 'addedAt'];
+  const HUB_KEYS = ['tags', 'note', 'meetings', 'reachedAt', 'declined', 'notInterested', 'fromProspect', 'addedAt', 'contactYears'];
   function carryPatch(cur, x) {
     const p = {};
     const sig = o => JSON.stringify(o);
@@ -1739,6 +2218,11 @@
         if (s(cur.note).indexOf(s(v)) === -1) p.note = [s(cur.note), s(v)].filter(Boolean).join('\n');
       } else if (k === 'reachedAt') {
         if (s(v) > s(cur.reachedAt)) p.reachedAt = v;
+      } else if (k === 'contactYears') {
+        // "Contact in <year>" picks: a year the main one has none for.
+        const have = cur.contactYears || {}, add = {};
+        Object.keys(v || {}).forEach(y => { if (v[y] && !have[y]) add[y] = v[y]; });
+        if (Object.keys(add).length) p.contactYears = Object.assign({}, have, add);
       } else if (!cur[k]) {
         p[k] = v;
       }
@@ -1961,6 +2445,7 @@
     }
     // When to call
     h += whenHtml(c, ch);
+    h += nyPageHtml(c, ch);
     // Tags: the ones picked, and a search box over the services list.
     h += '<div class="cu-sec"><div class="cu-sec-h">What for</div><div class="pp-svc">' +
       ((c.tags || []).length ? c.tags.map((t, i) => '<span class="svc-tag">' + esc(t) +

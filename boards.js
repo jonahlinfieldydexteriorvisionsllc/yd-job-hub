@@ -3878,6 +3878,16 @@
     hasDraft: hasDraft,
     acceptedToBook: acceptedToBook,
     turnedDown: turnedDown,
+    // Where a bid is in its follow-up plan (customers.js, "Contact in
+    // <year>"): on -- still inside it (being chased, the "mark it lost?" day
+    // not come yet); day -- the day of the plan it is on, of `last`; heard --
+    // when the customer last wrote back.
+    chaseState: j => {
+      const start = chaseStart(j), last = CHASE_STEPS[CHASE_STEPS.length - 1].day;
+      const day = start == null ? null : calDays(start);
+      return { on: start != null && chasingBid(j) && day < last, day: day, last: last,
+        heard: (j.chaseHeard && j.chaseHeard.at) || '' };
+    },
     // The column a job sits in, named as on its board -- All Jobs shows it
     // beside the status (app.js renderDashboard). null: on neither board (a
     // lost bid, a job paid over a month ago).
