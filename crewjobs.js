@@ -350,8 +350,17 @@
     };
   }
 
+  // Where a booked job stands in line (jobline.js): its place and the day
+  // the customer said yes, so the crew lead's "Up next" is in Jonah's order
+  // with his numbers. A day and how it was said yes -- never anything about
+  // the price. null for a job under way, or one not in line.
+  function lineOf(d, id) {
+    const r = id && statusOf(d) === 'booked' && window.YDJobLine ? YDJobLine.spotOf(id) : null;
+    return r ? { place: r.place, day: r.acc.day || '', how: r.acc.how || '' } : null;
+  }
+
   // What a crew member may know about a job -- nothing else is copied.
-  function crewEntry(d) {
+  function crewEntry(d, id) {
     const est = d.estimate || {};
     const items = catalogue().items;
     const parts = workParts(d);
@@ -362,6 +371,7 @@
       address: d.address || '', city: d.city || '', state: d.state || '', zip: d.zip || '',
       phone: d.phone || '',
       status: statusOf(d),
+      line: lineOf(d, id),
       est: String(d.estimateNumber || '').trim(),
       services: (d.serviceTypes || []).slice(0, 20),
       siteNotes: noMoney(est.notes).slice(0, 8000),
@@ -404,7 +414,7 @@
     // Sent before Supplies or the services list arrived (its units or its
     // how-we-do-it missing): sent again when they do.
     if (force && !partsReady(d)) forced[id] = d; else delete forced[id];
-    const entry = crewEntry(d);
+    const entry = crewEntry(d, id);
     const sig = JSON.stringify(entry);
     if (sent[id] === sig) return;
     sent[id] = sig;
@@ -451,7 +461,7 @@
         // server keeps its units and how-we-do-it rather than being
         // rewritten without them.
         if (have[j.id] && !partsReady(d)) return;
-        const entry = crewEntry(d);
+        const entry = crewEntry(d, j.id);
         // Already right on the server: only remember it, write nothing.
         if (have[j.id] && sameEntry(have[j.id], entry)) { sent[j.id] = JSON.stringify(entry); return; }
         mirror(j.id, d);
@@ -500,7 +510,7 @@
         let d = null;
         try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) { d = null; }
         if (!d || !shows(d)) return;
-        const entry = crewEntry(d);
+        const entry = crewEntry(d, id);
         const sig = JSON.stringify(entry);
         if (sent[id] === sig) return;
         if (serverHad && serverHad[id] && sameEntry(serverHad[id], entry)) { sent[id] = sig; return; }
@@ -510,6 +520,29 @@
   }
   // ...and his delivered-or-picked-up rules, or an item's own way in Supplies.
   ['yd-services', 'yd-tools', 'yd-equipment-changed', 'yd-pricing', 'yd-supplies'].forEach(ev => document.addEventListener(ev, refreshAll));
+
+  // The line of booked jobs moved (jobline.js): one booked, one started, one
+  // moved up or down by hand. Only that job was saved, but the places of the
+  // others changed with it -- so their copies follow, each written only when
+  // it now differs from what this device last sent. Looked at only when the
+  // line itself is different, not at every save.
+  let lineSig = null, lineTimer = null;
+  function lineMoved() {
+    clearTimeout(lineTimer);
+    lineTimer = setTimeout(() => {
+      if (!reconciled || !window.YDJobLine || typeof ydCan !== 'function' || !ydCan('jobs', 'change')) return;
+      const rows = YDJobLine.line();
+      const sig = rows.map(r => r.id + ':' + r.place + ':' + r.acc.day + ':' + r.acc.how).join('|');
+      if (sig === lineSig) return;
+      lineSig = sig;
+      rows.forEach(r => {
+        if (typeof sent[r.id] !== 'string' || !shows(r.d) || !partsReady(r.d)) return;
+        if (sent[r.id] === JSON.stringify(crewEntry(r.d, r.id))) return;
+        mirror(r.id, r.d);
+      });
+    }, 1500);
+  }
+  document.addEventListener('yd-jobs-changed', lineMoved);
 
   // A job changed on another device or by the server (sync.js applyRemote):
   // QuickBooks' words kept in step, an estimate filled from QuickBooks. The
@@ -529,7 +562,7 @@
       try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) { d = null; }
       if (!d) return;               // gone: the delete takes its copy down
       if (shows(d) && !partsReady(d)) return;
-      const want = shows(d) ? crewEntry(d) : null;
+      const want = shows(d) ? crewEntry(d, id) : null;
       const sig = want ? JSON.stringify(want) : null;
       if (sent[id] === sig) return;
       let have = null;
@@ -843,7 +876,8 @@
         'Hide it from them with “Hide from crew” on the Job tab.</div>' : '') +
       '<div class="cj-top"><div class="cj-name">' + esc(j.name) + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
         (j.what ? '<div class="cj-what">' + esc(j.what) + '</div>' : '') + '</div>' +
-        '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></div>' +
+        '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress'
+          : 'Booked' + (j.line && j.line.place > 0 && window.YDJobLine ? ' · ' + YDJobLine.nth(j.line.place) + ' in line' : '')) + '</span></div>' +
       (where ? '<div class="cj-where">📍 ' + esc(where) + '</div>' : '<div class="muted">No address on the job yet.</div>') +
       // Two big buttons a gloved thumb can find, side by side.
       (where || tel ? '<div class="cj-go">' +
@@ -1014,7 +1048,7 @@
     if (typeof getJobData !== 'function') return;
     const d = getJobData();
     const id = typeof currentJobId !== 'undefined' ? currentJobId : '';
-    const entry = crewEntry(d);
+    const entry = crewEntry(d, id);
     modalBody('What the crew see').innerHTML = pageHtml(id, entry, true) +
       (shows(d) ? '' : '<p class="ntf-warn">The crew do not see this job now — ' +
         (d.crewHidden ? 'it is hidden from them.' : 'only booked and in-progress jobs are shown to them.') + '</p>');
@@ -1032,11 +1066,42 @@
   }
   document.addEventListener('yd-workdone', () => { if (Object.keys(jobs).length) render(); });
 
-  // In progress first, then booked; A to Z within each.
+  // In progress first (A to Z), then the booked ones in line -- the order
+  // Jonah has them in (jobline.js, carried on each copy as `line`), so the
+  // crew lead always knows what is coming up next (Jonah, 26 Oct 2026).
+  const placeOf = j => (j.status !== 'inprogress' && j.line && j.line.place > 0 ? j.line.place : Infinity);
   function listed() {
     return Object.keys(jobs).map(id => Object.assign({ id: id }, jobs[id]))
       .sort((a, b) => (a.status === 'inprogress' ? 0 : 1) - (b.status === 'inprogress' ? 0 : 1) ||
-        String(a.name).localeCompare(String(b.name)));
+        ((placeOf(a) - placeOf(b)) || 0) || String(a.name).localeCompare(String(b.name)));
+  }
+  // Its place in line as a pill ("2nd"), the same as Jonah sees.
+  function placeHtml(j) {
+    return placeOf(j) !== Infinity && window.YDJobLine
+      ? '<span class="bd-place" title="Place in line">' + YDJobLine.nth(j.line.place) + '</span> ' : '';
+  }
+  // The days it is on the calendar from today (the Job schedule -- who is
+  // working where), first few: "Mon, Oct 27 · Tue, Oct 28 · 2 more". Nothing
+  // until the calendars have answered, rather than "not on the schedule" for
+  // a job that is.
+  function daysHtml(j) {
+    if (!window.YDCalendar || !YDCalendar.forJob || !(YDCalendar.ready && YDCalendar.ready())) return '';
+    const seen = new Set();
+    const days = YDCalendar.forJob(j.id, 120).filter(x => x.jobDay && !seen.has(x.day) && seen.add(x.day)).map(x => x.day).sort();
+    if (!days.length) return j.status === 'inprogress' ? '' : '<small class="cj-row-days none">📅 Not on the schedule yet</small>';
+    const word = day => new Date(day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+    return '<small class="cj-row-days">📅 ' + esc(days.slice(0, 3).map(word).join(' · ')) +
+      (days.length > 3 ? ' · ' + (days.length - 3) + ' more' : '') + '</small>';
+  }
+  function rowHtml(j) {
+    const town = [j.address, j.city].filter(Boolean).join(', ');
+    return '<button class="cj-row" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
+      '<span class="cj-row-name">' + placeHtml(j) + '<b>' + esc(j.name) + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+        (j.what ? '<span class="cj-row-what">' + esc(j.what) + '</span>' : '') +
+        (town ? '<small>' + esc(town) + '</small>' : '') + daysHtml(j) +
+        (placeOf(j) !== Infinity && window.YDJobLine ? '<small>' + esc(YDJobLine.words({ day: j.line.day, how: j.line.how })) + '</small>' : '') +
+        progressHtml(j) + '</span>' +
+      '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></button>';
   }
   function render() {
     // Home shows the same list (home.js).
@@ -1044,13 +1109,14 @@
     const wrap = el('crewJobsWrap');
     if (!wrap) return;
     const list = listed();
-    wrap.innerHTML = list.length ? list.map(j => '<button class="cj-row" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
-        '<span class="cj-row-name"><b>' + esc(j.name) + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
-          (j.what ? '<span class="cj-row-what">' + esc(j.what) + '</span>' : '') +
-          '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small>' + progressHtml(j) + '</span>' +
-        '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></button>').join('')
-      : '<p class="empty-msg">No booked jobs right now.</p>';
+    const going = list.filter(j => j.status === 'inprogress'), next = list.filter(j => j.status !== 'inprogress');
+    wrap.innerHTML = !list.length ? '<p class="empty-msg">No booked jobs right now.</p>' :
+      (going.length ? '<div class="cj-group">🔨 Under way <span class="cj-group-n">' + going.length + '</span></div>' + going.map(rowHtml).join('') : '') +
+      (next.length ? '<div class="cj-group">⏭ Up next — in line <span class="cj-group-n">' + next.length + '</span></div>' +
+        next.map(rowHtml).join('') : '');
   }
+  // A day put on the Job schedule: the list says it.
+  document.addEventListener('yd-calendar-changed', () => { if (Object.keys(jobs).length) render(); });
 
   function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; jobs = {}; }
   function start(a) {

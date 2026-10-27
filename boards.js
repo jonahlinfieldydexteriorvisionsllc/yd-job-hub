@@ -269,6 +269,15 @@
     const since = j => board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     Object.keys(out).forEach(k => out[k].sort((a, b) =>
       String(since(a) || '').localeCompare(String(since(b) || ''))));
+    // Scheduled: in line -- the first to say yes first, or where Jonah put
+    // them (jobline.js; Jonah, 26 Oct 2026: "organize accepted job in order
+    // of acceptance so i can schedule properly").
+    if (board.id === 'jobs' && out.scheduled && window.YDJobLine) {
+      const place = {};
+      YDJobLine.line().forEach(r => { place[r.id] = r.place; });
+      const at = j => place[j._id] || Infinity;
+      out.scheduled.sort((a, b) => (at(a) - at(b)) || 0);
+    }
     return out;
   }
 
@@ -1232,6 +1241,10 @@
     pick = pick || (k => shows(board, k));
     if (board.virtual) {
       const grouped = jobCards(board);
+      // The next day each job is on the calendar, once for the whole draw
+      // (the Scheduled column says which still want days).
+      lineNext = board.id === 'jobs' && window.YDCalendar && YDCalendar.nextForJobs && YDCalendar.ready && YDCalendar.ready()
+        ? YDCalendar.nextForJobs(90) : null;
       return board.columns.map(c => {
         // What the column is worth (Jonah sees the money on these two boards).
         const sum = grouped[c.id].reduce((s, j) => s + (parseMoney(j.jobPrice) || 0), 0);
@@ -1240,6 +1253,7 @@
         return column(board, c, grouped[c.id].map(j => jobCardHtml(board, j)), {
           empty: c.id === 'lost' ? 'Drop a lost bid here. It leaves the board, stays under Bids in My Jobs, and goes on Contacts for next season.' : '',
           total: sum ? fmtMoney(sum) + (owed ? ' · ' + fmtMoney(owed) + ' owed' : '') : '',
+          foot: board.id === 'jobs' && c.id === 'scheduled' ? lineFootHtml() : '',
         });
       }).join('');
     }
@@ -1472,6 +1486,40 @@
         safeId(j._id) + '\')">Mark sent</button>' : '';
     return '<div class="bd-card-line">' + bidStandHtml(w) + mark + '</div>';
   }
+  // ------------------------------------------------- the line of booked jobs
+  //
+  // On a card in Scheduled: its place in line, when the customer said yes
+  // (jobline.js -- the same words as My Jobs, Home and the crew's list), the
+  // next day it is on the calendar, and ▲ ▼ to move it up or down the line
+  // by hand. His order wins; "Back to the order they said yes in" at the
+  // foot of the column undoes every hand move at once.
+  let lineNext = null;      // job id -> its next day on the calendar, for one draw
+  function lineHtml(j) {
+    const r = window.YDJobLine ? YDJobLine.spotOf(j._id) : null;
+    if (!r) return '';
+    const total = YDJobLine.line().length;
+    const stop = 'event.stopPropagation(); ';
+    // Not known until the calendars have answered (no line at all then):
+    // never "not on the schedule" for a job that is.
+    const n = lineNext ? lineNext[j._id] || null : undefined;
+    const btn = (step, label, off) => '<button type="button" class="bd-card-act bd-line-btn" draggable="false" ' +
+      'aria-label="' + label + '" title="' + label + '"' + (off ? ' disabled' : '') +
+      ' onclick="' + stop + 'jobLineMove(\'' + safeId(j._id) + '\', ' + step + ')">' + (step < 0 ? '▲' : '▼') + '</button>';
+    return '<div class="bd-card-line bd-line">' +
+        '<span class="bd-line-what"><span class="bd-place" title="Place in line">' + YDJobLine.nth(r.place) + '</span> ' +
+        '<span class="bd-line-words">' + esc(YDJobLine.words(r.acc)) +
+          (r.hand ? ' · <span class="bd-line-hand" title="Moved by hand — your order, not the order they said yes in">✋ your order</span>' : '') + '</span></span>' +
+        (movesJobs() && total > 1 ? '<span class="bd-line-btns">' + btn(-1, 'Move up the line', r.place === 1) +
+          btn(1, 'Move down the line', r.place === total) + '</span>' : '') +
+      '</div>' +
+      (n === undefined ? '' : '<div class="bd-card-line bd-line-day' + (n ? '' : ' none') + '">' +
+        (n ? '📅 ' + esc(shortDay(n.day)) + (n.time ? ' · ' + esc(n.time) : '') : '📅 Not on the schedule yet') + '</div>');
+  }
+  function lineFootHtml() {
+    if (!window.YDJobLine || !movesJobs() || !YDJobLine.anyByHand()) return '';
+    return '<button class="bd-add-card bd-line-reset" onclick="jobLineReset()">↺ Back to the order they said yes in</button>';
+  }
+
   function jobCardHtml(board, j) {
     const since = board.id === 'bids' ? (j.bidStageAt || j.lastModified) : (j.workStageAt || j.lastModified);
     const days = daysSince(since);
@@ -1503,6 +1551,7 @@
         (window.YDPlants ? YDPlants.badge(j) : '') + '</div>' +
       (showWhere ? '<div class="bd-card-line">' + esc(where) + '</div>' : '') +
       (services ? '<div class="bd-card-line muted">' + esc(services) + '</div>' : '') +
+      (board.id === 'jobs' && col === 'scheduled' ? lineHtml(j) : '') +
       (board.id === 'jobs' ? workDoneHtml(j, col) : '') +
       // Finished, with plants, and the care email not done yet.
       (window.YDPlants && YDPlants.owed(j) ? '<div class="bd-card-line bd-care">🌱 Care email owed</div>' : '') +
@@ -1741,6 +1790,18 @@
   // machine's service form, a recurring task's OK) }, or null when it did
   // not move. A person's move goes through moveByHand below.
   function moveCard(boardId, cardId, col, beforeId) {
+    // Dropped in Scheduled, where it already was: a move in line (jobline.js).
+    if (boardId === 'jobs' && col === 'scheduled' && window.YDJobLine) {
+      const j = jobsList().find(x => x._id === cardId);
+      if (j && workColumn(j) === 'scheduled') {
+        if (YDJobLine.moveBefore(cardId, beforeId || null)) {
+          const r = YDJobLine.spotOf(cardId);
+          if (r) showToast((String(j.customerName || 'Job').trim() || 'Job') + ' is ' + YDJobLine.nth(r.place) + ' in line now');
+        }
+        render();
+        return null;
+      }
+    }
     if (boardId === 'bids' || boardId === 'jobs') { moveJob(cardId, boardId, col); return null; }
     const set = cards[boardId] || {};
     const k = set[cardId];
@@ -3901,6 +3962,9 @@
     render();
   });
   document.addEventListener('yd-jobs-changed', redrawIfVisible);
+  // A day put on the calendar: the Jobs board's Scheduled cards say each
+  // one's next day (lineHtml).
+  document.addEventListener('yd-calendar-changed', () => { if (current === 'jobs') redrawIfVisible(); });
   // A piece of work ticked off (workdone.js): the Jobs board's counts.
   document.addEventListener('yd-workdone', redrawIfVisible);
   // This person's own record has come in (remind.js): which cards are theirs

@@ -22,10 +22,16 @@
   const PUSH_DELAY = 800;
   // Job fields written by the server (QuickBooks' answers, the plant-care
   // email, when the estimate was first seen accepted); all are in app.js
-  // BOARD_FIELDS so the form carries them.
+  // BOARD_FIELDS so the form carries them. jobLine (where Jonah put a booked
+  // job in line, jobline.js) is not the server's but is carried the same
+  // way: moved on the iPad while the laptop has the job open with typing in
+  // it, the laptop's next save would put it back -- the newest move wins
+  // (newerLine).
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
     'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff',
-    'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail'];
+    'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail', 'jobLine'];
+  // A place in line set (or put back) after the one this copy has.
+  const newerLine = (s, l) => !!s && typeof s === 'object' && String(s.at || '') > String((l && l.at) || '');
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -558,6 +564,10 @@
         if (Object.keys(s).some(k => !(k in l))) { local[f] = Object.assign({}, l, s); took = true; }
         return;
       }
+      if (f === 'jobLine') {
+        if (newerLine(s, l)) { local[f] = s; took = true; }
+        return;
+      }
       const ahead = l == null ||
         (f === 'qbEstimate' && s.id && s.id === l.id && (estStep(s.status) > estStep(l.status) ||
           // Emailed since (quickbooks.py _emailed_patch), with no answer lost.
@@ -718,7 +728,11 @@
           // under them -- reloadWhenFree): what they type next is saved over
           // this copy with these carried in.
           if (dirty || formBusy()) {
-            SERVER_FIELDS.forEach(f => { if (c.data && c.data[f] != null) boardFields[f] = c.data[f]; });
+            SERVER_FIELDS.forEach(f => {
+              if (!c.data || c.data[f] == null) return;
+              if (f === 'jobLine' && !newerLine(c.data[f], boardFields[f])) return;
+              boardFields[f] = c.data[f];
+            });
             // And the estimate the server filled from QuickBooks, into one
             // with no lines yet (estimate.js keeps what was typed).
             if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(c.data && c.data.estimate);

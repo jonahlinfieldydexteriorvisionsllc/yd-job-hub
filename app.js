@@ -330,11 +330,13 @@ function jobBill(d) {
 // lost?" card, the thank-you once paid).
 // careDecidedAt: when Plants / Turf were settled by themselves as the bid
 // became a job (plantcare.js decide); null once picked by hand.
+// jobLine {key, at, by}: where Jonah put a booked job in line by hand
+// (jobline.js; key null = back to the order the customers said yes in).
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'autoFollowUpAt', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
   'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail',
-  'noPost'];
+  'noPost', 'jobLine'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old
@@ -4472,6 +4474,21 @@ function renderJobList() {
   if (jobListBids) { renderBidList(body, idx, full, switcher, !!(fSearch || fSvc)); return; }
   if (!idx.length) { body.innerHTML = removeBoxHtml() + switcher + '<p class="empty-msg">No jobs found.</p>' + deletedBoxHtml(); return; }
 
+  // Booked and not started yet, first: in line -- the first customer to say
+  // yes first, or where Jonah put them (jobline.js; Jonah, 26 Oct 2026:
+  // "organize accepted job in order of acceptance so i can schedule
+  // properly"). The months below hold the rest.
+  const shownIds = new Set(idx.map(j => j.id));
+  const spots = (window.YDJobLine ? YDJobLine.line() : []).filter(r => shownIds.has(r.id));
+  const byId = {};
+  idx.forEach(j => { byId[j.id] = j; });
+  const lineGroup = spots.length ? jobListGroupHtml('line', '📌 Booked — up next, in line (' + spots.length + ')',
+    spots.map(r => jobRowHtml(byId[r.id], full[r.id], false, null, r)).join('') +
+    (!jobsReadOnly() && YDJobLine.anyByHand() ? '<div class="jl-line-foot"><button type="button" class="btn btn-sm" onclick="jobLineReset()">' +
+      '↺ Back to the order they said yes in</button></div>' : '')) : '';
+  const inLine = new Set(spots.map(r => r.id));
+  idx = idx.filter(j => !inLine.has(j.id));
+
   // Filed by the job's own date, newest first within a month -- not by
   // lastModified, which the server moves on every QuickBooks check.
   const groups = {};
@@ -4482,7 +4499,7 @@ function renderJobList() {
       (groups[key] = groups[key] || []).push(j);
     });
   const keys = Object.keys(groups).sort((a, b) => { const [ma, ya] = a.split(' '), [mb, yb] = b.split(' '); return yb - ya || MONTHS.indexOf(mb) - MONTHS.indexOf(ma); });
-  body.innerHTML = removeBoxHtml() + switcher + keys.map(key =>
+  body.innerHTML = removeBoxHtml() + switcher + lineGroup + keys.map(key =>
     jobListGroupHtml(key, key + ' (' + groups[key].length + ')', groups[key].map(j => jobRowHtml(j, full[j.id], false)).join(''))
   ).join('') + deletedBoxHtml();
 }
@@ -4519,8 +4536,9 @@ function renderBidList(body, idx, full, switcher, filtered) {
     return jobListGroupHtml('bids-' + sec.id, sec.name + ' (' + list.length + ')', list.map(r => jobRowHtml(r.j, full[r.j.id], true, r.w)).join(''));
   }).join('') + deletedBoxHtml();
 }
-// One row of My Jobs: a job, or a bid (bids) with where it stands (w).
-function jobRowHtml(j, d, bids, w) {
+// One row of My Jobs: a job, or a bid (bids) with where it stands (w), or a
+// booked job with its place in line (spot, jobline.js) and ▲ ▼ to move it.
+function jobRowHtml(j, d, bids, w, spot) {
   const plants = d && window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '';
   // How far the crew have ticked off its work (workdone.js).
   const p = d && window.YDWorkDone ? YDWorkDone.ofJob(d) : null;
@@ -4529,11 +4547,18 @@ function jobRowHtml(j, d, bids, w) {
     : bids && w ? bidStandHtml(w) : j.stage ? stagePill(j.stage) : statusPill(normStatus(j.status));
   return '<div class="job-row"><div class="job-row-main" onclick="loadJob(\'' + ordId(j.id) + '\')">' +
       '<div class="job-row-name">' + jobNameHtml(j.name, j.est) + ' ' + pill + plants + '</div>' +
+      (spot ? '<div class="job-row-sub jl-line"><span class="bd-place">' + YDJobLine.nth(spot.place) + '</span> ' +
+        esc(YDJobLine.words(spot.acc)) + (spot.hand ? ' · <span class="bd-line-hand">✋ your order</span>' : '') + '</div>' : '') +
       '<div class="job-row-sub">' + (j.city ? esc(j.city) + ' · ' : '') + (j.services ? esc(j.services) + ' · ' : '') +
         // A bid with no price yet said "$0.00", which read as a free job.
         (j.price ? fmtMoney(j.price) : esc(perPushOfJob(j.id)) || '<span class="muted">no price yet</span>') + '</div>' +
       work + '</div>' +
     '<div class="jl-acts">' +
+    (spot && !jobsReadOnly() && YDJobLine.line().length > 1
+      ? '<button class="dup-btn jl-line-btn" aria-label="Move up the line" title="Move up the line"' + (spot.place === 1 ? ' disabled' : '') +
+          ' onclick="jobLineMove(\'' + ordId(j.id) + '\', -1)">▲</button>' +
+        '<button class="dup-btn jl-line-btn" aria-label="Move down the line" title="Move down the line"' +
+          (spot.place === YDJobLine.line().length ? ' disabled' : '') + ' onclick="jobLineMove(\'' + ordId(j.id) + '\', 1)">▼</button>' : '') +
     (bids && w && (w.id === 'working' || w.id === 'inQb') && !j.lost && !jobsReadOnly()
       ? '<button class="dup-btn strong" onclick="markBidSent(\'' + ordId(j.id) + '\')" title="Move it to Sent — you sent it">MARK SENT</button>' : '') +
     (bids && j.lost && !jobsReadOnly() ? '<button class="dup-btn" onclick="reopenBid(\'' + ordId(j.id) + '\')">BACK ON THE BOARD</button>' : '') +

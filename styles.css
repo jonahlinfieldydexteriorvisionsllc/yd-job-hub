@@ -5536,3 +5536,39 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   @media (max-width:720px) {
     .rc-pay-row .btn, .rc-pay-old > .btn, .rc-pay-stores .btn { min-height:44px; }
   }
+
+  /* ---- The line of booked jobs (jobline.js): a job's place in line ("2nd")
+     and when the customer said yes -- on the Jobs board's Scheduled cards, My
+     Jobs, Home and the crew's Up next list -- and ▲ ▼ to move it by hand. ---- */
+  .bd-place { display:inline-block; min-width:2.6em; text-align:center; padding:1px 7px; border-radius:10px;
+    font-size:11.5px; font-weight:800; letter-spacing:.2px; line-height:1.5; background:#1d6a3d; color:#fff; vertical-align:1px; }
+  /* The place and the words stay together; the arrows sit beside them, or
+     under them on the right in a narrow column. */
+  .bd-line { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; }
+  .bd-line-what { flex:1 1 9em; min-width:0; line-height:1.45; }
+  .bd-line-words { color:var(--muted); font-weight:600; }
+  .bd-line-hand { color:var(--accent-ink); font-weight:700; white-space:nowrap; }
+  .bd-card .bd-line-hand { color:#855a12; }
+  .bd-line-btns { display:flex; gap:4px; margin-left:auto; }
+  .bd-line-btn { min-width:34px; padding:3px 0; font-size:13px; line-height:1; }
+  .bd-line-btn:disabled { opacity:.35; cursor:default; }
+  .bd-line-day { color:var(--brand-ink); font-weight:600; }
+  .bd-line-day.none { color:var(--muted); font-style:italic; font-weight:400; }
+  .bd-line-reset { margin-top:2px; }
+  @media (pointer: coarse) { .bd-line-btn { min-width:44px; min-height:44px; font-size:15px; } }
+  .jl-line { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-weight:600; }
+  .jl-line-btn { min-width:44px; min-height:40px; font-size:14px; }
+  .jl-line-btn:disabled { opacity:.35; cursor:default; }
+  .jl-line-foot { padding:8px 0 4px; }
+  .jl-line-foot .btn { min-height:44px; }
+  .hm-job-m small.hm-line { color:var(--muted); font-weight:600; }
+  .cj-group { display:flex; align-items:center; gap:8px; font-size:12px; font-weight:800; text-transform:uppercase;
+    letter-spacing:.7px; color:var(--brand-ink); margin:16px 2px 8px; }
+  .cj-group:first-child { margin-top:2px; }
+  .cj-group-n { background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:0 8px;
+    font-size:11px; color:var(--muted); letter-spacing:0; }
+  .cj-row-name small.cj-row-days { color:var(--brand-ink); font-weight:600; }
+  .cj-row-name small.cj-row-days.none { color:var(--muted); font-style:italic; font-weight:400; }
+  .cj-row-name .bd-place { margin-right:2px; }
+  html[data-night] .cj-group, html[data-night] .cj-row-name small.cj-row-days { color:var(--brand-2); }
+  html[data-night] .cj-row-name small.cj-row-days.none { color:var(--muted); }

@@ -666,6 +666,10 @@
     const list = all.filter(j => ['booked', 'inprogress'].indexOf(statusOf(j)) !== -1).map(j => ({ j: j, n: next[j._id] || null }))
       .sort((a, b) => (statusOf(a.j) === 'inprogress' ? 0 : 1) - (statusOf(b.j) === 'inprogress' ? 0 : 1) ||
         String(a.n ? a.n.day : '9999').localeCompare(b.n ? b.n.day : '9999') || nameOf(a.j).localeCompare(nameOf(b.j)));
+    // Booked ones in line (jobline.js): the first to say yes first, or where
+    // Jonah put them -- each with its place and when the yes came.
+    const spot = {};
+    if (window.YDJobLine) YDJobLine.line().forEach(r => { spot[r.id] = r; });
     // A booked job with no day on the calendar is one to schedule; one under
     // way may simply have had its days already.
     // A booked job with no day says nothing on its own row: one line above
@@ -678,19 +682,24 @@
       const about = [whereOf(j), servicesOf(j)].filter(Boolean).join(' · ');
       // How far the crew have ticked the work off (workdone.js).
       const p = window.YDWorkDone ? YDWorkDone.ofJob(j) : null;
+      const s = statusOf(j) === 'booked' ? spot[j._id] : null;
       return '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
-        '<span class="hm-job-m">' + jobNameHtml(nameOf(j), numOf(j)) +
-          (about ? '<small>' + esc(about) + '</small>' : '') + when + (p ? YDWorkDone.barHtml(p, 'wd-row') : '') + '</span>' +
+        '<span class="hm-job-m">' + (s ? '<span class="bd-place">' + YDJobLine.nth(s.place) + '</span> ' : '') + jobNameHtml(nameOf(j), numOf(j)) +
+          (about ? '<small>' + esc(about) + '</small>' : '') +
+          (s ? '<small class="hm-line">' + esc(YDJobLine.words(s.acc)) + (s.hand ? ' · ✋ your order' : '') + '</small>' : '') +
+          when + (p ? YDWorkDone.barHtml(p, 'wd-row') : '') + '</span>' +
         '<span class="hm-job-r">' +
           (priceOf(j) ? '<span class="hm-money">' + fmtMoney(priceOf(j)) + '</span>' : '') + '</span></button>';
     };
-    const inProg = list.filter(x => statusOf(x.j) === 'inprogress'), booked = list.filter(x => statusOf(x.j) === 'booked');
+    const inProg = list.filter(x => statusOf(x.j) === 'inprogress');
+    const placeOf = x => (spot[x.j._id] ? spot[x.j._id].place : Infinity);
+    const booked = list.filter(x => statusOf(x.j) === 'booked').sort((a, b) => (placeOf(a) - placeOf(b)) || 0);
     const unplanned = signedIn() ? booked.filter(x => !x.n).length : 0;
     // A few of each, then "Show all": on a wide screen the cards sit side by
     // side, and one long list left the cards beside it with a tall gap.
     const body = !list.length ? empty('Nothing booked yet.') :
       (inProg.length ? sub('🔨 In progress', inProg.length) + capped('jobsP', inProg.map(row), 4) : '') +
-      (booked.length ? sub('📌 Booked', booked.length) +
+      (booked.length ? sub('📌 Booked — up next, in line', booked.length) +
         (unplanned ? '<div class="hm-note">📅 ' + unplanned + ' not scheduled yet</div>' : '') +
         capped('jobsB', booked.map(row), 4) : '');
     return card('jobs', '🔨 Booked & in progress', list.length || '', ['Jobs board', "homeBoard('jobs')"], body);
@@ -941,8 +950,11 @@
     if (d && d !== 'loading') d.mineTimed.concat(d.mineAny).forEach(x => { if (x.o && x.o.ev && x.o.ev.jobId && !openCrew(x)) mineToday[x.o.ev.jobId] = 1; });
     const rows = list.map(j => {
       const n = next[j.id];
+      // Booked ones in line, as Jonah has them (crewjobs.js): "2nd".
+      const place = j.status !== 'inprogress' && j.line && j.line.place > 0 && window.YDJobLine
+        ? '<span class="bd-place" title="Place in line">' + YDJobLine.nth(j.line.place) + '</span> ' : '';
       return '<button class="hm-job" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
-        '<span class="hm-job-m"><b>' + esc(j.name || 'Job') + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
+        '<span class="hm-job-m">' + place + '<b>' + esc(j.name || 'Job') + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
           (j.what ? '<small class="hm-job-what">' + esc(j.what) + '</small>' : '') +
           '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small>' +
           (mineToday[j.id] ? '<small class="hm-when you">👷 You’re on it today</small>'
