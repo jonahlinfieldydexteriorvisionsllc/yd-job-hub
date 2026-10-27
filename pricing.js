@@ -203,6 +203,10 @@
       // ...and drafts the plant-care email when a job with plants is
       // marked Complete. On unless switched off.
       autoCare: null,
+      // Claude is shown the finished jobs most like a bid, and what they
+      // really took on the clock (functions/pastjobs.py). On unless
+      // switched off.
+      learnFromJobs: null,
     };
   }
 
@@ -1325,8 +1329,10 @@
     'snowBid.items.commercial': ['Snow bid — QuickBooks product, a business', 'text', 'snow'],
     'snowBid.items.salt': ['Snow bid — QuickBooks product, salt', 'text', 'snow'],
     'snowBid.items.labor': ['Snow bid — QuickBooks product, labor', 'text', 'snow'],
-    autoDraft: ['Claude starts estimates by itself', 'onOff', 'other'],
-    autoCare: ['Plant-care email on Complete', 'onOff', 'other'],
+    // On while never set (null): said so, not "Off".
+    autoDraft: ['Claude starts estimates by itself', 'onUsual', 'other'],
+    autoCare: ['Plant-care email on Complete', 'onUsual', 'other'],
+    learnFromJobs: ['Claude sees my finished jobs', 'onUsual', 'other'],
   };
   const CAT_WORDS = { markupPct: ['Markup', 'pct'], wastePct: ['Waste', 'pct'], noTax: ['No tax on it', 'onOff'],
                       customerTax: ['Tax to the customer', 'text'] };
@@ -1334,10 +1340,12 @@
   function ruleText(v, how) {
     const C = window.YDChangeLog;
     const money = c => (C ? C.money(c) : String(c));
-    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return how === 'onOff' ? 'Off (usual)' : 'not set';
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) {
+      return how === 'onOff' ? 'Off (usual)' : how === 'onUsual' ? 'On (usual)' : 'not set';
+    }
     if (how === 'money') return typeof v === 'number' ? money(v) : String(v);
     if (how === 'pct') return v + '%';
-    if (how === 'onOff') return v ? 'On' : 'Off';
+    if (how === 'onOff' || how === 'onUsual') return v ? 'On' : 'Off';
     if (how === 'way') return v === 'delivered' ? 'Delivered' : v === 'pickup' ? 'Picked up' : String(v);
     if (how === 'moneyList') return [].concat(v).map(money).join(', ');
     if (how === 'item' || how === 'items') {
@@ -1911,6 +1919,12 @@
       '<label class="est-switch"><input type="checkbox"' + (r.autoCare !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
         ' onchange="prSet(\'autoCare\', this.checked, \'bool\')"> Draft the plant-care email when a job with plants is marked Complete</label>' +
       '<p class="hint">It goes to your Gmail Drafts for you to read and send — never straight to the customer.</p>' +
+      '<label class="est-switch"><input type="checkbox"' + (r.learnFromJobs !== false ? ' checked' : '') + (ro ? ' disabled' : '') +
+        ' onchange="prSet(\'learnFromJobs\', this.checked, \'bool\')"> Show Claude my finished jobs most like each bid, and what they really took</label>' +
+      '<p class="hint">With each estimate message Claude sees a few of your finished jobs most like the bid — their work, materials and ' +
+        'price, the clock’s hours as crew-days, and what the crew noted — without names or addresses, as examples. For each kind of work ' +
+        'on the bid with 3 or more finished jobs, what they were bid at against what they really took. Your rules above always win. ' +
+        'About a cent more a message. Under each answer: “📚 Based on N of your finished jobs”.</p>' +
       secHead('takeoff') +
       '<p class="hint">Your rules for laying out an estimate — base depths, conversions, install standards, how a scope is written, the clauses every estimate carries. ' +
         'Claude reads all of this with every message about an estimate. Prices and markups don’t belong here; the app works those out.</p>' +

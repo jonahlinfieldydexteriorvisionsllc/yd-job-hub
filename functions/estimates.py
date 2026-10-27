@@ -25,6 +25,10 @@ every estimate carries -- is in pricing/claude (his words, edited in the app,
 never in this public repository) and goes to Claude with every message,
 together with the Supplies catalogue; both are cached between messages.
 
+With each message Claude is also shown a few of Jonah's finished jobs most
+like this one and what they really took on the clock (pastjobs.py) -- worked
+out in plain code, after the cached rules since it changes with the bid.
+
 It is a conversation: each call carries the whole conversation so far and the
 estimate as it stands on screen (he may have changed lines by hand), and
 Claude answers in words and, when he asked for a change, with the whole
@@ -560,7 +564,9 @@ def _chat_text(chat):
     return "\n\n".join(out)
 
 
-def _prompt(d):
+def _prompt(d, past=""):
+    """The message: the job, and -- `past`, from pastjobs.py -- the finished
+    jobs most like it, then the estimate and the conversation."""
     chat = [m for m in (d.get("chat") or []) if isinstance(m, dict) and str(m.get("text") or "").strip()]
     return "\n".join([
         "Today is %s." % dg._long_day(dg._now().date()),
@@ -574,6 +580,7 @@ def _prompt(d):
         "Other notes on the job (context):",
         str(d.get("jobNotes") or "").strip()[:3000] or "(none)",
         "",
+    ] + ([past, ""] if past else []) + [
         "THE ESTIMATE AS IT STANDS:",
         _current_text(d.get("current")),
         "",
@@ -778,10 +785,22 @@ def draft(client, d):
     # -- never cached: they come after the rules.
     newest, nums = d.get("photos") is True, _photo_nums(d.get("photoNums"))
     photos, photos_total, missing = _photos(db, d.get("jobId"), newest, nums) if newest or nums else ([], 0, [])
+    # His finished jobs most like this one, and what they really took
+    # (pastjobs.py) -- with every message, from a copy of the app that shows
+    # him which ones (pastJobs), unless he switched it off. Never in the way:
+    # if they can't be read, the estimate is built without them.
+    past, learned = "", None
+    if d.get("pastJobs") is True:
+        try:
+            import pastjobs
+            past, learned = pastjobs.for_estimate(db, d)
+        except Exception as e:                      # noqa: BLE001
+            print("estimates: finished jobs not read:", e)
+            past, learned = "", None
     with client.beta.messages.stream(
         model=model, max_tokens=64000, system=system,
         messages=[{"role": "user", "content": _photo_blocks(photos, photos_total, newest, missing) +
-                   [{"type": "text", "text": _prompt(d)}]}],
+                   [{"type": "text", "text": _prompt(d, past)}]}],
         thinking={"type": "adaptive"},
         # The first build is the careful one; a follow-up ("make it 18x20")
         # should come back while he is still looking at the screen.
@@ -853,6 +872,9 @@ def draft(client, d):
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
             "photos": len(photos), "photosTotal": photos_total, "photoNums": [p[0] for p in photos],
+            # Which finished jobs it was shown, and the averages (the app's
+            # "📚 Based on N of your finished jobs").
+            "learned": learned,
             "catalogueSize": len(supply_ids), "model": model}, resp.usage
 
 

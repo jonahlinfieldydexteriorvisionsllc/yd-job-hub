@@ -2623,6 +2623,15 @@
   .est-text { white-space:pre-wrap; }
   .est-did { font-size:12px; color:var(--pos); margin-top:4px; }
   .est-did .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-weight:700; text-decoration:underline; cursor:pointer; }
+  /* The finished jobs Claude was shown with a reply (estimate.js learnedHtml) */
+  .est-learned { margin-top:6px; font-size:12px; }
+  .est-learned summary { cursor:pointer; color:var(--brand-ink); font-weight:700; min-height:28px; display:flex; align-items:center; }
+  .est-learned ul { margin:4px 0 6px; padding-left:18px; }
+  .est-learned li { margin:2px 0; }
+  .est-learned-h { font-weight:700; color:var(--muted); margin-top:4px; }
+  .est-learned-note { color:var(--muted); }
+  .est-learned .link-btn { background:none; border:0; padding:0; color:var(--brand-ink); font:inherit; font-weight:700; text-decoration:underline; cursor:pointer; }
+  @media (max-width:720px) { .est-learned summary { min-height:44px; } }
   .est-send { display:flex; gap:8px; align-items:flex-end; margin-top:8px; }
   .est-send textarea { flex:1; }
   .eq-fixed .link-btn { background:none; border:0; padding:0 2px; color:var(--brand-ink); font:inherit; font-size:12px; text-decoration:underline; cursor:pointer; }

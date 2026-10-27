@@ -374,6 +374,8 @@
       const c = { role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.text), at: m.at || null, changed: !!m.changed };
       if (num(m.photos) > 0) c.photos = num(m.photos);       // site photos it looked at (apply)
       if (Array.isArray(m.photoNums) && m.photoNums.length) c.photoNums = m.photoNums.filter(Number.isInteger).slice(0, 40);
+      const learned = cleanLearned(m.learned);                 // the finished jobs it was shown (apply)
+      if (learned) c.learned = learned;
       return c;
     });
     o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
@@ -859,6 +861,61 @@
     return ns.length + ' photos (' + ns[0] + '–' + ns[ns.length - 1] + ')';
   }
 
+  // ------------------------------------------------ what finished jobs said
+  //
+  // With each message Claude is shown the few finished jobs most like this
+  // bid and what they really took on the clock (functions/pastjobs.py: no
+  // customer names or addresses go to it). The answer says which, by job id,
+  // and the averages per kind of work; kept on the reply as `learned` and
+  // shown under it as "📚 Based on N of your finished jobs" -- to him and to
+  // whoever may change jobs, never to someone only looking (it is the
+  // business's margins). Every field there, nothing undefined: the chat is
+  // saved with the job.
+  function cleanLearned(l) {
+    if (!l || typeof l !== 'object') return null;
+    const n = v => (num(v) === null ? null : Math.round(num(v) * 100) / 100);
+    const jobs = (Array.isArray(l.jobs) ? l.jobs : []).filter(j => j && safeId(j.id)).slice(0, 8)
+      .map(j => ({ id: safeId(j.id), bid: n(j.bid), took: n(j.took), hours: n(j.hours) }));
+    const kinds = (Array.isArray(l.kinds) ? l.kinds : [])
+      .filter(k => k && String(k.name || '').trim() && num(k.n) > 0 && num(k.bid) > 0 && num(k.took) !== null).slice(0, 6)
+      .map(k => ({ name: String(k.name).trim().slice(0, 80), n: Math.round(num(k.n)), bid: n(k.bid), took: n(k.took) }));
+    if (!jobs.length && !kinds.length) return null;
+    return { jobs: jobs, kinds: kinds, finished: num(l.finished) > 0 ? Math.round(num(l.finished)) : null,
+             dayHours: num(l.dayHours) > 0 ? num(l.dayHours) : null };
+  }
+  const daysWord = d => String(Math.round(d * 10) / 10);
+  function overUnder(took, bid) {
+    if (!(bid > 0) || took === null) return '';
+    const p = Math.round((took / bid - 1) * 100);
+    return p ? ' (' + (p > 0 ? '+' : '−') + Math.abs(p) + '%)' : ' (right on)';
+  }
+  function learnedJobName(id) {
+    const d = savedJob(id);
+    return (d && String(d.customerName || '').trim()) || 'A finished job';
+  }
+  function learnedHtml(l) {
+    const shown = l.jobs.length || Math.max.apply(null, l.kinds.map(k => k.n));
+    const jobLine = j => {
+      const d = savedJob(j.id), town = d && String(d.city || '').trim();
+      const took = j.took !== null ? 'really took ' + daysWord(j.took) + ' crew-day' + (j.took === 1 ? '' : 's') + overUnder(j.took, j.bid)
+        : j.hours ? j.hours + ' paid hours on the clock' : 'no hours on record';
+      return '<li><b>' + esc(learnedJobName(j.id)) + '</b>' + (town ? ' · ' + esc(town) : '') +
+        (j.bid !== null ? ' · bid ' + daysWord(j.bid) + ' crew-day' + (j.bid === 1 ? '' : 's') : '') + ' · ' + took + '</li>';
+    };
+    return '<details class="est-learned"><summary>📚 Based on ' + shown + ' of your finished job' + (shown === 1 ? '' : 's') + '</summary>' +
+      (l.jobs.length ? '<ul>' + l.jobs.map(jobLine).join('') + '</ul>' : '') +
+      (l.kinds.length ? '<div class="est-learned-h">Kinds of work on this bid with 3 or more finished jobs</div><ul>' +
+        l.kinds.map(k => '<li>' + esc(k.name) + ' — ' + k.n + ' jobs: bid ' + daysWord(k.bid) + ' crew-days on average, really took ' +
+          daysWord(k.took) + overUnder(k.took, k.bid) + '</li>').join('') + '</ul>' : '') +
+      '<div class="est-learned-note">Claude was shown these jobs — without names or addresses — as examples of what jobs like this ' +
+        'really took: their work, materials and price, the clock’s hours and what the crew noted. Your Pricing rules text always wins.' +
+        (l.dayHours ? ' A crew-day is ' + l.dayHours + ' paid hours of the whole crew.'
+          : ' Set “Hours in a crew-day” in Pricing rules and the clock’s hours are counted as crew-days.') +
+        (window.YDAuth && YDAuth.isOwner ? ' <button type="button" class="link-btn ro-ok" onclick="openPricingRules()">Pricing rules</button>' : '') +
+      '</div></details>';
+  }
+  const learnedKey = l => l.jobs.map(j => j.id).join(',') + '|' + l.kinds.map(k => k.name + k.n).join(',');
+
   // On a phone the chat is part of the page, not a box of its own: its last
   // few messages, and the earlier ones behind a tap (styles.css hides them
   // there; a wider screen keeps the whole conversation in its scrolling box).
@@ -889,6 +946,20 @@
     const lastM = est.chat[lastI];
     const unanswered = !ro && lastM && lastM.role === 'user' && !busyHere() && queued.indexOf(currentJobId) === -1 &&
       (!lastM.at || Date.now() - Date.parse(lastM.at) > UNANSWERED_MS);
+    // Which finished jobs each reply was shown: under a reply when they
+    // differ from the reply before, and always under the newest one -- not
+    // the same list under every answer.
+    const learnedAt = {};
+    if (changes()) {
+      let was = '', newest = -1;
+      est.chat.forEach((m, i) => {
+        if (m.role !== 'assistant' || !m.learned) return;
+        const k = learnedKey(m.learned);
+        if (k !== was) learnedAt[i] = true;
+        was = k; newest = i;
+      });
+      if (newest >= 0) learnedAt[newest] = true;
+    }
     return '<div class="est-chat' + (chatAll[currentJobId || ''] ? ' est-chat-all' : '') + '" id="estChat">' +
         (older ? '<button type="button" class="link-btn est-chat-older ro-ok" onclick="estChatAll()">Show the ' + older +
           ' earlier message' + (older === 1 ? '' : 's') + '</button>' : '') +
@@ -896,6 +967,7 @@
           '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
           '<div class="est-text">' + esc(m.text) + '</div>' +
           (m.role === 'assistant' && m.photos ? '<div class="est-did">📷 Looked at ' + photosSeenText(m) + '</div>' : '') +
+          (learnedAt[i] ? learnedHtml(m.learned) : '') +
           (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate' +
             (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
             '</div>' : '') +
@@ -4232,6 +4304,10 @@
         patchOk: true,
         photos: photos,
         photoNums: photoNums,
+        // This copy of the app shows which of his finished jobs Claude was
+        // shown with each message (functions/pastjobs.py; off in Pricing
+        // rules) -- an older copy, which can't, gets none sent.
+        pastJobs: !snowy,
         // His usual grass seed in its biggest bag (Pricing rules): the one
         // Claude uses unless he names another (estimates.py).
         usualSeed: snowy || !window.YDMatch || !YDMatch.usualSeed ? null : YDMatch.usualSeed(catalog()),
@@ -4286,6 +4362,9 @@
     if (num(r.photos) > 0) msg.photos = num(r.photos);
     const seen = (Array.isArray(r.photoNums) ? r.photoNums : []).filter(Number.isInteger);
     if (seen.length) msg.photoNums = seen;
+    // The finished jobs it was shown with this message (learnedHtml).
+    const learned = cleanLearned(r.learned);
+    if (learned) msg.learned = learned;
     e.chat.push(msg);
     return did;
   }
