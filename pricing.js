@@ -506,8 +506,13 @@
       return out;
     }
     if (costCents === null) { out.problems.push(it ? 'no price in Supplies' : 'no cost'); return out; }
-    if (markupPct === null) { out.problems.push('no markup set for ' + kindName(cat) + ' (⋯ → Pricing rules)'); return out; }
     if (num(r.taxPct) === null) { out.problems.push('sales tax % not set'); return out; }
+    // What it costs us is known without a markup; only the customer's price
+    // waits for one -- a kind he added and has not given a markup yet. A job
+    // accepted in QuickBooks never needs it (price() leaves the problem out).
+    const noMarkup = markupPct === null;
+    if (noMarkup) { out.noMarkup = true; out.problems.push('no markup set for ' + kindName(cat) + ' (⋯ → Pricing rules)'); }
+    const up = noMarkup ? 0 : 1 + markupPct / 100;
     // A category can be set as not taxed when bought (a rental, say). A cost
     // typed onto the line from a quote that already has the tax in it
     // (m.taxIn, Jonah 20 Oct 2026: "the prices for the turf and the airdrain
@@ -519,7 +524,7 @@
       out.rentalPlan = rent.plan;
       out.landedEachCents = Math.round(rent.cents * landing / orderQty);
       out.costTotalCents = Math.round(rent.cents * landing);
-      out.clientCents = Math.round(rent.cents * landing * (1 + markupPct / 100));
+      out.clientCents = Math.round(rent.cents * landing * up);
       return out;
     }
     out.landedEachCents = Math.round(costCents * landing);
@@ -533,7 +538,7 @@
       out.perLbCents = pk.lb ? costCents / pk.lb : null;     // the supplier's price a pound
     }
     out.costTotalCents = Math.round(charged * out.landedEachCents);
-    out.clientCents = Math.round(charged * out.landedEachCents * (1 + markupPct / 100));
+    out.clientCents = Math.round(charged * out.landedEachCents * up);
     return out;
   }
 
@@ -994,7 +999,12 @@
     // Accepted in QuickBooks, a material with no cost here leaves the price as
     // it is -- only what the job makes unknown -- so it is told apart.
     const noCost = [];
-    all.forEach(l => l.problems.forEach(p => (fixed ? noCost : problems).push((l.name || 'A material') + ': ' + p)));
+    // Accepted in QuickBooks, a missing markup leaves nothing unknown: the
+    // price is QuickBooks' and the cost is known (materialLine).
+    all.forEach(l => l.problems.forEach(p => {
+      if (fixed && l.noMarkup && /^no markup set/.test(p)) return;
+      (fixed ? noCost : problems).push((l.name || 'A material') + ': ' + p);
+    }));
     (est.work || []).forEach((w, i) => work[i].problems.forEach(p => problems.push((w.title || 'Labor line') + ': ' + p)));
     del.problems.forEach(p => (fixed ? noCost : problems).push('Delivery: ' + p));
     fu.problems.forEach(p => (fixed ? noCost : problems).push('Fuel: ' + p));
