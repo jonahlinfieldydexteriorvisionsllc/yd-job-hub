@@ -122,7 +122,7 @@ STATE_CODES = {
     "Oregon": "OR", "Pennsylvania": "PA", "Rhode Island": "RI", "South Carolina": "SC", "South Dakota": "SD",
     "Tennessee": "TN", "Texas": "TX", "Utah": "UT", "Vermont": "VT", "Virginia": "VA", "Washington": "WA",
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"}
-# "5020 Peach Bl...", "N1234 County Rd X": the house (or fire) number first.
+# "123 Main St...", "N1234 County Rd X": the house (or fire) number first.
 HOUSE_NO = re.compile(r"^\s*([NSEW]?\d+[A-Za-z]?)\s+\S")
 
 
