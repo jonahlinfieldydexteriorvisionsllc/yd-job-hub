@@ -864,6 +864,19 @@
        the ones waiting to be put against a job, then every one so far.
        Hidden from anyone who cannot see jobs. -->
   <div class="tab-panel" id="panel-receipts">
+    <!-- Bills the email reader found that are not paid yet (receipts.js
+         payHtml): not receipts until they are paid. Shown only when there
+         are any. -->
+    <div class="section" id="rcPaySection" hidden>
+      <div class="section-head">
+        <span class="section-title">💸 Invoices to pay</span>
+        <span class="section-badge accent" id="rcPayBadge"></span>
+      </div>
+      <div class="section-body">
+        <div id="rcPayList"></div>
+      </div>
+    </div>
+
     <div class="section" id="rcSection" hidden>
       <div class="section-head">
         <span class="section-title">Receipts to sort</span>

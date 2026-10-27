@@ -867,6 +867,18 @@
       }
       if (old) rows.push(line('📥', '<b>' + plural(old, 'receipt') + ' from earlier this year</b>', 'From the email pull — put each on its job', '',
         "switchTab('receipts')"));
+      // Bills the email reader found not paid yet (receipts.js payHtml) --
+      // not the year's pull, most of which were paid long ago. Late first.
+      const bills = (YDReceipts.toPay ? YDReceipts.toPay() : []).filter(r => r && !r.pulled);
+      if (bills.length) {
+        const st = r => window.YDStages.receipt(r);
+        const late = bills.filter(r => st(r).late).length;
+        const top = bills.slice().sort((a, b) => (st(b).late - st(a).late) || String(st(a).due || '9').localeCompare(String(st(b).due || '9')))
+          .slice(0, 3).map(r => esc(r.vendor || 'Bill') + ' ' + fmtMoney((Number(r.totalCents) || 0) / 100) +
+            (st(r).due ? ' due ' + esc(fmtDateMD(st(r).due)) : '')).join(' · ');
+        rows.push(line('💸', '<b>' + plural(bills.length, 'invoice') + ' to pay</b>',
+          (late ? '<b>' + late + ' late</b> · ' : '') + top + (bills.length > 3 ? ' …' : ''), '', "switchTab('receipts')"));
+      }
     }
     // Prices a receipt said differently (supplies.js Prices to check): only
     // whoever may change the price list is waited on.

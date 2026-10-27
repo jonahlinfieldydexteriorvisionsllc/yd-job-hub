@@ -8,6 +8,9 @@
 // overhead, property overhead, a subcontractor, a loan payment, personal --
 // or set aside, with a note saying why (PLACE_LIST below). Tags on the whole
 // receipt (a rebate to claim, a warranty...) come on top of that (RECEIPT_TAGS).
+// What is no receipt at all is kept apart: a bill not paid yet waits under
+// Invoices to pay until it is, and anything can be marked 🚫 Not a receipt,
+// which teaches the email reader to pass mail like it over (rcNotReceipt).
 //
 // "Add to job" puts the ticked lines into that job's materials (Tracking),
 // one materials line per receipt line, plus that job's share of the sales
@@ -208,6 +211,12 @@
   // from a receipt still to sort leave it as it was.
   const stageOf = r => window.YDStages.receipt(r);
   const toSortNow = r => !!r && stageOf(r).id === 'tosort';
+  // A bill not paid yet (Invoices to pay), and one marked Not a receipt:
+  // their own stored words (stages.js), neither of them a cost.
+  const TO_PAY = window.YDStages.RECEIPT_TO_PAY || 'topay';
+  const NOT_RECEIPT = window.YDStages.RECEIPT_NOT || 'notreceipt';
+  const toPayNow = r => !!r && stageOf(r).id === 'topay';
+  const notReceiptNow = r => !!r && stageOf(r).id === 'notreceipt';
   // To sort and from the new mail -- not from the year's pull (pulledHtml).
   const newToSort = r => toSortNow(r) && !r.pulled;
   function moved(r, patch, who) {
@@ -787,12 +796,261 @@
     const r = receipts[rid];
     if (!r) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    if (notReceiptNow(r)) { notBack(rid, true); return; }
     const status = freeLines(r).length ? 'new' : 'done';
     const patch = moved(r, { status, skipWhy: '', skippedBy: '' });
     receipts[rid] = Object.assign({}, r, patch);
     write(rid, Object.assign({}, patch));
     redraw(true);
   };
+
+  // ------------------------------------------------- not a receipt
+  //
+  // Jonah, 26 Oct 2026: "you keep pulling things that arent receipts. I want
+  // you to learn from the recceipts I mark as not receipts. so add a 'not
+  // receipt' tag." 🚫 Not a receipt on any receipt with nothing put anywhere
+  // yet (lines already on a job come off first, ⋯ → Undo): it leaves To
+  // sort and every total, is never sent to QuickBooks, and waits under All
+  // receipts → 🚫 Not receipts, where Put back undoes it.
+  //
+  // And it teaches the email reader, in plain code: each of its emails --
+  // the sender (the store's domain, or the whole address for gmail and the
+  // like) and the subject's shape (every word with a digit in it one "#") --
+  // goes in settings/receiptLearn, and mail like it is passed over unread
+  // from then on (functions/receipts.py _learned). The latest are also shown
+  // to the call that sorts the mail, so Claude learns from them too. Undone
+  // (Put back), the receipt's id comes off its patterns, and a pattern with
+  // no receipt left counts no more: one wrong mark is undone by undoing it.
+  //
+  // Never too wide: a pattern that other receipts here also have (a store's
+  // "Order confirmation" marked because it was a $0 order) is only shown to
+  // Claude as an example, never skipped by code -- so a real receipt like
+  // it is never passed over unread.
+  const LEARN_DOC = 'receiptLearn';
+  // Keep these three the same as receipts.py FREE_MAIL, sender_key and
+  // subject_shape. The server works the sender and shape out again from the
+  // From and Subject kept here; these are for the check above and the key.
+  const FREE_MAIL = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'aol.com',
+    'me.com', 'live.com', 'msn.com', 'comcast.net', 'att.net', 'charter.net'];
+  function senderKey(from) {
+    const m = /<([^>]+)>/.exec(String(from || ''));
+    const addr = (m ? m[1] : String(from || '')).trim().toLowerCase();
+    if (addr.indexOf('@') === -1) return '';
+    const domain = addr.split('@').pop();
+    if (FREE_MAIL.indexOf(domain) !== -1) return addr.replace(/\//g, '_').slice(0, 200);
+    return domain.split('.').slice(-2).join('.').replace(/\//g, '_');
+  }
+  function subjectShape(subject) {
+    let s = String(subject || '').replace(/^\s*((re|fwd?|fw)\s*:\s*)+/i, '').toLowerCase();
+    s = s.split(/\s+/).filter(Boolean).map(w => /[0-9]/.test(w) ? '#' : w).join(' ');
+    s = s.replace(/[^a-z#]+/g, ' ').split(/\s+/).filter(Boolean).join(' ').replace(/#(\s+#)+/g, '#');
+    return s.trim().slice(0, 120);
+  }
+  // A short stable key for a pattern (a map key in settings/receiptLearn).
+  function patternKey(sender, shape) {
+    const text = sender + '|' + shape;
+    const fnv = seed => {
+      let h = seed >>> 0;
+      for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+      return h.toString(36);
+    };
+    return 'lp' + fnv(2166136261) + fnv(374761393);
+  }
+  // A receipt's emails as patterns: one per sender + subject shape. `skip`
+  // false when another receipt still counted here has one the same.
+  function patternsOf(rid, r) {
+    const seen = {};
+    const out = [];
+    (Array.isArray(r.mail) ? r.mail : []).forEach(m => {
+      if (!m || !m.from) return;
+      const sender = senderKey(m.from), shape = subjectShape(m.subject);
+      if (!sender || !/[a-z]/.test(shape)) return;
+      const key = patternKey(sender, shape);
+      if (seen[key]) return;
+      seen[key] = true;
+      out.push({ key, sender, shape, from: String(m.from).slice(0, 200), subject: String(m.subject || '').slice(0, 300), skip: true });
+    });
+    if (!out.length) return out;
+    allReceipts().forEach(o => {
+      if (o.id === rid || notReceiptNow(o) || isAside(o)) return;
+      (Array.isArray(o.mail) ? o.mail : []).forEach(m => {
+        if (!m || !m.from) return;
+        const sender = senderKey(m.from), shape = subjectShape(m.subject);
+        out.forEach(p => { if (p.sender === sender && p.shape === shape) p.skip = false; });
+      });
+    });
+    return out;
+  }
+  // The patterns, with this receipt's id on (on) or off (null) each. Merged:
+  // other receipts' marks on the same pattern are kept.
+  function learn(rid, pats, on) {
+    if (!pats.length) return;
+    const at = new Date().toISOString(), by = (me() || {}).uid || '';
+    const patterns = {};
+    pats.forEach(p => {
+      patterns[p.key] = on
+        ? { from: p.from, subject: p.subject, sender: p.sender, shape: p.shape, skip: p.skip, at, by, ids: { [rid]: true } }
+        : { ids: { [rid]: null } };
+    });
+    Promise.resolve(window.YDDb.put('settings', LEARN_DOC, { patterns, updatedAt: at })).catch(e =>
+      console.warn('[receipts] what was marked not a receipt not yet on the server:', (e && e.code) || e));
+  }
+  // Nothing on it may be anywhere yet: lines on a job come back off first.
+  const markable = r => !!r && !(r.splits || []).length && !notReceiptNow(r);
+  window.rcNotReceipt = function (rid) {
+    const r = receipts[rid];
+    if (!r || leaving[rid]) return;
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    if ((r.splits || []).length) { showToast('Take its lines back off first (⋯ → Undo), then mark it not a receipt'); return; }
+    if (notReceiptNow(r)) return;
+    const pats = patternsOf(rid, r);
+    const skip = pats.some(p => p.skip);
+    const was = r.status === TO_PAY || r.status === 'skipped' ? r.status : 'new';
+    const patch = moved(r, { status: NOT_RECEIPT, notReceipt: { at: new Date().toISOString(), by: (me() || {}).uid || '',
+      was, keys: pats.map(p => p.key), skip } });
+    receipts[rid] = Object.assign({}, r, patch);
+    delete ticked[rid]; delete chosen[rid]; delete splitting[rid]; delete dest[rid];
+    write(rid, Object.assign({}, patch));
+    learn(rid, pats, true);
+    const say = '🚫 ' + (r.vendor || 'It') + ' — not a receipt. ' + (skip ? 'Mail like it is passed over from now on.'
+      : pats.length ? 'Claude is shown it as an example (other receipts look like it).' : 'Under All receipts → 🚫 Not receipts.');
+    if (typeof showUndo === 'function') showUndo(say, () => notBack(rid, false), UNDO_MS); else showToast(say);
+    redraw(true);
+  };
+  // Put back to what it was before it was marked, and taken off what the
+  // reader learned. `say`: tell so (Put back); Undo needs no words.
+  function notBack(rid, say) {
+    const r = receipts[rid];
+    if (!r || !notReceiptNow(r)) return;
+    const n = r.notReceipt || {};
+    const status = n.was === TO_PAY || n.was === 'skipped' ? n.was : 'new';
+    const patch = moved(r, { status, notReceipt: null });
+    receipts[rid] = Object.assign({}, r, patch);
+    write(rid, Object.assign({}, patch));
+    learn(rid, (n.keys || []).map(key => ({ key })), false);
+    if (say) showToast('Put back — ' + (status === TO_PAY ? 'under Invoices to pay' : status === 'skipped' ? 'set aside, as it was' : 'in Receipts to sort') +
+      '. Mail like it is read again.');
+    redraw(true);
+  }
+
+  // ------------------------------------------------- invoices to pay
+  //
+  // A bill not paid yet is not a receipt (Jonah, 26 Oct 2026: "that should go
+  // into something that says 'invoices to pay'"). The email reader keeps one
+  // as status topay (functions/receipts.py unpaid_bill): listed at the top of
+  // this tab with when it is due, counted nowhere, never sent to QuickBooks.
+  // Its payment email (the same store and amount) makes it a receipt to sort
+  // by itself; ✓ Paid does the same by hand -- with Undo -- for a bill paid
+  // with no email to say so. Either way it then goes to its job like any
+  // other receipt. 💸 Not paid yet, on a receipt in To sort, is the way back
+  // the other way: a bill the reader took for a receipt.
+  const todayYMD = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+  function toPayPatch(r, status) {
+    return moved(r, status === TO_PAY ? { status: TO_PAY, paidOn: null } : { status: 'new', paidOn: todayYMD() });
+  }
+  function setPay(ids, status) {
+    const back = [];
+    ids.forEach(rid => {
+      const r = receipts[rid];
+      if (!r || (r.splits || []).length) return;
+      back.push([rid, r.status, r.paidOn == null ? null : r.paidOn]);
+      const patch = toPayPatch(r, status);
+      receipts[rid] = Object.assign({}, r, patch);
+      write(rid, Object.assign({}, patch));
+    });
+    redraw(true);
+    return back;
+  }
+  // Undo: each one as it was, while nothing on it has been sorted since.
+  function undoPay(back) {
+    back.forEach(([rid, status, paidOn]) => {
+      const r = receipts[rid];
+      if (!r || (r.splits || []).length) return;
+      const patch = moved(r, { status, paidOn });
+      receipts[rid] = Object.assign({}, r, patch);
+      write(rid, Object.assign({}, patch));
+    });
+    redraw(true);
+  }
+  window.rcPaid = function (rid) {
+    const r = receipts[rid];
+    if (!r || !toPayNow(r)) return;
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    const back = setPay([rid], 'new');
+    const say = '✓ ' + (r.vendor || 'Bill') + ' ' + money(r.totalCents) + ' paid — in Receipts to sort now';
+    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back), UNDO_MS); else showToast(say);
+  };
+  // Several at once: the year's pull (old bills, most of them paid long
+  // ago), or every bill from one store -- a supplier billed on account, paid
+  // by the month.
+  async function paidMany(ids, title, why) {
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    if (!ids.length || !(await ydConfirm(why, { title: title, ok: 'They’re paid' }))) return;
+    const back = setPay(ids.filter(id => toPayNow(receipts[id])), 'new');
+    const say = '✓ ' + back.length + ' bill' + (back.length === 1 ? '' : 's') + ' paid — in Receipts to sort now';
+    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back), UNDO_MS); else showToast(say);
+  }
+  window.rcPaidAll = function () {
+    const ids = allReceipts().filter(r => toPayNow(r) && r.pulled).map(r => r.id);
+    paidMany(ids, 'Mark all ' + ids.length + ' paid?', 'Each goes to 📥 Earlier this year in Receipts to sort, to put on its job.');
+  };
+  // The store, as its first real word (receipts.py vendor_key): "The Home
+  // Depot" and "Home Depot Pro" are one.
+  const storeKey = v => String(v || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(' ')
+    .filter(w => w && ['the', 'a', 'an'].indexOf(w) === -1)[0] || '';
+  window.rcPaidStore = function (key) {
+    const list = allReceipts().filter(r => toPayNow(r) && !r.pulled && storeKey(r.vendor) === key);
+    paidMany(list.map(r => r.id), 'Mark all ' + list.length + ' from ' + ((list[0] || {}).vendor || 'this store') + ' paid?',
+      'Each goes to Receipts to sort, to put on its job.');
+  };
+  window.rcNotPaid = function (rid) {
+    const r = receipts[rid];
+    if (!r || !toSortNow(r)) return;
+    if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
+    if ((r.splits || []).length) { showToast('Take its lines back off first (⋯ → Undo)'); return; }
+    const back = setPay([rid], TO_PAY);
+    const say = '💸 ' + (r.vendor || 'Bill') + ' — under Invoices to pay until it is paid';
+    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back), UNDO_MS); else showToast(say);
+  };
+
+  // A bill's row: who, how much, when it is due, and what to do with it.
+  function payRowHtml(r) {
+    const rid = safeId(r.id);
+    const st = stageOf(r);
+    const due = st.due ? (st.late ? 'Was due ' : 'Due ') + fmtDateMD(st.due) : 'No due date';
+    const dueChip = '<span class="stc stc-' + (st.due ? st.tone : 'info') + '">' + esc(due) + '</span>';
+    return '<div class="rc-row rc-pay-row" id="rcPay_' + rid + '"><span class="rc-row-main"><b>' + esc(r.vendor || 'Bill') + '</b> ' +
+        '<span class="muted">' + (r.orderNo ? '#' + esc(r.orderNo) + ' · ' : '') + fmtDateMD(r.date) + '</span> ' +
+        esc(r.summary || '') + (r.whose === 'personal' ? ' <span class="rc-tag">👤 Personal</span>' : '') +
+        (tagsOf(r).length ? ' ' + tagChipsHtml(r) : '') + '</span>' +
+        dueChip + '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
+        (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
+        (sorts() ? '<button class="btn btn-sm btn-filled" onclick="rcPaid(\'' + rid + '\')">✓ Paid</button>' +
+          '<button class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>' : '') +
+        deleteBtn(rid, true) +
+      '</div>';
+  }
+  // Late first, then by when each is due; the year's pull folded away.
+  function payHtml(list) {
+    const rank = r => { const st = stageOf(r); return st.late ? 0 : st.due ? 1 : 2; };
+    const order = (a, b) => (rank(a) - rank(b)) || String(stageOf(a).due || '').localeCompare(String(stageOf(b).due || '')) ||
+      String(a.date || '').localeCompare(String(b.date || ''));
+    const now = list.filter(r => !r.pulled).sort(order), old = list.filter(r => r.pulled).sort(order);
+    // A store with several bills waiting: all of them paid in one tap.
+    const stores = {};
+    now.forEach(r => { const k = storeKey(r.vendor); if (k) (stores[k] = stores[k] || []).push(r); });
+    const many = Object.keys(stores).filter(k => stores[k].length > 1);
+    return now.map(payRowHtml).join('') +
+      (many.length && sorts() ? '<div class="rc-pay-stores">' + many.map(k =>
+        '<button type="button" class="btn btn-sm" data-store="' + esc(k) + '" onclick="rcPaidStore(this.dataset.store)">✓ All ' +
+          stores[k].length + ' from ' + esc(stores[k][0].vendor || k) + ' paid</button>').join('') + '</div>' : '') +
+      (now.length ? '<div class="rc-hint">Not receipts until they are paid — counted nowhere, never sent to QuickBooks. ' +
+        'Paid: it goes to Receipts to sort by itself when its payment email comes, or tap ✓ Paid.</div>' : '') +
+      (old.length ? '<details class="rc-pay-old"' + (now.length ? '' : ' open') + '><summary>📥 ' + old.length +
+        ' from earlier this year (the email pull) — most were paid long ago</summary>' +
+        (sorts() ? '<button class="btn btn-sm" onclick="rcPaidAll()">✓ All ' + old.length + ' paid — put them in To sort</button>' : '') +
+        old.map(payRowHtml).join('') + '</details>' : '');
+  }
 
   async function ask(path) {
     const user = me();
@@ -824,6 +1082,10 @@
           : 'No new receipts' + (rep.waiting ? ' yet — ' + rep.waiting + ' waiting for the next check' : ''))
           // Clearly a household's: kept, and filed under Personal by itself.
           + (rep.personal ? ' · ' + rep.personal + ' personal, filed under 👤 Personal' : '')
+          // Bills not paid yet, kept apart; mail for nothing, or like what
+          // was marked not a receipt, passed over.
+          + (rep.toPay ? ' · ' + rep.toPay + ' bill' + (rep.toPay === 1 ? '' : 's') + ' not paid yet, under 💸 Invoices to pay' : '')
+          + ((rep.zero || 0) + (rep.learned || 0) ? ' · ' + ((rep.zero || 0) + (rep.learned || 0)) + ' passed over ($0, or like ones marked not a receipt)' : '')
           + (rep.byCode ? ' · ' + rep.byCode + ' sorted by the app, no Claude' : ''));
       }
     } catch (e) {
@@ -999,7 +1261,7 @@
   // `where` tells a card in To sort ('c') from a row in All receipts ('h'):
   // the same receipt can be in both.
   let menuOpen = '';          // the ⋯ menu that is open, kept through a redraw
-  function menuItems(rid, r) {
+  function menuItems(rid, r, where) {
     const items = [];
     if (sorts()) {
       (r.splits || []).forEach(s => items.push('<button type="button" ' +
@@ -1010,6 +1272,15 @@
       // nothing on it is sorted -- functions/receipts.py read_again.
       if (!(r.splits || []).length && (r.mail || []).length && stageOf(r).id === 'tosort') {
         items.push('<button type="button" onclick="rcMenuClose(); rcReadAgain(\'' + rid + '\')">📖 Read it again</button>');
+      }
+      // A bill the reader took for a receipt (its own button when it says
+      // Owed, cardHtml): to Invoices to pay until it is paid.
+      if (!(r.splits || []).length && stageOf(r).id === 'tosort' && !owedOf(r)) {
+        items.push('<button type="button" onclick="rcMenuClose(); rcNotPaid(\'' + rid + '\')">💸 Not paid yet — to Invoices to pay</button>');
+      }
+      // In All receipts (a card in To sort has the button itself).
+      if (where === 'h' && markable(r)) {
+        items.push('<button type="button" onclick="rcMenuClose(); rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>');
       }
     }
     return items;
@@ -1036,7 +1307,7 @@
       ' onclick="rcDelete(\'' + rid + '\')">' + (small ? '🗑' : '🗑 Delete') + '</button>' : '';
   }
   function menuHtml(where, rid, r) {
-    const items = menuItems(rid, r);
+    const items = menuItems(rid, r, where);
     if (!items.length) return '';
     const key = where + rid;
     return '<details class="rc-menu" data-menu="' + key + '"' + (menuOpen === key ? ' open' : '') +
@@ -1047,7 +1318,7 @@
   function chipsHtml(where, rid, r) {
     const list = r.splits || [];
     if (!list.length) return '';
-    const opens = menuItems(rid, r).length > 0;
+    const opens = menuItems(rid, r, where).length > 0;
     return '<span class="rc-chips">' + list.map(s => {
       const n = (s.lines || []).length, amt = money((s.cents || 0) + (s.taxCents || 0));
       const title = (n ? n + ' line' + (n === 1 ? '' : 's') + (s.taxCents ? ' + tax' : '') + ', ' : '') + amt +
@@ -1104,7 +1375,7 @@
     const tickedSet = new Set(tickedLines(rid, r));
     const pick = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
     const sug = r.suggest && jobs.find(j => j.id === r.suggest.jobId);
-    const owed = r.paid === false && r.docType === 'invoice';
+    const owed = owedOf(r);
     const split = isSplit(rid, r);
     const to = dest[rid] || defaultDest(r);
     // Lines still to place -- or a receipt with no lines at all, which goes whole.
@@ -1148,11 +1419,22 @@
       (sortable && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
-        tagBtn('c', rid) + deleteBtn(rid) + menuHtml('c', rid, r) +
+        tagBtn('c', rid) + notBtns(rid, r, owed) + deleteBtn(rid) + menuHtml('c', rid, r) +
       '</div>' +
       tagEditHtml('c', rid, r) +
       qbHtml(r, rid) +
     '</div>';
+  }
+
+  // An invoice still owed, read before bills had a place of their own (or
+  // one the reader took for a receipt) -- not once Paid was tapped on it.
+  const owedOf = r => !!r && r.paid === false && r.docType === 'invoice' && !r.paidOn;
+  // 🚫 Not a receipt on every card with nothing put anywhere yet, and 💸 Not
+  // paid yet beside it on one that says Owed.
+  function notBtns(rid, r, owed) {
+    if (!sorts() || !markable(r)) return '';
+    return (owed ? '<button type="button" class="btn btn-sm" onclick="rcNotPaid(\'' + rid + '\')">💸 Not paid yet</button>' : '') +
+      '<button type="button" class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>';
   }
 
   // Where it is going: one chip each, the first already picked from what
@@ -1238,7 +1520,8 @@
   // _not_for_qb; keep the two the same).
   function notForQb(r) {
     const st = stageOf(r);
-    if (st.noQb || st.offBooks) return true;
+    // A bill still to pay, or not a receipt at all: never.
+    if (st.noQb || st.offBooks || st.id === 'topay' || st.id === 'notreceipt') return true;
     return r.kind === 'loan_payment' && st.id === 'tosort' && !(r.splits || []).length;
   }
   function qbHtml(r, rid, compact) {
@@ -1374,6 +1657,7 @@
       detail: legacy ? (DEST.find(d => d[0] === legacy) || ['', ''])[1].split(' ')[0] + ' ' + (legacyName || DEST_NAME[legacy])
         : st.id === 'tosort' && st.part ? 'part filed' : '' });
     const why = aside ? asideText(r) : '';
+    const notOne = st.id === 'notreceipt';
     // Where it went sits in the row as a chip or two, not a bar under it.
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
         '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
@@ -1382,10 +1666,14 @@
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
-        (r.status === 'skipped' && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
+        ((r.status === 'skipped' || notOne) && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
         tagBtn('h', rid) + menuHtml('h', rid, r) + deleteBtn(rid, true) +
       '</div>' +
       (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '') +
+      // What the mark taught the email reader (rcNotReceipt).
+      (notOne ? '<div class="rc-aside-why">' + (r.notReceipt && r.notReceipt.skip ? 'Mail like it is passed over unread.'
+        : r.notReceipt && (r.notReceipt.keys || []).length ? 'Shown to Claude as an example — other receipts look like it, so none is passed over by itself.'
+        : 'No email to learn from.') + ' Put back undoes it.</div>' : '') +
       tagEditHtml('h', rid, r);
   }
 
@@ -1430,14 +1718,22 @@
   }
 
   function render() {
-    const sec = el('rcSection'), hist = el('rcHistorySection'), tab = el('tabReceipts');
+    const sec = el('rcSection'), hist = el('rcHistorySection'), tab = el('tabReceipts'), pay = el('rcPaySection');
     if (!sec) return;
     const on = !!(window.YDAuth && window.YDAuth.mode === 'cloud' && window.YDAuth.user) && sees();
     sec.hidden = hist.hidden = !on;
     if (tab) tab.hidden = !on;
-    if (!on) { badges(0); return; }
+    if (!on) { badges(0); if (pay) pay.hidden = true; return; }
 
     const all = allReceipts();
+    // Bills to pay, above the receipts -- only when there are any.
+    const bills = all.filter(toPayNow);
+    if (pay) {
+      pay.hidden = !loaded || !bills.length;
+      const late = bills.filter(r => !r.pulled && stageOf(r).late).length, fresh = bills.filter(r => !r.pulled).length;
+      el('rcPayBadge').textContent = fresh ? fresh + (late ? ' · ' + late + ' late' : '') : '';
+      el('rcPayList').innerHTML = bills.length ? payHtml(bills) : '';
+    }
     // The ones waiting on a person first: a photo that could not go on its
     // job by itself says why at the top of the list.
     const open = all.filter(newToSort).sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
@@ -1491,6 +1787,8 @@
   // that went only there.
   const VIEWS = PLACE_LIST.reduce((o, p) => (o[p.id] = p.view, o), { all: 'All' });
   VIEWS.skipped = '🗄 Set aside';
+  // Marked Not a receipt: only ever here, under its own filter, to put back.
+  VIEWS.notreceipt = '🚫 Not receipts';
   let view = 'all';
   // The places the books count (month totals), and what each is called there.
   const PLACES = PLACE_LIST.map(p => p.id).filter(id => !offBooks(id));
@@ -1513,7 +1811,7 @@
   // to Personal; set aside, only what was put somewhere first.
   const business = r => isAside(r) ? placed(r)
     : Math.max(0, (r.totalCents || 0) - OFF_BOOKS.reduce((t, p) => t + amountTo(r, p), 0));
-  const inAll = r => isAside(r) ? placed(r) > 0 : !stageOf(r).offBooks;
+  const inAll = r => isAside(r) ? placed(r) > 0 : !notReceiptNow(r) && !stageOf(r).offBooks;
   // A place's own filter: every receipt with something there, whatever it
   // came to (a $0 line still went there).
   const goesTo = (r, p) => stageOf(r).places.indexOf(p) !== -1;
@@ -1521,7 +1819,7 @@
   // it went -- one still to sort too, set aside or Personal.
   const viewTag = () => view.indexOf('tag:') === 0 ? view.slice(4) : '';
   const inView = r => viewTag() ? tagsOf(r).indexOf(viewTag()) !== -1
-    : view === 'all' ? inAll(r) : view === 'skipped' ? isAside(r) : goesTo(r, view);
+    : view === 'all' ? inAll(r) : view === 'skipped' ? isAside(r) : view === 'notreceipt' ? notReceiptNow(r) : goesTo(r, view);
   window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
   window.rcViewTag = function (t) { const tag = cleanTag(t); if (tag) { view = 'tag:' + tag; renderHistory(); } };
   // Typing in the search box redraws only the list under it, so the box keeps
@@ -1533,7 +1831,7 @@
     const hay = [r.vendor, r.orderNo, r.summary, r.date,
       (r.lines || []).map(l => l.name + ' ' + (l.itemNo || '')).join(' '),
       (r.splits || []).map(x => (x.jobName || x.name || '') + ' ' + (x.est || '') + ' ' + DEST_NAME[destOf(x)]).join(' '),
-      tagNames(r), isAside(r) ? 'set aside ' + asideText(r) : ''].join(' ').toLowerCase();
+      tagNames(r), isAside(r) ? 'set aside ' + asideText(r) : '', notReceiptNow(r) ? 'not a receipt' : ''].join(' ').toLowerCase();
     return words.every(w => hay.indexOf(w) !== -1);
   }
 
@@ -1554,7 +1852,8 @@
         : (olderState === 'failed' ? 'Receipts from before ' + esc(before) + ' could not be read just now. '
           : 'Receipts from before ' + esc(before) + ' are not loaded. ') +
           '<button class="link-btn" onclick="rcOlder()">' + (olderState === 'failed' ? 'Try again' : 'Show them') + '</button>') + '</p>';
-    const every = allReceipts().filter(r => !toSortNow(r));
+    // Bills still to pay have their own list above (payHtml).
+    const every = allReceipts().filter(r => !toSortNow(r) && !toPayNow(r));
     // A tag's filter looks at the ones still to sort as well.
     const shown = (viewTag() ? allReceipts() : every).filter(r => inView(r) && matches(r, words)).sort(byNewest);
     const aside = every.filter(deletableAside);
@@ -1594,7 +1893,7 @@
       if (!m || m.key !== key) { m = { key, rows: [], cents: 0, by: {} }; months.push(m); }
       m.rows.push(r);
       // A tag is on the whole receipt: its whole total.
-      m.cents += view === 'skipped' || viewTag() ? (r.totalCents || 0)
+      m.cents += view === 'skipped' || view === 'notreceipt' || viewTag() ? (r.totalCents || 0)
         : view === 'all' ? business(r) : amountTo(r, view);
       PLACES.forEach(p => { m.by[p] = (m.by[p] || 0) + amountTo(r, p); });
     });
@@ -1754,6 +2053,8 @@
     },
     // A photo that could not go where it was sent by itself (home.js).
     needsYou: needsYou,
+    // Bills not paid yet (Invoices to pay), for Home.
+    toPay: () => allReceipts().filter(toPayNow),
     // A receipt's tags by name, for the app's search (search.js).
     tagNames: tagNames,
     loaded: () => loaded,
@@ -2120,6 +2421,8 @@
   function photoSaid(r, it) {
     const what = '🧾 ' + (r.vendor || 'Receipt') + ' ' + money(r.totalCents);
     if (r.what === 'added to') return what + ' — matched a receipt already there';
+    if (r.what === 'to pay') return what + ' — matched a bill not paid yet (Receipts → Invoices to pay)';
+    if (r.what === 'not a receipt') return what + ' — matched one marked not a receipt';
     const where = r.name || it.forName || '';
     if (r.auto === 'ready') return what + ' — going on ' + (where || 'its job') + (sees() ? '' : ' (Jonah sees it)');
     if (r.why) return what + ' — ' + (sees() ? 'in Receipts to sort: ' : 'sent to Jonah to check: ') + r.why;

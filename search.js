@@ -250,11 +250,14 @@
   // Set aside when that is the only place it shows.
   function openReceipt(r) {
     switchTab('receipts');
-    if (window.YDStages.receipt(r).id === 'tosort') { later(() => reveal(el('rc_' + String(r.id).replace(/[^A-Za-z0-9_-]/g, '')))); return; }
+    const stage = window.YDStages.receipt(r).id;
+    if (stage === 'tosort') { later(() => reveal(el('rc_' + String(r.id).replace(/[^A-Za-z0-9_-]/g, '')))); return; }
+    // A bill to pay has its own list at the top (receipts.js payRowHtml).
+    if (stage === 'topay') { later(() => reveal(el('rcPay_' + String(r.id).replace(/[^A-Za-z0-9_-]/g, '')))); return; }
     const box = el('rcSearch');
     if (box) box.value = joinDot([r.vendor, r.orderNo || r.date]).replace(/ · /g, ' ');
     if (fn('rcView')) {
-      rcView('all');
+      rcView(stage === 'notreceipt' ? 'notreceipt' : 'all');
       if (!document.querySelector('#rcHistory .rc-row')) rcView('skipped');
     } else if (fn('rcSearchNow')) rcSearchNow();
     later(() => reveal(document.querySelector('#rcHistory .rc-row') || el('rcHistorySection')));
@@ -585,6 +588,8 @@
       const st = window.YDStages.receipt(r);
       const where = st.id === 'tosort' ? 'To sort'
         : st.id === 'aside' ? 'Set aside'
+        // A bill not paid yet, or one marked not a receipt (receipts.js).
+        : st.id === 'topay' || st.id === 'notreceipt' ? st.name
         : (r.splits || []).map(s => s && (s.jobName || s.name)).filter(Boolean).slice(0, 2).join(', ') ||
           (st.legacy === 'shop' ? 'Shop overhead' : st.legacy === 'sub' ? 'Subcontractor' : 'Filed');
       return entry('receipts', {

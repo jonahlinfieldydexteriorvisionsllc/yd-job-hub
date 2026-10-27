@@ -204,6 +204,12 @@ service cloud.firestore {
         // Everyone who works here reads it; only the owner changes it.
         || (docId == 'endOfDay' && isStaff());
       allow write: if isOwner()
+        // What was marked Not a receipt (receipts.js rcNotReceipt), for the
+        // email reader to learn from: whoever sorts receipts adds a mark or
+        // takes their receipt off one -- that map and nothing else.
+        || (docId == 'receiptLearn' && canChange('jobs') && request.resource != null
+            && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys().hasOnly(['patterns', 'updatedAt'])
+            && request.resource.data.patterns is map)
         || (docId == 'snow' && canChange('snow'))
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canChange('billing'))
         || (docId == 'supplyAliases' && canChange('supplies')
@@ -968,12 +974,19 @@ service cloud.firestore {
     // whose stored words are unchanged. `tags`: the whole receipt's extra
     // labels (Rebate, Warranty, his own -- receipts.js RECEIPT_TAGS), a short
     // list of words, or null when the last one is taken off.
+    // 'topay' is a bill not paid yet (Invoices to pay) and 'notreceipt' one
+    // marked Not a receipt (stages.js) -- each only while nothing on it is
+    // filed anywhere: lines on a job come off first. `notReceipt`: when it
+    // was marked, by whom, what it was before (Put back) and what it taught
+    // the email reader; `paidOn`: the day Paid was tapped on a bill.
     match /receipts/{docId} {
       allow read: if canSee('jobs');
       allow update: if canChange('jobs')
         && request.resource.data.diff(resource.data).affectedKeys()
-             .hasOnly(['splits', 'status', 'statusChange', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto', 'tags'])
-        && request.resource.data.status in ['new', 'done', 'skipped']
+             .hasOnly(['splits', 'status', 'statusChange', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto', 'tags',
+                       'notReceipt', 'paidOn'])
+        && request.resource.data.status in ['new', 'done', 'skipped', 'topay', 'notreceipt']
+        && (!(request.resource.data.status in ['topay', 'notreceipt']) || request.resource.data.get('splits', []).size() == 0)
         && (!('tags' in request.resource.data) || request.resource.data.tags == null
             || (request.resource.data.tags is list && request.resource.data.tags.size() <= 20));
       allow create: if false;

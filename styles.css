@@ -5526,3 +5526,13 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   /* A note to sort's likely place (home.js notesHtml, boards.js noteSuggest):
      one wide button under it, its words wrapping on a phone. */
   .hm-note-go { width:100%; margin-top:6px; text-align:left; white-space:normal; line-height:1.3; min-height:44px; }
+
+  /* Receipts: bills not paid yet (receipts.js payHtml), one row each with
+     when it is due; the year's pull folded under them. */
+  .rc-pay-old { margin-top:12px; padding-top:8px; border-top:1px dashed var(--border-strong); }
+  .rc-pay-old summary { cursor:pointer; min-height:40px; display:flex; align-items:center; font-size:14px; }
+  .rc-pay-old > .btn { margin:4px 0 8px; }
+  .rc-pay-stores { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  @media (max-width:720px) {
+    .rc-pay-row .btn, .rc-pay-old > .btn, .rc-pay-stores .btn { min-height:44px; }
+  }

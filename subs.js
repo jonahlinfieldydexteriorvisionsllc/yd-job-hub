@@ -294,8 +294,9 @@
   }
   // One set aside in Receipts counts for nothing here either -- a second copy
   // of a bill set aside as a duplicate is not money owed twice. (An old bill
-  // set aside "subcontractor" is filed to them: YDStages says so.)
-  const setAside = r => !!(window.YDStages && YDStages.receipt(r).id === 'aside');
+  // set aside "subcontractor" is filed to them: YDStages says so.) Nor does
+  // one marked Not a receipt in Receipts.
+  const setAside = r => !!(window.YDStages && ['aside', 'notreceipt'].indexOf(YDStages.receipt(r).id) !== -1);
   function billsOf(s) {
     const all = receiptsAll();
     return Object.keys(all).map(id => Object.assign({ id: id }, all[id]))

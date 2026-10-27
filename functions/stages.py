@@ -97,6 +97,8 @@ def board_column(j):
 # both together. Old records are read as they are; nothing is rewritten.
 #
 #   receipt:  tosort -> filed  (or aside, with the reason)
+#             topay -> tosort  (a bill not paid yet, until it is)
+#             notreceipt       (marked "Not a receipt"; put back to what it was)
 #   problem:  open -> ordered -> atshop -> fixed  (and back to open)
 #   request:  waiting -> approved | turneddown  (or withdrawn)
 #   storm:    open -> closed | abandoned
@@ -114,19 +116,38 @@ RECEIPT_OFF_BOOKS = ("personal",)
 # name, but mostly paying back what was borrowed, which is not a cost.
 # QuickBooks has it from the bank. Keep the same as stages.js.
 RECEIPT_NOT_TO_QB = ("personal", "loan")
+# Two stored words of its own each (Jonah, 26 Oct 2026: "It isnt a receipt
+# if its an invoice that hasnt been paid yet that should go into something
+# that says 'invoices to pay'", and "add a 'not receipt' tag"). Neither is a
+# cost yet -- or ever: counted nowhere, never to sort, never sent to
+# QuickBooks. A bill to pay becomes a receipt to sort once it is paid (its
+# payment email, or "Paid" on the Receipts tab); one marked not a receipt is
+# kept only so the mark can be undone and the email reader can learn from it.
+# Keep the words the same as stages.js and firestore.rules.
+RECEIPT_TO_PAY = "topay"
+RECEIPT_NOT = "notreceipt"
 
 
 def receipt_status(r):
-    """'tosort' | 'filed' | 'aside'. 'new' (or no status at all) is still to
-    sort, even with some lines already filed; 'done' is filed; 'skipped' is
-    set aside -- unless its reason was one of the old places."""
+    """'tosort' | 'filed' | 'aside' | 'topay' | 'notreceipt'. 'new' (or no
+    status at all) is still to sort, even with some lines already filed;
+    'done' is filed; 'skipped' is set aside -- unless its reason was one of
+    the old places."""
     r = r or {}
     s = r.get("status")
     if s == "done":
         return "filed"
     if s == "skipped":
         return "filed" if r.get("skipWhy") in RECEIPT_LEGACY_PLACE else "aside"
+    if s in (RECEIPT_TO_PAY, RECEIPT_NOT):
+        return s
     return "tosort"
+
+
+def receipt_counts(r):
+    """False for a record that is no cost of the business's yet, or ever: a
+    bill still to pay, or one marked not a receipt."""
+    return receipt_status(r) not in (RECEIPT_TO_PAY, RECEIPT_NOT)
 
 
 def _filed_places(r):

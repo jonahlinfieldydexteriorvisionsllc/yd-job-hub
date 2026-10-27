@@ -8,7 +8,9 @@
 //
 //   Receipt:    To sort -> Filed (to a job, a vehicle, the shop, the office,
 //               the property, a subcontractor, or Personal) -- or Set
-//               aside, with the reason
+//               aside, with the reason. Before it: To pay (a bill not paid
+//               yet, until it is). Apart: Not a receipt (marked so, and put
+//               back to what it was when that was wrong)
 //   Problem:    Open -> Part ordered -> Part at the shop -> Fixed (and back
 //               to Open when it was not fixed after all)
 //   Change ask: Waiting -> Approved or Turned down (or Withdrawn by whoever
@@ -91,11 +93,35 @@
   // The old set-aside pick list's words, read back as the reason.
   const RECEIPT_WHY = { overhead: 'Shop overhead', personal: 'Personal', notPurchase: 'Not a purchase',
     alreadyEntered: 'Already entered', subcontractor: 'Subcontractor bill' };
-  const RECEIPT_STAGES = [{ id: 'tosort', name: 'To sort' }, { id: 'filed', name: 'Filed' }, { id: 'aside', name: 'Set aside' }];
+  // Two stored words of their own (Jonah, 26 Oct 2026: "It isnt a receipt if
+  // its an invoice that hasnt been paid yet that should go into something
+  // that says 'invoices to pay'", and "add a 'not receipt' tag"): 'topay', a
+  // bill the email reader found that is not paid yet -- To pay until its
+  // payment email comes or Paid is tapped, then To sort; 'notreceipt', one
+  // marked Not a receipt (receipts.js), which teaches the reader. Neither is
+  // a cost: counted nowhere, never to sort, never sent on to QuickBooks
+  // (receiptCounts below; stages.py receipt_counts). Keep the words the same as
+  // stages.py and firestore.rules.
+  const RECEIPT_TO_PAY = 'topay', RECEIPT_NOT = 'notreceipt';
+  const RECEIPT_STAGES = [{ id: 'topay', name: 'To pay' }, { id: 'tosort', name: 'To sort' }, { id: 'filed', name: 'Filed' },
+    { id: 'aside', name: 'Set aside' }, { id: 'notreceipt', name: 'Not a receipt' }];
+  // "2026-10-26" today, where the business is.
+  const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
   function receipt(r) {
     r = r || {};
     const splits = Array.isArray(r.splits) ? r.splits : [];
     const places = splits.map(s => (s && s.to) || 'job');
+    if (r.status === RECEIPT_TO_PAY) {
+      // Late (red) once its due date has gone by, due (orange) on the day.
+      const due = /^\d{4}-\d{2}-\d{2}$/.test(r.dueDate || '') ? r.dueDate : '', t = today();
+      return dated(one('topay', 'To pay', due && due < t ? 'now' : due === t ? 'due' : 'soon',
+        { due: due, late: !!due && due < t, places: [] }), r, RECEIPT_TO_PAY, r.createdAt, '', '');
+    }
+    if (r.status === RECEIPT_NOT) {
+      const n = r.notReceipt || {};
+      return dated(one('notreceipt', 'Not a receipt', 'later', { was: n.was || 'new', places: [] }),
+        r, RECEIPT_NOT, n.at, n.by, '');
+    }
     const legacy = r.status === 'skipped' ? (RECEIPT_LEGACY_PLACE[r.skipWhy] || '') : '';
     if (r.status === 'done' || legacy) {
       if (legacy) places.push(legacy);
@@ -116,6 +142,9 @@
       r, r.status === 'new' ? 'new' : '__none', r.createdAt, '', '');
   }
   function unique(list) { return list.filter((x, i, a) => x && a.indexOf(x) === i); }
+  // False for a bill still to pay and for one marked not a receipt: no cost
+  // of the business, in any total (stages.py receipt_counts).
+  const receiptCounts = r => { const id = receipt(r).id; return id !== 'topay' && id !== 'notreceipt'; };
 
   // ------------------------------------------------------- equipment problems
   //
@@ -253,6 +282,7 @@
     storm: storm, stormOpen: stormOpen, stamp: stamp, chip: chip, whenWho: whenWho,
     RECEIPT_STAGES: RECEIPT_STAGES, RECEIPT_WHY: RECEIPT_WHY, RECEIPT_LEGACY_PLACE: RECEIPT_LEGACY_PLACE,
     RECEIPT_OFF_BOOKS: RECEIPT_OFF_BOOKS, RECEIPT_NOT_TO_QB: RECEIPT_NOT_TO_QB,
+    RECEIPT_TO_PAY: RECEIPT_TO_PAY, RECEIPT_NOT: RECEIPT_NOT, receiptCounts: receiptCounts,
     ISSUE_STAGES: ISSUE_STAGES, REQUEST_STAGES: REQUEST_STAGES, STORM_STAGES: STORM_STAGES,
   };
 })();
