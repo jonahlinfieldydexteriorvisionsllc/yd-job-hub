@@ -1935,7 +1935,7 @@
         '<div class="hint" id="evShareHint"></div>' +
       '</div>' +
       '<div class="field"><span class="label">Address</span>' +
-        '<input id="evAddr" value="' + esc(ev.address || '') + '" placeholder="Filled in from the job, or type one"></div>' +
+        '<input id="evAddr" data-addr="line" autocomplete="off" value="' + esc(ev.address || '') + '" placeholder="Filled in from the job, or type one"></div>' +
       '<div class="field"><span class="label">Notes</span>' +
         '<textarea id="evNotes" rows="3" placeholder="What to bring, gate code, who to ask for">' + esc(ev.notes || '') + '</textarea></div>' +
       '<div class="field-actions" id="evActions">' + editorActions() + '</div>' +

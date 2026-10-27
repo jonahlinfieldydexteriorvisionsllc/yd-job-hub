@@ -7,7 +7,7 @@
 //
 // Bump CACHE whenever a shell file changes, or phones keep serving the old one.
 
-const CACHE = 'ydjobhub-v334';
+const CACHE = 'ydjobhub-v335';
 
 // Same-origin files the app cannot start without.
 const SHELL = [
@@ -109,6 +109,10 @@ const BYPASS = [
   // and snowroute.js keeps its own copy for a day.
   'nominatim.openstreetmap.org',
   'router.project-osrm.org',
+  // The addresses offered while a street is typed (addr.js): live answers
+  // only. Saved like the app's own files, every half-typed street would be
+  // kept, and an old answer served back at once.
+  'photon.komoot.io',
 ];
 
 // When the page itself last came from the saved copy because the network was

@@ -1079,8 +1079,9 @@ def _estimate(request, path, headers):
 #
 # The app finds an address on the map through here (geo.py): the US Census
 # geocoder knows Wisconsin's rural fire numbers that OpenStreetMap misses,
-# but it cannot be called from a browser. For whoever may change snow
-# accounts or jobs -- the two places an address is typed.
+# but it cannot be called from a browser. For whoever may change anything an
+# address is typed on: jobs, snow accounts, contacts, suppliers. Look-ups
+# only -- nothing is written.
 
 
 def _geo(request, path, headers):
@@ -1088,13 +1089,13 @@ def _geo(request, path, headers):
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     if request.method == "OPTIONS":
         return ("", 204, headers)
-    if path not in ("/geo/find", "/geo/suggest"):
+    if path not in ("/geo/find", "/geo/suggest", "/geo/towns"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if origin_blocked(request):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
-    # Addresses are typed on jobs and snow accounts -- and, for the
-    # suggestions as one is typed (addr.js), on contacts and suppliers too.
-    areas = ("snow", "jobs") if path == "/geo/find" else ("snow", "jobs", "contacts", "supplies")
+    # Addresses are typed on jobs and snow accounts, contacts and suppliers
+    # -- and each of their forms fills its town and ZIP in (addr.js).
+    areas = ("snow", "jobs", "contacts", "supplies")
     who = None
     for area in areas:
         try:
@@ -1110,6 +1111,13 @@ def _geo(request, path, headers):
             return (json.dumps({"hits": geo.suggest(d.get("q"))}), 200, json_headers)
         except Exception as e:                      # noqa: BLE001
             print("geo suggest failed:", e)
+            return (json.dumps({"error": "The map could not be reached just now"}), 502, json_headers)
+    # A street typed with no town yet: the towns it is in (geo.towns).
+    if path == "/geo/towns":
+        try:
+            return (json.dumps({"towns": geo.towns(d.get("street"), d.get("state") or "WI")}), 200, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("geo towns failed:", e)
             return (json.dumps({"error": "The map could not be reached just now"}), 502, json_headers)
     try:
         hit = geo.find(d.get("street"), d.get("city"), d.get("state") or "WI", d.get("zip"))

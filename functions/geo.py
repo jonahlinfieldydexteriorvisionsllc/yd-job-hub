@@ -162,3 +162,62 @@ def suggest(q, limit=5):
         if len(out) >= limit:
             break
     return out
+
+# ------------------------------------------------------- which town it is in
+#
+# Jonah (26 Oct 2026): "auto fill city state and zip everywhere applicable
+# after typing in address". A street typed with no town yet: the Census
+# street-and-town search above refuses it ("Specify ... City and State
+# and/or ZIP Code"), but its one-line search takes the street and the state
+# alone and answers with every match in the state. The ones inside the area,
+# nearest Madison first, one per town and ZIP, are the answer: one fills the
+# boxes (addr.js), more are offered as buttons to tap. Wisconsin's rural fire
+# numbers included -- the map (Photon) rarely has those houses.
+CENSUS_LINE_URL = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
+_WEST, _SOUTH, _EAST, _NORTH = (float(x) for x in AREA.split(","))
+# Two towns the Census spells as two words.
+TOWN_NAMES = {"Mc Farland": "McFarland", "De Forest": "DeForest"}
+
+
+def _town(s):
+    t = _title(s)
+    return TOWN_NAMES.get(t, t)
+
+
+def towns(street, state="WI", limit=4):
+    """[{city, state, zip, matched, lat, lng}] where `street` (with no town)
+    is, inside the area, nearest Madison first, one per town and ZIP. [] when
+    there is none, or no house number to find. Raises when the Census cannot
+    be reached."""
+    street = re.sub(r"\s+", " ", str(street or "")).strip()[:120]
+    state = re.sub(r"[^A-Za-z ]", "", str(state or "")).strip()[:20] or "WI"
+    if len(street) < 4 or not re.search(r"\d", street):
+        return []
+    r = requests.get(CENSUS_LINE_URL, timeout=20, headers={"User-Agent": UA},
+                     params={"address": street + ", " + state, "benchmark": "Public_AR_Current", "format": "json"})
+    r.raise_for_status()
+    found = []
+    for h in ((r.json().get("result") or {}).get("addressMatches")) or []:
+        try:
+            lng, lat = float(h["coordinates"]["x"]), float(h["coordinates"]["y"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (_WEST <= lng <= _EAST and _SOUTH <= lat <= _NORTH):
+            continue
+        c = h.get("addressComponents") or {}
+        # Near enough flat here: a degree east is 0.73 of a degree north.
+        far = (lat - NEAR["lat"]) ** 2 + ((lng - NEAR["lon"]) * 0.73) ** 2
+        found.append((far, {"city": _town(c.get("city")), "state": str(c.get("state") or "").upper()[:2],
+                            "zip": str(c.get("zip") or "")[:10], "matched": h.get("matchedAddress") or "",
+                            "lat": lat, "lng": lng}))
+    found.sort(key=lambda x: x[0])
+    out, seen = [], set()
+    for _, t in found:
+        key = (t["city"].lower(), t["zip"])
+        if not t["city"] or key in seen:
+            continue
+        seen.add(key)
+        out.append(t)
+        if len(out) >= limit:
+            break
+    return out

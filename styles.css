@@ -5461,14 +5461,30 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .est-wd-line { padding:6px 0; border-top:1px solid var(--border); }
   .est-wd-line .wd-line { margin:4px 0 0; }
   .est-wd .wd-btn, .est-words .wd-btn { flex:0 1 auto; min-height:38px; font-size:14px; padding:4px 14px; }
-  /* Addresses filled in as you type (addr.js): the suggestions under the
-     street box, each a full-width tap. */
-  .addr-sug { display:flex; flex-direction:column; gap:4px; margin:-4px 0 10px; padding:6px; border:1px solid var(--border-strong);
-    border-radius:10px; background:var(--surface); box-shadow:0 6px 18px rgba(0,0,0,.12); }
+  /* Addresses filled in for you (addr.js). The list under the street box
+     lies over what is below it, so nothing on the form jumps while typing
+     (put in the page's flow, it became a cell of the Job tab's address
+     grid); each address a full-width tap. Under the boxes: what was filled,
+     with Undo, or the towns to pick from as buttons. */
+  .addr-host { position:relative; }
+  .addr-sug { position:absolute; left:0; top:100%; z-index:60; width:100%; box-sizing:border-box;
+    margin-top:4px; display:flex; flex-direction:column; gap:2px; padding:6px; border:1px solid var(--border-strong);
+    border-radius:10px; background:var(--surface); box-shadow:0 10px 28px rgba(0,0,0,.2); }
   .addr-sug-btn { display:flex; flex-direction:column; align-items:flex-start; gap:1px; min-height:44px; padding:6px 10px; text-align:left;
     font:inherit; font-size:14px; border:0; border-radius:8px; background:transparent; color:var(--text); cursor:pointer; }
   .addr-sug-btn span { font-size:12.5px; color:var(--muted); }
-  .addr-sug-btn:hover, .addr-sug-btn:focus { background:var(--surface-2); }
+  .addr-sug-btn:hover, .addr-sug-btn:focus, .addr-sug-btn.on { background:var(--surface-2); }
+  .addr-sug-btn.on { box-shadow:inset 3px 0 0 var(--brand-ink); }
+  .addr-note { display:flex; flex-wrap:wrap; align-items:center; gap:4px 10px; margin:6px 0 10px; font-size:13px; color:var(--muted); }
+  .addr-note .link-btn { min-height:36px; padding:0 4px; }
+  .addr-towns { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:6px; width:100%; }
+  .addr-town { min-height:44px; padding:6px 10px; font:inherit; font-size:14px; text-align:left; border:1px solid var(--border-strong);
+    border-radius:8px; background:var(--surface); color:var(--text); cursor:pointer; }
+  .addr-town:hover { background:var(--surface-2); }
+  .addr-town.addr-none { color:var(--muted); }
+  @media (max-width:520px) { .addr-towns { grid-template-columns:1fr 1fr; } }
+  /* A narrow street box on a wide screen (the Job tab's grid): the list wider than it. */
+  @media (min-width:721px) { .addr-sug { min-width:340px; } }
 
   /* Profit by piece of work: under Planned profit on the estimate, and
      added up by service on All Jobs (pricing.js byLine). */
