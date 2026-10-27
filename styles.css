@@ -2640,6 +2640,8 @@
   .est-supply { flex:2 1 220px; max-width:100%; }
   .est-grow { flex:1 1 220px; }
   .est-grow select { width:100%; }
+  /* A name typed in (a line's sub or installer): as wide as its row allows. */
+  .est-nums label.est-grow input { width:100%; }
   .est-mtop label, .est-nums label { display:flex; flex-direction:column; font-size:11px; color:var(--muted); max-width:100%; min-width:0; }
   .est-mtop label input { width:84px; }
   .est-scope { width:100%; font-size:14px; }

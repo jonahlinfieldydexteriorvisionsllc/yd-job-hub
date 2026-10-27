@@ -202,6 +202,8 @@
       if (num(c.crewDayCents) !== null) out.rateCents = num(c.crewDayCents);
       out.costs = { materials: Math.max(0, (num(c.materialCostCents) || 0) - dumps), dumpsters: dumps,
                     delivery: num(c.deliveryCostCents) || 0, fuel: num(c.fuelCostCents) || 0 };
+      // Lines done by a sub or installer: what they were to charge.
+      if (num(c.subCostCents) > 0) out.costs.subs = num(c.subCostCents);
       out.complete = !!c.complete;
       if (r) out.nowCents = r.totalCents;
     } else if (r) {
@@ -214,6 +216,7 @@
         if (l.category === 'dumpster' || l.category === 'rental') dumps += c; else mats += c;
       });
       out.costs = { materials: mats, dumpsters: dumps, delivery: r.profit.deliveryCostCents || 0, fuel: r.profit.fuelCostCents || 0 };
+      if (r.profit.subCostCents > 0) out.costs.subs = r.profit.subCostCents;
       out.complete = !!r.profit.complete;
       out.problems = r.problems.length;
     } else {

@@ -774,11 +774,32 @@
     } else if (w.kind === 'amount') {
       const a = num(w.amountCents);
       if (a === null) out.problems.push('needs an amount'); else out.cents = Math.round(a);
+    } else if (w.sub) {
+      // Crew-days price his own crew's time; someone else's work has a price
+      // of its own.
+      out.problems.push('done by someone else — give it a fixed price or an all-in price, not crew-days');
     } else {
       const target = profitOf(w, r);
       if (!(days > 0)) out.problems.push('how many crew-days?');
       else if (dayCost === null || target === null) out.problems.push('crew-day rate or profit per day not set (⋯ → Pricing rules)');
       else out.cents = Math.round(days * (dayCost + target));
+    }
+    if (w.sub) {
+      // Done by someone else -- a subcontractor or an outside installer
+      // (Jonah, 26 Oct 2026: the lighting on a patio bid is "done by the
+      // lighting installer who picks the supplies", and "items on estimates
+      // can be marked as subbed item and i can enter what the sub is charging
+      // me and input who the sub is"). What they charge him is this line's
+      // cost, in place of his crew's days: it takes no crew-days, so no days
+      // of fuel, and his profit per crew-day is over his own crew's days
+      // only. The customer's price is the line's as ever.
+      const charge = num(w.sub.cents);
+      out.sub = { by: String(w.sub.by || '').trim(), cents: charge };
+      if (charge !== null) {
+        out.costCents = Math.round(charge);
+        out.subProfitCents = out.cents > 0 ? out.cents - out.costCents : null;
+      }
+      return out;
     }
     if (days > 0) {
       out.crewDays = days;
@@ -908,13 +929,19 @@
     const deliveryCost = del.lines.reduce((s, l) => s + (l.costCents || 0), 0);
     const fuelCost = fu.costCents || 0;
     const laborCost = dayCost !== null ? Math.round(crewDays * dayCost) : 0;
-    const costCents = materialCost + deliveryCost + fuelCost + laborCost;
+    // Lines done by someone else (workLine's `sub`): what they charge.
+    const subs = (est.work || []).map((w, i) => work[i].sub ? Object.assign({ title: w.title || '' }, work[i].sub) : null).filter(Boolean);
+    const subCost = subs.reduce((s, x) => s + (x.cents || 0), 0);
+    const costCents = materialCost + deliveryCost + fuelCost + laborCost + subCost;
     const profit = {
       cents: totalCents - costCents, costCents: costCents, crewDays: crewDays,
       materialCostCents: materialCost, deliveryCostCents: deliveryCost, fuelCostCents: fuelCost, laborCostCents: laborCost,
+      subCostCents: subCost, subs: subs,
       marginPct: totalCents > 0 ? (totalCents - costCents) / totalCents * 100 : null,
       perDayCents: crewDays > 0 ? Math.round((totalCents - costCents) / crewDays) : null,
-      complete: !problems.length && !noCost.length && dayCost !== null && work.every(w => w.crewDays > 0),
+      // Every line knows its cost: his crew's days, or what the one doing it charges.
+      complete: !problems.length && !noCost.length && dayCost !== null &&
+        work.every(w => (w.sub ? w.sub.cents !== null : w.crewDays > 0)),
     };
     // Sales tax to the customer (see KIND_TAX). totalCents stays the price
     // before tax -- the profit, the job's price and the dashboards are that;
@@ -960,6 +987,7 @@
       laborCents: r.work[i] ? r.work[i].cents : 0, materialsCents: 0, materialCostCents: 0,
       deliveryCostCents: 0, fuelCostCents: 0, fuelCents: 0, laborCostCents: 0,
       crewDays: r.work[i] && r.work[i].crewDays > 0 ? r.work[i].crewDays : 0,
+      sub: r.work[i] && r.work[i].sub ? r.work[i].sub : null,
       problems: r.work[i] ? r.work[i].problems.length : 0, count: 0 }));
     const byId = {};
     lines.forEach(l => { if (l.id) byId[l.id] = l; });
@@ -1006,15 +1034,18 @@
     const out = lines.map(l => {
       l.materialsCents += l.fuelCents;
       l.laborCostCents = dayCost !== null ? Math.round(l.crewDays * dayCost) : 0;
+      // Done by someone else: what they charge is the line's labour cost.
+      const subCents = l.sub && l.sub.cents !== null ? l.sub.cents : 0;
       const priceCents = l.laborCents + l.materialsCents;
-      const costCents = l.materialCostCents + l.deliveryCostCents + l.fuelCostCents + l.laborCostCents;
+      const costCents = l.materialCostCents + l.deliveryCostCents + l.fuelCostCents + l.laborCostCents + subCents;
       return { id: l.id, title: l.title, w: l.w, laborCents: l.laborCents, materialsCents: l.materialsCents,
         priceCents: priceCents, costCents: costCents, profitCents: priceCents - costCents,
         materialCostCents: l.materialCostCents, deliveryCostCents: l.deliveryCostCents,
-        fuelCostCents: l.fuelCostCents, laborCostCents: l.laborCostCents, crewDays: l.crewDays, materials: l.count,
+        fuelCostCents: l.fuelCostCents, laborCostCents: l.laborCostCents, subCostCents: subCents, sub: l.sub,
+        crewDays: l.crewDays, materials: l.count,
         marginPct: priceCents > 0 ? (priceCents - costCents) / priceCents * 100 : null,
         perDayCents: l.crewDays > 0 ? Math.round((priceCents - costCents) / l.crewDays) : null,
-        complete: !l.problems && l.crewDays > 0 && dayCost !== null };
+        complete: !l.problems && dayCost !== null && (l.sub ? l.sub.cents !== null : l.crewDays > 0) };
     });
     const sumP = out.reduce((s, l) => s + l.priceCents, 0), sumC = out.reduce((s, l) => s + l.costCents, 0);
     const restPrice = r.totalCents - sumP, restCost = r.profit.costCents - sumC;

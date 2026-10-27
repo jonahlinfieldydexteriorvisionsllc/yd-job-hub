@@ -310,8 +310,8 @@
     const n = v => (typeof v === 'number' && isFinite(v) ? v : 0);
     return { priceCents: n(r.totalCents), crewDays: n(r.crewDays), crewDayCents: num(P().rules().crewDayCents),
              materialCostCents: n(p.materialCostCents), deliveryCostCents: n(p.deliveryCostCents),
-             fuelCostCents: n(p.fuelCostCents), laborCostCents: n(p.laborCostCents), costCents: n(p.costCents),
-             byKind: byKind, complete: !!p.complete };
+             fuelCostCents: n(p.fuelCostCents), laborCostCents: n(p.laborCostCents), subCostCents: n(p.subCostCents),
+             costCents: n(p.costCents), byKind: byKind, complete: !!p.complete };
   }
 
   // What to buy for an estimate: every material it prices -- the takeoff and
@@ -938,8 +938,21 @@
     const on = (f, v, ph, cls, mode) => '<input class="' + (cls || '') + '"' + (mode ? ' inputmode="' + mode + '"' : '') +
       ' value="' + esc(v == null ? '' : v) + '" placeholder="' + esc(ph || '') + '"' + dis +
       ' oninput="estWork(\'' + id + '\', \'' + f + '\', this.value)">';
+    // Done by someone else (pricing.js workLine's `sub`): who, and what they
+    // charge him, where his crew's days would be -- the line takes none.
+    // What they charge is his cost, so not for a look-only viewer (as the
+    // planned profit is not).
+    const daysBox = w.sub
+      ? '<label class="est-grow"><span>Who does it</span><input list="estSubNames" value="' + esc(w.sub.by || '') + '"' +
+          ' placeholder="Sub or installer"' + dis + ' onfocus="estLoadSubNames()" oninput="estWork(\'' + id + '\', \'subBy\', this.value)"></label>' +
+        (ro ? '' : '<label><span>They charge you ($)</span>' + on('subCents', dollarsIn(w.sub.cents), '0.00', 'est-money', 'decimal') + '</label>')
+      : '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
     let nums = '', extra = '';
-    if (kind === 'crew') {
+    if (kind === 'crew' && w.sub) {
+      // Crew-days price his own crew; the line asks for another way
+      // (its problem says so) and shows what the sub charges meanwhile.
+      nums = daysBox;
+    } else if (kind === 'crew') {
       // His own amounts (Pricing rules), the usual marked; a line with an
       // amount of its own shows it too; "Other" asks for one.
       const choices = P().profitChoices ? P().profitChoices() : [];
@@ -963,17 +976,17 @@
         '</select></label>' +
         '<label><span>Qty' + (w.unit ? ' (' + esc(w.unit) + ')' : '') + '</span>' + on('qty', w.qty, '', '', 'decimal') + '</label>' +
         '<label><span>Price per ' + esc(w.unit || 'unit') + '</span>' + on('rate', dollarsIn(w.rateCents), '0.00', 'est-money', 'decimal') + '</label>' +
-        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
+        daysBox;
       extra = adjustHtml(w, svc, ro);
     } else if (kind === 'allin') {
       nums = '<label><span>All-in price ($)</span>' + on('allIn', dollarsIn(w.allInCents), 'labor + its materials', 'est-money', 'decimal') + '</label>' +
         '<label><span>+ Labor not in it ($)</span>' + on('add', dollarsIn(w.addCents), 'optional', 'est-money', 'decimal') + '</label>' +
-        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
+        daysBox;
       // How the figure splits, filled by renderTotals.
       extra = '<div class="est-allin" id="estWI_' + id + '"></div>';
     } else {
       nums = '<label><span>Amount ($)</span>' + on('amount', dollarsIn(w.amountCents), '0.00', 'est-money', 'decimal') + '</label>' +
-        '<label><span>Crew-days</span>' + on('crewDays', w.crewDays, 'e.g. 1.5', '', 'decimal') + '</label>';
+        daysBox;
     }
     // The QuickBooks product is rarely changed: under More, named on the
     // button when it has one so it is never hidden without a word.
@@ -1001,6 +1014,9 @@
         (kind === 'allin' ? '' : '<label class="est-withmats" title="The materials the crew’s page lists under this line go into its price on the customer’s copy and QuickBooks, instead of the Materials line">' +
           '<input type="checkbox"' + (w.withMats ? ' checked' : '') + dis + ' onchange="estWork(\'' + id + '\', \'withMats\', this.checked)"> ' +
           'Its materials in this price</label>') +
+        '<label class="est-withmats" title="A subcontractor or outside installer does this line: what they charge you is its cost instead of your crew’s days. The customer’s price stays the same.">' +
+          '<input type="checkbox"' + (w.sub ? ' checked' : '') + dis + ' onchange="estWork(\'' + id + '\', \'subOn\', this.checked)"> ' +
+          '🤝 Done by a sub / installer</label>' +
         moreBtnHtml(id, [qbName ? 'QuickBooks: ' + qbName : '',
           w.service === 'none' ? 'No how-we-do-it' : w.service ? 'Service picked' : ''].filter(Boolean).join(' · ')) + '</div>' +
       moreBoxHtml(id, '<div class="est-qbitem"><span>QuickBooks product</span><input list="estQbItems" value="' + esc(w.qbItem || '') + '" placeholder="Labor"' + dis +
@@ -1601,6 +1617,14 @@
       // numbers"): bids are built on the iPad in front of the customer.
       if (!numbersShown) { f.innerHTML = ''; return; }
       const kind = (est.work[i] || {}).kind || 'crew';
+      // Done by someone else: what is left of the line once they are paid.
+      if (w.sub) {
+        f.innerHTML = !w.cents ? '' : w.sub.cents === null
+          ? '<span class="muted">Put in what ' + esc(w.sub.by || 'they') + ' charge' + (w.sub.by ? 's' : '') + ' you to see what it makes.</span>'
+          : 'Makes <b>' + cents(w.cents - w.sub.cents) + '</b> over what ' + esc(w.sub.by || 'they') + ' charge' + (w.sub.by ? 's' : '') + ' you' +
+            (w.cents > 0 ? ' <span class="muted">(' + Math.round((w.cents - w.sub.cents) / w.cents * 100) + '%)</span>' : '');
+        return;
+      }
       if (kind === 'crew' || !w.cents) { f.innerHTML = ''; return; }
       if (w.profitPerDayCents === null) {
         f.innerHTML = '<span class="muted">Put in its crew-days to see what it makes per day.</span>';
@@ -1779,9 +1803,15 @@
       return '<div class="est-planned-show"><button class="link-btn ro-ok" onclick="estNumbers()">📊 Show my numbers</button></div>';
     }
     const why = !p.complete ? '<p class="est-planned-why">Not final — ' +
-      (r.problems.length ? 'some lines aren’t priced yet' : r.work.some(w => !w.crewDays) ? 'a labor line has no crew-days' : 'the crew-day rate isn’t set') + '.</p>' : '';
+      (r.problems.length ? 'some lines aren’t priced yet'
+        : r.work.some(w => w.sub && w.sub.cents === null) ? 'a line done by someone else has no charge yet'
+        : r.work.some(w => !w.sub && !w.crewDays) ? 'a labor line has no crew-days' : 'the crew-day rate isn’t set') + '.</p>' : '';
     const row = (label, value, cls) => '<tr' + (cls ? ' class="' + cls + '"' : '') + '><th scope="row">' + label + '</th><td>' + value + '</td></tr>';
     const days = p.crewDays > 0 ? fmtQ(p.crewDays) + ' crew-day' + (p.crewDays === 1 ? '' : 's') : 'no crew-days yet';
+    // Lines done by someone else: who, and what they charge (a line with
+    // no charge yet is counted as nothing until it has one).
+    const subs = (p.subs || []).filter(s => s.cents !== null || s.by);
+    const subNames = subs.map(s => esc(s.by || s.title || 'someone') + (s.cents === null ? ' (not put in)' : '')).join(', ');
     return '<div class="est-planned">' +
       '<div class="est-planned-h"><span>Planned profit <span class="muted">— only you see this</span></span>' +
         '<button class="link-btn ro-ok" onclick="estNumbers()">Hide</button></div>' +
@@ -1790,10 +1820,12 @@
         (p.deliveryCostCents ? row('Delivery cost', cents(p.deliveryCostCents)) : '') +
         (p.fuelCostCents ? row('Fuel cost', cents(p.fuelCostCents)) : '') +
         row('Labor cost <small>' + days + ' at your crew-day rate</small>', cents(p.laborCostCents)) +
+        (subs.length ? row('Subs &amp; installers <small>' + subNames + '</small>', cents(p.subCostCents || 0)) : '') +
         row('Total cost', cents(p.costCents), 'est-plan-sub') +
         row('Profit', cents(p.cents), 'est-plan-big') +
         row('Profit margin', p.marginPct === null ? '—' : (Math.round(p.marginPct * 10) / 10) + '%') +
-        row('Profit per crew-day', p.perDayCents === null ? '— put in crew-days' : perDay(p.perDayCents)) +
+        row('Profit per crew-day' + (subs.length ? ' <small>your own crew’s days</small>' : ''),
+          p.perDayCents === null ? (subs.length && !r.work.some(w => !w.sub) ? '— all done by others' : '— put in crew-days') : perDay(p.perDayCents)) +
       '</tbody></table>' + why + serviceRowsHtml(est, r) +
     '</div>';
   }
@@ -1826,7 +1858,8 @@
           '<span class="' + cls + '">' + cents(l.profitCents) + pctTxt(l.marginPct) + '</span></div>' +
         '<div class="est-svc-sub">Labor ' + cents(l.laborCents) + ' + materials ' + cents(l.materialsCents) +
           ' = ' + cents(l.priceCents) + ' · cost ' + cents(l.costCents) +
-          (l.perDayCents !== null ? ' · ' + perDay(l.perDayCents) : ' · no crew-days') + '</div></div>';
+          (l.sub ? ' · done by ' + esc(l.sub.by || 'someone else') + (l.sub.cents === null ? ' (their charge not put in)' : ' for ' + cents(l.sub.cents))
+            : l.perDayCents !== null ? ' · ' + perDay(l.perDayCents) : ' · no crew-days') + '</div></div>';
     };
     const rest = split.rest;
     const restHtml = Math.abs(rest.priceCents) > 100 || Math.abs(rest.costCents) > 100
@@ -3367,6 +3400,16 @@
     }
     // The customer reads this line with its materials in its price (customerLines).
     else if (field === 'withMats') { if (v) w.withMats = true; else delete w.withMats; changed(true); return; }
+    // Done by a sub / installer (pricing.js workLine `sub`): ticked on, it
+    // asks who and what they charge; ticked off, it is gone, and crew-days
+    // typed on the line before count again (they are kept, never cleared).
+    else if (field === 'subOn') {
+      if (v) w.sub = { by: '', cents: null }; else delete w.sub;
+      changed(true);
+      return;
+    }
+    else if (field === 'subBy') { if (w.sub) w.sub.by = String(v || '').slice(0, 120); }
+    else if (field === 'subCents') { if (w.sub) w.sub.cents = toCents(v); }
     // The service the line is, by hand (its how-we-do-it and its tools), or
     // back to the one its heading names. Nothing to re-price.
     else if (field === 'service') {
@@ -3903,7 +3946,10 @@
                                                       labour: a.labourCents / 100 } : null,
           // The notes for the crew on the line, and whether they are his own
           // words (typed by him) or still Claude's.
-          crew: String(w.crewNote || '').slice(0, 1500), crewMine: crewNoteMine(w) };
+          crew: String(w.crewNote || '').slice(0, 1500), crewMine: crewNoteMine(w),
+          // Done by a sub or installer: not his crew's days (its cost is
+          // what they charge).
+          doneBy: w.sub ? { who: String(w.sub.by || ''), chargeDollars: dollars(w.sub.cents) } : null };
       }),
       materials: e.materials.map((m, i) => ({ id: m.id, supplyId: m.supplyId || null, name: m.name || '', qty: num(m.qty),
         unit: m.unit || '', plant: !!m.plant, tree: m.tree || null,
@@ -4715,6 +4761,17 @@
       if (!dl) { dl = document.createElement('datalist'); dl.id = 'estQbItems'; document.body.appendChild(dl); }
       dl.innerHTML = qbItems.map(n => '<option value="' + esc(n) + '">').join('');
     } catch (e) { qbItems = null; }
+  };
+  // Who a line done by someone else might be: his subcontractors (subs.js,
+  // the owner's) and the names already on this estimate's other lines --
+  // picked or typed, the box takes any name.
+  window.estLoadSubNames = function () {
+    const names = {};
+    (window.YDSubs && YDSubs.list ? YDSubs.list() : []).forEach(s => { if (s.name) names[s.name] = true; });
+    (est.work || []).forEach(w => { if (w.sub && String(w.sub.by || '').trim()) names[String(w.sub.by).trim()] = true; });
+    let dl = el('estSubNames');
+    if (!dl) { dl = document.createElement('datalist'); dl.id = 'estSubNames'; document.body.appendChild(dl); }
+    dl.innerHTML = Object.keys(names).sort().map(n => '<option value="' + esc(n) + '">').join('');
   };
 
   // True to go ahead: QuickBooks' estimate still totals what Job Hub last
