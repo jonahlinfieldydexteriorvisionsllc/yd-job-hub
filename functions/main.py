@@ -359,6 +359,14 @@ def _quickbooks(request, path, headers):
             every = {s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()}
             jobs = qb.live_jobs(every)
             with qb._holding_tokens():
+                # A bid whose estimate Jonah made in QuickBooks by hand is
+                # joined to it first, so it says Sent too (link_hand_jobs).
+                try:
+                    qb.link_hand_jobs(jobs, bids_only=True)
+                except qb.ReconnectNeeded:
+                    raise
+                except Exception as err:            # noqa: BLE001 -- the hourly look tries again
+                    print("estimates-now: bids not joined to their estimates:", err)
                 news = qb.check_estimates(jobs, [])
                 # And an estimate said yes to in QuickBooks itself becomes its
                 # job now too, not at the next hourly look -- which runs 7 am
