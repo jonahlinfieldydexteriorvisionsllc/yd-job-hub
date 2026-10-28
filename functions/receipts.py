@@ -300,7 +300,7 @@ def _reading_due(st):
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
-         "utilities_and_phone", "loan_payment", "other"]
+         "utilities_and_phone", "loan_payment", "travel", "other"]
 # A payment on a loan (Jonah, 22 Oct 2026): offered for 🏦 Loan payment on the
 # Receipts tab, and never sent to QuickBooks as an expense (_not_for_qb).
 LOAN_KIND = "loan_payment"
@@ -326,7 +326,7 @@ NOT_UPKEEP = re.compile(r"\b(linseed|teak|deck|stain|olive|cooking|vegetable|can
 # Lines that are not goods (shipping, a core charge, the gap to the total).
 NOT_GOODS = re.compile(r"\b(shipping|delivery|freight|handling|fee|fees|surcharge|core|deposit|tax|discount|"
                        r"not itemised)\b")
-LEFT_AS_READ = ("loan_payment", "subcontractor", "insurance", "office_and_software",
+LEFT_AS_READ = ("loan_payment", "travel", "subcontractor", "insurance", "office_and_software",
                 "utilities_and_phone", "fuel")
 
 
@@ -404,7 +404,7 @@ payment confirmation, the number of the invoice it pays.
 - vendor: the business that sold it ("Home Depot", "Menards", "the stone yard").
 - kind: loan_payment for a payment on a loan or financing agreement (a truck, trailer or \
 machine loan, a business loan or line of credit) -- never for paying a supplier's invoice or a \
-credit card bill.
+credit card bill. travel for a business trip away from home: a hotel or motel, a flight, a rental car, parking or tolls on the trip, a meal while travelling.
 - whose: "personal" for things clearly for a household (groceries, clothes, entertainment, \
 personal care, a service at Jonah's own home); "business" for anything a landscaping company \
 buys or pays for; "unsure" otherwise.

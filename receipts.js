@@ -62,7 +62,7 @@
     materials: 'Materials', plants: 'Plants', dump_and_disposal: 'Dump & disposal',
     equipment_and_repairs: 'Equipment & repairs', fuel: 'Fuel', tools: 'Tools', rental: 'Rental',
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
-    insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', other: 'Other',
+    insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', travel: 'Travel', other: 'Other',
   };
   // Why a receipt was set aside, in the words of the old pick list. Only read
   // back now: since 13 Oct `skipWhy` is the note typed when it was set aside
@@ -105,6 +105,10 @@
   // RECEIPT_NOT_TO_QB). One the email reader reads as a loan payment comes
   // with this place already picked.
   //
+  // Jonah, 27 Oct 2026: "add receipt tag for travel" -- a hotel, a flight,
+  // parking or meals on a business trip. A business cost like the others,
+  // counted under its own name and sent to QuickBooks as usual.
+  //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
   // is one more row, and every list below follows.
@@ -114,6 +118,7 @@
     { id: 'shop', chip: '🏠 Shop overhead', name: 'Shop overhead', view: '🏠 Shop', total: 'Shop' },
     { id: 'office', chip: '🗂 Office overhead', name: 'Office overhead', view: '🗂 Office', total: 'Office' },
     { id: 'property', chip: '🌳 Property overhead', name: 'Property overhead', view: '🌳 Property', total: 'Property' },
+    { id: 'travel', chip: '✈️ Travel', name: 'Travel', view: '✈️ Travel', total: 'Travel' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
     { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
     { id: 'personal', chip: '👤 Personal', name: 'Personal', view: '👤 Personal', total: 'Personal' },
@@ -125,7 +130,7 @@
   const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'vehicle',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop',
-    loan_payment: 'loan' };
+    loan_payment: 'loan', travel: 'travel' };
   const destOf = s => s.to || 'job';
   const dest = {};            // receipt id -> where it is going, once picked
   const chosenGear = {};      // receipt id -> vehicle picked
