@@ -55,14 +55,14 @@
   // marked Lost, and the customer goes on Contacts for next season.
   const SHOW_WON_DAYS = 30, SHOW_PAID_DAYS = 30;
 
-  // Templates for new stored boards.
+  // Templates for new stored boards. None brings a done column: that is the
+  // special column added with "+ Add a Done column" (bdDoneAdd).
   const TEMPLATES = {
-    crew: { label: 'Crew task list', columns: ['To do', 'Doing', 'Done'] },
-    admin: { label: 'To-do list', columns: ['This week', 'Recurring', 'Waiting on', 'Done'] },
-    blank: { label: 'Blank', columns: ['To do', 'Done'] },
+    crew: { label: 'Crew task list', columns: ['To do', 'Doing'] },
+    admin: { label: 'To-do list', columns: ['This week', 'Recurring', 'Waiting on'] },
+    blank: { label: 'Blank', columns: ['To do'] },
     // Jonah (9 Oct 2026): "something to track things i want to purchase".
-    // Bought is the done column, so a bought thing leaves the board next day.
-    tobuy: { label: 'To-buy list', columns: ['Want', 'Researching', 'Ready to buy', 'Bought'] },
+    tobuy: { label: 'To-buy list', columns: ['Want', 'Researching', 'Ready to buy'] },
   };
 
   // Colours a board or a label can be. Picked to be told apart at a glance in
@@ -190,24 +190,17 @@
   function colOf(board, k) {
     return k.column || (board && board.columns && board.columns[0] ? board.columns[0].id : '');
   }
-  // The column that means "done": the one called Done, when a board has one
-  // -- Crew tasks keeps an "Equipment Maintenance" column after its Done --
-  // otherwise the last column, as it always was.
-  // The column that means done. A board says which in its settings
-  // (doneColumn: a column's id, or '' for none) -- Jonah, 15 Oct 2026:
-  // deleting the To buy board's "Bought" column made the next one along,
-  // "Vehicles", the last -- and so "done" -- and every card in it was
-  // crossed off. A board not saved since: the column called Done, else one
-  // whose name says finished (Bought, Picked up, Built…) -- never just the
-  // last column.
-  const FINISHED_NAME = /^\s*(done|bought|built|finished|complete|completed|paid|picked up|fixed|closed|sold|delivered)\s*$/i;
+  // The column that means done is only ever the one the board's settings
+  // name (doneColumn: a column's id, or '' for none) -- never worked out from
+  // where a column sits or what it is called. Jonah, 28 Oct 2026: "get rid of
+  // the ... code that makes the last column always be done ... just make it
+  // so i can add a special column called a done column" (a new board's
+  // template Done column, renamed, kept being done). Every live board carries
+  // doneColumn; one that somehow does not has none.
   function doneColOf(board) {
     const cols = (board && board.columns) || [];
     if (board && typeof board.doneColumn === 'string') return cols.some(c => c.id === board.doneColumn) ? board.doneColumn : '';
-    const named = cols.find(c => /^\s*done\s*$/i.test(String(c.name || '')));
-    if (named) return named.id;
-    const finished = cols.filter(c => FINISHED_NAME.test(String(c.name || '')));
-    return finished.length ? finished[finished.length - 1].id : '';
+    return '';
   }
   // Phones and tablets do not drag reliably, so there a card is moved from
   // the sheet that opens when it is tapped -- and the screen should say so.
@@ -3160,7 +3153,6 @@
     const doneNow = id ? doneColOf(b) : null;
     draftCols = (b.columns || TEMPLATES.crew.columns.map(n => ({ name: n })))
       .map(c => ({ id: c.id || null, name: c.name, done: id ? c.id === doneNow : false }));
-    if (!id) markDraftDone();
     draftLabels = (b.labels || DEFAULT_LABELS).map(l => ({ id: l.id, name: l.name, color: l.color }));
     draftKinds = id ? YDRemind.boardKinds(b).map(t => t.id) : YDRemind.templateKinds('crew', { ownerOnly: false });
 
@@ -3183,12 +3175,14 @@
         '</select></div>') +
       '<div class="field"><span class="label">Columns, left to right</span>' +
         '<div id="bdColList" class="bd-edit-list"></div>' +
-        '<button class="btn btn-sm" onclick="bdColAdd()">+ Add a column</button>' +
+        '<div class="bd-col-adds"><button class="btn btn-sm" onclick="bdColAdd()">+ Add a column</button>' +
+          '<button class="btn btn-sm" id="bdDoneAddBtn" onclick="bdDoneAdd()"' + (draftCols.some(c => c.done) ? ' hidden' : '') +
+          '>+ Add a Done column</button></div>' +
         '<label class="bd-done-none"><input type="radio" name="bdDone" onchange="bdDonePick(-1)"' +
-          (draftCols.some(c => c.done) ? '' : ' checked') + '> No column counts as done</label>' +
-        '<div class="hint">The column ticked ✓ Done counts as done: a card moved there is crossed off, stays ' +
-          'until the end of the day, then leaves the board (and is deleted a week later). Cards in a column you ' +
-          'delete move to the first column.</div>' +
+          (draftCols.some(c => c.done) ? '' : ' checked') + '> No Done column</label>' +
+        '<div class="hint">Only the Done column counts as done — whatever it is called and wherever it sits: a card ' +
+          'moved there is crossed off, stays until the end of the day, then leaves the board (and is deleted a week ' +
+          'later). No other column ever does. Cards in a column you delete move to the first column.</div>' +
       '</div>' +
       '<div class="field"><span class="label">Labels</span>' +
         '<div id="bdLabelList" class="bd-edit-list"></div>' +
@@ -3293,12 +3287,15 @@
     document.querySelectorAll('.bdLabelName').forEach((inp, i) => { if (draftLabels[i]) draftLabels[i].name = inp.value; });
   }
 
-  // A new board's done column: the one called Done, else the last if its
-  // name says finished (doneColOf's own rule).
-  function markDraftDone() {
-    const id = doneColOf({ columns: draftCols.map((c, i) => ({ id: 'd' + i, name: c.name })) });
-    draftCols.forEach((c, i) => { c.done = id === 'd' + i; });
-  }
+  // The special Done column: added at the end, ticked, named Done (he can
+  // rename it -- it stays the Done column). Only one: the button goes once a
+  // board has one.
+  window.bdDoneAdd = function () {
+    readDrafts();
+    if (draftCols.some(c => c.done)) return;
+    draftCols.push({ id: null, name: 'Done', done: true });
+    drawDrafts();
+  };
   window.bdDonePick = function (i) {
     readDrafts();
     draftCols.forEach((c, j) => { c.done = j === i; });
@@ -3313,8 +3310,8 @@
       '<div class="bd-edit-row">' +
         '<span class="bd-edit-num">' + (i + 1) + '</span>' +
         '<input class="bdColName" value="' + esc(c.name) + '" placeholder="Column name" aria-label="Column ' + (i + 1) + '">' +
-        '<label class="bd-done-pick" title="Cards in this column count as done"><input type="radio" name="bdDone"' +
-          (c.done ? ' checked' : '') + ' onchange="bdDonePick(' + i + ')"> ✓ Done</label>' +
+        '<label class="bd-done-pick" title="Make this the Done column: cards in it count as done"><input type="radio" name="bdDone"' +
+          (c.done ? ' checked' : '') + ' onchange="bdDonePick(' + i + ')"> ✓ Done column</label>' +
         '<button class="bd-edit-btn" onclick="bdColMove(' + i + ', -1)"' + (i === 0 ? ' disabled' : '') + ' aria-label="Move earlier">↑</button>' +
         '<button class="bd-edit-btn" onclick="bdColMove(' + i + ', 1)"' + (i === draftCols.length - 1 ? ' disabled' : '') + ' aria-label="Move later">↓</button>' +
         '<button class="bd-edit-btn del" onclick="bdColRemove(' + i + ')"' + (draftCols.length === 1 ? ' disabled' : '') + ' aria-label="Delete column">✕</button>' +
@@ -3336,16 +3333,19 @@
     // column until one is ticked -- nothing else is crossed off instead).
     const none = document.querySelector('.bd-done-none input');
     if (none) none.checked = !draftCols.some(c => c.done);
+    const addDone = el('bdDoneAddBtn');
+    if (addDone) addDone.hidden = draftCols.some(c => c.done);
   }
 
   window.bdColAdd = function () {
     readDrafts();
-    // New columns go in just before the last (done) column, which is nearly
-    // always where a new step belongs.
-    draftCols.splice(Math.max(0, draftCols.length - 1), 0, { id: null, name: '' });
+    // A new column goes just before the Done column when the board has one at
+    // the end (a new step belongs before done), otherwise at the end.
+    const doneAt = draftCols.findIndex(c => c.done);
+    const at = doneAt === draftCols.length - 1 ? doneAt : draftCols.length;
+    draftCols.splice(at, 0, { id: null, name: '' });
     drawDrafts();
-    const inputs = document.querySelectorAll('.bdColName');
-    const box = inputs[Math.max(0, draftCols.length - 2)];
+    const box = document.querySelectorAll('.bdColName')[at];
     if (box) box.focus();
   };
   window.bdColMove = function (i, d) {
@@ -3378,7 +3378,6 @@
   window.bdTemplateChanged = function () {
     const t = TEMPLATES[val('bdTemplate')] || TEMPLATES.blank;
     draftCols = t.columns.map(n => ({ id: null, name: n }));
-    markDraftDone();
     drawDrafts();
     draftKinds = YDRemind.templateKinds(val('bdTemplate'), draftBoard());
     bdDrawKinds();
@@ -3448,10 +3447,8 @@
     write('boards', id, rec, 'saving the board');
 
     // Cards in a column that no longer exists go to the first column rather
-    // than vanishing from view. And "done" follows the last column wherever
-    // it now is: reordering can make a different column last, and the cards
-    // in it are done from now on, while those left behind in the old last
-    // column are not done any more.
+    // than vanishing from view. And "done" follows the Done column: cards in
+    // it are done from now on, cards anywhere else are not.
     const live = new Set(columns.map(c => c.id));
     const lastId = doneColumn;
     Object.values(cards[id] || {}).forEach(k => {
@@ -3696,7 +3693,7 @@
     const b = {
       name: 'Job Hub wishes', color: '#2a9d8f', order: 90, visibleTo: [], ownerOnly: false,
       columns: [{ id: 'w0', name: 'New wishes' }, { id: 'w1', name: 'On the wish list' }, { id: 'w2', name: 'Built' }],
-      labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
+      doneColumn: 'w2', labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
     };
     boards[WISHES] = Object.assign({ id: WISHES }, b);
     write('boards', WISHES, b, 'wishes board');
@@ -3720,11 +3717,16 @@
   }
 
   function seedBoards() {
-    const mk = (id, name, color, tpl, order) => ({
-      name: name, color: color, order: order, visibleTo: [], ownerOnly: false,
-      columns: TEMPLATES[tpl].columns.map((n, i) => ({ id: tpl + i, name: n })),
-      labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
-    });
+    // The two starters come with their Done column (the templates no longer
+    // carry one).
+    const mk = (id, name, color, tpl, order) => {
+      const names = TEMPLATES[tpl].columns.concat(['Done']);
+      return {
+        name: name, color: color, order: order, visibleTo: [], ownerOnly: false,
+        columns: names.map((n, i) => ({ id: tpl + i, name: n })), doneColumn: tpl + (names.length - 1),
+        labels: DEFAULT_LABELS, createdAt: nowIso(), updatedAt: nowIso(),
+      };
+    };
     const todo = mk('todo', 'My to-dos', '#8e5bc7', 'admin', 1);
     const crew = mk('crew', 'Crew tasks', '#e07b24', 'crew', 2);
     boards.todo = Object.assign({ id: 'todo' }, todo);

@@ -1795,7 +1795,7 @@
     if (!board) {
       const rec = {
         name: 'Maintenance', color: '#8a6d3b', order: 3, visibleTo: [], ownerOnly: false,
-        columns: [{ id: 'm0', name: 'Due' }, { id: 'm1', name: 'Booked in' }, { id: 'm2', name: 'Done' }],
+        columns: [{ id: 'm0', name: 'Due' }, { id: 'm1', name: 'Booked in' }, { id: 'm2', name: 'Done' }], doneColumn: 'm2',
         labels: [{ id: 'overdue', name: 'Overdue', color: '#d64545' },
                  { id: 'soon', name: 'Due soon', color: '#e0a526' }],
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),

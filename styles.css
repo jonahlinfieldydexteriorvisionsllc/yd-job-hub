@@ -4383,6 +4383,7 @@
   #eqList .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
   .bd-done-pick { display:inline-flex; align-items:center; gap:4px; font-size:12.5px; white-space:nowrap; color:var(--muted); }
   .bd-done-none { display:flex; align-items:center; gap:6px; margin:6px 0 2px; font-size:13px; }
+  .bd-col-adds { display:flex; flex-wrap:wrap; gap:8px; }
 
   /* Invoices on All Jobs (invoices.js): one row per unpaid invoice -- who and
      what's owed on top, when it went out / was due / reminded under, then

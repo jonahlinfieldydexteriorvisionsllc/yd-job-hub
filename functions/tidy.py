@@ -19,7 +19,6 @@ reminder email for an order already picked up does not bring it back
 """
 
 import datetime
-import re
 
 import digest as dg
 
@@ -29,24 +28,17 @@ PICKUPS = "pickups"
 MAINTENANCE = "maintenance"
 
 
-FINISHED_NAME = re.compile(r"^\s*(done|bought|built|finished|complete|completed|paid|picked up|fixed|closed|sold|delivered)\s*$", re.I)
-
-
 def _done_col(board):
-    """The column that means done (boards.js doneColOf): the one the board's
-    settings name (doneColumn; '' = none), else the one called Done, else
-    one whose name says finished (Bought, Built...). A board whose done column
-    was deleted has none -- never the next column along (Oct 2026: that
-    made a whole column "done", and this would have deleted it a week on)."""
+    """The column that means done (boards.js doneColOf): only the one the
+    board's settings name (doneColumn; '' = none) -- never worked out from a
+    column's place or name (Jonah, 28 Oct 2026: a new board's renamed last
+    column kept being "done", and this would have deleted its cards a week
+    on). A board with no doneColumn, or whose done column was deleted, has
+    none."""
     cols = board.get("columns") or []
     ids = [c.get("id") for c in cols]
-    if isinstance(board.get("doneColumn"), str):
-        return board["doneColumn"] if board["doneColumn"] in ids else None
-    for c in cols:
-        if re.match(r"^\s*done\s*$", str(c.get("name") or ""), re.I):
-            return c.get("id")
-    finished = [c.get("id") for c in cols if FINISHED_NAME.match(str(c.get("name") or ""))]
-    return finished[-1] if finished else None
+    done = board.get("doneColumn")
+    return done if isinstance(done, str) and done in ids else None
 
 
 def _still_wanted(k):
