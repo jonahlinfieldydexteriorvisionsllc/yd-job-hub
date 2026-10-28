@@ -919,6 +919,29 @@ def _care_owed(jobs):
         return []
 
 
+def _thanked_week_ago(jobs, today):
+    """Customers whose thank-you (followup.py, with the review link) went out
+    7 to 13 days ago, for the owner's Friday evening -- Jonah, 27 Oct 2026, on
+    the reviews plan: "I like everything in this". A short personal text from
+    him is the nudge; Google does not tell Job Hub who has left a review, so
+    he skips the ones he knows did. Every customer thanked is listed, not only
+    the happy ones: Google's rules forbid asking only those."""
+    out = []
+    for j in jobs.values():
+        rec = j.get("thanksEmail") or {}
+        if not rec.get("sentAt") or j.get("removeWhy"):
+            continue
+        try:
+            sent = _parse_day(_local_day(rec.get("sentAt"))[:10])
+        except ValueError:
+            continue
+        days = (today - sent).days
+        if 7 <= days <= 13:
+            out.append({"name": str(j.get("customerName") or "A customer").strip()[:80],
+                        "phone": str(j.get("phone") or "").strip()[:30], "sent": sent})
+    return sorted(out, key=lambda x: x["sent"])
+
+
 def _care_section(owed, sections, push_bits):
     """The owner's "Plant-care emails owed" lines, and a word in the push."""
     import care
@@ -1380,6 +1403,15 @@ def build(slot, user, people, wx, cache):
     if owner and slot in ("morning", "evening") and cache.get("careOwed"):
         _care_section(cache["careOwed"], sections, push_bits)
 
+    # ---- Friday evening: thanked a week ago, for a personal review nudge (the owner's alone)
+    if owner and slot == "evening" and cache.get("thanked"):
+        sections.append(("⭐ Thanked a week ago — a quick text about a review?", [
+            {"text": "%s%s — thank-you sent %s" % (x["name"], (" (" + x["phone"] + ")") if x["phone"] else "",
+                                                   x["sent"].strftime("%b ") + str(x["sent"].day))}
+            for x in cache["thanked"][:15]] + [
+            {"text": "A short personal text to each of them (skip anyone who already left one) brings in "
+                     "more reviews than a second email. Ask everyone the same way — Google's rules."}]))
+
     # ---- receipts waiting to be put on a job (whoever may change jobs sorts them)
     waiting = cache.get("receipts") or 0
     if (owner or access.get("jobs") == "change") and waiting:
@@ -1772,6 +1804,9 @@ def _cache(slot="morning", people=None):
     if slot == "evening":
         people = people if people is not None else _people()
         cache["record"] = _day_record(today, people)
+        # Fridays only: last week's thank-yous, for a personal nudge.
+        if today.weekday() == 4:
+            cache["thanked"] = _thanked_week_ago(jobs, today)
         cache["open"] = _open_tasks(people)
     # The end-of-day reports (endofday.py): the evening's for today, the
     # morning's for yesterday.
