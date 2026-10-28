@@ -1197,7 +1197,10 @@ def read_again(client, db, rid):
     mails = sorted((x for x in (r.get("mail") or []) if x.get("id")), key=lambda x: x.get("at") or 0)
     if not mails:
         return {"error": "This one came from a photo, not an email — there is nothing to read again."}, None
-    pick = next((x for x in mails if not SHIP_SUBJECT.search(x.get("subject") or "")), mails[0])
+    # One of its emails' PDFs read alone (ONE RECEIPT IN EACH PDF) is the
+    # surest read of it there is: that one first.
+    bills = [x for x in mails if not SHIP_SUBJECT.search(x.get("subject") or "")]
+    pick = next((x for x in bills if x.get("pdfN") or x.get("pdf")), (bills or mails)[0])
     m = _fetch(pick["id"])
     st = db.collection("settings").document("receipts").get()
     st_data = (st.to_dict() or {}) if st.exists else {}
@@ -1220,6 +1223,19 @@ def read_again(client, db, rid):
         return {"error": "This time it read as not a purchase — left as it was. 🚫 Not a receipt takes it off."}, usage
     if zero_amount(got):
         return {"error": "It reads as $0.00 — nothing was paid, so it isn't a receipt. 🚫 Not a receipt takes it off."}, usage
+    patch = _read_patch(got, r)
+    # Sorted (or deleted) by someone while Claude was reading: theirs stands.
+    now = ref.get()
+    have = (now.to_dict() or {}) if now.exists else {}
+    if not now.exists or (have.get("splits") or []) or stages.receipt_status(have) != "tosort":
+        return {"error": "It was sorted while it was being read — nothing changed."}, usage
+    ref.update(patch)
+    return {"ok": True, "summary": patch["summary"], "lines": len(patch["lines"]), "totalCents": patch["totalCents"]}, usage
+
+
+def _read_patch(got, r):
+    """What a read again replaces on a receipt (read_again): what it says
+    was bought; which store, whose, paid and the order number stay."""
     lines, tax, total = lines_from(got)
     patch = {
         "vendor": (got.get("vendor") or "").strip()[:120] or r.get("vendor") or "",
@@ -1231,13 +1247,7 @@ def read_again(client, db, rid):
     }
     if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("date") or ""):
         patch["date"] = got["date"]
-    # Sorted (or deleted) by someone while Claude was reading: theirs stands.
-    now = ref.get()
-    have = (now.to_dict() or {}) if now.exists else {}
-    if not now.exists or (have.get("splits") or []) or stages.receipt_status(have) != "tosort":
-        return {"error": "It was sorted while it was being read — nothing changed."}, usage
-    ref.update(patch)
-    return {"ok": True, "summary": patch["summary"], "lines": len(lines), "totalCents": total}, usage
+    return patch
 
 
 def _part_named(m, mail):
@@ -1286,6 +1296,14 @@ def _split_again(client, db, ref, r, m, parts, bank, note):
     ids = list(dict.fromkeys(s[0] for s in saves))
     if not ids:
         return {"error": "None of its PDFs could be saved as a receipt — left as it was."}, usage
+    # A PDF with the number this one already had (read whole, it took one
+    # PDF's number for all of them) joined this receipt rather than making
+    # its own: what it says is now only that PDF's.
+    if ref.id in ids:
+        own = next((g for g in gots if receipt_id(g.get("vendor"), g.get("order_number"), m["id"],
+                                                  g["part"]["n"]) == ref.id), None)
+        if own:
+            ref.update(_read_patch(own, r))
     carry = {k: r[k] for k in ("note", "tags") if r.get(k)}
     if (r.get("qbForward") or {}).get("ok"):
         carry["qbForward"] = r["qbForward"]
