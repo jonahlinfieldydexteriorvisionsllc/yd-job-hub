@@ -1324,8 +1324,69 @@
       h += '<div class="cu-fillbar"><span><b>' + missing.length + ' of ' + list.length + '</b> missing a phone, email or address.</span>' +
         '<button class="btn btn-sm btn-filled" onclick="custFillStart(\'leads\')">✎ Fill them in, one after another</button></div>';
     }
+    if (window.YDAuth && window.YDAuth.isOwner) h += leadMailBarHtml();
     if (!list.length) return h + '<p class="empty-msg">' + (q || tag ? 'No lead matches that.' : 'No leads yet — “+ Add a lead” puts one in.') + '</p>';
+    // Leads from email, newest first, above the rest (by name).
+    const mail = list.filter(c => c.fromEmail).sort((a, b) => String(b.addedAt || '').localeCompare(String(a.addedAt || '')));
+    list = mail.concat(list.filter(c => !c.fromEmail));
     return h + list.slice(0, showN).map(leadRowHtml).join('') + more(list.length);
+  }
+
+  // ---- leads from the inbox (functions/leads.py)
+  //
+  // Jonah (26 Oct 2026, AI idea #3 / routine #1): someone writing in for a
+  // quote becomes a Lead here by itself within the hour, with a reply waiting
+  // in his Gmail Drafts -- never sent for him. settings/leads: on (false =
+  // off), never (addresses or @domains it must never touch).
+  let leadConf = null;
+  let leadConfAsked = false;
+  function leadMailBarHtml() {
+    if (!leadConfAsked) { leadConfAsked = true; loadLeadConf(); }
+    const c = leadConf || {};
+    const off = c.on === false;
+    return '<div class="cu-fillbar"><span>📬 ' + (off ? 'Leads from your email are <b>switched off</b>.'
+        : 'People who email asking for work are added here by themselves, with a reply in your Gmail Drafts to read and send.') +
+      '</span><button class="btn btn-sm" onclick="custLeadMailSettings()">⚙ Settings</button></div>';
+  }
+  function loadLeadConf() {
+    if (!(window.YDAuth && window.YDAuth.isOwner) || !window.YDDb) return;
+    Promise.resolve(window.YDDb.get('settings', 'leads')).then(d => { leadConf = d || {}; if (view === 'leads') render(); }).catch(() => {});
+  }
+  window.custLeadMailSettings = async function () {
+    if (!(window.YDAuth && window.YDAuth.isOwner) || !window.YDDb) return;
+    const now = (await Promise.resolve(window.YDDb.get('settings', 'leads')).catch(() => null)) || {};
+    const never = (now.never || []).join(', ');
+    const pick = await ydChoose('Every hour from 7 to 7, mail from someone not in Job Hub is read; anyone asking for work becomes a Lead ' +
+      'here and a short reply goes into your Gmail Drafts (never sent for you). Your suppliers, crew, customers and mailing lists ' +
+      'are never read.', [
+      { id: 'on', label: '✅ On', hint: 'Catch new leads from my email' },
+      { id: 'off', label: '🚫 Off', hint: 'Don’t read my email for leads' },
+      { id: 'never', label: '✋ Never touch these senders', hint: never || 'Family, friends, anyone — add addresses or @domains' },
+    ], { title: 'Leads from your email', value: now.on === false ? 'off' : 'on', cancel: 'Close' });
+    if (!pick) return;
+    let patch;
+    if (pick.id === 'never') {
+      const got = await ydPrompt('Addresses or whole domains (like @mybank.com), separated by commas. Mail from them is never read for leads.',
+        never, { title: 'Never touch these senders', placeholder: 'mom@gmail.com, @family.net' });
+      if (got == null) return;
+      patch = { never: String(got).split(/[,\s]+/).map(x => x.trim().toLowerCase()).filter(x => /^@?[^@\s]+(@[^@\s]+)?\.[a-z]{2,}$/.test(x)) };
+    } else patch = { on: pick.id === 'on' };
+    leadConf = Object.assign({}, now, patch);
+    render();
+    Promise.resolve(window.YDDb.put('settings', 'leads', Object.assign(patch, { updatedAt: new Date().toISOString() })))
+      .then(() => showToast('Saved'), e => showToast('Not saved: ' + ((e && e.code) || 'error')));
+  };
+  document.addEventListener('yd-auth', loadLeadConf);
+  // The lead's email and the drafted reply, under its name.
+  const gmailLink = u => /^https:\/\/mail\.google\.com\//.test(String(u || '')) ? String(u) : '';
+  function leadMailHtml(c) {
+    const f = c.fromEmail;
+    if (!f) return '';
+    const draft = f.draft && gmailLink(f.draft.link), mail = gmailLink(f.link);
+    return '<div class="cu-mail">📬 ' + esc(f.summary || f.subject || 'Emailed in') +
+      (f.timing ? ' <span class="muted">· ' + esc(f.timing) + '</span>' : '') +
+      (draft ? ' <a class="btn btn-sm" href="' + esc(draft) + '" target="_blank" rel="noopener">✉️ Open the reply draft</a>' : '') +
+      (mail ? ' <a class="link-btn" href="' + esc(mail) + '" target="_blank" rel="noopener">Their email</a>' : '') + '</div>';
   }
   function contactBits(c) {
     const phone = c.phone || c.mobile;
@@ -1340,7 +1401,7 @@
         '<button class="cu-name" onclick="openCustomer(\'' + id + '\')">' + esc(shownName(c)) + '</button>' +
         (w ? ' <span class="pp-when">' + esc(whenText(w)) + '</span>' : '') +
         ((c.tags || []).length ? '<div class="pp-svc">' + c.tags.map(t => '<span class="svc-tag">' + esc(t) + '</span>').join('') + '</div>' : '') +
-        '<div class="pp-contact">' + contactBits(c) + '</div>' +
+        '<div class="pp-contact">' + contactBits(c) + '</div>' + leadMailHtml(c) +
         (miss.length ? '<div class="cu-miss">' + miss.map(m => '<span class="cu-kind k-warn">' + MISS_WORD[m] + '</span>').join(' ') + '</div>' : '') +
       '</div>' +
       (miss.length && can('contacts', 'change') ? '<div class="cu-act"><button class="btn btn-sm" onclick="custFillOne(\'' + id + '\')">✎ Fill in</button></div>' : '') +

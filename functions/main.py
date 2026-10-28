@@ -597,6 +597,13 @@ def _cards(request, path, headers):
                 _tell_owner(followup.auto(client, deadline,
                                           lambda usage: _record_spend(day, "followup", usage, followup.MODEL),
                                           claude=client is not None))
+                # New leads in the inbox (leads.py): a Lead in Customers and a
+                # reply in his Gmail Drafts, the same hour they wrote. Claude
+                # reads only the strangers plain code could not pass over.
+                if time.monotonic() < deadline:
+                    import leads
+                    _tell_owner(leads.run(client, deadline,
+                                          lambda usage: _record_spend(day, "leads", usage, leads.MODEL)))
         except Exception as e:                      # noqa: BLE001
             print("followups failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]

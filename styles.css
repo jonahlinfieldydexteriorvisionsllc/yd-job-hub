@@ -2777,6 +2777,8 @@
   html[data-night] .cr-special { background:#3a2c10; color:var(--accent); }
   .cr-sku { font-size:12px; font-weight:600; font-variant-numeric:tabular-nums; white-space:nowrap; }
   .cr-sku.muted { font-weight:400; }
+  .cu-mail { font-size:13px; margin-top:4px; line-height:1.5; }
+  .cu-mail .btn { margin-left:4px; }
   .warn-text { color:var(--neg); font-weight:600; }
   .cr-link { margin-top:6px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
   .cr-link select { max-width:100%; }
