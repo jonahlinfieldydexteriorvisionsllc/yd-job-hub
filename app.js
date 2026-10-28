@@ -2149,7 +2149,8 @@ function orderFromEstimate(list, lines) {
     if (it.ordered) { out.push(it); seen[k] = 1; return; }   // bought already: left as it was
     if (!want[k]) return;                                    // no longer on the estimate
     seen[k] = 1;
-    out.push(Object.assign({}, it, orderFields(want[k])));
+    // An amount changed by hand (what was really ordered) stays his.
+    out.push(Object.assign({}, it, orderFields(want[k]), it.qtyByHand ? { quantity: it.quantity, qty: it.qty } : {}));
   });
   lines.forEach(l => {
     if (!seen[keyOf(l)]) out.push(Object.assign({ id: uid(), proposalId: null, ordered: false, fromEstimate: true }, orderFields(l)));
@@ -2392,15 +2393,14 @@ function orderOptions(it, cat) {
   const skip = (window.YDPricing && YDPricing.NOT_FOR_ESTIMATES) || [];
   return YDMatch.match({ name: String(it.name || ''), unit: '' }, cat, skip, { anyUnit: true }).options;
 }
-// How many, typed on the line: "4" or "4 yards".
+// How many, typed on the line: "4" or "4 yards" (orderQtyFields).
 function setOrderQty(id, v) {
   const it = orderItems.find(m => m.id === id);
-  if (!it) return;
-  it.quantity = String(v || '').trim();
-  const n = parseFloat(String(v || '').replace(/,/g, ''));
-  it.qty = isFinite(n) ? n : null;
+  if (!it || jobsReadOnly()) return;
+  Object.assign(it, orderQtyFields(it, v));
   markDirty();
   renderOrderList();
+  renderOrdersOverview();
 }
 function orderQtyOf(it) {
   if (typeof it.qty === 'number' && isFinite(it.qty)) return it.qty;
@@ -2775,8 +2775,13 @@ function renderOrderList() {
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
         (costLine ? '<br>' + costLine : '') + picker + (way ? '<br>' + way : '') +
       '</span>' +
-      (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) +
-        (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : '') +
+      // How much -- changed right on the line (what was really ordered).
+      (!ro && !nb && (it.quantity || !askQty)
+        ? '<span class="cr-qty"><input class="cr-qty-in ord-qty-in" value="' + esc(String(it.quantity || '')) + '" placeholder="how much" aria-label="How much of ' + esc(it.name) + '"' +
+            ' onchange="setOrderQty(\'' + ordId(it.id) + '\', this.value)">' +
+            (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>'
+        : it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) +
+          (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : '') +
       '<button class="remove-btn" onclick="rmOrderItem(\'' + ordId(it.id) + '\')">×</button></div>';
   };
 
@@ -2855,27 +2860,35 @@ function setOrdersBy(v) {
   try { localStorage.setItem(ORDERS_BY_KEY, ordersBy); } catch (e) { /* remembered for this visit only */ }
   renderOrdersOverview();
 }
-// Booked and running jobs with something still to order. The job open in the
-// form is read from the form (what was just typed onto its list counts);
-// every other one from its saved copy. Bids are not ordered for, and a job
-// marked to take off (a duplicate) is not either.
+// Booked and running jobs with an order list -- and a finished one until every
+// line on it is checked (Jonah, 28 Oct 2026: "after they get checked off i
+// dont want them to dissappear i just want them to be checked. then once
+// theyve all been checked and the job has been marked completed they can
+// leave the order screen"). Jobs finished before that rule came in are not
+// brought back for lists never ticked. The job open in the form is read from
+// the form (what was just typed onto its list counts); every other one from
+// its saved copy. Bids are not ordered for, and a job marked to take off (a
+// duplicate) is not either. items: every line, a checked one (ordered, or
+// not bought) marked _settled; left: the ones still to order.
+const ORDERS_STAY_FROM = '2026-10-28';
 function ordersJobs() {
   const next = window.YDCalendar && YDCalendar.nextForJobs ? YDCalendar.nextForJobs(60) : {};
   const weekEnd = localYMD(new Date(Date.now() + 7 * 864e5));
   return loadAllJobs().filter(d => {
     const st = normStatus(d.jobStatus, d);
-    return (st === 'booked' || st === 'inprogress') && !d.removeWhy;
+    return (st === 'booked' || st === 'inprogress' || (st === 'complete' && String(d.completedAt || '') >= ORDERS_STAY_FROM)) && !d.removeWhy;
   }).map(d => {
     const open = d._id === currentJobId;
     const items = (open ? orderItems : (Array.isArray(d.orderItems) ? d.orderItems : []))
-      .map((it, i) => it && typeof it === 'object' ? Object.assign({}, it, { _key: ordLineKey(it, i) }) : null)
-      .filter(it => it && !it.ordered && !it.notBought && String(it.name || '').trim());
+      .map((it, i) => it && typeof it === 'object' ? Object.assign({}, it, { _key: ordLineKey(it, i), _settled: !!(it.ordered || it.notBought) }) : null)
+      .filter(it => it && String(it.name || '').trim());
     const when = next[d._id] || null;
-    const running = normStatus(d.jobStatus, d) === 'inprogress';
-    return { id: d._id, d: d, items: items, when: when, running: running,
+    const st = normStatus(d.jobStatus, d);
+    const running = st === 'inprogress';
+    return { id: d._id, d: d, items: items, left: items.filter(it => !it._settled), when: when, running: running, done: st === 'complete',
              // This week: under way now, or on a calendar within 7 days.
              soon: running || !!(when && when.day <= weekEnd) };
-  }).filter(j => j.items.length)
+  }).filter(j => j.items.length && !(j.done && !j.left.length))
     .sort((a, b) => (a.when ? a.when.day : '9999') .localeCompare(b.when ? b.when.day : '9999') ||
       String(a.d.customerName || '').localeCompare(String(b.d.customerName || '')));
 }
@@ -2913,12 +2926,13 @@ function orderSkuHtml(it, cat) {
   return v && (v.buyWays || []).indexOf('online') !== -1 ? ' <span class="cr-sku muted">no item # in Supplies</span>' : '';
 }
 // The blocks: supplier id ('' = no supplier yet) -> [{ job, lines }], in
-// the jobs' order (soonest first).
-function ordersBySupplier(jobs, cat) {
+// the jobs' order (soonest first). Lines still to order (an order to copy or
+// email), unless `all`: the checked ones too, as the screen shows them.
+function ordersBySupplier(jobs, cat, all) {
   const groups = {};
   jobs.forEach(j => {
     const mine = {};
-    j.items.forEach(it => { const v = orderVendor(it, cat); (mine[v] = mine[v] || []).push(it); });
+    (all ? j.items : j.left).forEach(it => { const v = orderVendor(it, cat); (mine[v] = mine[v] || []).push(it); });
     Object.keys(mine).forEach(v => { (groups[v] = groups[v] || []).push({ job: j, lines: mine[v] }); });
   });
   return groups;
@@ -2939,7 +2953,7 @@ function renderOrdersOverview() {
   const all = ordersJobs();
   const soonCount = all.filter(j => j.soon).length;
   const jobs = ordersView === 'week' ? all.filter(j => j.soon) : all;
-  const lineCount = list => list.reduce((n, j) => n + j.items.length, 0);
+  const lineCount = list => list.reduce((n, j) => n + j.left.length, 0);
   document.getElementById('ordersBadge').textContent = lineCount(all) ? lineCount(all) + ' to order' : '';
   // Tap buttons, not a dropdown or a sideways row (phones) -- two questions,
   // two sets: how it is grouped, and which jobs.
@@ -2957,19 +2971,21 @@ function renderOrdersOverview() {
       : 'Nothing left to order on any booked job. A job’s list is on its Job tab, under Materials to Order.') + '</p>';
     return;
   }
-  const groups = ordersBySupplier(jobs, cat);
+  const groups = ordersBySupplier(jobs, cat, true);
   const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
   const bySupplier = ordersSupplierSort(cat);
   const siteOf = v => (window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl(cat.vendors[v]) : '');
-  // The same material from the same supplier on more than one job: said
-  // beside each, so it can go on one call -- but as two lines, for two places.
+  // The same material from the same supplier still to order on more than one
+  // job: said beside each, so it can go on one call -- but as two lines, for
+  // two places.
   const sameKey = it => orderSupply(it, cat) || (window.YDMatch ? YDMatch.keyOf(it.name) : String(it.name).toLowerCase().trim());
   const alsoKey = (v, it) => { const k = sameKey(it); return k ? v + '|' + k : ''; };
   const onJobs = {};
-  Object.keys(groups).forEach(v => groups[v].forEach(b => b.lines.forEach(it => {
-    const k = alsoKey(v, it);
-    if (k) (onJobs[k] = onJobs[k] || []).push(b.job);
-  })));
+  jobs.forEach(j => j.left.forEach(it => {
+    const k = alsoKey(orderVendor(it, cat), it);
+    if (k) (onJobs[k] = onJobs[k] || []).push(j);
+  }));
+  const leftOf = lines => lines.filter(it => !it._settled).length;
   // Each line's way, job by job (the open job's from the form), in the
   // order of the job's lines still to order.
   const ways = {};
@@ -2980,9 +2996,32 @@ function renderOrdersOverview() {
     dels[j.id] = orderDeliveries(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city,
       j.id === currentJobId ? undefined : j.d.deliveryQuotes);
   });
+  // How much, changed right here (Jonah, 28 Oct 2026: "a client has 5yd of
+  // soil listed but we ended up ordering 3.5yd i wanna be able to change that
+  // right there") -- on the job, as a tick is (ordersQty).
+  const qtyBox = (it, j) => canTick && !it.notBought
+    ? '<input class="cr-qty-in ord-qty-in" value="' + esc(String(it.quantity || '')) + '" placeholder="how much" aria-label="How much of ' + esc(it.name) + '"' +
+        ' onchange="ordersQty(\'' + ordId(j.id) + '\', \'' + it._key + '\', this.value)">'
+    : it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>';
+  // A checked line stays, ticked, until its job is finished and every line on
+  // it is checked. -> { html, c: null } (it adds nothing to what is left to buy)
+  const doneRowOf = (it, j) => {
+    const nb = !it.ordered && !!it.notBought;
+    const paid = it.ordered && typeof it.paidCents === 'number' && it.paidCents > 0;
+    const said = nb ? 'Not bought — its cost stays in the job as profit' +
+        (canTick ? ' <button type="button" class="link-btn" onclick="ordersNotBought(\'' + ordId(j.id) + '\', \'' + it._key + '\', false)">↺ Buying it after all</button>' : '')
+      : paid ? '✓ Ordered · paid <b>' + fmtMoney(it.paidCents / 100) + '</b>'
+      : '✓ Ordered' + (it.orderNo ? ' · ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) : '');
+    return { c: null, html: '<div class="check-row done' + (nb ? ' not-bought' : '') + '">' +
+      '<input type="checkbox" aria-label="Ordered"' + (it.ordered ? ' checked' : '') + (canTick ? '' : ' disabled') +
+        ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\', this.checked)">' +
+      '<span class="cr-name">' + esc(it.name) + '<br><span class="cr-cost">' + said + '</span></span>' +
+      qtyBox(it, j) + '</div>' };
+  };
   // One line still to order, ticked here as on its job. -> { html, c }
   // (c: what it costs, null where prices are not shown).
   const rowOf = (it, j, v) => {
+    if (it._settled) return doneRowOf(it, j);
     const c = prices ? orderCost(it, cat) : null;
     const cost = !c ? '' : c.cents !== null
       ? '<span class="cr-cost">' + (c.buy ? esc(YDPricing.qtyText(c.buy, c.per)) + ' to buy × ' : '') +
@@ -3002,14 +3041,13 @@ function renderOrdersOverview() {
       others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
     return { c: c, html: '<div class="check-row">' +
       '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
-        ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\')">' +
+        ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\', this.checked)">' +
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
         orderSkuHtml(it, cat) +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
         (cost ? '<br>' + cost : '') + (way ? '<br>' + way : '') + '</span>' +
-      (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
-      '</div>' };
+      qtyBox(it, j) + '</div>' };
   };
   // A job's name (opens it), what the work is and when it is.
   const jobHead = (j, cls, extra) => {
@@ -3026,11 +3064,11 @@ function renderOrdersOverview() {
   // BY SUPPLIER: one card per supplier, each job's lines under its name.
   const supplierCards = () => Object.keys(groups).sort(bySupplier).map(v => {
     const blocks = groups[v];
-    let sum = 0, unpriced = 0, lines = 0;
+    let sum = 0, unpriced = 0, lines = 0, checked = 0;
     const body = blocks.map(b => {
       const j = b.job;
       const rows = b.lines.map(it => {
-        lines++;
+        if (it._settled) checked++; else lines++;
         const r = rowOf(it, j, v);
         if (r.c) { if (r.c.cents !== null) sum += r.c.cents; else unpriced++; }
         return r.html;
@@ -3044,12 +3082,12 @@ function renderOrdersOverview() {
     const vEsc = ordId(v);
     return '<div class="ord-supplier">' +
       '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
-        '<span class="muted">' + n(lines, 'line') + ' · ' + n(blocks.length, 'job') +
+        '<span class="muted">' + n(lines, 'line') + ' to order' + (checked ? ' · ' + checked + ' checked' : '') + ' · ' + n(blocks.length, 'job') +
           (lead ? ' · takes ' + esc(lead) : '') + (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
-        (v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy this supplier’s order</button>' +
+        (v && lines ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy this supplier’s order</button>' +
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
-          : '<span class="muted">pick each one’s Supplies item on its job</span>') +
+          : v || !lines ? '' : '<span class="muted">pick each one’s Supplies item on its job</span>') +
       '</div>' + body + '</div>';
   }).join('');
 
@@ -3074,11 +3112,12 @@ function renderOrdersOverview() {
       jobSum += sum;
       const lead = v ? (cat.vendors[v] || {}).leadTime : '';
       const vEsc = ordId(v), jEsc = ordId(j.id);
-      const onJobsHere = (groups[v] || []).length;
+      const onJobsHere = (groups[v] || []).filter(b => leftOf(b.lines)).length;
+      const toOrder = leftOf(mine[v]), checked = mine[v].length - toOrder;
       return '<div class="order-vendor ord-sub"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
-          '<span class="muted">' + n(mine[v].length, 'line') + (lead ? ' · takes ' + esc(lead) : '') +
-            (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
-          (v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">📋 Copy</button>' +
+          '<span class="muted">' + (toOrder ? n(toOrder, 'line') + ' to order' : 'all checked') + (toOrder && checked ? ' · ' + checked + ' checked' : '') +
+            (lead && toOrder ? ' · takes ' + esc(lead) : '') + (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
+          (!toOrder ? '' : v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">📋 Copy</button>' +
             ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">✉️ Email</button>' : '') +
             (onJobsHere > 1 ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy all ' + onJobsHere + ' jobs’ order</button>' : '') +
             (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
@@ -3087,7 +3126,10 @@ function renderOrdersOverview() {
     }).join('');
     grand += jobSum; grandUnpriced += jobUnpriced;
     const named = vs.filter(Boolean).length;
-    const counts = ' <span class="muted ord-count">· ' + n(j.items.length, 'line') + (named ? ' · ' + n(named, 'supplier') : '') + '</span>';
+    const checkedHere = j.items.length - j.left.length;
+    const counts = ' <span class="muted ord-count">· ' + (j.left.length ? n(j.left.length, 'line') + ' to order' : '✓ all checked') +
+      (j.left.length && checkedHere ? ' · ' + checkedHere + ' checked' : '') + (named ? ' · ' + n(named, 'supplier') : '') +
+      (j.done ? ' · job finished' : '') + '</span>';
     const total = prices && (jobSum || jobUnpriced || jobDelUnpriced) ? '<div class="ord-job-total">This job comes to about <b>' + fmtMoney(jobSum / 100) + '</b> before tax' +
       (jobDel ? ', with ' + fmtMoney(jobDel / 100) + ' of delivery' : '') +
       (jobUnpriced ? ' · ' + n(jobUnpriced, 'line') + ' without a price' : '') +
@@ -3108,25 +3150,55 @@ function renderOrdersOverview() {
 // Ticked here = ticked on the job. The job open in the form is ticked in the
 // form (its autosave writes it, and nothing typed there is lost); any other
 // through patchJob, the path a move on the board takes -- this device, the
-// cloud, the crew's copy.
-function ordersTick(jobId, itemId) {
+// cloud, the crew's copy. The line stays where it is, ticked or not: the box
+// is its own undo. Ticked = bought, so a "Didn't buy it" on it goes.
+function ordersTick(jobId, itemId, on) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
-  const flip = on => {
-    if (currentJobId && ordId(currentJobId) === jobId) {
-      const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
-      if (it && !!it.ordered !== on) toggleOrderItem(it.id);
-    } else {
-      const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
-      let d = null;
-      try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
-      if (!d || !window.YDSync) return;
-      const list = (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? Object.assign({}, o, { ordered: on }) : o);
-      window.YDSync.patchJob(id, { orderItems: list });
-    }
-    renderOrdersOverview();
-  };
-  flip(true);
-  if (typeof showUndo === 'function') showUndo('Marked ordered', () => flip(false));
+  on = on !== false;
+  if (currentJobId && ordId(currentJobId) === jobId) {
+    const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+    if (it && !!it.ordered !== on) toggleOrderItem(it.id);
+  } else {
+    ordersPatchLine(jobId, itemId, o => {
+      const n = Object.assign({}, o, { ordered: on });
+      if (on) delete n.notBought;
+      return n;
+    });
+  }
+  renderOrdersOverview();
+}
+// One line of a job that is not open, changed and saved through patchJob.
+function ordersPatchLine(jobId, itemId, set) {
+  const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
+  let d = null;
+  try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+  if (!d || !window.YDSync) return false;
+  window.YDSync.patchJob(id, { orderItems: (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? set(o) : o) });
+  return true;
+}
+// How much of a line, typed on the order screen: what was really ordered
+// ("3.5" of soil quoted at 5 yards). A bare number keeps the line's unit. Kept
+// by hand (qtyByHand), so the estimate no longer moves it (orderFromEstimate).
+function orderQtyFields(o, v) {
+  const typed = String(v == null ? '' : v).trim();
+  const n = parseFloat(typed.replace(/,/g, ''));
+  const bare = /^[\d.,\s]+$/.test(typed);
+  const unit = String(o.per || orderUnitWords(o.quantity) || '').trim();
+  const quantity = !typed ? '' : bare && isFinite(n) && unit
+    ? (window.YDPricing && YDPricing.qtyText ? YDPricing.qtyText(n, unit) : n + ' ' + unit) : typed;
+  return { quantity: quantity, qty: isFinite(n) ? n : null, qtyByHand: true };
+}
+function ordersQty(jobId, itemId, v) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  if (currentJobId && ordId(currentJobId) === jobId) {
+    const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+    if (!it) return;
+    Object.assign(it, orderQtyFields(it, v));
+    markDirty();
+    renderOrderList();
+  } else if (!ordersPatchLine(jobId, itemId, o => Object.assign({}, o, orderQtyFields(o, v)))) return;
+  renderOrdersOverview();
+  showToast('Saved on the job');
 }
 // A line's way set by hand here = on the job, as a tick is (ordersTick).
 function ordersWay(jobId, itemId, v) {
@@ -3146,28 +3218,24 @@ function ordersWay(jobId, itemId, v) {
   }
   renderOrdersOverview();
 }
-// Not bought, set here = on the job (orderNotBought), with Undo: the line
-// leaves this list at once.
-function ordersNotBought(jobId, itemId) {
+// Not bought, set here = on the job (orderNotBought). The line stays, marked,
+// with its own "Buying it after all" (on = false).
+function ordersNotBought(jobId, itemId, on) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
-  const mark = on => {
-    if (currentJobId && ordId(currentJobId) === jobId) {
-      const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
-      if (it) orderNotBought(it.id, on);
-    } else {
-      const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
-      let d = null;
-      try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
-      if (!d || !window.YDSync) return;
-      const set = o => { const n = Object.assign({}, o); if (on) { n.notBought = notBoughtMark(); n.ordered = false; } else delete n.notBought; return n; };
-      window.YDSync.patchJob(id, { orderItems: (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? set(o) : o) });
-      renderOrdersOverview();
-    }
-  };
-  mark(true);
-  if (typeof showUndo === 'function') showUndo('Not bought — its cost stays in the job as profit', () => mark(false));
+  on = on !== false;
+  if (currentJobId && ordId(currentJobId) === jobId) {
+    const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+    if (it) orderNotBought(it.id, on);
+  } else {
+    ordersPatchLine(jobId, itemId, o => {
+      const n = Object.assign({}, o);
+      if (on) { n.notBought = notBoughtMark(); n.ordered = false; } else delete n.notBought;
+      return n;
+    });
+  }
+  renderOrdersOverview();
 }
-// One job's lines still to order (ordersJobs), each with its way.
+// One job's lines on the order screen (ordersJobs), each with its way.
 function orderJobWays(j, cat) {
   return orderWaysOf(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city);
 }

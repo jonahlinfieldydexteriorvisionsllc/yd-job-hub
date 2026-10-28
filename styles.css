@@ -5680,3 +5680,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
    under the estimate's Delivery row (estimate.js). */
 .est-arow-sub { margin-left:18px; }
 .est-arow-sub input { width:90px; }
+
+/* Order lists: how much, changed right on the line; a checked line keeps its
+   words readable under the strike (app.js qtyBox / doneRowOf). */
+.ord-qty-in { width:110px; margin-left:0; font-weight:600; }
+.check-row.done .cr-name .cr-cost { display:inline-block; text-decoration:none; }
