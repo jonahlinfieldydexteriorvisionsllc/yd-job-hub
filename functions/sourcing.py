@@ -44,7 +44,9 @@ costs him money:
   sold near here -- say so in `note`.
 - `price` is the price before tax for ONE `per`, exactly as the page shows it (the contractor/pro
   price when the page shows one). Only prices you actually read on a page in this search -- never
-  a remembered, typical or worked-out price. A supplier worth calling whose page shows no price
+  a remembered, typical or worked-out price. Never a price after a mail-in rebate ("value after
+  rebate", Menards' 11% rebate): the regular / everyday price paid at the register -- the owner
+  charges that and keeps the rebate. A supplier worth calling whose page shows no price
   goes in with price 0 and "call for price" in `note`.
 - `per` is how it is sold, in plain words: each, bag, roll, box, pallet, ton, yard, sq ft, LF,
   gallon...
