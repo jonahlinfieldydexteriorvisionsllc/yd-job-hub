@@ -2723,6 +2723,7 @@ function renderOrderList() {
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
+        (settled ? '' : orderSkuHtml(it, cat)) +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') +
         // Ticked by a receipt sorted onto this job: which order it was.
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
@@ -2844,7 +2845,26 @@ function orderJobTitle(j) {
 // supplier has it at the counter rather than on the truck.
 function orderLineText(it, cat, w) {
   const amt = orderAmountText(it, cat);
-  return (amt ? amt + ' — ' : '') + it.name + (it.specialOrder ? ' (special order)' : '') + (w && w.way === 'pickup' ? ' (we’ll pick it up)' : '');
+  const sku = orderSkuOf(it, cat);
+  return (amt ? amt + ' — ' : '') + it.name + (sku ? ' (item #' + sku + ')' : '') +
+    (it.specialOrder ? ' (special order)' : '') + (w && w.way === 'pickup' ? ' (we’ll pick it up)' : '');
+}
+// The supplier's own item number for a line, from Supplies -- Jonah, 27 Oct
+// 2026: "items to order online from menards should include product number so
+// i can easily search it up". '' when the line is not joined or has none.
+function orderSkuOf(it, cat) {
+  const sid = orderSupply(it, cat);
+  const sup = sid && cat.items[sid];
+  return sup && sup.sku ? String(sup.sku).trim() : '';
+}
+// Beside the line's name: its item #, or -- for a supplier you order from
+// online -- a note that Supplies has none yet, so it gets filled in once.
+function orderSkuHtml(it, cat) {
+  const sku = orderSkuOf(it, cat);
+  if (sku) return ' <span class="cr-sku">Item #' + esc(sku) + '</span>';
+  const sid = orderSupply(it, cat), sup = sid && cat.items[sid];
+  const v = sup && cat.vendors[sup.vendorId];
+  return v && (v.buyWays || []).indexOf('online') !== -1 ? ' <span class="cr-sku muted">no item # in Supplies</span>' : '';
 }
 // The blocks: supplier id ('' = no supplier yet) -> [{ job, lines }], in
 // the jobs' order (soonest first).
@@ -2938,6 +2958,7 @@ function renderOrdersOverview() {
         ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
+        orderSkuHtml(it, cat) +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
         (cost ? '<br>' + cost : '') + (way ? '<br>' + way : '') + '</span>' +
       (it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) + '</span>' : '<span class="cr-qty muted">no amount</span>') +
