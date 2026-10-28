@@ -134,13 +134,17 @@
   // city: the job's town for the delivery rate -- the form's, unless a job
   // that is not open is being priced. e/jobId: for an estimate accepted in
   // QuickBooks, whose lines carry no crew-days, the job's own days -- what
-  // its fuel is counted over (pricing.js fuel).
-  function ctx(city, e, jobId) {
+  // its fuel is counted over (pricing.js fuel). quotes: the job's delivery
+  // charges checked with a supplier whose charge changes every order
+  // (job.deliveryQuotes {vendorId: {cents, at, by}}; pricing.js deliveries).
+  function ctx(city, e, jobId, quotes) {
     const c = catalog();
     return { rules: P().rules(), items: c.items, prices: c.prices, vendors: c.vendors || {}, fuel: P().fuelPrices(), book: book,
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim(),
-             jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null };
+             jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null, quotes: quotes || {} };
   }
+  // The open job's (app.js boardFields) -- never used for a job not open.
+  const openQuotes = () => (typeof window.ydOpenDeliveryQuotes === 'function' && window.ydOpenDeliveryQuotes()) || {};
   // A job's days: each day someone was clocked in on it, and each day still
   // ahead on the Job schedule -- a drive from the shop and back for each
   // (Jonah, 21 Oct 2026). null when there are none yet.
@@ -161,7 +165,7 @@
     // address leaves it behind (the next miles lookup finds the new one).
     if (est.site && est.site.at !== siteKey()) est.site = null;
     priceRuns++;
-    last = P() ? P().price(est, ctx(undefined, est, currentJobId)) : null;
+    last = P() ? P().price(est, ctx(undefined, est, currentJobId, openQuotes())) : null;
     return last;
   }
   const busyHere = () => !!building && building === currentJobId;
@@ -240,10 +244,11 @@
     // lines may carry `hand`: the way set by hand on the order line, which
     // wins over the estimate's. A line not joined to Supplies is let in: when
     // it is delivered, there is no supplier to price that by, and it says so.
-    orderDelivery: (lines, saved, city) => {
+    // quotes: that job's deliveryQuotes when it is not the open one.
+    orderDelivery: (lines, saved, city, quotes) => {
       if (!P() || !P().deliveries) return null;
       const e = saved === undefined ? est : fromSaved(saved || {});
-      const c = ctx(saved === undefined ? undefined : city || '');
+      const c = ctx(saved === undefined ? undefined : city || '', undefined, undefined, saved === undefined ? openQuotes() : quotes);
       const shaped = orderShaped(lines, e, c).filter(l => l.orderQty > 0);
       return P().deliveries(shaped, e, c, { order: true });
     },
@@ -262,19 +267,23 @@
     // job that is not open (Estimate vs actual, jobcosts.js): the same
     // pricing.js price() with the same Supplies, rules and price book --
     // never a second copy of the sums. null before pricing.js is there.
-    // jobId: the job it is on (its days, for one accepted in QuickBooks).
-    priceSaved: (saved, city, jobId) => {
+    // jobId: the job it is on (its days, for one accepted in QuickBooks);
+    // quotes: its deliveryQuotes.
+    priceSaved: (saved, city, jobId, quotes) => {
       if (!P()) return null;
       const e = fromSaved(saved || {});
-      return P().price(e, ctx(city == null ? '' : city, e, jobId));
+      return P().price(e, ctx(city == null ? '' : city, e, jobId, quotes));
     },
     // The same, split by piece of work (profit by service, jobcosts.js):
     // { lines: [{ title, service, priceCents, costCents, profitCents, crewDays, complete, ... }], rest } or null.
-    splitSaved: (saved, city, jobId) => {
+    splitSaved: (saved, city, jobId, quotes) => {
       if (!P()) return null;
       const e = fromSaved(saved || {});
-      return serviceSplit(e, P().price(e, ctx(city == null ? '' : city, e, jobId)));
+      return serviceSplit(e, P().price(e, ctx(city == null ? '' : city, e, jobId, quotes)));
     },
+    // A delivery charge checked for the open job (app.js setOrderDeliveryQuote):
+    // priced again with it.
+    repriced: () => changed(true),
     // The plant-care line under QuickBooks, after the job's plants or its
     // care email were settled on the Job tab (plantcare.js).
     redrawCare: () => renderQb(),
@@ -2122,6 +2131,22 @@
         (d.deliveryZone ? 'Zone: from the address' : 'Town: from the job') + '</option>' +
         towns.map(t => '<option' + (t === est.deliveryTown ? ' selected' : '') + '>' + esc(t) + '</option>').join('') + '</select>' : '') +
       '<b>' + delAmt + '</b></div>');
+    // A supplier whose delivery changes every order (pricing.js deliveryEach):
+    // the charge checked with them for this job, typed here or on the order
+    // list -- the one figure (the job's deliveryQuotes).
+    if (!off.delivery) {
+      const names = catalog().vendors || {};
+      const eachRows = Object.keys(d.check || {}).map(v => ({ v: v, items: d.check[v], q: null }))
+        .concat(d.lines.filter(l => l.each).map(l => ({ v: l.vendorId, items: l.items || [], q: l.checked })));
+      eachRows.forEach(x => {
+        const vname = (names[x.v] || {}).name || 'the supplier';
+        rows.push('<div class="est-arow est-arow-sub"><span></span><span class="est-adesc">🚚 ' + esc(vname) + ' — ' + esc(x.items.join(', ')) + ': ' +
+          (x.q ? 'checked' + (x.q.at ? ' ' + esc(bidDay(x.q.at)) : '') + (x.q.by ? ' by ' + esc(x.q.by) : '')
+            : '<span class="bad">their delivery changes every order — check it with them</span>') +
+          ' <label>Delivery for this job $<input inputmode="decimal" value="' + (x.q ? esc((x.q.cents / 100).toFixed(2)) : '') + '"' + (ro ? ' disabled' : '') +
+          ' onchange="setOrderDeliveryQuote(\'\', \'' + String(x.v || '').replace(/[^A-Za-z0-9_-]/g, '') + '\', this.value)"></label></span><b></b></div>');
+      });
+    }
     // Fuel: a drive from the shop and back each day of the job, both trucks.
     // The miles look themselves up from the job's address (autoTrip) -- no
     // button to press (Jonah, 21 Oct 2026); a number typed in the box stays

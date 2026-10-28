@@ -5675,3 +5675,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .ord-delivery .cr-qty-in { width:80px; }
   .pr-del { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 8px; }
   .pr-del-amt { display:inline-flex; align-items:center; gap:2px; }
+
+/* A supplier whose delivery changes every order: this job's checked charge,
+   under the estimate's Delivery row (estimate.js). */
+.est-arow-sub { margin-left:18px; }
+.est-arow-sub input { width:90px; }

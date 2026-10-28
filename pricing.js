@@ -630,7 +630,7 @@
   //      problems, problemsOf: {vendorId ('' = not joined): [text]},
   //      unset: {vendorId: [names delivered with no charge set]}, deliveryZone }
   function deliveries(lines, est, ctx, opts) {
-    const r = ctx.rules, d = r.delivery || {}, out = { lines: [], clientCents: 0, problems: [], problemsOf: {}, unset: {} };
+    const r = ctx.rules, d = r.delivery || {}, out = { lines: [], clientCents: 0, problems: [], problemsOf: {}, unset: {}, check: {} };
     if ((est.off || {}).delivery) return out;
     const say = (p, vid) => { out.problems.push(p); (out.problemsOf[vid || ''] = out.problemsOf[vid || ''] || []).push(p); };
     // A delivery is a truck of bulk material or a pallet. Small things --
@@ -672,10 +672,24 @@
         out.lines.push(Object.assign(base, { name: vname, loads: 0, free: true, costCents: 0, clientCents: 0 }));
         return;
       }
-      const cost = num(vr.deliveryCents);
-      if (cost === null) { out.unset[k] = items; say('no delivery charge set for ' + vname + ' (Pricing rules → Suppliers)', k); return; }
+      // A supplier whose charge changes every order (shipped by weight --
+      // turf, drainage grid; Jonah, 28 Oct 2026: "Delivery charges vary so
+      // well always need to double check that whenever ordering"): the
+      // charge checked with them for this job (ctx.quotes, the job's
+      // deliveryQuotes, typed on its order list or estimate), else it says so.
+      let cost, checked = null;
+      if (vr.deliveryEach) {
+        const q = (ctx.quotes || {})[k];
+        cost = q && typeof q === 'object' ? num(q.cents) : null;
+        if (cost === null) { out.check[k] = items; say('delivery from ' + vname + ' changes every order — check it with them for this job', k); return; }
+        checked = { cents: cost, at: q.at || '', by: q.by || '' };
+      } else {
+        cost = num(vr.deliveryCents);
+        if (cost === null) { out.unset[k] = items; say('no delivery charge set for ' + vname + ' (Pricing rules → Suppliers)', k); return; }
+      }
       const client = Math.round(cost * (1 + pct(d.markupPct)));
-      out.lines.push(Object.assign(base, { name: vname + ' delivery', loads: 1, charge: true, costCents: cost, clientCents: client }));
+      out.lines.push(Object.assign(base, { name: vname + ' delivery', loads: 1, charge: true, each: !!vr.deliveryEach, checked: checked,
+                                           costCents: cost, clientCents: client }));
       out.clientCents += client;
       if (cost > 0 && num(d.markupPct) === null && out.problems.indexOf('delivery markup % not set') === -1) say('delivery markup % not set', k);
     });
@@ -1438,7 +1452,8 @@
   const CAT_WORDS = { markupPct: ['Markup', 'pct'], wastePct: ['Waste', 'pct'], noTax: ['No tax on it', 'onOff'],
                       customerTax: ['Tax to the customer', 'text'] };
   const VENDOR_WORDS = { processingPct: ['Processing charge', 'pct'], cityDelivery: ['Delivers in the city', 'onOff'],
-                         deliveryCents: ['Delivery charge to a job', 'money'], deliveryFree: ['Delivery free or in their prices', 'onOff'] };
+                         deliveryCents: ['Delivery charge to a job', 'money'], deliveryFree: ['Delivery free or in their prices', 'onOff'],
+                         deliveryEach: ['Delivery changes every order (checked when ordering)', 'onOff'] };
   function ruleText(v, how) {
     const C = window.YDChangeLog;
     const money = c => (C ? C.money(c) : String(c));
@@ -1957,6 +1972,8 @@
         }).join('') + '</tbody></table>' +
         '<p class="hint">How each supplier charges to bring an order to a job. <b>By town</b>: the MDS book — one load per bulk material ' +
           'or pallet, at the town’s rate below. <b>A set charge</b>: what they charge each time they deliver to a job, whatever is on it. ' +
+          '<b>Changes every order</b>: shipped by weight or by the order (turf, drainage grid) — each job’s order list asks for the charge ' +
+          'once you’ve checked it with them, and says it isn’t checked until then. ' +
           '<b>Free or in their prices</b>: online stores that ship free, a dumpster company. Anything marked 🚚 Delivered from a supplier ' +
           'with none of these says so on the estimate and the order list instead of costing $0.</p>'
         : '<p class="muted">No suppliers in Supplies yet.</p>') +
@@ -2268,14 +2285,16 @@
   };
   // How a supplier charges to bring an order to a job (deliveries()): one of
   // by town (cityDelivery), a set charge each delivery (deliveryCents), free
-  // or in their prices (deliveryFree) -- or not set. Also set from under an
+  // or in their prices (deliveryFree), changes every order (deliveryEach:
+  // checked with them per job) -- or not set. Also set from under an
   // order list's delivery that has no price (app.js), where the gap shows.
   const chargeOpen = {};      // supplier id -> "A set charge" picked, no amount typed yet
   function deliveryHow(vid, vr) {
     vr = vr || {};
-    return vr.cityDelivery ? 'town' : vr.deliveryFree ? 'free' : num(vr.deliveryCents) !== null || chargeOpen[vid] ? 'charge' : '';
+    return vr.cityDelivery ? 'town' : vr.deliveryEach ? 'each' : vr.deliveryFree ? 'free' : num(vr.deliveryCents) !== null || chargeOpen[vid] ? 'charge' : '';
   }
-  const DELIVERY_HOWS = [['', 'Not set yet'], ['town', 'By town (MDS book)'], ['charge', 'A set charge each delivery'], ['free', 'Free, or in their prices']];
+  const DELIVERY_HOWS = [['', 'Not set yet'], ['town', 'By town (MDS book)'], ['charge', 'A set charge each delivery'],
+                         ['each', 'Changes every order — check it'], ['free', 'Free, or in their prices']];
   function vendorDeliveryHtml(vid, vr, ro) {
     const how = deliveryHow(vid, vr), id = String(vid).replace(/[^A-Za-z0-9_-]/g, '');
     return '<span class="pr-del"><select' + (ro ? ' disabled' : '') + ' aria-label="How they charge to deliver" onchange="prDelivery(\'' + id + '\', this.value)">' +
@@ -2292,6 +2311,7 @@
     vs[vid] = Object.assign({}, was, {
       cityDelivery: how === 'town',
       deliveryFree: how === 'free' ? true : null,
+      deliveryEach: how === 'each' ? true : null,
       deliveryCents: how === 'charge' ? (cents !== undefined ? cents : num(was.deliveryCents)) : null,
     });
     save({ vendors: vs });

@@ -131,7 +131,7 @@
   function depositOf(inv, job) {
     const total = Number(inv.total) || 0;
     try {
-      const r = job && job.estimate && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(job.estimate, job.city || '') : null;
+      const r = job && job.estimate && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(job.estimate, job.city || '', undefined, job.deliveryQuotes) : null;
       const first = r && r.payments && r.payments[0], grand = r && (r.grandCents || r.totalCents);
       if (first && grand > 0 && r.payments.length > 1) return Math.round(total * first.cents / grand * 100) / 100;
     } catch (e) { /* priced below instead */ }

@@ -191,7 +191,7 @@
                   costs: {}, complete: true, problems: 0, sentAt: null, docNumber: null, nowCents: null, hand: {} };
     const sent = lastSent(est);
     const needNow = !(ctx && ctx.lean && sent && !wantNow);
-    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '', job._id) : null;
+    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '', job._id, job.deliveryQuotes) : null;
     if (sent && !wantNow) {
       const c = sent.cost, byKind = c.byKind || {};
       const dumps = (num(byKind.dumpster) || 0) + (num(byKind.rental) || 0);
@@ -800,7 +800,7 @@
     const k = splitKept.get(job._id);
     if (k && k.key === key) return k.v;
     let v = null;
-    try { v = hasLines(job.estimate) && window.YDEstimate && YDEstimate.splitSaved ? YDEstimate.splitSaved(job.estimate, job.city || '', job._id) : null; }
+    try { v = hasLines(job.estimate) && window.YDEstimate && YDEstimate.splitSaved ? YDEstimate.splitSaved(job.estimate, job.city || '', job._id, job.deliveryQuotes) : null; }
     catch (e) { v = null; }
     splitKept.set(job._id, { key: key, v: v });
     return v;

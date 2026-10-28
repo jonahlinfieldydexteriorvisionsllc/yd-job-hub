@@ -338,7 +338,7 @@ const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'car
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
   'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail',
-  'noPost', 'noThanks', 'jobLine', 'welcomeEmail', 'noWelcome'];
+  'noPost', 'noThanks', 'jobLine', 'welcomeEmail', 'noWelcome', 'deliveryQuotes'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
 // device still on the old code keeps reading them): qbInvoiced, the old
@@ -2467,10 +2467,11 @@ function orderCost(it, cat) {
 // anything delivered whose charge is not known says so rather than adding
 // nothing (Jonah, 27 Oct 2026: "stuff marked to be delivered but dont
 // include a delivery fee ... it keeps happening").
-// saved: the job's estimate when it is not the open one.
+// saved: the job's estimate when it is not the open one; quotes: its
+// deliveryQuotes (a supplier whose charge changes every order, checked).
 // -> { vendorId ('' = not joined to Supplies): {cents, loads, names,
-//      problems, free, unset} }
-function orderDeliveries(items, cat, saved, city) {
+//      problems, free, unset, each, quote} }
+function orderDeliveries(items, cat, saved, city, quotes) {
   if (!window.YDEstimate || !window.YDEstimate.orderDelivery) return {};
   // Each line as it is got (orderWaysOf): one we pick up brings no truck.
   // One not joined to Supplies still counts: delivered, it has no supplier
@@ -2481,15 +2482,16 @@ function orderDeliveries(items, cat, saved, city) {
              qty: c.sid ? c.buy || c.bags || (c.unitOff ? null : orderQtyOf(it)) : orderQtyOf(it) || 1,
              per: c.sid ? '' : it.per || orderUnitWords(it.quantity) };
   }).filter(l => l.qty > 0);
-  const d = lines.length ? window.YDEstimate.orderDelivery(lines, saved, city) : null;
+  const d = lines.length ? window.YDEstimate.orderDelivery(lines, saved, city, quotes) : null;
   if (!d) return {};
   const out = {};
-  const of = v => out[v] = out[v] || { cents: 0, loads: 0, names: [], problems: [], free: false, unset: false };
+  const of = v => out[v] = out[v] || { cents: 0, loads: 0, names: [], problems: [], free: false, unset: false, each: false, quote: null };
   d.lines.forEach(l => {
     const o = of(l.vendorId || (cat.items[l.supplyId] || {}).vendorId || '');
     o.cents += l.costCents || 0;
     o.loads += l.loads;
     if (l.free) o.free = true;
+    if (l.each) { o.each = true; o.quote = l.checked || null; }
     o.names.push(l.free || l.charge ? (l.items || []).join(', ') : l.name + (l.loads > 1 ? ' ×' + l.loads : '') + (l.pallet ? ' + pallet' : ''));
   });
   // Only what stops a delivery being priced (no town, a zone to pick, no
@@ -2499,8 +2501,11 @@ function orderDeliveries(items, cat, saved, city) {
     if (ps.length) of(v).problems = ps;
   });
   Object.keys(d.unset || {}).forEach(v => { const o = of(v); o.unset = true; o.names = o.names.concat(d.unset[v]); });
+  Object.keys(d.check || {}).forEach(v => { const o = of(v); o.each = true; o.names = o.names.concat(d.check[v]); });
   return out;
 }
+// The open job's checked delivery charges, for pricing it (estimate.js ctx).
+window.ydOpenDeliveryQuotes = () => boardFields.deliveryQuotes || {};
 // Delivered or picked up (Jonah, 22 Oct 2026): each line of a job's order
 // list, by his rules (pricing.js wayOf), else the way set on the estimate's
 // line, else the way set by hand on the order line itself (`way`:
@@ -2537,11 +2542,24 @@ function orderWayAt(i, v) { setOrderWay(orderItems[i], v); }
 // Opening the job looks up where it is (estimate.js autoTrip), which finds a
 // Madison zone by itself; the problem says what else would. A supplier with
 // no charge set gets the box for it right here (owner): set once, it counts
-// on every job and estimate from then on.
-function orderDeliveryRow(dv, vid, vname) {
-  if (!dv || (!dv.loads && !dv.free && !dv.problems.length)) return '';
+// on every job and estimate from then on. A supplier whose charge changes
+// every order gets a box for this job's, once checked with them.
+// jobId: the job the list is for (none: the open job).
+function orderDeliveryRow(dv, vid, vname, jobId) {
+  if (!dv) return '';
   const what = esc(dv.names.join(', '));
   const id = ordId(vid);
+  if (dv.each && vid) {
+    const q = dv.quote, ro = jobsReadOnly();
+    return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivered: ' + what + '<br>' +
+      (q ? '<span class="cr-cost">their delivery charge for this job = <b>' + fmtMoney(q.cents / 100) + '</b>' +
+          ' <span class="muted">checked' + (q.at ? ' ' + esc(bidDay(q.at)) : '') + (q.by ? ' by ' + esc(q.by) : '') + '</span></span>'
+        : '<span class="cr-cost warn-text">Not checked yet — ' + esc(vname || 'their') + ' delivery changes every order. Check it with them when you order.</span>') +
+      (ro ? '' : ' <span class="cr-cost">' + (q ? 'Changed? ' : 'Their charge for this job: ') + '$<input class="cr-qty-in" inputmode="decimal" placeholder="0.00" value="' +
+          (q ? (q.cents / 100).toFixed(2) : '') + '" aria-label="Their delivery charge for this job" ' +
+          'onchange="setOrderDeliveryQuote(\'' + ordId(jobId || '') + '\', \'' + id + '\', this.value)"></span>') + '</span></div>';
+  }
+  if (!dv.loads && !dv.free && !dv.problems.length) return '';
   if (dv.unset && vid) {
     const owner = !!(window.YDAuth && window.YDAuth.isOwner);
     return '<div class="check-row ord-delivery"><span class="cr-name">🚚 Delivered: ' + what + '<br>' +
@@ -2574,6 +2592,33 @@ function setOrderDeliveryCharge(vid, v) {
 function setOrderDeliveryFree(vid) {
   if (!window.YDPricing || !YDPricing.setVendorDelivery || !YDPricing.setVendorDelivery(vid, 'free')) return;
   showToast('Saved — their delivery is free or in their prices (Pricing rules → Suppliers)');
+  orderListsRedraw();
+}
+// A delivery charge checked with a supplier whose charge changes every order
+// (pricing.js deliveryEach), for one job: job.deliveryQuotes {vendorId:
+// {cents, at, by}} -- the one figure its order list and estimate both use
+// (blank takes it off: null, as saves merge). jobId: the job's ordId, ''
+// for the open job.
+function setOrderDeliveryQuote(jobId, vid, v) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  const s = String(v == null ? '' : v).replace(/[$,\s]/g, '');
+  const c = s === '' ? null : Math.round(parseFloat(s) * 100);
+  if (c !== null && (!isFinite(c) || c < 0)) { showToast('Type their delivery charge in dollars, like 85'); return; }
+  const q = c === null ? null : { cents: c, at: new Date().toISOString(), by: notBoughtMark().by };
+  const vname = ((window.YDSupplies && YDSupplies.catalog && (YDSupplies.catalog() || {}).vendors) || {})[vid];
+  const said = c === null ? 'Taken off — check it with them again' : 'Saved — ' + fmtMoney(c / 100) + ' delivery from ' + ((vname && vname.name) || 'them') + ' on this job';
+  if (!jobId || (currentJobId && ordId(currentJobId) === jobId)) {
+    boardFields.deliveryQuotes = Object.assign({}, boardFields.deliveryQuotes, { [vid]: q });
+    markDirty();
+    if (window.YDEstimate && YDEstimate.repriced) YDEstimate.repriced();
+  } else {
+    const id = (getJobIndex().find(x => ordId(x.id) === jobId) || {}).id;
+    let d = null;
+    try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+    if (!d || !window.YDSync) return;
+    window.YDSync.patchJob(id, { deliveryQuotes: Object.assign({}, d.deliveryQuotes, { [vid]: q }) });
+  }
+  showToast(said);
   orderListsRedraw();
 }
 function orderListsRedraw() {
@@ -2932,7 +2977,8 @@ function renderOrdersOverview() {
   // Each job's delivery from each supplier (the open job's from the form).
   const dels = {};
   if (prices) jobs.forEach(j => {
-    dels[j.id] = orderDeliveries(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city);
+    dels[j.id] = orderDeliveries(j.items, cat, j.id === currentJobId ? undefined : (j.d.estimate || null), j.id === currentJobId ? undefined : j.d.city,
+      j.id === currentJobId ? undefined : j.d.deliveryQuotes);
   });
   // One line still to order, ticked here as on its job. -> { html, c }
   // (c: what it costs, null where prices are not shown).
@@ -2991,7 +3037,7 @@ function renderOrdersOverview() {
       }).join('');
       const dv = (dels[j.id] || {})[v];
       if (dv) { sum += dv.cents; if (dv.problems.length) grandDelUnpriced++; }
-      return jobHead(j) + rows + orderDeliveryRow(dv, v, vname(v));
+      return jobHead(j) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
     }).join('');
     grand += sum; grandUnpriced += unpriced;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
@@ -3037,7 +3083,7 @@ function renderOrdersOverview() {
             (onJobsHere > 1 ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy all ' + onJobsHere + ' jobs’ order</button>' : '') +
             (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
             : '<span class="muted">pick each one’s Supplies item on the job</span>') +
-        '</div>' + rows + orderDeliveryRow(dv, v, vname(v));
+        '</div>' + rows + orderDeliveryRow(dv, v, vname(v), j.id);
     }).join('');
     grand += jobSum; grandUnpriced += jobUnpriced;
     const named = vs.filter(Boolean).length;
@@ -4868,7 +4914,7 @@ function dashPlannedNet(d, price) {
   const e = d.estimate;
   if (!price || !e || !((e.work || []).length || (e.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return null;
   try {
-    const r = YDEstimate.priceSaved(e, d.city || '', d._id);
+    const r = YDEstimate.priceSaved(e, d.city || '', d._id, d.deliveryQuotes);
     if (!r || !r.profit || !r.profit.complete) return null;
     return round2(price - r.profit.costCents / 100);
   } catch (err) { return null; }
