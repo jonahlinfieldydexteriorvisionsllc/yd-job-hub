@@ -265,6 +265,18 @@ def _tag(t):
     return "#" + t if t else ""
 
 
+# The same After photos go on the Google Business Profile every week -- Jonah,
+# 27 Oct 2026: "routine for adding photos to the google business profile. Add
+# after photos weekly." Fresh photos are part of how Google ranks a local
+# business, and they are his to upload (Job Hub has no way into the profile),
+# so the week's card carries the step and a tick for it (boards.js shows the
+# same words above the photos).
+GOOGLE_PHOTOS = ("Google Business Profile: add the same After photos there too -- search \"YD Exterior Visions\" "
+                 "on Google while signed in, then Add photos (or the Google Business Profile app -> Add photo). "
+                 "A few fresh job photos every week helps you show up in local searches.")
+GOOGLE_PHOTOS_TICK = "📍 After photos added to the Google Business Profile"
+
+
 def weekly(client, today=None):
     """The week's "ready to post" card (above). Returns (result, usage):
     result {cardId, jobs} / {skipped} / {none} / {error}; usage is None
@@ -333,9 +345,11 @@ def weekly(client, today=None):
         "title": ("📸 " + str(len(jobs)) + " job" + ("" if len(jobs) == 1 else "s") + " ready to post — week of " + week)[:200],
         "notes": ("Pinterest and Yelp: save each job's photos (tap one to open it full size), upload them and "
                   "paste its words. Tick each job off as it goes up. Nothing is posted by Job Hub.\n\n"
+                  + GOOGLE_PHOTOS + "\n\n"
                   + "\n\n".join(lines))[:9000],
         "checklist": [{"id": "pwj" + re.sub(r"[^A-Za-z0-9]", "", x["jobId"])[:20], "text": x["title"], "done": False,
-                       "doneBy": None} for x in jobs],
+                       "doneBy": None} for x in jobs]
+        + [{"id": "pwgoogle", "text": GOOGLE_PHOTOS_TICK, "done": False, "doneBy": None}],
         "postWeek": {"from": start.isoformat(), "to": today.isoformat(), "jobs": jobs},
         "column": col, "order": int(dg._now().timestamp() * 1000), "due": None, "dueTime": None,
         "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False,

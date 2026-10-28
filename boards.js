@@ -2250,6 +2250,10 @@
     const jobs = Array.isArray(pw.jobs) ? pw.jobs : [];
     return '<div class="hint">Save each job’s photos (tap one to open it full size), upload them to Pinterest and Yelp, and ' +
         'paste its words. Tick each job off below as it goes up. Nothing is posted by Job Hub.</div>' +
+      // The Google profile gets the same After photos each week (posts.py GOOGLE_PHOTOS).
+      '<div class="hint">📍 <b>Google Business Profile:</b> add the same After photos there too — search “YD Exterior Visions” ' +
+        'on Google while signed in, then <b>Add photos</b> (or the Google Business Profile app → Add photo). ' +
+        'Fresh job photos every week help you show up in local searches. Tick it off below.</div>' +
       jobs.map((j, i) => '<div class="bd-post">' +
         '<div class="bd-post-h"><b>' + esc(j.title || 'A job') + '</b></div>' +
         '<div class="bd-post-text">' + esc(postWords(j)) + '</div>' +
