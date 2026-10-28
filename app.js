@@ -2712,12 +2712,17 @@ function orderSwapHtml(job, key, it, cat) {
   const call = (fn, extra) => fn + '(\'' + job + '\', \'' + key + '\'' + (extra || '') + ')';
   if (swappingOrder.adding) {
     const vendors = Object.values(cat.vendors || {}).map(v => v.name).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    // A line in feet or sq ft is mostly bought in lengths or rolls: the box
+    // starts empty, so the size of one is typed ("25 ft") rather than the
+    // price going in per foot by default.
+    const lineUnit = it.per || orderUnitWords(it.quantity) || 'each';
+    const measured = !!window.YDMatch && ['lf', 'sqft'].indexOf(YDMatch.unitKey(lineUnit)) !== -1;
     return (was ? '<br>' + was : '') + '<div class="ord-swap"><b>Not in Supplies — add it and swap to it</b>' +
       '<label>What it is <input id="swNewName" placeholder="Product name"></label>' +
       '<label>Supplier <input id="swNewVendor" list="swVendors" placeholder="Menards"></label>' +
       '<datalist id="swVendors">' + vendors.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
       '<label>Price $<input id="swNewPrice" inputmode="decimal" placeholder="optional"></label>' +
-      '<label>per <input id="swNewPer" value="' + esc(it.per || orderUnitWords(it.quantity) || 'each') + '"></label>' +
+      '<label>per <input id="swNewPer" value="' + (measured ? '' : esc(lineUnit)) + '" placeholder="each · ft · 25 ft length"></label>' +
       '<label>Item # / SKU <input id="swNewSku" placeholder="their number"></label>' +
       '<label>Link <input id="swNewLink" class="ord-link-in" placeholder="product page https://…"></label>' +
       '<span><button type="button" class="btn btn-sm btn-filled" onclick="' + call('orderSwapAdd') + '">Add &amp; swap</button> ' +
@@ -2742,8 +2747,15 @@ function orderSwapFields(o, sid, cat) {
                                  quantity: o.quantity || '', qty: typeof o.qty === 'number' ? o.qty : null, qtyByHand: !!o.qtyByHand };
   if (was.supplyId && was.supplyId === sid) return orderSwapRestore(o);
   const p = (cat.prices || {})[sid] || {};
-  const per = String(p.per || s.unit || '').trim();
   const q = orderQtyOf(o);
+  // A line already in what one of the new item covers -- 25 ft of drain
+  // swapped to pipe sold in 25 ft lengths, sq ft of fabric to a roll -- keeps
+  // its amount, and orderCost works out how many to buy. Any other amount is
+  // taken as that many of the new item (the toast says to check it).
+  const U = window.YDMatch ? YDMatch.unitKey : (x => String(x || '').toLowerCase().trim());
+  const lineUnit = String(o.per || orderUnitWords(o.quantity) || '').trim();
+  const covered = Number(s.coverage) > 0 && lineUnit !== '' && U(lineUnit) === U(s.takeoffUnit);
+  const per = covered ? lineUnit : String(p.per || s.unit || '').trim();
   const n = Object.assign({}, o, { supplyId: sid, vendorId: s.vendorId || null, name: s.name, per: per, specialOrder: !!s.specialOrder,
     qty: q, quantity: q === null ? '' : window.YDPricing && YDPricing.qtyText ? YDPricing.qtyText(q, per) : (q + ' ' + per).trim(),
     qtyByHand: true, swappedFrom: was, swappedAt: new Date().toISOString(), swappedBy: notBoughtMark().by });
@@ -2788,6 +2800,8 @@ function orderSwapAdd(job, key) {
   const name = val('swNewName'), vendor = val('swNewVendor'), per = val('swNewPer');
   const sku = val('swNewSku'), link = val('swNewLink');
   if (!name || !vendor) { showToast('Type what it is and who sells it'); return; }
+  if (!per) { showToast('Say how it’s sold — each, by the ft, or one piece’s size like 25 ft'); return; }
+  const piece = perAsPiece(per);
   // Its supplier's number goes in with it (needsSku: anything not sold loose by
   // the ton or yard).
   if (!sku && !/^(tons?|t|yards?|yds?|cu ?yds?|cubic yards?)$/i.test(per)) { showToast('Type its item # / SKU from the supplier'); return; }
@@ -2806,10 +2820,25 @@ function orderSwapAdd(job, key) {
     try { line = (JSON.parse(readJobBlob(id) || 'null').orderItems || []).find((m, i) => m && ordLineKey(m, i) === key); } catch (e) {}
   }
   const was = line && (line.swappedFrom ? line.swappedFrom.supplyId : line.supplyId);
-  const sid = YDSupplies.addSourced({ vendor: vendor, name: name, per: per, cents: cents, sku: sku, url: link || '',
+  const sid = YDSupplies.addSourced({ vendor: vendor, name: name, per: piece ? piece.per : per, cents: cents, sku: sku, url: link || '',
+    coverage: piece ? piece.coverage : null, takeoffUnit: piece ? piece.takeoffUnit : '',
     category: was && cat.items[was] ? cat.items[was].category : null, note: 'Added when swapping an order line' });
   if (!sid) { showToast('Not added — you can’t change Supplies'); return; }
   orderSwapPick(job, key, sid);
+}
+// "25ft", "25' length", "100 sq ft roll": one piece of that size -- sold by
+// the length (or each) and covering that much, so an order line in feet buys
+// whole lengths. Saved as sold "per 25ft", 40 ft of drain pipe read as 40
+// pieces: $938.80 for two lengths (Jonah, 28 Oct 2026). Null for anything
+// else ("each", "ft", "bag").
+function perAsPiece(per) {
+  const m = String(per || '').toLowerCase().replace(/\s+/g, ' ').trim()
+    .match(/^(?:an? |one |per )?(\d+(?:\.\d+)?) ?-? ?('|’|′|ft\.?|feet|foot|lf|lin(?:ear)? ?(?:ft|feet|foot)\.?|sq\.? ?ft\.?|sf|square f(?:ee|oo)t)(?: long)?(?: (length|piece|pc|roll|strip|stick|section|coil|board))?$/);
+  const n = m ? parseFloat(m[1]) : null;
+  if (!(n > 0)) return null;
+  const area = /^(sq|sf|square)/.test(m[2]);
+  const word = m[3] && !/^(piece|pc)$/.test(m[3]) ? m[3] : area ? 'each' : 'length';
+  return { per: word, coverage: n, takeoffUnit: area ? 'sq ft' : 'LF' };
 }
 function orderVendor(it, cat) {
   if (it.vendorId) return it.vendorId;
