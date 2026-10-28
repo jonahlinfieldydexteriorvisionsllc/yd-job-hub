@@ -2145,10 +2145,13 @@ function orderFromEstimate(list, lines) {
   const seen = {}, out = [];
   list.forEach(it => {
     if (!it.fromEstimate) { out.push(it); return; }
-    const k = keyOf(it);
+    // A line swapped to another product stands for the estimate's material
+    // it replaced (orderSwapFields).
+    const k = keyOf(it.swappedFrom || it);
     if (it.ordered) { out.push(it); seen[k] = 1; return; }   // bought already: left as it was
     if (!want[k]) return;                                    // no longer on the estimate
     seen[k] = 1;
+    if (it.swappedFrom) { out.push(it); return; }           // swapped by hand: his product and amount
     // An amount changed by hand (what was really ordered) stays his.
     out.push(Object.assign({}, it, orderFields(want[k]), it.qtyByHand ? { quantity: it.quantity, qty: it.qty } : {}));
   });
@@ -2172,7 +2175,7 @@ function rejoinOrderLines(list, lines, picks) {
   const still = sid => lines.some(l => l.supplyId === sid);
   const have = {};
   list.forEach(it => { if (it && it.fromEstimate && it.supplyId) have[it.supplyId] = true; });
-  const pickFor = it => it && it.fromEstimate && !it.ordered ? picks.find(p => fresh[p.sid] && p.sid !== it.supplyId &&
+  const pickFor = it => it && it.fromEstimate && !it.ordered && !it.swappedFrom ? picks.find(p => fresh[p.sid] && p.sid !== it.supplyId &&
     (it.supplyId ? !!p.was && it.supplyId === p.was && !still(p.was)
       : String(it.name || '').toLowerCase().trim() === String(p.name || '').toLowerCase().trim())) : null;
   let moved = false;
@@ -2679,6 +2682,128 @@ function emailSupplierOrder(vid) {
     'delivered or picked up.\n\nThanks,\nJonah\nYD Exterior Visions';
   location.href = 'mailto:' + encodeURIComponent(o.vendor.email) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
 }
+// ── Swapping a line's product ──
+// Jonah, 28 Oct 2026: "a button to swap a material item" -- an adhesive one
+// supplier can't get, bought as a different product from another. The ORDER
+// line moves to another Supplies
+// item -- its name, supplier, unit and price, and so its delivery and way --
+// keeping the amount to adjust; the estimate the customer was given is not
+// touched. `swappedFrom` keeps what it was (Put back), and the line is his
+// from then on: "Update from the estimate" leaves it (orderFromEstimate).
+// One open at a time: {job: ordId of the job ('' = the open job's list on the
+// Job tab), key: ordLineKey, adding: the not-in-Supplies form}.
+let swappingOrder = null;
+const swapIsOpen = (job, key) => !!swappingOrder && swappingOrder.job === job && swappingOrder.key === key;
+function orderSwapOpen(job, key, adding) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  swappingOrder = { job: job, key: key, adding: !!adding };
+  orderListsRedraw();
+}
+function orderSwapCancel() { swappingOrder = null; orderListsRedraw(); }
+// The button, and -- while open -- the picker under the line. job/key as above.
+function orderSwapHtml(job, key, it, cat) {
+  const was = it.swappedFrom ? '<span class="muted ord-swapped">⇄ swapped from ' + esc(it.swappedFrom.name || 'another item') + '</span>' +
+    (jobsReadOnly() ? '' : ' <button type="button" class="link-btn" onclick="orderSwapBack(\'' + job + '\', \'' + key + '\')">↺ Put back</button>') : '';
+  if (jobsReadOnly()) return was ? '<br>' + was : '';
+  if (!swapIsOpen(job, key)) return (was ? '<br>' + was : '') +
+    ' <button type="button" class="link-btn ord-swap-btn" onclick="orderSwapOpen(\'' + job + '\', \'' + key + '\')">⇄ Swap</button>';
+  const vname = s => ((cat.vendors || {})[s.vendorId] || {}).name || '';
+  const priceOf = s => { const p = (cat.prices || {})[s.id]; return p && typeof p.cents === 'number' ? ' · ' + fmtMoney(p.cents / 100) + (p.per ? '/' + p.per : '') : ''; };
+  const call = (fn, extra) => fn + '(\'' + job + '\', \'' + key + '\'' + (extra || '') + ')';
+  if (swappingOrder.adding) {
+    const vendors = Object.values(cat.vendors || {}).map(v => v.name).filter(Boolean).sort((a, b) => a.localeCompare(b));
+    return (was ? '<br>' + was : '') + '<div class="ord-swap"><b>Not in Supplies — add it and swap to it</b>' +
+      '<label>What it is <input id="swNewName" placeholder="Product name"></label>' +
+      '<label>Supplier <input id="swNewVendor" list="swVendors" placeholder="Menards"></label>' +
+      '<datalist id="swVendors">' + vendors.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
+      '<label>Price $<input id="swNewPrice" inputmode="decimal" placeholder="optional"></label>' +
+      '<label>per <input id="swNewPer" value="' + esc(it.per || orderUnitWords(it.quantity) || 'each') + '"></label>' +
+      '<span><button type="button" class="btn btn-sm btn-filled" onclick="' + call('orderSwapAdd') + '">Add &amp; swap</button> ' +
+      '<button type="button" class="link-btn" onclick="' + call('orderSwapOpen') + '">Back to the list</button> ' +
+      '<button type="button" class="link-btn" onclick="orderSwapCancel()">Cancel</button></span></div>';
+  }
+  // Same kind first (another adhesive for an adhesive), then everything else.
+  const kind = it.supplyId && cat.items[it.supplyId] ? cat.items[it.supplyId].category || '' : '';
+  const list = Object.values(cat.items).filter(s => s.id !== it.supplyId && s.name)
+    .sort((a, b) => ((a.category === kind ? 0 : 1) - (b.category === kind ? 0 : 1)) || String(a.name).localeCompare(String(b.name)));
+  return (was ? '<br>' + was : '') + '<div class="ord-swap"><b>Swap to</b>' +
+    '<select class="searchable" onchange="' + call('orderSwapPick', ', this.value') + '"><option value="">Which Supplies item instead?</option>' +
+      list.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + (vname(s) ? ' — ' + esc(vname(s)) : '') + esc(priceOf(s)) + '</option>').join('') + '</select>' +
+    '<span><button type="button" class="link-btn" onclick="' + call('orderSwapOpen', ', true') + '">Not in Supplies? Add it</button> ' +
+    '<button type="button" class="link-btn" onclick="orderSwapCancel()">Cancel</button></span></div>';
+}
+// The line on another item, or back to what it was when that is the one picked.
+function orderSwapFields(o, sid, cat) {
+  const s = cat.items[sid];
+  if (!s) return o;
+  const was = o.swappedFrom || { supplyId: o.supplyId || null, vendorId: o.vendorId || null, name: o.name || '', per: o.per || '',
+                                 quantity: o.quantity || '', qty: typeof o.qty === 'number' ? o.qty : null, qtyByHand: !!o.qtyByHand };
+  if (was.supplyId && was.supplyId === sid) return orderSwapRestore(o);
+  const p = (cat.prices || {})[sid] || {};
+  const per = String(p.per || s.unit || '').trim();
+  const q = orderQtyOf(o);
+  const n = Object.assign({}, o, { supplyId: sid, vendorId: s.vendorId || null, name: s.name, per: per, specialOrder: !!s.specialOrder,
+    qty: q, quantity: q === null ? '' : window.YDPricing && YDPricing.qtyText ? YDPricing.qtyText(q, per) : (q + ' ' + per).trim(),
+    qtyByHand: true, swappedFrom: was, swappedAt: new Date().toISOString(), swappedBy: notBoughtMark().by });
+  // The old supplier's way and grass-seed bag do not carry over.
+  delete n.way; delete n.usesLb;
+  return n;
+}
+function orderSwapRestore(o) {
+  const was = o.swappedFrom;
+  if (!was) return o;
+  const n = Object.assign({}, o, { supplyId: was.supplyId || null, vendorId: was.vendorId || null, name: was.name || o.name,
+    per: was.per || '', quantity: was.quantity || '', qty: typeof was.qty === 'number' ? was.qty : null, qtyByHand: !!was.qtyByHand });
+  delete n.swappedFrom; delete n.swappedAt; delete n.swappedBy; delete n.way;
+  return n;
+}
+// One line changed on its job: the open one in the form (job '' or its id),
+// any other through patchJob (ordersPatchLine).
+function orderSwapApply(job, key, fn) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return false; }
+  if (!job || (currentJobId && ordId(currentJobId) === job)) {
+    const at = orderItems.findIndex((m, i) => m && ordLineKey(m, i) === key);
+    if (at === -1) return false;
+    orderItems[at] = fn(orderItems[at]);
+    markDirty();
+  } else if (!ordersPatchLine(job, key, fn)) return false;
+  swappingOrder = null;
+  orderListsRedraw();
+  return true;
+}
+function orderSwapPick(job, key, sid) {
+  const cat = window.YDSupplies ? window.YDSupplies.catalog() : null;
+  if (!sid || !cat || !cat.items[sid]) return;
+  if (orderSwapApply(job, key, o => orderSwapFields(o, sid, cat))) showToast('Swapped to ' + cat.items[sid].name + ' — check the amount');
+}
+function orderSwapBack(job, key) {
+  if (orderSwapApply(job, key, orderSwapRestore)) showToast('Put back');
+}
+// Not in Supplies yet: filed there (supplies.js addSourced -- the supplier
+// found by name or made new), then the line swapped to it.
+function orderSwapAdd(job, key) {
+  const val = id => ((document.getElementById(id) || {}).value || '').trim();
+  const name = val('swNewName'), vendor = val('swNewVendor'), per = val('swNewPer');
+  if (!name || !vendor) { showToast('Type what it is and who sells it'); return; }
+  const priceTyped = val('swNewPrice').replace(/[$,\s]/g, '');
+  const cents = priceTyped ? Math.round(parseFloat(priceTyped) * 100) : null;
+  if (priceTyped && !(cents > 0)) { showToast('Type the price in dollars, like 12.98'); return; }
+  const cat = window.YDSupplies ? window.YDSupplies.catalog() : null;
+  if (!cat || !window.YDSupplies.addSourced) return;
+  // The same kind as what it replaces, so it is marked up and wasted the same.
+  const open = !job || (currentJobId && ordId(currentJobId) === job);
+  let line = null;
+  if (open) line = orderItems.find((m, i) => m && ordLineKey(m, i) === key);
+  else {
+    const id = (getJobIndex().find(x => ordId(x.id) === job) || {}).id;
+    try { line = (JSON.parse(readJobBlob(id) || 'null').orderItems || []).find((m, i) => m && ordLineKey(m, i) === key); } catch (e) {}
+  }
+  const was = line && (line.swappedFrom ? line.swappedFrom.supplyId : line.supplyId);
+  const sid = YDSupplies.addSourced({ vendor: vendor, name: name, per: per, cents: cents,
+    category: was && cat.items[was] ? cat.items[was].category : null, note: 'Added when swapping an order line' });
+  if (!sid) { showToast('Not added — you can’t change Supplies'); return; }
+  orderSwapPick(job, key, sid);
+}
 function orderVendor(it, cat) {
   if (it.vendorId) return it.vendorId;
   const sid = orderSupply(it, cat);
@@ -2764,7 +2889,8 @@ function renderOrderList() {
     // other way -- then "Didn't buy it" for a line still to order.
     const wi = orderItems.indexOf(it);
     const way = nb ? '' : orderWayHtml(ways[wi], it.way === 'delivered' || it.way === 'pickup', 'orderWayAt(' + wi + ', \'%\')', ro) +
-      (ro || it.ordered ? '' : ' <button type="button" class="link-btn ord-nb-btn" onclick="orderNotBought(\'' + ordId(it.id) + '\', true)">✗ Didn’t buy it</button>');
+      (ro || it.ordered ? '' : ' <button type="button" class="link-btn ord-nb-btn" onclick="orderNotBought(\'' + ordId(it.id) + '\', true)">✗ Didn’t buy it</button>') +
+      orderSwapHtml('', ordLineKey(it, wi), it, cat);
     return '<div class="check-row' + (settled ? ' done' : '') + (nb ? ' not-bought' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
       '<span class="cr-name">' + esc(it.name) +
@@ -3015,7 +3141,9 @@ function renderOrdersOverview() {
     return { c: null, html: '<div class="check-row done' + (nb ? ' not-bought' : '') + '">' +
       '<input type="checkbox" aria-label="Ordered"' + (it.ordered ? ' checked' : '') + (canTick ? '' : ' disabled') +
         ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\', this.checked)">' +
-      '<span class="cr-name">' + esc(it.name) + '<br><span class="cr-cost">' + said + '</span></span>' +
+      '<span class="cr-name">' + esc(it.name) + '<br><span class="cr-cost">' + said + '</span>' +
+        // Bought something else after all: put right on the line.
+        (nb ? '' : orderSwapHtml(ordId(j.id), it._key, it, cat)) + '</span>' +
       qtyBox(it, j) + '</div>' };
   };
   // One line still to order, ticked here as on its job. -> { html, c }
@@ -3036,7 +3164,8 @@ function renderOrdersOverview() {
     const others = (onJobs[alsoKey(v, it)] || []).filter(o => o.id !== j.id);
     const way = orderWayHtml((ways[j.id] || [])[j.items.indexOf(it)], it.way === 'delivered' || it.way === 'pickup',
       'ordersWay(\'' + ordId(j.id) + '\', \'' + it._key + '\', \'%\')', !canTick) +
-      (canTick ? ' <button type="button" class="link-btn ord-nb-btn" onclick="ordersNotBought(\'' + ordId(j.id) + '\', \'' + it._key + '\')">✗ Didn’t buy it</button>' : '');
+      (canTick ? ' <button type="button" class="link-btn ord-nb-btn" onclick="ordersNotBought(\'' + ordId(j.id) + '\', \'' + it._key + '\')">✗ Didn’t buy it</button>' : '') +
+      orderSwapHtml(ordId(j.id), it._key, it, cat);
     const also = others.length ? ' <span class="muted ord-also">· also on ' +
       others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
     return { c: c, html: '<div class="check-row">' +

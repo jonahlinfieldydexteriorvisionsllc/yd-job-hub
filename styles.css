@@ -5685,3 +5685,13 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
    words readable under the strike (app.js qtyBox / doneRowOf). */
 .ord-qty-in { width:110px; margin-left:0; font-weight:600; }
 .check-row.done .cr-name .cr-cost { display:inline-block; text-decoration:none; }
+
+/* Swapping an order line's product (app.js orderSwapHtml): inline-flex, so a
+   checked line's strike-through does not run through the picker. */
+.ord-swap { display:inline-flex; flex-wrap:wrap; gap:6px 10px; align-items:center; width:100%; margin-top:6px; padding:8px;
+            border:1px dashed var(--border-strong); border-radius:8px; text-decoration:none; }
+.ord-swap label { display:inline-flex; gap:4px; align-items:center; }
+.ord-swap input:not([type]) , .ord-swap input[inputmode] { width:140px; }
+.ord-swap select { max-width:100%; }
+.check-row.done .cr-name .ord-swapped, .check-row.done .cr-name .ord-swap-btn,
+.check-row.done .cr-name .ord-swapped + .link-btn { display:inline-block; text-decoration:none; }
