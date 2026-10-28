@@ -14,7 +14,7 @@
 // material (by the job's town, a load per so many tons, a surcharge for
 // pallets), fuel for both trucks and the loader for the days on site,
 // dumpsters for the spoil, the planting package for every plant and tree, and
-// the layout markers on paver, wall and edging jobs. Labour is crew-days x
+// the layout markers on paving, stone edging and non-boulder walls. Labour is crew-days x
 // (the crew-day rate + the profit target for the day). The customer sees one
 // materials total and the labour; never a markup, a crew-day or a cost.
 //
@@ -99,8 +99,22 @@
     if (hit) return hit[0];
     return customKinds().find(c => kindKey(c) === k) || t;
   }
-  // A job with any of these gets the layout markers.
-  const MARKER_CATEGORIES = ['pavers', 'wall', 'edging'];
+  // The layout markers go only on work that is laid out to a line -- Jonah,
+  // 27 Oct 2026: "they should only be included for stone edging, retaining
+  // walls that arent being build with boulders, and paving walkways/patios".
+  // So: pavers; a wall line unless it is boulders; edging only when it is
+  // stone (not steel or plastic); flagstone laid as a walk or patio.
+  const BOULDER = /\bboulders?\b/i;
+  const STONE_EDGING = /\b(stone|cobble|cobblestones?|belgian|block|granite|limestone|brick|paver|concrete|curb)\b/i;
+  const FLAGSTONE = /\b(flag|flagstone|flagging|stepp?ing stones?|stepper)\b/i;
+  function wantsMarkers(l) {
+    const name = String(l.name || '');
+    if (l.category === 'pavers') return true;
+    if (l.category === 'wall') return !BOULDER.test(name);
+    if (l.category === 'edging') return STONE_EDGING.test(name);
+    if (l.category === 'natural') return FLAGSTONE.test(name);
+    return false;
+  }
 
   // ---------------------------------------------------------- sales tax
   //
@@ -592,10 +606,10 @@
       (p.perSingleTree || []).forEach(id => add(id, singles, 'planting', true));
       (p.perMultiTree || []).forEach(id => add(id, multis, 'planting', true));
     }
-    // Layout markers on paver, wall and edging jobs. Not listed: a few
-    // dollars, there to be on hand.
+    // Layout markers on paving, stone edging and walls that are not
+    // boulders (wantsMarkers). Not listed: a few dollars, there to be on hand.
     if (!off.markers && r.markers && r.markers.supplyId && num(r.markers.count) > 0 &&
-        lines.some(l => MARKER_CATEGORIES.indexOf(l.category) !== -1)) {
+        lines.some(wantsMarkers)) {
       add(r.markers.supplyId, num(r.markers.count), 'markers', false);
     }
     return out;
@@ -1978,7 +1992,7 @@
         '<label class="pr-field"><span>Bigger dumpster, only ever filled with brush (from Supplies)</span>' + pick('dumpster.brushSupplyId', r.dumpster.brushSupplyId, i => i.category === 'dumpster') + '</label>' +
         box('Most cubic yards of brush in one', r.dumpster.brushMaxCuYd, "prSet('dumpster.brushMaxCuYd', this.value, 'num')") +
         '<label class="pr-field"><span>Layout markers (from Supplies)</span>' + pick('markers.supplyId', r.markers.supplyId) + '</label>' +
-        box('Markers per paver / wall / edging job', r.markers.count, "prSet('markers.count', this.value, 'num')") +
+        box('Markers per paving, stone edging or (not boulder) wall job', r.markers.count, "prSet('markers.count', this.value, 'num')") +
       '</div>' +
       '<div class="pr-field wide"><span>Planting package — for every plant (set each item’s “covers” in Supplies, e.g. soil 0.5 plants a bag). ' +
         'The lists offer planting-package, soil, mulch, bagged and hardware items; to add something else, give it one of those kinds in Supplies.</span>' + listPick('perPlant') + '</div>' +
