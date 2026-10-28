@@ -387,10 +387,32 @@
   // A name that says nothing ("Hardscaping"): the starters of its kind of work.
   const GROUP_SAMPLE = { hardscape: 'patio', landscape: 'planting', lawn: 'mowing', drainage: 'drainage', seasonal: 'cleanup',
                          snow: 'snow', trees: 'trees' };
+  // Jonah's own rules (28 Oct 2026), added to any service they fit: "anything
+  // with pavers or stone edging not including boulders requires the wetsaw,
+  // water pump for wetsaw, extension cord, wetsaw stand and tray and a hose.
+  // everything hardscape requires tampers. all paving and walls require the
+  // compactor. Atifical turf requires the glue box ... Anything where were
+  // using wood requires the circular saw and the chop saw, 2 sets of saw
+  // horses, table top to go over saw horses". (The services there were then
+  // got their lists picked from these.)
+  const RULE_TOOLS = [
+    [(n, g) => /paver|patio|walkway|\bpath|\bsteps?\b|driveway|stone edging/.test(n) && !/boulder/.test(n),
+      ['Wet saw', 'Water pump for wet saw', 'Extension cord', 'Wet saw stand and tray', 'Hose']],
+    [(n, g) => g === 'hardscape', ['Tampers']],
+    [(n, g) => /paver|patio|walkway|\bpath|driveway|paving|wall/.test(n), ['Plate compactor']],
+    [(n, g) => /artificial|synthetic|\bturf\b/.test(n), ['Glue box']],
+    [(n, g) => /wood|cedar|timber|pergola|deck|fence|raised|structure/.test(n),
+      ['Circular saw', 'Chop saw', 'Saw horses (2 sets)', 'Table top for saw horses']],
+  ];
   function starters(name, group) {
-    const find = n => STARTERS.find(([re]) => re.test(s(n).toLowerCase()));
+    const n = s(name).toLowerCase();
+    const find = x => STARTERS.find(([re]) => re.test(s(x).toLowerCase()));
     const hit = find(name) || (GROUP_SAMPLE[group] ? find(GROUP_SAMPLE[group]) : null);
-    return hit ? hit[1] : [];
+    const out = (hit ? hit[1] : []).slice();
+    RULE_TOOLS.forEach(([fits, names]) => { if (fits(n, group)) out.push(...names); });
+    // His word for them is Tampers.
+    const seen = { 'hand tamper': out.some(t => t === 'Tampers') };
+    return out.filter(t => { const k = t.toLowerCase(); if (seen[k]) return false; seen[k] = true; return true; });
   }
   // The words his own machine may go by, for a generic name: "Skid steer"
   // is often a "Bobcat" on the machine list. Only phrases that cannot mean another machine ("blower"
