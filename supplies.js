@@ -1997,6 +1997,25 @@
     return (sku && list.find(it => it.sku && key(it.sku) === key(sku))) ||
       (name && list.find(it => names(it).indexOf(key(name)) !== -1)) || null;
   }
+  // An item's supplier item number or product page, typed where it is missing
+  // (app.js, the order lists). link: kept only as a web address. -> saved.
+  function setItemInfo(id, f) {
+    const it = items[id];
+    if (!it || !edits()) return false;
+    const patch = { updatedAt: new Date().toISOString() };
+    if ('sku' in f) patch.sku = String(f.sku || '').trim().slice(0, 40);
+    if ('link' in f) {
+      const link = String(f.link || '').trim() ? websiteUrl({ website: f.link }) : '';
+      if (String(f.link || '').trim() && !link) return false;
+      patch.link = link;
+    }
+    Object.assign(it, patch);
+    Promise.resolve(window.YDDb.put('supplies', id, patch)).catch(e => {
+      showToast(e && e.code === 'permission-denied' ? 'Not saved — not allowed' : 'Not on the server yet — will retry');
+    });
+    announce();
+    return true;
+  }
   // A new price for one item, filed the way the price list files it (a
   // newer year moves the old price into its history). Not awaited.
   // via: what the change came from, for the change history ("Receipt").
@@ -2074,10 +2093,13 @@
     // The product's own page, where the price came from -- kept on an item
     // that has no link yet, never over one typed in by hand.
     const link = websiteUrl({ website: o.url });
-    if (it && ((covers && !(Number(it.coverage) > 0)) || (link && !it.link))) {
+    // Its item number too, on one that has none.
+    const sku = String(o.sku || '').trim().slice(0, 40);
+    if (it && ((covers && !(Number(it.coverage) > 0)) || (link && !it.link) || (sku && !it.sku))) {
       const patch = { updatedAt: now };
       if (covers && !(Number(it.coverage) > 0)) Object.assign(patch, { coverage: Number(o.coverage), takeoffUnit: String(o.takeoffUnit).trim().slice(0, 30) });
       if (link && !it.link) patch.link = link;
+      if (sku && !it.sku) patch.sku = sku;
       Object.assign(it, patch);
       writes.push(['supplies', it.id, patch]);
     }
@@ -2134,7 +2156,7 @@
   window.YDSupplies = {
     render: render, parseTable: parseTable, parseCents: parseCents,
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
-    findSupply: findSupply, setPrice: setPrice, addSourced: addSourced,
+    findSupply: findSupply, setPrice: setPrice, addSourced: addSourced, setItemInfo: setItemInfo,
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
     websiteUrl: websiteUrl,       // app.js, Materials to Order
     renameKind: renameKind,       // pricing.js, Pricing rules

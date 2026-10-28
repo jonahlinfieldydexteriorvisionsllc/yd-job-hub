@@ -2718,6 +2718,8 @@ function orderSwapHtml(job, key, it, cat) {
       '<datalist id="swVendors">' + vendors.map(n => '<option value="' + esc(n) + '">').join('') + '</datalist>' +
       '<label>Price $<input id="swNewPrice" inputmode="decimal" placeholder="optional"></label>' +
       '<label>per <input id="swNewPer" value="' + esc(it.per || orderUnitWords(it.quantity) || 'each') + '"></label>' +
+      '<label>Item # / SKU <input id="swNewSku" placeholder="their number"></label>' +
+      '<label>Link <input id="swNewLink" class="ord-link-in" placeholder="product page https://…"></label>' +
       '<span><button type="button" class="btn btn-sm btn-filled" onclick="' + call('orderSwapAdd') + '">Add &amp; swap</button> ' +
       '<button type="button" class="link-btn" onclick="' + call('orderSwapOpen') + '">Back to the list</button> ' +
       '<button type="button" class="link-btn" onclick="orderSwapCancel()">Cancel</button></span></div>';
@@ -2784,7 +2786,12 @@ function orderSwapBack(job, key) {
 function orderSwapAdd(job, key) {
   const val = id => ((document.getElementById(id) || {}).value || '').trim();
   const name = val('swNewName'), vendor = val('swNewVendor'), per = val('swNewPer');
+  const sku = val('swNewSku'), link = val('swNewLink');
   if (!name || !vendor) { showToast('Type what it is and who sells it'); return; }
+  // Its supplier's number goes in with it (needsSku: anything not sold loose by
+  // the ton or yard).
+  if (!sku && !/^(tons?|t|yards?|yds?|cu ?yds?|cubic yards?)$/i.test(per)) { showToast('Type its item # / SKU from the supplier'); return; }
+  if (link && !(window.YDSupplies.websiteUrl && YDSupplies.websiteUrl({ website: link }))) { showToast('That link isn’t a web address — paste the product page’s link'); return; }
   const priceTyped = val('swNewPrice').replace(/[$,\s]/g, '');
   const cents = priceTyped ? Math.round(parseFloat(priceTyped) * 100) : null;
   if (priceTyped && !(cents > 0)) { showToast('Type the price in dollars, like 12.98'); return; }
@@ -2799,7 +2806,7 @@ function orderSwapAdd(job, key) {
     try { line = (JSON.parse(readJobBlob(id) || 'null').orderItems || []).find((m, i) => m && ordLineKey(m, i) === key); } catch (e) {}
   }
   const was = line && (line.swappedFrom ? line.swappedFrom.supplyId : line.supplyId);
-  const sid = YDSupplies.addSourced({ vendor: vendor, name: name, per: per, cents: cents,
+  const sid = YDSupplies.addSourced({ vendor: vendor, name: name, per: per, cents: cents, sku: sku, url: link || '',
     category: was && cat.items[was] ? cat.items[was].category : null, note: 'Added when swapping an order line' });
   if (!sid) { showToast('Not added — you can’t change Supplies'); return; }
   orderSwapPick(job, key, sid);
@@ -3042,14 +3049,44 @@ function orderSkuOf(it, cat) {
   const sup = sid && cat.items[sid];
   return sup && sup.sku ? String(sup.sku).trim() : '';
 }
-// Beside the line's name: its item #, or -- for a supplier you order from
-// online -- a note that Supplies has none yet, so it gets filled in once.
+// Every product carries its supplier's item number (Jonah, 28 Oct 2026:
+// "product skus / numbers with every item on supplies lists other than the
+// bulk stuff we order from mds") -- not what is sold loose by the ton or the
+// yard, a dumpster or a rental.
+function needsSku(sup, cat) {
+  if (!sup || sup.category === 'dumpster' || sup.category === 'rental') return false;
+  const p = (cat.prices || {})[sup.id] || {};
+  const per = String(p.per || sup.unit || '');
+  const u = window.YDMatch ? YDMatch.unitKey(per) : per.toLowerCase();
+  return u !== 'ton' && u !== 'yd';
+}
+// Beside the line's name: its item #, or -- where one is wanted and Supplies
+// has none -- boxes for it and the product's page, filled in once for every
+// job after (YDSupplies.setItemInfo).
 function orderSkuHtml(it, cat) {
   const sku = orderSkuOf(it, cat);
   if (sku) return ' <span class="cr-sku">Item #' + esc(sku) + '</span>';
   const sid = orderSupply(it, cat), sup = sid && cat.items[sid];
-  const v = sup && cat.vendors[sup.vendorId];
-  return v && (v.buyWays || []).indexOf('online') !== -1 ? ' <span class="cr-sku muted">no item # in Supplies</span>' : '';
+  if (!needsSku(sup, cat)) return '';
+  if (!(typeof ydCan === 'function' && ydCan('supplies', 'change'))) return ' <span class="cr-sku muted">no item # in Supplies</span>';
+  const id = ordId(sid);
+  return '<br><span class="ord-sku-add"><span class="warn-text">No item # yet</span> ' +
+    '<label>Item # <input class="cr-qty-in" placeholder="SKU" aria-label="Item number for ' + esc(sup.name) + '"' +
+      ' onchange="setOrderSku(\'' + id + '\', this.value)"></label>' +
+    (sup.link ? '' : ' <label>Link <input class="ord-link-in" placeholder="https://…" aria-label="Product page for ' + esc(sup.name) + '"' +
+      ' onchange="setOrderLink(\'' + id + '\', this.value)"></label>') + '</span>';
+}
+function setOrderSku(sid, v) {
+  if (!String(v || '').trim() || !window.YDSupplies || !YDSupplies.setItemInfo) return;
+  if (!YDSupplies.setItemInfo(sid, { sku: v })) { showToast('Not saved — you can’t change Supplies'); return; }
+  showToast('Item # saved in Supplies — on every job from now on');
+  orderListsRedraw();
+}
+function setOrderLink(sid, v) {
+  if (!String(v || '').trim() || !window.YDSupplies || !YDSupplies.setItemInfo) return;
+  if (!YDSupplies.setItemInfo(sid, { link: v })) { showToast('That isn’t a web address — paste the product page’s link'); return; }
+  showToast('Link saved in Supplies');
+  orderListsRedraw();
 }
 // The blocks: supplier id ('' = no supplier yet) -> [{ job, lines }], in
 // the jobs' order (soonest first). Lines still to order (an order to copy or

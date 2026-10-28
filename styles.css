@@ -5695,3 +5695,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .ord-swap select { max-width:100%; }
 .check-row.done .cr-name .ord-swapped, .check-row.done .cr-name .ord-swap-btn,
 .check-row.done .cr-name .ord-swapped + .link-btn { display:inline-block; text-decoration:none; }
+
+/* An order line's missing item # / product page, typed right there (app.js orderSkuHtml). */
+.ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; }
+.ord-sku-add label { display:inline-flex; gap:4px; align-items:center; }
+.ord-link-in { width:180px; }
