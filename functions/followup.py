@@ -539,7 +539,8 @@ def _send_step(client, ref, jid, j, s, to, spent):
 def auto(client, deadline=None, spent=None, claude=True):
     """The hourly part (main.py /cards/run): every bid's email step that is
     due sent (in the morning, SEND_HOURS), the "mark it lost?" card made, and
-    the thank-you sent for a job paid off (thank-you section below).
+    the next-steps email for a yes (after-a-yes section below) and the
+    thank-you sent for a job paid off (thank-you section below).
     `spent(usage)` records what each Claude call cost; `claude` False (the
     day's Claude spending limit reached) leaves the bids' emails, which
     Claude writes, for later -- the thank-you is plain code and still goes.
@@ -560,6 +561,7 @@ def auto(client, deadline=None, spent=None, claude=True):
     # His settings unread, no thank-you this run: "no review link" would
     # be a guess.
     thanks = _ThanksRun(db, conf, morning, known, mailed) if read else None
+    welcome = _WelcomeRun(db, conf, morning, known, mailed) if read else None
     for snap in db.collection("jobs").stream():
         if deadline and time.monotonic() > deadline:
             break
@@ -591,6 +593,10 @@ def auto(client, deadline=None, spent=None, claude=True):
                     if item:
                         news.append(item)
             continue
+        # Just said yes: the next steps.
+        item = welcome.job(ref, jid, j) if welcome else None
+        if item:
+            news.append(item)
         # Finished and paid off: the thank-you.
         item = thanks.job(ref, jid, j) if thanks else None
         if item:
@@ -974,3 +980,205 @@ def thanks_now(job_id, uid):
         return {"error": why}
     return {"ok": True, "sent": bool(rec.get("sentAt")), "drafted": bool(rec.get("draftId")),
             "to": to, "at": rec["at"], "record": rec}
+
+
+# ---------------------------------------------------------------- after a yes
+#
+# Jonah (27 Oct 2026): "have generic email that gets sent after an estimate is
+# accepted thanking them and giving next steps down payment etc." Plain code,
+# the same few lines each time in his words once he changes them
+# (settings/followUp welcomeSubject / welcomeBody, {name} {work}). Like the
+# thank-you, in the morning (SEND_HOURS), one email to a person a run and
+# WELCOME_MAX a run, never twice (reminderLog/welcome_<job> is CREATED first),
+# never to his own, the crew's or a test address. A job gets it once it is:
+#   - accepted (acceptedSeenAt: the sweep or the import saw the yes in
+#     QuickBooks) on or after the day this started (settings/followUp
+#     .welcomeFrom, written by the first run that finds one -- older yeses are
+#     never emailed in a batch), and no more than WELCOME_WITHIN_DAYS ago;
+#   - not a snow account (those are removeWhy 'snow'), not finished yet, not
+#     ticked "Don't send the next-steps email" (noWelcome);
+#   - and he has not emailed them about the deposit or next steps himself since.
+# settings/followUp.welcome: 'draft' (the start: his Gmail Drafts, until he
+# has read one and chosen) | 'send' | 'off'. The job's welcomeEmail is what
+# the app shows (thanks.js): {at, to, subject, sentAt | draftId, link},
+# {byHand, emailedAt}, {unconfirmed}, or {held: noEmail | notCustomer}.
+WELCOME_MAX = 4
+WELCOME_WITHIN_DAYS = 14
+WELCOME_SUBJECT = "Next steps for your {work} — YD Exterior Visions"
+WELCOME_BODY = (
+    "Hi {name},\n\n"
+    "Thank you for accepting our estimate for your {work} — we're glad to be working with you.\n\n"
+    "Here's what happens next:\n\n"
+    "1. Deposit: you'll get the deposit invoice from QuickBooks by email. You can pay it online with the "
+    "button in that email (a bank transfer costs you nothing), or by check made out to YD Exterior Visions LLC.\n\n"
+    "2. Scheduling: once the deposit is in, we order your materials and put you on the schedule, "
+    "and we'll be in touch with a start date.\n\n"
+    "3. Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few "
+    "days before we start. If you have private lines (an invisible dog fence, irrigation, lighting, a line to a "
+    "shed), please let us know where they run.\n\n"
+    "4. Questions or changes: just reply to this email.\n\n"
+    "Thanks again for choosing us,\n"
+    "Jonah\n"
+    "YD Exterior Visions"
+)
+
+
+def welcome_mode(conf):
+    """'draft' (until he chooses), 'send' or 'off'. thanks.js welcomeMode is the same."""
+    m = str((conf or {}).get("welcome") or "")
+    return m if m in ("send", "off") else "draft"
+
+
+def accepted_at(j):
+    """When the yes was seen in QuickBooks (acceptedSeenAt), or None: not
+    accepted, or a job this email is not for."""
+    if j.get("deletedAt") or j.get("removeWhy") or j.get("noWelcome"):
+        return None
+    if stages.status_of(j) not in ("booked", "inprogress"):
+        return None
+    return _when(j.get("acceptedSeenAt"))
+
+
+def welcome_words(j, conf, cust=None):
+    """(subject, body) for job `j`: his words when he has written his own,
+    else WELCOME_SUBJECT / WELCOME_BODY, with {name} and {work} filled in."""
+    subject = str(conf.get("welcomeSubject") or "").strip() or WELCOME_SUBJECT
+    body = str(conf.get("welcomeBody") or "").strip() or WELCOME_BODY
+    fill = {"{name}": _first_name(j, cust) or "there", "{work}": _work_words(j)}
+    for k, v in fill.items():
+        subject, body = subject.replace(k, v), body.replace(k, v)
+    return re.sub(r"\s+", " ", subject).strip()[:200] or "Next steps — YD Exterior Visions", body
+
+
+def _welcome_hold(ref, j, why):
+    """Held, and why, on the job -- written only when the reason is new, so
+    he is told once: True then."""
+    if (j.get("welcomeEmail") or {}).get("held") == why:
+        return False
+    at = _stamp()
+    rec = {"held": why, "at": at}
+    ref.update({"welcomeEmail": rec, "lastModified": at})
+    j["welcomeEmail"] = rec
+    return True
+
+
+def send_welcome(db, ref, jid, j, to, conf, cust=None, by=None):
+    """Claim, then send (or draft) one job's next-steps email. (record, None),
+    or (None, why): "already" when it was claimed before."""
+    subject, body = welcome_words(j, conf, cust)
+    mode = "send" if welcome_mode(conf) == "send" else "draft"
+    log = db.collection("reminderLog").document("welcome_" + jid)
+    try:
+        log.create({"job": jid, "at": _iso(dg._now()), "to": to, "mode": mode, "by": by or "auto"})
+    except AlreadyExists:
+        got = log.get()
+        d = (got.to_dict() or {}) if got.exists else {}
+        # Its record lost from the job (an old copy saved over it): put back
+        # what the log knows, so the app shows it and nothing goes again.
+        if d.get("done") and not thanks_done(j.get("welcomeEmail")):
+            rec = {k: d[k] for k in ("to", "subject", "sentAt", "messageId", "threadId", "link", "draftId") if d.get(k)}
+            rec["at"] = _stamp()
+            ref.update({"welcomeEmail": rec, "lastModified": rec["at"]})
+        return None, "already"
+    try:
+        got = cards.draft_email(to, subject, body) if mode == "draft" else cards.send_mail(to, subject, body)
+    except Exception as err:        # noqa: BLE001 -- Gmail may have it: the claim stays
+        print("followup: next-steps email for", jid, "-- no answer from Gmail:", err)
+        at = _stamp()
+        rec = {"at": at, "to": to, "subject": subject, "sentAt": at, "unconfirmed": True}
+        ref.update({"welcomeEmail": rec, "lastModified": at})
+        return None, "Gmail did not answer — look in your Sent mail"
+    if got.get("error"):
+        log.delete()                # certainly not sent: it may be tried again
+        print("followup: next-steps email for", jid, "not", mode, "--", got["error"])
+        return None, got["error"]
+    at = _stamp()
+    rec = {"at": at, "to": to, "subject": got.get("subject") or subject}
+    if mode == "draft":
+        rec.update(draftId=got.get("draftId"), link=got.get("link"))
+    else:
+        rec.update(sentAt=at, messageId=got.get("messageId"), threadId=got.get("threadId"),
+                   link="https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, got.get("threadId") or ""))
+    if by:
+        rec["sentBy"] = by
+    rec = {k: v for k, v in rec.items() if v is not None}
+    ref.update({"welcomeEmail": rec, "lastModified": at})
+    j["welcomeEmail"] = rec
+    try:
+        log.update(dict(rec, done=True))
+    except Exception as err:        # noqa: BLE001 -- the claim alone still stops a second one
+        print("followup: next-steps log for", jid, "not updated:", err)
+    print("followup: next-steps email", "drafted" if mode == "draft" else "sent", "for job", jid)
+    return rec, None
+
+
+class _WelcomeRun:
+    """The next-steps emails of one hourly run (auto): each job looked at
+    with job(). Shares the run's customers read (known) and the addresses
+    emailed this run (mailed) with the thank-yous."""
+
+    def __init__(self, db, conf, morning, known, mailed):
+        self.db, self.conf, self.morning, self.known, self.mailed = db, conf, morning, known, mailed
+        self.mode = welcome_mode(conf)
+        self.start = str(conf.get("welcomeFrom") or "")[:10]
+        self.today = dg._now().astimezone(dg.TZ).date()
+        self.staff = False          # not read yet
+        self.done = 0
+
+    def _start(self):
+        if not self.start:
+            self.start = self.today.isoformat()
+            self.db.collection("settings").document("followUp").set({"welcomeFrom": self.start}, merge=True)
+            print("followup: next-steps emails go for estimates accepted from", self.start)
+        return self.start
+
+    def job(self, ref, jid, j):
+        """One job: sent, drafted, held, or nothing. News for his phone, or None."""
+        if self.mode == "off" or thanks_done(j.get("welcomeEmail")):
+            return None
+        yes = accepted_at(j)
+        if not yes:
+            return None
+        day = yes.astimezone(dg.TZ).date()
+        if (self.today - day).days > WELCOME_WITHIN_DAYS or day.isoformat() < self._start():
+            return None
+        name = (j.get("customerName") or "").strip() or "A customer"
+        to = _contact(self.db, ref, j, self.known)
+        if not to:
+            if _welcome_hold(ref, j, "noEmail"):
+                return {"kind": "followup", "jobId": jid, "title": "👋 No email for the next-steps email",
+                        "body": "%s said yes, but there's no email on the job or its QuickBooks customer." % name}
+            return None
+        if self.staff is False:
+            self.staff = _staff_emails(self.db)
+        if self.staff is None:
+            return None
+        if _not_customer(to, j, self.staff):
+            _welcome_hold(ref, j, "notCustomer")
+            return None
+        if not self.morning or to.lower() in self.mailed or self.done >= WELCOME_MAX:
+            return None
+        # He wrote them about the deposit or what comes next himself since
+        # the yes: that is the email. His mailbox unreadable: nothing goes.
+        try:
+            mine = _found('in:sent to:%s {deposit "next steps" schedule}' % to, yes - datetime.timedelta(hours=12))
+        except Exception as err:    # noqa: BLE001
+            print("followup: mailbox not read for", jid, "-- no next-steps email:", err)
+            return None
+        self.mailed.add(to.lower())
+        if mine:
+            at = _stamp()
+            rec = {"byHand": True, "emailedAt": _iso(mine["at"]), "to": to, "at": at}
+            ref.update({"welcomeEmail": rec, "lastModified": at})
+            return None
+        cust = self.known.get(str(j.get("customerId") or "")) or \
+            self.known.get(str((j.get("qbEstimate") or {}).get("customerId") or ""))
+        rec, why = send_welcome(self.db, ref, jid, j, to, self.conf, cust)
+        if not rec:
+            return None
+        self.done += 1
+        if rec.get("draftId"):
+            return {"kind": "followup", "jobId": jid, "title": "👋 Next-steps email drafted",
+                    "body": "%s said yes — the thank-you with the next steps is in your Gmail Drafts." % name}
+        return {"kind": "followup", "jobId": jid, "title": "👋 Next-steps email sent",
+                "body": "%s said yes — the next steps went to %s." % (name, to)}

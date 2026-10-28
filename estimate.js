@@ -2301,14 +2301,17 @@
           'The payments are each a share of the total, so they still add up.') + '</div>';
   }
 
-  // The thank-you once the job is paid off (thanks.js; functions/followup.py
-  // sends it): where it stands, "Don't send a thank-you", "Send it now".
+  // The next-steps email after a yes, and the thank-you once the job is paid
+  // off (thanks.js; functions/followup.py sends them): where each stands,
+  // the "Don't send" ticks, "Send it now".
   function thanksHtml() {
     if (!window.YDThanks || !currentJobId || typeof boardFields === 'undefined') return '';
-    return YDThanks.lineHtml(Object.assign({}, boardFields, {
+    const d = Object.assign({}, boardFields, {
       _id: currentJobId, jobStatus: typeof jobStatus !== 'undefined' ? jobStatus : '',
       email: el('email') ? el('email').value : '', customerName: el('customerName') ? el('customerName').value : '',
-    }), currentJobId);
+    });
+    // The next-steps email after the yes (thanks.js welcomeHtml), then the thank-you once paid.
+    return (YDThanks.welcomeHtml ? YDThanks.welcomeHtml(d, currentJobId) : '') + YDThanks.lineHtml(d, currentJobId);
   }
 
   // ------------------------------------------------------ plant-care email

@@ -241,10 +241,12 @@
       { id: 'send', label: '✉️ Send them by themselves', hint: 'From your Gmail, 8 to noon — a reply comes to you' },
       { id: 'draft', label: '📝 Put them in my Gmail Drafts instead', hint: 'You read each one and send it yourself' },
       { id: 'words', label: '✏️ The words', hint: now.thanksBody || now.thanksSubject ? 'Your own words' : 'The usual words — change them' },
+      { id: 'welcome', label: '👋 After a yes: the next-steps email', hint: { draft: 'Into your Gmail Drafts', send: 'Sends by itself', off: 'Off' }[welcomeMode(now)] },
     ], { title: 'Follow-ups & thank-yous', value: now.thanksSend === false ? 'draft' : 'send', cancel: 'Close' });
     if (!pick) return;
     if (pick.id === 'link') { window.chaseReviewLink(); return; }
     if (pick.id === 'words') { editWords(); return; }
+    if (pick.id === 'welcome') { openWelcomeSettings(); return; }
     save({ thanksSend: pick.id === 'send' }, 'the thank-you choice');
     showToast(pick.id === 'send' ? 'Thank-yous will send themselves' : 'Thank-yous will go into your Gmail Drafts');
   };
@@ -285,7 +287,113 @@
     }
   };
 
-  window.YDThanks = { lineHtml: lineHtml, homeRows: homeRows, stateOf: stateOf, conf: () => conf };
+  // ------------------------------------------------------------ after a yes
+  //
+  // Jonah (27 Oct 2026): "have generic email that gets sent after an estimate
+  // is accepted thanking them and giving next steps down payment etc." The
+  // server writes it (followup.py, the after-a-yes section): the morning
+  // after the yes is seen in QuickBooks, into his Gmail Drafts until he
+  // chooses to have it sent (settings/followUp.welcome 'draft' | 'send' |
+  // 'off'), in his words once he changes them. Here: the line on the job, the
+  // "Don't send" tick (noWelcome), and the choice in Follow-ups & thank-yous.
+  // followup.py WELCOME_SUBJECT / WELCOME_BODY -- the same words.
+  const W_SUBJECT = 'Next steps for your {work} — YD Exterior Visions';
+  const W_BODY = 'Hi {name},\n\n' +
+    'Thank you for accepting our estimate for your {work} — we\'re glad to be working with you.\n\n' +
+    'Here\'s what happens next:\n\n' +
+    '1. Deposit: you\'ll get the deposit invoice from QuickBooks by email. You can pay it online with the ' +
+    'button in that email (a bank transfer costs you nothing), or by check made out to YD Exterior Visions LLC.\n\n' +
+    '2. Scheduling: once the deposit is in, we order your materials and put you on the schedule, ' +
+    'and we\'ll be in touch with a start date.\n\n' +
+    '3. Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few ' +
+    'days before we start. If you have private lines (an invisible dog fence, irrigation, lighting, a line to a ' +
+    'shed), please let us know where they run.\n\n' +
+    '4. Questions or changes: just reply to this email.\n\n' +
+    'Thanks again for choosing us,\n' +
+    'Jonah\n' +
+    'YD Exterior Visions';
+  const W_WITHIN_DAYS = 14;          // followup.WELCOME_WITHIN_DAYS
+  // followup.py welcome_mode: drafts until he chooses.
+  const welcomeMode = c => (c && (c.welcome === 'send' || c.welcome === 'off')) ? c.welcome : 'draft';
+
+  // The line on a booked job whose estimate was accepted (estimate.js, beside
+  // the thank-you's). '' when there is nothing to say.
+  function welcomeHtml(d, jobId) {
+    if (!jobId || !can('jobs', 'see')) return '';
+    d = d || {};
+    const rec = d.welcomeEmail || {};
+    const st = typeof normStatus === 'function' ? normStatus(d.jobStatus, d) : d.jobStatus;
+    const isDone = done(rec);
+    if (!isDone && (!d.acceptedSeenAt || d.removeWhy || d.deletedAt || ['booked', 'inprogress'].indexOf(st) === -1)) return '';
+    const to = rec.to ? ' to ' + esc(rec.to) : '';
+    const mode = welcomeMode(conf);
+    let words;
+    if (rec.sentAt) words = rec.unconfirmed ? 'The next-steps email' + to + ' was being sent ' + esc(day(rec.sentAt)) +
+      ' and Gmail never answered — look in your Sent mail.' : 'Next-steps email sent ' + esc(day(rec.sentAt)) + to + '.';
+    else if (rec.draftId) words = 'Next-steps email drafted ' + esc(day(rec.at)) + to + ' — in your Gmail Drafts to read and send.';
+    else if (rec.byHand) words = 'You emailed them about the deposit / next steps yourself — none sent.';
+    else if (d.noWelcome) words = 'No next-steps email for this job.';
+    else if (mode === 'off') words = 'Next-steps emails are switched off (⋯ → All settings → Follow-ups & thank-yous).';
+    else {
+      const yes = ymd(d.acceptedSeenAt);
+      const age = yes ? Math.round((Date.parse(localYMD() + 'T12:00:00') - Date.parse(yes + 'T12:00:00')) / 864e5) : 0;
+      // Not started yet: the first run that finds a yes starts it from that
+      // day (followup.py _WelcomeRun._start) -- today's.
+      const from = String((conf && conf.welcomeFrom) || localYMD()).slice(0, 10);
+      if (!yes || age > W_WITHIN_DAYS || yes < from) return '';
+      if (rec.held === 'noEmail' && !looksLikeEmail(d.email)) words = 'Next-steps email held: no email on the job or its QuickBooks customer.';
+      else if (rec.held === 'notCustomer') words = 'Next-steps email held: the email on it is yours, the crew’s or a test address.';
+      else words = 'They said yes — a thank-you with the next steps (deposit, scheduling) ' +
+        (mode === 'send' ? 'goes to them by itself ' : 'goes into your Gmail Drafts ') + nextMorning() + '.';
+    }
+    const link = mailLink(rec.link) && (rec.sentAt || rec.draftId)
+      ? ' <a class="btn btn-sm" href="' + esc(rec.link) + '" target="_blank" rel="noopener">' + (rec.draftId ? 'Open the draft' : 'Open the email') + '</a>' : '';
+    const tick = !isDone && can('jobs', 'change')
+      ? '<div class="est-care"><label class="chk est-nothanks"><input type="checkbox"' + (d.noWelcome ? ' checked' : '') +
+        ' onchange="welcomeNoSend(\'' + safeId(jobId) + '\', this.checked)"> 🚫 Don’t send the next-steps email for this job</label></div>' : '';
+    return '<div class="est-care est-thanks">👋 ' + words + link + '</div>' + tick;
+  }
+
+  window.welcomeNoSend = function (jobId, on) {
+    if (!can('jobs', 'change') || !window.YDSync || !YDSync.patchJob) return;
+    if (jobId === currentJobId && typeof boardFields !== 'undefined') boardFields.noWelcome = !!on;
+    if (!YDSync.patchJob(jobId, { noWelcome: !!on })) { showToast('Could not save that'); return; }
+    showToast(on ? '🚫 No next-steps email will go for this job' : 'The next-steps email can go for this job again');
+    redraw();
+  };
+
+  async function editWelcomeWords() {
+    const now = await current();
+    const got = await ydForm('The email a customer gets the morning after they accept your estimate. {name} becomes their first ' +
+      'name (“there” for a business), {work} what the job is (“paver patio”). Empty a box for the usual words.', [
+      { id: 'subject', label: 'Subject', value: now.welcomeSubject || W_SUBJECT },
+      { id: 'body', label: 'The email', value: now.welcomeBody || W_BODY, multiline: true },
+    ], { title: 'The next-steps email’s words', ok: 'Save' });
+    if (!got) return;
+    const subject = String(got.subject || '').trim(), body = String(got.body || '').trim();
+    save({ welcomeSubject: subject === W_SUBJECT ? '' : subject, welcomeBody: body === W_BODY.trim() ? '' : body }, 'the next-steps words');
+    showToast('Saved — the next one uses them');
+  }
+
+  async function openWelcomeSettings() {
+    const now = await current();
+    const mode = welcomeMode(now);
+    const pick = await ydChoose('The morning after a customer accepts your estimate in QuickBooks, they get a thank-you with the next ' +
+      'steps — the deposit invoice, scheduling, marking the utility lines. Never twice, never for snow, and not when you’ve ' +
+      'emailed them about the deposit yourself.', [
+      { id: 'draft', label: '📝 Put it in my Gmail Drafts', hint: 'You read each one and send it yourself (how it starts)' },
+      { id: 'send', label: '✉️ Send it by itself', hint: 'From your Gmail, 8 to noon — a reply comes to you' },
+      { id: 'off', label: '🚫 Don’t send them', hint: 'No next-steps emails at all' },
+      { id: 'words', label: '✏️ The words', hint: now.welcomeBody || now.welcomeSubject ? 'Your own words' : 'The usual words — read and change them' },
+    ], { title: 'After a yes: the next-steps email', value: mode, cancel: 'Close' });
+    if (!pick) return;
+    if (pick.id === 'words') { editWelcomeWords(); return; }
+    save({ welcome: pick.id }, 'the next-steps choice');
+    showToast(pick.id === 'send' ? 'Next-steps emails will send themselves' : pick.id === 'off' ? 'No next-steps emails will go'
+      : 'Next-steps emails will go into your Gmail Drafts');
+  }
+
+  window.YDThanks = { lineHtml: lineHtml, homeRows: homeRows, stateOf: stateOf, conf: () => conf, welcomeHtml: welcomeHtml };
 
   document.addEventListener('yd-auth', e => {
     const a = (e && e.detail) || {};
