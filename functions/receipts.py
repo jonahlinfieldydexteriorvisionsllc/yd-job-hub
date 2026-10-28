@@ -818,6 +818,9 @@ def receipt_id(vendor, order_number, mid, part=0):
     return "rc" + hashlib.sha1(key.encode()).hexdigest()[:20]
 
 
+GAP_LINE = "Not itemised in the email (difference to the total)"
+
+
 def lines_from(got):
     """Lines that add up, with the tax, to what was charged. When the email
     does not itemise everything, the difference is a line of its own -- the
@@ -841,7 +844,7 @@ def lines_from(got):
             lines.append({"name": (got.get("summary") or "Purchase")[:160], "itemNo": "", "qty": 0,
                           "unit": "", "unitCents": 0, "cents": total - tax})
         elif abs(gap) > 2:
-            lines.append({"name": "Not itemised in the email (difference to the total)", "itemNo": "",
+            lines.append({"name": GAP_LINE, "itemNo": "",
                           "qty": 0, "unit": "", "unitCents": 0, "cents": gap})
     return lines, tax, total
 
@@ -1074,14 +1077,24 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
         "updatedAt": dg._now().isoformat(),
     }
     snap = ref.get()
+    joined = None
     if not snap.exists:
         twin = _same_bill(db, fields)
+        if twin is None:
+            twin = _same_order(db, fields, mail["subject"])
+            if twin is not None:
+                joined = {"no": fields["orderNo"], "totalCents": total, "date": fields["date"],
+                          "docType": fields["docType"]}
         if twin is not None:
             ref, snap = twin.reference, twin
     if snap.exists:
         have = snap.to_dict() or {}
         status = stages.receipt_status(have)
         patch = {"mail": firestore.ArrayUnion([mail]), "updatedAt": fields["updatedAt"]}
+        # An order and its invoice under another number (_same_order): the
+        # number, and what it came to, kept on the one receipt.
+        if joined:
+            patch["joined"] = firestore.ArrayUnion([joined])
         # Marked "Not a receipt": a later email about it is noted with it and
         # changes nothing else -- it stays where Jonah put it.
         if status == stages.RECEIPT_NOT:
@@ -1429,6 +1442,80 @@ def _same_bill(db, f):
 
 
 MATCH_DAYS = 14
+
+
+# An order, then the invoice for it, are one purchase (Jonah, 28 Oct 2026:
+# "make the email reader join an MDS sales order and its later invoice for
+# the same purchase into one receipt, so it can't be counted twice again").
+# The stone yard emails a "Sales Order" when an order is placed (the card on
+# file is charged) and an invoice once it goes out, under another number --
+# both were saved as receipts and both put on the job: Sales Order 26536 and
+# invoice 2621297, $361.00 each; 26333 and 2614639, $2,275.13 each. The
+# invoice may add the card fee the order left off (26041 $921.11, invoice
+# 2602494 $951.05), so the totals can differ; the goods cannot.
+#
+# Same store; one an order (read as an order confirmation, or its email says
+# "Sales Order"), the other the invoice or receipt, dated on or after it and
+# within MATCH_DAYS; the same goods -- every line's amount but a card fee;
+# no PO or delivery address that disagrees; and the order not joined to
+# another invoice already (one order, one invoice). The invoice is then one
+# more email of the order's receipt (_save: `joined` says its number and
+# what it came to), never a receipt of its own.
+SALES_ORDER = re.compile(r"\b(sales order|order confirmation)\b", re.I)
+CARD_FEE = re.compile(r"\b(credit card|card (processing|fee|surcharge)|processing fee|convenience fee)\b", re.I)
+ORDER_DOCS = ("order_confirmation",)
+BILL_DOCS = ("invoice", "receipt")
+
+
+def _is_order(doc_type, subjects):
+    return doc_type in ORDER_DOCS or any(SALES_ORDER.search(s or "") for s in subjects)
+
+
+def goods_of(lines):
+    """A purchase's goods as the amounts of its lines, sorted -- a card fee
+    left out, since one may be added when the order is invoiced, and the
+    line lines_from adds for what the email did not itemise."""
+    return sorted(int(ln.get("cents") or 0) for ln in lines or []
+                  if not CARD_FEE.search(str(ln.get("name") or "")) and ln.get("name") != GAP_LINE)
+
+
+def _same_order(db, f, subject=""):
+    """The receipt this one is the order or the invoice of (above), or None.
+    `f` is the new record's fields (_save), `subject` its email's."""
+    goods = goods_of(f.get("lines"))
+    if not goods or sum(goods) <= 0:
+        return None
+    key = vendor_key(f["vendor"])
+    try:
+        day = datetime.date.fromisoformat(f["date"])
+    except ValueError:
+        return None
+    mine_order = _is_order(f.get("docType"), [subject])
+    if not mine_order and f.get("docType") not in BILL_DOCS:
+        return None
+    lo = (day - datetime.timedelta(days=MATCH_DAYS)).isoformat()
+    hi = (day + datetime.timedelta(days=MATCH_DAYS)).isoformat()
+    best, best_gap = None, None
+    for s in db.collection("receipts").where("date", ">=", lo).where("date", "<=", hi).stream():
+        r = s.to_dict() or {}
+        if vendor_key(r.get("vendor")) != key or r.get("joined"):
+            continue
+        theirs_order = _is_order(r.get("docType"), [x.get("subject") for x in r.get("mail") or []])
+        if theirs_order == mine_order or (not theirs_order and r.get("docType") not in BILL_DOCS):
+            continue
+        order, bill = (f, r) if mine_order else (r, f)
+        try:
+            gap = (datetime.date.fromisoformat(bill.get("date") or "") -
+                   datetime.date.fromisoformat(order.get("date") or "")).days
+        except ValueError:
+            continue
+        if not 0 <= gap <= MATCH_DAYS or goods_of(r.get("lines")) != goods:
+            continue
+        if any(_norm(f.get(k)) and _norm(r.get(k)) and _norm(f.get(k)) != _norm(r.get(k)) for k in ("po", "deliverTo")):
+            continue
+        if best is None or gap < best_gap:
+            best, best_gap = s, gap
+    return best
 
 
 def _is_payment(r):

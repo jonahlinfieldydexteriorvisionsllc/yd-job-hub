@@ -1479,7 +1479,7 @@
     return '<div class="rc-card" id="rc_' + rid + '">' +
       '<div class="rc-top">' +
         '<span class="rc-vendor">' + esc(r.vendor || 'Receipt') + '</span>' +
-        (r.orderNo ? '<span class="rc-tag">#' + esc(r.orderNo) + '</span>' : '') +
+        (r.orderNo ? '<span class="rc-tag">#' + esc(r.orderNo) + '</span>' : '') + joinedHtml(r) +
         '<span class="rc-tag">' + fmtDateMD(r.date) + '</span>' +
         (owed ? '<span class="rc-tag rc-owed">Owed</span>' : '') + tagChipsHtml(r) +
         '<span class="rc-total">' + money(r.totalCents) + '</span>' +
@@ -1512,6 +1512,20 @@
       tagEditHtml('c', rid, r) + noteEditHtml('c', rid, r) +
       qbHtml(r, rid) +
     '</div>';
+  }
+
+  // The invoice of an order, joined to the order's receipt by the email
+  // reader rather than made a second one (functions/receipts.py
+  // _same_order): its number, and what it came to when that differs (a card
+  // fee added on the invoice).
+  function joinedHtml(r, plain) {
+    return (r.joined || []).filter(j => j && j.no).map(j => {
+      const more = j.totalCents && j.totalCents !== r.totalCents ? ' ' + money(j.totalCents) : '';
+      const title = 'Same purchase: ' + (j.docType === 'receipt' ? 'receipt' : 'invoice') + ' #' + j.no + more +
+        ' — joined to this one so it is counted once';
+      return plain ? ' + #' + esc(j.no) + more
+        : '<span class="rc-tag" title="' + esc(title) + '">+ #' + esc(j.no) + more + '</span>';
+    }).join('');
   }
 
   // An invoice still owed, read before bills had a place of their own (or
@@ -1748,7 +1762,7 @@
     const notOne = st.id === 'notreceipt';
     // Where it went sits in the row as a chip or two, not a bar under it.
     return '<div class="rc-row"><span class="rc-row-main"><b>' + esc(r.vendor || 'Receipt') + '</b> ' +
-        '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + '</span> ' +
+        '<span class="muted">' + fmtDateMD(r.date) + (r.orderNo ? ' · #' + esc(r.orderNo) : '') + joinedHtml(r, true) + '</span> ' +
         esc(r.summary || '') + (tagsOf(r).length ? ' ' + tagChipsHtml(r) : '') + '</span>' +
         where + chipsHtml('h', rid, r) + qbHtml(r, rid, true) +
         '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
