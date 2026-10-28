@@ -1081,6 +1081,7 @@
           WORK_KINDS.map(([k, n]) => '<option value="' + k + '"' + (k === kind ? ' selected' : '') + '>' + n + '</option>').join('') +
         '</select>' + moves('work', id, i, est.work.length, ro) + '</div>' +
       '<div class="est-nums">' + nums + '<div class="est-amt" id="estWA_' + id + '"></div></div>' +
+      (w.sub && !ro ? subPickHtml(w, id) : '') +
       extra +
       '<div class="est-wprofit" id="estWF_' + id + '"></div>' +
       (fromQbLine(w)
@@ -1109,6 +1110,48 @@
       '<div class="est-probs" id="estWP_' + id + '"></div>' +
     '</div>';
   }
+
+  // Who does a line done by someone else, as buttons to tap (Jonah, 28 Oct
+  // 2026: "when i tick something as done by a sub i want to also pick the sub
+  // that is doing the work"): his subcontractors (subs.js) and names already
+  // on this estimate's other lines, plus "+ New sub" (the owner's) that saves
+  // one by name. The typed box above still takes any name.
+  function subPickHtml(w, id) {
+    const names = {};
+    (window.YDSubs && YDSubs.list ? YDSubs.list() : []).forEach(s => { if (s.name) names[s.name] = s.id; });
+    (est.work || []).forEach(x => { const n = x.sub && String(x.sub.by || '').trim(); if (n && !(n in names)) names[n] = ''; });
+    const now = String(w.sub.by || '').trim().toLowerCase();
+    const chips = Object.keys(names).sort((a, b) => a.localeCompare(b)).map(n =>
+      '<button type="button" class="est-sub-chip' + (n.toLowerCase() === now ? ' on' : '') + '" data-sub="' + esc(names[n]) +
+        '" data-name="' + esc(n) + '" onclick="estSubPick(\'' + id + '\', this)">' + esc(n) + '</button>').join('');
+    const add = window.YDAuth && YDAuth.isOwner && window.YDSubs && YDSubs.add
+      ? '<button type="button" class="est-sub-chip add" onclick="estSubNew(\'' + id + '\')">+ New sub</button>' : '';
+    return chips || add ? '<div class="est-sub-pick"><span class="muted">Who does it:</span>' + chips + add + '</div>' : '';
+  }
+  const subNamed = n => (window.YDSubs && YDSubs.list ? YDSubs.list() : [])
+    .find(s => String(s.name || '').trim().toLowerCase() === String(n || '').trim().toLowerCase());
+  window.estSubPick = function (id, btn) {
+    const w = find(est.work, id);
+    if (!w || !w.sub || !changes() || !btn) return;
+    w.sub.by = String(btn.dataset.name || '').slice(0, 120);
+    if (btn.dataset.sub) w.sub.subId = btn.dataset.sub; else delete w.sub.subId;
+    changed(true);
+  };
+  window.estSubNew = async function (id) {
+    const w = find(est.work, id);
+    if (!w || !w.sub || !changes() || !window.YDSubs || !YDSubs.add) return;
+    const name = await ydPrompt('The sub or installer’s company name. Their phone and the rest go in on All Jobs → Subcontractors.', '',
+      { title: 'New sub', ok: 'Add them' });
+    const n = String(name || '').trim();
+    if (!n) return;
+    const known = subNamed(n);
+    const sid = known ? known.id : YDSubs.add(n);
+    const live = find(est.work, id);
+    if (!live || !live.sub) return;
+    live.sub.by = known ? known.name : n.slice(0, 120);
+    if (sid) live.sub.subId = sid; else delete live.sub.subId;
+    changed(true);
+  };
 
   // A line's "More ▾": what is seldom changed, folded under the line. Open
   // or shut without drawing the estimate again (nothing in it prices).
@@ -3529,7 +3572,14 @@
       changed(true);
       return;
     }
-    else if (field === 'subBy') { if (w.sub) w.sub.by = String(v || '').slice(0, 120); }
+    else if (field === 'subBy') {
+      if (w.sub) {
+        w.sub.by = String(v || '').slice(0, 120);
+        // Typed exactly as one of his subcontractors: that one.
+        const s = subNamed(w.sub.by);
+        if (s) w.sub.subId = s.id; else delete w.sub.subId;
+      }
+    }
     else if (field === 'subCents') { if (w.sub) w.sub.cents = toCents(v); }
     // The service the line is, by hand (its how-we-do-it and its tools), or
     // back to the one its heading names. Nothing to re-price.

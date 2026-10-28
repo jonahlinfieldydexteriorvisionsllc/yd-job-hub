@@ -3728,6 +3728,12 @@
   /* "Its materials in this price": one line for the customer (customerLines). */
   .est-withmats { display:inline-flex; align-items:center; gap:5px; white-space:nowrap; cursor:pointer; }
   .est-withmats input { width:16px; height:16px; }
+  /* Who does a line done by a sub: his subs as buttons (estimate.js subPickHtml). */
+  .est-sub-pick { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:6px 0 2px; font-size:13px; }
+  .est-sub-chip { font:inherit; font-size:14px; min-height:40px; padding:6px 14px; border-radius:999px; cursor:pointer;
+    border:1px solid var(--border-strong); background:var(--surface); color:var(--text); }
+  .est-sub-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .est-sub-chip.add { border-style:dashed; color:var(--brand-ink); }
   .est-meta .est-tax { margin:0 0 0 auto; gap:6px; }
   .est-meta .est-tax select { width:auto; font-size:13px; padding:3px 28px 3px 8px; background-position:right 9px center; }
   .est-chip { display:inline-flex; align-items:center; gap:4px; font:inherit; font-size:12px; line-height:1.2; color:var(--muted);

@@ -2025,7 +2025,17 @@
     // that was told (for a screen that wants them; and for testing).
     bills: subId => { const s = owner() && subById(subId); return s ? billsFor(s).bills : []; },
     // The usual ones, for the first fill of the one services list (services.js).
-    services: () => SERVICES.slice() };
+    services: () => SERVICES.slice(),
+    // A new one by its name only (Estimate's "+ New sub" on a line done by
+    // someone else); phone and the rest are filled in here later. Owner only.
+    add: name => {
+      const n = String(name || '').trim().slice(0, 120);
+      if (!n || !owner()) return null;
+      const id = newId('sb'), at = new Date().toISOString();
+      put({ subs: { [id]: { name: n, match: matchOf(n), phone: '', email: '', notes: '', createdAt: at, updatedAt: at, props: {} } } },
+        'saving ' + n);
+      return id;
+    } };
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {
