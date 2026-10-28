@@ -984,8 +984,13 @@ service cloud.firestore {
       allow update: if canChange('jobs')
         && request.resource.data.diff(resource.data).affectedKeys()
              .hasOnly(['splits', 'status', 'statusChange', 'skipWhy', 'skippedBy', 'updatedAt', 'updatedBy', 'auto', 'tags',
-                       'notReceipt', 'paidOn'])
+                       'notReceipt', 'paidOn', 'note'])
         && request.resource.data.status in ['new', 'done', 'skipped', 'topay', 'notreceipt']
+        // A note on it for Claude to read (receipts.js rcNote): a few
+        // short words, or none.
+        && (!('note' in request.resource.data) || request.resource.data.note == null
+            || (request.resource.data.note is map && request.resource.data.note.text is string
+                && request.resource.data.note.text.size() <= 2000))
         && (!(request.resource.data.status in ['topay', 'notreceipt']) || request.resource.data.get('splits', []).size() == 0)
         && (!('tags' in request.resource.data) || request.resource.data.tags == null
             || (request.resource.data.tags is list && request.resource.data.tags.size() <= 20));

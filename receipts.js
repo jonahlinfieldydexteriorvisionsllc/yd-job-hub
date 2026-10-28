@@ -5,7 +5,8 @@
 // every line, the tax and the total, and a job it thinks the purchase is for
 // when the delivery address or a name on the order says so. This screen is
 // where each one is sorted: to a job, a vehicle, shop overhead, office
-// overhead, property overhead, a subcontractor, a loan payment, personal --
+// overhead, property overhead, LLC overhead, equipment, equipment
+// maintenance, a subcontractor, a loan payment, personal --
 // or set aside, with a note saying why (PLACE_LIST below). Tags on the whole
 // receipt (a rebate to claim, a warranty...) come on top of that (RECEIPT_TAGS).
 // What is no receipt at all is kept apart: a bill not paid yet waits under
@@ -80,8 +81,9 @@
   // job/shop overhead/office overhead/personal"). Each split says where its
   // lines went (`to`); one with no `to` went to a job, as all did before.
   // The first choice comes from what Claude already said the purchase was
-  // (`kind`, read with the receipt -- no extra call): fuel and repairs to a
-  // vehicle, office things to the office, tools to the shop, the rest a job.
+  // (`kind`, read with the receipt -- no extra call): fuel to a vehicle,
+  // repairs and upkeep to equipment maintenance, office things to the
+  // office, tools to the shop, the rest a job.
   //
   // A subcontractor's bill is a place of its own (Jonah, 13 Oct 2026: "sub
   // bills should have its own category"): a split `to: 'sub'` naming them
@@ -109,6 +111,13 @@
   // parking or meals on a business trip. A business cost like the others,
   // counted under its own name and sent to QuickBooks as usual.
   //
+  // Jonah, 28 Oct 2026: "I need a tag thats LLC Overhead" (what the company
+  // itself costs), "equipment this is where receipts for equipment
+  // purchases go" (renewing a trailer's plates too) "and a separate one for
+  // maintenance on equipment. like air filters". Business costs like the
+  // shop and the office. Upkeep the reader reads as equipment & repairs
+  // (oil, filters -- receipts.py kind_of) starts on Equipment maintenance.
+  //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
   // is one more row, and every list below follows.
@@ -118,6 +127,9 @@
     { id: 'shop', chip: '🏠 Shop overhead', name: 'Shop overhead', view: '🏠 Shop', total: 'Shop' },
     { id: 'office', chip: '🗂 Office overhead', name: 'Office overhead', view: '🗂 Office', total: 'Office' },
     { id: 'property', chip: '🌳 Property overhead', name: 'Property overhead', view: '🌳 Property', total: 'Property' },
+    { id: 'llc', chip: '🏢 LLC overhead', name: 'LLC overhead', view: '🏢 LLC', total: 'LLC overhead' },
+    { id: 'equipment', chip: '🚜 Equipment', name: 'Equipment', view: '🚜 Equipment', total: 'Equipment' },
+    { id: 'upkeep', chip: '🔧 Equipment maintenance', name: 'Equipment maintenance', view: '🔧 Maintenance', total: 'Equipment maintenance' },
     { id: 'travel', chip: '✈️ Travel', name: 'Travel', view: '✈️ Travel', total: 'Travel' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
     { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
@@ -128,7 +140,7 @@
   const offBooks = id => (window.YDStages.RECEIPT_OFF_BOOKS || ['personal']).indexOf(id) !== -1;
   const DEST = PLACE_LIST.map(p => [p.id, p.chip]).concat([['aside', '🗄 Set aside']]);
   const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
-  const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'vehicle',
+  const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'upkeep',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop',
     loan_payment: 'loan', travel: 'travel' };
   const destOf = s => s.to || 'job';
@@ -1256,6 +1268,73 @@
     if (box()) box().focus();
   };
 
+  // ------------------------------------------------- a note on it
+  //
+  // Jonah, 28 Oct 2026: "i want to be able to add a note on a receipt for
+  // you to view". receipts/{id}.note {text, at, by, name}: shown with the
+  // receipt to whoever sees it, read by Claude when the receipt is read
+  // again (functions/receipts.py NOTE_HEAD) and by the Claude chats that
+  // work on his books. One note a receipt; changed or taken off any time.
+  let noting = '';            // the receipt whose note box is open ('c' card / 'h' row + its id)
+  const noteTyped = {};       // receipt id -> what is being typed, kept through a redraw
+  const noteOf = r => String((r && r.note && r.note.text) || '').trim();
+  function noteHtml(r, where) {
+    const t = noteOf(r);
+    if (!t || noting === where + safeId(r.id)) return '';
+    const n = r.note || {};
+    const by = [String(n.name || '').split(/[ @]/)[0], n.at ? fmtDateMD(String(n.at).slice(0, 10)) : ''].filter(Boolean).join(', ');
+    return '<div class="rc-mynote">📝 ' + esc(t) + (by ? ' <span class="muted">— ' + esc(by) + '</span>' : '') + '</div>';
+  }
+  function noteBtn(where, rid, r) {
+    if (!sorts()) return '';
+    const open = noting === where + rid, has = !!noteOf(r);
+    const words = has ? 'Note' : 'Add a note';
+    return '<button type="button" class="btn btn-sm' + (open ? ' btn-filled' : '') + '" aria-expanded="' + open + '"' +
+      (where === 'h' ? ' title="' + words + '" aria-label="' + words + '"' : '') +
+      ' onclick="rcNote(\'' + where + rid + '\')">' + (where === 'h' ? '📝' : '📝 ' + words) + '</button>';
+  }
+  function noteEditHtml(where, rid, r) {
+    if (noting !== where + rid || !sorts()) return '';
+    const text = noteTyped[rid] != null ? noteTyped[rid] : noteOf(r);
+    return '<div class="rc-tagedit rc-noteedit">' +
+      '<textarea class="rc-note-box" id="rcNote_' + where + rid + '" rows="3" maxlength="2000"' +
+        ' placeholder="Anything about this receipt — what it is, what was read wrong, where it goes…"' +
+        ' oninput="rcNoteTyped(\'' + rid + '\', this.value)">' + esc(text) + '</textarea>' +
+      '<div class="rc-assign">' +
+        '<button type="button" class="btn btn-sm btn-filled" onclick="rcNoteSave(\'' + where + '\',\'' + rid + '\')">Save the note</button>' +
+        (noteOf(r) ? '<button type="button" class="btn btn-sm" onclick="rcNoteSave(\'' + where + '\',\'' + rid + '\', true)">Take it off</button>' : '') +
+        '<button type="button" class="btn btn-sm" onclick="rcNote(\'\')">Cancel</button>' +
+      '</div>' +
+      '<div class="rc-hint">Claude reads it: when the receipt is read again (⋯ → 📖 Read it again), and when it works on your books.</div>' +
+    '</div>';
+  }
+  window.rcNote = function (key) {
+    const was = noting;
+    noting = key && key !== noting ? key : '';
+    if (was && was !== noting) delete noteTyped[was.slice(1)];
+    redraw(true);
+    if (noting) {
+      const box = el('rcNote_' + noting);
+      if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+    }
+  };
+  window.rcNoteTyped = function (rid, text) { noteTyped[rid] = text; };
+  window.rcNoteSave = function (where, rid, off) {
+    const r = receipts[rid];
+    if (!r || !sorts()) return;
+    const box = el('rcNote_' + where + rid);
+    const text = off ? '' : String(noteTyped[rid] != null ? noteTyped[rid] : (box ? box.value : '')).trim().slice(0, 2000);
+    const u = me() || {};
+    const note = text ? { text, at: new Date().toISOString(), by: u.uid || '', name: u.displayName || u.email || '' } : null;
+    if (!text && !noteOf(r)) { rcNote(''); return; }
+    receipts[rid] = Object.assign({}, r, { note });
+    delete noteTyped[rid];
+    noting = '';
+    write(rid, { note });
+    showToast(text ? '📝 Note saved' : 'Note taken off');
+    redraw(true);
+  };
+
   // ------------------------------------------------- what was done with it
   //
   // Where a receipt went shows as a small chip ("✓ Added to the Smith job");
@@ -1407,6 +1486,7 @@
       '</div>' +
       '<div class="rc-sum">' + summary +
         '<span class="muted">' + (summary ? '· ' : '') + esc(KIND[r.kind] || 'Other') + '</span></div>' +
+      noteHtml(r, 'c') +
       sentForHtml(r) +
       (r.whose === 'unsure' && !r.sentFor ? '<div class="rc-note">Claude was not sure this one is for the business.</div>' : '') +
       (sug && free.length && to === 'job' && !r.sentFor ? '<div class="rc-suggest">Looks like <b>' + jobNameHtml(sug.name, sug.est) + '</b>' +
@@ -1427,9 +1507,9 @@
       (sortable && sorts() ? destHtml(rid, r, to) + assignHtml(rid, r, to, jobs, pick, tickedSet, free) : '') +
       '<div class="rc-foot">' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Open the email</a>' : '') +
-        tagBtn('c', rid) + notBtns(rid, r, owed) + deleteBtn(rid) + menuHtml('c', rid, r) +
+        tagBtn('c', rid) + noteBtn('c', rid, r) + notBtns(rid, r, owed) + deleteBtn(rid) + menuHtml('c', rid, r) +
       '</div>' +
-      tagEditHtml('c', rid, r) +
+      tagEditHtml('c', rid, r) + noteEditHtml('c', rid, r) +
       qbHtml(r, rid) +
     '</div>';
   }
@@ -1675,14 +1755,15 @@
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (aside && sorts() ? '<button class="btn btn-sm" onclick="rcAsideWhy(\'' + rid + '\')" title="Change the note">✎ Why</button>' : '') +
         ((r.status === 'skipped' || notOne) && sorts() ? '<button class="btn btn-sm" onclick="rcPutBack(\'' + rid + '\')">Put back</button>' : '') +
-        tagBtn('h', rid) + menuHtml('h', rid, r) + deleteBtn(rid, true) +
+        tagBtn('h', rid) + noteBtn('h', rid, r) + menuHtml('h', rid, r) + deleteBtn(rid, true) +
       '</div>' +
+      noteHtml(r, 'h') +
       (aside ? '<div class="rc-aside-why">' + (why ? 'Why: ' + esc(why) : '<span class="muted">No note for why</span>') + '</div>' : '') +
       // What the mark taught the email reader (rcNotReceipt).
       (notOne ? '<div class="rc-aside-why">' + (r.notReceipt && r.notReceipt.skip ? 'Mail like it is passed over unread.'
         : r.notReceipt && (r.notReceipt.keys || []).length ? 'Shown to Claude as an example — other receipts look like it, so none is passed over by itself.'
         : 'No email to learn from.') + ' Put back undoes it.</div>' : '') +
-      tagEditHtml('h', rid, r);
+      tagEditHtml('h', rid, r) + noteEditHtml('h', rid, r);
   }
 
   function stateHtml() {
@@ -1917,12 +1998,12 @@
 
   // A snapshot arriving while a job is being chosen would rebuild the list
   // under the person's finger and lose what they typed into the picker. Hold
-  // it until they move on. The same for a tag being typed on a row of All
-  // receipts.
+  // it until they move on. The same for a tag or a note being typed on a row
+  // of All receipts.
   function choosing() {
     const a = document.activeElement, sec = el('rcSection'), hist = el('rcHistory');
     if (!a || a === document.body) return false;
-    return !!((sec && sec.contains(a)) || (hist && hist.contains(a) && a.tagName === 'INPUT'));
+    return !!((sec && sec.contains(a)) || (hist && hist.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')));
   }
   function redraw(force) {
     const p = el('panel-receipts');

@@ -430,6 +430,15 @@ delivered" or "Dumpster swap, 20 yd".
 something."""
 
 
+# Jonah's note on a receipt (Jonah, 28 Oct 2026: "i want to be able to add a
+# note on a receipt for you to view"): receipts/{id}.note {text, at, by,
+# name}, written on the Receipts tab. Unlike the email, it is the owner
+# speaking: a read of the receipt again goes by it.
+NOTE_MAX = 2000
+NOTE_HEAD = ("Jonah's own note on this receipt (from him, not from the email -- go by it: what it is, what was "
+             "read wrong, how to read it):\n")
+
+
 def read_system(bank=""):
     """READ_SYSTEM with the business's bank named, when it is set
     (settings/receipts.bankName -- kept out of this public code). Without
@@ -609,14 +618,19 @@ MAX_FILE = 10 * 1024 * 1024
 MAX_FILES_TOTAL = 18 * 1024 * 1024
 
 
+def _mime_of(f):
+    """An attachment's type -- a PDF sent as "any file" counted as a PDF."""
+    if f["mime"] == "application/octet-stream" and f["name"].lower().endswith(".pdf"):
+        return "application/pdf"
+    return f["mime"]
+
+
 def _attachment_blocks(m):
     """PDFs and photos Claude can read, largest receipts first, within the
     request's size limit. Tiny images are logos, not receipts."""
     blocks, notes, total = [], [], 0
     for f in m["files"]:
-        mime, size = f["mime"], f["size"]
-        if mime == "application/octet-stream" and f["name"].lower().endswith(".pdf"):
-            mime = "application/pdf"
+        mime, size = _mime_of(f), f["size"]
         if mime != "application/pdf" and mime not in IMAGE_TYPES:
             if mime.startswith("image/"):
                 notes.append("(an attached photo, %s, is in a format that could not be read)" % f["name"])
@@ -633,6 +647,55 @@ def _attachment_blocks(m):
         kind = "document" if mime == "application/pdf" else "image"
         blocks.append({"type": kind, "source": {"type": "base64", "media_type": mime, "data": data}})
     return blocks, notes
+
+
+# ----------------------------------------------- ONE RECEIPT IN EACH PDF
+#
+# Jonah, 28 Oct 2026: "you pulled an mds email with two separate receipt pdfs
+# in it and listed it as one receipt int eh job hub that cant happen. every
+# separate pdf in the mds emails are separate receipts." The stone yard
+# sends the day's invoices in one email ("Invoices from ...", "Transactions
+# from ...", one PDF each), and one read of the whole email made one receipt
+# of them all -- one total, one job for every line. An email like that has
+# each PDF read on its own (one read each), and each is its own receipt: its
+# own number, lines, tax and total, sorted on its own. The email is still
+# labelled once and sent on to QuickBooks once (forward_email notes the
+# email it sent, and the next receipt of it is marked sent with it).
+#
+# Which emails: two PDFs or more, and a subject that names more than one
+# record ("Invoices from", "Transactions from"), or a sender in
+# settings/receipts.pdfEachFrom -- the ends of email addresses (the stone
+# yard's, kept out of this public code), whose every PDF is a receipt.
+EACH_PDF_SUBJECT = re.compile(r"^\s*((re|fwd?|fw)\s*:\s*)*(invoices|receipts|transactions|sales orders|orders)\b", re.I)
+MAX_PARTS = 10              # PDFs read one by one in one email; more than that, read whole
+PART_NOTE = ("This email carries %d PDFs, each a separate receipt or invoice of its own. Only PDF %d "
+             "of %d is attached here (%s): read ONLY that one -- its own number, its own lines, tax and "
+             "total. The email's text may speak of the others; leave them out.")
+
+
+def pdf_files(m):
+    """The email's PDFs, in the order they are attached."""
+    return [f for f in m.get("files") or [] if _mime_of(f) == "application/pdf"]
+
+
+def sender_domain(from_header):
+    found = re.search(r"@([A-Za-z0-9.-]+)", from_header or "")
+    return found.group(1).lower().rstrip(".") if found else ""
+
+
+def each_pdf(m, each_from=()):
+    """The parts of an email with one receipt in each PDF (above) -- [{n,
+    of, name, file}] -- or [] for an email read whole."""
+    pdfs = pdf_files(m)
+    if len(pdfs) < 2 or len(pdfs) > MAX_PARTS:
+        return []
+    dom = sender_domain(m.get("from"))
+    ends = [str(x or "").strip().lower().lstrip("@") for x in each_from or []]
+    if not (EACH_PDF_SUBJECT.search(m.get("subject") or "")
+            or any(e and (dom == e or dom.endswith("." + e)) for e in ends)):
+        return []
+    return [{"n": i + 1, "of": len(pdfs), "name": (f["name"] or "PDF %d" % (i + 1))[:120], "file": f}
+            for i, f in enumerate(pdfs)]
 
 
 # ---------------------------------------------------------------- Claude
@@ -683,13 +746,41 @@ def triage(client, msgs, examples=()):
     return keep, used, None
 
 
-def read_receipt(client, m, bank=""):
-    blocks, notes = _attachment_blocks(m)
+def read_receipt(client, m, bank="", part=None, note=""):
+    """Claude's read of one email: (got, used, err). `part`: one of its PDFs
+    (each_pdf), read alone as a receipt of its own -- the email's text goes
+    with it, its other PDFs do not. `note`: what Jonah wrote on the receipt
+    (Read it again), for the read to go by."""
+    blocks, notes = _attachment_blocks(dict(m, files=[part["file"]]) if part else m)
     text = m["text"][:40000]
     head = ("From: %s\nTo: %s\nDate: %s\nSubject: %s\n\n" % (m["from"], m["to"], m["date"], m["subject"]))
+    if part:
+        head = (PART_NOTE % (part["of"], part["n"], part["of"], part["name"])) + "\n\n" + head
     blocks.append({"type": "text", "text": head + (text or "(no text in the email itself)") +
                    ("\n\n" + "\n".join(notes) if notes else "")})
+    if note:
+        blocks.append({"type": "text", "text": NOTE_HEAD + note[:NOTE_MAX]})
     return _ask(client, read_system(bank), blocks, RECEIPT_SCHEMA, "medium")
+
+
+def read_email(client, m, bank="", parts=()):
+    """Read one email: (got, used, err). With `parts` (each_pdf) every PDF
+    is read on its own, and `got` is the first that is a purchase, carrying
+    them all in `parts`, each with `part` {n, of, name} -- one receipt each
+    when saved (_save_all). All or nothing: when one PDF cannot be read, the
+    email is read again whole another time, so no receipt of it is lost."""
+    if not parts:
+        return read_receipt(client, m, bank)
+    used, gots = {"input": 0, "output": 0, "cents": 0}, []
+    for p in parts:
+        got, u, err = read_receipt(client, m, bank, p)
+        for k in used:
+            used[k] += (u or {}).get(k) or 0
+        if err or not got:
+            return None, used, "PDF %d of %d: %s" % (p["n"], p["of"], err or "no answer")
+        gots.append(dict(got, part={"n": p["n"], "of": p["of"], "name": p["name"]}))
+    lead = next((g for g in gots if g.get("is_purchase") and not zero_amount(g)), gots[0])
+    return dict(lead, parts=gots), used, None
 
 
 # ---------------------------------------------------------------- turning it into a receipt
@@ -710,16 +801,18 @@ def vendor_key(vendor):
     return next((w for w in _norm(vendor).split() if w not in ("the", "a", "an")), "")
 
 
-def receipt_id(vendor, order_number, mid):
+def receipt_id(vendor, order_number, mid, part=0):
     """The same order is the same receipt, however many emails say so. With
-    no order number there is nothing to join on, so the email is the key.
+    no order number there is nothing to join on, so the email is the key --
+    and which of its PDFs (`part`, ONE RECEIPT IN EACH PDF), when each is
+    one.
 
     The store is only the first real word of its name: one store's emails
     call it "The Home Depot", "Home Depot" and "Home Depot Pro", and an order
     number already tells two stores' orders apart."""
     v = vendor_key(vendor)
     o = re.sub(r"[^a-z0-9]", "", (order_number or "").lower())
-    key = ("%s|%s" % (v, o)) if v and o else "msg|" + mid
+    key = ("%s|%s" % (v, o)) if v and o else "msg|" + mid + ("|%d" % part if part else "")
     return "rc" + hashlib.sha1(key.encode()).hexdigest()[:20]
 
 
@@ -946,12 +1039,17 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
     """Write (or add to) the receipt for one email. Returns what happened.
     `extra`: fields a NEW receipt also carries (the year's pull: `pulled`).
     `to_pay`: the email is a bill not paid yet (_to_pay) -- a new record is
-    a bill to pay (status topay), not a receipt to sort."""
-    rid = receipt_id(got.get("vendor"), got.get("order_number"), m["id"])
+    a bill to pay (status topay), not a receipt to sort. `got` is one
+    receipt's read: one PDF of an email with a receipt in each (`part`) is
+    noted on the mail as which PDF (`pdf`), so it is read again alone."""
+    part = got.get("part") or {}
+    rid = receipt_id(got.get("vendor"), got.get("order_number"), m["id"], part.get("n") or 0)
     ref = db.collection("receipts").document(rid)
     lines, tax, total = lines_from(got)
     mail = {"id": m["id"], "threadId": m["threadId"], "from": m["from"][:200],
             "subject": m["subject"][:300], "at": m["internalDate"]}
+    if part:
+        mail.update({"pdf": part.get("name") or "", "pdfN": part.get("n") or 0, "pdfOf": part.get("of") or 0})
     fields = {
         "vendor": (got.get("vendor") or "").strip()[:120] or m["from"][:120],
         "orderNo": (got.get("order_number") or "").strip()[:60],
@@ -1021,6 +1119,51 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
     return rid, TO_PAY if to_pay else "new"
 
 
+def _save_all(db, m, got, jobs, extra=None):
+    """Every receipt one email holds, saved (_save): the one, or one for
+    each of its PDFs (ONE RECEIPT IN EACH PDF) -- passing over a PDF of its
+    own that is no purchase or charged nothing. A personal one is filed
+    under Personal (_file_personal). Returns [(rid, what, personal)]."""
+    out = []
+    parts = got.get("parts") or []
+    for g in parts or [got]:
+        if parts and (not g.get("is_purchase") or zero_amount(g)):
+            continue
+        rid, what = _save(db, m, g, jobs, extra=extra, to_pay=_to_pay(db, g, m))
+        personal = what not in (TO_PAY, NOT_RECEIPT) and _file_personal(db, rid, g, m)
+        out.append((rid, what, bool(personal)))
+    return out
+
+
+def _note_saved(db, m, saves, report=None, receipt=None, **extra):
+    """What became of one email's receipts (_save_all), noted on the email
+    (receiptMail): the receipts it made (receiptId, the first; receiptIds,
+    all, when it holds several; plus `receipt`, what only a receipt's email
+    is marked with), else a bill to pay or not a receipt
+    (_not_a_receipt_seen), else not a purchase. `extra` goes on the email
+    whichever it is. Returns the receipts kept [(rid, what, personal)] --
+    the caller counts and tags those."""
+    kept = [s for s in saves if s[1] not in (TO_PAY, NOT_RECEIPT)]
+    for rid, what, _ in saves:
+        if what not in (TO_PAY, NOT_RECEIPT):
+            continue
+        if not kept:
+            _not_a_receipt_seen(db, m, rid, what, report, **extra)
+        elif report is not None:
+            # Beside receipts of the same email: counted, the email is theirs.
+            key = "toPay" if what == TO_PAY else "notReceipts"
+            report[key] = report.get(key, 0) + 1
+    if not saves:
+        _seen(db, m["id"], "not_purchase", subject=(m.get("subject") or "")[:200], **extra)
+        if report is not None:
+            report["notReceipts"] = report.get("notReceipts", 0) + 1
+    if kept:
+        rids = [s[0] for s in kept]
+        _seen(db, m["id"], "personal" if all(s[2] for s in kept) else "receipt", receiptId=rids[0],
+              **dict(extra, **dict(receipt or {}, **({"receiptIds": rids} if len(rids) > 1 else {}))))
+    return kept
+
+
 # A notice that an order shipped or arrived: it carries no prices, so it is
 # never the email a receipt is read again from.
 SHIP_SUBJECT = re.compile(r"\b(shipped|delivered|on (its|the) way|out for delivery|tracking|shipment|ready for pickup)\b",
@@ -1036,7 +1179,14 @@ def read_again(client, db, rid):
     not a shipping notice: the order or the bill is the one with the prices.
     What the receipt says is replaced as a later, fuller email would replace
     it (_save); which store, whose, paid and the order number stay.
-    Returns ({ok, summary, lines} or {error}, usage or None)."""
+
+    Jonah's note on it (NOTE_HEAD) goes with the read. One PDF of an email
+    with a receipt in each (its mail names the `pdf`) is read alone again.
+    One read whole before each PDF was a receipt of its own (Jonah, 28 Oct
+    2026: the stone yard's day of invoices as one receipt) is split: each
+    PDF read and saved as its own receipt (_split_again).
+    Returns ({ok, summary, lines} or {ok, split, ids} or {error}, usage or
+    None)."""
     ref = db.collection("receipts").document(rid)
     snap = ref.get()
     if not snap.exists:
@@ -1050,7 +1200,19 @@ def read_again(client, db, rid):
     pick = next((x for x in mails if not SHIP_SUBJECT.search(x.get("subject") or "")), mails[0])
     m = _fetch(pick["id"])
     st = db.collection("settings").document("receipts").get()
-    got, used, err = read_receipt(client, m, ((st.to_dict() or {}) if st.exists else {}).get("bankName") or "")
+    st_data = (st.to_dict() or {}) if st.exists else {}
+    bank = st_data.get("bankName") or ""
+    note = str((r.get("note") or {}).get("text") or "").strip()
+    part = None
+    if pick.get("pdf") or pick.get("pdfN"):
+        part = _part_named(m, pick)
+        if not part:
+            return {"error": "Its PDF is not on that email any more — nothing to read again."}, None
+    else:
+        parts = each_pdf(m, st_data.get("pdfEachFrom"))
+        if parts:
+            return _split_again(client, db, ref, r, m, parts, bank, note)
+    got, used, err = read_receipt(client, m, bank, part, note)
     usage = types_usage(used)
     if err or not got:
         return {"error": "It could not be read again (%s) — try once more." % (err or "no answer")}, usage
@@ -1076,6 +1238,70 @@ def read_again(client, db, rid):
         return {"error": "It was sorted while it was being read — nothing changed."}, usage
     ref.update(patch)
     return {"ok": True, "summary": patch["summary"], "lines": len(lines), "totalCents": total}, usage
+
+
+def _part_named(m, mail):
+    """The PDF a receipt was read from (its mail's `pdf` / `pdfN`), in the
+    email as it is now: the one of that name in that place, else of that
+    name, else in that place when the email still has as many."""
+    pdfs = pdf_files(m)
+    n, name = int(mail.get("pdfN") or 0), str(mail.get("pdf") or "")
+    pick = None
+    if 0 < n <= len(pdfs) and (pdfs[n - 1]["name"] or "")[:120] == name:
+        pick = n
+    if not pick and name:
+        pick = next((i + 1 for i, f in enumerate(pdfs) if (f["name"] or "")[:120] == name), None)
+    if not pick and 0 < n <= len(pdfs) and len(pdfs) == int(mail.get("pdfOf") or 0):
+        pick = n
+    if not pick:
+        return None
+    return {"n": pick, "of": len(pdfs), "name": (pdfs[pick - 1]["name"] or "PDF %d" % pick)[:120],
+            "file": pdfs[pick - 1]}
+
+
+def _split_again(client, db, ref, r, m, parts, bank, note):
+    """read_again for a receipt made of an email whose PDFs are each a
+    receipt (ONE RECEIPT IN EACH PDF): every PDF read on its own and saved
+    as its own receipt -- joining one there already of the same number --
+    and this one, nothing on it sorted, deleted. The new ones keep Jonah's
+    note, its tags, and the note that its email went to QuickBooks."""
+    used, gots = {"input": 0, "output": 0, "cents": 0}, []
+    for p in parts:
+        got, u, err = read_receipt(client, m, bank, p, note)
+        for k in used:
+            used[k] += (u or {}).get(k) or 0
+        if err or not got:
+            return {"error": "PDF %d of %d could not be read (%s) — try once more." % (
+                p["n"], p["of"], err or "no answer")}, types_usage(used)
+        gots.append(dict(got, part={"n": p["n"], "of": p["of"], "name": p["name"]}))
+    usage = types_usage(used)
+    if not any(g.get("is_purchase") and not zero_amount(g) for g in gots):
+        return {"error": "None of its %d PDFs reads as a purchase — left as it was." % len(gots)}, usage
+    # Sorted (or deleted) by someone while Claude was reading: theirs stands.
+    now = ref.get()
+    have = (now.to_dict() or {}) if now.exists else {}
+    if not now.exists or (have.get("splits") or []) or stages.receipt_status(have) != "tosort":
+        return {"error": "It was sorted while it was being read — nothing changed."}, usage
+    saves = _save_all(db, m, dict(gots[0], parts=gots), _jobs(db), extra={"pulled": True} if r.get("pulled") else None)
+    ids = list(dict.fromkeys(s[0] for s in saves))
+    if not ids:
+        return {"error": "None of its PDFs could be saved as a receipt — left as it was."}, usage
+    carry = {k: r[k] for k in ("note", "tags") if r.get(k)}
+    if (r.get("qbForward") or {}).get("ok"):
+        carry["qbForward"] = r["qbForward"]
+    for nid in ids:
+        if nid == ref.id or not carry:
+            continue
+        nref = db.collection("receipts").document(nid)
+        n = nref.get().to_dict() or {}
+        add = {k: v for k, v in carry.items() if not n.get(k)}
+        if add:
+            nref.update(add)
+    if ref.id not in ids:
+        ref.delete()
+    db.collection("receiptMail").document(m["id"]).set({"receiptId": ids[0], "receiptIds": ids}, merge=True)
+    return {"ok": True, "split": len(ids), "ids": ids,
+            "summary": "%d separate receipts, one for each PDF" % len(ids)}, usage
 
 
 def _b36(n):
@@ -1244,7 +1470,7 @@ def _board(db, board_id):
         now = _app_time()
         board = {"name": "Pickups", "color": "#e07b24", "order": 3, "visibleTo": [], "ownerOnly": False,
                  "columns": [{"id": "pk0", "name": "Ready to pick up"}, {"id": "pk1", "name": "Picked up"}],
-                 "labels": DEFAULT_LABELS, "createdAt": now, "updatedAt": now}
+                 "doneColumn": "pk1", "labels": DEFAULT_LABELS, "createdAt": now, "updatedAt": now}
         ref.set(board)
         return board_id, board
     if board_id != "todo":
@@ -2180,11 +2406,8 @@ def _save_held(db, jobs_of, report, saved=None, pats=None):
             report["zero"] = report.get("zero", 0) + 1
             continue
         try:
-            rid, what = _save(db, m, got, jobs_of(), to_pay=_to_pay(db, got, m))
-            if what in (TO_PAY, NOT_RECEIPT):
-                _not_a_receipt_seen(db, dict(m, id=s.id), rid, what, report, got=firestore.DELETE_FIELD)
-                continue
-            personal = _file_personal(db, rid, got, m)
+            # Held with each of its PDFs read (`parts`): one receipt each.
+            saves = _save_all(db, m, got, jobs_of())
         except Exception as e:      # noqa: BLE001
             tries = (d.get("tries") or 0) + 1
             print("receipts: could not save held", s.id, e)
@@ -2194,16 +2417,17 @@ def _save_held(db, jobs_of, report, saved=None, pats=None):
         # Read with no body kept: its sender, subject and lines say whether
         # it is a Menards rebate receipt.
         rebate = is_menards_rebate(m.get("from"), m.get("subject"), "", got.get("lines"))
-        _seen(db, s.id, "personal" if personal else "receipt", receiptId=rid, got=firestore.DELETE_FIELD,
-              labelled=False, rebate=rebate)
-        if rebate:
-            _tag_rebate(db, rid)
-        if personal:
-            report["personal"] += 1
-            continue
-        if saved is not None:
-            saved.append(rid)
-        report["added" if what == "added to" else "new"] += 1
+        kept = _note_saved(db, dict(m, id=s.id), saves, report, receipt={"labelled": False, "rebate": rebate},
+                           got=firestore.DELETE_FIELD)
+        for rid, what, personal in kept:
+            if rebate:
+                _tag_rebate(db, rid)
+            if personal:
+                report["personal"] += 1
+                continue
+            if saved is not None:
+                saved.append(rid)
+            report["added" if what == "added to" else "new"] += 1
 
 
 # ------------------------------------------------------------ the year's pull
@@ -2247,7 +2471,7 @@ def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of):
     p = dict(st_data.get("pull") or {})
     outs = []
     for _ in range(PULL_STEPS_PER_RUN):
-        out = _pull_step(client, db, p, since_epoch, bank, jobs_of)
+        out = _pull_step(client, db, p, since_epoch, bank, jobs_of, st_data.get("pdfEachFrom"))
         if out is None:
             break
         outs.append(out)
@@ -2259,7 +2483,7 @@ def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of):
     return outs[0] if len(outs) == 1 else {"steps": outs}
 
 
-def _pull_step(client, db, p, since_epoch, bank, jobs_of):
+def _pull_step(client, db, p, since_epoch, bank, jobs_of, each_from=()):
     """One stretch of the year's pull. Returns what it did, or None."""
     try:
         cursor = float(p.get("cursor"))
@@ -2347,7 +2571,7 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of):
     to_read = to_read[:allowed]
 
     def one(m):
-        return m, read_receipt(client, m, bank)
+        return m, read_email(client, m, bank, each_pdf(m, each_from))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = {pool.submit(one, m): m for m in to_read}
@@ -2381,23 +2605,21 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of):
                 # A bill from those months still says it is owed: under
                 # Invoices to pay like a new one, marked `pulled` -- the app
                 # keeps those apart, most were paid long since.
-                rid, what = _save(db, m, got, jobs_of(), extra={"pulled": True}, to_pay=_to_pay(db, got, m))
-                if what in (TO_PAY, NOT_RECEIPT):
-                    _not_a_receipt_seen(db, m, rid, what, None, pulled=True)
-                    key = "toPay" if what == TO_PAY else "passed"
-                    out[key] = out.get(key, 0) + 1
-                    continue
-                personal = _file_personal(db, rid, got, m)
+                saves = _save_all(db, m, got, jobs_of(), extra={"pulled": True})
             except Exception as e:      # noqa: BLE001
                 print("receipts: pull could not save", m["id"], e)
                 _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1, pulled=True)
                 continue
+            for _, what, _ in saves:
+                if what in (TO_PAY, NOT_RECEIPT):
+                    key = "toPay" if what == TO_PAY else "passed"
+                    out[key] = out.get(key, 0) + 1
             rebate = is_menards_rebate(m.get("from"), m.get("subject"), m.get("text"))
-            _seen(db, m["id"], "personal" if personal else "receipt", receiptId=rid, labelled=False,
-                  rebate=rebate, pulled=True)
-            if rebate:
-                _tag_rebate(db, rid)
-            out["saved"] += 1
+            kept = _note_saved(db, m, saves, None, receipt={"labelled": False, "rebate": rebate}, pulled=True)
+            for rid, _, _ in kept:
+                if rebate:
+                    _tag_rebate(db, rid)
+                out["saved"] += 1
     state.set({"pull": {"counts": {"read": firestore.Increment(out["read"]),
                                    "saved": firestore.Increment(out["saved"]),
                                    "passed": firestore.Increment(out["passed"])},
@@ -2545,7 +2767,7 @@ def run(client, manual=False):
             return loaded["jobs"]
 
         def one(m):
-            return m, read_receipt(client, m, bank)
+            return m, read_email(client, m, bank, each_pdf(m, st_data.get("pdfEachFrom")))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
             futures = {pool.submit(one, m): m for m in to_read}
@@ -2609,28 +2831,26 @@ def run(client, manual=False):
                         _hold(db, m, got, card)
                         report["held"] += 1
                         continue
-                    rid, what = _save(db, m, got, jobs_of(), to_pay=_to_pay(db, got, m))
-                    if what in (TO_PAY, NOT_RECEIPT):
-                        _not_a_receipt_seen(db, m, rid, what, report)
-                        continue
-                    # Personal purchases are kept now, filed under Personal
-                    # (Jonah, 21 Oct 2026, reversing his 5 Oct "never
-                    # written"); they never go on to QuickBooks.
-                    personal = _file_personal(db, rid, got, m)
+                    # One receipt, or one for each PDF (ONE RECEIPT IN EACH
+                    # PDF). Personal purchases are kept now, filed under
+                    # Personal (Jonah, 21 Oct 2026, reversing his 5 Oct
+                    # "never written"); they never go on to QuickBooks.
+                    saves = _save_all(db, m, got, jobs_of())
                 except Exception as e:      # noqa: BLE001
                     print("receipts: could not save", m["id"], e)
                     _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
-                _seen(db, m["id"], "personal" if personal else "receipt", receiptId=rid, labelled=False,
-                      rebate=m["id"] in rebates)
-                if m["id"] in rebates:
-                    _tag_rebate(db, rid)
-                if personal:
-                    report["personal"] += 1
-                    continue
-                saved.append(rid)
-                report["added" if what == "added to" else "new"] += 1
+                kept = _note_saved(db, m, saves, report,
+                                   receipt={"labelled": False, "rebate": m["id"] in rebates})
+                for rid, what, personal in kept:
+                    if m["id"] in rebates:
+                        _tag_rebate(db, rid)
+                    if personal:
+                        report["personal"] += 1
+                        continue
+                    saved.append(rid)
+                    report["added" if what == "added to" else "new"] += 1
 
         if reading:
             _save_held(db, jobs_of, report, saved, pats)

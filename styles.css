@@ -4160,6 +4160,12 @@
   .rc-tagbar { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
   .rc-tagn { font-weight:400; opacity:.75; }
   @media (max-width:720px) { .rc-tagedit .btn, .rc-tagbar .btn { min-height:44px; } }
+  /* A note on a receipt for Claude (receipts.js noteHtml / noteEditHtml). */
+  .rc-mynote { margin:6px 0; padding:6px 10px; border-left:3px solid var(--brand); border-radius:6px; background:var(--surface-2);
+    font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .rc-row + .rc-mynote { margin:-2px 0 6px; }
+  .rc-note-box { width:100%; box-sizing:border-box; min-height:70px; resize:vertical; font:inherit; font-size:16px; padding:8px;
+    border:1px solid var(--border-strong); border-radius:8px; background:var(--surface); color:var(--text); margin-bottom:6px; }
   .rc-menu { position:relative; display:inline-block; flex:none; }
   .rc-menu > summary { list-style:none; }
   .rc-menu > summary::-webkit-details-marker { display:none; }
