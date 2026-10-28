@@ -2975,6 +2975,8 @@ function renderOrderList() {
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailSupplierOrder(\'' + ordId(v) + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '') : '') +
         '</div>' : '') +
+      // Menards / Home Depot: the saved list Claude makes there (storelists.js).
+      (v && window.YDStoreLists ? YDStoreLists.html(currentJobId, v) : '') +
       rows + orderDeliveryRow(dels[v], v, vname(v));
   }).join('') +
     (prices && (sum || unpriced || delUnpriced) ? '<div class="order-cost">Still to order comes to about <b>' + fmtMoney((sum + delSum) / 100) + '</b> before tax' +
@@ -3254,6 +3256,9 @@ function renderOrdersOverview() {
         (when ? ' <span class="ord-when">' + esc(when) + '</span>' : '') + (extra || '') + '</div>';
   };
   const n = (k, word) => k + ' ' + word + (k === 1 ? '' : 's');
+  // A job's Menards / Home Depot part: the saved list Claude makes there
+  // (storelists.js) -- its button, or where the list stands.
+  const storeList = (j, v) => v && window.YDStoreLists ? YDStoreLists.html(j.id, v) : '';
   let grand = 0, grandUnpriced = 0, grandDelUnpriced = 0;
 
   // BY SUPPLIER: one card per supplier, each job's lines under its name.
@@ -3270,7 +3275,7 @@ function renderOrdersOverview() {
       }).join('');
       const dv = (dels[j.id] || {})[v];
       if (dv) { sum += dv.cents; if (dv.problems.length) grandDelUnpriced++; }
-      return jobHead(j) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
+      return jobHead(j) + storeList(j, v) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
     }).join('');
     grand += sum; grandUnpriced += unpriced;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
@@ -3317,7 +3322,7 @@ function renderOrdersOverview() {
             (onJobsHere > 1 ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy all ' + onJobsHere + ' jobs’ order</button>' : '') +
             (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
             : '<span class="muted">pick each one’s Supplies item on the job</span>') +
-        '</div>' + rows + orderDeliveryRow(dv, v, vname(v), j.id);
+        '</div>' + storeList(j, v) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
     }).join('');
     grand += jobSum; grandUnpriced += jobUnpriced;
     const named = vs.filter(Boolean).length;

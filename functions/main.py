@@ -1190,6 +1190,54 @@ def _supplies(request, path, headers):
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
+# ---------------------------------------------------------------- store lists
+#
+# Whether the routine on Jonah's computer that makes Menards / Home Depot
+# lists (storelists.js) has anything to do. It asks every few minutes and,
+# with nothing waiting, stops there -- his Chrome is opened only when there
+# is work. Two counts, nothing about any job, so no sign-in, like /version:
+#   waiting: lists asked for (or one left "working" by a run that died);
+#   unbooked: estimates the customer said yes to in the last two days that
+#     are not booked yet. The owner's device books those (sync.js
+#     bookIfAccepted) and asks for their lists as it does -- the routine's
+#     own Job Hub tab is one, so a yes becomes a list without waiting for
+#     Jonah to open the app.
+STORE_LIST_STALE_S = 2 * 3600
+STORE_LIST_UNBOOKED_DAYS = 2
+
+
+def _store_lists_waiting():
+    from digest import qb_accepted
+    now = datetime.datetime.now(datetime.timezone.utc)
+    waiting = 0
+    for d in _db.collection("storeLists").where("status", "in", ["asked", "working"]).stream():
+        r = d.to_dict() or {}
+        if r.get("status") == "asked":
+            waiting += 1
+            continue
+        try:
+            started = datetime.datetime.fromisoformat(str(r.get("startedAt") or "").replace("Z", "+00:00"))
+        except ValueError:
+            started = None
+        if started is None or (now - started).total_seconds() > STORE_LIST_STALE_S:
+            waiting += 1
+    # The same tests as bookIfAccepted: a bid still, said yes to, not a snow
+    # contract, not moved by hand after the yes was seen.
+    since = (now - datetime.timedelta(days=STORE_LIST_UNBOOKED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    unbooked = 0
+    for d in _db.collection("jobs").where("acceptedSeenAt", ">=", since).stream():
+        j = d.to_dict() or {}
+        q = j.get("qbEstimate") or {}
+        if not qb_accepted(q) or q.get("snowBid") or j.get("removeWhy") or j.get("deletedAt"):
+            continue
+        if j.get("jobStatus") in ("booked", "inprogress", "complete", "active") or j.get("bidStage") == "won":
+            continue
+        if str(j.get("bidStageAt") or "") > str(j.get("acceptedSeenAt") or ""):
+            continue
+        unbooked += 1
+    return {"waiting": waiting, "unbooked": unbooked}
+
+
 # ---------------------------------------------------------------- version
 
 # Which code is running, so whether a deploy went live can be checked from
@@ -1229,6 +1277,13 @@ def claude(request):
     if path == "/version":
         return (json.dumps({"revision": os.environ.get("K_REVISION", ""), "code": _code_fingerprint()}), 200,
                 dict(headers, **{"Content-Type": "application/json"}))
+    if path == "/storelists/waiting":
+        try:
+            body, code = _store_lists_waiting(), 200
+        except Exception as e:                      # noqa: BLE001
+            print("store lists count failed:", e)
+            body, code = {"error": "not counted"}, 500
+        return (json.dumps(body), code, dict(headers, **{"Content-Type": "application/json"}))
     if path.startswith("/qb"):
         return _quickbooks(request, path, headers)
     if path.startswith("/digest"):

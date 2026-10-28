@@ -147,6 +147,9 @@ service cloud.firestore {
     // What the business charges, one entry per priced thing (estimate.js).
     // Prices -- so whoever deals with jobs, never crew.
     match /priceBook/{docId} { allow read: if canSee('jobs');      allow write: if canChange('jobs'); }
+    // A job's Menards / Home Depot list, asked for in the app and made by
+    // the routine on Jonah's computer, signed in as him (storelists.js).
+    match /storeLists/{docId} { allow read: if canSee('jobs');     allow write: if canChange('jobs'); }
     // How estimates are priced (pricing.js): markups, the crew-day rate,
     // profit targets, delivery rates; pricing/claude is the owner's takeoff
     // rules for Claude. Whoever builds estimates reads them; only the owner
