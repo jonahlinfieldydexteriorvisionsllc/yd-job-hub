@@ -394,7 +394,9 @@ printed: ton, yd, bag, ea, pallet, sq ft, gal.
 as a piece of that one set ("Tailgate handle set, piece 1 of 2"), and count it as ONE thing bought in \
 the summary -- never "two handles".
 - unit_price: the price of one unit as printed, in dollars; 0 when not shown.
-- tax: the sales tax in dollars, 0 if none is shown. total: what was charged in all.
+- tax: the sales tax in dollars, 0 if none is shown. total: what was charged in all. On an invoice \
+that shows a payment or deposit already taken off (paid by card, a prior payment), total is the \
+invoice's total before it -- what the goods and services cost -- never the balance left to pay.
 - fulfilment: "delivery" or "pickup" when the email says which, else "". delivery_date: the \
 delivery (or pickup) date, YYYY-MM-DD, or "". due_date: when an invoice must be paid, \
 YYYY-MM-DD, or "". po: a PO number or job name written on the order, exactly as printed, or "".
