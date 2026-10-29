@@ -874,8 +874,11 @@ def go_through(client, by="friday", budget=BUDGET_S):
             got, used, err = rc._ask(client, SYSTEM, content, ANSWER_SCHEMA, "medium")
             rc._spend(db, cost["day"], used or {}, "receiptnotes")
             if err or not got:
+                # Counted as left too, so the next evening tries them again
+                # rather than a week later (due()).
                 print("receipt notes: a call failed:", err)
                 out["failed"] += len(batch)
+                out["left"] += len(batch)
                 continue
             answered = set()
             for a in got.get("answers") or []:
