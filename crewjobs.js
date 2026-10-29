@@ -922,6 +922,8 @@
       // Too much rock, no dump trailer, took a day longer -- noted for Jonah
       // and the next bid (jobissues.js), with what they noted here before.
       '<div class="cj-sec cj-issues" id="cjIssues" data-job="' + safe(id) + '"></div>' +
+      // Said or typed on the job, for the day's log (joblog.js).
+      '<div class="cj-sec cj-log" id="cjLog" data-job="' + safe(id) + '"></div>' +
       // A paper receipt for this job: it goes on the job by itself
       // (receipts.js rcPhotoForJob) -- no asking which job.
       (preview ? '' : '<div class="cj-receipt"><button class="btn cj-go-btn" onclick="rcPhotoForJob(\'' + safe(id) + '\')">' +
@@ -960,6 +962,7 @@
     if (bar) bar.innerHTML = barHtml(id, j, preview);
     if (window.YDJobPhotos) YDJobPhotos.mount(el('cjPhotos'), id);
     if (window.YDJobIssues) YDJobIssues.mount(el('cjIssues'), id, j, preview);
+    if (window.YDJobLog) YDJobLog.mount(el('cjLog'), id, j, preview);
     // What the signed PDF says about the job: the crew have no job form.
     if (window.YDSignatures && el('cjSigs') && j) {
       YDSignatures.mount(el('cjSigs'), id, {

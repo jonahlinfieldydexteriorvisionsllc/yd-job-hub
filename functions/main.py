@@ -26,6 +26,7 @@ import datetime
 import hmac
 import json
 import os
+import re
 import time
 
 import anthropic
@@ -507,9 +508,20 @@ def _digest(request, path, headers):
                 posted = result
             except Exception as e:                      # noqa: BLE001
                 print("the week's posts not made:", e)
+        # Every evening, after the summary: each job worked today gets its
+        # daily log (joblog.py) -- hours, ticks, photos and notes in code,
+        # Claude only for notes to read.
+        logged = None
+        if slot == "evening":
+            try:
+                import joblog
+                logged = joblog.evening(_claude())
+            except Exception as e:                      # noqa: BLE001
+                print("daily logs not written:", e)
         if failed is not None:
             return (json.dumps({"error": failed}), 500, json_headers)
-        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted}), 200, json_headers)
+        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted, "logs": logged}),
+                200, json_headers)
 
     if path == "/digest/preview":
         if origin_blocked(request):
@@ -1019,6 +1031,52 @@ def _followup(request, path, headers):
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
+# ---------------------------------------------------------------- daily logs
+#
+# A job's day (joblog.py): "Write today's log now" and "Draft an update to
+# the customer" on the Job tab, for whoever may change jobs. The job is read
+# here, not taken from the app; the update goes to Gmail Drafts only.
+
+
+def _joblog(request, path, headers):
+    import joblog
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path not in ("/joblog/now", "/joblog/update"):
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request, "jobs", "change")
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    body = request.get_json(silent=True) or {}
+    job_id = str(body.get("jobId") or "")
+    day = str(body.get("day") or joblog.today())
+    if not job_id or "/" in job_id or not re.match(r"^\d{4}-\d{2}-\d{2}$", day):
+        return (json.dumps({"error": "which job and day?"}), 400, json_headers)
+    try:
+        cost_day = _check_and_count_usage(uid)
+    except RuntimeError as e:
+        return (json.dumps({"error": str(e)}), 429, json_headers)
+    try:
+        if path == "/joblog/now":
+            result = joblog.write(_claude(), _db, job_id, day, by=uid)
+            if result.get("empty"):
+                result = {"error": "Nothing on this job that day yet — no hours, ticks, photos or notes."}
+        else:
+            result, usage = joblog.draft_update(_claude(), _db, job_id, day, uid)
+            if usage is not None:
+                _record_spend(cost_day, "joblog", usage, joblog.MODEL)
+    except anthropic.RateLimitError:
+        return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("joblog %s failed: %s" % (path, e))
+        return (json.dumps({"error": "Not written. Try again."}), 502, json_headers)
+    return (json.dumps(result, default=str), 400 if result.get("error") else 200, json_headers)
+
+
 # ---------------------------------------------------------------- estimates
 #
 # The estimate on the Job tab (estimates.py): the site-visit notes and the
@@ -1306,6 +1364,8 @@ def claude(request):
         return _supplies(request, path, headers)
     if path.startswith("/docs"):
         return _docs(request, path, headers)
+    if path.startswith("/joblog"):
+        return _joblog(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

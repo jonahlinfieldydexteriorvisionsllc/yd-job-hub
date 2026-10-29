@@ -758,6 +758,32 @@ service cloud.firestore {
       allow delete: if canChange('jobs');
     }
 
+    // Notes on a job's day, typed or said into the phone's keyboard
+    // microphone (joblog.js; Jonah, 26 Oct 2026: voice notes and photos made
+    // into a daily log). Anyone working writes their own; whoever sees jobs
+    // reads them all, a crew member their own (their page asks by uid). The
+    // log made from them (jobLogs) is written by the server only.
+    match /jobNotes/{noteId} {
+      allow read: if canSee('jobs') || (isStaff() && resource.data.uid == request.auth.uid);
+      allow create: if isStaff() && request.resource.data.uid == request.auth.uid
+        && noteId.matches('jn[a-z0-9]+')
+        && request.resource.data.keys().hasOnly(['uid', 'by', 'jobId', 'jobName', 'day', 'text', 'at', 'editedAt'])
+        && request.resource.data.text is string && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.jobId is string && request.resource.data.jobId.size() > 0
+        && request.resource.data.jobId.size() <= 100
+        && request.resource.data.day is string && request.resource.data.day.size() == 10;
+      allow update: if (canChange('jobs') || (isStaff() && resource.data.uid == request.auth.uid))
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt'])
+        && request.resource.data.text is string && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000;
+      allow delete: if canChange('jobs') || (isStaff() && resource.data.uid == request.auth.uid);
+    }
+    match /jobLogs/{logId} {
+      allow read: if canSee('jobs');
+      allow write: if false;
+    }
+
     // Photos on a job (jobphotos.js; Jonah, 12 Oct 2026: the crew upload
     // photos on the job page, each marked before / during / after, showing
     // who took it). The picture is in Cloud Storage (storage.rules); this is

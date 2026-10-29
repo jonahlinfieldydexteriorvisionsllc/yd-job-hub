@@ -5720,3 +5720,19 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; }
 .ord-sku-add label { display:inline-flex; gap:4px; align-items:center; }
 .ord-link-in { width:180px; }
+
+/* A job's daily log (joblog.js): the note box, said or typed, and the days. */
+.jl-box { margin:2px 0 10px; }
+.jl-text { width:100%; min-height:84px; font-size:16px; padding:10px 12px; border-radius:10px; box-sizing:border-box; }
+.jl-acts { display:flex; flex-wrap:wrap; align-items:center; gap:8px 14px; margin-top:6px; font-size:13px; }
+.jl-h { font-weight:700; font-size:13px; margin:8px 0 4px; }
+.jl-notes { display:flex; flex-direction:column; gap:6px; margin:4px 0 10px; }
+.jl-note { background:var(--surface-2); border-radius:8px; padding:8px 12px; }
+.jl-note-top { display:flex; align-items:baseline; gap:4px; font-size:13px; }
+.jl-x { margin-left:auto; min-width:32px; }
+.jl-note-text { font-size:14px; margin-top:2px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.jl-days { display:flex; flex-direction:column; gap:10px; margin-top:10px; }
+.jl-day { border-left:4px solid var(--st-info, var(--border)); background:var(--surface-2); border-radius:6px; padding:9px 12px; }
+.jl-day-top { font-size:14px; }
+.jl-day-text { font-size:14px; margin-top:4px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.jl-done { color:var(--st-done, inherit); font-weight:600; }
