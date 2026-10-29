@@ -1,6 +1,9 @@
 #!/bin/bash
 # Put a new Claude (Anthropic) API key on the Job Hub server, in Cloud Shell:
 #   bash claudekey.sh
+# Or only see which key the server has now, changing nothing:
+#   bash claudekey.sh check
+# (prints its start and end, the same short form the Console's key list shows)
 #
 # Anthropic keys can expire (the first one ran out 31 Oct 2026). Make the new
 # one on platform.claude.com/settings/keys with Expiration "Never" and Workspace
@@ -16,20 +19,30 @@ R=us-central1
 S=yd-claude
 URL=https://yd-claude-147632184660.us-central1.run.app
 
-# Which secret the server reads the key from -- looked up, not assumed.
-SEC="$(gcloud run services describe "$S" --region "$R" --project "$P" --format=json | python3 -c '
+# Which secret (and which version of it) the server reads the key from --
+# looked up, not assumed.
+read -r SEC VER <<<"$(gcloud run services describe "$S" --region "$R" --project "$P" --format=json | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 for c in d["spec"]["template"]["spec"]["containers"]:
     for e in c.get("env", []):
         if e.get("name") == "ANTHROPIC_API_KEY":
-            print(((e.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name", ""))
+            r = (e.get("valueFrom") or {}).get("secretKeyRef") or {}
+            print(r.get("name", ""), r.get("key") or "latest")
 ')"
 if [ -z "$SEC" ]; then
   echo "The server does not read ANTHROPIC_API_KEY from Secret Manager -- nothing changed. Tell Claude."
   exit 1
 fi
-echo "The server reads the key from secret: $SEC"
+echo "The server reads the key from secret: $SEC (version: $VER)"
+
+if [ "${1:-}" = "check" ]; then
+  K="$(gcloud secrets versions access "$VER" --secret "$SEC" --project "$P")"
+  echo "The server's key starts ${K:0:16} and ends ${K: -4}"
+  echo "Find the key with that start and end on platform.claude.com/settings/keys. Nothing changed."
+  unset K
+  exit 0
+fi
 
 read -rsp "Paste the NEW Claude key (it won't show on screen), then press Enter: " K; echo
 K="$(printf '%s' "$K" | tr -d '[:space:]')"
