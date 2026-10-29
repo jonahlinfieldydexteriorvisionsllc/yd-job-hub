@@ -305,10 +305,38 @@ def _reading_due(st):
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
-         "utilities_and_phone", "loan_payment", "travel", "other"]
+         "utilities_and_phone", "loan_payment", "travel", "company", "marketing", "other"]
 # A payment on a loan (Jonah, 22 Oct 2026): offered for 🏦 Loan payment on the
 # Receipts tab, and never sent to QuickBooks as an expense (_not_for_qb).
 LOAN_KIND = "loan_payment"
+# Jonah, 29 Oct 2026: "make accountant, bookkeeper and tax-prep bills start on
+# LLC overhead by themselves". What the company itself costs is one kind,
+# `company`, which the Receipts tab starts on 🏢 LLC overhead (receipts.js
+# DEST_OF_KIND); getting the word out -- ads, the website, signs, branded
+# clothing -- is `marketing`, started on 📣 Marketing ("there should be a
+# marketing tag"). Claude reads both from what the bill says; a store whose own
+# name says it keeps books or does taxes is one by its name, whatever Claude
+# called it (kind_of) -- QuickBooks and the like are software, not a person
+# doing the books, and stay Office & software.
+COMPANY_KIND = "company"
+ACCOUNTING = re.compile(r"\b(cpa|cpas|accountants?|accounting|bookkeep(er|ers|ing)|"
+                        r"tax (prep|preparation|preparers?|services?|pros?)|"
+                        r"h r block|jackson hewitt|liberty tax)\b")
+NOT_ACCOUNTING = re.compile(r"\b(quickbooks|intuit|turbotax|xero|freshbooks|wave|software|app)\b")
+# Jonah, 29 Oct 2026: "anthropic bills should auto go to office overhead" --
+# the Claude plan and the API credit Job Hub runs on. By the store's name,
+# whoever Claude thought it was for: Office & software, the business's.
+OFFICE_STORES = re.compile(r"\b(anthropic|claude ai)\b")
+# Jonah, 29 Oct 2026: a subcontractor's receipts "should auto go to
+# subcontractor". A bill from anyone set up on All Jobs -> Subcontractors
+# (_a_subs_bill; their names stay in settings, out of this public code) is
+# theirs, read as what it may -- only goods a sub also sells over the counter
+# stay goods, for the jobs (receipts.js defaultDest says the same).
+SUB_GOODS = ("materials", "plants")
+# Jonah, 29 Oct 2026: "i also want a rental tag". A label, not a place: a
+# machine rented for a job still costs that job. A receipt read as a rental
+# is saved with the 🚜 Rental tag on it (receipts.js RECEIPT_TAGS).
+RENTAL_KIND = "rental"
 
 # Jonah, 26 Oct 2026: "most oreilly receipts are for vehicle parts so those
 # would go under vehicle expenses -- every air filter, oil filter, oil, all
@@ -332,14 +360,31 @@ NOT_UPKEEP = re.compile(r"\b(linseed|teak|deck|stain|olive|cooking|vegetable|can
 NOT_GOODS = re.compile(r"\b(shipping|delivery|freight|handling|fee|fees|surcharge|core|deposit|tax|discount|"
                        r"not itemised)\b")
 LEFT_AS_READ = ("loan_payment", "travel", "subcontractor", "insurance", "office_and_software",
-                "utilities_and_phone", "fuel")
+                "utilities_and_phone", "fuel", COMPANY_KIND, "marketing")
+
+
+def is_office_store(vendor):
+    """A store whose every bill is the office's (OFFICE_STORES)."""
+    return bool(OFFICE_STORES.search(_norm(vendor)))
+
+
+def is_accounting(vendor):
+    """A store whose own name says it keeps books or does taxes (ACCOUNTING)."""
+    name = _norm(vendor)
+    return bool(ACCOUNTING.search(name)) and not NOT_ACCOUNTING.search(name)
 
 
 def kind_of(got, lines):
     """What the purchase was: Claude's word for it, unless his rule above
     says otherwise."""
     kind = got.get("kind") if got.get("kind") in KINDS else "other"
-    if kind in LEFT_AS_READ or got.get("whose") == "personal" or got.get("doc_type") == "person_payment":
+    if got.get("doc_type") != "person_payment" and is_office_store(got.get("vendor")):
+        return "office_and_software"
+    if got.get("whose") == "personal" or got.get("doc_type") == "person_payment":
+        return kind
+    if kind != LOAN_KIND and is_accounting(got.get("vendor")):
+        return COMPANY_KIND
+    if kind in LEFT_AS_READ:
         return kind
     goods = [_norm(l.get("name")) for l in lines if (l.get("cents") or 0) > 0 and not NOT_GOODS.search(_norm(l.get("name")))]
     if goods and all(UPKEEP.search(g) and not NOT_UPKEEP.search(g) for g in goods):
@@ -411,10 +456,17 @@ payment confirmation, the number of the invoice it pays.
 - vendor: the business that sold it ("Home Depot", "Menards", "the stone yard").
 - kind: loan_payment for a payment on a loan or financing agreement (a truck, trailer or \
 machine loan, a business loan or line of credit) -- never for paying a supplier's invoice or a \
-credit card bill. travel for a business trip away from home: a hotel or motel, a flight, a rental car, parking or tolls on the trip, a meal while travelling.
+credit card bill. travel for a business trip away from home: a hotel or motel, a flight, a rental car, parking or tolls on the trip, a meal while travelling. \
+rental for renting equipment or a machine (a skid steer, mini excavator, trencher, compactor, \
+a tool rented by the day) -- a rental car on a trip is travel. company for what the company \
+itself costs: an accountant's, bookkeeper's or tax preparer's bill, a lawyer, the state's LLC \
+filing or annual report fee. marketing for getting the word out: advertising (Google, Facebook, \
+Yelp, Angi, Nextdoor), the website and its domain, yard signs, flyers, door hangers, business \
+cards, truck lettering, and clothing or hats printed or embroidered with the company's name or \
+logo.
 - whose: "personal" for things clearly for a household (groceries, clothes, entertainment, \
-personal care, a service at Jonah's own home); "business" for anything a landscaping company \
-buys or pays for; "unsure" otherwise.
+personal care, a service at Jonah's own home) -- but clothing with the company's name or logo on \
+it is "business"; "business" for anything a landscaping company buys or pays for; "unsure" otherwise.
 - is_purchase: false for marketing, quotes or estimates not yet bought, statements of account, \
 failed-payment notices, and anything sent BY YD Exterior Visions to its own customers.
 - doc_type: shipping_notice for "shipped" or "delivered" messages about an order. \
@@ -1092,14 +1144,22 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
             "subject": m["subject"][:300], "at": m["internalDate"]}
     if part:
         mail.update({"pdf": part.get("name") or "", "pdfN": part.get("n") or 0, "pdfOf": part.get("of") or 0})
+    kind, whose = kind_of(got, lines), got.get("whose") or "unsure"
+    # A subcontractor's bill (SUB_GOODS) and a store whose bills are all the
+    # office's (OFFICE_STORES) are the business's, whatever the read said.
+    if kind not in SUB_GOODS and kind != LOAN_KIND and got.get("doc_type") != "person_payment" \
+            and _a_subs_bill(db, got, m):
+        kind, whose = "subcontractor", "business"
+    elif kind == "office_and_software" and is_office_store(got.get("vendor")):
+        whose = "business"
     fields = {
         "vendor": (got.get("vendor") or "").strip()[:120] or m["from"][:120],
         "orderNo": (got.get("order_number") or "").strip()[:60],
         "date": got.get("date") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("date") or "") else
         datetime.datetime.fromtimestamp(m["internalDate"] / 1000, dg.TZ).strftime("%Y-%m-%d"),
         "docType": got.get("doc_type") or "other",
-        "kind": kind_of(got, lines),
-        "whose": got.get("whose") or "unsure",
+        "kind": kind,
+        "whose": whose,
         "paid": bool(got.get("paid")),
         "lines": lines, "taxCents": tax, "totalCents": total,
         "deliverTo": (got.get("deliver_to") or "").strip()[:200],
@@ -1162,12 +1222,14 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
             patch.update({"status": "new", "paidOn": fields["date"], "statusChange": _job_hub_stamp("new")})
         ref.update(patch)
         return ref.id, "added to"
-    # A photographed paper receipt has no email to link to.
+    # A photographed paper receipt has no email to link to. A rental starts
+    # with its 🚜 Rental tag (RENTAL_KIND); taken off by hand, it stays off.
     ref.set(dict(fields, **dict({
         "status": stages.RECEIPT_TO_PAY if to_pay else "new", "skipWhy": "", "skippedBy": "",
         "splits": [], "mail": [mail], "link": gmail_link(m["threadId"]) if m["threadId"] else "",
         "createdAt": dg._now().isoformat(), "model": MODEL,
-    }, **dict({"statusChange": _job_hub_stamp(stages.RECEIPT_TO_PAY)} if to_pay else {}, **(extra or {})))))
+    }, **dict({"tags": ["rental"]} if fields["kind"] == RENTAL_KIND else {},
+              **dict({"statusChange": _job_hub_stamp(stages.RECEIPT_TO_PAY)} if to_pay else {}, **(extra or {}))))))
     return rid, TO_PAY if to_pay else "new"
 
 
@@ -1395,7 +1457,7 @@ def _file_personal(db, rid, got, m=None):
     itself read as personal: one a person has sorted, or that an earlier
     email about the same order called the business's, is left as it is.
     Returns True when the receipt is (now) filed only under Personal."""
-    if got.get("whose") != "personal":
+    if got.get("whose") != "personal" or is_office_store(got.get("vendor")):
         return False
     if _a_subs_bill(db, got, m):
         return False

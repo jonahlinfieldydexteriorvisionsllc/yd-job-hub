@@ -63,7 +63,8 @@
     materials: 'Materials', plants: 'Plants', dump_and_disposal: 'Dump & disposal',
     equipment_and_repairs: 'Equipment & repairs', fuel: 'Fuel', tools: 'Tools', rental: 'Rental',
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
-    insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', travel: 'Travel', other: 'Other',
+    insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', travel: 'Travel',
+    company: 'Company costs', marketing: 'Marketing', other: 'Other',
   };
   // Why a receipt was set aside, in the words of the old pick list. Only read
   // back now: since 13 Oct `skipWhy` is the note typed when it was set aside
@@ -118,6 +119,12 @@
   // shop and the office. Upkeep the reader reads as equipment & repairs
   // (oil, filters -- receipts.py kind_of) starts on Equipment maintenance.
   //
+  // Jonah, 29 Oct 2026: accountant, bookkeeper and tax-prep bills "start on
+  // LLC overhead by themselves" -- the reader's `company` kind -- and "there
+  // should be a marketing tag": ads, the website, signs, flyers and branded
+  // clothing ("I want to not have a million tags"), the reader's `marketing`.
+  // A business cost like the others, sent to QuickBooks as usual.
+  //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
   // is one more row, and every list below follows.
@@ -131,6 +138,7 @@
     { id: 'equipment', chip: '🚜 Equipment', name: 'Equipment', view: '🚜 Equipment', total: 'Equipment' },
     { id: 'upkeep', chip: '🔧 Equipment maintenance', name: 'Equipment maintenance', view: '🔧 Maintenance', total: 'Equipment maintenance' },
     { id: 'travel', chip: '✈️ Travel', name: 'Travel', view: '✈️ Travel', total: 'Travel' },
+    { id: 'marketing', chip: '📣 Marketing', name: 'Marketing', view: '📣 Marketing', total: 'Marketing' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
     { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
     { id: 'personal', chip: '👤 Personal', name: 'Personal', view: '👤 Personal', total: 'Personal' },
@@ -142,7 +150,7 @@
   const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'upkeep',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop',
-    loan_payment: 'loan', travel: 'travel' };
+    loan_payment: 'loan', travel: 'travel', company: 'llc', marketing: 'marketing' };
   const destOf = s => s.to || 'job';
   const dest = {};            // receipt id -> where it is going, once picked
   const chosenGear = {};      // receipt id -> vehicle picked
@@ -154,12 +162,16 @@
   const subsKnown = () => (window.YDSubs && YDSubs.list ? YDSubs.list() : []);
   function defaultDest(r) {
     if (r.kind === 'subcontractor') return 'sub';
+    // A bill from one of his subcontractors is theirs (Jonah, 29 Oct 2026:
+    // their receipts "should auto go to subcontractor"), whoever
+    // Claude thought it was for and whatever job's address it names. A
+    // subcontractor that also sells materials keeps those for the jobs
+    // (receipts.py SUB_GOODS).
+    if (r.kind !== 'materials' && r.kind !== 'plants' && r.kind !== 'loan_payment' && subMatch(r)) return 'sub';
     if (r.suggest && r.suggest.jobId) return 'job';
     // Claude read it as clearly a household's (a photo still to sort --
     // the email reader files those itself, functions/receipts.py).
     if (r.whose === 'personal') return 'personal';
-    // A subcontractor that also sells materials keeps those for the jobs.
-    if ((!r.kind || r.kind === 'other') && subMatch(r)) return 'sub';
     return DEST_OF_KIND[r.kind] || 'job';
   }
   // The vehicles and machines on the Equipment tab, vehicles first.
@@ -1156,12 +1168,16 @@
   // starter tag by its id, his own by the words typed, spelt as first typed
   // (the way Supplies keeps its "Used for" tags). A Menards rebate receipt's
   // purchase gets 🎟 Rebate by itself when its email is read (receipts.py
-  // _tag_rebate); taken off here, it stays off.
+  // _tag_rebate); taken off here, it stays off. 🚜 Rental (Jonah, 29 Oct
+  // 2026: "i also want a rental tag") is a label for the same reason -- a
+  // machine rented for a job still costs that job -- and a receipt the reader
+  // reads as a rental is saved with it (receipts.py RENTAL_KIND).
   const RECEIPT_TAGS = [
     { id: 'rebate', icon: '🎟', name: 'Rebate', also: ['rebates', 'menards rebate', 'mail in rebate', 'mail-in rebate'] },
     { id: 'warranty', icon: '🛡', name: 'Warranty', also: ['warranties', 'guarantee'] },
     { id: 'return', icon: '↩', name: 'To return', also: ['return', 'returns', 'take back'] },
     { id: 'accountant', icon: '🧮', name: 'For the accountant', also: ['accountant', 'taxes', 'cpa', 'tax question'] },
+    { id: 'rental', icon: '🚜', name: 'Rental', also: ['rentals', 'rented', 'equipment rental'] },
   ];
   const TAG_BY_ID = {};
   RECEIPT_TAGS.forEach(t => { TAG_BY_ID[t.id] = t; });
