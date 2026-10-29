@@ -826,6 +826,15 @@
         esc(n.at ? dayWords(localYMD(new Date(n.at))) : ''),
         n.kind === 'issue' && n.jobId && typeof jiOpenJob === 'function' ? "jiOpenJob('" + ordId(n.jobId) + "')" : 'openCrewNotes()')));
     }
+    // Customers writing in about a booked or under-way job (inboxdesk.js):
+    // a tap opens the email, drafts a reply when asked, or takes it off.
+    if (isOwner() && window.YDInboxDesk) {
+      any = true;
+      YDInboxDesk.list().forEach(n => rows.push(line('📬', '<b>' + esc(n.jobName || 'A customer') + ' wrote</b>' +
+          (n.draft ? ' · <span class="muted">reply drafted</span>' : ''),
+        esc(n.subject || '') + (n.snippet ? ' — ' + esc(String(n.snippet).slice(0, 110)) : ''),
+        esc(n.at ? dayWords(localYMD(new Date(n.at))) : ''), "ibOpen('" + safe(n.id) + "')")));
+    }
     // The follow-up plan's calls for today (boards.js); its emails send themselves.
     const calls = window.YDBoards && YDBoards.chaseToDo && can('jobs', 'change') ? YDBoards.chaseToDo() : 0;
     if (calls) {
@@ -1161,7 +1170,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

@@ -1345,7 +1345,8 @@
     const c = leadConf || {};
     const off = c.on === false;
     return '<div class="cu-fillbar"><span>📬 ' + (off ? 'Leads from your email are <b>switched off</b>.'
-        : 'People who email asking for work are added here by themselves, with a reply in your Gmail Drafts to read and send.') +
+        : c.autoDraft === true ? 'People who email asking for work are added here by themselves, with a reply in your Gmail Drafts to read and send.'
+        : 'People who email asking for work are added here by themselves. “✍️ Draft a reply” on one writes it the way you write, into your Gmail Drafts.') +
       '</span><button class="btn btn-sm" onclick="custLeadMailSettings()">⚙ Settings</button></div>';
   }
   function loadLeadConf() {
@@ -1362,6 +1363,9 @@
       { id: 'on', label: '✅ On', hint: 'Catch new leads from my email' },
       { id: 'off', label: '🚫 Off', hint: 'Don’t read my email for leads' },
       { id: 'never', label: '✋ Never touch these senders', hint: never || 'Family, friends, anyone — add addresses or @domains' },
+      now.autoDraft === true
+        ? { id: 'nodraft', label: '✋ Stop drafting replies by themselves', hint: 'Only when I tap “Draft a reply” on a lead' }
+        : { id: 'autodraft', label: '✍️ Draft a reply for each new lead by itself', hint: 'Now: only when you tap “Draft a reply”' },
     ], { title: 'Leads from your email', value: now.on === false ? 'off' : 'on', cancel: 'Close' });
     if (!pick) return;
     let patch;
@@ -1370,7 +1374,8 @@
         never, { title: 'Never touch these senders', placeholder: 'mom@gmail.com, @family.net' });
       if (got == null) return;
       patch = { never: String(got).split(/[,\s]+/).map(x => x.trim().toLowerCase()).filter(x => /^@?[^@\s]+(@[^@\s]+)?\.[a-z]{2,}$/.test(x)) };
-    } else patch = { on: pick.id === 'on' };
+    } else if (pick.id === 'autodraft' || pick.id === 'nodraft') patch = { autoDraft: pick.id === 'autodraft' };
+    else patch = { on: pick.id === 'on' };
     leadConf = Object.assign({}, now, patch);
     render();
     Promise.resolve(window.YDDb.put('settings', 'leads', Object.assign(patch, { updatedAt: new Date().toISOString() })))
@@ -1385,7 +1390,9 @@
     const draft = f.draft && gmailLink(f.draft.link), mail = gmailLink(f.link);
     return '<div class="cu-mail">📬 ' + esc(f.summary || f.subject || 'Emailed in') +
       (f.timing ? ' <span class="muted">· ' + esc(f.timing) + '</span>' : '') +
-      (draft ? ' <a class="btn btn-sm" href="' + esc(draft) + '" target="_blank" rel="noopener">✉️ Open the reply draft</a>' : '') +
+      (draft ? ' <a class="btn btn-sm" href="' + esc(draft) + '" target="_blank" rel="noopener">✉️ Open the reply draft</a>'
+        : window.YDAuth && window.YDAuth.isOwner && typeof ibDraftLead === 'function'
+          ? ' <button class="btn btn-sm" onclick="ibDraftLead(\'' + sid(c.id) + '\')">✍️ Draft a reply</button>' : '') +
       (mail ? ' <a class="link-btn" href="' + esc(mail) + '" target="_blank" rel="noopener">Their email</a>' : '') + '</div>';
   }
   function contactBits(c) {

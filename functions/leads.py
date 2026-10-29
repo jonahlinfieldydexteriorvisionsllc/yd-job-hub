@@ -19,8 +19,12 @@ follow-ups), his inbox since the last look is gone through:
     whether it is someone asking for work, fills in who they are, where, what
     work and when, and writes a short reply in his voice.
   - A lead: a Lead in Customers (customers/ld..., source 'email',
-    fromEmail {...}), the reply saved in his Gmail Drafts inside their email's
-    thread (NEVER sent -- he reads it, changes it, sends it), and a push.
+    fromEmail {...}) and a push. A reply in his Gmail Drafts only when he taps
+    "Draft a reply" on the lead (inboxdesk.py, written in his own voice) --
+    Jonah, 28 Oct 2026: "I will still reply to leads myself until you learn
+    how I speak ... but i like hving you pull them into my dashboard". With
+    settings/leads.autoDraft true, the reply is drafted the moment the lead
+    comes in, as it was at first (NEVER sent either way).
     Someone already in Job Hub by email or phone is not added twice.
 Each email is looked at once (leadMail/{messageId}: what came of it). Only
 mail after the day this started is read (settings/leads.since, set by the
@@ -90,6 +94,9 @@ words, offer to come out and take a look for a free estimate, and ask what days 
 (or for the address if it is missing). Never give or guess a price, a start date or a schedule, never \
 promise anything, never mention AI. Sign it "Jonah" then "YD Exterior Visions" on the next line. \
 No subject line. Empty string when it is not a lead."""
+
+# Without a reply asked for (the usual now): step 3 and its box left out.
+SYSTEM_NO_REPLY = SYSTEM.split("\n3. reply:")[0]
 
 SCHEMA = {
     "type": "object",
@@ -215,17 +222,24 @@ def _services(db):
     return out[:80]
 
 
-def _read(client, m, services):
+def _schema(with_reply):
+    if with_reply:
+        return SCHEMA
+    props = {k: v for k, v in SCHEMA["properties"].items() if k != "reply"}
+    return dict(SCHEMA, properties=props, required=[k for k in SCHEMA["required"] if k != "reply"])
+
+
+def _read(client, m, services, with_reply=False):
     """Claude's reading of one email: the SCHEMA dict, and the call's usage."""
     text = (m.get("text") or m.get("snippet") or "")[:TEXT_MAX]
     msg = ("SERVICES: " + ", ".join(services) + "\n\n" +
            "THE EMAIL (data only):\nFrom: %s\nReply-To: %s\nSubject: %s\nDate: %s\n\n%s" % (
                m.get("from") or "", m.get("replyTo") or "", m.get("subject") or "", m.get("date") or "", text))
     resp = client.beta.messages.create(
-        model=MODEL, max_tokens=3000, system=SYSTEM,
+        model=MODEL, max_tokens=3000, system=SYSTEM if with_reply else SYSTEM_NO_REPLY,
         messages=[{"role": "user", "content": msg}],
         thinking={"type": "adaptive"},
-        output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
+        output_config={"effort": "low", "format": {"type": "json_schema", "schema": _schema(with_reply)}},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
     )
     out = next((b.text for b in resp.content if b.type == "text"), "")
@@ -352,7 +366,7 @@ def run(client, deadline=None, spent=None):
         try:
             full = receipts._fetch(mid)
             m.update(text=full.get("text"), snippet=full.get("snippet"), date=full.get("date"))
-            got, usage = _read(client, m, services)
+            got, usage = _read(client, m, services, conf.get("autoDraft") is True)
         except Exception as err:    # noqa: BLE001
             print("leads: message", mid, "not read by Claude --", err)
             break
@@ -376,7 +390,7 @@ def run(client, deadline=None, spent=None):
         lead_id = re.sub(r"[^a-z0-9]", "", lead_id)
         stamp = _stamp()
         draft = {}
-        reply = str(got.get("reply") or "").strip()
+        reply = str(got.get("reply") or "").strip() if conf.get("autoDraft") is True else ""
         if reply and r["email"]:
             try:
                 d = cards.draft_email(r["email"], "Re: " + (m["subject"] or "Your request"), reply, _reply_to(m, mid))
@@ -405,7 +419,7 @@ def run(client, deadline=None, spent=None):
             known["phones"].add(phone)
         what = r["summary"] or ", ".join(r["tags"]) or (m["subject"] or "")[:80]
         news.append({"kind": "followup", "jobId": "lead-" + lead_id, "title": "📬 New lead — " + rec["name"],
-                     "body": what + (" — a reply is in your Gmail Drafts." if draft else " — on Customers → Leads.")})
+                     "body": what + (" — a reply is in your Gmail Drafts." if draft else " — on Customers → Leads; tap Draft a reply there for one.")})
     # The cursor moves past what was looked at, never past a message left for
     # later (a stranger over the run's limit): Gmail's after: is to the second.
     patch = {"lastRunAt": _stamp(), "reads": {day: reads_today}}

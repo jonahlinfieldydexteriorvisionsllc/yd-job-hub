@@ -616,6 +616,11 @@ def _cards(request, path, headers):
                     import leads
                     _tell_owner(leads.run(client, deadline,
                                           lambda usage: _record_spend(day, "leads", usage, leads.MODEL)))
+                # Customers writing in about a booked or under-way job
+                # (inboxdesk.py): onto Home's Waiting on you. Plain code.
+                if time.monotonic() < deadline:
+                    import inboxdesk
+                    _tell_owner(inboxdesk.run(deadline))
         except Exception as e:                      # noqa: BLE001
             print("followups failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
@@ -1031,6 +1036,46 @@ def _followup(request, path, headers):
     return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
 
 
+# ---------------------------------------------------------------- inbox desk
+#
+# "✍️ Draft a reply" on a customer's email in Needs you, or on a lead from
+# email (inboxdesk.py): Claude writes it in his voice into his Gmail Drafts,
+# never sent. His inbox: the owner's only. Counted under the cap.
+
+
+def _inbox(request, path, headers):
+    import inboxdesk
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path != "/inbox/draft":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request)
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    body = request.get_json(silent=True) or {}
+    kind, rid = str(body.get("kind") or ""), str(body.get("id") or "")
+    if kind not in ("need", "lead") or not rid or "/" in rid:
+        return (json.dumps({"error": "which email?"}), 400, json_headers)
+    try:
+        day = _check_and_count_usage(uid)
+    except RuntimeError as e:
+        return (json.dumps({"error": str(e)}), 429, json_headers)
+    try:
+        result, usage = inboxdesk.draft(_claude(), kind, rid, uid)
+    except anthropic.RateLimitError:
+        return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+    except Exception as e:                          # noqa: BLE001
+        print("inbox draft failed:", e)
+        return (json.dumps({"error": "The reply could not be written. Try again."}), 502, json_headers)
+    if usage is not None:
+        _record_spend(day, "inbox", usage, inboxdesk.MODEL)
+    return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+
+
 # ---------------------------------------------------------------- daily logs
 #
 # A job's day (joblog.py): "Write today's log now" and "Draft an update to
@@ -1366,6 +1411,8 @@ def claude(request):
         return _docs(request, path, headers)
     if path.startswith("/joblog"):
         return _joblog(request, path, headers)
+    if path.startswith("/inbox"):
+        return _inbox(request, path, headers)
 
     if request.method == "OPTIONS":
         return ("", 204, headers)

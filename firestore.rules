@@ -784,6 +784,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Customers' emails about their booked or under-way jobs (inboxdesk.py,
+    // Home's Waiting on you). His inbox: the owner's only. The server writes
+    // them; he only marks one done.
+    match /inboxNeeds/{msgId} {
+      allow read: if isOwner();
+      allow update: if isOwner()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['open', 'doneAt', 'doneBy']);
+    }
+
     // Photos on a job (jobphotos.js; Jonah, 12 Oct 2026: the crew upload
     // photos on the job page, each marked before / during / after, showing
     // who took it). The picture is in Cloud Storage (storage.rules); this is
