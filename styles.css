@@ -5736,3 +5736,10 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .jl-day-top { font-size:14px; }
 .jl-day-text { font-size:14px; margin-top:4px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .jl-done { color:var(--st-done, inherit); font-weight:600; }
+
+/* An order to pick up (boards.js pickupHtml): ready or not, its number, and the code to scan. */
+.bd-pickup { margin:8px 0 10px; display:flex; flex-direction:column; gap:6px; }
+.bd-pickup-ready { font-weight:700; color:var(--st-done, inherit); }
+.bd-pickup-wait { color:var(--muted); font-size:14px; }
+.bd-pickup-no { font-size:16px; }
+.bd-pickup-code img { display:block; width:220px; max-width:100%; height:auto; background:#fff; padding:10px; border-radius:8px; border:1px solid var(--border); }

@@ -101,7 +101,12 @@ PICKUP_SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
                  "-deliveredto:" + dg.OWNER_EMAIL.replace("@", "+crew@") + " "
                  "subject:(\"ready for pickup\" OR \"ready for pick up\" OR \"ready to pick up\" OR "
                  "\"awaiting pickup\" OR \"waiting for pickup\" OR \"pick up your order\" OR "
-                 "\"order is ready\" OR \"order is available\")")
+                 "\"order is ready\" OR \"order is available\" OR \"order's ready\" OR \"pick it up\" OR "
+                 # The order itself, the day it is placed: a pickup order's
+                 # card is made then (Jonah, 28 Oct 2026: "when order is
+                 # placed for pickup auto make a card for the crew") -- read
+                 # once, held for the week's read like any receipt.
+                 "\"order confirmation\" OR \"thanks for your order\" OR \"thank you for your order\")")
 
 # A store saying an order is waiting to be collected is never a receipt
 # (Jonah, 21 Oct 2026: "stop pulling orders for pickup from menards as
@@ -114,7 +119,7 @@ PICKUP_SEARCH = ("after:%d -in:sent -in:drafts -in:chats "
 # else. Told by the subject, in plain code, as well as by what the read made
 # of it, so a notice read as something else is still caught.
 PICKUP_NOTICE = re.compile(r"\b(ready (for|to) (in[- ]store |curbside )?pick[- ]?up|awaiting pick[- ]?up|"
-                           r"waiting for pick[- ]?up|pick[- ]?up your order|"
+                           r"waiting for pick[- ]?up|pick[- ]?up your order|order[’']s ready|pick it up by|"
                            r"order is (ready|available)(?!\s+(to|for)\s+(ship|deliver)))", re.I)
 # What the purchase record calls itself. An email named so is the receipt
 # even when it also says the order is ready, or the read took it for a
@@ -603,7 +608,8 @@ def _fetch(mid):
     found = {"plain": [], "html": [], "files": []}
     _walk(msg.get("payload") or {}, found)
     plain = "\n".join(found["plain"]).strip()
-    html = html_to_text("\n".join(found["html"]))
+    raw_html = "\n".join(found["html"])
+    html = html_to_text(raw_html)
     # The HTML half usually carries the table; the plain half is sometimes just
     # "view this in a browser". Take whichever says more.
     text = html if len(html) > len(plain) else plain
@@ -612,7 +618,38 @@ def _fetch(mid):
         "from": _header(msg, "From"), "to": _header(msg, "To"), "subject": _header(msg, "Subject"),
         "date": _header(msg, "Date"), "internalDate": int(msg.get("internalDate") or 0),
         "snippet": msg.get("snippet") or "", "text": text, "files": found["files"],
+        "pickupCode": pickup_code(raw_html),
     }
+
+
+# The code a store scans at its pickup desk, as the email shows it (Jonah,
+# 28 Oct 2026: a crew card for a pickup "with ... any necessary qr code and
+# order number"). Menards' "ready" email draws its QR from menards.com/main/
+# barcode/<order>.png; Home Depot's its "Return/Pickup Barcode" from its
+# orderBarcode images. Any other store: an image whose name says QR or
+# barcode. Plain code; only a picture on an https address is kept.
+CODE_IMAGES = (
+    (re.compile(r"https://www\.menards\.com/main/barcode/[^\"'\s<>]+", re.I), "qr"),
+    (re.compile(r"https://storage\.googleapis\.com/[^\"'\s<>]*/orderBarcode/[^\"'\s<>]+", re.I), "barcode"),
+)
+IMG_TAG = re.compile(r"<img\b[^>]*>", re.I)
+IMG_ALT = re.compile(r"alt\s*=\s*[\"']([^\"']*)", re.I)
+IMG_SRC = re.compile(r"src\s*=\s*[\"'](https://[^\"'\s<>]+)", re.I)
+
+
+def pickup_code(html):
+    """{url, kind} of the pickup QR or barcode picture in an email, or None."""
+    h = str(html or "")
+    for pat, kind in CODE_IMAGES:
+        m = pat.search(h)
+        if m:
+            return {"url": m.group(0).replace("&amp;", "&")[:1000], "kind": kind}
+    for tag in IMG_TAG.findall(h):
+        alt, src = IMG_ALT.search(tag), IMG_SRC.search(tag)
+        words = alt.group(1) if alt else ""
+        if src and re.search(r"\b(qr|bar ?code)\b", words, re.I) and not re.search(r"track|stepper|logo", words, re.I):
+            return {"url": src.group(1).replace("&amp;", "&")[:1000], "kind": "qr" if re.search(r"qr", words, re.I) else "barcode"}
+    return None
 
 
 IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -1605,9 +1642,38 @@ def _new_card(board, title, notes, **more):
     return card
 
 
-def pickup_card(db, m, got, jobs):
-    """Make (or add a reminder to) the Pickups card for an order waiting at a
-    store. Returns the card id, or None when there is nowhere to put it."""
+# The numbers an order goes by in its emails (Menards' confirmation is order
+# MADI10002 "Pick Up At Store: MADI10001", and its "ready" email says
+# MADI10001): every one is kept on the card, so the ready email finds the
+# card the order made whichever number it was read under.
+ORDER_NOS = re.compile(r"\b[A-Z]{0,5}\d[0-9A-Z-]{3,}\b")
+PICKUP_CARD_DAYS = 14       # an order older than this makes no card of its own
+
+
+def _order_nos(order, m):
+    """The order's own number first, then numbers with letters in front
+    (MADI10001, WH10000001) before bare ones (dates, phone numbers)."""
+    text = " ".join([m.get("subject") or "", (m.get("text") or "")[:20000]])
+    found = ORDER_NOS.findall(text)
+    found = [n for n in found if re.match(r"[A-Z]", n)] + [n for n in found if not re.match(r"[A-Z]", n)]
+    seen = []
+    for n in [order or ""] + found:
+        n = re.sub(r"[^A-Z0-9]", "", str(n).upper())
+        if len(n) >= 6 and n not in seen:
+            seen.append(n)
+    return seen[:12]
+
+
+def _ready_title(title):
+    return title if title.endswith("— ready now") else title + " — ready now"
+
+
+def pickup_card(db, m, got, jobs, ready=True):
+    """Make (or add a reminder to) the Pickups card for an order to collect
+    from a store. `ready`: the store's "ready for pickup" email (else the
+    order's own confirmation: the card is made when the order is placed and
+    says ready when that email comes). Returns the card id, or None when
+    there is nowhere to put it."""
     board_id, board = _board(db, PICKUPS)
     if not board_id:
         return None
@@ -1615,19 +1681,48 @@ def pickup_card(db, m, got, jobs):
     order = (got.get("order_number") or "").strip()
     key = "%s|%s" % (vendor_key(vendor), re.sub(r"[^a-z0-9]", "", order.lower()) or "msg " + m["id"])
     cid = "pk" + hashlib.sha1(key.encode()).hexdigest()[:18]
-    ref = db.collection("boards").document(board_id).collection("cards").document(cid)
+    cards_ref = db.collection("boards").document(board_id).collection("cards")
+    ref = cards_ref.document(cid)
     snap = ref.get()
+    nos = _order_nos(order, m)
+    code = m.get("pickupCode") if isinstance(m.get("pickupCode"), dict) else None
+    # The ready email of an order whose card was made from its confirmation
+    # under another of its numbers: that card.
+    if not snap.exists and ready and order:
+        want = re.sub(r"[^A-Z0-9]", "", order.upper())
+        for s in cards_ref.where("pickupNos", "array_contains", want).limit(3).stream():
+            k = s.to_dict() or {}
+            if not k.get("doneAt") and vendor_key(k.get("pickupVendor") or "") == vendor_key(vendor):
+                ref, snap, cid = s.reference, s, s.id
+                break
     # Picked up and its card deleted ("Delete all done", boards.js notes it
     # in the board's `cleared` list): a "still waiting" reminder for it must
     # not put the card back.
     if not snap.exists and any(str(s).split("|")[0] == cid for s in (board.get("cleared") or [])):
         return cid
     if snap.exists:
-        # A reminder for an order already on the board: noted, nothing new.
-        # The same email read again (a retry) is not another reminder.
-        if m["id"] not in ((snap.to_dict() or {}).get("pickupMail") or []):
-            ref.update({"pickupReminders": firestore.Increment(1), "pickupMail": firestore.ArrayUnion([m["id"]])})
+        # An order already on the board: a reminder is noted, nothing new.
+        # The same email read again (a retry) is not another reminder. Its
+        # first "ready" email says so on the card, with the code to scan.
+        k = snap.to_dict() or {}
+        if m["id"] in (k.get("pickupMail") or []):
+            return cid
+        patch = {"pickupMail": firestore.ArrayUnion([m["id"]])}
+        if ready and not k.get("pickupReadyAt"):
+            patch["pickupReadyAt"] = dg._now().isoformat()
+            patch["title"] = _ready_title(str(k.get("title") or "Pick up order"))[:200]
+        elif ready:
+            patch["pickupReminders"] = firestore.Increment(1)
+        if code and not k.get("pickupCode"):
+            patch["pickupCode"] = code
+        if nos:
+            patch["pickupNos"] = firestore.ArrayUnion(nos)
+        ref.update(patch)
         return cid
+    # The order's confirmation: only a new order makes a card (the year's
+    # catch-up reads never fill the board with long-collected orders).
+    if not ready and m.get("internalDate") and time.time() - m["internalDate"] / 1000 > PICKUP_CARD_DAYS * 86400:
+        return None
     where = (got.get("pickup_location") or "").strip()
     by = got.get("pickup_by") if re.match(r"^\d{4}-\d{2}-\d{2}$", got.get("pickup_by") or "") else None
     items = [it for it in (got.get("items") or []) if (it.get("name") or "").strip()]
@@ -1639,11 +1734,15 @@ def pickup_card(db, m, got, jobs):
         notes.append("Pick up by: " + by)
     if total:
         notes.append("Total: $%.2f" % (total / 100))
+    if not ready:
+        notes.append("Not ready yet — " + vendor + " emails when it is, and this card then says “ready now”" +
+                     " (with the code to scan, when the email has one).")
     notes = "\n".join(notes + ["", "Email: " + gmail_link(m["threadId"])])
     sug = suggest_job(jobs, got.get("deliver_to") or "", got.get("job_hint") or "")
     job = jobs.get(sug["jobId"]) if sug else None
+    title = "Pick up %s order%s" % (vendor, (" #" + order) if order else "")
     card = _new_card(
-        board, "Pick up %s order%s" % (vendor, (" #" + order) if order else ""), notes,
+        board, _ready_title(title) if ready else title, notes,
         due=by, labels=["crew", "materials"], noClaude=True,
         checklist=[{"id": "ckp%d" % i, "text": ("%s × %s" % (_qty(it.get("qty")), it["name"].strip())
                                                   if it.get("qty") else it["name"].strip())[:200],
@@ -1651,7 +1750,9 @@ def pickup_card(db, m, got, jobs):
         jobId=sug["jobId"] if job else None,
         jobName=(job.get("customerName") or "Untitled job") if job else None,
         jobNum=(str(job.get("estimateNumber") or "").strip() or None) if job else None,
-        pickupMail=[m["id"]], pickupReminders=0, source="pickup")
+        pickupMail=[m["id"]], pickupReminders=0, source="pickup",
+        pickupVendor=vendor[:80], pickupNos=nos, pickupCode=code,
+        pickupReadyAt=dg._now().isoformat() if ready else None)
     ref.set(card)
     return cid
 
@@ -2903,6 +3004,13 @@ def run(client, manual=False):
                     if notice or got.get("doc_type") == "ready_for_pickup":
                         # A card for whoever goes to get it.
                         card = pickup_card(db, m, got, jobs_of())
+                        if card:
+                            report["pickups"] += 1
+                    elif got.get("is_purchase") and got.get("fulfilment") == "pickup" \
+                            and got.get("doc_type") not in ("shipping_notice", "refund"):
+                        # An order placed for pickup: its card now, for the
+                        # crew, before the store says it is ready.
+                        card = pickup_card(db, m, got, jobs_of(), ready=False)
                         if card:
                             report["pickups"] += 1
                     if notice:

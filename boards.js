@@ -2208,6 +2208,7 @@
         ((k.assignees || []).length ? '<span>👤 ' + k.assignees.map(a => esc(nameOn(a))).join(', ') + '</span>' : '') +
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
+      pickupHtml(k) +
       (k.postWeek ? postWeekHtml(k.postWeek) : k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +
       (list.length ? '<div class="bd-move-label">Checklist</div><div class="bd-checklist">' +
         list.map(i => '<label class="chk bd-chk"><input type="checkbox"' + (i.done ? ' checked' : '') +
@@ -2232,6 +2233,24 @@
           ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete</button>' : '') +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
+  }
+  // An order to pick up (functions/receipts.py pickup_card; Jonah, 28 Oct
+  // 2026: the crew's card "with information on the order, list of whats being
+  // picked up, and include any necessary qr code and order number"): made when
+  // the order is placed, "ready now" once the store says so, with the code
+  // its email shows -- big enough to scan off the phone at the desk.
+  function pickupHtml(k) {
+    if (k.source !== 'pickup') return '';
+    const code = k.pickupCode && httpsOnly(k.pickupCode.url);
+    const no = String(k.title || '').match(/#\s*([A-Za-z0-9-]+)/);
+    return '<div class="bd-pickup">' +
+      (k.pickupReadyAt ? '<div class="bd-pickup-ready">✅ Ready for pickup</div>'
+        : '<div class="bd-pickup-wait">⏳ Ordered — not ready yet. The store emails when it is; this card says so then.</div>') +
+      (no ? '<div class="bd-pickup-no">Order # <b>' + esc(no[1]) + '</b></div>' : '') +
+      (code ? '<div class="bd-pickup-code"><img src="' + esc(code) + '" alt="Pickup ' + (k.pickupCode.kind === 'barcode' ? 'barcode' : 'QR code') +
+          '" referrerpolicy="no-referrer"><div class="hint">Show this at the pickup desk' + (no ? ', or give the order number' : '') +
+          ' — with an ID.</div></div>' : '') +
+    '</div>';
   }
   // The week's finished jobs to post (functions/posts.py weekly; Jonah, 26 Oct
   // 2026: "the weekly 'ready to post' card with up to 3 After photos per job,
