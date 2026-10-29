@@ -15,16 +15,18 @@ Claude only picks; the code does it, from the short list of what the
 Receipts tab's own buttons do, and every job, machine and subcontractor it
 names is checked to be one that was shown to it:
   - read it again with the note (receipts.read_again; still to sort only),
-  - file the whole of it to one place. Every place but a job is written
-    here, as the tab writes it (a split on the receipt). A job's lines go
+  - file it: the whole of it to one place, or chosen lines to each of
+    several (one line to a job, the rest personal). Every place but a job is
+    written here, as the tab writes it (a split on the receipt, its share of
+    the tax by value, the last one taking what is left). A job's lines go
     onto that job through the owner's device -- the road a photo sent in for
-    a job takes (receipts.js autoSort: `sentFor` + auto 'ready') -- since a
-    job's materials and its order list are kept by the app, not the server,
+    a job takes (receipts.js autoSort: `sentFor` {lines} + auto 'ready') --
+    since a job's materials and its order list are kept by the app,
   - set it aside with why, keep it under Invoices to pay, mark a bill paid,
     or mark it Not a receipt (teaching the email reader, as 🚫 does),
   - put tags on it,
   - or change nothing and ask.
-Nothing already filed is ever moved here: taking lines back off a job is
+No line already filed is ever moved here: taking lines back off a job is
 his (⋯ → Undo), and Claude says what to do instead.
 
 What was done, or what Claude asks, is written back on the receipt as
@@ -37,6 +39,7 @@ left, failed, by}.
 
 import datetime
 import hashlib
+import math
 import re
 import time
 
@@ -84,7 +87,10 @@ read wrong, or a question. Once a week you go through those notes and do what ea
 only what the app can do, and tell him in a sentence what you did, or ask the one thing you need.
 
 What the app can do with a receipt (answer with these exact words):
-- action "sort": file the WHOLE receipt to one place. Only a receipt with nothing filed yet. Places:
+- action "sort": file it, in `files`. Each file is {lines, place, job, vehicle, sub}: the receipt's \
+line numbers that go to that place, or [] for every line not filed yet (which is how a whole receipt \
+is filed). Several files split one receipt between places -- e.g. line 1 to a job and lines 2 and 3 \
+personal. Only lines not filed yet; at most one of the files a job. Places:
   job -- bought for one customer's job: its lines go onto that job's costs. Give `job` (a J number).
   vehicle -- fuel, parts or repairs for one of the trucks, trailers or machines listed. Give `vehicle` \
 (an E number).
@@ -119,9 +125,12 @@ How to decide:
 - Do what the note says, and nothing it does not say.
 - Never guess a job, vehicle or subcontractor: only one from the lists, and only when the note \
 (with the receipt) makes it clear. Two that could fit: ask which.
-- Something already filed is never moved by you. Say exactly what he should do instead (⋯ → Undo \
+- Lines already filed are never moved by you. Say exactly what he should do instead (⋯ → Undo \
 on the receipt, then file it).
-- One receipt split between places is his to do (Split across jobs on the receipt); say so.
+- Do the part the note makes clear and ask about the rest (file the personal lines; ask which job \
+the other one is for).
+- Two orders read as one receipt cannot be pulled apart here (only an email with a PDF for each \
+order can be read again as separate receipts): say so.
 - Anything the app cannot do from this list (change a price, email someone, QuickBooks): say so \
 plainly, action none.
 - A note that only tells you something and changes nothing: action none, and say you have it.
@@ -145,17 +154,28 @@ ANSWER_SCHEMA = {
                     "read_again": {"type": "boolean"},
                     "paid": {"type": "boolean"},
                     "action": {"type": "string", "enum": ["sort", "set_aside", "to_pay", "not_receipt", "none"]},
-                    "place": {"type": "string", "enum": [""] + list(PLACES)},
-                    "job": {"type": "string"},
-                    "vehicle": {"type": "string"},
-                    "sub": {"type": "string"},
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "lines": {"type": "array", "items": {"type": "integer"}},
+                                "place": {"type": "string", "enum": list(PLACES)},
+                                "job": {"type": "string"},
+                                "vehicle": {"type": "string"},
+                                "sub": {"type": "string"},
+                            },
+                            "required": ["lines", "place", "job", "vehicle", "sub"],
+                            "additionalProperties": False,
+                        },
+                    },
                     "why": {"type": "string"},
                     "add_tags": {"type": "array", "items": {"type": "string", "enum": list(TAGS)}},
                     "says": {"type": "string"},
                     "question": {"type": "boolean"},
                 },
-                "required": ["receipt", "read_again", "paid", "action", "place", "job", "vehicle", "sub", "why",
-                             "add_tags", "says", "question"],
+                "required": ["receipt", "read_again", "paid", "action", "files", "why", "add_tags", "says",
+                             "question"],
                 "additionalProperties": False,
             },
         },
@@ -321,10 +341,11 @@ def _receipt_text(label, rid, r, near, labels):
                (" | Order #" + str(r["orderNo"])) if r.get("orderNo") else "", r.get("kind") or "other")]
     if r.get("summary"):
         out.append("Summary: " + str(r["summary"])[:200])
+    filed = {i: _split_words(s) for s in (r.get("splits") or []) if isinstance(s, dict) for i in (s.get("lines") or [])}
     for i, ln in enumerate(lines[:30]):
         qty = " ".join(x for x in (str(ln.get("qty") or ""), str(ln.get("unit") or "")) if x)
-        out.append("  %d. %s%s -- %s" % (i + 1, str(ln.get("name") or "Item")[:120], (" (" + qty + ")") if qty else "",
-                                         _money(ln.get("cents"))))
+        out.append("  %d. %s%s -- %s%s" % (i + 1, str(ln.get("name") or "Item")[:120], (" (" + qty + ")") if qty else "",
+                                           _money(ln.get("cents")), ("  [filed: %s]" % filed[i]) if i in filed else ""))
     if len(lines) > 30:
         out.append("  ... and %d more lines" % (len(lines) - 30))
     out.append("Where it is now: " + _where_now(r))
@@ -485,13 +506,9 @@ def _learn(db, rid, pats, on):
     db.collection(LEARNED[0]).document(LEARNED[1]).set({"patterns": patterns, "updatedAt": at}, merge=True)
 
 
-def _whole(r):
-    """Every line of a receipt with nothing filed, and its tax -- as
-    _file_personal and the tab's own whole-receipt moves take it."""
-    lines = r.get("lines") or []
-    tax = int(r.get("taxCents") or 0)
-    cents = sum(int(ln.get("cents") or 0) for ln in lines) if lines else max(0, int(r.get("totalCents") or 0) - tax)
-    return list(range(len(lines))), cents, tax
+def _js_round(x):
+    """Math.round, as receipts.js portion() rounds a tax share."""
+    return int(math.floor(x + 0.5))
 
 
 def _leaving(r):
@@ -506,71 +523,142 @@ def _leaving(r):
     return out
 
 
-def _sort(db, rid, r0, a, ctx):
-    """The whole receipt to one place. Returns (did, '' or why not)."""
-    to = a["place"]
+def _target(f, r0, ctx):
+    """One of the answer's files as (place, what goes on the split, its
+    name), or (None, why not, '') -- every job, machine and sub one of the
+    labels shown."""
+    to = f.get("place")
     if to not in PLACES:
-        return "", "no place was named"
-    target, words = {}, PLACES[to]
+        return None, "no place was named", ""
     if to == "job":
-        jid = ctx["jobLabels"].get(a["job"].strip().upper())
+        jid = ctx["jobLabels"].get(str(f.get("job") or "").strip().upper())
         if not jid:
-            return "", "the job it named is not one of the jobs"
+            return None, "the job it named is not one of the jobs", ""
         j = ctx["jobs"][jid]
         name = (j.get("customerName") or "").strip() or "Untitled job"
-        target = {"jobId": jid, "jobName": name, "est": str(j.get("estimateNumber") or "").strip()}
-        words = name
-    elif to == "vehicle":
-        gid = ctx["gearLabels"].get(a["vehicle"].strip().upper())
+        return to, {"jobId": jid, "jobName": name, "est": str(j.get("estimateNumber") or "").strip()}, name
+    if to == "vehicle":
+        gid = ctx["gearLabels"].get(str(f.get("vehicle") or "").strip().upper())
         if not gid:
-            return "", "the vehicle it named is not one on the Equipment tab"
-        target = {"equipmentId": gid, "name": ctx["gear"][gid].get("name") or "Vehicle"}
-        words = target["name"]
-    elif to == "sub":
-        sid = ctx["subLabels"].get(a["sub"].strip().upper()) if a["sub"].strip() else ""
-        if a["sub"].strip() and not sid:
-            return "", "the subcontractor it named is not one under Subcontractors"
-        target = ({"subId": sid, "name": ctx["subs"][sid].get("name") or "Subcontractor"} if sid
-                  else {"name": str(r0.get("vendor") or "").strip() or PLACES["sub"]})
-        words = target["name"]
-    elif to == "loan":
-        target = {"name": str(r0.get("vendor") or "").strip() or PLACES["loan"]}
-    else:
-        target = {"name": PLACES[to]}
+            return None, "the vehicle it named is not one on the Equipment tab", ""
+        name = ctx["gear"][gid].get("name") or "Vehicle"
+        return to, {"equipmentId": gid, "name": name}, name
+    if to == "sub":
+        said = str(f.get("sub") or "").strip()
+        sid = ctx["subLabels"].get(said.upper()) if said else ""
+        if said and not sid:
+            return None, "the subcontractor it named is not one under Subcontractors", ""
+        name = (ctx["subs"][sid].get("name") if sid else str(r0.get("vendor") or "").strip()) or PLACES["sub"]
+        return to, ({"subId": sid, "name": name} if sid else {"name": name}), name
+    if to == "loan":
+        name = str(r0.get("vendor") or "").strip() or PLACES["loan"]
+        return to, {"name": name}, name
+    return to, {"name": PLACES[to]}, PLACES[to]
+
+
+def _sort(db, rid, r0, files, ctx):
+    """The answer's files: each one's lines (or every line not filed yet)
+    to its place. Every place but a job is a split written here; a job's
+    lines are left for the owner's device (`sentFor` {lines}), after the
+    rest, so its tax share is the one that takes what is left -- as the
+    tab's own Split across jobs shares it. Returns (did, '' or why not)."""
+    plan = []
+    for f in files or []:
+        to, target, name = _target(f, r0, ctx)
+        if not to:
+            return "", target
+        nums = f.get("lines") or []
+        if any(not isinstance(n, int) for n in nums):
+            return "", "a line number was not a number"
+        plan.append({"to": to, "target": target, "name": name, "lines": sorted({n - 1 for n in nums})})
+    if not plan:
+        return "", "it was not said where it goes"
+    if sum(1 for p in plan if p["to"] == "job") > 1:
+        return "", "only one job can be filled in from a note -- the other job's lines are yours to add"
+    if sum(1 for p in plan if not p["lines"]) > 1:
+        return "", "two places were both given the rest of it"
     was = {}
 
     def make(r):
         st = stages.receipt_status(r)
-        if r.get("splits"):
-            return None, "something on it is filed already"
         if st == "filed":
             return None, "it is filed already"
         if st == stages.RECEIPT_TO_PAY:
             return None, "it is under Invoices to pay -- not paid yet"
+        lines, splits = r.get("lines") or [], [s for s in (r.get("splits") or []) if isinstance(s, dict)]
+        tax = int(r.get("taxCents") or 0)
+        if not lines:
+            # Nothing itemised: only ever the whole of it, to one place.
+            if splits or len(plan) > 1 or plan[0]["lines"]:
+                return None, "it has no lines to file one by one"
+            plan[0]["lines"] = []
+        else:
+            taken = {i for s in splits for i in (s.get("lines") or [])}
+            free = [i for i in range(len(lines)) if i not in taken]
+            claimed = set()
+            for p in plan:
+                if not p["lines"]:
+                    continue
+                bad = [i + 1 for i in p["lines"] if i not in free or i in claimed]
+                if bad:
+                    return None, "line%s %s %s filed already or not on it" % (
+                        "s" if len(bad) > 1 else "", ", ".join(map(str, bad)), "are" if len(bad) > 1 else "is")
+                claimed |= set(p["lines"])
+            for p in plan:
+                if not p["lines"]:
+                    p["lines"] = [i for i in free if i not in claimed]
+                    if not p["lines"]:
+                        return None, "no lines were left for %s" % p["name"]
+                    claimed |= set(p["lines"])
         was["keys"] = ((r.get("notReceipt") or {}).get("keys") or []) if st == stages.RECEIPT_NOT else []
         patch = _leaving(r)
-        if to == "job":
-            # The owner's device puts its lines on the job (receipts.js
-            # autoSort), as for a photo sent in for one -- `from` says it
-            # was his note that said where.
-            patch.update({"sentFor": {"to": "job", "jobId": target["jobId"], "jobName": target["jobName"],
-                                      "equipmentId": "", "name": "", "how": "note", "by": "", "byName": "",
-                                      "from": "note"},
+        job = next((p for p in plan if p["to"] == "job"), None)
+        left = set(range(len(lines))) - {i for s in splits for i in (s.get("lines") or [])}
+        all_cents = sum(int(ln.get("cents") or 0) for ln in lines)
+        tax_so_far = sum(int(s.get("taxCents") or 0) for s in splits)
+        new = list(splits)
+        for k, p in enumerate(x for x in plan if x["to"] != "job"):
+            if lines:
+                part = sum(int(lines[i].get("cents") or 0) for i in p["lines"])
+                left -= set(p["lines"])
+                last = not left and not job
+                share = tax - tax_so_far if last else (_js_round(tax * part / all_cents) if all_cents else 0)
+            else:
+                part, share = max(0, int(r.get("totalCents") or 0) - tax), tax
+            tax_so_far += share
+            new.append(dict({"id": "sp" + rc._b36(int(time.time() * 1000) + k) +
+                                   hashlib.sha1(rid.encode()).hexdigest()[:4],
+                             "to": p["to"], "lines": p["lines"], "cents": part, "taxCents": share, "at": _now(),
+                             "by": "", "auto": True, "fromNote": True}, **p["target"]))
+        if len(new) != len(splits):
+            patch["splits"] = new
+        if job:
+            # The owner's device puts these lines on the job (receipts.js
+            # autoSort), as for a photo sent in for one -- `from` says his
+            # note said where, `lines` which of the receipt's lines.
+            patch.update({"sentFor": {"to": "job", "jobId": job["target"]["jobId"], "jobName": job["target"]["jobName"],
+                                      "lines": job["lines"], "equipmentId": "", "name": "", "how": "note", "by": "",
+                                      "byName": "", "from": "note"},
                           "auto": {"state": "ready", "why": "", "at": _now(), "by": ""}})
-            return _moved(r, "new", dict(patch, status="new")), ""
-        idxs, cents, tax = _whole(r)
-        split = dict({"id": "sp" + rc._b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
-                      "to": to, "lines": idxs, "cents": cents, "taxCents": tax, "at": _now(), "by": "",
-                      "auto": True, "fromNote": True}, **target)
-        return _moved(r, "done", dict(patch, splits=[split], status="done")), ""
+        status = "new" if (job or (lines and left)) else "done"
+        patch["status"] = status
+        return _moved(r, status, patch), ""
 
     err = _change(db, rid, make)
     if err:
         return "", err
     if was.get("keys"):
         _learn(db, rid, [{"key": k} for k in was["keys"]], False)
-    return ("Going on the %s job (Job Hub adds its lines the next time it is open)" % words if to == "job"
-            else "Filed to %s" % (words if words == PLACES[to] else "%s (%s)" % (PLACES[to], words))), ""
+    words = []
+    for p in plan:
+        what = ("line%s %s " % ("s" if len(p["lines"]) > 1 else "", ", ".join(str(i + 1) for i in p["lines"]))
+                if len(plan) > 1 and p["lines"] else "")
+        words.append((what + "going on the %s job (Job Hub adds them the next time it is open)" % p["name"])
+                     if p["to"] == "job" else
+                     (what + "filed to " + (p["name"] if p["name"] == PLACES[p["to"]]
+                                             else "%s (%s)" % (PLACES[p["to"]], p["name"]))))
+    out = "; ".join(words)
+    return out[:1].upper() + out[1:], ""
 
 
 def _aside(db, rid, why):
@@ -703,7 +791,7 @@ def _carry_out(client, db, rid, a, ctx, everyone, cost):
         did.append("Read again: %s, %s" % (res.get("summary") or "read", _money(res.get("totalCents"))))
     act = a.get("action")
     if act == "sort":
-        step(*_sort(db, rid, everyone.get(rid) or {}, a, ctx))
+        step(*_sort(db, rid, everyone.get(rid) or {}, a.get("files") or [], ctx))
     elif act == "set_aside":
         step(*_aside(db, rid, a.get("why")))
     elif act == "to_pay":

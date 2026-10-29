@@ -525,8 +525,14 @@
   // Two of Jonah's devices may see it at once: it is claimed first, in one
   // step on the server (YDDb.transact), so only one of them adds it. A
   // transaction needs signal; with none, it waits for the next look.
+  //
+  // A note gone through at the end of the week (functions/receiptnotes.py)
+  // comes the same way, `sentFor.from` 'note', with the receipt's `lines`
+  // for the job: only those go on it, and what the note filed elsewhere
+  // (its other lines, already split off on the server) stays as it is.
   const autoBusy = {};         // receipt id -> true while this device is on it (or has done it)
-  const autoReady = r => !!(r && toSortNow(r) && !(r.splits || []).length && r.auto && r.auto.state === 'ready');
+  const noteLines = r => !!(r && r.sentFor && r.sentFor.from === 'note' && Array.isArray(r.sentFor.lines));
+  const autoReady = r => !!(r && toSortNow(r) && (!(r.splits || []).length || noteLines(r)) && r.auto && r.auto.state === 'ready');
   function autoSoon() {
     if (!sorts() || !loaded || !window.YDDb || !window.YDDb.transact) return;
     Object.keys(receipts).forEach(id => { if (autoReady(receipts[id]) && !autoBusy[id] && !leaving[id]) autoSort(id); });
@@ -552,16 +558,26 @@
       return;
     }
     if (!claimed) return;
-    const fresh = Object.assign({}, receipts[rid] || r, { splits: [], status: 'new' });
-    // Every line, whatever was ticked on this screen meanwhile.
+    const byNote = noteLines(receipts[rid] || r);
+    const fresh = byNote ? Object.assign({}, receipts[rid] || r)
+      : Object.assign({}, receipts[rid] || r, { splits: [], status: 'new' });
+    // Every line, whatever was ticked on this screen meanwhile -- or, from a
+    // note, the lines it named that are still free.
     delete ticked[rid]; delete splitting[rid];
+    if (byNote && (fresh.lines || []).length) {
+      const free = freeLines(fresh);
+      ticked[rid] = new Set(f.lines.filter(i => free.indexOf(i) !== -1));
+      splitting[rid] = true;
+    }
     const done = { state: 'done', why: '', by: uidNow, at: new Date().toISOString() };
     let ok;
-    if (f.to === 'job') ok = !!addToJob(rid, fresh, f.jobId, done);
+    if (byNote && ticked[rid] && !ticked[rid].size) ok = false;
+    else if (f.to === 'job') ok = !!addToJob(rid, fresh, f.jobId, done);
     else if (f.to === 'vehicle' || f.to === 'shop' || f.to === 'office') {
       ok = assignElsewhere(rid, fresh, f.to, f.to === 'vehicle'
         ? { equipmentId: f.equipmentId || '', name: f.name || 'Vehicle' } : { name: f.name || DEST_NAME[f.to] }, done);
     }
+    delete splitting[rid];
     if (!ok) {
       const auto = { state: 'needs', why: 'it could not be put on ' + (f.jobName || f.name || 'it') + ' by itself', by: uidNow, at };
       receipts[rid] = Object.assign({}, receipts[rid] || r, { auto });
