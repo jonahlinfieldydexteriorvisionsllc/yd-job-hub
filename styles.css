@@ -4171,6 +4171,13 @@
   .rc-mynote { margin:6px 0; padding:6px 10px; border-left:3px solid var(--brand); border-radius:6px; background:var(--surface-2);
     font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
   .rc-row + .rc-mynote { margin:-2px 0 6px; }
+  /* What Claude did with the note at the end of the week (receipts.js noteBackHtml). */
+  .rc-noteback { margin:-2px 0 6px; padding:5px 10px; border-left:3px solid var(--st-info); border-radius:6px;
+    background:var(--st-info-soft); font-size:13px; overflow-wrap:anywhere; }
+  .rc-noteback.asks { border-left-color:var(--st-soon-fill); background:var(--st-soon-soft); }
+  .rc-noteback.old { opacity:.75; }
+  .rc-noteback.wait { background:none; border-left-color:var(--border-strong); color:var(--muted); font-size:12.5px; }
+  .rc-notes-wait { color:var(--muted); }
   .rc-note-box { width:100%; box-sizing:border-box; min-height:70px; resize:vertical; font:inherit; font-size:16px; padding:8px;
     border:1px solid var(--border-strong); border-radius:8px; background:var(--surface); color:var(--text); margin-bottom:6px; }
   .rc-menu { position:relative; display:inline-block; flex:none; }

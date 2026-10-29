@@ -577,7 +577,8 @@
     if (!f || !toSortNow(r)) return '';
     const where = f.to === 'job' ? (f.jobName ? '<b>' + esc(f.jobName) + '</b>' : 'a job')
       : '<b>' + esc(f.name || DEST_NAME[f.to] || '') + '</b>';
-    const who = f.byName ? esc(f.byName) + ' sent it in for ' : 'Sent in for ';
+    // Your note said where (functions/receiptnotes.py), not a photo.
+    const who = f.from === 'note' ? 'Your note says it goes on ' : f.byName ? esc(f.byName) + ' sent it in for ' : 'Sent in for ';
     // Claimed by a device that then went quiet (closed mid-way): a person's.
     const stuck = a.state === 'adding' && Date.now() - new Date(a.at || 0).getTime() > STUCK_MS;
     if (a.state === 'ready' || (a.state === 'adding' && !stuck)) {
@@ -1059,8 +1060,10 @@
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (sorts() ? '<button class="btn btn-sm btn-filled" onclick="rcPaid(\'' + rid + '\')">✓ Paid</button>' +
           '<button class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>' : '') +
-        deleteBtn(rid, true) +
-      '</div>';
+        noteBtn('p', rid, r) + deleteBtn(rid, true) +
+      '</div>' +
+      // A bill Claude put here from a note says so under it.
+      noteHtml(r, 'p') + noteEditHtml('p', rid, r);
   }
   // Late first, then by when each is due; the year's pull folded away.
   function payHtml(list) {
@@ -1291,24 +1294,87 @@
   // receipt to whoever sees it, read by Claude when the receipt is read
   // again (functions/receipts.py NOTE_HEAD) and by the Claude chats that
   // work on his books. One note a receipt; changed or taken off any time.
-  let noting = '';            // the receipt whose note box is open ('c' card / 'h' row + its id)
+  //
+  // And gone through (Jonah, 29 Oct 2026: "when i add a note on a receipt i
+  // want claude to go through them at the end of the week"): every Friday
+  // evening the server shows Claude each note written or changed since it
+  // was last gone through, and does what it says -- reads the receipt
+  // again, files it, sets it aside, puts it under Invoices to pay, marks it
+  // not a receipt, tags it -- or asks (functions/receiptnotes.py). What it
+  // did, or asks, comes back on the receipt as `noteDone` {at, noteAt,
+  // says, asks}, shown under the note; he answers by changing the note.
+  // "Go through them now" (the bar at the top) does it at once.
+  let noting = '';            // the receipt whose note box is open ('c' card / 'h' row / 'p' bill + its id)
   const noteTyped = {};       // receipt id -> what is being typed, kept through a redraw
   const noteOf = r => String((r && r.note && r.note.text) || '').trim();
+  // A note Claude has not gone through since it was written (receiptnotes.py
+  // waiting -- keep the two the same).
+  const noteWaiting = r => !!noteOf(r) && String(((r.noteDone || {}).noteAt) || '') !== String((r.note || {}).at || '');
+  let notesGoing = false;     // "Go through them now" pressed and not answered yet
   function noteHtml(r, where) {
     const t = noteOf(r);
     if (!t || noting === where + safeId(r.id)) return '';
     const n = r.note || {};
     const by = [String(n.name || '').split(/[ @]/)[0], n.at ? fmtDateMD(String(n.at).slice(0, 10)) : ''].filter(Boolean).join(', ');
-    return '<div class="rc-mynote">📝 ' + esc(t) + (by ? ' <span class="muted">— ' + esc(by) + '</span>' : '') + '</div>';
+    return '<div class="rc-mynote">📝 ' + esc(t) + (by ? ' <span class="muted">— ' + esc(by) + '</span>' : '') + '</div>' +
+      noteBackHtml(r);
+  }
+  // Under the note: what Claude did with it, or asks -- and, until it has
+  // gone through this note, when it will.
+  function noteBackHtml(r) {
+    const d = r.noteDone || null;
+    const fresh = !noteWaiting(r);
+    const when = d && d.at ? ' <span class="muted">' + esc(fmtDateMD(String(d.at).slice(0, 10))) + '</span>' : '';
+    return (d && d.says ? '<div class="rc-noteback' + (d.asks ? ' asks' : '') + (fresh ? '' : ' old') + '">' +
+        (d.asks ? '❓' : '🤖') + ' <b>Claude</b>' + when + ': ' + esc(d.says) +
+        (fresh ? '' : ' <span class="muted">(about your note before you changed it)</span>') + '</div>' : '') +
+      (fresh ? '' : '<div class="rc-noteback wait">⏳ Claude goes through it ' + nextPassWords() + '</div>');
+  }
+  // The pass runs with the Friday evening summary (5:30 pm, Chicago).
+  function nextPassWords() {
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    return now.getDay() === 5 && now.getHours() < 17 ? 'this evening' : 'Friday evening';
   }
   function noteBtn(where, rid, r) {
     if (!sorts()) return '';
     const open = noting === where + rid, has = !!noteOf(r);
     const words = has ? 'Note' : 'Add a note';
+    // A row (All receipts, Invoices to pay) has room for the icon only.
+    const row = where !== 'c';
     return '<button type="button" class="btn btn-sm' + (open ? ' btn-filled' : '') + '" aria-expanded="' + open + '"' +
-      (where === 'h' ? ' title="' + words + '" aria-label="' + words + '"' : '') +
-      ' onclick="rcNote(\'' + where + rid + '\')">' + (where === 'h' ? '📝' : '📝 ' + words) + '</button>';
+      (row ? ' title="' + words + '" aria-label="' + words + '"' : '') +
+      ' onclick="rcNote(\'' + where + rid + '\')">' + (row ? '📝' : '📝 ' + words) + '</button>';
   }
+  // The bar at the top: how many notes wait for Claude, and the button that
+  // has it go through them now rather than on Friday.
+  function notesBarHtml() {
+    if (!sorts()) return '';
+    const n = allReceipts().filter(noteWaiting).length;
+    if (!n && !notesGoing) return '';
+    return '<span class="rc-notes-wait">📝 ' + (notesGoing ? 'Claude is going through your notes…'
+        : n + ' note' + (n === 1 ? '' : 's') + ' for Claude — ' + nextPassWords()) + '</span>' +
+      (notesGoing ? '' : '<button class="btn btn-sm" onclick="rcNotesNow()">Go through them now</button>');
+  }
+  window.rcNotesNow = async function () {
+    if (notesGoing || !sorts() || !window.YDClaude) return;
+    notesGoing = true; redraw(true);
+    try {
+      const out = await window.YDClaude.post('/receipts/notes-now', {});
+      if (out.busy) showToast('Claude is going through them already — the answers appear under each note');
+      else if (out.none) showToast('No notes waiting — every one has been gone through');
+      else {
+        const asks = out.asks || 0;
+        showToast('📝 ' + (out.gone || 0) + ' note' + (out.gone === 1 ? '' : 's') + ' gone through' +
+          (asks ? ' — ' + asks + ' ask' + (asks === 1 ? 's' : '') + ' you something (under the note)' : ', all done') +
+          (out.left ? ' · ' + out.left + ' left for this evening' : ''), 6000);
+      }
+    } catch (e) {
+      showToast('Claude could not go through the notes: ' + ((e && e.message) || e));
+    }
+    notesGoing = false;
+    await loadState();
+    redraw(true);
+  };
   function noteEditHtml(where, rid, r) {
     if (noting !== where + rid || !sorts()) return '';
     const text = noteTyped[rid] != null ? noteTyped[rid] : noteOf(r);
@@ -1321,7 +1387,8 @@
         (noteOf(r) ? '<button type="button" class="btn btn-sm" onclick="rcNoteSave(\'' + where + '\',\'' + rid + '\', true)">Take it off</button>' : '') +
         '<button type="button" class="btn btn-sm" onclick="rcNote(\'\')">Cancel</button>' +
       '</div>' +
-      '<div class="rc-hint">Claude reads it: when the receipt is read again (⋯ → 📖 Read it again), and when it works on your books.</div>' +
+      '<div class="rc-hint">Claude goes through your notes every Friday evening and does what each one says — or asks you, ' +
+        'under the note. It reads it too when the receipt is read again (⋯ → 📖 Read it again).</div>' +
     '</div>';
   }
   window.rcNote = function (key) {
@@ -1863,7 +1930,8 @@
     el('rcBadge').textContent = open.length ? open.length + ' to sort' : '';
     el('rcBar').innerHTML =
       (sorts() ? '<button class="btn btn-sm" onclick="rcCheckNow()"' + (checking ? ' disabled' : '') + '>' +
-        (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml() + qbAddressHtml();
+        (checking ? 'Checking email…' : '📧 Check email now') + '</button>' : '') + stateHtml() + qbAddressHtml() +
+      notesBarHtml();
     el('rcList').innerHTML = !loaded ? '<p class="empty-msg">Loading receipts…</p>'
       : (open.length ? open.map(r => cardHtml(r, jobs)).join('')
         : '<p class="empty-msg">Nothing ' + (old.length ? 'new ' : '') + 'to sort. Receipts that arrive by email show up here by themselves.</p>') +

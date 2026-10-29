@@ -508,6 +508,18 @@ def _digest(request, path, headers):
                 posted = result
             except Exception as e:                      # noqa: BLE001
                 print("the week's posts not made:", e)
+        # Friday evening (or the next evening, when Friday's was missed or
+        # left some): Jonah's notes on receipts, gone through by Claude and
+        # done (receiptnotes.py), then one push to say so.
+        noted = None
+        if slot == "evening":
+            try:
+                import receiptnotes
+                if receiptnotes.due(_db):
+                    noted = receiptnotes.go_through(_claude())
+                    receiptnotes.tell_owner(noted)
+            except Exception as e:                      # noqa: BLE001
+                print("receipt notes not gone through:", e)
         # Every evening, after the summary: each job worked today gets its
         # daily log (joblog.py) -- hours, ticks, photos and notes in code,
         # Claude only for notes to read.
@@ -520,8 +532,8 @@ def _digest(request, path, headers):
                 print("daily logs not written:", e)
         if failed is not None:
             return (json.dumps({"error": failed}), 500, json_headers)
-        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted, "logs": logged}),
-                200, json_headers)
+        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted, "notes": noted,
+                            "logs": logged}), 200, json_headers)
 
     if path == "/digest/preview":
         if origin_blocked(request):
@@ -808,6 +820,28 @@ def _receipts(request, path, headers):
         if usage is not None:
             _record_spend(day, "receipts", usage, receipts.MODEL)
         return (json.dumps(result), 400 if result.get("error") else 200, json_headers)
+    elif path == "/receipts/notes-now":
+        # "Go through them now" on the Receipts tab: the Friday pass over the
+        # notes on receipts (receiptnotes.py), at once. It sorts receipts, so
+        # whoever may sort them (jobs change); its calls count to the day's.
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            uid = _caller(request, "jobs", "change")
+            _check_and_count_usage(uid)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        except RuntimeError as e:
+            return (json.dumps({"error": str(e)}), 429, json_headers)
+        import receiptnotes
+        try:
+            out = receiptnotes.go_through(_claude(), by="now", budget=receiptnotes.BUDGET_NOW_S)
+        except anthropic.RateLimitError:
+            return (json.dumps({"error": "Claude is busy — try again shortly"}), 429, json_headers)
+        except Exception as e:                      # noqa: BLE001
+            print("receipt notes failed:", e)
+            return (json.dumps({"error": "The notes could not be gone through. Try once more."}), 502, json_headers)
+        return (json.dumps(out), 400 if out.get("error") else 200, json_headers)
     elif path == "/receipts/qb-send":
         # A receipt photo sent to QuickBooks again (receipts.forward_to_qb) --
         # one whose send failed, or sent before the address was set.

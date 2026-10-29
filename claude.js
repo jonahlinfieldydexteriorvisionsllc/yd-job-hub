@@ -24,7 +24,7 @@
   const SHORT_MS = 45000;
   const LONG_MS = 300000;
   const LONG_PATHS = ['/estimate/draft', '/estimate/source', '/supplies/read-sheet', '/cards/now',
-    '/receipts/photo', '/receipts/now', '/receipts/read-again', '/care/draft', '/posts/draft', '/followup/draft', '/subs/scan',
+    '/receipts/photo', '/receipts/now', '/receipts/read-again', '/receipts/notes-now', '/care/draft', '/posts/draft', '/followup/draft', '/subs/scan',
     '/qb/estimate', '/qb/estimate-invoice', '/qb/invoice'];
   const waitFor = path => (LONG_PATHS.indexOf(path) !== -1 ? LONG_MS : SHORT_MS);
 
