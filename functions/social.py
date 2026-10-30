@@ -106,6 +106,9 @@ HORIZON_DAYS = 8
 RECENT_DAYS = 45
 LATE = datetime.timedelta(hours=3)        # a post this late is missed, not put up
 MAX_TRIES = 3
+STUCK = datetime.timedelta(minutes=30)    # 'posting' this long: the run died mid-post
+MAYBE_UP = ("%s took too long to answer, so it may have gone up -- look at the page "
+            "before you tap Try again, or it could go up twice")
 WRITES_PER_RUN = 6                        # Claude writes for this many jobs a run at most
 PLAN_BUDGET_S = 150                       # ... and is not asked again after this many seconds
 IDEAS_PER_MONTH = 10
@@ -539,7 +542,7 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
         if got.get("facebook"):
             words_cache[jid] = got
             return got
-        if got.get("error"):
+        if got.get("error") and not (got.get("noWork") and posts.has_work(j)):
             words_cache[jid] = None
             return None
         if not may_ask():
@@ -712,6 +715,16 @@ def publish_due(db=None, people=None, now=None):
             if (s.to_dict() or {}).get("heldWhy") == HELD_NO_AUTO:
                 s.reference.set({"status": "queued", "heldWhy": None, "updatedAt": _stamp()}, merge=True)
     sent = []
+    # A run that died part way through a post (Cloud Run stopped, a crash)
+    # left it 'Going up…' for good. Taken again blind it could go up twice,
+    # so it turns 'Didn't go up' with words to look first, and he is told.
+    for s in db.collection("socialPosts").where("status", "==", "posting").stream():
+        d = s.to_dict() or {}
+        began = _parse(d.get("postingAt"))
+        if began and now - began > STUCK:
+            s.reference.set({"status": "failed", "error": MAYBE_UP % NAMES.get(d.get("place"), "It"),
+                             "updatedAt": _stamp()}, merge=True)
+            sent.extend(_failed(db, people, d, "Job Hub lost track while putting it up", False) or [])
     for s in db.collection("socialPosts").where("status", "==", "queued").stream():
         d = s.to_dict() or {}
         # "Each waits for my OK": a post already in line when he switched it
@@ -859,6 +872,13 @@ def fb_post(db, d):
             for i, fid in enumerate(ids):
                 data["attached_media[%d]" % i] = json.dumps({"media_fbid": fid})
             r = requests.post("%s/%s/feed" % (GRAPH, page), data=data, timeout=60)
+    except requests.ReadTimeout:
+        # Sent, but no answer came: Facebook may have put it up. Retried
+        # blind it could go up twice, so the Page is looked at first.
+        found = _fb_find(page, token, text)
+        if found:
+            return {"postId": found, "link": "https://www.facebook.com/" + found}
+        raise RuntimeError(MAYBE_UP % "Facebook")
     except requests.RequestException as e:
         raise Retry("Facebook could not be reached (%s)" % e)
     if r.status_code >= 300:
@@ -866,6 +886,24 @@ def fb_post(db, d):
     got = r.json() or {}
     post = got.get("post_id") or got.get("id") or ""
     return {"postId": post, "link": "https://www.facebook.com/" + post if post else None}
+
+
+def _fb_find(page, token, text):
+    """The id of a post on the Page in the last half hour with these very
+    words, else None (also when the Page can't be read)."""
+    try:
+        r = requests.get("%s/%s/posts" % (GRAPH, page), timeout=30,
+                         params={"fields": "id,message,created_time", "limit": 10, "access_token": token})
+        if r.status_code >= 300:
+            return None
+        since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)
+        for p in (r.json() or {}).get("data") or []:
+            made = _parse(str(p.get("created_time") or "").replace("+0000", "+00:00"))
+            if (p.get("message") or "").strip() == text.strip() and made and made >= since:
+                return p.get("id")
+    except (requests.RequestException, ValueError):
+        return None
+    return None
 
 
 def _redirect():
@@ -1090,6 +1128,14 @@ def google_post(db, d, now):
         body["media"] = [{"mediaFormat": "PHOTO", "sourceUrl": photo["url"]}]
     try:
         r = requests.post(GBP_V4 + where + "/localPosts", headers=h, json=body, timeout=60)
+    except requests.ReadTimeout:
+        # As for Facebook: no answer is not "not up" -- the profile is looked
+        # at before anything could put it up a second time.
+        found = _g_find(h, where, body["summary"])
+        if found:
+            return {"postId": found.get("name"), "link": found.get("searchUrl"),
+                    "galleryAdded": _gallery(db, h, where, now)}
+        raise RuntimeError(MAYBE_UP % "Google")
     except requests.RequestException as e:
         raise Retry("Google could not be reached (%s)" % e)
     if r.status_code >= 300:
@@ -1097,6 +1143,23 @@ def google_post(db, d, now):
     got = r.json() or {}
     added = _gallery(db, h, where, now)
     return {"postId": got.get("name"), "link": got.get("searchUrl"), "galleryAdded": added}
+
+
+def _g_find(h, where, summary):
+    """The profile's post from the last half hour with these very words,
+    else None (also when the profile can't be read)."""
+    try:
+        r = requests.get(GBP_V4 + where + "/localPosts", headers=h, params={"pageSize": 10}, timeout=30)
+        if r.status_code >= 300:
+            return None
+        since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)
+        for p in (r.json() or {}).get("localPosts") or []:
+            made = _parse(str(p.get("createTime") or "").replace("Z", "+00:00"))
+            if (p.get("summary") or "").strip() == summary.strip() and made and made >= since:
+                return p
+    except (requests.RequestException, ValueError):
+        return None
+    return None
 
 
 def _gallery(db, h, where, now):

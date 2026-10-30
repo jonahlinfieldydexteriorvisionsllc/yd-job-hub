@@ -587,6 +587,11 @@ def _sort(db, rid, r0, files, ctx):
             return None, "it is filed already"
         if st == stages.RECEIPT_TO_PAY:
             return None, "it is under Invoices to pay -- not paid yet"
+        if (r.get("sentFor") or {}).get("from") == "note" and (r.get("auto") or {}).get("state") in ("ready", "adding"):
+            # The lines an earlier note gave a job are not on it yet (his
+            # device adds them): they still look free here, and filing them
+            # elsewhere would quietly drop them from the job.
+            return None, "the job lines from its last note are still being added -- ask again once they're on the job"
         lines, splits = r.get("lines") or [], [s for s in (r.get("splits") or []) if isinstance(s, dict)]
         tax = int(r.get("taxCents") or 0)
         if not lines:
@@ -815,6 +820,17 @@ def _carry_out(client, db, rid, a, ctx, everyone, cost):
     return did, failed, also
 
 
+def _fresh(db, rid):
+    """The receipt as it is now; None when it is gone, False when it could
+    not be read."""
+    try:
+        snap = db.collection("receipts").document(rid).get()
+        return (snap.to_dict() or {}) if snap.exists else None
+    except Exception as e:                          # noqa: BLE001
+        print("receipt notes: %s not read again: %s" % (rid, e))
+        return False
+
+
 def _answer_back(db, rid, r, a, did, failed):
     """What Claude said, on the receipt -- or, when the app could not do it,
     what stopped it, so the words never claim what did not happen."""
@@ -910,7 +926,20 @@ def go_through(client, by="friday", budget=BUDGET_S):
                     did, failed, also = [], ["something went wrong (%s)" % str(e)[:120]], []
                 asks = _answer_back(db, rid, r, a, did, failed)
                 for other in also:
-                    _answer_back(db, other, r, a, did, failed)
+                    # A receipt read again into one per PDF: the new ones
+                    # carry this note, and its answer. One that was already
+                    # there with a note of its own keeps its own.
+                    o = _fresh(db, other)
+                    if o and _note(o)[0] in ("", _note(r)[0]):
+                        _answer_back(db, other, r, a, did, failed)
+                # What later batches are shown (and _near) is as it is now,
+                # not as it was before this answer filed or set it aside.
+                for x in [rid] + also:
+                    o = _fresh(db, x)
+                    if o is None:
+                        everyone.pop(x, None)
+                    elif o is not False:
+                        everyone[x] = o
                 out["gone"] += 1
                 out["asks" if asks else "done"] += 1
             # One Claude left out is gone through the next evening.

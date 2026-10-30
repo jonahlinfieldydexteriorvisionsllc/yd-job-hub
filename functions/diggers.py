@@ -97,7 +97,10 @@ def parse_response(text):
     no = re.search(r"Ticket Number\s*:\s*(\d{6,})", t)
     if not no:
         return None
-    body = t.split("Status Explanations", 1)[0]
+    # The space at the end: a row is closed by the space after it, so in an
+    # email with no "Status Explanations" part the LAST utility was dropped
+    # -- a trailing one still waiting could read as all clear to dig.
+    body = t.split("Status Explanations", 1)[0] + " "
     statuses = "|".join(re.escape(s) for s in DONE + WAITING)
     rows = re.findall(r"(" + statuses + r")\s+([A-Z0-9]{3,6})\s+(.+?)\s+(?=\(\d{3}\)|" + statuses + r"|$)", body)
     done, waiting, names, seen = 0, 0, [], set()

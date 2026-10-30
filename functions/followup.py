@@ -1168,6 +1168,23 @@ def send_welcome(db, ref, jid, j, to, conf, cust=None, by=None):
             rec = {k: d[k] for k in ("to", "subject", "sentAt", "messageId", "threadId", "link", "draftId") if d.get(k)}
             rec["at"] = _stamp()
             ref.update({"welcomeEmail": rec, "lastModified": rec["at"]})
+        elif not d.get("done") and not thanks_done(j.get("welcomeEmail")):
+            # A claim with no end: the run died between the claim and Gmail's
+            # answer. Left so, the job came back every morning and took its
+            # customer's turn for the day. A draft is simply made again; a
+            # send may have gone, so it is marked "look in your Sent mail"
+            # (as the thank-yous are, _from_log) and never sent twice.
+            claimed = _when(d.get("at"))
+            if claimed and dg._now() - claimed < CLAIM_FRESH:
+                return None, "already"
+            if d.get("mode") == "draft":
+                log.delete()
+            else:
+                at = _stamp()
+                rec = {"at": at, "to": d.get("to") or to, "subject": subject, "sentAt": d.get("at") or at,
+                       "unconfirmed": True}
+                ref.update({"welcomeEmail": rec, "lastModified": at})
+                j["welcomeEmail"] = rec
         return None, "already"
     try:
         got = cards.draft_email(to, subject, body) if mode == "draft" else cards.send_mail(to, subject, body)

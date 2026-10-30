@@ -130,6 +130,12 @@ def _facts(j):
     }
 
 
+def has_work(j):
+    """Whether there is anything on the job to write a post about."""
+    f = _facts(j)
+    return bool(f["work"] or f["services"])
+
+
 def _after_photos(db, job_id, most=8):
     """The job's after photos, newest first: links for the card."""
     out = []
@@ -215,7 +221,10 @@ def words(client, db, job_id, j):
     not write about, is kept as such so it is not asked about again."""
     facts = _facts(j)
     if not facts["work"] and not facts["services"]:
-        db.collection("socialWords").document(job_id).set({"error": "no work on its estimate",
+        # noWork: kept so it costs nothing each run, but asked again once the
+        # job has work on it (a QuickBooks estimate filled in after the job
+        # was finished) -- social.py plan looks at has_work().
+        db.collection("socialWords").document(job_id).set({"error": "no work on its estimate", "noWork": True,
                                                             "at": dg._now().isoformat()})
         return {"error": "no work on its estimate"}, None
     posts, error, usage = _ask(client, facts)
