@@ -170,6 +170,9 @@ def run():
         # Plowable snow or freezing rain coming, Nov-Apr: checked every three
         # hours, one push per snowfall (stormwatch.py).
         ("storm watch", (), lambda: _storm_watch(db, people, prefs, now)),
+        # Tax and filing dates 14 / 3 / 0 days away, once a day after 7 am
+        # (deadlines.py).
+        ("tax and filing dates", (), lambda: _deadlines(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -188,6 +191,11 @@ def run():
 def _storm_watch(db, people, prefs, now):
     import stormwatch
     return stormwatch.run(db, people, prefs, now)
+
+
+def _deadlines(db, people, now):
+    import deadlines
+    return deadlines.run(db, people, now)
 
 
 def _set_reminders(db, people, cals, since, now):

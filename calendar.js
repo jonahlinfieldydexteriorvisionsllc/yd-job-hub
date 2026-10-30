@@ -104,6 +104,11 @@
     // The owner's alone (only he can read the date).
     'auto:outreach': { id: 'auto:outreach', name: 'Next season outreach', color: '#2f8f5b', auto: true,
                        about: 'The start date on the Contacts tab' },
+    // Jonah's routine 10 of 14: sales tax returns, estimated tax, 1099s, the
+    // LLC report and dates of his own -- worked out (deadlines.js), never
+    // stored as entries. The owner's alone.
+    'auto:deadlines': { id: 'auto:deadlines', name: 'Tax & filing dates', color: '#9a3412', auto: true,
+                        about: 'From ⚙ All settings → Tax & filing dates' },
   };
   // {start: 'YYYY-MM-DD', due(day)} once the owner has set the date, else null.
   const outreachInfo = () => (window.YDProspects && YDProspects.outreach ? YDProspects.outreach() : null);
@@ -245,7 +250,8 @@
   function layers() {
     const auto = Object.values(AUTO).filter(l => (!l.ownerOnly || ydCan('equipment', 'see')) &&
       (l.id !== 'auto:recurring' || (window.YDRecurring && YDRecurring.visible())) &&
-      (l.id !== 'auto:outreach' || !!outreachInfo()));
+      (l.id !== 'auto:outreach' || !!outreachInfo()) &&
+      (l.id !== 'auto:deadlines' || !!(window.YDDeadlines && YDDeadlines.visible())));
     return storedCals().concat(auto);
   }
   function layerOf(id) { return cals[id] || AUTO[id] || null; }
@@ -452,6 +458,15 @@
         title: '📲 Start reaching out for next season', name: 'Start reaching out for next season',
         // Calls to make: office work, as a 📲 Phone call is.
         note: n ? n + (n === 1 ? ' person' : ' people') + ' to reach — Contacts' : 'Contacts tab', place: 'office' });
+    }
+
+    // Tax and filing dates: a task on its due date, ticked off here or in
+    // its window (deadlines.js). Paperwork: office work.
+    if (window.YDDeadlines && YDDeadlines.visible() && !off('auto:deadlines') && !cardsOnly) {
+      YDDeadlines.between(from, to).forEach(x => {
+        out.push({ day: x.due, layer: AUTO['auto:deadlines'], auto: 'deadline', id: x.key, task: true, done: x.done,
+          doneAt: '', title: '📅 ' + x.name, name: x.name, note: x.needs || 'Tax & filing dates', place: 'office' });
+      });
     }
 
     // All-day first, then by time, then by calendar, so a day reads top to
@@ -707,6 +722,7 @@
       if (window.YDBoards && YDBoards.editsBoard && YDBoards.editsBoard(o.auto === 'card' ? o.boardId : 'crew')) return true;
       return onlyOnesOwn(onUids(o));
     }
+    if (o.auto === 'deadline') return !!(window.YDDeadlines && YDDeadlines.visible());
     if (o.auto) return false;                      // a machine is done by logging its service
     const cal = cals[o.calId], u = me();
     // A job's day is not ticked off (remind.js isJobDay / isTask).
@@ -900,7 +916,7 @@
   let pushState = '';       // this phone's notifications (notify.js); '' until asked
   function occIsMine(o, w) {
     if (o.auto === 'storm') return true;                       // a storm is everybody's
-    if (o.auto === 'equipment' || o.auto === 'outreach') return !!w.owner;
+    if (o.auto === 'equipment' || o.auto === 'outreach' || o.auto === 'deadline') return !!w.owner;
     if (o.auto === 'card' || o.auto === 'recurring') {
       const boardId = o.auto === 'card' ? o.boardId : 'crew';
       const b = (YDBoards.boards() || {})[boardId] || { id: boardId };
@@ -1018,6 +1034,7 @@
   // Ticks one thing off (or back on) for its own date. False when it could
   // not be.
   function tick(o, on) {
+    if (o.auto === 'deadline') return !!(window.YDDeadlines && YDDeadlines.setDone(o.id, on));
     if (o.auto === 'card' || o.auto === 'recurring') {
       if (!window.YDBoards || !YDBoards.setDone(o.auto === 'card' ? o.boardId : 'crew', o.id, on)) {
         showToast('That card is not on its board yet');
@@ -1540,6 +1557,7 @@
     if (o.auto === 'equipment') return calOpenEquipment(o.id);
     if (o.auto === 'card') return calOpenCard(o.boardId, o.id);
     if (o.auto === 'outreach') return calOpenOutreach();
+    if (o.auto === 'deadline') return window.openDeadlines && window.openDeadlines();
     // A recurring task: its card when this date's has been made, otherwise
     // the Crew tasks board.
     if (o.auto === 'recurring') {
@@ -3837,6 +3855,7 @@
   document.addEventListener('yd-boards-changed', redrawIfVisible);
   // The outreach date set or moved, or who is due changed (prospects.js).
   document.addEventListener('yd-outreach', redrawIfVisible);
+  document.addEventListener('yd-deadlines', redrawIfVisible);
   // This person's own record has come in (remind.js): whether they are crew,
   // and so what My day holds, follows it.
   document.addEventListener('yd-remind-me', redrawIfVisible);

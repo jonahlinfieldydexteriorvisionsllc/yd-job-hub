@@ -3897,6 +3897,26 @@
   .hm-alert .hm-watch-row { display:block; color:var(--text); font-size:13px; overflow-wrap:anywhere; }
   .hm-alert .hm-watch-row span { font-size:12.5px; }
   .hm-alert .hm-watch-small { display:block; margin-top:2px; font-size:12px; }
+  /* Tax & filing dates (deadlines.js) */
+  .dl-ask { padding:10px 12px; margin:0 0 12px; border:1px solid var(--border); border-radius:10px; background:var(--surface); }
+  .dl-ask small { display:block; margin-top:6px; color:var(--muted); font-size:12.5px; }
+  .dl-freq { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
+  .dl-freq .btn { min-height:44px; }
+  .dl-row { display:flex; align-items:flex-start; gap:10px; padding:10px 4px; border-bottom:1px solid var(--border); }
+  .dl-tick { flex:none; width:32px; height:32px; margin-top:2px; border-radius:8px; border:2px solid var(--border);
+    background:var(--surface); color:var(--text); font-weight:700; cursor:pointer; }
+  .dl-row.done .dl-tick { border-color:var(--st-done); color:var(--st-done); }
+  .dl-main { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; overflow-wrap:anywhere; }
+  .dl-main small { color:var(--muted); font-size:12.5px; line-height:1.4; }
+  .dl-main .dl-when { color:var(--text); font-weight:600; }
+  .dl-row.soon .dl-when { color:var(--st-soon); }
+  .dl-row.now .dl-when, .dl-row.late .dl-when { color:var(--neg); }
+  .dl-row.done .dl-main b { color:var(--muted); font-weight:600; }
+  .dl-x { flex:none; min-width:44px; min-height:44px; }
+  .dl-add { display:flex; flex-direction:column; gap:10px; margin:14px 0 0; padding:12px; border:1px dashed var(--border); border-radius:10px; }
+  .dl-add label { display:flex; flex-direction:column; gap:4px; font-size:13px; }
+  .dl-add-btn { margin-top:14px; min-height:44px; }
+  .dl-off { margin-top:12px; }
   .hm-flash { animation:uxc-flash 1.6s ease-out; }
   @keyframes uxc-flash { 0%, 40% { box-shadow:0 0 0 4px #3fb6d8; } 100% { box-shadow:0 0 0 4px rgba(63,182,216,0); } }
   /* Home: your clock -- Clock out on its own, marked; the long-shift note */

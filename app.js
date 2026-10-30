@@ -1060,7 +1060,9 @@ function switchTab(name) {
 // summary opened nothing.
 // The end of the day (eod.js): the crew's reminder opens their list, the
 // owner's "it is in" opens the reports.
-const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports' };
+// A tax or filing date coming up (functions/deadlines.py) opens its window.
+const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
+  deadlines: 'openDeadlines' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }

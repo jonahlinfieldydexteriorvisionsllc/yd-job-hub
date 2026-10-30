@@ -385,6 +385,8 @@
       // The end of the day (eod.js): the list itself, or the owner's reports.
       else if (want === 'eod' && window.openEndOfDay) window.openEndOfDay();
       else if (want === 'eodreports' && window.openEodReports) window.openEodReports();
+      // A tax or filing date coming up (deadlines.js).
+      else if (want === 'deadlines' && window.openDeadlines) window.openDeadlines();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
         const btn = el(tabButtonId(want));
         if (btn && !btn.hidden) switchTab(want);
