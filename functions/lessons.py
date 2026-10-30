@@ -637,9 +637,16 @@ def after_finish(client, db=None, now=None):
             db.collection("reminderLog").document("lessons_" + jid).create({"at": now.isoformat()})
         except AlreadyExists:
             continue
-        if recs is None:
-            recs = {x["id"]: x for x in pj.records(db)}
-        got, usage = _ask(client, _prompt(j, r, recs.get(jid), day_hours))
+        try:
+            if recs is None:
+                recs = {x["id"]: x for x in pj.records(db)}
+            got, usage = _ask(client, _prompt(j, r, recs.get(jid), day_hours))
+        except Exception as err:            # noqa: BLE001
+            # Claude could not be reached (overloaded, a timeout): the job is
+            # not marked read, so tomorrow evening asks again.
+            print("lessons: not read for", jid, "-", err)
+            db.collection("reminderLog").document("lessons_" + jid).delete()
+            break
         spend.record(db, now.astimezone(datetime.timezone.utc).strftime("%Y-%m-%d"), "lessons", MODEL, usage)
         read += 1
         at = now.astimezone(datetime.timezone.utc).isoformat().replace("+00:00", "Z")
@@ -648,7 +655,11 @@ def after_finish(client, db=None, now=None):
             i = issue_of(x if isinstance(x, dict) else {}, j, cats)
             if not i:
                 continue
-            nid = "cn%sc%d" % (_b36(int(now.timestamp() * 1000)), n)
+            # One id per lesson in the whole run: `now` is the same for every
+            # job read this evening, so the count runs across them all (it
+            # restarted for each job, and a second job's lessons overwrote the
+            # first's).
+            nid = "cn%sc%d" % (_b36(int(now.timestamp() * 1000)), wrote + n)
             # Handled and told already: Claude's lesson is no to-do for Jonah
             # and never buzzes his phone -- it waits on the job for the next
             # one like it, where he can change or remove it.
