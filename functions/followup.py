@@ -640,6 +640,9 @@ def auto(client, deadline=None, spent=None, claude=True):
             to = _contact(db, ref, j, known) if steps else ""
             for s in steps:
                 if s["kind"] == "decide":
+                    # They wrote back (the plan held for it): not "no answer".
+                    if heard(j):
+                        continue
                     cid = _lost_card(db, jid, j)
                     if cid:
                         ref.update({"chaseLostCard": {"cardId": cid, "at": _stamp()}, "lastModified": _stamp()})
@@ -740,6 +743,9 @@ TEST_JOB = re.compile(r"(?i)\btest\b")
 COMPANY = re.compile(r"(?i)\b(llc|inc|corp|co|company|properties|property|management|mgmt|apartments?|condos?|"
                      r"hoa|association|church|school|group|partners|holdings|services|realty|homes|builders|"
                      r"construction|city|village|town|county|club|center|centre)\b|\d")
+# A household's name, not a person's: "The Johnson Family", "Smith Residence",
+# "Mr and Mrs Smith" -- the email says "Hi there," rather than "Hi The,".
+NOT_A_FIRST = re.compile(r"(?i)^(the|mr|mrs|ms|miss|dr)\b\.?|\b(family|residence|household|estate|trust|farms?)\b")
 # Lines of an estimate that are not the work: no "thank you for your discount".
 NOT_WORK = re.compile(r"(?i)discount|terms|warranty|notice|deposit|\bfee\b|change order")
 
@@ -770,7 +776,7 @@ def _first_name(j, cust):
     if first:
         return cap(first[:40])
     name = re.sub(r"\s+", " ", str(j.get("customerName") or "")).strip()
-    if not name or str(j.get("business") or "").strip() or COMPANY.search(name):
+    if not name or str(j.get("business") or "").strip() or COMPANY.search(name) or NOT_A_FIRST.search(name):
         return ""
     two = re.match(r"^([A-Za-z][A-Za-z'-]+) (?:&|and) ([A-Za-z][A-Za-z'-]+) [A-Za-z'-]+$", name)
     if two:

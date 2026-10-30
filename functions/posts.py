@@ -378,7 +378,7 @@ def weekly(client, today=None):
     picked = []
     for s in db.collection("jobs").where("completedAt", ">=", start.isoformat()).stream():
         j = s.to_dict() or {}
-        done = str(j.get("completedAt") or "")[:10]
+        done = dg._local_day(j.get("completedAt"))      # the Chicago day (completedAt is UTC)
         if not (start.isoformat() <= done <= today.isoformat()) or j.get("noPost") or j.get("removeWhy"):
             continue
         photos = _week_photos(db, s.id)
