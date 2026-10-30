@@ -308,6 +308,7 @@
     if (live && p.place !== 'nextdoor' && hooked(p.place)) acts.push(btn("spNow('" + id + "')", p.status === 'failed' ? 'Try again now' : 'Post now'));
     if (live && p.place === 'nextdoor' && p.status === 'queued') acts.push(btn("spNow('" + id + "')", 'Get it ready now'));
     acts.push(btn("spCopy('" + id + "')", '📋 Copy the words'));
+    if (live && p.kind === 'job' && p.status !== 'ready') acts.push(btn("spRewrite('" + id + "')", '✍️ Write it again'));
     if (live && p.status !== 'ready') acts.push(btn("spSkip('" + id + "')", 'Skip it'));
     if (p.link) acts.push('<a class="btn btn-sm" href="' + esc(p.link) + '" target="_blank" rel="noopener">See it ↗</a>');
     return '<div class="sp-open">' +
@@ -524,6 +525,16 @@
     if (!r) return;
     showToast(r.status === 'posted' ? '✓ It’s up' : r.status === 'ready' ? 'Ready — open Nextdoor to post it'
       : 'Not posted: ' + (r.error || r.status));
+  };
+  // Claude writes the job's words again; every post of the job not up yet
+  // and not changed by hand takes them (social.py rewrite).
+  window.spRewrite = async id => {
+    const p = posts[id];
+    if (!p) return;
+    if (p.edited && !(await ydConfirm('You changed this one by hand — Claude’s new words won’t replace yours here ' +
+        '(they will on the job’s other posts). Go on?', { ok: 'Write them again' }))) return;
+    const r = await ask('/social/rewrite', { id: p.id }, 'Claude is writing it again…');
+    if (r) showToast(r.error || 'Written again — ' + r.posts + ' post' + (r.posts === 1 ? '' : 's') + ' changed');
   };
   window.spCopy = id => {
     const p = posts[id];

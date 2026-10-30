@@ -1084,6 +1084,53 @@ def _gallery(db, h, where, now):
 # ---------------------------------------------------------------- the app
 
 
+def rewrite(client, pid):
+    """"Write it again" on a job's post: Claude writes the job's words anew
+    (socialWords), and every post of that job not up yet and not changed by
+    hand takes them -- checked again, as when planned."""
+    import posts
+    import spend
+    db = _db()
+    snap = db.collection("socialPosts").document(pid).get()
+    d = (snap.to_dict() or {}) if snap.exists else {}
+    jid = d.get("jobId")
+    if d.get("kind") != "job" or not jid:
+        return {"error": "Only a job's post can be written again — change the words by hand"}
+    js = db.collection("jobs").document(jid).get()
+    if not js.exists:
+        return {"error": "That job is gone"}
+    if spend.over_cap(db):
+        return {"error": "Over today's Claude limit — try tomorrow, or change the words by hand"}
+    j = js.to_dict() or {}
+    res, usage = posts.words(client, db, jid, j)
+    if usage is not None:
+        spend.record(db, spend.today(), "social", posts.MODEL, usage)
+    if not (isinstance(res, dict) and res.get("facebook")):
+        return {"error": (res or {}).get("error") or "Claude's words didn't come back"}
+    cfg = settings(db)
+    auto = cfg.get("auto") is not False
+    changed = 0
+    for s in db.collection("socialPosts").where("jobId", "==", jid).stream():
+        p = s.to_dict() or {}
+        place = p.get("place")
+        if place not in PLACES or p.get("edited") or p.get("status") not in ("queued", "held", "notConnected", "failed",
+                                                                                 "missed"):
+            continue
+        words = _clean(place, res.get(place))
+        if not words:
+            continue
+        text, sign = _with_sign_off(place, words, cfg)
+        why = problems(words, j)
+        patch = {"words": words, "text": text, "signOff": sign if place != "google" else "", "updatedAt": _stamp()}
+        if why:
+            patch.update(status="held", heldWhy=why)
+        elif p.get("status") == "held" and p.get("heldWhy") != "You held it":
+            patch.update(status="queued" if auto else "held", heldWhy=None if auto else p.get("heldWhy"))
+        s.reference.set(patch, merge=True)
+        changed += 1
+    return {"ok": True, "posts": changed}
+
+
 def status():
     """What the app shows about the hookups."""
     db = _db()
