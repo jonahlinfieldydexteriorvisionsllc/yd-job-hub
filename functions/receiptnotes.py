@@ -67,7 +67,7 @@ LEARNED = rc.LEARNED
 PLACES = {
     "job": "Job", "vehicle": "Vehicle", "shop": "Shop overhead", "office": "Office overhead",
     "property": "Property overhead", "llc": "LLC overhead", "equipment": "Equipment",
-    "upkeep": "Equipment maintenance", "travel": "Travel", "marketing": "Marketing", "sub": "Subcontractor",
+    "upkeep": "Equipment maintenance", "travel": "Travel", "marketing": "Marketing", "snow": "Snow", "sub": "Subcontractor",
     "loan": "Loan payment", "personal": "Personal",
 }
 # The starter tags (receipts.js RECEIPT_TAGS): stored by their id.
@@ -101,6 +101,7 @@ fees, the accountant, bookkeeper or tax preparer).
 equipment: oil, filters, grease.
   travel -- a hotel, flights, parking or meals on a business trip.
   marketing -- ads, the website, signs, flyers, branded clothing.
+  snow -- rock salt, ice melt and other de-icers for the snow plowing and salting.
   sub -- a subcontractor's bill. Give `sub` (an S number) when they are listed; else "" files it by \
 the store's name.
   loan -- a loan payment (a truck, a machine).  personal -- his own, not the business's: kept, but \

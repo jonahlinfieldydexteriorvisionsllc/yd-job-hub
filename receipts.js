@@ -64,7 +64,7 @@
     equipment_and_repairs: 'Equipment & repairs', fuel: 'Fuel', tools: 'Tools', rental: 'Rental',
     subcontractor: 'Subcontractor', vehicle: 'Vehicle', office_and_software: 'Office & software',
     insurance: 'Insurance', utilities_and_phone: 'Utilities & phone', loan_payment: 'Loan payment', travel: 'Travel',
-    company: 'Company costs', marketing: 'Marketing', other: 'Other',
+    company: 'Company costs', marketing: 'Marketing', snow: 'Snow (salt, ice melt)', other: 'Other',
   };
   // Why a receipt was set aside, in the words of the old pick list. Only read
   // back now: since 13 Oct `skipWhy` is the note typed when it was set aside
@@ -125,6 +125,12 @@
   // clothing ("I want to not have a million tags"), the reader's `marketing`.
   // A business cost like the others, sent to QuickBooks as usual.
   //
+  // Jonah, 30 Oct 2026: "make snow tag for receipts. all rock salt receipts
+  // can be auto sorted into snow." Salt and ice melt for the plowing accounts
+  // are the snow side's cost, not a job's: the reader's `snow` kind starts
+  // on ❄️ Snow, and an emailed one is filed there by itself
+  // (receipts.py _file_snow; ⋯ → Undo puts it back to sort).
+  //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
   // is one more row, and every list below follows.
@@ -139,6 +145,7 @@
     { id: 'upkeep', chip: '🔧 Equipment maintenance', name: 'Equipment maintenance', view: '🔧 Maintenance', total: 'Equipment maintenance' },
     { id: 'travel', chip: '✈️ Travel', name: 'Travel', view: '✈️ Travel', total: 'Travel' },
     { id: 'marketing', chip: '📣 Marketing', name: 'Marketing', view: '📣 Marketing', total: 'Marketing' },
+    { id: 'snow', chip: '❄️ Snow', name: 'Snow', view: '❄️ Snow', total: 'Snow' },
     { id: 'sub', chip: '🤝 Subcontractor', name: 'Subcontractor', view: '🤝 Subcontractors', total: 'Subcontractors' },
     { id: 'loan', chip: '🏦 Loan payment', name: 'Loan payment', view: '🏦 Loans', total: 'Loan payments' },
     { id: 'personal', chip: '👤 Personal', name: 'Personal', view: '👤 Personal', total: 'Personal' },
@@ -150,7 +157,7 @@
   const DEST_NAME = PLACE_LIST.reduce((o, p) => (o[p.id] = p.name, o), { aside: 'Set aside' });
   const DEST_OF_KIND = { fuel: 'vehicle', vehicle: 'vehicle', equipment_and_repairs: 'upkeep',
     office_and_software: 'office', utilities_and_phone: 'office', insurance: 'office', tools: 'shop',
-    loan_payment: 'loan', travel: 'travel', company: 'llc', marketing: 'marketing' };
+    loan_payment: 'loan', travel: 'travel', company: 'llc', marketing: 'marketing', snow: 'snow' };
   const destOf = s => s.to || 'job';
   const dest = {};            // receipt id -> where it is going, once picked
   const chosenGear = {};      // receipt id -> vehicle picked

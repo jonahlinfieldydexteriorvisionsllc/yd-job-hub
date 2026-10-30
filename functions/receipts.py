@@ -305,7 +305,7 @@ def _reading_due(st):
 
 KINDS = ["materials", "plants", "dump_and_disposal", "equipment_and_repairs", "fuel", "tools",
          "rental", "subcontractor", "vehicle", "office_and_software", "insurance",
-         "utilities_and_phone", "loan_payment", "travel", "company", "marketing", "other"]
+         "utilities_and_phone", "loan_payment", "travel", "company", "marketing", "snow", "other"]
 # A payment on a loan (Jonah, 22 Oct 2026): offered for 🏦 Loan payment on the
 # Receipts tab, and never sent to QuickBooks as an expense (_not_for_qb).
 LOAN_KIND = "loan_payment"
@@ -337,6 +337,17 @@ SUB_GOODS = ("materials", "plants")
 # machine rented for a job still costs that job. A receipt read as a rental
 # is saved with the 🚜 Rental tag on it (receipts.js RECEIPT_TAGS).
 RENTAL_KIND = "rental"
+# Jonah, 30 Oct 2026: "make snow tag for receipts. all rock salt receipts can
+# be auto sorted into snow." Salt and ice melt bought for the plowing
+# accounts are the snow side's cost, not a job's: a receipt read as `snow`
+# starts on ❄️ Snow on the Receipts tab and is filed there by itself
+# (_file_snow), as a personal one is under Personal. Plain words, not Claude:
+# a receipt whose every item is salt or a de-icer is snow whatever Claude
+# called it (kind_of) -- softener, pool and kitchen salt never count.
+SNOW_KIND = "snow"
+SALT = re.compile(r"\b(rock salt|road salt|bulk salt|treated salt|ice ?melt(er|ers)?|de ?icers?|de icing|"
+                  r"halite|(calcium|magnesium) chlorides?|salt (bags?|pallets?|tons?|lbs?)|\d+ ?lbs? salt)\b")
+NOT_SALT = re.compile(r"\b(softener|soft water|pool|spa|table|sea|kosher|epsom|lamp|bath|cooking|himalayan|pink)\b")
 
 # Jonah, 26 Oct 2026: "most oreilly receipts are for vehicle parts so those
 # would go under vehicle expenses -- every air filter, oil filter, oil, all
@@ -360,7 +371,7 @@ NOT_UPKEEP = re.compile(r"\b(linseed|teak|deck|stain|olive|cooking|vegetable|can
 NOT_GOODS = re.compile(r"\b(shipping|delivery|freight|handling|fee|fees|surcharge|core|deposit|tax|discount|"
                        r"not itemised)\b")
 LEFT_AS_READ = ("loan_payment", "travel", "subcontractor", "insurance", "office_and_software",
-                "utilities_and_phone", "fuel", COMPANY_KIND, "marketing")
+                "utilities_and_phone", "fuel", COMPANY_KIND, "marketing", SNOW_KIND)
 
 
 def is_office_store(vendor):
@@ -384,9 +395,11 @@ def kind_of(got, lines):
         return kind
     if kind != LOAN_KIND and is_accounting(got.get("vendor")):
         return COMPANY_KIND
+    goods = [_norm(l.get("name")) for l in lines if (l.get("cents") or 0) > 0 and not NOT_GOODS.search(_norm(l.get("name")))]
+    if kind != LOAN_KIND and goods and all(SALT.search(g) and not NOT_SALT.search(g) for g in goods):
+        return SNOW_KIND
     if kind in LEFT_AS_READ:
         return kind
-    goods = [_norm(l.get("name")) for l in lines if (l.get("cents") or 0) > 0 and not NOT_GOODS.search(_norm(l.get("name")))]
     if goods and all(UPKEEP.search(g) and not NOT_UPKEEP.search(g) for g in goods):
         return "equipment_and_repairs"
     if AUTO_PARTS.search(_norm(got.get("vendor"))):
@@ -463,7 +476,8 @@ itself costs: an accountant's, bookkeeper's or tax preparer's bill, a lawyer, th
 filing or annual report fee. marketing for getting the word out: advertising (Google, Facebook, \
 Yelp, Angi, Nextdoor), the website and its domain, yard signs, flyers, door hangers, business \
 cards, truck lettering, and clothing or hats printed or embroidered with the company's name or \
-logo.
+logo. snow for rock salt, ice melt or another de-icer bought for the snow plowing and salting \
+(never water-softener, pool or kitchen salt).
 - whose: "personal" for things clearly for a household (groceries, clothes, entertainment, \
 personal care, a service at Jonah's own home) -- but clothing with the company's name or logo on \
 it is "business"; "business" for anything a landscaping company buys or pays for; "unsure" otherwise.
@@ -1237,7 +1251,8 @@ def _save_all(db, m, got, jobs, extra=None):
     """Every receipt one email holds, saved (_save): the one, or one for
     each of its PDFs (ONE RECEIPT IN EACH PDF) -- passing over a PDF of its
     own that is no purchase or charged nothing. A personal one is filed
-    under Personal (_file_personal). Returns [(rid, what, personal)]."""
+    under Personal (_file_personal), rock salt under Snow (_file_snow).
+    Returns [(rid, what, personal)]."""
     out = []
     parts = got.get("parts") or []
     for g in parts or [got]:
@@ -1245,6 +1260,8 @@ def _save_all(db, m, got, jobs, extra=None):
             continue
         rid, what = _save(db, m, g, jobs, extra=extra, to_pay=_to_pay(db, g, m))
         personal = what not in (TO_PAY, NOT_RECEIPT) and _file_personal(db, rid, g, m)
+        if what not in (TO_PAY, NOT_RECEIPT) and not personal:
+            _file_snow(db, rid)
         out.append((rid, what, bool(personal)))
     return out
 
@@ -1474,6 +1491,34 @@ def _file_personal(db, rid, got, m=None):
     now = dg._now().isoformat()
     split = {"id": "sp" + _b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
              "to": "personal", "name": "Personal", "lines": list(range(len(lines))), "cents": cents, "taxCents": tax,
+             "at": now, "by": "Job Hub", "auto": True}
+    ref.update({"splits": [split], "status": "done", "updatedAt": now, "updatedBy": "",
+                "statusChange": {"to": "done", "at": now, "by": "", "name": "Job Hub"}})
+    return True
+
+
+def _file_snow(db, rid):
+    """A receipt read as rock salt or ice melt (SNOW_KIND): filed whole under
+    ❄️ Snow by itself, the same split the app's Snow chip makes, so ⋯ → Undo
+    there puts it back to sort. A business cost like the shop's, sent to
+    QuickBooks as usual. Only one still to sort with nothing filed: one a
+    person has sorted is left as it is. Returns True when filed (now or
+    before) under Snow."""
+    ref = db.collection("receipts").document(rid)
+    snap = ref.get()
+    r = (snap.to_dict() or {}) if snap.exists else {}
+    if r.get("kind") != SNOW_KIND or r.get("whose") == "personal":
+        return False
+    if any(sp.get("to") == "snow" for sp in (r.get("splits") or [])):
+        return True
+    if r.get("splits") or stages.receipt_status(r) != "tosort":
+        return False
+    lines = r.get("lines") or []
+    tax = int(r.get("taxCents") or 0)
+    cents = sum(int(ln.get("cents") or 0) for ln in lines) if lines else max(0, int(r.get("totalCents") or 0) - tax)
+    now = dg._now().isoformat()
+    split = {"id": "sp" + _b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
+             "to": "snow", "name": "Snow", "lines": list(range(len(lines))), "cents": cents, "taxCents": tax,
              "at": now, "by": "Job Hub", "auto": True}
     ref.update({"splits": [split], "status": "done", "updatedAt": now, "updatedBy": "",
                 "statusChange": {"to": "done", "at": now, "by": "", "name": "Job Hub"}})
