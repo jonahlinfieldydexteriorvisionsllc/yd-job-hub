@@ -791,6 +791,13 @@ def _carry_out(client, db, rid, a, ctx, everyone, cost):
             did.append("Read again: %s -- file each one" % res.get("summary"))
             return did, failed, also
         did.append("Read again: %s, %s" % (res.get("summary") or "read", _money(res.get("totalCents"))))
+        # Claude named lines by the old read's numbers: after a new read they
+        # may be other things, so nothing is filed line by line on them. The
+        # whole receipt (no lines named) still goes where it said.
+        if a.get("action") == "sort" and any(f.get("lines") for f in (a.get("files") or []) if isinstance(f, dict)):
+            failed.append("its lines changed when it was read again -- say again which lines go where")
+            step(*_tags(db, rid, a.get("add_tags") or []))
+            return did, failed, also
     act = a.get("action")
     # "File it" with nowhere named is a question, not a failure (29 Oct:
     # the seed bag used on several jobs -- Claude asked where it goes).
@@ -877,7 +884,10 @@ def go_through(client, by="friday", budget=BUDGET_S):
                 dg._now().strftime("%A %d %B %Y"), lists,
                 "\n\n".join(_receipt_text(lab, rid, everyone[rid], _near(rid, everyone[rid], everyone), labels)
                             for lab, rid in rlabels.items())))
-            got, used, err = rc._ask(client, SYSTEM, content, ANSWER_SCHEMA, "medium")
+            try:
+                got, used, err = rc._ask(client, SYSTEM, content, ANSWER_SCHEMA, "medium")
+            except Exception as e:      # noqa: BLE001 -- Claude busy or down: this batch is left for next time
+                got, used, err = None, None, str(e)[:200]
             rc._spend(db, cost["day"], used or {}, "receiptnotes")
             if err or not got:
                 # Counted as left too, so the next evening tries them again

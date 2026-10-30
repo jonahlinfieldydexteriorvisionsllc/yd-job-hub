@@ -75,9 +75,34 @@ SCHEMA = {
 MONEY = re.compile(r"[$＄]\s*\.?\d[\d,]*(\.\d+)?|\b\d[\d,]*(\.\d+)?\s?(k|grand|dollars?|bucks|usd)\b", re.I)
 
 
-def _clean(text, limit):
-    """A customer's words with any money taken out (a scope might say what was agreed)."""
-    return MONEY.sub("", str(text or "")).strip()[:limit]
+PHONE = re.compile(r"\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}\b")
+EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+# A street address anywhere in the words: a QuickBooks line made by Job Hub
+# starts "HEADING, address, scope" ("123 N Main St", "100 & 102 Example Ave").
+STREET = re.compile(r"\b\d{1,6}(?:\s*(?:&|and|-)\s*\d{1,6})?\s+(?:[NSEW]\.?\s+)?(?:[A-Z][\w'.-]*\s+){1,4}"
+                    r"(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Ln|Lane|Ct|Court|Way|Blvd|Boulevard|Cir|Circle|Pl|Place|"
+                    r"Trl|Trail|Pkwy|Parkway|Hwy|Highway|Ter|Terrace|Pass|Run|Ridge|Xing|Crossing)\b\.?")
+
+
+def _clean(text, limit, j=None):
+    """A customer's words with any money taken out (a scope might say what was
+    agreed) -- and who and where: the street, phone numbers, emails, and the
+    customer's name (the whole name, and the first name; a last name alone
+    can be a work word, like Black or Stone, and social.problems() still
+    holds a post that says it)."""
+    s = STREET.sub("", MONEY.sub("", str(text or "")))
+    s = EMAIL.sub("", PHONE.sub("", s))
+    if j:
+        street = str(j.get("address") or "").split(",")[0].strip()
+        if len(street) >= 5:
+            s = re.sub(re.escape(street), "", s, flags=re.I)
+        name = " ".join(str(j.get("customerName") or "").split())
+        if len(name) >= 3:
+            s = re.sub(r"\b%s\b" % re.escape(name), "the customer", s, flags=re.I)
+            first = name.split()[0]
+            if len(first) >= 3 and len(name.split()) > 1:
+                s = re.sub(r"\b%s\b" % re.escape(first), "the customer", s)
+    return re.sub(r"[ \t]{2,}", " ", s).strip(" ,;-")[:limit]
 
 
 def _facts(j):
@@ -88,12 +113,12 @@ def _facts(j):
     for w in (est.get("work") or [])[:20]:
         if not w:
             continue
-        title, scope = _clean(w.get("title"), 200), _clean(w.get("scope"), 1500)
+        title, scope = _clean(w.get("title"), 200, j), _clean(w.get("scope"), 1500, j)
         if title or scope:
             work.append({"title": title, "scope": scope})
     mats = []
     for m in (est.get("materials") or [])[:40]:
-        name = _clean((m or {}).get("name"), 120)
+        name = _clean((m or {}).get("name"), 120, j)
         if name:
             mats.append(name)
     return {
