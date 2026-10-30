@@ -1564,7 +1564,10 @@
   const FILE_MAX = 25 * 1024 * 1024;
   const fileSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
   const isImage = f => /^image\//.test(f.type || '') || /\.(jpe?g|png|gif|webp|heic)$/i.test(f.name || '');
-  function filesHtml(base, mayChange) {
+  // `on`: the two buttons' handlers, by name -- the board's card window
+  // (boards.js, YDFiles) lists its files the same way.
+  function filesHtml(base, mayChange, on) {
+    on = on || { pick: 'calFilesPicked', remove: 'calFileRemove' };
     const files = Array.isArray(base.files) ? base.files : [];
     if (!files.length && !mayChange) return '';
     return '<div class="cal-files">' +
@@ -1576,10 +1579,10 @@
           // iPad or a phone to read a title by.
           '<span class="cal-file-state" aria-live="polite"></span></a>' +
         '<small>' + esc(fileSize(+f.size || 0)) + '</small>' +
-        (mayChange ? '<button type="button" class="cal-file-x" onclick="calFileRemove(\'' + safeKey(f.id) + '\')" aria-label="Remove ' + esc(f.name || 'the file') + '">✕</button>' : '') +
+        (mayChange ? '<button type="button" class="cal-file-x" onclick="' + on.remove + '(\'' + safeKey(f.id) + '\')" aria-label="Remove ' + esc(f.name || 'the file') + '">✕</button>' : '') +
       '</div>').join('') +
       (mayChange ? '<label class="btn btn-sm cal-file-add">📎 Attach a file' +
-        '<input type="file" multiple hidden onchange="calFilesPicked(this)"></label>' : '') +
+        '<input type="file" multiple hidden onchange="' + on.pick + '(this)"></label>' : '') +
     '</div>';
   }
   // The links are filled in once Storage says where each file is. Crew
@@ -1714,6 +1717,11 @@
     if (window.YDStore) window.YDStore.remove(f.path).catch(e => console.warn('[calendar] file not removed from storage:', e && (e.code || e.message)));
     openOcc(o);
   };
+  // The same file rows for a board's card (boards.js; Jonah, 30 Oct 2026:
+  // "make it so i can attach documents to cards"): drawn, filled in, and the
+  // size limit -- one way of showing a file wherever it is attached.
+  window.YDFiles = { html: filesHtml, fill: fillFileLinks, MAX: FILE_MAX };
+
   // An entry deleted for good takes its files with it.
   function dropFiles(base) {
     (Array.isArray(base && base.files) ? base.files : []).forEach(f => {

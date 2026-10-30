@@ -995,6 +995,8 @@
   // already picked up does not put its card back (receipts.py; tidy.py does
   // the same). Kept a couple of months -- reminders come within days.
   function deleteCards(board, ids) {
+    // Their attached files go too (bdFilesPicked).
+    dropCardFiles([].concat.apply([], ids.map(id => cardFiles((cards[board.id] || {})[id]))));
     ids.forEach(id => { if (cards[board.id]) delete cards[board.id][id]; });
     Promise.resolve(window.YDDb.removeMany(ids.map(id => ['boards/' + board.id + '/cards', id])))
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed to delete that' : 'Not deleted yet — will retry'));
@@ -1616,6 +1618,7 @@
         (list.length ? '<span class="bd-check' + (done === list.length ? ' all' : '') + '">☑ ' +
           done + '/' + list.length + '</span>' : '') +
         (k.notes ? '<span class="bd-note" title="Has notes">≡</span>' : '') +
+        (cardFiles(k).length ? '<span class="bd-note" title="Has files">📎' + (cardFiles(k).length > 1 ? cardFiles(k).length : '') + '</span>' : '') +
         (k.recurring && typeof recurringBadge === 'function' ? recurringBadge(k, inLastColumn) : '') +
         (isOwner() && askedAgain(k) ? '<span class="bd-claude" title="Sent back to Claude with your notes">🔁</span>'
           : (isOwner() && k.claude && k.claude.status === 'done' ? '<span class="bd-claude" title="Claude did this — check it">🤖</span>' : '') +
@@ -2214,6 +2217,7 @@
         list.map(i => '<label class="chk bd-chk"><input type="checkbox"' + (i.done ? ' checked' : '') +
           ' onchange="toggleCheck(\'' + safeId(i.id) + '\', this.checked)"><span' + (i.done ? ' class="struck"' : '') + '>' +
           esc(i.text) + '</span></label>').join('') + '</div>' : '') +
+      cardFilesHtml(board, k) +
       '<div class="bd-move-label">Move to</div>' +
       '<div class="bd-move">' + board.columns.map(c =>
         '<button class="bd-move-btn' + (c.id === here ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
@@ -2233,6 +2237,85 @@
           ? '<button class="btn btn-sm" onclick="bdDeleteOpen()">🗑 Delete</button>' : '') +
         '<button class="btn btn-sm" onclick="closeBoardModal()">Close</button>' +
       '</div>');
+    if (window.YDFiles) YDFiles.fill();
+  }
+
+  // ------------------------------------------------------------- files
+  //
+  // Jonah, 30 Oct 2026: "make it so i can attach documents to cards" -- a
+  // quote, a plan, a manual, a photo. Each goes to Cloud Storage at
+  // boardFiles/{board}/{card}/{id}-{name} (storage.rules: whoever may change
+  // the board's cards adds and removes; anyone working for the business
+  // opens one -- only from a card they can see, which is where the path is)
+  // and is listed on the card as `files` [{id, name, path, type, size, by,
+  // at}], the way calendar entries keep theirs (calendar.js YDFiles draws
+  // the rows). No address is kept: one works for anyone who has it, so it
+  // is asked for each time the card is opened. A card deleted, by hand or by
+  // the morning tidy (functions/tidy.py), takes its files with it.
+  const cardFiles = k => (Array.isArray(k && k.files) ? k.files : []);
+  function cardFilesHtml(board, k) {
+    const may = editsBoard(board);
+    if (!window.YDFiles || (!cardFiles(k).length && !may)) return '';
+    return '<div class="bd-move-label">Files</div>' +
+      YDFiles.html(k, may, { pick: 'bdFilesPicked', remove: 'bdFileRemove' });
+  }
+  window.bdFilesPicked = async function (input) {
+    const at = openCard, picked = Array.from((input && input.files) || []);
+    if (input) input.value = '';
+    const board = at && boards[at.boardId];
+    const k = board && (cards[board.id] || {})[at.cardId];
+    if (!k || !picked.length || !editsBoard(board)) return;
+    if (!window.YDStore || !window.YDFiles) { showToast('Files are still loading — try again in a moment'); return; }
+    if (navigator.onLine === false) { showToast('Attaching a file needs signal'); return; }
+    const added = [];
+    for (let i = 0; i < picked.length; i++) {
+      const f = picked[i];
+      if (f.size > YDFiles.MAX) { showToast(f.name + ' is over 25 MB — not attached'); continue; }
+      const id = 'bf' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const name = String(f.name || 'file').replace(/[\\/#?\[\]*]+/g, '-').slice(-90);
+      const path = 'boardFiles/' + board.id + '/' + k.id + '/' + id + '-' + name.replace(/\s+/g, '-');
+      const what = picked.length > 1 ? ' (' + (i + 1) + ' of ' + picked.length + ')' : '';
+      try {
+        await window.YDStore.upload(path, f, f.type || 'application/octet-stream',
+          p => showToast('Attaching ' + name + what + ' — ' + Math.round(p * 100) + '%'));
+        added.push({ id: id, name: name, path: path, type: f.type || '', size: f.size,
+          by: myName(), at: nowIso() });
+      } catch (e) {
+        showToast(name + ' was not attached' + (e && e.code === 'storage/unauthorized' ? ' — not allowed' : ' — try again'));
+      }
+    }
+    if (!added.length) return;
+    // The card as it is now, so a file another device added meanwhile stays.
+    const now = (cards[board.id] || {})[k.id];
+    if (!now) return;
+    const patch = { files: cardFiles(now).concat(added), updatedAt: nowIso(), updatedBy: myName() };
+    Object.assign(now, patch);
+    writeCard(board.id, k.id, patch);
+    showToast(added.length === 1 ? 'Attached' : added.length + ' files attached');
+    render();
+    if (openCard && openCard.cardId === k.id) renderCardDetail();
+  };
+  window.bdFileRemove = async function (fid) {
+    const at = openCard;
+    const board = at && boards[at.boardId];
+    const k = board && (cards[board.id] || {})[at.cardId];
+    if (!k || !editsBoard(board)) return;
+    const f = cardFiles(k).find(x => x.id === fid);
+    if (!f || !(await ydConfirm('It is deleted for good.', { title: 'Remove ' + (f.name || 'this file') + ' from the card?', ok: 'Remove', danger: true }))) return;
+    const now = (cards[board.id] || {})[k.id];
+    if (!now || !cardFiles(now).some(x => x.id === fid)) return;
+    const patch = { files: cardFiles(now).filter(x => x.id !== fid), updatedAt: nowIso(), updatedBy: myName() };
+    Object.assign(now, patch);
+    writeCard(board.id, k.id, patch);
+    dropCardFiles([f]);
+    render();
+    if (openCard && openCard.cardId === k.id) renderCardDetail();
+  };
+  function dropCardFiles(files) {
+    files.forEach(f => {
+      if (window.YDStore && f && f.path) window.YDStore.remove(f.path)
+        .catch(e => console.warn('[boards] file not removed from storage:', e && (e.code || e.message)));
+    });
   }
   // An order to pick up (functions/receipts.py pickup_card; Jonah, 28 Oct
   // 2026: the crew's card "with information on the order, list of whats being

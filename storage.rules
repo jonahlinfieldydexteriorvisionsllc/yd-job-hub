@@ -62,6 +62,26 @@ service firebase.storage {
       allow delete: if changesCal(calId);
     }
 
+    // Files on board cards (boards.js, Jonah 30 Oct 2026: "make it so i can
+    // attach documents to cards"): boardFiles/{boardId}/{cardId}/{file}.
+    // Added and removed by whoever may change that board's cards, as
+    // firestore.rules decide it (boardEditor): the owner, an admin with
+    // Boards "change" on a board that is not private, anyone ticked as its
+    // editor. Opened by anyone working for the business, as calendar files
+    // are -- the path is only on the card, which only those who can see the
+    // board can read.
+    function changesBoard(boardId) {
+      return staff() && (me().role == 'owner'
+        || (me().role == 'admin' && me().get(['access', 'boards'], 'none') == 'change'
+            && firestore.get(/databases/(default)/documents/boards/$(boardId)).data.get('ownerOnly', true) == false)
+        || request.auth.uid in firestore.get(/databases/(default)/documents/boards/$(boardId)).data.get('editors', []));
+    }
+    match /boardFiles/{boardId}/{cardId}/{file} {
+      allow read: if staff();
+      allow create: if changesBoard(boardId) && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if changesBoard(boardId);
+    }
+
     // Signed papers (signatures.js): jobDocs/{jobId}/{uid}/{docId}.pdf, made
     // on the phone that collected the signature and written once. Whoever may
     // see jobs opens any; a crew member the ones they collected.

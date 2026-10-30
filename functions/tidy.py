@@ -91,6 +91,9 @@ def run(now=None):
             for c in gone[n:n + 400]:
                 batch.delete(c.reference)
             batch.commit()
+        # Files attached to them (boards.js bdFilesPicked) go with them.
+        _photo_files_gone([f.get("path") for c in gone for f in ((c.to_dict() or {}).get("files") or [])
+                           if isinstance(f, dict) and str(f.get("path") or "").startswith("boardFiles/")])
         if snap.id == PICKUPS:
             keep_from = dg._day(now - datetime.timedelta(days=CLEARED_DAYS))
             cleared = [s for s in (board.get("cleared") or []) if str(s).split("|")[-1] >= keep_from]
