@@ -1055,6 +1055,25 @@ service cloud.firestore {
     // (functions/diggers.py): everyone who works here sees whether a job is
     // clear to dig (the crew's job page); whoever changes jobs may put a
     // ticket that matched no job on one (digging.js digPut).
+    // The posting schedule (functions/social.py, socialposts.js): the
+    // owner's alone. The server plans the posts and puts them up; he changes
+    // the words, the time and the photos, holds one or lets it go, skips one,
+    // writes one of his own (sph...), or ticks a Nextdoor one posted -- he
+    // never marks a Facebook or Google one posted (only the server knows).
+    match /socialPosts/{id} {
+      allow read, delete: if isOwner();
+      allow create: if isOwner() && id.matches('sph[a-z0-9]+')
+        && request.resource.data.status in ['queued', 'held'];
+      allow update: if isOwner()
+        && (request.resource.data.status == resource.data.status
+            || request.resource.data.status in ['queued', 'held', 'skipped']
+            || (request.resource.data.status == 'posted' && resource.data.place == 'nextdoor'));
+    }
+    // A finished job's words for the schedule, and each month's seasonal
+    // posts: written by the server (Claude), read by the owner; he may
+    // change a month's.
+    match /socialWords/{id}  { allow read: if isOwner(); }
+    match /socialIdeas/{id}  { allow read, write: if isOwner(); }
     match /digTickets/{no} {
       allow read: if isStaff();
       allow update: if canChange('jobs')

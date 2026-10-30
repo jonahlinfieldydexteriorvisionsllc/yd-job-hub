@@ -32,8 +32,8 @@ PLACES = [("google", "Google Business Profile"), ("facebook", "Facebook"), ("nex
 
 SYSTEM = (
     "You write social media posts for YD Exterior Visions LLC, a landscaping and hardscaping "
-    "company near Madison, Wisconsin, about one job they just finished. The owner, Jonah, posts "
-    "them himself.\n\n"
+    "company near Madison, Wisconsin, about one job they finished. Job Hub puts the Google, "
+    "Facebook and Nextdoor ones up on a schedule; the Pinterest and Yelp ones are posted by hand.\n\n"
     "Write one post for each place, each the way that place reads:\n"
     "- google: a Google Business Profile update. 80-150 words, plain and specific: what was "
     "done, in which town, what it was built with, and why it works for that yard. Use the words "
@@ -51,7 +51,9 @@ SYSTEM = (
     "town only. Never mention any price, cost or budget. Never invent anything not given: no "
     "materials, sizes, plants, timelines, awards or claims beyond the facts. Use the facts' own "
     "measurements and materials when they are given. No phone number, website or address in any "
-    "post (Jonah adds his own). Plain English, no jargon; write as the company ('we')."
+    "post (the app adds the company's own). Never say licensed, never mention subcontractors, never "
+    "call the company small, family-run or a one-man shop -- it is a growing company -- and never "
+    "speak as one person or the owner. Plain English, no jargon; write as the company ('we')."
 )
 
 SCHEMA = {
@@ -148,7 +150,8 @@ def draft(client, job_id, auto=False):
     return result
 
 
-def _write(client, db, job_id, j, facts):
+def _ask(client, facts):
+    """Claude's posts for one job: (posts, error, usage)."""
     resp = client.beta.messages.create(
         model=MODEL, max_tokens=6000, system=SYSTEM,
         messages=[{"role": "user", "content": "The job:\n" + json.dumps(facts, ensure_ascii=False)}],
@@ -157,23 +160,75 @@ def _write(client, db, job_id, j, facts):
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
     )
     if resp.stop_reason == "refusal":
-        return {"error": "Claude declined to write these"}, resp.usage
+        return None, "Claude declined to write these", resp.usage
     text = next((b.text for b in resp.content if b.type == "text"), "")
     try:
         got = json.loads(text)
     except ValueError:
-        return {"error": "Claude's answer could not be read. Try again."}, resp.usage
+        return None, "Claude's answer could not be read. Try again.", resp.usage
     posts = {k: str(got.get(k) or "").strip() for k in SCHEMA["required"]}
     if not all(posts[k] for k, _ in PLACES):
-        return {"error": "Claude's answer was empty. Try again."}, resp.usage
+        return None, "Claude's answer was empty. Try again.", resp.usage
+    return posts, None, resp.usage
+
+
+def _keep_words(db, job_id, posts):
+    """Kept for the posting schedule (social.py): socialWords/{jobId}."""
+    db.collection("socialWords").document(job_id).set(dict(posts, at=dg._now().isoformat(), error=None))
+
+
+def words(client, db, job_id, j):
+    """A finished job's posts, written and kept for the posting schedule
+    (social.py plan) when it was never written for. Returns (words or
+    {error}, usage). A job with nothing to write about, or one Claude will
+    not write about, is kept as such so it is not asked about again."""
+    facts = _facts(j)
+    if not facts["work"] and not facts["services"]:
+        db.collection("socialWords").document(job_id).set({"error": "no work on its estimate",
+                                                            "at": dg._now().isoformat()})
+        return {"error": "no work on its estimate"}, None
+    posts, error, usage = _ask(client, facts)
+    if error:
+        if error.startswith("Claude declined"):
+            db.collection("socialWords").document(job_id).set({"error": error, "at": dg._now().isoformat()})
+        return {"error": error}, usage
+    _keep_words(db, job_id, posts)
+    return posts, usage
+
+
+def _social(db):
+    snap = db.collection("settings").document("social").get()
+    return (snap.to_dict() or {}) if snap.exists else {}
+
+
+def _scheduled(db):
+    """The places the posting schedule puts up by itself (social.py), when
+    it is on: those leave the "Posts ready" card."""
+    cfg = _social(db)
+    if not cfg.get("on"):
+        return set()
+    return {p for p in ("google", "facebook", "nextdoor")
+            if ((cfg.get("places") or {}).get(p) or {}).get("on") is not False}
+
+
+def _write(client, db, job_id, j, facts):
+    posts, error, usage = _ask(client, facts)
+    if error:
+        return {"error": error}, usage
+    _keep_words(db, job_id, posts)
+    scheduled = _scheduled(db)
+    places = [(k, label) for k, label in PLACES if k not in scheduled]
 
     name = str(j.get("customerName") or "").strip() or "Untitled job"
     num = str(j.get("estimateNumber") or "").strip()
     photos = _after_photos(db, job_id)
-    parts = ["Copy each into its place and tick it off as it goes up. Nothing is posted by Job Hub.",
+    parts = ["Copy each into its place and tick it off as it goes up." + (
+                 " " + ", ".join(label for k, label in PLACES if k in scheduled) +
+                 " go up by themselves on the posting schedule (⋯ › 📣 Posts)." if scheduled
+                 else " Nothing is posted by Job Hub."),
              "Photos: " + ("the after photos —\n" + "\n".join(photos) if photos
                            else "none marked After on the job yet (📷 on the job's page).")]
-    for key, label in PLACES:
+    for key, label in places:
         body = posts[key]
         if key == "pinterest":
             body = "Title: " + posts["pinterestTitle"] + "\n" + body
@@ -187,7 +242,7 @@ def _write(client, db, job_id, j, facts):
     db.collection("boards").document("todo").collection("cards").document(card_id).set({
         "title": ("📣 Posts ready — " + name + (" #" + num if num else ""))[:200],
         "notes": "\n\n".join(parts)[:9000],
-        "checklist": [{"id": "pst" + k, "text": label, "done": False, "doneBy": None} for k, label in PLACES],
+        "checklist": [{"id": "pst" + k, "text": label, "done": False, "doneBy": None} for k, label in places],
         "column": col, "order": int(dg._now().timestamp() * 1000), "due": None, "dueTime": None,
         "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False,
         "type": None, "urgency": "normal", "labels": [], "color": None, "assignees": [],
@@ -199,7 +254,7 @@ def _write(client, db, job_id, j, facts):
     db.collection("jobs").document(job_id).set({"postsDraft": {"at": dg._now().isoformat(), "cardId": card_id},
                                                 "lastModified": stamp}, merge=True)
     print("posts: written for job", job_id)
-    return {"cardId": card_id, "photos": len(photos)}, resp.usage
+    return {"cardId": card_id, "photos": len(photos)}, usage
 
 
 # ------------------------------------------------------------ the week's posts
@@ -341,16 +396,20 @@ def weekly(client, today=None):
     col = next((c.get("id") for c in cols if isinstance(c, dict) and c.get("id")), "admin0")
     card_id = "pw" + today.strftime("%Y%m%d")
     week = start.strftime("%b ") + str(start.day)
+    # The posting schedule puts the week's After photos on the Google
+    # profile by itself once Google is hooked up (social.py _gallery): then
+    # the step is not his.
+    gauto = "google" in _scheduled(db) and bool(((_social(db).get("google") or {}).get("ok")))
     db.collection("boards").document("todo").collection("cards").document(card_id).set({
         "title": ("📸 " + str(len(jobs)) + " job" + ("" if len(jobs) == 1 else "s") + " ready to post — week of " + week)[:200],
         "notes": ("Pinterest and Yelp: save each job's photos (tap one to open it full size), upload them and "
                   "paste its words. Tick each job off as it goes up. Nothing is posted by Job Hub.\n\n"
-                  + GOOGLE_PHOTOS + "\n\n"
+                  + ("" if gauto else GOOGLE_PHOTOS + "\n\n")
                   + "\n\n".join(lines))[:9000],
         "checklist": [{"id": "pwj" + re.sub(r"[^A-Za-z0-9]", "", x["jobId"])[:20], "text": x["title"], "done": False,
                        "doneBy": None} for x in jobs]
-        + [{"id": "pwgoogle", "text": GOOGLE_PHOTOS_TICK, "done": False, "doneBy": None}],
-        "postWeek": {"from": start.isoformat(), "to": today.isoformat(), "jobs": jobs},
+        + ([] if gauto else [{"id": "pwgoogle", "text": GOOGLE_PHOTOS_TICK, "done": False, "doneBy": None}]),
+        "postWeek": {"from": start.isoformat(), "to": today.isoformat(), "jobs": jobs, "googleAuto": gauto},
         "column": col, "order": int(dg._now().timestamp() * 1000), "due": None, "dueTime": None,
         "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False,
         "type": None, "urgency": "normal", "labels": [], "color": None, "assignees": [],

@@ -910,6 +910,19 @@
           esc(YDDeadlines.whenWords(x.due).replace(/^.* — in /, 'in ')), 'openDeadlines()'));
       });
     }
+    // Posts that need him (socialposts.js): a Nextdoor one ready to post, one
+    // held for his OK, one that didn't go up. One line; a tap opens Posts.
+    if (isOwner() && window.YDPosts && YDPosts.needs) {
+      const ps = YDPosts.needs();
+      if (ps.length) {
+        any = true;
+        const ready = ps.filter(p => p.status === 'ready').length, held = ps.filter(p => p.status === 'held').length;
+        const bits = [ready ? ready + ' ready to post on Nextdoor' : '', held ? held + ' waiting for your OK' : '',
+          ps.length - ready - held ? (ps.length - ready - held) + ' didn’t go up' : ''].filter(Boolean);
+        rows.push(line('📣', '<b>' + ps.length + ' post' + (ps.length === 1 ? '' : 's') + ' need' + (ps.length === 1 ? 's' : '') +
+          ' you</b>', esc(bits.join(' · ')), '', 'openPosts()'));
+      }
+    }
     // A digging job starting within a week with no Diggers ticket yet
     // (digging.js): one tap opens the job.
     if (isOwner() && window.YDDigging && YDDigging.toFile) {
@@ -1260,7 +1273,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

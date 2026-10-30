@@ -179,6 +179,10 @@ def run():
         # Diggers Hotline tickets read from email (every 30 minutes) and
         # their clocks (once a day after 7 am) (diggers.py).
         ("diggers tickets", (), lambda: _diggers(db, people, now)),
+        # The posting schedule: a Facebook / Google / Nextdoor post whose
+        # time has come goes up (social.py; planned after the summaries).
+        # Last: a slow Facebook photo upload holds nothing else up.
+        ("social posts", (), lambda: _social_posts(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -207,6 +211,11 @@ def _deadlines(db, people, now):
 def _lien_clock(db, people, now):
     import lienclock
     return lienclock.run(db, people, now)
+
+
+def _social_posts(db, people, now):
+    import social
+    return social.publish_due(db, people, now)
 
 
 def _diggers(db, people, now):

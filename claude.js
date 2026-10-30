@@ -25,7 +25,7 @@
   const LONG_MS = 300000;
   const LONG_PATHS = ['/estimate/draft', '/estimate/source', '/supplies/read-sheet', '/cards/now',
     '/receipts/photo', '/receipts/now', '/receipts/read-again', '/receipts/notes-now', '/care/draft', '/posts/draft', '/followup/draft', '/subs/scan',
-    '/qb/estimate', '/qb/estimate-invoice', '/qb/invoice'];
+    '/qb/estimate', '/qb/estimate-invoice', '/qb/invoice', '/social/plan-now', '/social/post-now', '/social/google/check'];
   const waitFor = path => (LONG_PATHS.indexOf(path) !== -1 ? LONG_MS : SHORT_MS);
 
   // How many asks are still waiting for their answer. The page never reloads

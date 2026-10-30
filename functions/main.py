@@ -530,10 +530,22 @@ def _digest(request, path, headers):
                 logged = joblog.evening(_claude())
             except Exception as e:                      # noqa: BLE001
                 print("daily logs not written:", e)
+        # Morning and evening, after the summary: the posting schedule's next
+        # days filled (social.py -- Claude only for words not yet written),
+        # and in the evening his phone told what goes up tomorrow.
+        planned = None
+        if slot in ("morning", "evening"):
+            try:
+                import social
+                planned = social.plan(_claude())
+                if slot == "evening":
+                    social.tell_tomorrow()
+            except Exception as e:                      # noqa: BLE001
+                print("social posts not planned:", e)
         if failed is not None:
             return (json.dumps({"error": failed}), 500, json_headers)
         return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted, "notes": noted,
-                            "logs": logged}), 200, json_headers)
+                            "logs": logged, "social": planned}), 200, json_headers)
 
     if path == "/digest/preview":
         if origin_blocked(request):
@@ -1166,6 +1178,64 @@ def _joblog(request, path, headers):
 # (sourcing.py) finds a price on the web for a material Supplies lacks.
 
 
+# ---------------------------------------------------------------- social posts
+#
+# The posting schedule (social.py, socialposts.js): the owner's alone. As with
+# QuickBooks, /social/fb/callback is where Facebook sends his browser back --
+# no Authorization header can come with it, so it is tied to him by a
+# one-use state value instead.
+
+
+def _social(request, path, headers):
+    import social
+    json_headers = {**headers, "Content-Type": "application/json"}
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if path == "/social/fb/callback":
+        try:
+            html, status = social.fb_callback(request)
+        except Exception as e:                          # noqa: BLE001
+            print("facebook callback error:", e)
+            html, status = ("<p>Something went wrong hooking up Facebook.</p>", 500)
+        return (html, status, {"Content-Type": "text/html; charset=utf-8"})
+    if origin_blocked(request):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    try:
+        uid = _caller(request)
+    except PermissionError as e:
+        return (json.dumps({"error": str(e)}), 401, json_headers)
+    body = request.get_json(silent=True) or {}
+    try:
+        if path == "/social/status":
+            result = social.status()
+        elif path == "/social/fb/app":
+            result = social.fb_set_app(body.get("appId"), body.get("appSecret"), uid)
+        elif path == "/social/fb/connect-url":
+            result = social.fb_connect_url(uid)
+        elif path == "/social/fb/page":
+            result = social.fb_pick_page(str(body.get("pageId") or ""))
+        elif path == "/social/fb/disconnect":
+            result = social.fb_disconnect()
+        elif path == "/social/google/check":
+            result = social.google_find()
+        elif path == "/social/post-now":
+            pid = re.sub(r"[^A-Za-z0-9_-]", "", str(body.get("id") or ""))
+            if not pid:
+                return (json.dumps({"error": "which post?"}), 400, json_headers)
+            social.publish(_db, pid, by_hand=True)
+            snap = _db.collection("socialPosts").document(pid).get()
+            d = (snap.to_dict() or {}) if snap.exists else {}
+            result = {"status": d.get("status"), "link": d.get("link"), "error": d.get("error")}
+        elif path == "/social/plan-now":
+            result = social.plan(_claude())
+        else:
+            return (json.dumps({"error": "not found"}), 404, json_headers)
+    except Exception as e:                              # noqa: BLE001
+        print("social", path, "failed:", e)
+        return (json.dumps({"error": str(e)[:300]}), 500, json_headers)
+    return (json.dumps(result), 200, json_headers)
+
+
 def _estimate(request, path, headers):
     import estimates
     json_headers = dict(headers, **{"Content-Type": "application/json"})
@@ -1435,6 +1505,8 @@ def claude(request):
         return _notes(request, path, headers)
     if path.startswith("/followup") or path.startswith("/care") or path.startswith("/posts"):
         return _followup(request, path, headers)
+    if path.startswith("/social"):
+        return _social(request, path, headers)
     if path.startswith("/estimate"):
         return _estimate(request, path, headers)
     if path.startswith("/geo"):

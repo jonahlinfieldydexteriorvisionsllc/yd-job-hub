@@ -387,6 +387,8 @@
       else if (want === 'eodreports' && window.openEodReports) window.openEodReports();
       // A tax or filing date coming up (deadlines.js).
       else if (want === 'deadlines' && window.openDeadlines) window.openDeadlines();
+      // A post ready, held or not gone up (socialposts.js).
+      else if (want === 'posts' && window.openPosts) window.openPosts();
       else if (typeof TABS !== 'undefined' && TABS.indexOf(want) !== -1) {
         const btn = el(tabButtonId(want));
         if (btn && !btn.hidden) switchTab(want);
