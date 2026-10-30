@@ -1003,6 +1003,12 @@
         rows.push(line('💵', '<b>' + plural(due.length, 'invoice') + ' to chase</b> · ' + fmtMoney(owed),
           top + (due.length > 3 ? ' …' : ''), '', 'openInvoices()'));
       }
+      // 120 days since the last work and still owed: decide about a lien,
+      // with the lawyer (invoices.js, functions/lienclock.py).
+      (YDInvoices.lienToDecide ? YDInvoices.lienToDecide() : []).forEach(x => rows.push(line('⚖️',
+        '<b>Decide about a lien</b> · ' + esc(x.inv.customerName || 'A customer') + ' ' + fmtMoney(x.inv.balance),
+        x.l.days + ' days since the last work — notice by ' + esc(new Date(x.l.noticeBy + 'T12:00:00')
+          .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })) + '. Talk to your lawyer first.', '', 'openInvoices()')));
     }
     if (!any) return '';
     return card('waiting', '📥 Waiting on you', rows.length || '', null,

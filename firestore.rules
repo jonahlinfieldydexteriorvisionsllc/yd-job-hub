@@ -1054,7 +1054,12 @@ service cloud.firestore {
     match /invoices/{docId} {
       allow read: if canSee('billing');
       allow update: if canChange('billing')
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['handReminders', 'snoozeUntil', 'jobId', 'jobBy', 'updatedAt'])
+        // lienDecided: he has decided about a lien on it; lienLastWork: the
+        // last day of real work, set by hand (invoices.js invLien / invLienDay).
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['handReminders', 'snoozeUntil', 'jobId', 'jobBy',
+             'lienDecided', 'lienLastWork', 'updatedAt'])
+        && (!('lienLastWork' in request.resource.data) || request.resource.data.lienLastWork == null
+            || request.resource.data.lienLastWork.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}'))
         && (!('jobBy' in request.resource.data) || request.resource.data.jobBy in ['hand', 'job', 'name', null]);
     }
 

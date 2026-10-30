@@ -173,6 +173,9 @@ def run():
         # Tax and filing dates 14 / 3 / 0 days away, once a day after 7 am
         # (deadlines.py).
         ("tax and filing dates", (), lambda: _deadlines(db, people, now)),
+        # Unpaid invoices: the lien clock and the 45 / 90 / 120-day steps,
+        # once a day after 7 am (lienclock.py).
+        ("lien clock", (), lambda: _lien_clock(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -196,6 +199,11 @@ def _storm_watch(db, people, prefs, now):
 def _deadlines(db, people, now):
     import deadlines
     return deadlines.run(db, people, now)
+
+
+def _lien_clock(db, people, now):
+    import lienclock
+    return lienclock.run(db, people, now)
 
 
 def _set_reminders(db, people, cals, since, now):

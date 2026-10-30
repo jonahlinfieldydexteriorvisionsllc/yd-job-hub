@@ -141,6 +141,62 @@
   }
   const wantsYou = st => st.kind === 'due' || st.kind === 'unsent' || st.kind === 'call';
 
+  // The lien clock (functions/lienclock.py, Jonah's routine 5 of 14): the
+  // last day of work on the invoice's job, and Wisconsin's two dates from it
+  // -- the notice of intent served by `noticeBy` (30 days before filing),
+  // the claim filed by `fileBy` (6 months after the last work). Only on an
+  // invoice for a job here. The server finds the last clocked day once a
+  // day (lienClock.lastWork, days after the job was finished left out); a
+  // day set by hand (lienLastWork) wins -- a day clocked after the real work
+  // ended would put the dates too late. The dates are worked out here from
+  // whichever day it is, as the server does (lienclock.lien_dates).
+  // LIEN_DECIDE days after the last work he decides about a lien, with his
+  // lawyer: `lienDecided` {what: 'no' | 'lawyer', at, by} once he has.
+  const LIEN_SHOW = 60, LIEN_DECIDE = 120, NOTICE_DAYS = 30, LIEN_WARN = 45;
+  let lienEditing = '';     // the invoice whose last day of work is being set by hand
+  function addMonths(iso, n) {
+    const y0 = +iso.slice(0, 4), m0 = +iso.slice(5, 7) - 1 + n, d0 = +iso.slice(8, 10);
+    const y = y0 + Math.floor(m0 / 12), m = ((m0 % 12) + 12) % 12;
+    const last = new Date(y, m + 1, 0).getDate();
+    return y + '-' + pad(m + 1) + '-' + pad(Math.min(d0, last));
+  }
+  function lienOf(inv) {
+    const c = inv.lienClock || {};
+    const lastWork = inv.lienLastWork || c.lastWork;
+    if (!lastWork || !inv.open || !(Number(inv.balance) > 0)) return null;
+    const days = daysBetween(lastWork, today());
+    const fileBy = addMonths(lastWork, 6), noticeBy = addDays(fileBy, -NOTICE_DAYS);
+    return { days, lastWork, fileBy, noticeBy, byHand: !!inv.lienLastWork, clocked: c.lastWork || '',
+      decided: inv.lienDecided || null, decide: days >= LIEN_DECIDE && !inv.lienDecided,
+      warn: daysBetween(today(), noticeBy) <= LIEN_WARN };
+  }
+  function lienHtml(inv, st) {
+    const l = st.kind === 'waiting' ? null : lienOf(inv);
+    if (!l) return '';
+    const id = safe(inv.id);
+    if (lienEditing === inv.id) {
+      return '<div class="inv-lien now">The last day of real work on the job — not a warranty or repair visit since:' +
+        '<div class="inv-acts"><input type="date" id="invLienDay" value="' + esc(l.lastWork) + '" max="' + today() + '">' +
+          '<button class="btn btn-sm btn-filled" onclick="invLienDay(\'' + id + '\', true)">Save</button>' +
+          (l.byHand && l.clocked ? '<button class="btn btn-sm" onclick="invLienDay(\'' + id + '\', false)">Use the last clocked day (' +
+            esc(shortDay(l.clocked)) + ')</button>' : '') +
+          '<button class="btn btn-sm" onclick="invLienEdit(\'\')">Cancel</button></div></div>';
+    }
+    const change = changes() ? ' <button class="link-btn" onclick="invLienEdit(\'' + id + '\')">Change</button>' : '';
+    const head = '🕒 ' + l.days + ' day' + (l.days === 1 ? '' : 's') + ' since the last work (' + esc(shortDay(l.lastWork)) +
+      (l.byHand ? ', set by hand' : ', last clocked day') + ')' + change;
+    if (l.days < LIEN_SHOW && !l.warn) return '<div class="inv-lien">' + head + '</div>';
+    const dates = '⚖️ Lien: notice by <b>' + esc(shortDay(l.noticeBy)) + '</b>, file by <b>' + esc(shortDay(l.fileBy)) + '</b>';
+    const said = l.decided ? ' · decided: ' + (l.decided.what === 'lawyer' ? 'your lawyer has it' : 'no lien') +
+      (changes() ? ' <button class="link-btn" onclick="invLien(\'' + id + '\', \'\')">undo</button>' : '') : '';
+    return '<div class="inv-lien' + (l.decide || (l.warn && !l.decided) ? ' now' : '') + '">' + head + '<br>' + dates + said +
+      (l.decide ? '<div class="inv-lien-ask">Time to decide about a lien — talk to your lawyer first. ' +
+        'Job Hub never drafts or sends the notice.' +
+        (changes() ? '<div class="inv-acts"><button class="btn btn-sm" onclick="invLien(\'' + id + '\', \'lawyer\')">⚖️ My lawyer has it</button>' +
+          '<button class="btn btn-sm" onclick="invLien(\'' + id + '\', \'no\')">No lien</button></div>' : '') + '</div>' : '') +
+    '</div>';
+  }
+
   // ------------------------------------------------------------- drawing
 
   // Drawn only while All Jobs is on screen: the jobs feed fires all day, and
@@ -245,6 +301,7 @@
           (st.kind !== 'paid' && Number(inv.balance) < Number(inv.total) - 0.005 ? '<small> of ' + money(inv.total) + '</small>' : '') + '</span></div>' +
       '<div class="inv-facts">' + facts.join(' · ') + '</div>' +
       jobLineHtml(inv, st, idx) +
+      lienHtml(inv, st) +
       '<div class="inv-next">' + stateText(st, inv) + '</div>' +
       '<div class="inv-acts">' +
         (can && st.kind !== 'waiting' ? '<button class="btn btn-sm' + (wantsYou(st) ? ' btn-filled' : '') + '" onclick="invRemind(\'' + id + '\')"' +
@@ -341,6 +398,36 @@
     Promise.resolve(window.YDDb.put('invoices', inv.id, { handReminders: hand, updatedAt: new Date().toISOString() }))
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
   };
+  // The last day of real work, set by hand (or given back to the clock).
+  window.invLienEdit = function (id) { lienEditing = id || ''; render(); };
+  window.invLienDay = function (id, keep) {
+    const inv = invoices[id];
+    if (!inv || !changes()) return;
+    let v = null;
+    if (keep) {
+      const box = el('invLienDay');
+      v = box && /^\d{4}-\d{2}-\d{2}$/.test(box.value) ? box.value : '';
+      if (!v) { showToast('Pick the day'); return; }
+      if (v > today()) { showToast('That day has not come yet'); return; }
+    }
+    inv.lienLastWork = v;
+    lienEditing = '';
+    render();
+    document.dispatchEvent(new CustomEvent('yd-invoices'));
+    Promise.resolve(window.YDDb.put('invoices', inv.id, { lienLastWork: v, updatedAt: new Date().toISOString() }))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
+  // Decided about a lien (or that decision taken back: what '').
+  window.invLien = function (id, what) {
+    const inv = invoices[id];
+    if (!inv || !changes()) return;
+    const me = (window.YDAuth && window.YDAuth.user && (window.YDAuth.user.displayName || window.YDAuth.user.email)) || '';
+    inv.lienDecided = what ? { what: what === 'lawyer' ? 'lawyer' : 'no', at: new Date().toISOString(), by: me } : null;
+    render();
+    document.dispatchEvent(new CustomEvent('yd-invoices'));
+    Promise.resolve(window.YDDb.put('invoices', inv.id, { lienDecided: inv.lienDecided, updatedAt: new Date().toISOString() }))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
   window.invSnooze = function (id) {
     const inv = invoices[id];
     if (!inv || !changes()) return;
@@ -419,6 +506,11 @@
     // What wants doing, most late first (Home).
     toDo: () => Object.values(invoices).map(inv => ({ inv, st: stateOf(inv) })).filter(x => wantsYou(x.st))
       .sort((a, b) => (b.st.late || 0) - (a.st.late || 0)),
+    // Lien decisions waiting (Home): LIEN_DECIDE days since the last work,
+    // not decided, the rest still owed.
+    lienToDecide: () => Object.values(invoices).filter(inv => stateOf(inv).kind !== 'waiting')
+      .map(inv => ({ inv, l: lienOf(inv) })).filter(x => x.l && x.l.decide)
+      .sort((a, b) => b.l.days - a.l.days),
     render: render,
   };
 

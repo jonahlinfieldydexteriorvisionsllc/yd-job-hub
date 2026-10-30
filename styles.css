@@ -3917,6 +3917,11 @@
   .dl-add label { display:flex; flex-direction:column; gap:4px; font-size:13px; }
   .dl-add-btn { margin-top:14px; min-height:44px; }
   .dl-off { margin-top:12px; }
+  /* Invoices: the lien clock (invoices.js lienHtml) */
+  .inv-lien { margin:6px 0 2px; font-size:12.5px; line-height:1.45; color:var(--muted); }
+  .inv-lien.now { color:var(--text); padding:8px 10px; border-radius:8px; border-left:4px solid var(--neg); background:var(--surface); }
+  .inv-lien-ask { margin-top:6px; color:var(--text); font-weight:600; }
+  .inv-lien-ask .inv-acts { margin-top:6px; }
   .hm-flash { animation:uxc-flash 1.6s ease-out; }
   @keyframes uxc-flash { 0%, 40% { box-shadow:0 0 0 4px #3fb6d8; } 100% { box-shadow:0 0 0 4px rgba(63,182,216,0); } }
   /* Home: your clock -- Clock out on its own, marked; the long-shift note */

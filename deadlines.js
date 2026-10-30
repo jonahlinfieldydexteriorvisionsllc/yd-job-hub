@@ -27,8 +27,13 @@
   'use strict';
 
   const el = id => document.getElementById(id);
+  const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner && window.YDAuth.user);
   const SOON_DAYS = 14;
+  // The clock began here (30 Oct 2026): a date before it is not shown as
+  // late -- whether it was met was never asked (functions/deadlines.py
+  // never reaches back that far either).
+  const FROM = '2026-10-30';
   // A 1099-NEC is owed for $600 or more paid before 2026, $2,000 or more
   // from 2026 (the federal change of July 2025).
   const nec = y => (y >= 2026 ? '$2,000' : '$600');
@@ -139,6 +144,7 @@
     c = c || cfg;
     if (!c) return [];
     const out = [];
+    if (from < FROM) from = FROM;
     for (let y = +from.slice(0, 4) - 1; y <= +to.slice(0, 4) + 1; y++) {
       builtIn(y, c).concat(own(y, c)).forEach(x => { if (x.due >= from && x.due <= to) out.push(x); });
     }
@@ -243,7 +249,7 @@
       '<button class="dl-tick" onclick="dlTick(\'' + safeId(x.key) + '\', ' + (x.done ? 'false' : 'true') + ')" ' +
         'aria-label="' + (x.done ? 'Not done after all' : 'Done') + '">' + (x.done ? '✓' : '') + '</button>' +
       '<div class="dl-main"><b>' + esc(x.name) + '</b>' +
-        '<small class="dl-when">' + esc(x.done ? 'Done — was due ' + whenWords(x.due) : 'Due ' + whenWords(x.due)) + '</small>' +
+        '<small class="dl-when">' + esc((x.done ? '✓ Done · due ' : 'Due ') + whenWords(x.due)) + '</small>' +
         (x.needs && !x.done ? '<small>' + esc(x.needs) + '</small>' : '') + '</div>' +
       (x.rule === 'own'
         ? '<button class="link-btn dl-x" onclick="dlRemove(\'' + safeId(x.id) + '\')" aria-label="Take this date off">✕</button>'
