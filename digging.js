@@ -41,6 +41,7 @@
 
   let tickets = {};          // digTickets/{no}
   let unsub = null;
+  let ticketsHeard = false;  // the tickets have come from the server (before, every job looks ticketless)
   let state = null;          // settings/digging, once read
   let reading = null, running = false, timer = null;
 
@@ -168,11 +169,16 @@
     if (!window.YDSync || !YDSync.jobsHeard || !YDSync.jobsHeard() || !navigator.onLine) return;
     if (!window.YDBoards || !YDBoards.ready || !YDBoards.ready() || !YDBoards.boards()[TODO]) return;
     if (!window.YDCalendar || !YDCalendar.ready || !YDCalendar.ready()) return;
+    if (!ticketsHeard) return;
     running = true;
     try {
       try { await read(); } catch (e) { return; }
       const horizon = addDays(today(), LOOK_DAYS);
       for (const j of getJobIndex()) {
+        // A job with no to-do here that is not booked or under way can need
+        // nothing: passed by on its list entry, not read whole (this runs
+        // after every job change, while he types).
+        if (!state.jobs[j.id] && typeof normStatus === 'function' && BOOKED.indexOf(normStatus(j.status)) === -1) continue;
         const d = jobOf(j.id);
         if (!d || d.deletedAt || d.removeWhy) continue;
         const k = state.jobs[j.id];
@@ -238,7 +244,11 @@
   window.digNone = function () {
     const id = typeof currentJobId !== 'undefined' ? currentJobId : null;
     if (!owner() || !id) return;
-    save({ [id]: { none: true, at: iso() } });
+    // Its "File the Diggers ticket" to-do goes too: nothing ticks it off once
+    // the job needs no ticket, so it sat open on My to-dos.
+    const c = cardNow(id), k = state && state.jobs[id];
+    if (c && !cardDone(c) && k && k.cardId && window.YDBoards && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true);
+    save({ [id]: Object.assign({}, k || {}, { none: true, at: iso() }) });
     render();
   };
   window.digUndoNone = function () {
@@ -282,14 +292,15 @@
 
   function start() {
     stop();
-    unsub = window.YDDb.watch('digTickets', changes => {
+    unsub = window.YDDb.watch('digTickets', (changes, meta) => {
+      if (meta && !meta.fromCache) ticketsHeard = true;
       changes.forEach(c => { if (c.type === 'removed') delete tickets[c.id]; else tickets[c.id] = Object.assign({ no: c.id }, c.data); });
       render();
       soon();
       document.dispatchEvent(new CustomEvent('yd-dig-tickets'));
     }, () => {});
   }
-  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; tickets = {}; }
+  function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; tickets = {}; ticketsHeard = false; }
 
   let authKey = null;
   document.addEventListener('yd-auth', e => {

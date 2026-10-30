@@ -162,11 +162,14 @@
   }
   function lienOf(inv) {
     const c = inv.lienClock || {};
-    const lastWork = inv.lienLastWork || c.lastWork;
+    // The last CLOCKED day: the server keeps it apart (`clocked`); an older
+    // record has only lastWork, which is the clocked day unless set by hand.
+    const clocked = 'clocked' in c ? (c.clocked || '') : (c.byHand ? '' : (c.lastWork || ''));
+    const lastWork = inv.lienLastWork || clocked;
     if (!lastWork || !inv.open || !(Number(inv.balance) > 0)) return null;
     const days = daysBetween(lastWork, today());
     const fileBy = addMonths(lastWork, 6), noticeBy = addDays(fileBy, -NOTICE_DAYS);
-    return { days, lastWork, fileBy, noticeBy, byHand: !!inv.lienLastWork, clocked: c.lastWork || '',
+    return { days, lastWork, fileBy, noticeBy, byHand: !!inv.lienLastWork, clocked: clocked,
       decided: inv.lienDecided || null, decide: days >= LIEN_DECIDE && !inv.lienDecided,
       warn: daysBetween(today(), noticeBy) <= LIEN_WARN };
   }
@@ -490,6 +493,7 @@
 
   window.YDInvoices = {
     all: () => invoices,
+    loaded: () => loaded,
     stateOf: stateOf,
     // About what a deposit is, as the list says it (Home's rows).
     depositOf: depositOf,

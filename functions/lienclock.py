@@ -187,14 +187,22 @@ def _one(db, s, jobs, rules, today, now, lines, drafted):
     if st.get("kind") == "paid":
         return
     hand = _day(inv.get("lienLastWork"))
-    last = hand or (last_work(db, job_id, job) if job else None)
-    clock = None
+    # The clocked day is kept apart from the one in use: with a day set by
+    # hand, the app's "Use the last clocked day" showed the hand day, and
+    # going back to it showed the hand day as clocked until the next run.
+    clocked = last_work(db, job_id, job) if job else None
+    last = hand or clocked
+    was = inv.get("lienClock") or {}
     if last:
         notice_by, file_by = lien_dates(last)
-        clock = {"lastWork": _iso(last), "noticeBy": _iso(notice_by), "fileBy": _iso(file_by), "byHand": bool(hand)}
-        was = inv.get("lienClock") or {}
+        clock = {"lastWork": _iso(last), "noticeBy": _iso(notice_by), "fileBy": _iso(file_by), "byHand": bool(hand),
+                 "clocked": _iso(clocked) if clocked else None}
         if any(was.get(k) != v for k, v in clock.items()):
             s.reference.set({"lienClock": dict(clock, at=now.isoformat())}, merge=True)
+    elif was:
+        # No day any more (a hand day taken off, no clocked day): no dates
+        # left standing that are not true.
+        s.reference.set({"lienClock": None}, merge=True)
     if st.get("kind") == "waiting":
         return            # the deposit is in and the job not done: the rest is not due yet
     snooze = _day(inv.get("snoozeUntil"))

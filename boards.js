@@ -4012,6 +4012,8 @@
     ready: () => ready,
     // Whether a board's cards have come from the server, not just the cache.
     cardsReady: id => !!cardsLoaded[id],
+    // The job whose bid/job card window is open (its Save writes its boxes back).
+    editingJob: () => (jobEdit ? jobEdit.jobId : null),
     boards: () => boards,
     cards: () => cards,
     people: () => people,

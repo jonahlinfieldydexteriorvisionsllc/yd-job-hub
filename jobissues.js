@@ -418,13 +418,18 @@
   function readLike(id, then) {
     if (!id || !signedIn() || !window.YDDb || !YDDb.get) return;
     const had = like[id];
-    if (had && (had.busy || Date.now() - had.at < LIKE_FRESH_MS)) return;
-    like[id] = { items: had ? had.items : [], at: Date.now(), busy: true };
+    // A read already on its way tells every page waiting on it, not only the
+    // first: the crew page is drawn again as it opens (a ticket or service
+    // arriving), and the box on the new page stayed empty.
+    if (had && had.busy) { if (then) had.waiters.push(then); return; }
+    if (had && Date.now() - had.at < LIKE_FRESH_MS) return;
+    const waiters = then ? [then] : [];
+    like[id] = { items: had ? had.items : [], at: Date.now(), busy: true, waiters: waiters };
     Promise.resolve(YDDb.get('jobLessons', id)).then(d => {
       const items = d && Array.isArray(d.items) ? d.items.filter(x => x && (x.head || x.note)).slice(0, 8) : [];
-      like[id] = { items: items, at: Date.now(), busy: false };
-      if (then) then();
-    }).catch(() => { like[id] = { items: had ? had.items : [], at: 0, busy: false }; });
+      like[id] = { items: items, at: Date.now(), busy: false, waiters: [] };
+      waiters.forEach(f => { try { f(); } catch (e) {} });
+    }).catch(() => { like[id] = { items: had ? had.items : [], at: 0, busy: false, waiters: [] }; });
   }
   function likeListHtml(items) {
     return '<div class="ji-list">' + items.map(x => {

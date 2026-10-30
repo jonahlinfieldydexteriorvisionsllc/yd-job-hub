@@ -802,6 +802,10 @@ async function start() {
     if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
     unwatchMe = onSnapshot(doc(db, 'users', user.uid), { includeMetadataChanges: true }, snap => {
       if (snap.metadata.fromCache || auth.currentUser !== user) return;
+      // The record itself, for a screen that shows something from it (the
+      // clock: whether they settle their own shifts) -- read once at sign-in,
+      // a change the owner made stayed unseen until they signed in again.
+      document.dispatchEvent(new CustomEvent('yd-my-record', { detail: snap.exists() ? snap.data() : null }));
       const first = checking;
       checking = false;
       if (snap.exists()) { applyRole(user, roleOf(snap.data()), !first); return; }

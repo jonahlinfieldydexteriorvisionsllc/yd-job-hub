@@ -4235,10 +4235,11 @@
   function carryLines(jobId, workIds, matIds) {
     const was = copyFrom;
     copyFrom = sourcesOf([jobId]);
-    const work = (workIds || []).map(id => copyFrom.work[id]).filter(Boolean).map(w => carriedWork(w, {}));
-    const materials = (matIds || []).map(id => copyFrom.materials[id]).filter(Boolean).map(m => carriedMat(m, {}));
-    copyFrom = was;
-    return { work: work, materials: materials };
+    try {
+      const work = (workIds || []).map(id => copyFrom.work[id]).filter(Boolean).map(w => carriedWork(w, {}));
+      const materials = (matIds || []).map(id => copyFrom.materials[id]).filter(Boolean).map(m => carriedMat(m, {}));
+      return { work: work, materials: materials };
+    } finally { copyFrom = was; }
   }
   // A bid's lines and materials, for ticking which to carry: each material
   // with the line it most likely goes with (crewjobs.js workFor -- the same
@@ -4572,11 +4573,14 @@
       const lastAsk = e.chat.filter(m => m.role === 'user').slice(-1)[0];
       crewAsked = !!(lastAsk && CREW_WORDS.test(String(lastAsk.text || '')));
       copyFrom = sourcesOf((cleanBids(r.bids) || []).map(b => b.jobId));
-      e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
-      crewAsked = false;
-      e.materials = patch ? patchLines(e.materials, r.materials, r.removed, (g, was) => matLine(g, was, e, said))
-        : mergeMaterials(r.materials, e, said);
-      copyFrom = null;
+      // Let go even if a line breaks: left set, a later answer's copyOf
+      // would be read against these bids.
+      try {
+        e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
+        crewAsked = false;
+        e.materials = patch ? patchLines(e.materials, r.materials, r.removed, (g, was) => matLine(g, was, e, said))
+          : mergeMaterials(r.materials, e, said);
+      } finally { copyFrom = null; crewAsked = false; }
       e.spoilCuYd = spoil;
       e.brushCuYd = brush;
       joinAllIn(e);

@@ -6,17 +6,22 @@
 //
 // It is a card on his My to-dos, "🧱 Order materials — <name>", due on the earliest order-by day,
 // listing each supplier with its order-by day, its lines and how many are special order. Made once per
-// job and first day, on the owner's device (as digging.js makes the Diggers to-do); kept in step while
-// it is open (a moved first day or a line ticked moves its day and words); ticked off by itself when
-// every line is ordered or marked not bought, or the job is done. The 7 am list tells him the morning
-// it is due (functions/reminders.py: his cards due today), so nothing here sends a push of its own.
+// job, on the owner's device (as digging.js makes the Diggers to-do); kept in step while it is open (a
+// moved first day or a line ticked moves its day and words -- but a due day, title or words he changed
+// on the card are his and stay); ticked off by itself when every line is ordered or marked not bought,
+// or the job is done. A card ticked off by itself is followed by a new one if lines to order turn up
+// again; one he ticked off or deleted is his answer and never comes back (the first day "from today on"
+// moves every morning of a job under way, and it used to come back each day). The 7 am list tells him
+// the morning it is due (functions/reminders.py: his cards due today), so nothing here sends a push.
 //
 // What is still to order is what Orders to place shows (app.js ordersJobs, orderVendor); the first day
 // is the first day on the Job schedule (a pickup or a to-do tied to the job does not count).
 // Lead time: the supplier's "Usually takes" on Supplies ("3–5 business days", "1 week", "next day")
 // read as working days, the longest it says; none written = LEAD_WORKDAYS. A special-order line
 // (Supplies' specialOrder, or the line's own) waits at least SPECIAL_WORKDAYS.
-// Kept in settings/orderAhead (owner only): jobs: { jobId: { cardId, first, at } }
+// Kept in settings/orderAhead (owner only): jobs: { jobId: { cardId, first, at, n, wrote {due, title,
+// notes (a hash)}, autoDone } } -- n counts the cards made for the job (each its own id), wrote is what
+// this last put on the card.
 (function () {
   'use strict';
 
@@ -56,10 +61,13 @@
   function leadDays(text) {
     const t = String(text || '').toLowerCase();
     if (!t.trim()) return null;
-    if (/same[ -]day|in stock|today/.test(t)) return 0;
-    if (/next[ -]day|overnight|tomorrow/.test(t)) return 1;
+    // Figures first: "3-5 days, same day if in stock" is 5, not 0.
     const nums = (t.match(/\d+(\.\d+)?/g) || []).map(Number);
-    if (!nums.length) return null;
+    if (!nums.length) {
+      if (/same[ -]day|in stock|today/.test(t)) return 0;
+      if (/next[ -]day|overnight|tomorrow/.test(t)) return 1;
+      return null;
+    }
     const n = Math.max.apply(null, nums);
     if (/week/.test(t)) return Math.ceil(n * 5);
     if (/business|working|work day/.test(t)) return Math.ceil(n);
@@ -155,18 +163,33 @@
     const b = window.YDBoards && YDBoards.boards()[TODO];
     return !!(c && b && YDBoards.doneCol && c.column === YDBoards.doneCol(b));
   };
-  function makeCard(j) {
-    const cid = 'oa' + safe(j.id) + '_' + j.first.replace(/-/g, '');
+  // A short fingerprint of the words (FNV-1a), so settings need not hold them twice.
+  function hash(s) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(36);
+  }
+  const wroteOf = f => ({ due: f.due, title: f.title, notes: hash(f.notes) });
+  // The n-th card for the job: its own id, the same on every device (two of
+  // his devices running at once make one card, not two).
+  function makeCard(j, n) {
+    const cid = 'oa' + safe(j.id) + '_' + j.first.replace(/-/g, '') + (n > 1 ? '_' + n : '');
     return Promise.resolve(window.YDDb.transact([['boards/' + TODO + '/cards', cid]], ([cur]) => [cur ? null : newCard(j)]))
-      .then(() => save({ [j.id]: { cardId: cid, first: j.first, at: iso() } }))
+      .then(() => save({ [j.id]: { cardId: cid, first: j.first, at: iso(), n: n, wrote: wroteOf(fieldsFor(j)), autoDone: false } }))
       .catch(e => console.warn('[orderahead] card not made yet:', (e && e.code) || e));
   }
-  // An open card that no longer says what is true: its day, its words.
-  function keepInStep(cid, c, j) {
-    const f = fieldsFor(j);
-    if (c.due === f.due && c.notes === f.notes && c.title === f.title) return Promise.resolve();
-    return Promise.resolve(window.YDDb.put('boards/' + TODO + '/cards', cid,
-      { due: f.due, notes: f.notes, title: f.title, updatedAt: iso(), updatedBy: 'Job Hub' }))
+  // An open card that no longer says what is true: its day, its words. Only
+  // what is still as this last wrote it changes -- what he changed is his.
+  function keepInStep(jobId, k, c, j) {
+    const f = fieldsFor(j), was = k.wrote || {};
+    const patch = {};
+    if (c.due !== f.due && (!was.due || c.due === was.due)) patch.due = f.due;
+    if (c.title !== f.title && (!was.title || c.title === was.title)) patch.title = f.title;
+    if (c.notes !== f.notes && (!was.notes || hash(String(c.notes || '')) === was.notes)) patch.notes = f.notes;
+    if (!Object.keys(patch).length) return Promise.resolve();
+    return Promise.resolve(window.YDDb.put('boards/' + TODO + '/cards', k.cardId,
+      Object.assign(patch, { updatedAt: iso(), updatedBy: 'Job Hub' })))
+      .then(() => save({ [jobId]: Object.assign({}, k, { wrote: Object.assign({}, was, wroteOf(f)) }) }))
       .catch(e => console.warn('[orderahead] card not updated yet:', (e && e.code) || e));
   }
 
@@ -176,6 +199,8 @@
     if (running || !owner() || !window.YDDb || !navigator.onLine) return;
     if (!window.YDSync || !YDSync.jobsHeard || !YDSync.jobsHeard()) return;
     if (!window.YDBoards || !YDBoards.ready || !YDBoards.ready() || !YDBoards.boards()[TODO]) return;
+    // The cards themselves from the server too: before them every card reads as gone.
+    if (!YDBoards.cardsReady || !YDBoards.cardsReady(TODO)) return;
     if (!window.YDCalendar || !YDCalendar.ready || !YDCalendar.ready()) return;
     const cat = window.YDSupplies && YDSupplies.catalog ? YDSupplies.catalog() : null;
     if (!cat || !Object.keys(cat.items || {}).length) return;
@@ -191,18 +216,22 @@
         const k = state.jobs[jobId], c = k && cards[k.cardId];
         if (!c || cardDone(c)) continue;
         const j = byId[jobId];
-        if (j) { await keepInStep(k.cardId, c, j); continue; }
+        if (j) { await keepInStep(jobId, k, c, j); continue; }
         // Not wanted any more: done when nothing is left to order (or the job is finished or gone);
         // a first day moved past two weeks leaves the card as it is.
         const still = (typeof ordersJobs === 'function' ? ordersJobs() : []).find(x => x.id === jobId);
-        if ((!still || !still.left.length || still.done) && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true);
+        if ((!still || !still.left.length || still.done) && YDBoards.setDone) {
+          YDBoards.setDone(TODO, k.cardId, true);
+          save({ [jobId]: Object.assign({}, k, { autoDone: true }) });
+        }
       }
-      // New: a job with no card yet for this first day (one ticked off for an earlier day gets a new one).
+      // New: a job with no card yet, or whose last card ticked itself off and has lines to order
+      // again. One he ticked off or deleted himself is left so.
       for (const j of now) {
         const k = state.jobs[j.id], c = k && cards[k.cardId];
         if (c && !cardDone(c)) continue;
-        if (k && k.first === j.first) continue;
-        await makeCard(j);
+        if (k && !k.autoDone) continue;
+        await makeCard(j, k ? (k.n || 1) + 1 : 1);
       }
     } finally { running = false; }
   }

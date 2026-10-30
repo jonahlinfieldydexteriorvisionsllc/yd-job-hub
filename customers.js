@@ -3127,9 +3127,13 @@
     if (typeof loadJob === 'function') loadJob(jobId);
     if (typeof switchTab === 'function') switchTab('job');
     if (text && window.YDEstimate) YDEstimate.ask(text);
+    // Nothing said, nothing ticked: their meeting notes start Claude, as they
+    // did before (only putting them in the notes left Claude waiting).
+    else if (!carried.length && est.notes && window.YDEstimate && YDEstimate.setNotes) YDEstimate.setNotes(est.notes, true);
     // The job's price follows the lines carried over, and is saved with it.
     else if (window.YDEstimate && YDEstimate.repriced) YDEstimate.repriced();
-    showToast('A new bid for ' + (c.name || 'them') + (text ? ' — Claude is building it' : carried.length ? ' — lines carried over' : ''));
+    showToast('A new bid for ' + (c.name || 'them') + (text || (!carried.length && est.notes) ? ' — Claude is starting it'
+      : carried.length ? ' — lines carried over' : ''));
   };
 
   // ------------------------------------------------------------ every bid tied to its customer
@@ -3152,7 +3156,10 @@
     const out = {};
     const site = c.ship && s(c.ship.street) ? c.ship : c;
     if (!s(j.address) && !s(j.city) && s(site.street)) {
-      out.address = s(site.street); out.city = s(site.city); out.state = s(site.state); out.zip = s(site.zip);
+      out.address = s(site.street); out.city = s(site.city);
+      // A state or ZIP typed on the job stays (and theirs only when they have one).
+      if (!s(j.state) && s(site.state)) out.state = s(site.state);
+      if (!s(j.zip) && s(site.zip)) out.zip = s(site.zip);
     }
     if (!s(j.phone) && s(c.phone || c.mobile)) out.phone = s(c.phone || c.mobile);
     if (!s(j.email) && s(c.email)) out.email = s(c.email);
@@ -3169,7 +3176,10 @@
     return id ? Object.assign({ customerId: id, customerBy: 'auto' }, fillFrom(customers[id], {})) : {};
   }
   const openJobId = () => (typeof currentJobId !== 'undefined' && currentJobId) || '';
-  const formDirty = () => typeof dirty !== 'undefined' && !!dirty;
+  // app.js's typing-not-saved. Not `dirty` by name: this file has a `dirty`
+  // of its own (a redraw waiting), so that read this file's and the guard
+  // below never saw the form's typing.
+  const formDirty = () => typeof window.ydFormDirty === 'function' && window.ydFormDirty();
   // The job open on the Job tab: tied on the form, which saves it.
   function tieForm(cid, by) {
     const c = customers[cid];
@@ -3195,11 +3205,17 @@
   function tieSoon() { clearTimeout(tieTimer); tieTimer = setTimeout(tieSure, 1500); }
   function tieSure() {
     if (!isOn() || !loaded || !can('jobs', 'change') || !window.YDSync) return;
+    // Invoices say whose a job is (their QuickBooks customer): tied before
+    // they came, a job could go to the customer its email matched instead.
+    if (can('billing', 'see') && window.YDInvoices && YDInvoices.loaded && !YDInvoices.loaded()) return;
+    const editing = window.YDBoards && YDBoards.editingJob ? YDBoards.editingJob() : null;
     let by = null, n = 0;
     allJobs().forEach(j => {
       if (j.customerId || j.customerBy === 'hand' || j.removeWhy || j.deletedAt) return;
       // The job on screen with typing not saved yet: once it is.
       if (j._id === openJobId() && formDirty()) return;
+      // Its card window open: Save there writes its boxes back over the fill.
+      if (j._id === editing) return;
       by = by || index();
       const id = sureOf(by, whoOfJob(j));
       if (id && tieJob(j._id, id, 'auto', j)) n++;
@@ -3773,6 +3789,8 @@
   // A bid or job saved tied to nobody: tied by itself when it surely is
   // someone's.
   document.addEventListener('yd-jobs-changed', () => { if (isOn()) tieSoon(); });
+  // Tying waits for the invoices (see tieSure): their arrival starts it.
+  document.addEventListener('yd-invoices', () => { if (isOn()) tieSoon(); });
   // Everyone lists the suppliers and subcontractors; the services list feeds
   // the "What for" buttons.
   ['yd-supplies', 'yd-subs'].forEach(ev => document.addEventListener(ev, () => { if (isOn() && view === 'everyone') renderQuietly(); }));

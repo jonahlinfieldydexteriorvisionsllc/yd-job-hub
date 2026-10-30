@@ -349,6 +349,9 @@ let oldTaxable = false;
 let manualJobPrice = false;
 let baseJobPrice = 0;
 let dirty = false;
+// The job form's typing not saved yet, for the other files: one with a
+// `dirty` of its own (customers.js) reads its own by that name, never this.
+function ydFormDirty() { return !!dirty; }
 let collapsedMonths = {};
 let dashSort = { col: 'name', asc: true };
 // The date field shows M/D with no year, so saving re-stamps it with the

@@ -779,8 +779,10 @@
     // to the owner, because that is where a forgotten clock-out hides -- and
     // one the clock had to stop always does, as the server sends it.
     e.status = late || needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
-    // One trusted with his own shifts: a long day counts as it is.
-    if (e.status === 'pending' && !late && settlesOwn(e) && paidMs(e) <= OWN_MAX_MS) e.status = 'ok';
+    // One trusted with his own shifts: a long day counts as it is. Up to 16 h
+    // from start to end, breaks included -- what the rules measure (paid time
+    // alone said "counted" for a shift the rules then refused).
+    if (e.status === 'pending' && !late && settlesOwn(e) && stampMs - startMsOf(e) <= OWN_MAX_MS) e.status = 'ok';
 
     render();
     lastWrite = write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
@@ -4022,6 +4024,14 @@
       render();
     }).catch(() => { /* not published yet, or offline: the old record's rate stands */ });
   }
+  // Their record as it changes (firebase-init.js watches it): "settles his own
+  // shifts" switched on or off by the owner shows at once, not at the next sign-in.
+  document.addEventListener('yd-my-record', e => {
+    const u = me(), d = e.detail;
+    if (!u || !d || isOwner()) return;
+    people[u.uid] = Object.assign({}, people[u.uid] || {}, { uid: u.uid }, d);
+    render();
+  });
 
   function start() {
     if (!window.YDDb) return;
