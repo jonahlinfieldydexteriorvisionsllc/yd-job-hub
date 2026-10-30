@@ -208,7 +208,10 @@
     const t = current(id);
     const k = state.jobs[id];
     let h = '';
-    if (t) {
+    if (t && BOOKED.indexOf(statusOf(d)) === -1) {
+      // A finished job (or a bid): the ticket it had, nothing to do about it.
+      h = '🚧 Diggers ticket ' + esc(t.no) + ' — clear to dig from ' + esc(whenWords(t.start));
+    } else if (t) {
       h = '🚧 Diggers ticket ' + esc(t.no) + ' — ' + (t.lapsed
         ? '<b class="dig-late">lapsed ' + esc(dayWords(t.lapseOn)) + '</b> — file a new one'
         : (t.clear ? 'clear to dig since ' : 'clear to dig from ') + esc(whenWords(t.start)) + ' · ' +
