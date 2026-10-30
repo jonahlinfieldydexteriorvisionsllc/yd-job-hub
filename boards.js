@@ -561,8 +561,13 @@
   }
   // Whole calendar days since it went (day 0 the day it went).
   const calDays = t => Math.round((Date.parse(localDay() + 'T12:00:00') - Date.parse(localDay(new Date(t)) + 'T12:00:00')) / 864e5);
+  // Made into an invoice in QuickBooks (his way to take the deposit) without
+  // being marked accepted: going ahead, never chased (followup.py _invoiced).
+  const invoicedBid = j => { const s = (j.qbEstimate || {}).status;
+    return s === 'Closed' || s === 'Converted' || !!(typeof qbInvoiceOf === 'function' && qbInvoiceOf(j)); };
   const chasingBid = j => !j.deletedAt && !j.removeWhy && normStatusOf(j) === 'quoting' &&
-    (j.bidStage === 'sent' || j.bidStage === 'followUp') && !acceptedToBook(j) && !turnedDown(j) && !(j.chase || {}).stoppedAt;
+    (j.bidStage === 'sent' || j.bidStage === 'followUp') && !acceptedToBook(j) && !turnedDown(j) && !invoicedBid(j) &&
+    !(j.chase || {}).stoppedAt;
   function chaseDoneIds(j) {
     const out = new Set(Object.keys(((j.chase || {}).done) || {}).concat(Object.keys(j.chaseDrafts || {})));
     (Array.isArray(j.followUps) ? j.followUps : []).forEach(f => { if (f && f.step) out.add(f.step); });
