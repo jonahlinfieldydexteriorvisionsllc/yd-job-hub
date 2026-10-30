@@ -129,7 +129,11 @@
   // can be auto sorted into snow." Salt and ice melt for the plowing accounts
   // are the snow side's cost, not a job's: the reader's `snow` kind starts
   // on ❄️ Snow, and an emailed one is filed there by itself
-  // (receipts.py _file_snow; ⋯ → Undo puts it back to sort).
+  // (receipts.py _file_place; ⋯ → Undo puts it back to sort).
+  //
+  // Jonah, 30 Oct 2026: "all receipts from airlines or for hotel bookings or
+  // bus tickets should be automarked as travel" -- filed under ✈️ Travel by
+  // the email reader the same way, even a trip it read as his own.
   //
   // Every place is one row here -- its chip on a card, its name, its filter
   // under All receipts and its name in a month's totals -- so another place
@@ -176,6 +180,10 @@
     // (receipts.py SUB_GOODS).
     if (r.kind !== 'materials' && r.kind !== 'plants' && r.kind !== 'loan_payment' && subMatch(r)) return 'sub';
     if (r.suggest && r.suggest.jobId) return 'job';
+    // A flight, a hotel or a bus ticket is Travel whoever the trip was for
+    // (Jonah, 30 Oct 2026: "all receipts from airlines or for hotel bookings
+    // or bus tickets should be automarked as travel"; receipts.py is_travel).
+    if (r.kind === 'travel') return 'travel';
     // Claude read it as clearly a household's (a photo still to sort --
     // the email reader files those itself, functions/receipts.py).
     if (r.whose === 'personal') return 'personal';

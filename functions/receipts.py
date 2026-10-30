@@ -341,13 +341,32 @@ RENTAL_KIND = "rental"
 # be auto sorted into snow." Salt and ice melt bought for the plowing
 # accounts are the snow side's cost, not a job's: a receipt read as `snow`
 # starts on ❄️ Snow on the Receipts tab and is filed there by itself
-# (_file_snow), as a personal one is under Personal. Plain words, not Claude:
+# (_file_place), as a personal one is under Personal. Plain words, not Claude:
 # a receipt whose every item is salt or a de-icer is snow whatever Claude
 # called it (kind_of) -- softener, pool and kitchen salt never count.
 SNOW_KIND = "snow"
 SALT = re.compile(r"\b(rock salt|road salt|bulk salt|treated salt|ice ?melt(er|ers)?|de ?icers?|de icing|"
                   r"halite|(calcium|magnesium) chlorides?|salt (bags?|pallets?|tons?|lbs?)|\d+ ?lbs? salt)\b")
 NOT_SALT = re.compile(r"\b(softener|soft water|pool|spa|table|sea|kosher|epsom|lamp|bath|cooking|himalayan|pink)\b")
+# Jonah, 30 Oct 2026: "all receipts from airlines or for hotel bookings or bus
+# tickets should be automarked as travel". By the store's name (an airline, a
+# booking site, a hotel or a bus or train line) or, failing that, when every
+# item is a flight, a room or a ticket -- whoever Claude thought the trip was
+# for: travel, filed whole under ✈️ Travel by itself (_file_place), the way
+# he had been sorting them by hand. Names that also belong to other trades
+# (United Rentals, American Heritage stone, Delta faucets) never count alone.
+TRAVEL_KIND = "travel"
+TRAVEL_STORES = re.compile(
+    r"\b(airlines?|air lines|airways|expedia|priceline|orbitz|travelocity|cheapoair|booking com|hotels com|"
+    r"airbnb|vrbo|hotels?|motels?|marriott|hilton|doubletree|hampton inn|homewood suites|embassy suites|hyatt|"
+    r"holiday inn|crowne plaza|ihg|wyndham|ramada|days inn|super 8|la quinta|best western|choice hotels|"
+    r"comfort inn|comfort suites|quality inn|red roof|red carpet inn|motel 6|radisson|sheraton|westin|"
+    r"fairfield inn|residence inn|springhill suites|americinn|country inn|baymont|microtel|extended stay|"
+    r"greyhound|megabus|flixbus|coach usa|van galder|badger bus|lamers|jefferson lines|amtrak)\b")
+TRAVEL_GOODS = re.compile(
+    r"\b(airfare|air fare|airline tickets?|plane tickets?|flights?|checked bags?|baggage|seat (selection|upgrade)|"
+    r"bus tickets?|train tickets?|rail fare|hotel (room|stay|booking)|guest room|room nights?|nights? stay|"
+    r"lodging|resort fee)\b")
 
 # Jonah, 26 Oct 2026: "most oreilly receipts are for vehicle parts so those
 # would go under vehicle expenses -- every air filter, oil filter, oil, all
@@ -385,14 +404,28 @@ def is_accounting(vendor):
     return bool(ACCOUNTING.search(name)) and not NOT_ACCOUNTING.search(name)
 
 
+def is_travel(got, lines):
+    """A flight, a hotel or a bus or train ticket (TRAVEL_STORES, TRAVEL_GOODS)."""
+    if got.get("doc_type") == "person_payment":
+        return False
+    if TRAVEL_STORES.search(_norm(got.get("vendor"))):
+        return True
+    goods = [_norm(l.get("name")) for l in lines if (l.get("cents") or 0) > 0 and not NOT_GOODS.search(_norm(l.get("name")))]
+    return bool(goods) and all(TRAVEL_GOODS.search(g) for g in goods)
+
+
 def kind_of(got, lines):
     """What the purchase was: Claude's word for it, unless his rule above
     says otherwise."""
     kind = got.get("kind") if got.get("kind") in KINDS else "other"
     if got.get("doc_type") != "person_payment" and is_office_store(got.get("vendor")):
         return "office_and_software"
+    if kind != LOAN_KIND and is_travel(got, lines):
+        return TRAVEL_KIND
     if got.get("whose") == "personal" or got.get("doc_type") == "person_payment":
-        return kind
+        # Only his rule makes a household's purchase travel (a meal out on a
+        # holiday stays Personal).
+        return "other" if kind == TRAVEL_KIND else kind
     if kind != LOAN_KIND and is_accounting(got.get("vendor")):
         return COMPANY_KIND
     goods = [_norm(l.get("name")) for l in lines if (l.get("cents") or 0) > 0 and not NOT_GOODS.search(_norm(l.get("name")))]
@@ -1251,7 +1284,8 @@ def _save_all(db, m, got, jobs, extra=None):
     """Every receipt one email holds, saved (_save): the one, or one for
     each of its PDFs (ONE RECEIPT IN EACH PDF) -- passing over a PDF of its
     own that is no purchase or charged nothing. A personal one is filed
-    under Personal (_file_personal), rock salt under Snow (_file_snow).
+    under Personal (_file_personal), rock salt under Snow and a flight, hotel
+    or ticket under Travel (_file_place).
     Returns [(rid, what, personal)]."""
     out = []
     parts = got.get("parts") or []
@@ -1261,7 +1295,7 @@ def _save_all(db, m, got, jobs, extra=None):
         rid, what = _save(db, m, g, jobs, extra=extra, to_pay=_to_pay(db, g, m))
         personal = what not in (TO_PAY, NOT_RECEIPT) and _file_personal(db, rid, g, m)
         if what not in (TO_PAY, NOT_RECEIPT) and not personal:
-            _file_snow(db, rid)
+            _file_place(db, rid)
         out.append((rid, what, bool(personal)))
     return out
 
@@ -1485,6 +1519,10 @@ def _file_personal(db, rid, got, m=None):
         return True
     if not r or r.get("whose") != "personal" or r.get("splits") or stages.receipt_status(r) != "tosort":
         return False
+    # A flight, a hotel or a ticket is Travel, even a trip Claude read as his
+    # own (TRAVEL_STORES): _file_place files it.
+    if r.get("kind") == TRAVEL_KIND:
+        return False
     lines = r.get("lines") or []
     tax = int(r.get("taxCents") or 0)
     cents = sum(int(ln.get("cents") or 0) for ln in lines) if lines else max(0, int(r.get("totalCents") or 0) - tax)
@@ -1497,20 +1535,41 @@ def _file_personal(db, rid, got, m=None):
     return True
 
 
-def _file_snow(db, rid):
-    """A receipt read as rock salt or ice melt (SNOW_KIND): filed whole under
-    ❄️ Snow by itself, the same split the app's Snow chip makes, so ⋯ → Undo
-    there puts it back to sort. A business cost like the shop's, sent to
-    QuickBooks as usual. Only one still to sort with nothing filed: one a
-    person has sorted is left as it is. Returns True when filed (now or
-    before) under Snow."""
+# The places a receipt is filed in by itself, by what it was read as:
+# rock salt under Snow (never a personal one), a flight, hotel or ticket under
+# Travel (whoever it was for -- kind_of only reads a personal one as travel
+# by his rule, TRAVEL_STORES).
+AUTO_PLACES = {SNOW_KIND: ("snow", "Snow", False), TRAVEL_KIND: ("travel", "Travel", True)}
+
+
+def _file_place(db, rid):
+    """A receipt read as rock salt or ice melt (SNOW_KIND) or as a flight,
+    hotel or ticket (TRAVEL_KIND): filed whole under ❄️ Snow or ✈️ Travel by
+    itself, the same split the app's chip makes, so ⋯ → Undo there puts it
+    back to sort. A business cost like the shop's, sent to QuickBooks as
+    usual. Only one still to sort with nothing filed: one a person has sorted
+    is left as it is. Returns True when filed (now or before) there."""
     ref = db.collection("receipts").document(rid)
     snap = ref.get()
     r = (snap.to_dict() or {}) if snap.exists else {}
-    if r.get("kind") != SNOW_KIND or r.get("whose") == "personal":
+    place = AUTO_PLACES.get(r.get("kind"))
+    if not place or (r.get("whose") == "personal" and not place[2]):
         return False
-    if any(sp.get("to") == "snow" for sp in (r.get("splits") or [])):
+    to, name = place[0], place[1]
+    if any(sp.get("to") == to for sp in (r.get("splits") or [])):
         return True
+    if r.get("splits") or stages.receipt_status(r) != "tosort":
+        return False
+    lines = r.get("lines") or []
+    tax = int(r.get("taxCents") or 0)
+    cents = sum(int(ln.get("cents") or 0) for ln in lines) if lines else max(0, int(r.get("totalCents") or 0) - tax)
+    now = dg._now().isoformat()
+    split = {"id": "sp" + _b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
+             "to": to, "name": name, "lines": list(range(len(lines))), "cents": cents, "taxCents": tax,
+             "at": now, "by": "Job Hub", "auto": True}
+    ref.update({"splits": [split], "status": "done", "updatedAt": now, "updatedBy": "",
+                "statusChange": {"to": "done", "at": now, "by": "", "name": "Job Hub"}})
+    return True
     if r.get("splits") or stages.receipt_status(r) != "tosort":
         return False
     lines = r.get("lines") or []
