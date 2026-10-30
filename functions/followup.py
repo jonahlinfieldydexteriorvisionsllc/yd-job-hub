@@ -210,8 +210,9 @@ def _not_waiting(j):
 def _write(client, j, to, step):
     """Claude writes the follow-up: ({subject, body, reply} or {error}, usage).
     `reply` is the estimate's email thread when it is found (else None)."""
+    import voice
     resp = client.beta.messages.create(
-        model=MODEL, max_tokens=4000, system=SYSTEM,
+        model=MODEL, max_tokens=4000, system=SYSTEM + voice.block(),
         messages=[{"role": "user", "content": _prompt(j) + _step_words(step)}],
         thinking={"type": "adaptive"},
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
@@ -653,7 +654,7 @@ THANKS_BODY = (
     "Hi {name},\n\n"
     "Thank you for choosing YD Exterior Visions for your {work}. It was a pleasure working with you, "
     "and I hope you enjoy it for years to come.\n\n"
-    "If you have a minute, a Google review would mean a lot to a small local business like ours:\n"
+    "If you have a minute, a Google review would mean a lot to us:\n"
     "{link}\n\n"
     "And if anything ever comes up, just reply to this email.\n\n"
     "Thanks again,\n"

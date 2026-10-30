@@ -25,7 +25,7 @@
   const BODY = 'Hi {name},\n\n' +
     'Thank you for choosing YD Exterior Visions for your {work}. It was a pleasure working with you, ' +
     'and I hope you enjoy it for years to come.\n\n' +
-    'If you have a minute, a Google review would mean a lot to a small local business like ours:\n' +
+    'If you have a minute, a Google review would mean a lot to us:\n' +
     '{link}\n\n' +
     'And if anything ever comes up, just reply to this email.\n\n' +
     'Thanks again,\n' +
@@ -392,6 +392,30 @@
     showToast(pick.id === 'send' ? 'Next-steps emails will send themselves' : pick.id === 'off' ? 'No next-steps emails will go'
       : 'Next-steps emails will go into your Gmail Drafts');
   }
+
+  // ------------------------------------------------------------ how he writes
+  //
+  // Jonah (30 Oct 2026, wish card): "read all my personally sent emails to
+  // find my voice so you can improve writing as me." The guide made from the
+  // emails he typed himself (settings/voice.guide, owner-only) goes with
+  // every email Claude writes as him -- follow-ups, replies, a lead's first
+  // reply, card emails, plant care, progress updates (functions/voice.py).
+  // Here he reads it and changes it; emptied, Claude writes without it.
+  window.openVoiceSettings = async function () {
+    if (!isOwner() || !window.YDDb) return;
+    const now = (await Promise.resolve(window.YDDb.get('settings', 'voice')).catch(() => null)) || {};
+    const got = await ydForm('How you write, for every email Claude writes as you — follow-ups, replies, a lead’s first reply, ' +
+      'card emails, plant care, progress updates. It changes how they sound, never the facts or prices in them. Empty it ' +
+      'and Claude writes without it.', [
+      { id: 'guide', label: 'How you write', value: now.guide || '', multiline: true, rows: 14 },
+    ], { title: 'How you write', ok: 'Save' });
+    if (!got) return;
+    const guide = String(got.guide || '').trim();
+    if (guide === String(now.guide || '').trim()) return;
+    Promise.resolve(window.YDDb.put('settings', 'voice', { guide: guide, by: 'hand', updatedAt: new Date().toISOString() }))
+      .then(() => showToast(guide ? 'Saved — the next email Claude writes uses it' : 'Emptied — Claude writes without it'))
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not saved — not allowed' : 'Not saved — try again'));
+  };
 
   window.YDThanks = { lineHtml: lineHtml, homeRows: homeRows, stateOf: stateOf, conf: () => conf, welcomeHtml: welcomeHtml };
 

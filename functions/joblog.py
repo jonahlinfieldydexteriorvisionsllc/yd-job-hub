@@ -339,7 +339,8 @@ def draft_update(client, db, job_id, day, uid):
                                     (" (first name %s)" % first) if first else "") +
               _facts_prompt(j, day, log.get("facts") or {"hours": [], "done": [], "photos": {}, "captions": [], "notes": []}) +
               "\n\nThe day's log:\n" + str(log.get("text") or ""))
-    got, usage = _ask(client, UPDATE_SYSTEM, UPDATE_SCHEMA, prompt)
+    import voice
+    got, usage = _ask(client, UPDATE_SYSTEM + voice.block(db), UPDATE_SCHEMA, prompt)
     subject, body = str((got or {}).get("subject") or "").strip(), str((got or {}).get("body") or "").strip()
     if not subject or not body:
         return {"error": "Claude's answer could not be read. Try again."}, usage

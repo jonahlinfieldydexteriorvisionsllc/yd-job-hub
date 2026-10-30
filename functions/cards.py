@@ -449,9 +449,12 @@ def work_card(client, board, card, records, used=None):
     ctx = {"drafts": [], "checklist": []}
     used = used if used is not None else {"input": 0, "output": 0, "cents": 0.0}
     finished = None
+    import voice
+    system = SYSTEM + voice.block(also="Here it is for the emails you write as him (draft_email), not for your "
+                                       "result on the card.")
     for _ in range(MAX_TURNS):
         resp = client.beta.messages.create(
-            model=MODEL, max_tokens=16000, system=SYSTEM, tools=TOOLS, messages=messages,
+            model=MODEL, max_tokens=16000, system=system, tools=TOOLS, messages=messages,
             thinking={"type": "adaptive"}, output_config={"effort": "medium"},
             # A safety-classifier decline is routed to another model rather
             # than ending the card.

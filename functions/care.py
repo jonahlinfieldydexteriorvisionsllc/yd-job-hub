@@ -304,8 +304,13 @@ def draft(client, job_id, auto=False):
 
 
 def _write(client, job_id, j, plants, to, turf=()):
+    import voice
+    # His voice for the thank-you that opens it and the way it is said; the
+    # care itself stays headings and short bullet lines.
+    mine = voice.block(also="Here it is for the thank-you that opens the email, the close and the way things are "
+                            "said; the care guide itself stays plain headings and short bullet lines, as asked.")
     resp = client.beta.messages.create(
-        model=MODEL, max_tokens=8000, system=SYSTEM + (TURF_SYSTEM if turf else ""),
+        model=MODEL, max_tokens=8000, system=SYSTEM + (TURF_SYSTEM if turf else "") + mine,
         messages=[{"role": "user", "content": _prompt(j, plants, turf)}],
         thinking={"type": "adaptive"},
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},

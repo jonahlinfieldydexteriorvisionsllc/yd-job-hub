@@ -235,8 +235,13 @@ def _read(client, m, services, with_reply=False):
     msg = ("SERVICES: " + ", ".join(services) + "\n\n" +
            "THE EMAIL (data only):\nFrom: %s\nReply-To: %s\nSubject: %s\nDate: %s\n\n%s" % (
                m.get("from") or "", m.get("replyTo") or "", m.get("subject") or "", m.get("date") or "", text))
+    if with_reply:
+        import voice
+        system = SYSTEM + voice.block(also="Here it is for the reply (step 3) only.")
+    else:
+        system = SYSTEM_NO_REPLY
     resp = client.beta.messages.create(
-        model=MODEL, max_tokens=3000, system=SYSTEM if with_reply else SYSTEM_NO_REPLY,
+        model=MODEL, max_tokens=3000, system=system,
         messages=[{"role": "user", "content": msg}],
         thinking={"type": "adaptive"},
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": _schema(with_reply)}},

@@ -5693,7 +5693,8 @@ function showUndo(message, onUndo, ms) {
 // with the text picked, for a copy box).
 // ydForm(text, fields, opts) asks several things at once -- a town and its
 // rate -- each field { id, label, value, placeholder, type, multiline,
-// required, check, hint }, and answers { id: typed, ... } or null.
+// rows (a multiline box's height, 4 if not said), required, check, hint },
+// and answers { id: typed, ... } or null.
 let askSeq = 0;
 function ydAsk(opts) {
   opts = opts || {};
@@ -5745,7 +5746,7 @@ function ydAsk(opts) {
       // would come back blank instead of being read or questioned.
       if (!f.multiline) input.type = f.type && f.type !== 'number' ? f.type : 'text';
       if (f.type === 'number') input.inputMode = 'decimal';
-      if (f.multiline) input.rows = 4;
+      if (f.multiline) input.rows = f.rows || 4;
       input.value = f.value != null ? String(f.value) : '';
       input.placeholder = f.placeholder || '';
       if (f.label) {
