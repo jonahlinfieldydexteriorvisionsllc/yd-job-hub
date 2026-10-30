@@ -795,7 +795,11 @@ def publish(db, pid, people=None, now=None, by_hand=False):
         # A queued post is only for a place that was hooked up: refused now
         # (a token run out, a permission taken away), so he is told -- once a
         # day per place -- rather than its posts quietly stopping.
-        if by_hand or not _claim(db, "social_nc_%s_%s" % (place, now.astimezone(dg.TZ).date().isoformat()), now):
+        # A place never hooked up ("... isn't hooked up yet": a held post he
+        # OK'd goes in line whatever the place) is no news -- the post just
+        # waits as Not hooked up, as planned ones do.
+        if by_hand or str(e).endswith("hooked up yet") or \
+                not _claim(db, "social_nc_%s_%s" % (place, now.astimezone(dg.TZ).date().isoformat()), now):
             return []
         return _push(db, people, "⚠️ %s needs hooking up again" % NAMES.get(place, "A place"),
                      str(e)[:140] + " — its posts wait until then. Tap to see.", "yd-social-failed")

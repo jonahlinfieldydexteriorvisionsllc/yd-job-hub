@@ -60,6 +60,7 @@
   let view = 'coming';     // coming | schedule | hookup
   let open = null;         // the post opened for changing
   let busy = '';           // what the server is doing for us
+  const drafts = {};       // post id -> words typed and not saved yet (kept through redraws)
   let own = null;          // "a post of your own" form, while open
   let fbForm = { appId: '', appSecret: '' };
 
@@ -133,7 +134,8 @@
   // one stays held (planned again it could go up by itself).
   async function replan() {
     const soon = Date.now() + 10 * 60000;
-    const gone = Object.values(posts).filter(p => p.kind !== 'own' && !p.edited &&
+    // One he OK'd stays too: planned again it would start held and lose his OK.
+    const gone = Object.values(posts).filter(p => p.kind !== 'own' && !p.edited && !p.okAt &&
       ['queued', 'notConnected'].indexOf(p.status) !== -1 && new Date(p.at).getTime() > soon);
     if (gone.length && window.YDDb.removeMany) {
       await Promise.resolve(window.YDDb.removeMany(gone.map(p => ['socialPosts', p.id]))).catch(() => {});
@@ -236,7 +238,9 @@
     ahead.forEach(p => {
       if (p.day !== lastDay) {
         lastDay = p.day;
-        byDay += '<h4 class="sp-day">' + esc(when(p.at).split(',')[0]) + '</h4>';
+        // "Today", or "Tue, Nov 3" -- just "Tue" made two Tuesdays one heading.
+        const w = when(p.at);
+        byDay += '<h4 class="sp-day">' + esc(w.slice(0, w.lastIndexOf(', '))) + '</h4>';
       }
       byDay += rowHtml(p);
     });
@@ -289,9 +293,11 @@
   function shareUrl(p) {
     // Nextdoor's share link: its composer opens with the words already in
     // (developer.nextdoor.com share plugin; body up to 3,500 characters).
-    let body = String(p.text || '');
-    while (encodeURIComponent(body).length > 3400) body = body.slice(0, -20);
-    return 'https://nextdoor.com/sharekit/?source=' + encodeURIComponent(SHARE_SOURCE) + '&body=' + encodeURIComponent(body);
+    // Cut by whole characters: a cut through an emoji leaves half of it, and
+    // encodeURIComponent throws on that -- the whole Posts window stopped drawing.
+    let chars = Array.from(String(p.text || ''));
+    while (chars.length && encodeURIComponent(chars.join('')).length > 3400) chars = chars.slice(0, -20);
+    return 'https://nextdoor.com/sharekit/?source=' + encodeURIComponent(SHARE_SOURCE) + '&body=' + encodeURIComponent(chars.join(''));
   }
 
   function openHtml(p, photos) {
@@ -316,12 +322,15 @@
     return '<div class="sp-open">' +
       (live && p.status !== 'ready'
         ? '<label class="sp-lbl">The words' + (p.place === 'google' ? ' <span class="muted">(Google adds a Call button)</span>' : '') +
-            '<textarea id="spText_' + id + '" rows="8" maxlength="5000">' + esc(p.text || '') + '</textarea></label>' +
+            '<textarea id="spText_' + id + '" rows="8" maxlength="5000">' + esc(drafts[id] != null ? drafts[id] : p.text || '') +
+            '</textarea></label>' +
           '<div class="field-actions"><button class="btn btn-sm" onclick="spSaveText(\'' + id + '\')">Save the words</button></div>'
         : '<div class="sp-text">' + esc(p.text || '') + '</div>') +
       (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
           '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '" loading="lazy"></a>' +
-          (live && p.status !== 'ready' && photos.length > 0 ? '<button class="sp-photo-x" onclick="spDropPhoto(\'' + id + '\', ' + i + ')" aria-label="Leave this photo out">✕</button>' : '') +
+          // Its place in p.photos, not in this https-only list.
+          (live && p.status !== 'ready' && photos.length > 0 ? '<button class="sp-photo-x" onclick="spDropPhoto(\'' + id + '\', ' +
+            (p.photos || []).indexOf(x) + ')" aria-label="Leave this photo out">✕</button>' : '') +
         '</span>').join('') + '</div>' +
         (p.place === 'nextdoor' && p.status === 'ready' ? '<p class="hint">Tap a photo to open it, save it, then add it in Nextdoor.</p>' : '')
         : '') +
@@ -488,6 +497,7 @@
     const text = t.value.trim();
     if (!text) { showToast('The words are empty'); return; }
     t.blur();
+    delete drafts[id];
     // His own words: nothing holds them (social.py checks only Claude's).
     patchPost(id, { text: text, edited: true }, 'the words').then(() => showToast('Saved'));
   };
@@ -502,7 +512,12 @@
     const t = new Date(v);
     if (!v || isNaN(t)) return;
     if (t < new Date()) { showToast('Pick a time still to come — or Post now'); draw(); return; }
-    patchPost(id, { at: t.toISOString(), day: localYMD(t), edited: true }, 'the time').then(() => showToast('Moved to ' + when(t.toISOString())));
+    // A missed or failed one moved to a new time goes back in line: left as
+    // it was, nothing would ever put it up (the server takes queued ones).
+    const p = posts[id];
+    const again = p && (p.status === 'missed' || p.status === 'failed') ? { status: 'queued', error: null, tries: 0 } : {};
+    patchPost(id, Object.assign({ at: t.toISOString(), day: localYMD(t), edited: true }, again), 'the time')
+      .then(() => showToast('Moved to ' + when(t.toISOString())));
   };
   window.spHold = id => patchPost(id, { status: 'held', heldWhy: 'You held it' }, 'holding it');
   window.spLet = id => {
@@ -516,7 +531,11 @@
     if (!p) return;
     const was = { status: p.status, heldWhy: p.heldWhy || null };
     patchPost(id, { status: 'skipped' }, 'skipping it');
-    if (window.showUndo) showUndo('Skipped', () => patchPost(id, was, 'putting it back'));
+    // Only queued or held can be put back (the rules refuse a post being set
+    // to failed, missed, not hooked up or ready) -- no Undo that can't undo.
+    if (window.showUndo && (was.status === 'queued' || was.status === 'held')) {
+      showUndo('Skipped', () => patchPost(id, was, 'putting it back'));
+    } else showToast('Skipped');
   };
   window.spDone = id => patchPost(id, { status: 'posted', postedAt: new Date().toISOString(), heldWhy: null }, 'ticking it off');
   window.spNow = async id => {
@@ -535,6 +554,7 @@
     if (!p) return;
     if (p.edited && !(await ydConfirm('You changed this one by hand — Claude’s new words won’t replace yours here ' +
         '(they will on the job’s other posts). Go on?', { ok: 'Write them again' }))) return;
+    delete drafts[safeId(p.id)];
     const r = await ask('/social/rewrite', { id: p.id }, 'Claude is writing it again…');
     if (r) showToast(r.error || 'Written again — ' + r.posts + ' post' + (r.posts === 1 ? '' : 's') + ' changed');
   };
@@ -644,10 +664,20 @@
     loadHook();
   };
 
-  // A box left after typing draws what waited.
-  document.addEventListener('focusout', () => {
+  // A box left after typing draws what waited -- but not under the press that
+  // left it: the redraw used to swap "Save the words" for a new button between
+  // mouse-down and mouse-up, so the click never happened. Focus moving to
+  // something else in the window waits; otherwise the redraw waits a moment.
+  document.addEventListener('focusout', e => {
     const body = el('spBody');
-    if (body && body.dataset.later) setTimeout(draw, 0);
+    if (!body || !body.dataset.later) return;
+    if (e.relatedTarget && body.contains(e.relatedTarget)) return;
+    setTimeout(draw, 300);
+  });
+  // Words typed and not saved yet survive any redraw.
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t && t.id && t.id.indexOf('spText_') === 0) drafts[t.id.slice(7)] = t.value;
   });
 
   // ------------------------------------------------------------ the rest of Job Hub
