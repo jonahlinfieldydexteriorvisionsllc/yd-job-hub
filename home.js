@@ -997,7 +997,7 @@
       const checks = Object.values(YDSupplies.catalog().prices || {}).filter(p => p && p.check).length;
       if (checks) {
         any = true;
-        rows.push(line('💲', '<b>' + plural(checks, 'price') + ' to check</b>', 'A receipt said a different price than the price list', '',
+        rows.push(line('💲', '<b>' + plural(checks, 'price') + ' to check</b>', 'A receipt or a store’s site said a different price than the price list', '',
           "switchTab('supplies')"));
       }
     }

@@ -516,7 +516,11 @@
   // be submitted for review so i can ensure there wasnt a mistake made".
   // Each waits on its item's price (supplyPrices `check`) until he takes the
   // receipt's price or keeps his own -- estimates never use it before that.
+  // The monthly online price check (a scheduled routine, 1st of the month,
+  // Mar-Dec) files a big change here too, its `where` saying so: that row
+  // says the store's site, not a receipt, and its link is the product page.
   let checksOpen = false;
+  const fromSite = c => /online/i.test(String((c && c.where) || ''));
   function checksList() {
     return Object.keys(prices).filter(id => prices[id] && prices[id].check && items[id])
       .map(id => ({ id: id, it: items[id], pr: prices[id], c: prices[id].check }))
@@ -525,6 +529,7 @@
   function checksHtml() {
     const list = checksList();
     if (!list.length) return '';
+    const sites = list.filter(x => fromSite(x.c)).length;
     const cash = c => typeof c === 'number' ? fmtMoney(c / 100) : 'no price';
     const row = x => {
       const v = vendors[x.it.vendorId];
@@ -534,20 +539,23 @@
         ? new Date(x.c.date + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '';
       return '<div class="sup-check">' +
         '<div><b>' + esc(x.it.name) + '</b>' + (v ? ' <span class="muted">· ' + esc(v.name) + '</span>' : '') + '</div>' +
-        '<div>Receipt: <b>' + cash(x.c.cents) + per + '</b>' +
+        '<div>' + (fromSite(x.c) ? 'Store’s site' : 'Receipt') + ': <b>' + cash(x.c.cents) + per + '</b>' +
           (x.c.unsure ? ' <span class="warn-text">(it doesn’t say per what — check)</span>' : '') +
           ' · price list: ' + cash(mine) + (x.pr.per ? '/' + esc(x.pr.per) : '') +
           (x.pr.asOf ? ' <span class="muted">(set ' + esc(x.pr.asOf) + ')</span>' : '') + '</div>' +
         '<div class="muted">' + esc([x.c.vendor, x.c.orderNo ? '#' + x.c.orderNo : '', day, x.c.where].filter(Boolean).join(' · ')) +
-          (x.c.link ? ' · <a class="link-btn" href="' + esc(x.c.link) + '" target="_blank" rel="noopener">the email</a>' : '') + '</div>' +
+          (x.c.link ? ' · <a class="link-btn" href="' + esc(x.c.link) + '" target="_blank" rel="noopener">' +
+            (fromSite(x.c) ? 'the product page' : 'the email') + '</a>' : '') + '</div>' +
         '<div class="sup-check-acts"><button class="btn btn-sm btn-filled" onclick="supCheckUse(\'' + safeId(x.id) + '\')">Use ' +
           cash(x.c.cents) + per + '</button> <button class="btn btn-sm" onclick="supCheckKeep(\'' + safeId(x.id) + '\')">Keep ' +
           cash(mine) + '</button></div></div>';
     };
     return '<details class="sup-checks"' + (checksOpen ? ' open' : '') + ' ontoggle="supChecksOpen(this.open)">' +
-      '<summary>💲 <b>Prices to check (' + list.length + ')</b> — a receipt said a different price</summary>' +
-      '<p class="hint">Estimates are priced from the price list. Use the receipt’s price if it is right; keep yours if that ' +
-        'receipt was a one-off or was read wrong.</p>' + list.map(row).join('') + '</details>';
+      '<summary>💲 <b>Prices to check (' + list.length + ')</b> — ' +
+        (sites === list.length ? 'a store’s site showed a different price' : sites ? 'a receipt or a store’s site said a different price'
+          : 'a receipt said a different price') + '</summary>' +
+      '<p class="hint">Estimates are priced from the price list. Use the new price if it is right; keep yours if it ' +
+        'was a one-off, a sale or read wrong.</p>' + list.map(row).join('') + '</details>';
   }
   window.supChecksOpen = open => { checksOpen = !!open; };
   // Its check done with: gone here at once, and on the server (not awaited).
@@ -559,7 +567,7 @@
   window.supCheckUse = function (id) {
     const x = prices[id], c = x && x.check;
     if (!c || !edits() || typeof c.cents !== 'number') return;
-    setPrice(id, c.cents, c.year, 'Receipt').catch(e => showToast(e && e.code === 'permission-denied'
+    setPrice(id, c.cents, c.year, fromSite(c) ? c.where : 'Receipt').catch(e => showToast(e && e.code === 'permission-denied'
       ? 'Price not changed — not allowed' : 'Price change not on the server yet'));
     clearCheck(id);
     showToast((items[id] ? items[id].name + ': ' : '') + fmtMoney(c.cents / 100) + (c.per ? '/' + c.per : '') + ' on the price list');
