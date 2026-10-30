@@ -297,9 +297,15 @@ def _jobs(db, photos):
     return out
 
 
-def _used(db):
+NEVER_UP = ("notConnected", "missed", "failed")
+
+
+def _used(db, now=None):
     """{place: {jobIds}}, {place: {ideaIds}} and every post by id -- from
-    every post ever planned (a skipped one counts: he did not want it)."""
+    every post planned (a skipped one counts: he did not want it). One whose
+    time passed without it going up (not hooked up, missed, failed) gives
+    its job back, so hooking a place up later loses nothing."""
+    now = now or _now()
     jobs = {p: set() for p in PLACES}
     ideas = {p: set() for p in PLACES}
     posts = {}
@@ -308,6 +314,8 @@ def _used(db):
         posts[s.id] = d
         place = d.get("place")
         if place not in jobs:
+            continue
+        if d.get("status") in NEVER_UP and (_parse(d.get("at")) or now) <= now:
             continue
         if d.get("jobId"):
             jobs[place].add(d["jobId"])
@@ -506,7 +514,8 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
         return {"planned": 0, "wrote": 0}
     photos = after_photos(db)
     jobs = _jobs(db, photos)
-    used_jobs, used_ideas, existing = _used(db)
+    used_jobs, used_ideas, existing = _used(db, now)
+    hooked = _hooked(db, cfg)
     words_cache = {}
     ideas_by_month = {}
     planned, wrote, waiting = [], 0, 0
@@ -605,10 +614,13 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
         why = rec.pop("why")
         text, sign = _with_sign_off(place, words, cfg)
         held = why or ("" if auto else "Waiting for your OK (posts going up by themselves is switched off)")
+        # A place not hooked up yet: the post is kept for him to copy, and
+        # goes back in line by itself once the place is hooked up.
+        off = "" if held or hooked[place] else "%s isn't hooked up yet" % NAMES[place]
         doc = dict(rec, place=place, at=at.isoformat(), day=at.date().isoformat(), slotId=slot["id"],
                    words=words, signOff=sign if place != "google" else "", text=text,
-                   status="held" if held else "queued", heldWhy=held or None, tries=0, error=None,
-                   createdAt=stamp, updatedAt=stamp, by="Job Hub")
+                   status="held" if held else "notConnected" if off else "queued", heldWhy=held or None, tries=0,
+                   error=off or None, createdAt=stamp, updatedAt=stamp, by="Job Hub")
         doc.setdefault("jobId", None)
         doc.setdefault("ideaId", None)
         try:
@@ -622,19 +634,28 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
     return {"planned": len(planned), "wrote": wrote, "waiting": waiting, "ids": planned}
 
 
+def _hooked(db, cfg):
+    """Which places a post can go up in now. Nextdoor always: he posts it
+    from Job Hub."""
+    return {"facebook": bool(_fb_doc(db).get("pageToken")), "google": bool((cfg.get("google") or {}).get("ok")),
+            "nextdoor": True}
+
+
 def tell_tomorrow(db=None, people=None, now=None):
     """The evening heads-up: what goes up tomorrow, so he can change or stop
-    one first. Once a day."""
+    one first. Once a day. Not a post in a place not hooked up yet: it can't
+    go up anyway."""
     db = db or _db()
     now = now or _now()
     cfg = settings(db)
     if not cfg.get("on"):
         return []
+    hooked = _hooked(db, cfg)
     tomorrow = (now + datetime.timedelta(days=1)).date().isoformat()
     rows = []
     for s in db.collection("socialPosts").where("day", "==", tomorrow).stream():
         d = s.to_dict() or {}
-        if d.get("status") in ("queued", "held", "notConnected"):
+        if d.get("status") in ("queued", "held") and hooked.get(d.get("place")):
             rows.append(d)
     if not rows or not _claim(db, "social_tomorrow_" + tomorrow, now):
         return []

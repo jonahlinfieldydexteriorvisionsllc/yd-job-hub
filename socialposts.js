@@ -279,7 +279,9 @@
         (photos[0] ? '<img class="sp-thumb" src="' + esc(photos[0].thumb || photos[0].url) + '" alt="" loading="lazy">' : '') +
       '</button>' +
       (p.status === 'held' && p.heldWhy ? '<div class="sp-why">⚠️ ' + esc(p.heldWhy) + '</div>' : '') +
-      ((p.status === 'failed' || p.status === 'notConnected') && p.error ? '<div class="sp-why">' + esc(p.error) + '</div>' : '') +
+      // "Not hooked up yet" is said once at the top, not under every post.
+      ((p.status === 'failed' || p.status === 'notConnected') && p.error && !/isn.t hooked up yet$/.test(p.error)
+        ? '<div class="sp-why">' + esc(p.error) + '</div>' : '') +
       (isOpen ? openHtml(p, photos) : '') +
     '</div>';
   }
