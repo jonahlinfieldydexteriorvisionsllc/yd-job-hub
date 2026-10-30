@@ -21,6 +21,17 @@
 // once, on "To sort": the sure ones in one tap, the unsure ones listed with
 // buttons to pick (manual override always).
 //
+// Jonah (30 Oct 2026): "i want all claude conversations about estimates and
+// all estimates tied to proper customers so i can go to a customer and say
+// 'he wants a separate bid for just ___' and then it can use info from other
+// bids its made." A bid's conversation with Claude is saved on the bid, so a
+// bid tied to its customer ties its conversation too. Bids are tied as they
+// are made, and by themselves whenever they surely are someone's (see "Every
+// bid tied to its customer"); a customer's page shows each bid's talk with
+// Claude, and "Start a bid" there says what the new one is for and/or which
+// lines of their other bids to carry over -- Claude is shown their other bids
+// with every message about any of their bids (estimates.py).
+//
 // Nothing changes until the owner switches the list on (settings/customers
 // .importOn): until then this tab is the Contacts screen, as it was.
 //
@@ -85,6 +96,8 @@
   let openId = null;              // the customer whose page is open
   let editing = false;            // the contact form is open on it
   const drafts = {};              // customer id -> a dated note being written
+  let nb = null;                  // a new bid being started on a customer's page: { id, text, lines: {job: [line ids]}, mats: {job: [ids]}, own: {job: true} }
+  const talkOpen = {};            // job id -> its conversation with Claude shown on the customer's page
   const sortPick = {};            // To sort: "kind:id" -> customer id picked (or 'lead' / 'skip')
   let ver = 0;                    // goes up with every change to the list (what the duplicates are worked out from)
   let tagPick = '';               // the "What for" filter on the lists ('' = any)
@@ -2473,7 +2486,7 @@
     // under it whenever anyone changes anything) -- unless the redraw is
     // what was asked for (another customer opened, the form saved).
     const act = document.activeElement;
-    if (!force && act && body.contains(act) && /^(cuF|cuWhen|cuNote|cuTag)/.test(act.id || '')) return;
+    if (!force && act && body.contains(act) && /^(cuF|cuWhen|cuNote|cuTag|cuNB)/.test(act.id || '')) return;
     const k = kindOf(c), ch = can('contacts', 'change');
     el('custTitle').textContent = c.name || '(no name)';
     const id = sid(c.id);
@@ -2710,15 +2723,20 @@
     const jobs = jobsFor(c).sort((a, b) => s(b.quoteDate || b.lastModified).localeCompare(s(a.quoteDate || a.lastModified)));
     const bills = can('billing', 'see');
     if (can('jobs', 'see')) {
+      const starting = nb && nb.id === c.id;
       h += '<div class="cu-sec"><div class="cu-sec-h">Jobs &amp; bids' +
-        (can('jobs', 'change') ? ' <button class="btn btn-sm" onclick="custStartBid(\'' + sid(c.id) + '\')">Start a bid</button>' : '') + '</div>' +
+        (can('jobs', 'change') && !starting ? ' <button class="btn btn-sm" onclick="custStartBid(\'' + sid(c.id) + '\')">Start a bid</button>' : '') + '</div>' +
+        (starting && can('jobs', 'change') ? newBidHtml(c, jobs) : '') +
         (jobs.length ? jobs.map(j => {
           const word = jobWord(j);
+          const talk = talkOf(j).length;
           return '<div class="cu-job"><button class="link-btn" onclick="custOpenJob(\'' + sid(j._id) + '\')">' +
             (typeof jobNameHtml === 'function' ? jobNameHtml(j.customerName, j.estimateNumber) : esc(j.customerName)) + '</button> ' +
             '<span class="muted">' + esc(word) + (j.quoteDate ? ' · ' + esc(niceDay(s(j.quoteDate).slice(0, 10))) : '') + '</span>' +
             (bills && j.jobPrice ? ' <span class="cu-money">' + esc(money(parseFloat(String(j.jobPrice).replace(/[$,]/g, '')) || 0)) + '</span>' : '') +
+            (talk ? ' <button class="link-btn" onclick="custTalk(\'' + sid(j._id) + '\')">💬 ' + talk + ' with Claude' + (talkOpen[j._id] ? ' ▴' : ' ▾') + '</button>' : '') +
             (can('jobs', 'change') ? ' <button class="link-btn cu-unlink" onclick="custUnlinkJob(\'' + sid(j._id) + '\')">Not theirs</button>' : '') +
+            (talk && talkOpen[j._id] ? talkHtml(j) : '') +
             '</div>';
         }).join('') : '<div class="muted">No jobs or bids tied to them in Job Hub.</div>') + '</div>';
     }
@@ -2954,30 +2972,387 @@
     YDSync.patchJob(jobId, { customerId: null, customerBy: 'hand' });
     render();
   };
-  window.custStartBid = async function (id) {
-    const c = customers[id];
-    if (!c || typeof newJob !== 'function') return;
-    window.closeCustomer();
-    // newJob() asks first when the job on screen is unsaved, and answers
-    // false when it was kept.
-    if (!(await newJob())) return;
-    if (typeof dirty !== 'undefined' && dirty) return;      // the job on screen was kept
-    const set = (f, v) => { const n = el(f); if (n && v) n.value = v; };
-    set('customerName', c.name);
-    set('firstName', c.firstName); set('lastName', c.lastName); set('business', c.business);
-    const site = c.ship && c.ship.street ? c.ship : c;
-    set('address', site.street || site.address); set('city', site.city); set('state', site.state); set('zip', site.zip);
-    set('phone', c.phone || c.mobile); set('email', c.email);
-    if (typeof boardFields !== 'undefined') { boardFields.customerId = c.id; boardFields.customerBy = 'hand'; }
-    const svc = (c.tags || []).filter(t => t !== 'Snow Removal');
-    if (svc.length && typeof serviceTypes !== 'undefined') { serviceTypes = svc.slice(); if (typeof renderServiceTypes === 'function') renderServiceTypes(); }
-    if (typeof markDirty === 'function') markDirty();
-    const notes = (c.meetings || []).slice().sort((a, b) => s(a.at).localeCompare(s(b.at)))
-      .map(m => niceDay(localDay(m.at)) + ': ' + m.text).join('\n\n');
-    if (notes && window.YDEstimate && YDEstimate.setNotes) YDEstimate.setNotes(notes, true);
-    if (typeof switchTab === 'function') switchTab('job');
-    showToast((c.name || 'They') + ' started as a bid');
+  // ------------------------------------------------------------ their talk with Claude
+  //
+  // Each bid's conversation with Claude, under it on the customer's page --
+  // the newest messages; the whole of it is on the bid.
+  const TALK_SHOW = 12;
+  const talkOf = j => ((j && j.estimate && Array.isArray(j.estimate.chat)) ? j.estimate.chat : []).filter(m => m && s(m.text));
+  function talkHtml(j) {
+    const chat = talkOf(j);
+    return '<div class="cu-talk">' +
+      (chat.length > TALK_SHOW ? '<div class="muted">The ' + (chat.length - TALK_SHOW) + ' before these are on the bid.</div>' : '') +
+      chat.slice(-TALK_SHOW).map(m => '<div class="cu-talk-m' + (m.role === 'assistant' ? ' claude' : '') + '"><b>' +
+        (m.role === 'assistant' ? '✨ Claude' : 'You') + '</b>' + (m.at ? ' <span class="muted">' + esc(niceDay(localDay(m.at))) + '</span>' : '') +
+        '<div class="cu-talk-t">' + esc(s(m.text).slice(0, 1500)) + (s(m.text).length > 1500 ? '…' : '') + '</div></div>').join('') +
+      '<button class="link-btn" onclick="custOpenJob(\'' + sid(j._id) + '\')">Open it to talk to Claude about it</button></div>';
+  }
+  window.custTalk = function (jobId) {
+    talkOpen[jobId] = !talkOpen[jobId];
+    renderPage(true);
   };
+
+  // ------------------------------------------------------------ a new bid for them
+  //
+  // "Start a bid" on a customer's page: what the bid is for, in his words --
+  // it goes to Claude as the bid's first message, with every other bid of
+  // theirs in front of it (estimates.py) -- and/or the lines of one of their
+  // bids to carry over, ticked, copied word for word with their price and
+  // crew-days (estimate.js carry). Their materials are ticked with them by the
+  // crew page's guess of which line each is for, until he ticks them himself.
+  // Nothing written and nothing ticked: a bid with their details and their
+  // dated notes as its site notes, as before.
+  const NB_SOURCES = 6;
+  function nbSources(jobs) {
+    if (!window.YDEstimate || !YDEstimate.linesOf) return [];
+    return jobs.map(j => ({ j: j, l: YDEstimate.linesOf(j._id) })).filter(x => x.l && x.l.work.length).slice(0, NB_SOURCES);
+  }
+  function newBidHtml(c, jobs) {
+    const id = sid(c.id), bills = can('billing', 'see');
+    const srcs = nbSources(jobs);
+    const days = n => n + ' crew-day' + (n === 1 ? '' : 's');
+    let h = '<div class="cu-nb"><div class="cu-sub">A new bid for ' + esc(c.name || 'them') + '</div>' +
+      '<textarea id="cuNB_' + id + '" rows="3" placeholder="What is it for? e.g. a separate bid for just the gravel top-up — line 3 on their last bid" ' +
+        'oninput="custNBText(this.value)">' + esc(nb.text) + '</textarea>' +
+      '<div class="hint">Claude gets this with ' + (srcs.length ? 'their other bids — the lines, materials, site notes and what was said about each — ' +
+        'and builds the new bid from them.' : 'your notes on them, and builds the bid.') + '</div>';
+    if (srcs.length) {
+      h += '<div class="cu-sub">Or tick the lines to carry over yourself</div>';
+      srcs.forEach(({ j, l }) => {
+        const jid = sid(j._id), on = nb.lines[j._id] || [], mOn = nb.mats[j._id] || [];
+        h += '<div class="cu-nb-src"><div><b>' + (s(j.estimateNumber) ? 'Bid #' + esc(j.estimateNumber) : esc(j.customerName || 'A bid')) + '</b> ' +
+            '<span class="muted">' + esc(jobWord(j)) + (j.quoteDate ? ' · ' + esc(niceDay(s(j.quoteDate).slice(0, 10))) : '') + '</span></div>' +
+          '<div class="cu-picks">' + l.work.map(w => '<button type="button" class="cu-chip' + (on.indexOf(w.id) !== -1 ? ' on' : '') + '" ' +
+            'onclick="custNBLine(\'' + jid + '\', \'' + sid(w.id) + '\')">' + w.n + '. ' + esc(w.title) + '<small>' +
+            esc([bills && w.cents ? money(w.cents / 100) : '', w.crewDays ? days(w.crewDays) : ''].filter(Boolean).join(' · ') || 'line ' + w.n) +
+            '</small></button>').join('') + '</div>';
+        if (on.length && l.materials.length) {
+          const lineN = wid => (l.work.find(w => w.id === wid) || {}).n;
+          h += '<div class="muted cu-nb-mh">Their materials — ticked: the ones that go with the lines ticked</div><div class="cu-picks">' +
+            l.materials.map(m => '<button type="button" class="cu-chip' + (mOn.indexOf(m.id) !== -1 ? ' on' : '') + '" ' +
+              'onclick="custNBMat(\'' + jid + '\', \'' + sid(m.id) + '\')">' + esc(m.name || 'A material') + '<small>' +
+              esc([m.qty !== null ? m.qty + (m.unit ? ' ' + m.unit : '') : '', m.forWork && lineN(m.forWork) ? 'with line ' + lineN(m.forWork) : ''].filter(Boolean).join(' · ')) +
+              '</small></button>').join('') + '</div>';
+        }
+        h += '</div>';
+      });
+      h += '<div class="hint">Lines ticked come over word for word, with their price and crew-days; their materials are priced again at today’s prices. ' +
+        'Anything written above goes to Claude after them.</div>';
+    }
+    return h + '<div class="cu-btns"><button class="btn btn-filled" onclick="custNBGo(\'' + id + '\')">Start the bid</button>' +
+      '<button class="btn btn-sm" onclick="custNBOff()">Cancel</button></div></div>';
+  }
+  window.custStartBid = function (id) {
+    if (!customers[id] || !can('jobs', 'change')) return;
+    nb = { id: id, text: '', lines: {}, mats: {}, own: {} };
+    renderPage(true);
+    const t = el('cuNB_' + sid(id));
+    if (t) t.focus();
+  };
+  window.custNBText = function (v) { if (nb) nb.text = v; };
+  window.custNBOff = function () { nb = null; renderPage(true); };
+  // The ids come back through the page safe-id'd: looked up again here.
+  const realId = (list, k) => (list || []).map(x => x.id).find(x => sid(x) === k) || k;
+  const realJob = k => (allJobs().find(j => sid(j._id) === k) || {})._id || k;
+  window.custNBLine = function (jk, wk) {
+    if (!nb || !window.YDEstimate) return;
+    const jid = realJob(jk), l = YDEstimate.linesOf(jid);
+    if (!l) return;
+    const wid = realId(l.work, wk);
+    const on = (nb.lines[jid] || []).slice();
+    const i = on.indexOf(wid);
+    if (i === -1) on.push(wid); else on.splice(i, 1);
+    const order = l.work.map(w => w.id);
+    nb.lines[jid] = on.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    if (!nb.own[jid]) nb.mats[jid] = l.materials.filter(m => m.forWork && on.indexOf(m.forWork) !== -1).map(m => m.id);
+    renderPage(true);
+  };
+  window.custNBMat = function (jk, mk) {
+    if (!nb || !window.YDEstimate) return;
+    const jid = realJob(jk), l = YDEstimate.linesOf(jid);
+    if (!l) return;
+    const mid = realId(l.materials, mk);
+    const on = (nb.mats[jid] || []).slice();
+    const i = on.indexOf(mid);
+    if (i === -1) on.push(mid); else on.splice(i, 1);
+    const order = l.materials.map(m => m.id);
+    nb.mats[jid] = on.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    nb.own[jid] = true;
+    renderPage(true);
+  };
+  window.custNBGo = async function (id) {
+    const c = customers[id];
+    if (!c || !nb || nb.id !== id || !can('jobs', 'change') || typeof createJobRecord !== 'function') return;
+    // The job open on the Job tab keeps what was typed in it (asked first).
+    if (typeof ydLeaveUnsavedJob === 'function' && !(await ydLeaveUnsavedJob())) return;
+    if (!nb || nb.id !== id) return;
+    const text = s(nb.text);
+    const now = new Date().toISOString();
+    const est = { v: 2, notes: '', work: [], materials: [], chat: [], flags: [] };
+    const services = [], carried = [];
+    Object.keys(nb.lines).filter(jid => nb.lines[jid].length).forEach(jid => {
+      const got = YDEstimate.carry(jid, nb.lines[jid], nb.mats[jid] || []);
+      est.work = est.work.concat(got.work);
+      est.materials = est.materials.concat(got.materials);
+      const src = allJobs().find(j => j._id === jid) || {};
+      (src.serviceTypes || []).forEach(x => { if (services.indexOf(x) === -1) services.push(x); });
+      carried.push((s(src.estimateNumber) ? 'bid #' + s(src.estimateNumber) : 'their bid of ' + niceDay(s(src.quoteDate).slice(0, 10))) + ': ' +
+        got.work.map(w => w.title || 'a line').join(', ') +
+        (got.materials.length ? ', with ' + got.materials.length + ' material' + (got.materials.length === 1 ? '' : 's') : ''));
+    });
+    if (carried.length) {
+      const said = 'Carried over from ' + carried.join('; ') + ' — word for word, with the price and crew-days; the materials at today’s prices.';
+      // Before his words, Claude reads where these lines came from; with
+      // none, it is said under the estimate.
+      if (text) est.chat.push({ role: 'user', text: '(' + said + ')', at: now, changed: false });
+      else est.flags.push(said);
+    } else if (!text) {
+      // Nothing said, nothing carried: their dated notes as the site notes.
+      est.notes = (c.meetings || []).slice().sort((a, b) => s(a.at).localeCompare(s(b.at)))
+        .map(m => niceDay(localDay(m.at)) + ': ' + m.text).join('\n\n');
+    }
+    const site = c.ship && s(c.ship.street) ? c.ship : c;
+    const fields = {
+      customerName: s(c.name), firstName: s(c.firstName), lastName: s(c.lastName), business: s(c.business),
+      address: s(site.street), city: s(site.city), state: s(site.state), zip: s(site.zip),
+      phone: s(c.phone || c.mobile), email: s(c.email),
+      serviceTypes: services.length ? services : (c.tags || []).filter(t => t !== 'Snow Removal'),
+      customerId: c.id, customerBy: 'hand', jobStatus: 'quoting', bidStage: 'toSend', bidStageAt: now,
+    };
+    if (est.work.length || est.materials.length || est.chat.length || est.notes) fields.estimate = est;
+    const jobId = createJobRecord(fields);
+    if (!jobId) return;
+    nb = null;
+    window.closeCustomer();
+    if (typeof loadJob === 'function') loadJob(jobId);
+    if (typeof switchTab === 'function') switchTab('job');
+    if (text && window.YDEstimate) YDEstimate.ask(text);
+    // The job's price follows the lines carried over, and is saved with it.
+    else if (window.YDEstimate && YDEstimate.repriced) YDEstimate.repriced();
+    showToast('A new bid for ' + (c.name || 'them') + (text ? ' — Claude is building it' : carried.length ? ' — lines carried over' : ''));
+  };
+
+  // ------------------------------------------------------------ every bid tied to its customer
+  //
+  // A bid made by typing a name (the Bids board's "+ Add a bid", 29 Oct
+  // 2026) was tied to nobody until someone sorted it. Now:
+  //  * made from a board, it is tied as it is made when it surely is one
+  //    customer's (tieFields) -- the same "sure" as To sort: that email or
+  //    phone, QuickBooks' own id, or exactly that name with only one customer
+  //    of it -- and their address, phone and email fill its empty boxes;
+  //  * any bid or job saved tied to nobody is tied the same way by itself
+  //    (tieSure), unless someone untied it by hand ("Not theirs");
+  //  * the Job tab and a bid's card say whose it is, with the likeliest
+  //    customers as buttons when it isn't sure (manual override always).
+  //
+  // The empty boxes of a job filled from its customer: the work address (or
+  // theirs) when the job has no address, their phone and email when it has
+  // none -- never over something typed.
+  function fillFrom(c, j) {
+    const out = {};
+    const site = c.ship && s(c.ship.street) ? c.ship : c;
+    if (!s(j.address) && !s(j.city) && s(site.street)) {
+      out.address = s(site.street); out.city = s(site.city); out.state = s(site.state); out.zip = s(site.zip);
+    }
+    if (!s(j.phone) && s(c.phone || c.mobile)) out.phone = s(c.phone || c.mobile);
+    if (!s(j.email) && s(c.email)) out.email = s(c.email);
+    return out;
+  }
+  function sureOf(by, who) {
+    const g = guess(by, who);
+    const id = g.sure ? resolve(g.sure) : null;
+    return id && customers[id] ? id : null;
+  }
+  function tieFields(name) {
+    if (!isOn() || !loaded || !s(name)) return {};
+    const id = sureOf(index(), { name: name, email: '', phone: '' });
+    return id ? Object.assign({ customerId: id, customerBy: 'auto' }, fillFrom(customers[id], {})) : {};
+  }
+  const openJobId = () => (typeof currentJobId !== 'undefined' && currentJobId) || '';
+  const formDirty = () => typeof dirty !== 'undefined' && !!dirty;
+  // The job open on the Job tab: tied on the form, which saves it.
+  function tieForm(cid, by) {
+    const c = customers[cid];
+    if (!c || typeof boardFields === 'undefined') return false;
+    boardFields.customerId = cid;
+    boardFields.customerBy = by;
+    const now = {};
+    ['address', 'city', 'phone', 'email'].forEach(f => { now[f] = el(f) ? el(f).value : ''; });
+    const add = fillFrom(c, now);
+    Object.keys(add).forEach(f => { const n = el(f); if (n && !s(n.value)) n.value = add[f]; });
+    if (typeof markDirty === 'function') markDirty();
+    drawTie();
+    return true;
+  }
+  function tieJob(jobId, cid, by, j) {
+    if (jobId === openJobId()) return tieForm(cid, by);
+    const c = customers[cid];
+    if (!c || !window.YDSync) return false;
+    j = j || allJobs().find(x => x._id === jobId) || {};
+    return !!YDSync.patchJob(jobId, Object.assign({ customerId: cid, customerBy: by }, fillFrom(c, j)));
+  }
+  let tieTimer = null;
+  function tieSoon() { clearTimeout(tieTimer); tieTimer = setTimeout(tieSure, 1500); }
+  function tieSure() {
+    if (!isOn() || !loaded || !can('jobs', 'change') || !window.YDSync) return;
+    let by = null, n = 0;
+    allJobs().forEach(j => {
+      if (j.customerId || j.customerBy === 'hand' || j.removeWhy || j.deletedAt) return;
+      // The job on screen with typing not saved yet: once it is.
+      if (j._id === openJobId() && formDirty()) return;
+      by = by || index();
+      const id = sureOf(by, whoOfJob(j));
+      if (id && tieJob(j._id, id, 'auto', j)) n++;
+    });
+    if (n) render(true);
+  }
+
+  // Whose bid it is, with buttons to say (ctx 'job': the Job tab; 'card': a
+  // bid's card being edited on a board).
+  function tieHtml(ctx, jobId, tiedId, who, word) {
+    const ch = can('jobs', 'change'), k = sid(ctx), jid = sid(jobId || '');
+    const c = tiedId ? customers[mainOf(s(tiedId))] || customers[resolve(s(tiedId))] : null;
+    if (c) {
+      const where = s(c.address).split(',')[0];
+      return '<div class="cu-tie">👤 <b>' + esc(c.name || '?') + '</b>' + (where ? ' <span class="muted">' + esc(where) + '</span>' : '') +
+        ' <span class="cu-kind k-' + kindOf(c) + '">' + KIND_WORD[kindOf(c)] + '</span>' +
+        ' <button type="button" class="link-btn ro-ok" onclick="custTieOpen(\'' + sid(c.id) + '\')">Their page</button>' +
+        (ch ? ' <button type="button" class="link-btn" onclick="custTieOff(\'' + k + '\', \'' + jid + '\')">Not them</button>' : '') + '</div>';
+    }
+    if (!ch || !s(who.name)) return '';
+    const g = guess(index(), who);
+    const sure = g.sure ? resolve(g.sure) : null;
+    const ids = Array.from(new Set([].concat(sure ? [sure] : [], g.options.map(resolve)))).filter(x => customers[x]).slice(0, 4);
+    const chip = (v, label, sub) => '<button type="button" class="cu-chip" onclick="custTiePick(\'' + k + '\', \'' + jid + '\', \'' + sid(v) + '\')">' +
+      label + '<small>' + sub + '</small></button>';
+    return '<div class="cu-tie cu-tie-ask"><div>👤 <b>Whose ' + word + ' is this?</b> <span class="muted">Tied to the customer, their bids and ' +
+        'Claude’s talk about them stay together.</span></div>' +
+      '<div class="cu-picks">' + ids.map(x => {
+        const o = customers[x];
+        return chip(x, (x === sure ? '✓ ' : '') + esc(o.name || '?'),
+          esc([s(o.address).split(',')[0], o.phone || o.mobile].filter(Boolean).join(' · ') || KIND_WORD[kindOf(o)]));
+      }).join('') + chip('lead', 'Someone new', 'a lead — not a customer yet') + '</div>' +
+      '<input class="cu-sort-find" id="cuTieFind_' + k + '" placeholder="Someone else? Type a name…" oninput="custTieFind(\'' + k + '\', \'' + jid + '\', this.value)">' +
+      '<div class="cu-picks" id="cuTieFound_' + k + '"></div></div>';
+  }
+  const formWho = () => {
+    const v = f => s(el(f) && el(f).value);
+    const q = typeof boardFields !== 'undefined' && boardFields && boardFields.qbEstimate || {};
+    return { name: v('customerName'), email: v('email'), phone: v('phone'), qbId: q.customerId && q.env === 'production' ? s(q.customerId) : '' };
+  };
+  const cardWho = j => {
+    const v = f => s(el(f) && el(f).value);
+    return Object.assign({}, whoOfJob(j || {}), { name: v('jeBusiness') || [v('jeFirst'), v('jeLast')].filter(Boolean).join(' '),
+      email: v('jeEmail'), phone: v('jePhone') });
+  };
+  const bidWord = status => typeof isBidStatus === 'function' && isBidStatus(status) ? 'bid' : 'job';
+  function drawTie() {
+    const box = el('jobCustTie');
+    if (!box) return;
+    // Not while he is typing in it (a search for someone else).
+    if (box.contains(document.activeElement)) return;
+    const bf = typeof boardFields !== 'undefined' && boardFields ? boardFields : {};
+    const html = isOn() && loaded && can('jobs', 'see')
+      ? tieHtml('job', openJobId(), s(bf.customerId), formWho(), bidWord(typeof jobStatus !== 'undefined' ? jobStatus : '')) : '';
+    box.innerHTML = html;
+    box.hidden = !html;
+  }
+  let tieDrawTimer = null;
+  function drawTieSoon() { clearTimeout(tieDrawTimer); tieDrawTimer = setTimeout(drawTie, 400); }
+  function cardTieHtml(j) {
+    return '<div id="jeCustTie">' + (isOn() && loaded ? tieHtml('card', j._id, s(j.customerId), whoOfJob(j), bidWord(j.jobStatus)) : '') + '</div>';
+  }
+  function redrawCardTie(jobId, tied) {
+    const box = el('jeCustTie');
+    const j = allJobs().find(x => x._id === jobId) || {};
+    if (box) box.innerHTML = tieHtml('card', jobId, tied, cardWho(j), bidWord(j.jobStatus));
+  }
+  // A bid's card being edited: tied at once, and the customer's details put
+  // in the boxes still empty there (its Save writes the boxes).
+  const CARD_BOX = { address: 'jeStreet', city: 'jeCity', state: 'jeState', zip: 'jeZip', phone: 'jePhone', email: 'jeEmail' };
+  function tieCard(jobId, cid, by) {
+    const c = customers[cid];
+    if (!c || !window.YDSync || !YDSync.patchJob(jobId, { customerId: cid, customerBy: by })) return;
+    if (jobId === openJobId()) tieForm(cid, by);
+    const now = {};
+    Object.keys(CARD_BOX).forEach(f => { now[f] = el(CARD_BOX[f]) ? el(CARD_BOX[f]).value : ''; });
+    const add = fillFrom(c, now);
+    Object.keys(add).forEach(f => { const n = el(CARD_BOX[f]); if (n && !s(n.value)) n.value = add[f]; });
+    redrawCardTie(jobId, cid);
+  }
+  window.custTieOpen = function (id) { window.openCustomer(id); };
+  window.custTiePick = function (ctx, jk, v) {
+    if (!can('jobs', 'change')) return;
+    if (v === 'lead') { window.custTieNew(ctx, jk); return; }
+    const cid = resolve(Object.keys(customers).find(x => sid(x) === v) || v);
+    if (!customers[cid]) return;
+    if (ctx === 'card') { tieCard(realJob(jk), cid, 'hand'); return; }
+    // Another job opened since the buttons were drawn: nothing.
+    if (sid(openJobId()) !== jk) return;
+    tieForm(cid, 'hand');
+  };
+  window.custTieOff = function (ctx, jk) {
+    if (!can('jobs', 'change')) return;
+    // By hand: the automatic tie never puts it back.
+    if (ctx === 'card') {
+      const jobId = realJob(jk);
+      if (!window.YDSync || !YDSync.patchJob(jobId, { customerId: null, customerBy: 'hand' })) return;
+      if (jobId === openJobId() && typeof boardFields !== 'undefined') { boardFields.customerId = null; boardFields.customerBy = 'hand'; drawTie(); }
+      redrawCardTie(jobId, '');
+      return;
+    }
+    if (sid(openJobId()) !== jk || typeof boardFields === 'undefined') return;
+    boardFields.customerId = null;
+    boardFields.customerBy = 'hand';
+    if (typeof markDirty === 'function') markDirty();
+    drawTie();
+  };
+  // Someone new: a lead made from the bid's own details, and the bid tied
+  // to it (as To sort's "New lead" does).
+  window.custTieNew = function (ctx, jk) {
+    if (!can('jobs', 'change') || !can('contacts', 'change')) { showToast('Adding someone new needs Customers change access'); return; }
+    const v = f => s(el(f) && el(f).value);
+    if (ctx === 'card') {
+      const jobId = realJob(jk);
+      const id = newLeadFromJob({ _id: jobId, customerName: v('jeBusiness') || [v('jeFirst'), v('jeLast')].filter(Boolean).join(' '),
+        firstName: v('jeFirst'), lastName: v('jeLast'), business: v('jeBusiness'), phone: v('jePhone'), email: v('jeEmail'),
+        address: v('jeStreet'), city: v('jeCity'), state: v('jeState'), zip: v('jeZip'), serviceTypes: [] });
+      tieCard(jobId, id, 'hand');
+      return;
+    }
+    // A new job not saved yet gets its id first (the lead is named after it).
+    if (!openJobId() && typeof autosave === 'function') autosave();
+    const jobId = openJobId();
+    if (!jobId) { showToast('Give the job a name first'); return; }
+    const id = newLeadFromJob({ _id: jobId, customerName: v('customerName'), firstName: v('firstName'), lastName: v('lastName'),
+      business: v('business'), phone: v('phone'), email: v('email'), address: v('address'), city: v('city'), state: v('state'), zip: v('zip'),
+      serviceTypes: typeof serviceTypes !== 'undefined' ? serviceTypes.slice() : [] });
+    tieForm(id, 'hand');
+  };
+  window.custTieFind = function (ctx, jk, q) {
+    const box = el('cuTieFound_' + ctx);
+    if (!box) return;
+    q = low(q);
+    if (q.length < 2) { box.innerHTML = ''; return; }
+    const hits = Object.values(customers).filter(c => inLists(c) && low([c.name, c.business, c.email, c.phone, c.address].join(' ')).indexOf(q) !== -1)
+      .sort(byName).slice(0, 6);
+    box.innerHTML = hits.map(c => '<button type="button" class="cu-chip" onclick="custTiePick(\'' + sid(ctx) + '\', \'' + sid(jk) + '\', \'' + sid(c.id) + '\')">' +
+      esc(c.name || '?') + '<small>' + esc(c.address ? c.address.split(',')[0] : (c.phone || '')) + '</small></button>').join('') ||
+      '<span class="muted">Nobody by that name</span>';
+  };
+
+  // The customer's other bids and jobs with something on them, newest first
+  // -- theirs and those of the ones shown with them (a second QuickBooks
+  // profile, a sub-customer) -- for Claude (estimate.js ask).
+  function otherJobs(customerId, exceptId) {
+    const main = mainOf(s(customerId));
+    const ids = {};
+    (customers[main] ? [main].concat(family(main)) : [resolve(s(customerId))]).forEach(x => { ids[x] = true; });
+    return allJobs().filter(j => j._id !== exceptId && j.customerId && ids[resolve(s(j.customerId))] && !j.removeWhy && !j.deletedAt)
+      .filter(j => { const e = j.estimate || {}; return (e.work || []).length || (e.materials || []).length || talkOf(j).length || s(e.notes); })
+      .sort((a, b) => s(b.quoteDate || b.lastModified).localeCompare(s(a.quoteDate || a.lastModified)))
+      .slice(0, 6).map(j => j._id);
+  }
   window.custToSnow = function (id) {
     const c = customers[id];
     if (!c || typeof openSnowForm !== 'function') return;
@@ -3346,6 +3721,8 @@
       ver++;
       if (!meta || meta.fromCache === false || Object.keys(customers).length) loaded = true;
       render(true);
+      drawTie();
+      tieSoon();
       document.dispatchEvent(new CustomEvent('yd-customers'));
     }, err => {
       loaded = true;
@@ -3365,6 +3742,15 @@
     // The one a record is shown as (a lead merged in, a second QuickBooks
     // profile), and whether it has a row of its own in the lists.
     mainOf: id => mainOf(id), ownRow: c => !!c && inLists(c),
+    // The customer's other bids and jobs, for Claude (estimate.js ask).
+    otherJobs: (customerId, exceptId) => otherJobs(customerId, exceptId),
+    // A bid or job about to be made from a name (boards.js addJobCard): tied
+    // to its customer when it surely is theirs, their details in its boxes.
+    tieFields: name => tieFields(name),
+    // Whose bid it is, on the Job tab and on a bid's card.
+    drawTie: () => drawTie(),
+    drawTieSoon: () => drawTieSoon(),
+    cardTieHtml: j => cardTieHtml(j),
   };
   window.custRenderNow = render;
 
@@ -3384,6 +3770,9 @@
   let quietTimer = null;
   const renderQuietly = () => { clearTimeout(quietTimer); quietTimer = setTimeout(() => render(true), 80); };
   ['yd-jobs-changed', 'yd-invoices', 'yd-prospects', 'yd-snow-accounts'].forEach(ev => document.addEventListener(ev, () => { if (isOn()) renderQuietly(); }));
+  // A bid or job saved tied to nobody: tied by itself when it surely is
+  // someone's.
+  document.addEventListener('yd-jobs-changed', () => { if (isOn()) tieSoon(); });
   // Everyone lists the suppliers and subcontractors; the services list feeds
   // the "What for" buttons.
   ['yd-supplies', 'yd-subs'].forEach(ev => document.addEventListener(ev, () => { if (isOn() && view === 'everyone') renderQuietly(); }));

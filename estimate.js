@@ -211,6 +211,14 @@
     // A snow bid has no takeoff (any lines from before it was one are kept,
     // not used): nothing for the job's price or Materials to Order.
     hasLines: () => !snowNow() && hasLines(),
+    // Another bid's lines to tick and copy (customers.js "Start a bid").
+    linesOf: jobId => linesOf(jobId),
+    carry: (jobId, workIds, matIds) => carryLines(jobId, workIds, matIds),
+    // A message to Claude on the bid open now, as if typed and sent there.
+    ask(text) {
+      draftMsg = String(text || '');
+      window.estSend();
+    },
     hasMaterials: () => !snowNow() && est.materials.length > 0,
     // Whether a job's saved estimate is a snow bid, and its 1–3" price per
     // push -- shown where a bid's price is (boards, My Jobs, All Jobs), and
@@ -386,6 +394,8 @@
       if (Array.isArray(m.photoNums) && m.photoNums.length) c.photoNums = m.photoNums.filter(Number.isInteger).slice(0, 40);
       const learned = cleanLearned(m.learned);                 // the finished jobs it was shown (apply)
       if (learned) c.learned = learned;
+      const bids = cleanBids(m.bids);                          // the customer's other bids it was shown (apply)
+      if (bids) c.bids = bids;
       return c;
     });
     o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
@@ -871,6 +881,18 @@
     return ns.length + ' photos (' + ns[0] + '–' + ns[ns.length - 1] + ')';
   }
 
+  // The customer's other bids a reply was shown (estimates.py _other_bids):
+  // [{jobId, number}], kept on the reply -- nothing undefined, it is saved.
+  function cleanBids(v) {
+    const out = (Array.isArray(v) ? v : []).filter(b => b && safeId(b.jobId)).slice(0, 8)
+      .map(b => ({ jobId: safeId(b.jobId), number: String(b.number || '').trim().slice(0, 20) }));
+    return out.length ? out : null;
+  }
+  function bidsSeenText(bids) {
+    const name = b => b.number ? '#' + esc(b.number) : 'of ' + esc(String((savedJob(b.jobId) || {}).quoteDate || '').slice(0, 10) || 'before');
+    return bids.length === 1 ? 'bid ' + name(bids[0]) : bids.length + ' other bids (' + bids.map(name).join(', ') + ')';
+  }
+
   // ------------------------------------------------ what finished jobs said
   //
   // With each message Claude is shown the few finished jobs most like this
@@ -977,6 +999,7 @@
           '<div class="est-who">' + (m.role === 'assistant' ? '✨ Claude' : 'You') + '</div>' +
           '<div class="est-text">' + esc(m.text) + '</div>' +
           (m.role === 'assistant' && m.photos ? '<div class="est-did">📷 Looked at ' + photosSeenText(m) + '</div>' : '') +
+          (m.role === 'assistant' && m.bids ? '<div class="est-did">📎 Looked at their ' + bidsSeenText(m.bids) + '</div>' : '') +
           (learnedAt[i] ? learnedHtml(m.learned) : '') +
           (m.role === 'assistant' && m.changed ? '<div class="est-did">Updated the estimate' +
             (i === lastI && undo && undo.jobId === currentJobId && !ro ? ' · <button class="link-btn" onclick="estUndo()">Undo</button>' : '') +
@@ -4096,7 +4119,10 @@
     return { customer: v('customerName'), city: v('city'), notes: v('notes'), services: services,
              status: d ? d.jobStatus : statusNow(),
              location: [v('address'), [v('city'), v('state')].filter(Boolean).join(', ')].filter(Boolean).join(', '),
-             estimate: d ? fromSaved(d.estimate || {}) : est, data: d };
+             estimate: d ? fromSaved(d.estimate || {}) : est, data: d,
+             // The customer it is tied to (customers.js): their other bids
+             // go to Claude with it.
+             customerId: String((d ? d.customerId : typeof boardFields !== 'undefined' && boardFields && boardFields.customerId) || '') };
   }
 
   function currentForClaude(e, city) {
@@ -4135,6 +4161,102 @@
     };
   }
 
+  // ------------------------------------------------ lines carried from another bid
+  //
+  // Jonah (30 Oct 2026): a customer "wants a separate bid for just ...
+  // line item 3 on the bid so i want it to use info from [that bid] to make
+  // a second bid for him." A line carried over from another of the
+  // customer's bids is that line, copied whole -- its words (what the
+  // customer already read), its kind, price, crew-days, crew notes, sub --
+  // with a new id; only what is said to be different changes (Claude's copyOf
+  // with a title, scope or figure of its own, estimates.py). Its materials
+  // follow it to the new line. Materials are priced again at today's prices,
+  // as on any bid not yet sent.
+  let copyFrom = null;        // { work: {id: line}, materials: {id: m}, moved: {old line id: new} } while lines are carried
+  function sourcesOf(jobIds) {
+    const out = { work: {}, materials: {}, moved: {} };
+    (jobIds || []).forEach(jid => {
+      const d = savedJob(jid);
+      const e = d && d.estimate && typeof d.estimate === 'object' ? d.estimate : null;
+      if (!e) return;
+      (Array.isArray(e.work) ? e.work : []).forEach(w => { if (w && w.id) out.work[w.id] = w; });
+      (Array.isArray(e.materials) ? e.materials : []).forEach(m => { if (m && m.id) out.materials[m.id] = m; });
+    });
+    return out;
+  }
+  // g: what Claude gave beside copyOf ({} when carried by hand).
+  function carriedWork(src, g) {
+    const w = clone(src);
+    w.id = newId('ew');
+    if (copyFrom) copyFrom.moved[src.id] = w.id;
+    const str = v => String(v || '').trim();
+    if (str(g.title)) w.title = str(g.title);
+    if (str(g.scope)) w.scope = str(g.scope);
+    if (str(g.crew) && !crewNoteMine(w)) { w.crewNote = str(g.crew).slice(0, 3000); w.crewNoteBy = 'claude'; }
+    if (num(g.crewDays) > 0) w.crewDays = num(g.crewDays);
+    if (w.kind === 'amount' && num(g.amountDollars) > 0) w.amountCents = Math.round(num(g.amountDollars) * 100);
+    if (w.kind === 'allin' && num(g.allInDollars) > 0) w.allInCents = Math.round(num(g.allInDollars) * 100);
+    if (w.kind === 'allin' && num(g.addDollars) > 0) w.addCents = Math.round(num(g.addDollars) * 100);
+    if (w.kind === 'flat' && num(g.qty) > 0) w.qty = num(g.qty);
+    return w;
+  }
+  function carriedMat(src, g) {
+    const m = clone(src);
+    m.id = newId('em');
+    const moved = (copyFrom && copyFrom.moved) || {};
+    // Which line it is for, or whose all-in price it is in: that line's copy
+    // here, or none (the line stayed on the other bid).
+    if (m.forWork && m.forWork !== 'none') { if (moved[m.forWork]) m.forWork = moved[m.forWork]; else delete m.forWork; }
+    if (m.allInOf) m.allInOf = moved[m.allInOf] || null;
+    if (String(g.name || '').trim()) m.name = String(g.name).trim();
+    if (num(g.qty) > 0) m.qty = num(g.qty);
+    if (num(g.costEachDollars) > 0) m.costCents = Math.round(num(g.costEachDollars) * 100);
+    if (['delivered', 'pickup', 'rides'].indexOf(g.delivery) !== -1) m.delivery = g.delivery;
+    if (typeof g.allInOf === 'string' && g.allInOf.trim()) m.allInOf = g.allInOf.trim();
+    return m;
+  }
+  // Lines ticked to carry over by hand (customers.js "Start a bid"): copied
+  // the same way, the materials after the lines they go with.
+  function carryLines(jobId, workIds, matIds) {
+    const was = copyFrom;
+    copyFrom = sourcesOf([jobId]);
+    const work = (workIds || []).map(id => copyFrom.work[id]).filter(Boolean).map(w => carriedWork(w, {}));
+    const materials = (matIds || []).map(id => copyFrom.materials[id]).filter(Boolean).map(m => carriedMat(m, {}));
+    copyFrom = was;
+    return { work: work, materials: materials };
+  }
+  // A bid's lines and materials, for ticking which to carry: each material
+  // with the line it most likely goes with (crewjobs.js workFor -- the same
+  // guess the crew's page makes).
+  function linesOf(jobId) {
+    const d = savedJob(jobId);
+    const e = d && d.estimate && typeof d.estimate === 'object' && d.estimate.v === 2 ? d.estimate : null;
+    if (!e) return null;
+    const work = (Array.isArray(e.work) ? e.work : []).filter(w => w && w.id);
+    const items = catalog().items;
+    // Where its name says it goes ("Road gravel — main house top-up"), as
+    // two words in a row in one line's title ("Home Gravel Top-Up"): the
+    // tie-breaker when the crew page's guess can't choose ("house" was in
+    // another line's title too).
+    const pairs = t => {
+      const w = String(t || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean), out = new Set();
+      for (let i = 0; i + 1 < w.length; i++) out.add(w[i] + ' ' + w[i + 1]);
+      return out;
+    };
+    const named = m => {
+      const where = pairs(String(m.name || '').split(/\s[—–-]\s/)[1]);
+      const hits = where.size ? work.filter(w => Array.from(pairs(w.title)).some(x => where.has(x))) : [];
+      return hits.length === 1 ? hits[0].id : '';
+    };
+    const forOf = m => (window.YDCrewJobs && YDCrewJobs.workFor ? YDCrewJobs.workFor(m, work, items) : '') || named(m);
+    return {
+      work: work.map((w, i) => ({ id: w.id, n: i + 1, title: String(w.title || 'Work'), kind: w.kind || 'crew',
+        cents: w.kind === 'amount' ? num(w.amountCents) : w.kind === 'allin' ? num(w.allInCents) : null, crewDays: num(w.crewDays) })),
+      materials: (Array.isArray(e.materials) ? e.materials : []).filter(m => m && m.id)
+        .map(m => ({ id: m.id, name: String(m.name || ''), qty: num(m.qty), unit: String(m.unit || ''), forWork: forOf(m) })),
+    };
+  }
+
   // Claude's estimate onto ours (e), line by line by id.
   function mergeWork(got, e) {
     return (got || []).map(g => workLine(g, g.id ? e.work.find(w => w.id === g.id) : null));
@@ -4147,6 +4269,8 @@
   let crewAsked = false;
   const CREW_WORDS = /\b(crew|guys)\b/i;
   function workLine(g, was) {
+    const src = !was && g.copyOf && copyFrom ? copyFrom.work[g.copyOf] : null;
+    if (src) return carriedWork(src, g);
     const w = was ? clone(was) : { id: newId('ew'), kind: 'crew', profit: null, qbItem: '' };
     w.title = String(g.title || '');
     w.scope = String(g.scope || '');
@@ -4209,6 +4333,8 @@
   }
   // said: what the app changed of Claude's answer, for its flags.
   function matLine(g, was, e, said) {
+    const src = !was && g.copyOf && copyFrom ? copyFrom.materials[g.copyOf] : null;
+    if (src) return carriedMat(src, g);
     const items = catalog().items;
     const m = was ? clone(was) : { id: newId('em'), delivery: 'auto' };
     m.plant = !!g.plant;
@@ -4395,6 +4521,13 @@
         // His usual grass seed in its biggest bag (Pricing rules): the one
         // Claude uses unless he names another (estimates.py).
         usualSeed: snowy || !window.YDMatch || !YDMatch.usualSeed ? null : YDMatch.usualSeed(catalog()),
+        // The customer's other bids and jobs, newest first (Jonah, 30 Oct
+        // 2026: "he wants a separate bid for just ___ ... use info from
+        // other bids"): read by the server; a line carried over from one
+        // comes back as copyOf.
+        customerId: snowy ? '' : job.customerId,
+        customerJobs: snowy || !job.customerId || !window.YDCustomers || !YDCustomers.otherJobs ? []
+          : YDCustomers.otherJobs(job.customerId, jobId),
       });
       land(jobId, r);
     } catch (e) {
@@ -4423,10 +4556,12 @@
     if (did) {
       const lastAsk = e.chat.filter(m => m.role === 'user').slice(-1)[0];
       crewAsked = !!(lastAsk && CREW_WORDS.test(String(lastAsk.text || '')));
+      copyFrom = sourcesOf((cleanBids(r.bids) || []).map(b => b.jobId));
       e.work = patch ? patchLines(e.work, r.work, r.removed, workLine) : mergeWork(r.work, e);
       crewAsked = false;
       e.materials = patch ? patchLines(e.materials, r.materials, r.removed, (g, was) => matLine(g, was, e, said))
         : mergeMaterials(r.materials, e, said);
+      copyFrom = null;
       e.spoilCuYd = spoil;
       e.brushCuYd = brush;
       joinAllIn(e);
@@ -4449,6 +4584,8 @@
     // The finished jobs it was shown with this message (learnedHtml).
     const learned = cleanLearned(r.learned);
     if (learned) msg.learned = learned;
+    const bids = cleanBids(r.bids);
+    if (bids) msg.bids = bids;
     e.chat.push(msg);
     return did;
   }

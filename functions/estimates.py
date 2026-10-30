@@ -29,6 +29,14 @@ With each message Claude is also shown a few of Jonah's finished jobs most
 like this one and what they really took on the clock (pastjobs.py) -- worked
 out in plain code, after the cached rules since it changes with the bid.
 
+And it is shown the same customer's other bids and jobs (Jonah, 30 Oct 2026:
+"he wants a separate bid for just ___ ... use info from other bids its made"):
+their site notes, lines, materials and what was said with Claude about each,
+read here from the jobs the app names (customerJobs -- the app knows who is
+the same customer). A line or material carried over from one of them comes
+back as copyOf, its id there; the app copies it word for word, with its price
+and crew-days, so a scope the customer already read is never retyped.
+
 It is a conversation: each call carries the whole conversation so far and the
 estimate as it stands on screen (he may have changed lines by hand), and
 Claude answers in words and, when he asked for a change, with the whole
@@ -129,7 +137,19 @@ SYSTEM = (
     "- Delivery: 'auto' -- the app's rules (Jonah's) say which materials are delivered and which "
     "the crew picks up; never ask about it. Only when he says otherwise for this job: 'pickup' when "
     "he says the crew picks it up, 'delivered' when he says it is delivered this time, 'rides' when "
-    "it comes on another material's load.\n\n"
+    "it comes on another material's load.\n"
+    "- The customer's other bids and jobs, when the message lists them, are for using what was "
+    "already worked out with this customer: when Jonah asks for a bid built from one of them ('a "
+    "separate bid for just line 3 on their last bid', 'the same patio as last year's bid'), carry those lines "
+    "over with copyOf -- the id of the line there -- on a new line (empty id). Leave title, scope and "
+    "crew empty and every number 0 to carry it word for word with its price and crew-days (the app "
+    "copies it); give only what is different for this bid. It keeps its kind and how it is priced -- "
+    "to price it another way, write a new line instead. Carry the materials that go with that work the "
+    "same way (copyOf; qty 0 keeps its quantity, a qty when this bid needs a different amount -- a "
+    "rental or a dumpster shared with work left out is only needed for this work), and a material "
+    "named for another part of the job (its name says where it went) only when it is for this work. "
+    "Never carry lines or materials he did not ask for, and say in reply which you carried. copyOf "
+    "is '' on everything else.\n\n"
     "QuickBooks: you only build the estimate -- you never put it in QuickBooks or send it, "
     "and never say you have. Jonah does that himself with the buttons under the estimate "
     "('Put in QuickBooks, don't email yet' creates or updates it there under this customer, "
@@ -182,9 +202,10 @@ SCHEMA = {
                 "allInDollars": {"type": "number"},
                 "addDollars": {"type": "number"},
                 "crew": {"type": "string"},
+                "copyOf": {"type": "string"},
             },
             "required": ["id", "title", "scope", "kind", "crewDays", "priceId", "qty", "factors", "amountDollars",
-                         "allInDollars", "addDollars", "crew"],
+                         "allInDollars", "addDollars", "crew", "copyOf"],
             "additionalProperties": False,
         }},
         "materials": {"type": "array", "items": {
@@ -200,9 +221,10 @@ SCHEMA = {
                 "costEachDollars": {"type": "number"},
                 "delivery": {"type": "string", "enum": ["auto", "delivered", "pickup", "rides"]},
                 "allInOf": {"type": "string"},
+                "copyOf": {"type": "string"},
             },
             "required": ["id", "supplyId", "name", "qty", "unit", "plant", "tree", "costEachDollars", "delivery",
-                         "allInOf"],
+                         "allInOf", "copyOf"],
             "additionalProperties": False,
         }},
         "spoilCuYd": {"type": "number"},
@@ -599,6 +621,149 @@ def _patching(d):
     return d.get("patchOk") is True and bool((cur.get("work") or []) or (cur.get("materials") or []))
 
 
+# ----------------------------------------------------------------- the customer's other bids
+#
+# Jonah (30 Oct 2026): "i want all claude conversations about estimates and all
+# estimates tied to proper customers so i can go to a customer and say 'he wants
+# a separate bid for just ___' and then it can use info from other bids its
+# made." The app sends the ids of the customer's other bids and jobs
+# (customers.js knows who is the same customer: a second QuickBooks profile, a
+# lead that became a customer); they are read here, fresh, and put before the
+# job in the message -- cached on their own, since they stay the same from one
+# message about this bid to the next.
+OTHER_BIDS_MAX = 6
+OTHER_CHAT_MAX = 8               # the last messages of each bid's conversation
+JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
+BID_STAGE_WORDS = {"siteVisit": "a bid, site visit", "toSend": "a bid not sent yet", "sent": "a bid sent to them",
+                   "followUp": "a bid sent to them, being followed up", "won": "a bid they said yes to",
+                   "lost": "a bid they turned down"}
+JOB_STAGE_WORDS = {"booked": "a booked job", "inprogress": "a job in progress", "complete": "a finished job"}
+
+
+def _dollars(cents):
+    n = _num(cents)
+    if not n:
+        return ""
+    return "$" + ("{:,.0f}".format(n / 100) if round(n) % 100 == 0 else "{:,.2f}".format(n / 100))
+
+
+def _stand_words(j):
+    status = str(j.get("jobStatus") or "")
+    if status in JOB_STAGE_WORDS:
+        return JOB_STAGE_WORDS[status]
+    return BID_STAGE_WORDS.get(str(j.get("bidStage") or ""), "a bid")
+
+
+def _bid_text(jid, j):
+    """One of the customer's bids as Claude reads it, and the ids of its lines
+    and materials (what copyOf may name)."""
+    e = j.get("estimate") if isinstance(j.get("estimate"), dict) else {}
+    work = [w for w in e.get("work") or [] if isinstance(w, dict) and w.get("id")]
+    mats = [m for m in e.get("materials") or [] if isinstance(m, dict) and m.get("id")]
+    chat = [m for m in e.get("chat") or [] if isinstance(m, dict) and str(m.get("text") or "").strip()]
+    if not (work or mats or chat or str(e.get("notes") or "").strip()):
+        return "", set(), set(), set()
+    q = j.get("qbEstimate") if isinstance(j.get("qbEstimate"), dict) else {}
+    num = str(j.get("estimateNumber") or q.get("docNumber") or "").strip()
+    where = ", ".join(x for x in [str(j.get("address") or "").strip(), str(j.get("city") or "").strip()] if x)
+    day = str(j.get("quoteDate") or "")[:10]
+    head = "BID %s(job id %s) -- %s%s -- %s%s" % (
+        ("#" + num + " ") if num else "", jid, str(j.get("customerName") or "").strip() or "(no name)",
+        (", " + where) if where else "", _stand_words(j), (", dated " + day) if day else "")
+    rows = [head]
+    notes = str(e.get("notes") or "").strip()
+    if notes:
+        rows.append("Site-visit notes: " + notes[:2500].replace("\n", "\n  "))
+    if work:
+        rows.append("Lines (numbered as on its estimate):")
+    for n, w in enumerate(work, 1):
+        kind = str(w.get("kind") or "crew")
+        bits = ["Line %d" % n, "id %s" % w["id"], str(w.get("title") or "")[:200], "kind %s" % kind]
+        if kind == "amount" and _dollars(w.get("amountCents")):
+            bits.append("%s, labour only" % _dollars(w.get("amountCents")))
+        elif kind == "allin" and _dollars(w.get("allInCents")):
+            bits.append("%s all-in with its materials" % _dollars(w.get("allInCents")))
+        elif kind == "flat" and w.get("priceId"):
+            bits.append("service %s qty %s" % (w.get("priceId"), w.get("qty")))
+        if _num(w.get("crewDays")):
+            bits.append("crewDays %s" % w.get("crewDays"))
+        if isinstance(w.get("sub"), dict) and w["sub"].get("by"):
+            bits.append("done by %s" % str(w["sub"]["by"])[:60])
+        rows.append("  " + " | ".join(bits) + "\n    scope: " +
+                    str(w.get("scope") or "")[:2500].replace("\n", "\n    "))
+    if mats:
+        rows.append("Materials:")
+    for m in mats:
+        bits = ["id %s" % m["id"], "supplyId %s" % (m.get("supplyId") or "(not in Supplies)"),
+                str(m.get("name") or "")[:200], "qty %s %s" % (m.get("qty"), str(m.get("unit") or "")[:20])]
+        if m.get("plant"):
+            bits.append("plant")
+        if _num(m.get("costCents")):
+            bits.append("cost each %s (typed in)" % _dollars(m.get("costCents")))
+        rows.append("  - " + " | ".join(bits))
+    if chat:
+        rows.append("What you and Jonah said about it (the last %d messages):" % min(len(chat), OTHER_CHAT_MAX))
+        for m in chat[-OTHER_CHAT_MAX:]:
+            who = "Jonah" if m.get("role") == "user" else "You"
+            rows.append("  %s: %s" % (who, str(m.get("text") or "")[:700].replace("\n", "\n    ")))
+    return ("\n".join(rows), {str(w["id"]) for w in work}, {str(m["id"]) for m in mats},
+            {str(m["supplyId"]) for m in mats if m.get("supplyId")})
+
+
+def _customer_text(db, cid):
+    """What Jonah noted on the customer themselves (customers.js): the note
+    and the newest dated notes."""
+    if not JOB_ID.fullmatch(str(cid or "")):
+        return ""
+    try:
+        snap = db.collection("customers").document(str(cid)).get()
+    except Exception as e:                          # noqa: BLE001
+        print("estimates: customer not read:", e)
+        return ""
+    c = (snap.to_dict() or {}) if snap.exists else {}
+    meets = sorted([m for m in c.get("meetings") or [] if isinstance(m, dict) and str(m.get("text") or "").strip()],
+                   key=lambda m: str(m.get("at") or ""))[-5:]
+    rows = [str(c.get("note") or "").strip()[:1500]] + ["%s: %s" % (str(m.get("at") or "")[:10], str(m["text"]).strip()[:600])
+                                                       for m in meets]
+    rows = [r for r in rows if r]
+    return ("NOTES ON THIS CUSTOMER (Jonah's):\n" + "\n".join(rows)) if rows else ""
+
+
+def _other_bids(db, d):
+    """(text, line ids, material ids, supply ids, [(job id, number)]) for the
+    customer's other bids the app named, newest first as it sent them."""
+    ids = [str(x) for x in (d.get("customerJobs") or []) if JOB_ID.fullmatch(str(x)) and str(x) != str(d.get("jobId"))]
+    ids = list(dict.fromkeys(ids))[:OTHER_BIDS_MAX]
+    parts, work_ids, mat_ids, supply_ids, shown = [], set(), set(), set(), []
+    if ids:
+        try:
+            snaps = db.get_all([db.collection("jobs").document(i) for i in ids])
+            got = {s.id: (s.to_dict() or {}) for s in snaps if s.exists}
+        except Exception as e:                      # noqa: BLE001
+            print("estimates: the customer's other bids not read:", e)
+            got = {}
+        for i in ids:
+            j = got.get(i)
+            if not j or j.get("deletedAt") or j.get("removeWhy"):
+                continue
+            text, w, m, sids = _bid_text(i, j)
+            if not text:
+                continue
+            parts.append(text)
+            work_ids |= w
+            mat_ids |= m
+            supply_ids |= sids
+            q = j.get("qbEstimate") if isinstance(j.get("qbEstimate"), dict) else {}
+            shown.append((i, str(j.get("estimateNumber") or q.get("docNumber") or "").strip()))
+    cust = _customer_text(db, d.get("customerId"))
+    if not parts and not cust:
+        return "", set(), set(), set(), []
+    text = "\n\n".join(([cust] if cust else []) + (
+        ["THIS CUSTOMER'S OTHER BIDS AND JOBS (to use what was already worked out with them -- not part "
+         "of this estimate unless Jonah asks for it):"] + parts if parts else []))
+    return text, work_ids, mat_ids, supply_ids, shown
+
+
 # ----------------------------------------------------------------- photos
 #
 # Jonah (21 Oct 2026): Claude here should see the bid's photos -- "send the
@@ -754,7 +919,11 @@ def draft(client, d):
     # His usual grass seed (the app's Pricing rules, in its biggest bag).
     usual = str(d.get("usualSeed") or "")
     usual = usual if usual in supplies[0] and supplies[0][usual].get("category") not in NOT_FOR_ESTIMATES else ""
-    cat_text, supply_ids = catalogue(kinds, on_estimate + ([usual] if usual else []), supplies, usual)
+    # The customer's other bids, and the items on them: in the catalogue too,
+    # so a material carried over can still be picked by id.
+    others, other_work, other_mats, other_supplies, shown = _other_bids(db, d)
+    cat_text, supply_ids = catalogue(kinds, on_estimate + ([usual] if usual else []) + sorted(other_supplies),
+                                     supplies, usual)
     if kinds is not None:
         cat_text += ("\n\n(Only the kinds of material this job's notes call for are listed. If it "
                      "needs something not here, add it with an empty supplyId and a clear name.)")
@@ -797,9 +966,12 @@ def draft(client, d):
         except Exception as e:                      # noqa: BLE001
             print("estimates: finished jobs not read:", e)
             past, learned = "", None
+    # The customer's other bids first, cached on their own: the same for every
+    # message about this bid, where the photos come and go.
+    other_block = [{"type": "text", "text": others, "cache_control": {"type": "ephemeral", "ttl": "1h"}}] if others else []
     with client.beta.messages.stream(
         model=model, max_tokens=64000, system=system,
-        messages=[{"role": "user", "content": _photo_blocks(photos, photos_total, newest, missing) +
+        messages=[{"role": "user", "content": other_block + _photo_blocks(photos, photos_total, newest, missing) +
                    [{"type": "text", "text": _prompt(d, past)}]}],
         thinking={"type": "adaptive"},
         # The first build is the careful one; a follow-up ("make it 18x20")
@@ -827,8 +999,9 @@ def draft(client, d):
         # fixed); its adjustments only from that service's own list.
         svc = book.get(pid) if pid in book and (book[pid].get("method") or "unit") != "crew" else None
         own = {str(f.get("id")) for f in ((svc or {}).get("factors") or []) if isinstance(f, dict) and f.get("id")}
+        wid = str(w.get("id") or "") if str(w.get("id") or "") in work_ids else ""
         work.append({
-            "id": str(w.get("id") or "") if str(w.get("id") or "") in work_ids else "",
+            "id": wid,
             "title": str(w.get("title") or "").strip()[:200],
             "scope": str(w.get("scope") or "").strip()[:6000],
             "kind": "flat" if kind == "flat" and svc else ("crew" if kind == "flat" else kind),
@@ -842,6 +1015,9 @@ def draft(client, d):
             # The crew's version of the line (estimate.js puts it in the
             # line's notes for the crew while those are not his own).
             "crew": str(w.get("crew") or "").strip()[:1500],
+            # A new line carried over from another of the customer's bids:
+            # only an id of one it was shown (the app copies that line).
+            "copyOf": str(w.get("copyOf") or "") if not wid and str(w.get("copyOf") or "") in other_work else "",
         })
     # An all-in line a material's price is in: an id on the estimate, or the
     # title of a line given in this answer (the app joins it to its new id).
@@ -850,8 +1026,9 @@ def draft(client, d):
     for m in got.get("materials") or []:
         sid = str(m.get("supplyId") or "")
         ref = str(m.get("allInOf") or "").strip()[:200]
+        mid = str(m.get("id") or "") if str(m.get("id") or "") in mat_ids else ""
         materials.append({
-            "id": str(m.get("id") or "") if str(m.get("id") or "") in mat_ids else "",
+            "id": mid,
             "supplyId": sid if sid in supply_ids and not m.get("plant") else "",
             "name": str(m.get("name") or "").strip()[:200],
             "qty": max(0.0, round(_num(m.get("qty")) or 0, 3)),
@@ -861,6 +1038,7 @@ def draft(client, d):
             "costEachDollars": max(0.0, round(_num(m.get("costEachDollars")) or 0, 2)),
             "delivery": m.get("delivery") if m.get("delivery") in ("delivered", "pickup", "rides") else "auto",
             "allInOf": ref if ref in allin_refs or ref.lower() in allin_refs else "",
+            "copyOf": str(m.get("copyOf") or "") if not mid and str(m.get("copyOf") or "") in other_mats else "",
         })
     patching = _patching(d)
     removed = [str(i) for i in got.get("removed") or [] if str(i) in work_ids or str(i) in mat_ids] if patching else []
@@ -875,6 +1053,9 @@ def draft(client, d):
             # Which finished jobs it was shown, and the averages (the app's
             # "📚 Based on N of your finished jobs").
             "learned": learned,
+            # The customer's other bids it was shown (the app copies carried
+            # lines from them, and says which it looked at).
+            "bids": [{"jobId": i, "number": n} for i, n in shown],
             "catalogueSize": len(supply_ids), "model": model}, resp.usage
 
 

@@ -403,6 +403,19 @@
   .cu-chip.on small { color:rgba(255,255,255,.8); }
   .cu-counts .cu-chip { min-height:36px; }
   .cu-sort-find { margin-top:6px; width:100%; }
+  /* Whose bid it is (Job tab, a bid's card) and a new bid on a customer's page. */
+  #jobCustTie { margin-top:8px; }
+  .cu-tie { font-size:13.5px; padding:8px 10px; border:1px solid var(--border); border-radius:8px; background:var(--surface-2); overflow-wrap:anywhere; }
+  .cu-tie-ask { border-color:var(--border-strong); }
+  #jeCustTie .cu-tie { margin:2px 0 10px; }
+  .cu-nb { border:1.5px solid var(--border-strong); border-radius:8px; padding:10px; margin:6px 0 10px; }
+  .cu-nb textarea { width:100%; }
+  .cu-nb-src { border-top:1px solid var(--border); padding:8px 0; font-size:13.5px; }
+  .cu-nb-mh { font-size:12px; margin-top:8px; }
+  .cu-talk { margin:6px 0 4px 10px; padding-left:10px; border-left:3px solid var(--border); }
+  .cu-talk-m { padding:4px 0; font-size:13px; }
+  .cu-talk-m.claude b { color:var(--brand-ink, var(--brand)); }
+  .cu-talk-t { white-space:pre-wrap; overflow-wrap:anywhere; }
   /* When to call: every choice a button in sight (no sideways rows). */
   .cu-when-now { font-size:14px; margin-bottom:8px; overflow-wrap:anywhere; }
   .cu-when-pick { display:flex; flex-direction:column; gap:8px; }

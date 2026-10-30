@@ -1785,7 +1785,11 @@ function customerNameFromParts() {
   const v = id => ((document.getElementById(id) || {}).value || '').trim();
   document.getElementById('customerName').value = v('business') || [v('firstName'), v('lastName')].filter(Boolean).join(' ');
 }
-function onCustomerNamePart() { customerNameFromParts(); markDirty(); updateCtxBar(); }
+function onCustomerNamePart() {
+  customerNameFromParts(); markDirty(); updateCtxBar();
+  // Whose it is follows the name typed (customers.js).
+  if (window.YDCustomers && YDCustomers.drawTieSoon) YDCustomers.drawTieSoon();
+}
 // Jobs saved before the boxes existed, imports and contacts turned into jobs
 // carry one name: it is split into the boxes. Two or three words read as a
 // person's name; anything else is a business name.
@@ -4409,6 +4413,7 @@ function loadJobData(d) {
   boardFields = {};
   BOARD_FIELDS.forEach(f => { if (d[f] != null) boardFields[f] = d[f]; });
   if (window.YDEstimate) window.YDEstimate.load(d.estimate || null);
+  if (window.YDCustomers && YDCustomers.drawTie) YDCustomers.drawTie();
   crewWhatHint();
 
   syncStatusSelect(); updateJobHeadBadge();
@@ -4816,6 +4821,7 @@ function clearJobForm() {
   loadedQuoteDate = '';
   document.getElementById('quoteDate').value = todayMD();
   if (window.YDEstimate) window.YDEstimate.load(null);
+  if (window.YDCustomers && YDCustomers.drawTie) YDCustomers.drawTie();
   crewWhatHint();
   syncStatusSelect(); updateJobHeadBadge();
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();

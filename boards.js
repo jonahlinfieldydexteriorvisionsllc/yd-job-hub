@@ -2026,6 +2026,7 @@
       '<div class="grid g2">' + box('jeFirst', 'First name', nm.first, ' autocomplete="off"') +
         box('jeLast', 'Last name', nm.last, ' autocomplete="off"') + '</div>' +
       box('jeBusiness', 'Business name (if a business)', nm.business, ' autocomplete="off"') +
+      (window.YDCustomers && YDCustomers.cardTieHtml ? YDCustomers.cardTieHtml(j) : '') +
       box('jeStreet', 'Street address', j.address, ' autocomplete="off"') +
       '<div class="grid g3">' + box('jeCity', 'City', j.city) + box('jeState', 'State', j.state) +
         box('jeZip', 'ZIP', j.zip, ' inputmode="numeric"') + '</div>' +
@@ -2140,7 +2141,10 @@
       { title: boardId === 'bids' ? 'Who is the bid for?' : 'Who is the job for?', placeholder: 'Customer name', ok: 'Add' });
     if (!name || !name.trim()) return;
     const at = nowIso();
-    const fields = { customerName: name.trim() };
+    // Tied to the customer it surely is, with their details in its boxes
+    // (customers.js) -- else its card asks whose it is.
+    const fields = Object.assign({ customerName: name.trim() },
+      window.YDCustomers && YDCustomers.tieFields ? YDCustomers.tieFields(name.trim()) : {});
     if (boardId === 'bids') {
       Object.assign(fields, { bidStage: col, bidStageAt: at, jobStatus: 'quoting' });
     } else {
