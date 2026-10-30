@@ -142,6 +142,9 @@
 
   async function loadPrefs() {
     const base = Object.assign({}, DEFAULTS[isOwner() ? 'owner' : 'crew']);
+    // Storm watch: the owner and admins hear it unless they switch it off,
+    // the crew only once they switch it on (functions/stormwatch.py who_hears).
+    base.stormWatch = isOwner() || !!(window.YDAuth && (window.YDAuth.isAdmin || window.YDAuth.role === 'admin'));
     try {
       const saved = await window.YDDb.get('digestPrefs', me().uid);
       prefs = Object.assign(base, saved || {});
@@ -219,6 +222,10 @@
         // to a calendar or makes a change" (functions/reminders.py _activity).
         (isOwner() ? toggle('crewActivity', 'When the crew add or change something',
           'a card or calendar entry added, changed, finished or ticked off by anyone but you — one buzz every few minutes at most') : '') +
+        // Storm watch (functions/stormwatch.py), November to April.
+        toggle('stormWatch', '❄️ When plowable snow is coming',
+          'November to April: when the forecast reaches the plow depth of any snow account, or freezing rain is ' +
+          'coming — once per snowfall, and at night only when it starts by morning') +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Which updates</div>' +
         // Jonah (15 Oct 2026): "turn off midday summary for crew: leave on for

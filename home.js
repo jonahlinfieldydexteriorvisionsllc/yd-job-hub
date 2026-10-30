@@ -352,6 +352,65 @@
     '</div>';
   }
 
+  // Plowable snow (or freezing rain) on the way, from the storm watch
+  // (stormwatch.js, functions/stormwatch.py): when, how much, how many
+  // accounts take it, the Weather Service's warnings, and the machines to
+  // fix before it -- with Start storm for whoever may start one. Gone once
+  // a storm is open (stormHtml takes over) or the snow has passed.
+  function hourWords(t) {
+    const h = t.getHours();
+    return (h % 12 || 12) + (h < 12 ? ' am' : ' pm');
+  }
+  function dayWord(t) {
+    const d = Math.round((new Date(localYMD(t) + 'T12:00:00') - new Date(today() + 'T12:00:00')) / 864e5);
+    if (d === 0) return t.getHours() >= 18 ? 'tonight' : 'today';
+    if (d === 1) return t.getHours() >= 18 ? 'tomorrow night' : 'tomorrow';
+    return t.toLocaleDateString('en-US', { weekday: 'short' });
+  }
+  function whenWords(a, b) {
+    const s = a ? new Date(a) : null, e = b ? new Date(b) : null;
+    if (!s || isNaN(s)) return '';
+    const head = dayWord(s) + ' ' + hourWords(s);
+    if (!e || isNaN(e)) return head;
+    return head + ' to ' + (localYMD(e) === localYMD(s) ? '' : dayWord(e) + ' ') + hourWords(e);
+  }
+  function inchWords(lo, hi) {
+    if (lo == null) return '';
+    const n = x => { const v = Math.round(x * 2) / 2; return v === Math.floor(v) ? String(v) : v.toFixed(1); };
+    return n(lo) === n(hi) ? 'about ' + n(lo) + ' in' : n(lo) + ' to ' + n(hi) + ' in';
+  }
+  function stormWatchHtml() {
+    const o = window.YDStormWatch && YDStormWatch.outlook();
+    if (!o) return '';
+    if (window.YDStages.stormOpen(window.YDStorm && YDStorm.current())) return '';
+    const snow = o.inPlay > 0;
+    const head = snow ? '❄️ <b>Plowable snow likely</b>' + (o.ice ? ' + 🧊 freezing rain' : '')
+      : '🧊 <b>Freezing rain likely</b> — salt run';
+    const when = snow ? whenWords(o.start, o.end) : whenWords(o.iceStart, o.iceEnd);
+    const bits = snow ? [inchWords(o.inchesLo, o.inchesHi), o.inPlay + ' of ' + o.accounts + ' accounts in play',
+      o.pop ? o.pop + '% chance' : ''].filter(Boolean) : [];
+    const alerts = (o.alerts || []).map(x => '⚠️ ' + esc(x.event) + ' (' + esc(x.county) + ')');
+    const fix = (o.machines || []).map(m => '🔧 <b>' + esc(m.name) + '</b>' +
+      (m.what ? ' — ' + esc(m.what) : '') + ' <span>(' + (m.urgency === 'down' ? 'out of service' : 'fix before it goes out') + ')</span>');
+    const checked = o.at ? new Date(o.at) : null;
+    const a = window.YDAuth || {};
+    const starts = typeof window.startStorm === 'function' &&
+      (ydCan('snow', 'change') || (signedIn() && (a.isAdmin || a.role === 'admin')));
+    return '<div class="hm-storm hm-watch">' +
+      '<button class="hm-alert" onclick="switchTab(\'snow\')">' +
+        '<span class="hm-storm-l1">' + head + (when ? ' — ' + esc(when) : '') + '</span>' +
+        (bits.length ? '<span class="hm-watch-l2">' + esc(bits.join(' · ')) + '</span>' : '') +
+        alerts.map(x => '<span class="hm-watch-warn">' + x + '</span>').join('') +
+        (fix.length ? '<span class="hm-watch-fix">Before it starts:</span>' +
+          fix.map(x => '<span class="hm-watch-row">' + x + '</span>').join('') : '') +
+        '<span class="hm-watch-small">From the forecast at each account' +
+          (checked && !isNaN(checked) ? ', checked ' + esc(checked.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+            .replace(/\s*([AP])M$/i, (m, ap) => ap.toLowerCase() + 'm')) : '') + ' · Snow ›</span>' +
+      '</button>' +
+      (starts ? '<button class="btn btn-filled hm-storm-in" onclick="homeWatchStart()">❄ Start storm</button>' : '') +
+    '</div>';
+  }
+
   // This person's own clock (not the owner's: his is on the Clock tab, and
   // the crew's are under the crew's day).
   function clockHtml() {
@@ -996,7 +1055,7 @@
     // the crew, hours to look at, receipts -- then his day, the crew's, and
     // the work and the money. The crew: their clock, their day, the rest of
     // the crew, their jobs.
-    const top = greetingHtml() + actionsHtml() + stormHtml() + statsHtml(all);
+    const top = greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + statsHtml(all);
     // The owner's day is wide (placesHtml: his office and out lists side by
     // side), so on a wide screen it takes two thirds of the width beside
     // Waiting on you, and the rest flow in columns under them. A phone has
@@ -1135,6 +1194,12 @@
     window.clockInTo('storm', s.id);
     if (showing()) render();
   };
+  // Start storm from the storm watch card: on the Snow tab, the storm's own
+  // start form (storm.js startStorm checks who may).
+  window.homeWatchStart = function () {
+    if (typeof switchTab === 'function') switchTab('snow');
+    if (typeof window.startStorm === 'function') window.startStorm();
+  };
   window.homeAddEntry = function () {
     if (window.calAdd) calAdd(today());
   };
@@ -1170,7 +1235,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

@@ -167,6 +167,9 @@ def run():
         # End-of-day reports in (the owner told), and the day's reminder to
         # whoever has not sent theirs (endofday.py).
         ("end of day", (), lambda: _end_of_day(db, people, now)),
+        # Plowable snow or freezing rain coming, Nov-Apr: checked every three
+        # hours, one push per snowfall (stormwatch.py).
+        ("storm watch", (), lambda: _storm_watch(db, people, prefs, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -180,6 +183,11 @@ def run():
     if clocked.get("stopped"):
         sent.append({"clockStopped": clocked["stopped"]})
     return sent
+
+
+def _storm_watch(db, people, prefs, now):
+    import stormwatch
+    return stormwatch.run(db, people, prefs, now)
 
 
 def _set_reminders(db, people, cals, since, now):

@@ -1715,9 +1715,11 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
 # notify.js too.
 DEFAULT_PREFS = {
     "owner": {"email": True, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True,
-              "crewActivity": True},
+              "crewActivity": True, "stormWatch": True},
+    # stormWatch None: the role decides -- admins hear it, the crew only when
+    # they switch it on (stormwatch.who_hears).
     "crew": {"email": False, "push": True, "morning": True, "midday": True, "evening": True, "autoRemind": True,
-             "crewActivity": False},
+             "crewActivity": False, "stormWatch": None},
 }
 
 

@@ -3889,6 +3889,14 @@
   .hm-alert .hm-storm-what { flex:1; min-width:0; font-weight:700; color:var(--text); font-size:15px; overflow-wrap:anywhere; }
   .hm-storm .hm-alert-go { flex:none; }
   .hm-storm-in { width:100%; min-height:50px; margin-top:8px; font-size:15px; }
+  /* Home: storm watch -- snow on the way (stormwatch.js) */
+  .hm-watch .hm-alert { gap:4px; }
+  .hm-alert .hm-watch-l2 { display:block; color:var(--text); font-weight:600; font-size:14px; }
+  .hm-alert .hm-watch-warn { display:block; color:var(--neg); font-weight:700; font-size:13px; }
+  .hm-alert .hm-watch-fix { display:block; margin-top:4px; color:var(--text); font-weight:700; font-size:13px; }
+  .hm-alert .hm-watch-row { display:block; color:var(--text); font-size:13px; overflow-wrap:anywhere; }
+  .hm-alert .hm-watch-row span { font-size:12.5px; }
+  .hm-alert .hm-watch-small { display:block; margin-top:2px; font-size:12px; }
   .hm-flash { animation:uxc-flash 1.6s ease-out; }
   @keyframes uxc-flash { 0%, 40% { box-shadow:0 0 0 4px #3fb6d8; } 100% { box-shadow:0 0 0 4px rgba(63,182,216,0); } }
   /* Home: your clock -- Clock out on its own, marked; the long-shift note */

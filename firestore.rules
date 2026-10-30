@@ -205,7 +205,11 @@ service cloud.firestore {
         || (docId == 'customers' && canSee('contacts'))
         // The end-of-day list (eod.js): what to fill in and who gets it.
         // Everyone who works here reads it; only the owner changes it.
-        || (docId == 'endOfDay' && isStaff());
+        || (docId == 'endOfDay' && isStaff())
+        // Storm watch (functions/stormwatch.py): the snow coming and the
+        // accounts in play, on Home for everyone who works here. Written by
+        // the server alone.
+        || (docId == 'stormWatch' && isStaff());
       allow write: if isOwner()
         // What was marked Not a receipt (receipts.js rcNotReceipt), for the
         // email reader to learn from: whoever sorts receipts adds a mark or
