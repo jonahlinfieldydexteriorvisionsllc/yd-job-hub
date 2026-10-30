@@ -1,5 +1,5 @@
 // Storm watch on Home: what the server last saw coming (functions/
-// stormwatch.py, every three hours November to April) -- plowable snow at
+// stormwatch.py, every three hours October to April) -- plowable snow at
 // the snow accounts, or freezing rain. Jonah's routine 3 of 14: a push, and
 // a "Start storm" card on Home with a short pre-storm list (home.js
 // stormWatchHtml draws it from YDStormWatch.outlook()).

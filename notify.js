@@ -222,9 +222,9 @@
         // to a calendar or makes a change" (functions/reminders.py _activity).
         (isOwner() ? toggle('crewActivity', 'When the crew add or change something',
           'a card or calendar entry added, changed, finished or ticked off by anyone but you — one buzz every few minutes at most') : '') +
-        // Storm watch (functions/stormwatch.py), November to April.
+        // Storm watch (functions/stormwatch.py), October to April.
         toggle('stormWatch', '❄️ When plowable snow is coming',
-          'November to April: when the forecast reaches the plow depth of any snow account, or freezing rain is ' +
+          'October to April: when the forecast reaches the plow depth of any snow account, or freezing rain is ' +
           'coming — once per snowfall, and at night only when it starts by morning') +
       '</div>' +
       '<div class="ntf-block"><div class="ntf-head">Which updates</div>' +

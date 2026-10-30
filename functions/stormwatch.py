@@ -34,7 +34,7 @@ from google.cloud import firestore
 import digest as dg
 
 STATE = ("settings", "stormWatch")
-SEASON_MONTHS = (11, 12, 1, 2, 3, 4)       # November to April
+SEASON_MONTHS = (10, 11, 12, 1, 2, 3, 4)   # October to April: early snow happens, and a check costs nothing
 CHECK_EVERY = datetime.timedelta(hours=3)
 RETRY_AFTER = datetime.timedelta(minutes=30)   # a forecast that did not come back
 LOOK_AHEAD_H = 48
