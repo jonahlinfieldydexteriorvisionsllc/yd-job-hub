@@ -112,10 +112,18 @@
 
   // ------------------------------------------------------------ state
 
+  // From the server, but at most every READ_AGAIN_MS: this runs seconds
+  // after every job or card change (while he types), and what this device
+  // writes is kept in `state` as it goes. Another device's change is seen
+  // within two minutes; the cards' own ids stop a second card meanwhile.
+  const READ_AGAIN_MS = 120000;
+  let readAt = 0;
   function read() {
     if (reading) return reading;
+    if (state && Date.now() - readAt < READ_AGAIN_MS) return Promise.resolve(state);
     reading = Promise.resolve(window.YDDb.getFresh('settings', DOC)).then(d => {
       state = { jobs: (d && d.jobs) || {} };
+      readAt = Date.now();
       return state;
     }).finally(() => { reading = null; });
     return reading;
@@ -221,7 +229,7 @@
         // a first day moved past two weeks leaves the card as it is.
         const still = (typeof ordersJobs === 'function' ? ordersJobs() : []).find(x => x.id === jobId);
         if ((!still || !still.left.length || still.done) && YDBoards.setDone) {
-          YDBoards.setDone(TODO, k.cardId, true);
+          YDBoards.setDone(TODO, k.cardId, true, true);
           save({ [jobId]: Object.assign({}, k, { autoDone: true }) });
         }
       }

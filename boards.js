@@ -4020,14 +4020,19 @@
     isMine: (card, board) => isMineCard(board, card),
     // The calendar's "any time today" list ticks a card off: to Done (as a
     // drag there would), or back to the first column.
-    setDone: (boardId, cardId, done) => {
+    // `byItself`: Job Hub ticking off a card it made (the ticket came in,
+    // everything is ordered) -- moved without the checklist question or the
+    // Undo bar, which would pop up on his screen out of nowhere.
+    setDone: (boardId, cardId, done, byItself) => {
       const b = boards[boardId];
       if (!b || !(cards[boardId] || {})[cardId]) return false;
       // A board with no done column has nowhere to tick a card off to.
       if (done && !doneColOf(b)) return false;
+      const col = done ? doneColOf(b) : b.columns[0].id;
+      if (byItself) { moveCard(boardId, cardId, col, null); return true; }
       // A person's tick: a checklist not all ticked is asked about first,
       // and the card moves (and the calendar is told) once they say so.
-      moveByHand(boardId, cardId, done ? doneColOf(b) : b.columns[0].id, null);
+      moveByHand(boardId, cardId, col, null);
       return true;
     },
     // For the calendar: every stored card with a due date, with its board.

@@ -106,10 +106,18 @@
 
   // ------------------------------------------------------------ state
 
+  // From the server, but at most every READ_AGAIN_MS: this runs seconds
+  // after every job or card change (while he types), and what this device
+  // writes is kept in `state` as it goes. Another device's change is seen
+  // within two minutes; the cards' own ids stop a second card meanwhile.
+  const READ_AGAIN_MS = 120000;
+  let readAt = 0;
   function read() {
     if (reading) return reading;
+    if (state && Date.now() - readAt < READ_AGAIN_MS) return Promise.resolve(state);
     reading = Promise.resolve(window.YDDb.getFresh('settings', DOC)).then(d => {
       state = { jobs: (d && d.jobs) || {} };
+      readAt = Date.now();
       return state;
     }).finally(() => { reading = null; });
     return reading;
@@ -186,7 +194,7 @@
         // The ticket came in: its to-do is done.
         if (t && !t.lapsed && k && k.cardId) {
           const c = cardNow(j.id);
-          if (c && !cardDone(c) && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true);
+          if (c && !cardDone(c) && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true, true);
           continue;
         }
         if (k || (t && !t.lapsed) || BOOKED.indexOf(statusOf(d)) === -1 || !digs(d)) continue;
@@ -247,7 +255,7 @@
     // Its "File the Diggers ticket" to-do goes too: nothing ticks it off once
     // the job needs no ticket, so it sat open on My to-dos.
     const c = cardNow(id), k = state && state.jobs[id];
-    if (c && !cardDone(c) && k && k.cardId && window.YDBoards && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true);
+    if (c && !cardDone(c) && k && k.cardId && window.YDBoards && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true, true);
     save({ [id]: Object.assign({}, k || {}, { none: true, at: iso() }) });
     render();
   };
