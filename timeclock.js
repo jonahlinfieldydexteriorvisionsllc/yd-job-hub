@@ -186,6 +186,23 @@
     return source === 'manual' || paid > LONG_SHIFT_MS;
   }
 
+  // Jonah, 30 Oct 2026: "make it so [one crew member] can adjust his own shifts without
+  // my approval. but [him] only." Whoever the owner ticks "Fixes his own
+  // shifts" for on Your Crew (users.ownShifts, toggleOwnShifts) types in a
+  // shift they forgot, changes the times of one of their own, or clocks out
+  // of a long day, and it counts at once -- within the same limits the rules
+  // hold them to (firestore.rules ownChange): their own shifts from the last
+  // OWN_DAYS, never one turned down, never in the future, at most OWN_MAX_MS
+  // long. Everyone else's shifts go to the owner as before.
+  const OWN_DAYS = 31;
+  const OWN_MAX_MS = 16 * 3600000;
+  const fixesOwn = uid => !!(people[uid] || {}).ownShifts;
+  function settlesOwn(e) {
+    const u = me();
+    return !!u && !isOwner() && fixesOwn(u.uid) && (!e || (e.uid === u.uid && e.status !== 'rejected' &&
+      startMsOf(e) >= Date.now() - OWN_DAYS * 86400000));
+  }
+
   // 'ok' is a finished shift that stands on its own; 'approved' is one the
   // owner decided. Both are real hours and both count.
   const counts = e => e.status === 'ok' || e.status === 'approved';
@@ -670,19 +687,24 @@
       pauses: [],
       note: why,
       source: 'manual',
-      status: 'pending',       // always: nobody watched the clock run
+      status: 'pending',       // nobody watched the clock run...
       createdBy: u.uid,
     };
+    // ...unless it is their own and the owner lets them settle their own
+    // shifts: it counts at once, and nobody is asked.
+    const own = forUid === u.uid && settlesOwn() && startMs >= Date.now() - OWN_DAYS * 86400000 &&
+      endMs - startMs <= OWN_MAX_MS;
+    if (own) rec.status = 'ok';
     // Sent in by the crew, the owner's phone is told (reminders.py
     // crew_shifts) so it is approved while the day is remembered; one he
     // typed in himself needs no telling.
-    if (!isOwner()) rec.notifiedAt = null;
+    else if (!isOwner()) rec.notifiedAt = null;
     if (repair) Object.assign(rec, repairFields(repair));
     entries[id] = Object.assign({ id: id }, rec);
     addingShift = false; addFor = null;
     render();
     write(id, rec, 'submitting a shift');
-    showToast('Sent in — ' + fmtDur(endMs - startMs) + ' on ' + targetName);
+    showToast((own ? 'Saved — counted, ' : 'Sent in — ') + fmtDur(endMs - startMs) + ' on ' + targetName);
   };
   window.cancelJobPicker = function () { picking = false; clockingFor = null; repairPick = null; render(); };
 
@@ -757,6 +779,8 @@
     // to the owner, because that is where a forgotten clock-out hides -- and
     // one the clock had to stop always does, as the server sends it.
     e.status = late || needsReview(paidMs(e), e.source) ? 'pending' : 'ok';
+    // One trusted with his own shifts: a long day counts as it is.
+    if (e.status === 'pending' && !late && settlesOwn(e) && paidMs(e) <= OWN_MAX_MS) e.status = 'ok';
 
     render();
     lastWrite = write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
@@ -2291,6 +2315,9 @@
             '<button class="btn btn-sm crew-flag' + (YDRemind.isCrewMember(u) ? ' on' : '') +
               '" onclick="toggleCrewMember(\'' + safeId(u.uid) + '\')" title="Crew members see every crew task">' +
               (YDRemind.isCrewMember(u) ? '👷 Crew member' : '+ Crew member') + '</button>' +
+            '<button class="btn btn-sm crew-flag' + (fixesOwn(u.uid) ? ' on' : '') +
+              '" onclick="toggleOwnShifts(\'' + safeId(u.uid) + '\')" title="Their own shifts count without your approval">' +
+              (fixesOwn(u.uid) ? '✎ Fixes own shifts' : '+ Fixes own shifts') + '</button>' +
             '<button class="btn btn-sm" onclick="openAccess(\'' + safeId(u.uid) + '\')">' +
               (u.role === 'admin' ? 'Access' : 'Make admin…') + '</button>' +
             '<button class="btn btn-sm" onclick="renameWorker(\'' + safeId(u.uid) + '\')">Rename</button>' +
@@ -2351,6 +2378,20 @@
     const on = !YDRemind.isCrewMember(u);
     setRole(uid, { crewMember: on }, (u.name || u.email) + (on
       ? ' is crew — they see every crew task' : ' is not crew any more'));
+  };
+
+  // Who may settle their own shifts without the owner (settlesOwn). Asked
+  // before it goes on: it is their hours, and so their pay.
+  window.toggleOwnShifts = async function (uid) {
+    const u = people[uid];
+    if (!u || !isOwner()) return;
+    const who = u.name || u.email;
+    const on = !fixesOwn(uid);
+    if (on && !(await ydConfirm('Shifts ' + who + ' types in, changes or clocks out of (from the last ' + OWN_DAYS +
+        ' days, up to ' + (OWN_MAX_MS / 3600000) + ' hours) will count straight away, without your approval. ' +
+        'You still see every one, marked "Changed by ' + who + '".',
+        { title: 'Let ' + who + ' fix their own shifts?', ok: 'Yes, let them' }))) return;
+    setRole(uid, { ownShifts: on }, who + (on ? ' fixes their own shifts now' : '’s shifts go to you again'));
   };
 
   window.approveCrew = async function (uid) {
@@ -2878,15 +2919,17 @@
   const spanOf = (a, b) => (ms(b) > ms(a) ? fmtDur(ms(b) - ms(a)) : '');
 
   function askHtml(e) {
+    const own = settlesOwn(e);
     return '<div class="add-area wk-ask">' +
-      '<div class="add-label">Ask for a change to ' + new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
+      '<div class="add-label">' + (own ? 'Change' : 'Ask for a change to') + ' ' + new Date(e.startedAt).toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) +
         ' · ' + esc(whereOf(e)) + ' (' + clockTime(e.startedAt) + '–' + clockTime(e.endedAt) + ')</div>' +
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Should have started</span><input type="time" id="crStart" value="' + hm(e.startedAt) + '"></div>' +
         '<div class="field"><span class="label">Should have ended</span><input type="time" id="crEnd" value="' + hm(e.endedAt) + '"></div>' +
       '</div>' +
-      '<div class="field"><span class="label">Why</span><input id="crWhy" placeholder="e.g. forgot to clock out at the shop"></div>' +
-      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="sendRequest()">Send to the office</button>' +
+      '<div class="field"><span class="label">Why' + (own ? ' (if you like)' : '') + '</span><input id="crWhy" placeholder="e.g. forgot to clock out at the shop"></div>' +
+      '<div class="field-actions"><button class="btn btn-filled btn-sm" onclick="sendRequest()">' +
+        (own ? 'Save the change' : 'Send to the office') + '</button>' +
         '<button class="btn btn-sm" onclick="cancelRequest()">Cancel</button></div>' +
     '</div>';
   }
@@ -2926,9 +2969,10 @@
     const start = t && t.start, end = t && t.end;
     const why = ((el('crWhy') || {}).value || '').trim();
     if (!start || !end) { showToast('Put in both times'); return; }
-    if (!why) { showToast('Say why, so the office knows'); return; }
+    if (!why && !settlesOwn(e)) { showToast('Say why, so the office knows'); return; }
     if (start === e.startedAt && end === e.endedAt) { showToast('Those are the times it has now'); return; }
     if (ms(end) - ms(start) > 20 * 3600000) { showToast('That is longer than a day — check the times'); return; }
+    if (settlesOwn(e)) { changeOwn(e, start, end, why); return; }
     const id = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const rec = { type: 'timeEntry', targetPath: 'timeEntries/' + e.id, targetId: e.id,
       requestedBy: u.uid, requestedByName: whoIs(u.uid), reason: why.slice(0, 300), status: 'pending',
@@ -2940,6 +2984,28 @@
     renderWorker();
     showToast('Sent — the office will look at it');
   };
+  // Their own shift, changed by them and counted at once (settlesOwn). The
+  // pay stamped on it is cleared, not worked out here -- nobody stamps their
+  // own wage -- and the owner's device prices it again at their rate
+  // (stampUnpriced). What it said before is kept on it (selfChanged), so the
+  // owner can always see that it was changed, when, and from what.
+  function changeOwn(e, start, end, why) {
+    if (ms(start) < Date.now() - OWN_DAYS * 86400000) { showToast('Only shifts from the last ' + OWN_DAYS + ' days'); return; }
+    if (ms(end) > Date.now() + 2 * 60000) { showToast('It cannot end in the future'); return; }
+    if (ms(end) - ms(start) > OWN_MAX_MS) { showToast('Over ' + (OWN_MAX_MS / 3600000) + ' hours — ask the office for that one'); return; }
+    const patch = {
+      startedAt: start, startedMs: ms(start), endedAt: end, endedMs: ms(end), status: 'ok',
+      rateCents: null, costCents: null, paidHours: null, billableHours: null, approvedBy: null, approvedAt: null,
+      selfChanged: { at: nowIso(), why: (why || '').slice(0, 300),
+        before: { startedAt: e.startedAt || null, endedAt: e.endedAt || null, status: e.status || null } },
+    };
+    Object.assign(e, patch);
+    patchOlder(e.id, patch);
+    asking = null;
+    write(e.id, patch, 'changing their own shift');
+    renderWorker();
+    showToast('Changed — ' + fmtDur(paidMs(e)) + ', counted');
+  }
   window.withdrawRequest = function (id) {
     const r = requests[id];
     if (!r || !isWaiting(r)) return;
@@ -3102,8 +3168,20 @@
       : e.status === 'rejected' ? 'turned down'
       : 'waiting';
   }
-  const rejectedHtml = e => e.status === 'rejected'
-    ? '<span class="shift-why">✕ Turned down' + (e.rejectedReason ? ': “' + esc(e.rejectedReason) + '”' : '') + '</span>' : '';
+  const rejectedHtml = e => (e.status === 'rejected'
+    ? '<span class="shift-why">✕ Turned down' + (e.rejectedReason ? ': “' + esc(e.rejectedReason) + '”' : '') + '</span>' : '') +
+    selfChangedHtml(e);
+  // A shift its own worker changed (settlesOwn): said on it, with what it
+  // was, so the owner sees it without having had to approve it.
+  function selfChangedHtml(e) {
+    const c = e.selfChanged;
+    if (!c || !c.at) return '';
+    const b = c.before || {};
+    const mine = e.uid === (me() || {}).uid;
+    return '<span class="shift-pause">✎ Changed by ' + esc(mine ? 'you' : workerOf(e)) + ' ' + esc(sinceWords(c.at)) +
+      (b.startedAt ? ' — was ' + clockTime(b.startedAt) + '–' + (b.endedAt ? clockTime(b.endedAt) : '?') : ' — typed in') +
+      (c.why ? ': “' + esc(c.why) + '”' : '') + '</span>';
+  }
   // The button to ask for a change, or to change it (the office): the same
   // rules for the table row and the phone's card.
   function shiftAct(e, askable, fixable, big) {
@@ -3111,7 +3189,8 @@
     if (askable) {
       return running(e) || !e.endedAt || e.status === 'rejected' ? ''
         : pendingFor(e.id) ? '<span class="muted">change asked</span>'
-        : '<button class="' + cls + '" onclick="askChange(\'' + safeId(e.id) + '\')">Ask for a change</button>';
+        : '<button class="' + cls + '" onclick="askChange(\'' + safeId(e.id) + '\')">' +
+          (settlesOwn(e) ? 'Change it' : 'Ask for a change') + '</button>';
     }
     if (fixable) {
       return running(e) || !e.endedAt || e.status === 'rejected' || !mayDecide(e) ? ''

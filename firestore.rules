@@ -469,11 +469,57 @@ service cloud.firestore {
         );
       }
 
+      // Jonah, 30 Oct 2026: "make it so [one crew member] can adjust his own shifts
+      // without my approval. but [him] only." Whoever the owner ticks
+      // "Fixes his own shifts" for on Your Crew (users/{uid}.ownShifts --
+      // only the owner writes a user record, so nobody ticks it for
+      // themselves) may type in a shift they forgot, or change the times of
+      // one of their own from the last OWN_DAYS, and it counts at once
+      // ('ok'), no waiting for the owner. Still never their wage or an
+      // approval: the pay stamped on the shift is either left exactly as it
+      // was or cleared (null), and the owner's device prices it again at
+      // their rate (timeclock.js stampUnpriced). Never one already turned
+      // down, never in the future, never longer than OWN_MAX hours, and the
+      // clock's own marks stay as the server left them.
+      function ownShifts() {
+        return isWorker() && myUserDoc().get('ownShifts', false) == true;
+      }
+      function recent(msVal) {
+        return msVal is number && msVal >= request.time.toMillis() - 31 * 24 * 60 * 60 * 1000;
+      }
+      function ownTimesOk() {
+        let d = request.resource.data;
+        return d.status == 'ok' && d.startedMs is number && recent(d.startedMs)
+          && endedInPast() && durationMs() > 0 && durationMs() <= 16 * 60 * 60 * 1000;
+      }
+      function payKept(k) {
+        return request.resource.data.get(k, null) == null
+          || request.resource.data.get(k, null) == resource.data.get(k, null);
+      }
+      function ownChange() {
+        let was = resource.data;
+        return ownShifts()
+          && (was.status == 'running' || was.status == 'ok' || was.status == 'pending' || was.status == 'approved')
+          && recent(was.startedMs)
+          && request.resource.data.source == was.source
+          && ownTimesOk()
+          && payKept('rateCents') && payKept('costCents') && payKept('paidHours')
+          && payKept('billableHours') && payKept('approvedBy') && payKept('approvedAt')
+          && autoMarksKept();
+      }
+
       allow create: if decidesFor(request.resource.data.uid)
         || (isWorker()
             && goodId()
             && request.resource.data.uid == request.auth.uid
             && crewMayCreate()
+            && crewFieldsOnly()
+            && noAutoMarks())
+        || (ownShifts()
+            && goodId()
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.source == 'manual'
+            && ownTimesOk()
             && crewFieldsOnly()
             && noAutoMarks());
 
@@ -503,7 +549,10 @@ service cloud.firestore {
             && crewMayChange()
             && crewFieldsOnly()
             && autoMarksKept())
-        || (isWorker() && resource.data.uid == request.auth.uid && breakOver());
+        || (isWorker() && resource.data.uid == request.auth.uid && breakOver())
+        || (resource.data.uid == request.auth.uid
+            && request.resource.data.uid == resource.data.uid
+            && ownChange());
 
       allow delete: if decidesFor(resource.data.uid);
     }
