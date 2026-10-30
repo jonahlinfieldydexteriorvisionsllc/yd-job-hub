@@ -779,7 +779,13 @@ def publish(db, pid, people=None, now=None, by_hand=False):
             raise RuntimeError("no such place")
     except NotConnected as e:
         ref.set({"status": "notConnected", "error": str(e), "updatedAt": _stamp()}, merge=True)
-        return []
+        # A queued post is only for a place that was hooked up: refused now
+        # (a token run out, a permission taken away), so he is told -- once a
+        # day per place -- rather than its posts quietly stopping.
+        if by_hand or not _claim(db, "social_nc_%s_%s" % (place, now.astimezone(dg.TZ).date().isoformat()), now):
+            return []
+        return _push(db, people, "⚠️ %s needs hooking up again" % NAMES.get(place, "A place"),
+                     str(e)[:140] + " — its posts wait until then. Tap to see.", "yd-social-failed")
     except Retry as e:
         tries = int(d.get("tries") or 0) + 1
         ref.set({"status": "queued" if tries < MAX_TRIES else "failed", "tries": tries, "error": str(e),
