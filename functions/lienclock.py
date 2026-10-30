@@ -59,6 +59,13 @@ def _day(s):
         return None
 
 
+def _fin(job):
+    """The Chicago day the job was finished. completedAt is the phone's UTC
+    time: one marked complete after 7 pm here is the next day in UTC, which
+    would put every lien date a day late -- the unsafe way."""
+    return _day(dg._local_day(job.get("completedAt")))
+
+
 def add_months(d, n):
     """The same day n months on (the 31st into a shorter month: its last day)."""
     m = d.month - 1 + n
@@ -78,7 +85,7 @@ def _local_day(ms):
 def last_work(db, job_id, job):
     """The last day of work on the job (see above), or None."""
     done = str(job.get("jobStatus") or "").lower() in ("complete", "completed", "done")
-    fin = _day(job.get("completedAt")) if done else None
+    fin = _fin(job) if done else None
     days = []
     for s in db.collection("timeEntries").where("targetId", "==", job_id).stream():
         e = s.to_dict() or {}
@@ -149,68 +156,10 @@ def run(db, people, now=None):
     rules = dg.invoice_rules()
     lines, drafted = [], []
     for s in db.collection("invoices").where("open", "==", True).stream():
-        inv = s.to_dict() or {}
-        if not float(inv.get("balance") or 0) > 0:
-            continue
-        job_id = inv.get("jobId")
-        job = jobs.get(job_id) if job_id else None
-        st = dg.invoice_state(inv, job, rules, today)
-        if st.get("kind") == "paid":
-            continue
-        hand = _day(inv.get("lienLastWork"))
-        last = hand or (last_work(db, job_id, job) if job else None)
-        clock = None
-        if last:
-            notice_by, file_by = lien_dates(last)
-            clock = {"lastWork": _iso(last), "noticeBy": _iso(notice_by), "fileBy": _iso(file_by), "byHand": bool(hand)}
-            was = inv.get("lienClock") or {}
-            if any(was.get(k) != v for k, v in clock.items()):
-                s.reference.set({"lienClock": dict(clock, at=now.isoformat())}, merge=True)
-        if st.get("kind") == "waiting":
-            continue            # the deposit is in and the job not done: the rest is not due yet
-        snooze = _day(inv.get("snoozeUntil"))
-        if snooze and snooze > today:
-            continue
-        due = _day(inv.get("dueDate") or inv.get("txnDate"))
-        fin = _day(job.get("completedAt")) if job else None
-        start = max([d for d in (due, fin) if d] or [today])
-        age = (today - start).days
-        who = "%s%s %s" % (inv.get("customerName") or "A customer",
-                           (" #" + str(inv["docNumber"])) if inv.get("docNumber") else "",
-                           "${:,.2f}".format(float(inv.get("balance") or 0)))
-        reached = [x for x in STAGES if age >= x]
-        if reached:
-            stage = reached[-1]
-            # The stage reached, once; the ones before it are passed, not sent late.
-            fresh = _claim(db, "lien%d_%s" % (stage, s.id), now)
-            for x in reached[:-1]:
-                _claim(db, "lien%d_%s" % (x, s.id), now)
-            if fresh and stage in (45, 90):
-                to = str(inv.get("email") or "").strip()
-                if to:
-                    import cards
-                    subject, body = note_words(stage, inv, job)
-                    got = cards.draft_email(to, subject, body)
-                    if got.get("ok"):
-                        drafted.append(s.id)
-                        lines.append("%s — %d days past due: a %s note is in your Gmail Drafts" % (
-                            who, age, "firmer" if stage == 45 else "second"))
-                    else:
-                        lines.append("%s — %d days past due: the note could not be drafted (%s)" % (who, age, got.get("error")))
-                else:
-                    lines.append("%s — %d days past due: no email on the invoice, give them a call" % (who, age))
-            elif fresh:
-                # The lien is about the last work, not the bill: decided at
-                # LIEN_DECIDE days after it (Home and the list say so too).
-                lien = bool(last) and (today - last).days >= LIEN_DECIDE and not inv.get("lienDecided")
-                lines.append("%s — %d days past due: time to call%s" % (
-                    who, age, ", and to decide about a lien (talk to your lawyer)" if lien else ""))
-        # The last day to serve a lien notice coming up, not decided yet.
-        if clock and not inv.get("lienDecided"):
-            left = (_day(clock["noticeBy"]) - today).days
-            if 0 <= left <= NOTICE_WARN and _claim(db, "liennotice_%s_%s" % (s.id, clock["noticeBy"]), now):
-                lines.append("%s — the last day to serve a lien notice is %s (talk to your lawyer)" % (
-                    who, _day(clock["noticeBy"]).strftime("%a %b ") + str(_day(clock["noticeBy"]).day)))
+        try:
+            _one(db, s, jobs, rules, today, now, lines, drafted)
+        except Exception as e:      # noqa: BLE001 -- one invoice must not stop the rest
+            print("lienclock: invoice", s.id, "skipped:", e)
     sent = []
     if lines:
         n = len(lines)
@@ -225,3 +174,78 @@ def run(db, people, now=None):
             except Exception as e:      # noqa: BLE001
                 print("lienclock: push failed:", uid, e)
     return sent
+
+
+def _one(db, s, jobs, rules, today, now, lines, drafted):
+    """One open invoice (run): its lien clock, and the step it has reached."""
+    inv = s.to_dict() or {}
+    if not float(inv.get("balance") or 0) > 0:
+        return
+    job_id = inv.get("jobId")
+    job = jobs.get(job_id) if job_id else None
+    st = dg.invoice_state(inv, job, rules, today)
+    if st.get("kind") == "paid":
+        return
+    hand = _day(inv.get("lienLastWork"))
+    last = hand or (last_work(db, job_id, job) if job else None)
+    clock = None
+    if last:
+        notice_by, file_by = lien_dates(last)
+        clock = {"lastWork": _iso(last), "noticeBy": _iso(notice_by), "fileBy": _iso(file_by), "byHand": bool(hand)}
+        was = inv.get("lienClock") or {}
+        if any(was.get(k) != v for k, v in clock.items()):
+            s.reference.set({"lienClock": dict(clock, at=now.isoformat())}, merge=True)
+    if st.get("kind") == "waiting":
+        return            # the deposit is in and the job not done: the rest is not due yet
+    snooze = _day(inv.get("snoozeUntil"))
+    if snooze and snooze > today:
+        return
+    due = _day(inv.get("dueDate") or inv.get("txnDate"))
+    fin = _fin(job) if job else None
+    start = max([d for d in (due, fin) if d] or [today])
+    age = (today - start).days
+    who = "%s%s %s" % (inv.get("customerName") or "A customer",
+                       (" #" + str(inv["docNumber"])) if inv.get("docNumber") else "",
+                       "${:,.2f}".format(float(inv.get("balance") or 0)))
+    reached = [x for x in STAGES if age >= x]
+    if reached:
+        stage = reached[-1]
+        # The stage reached, once; the ones before it are passed, not sent late.
+        fresh = _claim(db, "lien%d_%s" % (stage, s.id), now)
+        for x in reached[:-1]:
+            _claim(db, "lien%d_%s" % (x, s.id), now)
+        if fresh and stage in (45, 90) and st.get("kind") == "unsent":
+            # A "following up on the invoice" note for one that was never
+            # emailed would say the wrong thing: the bill goes first.
+            lines.append("%s — %d days past due and never emailed: send the invoice from QuickBooks" % (who, age))
+        elif fresh and stage in (45, 90):
+            to = str(inv.get("email") or "").strip()
+            if to:
+                import cards
+                subject, body = note_words(stage, inv, job)
+                try:
+                    got = cards.draft_email(to, subject, body)
+                except Exception as e:      # noqa: BLE001 -- Gmail slow or down
+                    got = {"ok": False, "error": str(e)[:80]}
+                if got.get("ok"):
+                    drafted.append(s.id)
+                    lines.append("%s — %d days past due: a %s note is in your Gmail Drafts" % (
+                        who, age, "firmer" if stage == 45 else "second"))
+                else:
+                    # Not drafted: the step is let go, so tomorrow drafts it again.
+                    db.collection("reminderLog").document("lien%d_%s" % (stage, s.id)).delete()
+                    lines.append("%s — %d days past due: the note could not be drafted (%s)" % (who, age, got.get("error")))
+            else:
+                lines.append("%s — %d days past due: no email on the invoice, give them a call" % (who, age))
+        elif fresh:
+            # The lien is about the last work, not the bill: decided at
+            # LIEN_DECIDE days after it (Home and the list say so too).
+            lien = bool(last) and (today - last).days >= LIEN_DECIDE and not inv.get("lienDecided")
+            lines.append("%s — %d days past due: time to call%s" % (
+                who, age, ", and to decide about a lien (talk to your lawyer)" if lien else ""))
+    # The last day to serve a lien notice coming up, not decided yet.
+    if clock and not inv.get("lienDecided"):
+        left = (_day(clock["noticeBy"]) - today).days
+        if 0 <= left <= NOTICE_WARN and _claim(db, "liennotice_%s_%s" % (s.id, clock["noticeBy"]), now):
+            lines.append("%s — the last day to serve a lien notice is %s (talk to your lawyer)" % (
+                who, _day(clock["noticeBy"]).strftime("%a %b ") + str(_day(clock["noticeBy"]).day)))

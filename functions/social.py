@@ -142,12 +142,18 @@ def _iso(t):
     return t.isoformat() if t else None
 
 
+# Why a post waits when "Posts go up by themselves" is off (plan, publish_due).
+HELD_NO_AUTO = "Waiting for your OK (posts going up by themselves is switched off)"
+
+
 def _parse(s):
+    """A stored time, in Chicago time: a post moved or written in the app is
+    saved in UTC ("...Z"), and its hour and day are read as he sees them."""
     try:
-        t = datetime.datetime.fromisoformat(str(s))
+        t = datetime.datetime.fromisoformat(str(s).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
-    return t if t.tzinfo else t.replace(tzinfo=dg.TZ)
+    return t.astimezone(dg.TZ) if t.tzinfo else t.replace(tzinfo=dg.TZ)
 
 
 def _stamp():
@@ -613,7 +619,7 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
         words = rec.pop("words")
         why = rec.pop("why")
         text, sign = _with_sign_off(place, words, cfg)
-        held = why or ("" if auto else "Waiting for your OK (posts going up by themselves is switched off)")
+        held = why or ("" if auto else HELD_NO_AUTO)
         # A place not hooked up yet: the post is kept for him to copy, and
         # goes back in line by itself once the place is hooked up.
         off = "" if held or hooked[place] else "%s isn't hooked up yet" % NAMES[place]
@@ -698,9 +704,21 @@ def publish_due(db=None, people=None, now=None):
     if not cfg.get("on"):
         return []
     paused = str(cfg.get("pausedUntil") or "")
+    auto = cfg.get("auto") is not False
+    if auto:
+        # Switched back on: the posts held only because it was off go back in
+        # line (one he held himself, or one with words to check, stays held).
+        for s in db.collection("socialPosts").where("status", "==", "held").stream():
+            if (s.to_dict() or {}).get("heldWhy") == HELD_NO_AUTO:
+                s.reference.set({"status": "queued", "heldWhy": None, "updatedAt": _stamp()}, merge=True)
     sent = []
     for s in db.collection("socialPosts").where("status", "==", "queued").stream():
         d = s.to_dict() or {}
+        # "Each waits for my OK": a post already in line when he switched it
+        # off waits for his OK too (plan() holds the ones it makes after).
+        if not auto and not d.get("okAt"):
+            s.reference.set({"status": "held", "heldWhy": HELD_NO_AUTO, "updatedAt": _stamp()}, merge=True)
+            continue
         at = _parse(d.get("at"))
         if not at or at > now:
             continue
@@ -973,11 +991,16 @@ def _refresh_not_connected(db, place):
     """Hooked up now: the posts still to come that were marked not hooked up
     go back in line."""
     now = _now()
+    auto = settings(db).get("auto") is not False
     for s in db.collection("socialPosts").where("status", "==", "notConnected").stream():
         d = s.to_dict() or {}
         at = _parse(d.get("at"))
         if d.get("place") == place and at and at > now:
-            s.reference.set({"status": "queued", "error": None, "updatedAt": _stamp()}, merge=True)
+            # Back in line -- or waiting for his OK while posts going up by
+            # themselves is switched off.
+            line = "queued" if auto or d.get("okAt") else "held"
+            s.reference.set({"status": line, "heldWhy": None if line == "queued" else HELD_NO_AUTO,
+                             "error": None, "updatedAt": _stamp()}, merge=True)
 
 
 def _page(message, ok):

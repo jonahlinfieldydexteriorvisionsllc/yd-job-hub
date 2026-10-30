@@ -21,6 +21,8 @@ import digest as dg
 STATE = ("settings", "deadlines")
 LEADS = (14, 3, 0, -1)          # days before the date (-1: the day after, still not ticked)
 FROM_HOUR = 7
+# The clock began here (30 Oct 2026), as deadlines.js FROM: a date before it is never told as late.
+FROM = datetime.date(2026, 10, 30)
 NUMBER_DAYS = 45                # the sales tax figure kept up to date this close to its date
 MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October",
           "November", "December"]
@@ -220,7 +222,7 @@ def run(db, people, now=None):
     ref = db.collection(STATE[0]).document(STATE[1])
     snap = ref.get()
     c = (snap.to_dict() or {}) if snap.exists else {}
-    near = between(today - datetime.timedelta(days=2), today + datetime.timedelta(days=NUMBER_DAYS), c)
+    near = between(max(today - datetime.timedelta(days=2), FROM), today + datetime.timedelta(days=NUMBER_DAYS), c)
     numbers = {}
     for x in near:
         if x["rule"] == "salesTax" and not x["done"] and x["from"] <= today:

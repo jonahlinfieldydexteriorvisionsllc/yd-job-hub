@@ -353,6 +353,17 @@ def run(db, people, prefs, now=None, force=False):
     if was is None:
         return []
     ref = db.collection(STATE[0]).document(STATE[1])
+    try:
+        return _check(db, people, prefs, now, was, ref)
+    except Exception:
+        # Anything that broke after the claim (a read that failed): marked
+        # failed, so the next look is RETRY_AFTER away, not CHECK_EVERY.
+        ref.set({"failed": True}, merge=True)
+        raise
+
+
+def _check(db, people, prefs, now, was, ref):
+    """The look itself (run, once it has the claim)."""
     accounts = _accounts(db)
     points = sorted({_point_of(a) for a in accounts.values()})
     got = forecast(points, now)

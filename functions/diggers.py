@@ -184,6 +184,35 @@ def _when(iso):
     return "%s %d %s" % (t.strftime("%a %b ") + str(t.day), h, "am" if t.hour < 12 else "pm")
 
 
+def _told_kind(resp):
+    """What the owner was told about a ticket's answers: 'clear', 'waiting'
+    or ''. (Before toldKind, `told` alone was kept: with every utility
+    answered then, it was the clear.)"""
+    resp = resp or {}
+    if resp.get("toldKind"):
+        return resp["toldKind"]
+    if resp.get("told"):
+        return "clear" if resp.get("allDone") else "waiting"
+    return ""
+
+
+def _started(iso, now):
+    """The ticket's start time (clear to dig from) has come."""
+    try:
+        t = datetime.datetime.fromisoformat(str(iso))
+    except (TypeError, ValueError):
+        return False
+    if not t.tzinfo:
+        t = t.replace(tzinfo=dg.TZ)
+    return now >= t
+
+
+def _tell_not_marked(people, who, resp):
+    return _tell_owner(people, "⚠️ Not all marked: %s" % who,
+                       "Diggers ticket %s — still waiting on %s. Call them, or file a No-Show Relocate." % (
+                           resp.get("no") or "", ", ".join(resp.get("waitingNames") or []) or "some utilities"))
+
+
 def _tell_owner(people, title, body):
     out = []
     for uid, u in people.items():
@@ -240,20 +269,23 @@ def scan(db, people, now=None):
             tk = (snap.to_dict() or {}) if snap.exists else {}
             before = tk.get("response") or {}
             ref.set({"no": r["no"], "response": dict(r, at=now.isoformat())}, merge=True)
-            # Only news is told: the first look reads two months back.
+            # Only news is told: the first look reads two months back. Clear to
+            # dig once every utility has answered; "not all marked" only once
+            # the start time has come (an answer still coming before then is
+            # normal -- daily() tells it on the morning it starts).
             recent = now.timestamp() * 1000 - float(m.get("internalDate") or 0) < TELL_WITHIN_MS
-            if tk.get("jobId") and not before.get("told") and recent:
+            told = _told_kind(before)
+            if tk.get("jobId") and recent:
                 job = jobs.get(tk["jobId"]) or {}
                 who = job.get("customerName") or tk.get("workFor") or "a job"
-                if r["allDone"]:
+                if r["allDone"] and told != "clear":
                     sent += _tell_owner(people, "✅ Clear to dig: %s" % who,
                                         "Diggers ticket %s — every utility has answered. Clear from %s." % (
                                             r["no"], _when(tk.get("start"))))
-                else:
-                    sent += _tell_owner(people, "⚠️ Not all marked: %s" % who,
-                                        "Diggers ticket %s — still waiting on %s. Call them, or file a No-Show Relocate." % (
-                                            r["no"], ", ".join(r["waitingNames"]) or "some utilities"))
-                ref.set({"response": {"told": now.isoformat()}}, merge=True)
+                    ref.set({"response": {"told": now.isoformat(), "toldKind": "clear"}}, merge=True)
+                elif not r["allDone"] and not told and _started(tk.get("start"), now):
+                    sent += _tell_not_marked(people, who, r)
+                    ref.set({"response": {"told": now.isoformat(), "toldKind": "waiting"}}, merge=True)
             continue
         tk = parse_ticket(text)
         if not tk:
@@ -301,6 +333,14 @@ def daily(db, people, now=None):
             continue
         if str(job.get("jobStatus") or "").lower() in ("complete", "completed"):
             continue
+        # The start time has come with a utility still not marked (scan tells
+        # the clear the moment it comes; this is the other half).
+        resp = tk.get("response") or {}
+        if resp and not resp.get("allDone") and not _told_kind(resp) and _started(tk.get("start"), now) \
+                and (today - start).days <= 3:
+            who = job.get("customerName") or tk.get("workFor") or "a job"
+            sent += _tell_not_marked(people, who, dict(resp, no=tk.get("no") or s.id))
+            s.reference.set({"response": {"told": now.isoformat(), "toldKind": "waiting"}}, merge=True)
         days = []
         for e in db.collection("timeEntries").where("targetId", "==", tk["jobId"]).stream():
             x = e.to_dict() or {}
