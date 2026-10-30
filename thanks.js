@@ -401,14 +401,19 @@
   // every email Claude writes as him -- follow-ups, replies, a lead's first
   // reply, card emails, plant care, progress updates (functions/voice.py).
   // Here he reads it and changes it; emptied, Claude writes without it.
+  // Until he has one, Claude's proposal (settings/voice.proposed, which the
+  // server never reads) fills the box: Save is his OK.
   window.openVoiceSettings = async function () {
     if (!isOwner() || !window.YDDb) return;
     const now = (await Promise.resolve(window.YDDb.get('settings', 'voice')).catch(() => null)) || {};
-    const got = await ydForm('How you write, for every email Claude writes as you — follow-ups, replies, a lead’s first reply, ' +
+    const proposal = !String(now.guide || '').trim() && String(now.proposed || '').trim();
+    const got = await ydForm((proposal ? 'Claude’s guide from the emails you typed yourself, waiting for your OK: change any line, ' +
+      'then Save to start using it. ' : '') +
+      'How you write, for every email Claude writes as you — follow-ups, replies, a lead’s first reply, ' +
       'card emails, plant care, progress updates. It changes how they sound, never the facts or prices in them. Empty it ' +
       'and Claude writes without it.', [
-      { id: 'guide', label: 'How you write', value: now.guide || '', multiline: true, rows: 14 },
-    ], { title: 'How you write', ok: 'Save' });
+      { id: 'guide', label: 'How you write', value: now.guide || proposal || '', multiline: true, rows: 14 },
+    ], { title: 'How you write', ok: proposal ? 'Save — use it' : 'Save' });
     if (!got) return;
     const guide = String(got.guide || '').trim();
     if (guide === String(now.guide || '').trim()) return;
