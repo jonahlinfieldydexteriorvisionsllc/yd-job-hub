@@ -530,6 +530,13 @@ def _digest(request, path, headers):
                 logged = joblog.evening(_claude())
             except Exception as e:                      # noqa: BLE001
                 print("daily logs not written:", e)
+            # Then a job finished lately, with logs or notes to read, gets
+            # Claude's lessons for next time -- once (lessons.py).
+            try:
+                import lessons
+                lessons.after_finish(_claude())
+            except Exception as e:                      # noqa: BLE001
+                print("lessons not written:", e)
         # Morning and evening, after the summary: the posting schedule's next
         # days filled (social.py -- Claude only for words not yet written),
         # and in the evening his phone told what goes up tomorrow.

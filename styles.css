@@ -5739,6 +5739,15 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .ji-pat-t { flex:1 1 auto; min-width:0; font-size:14px; overflow-wrap:anywhere; }
   .ji-pat-t small { display:block; font-size:12px; color:var(--muted); margin-top:2px; }
   .note-row.note-issue { border-left-color:var(--st-due); }
+  /* A lesson -- something to remember, Claude's from a job's logs, or one
+     from the jobs like this ("Last time on a job like this") -- is no
+     warning: the calm colour. */
+  .ji-row.lesson { border-left-color:var(--st-info); }
+  .ji-row.lesson .ji-chip { color:var(--text); }
+  .ji-next { font-size:14px; margin-top:4px; font-weight:600; overflow-wrap:anywhere; }
+  .ji-from { font-size:12px; margin-top:4px; }
+  .cj-lessons { margin:0 0 12px; padding:10px 12px; border-radius:10px; border:1px solid var(--st-info); background:var(--st-info-soft); }
+  .cj-lessons .ji-row { background:var(--surface); }
   @media (max-width:720px) {
     .ji-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .ji-acts .btn { min-height:44px; }

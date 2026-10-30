@@ -899,6 +899,10 @@
           '<div class="cj-before-body">' + before.join('') + '</div>' +
           (long ? '<button class="link-btn cj-before-more" onclick="cjBeforeAll()">Show all</button>' : '') +
         '</div>' : '') +
+      // What went wrong or right on the jobs like this one -- before the
+      // work starts, while there is time to bring the dump trailer
+      // (jobissues.js; functions/lessons.py).
+      '<div class="cj-lessons" id="cjLessons" hidden></div>' +
       clockHtml(id, preview) +
       // The Diggers Hotline ticket: whether they may dig yet (digging.js).
       (window.YDDigging ? YDDigging.crewHtml(id) : '') +
@@ -964,6 +968,7 @@
     if (bar) bar.innerHTML = barHtml(id, j, preview);
     if (window.YDJobPhotos) YDJobPhotos.mount(el('cjPhotos'), id);
     if (window.YDJobIssues) YDJobIssues.mount(el('cjIssues'), id, j, preview);
+    if (window.YDJobIssues && YDJobIssues.mountLike) YDJobIssues.mountLike(el('cjLessons'), id);
     if (window.YDJobLog) YDJobLog.mount(el('cjLog'), id, j, preview);
     // What the signed PDF says about the job: the crew have no job form.
     if (window.YDSignatures && el('cjSigs') && j) {

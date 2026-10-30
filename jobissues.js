@@ -36,23 +36,46 @@
 // happened and the kind of material ("Too much material — Decorative rock ·
 // 3 jobs"), and the ones not handled yet. The rules let only the owner read
 // everyone's; a crew lead sees the ones they sent.
+//
+// LESSONS (Jonah, 30 Oct 2026: "make it so notes can be added to jobs like
+// if we overorderd on material or issues that arised so claude and the crew
+// and me can learn and do better on future jobs"). Any issue may say what to
+// do next time (issue.nextTime), and "💡 Something to remember next time" is
+// a kind of its own -- what worked, what to watch for. Jonah and an admin
+// note them on the Job tab of any job that has been worked, a finished one
+// too, and Jonah puts any of them right: ✏️ Change, or Remove (deletedAt,
+// with Undo -- nobody's note is ever lost). Claude adds its own when a job is
+// finished, from the job's daily logs and notes (functions/lessons.py; uid
+// 'claude', 🤖 -- no to-do, no buzz). They come back on the next job like
+// it: Claude is given the ones that fit a bid it builds (with the finished
+// jobs, pastjobs.py), and the page of a booked job shows "💡 Last time on a
+// job like this" (jobLessons/{jobId}, made by the server: the crew cannot
+// read other jobs or other people's notes).
 
 (function () {
   'use strict';
 
+  // nextPh: what "next time" might say for that kind (a lesson is one already).
   const TYPES = [
-    { id: 'over', icon: '📦', name: 'Too much material', mat: true, amountPh: 'e.g. about 3 yd left over' },
-    { id: 'short', icon: '📉', name: 'Ran short on material', mat: true, amountPh: 'e.g. needed about 2 more tons' },
-    { id: 'equipment', icon: '🚜', name: 'Needed equipment we didn’t have', equip: true },
-    { id: 'time', icon: '⏰', name: 'Took longer than planned', work: true, amountPh: 'e.g. about half a day more' },
-    { id: 'site', icon: '🚧', name: 'Site problem', needNote: true, notePh: 'e.g. old concrete footing under the bed — had to break it out' },
+    { id: 'over', icon: '📦', name: 'Too much material', mat: true, amountPh: 'e.g. about 3 yd left over',
+      nextPh: 'e.g. order 2 yd less mulch for beds this size' },
+    { id: 'short', icon: '📉', name: 'Ran short on material', mat: true, amountPh: 'e.g. needed about 2 more tons',
+      nextPh: 'e.g. add 10% more base on a sloped yard' },
+    { id: 'equipment', icon: '🚜', name: 'Needed equipment we didn’t have', equip: true,
+      nextPh: 'e.g. book the dump trailer when there’s sod to haul' },
+    { id: 'time', icon: '⏰', name: 'Took longer than planned', work: true, amountPh: 'e.g. about half a day more',
+      nextPh: 'e.g. plan half a day more when the soil is clay' },
+    { id: 'site', icon: '🚧', name: 'Site problem', needNote: true, notePh: 'e.g. old concrete footing under the bed — had to break it out',
+      nextPh: 'e.g. probe the beds for old concrete at the bid' },
+    { id: 'lesson', icon: '💡', name: 'Something to remember next time', needNote: true, noNext: true, lesson: true,
+      notePh: 'e.g. Black steel edging looked best with the river rock — use it again' },
     { id: 'other', icon: '❓', name: 'Something else', needNote: true },
   ];
   const TYPE = {};
   TYPES.forEach(t => { TYPE[t.id] = t; });
   // What a job most often turns out to need -- a tap each; anything else typed.
   const EQUIPMENT = ['Dump trailer', 'Mini-ex', 'Skid steer', 'Dumpster', 'Another truck'];
-  const MAX = { material: 200, equipment: 80, work: 200, amount: 120, note: 1000 };
+  const MAX = { material: 200, equipment: 80, work: 200, amount: 120, note: 1000, next: 400 };
   const PATTERN_DAYS = 365;
   const SHOW_OPEN = 10;
 
@@ -66,7 +89,10 @@
   const numOr = v => { const n = parseFloat(v); return isFinite(n) ? n : null; };
   const fmtNum = q => Number(q).toLocaleString('en-US', { maximumFractionDigits: 2 });
 
-  function all() { return window.YDCrewNotes && YDCrewNotes.issues ? YDCrewNotes.issues() : []; }
+  // One Jonah took off (deletedAt) is gone everywhere -- kept only for Undo.
+  function all() { return (window.YDCrewNotes && YDCrewNotes.issues ? YDCrewNotes.issues() : []).filter(n => !n.deletedAt); }
+  // Claude's own, from a finished job's logs (functions/lessons.py).
+  const isClaude = n => !!n && n.uid === 'claude';
   const newest = (a, b) => String(b.at || '').localeCompare(String(a.at || ''));
   function forJob(id) { return id ? all().filter(n => n.jobId === id).sort(newest) : []; }
   function when(iso) {
@@ -82,10 +108,11 @@
   // draft: { jobId, jobName, mats [{name, supplyId, kind, unit, qty, plant}],
   //          work [{id, title}], type, mat (index | -1 typed | null),
   //          matText, equip (name | '' typed | null), equipText, workId,
-  //          amount, note }
+  //          amount, note, next, editId (✏️ Change: the note's id),
+  //          orig (its issue as it was) }
   let draft = null;
 
-  function modal() {
+  function modal(title) {
     let m = el('issueModal');
     if (!m) {
       m = document.createElement('div');
@@ -97,6 +124,7 @@
       m.querySelector('.modal-close').onclick = () => m.classList.remove('active');
       document.body.appendChild(m);
     }
+    m.querySelector('h2').textContent = title || '⚠️ Note a job issue';
     m.classList.add('active');
     return m.querySelector('.modal-body');
   }
@@ -121,15 +149,40 @@
     if (!signedIn() || !jobId) return;
     const p = partsOf(parts);
     draft = { jobId: jobId, jobName: clip(jobName, 120), mats: p.mats, work: p.work, type: null, mat: null, matText: '',
-              equip: null, equipText: '', workId: null, amount: '', note: '' };
+              equip: null, equipText: '', workId: null, amount: '', note: '', next: '', editId: null, orig: null };
     draw();
   }
+  // ✏️ Change (Jonah): the same form, filled in from the note -- with its
+  // job's own materials and work when that job is the one open on the Job
+  // tab; else what the note says is kept as it is unless he changes it.
+  window.jiEdit = function (id) {
+    if (!isOwner() || !signedIn()) return;
+    const n = all().find(x => x.id === id);
+    if (!n) return;
+    const i = n.issue || {};
+    const here = n.jobId && n.jobId === jobId && typeof getJobData === 'function' && window.YDCrewJobs && YDCrewJobs.workParts;
+    const p = partsOf(here ? YDCrewJobs.workParts(getJobData()) : {});
+    const type = TYPE[i.type] ? i.type : 'other';
+    let mat = null, matText = '';
+    if (TYPE[type].mat && i.material) {
+      const at = p.mats.findIndex(m => (i.supplyId && m.supplyId === i.supplyId) || keyOf(m.name) === keyOf(i.material));
+      if (at >= 0) mat = at; else { mat = -1; matText = i.material; }
+    }
+    let equip = null, equipText = '';
+    if (TYPE[type].equip && i.equipment) {
+      if (EQUIPMENT.indexOf(i.equipment) !== -1) equip = i.equipment; else { equip = ''; equipText = i.equipment; }
+    }
+    draft = { jobId: n.jobId, jobName: clip(n.jobName, 120), mats: p.mats, work: p.work, type: type, mat: mat, matText: matText,
+              equip: equip, equipText: equipText, workId: p.work.some(w => w.id === i.workId) ? i.workId : null,
+              amount: i.amount || '', note: i.note || '', next: i.nextTime || '', editId: n.id, orig: i };
+    draw();
+  };
   // What is typed is read back before the form is drawn again (a tap on a
   // kind or a material redraws it), so nothing typed is lost.
   function keep() {
     if (!draft) return;
     const v = id => { const b = el(id); return b ? b.value : null; };
-    [['jiMatText', 'matText'], ['jiEquipText', 'equipText'], ['jiAmount', 'amount'], ['jiNote', 'note']].forEach(([id, k]) => {
+    [['jiMatText', 'matText'], ['jiEquipText', 'equipText'], ['jiAmount', 'amount'], ['jiNote', 'note'], ['jiNext', 'next']].forEach(([id, k]) => {
       const got = v(id);
       if (got !== null) draft[k] = got;
     });
@@ -138,7 +191,7 @@
 
   function draw() {
     if (!draft) return;
-    const body = modal();
+    const body = modal(draft.editId ? '✏️ Change this note' : '⚠️ Note a job issue');
     const t = draft.type ? TYPE[draft.type] : null;
     const btn = (on, call, inner, cls) => '<button type="button" class="ji-btn' + (cls ? ' ' + cls : '') + (on ? ' on' : '') + '"' +
       pressed(on) + ' onclick="' + call + '">' + inner + '</button>';
@@ -148,7 +201,7 @@
         draft.mats.map((m, i) => btn(draft.mat === i, 'jiMat(' + i + ')', (m.plant ? '🌱 ' : '') + esc(m.name) +
           (m.qty !== null ? '<small>' + esc(fmtNum(m.qty) + (m.unit ? ' ' + m.unit : '')) + ' planned</small>' : ''))).join('') +
         btn(draft.mat === -1, 'jiMat(-1)', '✏️ Something else') + '</div>' +
-        (draft.mat === -1 || !draft.mats.length
+        (draft.mat === -1 || (!draft.mats.length && draft.mat === null)
           ? '<input id="jiMatText" class="ji-text" maxlength="' + MAX.material + '" placeholder="What material — e.g. river rock" value="' + esc(draft.matText) + '">' : '') +
         '</div>';
     }
@@ -168,12 +221,18 @@
         '<input id="jiAmount" class="ji-text" maxlength="' + MAX.amount + '" placeholder="' + esc(t.amountPh || '') + '" value="' + esc(draft.amount) + '"></div>';
     }
     if (t) {
-      more += '<div class="field"><span class="label">Note' + (t.needNote ? '' : ' <span class="muted">(if there’s more to say)</span>') + '</span>' +
+      more += '<div class="field"><span class="label">' + (t.lesson ? 'What to remember' : 'Note' + (t.needNote ? '' : ' <span class="muted">(if there’s more to say)</span>')) + '</span>' +
         '<textarea id="jiNote" rows="3" maxlength="' + MAX.note + '" placeholder="' +
           esc(t.notePh || 'e.g. Should have booked a dump trailer — 2 extra trips to the yard') + '">' + esc(draft.note) + '</textarea></div>' +
-        '<div class="hint">' + (isOwner() ? 'It is kept on the job, with the ones the crew send.'
-          : 'Jonah’s phone gets it. It saves even with no signal and goes when you have it.') + '</div>' +
-        '<div class="field-actions"><button class="btn btn-filled" onclick="jiSend()">' + (isOwner() ? 'Save it' : 'Send to Jonah') + '</button>' +
+        // What to do differently: what the next bid and the next crew are
+        // shown (functions/lessons.py).
+        (t.noNext ? '' : '<div class="field"><span class="label">💡 Next time we should… <span class="muted">(if you know)</span></span>' +
+          '<textarea id="jiNext" rows="2" maxlength="' + MAX.next + '" placeholder="' + esc(t.nextPh || 'e.g. ask about it at the bid') + '">' +
+          esc(draft.next) + '</textarea></div>') +
+        '<div class="hint">' + (draft.editId ? 'The next bid Claude builds and the crew’s next job like it get the changed words.'
+          : isOwner() ? 'It is kept on the job, with the ones the crew send — and comes back on the next job like it, for Claude’s bid and the crew.'
+          : 'Jonah’s phone gets it, and the next job like it shows it. It saves even with no signal and goes when you have it.') + '</div>' +
+        '<div class="field-actions"><button class="btn btn-filled" onclick="jiSend()">' + (draft.editId ? 'Save the change' : isOwner() ? 'Save it' : 'Send to Jonah') + '</button>' +
           '<button class="btn btn-sm" onclick="jiClose()">Cancel</button></div>';
     }
     body.innerHTML = '<div class="ji-job">📐 ' + esc(draft.jobName || 'This job') + '</div>' +
@@ -226,28 +285,48 @@
     const w = t.work ? draft.work.find(x => x.id === draft.workId) : null;
     const amount = t.mat || t.work ? clip(draft.amount, MAX.amount) : '';
     const note = String(draft.note || '').trim().slice(0, MAX.note);
-    if (t.needNote && !note) { showToast('Write what happened'); if (el('jiNote')) el('jiNote').focus(); return; }
+    if (t.needNote && !note) { showToast(t.lesson ? 'Write what to remember' : 'Write what happened'); if (el('jiNote')) el('jiNote').focus(); return; }
+    const next = t.noNext ? '' : String(draft.next || '').trim().slice(0, MAX.next);
+    // Changing one whose job is not open here: the Supplies item, planned
+    // amount and piece of work it was noted with stay, unless changed.
+    const o = draft.editId && draft.orig && draft.orig.type === t.id ? draft.orig : null;
+    const was = o && !m && material && keyOf(material) === keyOf(o.material) ? o : null;
+    const wasWork = o && !w && t.work && !draft.work.length && o.work ? o : null;
     const issue = {
       type: t.id,
       material: material || null,
-      supplyId: m && m.supplyId ? m.supplyId : null,
-      materialKind: m && m.kind ? m.kind : null,
-      unit: m && m.unit ? m.unit : null,
-      planned: m && m.qty !== null ? m.qty : null,
+      supplyId: m && m.supplyId ? m.supplyId : was ? was.supplyId || null : null,
+      materialKind: m && m.kind ? m.kind : was ? was.materialKind || null : null,
+      unit: m && m.unit ? m.unit : was ? was.unit || null : null,
+      planned: m && m.qty !== null ? m.qty : was && was.planned !== undefined ? was.planned : null,
       equipment: equipment || null,
-      workId: w ? w.id : null,
-      work: w ? w.title : null,
+      workId: w ? w.id : wasWork ? wasWork.workId || null : null,
+      work: w ? w.title : wasWork ? wasWork.work : null,
       amount: amount || null,
       note: note || null,
+      nextTime: next || null,
     };
     // In words, for the buzz on his phone and the notes list (each puts
     // its own ⚠️ beside it, from `kind`).
-    const about = material || equipment || (w ? w.title : '');
-    const text = t.name + (about ? ': ' + about : '') + (amount ? ' — ' + amount : '') + (note ? '\n' + note : '');
-    if (!window.YDCrewNotes || !YDCrewNotes.sendIssue || !YDCrewNotes.sendIssue(text, draft.jobId, draft.jobName || null, issue)) {
+    const about = material || equipment || (issue.work || '');
+    const text = t.name + (about ? ': ' + about : '') + (amount ? ' — ' + amount : '') + (note ? '\n' + note : '') +
+      (next ? '\nNext time: ' + next : '');
+    if (draft.editId) {
+      if (!window.YDCrewNotes || !YDCrewNotes.editIssue || !YDCrewNotes.editIssue(draft.editId, issue, text)) {
+        showToast('Not changed — try again in a moment');
+        return;
+      }
+      showToast('Changed');
+      window.jiClose();
+      return;
+    }
+    const id = window.YDCrewNotes && YDCrewNotes.sendIssue ? YDCrewNotes.sendIssue(text, draft.jobId, draft.jobName || null, issue) : null;
+    if (!id) {
       showToast('Not sent — try again in a moment');
       return;
     }
+    // A lesson Jonah notes himself is nothing for him to handle.
+    if (t.lesson && isOwner() && typeof id === 'string') YDCrewNotes.handled(id, true);
     window.jiClose();
   };
 
@@ -266,23 +345,37 @@
     const i = n.issue || {}, t = TYPE[i.type] || TYPE.other;
     const about = aboutHtml(n);
     const id = safe(n.id);
-    return '<div class="ji-row' + (n.readAt ? ' handled' : '') + '">' +
+    const bot = isClaude(n);
+    // A lesson is read, not handled: the word for it says so.
+    const done = t.lesson ? 'Seen' : 'Handled';
+    return '<div class="ji-row' + (n.readAt ? ' handled' : '') + (t.lesson || bot ? ' lesson' : '') + '">' +
       '<div class="ji-top"><span class="ji-chip">' + t.icon + ' ' + esc(t.name) + '</span>' +
-        '<span class="muted">' + (opts && opts.job && n.jobName ? esc(n.jobName) + ' · ' : '') + esc(n.by || 'Someone') + ' · ' + esc(when(n.at)) + '</span></div>' +
+        '<span class="muted">' + (opts && opts.job && n.jobName ? esc(n.jobName) + ' · ' : '') + (bot ? '🤖 Claude' : esc(n.by || 'Someone')) +
+          ' · ' + esc(when(n.at)) + (n.editedAt ? ' · changed' : '') + '</span></div>' +
       (about ? '<div class="ji-about">' + about + '</div>' : '') +
       (i.note ? '<div class="ji-note">' + esc(i.note) + '</div>' : '') +
+      (i.nextTime ? '<div class="ji-next">💡 Next time: ' + esc(i.nextTime) + '</div>' : '') +
       '<div class="ji-acts">' +
         (isOwner()
-          ? (n.readAt ? '<span class="ji-done">✓ Handled</span><button class="link-btn" onclick="jiHandled(\'' + id + '\', false)">Not handled after all</button>'
-            : '<button class="btn btn-sm" onclick="jiHandled(\'' + id + '\', true)">✓ Mark handled</button>') +
+          ? (bot ? '<span class="muted">From the job’s daily logs</span>'
+            : n.readAt ? '<span class="ji-done">✓ ' + done + '</span><button class="link-btn" onclick="jiHandled(\'' + id + '\', false)">Not ' + done.toLowerCase() + ' after all</button>'
+            : '<button class="btn btn-sm" onclick="jiHandled(\'' + id + '\', true)">✓ Mark ' + done.toLowerCase() + '</button>') +
+            '<button class="link-btn" onclick="jiEdit(\'' + id + '\')">✏️ Change</button>' +
+            '<button class="link-btn" onclick="jiRemove(\'' + id + '\')">Remove</button>' +
             (opts && opts.job && n.jobId ? '<button class="link-btn" onclick="jiOpenJob(\'' + safe(n.jobId) + '\')">Open the job</button>' : '')
-          : '<span class="muted">' + (n.readAt ? '✓ Jonah has handled it' : 'Not handled yet') + '</span>') +
+          : '<span class="muted">' + (n.readAt ? '✓ Jonah has ' + (t.lesson ? 'seen' : 'handled') + ' it' : 'Not ' + done.toLowerCase() + ' yet') + '</span>') +
       '</div></div>';
   }
   window.jiHandled = function (id, on) {
     if (!isOwner() || !window.YDCrewNotes || !YDCrewNotes.handled) return;
     YDCrewNotes.handled(id, !!on);
-    if (on && typeof showUndo === 'function') showUndo('Marked handled', () => YDCrewNotes.handled(id, false));
+    if (on && typeof showUndo === 'function') showUndo('Marked done', () => YDCrewNotes.handled(id, false));
+  };
+  // Taken off: no bid or crew page gets it again. Undo puts it back.
+  window.jiRemove = function (id) {
+    if (!isOwner() || !window.YDCrewNotes || !YDCrewNotes.removeIssue) return;
+    YDCrewNotes.removeIssue(id, true);
+    if (typeof showUndo === 'function') showUndo('Removed', () => YDCrewNotes.removeIssue(id, false));
   };
   window.jiOpenJob = function (jobId) {
     if (typeof openNoteJob !== 'function') return;
@@ -307,9 +400,56 @@
     const mine = b.preview ? [] : forJob(b.jobId);
     b.node.innerHTML = '<div class="cj-h">⚠️ Job issues</div>' +
       '<button class="btn cj-go-btn ji-big" ' + (b.preview ? 'disabled title="The crew lead’s button"' : 'onclick="cjIssue(\'' + safe(b.jobId) + '\')"') + '>' +
-        '⚠️ Note a job issue<span class="cj-go-sub">Too much or too little material, equipment we didn’t have, took longer…</span></button>' +
+        '⚠️ Note a job issue<span class="cj-go-sub">Too much or too little material, equipment we didn’t have, took longer, something to remember next time…</span></button>' +
       (mine.length ? '<div class="ji-list">' + mine.slice(0, 20).map(n => rowHtml(n)).join('') + '</div>'
         : b.preview ? '<p class="hint">The crew lead notes them here; you see them on the Job tab and All Jobs.</p>' : '');
+  }
+
+  // ----------------------------------- last time on a job like this
+  //
+  // The lessons from other jobs that fit this one: jobLessons/{jobId}
+  // {items [{id, type, icon, head, planned, amount, note, nextTime, job,
+  // town, when, by}], at}, made by the server once an hour for each booked
+  // or under-way job (functions/lessons.py) -- no customer, no dollars. Read
+  // once a while per job (the phone's own copy when there is no signal).
+  const LIKE_FRESH_MS = 10 * 60 * 1000;
+  const like = {};            // jobId -> { items, at (read), busy }
+  function likeOf(id) { return (id && like[id] && like[id].items) || []; }
+  function readLike(id, then) {
+    if (!id || !signedIn() || !window.YDDb || !YDDb.get) return;
+    const had = like[id];
+    if (had && (had.busy || Date.now() - had.at < LIKE_FRESH_MS)) return;
+    like[id] = { items: had ? had.items : [], at: Date.now(), busy: true };
+    Promise.resolve(YDDb.get('jobLessons', id)).then(d => {
+      const items = d && Array.isArray(d.items) ? d.items.filter(x => x && (x.head || x.note)).slice(0, 8) : [];
+      like[id] = { items: items, at: Date.now(), busy: false };
+      if (then) then();
+    }).catch(() => { like[id] = { items: had ? had.items : [], at: 0, busy: false }; });
+  }
+  function likeListHtml(items) {
+    return '<div class="ji-list">' + items.map(x => {
+      const from = [x.job, x.town, x.when].filter(Boolean).join(' · ');
+      return '<div class="ji-row lesson">' +
+        '<div class="ji-top"><span class="ji-chip">' + esc(x.icon || '💡') + ' ' + esc(x.head || '') + '</span>' +
+          (x.planned ? '<span class="muted">' + esc(x.planned) + '</span>' : '') + '</div>' +
+        (x.amount ? '<div class="ji-about">' + esc(x.amount) + '</div>' : '') +
+        (x.note ? '<div class="ji-note">' + esc(x.note) + '</div>' : '') +
+        (x.nextTime ? '<div class="ji-next">💡 Next time: ' + esc(x.nextTime) + '</div>' : '') +
+        (from || x.by ? '<div class="ji-from muted">' + esc(from) + (x.by ? (from ? ' — ' : '') + esc(x.by) : '') + '</div>' : '') +
+      '</div>';
+    }).join('') + '</div>';
+  }
+  // The crew's page of a job (crewjobs.js puts the box near its top).
+  function mountLike(node, id) {
+    if (!node) return;
+    const draw = () => {
+      if (!node.isConnected) return;
+      const items = likeOf(id);
+      node.hidden = !items.length;
+      node.innerHTML = items.length ? '<div class="cj-h">💡 Last time on a job like this</div>' + likeListHtml(items) : '';
+    };
+    draw();
+    readLike(id, draw);
   }
 
   // ------------------------------------------------------- the Job tab
@@ -326,11 +466,12 @@
       sec.className = 'section';
       sec.id = 'jobIssuesSection';
       sec.hidden = true;
-      sec.innerHTML = '<div class="section-head"><span class="section-title">⚠️ Issues from the crew</span>' +
+      sec.innerHTML = '<div class="section-head"><span class="section-title">⚠️ Issues &amp; lessons</span>' +
         '<span class="section-badge" id="jobIssuesBadge"></span></div><div class="section-body" id="jobIssuesBody"></div>';
       after.insertAdjacentElement('afterend', sec);
     }
     drawJob();
+    readLike(jobId, () => { if (id === jobId) drawJob(); });
   }
   // A bid has not been worked: nothing to note, unless one was.
   function jobIsWorked() {
@@ -341,13 +482,16 @@
     const sec = el('jobIssuesSection'), body = el('jobIssuesBody'), badge = el('jobIssuesBadge');
     if (!sec || !body) return;
     const list = forJob(jobId);
-    sec.hidden = !jobId || !signedIn() || !can('jobs', 'see') || (!list.length && !jobIsWorked());
+    const like = likeOf(jobId);
+    sec.hidden = !jobId || !signedIn() || !can('jobs', 'see') || (!list.length && !jobIsWorked() && !like.length);
     if (sec.hidden) return;
     const open = list.filter(n => !n.readAt).length;
     if (badge) badge.textContent = open ? open + ' not handled' : '';
     body.innerHTML = (list.length ? '<div class="ji-list">' + list.map(n => rowHtml(n)).join('') + '</div>'
-        : '<p class="empty-msg">' + (isOwner() ? 'Nothing from the crew on this job.' : 'You haven’t noted anything on this job.') + '</p>') +
-      '<div class="field-actions"><button class="btn btn-sm ro-ok" onclick="jiNew()">⚠️ Note an issue</button></div>';
+        : '<p class="empty-msg">' + (isOwner() ? 'Nothing noted on this job yet.' : 'You haven’t noted anything on this job.') + '</p>') +
+      (jobIsWorked() ? '<div class="field-actions"><button class="btn btn-sm ro-ok" onclick="jiNew()">⚠️ Note an issue or lesson</button></div>' : '') +
+      // What the crew are shown for it from the jobs like it.
+      (like.length ? '<div class="cj-h" style="margin-top:14px">💡 Last time on a job like this</div>' + likeListHtml(like) : '');
   }
   window.jiNew = function () {
     if (!jobId || typeof getJobData !== 'function') return;
@@ -386,6 +530,8 @@
       const i = n.issue || {};
       if (!(Date.parse(n.at) >= since)) return;
       const t = TYPE[i.type] || TYPE.other;
+      // Something to remember is no count of anything going wrong.
+      if (t.lesson) return;
       let k = t.id, label = '';
       if (t.mat && i.materialKind) { k += '|k:' + keyOf(i.materialKind); label = kindName(i.materialKind); }
       else if (t.mat && i.material) { k += '|n:' + keyOf(i.material); label = i.material; }
@@ -467,7 +613,7 @@
 
   window.YDJobIssues = {
     TYPES: TYPES.map(t => ({ id: t.id, icon: t.icon, name: t.name })),
-    open: open, mount: mount, jobShown: jobShown, matHtml: matHtml,
+    open: open, mount: mount, mountLike: mountLike, jobShown: jobShown, matHtml: matHtml,
     // For a later "estimates that learn from finished jobs": every issue
     // this device can read, or one job's, newest first (copies).
     all: () => all().sort(newest), forJob: forJob, patterns: () => patterns(all()),

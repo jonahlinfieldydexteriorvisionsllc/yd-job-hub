@@ -179,6 +179,9 @@ def run():
         # Diggers Hotline tickets read from email (every 30 minutes) and
         # their clocks (once a day after 7 am) (diggers.py).
         ("diggers tickets", (), lambda: _diggers(db, people, now)),
+        # "Last time on a job like this": each crew page's lessons from the
+        # jobs that fit it, once an hour (lessons.py).
+        ("job lessons", (), lambda: _job_lessons(db, now)),
         # The posting schedule: a Facebook / Google / Nextdoor post whose
         # time has come goes up (social.py; planned after the summaries).
         # Last: a slow Facebook photo upload holds nothing else up.
@@ -221,6 +224,11 @@ def _social_posts(db, people, now):
 def _diggers(db, people, now):
     import diggers
     return (diggers.scan(db, people, now) or []) + (diggers.daily(db, people, now) or [])
+
+
+def _job_lessons(db, now):
+    import lessons
+    return lessons.crew_pages(db, now)
 
 
 def _set_reminders(db, people, cals, since, now):

@@ -16,7 +16,10 @@
 //
 // A JOB ISSUE (jobissues.js) is a note of its own kind -- kind 'issue' and
 // an `issue` record beside the usual fields -- so it is told the same way
-// and needs no rule of its own. Its readAt means Jonah has handled it.
+// and needs no rule of its own. Its readAt means Jonah has handled it. He
+// may change its words or take it off (deletedAt, kept for Undo); Claude's
+// own lessons on a finished job (uid 'claude', functions/lessons.py) are
+// kept with them on the job, not in this list of notes from the crew.
 
 (function () {
   'use strict';
@@ -126,7 +129,7 @@
     closeNoteForJonah();
   };
   // A note to Jonah, from the window above or straight from the box at the
-  // top of Home (home.js homeNoteJonah). True when it is on its way.
+  // top of Home (home.js homeNoteJonah). Its id when it is on its way.
   // `more`: what a job issue carries beside the note ({kind, issue}).
   function send(text, jobId, jobName, more) {
     const u = me();
@@ -146,6 +149,19 @@
     // (Jonah himself only ever writes a job issue -- kept on the job.)
     showToast(isOwner() ? 'Saved on the job' : navigator.onLine === false ? 'Saved — it goes to Jonah when you have signal' : 'Sent to Jonah');
     render();
+    return id;
+  }
+  // Jonah putting a job issue right (jobissues.js): its words changed, or
+  // taken off and put back (deletedAt). Saved on the phone at once.
+  function changeIssue(id, patch) {
+    const n = notes[id];
+    if (!n || n.kind !== 'issue' || !isOwner() || !window.YDDb) return false;
+    Object.assign(n, patch);
+    Promise.resolve(window.YDDb.put('crewNotes', id, patch)).catch(e => {
+      if (e && e.code === 'permission-denied') showToast('Not changed — not allowed');
+      else console.warn('[notes] change not yet on the server:', (e && e.code) || e);
+    });
+    render();
     return true;
   }
   // Tell the owner now rather than at the next five-minute run.
@@ -156,7 +172,7 @@
 
   // ----------------------------------------------------- the owner's list
 
-  const unread = () => Object.values(notes).filter(n => !n.readAt);
+  const unread = () => Object.values(notes).filter(n => !n.readAt && !n.deletedAt);
   const isIssue = n => !!n && n.kind === 'issue';
   window.openCrewNotes = function () {
     modal('notesListModal', isOwner() ? '📝 Notes from the crew' : '📝 Your notes to Jonah');
@@ -174,7 +190,8 @@
     }
     if (!m || !m.classList.contains('active')) return;
     const body = m.querySelector('.modal-body');
-    const list = Object.values(notes).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    const list = Object.values(notes).filter(n => !n.deletedAt && n.uid !== 'claude')
+      .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
     // A job issue says "handled" where a note says "read" -- the one word
     // for it everywhere it is shown (jobissues.js says the same).
     body.innerHTML = (list.length ? list.slice(0, 100).map(n =>
@@ -260,6 +277,9 @@
     // note; every issue this device can read (the owner's all, anyone
     // else's their own), as copies; and handled or not (readAt).
     sendIssue: (text, jobId, jobName, issue) => !!jobId && send(text, jobId, jobName, { kind: 'issue', issue: issue }),
+    editIssue: (id, issue, text) => !!String(text || '').trim() && changeIssue(id, { issue: issue,
+      text: String(text).trim().slice(0, MAX_LEN), editedAt: nowIso(), editedBy: myName() }),
+    removeIssue: (id, on) => changeIssue(id, { deletedAt: on ? nowIso() : null }),
     issues: () => Object.values(notes).filter(isIssue).map(n => JSON.parse(JSON.stringify(n))),
     handled: (id, on) => window.markCrewNote(id, on),
     loaded: () => loaded };

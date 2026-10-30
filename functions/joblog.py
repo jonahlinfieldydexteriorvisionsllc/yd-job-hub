@@ -163,6 +163,10 @@ def facts(db, job_id, day, people=None):
                           "text": str(n.get("text")).strip()[:NOTE_CHARS], "kind": "note"})
     for s in db.collection("crewNotes").where("jobId", "==", job_id).stream():
         n = s.to_dict() or {}
+        # Claude's own lessons on a finished job (lessons.py) are read from
+        # these logs -- not part of a day's facts; one taken off is gone.
+        if n.get("uid") == "claude" or n.get("deletedAt"):
+            continue
         if _within(n.get("at"), lo_iso, hi_iso) and str(n.get("text") or "").strip():
             notes.append({"by": name_of(n.get("uid"), n.get("by")), "at": n.get("at") or "",
                           "text": str(n.get("text")).strip()[:NOTE_CHARS],

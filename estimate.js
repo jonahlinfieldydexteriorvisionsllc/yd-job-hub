@@ -901,8 +901,9 @@
   // and the averages per kind of work; kept on the reply as `learned` and
   // shown under it as "📚 Based on N of your finished jobs" -- to him and to
   // whoever may change jobs, never to someone only looking (it is the
-  // business's margins). Every field there, nothing undefined: the chat is
-  // saved with the job.
+  // business's margins). With them, the lessons noted on past jobs that fit
+  // this bid (functions/lessons.py): which, and on which job. Every field
+  // there, nothing undefined: the chat is saved with the job.
   function cleanLearned(l) {
     if (!l || typeof l !== 'object') return null;
     const n = v => (num(v) === null ? null : Math.round(num(v) * 100) / 100);
@@ -911,8 +912,11 @@
     const kinds = (Array.isArray(l.kinds) ? l.kinds : [])
       .filter(k => k && String(k.name || '').trim() && num(k.n) > 0 && num(k.bid) > 0 && num(k.took) !== null).slice(0, 6)
       .map(k => ({ name: String(k.name).trim().slice(0, 80), n: Math.round(num(k.n)), bid: n(k.bid), took: n(k.took) }));
-    if (!jobs.length && !kinds.length) return null;
-    return { jobs: jobs, kinds: kinds, finished: num(l.finished) > 0 ? Math.round(num(l.finished)) : null,
+    const lessons = (Array.isArray(l.lessons) ? l.lessons : []).filter(x => x && safeId(x.id) && String(x.text || '').trim()).slice(0, 12)
+      .map(x => ({ id: safeId(x.id), jobId: safeId(x.jobId) || null, who: ['claude', 'owner', 'crew'].indexOf(x.who) !== -1 ? x.who : 'crew',
+                   text: String(x.text).trim().slice(0, 300) }));
+    if (!jobs.length && !kinds.length && !lessons.length) return null;
+    return { jobs: jobs, kinds: kinds, lessons: lessons, finished: num(l.finished) > 0 ? Math.round(num(l.finished)) : null,
              dayHours: num(l.dayHours) > 0 ? num(l.dayHours) : null };
   }
   const daysWord = d => String(Math.round(d * 10) / 10);
@@ -926,7 +930,13 @@
     return (d && String(d.customerName || '').trim()) || 'A finished job';
   }
   function learnedHtml(l) {
-    const shown = l.jobs.length || Math.max.apply(null, l.kinds.map(k => k.n));
+    const lessons = l.lessons || [];
+    const shown = l.jobs.length || Math.max.apply(null, l.kinds.map(k => k.n).concat([0]));
+    const who = { claude: '🤖 Claude', owner: 'You', crew: 'The crew' };
+    const lessonLine = x => '<li>' + esc(x.text) + ' <span class="muted">— ' + esc(who[x.who] || 'The crew') +
+      (x.jobId ? ', ' + esc(learnedJobName(x.jobId).replace('A finished job', 'a past job')) : '') + '</span></li>';
+    const lessonsPart = lessons.length ? '<div class="est-learned-h">💡 Lessons from past jobs like this</div><ul>' +
+      lessons.map(lessonLine).join('') + '</ul>' : '';
     const jobLine = j => {
       const d = savedJob(j.id), town = d && String(d.city || '').trim();
       const took = j.took !== null ? 'really took ' + daysWord(j.took) + ' crew-day' + (j.took === 1 ? '' : 's') + overUnder(j.took, j.bid)
@@ -934,19 +944,24 @@
       return '<li><b>' + esc(learnedJobName(j.id)) + '</b>' + (town ? ' · ' + esc(town) : '') +
         (j.bid !== null ? ' · bid ' + daysWord(j.bid) + ' crew-day' + (j.bid === 1 ? '' : 's') : '') + ' · ' + took + '</li>';
     };
-    return '<details class="est-learned"><summary>📚 Based on ' + shown + ' of your finished job' + (shown === 1 ? '' : 's') + '</summary>' +
+    return '<details class="est-learned"><summary>' + (shown ? '📚 Based on ' + shown + ' of your finished job' + (shown === 1 ? '' : 's') +
+        (lessons.length ? ' · 💡 ' + lessons.length + ' lesson' + (lessons.length === 1 ? '' : 's') : '')
+        : '💡 ' + lessons.length + ' lesson' + (lessons.length === 1 ? '' : 's') + ' from past jobs') + '</summary>' +
       (l.jobs.length ? '<ul>' + l.jobs.map(jobLine).join('') + '</ul>' : '') +
       (l.kinds.length ? '<div class="est-learned-h">Kinds of work on this bid with 3 or more finished jobs</div><ul>' +
         l.kinds.map(k => '<li>' + esc(k.name) + ' — ' + k.n + ' jobs: bid ' + daysWord(k.bid) + ' crew-days on average, really took ' +
           daysWord(k.took) + overUnder(k.took, k.bid) + '</li>').join('') + '</ul>' : '') +
-      '<div class="est-learned-note">Claude was shown these jobs — without names or addresses — as examples of what jobs like this ' +
-        'really took: their work, materials and price, the clock’s hours and what the crew noted. Your Pricing rules text always wins.' +
+      lessonsPart +
+      '<div class="est-learned-note">Claude was shown these — without names or addresses — as examples of what jobs like this ' +
+        'really took (their work, materials and price, and the clock’s hours) and what was noted on them to do better next time; ' +
+        'a lesson it follows is flagged on the estimate. Your Pricing rules text always wins.' +
         (l.dayHours ? ' A crew-day is ' + l.dayHours + ' paid hours of the whole crew.'
           : ' Set “Hours in a crew-day” in Pricing rules and the clock’s hours are counted as crew-days.') +
         (window.YDAuth && YDAuth.isOwner ? ' <button type="button" class="link-btn ro-ok" onclick="openPricingRules()">Pricing rules</button>' : '') +
       '</div></details>';
   }
-  const learnedKey = l => l.jobs.map(j => j.id).join(',') + '|' + l.kinds.map(k => k.name + k.n).join(',');
+  const learnedKey = l => l.jobs.map(j => j.id).join(',') + '|' + l.kinds.map(k => k.name + k.n).join(',') +
+    '|' + (l.lessons || []).map(x => x.id).join(',');
 
   // On a phone the chat is part of the page, not a box of its own: its last
   // few messages, and the earlier ones behind a tap (styles.css hides them

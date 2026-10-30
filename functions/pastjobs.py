@@ -3,10 +3,11 @@ that learn from finished jobs").
 
 When Claude builds or talks about a bid (estimates.py draft), it is shown the
 few finished jobs most like it -- the work and materials they were bid with,
-their price, how many crew-days they really took on the clock, and what the
-crew said went wrong -- and, for each kind of work on this bid that at least
-MIN_JOBS finished jobs had, what those were bid at against what they really
-took. So it stops forgetting what Jonah always includes on a job like this,
+their price, how many crew-days they really took on the clock -- and, for each
+kind of work on this bid that at least MIN_JOBS finished jobs had, what those
+were bid at against what they really took. And the lessons noted on past jobs
+that fit this bid (lessons.py: what the crew, Jonah or Claude noted went wrong
+or right, and what to do next time). So it stops forgetting what Jonah always includes on a job like this,
 and the crew-days it suggests (only when he asks -- his call, estimates.SYSTEM)
 follow what jobs really take.
 
@@ -41,8 +42,8 @@ materials -- the rarer a word among his finished jobs, the more it counts.
 
 NEVER SENT TO CLAUDE: a customer's name, address, email or phone. Each job is
 "Job A" with its town; its own name and address are taken out of every word of
-it that is sent (scopes, titles, the crew's notes), and so is anything that
-reads as a street address, an email or a phone number.
+it that is sent (scopes, titles, the lessons noted on it), and so is anything
+that reads as a street address, an email or a phone number.
 
 Read once per server instance and kept CACHE_SECONDS: a few hundred quick
 reads, nothing stored anywhere new -- no second copy of prices and hours to
@@ -67,9 +68,7 @@ MIN_SCORE = 1.5             # less alike than this is no example
 SCOPE_CHARS = 200
 WORK_MAX = 4
 MATS_MAX = 10
-ISSUES_MAX = 4
-
-_cache = {"at": 0.0, "records": None}
+_cache = {"at": 0.0, "records": None, "others": (None, None)}
 
 # Only what a record is made from is read (a job carries its whole estimate
 # conversation, its photos list, its orders...).
@@ -345,7 +344,8 @@ def _scrubber(job, corpus="", others=(None, None)):
 
 def _read(db):
     """Every finished job as a record (no customer in it but its job id, for
-    the app): what was bid, its price, the hours on it, the crew's issues."""
+    the app): what was bid, its price, the hours on it. Every customer's
+    names, as patterns, go in _cache["others"] (name_patterns)."""
     jobs, whole, last = {}, set(), set()
     for s in db.collection("jobs").select(JOB_FIELDS).stream():
         j = s.to_dict() or {}
@@ -358,9 +358,10 @@ def _read(db):
             last.add(ln[0].upper() + ln[1:])
         if is_finished(j):
             jobs[s.id] = j
+    others = _others(whole, last)
+    _cache["others"] = others
     if not jobs:
         return []
-    others = _others(whole, last)
     hours, days = {}, {}
     q = db.collection("timeEntries").where("kind", "==", "job").select(SHIFT_FIELDS)
     for s in q.stream():
@@ -375,21 +376,13 @@ def _read(db):
         h = paid if paid is not None else max(0.0, end - start) / 3600000
         hours[jid] = hours.get(jid, 0.0) + h
         days.setdefault(jid, set()).add(datetime.fromtimestamp(start / 1000, dg.TZ).date())
-    issues = {}
-    try:
-        for s in db.collection("crewNotes").where("kind", "==", "issue").stream():
-            n = s.to_dict() or {}
-            if n.get("jobId") in jobs and isinstance(n.get("issue"), dict) and not n.get("deletedAt"):
-                issues.setdefault(n["jobId"], []).append(n)
-    except Exception as e:                          # noqa: BLE001
-        print("pastjobs: crew issues not read:", e)
     out = []
     for jid, j in jobs.items():
-        out.append(_record(jid, j, hours.get(jid, 0.0), len(days.get(jid, ())), issues.get(jid, []), others))
+        out.append(_record(jid, j, hours.get(jid, 0.0), len(days.get(jid, ())), others))
     return out
 
 
-def _record(jid, j, clock_hours, clock_days, issues, others=(None, None)):
+def _record(jid, j, clock_hours, clock_days, others=(None, None)):
     est = j.get("estimate") or {}
     corpus = " ".join([str(w.get("title") or "") + " " + str(w.get("scope") or "")
                        for w in est.get("work") or [] if isinstance(w, dict)] +
@@ -419,19 +412,13 @@ def _record(jid, j, clock_hours, clock_days, issues, others=(None, None)):
         mats.append({"name": _clip(scrub(m.get("name")), 60), "qty": _qty(m.get("qty")),
                      "unit": _clip(m.get("unit"), 16), "plant": bool(m.get("plant"))})
     typed = sum(_entry_hours(e) for e in j.get("labor") or [])
-    said = []
-    for n in sorted(issues, key=lambda n: str(n.get("at") or "")):
-        i = n["issue"]
-        said.append({"type": str(i.get("type") or "other"), "material": _clip(scrub(i.get("material")), 60),
-                     "equipment": _clip(scrub(i.get("equipment")), 40), "work": _clip(scrub(i.get("work")), 60),
-                     "amount": _clip(scrub(i.get("amount")), 60), "note": _clip(scrub(i.get("note")), 120)})
     done = str(j.get("completedAt") or "")
     price = _money(j.get("jobPrice"))
     text = " ".join(services + [w["title"] for w in work] + [w["scope"] for w in work] + [m["name"] for m in mats])
     return {
         "id": jid, "town": _clip(j.get("city"), 40), "done": done[:10],
         "price": price if price and price > 0 else None,
-        "services": services, "work": work, "mats": mats, "issues": said,
+        "services": services, "work": work, "mats": mats,
         "bid": _bid_days(j), "handTook": _hand(j, "act"),
         "hours": round(clock_hours + typed, 2), "typedHours": round(typed, 2), "clockDays": clock_days,
         "groups": sorted(_groups(services + [w["title"] for w in work])),
@@ -447,6 +434,13 @@ def records(db):
     recs = _read(db)
     _cache.update(at=now, records=recs)
     return recs
+
+
+def name_patterns(db):
+    """Every customer's whole names and last names as patterns (_others), for
+    _scrubber -- read with the records."""
+    records(db)
+    return _cache["others"]
 
 
 def took_days(rec, day_hours):
@@ -541,24 +535,6 @@ def kind_stats(recs, bid, day_hours, exclude=None):
 
 # ------------------------------------------------------------ the message
 
-TYPE_WORDS = {"over": "too much %s", "short": "ran short on %s", "equipment": "needed %s we didn't have",
-              "time": "took longer%s", "site": "site problem", "other": "something else"}
-
-
-def _issue_text(i):
-    t = i["type"]
-    if t in ("over", "short"):
-        s = TYPE_WORDS[t] % (i["material"] or "material")
-    elif t == "equipment":
-        s = TYPE_WORDS[t] % (i["equipment"] or "equipment")
-    elif t == "time":
-        s = TYPE_WORDS[t] % ((" on " + i["work"]) if i["work"] else "")
-    else:
-        s = TYPE_WORDS.get(t, "something else")
-    said = "; ".join(x for x in (i["amount"], i["note"]) if x)
-    return s + (' ("%s")' % said if said else "")
-
-
 def _pct(took, bid):
     if not bid:
         return ""
@@ -605,8 +581,6 @@ def _job_text(letter, r, day_hours):
             rows.append("  Really took: %s%s." % (where, (" -- bid %s crew-days" % _days(r["bid"])) if r["bid"] else ""))
     else:
         rows.append("  Really took: no hours on record%s." % ((" (bid %s crew-days)" % _days(r["bid"])) if r["bid"] else ""))
-    if r["issues"]:
-        rows.append("  The crew said: " + "; ".join(_issue_text(i) for i in r["issues"][:ISSUES_MAX]) + ".")
     return "\n".join(rows)
 
 
@@ -632,8 +606,6 @@ def for_estimate(db, d):
     bid = bid_facts(d)
     picked = similar(recs, bid, exclude)
     kinds = kind_stats(recs, bid, day_hours, exclude)
-    if not picked and not kinds:
-        return "", None
     finished = len([r for r in recs if r["id"] != exclude])
     blocks, shown = [], []
     used = 0
@@ -644,6 +616,17 @@ def for_estimate(db, d):
         blocks.append(t)
         used += len(t)
         shown.append(r)
+    # The lessons noted on past jobs that fit this bid (lessons.py), each
+    # with its job's letter when that job is one shown above. Never in the
+    # way: without them the jobs still go.
+    lessons, taught = "", []
+    try:
+        import lessons as ls
+        lessons, taught = ls.for_bid(db, d, recs, {r["id"]: "ABCDEFGH"[k] for k, r in enumerate(shown)})
+    except Exception as e:                          # noqa: BLE001
+        print("pastjobs: lessons not read:", e)
+    if not shown and not kinds and not lessons:
+        return "", None
     head = ("JONAH'S FINISHED JOBS -- what jobs like this one really took, worked out by the app from his own records "
             "and the crew's clock (%s of his %d finished jobs on record). They are examples, not rules: his takeoff and "
             "estimate rules above always win. Use them (1) to check this estimate is not missing work or materials he "
@@ -656,14 +639,16 @@ def for_estimate(db, d):
                 ("A crew-day is %s paid crew hours (his Pricing rules). " % _qty(day_hours)) if day_hours else
                 "(Hours in a crew-day is not set in his Pricing rules, so the clock's hours are not turned into "
                 "crew-days.) "))
-    parts = [head] + blocks
+    parts = ([head] + blocks) if shown or kinds else []
     if kinds:
         parts.append("KINDS OF WORK on this bid that at least %d finished jobs had (whole jobs that included it, "
                      "what they were bid at against the clock):\n" % MIN_JOBS +
                      "\n".join("- %s (%d jobs): bid %s crew-days on average, really took %s%s." % (
                          k["name"], k["n"], _days(k["bid"]), _days(k["took"]), _pct(k["took"], k["bid"]))
                          for k in kinds))
-    info = {"finished": finished, "dayHours": day_hours, "kinds": kinds,
+    if lessons:
+        parts.append(lessons)
+    info = {"finished": finished, "dayHours": day_hours, "kinds": kinds, "lessons": taught,
             "jobs": [{"id": r["id"], "bid": r["bid"], "took": round(took_days(r, day_hours), 2)
                       if took_days(r, day_hours) is not None else None,
                       "hours": round(r["hours"]) if r["hours"] else None} for r in shown]}

@@ -928,9 +928,27 @@ service cloud.firestore {
         && request.resource.data.text.size() <= 2000
         && request.resource.data.readAt == null && request.resource.data.notifiedAt == null
         && noteId.matches('cn[a-z0-9]+');
+      // A job issue or lesson (jobissues.js) is the owner's to put right
+      // too: its words changed by hand, or taken off (deletedAt -- kept, so
+      // Undo brings it back and nobody else's note is ever lost).
       allow update: if isOwner()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
+        && (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt'])
+          || (resource.data.get('kind', '') == 'issue'
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['readAt', 'issue', 'text', 'editedAt', 'editedBy', 'deletedAt'])
+            && request.resource.data.text is string && request.resource.data.text.size() > 0
+            && request.resource.data.text.size() <= 2000
+            && request.resource.data.issue is map));
       allow delete: if isOwner();
+    }
+
+    // "Last time on a job like this" (lessons.py): for each booked or
+    // under-way job the crew can see, the lessons from other jobs that fit
+    // it -- no customer's name or address, no dollar figure. Written by the
+    // server only; anyone working reads them.
+    match /jobLessons/{jobId} {
+      allow read: if isStaff();
+      allow write: if false;
     }
 
     // End-of-day reports (eod.js; Jonah, 22 Oct 2026: an end-of-day list for
