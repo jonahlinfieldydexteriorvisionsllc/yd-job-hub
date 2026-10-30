@@ -176,6 +176,9 @@ def run():
         # Unpaid invoices: the lien clock and the 45 / 90 / 120-day steps,
         # once a day after 7 am (lienclock.py).
         ("lien clock", (), lambda: _lien_clock(db, people, now)),
+        # Diggers Hotline tickets read from email (every 30 minutes) and
+        # their clocks (once a day after 7 am) (diggers.py).
+        ("diggers tickets", (), lambda: _diggers(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -204,6 +207,11 @@ def _deadlines(db, people, now):
 def _lien_clock(db, people, now):
     import lienclock
     return lienclock.run(db, people, now)
+
+
+def _diggers(db, people, now):
+    import diggers
+    return (diggers.scan(db, people, now) or []) + (diggers.daily(db, people, now) or [])
 
 
 def _set_reminders(db, people, cals, since, now):

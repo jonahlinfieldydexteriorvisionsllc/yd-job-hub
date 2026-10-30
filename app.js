@@ -1179,6 +1179,7 @@ function onStatusChange() {
   updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
   if (window.YDMarkOut) window.YDMarkOut.refresh();
+  if (window.YDDigging) window.YDDigging.refresh();
 }
 function syncStatusSelect() { document.getElementById('jobStatusSelect').value = jobStatus; showBidBanner(); }
 // The Job tab's bid banner: where the bid stands (bidWhere), in the words
@@ -4422,6 +4423,7 @@ function loadJobData(d) {
   dirty = false; updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
   if (window.YDMarkOut) window.YDMarkOut.refresh();
+  if (window.YDDigging) window.YDDigging.refresh();
 }
 
 // The job index holds every job on this device, those in Recently deleted
@@ -4829,6 +4831,7 @@ function clearJobForm() {
   dirty = false; updateCtxBar();
   if (window.YDPlants) window.YDPlants.refresh();
   if (window.YDMarkOut) window.YDMarkOut.refresh();
+  if (window.YDDigging) window.YDDigging.refresh();
 }
 function markDirty() { dirty = true; updateCtxBar(); scheduleAutosave(); scheduleJobTools(); }
 

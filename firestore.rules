@@ -1051,6 +1051,16 @@ service cloud.firestore {
     // (a call, a text), one put off, or the job picked by hand is all anyone
     // writes here.
     // ===================================================================
+    // Diggers Hotline tickets, read from the owner's email by the server
+    // (functions/diggers.py): everyone who works here sees whether a job is
+    // clear to dig (the crew's job page); whoever changes jobs may put a
+    // ticket that matched no job on one (digging.js digPut).
+    match /digTickets/{no} {
+      allow read: if isStaff();
+      allow update: if canChange('jobs')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['jobId', 'jobBy', 'updatedAt'])
+        && request.resource.data.jobBy == 'hand' && request.resource.data.jobId is string;
+    }
     match /invoices/{docId} {
       allow read: if canSee('billing');
       allow update: if canChange('billing')

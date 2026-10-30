@@ -3935,6 +3935,14 @@
   .inv-lien.now { color:var(--text); padding:8px 10px; border-radius:8px; border-left:4px solid var(--neg); background:var(--surface); }
   .inv-lien-ask { margin-top:6px; color:var(--text); font-weight:600; }
   .inv-lien-ask .inv-acts { margin-top:6px; }
+  /* Diggers Hotline tickets (digging.js) */
+  .dig-row .dig-late { color:var(--neg); }
+  .dig-row .dig-loose { display:block; margin-top:2px; }
+  .cj-dig { margin:10px 0; padding:10px 12px; border-radius:10px; border-left:5px solid var(--st-done, #4a5462);
+    background:var(--surface); border-top:1px solid var(--border); border-right:1px solid var(--border); border-bottom:1px solid var(--border);
+    font-size:14px; line-height:1.45; }
+  .cj-dig.wait { border-left-color:var(--neg); }
+  .cj-dig .muted { font-size:12.5px; }
   .hm-flash { animation:uxc-flash 1.6s ease-out; }
   @keyframes uxc-flash { 0%, 40% { box-shadow:0 0 0 4px #3fb6d8; } 100% { box-shadow:0 0 0 4px rgba(63,182,216,0); } }
   /* Home: your clock -- Clock out on its own, marked; the long-shift note */

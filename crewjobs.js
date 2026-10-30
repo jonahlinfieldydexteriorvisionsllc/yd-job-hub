@@ -900,6 +900,8 @@
           (long ? '<button class="link-btn cj-before-more" onclick="cjBeforeAll()">Show all</button>' : '') +
         '</div>' : '') +
       clockHtml(id, preview) +
+      // The Diggers Hotline ticket: whether they may dig yet (digging.js).
+      (window.YDDigging ? YDDigging.crewHtml(id) : '') +
       // Each service a button: what it is, in words to tell the homeowner
       // (services.js What we do).
       ((j.services || []).length ? '<div class="cj-tags">' + j.services.map(s => '<button type="button" class="svc-tag svc-tag-btn" data-n="' + esc(s) +
@@ -987,6 +989,9 @@
   // The services list came in or changed (a how-we-do-it, the paint key):
   // an open page is drawn again with it.
   document.addEventListener('yd-services', () => { pageSig = ''; freshPage(); });
+  // A Diggers Hotline ticket came in or changed (digging.js): whether they
+  // may dig is on the page.
+  document.addEventListener('yd-dig-tickets', () => { pageSig = ''; freshPage(); });
 
   // The job's crew copy changed while its page is open (Jonah changed the
   // work, QuickBooks' words came in): the page is drawn again, where it was

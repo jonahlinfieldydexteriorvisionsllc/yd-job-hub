@@ -910,6 +910,16 @@
           esc(YDDeadlines.whenWords(x.due).replace(/^.* — in /, 'in ')), 'openDeadlines()'));
       });
     }
+    // A digging job starting within a week with no Diggers ticket yet
+    // (digging.js): one tap opens the job.
+    if (isOwner() && window.YDDigging && YDDigging.toFile) {
+      YDDigging.toFile().forEach(x => {
+        any = true;
+        rows.push(line('🚧', '<b>File the Diggers ticket</b> · ' + esc(x.j.name || 'A job'),
+          'First day ' + esc(dayWords(x.first)) + ' — Wisconsin wants it 3 working days ahead', '',
+          typeof loadJob === 'function' ? "homeOpenJob('" + safe(x.j.id) + "')" : ''));
+      });
+    }
     // End-of-day reports in and not read yet (eod.js): a tap opens that one.
     if (isOwner() && window.YDEndOfDay && YDEndOfDay.unread) {
       any = true;
@@ -1250,7 +1260,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 
