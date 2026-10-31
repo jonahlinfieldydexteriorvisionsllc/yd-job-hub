@@ -263,8 +263,17 @@ def write(client, db, job_id, day, people=None, by=None):
     if _needs_reading(f) and client is not None:
         import spend
         if not spend.over_cap(db):
-            got, usage = _ask(client, LOG_SYSTEM, LOG_SCHEMA, _facts_prompt(j, day, f))
-            _spend(db, usage)
+            # Claude busy or down: the code text is the day's log, as the
+            # docstring says -- the error used to lose the whole day's log.
+            try:
+                got, usage = _ask(client, LOG_SYSTEM, LOG_SCHEMA, _facts_prompt(j, day, f))
+            except Exception as e:          # noqa: BLE001
+                print("joblog: Claude not reached for %s %s: %s" % (job_id, day, e))
+                got, usage = None, None
+            try:
+                _spend(db, usage)
+            except Exception as e:          # noqa: BLE001
+                print("joblog: spend not recorded:", e)
             said = str((got or {}).get("log") or "").strip()
             if said:
                 text, how = said[:4000], "claude"
@@ -334,10 +343,19 @@ def draft_update(client, db, job_id, day, uid):
         log = write(client, db, job_id, day, by=uid)
         if not log.get("day"):
             return {"error": "Nothing was noted on this job that day."}, None
+    f = log.get("facts") or {"hours": [], "done": [], "photos": {}, "captions": [], "notes": []}
+    # What the customer is told comes from what was done. A day with only
+    # clock time on it has nothing to tell -- given only hours, Claude would
+    # have to make the day's work up.
+    if not (f.get("done") or sum((f.get("photos") or {}).values()) or f.get("captions") or f.get("notes")):
+        return {"error": "Only clock time was noted on this job that day — add a note of what got done first."}, None
+    # A note meant for him alone (to the owner) and the crew's job issues stay
+    # out of a customer's email.
+    f = dict(f, notes=[x for x in (f.get("notes") or []) if x.get("kind") not in ("toJonah", "issue")])
     first = str(j.get("firstName") or "").strip()
     prompt = ("Customer: %s%s\n" % (str(j.get("customerName") or "").strip() or "(no name)",
                                     (" (first name %s)" % first) if first else "") +
-              _facts_prompt(j, day, log.get("facts") or {"hours": [], "done": [], "photos": {}, "captions": [], "notes": []}) +
+              _facts_prompt(j, day, f) +
               "\n\nThe day's log:\n" + str(log.get("text") or ""))
     import voice
     got, usage = _ask(client, UPDATE_SYSTEM + voice.block(db), UPDATE_SCHEMA, prompt)

@@ -37,6 +37,7 @@ that nothing in it is an instruction. The worst a trick could do is a wrong
 box on a lead or an odd draft, which he reads before anything is sent.
 """
 import datetime
+import hashlib
 import json
 import re
 
@@ -52,6 +53,18 @@ READS_PER_DAY = 40
 # Messages looked at in one run (most are passed over by plain code).
 LOOK_MAX = 60
 TEXT_MAX = 6000
+# An email that fails this many runs in a row is let go (logged "error"):
+# left to fail for ever it held back every email after it.
+MAX_TRIES = 3
+
+
+class ReadFailed(Exception):
+    """Claude's answer could not be used (none, cut short, not JSON). Carries
+    the call's usage, so its cost is still counted."""
+
+    def __init__(self, why, usage=None):
+        super().__init__(why)
+        self.usage = usage
 
 # Senders that are machines, not people.
 AUTOMATIC = re.compile(r"(?i)^(no-?reply|do-?not-?reply|donotreply|notifications?|notify|alerts?|mailer-daemon|"
@@ -163,6 +176,12 @@ def _known(db):
                     e = str(c.get(k) or "").strip().lower()
                     if e:
                         emails.add(e)
+                # The address a lead first wrote from, when the lead is kept
+                # under another one it gave: their next email is no new lead.
+                f = str((c.get("fromEmail") or {}).get("from") or "").strip().lower() \
+                    if isinstance(c.get("fromEmail"), dict) else ""
+                if f:
+                    emails.add(f)
                 for k in ("phone", "mobile"):
                     d = _digits(c.get(k))
                     if d:
@@ -247,8 +266,18 @@ def _read(client, m, services, with_reply=False):
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": _schema(with_reply)}},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
     )
+    if resp.stop_reason == "refusal":
+        # Claude would not read it: whatever it is, it is no customer asking for work.
+        return {"is_lead": False, "why": "Claude declined to read it"}, resp.usage
     out = next((b.text for b in resp.content if b.type == "text"), "")
-    return json.loads(out or "{}"), resp.usage
+    # No answer, or one cut short, is not "not a lead": read as {} it was
+    # logged notLead and a real lead was never looked at again.
+    if not out or resp.stop_reason == "max_tokens":
+        raise ReadFailed("no full answer (%s)" % resp.stop_reason, resp.usage)
+    try:
+        return json.loads(out), resp.usage
+    except ValueError:
+        raise ReadFailed("answer not readable", resp.usage)
 
 
 def _clean(got, who, services):
@@ -299,6 +328,83 @@ def _reply_to(m, mid):
             "references": " ".join(refs.split()[-20:])}
 
 
+
+def _passing(err):
+    """A service down or busy for a while (Gmail, Claude), not something
+    about this one email: tried again freely, never counted against it."""
+    status = getattr(err, "status_code", None)
+    if status is None:
+        status = getattr(getattr(err, "response", None), "status_code", None)
+    if status is None:
+        got = re.search(r"-> (\d{3})", str(err))      # followup._gmail's "gmail /path -> 503"
+        status = int(got.group(1)) if got else None
+    if isinstance(status, int):
+        return status in (408, 409, 429) or status >= 500
+    name = type(err).__name__
+    return any(w in name for w in ("Timeout", "Connection", "Overloaded", "Unavailable"))
+
+
+def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
+    """One email Claude has read: logged, and a lead (with a reply in his
+    Drafts when he wants them) when it is someone asking for work. The news
+    for his phone, or None."""
+    log = db.collection("leadMail").document(mid)
+    if not got.get("is_lead"):
+        log.set({"at": _stamp(), "outcome": "notLead", "why": str(got.get("why") or "")[:200], "from": who})
+        return None
+    r = _clean(got, who, services)
+    phone = _digits(r["phone"])
+    if r["email"] in known["emails"] or (phone and phone in known["phones"]):
+        log.set({"at": _stamp(), "outcome": "known", "from": who})
+        return None
+    # One id per email: another run reading it (two at once, or one after a
+    # run that stopped part way) finds the lead made -- no second lead, reply
+    # or push. Made before the reply is drafted, for the same reason.
+    lead_id = "ld" + hashlib.sha1(mid.encode()).hexdigest()[:14]
+    stamp = _stamp()
+    rec = {k: r[k] for k in ("firstName", "lastName", "business", "email", "phone", "mobile", "street", "city", "state", "zip", "tags")}
+    rec["name"] = _lead_name(r)
+    rec["address"] = ", ".join(x for x in (r["street"], r["city"], " ".join(y for y in (r["state"], r["zip"]) if y)) if x)
+    rec["note"] = _note(r, m)
+    rec.update(id=lead_id, source="email", addedAt=stamp, fromEmail={
+        "messageId": mid, "threadId": m["threadId"], "subject": (m["subject"] or "")[:200], "from": who,
+        "form": why == "form", "summary": r["summary"], "timing": r["timing"], "at": stamp,
+        "draft": None,
+        "link": "https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, m["threadId"] or mid)})
+    ref = db.collection("customers").document(lead_id)
+    try:
+        ref.create(rec)
+    except AlreadyExists:
+        log.set({"at": stamp, "outcome": "lead", "leadId": lead_id, "from": who}, merge=True)
+        return None
+    draft = {}
+    reply = str(got.get("reply") or "").strip() if conf.get("autoDraft") is True else ""
+    # The reply goes back to whoever wrote, as Gmail's Reply does -- not to an
+    # address read out of the email's words (a website form's excepted: that
+    # comes from the form, with the person's own address in it).
+    to = r["email"] if why == "form" else who
+    if reply and to:
+        try:
+            d = cards.draft_email(to, "Re: " + (m["subject"] or "Your request"), reply, _reply_to(m, mid))
+        except Exception as err:    # noqa: BLE001
+            d = {"error": str(err)}
+        if d.get("draftId"):
+            draft = {"draftId": d["draftId"], "link": d.get("link"), "at": stamp}
+            try:
+                ref.update({"fromEmail.draft": draft})
+            except Exception as err:    # noqa: BLE001
+                print("leads: draft not noted on", lead_id, "--", err)
+        else:
+            print("leads: reply not drafted for", mid, "--", d.get("error"))
+    log.set({"at": stamp, "outcome": "lead", "leadId": lead_id, "from": who, "drafted": bool(draft)})
+    known["emails"].add(r["email"])
+    if phone:
+        known["phones"].add(phone)
+    what = r["summary"] or ", ".join(r["tags"]) or (m["subject"] or "")[:80]
+    return {"kind": "followup", "jobId": "lead-" + lead_id, "title": "📬 New lead — " + rec["name"],
+            "body": what + (" — a reply is in your Gmail Drafts." if draft else " — on Customers → Leads; tap Draft a reply there for one.")}
+
+
 def run(client, deadline=None, spent=None):
     """The hourly look (main.py). Returns news for his phone (main._tell_owner,
     kind "followup"). `client` None: Claude can't be used this run (the day's
@@ -316,6 +422,11 @@ def run(client, deadline=None, spent=None):
         print("leads: settings not read --", err)
         return news
     if conf.get("on") is False:
+        # Off: the cursor follows now, so switching it on again reads mail
+        # from then on (left behind, the old inbox was read at once).
+        stamp_now = int(dg._now().timestamp())
+        if int(conf.get("since") or 0) < stamp_now - 3600:
+            conf_ref.set({"since": stamp_now}, merge=True)
         return news
     now = dg._now()
     since = conf.get("since")
@@ -325,12 +436,30 @@ def run(client, deadline=None, spent=None):
         print("leads: reading new mail from now on")
         return news
     q = "in:inbox -from:me -in:chats -category:promotions -category:social -category:forums after:%d" % int(since)
+    # Every page, then the OLDEST not looked at yet: asking Gmail for
+    # LOOK_MAX gave the newest, and with the cursor held back (the day's
+    # limit) older mail could fall out of the list for good.
+    listed, page = [], None
     try:
-        ids = [x["id"] for x in (followup_gmail("/messages", {"q": q, "maxResults": LOOK_MAX}).get("messages") or [])]
+        while True:
+            got = followup_gmail("/messages", dict({"q": q, "maxResults": 500}, **({"pageToken": page} if page else {})))
+            listed.extend(x["id"] for x in got.get("messages") or [])
+            page = got.get("nextPageToken")
+            if not page or len(listed) >= 2000:
+                break
     except Exception as err:        # noqa: BLE001
         print("leads: inbox not read --", err)
         return news
-    ids = [i for i in ids if not db.collection("leadMail").document(i).get().exists]
+    ids, logs = [], {}
+    for i in reversed(listed):          # oldest first
+        snap = db.collection("leadMail").document(i).get()
+        d = (snap.to_dict() or {}) if snap.exists else {}
+        if d.get("outcome"):
+            continue                    # looked at already (a try that failed has none)
+        logs[i] = d
+        ids.append(i)
+        if len(ids) >= LOOK_MAX:
+            break
     if not ids:
         conf_ref.set({"lastRunAt": _stamp()}, merge=True)
         return news
@@ -345,7 +474,38 @@ def run(client, deadline=None, spent=None):
     newest = int(since)
     reads = 0
     looked = 0
-    for mid in reversed(ids):           # oldest first
+
+    def failed(mid, err):
+        """This email failed: tried again next run, the cursor left before
+        it (True: stop here). A service down or busy is tried again freely;
+        anything about the email itself only MAX_TRIES times, then it is let
+        go as "error" (False: go on) -- it used to hold back all mail after it."""
+        if _passing(err):
+            print("leads: message", mid, "waits --", err)
+            return True
+        tries = int(logs.get(mid, {}).get("tries") or 0) + 1
+        print("leads: message", mid, "failed (try %d) --" % tries, err)
+        ref = db.collection("leadMail").document(mid)
+        try:
+            if tries >= MAX_TRIES:
+                ref.set({"at": _stamp(), "outcome": "error", "why": str(err)[:200], "tries": tries}, merge=True)
+                return False
+            ref.set({"tries": tries, "lastError": str(err)[:200], "triedAt": _stamp()}, merge=True)
+        except Exception as e:      # noqa: BLE001
+            print("leads: failure not noted for", mid, "--", e)
+        return True
+
+    def count(usage):
+        nonlocal reads, reads_today
+        reads += 1
+        reads_today += 1
+        if spent and usage is not None:
+            try:
+                spent(usage)
+            except Exception as err:    # noqa: BLE001
+                print("leads: spend not recorded --", err)
+
+    for mid in ids:
         if deadline and time.monotonic() > deadline:
             break
         log = db.collection("leadMail").document(mid)
@@ -353,8 +513,9 @@ def run(client, deadline=None, spent=None):
             head = followup_gmail("/messages/" + mid, {"format": "metadata", "metadataHeaders": [
                 "From", "Reply-To", "Subject", "List-Unsubscribe", "Precedence", "Auto-Submitted"]})
         except Exception as err:    # noqa: BLE001
-            print("leads: message", mid, "not read --", err)
-            break
+            if failed(mid, err):
+                break
+            continue
         looked += 1
         h = lambda n: _hdr(head, n)
         m = {"from": h("From"), "replyTo": h("Reply-To"), "subject": h("Subject"), "listUnsubscribe": h("List-Unsubscribe"),
@@ -373,58 +534,22 @@ def run(client, deadline=None, spent=None):
             m.update(text=full.get("text"), snippet=full.get("snippet"), date=full.get("date"))
             got, usage = _read(client, m, services, conf.get("autoDraft") is True)
         except Exception as err:    # noqa: BLE001
-            print("leads: message", mid, "not read by Claude --", err)
-            break
-        reads += 1
-        reads_today += 1
-        if spent:
-            try:
-                spent(usage)
-            except Exception as err:    # noqa: BLE001
-                print("leads: spend not recorded --", err)
+            if isinstance(err, ReadFailed):
+                count(err.usage)        # paid for, so counted (the day's limit sees it)
+            if failed(mid, err):
+                break
+            newest = max(newest, m["internalDate"] // 1000)
+            continue
+        count(usage)
         newest = max(newest, m["internalDate"] // 1000)
-        if not got.get("is_lead"):
-            log.set({"at": _stamp(), "outcome": "notLead", "why": str(got.get("why") or "")[:200], "from": who})
-            continue
-        r = _clean(got, who, services)
-        phone = _digits(r["phone"])
-        if r["email"] in known["emails"] or (phone and phone in known["phones"]):
-            log.set({"at": _stamp(), "outcome": "known", "from": who})
-            continue
-        lead_id = "ld" + format(int(time.time() * 1000), "x")[-10:] + mid[-4:].lower()
-        lead_id = re.sub(r"[^a-z0-9]", "", lead_id)
-        stamp = _stamp()
-        draft = {}
-        reply = str(got.get("reply") or "").strip() if conf.get("autoDraft") is True else ""
-        if reply and r["email"]:
-            try:
-                d = cards.draft_email(r["email"], "Re: " + (m["subject"] or "Your request"), reply, _reply_to(m, mid))
-            except Exception as err:    # noqa: BLE001
-                d = {"error": str(err)}
-            if d.get("draftId"):
-                draft = {"draftId": d["draftId"], "link": d.get("link"), "at": stamp}
-            else:
-                print("leads: reply not drafted for", mid, "--", d.get("error"))
-        rec = {k: r[k] for k in ("firstName", "lastName", "business", "email", "phone", "mobile", "street", "city", "state", "zip", "tags")}
-        rec["name"] = _lead_name(r)
-        rec["address"] = ", ".join(x for x in (r["street"], r["city"], " ".join(y for y in (r["state"], r["zip"]) if y)) if x)
-        rec["note"] = _note(r, m)
-        rec.update(id=lead_id, source="email", addedAt=stamp, fromEmail={
-            "messageId": mid, "threadId": m["threadId"], "subject": (m["subject"] or "")[:200], "from": who,
-            "form": why == "form", "summary": r["summary"], "timing": r["timing"], "at": stamp,
-            "draft": draft or None,
-            "link": "https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, m["threadId"] or mid)})
         try:
-            db.collection("customers").document(lead_id).create(rec)
-        except AlreadyExists:
-            pass
-        log.set({"at": stamp, "outcome": "lead", "leadId": lead_id, "from": who, "drafted": bool(draft)})
-        known["emails"].add(r["email"])
-        if phone:
-            known["phones"].add(phone)
-        what = r["summary"] or ", ".join(r["tags"]) or (m["subject"] or "")[:80]
-        news.append({"kind": "followup", "jobId": "lead-" + lead_id, "title": "📬 New lead — " + rec["name"],
-                     "body": what + (" — a reply is in your Gmail Drafts." if draft else " — on Customers → Leads; tap Draft a reply there for one.")})
+            item = _one_lead(db, cards, conf, m, mid, who, why, got, services, known)
+        except Exception as err:    # noqa: BLE001 -- one email never stops the rest (or loses their pushes)
+            if failed(mid, err):
+                break
+            continue
+        if item:
+            news.append(item)
     # The cursor moves past what was looked at, never past a message left for
     # later (a stranger over the run's limit): Gmail's after: is to the second.
     patch = {"lastRunAt": _stamp(), "reads": {day: reads_today}}
