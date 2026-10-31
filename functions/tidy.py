@@ -13,6 +13,7 @@ clearable):
     service, reset when one is logged -- not a finished job;
   - a recurring card whose period is not over yet: recurring.js would make
     it again, not done.
+And, here only, a card Claude's last word on asks him something (_asks_him).
 A Pickups card is noted as cleared on its board, so a "still waiting"
 reminder email for an order already picked up does not bring it back
 (receipts.pickup_card).
@@ -45,6 +46,22 @@ def _still_wanted(k):
     claude = k.get("claude") or {}
     return bool((k.get("recurring") and not k.get("confirmedAt")) or k.get("markedDoneBy")
                 or (claude.get("status") == "waiting_ok" and not claude.get("approvedAt")))
+
+
+def _asks_him(k):
+    """Claude's last word on the card asks him something and he hasn't
+    answered (an answer sends the card back out of done, boards.js
+    claudeSend). Wish cards are moved to Built with their questions on them
+    -- how often he files sales tax, say -- and a week on the questions went
+    with the card (31 Oct 2026). Kept by this sweep only: his own "Delete
+    all done" and the card's 🗑 still take it."""
+    talk = [t for t in (k.get("claudeTalk") or []) if isinstance(t, dict)]
+    last = talk[-1] if talk else dict(k.get("claude") or {}, **{"from": "claude"})
+    if last.get("from") != "claude":
+        return False
+    if last.get("status") == "needs_info":
+        return True
+    return "?" in str(last.get("result") or "") + str(last.get("summary") or "")
 
 
 def _when(iso):
@@ -82,7 +99,7 @@ def run(now=None):
         for c in snap.reference.collection("cards").where("column", "==", done).stream():
             k = c.to_dict() or {}
             t = _when(k.get("doneAt")) if k.get("doneAt") else None
-            if t and t < cutoff and clearable(snap.id, c.id, k, today):
+            if t and t < cutoff and clearable(snap.id, c.id, k, today) and not _asks_him(k):
                 gone.append(c)
         if not gone:
             continue
