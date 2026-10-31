@@ -898,11 +898,17 @@ def _invoice_reminders(jobs, today):
         rules = invoice_rules()
         for s in _db().collection("invoices").where("open", "==", True).stream():
             inv = s.to_dict() or {}
-            st = invoice_state(inv, jobs.get(inv.get("jobId")) if inv.get("jobId") else None, rules, today)
-            if st["kind"] in ("due", "unsent", "call"):
-                out.append({"name": inv.get("customerName") or "A customer", "doc": inv.get("docNumber") or "",
-                            "balance": float(inv.get("balance") or 0), "kind": st["kind"], "late": st.get("late") or 0,
-                            "count": st.get("count") or 0, "deposit": bool(st.get("deposit")), "rest": bool(st.get("rest"))})
+            # One invoice with something odd in it (a date or figure that won't
+            # read) is left out -- not every invoice with it.
+            try:
+                st = invoice_state(inv, jobs.get(inv.get("jobId")) if inv.get("jobId") else None, rules, today)
+                if st["kind"] in ("due", "unsent", "call"):
+                    out.append({"name": inv.get("customerName") or "A customer", "doc": inv.get("docNumber") or "",
+                                "balance": float(inv.get("balance") or 0), "kind": st["kind"], "late": st.get("late") or 0,
+                                "count": st.get("count") or 0, "deposit": bool(st.get("deposit")),
+                                "rest": bool(st.get("rest"))})
+            except Exception as e:      # noqa: BLE001
+                print("digest: invoice %s left out of the reminders: %s" % (s.id, e))
     except Exception as e:      # noqa: BLE001 -- a summary without them beats none
         print("digest: invoice reminders not worked out:", e)
     return sorted(out, key=lambda x: -x["late"])

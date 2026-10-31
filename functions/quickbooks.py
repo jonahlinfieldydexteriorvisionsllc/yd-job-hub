@@ -223,15 +223,18 @@ def _retry_wait(resp, default):
         return default
 
 
-def _send(method, url, **kwargs):
+def _send(method, url, retry=True, **kwargs):
     """One request to Intuit, tried again when the failure is theirs and passing.
 
     Only throttling, Intuit server errors and a dropped connection are retried.
     A request that changes something (an invoice) must carry a requestid, which
     makes Intuit answer a repeat with the original result rather than doing the
     work twice -- otherwise a retry after a timeout could raise a second invoice.
+    An email QuickBooks sends (invoice/{id}/send) takes no requestid, so it is
+    never tried again (retry=False): one that went out but answered late
+    would reach the customer twice.
     """
-    for wait in RETRY_WAITS + (None,):
+    for wait in (RETRY_WAITS if retry else ()) + (None,):
         try:
             resp = requests.request(method, url, **kwargs)
         except (requests.ConnectionError, requests.Timeout) as e:
@@ -379,7 +382,7 @@ def _access_token(force_refresh=False):
     return fresh["accessToken"], fresh
 
 
-def _call(method, path, params=None, body=None, request_id=None, empty_body=False):
+def _call(method, path, params=None, body=None, request_id=None, empty_body=False, retry=True):
     """One accounting API call against the connected company.
 
     It fetches its own token rather than being handed one, so that a 401 can be
@@ -404,6 +407,7 @@ def _call(method, path, params=None, body=None, request_id=None, empty_body=Fals
         resp = _send(
             method,
             url,
+            retry=retry,
             params=query,
             headers={
                 "Authorization": "Bearer %s" % token,
@@ -1995,9 +1999,17 @@ def _sweep(news, deadline=None):
     # The rest, each on its own: one that fails is logged and the next still
     # runs. Past the run's deadline (main.py: the hourly request has only so
     # long) no new step is started -- the next hour carries on.
+    # The payments step sends to QuickBooks only after the invoices list was
+    # brought up to date this run (sync_payments `pushes`).
+    invoices_read = []
+
+    def invoices():
+        news.extend(sync_invoices(jobs) or [])
+        invoices_read.append(True)
+
     later = [
-        ("invoices list not brought up to date", lambda: news.extend(sync_invoices(jobs) or [])),
-        ("payments not brought in step", lambda: sync_payments(jobs)),
+        ("invoices list not brought up to date", invoices),
+        ("payments not brought in step", lambda: sync_payments(jobs, pushes=bool(invoices_read))),
         ("accepted estimates not brought in", lambda: news.extend(import_accepted(every) or [])),
         ("snow contracts not moved",
          lambda: counted("%d snow contract(s) put on the Snow route", snow_from_jobs(jobs))),
@@ -3811,7 +3823,7 @@ def _inv_doc(inv, have, job_id, job_by=None):
 
 def _inv_changed(rec, have):
     keys = ("docNumber", "customerName", "email", "total", "balance", "open", "txnDate", "dueDate",
-            "emailStatus", "viewed", "emails", "jobId", "jobBy", "payments")
+            "emailStatus", "viewed", "emails", "jobId", "jobBy", "payments", "paymentIds")
     return any(rec.get(k) != have.get(k) for k in keys)
 
 
@@ -3895,11 +3907,16 @@ def sync_invoices(jobs):
             snap = col.document(inv_id).get()
             old = (snap.to_dict() or {}) if snap.exists else {}
         olds[inv_id] = old
-    # The payments on each, asked for only when the list of them changed.
-    want = {}
+    # The payments on each, asked for only when the list of them changed --
+    # against every id seen last time (paymentIds), not just the ones kept: a
+    # $0 credit-memo "payment" is never kept, and was asked for every hour.
+    want, ids_of = {}, {}
     for inv_id, inv in list(now_open.items()) + list(closed.items()):
-        ids = _payment_ids(inv)
-        if ids != sorted(str(p.get("id")) for p in olds[inv_id].get("payments") or []):
+        ids = ids_of[inv_id] = _payment_ids(inv)
+        seen = olds[inv_id].get("paymentIds")
+        if seen is None:
+            seen = sorted(str(p.get("id")) for p in olds[inv_id].get("payments") or [])
+        if ids != sorted(str(i) for i in seen):
             want[inv_id] = ids
     pays = _by_ids("Payment", [i for ids in want.values() for i in ids]) if want else {}
     names = {}
@@ -3935,11 +3952,16 @@ def sync_invoices(jobs):
             jobs[hand]["qbInvoiceRef"] = _invoice_record(inv)
         if inv_id in want:
             got = {i: pays[i] for i in want[inv_id] if i in pays}
-            # A payment QuickBooks didn't answer for: keep what was known.
-            rec["payments"] = (_payments_on(inv_id, got, names) if len(got) == len(want[inv_id])
-                               else list(old.get("payments") or []))
+            # A payment QuickBooks didn't answer for: keep what was known
+            # (and ask again next time).
+            if len(got) == len(want[inv_id]):
+                rec["payments"], rec["paymentIds"] = _payments_on(inv_id, got, names), want[inv_id]
+            else:
+                rec["payments"] = list(old.get("payments") or [])
+                if old.get("paymentIds") is not None:
+                    rec["paymentIds"] = old["paymentIds"]
         else:
-            rec["payments"] = list(old.get("payments") or [])
+            rec["payments"], rec["paymentIds"] = list(old.get("payments") or []), ids_of[inv_id]
         if not _inv_changed(rec, old):
             continue
         paid = round(_amount(old.get("balance")) - rec["balance"], 2) if old else 0
@@ -3962,6 +3984,9 @@ def sync_invoices(jobs):
     return news
 
 
+REMIND_AGAIN_AFTER = datetime.timedelta(minutes=10)
+
+
 def invoice_remind(body, who=""):
     """A reminder: the invoice emailed again from QuickBooks, with its pay
     link, to the address on it. Noted on invoices/{id}."""
@@ -3976,10 +4001,19 @@ def invoice_remind(body, who=""):
     to = str(((inv.get("BillEmail") or {}).get("Address")) or "").strip()
     if not to:
         raise RuntimeError("The invoice has no email address in QuickBooks — add one there first")
-    sent = _call("POST", "invoice/%s/send" % inv_id, params={"sendTo": to}, empty_body=True).get("Invoice") or inv
     ref = _db().collection("invoices").document(inv_id)
     snap = ref.get()
     old = (snap.to_dict() or {}) if snap.exists else {}
+    # Emailed in the last few minutes (a second tap, or the first answered
+    # too late on a phone with poor signal): not again -- the customer would
+    # get it twice. QuickBooks' own send time counts too.
+    last = [t for t in (_when(e) for e in list(old.get("emails") or []) + [r.get("at") for r in old.get("reminders") or []
+                                                                         if isinstance(r, dict)]
+                        + [((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))]) if t is not None]
+    if last and (_now() - max(last)) < REMIND_AGAIN_AFTER:
+        raise RuntimeError("It was emailed a few minutes ago — not sent again")
+    sent = _call("POST", "invoice/%s/send" % inv_id, params={"sendTo": to}, empty_body=True,
+                 retry=False).get("Invoice") or inv
     rec = _inv_doc(sent, old, old.get("jobId"), old.get("jobBy"))
     rec["payments"] = list(old.get("payments") or [])
     stamp = _now().isoformat()
@@ -4055,114 +4089,230 @@ def _payment_setup():
             "names": {str(m.get("Id")): str(m.get("Name") or "") for m in methods}}
 
 
-def sync_payments(jobs, only=None):
+def sync_payments(jobs, only=None, pushes=True):
     """Each job's payments here and its invoice's payments in QuickBooks
     brought into one list (see above). `only`: one job id (the app asking
-    right after a payment was logged). Returns how many jobs changed."""
+    right after a payment was logged). `pushes` False: QuickBooks' payments
+    are brought in but nothing is sent there -- the invoices list could not
+    be brought up to date this run, so a payment he entered in QuickBooks
+    meanwhile would not be seen, and the one logged here would go in a
+    second time. Returns how many jobs changed."""
     env = _env("QB_ENV", "sandbox")
     if env != "production":
         return 0
     db = _db()
-    by_job = {}
+    by_job, inv_job = {}, {}
     for s in db.collection("invoices").stream():
         inv = dict(s.to_dict() or {}, id=s.id)
+        if inv.get("jobId"):
+            inv_job[s.id] = inv["jobId"]
         if inv.get("jobId") and not inv.get("deletedAt"):
             by_job.setdefault(inv["jobId"], []).append(inv)
-    setup = None
     # Chicago's day, summer or winter (a fixed five hours behind was an hour
     # off all winter: a payment logged after 11 pm would be dated tomorrow).
-    today = _chicago_day()
+    run = {"setup": None, "today": _chicago_day(), "pushes": pushes}
     changed_jobs = 0
     for jid, j in jobs.items():
-        if (only and jid != only) or j.get("removeWhy"):
+        if (only and jid != only) or j.get("removeWhy") or j.get("deletedAt"):
             continue
-        mine = by_job.get(jid) or []
-        pays = [dict(p) for p in j.get("payments") or [] if isinstance(p, dict)]
-        wants_push = [p for p in pays if not p.get("qbPaymentId") and not p.get("fromQb")
-                      and str(p.get("createdAt") or "") >= PAYMENTS_FROM and _hub_amount(p) > 0]
-        if not mine and not wants_push:
-            continue
-        before = json.dumps(pays, sort_keys=True)
-        qb_pays = sorted((dict(p, invoiceId=inv["id"]) for inv in mine for p in inv.get("payments") or []),
-                         key=lambda x: (x.get("date") or "", x.get("id") or ""))
-        linked = {str(p["qbPaymentId"]) for p in pays if p.get("qbPaymentId")}
-        # QuickBooks -> here: tied to the same payment logged here, else added.
-        for qp in qb_pays:
-            if str(qp["id"]) in linked:
-                continue
-            # Within a dollar: the same payment typed with or without its cents.
-            same = next((p for p in pays if not p.get("qbPaymentId") and abs(_hub_amount(p) - qp["amount"]) < 1
-                         and _days_apart(p.get("date"), qp.get("date")) <= MATCH_DAYS), None)
-            if same:
-                same["qbPaymentId"] = str(qp["id"])
-                same.pop("qbError", None)
+        # One job that breaks (a write refused, a QuickBooks answer that is
+        # not what was expected) never stops the others.
+        try:
+            if _sync_job_payments(db, jid, j, by_job.get(jid) or [], inv_job, run):
+                changed_jobs += 1
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001
+            print("quickbooks payments: %s not brought in step: %s" % (jid, err))
+    return changed_jobs
+
+
+def _payment_stands(row, jid, inv_job):
+    """A QuickBooks payment tied to this job that still counts as paid on it:
+    not voided (a bounced check voided there keeps its record, at $0), and
+    not moved wholly onto invoices other jobs hold. One whose invoice has
+    left the list (paid off over a month ago) still counts."""
+    if row.get("TotalAmt") is not None and _amount(row.get("TotalAmt")) <= 0:
+        return False
+    invs = [str(t.get("TxnId")) for ln in row.get("Line") or [] for t in ln.get("LinkedTxn") or []
+            if t.get("TxnType") == "Invoice" and t.get("TxnId")]
+    return not (invs and all(inv_job.get(i) and inv_job.get(i) != jid for i in invs))
+
+
+def _payment_marked(marker, customer_id, txn_date, p):
+    """A payment already in QuickBooks for this entry -- its marker in the
+    note: one an earlier look made whose answer was lost, or made under an
+    earlier request id. Asked by date (from a little before the payment's
+    day, the day it was logged and the day it would be dated), looked through
+    here: QuickBooks can't search notes."""
+    days = [d for d in (str(p.get("date") or "")[:10], str(p.get("createdAt") or "")[:10], txn_date)
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", d)]
+    lo = (datetime.date.fromisoformat(min(days)) - datetime.timedelta(days=2)).isoformat()
+    for r in _query("Payment", "TxnDate >= '%s' MAXRESULTS 1000" % lo):
+        if marker in str(r.get("PrivateNote") or "") \
+                and str((r.get("CustomerRef") or {}).get("value") or "") == str(customer_id or ""):
+            return r
+    return None
+
+
+def _sync_job_payments(db, jid, j, all_mine, inv_job, run):
+    """One job's payments both ways (sync_payments). Returns whether the job
+    changed."""
+    today = run["today"]
+    # Only an invoice that is this job's for sure -- its own (qbInvoiceRef)
+    # or one picked for it on the Invoices list -- moves money either way.
+    # One matched by the customer's name alone is a guess: a repeat
+    # customer's old invoice, made before Job Hub, would take this job's
+    # deposit as a real QuickBooks payment, and give it that invoice's
+    # payments. It still drives the reminders (invoices.js).
+    mine = [i for i in all_mine if i.get("jobBy") != "name"]
+    guessed = [i for i in all_mine if i.get("jobBy") == "name"]
+    pays = [dict(p) for p in j.get("payments") or [] if isinstance(p, dict)]
+    wants_push = [p for p in pays if not p.get("qbPaymentId") and not p.get("fromQb")
+                  and str(p.get("createdAt") or "") >= PAYMENTS_FROM and _hub_amount(p) > 0]
+    if not mine and not wants_push:
+        return False
+    before = json.dumps(pays, sort_keys=True)
+    # One QuickBooks payment can pay two of this job's invoices (one check for
+    # the deposit bill and the rest): one entry for all of it, not its first part.
+    whole = {}
+    for inv in mine:
+        for p in inv.get("payments") or []:
+            k = str(p.get("id"))
+            amt = round(float(p.get("amount") or 0), 2)
+            if k in whole:
+                whole[k]["amount"] = round(whole[k]["amount"] + amt, 2)
             else:
-                # Its label as he would write it: the one that paid it off is
-                # the final payment, the first of several the deposit.
-                inv = next(i for i in mine if i["id"] == qp["invoiceId"])
-                earlier = any(str(p.get("date") or "") < str(qp.get("date") or "") for p in pays if _hub_amount(p) > 0)
-                label = ("Final" if qp is qb_pays[-1] and _amount(inv.get("balance")) <= 0
-                         else "Payment" if earlier else "Deposit")
-                pays.append({"id": "qb" + str(qp["id"]), "date": qp.get("date") or "", "amount": "%.2f" % qp["amount"],
-                             "label": label, "notes": qp.get("method") or "", "qbPaymentId": str(qp["id"]), "fromQb": True})
-            linked.add(str(qp["id"]))
-        # Gone from QuickBooks (deleted there): gone from here -- asked of
-        # QuickBooks itself first, never guessed from a list that may be short.
-        ours = {str(p["id"]) for p in qb_pays}
-        missing = [str(p["qbPaymentId"]) for p in pays if p.get("qbPaymentId") and str(p["qbPaymentId"]) not in ours]
-        if missing and mine:
-            try:
-                still = {str(r.get("Id")) for r in _query("Payment", "Id in (%s)" % ", ".join("'%s'" % _quote(i) for i in missing))}
-                pays = [p for p in pays if not (p.get("qbPaymentId") and str(p["qbPaymentId"]) in missing
-                                                and str(p["qbPaymentId"]) not in still)]
-            except ReconnectNeeded:
-                raise
-            except Exception as err:                    # noqa: BLE001 -- kept until QuickBooks answers
-                print("quickbooks payments: could not check %s: %s" % (missing, err))
-        # Here -> QuickBooks.
-        open_inv = next((i for i in mine if i.get("open") and _amount(i.get("balance")) > 0), None)
-        left = _amount(open_inv.get("balance")) if open_inv else 0.0
-        for p in pays:
-            if p.get("qbPaymentId") or p.get("fromQb") or str(p.get("createdAt") or "") < PAYMENTS_FROM:
-                continue
-            amt = _hub_amount(p)
-            if amt <= 0:
-                continue
-            if not open_inv:
-                p["qbError"] = "No QuickBooks invoice with money owing on this job yet"
-                continue
-            if amt > left + 0.005:
-                p["qbError"] = "More than the invoice's balance ($%.2f) — not sent" % left
-                continue
-            if setup is None:
-                setup = _payment_setup()
-            method = _method_of(p)
-            body = {
-                "CustomerRef": {"value": open_inv.get("customerId")},
-                "TotalAmt": amt,
-                "TxnDate": min(str(p.get("date") or today)[:10], today),
-                "PrivateNote": ("Logged in Job Hub: %s %s" % (p.get("label") or "", p.get("notes") or "")).strip()[:4000],
-                "Line": [{"Amount": amt, "LinkedTxn": [{"TxnId": open_inv["id"], "TxnType": "Invoice"}]}],
-            }
-            if setup.get("undeposited"):
-                body["DepositToAccountRef"] = {"value": setup["undeposited"]}
-            if method and setup["methods"].get(method.lower()):
-                body["PaymentMethodRef"] = {"value": setup["methods"][method.lower()]}
-            try:
-                made = _call("POST", "payment", body=body, request_id="pay|%s|%s" % (jid, p.get("id"))).get("Payment") or {}
-            except ReconnectNeeded:
-                raise
-            except Exception as err:                    # noqa: BLE001 -- told on the payment, tried again next hour
-                p["qbError"] = "QuickBooks said no: %s" % str(err)[:200]
-                continue
-            p["qbPaymentId"] = str(made.get("Id"))
+                whole[k] = dict(p, id=k, invoiceId=inv["id"], amount=amt)
+    qb_pays = sorted(whole.values(), key=lambda x: (x.get("date") or "", x.get("id") or ""))
+    linked = {str(p["qbPaymentId"]) for p in pays if p.get("qbPaymentId")}
+    # QuickBooks -> here: tied to the same payment logged here, else added.
+    for qp in qb_pays:
+        if str(qp["id"]) in linked:
+            continue
+        # Within a dollar: the same payment typed with or without its cents --
+        # the one nearest in date (two equal instalments a week apart each
+        # find their own).
+        near = [p for p in pays if not p.get("qbPaymentId") and abs(_hub_amount(p) - qp["amount"]) < 1
+                and _days_apart(p.get("date"), qp.get("date")) <= MATCH_DAYS]
+        same = min(near, key=lambda p: (_days_apart(p.get("date"), qp.get("date")),
+                                        abs(_hub_amount(p) - qp["amount"]))) if near else None
+        if same:
+            same["qbPaymentId"] = str(qp["id"])
+            same.pop("qbError", None)
+        else:
+            # Its label as he would write it: the one that paid it off is
+            # the final payment, the first of several the deposit.
+            inv = next(i for i in mine if i["id"] == qp["invoiceId"])
+            earlier = any(str(p.get("date") or "") < str(qp.get("date") or "") for p in pays if _hub_amount(p) > 0)
+            label = ("Final" if qp is qb_pays[-1] and _amount(inv.get("balance")) <= 0
+                     else "Payment" if earlier else "Deposit")
+            pays.append({"id": "qb" + str(qp["id"]), "date": qp.get("date") or "", "amount": "%.2f" % qp["amount"],
+                         "label": label, "notes": qp.get("method") or "", "qbPaymentId": str(qp["id"]), "fromQb": True})
+        linked.add(str(qp["id"]))
+    # Gone from QuickBooks (deleted there, voided there, or moved onto another
+    # job's invoice): gone from here -- asked of QuickBooks itself first,
+    # never guessed from a list that may be short.
+    ours = {str(p["id"]) for p in qb_pays}
+    missing = [str(p["qbPaymentId"]) for p in pays if p.get("qbPaymentId") and str(p["qbPaymentId"]) not in ours]
+    if missing and mine:
+        try:
+            rows = _query("Payment", "Id in (%s)" % ", ".join("'%s'" % _quote(i) for i in missing))
+            still = {str(r.get("Id")) for r in rows if _payment_stands(r, jid, inv_job)}
+            pays = [p for p in pays if not (p.get("qbPaymentId") and str(p["qbPaymentId"]) in missing
+                                            and str(p["qbPaymentId"]) not in still)]
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- kept until QuickBooks answers
+            print("quickbooks payments: could not check %s: %s" % (missing, err))
+    # Here -> QuickBooks.
+    open_inv = next((i for i in mine if i.get("open") and _amount(i.get("balance")) > 0), None)
+    left = _amount(open_inv.get("balance")) if open_inv else 0.0
+    for p in pays if run["pushes"] else []:
+        if p.get("qbPaymentId") or p.get("fromQb") or str(p.get("createdAt") or "") < PAYMENTS_FROM:
+            continue
+        amt = _hub_amount(p)
+        if amt <= 0:
+            continue
+        if not open_inv:
+            p["qbError"] = (("QuickBooks invoice #%s was matched to this job by the customer's name only — pick this "
+                             "job for it on the Invoices list (Change), then the payment is sent"
+                             % (guessed[0].get("docNumber") or "?")) if guessed
+                            else "No QuickBooks invoice with money owing on this job yet")
+            continue
+        if amt > left + 0.005:
+            p["qbError"] = "More than the invoice's balance ($%.2f) — not sent" % left
+            continue
+        if not p.get("id"):
+            p["qbError"] = "This payment has no id — take it off and log it again"
+            continue
+        # On the job as it is NOW: the sweep's copy is minutes old, and a
+        # payment taken off or changed on a phone meanwhile is never sent.
+        now = db.collection("jobs").document(jid).get()
+        now = (now.to_dict() or {}) if now.exists else {}
+        cur = next((x for x in now.get("payments") or [] if isinstance(x, dict) and x.get("id") == p["id"]), None)
+        if now.get("deletedAt") or now.get("removeWhy") or cur is None or cur.get("qbPaymentId") \
+                or _hub_amount(cur) != amt:
+            continue
+        if run["setup"] is None:
+            run["setup"] = _payment_setup()
+        setup = run["setup"]
+        txn_date = min(str(p.get("date") or today)[:10], today)
+        # Its mark in QuickBooks' note: an earlier look that made it but lost
+        # the answer is found by it, so it is tied, never made twice.
+        marker = "[Job Hub %s/%s]" % (jid, p["id"])
+        try:
+            found = _payment_marked(marker, open_inv.get("customerId"), txn_date, p)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- never sent without looking first
+            p["qbError"] = "Couldn't look in QuickBooks first — tried again next hour"
+            print("quickbooks payments: %s/%s not looked for: %s" % (jid, p["id"], err))
+            continue
+        if found:
+            p["qbPaymentId"] = str(found.get("Id"))
             p["qbSyncedAt"] = _now().isoformat()
             p.pop("qbError", None)
             left = round(left - amt, 2)
-        if json.dumps(pays, sort_keys=True) != before:
-            if _write_payments(db, jid, json.loads(before), pays):
-                changed_jobs += 1
-    return changed_jobs
+            continue
+        method = _method_of(p)
+        note = ("Logged in Job Hub: %s %s" % (p.get("label") or "", p.get("notes") or "")).strip()
+        body = {
+            "CustomerRef": {"value": open_inv.get("customerId")},
+            "TotalAmt": amt,
+            "TxnDate": txn_date,
+            "PrivateNote": (note[:3900] + " " + marker).strip(),
+            "Line": [{"Amount": amt, "LinkedTxn": [{"TxnId": open_inv["id"], "TxnType": "Invoice"}]}],
+        }
+        if setup.get("undeposited"):
+            body["DepositToAccountRef"] = {"value": setup["undeposited"]}
+        if method and setup["methods"].get(method.lower()):
+            body["PaymentMethodRef"] = {"value": setup["methods"][method.lower()]}
+        # The request id names what is sent (invoice, amount, day typed), so
+        # one QuickBooks refused is not handed the same refusal for ever once
+        # it is put right; the marker above stops a second payment.
+        what = hashlib.sha1(("%s|%.2f|%s" % (open_inv["id"], amt, p.get("date") or "")).encode()).hexdigest()[:10]
+        try:
+            made = _call("POST", "payment", body=body,
+                         request_id="pay|%s|%s|%s" % (jid, p["id"], what)).get("Payment") or {}
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- told on the payment, tried again next hour
+            p["qbError"] = "QuickBooks said no: %s" % str(err)[:200]
+            continue
+        if not made.get("Id"):
+            # No payment in the answer: never tied to nothing (it was then
+            # taken off the job next hour as "deleted in QuickBooks"). The
+            # marker finds it next hour if it was made.
+            p["qbError"] = "QuickBooks gave no answer — looked for again next hour"
+            continue
+        p["qbPaymentId"] = str(made.get("Id"))
+        p["qbSyncedAt"] = _now().isoformat()
+        p.pop("qbError", None)
+        left = round(left - amt, 2)
+    if json.dumps(pays, sort_keys=True) != before:
+        return _write_payments(db, jid, json.loads(before), pays)
+    return False
 
 
 QB_PAY_FIELDS = ("qbPaymentId", "qbError", "qbSyncedAt")

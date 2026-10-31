@@ -333,7 +333,7 @@ def _quickbooks(request, path, headers):
             # at the next hourly look -- and QuickBooks' payments back onto it.
             jid = str(body.get("jobId") or "").strip()
             snap = _db.collection("jobs").document(jid).get() if jid else None
-            if not snap or not snap.exists:
+            if not snap or not snap.exists or (snap.to_dict() or {}).get("deletedAt"):
                 raise RuntimeError("No such job")
             with qb._holding_tokens():
                 jobs = qb.live_jobs({s.id: (s.to_dict() or {}) for s in _db.collection("jobs").select(qb.SWEEP_FIELDS).stream()})

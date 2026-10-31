@@ -100,11 +100,19 @@ service cloud.firestore {
       //     that got into a bad state could only be repaired by that person
       //     signing in again. It grants nothing new: an owner already controls
       //     every role.
+      // A record made for yourself carries only what the sign-in gate writes
+      // (firebase-init.js): a request that planted its own pay rate or
+      // "fixes own shifts" would keep it through the owner's approval, which
+      // changes only the role. The owner's own record needs a verified email.
       allow create: if isOwner() || (signedIn()
         && request.auth.uid == uid
         && request.resource.data.email == request.auth.token.email
+        && request.resource.data.keys().hasOnly(['email', 'name', 'role', 'active', 'createdAt'])
+        && request.resource.data.get('name', '') is string
+        && request.resource.data.get('name', '').size() <= 200
         && (
              (request.auth.token.email == OWNER()
+               && request.auth.token.email_verified == true
                && request.resource.data.role == 'owner'
                && request.resource.data.active == true)
              ||
@@ -235,15 +243,19 @@ service cloud.firestore {
         // The board list the crew read to find Crew-tagged cards on boards
         // they are not on (names and columns only): kept up by whoever may
         // change boards.
+        // Every crew phone reads this one doc: each list kept a map of a
+        // sensible size.
         || (docId == 'public' && canChange('boards')
             && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
-                 .hasOnly(['crewBoards', 'crewBoardsAt']))
+                 .hasOnly(['crewBoards', 'crewBoardsAt'])
+            && request.resource.data.crewBoards is map && request.resource.data.crewBoards.size() <= 300)
         // The machines' names and types (no costs), for the crew's shop board
         // on the Equipment tab (equipment.js publishNames): kept up by
         // whoever may change the machines.
         || (docId == 'public' && canChange('equipment')
             && request.resource.data.diff(resource == null ? {} : resource.data).affectedKeys()
-                 .hasOnly(['equipmentList', 'equipmentListAt']));
+                 .hasOnly(['equipmentList', 'equipmentListAt'])
+            && request.resource.data.equipmentList is map && request.resource.data.equipmentList.size() <= 300);
     }
 
     // ===================================================================
@@ -765,8 +777,13 @@ service cloud.firestore {
     }
     match /pushSubs/{subId} {
       allow read: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
+      // The server posts to the device's push address: only a push
+      // service's https address is kept (notify.js writes the browser's own).
       allow create, update: if isStaff() && request.resource.data.uid == request.auth.uid
-        && subId.matches('ps[a-f0-9]+');
+        && subId.matches('ps[a-f0-9]+')
+        && request.resource.data.sub.endpoint is string
+        && request.resource.data.sub.endpoint.size() < 1000
+        && request.resource.data.sub.endpoint.matches('https://.+');
       allow delete: if isOwner() || (isStaff() && resource.data.uid == request.auth.uid);
     }
 
@@ -1107,7 +1124,13 @@ service cloud.firestore {
              'lienDecided', 'lienLastWork', 'updatedAt'])
         && (!('lienLastWork' in request.resource.data) || request.resource.data.lienLastWork == null
             || request.resource.data.lienLastWork.matches('[0-9]{4}-[0-9]{2}-[0-9]{2}'))
-        && (!('jobBy' in request.resource.data) || request.resource.data.jobBy in ['hand', 'job', 'name', null]);
+        && (!('jobBy' in request.resource.data) || request.resource.data.jobBy in ['hand', 'job', 'name', null])
+        // The server's reminder rule (digest.invoice_state) reads these: kept
+        // the shapes it reads, for everyone's summary.
+        && (!('handReminders' in request.resource.data) || (request.resource.data.handReminders is list
+            && request.resource.data.handReminders.size() <= 100))
+        && (!('snoozeUntil' in request.resource.data) || request.resource.data.snoozeUntil == null
+            || (request.resource.data.snoozeUntil is string && request.resource.data.snoozeUntil.size() <= 40));
     }
 
     // `auto`: a receipt photo sent for a job is put on it by the sorting

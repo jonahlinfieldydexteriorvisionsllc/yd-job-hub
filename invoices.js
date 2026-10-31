@@ -275,8 +275,13 @@
         '</select><button class="btn btn-sm btn-filled" onclick="invSetJob(\'' + safe(inv.id) + '\')">Save</button>' +
         '<button class="btn btn-sm" onclick="invPickJob(\'\')">Cancel</button></div>';
     }
+    // A job found only by the customer's name is a guess: payments logged on
+    // it go to QuickBooks only once it is said to be the right one
+    // (quickbooks.py _sync_job_payments) -- one tap here.
+    const sure = changes() && st.kind !== 'paid' && inv.jobBy === 'name' && inv.jobId
+      ? ' <button class="link-btn" onclick="invRightJob(\'' + safe(inv.id) + '\')">✓ Right job</button>' : '';
     return '<div class="inv-job">' + (j ? '🧱 ' + jobNameHtml(j.name, j.est) + '<span class="muted">' + esc(how) + '</span>'
-        : inv.jobId ? '🧱 A job not on this device' : '<span class="muted">No job here</span>') +
+        : inv.jobId ? '🧱 A job not on this device' : '<span class="muted">No job here</span>') + sure +
       (changes() && st.kind !== 'paid' ? ' <button class="link-btn" onclick="invPickJob(\'' + safe(inv.id) + '\')">' + (inv.jobId ? 'Change' : 'Pick the job') + '</button>' : '') +
     '</div>';
   }
@@ -344,15 +349,25 @@
   };
   // Picked by hand: kept whatever the hourly look would have said
   // (quickbooks.py _inv_doc, jobBy 'hand').
-  window.invSetJob = function (id) {
-    const inv = invoices[id], sel = el('invJobSel');
-    if (!inv || !sel || !changes()) return;
-    inv.jobId = sel.value || null;
+  function tieJob(inv, jobId) {
+    inv.jobId = jobId || null;
     inv.jobBy = 'hand';
     picking = '';
     render();
     Promise.resolve(window.YDDb.put('invoices', inv.id, { jobId: inv.jobId, jobBy: 'hand', updatedAt: new Date().toISOString() }))
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  }
+  window.invSetJob = function (id) {
+    const inv = invoices[id], sel = el('invJobSel');
+    if (!inv || !sel || !changes()) return;
+    tieJob(inv, sel.value);
+  };
+  // The job its name pointed to is the right one: kept as picked by hand.
+  window.invRightJob = function (id) {
+    const inv = invoices[id];
+    if (!inv || !inv.jobId || !changes()) return;
+    tieJob(inv, inv.jobId);
+    showToast('Saved — payments on that job now go to this invoice');
   };
   window.invView = function (v) { view = ['todo', 'owed', 'paid'].indexOf(v) !== -1 ? v : 'todo'; render(); };
   // As search.js opens one: the job already in the form is just shown.
