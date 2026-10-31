@@ -2000,7 +2000,7 @@ def _sweep(news, deadline=None):
         ("snow contracts not moved",
          lambda: counted("%d snow contract(s) put on the Snow route", snow_from_jobs(jobs))),
         ("hand-typed jobs not looked for",
-         lambda: counted("%d job(s) typed in by hand joined to their QuickBooks estimate", link_hand_jobs(jobs))),
+         lambda: counted("%d job(s) typed in by hand joined to their QuickBooks estimate", link_hand_jobs(jobs, every=every))),
         ("jobs not filled from QuickBooks",
          lambda: counted("%d job(s) filled from their QuickBooks estimate", fill_imported(jobs))),
         ("QuickBooks' words not checked",
@@ -2984,6 +2984,7 @@ LOOK_AGAIN_BID = datetime.timedelta(minutes=10)   # a bid: on every hourly look,
 HAND_MAX = 10                             # and so many in one sweep
 BID_EST_BEFORE = datetime.timedelta(days=3)    # a bid's estimate is dated no earlier than this before the bid
 BID_EST_WITHIN = datetime.timedelta(days=60)   # (a bid with no date: an estimate this recent)
+BID_EST_AFTER = datetime.timedelta(days=45)    # ... and no later than this after it (later is other work)
 
 
 def _norm_name(s):
@@ -3012,7 +3013,7 @@ def _is_open_bid(j):
     return str(j.get("jobStatus") or "") == "quoting" and str(j.get("bidStage") or "") != "lost"
 
 
-def link_hand_jobs(jobs, bids_only=False):
+def link_hand_jobs(jobs, bids_only=False, every=None):
     """Jobs typed in by hand -- booked or under way -- with no QuickBooks
     estimate joined to them (Jonah, 15 Oct 2026: one such job had only its
     price; it was typed in before the import, and its estimate was
@@ -3041,7 +3042,10 @@ def link_hand_jobs(jobs, bids_only=False):
     state = (((snap.to_dict() or {}) if snap.exists else {}).get(realm)) or {}
     looked = {k: v for k, v in (state.get("looked") or {}).items()
               if k in jobs and (_parse_time(v) or now) > now - datetime.timedelta(days=30)}
-    used = {str((j.get("qbEstimate") or {}).get("id")) for j in jobs.values()
+    # Every job's estimate is taken -- one in Recently deleted too (`every`):
+    # left out, a deleted duplicate's estimate went to another bid of theirs.
+    everyone = every if every is not None else jobs
+    used = {str((j.get("qbEstimate") or {}).get("id")) for j in everyone.values()
             if (j.get("qbEstimate") or {}).get("id") and (j.get("qbEstimate") or {}).get("env") == env}
     due = []
     # Finished jobs too (Jonah, 15 Oct 2026: link the finished jobs to their
@@ -3073,7 +3077,7 @@ def link_hand_jobs(jobs, bids_only=False):
         for jid in want:
             looked[jid] = now.isoformat()
             try:
-                done += _link_hand_job(db, jid, jobs[jid], used, finished)
+                done += _link_hand_job(db, jid, jobs[jid], used, finished, everyone)
             except ReconnectNeeded:
                 raise
             except Exception as err:                    # noqa: BLE001 -- one job's trouble never stops the rest
@@ -3117,20 +3121,57 @@ def _bid_estimate(j, pool, now):
     old unanswered estimate of the same customer is other work. More than one
     (or none) is not certain: left alone."""
     try:
-        start = datetime.date.fromisoformat(str(j.get("quoteDate") or "")[:10]) - BID_EST_BEFORE
+        quoted = datetime.date.fromisoformat(str(j.get("quoteDate") or "")[:10])
+        start, end = quoted - BID_EST_BEFORE, quoted + BID_EST_AFTER
     except ValueError:
-        start = (now - BID_EST_WITHIN).date()
+        start, end = (now - BID_EST_WITHIN).date(), None
     def dated(e):
         try:
-            return datetime.date.fromisoformat(str(e.get("TxnDate") or "")[:10]) >= start
+            d = datetime.date.fromisoformat(str(e.get("TxnDate") or "")[:10])
         except ValueError:
             return False
+        return d >= start and (end is None or d <= end)
     pick = [e for e in pool if (e.get("TxnStatus") or "Pending") == "Pending" and dated(e)]
     return pick[0] if len(pick) == 1 else None
 
 
-def _link_hand_job(db, jid, j, used, finished):
+def _snow_bid(j):
+    """Whether a bid is for snow: its estimate says so, else every service
+    on it is snow work."""
+    est = j.get("estimate") if isinstance(j.get("estimate"), dict) else {}
+    if est.get("snowBid") is not None:
+        return bool(est.get("snowBid"))
+    svc = [str(x) for x in (j.get("serviceTypes") or []) if str(x).strip()]
+    return bool(svc) and all(re.search(r"(?i)snow|salt|plow", x) for x in svc)
+
+
+def _same_customer(a, b):
+    ca, cb = str(a.get("customerId") or ""), str(b.get("customerId") or "")
+    if ca and cb:
+        return ca == cb
+    na, nb = _norm_name(a.get("customerName")), _norm_name(b.get("customerName"))
+    return bool(na) and na == nb
+
+
+def _guessable(jid, j, everyone):
+    """Whether a bid that names no estimate may be given one by its date:
+    only when it is the customer's ONE open bid with no estimate and no
+    number. With two (a repeat customer, a second bid started from their
+    first), the one estimate dated after them could be either's -- it went
+    to whichever was looked at first."""
+    for oid, o in everyone.items():
+        if oid == jid or o.get("deletedAt") or o.get("removeWhy") or not _is_open_bid(o):
+            continue
+        if (o.get("qbEstimate") or {}).get("id") or re.search(r"\d{3,7}", str(o.get("estimateNumber") or "")):
+            continue
+        if _same_customer(o, j):
+            return False
+    return True
+
+
+def _link_hand_job(db, jid, j, used, finished, everyone=None):
     """link_hand_jobs for one job. Returns 1 when it was joined, else 0."""
+    everyone = everyone if everyone is not None else {jid: j}
     cust = _job_customer(db, j)
     if not cust:
         return 0
@@ -3149,7 +3190,19 @@ def _link_hand_job(db, jid, j, used, finished):
         # still moving. One naming a number QuickBooks does not have is left
         # alone rather than guessed.
         if len(pick) != 1 and not nums:
-            one = _bid_estimate(j, pool, _now())
+            # By its date only when nothing else could be meant: no other
+            # open bid of theirs that could be it, an estimate no other job
+            # names by number, and snow with snow (a snow contract's estimate
+            # once booked the landscaping bid and made no Snow account).
+            if not _guessable(jid, j, everyone):
+                return 0
+            named = {n for oid, o in everyone.items() if oid != jid
+                     for n in re.findall(r"\d{3,7}", str(o.get("estimateNumber") or ""))}
+            ends = _end_names()
+            snow = _snow_bid(j)
+            fits = [e for e in pool if _number(e.get("DocNumber")) not in named
+                    and (_snow_lines(e, ends) is not None) == snow]
+            one = _bid_estimate(j, fits, _now())
             pick = [one] if one else []
     elif len(pick) != 1 and not finished(j):
         price = _job_price(j)
@@ -3179,7 +3232,9 @@ def _link_hand_job(db, jid, j, used, finished):
             raise
         except Exception as err:                    # noqa: BLE001 -- the estimate is joined all the same
             print("quickbooks link: invoice %s not read: %s" % (inv_id, err))
-    db.collection("jobs").document(jid).set(patch, merge=True)
+    # Each field written whole: merged, a bid whose last estimate was deleted
+    # in QuickBooks kept that `deleted` note (and a snowBid) beside the new one.
+    db.collection("jobs").document(jid).set(patch, merge=list(patch.keys()))
     j["qbEstimate"] = rec           # so fill_imported reads it in this same sweep
     used.add(str(e.get("Id")))
     return 1

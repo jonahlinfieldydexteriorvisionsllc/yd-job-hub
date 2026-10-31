@@ -363,7 +363,7 @@ def _quickbooks(request, path, headers):
                 # A bid whose estimate Jonah made in QuickBooks by hand is
                 # joined to it first, so it says Sent too (link_hand_jobs).
                 try:
-                    qb.link_hand_jobs(jobs, bids_only=True)
+                    qb.link_hand_jobs(jobs, bids_only=True, every=every)
                 except qb.ReconnectNeeded:
                     raise
                 except Exception as err:            # noqa: BLE001 -- the hourly look tries again
@@ -637,21 +637,32 @@ def _cards(request, path, headers):
                     except Exception as e:          # noqa: BLE001
                         print("followups: Claude not reachable --", e)
                 day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-                _tell_owner(followup.auto(client, deadline,
-                                          lambda usage: _record_spend(day, "followup", usage, followup.MODEL),
-                                          claude=client is not None))
+                # Each of the three on its own: one that broke used to take
+                # the ones after it with it for the hour.
+                try:
+                    _tell_owner(followup.auto(client, deadline,
+                                              lambda usage: _record_spend(day, "followup", usage, followup.MODEL),
+                                              claude=client is not None))
+                except Exception as e:              # noqa: BLE001
+                    print("followups failed:", e)
                 # New leads in the inbox (leads.py): a Lead in Customers and a
                 # reply in his Gmail Drafts, the same hour they wrote. Claude
                 # reads only the strangers plain code could not pass over.
                 if time.monotonic() < deadline:
-                    import leads
-                    _tell_owner(leads.run(client, deadline,
-                                          lambda usage: _record_spend(day, "leads", usage, leads.MODEL)))
+                    try:
+                        import leads
+                        _tell_owner(leads.run(client, deadline,
+                                              lambda usage: _record_spend(day, "leads", usage, leads.MODEL)))
+                    except Exception as e:          # noqa: BLE001
+                        print("leads failed:", e)
                 # Customers writing in about a booked or under-way job
                 # (inboxdesk.py): onto Home's Waiting on you. Plain code.
                 if time.monotonic() < deadline:
-                    import inboxdesk
-                    _tell_owner(inboxdesk.run(deadline))
+                    try:
+                        import inboxdesk
+                        _tell_owner(inboxdesk.run(deadline))
+                    except Exception as e:          # noqa: BLE001
+                        print("inbox desk failed:", e)
         except Exception as e:                      # noqa: BLE001
             print("followups failed:", e)
     failed, report = None, [{"skipped": "not a card run (switched off, or not one of the card hours)"}]
@@ -1441,7 +1452,10 @@ def _store_lists_waiting():
     # contract, not moved by hand after the yes was seen.
     since = (now - datetime.timedelta(days=STORE_LIST_UNBOOKED_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
     unbooked = 0
-    for d in _db.collection("jobs").where("acceptedSeenAt", ">=", since).stream():
+    # Only the fields the test needs: this answers anyone who asks (it says
+    # only counts), so it must not read whole jobs each time.
+    for d in _db.collection("jobs").where("acceptedSeenAt", ">=", since).select(
+            ["qbEstimate", "jobStatus", "bidStage", "bidStageAt", "acceptedSeenAt", "removeWhy", "deletedAt"]).stream():
         j = d.to_dict() or {}
         q = j.get("qbEstimate") or {}
         if not qb_accepted(q) or q.get("snowBid") or j.get("removeWhy") or j.get("deletedAt"):
