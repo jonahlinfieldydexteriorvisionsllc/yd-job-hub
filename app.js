@@ -600,11 +600,20 @@ async function ydSignOut() {
   // told -- signing out at the end of the day looked like the same thing.
   const mine = window.YDClock && YDClock.mine && !(window.YDAuth || {}).isOwner ? YDClock.mine() : null;
   const onClock = mine && mine.shift && !mine.shift.leaving ? mine.shift : null;
-  const said = onClock
+  // Photos and signed papers still waiting for signal live on this phone,
+  // not in the cloud: they send only when the same person signs in here
+  // again (jobphotos.js, signatures.js).
+  const count = m => { try { return m && m.waiting ? m.waiting() : 0; } catch (e) { return 0; } };
+  const photosLeft = count(window.YDJobPhotos), papersLeft = count(window.YDSignatures);
+  const left = [photosLeft ? photosLeft + ' photo' + (photosLeft === 1 ? '' : 's') : '',
+    papersLeft ? papersLeft + ' signed paper' + (papersLeft === 1 ? '' : 's') : ''].filter(Boolean).join(' and ');
+  const leftSaid = left ? '\n\n' + left + ' on this phone ' + (photosLeft + papersLeft === 1 ? 'has' : 'have') +
+    ' not been sent yet. They send when you sign in on this phone again — signing in as someone else here, or clearing the app, loses them.' : '';
+  const said = (onClock
     ? 'You are still on the clock (' + (onClock.where || 'working') + '). Signing out does not clock you out — the clock keeps running.\n\nThis device will need to sign in again.'
     : crewView() ? 'Everything is kept in the cloud. This device will need to sign in again.'
-    : 'Your jobs stay safe in the cloud. This device will need to sign in again.';
-  if (!(await ydConfirm(said, { title: 'Sign out of YD Job Hub?', ok: 'Sign out', danger: !!onClock }))) return;
+    : 'Your jobs stay safe in the cloud. This device will need to sign in again.') + leftSaid;
+  if (!(await ydConfirm(said, { title: 'Sign out of YD Job Hub?', ok: 'Sign out', danger: !!onClock || !!left }))) return;
 
   closeHeaderMenu();
   // The full sign-out can stop to ask about changes that have not reached
@@ -4585,6 +4594,32 @@ function invalidateJobsCache() { _jobsCache = null; }
 
 // ---- Autosave state ----
 let autosaveTimer = null;
+// The job as the form last had it -- when it was loaded, or at its last
+// save -- so a save can tell what was changed on the form from what came in
+// from elsewhere meanwhile (persistJob keepUntouched). { id, data } or null.
+let formBase = null;
+// A value printed the same way whatever order its keys were made in, to
+// tell whether two copies of one part of a job are the same (persistJob,
+// sync.js). A date or other value that prints itself (toJSON) as saved.
+function stableJson(v) {
+  if (v && typeof v.toJSON === 'function') v = v.toJSON();
+  if (v === null || typeof v !== 'object') return v === undefined ? 'null' : JSON.stringify(v);
+  if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+  return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort()
+    .map(k => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+}
+// The form is rebuilt whole on every save (getJobData). What another
+// device, the server or a board move (patchJob) wrote into the job while it
+// was open -- a part the form never changed -- is kept, not put back to what
+// the form loaded with. A part changed on the form is the form's.
+function keepUntouched(data, base, stored) {
+  const same = (a, b) => (a === undefined ? b === undefined : b !== undefined && stableJson(a) === stableJson(b));
+  new Set(Object.keys(base).concat(Object.keys(stored), Object.keys(data))).forEach(k => {
+    if (k === 'lastModified' || k === '_id') return;
+    if (!same(data[k], base[k]) || same(stored[k], base[k])) return;
+    if (stored[k] === undefined) delete data[k]; else data[k] = stored[k];
+  });
+}
 let loadingJob = false;      // suppress autosave while a job loads in
 let storageBroken = false;   // set true once a write fails
 let storageWarned = false;   // ensures the storage-full toast shows once, not on every retry
@@ -4626,6 +4661,15 @@ function persistJob(announce) {
   const data = getJobData();
   if (!currentJobId) { currentJobId = uid(); jobOnScreen(); }
   const before = localStorage.getItem(STORAGE_PREFIX + currentJobId);
+  // What the form says, kept before what came in meanwhile is joined in:
+  // the next save compares against this.
+  let formSays = null;
+  if (before !== null && formBase && formBase.id === currentJobId) {
+    try {
+      formSays = JSON.parse(JSON.stringify(data));
+      keepUntouched(data, formBase.data, JSON.parse(before));
+    } catch (e) { console.warn('[save] could not join in what came in meanwhile', e); }
+  }
   const json = JSON.stringify(data);
   try {
     localStorage.setItem(STORAGE_PREFIX + currentJobId, json);
@@ -4647,6 +4691,7 @@ function persistJob(announce) {
   }
   storageBroken = false;
   storageWarned = false;
+  formBase = { id: currentJobId, data: formSays || JSON.parse(json) };
   // A status or stage changed on the form: into the change history
   // (changelog.js). A brand-new job has no "before" and is not a move.
   if (before !== null && window.YDChangeLog) {
@@ -4743,9 +4788,19 @@ function loadJob(id, quiet) {
     if (!quiet) showToast('That job is in Recently deleted — restore it from the foot of My Jobs first');
     return;
   }
+  // Typing on the job open now, not yet saved (the save waits a moment
+  // after the last key): saved first. Left to its timer, it saved the next
+  // job instead and the last words typed here were lost.
+  clearTimeout(autosaveTimer);
+  if (dirty && currentJobId && currentJobId !== id) autosave();
   currentJobId = id;
   loadingJob = true;
-  try { loadJobData(JSON.parse(raw)); } catch (e) { console.error(e); showToast('Could not load job'); }
+  formBase = null;
+  try {
+    const d = JSON.parse(raw);
+    loadJobData(d);
+    formBase = { id: id, data: JSON.parse(raw) };
+  } catch (e) { console.error(e); showToast('Could not load job'); }
   loadingJob = false;
   jobOnScreen();
   if (!quiet) { closeManager(); switchTab('job'); }
@@ -4892,6 +4947,7 @@ async function newJob() {
 // the job on screen was deleted on another device.
 function clearJobForm() {
   currentJobId = null;
+  formBase = null;
   launchJobId = null;     // a new job was asked for: not the last one
   jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];

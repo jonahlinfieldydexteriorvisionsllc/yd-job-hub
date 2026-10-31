@@ -296,9 +296,120 @@
     // Saved again after being deleted -- restored from a backup, say. The
     // save is the newer wish, so a delete still waiting to go out is dropped.
     if (pendingDeletes.delete(id)) savePendingDeletes();
-    if (!watching) { unsent.add(id); saveUnsent(); return; }
+    // Written down even with sync running: the app ended (an iPhone closing
+    // it in the background) in the moment before the push timer ran, and a
+    // brand-new job was on this device only, with nothing to send it later.
+    // pushNow forgets it once Firestore has the write.
+    unsent.add(id); saveUnsent();
+    if (!watching) return;
     clearTimeout(pushTimers[id]);
-    pushTimers[id] = setTimeout(() => pushNow(id), PUSH_DELAY);
+    pushTimers[id] = setTimeout(() => { delete pushTimers[id]; pushNow(id); }, PUSH_DELAY);
+  }
+
+  // ------------------------------------------- what the server holds
+  //
+  // A job used to go up WHOLE, the newest save winning: a phone that edited
+  // a job with no signal put its whole old copy, on coming back, over what
+  // the server and other devices had written meanwhile -- QuickBooks'
+  // answers, a payment tied, a follow-up sent -- and a device holding a
+  // newer copy then pushed ITS whole copy back over the phone's site notes
+  // (review, 31 Oct). Now each device remembers, part by part (a short
+  // print of each top-level part of the job), the copy the server holds as
+  // it last saw it. It sends only the parts it changed since, and a copy
+  // coming in is taken part by part: a part only the other side changed is
+  // theirs, a part only this side changed stays, and only a part both
+  // changed goes by the newer save.
+  const BASE_KEY = STORAGE_PREFIX + 'syncBase';
+  const NOT_PARTS = { lastModified: 1, _id: 1 };
+  const bases = (() => {
+    try { return JSON.parse(localStorage.getItem(BASE_KEY) || '{}') || {}; } catch (e) { return {}; }
+  })();
+  let basesTimer = null;
+  function saveBasesNow() {
+    clearTimeout(basesTimer); basesTimer = null;
+    try { localStorage.setItem(BASE_KEY, JSON.stringify(bases)); }
+    catch (e) { console.warn('[sync] could not keep what the server holds', e); }
+  }
+  // A launch's first look at every job sets every one: kept in one go.
+  function saveBases() { if (!basesTimer) basesTimer = setTimeout(saveBasesNow, 300); }
+  // '' = not there. FNV-1a over the part printed the same way every time
+  // (app.js stableJson), with its length.
+  function print(v) {
+    if (v === undefined) return '';
+    const s = stableJson(v);
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(36) + '.' + s.length.toString(36);
+  }
+  function printsOf(o) {
+    const p = {};
+    Object.keys(o || {}).forEach(k => { if (!NOT_PARTS[k] && o[k] !== undefined) p[k] = print(o[k]); });
+    return p;
+  }
+  const baseOf = id => (bases[id] && bases[id].p ? bases[id] : null);
+  // `partial`: this device sent only some parts, onto a copy that may hold
+  // what it has not seen yet -- the next copy in is gone through part by
+  // part even when its save time is this device's own.
+  function setBase(id, data, partial) { bases[id] = { p: printsOf(data), partial: !!partial }; saveBases(); }
+  function dropBase(id) { if (bases[id]) { delete bases[id]; saveBases(); } }
+  // The parts of `data` that are not as the server holds them, by this
+  // device's last look: changed or new, and taken off.
+  function changesFrom(base, data) {
+    const fields = {}, gone = [];
+    Object.keys(data).forEach(k => { if (!NOT_PARTS[k] && data[k] !== undefined && print(data[k]) !== base.p[k]) fields[k] = data[k]; });
+    Object.keys(base.p).forEach(k => { if (data[k] === undefined) gone.push(k); });
+    return { fields: fields, gone: gone };
+  }
+  // A copy coming in, against what the server held when this device last
+  // looked: { merged, ours: parts only this side has, took: parts taken
+  // from theirs }. A part both sides changed goes by the newer save --
+  // except the server's own parts (SERVER_FIELDS), which go by whichever is
+  // further along (takeField), and the payments, which are joined
+  // (app.js mergePayments).
+  function mergeParts(local, theirs, base) {
+    const merged = Object.assign({}, local);
+    const ours = [], took = [];
+    const theirsNewer = String(theirs.lastModified || '') >= String(local.lastModified || '');
+    const put = (k, v) => { if (v === undefined) delete merged[k]; else merged[k] = v; };
+    new Set(Object.keys(local).concat(Object.keys(theirs))).forEach(k => {
+      if (NOT_PARTS[k]) return;
+      const l = print(local[k]), t = print(theirs[k]), b = base.p[k] || '';
+      if (l === t) return;
+      let v;
+      if (l === b) v = theirs[k];                    // only theirs changed it
+      else if (t === b) { ours.push(k); return; }    // only this side did
+      else if (k === 'payments' && typeof mergePayments === 'function') {
+        const pays = mergePayments(local.payments, theirs.payments);
+        v = pays ? pays.list : (theirsNewer ? theirs.payments : local.payments);
+      } else if (k === 'chaseDrafts' && local[k] && theirs[k] && typeof local[k] === 'object' && typeof theirs[k] === 'object') {
+        // Each step's record, the server's where both have one (followup.py).
+        v = Object.assign({}, local[k], theirs[k]);
+      } else if (SERVER_FIELDS.indexOf(k) !== -1 && k !== 'qbChangesIn') {
+        const probe = { [k]: local[k] };
+        v = takeField(k, probe, theirs) ? probe[k] : local[k];
+      } else v = theirsNewer ? theirs[k] : local[k];
+      put(k, v);
+      if (print(v) === t) took.push(k); else ours.push(k);
+    });
+    // The change orders the server put in the price (quickbooks.py
+    // _price_follows), onto a price changed here: moved by the same, as
+    // takeServerFields does.
+    if (took.indexOf('qbChangesIn') !== -1 && ours.indexOf('jobPrice') !== -1 && !theirs.qbChangesOff && !local.qbChangesOff) {
+      const price = parseMoney(local.jobPrice || '');
+      const had = typeof local.qbChangesIn === 'number' ? local.qbChangesIn : 0;
+      if (price > 0 && typeof theirs.qbChangesIn === 'number') merged.jobPrice = (price + (theirs.qbChangesIn - had) / 100).toFixed(2);
+    }
+    // Nothing of this side's left to send: the server's copy as it is, its
+    // time and all. Else a copy neither side had before -- newer than both,
+    // or a device already holding theirs would take ours for the same one.
+    if (!ours.length) merged.lastModified = theirs.lastModified;
+    else {
+      const now = new Date().toISOString(), theirsAt = String(theirs.lastModified || '');
+      const top = [now, theirsAt, String(local.lastModified || '')].sort().pop();
+      const after = Date.parse(theirsAt);
+      merged.lastModified = top !== theirsAt ? top : (isFinite(after) ? new Date(after + 1).toISOString() : now);
+    }
+    return { merged: merged, ours: ours, took: took };
   }
 
   // ---------------------------------------------------------------- delete
@@ -430,7 +541,32 @@
     // a saved job the crew cannot clock into is the failure that matters.
     pushBoard(id, data);
     try {
-      const sent = window.YDDb.putJob(id, data);
+      // Only the parts changed since the server's copy as this device last
+      // saw it (see bases) -- or the whole job, when there is no such look
+      // yet (a new job, the first save since this came in).
+      const base = window.YDDb.updateJob ? baseOf(id) : null;
+      let sent;
+      if (base) {
+        const parts = changesFrom(base, data);
+        // Nothing changed after all (a save with nothing new in it).
+        if (!Object.keys(parts.fields).length && !parts.gone.length) { forgetUnsent(id); return true; }
+        parts.fields.lastModified = data.lastModified;
+        sent = window.YDDb.updateJob(id, parts.fields, parts.gone)
+          // Not on the server any more (deleted there for good): put back
+          // whole, as a save always did.
+          .catch(err => {
+            if (err && err.code === 'not-found') { setBase(id, data, false); return window.YDDb.putJob(id, data); }
+            throw err;
+          });
+        // As the server will hold it once this lands.
+        Object.keys(parts.fields).forEach(k => { if (!NOT_PARTS[k]) base.p[k] = print(parts.fields[k]); });
+        parts.gone.forEach(k => { delete base.p[k]; });
+        base.partial = true;
+        saveBases();
+      } else {
+        sent = window.YDDb.putJob(id, data);
+        setBase(id, data, false);
+      }
       // In Firestore's hands now; its queue keeps it until the server has it.
       forgetUnsent(id);
       await sent;
@@ -555,41 +691,45 @@
       local.qbChangesIn = cin;
       took = true;
     }
-    SERVER_FIELDS.forEach(f => {
-      const s = theirs[f], l = local[f];
-      if (s == null || f === 'qbChangesIn') return;
-      // The follow-up emails the server drafted, one more at a time
-      // (followup.py auto): every one it has is kept with this copy's.
-      if (f === 'chaseDrafts' && l && typeof s === 'object') {
-        if (Object.keys(s).some(k => !(k in l))) { local[f] = Object.assign({}, l, s); took = true; }
-        return;
-      }
-      if (f === 'jobLine') {
-        if (newerLine(s, l)) { local[f] = s; took = true; }
-        return;
-      }
-      const ahead = l == null ||
-        (f === 'qbEstimate' && s.id && s.id === l.id && (estStep(s.status) > estStep(l.status) ||
-          // Emailed since (quickbooks.py _emailed_patch), with no answer lost.
-          (estStep(s.status) === estStep(l.status) && s.emailStatus === 'EmailSent' &&
-            (l.emailStatus !== 'EmailSent' || String(s.emailedAt || '') > String(l.emailedAt || ''))))) ||
-        // The estimate this copy has was deleted in QuickBooks since
-        // (quickbooks.py _deleted_record).
-        (f === 'qbEstimate' && !s.id && s.deleted && l.id && String(s.deleted.id) === String(l.id)) ||
-        // The invoice as QuickBooks has it now: its balance, its change orders.
-        (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || '')) ||
-        // Where the thank-you stands (followup.py): each record the server
-        // writes is newer -- held, then sent -- and an older one pushed back
-        // over "sent" would show it as still to go.
-        ((f === 'thanksEmail' || f === 'welcomeEmail') && String(s.at || '') > String(l.at || ''));
-      if (ahead) { local[f] = s; took = true; }
-    });
+    SERVER_FIELDS.forEach(f => { if (takeField(f, local, theirs)) took = true; });
     if (qbFilledEstimate(local, theirs)) {
       // What was typed on the estimate here (its site notes) stays.
       local.estimate = Object.assign({}, theirs.estimate, local.estimate && local.estimate.notes ? { notes: local.estimate.notes } : {});
       took = true;
     }
     return took;
+  }
+  // One of the server's own parts, from `theirs` into `local` when it is
+  // plainly further along there; true if taken.
+  function takeField(f, local, theirs) {
+    const s = theirs[f], l = local[f];
+    if (s == null || f === 'qbChangesIn') return false;
+    // The follow-up emails the server drafted, one more at a time
+    // (followup.py auto): every one it has is kept with this copy's.
+    if (f === 'chaseDrafts' && l && typeof s === 'object') {
+      if (Object.keys(s).some(k => !(k in l))) { local[f] = Object.assign({}, l, s); return true; }
+      return false;
+    }
+    if (f === 'jobLine') {
+      if (newerLine(s, l)) { local[f] = s; return true; }
+      return false;
+    }
+    const ahead = l == null ||
+      (f === 'qbEstimate' && s.id && s.id === l.id && (estStep(s.status) > estStep(l.status) ||
+        // Emailed since (quickbooks.py _emailed_patch), with no answer lost.
+        (estStep(s.status) === estStep(l.status) && s.emailStatus === 'EmailSent' &&
+          (l.emailStatus !== 'EmailSent' || String(s.emailedAt || '') > String(l.emailedAt || ''))))) ||
+      // The estimate this copy has was deleted in QuickBooks since
+      // (quickbooks.py _deleted_record).
+      (f === 'qbEstimate' && !s.id && s.deleted && l.id && String(s.deleted.id) === String(l.id)) ||
+      // The invoice as QuickBooks has it now: its balance, its change orders.
+      (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || '')) ||
+      // Where the thank-you stands (followup.py): each record the server
+      // writes is newer -- held, then sent -- and an older one pushed back
+      // over "sent" would show it as still to go.
+      ((f === 'thanksEmail' || f === 'welcomeEmail') && String(s.at || '') > String(l.at || ''));
+    if (ahead) { local[f] = s; return true; }
+    return false;
   }
 
   // Someone is in one of the open job's boxes (the Job or Tracking tab, the
@@ -631,6 +771,36 @@
     }, 1500);
   }
 
+  // What only the server writes -- QuickBooks' answers, the care email --
+  // goes into the open form even when it has unsaved edits, or the next
+  // save would put the old values back. The same while someone is in one of
+  // the form's boxes (the form is not reloaded under them -- reloadWhenFree):
+  // what they type next is saved over this copy with these carried in.
+  function carryIntoForm(src) {
+    SERVER_FIELDS.forEach(f => {
+      if (!src || src[f] == null) return;
+      if (f === 'jobLine' && !newerLine(src[f], boardFields[f])) return;
+      boardFields[f] = src[f];
+    });
+    // And the estimate the server filled from QuickBooks, into one
+    // with no lines yet (estimate.js keeps what was typed).
+    if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(src && src.estimate);
+    // The change orders on its invoice: the add-ons table and the
+    // price box (base + add-ons) come to what the server saved.
+    if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
+    if (typeof mergeOpenPayments === 'function') mergeOpenPayments(src && src.payments);
+    // And the stage the server moved it to with its invoice, or the
+    // form's next save would put the card back in Ready to invoice.
+    const form = { workStage: boardFields.workStage, jobStatus: jobStatus };
+    if (takeServerStage(form, src || {})) {
+      boardFields.workStage = form.workStage; boardFields.workStageAt = form.workStageAt;
+    }
+    // And a bid QuickBooks emailed, moved to Sent.
+    const bid = { bidStage: boardFields.bidStage, bidStageAt: boardFields.bidStageAt, jobStatus: jobStatus };
+    if (takeServerSent(bid, src || {})) { boardFields.bidStage = bid.bidStage; boardFields.bidStageAt = bid.bidStageAt; }
+    if (typeof showBidBanner === 'function') showBidBanner();
+  }
+
   function applyRemote(changes) {
     if (!changes.length) return;
     applyingRemote = true;
@@ -650,6 +820,7 @@
           localStorage.removeItem(STORAGE_PREFIX + c.id);
           delete map[c.id];
           boardKnown.delete(c.id);
+          dropBase(c.id);
           if (c.id === currentJobId) openJobChanged = true;
           return;
         }
@@ -658,17 +829,65 @@
         if (pendingDeletes.has(c.id)) return;
         // Already holding exactly this copy, as the index says without the
         // stored job being read and parsed. The first snapshot of every
-        // launch lists every job, nearly all of them unchanged.
+        // launch lists every job, nearly all of them unchanged. Not after
+        // this device sent only some parts of it: the server's copy may hold
+        // what it has not seen under its own save time.
         const theirsAt = c.data && c.data.lastModified;
+        const partial = !!(bases[c.id] && bases[c.id].partial);
         if (theirsAt && map[c.id] && map[c.id].lastModified === theirsAt &&
-            localStorage.getItem(STORAGE_PREFIX + c.id) !== null) return;
+            localStorage.getItem(STORAGE_PREFIX + c.id) !== null && !partial) {
+          if (!baseOf(c.id)) setBase(c.id, c.data, false);
+          return;
+        }
         let local = null;
         try { local = JSON.parse(readJobBlob(c.id) || 'null'); } catch (e) {}
         const mine = local && local.lastModified, theirs = c.data && c.data.lastModified;
+        // Taken part by part against the server's copy as this device last
+        // saw it (see bases).
+        const base = local ? baseOf(c.id) : null;
+        if (base) {
+          const doc = c.data || {};
+          const m = mergeParts(local, doc, base);
+          // What the server holds now, for next time -- still `partial` until
+          // a copy the server itself has (not this device's write still on
+          // its way) has been gone through.
+          setBase(c.id, doc, base.partial && !!c.pending);
+          // The same parts: this device's own save come round again, or a
+          // copy it already has. Only the save time can differ.
+          if (!m.took.length && !m.ours.length) {
+            if (local.lastModified !== m.merged.lastModified) {
+              try { localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(m.merged)); } catch (e) {}
+              map[c.id] = buildIndexEntry(c.id, m.merged);
+              touched = true;
+            }
+            return;
+          }
+          try {
+            localStorage.setItem(STORAGE_PREFIX + c.id, JSON.stringify(m.merged));
+          } catch (e) {
+            console.warn('[sync] no room on this device for', c.id);
+            return;
+          }
+          touched = true;
+          map[c.id] = buildIndexEntry(c.id, m.merged);
+          // Parts only this side has go up -- just those (pushNow).
+          if (m.ours.length) { boardKnown.delete(c.id); keepOurs.push(c.id); }
+          else if (!(boardKnown.get(c.id) === NOT_ON_BOARD && !onBoard(m.merged))) boardKnown.delete(c.id);
+          bookIfAccepted(c.id, m.merged);
+          if (typeof fillFromQb === 'function') fillFromQb(c.id, m.merged);
+          if (window.YDCrewJobs && YDCrewJobs.remote) {
+            try { YDCrewJobs.remote(c.id); } catch (e) { console.warn('[sync] crew copy not checked for', c.id, e); }
+          }
+          if (c.id === currentJobId && m.took.length) {
+            openJobChanged = true;
+            if (dirty || formBusy()) carryIntoForm(m.merged);
+          }
+          return;
+        }
         // Our own save coming back round. Every autosave used to reload the
         // whole form from it -- the cursor jumped, and anyone who had moved to
         // another tab was pulled back to the Job tab.
-        if (mine && theirs && mine === theirs) return;
+        if (mine && theirs && mine === theirs) { setBase(c.id, c.data, false); return; }
         // Older than what this device already has: an edit made here before
         // sync had started, about to be overwritten by the stale cloud copy.
         // Keep ours and send it up instead.
@@ -700,6 +919,8 @@
           // The other device's save rewrote the crew's board entry; ours goes
           // back up, and pushBoard must not skip it as "already sent".
           boardKnown.delete(c.id);
+          // The server's copy remembered, so only what differs from it goes up.
+          setBase(c.id, c.data, false);
           keepOurs.push(c.id);
           return;
         }
@@ -710,6 +931,7 @@
           return;
         }
         touched = true;
+        setBase(c.id, c.data, false);
         map[c.id] = buildIndexEntry(c.id, c.data);
         // Changed on another device: what the board holds for it is unknown
         // here until this device next sends it -- except a bid that stays a
@@ -731,30 +953,7 @@
           // someone is in one of the form's boxes (the form is not reloaded
           // under them -- reloadWhenFree): what they type next is saved over
           // this copy with these carried in.
-          if (dirty || formBusy()) {
-            SERVER_FIELDS.forEach(f => {
-              if (!c.data || c.data[f] == null) return;
-              if (f === 'jobLine' && !newerLine(c.data[f], boardFields[f])) return;
-              boardFields[f] = c.data[f];
-            });
-            // And the estimate the server filled from QuickBooks, into one
-            // with no lines yet (estimate.js keeps what was typed).
-            if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(c.data && c.data.estimate);
-            // The change orders on its invoice: the add-ons table and the
-            // price box (base + add-ons) come to what the server saved.
-            if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
-            if (typeof mergeOpenPayments === 'function') mergeOpenPayments(c.data && c.data.payments);
-            // And the stage the server moved it to with its invoice, or the
-            // form's next save would put the card back in Ready to invoice.
-            const form = { workStage: boardFields.workStage, jobStatus: jobStatus };
-            if (takeServerStage(form, c.data || {})) {
-              boardFields.workStage = form.workStage; boardFields.workStageAt = form.workStageAt;
-            }
-            // And a bid QuickBooks emailed, moved to Sent.
-            const bid = { bidStage: boardFields.bidStage, bidStageAt: boardFields.bidStageAt, jobStatus: jobStatus };
-            if (takeServerSent(bid, c.data || {})) { boardFields.bidStage = bid.bidStage; boardFields.bidStageAt = bid.bidStageAt; }
-            if (typeof showBidBanner === 'function') showBidBanner();
-          }
+          if (dirty || formBusy()) carryIntoForm(c.data);
         }
       });
 
@@ -953,7 +1152,7 @@
     // Only reaches the cloud if the local delete actually happened (the user
     // may have cancelled the confirm). Before sync is running it waits in
     // pendingDeletes rather than being dropped.
-    if (existed && !readJobBlob(id)) queueDelete(id);
+    if (existed && !readJobBlob(id)) { dropBase(id); queueDelete(id); }
   };
 
   const _duplicateJob = window.duplicateJob;
@@ -1007,9 +1206,26 @@
     startSync();
   });
 
+  // The phone put away, or the page closing: what is waiting a moment to be
+  // saved and sent goes now. An iPhone can end the app in the background
+  // before those timers run, and the last words typed were lost with it
+  // (review, 31 Oct). Before a sign-out too, so its wait covers them.
+  function flushNow() {
+    try {
+      if (typeof dirty !== 'undefined' && dirty && typeof autosave === 'function') { clearTimeout(autosaveTimer); autosave(); }
+    } catch (e) { console.warn('[sync] could not save before going', e); }
+    if (watching) Object.keys(pushTimers).forEach(id => { clearTimeout(pushTimers[id]); delete pushTimers[id]; pushNow(id); });
+    if (basesTimer) saveBasesNow();
+  }
+  document.addEventListener('visibilitychange', () => { if (document.hidden) flushNow(); });
+  window.addEventListener('pagehide', flushNow);
+  (window.YDSignOutFlush = window.YDSignOutFlush || []).push(flushNow);
+
   // Expose a little of this for diagnostics.
   window.YDSync = {
     status: () => ({ watching, cloudState, applyingRemote }),
+    // What this device last saw the server hold for a job, part by part.
+    base: id => baseOf(id),
     patchJob: patchJob,
     sendNow: sendNow,
     // The job lifecycle's shared readings (see above): boards.js, home.js and

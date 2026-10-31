@@ -61,10 +61,25 @@
   // Any money written into free text ("$4,500", "$ 500", "$.50", "budget
   // ~15k", "800 dollars", "USD 300") -- never measurements, which the crew
   // need ("320 sq ft", "45 ft of edging").
+  // Also a figure straight after a money word ("budget is 8000", "quoted
+  // 1,500"), a dollar sign after the figure ("500$"), an hourly rate
+  // ("85/hr"), a part off ("10% off"), and amounts in words ("three
+  // thousand", "five hundred dollars"). "$ 1 500" goes whole, not as
+  // "$— 500" (review, 31 Oct).
+  const MONEY_WORD = /\b(budget(?:ed)?|price[ds]?|pricing|costs?|quote[ds]?|bid|charged?|paid|pays?|owe[sd]?|discount(?:ed)?|deposit)\b((?:\s+(?:is|was|of|at|around|about|under|over|near|roughly|approx\.?|for|to|by|them|him|her|us))*)\s*[:~=]?\s*\d(?:[\d,]|\s(?=\d{3}\b))*(\.\d+)?/gi;
+  const NUM = '(?:a|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|and)';
+  const WORD_DOLLARS = new RegExp('\\b(?:' + NUM + '[\\s-]+)*(?:hundred|thousand)\\s+(?:dollars?|bucks)\\b', 'gi');
+  const WORD_GRAND = new RegExp('\\b(?:' + NUM + '[\\s-]+)+(?:thousand|grand)\\b', 'gi');
   const noMoney = s => String(s == null ? '' : s)
-    .replace(/[$＄]\s*\.?\d[\d,]*(\.\d+)?/g, '$—')
+    .replace(/[$＄]\s*\.?\d(?:[\d,]|\s(?=\d{3}\b))*(\.\d+)?/g, '$—')
     .replace(/\busd\s*\d[\d,]*(\.\d+)?/gi, '$—')
-    .replace(/\b\d[\d,]*(\.\d+)?\s?(k|grand|dollars?|bucks|usd)\b/gi, '$—');
+    .replace(/\b\d[\d,]*(\.\d+)?\s?(k|grand|dollars?|bucks|usd)\b/gi, '$—')
+    .replace(/\b\d[\d,]*(\.\d+)?\s?[$＄]/g, '$—')
+    .replace(/\b\d[\d,]*(\.\d+)?\s?\/\s?(hr|hour|h)\b/gi, '$—/hr')
+    .replace(/\b\d+(\.\d+)?\s?%\s?(off|discount)\b/gi, '— $2')
+    .replace(WORD_DOLLARS, '$—')
+    .replace(WORD_GRAND, '$—')
+    .replace(MONEY_WORD, (m, word, between) => word + (between || '') + ' $—');
   const numOr = v => { const n = parseFloat(v); return isFinite(n) ? n : null; };
 
   // The job's own notes are the OFFICE's: on real jobs they hold invoice
@@ -75,14 +90,21 @@
   // bullet by bullet), and any piece that talks about billing is left out;
   // the rest goes. The proper answer is a notes-for-the-crew box of its own
   // on the job -- Jonah's call; until then this keeps the money side home.
-  const BILLING = /\b(invoic\w*|paid|unpaid|prepaid|owe[sd]?|owing|balance|late\s*fees?|deposits?|payments?|due|quick\s*books|qbo|estimate\s*(#|no\b|number))/i;
+  // "due to the sewer line" is not a bill: only "due" on its own.
+  const BILLING = /\b(invoic\w*|paid|unpaid|prepaid|owe[sd]?|owing|balance|late\s*fees?|deposits?|payments?|due(?!\s+to\b)|quick\s*books|qbo|estimate\s*(#|no\b|number)|budget\w*|pric(e[ds]?|ing)|quote[ds]?|discount\w*|margin|profit|mark-?up|sales\s*tax|slow\s+(to\s+)?pay|pays?\s+(by|in|with|late|cash|check))/i;
+  // A line that talks about billing loses only its billing pieces: a line
+  // of bullets, the bullets; a line of sentences, the sentences (a gate
+  // code or "watch the dog" beside a word about the bill used to go too).
+  const SENTENCES = /.+?(?:[.!?;](?=\s|$)|$)/g;
   function crewNotes(text) {
     return String(text == null ? '' : text).split(/\r?\n/).map(line => {
       if (!BILLING.test(line)) return line;
-      // A line with bullets in it loses only its billing pieces.
+      const bullets = /[•·▪●]/.test(line);
       const dot = (line.match(/[•·▪●]/) || ['•'])[0];
-      const kept = line.split(/[•·▪●]/).map(s => s.trim()).filter(s => s && !BILLING.test(s));
-      return kept.length ? (/^\s*[•·▪●]/.test(line) ? dot + ' ' : '') + kept.join(' ' + dot + ' ') : null;
+      const parts = bullets ? line.split(/[•·▪●]/) : (line.match(SENTENCES) || [line]);
+      const kept = parts.map(s => s.trim()).filter(s => s && !BILLING.test(s));
+      if (!kept.length) return null;
+      return bullets ? (/^\s*[•·▪●]/.test(line) ? dot + ' ' : '') + kept.join(' ' + dot + ' ') : kept.join(' ');
     }).filter(line => line !== null).join('\n').replace(/\n{3,}/g, '\n\n').trim();
   }
 
@@ -293,8 +315,14 @@
   }
 
   // The estimate's pieces of work the crew's page lists (one with no words
-  // at all is not work to do).
-  const workLines = d => (((d && d.estimate) || {}).work || []).filter(w => w && (w.title || w.scope || w.crewNote)).slice(0, 40);
+  // at all is not work to do). A discount or credit line ("Discount 10%",
+  // a QuickBooks discount brought in, a line below zero) is money, not
+  // work: it told the crew there was a discount, and sat on their list as a
+  // thing to tick Done -- unless Jonah wrote the crew a note on it.
+  const takesOff = w => (w.kind === 'amount' && Number(w.amountCents) < 0) || (w.kind === 'allin' && Number(w.allInCents) < 0) ||
+    /^\s*(discount|credit)\b/i.test(String(w.title || ''));
+  const workLines = d => (((d && d.estimate) || {}).work || [])
+    .filter(w => w && (w.title || w.scope || w.crewNote) && !(takesOff(w) && !String(w.crewNote || '').trim())).slice(0, 40);
   // Each piece of work as { id, title } -- the lines the crew tick off
   // (workdone.js), the same ids and order as the page: the estimate's, then
   // the invoice's change orders.
@@ -379,7 +407,9 @@
       line: lineOf(d, id),
       est: String(d.estimateNumber || '').trim(),
       services: (d.serviceTypes || []).slice(0, 20),
-      siteNotes: noMoney(est.notes).slice(0, 8000),
+      // The site-visit notes take meeting notes from Contacts too, where
+      // budgets get talked about: billing pieces left out as for the notes.
+      siteNotes: noMoney(crewNotes(est.notes)).slice(0, 8000),
       notes: noMoney(crewNotes(d.notes)).slice(0, 4000),
       work: parts.work,
       materials: parts.materials,
@@ -1002,10 +1032,16 @@
   // work, QuickBooks' words came in): the page is drawn again, where it was
   // scrolled to. Not while a box on it is being typed in -- then once that
   // is left. A copy that only got a new time stamp is left alone.
-  let pageSig = '', pageWaiting = false;
+  let pageSig = '', pageWaiting = false, pickWaiting = false;
   const sigOf = j => { const o = Object.assign({}, j || {}); delete o.updatedAt; return JSON.stringify(o); };
   function freshPage() {
     if (!pageOpen() || !pageId || pagePreview) return;
+    // A photo being taken from the page (jobphotos.js): drawn again only
+    // once it is back, or the camera's file box is gone with the old page.
+    if (window.YDJobPhotos && YDJobPhotos.picking && YDJobPhotos.picking()) {
+      if (!pickWaiting) { pickWaiting = true; setTimeout(() => { pickWaiting = false; freshPage(); }, 2000); }
+      return;
+    }
     const m = el('crewJobModal');
     const a = document.activeElement;
     if (a && m.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) {

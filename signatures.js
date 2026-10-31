@@ -353,7 +353,9 @@
     sgReady();
   };
   function amountCents() {
-    const v = parseFloat((el('sgAmount') || {}).value);
+    // A minus typed in the box means the same as "Takes off" (the box once
+    // read it as no price change at all, and said nothing).
+    const v = Math.abs(parseFloat((el('sgAmount') || {}).value));
     if (!isFinite(v) || v <= 0) return null;
     const sign = (document.querySelector('input[name="sgSign"]:checked') || {}).value === '-1' ? -1 : 1;
     return sign * Math.round(v * 100);
@@ -375,7 +377,21 @@
     return '';
   }
   function readyCheck() { window.sgReady(); }
+  // What the customer is agreeing to, as the boxes say it now. Ticked, then
+  // the words or the price changed: the tick no longer stands for what is
+  // on the paper, so it comes off and they tick it again.
+  let agreedTo = null;
+  function termsNow() {
+    const v = id => String((el(id) || {}).value || '').trim();
+    return JSON.stringify([amountCents(), v('sgWhat'), v('sgWork'), v('sgNotes'), v('sgTitle'), v('sgText'), v('sgSchedule')]);
+  }
   window.sgReady = function () {
+    const box = el('sgAgree');
+    if (box && box.checked) {
+      const now = termsNow();
+      if (agreedTo === null) agreedTo = now;
+      else if (agreedTo !== now) { box.checked = false; agreedTo = null; showToast('The paper changed — they tick “I agree” again'); }
+    } else agreedTo = null;
     const t = el('sgAgreeText');
     if (t) t.textContent = agreeText();
     const b = el('sgSave');

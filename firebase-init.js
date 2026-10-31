@@ -19,7 +19,7 @@ import {
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-auth.js';
 import {
   initializeFirestore, persistentLocalCache, persistentSingleTabManager,
-  doc, getDoc, getDocFromServer, setDoc, serverTimestamp, collection, onSnapshot, deleteDoc,
+  doc, getDoc, getDocFromServer, setDoc, updateDoc, deleteField, serverTimestamp, collection, onSnapshot, deleteDoc,
   getDocs, getDocsFromServer, writeBatch, query, where,
   terminate, clearIndexedDbPersistence, waitForPendingWrites, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
@@ -504,7 +504,10 @@ async function start() {
     function relay(onChange) {
       let wasCache = null;
       return snap => {
-        const changes = snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data() }));
+        // `pending`: the copy still carries this device's own write, not yet
+        // on the server (sync.js waits for the server's own copy of a job it
+        // sent only some parts of).
+        const changes = snap.docChanges().map(c => ({ type: c.type, id: c.doc.id, data: c.doc.data(), pending: c.doc.metadata.hasPendingWrites }));
         const fromCache = snap.metadata.fromCache;
         if (!changes.length && fromCache === wasCache) return;
         wasCache = fromCache;
@@ -516,6 +519,15 @@ async function start() {
       // Jobs are watched with the general watch('jobs') below (sync.js).
       async putJob(id, data) {
         await track(setDoc(doc(db, 'jobs', id), data));
+      },
+
+      // Only some parts of a job, each part whole (sync.js sends what this
+      // device changed, not its whole copy over what others wrote). `gone`:
+      // parts taken off. A job no longer on the server answers not-found.
+      async updateJob(id, fields, gone) {
+        const data = Object.assign({}, fields);
+        (gone || []).forEach(k => { data[k] = deleteField(); });
+        await track(updateDoc(doc(db, 'jobs', id), data));
       },
 
       async removeJob(id) {

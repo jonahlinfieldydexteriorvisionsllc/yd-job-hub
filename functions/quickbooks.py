@@ -4620,8 +4620,10 @@ def add_change_order(body):
         ("\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if signed else "")
     lines = [l for l in txn.get("Line") or [] if l.get("DetailType") != "SubTotalLineDetail"]
     # Already on it (a tap again after the line went on but the PDF or the
-    # record did not): not a second time.
-    if any(str(l.get("Description") or "").strip() == text.strip() for l in lines):
+    # record did not): not a second time. The same words AND the same price
+    # -- two change orders signed the same day in the same words are two
+    # lines, and the second one's price must reach the invoice.
+    if any(str(l.get("Description") or "").strip() == text.strip() and _cents(l.get("Amount")) == cents for l in lines):
         out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),
                "docNumber": str(txn.get("DocNumber") or ""), "total": txn.get("TotalAmt"), "env": env, "already": True}
         ref.set({"qb": out}, merge=True)
@@ -4632,7 +4634,10 @@ def add_change_order(body):
         at -= 1
     lines.insert(at, _line(_item_named(CHANGE_ORDER_ITEM), cents, text))
     upd = _call("POST", entity.lower(), body={"Id": txn["Id"], "SyncToken": txn["SyncToken"], "sparse": True, "Line": lines},
-                request_id=hashlib.sha1(("co|" + doc_id).encode()).hexdigest()).get(entity) or {}
+                # The invoice's version in the id: an update QuickBooks
+                # refused (it changed in between) is tried afresh next time,
+                # not answered with the old refusal.
+                request_id=hashlib.sha1(("co|%s|%s" % (doc_id, txn.get("SyncToken"))).encode()).hexdigest()).get(entity) or {}
     out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),
            "docNumber": str(upd.get("DocNumber") or txn.get("DocNumber") or ""),
            "total": upd.get("TotalAmt"), "env": env}

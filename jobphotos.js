@@ -124,6 +124,7 @@
   // Picked from a Before / During / After button: shrink each, keep it on
   // the phone, show it at once, then send.
   window.jpPicked = async function (input, stage) {
+    pickingSince = 0;
     const files = Array.from(input.files || []).filter(f => /^image\//.test(f.type) || !f.type);
     input.value = '';
     const forJob = input.getAttribute('data-job') || jobId;
@@ -179,6 +180,10 @@
     const base = 'jobPhotos/' + item.jobId + '/' + item.id;
     const tried = !!item.tries;
     item.tries = (item.tries || 0) + 1;
+    // Kept now, not after: an app closed after a file reached the server but
+    // before the phone heard so must ask next time whether it is there --
+    // a second upload of it is refused (create-only), for ever.
+    qSave(item);
     try {
       // Each address is kept on the phone as soon as it is known, so a try
       // that dies half way picks up where it stopped.
@@ -360,17 +365,26 @@
     const inSection = container.id === 'jobPhotosBody';
     const count = list.length ? (inSection ? list.length + ' photo' + (list.length === 1 ? '' : 's') : ' · ' + list.length) : '';
     const askedHtml = asked && changesJobs() ? ' <span class="jp-asked-n">' + asked + ' asked to be deleted</span>' : '';
+    // The three Add buttons are put back as they were, not drawn again: the
+    // list redraws whenever an upload starts or ends or a teammate's photo
+    // comes in, and a new file box in place of the one the camera was opened
+    // from could lose the photo being taken (iPhone).
+    const keep = container.querySelector('.jp-add[data-job="' + safe(id) + '"]');
     container.innerHTML =
       (inSection ? (count || askedHtml ? '<div class="cj-h">' + count + askedHtml + '</div>' : '')
         : '<div class="cj-h">📷 Photos' + count + askedHtml + '</div>') +
-      '<div class="jp-add">' + STAGES.map(([k, name]) =>
+      (keep ? '<div class="jp-add-slot"></div>' : addRowHtml(id)) +
+      (groups || '<p class="muted">' + (loaded || !navigator.onLine ? 'No photos yet. Tap Add before, during or after photo, then take or choose the photos.' : 'Loading…') + '</p>');
+    if (keep) container.querySelector('.jp-add-slot').replaceWith(keep);
+  }
+  function addRowHtml(id) {
+    return '<div class="jp-add" data-job="' + safe(id) + '">' + STAGES.map(([k, name]) =>
         // "Add before photo", not just "Before": the bare word read like a
         // filter on the photos below. "before photo" kept together, so on a
         // phone all three break the same way.
         '<label class="btn jp-btn jp-btn-' + k + '">📷 Add <span class="jp-btn-what">' + name.toLowerCase() + ' photo</span>' +
         '<input type="file" accept="image/*" multiple hidden data-job="' + safe(id) + '" onchange="jpPicked(this, \'' + k + '\')"></label>').join('') +
-      '</div>' +
-      (groups || '<p class="muted">' + (loaded || !navigator.onLine ? 'No photos yet. Tap Add before, during or after photo, then take or choose the photos.' : 'Loading…') + '</p>');
+      '</div>';
   }
   function drawAll() {
     mounts.forEach(c => { if (!c.isConnected) mounts.delete(c); else draw(c); });
@@ -700,8 +714,25 @@
   });
   window.addEventListener('online', sendWaiting);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendWaiting(); });
+  // A weak signal the phone still calls "online": a try that failed was
+  // only tried again on the next coming-online or coming-back, so a photo
+  // could sit at "Waiting for signal" all afternoon. Once a minute instead,
+  // while any wait.
+  setInterval(() => { if (Object.keys(queue).length && navigator.onLine !== false && !document.hidden) sendWaiting(); }, 60000);
+
+  // A photo box opened -- its camera or picker is up -- since when, until a
+  // photo comes back (jpPicked) or a minute passes. The crew's job page is
+  // not drawn again meanwhile (crewjobs.js freshPage): a new page is a new
+  // file box, and the photo being taken could be lost.
+  let pickingSince = 0;
+  document.addEventListener('click', ev => {
+    const t = ev.target;
+    if (t && t.matches && t.matches('input[type="file"]') && t.closest('.jp-add')) pickingSince = Date.now();
+  }, true);
+  window.addEventListener('focus', () => { if (pickingSince) setTimeout(() => { pickingSince = 0; }, 3000); });
 
   window.YDJobPhotos = { mount: mount, jobShown: jobShown, readyToFinish: readyToFinish,
+                         picking: () => !!pickingSince && Date.now() - pickingSince < 60000,
                          waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
                          // This person's photos still on this phone, for the end
                          // of the day's count of the day's photos (eod.js).

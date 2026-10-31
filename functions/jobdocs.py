@@ -68,6 +68,8 @@ def email_copy(db, doc_id, who=""):
                          json={"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()}, timeout=60)
     if resp.status_code >= 300:
         raise RuntimeError("Gmail said %d: %s" % (resp.status_code, resp.text[:200]))
-    out = {"ok": True, "at": dg._now().isoformat(), "to": to, "by": str(who or "")[:80]}
+    # Not the address it went to: the crew member who collected the paper can
+    # read this record, and the customer's email is not theirs to see.
+    out = {"ok": True, "at": dg._now().isoformat(), "by": str(who or "")[:80]}
     ref.set({"emailed": out}, merge=True)
     return out
