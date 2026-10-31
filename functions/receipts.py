@@ -177,12 +177,35 @@ OWED_SIGN = re.compile(r"\b(amount due|balance due|payment due|due date|due on|d
 PAID_DOCS = ("receipt", "refund", "order_confirmation", "person_payment", "shipping_notice", "ready_for_pickup")
 
 
-def zero_amount(got):
+MONEY = re.compile(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
+
+
+def _money_in(m):
+    """Whether the email itself shows a dollar amount above nothing."""
+    text = " ".join(str(m.get(k) or "") for k in ("subject", "snippet", "text"))
+    for x in MONEY.findall(text):
+        try:
+            if float(x.replace(",", "")) > 0:
+                return True
+        except ValueError:
+            pass
+    return False
+
+
+def zero_amount(got, m=None):
     """True when the read found nothing charged at all: a $0.00 total and no
-    line that cost anything. A refund (a total below nothing) is money."""
+    line that cost anything. A refund (a total below nothing) is money.
+    `m` (the email, when there is one): goods listed or a PDF, and dollar
+    amounts in the email itself, is a read that missed the prices (in a
+    picture, a table it could not follow) -- kept to look at, not dropped as
+    $0 for good."""
     if _cents(got.get("total")):
         return False
-    return not any(_cents(it.get("amount")) for it in (got.get("items") or []))
+    if any(_cents(it.get("amount")) for it in (got.get("items") or [])):
+        return False
+    if m is not None and (got.get("items") or m.get("files")) and _money_in(m):
+        return False
+    return True
 
 
 def unpaid_bill(got, m=None):
@@ -890,6 +913,13 @@ def read_receipt(client, m, bank="", part=None, note=""):
     with it, its other PDFs do not. `note`: what Jonah wrote on the receipt
     (Read it again), for the read to go by."""
     blocks, notes = _attachment_blocks(dict(m, files=[part["file"]]) if part else m)
+    if part and not blocks:
+        # The PDF could not go with the read (too large): read from the
+        # email's text alone under "PDF n is attached", it came back $0 and
+        # was dropped without a word. Said instead, so the email is read
+        # whole on its last try (read_email).
+        return None, None, "PDF %d of %d could not be sent to be read (%s)" % (
+            part["n"], part["of"], "; ".join(notes) or "too large")
     text = m["text"][:40000]
     head = ("From: %s\nTo: %s\nDate: %s\nSubject: %s\n\n" % (m["from"], m["to"], m["date"], m["subject"]))
     if part:
@@ -899,6 +929,18 @@ def read_receipt(client, m, bank="", part=None, note=""):
     if note:
         blocks.append({"type": "text", "text": NOTE_HEAD + note[:NOTE_MAX]})
     return _ask(client, read_system(bank), blocks, RECEIPT_SCHEMA, "medium")
+
+
+def _parts_now(m, done, each_from):
+    """each_pdf for an email being read -- but none on its last try when
+    reading its PDFs one by one has failed before: then it is read whole, one
+    receipt for them all (Read it again splits it later), so one PDF that
+    cannot be read no longer loses every receipt in the email."""
+    parts = each_pdf(m, each_from)
+    if parts and int(((done or {}).get(m["id"]) or {}).get("tries") or 0) >= MAX_TRIES - 1:
+        print("receipts: %s read whole -- its PDFs one by one failed before" % m["id"])
+        return ()
+    return parts
 
 
 def read_email(client, m, bank="", parts=()):
@@ -1223,6 +1265,12 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
     snap = ref.get()
     joined = None
     if not snap.exists:
+        # Joined to its order's receipt before (_same_order, below): this is
+        # that receipt again -- sent a second time, or in another email. It
+        # was counted again on its own, the order's receipt being `joined`.
+        for s in db.collection("receipts").where("joinedIds", "array_contains", rid).limit(1).stream():
+            ref, snap = s.reference, s
+    if not snap.exists:
         twin = _same_bill(db, fields)
         if twin is None:
             twin = _same_order(db, fields, mail["subject"])
@@ -1239,6 +1287,7 @@ def _save(db, m, got, jobs, extra=None, to_pay=False):
         # number, and what it came to, kept on the one receipt.
         if joined:
             patch["joined"] = firestore.ArrayUnion([joined])
+            patch["joinedIds"] = firestore.ArrayUnion([rid])
         # Marked "Not a receipt": a later email about it is noted with it and
         # changes nothing else -- it stays where Jonah put it.
         if status == stages.RECEIPT_NOT:
@@ -1682,6 +1731,12 @@ def goods_of(lines):
                   if not CARD_FEE.search(str(ln.get("name") or "")) and ln.get("name") != GAP_LINE)
 
 
+def _names_meet(a, b):
+    """Whether two purchases' lines share a word (4 letters or more) of what was bought."""
+    words = lambda lines: {w for ln in lines or [] for w in re.findall(r"[a-z]{4,}", str(ln.get("name") or "").lower())}
+    return bool(words(a) & words(b))
+
+
 def _same_order(db, f, subject=""):
     """The receipt this one is the order or the invoice of (above), or None.
     `f` is the new record's fields (_save), `subject` its email's."""
@@ -1715,6 +1770,12 @@ def _same_order(db, f, subject=""):
         if not 0 <= gap <= MATCH_DAYS or goods_of(r.get("lines")) != goods:
             continue
         if any(_norm(f.get(k)) and _norm(r.get(k)) and _norm(f.get(k)) != _norm(r.get(k)) for k in ("po", "deliverTo")):
+            continue
+        # One line at the same price is not enough: two purchases of one thing
+        # at one price would be taken for one. The same PO, or a word of what
+        # was bought, says it is the same purchase.
+        if len(goods) < 2 and not (_norm(f.get("po")) and _norm(f.get("po")) == _norm(r.get("po"))) \
+                and not _names_meet(f.get("lines"), r.get("lines")):
             continue
         if best is None or gap < best_gap:
             best, best_gap = s, gap
@@ -1852,11 +1913,16 @@ def pickup_card(db, m, got, jobs, ready=True):
     snap = ref.get()
     nos = _order_nos(order, m)
     code = m.get("pickupCode") if isinstance(m.get("pickupCode"), dict) else None
-    # The ready email of an order whose card was made from its confirmation
-    # under another of its numbers: that card.
-    if not snap.exists and ready and order:
-        want = re.sub(r"[^A-Z0-9]", "", order.upper())
-        for s in cards_ref.where("pickupNos", "array_contains", want).limit(3).stream():
+    # The same order's card made under another of its numbers -- the ready
+    # email's card from its confirmation, or (read the other way round, both
+    # in one run) the confirmation's from the ready email: that card. Its own
+    # number and the lettered ones only (a bare number may be a phone or date).
+    wants = [n for n in nos if re.match(r"[A-Z]", n)]
+    own = re.sub(r"[^A-Z0-9]", "", order.upper())
+    if own and own not in wants:
+        wants.insert(0, own)
+    if not snap.exists and wants:
+        for s in cards_ref.where("pickupNos", "array_contains_any", wants[:10]).limit(5).stream():
             k = s.to_dict() or {}
             if not k.get("doneAt") and vendor_key(k.get("pickupVendor") or "") == vendor_key(vendor):
                 ref, snap, cid = s.reference, s, s.id
@@ -2945,7 +3011,7 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of, each_from=()):
     to_read = to_read[:allowed]
 
     def one(m):
-        return m, read_email(client, m, bank, each_pdf(m, each_from))
+        return m, read_email(client, m, bank, _parts_now(m, done, each_from))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = {pool.submit(one, m): m for m in to_read}
@@ -2971,7 +3037,7 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of, each_from=()):
             if not got.get("is_purchase"):
                 _seen(db, m["id"], "not_purchase", subject=m["subject"][:200], pulled=True)
                 continue
-            if zero_amount(got):
+            if zero_amount(got, m):
                 _seen(db, m["id"], "zero", subject=m["subject"][:200], pulled=True)
                 out["passed"] += 1
                 continue
@@ -3141,7 +3207,7 @@ def run(client, manual=False):
             return loaded["jobs"]
 
         def one(m):
-            return m, read_email(client, m, bank, each_pdf(m, st_data.get("pdfEachFrom")))
+            return m, read_email(client, m, bank, _parts_now(m, done, st_data.get("pdfEachFrom")))
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
             futures = {pool.submit(one, m): m for m in to_read}
@@ -3173,9 +3239,11 @@ def run(client, manual=False):
                         if card:
                             report["pickups"] += 1
                     elif got.get("is_purchase") and got.get("fulfilment") == "pickup" \
-                            and got.get("doc_type") not in ("shipping_notice", "refund"):
+                            and got.get("doc_type") == "order_confirmation":
                         # An order placed for pickup: its card now, for the
-                        # crew, before the store says it is ready.
+                        # crew, before the store says it is ready. Only the
+                        # order itself -- a receipt or invoice for one already
+                        # collected made a "not ready yet" card for it.
                         card = pickup_card(db, m, got, jobs_of(), ready=False)
                         if card:
                             report["pickups"] += 1
@@ -3200,7 +3268,7 @@ def run(client, manual=False):
                         _seen(db, m["id"], "not_purchase", subject=m["subject"][:200])
                         report["notReceipts"] += 1
                         continue
-                    if zero_amount(got):
+                    if zero_amount(got, m):
                         # Nothing was charged: no receipt (above).
                         _seen(db, m["id"], "zero", subject=m["subject"][:200])
                         report["notReceipts"] += 1
