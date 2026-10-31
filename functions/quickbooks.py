@@ -896,7 +896,9 @@ def _estimate_lines(body):
     the materials: one line, or two when some are taxed and some not
     (materialParts; a client from before sends only `materials`)."""
     out, site = [], str(body.get("site") or "").strip()
-    work = [w for w in body.get("work") or [] if int(w.get("cents") or 0) > 0 or str(w.get("scope") or "").strip()]
+    # A discount line (below zero) is in Job Hub's total: it goes too
+    # (estimate.js customerLines; only a $0 line with no words is left out).
+    work = [w for w in body.get("work") or [] if int(w.get("cents") or 0) != 0 or str(w.get("scope") or "").strip()]
     for i, w in enumerate(work):
         head = [str(w.get("title") or "").strip().upper()]
         if i == 0 and site:

@@ -2163,8 +2163,9 @@ function orderFromEstimate(list, lines) {
     if (!want[k]) return;                                    // no longer on the estimate
     seen[k] = 1;
     if (it.swappedFrom) { out.push(it); return; }           // swapped by hand: his product and amount
-    // An amount changed by hand (what was really ordered) stays his.
-    out.push(Object.assign({}, it, orderFields(want[k]), it.qtyByHand ? { quantity: it.quantity, qty: it.qty } : {}));
+    // An amount changed by hand (what was really ordered) stays his -- in the
+    // unit he typed it in.
+    out.push(Object.assign({}, it, orderFields(want[k]), it.qtyByHand ? { quantity: it.quantity, qty: it.qty, per: it.per || '' } : {}));
   });
   lines.forEach(l => {
     if (!seen[keyOf(l)]) out.push(Object.assign({ id: uid(), proposalId: null, ordered: false, fromEstimate: true }, orderFields(l)));
@@ -2197,7 +2198,9 @@ function rejoinOrderLines(list, lines, picks) {
     moved = true;
     if (have[p.sid]) return;                 // already on the list under its item
     have[p.sid] = true;
-    out.push(Object.assign({}, it, orderFields(fresh[p.sid])));
+    // Made again in the new item's units: a hand amount in the old ones no
+    // longer fits, so the line follows the estimate again.
+    out.push(Object.assign({}, it, orderFields(fresh[p.sid]), { qtyByHand: null }));
   });
   return moved ? out : null;
 }
@@ -2365,7 +2368,11 @@ function fillWaitingFromQb() {
 }
 document.addEventListener('yd-supplies', fillWaitingFromQb);
 // A Supplies item picked for some words (supplymatch.js): the order list takes it.
-document.addEventListener('yd-supply-aliases', () => { if (document.getElementById('orderListWrap') && orderItems.length) renderOrderList(); });
+document.addEventListener('yd-supply-aliases', () => {
+  if (!document.getElementById('orderListWrap') || !orderItems.length) return;
+  if (orderTyping('orderListWrap')) { ordersHeld.orderListWrap = true; return; }      // drawn once the typing is done
+  renderOrderList();
+});
 document.addEventListener('yd-pricing', fillWaitingFromQb);
 
 // ── What it costs (owner, and admins with Supplies) ──
@@ -2408,13 +2415,18 @@ function orderOptions(it, cat) {
   return YDMatch.match({ name: String(it.name || ''), unit: '' }, cat, skip, { anyUnit: true }).options;
 }
 // How many, typed on the line: "4" or "4 yards" (orderQtyFields).
+function orderQtyRefused(v) {
+  if (!(orderTypedNumber(v) < 0)) return false;
+  showToast('An amount can’t be below zero');
+  return true;
+}
 function setOrderQty(id, v) {
   const it = orderItems.find(m => m.id === id);
   if (!it || jobsReadOnly()) return;
+  if (orderQtyRefused(v)) { orderListsRedraw(); return; }
   Object.assign(it, orderQtyFields(it, v));
   markDirty();
-  renderOrderList();
-  renderOrdersOverview();
+  orderListsRedraw();
 }
 function orderQtyOf(it) {
   if (typeof it.qty === 'number' && isFinite(it.qty)) return it.qty;
@@ -2635,9 +2647,13 @@ function setOrderDeliveryQuote(jobId, vid, v) {
   showToast(said);
   orderListsRedraw();
 }
+// After a box on either list saves: both drawn again -- but not one whose
+// next box is being typed in now (orderTyping; drawn once that is done).
 function orderListsRedraw() {
-  if (document.getElementById('orderListWrap')) renderOrderList();
-  renderOrdersOverview();
+  if (document.getElementById('orderListWrap')) {
+    if (orderTyping('orderListWrap')) ordersHeld.orderListWrap = true; else renderOrderList();
+  }
+  if (orderTyping('ordersWrap')) ordersHeld.ordersWrap = true; else renderOrdersOverview();
 }
 // The unit a quantity typed by hand is in: "632 sq ft" -> "sq ft",
 // "approx. 1.10 tons" -> "tons", "376 sq ft (4 pallets)" -> "sq ft".
@@ -2754,8 +2770,11 @@ function orderSwapHtml(job, key, it, cat) {
 function orderSwapFields(o, sid, cat) {
   const s = cat.items[sid];
   if (!s) return o;
+  // All Put back needs to make it exactly what it was (its special-order
+  // mark and grass-seed bag too).
   const was = o.swappedFrom || { supplyId: o.supplyId || null, vendorId: o.vendorId || null, name: o.name || '', per: o.per || '',
-                                 quantity: o.quantity || '', qty: typeof o.qty === 'number' ? o.qty : null, qtyByHand: !!o.qtyByHand };
+                                 quantity: o.quantity || '', qty: typeof o.qty === 'number' ? o.qty : null, qtyByHand: !!o.qtyByHand,
+                                 specialOrder: !!o.specialOrder, usesLb: typeof o.usesLb === 'number' ? o.usesLb : null };
   if (was.supplyId && was.supplyId === sid) return orderSwapRestore(o);
   const p = (cat.prices || {})[sid] || {};
   const q = orderQtyOf(o);
@@ -2779,6 +2798,9 @@ function orderSwapRestore(o) {
   if (!was) return o;
   const n = Object.assign({}, o, { supplyId: was.supplyId || null, vendorId: was.vendorId || null, name: was.name || o.name,
     per: was.per || '', quantity: was.quantity || '', qty: typeof was.qty === 'number' ? was.qty : null, qtyByHand: !!was.qtyByHand });
+  // (A swap made before these were kept leaves them as they are.)
+  if ('specialOrder' in was) n.specialOrder = !!was.specialOrder;
+  if (typeof was.usesLb === 'number') n.usesLb = was.usesLb;
   delete n.swappedFrom; delete n.swappedAt; delete n.swappedBy; delete n.way;
   return n;
 }
@@ -3384,31 +3406,59 @@ function ordersPatchLine(jobId, itemId, set) {
   let d = null;
   try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
   if (!d || !window.YDSync) return false;
-  window.YDSync.patchJob(id, { orderItems: (d.orderItems || []).map((o, i) => o && ordLineKey(o, i) === itemId ? set(o) : o) });
+  // No line by that key any more (changed on another device meanwhile):
+  // nothing saved, and the caller says so -- not "Saved".
+  let hit = false;
+  const items = (d.orderItems || []).map((o, i) => { if (o && ordLineKey(o, i) === itemId) { hit = true; return set(o); } return o; });
+  if (!hit) return false;
+  window.YDSync.patchJob(id, { orderItems: items });
   return true;
+}
+// The number at the front of what was typed: "3.5 yd", "1/2 yard",
+// "1 1/2 tons" (a fraction read as one, not as its first figure). NaN if none.
+function orderTypedNumber(typed) {
+  const t = String(typed || '').replace(/,/g, '').trim();
+  const mixed = /^(\d+(?:\.\d+)?)\s+(\d+)\s*\/\s*(\d+)/.exec(t), frac = /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/.exec(t);
+  if (mixed && +mixed[3]) return +mixed[1] + mixed[2] / mixed[3];
+  if (frac && +frac[2]) return frac[1] / frac[2];
+  return parseFloat(t);
 }
 // How much of a line, typed on the order screen: what was really ordered
 // ("3.5" of soil quoted at 5 yards). A bare number keeps the line's unit. Kept
 // by hand (qtyByHand), so the estimate no longer moves it (orderFromEstimate).
+// A unit typed with it is the
+// line's unit from then on: "215 sq ft" on a line by the roll is 215 square
+// feet -- whole rolls to buy for them, or "not the unit it is priced by" --
+// never 215 rolls (21 Oct 2026: $19,608). Emptied, the line follows the
+// estimate's amount again.
 function orderQtyFields(o, v) {
   const typed = String(v == null ? '' : v).trim();
-  const n = parseFloat(typed.replace(/,/g, ''));
-  const bare = /^[\d.,\s]+$/.test(typed);
-  const unit = String(o.per || orderUnitWords(o.quantity) || '').trim();
-  const quantity = !typed ? '' : bare && isFinite(n) && unit
+  if (!typed) return { quantity: '', qty: null, qtyByHand: null };
+  const n = orderTypedNumber(typed);
+  const bare = /^[\d.,\s\/]+$/.test(typed);
+  const said = bare ? '' : orderUnitWords(typed);
+  const unit = String(said || o.per || orderUnitWords(o.quantity) || '').trim();
+  const U = window.YDMatch ? YDMatch.unitKey : (s => String(s || '').toLowerCase().trim());
+  const quantity = bare && isFinite(n) && unit
     ? (window.YDPricing && YDPricing.qtyText ? YDPricing.qtyText(n, unit) : n + ' ' + unit) : typed;
-  return { quantity: quantity, qty: isFinite(n) ? n : null, qtyByHand: true };
+  const out = { quantity: quantity, qty: isFinite(n) ? n : null, qtyByHand: true };
+  if (said && o.per && U(said) !== U(o.per)) out.per = said;
+  return out;
 }
 function ordersQty(jobId, itemId, v) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  if (orderQtyRefused(v)) { orderListsRedraw(); return; }
   if (currentJobId && ordId(currentJobId) === jobId) {
     const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
     if (!it) return;
     Object.assign(it, orderQtyFields(it, v));
     markDirty();
-    renderOrderList();
-  } else if (!ordersPatchLine(jobId, itemId, o => Object.assign({}, o, orderQtyFields(o, v)))) return;
-  renderOrdersOverview();
+  } else if (!ordersPatchLine(jobId, itemId, o => Object.assign({}, o, orderQtyFields(o, v)))) {
+    showToast('That line has changed on the job — look again');
+    orderListsRedraw();
+    return;
+  }
+  orderListsRedraw();
   showToast('Saved on the job');
 }
 // A line's way set by hand here = on the job, as a tick is (ordersTick).
@@ -3467,7 +3517,9 @@ async function ordersOpenJob(key) {
 // no address it keeps the job's name, so the lines never come with no place.
 function ordersTextFor(vid, jobKey) {
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : { items: {}, vendors: {} };
-  const all = ordersJobs();
+  // A finished job still on the screen (lines left to tick or mark "didn't
+  // buy it") is never asked of a supplier again.
+  const all = ordersJobs().filter(j => !j.done);
   const jobs = ordersView === 'week' ? all.filter(j => j.soon) : all;
   const groups = ordersBySupplier(jobs, cat);
   const v = Object.keys(groups).find(k => k && ordId(k) === vid);
@@ -3509,11 +3561,36 @@ function emailOrdersFor(vid, jobKey) {
 }
 // Drawn when Supplies is opened (switchTab) and whenever the jobs, Supplies
 // or the calendars change while it is on screen.
+// A box being typed in on an order list -- an amount, an item #, the swap's
+// search or its "Not in Supplies" form, a delivery charge -- is never
+// redrawn under the typing: a job or Supplies change arriving meanwhile (or
+// the box before it saving) would throw the box away, and the tap that went
+// to the next box with it. Held, it is drawn once the typing is done: a
+// moment after leaving the boxes, so a tap on a tick lands first.
+function orderTyping(wrapId) {
+  const wrap = document.getElementById(wrapId), a = document.activeElement;
+  if (!wrap || !a || !wrap.contains(a)) return false;
+  return a.tagName === 'TEXTAREA' || a.tagName === 'SELECT' ||
+    (a.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|reset)$/i.test(a.type || ''));
+}
+const ordersHeld = { ordersWrap: false, orderListWrap: false };
 function ordersOnScreen() {
   const p = document.getElementById('panel-supplies');
-  if (p && p.classList.contains('active')) renderOrdersOverview();
+  if (!p || !p.classList.contains('active')) return;
+  if (orderTyping('ordersWrap')) { ordersHeld.ordersWrap = true; return; }
+  renderOrdersOverview();
 }
 ['yd-jobs-changed', 'yd-supplies', 'yd-supply-aliases'].forEach(ev => document.addEventListener(ev, ordersOnScreen));
+document.addEventListener('focusout', () => {
+  if (!ordersHeld.ordersWrap && !ordersHeld.orderListWrap) return;
+  setTimeout(() => {
+    if (ordersHeld.ordersWrap && !orderTyping('ordersWrap')) { ordersHeld.ordersWrap = false; ordersOnScreen(); }
+    if (ordersHeld.orderListWrap && !orderTyping('orderListWrap')) {
+      ordersHeld.orderListWrap = false;
+      if (document.getElementById('orderListWrap') && orderItems.length) renderOrderList();
+    }
+  }, 300);
+});
 
 // ═══════════════════════════════════════════════════════════
 // LABOR  (worker · hours · minutes — total per worker, no date)

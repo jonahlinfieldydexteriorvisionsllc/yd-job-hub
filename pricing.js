@@ -52,6 +52,9 @@
   // Priced on an estimate but never named to the customer (materialLine
   // `listed`): what is hired for the job, not part of what it leaves behind.
   const NOT_LISTED = ['rental'];
+  // When every supplier's delivery started counting (abd5906): a bid first
+  // sent before it kept the price it went out at (deliveries()).
+  const OWN_DELIVERY_FROM = '2026-10-27T17:01:09Z';
   const CATEGORY_NAME = {};
   CATEGORIES.forEach(([id, name]) => { CATEGORY_NAME[id] = name; });
 
@@ -576,7 +579,8 @@
     const spoil = Math.max(0, num(est.spoilCuYd) || 0), brush = Math.max(0, num(est.brushCuYd) || 0);
     const boxOf = (id, max) => (id && num(max) > 0 ? { id: id, max: num(max), cents: ctx.prices[id] ? num(ctx.prices[id].cents) : null } : null);
     const usual = boxOf(d.supplyId, d.maxCuYd), big = boxOf(d.brushSupplyId, d.brushMaxCuYd);
-    if (!off.dumpsters && !lines.some(l => l.category === 'dumpster') && (spoil > 0 || brush > 0)) {
+    // (A hand-typed "Dumpster 10 yd" not joined to Supplies is one too.)
+    if (!off.dumpsters && !lines.some(l => isDumpster(l)) && (spoil > 0 || brush > 0)) {
       const soilBoxes = usual && spoil > 0 ? Math.ceil(trim(spoil / usual.max)) : 0;
       const rest = Math.max(0, trim(brush - (usual ? soilBoxes * usual.max - spoil : 0)));
       let nUsual = 0, nBig = 0;
@@ -640,9 +644,12 @@
     // Nor does anything we pick up ourselves (wayOf), nor a dumpster.
     const want = lines.filter(l => truckable(l) && wayNow(l) === 'delivered' && l.wayBy !== 'dumpster');
     // Delivered, but not a town truck's load. Counted from 27 Oct 2026: a bid
-    // sent before keeps the price it went out at (QuickBooks has the last
-    // word on it); its order list counts them.
-    const sent = Array.isArray(est.sent) && est.sent.length > 0;
+    // sent before then keeps the price it went out at (QuickBooks has the
+    // last word on it); its order list counts them. Sent before THEN, not
+    // sent at all: one first sent since went out with these charges in it,
+    // and must keep them (it lost them the moment it was put in QuickBooks).
+    const firstSent = Array.isArray(est.sent) ? est.sent.map(v => String((v && v.at) || '')).sort()[0] : undefined;
+    const sent = firstSent !== undefined && firstSent < OWN_DELIVERY_FROM;
     const own = !(opts && opts.order) && sent ? []
       : lines.filter(l => l.way === 'delivered' && l.wayBy !== 'dumpster' && l.orderQty > 0 && !l.auto && !truckable(l));
     // From a supplier who delivers by town, it comes on that supplier's

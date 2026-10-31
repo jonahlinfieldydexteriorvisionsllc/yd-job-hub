@@ -593,7 +593,7 @@
       '<div class="field mt"><span class="label">Message on the estimate (the payments and payment terms) — blank uses the one in Pricing rules. ' +
         'The warranty and the terms & conditions go on as the estimate’s last lines.</span>' +
         '<textarea id="estMemo" rows="3" ' + (ro ? 'readonly ' : '') + 'oninput="estMemoInput(this.value)" placeholder="' +
-        esc(defaultMemo(r ? r.totalCents : 0)) + '">' + esc(est.memo) + '</textarea></div>' +
+        esc(defaultMemo(r ? r.grandCents : 0)) + '">' + esc(est.memo) + '</textarea></div>' +
       '<div class="field-actions"><button class="btn btn-sm" onclick="openPriceBook()">🧰 Services &amp; how they’re priced (' + Object.keys(book).length + ')</button>' +
         (window.YDAuth && window.YDAuth.isOwner ? '<button class="btn btn-sm" onclick="openPricingRules()">⚙ Pricing rules</button>' : '') + '</div>' +
       '<div class="est-qb est-jump-to" id="estQb"></div>';
@@ -2137,7 +2137,9 @@
       return { id: w.id, title: w.title || '', scope: scopeBody(w), cents: r.work[i].cents + matsCents + (delOf[w.id] || 0),
                qbItem: w.qbItem || '', taxable: taxedOf[w.id],
                includes: mine.filter(l => l.listed && l.orderQty > 0).map(named) };
-    }).filter(w => w.cents > 0 || w.scope.trim());
+    // A discount (a line below zero) is in the total, so it is shown and
+    // sent too -- with words or without; only a $0 line with none is left out.
+    }).filter(w => w.cents !== 0 || w.scope.trim());
     if (!Object.keys(moved).length) return { work: work, parts: materialParts(r, work) };
     const rest = { takeoff: r.takeoff.filter(l => !moved[l.id]), added: r.added, cents: r.materialsCents - movedCents,
                    taxedCents: Math.max(0, (r.tax ? r.tax.materialsCents : 0) - movedTaxed) };
@@ -2173,7 +2175,7 @@
         (text ? '<div class="cv-scope' + (p ? '' : ' warn-text') + '">' + esc(text) + '</div>' : '') +
         '</div><div class="cv-amt">' + cents(0) + '</div></div>');
     });
-    const memo = String(est.memo || '').trim() || defaultMemo(r.totalCents);
+    const memo = String(est.memo || '').trim() || defaultMemo(r.grandCents);
     box.innerHTML = '<div class="cv">' +
       '<div class="cv-head"><b>' + esc((el('customerName') && el('customerName').value) || 'Customer') + '</b>' +
         (qb() && qb().docNumber ? ' · Estimate #' + esc(qb().docNumber) : '') + '</div>' +
@@ -2778,12 +2780,15 @@
   // payment terms. The warranty is a QuickBooks product at the end of the
   // estimate (P().endItems(whoFor())); until that list has anything on it,
   // the old warranty sentence stays here.
+  // `totalCents` is the total WITH tax -- what the payment plan is split on
+  // (pricing.js payments(grandCents)), so the terms text names as many
+  // payments as the plan has.
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
     const above = num(p.splitAboveCents);
     const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
     const r = last;
-    const pays = r && r.totalCents === totalCents ? r.payments || [] : [];
+    const pays = r && r.grandCents === totalCents ? r.payments || [] : [];
     const warranty = P() && P().endItems(whoFor()).length ? '' : p.warranty;
     return [payWords(pays), terms, warranty]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
@@ -5201,7 +5206,7 @@
         work: work,
         materialParts: parts.map(m => ({ head: m.head, list: m.list, cents: m.cents, taxable: m.taxed })),
         materials: { list: P().materialsList(r), cents: r.materialsCents },
-        memo: String(est.memo || '').trim() || defaultMemo(r.totalCents),
+        memo: String(est.memo || '').trim() || defaultMemo(r.grandCents),
         // The warranty and terms products, last (their text is read from
         // QuickBooks by the server).
         endItems: P().endItems(whoFor()),
