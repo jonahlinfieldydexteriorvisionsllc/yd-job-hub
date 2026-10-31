@@ -537,6 +537,14 @@ def _digest(request, path, headers):
                 lessons.after_finish(_claude())
             except Exception as e:                      # noqa: BLE001
                 print("lessons not written:", e)
+        elif slot == "morning":
+            # Yesterday's again, for what came in after the evening run
+            # (Claude only where there is something new to read).
+            try:
+                import joblog
+                logged = joblog.catch_up(_claude())
+            except Exception as e:                      # noqa: BLE001
+                print("yesterday's logs not caught up:", e)
         # Morning and evening, after the summary: the posting schedule's next
         # days filled (social.py -- Claude only for words not yet written),
         # and in the evening his phone told what goes up tomorrow.

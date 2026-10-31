@@ -183,6 +183,13 @@ def _needs_reading(f):
     return bool(f["notes"] or f["captions"])
 
 
+def _reading(f):
+    """What Claude's log is written from -- the hours are shown beside it, so
+    a shift that ran on past the evening run is no reason to ask again."""
+    f = f or {}
+    return json.dumps([f.get(k) for k in ("done", "photos", "captions", "notes")], sort_keys=True, default=str)
+
+
 def code_text(f):
     """The day in plain code: always there, the log itself when there is
     nothing to read."""
@@ -259,8 +266,17 @@ def write(client, db, job_id, day, people=None, by=None):
     f = facts(db, job_id, day, people)
     if not has_any(f):
         return {"empty": True}
+    ref = db.collection("jobLogs").document("%s_%s" % (job_id, day))
+    was = ref.get()
+    was = (was.to_dict() or {}) if was.exists else {}
+    if was.get("facts") == f and (was.get("how") == "claude" or not _needs_reading(f) or client is None):
+        return was          # nothing new since it was written (a log Claude could not write is asked again)
     text, how = code_text(f), "code"
-    if _needs_reading(f) and client is not None:
+    if was.get("how") == "claude" and was.get("text") and _reading(was.get("facts")) == _reading(f):
+        # The same notes, ticks and photos Claude already wrote it from (only
+        # the hours moved): its words stand, without paying for them again.
+        text, how = was["text"], "claude"
+    elif _needs_reading(f) and client is not None:
         import spend
         if not spend.over_cap(db):
             # Claude busy or down: the code text is the day's log, as the
@@ -281,7 +297,7 @@ def write(client, db, job_id, day, people=None, by=None):
            "facts": f, "codeText": code_text(f), "text": text, "how": how, "hours": hours_text(f),
            "at": dg._now().isoformat(), "by": by or "evening"}
     # The fields written are replaced whole; a drafted update stays.
-    db.collection("jobLogs").document("%s_%s" % (job_id, day)).set(rec, merge=list(rec.keys()))
+    ref.set(rec, merge=list(rec.keys()))
     return rec
 
 
@@ -307,21 +323,30 @@ def worked_today(db, day):
     return sorted(i for i in ids if i and "/" not in i)
 
 
-def evening(client):
-    """The evening summary run: every job worked today gets its log."""
+def evening(client, day=None, by=None):
+    """The evening summary run: every job worked today gets its log. The
+    morning run goes over yesterday again (catch_up)."""
     db = dg._db()
-    day = today()
+    day = day or today()
     people = dg._people()
     done = []
     for job_id in worked_today(db, day)[:EVENING_MAX]:
         try:
-            r = write(client, db, job_id, day, people)
+            r = write(client, db, job_id, day, people, by=by)
             if r.get("day"):
                 done.append(job_id)
         except Exception as e:                      # noqa: BLE001 -- one job never stops the rest
             print("joblog: %s not written: %s" % (job_id, e))
     print("joblog: %d logs for %s" % (len(done), day))
     return {"day": day, "written": len(done)}
+
+
+def catch_up(client):
+    """Morning: yesterday's logs again, for what came in after the 5:30 run
+    (a crew note sent from home, a shift clocked out late, photos sent once
+    the phone had signal). A log with nothing new is left as it is."""
+    d = dg._parse_day(today()) - datetime.timedelta(days=1)
+    return evening(client, d.strftime("%Y-%m-%d"), by="morning")
 
 
 # ---------------------------------------------------------------- the update
