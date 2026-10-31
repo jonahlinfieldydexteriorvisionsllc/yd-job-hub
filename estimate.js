@@ -2660,16 +2660,27 @@
 
   // What the invoice says about paying: the schedule for its total, then the
   // payment terms from Pricing rules.
-  function invoiceMemo(totalCents) {
+  // This estimate's own payments for a total, with its deposit floor (the
+  // materials) -- worked out for the total being sent, so they are never
+  // left off because the estimate was priced again a moment before.
+  function memoPays(totalCents) {
     const rules = P() ? P().rules() : {};
-    const p = rules.payments || {};
-    const above = num(p.splitAboveCents);
-    const terms = String((above !== null && totalCents > above ? p.threeText : p.twoText) || '').trim();
-    // This estimate's own payments, with its deposit floor (the materials).
     const r = last || priced();
-    const pays = P() ? P().payments(totalCents, rules, { plan: est.payments,
+    return P() ? P().payments(totalCents, rules, { plan: est.payments,
       materialsCents: r ? r.materialsCents + ((r.tax && r.tax.materialsTaxCents) || 0) : 0 }) : [];
-    return [payWords(pays), terms].filter(Boolean).join('\n\n');
+  }
+  // The terms that go with them: by how many payments there are (a plan of
+  // his own can be two on a big job, or three on a small one), else by the
+  // total as the usual plan decides.
+  function termsFor(p, pays, totalCents) {
+    const above = num(p.splitAboveCents);
+    const three = pays.length ? pays.length >= 3 : (above !== null && totalCents > above);
+    return String((three ? p.threeText : p.twoText) || '').trim();
+  }
+  function invoiceMemo(totalCents) {
+    const p = ((P() ? P().rules() : {}).payments) || {};
+    const pays = memoPays(totalCents);
+    return [payWords(pays), termsFor(p, pays, totalCents)].filter(Boolean).join('\n\n');
   }
 
   window.estInvoice = async function (email) {
@@ -2695,8 +2706,11 @@
       const out = await askQb('/qb/estimate-invoice', { jobId: jobId, estimateId: q.id, env: q.env || null,
         invoiceId: inv.id || null, email: !!email, memo: invoiceMemo(total),
         testOk: !!(qbCompany && qbCompany.env !== 'production') });
+      const notEmailed = out.notEmailed;
+      delete out.notEmailed;
       afterInvoice(jobId, out);
-      showToast((email ? 'Emailed from QuickBooks' : 'Made in QuickBooks') + (out.docNumber ? ' — invoice #' + out.docNumber : ''));
+      showToast(notEmailed ? 'Made in QuickBooks' + (out.docNumber ? ' as invoice #' + out.docNumber : '') + ', not emailed: ' + notEmailed
+        : (email ? 'Emailed from QuickBooks' : 'Made in QuickBooks') + (out.docNumber ? ' — invoice #' + out.docNumber : ''), notEmailed ? 10000 : undefined);
       // A yes from the customer: a bid still waiting to be booked is offered it.
       if (currentJobId === jobId && typeof isBidStatus === 'function' && isBidStatus(jobStatus) && typeof makeItAJob === 'function' &&
           await ydConfirm('', { title: 'They said yes — book it as a job now?', ok: 'Book it', cancel: 'Not now' }) &&
@@ -2785,12 +2799,10 @@
   // payments as the plan has.
   function defaultMemo(totalCents) {
     const p = (P() && P().rules().payments) || {};
-    const above = num(p.splitAboveCents);
-    const terms = above !== null && totalCents > above ? p.threeText : p.twoText;
     const r = last;
-    const pays = r && r.grandCents === totalCents ? r.payments || [] : [];
+    const pays = r && r.grandCents === totalCents ? r.payments || [] : memoPays(totalCents);
     const warranty = P() && P().endItems(whoFor()).length ? '' : p.warranty;
-    return [payWords(pays), terms, warranty]
+    return [payWords(pays), termsFor(p, pays, totalCents), warranty]
       .map(s => String(s || '').trim()).filter(Boolean).join('\n\n');
   }
 
@@ -5125,9 +5137,13 @@
       const s = await askQb('/qb/estimate-status', { estimateId: q.id, env: q.env || null, jobId: currentJobId });
       if (s && !s.missing) now = Math.round(Number(s.total) * 100);
     } catch (e) { return true; }
-    if (now === null || !isFinite(now) || Math.abs(now - lastSent.totalCents) <= 100) return true;
+    // Against what QuickBooks said it came to then (its own tax for the
+    // address), not Job Hub's figure: a county rate other than the one in
+    // Pricing rules made every re-send say "changed in QuickBooks".
+    const was = num(lastSent.qbTotalCents) !== null ? lastSent.qbTotalCents : lastSent.totalCents;
+    if (now === null || !isFinite(now) || Math.abs(now - was) <= 100) return true;
     return ydConfirm('Estimate #' + (q.docNumber || '') + ' was changed in QuickBooks: it totals ' + cents(now) +
-      ' there, but Job Hub last sent ' + cents(lastSent.totalCents) + '.\n\nSending from Job Hub replaces it with Job Hub’s ' +
+      ' there, but it came to ' + cents(was) + ' when Job Hub last sent it.\n\nSending from Job Hub replaces it with Job Hub’s ' +
       'version — the changes made in QuickBooks will be lost. Make the same changes here first if you want to keep them.',
       { title: 'Replace it anyway?', ok: 'Replace it', cancel: 'Keep QuickBooks’ version', danger: true });
   }
@@ -5223,8 +5239,10 @@
           cents(r.grandCents) + '. The message gives each payment as its share of the total, so it still adds up.', 9000), 2500);
       }
       // This version, as it went (see SENT_KEEP).
+      // qbTotalCents: QuickBooks' own total for it (its tax for the address),
+      // which a later look in QuickBooks is compared with (qbUnchanged).
       const version = { at: new Date().toISOString(), emailed: !!email, docNumber: out.docNumber || null,
-        totalCents: r.grandCents, taxCents: r.tax.cents, materialsCents: r.materialsCents,
+        totalCents: r.grandCents, qbTotalCents: isFinite(qbTotal) ? qbTotal : null, taxCents: r.tax.cents, materialsCents: r.materialsCents,
         work: work.map(w => ({ title: w.title, cents: w.cents })), materials: P().materialsList(r),
         cost: costSnapshot(r) };
       // The fuel prices it was priced with stay with it once it has gone: the

@@ -152,10 +152,20 @@ def run(db, people, now=None):
     today = now.date()
     if not _claim(db, "lienclock_" + _iso(today), now):
         return []
-    jobs = dg._jobs()
-    rules = dg.invoice_rules()
+    try:
+        jobs = dg._jobs()
+        rules = dg.invoice_rules()
+        open_invoices = list(db.collection("invoices").where("open", "==", True).stream())
+    except Exception:
+        # Nothing could be read: the day given back, so the next run does it
+        # (as deadlines.py does) -- it used to be lost until tomorrow.
+        try:
+            db.collection("reminderLog").document("lienclock_" + _iso(today)).delete()
+        except Exception as e:      # noqa: BLE001
+            print("lienclock: day not given back:", e)
+        raise
     lines, drafted = [], []
-    for s in db.collection("invoices").where("open", "==", True).stream():
+    for s in open_invoices:
         try:
             _one(db, s, jobs, rules, today, now, lines, drafted)
         except Exception as e:      # noqa: BLE001 -- one invoice must not stop the rest

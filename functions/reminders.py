@@ -35,9 +35,11 @@ from google.api_core.exceptions import AlreadyExists
 import digest as dg
 
 # The scheduler fires every five minutes; a reminder is due if it fell in the
-# last six, so a run that starts a little late misses nothing. The log stops
-# the overlap from sending anything twice.
-WINDOW_MIN = 6
+# last sixteen, so a run that starts late -- or one that was skipped, or one
+# whose push the service turned away (the claim is given back) -- misses
+# nothing: the next run or two still covers it. The log (reminderLog, one
+# create() per reminder) stops the overlap from sending anything twice.
+WINDOW_MIN = 16
 ALL_DAY_HOUR = 7            # all-day entries remind counting back from 7 am
 MAX_LEAD_MIN = 7 * 24 * 60
 
@@ -236,51 +238,77 @@ def _set_reminders(db, people, cals, since, now):
     sent = []
     for cal_id, cal, _, evs in cals:
         for eid, ev in (evs or {}).items():
-            if ev.get("hasReminder") is not True:
-                continue
-            mins = ev.get("remindMins")
-            if not isinstance(mins, (int, float)) or mins < 0 or mins > MAX_LEAD_MIN:
-                continue
-            # Each repeat's first day only: a three-day job reminds once, not
-            # on every day it spans.
-            starts_only = dict(ev)
-            starts_only.pop("endDate", None)
-            first = (since + datetime.timedelta(minutes=mins)).date() - datetime.timedelta(days=1)
-            last = (now + datetime.timedelta(minutes=mins)).date() + datetime.timedelta(days=1)
+            # One entry with something odd in it (a time that won't read, a
+            # date list that isn't one) is left out -- not every reminder in
+            # the calendars after it, every run.
             try:
-                days = dg._occurrences(starts_only, first, last)
-            except (TypeError, ValueError) as err:
-                print("reminders: skipped", cal_id, eid, "-", err)
-                continue
-            # A single date changed on its own (calendar.js) reminds at its own
-            # time; a cancelled one not at all.
-            for day, one in days:
-                if day.isoformat() != str(one.get("date")):
-                    continue
-                start = _start_of(one, day)
-                due = start - datetime.timedelta(minutes=mins)
-                if not (since < due <= now):
-                    continue
-                key = "%s_%s_%s" % (cal_id, eid, day.isoformat())
-                try:
-                    db.collection("reminderLog").document(key).create(
-                        {"calendar": cal_id, "event": eid, "day": day.isoformat(), "at": now.isoformat()})
-                except AlreadyExists:
-                    continue        # an earlier or overlapping run sent it
-                uids = set(ev.get("remindUids") or [])
-                uids.update(cr.get("uid") for cr in (one.get("crew") or []) if cr.get("uid"))
-                title = one.get("title") or one.get("jobName") or "Calendar"
-                note = {"push": {"title": "🔔 " + title, "body": _words(one, cal, start)}}
-                for uid in uids:
-                    u = people.get(uid)
-                    if not u or not _can_see(u, cal):
-                        continue
-                    try:
-                        n = dg.send_push(uid, note, tag="yd-remind-" + key, ttl=2 * 3600)
-                        sent.append({"uid": uid, "event": key, "phones": n})
-                    except Exception as err:      # noqa: BLE001
-                        print("reminders: push failed for", uid, key, err)
+                _set_reminder(db, people, cal_id, cal, eid, ev, since, now, sent)
+            except Exception as err:      # noqa: BLE001
+                print("reminders: entry", cal_id, eid, "not looked at:", err)
     return sent
+
+
+def _set_reminder(db, people, cal_id, cal, eid, ev, since, now, sent):
+    if ev.get("hasReminder") is not True:
+        return
+    mins = ev.get("remindMins")
+    if not isinstance(mins, (int, float)) or mins < 0 or mins > MAX_LEAD_MIN:
+        return
+    # Each repeat's first day only: a three-day job reminds once, not
+    # on every day it spans.
+    starts_only = dict(ev)
+    starts_only.pop("endDate", None)
+    first = (since + datetime.timedelta(minutes=mins)).date() - datetime.timedelta(days=1)
+    last = (now + datetime.timedelta(minutes=mins)).date() + datetime.timedelta(days=1)
+    try:
+        days = dg._occurrences(starts_only, first, last)
+    except (TypeError, ValueError) as err:
+        print("reminders: skipped", cal_id, eid, "-", err)
+        return
+    # A single date changed on its own (calendar.js) reminds at its own
+    # time; a cancelled one not at all.
+    for day, one in days:
+        if day.isoformat() != str(one.get("date")):
+            continue
+        start = _start_of(one, day)
+        due = start - datetime.timedelta(minutes=mins)
+        if not (since < due <= now):
+            continue
+        # The time is in it: moved to later the same day, it reminds again
+        # at the new time (it used to stay silent).
+        key = "%s_%s_%s_%s" % (cal_id, eid, day.isoformat(), start.strftime("%H%M"))
+        claim = db.collection("reminderLog").document(key)
+        try:
+            claim.create({"calendar": cal_id, "event": eid, "day": day.isoformat(), "at": now.isoformat()})
+        except AlreadyExists:
+            continue        # an earlier or overlapping run sent it
+        uids = set(ev.get("remindUids") or [])
+        uids.update(cr.get("uid") for cr in (one.get("crew") or []) if cr.get("uid"))
+        title = one.get("title") or one.get("jobName") or "Calendar"
+        note = {"push": {"title": "🔔 " + title, "body": _words(one, cal, start)}}
+        tried, failed = 0, 0
+        for uid in uids:
+            u = people.get(uid)
+            if not u or not _can_see(u, cal):
+                continue
+            tried += 1
+            try:
+                n = dg.send_push(uid, note, tag="yd-remind-" + key, ttl=2 * 3600)
+                sent.append({"uid": uid, "event": key, "phones": n})
+            except Exception as err:      # noqa: BLE001
+                failed += isinstance(err, dg.PushFailed)
+                print("reminders: push failed for", uid, key, err)
+        # Nobody's phone reached (the push service down): given back, so the
+        # next run (the window is WINDOW_MIN wide) tries again.
+        if tried and failed == tried:
+            _give_back(claim)
+
+
+def _give_back(claim):
+    try:
+        claim.delete()
+    except Exception as err:          # noqa: BLE001 -- then it is simply not tried again
+        print("reminders: claim not given back:", err)
 
 
 def crew_notes(db, people=None, now=None):
@@ -467,7 +495,9 @@ def crew_shifts(db, people=None, now=None):
         try:
             a = datetime.datetime.fromtimestamp(float(e["startedMs"]) / 1000, dg.TZ)
             b = datetime.datetime.fromtimestamp(float(e["endedMs"]) / 1000, dg.TZ)
-            mins = int(round((b - a).total_seconds() / 60))
+            # From the stored times, not the two clock times: across the
+            # night the clocks go back, a 10 pm-6 am shift is 9 hours.
+            mins = int(round((float(e["endedMs"]) - float(e["startedMs"])) / 60000))
             body = "%s %d, %s–%s (%d h %02d m) · %s" % (a.strftime("%a %b"), a.day,
                                                         dg._fmt_time(a.strftime("%H:%M")), dg._fmt_time(b.strftime("%H:%M")),
                                                         mins // 60, mins % 60, body)
@@ -1117,8 +1147,9 @@ def _usual(db, people, since, now, cals, boards, prefs):
     day_list = {uid: [] for uid in auto}
 
     def buzz(uid, key, title, body, tag):
+        claim = db.collection("reminderLog").document(key)
         try:
-            db.collection("reminderLog").document(key).create({"uid": uid, "at": now.isoformat()})
+            claim.create({"uid": uid, "at": now.isoformat()})
         except AlreadyExists:
             return
         try:
@@ -1126,6 +1157,9 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 uid, {"push": {"title": title[:90], "body": body}}, tag=tag, ttl=2 * 3600)})
         except Exception as err:      # noqa: BLE001
             print("reminders: usual push failed:", uid, key, err)
+            # No phone of theirs reached: given back, for the next run.
+            if isinstance(err, dg.PushFailed):
+                _give_back(claim)
 
     # `icon`: its tag's, as its calendar has it (one the owner made too).
     def timed(uids, kind, title, start, body, key, tag, icon=None):
@@ -1150,33 +1184,40 @@ def _usual(db, people, since, now, cals, boards, prefs):
                     continue
                 try:
                     days = dg._occurrences(ev, first, last)
-                except (TypeError, ValueError) as err:
+                except Exception as err:      # noqa: BLE001
                     print("reminders: skipped", cal_id, eid, "-", err)
                     continue
-                done = ev.get("done") or {}
-                for day, one in days:
-                    if done.get(day.isoformat()):
-                        continue
-                    kind = _type_of(one, cal=cal)
-                    tag = _tag_of(kind, cal) or {}
-                    on = {cr.get("uid") for cr in (one.get("crew") or []) if isinstance(cr, dict)}
-                    who = [u["uid"] for u in sees if _is_mine(on, _whose(kind, cal.get("kind")), ev.get("createdBy") or "", u)]
-                    # A job's day says it is one, whatever it was once tagged.
-                    if _is_job_day(kind, cal.get("kind"), _known_on(cal, one.get("type"))):
-                        kind, tag = "jobday", dict(tag, icon=TYPES["jobday"])
-                    title = str(one.get("title") or one.get("jobName") or "Calendar")
-                    if one.get("time") and not one.get("allDay"):
-                        if day.isoformat() != str(one.get("date")):
-                            continue            # a timed entry over days reminds on its first
-                        mine = (set(ev.get("remindUids") or []) | on) if ev.get("hasReminder") else set()
-                        timed([u for u in who if u not in mine], kind, title, _start_of(one, day),
-                              _words(one, cal, _start_of(one, day)),
-                              "ev_%s_%s_%s" % (cal_id, eid, day.isoformat()),
-                              "yd-remind-%s_%s_%s" % (cal_id, eid, day.isoformat()), tag.get("icon") or "")
-                    elif morning and day == today:
-                        for uid in who:
-                            day_list[uid].append((kind, title, tag.get("icon") or "", bool(tag.get("crew")),
-                                                  "" if kind == "jobday" else _place_of(one, kind, cal)))
+                # One entry with something odd in it (its dates not a list, a
+                # time that won't read) is left out, not the calendars after it.
+                try:
+                    done = ev.get("done") or {}
+                    for day, one in days:
+                        if done.get(day.isoformat()):
+                            continue
+                        kind = _type_of(one, cal=cal)
+                        tag = _tag_of(kind, cal) or {}
+                        on = {cr.get("uid") for cr in (one.get("crew") or []) if isinstance(cr, dict)}
+                        who = [u["uid"] for u in sees if _is_mine(on, _whose(kind, cal.get("kind")), ev.get("createdBy") or "", u)]
+                        # A job's day says it is one, whatever it was once tagged.
+                        if _is_job_day(kind, cal.get("kind"), _known_on(cal, one.get("type"))):
+                            kind, tag = "jobday", dict(tag, icon=TYPES["jobday"])
+                        title = str(one.get("title") or one.get("jobName") or "Calendar")
+                        if one.get("time") and not one.get("allDay"):
+                            if day.isoformat() != str(one.get("date")):
+                                continue            # a timed entry over days reminds on its first
+                            mine = (set(ev.get("remindUids") or []) | on) if ev.get("hasReminder") else set()
+                            # The time in the key: moved later the same day, it
+                            # reminds again at the new time.
+                            timed([u for u in who if u not in mine], kind, title, _start_of(one, day),
+                                  _words(one, cal, _start_of(one, day)),
+                                  "ev_%s_%s_%s_%s" % (cal_id, eid, day.isoformat(), _start_of(one, day).strftime("%H%M")),
+                                  "yd-remind-%s_%s_%s" % (cal_id, eid, day.isoformat()), tag.get("icon") or "")
+                        elif morning and day == today:
+                            for uid in who:
+                                day_list[uid].append((kind, title, tag.get("icon") or "", bool(tag.get("crew")),
+                                                      "" if kind == "jobday" else _place_of(one, kind, cal)))
+                except Exception as err:      # noqa: BLE001
+                    print("reminders: entry", cal_id, eid, "not looked at:", err)
     except Exception as err:          # noqa: BLE001
         print("reminders: usual calendar reminders not read:", err)
 

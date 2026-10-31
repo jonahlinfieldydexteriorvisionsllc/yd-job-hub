@@ -553,10 +553,16 @@ def _digest(request, path, headers):
             try:
                 import social
                 planned = social.plan(_claude())
-                if slot == "evening":
-                    social.tell_tomorrow()
             except Exception as e:                      # noqa: BLE001
                 print("social posts not planned:", e)
+            # On its own: the planning failing (Claude down) must not keep
+            # him from hearing what already goes up tomorrow.
+            if slot == "evening":
+                try:
+                    import social
+                    social.tell_tomorrow()
+                except Exception as e:                  # noqa: BLE001
+                    print("tomorrow's posts not told:", e)
         if failed is not None:
             return (json.dumps({"error": failed}), 500, json_headers)
         return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted, "notes": noted,

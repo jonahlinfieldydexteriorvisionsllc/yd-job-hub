@@ -1117,8 +1117,17 @@ def save_estimate(body):
     # The estimate already made for this job, looked for before anything is
     # made in QuickBooks (a customer, a product) for a save that is refused.
     existing = None
-    if body.get("estimateId") and same:
-        existing = _query_one("Estimate", "Id = '%s'" % _quote(body["estimateId"]))
+    est_id = str(body.get("estimateId") or "") if same else ""
+    if not est_id:
+        # The device that sent this may not have heard the last answer (an
+        # email that failed after the estimate was made, another device's
+        # copy): the job's own record says -- or a second estimate is made.
+        snap = _db().collection("jobs").document(job_id).get()
+        q = ((snap.to_dict() or {}) if snap.exists else {}).get("qbEstimate") or {}
+        if q.get("id") and q.get("env") == _env("QB_ENV", "sandbox"):
+            est_id = str(q["id"])
+    if est_id:
+        existing = _query_one("Estimate", "Id = '%s'" % _quote(est_id))
         if existing and not _ours(existing, job_id):
             if _belongs(existing, job_id):
                 # Made in QuickBooks itself and brought in as this job
@@ -1126,11 +1135,17 @@ def save_estimate(body):
                 # Job Hub rewriting its lines -- or emailing it again --
                 # would change an accepted estimate behind his back.
                 raise RuntimeError("This estimate was made in QuickBooks — change it there.")
-            print("quickbooks: estimate %s is not job %s's; making a new one" % (body["estimateId"], job_id))
+            print("quickbooks: estimate %s is not job %s's; making a new one" % (est_id, job_id))
             existing = None
     if existing and existing.get("TxnStatus") in ("Closed", "Converted"):
         raise RuntimeError("That estimate is already %s in QuickBooks; it can't be changed"
                            % existing["TxnStatus"].lower())
+    # What the customer said yes to stands (QuickBooks wins once it is
+    # theirs): a full update would rewrite its lines and clear its
+    # acceptance.
+    if existing and existing.get("TxnStatus") == "Accepted":
+        raise RuntimeError("The customer has accepted this estimate in QuickBooks — what they agreed to stays as it is. "
+                           "Change it there, or add the extra work as a change order.")
 
     # A snow bid (estimate.js): his snow products, his words, nothing else
     # on it (_snow_bid_lines).
@@ -1173,6 +1188,10 @@ def save_estimate(body):
         # retry is still recognised if another estimate was made meanwhile.
         key = hashlib.sha1(("est|" + job_id + json.dumps(est, sort_keys=True)).encode()).hexdigest()
         e = _make("Estimate", _numbered("Estimate", est), key)
+    # On the job at once, before the notice and the email: either failing
+    # left an estimate in QuickBooks the job did not know of -- the next try
+    # made a second one (and attached the notice twice).
+    _keep_record(job_id, e, customer_id)
 
     # A home's estimate carries the lien-waiver notice, attached before it
     # can be emailed; if QuickBooks won't take it, the estimate is saved but
@@ -1181,12 +1200,17 @@ def save_estimate(body):
     if body.get("lienNotice") and not snow:
         try:
             notice = _attach_lien_notice(job_id, e["Id"])
+            if notice:
+                # The whole record with it, so the notice is known to be on
+                # this estimate (in this company) whatever fails next.
+                _db().collection("jobs").document(job_id).set(
+                    {"qbEstimate": dict(_estimate_record(e, customer_id), lienNoticeFor=e["Id"], lienNoticeId=notice),
+                     "lastModified": _stamp()}, merge=True)
         except ReconnectNeeded:
             raise
         except Exception as err:            # noqa: BLE001 -- said plainly below
             print("quickbooks: lien notice not attached to estimate %s: %s" % (e.get("Id"), err))
             if body.get("email"):
-                _keep_record(job_id, e, customer_id)
                 raise RuntimeError("Saved in QuickBooks, but not emailed: the lien-waiver notice couldn't be "
                                    "attached (%s). Try again." % err)
 
@@ -1194,7 +1218,8 @@ def save_estimate(body):
     if body.get("email"):
         if not email:
             raise RuntimeError("Saved in QuickBooks, but the job has no email to send it to")
-        sent = _call("POST", "estimate/%s/send" % e["Id"], params={"sendTo": email}, empty_body=True)
+        sent = _call("POST", "estimate/%s/send" % e["Id"], params={"sendTo": email}, empty_body=True,
+                     retry=False)       # an email: never sent twice (_send)
         e = sent.get("Estimate") or e
         sent_to = email
 
@@ -1548,18 +1573,28 @@ def _changes_by_hand(j, rec, price):
 
 def _invoice_lines(e, link_lines=False):
     """The estimate's lines as they are, for its invoice; with link_lines,
-    each one names the estimate line it came from."""
+    each one names the estimate line it came from. A bundle's lines come in
+    its place, and a discount comes too: left out, the invoice billed more
+    than the estimate the customer agreed to (one edited in QuickBooks)."""
     out = []
-    for ln in e.get("Line") or []:
+    top = {id(ln) for ln in e.get("Line") or []}
+    for ln in _flat_lines(e.get("Line")):
         kind = ln.get("DetailType")
         if kind == "SalesItemLineDetail":
             d = ln.get("SalesItemLineDetail") or {}
             detail = {k: d[k] for k in ("ItemRef", "Qty", "UnitPrice", "TaxCodeRef", "ServiceDate") if d.get(k) is not None}
             line = {"DetailType": kind, "Amount": ln.get("Amount"), "Description": ln.get("Description") or "",
                     "SalesItemLineDetail": detail}
-            if link_lines and ln.get("Id"):
+            # Only a line of the estimate itself is linked line by line: a
+            # bundle's own lines have no line of their own to name.
+            if link_lines and ln.get("Id") and id(ln) in top:
                 line["LinkedTxn"] = [{"TxnId": e["Id"], "TxnType": "Estimate", "TxnLineId": ln["Id"]}]
             out.append(line)
+        elif kind == "DiscountLineDetail":
+            d = ln.get("DiscountLineDetail") or {}
+            detail = {k: d[k] for k in ("PercentBased", "DiscountPercent", "DiscountAccountRef") if d.get(k) is not None}
+            out.append({"DetailType": kind, "Amount": ln.get("Amount"), "Description": ln.get("Description") or "",
+                        "DiscountLineDetail": detail})
         elif kind == "DescriptionOnly":
             out.append({"DetailType": kind, "Description": ln.get("Description") or "", "DescriptionLineDetail": {}})
     return out
@@ -1593,6 +1628,7 @@ def invoice_from_estimate(body):
         raise RuntimeError("That estimate isn't in QuickBooks any more")
 
     inv = None
+    differs = None
     known = str(body.get("invoiceId") or "").strip()
     if known:
         inv = _query_one("Invoice", "Id = '%s'" % _quote(known))
@@ -1662,9 +1698,18 @@ def invoice_from_estimate(body):
                     break
         if not inv:
             raise first_error
+        # Just made: its total against the estimate's. A line QuickBooks has
+        # that cannot be copied would bill the customer something other than
+        # what they agreed to -- so it is not emailed, and he is told. (One
+        # made earlier may have change orders on it, and differ rightly.)
+        if e.get("TotalAmt") is not None and inv.get("TotalAmt") is not None \
+                and abs(_amount(inv["TotalAmt"]) - _amount(e["TotalAmt"])) > 0.01:
+            differs = ("its total $%.2f is not the estimate's $%.2f — check it in QuickBooks before it goes"
+                       % (_amount(inv["TotalAmt"]), _amount(e["TotalAmt"])))
+            print("quickbooks: invoice %s for estimate %s: %s" % (inv.get("Id"), e["Id"], differs))
 
     sent_to = ""
-    if body.get("email"):
+    if body.get("email") and not differs:
         to = str(((inv.get("BillEmail") or e.get("BillEmail") or {}).get("Address")) or "").strip()
         if not to:
             raise RuntimeError("Made in QuickBooks, but the customer has no email to send it to")
@@ -1676,7 +1721,8 @@ def invoice_from_estimate(body):
                                                      "DueDate": today}).get("Invoice") or inv
             except RuntimeError as err:          # the bill still goes; its due date stays as it was
                 print("quickbooks: due date of invoice %s not moved to today: %s" % (inv.get("Id"), err))
-        sent = _call("POST", "invoice/%s/send" % inv["Id"], params={"sendTo": to}, empty_body=True)
+        sent = _call("POST", "invoice/%s/send" % inv["Id"], params={"sendTo": to}, empty_body=True,
+                     retry=False)       # an email: never sent twice (_send)
         inv = sent.get("Invoice") or inv
         sent_to = to
 
@@ -1703,6 +1749,8 @@ def invoice_from_estimate(body):
     ref.set(dict({"qbInvoiceRef": out, "qbEstimate": {"status": "Closed"}, "lastModified": stamp}, **stage),
             merge=["qbInvoiceRef", "qbEstimate.status", "lastModified"] + sorted(stage))
     _log_stage(job_id, job, stage)
+    if differs:
+        return dict(out, notEmailed=differs)        # said to him, not kept on the job
     return out
 
 
@@ -2566,11 +2614,31 @@ def _snow_terms(lines):
     return pricing, labor, extras, " · ".join(words)[:400], salt
 
 
+_STREET_WORDS = {"st": "street", "rd": "road", "ave": "avenue", "av": "avenue", "dr": "drive", "ln": "lane",
+                 "ct": "court", "blvd": "boulevard", "cir": "circle", "pl": "place", "pkwy": "parkway", "hwy": "highway",
+                 "trl": "trail", "ter": "terrace", "n": "north", "s": "south", "e": "east", "w": "west"}
+
+
 def _street_key(s):
-    """House number and street name, for telling one address from another
-    however it was typed ("12 Oak Rd" / "12 oak road, Middleton")."""
+    """House number and the whole street, for telling one address from
+    another however it was typed ("12 Oak Rd" / "12 oak road, Middleton").
+    The whole street, not its first word: "12 Oak St" and "12 Oak Rd" are
+    two households (an accepted snow bid joined the other's account and kept
+    its prices)."""
     words = re.sub(r"[^a-z0-9 ]+", " ", str(s or "").lower().split(",")[0]).split()
-    return " ".join(words[:2]) if words and any(ch.isdigit() for ch in words[0]) else ""
+    if not words or not any(ch.isdigit() for ch in words[0]):
+        return ""
+    return " ".join(_STREET_WORDS.get(w, w) for w in words)
+
+
+def _same_town(a, parts):
+    """A snow account and an address in the same town, when both say: the
+    same street number and name can be in two towns."""
+    az, pz = str(a.get("zip") or "")[:5], str(parts.get("zip") or "")[:5]
+    if az and pz:
+        return az == pz
+    ac, pc = _norm_name(a.get("city")), _norm_name(parts.get("city"))
+    return not (ac and pc) or ac == pc
 
 
 def _snow_season(now):
@@ -2594,7 +2662,8 @@ def snow_account(e, cust, end_names, stamp, crew_notes=""):
     accounts = {s.id: (s.to_dict() or {}) for s in db.collection("snowAccounts").stream()}
     key = _street_key(parts["address"])
     have = next((aid for aid, a in accounts.items() if _norm_name(a.get("name")) == _norm_name(name)), None) or \
-        next((aid for aid, a in accounts.items() if key and _street_key(a.get("street") or a.get("address")) == key), None)
+        next((aid for aid, a in accounts.items() if key and _street_key(a.get("street") or a.get("address")) == key
+              and _same_town(a, parts)), None)
     ref = {"estimateId": str(e.get("Id")), "docNumber": str(e.get("DocNumber") or ""), "at": stamp}
     # A new account is tied to its customer by QuickBooks' own id
     # (customers.js reads customerId). One found by name or street is not:
@@ -4550,7 +4619,18 @@ def add_change_order(body):
     text = "CHANGE ORDER" + (": " + what if what else "") + \
         ("\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if signed else "")
     lines = [l for l in txn.get("Line") or [] if l.get("DetailType") != "SubTotalLineDetail"]
-    lines.append(_line(_item_named(CHANGE_ORDER_ITEM), cents, text))
+    # Already on it (a tap again after the line went on but the PDF or the
+    # record did not): not a second time.
+    if any(str(l.get("Description") or "").strip() == text.strip() for l in lines):
+        out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),
+               "docNumber": str(txn.get("DocNumber") or ""), "total": txn.get("TotalAmt"), "env": env, "already": True}
+        ref.set({"qb": out}, merge=True)
+        return out
+    # Above the warranty and terms (the $0 lines that end it), not under them.
+    at = len(lines)
+    while at > 0 and (lines[at - 1].get("DetailType") == "DescriptionOnly" or not _amount(lines[at - 1].get("Amount"))):
+        at -= 1
+    lines.insert(at, _line(_item_named(CHANGE_ORDER_ITEM), cents, text))
     upd = _call("POST", entity.lower(), body={"Id": txn["Id"], "SyncToken": txn["SyncToken"], "sparse": True, "Line": lines},
                 request_id=hashlib.sha1(("co|" + doc_id).encode()).hexdigest()).get(entity) or {}
     out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),

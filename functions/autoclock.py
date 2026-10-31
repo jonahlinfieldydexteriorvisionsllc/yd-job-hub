@@ -394,8 +394,9 @@ def hold_overlaps(db, people, now):
         if e is None:
             continue
         held.append(sid)
+        # Both of the pair are held for him; he is told once for the two.
         try:
-            db.collection("reminderLog").document("overlap_" + sid).create({"at": now.isoformat()})
+            db.collection("reminderLog").document("overlap_" + "_".join(sorted((sid, oid)))).create({"at": now.isoformat()})
         except AlreadyExists:
             continue
         except Exception as err:      # noqa: BLE001

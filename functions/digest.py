@@ -1690,6 +1690,7 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
     if tag:
         body["tag"] = tag
     payload = json.dumps(body)
+    failed = 0
     for s in db.collection("pushSubs").where("uid", "==", uid).stream():
         sub = (s.to_dict() or {}).get("sub")
         if not sub:
@@ -1703,13 +1704,30 @@ def send_push(uid, d, tag=None, ttl=6 * 3600, opens="calendar"):
         except WebPushException as e:
             code = getattr(e.response, "status_code", None)
             if code in (404, 410):
-                s.reference.delete()
+                try:
+                    s.reference.delete()
+                except Exception as err:      # noqa: BLE001 -- forgotten next time
+                    print("digest: gone phone not forgotten for", uid, err)
             else:
+                failed += 1
                 print("digest: push failed for", uid, code, e)
         except requests.RequestException as e:
             # Timed out or unreachable: this phone misses it; their others don't.
+            failed += 1
             print("digest: push not delivered for", uid, e)
+        except Exception as e:                # noqa: BLE001 -- one bad device record never stops their others
+            failed += 1
+            print("digest: push to one phone broke for", uid, e)
+    # Phones to reach and none reached (the push service down): said, so a
+    # reminder claimed for this send can be given back and tried again.
+    if failed and not sent:
+        raise PushFailed("no phone reached (%d tried)" % failed)
     return sent
+
+
+class PushFailed(RuntimeError):
+    """send_push reached none of the phones it tried (reminders.py gives the
+    reminder's claim back, and the next run tries again)."""
 
 
 # ---------------------------------------------------------------- running
@@ -1795,27 +1813,40 @@ def _receipts_to_sort():
         return 0
 
 
+def _part(what, fn, empty):
+    """One part of the day's figures. One that breaks (an odd record) is
+    left empty -- it used to raise out of _cache, and nobody got a summary,
+    the crew included, who need none of it."""
+    try:
+        return fn()
+    except Exception as e:      # noqa: BLE001
+        print("digest: %s not worked out:" % what, e)
+        return empty
+
+
 def _cache(slot="morning", people=None):
     today = _now().date()
-    jobs = _jobs()
+    jobs = _part("jobs", _jobs, {})
     cache = {
-        "items": _calendar_items(today, today + datetime.timedelta(days=1)),
-        "storms": _storms(),
-        "bids": _bids(jobs),
-        "office": _office(jobs),
+        "items": _part("calendar", lambda: _calendar_items(today, today + datetime.timedelta(days=1)), []),
+        "storms": _part("storms", _storms, []),
+        "bids": _part("bids", lambda: _bids(jobs), []),
+        "office": _part("office", lambda: _office(jobs),
+                        {"drafts": [], "accepted": [], "owed": [], "toOrder": [], "toBill": []}),
         "invoices": _invoice_reminders(jobs, today),
         "careOwed": _care_owed(jobs),
         "recurring": _recurring_overdue(today),
-        "shifts": _shifts(),
-        "receipts": _receipts_to_sort(),
+        "shifts": _part("shifts", _shifts, []),
+        "receipts": _part("receipts", _receipts_to_sort, 0),
     }
     if slot == "evening":
         people = people if people is not None else _people()
-        cache["record"] = _day_record(today, people)
+        cache["record"] = _part("the day's record", lambda: _day_record(today, people),
+                                {"cardsDone": [], "eventsDone": [], "cardsAdded": [], "eventsAdded": [], "machines": []})
         # Fridays only: last week's thank-yous, for a personal nudge.
         if today.weekday() == 4:
-            cache["thanked"] = _thanked_week_ago(jobs, today)
-        cache["open"] = _open_tasks(people)
+            cache["thanked"] = _part("thank-yous", lambda: _thanked_week_ago(jobs, today), [])
+        cache["open"] = _part("open tasks", lambda: _open_tasks(people), [])
     # The end-of-day reports (endofday.py): the evening's for today, the
     # morning's for yesterday.
     try:
@@ -1844,6 +1875,39 @@ def _cache(slot="morning", people=None):
     cache["sites"] = sites
     cache["alerts"] = county_alerts()
     return cache
+
+
+SUMMARY_RETAKE = datetime.timedelta(minutes=10)
+
+
+def _claim_summary(uid, slot, today):
+    """This run's turn to send one person's summary, claimed once
+    (reminderLog/digest_<slot>_<day>_<uid>): the reference, or None when
+    another run has it -- sent, or still at it. A second call from Cloud
+    Scheduler while the first was still building (weather, the day's
+    figures) sent everyone two. A claim left by a run that died is taken
+    back after SUMMARY_RETAKE. Firestore not answering: sent, as before."""
+    from google.api_core.exceptions import AlreadyExists
+    ref = _db().collection("reminderLog").document("digest_%s_%s_%s" % (slot, _day(today), uid))
+    now = _now()
+    try:
+        ref.create({"at": now.isoformat()})
+        return ref
+    except AlreadyExists:
+        pass
+    got = ref.get().to_dict() or {}
+    if got.get("sentAt"):
+        return None
+    try:
+        began = datetime.datetime.fromisoformat(str(got.get("at") or ""))
+    except ValueError:
+        began = None
+    if began is not None and began.tzinfo is None:
+        began = began.replace(tzinfo=TZ)
+    if began is not None and now - began < SUMMARY_RETAKE:
+        return None
+    ref.set({"at": now.isoformat(), "retaken": True}, merge=True)
+    return ref
 
 
 def run(slot, only_uid=None, dry=False):
@@ -1885,6 +1949,15 @@ def run(slot, only_uid=None, dry=False):
             # Not even as a test send: a crew member has no midday summary.
             if slot == "midday" and not _gets_midday(u):
                 continue
+            claim = None
+            if not only_uid and not dry:
+                try:
+                    claim = _claim_summary(uid, slot, _now().date())
+                    if claim is None:
+                        report.append({"uid": uid, "skipped": "already sent (or being sent)"})
+                        continue
+                except Exception as e:      # noqa: BLE001 -- not knowing, theirs goes
+                    print("digest: summary not claimed for", uid, e)
             d = build(slot, u, people, wx, cache)
             if not d:
                 report.append({"uid": uid, "skipped": "nothing to say"})
@@ -1923,5 +1996,11 @@ def run(slot, only_uid=None, dry=False):
             except Exception as e:      # noqa: BLE001
                 r["push"] = "failed: %s" % e
                 print("digest: push failed for", uid, e)
+        if claim is not None:
+            try:
+                claim.set({"sentAt": _now().isoformat(), "email": str(r.get("email") or ""),
+                           "push": str(r.get("push") if r.get("push") is not None else "")}, merge=True)
+            except Exception as e:      # noqa: BLE001
+                print("digest: summary claim not marked sent for", uid, e)
         report.append(r)
     return report
