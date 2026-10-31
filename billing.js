@@ -629,6 +629,16 @@
     // customer twice. With no signal there is no knowing what has been handed
     // out, so nothing is numbered rather than guessed.
     let b = null, numbers = null;
+    // The other way in: invoices for this storm already raised in QuickBooks
+    // from Job Hub (Send to QuickBooks). Importing this file as well bills
+    // those customers twice -- asked before any number is given out.
+    try {
+      const peek = await window.YDDb.getFresh('storms/' + id + '/private', 'billing');
+      const inQb = Object.keys((peek && peek.quickbooks) || {}).filter(a => peek.quickbooks[a]);
+      if (inQb.length && !(await ydConfirm(inQb.length + ' of this storm’s invoices are already in QuickBooks, sent from Job Hub. ' +
+          'Importing this file as well would bill those customers twice.',
+          { title: 'Already sent to QuickBooks', ok: 'Download anyway', cancel: 'Don’t', danger: true }))) return;
+    } catch (e) { /* no signal: the numbering below says so */ }
     try {
       await oneAtATime(async () => {
         b = await window.YDDb.getFresh('storms/' + id + '/private', 'billing');

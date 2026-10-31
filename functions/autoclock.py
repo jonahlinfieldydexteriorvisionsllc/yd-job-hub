@@ -196,6 +196,11 @@ def storm_done_ms(storm, stops):
     last = None
     for st in stops:
         t = _ms(st.get("departedAt")) if st.get("departedAt") else None
+        # A property skipped after driving there (storm.js skipWhy: skippedAt)
+        # is work up to the skip: the last one skipped ends the night there.
+        k = _ms(st.get("skippedAt")) if st.get("skipped") and st.get("skippedAt") else None
+        if k and t is None:
+            t = k
         if t and (last is None or t > last):
             last = t
     if stops and last and all(st.get("departedAt") or st.get("skipped") for st in stops):

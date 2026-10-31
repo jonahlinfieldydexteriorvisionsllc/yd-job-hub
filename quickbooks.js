@@ -333,6 +333,14 @@
       return;
     }
     if (!todo.length) { showToast('Every invoice for that storm is already in QuickBooks'); return; }
+    // The other way in: the same storm downloaded as a QuickBooks CSV
+    // (billing.js) gave these invoice numbers. If that file was imported,
+    // raising them here bills each of those customers a second time.
+    const csv = todo.filter(a => (b.invoiceNos || {})[a]);
+    if (csv.length && !(await ydConfirm(csv.length + ' of these were already put in a QuickBooks CSV download (invoice #' +
+        csv.map(a => b.invoiceNos[a]).slice(0, 5).join(', #') + (csv.length > 5 ? '…' : '') + '). ' +
+        'If that file was imported into QuickBooks, raising them here bills those customers twice.',
+        { title: 'Already exported as a CSV', ok: 'Raise them anyway', cancel: 'Don’t', danger: true }))) return;
 
     const storm = (window.YDBilling && YDBilling.storms()[stormId]) || {};
     const when = new Date(storm.startedAt || storm.closedAt || Date.now());

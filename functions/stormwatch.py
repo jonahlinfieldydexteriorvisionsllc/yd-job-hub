@@ -338,9 +338,23 @@ def who_hears(people, prefs):
     return out
 
 
-def _storm_open(db):
-    for _ in db.collection("storms").where("status", "==", "open").limit(1).stream():
-        return True
+STORM_STALE = datetime.timedelta(hours=24)
+
+
+def _storm_open(db, now=None):
+    """A storm being worked now. One left open and forgotten (started over a
+    day ago -- nobody closed it, or two were started with no signal) is not:
+    it used to silence every warning after it."""
+    now = now or dg._now()
+    for s in db.collection("storms").where("status", "==", "open").limit(10).stream():
+        try:
+            began = datetime.datetime.fromisoformat(str((s.to_dict() or {}).get("startedAt") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return True                 # no start to go by: taken as being worked
+        if began.tzinfo is None:
+            began = began.replace(tzinfo=datetime.timezone.utc)
+        if now - began < STORM_STALE:
+            return True
     return False
 
 
@@ -386,7 +400,7 @@ def _check(db, people, prefs, now, was, ref):
     patch = {"failed": False, "outlook": o}
     sent = []
     told = was.get("told") or {}
-    if o["coming"] and not _storm_open(db) and not _same_snowfall(o, told) and not quiet_now(o, now):
+    if o["coming"] and not _storm_open(db, now) and not _same_snowfall(o, told) and not quiet_now(o, now):
         note = {"push": words(o, machines, now)}
         for uid in who_hears(people, prefs):
             try:

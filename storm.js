@@ -360,6 +360,7 @@
           (runs || bills ? '<div class="storm-end">' +
             (runs && done === list.length && list.length
               ? '<div class="storm-end-row"><button class="btn btn-accent storm-end-btn" onclick="anotherRound()">Run the route again</button></div>' : '') +
+            (runs ? '<div class="storm-end-row"><button class="btn btn-sm" onclick="addStormStop()">+ Add a stop</button></div>' : '') +
             (bills ? '<div class="storm-end-row"><button class="btn btn-filled storm-end-btn" onclick="closeStorm()">Close storm &amp; work out billing</button></div>' : '') +
             (runs ? '<div class="storm-end-row"><button class="btn btn-danger btn-sm" onclick="abandonStorm()">Abandon</button></div>' : '') +
             '</div>' : '') +
@@ -371,6 +372,23 @@
     }
     if (scrollWanted) showCurrent(list);
   }
+
+  // Another phone's change while a box here is being typed in: the list is
+  // redrawn once the box is left, not under it -- rebuilt, the box got its
+  // text back but an iPhone dropped the keyboard mid-number.
+  let renderWaiting = false;
+  const typingHere = () => {
+    const wrap = document.getElementById('stormWrap'), a = document.activeElement;
+    return !!(wrap && a && a.tagName === 'INPUT' && wrap.contains(a));
+  };
+  function renderSoon() {
+    if (typingHere()) { renderWaiting = true; return; }
+    render();
+  }
+  document.addEventListener('focusout', () => {
+    if (!renderWaiting) return;
+    setTimeout(() => { if (renderWaiting && !typingHere()) { renderWaiting = false; render(); } }, 300);
+  });
 
   // A number that can be nudged or typed. The buttons are for gloves; the
   // field is for the times a stepper would take ten taps.
@@ -658,14 +676,17 @@
   //
   // So: send the write, never block the interface on it, and let the local
   // listener redraw. The queued write reaches the server on its own later.
-  function writeSoon(promise, what) {
+  // `onRefused`: what to do instead when the rules refuse it (a Depart on a
+  // storm closed meanwhile: sent to the office as a visit to add).
+  function writeSoon(promise, what, onRefused) {
     Promise.resolve(promise).catch(e => {
       // Refused is not the same as "not sent yet". The usual case is a crew
       // member departing a stop after the owner has already closed the storm:
       // the phone showed the stop as done while the server kept the old one.
       if (e && e.code === 'permission-denied') {
-        showToast('Not saved — this storm has been closed');
         console.error('[storm] ' + what + ' refused by the rules');
+        if (onRefused) onRefused();
+        else showToast('Not saved — this storm has been closed');
       } else {
         console.warn('[storm] ' + what + ' not yet on the server:', (e && (e.code || e.message)));
       }
@@ -682,7 +703,32 @@
     if (!storm || !stops[id]) return;
     Object.assign(stops[id], patch);              // show it immediately
     if (!quiet) render();
-    writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', id, patch), 'stop update');
+    const stormId = storm.id, s = Object.assign({}, stops[id]);
+    writeSoon(window.YDDb.put('storms/' + stormId + '/stops', id, patch), 'stop update',
+      patch.departedAt ? () => missedVisit(stormId, s, patch) : null);
+  }
+  // A Depart that reached the server only after the storm was closed (made
+  // with no signal, the owner closing meanwhile): refused, the visit was
+  // left off the bill and its figures lost. Sent to the office instead as
+  // a change to the visit -- approving it adds it to the bill (billing.js
+  // fixVisit puts in a visit the bill does not have).
+  function missedVisit(stormId, s, p) {
+    const u = (window.YDAuth && window.YDAuth.user) || null;
+    if (!u) return;
+    const rid = 'cr' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const rec = {
+      type: 'stopFigures', stormId: stormId, targetId: s.id, targetPath: 'storms/' + stormId + '/stops/' + s.id,
+      accountId: s.accountId || '', accountName: accountFor(s).name || '',
+      requestedBy: u.uid, requestedByName: u.displayName || u.email || '',
+      reason: ('Departed ' + clockTime(p.departedAt) + ' — the storm was closed before it got through, so this visit is not on its bill').slice(0, 300),
+      status: 'pending',
+      before: { inchesCleared: null, saltLbs: null },
+      after: { inchesCleared: num(p.inchesCleared, 0), saltLbs: num(p.saltLbs, 0) },
+      createdAt: new Date().toISOString(),
+    };
+    Promise.resolve(window.YDDb.put('changeRequests', rid, rec)).catch(e =>
+      console.warn('[storm] missed visit not sent:', (e && e.code) || e));
+    showToast('The storm was closed before this Depart got through — sent to the office to add to the bill', 8000);
   }
 
   // Who tapped Arrive and Depart is saved with the time (arrivedBy /
@@ -816,6 +862,7 @@
     let s = stops[id];
     if (!storm || !s || s.arrivedAt) { skipping = null; render(); return; }
     let why = SKIP_REASONS[i];
+    const skippedAt = new Date().toISOString();
     if (i === -1) {
       const typed = await ydPrompt('', '', { title: 'Why is ' + nameOf(s) + ' being skipped?', placeholder: 'In a few words', ok: 'Skip it' });
       if (typed === null) return;
@@ -826,16 +873,18 @@
     if (!why) return;
     skipping = null;
     holdDone();
-    writeStop(id, { skipped: true, skipReason: why });
+    // When: the last property skipped after driving there ends the night
+    // there, not at the departure before it (doneAtMs, autoclock.py).
+    writeStop(id, { skipped: true, skipReason: why, skippedAt: skippedAt });
     undoOr('Skipped ' + nameOf(s) + ' — ' + why, () => {
       const x = stops[id];
       if (!x || !x.skipped || x.skipReason !== why) return;
-      writeStop(id, { skipped: false, skipReason: null });
+      writeStop(id, { skipped: false, skipReason: null, skippedAt: null });
     });
   };
 
   window.unskipStop = function (id) {
-    writeStop(id, { skipped: false, skipReason: null });
+    writeStop(id, { skipped: false, skipReason: null, skippedAt: null });
   };
 
   // Reordering uses arrows rather than dragging. The spec said drag, and on a
@@ -887,13 +936,19 @@
   // again is a first-class action, not a per-stop afterthought.
   window.anotherRound = async function () {
     if (!ydCan('snow', 'change')) return;
-    const list = Object.values(stops).sort((a, b) => a.order - b.order);
-    const worked = list.filter(s => s.departedAt && !s.skipped);
-    if (!worked.length) { showToast('Nothing to run again yet'); return; }
-    if (!(await ydConfirm('This adds another billed visit for each of the ' + worked.length + ' stops done so far.',
+    const first = Object.values(stops).filter(s => s.departedAt && !s.skipped).length;
+    if (!first) { showToast('Nothing to run again yet'); return; }
+    // Every property is done, so the crew's storm shifts have ended at the
+    // last departure: said, so the next pass is worked on the clock.
+    if (!(await ydConfirm('This adds another billed visit for each of the ' + first + ' stops done so far.\n\n' +
+        'Everyone was clocked out at the last stop — each of the crew clocks in to the storm again for this pass.',
         { title: 'Run the route again?', ok: 'Run it again' }))) return;
     if (!storm) return;
 
+    // Worked out now, not before the question: another device may have
+    // started the next pass while it was open, and its stops are kept.
+    const list = Object.values(stops).sort((a, b) => a.order - b.order);
+    const worked = list.filter(s => s.departedAt && !s.skipped);
     const seen = {};
     list.forEach(s => { seen[s.accountId] = Math.max(seen[s.accountId] || 0, s.pass || 1); });
 
@@ -902,13 +957,46 @@
     worked.forEach(s => {
       if ((s.pass || 1) !== seen[s.accountId]) return;     // only the latest pass spawns the next
       const next = seen[s.accountId] + 1;
-      writes.push(['storms/' + storm.id + '/stops', s.accountId + '-p' + next, {
+      const id = s.accountId + '-p' + next;
+      if (stops[id]) return;
+      // Only what a new stop needs. Blank figures in the write (it merges)
+      // wiped a pass another phone had already started or finished.
+      writes.push(['storms/' + storm.id + '/stops', id, {
         accountId: s.accountId, order: order++, pass: next, driveMiles: num(s.driveMiles, null),
-        arrivedAt: null, departedAt: null, inchesCleared: null, saltBags: null, saltLbs: null, skipped: false,
       }]);
     });
+    if (!writes.length) { showToast('That pass has already been added'); return; }
     writeSoon(window.YDDb.putMany(writes), 'extra round');
     showToast('Route added again — ' + writes.length + ' more stops');
+  };
+
+  // An account that is not on tonight's route -- left off by the expected
+  // depth (it snowed more than said), on hold when the storm began, or
+  // added or switched back on since -- put on it, at the end. There was no
+  // way to, short of abandoning the storm and starting again.
+  window.addStormStop = async function () {
+    if (!ydCan('snow', 'change') || !storm) return;
+    const accounts = window.YDSnow ? YDSnow.accounts() : {};
+    const on = {};
+    Object.values(stops).forEach(s => { on[s.accountId] = true; });
+    const left = Object.keys(accounts).filter(id => !on[id] && accounts[id] && accounts[id].active !== false)
+      .sort((a, b) => String(accounts[a].name || '').localeCompare(String(accounts[b].name || '')));
+    if (!left.length) { showToast('Every active account is on this storm already'); return; }
+    const pick = await ydChoose('Not on tonight’s route — left off by the expected depth, on hold, or added since. ' +
+      'It goes at the end of the list.',
+      left.map(id => ({ id: id, label: accounts[id].name || id,
+        hint: onHold(accounts[id]) ? 'on hold today' : accounts[id].minTriggerInches > 1 ? 'takes ' + accounts[id].minTriggerInches + '" or more' : '' })),
+      { title: 'Add a stop to this storm' });
+    if (!pick || !storm) return;
+    const id = left.find(x => x === pick.id);
+    if (!id) return;
+    if (stops[id]) { showToast('That one is on the route now'); return; }
+    const order = Object.values(stops).reduce((m, s) => Math.max(m, num(s.order, 0)), -1) + 1;
+    const rec = { accountId: id, order: order, pass: 1, driveMiles: null };
+    stops[id] = Object.assign({ id: id }, rec);
+    render();
+    writeSoon(window.YDDb.put('storms/' + storm.id + '/stops', id, rec), 'added stop');
+    showToast((accounts[id].name || 'That account') + ' added at the end of the route');
   };
 
   // A single stop can also be run again on its own.
@@ -930,14 +1018,13 @@
     pass += 1;
     while (stops[s.accountId + '-p' + pass]) pass += 1;
     const newId = s.accountId + '-p' + pass;
+    // Only what a new stop needs: the write merges, and blank figures would
+    // wipe a pass another phone made under the same id meanwhile.
     const rec = {
       accountId: s.accountId,
       order: Object.keys(stops).length,
       pass: pass,
       driveMiles: null,
-      arrivedAt: null, departedAt: null,
-      inchesCleared: null, saltBags: null, saltLbs: null,
-      skipped: false,
     };
     stops[newId] = Object.assign({ id: newId }, rec);
     render();
@@ -990,6 +1077,11 @@
     }
     const accounts = window.YDSnow ? YDSnow.accounts() : {};
     if (!Object.keys(accounts).length) { showToast('No snow accounts yet'); return; }
+    // The yard and the hand-set route order read again while the form is
+    // filled in (they were read once a sign-in: a phone left open for days
+    // started the storm on an old order). Not waited for -- no signal, and
+    // the last ones read stand.
+    loadStartPoint();
     // One form rather than three questions in a row: big buttons for gloves,
     // and the crew picked by tapping their names (the clock's people), so
     // the names match the time clock and the count is never mistyped.
@@ -1180,10 +1272,16 @@
     const skippedN = list.filter(s => s.skipped).length;
     const onSiteN = list.filter(s => s.arrivedAt && !s.departedAt && !s.skipped).length;
     const openN = list.length - doneN - skippedN;
+    // Skipped on one phone and worked on another: left off the bill, as a
+    // skip is -- said, so a real visit is not lost without a word.
+    const bothN = list.filter(s => s.skipped && s.departedAt).length;
     const closing = storm.id;
     if (!(await ydConfirm(doneN + ' done · ' + skippedN + ' skipped · ' + openN + ' still open' +
         (onSiteN ? ' (' + onSiteN + ' on site — nobody has departed)' : '') + '\n\n' +
         (openN ? 'Stops still open are left off the bill. ' : '') +
+        (onSiteN ? 'A phone with no signal may still be sending its Depart — if so, it comes to you as a visit to add. ' : '') +
+        (bothN ? bothN + ' skipped stop' + (bothN === 1 ? ' also has' : 's also have') +
+          ' a Depart — un-skip ' + (bothN === 1 ? 'it' : 'them') + ' first if the visit was made, or it is left off. ' : '') +
         'Once it is closed, the crew can no longer change its numbers.',
         { title: 'Close this storm and work out the billing?', ok: 'Close the storm' }))) return;
     // The storm on screen may have changed while the question was open.
@@ -1312,7 +1410,7 @@
       // not on screen, and redrawing every phone's list for it moved the
       // buttons under whoever was tapping. So is this phone's own write
       // coming back, already drawn when it was made.
-      if (shown) { render(); stormNews(); }
+      if (shown) { renderSoon(); stormNews(); }
       // Every property done: this phone's storm shift ends at the last
       // departure (timeclock.js stormDone). Only from a list the server has
       // given -- a part-filled cache could look finished when it is not.
@@ -1341,7 +1439,8 @@
     let last = null;
     for (const s of list) {
       if (!s.departedAt && !s.skipped) return null;
-      const t = s.departedAt ? Date.parse(s.departedAt) : NaN;
+      // A property skipped after driving there counts to the skip.
+      const t = s.departedAt ? Date.parse(s.departedAt) : s.skippedAt ? Date.parse(s.skippedAt) : NaN;
       if (isFinite(t) && (last === null || t > last)) last = t;
     }
     return last;
