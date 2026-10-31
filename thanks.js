@@ -307,7 +307,9 @@
   // chooses to have it sent (settings/followUp.welcome 'draft' | 'send' |
   // 'off'), in his words once he changes them. Here: the line on the job, the
   // "Don't send" tick (noWelcome), and the choice in Follow-ups & thank-yous.
-  // followup.py WELCOME_SUBJECT / WELCOME_BODY -- the same words.
+  // followup.py WELCOME_SUBJECT / WELCOME_BODY -- the same words: every part
+  // of the usual email. The server leaves out ordering materials for a job
+  // with none, and the utility lines for a job that doesn't dig.
   const W_SUBJECT = 'Next steps for your {work} — YD Exterior Visions';
   const W_BODY = 'Hi {name},\n\n' +
     'Thank you for accepting our estimate for your {work} — we\'re glad to be working with you.\n\n' +
@@ -376,7 +378,9 @@
   async function editWelcomeWords() {
     const now = await current();
     const got = await ydForm('The email a customer gets the morning after they accept your estimate. {name} becomes their first ' +
-      'name (“there” for a business), {work} what the job is (“paver patio”). Empty a box for the usual words.', [
+      'name (“there” for a business), {work} what the job is (“paver patio”). Empty a box for the usual words — they leave ' +
+      'out ordering materials for a job with none, and marking the utility lines for one that doesn’t dig. Your own words ' +
+      'go to every job as you write them.', [
       { id: 'subject', label: 'Subject', value: now.welcomeSubject || W_SUBJECT },
       { id: 'body', label: 'The email', value: now.welcomeBody || W_BODY, multiline: true },
     ], { title: 'The next-steps email’s words', ok: 'Save' });
@@ -390,7 +394,7 @@
     const now = await current();
     const mode = welcomeMode(now);
     const pick = await ydChoose('The morning after a customer accepts your estimate in QuickBooks, they get a thank-you with the next ' +
-      'steps — the deposit invoice, scheduling, marking the utility lines. Never twice, never for snow, and not when you’ve ' +
+      'steps — the deposit invoice, scheduling, marking the utility lines when the job digs. Never twice, never for snow, and not when you’ve ' +
       'emailed them about the deposit yourself.', [
       { id: 'draft', label: '📝 Put it in my Gmail Drafts', hint: 'You read each one and send it yourself (how it starts)' },
       { id: 'send', label: '✉️ Send it by itself', hint: 'From your Gmail, 8 to noon — a reply comes to you' },

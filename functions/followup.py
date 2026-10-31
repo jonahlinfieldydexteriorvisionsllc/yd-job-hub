@@ -1434,22 +1434,62 @@ def thanks_now(job_id, uid):
 WELCOME_MAX = 4
 WELCOME_WITHIN_DAYS = 14
 WELCOME_SUBJECT = "Next steps for your {work} — YD Exterior Visions"
-WELCOME_BODY = (
+# The usual words are put together for each job: a fall cleanup was told
+# "we order your materials" and "before we dig" (31 Oct). The materials words
+# go only to a job with materials, the utility lines only to one whose work
+# digs (DIGS). His own words (welcomeBody) go as he wrote them. WELCOME_BODY
+# is every part -- what thanks.js W_BODY shows him to change.
+WELCOME_HEAD = (
     "Hi {name},\n\n"
     "Thank you for accepting our estimate for your {work} — we're glad to be working with you.\n\n"
-    "Here's what happens next:\n\n"
-    "1. Deposit: you'll get the deposit invoice from QuickBooks by email. You can pay it online with the "
-    "button in that email (a bank transfer costs you nothing), or by check made out to YD Exterior Visions LLC.\n\n"
-    "2. Scheduling: once the deposit is in, we order your materials and put you on the schedule, "
-    "and we'll be in touch with a start date.\n\n"
-    "3. Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few "
-    "days before we start. If you have private lines (an invisible dog fence, irrigation, lighting, a line to a "
-    "shed), please let us know where they run.\n\n"
-    "4. Questions or changes: just reply to this email.\n\n"
+    "Here's what happens next:"
+)
+WELCOME_STEPS = (                   # (for which jobs, the words)
+    ("all", "Deposit: you'll get the deposit invoice from QuickBooks by email. You can pay it online with the "
+            "button in that email (a bank transfer costs you nothing), or by check made out to YD Exterior Visions LLC."),
+    ("materials", "Scheduling: once the deposit is in, we order your materials and put you on the schedule, "
+                  "and we'll be in touch with a start date."),
+    ("no materials", "Scheduling: once the deposit is in, we put you on the schedule, "
+                     "and we'll be in touch with a start date."),
+    ("digs", "Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few "
+             "days before we start. If you have private lines (an invisible dog fence, irrigation, lighting, a line to a "
+             "shed), please let us know where they run."),
+    ("all", "Questions or changes: just reply to this email."),
+)
+WELCOME_FOOT = (
     "Thanks again for choosing us,\n"
     "Jonah\n"
     "YD Exterior Visions"
 )
+# Work that digs: digging.js DIGS (the Diggers ticket to-do) -- keep the same.
+DIGS = re.compile(r"\b(walls?|retaining|pavers?|patios?|drain\w*|trench\w*|light\w*|trees?|plant\w*|shrubs?|excavat\w*|"
+                  r"footings?|posts?|fenc\w*|grad(?:e|ing)|fire ?pits?|walkways?|paths?|steps|edging|boulders?|sod|"
+                  r"irrigat\w*|french|dig\w*|stump|turf|grading|garden|beds?|window ?wells?)\b", re.I)
+
+
+def _welcome_body(materials, digs):
+    """The usual words for a job with (or without) materials and digging."""
+    want = {"all", "materials" if materials else "no materials"} | ({"digs"} if digs else set())
+    steps = [w for who, w in WELCOME_STEPS if who in want]
+    return "\n\n".join([WELCOME_HEAD] + ["%d. %s" % (i + 1, w) for i, w in enumerate(steps)] + [WELCOME_FOOT])
+
+
+WELCOME_BODY = _welcome_body(True, True)
+
+
+def _digs(j):
+    """digging.js digs(): its services, its work lines' titles, what the crew are told."""
+    est = j.get("estimate") or {}
+    words = list(j.get("serviceTypes") or []) + [str((w or {}).get("title") or "") for w in (est.get("work") or [])]
+    words.append(str(j.get("crewWhat") or ""))
+    return bool(DIGS.search(" · ".join(str(w) for w in words)))
+
+
+def _has_materials(j):
+    """Materials to order: a named line on its estimate or its order list (not one he didn't buy)."""
+    est = j.get("estimate") or {}
+    lines = list(est.get("materials") or []) + list(j.get("orderItems") or [])
+    return any(isinstance(m, dict) and str(m.get("name") or "").strip() and not m.get("notBought") for m in lines)
 
 
 def welcome_mode(conf):
@@ -1470,9 +1510,9 @@ def accepted_at(j):
 
 def welcome_words(j, conf, cust=None):
     """(subject, body) for job `j`: his words when he has written his own,
-    else WELCOME_SUBJECT / WELCOME_BODY, with {name} and {work} filled in."""
+    else WELCOME_SUBJECT / the usual words for this job, with {name} and {work} filled in."""
     subject = str(conf.get("welcomeSubject") or "").strip() or WELCOME_SUBJECT
-    body = str(conf.get("welcomeBody") or "").strip() or WELCOME_BODY
+    body = str(conf.get("welcomeBody") or "").strip() or _welcome_body(_has_materials(j), _digs(j))
     fill = {"{name}": _first_name(j, cust) or "there", "{work}": _work_words(j)}
     for k, v in fill.items():
         subject, body = subject.replace(k, v), body.replace(k, v)
