@@ -2208,6 +2208,8 @@ WORK_HEADS = frozenset((
 WORK_VERBS = frozenset((
     "remove", "excavate", "install", "haul", "dig", "trench", "till", "rototill", "demolish",
     "extract", "regrade", "dethatch", "aerate", "prune", "prep", "prepare"))
+# "Trench drain", "Dig bar": a thing to buy, named after what it is for.
+THING_AFTER = frozenset(("drain", "drains", "grate", "grates", "channel", "channels", "bar", "bars", "cover", "covers"))
 _NOTE_CUT = re.compile(r"\s[—–-]\s|[,:;(]|\s(?:to|of|for|with|including|below|above|after|before|around|along|at|in|on"
                        r"|from|into|under|behind|and|&)\s")
 
@@ -2218,7 +2220,7 @@ def _reads_as_work(name):
     ws = [w for w in ws if re.search(r"[a-z]", w)]
     if not ws:
         return False
-    if ws[0] in WORK_VERBS:
+    if ws[0] in WORK_VERBS and not (len(ws) > 1 and ws[1] in THING_AFTER):
         return True
     head = ws[-1]
     if head not in WORK_HEADS and head.endswith("s"):

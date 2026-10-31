@@ -71,10 +71,19 @@
   // ---------------------------------------------------------------- periods
 
   // The period a day falls in: {start, due} as local YYYY-MM-DD, or null when
-  // the task does not run then (out of season).
+  // the task does not run then (out of season). The season is the PERIOD's,
+  // not the day's: a week that starts or ends in April–October runs. Asking
+  // by the day made the Oct 31–Nov 6 week's card on the 31st, then the
+  // clean-up (which asks by the card's due day, 6 Nov) took it off again --
+  // over and over on the owner's device.
   function periodOf(t, day) {
+    const p = periodAny(t, day);
+    if (!p || t.season !== 'season') return p;
+    const inSeason = s => { const m = new Date(s + 'T00:00:00').getMonth(); return m >= 3 && m <= 9; };
+    return inSeason(p.start) || inSeason(p.due) ? p : null;
+  }
+  function periodAny(t, day) {
     const d = new Date(day + 'T00:00:00');
-    if (t.season === 'season' && (d.getMonth() < 3 || d.getMonth() > 9)) return null;
     if (t.every === 'week') {
       // Saturday to Friday, due Friday: a task added (or a new week begun)
       // on the weekend is due the coming Friday, not the one just gone.

@@ -282,19 +282,33 @@
   // `photosOk`: a job being finished was asked about its Before and After
   // photos already (app.js photosLetFinish) -- the same way: Cancel and it
   // stays where it was.
-  function moveJob(jobId, boardId, col, why, photosOk) {
+  function moveJob(jobId, boardId, col, why, photosOk, backOk) {
     const j = jobsList().find(x => x._id === jobId);
     if (!j) return;
     // A card dropped back where it was (a drag that changed its mind) is not
     // a move. Treating it as one restamped the job, which reset its age and
     // cleared the "untouched for a fortnight" warning on a bid going cold.
     if ((boardId === 'bids' ? bidColumn(j) : workColumn(j)) === col) return;
+    // A job under way -- booked, in progress or finished -- sits in Won. Moved
+    // back to a bid column it stops being a job (off the Jobs board and the
+    // crew's clock list) and an In progress one came back only as Scheduled:
+    // one slip on the Bids board did that with no question. Asked first now,
+    // and it can be undone.
+    if (boardId === 'bids' && col !== 'won' && !backOk && (j.jobStatus || 'quoting') !== 'quoting' &&
+        typeof ydConfirm === 'function') {
+      render();
+      const to = (BIDS.columns.find(c => c.id === col) || {}).name || col;
+      ydConfirm('It is a job now. Moving it to ' + to + ' takes it off the Jobs board and the crew’s clock list.',
+        { title: 'Make ' + ((j.customerName || '').trim() || 'this job') + ' a bid again?', ok: 'Make it a bid again' })
+        .then(ok => { if (ok) moveJob(jobId, boardId, col, why, photosOk, true); });
+      return;
+    }
     if (boardId === 'bids' && col === 'lost' && !why && typeof askLostReason === 'function') {
       // The card goes back to its place while the question is open; the
       // answer moves it.
       render();
       askLostReason({ name: (j.customerName || '').trim(), preset: turnedDown(j) ? 'qb' : '' },
-        w => moveJob(jobId, boardId, col, w));
+        w => moveJob(jobId, boardId, col, w, photosOk, backOk));
       return;
     }
     // Into Ready to invoice, Invoiced or Paid from anywhere before them is
@@ -345,13 +359,21 @@
     }
     // A bid booked by a move to Won can be undone, as from Make it a job
     // (app.js putJobBack): what it was, taken before the move.
-    const was = patch.jobStatus === 'booked' && boardId === 'bids' && typeof jobMoveSnapshot === 'function'
-      ? jobMoveSnapshot(jobId) : null;
+    // So can a job made a bid again (not one marked lost: that also files the
+    // customer on Contacts, which an Undo here would not take back).
+    const was = boardId === 'bids' && typeof jobMoveSnapshot === 'function' &&
+      (patch.jobStatus === 'booked' || (backOk && col !== 'lost')) ? jobMoveSnapshot(jobId) : null;
     if (!window.YDSync || !window.YDSync.patchJob(jobId, patch)) {
       showToast('Could not move that job');
       return;
     }
     const name = (j.customerName || 'Job').trim();
+    if (was && backOk && typeof showUndo === 'function' && typeof putJobBack === 'function') {
+      showUndo(name + ' → a bid again, off the Jobs board',
+        () => putJobBack(jobId, was, 'Back to a job, as it was'), 10000);
+      render();
+      return;
+    }
     if (was && typeof showUndo === 'function' && typeof putJobBack === 'function') {
       showUndo(name + ' → Won — booked, now on the Jobs board',
         () => putJobBack(jobId, was, 'Back to a bid, as it was'), 10000);
@@ -1834,7 +1856,7 @@
     Object.assign(patch, doneByPatch(board, k, colOf(board, k) === last, col === last, patch.doneAt));
     Object.assign(k, patch);
     render();
-    if (openCard && openCard.cardId === cardId) renderCardDetail();
+    redrawOpenCard(cardId);
     writeCard(boardId, cardId, patch);
     // The calendar and Home show cards too: told now, not only when the
     // write comes back from the database.
@@ -1927,7 +1949,7 @@
     Object.assign(patch, doneByPatch(board, k, true, false, null));
     Object.assign(k, patch);
     render();
-    if (openCard && openCard.cardId === cardId) renderCardDetail();
+    redrawOpenCard(cardId);
     writeCard(boardId, cardId, patch);
     cardsChanged();
     showToast('Put back in ' + ((board.columns.find(c => c.id === was.column) || {}).name || 'its column'));
@@ -2191,6 +2213,15 @@
     renderCardDetail();
   };
 
+  // Something else changed the open card -- a move Job Hub made by itself (a
+  // to-do ticked off when its ticket came in), a file that finished sending:
+  // the sheet shows it, but not over the card's editor, where a redraw threw
+  // away what was being typed. (The editor's own Save and Cancel draw the
+  // sheet themselves.)
+  function redrawOpenCard(cardId) {
+    if (openCard && openCard.cardId === cardId && !el('cdTitle')) renderCardDetail();
+  }
+
   function renderCardDetail() {
     const board = boards[openCard.boardId];
     const k = board && (cards[board.id] || {})[openCard.cardId];
@@ -2313,7 +2344,7 @@
     writeCard(board.id, k.id, patch);
     showToast(added.length === 1 ? 'Attached' : added.length + ' files attached');
     render();
-    if (openCard && openCard.cardId === k.id) renderCardDetail();
+    redrawOpenCard(k.id);
   };
   window.bdFileRemove = async function (fid) {
     const at = openCard;
@@ -2329,7 +2360,7 @@
     writeCard(board.id, k.id, patch);
     dropCardFiles([f]);
     render();
-    if (openCard && openCard.cardId === k.id) renderCardDetail();
+    redrawOpenCard(k.id);
   };
   function dropCardFiles(files) {
     files.forEach(f => {
@@ -3697,8 +3728,11 @@
     const out = {};
     // A private board's name and columns are not the crew's business either.
     Object.values(boards).filter(b => !b.virtual && !b.crewOnly && !b.ownerOnly).forEach(b => {
+      // Which column is Done goes too: without it a crew phone moving a card
+      // there never marked it done (no doneAt), so it stayed open everywhere.
       out[b.id] = { name: String(b.name || 'Board').slice(0, 80), color: b.color || null,
-                    columns: (b.columns || []).map(c => ({ id: c.id, name: String(c.name || '').slice(0, 60) })) };
+                    columns: (b.columns || []).map(c => ({ id: c.id, name: String(c.name || '').slice(0, 60) })),
+                    doneColumn: doneColOf(b) };
     });
     const json = JSON.stringify(out);
     if (json === crewPublished) return;
@@ -3725,7 +3759,8 @@
       Object.keys(list).forEach(id => {
         const info = list[id];
         if (!info || (boards[id] && !boards[id].crewOnly)) return;      // gone, or a board they are on
-        const meta = { name: info.name || 'Board', color: info.color || null, columns: info.columns || [] };
+        const meta = { name: info.name || 'Board', color: info.color || null, columns: info.columns || [],
+                       doneColumn: typeof info.doneColumn === 'string' ? info.doneColumn : '' };
         if (crewWatch[id]) { Object.assign(boards[id], meta); return; }
         if (!meta.columns.length) return;
         boards[id] = Object.assign({ id: id, crewOnly: true }, meta);

@@ -68,6 +68,19 @@ def _can_see(user, cal):
     return False
 
 
+def _looks_only(user, cal):
+    """Shared with this person to look at only (calendar.js looksOnly):
+    they tick nothing off on it, so nothing on it is a task left undone for
+    them. A calendar they may change is never look-only for them."""
+    if cal.get("lookOnly") is not True or user.get("role") == "owner":
+        return False
+    if user["uid"] in (cal.get("editors") or []):
+        return False
+    if user.get("role") == "admin" and cal.get("ownerOnly") is False and cal.get("seeOnly") is not True:
+        return (user.get("access") or {}).get("calendars", "none") != "change"
+    return True
+
+
 def _words(ev, cal, start):
     when = "All day" if (ev.get("allDay") or not ev.get("time")) else dg._fmt_time(ev.get("time"))
     today = dg._now().date()
@@ -267,8 +280,13 @@ def _set_reminder(db, people, cal_id, cal, eid, ev, since, now, sent):
         return
     # A single date changed on its own (calendar.js) reminds at its own
     # time; a cancelled one not at all.
+    done = ev.get("done") or {}
     for day, one in days:
         if day.isoformat() != str(one.get("date")):
+            continue
+        # Ticked off already (done early): nothing, as for the usual
+        # reminders (_usual) -- it still buzzed when it had its own time.
+        if done.get(day.isoformat()):
             continue
         start = _start_of(one, day)
         due = start - datetime.timedelta(minutes=mins)
@@ -420,20 +438,24 @@ def _look_card(db, job_id, page, work, ticks, last, now):
     (not done) nothing more is made; once it is done or deleted, the next
     finish puts it back. Returns the card id when made, "" when his card for
     it is still open, None when there is no My to-dos board to put it on."""
+    import tidy
     bref = db.collection("boards").document("todo")
     snap = bref.get()
-    cols = ((snap.to_dict() or {}).get("columns") or []) if snap.exists else []
-    cols = [col for col in cols if isinstance(col, dict) and col.get("id")]
+    board = (snap.to_dict() or {}) if snap.exists else {}
+    cols = [col for col in (board.get("columns") or []) if isinstance(col, dict) and col.get("id")]
     if not cols:
         return None
     today = next((col["id"] for col in cols if str(col.get("name") or "").strip().lower() == "today"), cols[0]["id"])
-    done_col = cols[-1]["id"]
+    # Done is the column the board's settings name (boards.js doneColOf), not
+    # the last one: an open card sitting in a last column that is not Done
+    # was taken for done and written over with a fresh one.
+    done_col = tidy._done_col(board)
     cid = "lk" + re.sub(r"[^A-Za-z0-9_-]", "", job_id)
     ref = bref.collection("cards").document(cid)
     have = ref.get()
     if have.exists:
         cur = have.to_dict() or {}
-        if not cur.get("doneAt") and cur.get("column") != done_col:
+        if not cur.get("doneAt") and not (done_col and cur.get("column") == done_col):
             return ""
     name = str(page.get("name") or "").strip() or "Untitled job"
     num = str(page.get("est") or "").strip()
@@ -561,9 +583,9 @@ def _card_reminders(db, people, since, now, boards):
                     continue
                 key = "card_%s_%s_%s_%s" % (board_id, card_id, day.isoformat(),
                                             str(k.get("dueTime") or "allday").replace(":", ""))
+                claim = db.collection("reminderLog").document(key)
                 try:
-                    db.collection("reminderLog").document(key).create({"board": board_id, "card": card_id,
-                                                                       "at": now.isoformat()})
+                    claim.create({"board": board_id, "card": card_id, "at": now.isoformat()})
                 except AlreadyExists:
                     continue
                 uids = set(k.get("remindUids") or [])
@@ -574,14 +596,21 @@ def _card_reminders(db, people, since, now, boards):
                       else start.strftime("%a %b ") + str(day.day))
                 note = {"push": {"title": "🔔 " + str(k.get("title") or "A card")[:80],
                                  "body": " · ".join(x for x in (when + " " + on, board.get("name") or "") if x)}}
+                tried, failed = 0, 0
                 for uid in uids:
                     u = people.get(uid)
                     if not u or not _sees_board(u, board, k):
                         continue
+                    tried += 1
                     try:
                         out.append({"uid": uid, "card": key, "phones": dg.send_push(uid, note, tag="yd-" + key, ttl=2 * 3600)})
                     except Exception as err:      # noqa: BLE001
+                        failed += isinstance(err, dg.PushFailed)
                         print("reminders: card push failed:", uid, key, err)
+                # No phone reached (the push service down): given back, so the
+                # next run tries again, as a calendar entry's own reminder does.
+                if tried and failed == tried:
+                    _give_back(claim)
     except Exception as err:          # noqa: BLE001
         print("reminders: card reminders not read:", err)
     return out
@@ -1024,7 +1053,10 @@ def open_tasks(db, people, first, last, now):
     try:
         for c in db.collection("calendars").stream():
             cal = c.to_dict() or {}
-            sees = [u for u in people.values() if _can_see(u, cal)]
+            # Not on a calendar they may only look at (Jonah's My work, for
+            # the crew): the app gives them no tick there, so it headed their
+            # "not done" lists for a fortnight with no way to clear it.
+            sees = [u for u in people.values() if _can_see(u, cal) and not _looks_only(u, cal)]
             if not sees:
                 continue
             for eid, ev in dg.events_near(c.reference, first, last).items():

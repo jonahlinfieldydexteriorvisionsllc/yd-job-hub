@@ -841,7 +841,9 @@
   // none are left; nothing at all when there were none.
   // `all`: the day's occurrences on every calendar; `late`: carried(true).
   function tally(all, late, pick, day) {
-    const tasks = all.filter(o => o.task && !o.after && pick(o));
+    // Not what sits on a calendar they may only look at: there is no tick for
+    // it, so it could never leave the count (carried() leaves them out too).
+    const tasks = all.filter(o => o.task && !o.after && !looksOnly(cals[o.calId]) && pick(o));
     const earlier = late.filter(pick);
     return { day: day, today: tasks.filter(o => !o.done).length, earlier: earlier.filter(o => !o.done).length,
              any: tasks.length + earlier.length };
@@ -890,8 +892,10 @@
   // second line (who is on it). `late`: from an earlier day, not done.
   function todoRow(o, sub, late, at) {
     const k = keyOf(o);
-    // Someone else's, with no box to tick: whose it is, instead.
-    const tickable = canTick(o), theirs = !tickable && o.task ? whoOn(o) : '';
+    // Someone else's, with no box to tick: whose it is, instead. An
+    // appointment (a quote visit, the doctor) is never ticked off -- a tick
+    // there silenced its morning line and called it "done today".
+    const tickable = canTick(o) && !!o.task, theirs = !tickable && o.task ? whoOn(o) : '';
     if (theirs && String(sub || '').indexOf(theirs) === -1) sub = [sub, theirs].filter(Boolean).join(' · ');
     return '<div class="cal-todo' + (o.done ? ' done' : '') + (late ? ' late' : '') + '" style="--c:' + colorOf(o) + '">' +
       (tickable ? '<input type="checkbox"' + (o.done ? ' checked' : '') + ' onchange="calTick(\'' + k + '\', this.checked)" ' +
@@ -1732,7 +1736,7 @@
     const files = (now.files || []).filter(x => x.id !== fid);
     applyLocal(o.calId, o.id, { files: files });
     write('calendars/' + o.calId + '/events', o.id, { files: files }, 'removing a file');
-    if (window.YDStore) window.YDStore.remove(f.path).catch(e => console.warn('[calendar] file not removed from storage:', e && (e.code || e.message)));
+    if (window.YDStore && !listedElsewhere(f.path, (events[o.calId] || {})[o.id])) window.YDStore.remove(f.path).catch(e => console.warn('[calendar] file not removed from storage:', e && (e.code || e.message)));
     openOcc(o);
   };
   // The same file rows for a board's card (boards.js; Jonah, 30 Oct 2026:
@@ -1743,8 +1747,17 @@
   // An entry deleted for good takes its files with it.
   function dropFiles(base) {
     (Array.isArray(base && base.files) ? base.files : []).forEach(f => {
-      if (window.YDStore && f && f.path) window.YDStore.remove(f.path).catch(() => {});
+      if (window.YDStore && f && f.path && !listedElsewhere(f.path, base)) window.YDStore.remove(f.path).catch(() => {});
     });
+  }
+  // A file another entry still lists stays in storage: "this date and the
+  // ones after" makes a second entry carrying the same files, and deleting
+  // either one (or a file off it) left the other with a dead link.
+  function listedElsewhere(path, base) {
+    return Object.keys(events).some(cid => Object.keys(events[cid] || {}).some(eid => {
+      const ev = events[cid][eid];
+      return ev && ev !== base && Array.isArray(ev.files) && ev.files.some(x => x && x.path === path);
+    }));
   }
 
   function openOcc(o) {
@@ -2010,12 +2023,15 @@
   // calendar items for me to do"): a new entry there starts with Jonah
   // ticked as who is on it, so it is his -- on his day, and his reminder --
   // not the maker's. Untick him (or tick others) as wanted.
+  // Once: it ran again on every tag tap and title letter, so an admin who
+  // unticked him (to make it their own) had him ticked back on.
   function forJonah(cal) {
-    if (isOwner() || !editing || editing.eventId || !cal || cal.kind !== 'work') return;
+    if (isOwner() || !editing || editing.eventId || editing.jonahPut || !cal || cal.kind !== 'work') return;
     if (document.querySelector('.evWho:checked')) return;
     const owner = Object.keys(people).find(uid => people[uid] && people[uid].role === 'owner');
     const box = owner && document.querySelector('.evWho[value="' + owner + '"]');
     if (!box) return;
+    editing.jonahPut = true;
     box.checked = true;
     if (typeof window.calWhoTicked === 'function') window.calWhoTicked(box);
   }
@@ -2366,6 +2382,15 @@
       showToast('"Ends" is before "Starts" — for work past midnight, set "Until" to the next day'); return null;
     }
     const crew = crewPeople();
+    // Someone on it with no box on this screen stays on it: a crew member
+    // trusted with this calendar has no people list on their phone (so no
+    // boxes at all), and a person switched off has none either -- a time
+    // changed from there took everyone off the entry, and their reminders
+    // with them.
+    const shown = (ed.occ && ed.occ.ev ? ed.occ.ev : was) || {};
+    const boxed = new Set(Array.from(document.querySelectorAll('.evWho')).map(i => i.value));
+    const noBox = (shown.crew || []).filter(c => c && c.uid && !boxed.has(c.uid))
+      .map(c => ({ uid: c.uid, name: c.name || '' }));
     const rec = {
       title: title,
       date: date,
@@ -2380,7 +2405,8 @@
       address: val('evAddr'),
       crew: Array.from(document.querySelectorAll('.evWho:checked'))
         .map(i => crew.find(p => p.uid === i.value)).filter(Boolean)
-        .map(p => ({ uid: p.uid, name: p.name })),
+        .map(p => ({ uid: p.uid, name: p.name }))
+        .concat(noBox),
       notes: el('evNotes').value.trim(),
       // Its tag: kept when it was tapped, or is not what the calendar and
       // the title make it anyway; one that only followed them is left to
@@ -3326,6 +3352,9 @@
     editing = null;
     // Closed while asking which dates a drag should move: it goes back.
     if (pending) { pending = null; render(); }
+    // What changed while the editor held the redraws back (another phone's
+    // tick, an edit) is drawn now -- Cancel left it out until the next one.
+    else redrawIfVisible();
   };
 
   // ---------------------------------------------------------------- writes

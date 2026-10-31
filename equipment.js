@@ -1044,6 +1044,12 @@
     write(g.id, { issues: g.issues }, to === 'fixed' ? 'marking a problem fixed' : 'moving a problem to ' + to);
   }
   // Fixed, or back to Open -- the board sync's two moves.
+  // When a problem was marked fixed -- not the repair day it was dated with
+  // (a fix written up two days late is "done" on the repair day).
+  function fixedWhen(i) {
+    const said = i.statusChange && i.statusChange.to === 'fixed' ? String(i.statusChange.at || '') : '';
+    return said > String(i.doneAt || '') ? said : String(i.doneAt || '');
+  }
   function setIssueDone(g, issueId, done) { setIssueStage(g, issueId, done ? 'fixed' : 'open'); }
 
   // Ticked "Fixed" by mistake: back on the list, and its Maintenance card
@@ -1290,7 +1296,7 @@
   }
 
   window.saveService = async function () {
-    const g = gear[openId];
+    let g = gear[openId];
     if (!g) return;
     const what = val('svWhat');
     if (!what) { showToast('Say what was done'); return; }
@@ -1306,6 +1312,9 @@
       }
       // The form closed, or another machine opened, while it was asked.
       if (openId !== was || !el('svWhat') || !gear[openId]) return;
+      // The machine as it is now: a change from another phone that came in
+      // while it was asked would be written over by the copy read before.
+      g = gear[openId];
     }
 
     const entry = {
@@ -1328,9 +1337,11 @@
       // Fixed on the day the repair was done, which may be before today.
       const doneAt = entry.at === localDay() ? new Date().toISOString() : entry.at + 'T12:00:00';
       // Its status goes to Fixed with it (stages.js), said to be by whoever
-      // did the repair.
+      // did the repair -- the change dated now, when it was written down: a
+      // crew move of its card since the repair day read as "moved back out
+      // of Done after the fix" and reopened it at once (syncMaintenance).
       patch.issues = (g.issues || []).map(i => i.id === fixed.id
-        ? Object.assign({}, i, window.YDStages.issuePatch(i, 'fixed', { uid: meWho().uid, name: entry.by || whoAmI() }, doneAt),
+        ? Object.assign({}, i, window.YDStages.issuePatch(i, 'fixed', { uid: meWho().uid, name: entry.by || whoAmI() }),
             { doneAt: doneAt, doneBy: entry.by || whoAmI(), serviceId: entry.id }) : i);
     }
 
@@ -1408,11 +1419,26 @@
     const h = newestWith(service, 'hours'), m = newestWith(service, 'miles');
     if (entry.hours != null && entry.hours === g.hours && h) patch.hours = h.hours;
     if (entry.miles != null && entry.miles === g.miles && m) patch.miles = m.miles;
-    // The next service goes back to where the newest remaining one puts it.
+    // The next service goes back to where the newest remaining one puts it
+    // -- or, with none left that says, to where a machine with no history
+    // starts (its reading, or today, plus the interval), as saveEquipment
+    // does: the removed entry's due point stayed on it before.
     const next = dueFromHistory(g, service);
-    if (entry.hours != null && next.dueHours != null) patch.dueHours = next.dueHours;
-    if (entry.miles != null && next.dueMiles != null) patch.dueMiles = next.dueMiles;
+    const reading = (k, r) => patch[k] != null ? patch[k] : r;
+    if (entry.hours != null) {
+      patch.dueHours = next.dueHours != null ? next.dueHours
+        : g.intervalHours && reading('hours', g.hours) != null ? round1(reading('hours', g.hours) + g.intervalHours) : null;
+    }
+    if (entry.miles != null) {
+      patch.dueMiles = next.dueMiles != null ? next.dueMiles
+        : g.intervalMiles && reading('miles', g.miles) != null ? Math.round(reading('miles', g.miles) + g.intervalMiles) : null;
+    }
     if (next.dueDate) patch.dueDate = next.dueDate;
+    else if (g.intervalDays && entry.at) {
+      const base = new Date(localDay() + 'T00:00:00');
+      base.setDate(base.getDate() + g.intervalDays);
+      patch.dueDate = localDay(base);
+    }
     Object.assign(g, patch);
     renderDetail(); renderEquipment();
     write(g.id, patch, 'removing a service entry');
@@ -1589,12 +1615,17 @@
     const hoursChanged = rec.intervalHours !== (was.intervalHours != null ? was.intervalHours : null);
     const milesChanged = rec.intervalMiles !== (was.intervalMiles != null ? was.intervalMiles : null);
     const daysChanged = rec.intervalDays !== (was.intervalDays != null ? was.intervalDays : null);
+    // Counted from the last service that took a reading, when there is one
+    // (as dueFromHistory does, and the days below): from today's reading, a
+    // truck serviced at 80,000 and overdue at 84,200 on a new 3,000-mile
+    // interval came out "due at 87,200" -- the overdue service hidden.
+    const fromLast = dueFromHistory(rec, was.service);
     if (rec.hours != null && rec.intervalHours && (was.dueHours == null || hoursChanged)) {
-      rec.dueHours = round1(rec.hours + rec.intervalHours);
+      rec.dueHours = fromLast.dueHours != null ? fromLast.dueHours : round1(rec.hours + rec.intervalHours);
     } else if (was.dueHours != null && rec.intervalHours) rec.dueHours = was.dueHours;
     else rec.dueHours = null;
     if (rec.miles != null && rec.intervalMiles && (was.dueMiles == null || milesChanged)) {
-      rec.dueMiles = Math.round(rec.miles + rec.intervalMiles);
+      rec.dueMiles = fromLast.dueMiles != null ? fromLast.dueMiles : Math.round(rec.miles + rec.intervalMiles);
     } else if (was.dueMiles != null && rec.intervalMiles) rec.dueMiles = was.dueMiles;
     else rec.dueMiles = null;
     // A machine that goes by date gets a first due date counted from today
@@ -1942,8 +1973,8 @@
         // problem ticked off by mistake could never be reopened from the
         // board. Only a move made after the fix counts, so marking it fixed
         // on the machine still sends the card to Done.
-        if (k && i.doneAt && k.column !== lastCol && k.updatedBy !== 'Equipment' &&
-            String(k.updatedAt || '') > String(i.doneAt)) {
+        if (k && i.doneAt && lastCol && k.column !== lastCol && k.updatedBy !== 'Equipment' &&
+            String(k.updatedAt || '') > fixedWhen(i)) {
           setIssueDone(g, i.id, false);
           return;
         }
@@ -1968,7 +1999,7 @@
         const doneNow = !!i.doneAt;
         const same = k && k.title === want.title && k.notes === want.notes &&
           JSON.stringify(k.labels || []) === JSON.stringify(want.labels) && k.urgency === want.urgency &&
-          (doneNow ? k.column === lastCol : k.column !== lastCol);
+          (doneNow ? (!lastCol || k.column === lastCol) : k.column !== lastCol);
         if (same) return;
         const patch = Object.assign({}, want, { updatedAt: new Date().toISOString(), updatedBy: 'Equipment' });
         // Who noted the problem made the card: an urgent one pings the owner
@@ -1978,8 +2009,11 @@
         // A problem that came from a card added in the shop starts in the
         // column that card had reached.
         const startCol = i.boardColumn && board.columns.some(c => c.id === i.boardColumn) ? i.boardColumn : first;
-        if (!k) { patch.createdAt = new Date().toISOString(); patch.column = doneNow ? lastCol : startCol; }
-        if (doneNow && (!k || k.column !== lastCol)) { patch.column = lastCol; patch.doneAt = i.doneAt; }
+        // A Maintenance board with no Done column (taken off in its settings)
+        // has nowhere to put a fixed one: it stays where it is (it was
+        // written to column '' and showed as a new open card).
+        if (!k) { patch.createdAt = new Date().toISOString(); patch.column = doneNow && lastCol ? lastCol : startCol; }
+        if (doneNow && lastCol && (!k || k.column !== lastCol)) { patch.column = lastCol; patch.doneAt = i.doneAt; }
         // Reopened on the machine: back out of Done.
         if (!doneNow && k && k.column === lastCol) { patch.column = first; patch.doneAt = null; }
         Promise.resolve(window.YDDb.put(path, id, placed(k, patch)))

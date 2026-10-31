@@ -599,7 +599,9 @@ def _candidates(db, only=None):
             # Claude's.
             if k.get("noClaude") or k.get("auto") or k.get("recurring") or c.id.startswith("rc-"):
                 continue
-            if k.get("column") == last or k.get("doneAt"):
+            # (A board with no Done column has `last` None -- a card with no
+            # column field is not "in" it.)
+            if (last and k.get("column") == last) or k.get("doneAt"):
                 continue
             prev = k.get("claude") or {}
             if not only and _asked_again(k) and prev.get("status") != "working":

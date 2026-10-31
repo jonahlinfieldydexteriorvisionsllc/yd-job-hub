@@ -1233,8 +1233,17 @@ def build(slot, user, people, wx, cache):
                              ([{"text": "…and %d more" % (len(tm) - 6)}] if len(tm) > 6 else [])))
     elif slot == "midday":
         hhmm = now.strftime("%H:%M")
-        rest = [it for it in day_items(today)
-                if not it["ev"].get("time") or it["ev"].get("allDay") or (it["ev"].get("endTime") or it["ev"]["time"]) >= hhmm]
+
+        def still_on(ev):
+            if not ev.get("time") or ev.get("allDay"):
+                return True
+            end = ev.get("endTime") or ev["time"]
+            # Work past midnight (ends on a later day, or "ends" before it
+            # starts) is still on at noon -- its 02:00 end read as long over.
+            if str(ev.get("endDate") or "") > today.isoformat() or end < ev["time"]:
+                return True
+            return end >= hhmm
+        rest = [it for it in day_items(today) if still_on(it["ev"])]
         if rest:
             sections.append(("Rest of today", [_event_line(it, people) for it in rest]))
             push_bits.append("%d still on today" % len(rest))

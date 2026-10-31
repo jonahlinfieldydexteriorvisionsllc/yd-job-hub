@@ -295,6 +295,15 @@
     return customTags().find(c => key(c) === k) || t;
   }
   const tagInfo = t => USE_BY_ID[t] || { id: t, icon: '🔖', name: t, custom: true };
+  // A Used-for cell's tags. The downloaded list joins them with "; ", and a
+  // starter tag's name has a comma in it ("Fire pits, fireplaces &
+  // kitchens"): split on commas too, every fire pit came back with a made-up
+  // tag "fireplaces & kitchens". Commas split only a cell with no ";" whose
+  // whole text is not a tag already.
+  function tagsIn(cell) {
+    const s = String(cell || '');
+    return (s.indexOf(';') !== -1 || isTag(tagFor(s)) ? s.split(';') : s.split(','));
+  }
   const isTag = t => !!t && (!!USE_BY_ID[t] || customTags().indexOf(t) !== -1);
   const kindName = it => (it.category ? (window.YDPricing && window.YDPricing.kindName ? window.YDPricing.kindName(it.category)
     : ((categories().find(c => c[0] === it.category) || [])[1]) || it.category) : '') || 'No kind set';
@@ -1184,6 +1193,12 @@
     if (priceTouched && Number.isNaN(cents)) { showToast('The price should look like 89.99'); return; }
     const year = validYear(typed.year);
     if (priceTouched && !year) { showToast('The year should look like ' + thisYear()); return; }
+    // A price changed on an item before this device has heard its prices:
+    // the write is the whole price record, so it put "no earlier years" over
+    // the real ones. Nothing saved until they are in.
+    if (priceTouched && editing.id && !pricesReady && !prices[editing.id]) {
+      showToast('The prices are still loading — try again in a moment'); return;
+    }
     const markupPct = parsePct(typed.markup), wastePct = parsePct(typed.waste), clientCents = parseCents(typed.client);
     const rentalRates = {};
     RENTAL_RATES.forEach(([k, , f]) => { rentalRates[k] = parseCents(typed[f]); });
@@ -1394,6 +1409,22 @@
     table = table.slice(skippedLines);
     if (table.length < 2) return { error: 'Paste the column names on the first line and at least one item below them.' };
     const head = table[0].map(headerKey);
+    // Only a column called Unit (or UOM) says what the price is per. Size,
+    // Pack and Package are "Comes in" -- a Size of "36 in" became the price's
+    // per, and every estimate line in its real unit stopped fitting it.
+    const unitAt = head.indexOf('unit');
+    const unitIsPer = unitAt !== -1 && ['unit', 'uom', 'u m', 'unit of measure']
+      .indexOf(norm(table[0][unitAt]).replace(/[^a-z0-9#]+/g, ' ').trim()) !== -1;
+    // Two price columns ("List Price", "Net Price"): what he pays, not the
+    // first one on the sheet -- the list price went in as his cost. Net / his
+    // / contractor / dealer / sale / cost first, a plain price next, list
+    // and retail last; an empty cell falls to the next.
+    const priceRank = h => {
+      const t = norm(h);
+      return /\b(net|your|contractor|dealer|sale|cost)\b/.test(t) ? 0 : /\b(list|retail)\b/.test(t) ? 2 : 1;
+    };
+    const priceAt = head.map((k, i) => k === 'price' ? i : -1).filter(i => i !== -1)
+      .sort((a, b) => priceRank(table[0][a]) - priceRank(table[0][b]) || a - b);
     if (head.indexOf('name') === -1 && head.indexOf('id') === -1 && !(forcedVendor && head.indexOf('sku') !== -1)) {
       return { error: 'No line with an “Item” (or “Description”) column was found. ' +
         'The first line reads: ' + table[0].slice(0, 6).join(', ') };
@@ -1414,9 +1445,11 @@
       const line = r + 1 + skippedLines;
       const c = {};
       head.forEach((k, i) => { if (k && c[k] == null) c[k] = table[r][i] || ''; });
+      if (priceAt.length > 1) c.price = priceAt.map(i => table[r][i] || '').find(v => String(v).trim() !== '') || '';
       // On a supplier's sheet "Unit" is what the price is per ("sq ft",
       // "bag"), unless the sheet says that separately.
-      if (forcedVendor && !c.per && c.unit) c.per = c.unit;
+      const perFromUnit = forcedVendor && !c.per && !!c.unit && unitIsPer;
+      if (perFromUnit) c.per = c.unit;
 
       const existingById = c.id && items[c.id] ? items[c.id] : null;
       let vendorId = existingById ? existingById.vendorId || null : null;
@@ -1444,6 +1477,9 @@
       if (!id && c.sku) id = itemByKey[(vendorId || '') + '#' + key(c.sku)] || null;
       if (!id && c.name) id = itemByKey[(vendorId || '') + '|' + key(c.name)] || null;
       const isNew = !id;
+      // ...and never over the per an item's price already has: their "EA"
+      // is not a reason to change "per pallet" that was set by hand.
+      if (perFromUnit && id && prices[id] && prices[id].per) delete c.per;
       // A sheet's section headings ("PAVERS") and filler rows carry no price.
       // On a supplier's own sheet a line we do not know with no price is not
       // an item to add -- there is nothing on it worth saving.
@@ -1461,10 +1497,10 @@
       if (c.coverage) { const n = parsePct(c.coverage); if (!(n > 0)) bad = '“covers” should be a number above 0'; else extra.coverage = n; }
       if (c.takeoffUnit) extra.takeoffUnit = c.takeoffUnit;
       if (c.link) { const page = websiteUrl({ website: c.link }); if (!page) bad = 'the link “' + c.link + '” is not a web address'; else extra.link = page; }
-      // Tags, split on ; or , -- kept as the item's own only when they are not
-      // just what its kind gives.
+      // Tags (tagsIn) -- kept as the item's own only when they are not just
+      // what its kind gives.
       if (c.usedFor) {
-        const tags = c.usedFor.split(/[;,]/).map(tagFor).filter((t, i, a) => t && a.indexOf(t) === i);
+        const tags = tagsIn(c.usedFor).map(tagFor).filter((t, i, a) => t && a.indexOf(t) === i);
         const was = existingById || (id ? items[id] : null) || {};
         const auto = usesFromKind(extra.category !== undefined ? extra.category : was.category, c.name || was.name, c.also || was.also);
         extra.usedFor = !tags.length || sameSet(tags, auto) ? null : tags;
@@ -1514,7 +1550,22 @@
         kind: cents == null ? 'noprice' : oldCents == null ? 'first'
           : cents > oldCents ? 'up' : cents < oldCents ? 'down' : 'same',
       };
-      if (rowAt[id] != null) { out.rows[rowAt[id]] = row; out.dupes++; }
+      if (rowAt[id] != null) {
+        // A second row for an item this sheet itself adds is still that new
+        // item: it took over as an old one, so the save dropped the name and
+        // the supplier and made a blank item under "No supplier set". What
+        // the later row fills in wins.
+        const first = out.rows[rowAt[id]];
+        if (first.isNew) {
+          const filled = {};
+          Object.keys(c).forEach(k => { if (c[k] !== '' && c[k] != null) filled[k] = c[k]; });
+          Object.assign(row, { isNew: true, vendorId: row.vendorId || first.vendorId,
+            cells: Object.assign({}, first.cells, filled), extra: Object.assign({}, first.extra, row.extra),
+            pricing: Object.assign({}, first.pricing, row.pricing) });
+          if (row.cents == null && first.cents != null) Object.assign(row, { cents: first.cents, kind: first.kind });
+        }
+        out.rows[rowAt[id]] = row; out.dupes++;
+      }
       else { rowAt[id] = out.rows.length; out.rows.push(row); }
     }
     out.newVendors = Object.values(newVendors);

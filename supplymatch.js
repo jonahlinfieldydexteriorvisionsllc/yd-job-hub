@@ -370,12 +370,15 @@
     'mowing', 'stripping', 'restoration', 'repair', 'grinding', 'service', 'work'];
   const WORK_VERBS = ['remove', 'excavate', 'install', 'haul', 'dig', 'trench', 'till', 'rototill', 'demolish',
     'extract', 'regrade', 'dethatch', 'aerate', 'prune', 'prep', 'prepare'];
+  const THING_AFTER = ['drain', 'drains', 'grate', 'grates', 'channel', 'channels', 'bar', 'bars', 'cover', 'covers'];
   const NOTE_CUT = /\s[—–-]\s|[,:;(]|\s(?:to|of|for|with|including|below|above|after|before|around|along|at|in|on|from|into|under|behind|and|&)\s/;
   function readsAsWork(name) {
     const lead = String(name || '').toLowerCase().replace(/\([^)]*\)/g, ' ').split(NOTE_CUT)[0];
     const ws = lead.split(/\s+/).map(w => w.replace(/^[^a-z]+|[^a-z-]+$/g, '')).filter(w => /[a-z]/.test(w));
     if (!ws.length) return false;
-    if (WORK_VERBS.indexOf(ws[0]) !== -1) return true;
+    // "Trench drain", "Dig bar": a thing to buy, named after what it is for
+    // -- they read as "trench (the work)" and fell off the order list.
+    if (WORK_VERBS.indexOf(ws[0]) !== -1 && !(ws[1] && THING_AFTER.indexOf(ws[1]) !== -1)) return true;
     let head = ws[ws.length - 1];
     if (WORK_HEADS.indexOf(head) === -1 && /s$/.test(head)) head = head.slice(0, -1);
     return WORK_HEADS.indexOf(head) !== -1;
