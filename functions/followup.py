@@ -1017,6 +1017,7 @@ THANKS_BODY = (
     "Jonah\n"
     "YD Exterior Visions"
 )
+THANKS_LASTS = ", and I hope you enjoy it for years to come."
 # Never thanked: the company's own addresses, made-up ones, and a test job.
 NOT_A_CUSTOMER = re.compile(r"(?i)ydexteriorvisions|@example\.(com|org|net)$|\.(test|invalid|example|localhost)$")
 TEST_JOB = re.compile(r"(?i)\btest\b")
@@ -1136,7 +1137,11 @@ def thanks_words(j, link, conf, cust=None):
     {name}, {work} and {link} are filled in; a body without {link} gets the
     link at the end, as the email is there to ask for the review."""
     subject = str(conf.get("thanksSubject") or "").strip() or THANKS_SUBJECT
-    body = str(conf.get("thanksBody") or "").strip() or THANKS_BODY
+    body = str(conf.get("thanksBody") or "").strip()
+    if not body:
+        # "Enjoy it for years to come" is for something built (DIGS, as the
+        # next-steps email), not a fall cleanup or a pressure wash.
+        body = THANKS_BODY if _digs(j) else THANKS_BODY.replace(THANKS_LASTS, ".")
     if "{link}" not in body:
         body += "\n\n{link}"
     fill = {"{name}": _first_name(j, cust) or "there", "{work}": _work_words(j), "{link}": link}

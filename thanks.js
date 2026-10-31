@@ -20,7 +20,8 @@
 
   const WITHIN_DAYS = 30;            // followup.THANKS_WITHIN_DAYS
   const LAST_RUN_HOUR = 11;          // followup.SEND_HOURS: 8, 9, 10 and 11 o'clock
-  // followup.py THANKS_SUBJECT / THANKS_BODY -- the same words.
+  // followup.py THANKS_SUBJECT / THANKS_BODY -- the same words. The server
+  // leaves out "enjoy it for years to come" for work that isn't built.
   const SUBJECT = 'Thank you from YD Exterior Visions';
   const BODY = 'Hi {name},\n\n' +
     'Thank you for choosing YD Exterior Visions for your {work}. It was a pleasure working with you, ' +
@@ -229,7 +230,8 @@
   async function editWords() {
     const now = await current();
     const got = await ydForm('The thank-you in your words. {name} becomes their first name (“there” for a business), ' +
-      '{work} what the job was (“paver patio”), {link} your review link. Empty a box for the usual words.', [
+      '{work} what the job was (“paver patio”), {link} your review link. Empty a box for the usual words — they leave out ' +
+      '“enjoy it for years to come” for work that isn’t built, like a cleanup or a pressure wash.', [
       { id: 'subject', label: 'Subject', value: now.thanksSubject || SUBJECT },
       { id: 'body', label: 'The email', value: now.thanksBody || BODY, multiline: true,
         check: v => !v.trim() || /\{link\}/.test(v) ? '' : 'Keep {link} where your review link goes' },
