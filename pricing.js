@@ -1996,7 +1996,7 @@
         box('Truck mpg (each truck, comma between)', (r.fuel.mpg || []).join(', '), "prSet('fuel.mpg', this.value, 'list')", 'every truck makes the round trip every day') +
         box('Loader diesel (gallons a day)', r.fuel.bobcatGalPerDay, "prSet('fuel.bobcatGalPerDay', this.value, 'num')") +
         box('Markup on fuel (%)', r.fuel.markupPct, "prSet('fuel.markupPct', this.value, 'num')") +
-        box('Shop address (where trips start)', r.shop.address || '', "prSet('shop.address', this.value, 'text')", '', ' inputmode="text" data-addr="line" autocomplete="off"') +
+        box('Shop address (where trips start)', r.shop.address || '', "prSet('shop.address', this.value, 'text')", '', ' id="prShopAddr" inputmode="text" data-addr="line" autocomplete="off"') +
       '</div>' +
       '<p class="hint">Gas ' + (num(fp.gasCents) !== null ? '$' + (num(fp.gasCents) / 100).toFixed(3) : '—') +
         ' · diesel ' + (num(fp.dieselCents) !== null ? '$' + (num(fp.dieselCents) / 100).toFixed(3) : '—') +

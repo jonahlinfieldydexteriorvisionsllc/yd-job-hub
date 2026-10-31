@@ -481,8 +481,12 @@ def patterns_of(rid, r, everyone):
                     "subject": str(m.get("subject") or "")[:300], "skip": True})
     if not out:
         return out
+    # One set aside is still a purchase (already entered, a duplicate,
+    # returned) -- unless set aside as "not a purchase" (receipts.js).
+    not_purchase = re.compile(r"not a (purchase|receipt)", re.I)
     for oid, o in everyone.items():
-        if oid == rid or stages.receipt_status(o) in (stages.RECEIPT_NOT, "aside"):
+        st = stages.receipt_status(o)
+        if oid == rid or st == stages.RECEIPT_NOT or (st == "aside" and not_purchase.search(str(o.get("skipWhy") or ""))):
             continue
         for m in (o.get("mail") or []):
             if not isinstance(m, dict) or not m.get("from"):

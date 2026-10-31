@@ -416,8 +416,10 @@
     ], { title: 'How you write', ok: proposal ? 'Save — use it' : 'Save' });
     if (!got) return;
     const guide = String(got.guide || '').trim();
-    if (guide === String(now.guide || '').trim()) return;
-    Promise.resolve(window.YDDb.put('settings', 'voice', { guide: guide, by: 'hand', updatedAt: new Date().toISOString() }))
+    if (guide === String(now.guide || '').trim() && !proposal) return;
+    // Saving is his answer to the proposal either way -- taken, changed or
+    // emptied -- so it never fills the box again.
+    Promise.resolve(window.YDDb.put('settings', 'voice', { guide: guide, by: 'hand', proposed: null, updatedAt: new Date().toISOString() }))
       .then(() => showToast(guide ? 'Saved — the next email Claude writes uses it' : 'Emptied — Claude writes without it'))
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not saved — not allowed' : 'Not saved — try again'));
   };

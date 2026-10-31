@@ -2028,9 +2028,15 @@
     services: () => SERVICES.slice(),
     // A new one by its name only (Estimate's "+ New sub" on a line done by
     // someone else); phone and the rest are filled in here later. Owner only.
+    // A name whose words are all in one already set up ("Green Acre" for
+    // "GreenAcre Lawn Care") is that one: a second sub under it would match
+    // the first one's bills and, sorted ahead of it, take them.
     add: name => {
       const n = String(name || '').trim().slice(0, 120);
       if (!n || !owner()) return null;
+      const want = words(n);
+      const same = subsList().find(s => nameIn(want, words(s.name)) || (s.match && nameIn(want, words(s.match))));
+      if (same) return same.id;
       const id = newId('sb'), at = new Date().toISOString();
       put({ subs: { [id]: { name: n, match: matchOf(n), phone: '', email: '', notes: '', createdAt: at, updatedAt: at, props: {} } } },
         'saving ' + n);

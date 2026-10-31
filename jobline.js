@@ -197,9 +197,12 @@
   }
   // Dropped above another job in line (a drag on the Jobs board), or at the
   // back (beforeId null / not in line).
+  // Dropped before a card that is not in the line (one taken off the jobs, on
+  // the board still): left where it is, not sent to the back.
   function moveBefore(id, beforeId) {
     const rest = line().filter(r => r.id !== id);
     const i = beforeId ? rest.findIndex(r => r.id === beforeId) : -1;
+    if (beforeId && i === -1) return false;
     return moveTo(id, i === -1 ? rest.length : i);
   }
   // Back to the order the customers said yes in: every hand place cleared.

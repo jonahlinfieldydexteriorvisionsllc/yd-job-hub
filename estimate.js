@@ -1182,8 +1182,10 @@
       { title: 'New sub', ok: 'Add them' });
     const n = String(name || '').trim();
     if (!n) return;
-    const known = subNamed(n);
-    const sid = known ? known.id : YDSubs.add(n);
+    const sid = (subNamed(n) || {}).id || YDSubs.add(n);
+    // YDSubs.add hands back one already set up when the name is theirs.
+    const known = sid ? (YDSubs.list() || []).find(s => s.id === sid) : null;
+    if (known && known.name.trim().toLowerCase() !== n.toLowerCase()) showToast('That’s ' + known.name + ' — already set up');
     const live = find(est.work, id);
     if (!live || !live.sub) return;
     live.sub.by = known ? known.name : n.slice(0, 120);

@@ -842,11 +842,14 @@
   // A bid untied by hand ("Not theirs") is never tied again by itself.
   function nyPersonOf(j, by) {
     let id = j.customerId ? resolve(s(j.customerId)) : '';
-    if (!customers[id]) {
+    // "Not theirs" said by hand: nobody's -- not even the lead made from it.
+    const notTheirs = j.customerBy === 'hand' && !j.customerId;
+    if (!customers[id] && !notTheirs) {
       const lead = resolve('ld' + s(j._id).toLowerCase().replace(/[^a-z0-9]/g, ''));      // newLeadFromJob's
       id = customers[lead] ? lead : '';
     }
-    if (!id && !(j.customerBy === 'hand' && !j.customerId)) {
+    if (!customers[id]) id = '';
+    if (!id && !notTheirs) {
       const g = guess(by(), whoOfJob(j));
       if (g.sure && customers[resolve(g.sure)]) id = resolve(g.sure);
     }
@@ -3598,6 +3601,9 @@
   };
   function newLeadFromJob(j) {
     const id = 'ld' + s(j._id).toLowerCase().replace(/[^a-z0-9]/g, '');
+    // Made for this job before ("Someone new", then "Not them", then "Someone
+    // new" again): the same lead, with whatever was added to it since.
+    if (customers[id]) return id;
     const rec = { name: s(j.customerName), firstName: s(j.firstName), lastName: s(j.lastName), business: s(j.business),
       phone: s(j.phone), mobile: '', email: s(j.email).toLowerCase(), street: s(j.address), city: s(j.city), state: s(j.state), zip: s(j.zip),
       tags: (j.serviceTypes || []).slice(), source: 'job', addedAt: new Date().toISOString() };

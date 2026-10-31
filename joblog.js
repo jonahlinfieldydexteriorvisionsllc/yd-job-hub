@@ -93,7 +93,7 @@
     mine[id] = rec;
     if (watchingJob === jobId) notes[id] = rec;
     box.value = '';
-    try { sessionStorage.removeItem('ydjobhub_jlDraft_' + boxId); } catch (e) { /* private window */ }
+    try { sessionStorage.removeItem(draftKey(boxId, jobId)); } catch (e) { /* private window */ }
     drawJob(true); drawCrew(true);
     Promise.resolve(YDDb.put('jobNotes', id, rec)).catch(e => {
       console.error('[joblog] note not saved', e);
@@ -109,11 +109,14 @@
     save(jobId, name, boxId);
   };
   // What is typed is kept through a redraw and a closed window (a long
-  // dictation lost to a tap outside would be the worst of it).
-  window.jlKeep = function (box) {
-    try { sessionStorage.setItem('ydjobhub_jlDraft_' + box.id, box.value); } catch (e) { /* private window */ }
+  // dictation lost to a tap outside would be the worst of it). Kept per job:
+  // one box serves every job, and a note left unsaved on one must never turn
+  // up -- and be saved -- on the next job opened.
+  const draftKey = (boxId, jobId) => 'ydjobhub_jlDraft_' + boxId + '_' + (jobId || '');
+  window.jlKeep = function (box, jobId) {
+    try { sessionStorage.setItem(draftKey(box.id, jobId), box.value); } catch (e) { /* private window */ }
   };
-  const draftOf = boxId => { try { return sessionStorage.getItem('ydjobhub_jlDraft_' + boxId) || ''; } catch (e) { return ''; } };
+  const draftOf = (boxId, jobId) => { try { return sessionStorage.getItem(draftKey(boxId, jobId)) || ''; } catch (e) { return ''; } };
 
   window.jlRemove = async function (id) {
     const n = mine[id] || notes[id];
@@ -129,9 +132,9 @@
 
   function boxHtml(jobId, boxId, disabled) {
     return '<div class="jl-box">' +
-      '<textarea id="' + boxId + '" class="jl-text" rows="3" maxlength="' + MAX_LEN + '" oninput="jlKeep(this)"' +
+      '<textarea id="' + boxId + '" class="jl-text" rows="3" maxlength="' + MAX_LEN + '" oninput="jlKeep(this, \'' + safe(jobId) + '\')"' +
         (disabled ? ' disabled' : '') + ' placeholder="What happened today? Tap here, then the 🎤 on your keyboard to talk.">' +
-        esc(draftOf(boxId)) + '</textarea>' +
+        esc(draftOf(boxId, jobId)) + '</textarea>' +
       '<div class="jl-acts"><button class="btn btn-filled ro-ok" ' + (disabled ? 'disabled' : 'onclick="jlSave(\'' + safe(jobId) + '\', \'' + boxId + '\')"') +
         '>💾 Save the note</button>' +
         '<span class="hint">🎤 = your keyboard’s microphone. Kept with today’s log.</span></div></div>';
@@ -221,8 +224,10 @@
   let busy = false;
   window.jlWrite = async function (day) {
     if (!jobId || busy || !can('jobs', 'change') || !window.YDClaude) return;
-    if (window.YDSync && YDSync.sendNow) { try { await YDSync.sendNow(jobId); } catch (e) { /* the server has the last save */ } }
+    // Taken before the wait for the save, so a second tap meanwhile asks
+    // Claude no second time.
     busy = true;
+    if (window.YDSync && YDSync.sendNow) { try { await YDSync.sendNow(jobId); } catch (e) { /* the server has the last save */ } }
     showToast('Writing the log…');
     try {
       const r = await YDClaude.post('/joblog/now', { jobId: jobId, day: day });

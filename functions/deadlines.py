@@ -15,6 +15,7 @@ QuickBooks' own Sales tax page stays the one to file from.
 
 import calendar
 import datetime
+import re
 
 import digest as dg
 
@@ -53,8 +54,10 @@ def _nth(y, m, wd, n):
 
 
 def holidays(y):
+    # DC's Emancipation Day (16 April) too: it moves the IRS's April dates
+    # (as deadlines.js).
     out = set()
-    for m, d in ((1, 1), (6, 19), (7, 4), (11, 11), (12, 25)):
+    for m, d in ((1, 1), (4, 16), (6, 19), (7, 4), (11, 11), (12, 25)):
         day = datetime.date(y, m, d)
         if day.weekday() == 5:
             day -= datetime.timedelta(days=1)
@@ -108,11 +111,10 @@ def built_in(y, c):
                 "name": "Income tax returns for %d — federal and Wisconsin" % (y - 1)})
     out.append({"rule": "nec", "key": "nec_%d" % (y - 1), "due": workday(datetime.date(y, 1, 31)), "label": str(y - 1),
                 "name": "1099-NECs for %d — everyone paid %s+ (to them and the IRS)" % (y - 1, _nec(y - 1))})
-    md = str(c.get("llcReport") or "")
-    try:
-        m, d = int(md[:2]), int(md[3:5])
-    except ValueError:
-        m, d = 6, 30
+    # Exactly 'MM-DD', as deadlines.js reads it ("06-3" is the usual date
+    # there, so here too).
+    md = re.fullmatch(r"(\d{2})-(\d{2})", str(c.get("llcReport") or ""))
+    m, d = (int(md.group(1)), int(md.group(2))) if md else (6, 30)
     m = min(12, max(1, m))
     d = min(_last_day(y, m), max(1, d))
     out.append({"rule": "llcReport", "key": "llcReport_%d" % y, "due": workday(datetime.date(y, m, d)), "label": str(y),
@@ -215,25 +217,35 @@ def run(db, people, now=None):
     if now.hour < FROM_HOUR:
         return []
     today = now.date()
+    claim = db.collection("reminderLog").document("deadlines_" + _iso(today))
     try:
-        db.collection("reminderLog").document("deadlines_" + _iso(today)).create({"at": now.isoformat()})
+        claim.create({"at": now.isoformat()})
     except AlreadyExists:
         return []
-    ref = db.collection(STATE[0]).document(STATE[1])
-    snap = ref.get()
-    c = (snap.to_dict() or {}) if snap.exists else {}
-    near = between(max(today - datetime.timedelta(days=2), FROM), today + datetime.timedelta(days=NUMBER_DAYS), c)
-    numbers = {}
-    for x in near:
-        if x["rule"] == "salesTax" and not x["done"] and x["from"] <= today:
-            try:
-                cents, docs = tax_charged(x["from"], min(x["to"], today))
-                numbers[x["key"]] = {"cents": cents, "docs": docs, "at": now.isoformat()}
-            except Exception as e:      # noqa: BLE001 -- the reminder still goes, without its figure
-                print("deadlines: sales tax not read from QuickBooks:", e)
-    if numbers:
-        ref.set({"numbers": numbers}, merge=True)
-        c["numbers"] = dict(c.get("numbers") or {}, **numbers)
+    # A day's 14 / 3 / 0-day push goes on that day only: a read that fails
+    # gives the day back, for the next run to try, instead of losing it.
+    try:
+        ref = db.collection(STATE[0]).document(STATE[1])
+        snap = ref.get()
+        c = (snap.to_dict() or {}) if snap.exists else {}
+        near = between(max(today - datetime.timedelta(days=2), FROM), today + datetime.timedelta(days=NUMBER_DAYS), c)
+        numbers = {}
+        for x in near:
+            if x["rule"] == "salesTax" and not x["done"] and x["from"] <= today:
+                try:
+                    cents, docs = tax_charged(x["from"], min(x["to"], today))
+                    numbers[x["key"]] = {"cents": cents, "docs": docs, "at": now.isoformat()}
+                except Exception as e:      # noqa: BLE001 -- the reminder still goes, without its figure
+                    print("deadlines: sales tax not read from QuickBooks:", e)
+        if numbers:
+            ref.set({"numbers": numbers}, merge=True)
+            c["numbers"] = dict(c.get("numbers") or {}, **numbers)
+    except Exception:
+        try:
+            claim.delete()
+        except Exception as e:      # noqa: BLE001
+            print("deadlines: day's claim not given back:", e)
+        raise
     sent = []
     owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
     for x in near:

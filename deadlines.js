@@ -65,9 +65,11 @@
     return ymdOf(y, m, d + 7 * (n - 1));
   }
   // Federal holidays (a fixed-date one on a weekend is kept on the Friday
-  // or Monday). A filing due on one moves to the next working day.
+  // or Monday). A filing due on one moves to the next working day. DC's
+  // Emancipation Day (16 April) is in too: it moves the IRS's April dates
+  // (15 April 2028, a Saturday, is due Tuesday the 18th).
   function holidays(y) {
-    const fixed = [[1, 1], [6, 19], [7, 4], [11, 11], [12, 25]].map(([m, d]) => {
+    const fixed = [[1, 1], [4, 16], [6, 19], [7, 4], [11, 11], [12, 25]].map(([m, d]) => {
       const s = ymdOf(y, m, d), w = dow(s);
       return w === 6 ? addDaysTo(s, -1) : w === 0 ? addDaysTo(s, 1) : s;
     });
@@ -195,7 +197,9 @@
       if (!cfg) return;          // offline and nothing read yet: nothing to show
     }
     document.dispatchEvent(new CustomEvent('yd-deadlines'));
-    if (el('dlModal') && el('dlModal').classList.contains('active')) draw();
+    // Not redrawn under the "date of your own" form being filled in (coming
+    // back to the app reads again): the cursor would leave the box.
+    if (el('dlModal') && el('dlModal').classList.contains('active') && !adding) draw();
   }
   // The maps merge key by key, as the database merges them (YDDb.put): a
   // null there is "not any more".
@@ -363,7 +367,7 @@
     soon: () => {
       if (!isOwner() || !cfg) return [];
       const today = localYMD();
-      return between(addDaysTo(today, -60), addDaysTo(today, SOON_DAYS)).filter(x => !x.done);
+      return between(addDaysTo(today, -366), addDaysTo(today, SOON_DAYS)).filter(x => !x.done);
     },
     whenWords: whenWords,
     setDone: setDone,

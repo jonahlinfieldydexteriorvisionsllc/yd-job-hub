@@ -902,12 +902,17 @@
         'Bids with no answer yet — the call is one tap on the Bids board', '', "homeBoard('bids')"));
     }
     // Tax and filing dates coming up in the next 14 days (deadlines.js). One
-    // due today, or late, is on My day already (a task on the calendar).
+    // due today, or late, is on My day already (a task on the calendar) --
+    // until it is too late for My day to carry (remind.js CARRY_DAYS), when
+    // it comes here, so a missed filing is never out of sight.
     if (isOwner() && window.YDDeadlines) {
-      YDDeadlines.soon().filter(x => x.due > today()).forEach(x => {
+      const carried = window.YDRemind && YDRemind.CARRY_DAYS ? YDRemind.CARRY_DAYS : 14;
+      const longAgo = localYMD(new Date(Date.now() - carried * 86400000));
+      YDDeadlines.soon().filter(x => x.due > today() || x.due < longAgo).forEach(x => {
         any = true;
-        rows.push(line('📅', '<b>' + esc(x.name) + '</b>', esc(x.needs || ''),
-          esc(YDDeadlines.whenWords(x.due).replace(/^.* — in /, 'in ')), 'openDeadlines()'));
+        const late = x.due < today();
+        rows.push(line(late ? '⚠️' : '📅', '<b>' + esc(x.name) + '</b>' + (late ? ' — not ticked off' : ''), esc(x.needs || ''),
+          esc(late ? YDDeadlines.whenWords(x.due) : YDDeadlines.whenWords(x.due).replace(/^.* — in /, 'in ')), 'openDeadlines()'));
       });
     }
     // Posts that need him (socialposts.js): a Nextdoor one ready to post, one
