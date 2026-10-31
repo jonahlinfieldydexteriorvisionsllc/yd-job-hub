@@ -3168,15 +3168,25 @@
     if (!s(j.email) && s(c.email)) out.email = s(c.email);
     return out;
   }
-  function sureOf(by, who) {
+  // The customer a job surely is, and how that was known ('qb' QuickBooks'
+  // id, 'contact' its email or phone, 'name' its name alone), or null.
+  function sureTie(by, who) {
     const g = guess(by, who);
     const id = g.sure ? resolve(g.sure) : null;
-    return id && customers[id] ? id : null;
+    return id && customers[id] ? { id: id, how: g.how } : null;
   }
+  function sureOf(by, who) { const t = sureTie(by, who); return t ? t.id : null; }
+  // What an automatic tie put in the job's empty boxes (customerFill), so
+  // "Not them" takes it back off -- else a job tied by its name alone to
+  // someone else of that name kept their email, and the follow-ups and the
+  // thank-you went to them (functions/followup.py _contact reads `how`).
+  const fillMark = (cid, how, add) => ({ customerId: cid, how: how || '', fields: add || {}, at: new Date().toISOString() });
   function tieFields(name) {
     if (!isOn() || !loaded || !s(name)) return {};
-    const id = sureOf(index(), { name: name, email: '', phone: '' });
-    return id ? Object.assign({ customerId: id, customerBy: 'auto' }, fillFrom(customers[id], {})) : {};
+    const t = sureTie(index(), { name: name, email: '', phone: '' });
+    if (!t) return {};
+    const add = fillFrom(customers[t.id], {});
+    return Object.assign({ customerId: t.id, customerBy: 'auto', customerFill: fillMark(t.id, t.how, add) }, add);
   }
   const openJobId = () => (typeof currentJobId !== 'undefined' && currentJobId) || '';
   // app.js's typing-not-saved. Not `dirty` by name: this file has a `dirty`
@@ -3184,25 +3194,28 @@
   // below never saw the form's typing.
   const formDirty = () => typeof window.ydFormDirty === 'function' && window.ydFormDirty();
   // The job open on the Job tab: tied on the form, which saves it.
-  function tieForm(cid, by) {
+  function tieForm(cid, by, how) {
     const c = customers[cid];
     if (!c || typeof boardFields === 'undefined') return false;
     boardFields.customerId = cid;
     boardFields.customerBy = by;
     const now = {};
     ['address', 'city', 'phone', 'email'].forEach(f => { now[f] = el(f) ? el(f).value : ''; });
-    const add = fillFrom(c, now);
-    Object.keys(add).forEach(f => { const n = el(f); if (n && !s(n.value)) n.value = add[f]; });
+    const add = fillFrom(c, now), put = {};
+    Object.keys(add).forEach(f => { const n = el(f); if (n && !s(n.value)) { n.value = add[f]; put[f] = add[f]; } });
+    boardFields.customerFill = by === 'auto' ? fillMark(cid, how, put) : null;
     if (typeof markDirty === 'function') markDirty();
     drawTie();
     return true;
   }
-  function tieJob(jobId, cid, by, j) {
-    if (jobId === openJobId()) return tieForm(cid, by);
+  function tieJob(jobId, cid, by, j, how) {
+    if (jobId === openJobId()) return tieForm(cid, by, how);
     const c = customers[cid];
     if (!c || !window.YDSync) return false;
     j = j || allJobs().find(x => x._id === jobId) || {};
-    return !!YDSync.patchJob(jobId, Object.assign({ customerId: cid, customerBy: by }, fillFrom(c, j)));
+    const add = fillFrom(c, j);
+    return !!YDSync.patchJob(jobId, Object.assign({ customerId: cid, customerBy: by,
+      customerFill: by === 'auto' ? fillMark(cid, how, add) : null }, add));
   }
   let tieTimer = null;
   function tieSoon() { clearTimeout(tieTimer); tieTimer = setTimeout(tieSure, 1500); }
@@ -3220,21 +3233,24 @@
       // Its card window open: Save there writes its boxes back over the fill.
       if (j._id === editing) return;
       by = by || index();
-      const id = sureOf(by, whoOfJob(j));
-      if (id && tieJob(j._id, id, 'auto', j)) n++;
+      const t = sureTie(by, whoOfJob(j));
+      if (t && tieJob(j._id, t.id, 'auto', j, t.how)) n++;
     });
     if (n) render(true);
   }
 
   // Whose bid it is, with buttons to say (ctx 'job': the Job tab; 'card': a
   // bid's card being edited on a board).
-  function tieHtml(ctx, jobId, tiedId, who, word) {
+  function tieHtml(ctx, jobId, tiedId, who, word, fill) {
     const ch = can('jobs', 'change'), k = sid(ctx), jid = sid(jobId || '');
     const c = tiedId ? customers[mainOf(s(tiedId))] || customers[resolve(s(tiedId))] : null;
     if (c) {
       const where = s(c.address).split(',')[0];
+      // Tied by itself on the name alone: worth a look before anything goes to them.
+      const byName = fill && fill.how === 'name' && resolve(s(fill.customerId)) === resolve(s(tiedId));
       return '<div class="cu-tie">👤 <b>' + esc(c.name || '?') + '</b>' + (where ? ' <span class="muted">' + esc(where) + '</span>' : '') +
         ' <span class="cu-kind k-' + kindOf(c) + '">' + KIND_WORD[kindOf(c)] + '</span>' +
+        (byName ? ' <span class="muted">· matched by name only — check it’s them</span>' : '') +
         ' <button type="button" class="link-btn ro-ok" onclick="custTieOpen(\'' + sid(c.id) + '\')">Their page</button>' +
         (ch ? ' <button type="button" class="link-btn" onclick="custTieOff(\'' + k + '\', \'' + jid + '\')">Not them</button>' : '') + '</div>';
     }
@@ -3272,14 +3288,16 @@
     if (box.contains(document.activeElement)) return;
     const bf = typeof boardFields !== 'undefined' && boardFields ? boardFields : {};
     const html = isOn() && loaded && can('jobs', 'see')
-      ? tieHtml('job', openJobId(), s(bf.customerId), formWho(), bidWord(typeof jobStatus !== 'undefined' ? jobStatus : '')) : '';
+      ? tieHtml('job', openJobId(), s(bf.customerId), formWho(), bidWord(typeof jobStatus !== 'undefined' ? jobStatus : ''),
+        bf.customerBy === 'auto' ? bf.customerFill : null) : '';
     box.innerHTML = html;
     box.hidden = !html;
   }
   let tieDrawTimer = null;
   function drawTieSoon() { clearTimeout(tieDrawTimer); tieDrawTimer = setTimeout(drawTie, 400); }
   function cardTieHtml(j) {
-    return '<div id="jeCustTie">' + (isOn() && loaded ? tieHtml('card', j._id, s(j.customerId), whoOfJob(j), bidWord(j.jobStatus)) : '') + '</div>';
+    return '<div id="jeCustTie">' + (isOn() && loaded ? tieHtml('card', j._id, s(j.customerId), whoOfJob(j), bidWord(j.jobStatus),
+      j.customerBy === 'auto' ? j.customerFill : null) : '') + '</div>';
   }
   function redrawCardTie(jobId, tied) {
     const box = el('jeCustTie');
@@ -3313,16 +3331,29 @@
   window.custTieOff = function (ctx, jk) {
     if (!can('jobs', 'change')) return;
     // By hand: the automatic tie never puts it back.
+    // What the automatic tie filled in, and is still as it filled it, goes
+    // back off with it (customerFill); anything typed since stays.
+    const filled = fl => (fl && fl.fields && typeof fl.fields === 'object') ? fl.fields : {};
     if (ctx === 'card') {
       const jobId = realJob(jk);
-      if (!window.YDSync || !YDSync.patchJob(jobId, { customerId: null, customerBy: 'hand' })) return;
-      if (jobId === openJobId() && typeof boardFields !== 'undefined') { boardFields.customerId = null; boardFields.customerBy = 'hand'; drawTie(); }
+      const j = allJobs().find(x => x._id === jobId) || {};
+      const was = filled(j.customerFill), back = {};
+      Object.keys(was).forEach(f => { if (s(j[f]) && s(j[f]) === s(was[f])) back[f] = ''; });
+      if (!window.YDSync || !YDSync.patchJob(jobId, Object.assign({ customerId: null, customerBy: 'hand', customerFill: null }, back))) return;
+      Object.keys(was).forEach(f => { const n = el(CARD_BOX[f]); if (n && s(n.value) && s(n.value) === s(was[f])) n.value = ''; });
+      if (jobId === openJobId() && typeof boardFields !== 'undefined') {
+        Object.keys(back).forEach(f => { const n = el(f); if (n && s(n.value) === s(was[f])) n.value = ''; });
+        boardFields.customerId = null; boardFields.customerBy = 'hand'; boardFields.customerFill = null; drawTie();
+      }
       redrawCardTie(jobId, '');
       return;
     }
     if (sid(openJobId()) !== jk || typeof boardFields === 'undefined') return;
+    const was = filled(boardFields.customerFill);
+    Object.keys(was).forEach(f => { const n = el(f); if (n && s(n.value) && s(n.value) === s(was[f])) n.value = ''; });
     boardFields.customerId = null;
     boardFields.customerBy = 'hand';
+    boardFields.customerFill = null;
     if (typeof markDirty === 'function') markDirty();
     drawTie();
   };
@@ -3409,8 +3440,8 @@
 
   function guess(by, who) {
     const em = by.email[low(who.email)] || [], ph = by.phone[digits(who.phone)] || [], nm = by.name[low(who.name)] || [];
-    let sure = null;
-    if (who.qbId && customers[resolve(who.qbId)]) sure = resolve(who.qbId);      // QuickBooks' own id
+    let sure = null, how = '';
+    if (who.qbId && customers[resolve(who.qbId)]) { sure = resolve(who.qbId); how = 'qb'; }    // QuickBooks' own id
     else {
       // Email and phone first: sure when they point at one customer and
       // nothing points at another (two customers sharing that email or
@@ -3422,14 +3453,14 @@
       if (strong.length) {
         const ids = Array.from(new Set([].concat(...strong)));
         const nmOne = one(nm);
-        if (ids.length === 1 && !(nmOne && nmOne !== ids[0] && !nm.includes(ids[0]))) sure = ids[0];
-      } else if (one(nm)) sure = one(nm);
+        if (ids.length === 1 && !(nmOne && nmOne !== ids[0] && !nm.includes(ids[0]))) { sure = ids[0]; how = 'contact'; }
+      } else if (one(nm)) { sure = one(nm); how = 'name'; }
     }
     const score = {};
     words(who.name).forEach(w => (by.word[w] || []).forEach(id => { score[id] = (score[id] || 0) + 1; }));
     [].concat(by.email[low(who.email)] || [], by.phone[digits(who.phone)] || []).forEach(id => { score[id] = (score[id] || 0) + 3; });
     const options = Object.keys(score).sort((a, b) => score[b] - score[a] || byName(customers[a], customers[b])).slice(0, 4);
-    return { sure: sure, options: options };
+    return { sure: sure, options: options, how: sure ? how : '' };
   }
 
   function prospectsToSort() {

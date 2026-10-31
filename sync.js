@@ -28,7 +28,7 @@
   // it, the laptop's next save would put it back -- the newest move wins
   // (newerLine).
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
-    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'qbChangesIn', 'qbChangesOff',
+    'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'customerFill', 'qbChangesIn', 'qbChangesOff',
     'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail', 'jobLine', 'welcomeEmail'];
   // A place in line set (or put back) after the one this copy has.
   const newerLine = (s, l) => !!s && typeof s === 'object' && String(s.at || '') > String((l && l.at) || '');

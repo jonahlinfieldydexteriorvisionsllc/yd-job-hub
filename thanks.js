@@ -78,8 +78,11 @@
   //   notPaid -- finished, the invoice not paid off yet; handPaid -- paid,
   //   but not in QuickBooks; old -- paid over WITHIN_DAYS ago; before --
   //   paid before thank-yous went by themselves; noLink -- waits for the
-  //   review link; noEmail / notCustomer -- held for its address; due --
-  //   goes in the next morning's run.
+  //   review link; noEmail / notCustomer -- held for its address;
+  //   writtenOff -- the invoice zeroed without being paid (voided, or a
+  //   credit memo: followup.py written_off); unseen -- paid off in
+  //   QuickBooks before Job Hub saw it paid, so no day to go by (the server
+  //   needs its move to Paid); due -- goes in the next morning's run.
   function stateOf(d, jobId) {
     d = d || {};
     const rec = d.thanksEmail || {};
@@ -93,9 +96,11 @@
     if (d.noThanks) return { id: 'off', rec: rec };
     if (st.id !== 'paid') return { id: 'notPaid', rec: rec };
     if (!st.qb) return { id: 'handPaid', rec: rec };
-    // The sweep stamps workStageAt as it moves the job to Paid; not moved
-    // yet, it is today's.
-    const paidDay = d.workStage === 'paid' ? ymd(d.workStageAt) : localYMD();
+    // The sweep stamps workStageAt as it moves the job to Paid. Never moved
+    // there (its invoice was paid off before it came onto the job): the
+    // server sends nothing by itself, so nothing is promised.
+    if (d.workStage !== 'paid') return { id: 'unseen', rec: rec };
+    const paidDay = ymd(d.workStageAt);
     if (!paidDay) return { id: 'handPaid', rec: rec };
     const age = Math.round((Date.parse(localYMD() + 'T12:00:00') - Date.parse(paidDay + 'T12:00:00')) / 864e5);
     if (age > WITHIN_DAYS) return { id: 'old', rec: rec, paidDay: paidDay };
@@ -107,6 +112,7 @@
     } else if (rec.held === 'noLink') return { id: 'noLink', rec: rec, paidDay: paidDay };
     if (rec.held === 'noEmail' && !looksLikeEmail(d.email)) return { id: 'noEmail', rec: rec, paidDay: paidDay };
     if (rec.held === 'notCustomer') return { id: 'notCustomer', rec: rec, paidDay: paidDay };
+    if (rec.held === 'writtenOff') return { id: 'writtenOff', rec: rec, paidDay: paidDay };
     return { id: 'due', rec: rec, paidDay: paidDay };
   }
 
@@ -136,12 +142,14 @@
       case 'notPaid': words = 'When the invoice is paid off in QuickBooks, a thank-you with your Google review link ' + where +
         ' the next morning.'; break;
       case 'handPaid': words = 'Paid, but not in QuickBooks — no thank-you goes by itself.'; break;
+      case 'unseen': words = 'Paid off in QuickBooks before Job Hub saw it paid — no thank-you goes by itself.'; break;
       case 'old': words = paid + ', over ' + WITHIN_DAYS + ' days ago — no thank-you goes by itself now.'; break;
       case 'before': words = paid + ', before thank-yous went by themselves' +
         (conf && conf.thanksFrom ? ' (from ' + esc(fmtDateMD(conf.thanksFrom)) + ')' : '') + ' — none sent.'; break;
       case 'noLink': words = paid + ' — the thank-you is held until your Google review link is added.'; break;
       case 'noEmail': words = paid + ' — held: no email on the job or its QuickBooks customer. Add theirs and it goes the next morning.'; break;
       case 'notCustomer': words = paid + ' — held: the email on it is yours, the crew’s or a test address.'; break;
+      case 'writtenOff': words = paid + ' — held: the invoice shows nothing owed, but it was voided or written off rather than paid. If they did pay, send it.'; break;
       default: words = paid + ' — a thank-you with your review link ' + where + ' ' + nextMorning() + '.';
     }
     const isDone = done(r) || ['sent', 'drafted'].indexOf(s.id) !== -1;
@@ -180,9 +188,12 @@
           needLink.slice(0, 3).map(x => esc(String(x.j.customerName || 'A job').trim())).join(' · ') + (n > 3 ? ' …' : ''),
         call: 'chaseReviewLink()' });
     }
-    list.filter(x => x.s.id === 'noEmail' || x.s.id === 'notCustomer').forEach(x => out.push({
+    const HELD = { noEmail: 'Paid off, but no email for them — add it on the job',
+      notCustomer: 'The email on it is yours, the crew’s or a test address',
+      writtenOff: 'Its invoice was voided or written off, not paid — send it from the job if they did pay' };
+    list.filter(x => HELD[x.s.id]).forEach(x => out.push({
       icon: '🙏', main: '<b>Thank-you held</b> · ' + esc(String(x.j.customerName || 'A job').trim()),
-      small: x.s.id === 'noEmail' ? 'Paid off, but no email for them — add it on the job' : 'The email on it is yours, the crew’s or a test address',
+      small: HELD[x.s.id],
       call: "homeOpenJob('" + safeId(x.j._id) + "')" }));
     return out;
   }

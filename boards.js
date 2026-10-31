@@ -544,6 +544,10 @@
   ];
   // Bids out before the plan existed start it from here (followup.py PLAN_FROM).
   const PLAN_FROM = Date.parse('2026-10-22T05:00:00Z');
+  // The last email kept open this many days from its own day when it has not
+  // gone, the "mark it lost?" question waiting for it (followup.py
+  // LAST_WAIT_DAYS).
+  const LAST_WAIT_DAYS = 4;
   function chaseStart(j) {
     const c = j.chase || {};
     let t = Date.parse(c.start || '');
@@ -577,14 +581,19 @@
   // The steps waiting now. Calls and texts are one lane, emails another: in
   // each, a step not done is passed over once the next is due, so a bid
   // found late is never asked for three things at once; once the last day
-  // has come, only the "mark it lost?" question is left.
+  // has come, only the "mark it lost?" question is left -- after the last
+  // email, which waits up to LAST_WAIT_DAYS when it has not gone.
   function chaseOpen(j) {
     const start = chaseStart(j);
     if (start == null || !chasingBid(j)) return [];
     const days = calDays(start);
     const due = CHASE_STEPS.filter(s => s.day <= days);
     const done = chaseDoneIds(j);
-    if (due.some(s => s.kind === 'decide')) return due.filter(s => s.kind === 'decide' && !done.has(s.id));
+    if (due.some(s => s.kind === 'decide')) {
+      const last = CHASE_STEPS.find(s => s.last);
+      if (!done.has(last.id) && days < last.day + LAST_WAIT_DAYS) return [last];
+      return due.filter(s => s.kind === 'decide' && !done.has(s.id));
+    }
     const lane = s => s.kind === 'email' ? 'email' : 'phone';
     const latest = {};
     due.forEach(s => { latest[lane(s)] = s.id; });
@@ -722,7 +731,9 @@
       if (s.kind === 'email') {
         const h = chaseHeardOf(j);
         if (h) {
-          return word + '<span class="bd-chase-none">✋ ' + (h.unanswered
+          return word + '<span class="bd-chase-none">✋ ' + (h.bounced
+              ? 'An email to them bounced ' + esc(agoText(daysSince(h.at) || 0)) + ' — check the email address on the bid; the emails have stopped'
+              : h.unanswered
               ? 'Their email of ' + esc(agoText(daysSince(h.at) || 0)) + ' has no reply from you — the emails wait until you answer it'
               : 'They wrote back ' + esc(agoText(daysSince(h.at) || 0)) +
                 (h.subject ? ' (“' + esc(String(h.subject).slice(0, 60)) + '”)' : '') + ' — the emails have stopped') + '</span>' +

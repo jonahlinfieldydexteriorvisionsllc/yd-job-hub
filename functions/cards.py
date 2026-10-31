@@ -286,16 +286,29 @@ def draft_email(to, subject, body, reply=None):
             "link": "https://mail.google.com/mail/u/%s/#drafts?compose=%s" % (dg.OWNER_EMAIL, msg_id)}
 
 
+class MaybeSent(RuntimeError):
+    """Gmail was asked to send and gave no clear answer -- a server error on
+    its side. It may have gone, so the caller keeps its claim on the email
+    and never sends it again by itself (followup.py, the thank-yous)."""
+
+
 def send_mail(to, subject, body, reply=None):
     """Sent from the owner's Gmail, as he would send it himself (the summaries'
     gmail.send permission) -- for the follow-up plan's emails, which go out
     by themselves (followup.py auto; Jonah, 26 Oct 2026). `reply` as in
     draft_email: inside the estimate's thread. {messageId, threadId} or
-    {error}."""
+    {error} when it certainly did not go; raises when it may have (MaybeSent,
+    or the connection lost after the email went to Gmail)."""
     to = (to or "").strip()
     if not EMAIL_RE.match(to):
         return {"error": "not one email address"}
-    message, subject = _message(to, subject, body, reply)
+    # Put together before Gmail is asked: a header that can't be written is
+    # an email that never went, not one that may have.
+    try:
+        message, subject = _message(to, subject, body, reply)
+    except Exception as e:      # noqa: BLE001
+        print("cards: email not put together:", e)
+        return {"error": "the email could not be put together"}
     # No permission to send: certainly nothing went, so the caller may try
     # again later (an error after Gmail is asked is left to raise -- it may
     # have gone, and a claim on it must stay).
@@ -304,9 +317,25 @@ def send_mail(to, subject, body, reply=None):
     except Exception as e:      # noqa: BLE001
         print("cards: gmail send not allowed:", e)
         return {"error": "Gmail sending is not switched on"}
-    r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-                      headers={"Authorization": "Bearer " + token},
-                      json=message, timeout=30)
+    try:
+        r = requests.post("https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+                          headers={"Authorization": "Bearer " + token},
+                          json=message, timeout=30)
+    except requests.exceptions.ConnectTimeout as e:
+        # Never connected: nothing reached Gmail.
+        print("cards: gmail not reached:", e)
+        return {"error": "Gmail could not be reached"}
+    except requests.exceptions.ConnectionError as e:
+        # A connection never made (the name not found, refused) is certain;
+        # one dropped after the email went may have sent it -- left to raise.
+        if not _never_connected(e):
+            raise
+        print("cards: gmail not reached:", e)
+        return {"error": "Gmail could not be reached"}
+    if r.status_code >= 500:
+        # Gmail's own trouble: the email may still have gone out.
+        print("cards: send answered", r.status_code, r.text[:300])
+        raise MaybeSent("Gmail answered %d" % r.status_code)
     if r.status_code >= 300:
         print("cards: send failed", r.status_code, r.text[:300])
         return {"error": "Gmail would not send it (%d)" % r.status_code}
@@ -314,18 +343,42 @@ def send_mail(to, subject, body, reply=None):
     return {"messageId": d.get("id"), "threadId": d.get("threadId"), "subject": subject}
 
 
+def _never_connected(err):
+    """A requests connection error from before anything was sent: no
+    connection was ever made (urllib3's NewConnectionError, which a name
+    not found is too)."""
+    try:
+        from urllib3.exceptions import NewConnectionError
+    except ImportError:         # pragma: no cover
+        return False
+    seen, e = set(), err
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        if isinstance(e, NewConnectionError):
+            return True
+        e = getattr(e, "reason", None) or (e.args[0] if getattr(e, "args", None) and
+                                           isinstance(e.args[0], BaseException) else None)
+    return False
+
+
+def _one_line(text):
+    """A header's value on one line: a line break in it (a subject Claude
+    wrote over two lines) would not be a header Gmail takes."""
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
 def _message(to, subject, body, reply):
     """The email as Gmail takes it ({raw, threadId?}), and its subject."""
     msg = MIMEText(body or "", "plain", "utf-8")
     msg["To"] = to
     msg["From"] = dg.OWNER_EMAIL
-    msg["Subject"] = (subject or "").strip()[:200]
+    msg["Subject"] = _one_line(subject)[:200]
     # Gmail keeps a message in a thread only with the thread's id, a matching
     # subject and these two headers; the customer's own mail sorts it in
     # under the estimate by the same headers.
     if reply and reply.get("inReplyTo"):
-        msg["In-Reply-To"] = reply["inReplyTo"]
-        msg["References"] = reply.get("references") or reply["inReplyTo"]
+        msg["In-Reply-To"] = _one_line(reply["inReplyTo"])
+        msg["References"] = _one_line(reply.get("references") or reply["inReplyTo"])
     out = {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()}
     if reply and reply.get("threadId"):
         out["threadId"] = reply["threadId"]
