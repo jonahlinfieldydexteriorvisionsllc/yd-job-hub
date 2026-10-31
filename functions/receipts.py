@@ -3055,7 +3055,11 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of, each_from=()):
                     key = "toPay" if what == TO_PAY else "passed"
                     out[key] = out.get(key, 0) + 1
             rebate = is_menards_rebate(m.get("from"), m.get("subject"), m.get("text"))
-            kept = _note_saved(db, m, saves, None, receipt={"labelled": False, "rebate": rebate}, pulled=True)
+            try:
+                kept = _note_saved(db, m, saves, None, receipt={"labelled": False, "rebate": rebate}, pulled=True)
+            except Exception as e:      # noqa: BLE001 -- saved; looked at again next time, it finds them made
+                print("receipts: pull %s saved but not noted: %s" % (m["id"], e))
+                kept = [s for s in saves if s[1] not in (TO_PAY, NOT_RECEIPT)]
             for rid, _, _ in kept:
                 if rebate:
                     _tag_rebate(db, rid)
@@ -3290,8 +3294,17 @@ def run(client, manual=False):
                     _seen(db, m["id"], "error", why="save", tries=(prev.get("tries") or 0) + 1)
                     report["errors"] += 1
                     continue
-                kept = _note_saved(db, m, saves, report,
-                                   receipt={"labelled": False, "rebate": m["id"] in rebates})
+                # Its receipts are saved: a failure to note it on the email
+                # must not end the run (the rest of the emails, read and paid
+                # for, would wait and be read again). Unnoted, it is looked at
+                # again next run and finds its receipts made ("added to").
+                try:
+                    kept = _note_saved(db, m, saves, report,
+                                       receipt={"labelled": False, "rebate": m["id"] in rebates})
+                except Exception as e:      # noqa: BLE001
+                    print("receipts: %s saved but not noted: %s" % (m["id"], e))
+                    report["errors"] += 1
+                    kept = [s for s in saves if s[1] not in (TO_PAY, NOT_RECEIPT)]
                 for rid, what, personal in kept:
                     if m["id"] in rebates:
                         _tag_rebate(db, rid)
