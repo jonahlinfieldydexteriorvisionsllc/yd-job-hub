@@ -105,11 +105,14 @@
   // Paused time overlapping a window. With no window given it is the whole
   // shift; the snow side passes a single stop's arrive/depart instead, which
   // is what makes a pause land on the right client's invoice or on none.
+  // A shift's pauses, always a list of pauses: one shift with anything else
+  // there (a bad write) threw on every redraw and blanked the Clock tab.
+  const pausesOf = e => (Array.isArray(e && e.pauses) ? e.pauses.filter(p => p && typeof p === 'object') : []);
   function pausedMs(e, from, to) {
     const lo = from == null ? startMsOf(e) : from;
     const hi = to == null ? (endMsOf(e) != null ? endMsOf(e) : Date.now()) : to;
     if (!(hi > lo)) return 0;
-    return (e.pauses || []).reduce((sum, p) => {
+    return pausesOf(e).reduce((sum, p) => {
       const ps = ms(p.startedAt);
       if (!ps) return sum;
       const pe = p.endedAt ? ms(p.endedAt) : Date.now();
@@ -207,7 +210,11 @@
   // owner decided. Both are real hours and both count.
   const counts = e => e.status === 'ok' || e.status === 'approved';
   const awaitingOwner = e => e.status === 'pending' && !running(e);
-  const whyFlagged = e => autoStopped(e) && e.autoReason === 'storm'
+  // Held back by the server (autoclock.py hold_overlaps): it had settled
+  // itself over the same time as another of their shifts.
+  const whyFlagged = e => e.heldFor === 'overlap' && e.status === 'pending'
+    ? 'over the same time as another of their shifts — the hours would be paid twice'
+    : autoStopped(e) && e.autoReason === 'storm'
     ? 'storm done — clocked out at the last property'
     : autoStopped(e)
     ? 'no clock-out — stopped at ' + hoursWord(e.autoLimitHours || autoOutHours)
@@ -331,7 +338,7 @@
     if (e.kind === 'labor' || e.kind === 'receipts') return OVERHEAD_LABEL[e.kind];
     return e.targetName || OVERHEAD_LABEL[e.kind] || 'Other';
   }
-  const openPause = e => (e.pauses || []).find(p => !p.endedAt) || null;
+  const openPause = e => pausesOf(e).find(p => !p.endedAt) || null;
   // The rate on the user record is the old place for it, read until the move
   // to payRates has happened (see moveRates).
   const rateOf = uid => rates[uid] || ((people[uid] || {}).rateCents) || DEFAULT_RATE_CENTS;
@@ -694,7 +701,9 @@
     // shifts: it counts at once, and nobody is asked.
     const own = forUid === u.uid && settlesOwn() && startMs >= Date.now() - OWN_DAYS * 86400000 &&
       endMs - startMs <= OWN_MAX_MS;
-    if (own) rec.status = 'ok';
+    // Counted at once, and marked as theirs (selfChangedHtml "typed in"),
+    // as the owner was promised when he let them: he sees every one.
+    if (own) { rec.status = 'ok'; rec.selfChanged = { at: nowIso(), why: (why || '').slice(0, 300), kind: 'typed', before: {} }; }
     // Sent in by the crew, the owner's phone is told (reminders.py
     // crew_shifts) so it is approved while the day is remembered; one he
     // typed in himself needs no telling.
@@ -729,7 +738,7 @@
       e = entries[id];
       if (!e || !running(e) || openPause(e) || leavingNow(id)) return;
     }
-    e.pauses = (e.pauses || []).concat([{ startedAt: at, endedAt: null, reason: reason }]);
+    e.pauses = pausesOf(e).concat([{ startedAt: at, endedAt: null, reason: reason }]);
     pausingId = null;
     render();
     write(id, { pauses: e.pauses }, 'pausing');
@@ -741,7 +750,7 @@
     if (!e) return;
     const p = openPause(e);
     if (!p) return;
-    e.pauses = e.pauses || [];
+    e.pauses = pausesOf(e);
     p.endedAt = nowIso();
     render();
     write(id, { pauses: e.pauses }, 'resuming');
@@ -771,7 +780,7 @@
     // Always an array. Firestore refuses a write containing undefined and
     // fails the whole thing with it, so a shift that somehow had no pauses
     // list could not be clocked out at all.
-    e.pauses = e.pauses || [];
+    e.pauses = pausesOf(e);
     e.endedAt = stamp;
     e.endedMs = stampMs;
 
@@ -782,10 +791,16 @@
     // One trusted with his own shifts: a long day counts as it is. Up to 16 h
     // from start to end, breaks included -- what the rules measure (paid time
     // alone said "counted" for a shift the rules then refused).
-    if (e.status === 'pending' && !late && settlesOwn(e) && stampMs - startMsOf(e) <= OWN_MAX_MS) e.status = 'ok';
+    let own = null;
+    if (e.status === 'pending' && !late && settlesOwn(e) && stampMs - startMsOf(e) <= OWN_MAX_MS) {
+      e.status = 'ok';
+      // Said on it, as an own change is: a day past eight hours that nobody
+      // was asked about.
+      own = { selfChanged: e.selfChanged = { at: stamp, why: '', kind: 'long', before: {} } };
+    }
 
     render();
-    lastWrite = write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, extra || {}),
+    lastWrite = write(id, Object.assign({ endedAt: stamp, endedMs: stampMs, pauses: e.pauses, status: e.status }, own || {}, extra || {}),
       why || 'clocking out');
     return e.status;
   }
@@ -1751,8 +1766,8 @@
             : '<span>not billable</span>') +
           '<span class="appr-cost">' + money(costOf(paid, rateOf(e.uid))) + '</span>' +
         '</div>' +
-        ((e.pauses || []).length
-          ? '<div class="appr-pauses">' + e.pauses.map(p =>
+        (pausesOf(e).length
+          ? '<div class="appr-pauses">' + pausesOf(e).map(p =>
               esc(p.reason) + ' ' + fmtDur(Math.max(0, (p.endedAt ? ms(p.endedAt) : Date.now()) - ms(p.startedAt)))
             ).join(' · ') + '</div>'
           : '') +
@@ -1832,6 +1847,7 @@
     if (!t) { showToast('Put in both times'); return; }
     if (ms(t.end) > Date.now() + 60000) { showToast('That ends in the future — check the times'); return; }
     if (ms(t.start) === ms(e.startedAt) && ms(t.end) === ms(e.endedAt)) { leaveForm(); fixingId = null; fixingIn = null; render(); return; }
+    if (e.rateCents == null && counts(e) && !ratesReady()) { ratesWait(); return; }
     const patch = { startedAt: t.start, startedMs: ms(t.start), endedAt: t.end, endedMs: ms(t.end) };
     if (ms(t.end) - ms(t.start) > 20 * 3600000 &&
         !(await ydConfirm('That makes it ' + fmtDur(ms(t.end) - ms(t.start)) + ' long.', { title: 'Keep those times?', ok: 'Keep them', cancel: 'Change them' }))) return;
@@ -1870,32 +1886,52 @@
   // it sees it, which is what stops a later change of rate quietly re-valuing
   // work already done. Until then the figures use the worker's current rate,
   // so nothing is ever blank; the stamp just freezes it.
+  // Not until the worker list and the rates have arrived: until then rateOf
+  // says the default for everyone, and whatever is stamped now stays -- a
+  // $30/hr worker's night recorded at $25.
+  const ratesReady = () => usersLoaded && ratesLoaded;
+  const ratesWait = () => showToast('Pay rates are still loading — try again in a moment');
+  const stamping = {};
+  let staleTimer = null;
+  const staleSoon = () => {
+    if (!staleTimer) staleTimer = setTimeout(() => { staleTimer = null; if (!building) markStale(); }, 500);
+  };
   function stampUnpriced() {
-    // Not until the worker list has arrived. The shifts often load first, and
-    // stamping then froze every settled shift at the default rate for good --
-    // a $30/hr worker's night recorded at $25.
-    if (!decides() || !window.YDDb || !usersLoaded || !ratesLoaded) return;
+    if (!decides() || !window.YDDb || !ratesReady()) return;
     // The older shifts too, once read (the owner's device prices them before
     // summing them up for old jobs -- buildRoll).
     const all = known();
-    let old = false;
     Object.keys(all).forEach(id => {
       const e = all[id];
-      if (!counts(e) || running(e) || e.rateCents != null) return;
+      // No rate on it yet -- or its own worker changed its times (the rate
+      // it settled at kept, the figures cleared: changeOwn).
+      if (!counts(e) || running(e) || (e.rateCents != null && e.costCents != null) || stamping[id]) return;
       // An admin never prices their own shifts; the owner's device does.
       if (!mayDecide(e)) return;
-      const patch = {
-        rateCents: rateOf(e.uid),
-        costCents: costOf(paidMs(e), rateOf(e.uid)),
-        paidHours: hours(paidMs(e)),
-        billableHours: hours(chargeableMs(e)),
-      };
-      Object.assign(e, patch);
-      patchOlder(id, patch);
-      write(id, patch, 'pricing a settled shift');
-      if (isOld(e)) old = true;
+      const rate = e.rateCents != null ? e.rateCents : rateOf(e.uid);
+      const paid = paidMs(e);
+      const figures = { paidHours: hours(paid), billableHours: hours(chargeableMs(e)) };
+      const was = { s: e.startedMs, end: e.endedMs, st: e.status };
+      stamping[id] = true;
+      // Read again on the server and stamped there in one step: a shift whose
+      // times changed meanwhile (its worker, on another phone) is priced from
+      // its new times when it is next seen -- never these, from a queued
+      // write that landed on top of the new ones. Needs signal; without it,
+      // the next time.
+      Promise.resolve(window.YDDb.transact([['timeEntries', id]], ([cur]) => {
+        if (!cur || cur.startedMs !== was.s || cur.endedMs !== was.end || cur.status !== was.st
+            || (cur.rateCents != null && cur.costCents != null)) return [null];
+        const r = cur.rateCents != null ? cur.rateCents : rate;
+        return [Object.assign({ rateCents: r, costCents: costOf(paid, r) }, figures)];
+      })).then(done => {
+        const patch = done && done[0];
+        if (!patch) return;
+        Object.assign(e, patch);
+        patchOlder(id, patch);
+        if (isOld(e)) staleSoon();
+      }).catch(err => console.warn('[clock] settled shift not priced yet:', (err && err.code) || (err && err.message)))
+        .then(() => { delete stamping[id]; });
     });
-    if (old && !building) markStale();
   }
 
   // One shift approved, as it now reads: written, and kept on this device's
@@ -1925,6 +1961,7 @@
   window.approveShift = function (id) {
     const e = entries[id];
     if (!mayDecide(e)) return;
+    if (!ratesReady()) { ratesWait(); return; }
     // One from before the cutoff now counts on its job: the summary of old
     // jobs' labour has to take it in (after the shift's own write, so the
     // owner's device never sums from the shift as it was).
@@ -1953,8 +1990,12 @@
   //     would be paid twice
   //
   // The last two are said on the card itself (the first two already are).
-  const typedByThem = e => e.source === 'manual' && (e.createdBy || e.uid) === e.uid &&
-    e.uid !== (me() || {}).uid;
+  // `createdBy` is written by whoever typed it, so it counts as the office's
+  // word only when it names the owner or an admin (not the worker): a crew
+  // member's shift naming someone else is still their own recollection.
+  const officeTyped = e => { const by = e.createdBy, r = (people[by] || {}).role;
+    return !!by && by !== e.uid && (r === 'owner' || r === 'admin'); };
+  const typedByThem = e => e.source === 'manual' && !officeTyped(e) && e.uid !== (me() || {}).uid;
   const GRACE_MS = 60000;      // a switch between jobs: one ends as the next begins
   // `theirs`: this person's other shifts (all of them, for a list of many).
   function overlapOf(e, theirs) {
@@ -1996,6 +2037,7 @@
   }
 
   window.approveLookRight = function () {
+    if (!ratesReady()) { ratesWait(); return; }
     // Worked out again at the tap, not taken from the screen: a shift turned
     // down or changed on another device since it was drawn is not swept up.
     const list = lookRight();
@@ -2995,9 +3037,12 @@
     if (ms(start) < Date.now() - OWN_DAYS * 86400000) { showToast('Only shifts from the last ' + OWN_DAYS + ' days'); return; }
     if (ms(end) > Date.now() + 2 * 60000) { showToast('It cannot end in the future'); return; }
     if (ms(end) - ms(start) > OWN_MAX_MS) { showToast('Over ' + (OWN_MAX_MS / 3600000) + ' hours — ask the office for that one'); return; }
+    // The rate it settled at stays (the rules let it stand, never change):
+    // a three-week-old shift put right is still paid at that week's rate,
+    // not today's. Only the figures from the old times are cleared.
     const patch = {
       startedAt: start, startedMs: ms(start), endedAt: end, endedMs: ms(end), status: 'ok',
-      rateCents: null, costCents: null, paidHours: null, billableHours: null, approvedBy: null, approvedAt: null,
+      costCents: null, paidHours: null, billableHours: null, approvedBy: null, approvedAt: null,
       selfChanged: { at: nowIso(), why: (why || '').slice(0, 300),
         before: { startedAt: e.startedAt || null, endedAt: e.endedAt || null, status: e.status || null } },
     };
@@ -3094,6 +3139,7 @@
     if (a.endedAt) { patch.endedAt = a.endedAt; patch.endedMs = ms(a.endedAt); }
     const next = Object.assign({}, e, patch);
     if (!(ms(next.endedAt) > ms(next.startedAt))) { showToast('Those times end before they start'); return; }
+    if (e.rateCents == null && (e.status === 'approved' || e.status === 'ok') && !ratesReady()) { ratesWait(); return; }
     // The hours and pay stamped on it are worked out again, at the rate it
     // was settled at (or theirs now, if it never was).
     if (e.rateCents != null || e.status === 'approved' || e.status === 'ok') {
@@ -3181,7 +3227,8 @@
     const b = c.before || {};
     const mine = e.uid === (me() || {}).uid;
     return '<span class="shift-pause">✎ Changed by ' + esc(mine ? 'you' : workerOf(e)) + ' ' + esc(sinceWords(c.at)) +
-      (b.startedAt ? ' — was ' + clockTime(b.startedAt) + '–' + (b.endedAt ? clockTime(b.endedAt) : '?') : ' — typed in') +
+      (b.startedAt ? ' — was ' + clockTime(b.startedAt) + '–' + (b.endedAt ? clockTime(b.endedAt) : '?')
+        : c.kind === 'long' ? ' — a day over ' + LONG_SHIFT_HOURS + ' hours, counted without asking' : ' — typed in') +
       (c.why ? ': “' + esc(c.why) + '”' : '') + '</span>';
   }
   // The button to ask for a change, or to change it (the office): the same
@@ -3291,6 +3338,10 @@
                                  field: 'Hourly rate', before: money(was) + '/hr', after: money(cents) + '/hr',
                                  ref: { path: 'payRates', id: workerUid } });
       }
+      // Their settled shifts not yet priced are priced at the rate they were
+      // worked at first (the figures are worked out now, before the change):
+      // the new rate is for work from here on.
+      if (was !== cents) stampUnpriced();
       rates[workerUid] = cents;
       const uid = workerUid;
       if (!newRulesLive && isOwner()) {

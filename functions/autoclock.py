@@ -43,8 +43,16 @@ phones that are off.
 A storm shift whose storm is OVER (closed, abandoned, or gone) and gives no
 end after the shift began (storm_rule) has no storm left to wait for, and
 used to run for ever: the usual hour limit is its safety net (autoReason
-'hours', the office checks it). A storm still open keeps no limit, as Jonah
-asked.
+'hours', the office checks it). So does one begun after the last property
+was done on a storm nobody has closed yet (the drive back, the cleanup). A
+storm still being worked keeps no limit, as Jonah asked.
+
+TWO SHIFTS AT ONCE (hold_overlaps): a shift that settled itself ('ok') over
+the same minutes as another of the same person's -- clocked in on two
+phones, or clocked in by the office while their own clock-in sat unsent --
+would be paid twice, and the rules cannot see one shift from another. It is
+held for the office (status 'pending', heldFor 'overlap'), the owner is told
+once, and Waiting for You shows both side by side.
 """
 
 import datetime
@@ -59,6 +67,13 @@ DEFAULT_HOURS = 16
 MIN_HOURS, MAX_HOURS = 8, 24
 HOUR_MS = 3600 * 1000
 LONG_SHIFT_MS = 8 * HOUR_MS        # past this the office checks a shift (timeclock.js needsReview)
+# After a storm's last departure, a few minutes before the server ends its
+# shifts: an Undo of that Depart on the phone, or the next pass being
+# started, keeps them on the clock. (The phones on the storm end their own
+# within seconds -- YDClock.stormDone; this is for the ones that are off.)
+STORM_GRACE_MS = 3 * 60 * 1000
+OVERLAP_DAYS = 3                   # how far back hold_overlaps looks
+OVERLAP_GRACE_MS = 60 * 1000       # a switch between jobs: one ends as the next begins (timeclock.js GRACE_MS)
 
 
 def limit_hours(db):
@@ -120,6 +135,8 @@ def stop_patch(e, hours, now_ms, storm_end=None, by_hours=False):
         if storm_end is None or storm_end <= start:
             return None
         end = int(storm_end)
+        if now_ms < end + STORM_GRACE_MS:
+            return None
     else:
         end = start + int(round(hours * HOUR_MS))
     if now_ms < end:
@@ -228,9 +245,14 @@ def storm_rule(e, st):
     back, and the limit's stop is checked by the office (pending), where a
     stop at the closing could be cutting their time short unseen."""
     end = st.get("end")
-    if not st.get("over"):
-        return end, False
     start = start_ms(e)
+    if not st.get("over"):
+        # Begun after its last property was done, on a storm nobody has
+        # closed: nothing will ever end it -- the hour limit, as for a storm
+        # that is over (it ran for days, 30 Oct review).
+        if end and start and end <= start:
+            return None, True
+        return end, False
     if end and start and end > start:
         return end, False
     return None, True
@@ -308,6 +330,84 @@ def tell(db, people, now):
     return out
 
 
+def overlapping(shifts, now_ms):
+    """[(shift id, the other's id)] for each shift that settled itself ('ok')
+    over the same minutes as another of the same person's that counts or is
+    still to be decided. `shifts`: [(id, data)]. A running shift counts up
+    to now; one turned down never counts."""
+    by = {}
+    for sid, e in shifts:
+        if e.get("status") == "rejected" or not e.get("uid"):
+            continue
+        s = start_ms(e)
+        end = e.get("endedMs")
+        if not isinstance(end, (int, float)) or isinstance(end, bool):
+            end = now_ms if e.get("status") == "running" else None
+        if not s or end is None or end <= s:
+            continue
+        by.setdefault(str(e["uid"]), []).append((sid, e, s, int(end)))
+    out = []
+    for lst in by.values():
+        for sid, e, s, end in lst:
+            if e.get("status") != "ok":
+                continue
+            other = next((o for o in lst if o[0] != sid and o[2] < end - OVERLAP_GRACE_MS
+                          and s < o[3] - OVERLAP_GRACE_MS), None)
+            if other:
+                out.append((sid, other[0]))
+    return out
+
+
+def hold_overlaps(db, people, now):
+    """Shifts settled over the same time as another of the person's: held
+    for the office (see the top). Returns the ids held."""
+    now_ms = int(now.timestamp() * 1000)
+    try:
+        recent = [(s.id, s.to_dict() or {}) for s in db.collection("timeEntries")
+                  .where("startedMs", ">=", now_ms - OVERLAP_DAYS * 24 * HOUR_MS).stream()]
+    except Exception as err:          # noqa: BLE001
+        print("autoclock: recent shifts not read:", err)
+        return []
+    owners = [uid for uid, u in people.items() if u.get("role") == "owner"]
+    held = []
+    for sid, oid in overlapping(recent, now_ms):
+        ref = db.collection("timeEntries").document(sid)
+
+        @firestore.transactional
+        def take(tx, ref=ref, oid=oid):
+            snap = ref.get(transaction=tx)
+            if not snap.exists or (snap.to_dict() or {}).get("status") != "ok":
+                return None
+            tx.update(ref, {"status": "pending", "heldFor": "overlap", "heldWith": oid, "heldAt": now.isoformat()})
+            return snap.to_dict() or {}
+
+        try:
+            e = take(db.transaction())
+        except Exception as err:      # noqa: BLE001 -- the next one, and the next run, still go
+            print("autoclock: overlap not held:", sid, err)
+            continue
+        if e is None:
+            continue
+        held.append(sid)
+        try:
+            db.collection("reminderLog").document("overlap_" + sid).create({"at": now.isoformat()})
+        except AlreadyExists:
+            continue
+        except Exception as err:      # noqa: BLE001
+            print("autoclock: overlap not logged:", sid, err)
+            continue
+        who = (dg._name(people.get(e.get("uid"))) if people.get(e.get("uid"))
+               else str(e.get("workerName") or "Someone")).split()[0]
+        note = {"push": {"title": "⚠️ %s has two shifts over the same time" % who,
+                         "body": "%s — held for you to check, so it is not paid twice" % dg.shift_place(e)[:120]}}
+        for uid in owners:
+            try:
+                dg.send_push(uid, note, tag="yd-overlap-" + sid, ttl=48 * 3600, opens="clock")
+            except Exception as err:  # noqa: BLE001
+                print("autoclock: overlap push failed:", uid, sid, err)
+    return held
+
+
 def run(db=None, people=None, now=None):
     """Stop every shift past the limit, then tell. Returns what it did."""
     db = db or dg._db()
@@ -342,4 +442,7 @@ def run(db=None, people=None, now=None):
                 print("autoclock: stopped", s.id, "storm done" if storm_end else "at %s hours" % hours)
         except Exception as err:      # noqa: BLE001 -- the next one, and the next run, still go
             print("autoclock: not stopped:", s.id, err)
-    return {"hours": hours, "stopped": stopped, "told": tell(db, people, now)}
+    # Twice an hour (the run is every five minutes): the last few days'
+    # shifts, read for ones settled over the same time as another.
+    held = hold_overlaps(db, people, now) if now.minute % 30 < 5 else []
+    return {"hours": hours, "stopped": stopped, "held": held, "told": tell(db, people, now)}
