@@ -2910,21 +2910,41 @@ def _pull_budget(db):
     return day, PULL_READS_PER_DAY - used
 
 
-PULL_STEPS_PER_RUN = 4      # stretches one run may finish and go on from
+PULL_STEPS_PER_RUN = 60     # stretches one run may look at (one with mail is looked at twice)
+# No stretch is begun this long after the run started: the half-hourly run
+# has ten minutes in all (the scheduler's deadline), and a stretch can take
+# a minute or two of reading.
+PULL_UNTIL_SECONDS = 300
 
 
-def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of):
+def _pull_pass(client, db, st_data, since_epoch, bank, jobs_of, until=None):
     """The year's pull (above) for one run, when one is going: a stretch,
-    and on to the next while the last was finished. Returns what it did, or
-    None."""
+    and on to the next while the last was finished -- until `until` (epoch
+    seconds) or PULL_STEPS_PER_RUN. Returns what it did, or None."""
     p = dict(st_data.get("pull") or {})
     outs = []
+    looked_again = None     # the stretch looked at a second time this run
     for _ in range(PULL_STEPS_PER_RUN):
+        if outs and until and time.time() >= until:
+            break
         out = _pull_step(client, db, p, since_epoch, bank, jobs_of, st_data.get("pdfEachFrom"))
         if out is None:
             break
         outs.append(out)
-        if not out.get("next") or out.get("done"):
+        if out.get("done"):
+            break
+        if not out.get("next"):
+            # A stretch that read or sorted its mail is looked at once more
+            # straight away -- it moves on when nothing in it is left -- not a
+            # run (half an hour) later: 26 lost invoices spread over 16 weeks
+            # took a day of runs (Jonah, 2 Nov 2026). One that still has mail
+            # left (over the limit, the day's allowance spent, the sort
+            # failed), one made shorter, and one already looked at twice wait
+            # for the next run.
+            if not (out.get("waiting") or out.get("sortFailed") or out.get("narrowed")) \
+                    and looked_again != p.get("cursor"):
+                looked_again = p.get("cursor")
+                continue
             break
         p.update({"cursor": out["cursor"], "step": PULL_STEP_DAYS})
     if not outs:
@@ -3136,6 +3156,7 @@ def _queue_again(db, st, since_epoch):
 def run(client, manual=False):
     """Look for new receipts. Returns a short report; the receipts themselves
     land in Firestore for the app."""
+    started = time.time()
     db = dg._db()
     state = db.collection("settings").document("receipts")
     if not _claim(db):
@@ -3416,7 +3437,8 @@ def run(client, manual=False):
         # now", which is for the new mail and should be quick.
         if not manual:
             try:
-                pulled = _pull_pass(client, db, st_data, since_epoch, bank, jobs_of)
+                pulled = _pull_pass(client, db, st_data, since_epoch, bank, jobs_of,
+                                    until=started + PULL_UNTIL_SECONDS)
                 if pulled:
                     report["pull"] = pulled
             except NeedsPermission:
