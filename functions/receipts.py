@@ -475,9 +475,10 @@ business's bank to a person (a person-to-person payment, Zelle or similar: these
 
 Do not keep: marketing and sales offers, newsletters, quotes or estimates for something not \
 yet bought, statements that only list balances, failed or declined payment notices, review \
-requests, account and security notices, anything for $0.00 (a free order, a $0 payment) -- and \
-anything sent BY YD Exterior Visions to its own customers (its estimates and invoices are sales, \
-not purchases).
+requests, account and security notices, anything that cost nothing (a free order, a $0 payment) \
+-- and anything sent BY YD Exterior Visions to its own customers (its estimates and invoices are \
+sales, not purchases). An invoice or receipt whose first words say 0.00 is owed, due or left to \
+pay was paid already (by card, on account): keep it.
 
 Jonah may list emails he marked as NOT receipts before the messages: do not keep mail like those \
 -- the same sender with the same kind of subject -- unless it is plainly a receipt or bill for \
@@ -2068,6 +2069,14 @@ def by_code(m, record):
         return "skip"
     if yes >= TRUST_AFTER and not no:
         return "read"
+    # A store that has sold to us before, sending an invoice or receipt as a
+    # PDF: read, never sorted on its first words. The stone yard's email for
+    # an invoice paid by the card on file says "Your invoice-... for 0.00" --
+    # the balance left, not the price -- the sort dropped it as $0, and each
+    # drop counted against the sender, so its next emails were sorted on
+    # their first words too (Jonah, 2 Nov 2026: 27 of them lost this year).
+    if yes and pdf_files(m) and THE_RECEIPT.search(m.get("subject") or ""):
+        return "read"
     return ""
 
 
@@ -3071,6 +3080,59 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of, each_from=()):
     return out
 
 
+# ------------------------------------------------------------ read again
+#
+# An email passed over that should not have been (Jonah, 2 Nov 2026: the
+# stone yard's invoices paid by the card on file, dropped as $0 by the sort --
+# by_code, above) is read again by putting its Gmail message id in
+# settings/receipts.readAgain (the owner's). The next run marks each one
+# "queued" -- read without sorting, like one left over a run's limit -- and
+# takes it off the list. Mail from after `since` is read by the runs (run()
+# reads every queued email, however old); mail from before it is the year's
+# pull's, which is wound back to the oldest of them and reads them there,
+# marked `pulled` and never sent on to QuickBooks.
+AGAIN_MAX = 50              # emails taken off the list in one run; the rest wait
+GMAIL_ID = re.compile(r"^[0-9a-f]{8,24}$")
+
+
+def _queue_again(db, st, since_epoch):
+    """settings/receipts.readAgain, queued to be read (above). Returns how
+    many; `st` (the settings as this run read them) gets the wound-back pull,
+    so this run's own pull goes on from there."""
+    listed = list(st.get("readAgain") or [])
+    if not listed:
+        return 0
+    take = [i for i in listed if isinstance(i, str) and GMAIL_ID.match(i)][:AGAIN_MAX]
+    gone = [i for i in listed if not (isinstance(i, str) and GMAIL_ID.match(i))] + take
+    oldest, queued = None, 0
+    for mid in take:
+        try:
+            at = int(_gmail("/messages/" + mid, {"format": "minimal"}).get("internalDate") or 0) / 1000
+        except NeedsPermission:
+            raise
+        except Exception as e:      # noqa: BLE001 -- not in the mailbox: nothing to read
+            print("receipts: read again %s: %s" % (mid, e))
+            continue
+        old = 0 < at < since_epoch
+        _seen(db, mid, "queued", tries=0, againAt=dg._now().isoformat(), **({"pulled": True} if old else {}))
+        queued += 1
+        if old:
+            oldest = at if oldest is None else min(oldest, at)
+    change = {"readAgain": firestore.ArrayRemove(gone)}
+    if oldest is not None:
+        pull = st.get("pull") or {}
+        try:
+            cursor = float(pull.get("cursor"))
+        except (TypeError, ValueError):
+            cursor = None
+        start = int(oldest) - 1
+        if pull.get("doneAt") or cursor is None or cursor > start:
+            change["pull"] = {"cursor": start, "step": PULL_STEP_DAYS, "doneAt": None}
+            st["pull"] = dict(pull, **change["pull"])
+    db.collection("settings").document("receipts").set(change, merge=True)
+    return queued
+
+
 def run(client, manual=False):
     """Look for new receipts. Returns a short report; the receipts themselves
     land in Firestore for the app."""
@@ -3105,11 +3167,19 @@ def run(client, manual=False):
             raise
         except Exception as e:      # noqa: BLE001 -- receipts still run
             print("receipts: forwarded cards failed:", e)
+        # Emails Jonah asked to have read again (read again, above).
+        report["again"] = _queue_again(db, st_data, since_epoch)
         # The week's read, or between reads: only orders waiting for pickup.
         reading = bool(manual) or _reading_due(st_data)
         report["reading"] = reading
         bank = st_data.get("bankName") or ""        # named to Claude for crew-pay transfers (read_system)
         ids = _list_ids(search_for(since_epoch, SEARCH if reading else PICKUP_SEARCH))
+        # A queued email the search does not find -- one asked to be read
+        # again, or one left over a run's limit that has since dropped out of
+        # the LOOK_BACK_DAYS search -- is read all the same. The year's pull
+        # reads its own (`pulled`).
+        ids += [s.id for s in db.collection("receiptMail").where("outcome", "==", "queued").limit(MAX_LIST).stream()
+                if s.id not in ids and not (s.to_dict() or {}).get("pulled")]
         done = {s.id: (s.to_dict() or {})
                 for s in db.get_all([db.collection("receiptMail").document(i) for i in ids]) if s.exists}
         # Already judged to be a purchase, but not yet read (the run's limit),
