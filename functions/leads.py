@@ -370,7 +370,7 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
         "messageId": mid, "threadId": m["threadId"], "subject": (m["subject"] or "")[:200], "from": who,
         "form": why == "form", "summary": r["summary"], "timing": r["timing"], "at": stamp,
         "draft": None,
-        "link": "https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, m["threadId"] or mid)})
+        "link": dg.gmail_link("all/" + (m["threadId"] or mid))})
     ref = db.collection("customers").document(lead_id)
     try:
         ref.create(rec)

@@ -49,6 +49,14 @@ OWNER_EMAIL = "jonahlinfield@ydexteriorvisions.com"   # also the account mail is
 HOME = {"lat": 43.0731, "lng": -89.4012, "name": "Madison"}
 UA = "YD Job Hub (jonahlinfield@ydexteriorvisions.com)"   # weather.gov asks for one
 
+
+def gmail_link(where):
+    """A link into his Gmail: where = 'all/<threadId>' or 'drafts?compose=<messageId>'.
+    The account goes in ?authuser= -- Gmail answers /mail/u/<email>/ with
+    "Temporary Error (404)" (2 Nov 2026: every Open the email / Open the
+    draft built that way failed). app.js ydGmailLink mends links saved before."""
+    return "https://mail.google.com/mail/?authuser=%s#%s" % (OWNER_EMAIL, where)
+
 SLOTS = {
     "morning": {"label": "Morning", "icon": "☀️"},
     "midday": {"label": "Midday", "icon": "🕛"},

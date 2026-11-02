@@ -1399,7 +1399,7 @@
   };
   document.addEventListener('yd-auth', loadLeadConf);
   // The lead's email and the drafted reply, under its name.
-  const gmailLink = u => /^https:\/\/mail\.google\.com\//.test(String(u || '')) ? String(u) : '';
+  const gmailLink = u => window.ydGmailLink(u);
   function leadMailHtml(c) {
     const f = c.fromEmail;
     if (!f) return '';

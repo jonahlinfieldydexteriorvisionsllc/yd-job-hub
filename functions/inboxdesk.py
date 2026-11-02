@@ -182,7 +182,7 @@ def run(deadline=None):
                 "snippet": str(head.get("snippet") or "")[:300], "threadId": thread, "internalDate": when,
                 "at": datetime.datetime.fromtimestamp(when / 1000, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
                 if when else _stamp(),
-                "link": "https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, thread),
+                "link": dg.gmail_link("all/" + thread),
                 "open": True, "answeredAt": None, "doneAt": None, "draft": None, "foundAt": _stamp(),
             })
             news.append({"kind": "followup", "jobId": job_id, "title": "📬 %s wrote" % name,
@@ -353,7 +353,9 @@ def draft(client, kind, rid, uid):
     if not body:
         return {"error": "Claude's answer could not be read. Try again."}, resp.usage
     reply = leads._reply_to({"subject": subject, "threadId": thread}, mid)
-    saved = cards.draft_email(to, "Re: " + (subject or "Your job"), body, reply)
+    subject = subject or "Your job"
+    # The customer's subject is often a reply already ("Re: Re: ..." read oddly).
+    saved = cards.draft_email(to, subject if re.match(r"(?i)re:", subject) else "Re: " + subject, body, reply)
     if saved.get("error"):
         return {"error": saved["error"].split(". Put the full")[0] + "."}, resp.usage
     note = {"draftId": saved.get("draftId"), "link": saved.get("link"), "at": _stamp(), "by": uid}

@@ -5727,6 +5727,26 @@ function exportPurchasesCsv() {
   showToast('Purchases CSV downloaded');
 }
 
+// ---- Links into his Gmail ----
+// The server used to save them as mail.google.com/mail/u/<email>/#..., which
+// Gmail now answers with "Temporary Error (404)" (2 Nov 2026: Open the email /
+// Open the draft on the inbox list both failed). New ones carry ?authuser=
+// (digest.gmail_link); the ones already saved on jobs, cards, leads and the
+// inbox list are mended here as they are opened. '' when it isn't Gmail.
+function ydGmailLink(u) {
+  const s = String(u || '');
+  if (!/^https:\/\/mail\.google\.com\//.test(s)) return '';
+  const old = s.match(/^https:\/\/mail\.google\.com\/mail\/u\/([^\/#?]+@[^\/#?]+)\/?(#.*)?$/);
+  return old ? 'https://mail.google.com/mail/?authuser=' + old[1] + (old[2] || '') : s;
+}
+window.ydGmailLink = ydGmailLink;
+// Every <a href> to an old-style link is mended the moment it is pressed --
+// before the tap, click or long-press menu follows it.
+['pointerdown', 'click', 'auxclick'].forEach(type => document.addEventListener(type, e => {
+  const a = e.target && e.target.closest && e.target.closest('a[href^="https://mail.google.com/mail/u/"]');
+  if (a) a.href = ydGmailLink(a.href) || a.href;
+}, true));
+
 // ═══════════════════════════════════════════════════════════
 // TOAST + INIT
 // ═══════════════════════════════════════════════════════════

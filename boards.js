@@ -2670,7 +2670,7 @@
   // Only links into Gmail are drawn as links -- the text comes from the server,
   // but a link is where a stray address would do harm.
   function safeLink(u) {
-    return /^https:\/\/mail\.google\.com\//.test(String(u || '')) ? u : 'https://mail.google.com/mail/#drafts';
+    return window.ydGmailLink(u) || 'https://mail.google.com/mail/#drafts';
   }
 
   function claudePatch(patch) {

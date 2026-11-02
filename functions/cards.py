@@ -283,7 +283,7 @@ def draft_email(to, subject, body, reply=None):
     d = r.json()
     msg_id = (d.get("message") or {}).get("id", "")
     return {"ok": True, "draftId": d.get("id"), "to": to, "subject": subject,
-            "link": "https://mail.google.com/mail/u/%s/#drafts?compose=%s" % (dg.OWNER_EMAIL, msg_id)}
+            "link": dg.gmail_link("drafts?compose=" + msg_id)}
 
 
 class MaybeSent(RuntimeError):

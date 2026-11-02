@@ -17,7 +17,7 @@
 
   let rows = {}, unsub = null, who = null;
   const isOwner = () => !!(window.YDAuth && YDAuth.isOwner && YDAuth.mode === 'cloud' && YDAuth.user);
-  const gmail = u => /^https:\/\/mail\.google\.com\//.test(String(u || '')) ? String(u) : '';
+  const gmail = u => window.ydGmailLink(u);
   const tell = () => document.dispatchEvent(new CustomEvent('yd-inbox'));
 
   function watch() {

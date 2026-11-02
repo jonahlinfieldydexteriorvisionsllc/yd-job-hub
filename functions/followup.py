@@ -846,7 +846,7 @@ def _send_step(client, db, ref, jid, j, s, to, spent, staff):
     at = _stamp()
     rec = {"at": at, "sent": True, "messageId": sent.get("messageId"), "threadId": sent.get("threadId"),
            "subject": sent.get("subject") or "", "inThread": bool(got["reply"]),
-           "link": "https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, sent.get("threadId") or "")}
+           "link": dg.gmail_link("all/" + (sent.get("threadId") or ""))}
     ref.update({"chaseDrafts." + s["id"]: rec, "chaseSending": firestore.DELETE_FIELD,
                 "followUps": firestore.ArrayUnion([dict(rec, by="Job Hub (follow-ups)", step=s["id"])]),
                 "lastModified": at})
@@ -1247,7 +1247,7 @@ def send_thanks(db, ref, jid, j, to, link, conf, cust=None, by=None):
         rec.update(draftId=got.get("draftId"), link=got.get("link"))
     else:
         rec.update(sentAt=at, messageId=got.get("messageId"), threadId=got.get("threadId"),
-                   link="https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, got.get("threadId") or ""))
+                   link=dg.gmail_link("all/" + (got.get("threadId") or "")))
     if by:
         rec["sentBy"] = by
     rec = {k: v for k, v in rec.items() if v is not None}
@@ -1589,7 +1589,7 @@ def send_welcome(db, ref, jid, j, to, conf, cust=None, by=None):
         rec.update(draftId=got.get("draftId"), link=got.get("link"))
     else:
         rec.update(sentAt=at, messageId=got.get("messageId"), threadId=got.get("threadId"),
-                   link="https://mail.google.com/mail/u/%s/#all/%s" % (dg.OWNER_EMAIL, got.get("threadId") or ""))
+                   link=dg.gmail_link("all/" + (got.get("threadId") or "")))
     if by:
         rec["sentBy"] = by
     rec = {k: v for k, v in rec.items() if v is not None}
