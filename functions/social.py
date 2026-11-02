@@ -996,15 +996,9 @@ def fb_callback(request):
         long_user = (r.json() or {}).get("access_token")
         if not long_user:
             raise RuntimeError("the long-lived token was refused")
-        pages, url = [], "%s/me/accounts" % GRAPH
-        params = {"fields": "id,name,access_token,tasks,link", "access_token": long_user, "limit": 100}
-        while url and len(pages) < 200:
-            r = requests.get(url, params=params, timeout=30)
-            got = r.json() or {}
-            pages.extend(p for p in (got.get("data") or []) if p.get("id") and p.get("access_token"))
-            url, params = (got.get("paging") or {}).get("next"), None
+        pages, seen = _granted_pages(fb, long_user)
         if not pages:
-            raise RuntimeError("no Facebook Page was shared with Job Hub — tick your business Page when Facebook asks")
+            raise RuntimeError("no Facebook Page came through to Job Hub (%s)" % seen)
         # Posts go out as the business, never as anyone's own Page (Jonah, 2 Nov:
         # his first hookup shared only a personal Page and that Page was taken).
         shared = [p.get("name") or "" for p in pages]
@@ -1029,6 +1023,50 @@ def fb_callback(request):
         _set(db, {"facebook": {"error": "Facebook could not be hooked up: %s" % e}})
         return _page("Facebook could not be hooked up: %s" % e, False)
     return _page("Facebook is hooked up — posts go to %s." % (page.get("name") or "your Page"), True)
+
+
+PAGE_FIELDS = "id,name,access_token,tasks,link"
+
+
+def _granted_pages(fb, user):
+    """The Pages he shared, each with its own key. /me/accounts first; a Page
+    picked in Facebook's chooser that it leaves out (business-owned Pages can
+    be) is asked for by its id, from the token's granted targets. Also says
+    what Facebook gave, so a failed hookup can tell why."""
+    pages, listed, url = {}, [], "%s/me/accounts" % GRAPH
+    params = {"fields": PAGE_FIELDS, "access_token": user, "limit": 100}
+    while url and len(listed) < 200:
+        got = requests.get(url, params=params, timeout=30).json() or {}
+        listed.extend(got.get("data") or [])
+        url, params = (got.get("paging") or {}).get("next"), None
+    for p in listed:
+        if p.get("id") and p.get("access_token"):
+            pages[p["id"]] = p
+    scopes, targets = [], []
+    try:
+        got = requests.get("%s/debug_token" % GRAPH, timeout=30, params={
+            "input_token": user, "access_token": "%s|%s" % (fb["appId"], fb["appSecret"])}).json() or {}
+        data = got.get("data") or {}
+        scopes = data.get("scopes") or []
+        for g in data.get("granular_scopes") or []:
+            if str(g.get("scope") or "").startswith("pages_"):
+                targets.extend(t for t in (g.get("target_ids") or []) if t not in targets)
+    except (requests.RequestException, ValueError) as e:
+        print("social: facebook debug_token failed:", e)
+    for pid in targets:
+        if pid in pages:
+            continue
+        got = requests.get("%s/%s" % (GRAPH, pid), params={"fields": PAGE_FIELDS, "access_token": user},
+                           timeout=30).json() or {}
+        if got.get("id") and got.get("access_token"):
+            pages[got["id"]] = got
+        else:
+            print("social: facebook page %s gave no key: %s" % (pid, str(got.get("error") or got)[:300]))
+    seen = "listed: %s; picked: %s; allowed: %s" % (
+        ", ".join("%s%s" % (p.get("name") or p.get("id"), "" if p.get("access_token") else " (no key)")
+                  for p in listed) or "none",
+        ", ".join(targets) or "none", ", ".join(scopes) or "none")
+    return list(pages.values()), seen
 
 
 def fb_pick_page(page_id):
