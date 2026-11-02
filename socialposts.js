@@ -414,15 +414,17 @@
       : !fb.appSet
         ? '<ol class="sp-steps">' +
             '<li>On a computer, open <a href="https://developers.facebook.com/apps/creation/" target="_blank" rel="noopener">' +
-              'developers.facebook.com → Create app</a> (signed in as you, the Page’s admin). Name it “YD Job Hub”, pick the use ' +
-              'case <b>Manage everything on your Page</b>, and finish.</li>' +
-            '<li>In the app: <b>Use cases → Manage everything on your Page → Customize</b> — make sure ' +
-              '<b>pages_manage_posts</b> is there. Under <b>Facebook Login → Settings</b>, add this to ' +
-              '<b>Valid OAuth Redirect URIs</b>:<div class="sp-code">' + esc(redirect || 'shown once the server is updated') + '</div>' +
-              (redirect ? copy(redirect, 'Copy it') : '') + '</li>' +
-            '<li><b>App settings → Basic</b>: put in the Privacy Policy URL ' +
-              '<span class="sp-code">https://jonahlinfieldydexteriorvisionsllc.github.io/yd-job-hub/privacy.html</span>, then switch the ' +
-              'app to <b>Live</b> at the top (so posts show to everyone, not only you).</li>' +
+              'developers.facebook.com → Create app</a> (signed in as you, the Page’s admin — register as a developer first if it ' +
+              'asks). Name it “YD Job Hub”, pick the use case <b>Manage everything on your Page</b> (under Content management), ' +
+              'no business portfolio, and Create app.</li>' +
+            '<li>In the app: <b>Use cases → Customize</b> — Add <b>pages_manage_posts</b> and <b>pages_read_engagement</b>. Under ' +
+              '<b>Facebook Login for Business → Settings</b>, add this to <b>Valid OAuth Redirect URIs</b> and Save:<div class="sp-code">' +
+              esc(redirect || 'shown once the server is updated') + '</div>' + (redirect ? copy(redirect, 'Copy it') : '') + '</li>' +
+            '<li><b>App settings → Basic</b>: Privacy policy URL <span class="sp-code">' +
+              'https://jonahlinfieldydexteriorvisionsllc.github.io/yd-job-hub/privacy.html</span>, Data deletion instructions URL ' +
+              '<span class="sp-code">https://jonahlinfieldydexteriorvisionsllc.github.io/yd-job-hub/privacy.html#delete</span>, ' +
+              'Category “Business and pages”, Save. Then <b>Publish</b> in the left menu (until it is published, posts show only ' +
+              'to you).</li>' +
             '<li>Copy the <b>App ID</b> and the <b>App secret</b> (Show) from App settings → Basic into here:' +
               '<label class="sp-lbl">App ID<input id="spFbId" inputmode="numeric" autocomplete="off" value="' + esc(fbForm.appId) +
                 '" oninput="spFbSet(\'appId\', this.value)"></label>' +
