@@ -123,7 +123,9 @@ STATE_MINUTES = 15
 
 GRAPH = "https://graph.facebook.com/v26.0"
 FB_DIALOG = "https://www.facebook.com/v26.0/dialog/oauth"
-FB_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts"
+# business_management: a Page owned by a business portfolio (his is) hands its
+# key to an app only with it -- without it Facebook lists no Page at all.
+FB_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
 
 GBP_SCOPE = "https://www.googleapis.com/auth/business.manage"
 GBP_ACCOUNTS = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts"
@@ -1053,6 +1055,7 @@ def _granted_pages(fb, user):
                 targets.extend(t for t in (g.get("target_ids") or []) if t not in targets)
     except (requests.RequestException, ValueError) as e:
         print("social: facebook debug_token failed:", e)
+    refused = []
     for pid in targets:
         if pid in pages:
             continue
@@ -1061,11 +1064,15 @@ def _granted_pages(fb, user):
         if got.get("id") and got.get("access_token"):
             pages[got["id"]] = got
         else:
-            print("social: facebook page %s gave no key: %s" % (pid, str(got.get("error") or got)[:300]))
-    seen = "listed: %s; picked: %s; allowed: %s" % (
+            why = str((got.get("error") or {}).get("message") or "no key") if isinstance(got.get("error"), dict) \
+                else "no key"
+            refused.append("%s: %s" % (got.get("name") or pid, why[:160]))
+            print("social: facebook page %s gave no key: %s" % (pid, str(got)[:300]))
+    seen = "listed: %s; picked: %s; allowed: %s%s" % (
         ", ".join("%s%s" % (p.get("name") or p.get("id"), "" if p.get("access_token") else " (no key)")
                   for p in listed) or "none",
-        ", ".join(targets) or "none", ", ".join(scopes) or "none")
+        ", ".join(targets) or "none", ", ".join(scopes) or "none",
+        "; Facebook said " + " / ".join(refused) if refused else "")
     return list(pages.values()), seen
 
 
