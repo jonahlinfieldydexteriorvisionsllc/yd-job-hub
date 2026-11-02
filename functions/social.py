@@ -856,6 +856,10 @@ def fb_post(db, d):
     page, token = fb.get("pageId"), fb.get("pageToken")
     if not (page and token):
         raise NotConnected("Facebook isn't hooked up yet")
+    name = next((p.get("name") for p in (fb.get("pages") or []) if p.get("id") == page), "")
+    if not _business_page(name):
+        raise NotConnected("Facebook is hooked to %s, not the business Page — hook up again and tick %s"
+                           % (name or "another Page", BUSINESS_PAGE_NAME))
     text = str(d.get("text") or "")[:LIMITS["facebook"]]
     photos = [p for p in (d.get("photos") or []) if str((p or {}).get("url") or "").startswith("https://")][:4]
     try:
@@ -908,6 +912,14 @@ def _fb_find(page, token, text):
     except (requests.RequestException, ValueError):
         return None
     return None
+
+
+BUSINESS_PAGE_NAME = "YD Exterior Visions"
+
+
+def _business_page(name):
+    """A Page Job Hub may post to: the business's own, by its name."""
+    return bool(re.search(r"\b(yd|yard dudes|exterior visions)\b", str(name or ""), re.I))
 
 
 def _redirect():
@@ -993,8 +1005,15 @@ def fb_callback(request):
             url, params = (got.get("paging") or {}).get("next"), None
         if not pages:
             raise RuntimeError("no Facebook Page was shared with Job Hub — tick your business Page when Facebook asks")
+        # Posts go out as the business, never as anyone's own Page (Jonah, 2 Nov:
+        # his first hookup shared only a personal Page and that Page was taken).
+        shared = [p.get("name") or "" for p in pages]
+        pages = [p for p in pages if _business_page(p.get("name"))]
+        if not pages:
+            raise RuntimeError("Facebook shared only %s, not the business Page. Hook up again and tick %s"
+                               % (", ".join(shared), BUSINESS_PAGE_NAME))
         able = [p for p in pages if "CREATE_CONTENT" in (p.get("tasks") or [])] or pages
-        page = next((p for p in able if re.search(r"\b(yd|yard|exterior)\b", p.get("name") or "", re.I)), able[0])
+        page = able[0]
         db.collection(FB_DOC[0]).document(FB_DOC[1]).set({
             "userToken": long_user, "connectedAt": _now().isoformat(), "connectedBy": started.get("uid", ""),
             "pages": [{"id": p["id"], "name": p.get("name") or "", "token": p["access_token"],
@@ -1007,6 +1026,7 @@ def fb_callback(request):
         _refresh_not_connected(db, "facebook")
     except Exception as e:              # noqa: BLE001 -- shown, not swallowed
         print("social: facebook callback failed:", e)
+        _set(db, {"facebook": {"error": "Facebook could not be hooked up: %s" % e}})
         return _page("Facebook could not be hooked up: %s" % e, False)
     return _page("Facebook is hooked up — posts go to %s." % (page.get("name") or "your Page"), True)
 
@@ -1017,6 +1037,8 @@ def fb_pick_page(page_id):
     page = next((p for p in (fb.get("pages") or []) if p.get("id") == page_id), None)
     if not page:
         return {"error": "That Page wasn't shared with Job Hub"}
+    if not _business_page(page.get("name")):
+        return {"error": "Posts go out as the business — pick %s" % BUSINESS_PAGE_NAME}
     db.collection(FB_DOC[0]).document(FB_DOC[1]).set({"pageId": page["id"], "pageToken": page["token"]}, merge=True)
     _set(db, {"facebook": {"pageId": page["id"], "pageName": page.get("name") or "",
                            "pageLink": page.get("link") or ""}})
@@ -1025,8 +1047,15 @@ def fb_pick_page(page_id):
 
 def fb_disconnect():
     """Unhook: the tokens go, the app id and secret stay (hooking up again
-    is then one tap)."""
+    is then one tap). The permissions are given back to Facebook too, so the
+    next hookup asks afresh which Pages to share."""
     db = _db()
+    user = _fb_doc(db).get("userToken")
+    if user:
+        try:
+            requests.delete("%s/me/permissions" % GRAPH, params={"access_token": user}, timeout=30)
+        except requests.RequestException as e:
+            print("social: facebook permissions not given back:", e)
     db.collection(FB_DOC[0]).document(FB_DOC[1]).set({"userToken": firestore.DELETE_FIELD,
                                                        "pageToken": firestore.DELETE_FIELD,
                                                        "pages": firestore.DELETE_FIELD,

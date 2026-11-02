@@ -411,7 +411,7 @@
           (x.id === fbc.pageId ? ' btn-filled' : '') + '" onclick="spFbPage(\'' + safeId(x.id) + '\')">' + esc(x.name) + '</button>').join('') + '</div>' : '') +
         '<div class="field-actions"><button class="btn btn-sm" onclick="spFbConnect()">Hook up again</button>' +
           '<button class="btn btn-sm" onclick="spFbOff()">Unhook Facebook</button></div>'
-      : !fb.appSet
+      : (fbc.error ? '<div class="sp-why">' + esc(fbc.error) + '</div>' : '') + (!fb.appSet
         ? '<ol class="sp-steps">' +
             '<li>On a computer, open <a href="https://developers.facebook.com/apps/creation/" target="_blank" rel="noopener">' +
               'developers.facebook.com → Create app</a> (signed in as you, the Page’s admin — register as a developer first if it ' +
@@ -436,7 +436,9 @@
             '<span class="sp-code">' + esc(redirect) + '</span>' : '') + '</p>' +
           '<div class="field-actions"><button class="btn btn-filled" onclick="spFbConnect()">Hook up Facebook</button>' +
             '<button class="link-btn" onclick="spFbAppAgain()">Put in a different app</button></div>' +
-          '<p class="hint">Facebook asks which Pages to share — tick your business Page.</p>';
+          '<p class="hint">Facebook asks which Pages to share — tick <b>YD Exterior Visions</b>. Job Hub only ever posts as ' +
+            'the business, never to your own Page. If Facebook doesn’t show the Pages, tap <b>Edit access</b> (or Edit ' +
+            'previous settings) there.</p>');
     const gHtml = g.ok
       ? '<p>✓ Posting to <b>' + esc(g.title || 'your Business Profile') + '</b>. The week’s new After photos go onto the ' +
           'profile with each post.</p><button class="btn btn-sm" onclick="spGoogle()">Check again</button>'
