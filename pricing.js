@@ -169,6 +169,8 @@
       // lawn care), as Job Hub shows it. QuickBooks works out the exact tax
       // from the job's address when the estimate goes in.
       customerTaxPct: null,
+      // What paying by card adds (cardFee, below). Empty or 0: no line.
+      cardFeePct: 3.5,
       crewDayCents: null,
       // How many paid hours -- the whole crew's together -- make one
       // crew-day: what turns the clock's hours into crew-days on Estimate vs
@@ -1275,6 +1277,18 @@
       .filter(n => n && !seen[n.toLowerCase()] && (seen[n.toLowerCase()] = true));
   }
 
+  // The card fee (Jonah, 3 Nov 2026: "adding a line item for a 3.5% fee for the
+  // job with the total in the text box but not in the price line so it doesnt
+  // change job price and i can tack it on if they end up paying card"). A $0
+  // line on his own QuickBooks product of this name, its figure in the words.
+  // The name is the same in quickbooks.py (CARD_FEE_ITEM).
+  const CARD_FEE_ITEM = 'Online Transaction Fee';
+  function cardFee(r, grandCents) {
+    const pct = num(r.cardFeePct);
+    if (!(pct > 0) || !(grandCents > 0)) return null;
+    return { item: CARD_FEE_ITEM, pct: pct, cents: Math.round(grandCents * pct / 100) };
+  }
+
   // QuickBooks' products with their descriptions, asked for once a session
   // (the Pricing rules list and the estimate preview show the text).
   // A failed ask is not repeated by every redraw -- only by "Check again".
@@ -1405,6 +1419,7 @@
   const RULE_WORDS = {
     taxPct: ['Sales tax we pay on materials', 'pct', 'tax'],
     customerTaxPct: ['Sales tax charged to customers', 'pct', 'tax'],
+    cardFeePct: ['Card fee line on estimates', 'pct', 'terms'],
     crewDayCents: ['Crew-day rate (crew cost)', 'money', 'labor'],
     crewPeople: ['People in a crew', 'num', 'labor'],
     crewPersonHours: ['Paid hours each in a crew-day', 'num', 'labor'],
@@ -2038,6 +2053,10 @@
         esc(r.payments[k] || '') + '</textarea></label>').join('') +
 
       secHead('end') +
+      '<div class="pr-grid">' +
+        box('Card fee (%)', r.cardFeePct, "prSet('cardFeePct', this.value, 'num')",
+          'a $0 “' + CARD_FEE_ITEM + '” line before the warranty, with the job’s figure in its words. Not in the price; type it in on the invoice if they pay by card. Empty = no line') +
+      '</div>' +
       '<p class="hint">Customers e-sign the estimate itself, so the warranty and the terms and conditions go on it as its last lines ($0 each), ' +
         'in this order. Each is a product in QuickBooks: its text is the product’s description there (4,000 characters at most — ' +
         'split longer terms into more products). Change the wording in QuickBooks; the next estimate carries it.</p>' +
@@ -2389,6 +2408,7 @@
     usualPlan: total => usualPlan(total, rules),
     profitOf: w => profitOf(w, rules),
     endItems: which => endItems(rules, which), qbProduct, loadQbProducts,
+    cardFee: grandCents => cardFee(rules, grandCents),
     // A snow bid's words and products (estimate.js).
     snowBid: () => snowBid(rules),
     // services.js, "Your other lists".

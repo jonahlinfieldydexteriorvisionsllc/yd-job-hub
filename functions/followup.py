@@ -1569,7 +1569,8 @@ WELCOME_HEAD = (
 )
 WELCOME_STEPS = (                   # (for which jobs, the words)
     ("all", "Deposit: you'll get the deposit invoice from QuickBooks by email. You can pay it online with the "
-            "button in that email (a bank transfer costs you nothing), or by check made out to YD Exterior Visions LLC."),
+            "button in that email (a bank transfer costs you nothing, a card adds a 3.5% fee), or by check made out "
+            "to YD Exterior Visions LLC."),
     ("materials", "Scheduling: once the deposit is in, we order your materials and put you on the schedule, "
                   "and we'll be in touch with a start date."),
     ("no materials", "Scheduling: once the deposit is in, we put you on the schedule, "

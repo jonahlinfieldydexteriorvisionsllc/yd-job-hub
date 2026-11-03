@@ -937,28 +937,46 @@ def _estimate_lines(body):
 END_LINES_MAX = 10               # products on the end of one estimate
 
 
+def _product(name):
+    """A product's id and its description in QuickBooks, read now, so a change
+    made there is on the next estimate. Customers e-sign the estimate itself,
+    so a product that is missing or has no text stops the estimate rather than
+    go out without it."""
+    hit = next((i for i in _query("Item", "Name = '%s'" % _quote(name))
+                if i.get("Type") != "Category" and i.get("Active", True)), None)
+    if not hit:
+        raise RuntimeError('QuickBooks has no product called "%s". Add it there with its text, '
+                           "or take it off the list in Pricing rules." % name)
+    text = str(hit.get("Description") or "").strip()
+    if not text:
+        raise RuntimeError('The QuickBooks product "%s" has no description -- its text is what goes '
+                           "on the estimate." % name)
+    return hit["Id"], text
+
+
 def _end_lines(body):
     """The $0 lines every estimate ends with, in order: the warranty, then the
     terms and conditions -- one QuickBooks product each, written in
     QuickBooks (a product's description holds 4000 characters, as a line
-    does). Each line carries its product's own description, read now, so a
-    change made there is on the next estimate. Customers e-sign the estimate
-    itself, so a product that is missing or has no text stops the estimate
-    rather than go out without it."""
+    does)."""
     out = []
     names = [n for n in (_qb_name(x) for x in body.get("endItems") or []) if n]
     for name in names[:END_LINES_MAX]:
-        hit = next((i for i in _query("Item", "Name = '%s'" % _quote(name))
-                    if i.get("Type") != "Category" and i.get("Active", True)), None)
-        if not hit:
-            raise RuntimeError('QuickBooks has no product called "%s". Add it there with its text, '
-                               "or take it off the list in Pricing rules." % name)
-        text = str(hit.get("Description") or "").strip()
-        if not text:
-            raise RuntimeError('The QuickBooks product "%s" has no description -- its text is what goes '
-                               "on the estimate." % name)
-        out.append(_line(hit["Id"], 0, text))
+        item, text = _product(name)
+        out.append(_line(item, 0, text))
     return out
+
+
+def _card_fee_line(body):
+    """What paying by card would add (pricing.js cardFee): a $0 line, so it is
+    not in the estimate's total or the job's price, with the job's figure in
+    its words. His product already says the percent. It goes onto the invoice
+    with every other line, where he types the amount in if they pay by card."""
+    note = str(body.get("cardFeeNote") or "").strip()
+    if not note:
+        return []
+    item, text = _product(CARD_FEE_ITEM)
+    return [_line(item, 0, text + "\n\n" + note)]
 
 
 # A snow bid (estimate.js, Jonah 16 Oct 2026: "i bid snow at the moment per
@@ -1153,7 +1171,7 @@ def save_estimate(body):
 
     # A missing warranty or terms product -- or snow product -- is found
     # before a customer is made for nothing.
-    ends = [] if snow else _end_lines(body)
+    ends = [] if snow else _card_fee_line(body) + _end_lines(body)
     snow_lines = _snow_bid_lines(snow) if snow else None
     customer_id = _customer_for(c, str(body.get("customerId") or "") if same else "")
     lines = snow_lines if snow else _estimate_lines(body)
@@ -1448,11 +1466,11 @@ def _invoice_record(inv):
     the change orders on it (_invoice_changes)."""
     env = _env("QB_ENV", "sandbox")
     tax = _amount((inv.get("TxnTaxDetail") or {}).get("TotalTax"))
-    # QuickBooks' automatic late fees are charges on the bill, not the work's
-    # price: left out of what it comes to.
+    # QuickBooks' automatic late fees, and the card fee when he adds it, are
+    # charges on the bill, not the work's price: left out of what it comes to.
     tax += sum(_amount(ln.get("Amount")) for ln in _flat_lines(inv.get("Line"))
                if ln.get("DetailType") == "SalesItemLineDetail"
-               and LATE_FEE.search(str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "")))
+               and BILL_FEE.search(str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "")))
     return {
         "id": inv.get("Id"), "docNumber": inv.get("DocNumber"),
         "total": inv.get("TotalAmt"), "balance": inv.get("Balance"), "dueDate": inv.get("DueDate"),
@@ -1502,7 +1520,7 @@ def _invoice_changes(inv):
         item = str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "").strip()
         short = item.split(":")[-1].strip()
         cents = _cents(ln.get("Amount"))
-        if LATE_FEE.search(item) or not cents:
+        if BILL_FEE.search(item) or not cents:
             continue
         said = [s.strip() for s in str(ln.get("Description") or "").splitlines() if s.strip()]
         out.append({"id": str(ln.get("Id") or ""), "item": short[:100], "name": (said[0] if said else short or "Change order")[:200],
@@ -2284,7 +2302,9 @@ def _end_names():
     return {" ".join(n.lower().split()) for n in names if n.strip()} | set(END_ALWAYS)
 
 
-LATE_FEE = re.compile(r"\blate\s*fee", re.I)
+# The card fee's product; the same name is in pricing.js (CARD_FEE_ITEM).
+CARD_FEE_ITEM = "Online Transaction Fee"
+BILL_FEE = re.compile(r"\blate\s*fee|\b%s\b" % re.escape(CARD_FEE_ITEM), re.I)
 
 
 def _hub_estimate(e, end_names, stamp):
@@ -2301,8 +2321,8 @@ def _hub_estimate(e, end_names, stamp):
             short = item.split(":")[-1].strip()
             if " ".join(short.lower().split()) in end_names or " ".join(item.lower().split()) in end_names:
                 continue
-            # QuickBooks' automatic late fees are charges on the bill, not work.
-            if LATE_FEE.search(item):
+            # Late fees and the card fee are charges on the bill, not work.
+            if BILL_FEE.search(item):
                 continue
             if MATERIAL_ITEM.search(short):
                 materials_cents += _cents(ln.get("Amount"))

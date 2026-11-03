@@ -317,7 +317,7 @@
     'Thank you for accepting our estimate for your {work} — we\'re glad to be working with you.\n\n' +
     'Here\'s what happens next:\n\n' +
     '1. Deposit: you\'ll get the deposit invoice from QuickBooks by email. You can pay it online with the ' +
-    'button in that email (a bank transfer costs you nothing), or by check made out to YD Exterior Visions LLC.\n\n' +
+    'button in that email (a bank transfer costs you nothing, a card adds a 3.5% fee), or by check made out to YD Exterior Visions LLC.\n\n' +
     '2. Scheduling: once the deposit is in, we order your materials and put you on the schedule, ' +
     'and we\'ll be in touch with a start date.\n\n' +
     '3. Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few ' +

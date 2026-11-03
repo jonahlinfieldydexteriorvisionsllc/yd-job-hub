@@ -2148,6 +2148,13 @@
   // A line's description with the materials in its price named after it.
   const withIncludes = w => w.scope.trim() + (w.includes && w.includes.length
     ? (w.scope.trim() ? '\n\n' : '') + 'Materials included: ' + w.includes.join('; ') : '');
+  // The card fee line's words for this job: its product's own text comes first
+  // (quickbooks.py _card_fee_line). Never in the price: the line is $0.
+  function cardFeeLine(r) {
+    const f = P().cardFee(r.grandCents);
+    return f ? { item: f.item, note: 'On this job that comes to ' + cents(f.cents) + ' if the whole ' + cents(r.grandCents) +
+      ' is paid by card. It is not in the total on this estimate.' } : null;
+  }
   function renderCustomer(r) {
     const box = el('estCustomer');
     if (!box) return;
@@ -2167,7 +2174,15 @@
     // The warranty and the terms end every estimate: QuickBooks products
     // (Pricing rules), shown with their text once QuickBooks has answered.
     const ends = P().endItems(whoFor());
-    if (ends.length && sends()) P().loadQbProducts();
+    const fee = cardFeeLine(r);
+    if ((ends.length || fee) && sends()) P().loadQbProducts();
+    if (fee) {
+      const p = P().qbProduct(fee.item);
+      rows.push('<div class="cv-line cv-end"><div class="cv-text"><b>' + esc(fee.item) + '</b>' +
+        '<div class="cv-scope' + (p === null ? ' warn-text' : '') + '">' +
+        esc(p === null ? 'Not in QuickBooks — add this product (with its text) before sending.' : ((p ? p.text.trim() + '\n\n' : '') + fee.note)) + '</div>' +
+        '</div><div class="cv-amt">' + cents(0) + '</div></div>');
+    }
     ends.forEach(n => {
       const p = P().qbProduct(n);
       const text = p ? p.text.trim() : p === null ? 'Not in QuickBooks yet — add this product (with its text) before sending.' : '';
@@ -5223,8 +5238,9 @@
         materialParts: parts.map(m => ({ head: m.head, list: m.list, cents: m.cents, taxable: m.taxed })),
         materials: { list: P().materialsList(r), cents: r.materialsCents },
         memo: String(est.memo || '').trim() || defaultMemo(r.grandCents),
-        // The warranty and terms products, last (their text is read from
-        // QuickBooks by the server).
+        // The $0 card fee line, then the warranty and terms products, last
+        // (their text is read from QuickBooks by the server).
+        cardFeeNote: (cardFeeLine(r) || {}).note || '',
         endItems: P().endItems(whoFor()),
         // A home gets Wisconsin's lien-waiver notice attached (a separate
         // page it must have before signing); the server attaches it once.
