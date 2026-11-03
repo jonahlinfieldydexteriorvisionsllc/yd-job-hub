@@ -1125,6 +1125,13 @@
       updatedAt: nowIso(), updatedBy: myName(),
     };
     if (more) {
+      // The note's own words without the day it named, when that day is
+      // the card's due date (jot.js).
+      if (more.title) rec.title = String(more.title).slice(0, 200);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(more.due || '')) {
+        rec.due = more.due;
+        if (/^\d{2}:\d{2}$/.test(more.dueTime || '')) rec.dueTime = more.dueTime;
+      }
       if (more.type) rec.type = more.type;
       if (more.job && more.job.id) Object.assign(rec, { jobId: more.job.id, jobName: more.job.name, jobNum: more.job.num || null });
       if (more.people && more.people.length) rec.assignees = more.people.map(p => ({ uid: p.uid, name: p.name }));
@@ -1230,10 +1237,22 @@
         : has(/\bdeliver(y|ed)?\b/) ? 'delivery' : 'todo';
     }
     if (!b) return null;
-    const type = kindOn(b, kind);
+    return suggestOn(b, kindOn(b, kind), job, crew);
+  }
+  // A note's place on one board: its kind there (one the board offers), the
+  // job it names, and the crew member for the boards that have people.
+  function suggestOn(b, type, job, crew) {
     return { boardId: b.id, boardName: b.name, type: type, kind: type ? YDRemind.typeById(type) : null,
              job: b.id === 'wishes' || b.id === 'tobuy' ? null : job,
              people: b.id === 'crew' || b.id === 'maintenance' ? crew.map(p => ({ uid: p.uid, name: p.name })) : [] };
+  }
+  // The same for a board picked another way -- where notes like it went
+  // before (jot.js) -- with that kind when the board offers it.
+  function noteOnBoard(text, boardId, kind) {
+    const b = visibleBoards().find(x => x.id === boardId && !x.virtual && !/^inbox/.test(x.id) && editsBoard(x));
+    if (!b) return null;
+    const t = wordsOfNote(text);
+    return suggestOn(b, kind && YDRemind.boardKinds(b).some(k => k.id === kind) ? kind : null, noteJob(t), crewNamed(t));
   }
   // Onto the board it belongs on: made there, then taken off the inbox.
   // `more`: what the suggestion added (its kind, the job, the crew member).
@@ -1245,6 +1264,32 @@
     deleteCards(boards[id], [cardId]);
     redrawIfVisible(); cardsChanged();
     showToast('Moved to ' + to.name);
+    return true;
+  }
+  // A card straight from a note in the box (jot.js: one whose place is
+  // known), and its Undo.
+  function cardFromNote(boardId, text, more) {
+    const to = boards[boardId];
+    if (!to || to.virtual || /^inbox/.test(boardId) || !editsBoard(to) || !String(text || '').trim()) return '';
+    const id = newCardOn(boardId, text, null, more);
+    redrawIfVisible(); cardsChanged();
+    return id;
+  }
+  function dropNoteCard(boardId, cardId) {
+    const b = boards[boardId];
+    if (!b || b.virtual || !(cards[boardId] || {})[cardId] || !editsBoard(b)) return false;
+    deleteCards(b, [cardId]);
+    return true;
+  }
+  // What sorting notes has taught (jot.js), kept on this person's own inbox
+  // board -- the same on each of their devices, and nobody else's: the
+  // owner's private board, an admin's inbox-<uid>.
+  const learnedNotes = () => { const b = boards[inboxId()]; return (b && b.jotLearn) || null; };
+  function learnFromNotes(rec) {
+    const board = ensureInbox();
+    if (!board || !rec) return false;
+    board.jotLearn = rec;
+    write('boards', board.id, { jotLearn: rec, updatedAt: nowIso() }, 'what the notes taught');
     return true;
   }
 
@@ -4006,6 +4051,11 @@
     inboxAdd: inboxAdd,
     inboxSort: inboxSort,
     noteSuggest: noteSuggest,
+    noteOnBoard: noteOnBoard,
+    cardFromNote: cardFromNote,
+    dropNoteCard: dropNoteCard,
+    learnedNotes: learnedNotes,
+    learnFromNotes: learnFromNotes,
     inboxDrop: id => window.bdDeleteCard(inboxId(), id),
     sortTargets: () => visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && editsBoard(b)),
     // One board's columns drawn on another tab -- the Maintenance board on

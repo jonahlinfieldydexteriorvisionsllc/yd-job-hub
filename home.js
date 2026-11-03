@@ -552,14 +552,113 @@
     if (!signedIn() || !window.YDBoards || !YDBoards.inbox || !YDBoards.jots || !YDBoards.jots()) return '';
     const n = YDBoards.inbox().length;
     const toJonah = !isOwner() && window.YDCrewNotes && YDCrewNotes.send;
+    const who = window.YDJot && YDJot.example ? YDJot.example() : '';
     return '<div class="hm-jot">' +
-      '<div class="hm-note-add' + (toJonah ? ' two' : '') + '"><input id="hmNoteBox" maxlength="500" placeholder="📝 Jot a note — sort it later" ' +
-        'enterkeyhint="done" onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" autocomplete="off">' +
+      '<div class="hm-note-add' + (toJonah ? ' two' : '') + '"><input id="hmNoteBox" maxlength="500" placeholder="' +
+        esc(who ? '📝 Jot a note — or “have ' + who + ' pick up …”' : '📝 Jot a note — sort it later') + '" ' +
+        'enterkeyhint="done" onkeydown="if(event.key===\'Enter\'){event.preventDefault();homeNoteAdd()}" ' +
+        'oninput="homeJotTyped(this.value)" autocomplete="off">' +
         '<button type="button" class="btn btn-filled" onclick="homeNoteAdd()">' + (toJonah ? 'Add for me' : 'Add') + '</button>' +
         (toJonah ? '<button type="button" class="btn" onclick="homeNoteJonah()">📨 For Jonah</button>' : '') + '</div>' +
+      '<div id="hmJotAct" class="hm-jot-act">' + jotActHtml() + '</div>' +
       (n ?'<button type="button" class="hm-jot-n" onclick="homeGo(\'notes\')">' + n + (n === 1 ? ' note' : ' notes') + ' to sort ↓</button>' : '') +
     '</div>';
   }
+
+  // What the note in the box will do, said under it as it is typed (jot.js;
+  // Jonah, 2 Nov 2026: "if i write have cesar pickup blank itll auto add to
+  // calendar", and "actively learn ... so that eventually it is capable of
+  // auto doing most things i jot into it"). A note for someone: "Add puts
+  // it on Cesar’s day · today", with the day and the people a tap to
+  // change. One like notes that always went one place: "Add puts it on
+  // Pickups". Either way "Just a note" keeps it a note to sort. Short of
+  // that, where it most likely goes is a button to put it there now -- and
+  // "👤 For someone" puts a note that names nobody on a crew member's day.
+  let jotText = '';                                   // the box's words, as typed
+  let jotPick = { who: null, day: null, open: false }; // tapped under the box
+  let jotPlain = false;                               // "Just a note" tapped
+  function jotRead() {
+    return window.YDJot && jotText.trim() ? YDJot.read(jotText, { pick: jotPick, plain: jotPlain }) : null;
+  }
+  function jotClear() { jotText = ''; jotPick = { who: null, day: null, open: false }; jotPlain = false; }
+  const chip = (on, words, call) => '<button type="button" class="hm-jot-chip' + (on ? ' on' : '') + '" onclick="' + call + '">' +
+    (on ? '✓ ' : '') + esc(words) + '</button>';
+  function jotActHtml() {
+    const r = jotRead();
+    if (!r) return '';
+    const plan = r.auto, rows = [];
+    if (plan) {
+      rows.push('<div class="hm-jot-says">Add puts it on <b>' + esc(YDJot.says(plan)) + '</b>' +
+        (plan.why === 'learned' ? ' <small>— where ' + plan.times + ' notes like it went</small>' : '') + '</div>');
+    } else if (r.offer) {
+      rows.push('<button type="button" class="btn btn-sm hm-jot-go" onclick="homeJotGo()">→ ' + esc(YDJot.says(r.offer)) + '</button>');
+    }
+    const chips = [];
+    if (plan && plan.how === 'cal') {
+      const t = today();
+      for (let i = 0; i < 7; i++) {
+        const d = addDays(t, i);
+        chips.push(chip(plan.date === d, i === 0 ? 'Today' : i === 1 ? 'Tomorrow' :
+          new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' }), 'homeJotDay(\'' + d + '\')'));
+      }
+    }
+    if (r.forCan && (jotPick.open || (plan && plan.how === 'cal'))) {
+      const on = plan && plan.how === 'cal' ? plan.crew.map(p => p.uid) : [];
+      if (chips.length) chips.push('<span class="hm-jot-gap"></span>');
+      r.people.forEach(p => chips.push(chip(on.indexOf(p.uid) !== -1, '👤 ' + p.name.split(' ')[0], 'homeJotWho(\'' + safe(p.uid) + '\')')));
+    } else if (r.forCan) {
+      chips.push('<button type="button" class="hm-jot-chip" onclick="homeJotFor()">👤 For someone…</button>');
+    }
+    if (plan) chips.push('<button type="button" class="hm-jot-chip hm-jot-plain" onclick="homeJotPlain()">📝 Just a note</button>');
+    if (chips.length) rows.push('<div class="hm-jot-chips">' + chips.join('') + '</div>');
+    return rows.join('');
+  }
+  function jotRedraw() {
+    const a = el('hmJotAct');
+    if (a) a.innerHTML = jotActHtml();
+  }
+  window.homeJotTyped = function (v) {
+    jotText = String(v || '');
+    // A new note: what was tapped for the last one goes with it.
+    if (!jotText.trim()) jotClear();
+    jotRedraw();
+  };
+  window.homeJotFor = function () { jotPick.open = true; jotPlain = false; jotRedraw(); };
+  window.homeJotPlain = function () { jotPlain = true; jotPick.open = false; jotRedraw(); };
+  window.homeJotDay = function (d) { jotPick.day = d; jotRedraw(); };
+  // On or off the entry. Taking off everybody leaves it a note.
+  window.homeJotWho = function (uid) {
+    const r = jotRead();
+    const on = r && r.auto && r.auto.how === 'cal' ? r.auto.crew.map(p => p.uid) : [];
+    const at = on.indexOf(uid);
+    if (at === -1) on.push(uid); else on.splice(at, 1);
+    jotPick.who = on;
+    jotPick.open = true;
+    jotPlain = false;
+    jotRedraw();
+  };
+  // Done straight away: what the box would have done, or what it offered.
+  // Undo puts it back as a note to sort.
+  function jotDone(done) {
+    const box = el('hmNoteBox');
+    if (box) box.value = '';
+    jotClear();
+    if (typeof showUndo === 'function' && done.undo) {
+      showUndo(done.said, () => { done.undo(); showToast('Kept as a note to sort'); render(); }, 9000);
+    } else showToast(done.said);
+    render();
+    const again = el('hmNoteBox');
+    if (again) again.focus();
+  }
+  window.homeJotGo = function () {
+    const box = el('hmNoteBox');
+    const text = box ? box.value.trim() : '';
+    if (!text || !window.YDJot) return;
+    jotText = text;
+    const r = jotRead();
+    const done = r && r.offer ? YDJot.act(text, r.offer) : null;
+    if (done) jotDone(done); else showToast('Couldn’t put it there — add it as a note');
+  };
   // The notes waiting -- only when there are some.
   function notesHtml() {
     if (!signedIn() || !window.YDBoards || !YDBoards.inbox || !YDBoards.jots || !YDBoards.jots()) return '';
@@ -568,12 +667,11 @@
     const targets = sortOpen ? YDBoards.sortTargets() : [];
     const rows = list.map(k => {
       const open = k.id === sortOpen;
-      // Where it most likely goes (boards.js noteSuggest: its words, plain
-      // code), a tap to put it there -- "Somewhere else" is every board.
-      const s = YDBoards.noteSuggest ? YDBoards.noteSuggest(String(k.title || '') + ' ' + String(k.notes || '')) : null;
-      const said = s ? [esc(s.boardName || 'Board'), s.kind ? s.kind.icon + ' ' + esc(s.kind.name) : '',
-        s.job ? '📐 ' + esc(s.job.name) : '', s.people.length ? '👤 ' + s.people.map(p => esc(p.name)).join(', ') : '']
-        .filter(Boolean).join(' · ') : '';
+      // Where it most likely goes (jot.js: someone's day when it says who
+      // it is for, where notes like it went, else boards.js noteSuggest by
+      // its words), a tap to put it there -- "Somewhere else" is every board.
+      const s = notePlan(k);
+      const said = s ? esc(YDJot.says(s)) : '';
       return '<div class="hm-note' + (open ? ' open' : '') + '">' +
         '<div class="hm-note-top"><span class="hm-note-t">' + esc(k.title || '') +
           (k.notes ? '<small>' + esc(String(k.notes).slice(0, 140)) + '</small>' : '') + '</span>' +
@@ -587,11 +685,25 @@
     });
     return card('notes', '📝 Notes to sort', list.length, ['Board', "homeBoard('inbox')"], capped('notes', rows, 6));
   }
+  // A note on the inbox: its words, and where it goes, read from the day it
+  // was written ("tomorrow" in yesterday's note is today).
+  const noteText = k => [String(k.title || ''), String(k.notes || '')].filter(Boolean).join('\n');
+  function notePlan(k) {
+    if (!window.YDJot) return null;
+    const r = YDJot.read(noteText(k), { base: k.createdAt ? localYMD(new Date(k.createdAt)) : '' });
+    return r ? r.auto || r.offer : null;
+  }
   window.homeNoteAdd = function () {
     const box = el('hmNoteBox');
     const text = box ? box.value.trim() : '';
     if (!text) { if (box) box.focus(); return; }
+    // What the line under the box said Add would do (jotActHtml) -- done.
+    jotText = text;
+    const r = jotRead();
+    const done = r && r.auto ? YDJot.act(text, r.auto) : null;
+    if (done) { jotDone(done); return; }
     if (!YDBoards.inboxAdd(text)) { showToast('Notes can’t be saved just yet — still loading'); return; }
+    jotClear();
     box.value = '';
     // On a phone the list is screens below the box: say it went in.
     showToast('Note saved — sort it later');
@@ -605,19 +717,28 @@
     const text = box ? box.value.trim() : '';
     if (!text) { if (box) box.focus(); return; }
     if (!window.YDCrewNotes || !YDCrewNotes.send || !YDCrewNotes.send(text)) { showToast('Not sent — try again in a moment'); return; }
+    jotClear();
     box.value = '';
     render();
   };
   window.homeNoteSort = function (id) { sortOpen = sortOpen === id ? '' : id; render(); };
-  window.homeNoteTo = function (id, boardId) { sortOpen = ''; YDBoards.inboxSort(id, boardId); render(); };
-  // The note to where it most likely goes (noteSuggest), with its kind, job
-  // and crew member.
+  // Each sort is an example for the notes after it (jot.js).
+  window.homeNoteTo = function (id, boardId) {
+    sortOpen = '';
+    const k = (YDBoards.inbox() || []).find(x => x.id === id);
+    if (YDBoards.inboxSort(id, boardId) && k && window.YDJot) YDJot.sorted(noteText(k), boardId);
+    render();
+  };
+  // The note to where it most likely goes (notePlan), with its kind, job,
+  // crew member and day.
   window.homeNoteGo = function (id) {
     const k = (YDBoards.inbox() || []).find(x => x.id === id);
-    const s = k && YDBoards.noteSuggest(String(k.title || '') + ' ' + String(k.notes || ''));
-    if (!s) return;
+    const plan = k && notePlan(k);
+    if (!plan) return;
     sortOpen = '';
-    YDBoards.inboxSort(id, s.boardId, s);
+    const done = YDJot.act(noteText(k), plan, id);
+    if (done && done.undo && typeof showUndo === 'function') showUndo(done.said, () => { done.undo(); render(); }, 9000);
+    else if (!done) showToast('Couldn’t put it there');
     render();
   };
   window.homeNoteDrop = async function (id) { await YDBoards.inboxDrop(id); render(); };

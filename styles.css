@@ -5655,6 +5655,21 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
      one wide button under it, its words wrapping on a phone. */
   .hm-note-go { width:100%; margin-top:6px; text-align:left; white-space:normal; line-height:1.3; min-height:44px; }
 
+  /* What the note in the box will do (home.js jotActHtml, jot.js): a line
+     saying so, then the day and the people as tap buttons that wrap -- never
+     a row to slide sideways on a phone. */
+  .hm-jot-act:empty { display:none; }
+  .hm-jot-act { display:grid; gap:6px; margin-top:6px; }
+  .hm-jot-says { font-size:14px; line-height:1.35; color:var(--text); overflow-wrap:anywhere; }
+  .hm-jot-says small { color:var(--muted); font-size:12px; }
+  .hm-jot-go { width:100%; text-align:left; white-space:normal; line-height:1.3; min-height:40px; }
+  .hm-jot-chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .hm-jot-chip { min-height:38px; padding:6px 12px; border-radius:999px; border:1px solid var(--border-strong);
+    background:var(--surface); color:var(--text); font:600 13px 'DM Sans',sans-serif; cursor:pointer; }
+  .hm-jot-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .hm-jot-chip.hm-jot-plain { color:var(--muted); }
+  .hm-jot-gap { flex-basis:100%; height:0; }
+
   /* Receipts: bills not paid yet (receipts.js payHtml), one row each with
      when it is due; the year's pull folded under them. */
   .rc-pay-old { margin-top:12px; padding-top:8px; border-top:1px dashed var(--border-strong); }

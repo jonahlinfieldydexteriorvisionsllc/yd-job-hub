@@ -3805,6 +3805,41 @@
     };
   }
 
+  // A note jotted on Home that is for someone or for a day (jot.js: "have
+  // Cesar pick up ..." goes on his day), made as the editor makes an entry:
+  // the calendar's own write, who made it, no tag of its own (it follows the
+  // title, so "pick up" is a pickup), the usual reminder. `rec`: { title,
+  // date, time, crew [{uid, name}], notes }. Its id, or '' when this person
+  // may not add to that calendar.
+  function addFromNote(calId, rec) {
+    const cal = cals[calId];
+    if (!cal || !editsCal(cal) || cal.kind === 'jobs' || !rec || !rec.title || !/^\d{4}-\d{2}-\d{2}$/.test(rec.date || '')) return '';
+    const t = /^\d{2}:\d{2}$/.test(rec.time || '') ? rec.time : '';
+    const endOf = s => { const m = Number(s.slice(0, 2)) * 60 + Number(s.slice(3)) + 60; return m >= 24 * 60 ? '23:59' : two(Math.floor(m / 60)) + ':' + two(m % 60); };
+    const id = newId('ev');
+    const out = Object.assign({
+      title: String(rec.title).slice(0, 200), date: rec.date, endDate: null, allDay: !t, time: t || null, endTime: t ? endOf(t) : null,
+      repeat: 'none', repeatUntil: null, jobId: rec.jobId || null, jobName: rec.jobId ? rec.jobName || null : null, address: '',
+      crew: (rec.crew || []).filter(c => c && c.uid).map(c => ({ uid: c.uid, name: c.name || '' })),
+      notes: String(rec.notes || '').trim(), type: null, place: null,
+      createdAt: nowIso(), createdBy: (me() || {}).uid || null, updatedAt: nowIso(), fromNote: true,
+    }, YDRemind.fromChoice('', null, (me() || {}).uid));
+    events[calId] = events[calId] || {};
+    events[calId][id] = Object.assign({ id: id }, out);
+    write('calendars/' + calId + '/events', id, out, 'saving ' + out.title);
+    redrawIfVisible(); announce();
+    return id;
+  }
+  // Undo of the above: the entry, gone again (only one made that way).
+  function dropFromNote(calId, id) {
+    const ev = (events[calId] || {})[id];
+    if (!ev || !ev.fromNote || !editsCal(cals[calId])) return false;
+    delete events[calId][id];
+    removeEvent(calId, id);
+    redrawIfVisible(); announce();
+    return true;
+  }
+
   window.YDCalendar = {
     // Called as the calendar is opened (app.js switchTab): a fresh look, so
     // the "any time" list above it opens or folds by the day again
@@ -3835,6 +3870,14 @@
     // Home (see homeDay above). `ready`: the calendars have answered once.
     ready: () => calsHeard,
     adds: () => adds(),
+    // Home's note box (jot.js): an entry from a note, and Undo of it; who
+    // can be put on one (the editor's people list -- empty on a phone that
+    // has none); a calendar, and whether this person may add to it.
+    addFromNote: addFromNote,
+    dropFromNote: dropFromNote,
+    people: () => crewPeople(),
+    cal: id => cals[id] || null,
+    canAddTo: id => !!cals[id] && editsCal(cals[id]) && cals[id].kind !== 'jobs',
     day: homeDay,
     // A day's count (homeDay's count / crewCount) in the words every screen
     // uses: "3 to do today · 2 from earlier".

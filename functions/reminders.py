@@ -173,6 +173,7 @@ def run():
         ("urgent cards", (boards,), lambda: _urgent_cards(db, people, now, boards)),
         ("card reminders", (boards,), lambda: _card_reminders(db, people, since, now, boards)),
         ("usual reminders", (cals, boards), lambda: _usual(db, people, since, now, cals, boards, prefs)),
+        ("put on their day", (cals,), lambda: _put_on(db, people, since, now, cals, prefs)),
         ("crew activity", (cals, boards), lambda: _activity(db, people, now, cals, boards, prefs)),
         ("crew notes", (), lambda: crew_notes(db, people, now)),
         ("crew shifts", (), lambda: crew_shifts(db, people, now)),
@@ -1383,6 +1384,58 @@ def _usual(db, people, since, now, cals, boards, prefs):
             head = where + (" · " + head if head else " today")
         buzz(uid, "auto_%s_day_%s" % (uid, today.isoformat()), head,
              " · ".join(names) + (" +%d more" % more if more > 0 else ""), "yd-day-" + today.isoformat())
+    return out
+
+
+# ------------------------------------------------ put on someone's day
+#
+# Jonah (2 Nov 2026): "if i write have cesar pickup blank itll auto add to
+# calendar" (home.js, jot.js). Something put on a person's day for TODAY by
+# somebody else, once the 7 am list has gone, would otherwise reach them
+# only at its time (and an any-time one not at all) -- so they are told
+# as it is made, once: "📅 Jonah put this on your day". One for a later
+# day is in that day's 7 am list as usual.
+
+def _put_on(db, people, since, now, cals, prefs):
+    out = []
+    today = now.date()
+    seven = datetime.datetime(today.year, today.month, today.day, ALL_DAY_HOUR, 0, tzinfo=dg.TZ)
+    for cal_id, cal, _, evs in cals:
+        for eid, ev in (evs or {}).items():
+            try:
+                made = _when(ev.get("createdAt"))
+                # Made before 7 am: the day's list carries it.
+                if made is None or made < max(since, seven) or str(ev.get("date") or "") != today.isoformat():
+                    continue
+                if ev.get("noReminder") or (ev.get("done") or {}).get(today.isoformat()):
+                    continue
+                maker = ev.get("createdBy") or ""
+                kind = _type_of(ev, cal=cal)
+                icon = (_tag_of(kind, cal) or {}).get("icon") or ""
+                when = dg._fmt_time(ev.get("time")) if ev.get("time") and not ev.get("allDay") else "any time"
+                by = (dg._name(people.get(maker)) or "Someone").split()[0] if maker in people else "Someone"
+                for cr in ev.get("crew") or []:
+                    uid = cr.get("uid") if isinstance(cr, dict) else None
+                    u = people.get(uid) if uid else None
+                    if not u or uid == maker or not _can_see(u, cal) or not (prefs.get(uid) or {}).get("autoRemind"):
+                        continue
+                    claim = db.collection("reminderLog").document("puton_%s_%s_%s" % (cal_id, eid, uid))
+                    try:
+                        claim.create({"uid": uid, "at": now.isoformat()})
+                    except AlreadyExists:
+                        continue
+                    title = (icon + " " if icon else "") + str(ev.get("title") or "Something to do")
+                    try:
+                        out.append({"uid": uid, "putOn": eid, "phones": dg.send_push(
+                            uid, {"push": {"title": "📅 %s put this on your day" % by,
+                                           "body": "%s · %s today · %s" % (title[:80], when, cal.get("name") or "Calendar")}},
+                            tag="yd-puton-%s_%s" % (cal_id, eid), ttl=6 * 3600, opens="calendar")})
+                    except Exception as err:      # noqa: BLE001
+                        print("reminders: put-on push failed:", uid, eid, err)
+                        if isinstance(err, dg.PushFailed):
+                            _give_back(claim)
+            except Exception as err:          # noqa: BLE001
+                print("reminders: entry", cal_id, eid, "not looked at for put-on:", err)
     return out
 
 
