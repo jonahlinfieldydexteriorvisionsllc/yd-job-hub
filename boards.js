@@ -441,18 +441,42 @@
     if (list.length < GROUP_FROM) return '<div class="bd-picker">' + list.map(chipHtml).join('') + add + '</div>';
     const groups = GROUPS.filter(g => list.some(b => groupOf(b) === g[0]));
     const open = groups.some(g => g[0] === groupOpen) ? groupOpen : groupOf(board);
+    // Jonah, 2 Nov 2026: "i need to be able to move boards easily to other
+    // areas" -- the board on screen moves to another group with a tap here,
+    // not only from Board settings.
+    const moving = editsBoards() && board && board.id && boards[board.id] && groupOf(board) === open
+      ? (moveOpen
+        ? '<span class="bd-move">Move “' + esc(board.name || 'this board') + '” to: ' + GROUPS.filter(g => g[0] !== groupOf(board))
+            .map(([id, name]) => '<button type="button" class="btn btn-sm" onclick="bdMoveTo(\'' + id + '\')">' + esc(name) + '</button>').join(' ') +
+            ' <button type="button" class="link-btn" onclick="bdMoveOpen(false)">Cancel</button></span>'
+        : '<button type="button" class="link-btn bd-move" onclick="bdMoveOpen(true)">⇄ Move this board</button>')
+      : '';
     return '<div class="bd-groups" role="group" aria-label="Board groups">' + groups.map(([id, name]) => {
         const on = id === open;
         return '<button type="button" class="bd-group' + (on ? ' on' : '') + '" aria-pressed="' + on + '"' +
           ' onclick="bdGroup(\'' + id + '\')">' + esc(name) +
           ' <span class="bd-group-n">' + list.filter(b => groupOf(b) === id).length + '</span></button>';
-      }).join('') + '</div>' +
+      }).join('') + moving + '</div>' +
       '<div class="bd-picker">' + list.filter(b => groupOf(b) === open).map(chipHtml).join('') + add + '</div>';
   }
+  let moveOpen = false;
   window.bdGroup = function (id) {
     if (!GROUPS.some(g => g[0] === id)) return;
     groupOpen = id;
+    moveOpen = false;
     render();
+  };
+  window.bdMoveOpen = function (on) { moveOpen = !!on; render(); };
+  window.bdMoveTo = function (g) {
+    const b = current && boards[current];
+    const to = GROUPS.find(x => x[0] === g);
+    if (!b || !to || !editsBoards()) return;
+    boards[current] = Object.assign({}, b, { group: g });
+    write('boards', current, { group: g }, 'moving the board');
+    groupOpen = g;
+    moveOpen = false;
+    render();
+    showToast((b.name || 'Board') + ' moved to ' + to[1]);
   };
 
   // ---------------------------------------------------------------- render
