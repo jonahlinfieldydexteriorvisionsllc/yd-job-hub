@@ -958,14 +958,19 @@
     const chase = b.toChase().filter(x => !taken[x.j._id]);
     chase.forEach(x => { taken[x.j._id] = true; });
     const waiting = take(open.filter(j => b.bidColumn(j) === 'sent'));
-    const toDo = take(open.filter(j => ['siteVisit', 'toSend'].indexOf(b.bidColumn(j)) !== -1));
-    return { open, yes, no, drafted, chase, waiting, toDo };
+    // Jonah, 2 Nov 2026: "my home page should show bids i actively need to be
+    // sending and the ones i need to be chasing" -- the To send column is
+    // its own group, counted as needing him, apart from the site visits.
+    const toSend = take(open.filter(j => b.bidColumn(j) === 'toSend'));
+    const toDo = take(open.filter(j => b.bidColumn(j) === 'siteVisit'));
+    return { open, yes, no, drafted, chase, waiting, toSend, toDo };
   }
 
   function bidsHtml(all) {
     const g = seesJobs() ? bidGroups(all) : null;
     if (!g) return '';
     const { open, yes, drafted, chase, waiting, toDo } = g;
+    const toSend = g.toSend || [];
     const bc = j => B().bidColumn(j);
     const row = (j, words, late) => '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
       '<span class="hm-job-m">' + jobNameHtml(nameOf(j), numOf(j)) +
@@ -980,14 +985,14 @@
     const body = !open.length && !no.length ? empty('No bids open right now.') :
       (yes.length ? sub('✅ Said yes in QuickBooks — book it', yes.length) + capped('bidY', yes.map(j => row(j, 'Open it and press Make it a job'))) : '') +
       (drafted.length ? sub('📝 Estimate ready — check it & send', drafted.length) + capped('bidD', drafted.map(j => row(j, servicesOf(j)))) : '') +
+      (toSend.length ? sub('📤 Bids to send', toSend.length) + capped('bidS', toSend.map(j => row(j, servicesOf(j) || 'Bid to send'))) : '') +
       (chase.length ? sub('📨 Due a follow-up', chase.length) + capped('bidC', chase.map(x =>
         row(x.j, (x.col === 'followUp' ? 'In Follow up · ' : '') + sentWords(x.j), x.days >= 14))) : '') +
       (waiting.length ? sub('🕑 Waiting on the customer', waiting.length) + capped('bidW', waiting.map(j => row(j, sentWords(j)))) : '') +
-      (toDo.length ? sub('📍 Site visits & bids to write', toDo.length) + capped('bidT', toDo.map(j =>
-        row(j, bc(j) === 'siteVisit' ? 'Site visit' : 'Bid to send'))) : '') +
+      (toDo.length ? sub('📍 Site visits', toDo.length) + capped('bidT', toDo.map(j => row(j, 'Site visit'))) : '') +
       (no.length ? sub('✖ Turned down in QuickBooks', no.length) +
         capped('bidN', no.map(j => row(j, 'Open it to mark it lost, or follow up'))) : '');
-    const needs = yes.length + drafted.length + chase.length;
+    const needs = yes.length + drafted.length + toSend.length + chase.length;
     return card('bids', '📋 Bids', needs ? needs + ' need you' : open.length || '', ['Bids board', "homeBoard('bids')"], body, needs > 0);
   }
 

@@ -83,6 +83,14 @@ FORM_SUBJECT = re.compile(r"(?i)form submission|new (form )?(entry|submission|me
 FORM_SENDER = re.compile(r"(?i)@([a-z0-9-]+\.)*(squarespace|squarespace-mail|wix|wixforms|jotform|formspree|"
                          r"google|typeform|wufoo|weebly|godaddy|gator)\.(com|net|info|io|org)$|form")
 ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# A Google Ads (Local Services) lead: "<Name>'s new request" from an address
+# of its own per customer that passes his reply on to them. It is from
+# google.com, so NOT_PEOPLE passed every one over until 2 Nov 2026 (Jonah:
+# "google leads coming in should auto make a card for me with as much info
+# about the client that's included in the google lead email and what service
+# they want"). Read like a website form, its own address the customer's.
+GOOGLE_LEAD = re.compile(r"(?i)^customer-request-\d+@awexpress\.google\.com$")
+GOOGLE_LEAD_SUBJECT = re.compile(r"(?i)new request")
 
 SYSTEM = """You read one email that reached the inbox of Jonah Linfield, owner of YD Exterior Visions \
 LLC -- a small landscaping, hardscaping and snow-removal company near Madison, Wisconsin (Dane and Green \
@@ -98,7 +106,10 @@ snow removal and the like). False for sales pitches, vendors, job seekers, spam,
 subcontractors offering their services, and anything not asking YD to do work. Say why in a few words.
 2. When it is a lead, fill in only what the email says (empty string when it doesn't say): first and last \
 name, business, email, phone, street, city, state (2 letters), zip. For a form email, the customer is \
-the person who filled in the form, not the form company. services: pick from the SERVICES list given \
+the person who filled in the form, not the form company. A Google Ads lead email ("<Name>'s new \
+request", with Name, Location, Service type and Message) is always a lead: the customer is the person \
+named, their town the Location, their email the address it came from (Google passes replies on). \
+services: pick from the SERVICES list given \
 (exact names, at most 4; none that fit -> empty). timing: when they want it, in their words ("this \
 spring", "before Thanksgiving", "" if not said). summary: one plain sentence of what they want, where.
 3. reply: a short, warm first reply in Jonah's voice -- plain words, no sales talk, 4 to 7 short \
@@ -215,10 +226,12 @@ def pass_over(m, known, never):
     dom = _domain(who)
     if who in never or dom in never or sender in never:
         return None, "never touch"
-    if who in known["emails"] or (dom in known["domains"] and not form):
+    if who in known["emails"] or (dom in known["domains"] and not form and not GOOGLE_LEAD.match(who)):
         return None, "known"
     if form:
         return who, "form"
+    if GOOGLE_LEAD.match(sender) and GOOGLE_LEAD_SUBJECT.search(m.get("subject") or ""):
+        return sender, "google"
     if m.get("listUnsubscribe") or str(m.get("precedence") or "").lower() in ("bulk", "list", "junk") or \
             (m.get("autoSubmitted") and str(m.get("autoSubmitted")).lower() != "no"):
         return None, "mailing list or automatic"
@@ -344,6 +357,45 @@ def _passing(err):
     return any(w in name for w in ("Timeout", "Connection", "Overloaded", "Unavailable"))
 
 
+def _lead_card(db, lead_id, rec, r, draft, why):
+    """A card on his My to-dos for each new lead (Jonah, 2 Nov 2026: "draft
+    one the moment a bid comes in and give me a card to do it"): who, where,
+    what and when they want it, how to reach them, and the reply waiting in
+    Drafts. One per lead (its id from the lead's), due today. Never raises:
+    the lead is made either way."""
+    try:
+        board = db.collection("boards").document("todo").get()
+        cols = [c for c in ((board.to_dict() or {}).get("columns") or []) if c.get("id")] if board.exists else []
+        if not cols:
+            return
+        col = next((c["id"] for c in cols if str(c.get("name") or "").strip().lower() == "today"), cols[0]["id"])
+        what = r["summary"] or ", ".join(r["tags"]) or "a request"
+        lines = [("From Google Ads. " if why == "google" else "") + what]
+        if rec.get("address"):
+            lines.append("Where: " + rec["address"])
+        if r["timing"]:
+            lines.append("When: " + r["timing"])
+        reach = [x for x in (r["phone"], r["email"] if why != "google" else "") if x]
+        lines.append("Reach them: " + (", ".join(reach) if reach else "") +
+                     ("" if reach else "reply to the Google email" if why == "google" else "reply to their email"))
+        lines.append("Your reply is in Gmail Drafts: " + draft["link"] if draft.get("link")
+                     else "Customers → Leads → " + rec["name"] + " → Draft a reply")
+        lines.append("Their email: " + rec["fromEmail"]["link"])
+        now = _stamp()
+        db.collection("boards").document("todo").collection("cards").document("lc" + lead_id[2:]).create({
+            "title": ("📨 Reply to " + rec["name"] + " — " + what)[:200], "notes": "\n".join(lines)[:5000],
+            "checklist": [], "column": col, "order": int(dg._now().timestamp() * 1000),
+            "due": dg._now().date().isoformat(), "dueTime": None, "remindMins": None, "hasReminder": False,
+            "remindUids": [], "noReminder": False, "type": "email", "urgency": "high", "labels": [], "color": None,
+            "assignees": [], "jobId": None, "jobName": rec["name"], "jobNum": None, "noClaude": True,
+            "leadId": lead_id, "doneAt": None, "createdAt": now, "createdBy": "Job Hub", "updatedAt": now,
+            "updatedBy": "Job Hub"})
+    except AlreadyExists:
+        pass
+    except Exception as err:    # noqa: BLE001
+        print("leads: card not made for", lead_id, "--", err)
+
+
 def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
     """One email Claude has read: logged, and a lead (with a reply in his
     Drafts when he wants them) when it is someone asking for work. The news
@@ -366,9 +418,9 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
     rec["name"] = _lead_name(r)
     rec["address"] = ", ".join(x for x in (r["street"], r["city"], " ".join(y for y in (r["state"], r["zip"]) if y)) if x)
     rec["note"] = _note(r, m)
-    rec.update(id=lead_id, source="email", addedAt=stamp, fromEmail={
+    rec.update(id=lead_id, source="google" if why == "google" else "email", addedAt=stamp, fromEmail={
         "messageId": mid, "threadId": m["threadId"], "subject": (m["subject"] or "")[:200], "from": who,
-        "form": why == "form", "summary": r["summary"], "timing": r["timing"], "at": stamp,
+        "form": why == "form", "google": why == "google", "summary": r["summary"], "timing": r["timing"], "at": stamp,
         "draft": None,
         "link": dg.gmail_link("all/" + (m["threadId"] or mid))})
     ref = db.collection("customers").document(lead_id)
@@ -397,6 +449,7 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
         else:
             print("leads: reply not drafted for", mid, "--", d.get("error"))
     log.set({"at": stamp, "outcome": "lead", "leadId": lead_id, "from": who, "drafted": bool(draft)})
+    _lead_card(db, lead_id, rec, r, draft, why)
     known["emails"].add(r["email"])
     if phone:
         known["phones"].add(phone)
@@ -450,6 +503,16 @@ def run(client, deadline=None, spent=None):
     except Exception as err:        # noqa: BLE001
         print("leads: inbox not read --", err)
         return news
+    if not conf.get("googleBackAt"):
+        # Once: the Google Ads requests of the last month, from before the
+        # cursor (they were never looked at -- every one was from google.com).
+        try:
+            got = followup_gmail("/messages", {"q": 'in:inbox from:awexpress.google.com subject:"new request" '
+                                                    'newer_than:30d', "maxResults": 50})
+            listed.extend(x["id"] for x in got.get("messages") or [] if x["id"] not in listed)
+            conf_ref.set({"googleBackAt": _stamp()}, merge=True)
+        except Exception as err:    # noqa: BLE001
+            print("leads: the month's Google requests not read --", err)
     ids, logs = [], {}
     for i in reversed(listed):          # oldest first
         snap = db.collection("leadMail").document(i).get()
