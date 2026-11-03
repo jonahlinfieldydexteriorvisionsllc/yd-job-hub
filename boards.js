@@ -746,9 +746,12 @@
     const rows = open.map(s => {
       const word = '<span class="bd-step-w">' + esc(STEP_WORDS[s.id] || s.id) + '</span>';
       const tick = (how, label) => '<button class="btn btn-sm" onclick="chaseMark(\'' + id + '\', \'' + s.id + '\', \'' + how + '\')">' + label + '</button>';
+      // Jonah, 2 Nov: "bids to chase should have lost button not a skip button" -- a
+      // bid he gives up on goes to Lost (its reason asked first), not past one step.
+      const lostBtn = '<button class="btn btn-sm" onclick="chaseLost(\'' + id + '\')">✗ Lost</button>';
       if (s.kind === 'call') {
         return word + (tel ? '<a class="btn btn-sm btn-filled" href="tel:' + esc(tel) + '">📞 Call</a>' : '<span class="bd-chase-none">No phone on the job</span>') +
-          tick('talked', '✓ Talked') + tick('voicemail', '✓ Left a message') + tick('skipped', 'Skip');
+          tick('talked', '✓ Talked') + tick('voicemail', '✓ Left a message') + lostBtn;
       }
       if (s.kind === 'email') {
         const h = chaseHeardOf(j);
@@ -759,10 +762,10 @@
               ? 'Their email of ' + esc(agoText(daysSince(h.at) || 0)) + ' has no reply from you — the emails wait until you answer it'
               : 'They wrote back ' + esc(agoText(daysSince(h.at) || 0)) +
                 (h.subject ? ' (“' + esc(String(h.subject).slice(0, 60)) + '”)' : '') + ' — the emails have stopped') + '</span>' +
-            '<button class="btn btn-sm" onclick="chaseResume(\'' + id + '\')">Keep emailing them</button>' + tick('skipped', 'Skip');
+            '<button class="btn btn-sm" onclick="chaseResume(\'' + id + '\')">Keep emailing them</button>' + lostBtn;
         }
         return word + (looksLikeEmail(j.email) ? '<span class="bd-chase-none">Sends itself from your Gmail in the morning (8 to noon)</span>'
-          : '<span class="bd-chase-none">No email on the job — taken from QuickBooks if their customer has one</span>') + tick('skipped', 'Skip');
+          : '<span class="bd-chase-none">No email on the job — taken from QuickBooks if their customer has one</span>') + lostBtn;
       }
       return word + '<button class="btn btn-sm btn-filled" onclick="chaseLost(\'' + id + '\')">Mark it lost</button>' +
         tick('keep', 'Keep it open');
