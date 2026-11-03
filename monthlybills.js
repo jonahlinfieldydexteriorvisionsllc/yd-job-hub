@@ -115,6 +115,8 @@
     return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   }
   const dayWords = d => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  // The day it was ticked, here (not the UTC day of the stamp).
+  const paidDay = at => { const t = new Date(at); return isNaN(t) ? '' : t.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); };
 
   function draw() {
     const body = el('billsBody');
@@ -127,7 +129,7 @@
     const rows = list.map(b => {
       const p = paidOf(month, b.id), id = safe(b.id), d = daysTo(b.due);
       const state = p
-        ? '<span class="inv-chip">✓ Paid ' + esc(dayWords(String(p.at).slice(0, 10))) + (p.how === 'receipt' ? ' · its receipt' : '') + '</span> ' +
+        ? '<span class="inv-chip">✓ Paid ' + esc(paidDay(p.at)) + (p.how === 'receipt' ? ' · its receipt' : '') + '</span> ' +
           '<button type="button" class="link-btn" onclick="billsPaid(\'' + id + '\', false)">Undo</button>'
         : '<span class="inv-chip' + (month === now && d < 0 ? ' due' : '') + '">' + (month === now && d < 0 ? 'Late — was due ' : 'Due ') +
           esc(dayWords(b.due)) + '</span> <button type="button" class="btn btn-sm btn-filled" onclick="billsPaid(\'' + id + '\', true)">✓ Paid</button>';
