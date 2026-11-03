@@ -14,7 +14,8 @@ business):
     Saturday morning is when homeowners plan their yard in season.
   - Google Tue 8:30 am weekly: a post stays on the profile, so the point is a
     fresh one every week, up before the week's searches; the week's new After
-    photos go into the profile's photos with it.
+    photos go into the profile's photos with it (older jobs' After photos
+    fill the spare spots, so past jobs reach the profile too).
   - Nextdoor Thu 6:00 pm every other week: Nextdoor's own advice is Thursday
     or Friday, 5-7 pm, and a new post about every two weeks.
 
@@ -1242,34 +1243,70 @@ def _g_find(h, where, summary):
 
 def _gallery(db, h, where, now):
     """The week's new After photos into the profile's photos (Jonah, 27 Oct:
-    "Add after photos weekly"), up to GALLERY_A_WEEK, each once."""
-    cfg = settings(db)
-    done = cfg.get("gPhotos") or {}
-    since = now - datetime.timedelta(days=8)
-    fresh = []
-    for jid, lst in after_photos(db).items():
-        new = [p for p in lst if p["id"] not in done and (_parse(p["at"]) or since) > since]
-        if not new:
-            continue
-        snap = db.collection("jobs").document(jid).get()
-        j = (snap.to_dict() or {}) if snap.exists else {}
-        if not (j.get("noPost") or j.get("removeWhy")):
-            fresh.extend(new)
-    added = []
-    for p in sorted(fresh, key=lambda x: x["at"], reverse=True)[:GALLERY_A_WEEK]:
+    "Add after photos weekly"), up to GALLERY_A_WEEK, each once. A week with
+    fewer new ones fills the spare spots from finished jobs' older After
+    photos (Jonah, 2 Nov: the past jobs' photos, dated by the camera, were
+    never "new"), so the whole back catalogue reaches the profile in time."""
+    done = settings(db).get("gPhotos") or {}
+    added, refused = [], []
+    for p in _gallery_picks(db, done, now):
         try:
             r = requests.post(GBP_V4 + where + "/media", headers=h, timeout=60, json={
                 "mediaFormat": "PHOTO", "locationAssociation": {"category": "AT_WORK"}, "sourceUrl": p["url"]})
         except requests.RequestException as e:
             print("social: gallery photo not added:", p["id"], e)
             continue
-        if r.status_code >= 300:
-            print("social: gallery photo refused:", p["id"], r.status_code, r.text[:200])
+        if r.status_code == 400:
+            # Google won't take this photo (too small, can't fetch it): it is
+            # never tried again, or it would take a spot every week.
+            print("social: gallery photo refused:", p["id"], r.text[:200])
+            refused.append(p["id"])
             continue
+        if r.status_code >= 300:
+            # Google itself said no (key, limits, down): the rest wait a week.
+            print("social: gallery photos stopped:", p["id"], r.status_code, r.text[:200])
+            break
         added.append(p["id"])
-    if added:
-        _set(db, {"gPhotos": {pid: now.date().isoformat() for pid in added}})
+    if added or refused:
+        day = now.date().isoformat()
+        _set(db, {"gPhotos": dict({pid: day for pid in added}, **{pid: "refused " + day for pid in refused})})
     return added
+
+
+def _gallery_picks(db, done, now):
+    """The photos this week's post puts on the profile: After photos from the
+    last 8 days first (newest first), then older ones from finished jobs. The
+    older ones go a job at a time -- the job with the fewest on the profile
+    so far, newest finished first -- so each week shows different jobs
+    instead of one job's whole set."""
+    since = now - datetime.timedelta(days=8)
+    fresh, older = [], []
+    for jid, lst in after_photos(db).items():
+        left = [p for p in lst if p["id"] not in done]
+        if not left:
+            continue
+        snap = db.collection("jobs").document(jid).get()
+        if not snap.exists:
+            continue
+        j = snap.to_dict() or {}
+        if j.get("noPost") or j.get("removeWhy") or j.get("deletedAt"):
+            continue
+        new = [p for p in left if (_parse(p["at"]) or since) > since]
+        fresh.extend(new)
+        day = _finished(j)
+        if day:
+            shown = len(lst) - len(left)
+            older.extend(((shown + n, day, jid), p) for n, p in enumerate(q for q in left if q not in new))
+    picks = sorted(fresh, key=lambda x: x["at"], reverse=True)[:GALLERY_A_WEEK]
+    # Turn (fewest shown first), then the newest finished job, then its newest photo.
+    older.sort(key=lambda x: (x[0][0], _neg_day(x[0][1]), x[0][2]))
+    picks += [p for _, p in older[:GALLERY_A_WEEK - len(picks)]]
+    return picks
+
+
+def _neg_day(day):
+    """'2026-10-21' -> a key that sorts the newest day first."""
+    return -int(day.replace("-", ""))
 
 
 # ---------------------------------------------------------------- the app
