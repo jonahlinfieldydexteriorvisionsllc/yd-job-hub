@@ -16,6 +16,7 @@ posted from here; he posts them himself.
 As in care.py the app only says WHICH job; the job is read here.
 """
 
+import datetime
 import json
 import re
 
@@ -42,7 +43,7 @@ SYSTEM = (
     "- facebook: friendly, 2-4 short paragraphs, one or two emojis at most, then 3-6 hashtags "
     "on their own line (e.g. #MadisonLandscaping #PaverPatio and the town).\n"
     "- nextdoor: a neighbourly note to people nearby, 60-120 words, no hashtags, no hard "
-    "selling -- 'we just finished a ... in <town>', what it involved, happy to answer questions.\n"
+    "selling -- 'we finished a ... in <town>', what it involved, happy to answer questions.\n"
     "- pinterest: pinterestTitle (under 100 characters, the kind of project and style, the kind "
     "of thing someone searches for) and pinterest (a description, 2-3 sentences rich in search "
     "words: materials, style, the kind of project, southern Wisconsin).\n"
@@ -59,8 +60,35 @@ SYSTEM = (
     "material you do give is the facts' own, word for word. No phone number, website or address in any "
     "post (the app adds the company's own). Never say licensed, never mention subcontractors, never "
     "call the company small, family-run or a one-man shop -- it is a growing company -- and never "
-    "speak as one person or the owner. Plain English, no jargon; write as the company ('we')."
+    "speak as one person or the owner. Plain English, no jargon; write as the company ('we').\n\n"
+    "When it was done: the facts give today's date, the day it was finished, `recent` and `when`. "
+    "When recent is true, 'just finished' or 'recently' is fine. When it is false, never say 'just', "
+    "'recently', 'this week' or 'today' -- say when it was done in the words `when` gives (e.g. 'this "
+    "past spring', 'in the summer of 2025'), or write about the yard without saying when."
 )
+
+RECENT_DAYS = 45            # = social.RECENT_DAYS: "just finished" is true up to this many days
+SEASONS = {3: "spring", 4: "spring", 5: "spring", 6: "summer", 7: "summer", 8: "summer",
+           9: "fall", 10: "fall", 11: "fall"}
+
+
+def _when(finished, today):
+    """(recent, words) for a job finished on `finished` (YYYY-MM-DD) seen on
+    `today`: a post written for an April job in November said "we just
+    finished" (2 Nov 2026), so the age is worked out here and said plainly.
+    Winter months are named, since a winter runs over two years."""
+    try:
+        f = datetime.date.fromisoformat(str(finished)[:10])
+    except (TypeError, ValueError):
+        return True, ""
+    if (today - f).days <= RECENT_DAYS:
+        return True, ""
+    season = SEASONS.get(f.month)
+    if not season:
+        return False, "in " + f.strftime("%B %Y")
+    if f.year == today.year:
+        return False, ("earlier this " if SEASONS.get(today.month) == season else "this past ") + season
+    return False, "in the %s of %d" % (season, f.year)
 
 SCHEMA = {
     "type": "object",
@@ -121,12 +149,18 @@ def _facts(j):
         name = _clean((m or {}).get("name"), 120, j)
         if name:
             mats.append(name)
+    finished = str(j.get("completedAt") or j.get("workStageAt") or "")[:10]
+    today = dg._now().date()
+    recent, when = _when(finished, today)
     return {
         "town": str(j.get("city") or "").strip()[:60],
         "services": [str(s)[:60] for s in (j.get("serviceTypes") or [])[:10]],
         "work": work,
         "materials": mats,
-        "finished": str(j.get("completedAt") or j.get("workStageAt") or "")[:10],
+        "finished": finished,
+        "today": today.isoformat(),
+        "recent": recent,
+        "when": when,
     }
 
 
