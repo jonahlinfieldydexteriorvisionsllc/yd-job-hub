@@ -1018,6 +1018,49 @@ THANKS_BODY = (
     "YD Exterior Visions"
 )
 THANKS_LASTS = ", and I hope you enjoy it for years to come."
+
+# THE REVIEW CHECK-IN, three weeks on (Jonah, 2 Nov 2026, on the closeout
+# ladder: "I want these emails to push for reviews. So another email at day
+# 21 if we never got our review just thanking them again and asking for the
+# review also checking up on how they like the work"). Day 21 after the job
+# was finished, and at least two weeks after the thank-you; in the
+# thank-you's thread; never when Google has told him that person left a
+# review ("<First> left a review for YD Exterior Visions"). Sent like the
+# thank-yous (mornings, a few a run), claimed in reminderLog/review21_<job>
+# so it goes once. settings/followUp.reviewNudge false switches it off.
+REVIEW_AFTER_DAYS = 21
+REVIEW_GAP_DAYS = 14
+REVIEW_LATE_DAYS = 24       # missed by more than this (the app off, no email then) -- let go
+REVIEW_BODY = (
+    "Hi {name},\n\n"
+    "Just checking in on your {work}. How's everything holding up?\n\n"
+    "If you're happy with how it turned out, a quick Google review would really help us out:\n"
+    "{link}\n\n"
+    "If anything isn't right, just reply to this email & we'll take care of it.\n\n"
+    "Have a great day!"
+)
+REVIEWED = re.compile(r"^\s*(.+?)\s+left a review for\b", re.I)
+
+
+def _reviewed_names(since):
+    """First names (lower case) Google says left a review since `since`."""
+    q = 'from:businessprofile-noreply@google.com subject:"left a review" after:%d' % int(since.timestamp())
+    out = []
+    for m in (_gmail("/messages", {"q": q, "maxResults": 50}).get("messages") or []):
+        full = _gmail("/messages/" + m["id"], {"format": "metadata", "metadataHeaders": ["Subject"]})
+        got = REVIEWED.match(_header(full, "Subject") or "")
+        if got:
+            out.append(got.group(1).split()[0].lower())
+    return out
+
+
+def _named_in(first, names):
+    """Whether one of those reviewers is this customer, as far as a first
+    name tells (an initial counts: a check-in not sent is the safe side)."""
+    f = (first or "").strip().lower()
+    if not f:
+        return False
+    return any(n == f or (len(n) == 1 and f.startswith(n)) or n.startswith(f) or f.startswith(n) for n in names)
 # Never thanked: the company's own addresses, made-up ones, and a test job.
 NOT_A_CUSTOMER = re.compile(r"(?i)ydexteriorvisions|@example\.(com|org|net)$|\.(test|invalid|example|localhost)$")
 TEST_JOB = re.compile(r"(?i)\btest\b")
@@ -1273,6 +1316,7 @@ class _ThanksRun:
         self.staff = False          # not read yet
         self.done = 0
         self.want_link = []
+        self.reviewers = None       # first names Google says left a review (read once a run, when needed)
 
     def _start(self):
         """The first day thank-yous go by themselves: the day the first run
@@ -1286,6 +1330,8 @@ class _ThanksRun:
     def job(self, ref, jid, j):
         """One job: sent, drafted, held, or nothing. News for his phone, or None."""
         paid = paid_at(j)
+        if paid and not j.get("noThanks") and thanks_done(j.get("thanksEmail")):
+            return self.review(ref, jid, j, paid)
         if not paid or j.get("noThanks") or thanks_done(j.get("thanksEmail")):
             return None
         day = paid.astimezone(dg.TZ).date()
@@ -1352,6 +1398,69 @@ class _ThanksRun:
                     "body": "%s paid in full — a thank-you with your review link is in your Gmail Drafts." % name}
         return {"kind": "followup", "jobId": jid, "title": "🙏 Thank-you sent",
                 "body": "%s paid in full — a thank-you with your review link went to %s." % (name, to)}
+
+    def review(self, ref, jid, j, paid):
+        """The review check-in three weeks on (REVIEW_BODY), or None."""
+        t = j.get("thanksEmail") or {}
+        base = _when(t.get("sentAt") or t.get("emailedAt"))
+        if not base or t.get("unconfirmed") or self.conf.get("reviewNudge") is False or not self.link:
+            return None
+        done = _when(j.get("completedAt")) or paid
+        due = max(done + datetime.timedelta(days=REVIEW_AFTER_DAYS), base + datetime.timedelta(days=REVIEW_GAP_DAYS))
+        now = dg._now()
+        if now < due or (now - due).days > REVIEW_LATE_DAYS:
+            return None
+        if not self.morning or self.done >= THANKS_MAX:
+            return None
+        to = str(t.get("to") or "").strip() or _contact(self.db, ref, j, self.known)
+        if not to or to.lower() in self.mailed:
+            return None
+        log = self.db.collection("reminderLog").document("review21_" + jid)
+        if log.get().exists:
+            return None
+        first = _first_name(j, None)
+        try:
+            if self.reviewers is None:
+                self.reviewers = _reviewed_names(now - datetime.timedelta(days=120))
+            if _named_in(first, self.reviewers) or _asked_for_review(to, base + datetime.timedelta(hours=1)):
+                log.set({"job": jid, "at": _stamp(), "outcome": "reviewed or asked"})
+                return None
+        except Exception as err:    # noqa: BLE001 -- his mailbox unreadable: nothing goes
+            print("followup: reviews not read for", jid, "-- no check-in:", err)
+            return None
+        try:
+            log.create({"job": jid, "at": _stamp(), "to": to})
+        except AlreadyExists:
+            return None
+        self.mailed.add(to.lower())
+        reply = None
+        if t.get("messageId"):
+            try:
+                full = _gmail("/messages/" + t["messageId"], {"format": "metadata",
+                                                             "metadataHeaders": ["Message-ID", "References"]})
+                mid = _header(full, "Message-ID")
+                if mid:
+                    reply = {"threadId": full.get("threadId") or t.get("threadId"), "inReplyTo": mid,
+                             "references": ((_header(full, "References") or "") + " " + mid).strip()}
+            except Exception as err:    # noqa: BLE001 -- a new email instead of an answer in the thread
+                print("followup: thank-you thread not read for", jid, "--", err)
+        subject = ("Re: " + (t.get("subject") or THANKS_SUBJECT)) if reply else "How's your %s holding up?" % _work_words(j)
+        body = REVIEW_BODY.format(name=first or "there", work=_work_words(j), link=self.link)
+        try:
+            got = cards.send_mail(to, subject, body, reply)
+        except Exception as err:    # noqa: BLE001 -- it may have gone: the claim stays
+            print("followup: review check-in for", jid, "-- no answer from Gmail:", err)
+            return None
+        if got.get("error"):
+            log.delete()
+            print("followup: review check-in for", jid, "not sent --", got["error"])
+            return None
+        log.update({"sentAt": _stamp(), "messageId": got.get("messageId"), "threadId": got.get("threadId"), "done": True})
+        self.done += 1
+        name = (j.get("customerName") or "").strip() or "A customer"
+        return {"kind": "followup", "jobId": jid, "title": "⭐ Review check-in sent",
+                "body": "%s — 3 weeks after the job, a check-in asking how it's holding up and for a Google review "
+                        "went to %s." % (name, to)}
 
     def end(self):
         """Told once: thank-yous are waiting on the review link. Once there is
