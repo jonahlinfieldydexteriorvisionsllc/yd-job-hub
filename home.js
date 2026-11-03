@@ -1148,6 +1148,14 @@
     }
     // Invoices to chase (invoices.js): a reminder due, one never emailed,
     // or past its reminders -- for whoever may send them.
+    // His own bills due within a few days or late (monthlybills.js).
+    const bills = window.YDMonthlyBills ? YDMonthlyBills.due() : [];
+    if (bills.length) {
+      any = true;
+      rows.push(line('📅', '<b>' + plural(bills.length, 'bill') + ' due</b> · ' +
+        fmtMoney(bills.reduce((t, b) => t + (b.cents || 0), 0) / 100),
+        bills.slice(0, 3).map(b => esc(b.name)).join(' · ') + (bills.length > 3 ? ' …' : ''), '', 'openMonthlyBills()'));
+    }
     if (can('billing', 'change') && window.YDInvoices && YDInvoices.toDo) {
       any = true;
       const due = YDInvoices.toDo();
@@ -1404,7 +1412,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 
