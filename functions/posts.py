@@ -58,7 +58,8 @@ SYSTEM = (
     "town only. Never mention any price, cost or budget. Never invent anything not given: no "
     "materials, sizes, plants, timelines, awards or claims beyond the facts. A measurement or "
     "material you do give is the facts' own, word for word. No phone number, website or address in any "
-    "post (the app adds the company's own). Never say licensed, never mention subcontractors, never "
+    "post (the app adds the company's own). Never say licensed, never mention pressure washing "
+    "(even when the facts do: it is not a service we sell) or subcontractors, never "
     "call the company small, family-run or a one-man shop -- it is a growing company -- and never "
     "speak as one person or the owner. Plain English, no jargon; write as the company ('we').\n\n"
     "When it was done: the facts give today's date, the day it was finished, `recent` and `when`. "
@@ -378,7 +379,7 @@ WEEK_SYSTEM = (
     "- hashtags: 8 to 12, each starting with #, no spaces inside: a few for the work (#PaverPatio), "
     "one or two for the town or area (#VeronaWI #MadisonLandscaping), one for Wisconsin.\n\n"
     "Rules, all of them: never name the customer, never give a street or house number -- the town "
-    "only. Never mention any price. Never invent anything not given: no materials, sizes or claims "
+    "only. Never mention any price or pressure washing. Never invent anything not given: no materials, sizes or claims "
     "beyond the facts. Give every job you are given, by its jobId."
 )
 

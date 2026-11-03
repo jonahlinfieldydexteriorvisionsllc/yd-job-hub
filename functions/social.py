@@ -45,7 +45,8 @@ A post is HELD for his OK instead of going up by itself when:
   - the words name the customer, give their street, a price, a phone number,
     or say something YD never says in public: "licensed" (insured, not
     licensed), subcontractors, the owner speaking, "small"/"family-run"
-    (business voice, growing). Claude is told all of this; code checks it.
+    (business voice, growing), pressure washing (not a service YD sells).
+    Claude is told all of this; code checks it.
 
 Facebook: a Page token from his own Meta app (Standard Access needs no App
 Review for a Page its own admin manages). He puts the app's id and secret in
@@ -360,6 +361,7 @@ PHONE = re.compile(r"\(?\b\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}\b")
 NEVER_SAID = [
     (re.compile(r"\blicen[cs]ed\b", re.I), "says licensed (YD is insured, not licensed)"),
     (re.compile(r"\bsub-?contract", re.I), "talks about subcontractors"),
+    (re.compile(r"\b(pressure|power)[- ]?wash", re.I), "talks about pressure washing (not a service YD sells)"),
     (re.compile(r"\bowner[- ]operated\b|\bthe owner\b|\bjonah\b", re.I), "speaks as the owner, not the company"),
     (re.compile(r"\bsmall (crew|team|company|business|outfit|operation)\b|\bfamily[- ](owned|run)\b|\bone[- ]man\b",
                 re.I), "makes YD sound small"),
@@ -437,7 +439,8 @@ IDEA_SYSTEM = (
     "- photo: the number of the listed photo of a past job that fits this post, or 0 when none fits. Only pick a "
     "photo that shows what the post is about.\n\n"
     "Rules, all of them: write as the company ('we'), never as one person; never name anyone. Never give a price, "
-    "phone number, address or website (the app adds them). Never say licensed, never mention subcontractors, never "
+    "phone number, address or website (the app adds them). Never say licensed, never mention pressure washing or "
+    "subcontractors, never "
     "call the company small, family-run or a one-man shop -- it is a growing company. Never invent facts: no years "
     "in business, numbers of projects, awards, reviews, guarantees or offers. 'Free estimates' is fine. Plain "
     "English, no jargon."
