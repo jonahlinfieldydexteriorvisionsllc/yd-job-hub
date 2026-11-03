@@ -1418,6 +1418,15 @@ class _ThanksRun:
         log = self.db.collection("reminderLog").document("review21_" + jid)
         if log.get().exists:
             return None
+        # A customer with two jobs is asked once, not once a job.
+        try:
+            for s in self.db.collection("reminderLog").where("to", "==", to).limit(20).stream():
+                if s.id.startswith("review21_") and (s.to_dict() or {}).get("done"):
+                    log.set({"job": jid, "at": _stamp(), "outcome": "asked on " + s.id[len("review21_"):]})
+                    return None
+        except Exception as err:    # noqa: BLE001
+            print("followup: earlier check-ins not read for", jid, "-- none sent:", err)
+            return None
         first = _first_name(j, None)
         try:
             if self.reviewers is None:

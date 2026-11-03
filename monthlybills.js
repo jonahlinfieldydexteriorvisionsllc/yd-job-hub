@@ -53,7 +53,13 @@
       .map(b => Object.assign(b, { due: ym + '-' + pad(Math.min(Math.max(1, Number(b.day) || 1), last)) }))
       .sort((a, b) => a.due.localeCompare(b.due) || String(a.name).localeCompare(String(b.name)));
   }
-  const paidOf = (ym, id) => (((data && data.paid) || {})[ym] || {})[id] || null;
+  // A tick he took off a bill a receipt had ticked is kept as {off: true}:
+  // that receipt does not tick it again.
+  const markOf = (ym, id) => (((data && data.paid) || {})[ym] || {})[id] || null;
+  const paidOf = (ym, id) => { const p = markOf(ym, id); return p && !p.off ? p : null; };
+  // Receipts that are no payment: a bill still to pay, set aside, not a receipt.
+  const NOT_PAID = ['topay', 'aside', 'notreceipt'];
+  const stageOf = r => { try { const s = window.YDStages && YDStages.receipt ? YDStages.receipt(r) : null; return (s && (s.id || s.stage || s.key)) || r.status || ''; } catch (e) { return r.status || ''; } };
   const todayYmd = () => { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
   const daysTo = day => Math.round((new Date(day + 'T12:00:00') - new Date(todayYmd() + 'T12:00:00')) / 864e5);
 
@@ -63,10 +69,16 @@
     if (!window.YDReceipts || !YDReceipts.all || !(YDReceipts.loaded && YDReceipts.loaded())) return {};
     const out = {};
     const all = Object.entries(YDReceipts.all() || {});
-    billsIn(ym).forEach(b => {
+    const keep = area;
+    area = '';                      // every bill, whatever the screen shows
+    const list = billsIn(ym);
+    area = keep;
+    list.forEach(b => {
       const want = words(b.match || b.name);
-      if (!want.length || paidOf(ym, b.id)) return;
-      const hit = all.find(([, r]) => r && String(r.date || '').slice(0, 7) === ym && r.status !== 'notreceipt' &&
+      const mark = markOf(ym, b.id);
+      if (!want.length || (mark && !mark.off)) return;
+      const hit = all.find(([id, r]) => r && String(r.date || '').slice(0, 7) === ym && NOT_PAID.indexOf(stageOf(r)) === -1 &&
+        !(mark && mark.off && mark.receiptId === id) &&
         want.every(w => words(r.vendor).indexOf(w) !== -1) &&
         (!b.cents || Math.abs(Math.abs(Number(r.totalCents) || 0) - b.cents) <= b.cents * NEAR));
       if (hit) out[b.id] = { at: new Date().toISOString(), by: 'Job Hub', cents: Math.abs(Number(hit[1].totalCents) || 0),
@@ -227,7 +239,10 @@
   window.billsPaid = (id, on) => {
     const b = data.bills[id];
     if (!b) return;
-    const rec = on ? { at: new Date().toISOString(), by: 'Jonah', cents: b.cents || 0, receiptId: null, how: 'hand' } : null;
+    const was = markOf(month, id);
+    // Taken off one a receipt ticked: kept off, so that receipt leaves it be.
+    const rec = on ? { at: new Date().toISOString(), by: 'Jonah', cents: b.cents || 0, receiptId: null, how: 'hand' }
+      : was && was.how === 'receipt' && was.receiptId ? { off: true, receiptId: was.receiptId, at: new Date().toISOString() } : null;
     const cur = Object.assign({}, (data.paid || {})[month]);
     if (rec) cur[id] = rec; else delete cur[id];
     data.paid = Object.assign({}, data.paid, { [month]: cur });

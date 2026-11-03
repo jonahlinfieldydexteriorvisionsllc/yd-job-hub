@@ -434,8 +434,11 @@
         // second (2 Nov 2026) before either had heard of the other's. Now both write the
         // one card -- and one already there (ticked off, say) is left alone.
         const id = 'sbt_' + w.key;
+        // Not able to ask (no signal): tried again later, so a card he ticked
+        // off is never written over blind.
+        let there;
+        try { there = await window.YDDb.getFresh('boards/todo/cards', id); } catch (e) { continue; }
         note[w.key] = { card: id, at: at };
-        const there = await window.YDDb.getFresh('boards/todo/cards', id).catch(() => null);
         if (there) continue;
         Promise.resolve(window.YDDb.put('boards/todo/cards', id, billCard(w, col, at, today, i)))
           .catch(e => console.warn('[subs] bill to-do not yet on the server:', (e && e.code) || e));

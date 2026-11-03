@@ -503,26 +503,35 @@ def run(client, deadline=None, spent=None):
     except Exception as err:        # noqa: BLE001
         print("leads: inbox not read --", err)
         return news
+    # The Google Ads requests of the last month: every one was passed over as
+    # mail from google.com (leadMail outcome "passed", why "automatic or a
+    # company"). Listed once (googleBackAt) into googleBackIds, and each read
+    # again until its log says something else -- a run reads only
+    # READS_PER_RUN, and they are all before the cursor.
+    back = {i for i in (conf.get("googleBackIds") or []) if isinstance(i, str)}
     if not conf.get("googleBackAt"):
-        # Once: the Google Ads requests of the last month, from before the
-        # cursor (they were never looked at -- every one was from google.com).
         try:
             got = followup_gmail("/messages", {"q": 'in:inbox from:awexpress.google.com subject:"new request" '
                                                     'newer_than:30d', "maxResults": 50})
-            listed.extend(x["id"] for x in got.get("messages") or [] if x["id"] not in listed)
-            conf_ref.set({"googleBackAt": _stamp()}, merge=True)
+            back |= {x["id"] for x in got.get("messages") or []}
+            conf_ref.set({"googleBackAt": _stamp(), "googleBackIds": sorted(back)}, merge=True)
         except Exception as err:    # noqa: BLE001
             print("leads: the month's Google requests not read --", err)
-    ids, logs = [], {}
+    listed.extend(i for i in sorted(back) if i not in listed)
+    ids, logs, left = [], {}, set(back)
     for i in reversed(listed):          # oldest first
         snap = db.collection("leadMail").document(i).get()
         d = (snap.to_dict() or {}) if snap.exists else {}
-        if d.get("outcome"):
+        again = i in back and d.get("outcome") == "passed" and d.get("why") == "automatic or a company"
+        if d.get("outcome") and not again:
+            left.discard(i)
             continue                    # looked at already (a try that failed has none)
         logs[i] = d
         ids.append(i)
         if len(ids) >= LOOK_MAX:
             break
+    if left != back:
+        conf_ref.set({"googleBackIds": sorted(left)}, merge=True)
     if not ids:
         conf_ref.set({"lastRunAt": _stamp()}, merge=True)
         return news

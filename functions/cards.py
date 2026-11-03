@@ -424,7 +424,9 @@ def _with_signature(body):
     words = SIGN_OFF.sub("", (body or "").rstrip())
     text = words + "\n\n--\n" + _sig_text(sig)
     shown = h.escape(words).replace("\n", "<br>")
-    shown = re.sub(r"(https?://[^\s<&]+)", r'<a href="\1">\1</a>', shown)
+    # A link's own "&amp;" kept; a full stop or bracket after it is the sentence's.
+    shown = re.sub(r"https?://[^\s<]+?(?=[.,;:!?)]*(?:\s|<|$))", lambda m: '<a href="%s">%s</a>' % (m.group(0), m.group(0)),
+                   shown)
     page = ('<div dir="ltr">' + shown + '</div><br><div dir="ltr" class="gmail_signature">' + sig + '</div>')
     return text, page
 

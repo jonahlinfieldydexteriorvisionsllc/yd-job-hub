@@ -176,6 +176,9 @@
   // The first day was put on (or moved) after the card was made: the card
   // follows, unless he gave it a date of his own.
   function redate(id, k) {
+    // Its first day has come: the date stays (firstDay looks from today on,
+    // and would push a ticket still missing later and later).
+    if (k.first && k.first <= today()) return;
     const first = firstDay(id);
     if (first === (k.first || '')) return;
     const c = cardNow(id);

@@ -276,7 +276,8 @@ def words(client, db, job_id, j, note=None):
         # job has work on it (a QuickBooks estimate filled in after the job
         # was finished) -- social.py plan looks at has_work().
         db.collection("socialWords").document(job_id).set({"error": "no work on its estimate", "noWork": True,
-                                                            "at": dg._now().isoformat()})
+                                                            "at": dg._now().isoformat(),
+                                                            "note": _note_of(db, job_id, note) or None})
         return {"error": "no work on its estimate"}, None
     note = _note_of(db, job_id, note)
     posts, error, usage = _ask(client, facts, note)

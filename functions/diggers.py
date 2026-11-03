@@ -277,11 +277,13 @@ def scan(db, people, now=None):
         return []
     fresh = [mid for mid in ids if mid not in seen]
     _label(ids if back else fresh)
-    if back:
-        db.collection(STATE[0]).document(STATE[1]).set({"backAt": now.isoformat()}, merge=True)
+    # The old tickets' one read counts as done only once they are saved
+    # (here, or with `seen` at the end): a run that dies part way reads them
+    # again next time.
     if not fresh:
-        if was.get("seen") is None:
-            db.collection(STATE[0]).document(STATE[1]).set({"seen": []}, merge=True)
+        if was.get("seen") is None or back:
+            db.collection(STATE[0]).document(STATE[1]).set(
+                dict({"seen": list(was.get("seen") or [])}, **({"backAt": now.isoformat()} if back else {})), merge=True)
         return []
     jobs = dg._jobs()
     sent = []
@@ -335,7 +337,8 @@ def scan(db, people, now=None):
             jid, how = match_job(tk, jobs)
             patch["jobId"], patch["jobBy"] = jid, how
         ref.set(patch, merge=True)
-    db.collection(STATE[0]).document(STATE[1]).set({"seen": seen[-SEEN_MAX:]}, merge=True)
+    db.collection(STATE[0]).document(STATE[1]).set(
+        dict({"seen": seen[-SEEN_MAX:]}, **({"backAt": now.isoformat()} if back else {})), merge=True)
     return sent
 
 
