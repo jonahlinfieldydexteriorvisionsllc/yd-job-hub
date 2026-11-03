@@ -91,6 +91,7 @@ ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # they want"). Read like a website form, its own address the customer's.
 GOOGLE_LEAD = re.compile(r"(?i)^customer-request-\d+@awexpress\.google\.com$")
 GOOGLE_LEAD_SUBJECT = re.compile(r"(?i)new request")
+PASSED_GOOGLE = ("automatic or a company", "mailing list or automatic")
 
 SYSTEM = """You read one email that reached the inbox of Jonah Linfield, owner of YD Exterior Visions \
 LLC -- a small landscaping, hardscaping and snow-removal company near Madison, Wisconsin (Dane and Green \
@@ -314,7 +315,12 @@ def _clean(got, who, services):
 
 def _lead_name(r):
     n = " ".join(x for x in (r["firstName"], r["lastName"]) if x).strip()
-    return n or r["business"] or r["email"]
+    if n or r["business"]:
+        return n or r["business"]
+    # Google gave no name ("Potential Customer"): not its relay address.
+    if GOOGLE_LEAD.match(r["email"] or ""):
+        return "Google lead" + (" · " + r["city"] if r["city"] else "")
+    return r["email"]
 
 
 def _note(r, m):
@@ -504,8 +510,8 @@ def run(client, deadline=None, spent=None):
         print("leads: inbox not read --", err)
         return news
     # The Google Ads requests of the last month: every one was passed over as
-    # mail from google.com (leadMail outcome "passed", why "automatic or a
-    # company"). Listed once (googleBackAt) into googleBackIds, and each read
+    # mail from google.com (leadMail outcome "passed", why PASSED_GOOGLE).
+    # Listed once (googleBackAt) into googleBackIds, and each read
     # again until its log says something else -- a run reads only
     # READS_PER_RUN, and they are all before the cursor.
     back = {i for i in (conf.get("googleBackIds") or []) if isinstance(i, str)}
@@ -522,7 +528,8 @@ def run(client, deadline=None, spent=None):
     for i in reversed(listed):          # oldest first
         snap = db.collection("leadMail").document(i).get()
         d = (snap.to_dict() or {}) if snap.exists else {}
-        again = i in back and d.get("outcome") == "passed" and d.get("why") == "automatic or a company"
+        # (A mailing-list header on Google's email is passed over first.)
+        again = i in back and d.get("outcome") == "passed" and d.get("why") in PASSED_GOOGLE
         if d.get("outcome") and not again:
             left.discard(i)
             continue                    # looked at already (a try that failed has none)
