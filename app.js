@@ -265,14 +265,14 @@ function bidsFromQbNow() {
 //   change by itself -- with a line saying so and a button to stop it.
 // d: { jobPrice (number), estimate, city, qbInvoiceRef, qbEstimate, taxable }.
 const OLD_TAX_PCT = 5.5;    // what the retired box always added
-function estimateTaxCents(est, city) {
+function estimateTaxCents(est, city, q) {
   if (!est) return 0;
   const sent = Array.isArray(est.sent) && est.sent.length ? est.sent[est.sent.length - 1] : null;
   if (sent && isFinite(Number(sent.taxCents))) return Math.max(0, Math.round(Number(sent.taxCents)));
   if (est.fromQb && isFinite(Number(est.fromQb.taxCents)) && !est.reprice) return Math.max(0, Math.round(Number(est.fromQb.taxCents)));
   if (!((est.work || []).length || (est.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return 0;
   try {
-    const r = YDEstimate.priceSaved(est, city || '');
+    const r = YDEstimate.priceSaved(est, city || '', undefined, undefined, q);
     return r && r.tax && r.tax.cents > 0 ? Math.round(r.tax.cents) : 0;
   } catch (e) { return 0; }
 }
@@ -281,7 +281,7 @@ function jobBill(d) {
   const inv = qbInvoiceOf(d);
   const total = inv ? Number(inv.total) : NaN;
   if (inv && isFinite(total)) return { subtotal: price, tax: 0, total: round2(total), from: 'qb', inv: inv, oldBox: !!d.taxable };
-  const estTax = round2(estimateTaxCents(d.estimate, d.city) / 100);
+  const estTax = round2(estimateTaxCents(d.estimate, d.city, d.qbEstimate) / 100);
   if (estTax > 0) return { subtotal: price, tax: estTax, total: round2(price + estTax), from: 'estimate', inv: null, oldBox: !!d.taxable };
   if (d.taxable) {
     const tax = round2(price * OLD_TAX_PCT / 100);
@@ -5331,7 +5331,7 @@ function dashPlannedNet(d, price) {
   const e = d.estimate;
   if (!price || !e || !((e.work || []).length || (e.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return null;
   try {
-    const r = YDEstimate.priceSaved(e, d.city || '', d._id, d.deliveryQuotes);
+    const r = YDEstimate.priceSaved(e, d.city || '', d._id, d.deliveryQuotes, d.qbEstimate);
     if (!r || !r.profit || !r.profit.complete) return null;
     return round2(price - r.profit.costCents / 100);
   } catch (err) { return null; }

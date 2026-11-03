@@ -20,10 +20,11 @@
 // THE ACTUAL SIDE is what the app already holds about the job:
 //   labour     approved clock shifts on it and hours typed in on Tracking
 //              (YDClock.forJob -- the same figures as Labor Hours), turned
-//              into crew-days by pricing/rules.crewDayHours (people in a
-//              crew x hours each, his to set; nothing assumed) and costed
-//              at the crew-day rate the job was
-//              bid with, so a job done in the time it was bid for shows no
+//              into crew-days by the job's crew size x hours each when its
+//              estimate has one, else pricing/rules.crewDayHours (people in a
+//              crew x hours each, his to set; nothing assumed: pricing.js
+//              crewHours), and costed at the crew-day the job was bid with
+//              (crewDayFor), so a job done in the time it was bid for shows no
 //              labour difference. What the crew were actually paid (pay
 //              rates) is shown beside it.
 //   purchases  the job's Materials & Purchases -- receipt lines and lines
@@ -187,20 +188,20 @@
   function estimateSide(job, wantNow, ctx) {
     const rules = P() ? P().rules() : {};
     const est = job.estimate && typeof job.estimate === 'object' ? job.estimate : null;
-    const out = { from: 'none', priceCents: null, crewDays: null, rateCents: num(rules.crewDayCents),
+    // The crew-day the job was bid with: a later change to the rates is not
+    // this job's labour going over.
+    const inQb = !!(job.qbEstimate && job.qbEstimate.id);
+    const out = { from: 'none', priceCents: null, crewDays: null, rateCents: P() ? P().crewDayFor(est, rules, inQb).cents : null,
                   costs: {}, complete: true, problems: 0, sentAt: null, docNumber: null, nowCents: null, hand: {} };
     const sent = lastSent(est);
     const needNow = !(ctx && ctx.lean && sent && !wantNow);
-    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '', job._id, job.deliveryQuotes) : null;
+    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '', job._id, job.deliveryQuotes, job.qbEstimate) : null;
     if (sent && !wantNow) {
       const c = sent.cost, byKind = c.byKind || {};
       const dumps = (num(byKind.dumpster) || 0) + (num(byKind.rental) || 0);
       out.from = 'sent'; out.sentAt = sent.at || null; out.docNumber = sent.docNumber || null;
       out.priceCents = c.priceCents;
       out.crewDays = num(c.crewDays) > 0 ? num(c.crewDays) : null;
-      // The crew-day rate the job was bid with: a later change to the rate
-      // is not this job's labour going over.
-      if (num(c.crewDayCents) !== null) out.rateCents = num(c.crewDayCents);
       out.costs = { materials: Math.max(0, (num(c.materialCostCents) || 0) - dumps), dumpsters: dumps,
                     delivery: num(c.deliveryCostCents) || 0, fuel: num(c.fuelCostCents) || 0 };
       // Lines done by a sub or installer: what they were to charge.
@@ -267,7 +268,7 @@
 
   function actualSide(job, id, est, ctx) {
     const rules = P() ? P().rules() : {};
-    const dayHours = num(rules.crewDayHours) > 0 ? num(rules.crewDayHours) : null;
+    const dayHours = P() ? P().crewHours(rules, P().crewSizeOn(job.estimate)) : null;
     const rate = est.rateCents;
     const hand = handOf(job).act;
 
@@ -506,12 +507,11 @@
 
   // Hours in a crew-day not set: say how to, with what this job suggests.
   function setupHtml(m) {
-    const rules = P() ? P().rules() : {};
-    if (num(rules.crewDayHours) > 0) return '';
     const l = m.act.labour, rate = m.est.rateCents;
+    if (l.dayHours > 0) return '';
     const avg = l.clockHours > 0 && l.wagesCents > 0 ? l.wagesCents / l.hours : null;
     const guess = avg && rate ? Math.round(rate / avg) : null;
-    return '<div class="eva-setup">Set <b>People in a crew</b> and <b>Hours each in a crew-day</b> in Pricing rules ' +
+    return '<div class="eva-setup">Set <b>People on a job with no crew size</b> and <b>Hours each in a crew-day</b> in Pricing rules ' +
       'and the clock’s hours show here as crew-days, costed like the estimate.' +
       (guess ? ' At the ' + esc(money(Math.round(avg))) + ' an hour paid on this job, your ' + esc(money(rate)) + ' crew-day rate is about ' + guess + ' hours.' : '') +
       (isOwner() ? ' <button class="btn btn-sm" onclick="openPricingRules()">Open Pricing rules</button>' : '') + '</div>';
@@ -800,7 +800,7 @@
     const k = splitKept.get(job._id);
     if (k && k.key === key) return k.v;
     let v = null;
-    try { v = hasLines(job.estimate) && window.YDEstimate && YDEstimate.splitSaved ? YDEstimate.splitSaved(job.estimate, job.city || '', job._id, job.deliveryQuotes) : null; }
+    try { v = hasLines(job.estimate) && window.YDEstimate && YDEstimate.splitSaved ? YDEstimate.splitSaved(job.estimate, job.city || '', job._id, job.deliveryQuotes, job.qbEstimate) : null; }
     catch (e) { v = null; }
     splitKept.set(job._id, { key: key, v: v });
     return v;

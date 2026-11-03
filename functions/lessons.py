@@ -506,7 +506,7 @@ def worth_reading(r):
     return bool(r["said"] or r["told"] or any(g.get("how") == "claude" for g in r["logs"]))
 
 
-def _prompt(j, r, rec, day_hours):
+def _prompt(j, r, rec, day_hours, each_hours=None):
     est = j.get("estimate") or {}
     out = []
     services = [str(s) for s in j.get("serviceTypes") or [] if str(s).strip()]
@@ -520,7 +520,7 @@ def _prompt(j, r, rec, day_hours):
     if mats:
         out.append("Materials bid (the takeoff, before waste): " + "; ".join(re.sub(r"\s+", " ", x).strip() for x in mats[:25]))
     if rec:
-        took = pj.took_days(rec, day_hours)
+        took = pj.took_days(rec, day_hours, each_hours)
         if took is not None and rec.get("bid"):
             out.append("Crew-days: bid %s, really took %s%s." % (pj._days(rec["bid"]), pj._days(took), pj._pct(took, rec["bid"])))
         elif rec.get("hours"):
@@ -618,8 +618,7 @@ def after_finish(client, db=None, now=None):
     rules = (snap.to_dict() or {}) if snap.exists else {}
     if rules.get("learnFromJobs") is False:
         return {"read": 0}
-    day_hours = pj._num(rules.get("crewDayHours"))
-    day_hours = day_hours if day_hours and day_hours > 0 else None
+    day_hours, each_hours = pj.hours_of(rules)
     cats = categories(db)
     recs = None
     read, wrote = 0, 0
@@ -640,7 +639,7 @@ def after_finish(client, db=None, now=None):
         try:
             if recs is None:
                 recs = {x["id"]: x for x in pj.records(db)}
-            got, usage = _ask(client, _prompt(j, r, recs.get(jid), day_hours))
+            got, usage = _ask(client, _prompt(j, r, recs.get(jid), day_hours, each_hours))
         except Exception as err:            # noqa: BLE001
             # Claude could not be reached (overloaded, a timeout): the job is
             # not marked read, so tomorrow evening asks again.

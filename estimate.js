@@ -31,6 +31,8 @@
 //                  Claude's answers keep it)}],
 //     spoilCuYd (soil, rock, debris), brushCuYd (brush only), fuel: {miles, jobDays, bobcatDays, gasCents, dieselCents},
 //     deliveryTown, off: {delivery, fuel, dumpsters, planting, markers}, memo,
+//     crewSize (2, 3 or 4 people on site, what its crew-days cost: pricing.js
+//     crewDayFor; left out = the usual crew),
 //     ways: 'rules' (priced by his delivered-or-picked-up rules from the
 //     start; one sent before them has none and keeps its trucks) }
 // saved with the form like the materials list. What QuickBooks has is
@@ -137,11 +139,13 @@
   // its fuel is counted over (pricing.js fuel). quotes: the job's delivery
   // charges checked with a supplier whose charge changes every order
   // (job.deliveryQuotes {vendorId: {cents, at, by}}; pricing.js deliveries).
-  function ctx(city, e, jobId, quotes) {
+  // q: the job's qbEstimate: one in QuickBooks has gone out, so its crew-day
+  // stays as it was (pricing.js crewDayFor).
+  function ctx(city, e, jobId, quotes, q) {
     const c = catalog();
     return { rules: P().rules(), items: c.items, prices: c.prices, vendors: c.vendors || {}, fuel: P().fuelPrices(), book: book,
              city: city != null ? String(city).trim() : (el('city') && el('city').value || '').trim(),
-             jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null, quotes: quotes || {} };
+             jobDays: e && jobId && P().asAccepted(e) ? jobDaysOf(jobId) : null, quotes: quotes || {}, inQb: !!(q && q.id) };
   }
   // The open job's (app.js boardFields) -- never used for a job not open.
   const openQuotes = () => (typeof window.ydOpenDeliveryQuotes === 'function' && window.ydOpenDeliveryQuotes()) || {};
@@ -165,7 +169,7 @@
     // address leaves it behind (the next miles lookup finds the new one).
     if (est.site && est.site.at !== siteKey()) est.site = null;
     priceRuns++;
-    last = P() ? P().price(est, ctx(undefined, est, currentJobId, openQuotes())) : null;
+    last = P() ? P().price(est, ctx(undefined, est, currentJobId, openQuotes(), qb())) : null;
     return last;
   }
   const busyHere = () => !!building && building === currentJobId;
@@ -197,6 +201,9 @@
     get() {
       const o = clone(est);
       o.chat = o.chat.slice(-CHAT_KEEP);
+      // Saved with the crew it is priced for, picked or not: a bid put in
+      // QuickBooks by hand then keeps that crew (pricing.js crewDayFor).
+      if (hasLines() && !o.crewSize && P() && !P().crewLocked(est, !!(qb() && qb().id))) o.crewSize = P().USUAL_CREW;
       return o;
     },
     load(e) {
@@ -276,18 +283,18 @@
     // pricing.js price() with the same Supplies, rules and price book --
     // never a second copy of the sums. null before pricing.js is there.
     // jobId: the job it is on (its days, for one accepted in QuickBooks);
-    // quotes: its deliveryQuotes.
-    priceSaved: (saved, city, jobId, quotes) => {
+    // quotes: its deliveryQuotes; q: its qbEstimate.
+    priceSaved: (saved, city, jobId, quotes, q) => {
       if (!P()) return null;
       const e = fromSaved(saved || {});
-      return P().price(e, ctx(city == null ? '' : city, e, jobId, quotes));
+      return P().price(e, ctx(city == null ? '' : city, e, jobId, quotes, q));
     },
     // The same, split by piece of work (profit by service, jobcosts.js):
     // { lines: [{ title, service, priceCents, costCents, profitCents, crewDays, complete, ... }], rest } or null.
-    splitSaved: (saved, city, jobId, quotes) => {
+    splitSaved: (saved, city, jobId, quotes, q) => {
       if (!P()) return null;
       const e = fromSaved(saved || {});
-      return serviceSplit(e, P().price(e, ctx(city == null ? '' : city, e, jobId, quotes)));
+      return serviceSplit(e, P().price(e, ctx(city == null ? '' : city, e, jobId, quotes, q)));
     },
     // A delivery charge checked for the open job (app.js setOrderDeliveryQuote):
     // priced again with it.
@@ -326,7 +333,7 @@
       if (l.costTotalCents > 0) byKind[l.category || 'other'] = (byKind[l.category || 'other'] || 0) + l.costTotalCents;
     });
     const n = v => (typeof v === 'number' && isFinite(v) ? v : 0);
-    return { priceCents: n(r.totalCents), crewDays: n(r.crewDays), crewDayCents: num(P().rules().crewDayCents),
+    return { priceCents: n(r.totalCents), crewDays: n(r.crewDays), crewDayCents: num(p.crewDayCents), crewSize: p.crewSize || null,
              materialCostCents: n(p.materialCostCents), deliveryCostCents: n(p.deliveryCostCents),
              fuelCostCents: n(p.fuelCostCents), laborCostCents: n(p.laborCostCents), subCostCents: n(p.subCostCents),
              costCents: n(p.costCents), byKind: byKind, complete: !!p.complete };
@@ -412,6 +419,8 @@
     // A home or a business, when set by hand (whoFor); left out = from the
     // job's Business name.
     if (e.customerType === 'home' || e.customerType === 'business') o.customerType = e.customerType;
+    // The people on site: what its crew-days cost (pricing.js crewDayFor).
+    if (P() && P().crewSizeIn(e.crewSize)) o.crewSize = P().crewSizeIn(e.crewSize);
     // A snow bid: switched by hand either way, and its price sheet.
     if (e.snowBid === true || e.snowBid === false) o.snowBid = e.snowBid;
     o.snow = cleanSnow(e.snow);
@@ -505,7 +514,7 @@
     if (drawnSnow) { renderSnow(wrap, ro); return; }
     const r = priced();
     const rules = P().rules();
-    const notReady = num(rules.crewDayCents) === null || num(rules.taxPct) === null;
+    const notReady = P().crewDayCost(rules) === null || num(rules.taxPct) === null;
 
     // Said yes to: one line, and what is left to do with it (renderQb).
     const fold = folded();
@@ -560,6 +569,7 @@
         est.flags.map(q => '<li>' + esc(q) + '</li>').join('') + '</ul></div>' : '') +
 
       '<h4 class="est-h est-jump-to" id="estJLabor">Labor <span class="muted">— each line is a line on the estimate, with its scope of work</span></h4>' +
+      crewSizeHtml(r, ro) +
       '<div class="est-work">' + (est.work.length ? est.work.map((w, i) => workHtml(w, i, ro)).join('')
         : '<div class="empty-msg">No labor yet.</div>') + '</div>' +
       (ro ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estAddWork()">+ Labor line</button></div>') +
@@ -955,7 +965,7 @@
       '<div class="est-learned-note">Claude was shown these — without names or addresses — as examples of what jobs like this ' +
         'really took (their work, materials and price, and the clock’s hours) and what was noted on them to do better next time; ' +
         'a lesson it follows is flagged on the estimate. Your Pricing rules text always wins.' +
-        (l.dayHours ? ' A crew-day is ' + l.dayHours + ' paid hours of the whole crew.'
+        (l.dayHours ? ' A crew-day is ' + l.dayHours + ' paid hours of the whole crew, fewer or more on a job bid for a smaller or bigger crew.'
           : ' Set “Hours in a crew-day” in Pricing rules and the clock’s hours are counted as crew-days.') +
         (window.YDAuth && YDAuth.isOwner ? ' <button type="button" class="link-btn ro-ok" onclick="openPricingRules()">Pricing rules</button>' : '') +
       '</div></details>';
@@ -1053,6 +1063,31 @@
   const WORK_KINDS = [['crew', 'By crew-days'], ['flat', 'By the unit (a service)'], ['amount', 'Fixed price (labor only)'],
                       ['allin', 'All in — with its materials']];
   const perDay = c => fmtMoney(Math.round(c / 100)).replace(/\.00$/, '') + '/day';
+
+  // How many are on site, which is what its crew-days cost (pricing.js
+  // crewDayFor). Who sees the money is the same as for its profit: not a
+  // look-only viewer, and the figure itself only under "Show my numbers"
+  // (renderTotals), as bids are built in front of the customer. Once the bid
+  // has gone out its crew is what the price was worked from, so it is said,
+  // not asked.
+  function crewSizeHtml(r, ro) {
+    if (ro || !r || !r.profit) return '';
+    const cost = ' <span class="muted" id="estCrewCost"></span>';
+    if (r.profit.crewLocked) {
+      return '<div class="est-sub-pick"><span class="muted">' +
+        (r.profit.crewSize ? 'Crew of ' + r.profit.crewSize + ' — kept as it went out' : 'Crew cost kept as it went out') +
+        '</span>' + cost + '</div>';
+    }
+    return '<div class="est-sub-pick" role="group" aria-label="People on site"><span class="muted">People on site:</span>' +
+      P().CREW_SIZES.map(n => '<button type="button" class="est-sub-chip' + (n === r.profit.crewSize ? ' on' : '') + '" aria-pressed="' +
+        (n === r.profit.crewSize) + '" onclick="estCrewSize(' + n + ')">' + n + '</button>').join('') + cost + '</div>';
+  }
+  window.estCrewSize = function (n) {
+    const size = P().crewSizeIn(n);
+    if (!size || !changes() || P().crewLocked(est, !!(qb() && qb().id))) return;
+    est.crewSize = size;
+    changed(true);
+  };
 
   function workHtml(w, i, ro) {
     const id = safeId(w.id), dis = ro ? ' disabled' : '';
@@ -1774,6 +1809,8 @@
     if (!t || !P()) return;
     const r = priced();
     const usual = P().defaultProfitCents ? P().defaultProfitCents() : null;
+    const crewCost = el('estCrewCost');
+    if (crewCost) crewCost.textContent = numbersShown && r.profit.crewDayCents !== null ? perDay(r.profit.crewDayCents) : '';
     r.work.forEach((w, i) => {
       const a = el('estWA_' + safeId(w.id)); if (a) a.textContent = w.cents ? cents(w.cents) : '';
       const p = el('estWP_' + safeId(w.id)); if (p) p.textContent = w.problems.join(' · ');
@@ -1980,6 +2017,7 @@
         : r.work.some(w => !w.sub && !w.crewDays) ? 'a labor line has no crew-days' : 'the crew-day rate isn’t set') + '.</p>' : '';
     const row = (label, value, cls) => '<tr' + (cls ? ' class="' + cls + '"' : '') + '><th scope="row">' + label + '</th><td>' + value + '</td></tr>';
     const days = p.crewDays > 0 ? fmtQ(p.crewDays) + ' crew-day' + (p.crewDays === 1 ? '' : 's') : 'no crew-days yet';
+    const dayRate = p.crewDayCents === null ? '' : ' at ' + perDay(p.crewDayCents) + (p.crewSize ? ', crew of ' + p.crewSize : '');
     // Lines done by someone else: who, and what they charge (a line with
     // no charge yet is counted as nothing until it has one).
     const subs = (p.subs || []).filter(s => s.cents !== null || s.by);
@@ -1991,7 +2029,7 @@
         row('Material cost <small>what you pay, tax in</small>', cents(p.materialCostCents)) +
         (p.deliveryCostCents ? row('Delivery cost', cents(p.deliveryCostCents)) : '') +
         (p.fuelCostCents ? row('Fuel cost', cents(p.fuelCostCents)) : '') +
-        row('Labor cost <small>' + days + ' at your crew-day rate</small>', cents(p.laborCostCents)) +
+        row('Labor cost <small>' + days + dayRate + '</small>', cents(p.laborCostCents)) +
         (subs.length ? row('Subs &amp; installers <small>' + subNames + '</small>', cents(p.subCostCents || 0)) : '') +
         row('Total cost', cents(p.costCents), 'est-plan-sub') +
         row('Profit', cents(p.cents), 'est-plan-big') +
@@ -4174,8 +4212,8 @@
              customerId: String((d ? d.customerId : typeof boardFields !== 'undefined' && boardFields && boardFields.customerId) || '') };
   }
 
-  function currentForClaude(e, city) {
-    const r = P() ? P().price(e, ctx(city)) : null;
+  function currentForClaude(e, city, q) {
+    const r = P() ? P().price(e, ctx(city, undefined, undefined, undefined, q)) : null;
     const dollars = c => (num(c) === null ? null : num(c) / 100);
     // What the app prices each line at, for Claude to talk about (it never
     // sets one): the line's labour, an all-in line's split, and what each
@@ -4557,7 +4595,7 @@
         chat: e0.chat.slice(-CHAT_SEND).map(m => ({ role: m.role, text: m.text })),
         // A snow bid is talked about as one (estimates.py draft_snow): its
         // price sheet, and no takeoff to price.
-        current: snowy ? { work: [], materials: [] } : currentForClaude(e0, job.city),
+        current: snowy ? { work: [], materials: [] } : currentForClaude(e0, job.city, job.data ? job.data.qbEstimate : qb()),
         snow: snowy ? snowForClaude(e0, job.data) : undefined,
         // This copy of the app can take just the lines that change (less for
         // Claude to write, so cheaper and quicker).
@@ -4666,7 +4704,8 @@
     // an undefined anywhere in it.
     const patch = { estimate: clone(e) };
     // A snow bid has no whole-job price to follow.
-    const total = P() && !snowOf(e, d.serviceTypes, d.jobStatus, d.qbEstimate) ? P().price(e, ctx(d.city || '')).totalCents : 0;
+    const total = P() && !snowOf(e, d.serviceTypes, d.jobStatus, d.qbEstimate)
+      ? P().price(e, ctx(d.city || '', undefined, undefined, undefined, d.qbEstimate)).totalCents : 0;
     if (!d.manualJobPrice && total > 0) {
       // Its add-ons and its invoice's change orders (app.js addOnsOf).
       const extra = typeof addOnsOf === 'function' ? addOnsOf(d)

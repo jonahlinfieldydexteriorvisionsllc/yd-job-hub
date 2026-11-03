@@ -171,7 +171,14 @@
       customerTaxPct: null,
       // What paying by card adds (cardFee, below). Empty or 0: no line.
       cardFeePct: 3.5,
+      // The one flat crew-day he had before crew sizes. Still what a bid
+      // costs until both hourly rates are set, and for a bid already out with
+      // no crew-day of its own kept (crewDayFor).
       crewDayCents: null,
+      // What a crew-day costs by who is on it (crewDayCost): the crew lead's
+      // hourly pay and each other person's, for crewPersonHours.
+      crewLeadCents: null,
+      crewOtherCents: null,
       // How many paid hours -- the whole crew's together -- make one
       // crew-day: what turns the clock's hours into crew-days on Estimate vs
       // actual (jobcosts.js) and for the finished jobs Claude is shown
@@ -179,7 +186,8 @@
       // 2026: "7hrs per crew member assuming a 1hr lunch" -- lunch is a
       // clock-out, so off the clock too), so he sets the people in a crew
       // and the hours each, and crewDayHours is their product, saved with
-      // them (prCrewDay). Nothing is assumed until he sets both.
+      // them (prCrewDay). Nothing is assumed until he sets both. A job with a
+      // crew size of its own counts by that instead (crewHours).
       crewPeople: null,
       crewPersonHours: null,
       crewDayHours: null,
@@ -826,6 +834,66 @@
     return defaultProfitCents(r);
   }
 
+  // ------------------------------------------------- what a crew-day costs
+  //
+  // Jonah, 3 Nov 2026: "i cant have a set crew rate when the number of people
+  // on site is always changing". A crew-day is what the people on it are
+  // paid: the crew lead, who is always counted, and each other person, at
+  // their hourly rates for the hours in his day (lunch is off the clock), with
+  // nothing on top of the pay. Each bid says how many (estimate crewSize, one
+  // of CREW_SIZES; left out, USUAL_CREW).
+  const CREW_SIZES = [2, 3, 4], USUAL_CREW = 3;
+  const crewSizeIn = v => (CREW_SIZES.indexOf(Number(v)) !== -1 ? Number(v) : null);
+  const crewRatesSet = r => num(r.crewLeadCents) !== null && num(r.crewOtherCents) !== null && num(r.crewPersonHours) > 0;
+  // Until the rates and the hours are in the rules, the flat rate he had: a
+  // bid prices as it did before, whatever its size.
+  function crewDayCost(rules, size) {
+    const r = rules || {};
+    if (!crewRatesSet(r)) return num(r.crewDayCents);
+    const others = (crewSizeIn(size) || USUAL_CREW) - 1;
+    return Math.round((num(r.crewLeadCents) + num(r.crewOtherCents) * others) * num(r.crewPersonHours));
+  }
+  // The whole crew's paid hours in one crew-day, for turning the clock's hours
+  // into crew-days (jobcosts.js; pastjobs.py took_days keeps the same rule):
+  // the job's own crew when it has one, else Hours in a crew-day.
+  function crewHours(rules, size) {
+    const r = rules || {}, each = num(r.crewPersonHours), n = crewSizeIn(size);
+    if (n && each > 0) return Math.round(n * each * 100) / 100;
+    return num(r.crewDayHours) > 0 ? num(r.crewDayHours) : null;
+  }
+  // What the newest version sent kept of its costs (estimate.js costSnapshot),
+  // or null. Versions sent before 14 Oct 2026 kept none.
+  function sentCost(est) {
+    const list = est && Array.isArray(est.sent) ? est.sent : [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const c = list[i] && list[i].cost;
+      if (c && typeof c.priceCents === 'number') return c;
+    }
+    return null;
+  }
+  // The crew an estimate was priced for: as it went out, else its own. null
+  // when it never had one (pastjobs.py _crew_size keeps the same rule).
+  const crewSizeOn = est => crewSizeIn((sentCost(est) || {}).crewSize) || crewSizeIn((est || {}).crewSize);
+  // Gone out: the customer has this price, so the crew behind it stays as it
+  // was, like the fuel prices kept when it was sent. inQb: the job has a
+  // QuickBooks estimate, which may have been put in by hand with no version
+  // kept here (the caller knows the job; the estimate alone does not).
+  const crewLocked = (est, inQb) => !!(inQb || (est && Array.isArray(est.sent) && est.sent.length) || asAccepted(est));
+  // What a crew-day costs on this estimate, and for how many people (null: a
+  // bid from before crew sizes). Everything that costs a crew-day comes here.
+  function crewDayFor(est, rules, inQb) {
+    const r = rules || {}, e = est || {}, size = crewSizeOn(e);
+    if (!crewLocked(e, inQb)) return { cents: crewDayCost(r, size), size: size || USUAL_CREW, locked: false };
+    const kept = num((sentCost(e) || {}).crewDayCents);
+    if (kept !== null) return { cents: kept, size: size, locked: true };
+    // Put in QuickBooks by hand after he picked its crew.
+    if (size && !asAccepted(e)) return { cents: crewDayCost(r, size), size: size, locked: true };
+    // Out before crew sizes with nothing kept, or made in QuickBooks: the flat
+    // rate is what those have always been costed at.
+    const flat = num(r.crewDayCents);
+    return { cents: flat !== null ? flat : crewDayCost(r), size: size, locked: true };
+  }
+
   // What an all-in line's price covers besides its labour: the materials
   // marked as in it, at what the customer pays for them, and their share of
   // any delivery (by quantity, when a truck also brings material that is
@@ -845,9 +913,9 @@
              count: inside.length, unpriced: inside.filter(l => l.problems.length).map(l => l.name || 'a material') };
   }
 
-  function workLine(w, ctx, inside) {
+  function workLine(w, ctx, inside, dayCost) {
     const r = ctx.rules, out = { id: w.id, cents: 0, problems: [], crewDays: null, costCents: null, profitPerDayCents: null };
-    const days = num(w.crewDays), dayCost = num(r.crewDayCents);
+    const days = num(w.crewDays);
     if (w.kind === 'allin') {
       // All in (Jonah, 21 Oct 2026: "i want the labor plus materials for the
       // paving to total 5616 ... calculate materials then minus that from 5616
@@ -1022,7 +1090,9 @@
     const del = deliveries(all, est, ctx);
     // An all-in line is priced after its materials: it is what is left of
     // his figure once they are charged.
-    const work = (est.work || []).map(w => workLine(w, ctx, w.kind === 'allin' ? allInParts(w, all, del) : null));
+    const crew = crewDayFor(est, ctx.rules, ctx.inQb);
+    const dayCost = crew.cents;
+    const work = (est.work || []).map(w => workLine(w, ctx, w.kind === 'allin' ? allInParts(w, all, del) : null, dayCost));
     // Every line's crew-days, however it is priced: they are the days on
     // site (fuel) and what the profit per day is counted over.
     const crewDays = work.reduce((s, w) => s + (w.crewDays || 0), 0);
@@ -1049,7 +1119,6 @@
     // they cost landed, delivery and fuel at cost, the crew at the crew-day
     // rate -- and that per crew-day. Only Jonah sees it. Not exact until every
     // line is priced and every labour line has its crew-days.
-    const dayCost = num(ctx.rules.crewDayCents);
     const materialCost = all.reduce((s, l) => s + (l.costTotalCents || 0), 0);
     const deliveryCost = del.lines.reduce((s, l) => s + (l.costCents || 0), 0);
     const fuelCost = fu.costCents || 0;
@@ -1060,6 +1129,7 @@
     const costCents = materialCost + deliveryCost + fuelCost + laborCost + subCost;
     const profit = {
       cents: totalCents - costCents, costCents: costCents, crewDays: crewDays,
+      crewDayCents: dayCost, crewSize: crew.size, crewLocked: crew.locked,
       materialCostCents: materialCost, deliveryCostCents: deliveryCost, fuelCostCents: fuelCost, laborCostCents: laborCost,
       subCostCents: subCost, subs: subs,
       marginPct: totalCents > 0 ? (totalCents - costCents) / totalCents * 100 : null,
@@ -1099,14 +1169,14 @@
   //     customer's price and at cost, with their share of each truck by
   //     quantity;
   //   - fuel (price and cost) shared by crew-days, the days it is there;
-  //   - the crew at the crew-day rate for its own crew-days.
+  //   - the crew at the estimate's crew-day for its own crew-days.
   // What no line takes (a material under none, fuel with no crew-days
   // anywhere, a cent of rounding) is `rest`, so the lines and rest always add
   // up to the job's price and profit. An estimate accepted in QuickBooks has
   // one materials figure: it is shared by what each line's materials cost.
   // r: price(est, ...). workFor(m, lines) -> work line id or ''.
-  function byLine(est, r, rulesNow, workFor) {
-    const dayCost = num((rulesNow || {}).crewDayCents);
+  function byLine(est, r, workFor) {
+    const dayCost = num(r.profit.crewDayCents);
     const ws = est.work || [];
     const lines = ws.map((w, i) => ({ id: w.id, title: w.title || '', w: w,
       laborCents: r.work[i] ? r.work[i].cents : 0, materialsCents: 0, materialCostCents: 0,
@@ -1421,6 +1491,8 @@
     customerTaxPct: ['Sales tax charged to customers', 'pct', 'tax'],
     cardFeePct: ['Card fee line on estimates', 'pct', 'terms'],
     crewDayCents: ['Crew-day rate (crew cost)', 'money', 'labor'],
+    crewLeadCents: ['Crew lead’s hourly rate', 'money', 'labor'],
+    crewOtherCents: ['Everyone else’s hourly rate', 'money', 'labor'],
     crewPeople: ['People in a crew', 'num', 'labor'],
     crewPersonHours: ['Paid hours each in a crew-day', 'num', 'labor'],
     crewDayHours: ['Paid hours in a crew-day', 'num', 'labor'],
@@ -1936,13 +2008,21 @@
         'Only you see this screen, and the customer never sees any of it.' + (ro ? ' <b>Only the owner can change these.</b>' : '') + '</p>' +
 
       secHead('labor') + '<div class="pr-grid">' +
-        box('Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')", 'what a crew-day costs, for estimating') +
-        box('People in a crew', r.crewPeople, "prCrewDay('crewPeople', this.value)", 'the people in one crew-day') +
+        box('Cesar’s rate ($ an hour)', dollars(r.crewLeadCents), "prSet('crewLeadCents', this.value, 'cents')",
+          'always counted on a crew', crewBox('prCrewLead')) +
+        box('Everyone else ($ an hour)', dollars(r.crewOtherCents), "prSet('crewOtherCents', this.value, 'cents')",
+          'each other person on the crew', crewBox('prCrewOther')) +
         box('Hours each in a crew-day', r.crewPersonHours, "prCrewDay('crewPersonHours', this.value)",
-          'paid hours a person works in a day, lunch left out' +
-          (num(r.crewDayHours) > 0 ? ' — a crew-day is ' + num(r.crewDayHours) + ' paid hours. Turns clocked hours into crew-days'
-            : '. With both set, clocked hours are turned into crew-days')) +
+          'paid hours a person works in a day, lunch left out', crewBox('prCrewHours')) +
+        box('People on a job with no crew size', r.crewPeople, "prCrewDay('crewPeople', this.value)",
+          'a job with no 2, 3 or 4 picked on its bid' +
+          (num(r.crewDayHours) > 0 ? ' — its crew-day is ' + num(r.crewDayHours) + ' paid hours. Turns clocked hours into crew-days'
+            : '. With the hours set too, clocked hours are turned into crew-days')) +
+        box(crewRatesSet(r) ? 'Old flat crew-day ($)' : 'Crew-day rate ($)', dollars(r.crewDayCents), "prSet('crewDayCents', this.value, 'cents')",
+          crewRatesSet(r) ? 'only for bids out before crew sizes with no crew-day kept, and estimates made in QuickBooks'
+            : 'what a crew-day costs until the two rates and the hours are in') +
       '</div>' +
+      '<p class="hint" id="prCrewCosts">' + esc(crewCostsText(r)) + '</p>' +
       profitChoicesHtml(r, ro) +
       // Services priced by the unit, with their adjustments and his notes on
       // how each is priced (estimate.js, Services).
@@ -2212,6 +2292,20 @@
     if (sub) save({ [head]: Object.assign({}, rules[head], { [sub]: val }) });
     else save({ [head]: val });
   };
+  // What a crew-day comes to, in words: worked out from whatever is in the
+  // boxes as he types, before it is saved.
+  function crewCostsText(r) {
+    if (!crewRatesSet(r)) return 'With both rates and the hours in, each bid’s 2, 3 or 4 people work out what its crew-day costs. Until then bids use the crew-day rate.';
+    const whole = c => fmtCents(c).replace(/\.00$/, '');
+    return 'A crew-day costs ' + CREW_SIZES.map(n => whole(crewDayCost(r, n)) + ' with ' + n + ' people').join(', ') +
+      '. Each bid picks 2, 3 or 4, and nothing goes on top of the hourly pay. Bids already sent keep what they went out at.';
+  }
+  const crewBox = id => ' id="' + id + '" oninput="prCrewLive()"';
+  window.prCrewLive = function () {
+    const out = el('prCrewCosts'), inBox = id => (el(id) || {}).value;
+    if (out) out.textContent = crewCostsText(Object.assign({}, rules, { crewLeadCents: cents(inBox('prCrewLead')),
+      crewOtherCents: cents(inBox('prCrewOther')), crewPersonHours: num(inBox('prCrewHours')) }));
+  };
   // People in a crew or hours each: the crew-day's paid hours are saved with
   // them, so what reads crewDayHours (jobcosts.js, pastjobs.py) never
   // multiplies for itself. Either one emptied empties it.
@@ -2393,8 +2487,10 @@
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
     price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
+    // A crew-day by the people on it (estimate.js, jobcosts.js).
+    CREW_SIZES, USUAL_CREW, crewSizeIn, crewSizeOn, crewDayCost, crewDayFor, crewHours, crewLocked,
     // Each work line's price, cost and profit (estimate.js, jobcosts.js).
-    byLine: (est, r, workFor) => byLine(est, r, rules, workFor),
+    byLine,
     // What bringing a job's order costs (estimate.js orderDelivery): the same sums.
     deliveries,
     // Delivered or picked up: one material's way by the rules (Supplies

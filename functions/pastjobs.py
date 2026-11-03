@@ -24,7 +24,9 @@ HOW LONG IT REALLY TOOK -- the same sums as Estimate vs actual (jobcosts.js
 actualSide): the clock's approved shifts on the job (kind 'job', status ok or
 approved) at their paid hours -- clock-in to clock-out, a pause included: the
 crew are paid through it and the job had them that long -- plus the labour
-hours typed on the job, divided by Hours in a crew-day (pricing/rules
+hours typed on the job, divided by the paid hours in one of its crew-days: its
+own crew size x Hours each (pricing/rules.crewPersonHours) when its estimate has
+a crew size (pricing.js crewHours), else Hours in a crew-day (pricing/rules
 .crewDayHours: the whole crew's paid hours in one crew-day -- People in a crew
 x Hours each, saved together by the Pricing rules screen). Nothing is assumed
 when that is not set: the hours are given, no
@@ -60,6 +62,7 @@ import digest as dg
 import stages
 
 CACHE_SECONDS = 1800
+CREW_SIZES = (2, 3, 4)      # the people a bid can be priced for (pricing.js CREW_SIZES)
 MIN_JOBS = 3                # a kind of work is averaged once this many finished jobs had it
 SHOW_MAX = 5                # similar jobs shown at most
 KINDS_MAX = 5               # kinds-of-work lines at most
@@ -267,6 +270,17 @@ def _bid_days(job):
     return total if total > 0 else None
 
 
+def _crew_size(est):
+    """The crew an estimate was priced for, or None (pricing.js crewSizeOn):
+    as the newest version sent kept it, else its own."""
+    sent = [v for v in est.get("sent") or [] if isinstance(v, dict) and isinstance(v.get("cost"), dict)
+            and _num(v["cost"].get("priceCents")) is not None]
+    for size in ((sent[-1]["cost"].get("crewSize") if sent else None), est.get("crewSize")):
+        if size in CREW_SIZES:
+            return int(size)
+    return None
+
+
 def _names(job):
     """(whole names, single names) a job's customer goes by: the name on the
     job, the business, first and last; and each name on its own."""
@@ -419,7 +433,7 @@ def _record(jid, j, clock_hours, clock_days, others=(None, None)):
         "id": jid, "town": _clip(j.get("city"), 40), "done": done[:10],
         "price": price if price and price > 0 else None,
         "services": services, "work": work, "mats": mats,
-        "bid": _bid_days(j), "handTook": _hand(j, "act"),
+        "bid": _bid_days(j), "handTook": _hand(j, "act"), "crewSize": _crew_size(est),
         "hours": round(clock_hours + typed, 2), "typedHours": round(typed, 2), "clockDays": clock_days,
         "groups": sorted(_groups(services + [w["title"] for w in work])),
         "words": sorted(_words(text)),
@@ -443,12 +457,21 @@ def name_patterns(db):
     return _cache["others"]
 
 
-def took_days(rec, day_hours):
-    """Crew-days it really took, or None (no hours, or no Hours in a crew-day)."""
+def hours_of(rules):
+    """(Hours in a crew-day, Hours each) from pricing/rules, None for one not set."""
+    day, each = _num(rules.get("crewDayHours")), _num(rules.get("crewPersonHours"))
+    return (day if day and day > 0 else None, each if each and each > 0 else None)
+
+
+def took_days(rec, day_hours, each_hours=None):
+    """Crew-days it really took, or None (no hours, or no Hours in a crew-day).
+    A job with a crew size of its own counts by that (pricing.js crewHours)."""
     if rec.get("handTook") is not None:
         return rec["handTook"]
-    if rec.get("hours") and day_hours:
-        return rec["hours"] / day_hours
+    size = rec.get("crewSize")
+    a_day = round(size * each_hours, 2) if size and each_hours else day_hours
+    if rec.get("hours") and a_day:
+        return rec["hours"] / a_day
     return None
 
 
@@ -498,13 +521,13 @@ def similar(recs, bid, exclude=None):
     return scored
 
 
-def kind_stats(recs, bid, day_hours, exclude=None):
+def kind_stats(recs, bid, day_hours, exclude=None, each_hours=None):
     """For each kind of work on the bid (its services, then its kinds of
     work): the finished jobs that had it AND say both what they were bid at
     and what they took, when there are at least MIN_JOBS of them."""
     if not day_hours:
         return []
-    pool = [r for r in recs if r["id"] != exclude and r.get("bid") and took_days(r, day_hours)]
+    pool = [r for r in recs if r["id"] != exclude and r.get("bid") and took_days(r, day_hours, each_hours)]
     out, seen_sets = [], set()
     wanted = []
     names = {}
@@ -525,7 +548,7 @@ def kind_stats(recs, bid, day_hours, exclude=None):
             continue                                    # the same jobs as a line already given
         seen_sets.add(ids)
         bid_sum = sum(r["bid"] for r in had)
-        took_sum = sum(took_days(r, day_hours) for r in had)
+        took_sum = sum(took_days(r, day_hours, each_hours) for r in had)
         out.append({"name": name, "n": len(had), "bid": round(bid_sum / len(had), 2),
                     "took": round(took_sum / len(had), 2)})
         if len(out) >= KINDS_MAX:
@@ -542,7 +565,7 @@ def _pct(took, bid):
     return " (%s%d%%)" % ("+" if p > 0 else "", p) if p else " (right on)"
 
 
-def _job_text(letter, r, day_hours):
+def _job_text(letter, r, day_hours, each_hours=None):
     head = "Job %s -- %s" % (letter, ", ".join(x for x in (
         r["town"], ("finished " + _month(r["done"])) if r["done"] else "",
         ("price $%s" % format(int(round(r["price"])), ",")) if r["price"] else "") if x))
@@ -566,7 +589,7 @@ def _job_text(letter, r, day_hours):
         more = len(r["mats"]) - MATS_MAX
         rows.append("  Materials bid: " + "; ".join(re.sub(r"\s+", " ", x).strip() for x in mats) +
                     ("; and %d more" % more if more > 0 else ""))
-    took = took_days(r, day_hours)
+    took = took_days(r, day_hours, each_hours)
     if r.get("handTook") is not None:
         rows.append("  Really took: %s crew-days (set by Jonah)%s." % (
             _days(took), (" -- bid %s%s" % (_days(r["bid"]), _pct(took, r["bid"]))) if r["bid"] else ""))
@@ -599,18 +622,17 @@ def for_estimate(db, d):
     rules = (snap.to_dict() or {}) if snap.exists else {}
     if rules.get("learnFromJobs") is False:
         return "", None
-    day_hours = _num(rules.get("crewDayHours"))
-    day_hours = day_hours if day_hours and day_hours > 0 else None
+    day_hours, each_hours = hours_of(rules)
     recs = records(db)
     exclude = str(d.get("jobId") or "") or None
     bid = bid_facts(d)
     picked = similar(recs, bid, exclude)
-    kinds = kind_stats(recs, bid, day_hours, exclude)
+    kinds = kind_stats(recs, bid, day_hours, exclude, each_hours)
     finished = len([r for r in recs if r["id"] != exclude])
     blocks, shown = [], []
     used = 0
     for score, r in picked[:SHOW_MAX]:
-        t = _job_text("ABCDEFGH"[len(shown)], r, day_hours)
+        t = _job_text("ABCDEFGH"[len(shown)], r, day_hours, each_hours)
         if shown and used + len(t) > TEXT_BUDGET:
             break
         blocks.append(t)
@@ -636,7 +658,8 @@ def for_estimate(db, d):
             "whenever you use these figures, say how many jobs they come from." % (
                 ("the %d most like it" % len(shown)) if shown else "none close enough to show",
                 finished,
-                ("A crew-day is %s paid crew hours (his Pricing rules). " % _qty(day_hours)) if day_hours else
+                ("A crew-day is %s paid crew hours (his Pricing rules), fewer or more on a job bid for a smaller or "
+                 "bigger crew. " % _qty(day_hours)) if day_hours else
                 "(Hours in a crew-day is not set in his Pricing rules, so the clock's hours are not turned into "
                 "crew-days.) "))
     parts = ([head] + blocks) if shown or kinds else []
@@ -649,7 +672,7 @@ def for_estimate(db, d):
     if lessons:
         parts.append(lessons)
     info = {"finished": finished, "dayHours": day_hours, "kinds": kinds, "lessons": taught,
-            "jobs": [{"id": r["id"], "bid": r["bid"], "took": round(took_days(r, day_hours), 2)
-                      if took_days(r, day_hours) is not None else None,
+            "jobs": [{"id": r["id"], "bid": r["bid"], "took": round(took_days(r, day_hours, each_hours), 2)
+                      if took_days(r, day_hours, each_hours) is not None else None,
                       "hours": round(r["hours"]) if r["hours"] else None} for r in shown]}
     return "\n\n".join(parts), info
