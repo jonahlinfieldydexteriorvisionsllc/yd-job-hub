@@ -95,6 +95,7 @@
   const isClaude = n => !!n && n.uid === 'claude';
   const newest = (a, b) => String(b.at || '').localeCompare(String(a.at || ''));
   function forJob(id) { return id ? all().filter(n => n.jobId === id).sort(newest) : []; }
+  const notesFor = id => (id && window.YDCrewNotes && YDCrewNotes.forJob ? YDCrewNotes.forJob(id) : []);
   function when(iso) {
     const d = new Date(iso);
     if (isNaN(d)) return '';
@@ -488,12 +489,19 @@
     if (!sec || !body) return;
     const list = forJob(jobId);
     const like = likeOf(jobId);
-    sec.hidden = !jobId || !signedIn() || !can('jobs', 'see') || (!list.length && !jobIsWorked() && !like.length);
+    const plain = notesFor(jobId);
+    sec.hidden = !jobId || !signedIn() || !can('jobs', 'see') || (!list.length && !jobIsWorked() && !like.length && !plain.length);
     if (sec.hidden) return;
     const open = list.filter(n => !n.readAt).length;
     if (badge) badge.textContent = open ? open + ' not handled' : '';
     body.innerHTML = (list.length ? '<div class="ji-list">' + list.map(n => rowHtml(n)).join('') + '</div>'
         : '<p class="empty-msg">' + (isOwner() ? 'Nothing noted on this job yet.' : 'You haven’t noted anything on this job.') + '</p>') +
+      // The crew's plain notes about it ("📝 Leave a note for Jonah" on the
+      // job's page), with who wrote them.
+      (plain.length ? '<div class="cj-h" style="margin-top:14px">📝 Notes from the crew</div><div class="ji-list">' +
+        plain.map(n => '<div class="ji-row' + (n.readAt ? ' handled' : '') + '"><div class="ji-top"><span class="muted">' +
+          esc(n.by || 'Someone') + ' · ' + esc(when(n.at)) + (n.readAt ? ' · read' : '') + '</span></div>' +
+          '<div class="ji-note">' + esc(n.text || '') + '</div></div>').join('') + '</div>' : '') +
       (jobIsWorked() ? '<div class="field-actions"><button class="btn btn-sm ro-ok" onclick="jiNew()">⚠️ Note an issue or lesson</button></div>' : '') +
       // What the crew are shown for it from the jobs like it.
       (like.length ? '<div class="cj-h" style="margin-top:14px">💡 Last time on a job like this</div>' + likeListHtml(like) : '');

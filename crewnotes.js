@@ -281,6 +281,12 @@
       text: String(text).trim().slice(0, MAX_LEN), editedAt: nowIso(), editedBy: myName() }),
     removeIssue: (id, on) => changeIssue(id, { deletedAt: on ? nowIso() : null }),
     issues: () => Object.values(notes).filter(isIssue).map(n => JSON.parse(JSON.stringify(n))),
+    // The plain notes left about one job (not issues), newest first, as
+    // copies -- shown on that job with who wrote them (jobissues.js; Jonah,
+    // 2 Nov 2026: "note can be added on a job from the crew and it says who
+    // added the note").
+    forJob: id => Object.values(notes).filter(n => id && n.jobId === id && !isIssue(n) && !n.deletedAt)
+      .sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))).map(n => JSON.parse(JSON.stringify(n))),
     handled: (id, on) => window.markCrewNote(id, on),
     loaded: () => loaded };
 })();
