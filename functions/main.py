@@ -1261,7 +1261,9 @@ def _social(request, path, headers):
         elif path == "/social/plan-now":
             result = social.plan(_claude())
         elif path == "/social/rewrite":
-            result = social.rewrite(_claude(), re.sub(r"[^A-Za-z0-9_-]", "", str(body.get("id") or "")))
+            note = body.get("note")
+            result = social.rewrite(_claude(), re.sub(r"[^A-Za-z0-9_-]", "", str(body.get("id") or "")),
+                                    None if note is None else str(note))
         else:
             return (json.dumps({"error": "not found"}), 404, json_headers)
     except Exception as e:                              # noqa: BLE001

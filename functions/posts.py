@@ -221,11 +221,12 @@ def draft(client, job_id, auto=False):
     return result
 
 
-def _ask(client, facts):
+def _ask(client, facts, note=None):
     """Claude's posts for one job: (posts, error, usage)."""
+    said = ("\n\nJonah's note for these posts -- follow it, as long as every rule above still holds:\n" + note) if note else ""
     resp = client.beta.messages.create(
         model=MODEL, max_tokens=6000, system=SYSTEM,
-        messages=[{"role": "user", "content": "The job:\n" + json.dumps(facts, ensure_ascii=False)}],
+        messages=[{"role": "user", "content": "The job:\n" + json.dumps(facts, ensure_ascii=False) + said}],
         thinking={"type": "adaptive"},
         output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",
@@ -243,12 +244,28 @@ def _ask(client, facts):
     return posts, None, resp.usage
 
 
-def _keep_words(db, job_id, posts):
-    """Kept for the posting schedule (social.py): socialWords/{jobId}."""
-    db.collection("socialWords").document(job_id).set(dict(posts, at=dg._now().isoformat(), error=None))
+def _keep_words(db, job_id, posts, note=None):
+    """Kept for the posting schedule (social.py): socialWords/{jobId}, with
+    his note for Claude when there is one (kept for the next writing too)."""
+    db.collection("socialWords").document(job_id).set(dict(posts, at=dg._now().isoformat(), error=None,
+                                                           note=note or None))
 
 
-def words(client, db, job_id, j):
+NOTE_MAX = 1000
+
+
+def _note_of(db, job_id, note):
+    """His note for this job's posts: the one just typed (Posts → a post →
+    "Note for Claude", Jonah 2 Nov 2026: "add notes for calude to view on
+    media posts that are going up"), else the one he left before. '' wipes
+    it."""
+    if note is not None:
+        return str(note).strip()[:NOTE_MAX]
+    snap = db.collection("socialWords").document(job_id).get()
+    return str(((snap.to_dict() or {}) if snap.exists else {}).get("note") or "")[:NOTE_MAX]
+
+
+def words(client, db, job_id, j, note=None):
     """A finished job's posts, written and kept for the posting schedule
     (social.py plan) when it was never written for. Returns (words or
     {error}, usage). A job with nothing to write about, or one Claude will
@@ -261,12 +278,14 @@ def words(client, db, job_id, j):
         db.collection("socialWords").document(job_id).set({"error": "no work on its estimate", "noWork": True,
                                                             "at": dg._now().isoformat()})
         return {"error": "no work on its estimate"}, None
-    posts, error, usage = _ask(client, facts)
+    note = _note_of(db, job_id, note)
+    posts, error, usage = _ask(client, facts, note)
     if error:
         if error.startswith("Claude declined"):
-            db.collection("socialWords").document(job_id).set({"error": error, "at": dg._now().isoformat()})
+            db.collection("socialWords").document(job_id).set({"error": error, "at": dg._now().isoformat(),
+                                                                "note": note or None})
         return {"error": error}, usage
-    _keep_words(db, job_id, posts)
+    _keep_words(db, job_id, posts, note)
     return posts, usage
 
 
@@ -286,10 +305,11 @@ def _scheduled(db):
 
 
 def _write(client, db, job_id, j, facts):
-    posts, error, usage = _ask(client, facts)
+    note = _note_of(db, job_id, None)
+    posts, error, usage = _ask(client, facts, note)
     if error:
         return {"error": error}, usage
-    _keep_words(db, job_id, posts)
+    _keep_words(db, job_id, posts, note)
     scheduled = _scheduled(db)
     places = [(k, label) for k, label in PLACES if k not in scheduled]
 

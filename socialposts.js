@@ -324,7 +324,16 @@
         ? '<label class="sp-lbl">The words' + (p.place === 'google' ? ' <span class="muted">(Google adds a Call button)</span>' : '') +
             '<textarea id="spText_' + id + '" rows="8" maxlength="5000">' + esc(drafts[id] != null ? drafts[id] : p.text || '') +
             '</textarea></label>' +
-          '<div class="field-actions"><button class="btn btn-sm" onclick="spSaveText(\'' + id + '\')">Save the words</button></div>'
+          '<div class="field-actions"><button class="btn btn-sm" onclick="spSaveText(\'' + id + '\')">Save the words</button></div>' +
+          // Jonah, 2 Nov 2026: "add notes for claude to view on media posts
+          // that are going up". Kept with the job's words, so every later
+          // writing of this job's posts follows it too.
+          (p.kind === 'job'
+            ? '<label class="sp-lbl">Note for Claude <span class="muted">(what to say or leave out — it writes this job’s posts again with it)</span>' +
+                '<textarea id="spNote_' + id + '" rows="2" maxlength="1000" placeholder="e.g. say it was a full backyard redo; don’t mention the old deck">' +
+                esc(drafts['n_' + id] != null ? drafts['n_' + id] : p.jobNote || '') + '</textarea></label>' +
+              '<div class="field-actions"><button class="btn btn-sm" onclick="spRewrite(\'' + id + '\', true)">✍️ Write it again with my note</button></div>'
+            : '')
         : '<div class="sp-text">' + esc(p.text || '') + '</div>') +
       (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
           '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '" loading="lazy"></a>' +
@@ -553,13 +562,18 @@
   };
   // Claude writes the job's words again; every post of the job not up yet
   // and not changed by hand takes them (social.py rewrite).
-  window.spRewrite = async id => {
+  // withNote: from "Write it again with my note" -- the note box goes too
+  // (an emptied box takes the note off).
+  window.spRewrite = async (id, withNote) => {
     const p = posts[id];
     if (!p) return;
+    const box = withNote ? el('spNote_' + safeId(p.id)) : null;
     if (p.edited && !(await ydConfirm('You changed this one by hand — Claude’s new words won’t replace yours here ' +
         '(they will on the job’s other posts). Go on?', { ok: 'Write them again' }))) return;
     delete drafts[safeId(p.id)];
-    const r = await ask('/social/rewrite', { id: p.id }, 'Claude is writing it again…');
+    delete drafts['n_' + safeId(p.id)];
+    const body = box ? { id: p.id, note: box.value.trim().slice(0, 1000) } : { id: p.id };
+    const r = await ask('/social/rewrite', body, 'Claude is writing it again…');
     if (r) showToast(r.error || 'Written again — ' + r.posts + ' post' + (r.posts === 1 ? '' : 's') + ' changed');
   };
   window.spCopy = id => {
@@ -682,6 +696,7 @@
   document.addEventListener('input', e => {
     const t = e.target;
     if (t && t.id && t.id.indexOf('spText_') === 0) drafts[t.id.slice(7)] = t.value;
+    if (t && t.id && t.id.indexOf('spNote_') === 0) drafts['n_' + t.id.slice(7)] = t.value;
   });
 
   // ------------------------------------------------------------ the rest of Job Hub

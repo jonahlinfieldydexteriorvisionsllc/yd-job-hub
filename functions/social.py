@@ -1312,10 +1312,11 @@ def _neg_day(day):
 # ---------------------------------------------------------------- the app
 
 
-def rewrite(client, pid):
+def rewrite(client, pid, note=None):
     """"Write it again" on a job's post: Claude writes the job's words anew
     (socialWords), and every post of that job not up yet and not changed by
-    hand takes them -- checked again, as when planned."""
+    hand takes them -- checked again, as when planned. `note`: his note for
+    Claude on this job's posts (None = keep the one he left before)."""
     import posts
     import spend
     db = _db()
@@ -1330,7 +1331,7 @@ def rewrite(client, pid):
     if spend.over_cap(db):
         return {"error": "Over today's Claude limit — try tomorrow, or change the words by hand"}
     j = js.to_dict() or {}
-    res, usage = posts.words(client, db, jid, j)
+    res, usage = posts.words(client, db, jid, j, note)
     if usage is not None:
         spend.record(db, spend.today(), "social", posts.MODEL, usage)
     if not (isinstance(res, dict) and res.get("facebook")):
@@ -1341,6 +1342,9 @@ def rewrite(client, pid):
     for s in db.collection("socialPosts").where("jobId", "==", jid).stream():
         p = s.to_dict() or {}
         place = p.get("place")
+        if note is not None and (p.get("jobNote") or "") != note.strip()[:posts.NOTE_MAX]:
+            # Shown in each of the job's posts' note box (socialposts.js).
+            s.reference.set({"jobNote": note.strip()[:posts.NOTE_MAX] or None}, merge=True)
         if place not in PLACES or p.get("edited") or p.get("status") not in ("queued", "held", "notConnected", "failed",
                                                                                  "missed"):
             continue
