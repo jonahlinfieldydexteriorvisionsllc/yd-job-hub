@@ -310,6 +310,45 @@ def report_lines(r, name):
     return lines
 
 
+# ---------------------------------------------------------------- the archive
+#
+# Jonah (2 Nov 2026): "clear out [the crew lead's] end of the day summaries
+# after 14 days. Dont clear all at once ... old ones should go away after 14
+# days but maybe have the info stored in a note sheet or something that takes
+# up minimal space" -- so he can still ask about a day. Each morning a report
+# 15 days old or more is put, as plain words, into its person's month:
+# endOfDayArchive/{uid}_{YYYY-MM} {uid, by, month, days: {day: {text, jobs
+# [{id, name}], jobIds, sentAt, photos}}} (owner only), and then removed.
+# Its photos are on the jobs, not the report: nothing else goes.
+KEEP_DAYS = 14
+ARCHIVE_MAX = 200           # reports put away in one morning
+
+
+def archive(db, people=None, now=None):
+    """Put away the reports older than KEEP_DAYS. Returns how many."""
+    now = now or dg._now()
+    cutoff = (now.astimezone(dg.TZ).date() - datetime.timedelta(days=KEEP_DAYS)).isoformat()
+    people = people if people is not None else {}
+    n = 0
+    for s in db.collection("endOfDay").where("day", "<", cutoff).limit(ARCHIVE_MAX).stream():
+        r = s.to_dict() or {}
+        day, uid = str(r.get("day") or ""), str(r.get("uid") or "")
+        if not uid or len(day) != 10:
+            continue
+        name = _first(people, uid, r.get("by"))
+        lines = [str(x.get("text") or "").strip() for x in report_lines(r, name)[1:]]
+        jobs = [{"id": str(j.get("id") or ""), "name": str(j.get("name") or "")[:120]}
+                for j in (r.get("jobs") or []) if isinstance(j, dict) and j.get("id")][:30]
+        entry = {"text": "\n".join(x for x in lines if x)[:6000], "jobs": jobs,
+                 "jobIds": [str(x) for x in (r.get("jobIds") or [])][:30],
+                 "sentAt": r.get("sentAt"), "photos": _photos(r)}
+        db.collection("endOfDayArchive").document("%s_%s" % (uid, day[:7])).set(
+            {"uid": uid, "by": r.get("by") or name, "month": day[:7], "days": {day: entry}}, merge=True)
+        s.reference.delete()
+        n += 1
+    return n
+
+
 def add_to_summary(data, owner, uid, sections, push_bits):
     """The owner's summary: the reports, and whose is missing. Someone on the
     list: whether theirs went (evening only)."""

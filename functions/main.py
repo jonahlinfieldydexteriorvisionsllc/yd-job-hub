@@ -495,6 +495,12 @@ def _digest(request, path, headers):
                 tidy.purge_jobs()
             except Exception as e:                      # noqa: BLE001
                 print("tidy: deleted jobs not cleared:", e)
+            try:
+                import digest as dg_
+                import endofday
+                endofday.archive(_db, dg_._people())
+            except Exception as e:                      # noqa: BLE001
+                print("endofday: reports not put away:", e)
         # Friday evening, after the summary: the week's finished jobs ready
         # to post, with their After photos (posts.py weekly).
         posted = None

@@ -750,7 +750,9 @@
     const owner = isOwner();
     const seesJobs = typeof ydCan === 'function' && ydCan('jobs', 'see');
     const jobs = (Array.isArray(r.jobs) ? r.jobs : []).filter(j => j && j.id);
-    const rows = items.map(it => {
+    // Put away after two weeks: the words as they were sent, nothing to tick.
+    const rows = r.archived ? '<div class="eod-rep-row"><div class="eod-rep-t">' +
+      esc(r.text || '').replace(/\n/g, '<br>') + '</div></div>' : items.map(it => {
       const v = a[it.id];
       if (it.kind === 'photos') {
         return '<div class="eod-rep-row eod-rep-tick ' + (v === true ? 'yes' : 'no') + '">📷 ' +
@@ -770,7 +772,7 @@
     const jobLine = jobs.length && !opts.job ? '<div class="eod-rep-jobs">🔨 ' + jobs.map(j => seesJobs
       ? '<button type="button" class="link-btn" onclick="eodOpenJob(\'' + safe(j.id) + '\')">' + esc(j.name) + '</button>'
       : esc(j.name)).join(', ') + '</div>' : '';
-    const acts = owner && r.uid !== myUid() && !opts.job ? '<div class="eod-rep-acts">' + (r.readAt
+    const acts = r.archived ? '' : owner && r.uid !== myUid() && !opts.job ? '<div class="eod-rep-acts">' + (r.readAt
       ? '<button type="button" class="link-btn" onclick="eodRead(\'' + safe(r.id) + '\', false)">Mark unread</button>'
       : '<button type="button" class="btn btn-sm" onclick="eodRead(\'' + safe(r.id) + '\', true)">✓ Read it</button>') + '</div>'
       : !owner && !opts.job && r.uid === myUid() && onList(myUid()) && r.day >= addDays(today(), -DRAFT_DAYS)
@@ -820,8 +822,26 @@
     if (m) m.classList.remove('active');
     window.openEndOfDay(day);
   };
+  // Reports over two weeks old are put away as plain words by the server
+  // (functions/endofday.py archive: endOfDayArchive/{uid}_{month}); read
+  // once, when older ones are first wanted, and shown like the rest.
+  let archiveAsked = null;
+  function loadArchive() {
+    if (!isOwner() || !window.YDDb || !YDDb.list) return Promise.resolve();
+    if (archiveAsked) return archiveAsked;
+    archiveAsked = Promise.resolve(YDDb.list('endOfDayArchive')).then(found => {
+      Object.values(found || {}).forEach(doc => Object.keys((doc && doc.days) || {}).forEach(day => {
+        const e = doc.days[day] || {}, id = doc.uid + '_' + day;
+        if (!reports[id]) older[id] = { id: id, uid: doc.uid, by: doc.by, day: day, sentAt: e.sentAt, readAt: e.sentAt,
+          jobIds: e.jobIds || [], jobs: e.jobs || [], photos: { count: e.photos || 0 }, archived: true, text: e.text || '' };
+      }));
+      changed();
+    }).catch(e => { archiveAsked = null; console.warn('[eod] earlier reports not read:', (e && e.code) || e); });
+    return archiveAsked;
+  }
   window.eodMore = function () {
     listShow += LIST_SHOW;
+    loadArchive();
     // The owner's from before the live ones: asked for once, when first wanted.
     if (isOwner() && !olderAsked && window.YDDb && YDDb.listWhere) {
       olderAsked = true;
@@ -1030,6 +1050,7 @@
         Object.keys(found || {}).forEach(k => { if (!reports[k]) older[k] = Object.assign({ id: k }, found[k]); });
         if (jobId === asked) drawJob();
       }).catch(() => { delete jobAsked[asked]; });
+      loadArchive().then(() => { if (jobId === asked) drawJob(); });
     }
     drawJob();
   }

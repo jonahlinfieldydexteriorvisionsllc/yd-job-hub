@@ -996,6 +996,11 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt']);
       allow delete: if isOwner();
     }
+    // Reports older than two weeks, put away as plain words by the server
+    // (functions/endofday.py archive): the owner reads them, nobody writes.
+    match /endOfDayArchive/{docId} {
+      allow read: if isOwner();
+    }
 
     match /supplies/{docId} {
       allow read:  if isStaff();
