@@ -318,6 +318,29 @@
       render();
       return true;
     },
+    // The job took its QuickBooks invoice while it was open with typing in it
+    // (quickbooks.py take_invoice, app.js ydInvoiceTaken): what the server
+    // saved comes in, what was typed stays. Filled again from the invoice
+    // (fromQb), each line is QuickBooks' and keeps the crew-days and notes
+    // here; built in Job Hub, only a line's words changed.
+    takeInvoice(saved) {
+      if (!saved) return false;
+      const got = fromSaved(saved);
+      const here = {};
+      est.work.forEach(w => { here[w.id] = w; });
+      if (saved.fromQb) {
+        est.work = got.work.map(w => (here[w.id] ? Object.assign({}, here[w.id],
+          { kind: w.kind, title: w.title, scope: w.scope, amountCents: w.amountCents, qbItem: w.qbItem, taxable: w.taxable, qbLine: w.qbLine }) : w));
+        est.fromQb = got.fromQb;
+        if (!est.materials.length) est.materials = got.materials;
+      } else {
+        const theirs = {};
+        got.work.forEach(w => { theirs[w.id] = w; });
+        est.work = est.work.map(w => (theirs[w.id] ? Object.assign({}, w, { scope: theirs[w.id].scope }) : w));
+      }
+      if (!typingHere()) render(); else stale = true;
+      return true;
+    },
   };
 
   // What the estimate cost us, as it stood when it went to QuickBooks: kept
@@ -814,15 +837,16 @@
   function fromQbHtml(r, ro) {
     const q = est.fromQb;
     if (!q) return '';
-    const what = q.kind === 'invoice' ? 'invoice' : 'estimate';
+    const billed = q.kind === 'invoice';
+    const what = billed ? 'invoice' : 'estimate';
     const said = (q.docNumber ? 'QuickBooks ' + what + ' #' + esc(q.docNumber) : 'a QuickBooks ' + what) +
       (q.acceptedDate ? ', accepted ' + esc(fmtDay(q.acceptedDate)) : '');
     if (q.reprice) {
-      return '<div class="est-fromqb">From ' + said + '. Priced by your rules here, not as the customer accepted it' +
+      return '<div class="est-fromqb">From ' + said + '. Priced by your rules here, not as ' + (billed ? 'the invoice bills it' : 'the customer accepted it') +
         (num(q.totalCents) !== null ? ' (' + cents(q.totalCents) + ')' : '') + '.' +
         (ro ? '' : ' <button class="link-btn" onclick="estReprice(false)">Back to QuickBooks’ figures</button>') + '</div>';
     }
-    return '<div class="est-fromqb">From ' + said + ' — the prices are the ones the customer said yes to: ' +
+    return '<div class="est-fromqb">From ' + said + ' — the prices are ' + (billed ? 'the invoice’s, change orders and all' : 'the ones the customer said yes to') + ': ' +
       'the materials as one figure, nothing added on top. Each material below shows what it costs you.' +
       (ro ? '' : ' <button class="link-btn" onclick="estReprice(true)">Price it by my rules instead</button>') + '</div>';
   }
@@ -834,7 +858,8 @@
     if (!changes() || !est.fromQb) return;
     const was = est;
     if (on && !(await ydConfirm('Its total will no longer be the ' +
-        (num(est.fromQb.totalCents) !== null ? cents(est.fromQb.totalCents) + ' ' : '') + 'the customer accepted in QuickBooks.',
+        (num(est.fromQb.totalCents) !== null ? cents(est.fromQb.totalCents) + ' ' : '') +
+        (est.fromQb.kind === 'invoice' ? 'on the QuickBooks invoice.' : 'the customer accepted in QuickBooks.'),
         { title: 'Price this estimate by your rules?', ok: 'Price it by my rules' }))) return;
     if (est !== was || !est.fromQb) return;      // another job opened meanwhile
     est.fromQb = Object.assign({}, est.fromQb, { reprice: !!on });

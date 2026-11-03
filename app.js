@@ -321,7 +321,9 @@ function jobBill(d) {
 // by id, never by the spelling of a name; 'hand' when Jonah picked it.
 // qbChangesIn: the change orders on its QuickBooks invoice already in its
 // price, in cents; qbChangesOff: they were put in by hand, so never counted
-// (quickbooks.py _price_follows).
+// (quickbooks.py _price_follows). qbInvoiceTaken {id, docNumber, emailAt,
+// cents, at, by}: the job last took its invoice whole (take_invoice) --
+// price, lines and words, each time it was emailed.
 // The follow-up plan (boards.js CHASE_STEPS, functions/followup.py): chase
 // {start, done: {step: {at, by, how}}, stoppedAt, resumeAt} is the app's
 // (calls ticked, "keep emailing them"); chaseDrafts {step: {at, sent | byHand
@@ -337,7 +339,7 @@ function jobBill(d) {
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'autoFollowUpAt', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
-  'customerId', 'customerBy', 'customerFill', 'qbChangesIn', 'qbChangesOff', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail',
+  'customerId', 'customerBy', 'customerFill', 'qbChangesIn', 'qbChangesOff', 'qbInvoiceTaken', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail',
   'noPost', 'noThanks', 'jobLine', 'welcomeEmail', 'noWelcome', 'deliveryQuotes'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
@@ -1864,9 +1866,16 @@ function syncJobPriceFromProposals() {
   if (total > 0) { baseJobPrice = total; document.getElementById('jobPrice').value = (baseJobPrice + getAdditionalCostsTotal()).toFixed(2); updateJobPriceSourceTag(); updateSummary(); }
 }
 function onJobPriceManualEdit() { manualJobPrice = true; baseJobPrice = parseMoney(document.getElementById('jobPrice').value) - getAdditionalCostsTotal(); updateJobPriceSourceTag(); }
+// The price box still holds what the job took from its invoice: it is the
+// invoice's, not one typed (take_invoice marks it manual so the form leaves it).
+function priceIsInvoices() {
+  const t = boardFields.qbInvoiceTaken;
+  return !!t && typeof t.cents === 'number' && Math.abs(parseMoney(document.getElementById('jobPrice').value) - t.cents / 100) < 0.005;
+}
 function updateJobPriceSourceTag() {
   const tag = document.getElementById('jobPriceSourceTag');
-  if (manualJobPrice) { tag.textContent = '(manual)'; tag.style.color = 'var(--accent-ink)'; }
+  if (priceIsInvoices()) { tag.textContent = '(from invoice)'; tag.style.color = 'var(--pos)'; }
+  else if (manualJobPrice) { tag.textContent = '(manual)'; tag.style.color = 'var(--accent-ink)'; }
   else if (proposals.length || hasEstimate()) { tag.textContent = hasEstimate() ? '(from estimate)' : '(auto)'; tag.style.color = 'var(--pos)'; }
   else tag.textContent = '';
 }
@@ -1895,24 +1904,68 @@ function showJobPrice() {
 // counted with the add-ons (qbChangesTotal), so the price box comes to the
 // invoice; when it still does not -- a discount changed there, a line's
 // amount edited, a job whose invoice was made by hand -- the invoice's
-// figure shows under the box, with one tap to make it the price.
+// figure shows under the box, with one tap to make it the price. The job
+// takes its invoice by itself each time it is emailed (Jonah, 3 Nov 2026:
+// quickbooks.py take_invoice); until the invoice changes again, the box says
+// which one it follows.
 function showInvoicePrice(price) {
   const el = document.getElementById('jobPriceQb');
   if (!el) return;
-  const ref = boardFields.qbInvoiceRef || {};
+  const ref = boardFields.qbInvoiceRef || {}, took = boardFields.qbInvoiceTaken;
   const sub = typeof ref.subtotal === 'number' ? ref.subtotal : null;
   const off = sub !== null && sub > 0 && (price === null || Math.abs(price - sub) >= 0.005);
-  el.hidden = !off;
+  const follows = !off && sub !== null && !!took && String(took.id) === String(ref.id);
+  el.hidden = !off && !follows;
+  if (follows) {
+    const day = new Date(took.at);
+    el.textContent = '🧾 Follows QuickBooks invoice' + (took.docNumber ? ' #' + took.docNumber : '') +
+      (isNaN(day) ? '' : ', taken ' + day.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+    return;
+  }
   if (!off) { el.innerHTML = ''; return; }
   el.innerHTML = 'QuickBooks invoice' + (ref.docNumber ? ' #' + esc(String(ref.docNumber)) : '') + ' comes to <b>' + fmtMoney(sub) +
     '</b> before tax' + (jobsReadOnly() ? '' : ' · <button type="button" class="link-btn" onclick="useInvoicePrice()">Make it the price</button>');
 }
-function useInvoicePrice() {
-  const sub = (boardFields.qbInvoiceRef || {}).subtotal;
-  if (typeof sub !== 'number' || !(sub > 0) || jobsReadOnly()) return;
-  document.getElementById('jobPrice').value = sub.toFixed(2);
-  onJobPriceManualEdit(); updateSummary(); markDirty();
-  showToast('Price set to the invoice’s ' + fmtMoney(sub) + ' — kept by hand (manual)');
+// The job takes its invoice now, lines and words too (quickbooks.py
+// invoice_take) -- what the invoice says, whatever the dates; the server's
+// copy comes back and the job reloads (sync.js). With no signal, or no
+// answer, it is the price by hand as before, so the tap always does something.
+let takingInvoice = false;
+async function useInvoicePrice() {
+  const ref = boardFields.qbInvoiceRef || {}, sub = ref.subtotal, jobId = currentJobId;
+  if (typeof sub !== 'number' || !(sub > 0) || jobsReadOnly() || takingInvoice) return;
+  const byHand = why => {
+    if (currentJobId !== jobId) return;
+    document.getElementById('jobPrice').value = sub.toFixed(2);
+    onJobPriceManualEdit(); updateSummary(); markDirty();
+    showToast('Price set to the invoice’s ' + fmtMoney(sub) + ' by hand' + (why ? ' — ' + why : ''), 5000);
+  };
+  if (!window.YDClaude || !jobId || !navigator.onLine || !(typeof ydCan === 'function' && ydCan('billing', 'change'))) { byHand(); return; }
+  takingInvoice = true;
+  showToast('Taking invoice' + (ref.docNumber ? ' #' + ref.docNumber : '') + ' from QuickBooks…');
+  try {
+    // What was just typed reaches the server first: its add-ons count.
+    if (dirty) autosave();
+    if (window.YDSync && YDSync.sendNow) await YDSync.sendNow(jobId);
+    const out = await window.YDClaude.post('/qb/invoice-take', { jobId: jobId });
+    if (!out || !out.ok) throw new Error((out && out.error) || 'no answer');
+    const gone = (out.gone || []).length;
+    showToast('Job follows invoice' + (out.docNumber ? ' #' + out.docNumber : '') + ' — ' + fmtMoney(parseMoney(out.jobPrice)) +
+      (gone ? ', ' + gone + ' line' + (gone === 1 ? '' : 's') + ' no longer on it' : ''), 5000);
+  } catch (e) {
+    byHand('QuickBooks didn’t answer');
+  } finally { takingInvoice = false; }
+}
+// The job took its invoice on the server while this form was open with
+// typing in it (sync.js carryIntoForm, boardFields already hold it): the price
+// box and the estimate come to what was saved, and the typing stays. Add-ons
+// typed and not saved yet go inside the invoice's figure, as saved ones do.
+function ydInvoiceTaken(src) {
+  if (!src) return;
+  manualJobPrice = !!src.manualJobPrice;
+  const price = parseMoney(src.jobPrice || '');
+  if (price > 0) baseJobPrice = price - getAdditionalCostsTotal();
+  if (window.YDEstimate && YDEstimate.takeInvoice) YDEstimate.takeInvoice(src.estimate);
 }
 async function removeProposal(propId) {
   if (!(await ydConfirm('Its imported order items are taken off too.', { title: 'Remove this proposal?', ok: 'Remove', danger: true }))) return;
@@ -4899,6 +4952,8 @@ function duplicateJob(id) {
   data.qbInvoice = ''; data.qbInvoiced = false; data.taxable = false;
   data.payments = [];
   data.jobStatus = 'quoting';
+  // Its price was the invoice's, not typed: the copy's follows its estimate.
+  if (data.qbInvoiceTaken) data.manualJobPrice = false;
   BOARD_FIELDS.forEach(f => { delete data[f]; });
   // Nor has the copy's estimate been sent: no versions "as it went to
   // QuickBooks" (Estimate vs actual reads them), and the fuel prices kept

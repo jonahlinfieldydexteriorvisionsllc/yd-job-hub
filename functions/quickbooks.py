@@ -1789,7 +1789,7 @@ def invoice_status(body):
 # materials, notes), which every job carries and the sweep never looks at.
 SWEEP_FIELDS = ["customerName", "qbEstimate", "qbInvoiceRef", "jobStatus", "bidStage", "estimateNumber", "payments",
                 "acceptedSeenAt", "workStage", "qbFilled", "jobPrice", "removeWhy", "fromQuickBooks", "snowChecked",
-                "deletedAt", "qbChangesIn", "customerId", "quoteDate"]
+                "deletedAt", "qbChangesIn", "customerId", "quoteDate", "qbInvoiceTaken"]
 
 
 def live_jobs(jobs):
@@ -2307,6 +2307,12 @@ CARD_FEE_ITEM = "Online Transaction Fee"
 BILL_FEE = re.compile(r"\blate\s*fee|\b%s\b" % re.escape(CARD_FEE_ITEM), re.I)
 
 
+def _work_id(doc, ln, n):
+    """A QuickBooks line's id as a job's work line. The crew's ticks
+    (workdone.js) and a material's line (forWork, allInOf) hang on it."""
+    return "ewqb%s%s" % (WORK_ID.sub("", str(ln.get("Id") or n)), WORK_ID.sub("", str(doc.get("Id"))))
+
+
 def _hub_estimate(e, end_names, stamp):
     """A QuickBooks estimate as the job's estimate (estimate.js v2), and the
     words that belong in the job's notes rather than on a line."""
@@ -2347,8 +2353,7 @@ def _hub_estimate(e, end_names, stamp):
             except (TypeError, ValueError):
                 pass
             code = str((d.get("TaxCodeRef") or {}).get("value") or "")
-            work.append({"id": "ewqb%s%s" % (WORK_ID.sub("", str(ln.get("Id") or n)), WORK_ID.sub("", str(e.get("Id")))),
-                         "kind": "amount", "title": title[:200], "scope": desc[:6000], "amountCents": _cents(ln.get("Amount")),
+            work.append({"id": _work_id(e, ln, n), "kind": "amount", "title": title[:200], "scope": desc[:6000], "amountCents": _cents(ln.get("Amount")),
                          "qbItem": item[:100], "taxable": code not in ("", "NON")})
         elif kind == "DiscountLineDetail":
             dd = ln.get("DiscountLineDetail") or {}
@@ -3657,12 +3662,15 @@ WORDS_MAX = 40              # jobs held up against QuickBooks in one sweep
 
 
 def _words_source(j, env):
-    """("Estimate"|"Invoice", id) whose words a job's lines are, or None."""
+    """("Estimate"|"Invoice", id) whose words a job's lines are, or None.
+    The invoice first: a job filled from it, or one that took it
+    (take_invoice), has its lines from there even when it is joined to an
+    estimate too -- the estimate's words would undo a change order's."""
     q, r, f = j.get("qbEstimate") or {}, j.get("qbInvoiceRef") or {}, j.get("qbFilled") or {}
+    if r.get("id") and r.get("env") == env and str(f.get("invoiceId") or "") == str(r["id"]):
+        return "Invoice", str(r["id"])
     if q.get("linked") and q.get("id") and q.get("env") == env and str(f.get("estimateId") or "") == str(q["id"]):
         return "Estimate", str(q["id"])
-    if not q.get("linked") and r.get("id") and r.get("env") == env and str(f.get("invoiceId") or "") == str(r["id"]):
-        return "Invoice", str(r["id"])
     return None
 
 
@@ -3670,29 +3678,72 @@ def _same_words(a, b):
     return str(a or "").strip() == str(b or "").strip()
 
 
+def _item_key(w):
+    return " ".join(str(w.get("qbItem") or "").lower().split())
+
+
+def _words_key(s):
+    """Words to compare, whatever their capitals and punctuation."""
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", str(s or "").lower()).split())
+
+
+def _title_key(w):
+    return _words_key(PRICED_AS.sub("", str(w.get("title") or "")))
+
+
+def _line_pairs(work, qb_work, named=None):
+    """Which of a job's lines each of QuickBooks' lines is: [(line, its
+    QuickBooks line)], only the sure ones. By id -- or the QuickBooks line it
+    was given last time (qbLine), or the estimate line an invoice line was
+    made from (`named`: invoice line's id -> estimate line's) -- then the same
+    product with the same words, then the only line left of its product, then
+    the only one left of its title. Two lines of one product, as a job often
+    has, are told apart that way: each one found leaves the other alone."""
+    used, done, pairs = set(), set(), []
+
+    def pair(w, q):
+        used.add(id(w))
+        done.add(id(q))
+        pairs.append((w, q))
+
+    def lines():
+        return [w for w in work if id(w) not in used]
+
+    def theirs():
+        return [q for q in qb_work if id(q) not in done]
+
+    by_id = {}
+    for w in work:
+        for key in (w.get("qbLine"), w.get("id")):
+            if key:
+                by_id.setdefault(key, w)
+    for q in qb_work:
+        w = by_id.get(q["id"]) or by_id.get((named or {}).get(q["id"]))
+        if w is not None and id(w) not in used:
+            pair(w, q)
+    for q in theirs():
+        said = str(q.get("scope") or "").strip()
+        same = [w for w in lines() if said and _item_key(q) and _item_key(w) == _item_key(q) and _same_words(w.get("scope"), said)]
+        if same:
+            pair(same[0], q)
+    for key in (_item_key, _title_key):
+        for q in theirs():
+            k = key(q)
+            here = [w for w in lines() if k and key(w) == k]
+            there = [x for x in theirs() if key(x) == k]
+            if len(here) == 1 and len(there) == 1:
+                pair(here[0], q)
+    return pairs
+
+
 def _words_onto(work, qb_work):
     """`work` (the job's lines) with QuickBooks' words on each line that is
     one of QuickBooks' (qb_work, from _hub_estimate). Returns (lines, how many
     changed, titles of QuickBooks lines found nowhere on the job)."""
     work = [dict(w) for w in work or [] if isinstance(w, dict)]
-    by_id = {w.get("id"): w for w in work if w.get("id")}
-    used, pairs, missing = set(), [], []
-    for q in qb_work:
-        w = by_id.get(q["id"])
-        if w is not None:
-            used.add(id(w))
-            pairs.append((w, q))
-    for q in qb_work:
-        if any(p[1] is q for p in pairs):
-            continue
-        item = " ".join(str(q.get("qbItem") or "").lower().split())
-        here = [w for w in work if id(w) not in used and item and " ".join(str(w.get("qbItem") or "").lower().split()) == item]
-        there = [x for x in qb_work if " ".join(str(x.get("qbItem") or "").lower().split()) == item]
-        if len(here) == 1 and len(there) == 1:
-            used.add(id(here[0]))
-            pairs.append((here[0], q))
-        else:
-            missing.append(q.get("title") or "Work")
+    pairs = _line_pairs(work, qb_work)
+    found = {id(q) for _w, q in pairs}
+    missing = [q.get("title") or "Work" for q in qb_work if id(q) not in found]
     changed = 0
     for w, q in pairs:
         if not _same_words(w.get("scope"), q.get("scope")):
@@ -3834,6 +3885,279 @@ def _words_for(db, jid, j, kind, qid, doc, env, end_names):
         print("quickbooks words: %s: %d line(s) given QuickBooks' words" % (jid, changed))
     db.collection("jobs").document(jid).set(patch, merge=True)
     return 1
+
+
+# ----------------------------------------------- the job takes its invoice
+#
+# Jonah (3 Nov 2026): "wen final invoice is sent from quickbooks job hub pulls
+# its current info to update the info in job hub since i do change orders on
+# quickbooks right now." Each time the invoice is emailed -- the final one
+# included -- the job takes it as it is: its price is the invoice before tax
+# and late fees (the same subtotal as _invoice_record), and its lines and
+# their words come from the invoice's lines. That catches what _price_follows
+# cannot see: a line changed or taken off, an invoice typed by hand. Job Hub
+# never writes to QuickBooks to match the job: the invoice is the truth.
+#  - An estimate made from QuickBooks, or a job with no work lines: filled
+#    again from the invoice (_job_estimate). Each line keeps what was put on
+#    it here (_carried_work) -- crew-days, the crew's note, its id, which the
+#    crew's ticks hang on -- and the materials and what they cost stay as they
+#    are. qbFilled then names the invoice, so keep_qb_words follows it. Added
+#    lines are work lines now, so they are no longer change orders too.
+#  - An estimate built in Job Hub keeps its lines, crew-days, materials, costs
+#    and what was sent, but for the words of a line that surely is one of the
+#    invoice's. Added lines stay change orders, counted once (qbChangesIn).
+#  - Add-ons typed on the job stay listed as his record. They are inside the
+#    price now, so nothing is counted twice: baseJobPrice is the rest.
+# Only a job truly tied to its invoice takes it by itself: never one tied by a
+# guess at the name (jobBy 'name'), never one taken off or in Recently deleted,
+# and each email once (qbInvoiceTaken.emailAt). A price typed by hand after
+# that stands until the next email. "Make it the price" under the job's price
+# takes it at once, whatever the dates (invoice_take).
+TAKE_FROM = "2026-11-04T00:00:00+00:00"     # older emails went out before this: they change nothing
+TAKEN_BY = "QuickBooks"
+MATERIALS_SAID = re.compile(r"\s*Materials included: [^\n]*\s*$")     # estimate.js withIncludes
+
+
+def _lines_from_estimate(inv):
+    """{invoice line's work id: the work id of the estimate line it was made
+    from}, where the invoice's lines say so -- the job's lines have the
+    estimate's ids until it first takes the invoice."""
+    out = {}
+    for n, ln in enumerate(_flat_lines(inv.get("Line")), 1):
+        for t in ln.get("LinkedTxn") or []:
+            if t.get("TxnType") == "Estimate" and t.get("TxnId") and t.get("TxnLineId"):
+                out[_work_id(inv, ln, n)] = _work_id({"Id": t["TxnId"]}, {"Id": t["TxnLineId"]}, n)
+    return out
+
+
+def _carried_work(work, qb_work, named):
+    """The invoice's lines (qb_work) as the job's: each keeps everything the
+    job had on its line -- crew-days, the crew's note, a sub, its id -- with
+    QuickBooks' part (price, title, words, product) from the invoice. A line
+    here that is not on the invoice has been taken off there. Returns (lines,
+    titles of those taken off)."""
+    old = [w for w in work or [] if isinstance(w, dict)]
+    of = {id(q): w for w, q in _line_pairs(old, qb_work, named)}
+    kept = {id(w) for w in of.values()}
+    ids = {w.get("id") for w in of.values()}
+    out = []
+    for q in qb_work:
+        w = of.get(id(q))
+        if w is None:
+            line = dict(q)
+            while line["id"] in ids:            # an id made from two numbers run together
+                line["id"] += "x"
+            ids.add(line["id"])
+        else:
+            line = dict(w, **q)
+            line["id"], line["qbLine"] = w.get("id") or q["id"], q["id"]
+        out.append(line)
+    return out, [str(w.get("title") or "Work") for w in old if id(w) not in kept]
+
+
+def _invoice_estimate(have, inv, end_names, stamp, sub):
+    """The job's estimate filled again from its invoice, keeping all it held
+    besides the lines: (estimate, words that are no line, titles of lines
+    taken off). None when the invoice has no lines to fill it from -- then the
+    job's stay."""
+    est, words = _job_estimate(have, inv, end_names, stamp, invoice_id=str(inv.get("Id")))
+    if not est["work"] and (have.get("work") or not est["materials"]):
+        return None
+    work, gone = _carried_work(have.get("work"), est["work"], _lines_from_estimate(inv))
+    was, fq = have.get("fromQb") or {}, est["fromQb"]
+    # Its materials are joined to Supplies already: not joined all over again.
+    if have.get("materials"):
+        fq.update({k: was[k] for k in ("linkedAt", "linkedV", "linked") if k in was})
+    # What the customer pays for the work: QuickBooks' total can hold late fees.
+    fq["totalCents"] = _cents(sub) + fq["taxCents"]
+    keep = {k: v for k, v in have.items() if k not in ("work", "materials", "fromQb") and v not in (None, "", [], {})}
+    return dict(dict(est, **keep), work=work, materials=have.get("materials") or est["materials"], fromQb=fq), words, gone
+
+
+def _under_heading(text, title, site=""):
+    """A line's words without the heading Job Hub sends above them
+    (_estimate_lines: the title in capitals, the job's address under the first
+    one, a blank line, the scope) and without the "Materials included" it adds
+    after them."""
+    text = str(text or "").replace("\r\n", "\n").strip()
+    first, _, rest = text.partition("\n")
+    if _words_key(title) and _words_key(first) == _words_key(title):
+        text = rest.strip()
+        place, _, after = text.partition("\n\n")
+        if site and _words_key(site) and "\n" not in place and _words_key(place).startswith(_words_key(site)):
+            text = after.strip()
+    return MATERIALS_SAID.sub("", text).strip()
+
+
+def _scopes_onto(work, qb_work, site=""):
+    """`work` (lines built in Job Hub) with the invoice's words on each line
+    that surely is one of its lines -- told by the heading Job Hub sent, or the
+    only line of a product it names. Returns (lines, how many changed)."""
+    work = [dict(w) for w in work or [] if isinstance(w, dict)]
+    heads = [dict(q, title=str(q.get("scope") or "").strip().split("\n")[0]) for q in qb_work]
+    changed = 0
+    for w, q in _line_pairs(work, heads):
+        words = _under_heading(q.get("scope"), w.get("title"), site)
+        if words and not _same_words(words, _under_heading(w.get("scope"), w.get("title"))):
+            w["scope"] = words[:6000]
+            changed += 1
+    return work, changed
+
+
+def _typed_add_ons(j):
+    """What the add-ons typed on a job come to (app.js addOnsOf)."""
+    return round(sum(_price_of(a.get(k)) or 0 for a in j.get("additionalCosts") or [] if isinstance(a, dict)
+                     for k in ("materialCost", "laborCost")), 2)
+
+
+def take_invoice(job, inv, end_names, email_at="", by=TAKEN_BY):
+    """One patch for `job` (the whole record) from its QuickBooks invoice as
+    it is now, and what it did: (patch, {refilled, lines, gone}). None when the
+    invoice comes to nothing. Nothing is written here, and nothing ever goes
+    back to QuickBooks."""
+    rec = _invoice_record(inv)
+    sub = rec.get("subtotal")
+    if not isinstance(sub, (int, float)) or sub <= 0:
+        return None
+    stamp = _stamp()
+    iid = str(inv.get("Id"))
+    old = job.get("qbInvoiceRef") or {}
+    # Its balance stays as the job has it: the sweep tells a payment by the
+    # balance moving (as _invoice_for).
+    ref = dict(old, **rec)
+    if "balance" in old:
+        ref["balance"] = old["balance"]
+    patch = {"qbInvoiceRef": ref, "lastModified": stamp}
+    have = job.get("estimate") or {}
+    filled = _invoice_estimate(have, inv, end_names, stamp, sub) if have.get("fromQb") or not have.get("work") else None
+    said = {"refilled": bool(filled), "lines": 0, "gone": []}
+    changes_in = 0
+    if filled:
+        est, words, said["gone"] = filled
+        said["lines"] = len(est["work"])
+        # keep_qb_words follows the invoice from now on (_words_source). Its
+        # added lines are work lines now: as change orders too they would show
+        # twice, on the crew's page and in the add-ons.
+        patch.update(estimate=est, qbFilled=dict(job.get("qbFilled") or {}, invoiceId=iid, at=stamp),
+                     qbChangesIn=0, qbChangesOff=True)
+        fresh = [w for w in words if w not in str(job.get("notes") or "")]
+        notes = _words_under(job.get("notes"), "From QuickBooks invoice #%s:" % (inv.get("DocNumber") or iid), fresh)
+        if notes is not None:
+            patch["notes"] = notes
+    else:
+        qb_est, _words = _hub_estimate(inv, end_names, stamp)
+        work, said["lines"] = _scopes_onto(have.get("work"), qb_est["work"], job.get("address"))
+        if said["lines"]:
+            patch["estimate"] = dict(have, work=work)
+        # Change orders put in by hand stay out for good (_price_follows).
+        if not job.get("qbChangesOff"):
+            changes_in = sum(int(c.get("cents") or 0) for c in rec.get("changes") or [] if isinstance(c, dict))
+            patch["qbChangesIn"] = changes_in
+    # jobPrice is the total, add-ons in it; base + add-ons (app.js) must come
+    # to the invoice's figure. By hand as far as the form goes (manualJobPrice):
+    # its price no longer follows the estimate's lines, and typing one still
+    # works until the next email.
+    patch.update(jobPrice="%.2f" % sub, baseJobPrice=max(0, round(sub - _typed_add_ons(job) - changes_in / 100, 2)),
+                 manualJobPrice=True,
+                 qbInvoiceTaken={"id": iid, "docNumber": str(inv.get("DocNumber") or ""), "emailAt": email_at or "",
+                                 "cents": _cents(sub), "at": stamp, "by": str(by or TAKEN_BY)[:100]})
+    return patch, said
+
+
+def _save_take(db, jid, job, inv, email_at, by, end_names):
+    """take_invoice written to the job. Returns (patch, said), or None when
+    there was nothing to take."""
+    got = take_invoice(job, inv, end_names, email_at=email_at, by=by)
+    if not got:
+        return None
+    patch, said = got
+    # Each part written whole: merged, the estimate's old fromQb stayed under
+    # the new one, and a line's price with it.
+    db.collection("jobs").document(jid).set(patch, merge=list(patch.keys()))
+    if said["refilled"] and not str(job.get("crewWhat") or "").strip():
+        board = db.collection("jobBoard").document(jid)
+        if board.get().exists:
+            board.set({"what": _what(patch["estimate"]), "updatedAt": patch["lastModified"]}, merge=True)
+    print("quickbooks invoice: %s took invoice %s: price %s -> %s, %s line(s)%s, %s line(s) gone"
+          % (jid, inv.get("DocNumber") or inv.get("Id"), job.get("jobPrice"), patch["jobPrice"], said["lines"],
+             " filled again" if said["refilled"] else " given new words", len(said["gone"])))
+    return patch, said
+
+
+def _newest_email(times):
+    """The latest of some email times, as it is written, or None."""
+    dated = [(t, s) for t, s in ((_when(s), s) for s in times if s) if t is not None]
+    return max(dated, key=lambda x: x[0])[1] if dated else None
+
+
+def _new_email(j, at):
+    """Whether an email at `at` is one the job has not taken yet."""
+    t, took = _when(at), _when((j.get("qbInvoiceTaken") or {}).get("emailAt"))
+    return t is not None and t > _when(TAKE_FROM) and (took is None or t > took)
+
+
+def _email_to_take(jobs, inv_id, rec):
+    """sync_invoices: the time of an email this invoice's job has not taken
+    yet, or None. A job tied by hand that holds a different invoice is left:
+    which of the two is its price is his to say."""
+    j = jobs.get(rec.get("jobId"))
+    if not j or rec.get("jobBy") not in ("job", "hand") or j.get("removeWhy") or j.get("deletedAt"):
+        return None
+    if str((j.get("qbInvoiceRef") or {}).get("id") or "") != str(inv_id):
+        return None
+    at = _newest_email(rec.get("emails") or [])
+    return at if at and _new_email(j, at) else None
+
+
+def _take_emailed(db, jobs, jid, inv, at, end_names):
+    """One job taking the invoice just seen emailed, from the job as it is now
+    (the sweep's list is a moment old, and holds only SWEEP_FIELDS). Returns
+    1 when it did, and the list follows for the rest of the sweep."""
+    snap = db.collection("jobs").document(jid).get()
+    j = (snap.to_dict() or {}) if snap.exists else None
+    if not j or j.get("deletedAt") or j.get("removeWhy") or not _new_email(j, at) \
+            or str((j.get("qbInvoiceRef") or {}).get("id") or "") != str(inv.get("Id")):
+        return 0
+    got = _save_take(db, jid, j, inv, at, TAKEN_BY, end_names)
+    if not got:
+        return 0
+    jobs[jid].update({k: v for k, v in got[0].items() if k in SWEEP_FIELDS})
+    return 1
+
+
+def invoice_take(body, who=""):
+    """"Make it the price" under a job's price (app.js useInvoicePrice): the
+    job takes its invoice now, whatever the dates. Read from QuickBooks,
+    written to the job only. The emails already sent count as taken, so the
+    next look does not take it over a price typed after this."""
+    jid = str(body.get("jobId") or "").strip()
+    if not jid:
+        raise RuntimeError("Which job?")
+    db = _db()
+    snap = db.collection("jobs").document(jid).get()
+    job = (snap.to_dict() or {}) if snap.exists else None
+    if not job or job.get("deletedAt"):
+        raise RuntimeError("No such job")
+    if job.get("removeWhy"):
+        raise RuntimeError("That job is marked to be taken off")
+    r = job.get("qbInvoiceRef") or {}
+    if not r.get("id"):
+        raise RuntimeError("This job has no QuickBooks invoice")
+    if r.get("env") != _env("QB_ENV", "sandbox"):
+        return {"missing": True, "error": "That invoice is in the QuickBooks test company, not the one connected now"}
+    iid = str(r["id"])
+    inv = _query_one("Invoice", "Id = '%s'" % _quote(iid))
+    if not inv:
+        return {"missing": True, "error": "QuickBooks has no such invoice now"}
+    doc = db.collection("invoices").document(iid).get()
+    sent = list(((doc.to_dict() or {}) if doc.exists else {}).get("emails") or [])
+    sent.append((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))
+    got = _save_take(db, jid, job, inv, _newest_email(sent), who or "By hand", _end_names())
+    if not got:
+        return {"missing": True, "error": "That invoice comes to nothing before tax"}
+    patch, said = got
+    return {"ok": True, "jobId": jid, "jobPrice": patch["jobPrice"], "docNumber": str(inv.get("DocNumber") or ""),
+            "refilled": said["refilled"], "lines": said["lines"], "gone": said["gone"]}
 
 
 # ------------------------------------------------ invoices and reminders
@@ -4019,6 +4343,7 @@ def sync_invoices(jobs):
         except Exception as err:                        # noqa: BLE001 -- the payments without their method
             print("quickbooks invoices: payment methods not read:", err)
     batch, n = db.batch(), 0
+    takes = []                          # (job id, invoice, email time): see take_invoice
     for inv_id in list(now_open) + gone:
         old = olds[inv_id]
         inv = now_open.get(inv_id) or closed.get(inv_id)
@@ -4041,6 +4366,11 @@ def sync_invoices(jobs):
             db.collection("jobs").document(hand).set({"qbInvoiceRef": _invoice_record(inv), "lastModified": _stamp()},
                                                      merge=True)
             jobs[hand]["qbInvoiceRef"] = _invoice_record(inv)
+        # Before the look at whether its record changed: a reminder has
+        # already written its email there (invoice_remind).
+        emailed = _email_to_take(jobs, inv_id, rec)
+        if emailed:
+            takes.append((rec["jobId"], inv, emailed))
         if inv_id in want:
             got = {i: pays[i] for i in want[inv_id] if i in pays}
             # A payment QuickBooks didn't answer for: keep what was known
@@ -4067,6 +4397,14 @@ def sync_invoices(jobs):
             batch, n = db.batch(), 0
     if n:
         batch.commit()
+    end_names = _end_names() if takes else None
+    for jid, inv, at in takes:
+        try:
+            _take_emailed(db, jobs, jid, inv, at, end_names)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:                        # noqa: BLE001 -- not marked, so the next look tries again
+            print("quickbooks invoices: %s did not take invoice %s: %s" % (jid, inv.get("Id"), err))
     # Paid a month ago: off the list.
     cutoff = (_now() - INVOICES_KEEP_PAID).isoformat()
     for s in col.where("open", "==", False).stream():

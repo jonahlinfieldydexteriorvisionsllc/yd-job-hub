@@ -286,7 +286,7 @@ def _quickbooks(request, path, headers):
     billing = path in ("/qb/status", "/qb/customers", "/qb/items", "/qb/invoice",
                        "/qb/estimate", "/qb/estimate-status", "/qb/estimate-invoice", "/qb/invoice-status",
                        "/qb/invoice-remind", "/qb/invoices-now", "/qb/payments-now", "/qb/change-order",
-                       "/qb/estimates-now")
+                       "/qb/estimates-now", "/qb/invoice-take")
     # A customer's contact details, from the Customers tab: whoever may change Contacts.
     contacts = path in ("/qb/customer-save", "/qb/customers-now")
     try:
@@ -328,6 +328,12 @@ def _quickbooks(request, path, headers):
             # A reminder emailed from QuickBooks (invoices.js Send reminder).
             who = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or ""
             result = qb.invoice_remind(body, who)
+        elif path == "/qb/invoice-take":
+            # "Make it the price" under a job's price (app.js): the job takes
+            # its invoice now. Read from QuickBooks, written to the job only.
+            who = (_db.collection("users").document(uid).get().to_dict() or {}).get("name") or ""
+            with qb._holding_tokens():
+                result = qb.invoice_take(body, who)
         elif path == "/qb/payments-now":
             # A payment just logged on a job (app.js): to QuickBooks now, not
             # at the next hourly look -- and QuickBooks' payments back onto it.

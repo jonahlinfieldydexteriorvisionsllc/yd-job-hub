@@ -29,9 +29,28 @@
   // (newerLine).
   const SERVER_FIELDS = ['qbEstimate', 'qbInvoiceRef', 'careEmail', 'acceptedSeenAt', 'fromQuickBooks', 'qbFilled', 'snowChecked',
     'removeWhy', 'replacedBy', 'removeNote', 'customerId', 'customerBy', 'customerFill', 'qbChangesIn', 'qbChangesOff',
-    'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail', 'jobLine', 'welcomeEmail'];
+    'qbInvoiceTaken', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail', 'jobLine', 'welcomeEmail'];
   // A place in line set (or put back) after the one this copy has.
   const newerLine = (s, l) => !!s && typeof s === 'object' && String(s.at || '') > String((l && l.at) || '');
+  // The job took its QuickBooks invoice since this copy last looked
+  // (quickbooks.py take_invoice): its price, lines and what says they follow
+  // the invoice are the server's, whole, whoever saved last -- "the invoice is
+  // the truth" -- and a price typed here before it came does not stand.
+  const INVOICE_PARTS = ['jobPrice', 'baseJobPrice', 'manualJobPrice', 'qbChangesIn', 'qbChangesOff', 'qbFilled', 'qbInvoiceTaken', 'estimate'];
+  const tookInvoice = (l, s) => !!(s && s.qbInvoiceTaken) && newerLine(s.qbInvoiceTaken, l && l.qbInvoiceTaken);
+  // The estimate it took: filled from the invoice, with the site notes typed
+  // here on it; built in Job Hub, this copy's with only a line's words new --
+  // the server changed nothing else, so anything else that differs is this
+  // device's, not yet sent.
+  function invoiceEstimate(local, theirs) {
+    const s = theirs.estimate, l = local.estimate;
+    if (!s || !l) return s;
+    if (s.fromQb) return l.notes ? Object.assign({}, s, { notes: l.notes }) : s;
+    const said = {};
+    (s.work || []).forEach(w => { said[w.id] = w.scope; });
+    return Object.assign({}, l, { work: (l.work || []).map(w => (w.id in said ? Object.assign({}, w, { scope: said[w.id] }) : w)) });
+  }
+  const invoicePart = (k, local, theirs) => (k === 'estimate' ? invoiceEstimate(local, theirs) : theirs[k]);
 
   let watching = false;
   let applyingRemote = false;   // guards against a change we just wrote coming
@@ -371,12 +390,14 @@
     const ours = [], took = [];
     const theirsNewer = String(theirs.lastModified || '') >= String(local.lastModified || '');
     const put = (k, v) => { if (v === undefined) delete merged[k]; else merged[k] = v; };
+    const invoice = tookInvoice(local, theirs);
     new Set(Object.keys(local).concat(Object.keys(theirs))).forEach(k => {
       if (NOT_PARTS[k]) return;
       const l = print(local[k]), t = print(theirs[k]), b = base.p[k] || '';
       if (l === t) return;
       let v;
-      if (l === b) v = theirs[k];                    // only theirs changed it
+      if (invoice && INVOICE_PARTS.indexOf(k) !== -1) v = invoicePart(k, local, theirs);
+      else if (l === b) v = theirs[k];               // only theirs changed it
       else if (t === b) { ours.push(k); return; }    // only this side did
       else if (k === 'payments' && typeof mergePayments === 'function') {
         const pays = mergePayments(local.payments, theirs.payments);
@@ -678,6 +699,14 @@
   const qbFilledEstimate = (local, theirs) => !!(theirs.estimate && theirs.estimate.fromQb && estHasLines(theirs.estimate) && !estHasLines(local.estimate));
   function takeServerFields(local, theirs) {
     let took = false;
+    // Its invoice taken whole: nothing is added to that price below.
+    if (tookInvoice(local, theirs)) {
+      INVOICE_PARTS.forEach(f => {
+        const v = invoicePart(f, local, theirs);
+        if (v === undefined) delete local[f]; else local[f] = v;
+      });
+      took = true;
+    }
     // The change orders on its invoice the server has put in the price
     // (quickbooks.py _price_follows): this copy's price, saved after the
     // server's, moves by the same -- or the push would take them back out.
@@ -724,6 +753,7 @@
       (f === 'qbEstimate' && !s.id && s.deleted && l.id && String(s.deleted.id) === String(l.id)) ||
       // The invoice as QuickBooks has it now: its balance, its change orders.
       (f === 'qbInvoiceRef' && s.id && s.id === l.id && String(s.syncedAt || '') > String(l.syncedAt || '')) ||
+      (f === 'qbInvoiceTaken' && newerLine(s, l)) ||
       // Where the thank-you stands (followup.py): each record the server
       // writes is newer -- held, then sent -- and an older one pushed back
       // over "sent" would show it as still to go.
@@ -777,6 +807,7 @@
   // the form's boxes (the form is not reloaded under them -- reloadWhenFree):
   // what they type next is saved over this copy with these carried in.
   function carryIntoForm(src) {
+    const invoice = tookInvoice(boardFields, src);
     SERVER_FIELDS.forEach(f => {
       if (!src || src[f] == null) return;
       if (f === 'jobLine' && !newerLine(src[f], boardFields[f])) return;
@@ -785,6 +816,8 @@
     // And the estimate the server filled from QuickBooks, into one
     // with no lines yet (estimate.js keeps what was typed).
     if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(src && src.estimate);
+    // And the invoice it took: the price box and the estimate's lines.
+    if (invoice && typeof ydInvoiceTaken === 'function') ydInvoiceTaken(src);
     // The change orders on its invoice: the add-ons table and the
     // price box (base + add-ons) come to what the server saved.
     if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
@@ -894,6 +927,7 @@
         // What the server wrote into it meanwhile is carried into ours first,
         // or the push would put the old values back.
         if (mine && theirs && mine > theirs) {
+          const tookInv = c.id === currentJobId && tookInvoice(boardFields, c.data || {});
           const tookFields = takeServerFields(local, c.data || {});
           const tookStage = takeServerStage(local, c.data || {});
           const tookSent = takeServerSent(local, c.data || {});
@@ -911,6 +945,7 @@
               if (tookSent) { boardFields.bidStage = local.bidStage; boardFields.bidStageAt = local.bidStageAt; }
               if (typeof showBidBanner === 'function') showBidBanner();
               if (window.YDEstimate && window.YDEstimate.takeQb) window.YDEstimate.takeQb(local.estimate);
+              if (tookInv && typeof ydInvoiceTaken === 'function') ydInvoiceTaken(local);
               // Its invoice's change orders: the add-ons table and the price.
               if (typeof ydInvoiceChanged === 'function') ydInvoiceChanged();
             }
