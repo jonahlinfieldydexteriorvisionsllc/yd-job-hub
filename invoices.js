@@ -26,6 +26,11 @@
   const RULES = { firstAfterDays: 3, everyDays: 7, max: 4 };
   let invoices = {};        // id -> invoices/{id}
   let rules = Object.assign({}, RULES);
+  // No card on an invoice over this many dollars; 0 = any invoice takes a card
+  // (settings/invoiceReminders.cardOver; quickbooks.py _card_rule does it).
+  // It starts off: his tap below is what lets Job Hub change customers' invoices.
+  const CARD_LIMIT = 1000;
+  let cardOver = 0, cardStopped = '';
   let unsub = null, loaded = false;
   let view = 'todo';        // todo | owed | paid
   let editingRules = false;
@@ -285,6 +290,16 @@
       (changes() && st.kind !== 'paid' ? ' <button class="link-btn" onclick="invPickJob(\'' + safe(inv.id) + '\')">' + (inv.jobId ? 'Change' : 'Pick the job') + '</button>' : '') +
     '</div>';
   }
+  // Over his limit: how this one can be paid, with the way round it.
+  function cardHtml(inv, st) {
+    if (st.kind === 'paid' || !cardOver || !(Number(inv.total) > cardOver)) return '';
+    const id = safe(inv.id);
+    const tap = (on, label) => changes()
+      ? ' <button class="link-btn" onclick="invCardOk(\'' + id + '\', ' + on + ')">' + label + '</button>' : '';
+    if (inv.cardOk) return '<div class="inv-lien">💳 Card allowed on this one' + tap(false, 'Back to no card') + '</div>';
+    return '<div class="inv-lien">💳 ' + (inv.cardOff ? 'No card — bank transfer or check' : 'The card button goes off at the next check') +
+      tap(true, 'Let them pay by card') + '</div>';
+  }
   function rowHtml(inv, st, idx) {
     const id = safe(inv.id);
     const emails = (inv.emails || []).filter(Boolean).sort();
@@ -310,6 +325,7 @@
       '<div class="inv-facts">' + facts.join(' · ') + '</div>' +
       jobLineHtml(inv, st, idx) +
       lienHtml(inv, st) +
+      cardHtml(inv, st) +
       '<div class="inv-next">' + stateText(st, inv) + '</div>' +
       '<div class="inv-acts">' +
         (can && st.kind !== 'waiting' ? '<button class="btn btn-sm' + (wantsYou(st) ? ' btn-filled' : '') + '" onclick="invRemind(\'' + id + '\')"' +
@@ -328,13 +344,17 @@
     const words = 'First reminder ' + rules.firstAfterDays + ' day' + (rules.firstAfterDays === 1 ? '' : 's') + ' after it’s due, then every ' +
       rules.everyDays + ' days, up to ' + rules.max + ' — then call.';
     if (!editingRules || !changes()) {
-      return '<div class="inv-rules muted">⏰ ' + words + (changes() ? ' <button class="link-btn" onclick="invRules(true)">Change</button>' : '') + '</div>';
+      const card = cardOver ? 'No card on invoices over ' + money(cardOver) + ' — bank transfer or check.'
+        : 'Customers can pay any invoice by card.' + (changes() ? ' <button class="link-btn" onclick="invCardLimit(' + CARD_LIMIT + ')">Turn card off over ' + money(CARD_LIMIT) + '</button>' : '');
+      return '<div class="inv-rules muted">⏰ ' + words + (changes() ? ' <button class="link-btn" onclick="invRules(true)">Change</button>' : '') +
+        '<br>💳 ' + card + (cardStopped ? '<br>⚠️ Turned off by itself: ' + esc(cardStopped) : '') + '</div>';
     }
     const box = (id, v, label) => '<label class="inv-rule"><span>' + label + '</span><input id="' + id + '" type="number" min="0" max="60" inputmode="numeric" value="' + v + '"></label>';
     return '<div class="inv-rules-edit">' +
       box('invFirst', rules.firstAfterDays, 'Days after it’s due for the first reminder') +
       box('invEvery', rules.everyDays, 'Days between reminders') +
       box('invMax', rules.max, 'Reminders before it’s time to call') +
+      '<label class="inv-rule"><span>No card on invoices over $ (0 = any invoice takes a card)</span><input id="invCardOver" type="number" min="0" step="1" inputmode="numeric" value="' + cardOver + '"></label>' +
       '<div class="field-actions"><button class="btn btn-sm btn-filled" onclick="invSaveRules()">Save</button>' +
       '<button class="btn btn-sm" onclick="invRules(false)">Cancel</button></div></div>';
   }
@@ -467,10 +487,44 @@
     if (Object.values(next).some(v => v === null) || next.everyDays < 1 || next.max < 1) {
       showToast('Whole numbers — at least 1 day between reminders and 1 reminder'); return;
     }
+    const card = Number((el('invCardOver') || {}).value);
+    if (!isFinite(card) || card < 0) { showToast('The card limit is a dollar amount, or 0 for none'); return; }
+    const cardMoved = card !== cardOver;
     rules = next;
+    cardOver = card;
+    if (cardMoved) cardStopped = '';
     editingRules = false;
     render();
-    Promise.resolve(window.YDDb.put('settings', 'invoiceReminders', Object.assign({ updatedAt: new Date().toISOString() }, next)))
+    Promise.resolve(window.YDDb.put('settings', 'invoiceReminders', Object.assign({ updatedAt: new Date().toISOString(), cardOver: card, cardStopped: cardStopped || null }, next)))
+      .then(() => { if (cardMoved) lookNow(); })
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
+  // The server's look at QuickBooks now, so a card change doesn't wait for the hour.
+  function lookNow() {
+    if (window.YDClaude) window.YDClaude.post('/qb/invoices-now', {})
+      .catch(e => showToast('It goes through at the next hourly check: ' + String((e && e.message) || e).slice(0, 100), 6000));
+  }
+  // Goes on customers' invoices, so it is asked -- and only ever by this tap.
+  window.invCardLimit = async function (dollars) {
+    if (!changes()) return;
+    const big = Object.values(invoices).filter(i => i.open && Number(i.total) > dollars).length;
+    if (!(await ydConfirm('Customers can’t pay ' + (big ? 'the ' + big + ' open invoice' + (big === 1 ? '' : 's') + ' over ' + money(dollars) + ' or any new one' : 'any new invoice over ' + money(dollars)) +
+        ' by card. They can still pay by bank transfer or check.', { title: 'No card over ' + money(dollars) + '?', ok: 'Turn card off' }))) return;
+    cardOver = dollars;
+    cardStopped = '';
+    render();
+    Promise.resolve(window.YDDb.put('settings', 'invoiceReminders', { cardOver: dollars, cardStopped: null, updatedAt: new Date().toISOString() }))
+      .then(() => { showToast('Going through your open invoices…'); lookNow(); })
+      .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
+  };
+  // This one may be paid by card after all (or back to the rule).
+  window.invCardOk = function (id, on) {
+    const inv = invoices[id];
+    if (!inv || !changes()) return;
+    inv.cardOk = !!on;
+    render();
+    Promise.resolve(window.YDDb.put('invoices', inv.id, { cardOk: !!on, updatedAt: new Date().toISOString() }))
+      .then(lookNow)
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed — Billing access needed' : 'Saved on this device — it goes up with signal'));
   };
   // Home's "Waiting on you" opens the list here.
@@ -498,6 +552,7 @@
     }, () => { loaded = true; render(); });
     Promise.resolve(window.YDDb.get('settings', 'invoiceReminders')).then(r => {
       if (r) Object.keys(RULES).forEach(k => { if (typeof r[k] === 'number' && r[k] >= 0) rules[k] = r[k]; });
+      if (r) { cardOver = typeof r.cardOver === 'number' && r.cardOver > 0 ? r.cardOver : 0; cardStopped = String(r.cardStopped || ''); }
       render();
     }).catch(() => {});
   }
