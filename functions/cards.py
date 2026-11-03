@@ -33,6 +33,7 @@ import base64
 import datetime
 import json
 import re
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import anthropic
@@ -282,6 +283,7 @@ def draft_email(to, subject, body, reply=None):
         return {"error": "Gmail would not save the draft. Put the full email in your result instead."}
     d = r.json()
     msg_id = (d.get("message") or {}).get("id", "")
+    _mark_ours(msg_id)
     return {"ok": True, "draftId": d.get("id"), "to": to, "subject": subject,
             "link": dg.gmail_link("drafts?compose=" + msg_id)}
 
@@ -340,6 +342,7 @@ def send_mail(to, subject, body, reply=None):
         print("cards: send failed", r.status_code, r.text[:300])
         return {"error": "Gmail would not send it (%d)" % r.status_code}
     d = r.json()
+    _mark_ours(d.get("id"))
     return {"messageId": d.get("id"), "threadId": d.get("threadId"), "subject": subject}
 
 
@@ -367,9 +370,94 @@ def _one_line(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+# HIS GMAIL SIGNATURE on every email Job Hub writes as him (Jonah, 2 Nov
+# 2026: "gmail sig should be on job hubs emails too"). His own emails end on
+# the closing line and the signature block, with no typed name, so the
+# "Jonah / YD Exterior Visions" sign-off the prompts and fixed words end
+# with comes off when the signature goes on. Read from Gmail itself
+# (Settings -> Signature), so a change there reaches these emails too; reused
+# for an hour; when it can't be read the email goes as before.
+GMAIL_READ = "https://www.googleapis.com/auth/gmail.readonly"
+SIG_KEEP_S = 3600
+SIGN_OFF = re.compile(r"\n+[ \t]*Jonah(?: Linfield)?[ \t]*\n[ \t]*YD Exterior Visions(?: LLC)?[ \t]*\s*$")
+_sig = {"html": "", "at": 0.0}
+
+
+def _signature():
+    """His Gmail signature as Gmail keeps it (HTML), or ''."""
+    import time
+    now = time.time()
+    if _sig["at"] and now - _sig["at"] < SIG_KEEP_S:
+        return _sig["html"]
+    try:
+        r = requests.get("https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs/" + dg.OWNER_EMAIL,
+                         headers={"Authorization": "Bearer " + dg._gmail_access_token(GMAIL_READ)}, timeout=15)
+        if r.status_code < 300:
+            _sig.update(html=str(r.json().get("signature") or ""), at=now)
+        else:
+            print("cards: signature not read", r.status_code, r.text[:200])
+            _sig["at"] = now - SIG_KEEP_S + 600        # try again in ten minutes
+    except Exception as e:      # noqa: BLE001
+        print("cards: signature not read:", e)
+        _sig["at"] = now - SIG_KEEP_S + 600
+    return _sig["html"]
+
+
+def _sig_text(sig):
+    """The signature in plain words, for the text part of the email."""
+    import html as h
+    t = re.sub(r"<a\b[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>", lambda m: m.group(2) + (
+        "" if m.group(1) in m.group(2) or re.sub(r"<[^>]+>", "", m.group(2)).strip() in m.group(1)
+        else " (" + m.group(1) + ")"), sig, flags=re.I | re.S)
+    t = re.sub(r"<br\s*/?>|</?(div|p|tr|li)\b[^>]*>", "\n", t, flags=re.I)
+    t = h.unescape(re.sub(r"<[^>]+>", "", t))
+    return "\n".join(x.rstrip() for x in t.splitlines() if x.strip())
+
+
+def _with_signature(body):
+    """(text, html) of the email with his signature, or (body, None) when
+    there is none to add."""
+    import html as h
+    sig = _signature()
+    if not sig.strip():
+        return body, None
+    words = SIGN_OFF.sub("", (body or "").rstrip())
+    text = words + "\n\n--\n" + _sig_text(sig)
+    shown = h.escape(words).replace("\n", "<br>")
+    shown = re.sub(r"(https?://[^\s<&]+)", r'<a href="\1">\1</a>', shown)
+    page = ('<div dir="ltr">' + shown + '</div><br><div dir="ltr" class="gmail_signature">' + sig + '</div>')
+    return text, page
+
+
+def _mark_ours(mid):
+    """hubSent/{Gmail message id}: written by Job Hub, not typed by him. With
+    his signature on them these read like his own emails, which teach his
+    voice (inboxdesk.voice) -- so each one Job Hub sends or drafts is noted."""
+    if not mid:
+        return
+    try:
+        dg._db().collection("hubSent").document(str(mid)).set({"at": dg._now().isoformat()})
+    except Exception as e:      # noqa: BLE001
+        print("cards: sent email not noted:", e)
+
+
+def ours(mid):
+    """Whether Job Hub wrote this email (see _mark_ours)."""
+    try:
+        return dg._db().collection("hubSent").document(str(mid)).get().exists
+    except Exception:           # noqa: BLE001
+        return False
+
+
 def _message(to, subject, body, reply):
     """The email as Gmail takes it ({raw, threadId?}), and its subject."""
-    msg = MIMEText(body or "", "plain", "utf-8")
+    text, page = _with_signature(body or "")
+    if page:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(text, "plain", "utf-8"))
+        msg.attach(MIMEText(page, "html", "utf-8"))
+    else:
+        msg = MIMEText(body or "", "plain", "utf-8")
     msg["To"] = to
     msg["From"] = dg.OWNER_EMAIL
     msg["Subject"] = _one_line(subject)[:200]

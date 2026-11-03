@@ -232,9 +232,13 @@ def voice(db):
     out = []
     try:
         ids = [x["id"] for x in (_gmail("/messages", {"q": VOICE_QUERY, "maxResults": 25}).get("messages") or [])]
+        import cards
         for mid in ids:
             if len(out) >= VOICE_EXAMPLES:
                 break
+            # Job Hub's own emails carry his signature too (2 Nov 2026).
+            if cards.ours(mid):
+                continue
             words = _own_words(receipts._fetch(mid).get("text"))
             cut = SIGNATURE.search(words)
             if cut:
