@@ -3916,6 +3916,7 @@ def _words_for(db, jid, j, kind, qid, doc, env, end_names):
 TAKE_FROM = "2026-11-04T00:00:00+00:00"     # older emails went out before this: they change nothing
 TAKEN_BY = "QuickBooks"
 MATERIALS_SAID = re.compile(r"\s*Materials included: [^\n]*\s*$")     # estimate.js withIncludes
+DOWN_PAYMENT = re.compile(r"\bdown\s*payment\b|\bdeposit\b", re.I)
 
 
 def _lines_from_estimate(inv):
@@ -4010,14 +4011,23 @@ def _typed_add_ons(j):
                      for k in ("materialCost", "laborCost")), 2)
 
 
+def _only_deposit(inv):
+    """An invoice for just the down payment (his 2025 way: a "Down Payment"
+    line and nothing else): it bills part of the job, so it is not the job's
+    price."""
+    sold = [str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "")
+            for ln in _flat_lines(inv.get("Line")) if ln.get("DetailType") == "SalesItemLineDetail" and _cents(ln.get("Amount"))]
+    return bool(sold) and all(DOWN_PAYMENT.search(n) for n in sold)
+
+
 def take_invoice(job, inv, end_names, email_at="", by=TAKEN_BY):
     """One patch for `job` (the whole record) from its QuickBooks invoice as
     it is now, and what it did: (patch, {refilled, lines, gone}). None when the
-    invoice comes to nothing. Nothing is written here, and nothing ever goes
-    back to QuickBooks."""
+    invoice comes to nothing or is only a down payment. Nothing is written
+    here, and nothing ever goes back to QuickBooks."""
     rec = _invoice_record(inv)
     sub = rec.get("subtotal")
-    if not isinstance(sub, (int, float)) or sub <= 0:
+    if not isinstance(sub, (int, float)) or sub <= 0 or _only_deposit(inv):
         return None
     stamp = _stamp()
     iid = str(inv.get("Id"))
@@ -4154,7 +4164,7 @@ def invoice_take(body, who=""):
     sent.append((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))
     got = _save_take(db, jid, job, inv, _newest_email(sent), who or "By hand", _end_names())
     if not got:
-        return {"missing": True, "error": "That invoice comes to nothing before tax"}
+        return {"missing": True, "error": "That invoice has no work on it to take: it comes to nothing, or only a down payment"}
     patch, said = got
     return {"ok": True, "jobId": jid, "jobPrice": patch["jobPrice"], "docNumber": str(inv.get("DocNumber") or ""),
             "refilled": said["refilled"], "lines": said["lines"], "gone": said["gone"]}
