@@ -8,7 +8,8 @@
 //
 // Neither store has a way in for apps and both turn robots away, so the
 // server cannot do it. A routine on his computer does (Claude desktop app →
-// Scheduled → "Store lists"), in his own Chrome where he is signed in to both
+// Scheduled → "Store lists", 7 am every other day -- Jonah, 2 Nov 2026; it
+// was every ten minutes), in his own Chrome where he is signed in to both
 // stores. It never adds to the cart, checks out or pays: it makes a saved
 // list he opens and orders from. This file is the Job Hub half -- the
 // request, the button that makes one, the request made by itself when a job
@@ -132,7 +133,7 @@
     const vid = Object.keys(catalog().vendors).find(v => ordId(v) === vidKey);
     if (!jobId || !vid) return;
     if (!ask(jobId, vid, false)) { showToast('Nothing left to order there'); return; }
-    showToast('Asked — Claude makes the ' + STORES[storeOf(vid)].label + ' list on your computer within about 10 minutes (it needs to be on)', 6000);
+    showToast('Asked — Claude makes the ' + STORES[storeOf(vid)].label + ' list on your computer at its next 7 am run (every other day; it needs to be on)', 6000);
   }
   function cancel(jobKey, store) {
     if (!canAsk()) return;
@@ -202,7 +203,7 @@
       said = button('🛒 Have Claude make the ' + label + ' list');
     } else if (r.status === 'asked') {
       said = '<span class="sl-said">🛒 ' + label + ' list asked for' + (r.auto ? ' (by itself, as the job was booked)' : '') +
-        ' — Claude makes it on your computer within about 10 minutes, while it’s on</span>' +
+        ' — Claude makes it on your computer at its next 7 am run (every other day), while it’s on</span>' +
         (canAsk() ? ' <button type="button" class="link-btn" onclick="ydStoreListCancel(\'' + jk + '\', \'' + store + '\')">Cancel</button>' : '');
     } else if (r.status === 'working') {
       said = '<span class="sl-said">🛒 Claude is making the ' + label + ' list now…</span>';

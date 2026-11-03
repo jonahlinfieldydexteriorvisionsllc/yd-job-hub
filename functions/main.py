@@ -1434,17 +1434,19 @@ def _supplies(request, path, headers):
 # ---------------------------------------------------------------- store lists
 #
 # Whether the routine on Jonah's computer that makes Menards / Home Depot
-# lists (storelists.js) has anything to do. It asks every few minutes and,
-# with nothing waiting, stops there -- his Chrome is opened only when there
-# is work. Two counts, nothing about any job, so no sign-in, like /version:
+# lists (storelists.js) has anything to do. It asks at 7 am every other day
+# (Jonah, 2 Nov 2026 -- it was every ten minutes) and, with nothing waiting,
+# stops there -- his Chrome is opened only when there is work. Two counts,
+# nothing about any job, so no sign-in, like /version:
 #   waiting: lists asked for (or one left "working" by a run that died);
-#   unbooked: estimates the customer said yes to in the last two days that
+#   unbooked: estimates the customer said yes to in the last three days that
 #     are not booked yet. The owner's device books those (sync.js
 #     bookIfAccepted) and asks for their lists as it does -- the routine's
 #     own Job Hub tab is one, so a yes becomes a list without waiting for
-#     Jonah to open the app.
+#     Jonah to open the app. Three days, so a yes just after one run is
+#     still counted at the next, two days later.
 STORE_LIST_STALE_S = 2 * 3600
-STORE_LIST_UNBOOKED_DAYS = 2
+STORE_LIST_UNBOOKED_DAYS = 3
 
 
 def _store_lists_waiting():
