@@ -426,13 +426,20 @@
       if (!cols.length) return;
       const col = (cols.find(c => String(c.name || '').trim().toLowerCase() === 'today') || cols[0]).id;
       const at = new Date().toISOString(), today = ymd(new Date()), note = {};
-      want.slice(0, BILL_TODOS_MAX).forEach((w, i) => {
-        const id = 'sb' + Date.now().toString(36) + i.toString(36) + Math.random().toString(36).slice(2, 5);
-        const card = billCard(w, col, at, today, i);
-        Promise.resolve(window.YDDb.put('boards/todo/cards', id, card))
-          .catch(e => console.warn('[subs] bill to-do not yet on the server:', (e && e.code) || e));
+      const batch = want.slice(0, BILL_TODOS_MAX);
+      for (let i = 0; i < batch.length; i++) {
+        const w = batch[i];
+        // Named by the bill, not by the moment: his laptop and phone, both
+        // open, each made the same "Bill <client> — Oct 30" card the same
+        // second (2 Nov 2026) before either had heard of the other's. Now both write the
+        // one card -- and one already there (ticked off, say) is left alone.
+        const id = 'sbt_' + w.key;
         note[w.key] = { card: id, at: at };
-      });
+        const there = await window.YDDb.getFresh('boards/todo/cards', id).catch(() => null);
+        if (there) continue;
+        Promise.resolve(window.YDDb.put('boards/todo/cards', id, billCard(w, col, at, today, i)))
+          .catch(e => console.warn('[subs] bill to-do not yet on the server:', (e && e.code) || e));
+      }
       applyLocal({ billTodos: note });
       save({ billTodos: note }, 'noting bill to-dos');
     } catch (e) {
