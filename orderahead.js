@@ -17,7 +17,8 @@
 // What is still to order is what Orders to place shows (app.js ordersJobs, orderVendor); the first day
 // is the first day on the Job schedule (a pickup or a to-do tied to the job does not count).
 // Lead time: the supplier's "Usually takes" on Supplies ("3–5 business days", "1 week", "next day")
-// read as working days, the longest it says; none written = LEAD_WORKDAYS. A special-order line
+// read as working days, the longest it says; none written = his habit: Menards a week (MENARDS_WORKDAYS),
+// bulk by the ton or yard BULK_WORKDAYS, anything else LEAD_WORKDAYS. A special-order line
 // (Supplies' specialOrder, or the line's own) waits at least SPECIAL_WORKDAYS.
 // Kept in settings/orderAhead (owner only): jobs: { jobId: { cardId, first, at, n, wrote {due, title,
 // notes (a hash)}, autoDone } } -- n counts the cards made for the job (each its own id), wrote is what
@@ -30,6 +31,10 @@
   const LOOK_DAYS = 14;             // a first day further off than this gets no card yet
   const LEAD_WORKDAYS = 2;          // a supplier with no "Usually takes": time to set up a delivery or pickup
   const SPECIAL_WORKDAYS = 7;       // a special-order line, at the least
+  const BULK_WORKDAYS = 3;          // soil, stone, mulch by the ton or yard ("2-4 days ahead")
+  const MENARDS_WORKDAYS = 5;       // "menards stuff a week ahead"
+  const BULK = /\b(tons?|yds?|yards?|cu\.? ?yds?|cubic)\b/i;
+  const MENARDS = /menards/i;
 
   const safe = v => String(v == null ? '' : v).replace(/[^A-Za-z0-9_-]/g, '');
   const iso = () => new Date().toISOString();
@@ -89,13 +94,16 @@
     j.left.forEach(it => {
       const vid = (typeof orderVendor === 'function' ? orderVendor(it, cat) : it.vendorId) || '';
       const sid = typeof orderSupply === 'function' ? orderSupply(it, cat) : it.supplyId;
-      const g = by[vid] || (by[vid] = { vid, name: vid ? ((cat.vendors[vid] || {}).name || 'Supplier') : 'No supplier picked yet', n: 0, special: 0 });
+      const g = by[vid] || (by[vid] = { vid, name: vid ? ((cat.vendors[vid] || {}).name || 'Supplier') : 'No supplier picked yet', n: 0, special: 0, bulk: 0 });
       g.n++;
       if (it.specialOrder || (sid && cat.items[sid] && cat.items[sid].specialOrder)) g.special++;
+      if (BULK.test(String((sid && cat.items[sid] && (cat.items[sid].per || cat.items[sid].unit)) || it.per || ''))) g.bulk++;
     });
     return Object.values(by).map(g => {
       const said = g.vid ? leadDays((cat.vendors[g.vid] || {}).leadTime) : null;
-      let lead = said == null ? LEAD_WORKDAYS : said;
+      // His own habit (2 Nov 2026) when the supplier says nothing: "bulk
+      // materials soil etc 2-4 days ahead and menards stuff a week ahead".
+      let lead = said != null ? said : MENARDS.test(g.name) ? MENARDS_WORKDAYS : g.bulk ? BULK_WORKDAYS : LEAD_WORKDAYS;
       if (g.special) lead = Math.max(lead, SPECIAL_WORKDAYS);
       return Object.assign(g, { lead, said, by: backWorkdays(first, lead) });
     }).sort((a, b) => a.by.localeCompare(b.by) || a.name.localeCompare(b.name));
@@ -140,7 +148,7 @@
     const t = today();
     const lines = j.groups.map(g => '• ' + g.name + ' — order by ' + dayWords(g.by) + (g.by < t ? ' (late)' : '') + ': ' +
       g.n + ' line' + (g.n === 1 ? '' : 's') + (g.special ? ', ' + g.special + ' special order' : '') +
-      (g.said == null && g.vid && !g.special ? ' (no lead time set — ' + LEAD_WORKDAYS + ' working days assumed)' : ''));
+      (g.said == null && g.vid && !g.special ? ' (no lead time set — ' + g.lead + ' working days assumed)' : ''));
     return 'First day on the Job schedule: ' + dayWords(j.first) + '.\n\nOrder by:\n' + lines.join('\n') +
       '\n\nThe lines are on All Jobs → Orders to place, and on the job\'s Materials to Order. Tick each one as ' +
       'you order it (or "Didn\'t buy it"); this card ticks itself off when they are all done.' +
