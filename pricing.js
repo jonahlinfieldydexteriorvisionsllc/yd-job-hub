@@ -2008,7 +2008,7 @@
         'Only you see this screen, and the customer never sees any of it.' + (ro ? ' <b>Only the owner can change these.</b>' : '') + '</p>' +
 
       secHead('labor') + '<div class="pr-grid">' +
-        box('Cesar’s rate ($ an hour)', dollars(r.crewLeadCents), "prSet('crewLeadCents', this.value, 'cents')",
+        box('Crew lead ($ an hour)', dollars(r.crewLeadCents), "prSet('crewLeadCents', this.value, 'cents')",
           'always counted on a crew', crewBox('prCrewLead')) +
         box('Everyone else ($ an hour)', dollars(r.crewOtherCents), "prSet('crewOtherCents', this.value, 'cents')",
           'each other person on the crew', crewBox('prCrewOther')) +
