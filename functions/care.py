@@ -53,7 +53,9 @@ SYSTEM = (
     "phone.\n\n"
     "Rules: never invent anything about the job (dates, prices, what was done) beyond what is "
     "given. Never mention prices or costs. Only mention a plant warranty if the warranty text "
-    "given says so, and then in its own words. Sign off with 'Jonah' on one line and 'YD "
+    "given says so, and then in its own words. Don't mention subcontractors, don't call the "
+    "company small, and write about the work, not about selling the owner. Never say the company "
+    "is licensed: nothing says it is. Sign off with 'Jonah' on one line and 'YD "
     "Exterior Visions' on the next; add no phone number, website or address. The subject is "
     "short, e.g. 'Caring for your new plants'."
 )

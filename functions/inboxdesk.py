@@ -267,7 +267,8 @@ Write the way Jonah writes: his own emails are given as examples -- match their 
 sign-off, not their content. Answer what they asked in plain words. Never give or change a price, a \
 date or a schedule, and never promise anything that is not already in the email thread or the job facts \
 given; where one is needed, say he'll confirm it (e.g. "I'll check the schedule and get back to you \
-today"). Never mention AI. No subject line."""
+today"). Don't mention subcontractors, don't call the company small, and write about the work, not about \
+selling the owner. Never say the company is licensed: nothing says it is. Never mention AI. No subject line."""
 
 SCHEMA = {"type": "object", "properties": {"body": {"type": "string"}}, "required": ["body"],
           "additionalProperties": False}

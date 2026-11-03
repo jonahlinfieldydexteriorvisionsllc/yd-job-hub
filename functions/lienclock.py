@@ -117,19 +117,19 @@ def note_words(stage, inv, job):
     if stage == 45:
         subject = "%s — %s still open" % (num[:1].upper() + num[1:], owed)
         body = ("Hi %s,\n\n"
-                "I'm following up on %s for your %s. %s is still open.\n\n"
-                "You can pay with the link in the invoice email from QuickBooks, or by check made out to "
+                "Just following up on %s for your %s. %s is still open.\n\n"
+                "You can pay with the link in the QuickBooks email or by check made out to "
                 "YD Exterior Visions LLC.\n\n"
-                "If something about the work isn't right, reply and tell me. I'd rather fix it than have it sit.\n\n"
-                "Thanks,\nJonah\nYD Exterior Visions") % (name, num, work, owed)
+                "If something about the work isn't right, let me know. I'd rather fix it than have it sit.\n\n"
+                "Thanks!") % (name, num, work, owed)
     else:
         by = dg._now().date() + datetime.timedelta(days=10)
         subject = "Second notice: %s — %s" % (num, owed)
         body = ("Hi %s,\n\n"
                 "%s for your %s is now well past due, with %s still open.\n\n"
-                "Please pay it by %s, with the link in the invoice email or by check made out to "
-                "YD Exterior Visions LLC. If that's hard right now, reply and we'll set up payments.\n\n"
-                "Thanks,\nJonah\nYD Exterior Visions") % (
+                "Please get it paid by %s, with the link in the invoice email or by check made out to "
+                "YD Exterior Visions LLC. If that's hard right now, let me know & we can set up payments.\n\n"
+                "Thanks!") % (
                     name, num[:1].upper() + num[1:], work, owed, by.strftime("%B ") + str(by.day))
     return subject, body
 

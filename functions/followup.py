@@ -52,6 +52,8 @@ SYSTEM = (
     "- Only mention the price if it helps and it is given; say it the way it is written.\n"
     "- If this is not the first follow-up, keep it shorter and lighter, and do not repeat "
     "the earlier wording.\n"
+    "- Don't mention subcontractors, don't call the company small, and write about the work, "
+    "not about selling the owner. Never say the company is licensed: nothing says it is.\n"
     "- Sign off with 'Jonah' on one line and 'YD Exterior Visions' on the next. Add no "
     "phone number, website or address.\n"
     "- The subject is short and names the work (e.g. 'Your patio estimate')."
@@ -1008,16 +1010,14 @@ CLAIM_FRESH = datetime.timedelta(minutes=10)
 THANKS_SUBJECT = "Thank you from YD Exterior Visions"
 THANKS_BODY = (
     "Hi {name},\n\n"
-    "Thank you for choosing YD Exterior Visions for your {work}. It was a pleasure working with you, "
-    "and I hope you enjoy it for years to come.\n\n"
+    "Thanks again for choosing us for your {work}. It was great working with you & I hope you enjoy it "
+    "for years to come.\n\n"
     "If you have a minute, a Google review would mean a lot to us:\n"
     "{link}\n\n"
-    "And if anything ever comes up, just reply to this email.\n\n"
-    "Thanks again,\n"
-    "Jonah\n"
-    "YD Exterior Visions"
+    "If anything comes up, just reply to this email.\n\n"
+    "Have a great day!"
 )
-THANKS_LASTS = ", and I hope you enjoy it for years to come."
+THANKS_LASTS = " & I hope you enjoy it for years to come."
 
 # THE REVIEW CHECK-IN, three weeks on (Jonah, 2 Nov 2026, on the closeout
 # ladder: "I want these emails to push for reviews. So another email at day
@@ -1564,27 +1564,22 @@ WELCOME_SUBJECT = "Next steps for your {work} — YD Exterior Visions"
 # is every part -- what thanks.js W_BODY shows him to change.
 WELCOME_HEAD = (
     "Hi {name},\n\n"
-    "Thank you for accepting our estimate for your {work} — we're glad to be working with you.\n\n"
-    "Here's what happens next:"
+    "Thanks for going with us for your {work}. Here's what happens next:"
 )
 WELCOME_STEPS = (                   # (for which jobs, the words)
-    ("all", "Deposit: you'll get the deposit invoice from QuickBooks by email. You can pay it online with the "
-            "button in that email (a bank transfer costs you nothing, a card adds a 3.5% fee), or by check made out "
+    ("all", "Deposit: you'll get the deposit invoice from QuickBooks by email. You can pay online with the "
+            "button in that email (a bank transfer costs you nothing, a card adds a 3.5% fee) or by check made out "
             "to YD Exterior Visions LLC."),
-    ("materials", "Scheduling: once the deposit is in, we order your materials and put you on the schedule, "
-                  "and we'll be in touch with a start date."),
-    ("no materials", "Scheduling: once the deposit is in, we put you on the schedule, "
-                     "and we'll be in touch with a start date."),
+    ("materials", "Scheduling: once the deposit is in, we'll order your materials & get you on the schedule. "
+                  "I'll reach out with a start date."),
+    ("no materials", "Scheduling: once the deposit is in, we'll get you on the schedule. "
+                     "I'll reach out with a start date."),
     ("digs", "Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few "
-             "days before we start. If you have private lines (an invisible dog fence, irrigation, lighting, a line to a "
-             "shed), please let us know where they run."),
+             "days before we start. If you have any private lines (invisible dog fence, irrigation, lighting, a line "
+             "to a shed), let me know where they run."),
     ("all", "Questions or changes: just reply to this email."),
 )
-WELCOME_FOOT = (
-    "Thanks again for choosing us,\n"
-    "Jonah\n"
-    "YD Exterior Visions"
-)
+WELCOME_FOOT = "I look forward to working with you!"
 # Work that digs: digging.js DIGS (the Diggers ticket to-do) -- keep the same.
 DIGS = re.compile(r"\b(walls?|retaining|pavers?|patios?|drain\w*|trench\w*|light\w*|trees?|plant\w*|shrubs?|excavat\w*|"
                   r"footings?|posts?|fenc\w*|grad(?:e|ing)|fire ?pits?|walkways?|paths?|steps|edging|boulders?|sod|"
@@ -1595,7 +1590,7 @@ def _welcome_body(materials, digs):
     """The usual words for a job with (or without) materials and digging."""
     want = {"all", "materials" if materials else "no materials"} | ({"digs"} if digs else set())
     steps = [w for who, w in WELCOME_STEPS if who in want]
-    return "\n\n".join([WELCOME_HEAD] + ["%d. %s" % (i + 1, w) for i, w in enumerate(steps)] + [WELCOME_FOOT])
+    return "\n\n".join([WELCOME_HEAD, "\n".join("- " + w for w in steps), WELCOME_FOOT])
 
 
 WELCOME_BODY = _welcome_body(True, True)

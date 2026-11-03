@@ -24,14 +24,12 @@
   // leaves out "enjoy it for years to come" for work that isn't built.
   const SUBJECT = 'Thank you from YD Exterior Visions';
   const BODY = 'Hi {name},\n\n' +
-    'Thank you for choosing YD Exterior Visions for your {work}. It was a pleasure working with you, ' +
-    'and I hope you enjoy it for years to come.\n\n' +
+    'Thanks again for choosing us for your {work}. It was great working with you & I hope you enjoy it ' +
+    'for years to come.\n\n' +
     'If you have a minute, a Google review would mean a lot to us:\n' +
     '{link}\n\n' +
-    'And if anything ever comes up, just reply to this email.\n\n' +
-    'Thanks again,\n' +
-    'Jonah\n' +
-    'YD Exterior Visions';
+    'If anything comes up, just reply to this email.\n\n' +
+    'Have a great day!';
 
   const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner);
@@ -314,19 +312,16 @@
   // with none, and the utility lines for a job that doesn't dig.
   const W_SUBJECT = 'Next steps for your {work} — YD Exterior Visions';
   const W_BODY = 'Hi {name},\n\n' +
-    'Thank you for accepting our estimate for your {work} — we\'re glad to be working with you.\n\n' +
-    'Here\'s what happens next:\n\n' +
-    '1. Deposit: you\'ll get the deposit invoice from QuickBooks by email. You can pay it online with the ' +
-    'button in that email (a bank transfer costs you nothing, a card adds a 3.5% fee), or by check made out to YD Exterior Visions LLC.\n\n' +
-    '2. Scheduling: once the deposit is in, we order your materials and put you on the schedule, ' +
-    'and we\'ll be in touch with a start date.\n\n' +
-    '3. Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few ' +
-    'days before we start. If you have private lines (an invisible dog fence, irrigation, lighting, a line to a ' +
-    'shed), please let us know where they run.\n\n' +
-    '4. Questions or changes: just reply to this email.\n\n' +
-    'Thanks again for choosing us,\n' +
-    'Jonah\n' +
-    'YD Exterior Visions';
+    'Thanks for going with us for your {work}. Here\'s what happens next:\n\n' +
+    '- Deposit: you\'ll get the deposit invoice from QuickBooks by email. You can pay online with the ' +
+    'button in that email (a bank transfer costs you nothing, a card adds a 3.5% fee) or by check made out to YD Exterior Visions LLC.\n' +
+    '- Scheduling: once the deposit is in, we\'ll order your materials & get you on the schedule. ' +
+    'I\'ll reach out with a start date.\n' +
+    '- Before we dig: we have the public utility lines marked, so you may see paint or flags in the yard a few ' +
+    'days before we start. If you have any private lines (invisible dog fence, irrigation, lighting, a line ' +
+    'to a shed), let me know where they run.\n' +
+    '- Questions or changes: just reply to this email.\n\n' +
+    'I look forward to working with you!';
   const W_WITHIN_DAYS = 14;          // followup.WELCOME_WITHIN_DAYS
   // followup.py welcome_mode: drafts until he chooses.
   const welcomeMode = c => (c && (c.welcome === 'send' || c.welcome === 'off')) ? c.welcome : 'draft';

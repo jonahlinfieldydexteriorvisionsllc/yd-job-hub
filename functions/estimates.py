@@ -86,6 +86,8 @@ SYSTEM = (
     "caliper'), the count, tree='single' for a single-trunk tree, 'multi' for multi-trunk or "
     "evergreen trees, 'none' otherwise, and costEachDollars only if Jonah gave the nursery cost.\n"
     "- Labour: one line per piece of work the customer should see separately -- often just one. "
+    "Fewer lines are better: put related work on one line (all the grading, beds and lawn restoration "
+    "together) and keep the detail in its scope. "
     "Read SERVICES first: it is how Jonah prices each kind of work, in his own words. A service "
     "priced BY THE UNIT (turf by the sq ft, say) goes on a line of kind 'flat' with its id and the "
     "quantity in its unit -- never as crew-days, whatever the job's size -- and in factors the ids "
@@ -111,7 +113,8 @@ SYSTEM = (
     "the figure (a wall's labour on the patio's line) goes in addDollars when he gave its amount; "
     "if he didn't, ask him for it once. allInDollars and addDollars are 0 on every other kind.\n"
     "  The estimate below shows what the app prices each line and material at; use those figures "
-    "when he asks what something comes to, and never change one yourself.\n"
+    "when he asks what something comes to, and never change one yourself. When he asks for a total, "
+    "give the total and then the breakdown.\n"
     "- The scope on each labour line is what the customer reads: a short heading-style title, "
     "then the scope of work in short plain paragraphs, no prices, no crew-days, no markup, no "
     "tier numbers, and no rented equipment (a mini-excavator or jumping jack is a takeoff line the "
@@ -1090,8 +1093,10 @@ SNOW_SYSTEM = (
     "storms; residential or commercial. There is NO takeoff, NO materials, NO trip miles or fuel, NO crew-days, NO "
     "dumpsters, NO season totals of salt or visits, NO deposit or payment plan -- never ask about any of them and "
     "never bring them up.\n\n"
-    "Every price is Jonah's own: he types each one in its box. You never set, suggest, estimate or change a price "
-    "or say what one should be -- if he asks you to change one, tell him which box to type it in. What you can "
+    "Every price is Jonah's own: he types each one in its box, and you never type or change one -- if he asks you "
+    "to change one, tell him which box to type it in. When he asks what to charge, suggest prices per push in your "
+    "`reply`, worked from HIS OWN ACCOUNTS given below (the ones nearest in type and size), and say which you went "
+    "by; with no fair match, say so. What you can "
     "change: which areas get cleared (`areas`, ids from the list given, and `areasOther` for anything else in a "
     "few plain words), extras by NAME only (`extras`: the price box stays his to fill), and the notes for the crew "
     "(`crewNotes`: what the crew should know on site -- never shown to the customer, never a price). Never invent "
@@ -1159,6 +1164,39 @@ def _snow_text(s):
     return "\n".join(rows)
 
 
+def _snow_prices():
+    """His snow accounts' prices and sizes, one line each and no names, for
+    the chat to suggest from (Jonah, 3 Nov 2026). Never stops the chat."""
+    def dollars(c):
+        return "$%d" % (int(c) // 100)
+    lines = []
+    try:
+        db = dg._db()
+        for s in db.collection("snowAccounts").stream():
+            a = s.to_dict() or {}
+            if a.get("active") is False:
+                continue
+            rates = s.reference.collection("private").document("rates").get().to_dict() or {}
+            p = rates.get("pricing") or {}
+            tiers = p.get("tiers") or {}
+            bits = ["%s in %s" % (k, dollars(tiers[k]["cents"])) for k in ("1-3", "4-6", "6+", "9+")
+                    if (tiers.get(k) or {}).get("cents")]
+            each = p.get("perInch") or {}
+            if each.get("cents"):
+                bits.append("%s an inch over %s" % (dollars(each["cents"]), each.get("aboveInches")))
+            salt = (p.get("salt") or {}).get("portionCents")
+            if salt:
+                bits.append("salt %s" % dollars(salt))
+            if not bits:
+                continue
+            size = ["%s %s sq ft" % (w, a[k]) for w, k in (("drive", "driveSqFt"), ("walks", "walkSqFt")) if a.get(k)]
+            lines.append("- %s, %s%s: %s" % (a.get("type") or "account", a.get("town") or "?",
+                                             " (%s)" % ", ".join(size) if size else "", ", ".join(bits)))
+    except Exception as err:    # noqa: BLE001
+        print("estimates: snow accounts not read --", err)
+    return "\n".join(lines)
+
+
 def _snow_prompt(d):
     chat = [m for m in (d.get("chat") or []) if isinstance(m, dict) and str(m.get("text") or "").strip()]
     return "\n".join([
@@ -1177,6 +1215,9 @@ def _snow_prompt(d):
         _snow_text(d.get("snow")),
         "",
         "Area ids you may use: " + ", ".join("%s = %s" % kv for kv in sorted(SNOW_AREAS.items())),
+        "",
+        "HIS OWN ACCOUNTS (what he charges now, per push):",
+        _snow_prices() or "(none on file)",
         "",
         "THE CONVERSATION SO FAR:",
         _chat_text(chat[:-1]) or "(this is the first message)",
