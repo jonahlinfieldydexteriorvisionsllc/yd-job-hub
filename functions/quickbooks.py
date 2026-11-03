@@ -1708,7 +1708,6 @@ def invoice_from_estimate(body):
                        % (_amount(inv["TotalAmt"]), _amount(e["TotalAmt"])))
             print("quickbooks: invoice %s for estimate %s: %s" % (inv.get("Id"), e["Id"], differs))
 
-    inv = _card_rule_new(inv)
     sent_to = ""
     if body.get("email") and not differs:
         to = str(((inv.get("BillEmail") or e.get("BillEmail") or {}).get("Address")) or "").strip()
@@ -3833,91 +3832,6 @@ INVOICES_KEEP_PAID = datetime.timedelta(days=30)
 EMAILS_KEEP = 20
 
 
-# No card on a big invoice (Jonah, 3 Nov 2026: "no card payment for invoices
-# over $1000"). A card costs him 2.99%, against about 1% for a bank transfer
-# and nothing for a check. Above
-# settings/invoiceReminders.cardOver (dollars; none = every invoice takes a
-# card) an invoice's card button goes off, and QuickBooks' pay-over-time button
-# with it, so what is left is the bank transfer. The invoice's TOTAL decides,
-# so a job's deposit and its last payment go the same way. Invoices made in
-# QuickBooks itself are caught by the hourly look. Job Hub never turns a card
-# back on by itself: only invoices/{id}.cardOk does (invoices.js, "Let them pay
-# by card"), and an invoice under the limit is left as it is.
-CARD_A_RUN = 25         # invoices changed in one look; the rest wait for the next
-
-
-class CardMoved(RuntimeError):
-    """Changing the card button changed an invoice's money."""
-
-
-def _card_limit():
-    try:
-        got = _db().collection("settings").document("invoiceReminders").get().to_dict() or {}
-    except Exception as err:                            # noqa: BLE001 -- no limit until it can be read
-        print("quickbooks: card limit not read:", err)
-        return 0
-    v = got.get("cardOver")
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else 0
-
-
-def _card_let(inv_id):
-    """He said this one may be paid by card."""
-    try:
-        snap = _db().collection("invoices").document(str(inv_id)).get()
-    except Exception as err:                            # noqa: BLE001
-        print("quickbooks: invoice %s not read for its card:" % inv_id, err)
-        return False
-    return bool(snap.exists and (snap.to_dict() or {}).get("cardOk") is True)
-
-
-def _card_rule(inv, limit, card_ok=False):
-    """The invoice's card button as the rule says -- the invoice as QuickBooks
-    has it afterwards. Only that button is sent; if the money on the invoice
-    moves all the same, the rule switches itself off and says so (cardStopped,
-    shown on the Invoices list) before another invoice is touched."""
-    on = inv.get("AllowOnlineCreditCardPayment") is not False
-    total, balance = _amount(inv.get("TotalAmt")), _amount(inv.get("Balance"))
-    if card_ok:
-        change = {} if on else {"AllowOnlineCreditCardPayment": True}
-    elif limit and total > limit and (on or inv.get("AllowOnlineAffirmPayment")):
-        change = {"AllowOnlineCreditCardPayment": False}
-    else:
-        return inv
-    if not change:
-        return inv
-    ways = [change]
-    if not card_ok and inv.get("AllowOnlineAffirmPayment"):
-        ways.insert(0, dict(change, AllowOnlineAffirmPayment=False))
-    back = None
-    for way in ways:
-        try:
-            back = _call("POST", "invoice", body=dict(way, Id=inv["Id"], SyncToken=inv["SyncToken"],
-                                                      sparse=True)).get("Invoice")
-            break
-        except ReconnectNeeded:
-            raise
-        except RuntimeError as err:
-            print("quickbooks: card button of invoice %s not changed: %s" % (inv.get("Id"), err))
-    if not back:
-        return inv
-    if abs(_amount(back.get("TotalAmt")) - total) > 0.005 or abs(_amount(back.get("Balance")) - balance) > 0.005:
-        said = ("Invoice #%s went from $%.2f to $%.2f when its card button changed — check it in QuickBooks"
-                % (inv.get("DocNumber") or inv.get("Id"), total, _amount(back.get("TotalAmt"))))
-        print("quickbooks:", said)
-        _db().collection("settings").document("invoiceReminders").set({"cardOver": 0, "cardStopped": said}, merge=True)
-        raise CardMoved(said)
-    return dict(inv, **back)
-
-
-def _card_rule_new(inv):
-    """The rule on an invoice just made -- never a reason for it not to be."""
-    try:
-        return _card_rule(inv, _card_limit(), _card_let(inv.get("Id")))
-    except Exception as err:                            # noqa: BLE001 -- the hourly look tries again
-        print("quickbooks: card rule not applied to invoice %s: %s" % (inv.get("Id"), err))
-        return inv
-
-
 def _open_invoices():
     """Every invoice with money still owed, in pages."""
     out, start = [], 1
@@ -3966,7 +3880,6 @@ def _inv_doc(inv, have, job_id, job_by=None):
         "total": total, "balance": bal, "open": bal > 0,
         "txnDate": str(inv.get("TxnDate") or ""), "dueDate": str(inv.get("DueDate") or ""),
         "emailStatus": str(inv.get("EmailStatus") or ""), "viewed": str(inv.get("EInvoiceStatus") or "") == "Viewed",
-        "cardOff": inv.get("AllowOnlineCreditCardPayment") is False,
         "emails": emails, "env": env,
         "link": "%s/app/invoice?txnId=%s" % (QB_APP.get(env, QB_APP["sandbox"]), inv.get("Id")),
     }
@@ -3981,7 +3894,7 @@ def _inv_doc(inv, have, job_id, job_by=None):
 
 def _inv_changed(rec, have):
     keys = ("docNumber", "customerName", "email", "total", "balance", "open", "txnDate", "dueDate",
-            "emailStatus", "viewed", "cardOff", "emails", "jobId", "jobBy", "payments", "paymentIds")
+            "emailStatus", "viewed", "emails", "jobId", "jobBy", "payments", "paymentIds")
     return any(rec.get(k) != have.get(k) for k in keys)
 
 
@@ -4086,7 +3999,6 @@ def sync_invoices(jobs):
         except Exception as err:                        # noqa: BLE001 -- the payments without their method
             print("quickbooks invoices: payment methods not read:", err)
     batch, n = db.batch(), 0
-    card_limit, card_changes = _card_limit(), 0
     for inv_id in list(now_open) + gone:
         old = olds[inv_id]
         inv = now_open.get(inv_id) or closed.get(inv_id)
@@ -4094,13 +4006,6 @@ def sync_invoices(jobs):
             batch.set(col.document(inv_id), {"open": False, "deletedAt": _now().isoformat()}, merge=True)
             n += 1
             continue
-        if inv_id in now_open and card_changes < CARD_A_RUN:
-            try:
-                was = inv.get("SyncToken")
-                inv = _card_rule(inv, card_limit, old.get("cardOk") is True)
-                card_changes += 1 if inv.get("SyncToken") != was else 0
-            except CardMoved:
-                card_limit, card_changes = 0, CARD_A_RUN    # no more this run; cardStopped keeps it off
         if by_inv.get(inv_id):
             link = (by_inv[inv_id], "job")
         else:
@@ -4627,7 +4532,7 @@ def create_invoice(body):
 
     # The request id is worked out first (above), so a retry is recognised
     # whatever number this one is given.
-    inv = _card_rule_new(_make("Invoice", _numbered("Invoice", invoice), request_id))
+    inv = _make("Invoice", _numbered("Invoice", invoice), request_id)
     return {
         "id": inv.get("Id"),
         "docNumber": inv.get("DocNumber"),
