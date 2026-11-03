@@ -11,20 +11,25 @@
 //   - the Job tab (#digRow, beside the mark-out): the ticket's state, or
 //     "no ticket yet — file it by <day>", "No ticket needed", and a ticket
 //     that matched no job can be put on this one;
-//   - a card on his My to-dos, "🚧 File the Diggers ticket — <name>", due 5
-//     working days before the first day on the Job schedule (Wisconsin
-//     wants 3 working days), made once per job on the owner's device, and
-//     ticked off by itself when the ticket's email comes in;
+//   - a card on his My to-dos, "🚧 File the Diggers ticket — <name>", made
+//     the moment a digging job is booked (Jonah, 2 Nov 2026: "when jobs get
+//     picked up that include any excavation card should be made to order
+//     diggers hotline ticket"), due 5 working days before the first day on
+//     the Job schedule (Wisconsin wants 3 working days) -- with no day yet it
+//     has none, and takes it when the first day is put on -- made once per
+//     job on the owner's device, and ticked off by itself when the ticket's
+//     email comes in;
 //   - the crew's job page: the ticket number and "clear to dig from".
 // Kept in settings/digging (owner only), as markout.js keeps its own:
-//   jobs: { jobId: { cardId, at } | { none: true, at } }
+//   jobs: { jobId: { cardId, at, first, due } | { none: true, at } }
+//   (first, due: the first day and the due date the card was given, so a
+//   moved first day moves the card -- unless he changed its date himself)
 (function () {
   'use strict';
 
   const TODO = 'todo';
   const DOC = 'digging';
   const LEAD_WORKDAYS = 5;          // the to-do's day: this many working days before the first day
-  const LOOK_DAYS = 30;             // a first day further off than this gets no to-do yet
   const GRACE = 10;                 // start within, no break longer than (functions/diggers.py)
   // Work that digs. Wisconsin wants a ticket for any digging, so this leans
   // wide; "No ticket needed" on the Job tab for the rest.
@@ -138,12 +143,11 @@
     const work = (((d.estimate || {}).work) || []).map(w => w && String(w.title || '').trim()).filter(Boolean).slice(0, 8);
     const b = window.YDBoards && YDBoards.boards ? YDBoards.boards()[TODO] : null;
     const col = b && b.columns && b.columns[0] ? b.columns[0].id : 'admin0';
-    const due = [backWorkdays(first, LEAD_WORKDAYS), today()].sort()[1];
+    const due = dueFor(first);
     const now = iso();
     return {
       title: '🚧 File the Diggers ticket — ' + name + (num ? ' #' + num : ''),
-      notes: 'First day on the Job schedule: ' + dayWords(first) + '. Wisconsin wants the ticket in at least 3 working days ' +
-        'before digging; this is 5 to be safe.\n\nFile it at diggershotline.com (or 811).' +
+      notes: whenNote(first) + '\n\nFile it at diggershotline.com (or 811).' +
         (where ? '\n\nWhere: ' + where : '') + (work.length ? '\n\nThe work: ' + work.join(', ') : '') +
         '\n\nJob Hub reads the ticket from your email when it comes in and ticks this off.',
       checklist: [], column: col, order: Date.now(), due: due, dueTime: null,
@@ -153,11 +157,40 @@
       doneAt: null, createdAt: now, createdBy: 'Job Hub', updatedAt: now, updatedBy: 'Job Hub',
     };
   }
+  // The card's day: 5 working days before the first day, never in the past;
+  // none while the job has no day on the Job schedule. (A ticket filed too
+  // early lapses: work must start within 10 days of its start date.)
+  const dueFor = first => first ? [backWorkdays(first, LEAD_WORKDAYS), today()].sort()[1] : null;
+  const whenNote = first => first
+    ? 'First day on the Job schedule: ' + dayWords(first) + '. Wisconsin wants the ticket in at least 3 working days ' +
+      'before digging; this is 5 to be safe.'
+    : 'No day on the Job schedule yet. File it 3 to 5 working days before the digging starts — a ticket lapses when ' +
+      'work hasn’t begun within 10 days of its start date. Put the first day on the Job schedule and this to-do ' +
+      'takes its date.';
   function makeCard(id, d, first) {
     const cid = cardIdOf(id), card = cardFor(id, d, first);
     return Promise.resolve(window.YDDb.transact([['boards/' + TODO + '/cards', cid]], ([cur]) => [cur ? null : card]))
-      .then(() => { save({ [id]: { cardId: cid, at: iso() } }); return true; })
+      .then(() => { save({ [id]: { cardId: cid, at: iso(), first: first || '', due: card.due } }); return true; })
       .catch(e => { console.warn('[digging] card not made yet:', (e && e.code) || e); return false; });
+  }
+  // The first day was put on (or moved) after the card was made: the card
+  // follows, unless he gave it a date of his own.
+  function redate(id, k) {
+    const first = firstDay(id);
+    if (first === (k.first || '')) return;
+    const c = cardNow(id);
+    if (!c || cardDone(c)) return;
+    if (k.first === undefined || (c.due || null) !== (k.due || null)) {
+      // Made before this was kept, or dated by hand: noted, not changed.
+      save({ [id]: Object.assign({}, k, { first: first, due: c.due || null }) });
+      return;
+    }
+    const due = dueFor(first), notes = String(c.notes || '');
+    const cut = notes.indexOf('\n\nFile it at diggershotline.com');
+    Promise.resolve(window.YDDb.put('boards/' + TODO + '/cards', k.cardId, {
+      due: due, notes: whenNote(first) + (cut === -1 ? '' : notes.slice(cut)), updatedAt: iso(), updatedBy: 'Job Hub' }))
+      .catch(e => console.warn('[digging] card date not moved yet:', (e && e.code) || e));
+    save({ [id]: Object.assign({}, k, { first: first, due: due }) });
   }
   const cardNow = id => {
     const k = state && state.jobs[id];
@@ -181,7 +214,6 @@
     running = true;
     try {
       try { await read(); } catch (e) { return; }
-      const horizon = addDays(today(), LOOK_DAYS);
       for (const j of getJobIndex()) {
         // A job with no to-do here that is not booked or under way can need
         // nothing: passed by on its list entry, not read whole (this runs
@@ -197,9 +229,12 @@
           if (c && !cardDone(c) && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true, true);
           continue;
         }
+        if (k && k.cardId && !(t && !t.lapsed) && BOOKED.indexOf(statusOf(d)) !== -1) redate(j.id, k);
         if (k || (t && !t.lapsed) || BOOKED.indexOf(statusOf(d)) === -1 || !digs(d)) continue;
+        // One under way with no day ahead on the schedule is likely dug
+        // already: only a job not started gets a to-do with no day.
         const first = firstDay(j.id);
-        if (!first || first > horizon) continue;
+        if (!first && statusOf(d) !== 'booked') continue;
         await makeCard(j.id, d, first);
       }
       render();
@@ -237,7 +272,7 @@
       const first = firstDay(id);
       const c = cardNow(id);
       h = '🚧 No Diggers ticket yet' + (first ? ' — file it by ' + esc(dayWords([backWorkdays(first, LEAD_WORKDAYS), today()].sort()[1])) +
-          ' (first day ' + esc(dayWords(first)) + ')' : ' — put the first day on the Job schedule and a to-do is made') +
+          ' (first day ' + esc(dayWords(first)) + ')' : ' — file it 3 to 5 working days before the digging starts; put the first day on the Job schedule and its to-do takes the date') +
         (c ? ' <button type="button" class="link-btn" onclick="digOpenCard()">Open the to-do</button>' : '') +
         ' <button type="button" class="link-btn" onclick="digNone()">No ticket needed</button>';
     }

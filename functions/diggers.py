@@ -35,6 +35,7 @@ SCAN_EVERY = datetime.timedelta(minutes=30)
 FIRST_LOOK_DAYS = 60
 LOOK_DAYS = 21
 SEEN_MAX = 400
+LABEL = "Diggers Hotline"
 FROM_HOUR = 7
 GRACE_DAYS = 10            # begin within, and no break longer than
 TELL_WITHIN_MS = 2 * 86400 * 1000   # a Positive Response older than this is not pushed
@@ -135,8 +136,20 @@ def _addr_key(s):
 LIVE = ("booked", "inprogress", "in progress", "complete", "completed", "quoting")
 
 
+BEFORE_BID_DAYS = 60        # a ticket starting this long before a job's bid date is another job's
+
+
+def _for_this_job(tk, j):
+    """Not a ticket from years before: since 2 Nov 2026 every old ticket
+    email is read once, and a repeat customer's address (or name) would
+    have taken a ticket of an earlier year's work."""
+    start, bid = _day(tk.get("start") or tk.get("called")), _day(j.get("quoteDate"))
+    return not (start and bid and start < bid - datetime.timedelta(days=BEFORE_BID_DAYS))
+
+
 def match_job(tk, jobs):
     """(jobId, how) for the ticket, or (None, None)."""
+    jobs = {jid: j for jid, j in jobs.items() if _for_this_job(tk, j)}
     key = _addr_key(tk.get("address"))
     if key:
         hits = [jid for jid, j in jobs.items() if not j.get("deletedAt") and not j.get("removeWhy")
@@ -230,6 +243,20 @@ def _tell_owner(people, title, body):
     return out
 
 
+def _label(mids):
+    """The "Diggers Hotline" label on these emails in his Gmail (Jonah, 2 Nov
+    2026: "auto label emails from diggers hotline as diggers hotline in
+    gmail"). Never raises: a label must never stop the read."""
+    import receipts
+    if not mids:
+        return
+    try:
+        lid = receipts._label_ids([LABEL])[LABEL]
+        receipts._add_label(lid, list(mids))
+    except Exception as e:      # noqa: BLE001 -- NeedsPermission, or Gmail down
+        print("diggers: not labelled:", e)
+
+
 def scan(db, people, now=None):
     """Read new Diggers Hotline emails (every SCAN_EVERY)."""
     import receipts
@@ -239,12 +266,19 @@ def scan(db, people, now=None):
         return []
     seen = list(was.get("seen") or [])
     days = LOOK_DAYS if was.get("seen") is not None else FIRST_LOOK_DAYS
+    # Once, every ticket email there is (the first look read only two months
+    # back): each older ticket on its job too, and all of them labelled.
+    back = not was.get("backAt")
     try:
-        ids = receipts._list_ids("from:diggershotline.com newer_than:%dd" % days)
+        ids = receipts._list_ids("from:diggershotline.com" if back else
+                                 "from:diggershotline.com newer_than:%dd" % days)
     except Exception as e:      # noqa: BLE001
         print("diggers: gmail not read:", e)
         return []
     fresh = [mid for mid in ids if mid not in seen]
+    _label(ids if back else fresh)
+    if back:
+        db.collection(STATE[0]).document(STATE[1]).set({"backAt": now.isoformat()}, merge=True)
     if not fresh:
         if was.get("seen") is None:
             db.collection(STATE[0]).document(STATE[1]).set({"seen": []}, merge=True)
