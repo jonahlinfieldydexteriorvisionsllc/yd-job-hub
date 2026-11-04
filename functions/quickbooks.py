@@ -4886,10 +4886,14 @@ def create_invoice(body):
     if not lines:
         raise RuntimeError("That invoice has no lines")
 
+    # Only storm invoices come through here, and snow removal is never taxed
+    # (Jonah, 4 Nov 2026). Said on every line: with no tax code QuickBooks
+    # falls back on the product's own setting, and it taxed snow that way.
     qb_lines = []
     for ln in lines:
         amount = round(float(ln.get("amount", 0)), 2)
-        detail = {"Qty": float(ln.get("qty", 1)), "UnitPrice": round(float(ln.get("rate", amount)), 2)}
+        detail = {"Qty": float(ln.get("qty", 1)), "UnitPrice": round(float(ln.get("rate", amount)), 2),
+                  "TaxCodeRef": {"value": "NON"}}
         item_id = str(ln.get("itemId") or "").strip()
         if item_id:
             detail["ItemRef"] = {"value": item_id}
