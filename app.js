@@ -2830,10 +2830,16 @@ function orderSwapHtml(job, key, it, cat) {
       '<button type="button" class="link-btn" onclick="' + call('orderSwapOpen') + '">Back to the list</button> ' +
       '<button type="button" class="link-btn" onclick="orderSwapCancel()">Cancel</button></span></div>';
   }
-  // Same kind first (another adhesive for an adhesive), then everything else.
-  const kind = it.supplyId && cat.items[it.supplyId] ? cat.items[it.supplyId].category || '' : '';
+  // Nearest first: what the same supplier sells of the same kind (their other
+  // sizes of it), then the same kind, then everything else. Until a word is
+  // typed the box shows 50 of ~960, and same kind by A to Z alone left a
+  // supplier late in the alphabet past that cut, so the other size of the very
+  // thing on the line wasn't there to pick.
+  const from = it.supplyId ? cat.items[it.supplyId] : null;
+  const kind = from ? from.category || '' : '';
+  const nearness = s => !from || (s.category || '') !== kind ? 2 : s.vendorId === from.vendorId ? 0 : 1;
   const list = Object.values(cat.items).filter(s => s.id !== it.supplyId && s.name)
-    .sort((a, b) => ((a.category === kind ? 0 : 1) - (b.category === kind ? 0 : 1)) || String(a.name).localeCompare(String(b.name)));
+    .sort((a, b) => (nearness(a) - nearness(b)) || String(a.name).localeCompare(String(b.name)));
   return (was ? '<br>' + was : '') + '<div class="ord-swap"><b>Swap to</b>' +
     '<select class="searchable" onchange="' + call('orderSwapPick', ', this.value') + '"><option value="">Which Supplies item instead?</option>' +
       list.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + (vname(s) ? ' — ' + esc(vname(s)) : '') + esc(priceOf(s)) + '</option>').join('') + '</select>' +
@@ -6610,8 +6616,11 @@ function makeSearchable(sel) {
   // they type another word. The one already chosen is always kept, in its
   // place in the list, so it can be seen and picked again.
   const SHOWN_MAX = 50;
+  // "5gal" and "5-gallon" are read as two words, so they find "5 gallon".
+  // This only ever finds more: a name holding "5gal" holds "5" and "gal" too.
+  const wordsIn = q => String(q || '').toLowerCase().replace(/-/g, ' ').replace(/(\d)([a-z])/g, '$1 $2').split(/\s+/).filter(Boolean);
   function open(q) {
-    const words = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    const words = wordsIn(q);
     const chosen = sel.options[sel.selectedIndex] || null;
     const matches = Array.prototype.filter.call(sel.options, o => !o.disabled && o.value !== '__custom' &&
       words.every(w => label(o).toLowerCase().indexOf(w) !== -1));
