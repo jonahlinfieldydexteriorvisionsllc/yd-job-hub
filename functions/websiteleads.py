@@ -244,7 +244,12 @@ def reply(claude, done, spent=None):
         patch = {k: c[k] for k in ("tags", "street", "city", "state", "zip") if c[k]}
         if c["summary"]:
             patch["fromEmail.summary"] = c["summary"]
-        words = str(got.get("reply") or "").strip()
+        # Snow with no plow: his fixed words, as for an email (leads.NO_PLOW_BODY)
+        # -- but in Drafts, never sent by itself, whatever settings/followUp says.
+        # Nobody has proved the address typed into a form is theirs, so a send
+        # here would let anyone aim his email at a stranger.
+        plow = leads._no_plow(db, got, m, f["fname"])
+        words = plow["body"] if plow else str(got.get("reply") or "").strip()
         saved = cards.draft_email(f["email"], SUBJECT, words) if words else {"error": "no reply written"}
         if saved.get("draftId"):
             draft = {"draftId": saved["draftId"], "link": saved.get("link"), "at": leads._stamp()}
