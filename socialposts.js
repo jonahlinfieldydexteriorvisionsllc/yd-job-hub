@@ -22,20 +22,26 @@
   const safeId = s => String(s == null ? '' : s).replace(/[^A-Za-z0-9_-]/g, '');
   const isOwner = () => !!(window.YDAuth && window.YDAuth.isOwner && window.YDAuth.user);
 
-  const PLACES = ['facebook', 'google', 'nextdoor'];
-  const NAMES = { facebook: 'Facebook', google: 'Google', nextdoor: 'Nextdoor' };
-  const ICONS = { facebook: '📘', google: '📍', nextdoor: '🏘️' };
+  const PLACES = ['facebook', 'instagram', 'google', 'nextdoor'];
+  // A post of his own has no photos yet, and Instagram can't take one without.
+  const OWN_PLACES = PLACES.filter(p => p !== 'instagram');
+  const NAMES = { facebook: 'Facebook', instagram: 'Instagram', google: 'Google', nextdoor: 'Nextdoor' };
+  const ICONS = { facebook: '📘', instagram: '📷', google: '📍', nextdoor: '🏘️' };
   // The same as functions/social.py DEFAULT_SLOTS (keep the two the same).
   const DEFAULT_SLOTS = [
     { id: 'fb1', place: 'facebook', day: 2, time: '09:30', every: 1, season: 'all' },
     { id: 'fb2', place: 'facebook', day: 4, time: '13:00', every: 1, season: 'all' },
     { id: 'fb3', place: 'facebook', day: 6, time: '09:00', every: 1, season: 'growing' },
+    { id: 'ig1', place: 'instagram', day: 3, time: '12:00', every: 1, season: 'all' },
+    { id: 'ig2', place: 'instagram', day: 6, time: '10:00', every: 1, season: 'all' },
     { id: 'gb1', place: 'google', day: 2, time: '08:30', every: 1, season: 'all' },
     { id: 'nd1', place: 'nextdoor', day: 4, time: '18:00', every: 2, season: 'all' },
   ];
   const WHY = {
     facebook: 'Weekday mid-morning and early afternoon are the steadiest times on Facebook; Saturday morning is when ' +
       'homeowners plan their yard, April to October.',
+    instagram: 'Days Facebook doesn’t already have the same job. Every post here carries its photos, and uses Facebook’s ' +
+      'words. A link in the words can’t be tapped on Instagram.',
     google: 'A Google post stays on your profile, so one fresh one every week is the point — early in the week, before ' +
       'the searches pick up. The week’s new After photos go onto the profile with it.',
     nextdoor: 'Nextdoor’s own advice: Thursday or Friday, 5–7 pm, and a new post about every two weeks — more reads as ' +
@@ -263,6 +269,7 @@
   function hooked(place) {
     if (place === 'nextdoor') return true;              // posted by him, from here
     if (place === 'facebook') return !!(hook && hook.facebook && hook.facebook.connected);
+    if (place === 'instagram') return !!((hook && hook.instagram && hook.instagram.ok) || (cfg.instagram && cfg.instagram.ok));
     if (place === 'google') return !!((hook && hook.google && hook.google.ok) || (cfg.google && cfg.google.ok));
     return false;
   }
@@ -271,7 +278,7 @@
     const st = STATUS[p.status] || [p.status, ''];
     const isOpen = open === p.id;
     const what = p.kind === 'job' ? (p.jobName || 'A finished job') + (p.town ? ' · ' + p.town : '')
-      : p.kind === 'idea' ? '🍂 ' + (p.topic || 'Seasonal post') : '✍️ Your post';
+      : p.kind === 'idea' ? (/^yt-/.test(p.ideaId || '') ? '📝 ' : '🍂 ') + (p.topic || 'Seasonal post') : '✍️ Your post';
     const photos = (p.photos || []).filter(x => /^https:\/\//.test((x || {}).url || ''));
     return '<div class="sp-row' + (isOpen ? ' open' : '') + '" id="spRow_' + safeId(p.id) + '">' +
       '<button class="sp-row-head" onclick="spOpen(\'' + safeId(p.id) + '\')" aria-expanded="' + isOpen + '">' +
@@ -355,7 +362,7 @@
   function ownHtml() {
     return '<div class="sp-own">' +
       '<b>A post of your own</b>' +
-      '<div class="sp-choice">' + PLACES.map(p => '<button class="btn btn-sm' + (own.places[p] ? ' btn-filled' : '') +
+      '<div class="sp-choice">' + OWN_PLACES.map(p => '<button class="btn btn-sm' + (own.places[p] ? ' btn-filled' : '') +
         '" onclick="spOwnPlace(\'' + p + '\')">' + (own.places[p] ? '✓ ' : '') + ICONS[p] + ' ' + NAMES[p] + '</button>').join('') + '</div>' +
       '<label class="sp-lbl">The words<textarea id="spOwnText" rows="6" oninput="spOwnSet(\'text\', this.value)">' + esc(own.text) + '</textarea></label>' +
       '<label class="sp-lbl">When<input type="datetime-local" id="spOwnAt" value="' + esc(own.at) + '" oninput="spOwnSet(\'at\', this.value)"></label>' +
@@ -386,7 +393,20 @@
               : '') : '') +
         '</div>';
       }).join('') +
+      yardTalkHtml() +
       (Array.isArray(cfg.slots) ? '<button class="btn btn-sm" onclick="spSlotsReset()">Back to the recommended times</button>' : '');
+  }
+
+  // Jonah, 4 Nov 2026: a Yard Talk post, once it is live, goes on the schedule
+  // by itself. Read from the site's own feed, so one waiting for his OK isn't in it.
+  function yardTalkHtml() {
+    const on = cfg.yardTalk !== false;
+    return '<div class="sp-place-box"><div class="sp-place-head"><b>📝 New Yard Talk posts</b>' +
+        '<div class="sp-choice"><button class="btn btn-sm' + (on ? ' btn-filled' : '') + '" onclick="spYardTalk(true)">' +
+          (on ? '✓ ' : '') + 'Announce them</button><button class="btn btn-sm' + (!on ? ' btn-filled' : '') +
+          '" onclick="spYardTalk(false)">' + (!on ? '✓ ' : '') + 'Don’t</button></div></div>' +
+      '<p class="hint">When a new post is live on the website, it takes the next time on Facebook, Instagram and Nextdoor, ' +
+        'once each. Whatever was planned there goes back in line. Posts you changed by hand stay put.</p></div>';
   }
 
   function slotHtml(s, i) {
@@ -409,6 +429,7 @@
   function hookupHtml() {
     const fb = (hook && hook.facebook) || {};
     const g = (hook && hook.google) || cfg.google || {};
+    const ig = (hook && hook.instagram) || cfg.instagram || {};
     const fbc = cfg.facebook || {};
     const redirect = fb.redirect || '';
     const copy = (text, label) => '<button class="btn btn-sm" data-copy="' + esc(text) + '" onclick="spCopyText(this.dataset.copy)">📋 ' +
@@ -448,6 +469,19 @@
           '<p class="hint">Facebook asks which Pages to share — tick <b>YD Exterior Visions</b>. Job Hub only ever posts as ' +
             'the business, never to your own Page. If Facebook doesn’t show the Pages, tap <b>Edit access</b> (or Edit ' +
             'previous settings) there.</p>');
+    const igHtml = ig.ok
+      ? '<p>✓ Posting to <b>@' + esc(ig.username || '') + '</b>.</p><button class="btn btn-sm" onclick="spInstagram()">Check again</button>'
+      : (ig.error ? '<div class="sp-why">' + esc(ig.error) + '</div>' : '') +
+        '<ol class="sp-steps">' +
+          '<li>In the Instagram app, signed in as the business: make it a <b>Business</b> account (Settings → Account type and ' +
+            'tools) and link it to the <b>YD Exterior Visions</b> Facebook Page.</li>' +
+          '<li>At <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener">developers.facebook.com</a>, ' +
+            'in the YD Job Hub app: <b>Use cases → Customize</b> — add <b>instagram_basic</b>, <b>instagram_content_publish</b>, ' +
+            '<b>ads_management</b> and <b>ads_read</b>.</li>' +
+          '<li>Under Facebook above, tap <b>Hook up again</b>. Tick the YD Exterior Visions Page and the Instagram account when ' +
+            'Facebook asks.</li>' +
+          '<li><button class="btn btn-sm btn-filled" onclick="spInstagram()">Check Instagram</button></li>' +
+        '</ol>';
     const gHtml = g.ok
       ? '<p>✓ Posting to <b>' + esc(g.title || 'your Business Profile') + '</b>. The week’s new After photos go onto the ' +
           'profile with each post.</p><button class="btn btn-sm" onclick="spGoogle()">Check again</button>'
@@ -472,6 +506,7 @@
         '<a href="https://developer.nextdoor.com/reference/applying-for-access" target="_blank" rel="noopener">apply for their ' +
         'Publish API</a>. No promise they will for one business.</p>';
     return '<div class="sp-place-box"><b>📘 Facebook</b>' + fbHtml + '</div>' +
+      '<div class="sp-place-box"><b>📷 Instagram</b>' + igHtml + '</div>' +
       '<div class="sp-place-box"><b>📍 Google Business Profile</b>' + gHtml + '</div>' +
       '<div class="sp-place-box"><b>🏘️ Nextdoor</b>' + ndHtml + '</div>';
   }
@@ -645,6 +680,7 @@
     save({ signOff: Object.assign({}, cfg.signOff, { [p]: t.value.trim().slice(0, 300) }) }, 'the line')
       .then(() => showToast('Saved — on posts planned from now'));
   };
+  window.spYardTalk = on => { save({ yardTalk: !!on }, 'that choice').then(replan); };
   window.spFbSet = (k, v) => { fbForm[k] = v; };
   window.spFbApp = async () => {
     const r = await ask('/social/fb/app', { appId: fbForm.appId, appSecret: fbForm.appSecret }, 'Checking with Facebook…');
@@ -672,6 +708,12 @@
   window.spFbOff = async () => {
     if (!(await ydConfirm('Unhook Facebook? Posts there stop going up until you hook it up again.', { ok: 'Unhook' }))) return;
     await ask('/social/fb/disconnect', {}, 'Unhooking…');
+    loadCfg();
+    loadHook();
+  };
+  window.spInstagram = async () => {
+    const r = await ask('/social/instagram/check', {}, 'Checking Instagram…');
+    if (r) showToast(r.ok ? '✓ Instagram is hooked up — @' + (r.username || '') : (r.error || 'Not yet'));
     loadCfg();
     loadHook();
   };

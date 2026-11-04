@@ -1,4 +1,4 @@
-"""Facebook, Google Business Profile and Nextdoor posts, on a schedule.
+"""Facebook, Instagram, Google Business Profile and Nextdoor posts, on a schedule.
 
 Jonah (30 Oct 2026): "lets setup automatic facebook, nextdoors, and google
 profile posting. i want a set schedule for all this where posts go up at the
@@ -18,16 +18,24 @@ business):
     fill the spare spots, so past jobs reach the profile too).
   - Nextdoor Thu 6:00 pm every other week: Nextdoor's own advice is Thursday
     or Friday, 5-7 pm, and a new post about every two weeks.
+  - Instagram Wed noon and Sat 10:00 am (Jonah, 4 Nov 2026: "we'll be adding
+    instagram to this list"): days Facebook doesn't already have the same job.
 
 What goes in a slot, in this order:
-  1. a job finished in the last RECENT_DAYS days with After photos, not yet
+  1. a new Yard Talk post live on the site (Jonah, 4 Nov 2026: yes, put it on
+     the schedule by itself): Facebook, Instagram and Nextdoor, once each. It
+     takes the next planned post's place; that job goes back in line;
+  2. a job finished in the last RECENT_DAYS days with After photos, not yet
      posted there (oldest first, so they go in the order finished);
-  2. an older finished job with After photos, never posted there (newest
+  3. an older finished job with After photos, never posted there (newest
      first) -- the season's work, shown off through the winter;
-  3. one of the month's seasonal posts (socialIdeas/{YYYY-MM}), written once
+  4. one of the month's seasonal posts (socialIdeas/{YYYY-MM}), written once
      a month by Claude, with a photo of a past job when one fits.
 Never the same job twice in one place. A job ticked "Don't post" (noPost) is
 never used.
+
+Instagram has no words of its own: it takes Facebook's, so it costs no Claude
+call, and it only ever takes a post with a photo (the place is photos).
 
 The words for a job are Claude's (posts.words -> socialWords/{jobId}),
 written once per job -- when it is marked Complete, or here the first time
@@ -55,9 +63,11 @@ and connects; a Page token made from a long-lived user token does not
 expire. Google: domain-wide delegation as the owner's Workspace account
 (digest._gmail_access_token) with the business.manage scope -- no stored
 key -- once Google has approved the project for the Business Profile API.
-Nextdoor: posting by itself needs Nextdoor's OK for its Publish API; until
-then a Nextdoor post is "ready" at its time and his phone is told, and Job
-Hub opens Nextdoor with the words already in (socialposts.js).
+Instagram: the business account linked to the Facebook Page, reached with the
+Page's token (the same hookup: Instagram API with Facebook Login). Nextdoor:
+posting by itself needs Nextdoor's OK for its Publish API; until then a
+Nextdoor post is "ready" at its time and his phone is told, and Job Hub opens
+Nextdoor with the words already in (socialposts.js).
 
 Post records: socialPosts/{place}_{YYYYMMDD}_{HHMM} (one per slot time) or
 socialPosts/sph... (one he wrote himself):
@@ -72,11 +82,17 @@ missed (its time passed by more than LATE); skipped (his).
 """
 
 import datetime
+import email.utils
+import io
 import json
 import os
 import re
 import secrets
+import time
 import urllib.parse
+import uuid
+import xml.etree.ElementTree as ET
+from html import unescape
 
 import requests
 from google.api_core.exceptions import AlreadyExists
@@ -86,8 +102,10 @@ import digest as dg
 
 MODEL = "claude-sonnet-5-5"
 
-PLACES = ("facebook", "google", "nextdoor")
-NAMES = {"facebook": "Facebook", "google": "Google", "nextdoor": "Nextdoor"}
+PLACES = ("facebook", "instagram", "google", "nextdoor")
+NAMES = {"facebook": "Facebook", "instagram": "Instagram", "google": "Google", "nextdoor": "Nextdoor"}
+# The places Claude writes for. Instagram takes Facebook's words (_words_for).
+WRITTEN = ("facebook", "google", "nextdoor")
 SEASONS = ("all", "growing", "winter")
 GROWING_MONTHS = (4, 5, 6, 7, 8, 9, 10)
 
@@ -97,6 +115,8 @@ DEFAULT_SLOTS = [
     {"id": "fb1", "place": "facebook", "day": 2, "time": "09:30", "every": 1, "season": "all"},
     {"id": "fb2", "place": "facebook", "day": 4, "time": "13:00", "every": 1, "season": "all"},
     {"id": "fb3", "place": "facebook", "day": 6, "time": "09:00", "every": 1, "season": "growing"},
+    {"id": "ig1", "place": "instagram", "day": 3, "time": "12:00", "every": 1, "season": "all"},
+    {"id": "ig2", "place": "instagram", "day": 6, "time": "10:00", "every": 1, "season": "all"},
     {"id": "gb1", "place": "google", "day": 2, "time": "08:30", "every": 1, "season": "all"},
     {"id": "nd1", "place": "nextdoor", "day": 4, "time": "18:00", "every": 2, "season": "all"},
 ]
@@ -114,9 +134,9 @@ MAYBE_UP = ("%s took too long to answer, so it may have gone up -- look at the p
 WRITES_PER_RUN = 6                        # Claude writes for this many jobs a run at most
 PLAN_BUDGET_S = 150                       # ... and is not asked again after this many seconds
 IDEAS_PER_MONTH = 10
-PHOTOS = {"facebook": 4, "google": 1, "nextdoor": 4}
+PHOTOS = {"facebook": 4, "instagram": 4, "google": 1, "nextdoor": 4}
 GALLERY_A_WEEK = 5                        # After photos added to the Google profile each week
-LIMITS = {"facebook": 5000, "google": 1500, "nextdoor": 3400}
+LIMITS = {"facebook": 5000, "instagram": 2200, "google": 1500, "nextdoor": 3400}
 
 SETTINGS = ("settings", "social")
 FB_DOC = ("integrations", "facebook")
@@ -127,7 +147,27 @@ GRAPH = "https://graph.facebook.com/v26.0"
 FB_DIALOG = "https://www.facebook.com/v26.0/dialog/oauth"
 # business_management: a Page owned by a business portfolio (his is) hands its
 # key to an app only with it -- without it Facebook lists no Page at all.
-FB_SCOPES = "pages_show_list,pages_read_engagement,pages_manage_posts,business_management"
+# instagram_*: posting to the Instagram account linked to the Page. ads_*: Meta
+# asks for them too when someone's role on that Page comes through a business
+# portfolio, which his does; Job Hub never touches an ad.
+FB_SCOPES = ("pages_show_list,pages_read_engagement,pages_manage_posts,business_management,"
+             "instagram_basic,instagram_content_publish,ads_management,ads_read")
+
+# Instagram takes only a JPEG, between 4:5 upright and 1.91:1 wide.
+IG_TALLEST, IG_WIDEST = 0.8, 1.91
+IG_WAIT_TRIES = 20                        # every 3 seconds, for the photos to be ready
+IG_ACCOUNT = re.compile(r"ydexterior|exteriorvisions|yarddudes", re.I)
+IG_NOT_LINKED = ("No Instagram business account is linked to the Facebook Page yet. In the Instagram app, make the "
+                 "account a Business account and link it to the YD Exterior Visions Page, then check again.")
+
+SITE = "https://ydexteriorvisions.com"
+YARD_TALK_FEED = SITE + "/yard-talk/rss.xml"
+YARD_TALK_FROM = "2026-11-04"             # earlier posts were never announced, and stay that way
+YARD_TALK_DAYS = 21                       # one older than this is old news
+YARD_TALK_PLACES = ("facebook", "instagram", "nextdoor")
+YARD_TALK_TAGS = "#YardTalk #MadisonWI #DaneCounty #Landscaping"
+YARD_TALK_LINK = re.compile(r"^https://(?:www\.)?ydexteriorvisions\.com/yard-talk/([A-Za-z0-9_-]+)/?$")
+OG_IMAGE = re.compile(r"""<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)""", re.I)
 
 GBP_SCOPE = "https://www.googleapis.com/auth/business.manage"
 GBP_ACCOUNTS = "https://mybusinessaccountmanagement.googleapis.com/v1/accounts"
@@ -411,6 +451,13 @@ def _clean(place, words):
     return t
 
 
+def _words_for(place, got):
+    """A place's words out of a job's words or a seasonal post. Instagram has
+    none of its own: Facebook's fit it, hashtags and all, with no Claude call."""
+    got = got or {}
+    return _clean(place, got.get(place) or (got.get("facebook") if place == "instagram" else ""))
+
+
 def _with_sign_off(place, words, cfg):
     sign = str(((cfg.get("signOff") or {}).get(place)) or "").strip()
     text = words + ("\n\n" + sign if sign and place != "google" else "")
@@ -423,7 +470,7 @@ IDEA_SYSTEM = (
     "You write social media posts for YD Exterior Visions LLC, a landscaping and hardscaping company serving Dane "
     "and Green County, Wisconsin (the Madison area): paver patios, retaining walls, walkways, fire pits, plantings "
     "and garden beds, mulch and rock, sod and seed, artificial turf, drainage, lawn care and snow removal. Job Hub "
-    "posts them on a schedule on Facebook, the Google Business Profile and Nextdoor in the weeks when there is no "
+    "posts them on a schedule on Facebook, Instagram, the Google Business Profile and Nextdoor in the weeks when there is no "
     "freshly finished job to show.\n\n"
     "Write the given number of posts for the given month, each on its own topic that fits that month in southern "
     "Wisconsin (what homeowners are thinking about then: fall clean-up and winter prep in autumn, snow removal "
@@ -494,13 +541,122 @@ def _write_ideas(client, db, month, jobs, photos):
         idea = {"id": "%s-%d" % (month, i + 1), "topic": str(x.get("topic") or "")[:80],
                 "photo": {"id": pick["photo"]["id"], "url": pick["photo"]["url"], "thumb": pick["photo"]["thumb"]}
                 if pick else None}
-        for place in PLACES:
+        for place in WRITTEN:
             idea[place] = _clean(place, x.get(place))[:LIMITS[place]]
-        if all(idea[p] for p in PLACES):
+        if all(idea[p] for p in WRITTEN):
             ideas.append(idea)
     if ideas:
         db.collection("socialIdeas").document(month).set({"ideas": ideas, "at": _now().isoformat(), "by": "Claude"})
     return ideas, resp.usage
+
+
+# ---------------------------------------------------------------- Yard Talk
+
+
+def _talk_photo(link, iid):
+    """The post's share photo, from its page. False when the page isn't live;
+    None when it has no photo."""
+    try:
+        r = requests.get(link, timeout=15, headers={"User-Agent": "YD Job Hub"})
+    except requests.RequestException as e:
+        print("social: yard talk page not read:", link, e)
+        return False
+    if r.status_code != 200:
+        return False
+    m = OG_IMAGE.search(r.text)
+    url = unescape(m.group(1)).strip() if m else ""
+    url = SITE + url if url.startswith("/") else url
+    return {"id": iid, "url": url, "thumb": url} if url.startswith("https://") else None
+
+
+def _talk_words(title, excerpt, link):
+    """Plain code, no Claude call: the post's own title and short text, which
+    were written for this. Instagram can't link from a caption, so it names
+    the site; a link Nextdoor or Facebook shows opens the post."""
+    lead = excerpt[:400].rsplit(" ", 1)[0] + "..." if len(excerpt) > 400 else excerpt
+    head = "New on Yard Talk: %s" % title
+
+    def lines(*parts):
+        return "\n\n".join(x for x in parts if x)       # a post with no short text leaves no gap
+
+    return {"facebook": lines(head, lead, "Read it here: " + link, YARD_TALK_TAGS),
+            "instagram": lines(head, lead, "The whole post is on our website: ydexteriorvisions.com/yard-talk",
+                               YARD_TALK_TAGS),
+            "nextdoor": lines("We just put up a new post on our Yard Talk blog: " + title, lead, link)}
+
+
+def yard_talk(cfg, used_ideas, now):
+    """Yard Talk posts live on the site and still to be announced, oldest
+    first, shaped as seasonal posts (ideaId yt-<address>), so the schedule, the
+    checks and the Posts screen treat them the same way. The site's own feed
+    says what is live: a post waiting on his OK isn't in it, and nothing is
+    announced before it can be read. settings/social.yardTalk false = off."""
+    if cfg.get("yardTalk") is False:
+        return []
+    try:
+        r = requests.get(YARD_TALK_FEED, timeout=15, headers={"User-Agent": "YD Job Hub"})
+        if r.status_code >= 300:
+            return []
+        items = list(ET.fromstring(r.content).iter("item"))
+    except (requests.RequestException, ET.ParseError) as e:
+        print("social: yard talk feed not read:", e)
+        return []
+    cut = max(YARD_TALK_FROM, (now - datetime.timedelta(days=YARD_TALK_DAYS)).date().isoformat())
+    places = [p for p in YARD_TALK_PLACES if _place_on(cfg, p)]
+    out = []
+    for item in items:
+        title = str(item.findtext("title") or "").strip()
+        excerpt = str(item.findtext("description") or "").strip()
+        link = str(item.findtext("link") or "").strip()
+        m = YARD_TALK_LINK.match(link)
+        try:
+            when = email.utils.parsedate_to_datetime(str(item.findtext("pubDate") or "")).astimezone(dg.TZ)
+        except (TypeError, ValueError):
+            continue
+        if not (title and m) or when > now or when.date().isoformat() < cut:
+            continue
+        iid = "yt-" + m.group(1)[:100]
+        if all(iid in used_ideas[p] for p in places):
+            continue
+        photo = _talk_photo(link, iid)
+        if photo is False:
+            continue
+        out.append((when, dict(_talk_words(title, excerpt, link), id=iid, topic=("Yard Talk: " + title)[:80],
+                               photo=photo)))
+    return [x for _, x in sorted(out, key=lambda y: y[0])]
+
+
+def _talk_for(place, talk, used_ideas):
+    """The Yard Talk post this place should have next. Instagram needs a photo."""
+    return next((x for x in talk if x.get(place) and x["id"] not in used_ideas[place] and
+                 (place != "instagram" or x.get("photo"))), None)
+
+
+def _make_room(db, talk, times, existing, used_jobs, used_ideas, now):
+    """The week ahead is planned days early, so a new Yard Talk post would wait
+    a week behind it. It takes the next time instead: the post planned there
+    comes off and its job goes back in line. One he changed or OK'd is his and
+    stays, and nothing about to go up (the next hour) is touched."""
+    soon = now + datetime.timedelta(hours=1)
+    for place in YARD_TALK_PLACES:
+        if not _talk_for(place, talk, used_ideas):
+            continue
+        for slot, at in times:
+            if slot["place"] != place or at <= soon:
+                continue
+            pid = post_id(place, at)
+            d = existing.get(pid)
+            if d is None:
+                break                   # an empty time: the post takes it
+            if d.get("edited") or d.get("okAt") or d.get("kind") not in ("job", "idea") or \
+                    str(d.get("ideaId") or "").startswith("yt-") or _parse(d.get("at")) != at or \
+                    d.get("status") not in ("queued", "notConnected"):
+                continue
+            db.collection("socialPosts").document(pid).delete()
+            del existing[pid]
+            used_jobs[place].discard(d.get("jobId"))
+            used_ideas[place].discard(d.get("ideaId"))
+            break
 
 
 # ---------------------------------------------------------------- planning
@@ -512,7 +668,6 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
     written (a job's, or the month's seasonal posts), at most `writes` times
     and not after `budget_s` seconds (it rides on the summary run); a slot
     whose words are not written yet waits for the next run."""
-    import time
     import posts
     import spend
     t0 = time.monotonic()
@@ -531,6 +686,8 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
     jobs = _jobs(db, photos)
     used_jobs, used_ideas, existing = _used(db, now)
     hooked = _hooked(db, cfg)
+    talk = yard_talk(cfg, used_ideas, now)
+    _make_room(db, talk, times, existing, used_jobs, used_ideas, now)
     words_cache = {}
     ideas_by_month = {}
     planned, wrote, waiting = [], 0, 0
@@ -598,12 +755,18 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
         if pid in existing:
             continue
         rec, later = None, False
-        for jid, j, day in _candidates(place, jobs, used_jobs, now.date()):
+        news = _talk_for(place, talk, used_ideas)
+        if news:
+            words = _clean(place, news[place])
+            rec = {"kind": "idea", "ideaId": news["id"], "topic": news["topic"], "words": words,
+                   "photos": [news["photo"]] if news.get("photo") else [], "why": problems(words)}
+            used_ideas[place].add(news["id"])
+        for jid, j, day in () if rec else _candidates(place, jobs, used_jobs, now.date()):
             w = words_of(jid, j)
             if w is LATER:
                 later = True
                 break
-            words = _clean(place, (w or {}).get(place))
+            words = _words_for(place, w)
             if not words:
                 continue
             rec = {"kind": "job", "jobId": jid, "jobName": str(j.get("customerName") or "")[:80],
@@ -615,9 +778,10 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
             break
         if rec is None and not later:
             for idea in ideas_of(at.strftime("%Y-%m")):
-                if idea.get("id") in used_ideas[place] or not idea.get(place):
+                words = _words_for(place, idea)
+                # Instagram is photos: a post with none can't go there.
+                if idea.get("id") in used_ideas[place] or not words or (place == "instagram" and not idea.get("photo")):
                     continue
-                words = _clean(place, idea[place])
                 rec = {"kind": "idea", "ideaId": idea["id"], "topic": idea.get("topic") or "", "words": words,
                        "photos": [idea["photo"]] if idea.get("photo") else [], "why": problems(words)}
                 used_ideas[place].add(idea["id"])
@@ -652,8 +816,9 @@ def plan(client, db=None, now=None, writes=WRITES_PER_RUN, budget_s=PLAN_BUDGET_
 def _hooked(db, cfg):
     """Which places a post can go up in now. Nextdoor always: he posts it
     from Job Hub."""
-    return {"facebook": bool(_fb_doc(db).get("pageToken")), "google": bool((cfg.get("google") or {}).get("ok")),
-            "nextdoor": True}
+    fb = _fb_doc(db)
+    return {"facebook": bool(fb.get("pageToken")), "instagram": bool(fb.get("pageToken") and fb.get("igId")),
+            "google": bool((cfg.get("google") or {}).get("ok")), "nextdoor": True}
 
 
 def tell_tomorrow(db=None, people=None, now=None):
@@ -783,6 +948,8 @@ def publish(db, pid, people=None, now=None, by_hand=False):
     try:
         if place == "facebook":
             done = fb_post(db, d)
+        elif place == "instagram":
+            done = ig_post(db, d)
         elif place == "google":
             done = google_post(db, d, now)
         elif place == "nextdoor":
@@ -841,7 +1008,7 @@ def _fb_doc(db):
     return (snap.to_dict() or {}) if snap.exists else {}
 
 
-def _fb_error(r):
+def _fb_error(r, who="Facebook"):
     """Graph's answer -> NotConnected (token or permission), Retry (their
     trouble or a limit), else an error with its words."""
     try:
@@ -851,10 +1018,10 @@ def _fb_error(r):
     code = err.get("code")
     msg = str(err.get("message") or r.text[:200])
     if code in (190, 102) or (code in (10, 200, 3) and "permission" in msg.lower()) or r.status_code == 401:
-        return NotConnected("Facebook needs hooking up again (%s)" % msg[:160])
+        return NotConnected("%s needs hooking up again (%s)" % (who, msg[:160]))
     if r.status_code >= 500 or code in (1, 2, 4, 17, 32, 341, 368, 613):
-        return Retry("Facebook said: %s" % msg[:200])
-    return RuntimeError("Facebook said: %s" % msg[:300])
+        return Retry("%s said: %s" % (who, msg[:200]))
+    return RuntimeError("%s said: %s" % (who, msg[:300]))
 
 
 def fb_post(db, d):
@@ -918,6 +1085,183 @@ def _fb_find(page, token, text):
     except (requests.RequestException, ValueError):
         return None
     return None
+
+
+# ---------------------------------------------------------------- Instagram
+
+
+def _ig_image(p):
+    """A public address Instagram will take for this photo. Instagram fetches
+    it itself and refuses anything but a JPEG between 4:5 upright and 1.91:1
+    wide, and a phone's upright photo (3:4) is a little too tall. Those are cut
+    to fit, keeping the middle, and kept in Storage (socialCrops/) with a key
+    in the address, as the job photos' own addresses have."""
+    from PIL import Image, ImageOps
+    url = p["url"]
+    try:
+        r = requests.get(url, timeout=60)
+    except requests.RequestException as e:
+        raise Retry("The photo could not be read (%s)" % e)
+    if r.status_code >= 300:
+        raise RuntimeError("The photo could not be read (it answered %s)" % r.status_code)
+    im = Image.open(io.BytesIO(r.content))
+    fmt = im.format
+    im = ImageOps.exif_transpose(im)
+    w, h = im.size
+    shape = w / h
+    if fmt == "JPEG" and IG_TALLEST <= shape <= IG_WIDEST:
+        return url
+    box = (0, 0, w, h)
+    if shape < IG_TALLEST:
+        keep = round(w / IG_TALLEST)
+        box = (0, (h - keep) // 2, w, (h - keep) // 2 + keep)
+    elif shape > IG_WIDEST:
+        keep = round(h * IG_WIDEST)
+        box = ((w - keep) // 2, 0, (w - keep) // 2 + keep, h)
+    out = io.BytesIO()
+    im.crop(box).convert("RGB").save(out, "JPEG", quality=90)
+    return _keep_crop(p.get("id"), out.getvalue())
+
+
+def _keep_crop(pid, raw):
+    import receipts
+    path = "socialCrops/%s.jpg" % re.sub(r"[^A-Za-z0-9_-]", "", str(pid or "photo"))
+    key = str(uuid.uuid4())
+    blob = receipts._bucket().blob(path)
+    blob.metadata = {"firebaseStorageDownloadTokens": key}
+    blob.upload_from_string(raw, content_type="image/jpeg")
+    return "https://firebasestorage.googleapis.com/v0/b/%s/o/%s?alt=media&token=%s" % (
+        receipts.STORAGE_BUCKET, urllib.parse.quote(path, safe=""), key)
+
+
+def _ig_box(ig, token, params):
+    """One Instagram 'container'. Nothing is up yet, so a failure here is safe
+    to try again."""
+    try:
+        r = requests.post("%s/%s/media" % (GRAPH, ig), data=dict(params, access_token=token), timeout=120)
+    except requests.RequestException as e:
+        raise Retry("Instagram could not be reached (%s)" % e)
+    if r.status_code >= 300 or not (r.json() or {}).get("id"):
+        raise _fb_error(r, "Instagram")
+    return r.json()["id"]
+
+
+def _ig_wait(box, token):
+    """Instagram fetches the photo in its own time: it must say FINISHED before
+    the post can go up."""
+    for _ in range(IG_WAIT_TRIES):
+        try:
+            r = requests.get("%s/%s" % (GRAPH, box), params={"fields": "status_code,status", "access_token": token},
+                             timeout=30)
+        except requests.RequestException as e:
+            raise Retry("Instagram could not be reached (%s)" % e)
+        if r.status_code >= 300:
+            raise _fb_error(r, "Instagram")
+        got = r.json() or {}
+        if got.get("status_code") in ("FINISHED", "PUBLISHED"):
+            return
+        if got.get("status_code") in ("ERROR", "EXPIRED"):
+            raise RuntimeError("Instagram wouldn't take the photo: %s" % str(got.get("status") or "")[:200])
+        time.sleep(3)
+    raise Retry("Instagram is still working on the photos")
+
+
+def ig_post(db, d):
+    fb = _fb_doc(db)
+    ig, token = fb.get("igId"), fb.get("pageToken")
+    if not (ig and token):
+        raise NotConnected("Instagram isn't hooked up yet")
+    photos = [p for p in (d.get("photos") or []) if str((p or {}).get("url") or "").startswith("https://")]
+    if not photos:
+        raise RuntimeError("Instagram needs a photo on the post")
+    caption = str(d.get("text") or "")[:LIMITS["instagram"]]
+    urls = [_ig_image(p) for p in photos[:PHOTOS["instagram"]]]
+    if len(urls) == 1:
+        box = _ig_box(ig, token, {"image_url": urls[0], "caption": caption})
+    else:
+        kids = [_ig_box(ig, token, {"image_url": u, "is_carousel_item": "true"}) for u in urls]
+        for k in kids:
+            _ig_wait(k, token)
+        box = _ig_box(ig, token, {"media_type": "CAROUSEL", "children": ",".join(kids), "caption": caption})
+    _ig_wait(box, token)
+    try:
+        r = requests.post("%s/%s/media_publish" % (GRAPH, ig), data={"creation_id": box, "access_token": token},
+                          timeout=120)
+    except requests.ReadTimeout:
+        # As for Facebook: no answer is not "not up". Look before anything
+        # could put it up a second time.
+        found = _ig_look(ig, token, caption)
+        if found:
+            return {"postId": found.get("id"), "link": found.get("permalink")}
+        raise RuntimeError(MAYBE_UP % "Instagram")
+    except requests.RequestException as e:
+        raise Retry("Instagram could not be reached (%s)" % e)
+    if r.status_code >= 300:
+        raise _fb_error(r, "Instagram")
+    post = (r.json() or {}).get("id") or ""
+    return {"postId": post, "link": _ig_link(post, token)}
+
+
+def _ig_link(post, token):
+    try:
+        r = requests.get("%s/%s" % (GRAPH, post), params={"fields": "permalink", "access_token": token}, timeout=30)
+        return (r.json() or {}).get("permalink") if r.status_code < 300 else None
+    except (requests.RequestException, ValueError):
+        return None                     # it is up; only the link is missing
+
+
+def _ig_look(ig, token, caption):
+    """The account's post from the last half hour with this very caption, else
+    None (also when the account can't be read)."""
+    try:
+        r = requests.get("%s/%s/media" % (GRAPH, ig), timeout=30, params={
+            "fields": "id,caption,timestamp,permalink", "limit": 10, "access_token": token})
+        if r.status_code >= 300:
+            return None
+        since = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=30)
+        for p in (r.json() or {}).get("data") or []:
+            made = _parse(str(p.get("timestamp") or "").replace("+0000", "+00:00"))
+            if (p.get("caption") or "").strip() == caption.strip() and made and made >= since:
+                return p
+    except (requests.RequestException, ValueError):
+        return None
+    return None
+
+
+def ig_find(db=None):
+    """Find the business Instagram account linked to the Page and keep it
+    (integrations/facebook.igId; settings/social.instagram for the app).
+    Returns what was found or why not."""
+    db = db or _db()
+    fb = _fb_doc(db)
+    page, token = fb.get("pageId"), fb.get("pageToken")
+    try:
+        if not (page and token):
+            raise NotConnected("Hook up Facebook first: Instagram comes through the Facebook Page")
+        r = requests.get("%s/%s" % (GRAPH, page), timeout=30, params={
+            "fields": "instagram_business_account{id,username}", "access_token": token})
+        if r.status_code >= 300:
+            raise _fb_error(r, "Instagram")
+        got = (r.json() or {}).get("instagram_business_account") or {}
+        if not got.get("id"):
+            raise NotConnected(IG_NOT_LINKED)
+        if not IG_ACCOUNT.search(str(got.get("username") or "")):
+            raise NotConnected("The Page is linked to @%s, not the business's Instagram: posts only go out as the "
+                               "business" % (got.get("username") or "another account"))
+    except requests.RequestException as e:
+        return {"error": "Facebook could not be reached (%s)" % e}
+    except Retry as e:
+        return {"error": str(e)}
+    except (NotConnected, RuntimeError) as e:
+        db.collection(FB_DOC[0]).document(FB_DOC[1]).set({"igId": firestore.DELETE_FIELD}, merge=True)
+        _set(db, {"instagram": {"ok": False, "id": None, "username": None, "error": str(e)[:300],
+                                "checkedAt": _now().isoformat()}})
+        return {"error": str(e)}
+    db.collection(FB_DOC[0]).document(FB_DOC[1]).set({"igId": got["id"]}, merge=True)
+    _set(db, {"instagram": {"ok": True, "id": got["id"], "username": got.get("username") or "", "error": None,
+                            "checkedAt": _now().isoformat()}})
+    _refresh_not_connected(db, "instagram")
+    return {"ok": True, "username": got.get("username") or ""}
 
 
 BUSINESS_PAGE_NAME = "YD Exterior Visions"
@@ -1024,11 +1368,14 @@ def fb_callback(request):
                                "pages": [{"id": p["id"], "name": p.get("name") or ""} for p in pages],
                                "error": None}})
         _refresh_not_connected(db, "facebook")
+        ig = ig_find(db)                # Instagram comes with the same hookup
     except Exception as e:              # noqa: BLE001 -- shown, not swallowed
         print("social: facebook callback failed:", e)
         _set(db, {"facebook": {"error": "Facebook could not be hooked up: %s" % e}})
         return _page("Facebook could not be hooked up: %s" % e, False)
-    return _page("Facebook is hooked up — posts go to %s." % (page.get("name") or "your Page"), True)
+    return _page("Facebook is hooked up — posts go to %s. %s" % (
+        page.get("name") or "your Page",
+        "Instagram too: @%s." % ig.get("username") if ig.get("ok") else "Instagram isn't yet: %s" % ig.get("error")), True)
 
 
 PAGE_FIELDS = "id,name,access_token,tasks,link"
@@ -1091,6 +1438,7 @@ def fb_pick_page(page_id):
     db.collection(FB_DOC[0]).document(FB_DOC[1]).set({"pageId": page["id"], "pageToken": page["token"]}, merge=True)
     _set(db, {"facebook": {"pageId": page["id"], "pageName": page.get("name") or "",
                            "pageLink": page.get("link") or ""}})
+    ig_find(db)
     return {"ok": True}
 
 
@@ -1108,8 +1456,10 @@ def fb_disconnect():
     db.collection(FB_DOC[0]).document(FB_DOC[1]).set({"userToken": firestore.DELETE_FIELD,
                                                        "pageToken": firestore.DELETE_FIELD,
                                                        "pages": firestore.DELETE_FIELD,
-                                                       "pageId": firestore.DELETE_FIELD}, merge=True)
-    _set(db, {"facebook": {"pageId": None, "pageName": None, "pageLink": None, "pages": [], "connectedAt": None}})
+                                                       "pageId": firestore.DELETE_FIELD,
+                                                       "igId": firestore.DELETE_FIELD}, merge=True)
+    _set(db, {"facebook": {"pageId": None, "pageName": None, "pageLink": None, "pages": [], "connectedAt": None},
+              "instagram": {"ok": False, "id": None, "username": None, "error": None}})
     return {"ok": True}
 
 
@@ -1351,7 +1701,7 @@ def rewrite(client, pid, note=None):
         if place not in PLACES or p.get("edited") or p.get("status") not in ("queued", "held", "notConnected", "failed",
                                                                                  "missed"):
             continue
-        words = _clean(place, res.get(place))
+        words = _words_for(place, res)
         if not words:
             continue
         text, sign = _with_sign_off(place, words, cfg)
@@ -1374,4 +1724,4 @@ def status():
     return {"facebook": {"appSet": bool(fb.get("appId") and fb.get("appSecret")), "appId": fb.get("appId"),
                          "connected": bool(fb.get("pageToken")), "pageId": fb.get("pageId"),
                          "redirect": _redirect()},
-            "google": cfg.get("google") or {}, "on": bool(cfg.get("on"))}
+            "instagram": cfg.get("instagram") or {}, "google": cfg.get("google") or {}, "on": bool(cfg.get("on"))}

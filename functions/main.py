@@ -1276,6 +1276,8 @@ def _social(request, path, headers):
             result = social.fb_pick_page(str(body.get("pageId") or ""))
         elif path == "/social/fb/disconnect":
             result = social.fb_disconnect()
+        elif path == "/social/instagram/check":
+            result = social.ig_find()
         elif path == "/social/google/check":
             result = social.google_find()
         elif path == "/social/post-now":
