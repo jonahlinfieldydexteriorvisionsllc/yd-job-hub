@@ -5903,11 +5903,11 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .ord-qty-in { width:110px; margin-left:0; font-weight:600; }
 .check-row.done .cr-name .cr-cost { display:inline-block; text-decoration:none; }
 /* A line stays inside its card (4 Nov 2026: the amount box ran into the next
-   column on lines with the Item # and Link boxes, whose 180px held the name
-   wide). The name may shrink and the Link box with it; a card too narrow for
-   name and amount side by side puts the amount under the name, on the right. */
+   column). A line whose name holds wide boxes (Item #, Link) can't shrink, so
+   its amount drops under the name, on the right. Plain lines stay as they
+   were: the name keeps its minimum width (no min-width:0 here), which is what
+   tells the row when to wrap. */
 .check-row { flex-wrap:wrap; }
-.check-row .cr-name { flex:1 1 150px; min-width:0; overflow-wrap:anywhere; }
 .check-row > .ord-qty-in, .check-row > .cr-qty { margin-left:auto; }
 
 /* Swapping an order line's product (app.js orderSwapHtml): inline-flex, so a
@@ -5921,9 +5921,9 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .check-row.done .cr-name .ord-swapped + .link-btn { display:inline-block; text-decoration:none; }
 
 /* An order line's missing item # / product page, typed right there (app.js orderSkuHtml). */
-.ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; max-width:100%; }
-.ord-sku-add label { display:inline-flex; gap:4px; align-items:center; min-width:0; max-width:100%; }
-.ord-link-in { width:180px; min-width:0; }
+.ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; }
+.ord-sku-add label { display:inline-flex; gap:4px; align-items:center; }
+.ord-link-in { width:140px; }
 
 /* A job's daily log (joblog.js): the note box, said or typed, and the days. */
 .jl-box { margin:2px 0 10px; }
