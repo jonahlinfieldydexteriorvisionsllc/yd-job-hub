@@ -7,7 +7,7 @@ wish is routine #1 on the wish board ("Inbox desk"). Speed matters: the
 first company to answer a stranger asking for a quote usually gets the job.
 
 Every hour of the work day (main.py /cards/run, after QuickBooks and the
-follow-ups), his inbox since the last look is gone through:
+follow-ups), his mail since the last look, opened or not, is gone through:
   - PLAIN CODE first (no Claude to pay for): mail from himself, the crew, a
     supplier, a customer or lead already in Job Hub, a mailing list, an
     automatic sender ("no-reply", notifications) or anyone on his "never
@@ -630,7 +630,10 @@ def run(client, deadline=None, spent=None):
         conf_ref.set({"since": int(now.timestamp()), "startedAt": _stamp()}, merge=True)
         print("leads: reading new mail from now on")
         return news
-    q = "in:inbox -from:me -in:chats -category:promotions -category:social -category:forums after:%d" % int(since)
+    # All mail that came in, opened or not, in the inbox or archived (Jonah, 4
+    # Nov 2026): a lead he opened and swiped away before this run is still a
+    # lead. Gmail leaves Spam and Trash out by itself.
+    q = "-in:sent -in:drafts -from:me -in:chats -category:promotions -category:social -category:forums after:%d" % int(since)
     # Every page, then the OLDEST not looked at yet: asking Gmail for
     # LOOK_MAX gave the newest, and with the cursor held back (the day's
     # limit) older mail could fall out of the list for good.
@@ -653,7 +656,7 @@ def run(client, deadline=None, spent=None):
     back = {i for i in (conf.get("googleBackIds") or []) if isinstance(i, str)}
     if not conf.get("googleBackAt"):
         try:
-            got = followup_gmail("/messages", {"q": 'in:inbox from:awexpress.google.com subject:"new request" '
+            got = followup_gmail("/messages", {"q": 'from:awexpress.google.com subject:"new request" '
                                                     'newer_than:30d', "maxResults": 50})
             back |= {x["id"] for x in got.get("messages") or []}
             conf_ref.set({"googleBackAt": _stamp(), "googleBackIds": sorted(back)}, merge=True)

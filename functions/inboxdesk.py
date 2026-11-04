@@ -7,8 +7,8 @@ reply. 2: I will still reply to leads myself until you learn how I speak and
 stuff but i like hving you pull them into my dashboard."
 
 EVERY HOUR of the work day (main.py /cards/run, after the leads), plain code
--- no Claude, nothing to pay for -- goes through his inbox since the last
-look for mail from the customer on a BOOKED or IN-PROGRESS job (by the
+-- no Claude, nothing to pay for -- goes through his mail since the last
+look, opened or not, for mail from the customer on a BOOKED or IN-PROGRESS job (by the
 job's email). Each becomes inboxNeeds/{messageId} {jobId, jobName, from,
 subject, snippet, threadId, link, at, open, answeredAt, doneAt, draft} and a
 buzz. (A reply on a BID is already caught by the follow-up plan, which stops
@@ -139,7 +139,10 @@ def run(deadline=None):
     except Exception as err:        # noqa: BLE001
         print("inboxdesk: open rows not checked --", err)
 
-    q = "in:inbox -from:me -in:chats -category:promotions -category:social after:%d" % int(since)
+    # All mail that came in, opened or not, in the inbox or archived (Jonah, 4
+    # Nov 2026): a customer's email he opened and swiped away before this run
+    # still needs him. Gmail leaves Spam and Trash out by itself.
+    q = "-in:sent -in:drafts -from:me -in:chats -category:promotions -category:social after:%d" % int(since)
     # The whole list (ids only, cheap), then the OLDEST LOOK_MAX read. Gmail
     # lists the newest first, so asking for LOOK_MAX kept the newest and --
     # `since` then jumping past them -- the older ones of a busy hour were

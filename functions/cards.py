@@ -160,7 +160,8 @@ TOOLS = [
         "name": "find_email",
         "description": "Search Jonah's Gmail with the words he would type in Gmail's search box (from:, subject:, "
                        "newer_than:7d and so on). Returns up to 10 emails: who, subject, date, a snippet and the "
-                       "thread id. Reading changes nothing in his mailbox.",
+                       "thread id. Reading changes nothing in his mailbox. Mail he has already opened counts the "
+                       "same as new mail, so never add is:unread unless the card asks for only unopened mail.",
         "strict": True,
         "input_schema": {"type": "object", "additionalProperties": False, "required": ["query"],
                          "properties": {"query": {"type": "string"}}},
