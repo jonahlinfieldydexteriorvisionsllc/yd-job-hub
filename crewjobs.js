@@ -947,6 +947,8 @@
         '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress'
           : 'Booked' + (j.line && j.line.place > 0 && window.YDJobLine ? ' · ' + YDJobLine.nth(j.line.place) + ' in line' : '')) + '</span></div>' +
       (where ? '<div class="cj-where">📍 ' + esc(where) + '</div>' : '<div class="muted">No address on the job yet.</div>') +
+      // A crew lead: the office's side of the same job.
+      (!preview && canOpenOffice(id) ? '<button type="button" class="link-btn cj-office" onclick="cjOffice(\'' + safe(id) + '\')">📐 Open it on the Job tab</button>' : '') +
       // Two big buttons a gloved thumb can find, side by side.
       (where || tel ? '<div class="cj-go">' +
         (where ? '<a class="btn cj-go-btn" href="' + esc(mapUrl(j)) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
@@ -1017,6 +1019,14 @@
         '<div class="cj-bar" id="cjBar"></div>';
       m.querySelector('.modal-close').onclick = () => m.classList.remove('active');
       document.body.appendChild(m);
+      // Photos and signatures follow one job at a time. A crew lead also has
+      // the Job tab: once this window shuts it goes back to the job open
+      // there, or it would show this job's photos under that one's name.
+      new MutationObserver(() => {
+        if (m.classList.contains('active') || !hasJobTab() || typeof currentJobId === 'undefined') return;
+        if (window.YDJobPhotos) YDJobPhotos.jobShown(currentJobId);
+        if (window.YDSignatures) YDSignatures.jobShown(currentJobId);
+      }).observe(m, { attributes: true, attributeFilter: ['class'] });
     }
     m.querySelector('h2').textContent = title;
     m.classList.add('active');
@@ -1161,10 +1171,16 @@
   // to, on a crew phone; one this device doesn't hold), where the clock
   // shows no way to it rather than a button that does nothing.
   const hasJobTab = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
-  const canOpenJob = id => !!id && (!!jobs[id] || (hasJobTab() && typeof readJobBlob === 'function' && !!readJobBlob(id)));
+  const canOpenOffice = id => !!id && hasJobTab() && typeof readJobBlob === 'function' && !!readJobBlob(id);
+  const canOpenJob = id => !!id && (!!jobs[id] || canOpenOffice(id));
   window.ydOpenShiftJob = function (id) {
     if (jobs[id]) window.openCrewJob(id);
     else if (hasJobTab() && window.homeOpenJob) window.homeOpenJob(id);
+  };
+  window.cjOffice = function (id) {
+    const m = el('crewJobModal');
+    if (m) m.classList.remove('active');
+    if (window.homeOpenJob) window.homeOpenJob(id);
   };
 
   // A crew member opening one of their jobs.
@@ -1282,7 +1298,9 @@
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     const on = a.mode === 'cloud' && !!a.user;
-    const crew = on && typeof ydCan === 'function' && !ydCan('jobs', 'see');
+    // Crew leads too (app.js isCrewLead): the page made for working on a job,
+    // beside the office's Job tab.
+    const crew = on && typeof ydCan === 'function' && (!ydCan('jobs', 'see') || isCrewLead());
     const tab = el('tabCrewJobs');
     if (tab) tab.hidden = !crew;
     const pv = el('crewPreviewBtn');

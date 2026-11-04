@@ -1248,7 +1248,7 @@
   // The crew's own jobs (their Jobs tab's list), with the next day each is
   // on and whether they are on it today.
   function crewJobsHtml(d) {
-    if (!signedIn() || seesJobs() || !window.YDCrewJobs || !YDCrewJobs.list) return '';
+    if (!signedIn() || (seesJobs() && !isCrewLead()) || !window.YDCrewJobs || !YDCrewJobs.list) return '';
     const list = YDCrewJobs.list();
     const next = window.YDCalendar && YDCalendar.nextForJobs ? YDCalendar.nextForJobs(60) : {};
     const mineToday = {};
@@ -1301,6 +1301,16 @@
     const cards = crewish
       ? [clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
       : [waitingHtml(), notesHtml(), clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
+    // A crew lead clocks in every day: the clock above the office's figures,
+    // not under them. Their jobs are the crew's list (the office's until
+    // that has come in).
+    if (isCrewLead()) {
+      const crewJobs = window.YDCrewJobs && YDCrewJobs.list().length ? crewJobsHtml(d) : jobsHtml(all);
+      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() +
+        '<div class="hm-grid hm-lead-clock">' + [clockHtml(), eodHtml()].filter(Boolean).join('') + '</div>' + statsHtml(all) +
+        '<div class="hm-grid">' + [waitingHtml(), notesHtml(), myDayHtml(d), crewDayHtml(d), crewJobs, invoiceHtml(all), bidsHtml(all), equipmentHtml()]
+          .filter(Boolean).join('') + '</div>';
+    }
     return top + '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
   }
 
@@ -1385,7 +1395,8 @@
   window.homeMore = function (key) { expanded[key] = !expanded[key]; render(); };
   window.homeGo = function (id) {
     if (id === 'invoices' && window.openInvoices) { openInvoices(); return; }
-    const c = el('hm-' + id);
+    // A crew lead's jobs are the crew's list (html).
+    const c = el('hm-' + id) || (id === 'jobs' ? el('hm-cjobs') : null);
     if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
   window.homeBoard = function (id) {

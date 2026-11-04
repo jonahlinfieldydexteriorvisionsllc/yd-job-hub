@@ -1840,11 +1840,12 @@
         // Not on the Crew schedule already, nor a day on a job.
         (editsCal(cal) && cal.kind !== 'crew' && cal.kind !== 'jobs' && !(type && type.crew)
           ? '<button class="btn btn-sm" onclick="calCrewTask()">👷 Make it a crew task</button>' : '') +
-        (ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
-        // The crew: the job's page made for them (crewjobs.js) -- the gate
-        // code, the work, Directions -- a tap from the entry sending them there.
-        (!ydCan('jobs', 'see') && ev.jobId && window.YDCrewJobs && YDCrewJobs.list().some(j => j.id === ev.jobId)
-          ? '<button class="btn btn-sm" onclick="calOpenCrewJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
+        // The crew and crew leads: the job's page made for them (crewjobs.js)
+        // -- the gate code, the work, Directions -- a tap from the entry
+        // sending them there. The office: the Job tab.
+        (ev.jobId && window.YDCrewJobs && YDCrewJobs.list().some(j => j.id === ev.jobId)
+          ? '<button class="btn btn-sm" onclick="calOpenCrewJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>'
+          : ydCan('jobs', 'see') && ev.jobId ? '<button class="btn btn-sm" onclick="calOpenJob(\'' + safeKey(ev.jobId) + '\')">Open the job</button>' : '') +
         '<button class="btn btn-sm" onclick="closeCalModal()">Close</button>' +
       '</div>');
     fillFileLinks();

@@ -6040,6 +6040,12 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     .rt-move { position:absolute; top:6px; right:6px; margin:0; }
     .rt-move button { min-height:44px; min-width:40px; }
   }
+  /* A crew lead on a phone: Jobs on the bar, the Job tab in More (app.js isCrewLead). */
+  @media (max-width:720px) { html[data-lead] #tabJob { display:none; } }
+  .hm-lead-clock { margin-bottom:18px; }
+  .cj-office { display:block; min-height:40px; margin:-4px 0 8px; padding:0; border:0; background:none; color:var(--brand-ink); font:inherit;
+    font-size:13.5px; font-weight:700; text-decoration:underline; cursor:pointer; }
+  html[data-night] .cj-office { color:var(--brand-2); }
   /* A short phone: Clock out in view without scrolling. */
   @media (max-width:720px) and (max-height:700px) {
     .clock-elapsed { font-size:40px; }

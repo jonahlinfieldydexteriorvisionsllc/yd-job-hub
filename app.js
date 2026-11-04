@@ -691,6 +691,7 @@ document.addEventListener('yd-auth', e => {
   // The attribute tells the stylesheet this is somebody without the job
   // screens (crew, mostly).
   document.documentElement.toggleAttribute('data-crew', noJobs);
+  document.documentElement.toggleAttribute('data-lead', isCrewLead());
   const more = document.getElementById('tabMore');
   // Crew get More too now: it holds their notification settings.
   if (more) more.hidden = false;
@@ -701,6 +702,15 @@ document.addEventListener('yd-auth', e => {
         .indexOf(openTab.id) !== -1) switchTab('home');
   }
 });
+
+// A crew lead: an admin who sees jobs, and is out on them all day. They get
+// the crew's Jobs list and job pages (crewjobs.js) as well as the office's
+// Job tab, which on a phone moves to More: "Jobs" and "Job" side by side on
+// the bar read as the same thing. Home puts their clock first (home.js).
+function isCrewLead() {
+  const a = window.YDAuth;
+  return !!(a && a.user && a.mode === 'cloud' && !a.isOwner && a.role === 'admin' && ydCan('jobs', 'see'));
+}
 
 // Your Crew lives on the Clock tab, below the clock and the approvals --
 // easy to miss. This goes straight to it: renaming, letting people in,
@@ -965,7 +975,7 @@ function closeOnTapOutside(id) {
 // Home comes first and is where the app opens (Jonah, 14 Oct 2026: "make
 // home page for the job hub with overviews of things") -- home.js.
 const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
-// crewjobs: the crew's Jobs tab (crewjobs.js) -- shown only to whoever cannot see the Job tab.
+// crewjobs: the crew's Jobs tab (crewjobs.js) -- for whoever cannot see the Job tab, and crew leads.
 // Five on a phone's bar for anybody: Home took All Jobs' place on the
 // owner's (Home has the jobs on the go and the ones to invoice; the full
 // table is a laptop screen), and Boards and Supplies' on the crew's (their
@@ -973,12 +983,14 @@ const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'sn
 const PHONE_TABS = ['home', 'crewjobs', 'job', 'snow', 'clock', 'calendar'];
 // Snow is on a phone's bar only while a storm is going (styles.css; storm.js
 // sets data-storm-on): otherwise it is listed in More with the rest.
-const phoneBar = () => document.documentElement.hasAttribute('data-storm-on') ? PHONE_TABS : PHONE_TABS.filter(n => n !== 'snow');
+const phoneBar = () => PHONE_TABS.filter(n => (n !== 'snow' || document.documentElement.hasAttribute('data-storm-on')) &&
+  (n !== 'job' || !document.documentElement.hasAttribute('data-lead')));
 const TAB_LABEL = { home: '🏡 Home', crewjobs: '🧰 Jobs', job: '📐 Job', snow: '❄️ Snow', clock: '🕒 Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
   equipment: '🚜 Equipment', tracking: '📈 Tracking',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
-const TAB_HINT = { boards: 'Bids, jobs, to-dos and crew task lists',
+const TAB_HINT = { job: 'The office side of a job: the estimate, materials and costs',
+  boards: 'Bids, jobs, to-dos and crew task lists',
   supplies: 'What we use, where to buy it, and what the season has cost',
   receipts: 'Purchases from your email — put each on its job',
   equipment: 'What each machine and truck is due for',
