@@ -1642,7 +1642,11 @@ function changeLostReason(id) {
     invalidateJobsCache();
     if (id === currentJobId) showBidBanner();
     if (document.getElementById('managerModal').classList.contains('active')) renderJobList();
-    showToast('Why it was lost: ' + lostWhy(Object.assign({}, d, why)));
+    // Changed to No reply: next spring on the Call list, as when a bid is
+    // marked lost that way (customers.js noReplySpring).
+    const contact = why.lostReason === 'noReply' && d.bidStage === 'lost' && window.YDProspects && YDProspects.fromLostBid
+      ? YDProspects.fromLostBid(id, Object.assign({}, d, patch)) : null;
+    showToast('Why it was lost: ' + lostWhy(Object.assign({}, d, why)) + (contact && contact.when ? ' — on the call list for ' + contact.when : ''));
   });
 }
 

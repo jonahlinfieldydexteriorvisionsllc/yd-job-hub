@@ -783,8 +783,10 @@
   // people to contact next year. note the service they were bid for."
   //
   // Worked out from the bids each time it is drawn -- nothing is written on
-  // anyone until he taps. On it: everyone bid in the year whose bid neither
-  // said yes (won, booked, accepted in QuickBooks) nor no (lost, turned down
+  // anyone until he taps (marking a bid lost for "No reply" is such a tap: it
+  // gives them next spring on the Call list, noReplySpring). On it: everyone
+  // bid in the year whose bid neither said yes (won, booked, accepted in
+  // QuickBooks) nor no (lost, turned down
   // in QuickBooks): sent with no answer -- and bids he marked lost for "No
   // reply", who never said no either. Snow bids too, marked snow. A bid still
   // inside its follow-up plan (boards.js CHASE_STEPS) sits under a heading
@@ -978,7 +980,7 @@
       h += '<div class="cu-ny-pick">' + ys.map(y => '<button class="cu-chip' + (y === B ? ' on' : '') + '" onclick="custNyYear(' + y + ')">Bid in ' + y +
         '<small>called in ' + (y + 1) + '</small></button>').join('') + '</div>';
       h += '<div class="hint">Everyone bid in ' + B + ' who hasn’t said yes or no — sent with no answer, or marked lost for “No reply”. ' +
-        'Snow bids too. Nothing is saved on anyone until you tap a button.</div>';
+        'Snow bids too. Marking a bid lost for “No reply” puts them on the Call list for next spring (a snow bid, next fall) by itself.</div>';
     } else {
       h += '<div class="hint">The bids show for whoever sees Jobs. Here: the ones put on it by hand.</div>';
     }
@@ -3656,6 +3658,24 @@
   // the time to call next spring if none is set. Onto the bid's own
   // customer; a bid tied to nobody finds them by email, phone or exact name,
   // or makes them a lead.
+  //
+  // Marked lost for "No reply" they never said no. Jonah, 4 Nov 2026: "rule of
+  // thumb no reply bids marked lost get put on spring contact list for next
+  // year" -- so next spring is theirs (fall for a snow bid, as the button on
+  // Contact in <year> says) even when their old time to call has come and
+  // gone or they were reached on it, and when the reason is changed to No
+  // reply later (app.js changeLostReason). A time still to come stays; so
+  // does "Not interested", and being taken off that year's list by hand.
+  function noReplySpring(id, j) {
+    const c = customers[id];
+    if (!c || j.lostReason !== 'noReply' || c.notInterested) return '';
+    const had = windowOf(c);
+    if (had && had.from > today()) return whenText(had);
+    const w = seasonWindow(nySnow(j) ? 'fall' : 'spring');
+    if (nyPickFor(c, w.from.slice(0, 4)).on === false) return '';
+    write(id, { when: w, contactWhen: w.label, whenSetAt: new Date().toISOString() }, 'when to call');
+    return w.label;
+  }
   function fromLostBid(jobId, j) {
     if (!j || !can('contacts', 'change')) return null;
     // A second QuickBooks profile's bid goes on the one they are shown as.
@@ -3673,7 +3693,11 @@
     const services = (Array.isArray(j.serviceTypes) ? j.serviceTypes : []).map(s).filter(Boolean);
     const est = s(j.estimateNumber);
     const before = c.declined || [];
-    if (before.some(d => d.jobId === jobId)) return { id: id, added: false };
+    if (before.some(d => d.jobId === jobId)) {
+      const when = noReplySpring(id, j);
+      render();
+      return { id: id, added: false, when: when };
+    }
     const line = 'Declined our bid' + (est ? ' #' + est : '') + (services.length ? ' for ' + services.join(', ') : '') +
       ' on ' + now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) + '.';
     const patch = {
@@ -3681,13 +3705,14 @@
       declined: before.concat([{ at: now.toISOString(), jobId: jobId, est: est || null, services: services }]),
       note: [s(c.note), line].filter(Boolean).join('\n'),
     };
-    if (!s(c.contactWhen) && !(c.when && c.when.from)) {
+    if (j.lostReason !== 'noReply' && !s(c.contactWhen) && !(c.when && c.when.from)) {
       patch.contactWhen = 'Spring ' + (now.getFullYear() + (now.getMonth() >= 2 ? 1 : 0));
       patch.whenSetAt = now.toISOString();
     }
     write(id, patch, 'the declined bid');
+    const when = noReplySpring(id, j);
     render();
-    return { id: id, added: added };
+    return { id: id, added: added, when: when };
   }
 
   // The QuickBooks id to send a job's estimate to (estimate.js): the job's

@@ -388,7 +388,7 @@
         ? window.YDProspects.fromLostBid(jobId, Object.assign({}, j, patch)) : null;
       const said = typeof lostWhy === 'function' ? lostWhy(patch) : '';
       showToast(name + ' marked lost' + (said ? ' (' + said + ')' : '') + ' — kept under Bids in My Jobs' +
-        (contact ? (contact.added ? ', and added to Contacts for next season' : ', and noted on their contact') : ''), 5000);
+        (contact ? (contact.when ? ', and on the call list for ' + contact.when : contact.added ? ', and added to Contacts for next season' : ', and noted on their contact') : ''), 5000);
       render();
       return;
     }
