@@ -66,9 +66,10 @@ MAX_TURNS = 10
 # Set for Claude tonight: what he asked for, so past the day's MAX_PER_DAY, but
 # not past the spending limit or this many in a night.
 TONIGHT_MAX = 12
-# An email thread as Claude reads it.
+# An email thread as Claude reads it: room for all of it inside work_card's
+# limit on a tool's answer (20,000), shared between the messages.
 MAIL_MESSAGES = 6
-MAIL_TEXT_MAX = 6000
+MAIL_ROOM = 16000
 THREAD_ID = re.compile(r"^[0-9a-fA-F]{6,32}$")
 # Machine cards are made by the Equipment tab and say "service due"; there is
 # nothing on them for Claude to do. Wishes are things Jonah wants built into
@@ -332,17 +333,20 @@ def _thread_messages(thread_id, fmt, headers=None):
 
 
 def read_email(thread_id):
-    """The last few messages of a thread, in full."""
+    """The last few messages of a thread, newest first: the one to answer is
+    the one that must not be cut."""
     import receipts
     msgs = _thread_messages(thread_id, "minimal")
     if msgs is None:
         return {"error": "That is not a thread id."}
+    last = msgs[-MAIL_MESSAGES:]
+    room = MAIL_ROOM // max(1, len(last))
     out = []
-    for m in msgs[-MAIL_MESSAGES:]:
+    for m in reversed(last):
         f = receipts._fetch(m["id"])
         out.append({k: f.get(k) for k in ("from", "to", "subject", "date")})
-        out[-1]["text"] = str(f.get("text") or f.get("snippet") or "")[:MAIL_TEXT_MAX]
-    return {"threadId": thread_id, "messages": len(msgs), "shown": out}
+        out[-1]["text"] = str(f.get("text") or f.get("snippet") or "")[:room]
+    return {"threadId": thread_id, "messages": len(msgs), "newestFirst": out}
 
 
 def _thread_reply(thread_id):
@@ -699,8 +703,16 @@ def _run_tool(name, args, records, ctx):
     if name == "draft_email":
         if len(ctx["drafts"]) >= 3:
             return {"error": "Three drafts per card is the limit."}
-        reply = _thread_reply(args.get("thread_id")) if str(args.get("thread_id") or "").strip() else None
-        got = draft_email(args.get("to"), args.get("subject"), args.get("body"), reply)
+        reply, subject = None, args.get("subject")
+        if str(args.get("thread_id") or "").strip():
+            reply = _thread_reply(args.get("thread_id"))
+            if not reply:
+                return {"error": "That thread could not be found. Check its id, or leave thread_id empty for a new email."}
+            # Gmail keeps a draft in its thread only with the thread's subject.
+            subject = reply["subject"] or subject
+            if not re.match(r"(?i)re:", str(subject or "")):
+                subject = "Re: " + str(subject or "")
+        got = draft_email(args.get("to"), subject, args.get("body"), reply)
         if got.get("ok"):
             ctx["drafts"].append({k: got[k] for k in ("to", "subject", "link", "draftId")})
         return got
@@ -957,8 +969,11 @@ def run(client, only=None, tonight=False, deadline=None):
             patch["labels"] = firestore.ArrayUnion([LABEL["id"]])
             labels = board.get("labels") or []
             if not any(l.get("id") == LABEL["id"] for l in labels):
-                b.reference.update({"labels": firestore.ArrayUnion([LABEL])})
-                board["labels"] = labels + [LABEL]
+                try:
+                    b.reference.update({"labels": firestore.ArrayUnion([LABEL])})
+                    board["labels"] = labels + [LABEL]
+                except Exception as e:      # noqa: BLE001 -- the card's answer matters, not its label
+                    print("cards: label not added to", b.id, e)
         # update(), not set(merge): the whole "claude" record is replaced, so
         # nothing of an earlier run lingers in it.
         try:
@@ -976,7 +991,10 @@ def tell_tonight(report):
     """One push after the night's cards: how many, and how many want him.
     Opens Home, where each answer sits under its to-do."""
     worked = [r for r in report or [] if r.get("status")]
-    if not worked:
+    # Claude down, out of time or over the limit: the card stays set and goes
+    # again next morning, and he hears, or it could go unnoticed for days.
+    left = any(r.get("error") or r.get("skipped") for r in report or [])
+    if not worked and not left:
         return
     asks = sum(1 for r in worked if r["status"] == "needs_info")
     done = sum(1 for r in worked if r["status"] == "done")
@@ -986,6 +1004,8 @@ def tell_tonight(report):
     rest = len(worked) - done - asks
     if rest:
         bits.append("%d not for Claude" % rest)
+    if left:
+        bits.append("the rest try again tomorrow" if worked else "not done, tried again tomorrow")
     db = dg._db()
     for s in db.collection("users").where("role", "==", "owner").stream():
         try:

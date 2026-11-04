@@ -379,9 +379,9 @@ def archive(db, people=None, now=None):
             if day not in days:
                 days[day] = worked_on(db, datetime.date.fromisoformat(day), storms)
             shifts = days[day].get(uid) or []
-        except Exception as err:    # noqa: BLE001 -- the report is put away either way
+        except Exception as err:    # noqa: BLE001 -- tomorrow's run puts it away with them
             print("endofday: shifts not read for", day, "--", err)
-            shifts = []
+            continue
         lines = [str(x.get("text") or "").strip() for x in report_lines(r, name, shifts, job_places(db, shifts))[1:]]
         jobs = [{"id": str(j.get("id") or ""), "name": str(j.get("name") or "")[:120]}
                 for j in (r.get("jobs") or []) if isinstance(j, dict) and j.get("id")][:30]

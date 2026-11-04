@@ -155,7 +155,7 @@
       (x.canTick ? '<input type="checkbox"' + (x.done ? ' checked' : '') + ' onchange="homeTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
       '<button class="cal-todo-t" onclick="homeOpen(\'' + k + '\')">' + esc(x.title) +
-        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + claudeLine(x, k);
+        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + (x.task ? claudeLine(x, k) : '');
   }
   // A plain line that goes somewhere: an icon, the words, something on the right.
   function line(icon, main, small, right, call, cls) {
@@ -260,10 +260,10 @@
   function fallingHtml(w) {
     const f = w.falling;
     if (!f) return '';
+    const sum = f.total ? '<small class="hm-wx-sum">' + esc(f.total.charAt(0).toUpperCase() + f.total.slice(1)) + ' over the next 24 hours</small>' : '';
     return '<span class="hm-wx-fall"><span class="hm-wx-hrs">' + f.cells.map(c =>
       '<span class="hm-wx-hr"><i>' + esc(c.at) + '</i>' + c.says.map(s => '<span>' + esc(s) + '</span>').join('') + '</span>').join('') +
-      (f.more ? '<span class="hm-wx-hr hm-wx-more">+' + f.more + ' more hours</span>' : '') + '</span>' +
-      '<small class="hm-wx-sum">' + esc(f.total.charAt(0).toUpperCase() + f.total.slice(1)) + ' over the next 24 hours</small></span>';
+      (f.more ? '<span class="hm-wx-hr hm-wx-more">+' + f.more + ' more hours</span>' : '') + '</span>' + sum + '</span>';
   }
 
   // Today's weather from the header button's copy (forecast.js); a tap

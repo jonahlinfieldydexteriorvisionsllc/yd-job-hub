@@ -2688,6 +2688,7 @@
     const talk = talkOf(k);
     if (words) talk.push({ id: 'tk' + Date.now().toString(36), from: 'owner', by: myName() || 'Jonah', at: now, text: words });
     const patch = { claudeTalk: talk.slice(-TALK_KEEP), claudeAskedAt: now, claudeTonight: now, noClaude: false, updatedAt: now, updatedBy: myName() };
+    if (k.noClaude) patch.claudeWasOff = true;      // Take back puts it as it was
     Object.assign(k, patch);
     writeCard(boardId, cardId, patch);
     redrawIfVisible(); cardsChanged();
@@ -2698,6 +2699,7 @@
     const board = boards[boardId], k = (cards[boardId] || {})[cardId];
     if (!claudeCan(board, k)) return false;
     const patch = { claudeTonight: null, claudeAskedAt: null };
+    if (k.claudeWasOff) Object.assign(patch, { noClaude: true, claudeWasOff: null });
     Object.assign(k, patch);
     writeCard(boardId, cardId, patch);
     redrawIfVisible(); cardsChanged();

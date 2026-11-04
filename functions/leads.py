@@ -392,6 +392,17 @@ def _no_plow(db, got, m, first):
     return {"mode": mode, "body": body.replace("{name}", name)}
 
 
+def _he_answered(m, mid):
+    """Whether he has written in this thread himself: the look is hourly, so he
+    may have got there first. None when it can't be told."""
+    try:
+        got = followup_gmail("/threads/" + (m.get("threadId") or mid), {"format": "minimal"})
+    except Exception as err:    # noqa: BLE001
+        print("leads: thread not read for", mid, "--", err)
+        return None
+    return any("SENT" in (x.get("labelIds") or []) for x in got.get("messages") or [])
+
+
 def _send_no_plow(cards, to, m, mid, body):
     """Sent in their thread: 'sent', 'maybe' (it may have gone, so never again)
     or None (it certainly did not)."""
@@ -520,10 +531,16 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
     answered = None
     if plow:
         reply = plow["body"]        # his fixed words: into Drafts if they don't go
-        if plow["mode"] == "send":
-            answered = _send_no_plow(cards, to, m, mid, plow["body"])
-            if answered:
-                reply = ""
+        # Sent only to who wrote. A form's address is words in the form, which
+        # anyone can type, so that one waits in Drafts for him to look at.
+        if plow["mode"] == "send" and why != "form":
+            his = _he_answered(m, mid)
+            if his:
+                reply = ""          # he answered: nothing to send, nothing to draft
+            elif his is False:
+                answered = _send_no_plow(cards, to, m, mid, plow["body"])
+                if answered:
+                    reply = ""
     if answered:
         try:
             ref.update({"fromEmail.autoReply": {"kind": "noPlow", "how": answered, "at": stamp}})
@@ -547,6 +564,8 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
     # Answered: nothing left for him to do, so no to-do. (A send that may not
     # have gone keeps its to-do, for him to look.)
     if answered != "sent":
+        if answered == "maybe":
+            r["extra"] = ["Your no-plow reply may have gone: check Sent before you answer."]
         _lead_card(db, lead_id, rec, r, draft, why)
     known["emails"].add(r["email"])
     if phone:

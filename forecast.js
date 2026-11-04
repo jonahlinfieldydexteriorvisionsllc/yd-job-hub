@@ -52,8 +52,14 @@
   const codeOf = c => CODES[c] || ['🌡️', '—'];
   // Freezing drizzle and freezing rain: what falls in such an hour is ice.
   const ICY = [56, 57, 66, 67];
-  // A wet hour at or under this may be ice, so weather.gov is asked.
+  // A wet hour at or under this, in the next few days, may be ice, so
+  // weather.gov is asked: at most this often, as its answer is large.
   const ICE_TEMP_F = 36;
+  const ICE_DAYS = 3;
+  const ICE_AGAIN_MS = 3 * 3600 * 1000;
+  // The least worth saying in an hour, and in a total: one line for both, so
+  // a total never sits over empty hours, or hours over no total.
+  const RAIN_MIN = 0.01, SNOW_MIN = 0.05, ICE_MIN = 0.005;
   // Hours shown on Home; the rest are in the panel.
   const FALLING_MAX = 12;
 
@@ -212,13 +218,21 @@
   }
   // Never waited on: the numbers are on screen first, and this is only an extra.
   async function addIce(p, got) {
-    if (!(got.hours || []).some(x => x.temp <= ICE_TEMP_F && x.rain > 0)) return;
+    const near = hourKey(new Date(Date.now() + ICE_DAYS * 24 * 3600000));
+    if (!(got.hours || []).some(x => x.t.slice(0, 13) <= near && x.temp <= ICE_TEMP_F && x.rain > 0)) return;
     const pt = PLACES[p];
     const until = Date.now() + NWS_WAIT_MS;
+    const key = STORE + 'ice_' + p;
     try {
-      const url = await forecastUrl(p, pt.lat.toFixed(4) + ',' + pt.lng.toFixed(4), until);
-      const grid = await nwsJson(url.replace(/\/forecast$/, ''), until);
-      const byHour = iceByHour(grid && grid.properties && grid.properties.iceAccumulation);
+      let kept = null;
+      try { kept = JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) {}
+      let byHour = kept && Date.now() - kept.at < ICE_AGAIN_MS ? kept.byHour : null;
+      if (!byHour) {
+        const url = await forecastUrl(p, pt.lat.toFixed(4) + ',' + pt.lng.toFixed(4), until);
+        const grid = await nwsJson(url.replace(/\/forecast$/, ''), until);
+        byHour = iceByHour(grid && grid.properties && grid.properties.iceAccumulation);
+        try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), byHour })); } catch (e) {}
+      }
       got.hours.forEach(x => { x.ice = Math.max(x.ice || 0, byHour[x.t.slice(0, 13)] || 0); });
       keep(p, got);
       if (p === place) { data = got; draw(); }
@@ -342,15 +356,15 @@
   // How much of each is expected in an hour. More than one can fall in it.
   function amountsOf(x) {
     const out = [], rain = rainOf(x);
-    if (rain >= 0.01) out.push('🌧️' + rain.toFixed(2) + '"');
-    if (x.snow >= 0.1) out.push('❄️' + x.snow.toFixed(1) + '"');
-    if (x.ice >= 0.005) out.push('🧊' + x.ice.toFixed(2) + '"');
+    if (rain >= RAIN_MIN) out.push('🌧️' + rain.toFixed(2) + '"');
+    if (x.snow >= SNOW_MIN) out.push('❄️' + x.snow.toFixed(1) + '"');
+    if (x.ice >= ICE_MIN) out.push('🧊' + x.ice.toFixed(2) + '"');
     return out;
   }
 
   function hourCell(x, isNow) {
     const pop = x.pop || 0;
-    const snowy = x.snow >= 0.1;
+    const snowy = x.snow >= SNOW_MIN;
     const amount = amountsOf(x).join('<br>') || rainAmount(rainOf(x));
     return '<div class="wxh' + (isNow ? ' now' : '') + (snowy ? ' snow' : '') + '">' +
       '<div class="wxh-t">' + (isNow ? 'Now' : hourLabel(x.t)) + '</div>' +
@@ -372,9 +386,9 @@
     const sum = fn => hours.reduce((s, x) => s + (fn(x) || 0), 0);
     const rain = sum(rainOf), snow = sum(x => x.snow), ice = sum(x => x.ice);
     const bits = [];
-    if (rain >= 0.01) bits.push('about ' + rain.toFixed(2) + '" of rain');
-    if (snow >= 0.1) bits.push('about ' + snow.toFixed(1) + '" of snow');
-    if (ice >= 0.01) bits.push('about ' + ice.toFixed(2) + '" of ice');
+    if (rain >= RAIN_MIN) bits.push('about ' + rain.toFixed(2) + '" of rain');
+    if (snow >= SNOW_MIN) bits.push('about ' + snow.toFixed(1) + '" of snow');
+    if (ice >= ICE_MIN) bits.push('about ' + ice.toFixed(2) + '" of ice');
     return bits.length > 1 ? bits.slice(0, -1).join(', ') + ' and ' + bits[bits.length - 1] : bits.join('');
   }
   function hoursTotal(hours, isToday) {
