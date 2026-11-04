@@ -3098,6 +3098,16 @@
   .hm-wx-t b { font-size:18px; }
   .hm-wx-t small { display:block; font-size:12px; color:var(--muted); margin-top:1px; }
   .hm-wx-t small.hm-wx-alert { color:var(--neg); font-weight:700; }
+  /* Home: what is expected to fall, hour by hour */
+  .hm-wx-fall { display:block; flex-basis:100%; width:100%; min-width:0; margin-top:6px; }
+  .hm-wx-hrs { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:4px; min-width:250px; }
+  .hm-wx-hr { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:3px 2px; border-radius:6px;
+    background:var(--surface-2); font-size:12px; font-weight:700; line-height:1.3; white-space:nowrap; }
+  .hm-wx-hr i { font-style:normal; font-weight:500; font-size:11px; color:var(--muted); }
+  .hm-wx-more { font-weight:500; font-size:11px; color:var(--muted); white-space:normal; text-align:center; }
+  small.hm-wx-sum { display:block; margin-top:4px; font-size:12px; color:var(--muted); }
+  .hm-wx-line { flex-wrap:wrap; }
+  @media (min-width:721px) { .hm-wx-hrs { grid-template-columns:repeat(6, minmax(0, 1fr)); min-width:320px; } }
   /* The owner's jot box (home.js jotHtml): after the greeting and the
      weather on a wide screen (beside them where there is room), straight
      under his name on a phone. */
