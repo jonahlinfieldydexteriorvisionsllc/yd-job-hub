@@ -127,6 +127,10 @@
     const j = await om.value.json();
     const d = j.daily;
     const h = j.hourly;
+    // In inches, going by the unit the answer names: asked for inches it
+    // gives inches. (Divided by 2.54 whatever it said, this panel showed 40%
+    // of the snow coming. Found 3 Nov 2026.)
+    const inches = (v, units, key) => (v || 0) / (units && units[key] === 'cm' ? 2.54 : 1);
     const out = {
       at: Date.now(),
       now: { temp: j.current.temperature_2m, feels: j.current.apparent_temperature,
@@ -134,15 +138,13 @@
       days: d.time.map((t, i) => ({
         date: t, code: d.weather_code[i], hi: d.temperature_2m_max[i], lo: d.temperature_2m_min[i],
         pop: d.precipitation_probability_max[i], rain: d.precipitation_sum[i],
-        // Open-Meteo gives snowfall in centimetres even when everything else
-        // is in inches.
-        snow: Math.round(((d.snowfall_sum[i] || 0) / 2.54) * 10) / 10,
+        snow: Math.round(inches(d.snowfall_sum[i], j.daily_units, 'snowfall_sum') * 10) / 10,
         wind: d.wind_speed_10m_max[i], gust: d.wind_gusts_10m_max[i],
       })),
       // Times are local ("2026-10-01T14:00") because timezone is set above.
       hours: h.time.map((t, i) => ({
         t, temp: h.temperature_2m[i], code: h.weather_code[i], pop: h.precipitation_probability[i],
-        rain: h.precipitation[i], snow: Math.round(((h.snowfall[i] || 0) / 2.54) * 10) / 10,
+        rain: h.precipitation[i], snow: Math.round(inches(h.snowfall[i], j.hourly_units, 'snowfall') * 10) / 10,
         wind: h.wind_speed_10m[i], gust: h.wind_gusts_10m[i], day: h.is_day[i],
       })),
       alerts: [],
