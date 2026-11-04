@@ -433,8 +433,31 @@ async function start() {
     }
   }
 
+  // Firebase hands back "nobody" for a whole load when its check of a saved
+  // session is refused for a moment, as can happen while an update takes over,
+  // though the session is still saved and the next load is fine. That showed
+  // the sign-in screen to someone who never signed out. So one quick try again
+  // first, at most once a minute. Signing out on purpose removes the saved
+  // session, so it isn't caught here.
+  let leaving = false;
+  function triedAgain() {
+    try {
+      const saved = Object.keys(localStorage).some(k => k.indexOf('firebase:authUser:') === 0);
+      if (!saved || leaving) return true;
+      const last = Number(sessionStorage.getItem('ydjobhub_authTryAt')) || 0;
+      if (Date.now() - last < 60000) return true;
+      sessionStorage.setItem('ydjobhub_authTryAt', String(Date.now()));
+      return false;
+    } catch (e) { return true; }
+  }
+
   onAuthStateChanged(auth, async user => {
     if (!user) {
+      if (!triedAgain()) {
+        gate.show('loading', { title: 'YD Job Hub', msg: 'Starting…', spinner: true });
+        setTimeout(() => location.reload(), 1200);
+        return;
+      }
       if (unwatchMe) { try { unwatchMe(); } catch (e) {} unwatchMe = null; }
       inFor = null;
       localStorage.removeItem(ROLE_UID);
@@ -871,6 +894,7 @@ async function start() {
       try { await Promise.race([Promise.resolve().then(hook), pause(2000)]); }
       catch (e) { console.warn('[auth] sign-out tidy-up failed', e); }
     }
+    leaving = true;
     await signOut(auth);
     try {
       await terminate(db);
