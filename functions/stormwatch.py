@@ -408,9 +408,12 @@ def _check(db, people, prefs, now, was, ref):
                              "phones": dg.send_push(uid, note, tag="yd-stormwatch", ttl=12 * 3600, opens="home")})
             except Exception as e:      # noqa: BLE001
                 print("stormwatch: push failed for", uid, e)
-        patch["told"] = {"at": now.isoformat(), "start": o.get("start") or o.get("iceStart"),
-                         "end": o.get("end") or o.get("iceEnd"), "inchesHi": o.get("inchesHi"),
-                         "inPlay": o.get("inPlay"), "ice": o.get("ice"), "words": note["push"]}
+        # Only once a phone heard it: a failed push tries again at the next
+        # check, or that snowfall would never be announced.
+        if sent:
+            patch["told"] = {"at": now.isoformat(), "start": o.get("start") or o.get("iceStart"),
+                             "end": o.get("end") or o.get("iceEnd"), "inchesHi": o.get("inchesHi"),
+                             "inPlay": o.get("inPlay"), "ice": o.get("ice"), "words": note["push"]}
     patch["ranMs"] = int(time.time() * 1000)
     ref.set(patch, merge=True)
     return sent

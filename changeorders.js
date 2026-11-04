@@ -111,7 +111,8 @@
     const say = (cls, text) => '<div class="co-said' + cls + '">' + esc(text) + '</div>';
     if (stage === 'added') return k.said ? say(' ok', '✓ ' + k.said) : '';
     if (k.qbTry && k.qbTry.error) return say(' bad', '⚠ Not on QuickBooks yet: ' + k.qbTry.error);
-    if (k.said) return say(' bad', k.said);
+    // Why it came back to be signed: done with once it is signed again.
+    if (k.said && !k.signDoc) return say(' bad', k.said);
     if (k.noSignature) return say('', 'Going on QuickBooks with no signature, within five minutes');
     if (stage === 'signed') return say('', 'Signed by ' + (k.signedName || 'the customer') + '. Going on QuickBooks, not emailed.');
     return '';
@@ -556,6 +557,9 @@
       (k && k.qbTry && k.qbTry.error && owner ? '<button type="button" class="btn" onclick="coTryAgain(\'' + id + '\')">Try QuickBooks again</button>' +
         '<button type="button" class="btn" onclick="coByHand(\'' + id + '\')">I put it in QuickBooks myself</button>' : '') +
       (k && owner && k.price && stage === 'sign' && !k.noSignature ? '<button type="button" class="btn" onclick="coNoSign(\'' + id + '\')">Add it without a signature</button>' : '') +
+      // Signed on a phone that was lost or never got signal: the PDF may never
+      // come, and the card would sit here for good.
+      (k && owner && stage === 'signed' && !k.noSignature ? '<button type="button" class="btn" onclick="coNoSign(\'' + id + '\')">Add it without the signed PDF</button>' : '') +
       (k && owner && k.noSignature && stage === 'sign' ? '<button type="button" class="btn" onclick="coGetSigned(\'' + id + '\')">Get a signature instead</button>' : '') +
       (k && (owner || stage === 'price') ? '<button type="button" class="btn" onclick="coDelete(\'' + id + '\')">🗑 Delete it</button>' : '');
   }
@@ -594,9 +598,14 @@
     if (toCents(edit.laborText) === null && !edit.materials.length) { showToast('Put in the price'); return; }
     const k = edit.isNew ? null : card(edit.id);
     const signed = !!(k && k.signDoc);
-    const changed = !!(k && k.price) && k.price.totalCents !== t.totalCents;
-    if (signed && changed && !(await ydConfirm('It was signed for ' + money(k.price.totalCents) + '. A new price of ' + money(t.totalCents) + ' means getting it signed again.',
-      { title: 'Change a signed price?', ok: 'Change it' }))) return;
+    // What was signed is the words and the split as well as the total: the
+    // same total with the tax or the materials moved is a different paper.
+    const parts = p => JSON.stringify([(p.items || []).map(i => [i.id, i.cents, !!i.taxable]), p.materialCents, p.laborCents, p.taxableCents, p.taxCents]);
+    const changed = !!(k && k.price) && (k.price.totalCents !== t.totalCents || parts(k.price) !== parts(t) || (k.what || '').trim() !== edit.what.trim());
+    if (signed && changed && !(await ydConfirm(k.price.totalCents !== t.totalCents
+      ? 'It was signed for ' + money(k.price.totalCents) + '. A new price of ' + money(t.totalCents) + ' means getting it signed again.'
+      : 'The total is the same, but the paper signed said something else. Changing it means getting it signed again.',
+      { title: 'Change what was signed?', ok: 'Change it' }))) return;
     if (!edit) return;
     const data = wordsOf(), id = edit.id || newId('co');
     data.title = titleOf(data);
@@ -644,8 +653,10 @@
   window.coNoSign = async function (id) {
     const k = card(id);
     if (!k || !isOwner() || !k.price) return;
-    if (!(await ydConfirm('It goes on the job’s QuickBooks invoice with no signature, and is not emailed. Send the invoice when you are ready.',
-      { title: 'Add it without a signature?', ok: 'Add it' }))) return;
+    const signed = !!k.signDoc;
+    if (!(await ydConfirm(signed ? 'Use this when the signed PDF never reached Job Hub, say the phone was lost. It goes on the job’s QuickBooks invoice, and is not emailed.'
+      : 'It goes on the job’s QuickBooks invoice with no signature, and is not emailed. Send the invoice when you are ready.',
+      { title: signed ? 'Add it without the signed PDF?' : 'Add it without a signature?', ok: 'Add it' }))) return;
     put(id, { noSignature: { at: nowIso(), by: (me() || {}).uid || '', name: myName() }, qbTry: null, said: null, updatedAt: nowIso(), updatedBy: myName() });
     window.coClose();
     showToast('It goes on QuickBooks within five minutes');

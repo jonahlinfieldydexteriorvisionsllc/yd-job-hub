@@ -132,6 +132,10 @@
   // "Cesar said the Bobcat is leaking", "Cesar's check".
   const NOT_FOR = "said|says|told|tells|think|thinks|thought|wants|wanted|asked|asks|called|calls|texted|texts|mentioned|" +
     "noticed|saw|found|forgot|broke|quit|left|is|was|isn'?t|wasn'?t|has(?!\\s+to)|had|does|did|didn'?t|doesn'?t|got|gets";
+  // What a note says someone is to do, right after a bare name.
+  const JOB_WORDS = "pick|pickup|grab|get|bring|drop|take|go|head|swing|stop|run|haul|load|unload|clean|wash|fix|check|" +
+    "call|text|email|order|buy|mow|plow|salt|shovel|blow|start|finish|meet|help|move|set|put|dump|deliver|fill|fuel|gas|" +
+    "sharpen|service|change|grease|charge|mark|measure|dig|edge|trim|mulch|rake|sweep|lay|install|build|cut|return|drive";
   // Who a note says it is for, and its words without saying so -- or null.
   function forWhom(line, people) {
     if (!people.length) return null;
@@ -146,9 +150,13 @@
       new RegExp('^\\s*(?:please\\s+)?(?:have|tell|ask|remind|let|need|want)\\s+(' + LIST + ')\\b' + MINE + '(?:\\s+to\\b)?', 'i'),
       // "get Cesar to ...", "send Cesar to ..." (not "get Cesar a shovel")
       new RegExp('^\\s*(?:please\\s+)?(?:get|send|make)\\s+(' + LIST + ')\\b' + MINE + '\\s+to\\b', 'i'),
-      // "Cesar: ...", "Cesar - ...", "Cesar pick up ...", "for Cesar: ..."
-      new RegExp('^\\s*(?:for\\s+)?(' + LIST + ')\\b' + MINE + '(?!\\s+(?:' + NOT_FOR + ')\\b)' +
-        '(?:\\s*[:,\\-–—]+|\\s+(?:to|needs?\\s+to|should|can|could|has\\s+to|please)\\b)?', 'i'),
+      // "for Sam: ...", "for Sam new shovel"
+      new RegExp('^\\s*for\\s+(' + LIST + ')\\b' + MINE + '(?:\\s*[:,\\-–—]+)?', 'i'),
+      // "Sam: ...", "Sam - ...", "Sam pick up ...". The name alone isn't
+      // enough: a customer can share a first name with the crew ("Sam Jones
+      // wants a bid" is no job for Sam), and this goes on his day and buzzes.
+      new RegExp('^\\s*(' + LIST + ')\\b' + MINE + '(?!\\s+(?:' + NOT_FOR + ')\\b)' +
+        '(?:\\s*[:,\\-–—]+|\\s+(?:to|needs?\\s+to|should|can|could|has\\s+to|please)\\b|(?=\\s+(?:' + JOB_WORDS + ')\\b))', 'i'),
       // Further on: "tomorrow have Cesar ...", "... @Cesar"
       new RegExp('(?:^|\\s)(?:have|tell|ask|remind)\\s+(' + LIST + ')\\b' + MINE + '(?:\\s+to\\b)?', 'i'),
       new RegExp('@(' + LIST + ')\\b', 'i'),

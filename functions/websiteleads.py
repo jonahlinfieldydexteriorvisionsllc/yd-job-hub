@@ -129,20 +129,31 @@ def room(db, ip):
     are being sent to the phone number too, and he should know why."""
     day = dg._now().date().isoformat()
     ref = db.collection("leadLimits").document(day)
-    d = ref.get().to_dict() or {}
     key = hashlib.sha256((day + ip).encode()).hexdigest()[:16]
-    if int((d.get("by") or {}).get(key) or 0) >= SENDER_PER_DAY:
-        return False, []
-    if int(d.get("all") or 0) >= FORMS_PER_DAY:
-        print("website form: the day's limit is reached")
-        if d.get("told"):
+
+    # Read and counted in one transaction: this route is open to the world,
+    # and 200 posts at once would all read a count of 0 otherwise.
+    @firestore.transactional
+    def take(tx):
+        d = ref.get(transaction=tx).to_dict() or {}
+        if int((d.get("by") or {}).get(key) or 0) >= SENDER_PER_DAY:
             return False, []
-        ref.set({"told": True}, merge=True)
-        return False, [{"kind": "followup", "jobId": "site-limit", "title": "⚠️ Website form stopped for today",
-                        "body": "%d forms today, far more than real customers send, so it may be spam. "
-                                "Until midnight the form asks people to call." % FORMS_PER_DAY}]
-    ref.set({"all": firestore.Increment(1), "by": {key: firestore.Increment(1)}}, merge=True)
-    return True, []
+        if int(d.get("all") or 0) >= FORMS_PER_DAY:
+            print("website form: the day's limit is reached")
+            if d.get("told"):
+                return False, []
+            tx.set(ref, {"told": True}, merge=True)
+            return False, [{"kind": "followup", "jobId": "site-limit", "title": "⚠️ Website form stopped for today",
+                            "body": "%d forms today, far more than real customers send, so it may be spam. "
+                                    "Until midnight the form asks people to call." % FORMS_PER_DAY}]
+        tx.set(ref, {"all": firestore.Increment(1), "by": {key: firestore.Increment(1)}}, merge=True)
+        return True, []
+
+    try:
+        return take(db.transaction())
+    except Exception as e:      # noqa: BLE001 -- too many at once: the form says to call
+        print("website form: limit not checked:", e)
+        return False, []
 
 
 def form_text(f):

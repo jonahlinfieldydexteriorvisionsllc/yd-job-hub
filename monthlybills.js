@@ -34,10 +34,17 @@
   let editing = null;               // a bill id being changed, 'new', or null
 
   function read() {
-    return Promise.resolve(window.YDDb.getFresh('settings', DOC)).then(d => {
-      data = Object.assign({ bills: {}, paid: {} }, d || {});
-      return data;
-    });
+    return Promise.resolve(window.YDDb.getFresh('settings', DOC))
+      .catch(async e => {
+        // No signal: the last copy on this phone, or the "needs signal" words.
+        const kept = await window.YDDb.get('settings', DOC);
+        if (!kept) throw e;
+        return kept;
+      })
+      .then(d => {
+        data = Object.assign({ bills: {}, paid: {} }, d || {});
+        return data;
+      });
   }
   function save(patch, what) {
     Promise.resolve(window.YDDb.put('settings', DOC, Object.assign(patch, { updatedAt: new Date().toISOString() })))

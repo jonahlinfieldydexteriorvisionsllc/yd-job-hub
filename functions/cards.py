@@ -51,6 +51,7 @@ from email.mime.text import MIMEText
 
 import anthropic
 import requests
+from google.api_core.exceptions import AlreadyExists
 from firebase_admin import firestore
 
 import digest as dg
@@ -900,6 +901,17 @@ def _budget_left(db):
     return day, MAX_PER_DAY - used
 
 
+def _tonight_claim(db, card_id, day):
+    """True for the one run that works this card today: the morning run can
+    be delivered twice, and two runs would pay Claude twice and leave two sets
+    of drafts. A card that fails goes again tomorrow."""
+    try:
+        db.collection("reminderLog").document("tonight_%s_%s" % (day, card_id)).create({"at": dg._now().isoformat()})
+        return True
+    except AlreadyExists:
+        return False
+
+
 def run(client, only=None, tonight=False, deadline=None):
     """Work through up to MAX_PER_RUN cards (or just the one in `only`, a
     (boardId, cardId) pair; or, `tonight`, those he set for Claude overnight,
@@ -913,7 +925,12 @@ def run(client, only=None, tonight=False, deadline=None):
     report = []
     day, left = _budget_left(db)
     todo = _candidates(db, only, tonight)
+    # Past the night's limit: said, so the morning push says some were left.
+    if tonight:
+        report.extend({"card": x[2].id, "skipped": "over the night's limit"} for x in todo[TONIGHT_MAX:])
     for b, board, c, k in todo[:TONIGHT_MAX if tonight else MAX_PER_RUN]:
+        if tonight and not _tonight_claim(db, c.id, day):
+            continue
         if deadline and time.monotonic() > deadline:
             report.append({"card": c.id, "skipped": "out of time"})
             break

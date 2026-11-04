@@ -1624,6 +1624,20 @@ def _chicago_day():
     return _now().astimezone(ZoneInfo("America/Chicago")).date().isoformat()
 
 
+def _chicago_day_of(stamp):
+    """The date of a stored time where the business is. Phones keep times in
+    UTC, so a paper signed at 7 pm would read as the next day otherwise."""
+    from zoneinfo import ZoneInfo
+    text = str(stamp or "")
+    try:
+        when = datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text[:10]
+    if when.tzinfo is None:
+        return text[:10]
+    return when.astimezone(ZoneInfo("America/Chicago")).date().isoformat()
+
+
 def invoice_from_estimate(body):
     """The job's invoice, made from its estimate the way Jonah does it in
     QuickBooks: one invoice for the whole job with every line of the estimate,
@@ -5128,7 +5142,7 @@ def add_card_order(card_id, paper=None):
         raise CardBusy("That change order is going on QuickBooks right now")
     try:
         entity, txn = _change_target(job)
-        signed = str((doc or {}).get("signedAt") or "")[:10]
+        signed = _chicago_day_of((doc or {}).get("signedAt"))
         tail = "\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if doc and signed else ""
         lines = [l for l in txn.get("Line") or [] if l.get("DetailType") != "SubTotalLineDetail"]
         new = [_card_line(kind, cents, words + tail, taxed) for kind, cents, words, taxed in parts]
@@ -5151,6 +5165,13 @@ def add_card_order(card_id, paper=None):
             _attach_signed(entity, txn["Id"], doc_id, doc, signed, out)
         word = "invoice" if entity == "Invoice" else "estimate"
         said = "On %s #%s, new total %s, not emailed" % (word, number, _money_text(upd.get("TotalAmt")))
+        # QuickBooks works out its own sales tax: when that lands on a figure
+        # other than the one signed, the card says so instead of hiding it.
+        if fresh and upd.get("TotalAmt") is not None and txn.get("TotalAmt") is not None:
+            rose = round(float(upd["TotalAmt"]) - float(txn["TotalAmt"]), 2)
+            signed_for = round(int((k.get("price") or {}).get("totalCents") or 0) / 100, 2)
+            if abs(rose - signed_for) >= 0.01:
+                said += ". QuickBooks added %s, the change order says %s (its sales tax)" % (_money_text(rose), _money_text(signed_for))
         if entity == "Invoice":
             said += _follow_invoice(db, jid, upd, out)
         else:
@@ -5260,7 +5281,7 @@ def add_change_order(body):
     env = _env("QB_ENV", "sandbox")
     entity, txn = _change_target(job)
 
-    signed = str(doc.get("signedAt") or "")[:10]
+    signed = _chicago_day_of(doc.get("signedAt"))
     what = re.sub(r"\s+", " ", str(doc.get("what") or doc.get("title") or "").strip())
     text = "CHANGE ORDER" + (": " + what if what else "") + \
         ("\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if signed else "")

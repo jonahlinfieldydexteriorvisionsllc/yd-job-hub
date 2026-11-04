@@ -173,10 +173,18 @@
     switchTab('clock');
   };
   window.paySheetMove = function () {
-    const next = addDays(first(), 7);
+    const next = addDays(first(), 7), was = payDayFrom(localYMD(new Date())), typed = ((cfg && cfg.paid) || {})[was];
     cfg = Object.assign({}, cfg, { first: next });
-    save({ first: next });
     shown = payDayFrom(localYMD(new Date()));
+    // Paid is kept by pay day: what was typed for this period goes with it,
+    // or "still owed" would read as if nobody had been paid.
+    if (typed && shown !== was) {
+      const moved = { [shown]: Object.assign({}, cfg.paid[shown], typed), [was]: null };
+      cfg.paid = Object.assign({}, cfg.paid, moved);
+      save({ first: next, paid: moved });
+    } else {
+      save({ first: next });
+    }
     draw();
     document.dispatchEvent(new CustomEvent('yd-paysheet'));
     showToast('Next pay day: ' + longDay(shown));
