@@ -73,6 +73,7 @@ CARD_HOURS = (7, 19)
 # The hourly /cards/run request: no new step (QuickBooks look, cards) is
 # started after this many seconds. Cloud Run and the scheduler give it 900.
 RUN_BUDGET = 600
+TONIGHT_BUDGET = 300            # the morning's cards set for Claude (cards.py)
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
 # The live app only. A local copy (localhost) never needs to call the real
 # server: its signed-in screens are tested against a fake database.
@@ -557,6 +558,13 @@ def _digest(request, path, headers):
                 logged = joblog.catch_up(_claude())
             except Exception as e:                      # noqa: BLE001
                 print("yesterday's logs not caught up:", e)
+            # The to-dos he set for Claude, with his notes, done before he is
+            # up (cards.py). Its own limit on time: the run has more to do.
+            try:
+                import cards
+                cards.tell_tonight(cards.run(_claude(), tonight=True, deadline=time.monotonic() + TONIGHT_BUDGET))
+            except Exception as e:                      # noqa: BLE001
+                print("tonight's cards not worked:", e)
         # Morning and evening, after the summary: the posting schedule's next
         # days filled (social.py -- Claude only for words not yet written),
         # and in the evening his phone told what goes up tomorrow.

@@ -116,6 +116,21 @@
   // way the calendar does, so a tap hands back exactly that one.
   function keep(x) { const k = 'h' + Object.keys(drawn).length; drawn[k] = x.o; return k; }
 
+  // Under a to-do: hand it to Claude for the night, with a note (boards.js
+  // forClaude, functions/cards.py). The owner's, as Claude's credit is.
+  function claudeLine(x, k) {
+    if (!isOwner() || x.done || !window.YDBoards || !YDBoards.claudeWord) return '';
+    const w = YDBoards.claudeWord(x.o);
+    if (!w) return '';
+    const said = { done: '🤖 Claude did this — check it', needs_info: '🤖 Claude needs something from you',
+                   not_mine: '🤖 Not one Claude can do', working: '🤖 Claude is working on it' }[w.state];
+    if (w.state === 'tonight') {
+      return '<div class="hm-cl on">🌙 Set for Claude tonight <button class="link-btn" onclick="homeClaudeBack(\'' + k + '\')">Take back</button></div>';
+    }
+    if (said) return '<div class="hm-cl"><button class="link-btn" onclick="homeClaudeOpen(\'' + k + '\')">' + said + '</button></div>';
+    return '<div class="hm-cl"><button class="link-btn" onclick="homeForClaude(\'' + k + '\')">🤖 For Claude</button></div>';
+  }
+
   // Something at a set time, drawn as My day draws it: a task (not an
   // appointment) has its tick box here too.
   function timedRow(x) {
@@ -127,7 +142,7 @@
       '<button class="md-open" onclick="homeOpen(\'' + k + '\')">' +
         '<span class="md-time">' + esc(x.time) + '</span>' +
         '<span class="md-what"><b>' + esc(x.title) + '</b>' + (line ? '<small>' + esc(line) + '</small>' : '') + '</span>' +
-      '</button></div>';
+      '</button></div>' + (x.task ? claudeLine(x, k) : '');
   }
   // Something for any time: a tick box when this person may tick it off,
   // its kind's colour down the side. `late`: it was due on an earlier day.
@@ -140,7 +155,7 @@
       (x.canTick ? '<input type="checkbox"' + (x.done ? ' checked' : '') + ' onchange="homeTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
       '<button class="cal-todo-t" onclick="homeOpen(\'' + k + '\')">' + esc(x.title) +
-        (line ? '<small>' + line + '</small>' : '') + '</button></div>';
+        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + claudeLine(x, k);
   }
   // A plain line that goes somewhere: an icon, the words, something on the right.
   function line(icon, main, small, right, call, cls) {
@@ -1318,6 +1333,27 @@
     if (o && window.YDCalendar && YDCalendar.tick) YDCalendar.tick(o, on);
     // Drawn again even when nothing changed: a tick that was refused must
     // not stay looking ticked.
+    lastHtml = '';
+    render();
+  };
+  window.homeForClaude = async function (k) {
+    const o = drawn[k];
+    if (!o || !window.YDBoards || !YDBoards.forClaude) return;
+    const got = await ydForm(YDBoards.tonightAsk(), [{ id: 'note', label: 'Your note to Claude', value: '', multiline: true, rows: 4 }],
+      { title: String(o.title || 'For Claude'), ok: 'Set for Claude' });
+    if (!got) return;
+    showToast(YDBoards.forClaude(o, got.note) ? 'Set \u2014 Claude does it tonight' : 'Claude can\u2019t take this one');
+    lastHtml = '';
+    render();
+  };
+  // The card, where Claude's answer is (a calendar to-do's own window has none).
+  window.homeClaudeOpen = function (k) {
+    const o = drawn[k];
+    if (o && window.YDBoards && YDBoards.openClaudeCard) YDBoards.openClaudeCard(o);
+  };
+  window.homeClaudeBack = function (k) {
+    const o = drawn[k];
+    if (o && window.YDBoards && YDBoards.takeBackFromClaude(o)) showToast('Taken back \u2014 Claude leaves it');
     lastHtml = '';
     render();
   };

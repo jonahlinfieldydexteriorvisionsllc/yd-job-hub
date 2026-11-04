@@ -2672,6 +2672,93 @@
   }
   const sendLabel = board => atNight(board) ? '🌙 Send — Claude does it tonight' : '📨 Send — Claude does it now';
 
+  // Set for Claude tonight (Jonah, 3 Nov 2026: "option under the to do on the
+  // home page to set it for claude"; "when you pull emails and add thhem to my
+  // todos allow me to put notes for you that get dealt with every night"). His
+  // note goes in the card's conversation and the server's morning run does it
+  // (cards.py). A card Job Hub made (noClaude) can be set too: he is asking.
+  const NOT_SERVERS = [MAINTENANCE, NIGHT_BOARD, CHANGE_ORDERS];     // cards.py SKIP_BOARDS
+  const claudeCan = (board, k) => !!board && !!k && claudeOwns(board, k) && NOT_SERVERS.indexOf(board.id) < 0 &&
+    !k.recurring && !String(k.id || '').startsWith('rc-');
+  const tonightOn = k => !!k.claudeTonight && askedAgain(k);
+  function forClaude(boardId, cardId, text) {
+    const board = boards[boardId], k = (cards[boardId] || {})[cardId];
+    if (!claudeCan(board, k) || !window.YDDb) return false;
+    const now = nowIso(), words = String(text || '').trim().slice(0, 4000);
+    const talk = talkOf(k);
+    if (words) talk.push({ id: 'tk' + Date.now().toString(36), from: 'owner', by: myName() || 'Jonah', at: now, text: words });
+    const patch = { claudeTalk: talk.slice(-TALK_KEEP), claudeAskedAt: now, claudeTonight: now, noClaude: false, updatedAt: now, updatedBy: myName() };
+    Object.assign(k, patch);
+    writeCard(boardId, cardId, patch);
+    redrawIfVisible(); cardsChanged();
+    if (openCard && openCard.boardId === boardId && openCard.cardId === cardId) renderCardDetail();
+    return true;
+  }
+  function takeBackFromClaude(boardId, cardId) {
+    const board = boards[boardId], k = (cards[boardId] || {})[cardId];
+    if (!claudeCan(board, k)) return false;
+    const patch = { claudeTonight: null, claudeAskedAt: null };
+    Object.assign(k, patch);
+    writeCard(boardId, cardId, patch);
+    redrawIfVisible(); cardsChanged();
+    if (openCard && openCard.boardId === boardId && openCard.cardId === cardId) renderCardDetail();
+    return true;
+  }
+  // A calendar to-do has no card to carry the note, so it gets one: the same
+  // id for that date each time, so a second tap finds it and Home can tell.
+  // No due date on it: that would put it on the day beside the entry itself.
+  const entryCardId = o => 'ce' + String((o.ev && o.ev.id) || o.id || '').replace(/[^A-Za-z0-9]/g, '') + '_' + String(o.day || '').replace(/-/g, '');
+  function claudeCardOf(o) {
+    if (!o || !isOwner()) return null;
+    if (o.auto === 'card') return { boardId: o.boardId, cardId: o.id };
+    if (o.auto || !o.ev) return null;
+    return { boardId: 'todo', cardId: entryCardId(o), entry: true };
+  }
+  // What Home says under a to-do. null: not one Claude can have.
+  function claudeWord(o) {
+    const at = claudeCardOf(o);
+    if (!at) return null;
+    const board = boards[at.boardId], k = (cards[at.boardId] || {})[at.cardId];
+    if (!k) return at.entry && board ? { state: 'free' } : null;
+    if (!claudeCan(board, k)) return null;
+    if (tonightOn(k)) return { state: 'tonight' };
+    return { state: (k.claude && k.claude.status) || 'free' };
+  }
+  function forClaudeOn(o, text) {
+    const at = claudeCardOf(o);
+    if (!at) return false;
+    if (at.entry && !(cards.todo || {})[at.cardId]) {
+      const board = boards.todo;
+      if (!board || !window.YDDb) return false;
+      const col = (board.columns.find(c => /today/i.test(c.name)) || board.columns[0]).id;
+      const now = nowIso();
+      const rec = {
+        title: String((o.ev && o.ev.title) || o.title || 'To-do').slice(0, 200), column: col, order: startOrder('todo', col), due: null, dueTime: null,
+        remindMins: null, hasReminder: false, remindUids: [], noReminder: true, type: null, urgency: 'normal', labels: [], color: null,
+        assignees: [], jobId: (o.ev && o.ev.jobId) || null, jobName: (o.ev && o.ev.jobName) || null, jobNum: null,
+        notes: ['On the calendar for ' + o.day + '.', (o.ev && o.ev.notes) || o.note || ''].filter(Boolean).join('\n'), checklist: [], doneAt: null,
+        createdAt: now, createdBy: myName(), updatedAt: now, updatedBy: myName(),
+      };
+      cards.todo = cards.todo || {};
+      cards.todo[at.cardId] = Object.assign({ id: at.cardId }, rec);
+      writeCard('todo', at.cardId, rec);
+    }
+    return forClaude(at.boardId, at.cardId, text);
+  }
+  function takeBackOn(o) {
+    const at = claudeCardOf(o);
+    return !!at && takeBackFromClaude(at.boardId, at.cardId);
+  }
+  window.claudeTonight = async function () {
+    const ids = openCard && { boardId: openCard.boardId, cardId: openCard.cardId };
+    if (!ids) return;
+    const got = await ydForm(TONIGHT_ASK, [{ id: 'note', label: 'Your note to Claude', value: '', multiline: true, rows: 4 }],
+      { title: 'For Claude tonight', ok: 'Set for Claude' });
+    if (got && forClaude(ids.boardId, ids.cardId, got.note)) showToast('Set — Claude does it tonight');
+  };
+  const TONIGHT_ASK = 'Say what you want done. Claude does it overnight and leaves its answer on the to-do. Any email it writes ' +
+    'waits in your Gmail Drafts: nothing is sent.';
+
   function claudeHtml(board, k) {
     if (!claudeOwns(board, k) || !claudeShown(board, k)) return '';
     const c = k.claude || null;
@@ -2681,7 +2768,8 @@
     const head = '<div class="bd-move-label">Claude</div>';
     if (k.noClaude) {
       return head + '<div class="cl-box muted">Claude leaves this card alone.' +
-        '<div class="field-actions"><button class="btn btn-sm" onclick="claudeAllow(true)">Let Claude look at it</button></div></div>';
+        '<div class="field-actions">' + (claudeCan(board, k) ? '<button class="btn btn-sm btn-filled" onclick="claudeTonight()">🌙 For Claude tonight</button>' : '') +
+        '<button class="btn btn-sm" onclick="claudeAllow(true)">Let Claude look at it</button></div></div>';
     }
     // A wish someone else put on the board is built once Jonah says yes
     // (wishFrom, saveCard): the night run takes his wishes, and his OK.
@@ -2714,11 +2802,13 @@
         '<div class="hint">What it does shows here when it has finished; add notes then.</div></div>';
     }
     const again = askedAgain(k);
+    const later = night || tonightOn(k);
     // Sent on a server board: its answer comes within a minute or two, from
     // the call already made -- a second Send then would run it twice. On the
     // wish board the night is hours off, so more notes can still go in.
-    const waiting = again && !night;
-    const title = again ? (night ? '🌙 Sent — Claude does it again at the night run' : '📨 Sent — Claude is doing it again')
+    const waiting = again && !later;
+    const title = tonightOn(k) ? '🌙 Set for Claude tonight'
+      : again ? (night ? '🌙 Sent — Claude does it again at the night run' : '📨 Sent — Claude is doing it again')
       : cc.status === 'done' ? who + ' did this — check it'
       : cc.status === 'needs_info' ? who + ' needs something from you'
       : cc.status === 'waiting_ok' ? (cc.approvedAt ? '🖥 Going live on the next check (within 20 minutes)'
@@ -2823,6 +2913,7 @@
       showToast(patch.column ? 'Sent — back on the list; Claude does it at the night run' : 'Sent — Claude does it at the night run');
       return;
     }
+    if (tonightOn(k)) { showToast('Added — Claude does it tonight'); return; }
     // The server reads the card from the database, so the note has to be
     // there before it is asked (a few seconds at most, not forever).
     showToast('Sent — Claude is on it');
@@ -4108,6 +4199,16 @@
       } finally { whoNow = null; }
     },
     editsBoard: id => !!boards[id] && editsBoard(boards[id]),
+    // For Claude tonight (home.js): what to say under a to-do, setting it
+    // with his note, and taking it back.
+    claudeWord: claudeWord,
+    openClaudeCard: o => {
+      const at = claudeCardOf(o);
+      if (at && window.calOpenCard) window.calOpenCard(at.boardId, at.cardId);
+    },
+    forClaude: forClaudeOn,
+    takeBackFromClaude: takeBackOn,
+    tonightAsk: () => TONIGHT_ASK,
     // Where a job sits on the Bids and Jobs boards, and the bids to chase --
     // Home (home.js) lists them by the same rules, so the two never disagree.
     bidColumn: bidColumn,
