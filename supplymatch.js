@@ -555,7 +555,7 @@
   // common: turf glue isn't wall glue) and is the same sort of thing. The sort
   // is read from the name: the word for what it IS, the last one before a
   // size, a comma, "with" or "for" -- glue, sealer, elbow, cap.
-  const HOW_PACKED = ONE_EACH.concat(['pack', 'set', 'pair', 'qt', 'quart', 'pt', 'pint', 'powder', 'unit', 'mix', 'rental', 'round', 'square']);
+  const HOW_PACKED = ONE_EACH.concat(['pack', 'set', 'pair', 'qt', 'quart', 'pt', 'pint', 'powder', 'unit', 'mix', 'rental', 'round', 'square', 'drain', 'handy']);
   function whatItIs(name) {
     const toks = words(specs(bare(name).split(',')[0].split(/\s(?:with|w\/|for)\s/i)[0]).rest).filter(w => !/^\d/.test(w));
     while (toks.length > 1 && (HOW_PACKED.indexOf(toks[toks.length - 1]) !== -1 || FILLER.indexOf(toks[toks.length - 1]) !== -1)) toks.pop();
@@ -568,13 +568,13 @@
     ['cleaner', 'remover', 'wash', 'stripper', 'solvent', 'mold'], ['sand', 'nitro'], ['tape', 'seaming'],
     ['pin', 'staple', 'nail', 'spike'], ['fabric', 'barrier'], ['edging', 'edge', 'edger', 'timber'],
     ['coupling', 'coupler', 'connector', 'connect', 'adapter', 'adaptor', 'fitting'],
-    ['insert', 'ring'], ['table', 'firetable'],
+    ['insert', 'ring'], ['table', 'firetable'], ['pipe', 'french'], ['cement', 'primer'],
     ['cap', 'coping', 'bullnose'], ['step', 'riser', 'tread'], ['pillar', 'column'],
   ];
   // Kinds that are one sort of thing whatever the last word of the name is (a
   // paver's name ends in its product line, a wall block's in "large"), but for
   // the sorts named above: a wall cap is not a wall block.
-  const ONE_SORT_KINDS = ['wall', 'pavers', 'natural', 'decorative', 'mulch', 'soil', 'stone', 'bagged', 'fill', 'dumpster'];
+  const ONE_SORT_KINDS = ['wall', 'pavers', 'natural', 'decorative', 'mulch', 'soil', 'stone', 'fill', 'dumpster'];
   function sameSort(a, b) {
     const x = whatItIs(a.name), y = whatItIs(b.name);
     if (SORTS.some(g => g.indexOf(x) !== -1 && g.indexOf(y) !== -1)) return true;
@@ -589,7 +589,7 @@
     const tags = joined && usesOf ? usesOf(from) : [];
     return items.filter(it => it.name && it.id !== from.id &&
       (!joined || (it.category || '') === (from.category || '')) &&
-      (!tags.length || usesOf(it).some(t => tags.indexOf(t) !== -1)) && sameSort(joined ? from : Object.assign({ category: it.category }, from), it));
+      (!tags.length || usesOf(it).some(t => tags.indexOf(t) !== -1)) && sameSort(from, it));
   }
 
   window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
