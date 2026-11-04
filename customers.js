@@ -1404,8 +1404,10 @@
     const f = c.fromEmail;
     if (!f) return '';
     const draft = f.draft && gmailLink(f.draft.link), mail = gmailLink(f.link);
+    const auto = f.autoReply && f.autoReply.kind === 'noPlow' ? ' <span class="muted">· ❄️ ' +
+      (f.autoReply.how === 'sent' ? 'Sent your no-plow reply' : 'Your no-plow reply may have gone — check Sent') + '</span>' : '';
     return '<div class="cu-mail">📬 ' + esc(f.summary || f.subject || 'Emailed in') +
-      (f.timing ? ' <span class="muted">· ' + esc(f.timing) + '</span>' : '') +
+      (f.timing ? ' <span class="muted">· ' + esc(f.timing) + '</span>' : '') + auto +
       (draft ? ' <a class="btn btn-sm" href="' + esc(draft) + '" target="_blank" rel="noopener">✉️ Open the reply draft</a>'
         : window.YDAuth && window.YDAuth.isOwner && typeof ibDraftLead === 'function'
           ? ' <button class="btn btn-sm" onclick="ibDraftLead(\'' + sid(c.id) + '\')">✍️ Draft a reply</button>' : '') +

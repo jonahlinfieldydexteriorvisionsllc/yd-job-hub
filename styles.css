@@ -5593,6 +5593,11 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .wd-sum-all { font-size:13px; font-weight:700; color:var(--pos); }
   .bd-wd-left { font-size:11.5px; color:var(--text); }
   .bd-wd-all { font-size:11.5px; font-weight:700; color:var(--pos); }
+  .eod-day { margin:10px 0 2px; padding:8px 10px; border-radius:8px; background:var(--surface-2); font-size:13.5px; }
+  .eod-day-h { font-weight:700; margin-bottom:2px; }
+  .eod-day-row { padding:2px 0; }
+  .eod-day-at { color:var(--muted); white-space:nowrap; }
+  .eod-day-dur { font-weight:600; white-space:nowrap; }
   .eod-ticked { margin:10px 0 2px; padding:8px 10px; border-radius:8px; background:var(--pos-soft, #d8ecdf); font-size:13.5px; }
   .eod-ticked-h { font-weight:700; color:var(--pos); margin-bottom:2px; }
   .eod-ticked-row { padding:1px 0; }

@@ -43,6 +43,14 @@
 // What is typed is kept on the phone as it is typed (localStorage), so an
 // update, a reload or no signal loses nothing; Send is not waited on --
 // Firestore keeps it on the phone until there is signal, as every write here.
+//
+// THE DAY FROM THE CLOCK (Jonah, 3 Nov 2026: "[the crew lead's] end of day summary include
+// list of jobs gone to and locations wen tto along with hours for the day
+// those can be auto added"): each shift that day, in order, with the job's
+// address and how long, and the day's total. Read from the shifts every time
+// and never kept on the report, so a shift put right on the clock is right
+// here too, and one still running when the report went is counted once it
+// ends. The summaries do the same (endofday.py day_lines).
 
 (function () {
   'use strict';
@@ -242,6 +250,31 @@
     });
     return out;
   }
+  // Each shift that day, in the order they went, with where it was.
+  function dayStops(uid, day) {
+    const board = (YDClock && YDClock.board && YDClock.board()) || {};
+    return shiftsOn(uid, day).sort((x, y) => YDClock.startMsOf(x) - YDClock.startMsOf(y)).map(e => {
+      const job = e.kind === 'job' ? board[e.targetId] : null;
+      return {
+        name: String((YDClock.label ? YDClock.label(e) : e.targetName) || 'Job'),
+        address: String((job && job.address) || ''),
+        from: YDClock.startMsOf(e), to: YDClock.endMsOf(e), ms: YDClock.paidMs(e),
+      };
+    });
+  }
+  function dayHtml(uid, day) {
+    const stops = window.YDClock && uid ? dayStops(uid, day) : [];
+    if (!stops.length) return '';
+    const total = stops.reduce((sum, s) => sum + s.ms, 0);
+    const running = stops.some(s => s.to == null);
+    const dur = ms => (YDClock.fmtDur ? YDClock.fmtDur(ms) : Math.round(ms / 60000) + 'm');
+    return '<div class="eod-day"><div class="eod-day-h">🕒 ' + esc(dur(total)) + ' on the clock' + (running ? ' so far' : '') + '</div>' +
+      stops.map(s => '<div class="eod-day-row"><span class="eod-day-at">' + esc(timeWords(s.from)) +
+        (s.to != null ? '–' + esc(timeWords(s.to)) : ' on') + '</span> <b>' + esc(s.name) + '</b>' +
+        (s.address ? ' <span class="muted">' + esc(s.address) + '</span>' : '') +
+        ' <span class="eod-day-dur">' + esc(dur(s.ms)) + '</span></div>').join('') + '</div>';
+  }
+
   // Off the clock and not on a break: done for the day.
   function offClock() {
     const m = window.YDClock && YDClock.mine ? YDClock.mine() : null;
@@ -442,7 +475,7 @@
       (others.length ? '<select class="eod-addjob" onchange="eodAddJob(this.value)" aria-label="Add a job">' +
         '<option value="">＋ Add a job…</option>' +
         others.map(j => '<option value="' + safe(j.id) + '">' + esc(j.name) + '</option>').join('') + '</select>' : '') +
-      tickedHtml(myUid(), form.day, form.jobs);
+      dayHtml(myUid(), form.day) + tickedHtml(myUid(), form.day, form.jobs);
   }
   // The work this person ticked off that day on the job pages (workdone.js),
   // job by job -- a start on "what got done", and Jonah sees it with the report.
@@ -778,7 +811,8 @@
       : !owner && !opts.job && r.uid === myUid() && onList(myUid()) && r.day >= addDays(today(), -DRAFT_DAYS)
       ? '<div class="eod-rep-acts"><button type="button" class="link-btn" onclick="eodChange(\'' + safe(r.day) + '\')">Change it</button></div>' : '';
     return '<div class="eod-rep' + (unreadOne ? ' unread' : '') + '" id="eodRep_' + safe(r.id) + '">' +
-      '<div class="eod-rep-h">' + head + '</div>' + jobLine + (opts.job ? '' : tickedHtml(r.uid, r.day, jobs)) + rows + acts + '</div>';
+      '<div class="eod-rep-h">' + head + '</div>' + jobLine + (opts.job || r.archived ? '' : dayHtml(r.uid, r.day)) +
+      (opts.job ? '' : tickedHtml(r.uid, r.day, jobs)) + rows + acts + '</div>';
   }
 
   function renderList() {
