@@ -55,6 +55,9 @@
   // When every supplier's delivery started counting (abd5906): a bid first
   // sent before it kept the price it went out at (deliveries()).
   const OWN_DELIVERY_FROM = '2026-10-27T17:01:09Z';
+  // When a typed-in rental started counting as a rental (lineKind): a bid
+  // first sent before it keeps the price it went out at.
+  const TYPED_RENTALS_FROM = '2026-11-04T05:00:00Z';
   const CATEGORY_NAME = {};
   CATEGORIES.forEach(([id, name]) => { CATEGORY_NAME[id] = name; });
 
@@ -346,6 +349,31 @@
     return { way: 'pickup', by: 'usual', why: 'no rule for it — picked up' };
   }
   const vendorsOf = ctx => ctx.vendors || (window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog().vendors || {} : {});
+  // A rental typed on a line by hand, or by Claude off an older bid, with no
+  // Supplies item behind it, is still a rental, and goes by his rule that the
+  // customer never sees one (Jonah, 3 Nov 2026: "dont include a typed in
+  // rental"; a skid steer on a bid read "Other" and went on the customer's
+  // list). Its words say so, or a machine's name, or that it is charged by the
+  // day or week, as nothing else on an estimate is. A dumpster is not one:
+  // the customer sees those.
+  const RENTAL_WORDS = new RegExp('\\brent(al|als|ed|ing)?\\b|\\bskid.?steers?\\b|\\bmini.?ex(cavators?)?\\b|\\bexcavators?\\b|' +
+    '\\btrack loaders?\\b|\\bjumping jacks?\\b|\\brammers?\\b|\\b(plate|vib\\S*) compactors?\\b|\\btrenchers?\\b|' +
+    '\\bstump grinders?\\b|\\bsod cutters?\\b|\\bpower rakes?\\b', 'i');
+  const BY_THE_DAY = /^(per )?(days?|daily|weeks?|weekly)$/i;
+  const readsAsRental = m => !isDumpster(m) &&
+    (RENTAL_WORDS.test(String(m.name || '')) || BY_THE_DAY.test(String(m.unit || m.per || '').trim()));
+  const firstSentAt = est => (est && Array.isArray(est.sent) ? est.sent.map(v => String((v && v.at) || '')).sort()[0] : undefined);
+  // The kind a material line counts as. Its Supplies item says, then a kind
+  // picked on the line ("Other" too: his pick beats the words), then the
+  // words. `est`, when pricing a bid: one first sent before the rule keeps
+  // the kind, and so the markup, the customer's price was worked out with.
+  function lineKind(m, it, est) {
+    if (m.plant) return 'plant';
+    if ((it && it.category) || m.category) return (it && it.category) || m.category;
+    if (!readsAsRental(m)) return 'other';
+    const first = firstSentAt(est);
+    return first !== undefined && first < TYPED_RENTALS_FROM ? 'other' : 'rental';
+  }
   // A priced line's way (the materialLine shape), from its item, its
   // supplier and the hand pick on the line ('auto' or none: the rules). A
   // rental has none: it has its own place on the crew's page, picked up at
@@ -472,11 +500,11 @@
   }
   const isDayUnit = per => /^(day|days|daily|per day)$/i.test(String(per || '').trim());
 
-  function materialLine(m, ctx) {
+  function materialLine(m, ctx, est) {
     const r = ctx.rules;
     const it = m.supplyId ? ctx.items[m.supplyId] || null : null;
     const pr = m.supplyId ? ctx.prices[m.supplyId] || null : null;
-    const cat = m.plant ? 'plant' : (it && it.category) || m.category || 'other';
+    const cat = lineKind(m, it, est);
     const catRule = catRuleOf(r, cat);
     const per = String((pr && pr.per) || (it && it.unit) || m.unit || '').trim();
     const coverage = it && num(it.coverage) > 0 ? num(it.coverage) : null;
@@ -517,8 +545,10 @@
       // customer's view and QuickBooks). A rental -- the mini-excavator, the
       // jumping jack -- never is (Jonah, 21 Oct 2026: "rental items dont go on
       // the estimate as visible to client"): what it costs stays in the
-      // materials figure, as the layout markers' does.
-      delivery: m.delivery || 'auto', listed: m.listed !== false && !NOT_LISTED.includes(cat), auto: m.auto || null,
+      // materials figure, as the layout markers' does. Asked without the bid,
+      // so one sent before the typed-in rule keeps its price but stops naming
+      // the rental the next time it goes.
+      delivery: m.delivery || 'auto', listed: m.listed !== false && !NOT_LISTED.includes(lineKind(m, it)), auto: m.auto || null,
       packLb: pk.lb, partUse: false, usedQty: null, usedLb: null,
       // The labour line whose all-in price already covers it (workLine).
       allInOf: m.allInOf || null,
@@ -658,7 +688,7 @@
     // last word on it); its order list counts them. Sent before THEN, not
     // sent at all: one first sent since went out with these charges in it,
     // and must keep them (it lost them the moment it was put in QuickBooks).
-    const firstSent = Array.isArray(est.sent) ? est.sent.map(v => String((v && v.at) || '')).sort()[0] : undefined;
+    const firstSent = firstSentAt(est);
     const sent = firstSent !== undefined && firstSent < OWN_DELIVERY_FROM;
     const own = !(opts && opts.order) && sent ? []
       : lines.filter(l => l.way === 'delivered' && l.wayBy !== 'dumpster' && l.orderQty > 0 && !l.auto && !truckable(l));
@@ -1084,7 +1114,7 @@
   function price(est, ctx) {
     est = est || {};
     const fixed = asAccepted(est);
-    const takeoff = (est.materials || []).map(m => Object.assign(materialLine(m, ctx), { tree: m.tree || null }));
+    const takeoff = (est.materials || []).map(m => Object.assign(materialLine(m, ctx, est), { tree: m.tree || null }));
     const added = fixed ? [] : ruleLines(est, takeoff, ctx).map(m => materialLine(m, ctx));
     const all = settleWays(takeoff.concat(added), est);
     const del = deliveries(all, est, ctx);
@@ -2486,7 +2516,7 @@
   window.YDPricing = {
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
-    price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents,
+    price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents, lineKind,
     // A crew-day by the people on it (estimate.js, jobcosts.js).
     CREW_SIZES, USUAL_CREW, crewSizeIn, crewSizeOn, crewDayCost, crewDayFor, crewHours, crewLocked,
     // Each work line's price, cost and profit (estimate.js, jobcosts.js).

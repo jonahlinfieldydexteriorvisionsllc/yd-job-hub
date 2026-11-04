@@ -227,7 +227,9 @@
   // -- with directions. Whether it is reserved (its order line ticked).
   const isRental = (m, items) => {
     const it = m && m.supplyId ? items[m.supplyId] : null;
-    return String((it && it.category) || (m && m.category) || '').toLowerCase() === 'rental';
+    // A typed-in one too (pricing.js lineKind).
+    const kind = window.YDPricing ? YDPricing.lineKind(m || {}, it) : (it && it.category) || (m && m.category) || '';
+    return String(kind).toLowerCase() === 'rental';
   };
   function shopOf(vid) {
     const v = vid ? (catalogue().vendors || {})[vid] : null;
@@ -237,19 +239,21 @@
   }
   function rentalsEntry(d, items) {
     const est = d.estimate || {}, out = [], seen = {};
+    const named = s => String(s || '').trim().toLowerCase();
     const orderOf = sid => (d.orderItems || []).find(o => o && o.supplyId === sid);
+    const typedOrder = name => (d.orderItems || []).find(o => o && !o.supplyId && named(o.name) === named(name));
     (est.materials || []).filter(m => m && m.name && isRental(m, items)).slice(0, 20).forEach(m => {
       const it = m.supplyId ? items[m.supplyId] : null;
-      const o = m.supplyId ? orderOf(m.supplyId) : null;
-      if (m.supplyId) seen[m.supplyId] = true;
+      const o = m.supplyId ? orderOf(m.supplyId) : typedOrder(m.name);
+      seen[m.supplyId || named(m.name)] = true;
       out.push({ name: noMoney((it && it.name) || m.name).slice(0, 200), days: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
                  shop: shopOf(it && it.vendorId), reserved: !!(o && o.ordered) });
     });
     // One put on the order list by hand, not on the estimate.
-    (d.orderItems || []).filter(o => o && o.name && o.supplyId && !seen[o.supplyId] && isRental(o, items)).slice(0, 10).forEach(o => {
-      const it = items[o.supplyId];
-      out.push({ name: noMoney(it.name || o.name).slice(0, 200), days: numOr(o.qty), unit: noMoney(o.per || '').slice(0, 30),
-                 shop: shopOf(it.vendorId), reserved: !!o.ordered });
+    (d.orderItems || []).filter(o => o && o.name && !seen[o.supplyId || named(o.name)] && isRental(o, items)).slice(0, 10).forEach(o => {
+      const it = o.supplyId ? items[o.supplyId] : null;
+      out.push({ name: noMoney((it && it.name) || o.name).slice(0, 200), days: numOr(o.qty), unit: noMoney(o.per || '').slice(0, 30),
+                 shop: shopOf(it && it.vendorId), reserved: !!o.ordered });
     });
     return out;
   }

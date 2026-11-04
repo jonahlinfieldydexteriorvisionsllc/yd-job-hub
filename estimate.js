@@ -1632,7 +1632,7 @@
           '<label class="est-taxin"><input type="checkbox"' + (m.taxIn ? ' checked' : '') + dis +
             ' onchange="estMat(\'' + id + '\', \'taxIn\', this.checked)"> Cost includes tax</label>' +
           '<label><span>Kind</span><select' + dis + ' onchange="estMat(\'' + id + '\', \'category\', this.value)">' +
-            kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
+            kinds().filter(([k]) => k !== 'plant').map(([k, n]) => '<option value="' + esc(k) + '"' + ((m.category || (line && line.category) || 'other') === k ? ' selected' : '') + '>' + esc(n) + '</option>').join('') +
           '</select></label>');
     }
     // Under the line, on one row: what is ordered, its sales tax, and More
@@ -3834,7 +3834,7 @@
     toSup = {};
     typedLines().forEach(m => {
       toSup[m.id] = { vendorId: '', newVendor: '', unit: m.unit || 'each',
-                      cost: num(m.costCents) > 0 ? (m.costCents / 100).toFixed(2) : '', category: m.category || 'other' };
+                      cost: num(m.costCents) > 0 ? (m.costCents / 100).toFixed(2) : '', category: P().lineKind(m) };
     });
     render();
   };
