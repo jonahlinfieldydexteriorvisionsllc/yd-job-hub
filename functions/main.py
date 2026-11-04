@@ -1498,6 +1498,68 @@ def _store_lists_waiting():
     return {"waiting": waiting, "unbooked": unbooked}
 
 
+# ---------------------------------------------------------------- the website
+#
+# The website's contact form (websiteleads.py). The one POST here anyone may
+# make: no sign-in, no scheduler's proof, so what comes in is a stranger's
+# data. The lead, its card and the buzz are done before the browser hears
+# anything. Claude's reply comes after: the answer is sent as the first piece
+# of the response and the reply written while the response stays open, because
+# Cloud Run gives a request no time once it has ended, and a person shouldn't
+# wait on it. The form only looks at the status.
+
+
+def _site(request, path):
+    import websiteleads as wl
+    origin = request.headers.get("Origin", "")
+    headers = wl.cors(origin)
+    json_headers = dict(headers, **{"Content-Type": "application/json"})
+    ok = json.dumps({"ok": True})
+    if path != "/site/lead":
+        return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    if not wl.origin_ok(origin):
+        return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+    if request.method == "OPTIONS":
+        return ("", 204, headers)
+    if request.method != "POST":
+        return (json.dumps({"error": "POST only"}), 405, json_headers)
+    if not 0 < (request.content_length or 0) <= wl.BODY_MAX:
+        return (json.dumps({"error": "wrong size"}), 413, json_headers)
+    body = request.get_json(silent=True)
+    if wl.is_bot(body):
+        return (ok, 200, json_headers)
+    form = wl.clean(body)
+    if not form:
+        return (json.dumps({"error": "a name and a way to reach you are needed"}), 400, json_headers)
+    try:
+        room, news = wl.room(_db, wl.sender(request))
+        if not room:
+            _tell_owner(news)
+            return (json.dumps({"error": "too many"}), 429, json_headers)
+        done = wl.take(_db, form)
+    except Exception as e:                          # noqa: BLE001
+        print("website form not saved:", e)
+        return (json.dumps({"error": "not saved"}), 500, json_headers)
+    if not done:
+        return (ok, 200, json_headers)
+    try:
+        _tell_owner(done["news"])
+    except Exception as e:                          # noqa: BLE001 -- the lead is saved, and on My to-dos
+        print("website form: buzz failed:", e)
+    if not done["drafting"]:
+        return (ok, 200, json_headers)
+
+    def answer_then_reply():
+        try:
+            yield ok
+        finally:                                    # also when the visitor has left
+            import leads
+            day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+            wl.reply(_claude, done, lambda usage: _record_spend(day, "leads", usage, leads.MODEL))
+
+    return (answer_then_reply(), 200, json_headers)
+
+
 # ---------------------------------------------------------------- version
 
 # Which code is running, so whether a deploy went live can be checked from
@@ -1544,6 +1606,8 @@ def claude(request):
             print("store lists count failed:", e)
             body, code = {"error": "not counted"}, 500
         return (json.dumps(body), code, dict(headers, **{"Content-Type": "application/json"}))
+    if path.startswith("/site"):
+        return _site(request, path)
     if path.startswith("/qb"):
         return _quickbooks(request, path, headers)
     if path.startswith("/digest"):

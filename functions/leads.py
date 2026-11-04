@@ -18,6 +18,7 @@ follow-ups), his inbox since the last look is gone through:
   - What is left -- a stranger writing in -- is read by Claude, which says
     whether it is someone asking for work, fills in who they are, where, what
     work and when, and writes a short reply in his voice.
+    From switch day the website's form comes straight in (websiteleads.py).
   - A lead: a Lead in Customers (customers/ld..., source 'email',
     fromEmail {...}) and a push. A reply in his Gmail Drafts only when he taps
     "Draft a reply" on the lead (inboxdesk.py, written in his own voice) --
@@ -182,7 +183,8 @@ def _known(db):
             if site:
                 domains.add(site)
         for coll in ("customers", "jobs", "prospects"):
-            for s in db.collection(coll).stream():
+            # Only these boxes: a job's record is large, and a website form waits on this.
+            for s in db.collection(coll).select(("email", "email2", "fromEmail", "phone", "mobile")).stream():
                 c = s.to_dict() or {}
                 for k in ("email", "email2"):
                     e = str(c.get(k) or "").strip().lower()
@@ -363,12 +365,35 @@ def _passing(err):
     return any(w in name for w in ("Timeout", "Connection", "Overloaded", "Unavailable"))
 
 
+def _card_notes(rec, r, draft, why):
+    """What a lead's card says. r["extra"], r["draftable"]: a website form's
+    (websiteleads.py) -- more lines, and False when "Draft a reply" can't be
+    the next step (no email to answer, or no lead made)."""
+    what = r["summary"] or ", ".join(r["tags"]) or "a request"
+    lines = [{"google": "From Google Ads. ", "website": "From the website form. "}.get(why, "") + what]
+    if rec.get("address"):
+        lines.append("Where: " + rec["address"])
+    if r["timing"]:
+        lines.append("When: " + r["timing"])
+    lines.extend(r.get("extra") or [])
+    reach = [x for x in (r["phone"], r["email"] if why != "google" else "") if x]
+    lines.append("Reach them: " + (", ".join(reach) if reach else "") +
+                 ("" if reach else "reply to the Google email" if why == "google" else "reply to their email"))
+    if draft.get("link"):
+        lines.append("Your reply is in Gmail Drafts: " + draft["link"])
+    elif r.get("draftable", True):
+        lines.append("Customers → Leads → " + rec["name"] + " → Draft a reply")
+    if rec["fromEmail"].get("link"):
+        lines.append("Their email: " + rec["fromEmail"]["link"])
+    return "\n".join(lines)[:5000]
+
+
 def _lead_card(db, lead_id, rec, r, draft, why):
     """A card on his My to-dos for each new lead (Jonah, 2 Nov 2026: "draft
     one the moment a bid comes in and give me a card to do it"): who, where,
     what and when they want it, how to reach them, and the reply waiting in
     Drafts. One per lead (its id from the lead's), due today. Never raises:
-    the lead is made either way."""
+    the lead is made either way. False when the card was there already."""
     try:
         board = db.collection("boards").document("todo").get()
         cols = [c for c in ((board.to_dict() or {}).get("columns") or []) if c.get("id")] if board.exists else []
@@ -376,20 +401,9 @@ def _lead_card(db, lead_id, rec, r, draft, why):
             return
         col = next((c["id"] for c in cols if str(c.get("name") or "").strip().lower() == "today"), cols[0]["id"])
         what = r["summary"] or ", ".join(r["tags"]) or "a request"
-        lines = [("From Google Ads. " if why == "google" else "") + what]
-        if rec.get("address"):
-            lines.append("Where: " + rec["address"])
-        if r["timing"]:
-            lines.append("When: " + r["timing"])
-        reach = [x for x in (r["phone"], r["email"] if why != "google" else "") if x]
-        lines.append("Reach them: " + (", ".join(reach) if reach else "") +
-                     ("" if reach else "reply to the Google email" if why == "google" else "reply to their email"))
-        lines.append("Your reply is in Gmail Drafts: " + draft["link"] if draft.get("link")
-                     else "Customers → Leads → " + rec["name"] + " → Draft a reply")
-        lines.append("Their email: " + rec["fromEmail"]["link"])
         now = _stamp()
         db.collection("boards").document("todo").collection("cards").document("lc" + lead_id[2:]).create({
-            "title": ("📨 Reply to " + rec["name"] + " — " + what)[:200], "notes": "\n".join(lines)[:5000],
+            "title": ("📨 Reply to " + rec["name"] + " — " + what)[:200], "notes": _card_notes(rec, r, draft, why),
             "checklist": [], "column": col, "order": int(dg._now().timestamp() * 1000),
             "due": dg._now().date().isoformat(), "dueTime": None, "remindMins": None, "hasReminder": False,
             "remindUids": [], "noReminder": False, "type": "email", "urgency": "high", "labels": [], "color": None,
@@ -397,7 +411,7 @@ def _lead_card(db, lead_id, rec, r, draft, why):
             "leadId": lead_id, "doneAt": None, "createdAt": now, "createdBy": "Job Hub", "updatedAt": now,
             "updatedBy": "Job Hub"})
     except AlreadyExists:
-        pass
+        return False
     except Exception as err:    # noqa: BLE001
         print("leads: card not made for", lead_id, "--", err)
 
