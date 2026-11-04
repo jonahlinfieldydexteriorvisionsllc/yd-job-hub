@@ -2800,12 +2800,21 @@ function emailSupplierOrder(vid) {
 // in Supplies listed, not only the similar ones}.
 let swappingOrder = null;
 const swapIsOpen = (job, key) => !!swappingOrder && swappingOrder.job === job && swappingOrder.key === key;
+// The lists wait for whoever is typing in them (orderTyping), and the Swap box
+// keeps the focus after a pick. So a swap made went unseen -- the old item and
+// the open box stayed on screen until a tap somewhere else -- unless the box
+// lets go first.
+function swapRedraw() {
+  const a = document.activeElement;
+  if (a && a.classList && a.classList.contains('ssel-box')) a.blur();
+  orderListsRedraw();
+}
 function orderSwapOpen(job, key, adding, all) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
   swappingOrder = { job: job, key: key, adding: !!adding, all: !!all };
-  orderListsRedraw();
+  swapRedraw();
 }
-function orderSwapCancel() { swappingOrder = null; orderListsRedraw(); }
+function orderSwapCancel() { swappingOrder = null; swapRedraw(); }
 // The button, and -- while open -- the picker under the line. job/key as above.
 function orderSwapHtml(job, key, it, cat) {
   const was = it.swappedFrom ? '<span class="muted ord-swapped">⇄ swapped from ' + esc(it.swappedFrom.name || 'another item') + '</span>' +
@@ -2908,7 +2917,7 @@ function orderSwapApply(job, key, fn) {
     markDirty();
   } else if (!ordersPatchLine(job, key, fn)) return false;
   swappingOrder = null;
-  orderListsRedraw();
+  swapRedraw();
   return true;
 }
 function orderSwapPick(job, key, sid) {
