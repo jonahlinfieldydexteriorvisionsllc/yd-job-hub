@@ -214,11 +214,17 @@
     return { from: ymd(a), to: lastDay(a.getFullYear(), a.getMonth() + 1) };
   }
 
-  function windowFromText(text) {
+  // Words with no year are read from the day they were written (setAt, their
+  // whenSetAt), never from today: read from today, "early spring" nobody had
+  // reached by May 31 became next year's spring on June 1 and left Call now,
+  // and "next month" never came. They stay until "Reached out", as a button's
+  // window does. No setAt: the words are being typed now.
+  function windowFromText(text, setAt) {
     const t = low(text);
     if (!t) return null;
     const ym = t.match(/\b((?:19|20)\d{2})\b/);
-    const now = new Date();
+    const said = new Date(s(setAt));
+    const now = isNaN(said) ? new Date() : said;
     const thisYear = now.getFullYear(), thisMonth = now.getMonth() + 1;
     // A month as a number: 2027-04, 4/2027, 4/15/2027.
     const iso = t.match(/\b(?:19|20)\d{2}[-\/](\d{1,2})\b/);
@@ -268,7 +274,7 @@
   function windowOf(c) {
     const w = c.when;
     if (w && validDay(w.from) && validDay(w.to || w.from)) return { from: w.from, to: w.to || w.from, label: s(w.label) || s(c.contactWhen), how: s(w.how) };
-    return windowFromText(c.contactWhen);
+    return windowFromText(c.contactWhen, c.whenSetAt);
   }
 
   // ---- the buttons

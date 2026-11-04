@@ -239,11 +239,19 @@ def window_from_text(text, today):
     return None
 
 
+def _said_on(c, today):
+    """The day their words were written (whenSetAt, Central time), else today.
+    Words with no year are read from it, never from today (customers.js
+    windowFromText): "early spring" stays that spring until they are reached."""
+    t = _instant(c.get("whenSetAt") or "")
+    return t.astimezone(TZ).date() if t else today
+
+
 def window_of(c, today):
     w = c.get("when") or {}
     if isinstance(w, dict) and _DAY.match(str(w.get("from") or "")) and _DAY.match(str(w.get("to") or w.get("from"))):
         return {"from": w["from"], "to": w.get("to") or w["from"]}
-    return window_from_text(c.get("contactWhen"), today)
+    return window_from_text(c.get("contactWhen"), _said_on(c, today))
 
 
 def _reached_for(c, w):
