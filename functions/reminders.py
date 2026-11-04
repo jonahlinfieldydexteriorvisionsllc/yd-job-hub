@@ -198,6 +198,10 @@ def run():
         # "Last time on a job like this": each crew page's lessons from the
         # jobs that fit it, once an hour (lessons.py).
         ("job lessons", (), lambda: _job_lessons(db, now)),
+        # Change orders: who needs to hear what, and each one signed (or added
+        # without a signature) put on the job's QuickBooks invoice
+        # (changeorders.py).
+        ("change orders", (), lambda: _change_orders(db, people, now)),
         # The posting schedule: a Facebook / Google / Nextdoor post whose
         # time has come goes up (social.py; planned after the summaries).
         # Last: a slow Facebook photo upload holds nothing else up.
@@ -245,6 +249,11 @@ def _diggers(db, people, now):
 def _job_lessons(db, now):
     import lessons
     return lessons.crew_pages(db, now)
+
+
+def _change_orders(db, people, now):
+    import changeorders
+    return changeorders.run(db, people, now)
 
 
 def _set_reminders(db, people, cals, since, now):
@@ -1505,6 +1514,9 @@ def _activity(db, people, now, cals, boards, prefs):
 
     try:
         for board_id, board, ref, _ in boards:
+            # Change orders tell their own news (changeorders.py).
+            if board_id == "changeorders":
+                continue
             for s in ref.collection("cards").where("updatedAt", ">", _iso_z(since)).stream():
                 k = s.to_dict() or {}
                 by = str(k.get("updatedBy") or "").strip().lower()

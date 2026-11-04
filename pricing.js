@@ -2493,6 +2493,19 @@
     byLine,
     // What bringing a job's order costs (estimate.js orderDelivery): the same sums.
     deliveries,
+    // One material on a change order (changeorders.js): what an estimate
+    // would charge the customer for it, markup and waste by its kind, and
+    // whether it is taxed -- by its kind, and one taxed "as the job is" by the
+    // service it is for. Only a figure to start from: he changes either.
+    // { cents (null when it has no price to go by), taxable }
+    materialPrice: (m, service) => {
+      const c = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {}, prices: {}, vendors: {} };
+      const ctx = { rules: rules, items: c.items || {}, prices: c.prices || {}, vendors: c.vendors || {}, quotes: {} };
+      const l = materialLine(m, ctx);
+      const way = kindTax(rules, l.category);
+      return { cents: l.clientCents > 0 ? l.clientCents : null,
+               taxable: way === 'always' ? true : way === 'never' ? false : workTaxable({ title: service || '' }, ctx) };
+    },
     // Delivered or picked up: one material's way by the rules (Supplies
     // shows it), and lines that are not an estimate's (the order list).
     wayOf: x => wayOf(x, rules), waysFor,

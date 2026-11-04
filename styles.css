@@ -4803,6 +4803,53 @@
   /* Signed papers (signatures.js, 15 Oct 2026): the window where the
      customer signs, and the list on the job. */
   .sg-modal { max-width:720px; }
+  .sg-locked { padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:10px; font-size:15px; line-height:1.45; overflow-wrap:anywhere; }
+  .sg-price-row { display:flex; justify-content:space-between; gap:12px; }
+  .sg-price-row.total { margin-top:4px; padding-top:4px; border-top:1px solid var(--border); font-weight:700; }
+  /* Change orders (changeorders.js). Tap buttons a thumb can find, one under
+     another: nothing here scrolls sideways on a phone. */
+  .co-chosen { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:10px 12px; min-height:44px;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px; font-size:15px; }
+  .co-chosen > span { min-width:0; overflow-wrap:anywhere; }
+  .co-chosen small { display:block; color:var(--muted); font-size:12.5px; }
+  .co-chosen .link-btn { flex:none; min-height:44px; padding:0 4px; }
+  .co-picks { display:flex; flex-direction:column; gap:6px; margin-top:6px; }
+  .co-pick { display:block; width:100%; min-height:44px; padding:9px 12px; text-align:left; color:var(--text); background:var(--surface);
+    border:1px solid var(--border); border-radius:10px; font:inherit; font-size:15px; cursor:pointer; overflow-wrap:anywhere; }
+  .co-pick small { display:block; color:var(--muted); font-size:12.5px; }
+  .co-pick:hover, .co-pick:focus-visible { border-color:var(--brand-ink); }
+  .co-pick.typed { border-style:dashed; color:var(--brand-ink); font-weight:600; }
+  .co-mats { display:flex; flex-direction:column; gap:8px; }
+  .co-mat { padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:10px; }
+  .co-mat-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; font-size:15px; font-weight:600; overflow-wrap:anywhere; }
+  .co-x { flex:none; width:44px; height:44px; margin:-8px -8px -8px 0; color:var(--muted); background:none; border:0; font-size:20px; cursor:pointer; }
+  .co-mat-row { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:8px; margin-top:8px; }
+  .co-mat-row input { min-height:44px; min-width:0; }
+  .co-mat-unit { align-self:center; color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
+  .co-mat-price { display:grid; grid-template-columns:minmax(0, 1fr) auto; align-items:center; gap:10px; margin-top:8px; }
+  .co-mat-price .chk { padding:0; min-height:44px; }
+  .co-money-in { display:flex; align-items:center; gap:6px; min-width:0; }
+  .co-money-in input { min-height:44px; min-width:0; width:100%; }
+  .co-money { margin-top:12px; padding:10px 12px; background:var(--surface); border:1px solid var(--border); border-radius:10px; font-size:15px; }
+  .co-money > div { display:flex; justify-content:space-between; gap:12px; padding:2px 0; }
+  .co-money .total { margin-top:4px; padding-top:6px; border-top:1px solid var(--border); font-weight:700; }
+  .co-said { margin-top:6px; font-size:13px; line-height:1.4; color:var(--text); overflow-wrap:anywhere; }
+  .co-said.bad { color:var(--st-now); font-weight:600; }
+  .co-said.ok { color:var(--pos); font-weight:600; }
+  .co-card-sum { font-weight:700; font-size:14px; }
+  .bd-card.co-card { cursor:pointer; }
+  .co-card .bd-card-act { min-height:44px; padding:8px 14px; }
+  .co-card .bd-card-act:disabled { opacity:.5; cursor:default; }
+  .co-acts { display:flex; flex-direction:column; gap:8px; margin-top:14px; }
+  .co-acts .btn { width:100%; min-height:44px; justify-content:center; }
+  .co-list { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+  .co-row { display:grid; grid-template-columns:minmax(0, 1fr) auto; gap:2px 10px; width:100%; min-height:44px; padding:10px 12px; text-align:left;
+    color:var(--text); background:var(--surface); border:1px solid var(--border); border-radius:10px; font:inherit; font-size:14px; cursor:pointer; }
+  .co-row b { overflow-wrap:anywhere; }
+  .co-row span { color:var(--muted); font-size:12.5px; overflow-wrap:anywhere; }
+  .co-row .co-row-total { color:var(--text); font-weight:700; font-size:14px; text-align:right; }
+  .co-row .co-row-stage { text-align:right; }
+  .co-row:hover, .co-row:focus-visible { border-color:var(--brand-ink); }
   .sg-for { margin:0 0 12px; color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
   .sg-for b { color:var(--text); }
   .sg-kinds { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; }

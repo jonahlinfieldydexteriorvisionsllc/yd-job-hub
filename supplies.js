@@ -2215,6 +2215,9 @@
   window.YDSupplies = {
     render: render, parseTable: parseTable, parseCents: parseCents,
     catalog: () => ({ items: items, prices: prices, vendors: vendors, pricesReady: pricesReady }),
+    // A screen that picks from Supplies on a crew phone, where the listeners
+    // otherwise wait for the Supplies tab (changeorders.js).
+    ensure: () => { if (!started && authKey) start(); },
     findSupply: findSupply, setPrice: setPrice, addSourced: addSourced, setItemInfo: setItemInfo,
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
     websiteUrl: websiteUrl,       // app.js, Materials to Order

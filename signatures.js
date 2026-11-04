@@ -28,7 +28,9 @@
 //     (functions/jobdocs.py, quickbooks.add_change_order).
 //   - The crew collect sign-offs and anything else; a change order, which
 //     carries a price, is for whoever may change jobs. The crew never see a
-//     price here.
+//     price here -- but for a card on the Change orders board (signCard,
+//     changeorders.js), which Jonah priced for the customer to see: this same
+//     window, its words and price locked to the card.
 
 (function () {
   'use strict';
@@ -52,6 +54,7 @@
   const can = (area, level) => typeof ydCan === 'function' && ydCan(area, level);
   const newId = () => 'sg' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const money = c => (c < 0 ? '−' : '+') + '$' + (Math.abs(c) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const plain = c => (c < 0 ? '−' : '') + '$' + (Math.abs(c || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const when = iso => {
     const d = new Date(iso);
     return isNaN(d) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
@@ -272,7 +275,7 @@
 
   // --------------------------------------------------------- the window
 
-  let form = null;             // { jobId, info, kind }
+  let form = null;             // { jobId, info, kind, card (signCard) }
   function modal() {
     let m = el('sgModal');
     if (!m) {
@@ -283,6 +286,8 @@
         '<button class="modal-close" onclick="sgClose()" aria-label="Close">&times;</button></div><div class="modal-body" id="sgBody"></div></div>';
       document.body.appendChild(m);
     }
+    // In front of whatever opened it (the crew's job page, made later).
+    if (!m.classList.contains('active')) document.body.appendChild(m);
     m.classList.add('active');
     return el('sgBody');
   }
@@ -315,15 +320,40 @@
       '</div>';
   };
 
+  // The price and what it is for, as the customer reads them, on the window
+  // and on the PDF: [[what, cents], ...] with the total last.
+  const priceRows = p => [['Material', p.materialCents], ['Labor', p.laborCents], ['Tax', p.taxCents], ['Total', p.totalCents]];
+  function lockedHtml(c) {
+    const said = (label, html) => '<div class="field"><span class="label">' + label + '</span><div class="sg-locked">' + html + '</div></div>';
+    return (c.service ? said('Service', esc(c.service)) : '') +
+      said('What is changing', esc(c.what).replace(/\n/g, '<br>')) +
+      (c.materials.length ? said('Materials', c.materials.map(esc).join('<br>')) : '') +
+      said('Price', priceRows(c.parts).map(([n, v], i) => '<div class="sg-price-row' + (i === 3 ? ' total' : '') + '"><span>' + n + '</span><span>' + plain(v) + '</span></div>').join(''));
+  }
+
+  // A card on the Change orders board: straight to step two, every word and
+  // figure the card's -- only the schedule box is theirs. Works with no
+  // signal, as signing always has. { cardId, jobId, info, service, what,
+  // materials: [words], parts: { materialCents, laborCents, taxCents,
+  // totalCents }, onSaved(paper id, record) }
+  function signCard(c) {
+    if (!signedIn()) { showToast('Sign in first'); return; }
+    form = { jobId: c.jobId, info: c.info, kind: '', card: c };
+    window.sgKind('change');
+  }
+
   // Step two: the words, the signature, the name.
   window.sgKind = function (kind) {
-    if (!form || !KIND_NAME[kind] || (kind === 'change' && !can('jobs', 'change'))) return;
+    if (!form || !KIND_NAME[kind] || (kind === 'change' && !can('jobs', 'change') && !form.card)) return;
     form.kind = kind;
     const info = form.info;
     const field = (id, label, html) => '<div class="field"><span class="label">' + label + '</span>' + html + '</div>';
     const area = (id, ph, val) => '<textarea id="' + id + '" rows="4" placeholder="' + esc(ph) + '" oninput="sgReady()">' + esc(val || '') + '</textarea>';
     let body = '';
-    if (kind === 'change') {
+    if (form.card) {
+      body = lockedHtml(form.card) +
+        field('sgSchedule', 'What it does to the schedule', '<input id="sgSchedule" placeholder="e.g. One more day; no change" oninput="sgReady()">');
+    } else if (kind === 'change') {
       body = field('sgWhat', 'What is changing', area('sgWhat', 'e.g. Add a 3-ft extension to the patio on the garage side')) +
         '<div class="field"><span class="label">Price change</span><div class="sg-price">' +
           '<label class="sg-sign"><input type="radio" name="sgSign" value="1" checked onchange="sgReady()"> Adds</label>' +
@@ -348,11 +378,13 @@
       '<p class="hint">Signed now, ' + esc(new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })) +
         ', collected by ' + esc(myName()) + '. The PDF is saved on the job' + (navigator.onLine === false ? ' — and sent as soon as there is signal.' : '.') + '</p>' +
       '<div class="field-actions"><button class="btn btn-filled" id="sgSave" onclick="sgSave()" disabled>Sign &amp; save</button>' +
-        '<button class="btn btn-sm" onclick="sgStart(\'' + safe(form.jobId) + '\')">Back</button></div>';
+        (form.card ? '<button class="btn btn-sm" onclick="sgClose()">Cancel</button>'
+          : '<button class="btn btn-sm" onclick="sgStart(\'' + safe(form.jobId) + '\')">Back</button>') + '</div>';
     startPad(el('sgPad'));
     sgReady();
   };
   function amountCents() {
+    if (form && form.card) return form.card.parts.totalCents || null;
     // A minus typed in the box means the same as "Takes off" (the box once
     // read it as no price change at all, and said nothing).
     const v = Math.abs(parseFloat((el('sgAmount') || {}).value));
@@ -368,7 +400,7 @@
   function missing() {
     if (!form) return 'x';
     const v = id => String((el(id) || {}).value || '').trim();
-    if (form.kind === 'change' && !v('sgWhat')) return 'Say what is changing';
+    if (form.kind === 'change' && !form.card && !v('sgWhat')) return 'Say what is changing';
     if (form.kind === 'signoff' && !v('sgWork')) return 'Say what work is finished';
     if (form.kind === 'other' && (!v('sgTitle') || !v('sgText'))) return 'Fill in what it is and the words';
     if (!pad || pad.ink < 25) return 'The customer signs in the box';
@@ -409,7 +441,7 @@
     const rec = {
       jobId: f.jobId, jobName: info.name, kind: f.kind,
       title: f.kind === 'other' ? v('sgTitle').slice(0, 200) : KIND_NAME[f.kind],
-      what: f.kind === 'change' ? v('sgWhat').slice(0, 5000) : null,
+      what: f.card ? String(f.card.what).slice(0, 5000) : f.kind === 'change' ? v('sgWhat').slice(0, 5000) : null,
       amountCents: f.kind === 'change' ? amountCents() : null,
       schedule: f.kind === 'change' ? v('sgSchedule').slice(0, 500) : null,
       work: f.kind === 'signoff' ? v('sgWork').slice(0, 5000) : null,
@@ -420,6 +452,8 @@
       signedName: v('sgName').slice(0, 120), signedAt: signedAt.toISOString(),
       by: uid, byName: myName(),
     };
+    // Signed for a card: which one, and what it came to, part by part.
+    if (f.card) Object.assign(rec, { cardId: f.card.cardId, service: f.card.service || '', materials: f.card.materials, parts: f.card.parts });
     const btn = el('sgSave');
     if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
     try {
@@ -442,6 +476,8 @@
         showToast(e && e.code === 'permission-denied' ? 'Not allowed to save that' : 'Not saved yet — it will try again');
       });
       docs[id] = Object.assign({ _local: true }, rec);
+      // After the paper, so the paper reaches the server first (it names it).
+      if (f.card && f.card.onSaved) f.card.onSaved(id, rec);
       sgClose();
       drawAll();
       send(item);
@@ -466,8 +502,11 @@
     if (r.jobNumber) parts.push({ text: 'Job #: ' + r.jobNumber, after: 1 });
     parts.push({ text: 'Date: ' + day.toLocaleDateString('en-US', { dateStyle: 'long' }), after: 4 }, { rule: true });
     if (r.kind === 'change') {
+      if (r.service) parts.push({ label: 'Service', text: r.service });
       parts.push({ label: 'What is changing', text: r.what });
-      if (r.amountCents) parts.push({ label: 'Price change', text: money(r.amountCents) + (r.amountCents > 0 ? ' (added to the job)' : ' (taken off the job)') });
+      if (r.materials && r.materials.length) parts.push({ label: 'Materials', text: r.materials.join('\n') });
+      if (r.parts) parts.push({ label: 'Price', text: priceRows(r.parts).map(([n, v]) => n + ': ' + plain(v)).join('\n') });
+      else if (r.amountCents) parts.push({ label: 'Price change', text: money(r.amountCents) + (r.amountCents > 0 ? ' (added to the job)' : ' (taken off the job)') });
       if (r.schedule) parts.push({ label: 'Schedule', text: r.schedule });
     } else if (r.kind === 'signoff') {
       parts.push({ label: 'Work finished', text: r.work });
@@ -704,6 +743,6 @@
   window.addEventListener('online', sendWaiting);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) sendWaiting(); });
 
-  window.YDSignatures = { mount: mount, jobShown: jobShown, waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
+  window.YDSignatures = { mount: mount, jobShown: jobShown, signCard: signCard, waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
                           _pdf: { layout: layout, pdfBytes: pdfBytes, wrap: wrap } };
 })();

@@ -965,6 +965,8 @@
       (preview ? '' : '<div class="cj-receipt"><button class="btn cj-go-btn" onclick="rcPhotoForJob(\'' + safe(id) + '\')">' +
         '🧾 Add a receipt for this job</button></div>') +
       '<div class="cj-photos" id="cjPhotos" data-job="' + safe(id) + '"></div>' +
+      // What changed on the job and is to be priced and signed (changeorders.js).
+      (preview ? '' : '<div class="cj-sigs" id="cjChanges" data-job="' + safe(id) + '"></div>') +
       // Sign-offs and anything else the customer signs (signatures.js).
       (preview ? '' : '<div class="cj-sigs" id="cjSigs" data-job="' + safe(id) + '"></div>') +
     '</div>';
@@ -1001,13 +1003,13 @@
     if (window.YDJobIssues && YDJobIssues.mountLike) YDJobIssues.mountLike(el('cjLessons'), id);
     if (window.YDJobLog) YDJobLog.mount(el('cjLog'), id, j, preview);
     // What the signed PDF says about the job: the crew have no job form.
-    if (window.YDSignatures && el('cjSigs') && j) {
-      YDSignatures.mount(el('cjSigs'), id, {
-        name: j.name || 'Customer', customer: j.name || '',
-        address: [j.address, j.city, [j.state, j.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
-        number: j.est || '', work: (j.work || []).map(w => w.title).filter(Boolean).slice(0, 20),
-      });
-    }
+    const paper = j && {
+      name: j.name || 'Customer', customer: j.name || '',
+      address: [j.address, j.city, [j.state, j.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
+      number: j.est || '', work: (j.work || []).map(w => w.title).filter(Boolean).slice(0, 20),
+    };
+    if (window.YDSignatures && el('cjSigs') && j) YDSignatures.mount(el('cjSigs'), id, paper);
+    if (window.YDChangeOrders && el('cjChanges') && j) YDChangeOrders.mount(el('cjChanges'), id, paper);
   }
   const pageOpen = () => { const m = el('crewJobModal'); return !!(m && m.classList.contains('active')); };
   // The clock changed (clocked in here, or out): the button and the bar

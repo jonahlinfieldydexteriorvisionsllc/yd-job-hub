@@ -67,6 +67,7 @@ const SHELL = [
   './orderahead.js',
   './jobphotos.js',
   './signatures.js',
+  './changeorders.js',
   './jobissues.js',
   './joblog.js',
   './inboxdesk.js',

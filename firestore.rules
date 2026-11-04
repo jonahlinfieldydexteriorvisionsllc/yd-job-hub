@@ -894,16 +894,23 @@ service cloud.firestore {
     // what was signed and of the PDF; the PDF itself is in Storage at `path`.
     // Whoever may see jobs reads them all; the crew read the ones they
     // collected. Anyone working collects a sign-off or "other"; a change
-    // order -- which can carry a price -- only whoever may change jobs. Once
-    // signed nothing about it changes: the phone only marks its PDF sent
-    // (pending false), and the server notes an email or QuickBooks.
+    // order -- which can carry a price -- only whoever may change jobs, or
+    // anyone working when it is signed for a card on the Change orders board
+    // that Jonah has priced for this job (signsCard). Once signed nothing
+    // about it changes: the phone only marks its PDF sent (pending false),
+    // and the server notes an email or QuickBooks.
     match /jobDocs/{docId} {
+      function signsCard() {
+        let d = request.resource.data;
+        let card = get(/databases/$(database)/documents/boards/changeorders/cards/$(d.cardId)).data;
+        return d.kind == 'change' && card.get('jobId', '') == d.jobId && card.get('price', null) != null;
+      }
       allow read: if canSee('jobs') || (isStaff() && resource.data.by == request.auth.uid);
       allow create: if isStaff() && docId.matches('sg[a-z0-9]+')
         && request.resource.data.by == request.auth.uid
         && request.resource.data.kind in ['change', 'signoff', 'other']
-        && (request.resource.data.kind != 'change' || canChange('jobs'))
-        && (!('amountCents' in request.resource.data) || request.resource.data.amountCents == null || canChange('jobs'))
+        && (request.resource.data.kind != 'change' || canChange('jobs') || signsCard())
+        && (!('amountCents' in request.resource.data) || request.resource.data.amountCents == null || canChange('jobs') || signsCard())
         && request.resource.data.jobId is string
         && request.resource.data.jobId.size() > 0 && request.resource.data.jobId.size() <= 100
         && request.resource.data.path == 'jobDocs/' + request.resource.data.jobId + '/' + request.auth.uid + '/' + docId + '.pdf'
@@ -1059,19 +1066,54 @@ service cloud.firestore {
           || (canSee('boards') && openBoard())
           || (isWorker() && request.auth.uid in boardDoc().visibleTo)
           || (isWorker() && 'crew' in resource.data.labels && openBoard());
+
+        // The Change orders board (changeorders.js; Jonah, 3 Nov 2026): the
+        // crew put in the job, the service, what is changing and the
+        // materials; only the owner prices it, and the customer signs that
+        // price -- so on this board alone an editor, or an admin who may
+        // change boards, is held to this list. The price, "add it without a
+        // signature" and what QuickBooks said are the owner's and the
+        // server's. Priced, a card stands as it is, but for the signature:
+        // to Signed, naming a signed paper that names this card.
+        function coHand() { return boardEditor() || (canChange('boards') && openBoard()); }
+        function coCreate() {
+          let d = request.resource.data;
+          return coHand() && d.get('byUid', '') == request.auth.uid && d.get('column', '') == 'co_price'
+            && !d.keys().hasAny(['price', 'noSignature', 'signDoc', 'signedAt', 'signedName', 'signedBy', 'qb', 'qbTry', 'said']);
+        }
+        function coUpdate() {
+          let was = resource.data;
+          let d = request.resource.data;
+          let touched = d.diff(was).affectedKeys();
+          return coHand() && (
+            (was.get('price', null) == null
+              && touched.hasOnly(['title', 'service', 'what', 'materials', 'jobId', 'jobName', 'jobNum', 'jobAddress', 'jobCustomer',
+                               'order', 'updatedAt', 'updatedBy']))
+            || (was.get('price', null) != null && was.get('column', '') == 'co_sign' && d.get('column', '') == 'co_signed'
+              && touched.hasOnly(['column', 'signDoc', 'signedAt', 'signedName', 'signedBy', 'updatedAt', 'updatedBy'])
+              && d.signDoc is string && d.signDoc.matches('sg[a-z0-9]+')
+              && get(/databases/$(database)/documents/jobDocs/$(d.signDoc)).data.get('cardId', '') == cardId));
+        }
+        // One not priced yet is nobody's money: it may be taken back.
+        function coDelete() { return coHand() && resource.data.get('price', null) == null; }
+
         // Crew can move a card they can see and tick its checklist -- and
         // nothing else. Without the field list, "can move a card" would also
         // mean "can rewrite what it says or who it is assigned to". Only the
         // owner (or an admin who may change boards) creates or deletes.
         allow update: if isOwner()
-          || (canChange('boards') && openBoard())
-          || boardEditor()
-          || (isWorker()
-              && (request.auth.uid in boardDoc().visibleTo
-                  || ('crew' in resource.data.labels && openBoard()))
-              && request.resource.data.diff(resource.data).affectedKeys()
-                   .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']));
-        allow create, delete: if isOwner() || (canChange('boards') && openBoard()) || boardEditor();
+          || (boardId == 'changeorders' ? coUpdate()
+              : ((canChange('boards') && openBoard())
+                 || boardEditor()
+                 || (isWorker()
+                     && (request.auth.uid in boardDoc().visibleTo
+                         || ('crew' in resource.data.labels && openBoard()))
+                     && request.resource.data.diff(resource.data).affectedKeys()
+                          .hasOnly(['column', 'order', 'checklist', 'doneAt', 'updatedAt', 'updatedBy']))));
+        allow create: if isOwner()
+          || (boardId == 'changeorders' ? coCreate() : ((canChange('boards') && openBoard()) || boardEditor()));
+        allow delete: if isOwner()
+          || (boardId == 'changeorders' ? coDelete() : ((canChange('boards') && openBoard()) || boardEditor()));
       }
     }
 

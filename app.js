@@ -1077,7 +1077,7 @@ function switchTab(name) {
 // A tax or filing date coming up (functions/deadlines.py) opens its window;
 // so does a post ready, held or not gone up (functions/social.py).
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
-  deadlines: 'openDeadlines', posts: 'openPosts' };
+  deadlines: 'openDeadlines', posts: 'openPosts', changeorders: 'openChangeOrders' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
@@ -4825,6 +4825,7 @@ function showStorageError() {
 function jobOnScreen() {
   if (window.YDJobPhotos) window.YDJobPhotos.jobShown(currentJobId);
   if (window.YDSignatures) window.YDSignatures.jobShown(currentJobId);
+  if (window.YDChangeOrders) window.YDChangeOrders.jobShown(currentJobId);
   if (window.YDEndOfDay) window.YDEndOfDay.jobShown(currentJobId);
   if (window.YDJobIssues) window.YDJobIssues.jobShown(currentJobId);
   if (window.YDJobLog) window.YDJobLog.jobShown(currentJobId);

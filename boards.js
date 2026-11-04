@@ -116,6 +116,7 @@
   const MAINTENANCE = 'maintenance';
   const CREW_BOARD = 'crew';         // Crew tasks: where the recurring crew tasks go (recurring.js)
   const PICKUPS_BOARD = 'pickups';   // made by the server from "ready for pickup" emails (receipts.py)
+  const CHANGE_ORDERS = 'changeorders';   // its cards and window are changeorders.js's
 
   const el = id => document.getElementById(id);
   const val = id => ((el(id) || {}).value || '').trim();
@@ -422,7 +423,7 @@
   // settings), else where the app's own boards belong by what they are for
   // (GROUP_OF), else Mine. Fewer boards (a crew phone) stay one row.
   const GROUPS = [['work', '🛠 Work'], ['mine', '📋 Mine'], ['plans', '💡 Plans']];
-  const GROUP_OF = { bids: 'work', jobs: 'work', crew: 'work', pickups: 'work', maintenance: 'work',
+  const GROUP_OF = { bids: 'work', jobs: 'work', crew: 'work', pickups: 'work', maintenance: 'work', changeorders: 'work',
                      todo: 'mine', tobuy: 'mine', inbox: 'mine', winter: 'plans', wishes: 'plans', 'claude-home': 'plans' };
   const GROUP_FROM = 7;
   const groupOf = b => (GROUPS.some(g => g[0] === (b && b.group)) ? b.group : GROUP_OF[b && b.id] || 'mine');
@@ -529,7 +530,7 @@
           // own button is -- one thing, one name.
           (editsBoard(board)
             ? '<button class="btn btn-sm btn-filled bd-add-board" onclick="addCard(\'' + safeId(board.id) + '\', \'' +
-              safeId(board.columns[0].id) + '\')">+ Add a card</button>' : '') +
+              safeId(board.columns[0].id) + '\')">' + (board.id === CHANGE_ORDERS ? '+ Add a change order' : '+ Add a card') + '</button>' : '') +
           // The recurring crew tasks land here, on Crew tasks (recurring.js).
           // Named as the calendar's layer of them is, "Recurring crew tasks":
           // one thing, one name.
@@ -880,7 +881,7 @@
       ? (b.ownerOnly ? '🔒 Private — ' + (shared.length ? 'you and ' + shared.map(esc).join(', ') : 'only you')
         : shared.length ? 'Shared with ' + shared.map(esc).join(', ') : 'Not shared with the crew')
       : editsBoard(b) ? 'Shared with you — you can add and change cards' : 'Shared with you') +
-      (touch && canMove(b.id) ? '. Tap a card to move it.' : '');
+      (b.id === CHANGE_ORDERS ? '. A card moves on as it is priced and signed.' : touch && canMove(b.id) ? '. Tap a card to move it.' : '');
   }
 
   // ------------------------------------------------- urgency & the filter
@@ -1029,6 +1030,7 @@
   function clearable(board, k) {
     if (stillWanted(k)) return false;
     if (board.id === MAINTENANCE && String(k.id || '').indexOf('eq-') === 0) return false;
+    if (board.id === CHANGE_ORDERS) return false;     // the job's record of what changed
     if (k.recurring && String(k.due || '') >= localDay()) return false;
     return true;
   }
@@ -1233,7 +1235,7 @@
   function noteSuggest(text) {
     const t = wordsOfNote(text);
     const has = re => re.test(t);
-    const targets = visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && editsBoard(b));
+    const targets = visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && b.id !== CHANGE_ORDERS && editsBoard(b));
     const on = id => targets.find(b => b.id === id) || null;
     const named = re => targets.find(b => re.test(String(b.name || '').toLowerCase())) || null;
     const kindOn = (b, id) => id && YDRemind.boardKinds(b).some(k => k.id === id) ? id : null;
@@ -1415,8 +1417,10 @@
     // 2026: "i shouldnt have to scroll to the bottom of the board to add
     // one"). A folded column on a phone keeps it too: one tap to add to an
     // empty column, without unfolding it first.
-    const add = editsBoard(board)
-      ? '<button class="bd-add-card bd-add-top" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">+ Add a card</button>'
+    const add = board.id === CHANGE_ORDERS && c.id !== board.columns[0].id ? ''
+      : editsBoard(board)
+      ? '<button class="bd-add-card bd-add-top" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
+        (board.id === CHANGE_ORDERS ? '+ Add a change order' : '+ Add a card') + '</button>'
       // Won, Lost and Paid are where jobs end up, not where they start.
       // A job added as finished has no photos yet, and only the owner may
       // finish one without them (addJobCard).
@@ -1695,6 +1699,7 @@
   }
 
   function storedCardHtml(board, k, inLastColumn) {
+    if (board.id === CHANGE_ORDERS && window.YDChangeOrders) return YDChangeOrders.cardHtml(k, inLastColumn);
     const labels = (k.labels || []).map(id => (board.labels || []).find(l => l.id === id)).filter(Boolean);
     const list = k.checklist || [];
     const done = list.filter(i => i.done).length;
@@ -2276,11 +2281,13 @@
 
   window.addCard = function (boardId, col) {
     if (!editsBoard(boards[boardId])) return;
+    if (boardId === CHANGE_ORDERS && window.YDChangeOrders) { YDChangeOrders.add(); return; }
     openCard = { boardId: boardId, cardId: '', column: col };
     renderCardEditor();
   };
 
   window.openCardDetail = function (boardId, cardId) {
+    if (boardId === CHANGE_ORDERS && window.YDChangeOrders) { YDChangeOrders.open(cardId); return; }
     openCard = { boardId: boardId, cardId: cardId };
     renderCardDetail();
   };
@@ -4084,7 +4091,7 @@
     learnedNotes: learnedNotes,
     learnFromNotes: learnFromNotes,
     inboxDrop: id => window.bdDeleteCard(inboxId(), id),
-    sortTargets: () => visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && editsBoard(b)),
+    sortTargets: () => visibleBoards().filter(b => !b.virtual && !/^inbox/.test(b.id) && b.id !== CHANGE_ORDERS && editsBoard(b)),
     // One board's columns drawn on another tab -- the Maintenance board on
     // the Equipment tab (equipment.js): the same cards, drag and card window
     // as here, the cards narrowed by `match` (its search) instead of this

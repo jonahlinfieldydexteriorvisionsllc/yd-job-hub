@@ -12,7 +12,8 @@ clearable):
   - a machine's service card (Maintenance, eq-...): it is the machine's NEXT
     service, reset when one is logged -- not a finished job;
   - a recurring card whose period is not over yet: recurring.js would make
-    it again, not done.
+    it again, not done;
+  - a change order: the job's record of what changed, shown on the job.
 And, here only, a card Claude's last word on asks him something (_asks_him).
 A Pickups card is noted as cleared on its board, so a "still waiting"
 reminder email for an order already picked up does not bring it back
@@ -27,6 +28,7 @@ KEEP_DAYS = 7
 CLEARED_DAYS = 60          # how long a cleared pickup is remembered
 PICKUPS = "pickups"
 MAINTENANCE = "maintenance"
+CHANGE_ORDERS = "changeorders"
 
 
 def _done_col(board):
@@ -76,6 +78,8 @@ def clearable(board_id, card_id, k, today):
     if _still_wanted(k):
         return False
     if board_id == MAINTENANCE and card_id.startswith("eq-"):
+        return False
+    if board_id == CHANGE_ORDERS:
         return False
     if k.get("recurring") and str(k.get("due") or "") >= today:
         return False

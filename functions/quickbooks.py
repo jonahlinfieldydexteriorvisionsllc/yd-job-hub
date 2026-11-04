@@ -2194,6 +2194,9 @@ def _lines_as_notes(e):
 
 MATERIAL_ITEM = re.compile(r"\bmaterials?\b", re.I)
 MATERIAL_BOILER = re.compile(r"^cost of materials? used in (a|the) project or service\.?$", re.I)
+# A change order's own words (add_change_order, add_card_order), on a materials
+# line or any other: not a material, and no down payment.
+CHANGE_ROW = re.compile(r"^(?:change order\b|signed by\b)", re.I)
 _QTY = r"(\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)"
 _ABOUT = r"(?:approx(?:imately|\.)?\s*|about\s+|~\s*)?"
 _UNIT = r"([A-Za-z][A-Za-z./' ]*?)?"
@@ -2264,7 +2267,7 @@ def _material(line):
     it gives none ("Screened topsoil:"); None when the line is not a
     material at all ("Material Delivery Included")."""
     s = line.strip().lstrip("-•*·–— ").strip()
-    if not s or MATERIAL_BOILER.match(s):
+    if not s or MATERIAL_BOILER.match(s) or CHANGE_ROW.match(s):
         return None
     if ":" in s:
         name, rest = (p.strip() for p in s.split(":", 1))
@@ -4016,7 +4019,8 @@ def _only_deposit(inv):
     line and nothing else): it bills part of the job, so it is not the job's
     price."""
     sold = [str((((ln.get("SalesItemLineDetail") or {}).get("ItemRef")) or {}).get("name") or "")
-            for ln in _flat_lines(inv.get("Line")) if ln.get("DetailType") == "SalesItemLineDetail" and _cents(ln.get("Amount"))]
+            for ln in _flat_lines(inv.get("Line")) if ln.get("DetailType") == "SalesItemLineDetail" and _cents(ln.get("Amount"))
+            and not CHANGE_ROW.match(str(ln.get("Description") or "").strip())]
     return bool(sold) and all(DOWN_PAYMENT.search(n) for n in sold)
 
 
@@ -4119,6 +4123,16 @@ def _email_to_take(jobs, inv_id, rec):
     return at if at and _new_email(j, at) else None
 
 
+def _emails_so_far(db, inv):
+    """The newest email of this invoice that has gone out: what a job taking
+    it now has taken, so the next look does not take it over a price typed
+    after this."""
+    doc = db.collection("invoices").document(str(inv.get("Id"))).get()
+    sent = list(((doc.to_dict() or {}) if doc.exists else {}).get("emails") or [])
+    sent.append((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))
+    return _newest_email(sent)
+
+
 def _take_emailed(db, jobs, jid, inv, at, end_names):
     """One job taking the invoice just seen emailed, from the job as it is now
     (the sweep's list is a moment old, and holds only SWEEP_FIELDS). Returns
@@ -4159,10 +4173,7 @@ def invoice_take(body, who=""):
     inv = _query_one("Invoice", "Id = '%s'" % _quote(iid))
     if not inv:
         return {"missing": True, "error": "QuickBooks has no such invoice now"}
-    doc = db.collection("invoices").document(iid).get()
-    sent = list(((doc.to_dict() or {}) if doc.exists else {}).get("emails") or [])
-    sent.append((inv.get("DeliveryInfo") or {}).get("DeliveryTime"))
-    got = _save_take(db, jid, job, inv, _newest_email(sent), who or "By hand", _end_names())
+    got = _save_take(db, jid, job, inv, _emails_so_far(db, inv), who or "By hand", _end_names())
     if not got:
         return {"missing": True, "error": "That invoice has no work on it to take: it comes to nothing, or only a down payment"}
     patch, said = got
@@ -4953,23 +4964,231 @@ def sweep_stale_states():
 CHANGE_ORDER_ITEM = "Change order"
 
 
-def add_change_order(body):
-    doc_id = str(body.get("docId") or "").strip()
-    if not re.fullmatch(r"sg[a-z0-9]+", doc_id):
-        raise RuntimeError("Which change order?")
-    db = _db()
-    ref = db.collection("jobDocs").document(doc_id)
-    doc = ref.get().to_dict() or {}
-    if doc.get("kind") != "change":
-        raise RuntimeError("That is not a signed change order")
-    if (doc.get("qb") or {}).get("ok"):
-        return doc["qb"]
-    cents = doc.get("amountCents")
-    if not isinstance(cents, int) or cents == 0:
-        raise RuntimeError("This change order has no price change to add")
+# ------------------------------------------- the Change orders board
+#
+# Jonah (3 Nov 2026): "change order board where i enter the change orders
+# basic info with service and price for material and labor then you enter them
+# onto their respective jobs". A card (changeorders.js) priced by him, then
+# signed or added without a signature, goes on the job's invoice -- or a
+# still-Pending estimate -- one line per part, above the end lines, taxed on
+# the materials he said, and is never emailed: he sends the invoice when he is
+# ready. Labor is never taxed. The five-minute reminders run calls this
+# (changeorders.py), and so does "Add to QuickBooks" on the card's signed
+# paper (add_change_order), so the two can never add it twice: the card says
+# it is done (qb), a claim in reminderLog stops two at once, the request id
+# stops a repeat reaching QuickBooks twice, and lines already on the invoice
+# are not added again (a run that died after QuickBooks answered).
+
+CO_BOARD = "changeorders"
+CO_ADDED = "co_added"            # the board's done column, unless it names another
+CO_CLAIM_MINUTES = 15            # a claim older than this was left by a run that died
+CO_BY = "Change order"           # qbInvoiceTaken.by
+
+
+class SignAgain(RuntimeError):
+    """The paper was signed for a price the card no longer has."""
+
+
+class CardBusy(RuntimeError):
+    """Another run has this card (or left it moments ago)."""
+
+
+def _one_line(s):
+    return re.sub(r"\s+", " ", str(s or "").strip())
+
+
+def _material_words(m):
+    """A material as the customer reads it ("Road gravel: 3 tons"), the way
+    the estimate's materials lines say it. Never a price."""
+    name = _one_line(m.get("name"))
+    qty, unit = m.get("qty"), _one_line(m.get("unit"))
+    if isinstance(qty, bool) or not isinstance(qty, (int, float)) or qty <= 0:
+        return name
+    return "%s: %s" % (name, " ".join(x for x in ("%g" % qty, unit) if x))
+
+
+def _card_parts(k):
+    """What a priced card comes to on QuickBooks, as [(kind, cents, words,
+    taxed)]: the materials -- taxed and untaxed on a line each -- then labor.
+    The price is his, as he saved it; it must add up, or nothing goes on."""
+    price = k.get("price") or {}
+    of = {str(p.get("id")): p for p in price.get("items") or [] if isinstance(p, dict)}
+    plain, taxed = [], []
+    for m in k.get("materials") or []:
+        if isinstance(m, dict):
+            p = of.get(str(m.get("id"))) or {}
+            (taxed if p.get("taxable") is True else plain).append((int(p.get("cents") or 0), _material_words(m)))
+    labor = int(price.get("laborCents") or 0)
+    total = sum(c for c, _w in plain + taxed) + labor + int(price.get("taxCents") or 0)
+    if total != int(price.get("totalCents") or 0):
+        raise RuntimeError("The price on this card does not add up — save the price again")
+    service, what = _one_line(k.get("service")), _one_line(k.get("what"))
+    head = "CHANGE ORDER" + (": " + service if service else "")
+    out = []
+    for rows, is_taxed in ((taxed, True), (plain, False)):
+        cents = sum(c for c, _w in rows)
+        if cents:
+            words = ", ".join(w for _c, w in rows if w)
+            # No labor line to say what is changing: this one says it.
+            out.append(("material", cents, head + ", materials: " + words + (". " + what if what and not labor else ""), is_taxed))
+    if labor:
+        out.append(("labor", labor, head + ", labor: " + what, False))
+    return out
+
+
+def _card_line(kind, cents, text, taxed):
+    if kind == "labor":
+        return _line(_item_named(CHANGE_ORDER_ITEM), cents, text)
+    # The same products as an estimate's materials lines (_estimate_lines).
+    item = _item_named(TAXED_MATERIALS_ITEM, taxable=True) if taxed else _item_named(MATERIALS_ITEM)
+    return _line(item, cents, text, taxable=taxed)
+
+
+def _card_claim(db, card_id):
+    """This run's claim on adding a card, or None when another has it."""
+    ref = db.collection("reminderLog").document("coadd_" + card_id)
+    now = _now()
+    try:
+        ref.create({"at": now.isoformat()})
+        return ref
+    except AlreadyExists:
+        pass
+    t = _when((ref.get().to_dict() or {}).get("at"))
+    if t is not None and now - t < datetime.timedelta(minutes=CO_CLAIM_MINUTES):
+        return None
+    ref.set({"at": now.isoformat()})
+    return ref
+
+
+def _card_paper(db, card_id, k, paper):
+    """(id, record) of the paper signed for this card, or (None, None) when it
+    goes on without one. Raises what stands in the way."""
+    doc_id = str(k.get("signDoc") or paper or "")
+    if not doc_id:
+        if k.get("noSignature"):
+            return None, None
+        raise RuntimeError("This change order is not signed yet")
+    snap = db.collection("jobDocs").document(doc_id).get()
+    doc = (snap.to_dict() or {}) if snap.exists else {}
+    if doc.get("cardId") != card_id or doc.get("jobId") != k.get("jobId"):
+        raise RuntimeError("The signed paper does not match this change order")
     if doc.get("pending") or not doc.get("path"):
+        if k.get("noSignature"):
+            return None, None
         raise RuntimeError("The signed PDF is still on the phone it was signed on — it goes up when that phone has signal")
-    job = (db.collection("jobs").document(str(doc.get("jobId") or "")).get().to_dict() or {})
+    total = int((k.get("price") or {}).get("totalCents") or 0)
+    if int(doc.get("amountCents") or 0) != total:
+        raise SignAgain("Signed for %s, but the price is %s now — get it signed again"
+                        % (_money_text(int(doc.get("amountCents") or 0) / 100), _money_text(total / 100)))
+    return doc_id, doc
+
+
+def _card_done(db, ref, out, said):
+    """The card moved to the board's done column, saying what went where."""
+    stamp = _stamp()
+    snap = db.collection("boards").document(CO_BOARD).get()
+    col = ((snap.to_dict() or {}) if snap.exists else {}).get("doneColumn") or CO_ADDED
+    ref.set({"column": col, "doneAt": stamp, "qb": out, "qbTry": None, "said": said,
+             "updatedAt": stamp, "updatedBy": "Job Hub"}, merge=True)
+
+
+def _job_of_card(db, jid):
+    snap = db.collection("jobs").document(jid).get() if jid else None
+    job = (snap.to_dict() or {}) if snap is not None and snap.exists else None
+    if not job or job.get("deletedAt") or job.get("removeWhy"):
+        raise RuntimeError("That job is gone, or marked to be taken off")
+    return job
+
+
+def add_card_order(card_id, paper=None):
+    """One card of the Change orders board onto its job's QuickBooks invoice
+    or Pending estimate, not emailed. Raises what stops it (the card stays,
+    and says so). `paper`: the signed paper, when a tap on it brought us here
+    before the card caught up. Returns what it did, as kept on the card (qb)."""
+    db = _db()
+    ref = db.collection("boards").document(CO_BOARD).collection("cards").document(card_id)
+    snap = ref.get()
+    k = (snap.to_dict() or {}) if snap.exists else None
+    if not k:
+        raise RuntimeError("That change order is not on the board any more")
+    if (k.get("qb") or {}).get("ok"):
+        return k["qb"]
+    if not k.get("price"):
+        raise RuntimeError("This change order has no price yet")
+    doc_id, doc = _card_paper(db, card_id, k, paper)
+    parts = _card_parts(k)
+    if not parts:
+        out = {"ok": True, "at": _now().isoformat(), "none": True}
+        _card_done(db, ref, out, "No price change, so nothing went on QuickBooks")
+        return out
+    jid = str(k.get("jobId") or "")
+    job = _job_of_card(db, jid)
+    claim = _card_claim(db, card_id)
+    if claim is None:
+        raise CardBusy("That change order is going on QuickBooks right now")
+    try:
+        entity, txn = _change_target(job)
+        signed = str((doc or {}).get("signedAt") or "")[:10]
+        tail = "\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if doc and signed else ""
+        lines = [l for l in txn.get("Line") or [] if l.get("DetailType") != "SubTotalLineDetail"]
+        new = [_card_line(kind, cents, words + tail, taxed) for kind, cents, words, taxed in parts]
+        # Already on it (a run that died after QuickBooks answered): only
+        # what is missing goes on.
+        fresh = [ln for ln in new if not _line_there(lines, ln)]
+        upd = txn
+        if fresh:
+            upd = _call("POST", entity.lower(), body={"Id": txn["Id"], "SyncToken": txn["SyncToken"], "sparse": True,
+                                                      "Line": _above_end(lines, fresh)},
+                        request_id=hashlib.sha1(("co|%s|%s" % (card_id, txn.get("SyncToken"))).encode()).hexdigest()).get(entity) or {}
+            if upd.get("TotalAmt") is None:     # no record in the answer: asked for
+                upd = _query_one(entity, "Id = '%s'" % _quote(txn["Id"])) or txn
+        number = str(upd.get("DocNumber") or txn.get("DocNumber") or "")
+        out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]), "docNumber": number,
+               "total": upd.get("TotalAmt"), "env": _env("QB_ENV", "sandbox"), "lines": len(new)}
+        if not fresh:
+            out["already"] = True
+        if doc and not (doc.get("qb") or {}).get("attachId"):
+            _attach_signed(entity, txn["Id"], doc_id, doc, signed, out)
+        word = "invoice" if entity == "Invoice" else "estimate"
+        said = "On %s #%s, new total %s, not emailed" % (word, number, _money_text(upd.get("TotalAmt")))
+        if entity == "Invoice":
+            said += _follow_invoice(db, jid, upd, out)
+        else:
+            said += ". The job follows once this estimate is made into its invoice"
+    except Exception:
+        try:
+            claim.delete()
+        except Exception as err:                        # noqa: BLE001 -- taken up when it is old
+            print("change order %s: claim not given back: %s" % (card_id, err))
+        raise
+    if doc_id:
+        db.collection("jobDocs").document(doc_id).set({"qb": out}, merge=True)
+    _card_done(db, ref, out, said)
+    return out
+
+
+def _follow_invoice(db, jid, inv, out):
+    """The job follows the invoice a change order just went on, now and not at
+    the next email (take_invoice): its price, lines and crew page, a job with
+    qbChangesOff too. The emails already sent stay counted as taken. The lines
+    are on, so nothing here undoes them: what goes wrong is said. Returns what
+    to add to the card's words."""
+    try:
+        job = _job_of_card(db, jid)
+        got = _save_take(db, jid, job, inv, _emails_so_far(db, inv), CO_BY, _end_names())
+    except Exception as err:                            # noqa: BLE001
+        print("change order on %s: job did not take the invoice: %s" % (jid, err))
+        return ". The job's price did not follow — tap Make it the price on the job"
+    if not got:
+        return ". That invoice is only a down payment, so the job's price did not move"
+    out["jobPrice"] = got[0]["jobPrice"]
+    return ""
+
+
+def _change_target(job):
+    """What a change order goes on: the job's invoice, else its estimate while
+    that still waits for an answer -- (entity, record). Raises when there is
+    neither."""
     env = _env("QB_ENV", "sandbox")
     inv, est = job.get("qbInvoiceRef") or {}, job.get("qbEstimate") or {}
     entity, txn = None, None
@@ -4983,27 +5202,79 @@ def add_change_order(body):
             entity, txn = "Estimate", found
     if not txn:
         raise RuntimeError("The job has no QuickBooks invoice or estimate yet — make one first")
+    return entity, txn
+
+
+def _line_there(lines, line):
+    """The same words AND the same price on a line already -- two change
+    orders signed the same day in the same words are two lines, and the
+    second one's price must reach the invoice."""
+    text, cents = str(line.get("Description") or "").strip(), _cents(line.get("Amount"))
+    return any(str(l.get("Description") or "").strip() == text and _cents(l.get("Amount")) == cents for l in lines)
+
+
+def _above_end(lines, new):
+    """Above the warranty and terms (the $0 lines that end it), not under them."""
+    at = len(lines)
+    while at > 0 and (lines[at - 1].get("DetailType") == "DescriptionOnly" or not _amount(lines[at - 1].get("Amount"))):
+        at -= 1
+    return lines[:at] + new + lines[at:]
+
+
+def _attach_signed(entity, txn_id, doc_id, doc, signed, out):
+    """The signed PDF onto the invoice or estimate. The lines are on: a PDF
+    that will not go is said, and can be attached by hand."""
+    try:
+        from firebase_admin import storage
+        pdf = storage.bucket("yd-job-hub.firebasestorage.app").blob(doc["path"]).download_as_bytes()
+        name = re.sub(r"[^A-Za-z0-9 ._-]+", "", "Change order signed %s.pdf" % signed).strip() or "Change order.pdf"
+        out["attachId"] = _upload(entity, txn_id, name, pdf)
+    except Exception as err:                            # noqa: BLE001 -- the line is on; the PDF can be attached by hand
+        print("change order %s: PDF not attached: %s" % (doc_id, err))
+        out["attachError"] = str(err)[:200]
+
+
+def add_change_order(body):
+    doc_id = str(body.get("docId") or "").strip()
+    if not re.fullmatch(r"sg[a-z0-9]+", doc_id):
+        raise RuntimeError("Which change order?")
+    db = _db()
+    ref = db.collection("jobDocs").document(doc_id)
+    doc = ref.get().to_dict() or {}
+    if doc.get("kind") != "change":
+        raise RuntimeError("That is not a signed change order")
+    if (doc.get("qb") or {}).get("ok"):
+        return doc["qb"]
+    # Signed for a card on the board: it goes on as the card, whoever gets
+    # there first, and only once.
+    if doc.get("cardId"):
+        out = add_card_order(str(doc["cardId"]), paper=doc_id)
+        ref.set({"qb": out}, merge=True)
+        return out
+    cents = doc.get("amountCents")
+    if not isinstance(cents, int) or cents == 0:
+        raise RuntimeError("This change order has no price change to add")
+    if doc.get("pending") or not doc.get("path"):
+        raise RuntimeError("The signed PDF is still on the phone it was signed on — it goes up when that phone has signal")
+    job = (db.collection("jobs").document(str(doc.get("jobId") or "")).get().to_dict() or {})
+    env = _env("QB_ENV", "sandbox")
+    entity, txn = _change_target(job)
 
     signed = str(doc.get("signedAt") or "")[:10]
     what = re.sub(r"\s+", " ", str(doc.get("what") or doc.get("title") or "").strip())
     text = "CHANGE ORDER" + (": " + what if what else "") + \
         ("\nSigned by %s on %s" % (str(doc.get("signedName") or "the customer").strip(), signed) if signed else "")
     lines = [l for l in txn.get("Line") or [] if l.get("DetailType") != "SubTotalLineDetail"]
+    line = _line(_item_named(CHANGE_ORDER_ITEM), cents, text)
     # Already on it (a tap again after the line went on but the PDF or the
-    # record did not): not a second time. The same words AND the same price
-    # -- two change orders signed the same day in the same words are two
-    # lines, and the second one's price must reach the invoice.
-    if any(str(l.get("Description") or "").strip() == text.strip() and _cents(l.get("Amount")) == cents for l in lines):
+    # record did not): not a second time.
+    if _line_there(lines, line):
         out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),
                "docNumber": str(txn.get("DocNumber") or ""), "total": txn.get("TotalAmt"), "env": env, "already": True}
         ref.set({"qb": out}, merge=True)
         return out
-    # Above the warranty and terms (the $0 lines that end it), not under them.
-    at = len(lines)
-    while at > 0 and (lines[at - 1].get("DetailType") == "DescriptionOnly" or not _amount(lines[at - 1].get("Amount"))):
-        at -= 1
-    lines.insert(at, _line(_item_named(CHANGE_ORDER_ITEM), cents, text))
-    upd = _call("POST", entity.lower(), body={"Id": txn["Id"], "SyncToken": txn["SyncToken"], "sparse": True, "Line": lines},
+    upd = _call("POST", entity.lower(), body={"Id": txn["Id"], "SyncToken": txn["SyncToken"], "sparse": True,
+                                              "Line": _above_end(lines, [line])},
                 # The invoice's version in the id: an update QuickBooks
                 # refused (it changed in between) is tried afresh next time,
                 # not answered with the old refusal.
@@ -5011,13 +5282,6 @@ def add_change_order(body):
     out = {"ok": True, "at": _now().isoformat(), "entity": entity, "id": str(txn["Id"]),
            "docNumber": str(upd.get("DocNumber") or txn.get("DocNumber") or ""),
            "total": upd.get("TotalAmt"), "env": env}
-    try:
-        from firebase_admin import storage
-        pdf = storage.bucket("yd-job-hub.firebasestorage.app").blob(doc["path"]).download_as_bytes()
-        name = re.sub(r"[^A-Za-z0-9 ._-]+", "", "Change order signed %s.pdf" % signed).strip() or "Change order.pdf"
-        out["attachId"] = _upload(entity, txn["Id"], name, pdf)
-    except Exception as err:                            # noqa: BLE001 -- the line is on; the PDF can be attached by hand
-        print("change order %s: PDF not attached: %s" % (doc_id, err))
-        out["attachError"] = str(err)[:200]
+    _attach_signed(entity, txn["Id"], doc_id, doc, signed, out)
     ref.set({"qb": out}, merge=True)
     return out
