@@ -262,6 +262,12 @@
   const NOT_RECEIPT = window.YDStages.RECEIPT_NOT || 'notreceipt';
   const toPayNow = r => !!r && stageOf(r).id === 'topay';
   const notReceiptNow = r => !!r && stageOf(r).id === 'notreceipt';
+  // What the 🚫 button says. A bill plainly is "not a receipt" until it's
+  // paid, so those words on a bill read as true of every real one -- and a tap
+  // teaches the reader to pass over that store's mail (Jonah, 3 Nov 2026:
+  // "why do invoices to pay have a not a receipt button"; he had tapped it on
+  // real bills). On a bill the button asks the question it really asks.
+  const notWord = r => (toPayNow(r) || (!!r && r.docType === 'invoice')) ? 'Not a bill' : 'Not a receipt';
   // To sort and from the new mail -- not from the year's pull (pulledHtml).
   const newToSort = r => toSortNow(r) && !r.pulled;
   function moved(r, patch, who) {
@@ -993,7 +999,7 @@
     delete ticked[rid]; delete chosen[rid]; delete splitting[rid]; delete dest[rid];
     write(rid, Object.assign({}, patch));
     learn(rid, pats, true);
-    const say = '🚫 ' + (r.vendor || 'It') + ' — not a receipt. ' + (skip ? 'Mail like it is passed over from now on.'
+    const say = '🚫 ' + (r.vendor || 'It') + ' — ' + notWord(r).toLowerCase() + '. ' + (skip ? 'Mail like it is passed over from now on.'
       : pats.length ? 'Claude is shown it as an example (other receipts look like it).' : 'Under All receipts → 🚫 Not receipts.');
     if (typeof showUndo === 'function') showUndo(say, () => notBack(rid, false), UNDO_MS); else showToast(say);
     redraw(true);
@@ -1110,7 +1116,7 @@
         dueChip + '<span class="rc-row-amt">' + money(r.totalCents) + '</span>' +
         (r.link ? '<a class="btn btn-sm" href="' + esc(r.link) + '" target="_blank" rel="noopener">Email</a>' : '') +
         (sorts() ? '<button class="btn btn-sm btn-filled" onclick="rcPaid(\'' + rid + '\')">✓ Paid</button>' +
-          '<button class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>' : '') +
+          '<button class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 ' + notWord(r) + '</button>' : '') +
         noteBtn('p', rid, r) + deleteBtn(rid, true) +
       '</div>' +
       // A bill Claude put here from a note says so under it.
@@ -1506,7 +1512,7 @@
       }
       // In All receipts (a card in To sort has the button itself).
       if (where === 'h' && markable(r)) {
-        items.push('<button type="button" onclick="rcMenuClose(); rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>');
+        items.push('<button type="button" onclick="rcMenuClose(); rcNotReceipt(\'' + rid + '\')">🚫 ' + notWord(r) + '</button>');
       }
     }
     return items;
@@ -1675,7 +1681,7 @@
   function notBtns(rid, r, owed) {
     if (!sorts() || !markable(r)) return '';
     return (owed ? '<button type="button" class="btn btn-sm" onclick="rcNotPaid(\'' + rid + '\')">💸 Not paid yet</button>' : '') +
-      '<button type="button" class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 Not a receipt</button>';
+      '<button type="button" class="btn btn-sm" onclick="rcNotReceipt(\'' + rid + '\')">🚫 ' + notWord(r) + '</button>';
   }
 
   // Where it is going: one chip each, the first already picked from what

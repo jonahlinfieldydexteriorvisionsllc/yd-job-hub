@@ -165,8 +165,10 @@ def pickup_notice(subject, got=None):
 #
 # Words in a subject that say a bill was paid after all, whatever the read
 # made of it ("not paid", "unpaid" are not).
+# "Due upon receipt" is a bill's terms, not a receipt: a sub's invoices say
+# it, and it filed them as receipts to sort (3 Nov 2026).
 PAID_SIGN = re.compile(r"(?<!not )(?<!not yet )\b(paid|payment (received|confirmation|confirmed|processed|successful|complete)|"
-                       r"thank you for (your|the) payment|receipt|(was|been|we've|we have) charged|"
+                       r"thank you for (your|the) payment|(?<!on )receipt|(was|been|we've|we have) charged|"
                        r"autopay(ment)? (was )?processed)\b", re.I)
 # Words that say a bill is owed, for an email the read called neither an
 # invoice nor anything else.
@@ -291,6 +293,12 @@ def learned_skip(m, pats):
     # A store's "ready for pickup" email makes its Pickups card whatever was
     # marked: it is never a receipt anyway (pickup_notice).
     if pickup_notice(m.get("subject")):
+        return ""
+    # An email saying money was paid is never passed over unread by code: a
+    # mark on a bill also learns the payment email joined to it ("Receipt
+    # for payment from ...", 3 Nov 2026). The sorting call still sees the
+    # mark as an example.
+    if PAID_SIGN.search(m.get("subject") or ""):
         return ""
     return next((p["key"] for p in pats if p["skip"] and p["sender"] == sender and p["shape"] == shape), "")
 
