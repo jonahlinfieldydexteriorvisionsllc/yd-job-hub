@@ -253,11 +253,13 @@
       { id: 'draft', label: '📝 Put them in my Gmail Drafts instead', hint: 'You read each one and send it yourself' },
       { id: 'words', label: '✏️ The words', hint: now.thanksBody || now.thanksSubject ? 'Your own words' : 'The usual words — change them' },
       { id: 'welcome', label: '👋 After a yes: the next-steps email', hint: { draft: 'Into your Gmail Drafts', send: 'Sends by itself', off: 'Off' }[welcomeMode(now)] },
+      { id: 'noplow', label: '❄️ Snow with no plow: the reply', hint: { draft: 'Into your Gmail Drafts', send: 'Sends by itself', off: 'Off' }[noPlowMode(now)] }
     ], { title: 'Follow-ups & thank-yous', value: now.thanksSend === false ? 'draft' : 'send', cancel: 'Close' });
     if (!pick) return;
     if (pick.id === 'link') { window.chaseReviewLink(); return; }
     if (pick.id === 'words') { editWords(); return; }
     if (pick.id === 'welcome') { openWelcomeSettings(); return; }
+    if (pick.id === 'noplow') { openNoPlowSettings(); return; }
     save({ thanksSend: pick.id === 'send' }, 'the thank-you choice');
     showToast(pick.id === 'send' ? 'Thank-yous will send themselves' : 'Thank-yous will go into your Gmail Drafts');
   };
@@ -403,6 +405,49 @@
     save({ welcome: pick.id }, 'the next-steps choice');
     showToast(pick.id === 'send' ? 'Next-steps emails will send themselves' : pick.id === 'off' ? 'No next-steps emails will go'
       : 'Next-steps emails will go into your Gmail Drafts');
+  }
+
+  // ------------------------------------------------------------ snow, no plow
+  //
+  // Jonah (3 Nov 2026, wish card): "we dont offer snow removal if they wont
+  // allow us to use a plow. so if we are contacted for that those emails can
+  // be auto written and sent." A new lead who asks for that is answered by
+  // itself (functions/leads.py). settings/followUp.noPlow 'send' | 'draft' |
+  // 'off', noPlowBody ('' = the usual words). NP_BODY = leads.py NO_PLOW_BODY.
+  const NP_BODY = 'Hi {name},\n\n' +
+    'Thanks for reaching out. We only do snow removal with a plow, so we can’t take on a property where a ' +
+    'plow isn’t allowed.\n\n' +
+    'If a plow would work for you, let me know & I’d be happy to get you a price.\n\n' +
+    'Have a great day!';
+  const noPlowMode = c => (['send', 'draft', 'off'].indexOf(c.noPlow) >= 0 ? c.noPlow : 'send');
+
+  async function editNoPlowWords() {
+    const now = await current();
+    const got = await ydForm('The reply to someone who wants snow removal with no plow. {name} becomes their first name.', [
+      { id: 'body', label: 'The email', value: now.noPlowBody || NP_BODY, multiline: true, rows: 9 },
+    ], { title: 'The no-plow reply', ok: 'Save' });
+    if (!got) return;
+    const body = String(got.body || '').trim();
+    if (!body) { showToast('The email can’t be empty'); return; }
+    save({ noPlowBody: body === NP_BODY.trim() ? '' : body }, 'the no-plow words');
+    showToast('Saved — the next one uses them');
+  }
+
+  async function openNoPlowSettings() {
+    const now = await current();
+    const mode = noPlowMode(now);
+    const pick = await ydChoose('A new lead who wants snow removal and says a plow can’t be used gets this reply. They stay on your ' +
+      'Leads, and you get a buzz. Only new people: anyone already in Job Hub stays yours to answer.', [
+      { id: 'send', label: '✉️ Send it by itself', hint: 'From your Gmail, in their thread — a reply comes to you' },
+      { id: 'draft', label: '📝 Put it in my Gmail Drafts', hint: 'You read each one and send it yourself' },
+      { id: 'off', label: '🚫 Don’t do this', hint: 'They come in like any other lead' },
+      { id: 'words', label: '✏️ The words', hint: now.noPlowBody ? 'Your own words' : 'The usual words — read and change them' },
+    ], { title: 'Snow with no plow', value: mode, cancel: 'Close' });
+    if (!pick) return;
+    if (pick.id === 'words') { editNoPlowWords(); return; }
+    save({ noPlow: pick.id }, 'the no-plow choice');
+    showToast(pick.id === 'send' ? 'No-plow replies will send themselves' : pick.id === 'off' ? 'No-plow replies are off'
+      : 'No-plow replies will go into your Gmail Drafts');
   }
 
   // ------------------------------------------------------------ how he writes

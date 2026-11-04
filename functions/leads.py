@@ -24,7 +24,9 @@ follow-ups), his inbox since the last look is gone through:
     Jonah, 28 Oct 2026: "I will still reply to leads myself until you learn
     how I speak ... but i like hving you pull them into my dashboard". With
     settings/leads.autoDraft true, the reply is drafted the moment the lead
-    comes in, as it was at first (NEVER sent either way).
+    comes in, as it was at first (NEVER sent either way) -- but for someone
+    who wants snow removal with no plow: that lead is answered by itself,
+    in his fixed words (NO_PLOW_BODY, below).
     Someone already in Job Hub by email or phone is not added twice.
 Each email is looked at once (leadMail/{messageId}: what came of it). Only
 mail after the day this started is read (settings/leads.since, set by the
@@ -92,6 +94,23 @@ ADDRESS = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 GOOGLE_LEAD = re.compile(r"(?i)^customer-request-\d+@awexpress\.google\.com$")
 GOOGLE_LEAD_SUBJECT = re.compile(r"(?i)new request")
 PASSED_GOOGLE = ("automatic or a company", "mailing list or automatic")
+# Jonah (3 Nov 2026, wish card): "we dont offer snow removal if they wont
+# allow us to use a plow. so if we are contacted for that those emails can be
+# auto written and sent. We will still offer service but with a plow." The one
+# lead answered by itself. Fixed words, with nothing from the email in them
+# but a first name, so a stranger's email can't get anything else sent. Claude
+# says no_plow in the reading already being paid for, and the email's own
+# words have to bear it out. settings/followUp: noPlow 'send' (how it starts)
+# | 'draft' | 'off', noPlowBody ('' = these words) -- thanks.js NP_BODY is the
+# same words.
+NO_PLOW_WORDS = re.compile(r"(?i)\bplow|\bplough|shovel|snow ?blow")
+FIRST_NAME = re.compile(r"[^\W\d_]+(?:['\u2019-][^\W\d_]+)*")
+NO_PLOW_BODY = (
+    "Hi {name},\n\n"
+    "Thanks for reaching out. We only do snow removal with a plow, so we can\u2019t take on a property where a "
+    "plow isn\u2019t allowed.\n\n"
+    "If a plow would work for you, let me know & I\u2019d be happy to get you a price.\n\n"
+    "Have a great day!")
 
 SYSTEM = """You read one email that reached the inbox of Jonah Linfield, owner of YD Exterior Visions \
 LLC -- a small landscaping, hardscaping and snow-removal company near Madison, Wisconsin (Dane and Green \
@@ -112,7 +131,10 @@ request", with Name, Location, Service type and Message) is always a lead: the c
 named, their town the Location, their email the address it came from (Google passes replies on). \
 services: pick from the SERVICES list given \
 (exact names, at most 4; none that fit -> empty). timing: when they want it, in their words ("this \
-spring", "before Thanksgiving", "" if not said). summary: one plain sentence of what they want, where.
+spring", "before Thanksgiving", "" if not said). summary: one plain sentence of what they want, where. \
+no_plow: true ONLY when they want snow removal AND say a plow may not or can't be used there (shovel or \
+snow blower only, no plowing, no truck on the drive). Not mentioning a plow, or asking only about walks \
+or salt, is false.
 3. reply: a short, warm first reply in Jonah's voice -- plain words, no sales talk, 4 to 7 short \
 sentences. Thank them by first name ("Hi there" if none), say what you understood they want in a few \
 words, offer to come out and take a look for a free estimate, and ask what days and times work for them \
@@ -132,10 +154,11 @@ SCHEMA = {
         "email": {"type": "string"}, "phone": {"type": "string"},
         "street": {"type": "string"}, "city": {"type": "string"}, "state": {"type": "string"}, "zip": {"type": "string"},
         "services": {"type": "array", "items": {"type": "string"}},
-        "timing": {"type": "string"}, "summary": {"type": "string"}, "reply": {"type": "string"},
+        "timing": {"type": "string"}, "summary": {"type": "string"}, "no_plow": {"type": "boolean"},
+        "reply": {"type": "string"},
     },
     "required": ["is_lead", "why", "first_name", "last_name", "business", "email", "phone", "street", "city",
-                 "state", "zip", "services", "timing", "summary", "reply"],
+                 "state", "zip", "services", "timing", "summary", "no_plow", "reply"],
     "additionalProperties": False,
 }
 
@@ -348,6 +371,44 @@ def _reply_to(m, mid):
 
 
 
+def _no_plow(db, got, m, first):
+    """When this lead wants snow removal with no plow: {mode, body}, his
+    choice and the words with their first name in; else None."""
+    if got.get("no_plow") is not True or not NO_PLOW_WORDS.search(m.get("text") or m.get("snippet") or ""):
+        return None
+    try:
+        conf = db.collection("settings").document("followUp").get().to_dict() or {}
+    except Exception as err:    # noqa: BLE001
+        print("leads: no-plow choice not read --", err)
+        conf = {}
+    mode = conf.get("noPlow") if conf.get("noPlow") in ("send", "draft", "off") else "send"
+    if mode == "off":
+        return None
+    first = str(first or "").strip()
+    name = first if FIRST_NAME.fullmatch(first) and len(first) <= 30 else "there"
+    body = str(conf.get("noPlowBody") or "").strip() or NO_PLOW_BODY
+    return {"mode": mode, "body": body.replace("{name}", name)}
+
+
+def _send_no_plow(cards, to, m, mid, body):
+    """Sent in their thread: 'sent', 'maybe' (it may have gone, so never again)
+    or None (it certainly did not)."""
+    try:
+        reply = _reply_to(m, mid)
+    except Exception as err:    # noqa: BLE001 -- their thread is a nicety, the reply is not
+        print("leads: thread not found for", mid, "--", err)
+        reply = None
+    try:
+        d = cards.send_mail(to, "Re: " + (m["subject"] or "Your request"), body, reply)
+    except Exception as err:    # noqa: BLE001
+        print("leads: no-plow reply may have gone for", mid, "--", err)
+        return "maybe"
+    if d.get("error"):
+        print("leads: no-plow reply not sent for", mid, "--", d.get("error"))
+        return None
+    return "sent"
+
+
 def _passing(err):
     """A service down or busy for a while (Gmail, Claude), not something
     about this one email: tried again freely, never counted against it."""
@@ -441,6 +502,19 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
     # address read out of the email's words (a website form's excepted: that
     # comes from the form, with the person's own address in it).
     to = r["email"] if why == "form" else who
+    plow = _no_plow(db, got, m, r["firstName"]) if to else None
+    answered = None
+    if plow:
+        reply = plow["body"]        # his fixed words: into Drafts if they don't go
+        if plow["mode"] == "send":
+            answered = _send_no_plow(cards, to, m, mid, plow["body"])
+            if answered:
+                reply = ""
+    if answered:
+        try:
+            ref.update({"fromEmail.autoReply": {"kind": "noPlow", "how": answered, "at": stamp}})
+        except Exception as err:    # noqa: BLE001
+            print("leads: auto reply not noted on", lead_id, "--", err)
     if reply and to:
         try:
             d = cards.draft_email(to, "Re: " + (m["subject"] or "Your request"), reply, _reply_to(m, mid))
@@ -454,12 +528,19 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
                 print("leads: draft not noted on", lead_id, "--", err)
         else:
             print("leads: reply not drafted for", mid, "--", d.get("error"))
-    log.set({"at": stamp, "outcome": "lead", "leadId": lead_id, "from": who, "drafted": bool(draft)})
-    _lead_card(db, lead_id, rec, r, draft, why)
+    log.set({"at": stamp, "outcome": "lead", "leadId": lead_id, "from": who, "drafted": bool(draft),
+             "noPlow": answered or ("draft" if plow else None)})
+    # Answered: nothing left for him to do, so no to-do. (A send that may not
+    # have gone keeps its to-do, for him to look.)
+    if answered != "sent":
+        _lead_card(db, lead_id, rec, r, draft, why)
     known["emails"].add(r["email"])
     if phone:
         known["phones"].add(phone)
     what = r["summary"] or ", ".join(r["tags"]) or (m["subject"] or "")[:80]
+    if answered == "sent":
+        return {"kind": "followup", "jobId": "lead-" + lead_id, "title": "❄️ No-plow reply sent — " + rec["name"],
+                "body": what + " — they got your usual reply, and they\u2019re on Customers → Leads."}
     return {"kind": "followup", "jobId": "lead-" + lead_id, "title": "📬 New lead — " + rec["name"],
             "body": what + (" — a reply is in your Gmail Drafts." if draft else " — on Customers → Leads; tap Draft a reply there for one.")}
 
