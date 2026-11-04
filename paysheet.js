@@ -45,6 +45,7 @@
 
   let cfg = null;       // settings/paySheet, once read
   let shown = '';       // the pay day on the screen
+  let paged = false;    // he moved to another period by hand
 
   const first = () => (cfg && isDay(cfg.first) ? cfg.first : FIRST);
   // The pay day on or after `day`.
@@ -59,7 +60,12 @@
     Promise.resolve(YDDb.get('settings', 'paySheet')).then(d => {
       cfg = d || {};
       document.dispatchEvent(new CustomEvent('yd-paysheet'));
-      if (isOpen()) draw();
+      // Opened before this arrived (a tap on the push as the app starts): it
+      // went by the first pay day in the code, not his.
+      if (isOpen()) {
+        if (!paged) shown = payDayFrom(localYMD(new Date()));
+        draw();
+      }
     }).catch(() => {});
   }
   function save(patch) {
@@ -151,12 +157,14 @@
   window.openPaySheet = function () {
     if (!owner() || !window.YDClock) return;
     shown = payDayFrom(localYMD(new Date()));
+    paged = false;
     modalBody();
     draw();
     load();
   };
   window.paySheetGo = function (n) {
     shown = addDays(shown, n * EVERY);
+    paged = true;
     draw();
   };
   window.paySheetApprovals = function () {
