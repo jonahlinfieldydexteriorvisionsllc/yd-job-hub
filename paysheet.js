@@ -7,13 +7,14 @@
 // settings/paySheet (owner only, as settings are):
 //   first   a pay day, 'YYYY-MM-DD'; every EVERY days from it is one. Until
 //           he sets it, FIRST. The server has the same (functions/paysheet.py).
-//   paid    {payDay: {uid: {cents, how, at}}}: paid by Cash App or cash, which
-//           no email tells Job Hub about.
+//   paid    {payDay: {uid: {cents, how, at}}}: pay marked here, by Cash App,
+//           cash or the bank. (The bank's emails stopped on 1 Oct 2026, so
+//           most of it comes this way for now.)
 //
 // A period is the EVERY days ending on the pay day. Hours, wages and what is
 // waiting come from Hours & Wages' own sum (YDClock.totalsFor), so the sheet
-// and that screen can't disagree. Paid is the bank payments Job Hub reads
-// (paychecks.js) dated around the pay day, plus the ones typed here. Each
+// and that screen can't disagree. Paid is any bank payments Job Hub has read
+// (paychecks.js) dated around the pay day, plus the ones marked here. Each
 // person's line is worked out when the window opens: a shift approved after
 // that is counted the next time, and nothing is stored but the hand-typed pay.
 
@@ -132,7 +133,7 @@
           (r.bank ? ' · bank ' + dollars(r.bank) : '') + (r.typed ? ' · ' + esc(r.how) + ' ' + dollars(r.typed) : '') + '</div>' +
         '<div class="ps-acts">' + (r.typed
           ? '<button class="link-btn" onclick="paySheetUnpaid(\'' + safeId(r.uid) + '\')">Take off the ' + esc(r.how) + ' payment</button>'
-          : '<button class="btn btn-sm" onclick="paySheetPaid(\'' + safeId(r.uid) + '\')">✓ Paid by Cash App or cash</button>') + '</div></div>';
+          : '<button class="btn btn-sm" onclick="paySheetPaid(\'' + safeId(r.uid) + '\')">✓ Mark paid</button>') + '</div></div>';
     }).join('') : '<p class="empty-msg">No hours in this pay period.</p>';
     body.innerHTML =
       '<div class="ps-head"><b>' + esc(longDay(s.start)) + ' – ' + esc(longDay(s.pay)) + '</b>' +
@@ -175,10 +176,10 @@
   window.paySheetPaid = async function (uid) {
     const pay = shown, r = sheetFor(pay).list.find(x => safeId(x.uid) === uid);
     if (!r) return;
-    const got = await ydForm('What ' + r.name + ' was paid outside the bank for this period.', [
+    const got = await ydForm('What ' + r.name + ' was paid for this period.', [
       { id: 'amount', label: 'Amount', value: r.owed > 0 ? (r.owed / 100).toFixed(2) : '' },
-      { id: 'how', label: 'How', value: 'Cash App' },
-    ], { title: 'Paid by Cash App or cash', ok: 'Save' });
+      { id: 'how', label: 'How (Cash App, bank, cash)', value: 'Cash App' },
+    ], { title: 'Mark paid', ok: 'Save' });
     if (!got) return;
     const cents = Math.round(parseFloat(String(got.amount || '').replace(/[$,\s]/g, '')) * 100);
     if (!(cents > 0)) { showToast('Put in the amount'); return; }
