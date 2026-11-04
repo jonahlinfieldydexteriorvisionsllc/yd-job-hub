@@ -225,6 +225,10 @@
           .forEach((r, i) => { place[r.accountId] = i + 1; });
       } catch (e) { /* the list still draws without the numbers */ }
     }
+    // In that order, so the numbers run 1, 2, 3 (by name they read as a
+    // mix-up); any off the route after them, by name.
+    const stop = id => place[id] || Infinity;
+    ids.sort((x, y) => (stop(x) - stop(y)) || 0);
 
     wrap.innerHTML = (seesPrices ? totalsHtml() : '') + ids.map(id => {
       const a = accounts[id];

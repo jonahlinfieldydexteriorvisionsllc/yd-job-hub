@@ -59,6 +59,7 @@
     if (!owner() || !window.YDDb) return;
     Promise.resolve(YDDb.get('settings', 'paySheet')).then(d => {
       cfg = d || {};
+      publish();
       document.dispatchEvent(new CustomEvent('yd-paysheet'));
       // Opened before this arrived (a tap on the push as the app starts): it
       // went by the first pay day in the code, not his.
@@ -67,6 +68,17 @@
         draw();
       }
     }).catch(() => {});
+  }
+  // The pay days, where everyone who works here can read them (settings/
+  // public): My hours shows the pay period by them. Dates only; what anyone
+  // was paid stays here, in settings/paySheet. Written by the owner's device
+  // when they differ, so moving the pay days moves everyone's.
+  function publish() {
+    const want = { first: first(), every: EVERY };
+    Promise.resolve(YDDb.get('settings', 'public')).then(p => {
+      const was = (p && p.paySchedule) || {};
+      if (was.first !== want.first || was.every !== want.every) return YDDb.put('settings', 'public', { paySchedule: want });
+    }).catch(e => console.warn('[paysheet] pay days not shared yet:', (e && e.code) || e));
   }
   function save(patch) {
     Promise.resolve(YDDb.put('settings', 'paySheet', Object.assign({}, patch, { updatedAt: new Date().toISOString() })))
@@ -185,6 +197,7 @@
     } else {
       save({ first: next });
     }
+    publish();
     draw();
     document.dispatchEvent(new CustomEvent('yd-paysheet'));
     showToast('Next pay day: ' + longDay(shown));

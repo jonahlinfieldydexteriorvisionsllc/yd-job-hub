@@ -126,7 +126,9 @@
     const t = tickOf(id, line);
     const done = !!(t && t.done === true);
     const can = !opts.preview && signedIn();
+    // How much the line is, for "How long did it take?" (production.js).
     const attrs = ' data-wd="' + id + '|' + line + '" data-t="' + esc2(String((w && w.title) || '').slice(0, 200)) + '"' +
+      (w && w.qty > 0 ? ' data-q="' + esc2(w.qty) + '" data-u="' + esc2(w.unit || '') + '"' : '') +
       (opts.preview ? ' data-wdp="1"' : '');
     if (done) {
       return '<div class="wd-line on"' + attrs + '>' +
@@ -166,7 +168,8 @@
   function fresh() {
     document.querySelectorAll('[data-wd]').forEach(n => {
       const [id, line] = String(n.dataset.wd).split('|');
-      const now = lineHtml(id, { id: line, title: n.dataset.t || '' }, { preview: n.dataset.wdp === '1' });
+      const now = lineHtml(id, { id: line, title: n.dataset.t || '', qty: Number(n.dataset.q) || 0, unit: n.dataset.u || '' },
+        { preview: n.dataset.wdp === '1' });
       if (n.outerHTML !== now) n.outerHTML = now;
     });
     document.querySelectorAll('[data-wd-sum]').forEach(n => {
@@ -225,8 +228,13 @@
     const [id, line] = String(box.dataset.wd).split('|');
     const title = box.dataset.t || 'That';
     if (!setLine(id, line, on, title)) return;
-    // Ticked done: how long it took (production.js), with Skip.
-    if (on && window.YDProduction) YDProduction.ask(id, line, title, { done: true });
+    // Ticked done: how long it took (production.js), with Skip. Undo goes in
+    // that window: a bar along the foot sat over its buttons.
+    if (on && window.YDProduction) {
+      YDProduction.ask(id, line, title, { done: true, qty: Number(box.dataset.q) || 0, unit: box.dataset.u || '',
+        undo: () => setLine(id, line, false, title) });
+      return;
+    }
     const name = title.length > 40 ? title.slice(0, 40) + '…' : title;
     const msg = on ? '✅ ' + name + ' — done' : name + ' — not done yet';
     if (typeof showUndo === 'function') showUndo(msg, () => setLine(id, line, !on, title));

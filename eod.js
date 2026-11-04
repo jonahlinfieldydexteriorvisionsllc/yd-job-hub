@@ -72,6 +72,7 @@
   const WATCH_DAYS = 60;      // the owner's reports kept live; older ones are asked for when looked for
   const DRAFT_DAYS = 7;       // what is typed is kept on the phone this long
   const LIST_SHOW = 20;       // reports in the window before "Show more"
+  const FULL_DAY_MS = 4 * 3600000;    // clocked this long, the list comes up at clock-out whatever the hour
   const EARLY_HOURS = 5;      // before 5 am, the end of day still open is yesterday's
   const DRAFT = 'ydjobhub_eod_';   // + uid + '_' + day
 
@@ -735,7 +736,13 @@
     const uid = myUid();
     if (!uid || d.uid !== uid || !onList(uid) || (d.kind === 'storm' && !conf().storms)) return;
     const t = today();
-    if (sentReport(uid, t) || !shiftsOn(uid, t).length) return;
+    const shifts = shiftsOn(uid, t);
+    if (sentReport(uid, t) || !shifts.length) return;
+    // Only when it looks like the end of the day: from the hour the list is
+    // due, or after a real day's work. A quick errand at 10:30 is not one,
+    // and the list stays on Home and in the ⋯ menu for an early finish.
+    const worked = shifts.reduce((sum, x) => sum + (YDClock.paidMs(x) || 0), 0);
+    if (!pastAt() && worked < FULL_DAY_MS) return;
     // After the clock has said so -- and not if they clocked straight back in.
     setTimeout(() => { if (!form && offClock()) window.openEndOfDay(t); }, 1200);
   });

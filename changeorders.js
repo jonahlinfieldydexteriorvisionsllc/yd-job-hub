@@ -354,15 +354,24 @@
     if (!w) return;
     w.innerHTML = jobPickHtml();
     if (!edit.jobId) window.coJobFind('');
+    if (!edit.service) window.coServiceFind('');
   }
 
+  // The services on the job picked: a tap each, before anything is typed.
+  function jobServices(id) {
+    if (!id) return [];
+    const crew = window.YDCrewJobs && YDCrewJobs.list ? YDCrewJobs.list().find(j => j.id === id) : null;
+    if (crew) return (crew.services || []).filter(Boolean);
+    const j = ydCan('jobs', 'see') && typeof loadAllJobs === 'function' ? loadAllJobs().find(x => x && x._id === id) : null;
+    return j && Array.isArray(j.serviceTypes) ? j.serviceTypes.filter(Boolean) : [];
+  }
   window.coServiceFind = function (text) {
     if (!edit) return;
     edit.service = String(text || '').slice(0, 100);
     const list = el('coServiceList');
     const q = edit.service.trim().toLowerCase();
     const names = window.YDServices ? YDServices.names() : [];
-    const hits = q ? names.filter(n => n.toLowerCase().indexOf(q) !== -1 && n.toLowerCase() !== q) : [];
+    const hits = q ? names.filter(n => n.toLowerCase().indexOf(q) !== -1 && n.toLowerCase() !== q) : jobServices(edit.jobId);
     if (list) list.innerHTML = hits.slice(0, PICKS_MAX).map(n => '<button type="button" class="co-pick" data-n="' + esc(n) +
       '" onclick="coServicePick(this.dataset.n)">' + esc(n) + '</button>').join('');
     // Taxed "as the job is" goes by the service.
@@ -534,7 +543,7 @@
     modal(title).innerHTML =
       (k ? '<p class="sg-for"><b>' + esc(stageName(k)) + '</b>' + (k.createdBy ? ' · put in by ' + esc(k.createdBy) : '') + '</p>' + sayHtml(k) : '') +
       field('Job', '<div id="coJob"></div>') +
-      field('Service', '<input id="coService" autocomplete="off" placeholder="Type a few letters" value="' + esc(edit.service) + '" oninput="coServiceFind(this.value)">' +
+      field('Service', '<input id="coService" autocomplete="off" placeholder="Tap one below, or type a few letters" value="' + esc(edit.service) + '" oninput="coServiceFind(this.value)">' +
         '<div class="co-picks" id="coServiceList"></div>') +
       field('What is changing', '<textarea id="coWhat" rows="4" placeholder="Measurements and what the customer asked for" oninput="coWhat(this.value)">' + esc(edit.what) + '</textarea>') +
       field('Materials', '<div class="co-mats" id="coMats"></div>' +

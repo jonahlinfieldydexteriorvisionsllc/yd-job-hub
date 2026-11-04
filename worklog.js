@@ -170,7 +170,8 @@
         // Only with every shift in the range here: while older ones are on
         // their way, or could not be read, the sheet would be missing them
         // without saying so.
-        (list.length && older === 'ready' ? '<button class="btn btn-sm" onclick="wlExport()">⬇ Spreadsheet</button>' : '') +
+        // The office's: nothing a crew member has a use for on a phone.
+        (list.length && older === 'ready' && ydCan('hours', 'see') ? '<button class="btn btn-sm" onclick="wlExport()">⬇ Spreadsheet</button>' : '') +
       '</div>' +
       (c.olderNote ? c.olderNote(older) : '') +
       (list.length

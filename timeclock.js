@@ -242,6 +242,9 @@
   // first, the shift ends in the same place.
   const AUTO_OUT_DEFAULT = 16, AUTO_OUT_MIN = 8, AUTO_OUT_MAX = 24;
   let autoOutHours = AUTO_OUT_DEFAULT;
+  let paySchedule = null;     // settings/public.paySchedule { first, every }: see RANGES
+  // "Tonight's storm" read wrong at 10:30 in the morning.
+  const stormWords = () => { const h = new Date().getHours(); return h >= 5 && h < 17 ? 'Today’s storm' : 'Tonight’s storm'; };
   const autoOutMs = () => autoOutHours * 3600000;
   const hoursWord = h => (Number(h) || AUTO_OUT_DEFAULT) + ' hours';
   // Stopped by the clock, and still at the time it stopped it. The person's
@@ -278,6 +281,12 @@
       const h = pub && pub.clock && pub.clock.autoOutHours;
       const next = typeof h === 'number' && h >= AUTO_OUT_MIN && h <= AUTO_OUT_MAX ? h : AUTO_OUT_DEFAULT;
       if (next !== autoOutHours) { autoOutHours = next; render(); }
+      // The pay days, for the hours' "This pay period" (paysheet.js puts them
+      // here: the money stays in settings/paySheet, the owner's alone).
+      const ps = pub && pub.paySchedule;
+      const had = !!paySchedule;
+      paySchedule = ps && isDay(ps.first) && ps.every > 0 ? { first: ps.first, every: ps.every } : null;
+      if (!!paySchedule !== had && workerUid && el('workerBody')) renderWorker(true);
     }).catch(() => { /* offline with nothing cached: the usual 16 hours */ });
   }
 
@@ -1186,7 +1195,8 @@
         (OVERHEAD_LABEL[e.kind] ? ' <span class="clock-kind">not a job</span>' : '') + '</div>' +
       '<div class="clock-elapsed" data-live-entry="' + safeId(e.id) + '">' + fmtDur(paid) + '</div>' +
       '<div class="clock-sub">' + inWords(e.startedAt) +
-        (pausedMs(e) ? ' · ' + fmtDur(pausedMs(e)) + ' paused · ' + fmtDur(bill) + ' billable' : '') +
+        // What a customer is charged is the office's side of it.
+        (pausedMs(e) ? ' · ' + fmtDur(pausedMs(e)) + ' paused' + (seesAll() ? ' · ' + fmtDur(bill) + ' billable' : '') : '') +
       '</div>' +
       (p ? '<div class="clock-pausenote">Paused for ' + esc(p.reason) +
              ' — still being paid, not billed to the customer.</div>' : '') +
@@ -1310,7 +1320,7 @@
   }
   function nameFor(kind, id) {
     if (kind === 'job') return board[id] ? jobName(board[id]) : 'Job';
-    if (kind === 'storm') return 'Tonight’s storm';
+    if (kind === 'storm') return stormWords();
     if (kind === 'repair') return repairName(id === 'shop' ? null : id, machineName(id), '', '');
     return OVERHEAD_LABEL[kind] || 'Other';
   }
@@ -1475,19 +1485,23 @@
     const lead = clockingFor && clockingFor !== ((me() || {}).uid)
       ? 'What is ' + esc(whoIs(clockingFor)) + ' working on?'
       : 'What are you working on?';
+    // The job they are on today first, above the kinds of work: it is what
+    // they clock in to on most days. Snow leads only with a storm open; the
+    // rest of the time it comes last.
+    const onToday = pickerTodayHtml();
     return '<div class="picker">' +
       '<p class="clock-lead">' + lead + '</p>' +
+      onToday +
       '<div class="picker-kinds">' +
-        (stormOpen
-          ? kindBtn('storm', storm.id, 'Tonight’s storm', '❄️', 'kind-snow')
-          : kindBtn('snow', 'snow', 'Snow', '❄️', 'kind-snow')) +
+        (stormOpen ? kindBtn('storm', storm.id, stormWords(), '❄️', 'kind-snow') : '') +
         kindBtn('labor', 'labor', OVERHEAD_LABEL.labor, '🏚️', 'kind-labor') +
         kindBtn('receipts', 'receipts', OVERHEAD_LABEL.receipts, '🚚', 'kind-receipts') +
         // Asks which machine next, so not straight onto the clock.
         '<button class="picker-kind kind-labor" onclick="openRepairPick()"><span class="kind-icon">🔧</span>' +
           OVERHEAD_LABEL.repair + '</button>' +
+        (stormOpen ? '' : kindBtn('snow', 'snow', 'Snow', '❄️', 'kind-snow')) +
       '</div>' +
-      '<p class="clock-lead picker-or">… or a job</p>' +
+      '<p class="clock-lead picker-or">… or ' + (onToday ? 'another' : 'a') + ' job</p>' +
       '<input id="clockSearch" class="picker-search" placeholder="Search every job…" oninput="filterJobPicker()">' +
       '<div id="pickerList">' + pickerList() + '</div>' +
       '<button class="btn btn-sm" onclick="cancelJobPicker()">Cancel</button>' +
@@ -1545,6 +1559,22 @@
   // for that would be the wrong way round. Typing searches the lot, finished
   // jobs included, because a callback on a closed job still needs somewhere to
   // put the hours.
+  function pickerRow(j, t) {
+    return '<button class="picker-job' + (t ? ' picker-today-job' : '') + '" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
+      '<span class="picker-name">' + esc(j.name) + (j.what ? ' <span class="picker-what">· ' + esc(j.what) + '</span>' : '') + '</span>' +
+      (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
+      (t ? '<span class="picker-today">📅 Today' + (t.time ? ' · ' + esc(t.time) : '') + (t.mine ? ' · you’re on it' : '') + '</span>' : '') +
+      '<span class="picker-flag ' + esc(j.status || '') + '">' +
+        esc(typeof statusLabel === 'function' ? statusLabel(j.status) : (j.status || 'job')) + '</span>' +
+    '</button>';
+  }
+  // Today's jobs, at the top of the picker.
+  function pickerTodayHtml() {
+    const today = todaysJobs();
+    const list = Object.keys(today).filter(id => board[id]).sort((a, b) => today[a].at - today[b].at);
+    return list.length ? '<div class="picker-todays"><p class="clock-lead picker-sub">On the calendar today</p>' +
+      list.map(id => pickerRow(Object.assign({ id: id }, board[id]), today[id])).join('') + '</div>' : '';
+  }
   function pickerList() {
     const search = ((el('clockSearch') || {}).value || '').trim().toLowerCase();
     const jobs = Object.keys(board).map(id => Object.assign({ id: id }, board[id]));
@@ -1563,20 +1593,9 @@
       return '<p class="empty-msg">' + (search ? 'No job matches that.'
         : 'No booked or in-progress jobs. Search above for a quoted or finished one.') + '</p>';
     }
-    const row = j => {
-      const t = today[j.id];
-      return '<button class="picker-job' + (t ? ' picker-today-job' : '') + '" onclick="clockInTo(\'job\', \'' + safeId(j.id) + '\')">' +
-        '<span class="picker-name">' + esc(j.name) + (j.what ? ' <span class="picker-what">· ' + esc(j.what) + '</span>' : '') + '</span>' +
-        (j.address ? '<span class="picker-addr">' + esc(j.address) + '</span>' : '') +
-        (t ? '<span class="picker-today">📅 Today' + (t.time ? ' · ' + esc(t.time) : '') + (t.mine ? ' · you’re on it' : '') + '</span>' : '') +
-        '<span class="picker-flag ' + esc(j.status || '') + '">' +
-          esc(typeof statusLabel === 'function' ? statusLabel(j.status) : (j.status || 'job')) + '</span>' +
-      '</button>';
-    };
-    const pinned = search ? [] : list.filter(isToday);
-    return (pinned.length ? '<p class="clock-lead picker-sub">On the calendar today</p>' + pinned.map(row).join('') +
-        (list.length > pinned.length ? '<p class="clock-lead picker-sub">Other jobs</p>' : '') : '') +
-      list.filter(j => pinned.indexOf(j) === -1).map(row).join('');
+    // Searching looks through all of them; otherwise today's are at the top
+    // of the picker already (pickerTodayHtml).
+    return (search ? list : list.filter(j => !isToday(j))).map(j => pickerRow(j, today[j.id])).join('');
   }
 
   // ------------------------------------------------------------ owner views
@@ -2128,10 +2147,27 @@
   // it): a storm from 10 pm to 4 am is one night's work, in one range.
   const RANGES = [
     ['today', 'Today'], ['week', 'This week'], ['lastweek', 'Last week'],
+    ['payperiod', 'This pay period'], ['lastpay', 'Last pay period'],
     ['twoweeks', 'This week & last'], ['month', 'This month'], ['lastmonth', 'Last month'],
     ['year', 'This year'], ['all', 'All time'], ['custom', 'Pick dates…'],
   ];
   const RANGE_DEFAULT = { totals: 'week', worker: 'week', pay: 'month', worklog: 'week' };
+  // Pay runs on fixed periods, not weeks. The pay periods are offered once
+  // the pay days are known (settings/public.paySchedule, readAutoOut), and
+  // someone's hours then open on the period being paid next.
+  const PAY_RANGES = ['payperiod', 'lastpay'];
+  const rangeList = () => (paySchedule ? RANGES : RANGES.filter(r => PAY_RANGES.indexOf(r[0]) === -1));
+  // A pay period as { start, pay } (Date, midnight): back 0 is the one the
+  // next pay day ends, 1 the one before it. Null until the pay days are known.
+  function payPeriod(back) {
+    if (!paySchedule) return null;
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    const n = paySchedule.every;
+    const days = Math.round((d.getTime() - new Date(paySchedule.first + 'T00:00:00').getTime()) / 86400000);
+    const off = ((days % n) + n) % n;
+    const pay = plusDays(d, (off ? n - off : 0) - (back || 0) * n);
+    return { start: plusDays(pay, 1 - n), pay: pay };
+  }
   const RANGE_KEY = 'ydjobhub_hoursRange';
   // A real day typed in full. A date box being typed into passes through
   // years like 0002 on the way to 2026, and one of those would send the
@@ -2155,7 +2191,8 @@
   function rangeOf(place) {
     const s = rangeStore()[place] || {};
     return {
-      range: RANGES.some(r => r[0] === s.range) ? s.range : (RANGE_DEFAULT[place] || 'week'),
+      range: rangeList().some(r => r[0] === s.range) ? s.range
+        : place === 'worker' && paySchedule ? 'payperiod' : (RANGE_DEFAULT[place] || 'week'),
       from: isDay(s.from) ? s.from : '',
       to: isDay(s.to) ? s.to : '',
     };
@@ -2177,6 +2214,10 @@
       case 'today': return [d.getTime(), plusDays(d, 1).getTime()];
       case 'week': return [sunday.getTime(), Infinity];
       case 'lastweek': return [plusDays(sunday, -7).getTime(), sunday.getTime()];
+      case 'payperiod': case 'lastpay': {
+        const p = payPeriod(r.range === 'lastpay' ? 1 : 0);
+        return p ? [p.start.getTime(), plusDays(p.pay, 1).getTime()] : [sunday.getTime(), Infinity];
+      }
       case 'twoweeks': return [plusDays(sunday, -7).getTime(), Infinity];
       case 'month': return [first.getTime(), Infinity];
       case 'lastmonth': return [new Date(d.getFullYear(), d.getMonth() - 1, 1).getTime(), first.getTime()];
@@ -2209,7 +2250,9 @@
         : dayStr(new Date(lo)) === today ? 'Today' : fmt(lo) + ' – today';
     }
     const last = hi - 1;
-    return dayStr(new Date(lo)) === dayStr(new Date(last)) ? fmt(lo) : fmt(lo) + ' – ' + fmt(last);
+    return (dayStr(new Date(lo)) === dayStr(new Date(last)) ? fmt(lo) : fmt(lo) + ' – ' + fmt(last)) +
+      // Which Friday that money comes.
+      (PAY_RANGES.indexOf(r.range) !== -1 && paySchedule ? ' · pay day ' + fmt(last) : '');
   }
 
   // The control itself: the choices, and From/To when picking dates. Each
@@ -2221,7 +2264,7 @@
     // No latest day: "the 1st to the 31st" can be picked mid-month.
     return '<span class="hr-range">' +
       '<select onchange="ydRangeSet(\'' + p + '\', \'range\', this.value)" aria-label="Which days">' +
-        RANGES.map(([v, t]) => '<option value="' + v + '"' + (r.range === v ? ' selected' : '') + '>' + t + '</option>').join('') +
+        rangeList().map(([v, t]) => '<option value="' + v + '"' + (r.range === v ? ' selected' : '') + '>' + t + '</option>').join('') +
       '</select>' +
       (r.range === 'custom'
         ? '<label class="hr-day"><span>From</span><input type="date" value="' + r.from +
@@ -2240,7 +2283,7 @@
     if (!RANGE_DEFAULT[place]) return;
     const r = rangeOf(place);
     if (what === 'range') {
-      if (!RANGES.some(x => x[0] === value)) return;
+      if (!rangeList().some(x => x[0] === value)) return;
       if (value === 'custom' && r.range !== 'custom' && !r.from && !r.to) {
         // Something to start from: the dates last picked anywhere, else the
         // days of the range being left (a week to nudge), else this month.
@@ -4036,6 +4079,7 @@
     // The jobs on a calendar today, those this person is on first (the job
     // picker's order; the crew's Jobs tab and Home list go by it too).
     todaysJobs: todaysJobs,
+    stormWords: stormWords,
     mine: () => {
       const s = myOpenShift(), b = s ? null : myBreak();
       const out = s && leavingNow(s.id) ? leaving : null;

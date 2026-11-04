@@ -1417,10 +1417,11 @@
     // 2026: "i shouldnt have to scroll to the bottom of the board to add
     // one"). A folded column on a phone keeps it too: one tap to add to an
     // empty column, without unfolding it first.
-    const add = board.id === CHANGE_ORDERS && c.id !== board.columns[0].id ? ''
+    // Change orders only ever start in the first column, and the board's own
+    // button says just that: a second one right under it was the same thing twice.
+    const add = board.id === CHANGE_ORDERS ? ''
       : editsBoard(board)
-      ? '<button class="bd-add-card bd-add-top" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">' +
-        (board.id === CHANGE_ORDERS ? '+ Add a change order' : '+ Add a card') + '</button>'
+      ? '<button class="bd-add-card bd-add-top" onclick="addCard(\'' + safeId(board.id) + '\', \'' + safeId(c.id) + '\')">+ Add a card</button>'
       // Won, Lost and Paid are where jobs end up, not where they start.
       // A job added as finished has no photos yet, and only the owner may
       // finish one without them (addJobCard).

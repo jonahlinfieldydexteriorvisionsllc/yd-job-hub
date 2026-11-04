@@ -2025,11 +2025,6 @@
   .eq-urg-pick { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
   .eq-urg-opt { --c:#6b7a8f; cursor:pointer; position:relative; }
   .eq-urg-opt input { position:absolute; opacity:0; pointer-events:none; }
-  .eq-urg-opt span { display:flex; flex-direction:column; gap:2px; min-height:56px; padding:9px 11px;
-    border:2px solid var(--border-strong); border-left:6px solid var(--c); border-radius:8px; background:var(--surface); }
-  .eq-urg-opt small { font-size:11px; color:var(--muted); }
-  .eq-urg-opt input:checked + span { border-color:var(--c); background:var(--surface-2);
-    background:color-mix(in srgb, var(--c) 16%, var(--surface)); }
   @media (max-width:520px) { .eq-urg-pick { grid-template-columns:1fr; } }
 
   /* ---- notifications & summaries ---- */
@@ -4518,7 +4513,7 @@
   .eq-urg-opt input { margin-top:3px; }
   .eq-urg-opt span { display:flex; flex-direction:column; line-height:1.25; }
   .eq-urg-opt small { color:var(--muted); font-size:12px; }
-  .eq-urg-opt:has(input:checked) { outline:2px solid var(--c); }
+  .eq-urg-opt:has(input:checked) { outline:2px solid var(--c); background:color-mix(in srgb, var(--c) 16%, var(--surface)); }
   /* On the Equipment tab a card is added through its machine picker (+ Add a
      card above the board), not the columns' own plain add. */
   #eqList .bd-add-card:not(.bd-old-done):not(.bd-del-done) { display:none; }
@@ -5907,6 +5902,13 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
    words readable under the strike (app.js qtyBox / doneRowOf). */
 .ord-qty-in { width:110px; margin-left:0; font-weight:600; }
 .check-row.done .cr-name .cr-cost { display:inline-block; text-decoration:none; }
+/* A line stays inside its card (4 Nov 2026: the amount box ran into the next
+   column on lines with the Item # and Link boxes, whose 180px held the name
+   wide). The name may shrink and the Link box with it; a card too narrow for
+   name and amount side by side puts the amount under the name, on the right. */
+.check-row { flex-wrap:wrap; }
+.check-row .cr-name { flex:1 1 150px; min-width:0; overflow-wrap:anywhere; }
+.check-row > .ord-qty-in, .check-row > .cr-qty { margin-left:auto; }
 
 /* Swapping an order line's product (app.js orderSwapHtml): inline-flex, so a
    checked line's strike-through does not run through the picker. */
@@ -5919,9 +5921,9 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .check-row.done .cr-name .ord-swapped + .link-btn { display:inline-block; text-decoration:none; }
 
 /* An order line's missing item # / product page, typed right there (app.js orderSkuHtml). */
-.ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; }
-.ord-sku-add label { display:inline-flex; gap:4px; align-items:center; }
-.ord-link-in { width:180px; }
+.ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; max-width:100%; }
+.ord-sku-add label { display:inline-flex; gap:4px; align-items:center; min-width:0; max-width:100%; }
+.ord-link-in { width:180px; min-width:0; }
 
 /* A job's daily log (joblog.js): the note box, said or typed, and the days. */
 .jl-box { margin:2px 0 10px; }
@@ -6005,3 +6007,53 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .sp-code { display:block; font-family:ui-monospace, Consolas, monospace; font-size:12px; background:var(--surface-2);
            border-radius:6px; padding:6px 8px; margin:4px 0; overflow-wrap:anywhere; }
 .cu-draft { display: inline-block; margin-top: 6px; font-weight: 600; color: var(--brand-ink); text-decoration: none; }
+
+  /* ---- Going through the app as the crew (4 Nov 2026) ---- */
+  /* The clock's picker: today's job above the kinds of work. */
+  .picker-todays { margin-bottom:12px; }
+  .picker-todays .picker-sub { margin-top:4px; }
+  /* How long it took: a tap for the line's amount or the clock's hours. */
+  .pl-fill { margin-top:6px; }
+  .pl-fill .pl-chip { border-style:dashed; font-weight:700; }
+  .pl-undo { display:block; margin-top:4px; min-height:40px; background:none; border:0; padding:0; color:var(--brand-ink); font:inherit;
+    font-weight:700; text-decoration:underline; cursor:pointer; }
+  html[data-night] .pl-undo { color:var(--brand-2); }
+  /* The route's stops, folded on a phone. */
+  .rt-fold > summary { min-height:44px; display:flex; align-items:center; font-size:13px; font-weight:700; color:var(--brand-ink); cursor:pointer; }
+  html[data-night] .rt-fold > summary { color:var(--brand-2); }
+  @media (max-width:720px) {
+    /* The tab already says Clock: the header is one row, words cut short,
+       so Clock out stays on the screen of a small phone. */
+    #panel-clock .section-head:has(.clock-head-acts button:not([hidden])) .section-title { display:none; }
+    #panel-clock .section-head:has(.clock-head-acts button:not([hidden])) { flex-wrap:nowrap; justify-content:flex-end; padding:8px 12px; }
+    #panel-clock .section-head .clock-head-acts { flex-wrap:nowrap; }
+    .clock-head-acts .btn { white-space:nowrap; }
+    .clock-head-long { display:none; }
+    /* The stops down the screen, no row to slide sideways. */
+    .rt-strip { flex-direction:column; overflow-x:visible; padding-bottom:0; }
+    .rt-stop, .rt-stop.start { flex:none; width:auto; padding-right:96px; }
+    .rt-stop.start { padding-right:10px; }
+    .rt-leg { align-self:flex-start; min-width:0; padding:3px 0 3px 12px; text-align:left; }
+    .rt-leg br { display:none; }
+    .rt-leg::before { content:'↓'; margin-right:8px; font-size:14px; color:var(--border-strong); }
+    .rt-leg::after { content:none; }
+    .rt-move { position:absolute; top:6px; right:6px; margin:0; }
+    .rt-move button { min-height:44px; min-width:40px; }
+  }
+  /* A short phone: Clock out in view without scrolling. */
+  @media (max-width:720px) and (max-height:700px) {
+    .clock-elapsed { font-size:40px; }
+    .clock-live { padding-top:0; }
+    .clock-big { min-height:50px; padding:10px 16px; margin-bottom:8px; }
+    .clock-actions { margin-top:10px; }
+    .clock-hint { margin-bottom:4px; }
+    .clock-out-gap { margin:4px 0 10px; }
+    .clock-job-btn { min-height:44px; margin-top:6px; }
+    .clock-job-link { min-height:36px; }
+  }
+  /* Six tabs across the smallest phones (a storm): every word whole. */
+  @media (max-width:360px) {
+    .tab-btn { font-size:9.5px; letter-spacing:0; padding-left:1px; padding-right:1px; }
+    /* The screen itself says it. Keeps the Clock header to one row. */
+    #panel-clock .clock-head-acts:has(button:not([hidden])) #clockBadge { display:none; }
+  }

@@ -503,7 +503,7 @@
     <div class="section">
       <div class="section-head">
         <span class="section-title">Time Clock</span>
-        <span style="display:flex;align-items:center;gap:8px"><span class="section-badge accent" id="clockBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" hidden>📷 Add a receipt</button><button class="btn btn-sm" id="clockNoteBtn" onclick="openNoteForJonah()" hidden>📝 Note for Jonah</button></span>
+        <span class="clock-head-acts" style="display:flex;align-items:center;gap:8px"><span class="section-badge accent" id="clockBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" aria-label="Add a receipt" hidden>📷 <span class="clock-head-long">Add a </span>receipt</button><button class="btn btn-sm" id="clockNoteBtn" onclick="openNoteForJonah()" aria-label="Note for Jonah" hidden>📝 Note<span class="clock-head-long"> for Jonah</span></button></span>
       </div>
       <div class="section-body" id="clockWrap"></div>
     </div>

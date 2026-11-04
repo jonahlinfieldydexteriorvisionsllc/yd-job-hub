@@ -1242,7 +1242,6 @@
         (town ? '<small>' + esc(town) + '</small>' : '') +
         (j.today === 'clock' ? '<small class="cj-row-today">⏱ You’re on the clock here</small>'
           : j.today === 'mine' ? '<small class="cj-row-today">👷 You’re on it today</small>' : '') + daysHtml(j) +
-        (placeOf(j) !== Infinity && window.YDJobLine ? '<small>' + esc(YDJobLine.words({ day: j.line.day, how: j.line.how })) + '</small>' : '') +
         progressHtml(j) + '</span>' +
       '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></button>';
   }

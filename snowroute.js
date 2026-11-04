@@ -139,25 +139,30 @@
       ? '<b>' + miles(road.m) + ' mi</b> · about <b>' + mins(road.s) + '</b> driving'
       : busy ? 'Working out the drive…'
       : '≈ ' + straight.toFixed(1) + ' mi in a straight line' + (failed ? ' <span class="muted">(the road times could not be fetched — no signal?)</span>' : '');
+    // A phone has the stops down the screen, folded: the accounts under the
+    // bar are in this same order, and a row to slide sideways is slow in gloves.
+    const phone = window.matchMedia('(max-width:720px)').matches;
+    const up = phone ? '▲' : '◀', down = phone ? '▼' : '▶';
     let i = 0;
     const stopsHtml = p.stops.map((s, n) => {
       const leg = onMap(s.a) && fits ? road.legs[i++] : null;
       const a = s.a || {};
       const far = leg ? leg.m / 1609.344 > FAR_MILES : (s.straight || 0) > FAR_MILES;
-      return '<div class="rt-leg">' + (leg ? miles(leg.m) + ' mi<br>' + mins(leg.s) : onMap(s.a) ? (s.straight != null ? '≈ ' + s.straight + ' mi' : '') : 'not on<br>the map') + '</div>' +
+      return '<div class="rt-leg">' + (leg ? miles(leg.m) + ' mi <br>' + mins(leg.s) : onMap(s.a) ? (s.straight != null ? '≈ ' + s.straight + ' mi' : '') : 'not on <br>the map') + '</div>' +
         '<div class="rt-stop' + (onMap(s.a) ? '' : ' lost') + (far ? ' far' : '') + '"><span class="rt-n">' + (n + 1) + '</span>' +
           '<b>' + esc(a.name || s.id) + '</b><small>' + esc(a.address || '') + '</small>' +
           (far ? '<small class="rt-warn">⚠ far from the last stop — check this address</small>' : '') +
           (edits() ? '<span class="rt-move">' +
-            (n > 0 ? '<button onclick="routeMove(\'' + safe(s.id) + '\', -1)" title="Earlier">◀</button>' : '') +
-            (n < p.stops.length - 1 ? '<button onclick="routeMove(\'' + safe(s.id) + '\', 1)" title="Later">▶</button>' : '') +
+            (n > 0 ? '<button onclick="routeMove(\'' + safe(s.id) + '\', -1)" title="Earlier" aria-label="Earlier">' + up + '</button>' : '') +
+            (n < p.stops.length - 1 ? '<button onclick="routeMove(\'' + safe(s.id) + '\', 1)" title="Later" aria-label="Later">' + down + '</button>' : '') +
           '</span>' : '') + '</div>';
     }).join('');
+    const strip = '<div class="rt-strip"><div class="rt-stop start"><span class="rt-n">🏠</span><b>Start</b><small>' + esc(p.start.label || '') + '</small></div>' +
+      stopsHtml + '</div>';
     wrap.innerHTML = '<div class="route-bar">' +
       '<div class="rt-head"><span>🚚 <b>Route</b> · ' + p.stops.length + ' stop' + (p.stops.length === 1 ? '' : 's') + '</span>' +
         '<span>' + head + '</span>' + (byHand ? '<span class="rc-tag">order set by hand</span>' : '') + '</div>' +
-      '<div class="rt-strip"><div class="rt-stop start"><span class="rt-n">🏠</span><b>Start</b><small>' + esc(p.start.label || '') + '</small></div>' +
-        stopsHtml + '</div>' +
+      (phone ? '<details class="rt-fold"' + (stripOpen ? ' open' : '') + ' ontoggle="routeFold(this)"><summary>Stops in order, with the drive between</summary>' + strip + '</details>' : strip) +
       // Only for whoever can take it: to anyone else it is a suggestion
       // they can do nothing with.
       (better && edits() ? '<div class="rt-better">A faster order: <b>' + miles(better.m) + ' mi · ' + mins(better.s) + '</b> — saves about ' +
@@ -167,6 +172,9 @@
       (byHand && edits() ? '<button class="link-btn" onclick="routeAuto()">Back to the worked-out order</button>' : '') +
     '</div>';
   }
+
+  let stripOpen = false;    // kept through a redraw (moving a stop, the road times coming in)
+  window.routeFold = function (d) { stripOpen = !!(d && d.open); };
 
   window.routeMove = function (id, by) {
     const p = plan();

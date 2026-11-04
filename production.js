@@ -77,6 +77,23 @@
   ];
   const guess = title => (GUESS.find(g => g[0].test(String(title || ''))) || [null, ''])[1];
 
+  // The line's own unit as one of the buttons (UNITS), '' when it isn't one.
+  const UNIT_SAID = { lf: 'LF', 'lin ft': 'LF', 'linear ft': 'LF', 'linear feet': 'LF', ft: 'LF', feet: 'LF', foot: 'LF',
+    'sq ft': 'sq ft', sqft: 'sq ft', sf: 'sq ft', 'square feet': 'sq ft', 'square ft': 'sq ft', 'face sq ft': 'face sq ft',
+    'cu yd': 'cu yd', 'cubic yards': 'cu yd', 'cubic yard': 'cu yd', yd: 'cu yd', yards: 'cu yd', yard: 'cu yd',
+    ton: 'tons', tons: 'tons', each: 'each', ea: 'each', bag: 'bags', bags: 'bags' };
+  const unitOf = u => UNIT_SAID[String(u || '').trim().toLowerCase()] || '';
+  // This person's hours on this job today, to the quarter hour: on a tap,
+  // never filled in by itself. A day's shift is rarely all one piece of work.
+  function clockedToday(jobId) {
+    if (!window.YDClock || !YDClock.shifts || !me().uid) return 0;
+    const from = new Date(); from.setHours(0, 0, 0, 0);
+    // The shift still running counts: this is mostly asked while they are on it.
+    const ms = Object.values(YDClock.shifts() || {}).filter(e => e && e.uid === me().uid && e.kind === 'job' && e.targetId === jobId &&
+      e.status !== 'rejected' && YDClock.startMsOf(e) >= from.getTime()).reduce((n, e) => n + (YDClock.paidMs(e) || 0), 0);
+    return Math.round(ms / 900000) / 4;
+  }
+
   // ------------------------------------------------ the form
 
   function me() {
@@ -108,14 +125,21 @@
     opts = opts || {};
     const was = opts.entry || null;
     const t = was ? was.task : guess(title);
+    // How much the line is: filled in when the whole of it was just ticked
+    // done; a button when logging a day's part of it.
+    const unit = unitOf(opts.unit);
+    const whole = unit && opts.qty > 0 ? { qty: opts.qty, unit: unit } : null;
     form = was ? Object.assign({}, was, { conditions: (was.conditions || []).slice() }) : {
       jobId: jobId, jobName: opts.jobName || (window.YDWorkDone && YDWorkDone.jobName ? YDWorkDone.jobName(jobId) : ''),
       lineId: lineId || '', lineTitle: String(title || '').slice(0, 200),
-      task: t, unit: (taskOf(t) || {}).unit || '', qty: null, hours: null, people: null,
+      task: t, unit: unit || (taskOf(t) || {}).unit || '', unitPicked: !!unit, qty: whole && opts.done ? whole.qty : null, hours: null, people: null,
       material: '', distanceFt: null, moveHow: '', conditions: [], notes: '',
     };
     form.id = was ? was.id : null;
     form.justDone = !!opts.done;
+    form.whole = was ? null : whole;
+    form.clocked = was ? 0 : clockedToday(jobId);
+    form.undoTick = opts.undo || null;
     draw();
   }
   function chips(list, on, call, label) {
@@ -135,14 +159,19 @@
       ' value="' + (val == null ? '' : esc2(val)) + '" placeholder="' + esc2(ph) + '" oninput="plNum(this)">';
     body.innerHTML =
       (form.justDone ? '<div class="hint pl-done">✅ ' + esc2(form.lineTitle || 'That') + ' is ticked done. Log how it went — these add up, job after job, ' +
-        'into how long each kind of work really takes.</div>' : '') +
+        'into how long each kind of work really takes.' +
+        (form.undoTick ? ' <button type="button" class="link-btn pl-undo" onclick="plUndo()">Undo — not done yet</button>' : '') + '</div>' : '') +
       '<div class="field"><span class="label">What was done</span><div class="pl-chips pl-tasks">' + chips(TASKS, form.task, 'plTask') + '</div>' +
         (form.lineTitle ? '<div class="hint">On this job: ' + esc2(form.lineTitle) + '</div>' : '') + '</div>' +
       '<div class="field"><span class="label">How much' + (t && t.unit ? '' : ' (if it can be counted)') + '</span>' +
         '<div class="pl-row">' + num('plQty', form.qty, 'e.g. 200') + '</div>' +
+        (form.whole && form.qty !== form.whole.qty ? '<div class="pl-chips pl-fill"><button type="button" class="pl-chip" onclick="plWhole()">All of it · ' +
+          esc2(form.whole.qty + ' ' + form.whole.unit) + '</button></div>' : '') +
         '<div class="pl-chips">' + chips(UNITS, form.unit, 'plUnit') + '</div></div>' +
       '<div class="field"><span class="label">How long — hours on site for it</span>' +
-        '<div class="pl-row">' + num('plHours', form.hours, 'e.g. 3.5', '0.25') + '</div></div>' +
+        '<div class="pl-row">' + num('plHours', form.hours, 'e.g. 3.5', '0.25') + '</div>' +
+        (form.clocked > 0 && form.hours !== form.clocked ? '<div class="pl-chips pl-fill"><button type="button" class="pl-chip" onclick="plClocked()">Your clock here today · ' +
+          esc2(form.clocked) + ' h</button></div>' : '') + '</div>' +
       '<div class="field"><span class="label">How many people on it</span><div class="pl-chips">' +
         chips(PEOPLE, form.people, 'plPeople', n => n === 6 ? '6+' : String(n)) + '</div>' +
         '<div class="hint" id="plMan">' + manWords() + '</div></div>' +
@@ -177,6 +206,19 @@
     draw();
   };
   window.plUnit = function (u) { if (!form) return; readBoxes(); form.unit = form.unit === u ? '' : u; form.unitPicked = true; draw(); };
+  window.plWhole = function () {
+    if (!form || !form.whole) return;
+    readBoxes();
+    form.qty = form.whole.qty; form.unit = form.whole.unit; form.unitPicked = true;
+    draw();
+  };
+  window.plClocked = function () { if (!form) return; readBoxes(); form.hours = form.clocked; draw(); };
+  // The tick taken back from here: the window goes with it.
+  window.plUndo = function () {
+    const undo = form && form.undoTick;
+    window.plClose();
+    if (undo) undo();
+  };
   window.plPeople = function (n) { if (!form) return; readBoxes(); form.people = Number(n) || null; draw(); };
   window.plHow = function (h) { if (!form) return; readBoxes(); form.moveHow = form.moveHow === h ? '' : h; draw(); };
   window.plSite = function (s) {
@@ -245,7 +287,7 @@
     const box = b && b.closest('[data-wd]');
     if (!box) return;
     const [id, line] = String(box.dataset.wd).split('|');
-    ask(id, line, box.dataset.t || '');
+    ask(id, line, box.dataset.t || '', { qty: Number(box.dataset.q) || 0, unit: box.dataset.u || '' });
   };
 
   // Entries for one piece of work (the crew's page shows how many).

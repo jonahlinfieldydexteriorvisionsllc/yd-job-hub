@@ -377,8 +377,17 @@
       '</button>' +
       (m && !onStorm && !allDone && !(m.shift && m.shift.leaving) && typeof window.clockInTo === 'function'
         ? '<button class="btn btn-filled hm-storm-in" onclick="homeStormIn()">⏱ ' +
-            (m.shift ? 'Switch to tonight’s storm' : 'Clock in to tonight’s storm') + '</button>' : '') +
+            (m.shift ? 'Switch to ' : 'Clock in to ') + esc(stormName()) + '</button>' : '') +
     '</div>';
+  }
+  // "today's storm" by day, "tonight's storm" by night (timeclock.js).
+  const stormName = () => (YDClock.stormWords ? YDClock.stormWords() : 'The storm').replace(/^T/, 't');
+  // Whether the storm's card above offers to clock in (stormHtml).
+  function stormOffersClock() {
+    const s = window.YDStorm && YDStorm.current();
+    if (!window.YDStages.stormOpen(s) || typeof window.clockInTo !== 'function') return false;
+    const stops = Object.values((YDStorm.stops && YDStorm.stops()) || {});
+    return !(stops.length && stops.every(x => x.departedAt || x.skipped));
   }
 
   // Plowable snow (or freezing rain) on the way, from the storm watch
@@ -485,8 +494,12 @@
             esc(m.onBreak.where || 'where you were') + '</button>' +
           '<button class="btn" onclick="switchTab(\'clock\')">Go to the clock</button></div>';
     } else {
+      // With a storm on, its card has the big button: one main way to clock
+      // in, and this one for anything else.
+      const storm = stormOffersClock();
       body = '<div class="hm-clock"><div class="hm-clock-where">Not on the clock</div></div>' +
-        '<div class="hm-actions"><button class="btn btn-filled hm-big" onclick="homeClockIn()">Clock in</button></div>';
+        '<div class="hm-actions"><button class="btn' + (storm ? '' : ' btn-filled hm-big') + '" onclick="homeClockIn()">' +
+          (storm ? 'Clock in to something else' : 'Clock in') + '</button></div>';
     }
     return card('clock', '🕒 Your clock', badge, ['Clock', "switchTab('clock')"], body, true);
   }

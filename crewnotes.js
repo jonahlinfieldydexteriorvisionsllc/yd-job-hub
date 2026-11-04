@@ -101,11 +101,13 @@
   };
   window.closeNoteForJonah = function () { const m = el('noteModal'); if (m) m.classList.remove('active'); };
 
-  // [what the chip says, what it puts in the box]
+  // [what the chip says, what it puts in the box, what to ask when that is
+  // all there is: a chip only starts these, so one sent as it stands said
+  // nothing ("Running late — ")]
   const CHIPS = [
-    ['📦 Need more material', 'Need more material: '],
-    ['⏰ Running late', 'Running late — '],
-    ['🔧 Machine problem', 'Machine problem: '],
+    ['📦 Need more material', 'Need more material: ', 'Say what material'],
+    ['⏰ Running late', 'Running late — ', 'Say how late'],
+    ['🔧 Machine problem', 'Machine problem: ', 'Say which machine and what is wrong'],
     ['✅ Done for the day', 'Done for the day. '],
   ];
   // Into an empty box, or on a new line under what is there already; the
@@ -123,6 +125,14 @@
     const text = ((el('noteText') || {}).value || '').trim().slice(0, MAX_LEN);
     if (!me() || !window.YDDb) return;
     if (!text) { showToast('Write the note first'); return; }
+    const lastLine = text.split('\n').pop().trim();
+    const bare = CHIPS.find(c => c[2] && c[1].trim() === lastLine);
+    if (bare) {
+      showToast(bare[2]);
+      const box = el('noteText');
+      if (box) box.focus();
+      return;
+    }
     const jobId = (el('noteJob') || {}).value || '';
     const job = jobId ? (jobChoices().find(j => j.id === jobId) || (forJob && forJob.id === jobId ? forJob : null)) : null;
     send(text, job ? jobId : '', job ? (job.name || null) : null);
