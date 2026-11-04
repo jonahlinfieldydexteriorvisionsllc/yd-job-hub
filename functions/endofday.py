@@ -265,8 +265,9 @@ def for_summary(slot, today, people):
         # (The phone writes its time in UTC, the server in Central: compared
         # as moments, never as text.)
         sent_at, went = _dt(r.get("sentAt")) if r else None, _dt(evening_at)
-        rows.append({"uid": uid, "name": dg._name(people.get(uid)), "report": r,
-                     "late": bool(r and (not went or not sent_at or sent_at > went))})
+        shifts = worked.get(uid) or []
+        rows.append({"uid": uid, "name": dg._name(people.get(uid)), "report": r, "shifts": shifts,
+                     "places": job_places(db, shifts), "late": bool(r and (not went or not sent_at or sent_at > went))})
     return {"slot": slot, "day": day.isoformat(), "rows": rows, "eveningAt": evening_at} if rows else None
 
 
@@ -285,15 +286,50 @@ def _time_of(iso):
     return dg._fmt_time(t.strftime("%H:%M")) if t else ""
 
 
-def report_lines(r, name):
-    """One report, as summary lines: who, when, the jobs and photos, then
-    each thing on the list as it was sent."""
+def job_places(db, shifts):
+    """{jobId: address} for the jobs in these shifts (a job gone from the
+    board reads by its name alone)."""
+    out = {}
+    for jid in {e.get("targetId") for e in shifts or [] if e.get("kind") == "job" and e.get("targetId")}:
+        try:
+            out[jid] = str((db.collection("jobBoard").document(str(jid)).get().to_dict() or {}).get("address") or "")
+        except Exception as err:    # noqa: BLE001 -- a line without its address beats no summary
+            print("endofday: job address not read:", err)
+    return out
+
+
+def day_lines(shifts, places=None):
+    """The day from the clock (eod.js dayHtml; Jonah, 3 Nov 2026: "list of
+    jobs gone to and locations wen tto along with hours for the day"): the
+    day's total, then each shift in order. From the shifts, not the report, so
+    one put right on the clock is right here too."""
+    rows = sorted((e for e in shifts or [] if isinstance(e.get("startedMs"), (int, float))), key=lambda e: e["startedMs"])
+    if not rows:
+        return []
+    now_ms = int(dg._now().timestamp() * 1000)
+    at = lambda ms: dg._fmt_time(datetime.datetime.fromtimestamp(ms / 1000, dg.TZ).strftime("%H:%M"))
+    total, lines, running = 0, [], False
+    for e in rows:
+        end = e.get("endedMs")
+        running = running or not end
+        mins = max(0, ((end or now_ms) - e["startedMs"]) / 60000)
+        total += mins
+        place = (places or {}).get(e.get("targetId")) if e.get("kind") == "job" else ""
+        lines.append({"text": "   📍 %s\u2013%s %s%s \u00b7 %s" % (
+            at(e["startedMs"]), at(end) if end else "now", dg.shift_place(e), " \u00b7 " + place if place else "", dg._fmt_dur(mins))})
+    head = "   🕒 %s on the clock%s" % (dg._fmt_dur(total), " so far" if running else "")
+    return [{"text": head}] + lines
+
+
+def report_lines(r, name, shifts=None, places=None):
+    """One report, as summary lines: who, when, the jobs and photos, the day
+    from the clock, then each thing on the list as it was sent."""
     jobs = [str(j.get("name") or "") for j in (r.get("jobs") or []) if isinstance(j, dict) and j.get("name")]
     n = _photos(r)
     head = "📋 %s — sent %s%s · %d photo%s" % (name, _time_of(r.get("sentAt")),
                                              (" · " + ", ".join(jobs[:4]) + (" +%d" % (len(jobs) - 4) if len(jobs) > 4 else ""))
                                              if jobs else "", n, "" if n == 1 else "s")
-    lines = [{"text": head}]
+    lines = [{"text": head}] + day_lines(shifts, places)
     a = r.get("answers") or {}
     for it in r.get("items") or DEFAULT_ITEMS:
         v = a.get(it.get("id"))
@@ -330,13 +366,23 @@ def archive(db, people=None, now=None):
     cutoff = (now.astimezone(dg.TZ).date() - datetime.timedelta(days=KEEP_DAYS)).isoformat()
     people = people if people is not None else {}
     n = 0
+    storms = settings(db)["storms"]
+    days = {}
     for s in db.collection("endOfDay").where("day", "<", cutoff).limit(ARCHIVE_MAX).stream():
         r = s.to_dict() or {}
         day, uid = str(r.get("day") or ""), str(r.get("uid") or "")
         if not uid or len(day) != 10:
             continue
         name = _first(people, uid, r.get("by"))
-        lines = [str(x.get("text") or "").strip() for x in report_lines(r, name)[1:]]
+        # Kept in the words: the shifts themselves are not put away with it.
+        try:
+            if day not in days:
+                days[day] = worked_on(db, datetime.date.fromisoformat(day), storms)
+            shifts = days[day].get(uid) or []
+        except Exception as err:    # noqa: BLE001 -- the report is put away either way
+            print("endofday: shifts not read for", day, "--", err)
+            shifts = []
+        lines = [str(x.get("text") or "").strip() for x in report_lines(r, name, shifts, job_places(db, shifts))[1:]]
         jobs = [{"id": str(j.get("id") or ""), "name": str(j.get("name") or "")[:120]}
                 for j in (r.get("jobs") or []) if isinstance(j, dict) and j.get("id")][:30]
         entry = {"text": "\n".join(x for x in lines if x)[:6000], "jobs": jobs,
@@ -361,7 +407,7 @@ def add_to_summary(data, owner, uid, sections, push_bits):
             r = row["report"]
             first = str(row["name"]).split()[0]
             if r and (evening or row["late"]):
-                lines.extend(report_lines(r, row["name"]))
+                lines.extend(report_lines(r, row["name"], row.get("shifts"), row.get("places")))
                 came += 1
             elif not r:
                 missing.append(first)
