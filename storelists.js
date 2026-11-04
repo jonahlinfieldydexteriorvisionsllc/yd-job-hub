@@ -6,6 +6,12 @@
 // per job not into cart", and "I want this to run the moment a job is
 // accepted".
 //
+// SiteOne too (Jonah, 4 Nov 2026: "auto make lists for jobs through site-one
+// as long as items are all being orderd from one of the locations in madison
+// or middleton wi"). Each of those two branches is its own supplier in
+// Supplies and its own store here, so a list is always one branch's: a job
+// with both gets two lists, and any other SiteOne branch gets none.
+//
 // Neither store has a way in for apps and both turn robots away, so the
 // server cannot do it. A routine on his computer does (Claude desktop app →
 // Scheduled → "Store lists", 7 am every other day -- Jonah, 2 Nov 2026; it
@@ -16,7 +22,7 @@
 // is booked, and the answer shown on the job.
 //
 // storeLists/{jobId}__{store}, one per job and store:
-//   jobId, store ('menards' | 'homedepot'), vendorId, name ("Jane Doe - Est #1234"),
+//   jobId, store ('menards' | 'homedepot' | 'siteoneMadison' | 'siteoneMiddleton'), vendorId, name ("Jane Doe - Est #1234"),
 //   status: 'asked' → 'working' → 'done' | 'failed'; 'cancelled' when taken back,
 //   lines: [{ key, name, sku, link, qty, amount, check }] -- what was still
 //     to order when it was asked: qty is the whole number to put on the list,
@@ -38,6 +44,10 @@
   const STORES = {
     menards: { label: 'Menards', site: 'menards.com' },
     homedepot: { label: 'Home Depot', site: 'homedepot.com' },
+    // branch: what the routine picks under Change Branch on siteone.com
+    // before adding anything, so what is in stock is that branch's.
+    siteoneMadison: { label: 'SiteOne Madison', site: 'siteone.com', branch: 'Madison' },
+    siteoneMiddleton: { label: 'SiteOne Middleton', site: 'siteone.com', branch: 'Middleton' },
   };
   let lists = {};           // docId -> record
   let unsub = null, key = null, heard = false;
@@ -55,6 +65,13 @@
     const s = String(v.name || '') + ' ' + String(v.website || '');
     if (/menards/i.test(s)) return 'menards';
     if (/home\s*depot|homedepot\.com/i.test(s)) return 'homedepot';
+    // The town is in the name or the address. A supplier naming both is
+    // not sure enough to say which branch, so it gets no list.
+    if (/site\s*one/i.test(s)) {
+      const at = String(v.name || '') + ' ' + String(v.address || '') + ' ' + String(v.city || '');
+      const madison = /madison/i.test(at), middleton = /middleton/i.test(at);
+      if (madison !== middleton) return madison ? 'siteoneMadison' : 'siteoneMiddleton';
+    }
     return null;
   }
 
@@ -116,7 +133,7 @@
     const j = jobOf(jobId);
     const now = new Date().toISOString();
     const was = lists[idOf(jobId, store)];
-    const rec = { jobId: jobId, store: store, vendorId: vid, name: listName(j.d), status: 'asked', lines: lines,
+    const rec = { jobId: jobId, store: store, vendorId: vid, branch: STORES[store].branch || null, name: listName(j.d), status: 'asked', lines: lines,
                   askedAt: now, askedBy: typeof notBoughtMark === 'function' ? notBoughtMark().by : '', auto: !!auto,
                   again: !!(was && was.status === 'done'), updatedAt: now,
                   startedAt: null, doneAt: null, by: null, result: was && was.result ? was.result : null };
