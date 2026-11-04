@@ -546,7 +546,54 @@
     if (on) load();
   });
 
+  // What can stand in for what: the Swap box on an order line. Jonah (4 Nov
+  // 2026): "swap items should only be swappable with similar items like why
+  // are paver sealants showing up as an item that could be swapped for turf
+  // glue". The same kind isn't enough: one kind holds glue, sealer, joint sand
+  // and cleaners, another holds pipe and elbows. So an item stands in for
+  // another when it is the same kind, is used for the same thing (a tag in
+  // common: turf glue isn't wall glue) and is the same sort of thing. The sort
+  // is read from the name: the word for what it IS, the last one before a
+  // size, a comma, "with" or "for" -- glue, sealer, elbow, cap.
+  const HOW_PACKED = ONE_EACH.concat(['pack', 'set', 'pair', 'qt', 'quart', 'pt', 'pint', 'powder', 'unit', 'mix', 'rental', 'round', 'square']);
+  function whatItIs(name) {
+    const toks = words(specs(bare(name).split(',')[0].split(/\s(?:with|w\/|for)\s/i)[0]).rest).filter(w => !/^\d/.test(w));
+    while (toks.length > 1 && (HOW_PACKED.indexOf(toks[toks.length - 1]) !== -1 || FILLER.indexOf(toks[toks.length - 1]) !== -1)) toks.pop();
+    return toks.length ? toks[toks.length - 1] : '';
+  }
+  // Different words for one sort of thing. "Nail" is in two: Liquid Nails is
+  // a glue, a landscape nail holds down fabric or edging.
+  const SORTS = [
+    ['adhesive', 'glue', 'paste', 'nail'], ['sealer', 'protector', 'finish'],
+    ['cleaner', 'remover', 'wash', 'stripper', 'solvent', 'mold'], ['sand', 'nitro'], ['tape', 'seaming'],
+    ['pin', 'staple', 'nail', 'spike'], ['fabric', 'barrier'], ['edging', 'edge', 'edger', 'timber'],
+    ['coupling', 'coupler', 'connector', 'connect', 'adapter', 'adaptor', 'fitting'],
+    ['insert', 'ring'], ['table', 'firetable'],
+    ['cap', 'coping', 'bullnose'], ['step', 'riser', 'tread'], ['pillar', 'column'],
+  ];
+  // Kinds that are one sort of thing whatever the last word of the name is (a
+  // paver's name ends in its product line, a wall block's in "large"), but for
+  // the sorts named above: a wall cap is not a wall block.
+  const ONE_SORT_KINDS = ['wall', 'pavers', 'natural', 'decorative', 'mulch', 'soil', 'stone', 'bagged', 'fill', 'dumpster'];
+  function sameSort(a, b) {
+    const x = whatItIs(a.name), y = whatItIs(b.name);
+    if (SORTS.some(g => g.indexOf(x) !== -1 && g.indexOf(y) !== -1)) return true;
+    if (ONE_SORT_KINDS.indexOf(a.category) === -1) return !!x && x === y;
+    const named = w => SORTS.some(g => g.indexOf(w) !== -1);
+    return !named(x) && !named(y);
+  }
+  // `from`: a Supplies item, or { name } for a line not joined to one, which
+  // has no kind or tags to go by.
+  function similar(from, items, usesOf) {
+    const joined = !!from.id;
+    const tags = joined && usesOf ? usesOf(from) : [];
+    return items.filter(it => it.name && it.id !== from.id &&
+      (!joined || (it.category || '') === (from.category || '')) &&
+      (!tags.length || usesOf(it).some(t => tags.indexOf(t) !== -1)) && sameSort(joined ? from : Object.assign({ category: it.category }, from), it));
+  }
+
   window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
+                     similar: similar, whatItIs: whatItIs,
                      oneEach: u => ONE_EACH.indexOf(unitKey(u)) !== -1,
                      pack: pack, packFromName: packFromName, partByKind: partByKind, readsAsWork: readsAsWork,
                      plainSeed: plainSeed, isGrassSeed: isGrassSeed, famOf: famOf, biggestBag: biggestBag,

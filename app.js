@@ -2796,12 +2796,13 @@ function emailSupplierOrder(vid) {
 // touched. `swappedFrom` keeps what it was (Put back), and the line is his
 // from then on: "Update from the estimate" leaves it (orderFromEstimate).
 // One open at a time: {job: ordId of the job ('' = the open job's list on the
-// Job tab), key: ordLineKey, adding: the not-in-Supplies form}.
+// Job tab), key: ordLineKey, adding: the not-in-Supplies form, all: every item
+// in Supplies listed, not only the similar ones}.
 let swappingOrder = null;
 const swapIsOpen = (job, key) => !!swappingOrder && swappingOrder.job === job && swappingOrder.key === key;
-function orderSwapOpen(job, key, adding) {
+function orderSwapOpen(job, key, adding, all) {
   if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
-  swappingOrder = { job: job, key: key, adding: !!adding };
+  swappingOrder = { job: job, key: key, adding: !!adding, all: !!all };
   orderListsRedraw();
 }
 function orderSwapCancel() { swappingOrder = null; orderListsRedraw(); }
@@ -2834,20 +2835,28 @@ function orderSwapHtml(job, key, it, cat) {
       '<button type="button" class="link-btn" onclick="' + call('orderSwapOpen') + '">Back to the list</button> ' +
       '<button type="button" class="link-btn" onclick="orderSwapCancel()">Cancel</button></span></div>';
   }
-  // Nearest first: what the same supplier sells of the same kind (their other
-  // sizes of it), then the same kind, then everything else. Until a word is
-  // typed the box shows 50 of ~960, and same kind by A to Z alone left a
-  // supplier late in the alphabet past that cut, so the other size of the very
-  // thing on the line wasn't there to pick.
+  // Only what could stand in for this line (YDMatch.similar): a paver sealer
+  // was on offer for turf glue. Everything in Supplies stays one deliberate tap
+  // away, for the swap nobody could have called similar. Nearest first: what
+  // the same supplier sells of the same kind (their other sizes of it), then
+  // the same kind, then the rest.
   const from = it.supplyId ? cat.items[it.supplyId] : null;
+  const others = Object.values(cat.items).filter(s => s.id !== it.supplyId && s.name);
+  const all = !!swappingOrder.all || !window.YDMatch || !YDMatch.similar;
+  const offered = all ? others : YDMatch.similar(from || { name: it.name || '' }, others, YDSupplies.usesOf);
   const kind = from ? from.category || '' : '';
   const nearness = s => !from || (s.category || '') !== kind ? 2 : s.vendorId === from.vendorId ? 0 : 1;
-  const list = Object.values(cat.items).filter(s => s.id !== it.supplyId && s.name)
-    .sort((a, b) => (nearness(a) - nearness(b)) || String(a.name).localeCompare(String(b.name)));
+  const list = offered.slice().sort((a, b) => (nearness(a) - nearness(b)) || String(a.name).localeCompare(String(b.name)));
+  const asked = all ? 'Which Supplies item instead?' : list.length ? 'Which similar item instead?' : 'Nothing similar in Supplies';
+  // What is on the line now is listed too, and says so. Left off, the size
+  // already swapped to could not be found: searching for it brought up only
+  // other things of that size (Jonah, 4 Nov 2026).
+  const onIt = from ? '<option value="__same">✓ On this line now: ' + esc(from.name) + '</option>' : '';
   return (was ? '<br>' + was : '') + '<div class="ord-swap"><b>Swap to</b>' +
-    '<select class="searchable" onchange="' + call('orderSwapPick', ', this.value') + '"><option value="">Which Supplies item instead?</option>' +
+    '<select class="searchable" onchange="' + call('orderSwapPick', ', this.value') + '"><option value="">' + asked + '</option>' + onIt +
       list.map(s => '<option value="' + esc(s.id) + '">' + esc(s.name) + (vname(s) ? ' — ' + esc(vname(s)) : '') + esc(priceOf(s)) + '</option>').join('') + '</select>' +
-    '<span><button type="button" class="link-btn" onclick="' + call('orderSwapOpen', ', true') + '">Not in Supplies? Add it</button> ' +
+    '<span><button type="button" class="link-btn" onclick="' + call('orderSwapOpen', all ? '' : ', false, true') + '">' + (all ? 'Only similar items' : 'Search all of Supplies') + '</button> ' +
+    '<button type="button" class="link-btn" onclick="' + call('orderSwapOpen', ', true') + '">Not in Supplies? Add it</button> ' +
     '<button type="button" class="link-btn" onclick="orderSwapCancel()">Cancel</button></span></div>';
 }
 // The line on another item, or back to what it was when that is the one picked.
@@ -2903,6 +2912,7 @@ function orderSwapApply(job, key, fn) {
   return true;
 }
 function orderSwapPick(job, key, sid) {
+  if (sid === '__same') { orderSwapCancel(); showToast('That’s already on this line'); return; }
   const cat = window.YDSupplies ? window.YDSupplies.catalog() : null;
   if (!sid || !cat || !cat.items[sid]) return;
   if (orderSwapApply(job, key, o => orderSwapFields(o, sid, cat))) showToast('Swapped to ' + cat.items[sid].name + ' — check the amount');

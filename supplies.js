@@ -2228,6 +2228,7 @@
       count: Object.values(items).filter(it => usesOf(it).indexOf(t) !== -1).length })),
     tagTargets: () => USES.map(u => ({ id: u.id, name: u.name })).concat(customTags().map(t => ({ id: t, name: t }))),
     tagFor: t => tagFor(t),
+    usesOf: usesOf,               // app.js, what can be swapped for what (YDMatch.similar)
     moveTag: (was, to) => {
       if (!edits() || !was || was === to) return 0;
       const n = retag(Object.values(items).filter(it => usesOf(it).indexOf(was) !== -1),
