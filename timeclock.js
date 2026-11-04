@@ -1155,6 +1155,10 @@
     '</div>';
   }
 
+  // The crew's job list came in after the card was drawn: the way to the job
+  // on the card goes by that list.
+  document.addEventListener('yd-crew-jobs', () => { if (clockShowing()) renderClockCard(); });
+
   // The few seconds after Clock out or Break, before anything is written:
   // the time stopped where it was tapped, and one big way back.
   function leavingHtml(e) {
@@ -1173,8 +1177,11 @@
     if (leavingNow(e.id)) return leavingHtml(e);
     const p = openPause(e);
     const paid = paidMs(e), bill = billableMs(e);
+    // On a job: a tap to it, its name too (crewjobs.js ydOpenShiftJob).
+    const jobId = e.kind === 'job' && window.YDCrewJobs && YDCrewJobs.canOpen(e.targetId) ? safeId(e.targetId) : '';
+    const open = 'ydOpenShiftJob(\'' + jobId + '\')';
     return '<div class="clock-live' + (p ? ' paused' : '') + '">' +
-      '<div class="clock-where">' + esc(whereOf(e)) +
+      '<div class="clock-where">' + (jobId ? '<button class="clock-job-link" onclick="' + open + '">' + esc(whereOf(e)) + ' ›</button>' : esc(whereOf(e))) +
         (e.kind === 'storm' ? ' <span class="clock-kind">storm</span>' : '') +
         (OVERHEAD_LABEL[e.kind] ? ' <span class="clock-kind">not a job</span>' : '') + '</div>' +
       '<div class="clock-elapsed" data-live-entry="' + safeId(e.id) + '">' + fmtDur(paid) + '</div>' +
@@ -1184,6 +1191,7 @@
       (p ? '<div class="clock-pausenote">Paused for ' + esc(p.reason) +
              ' — still being paid, not billed to the customer.</div>' : '') +
       limitNoteHtml(e) +
+      (jobId ? '<button class="btn btn-filled clock-job-btn" onclick="' + open + '">📋 Open the job</button>' : '') +
       (pausingId === e.id
         ? '<div class="pause-reasons"><p class="clock-lead">What for?</p>' +
             PAUSE_REASONS.map(r =>
@@ -4025,6 +4033,9 @@
     // is written (Undo); `ms` stops where it was tapped. `inWords`: "in at
     // 7:02 AM", or "in Tue 3:05 PM" when it began on an earlier day.
     // `note`: the clock's warning on a long shift.
+    // The jobs on a calendar today, those this person is on first (the job
+    // picker's order; the crew's Jobs tab and Home list go by it too).
+    todaysJobs: todaysJobs,
     mine: () => {
       const s = myOpenShift(), b = s ? null : myBreak();
       const out = s && leavingNow(s.id) ? leaving : null;

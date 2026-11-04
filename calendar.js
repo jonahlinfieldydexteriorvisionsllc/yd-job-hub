@@ -567,6 +567,9 @@
   // ---------------------------------------------------------------- render
 
   const isGrid = () => view === 'day' || view === '3day' || view === 'week';
+  // The week on a phone is a list, day by day: seven columns that narrow
+  // showed tiny icons with no words, so "where am I Friday?" had no answer.
+  const phoneWeek = () => view === 'week' && isPhone();
   function gridDays() {
     const first = view === 'week' ? weekStart(cursor) : cursor;
     const n = view === 'day' ? 1 : view === '3day' ? 3 : 7;
@@ -617,7 +620,8 @@
     // The "any time" list goes in two places -- down the side on a computer,
     // above the calendar on a phone (the stylesheet shows one) -- built once.
     // My day has it in the page already.
-    const anyTime = view === 'myday' ? '' : todayHtml();
+    // The week as a list on a phone holds today's own (weekListHtml).
+    const anyTime = view === 'myday' || phoneWeek() ? '' : todayHtml();
     wrap.innerHTML = filtersHtml() + '<div class="cal-shell">' +
         '<aside class="cal-side' + (sideOpen ? ' open' : '') + '">' + sideHtml() + '</aside>' +
         '<div class="cal-main">' + topHtml() +
@@ -625,7 +629,7 @@
           anyTime +
           '<div class="cal-body" id="calBody">' +
             (view === 'month' ? monthHtml() : view === 'schedule' ? listHtml() : view === 'myday' ? myDayHtml()
-              : gridHtml(gridDays())) +
+              : phoneWeek() ? weekListHtml() : gridHtml(gridDays())) +
           '</div>' +
         '</div>' +
       '</div>';
@@ -1429,6 +1433,24 @@
     const days = Array.from(new Set(occ.map(o => o.day)));
     return '<div class="cal-week">' + days.map(d => dayBlock(d, occ.filter(o => o.day === d), false)).join('') + '</div>';
   }
+
+  // The week as a list (phoneWeek): every day of it, an empty one saying so,
+  // so a day with nothing on it reads as that and not as a day left out. On
+  // the week of today it opens at today, the days gone behind one button.
+  // Where they are working that day heads it, as on My day.
+  let weekPast = '';        // the week whose earlier days were asked for
+  function weekListHtml() {
+    const days = gridDays(), t = today();
+    const occ = occurrences(days[0], days[days.length - 1]);
+    const gone = days.filter(d => d < t);
+    const fold = weekPast !== days[0] && gone.length > 0 && gone.length < days.length;
+    const onDay = d => occ.filter(o => o.day === d).sort((a, b) => (b.jobDay ? 1 : 0) - (a.jobDay ? 1 : 0));
+    return '<div class="cal-week cal-weeklist cal-pan">' +
+      (fold ? '<button class="btn btn-sm cal-week-earlier" onclick="calWeekEarlier()">Show earlier this week (' + gone.length + ')</button>' : '') +
+      (fold ? days.filter(d => d >= t) : days).map(d => dayBlock(d, onDay(d), true)).join('') +
+    '</div>';
+  }
+  window.calWeekEarlier = function () { weekPast = gridDays()[0]; render(); };
 
   function dayBlock(day, list, showEmpty) {
     const t = today();
@@ -2888,6 +2910,10 @@
   function panTargets() {
     const body = el('calBody');
     if (!body) return null;
+    if (phoneWeek()) {
+      const m = body.querySelector('.cal-weeklist');
+      return m && { els: [m], w: body.clientWidth, nb: false };
+    }
     if (isGrid()) {
       const vp = body.querySelector('.cg-body .cg-vp');
       return vp && { els: Array.from(body.querySelectorAll('.cg-track')), w: vp.clientWidth, nb: true };

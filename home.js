@@ -458,13 +458,19 @@
           '↩ Undo — stay on the clock</button></div>';
     } else if (m.shift) {
       badge = m.shift.paused ? 'Paused' : 'On the clock';
+      // On a job: a tap to that job, its name too. It used to say "Go to the
+      // clock", one tab away, and the job itself meant finding it on Jobs.
+      const jobId = m.shift.kind === 'job' && window.YDCrewJobs && YDCrewJobs.canOpen(m.shift.targetId) ? safe(m.shift.targetId) : '';
+      const open = 'ydOpenShiftJob(\'' + jobId + '\')';
       body = '<div class="hm-clock on">' +
-          '<div class="hm-clock-where">' + esc(m.shift.where || 'Working') + '</div>' +
+          '<div class="hm-clock-where">' + (jobId ? '<button class="hm-clock-job" onclick="' + open + '">' + esc(m.shift.where || 'Working') + ' ›</button>'
+            : esc(m.shift.where || 'Working')) + '</div>' +
           '<div class="hm-clock-sub">' + esc(m.shift.inWords || 'in at ' + m.shift.since) + ' · <b>' + esc(dur(m.shift.ms)) + '</b>' +
             (m.shift.paused ? ' · paused for ' + esc(m.shift.paused) : '') + '</div>' +
           (m.shift.note ? '<div class="hm-clock-note">⏱ ' + esc(m.shift.note) + '</div>' : '') + '</div>' +
         '<div class="hm-actions">' +
-          '<button class="btn btn-filled" onclick="switchTab(\'clock\')">Go to the clock</button>' +
+          (jobId ? '<button class="btn btn-filled" onclick="' + open + '">📋 Open the job</button>'
+            : '<button class="btn btn-filled" onclick="switchTab(\'clock\')">Go to the clock</button>') +
           '<button class="btn" onclick="homeClock(\'takeBreak\', \'' + safe(m.shift.id) + '\')">🍔 Break</button></div>' +
         // On a line of its own and marked as the one that ends the day.
         '<div class="hm-actions hm-out-row"><button class="btn hm-out" onclick="homeClock(\'clockOut\', \'' + safe(m.shift.id) + '\')">' +
@@ -1244,7 +1250,8 @@
         '<span class="hm-job-m">' + place + '<b>' + esc(j.name || 'Job') + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
           (j.what ? '<small class="hm-job-what">' + esc(j.what) + '</small>' : '') +
           '<small>' + esc([j.address, j.city].filter(Boolean).join(', ')) + '</small>' +
-          (mineToday[j.id] ? '<small class="hm-when you">👷 You’re on it today</small>'
+          (j.today === 'clock' ? '<small class="hm-when you">⏱ You’re on the clock here</small>'
+            : mineToday[j.id] || j.today === 'mine' ? '<small class="hm-when you">👷 You’re on it today</small>'
             : n ? '<small class="hm-when">📅 ' + esc(dayWords(n.day)) + (n.time ? ' · ' + esc(n.time) : '') + '</small>' : '') +
           (YDCrewJobs.progressHtml ? YDCrewJobs.progressHtml(j) : '') +
         '</span><span class="hm-job-r"><span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></span></button>';

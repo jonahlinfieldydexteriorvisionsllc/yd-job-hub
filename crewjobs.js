@@ -733,9 +733,10 @@
     const rest = mats.filter(m => !m.work || !ids[m.work]);
     const haul = (j.spoil > 0 ? '<div class="cj-haul">🚛 About <b class="cj-m">' + esc(fmtNum(j.spoil)) + ' cu yd</b> of soil and debris to haul away</div>' : '') +
       (j.brush > 0 ? '<div class="cj-haul">🌿 About <b class="cj-m">' + esc(fmtNum(j.brush)) + ' cu yd</b> of brush — its own dumpster, no soil or rock in it</div>' : '');
+    // The third word: where the page's jump buttons land (cjJump).
     return sec('🎨 Paint on the ground', paintHtml()) +
-      sec(opts.title || '🛠 The work', (W && lines ? W.sumHtml(opts.ticks.job, W.linesOfCopy(j)) : '') + lines + (lines ? haul : '')) +
-      sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest, opts.matExtra) : '') +
+      sec(opts.title || '🛠 The work', (W && lines ? W.sumHtml(opts.ticks.job, W.linesOfCopy(j)) : '') + lines + (lines ? haul : ''), 'work') +
+      sec(lines ? '🧱 Materials for the whole job' : '🧱 Materials for the job', rest.length ? matTable(rest, opts.matExtra) : '', 'mats') +
       (lines ? '' : sec('🚛 Haul away', haul));
   }
 
@@ -776,10 +777,17 @@
   // What we fetch ourselves (pickupsEntry), each supplier once: what to get
   // there, the shop's address and hours, Directions and Call -- a gloved
   // thumb's size, as for the rentals. ✓ when it is ticked as ordered.
-  function pickupsHtml(j, preview) {
+  // Folded to one line saying where and how many (4 Nov 2026): open, a long
+  // list stood between the crew and the work, which is what they came for.
+  function pickupsHtml(id, j, preview) {
     const list = Array.isArray(j.pickups) ? j.pickups : [];
     if (!list.length) return '';
-    return '<div class="cj-sec cj-rentals cj-pickups"><div class="cj-h">🏪 Materials to pick up</div>' + list.map(p => {
+    const shops = list.map(p => (p.shop || {}).name).filter(Boolean);
+    const count = list.reduce((n, p) => n + (p.items || []).length, 0);
+    const sub = shops.join(', ') + (count ? (shops.length ? ' · ' : '') + count + ' item' + (count === 1 ? '' : 's') : '');
+    return '<details class="cj-sec cj-fold cj-rentals cj-pickups"' + foldAttr(id + '|pickups', false) + '>' +
+      '<summary class="cj-fold-h"><span class="cj-h">🏪 Materials to pick up</span>' +
+        (sub ? '<span class="cj-fold-sub">' + esc(sub) + '</span>' : '') + '</summary>' + list.map(p => {
       const s = p.shop || {}, tel = String(s.phone || '').replace(/[^0-9+]/g, '');
       return '<div class="cj-rental">' +
         '<div class="cj-rental-where">At <b>' + esc(s.name || 'no supplier set') + '</b>' +
@@ -793,7 +801,7 @@
           (tel ? '<a class="btn cj-go-btn" href="tel:' + esc(tel) + '">📞 Call<span class="cj-go-sub">' + esc(s.phone) + '</span></a>' : '') +
         '</div>' : '') +
       '</div>';
-    }).join('') + '</div>';
+    }).join('') + '</details>';
   }
 
   // ------------------------------------------------ the tools to bring
@@ -804,6 +812,8 @@
   // seen before the long scopes: machines by type, then hand tools, each a
   // button to tap as it goes on the truck. The ticks are this phone's own,
   // for today only (packing is every morning) -- never sent anywhere.
+  // Folded to its heading and count (4 Nov 2026): a job's 34 tools took a
+  // whole screen above the work. The Tools button at the top opens it.
   const PACKED = 'ydjobhub_toolsPacked';
   const today = () => { const t = new Date(); return t.getFullYear() + '-' + (t.getMonth() + 1) + '-' + t.getDate(); };
   function packedOf(id) {
@@ -838,15 +848,17 @@
       groups[at[g]].list.push(t);
     });
     const n = tools.filter(t => packed[toolTick(t)]).length;
-    return '<div class="cj-sec cj-tools" data-job="' + esc(safe(id)) + '"><div class="cj-h">🧰 Tools to bring' +
-        (preview ? '' : ' <span class="cj-tools-n">' + (n ? n + ' of ' + tools.length + ' packed' : tools.length) + '</span>') + '</div>' +
+    return '<details class="cj-sec cj-fold cj-tools" data-jump="tools" data-job="' + esc(safe(id)) + '"' + foldAttr(id + '|tools', false) + '>' +
+      '<summary class="cj-fold-h"><span class="cj-h">🧰 Tools to bring</span>' +
+        (preview ? '<span class="cj-fold-sub">' + tools.length + '</span>'
+          : '<span class="cj-fold-sub cj-tools-n">' + (n ? n + ' of ' + tools.length + ' packed' : tools.length) + '</span>') + '</summary>' +
       groups.map(g => '<div class="cj-sub">' + esc(g.name) + '</div><div class="cj-tool-chips">' + g.list.map(t => {
         const on = !!packed[toolTick(t)];
         return '<button type="button" class="cj-tool' + (on ? ' on' : '') + '" aria-pressed="' + on + '" data-k="' + esc(toolTick(t)) + '"' +
           (preview ? ' disabled' : ' onclick="cjToolPacked(this)"') + '>' + (on ? '✓ ' : '') + esc(toolWords(t)) + '</button>';
       }).join('') + '</div>').join('') +
       (preview ? '' : '<div class="hint cj-tools-hint">Tap each one as it goes on the truck — the ticks stay on this phone, for today.</div>') +
-    '</div>';
+    '</details>';
   }
   // One tap: that button and the count, nothing else redrawn.
   window.cjToolPacked = function (b) {
@@ -905,13 +917,25 @@
     const where = [j.address, j.city, [j.state, j.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ');
     const tel = String(j.phone || '').replace(/[^0-9+]/g, '');
     const days = window.YDCalendar && YDCalendar.forJob ? YDCalendar.forJob(id) : [];
-    const sec = (title, body) => body ? '<div class="cj-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : '';
-    // The site-visit notes are where the gate code, the dog, where to park
-    // and what to watch for live: above the work, not under it. A long one
-    // shows its start and opens on a tap. (Not the job's own notes: those
-    // are the office's -- see crewNotes -- and stay at the foot.)
-    const before = j.siteNotes ? ['<div class="cj-text">' + marked(j.siteNotes) + '</div>'] : [];
-    const long = String(j.siteNotes || '').length > 600;
+    const sec = (title, body, jump) => body ? '<div class="cj-sec"' + (jump ? ' data-jump="' + jump + '"' : '') + '><div class="cj-h">' + title + '</div>' + body + '</div>' : '';
+    // The notes are where the gate code, the dog, where to park and what to
+    // watch for live: above the work, not under it. Both sets go here, the
+    // site visit's and the job's own (those used to sit at the very foot of
+    // the page, 7 screens down on a big job; crewNotes has taken the billing
+    // out of them). A long lot shows its start and opens on a tap, so the
+    // shorter one goes first and the fold takes as little as it can.
+    const noted = [j.siteNotes, j.notes].map(n => String(n || '').trim()).filter((n, i, all) => n && all.indexOf(n) === i)
+      .sort((a, b) => a.length - b.length);
+    const before = noted.map(n => '<div class="cj-text">' + marked(n) + '</div>');
+    const long = noted.join('').length > 600;
+    // One tap to each part of a long page -- the work starts well down it,
+    // under who is working, rentals and pickups. Only the parts this job
+    // has; no row at all when Photos would be alone (the bar has that one).
+    const jumps = [(j.work || []).length ? ['work', '🛠', 'Work'] : null,
+      (j.materials || []).length || (j.order || []).length ? ['mats', '🧱', 'Materials'] : null,
+      (j.tools || []).length ? ['tools', '🧰', 'Tools'] : null].filter(Boolean);
+    const jumpRow = jumps.length ? '<div class="cj-jump">' + jumps.concat([['photos', '📷', 'Photos']]).map(([k, icon, n]) =>
+      '<button type="button" class="cj-jump-btn" onclick="cjJump(\'' + k + '\')">' + icon + '<span>' + n + '</span></button>').join('') + '</div>' : '';
     // "7:30am" as the rest of the app writes a time (the calendar's own
     // words), not "07:30".
     const timeOf = x => x.when || (x.time ? x.time : '');
@@ -928,6 +952,9 @@
         (where ? '<a class="btn cj-go-btn" href="' + esc(mapUrl(j)) + '" target="_blank" rel="noopener">🧭 Directions</a>' : '') +
         (tel ? '<a class="btn cj-go-btn" href="tel:' + esc(tel) + '">📞 Call<span class="cj-go-sub">' + esc(j.phone) + '</span></a>' : '') +
       '</div>' : '') +
+      // Up here it is on the first screen of the smallest phone, however
+      // long the notes under it run.
+      jumpRow +
       (before.length ? '<div class="cj-before' + (long ? ' cj-folded' : '') + '" id="cjBefore">' +
           '<div class="cj-before-h">⚠️ Before you start</div>' +
           '<div class="cj-before-body">' + before.join('') + '</div>' +
@@ -952,13 +979,12 @@
           (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') +
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
       rentalsHtml(j, days, preview) +
-      pickupsHtml(j, preview) +
+      pickupsHtml(id, j, preview) +
       toolsHtml(id, j, preview) +
       workHtml(j, sec, { key: id, ticks: { job: id, preview: preview } }) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
-          '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '') +
-      sec('🗒 Notes', j.notes ? '<div class="cj-text">' + marked(j.notes) + '</div>' : '') +
+          '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '', 'order') +
       // Too much rock, no dump trailer, took a day longer -- noted for Jonah
       // and the next bid (jobissues.js), with what they noted here before.
       '<div class="cj-sec cj-issues" id="cjIssues" data-job="' + safe(id) + '"></div>' +
@@ -1007,10 +1033,12 @@
     if (window.YDJobIssues && YDJobIssues.mountLike) YDJobIssues.mountLike(el('cjLessons'), id);
     if (window.YDJobLog) YDJobLog.mount(el('cjLog'), id, j, preview);
     // What the signed PDF says about the job: the crew have no job form.
+    // `lines`: each piece of work, for a sign-off to go by what is ticked done.
     const paper = j && {
       name: j.name || 'Customer', customer: j.name || '',
       address: [j.address, j.city, [j.state, j.zip].filter(Boolean).join(' ')].filter(Boolean).join(', '),
       number: j.est || '', work: (j.work || []).map(w => w.title).filter(Boolean).slice(0, 20),
+      lines: window.YDWorkDone ? YDWorkDone.linesOfCopy(j).filter(w => w.title).slice(0, 20) : null,
     };
     if (window.YDSignatures && el('cjSigs') && j) YDSignatures.mount(el('cjSigs'), id, paper);
     if (window.YDChangeOrders && el('cjChanges') && j) YDChangeOrders.mount(el('cjChanges'), id, paper);
@@ -1109,6 +1137,35 @@
     const b = el('cjBefore');
     if (b) b.classList.remove('cj-folded');
   };
+  // A button at the top of the page: that part brought up under the row,
+  // opened if it is folded. Materials are the whole-job list where there is
+  // one, then what was ordered, then the first ones under a piece of work.
+  window.cjJump = function (key) {
+    const m = el('crewJobModal');
+    if (!m) return;
+    const t = key === 'photos' ? el('cjPhotos')
+      : key === 'mats' ? m.querySelector('[data-jump="mats"]') || m.querySelector('[data-jump="order"]') || m.querySelector('.cj-work .cj-sub')
+      : m.querySelector('[data-jump="' + key + '"]');
+    if (!t) return;
+    if (t.tagName === 'DETAILS') t.open = true;
+    if (t.scrollIntoView) t.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (key === 'photos') {
+      t.classList.add('cj-flash');
+      setTimeout(() => t.classList.remove('cj-flash'), 1600);
+    }
+  };
+
+  // The job someone is on the clock at, from the clock (Home's card, the
+  // Clock tab): the crew's page of it, or the Job tab for whoever has that
+  // one. canOpen: false for a job with neither (a finished job clocked in
+  // to, on a crew phone; one this device doesn't hold), where the clock
+  // shows no way to it rather than a button that does nothing.
+  const hasJobTab = () => typeof ydCan === 'function' && ydCan('jobs', 'see');
+  const canOpenJob = id => !!id && (!!jobs[id] || (hasJobTab() && typeof readJobBlob === 'function' && !!readJobBlob(id)));
+  window.ydOpenShiftJob = function (id) {
+    if (jobs[id]) window.openCrewJob(id);
+    else if (hasJobTab() && window.homeOpenJob) window.homeOpenJob(id);
+  };
 
   // A crew member opening one of their jobs.
   window.openCrewJob = function (id) {
@@ -1140,13 +1197,23 @@
   }
   document.addEventListener('yd-workdone', () => { if (Object.keys(jobs).length) render(); });
 
-  // In progress first (A to Z), then the booked ones in line -- the order
+  // Today's first: the job they are on the clock at, then the ones they are
+  // on by name today, then any other job on the calendar today (the clock's
+  // own list of today's jobs, YDClock.todaysJobs). A row's `today` says which.
+  // Then in progress (A to Z), then the booked ones in line -- the order
   // Jonah has them in (jobline.js, carried on each copy as `line`), so the
   // crew lead always knows what is coming up next (Jonah, 26 Oct 2026).
   const placeOf = j => (j.status !== 'inprogress' && j.line && j.line.place > 0 ? j.line.place : Infinity);
+  const TODAY_RANK = { clock: 0, mine: 1, crew: 2, '': 3 };
   function listed() {
-    return Object.keys(jobs).map(id => Object.assign({ id: id }, jobs[id]))
-      .sort((a, b) => (a.status === 'inprogress' ? 0 : 1) - (b.status === 'inprogress' ? 0 : 1) ||
+    const today = window.YDClock && YDClock.todaysJobs ? YDClock.todaysJobs() : {};
+    const s = myShift();
+    const clocked = s && s.kind === 'job' && !s.leaving ? s.targetId : '';
+    const todayOf = id => (id === clocked ? 'clock' : !today[id] ? '' : today[id].mine ? 'mine' : 'crew');
+    const at = id => (today[id] ? today[id].at : 0);
+    return Object.keys(jobs).map(id => Object.assign({ id: id, today: todayOf(id) }, jobs[id]))
+      .sort((a, b) => TODAY_RANK[a.today] - TODAY_RANK[b.today] || at(a.id) - at(b.id) ||
+        (a.status === 'inprogress' ? 0 : 1) - (b.status === 'inprogress' ? 0 : 1) ||
         ((placeOf(a) - placeOf(b)) || 0) || String(a.name).localeCompare(String(b.name)));
   }
   // Its place in line as a pill ("2nd"), the same as Jonah sees.
@@ -1172,7 +1239,9 @@
     return '<button class="cj-row" onclick="openCrewJob(\'' + safe(j.id) + '\')">' +
       '<span class="cj-row-name">' + placeHtml(j) + '<b>' + esc(j.name) + '</b>' + (j.est ? ' <span class="job-num">#' + esc(j.est) + '</span>' : '') +
         (j.what ? '<span class="cj-row-what">' + esc(j.what) + '</span>' : '') +
-        (town ? '<small>' + esc(town) + '</small>' : '') + daysHtml(j) +
+        (town ? '<small>' + esc(town) + '</small>' : '') +
+        (j.today === 'clock' ? '<small class="cj-row-today">⏱ You’re on the clock here</small>'
+          : j.today === 'mine' ? '<small class="cj-row-today">👷 You’re on it today</small>' : '') + daysHtml(j) +
         (placeOf(j) !== Infinity && window.YDJobLine ? '<small>' + esc(YDJobLine.words({ day: j.line.day, how: j.line.how })) + '</small>' : '') +
         progressHtml(j) + '</span>' +
       '<span class="cj-status">' + (j.status === 'inprogress' ? 'In progress' : 'Booked') + '</span></button>';
@@ -1183,14 +1252,17 @@
     const wrap = el('crewJobsWrap');
     if (!wrap) return;
     const list = listed();
-    const going = list.filter(j => j.status === 'inprogress'), next = list.filter(j => j.status !== 'inprogress');
+    const now = list.filter(j => j.today), rest = list.filter(j => !j.today);
+    const going = rest.filter(j => j.status === 'inprogress'), next = rest.filter(j => j.status !== 'inprogress');
     wrap.innerHTML = !list.length ? '<p class="empty-msg">No booked jobs right now.</p>' :
+      (now.length ? '<div class="cj-group">📍 Today <span class="cj-group-n">' + now.length + '</span></div>' + now.map(rowHtml).join('') : '') +
       (going.length ? '<div class="cj-group">🔨 Under way <span class="cj-group-n">' + going.length + '</span></div>' + going.map(rowHtml).join('') : '') +
       (next.length ? '<div class="cj-group">⏭ Up next — in line <span class="cj-group-n">' + next.length + '</span></div>' +
         next.map(rowHtml).join('') : '');
   }
-  // A day put on the Job schedule: the list says it.
-  document.addEventListener('yd-calendar-changed', () => { if (Object.keys(jobs).length) render(); });
+  // A day put on the Job schedule, or clocking in or out: the list says it,
+  // with today's job at the top.
+  ['yd-calendar-changed', 'yd-clock-changed'].forEach(ev => document.addEventListener(ev, () => { if (Object.keys(jobs).length) render(); }));
 
   function stop() { if (unsub) { try { unsub(); } catch (e) {} } unsub = null; jobs = {}; }
   function start(a) {
@@ -1243,5 +1315,7 @@
       ((title, body) => body ? '<div class="cj-sec"><div class="cj-h">' + title + '</div>' + body + '</div>' : ''), opts),
     // The crew's booked and in-progress jobs, as their Jobs tab lists them
     // (a crew phone; empty for anyone who has the Job tab instead).
-    list: () => listed() };
+    list: () => listed(),
+    // Whether the clock can offer a way to this job (see ydOpenShiftJob).
+    canOpen: canOpenJob };
 })();

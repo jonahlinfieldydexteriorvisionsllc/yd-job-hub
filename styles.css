@@ -1392,6 +1392,7 @@
   .cal-daypanel { margin-top:14px; }
 
   .cal-week { display:flex; flex-direction:column; gap:10px; }
+  .cal-week-earlier { align-self:flex-start; min-height:44px; }
   .cal-day { border:1px solid var(--border); border-radius:10px; background:var(--surface); overflow:hidden; }
   .cal-day.today { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
   .cal-day-head { display:flex; justify-content:space-between; align-items:center; padding:9px 13px;
@@ -3245,6 +3246,13 @@
   .hm-clock { padding:6px 2px 0; }
   .hm-clock-where { font-size:17px; font-weight:700; }
   .hm-clock.on .hm-clock-where { color:var(--pos); }
+  /* The job on the clock, as a way to it. */
+  .hm-clock-job { display:block; width:100%; min-height:40px; padding:2px 0; border:0; background:none; color:inherit; font:inherit; text-align:left;
+    text-decoration:underline; text-underline-offset:3px; cursor:pointer; overflow-wrap:anywhere; }
+  .clock-job-link { min-height:44px; padding:2px 0; border:0; background:none; color:var(--brand-ink, var(--brand)); font:inherit; text-align:left;
+    text-decoration:underline; text-underline-offset:3px; cursor:pointer; overflow-wrap:anywhere; }
+  html[data-night] .clock-job-link { color:var(--brand-2); }
+  .clock-job-btn { width:100%; min-height:48px; margin:10px 0 2px; }
   .hm-clock-sub { font-size:13px; color:var(--muted); margin-top:2px; }
 
   @media (max-width:720px) {
@@ -3526,6 +3534,11 @@
                           font-variant-numeric:tabular-nums; cursor:pointer; }
   #stormWrap .salt-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
   html[data-night] #stormWrap .salt-chip.on { background:var(--accent); border-color:var(--accent); color:#1a1208; }
+  /* Inches: the six on one row, so Depart stays near. "Same as last stop" under them. */
+  #stormWrap .inch-chips { display:grid; grid-template-columns:repeat(6, 1fr); gap:6px; }
+  #stormWrap .inch-chips .salt-chip { min-width:0; padding:0; }
+  #stormWrap .inch-chips .salt-chip:nth-child(7) { grid-column:1 / -1; }
+  @media (max-width:360px) { #stormWrap .inch-chips { grid-template-columns:repeat(3, 1fr); } }
 
   /* Why a stop is skipped: big buttons, two to a row. */
   #stormWrap .skip-why { display:grid; grid-template-columns:1fr 1fr; gap:8px; width:100%; }
@@ -4027,6 +4040,28 @@
   /* The bar along the foot of the screen: fixed to the window, not the
      page (crewjobs.js puts it beside the page, in the window). */
   #crewJobModal .modal-body { padding-bottom:96px; }
+  /* One tap to each part of a long page, kept in reach as it scrolls. The
+     window clips rather than hides its overflow: hidden would stop the row
+     sticking. Each landing place stops below the row. */
+  #crewJobModal .modal { overflow:clip; }
+  .cj-jump { position:sticky; top:0; z-index:4; display:grid; grid-auto-flow:column; grid-auto-columns:1fr; gap:6px;
+    margin:0 0 4px; padding:6px 0; background:var(--bg); }
+  .cj-jump-btn { min-height:48px; min-width:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px; padding:2px;
+    border:1px solid var(--border-strong, var(--border)); border-radius:8px; background:var(--surface); color:var(--text); font:inherit; font-size:14px;
+    line-height:1.15; cursor:pointer; }
+  .cj-jump-btn span { font-size:12.5px; font-weight:700; }
+  #crewJobModal [data-jump], #crewJobModal .cj-photos, #crewJobModal .cj-work .cj-sub { scroll-margin-top:78px; }
+  /* A folded part of the page: its heading, what is in it, and a thumb's room. */
+  .cj-fold > summary { list-style:none; }
+  .cj-fold > summary::-webkit-details-marker { display:none; }
+  .cj-fold-h { display:flex; align-items:center; flex-wrap:wrap; gap:0 8px; min-height:44px; padding:6px 10px; border-radius:8px;
+    background:var(--surface-2); cursor:pointer; }
+  .cj-fold-h::after { content:'▾'; margin-left:auto; color:var(--muted); font-size:14px; }
+  .cj-fold[open] > .cj-fold-h { margin-bottom:6px; }
+  .cj-fold[open] > .cj-fold-h::after { content:'▴'; }
+  .cj-fold-h .cj-h { margin-bottom:0; }
+  .cj-fold-sub { font-size:12.5px; color:var(--muted); overflow-wrap:anywhere; }
+  .cj-row-today { color:var(--pos); font-weight:700; }
   .cj-bar { position:fixed; z-index:5; left:50%; transform:translateX(-50%); bottom:0; width:min(680px, 100%);
     display:flex; gap:6px; padding:8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
     background:var(--bg); border-top:1px solid var(--border); box-shadow:0 -6px 18px rgba(0,0,0,.12); }
@@ -4876,6 +4911,10 @@
   .co-row .co-row-total { color:var(--text); font-weight:700; font-size:14px; text-align:right; }
   .co-row .co-row-stage { text-align:right; }
   .co-row:hover, .co-row:focus-visible { border-color:var(--brand-ink); }
+  /* Work not ticked done, a tap to put on a sign-off. */
+  .sg-left { margin:-6px 0 14px; }
+  .sg-left .hint { margin:0 0 6px; }
+  .sg-left-btn { display:block; width:100%; min-height:44px; margin-top:6px; white-space:normal; text-align:left; text-transform:none; letter-spacing:0; }
   .sg-for { margin:0 0 12px; color:var(--muted); font-size:14px; overflow-wrap:anywhere; }
   .sg-for b { color:var(--text); }
   .sg-kinds { display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:10px; }

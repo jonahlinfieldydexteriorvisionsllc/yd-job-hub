@@ -47,6 +47,7 @@
   const UNDO_MS = 8000;
   // Salt chips for gloves: the usual amounts, one tap each.
   const SALT_CHIPS = [0, 100, 200, 300, 500];
+  const INCH_CHIPS = [1, 2, 3, 4, 6, 8];
   // Picked as big buttons rather than typed. "Other…" asks for the words.
   const SKIP_REASONS = ['Under trigger', 'Car in the way', 'Cancelled by customer', 'Can’t get in'];
   // accountId -> { lbs, at }: the salt put down there on the last few storms,
@@ -414,20 +415,41 @@
     '</div>';
   }
 
-  // The salt amounts as chips under the salt box, and "Same as last time"
-  // when this account's last salt is known. A tap fills the box; Depart
-  // still reads the box, so typing and the stepper work as before.
+  // The amounts as chips under a box, and "Same as last ..." when that is
+  // known. A tap fills the box; Depart still reads the box, so typing and the
+  // stepper work as before. list: [[number, words], ...]
+  function chipRow(inputId, what, cur, list, cls) {
+    const v = String(cur).trim() === '' ? NaN : parseFloat(cur);
+    return '<div class="salt-chips' + (cls ? ' ' + cls : '') + '" data-chips-for="' + inputId + '" role="group" aria-label="' + what + '">' +
+      list.map(([n, label]) => '<button type="button" class="salt-chip' + (n === v ? ' on' : '') + '" data-n="' + n + '" ' +
+        'aria-pressed="' + (n === v) + '" onclick="stepperPick(\'' + inputId + '\',' + n + ')">' + esc(label) + '</button>').join('') +
+    '</div>';
+  }
   function saltChips(stopId, s) {
     const inputId = 'st-lbs-' + stopId;
     const cur = drafts[inputId] != null ? drafts[inputId] : (num(s.saltLbs, null) != null ? String(s.saltLbs) : '');
-    const v = String(cur).trim() === '' ? NaN : parseFloat(cur);
-    const chip = (n, label) => '<button type="button" class="salt-chip' + (n === v ? ' on' : '') + '" data-lbs="' + n + '" ' +
-      'aria-pressed="' + (n === v) + '" onclick="saltPick(\'' + inputId + '\',' + n + ')">' + label + '</button>';
     const same = lastSaltOf(s);
-    return '<div class="salt-chips" data-chips-for="' + inputId + '" role="group" aria-label="Salt used">' +
-      SALT_CHIPS.map(n => chip(n, n + ' lb')).join('') +
-      (same != null ? chip(same, 'Same as last time · ' + same + ' lb') : '') +
-    '</div>';
+    return chipRow(inputId, 'Salt used', cur, SALT_CHIPS.map(n => [n, n + ' lb'])
+      .concat(same != null ? [[same, 'Same as last time · ' + same + ' lb']] : []));
+  }
+  // The depth measured at the last stop left on this storm: usually about
+  // the same down the route. Only ever a tap: the box itself still starts
+  // empty (see stepper), so nothing is billed at a number nobody put there.
+  function lastInchesOf(s) {
+    let best = null;
+    Object.values(stops).forEach(x => {
+      if (x.id === s.id || !x.departedAt || x.skipped) return;
+      const n = num(x.inchesCleared, null);
+      if (n != null && (!best || String(x.departedAt) > best.at)) best = { n: n, at: String(x.departedAt) };
+    });
+    return best ? best.n : null;
+  }
+  function inchChips(stopId, s) {
+    const inputId = 'st-inches-' + stopId;
+    const cur = drafts[inputId] != null ? drafts[inputId] : (num(s.inchesCleared, null) != null ? String(s.inchesCleared) : '');
+    const same = lastInchesOf(s);
+    return chipRow(inputId, 'Inches cleared', cur, INCH_CHIPS.map(n => [n, n + '"'])
+      .concat(same != null ? [[same, 'Same as last stop · ' + same + '"']] : []), 'inch-chips');
   }
   function markChips(inputId) {
     const el = document.getElementById(inputId);
@@ -435,14 +457,14 @@
     if (!el || !group) return;
     const v = el.value.trim() === '' ? NaN : parseFloat(el.value);
     group.querySelectorAll('.salt-chip').forEach(b => {
-      const on = parseFloat(b.getAttribute('data-lbs')) === v;
+      const on = parseFloat(b.getAttribute('data-n')) === v;
       b.classList.toggle('on', on);
       b.setAttribute('aria-pressed', String(on));
     });
   }
-  // The chips follow what is in the salt box, without redrawing the card.
+  // The chips follow what is in the box, without redrawing the card.
   function touched(el) {
-    if (el && /^st-lbs-/.test(el.id)) markChips(el.id);
+    if (el && /^st-(lbs|inches)-/.test(el.id)) markChips(el.id);
   }
 
   window.stepperTyped = function (el) { drafts[el.id] = el.value; touched(el); };
@@ -454,7 +476,7 @@
     drafts[inputId] = el.value;
     touched(el);
   };
-  window.saltPick = function (inputId, n) {
+  window.stepperPick = function (inputId, n) {
     const el = document.getElementById(inputId);
     if (!el || typeof n !== 'number' || !isFinite(n)) return;
     el.value = n;
@@ -612,6 +634,7 @@
       // anything the steppers make slow (13.5 inches, 11 bags).
       actions =
         stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, ''), 0.5) +
+        inchChips(sid, s) +
         stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
         saltChips(sid, s) +
         '<button class="btn-stop depart" onclick="departStop(\'' + sid + '\')">Depart</button>' +
@@ -623,6 +646,7 @@
       // is still open (once it is closed, the bill is the office's).
       actions =
         stepper(sid, 'inches', 'Inches cleared', num(s.inchesCleared, ''), 0.5) +
+        inchChips(sid, s) +
         stepper(sid, 'lbs', 'Salt used (lbs)', num(s.saltLbs, ''), SALT_STEP) +
         saltChips(sid, s) +
         '<button class="btn btn-filled btn-sm" onclick="saveFix(\'' + sid + '\')">Save</button>' +

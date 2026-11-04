@@ -196,9 +196,11 @@ service cloud.firestore {
     // 'quickbooksMap' are billing's. Everything else is the owner's.
     match /settings/{docId} {
       allow read:  if isOwner() || (isStaff() && docId == 'public')
-        // Every admin reads 'snow' too: they may start a storm, and its route
-        // starts from the yard in the order set here.
-        || (docId == 'snow' && (canSee('snow') || isAdmin()))
+        // Everyone who works here reads 'snow': the yard and the order set by
+        // hand, no money. The crew's Snow tab draws the route from it, and
+        // without it said "Madison (yard not set)" and ignored that order.
+        // Changing it stays with Snow access (below).
+        || (docId == 'snow' && isStaff())
         || (docId in ['invoicing', 'quickbooksMap', 'invoiceReminders'] && canSee('billing'))
         // Which Supplies item his words mean (supplymatch.js): whoever sees Supplies.
         || (docId == 'supplyAliases' && canSee('supplies'))

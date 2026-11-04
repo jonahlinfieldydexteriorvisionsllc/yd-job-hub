@@ -342,6 +342,35 @@
     window.sgKind('change');
   }
 
+  // What a sign-off starts with: the customer signs "the work above is
+  // finished", so the box holds only the work ticked done (workdone.js).
+  // It used to hold every line of the estimate, ticked or not. The rest are
+  // buttons under it: a line that really is finished but was never ticked
+  // goes on in one tap, and the box can still be typed in.
+  function workSplit(jobId, info) {
+    const W = window.YDWorkDone;
+    const lines = info && info.lines;
+    if (!W || !Array.isArray(lines)) return { done: (info && info.work) || [], left: [] };
+    const has = l => W.isDone(jobId, l.id);
+    return { done: lines.filter(has).map(l => l.title), left: lines.filter(l => !has(l)).map(l => l.title) };
+  }
+  function leftHtml(left) {
+    if (!left.length) return '';
+    return '<div class="sg-left" id="sgLeft"><div class="hint">Not ticked done yet, so left off. Tap one only if it is finished:</div>' +
+      left.map(t => '<button type="button" class="btn btn-sm sg-left-btn" data-t="' + esc(t) + '" onclick="sgAddWork(this)">+ ' + esc(t) + '</button>').join('') +
+    '</div>';
+  }
+  window.sgAddWork = function (b) {
+    const box = el('sgWork');
+    if (!box || !b) return;
+    const had = box.value.replace(/\s+$/, '');
+    box.value = (had ? had + '\n' : '') + (b.dataset.t || '');
+    b.remove();
+    const wrap = el('sgLeft');
+    if (wrap && !wrap.querySelector('button')) wrap.remove();
+    window.sgReady();
+  };
+
   // Step two: the words, the signature, the name.
   window.sgKind = function (kind) {
     if (!form || !KIND_NAME[kind] || (kind === 'change' && !can('jobs', 'change') && !form.card)) return;
@@ -362,7 +391,8 @@
         '</div><div class="hint">Leave it empty when the price does not change.</div></div>' +
         field('sgSchedule', 'What it does to the schedule', '<input id="sgSchedule" placeholder="e.g. One more day; no change">');
     } else if (kind === 'signoff') {
-      body = field('sgWork', 'The work finished', area('sgWork', 'What was done', (info.work || []).join('\n'))) +
+      const work = workSplit(form.jobId, info);
+      body = field('sgWork', 'The work finished', area('sgWork', 'What was done', work.done.join('\n'))) + leftHtml(work.left) +
         field('sgNotes', 'Walk-through notes', area('sgNotes', 'Anything the customer pointed out, or to come back for'));
     } else {
       body = field('sgTitle', 'What it is', '<input id="sgTitle" placeholder="e.g. Permission to park the trailer on the lawn" oninput="sgReady()">') +
@@ -625,16 +655,17 @@
     if (got) return got;
     if (typeof currentJobId === 'undefined' || currentJobId !== id) return null;
     const v = f => String((el(f) || {}).value || '').trim();
-    let work = [];
+    let work = [], lines = null;
     try {
       const raw = typeof readJobBlob === 'function' ? readJobBlob(id) : null;
       const j = raw ? JSON.parse(raw) : null;
       work = ((j && j.estimate && j.estimate.work) || []).map(w => String(w.title || '').trim()).filter(Boolean).slice(0, 20);
+      if (j && window.YDWorkDone) lines = YDWorkDone.linesOfJob(j).filter(w => w.title).slice(0, 20);
     } catch (e) { /* none */ }
     const name = v('customerName') || 'Customer';
     return { name: name, customer: [v('firstName'), v('lastName')].filter(Boolean).join(' ') || name,
              address: [v('address'), v('city'), [v('state'), v('zip')].filter(Boolean).join(' ')].filter(Boolean).join(', '),
-             number: v('estimateNumber'), work: work };
+             number: v('estimateNumber'), work: work, lines: lines };
   }
 
   function rowHtml(id, d) {
