@@ -1515,8 +1515,6 @@ def _site(request, path):
     headers = wl.cors(origin)
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     ok = json.dumps({"ok": True})
-    if path == "/site/who":                         # TEMPORARY: a caller sees only their own address, to check wl.sender
-        return (json.dumps({"seen": request.headers.get("X-Forwarded-For", ""), "chosen": wl.sender(request)}), 200, json_headers)
     if path != "/site/lead":
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
     if not wl.origin_ok(origin):

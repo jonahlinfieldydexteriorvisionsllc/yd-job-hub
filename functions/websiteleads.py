@@ -110,13 +110,16 @@ def clean(body):
 
 def sender(request):
     """Who is posting: the last public address in X-Forwarded-For. Cloud Run
-    adds the real one at the end; what comes before it, a sender can make up."""
+    adds the real one at the end; what comes before it, a sender can make up
+    (seen on the live server, 3 Nov 2026). On IPv6 a home has a whole /64 to
+    hop around in, so that block counts as one sender."""
     for ip in reversed(request.headers.get("X-Forwarded-For", "").split(",")):
         try:
-            if ipaddress.ip_address(ip.strip()).is_global:
-                return ip.strip()
+            addr = ipaddress.ip_address(ip.strip())
         except ValueError:
             continue
+        if addr.is_global:
+            return str(ipaddress.ip_network((addr, 64), strict=False)) if addr.version == 6 else str(addr)
     return request.remote_addr or "?"
 
 
