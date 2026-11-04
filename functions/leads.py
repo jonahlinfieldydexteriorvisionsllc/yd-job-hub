@@ -403,6 +403,27 @@ def _he_answered(m, mid):
     return any("SENT" in (x.get("labelIds") or []) for x in got.get("messages") or [])
 
 
+def _sender_checks_out(mid, sender):
+    """Whether Gmail vouches for who the email says it is from: a From can
+    be typed by anyone, and the automatic reply would land on whoever was
+    named. A pass tied to the From's own domain counts; anything else, or a
+    check that fails, and the reply waits in Drafts for him."""
+    import receipts
+    domain = str(sender or "").rsplit("@", 1)[-1].strip().lower()
+    if not domain:
+        return False
+    try:
+        msg = receipts._gmail("/messages/" + mid, {"format": "metadata", "metadataHeaders": "Authentication-Results"})
+    except Exception as err:    # noqa: BLE001
+        print("leads: sender not checked --", err)
+        return False
+    found = " ".join(str(h.get("value") or "") for h in (msg.get("payload") or {}).get("headers") or []
+                     if str(h.get("name") or "").lower() == "authentication-results").lower()
+    if re.search(r"\bdmarc=pass\b", found):
+        return True
+    return bool(re.search(r"\bdkim=pass\b[^;]*@" + re.escape(domain) + r"\b", found))
+
+
 def _send_no_plow(cards, to, m, mid, body):
     """Sent in their thread: 'sent', 'maybe' (it may have gone, so never again)
     or None (it certainly did not)."""
@@ -533,7 +554,7 @@ def _one_lead(db, cards, conf, m, mid, who, why, got, services, known):
         reply = plow["body"]        # his fixed words: into Drafts if they don't go
         # Sent only to who wrote. A form's address is words in the form, which
         # anyone can type, so that one waits in Drafts for him to look at.
-        if plow["mode"] == "send" and why != "form":
+        if plow["mode"] == "send" and why != "form" and _sender_checks_out(mid, to):
             his = _he_answered(m, mid)
             if his:
                 reply = ""          # he answered: nothing to send, nothing to draft
