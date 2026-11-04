@@ -256,6 +256,15 @@ def _long_day(d):
     return d.strftime("%A, %B ") + str(d.day)
 
 
+def _snow_inches(v, units, key):
+    """Open-Meteo's snowfall in inches, going by the unit its answer names:
+    asked for inches it gives inches, asked for nothing, centimetres. (Divided
+    by 2.54 whatever it said, the summaries showed 40% of the snow coming.
+    Found 3 Nov 2026.)"""
+    v = v or 0
+    return v / 2.54 if str((units or {}).get(key) or "").lower() == "cm" else v
+
+
 # ---------------------------------------------------------------- weather
 
 WMO = {
@@ -291,9 +300,7 @@ def weather():
             "date": d["time"][i], "code": d["weather_code"][i],
             "hi": d["temperature_2m_max"][i], "lo": d["temperature_2m_min"][i],
             "pop": d["precipitation_probability_max"][i], "precip": d["precipitation_sum"][i],
-            # Open-Meteo gives snowfall in cm even when precipitation is in
-            # inches; convert so "2 inches" means 2 inches.
-            "snow": round((d["snowfall_sum"][i] or 0) / 2.54, 1),
+            "snow": round(_snow_inches(d["snowfall_sum"][i], j.get("daily_units"), "snowfall_sum"), 1),
             "wind": d["wind_speed_10m_max"][i], "gust": d["wind_gusts_10m_max"][i],
         } for i in range(len(d["time"]))]
         # A day with no high or low is dropped, as if it had not arrived, and
@@ -310,7 +317,7 @@ def weather():
         for t, sn in zip(h["time"], h["snowfall"]):
             ts = datetime.datetime.fromisoformat(t).replace(tzinfo=TZ)
             if now <= ts <= horizon and sn:
-                total += sn / 2.54
+                total += _snow_inches(sn, j.get("hourly_units"), "snowfall")
                 out["snowHours"].append(ts)
         out["snow48"] = round(total, 1)
     except Exception as e:      # noqa: BLE001
@@ -391,7 +398,7 @@ def forecast_points(points, days=3):
             days_out[t] = {
                 "code": d["weather_code"][i], "hi": hi, "lo": lo,
                 "pop": d["precipitation_probability_max"][i] or 0, "precip": d["precipitation_sum"][i] or 0,
-                "snow": round((d["snowfall_sum"][i] or 0) / 2.54, 1),     # cm -> inches
+                "snow": round(_snow_inches(d["snowfall_sum"][i], loc.get("daily_units"), "snowfall_sum"), 1),
                 "wind": d["wind_speed_10m_max"][i] or 0, "gust": d["wind_gusts_10m_max"][i] or 0,
                 "workPop": 0, "workRain": 0.0,
             }

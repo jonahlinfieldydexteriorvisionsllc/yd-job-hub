@@ -235,7 +235,20 @@
       '<span class="hm-wx-one"><b>' + esc(w.temp) + '</b> ' + esc(w.words) +
         (bits.length ? ' · ' + esc(bits.join(' · ')) : '') + (w.stale ? ' · from ' + esc(w.age) : '') + '</span>' +
       ((w.alerts || []).length ? '<span class="hm-wx-warn" title="' + esc(w.alerts.join(' · ')) + '">⚠️ ' + esc(w.alerts[0]) + '</span>' : '') +
+      fallingHtml(w) +
     '</button>';
+  }
+
+  // What is expected to fall, hour by hour, over the next 24 hours: only the
+  // hours with something in them, wrapped rather than scrolled sideways, and
+  // nothing at all when it should stay dry.
+  function fallingHtml(w) {
+    const f = w.falling;
+    if (!f) return '';
+    return '<span class="hm-wx-fall"><span class="hm-wx-hrs">' + f.cells.map(c =>
+      '<span class="hm-wx-hr"><i>' + esc(c.at) + '</i>' + c.says.map(s => '<span>' + esc(s) + '</span>').join('') + '</span>').join('') +
+      (f.more ? '<span class="hm-wx-hr hm-wx-more">+' + f.more + ' more hours</span>' : '') + '</span>' +
+      '<small class="hm-wx-sum">' + esc(f.total.charAt(0).toUpperCase() + f.total.slice(1)) + ' over the next 24 hours</small></span>';
   }
 
   // Today's weather from the header button's copy (forecast.js); a tap
@@ -250,6 +263,7 @@
       '<span class="hm-wx-t"><b>' + esc(w.temp) + '</b> ' + esc(w.words) +
         '<small>' + esc(bits.join(' · ')) + (w.stale ? ' · from ' + esc(w.age) : '') + '</small>' +
         (w.alerts.length ? '<small class="hm-wx-alert">⚠️ ' + esc(w.alerts.join(' · ')) + '</small>' : '') +
+        fallingHtml(w) +
       '</span></button>';
   }
 

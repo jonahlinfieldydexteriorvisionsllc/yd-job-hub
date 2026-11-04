@@ -12,6 +12,15 @@
 // The last forecast is kept on the device with the time it was fetched, so in
 // a truck with no signal the panel still shows something -- and says how old
 // it is, because a forecast whose age you cannot see is worse than none.
+//
+// HOW MUCH IS COMING (Jonah, 3 Nov 2026: "have weather on front page and stuff
+// show hourly estiamte quantity of rainfall/snowfall/ice"): each hour says how
+// much rain, snow and ice to expect, in the panel and on Home. Rain and snow
+// are Open-Meteo's. Ice it doesn't give: an hour it calls freezing rain or
+// drizzle counts its precipitation as ice, and weather.gov's own ice figure
+// (6-hour blocks, shared across their hours) is laid over it, the bigger of
+// the two standing. That figure is a 200 KB answer, so it is asked for only
+// when a wet hour near freezing is ahead, and after the numbers are on screen.
 
 (function () {
   'use strict';
@@ -41,6 +50,12 @@
     95: ['⛈️', 'Thunderstorms'], 96: ['⛈️', 'Storms, hail'], 99: ['⛈️', 'Storms, hail'],
   };
   const codeOf = c => CODES[c] || ['🌡️', '—'];
+  // Freezing drizzle and freezing rain: what falls in such an hour is ice.
+  const ICY = [56, 57, 66, 67];
+  // A wet hour at or under this may be ice, so weather.gov is asked.
+  const ICE_TEMP_F = 36;
+  // Hours shown on Home; the rest are in the panel.
+  const FALLING_MAX = 12;
 
   let open = false;
   // Only a town that is still in the list: one saved by an older version that
@@ -82,7 +97,7 @@
   // Where a town's written forecast is: weather.gov answers that once for a
   // point (/points) and it does not change, so it is kept on the device
   // rather than asked for before every forecast.
-  async function writtenForecast(p, spot, until) {
+  async function forecastUrl(p, spot, until) {
     const key = STORE + 'nws_' + p;
     let url = null;
     try { url = localStorage.getItem(key); } catch (e) {}
@@ -92,6 +107,11 @@
       if (!/^https:\/\/api\.weather\.gov\//.test(String(url || ''))) throw new Error('no forecast for this point');
       try { localStorage.setItem(key, url); } catch (e) {}
     }
+    return url;
+  }
+  async function writtenForecast(p, spot, until) {
+    const key = STORE + 'nws_' + p;
+    const url = await forecastUrl(p, spot, until);
     try {
       return await nwsJson(url, until);
     } catch (e) {
@@ -110,7 +130,7 @@
       current: 'temperature_2m,weather_code,wind_speed_10m,apparent_temperature',
       daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,' +
              'precipitation_sum,snowfall_sum,wind_speed_10m_max,wind_gusts_10m_max,sunrise,sunset',
-      hourly: 'temperature_2m,weather_code,precipitation_probability,precipitation,snowfall,' +
+      hourly: 'temperature_2m,weather_code,precipitation_probability,precipitation,rain,showers,snowfall,' +
               'wind_speed_10m,wind_gusts_10m,is_day',
     });
     const spot = pt.lat.toFixed(4) + ',' + pt.lng.toFixed(4);
@@ -127,6 +147,10 @@
     const j = await om.value.json();
     const d = j.daily;
     const h = j.hourly;
+    // In inches, going by the unit the answer names: asked for inches it
+    // gives inches. (Divided by 2.54 whatever it said, this panel showed 40%
+    // of the snow coming. Found 3 Nov 2026.)
+    const inches = (v, units, key) => (v || 0) / (units && units[key] === 'cm' ? 2.54 : 1);
     const out = {
       at: Date.now(),
       now: { temp: j.current.temperature_2m, feels: j.current.apparent_temperature,
@@ -134,17 +158,21 @@
       days: d.time.map((t, i) => ({
         date: t, code: d.weather_code[i], hi: d.temperature_2m_max[i], lo: d.temperature_2m_min[i],
         pop: d.precipitation_probability_max[i], rain: d.precipitation_sum[i],
-        // Open-Meteo gives snowfall in centimetres even when everything else
-        // is in inches.
-        snow: Math.round(((d.snowfall_sum[i] || 0) / 2.54) * 10) / 10,
+        snow: Math.round(inches(d.snowfall_sum[i], j.daily_units, 'snowfall_sum') * 10) / 10,
         wind: d.wind_speed_10m_max[i], gust: d.wind_gusts_10m_max[i],
       })),
       // Times are local ("2026-10-01T14:00") because timezone is set above.
-      hours: h.time.map((t, i) => ({
-        t, temp: h.temperature_2m[i], code: h.weather_code[i], pop: h.precipitation_probability[i],
-        rain: h.precipitation[i], snow: Math.round(((h.snowfall[i] || 0) / 2.54) * 10) / 10,
-        wind: h.wind_speed_10m[i], gust: h.wind_gusts_10m[i], day: h.is_day[i],
-      })),
+      hours: h.time.map((t, i) => {
+        const icy = ICY.indexOf(h.weather_code[i]) >= 0;
+        const liquid = ((h.rain || [])[i] || 0) + ((h.showers || [])[i] || 0);
+        return {
+          t, temp: h.temperature_2m[i], code: h.weather_code[i], pop: h.precipitation_probability[i],
+          rain: h.precipitation[i], snow: Math.round(inches(h.snowfall[i], j.hourly_units, 'snowfall') * 100) / 100,
+          // Rain on its own (rain: everything that falls, as water), and ice.
+          wet: icy ? 0 : Math.round(liquid * 1000) / 1000, ice: icy ? h.precipitation[i] || 0 : 0,
+          wind: h.wind_speed_10m[i], gust: h.wind_gusts_10m[i], day: h.is_day[i],
+        };
+      }),
       alerts: [],
       text: [],
     };
@@ -163,6 +191,42 @@
     return out;
   }
 
+  // weather.gov's ice, inches per local hour ("2026-11-05T14"). A figure covers
+  // a stretch ("...T18:00:00+00:00/PT6H"), shared evenly across its hours.
+  function iceByHour(series) {
+    const out = {};
+    const hoursIn = d => {
+      const m = /^P(?:(\d+)D)?(?:T(?:(\d+)H)?)?/.exec(String(d || ''));
+      return m ? (Number(m[1]) || 0) * 24 + (Number(m[2]) || 0) : 0;
+    };
+    (series && series.values || []).forEach(v => {
+      const [at, span] = String(v.validTime || '').split('/');
+      const start = Date.parse(at), n = hoursIn(span);
+      if (!(v.value > 0) || isNaN(start) || !n) return;
+      for (let i = 0; i < n; i++) {
+        const k = hourKey(new Date(start + i * 3600000));
+        out[k] = (out[k] || 0) + v.value / 25.4 / n;
+      }
+    });
+    return out;
+  }
+  // Never waited on: the numbers are on screen first, and this is only an extra.
+  async function addIce(p, got) {
+    if (!(got.hours || []).some(x => x.temp <= ICE_TEMP_F && x.rain > 0)) return;
+    const pt = PLACES[p];
+    const until = Date.now() + NWS_WAIT_MS;
+    try {
+      const url = await forecastUrl(p, pt.lat.toFixed(4) + ',' + pt.lng.toFixed(4), until);
+      const grid = await nwsJson(url.replace(/\/forecast$/, ''), until);
+      const byHour = iceByHour(grid && grid.properties && grid.properties.iceAccumulation);
+      got.hours.forEach(x => { x.ice = Math.max(x.ice || 0, byHour[x.t.slice(0, 13)] || 0); });
+      keep(p, got);
+      if (p === place) { data = got; draw(); }
+    } catch (e) {
+      console.warn('[forecast] no ice figure:', e.message);
+    }
+  }
+
   async function refresh(force) {
     // The town this fetch is for, held on to. Changing town while it was on
     // its way used to file Madison's forecast under Monroe and show it as
@@ -178,6 +242,7 @@
       const got = await fetchWeek(p);
       keep(p, got);
       if (p === place) data = got;
+      addIce(p, got);
     } catch (e) {
       console.warn('[forecast]', e.message);
     } finally {
@@ -271,10 +336,22 @@
     return inches < 0.01 ? 'trace' : inches.toFixed(2) + '"';
   }
 
+  // Rain in an hour, apart from snow and ice. (A copy saved before `wet` was
+  // kept: everything that fell, unless it snowed.)
+  const rainOf = x => (x.wet != null ? x.wet : (x.snow >= 0.1 ? 0 : (x.rain || 0)));
+  // How much of each is expected in an hour. More than one can fall in it.
+  function amountsOf(x) {
+    const out = [], rain = rainOf(x);
+    if (rain >= 0.01) out.push('🌧️' + rain.toFixed(2) + '"');
+    if (x.snow >= 0.1) out.push('❄️' + x.snow.toFixed(1) + '"');
+    if (x.ice >= 0.005) out.push('🧊' + x.ice.toFixed(2) + '"');
+    return out;
+  }
+
   function hourCell(x, isNow) {
     const pop = x.pop || 0;
     const snowy = x.snow >= 0.1;
-    const amount = snowy ? '❄️' + x.snow + '"' : rainAmount(x.rain);
+    const amount = amountsOf(x).join('<br>') || rainAmount(rainOf(x));
     return '<div class="wxh' + (isNow ? ' now' : '') + (snowy ? ' snow' : '') + '">' +
       '<div class="wxh-t">' + (isNow ? 'Now' : hourLabel(x.t)) + '</div>' +
       '<div class="wxh-i">' + iconFor(x.code, x.day) + '</div>' +
@@ -290,16 +367,21 @@
     '</div>';
   }
 
-  // The hours on show, added up: "about 0.42 in of rain over the next 24 hours".
-  function hoursTotal(hours, isToday) {
-    const rain = hours.reduce((s, x) => s + (x.snow >= 0.1 ? 0 : (x.rain || 0)), 0);
-    const snow = Math.round(hours.reduce((s, x) => s + (x.snow || 0), 0) * 10) / 10;
-    const span = isToday ? 'over the next 24 hours' : 'over the day';
+  // The hours on show, added up: "about 0.42" of rain and about 3" of snow".
+  function totalWords(hours) {
+    const sum = fn => hours.reduce((s, x) => s + (fn(x) || 0), 0);
+    const rain = sum(rainOf), snow = sum(x => x.snow), ice = sum(x => x.ice);
     const bits = [];
     if (rain >= 0.01) bits.push('about ' + rain.toFixed(2) + '" of rain');
-    if (snow >= 0.1) bits.push('about ' + snow + '" of snow');
-    return bits.length
-      ? '<div class="wxp-total">💧 ' + bits.join(' and ') + ' ' + span + '</div>'
+    if (snow >= 0.1) bits.push('about ' + snow.toFixed(1) + '" of snow');
+    if (ice >= 0.01) bits.push('about ' + ice.toFixed(2) + '" of ice');
+    return bits.length > 1 ? bits.slice(0, -1).join(', ') + ' and ' + bits[bits.length - 1] : bits.join('');
+  }
+  function hoursTotal(hours, isToday) {
+    const span = isToday ? 'over the next 24 hours' : 'over the day';
+    const bits = totalWords(hours);
+    return bits
+      ? '<div class="wxp-total">💧 ' + bits + ' ' + span + '</div>'
       : '<div class="wxp-total dry">No rain or snow expected ' + span + '</div>';
   }
 
@@ -371,6 +453,7 @@
         const snowy = d.snow >= 0.1;
         const gust = gusty(d.wind, d.gust) ? 'gusts ' + Math.round(d.gust) : '';
         const wind = '💨 ' + Math.round(d.wind) + ' mph';
+        const ice = (data.hours || []).reduce((s, x) => s + (x.t.slice(0, 10) === d.date ? x.ice || 0 : 0), 0);
         return '<button type="button" class="wxp-day' + (snowy ? ' snow' : '') + (i === sel ? ' on' : '') +
           '" onclick="wxDay(' + i + ')" aria-pressed="' + (i === sel) + '">' +
           '<div class="wxp-name">' + dayName(d.date) + '</div>' +
@@ -380,6 +463,7 @@
           '<div class="wxp-extra">' +
             (d.pop ? '💧' + d.pop + '%' : '') +
             (snowy ? ' ❄️' + d.snow + '"' : (d.rain >= 0.05 ? ' ' + d.rain.toFixed(2) + '"' : '')) +
+            (ice >= 0.01 ? ' 🧊' + ice.toFixed(2) + '"' : '') +
             // On a phone each day is one row, so the wind joins this line.
             '<span class="wxp-w"> ' + wind + (gust ? ', ' + gust : '') + '</span>' +
           '</div>' +
@@ -454,9 +538,18 @@
         rain: d && d.rain >= 0.05 ? d.rain.toFixed(2) + '"' : '', snow: d && d.snow >= 0.1 ? d.snow + '"' : '',
         wind: d && typeof d.wind === 'number' ? Math.round(d.wind) + ' mph' + (gusty(d.wind, d.gust) ? ', gusts ' + Math.round(d.gust) : '') : '',
         alerts: (data.alerts || []).slice(), age: ago(data.at), stale: Date.now() - data.at > 3 * 3600000,
+        falling: falling(),
       };
     },
   };
+  // The next 24 hours for Home: only the hours with something falling, and
+  // the total. null when it should stay dry.
+  function falling() {
+    const hours = hoursFor({ date: dayKey(new Date()) });
+    const cells = hours.filter(x => amountsOf(x).length).map(x => ({ at: hourLabel(x.t), says: amountsOf(x) }));
+    if (!cells.length) return null;
+    return { cells: cells.slice(0, FALLING_MAX), more: Math.max(0, cells.length - FALLING_MAX), total: totalWords(hours) };
+  }
 
   function boot() {
     refresh(false);
