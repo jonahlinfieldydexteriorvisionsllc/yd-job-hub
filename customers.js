@@ -1284,6 +1284,8 @@
         '<div class="pp-contact">' + [c.address ? esc(c.address) : '',
           phone ? '<a href="tel:' + esc(telOf(phone)) + '">📞 ' + esc(phone) + '</a>' : ''].filter(Boolean).join(' &middot; ') + '</div>' +
         (calling ? '<div class="cu-talk">' + (talked ? 'Last talked to ' + esc(niceDay(talked)) : 'Not talked to yet') + '</div>' : '') +
+        (calling && c.seasonDraft && c.seasonDraft.open && c.seasonDraft.link
+          ? '<a class="cu-draft" href="' + esc(typeof ydGmailLink === 'function' ? ydGmailLink(c.seasonDraft.link) : c.seasonDraft.link) + '" target="_blank" rel="noopener">✉️ Draft ready</a>' : '') +
       '</div>' +
       (mode === 'due' && ch ? '<div class="cu-act"><button class="btn btn-sm btn-filled" onclick="custReached(\'' + id + '\')">✓ Reached out</button></div>'
         : mode === 'none' && ch ? '<div class="cu-act"><button class="btn btn-sm" onclick="custSetWhen(\'' + id + '\')">Set when</button></div>' : '') +

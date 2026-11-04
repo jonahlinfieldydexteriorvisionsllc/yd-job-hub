@@ -73,6 +73,7 @@ CARD_HOURS = (7, 19)
 # The hourly /cards/run request: no new step (QuickBooks look, cards) is
 # started after this many seconds. Cloud Run and the scheduler give it 900.
 RUN_BUDGET = 600
+SEASON_BUDGET = 240
 TONIGHT_BUDGET = 300            # the morning's cards set for Claude (cards.py)
 DAILY_CALL_LIMIT = 200          # a working day of heavy use is nowhere near this
 # The live app only. A local copy (localhost) never needs to call the real
@@ -565,6 +566,13 @@ def _digest(request, path, headers):
                 cards.tell_tonight(cards.run(_claude(), tonight=True, deadline=time.monotonic() + TONIGHT_BUDGET))
             except Exception as e:                      # noqa: BLE001
                 print("tonight's cards not worked:", e)
+            # Mondays in an outreach window: the week's season emails, in his
+            # Drafts; the 1st: what he changed in them (seasonmail.py).
+            try:
+                import seasonmail
+                seasonmail.run(_claude(), deadline=time.monotonic() + SEASON_BUDGET)
+            except Exception as e:                      # noqa: BLE001
+                print("season emails not written:", e)
         # Morning and evening, after the summary: the posting schedule's next
         # days filled (social.py -- Claude only for words not yet written),
         # and in the evening his phone told what goes up tomorrow.

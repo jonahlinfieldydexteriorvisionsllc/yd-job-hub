@@ -241,6 +241,30 @@
     showToast('Saved — the next thank-you uses them');
   }
 
+  // Season emails (functions/seasonmail.py): only ever drafts, so this is on
+  // unless he turns it off.
+  async function openSeasonSettings() {
+    const now = (await Promise.resolve(window.YDDb.get('settings', 'seasonMail')).catch(() => null)) || {};
+    const n = Number(now.perWeek) > 0 ? Number(now.perWeek) : 25;
+    const pick = await ydChoose('Each Monday from February through April, Claude writes up to ' + n + ' personal emails to past customers and puts them in your Gmail Drafts. ' +
+      'You read each one and send it yourself. Nothing is ever sent for you, and snow renewals are left out. On the 1st of each month Claude reads what you changed and learns from it.', [
+      { id: 'on', label: '✉️ Write them', hint: 'Into your Gmail Drafts' },
+      { id: 'off', label: '🚫 Off', hint: 'No season emails' },
+      { id: 'count', label: '🔢 How many a week', hint: n + ' a week' },
+    ], { title: 'Spring emails', value: now.on === false ? 'off' : 'on', cancel: 'Close' });
+    if (!pick) return;
+    const put = (patch, say) => Promise.resolve(window.YDDb.put('settings', 'seasonMail', Object.assign(patch, { updatedAt: new Date().toISOString() })))
+      .then(() => showToast(say)).catch(() => showToast('Not saved — try again'));
+    if (pick.id === 'count') {
+      const got = await ydForm('How many emails to write each Monday.', [{ id: 'n', label: 'Emails a week', value: String(n) }], { title: 'Spring emails', ok: 'Save' });
+      const v = got ? parseInt(got.n, 10) : 0;
+      if (got && !(v > 0 && v <= 60)) { showToast('Pick a number from 1 to 60'); return; }
+      if (got) put({ perWeek: v }, v + ' a week');
+      return;
+    }
+    put({ on: pick.id === 'on' }, pick.id === 'on' ? 'Spring emails are on' : 'Spring emails are off');
+  }
+
   window.openThanksSettings = async function () {
     if (!isOwner()) return;
     const now = await current();
@@ -253,13 +277,15 @@
       { id: 'draft', label: '📝 Put them in my Gmail Drafts instead', hint: 'You read each one and send it yourself' },
       { id: 'words', label: '✏️ The words', hint: now.thanksBody || now.thanksSubject ? 'Your own words' : 'The usual words — change them' },
       { id: 'welcome', label: '👋 After a yes: the next-steps email', hint: { draft: 'Into your Gmail Drafts', send: 'Sends by itself', off: 'Off' }[welcomeMode(now)] },
-      { id: 'noplow', label: '❄️ Snow with no plow: the reply', hint: { draft: 'Into your Gmail Drafts', send: 'Sends by itself', off: 'Off' }[noPlowMode(now)] }
+      { id: 'noplow', label: '❄️ Snow with no plow: the reply', hint: { draft: 'Into your Gmail Drafts', send: 'Sends by itself', off: 'Off' }[noPlowMode(now)] },
+      { id: 'season', label: '🌱 Spring emails to past customers', hint: 'Into your Gmail Drafts, Mondays February to April' }
     ], { title: 'Follow-ups & thank-yous', value: now.thanksSend === false ? 'draft' : 'send', cancel: 'Close' });
     if (!pick) return;
     if (pick.id === 'link') { window.chaseReviewLink(); return; }
     if (pick.id === 'words') { editWords(); return; }
     if (pick.id === 'welcome') { openWelcomeSettings(); return; }
     if (pick.id === 'noplow') { openNoPlowSettings(); return; }
+    if (pick.id === 'season') { openSeasonSettings(); return; }
     save({ thanksSend: pick.id === 'send' }, 'the thank-you choice');
     showToast(pick.id === 'send' ? 'Thank-yous will send themselves' : 'Thank-yous will go into your Gmail Drafts');
   };
@@ -470,13 +496,14 @@
       'card emails, plant care, progress updates. It changes how they sound, never the facts or prices in them. Empty it ' +
       'and Claude writes without it.', [
       { id: 'guide', label: 'How you write', value: now.guide || proposal || '', multiline: true, rows: 14 },
+      { id: 'lessons', label: 'Learned from your edits to season emails (the 1st of each month). Take out any you don’t want.', value: now.lessons || '', multiline: true, rows: 6 },
     ], { title: 'How you write', ok: proposal ? 'Save — use it' : 'Save' });
     if (!got) return;
-    const guide = String(got.guide || '').trim();
-    if (guide === String(now.guide || '').trim() && !proposal) return;
+    const guide = String(got.guide || '').trim(), lessons = String(got.lessons || '').trim();
+    if (guide === String(now.guide || '').trim() && lessons === String(now.lessons || '').trim() && !proposal) return;
     // Saving is his answer to the proposal either way -- taken, changed or
     // emptied -- so it never fills the box again.
-    Promise.resolve(window.YDDb.put('settings', 'voice', { guide: guide, by: 'hand', proposed: null, updatedAt: new Date().toISOString() }))
+    Promise.resolve(window.YDDb.put('settings', 'voice', { guide: guide, lessons: lessons, by: 'hand', proposed: null, updatedAt: new Date().toISOString() }))
       .then(() => showToast(guide ? 'Saved — the next email Claude writes uses it' : 'Emptied — Claude writes without it'))
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not saved — not allowed' : 'Not saved — try again'));
   };

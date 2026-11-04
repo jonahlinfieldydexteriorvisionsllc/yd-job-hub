@@ -25,7 +25,7 @@ import digest as dg
 GUIDE_MAX = 6000          # characters of the guide a prompt carries
 FRESH_SECONDS = 600       # read again after ten minutes (one server, many emails an hour)
 
-_cache = {"at": 0.0, "guide": ""}
+_cache = {"at": 0.0, "guide": "", "lessons": ""}
 
 
 def guide(db=None):
@@ -37,7 +37,8 @@ def guide(db=None):
     try:
         snap = (db or dg._db()).collection("settings").document("voice").get()
         d = (snap.to_dict() or {}) if snap.exists else {}
-        _cache.update(at=now, guide=str(d.get("guide") or "").strip()[:GUIDE_MAX])
+        _cache.update(at=now, guide=str(d.get("guide") or "").strip()[:GUIDE_MAX],
+                      lessons=str(d.get("lessons") or "").strip()[:GUIDE_MAX])
     except Exception as err:      # noqa: BLE001 -- an email without the guide beats no email
         print("voice: guide not read --", err)
         _cache["at"] = now - FRESH_SECONDS + 60
@@ -48,11 +49,16 @@ def block(db=None, also=""):
     """The guide as the end of a system prompt ("" when there is none).
     `also`: one sentence on what it is for in that prompt."""
     g = guide(db)
+    # What he changed in drafts (seasonmail.py), which he can read and change
+    # beside the guide. It goes with the guide, or alone when there is none.
+    learned = _cache["lessons"]
+    if learned:
+        learned = ("\n\nWHAT JONAH CHANGED IN CLAUDE'S DRAFTS -- follow these too:\n" + learned)
     if not g:
-        return ""
+        return learned
     return ("\n\nHOW JONAH WRITES -- his own guide, made from the emails he typed himself and OK'd by him. "
             "Follow it for how the email sounds: the greeting, the length, the words he uses and the ones he "
             "never does, how he says things. Everything above still decides what the email says -- the facts, "
             "prices, dates and promises -- and how it is signed; where the two differ, what is above wins. The "
             "example lines in it show his way of saying things: never copy one into the email." +
-            (" " + also.strip() if also.strip() else "") + "\n\n" + g)
+            (" " + also.strip() if also.strip() else "") + "\n\n" + g + learned)
