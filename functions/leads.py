@@ -139,7 +139,8 @@ or salt, is false.
 3. reply: a short, warm first reply in Jonah's voice -- plain words, no sales talk, 4 to 7 short \
 sentences. Thank them by first name ("Hi there" if none), say what you understood they want in a few \
 words, offer to come out and take a look for a free estimate, and ask what days and times work for them \
-(or for the address if it is missing). Never give or guess a price, a start date or a schedule, never \
+(or for the address if it is missing). Snow removal is different: follow SNOW REMOVAL QUOTES below for \
+it. Never give or guess a price, a start date or a schedule, never \
 promise anything, never mention AI. Sign it "Jonah" then "YD Exterior Visions" on the next line. \
 No subject line. Empty string when it is not a lead."""
 
@@ -295,7 +296,7 @@ def _read(client, m, services, with_reply=False):
                m.get("from") or "", m.get("replyTo") or "", m.get("subject") or "", m.get("date") or "", text))
     if with_reply:
         import voice
-        system = SYSTEM + voice.block(also="Here it is for the reply (step 3) only.")
+        system = SYSTEM + voice.SNOW_QUOTE + voice.block(also="Here it is for the reply (step 3) only.")
     else:
         system = SYSTEM_NO_REPLY
     resp = client.beta.messages.create(

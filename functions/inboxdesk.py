@@ -354,7 +354,7 @@ def draft(client, kind, rid, uid):
     # voice() above for the whole function, and every reply failed.
     import voice as his_guide
     resp = client.beta.messages.create(
-        model=MODEL, max_tokens=3000, system=SYSTEM + his_guide.block(db),
+        model=MODEL, max_tokens=3000, system=SYSTEM + his_guide.SNOW_QUOTE + his_guide.block(db),
         messages=[{"role": "user", "content": prompt}],
         output_config={"effort": "low", "format": {"type": "json_schema", "schema": SCHEMA}},
         betas=["server-side-fallback-2026-07-01"], fallbacks="default",

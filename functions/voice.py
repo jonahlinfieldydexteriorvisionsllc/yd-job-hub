@@ -15,7 +15,8 @@ Every prompt that writes an email as him adds block(): the follow-ups
 (care.py) and the progress update (joblog.py). What each prompt asks for --
 the facts, prices, dates, promises, the sign-off -- stays that prompt's own;
 the guide decides only how the email sounds. No guide saved, or it emptied:
-the prompts write as they did before.
+the prompts write as they did before. SNOW_QUOTE below is the one thing here
+about what an email says.
 """
 
 import time
@@ -26,6 +27,28 @@ GUIDE_MAX = 6000          # characters of the guide a prompt carries
 FRESH_SECONDS = 600       # read again after ten minutes (one server, many emails an hour)
 
 _cache = {"at": 0.0, "guide": "", "lessons": ""}
+
+# Jonah (4 Nov 2026): "we dont meet with the client in person to bid snow unless
+# they request it so emails should say we will swing by and provide a quote."
+# Salt: ask if they want it and which kind, unless their request already says.
+# Areas: ask what else they want cleared beyond what the service covers.
+# This is what the email SAYS, not how it sounds, so it is not in the guide: it
+# holds with no guide saved, and every prompt that answers someone asking for
+# a price adds it ahead of block() -- a lead's first reply (leads.py, website
+# forms too), replies from the inbox and "Draft a reply" on a lead
+# (inboxdesk.py), and emails a card asks for (cards.py).
+SNOW_QUOTE = (
+    "\n\nSNOW REMOVAL QUOTES -- when someone is asking for snow removal or a quote for it (not a customer we "
+    "already plow writing about their service), these rules replace anything above about coming out, meeting, "
+    "or asking what days and times work:\n"
+    "- Jonah doesn't meet clients in person to bid snow. Say we'll swing by and provide a quote. Don't offer a "
+    "meeting and don't ask what days or times work. Only if they asked to meet in person, offer that and ask "
+    "when works for them.\n"
+    "- If their street address isn't in what they wrote, ask for it: we need it to swing by.\n"
+    "- Ask if they want salt and, if so, whether they prefer animal friendly or generic rock salt. Leave this "
+    "question out when what they wrote already says whether they want salt, or names a kind.\n"
+    "- Say what our service covers: the driveway, public walkways, the walkway to the front door, the front "
+    "stoop and access to the mailbox. Ask if they have any additional areas they'd like cleared.")
 
 
 def guide(db=None):
