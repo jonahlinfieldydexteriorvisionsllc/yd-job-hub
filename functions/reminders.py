@@ -189,6 +189,8 @@ def run():
         # Tax and filing dates 14 / 3 / 0 days away, once a day after 7 am
         # (deadlines.py).
         ("tax and filing dates", (), lambda: _deadlines(db, people, now)),
+        # The pay sheet ready on a pay day, 5:30 pm, to the owner (paysheet.py).
+        ("pay sheet", (), lambda: _pay_sheet(db, people, now)),
         # Unpaid invoices: the lien clock and the 45 / 90 / 120-day steps,
         # once a day after 7 am (lienclock.py).
         ("lien clock", (), lambda: _lien_clock(db, people, now)),
@@ -224,6 +226,11 @@ def run():
 def _storm_watch(db, people, prefs, now):
     import stormwatch
     return stormwatch.run(db, people, prefs, now)
+
+
+def _pay_sheet(db, people, now):
+    import paysheet
+    return paysheet.run(db, people, now)
 
 
 def _deadlines(db, people, now):

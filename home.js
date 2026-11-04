@@ -1056,6 +1056,11 @@
       rows.push(line('📞', '<b>' + calls + ' follow-up call' + (calls === 1 ? '' : 's') + '</b>',
         'Bids with no answer yet — the call is one tap on the Bids board', '', "homeBoard('bids')"));
     }
+    // A pay day (paysheet.js): the sheet, from noon.
+    if (window.YDPaySheet && YDPaySheet.dueToday()) {
+      any = true;
+      rows.push(line('📄', '<b>Pay day: the pay sheet</b>', 'Hours, wages and what is still owed', '', 'openPaySheet()'));
+    }
     // Tax and filing dates coming up in the next 14 days (deadlines.js). One
     // due today, or late, is on My day already (a task on the calendar) --
     // until it is too late for My day to carry (remind.js CARRY_DAYS), when
@@ -1462,7 +1467,7 @@
   });
   ['yd-jobs-changed', 'yd-jobs-restored', 'yd-calendar-changed', 'yd-cards-changed', 'yd-boards-changed', 'yd-boards-ready',
    'yd-clock-changed', 'yd-requests', 'yd-receipts', 'yd-remind-me', 'yd-equipment-changed', 'yd-crew-notes',
-   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills'].forEach(name => document.addEventListener(name, soon));
+   'yd-crew-jobs', 'yd-storm-changed', 'yd-forecast', 'yd-paysheet', 'yd-outreach', 'yd-invoices', 'yd-subs', 'yd-eod', 'yd-workdone', 'yd-thanks', 'yd-inbox', 'yd-stormwatch', 'yd-deadlines', 'yd-dig-tickets', 'yd-social', 'yd-bills'].forEach(name => document.addEventListener(name, soon));
   // Back to the app after a while: the day may have turned over.
   document.addEventListener('visibilitychange', () => { if (!document.hidden && showing()) render(); else manageTicker(); });
 

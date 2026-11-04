@@ -1077,7 +1077,7 @@ function switchTab(name) {
 // A tax or filing date coming up (functions/deadlines.py) opens its window;
 // so does a post ready, held or not gone up (functions/social.py).
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
-  deadlines: 'openDeadlines', posts: 'openPosts', changeorders: 'openChangeOrders' };
+  deadlines: 'openDeadlines', posts: 'openPosts', changeorders: 'openChangeOrders', paysheet: 'openPaySheet' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }

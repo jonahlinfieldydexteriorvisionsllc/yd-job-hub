@@ -3974,6 +3974,8 @@
     paidMs: paidMs,
     chargeableMs: chargeableMs,
     pausedMs: pausedMs,
+    // Hours & Wages' own sum, for the pay sheet (paysheet.js).
+    totalsFor: totalsFor,
     startMsOf: startMsOf,
     endMsOf: endMsOf,
     counts: counts,

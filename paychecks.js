@@ -160,7 +160,7 @@
     }, () => {}));
   }
 
-  window.YDPaychecks = { render: render };
+  window.YDPaychecks = { render: render, all: () => Object.values(checks) };
   if (R()) R().onChange('pay', force => render(force));
 
   let authKey = null;
