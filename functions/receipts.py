@@ -530,7 +530,8 @@ delivery (or pickup) date, YYYY-MM-DD, or "". due_date: when an invoice must be 
 YYYY-MM-DD, or "". po: a PO number or job name written on the order, exactly as printed, or "".
 - date: the purchase or invoice date, YYYY-MM-DD, or "" if none is shown.
 - order_number: the order, invoice or receipt number exactly as printed, or "". For a \
-payment confirmation, the number of the invoice it pays.
+payment confirmation, the number of the invoice it pays. An account or customer number is not \
+one: it is the same on every bill.
 - vendor: the business that sold it ("Home Depot", "Menards", "the stone yard").
 - kind: loan_payment for a payment on a loan or financing agreement (a truck, trailer or \
 machine loan, a business loan or line of credit) -- never for paying a supplier's invoice or a \
@@ -937,7 +938,21 @@ def read_receipt(client, m, bank="", part=None, note=""):
                    ("\n\n" + "\n".join(notes) if notes else "")})
     if note:
         blocks.append({"type": "text", "text": NOTE_HEAD + note[:NOTE_MAX]})
-    return _ask(client, read_system(bank), blocks, RECEIPT_SCHEMA, "medium")
+    got, used, err = _ask(client, read_system(bank), blocks, RECEIPT_SCHEMA, "medium")
+    return _drop_account_no(got, m), used, err
+
+
+def _drop_account_no(got, m):
+    """An account number given as the order number, taken off. It is the same
+    on every bill, and the order number makes the receipt's id (receipt_id),
+    so every month's payment would land on one receipt (the waste company's
+    "for Account #...", 4 Nov 2026). Plain code as well as the read's rules:
+    a month lost that way shows nowhere."""
+    no = str((got or {}).get("order_number") or "").strip()
+    words = " ".join([m.get("subject") or "", m.get("text") or ""])
+    if no and re.search(r"\b(account|acct)\b\W*((number|num|no)\b\W*)?" + re.escape(no) + r"\b", words, re.I):
+        got["order_number"] = ""
+    return got
 
 
 def _parts_now(m, done, each_from):
@@ -1649,6 +1664,21 @@ def _lists_amounts(r):
     return any((ln or {}).get("qty") for ln in r.get("lines") or [])
 
 
+def _told_twice(a, b):
+    """Whether two records of paying are one payment. At least one lists no
+    amounts of anything -- two fuel receipts for $50 on one day both list
+    gallons, and are two costs -- and they are of one day (the office's
+    receipt and the card system's "Payment Success", three minutes apart), or
+    the first is an invoice: a bill on autopay reads as paid, then its payment
+    comes (the waste company, 4 Nov 2026)."""
+    if _lists_amounts(a) and _lists_amounts(b):
+        return False
+    if a.get("date") == b.get("date"):
+        return True
+    first = a if str(a.get("date") or "") < str(b.get("date") or "") else b
+    return first.get("docType") == "invoice"
+
+
 def _same_bill(db, f):
     """The receipt this one is the same cost as, or None.
 
@@ -1661,8 +1691,7 @@ def _same_bill(db, f):
         then its receipt), whichever came first;
       - both are bills not yet paid and say the same due date (the bill,
         then its "3 days overdue" reminder);
-      - both are records of paying, on the same day, and one lists nothing
-        bought (one payment told twice).
+      - both are records of paying, and they are one payment (_told_twice).
     A monthly bill a month later is not the same bill, nor is next week's
     bill of the same amount (a different due date).
 
@@ -1704,13 +1733,7 @@ def _same_bill(db, f):
         # Two unsorted ones with nothing to tell them apart (the rule before):
         # the same cost read twice.
         both_new = r.get("status") == "new" and not r.get("splits") and paid == was_paid and             r.get("docType") == f.get("docType") and not paid
-        # One payment told twice: the office's receipt and the card system's
-        # "Payment Success", three minutes apart (the waste company, 4 Nov 2026). At
-        # least one lists no amounts of anything: two fuel receipts for $50 on
-        # one day both list gallons, and are two costs.
-        same_payment = paid and was_paid and f.get("date") == r.get("date") and \
-            not (_lists_amounts(f) and _lists_amounts(r))
-        if not (bill_then_payment or same_due or both_new or same_payment):
+        if not (bill_then_payment or same_due or both_new or (paid and was_paid and _told_twice(f, r))):
             continue
         if best is None or str(r.get("date") or "") < str((best.to_dict() or {}).get("date") or ""):
             best = s
