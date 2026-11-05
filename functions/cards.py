@@ -418,20 +418,22 @@ class MaybeSent(RuntimeError):
     and never sends it again by itself (followup.py, the thank-yous)."""
 
 
-def send_mail(to, subject, body, reply=None):
+def send_mail(to, subject, body, reply=None, reply_to=None):
     """Sent from the owner's Gmail, as he would send it himself (the summaries'
     gmail.send permission) -- for the follow-up plan's emails, which go out
     by themselves (followup.py auto; Jonah, 26 Oct 2026). `reply` as in
-    draft_email: inside the estimate's thread. {messageId, threadId} or
-    {error} when it certainly did not go; raises when it may have (MaybeSent,
-    or the connection lost after the email went to Gmail)."""
+    draft_email: inside the estimate's thread. `reply_to`: where an answer to
+    this email goes, when that isn't him (websiteleads: the customer). Checked
+    by the caller. {messageId, threadId} or {error} when it certainly did not
+    go; raises when it may have (MaybeSent, or the connection lost after the
+    email went to Gmail)."""
     to = (to or "").strip()
     if not EMAIL_RE.match(to):
         return {"error": "not one email address"}
     # Put together before Gmail is asked: a header that can't be written is
     # an email that never went, not one that may have.
     try:
-        message, subject = _message(to, subject, body, reply)
+        message, subject = _message(to, subject, body, reply, reply_to)
     except Exception as e:      # noqa: BLE001
         print("cards: email not put together:", e)
         return {"error": "the email could not be put together"}
@@ -575,7 +577,7 @@ def ours(mid):
         return False
 
 
-def _message(to, subject, body, reply):
+def _message(to, subject, body, reply, reply_to=None):
     """The email as Gmail takes it ({raw, threadId?}), and its subject."""
     text, page = _with_signature(body or "")
     if page:
@@ -587,6 +589,8 @@ def _message(to, subject, body, reply):
     msg["To"] = to
     msg["From"] = dg.OWNER_EMAIL
     msg["Subject"] = _one_line(subject)[:200]
+    if reply_to:
+        msg["Reply-To"] = _one_line(reply_to)
     # Gmail keeps a message in a thread only with the thread's id, a matching
     # subject and these two headers; the customer's own mail sorts it in
     # under the estimate by the same headers.

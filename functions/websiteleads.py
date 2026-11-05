@@ -226,6 +226,29 @@ def take(db, f):
     return {"leadId": lead_id, "known": known, "form": f, "rec": rec, "r": r, "drafting": drafting, "news": [news]}
 
 
+def tell_by_email(done):
+    """The whole form in his inbox as well as on his phone. Jonah, 5 Nov 2026:
+    "the test form should be hitting my email too": Squarespace emailed him
+    each one, and this keeps that when the site leaves it. Sent from his own
+    address to itself, so leads.py and inboxdesk.py pass over it (both search
+    -from:me) and it can't come back in as a second lead. Reply on it goes to
+    the customer. After the browser has its answer, so it never raises: the
+    lead, the card and the buzz are already done."""
+    import cards
+    f, name = done["form"], done["rec"]["name"]
+    where = "Already in Job Hub, so no new lead was made. It's on My to-dos." if done["known"] else \
+        "It's on Customers → Leads and on My to-dos."
+    how = "Reply to this email and it goes to them." if f["email"] else "No email given: call or text them."
+    body = "New request from the website.\n\n%s\n\n%s %s" % (form_text(f), where, how)
+    try:
+        sent = cards.send_mail(dg.OWNER_EMAIL, "Website form: %s - %s" % (name, _what(f)), body,
+                               reply_to=f["email"] or None)
+        if sent.get("error"):
+            print("website form: email not sent for", done["leadId"], "--", sent["error"])
+    except Exception as err:        # noqa: BLE001 -- it may have gone, and the lead is safe either way
+        print("website form: email may not have gone for", done["leadId"], "--", err)
+
+
 def reply(claude, done, spent=None):
     """Claude reads the form as it reads a website form's email (his service
     names, the address in its boxes, is this really someone asking for work)

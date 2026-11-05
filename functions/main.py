@@ -1510,10 +1510,10 @@ def _store_lists_waiting():
 # The website's contact form (websiteleads.py). The one POST here anyone may
 # make: no sign-in, no scheduler's proof, so what comes in is a stranger's
 # data. The lead, its card and the buzz are done before the browser hears
-# anything. Claude's reply comes after: the answer is sent as the first piece
-# of the response and the reply written while the response stays open, because
-# Cloud Run gives a request no time once it has ended, and a person shouldn't
-# wait on it. The form only looks at the status.
+# anything. His email and Claude's reply come after: the answer is sent as the
+# first piece of the response and those two done while the response stays open,
+# because Cloud Run gives a request no time once it has ended, and a person
+# shouldn't wait on them. The form only looks at the status.
 
 
 def _site(request, path):
@@ -1553,18 +1553,18 @@ def _site(request, path):
         _tell_owner(done["news"])
     except Exception as e:                          # noqa: BLE001 -- the lead is saved, and on My to-dos
         print("website form: buzz failed:", e)
-    if not done["drafting"]:
-        return (ok, 200, json_headers)
 
-    def answer_then_reply():
+    def answer_then_the_rest():
         try:
             yield ok
         finally:                                    # also when the visitor has left
-            import leads
-            day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-            wl.reply(_claude, done, lambda usage: _record_spend(day, "leads", usage, leads.MODEL))
+            wl.tell_by_email(done)
+            if done["drafting"]:
+                import leads
+                day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+                wl.reply(_claude, done, lambda usage: _record_spend(day, "leads", usage, leads.MODEL))
 
-    return (answer_then_reply(), 200, json_headers)
+    return (answer_then_the_rest(), 200, json_headers)
 
 
 # ---------------------------------------------------------------- version
