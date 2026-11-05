@@ -5175,6 +5175,20 @@ async function newJob() {
   switchTab('job'); showToast('New job started');
   return true;
 }
+// The Editing bar's ← Job list: closes the job and lists the jobs (jobpicker.js).
+// Saved first, as loadJob saves before opening another, and one that can't be
+// saved stays on screen. Dropped as the last job too: the list was asked for,
+// so the Job tab stays on it, the next launch included, until a job is picked.
+function backToJobList() {
+  clearTimeout(autosaveTimer);
+  if (dirty && !jobsReadOnly() && (currentJobId || !jobIsEmpty())) {
+    autosave();
+    if (dirty) { showStorageError(); return; }
+  }
+  clearJobForm();
+  try { localStorage.removeItem(LAST_JOB_KEY); } catch (e) { /* private window: just this visit */ }
+  window.scrollTo(0, 0);
+}
 // Empties the form without asking anything or moving anyone. newJob() puts
 // the unsaved-changes question in front of it; a delete does not need that
 // question (the person has just confirmed the delete), and sync uses it when
@@ -5185,6 +5199,7 @@ function clearJobForm(asked) {
   formBase = null;
   launchJobId = null;     // a new job was asked for: not the last one
   blankJobAsked = !!asked;
+  dirty = false;          // what was typed went with the job: the list shows for a job deleted mid-typing too
   jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
   jobToolsOwn = { added: [], dropped: [] };

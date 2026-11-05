@@ -6254,3 +6254,12 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   @media (max-width:720px) {
     .tab-plural { display:inline; }
   }
+
+  /* ← Job list on the Editing bar (app.js backToJobList). Small, so a phone
+     keeps the job's name beside it; ::after takes the tap out to 44 tall. */
+  .ctx-back { position:relative; flex:none; padding:4px 9px; font:inherit; font-size:12px; font-weight:700; line-height:1.4; color:#fff;
+    white-space:nowrap; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.55); border-radius:6px; cursor:pointer; }
+  .ctx-back::after { content:''; position:absolute; left:-4px; right:-4px; top:calc(50% - 22px); height:44px; }
+  .ctx-back:hover { background:rgba(255,255,255,.24); }
+  .ctx-back:focus-visible { outline:2px solid #fff; outline-offset:1px; }
+  @media print { .ctx-back { display:none !important; } }
