@@ -1357,8 +1357,8 @@ def _save_all(db, m, got, jobs, extra=None):
     """Every receipt one email holds, saved (_save): the one, or one for
     each of its PDFs (ONE RECEIPT IN EACH PDF) -- passing over a PDF of its
     own that is no purchase or charged nothing. A personal one is filed
-    under Personal (_file_personal), rock salt under Snow and a flight, hotel
-    or ticket under Travel (_file_place).
+    under Personal (_file_personal); one whose place is known without
+    asking files itself there (_file_place).
     Returns [(rid, what, personal)]."""
     out = []
     parts = got.get("parts") or []
@@ -1509,7 +1509,10 @@ def read_again(client, db, rid):
     if not now.exists or (have.get("splits") or []) or stages.receipt_status(have) != "tosort":
         return {"error": "It was sorted while it was being read — nothing changed."}, usage
     ref.update(patch)
-    return {"ok": True, "summary": patch["summary"], "lines": len(patch["lines"]), "totalCents": patch["totalCents"]}, usage
+    # Read properly at last, it may now be one that files itself.
+    filed = _file_place(db, ref.id)
+    return dict({"ok": True, "summary": patch["summary"], "lines": len(patch["lines"]), "totalCents": patch["totalCents"]},
+                **({"filed": True} if filed else {})), usage
 
 
 def _read_patch(got, r):
@@ -1622,7 +1625,7 @@ def _file_personal(db, rid, got, m=None):
     itself read as personal: one a person has sorted, or that an earlier
     email about the same order called the business's, is left as it is.
     Returns True when the receipt is (now) filed only under Personal."""
-    if got.get("whose") != "personal" or is_office_store(got.get("vendor")):
+    if got.get("whose") != "personal" or is_office_store(got.get("vendor")) or _bill_place(db, got.get("vendor")):
         return False
     if _a_subs_bill(db, got, m):
         return False
@@ -1652,27 +1655,98 @@ def _file_personal(db, rid, got, m=None):
 # The places a receipt is filed in by itself, by what it was read as:
 # rock salt under Snow (never a personal one), a flight, hotel or ticket under
 # Travel (whoever it was for -- kind_of only reads a personal one as travel
-# by his rule, TRAVEL_STORES).
-AUTO_PLACES = {SNOW_KIND: ("snow", "Snow", False), TRAVEL_KIND: ("travel", "Travel", True)}
+# by his rule, TRAVEL_STORES), an accountant's, a lawyer's or the state's bill
+# under LLC overhead (never a personal one).
+AUTO_PLACES = {SNOW_KIND: ("snow", "Snow", False), TRAVEL_KIND: ("travel", "Travel", True),
+               COMPANY_KIND: ("llc", "LLC overhead", False)}
+# Jonah, 5 Nov 2026, of his bookkeeper's payment: "not auto sorting". His rules
+# of 29 Oct (bookkeepers on LLC overhead, Anthropic "should auto go to office
+# overhead") only picked the chip a receipt starts on, so each one still waited
+# for a tap. And a payment email says who was paid and nothing else: no word in
+# it says bookkeeper, so a store has to be known by name. His Monthly bills
+# already name each store (`match`, monthlybills.js), so a bill says where its
+# receipts go (`place`; Money -> To pay -> Change, or Stopped bills for one that
+# ended), which keeps the names in settings, out of this public code. Only
+# places that need no other pick: a vehicle needs which one, a job which job,
+# and Personal stays with _file_personal, which keeps it from QuickBooks.
+# The names are the ones on receipts.js PLACE_LIST.
+BILL_PLACES = {"shop": "Shop overhead", "office": "Office overhead", "property": "Property overhead",
+               "llc": "LLC overhead", "equipment": "Equipment", "upkeep": "Equipment maintenance",
+               "marketing": "Marketing"}
+# Bought for a job, or owed on a loan: never overhead, even from a store with a
+# bill (a supply-house card, say). The same as monthlybills.js placeFor.
+NOT_BY_BILL = ("materials", "plants", RENTAL_KIND, LOAN_KIND)
+
+
+def _bill_words(s):
+    """A store's name as words: the same as monthlybills.js `words`."""
+    return re.sub(r"[^a-z0-9& ]+", " ", (s or "").lower()).split()
+
+
+def _bill_place(db, vendor):
+    """Where his Monthly bills say this store's receipts go (BILL_PLACES), or
+    None. A stopped bill counts: its last receipts still come in. A home bill
+    never does: these places are business costs, sent to QuickBooks, and a home
+    bill's receipts stay off the books. Two bills of one store that say
+    different places decide nothing."""
+    try:
+        bills = (db.collection("settings").document("monthlyBills").get().to_dict() or {}).get("bills") or {}
+    except Exception:       # noqa: BLE001 -- a receipt is never lost over this; it waits to be sorted
+        return None
+    have = _bill_words(vendor)
+    places = set()
+    for b in bills.values():
+        want = _bill_words((b or {}).get("match") or (b or {}).get("name"))
+        if (b or {}).get("place") in BILL_PLACES and (b or {}).get("area") != "home" and want \
+                and all(w in have for w in want):
+            places.add(b["place"])
+    return places.pop() if len(places) == 1 else None
+
+
+def _auto_place(db, r):
+    """Where a receipt files itself, as (place, its name), or None. The store
+    named on a bill first, then the office's own stores, then what it was read
+    as. Only his bill or his rule beats a read of "personal"."""
+    if r.get("docType") != "person_payment":
+        named = _bill_place(db, r.get("vendor")) if r.get("kind") not in NOT_BY_BILL else None
+        if named:
+            return named, BILL_PLACES[named]
+        if is_office_store(r.get("vendor")):
+            return "office", BILL_PLACES["office"]
+    place = AUTO_PLACES.get(r.get("kind"))
+    if not place or (r.get("whose") == "personal" and not place[2]):
+        return None
+    return place[0], place[1]
+
+
+def _put_back_by_hand(r):
+    """Whether a person took this one back to sort (⋯ -> Undo): a later email
+    about it must not file it again. Undo says so on its stamp (`handBack`).
+    ✓ Paid stamps it too, with the day it was paid: that one is still to be
+    filed. One stamped before `handBack` has only the person's name to go on."""
+    change = r.get("statusChange") or {}
+    if change.get("to") != "new" or not change.get("by"):
+        return False
+    return bool(change.get("handBack")) or not r.get("paidOn")
 
 
 def _file_place(db, rid):
-    """A receipt read as rock salt or ice melt (SNOW_KIND) or as a flight,
-    hotel or ticket (TRAVEL_KIND): filed whole under ❄️ Snow or ✈️ Travel by
-    itself, the same split the app's chip makes, so ⋯ → Undo there puts it
-    back to sort. A business cost like the shop's, sent to QuickBooks as
-    usual. Only one still to sort with nothing filed: one a person has sorted
-    is left as it is. Returns True when filed (now or before) there."""
+    """A receipt whose place is known without asking (_auto_place): filed
+    whole there by itself, the same split the app's chip makes, so ⋯ → Undo
+    there puts it back to sort. A business cost like the shop's, sent to
+    QuickBooks as usual. Only one still to sort with nothing filed: one a
+    person has sorted, or put back to sort, is left as it is. Returns True
+    when filed (now or before) there."""
     ref = db.collection("receipts").document(rid)
     snap = ref.get()
     r = (snap.to_dict() or {}) if snap.exists else {}
-    place = AUTO_PLACES.get(r.get("kind"))
-    if not place or (r.get("whose") == "personal" and not place[2]):
+    place = _auto_place(db, r) if r else None
+    if not place:
         return False
-    to, name = place[0], place[1]
+    to, name = place
     if any(sp.get("to") == to for sp in (r.get("splits") or [])):
         return True
-    if r.get("splits") or stages.receipt_status(r) != "tosort":
+    if r.get("splits") or stages.receipt_status(r) != "tosort" or _put_back_by_hand(r):
         return False
     lines = r.get("lines") or []
     tax = int(r.get("taxCents") or 0)
@@ -1680,18 +1754,6 @@ def _file_place(db, rid):
     now = dg._now().isoformat()
     split = {"id": "sp" + _b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
              "to": to, "name": name, "lines": list(range(len(lines))), "cents": cents, "taxCents": tax,
-             "at": now, "by": "Job Hub", "auto": True}
-    ref.update({"splits": [split], "status": "done", "updatedAt": now, "updatedBy": "",
-                "statusChange": {"to": "done", "at": now, "by": "", "name": "Job Hub"}})
-    return True
-    if r.get("splits") or stages.receipt_status(r) != "tosort":
-        return False
-    lines = r.get("lines") or []
-    tax = int(r.get("taxCents") or 0)
-    cents = sum(int(ln.get("cents") or 0) for ln in lines) if lines else max(0, int(r.get("totalCents") or 0) - tax)
-    now = dg._now().isoformat()
-    split = {"id": "sp" + _b36(int(time.time() * 1000)) + hashlib.sha1(rid.encode()).hexdigest()[:4],
-             "to": "snow", "name": "Snow", "lines": list(range(len(lines))), "cents": cents, "taxCents": tax,
              "at": now, "by": "Job Hub", "auto": True}
     ref.update({"splits": [split], "status": "done", "updatedAt": now, "updatedBy": "",
                 "statusChange": {"to": "done", "at": now, "by": "", "name": "Job Hub"}})

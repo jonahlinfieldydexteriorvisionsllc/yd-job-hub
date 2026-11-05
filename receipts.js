@@ -184,6 +184,11 @@
     // or bus tickets should be automarked as travel"; receipts.py is_travel)
     // -- a photo of one sent in from a job included.
     if (r.kind === 'travel') return 'travel';
+    // A store one of his Monthly bills says where to put. The email reader
+    // files those itself (receipts.py _file_place); this is the chip on one
+    // that was put back to sort, or marked paid by hand.
+    const billed = window.YDMonthlyBills && YDMonthlyBills.placeFor ? YDMonthlyBills.placeFor(r) : '';
+    if (billed) return billed;
     if (r.suggest && r.suggest.jobId) return 'job';
     // Claude read it as clearly a household's (a photo still to sort --
     // the email reader files those itself, functions/receipts.py).
@@ -747,6 +752,10 @@
     const splits = (r.splits || []).filter(x => x.id !== sid);
     const status = r.status === 'skipped' ? 'skipped' : 'new';
     const patch = moved(r, { splits, status });
+    // Said on the stamp: a later email about it must not file it again
+    // (receipts.py _put_back_by_hand). Stamped even when its status stays as
+    // it was: the last of a part-sorted receipt coming off.
+    if (status === 'new' && !splits.length) patch.statusChange = Object.assign(patch.statusChange || window.YDStages.stamp(status), { handBack: true });
     receipts[rid] = Object.assign({}, r, patch);
     write(rid, Object.assign({}, patch));
     redraw(true);
@@ -1070,23 +1079,47 @@
     return back;
   }
   // Undo: each one as it was, while nothing on it has been sorted since.
-  function undoPay(back) {
+  // `filed`: receipt id -> the split the same tap made (fileByBill), which comes
+  // back off, but only while it is all that is on the receipt.
+  function undoPay(back, filed) {
     back.forEach(([rid, status, paidOn]) => {
       const r = receipts[rid];
-      if (!r || (r.splits || []).length) return;
-      const patch = moved(r, { status, paidOn });
+      const had = r && (r.splits || []);
+      const mine = !!r && had.length === 1 && !!filed && had[0].id === filed[rid];
+      if (!r || (had.length && !mine)) return;
+      const patch = moved(r, Object.assign({ status, paidOn }, mine ? { splits: [] } : {}));
       receipts[rid] = Object.assign({}, r, patch);
       write(rid, Object.assign({}, patch));
     });
     redraw(true);
   }
+  // A receipt waiting to be sorted whose store a Monthly bill says where to put
+  // goes there now, by the same road as the chip. The email reader only files
+  // what an email brings in, and these came by a tap (✓ Paid), or were here
+  // before the bill said so. Never one a person took back to sort: the same
+  // test as receipts.py _put_back_by_hand.
+  function fileByBill(rid) {
+    const r = receipts[rid];
+    if (!r || !toSortNow(r) || (r.splits || []).length || !sorts()) return false;
+    const to = window.YDMonthlyBills && YDMonthlyBills.placeFor ? YDMonthlyBills.placeFor(r) : '';
+    const put = r.statusChange || {};
+    if (!to || (put.to === 'new' && put.by && (put.handBack || !r.paidOn))) return false;
+    delete ticked[rid];             // always the whole receipt
+    return assignElsewhere(rid, r, to, { name: DEST_NAME[to] });
+  }
+  // What fileByBill just put on these, for undoPay.
+  const splitsOf = ids => ids.reduce((o, id) => { o[id] = receipts[id].splits[0].id; return o; }, {});
+  // The ones already waiting, when a bill has just said where they go.
+  const fileWaiting = () => (loaded ? Object.keys(receipts).filter(fileByBill).length : 0);
   window.rcPaid = function (rid) {
     const r = receipts[rid];
     if (!r || !toPayNow(r)) return;
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
     const back = setPay([rid], 'new');
-    const say = '✓ ' + (r.vendor || 'Bill') + ' ' + money(r.totalCents) + ' paid — in Receipts to sort now';
-    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back), UNDO_MS); else showToast(say);
+    const filed = fileByBill(rid) ? splitsOf([rid]) : {};
+    const say = '✓ ' + (r.vendor || 'Bill') + ' ' + money(r.totalCents) + ' paid — ' +
+      (filed[rid] ? 'filed on ' + DEST_NAME[receipts[rid].splits[0].to] : 'in Receipts to sort now');
+    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back, filed), UNDO_MS); else showToast(say);
   };
   // Several at once: the year's pull (old bills, most of them paid long
   // ago), or every bill from one store -- a supplier billed on account, paid
@@ -1095,8 +1128,10 @@
     if (!sorts()) { showToast('You can look at jobs but not change them'); return; }
     if (!ids.length || !(await ydConfirm(why, { title: title, ok: 'They’re paid' }))) return;
     const back = setPay(ids.filter(id => toPayNow(receipts[id])), 'new');
-    const say = '✓ ' + back.length + ' bill' + (back.length === 1 ? '' : 's') + ' paid — in Receipts to sort now';
-    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back), UNDO_MS); else showToast(say);
+    const filed = splitsOf(back.map(b => b[0]).filter(fileByBill));
+    const say = '✓ ' + back.length + ' bill' + (back.length === 1 ? '' : 's') + ' paid — ' +
+      (Object.keys(filed).length === back.length ? 'filed by their bills' : 'in Receipts to sort now');
+    if (typeof showUndo === 'function') showUndo(say, () => undoPay(back, filed), UNDO_MS); else showToast(say);
   }
   window.rcPaidAll = function () {
     const ids = allReceipts().filter(r => toPayNow(r) && r.pulled).map(r => r.id);
@@ -1545,7 +1580,7 @@
     showToast('Reading the email again…', 30000);
     try {
       const out = await window.YDClaude.post('/receipts/read-again', { id: rid });
-      showToast('📖 Read again' + (out && out.summary ? ': ' + String(out.summary).slice(0, 120) : ''), 6000);
+      showToast('📖 Read again' + (out && out.summary ? ': ' + String(out.summary).slice(0, 120) : '') + (out && out.filed ? ' · it filed itself' : ''), 6000);
     } catch (e) {
       showToast(String((e && e.message) || e).slice(0, 160), 7000);
     } finally {
@@ -2375,6 +2410,8 @@
     // A receipt's tags by name, for the app's search (search.js).
     tagNames: tagNames,
     loaded: () => loaded,
+    // A Monthly bill just said where its store's receipts go (monthlybills.js).
+    fileWaiting: fileWaiting,
     render: () => {
       redraw(true);
       if (window.YDAuth && window.YDAuth.isOwner && window.YDDb) loadState().then(() => redraw(true));

@@ -6273,3 +6273,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .ctx-back:hover { background:rgba(255,255,255,.24); }
   .ctx-back:focus-visible { outline:2px solid #fff; outline-offset:1px; }
   @media print { .ctx-back { display:none !important; } }
+
+/* Money -> To pay: stopped bills, and where a bill's receipts go. */
+.bills-stopped { margin: 12px 0; }
+.bills-stopped > summary { padding: 12px 0; min-height: 44px; box-sizing: border-box; cursor: pointer; font-weight: 600; }
+.bills-places .btn { min-height: 44px; }
