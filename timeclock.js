@@ -1730,8 +1730,10 @@
     const nAsked = isOwner() ? Object.values(requests).filter(r => isWaiting(r) && ASKABLE.indexOf(r.type) !== -1).length : 0;
     const badge = el('approveBadge');
     if (badge) badge.textContent = waiting.length + nAsked ? (waiting.length + nAsked) + ' waiting' : '';
+    // Nothing waiting: no card at all. It held a paragraph saying so, on the
+    // first thing on the Clock, every day there was nothing to do.
     const sec = el('clockApproveSection');
-    if (sec) sec.hidden = false;
+    if (sec) sec.hidden = !waiting.length && !nAsked;
     // "Waiting for You" only to whoever approves. An admin who may only look
     // at the hours read it over a list where every shift says "Waiting for
     // the owner".
@@ -1739,13 +1741,7 @@
     if (title) title.textContent = decides() ? 'Waiting for You' : 'Waiting for approval';
     placeApprovals(sec, waiting.some(mayDecide) || nAsked > 0);
 
-    if (!waiting.length && !nAsked) {
-      wrap.innerHTML = '<p class="empty-msg">Nothing waiting. Ordinary clocked shifts ' +
-        'go through on their own — only shifts typed in by hand, longer than ' +
-        LONG_SHIFT_HOURS + ' hours or stopped by the clock after ' + hoursWord(autoOutHours) +
-        ' with nobody clocking out land here, and changes the crew ask for.</p>';
-      return;
-    }
+    if (!waiting.length && !nAsked) { wrap.innerHTML = ''; return; }
     // The plain ones, approved with one tap (approveLookRight) -- offered
     // only when there are two or more, since one has its own Approve.
     const byPerson = shiftsByPerson(waiting.map(e => e.uid));

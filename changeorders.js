@@ -133,7 +133,7 @@
     const sign = signBtn(k, 'bd-card-act' + (stage === 'sign' ? ' strong' : ''));
     return '<div class="bd-card co-card' + (done ? ' done' : '') + '" data-board="' + BOARD + '" data-card="' + esc(k.id) + '" ' +
         'onclick="openCardDetail(\'' + BOARD + '\', \'' + safe(k.id) + '\')">' +
-      '<div class="bd-card-title">🧾 ' + esc(k.jobName || 'A job') +
+      '<div class="bd-card-title">📑 ' + esc(k.jobName || 'A job') +
         (k.jobNum ? ' <span class="job-num">#' + esc(k.jobNum) + '</span>' : '') + '</div>' +
       (k.service ? '<div class="bd-card-line">' + esc(k.service) + '</div>' : '') +
       (words ? '<div class="bd-card-line muted">' + esc(words) + '</div>' : '') +
@@ -159,7 +159,7 @@
       let flags = null;
       try { flags = await YDDb.get('settings', 'seeds'); } catch (e) { seedAsked = false; return; }
       if ((flags && flags.changeOrders) || board()) return;
-      const rec = { name: '🧾 Change orders', color: '#8a5fb8', order: 3, group: 'work', ownerOnly: false,
+      const rec = { name: '📑 Change orders', color: '#8a5fb8', order: 3, group: 'work', ownerOnly: false,
                     visibleTo: [], editors: [], columns: COLUMNS, doneColumn: ADDED, labels: [],
                     createdAt: nowIso(), updatedAt: nowIso() };
       Promise.resolve(YDDb.put('boards', BOARD, rec)).catch(e => console.warn('[changeorders] board not yet made:', (e && e.code) || e));
@@ -711,8 +711,8 @@
     if (!id) { c.innerHTML = onJobTab ? '<p class="muted">Save the job first, then add a change order.</p>' : ''; return; }
     const list = forJob(id);
     if (!mayAdd() && !list.length) { c.innerHTML = ''; return; }
-    c.innerHTML = (onJobTab ? '' : '<div class="cj-h">🧾 Change orders</div>') +
-      (mayAdd() ? '<button type="button" class="btn sg-start" onclick="coAdd(\'' + safe(id) + '\')">🧾 Change order</button>' : '') +
+    c.innerHTML = (onJobTab ? '' : '<div class="cj-h">📑 Change orders</div>') +
+      (mayAdd() ? '<button type="button" class="btn sg-start" onclick="coAdd(\'' + safe(id) + '\')">📑 Change order</button>' : '') +
       (list.length ? '<div class="co-list">' + list.map(rowHtml).join('') + '</div>'
         : onJobTab ? '<p class="muted">None yet.</p>' : '');
   }

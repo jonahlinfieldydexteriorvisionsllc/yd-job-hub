@@ -157,15 +157,31 @@
 
   // ------------------------------------------------------------- the hooks
 
+  // A new version arriving reloads the page, and a load cut off by that fails
+  // its files on the way out. None of that is a fault, and it was nearly all
+  // the Problems list (review of 4 Nov 2026). So a file that fails is only
+  // written down if the page is still here a few seconds later, and what can't
+  // run without it ("ydCan is not defined") isn't a second report of the same
+  // thing. A file that really won't load is still reported.
+  const LOAD_WAIT_MS = 4000;
+  let leaving = false, loadFailed = false;
+  window.addEventListener('pagehide', () => { leaving = true; });
+  function loadFail(src) {
+    loadFailed = true;
+    setTimeout(() => { if (!leaving) record('error', 'Failed to load ' + src, ''); }, LOAD_WAIT_MS);
+  }
+
   // Files that failed before this one loaded (index.html heard them).
-  (window.YDLoadFails || []).forEach(src => record('error', 'Failed to load ' + src, ''));
+  (window.YDLoadFails || []).forEach(loadFail);
 
   window.addEventListener('error', e => {
+    if (leaving) return;
     // A failed <script> or <img> fires this too, with no Error object.
     if (!e.error && e.target && e.target !== window) {
-      record('error', 'Failed to load ' + (e.target.src || e.target.href || 'a file'), '');
+      loadFail(e.target.src || e.target.href || 'a file');
       return;
     }
+    if (loadFailed && /is not defined/.test(String(e.message || ''))) return;
     record('error', e.message,
       (e.filename || '') + ':' + (e.lineno || '') + '\n' +
       ((e.error && e.error.stack) || ''));

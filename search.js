@@ -697,7 +697,7 @@
       hint: 'Crew-day rate, profit, markups, delivery, sales tax, payments, the end of every estimate',
       words: 'markup margin profit tax delivery deposit payment terms warranty estimate',
       show: () => signedIn() && owner(), go: () => call('openPricingRules') },
-    { group: 'Prices & money', icon: '🧰', name: 'Services & how they’re priced',
+    { group: 'Prices & money', icon: '🧰', name: 'Service prices',
       hint: 'Services sold by the unit or the crew-day, their minimums and what adjusts them',
       words: 'price book turf sod flat rate minimum',
       show: () => signedIn() && owner(), go: () => call('openPriceBook') },

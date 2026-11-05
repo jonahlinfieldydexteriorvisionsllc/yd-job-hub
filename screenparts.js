@@ -44,7 +44,7 @@
       parts: [
         { id: 'orders', icon: '📦', name: 'Orders', words: () => said('ordersBadge') || 'Nothing to order' },
         { id: 'list', icon: '🛒', name: 'Supplies', words: itemWords },
-        { id: 'bought', icon: '🧾', name: 'Bought', words: () => said('matDashBadge').replace(/\.\d\d /, ' ') || 'This season' },
+        { id: 'bought', icon: '🛍️', name: 'Bought', words: () => said('matDashBadge').replace(/\.\d\d /, ' ') || 'This season' },
       ],
     },
     dashboard: {

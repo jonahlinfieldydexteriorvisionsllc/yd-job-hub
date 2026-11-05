@@ -316,6 +316,11 @@
   function whenText(w) {
     if (!w) return '';
     if (w.how === 'soon') return 'From ' + niceDay(w.from);
+    // "Early spring" typed beside "Spring 2027" from the buttons: said the same
+    // way, with its year. The words stay as typed; this is how they read.
+    if (w.label && !/\b(19|20)\d\d\b/.test(w.label) && validDay(w.from) && (SEASON_RE.test(low(w.label)) || MONTH_RE.test(low(w.label)))) {
+      return w.label + ' ' + w.from.slice(0, 4);
+    }
     return w.label || windowWords(w);
   }
   let whenLater = false;          // "A year later" picked on the open page

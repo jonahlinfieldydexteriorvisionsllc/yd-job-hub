@@ -1019,7 +1019,7 @@
       (owing.length ? sub('💵 Waiting on payment', owing.length) + capped('owed', owing.map(x => owedRow(x, false))) : '') +
       (waiting.length ? sub('🔨 Deposit paid, job not done yet', waiting.length) +
         capped('owedWait', waiting.map(x => owedRow(x, true)), 3) : '');
-    return card('invoice', '🧾 Needs invoicing', toInv.length ? toInv.length + ' · ' + dollars(total) : '',
+    return card('invoice', '💰 Needs invoicing', toInv.length ? toInv.length + ' · ' + dollars(total) : '',
       ['Jobs board', "homeBoard('jobs')"], body, toInv.length > 0);
   }
 
