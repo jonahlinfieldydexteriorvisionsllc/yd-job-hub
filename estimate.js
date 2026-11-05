@@ -1797,7 +1797,7 @@
   // bag".
   function partUseText(l) {
     if (!l.partUse || !l.usedQty) return '';
-    const used = l.usedLb ? fmtQ(l.usedLb) + ' lb' : P().qtyText(l.usedQty, l.per);
+    const used = l.usedLb ? fmtQ(l.usedLb) + ' lb' : l.usedAmount ? P().qtyText(l.usedAmount, l.takeoffUnit) : P().qtyText(l.usedQty, l.per);
     return ' — charged for the ' + used + ' used' +
       (l.perLbCents > 0 && l.packLb ? ' · ' + cents(Math.round(l.perLbCents)) + '/lb from the ' + fmtQ(l.packLb) + ' lb bag' : '');
   }
@@ -1926,12 +1926,12 @@
     const t = r.tax || {};
     if (t.fromQb) return t.cents > 0 ? '<div><span>Subtotal</span><b>' + cents(r.totalCents) + '</b></div>' +
       '<div><span>Sales tax (as QuickBooks worked it out)</span><b>' + cents(t.cents) + '</b></div>' : '';
-    if (t.underTen) return '<div class="est-taxnote">No sales tax: the planting and lawn work is under 10% of a building job ' +
+    if (t.underTen) return '<div class="est-taxnote">No sales tax: the landscaping is under 10% of a building job ' +
       '(Wisconsin taxes none of it then — you pay the tax on its materials when you buy them).</div>';
     if (!(t.taxableCents > 0)) return '';
     return '<div><span>Subtotal</span><b>' + cents(r.totalCents) + '</b></div>' +
       '<div><span>Sales tax' + (t.ratePct !== null ? ' ' + fmtQ(t.ratePct) + '%' : '') + ' on ' + cents(t.taxableCents) +
-        ' of planting & lawn work</span><b>' + (t.ratePct !== null ? cents(t.cents) : '—') + '</b></div>' +
+        ' of landscaping</span><b>' + (t.ratePct !== null ? cents(t.cents) : '—') + '</b></div>' +
       '<div class="est-taxnote">QuickBooks works out the exact tax from the job’s address.</div>';
   }
 
@@ -2194,7 +2194,7 @@
         if (taxedOf[wid]) movedTaxed += c;
       });
     });
-    const named = l => l.name + ': ' + (l.partUse && l.usedLb ? P().qtyText(l.usedLb, 'lb') : P().qtyText(l.orderQty, l.per));
+    const named = l => { const n = P().shownQty(l); return l.name + ': ' + P().qtyText(n.q, n.unit); };
     const work = est.work.map((w, i) => {
       const mine = r.takeoff.filter(l => moved[l.id] === w.id);
       const matsCents = mine.reduce((s, l) => s + l.clientCents, 0);

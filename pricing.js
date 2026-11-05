@@ -154,7 +154,7 @@
   // holding back soil is building work, so stone edging is taxed even though
   // QuickBooks files it under Hardscaping Services.
   const TAXED_WORK = /\b(edging|lawn-?care|landscap(e|es|ed|ing)|plant(s|ing|ed)?|trees?|shrubs?|perennials?|flowers?|annuals?|sod(ding)?|seed(ing)?|overseed(ing)?|mulch(ing)?|lawn|lawns|mow(s|ing)?|fertili[sz](e|er|ing|ation)|aerat(e|ion|ing)|dethatch(ing)?|weed(s|ing)?|prun(e|ing)|trim(s|ming)?|hedges?|garden|gardens|beds?|clean-?ups?|leaf|leaves|top-?dress(ing)?)\b/i;
-  const BUILT_WORK = /\b(hardscap\w*|patios?|pavers?|walls?|retaining|steps?|walks?|walkways?|paths?|driveways?|fences?|fencing|drains?|drainage|trench(es|ing)?|french|downspouts?|grading|excavat\w*|gravel|pads?|concrete|fire ?pits?|fireplaces?|kitchens?|lighting|irrigation|snow|plow\w*|salt\w*|boulders?|pergolas?|decks?)\b/i;
+  const BUILT_WORK = /\b(hardscap\w*|patios?|pavers?|pav(e|es|ed|ing)|flagstones?|walls?|retaining|steps?|walks?|walkways?|paths?|driveways?|fences?|fencing|drains?|drainage|trench(es|ing)?|french|downspouts?|grading|excavat\w*|gravel|pads?|concrete|fire ?pits?|fireplaces?|kitchens?|lighting|irrigation|snow|plow\w*|salt\w*|boulders?|pergolas?|decks?)\b/i;
   function workTaxable(w, ctx) {
     if (w.taxable === true || w.taxable === false) return w.taxable;
     const svc = w.priceId && ctx.book ? ctx.book[w.priceId] : null;
@@ -597,6 +597,8 @@
       out.partUse = true;
       out.usedQty = Math.round(used * 1000) / 1000;
       if (pk.lb) out.usedLb = Math.round(used * pk.lb * 100) / 100;
+      // Sold by the roll or box, used by the sq ft or pin: how much that is.
+      else if (coverage && takeoffUnit) out.usedAmount = Math.ceil(trim(withWaste));
       out.perLbCents = pk.lb ? costCents / pk.lb : null;     // the supplier's price a pound
     }
     out.costTotalCents = Math.round(charged * out.landedEachCents);
@@ -1353,13 +1355,19 @@
   // One product on two lines -- the edging inside the patio's all-in price
   // and the edging for the beds -- is one line for the customer, the two
   // amounts added together.
+  // How much of a line the customer reads: one charged by the part used
+  // reads as that part ("161 sq ft"), not the whole roll bought for it.
+  function shownQty(l) {
+    if (l.partUse && l.usedLb) return { q: l.usedLb, unit: 'lb' };
+    if (l.partUse && l.usedAmount) return { q: l.usedAmount, unit: l.takeoffUnit };
+    return { q: l.orderQty, unit: l.per };
+  }
   function materialsList(result, taxed) {
     const rows = [], byName = {};
     result.takeoff.concat(result.added)
       .filter(l => l.listed && l.orderQty > 0 && (taxed === undefined || !!l.taxed === taxed))
       .forEach(l => {
-        const lb = !!(l.partUse && l.usedLb);
-        const q = lb ? l.usedLb : l.orderQty, unit = lb ? 'lb' : l.per;
+        const { q, unit } = shownQty(l);
         const key = String(l.name || '').trim().toLowerCase() + '|' + String(unit || '').trim().toLowerCase();
         if (byName[key]) { byName[key].q += q; return; }
         rows.push(byName[key] = { name: l.name, q: q, unit: unit });
@@ -2521,7 +2529,7 @@
   window.YDPricing = {
     CATEGORIES, CATEGORY_NAME, PROFIT_TIERS, NOT_FOR_ESTIMATES, allKinds, kindName, kindFor,
     rules: () => rules, fuelPrices: () => fuelPrices, ready: () => ready,
-    price, asAccepted, materialsList, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents, lineKind,
+    price, asAccepted, materialsList, shownQty, qtyText, payments, roundUp, num, placeKey, isBulk, rentalCents, lineKind,
     // A crew-day by the people on it (estimate.js, jobcosts.js).
     CREW_SIZES, USUAL_CREW, crewSizeIn, crewSizeOn, crewDayCost, crewDayFor, crewHours, crewLocked,
     // Each work line's price, cost and profit (estimate.js, jobcosts.js).
