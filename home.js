@@ -156,7 +156,12 @@
       (x.canTick ? '<input type="checkbox"' + (x.done ? ' checked' : '') + ' onchange="homeTick(\'' + k + '\', this.checked)" ' +
         'aria-label="Done">' : '<span class="cal-todo-dot"></span>') +
       '<button class="cal-todo-t" onclick="homeOpen(\'' + k + '\')">' + esc(x.title) +
-        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + (x.task ? claudeLine(x, k) : '');
+        (line ? '<small>' + line + '</small>' : '') + '</button></div>' + mailLine(x) + (x.task ? claudeLine(x, k) : '');
+  }
+  // A to-do about an email (a lead to answer): straight there, a tap.
+  function mailLine(x) {
+    const m = window.YDBoards && YDBoards.mailOf ? YDBoards.mailOf(x.o) : null;
+    return m ? '<div class="hm-cl"><a class="link-btn" href="' + esc(m.url) + '" target="_blank" rel="noopener">' + esc(m.words) + '</a></div>' : '';
   }
   // A plain line that goes somewhere: an icon, the words, something on the right.
   function line(icon, main, small, right, call, cls) {
@@ -547,8 +552,13 @@
     const title = isOwner() ? '📅 My day' : '📅 Your day';
     const link = ['Calendar', "switchTab('calendar')"];
     if (d === 'loading' || !d) return card('day', title, '', link, empty('Loading…'));
-    const ownLate = d.mineLate.filter(x => !openCrew(x)), ownAny = d.mineAny.filter(x => !openCrew(x));
-    const crewLate = d.mineLate.filter(openCrew), crewAny = d.mineAny.filter(openCrew);
+    // Ticked off, a thing leaves Home (Jonah, 4 Nov 2026: "chdecked off pickups
+    // can leave my home screen"): Home is what is left to do. The calendar
+    // keeps it, and the tick offers Undo (homeTick).
+    const lateOnes = d.mineLate.filter(x => !x.done), anyOnes = d.mineAny.filter(x => !x.done);
+    d = Object.assign({}, d, { mineTimed: d.mineTimed.filter(x => !x.done) });
+    const ownLate = lateOnes.filter(x => !openCrew(x)), ownAny = anyOnes.filter(x => !openCrew(x));
+    const crewLate = lateOnes.filter(openCrew), crewAny = anyOnes.filter(openCrew);
     // The day's one count, worked out by the calendar (calendar.js tally) and
     // said in its words -- "3 to do today · 2 from earlier" -- so Home, My day
     // and the calendar's day list give the same figure (crew testing, 16 Oct
@@ -831,6 +841,8 @@
     // phone's narrow head has no room for both.
     const link = null;
     if (d === 'loading' || !d) return card('crew', title, '', link, empty('Loading…'));
+    d = Object.assign({}, d, { crewAny: d.crewAny.filter(x => !x.done), crewLate: d.crewLate.filter(x => !x.done),
+      crewTimed: d.crewTimed.filter(x => !x.done) });
     const tasks = d.crewAny.concat(d.crewLate);
     // Nobody on it (anyone's to do) apart from someone's already: the rows
     // of the second say who.
@@ -1190,7 +1202,7 @@
       if (checks) {
         any = true;
         rows.push(line('💲', '<b>' + plural(checks, 'price') + ' to check</b>', 'A receipt or a store’s site said a different price than the price list', '',
-          "switchTab('supplies')"));
+          'homePrices()'));
       }
     }
     // Subcontractor bills no client could be told from (subs.js) -- the
@@ -1374,7 +1386,17 @@
   };
   window.homeTick = function (k, on) {
     const o = drawn[k];
-    if (o && window.YDCalendar && YDCalendar.tick) YDCalendar.tick(o, on);
+    const ok = !!(o && window.YDCalendar && YDCalendar.tick && YDCalendar.tick(o, on));
+    // It leaves Home, so it has to be easy to bring back. A card's Undo is the
+    // board's own, to the column it came from (YDBoards.setDone).
+    if (ok && on && o.auto !== 'card' && o.auto !== 'recurring' && typeof showUndo === 'function') {
+      const t = String(o.title || 'That').trim();
+      showUndo('“' + (t.length > 40 ? t.slice(0, 38) + '…' : t) + '” done', () => {
+        YDCalendar.tick(o, false);
+        lastHtml = '';
+        render();
+      }, 9000);
+    }
     // Drawn again even when nothing changed: a tick that was refused must
     // not stay looking ticked.
     lastHtml = '';
@@ -1414,6 +1436,13 @@
     nextdoorUntil = Date.now() + 30000;
     switchTab('home');
     render();
+  };
+  // The list itself, not the top of Supplies (Jonah, 4 Nov 2026: it "just
+  // takes me to the supplies that need to be orderd for jobs page"): Orders
+  // to place sit above it, and it is folded.
+  window.homePrices = function () {
+    switchTab('supplies');
+    if (window.YDSupplies && YDSupplies.showChecks) YDSupplies.showChecks();
   };
   window.homeBoard = function (id) {
     switchTab('boards');

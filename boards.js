@@ -1699,6 +1699,17 @@
     return j ? String(j.estimateNumber || '').trim() : '';
   }
 
+  // A card can be ticked off from the board itself (Jonah, 4 Nov 2026: "make
+  // it so to do cards on boards canbe marked done from the board"), without
+  // opening it or dragging it to Done: whoever may move the board's cards, on
+  // a board with a done column, on a card not in it. The same move as a drag
+  // there (moveByHand): an unticked checklist is asked about, and it can be
+  // undone.
+  const tickable = (board, inLastColumn) => !inLastColumn && !!doneColOf(board) && canMove(board.id);
+  window.bdTick = function (boardId, cardId) {
+    const b = boards[boardId];
+    if (b && doneColOf(b) && canMove(boardId)) moveByHand(boardId, cardId, doneColOf(b), null, true);
+  };
   function storedCardHtml(board, k, inLastColumn) {
     if (board.id === CHANGE_ORDERS && window.YDChangeOrders) return YDChangeOrders.cardHtml(k, inLastColumn);
     const labels = (k.labels || []).map(id => (board.labels || []).find(l => l.id === id)).filter(Boolean);
@@ -1720,8 +1731,11 @@
         'onclick="openCardDetail(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')">' +
       (labels.length ? '<div class="bd-labels">' + labels.map(l =>
         '<span class="bd-label" style="--c:' + safeColor(l.color) + ';color:' + inkOn(safeColor(l.color)) + '">' + esc(l.name) + '</span>').join('') + '</div>' : '') +
-      '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
-        esc(k.title || 'Untitled') + '</div>' +
+      '<div class="bd-card-head">' + (tickable(board, inLastColumn)
+          ? '<button type="button" class="bd-tick" title="Mark it done" aria-label="Mark it done" draggable="false" ' +
+            'onclick="event.stopPropagation(); bdTick(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')"><span>✓</span></button>' : '') +
+        '<div class="bd-card-title">' + (YDRemind.icon(cardType(board, k)) ? YDRemind.icon(cardType(board, k)) + ' ' : '') +
+        esc(k.title || 'Untitled') + '</div></div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
       // Finished: said with a tick, not by striking the title through -- a
@@ -1817,6 +1831,7 @@
     groupOpen = '';
     try { localStorage.setItem('ydjobhub_board', id); } catch (e) {}
     render();
+    document.dispatchEvent(new CustomEvent('yd-board-shown'));
   };
 
   // ---------------------------------------------------------- drag and drop
@@ -1977,7 +1992,9 @@
   //     the way it went. Nor one whose move opened a window to finish it
   //     (a machine's service form, a recurring task's OK).
   // Resolves true when it moved (or was handed on to be moved).
-  async function moveByHand(boardId, cardId, col, beforeId) {
+  // `undoable`: offer Undo even when the card stays in sight, for a tick,
+  // where there was no dragging it back in mind.
+  async function moveByHand(boardId, cardId, col, beforeId, undoable) {
     if (boardId === 'bids' || boardId === 'jobs') { moveCard(boardId, cardId, col, beforeId); return true; }
     let board = boards[boardId], k = (cards[boardId] || {})[cardId];
     if (!board || !k) return false;
@@ -1990,7 +2007,7 @@
     const was = { column: colOf(board, k), order: k.order };
     const seen = onScreen(boardId, cardId);
     const r = moveCard(boardId, cardId, col, beforeId);
-    if (r && r.toDone && !r.more && seen && !onScreen(boardId, cardId)) {
+    if (r && r.toDone && !r.more && (undoable || (seen && !onScreen(boardId, cardId)))) {
       const say = '“' + shortTitle(k.title) + '” moved to ' + doneName + ' on ' + (board.name || 'its board');
       if (typeof showUndo === 'function') showUndo(say, () => undoDone(boardId, cardId, was), 9000);
       else showToast(say);
@@ -2302,6 +2319,27 @@
     if (openCard && openCard.cardId === cardId && !el('cdTitle')) renderCardDetail();
   }
 
+  // A Gmail address in a card's notes is a button (Jonah, 4 Nov 2026: "reply
+  // to google lead cards should always have a button that auto goes to the
+  // email not the text of the link in the body"). Its line in the notes says
+  // what it is, so that is the button's words and the address leaves the
+  // words: "Your reply is in Gmail Drafts: https://..." opens his reply, and
+  // "Their email: https://..." theirs. Read from the notes, so every card
+  // already made has them too, and the notes themselves stay as they are.
+  const MAIL_LINE = /^(.*?)(https:\/\/mail\.google\.com\/\S+)\s*$/;
+  function mailOf(k) {
+    return String((k && k.notes) || '').split('\n').map(l => l.match(MAIL_LINE)).filter(Boolean).map(m => {
+      const said = m[1].replace(/[:\s]+$/, '').trim();
+      return { url: window.ydGmailLink(m[2]) || m[2], draft: /draft/i.test(said) || /compose=/.test(m[2]), said: said };
+    });
+  }
+  const mailWords = m => (m.draft ? '✉️ Open your reply' : '✉️ Open their email');
+  function mailButtonsHtml(k) {
+    const list = mailOf(k);
+    return list.length ? '<div class="bd-mail">' + list.map(m => '<a class="btn btn-sm' + (m.draft ? ' btn-filled' : '') + '" href="' +
+      esc(m.url) + '" target="_blank" rel="noopener">' + mailWords(m) + '</a>').join('') + '</div>' : '';
+  }
+  const notesWords = k => String((k && k.notes) || '').split('\n').filter(l => !MAIL_LINE.test(l)).join('\n').trim();
   function renderCardDetail() {
     const board = boards[openCard.boardId];
     const k = board && (cards[board.id] || {})[openCard.cardId];
@@ -2343,7 +2381,8 @@
         (k.jobName ? '<span>📋 ' + esc(k.jobName) + (jobNumOf(k) ? ' #' + esc(jobNumOf(k)) : '') + '</span>' : '') +
       '</div>' +
       pickupHtml(k) +
-      (k.notes ? '<div class="bd-notes">' + esc(k.notes) + '</div>' : '') +
+      mailButtonsHtml(k) +
+      (notesWords(k) ? '<div class="bd-notes">' + esc(notesWords(k)) + '</div>' : '') +
       (list.length ? '<div class="bd-move-label">Checklist</div><div class="bd-checklist">' +
         list.map(i => '<label class="chk bd-chk"><input type="checkbox"' + (i.done ? ' checked' : '') +
           ' onchange="toggleCheck(\'' + safeId(i.id) + '\', this.checked)"><span' + (i.done ? ' class="struck"' : '') + '>' +
@@ -2962,7 +3001,7 @@
     openModal(openCard.cardId ? 'Edit card' : 'New card on ' + esc(board.name),
       '<div class="field"><span class="label">What needs doing</span>' +
         '<input id="cdTitle" value="' + esc(k.title || '') + '" placeholder="e.g. Pick up 3 pallets of pavers"' +
-          ' oninput="cardPlaceFollow()"></div>' +
+          ' oninput="cardPlaceFollow()" enterkeyhint="done" onkeydown="cardEnter(event)"></div>' +
       // The kind's box keeps its value even where it is not shown, so a card
       // keeps the kind it has.
       (kinds.length ? '' : '<input type="hidden" id="cdType" value="' + esc(kindNow) + '">') +
@@ -3004,13 +3043,13 @@
             (c.id === (k.column || openCard.column || board.columns[0].id) ? ' selected' : '') + '>' +
             esc(c.name) + '</option>').join('') + '</select></div>' +
         '<div class="field"><span class="label">Due</span>' +
-          '<input type="date" id="cdDue" value="' + esc(k.due || '') + '"></div>' +
+          '<input type="date" id="cdDue" value="' + esc(k.due || '') + '" onkeydown="cardEnter(event)"></div>' +
       '</div>' +
       // A time puts the card at that hour on the calendar, not just on the
       // day; the reminder buzzes the phone (functions/reminders.py).
       '<div class="grid g2">' +
         '<div class="field"><span class="label">Time (if it has one)</span>' +
-          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '" onchange="cardRemindHint()"></div>' +
+          '<input type="time" id="cdTime" value="' + esc(k.dueTime || '') + '" onchange="cardRemindHint()" onkeydown="cardEnter(event)"></div>' +
         '<div class="field"><span class="label">Reminder</span><select id="cdRemind" onchange="cardRemindHint()">' +
           YDRemind.optionsHtml(k) + '</select></div>' +
       '</div>' +
@@ -3092,6 +3131,15 @@
     };
   }
   window.renderCardDetail2 = function () { renderCardDetail(); };
+  // Enter in the title (or its day or time) saves the card (Jonah, 4 Nov 2026:
+  // "make it so i can hit enter when putting in a card and it does the save
+  // for me"). Not in Notes or the checklist, where Enter is a new line, nor
+  // while a phone's keyboard is still composing a word.
+  window.cardEnter = function (e) {
+    if (e.key !== 'Enter' || e.isComposing) return;
+    e.preventDefault();
+    window.saveCard();
+  };
   // Just its name (as on the calendar's editor, calendar.js typeLabel).
   const cardTypeLabel = t => t.icon + ' ' + t.name;
 
@@ -4169,6 +4217,16 @@
       } finally { whoNow = null; }
     },
     editsBoard: id => !!boards[id] && editsBoard(boards[id]),
+    // The board in front of whoever is on the Boards tab (the sidebar's Bids).
+    currentId: () => current,
+    // The email a to-do on Home is about (mailOf), the reply first: a tap
+    // straight there, not through the card.
+    mailOf: o => {
+      const at = o && claudeCardOf(o), k = at && (cards[at.boardId] || {})[at.cardId];
+      const list = k ? mailOf(k) : [];
+      const m = list.find(x => x.draft) || list[0];
+      return m ? { url: m.url, words: mailWords(m) } : null;
+    },
     // For Claude tonight (home.js): what to say under a to-do, setting it
     // with his note, and taking it back.
     claudeWord: claudeWord,
@@ -4233,7 +4291,7 @@
       if (byItself) { moveCard(boardId, cardId, col, null); return true; }
       // A person's tick: a checklist not all ticked is asked about first,
       // and the card moves (and the calendar is told) once they say so.
-      moveByHand(boardId, cardId, col, null);
+      moveByHand(boardId, cardId, col, null, !!done);
       return true;
     },
     // For the calendar: every stored card with a due date, with its board.

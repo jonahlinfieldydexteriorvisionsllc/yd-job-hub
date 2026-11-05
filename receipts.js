@@ -2069,8 +2069,25 @@
   const viewTag = () => view.indexOf('tag:') === 0 ? view.slice(4) : '';
   const inView = r => viewTag() ? tagsOf(r).indexOf(viewTag()) !== -1
     : view === 'all' ? inAll(r) : view === 'skipped' ? isAside(r) : view === 'notreceipt' ? notReceiptNow(r) : goesTo(r, view);
-  window.rcView = function (v) { if (VIEWS[v]) { view = v; renderHistory(); } };
-  window.rcViewTag = function (t) { const tag = cleanTag(t); if (tag) { view = 'tag:' + tag; renderHistory(); } };
+  window.rcView = function (v) { if (VIEWS[v]) { view = v; histOpen = true; renderHistory(); } };
+  window.rcViewTag = function (t) { const tag = cleanTag(t); if (tag) { view = 'tag:' + tag; histOpen = true; renderHistory(); } };
+  // Folded until it is wanted (Jonah, 4 Nov 2026: "all receipts section in the
+  // receipts tab is massive and doesnt need to be viewable all the time
+  // whenever opening that tab"): the tab is for what needs sorting, and the
+  // list ran to thousands of pixels under it. The search box stays, and
+  // finding something opens it. Opened, only the newest month is unfolded.
+  let histOpen = false;
+  const monthOpen = Object.create(null);
+  window.rcHistToggle = function () {
+    histOpen = !histOpen;
+    if (!histOpen) {
+      view = 'all';
+      const box = el('rcSearch');
+      if (box) box.value = '';
+    }
+    renderHistory();
+  };
+  window.rcMonthToggle = function (d) { monthOpen[d.dataset.month] = d.open; };
   // Typing in the search box redraws only the list under it, so the box keeps
   // its focus and what was typed.
   window.rcSearchNow = function () { renderHistory(); };
@@ -2110,6 +2127,17 @@
     // aside, nor what went only to Personal.
     const counted = every.filter(inAll).length;
     el('rcHistBadge').textContent = counted ? String(counted) : '';
+    const showing = histOpen || !!words.length || view !== 'all';
+    const fold = el('rcHistFold');
+    if (fold) {
+      fold.textContent = showing ? '▾ Fold it' : '▸ Show them';
+      fold.setAttribute('aria-expanded', showing ? 'true' : 'false');
+    }
+    if (!showing) {
+      el('rcHistBar').innerHTML = '';
+      wrap.innerHTML = '';
+      return;
+    }
     // The tags on any receipt here, each a filter of its own on a line under
     // the places (the one being looked at stays, even with none left).
     const inUse = Object.create(null);
@@ -2150,11 +2178,14 @@
     });
     const split = m => view !== 'all' ? '' : PLACES.filter(p => m.by[p]).map(p =>
       PLACE_NAME[p] + ' ' + money(m.by[p])).join(' · ');
-    wrap.innerHTML = months.map(m =>
-      '<div class="rc-month"><span>' + esc(label(m.key)) + '</span><span>' + m.rows.length + ' · ' +
-        money(m.cents) + '</span></div>' +
+    // A search or a filter shows what it found; the whole list, one month.
+    const unfolded = (m, i) => !!words.length || view !== 'all' || (m.key in monthOpen ? monthOpen[m.key] : i === 0);
+    wrap.innerHTML = months.map((m, i) =>
+      '<details class="rc-month-box" data-month="' + esc(m.key) + '"' + (unfolded(m, i) ? ' open' : '') + ' ontoggle="rcMonthToggle(this)">' +
+      '<summary class="rc-month"><span>' + esc(label(m.key)) + '</span><span>' + m.rows.length + ' · ' +
+        money(m.cents) + '</span></summary>' +
       (split(m) ? '<div class="rc-month-split">' + esc(split(m)) + '</div>' : '') +
-      m.rows.map(rowHtml).join('')).join('') +
+      m.rows.map(rowHtml).join('') + '</details>').join('') +
       (shown.length > 300 ? '<p class="empty-msg">Showing the newest 300 — search to find older ones.</p>' : '') + olderHtml;
   }
 

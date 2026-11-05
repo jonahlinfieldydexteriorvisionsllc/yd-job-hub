@@ -2218,6 +2218,16 @@
     // A screen that picks from Supplies on a crew phone, where the listeners
     // otherwise wait for the Supplies tab (changeorders.js).
     ensure: () => { if (!started && authKey) start(); },
+    // Home's "N prices to check": the list open and in view. It only draws
+    // with nothing searched and no supplier open.
+    showChecks: () => {
+      search = ''; shown = ''; checksOpen = true;
+      const box = el('supSearch');
+      if (box) box.value = '';
+      render();
+      const list = document.querySelector('.sup-checks');
+      if (list) list.scrollIntoView({ block: 'start' });
+    },
     findSupply: findSupply, setPrice: setPrice, addSourced: addSourced, setItemInfo: setItemInfo,
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
     websiteUrl: websiteUrl,       // app.js, Materials to Order

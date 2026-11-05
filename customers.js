@@ -3201,6 +3201,17 @@
     return Object.assign({ customerId: t.id, customerBy: 'auto', customerFill: fillMark(t.id, t.how, add) }, add);
   }
   const openJobId = () => (typeof currentJobId !== 'undefined' && currentJobId) || '';
+  // A customer's name as a job's boxes hold it. Picking whose a bid is says
+  // who it is for, so the name follows (Jonah, 4 Nov 2026: "whose bid is this
+  // shows up and lets me click a client but then doesnt auto fill their
+  // name"); what else was typed stays, as fillFrom keeps it.
+  function namesOf(c) {
+    const out = s(c.firstName) || s(c.lastName) || s(c.business)
+      ? { first: s(c.firstName), last: s(c.lastName), business: s(c.business) }
+      : typeof splitName === 'function' ? splitName(s(c.name)) : { first: '', last: '', business: s(c.name) };
+    out.name = out.business || [out.first, out.last].filter(Boolean).join(' ') || s(c.name);
+    return out;
+  }
   // app.js's typing-not-saved. Not `dirty` by name: this file has a `dirty`
   // of its own (a redraw waiting), so that read this file's and the guard
   // below never saw the form's typing.
@@ -3216,6 +3227,13 @@
     const add = fillFrom(c, now), put = {};
     Object.keys(add).forEach(f => { const n = el(f); if (n && !s(n.value)) { n.value = add[f]; put[f] = add[f]; } });
     boardFields.customerFill = by === 'auto' ? fillMark(cid, how, put) : null;
+    if (by === 'hand') {
+      const n = namesOf(c);
+      [['firstName', n.first], ['lastName', n.last], ['business', n.business], ['customerName', n.name]].forEach(p => {
+        if (el(p[0])) el(p[0]).value = p[1];
+      });
+      if (typeof updateCtxBar === 'function') updateCtxBar();
+    }
     if (typeof markDirty === 'function') markDirty();
     drawTie();
     return true;
@@ -3321,8 +3339,11 @@
   const CARD_BOX = { address: 'jeStreet', city: 'jeCity', state: 'jeState', zip: 'jeZip', phone: 'jePhone', email: 'jeEmail' };
   function tieCard(jobId, cid, by) {
     const c = customers[cid];
-    if (!c || !window.YDSync || !YDSync.patchJob(jobId, { customerId: cid, customerBy: by })) return;
+    const n = c ? namesOf(c) : {};
+    if (!c || !window.YDSync || !YDSync.patchJob(jobId, { customerId: cid, customerBy: by, customerName: n.name,
+      firstName: n.first, lastName: n.last, business: n.business })) return;
     if (jobId === openJobId()) tieForm(cid, by);
+    [['jeFirst', n.first], ['jeLast', n.last], ['jeBusiness', n.business]].forEach(p => { if (el(p[0])) el(p[0]).value = p[1]; });
     const now = {};
     Object.keys(CARD_BOX).forEach(f => { now[f] = el(CARD_BOX[f]) ? el(CARD_BOX[f]).value : ''; });
     const add = fillFrom(c, now);

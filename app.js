@@ -6805,13 +6805,22 @@ try { localStorage.removeItem('ydjobhub_sidebarPreview'); } catch (e) { /* priva
 // too) is coming and belongs beside it, not among the jobs.
 const SIDEBAR_GROUPS = [
   { name: 'Today', tabs: ['home', 'calendar'] },
-  { name: 'Sales + jobs', tabs: ['job', 'tracking', 'dashboard', 'boards'] },
+  { name: 'Sales + jobs', tabs: ['job', 'tracking', 'dashboard', 'bids', 'boards'] },
   { name: 'Snow', tabs: ['snow'] },
   { name: 'Crew', tabs: ['clock', 'crewjobs'] },
   { name: 'Stuff', tabs: ['supplies', 'receipts', 'equipment'] },
   { name: 'People', tabs: ['contacts'] }
 ];
 
+// A line of the sidebar that is a place on a tab, not a tab: Bids, straight to
+// the board (Jonah, 4 Nov 2026: "thereshould be a button on left hand nav that
+// goes right to bids page"), for whoever sees jobs. Boards stays lit for the
+// other boards.
+const SIDEBAR_PLACES = {
+  bids: { tab: 'boards', icon: '📝', label: 'Bids', hint: 'Every bid, by where it stands', go: "homeBoard('bids')",
+    shows: () => typeof ydCan === 'function' && ydCan('jobs', 'see'),
+    on: () => !!(window.YDBoards && YDBoards.currentId && YDBoards.currentId() === 'bids') },
+};
 function sidebarStored(key) {
   try { return localStorage.getItem(key) === '1'; } catch (e) { return false; }
 }
@@ -6865,11 +6874,13 @@ function toggleSidebarSmall() {
       html += '<div class="sb-group" role="group" aria-labelledby="sbHead' + gi + '">' +
         '<div class="sb-head" id="sbHead' + gi + '">' + esc(g.name) + '</div>';
       g.tabs.forEach(t => {
-        const b = document.getElementById(tabButtonId(t));
+        const place = SIDEBAR_PLACES[t];
+        const b = document.getElementById(tabButtonId(place ? place.tab : t));
         if (!b) return;
-        html += '<button type="button" class="sb-item" data-tab="' + t + '" onclick="switchTab(\'' + t + '\')">' +
-          '<span class="sb-icon" aria-hidden="true">' + esc(iconOf(b)) + '</span>' +
-          '<span class="sb-label">' + esc(labelOf(b)) + '</span>' +
+        html += '<button type="button" class="sb-item" data-tab="' + (place ? place.tab : t) + '"' +
+          (place ? ' data-place="' + t + '"' : '') + ' onclick="' + (place ? place.go : 'switchTab(\'' + t + '\')') + '">' +
+          '<span class="sb-icon" aria-hidden="true">' + esc(place ? place.icon : iconOf(b)) + '</span>' +
+          '<span class="sb-label">' + esc(place ? place.label : labelOf(b)) + '</span>' +
           '<span class="sb-count"></span></button>';
       });
       html += '</div>';
@@ -6898,11 +6909,15 @@ function toggleSidebarSmall() {
     const hints = crewView() ? TAB_HINT_CREW : TAB_HINT;
     nav.querySelectorAll('.sb-item').forEach(item => {
       const t = item.dataset.tab, b = document.getElementById(tabButtonId(t));
-      item.hidden = !barShows(b);
+      const place = SIDEBAR_PLACES[item.dataset.place];
+      item.hidden = !barShows(b) || !!(place && !place.shows());
       if (!b) return;
-      const on = b.classList.contains('active');
+      // On a place the tab's own line is not lit: one screen, one lit line.
+      const atPlace = t === 'boards' && SIDEBAR_PLACES.bids.shows() && SIDEBAR_PLACES.bids.on();
+      const on = b.classList.contains('active') && (place ? place.on() : !atPlace);
       item.classList.toggle('active', on);
       if (on) item.setAttribute('aria-current', 'page'); else item.removeAttribute('aria-current');
+      if (place) { item.title = place.label + ' — ' + place.hint; return; }
       const label = labelOf(b);
       const lab = item.querySelector('.sb-label');
       if (lab && lab.textContent !== label) lab.textContent = label;
@@ -6943,6 +6958,8 @@ function toggleSidebarSmall() {
     nav.hidden = !on;
     if (on) {
       if (!built) build(nav);
+      document.removeEventListener('yd-board-shown', later);
+      document.addEventListener('yd-board-shown', later);
       if (!watcher) {
         // Any module showing, hiding, lighting up or counting on a bar
         // button; and sign-in deciding crew or owner (the stylesheet hides
