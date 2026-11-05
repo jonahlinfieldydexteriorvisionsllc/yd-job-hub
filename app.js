@@ -6980,13 +6980,16 @@ try { localStorage.removeItem('ydjobhub_sidebarPreview'); } catch (e) { /* priva
 // The groups, in the order they sit. Each says what is in it and holds more
 // than one screen: a heading over a single line only adds a line (review of 4
 // Nov 2026; Jonah: "Yes, clear them up"). Customers sit with the jobs they're
-// for, and Snow with the crew who run it.
+// for, and Snow with the crew who run it. Job sits beside Bids and Supplies
+// right under them, because Supplies is where the orders to place are, so it
+// belongs with the jobs (Jonah, 5 Nov 2026: "why would it be in yard if it
+// tracks orders we need to place"). Equipment went to the crew's group then:
+// alone it would have been a heading over one line.
 const SIDEBAR_GROUPS = [
   { name: 'Today', tabs: ['home', 'calendar'] },
-  { name: 'Jobs', tabs: ['crewjobs', 'job', 'dashboard', 'bids', 'boards', 'contacts'] },
-  { name: 'Crew & snow', tabs: ['clock', 'snow'] },
-  { name: 'Money', tabs: ['money', 'receipts'] },
-  { name: 'Yard', tabs: ['supplies', 'equipment'] }
+  { name: 'Jobs', tabs: ['crewjobs', 'job', 'bids', 'supplies', 'dashboard', 'boards', 'contacts'] },
+  { name: 'Crew & machines', tabs: ['clock', 'snow', 'equipment'] },
+  { name: 'Money', tabs: ['money', 'receipts'] }
 ];
 
 // A line of the sidebar that is a place on a tab, not a tab: Bids, straight to
