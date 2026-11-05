@@ -149,14 +149,17 @@
   // Labour by what it is: words of planting and lawn care, and none of
   // building. A line with both (a patio with a planting bed) is left untaxed
   // for him to decide. His rule of thumb (4 Nov 2026): lawn care and
-  // landscaping are taxed, hardscaping and snow removal are not. Stone or
-  // landscape edging sits with his hardscaping.
-  const TAXED_WORK = /\b(lawn-?care|landscap(e|es|ed|ing)|plant(s|ing|ed)?|trees?|shrubs?|perennials?|flowers?|annuals?|sod(ding)?|seed(ing)?|overseed(ing)?|mulch(ing)?|lawn|lawns|mow(s|ing)?|fertili[sz](e|er|ing|ation)|aerat(e|ion|ing)|dethatch(ing)?|weed(s|ing)?|prun(e|ing)|trim(s|ming)?|hedges?|garden|gardens|beds?|clean-?ups?|leaf|leaves|top-?dress(ing)?)\b/i;
-  const BUILT_WORK = /\b(hardscap\w*|landscape\s+edging|patios?|pavers?|walls?|retaining|steps?|walks?|walkways?|paths?|driveways?|fences?|fencing|drains?|drainage|trench(es|ing)?|french|downspouts?|grading|excavat\w*|gravel|pads?|concrete|fire ?pits?|fireplaces?|kitchens?|lighting|irrigation|snow|plow\w*|salt\w*|boulders?|pergolas?|decks?)\b/i;
+  // landscaping are taxed, hardscaping and snow removal are not. Edging is
+  // landscaping whatever it is made of (Publication 210 III.J): only a wall
+  // holding back soil is building work, so stone edging is taxed even though
+  // QuickBooks files it under Hardscaping Services.
+  const TAXED_WORK = /\b(edging|lawn-?care|landscap(e|es|ed|ing)|plant(s|ing|ed)?|trees?|shrubs?|perennials?|flowers?|annuals?|sod(ding)?|seed(ing)?|overseed(ing)?|mulch(ing)?|lawn|lawns|mow(s|ing)?|fertili[sz](e|er|ing|ation)|aerat(e|ion|ing)|dethatch(ing)?|weed(s|ing)?|prun(e|ing)|trim(s|ming)?|hedges?|garden|gardens|beds?|clean-?ups?|leaf|leaves|top-?dress(ing)?)\b/i;
+  const BUILT_WORK = /\b(hardscap\w*|patios?|pavers?|walls?|retaining|steps?|walks?|walkways?|paths?|driveways?|fences?|fencing|drains?|drainage|trench(es|ing)?|french|downspouts?|grading|excavat\w*|gravel|pads?|concrete|fire ?pits?|fireplaces?|kitchens?|lighting|irrigation|snow|plow\w*|salt\w*|boulders?|pergolas?|decks?)\b/i;
   function workTaxable(w, ctx) {
     if (w.taxable === true || w.taxable === false) return w.taxable;
     const svc = w.priceId && ctx.book ? ctx.book[w.priceId] : null;
-    const text = [w.title, w.qbItem, svc && svc.name].filter(Boolean).join(' ');
+    const text = [w.title, w.qbItem, svc && svc.name].filter(Boolean).join(' ')
+      .replace(/hardscaping services:(?=[^:]*\bedging\b)/i, '');
     return TAXED_WORK.test(text) && !BUILT_WORK.test(text);
   }
 
