@@ -3889,6 +3889,8 @@ def _words_for(db, jid, j, kind, qid, doc, env, end_names):
         # one he built here (and then joined to an estimate) is his.
         if not have.get("fromQb"):
             return 0
+        if kind == "Estimate" and _estimate_moved(j, have, doc, env):
+            return _take_estimate(db, jid, j, have, doc, end_names, stamp)
         qb_est, _words = _hub_estimate(doc, end_names, stamp)
         work, changed, missing = _words_onto(have.get("work"), qb_est["work"])
         if missing:
@@ -3901,6 +3903,57 @@ def _words_for(db, jid, j, kind, qid, doc, env, end_names):
         patch = {"estimate": est, "lastModified": stamp}
         print("quickbooks words: %s: %d line(s) given QuickBooks' words" % (jid, changed))
     db.collection("jobs").document(jid).set(patch, merge=True)
+    return 1
+
+
+# ---------------------------------------- the job follows a changed estimate
+#
+# Jonah (4 Nov 2026): "[a customer's] job has an updated total in quickbooks
+# update it." He took a line off an estimate already accepted; only the words
+# were followed, so the job went on showing the old lines and price until the
+# invoice. An estimate changed in QuickBooks is what the customer agreed to
+# (a job follows QuickBooks, never the other way), so a job made from one takes
+# it when its total moves: its lines as QuickBooks has them, each keeping what
+# was put on it here (_lines_kept), and the price with them. The materials
+# list stays: what has been ordered hangs on it, and QuickBooks' figures for
+# them come along in fromQb. Once there is an invoice the invoice is the price
+# (take_invoice), a price typed by hand stands, and "Price it by my rules
+# instead" leaves the estimate his.
+
+
+def _estimate_moved(j, have, e, env):
+    """Whether a job's estimate made from QuickBooks is behind it (above)."""
+    fq = have.get("fromQb") or {}
+    if str(fq.get("estimateId") or "") != str(e.get("Id")) or fq.get("kind") == "invoice" or fq.get("reprice"):
+        return False
+    if _invoice_of(j, env) or not isinstance(fq.get("totalCents"), (int, float)):
+        return False
+    return _cents(e.get("TotalAmt")) != int(fq["totalCents"])
+
+
+def _take_estimate(db, jid, j, have, e, end_names, stamp):
+    """A job made from an estimate given it again as it is now. Returns 1."""
+    est, _words = _job_estimate(have, e, end_names, stamp)
+    if not est["work"] and not est["materials"]:
+        return 0
+    est, gone = _lines_kept(have, est, None)
+    fq = est["fromQb"]
+    price = round((fq["totalCents"] - fq["taxCents"]) / 100, 2)
+    patch = {"estimate": est, "lastModified": stamp,
+             "qbEstimate": dict(j.get("qbEstimate") or {}, **_estimate_record(e)),
+             "qbFilled": dict(j.get("qbFilled") or {}, estimateId=str(e.get("Id")), at=stamp)}
+    if not j.get("manualJobPrice"):
+        # jobPrice is the whole job, the add-ons typed on it included.
+        patch.update(jobPrice="%.2f" % round(price + _typed_add_ons(j), 2), baseJobPrice=price)
+    # Each part written whole, as _save_take: merged, the old fromQb would stay.
+    db.collection("jobs").document(jid).set(patch, merge=list(patch.keys()))
+    if not str(j.get("crewWhat") or "").strip():
+        board = db.collection("jobBoard").document(jid)
+        if board.get().exists:
+            board.set({"what": _what(est), "updatedAt": stamp}, merge=True)
+    print("quickbooks words: %s took estimate %s as changed: price %s -> %s, %d line(s), gone: %s"
+          % (jid, e.get("DocNumber") or e.get("Id"), j.get("jobPrice"), patch.get("jobPrice", "left"),
+             len(est["work"]), "; ".join(gone)[:200] or "none"))
     return 1
 
 
@@ -3981,15 +4034,23 @@ def _invoice_estimate(have, inv, end_names, stamp, sub):
     est, words = _job_estimate(have, inv, end_names, stamp, invoice_id=str(inv.get("Id")))
     if not est["work"] and (have.get("work") or not est["materials"]):
         return None
-    work, gone = _carried_work(have.get("work"), est["work"], _lines_from_estimate(inv))
+    est, gone = _lines_kept(have, est, _lines_from_estimate(inv))
+    # What the customer pays for the work: QuickBooks' total can hold late fees.
+    est["fromQb"]["totalCents"] = _cents(sub) + est["fromQb"]["taxCents"]
+    return est, words, gone
+
+
+def _lines_kept(have, est, named):
+    """A fresh fill from QuickBooks (est) as the job's estimate: QuickBooks'
+    lines, each with what the job had on it, and all the estimate held besides
+    its lines. Returns (estimate, titles of lines taken off)."""
+    work, gone = _carried_work(have.get("work"), est["work"], named)
     was, fq = have.get("fromQb") or {}, est["fromQb"]
     # Its materials are joined to Supplies already: not joined all over again.
     if have.get("materials"):
         fq.update({k: was[k] for k in ("linkedAt", "linkedV", "linked") if k in was})
-    # What the customer pays for the work: QuickBooks' total can hold late fees.
-    fq["totalCents"] = _cents(sub) + fq["taxCents"]
     keep = {k: v for k, v in have.items() if k not in ("work", "materials", "fromQb") and v not in (None, "", [], {})}
-    return dict(dict(est, **keep), work=work, materials=have.get("materials") or est["materials"], fromQb=fq), words, gone
+    return dict(dict(est, **keep), work=work, materials=have.get("materials") or est["materials"], fromQb=fq), gone
 
 
 def _under_heading(text, title, site=""):
