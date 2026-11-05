@@ -5929,6 +5929,35 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .check-row.done .cr-name .ord-swapped, .check-row.done .cr-name .ord-swap-btn,
 .check-row.done .cr-name .ord-swapped + .link-btn { display:inline-block; text-decoration:none; }
 
+/* One line on an order list (app.js orderLineHtml): the name, what it is, how it
+   comes beside how much, then what can be done with it, the width of the card. */
+.check-row.ord-line { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; gap:2px 8px; align-items:center; padding-top:6px; padding-bottom:4px; }
+.ord-line > input[type=checkbox] { grid-column:1; align-self:start; margin-top:1px; }
+.ord-line > .cr-name { grid-column:2 / -1; align-self:start; }
+.ord-line:has(> .remove-btn) > .cr-name { grid-column:2; }
+.ord-line > .remove-btn { grid-column:3; align-self:start; }
+/* Side by side where they fit; where they don't, how much drops under, on the right. */
+.ord-line-row { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:3px 6px; min-width:0; }
+.ord-line-row .ord-way-row { margin-top:0; }
+.ord-line-row > :last-child { margin-left:auto; }
+.ord-line-row > .cr-qty { white-space:normal; text-align:right; }
+.ord-line-more { grid-column:2 / -1; min-width:0; font-size:12px; }
+.ord-line-more > div + div { margin-top:2px; }
+.ord-line-acts { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:0 14px; min-width:0; font-size:12px; }
+.ord-line-acts .link-btn { display:inline-flex; align-items:center; min-height:32px; }
+.ord-line-acts .ord-swap { flex:1 1 100%; }
+.ord-sku-more { display:inline-block; }
+.ord-sku-more[open] { display:block; }
+.ord-sku-more > summary { display:inline-flex; align-items:center; gap:6px; min-height:28px; cursor:pointer; list-style:none; }
+.ord-sku-more > summary::-webkit-details-marker { display:none; }
+@media (max-width:720px) {
+  .ord-line .ord-qty-in { width:88px; height:36px; min-height:36px; padding:4px 8px; }
+  .ord-sku-more > summary { min-height:30px; }
+  .ord-line-acts .link-btn { min-height:34px; }
+  .check-row.ord-line { gap:2px 6px; }
+  .ord-line .ord-way-btn { min-height:36px; padding:4px 8px; font-size:12px; white-space:nowrap; }
+}
+
 /* An order line's missing item # / product page, typed right there (app.js orderSkuHtml). */
 .ord-sku-add { display:inline-flex; flex-wrap:wrap; gap:4px 10px; align-items:center; font-size:12px; margin-top:2px; }
 .ord-sku-add label { display:inline-flex; gap:4px; align-items:center; }

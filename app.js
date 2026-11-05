@@ -2647,9 +2647,10 @@ function orderWayHtml(w, hand, call, ro) {
   const cur = w.way === 'rides' ? 'delivered' : w.way;
   const b = (k, label) => '<button type="button" class="ord-way-btn' + (cur === k ? ' on' : '') + '" aria-pressed="' + (cur === k) + '"' +
     (ro ? ' disabled' : ' onclick="' + call.replace('%', k) + '"') + '>' + label + '</button>';
-  return '<span class="ord-way-row"><span class="ord-way" role="group" aria-label="Delivered or picked up">' +
-      b('delivered', '🚚 Delivered') + b('pickup', '🏪 We pick it up') + '</span>' +
-    ' <span class="muted ord-way-why">' + esc(hand ? 'set by hand' : w.wayBy === 'hand' ? 'set by hand on the estimate' : w.wayWhy || '') + '</span>' +
+  const byHand = hand ? 'set by hand' : w.wayBy === 'hand' ? 'set by hand on the estimate' : '';
+  return '<span class="ord-way-row"><span class="ord-way" role="group" aria-label="Delivered or picked up"' + (w.wayWhy ? ' title="' + esc(w.wayWhy) + '"' : '') + '>' +
+      b('delivered', '🚚 Delivered') + b('pickup', '🏪 Pickup') + '</span>' +
+    (byHand ? ' <span class="muted ord-way-why">' + esc(byHand) + '</span>' : '') +
     (hand && !ro ? ' <button type="button" class="link-btn" onclick="' + call.replace('%', '') + '">↺ back to the rules</button>' : '') + '</span>';
 }
 // One line set by hand on the open job's list (or back to the rules).
@@ -3074,32 +3075,31 @@ function renderOrderList() {
     // The product's own page, from Supplies, for what is ordered online.
     const sid = !settled ? orderSupply(it, cat) : null;
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
-    // Delivered or picked up, and the switch for the odd time it goes the
-    // other way -- then "Didn't buy it" for a line still to order.
     const wi = orderItems.indexOf(it);
-    const way = nb ? '' : orderWayHtml(ways[wi], it.way === 'delivered' || it.way === 'pickup', 'orderWayAt(' + wi + ', \'%\')', ro) +
-      (ro || it.ordered ? '' : ' <button type="button" class="link-btn ord-nb-btn" onclick="orderNotBought(\'' + ordId(it.id) + '\', true)">✗ Didn’t buy it</button>') +
-      orderSwapHtml('', ordLineKey(it, wi), it, cat);
-    return '<div class="check-row' + (settled ? ' done' : '') + (nb ? ' not-bought' : '') + '">' +
-      '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
-      '<span class="cr-name">' + orderNameHtml(it) +
-        (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
-        (settled ? '' : orderSkuHtml(it, cat)) +
-        orderColorHtml(it, cat, '', ordLineKey(it, orderItems.indexOf(it)), settled || ro) +
-        orderNoteHtml(it, '', ordLineKey(it, orderItems.indexOf(it)), ro) +
-        (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') +
-        // Ticked by a receipt sorted onto this job: which order it was.
-        (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
-        (costLine ? '<br>' + costLine : '') + picker + (way ? '<br>' + way : '') +
-      '</span>' +
+    const key = ordLineKey(it, wi);
+    const colour = orderColorHtml(it, cat, '', key, settled || ro), note = orderNoteHtml(it, '', key, ro);
+    return orderLineHtml({
+      cls: (settled ? ' done' : '') + (nb ? ' not-bought' : ''),
+      tick: '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">',
+      name: orderNameHtml(it) + (it.specialOrder ? ' <span class="cr-special">special order</span>' : ''),
       // How much -- changed right on the line (what was really ordered).
-      (!ro && !nb && (it.quantity || !askQty)
+      qty: (!ro && !nb && (it.quantity || !askQty)
         ? '<span class="cr-qty"><input class="cr-qty-in ord-qty-in" value="' + esc(String(it.quantity || '')) + '" placeholder="how much" aria-label="How much of ' + esc(it.name) + '"' +
             ' onchange="setOrderQty(\'' + ordId(it.id) + '\', this.value)">' +
             (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>'
         : it.quantity ? '<span class="cr-qty">' + esc(String(it.quantity)) +
-          (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : '') +
-      '<button class="remove-btn" onclick="rmOrderItem(\'' + ordId(it.id) + '\')">×</button></div>';
+          (it.usesLb > 0 && it.fromEstimate ? ' <span class="muted">(uses ' + esc(String(it.usesLb)) + ' lb)</span>' : '') + '</span>' : ''),
+      remove: '<button class="remove-btn" onclick="rmOrderItem(\'' + ordId(it.id) + '\')">×</button>',
+      more: [[settled ? '' : orderSkuHtml(it, cat), costLine,
+          // Ticked by a receipt sorted onto this job: which order it was.
+          it.ordered && it.orderNo ? '<span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : ''].filter(Boolean).join(' '),
+        it.color ? '' : colour, it.note ? note : '', picker],
+      way: nb ? '' : orderWayHtml(ways[wi], it.way === 'delivered' || it.way === 'pickup', 'orderWayAt(' + wi + ', \'%\')', ro),
+      acts: [it.note ? '' : note, it.color ? colour : '',
+        page ? '<a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 Order page</a>' : '',
+        ro || settled ? '' : '<button type="button" class="link-btn ord-nb-btn" onclick="orderNotBought(\'' + ordId(it.id) + '\', true)">✗ Didn’t buy it</button>',
+        nb ? '' : orderSwapHtml('', key, it, cat)],
+    });
   };
 
   // By supplier, so each call or email covers one place.
@@ -3324,11 +3324,11 @@ function orderSkuHtml(it, cat) {
   if (!needsSku(sup, cat)) return '';
   if (!(typeof ydCan === 'function' && ydCan('supplies', 'change'))) return ' <span class="cr-sku muted">no item # in Supplies</span>';
   const id = ordId(sid);
-  return '<br><span class="ord-sku-add"><span class="warn-text">No item # yet</span> ' +
+  return '<details class="ord-sku-more"><summary><span class="warn-text">No item # yet</span> <span class="link-btn">Add it</span></summary><span class="ord-sku-add">' +
     '<label>Item # <input class="cr-qty-in" placeholder="SKU" aria-label="Item number for ' + esc(sup.name) + '"' +
       ' onchange="setOrderSku(\'' + id + '\', this.value)"></label>' +
     (sup.link ? '' : ' <label>Link <input class="ord-link-in" placeholder="https://…" aria-label="Product page for ' + esc(sup.name) + '"' +
-      ' onchange="setOrderLink(\'' + id + '\', this.value)"></label>') + '</span>';
+      ' onchange="setOrderLink(\'' + id + '\', this.value)"></label>') + '</span></details>';
 }
 function setOrderSku(sid, v) {
   if (!String(v || '').trim() || !window.YDSupplies || !YDSupplies.setItemInfo) return;
@@ -3474,23 +3474,23 @@ function renderOrdersOverview() {
     const sid = orderSupply(it, cat);
     const page = sid && window.YDSupplies && window.YDSupplies.websiteUrl ? window.YDSupplies.websiteUrl({ website: cat.items[sid].link }) : '';
     const others = (onJobs[alsoKey(v, it)] || []).filter(o => o.id !== j.id);
-    const way = orderWayHtml((ways[j.id] || [])[j.items.indexOf(it)], it.way === 'delivered' || it.way === 'pickup',
-      'ordersWay(\'' + ordId(j.id) + '\', \'' + it._key + '\', \'%\')', !canTick) +
-      (canTick ? ' <button type="button" class="link-btn ord-nb-btn" onclick="ordersNotBought(\'' + ordId(j.id) + '\', \'' + it._key + '\')">✗ Didn’t buy it</button>' : '') +
-      orderSwapHtml(ordId(j.id), it._key, it, cat);
     const also = others.length ? ' <span class="muted ord-also">· also on ' +
       others.filter((o, i, a) => a.indexOf(o) === i).map(o => esc(orderJobTitle(o))).join(', ') + '</span>' : '';
-    return { c: c, html: '<div class="check-row">' +
-      '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
-        ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\', this.checked)">' +
-      '<span class="cr-name">' + orderNameHtml(it) +
-        (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
-        orderSkuHtml(it, cat) +
-        orderColorHtml(it, cat, ordId(j.id), it._key, !canTick) +
-        orderNoteHtml(it, ordId(j.id), it._key, !canTick) +
-        (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
-        (cost ? '<br>' + cost : '') + (way ? '<br>' + way : '') + '</span>' +
-      qtyBox(it, j) + '</div>' };
+    const jk = ordId(j.id);
+    const colour = orderColorHtml(it, cat, jk, it._key, !canTick), note = orderNoteHtml(it, jk, it._key, !canTick);
+    return { c: c, html: orderLineHtml({
+      tick: '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
+        ' onchange="ordersTick(\'' + jk + '\', \'' + it._key + '\', this.checked)">',
+      name: orderNameHtml(it) + (it.specialOrder ? ' <span class="cr-special">special order</span>' : ''),
+      qty: qtyBox(it, j),
+      more: [[orderSkuHtml(it, cat), cost, also].filter(Boolean).join(' '), it.color ? '' : colour, it.note ? note : ''],
+      way: orderWayHtml((ways[j.id] || [])[j.items.indexOf(it)], it.way === 'delivered' || it.way === 'pickup',
+        'ordersWay(\'' + jk + '\', \'' + it._key + '\', \'%\')', !canTick),
+      acts: [it.note ? '' : note, it.color ? colour : '',
+        page ? '<a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 Order page</a>' : '',
+        canTick ? '<button type="button" class="link-btn ord-nb-btn" onclick="ordersNotBought(\'' + jk + '\', \'' + it._key + '\')">✗ Didn’t buy it</button>' : '',
+        orderSwapHtml(jk, it._key, it, cat)],
+    }) };
   };
   // A job's name (opens it), what the work is and when it is.
   const jobHead = (j, cls, extra) => {
@@ -3625,6 +3625,19 @@ function ordersTick(jobId, itemId, on) {
     });
   }
   renderOrdersOverview();
+}
+// One line on an order list, here and on the Job tab (Jonah, 5 Nov 2026: "Yes,
+// tighten them": a line was 238px on a phone, and 37 of them were most of Orders
+// to place). The name gets the width, then what it is (more), then how it comes
+// (way) beside how much, then what can be done with it (acts): four short rows.
+function orderLineHtml(o) {
+  const bare = s => String(s || '').replace(/^\s*<br>/, '').trim();
+  const more = o.more.map(bare).filter(Boolean).map(s => '<div>' + s + '</div>').join('');
+  const acts = o.acts.map(bare).filter(Boolean).join(' ');
+  return '<div class="check-row ord-line' + (o.cls || '') + '">' + o.tick + '<span class="cr-name">' + o.name + '</span>' + (o.remove || '') +
+    (more ? '<div class="ord-line-more">' + more + '</div>' : '') +
+    (o.way || o.qty ? '<div class="ord-line-row">' + (o.way || '<span></span>') + (o.qty || '') + '</div>' : '') +
+    (acts ? '<div class="ord-line-acts">' + acts + '</div>' : '') + '</div>';
 }
 // One line of a job that is not open, changed and saved through patchJob.
 function ordersPatchLine(jobId, itemId, set) {
