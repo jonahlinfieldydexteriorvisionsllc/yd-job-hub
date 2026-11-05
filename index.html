@@ -773,6 +773,15 @@
         <div class="table-wrap" id="dashTableWrap"></div>
       </div>
     </div>
+    <!-- A line typed by hand and the receipt for the same order, both on a job
+         (doubles.js). Shown only while there are any. -->
+    <div class="section" id="dblSection" hidden>
+      <div class="section-head">
+        <span class="section-title">🔁 Costs counted twice</span>
+        <span class="section-badge accent" id="dblBadge"></span>
+      </div>
+      <div class="section-body" id="dblWrap"></div>
+    </div>
     <!-- Every job's estimate against what it actually took, side by side,
          worst first (jobcosts.js). Same people as the job's own. -->
     <div class="section" id="evaListSection" hidden>
@@ -1360,6 +1369,7 @@
 <script src="./services.js"></script>
 <script src="./invoices.js"></script>
 <script src="./jobcosts.js"></script>
+<script src="./doubles.js"></script>
 <script src="./paychecks.js"></script>
 <script src="./paysheet.js"></script>
 <script src="./notify.js"></script>

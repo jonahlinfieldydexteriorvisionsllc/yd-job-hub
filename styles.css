@@ -6107,3 +6107,10 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
      being chased. */
   .dash-svc { font-size:11px; color:var(--muted); margin-top:2px; max-width:220px; }
   .bd-chase-note { font-size:12px; margin-top:4px; cursor:default; }
+
+  /* Costs counted twice (doubles.js). */
+  .dbl-job { margin-top:12px; }
+  .dbl-name { font-weight:700; }
+  .dbl-row { border-top:1px solid var(--border); padding:8px 0; font-size:13px; }
+  .dbl-rc { color:var(--muted); font-size:12px; margin-top:2px; }
+  .dbl-acts { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:6px; }

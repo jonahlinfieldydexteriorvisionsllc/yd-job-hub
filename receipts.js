@@ -486,6 +486,19 @@
   // (autoSort, `auto` = what to note on the receipt) both come here, so a
   // line added by itself is exactly the line the button would have added.
   // Returns the lines' indexes, or null when nothing was added.
+  // The lines typed by hand that the rows a receipt is adding repeat: one to
+  // the cent what they all come to, else one to the cent a row of them with a
+  // word in common. Close in date, and never one he said is real (doubles.js).
+  function typedRepeats(list, add, date) {
+    const c = v => Math.round((parseFloat(v) || 0) * 100);
+    const days = (a, b) => Math.abs(Math.round((new Date(String(a).slice(0, 10) + 'T12:00:00') - new Date(String(b).slice(0, 10) + 'T12:00:00')) / 864e5));
+    const typed = (list || []).filter(m => m && !m.receiptId && !m.notDouble && c(m.price) > 0);
+    const total = add.reduce((t, a) => t + c(a.price), 0);
+    const whole = typed.find(m => c(m.price) === total && days(m.date, date) <= 14);
+    if (whole) return [whole];
+    const words = s => String(s || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length > 2);
+    return typed.filter(m => days(m.date, date) <= 7 && add.some(a => c(a.price) === c(m.price) && words(a.item).some(w => words(m.item).indexOf(w) !== -1)));
+  }
   function addToJob(rid, r, jobId, auto) {
     const p = portion(rid, r);
     if (!p) return null;
@@ -509,8 +522,14 @@
     if (tax) add.push(Object.assign({ id: uid(), item: 'Sales tax', date, location: from,
       price: (tax / 100).toFixed(2), qty: '', unit: '', itemNo: '', unitPrice: '' }, more));
 
-    let ticks = 0;
-    const job = changeJob(jobId, list => list.concat(add), list => {
+    let ticks = 0, typedOff = [];
+    const job = changeJob(jobId, list => {
+      // A line he typed for this same order comes off: the receipt says it
+      // better, and both left on would count the cost twice (doubles.js).
+      typedOff = typedRepeats(list, add, date);
+      const off = new Set(typedOff.map(m => m.id));
+      return list.filter(m => !off.has(m.id)).concat(add);
+    }, list => {
       const out = tickOrdered(list, idxs.map(i => ({ name: lines[i].name, sid: supplyOf(r, lines[i]), cents: lines[i].cents })),
         { orderNo: r.orderNo || '', vendor: r.vendor || '', rid, sid });
       ticks = out.filter((it, i) => it !== list[i]).length;
@@ -521,7 +540,7 @@
       id: sid, to: 'job', jobId, jobName: (job.customerName || '').trim() || 'Untitled job',
       est: String(job.estimateNumber || '').trim(), lines: idxs, cents: part, taxCents: tax,
       at: new Date().toISOString(), by: (me() || {}).uid || '',
-    }, auto ? { auto: true } : {})]);
+    }, auto ? { auto: true } : {}, typedOff.length ? { typedOff: typedOff } : {})]);
     const status = last ? 'done' : (r.status === 'skipped' ? 'skipped' : 'new');
     const patch = moved(r, Object.assign({ splits, status }, auto ? { auto } : {}), auto ? BY_ITSELF : null);
     // Shown at once rather than when the server echoes it back.
@@ -531,7 +550,8 @@
     showToast((auto ? '🧾 ' + (r.vendor || 'Receipt') + ': ' : '') +
       add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
       splits[splits.length - 1].jobName + (auto ? ' — sent in for it' : '') +
-      (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : ''), auto ? 5000 : undefined);
+      (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : '') +
+      (typedOff.length ? ' · the typed line it repeats came off' : ''), auto ? 5000 : undefined);
     redraw(true);
     return idxs;
   }
@@ -720,7 +740,8 @@
     // A job deleted since has nothing left to take back; nothing else was
     // ever written anywhere but the receipt.
     if (onJob && readJobBlob(s.jobId)) {
-      if (!changeJob(s.jobId, list => list.filter(m => !(m.receiptId === rid && m.splitId === sid)),
+      // What it took off when it went on comes back with it (typedRepeats).
+      if (!changeJob(s.jobId, list => list.filter(m => !(m.receiptId === rid && m.splitId === sid)).concat(s.typedOff || []),
         list => untickOrdered(list, sid))) return;
     }
     const splits = (r.splits || []).filter(x => x.id !== sid);
@@ -2338,6 +2359,9 @@
     },
     // A photo that could not go where it was sent by itself (home.js).
     needsYou: needsYou,
+    // doubles.js: a job's costs changed, and a receipt waiting to sort put on it.
+    changeJob: changeJob,
+    fileOnJob: (rid, jobId) => (receipts[rid] ? addToJob(rid, receipts[rid], jobId) : null),
     // Bills not paid yet (Invoices to pay), for Home.
     toPay: () => allReceipts().filter(toPayNow),
     // A receipt's tags by name, for the app's search (search.js).
