@@ -286,8 +286,13 @@
     const c = String((o && o.color) || '').trim();
     return c && String(name || '').toLowerCase().indexOf(c.toLowerCase()) === -1 ? name + ' — ' + c : name;
   }
-  // The order line a material of the estimate came to.
-  const lineFor = (d, m) => (d.orderItems || []).find(o => o && (m.supplyId ? o.supplyId === m.supplyId : o.name === m.name)) || null;
+  // The order line a material of the estimate came to. A line swapped to
+  // another product stands for the material it replaced, the way app.js
+  // orderFromEstimate matches it.
+  const lineFor = (d, m) => (d.orderItems || []).find(o => {
+    const k = o && (o.swappedFrom || o);
+    return k && (m.supplyId ? k.supplyId === m.supplyId : k.name === m.name);
+  }) || null;
   function pickupsEntry(d, items) {
     const est = d.estimate || {}, out = [];
     const order = (d.orderItems || []).filter(o => o && o.name && !o.notBought && !isRental(o, items)).slice(0, 120);
@@ -352,7 +357,16 @@
     const items = catalogue().items;
     const svcs = servicesReady();
     const mats = (est.materials || []).filter(m => m && m.name && !isRental(m, items)).slice(0, 120);
-    const ways = waysOf(d, mats.map(m => ({ supplyId: m.supplyId || null, name: m.name, qty: numOr(m.qty) || 1, hand: orderHand(d, m) })));
+    // A swapped line (app.js orderSwapFields) leaves the estimate as the
+    // customer was quoted it, so the crew read the product being bought,
+    // not the one it replaced. Two estimate lines can share one order line,
+    // whose amount is both together: each of those keeps its own amount.
+    const swaps = mats.map(m => { const o = lineFor(d, m); return o && o.swappedFrom && o.name ? o : null; });
+    const alone = i => swaps.filter(o => o === swaps[i]).length === 1 && typeof swaps[i].qty === 'number';
+    const ways = waysOf(d, mats.map((m, i) => {
+      const o = swaps[i];
+      return { supplyId: (o ? o.supplyId : m.supplyId) || null, name: o ? o.name : m.name, qty: numOr(o && alone(i) ? o.qty : m.qty) || 1, hand: orderHand(d, o || m) };
+    }));
     return {
       // Each piece of work: its scope, the notes for the crew (never on
       // the estimate), and -- a service sold by the unit -- how much of it.
@@ -381,14 +395,19 @@
       // Its Supplies item and kind of material go too (no price in either:
       // Supplies' items are the crew's to read), so an issue the crew lead
       // notes about it (jobissues.js) says which item and kind it was.
-      materials: mats.map((m, i) => ({ name: noMoney(withColor(m.name, lineFor(d, m))).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
+      materials: mats.map((m, i) => {
+        const o = swaps[i], own = !!o && alone(i), sid = o ? o.supplyId : m.supplyId;
+        return { name: noMoney(withColor(o ? o.name : m.name, lineFor(d, m))).slice(0, 200), qty: numOr(own ? o.qty : m.qty), unit: noMoney(own ? o.per : unitOf(m)).slice(0, 30),
                      note: noMoney((lineFor(d, m) || {}).note || '').slice(0, 300),
+                     // The estimate's item, not the swapped one: a crew note is
+                     // matched to its row on the estimate and to past jobs by this.
                      supplyId: m.supplyId ? safe(m.supplyId) : null,
-                     kind: m.plant ? 'plant' : String((m.supplyId && items[m.supplyId] && items[m.supplyId].category) || m.category || '').slice(0, 40),
+                     kind: m.plant ? 'plant' : String((sid && items[sid] && items[sid].category) || m.category || '').slice(0, 40),
                      plant: !!m.plant, tree: m.plant && (m.tree === 'single' || m.tree === 'multi') ? m.tree : '',
                      work: safe(workFor(m, lines, items)),
                      how: ways.length ? wayWords(ways[i])
-                       : m.delivery === 'pickup' ? 'pick up' : m.delivery === 'rides' ? 'rides on a delivery' : '' })),
+                       : m.delivery === 'pickup' ? 'pick up' : m.delivery === 'rides' ? 'rides on a delivery' : '' };
+      }),
       // Soil and debris to haul away (cu yd), as the estimate has it.
       spoil: numOr(est.spoilCuYd),
       // Brush only: it goes in a dumpster of its own.
