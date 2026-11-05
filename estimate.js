@@ -2545,8 +2545,10 @@
   }
   // Social posts about a finished job (posts.py; Jonah, 21 Oct 2026: "Build
   // something that auto build posts when a job is marked complete"): Claude
-  // writes one for each place onto his My to-dos, once when the job is
-  // finished (jobCompleted), and again whenever he presses the button.
+  // writes them once when the job is finished (jobCompleted), and again
+  // whenever he presses the button, and the posting schedule puts them up
+  // (social.py). Nothing lands on his My to-dos (4 Nov 2026: "i just want
+  // this stuff automated").
   const postsBusy = {};       // job id -> being written
   function postsHtml(when) {
     if (!changes() || snowNow()) return '';
@@ -2554,16 +2556,16 @@
     const st = typeof jobStatus !== 'undefined' ? jobStatus : '';
     const done = st === 'complete';
     // Jonah, 26 Oct 2026: a "Don't post" tick on the job -- no posts written
-    // by themselves when it is finished, and never in the week's "ready to
-    // post" card (posts.py weekly). Tickable before it is finished too.
+    // by themselves when it is finished, and never on the posting schedule.
+    // Tickable before it is finished too.
     const no = !!(typeof boardFields !== 'undefined' && boardFields.noPost);
     const tick = '<label class="chk est-nopost"><input type="checkbox"' + (no ? ' checked' : '') +
-      ' onchange="estNoPost(this.checked)"> 🚫 Don’t post this job — no social posts, not in the week’s photos</label>';
+      ' onchange="estNoPost(this.checked)"> 🚫 Don’t post this job — it stays off the posting schedule</label>';
     if (!p && !done) return st === 'booked' || st === 'inprogress' ? '<div class="est-care">' + tick + '</div>' : '';
     if (no) return '<div class="est-care">' + tick + '</div>';
     return '<div class="est-care">' + tick + '</div><div class="est-care">📣 ' + (p
-        ? 'Social posts written ' + esc(when(p.at)) + ' — on your My to-dos (Google, Facebook, Nextdoor, Pinterest, Yelp).'
-        : 'Social posts for this job: press the button and Claude writes one each for Google, Facebook, Nextdoor, Pinterest and Yelp onto your My to-dos.') +
+        ? 'Social posts written ' + esc(when(p.at)) + '. They go up by themselves on the posting schedule (📣 Posts) once the job has After photos.'
+        : 'This job’s social posts write themselves and go up on the posting schedule (📣 Posts) once it has After photos.') +
       ' <button class="btn btn-sm" onclick="estPosts()"' + (postsBusy[currentJobId] ? ' disabled' : '') + '>' +
         (postsBusy[currentJobId] ? 'Writing…' : p ? 'Write them again' : 'Write the posts') + '</button></div>';
   }
@@ -2573,8 +2575,8 @@
     try {
       const r = await window.YDClaude.post('/posts/draft', { jobId: jobId, auto: !!byItself });
       if (r.skipped) return;
-      if (window.YDSync) window.YDSync.patchJob(jobId, { postsDraft: { at: new Date().toISOString(), cardId: r.cardId || null } });
-      showToast('📣 The social posts are on your My to-dos — copy each into its place');
+      if (window.YDSync) window.YDSync.patchJob(jobId, { postsDraft: { at: new Date().toISOString() } });
+      if (!byItself) showToast('📣 Written — they go up by themselves on the posting schedule');
     } catch (e) {
       showToast((byItself ? 'The social posts weren’t written: ' : 'Social posts: ') + (e.message || e));
     } finally {

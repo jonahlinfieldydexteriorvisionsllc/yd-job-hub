@@ -509,19 +509,6 @@ def _digest(request, path, headers):
                 endofday.archive(_db, dg_._people())
             except Exception as e:                      # noqa: BLE001
                 print("endofday: reports not put away:", e)
-        # Friday evening, after the summary: the week's finished jobs ready
-        # to post, with their After photos (posts.py weekly).
-        posted = None
-        if slot == "evening" and digest._now().weekday() == 4:
-            try:
-                import posts
-                result, usage = posts.weekly(_claude())
-                if usage is not None:
-                    _record_spend(datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d"), "posts", usage,
-                                  posts.MODEL)
-                posted = result
-            except Exception as e:                      # noqa: BLE001
-                print("the week's posts not made:", e)
         # Friday evening (or the next evening, when Friday's was missed or
         # left some): Jonah's notes on receipts, gone through by Claude and
         # done (receiptnotes.py), then one push to say so.
@@ -593,7 +580,7 @@ def _digest(request, path, headers):
                     print("tomorrow's posts not told:", e)
         if failed is not None:
             return (json.dumps({"error": failed}), 500, json_headers)
-        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "posts": posted, "notes": noted,
+        return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "notes": noted,
                             "logs": logged, "social": planned}), 200, json_headers)
 
     if path == "/digest/preview":
@@ -1089,7 +1076,7 @@ def _subs(request, path, headers):
 def _followup(request, path, headers):
     # The same guard writes the plant-care email (care.py): a draft in the
     # owner's Gmail from one job, for whoever may change jobs, counted. And a
-    # finished job's social posts (posts.py), onto his My to-dos.
+    # finished job's social posts (posts.py), kept for the posting schedule.
     import care
     import followup
     import posts
