@@ -1986,6 +1986,18 @@
     }
   }
 
+  // Bills to pay, on Money (money.js) -- only when there are any. Apart from
+  // render, which draws every receipt: this is all Money needs.
+  function drawPay() {
+    const pay = el('rcPaySection');
+    if (!pay) return;
+    const bills = allReceipts().filter(toPayNow);
+    pay.hidden = !loaded || !bills.length;
+    const late = bills.filter(r => !r.pulled && stageOf(r).late).length, fresh = bills.filter(r => !r.pulled).length;
+    el('rcPayBadge').textContent = fresh ? fresh + (late ? ' · ' + late + ' late' : '') : '';
+    el('rcPayList').innerHTML = bills.length ? payHtml(bills) : '';
+  }
+
   function render() {
     const sec = el('rcSection'), hist = el('rcHistorySection'), tab = el('tabReceipts'), pay = el('rcPaySection');
     if (!sec) return;
@@ -1995,14 +2007,7 @@
     if (!on) { badges(0); if (pay) pay.hidden = true; return; }
 
     const all = allReceipts();
-    // Bills to pay, above the receipts -- only when there are any.
-    const bills = all.filter(toPayNow);
-    if (pay) {
-      pay.hidden = !loaded || !bills.length;
-      const late = bills.filter(r => !r.pulled && stageOf(r).late).length, fresh = bills.filter(r => !r.pulled).length;
-      el('rcPayBadge').textContent = fresh ? fresh + (late ? ' · ' + late + ' late' : '') : '';
-      el('rcPayList').innerHTML = bills.length ? payHtml(bills) : '';
-    }
+    drawPay();
     // The ones waiting on a person first: a photo that could not go on its
     // job by itself says why at the top of the list.
     const open = all.filter(newToSort).sort((a, b) => (needsYou(b) - needsYou(a)) || byNewest(a, b));
@@ -2218,7 +2223,7 @@
     const a = document.activeElement, sec = el('rcSection'), hist = el('rcHistory'), pay = el('rcPaySection');
     if (!a || a === document.body) return false;
     const typing = a.tagName === 'INPUT' || a.tagName === 'TEXTAREA';
-    // Invoices to pay sits apart from both, above them: a note typed on one
+    // Invoices to pay sits apart from both, on Money: a note typed on one
     // of its bills is as much under way.
     return !!((sec && sec.contains(a)) || (hist && hist.contains(a) && typing) || (pay && pay.contains(a) && typing));
   }
@@ -2228,6 +2233,7 @@
       // Off screen, only the counts on the tab and on More need to be right.
       deferred = true;
       badges(allReceipts().filter(newToSort).length);
+      if (window.YDMoney && YDMoney.showing('pay') && (force || !choosing())) drawPay();
       return;
     }
     if (!force && choosing()) {
@@ -2351,6 +2357,8 @@
   // Opening Receipts also re-reads when email was last checked: the half-
   // hourly run may have changed it (switched on, say) since the app opened.
   window.YDReceipts = {
+    // Invoices to pay, for Money (money.js).
+    renderPay: () => { if (sees()) drawPay(); },
     all: () => {
       if (!Object.keys(leaving).length) return receipts;
       const out = {};

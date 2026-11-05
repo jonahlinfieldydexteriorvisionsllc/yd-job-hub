@@ -1241,7 +1241,7 @@
   window.estSubNew = async function (id) {
     const w = find(est.work, id);
     if (!w || !w.sub || !changes() || !window.YDSubs || !YDSubs.add) return;
-    const name = await ydPrompt('The sub or installer’s company name. Their phone and the rest go in on All Jobs → Subcontractors.', '',
+    const name = await ydPrompt('The sub or installer’s company name. Their phone and the rest go in on Money → Subs.', '',
       { title: 'New sub', ok: 'Add them' });
     const n = String(name || '').trim();
     if (!n) return;

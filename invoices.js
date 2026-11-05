@@ -202,13 +202,13 @@
 
   // ------------------------------------------------------------- drawing
 
-  // Drawn only while All Jobs is on screen: the jobs feed fires all day, and
+  // Drawn only while Money is on screen: the jobs feed fires all day, and
   // each redraw works out every unpaid invoice's state. What came in while
-  // another tab was open is drawn when All Jobs opens (watchPanel, below).
+  // another tab was open is drawn when Money opens (watchPanel, below).
   let dirty = false, panelWatched = false;
   const onScreen = () => {
     if (!panelWatched) return true;
-    const p = el('panel-dashboard');
+    const p = el('panel-money');
     return !!(p && p.classList.contains('active'));
   };
   function render() {
@@ -475,7 +475,7 @@
   };
   // Home's "Waiting on you" opens the list here.
   window.openInvoices = function () {
-    if (typeof switchTab === 'function') switchTab('dashboard');
+    window.YDMoney.show('owed');
     view = 'todo'; render();
     const s = el('invSection');
     if (s && s.scrollIntoView) s.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -512,11 +512,11 @@
     stateOf: stateOf,
     // About what a deposit is, as the list says it (Home's rows).
     depositOf: depositOf,
-    // Search (search.js): the list on All Jobs, on the view that holds this
+    // Search (search.js): the list on Money, on the view that holds this
     // invoice; its row, to light up.
     show: function (id) {
       const inv = invoices[id];
-      if (typeof switchTab === 'function') switchTab('dashboard');
+      window.YDMoney.show('owed');
       if (inv) { const st = stateOf(inv); view = st.kind === 'paid' ? 'paid' : wantsYou(st) ? 'todo' : 'owed'; }
       picking = '';
       render();
@@ -546,7 +546,7 @@
   // Which job is finished moves an invoice on (waiting -> reminders).
   document.addEventListener('yd-jobs-changed', render);
   function watchPanel() {
-    const p = el('panel-dashboard');
+    const p = el('panel-money');
     if (!p || typeof MutationObserver !== 'function') return;
     panelWatched = true;
     new MutationObserver(() => { if (dirty && onScreen()) render(); }).observe(p, { attributes: true, attributeFilter: ['class'] });

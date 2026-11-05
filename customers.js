@@ -1944,7 +1944,7 @@
   };
   window.custGoSub = function (id) {
     window.closeCustomer();
-    if (typeof switchTab === 'function') switchTab('dashboard');
+    window.YDMoney.show('subs');
     if (typeof window.subToggle === 'function') window.subToggle(id, true);
     if (window.YDSubs && YDSubs.render) YDSubs.render();
     const sec = el('subsSection');

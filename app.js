@@ -844,7 +844,7 @@ function tabButtonId(name) {
   return { home: 'tabHome', crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
     dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
-    supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts' }[name] || '';
+    supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts', money: 'tabMoney' }[name] || '';
 }
 // The materials half of Supplies, hidden from crew.
 function matSectionHidden() {
@@ -983,7 +983,7 @@ function closeOnTapOutside(id) {
 // it is bought from.
 // Home comes first and is where the app opens (Jonah, 14 Oct 2026: "make
 // home page for the job hub with overviews of things") -- home.js.
-const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
+const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'money', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
 // crewjobs: the crew's Jobs tab (crewjobs.js) -- for whoever cannot see the Job tab, and crew leads.
 // Five on a phone's bar for anybody: Home took All Jobs' place on the
 // owner's (Home has the jobs on the go and the ones to invoice; the full
@@ -995,13 +995,14 @@ const PHONE_TABS = ['home', 'crewjobs', 'job', 'snow', 'clock', 'calendar'];
 const phoneBar = () => PHONE_TABS.filter(n => (n !== 'snow' || document.documentElement.hasAttribute('data-storm-on')) &&
   (n !== 'job' || !document.documentElement.hasAttribute('data-lead')));
 const TAB_LABEL = { home: '🏡 Home', crewjobs: '🧰 Jobs', job: '📐 Job', snow: '❄️ Snow', clock: '🕒 Clock',
-  calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts',
+  calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts', money: '💵 Money',
   equipment: '🚜 Equipment', tracking: '📈 Tracking',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
 const TAB_HINT = { job: 'The office side of a job: the estimate, materials and costs',
   boards: 'Bids, jobs, to-dos and crew task lists',
   supplies: 'What we use, where to buy it, and what the season has cost',
   receipts: 'Purchases from your email — put each on its job',
+  money: 'What you’re owed, what’s to pay, payroll and tax dates',
   equipment: 'What each machine and truck is due for',
   tracking: 'Hours and materials on the job you have open',
   dashboard: 'Every job with its price and what it made',
@@ -1077,7 +1078,7 @@ function switchTab(name) {
   if (name === 'boards' && window.YDBoards) YDBoards.render();
   if (name === 'supplies' && window.YDSupplies) YDSupplies.render();
   if (name === 'receipts' && window.YDReceipts) YDReceipts.render();
-  if (name === 'dashboard' && window.YDSubs) YDSubs.render();
+  if (name === 'money' && window.YDMoney) YDMoney.render();
   if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
   if (name === 'home' && window.YDHome) YDHome.render();
   if (pickJobFirst && (name === 'job' || name === 'tracking')) {
@@ -1105,7 +1106,7 @@ function switchTab(name) {
 // so does a post held or not gone up (functions/social.py). One ready for
 // Nextdoor opens Home at its card.
 const NOTIFICATION_WINDOWS = { summary: 'openSummaries', notes: 'openCrewNotes', eod: 'openEndOfDay', eodreports: 'openEodReports',
-  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'homeNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet' };
+  deadlines: 'openDeadlines', posts: 'openPosts', nextdoor: 'homeNextdoor', changeorders: 'openChangeOrders', paysheet: 'openPaySheet', invoices: 'openInvoices' };
 function openFromNotification(url) {
   let want = '';
   try { want = new URL(url, location.href).hash.slice(1); } catch (e) { return; }
@@ -6954,7 +6955,8 @@ const SIDEBAR_GROUPS = [
   { name: 'Sales + jobs', tabs: ['job', 'tracking', 'dashboard', 'bids', 'boards'] },
   { name: 'Snow', tabs: ['snow'] },
   { name: 'Crew', tabs: ['clock', 'crewjobs'] },
-  { name: 'Stuff', tabs: ['supplies', 'receipts', 'equipment'] },
+  { name: 'Money', tabs: ['money', 'receipts'] },
+  { name: 'Stuff', tabs: ['supplies', 'equipment'] },
   { name: 'People', tabs: ['contacts'] }
 ];
 

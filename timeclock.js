@@ -1008,9 +1008,11 @@
     // phone on the Snow tab need not rebuild a hidden clock for every change.
     if (clockShowing()) {
       renderClockCard();
-      if (seesAll()) { renderOnNow(); renderApprovals(); renderTotals(); }
+      if (seesAll()) { renderOnNow(); renderApprovals(); }
       if (isOwner()) renderCrew();
     }
+    // Hours & Wages is on Money (money.js).
+    if (window.YDMoney && YDMoney.showing('payroll') && seesAll()) renderTotals();
     // Not while the name and rate are being typed into: the clock redraws
     // every second, and rebuilding the form would clear the fields mid-word.
     // Nor while a change is being asked for (the same reason).

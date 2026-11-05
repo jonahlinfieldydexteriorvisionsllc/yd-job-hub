@@ -467,7 +467,7 @@
       ours + '\n' + (w.monthly ? 'They are billed by the month: bill ' + client + ' for ' + monthName(b.date) + ' in QuickBooks.'
         : 'Bill ' + client + ' for it in QuickBooks.') +
       (b.how && b.how !== 'hand' ? '\n\n(Put with ' + client + ' by ' + ({ address: 'the address', name: 'their name', learned: 'your earlier picks', price: 'their price' }[b.how] || b.how) +
-        ' — if that’s wrong, change it under All Jobs → Subcontractors.)' : '');
+        ' — if that’s wrong, change it under Money → Subs.)' : '');
     return {
       title: title.slice(0, 200), notes: notes.slice(0, 5000), checklist: [], column: col, order: Date.now() + i,
       due: today, dueTime: null, remindMins: null, hasReminder: false, remindUids: [], noReminder: false,
@@ -1801,7 +1801,7 @@
   window.subBillsMore = function (subId) { billsAll[subId] = true; render(); };
   // From Home's "Waiting on you": the subcontractor's bills to match.
   window.openSubBills = function (subId) {
-    if (typeof switchTab === 'function') switchTab('dashboard');
+    window.YDMoney.show('subs');
     render();
     setTimeout(() => {
       const n = (subId && el('sbMatch-' + sid(subId))) || document.querySelector('.sb-match') || el('subsSection');
@@ -1948,7 +1948,7 @@
   // not under someone typing in it (a mows box, "Another client…"): the
   // next news, or their own change, draws it.
   function quietRender() {
-    const p = el('panel-dashboard'), wrap = el('subsWrap'), a = document.activeElement;
+    const p = el('panel-money'), wrap = el('subsWrap'), a = document.activeElement;
     if (!p || !p.classList.contains('active')) return;
     if (wrap && a && wrap.contains(a) && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) return;
     render();

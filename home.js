@@ -1192,7 +1192,7 @@
           .slice(0, 3).map(r => esc(r.vendor || 'Bill') + ' ' + fmtMoney((Number(r.totalCents) || 0) / 100) +
             (st(r).due ? ' due ' + esc(fmtDateMD(st(r).due)) : '')).join(' · ');
         rows.push(line('💸', '<b>' + plural(bills.length, 'invoice') + ' to pay</b>',
-          (late ? '<b>' + late + ' late</b> · ' : '') + top + (bills.length > 3 ? ' …' : ''), '', "switchTab('receipts')"));
+          (late ? '<b>' + late + ' late</b> · ' : '') + top + (bills.length > 3 ? ' …' : ''), '', "YDMoney.show('pay')"));
       }
     }
     // Prices a receipt said differently (supplies.js Prices to check): only

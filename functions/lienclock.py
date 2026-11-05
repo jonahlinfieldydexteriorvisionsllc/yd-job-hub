@@ -180,7 +180,7 @@ def run(db, people, now=None):
                 continue
             try:
                 sent.append({"uid": uid, "lienClock": lines, "drafted": drafted,
-                             "phones": dg.send_push(uid, note, tag="yd-lienclock", ttl=20 * 3600, opens="dashboard")})
+                             "phones": dg.send_push(uid, note, tag="yd-lienclock", ttl=20 * 3600, opens="invoices")})
             except Exception as e:      # noqa: BLE001
                 print("lienclock: push failed:", uid, e)
     return sent

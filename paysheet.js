@@ -1,4 +1,4 @@
-// The pay sheet: one window with what each person is owed for the pay period.
+// The pay sheet, on Money → Payroll: what each person is owed for the pay period.
 //
 // Jonah (the "Friday payroll sheet" card; 3 Nov 2026): "i usally pay every
 // other friday through cashapp and bank payments. i am the only one
@@ -15,8 +15,8 @@
 // waiting come from Hours & Wages' own sum (YDClock.totalsFor), so the sheet
 // and that screen can't disagree. Paid is any bank payments Job Hub has read
 // (paychecks.js) dated around the pay day, plus the ones marked here. Each
-// person's line is worked out when the window opens: a shift approved after
-// that is counted the next time, and nothing is stored but the hand-typed pay.
+// person's line is worked out when it is drawn: nothing is stored but the
+// hand-typed pay.
 
 (function () {
   'use strict';
@@ -114,27 +114,12 @@
 
   // ------------------------------------------------------------ the window
 
-  const isOpen = () => { const m = el('paySheetModal'); return !!(m && m.classList.contains('active')); };
-  function modalBody() {
-    let m = el('paySheetModal');
-    if (!m) {
-      m = document.createElement('div');
-      m.className = 'modal-overlay';
-      m.id = 'paySheetModal';
-      m.innerHTML = '<div class="modal"><div class="modal-head"><h2>📄 Pay sheet</h2>' +
-        '<button type="button" class="modal-close" aria-label="Close">&times;</button></div><div class="modal-body"></div></div>';
-      m.onclick = ev => { if (ev.target === m) m.classList.remove('active'); };
-      m.querySelector('.modal-close').onclick = () => m.classList.remove('active');
-      document.body.appendChild(m);
-    }
-    m.classList.add('active');
-    return m.querySelector('.modal-body');
-  }
+
+  const isOpen = () => !!(window.YDMoney && YDMoney.showing('payroll'));
 
   function draw() {
-    const m = el('paySheetModal');
-    if (!m || !window.YDClock) return;
-    const body = m.querySelector('.modal-body');
+    const body = el('paySheetBody');
+    if (!body || !window.YDClock) return;
     const s = sheetFor(shown);
     const today = localYMD(new Date());
     const waiting = s.pending.length
@@ -168,22 +153,23 @@
 
   window.openPaySheet = function () {
     if (!owner() || !window.YDClock) return;
-    shown = payDayFrom(localYMD(new Date()));
     paged = false;
-    modalBody();
+    window.YDMoney.show('payroll');
+  };
+  // Money's Payroll coming on screen: this pay period, unless he has gone to
+  // another one with the buttons.
+  function show() {
+    if (!owner() || !window.YDClock) return;
+    if (!paged) shown = payDayFrom(localYMD(new Date()));
     draw();
     load();
-  };
+  }
   window.paySheetGo = function (n) {
     shown = addDays(shown, n * EVERY);
     paged = true;
     draw();
   };
-  window.paySheetApprovals = function () {
-    const m = el('paySheetModal');
-    if (m) m.classList.remove('active');
-    switchTab('clock');
-  };
+  window.paySheetApprovals = function () { switchTab('clock'); };
   window.paySheetMove = function () {
     const next = addDays(first(), 7), was = payDayFrom(localYMD(new Date())), typed = ((cfg && cfg.paid) || {})[was];
     cfg = Object.assign({}, cfg, { first: next });
@@ -238,14 +224,15 @@
 
   document.addEventListener('yd-auth', () => {
     cfg = null;
-    const b = el('paySheetBtn');
-    if (b) b.hidden = !owner();
     load();
   });
   document.addEventListener('yd-clock-changed', () => { if (isOpen()) draw(); });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) load(); });
 
   window.YDPaySheet = {
+    show: show,
+    // The next pay day, in words (Money's button).
+    nextDay: () => longDay(payDayFrom(localYMD(new Date()))),
     // Today, from noon, when today is a pay day.
     dueToday: () => {
       if (!owner() || !cfg) return false;

@@ -199,7 +199,7 @@
     document.dispatchEvent(new CustomEvent('yd-deadlines'));
     // Not redrawn under the "date of your own" form being filled in (coming
     // back to the app reads again): the cursor would leave the box.
-    if (el('dlModal') && el('dlModal').classList.contains('active') && !adding) draw();
+    if (window.YDMoney && YDMoney.showing('tax') && !adding) draw();
   }
   // The maps merge key by key, as the database merges them (YDDb.put): a
   // null there is "not any more".
@@ -230,19 +230,6 @@
 
   // ------------------------------------------------------------ the window
 
-  function modal() {
-    let m = el('dlModal');
-    if (m) return m;
-    m = document.createElement('div');
-    m.className = 'modal-overlay';
-    m.id = 'dlModal';
-    m.innerHTML = '<div class="modal dl-modal" role="dialog" aria-labelledby="dlTitle">' +
-      '<div class="modal-head"><h2 id="dlTitle">📅 Tax & filing dates</h2>' +
-      '<button class="modal-close" onclick="closeDeadlines()" aria-label="Close">&times;</button></div>' +
-      '<div class="modal-body" id="dlBody"></div></div>';
-    document.body.appendChild(m);
-    return m;
-  }
 
   const FREQS = [['monthly', 'Every month'], ['quarterly', 'Every 3 months'], ['annual', 'Once a year']];
 
@@ -300,17 +287,14 @@
   }
 
   window.openDeadlines = function () {
+    if (isOwner()) window.YDMoney.show('tax');
+  };
+  // Money's Tax dates coming on screen. A date half typed in stays.
+  function show() {
     if (!isOwner()) return;
-    const m = modal();
-    m.classList.add('active');
     draw();
     load();
-  };
-  window.closeDeadlines = function () {
-    // A date half typed in stays, for when the window is opened again.
-    const m = el('dlModal');
-    if (m) m.classList.remove('active');
-  };
+  }
   window.dlRedraw = draw;
   window.dlTick = (key, on) => { setDone(key, on); };
   window.dlFreq = k => save({ salesTax: k }, 'how often you file');
@@ -352,14 +336,13 @@
     who = k;
     cfg = null;
     adding = null;
-    const m = el('dlModal');
-    if (m) m.classList.remove('active');
     if (k) load();
     else document.dispatchEvent(new CustomEvent('yd-deadlines'));
   });
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && who) load(); });
 
   window.YDDeadlines = {
+    show: show,
     // The calendar's layer and Home: the owner's, once read.
     visible: () => isOwner() && !!cfg,
     between: (from, to) => between(from, to),

@@ -150,7 +150,7 @@
       g.n + ' line' + (g.n === 1 ? '' : 's') + (g.special ? ', ' + g.special + ' special order' : '') +
       (g.said == null && g.vid && !g.special ? ' (no lead time set — ' + g.lead + ' working days assumed)' : ''));
     return 'First day on the Job schedule: ' + dayWords(j.first) + '.\n\nOrder by:\n' + lines.join('\n') +
-      '\n\nThe lines are on All Jobs → Orders to place, and on the job\'s Materials to Order. Tick each one as ' +
+      '\n\nThe lines are on Supplies → Orders to place, and on the job\'s Materials to Order. Tick each one as ' +
       'you order it (or "Didn\'t buy it"); this card ticks itself off when they are all done.' +
       '\n\nLead times come from each supplier\'s "Usually takes" on Supplies; a special-order line allows at least ' +
       SPECIAL_WORKDAYS + ' working days.';

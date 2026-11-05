@@ -1424,7 +1424,7 @@ def build(slot, user, people, wx, cache):
             lines.append({"text": "💵 %s%s — $%s%s — %s" % (
                 x["name"], (" #" + x["doc"]) if x["doc"] else "", format(round(x["balance"], 2), ",.2f"),
                 (", %d day%s late" % (x["late"], "" if x["late"] == 1 else "s")) if x["late"] > 0 else "", what)})
-        sections.append(("Invoices", lines + [{"text": "Send them from All Jobs → Invoices."}]))
+        sections.append(("Invoices", lines + [{"text": "Send them from Money → Owed to you."}]))
         due = [x for x in remind if x["kind"] != "call"]
         if due:
             push_bits.append("%d invoice reminder%s due" % (len(due), "" if len(due) == 1 else "s"))

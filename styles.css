@@ -942,7 +942,7 @@
        (All Jobs since Home took its place, 14 Oct 2026). They stay in the
        DOM -- switchTab finds a tab's button by its id, and More lists them
        from there -- they are just not on the bar. */
-    #tabTracking, #tabContacts, #tabEquipment, #tabDashboard { display:none; }
+    #tabTracking, #tabContacts, #tabEquipment, #tabDashboard, #tabMoney { display:none; }
     /* Snow too, but for while a storm is going (storm.js data-storm-on;
        Jonah, 26 Oct 2026: "snow tab doesnt need to be on main nav on mobile"):
        then it is a tap away on every phone. Otherwise it is in More. */
@@ -3109,7 +3109,7 @@
   .ps-sub { font-size:13px; color:var(--muted); margin-top:2px; }
   .ps-acts { margin-top:6px; }
   .ps-total { display:flex; justify-content:space-between; padding:10px 0; border-top:2px solid var(--border); font-size:16px; }
-  .ps-acts .link-btn, .ps-warn .link-btn, #paySheetModal .hint .link-btn { background:none; border:0; padding:0; cursor:pointer; color:var(--brand-ink); font:inherit; font-weight:600; }
+  .ps-acts .link-btn, .ps-warn .link-btn, #paySheetBody .hint .link-btn { background:none; border:0; padding:0; cursor:pointer; color:var(--brand-ink); font:inherit; font-weight:600; }
   /* Home: what is expected to fall, hour by hour */
   .hm-wx-fall { display:block; flex-basis:100%; width:100%; min-width:0; margin-top:6px; }
   .hm-wx-hrs { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:4px; min-width:250px; }
@@ -4979,6 +4979,8 @@
                border-bottom:none; border-top:4px solid transparent; }
     .tab-btn.active { border-top-color:var(--accent); border-bottom-color:transparent; }
     .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
+    /* Thirteen across the narrowest tablet: EQUIPMENT and CUSTOMERS touched. */
+    @media (max-width:780px) { .tab-btn { font-size:9px; } }
     /* A count beside the word ran into the next tab: it sits by the icon. */
     .tab-btn { position:relative; }
     .tab-count { position:absolute; top:3px; left:calc(50% + 9px); margin-left:0; }
@@ -6136,3 +6138,18 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .calc-out b { display:block; font-size:22px; }
   .calc-out small { color:var(--muted); }
   .cj-calc { margin:8px 0 2px; }
+
+  /* Money (money.js): which list is showing. Buttons that say what is waiting
+     in each, wrapping on a phone: never a row that scrolls sideways. */
+  .mn-views { display:grid; grid-template-columns:repeat(5, minmax(0, 1fr)); gap:8px; margin:12px 0 18px; }
+  .mn-view-btn { min-height:64px; padding:10px 12px; text-align:left; font-family:inherit; color:var(--text); cursor:pointer;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 2px 8px rgba(43,36,51,.07); }
+  .mn-view-btn b { display:block; font-size:14px; font-weight:700; }
+  .mn-view-btn small { display:block; margin-top:3px; font-size:12.5px; color:var(--muted); }
+  .mn-view-btn.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .mn-view-btn.on small { color:rgba(255,255,255,.88); }
+  @media (max-width:860px) {
+    .mn-views { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .mn-view-btn:last-child:nth-child(odd) { grid-column:1 / -1; }
+  }
+  .mn-moved { margin:0 0 14px; }

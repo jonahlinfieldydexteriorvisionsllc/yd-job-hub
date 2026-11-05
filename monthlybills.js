@@ -3,8 +3,8 @@
 // somewhere in jobhub that shows all my monthly expenses and tracks them once
 // paid."
 //
-// ⋯ → All settings → 📅 Monthly bills (and Home's Waiting on you when one is
-// due within DUE_SOON_DAYS or late). Owner only: settings/monthlyBills
+// Money → To pay (money.js; and Home's Waiting on you when one is due within
+// DUE_SOON_DAYS or late). Owner only: settings/monthlyBills
 //   bills: { id: { name, match (words in the store's name on its receipts),
 //            cents, day (of the month), every 'month'|'year', month (1-12,
 //            a yearly one), area 'business'|'home', how, note, off, order } }
@@ -161,21 +161,6 @@
 
   // ------------------------------------------------------------ the screen
 
-  function modal() {
-    let m = el('billsModal');
-    if (!m) {
-      m = document.createElement('div');
-      m.className = 'modal-overlay';
-      m.id = 'billsModal';
-      m.onclick = ev => { if (ev.target === m) m.classList.remove('active'); };
-      m.innerHTML = '<div class="modal" style="max-width:620px"><div class="modal-head"><h2>📅 Monthly bills</h2>' +
-        '<button class="modal-close">&times;</button></div><div class="modal-body" id="billsBody"></div></div>';
-      m.querySelector('.modal-close').onclick = () => m.classList.remove('active');
-      document.body.appendChild(m);
-    }
-    m.classList.add('active');
-    return el('billsBody');
-  }
   function monthWords(ym) {
     const [y, m] = ym.split('-').map(Number);
     return new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -246,10 +231,19 @@
 
   let draft = {};
   window.openMonthlyBills = function () {
-    if (!owner()) return;
-    modal().innerHTML = '<p class="muted">Loading…</p>';
-    read().then(() => { tickFromReceipts(); draw(); }).catch(() => { el('billsBody').innerHTML = '<p>Needs signal to open.</p>'; });
+    if (owner()) window.YDMoney.show('pay');
   };
+  // Money's To pay coming on screen. Read fresh each time, as it was when this
+  // opened as a window; not drawn over a bill being typed in.
+  function show() {
+    const body = el('billsBody');
+    if (!owner() || !body) return;
+    if (!data) body.innerHTML = '<p class="muted">Loading…</p>';
+    else if (!editing) draw();
+    read().then(() => { tickFromReceipts(); if (!editing) draw(); }).catch(() => {
+      if (!data) body.innerHTML = '<p>Needs signal to open.</p>';
+    });
+  }
   window.billsMonth = n => {
     const [y, m] = month.split('-').map(Number);
     month = ymOf(new Date(y, m - 1 + n, 1));
@@ -317,6 +311,10 @@
     if (owner()) read().then(() => { tickFromReceipts(); document.dispatchEvent(new CustomEvent('yd-bills')); }).catch(() => {});
   });
   document.addEventListener('yd-receipts', () => { if (data) tickFromReceipts(); });
+  // A bill ticked by a receipt coming in, while it is on screen.
+  document.addEventListener('yd-bills', () => {
+    if (data && !editing && window.YDMoney && YDMoney.showing('pay')) draw();
+  });
 
-  window.YDMonthlyBills = { due: due, open: () => window.openMonthlyBills(), fromReceipts: fromReceipts };
+  window.YDMonthlyBills = { due: due, open: () => window.openMonthlyBills(), show: show, fromReceipts: fromReceipts };
 })();

@@ -177,6 +177,7 @@
     <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">📈</span>Tracking</button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
     <button class="tab-btn" id="tabReceipts" hidden onclick="switchTab('receipts')"><span class="tab-icon">🧾</span>Receipts<span class="tab-count" id="rcTabCount"></span></button>
+    <button class="tab-btn" id="tabMoney" hidden onclick="switchTab('money')"><span class="tab-icon">💵</span>Money</button>
     <button class="tab-btn" id="tabSnow" onclick="switchTab('snow')"><span class="tab-icon">❄️</span>Snow</button>
     <button class="tab-btn" id="tabClock" hidden onclick="switchTab('clock')"><span class="tab-icon">🕒</span>Clock</button>
     <button class="tab-btn" id="tabCalendar" hidden onclick="switchTab('calendar')"><span class="tab-icon">📅</span>Calendar</button>
@@ -534,29 +535,8 @@
       <div class="section-body" id="crewWrap"></div>
     </div>
 
-    <div class="section" id="clockTotalsSection" hidden>
-      <div class="section-head">
-        <span class="section-title">Hours &amp; Wages</span>
-        <span class="section-badge" id="totalsBadge"></span>
-      </div>
-      <div class="section-body">
-        <!-- Which days: the choices and From/To dates, drawn by timeclock.js
-             (the same control as a person's page, Paychecks and the Work log). -->
-        <div class="filter-bar" id="clockRangeBar"></div>
-        <div id="totalsWrap"></div>
-        <div class="field-actions" id="paySheetBtn" hidden><button class="btn btn-sm" onclick="openPaySheet()">📄 Pay sheet</button></div>
-      </div>
-    </div>
 
-    <!-- Paychecks: money sent from the bank to the crew, read out of the
-         owner's email (paychecks.js). Hours, like pay rates. -->
-    <div class="section" id="paySection" hidden>
-      <div class="section-head">
-        <span class="section-title">Paychecks</span>
-        <span class="section-badge" id="payBadge"></span>
-      </div>
-      <div class="section-body" id="payWrap"></div>
-    </div>
+    <p class="hint mn-moved" data-view="payroll" hidden>Hours, wages and the pay sheet are on <button type="button" class="link-btn" onclick="YDMoney.show('payroll')">💵 Money</button>.</p>
 
     <div class="section" id="worklogSection" hidden>
       <div class="section-head">
@@ -745,15 +725,7 @@
 
   <!-- ============ TAB 3: ALL JOBS ============ -->
   <div class="tab-panel" id="panel-dashboard">
-    <!-- Every unpaid QuickBooks invoice: when it went out, whether they
-         opened it, and when to send a reminder (invoices.js). Billing access. -->
-    <div class="section" id="invSection" hidden>
-      <div class="section-head">
-        <span class="section-title">💵 Invoices</span>
-        <span class="section-badge" id="invBadge"></span>
-      </div>
-      <div class="section-body" id="invWrap"></div>
-    </div>
+    <p class="hint mn-moved" data-view="owed" hidden>Invoices and subcontractors are on <button type="button" class="link-btn" onclick="YDMoney.show('owed')">💵 Money</button>.</p>
     <div class="section">
       <div class="section-head">
         <span class="section-title">All Jobs Overview</span>
@@ -799,12 +771,6 @@
         <span class="section-title">⏱ How long things take</span>
       </div>
       <div class="section-body" id="prodWrap"></div>
-    </div>
-    <div class="section" id="subsSection" hidden>
-      <div class="section-head">
-        <span class="section-title">🤝 Subcontractors</span>
-      </div>
-      <div class="section-body" id="subsWrap"></div>
     </div>
   </div>
 
@@ -877,10 +843,30 @@
   </div>
 
   <!-- ============ TAB: RECEIPTS ============ -->
-  <!-- Purchases the server reads out of the owner's email (receipts.js):
-       the ones waiting to be put against a job, then every one so far.
-       Hidden from anyone who cannot see jobs. -->
-  <div class="tab-panel" id="panel-receipts">
+  <!-- ============ TAB: MONEY ============ -->
+  <!-- What comes in and what goes out, one view at a time (money.js). Each
+       list is drawn by its own file into its place here. -->
+  <div class="tab-panel" id="panel-money">
+    <div class="mn-views" id="moneyViews"></div>
+    <p class="empty-msg" id="moneyEmpty" hidden>Nothing here right now.</p>
+
+    <div data-money="owed" hidden>
+    <!-- Every unpaid QuickBooks invoice: when it went out, whether they
+         opened it, and when to send a reminder (invoices.js). Billing access. -->
+    <div class="section" id="invSection" hidden>
+      <div class="section-head">
+        <span class="section-title">💵 Invoices</span>
+        <span class="section-badge" id="invBadge"></span>
+      </div>
+      <div class="section-body" id="invWrap"></div>
+    </div>
+    </div>
+
+    <div data-money="pay" hidden>
+      <div class="section" id="billsSection" hidden>
+        <div class="section-head"><span class="section-title">📅 Monthly bills</span></div>
+        <div class="section-body" id="billsBody"></div>
+      </div>
     <!-- Bills the email reader found that are not paid yet (receipts.js
          payHtml): not receipts until they are paid. Shown only when there
          are any. -->
@@ -893,6 +879,59 @@
         <div id="rcPayList"></div>
       </div>
     </div>
+    </div>
+
+    <div data-money="subs" hidden>
+    <div class="section" id="subsSection" hidden>
+      <div class="section-head">
+        <span class="section-title">🤝 Subcontractors</span>
+      </div>
+      <div class="section-body" id="subsWrap"></div>
+    </div>
+    </div>
+
+    <div data-money="payroll" hidden>
+      <div class="section" id="paySheetSection" hidden>
+        <div class="section-head"><span class="section-title">📄 Pay sheet</span></div>
+        <div class="section-body" id="paySheetBody"></div>
+      </div>
+    <div class="section" id="clockTotalsSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Hours &amp; Wages</span>
+        <span class="section-badge" id="totalsBadge"></span>
+      </div>
+      <div class="section-body">
+        <!-- Which days: the choices and From/To dates, drawn by timeclock.js
+             (the same control as a person's page, Paychecks and the Work log). -->
+        <div class="filter-bar" id="clockRangeBar"></div>
+        <div id="totalsWrap"></div>
+      </div>
+    </div>
+
+    <!-- Paychecks: money sent from the bank to the crew, read out of the
+         owner's email (paychecks.js). Hours, like pay rates. -->
+    <div class="section" id="paySection" hidden>
+      <div class="section-head">
+        <span class="section-title">Paychecks</span>
+        <span class="section-badge" id="payBadge"></span>
+      </div>
+      <div class="section-body" id="payWrap"></div>
+    </div>
+    </div>
+
+    <div data-money="tax" hidden>
+      <div class="section" id="dlSection" hidden>
+        <div class="section-head"><span class="section-title">🗓️ Tax &amp; filing dates</span></div>
+        <div class="section-body" id="dlBody"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Purchases the server reads out of the owner's email (receipts.js):
+       the ones waiting to be put against a job, then every one so far.
+       Hidden from anyone who cannot see jobs. -->
+  <div class="tab-panel" id="panel-receipts">
+    <p class="hint mn-moved" data-view="pay" hidden>Invoices to pay are on <button type="button" class="link-btn" onclick="YDMoney.show('pay')">💵 Money</button>.</p>
 
     <div class="section" id="rcSection" hidden>
       <div class="section-head">
@@ -1375,6 +1414,7 @@
 <script src="./calculators.js"></script>
 <script src="./paychecks.js"></script>
 <script src="./paysheet.js"></script>
+<script src="./money.js"></script>
 <script src="./notify.js"></script>
 <script src="./crewnotes.js"></script>
 <script src="./crewjobs.js"></script>

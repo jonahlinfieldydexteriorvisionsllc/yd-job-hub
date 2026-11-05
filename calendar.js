@@ -108,7 +108,7 @@
     // LLC report and dates of his own -- worked out (deadlines.js), never
     // stored as entries. The owner's alone.
     'auto:deadlines': { id: 'auto:deadlines', name: 'Tax & filing dates', color: '#9a3412', auto: true,
-                        about: 'From ⚙ All settings → Tax & filing dates' },
+                        about: 'From 💵 Money → Tax dates' },
   };
   // {start: 'YYYY-MM-DD', due(day)} once the owner has set the date, else null.
   const outreachInfo = () => (window.YDProspects && YDProspects.outreach ? YDProspects.outreach() : null);

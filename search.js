@@ -720,7 +720,7 @@
       hint: 'Who you sub work out to, their properties, what they charge and what they are owed',
       words: 'subs subbed mowing lawn care bills',
       show: () => signedIn() && owner(),
-      go: () => { switchTab('dashboard'); later(() => reveal(el('subsSection')), 120); } },
+      go: () => { window.YDMoney.show('subs'); later(() => reveal(el('subsSection')), 120); } },
     { group: 'Emails & posts', icon: '📣', name: 'Posts — Facebook, Google, Nextdoor',
       hint: 'The posting schedule: what goes up when, each post to change or hold, and hooking each place up',
       words: 'social media facebook google business profile gbp nextdoor post posts posting schedule marketing',
