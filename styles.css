@@ -3760,7 +3760,7 @@
   .dash-owed { color:var(--st-now, var(--neg)); }
   #dashYear { max-width:180px; }
   .dash-cards { display:none; }
-  @media (max-width:720px) {
+  @media (max-width:1100px) {
     #dashTableWrap .dash-table { display:none; }
     .dash-cards { display:flex; flex-direction:column; gap:8px; }
     .dash-card { display:flex; flex-direction:column; gap:4px; width:100%; text-align:left; padding:11px 13px; cursor:pointer;
@@ -6114,3 +6114,11 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .dbl-row { border-top:1px solid var(--border); padding:8px 0; font-size:13px; }
   .dbl-rc { color:var(--muted); font-size:12px; margin-top:2px; }
   .dbl-acts { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:6px; }
+
+  /* Material calculator (calculators.js). */
+  .calc-chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
+  .calc-chip { min-height:40px; }
+  .calc-out { margin:10px 0; padding:10px 12px; border-radius:8px; background:var(--st-info-soft, var(--surface)); border:1px solid var(--border); }
+  .calc-out b { display:block; font-size:22px; }
+  .calc-out small { color:var(--muted); }
+  .cj-calc { margin:8px 0 2px; }

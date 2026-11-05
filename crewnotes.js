@@ -278,7 +278,7 @@
     if (k !== key) { key = k; if (on) start(a); else stop(); }
   });
 
-  window.YDCrewNotes = { send: text => send(text, '', null), unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name),
+  window.YDCrewNotes = { send: text => send(text, '', null), sendAbout: (text, jobId, jobName) => send(text, jobId, jobName), unread: () => unread().length, openFor: (id, name) => window.openNoteForJonah(id, name),
     // The owner's unread notes, newest first (Home).
     unreadList: () => unread().sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))
       .map(n => ({ id: n.id, by: n.by || 'Someone', text: n.text || '', jobId: n.jobId || '', jobName: n.jobName || '', at: n.at || '',

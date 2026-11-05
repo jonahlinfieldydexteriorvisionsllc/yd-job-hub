@@ -999,6 +999,8 @@
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
           (o.note ? '<br><span class="cj-mat-note">📝 ' + esc(o.note) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '', 'order') +
+      // Short on site: what is needed, and it goes to the job (calculators.js).
+      (preview ? '' : '<div class="cj-calc"><button type="button" class="btn btn-sm" onclick="YDCalc.open(\'' + safe(id) + '\', this.dataset.name)" data-name="' + esc(j.name || '') + '">🧮 Work out material</button></div>') +
       // Too much rock, no dump trailer, took a day longer -- noted for Jonah
       // and the next bid (jobissues.js), with what they noted here before.
       '<div class="cj-sec cj-issues" id="cjIssues" data-job="' + safe(id) + '"></div>' +
