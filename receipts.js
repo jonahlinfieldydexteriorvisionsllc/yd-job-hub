@@ -479,12 +479,8 @@
     if (to !== 'job') { assignElsewhere(rid, r, to); return; }
     const jobId = chosen[rid] != null ? chosen[rid] : ((r.suggest && r.suggest.jobId) || '');
     if (!jobId) { showToast('Pick the job first'); return; }
-    const done = addToJob(rid, r, jobId, null);
-    // After the toast has had its moment: any price that is not the price
-    // list's, to Supplies → Prices to check.
-    if (done) setTimeout(() => checkPrices(rid, r, done, (receipts[rid] && lastJobName(receipts[rid])) || ''), 400);
+    addToJob(rid, r, jobId, null);
   };
-  const lastJobName = r => { const s = (r.splits || []).filter(x => x && x.to === 'job').slice(-1)[0]; return s ? s.jobName || '' : ''; };
 
   // The lines (the ticked ones, else all that are left) and their tax onto
   // a job's materials. The button above and a photo sent in for the job
@@ -541,6 +537,17 @@
       return out;
     });
     if (!job) return null;
+    // A product on these lines that Supplies doesn't have goes in now, so
+    // the price check below and the next estimate both find it. The lines are
+    // on the job by here: nothing in this may stop the receipt being marked,
+    // or a second try would put them on again.
+    const S = window.YDSupplies;
+    let isNew = [];
+    try {
+      if (S && S.boughtOnJob) isNew = S.boughtOnJob(r.vendor, idxs.map(i => lines[i]), { orderNo: r.orderNo, date });
+    } catch (e) { console.warn('[receipts] new items not added to Supplies:', (e && e.code) || e); }
+    const newWords = isNew.length === 1 ? String(isNew[0]).slice(0, 60) + ' added to Supplies'
+      : isNew.length ? isNew.length + ' new items added to Supplies' : '';
     const splits = (r.splits || []).concat([Object.assign({
       id: sid, to: 'job', jobId, jobName: (job.customerName || '').trim() || 'Untitled job',
       est: String(job.estimateNumber || '').trim(), lines: idxs, cents: part, taxCents: tax,
@@ -556,8 +563,13 @@
       add.length + ' line' + (add.length === 1 ? '' : 's') + ' (' + money(part + tax) + ') added to ' +
       splits[splits.length - 1].jobName + (auto ? ' — sent in for it' : '') +
       (ticks ? ' · ' + ticks + ' ticked on Materials to Order' : '') +
-      (typedOff.length ? ' · the typed line it repeats came off' : ''), auto ? 5000 : undefined);
+      (typedOff.length ? ' · the typed line it repeats came off' : '') +
+      (newWords ? ' · ' + newWords : ''), auto || newWords ? 5000 : undefined);
     redraw(true);
+    // After the toast has had its moment (its own words would replace it):
+    // any price that is not the price list's, to Supplies → Prices to check.
+    // Here so a receipt that sorted itself gets the check too.
+    setTimeout(() => checkPrices(rid, r, idxs, splits[splits.length - 1].jobName), newWords ? 5200 : 400);
     return idxs;
   }
 

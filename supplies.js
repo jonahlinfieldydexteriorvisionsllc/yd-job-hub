@@ -10,7 +10,8 @@
 // Three collections, because Firestore cannot hide one field of a document
 // from the crew -- the same split as the snow accounts:
 //   vendors/{id}       name, address, phone, hours, notes, email,     everyone
-//                      website, buyWays [online|shipped|phone|far], leadTime
+//                      website, buyWays [online|shipped|phone|far], leadTime,
+//                      also (other names, the way its receipts spell it)
 //   supplies/{id}      name, also, vendorId, sku, where, unit, notes, everyone
 //                      link (the product's own page)
 //   supplyPrices/{id}  (same id as the item) cents, per, year, asOf,
@@ -963,6 +964,8 @@
       const v = id ? vendors[id] || {} : {};
       openModal(id ? 'Edit supplier' : 'Add a supplier',
         field('Name', 'svName', v.name, 'e.g. Example Stone Yard') +
+        // MDS's receipts say its whole name, which nothing could tie to "MDS".
+        field('Also called', 'svAlso', v.also, 'The name on its receipts, if that is different. Commas between several.') +
         // In its parts (addr.js); the one line is kept for directions.
         (window.YDAddr ? YDAddr.fieldsHtml('svA', v, { streetHint: 'e.g. 123 Industrial Dr — used for directions' })
           : field('Address', 'svAddr', v.address, 'Street, town — used for directions')) +
@@ -1166,7 +1169,7 @@
       if (typedSite && !website) { showToast('That website doesn’t look right — e.g. theirsite.com'); return; }
       const id = editing.id || newId('v');
       const a = window.YDAddr && el('svAStreet') ? YDAddr.read('svA') : { address: val('svAddr'), street: '', city: '', state: '', zip: '' };
-      const rec = { name: name, address: a.address, street: a.street, city: a.city, state: a.state, zip: a.zip,
+      const rec = { name: name, also: val('svAlso').slice(0, 200), address: a.address, street: a.street, city: a.city, state: a.state, zip: a.zip,
                     phone: val('svPhone'), hours: val('svHours'),
                     email: val('svEmail').toLowerCase(), website: website,
                     buyWays: Array.from(document.querySelectorAll('.svWay:checked')).map(i => i.value),
@@ -2003,10 +2006,13 @@
   // looks at Supplies never downloads its ~900 items.
   let started = false;
   let heard = false;          // the supplies list has answered (cache or server)
+  // The server itself has answered for these two. A copy on this device may
+  // be behind it, and an item it hasn't heard of yet would look new.
+  let itemsServed = false, vendorsServed = false;
   function stop() {
     unsubs.forEach(u => { try { u(); } catch (e) {} });
     unsubs = []; items = {}; vendors = {}; prices = {}; pricesReady = false; shown = '';
-    started = false; heard = false;
+    started = false; heard = false; itemsServed = false; vendorsServed = false; boughtHeld = null;
     tagsChanged();
   }
   function start() {
@@ -2018,7 +2024,11 @@
         if (c.type === 'removed') delete store[c.id];
         else store[c.id] = withId ? Object.assign({ id: c.id }, c.data) : c.data;
       });
-      if (store === prices && meta && meta.fromCache === false) pricesReady = true;
+      if (meta && meta.fromCache === false) {
+        if (store === prices) pricesReady = true;
+        if (store === items) itemsServed = true;
+        if (store === vendors) vendorsServed = true;
+      }
       // A supplier's name is searched by too.
       if (store !== prices) tagsChanged();
       redrawIfVisible();
@@ -2038,6 +2048,8 @@
   // MDS). Then its item: by the supplier's item number, else by name (or an
   // "also called" name), punctuation ignored. With no known supplier nothing
   // is matched -- a name alone is too loose to price by. (receipts.js)
+  // Every name a supplier goes by: its own, and the ones its receipts use.
+  const vendorNames = v => [v.name].concat(String(v.also || '').split(/[;,]/)).map(key).filter(Boolean);
   function vendorFor(name) {
     const k = key(name);
     if (!k) return null;
@@ -2045,8 +2057,8 @@
       .filter(w => w && ['the', 'inc', 'llc', 'co', 'company', 'corp'].indexOf(w) === -1);
     const initials = words.map(w => w[0]).join('');
     const vs = Object.values(vendors);
-    return vs.find(v => key(v.name) === k) ||
-      vs.find(v => { const vk = key(v.name); return vk.length >= 4 && (k.indexOf(vk) !== -1 || vk.indexOf(k) !== -1); }) ||
+    return vs.find(v => vendorNames(v).indexOf(k) !== -1) ||
+      vs.find(v => vendorNames(v).some(vk => vk.length >= 4 && (k.indexOf(vk) !== -1 || vk.indexOf(k) !== -1))) ||
       (initials.length >= 2 ? vs.find(v => key(v.name) === initials) : null) || null;
   }
   function findSupply(vendorName, sku, name) {
@@ -2110,9 +2122,10 @@
     const k = key(name);
     if (!k) return null;
     const vs = Object.values(vendors);
-    return vs.find(v => key(v.name) === k) ||
-      vs.find(v => { const vk = key(v.name); return vk.length >= 4 && k.length >= 4 && (k.indexOf(vk) !== -1 || vk.indexOf(k) !== -1); }) || null;
+    return vs.find(v => vendorNames(v).indexOf(k) !== -1) ||
+      vs.find(v => vendorNames(v).some(vk => vk.length >= 4 && k.length >= 4 && (k.indexOf(vk) !== -1 || vk.indexOf(k) !== -1))) || null;
   }
+  const isStoreSearch = u => /menards\.com\/main\/search\.html\?search=|homedepot\.com\/s\//i.test(String(u || ''));
   function addSourced(o) {
     if (!edits() || !o || !String(o.vendor || '').trim() || !String(o.name || '').trim()) return null;
     if (o.cents != null && !(o.cents > 0)) return null;
@@ -2124,7 +2137,7 @@
       const site = websiteUrl({ website: o.url });
       const rec = { name: String(o.vendor).trim().slice(0, 80), address: '', phone: '', hours: '',
                     website: site ? new URL(site).origin : '',
-                    notes: 'Added when sourcing an estimate', updatedAt: now };
+                    notes: o.vendorNote || 'Added when sourcing an estimate', updatedAt: now };
       vendors[id] = Object.assign({ id: id }, rec);
       v = vendors[id];
       writes.push(['vendors', id, rec]);
@@ -2155,10 +2168,10 @@
     const link = websiteUrl({ website: o.url });
     // Its item number too, on one that has none.
     const sku = String(o.sku || '').trim().slice(0, 40);
-    if (it && ((covers && !(Number(it.coverage) > 0)) || (link && !it.link) || (sku && !it.sku))) {
+    if (it && ((covers && !(Number(it.coverage) > 0)) || (link && (!it.link || isStoreSearch(it.link))) || (sku && !it.sku))) {
       const patch = { updatedAt: now };
       if (covers && !(Number(it.coverage) > 0)) Object.assign(patch, { coverage: Number(o.coverage), takeoffUnit: String(o.takeoffUnit).trim().slice(0, 30) });
-      if (link && !it.link) patch.link = link;
+      if (link && (!it.link || isStoreSearch(it.link))) patch.link = link;
       if (sku && !it.sku) patch.sku = sku;
       Object.assign(it, patch);
       writes.push(['supplies', it.id, patch]);
@@ -2178,7 +2191,7 @@
     if (o.cents > 0) {
       const next = applyPrice(prices[it.id], { cents: Math.round(o.cents), per: per || null,
                                                year: thisYear(), priceNotes: String(o.note || '').slice(0, 300) || null });
-      logPrices(priceChanges(it.id, prices[it.id], next, 'Estimate'));
+      logPrices(priceChanges(it.id, prices[it.id], next, o.via || 'Estimate'));
       prices[it.id] = next;
       writes.push(['supplyPrices', it.id, next]);
     }
@@ -2190,6 +2203,147 @@
     announce();
     return it.id;
   }
+
+  // ------------------------------------------------- bought for a job
+  //
+  // A product on a receipt that goes on a job joins Supplies by itself, at
+  // what was paid (Jonah, 5 Nov 2026: Loctite bought for a job sat on its
+  // receipt for a week and never reached Supplies, because a receipt only
+  // ever looked things up there). Only a line with the supplier's item number:
+  // that is what says it is a product and which one. A line without one (bulk
+  // by the ton) is more likely an item already here in other words.
+  // Not goods: the same words as functions/receipts.py NOT_GOODS, and charges.
+  const NOT_GOODS = /\b(shipping|delivery|freight|handling|fee|fees|surcharge|charges?|core|deposit|tax|discount|gift|not itemised)\b/i;
+  const isItemNo = n => String(n || '').trim().length >= 4 && /\d/.test(String(n));
+  const boughtGoods = l => !!l && !!String(l.name || '').trim() && l.cents > 0 && isItemNo(l.itemNo) && !NOT_GOODS.test(l.name);
+  // What kind it is, from its name. The kind sets its markup and waste, and he
+  // can change it on the item. First that fits: "Concrete Anchors" are
+  // hardware, not concrete; "Liquid Nails" is an adhesive, not nails.
+  const KIND_WORDS = [
+    [/\brent(al|als|ed)?\b/, 'rental'],
+    [/\b(adhesive|glue|sealer|sealant|caulk|liquid nails|ipe seal)\b/, 'adhesive'],
+    [/\b(edging|edger|rebar)\b/, 'edging'],
+    [/\b(screws?|bolts?|nails?|spikes?|anchors?|hinges?|washers?|brackets?|struts?|tapcon|lags?|staples?|framing angle|hardware)\b/, 'hardware'],
+    [/\b(drains?|drainage|pvc|corrugated|downspout|culvert|sewer|rodent guard|concrete|cement|mortar|quikrete)\b/, 'drainage'],
+    [/\b(straw|seed|seeding|erosion|fertilizer)\b/, 'seed'],
+    [/\d\s*(cu\.?\s?ft|lbs?)\b/, 'bagged'],
+    [/\b(top ?soil|soil|compost)\b/, 'soil'],
+    [/\bmulch\b/, 'mulch'],
+    [/\bpavers?\b/, 'pavers'],
+    [/\b(wall block|retaining wall|wall cap|coping)\b/, 'wall'],
+    [/\b(fabric|weed barrier|geogrid|geotextile)\b/, 'hardscape'],
+    [/\b(boulders?|flagstone)\b/, 'natural'],
+    [/\b(gravel|sand|limestone|clear stone)\b/, 'stone'],
+  ];
+  function kindFromWords(name) {
+    const n = norm(name), hit = KIND_WORDS.find(([re]) => re.test(n));
+    return hit ? hit[1] : 'other';
+  }
+  // The store's own search by item number lands on that product. Until
+  // someone has opened it (the monthly price routine), that is its link, and
+  // the page itself replaces it (addSourced, isStoreSearch up there).
+  const ITEM_PAGES = [
+    [/menards/i, n => 'https://www.menards.com/main/search.html?search=' + encodeURIComponent(n)],
+    [/home ?depot/i, n => 'https://www.homedepot.com/s/' + encodeURIComponent(n)],
+  ];
+  // Already here under other words? MDS's items have no numbers, so "3/4
+  // road gravel" doesn't become a second Road gravel. An item with a number
+  // of its own needs the same sizes and nearly all the words: mostly a
+  // different number is a different product (a 2x10x10 is not a 2x10x12), but
+  // Home Depot has two numbers for each thing.
+  // A close match has to share most of its words: the matcher offers
+  // "Edging stakes (pack of 4)" for a pack of roller covers.
+  const plainWords = s => (norm(s).match(/[a-z]{3,}/g) || []).map(w => w.replace(/s$/, ''));
+  function sameWords(a, b, share) {
+    const x = plainWords(a), y = plainWords(b), few = Math.min(x.length, y.length);
+    return few > 0 && x.filter(w => y.indexOf(w) !== -1).length / few >= share;
+  }
+  function maybeTheirs(v, name) {
+    if (!v || !window.YDMatch) return false;
+    const own = {};
+    Object.values(items).forEach(it => { if (it.vendorId === v.id) own[it.id] = it; });
+    const got = window.YDMatch.match({ name: name, unit: '' }, { items: own, prices: {}, vendors: vendors }, [], { anyUnit: true });
+    const sizes = t => (norm(t).match(/\d[\d./x-]*/g) || []).join(' ');
+    const close = (id, sure) => (own[id].sku ? sizes(name) === sizes(own[id].name) && sameWords(name, own[id].name, 0.85)
+      : sure || sameWords(name, own[id].name, 0.6));
+    return (!!got.sure && close(got.sure.id, true)) || got.options.some(id => close(id, false));
+  }
+  function dayWords(ymd) {
+    const d = new Date(String(ymd || '') + 'T12:00:00');
+    return isNaN(d) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function addBought(store, l, from) {
+    const v = vendorFor(store), sku = String(l.itemNo).trim();
+    if (findSupply(store, sku, l.name) || maybeTheirs(v, l.name)) return null;
+    const qty = parseFloat(l.qty);
+    const each = l.unitCents > 0 ? l.unitCents : (qty > 0 ? Math.round(l.cents / qty) : l.cents);
+    const per = !String(l.unit || '').trim() || unitWord(l.unit) === 'each' ? 'each' : String(l.unit).trim();
+    const page = ITEM_PAGES.find(([re]) => re.test((v && v.name) || store));
+    const id = addSourced({ vendor: (v && v.name) || store, vendorId: v ? v.id : null, name: l.name, sku: sku,
+      cents: each > 0 ? each : null, per: per, category: kindFromWords(l.name), url: page ? page[1](sku) : '', via: 'Receipt',
+      vendorNote: 'Added from a receipt',
+      note: 'From the receipt' + (from.orderNo ? ' #' + from.orderNo : '') + (dayWords(from.date) ? ' of ' + dayWords(from.date) : '') + '.' });
+    return id ? l.name : null;
+  }
+  // Kept on this device until Supplies has come from the server: read before
+  // that, every item would look new and go in a second time. A receipt sorted
+  // by itself just after the app opens gets here first.
+  // Held here too: with the device's storage full or refused, it still goes
+  // in this visit.
+  const BOUGHT_KEY = 'ydjobhub_boughtOnJobs';
+  let boughtHeld = null;
+  function boughtWaiting() {
+    if (boughtHeld) return boughtHeld;
+    let q = [];
+    try { q = JSON.parse(localStorage.getItem(BOUGHT_KEY) || '[]'); } catch (e) { q = []; }
+    boughtHeld = Array.isArray(q) ? q : [];
+    return boughtHeld;
+  }
+  function keepWaiting(q) {
+    boughtHeld = q;
+    try {
+      if (q.length) localStorage.setItem(BOUGHT_KEY, JSON.stringify(q));
+      else localStorage.removeItem(BOUGHT_KEY);
+    } catch (e) { /* private window, or full */ }
+  }
+  function addWaiting() {
+    if (!edits() || !itemsServed || !vendorsServed || !window.YDMatch) return [];
+    const q = boughtWaiting();
+    if (!q.length) return [];
+    // A line that fails stays for next time; one that went in can't go in
+    // twice, it is found by its number.
+    const names = [], left = [];
+    q.forEach(b => {
+      const stuck = (b.lines || []).filter(l => {
+        try {
+          const n = addBought(b.store, l, b);
+          if (n) names.push(n);
+          return false;
+        } catch (e) {
+          console.warn('[supplies] bought item not added:', (e && e.code) || e);
+          return true;
+        }
+      });
+      if (stuck.length) left.push(Object.assign({}, b, { lines: stuck }));
+    });
+    keepWaiting(left);
+    return names;
+  }
+  // receipts.js: these lines just went on a job. -> the names added now.
+  function boughtOnJob(store, lines, from) {
+    if (!edits() || !String(store || '').trim()) return [];
+    const goods = (lines || []).filter(boughtGoods).map(l => ({ name: String(l.name).trim(), itemNo: l.itemNo, qty: l.qty, unit: l.unit,
+      unitCents: l.unitCents, cents: l.cents }));
+    if (!goods.length) return [];
+    keepWaiting(boughtWaiting().concat([{ store: store, orderNo: (from || {}).orderNo || '', date: (from || {}).date || '', lines: goods }]));
+    return addWaiting();
+  }
+  // Waiting from before Supplies had answered. Heard here, so the words go
+  // up on their own: the receipt's toast is long gone.
+  document.addEventListener('yd-supplies', () => {
+    const names = addWaiting();
+    if (names.length) showToast('🧾 ' + (names.length === 1 ? names[0] : names.length + ' items') + ' from a receipt added to Supplies');
+  });
 
   // One of Jonah's kinds renamed (Pricing rules → ✎ Rename): every item of
   // that kind moves to the new name. Returns how many.
@@ -2231,6 +2385,7 @@
       if (list) list.scrollIntoView({ block: 'start' });
     },
     findSupply: findSupply, setPrice: setPrice, addSourced: addSourced, setItemInfo: setItemInfo,
+    boughtOnJob: boughtOnJob,     // receipts.js, lines just filed on a job
     shrinkPhoto: shrinkPhoto,     // receipts.js, for a receipt photo
     websiteUrl: websiteUrl,       // app.js, Materials to Order
     renameKind: renameKind,       // pricing.js, Pricing rules
