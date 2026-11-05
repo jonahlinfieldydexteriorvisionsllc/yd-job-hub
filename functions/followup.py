@@ -98,6 +98,10 @@ def _prompt(j):
         lines.append("Follow-ups already written: %d, the last %s days ago, subject \"%s\"." % (
             len(earlier), _days_since(earlier[-1].get("at")), earlier[-1].get("subject") or ""))
     lines.append("\nJonah's notes on the job (context only):\n%s" % ((j.get("notes") or "").strip()[:3000] or "(none)"))
+    # What he told Claude about chasing this bid (boards.js chaseNoteHtml).
+    said = j.get("chaseNote") if isinstance(j.get("chaseNote"), dict) else {}
+    if str(said.get("text") or "").strip():
+        lines.append("\nJonah's note for this follow-up -- follow it, without quoting it:\n%s" % str(said["text"]).strip()[:1000])
     return "\n".join(lines)
 
 

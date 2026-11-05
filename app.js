@@ -339,7 +339,7 @@ function jobBill(d) {
 const BOARD_FIELDS = ['bidStage', 'bidStageAt', 'workStage', 'workStageAt', 'cardColor', 'followUps', 'qbEstimate', 'qbInvoiceRef', 'careEmail', 'postsDraft', 'autoFollowUpAt', 'acceptedSeenAt',
   'costByHand', 'completedAt', 'careDone', 'hasPlants', 'hasTurf', 'fromQuickBooks', 'qbFilled', 'snowChecked', 'removeWhy', 'replacedBy', 'removeNote',
   'lostReason', 'lostReasonText', 'lostAt', 'deletedAt', 'deletedBy', 'deletedByName',
-  'customerId', 'customerBy', 'customerFill', 'qbChangesIn', 'qbChangesOff', 'qbInvoiceTaken', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'thanksEmail',
+  'customerId', 'customerBy', 'customerFill', 'qbChangesIn', 'qbChangesOff', 'qbInvoiceTaken', 'careDecidedAt', 'chase', 'chaseDrafts', 'chaseHeard', 'chaseLostCard', 'chaseNote', 'thanksEmail',
   'noPost', 'noThanks', 'jobLine', 'welcomeEmail', 'noWelcome', 'deliveryQuotes'];
 let boardFields = {};
 // Two retired boxes, kept on the job as they were (no data lost, and a
@@ -5501,26 +5501,36 @@ const DASH_SAME_AS_STATUS = { scheduled: 1, inProgress: 1, won: 1, toInvoice: 1,
 // price less what its materials, delivery, fuel and crew-days cost
 // (pricing.js profit) -- marked as planned. With neither: unknown, never the
 // whole price shown as profit.
-function dashPlannedNet(d, price) {
+// A job's estimate, priced: what its labor and its materials come to (Jonah,
+// 4 Nov 2026: "the all jobs overview should have a column that shows the total
+// price of the estimate and separate pricing for labor and materials"), and
+// what it costs when that is known. Before tax, as the job's price is.
+function dashPriced(d) {
   const e = d.estimate;
-  if (!price || !e || !((e.work || []).length || (e.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return null;
+  if (!e || !((e.work || []).length || (e.materials || []).length) || !window.YDEstimate || !YDEstimate.priceSaved) return null;
   try {
     const r = YDEstimate.priceSaved(e, d.city || '', d._id, d.deliveryQuotes, d.qbEstimate);
-    if (!r || !r.profit || !r.profit.complete) return null;
-    return round2(price - r.profit.costCents / 100);
+    if (!r) return null;
+    if (!(r.totalCents > 0)) return { labor: null, materials: null, total: null, cost: null };
+    return { labor: (r.laborCents || 0) / 100, materials: (r.materialsCents || 0) / 100, total: r.totalCents / 100,
+             cost: r.profit && r.profit.complete ? r.profit.costCents / 100 : null };
   } catch (err) { return null; }
 }
 // The same, kept per job until the job, its price or town changes -- or the
 // rules, Supplies' prices or the fuel prices do (the events below): pricing
 // a whole estimate for every job at each All Jobs redraw was most of its time.
 const dashNetKept = new Map();
-function dashPlannedNetKept(d, price) {
-  const key = (d.lastModified || '') + '|' + price + '|' + (d.city || '');
+function dashPricedKept(d) {
+  const key = (d.lastModified || '') + '|' + (d.city || '');
   const k = dashNetKept.get(d._id);
   if (k && k.key === key) return k.v;
-  const v = dashPlannedNet(d, price);
+  const v = dashPriced(d);
   dashNetKept.set(d._id, { key: key, v: v });
   return v;
+}
+function dashPlannedNetKept(d, price) {
+  const p = dashPricedKept(d);
+  return price && p && p.cost !== null ? round2(price - p.cost) : null;
 }
 ['yd-pricing', 'yd-supplies'].forEach(ev => document.addEventListener(ev, () => dashNetKept.clear()));
 // Money still owed on the job's QuickBooks invoice; null with no invoice.
@@ -5574,6 +5584,10 @@ function renderDashboard() {
     r.net = real ? round2(r.price - (lab.cost + r.matCost)) : dashPlannedNetKept(d, r.price);
     r.planned = !real && r.net != null;
     r.push = r.price ? '' : perPushText(d);
+    const parts = dashPricedKept(d);
+    r.labor = parts ? parts.labor : null;
+    r.materials = parts ? parts.materials : null;
+    r.estTotal = parts ? parts.total : null;
     r.stage = dashStage(d, r.status);
     r.why = lostWhy(d);
     r.plantBits = window.YDPlants ? window.YDPlants.badge(d) + window.YDPlants.owedChip(d) : '';
@@ -5634,13 +5648,17 @@ function renderDashboard() {
     : '<span style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '"' +
       (r.planned ? ' class="dash-planned" title="Planned, from the estimate — no real costs recorded yet"' : '') + '>' +
       (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + (r.planned ? '<small> plan</small>' : '') + '</span>';
+  const moneyCell = v => v == null ? '<span class="muted">—</span>' : fmtMoney(v);
   const owedHtml = r => r.owed == null ? '<span class="muted">—</span>'
     : r.owed > 0 ? '<span class="dash-owed">' + fmtMoney(r.owed) + '</span>' : '<span class="muted">Paid</span>';
   let h = careNote + lostSum + (older || '') + '<table class="dash-table"><thead><tr>' +
     '<th style="cursor:pointer" onclick="sortDash(\'name\')">Customer' + arrow('name') + '</th>' +
-    '<th style="cursor:pointer" onclick="sortDash(\'city\')">Location' + arrow('city') + '</th>' +
-    '<th>Services</th><th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +
-    '<th style="cursor:pointer" onclick="sortDash(\'price\')">Price' + arrow('price') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'city\')">Where &amp; what' + arrow('city') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'status\')">Status' + arrow('status') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'labor\')" title="The estimate’s labor, before tax">Labor' + arrow('labor') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'materials\')" title="The estimate’s materials and delivery, before tax">Materials' + arrow('materials') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'estTotal\')" title="Labor and materials together: the estimate before tax">Estimate' + arrow('estTotal') + '</th>' +
+    '<th style="cursor:pointer" onclick="sortDash(\'price\')" title="What the job comes to now, change orders in">Price' + arrow('price') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'owed\')" title="Still owed on the QuickBooks invoice">Owed' + arrow('owed') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'net\')" title="Real costs once there are any; until then what the estimate planned">Est. Net' + arrow('net') + '</th></tr></thead><tbody>';
   // The same jobs as cards, for a phone (styles.css shows one or the other
@@ -5648,8 +5666,9 @@ function renderDashboard() {
   let cardsHtml = '<div class="dash-cards">';
   rows.forEach(r => {
     h += '<tr style="cursor:pointer" onclick="loadJob(\'' + ordId(r.id) + '\')"><td class="bold">' + jobNameHtml(r.name, r.est) + '</td>' +
-      '<td>' + esc(r.city || '—') + '</td><td>' + esc(r.services || '—') + '</td>' +
+      '<td>' + esc(r.city || '—') + (r.services ? '<div class="dash-svc">' + esc(r.services) + '</div>' : '') + '</td>' +
       '<td>' + statusHtml(r) + '</td>' +
+      '<td>' + moneyCell(r.labor) + '</td><td>' + moneyCell(r.materials) + '</td><td class="bold">' + moneyCell(r.estTotal) + '</td>' +
       '<td class="bold">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">—</span>') + '</td>' +
       '<td class="bold">' + owedHtml(r) + '</td>' +
       '<td class="bold">' + netHtml(r) + '</td></tr>';
@@ -5658,6 +5677,8 @@ function renderDashboard() {
         '<span class="dash-card-price">' + (r.price ? fmtMoney(r.price) : r.push ? esc(r.push) : '<span class="muted">no price yet</span>') + '</span></span>' +
       '<span class="dash-card-status">' + statusHtml(r) + '</span>' +
       ((r.city || r.services) ? '<span class="dash-card-sub">' + esc([r.city, r.services].filter(Boolean).join(' · ')) + '</span>' : '') +
+      (r.estTotal != null ? '<span class="dash-card-nums"><span>Labor ' + moneyCell(r.labor) + '</span><span>Materials ' + moneyCell(r.materials) + '</span>' +
+        '<span>Estimate ' + moneyCell(r.estTotal) + '</span></span>' : '') +
       '<span class="dash-card-nums"><span>Net ' + netHtml(r) + '</span>' +
         (r.owed != null ? '<span>Owed ' + owedHtml(r) + '</span>' : '') + '</span>' +
     '</button>';

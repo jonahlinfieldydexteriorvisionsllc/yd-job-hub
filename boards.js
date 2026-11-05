@@ -742,7 +742,7 @@
               (days === 0 ? 'today' : days === 1 ? 'yesterday' : (j.bidStageAt ? shortDay(localDay(new Date(j.bidStageAt))) : agoText(days)) +
                 ' (' + days + ' days)') +
               (last ? ' · follow-up ' + (last.sent ? 'sent ' : 'drafted ') + agoText(lastDays || 0) +
-                (ups.length > 1 ? ' (' + ups.length + ' so far)' : '') : '') + '</div>' +
+                (ups.length > 1 ? ' (' + ups.length + ' so far)' : '') : '') + '</div>' + chaseNoteHtml(j) +
           '</div>' + chaseStepsHtml(j) +
           '<div class="bd-chase-act">' +
             (last && /^https:\/\/mail\.google\.com\//.test(String(last.link || ''))
@@ -757,6 +757,28 @@
       }).join('') +
     '</div>';
   }
+
+  // A note for Claude on a bid being chased (Jonah, 4 Nov 2026: "time to chase
+  // bids should have a spot for me to add a note for claude to view"): what he
+  // knows that the job doesn't say, "she's away till the 20th", read before
+  // each follow-up is written (functions/followup.py _prompt), the ones that
+  // send themselves included.
+  function chaseNoteHtml(j) {
+    const n = j.chaseNote, id = safeId(j._id);
+    const edit = '<button class="link-btn" onclick="chaseNoteEdit(\'' + id + '\')">' + (n && n.text ? 'Change' : '📝 Note for Claude') + '</button>';
+    return '<div class="bd-chase-note" onclick="event.stopPropagation()">' + (n && n.text ? '📝 ' + esc(n.text) + ' ' : '') + edit + '</div>';
+  }
+  window.chaseNoteEdit = async function (jobId) {
+    const j = jobsList().find(x => safeId(x._id) === jobId);
+    if (!j || !movesJobs() || !window.YDSync) return;
+    const got = await ydForm('What should Claude know before it writes to them? It reads this before every follow-up.',
+      [{ id: 'note', label: 'Your note to Claude', value: (j.chaseNote && j.chaseNote.text) || '', multiline: true, rows: 3 }],
+      { title: (j.customerName || 'This bid').trim(), ok: 'Save note' });
+    if (!got) return;
+    const text = String(got.note || '').trim().slice(0, 1000);
+    YDSync.patchJob(j._id, { chaseNote: text ? { text: text, at: nowIso(), by: myName() } : null });
+    render();
+  };
 
   // Today's steps of the plan on a bid's row: a tap to call, then ticked
   // done -- or the email the hourly run sends in the morning, or the
