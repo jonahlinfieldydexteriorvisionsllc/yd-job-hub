@@ -758,6 +758,32 @@
     '</div>';
   }
 
+  // A note to Claude from any screen (Jonah, 4 Nov 2026: "make it so i can add
+  // notes directly onto as many things as will be helpful so you can continue
+  // to improve stuff and we can avoid issues"). Rather than a box on every
+  // thing, one in the ⋯ menu, wherever he is: the screen he was on and the job
+  // or board open there go with it, and it lands on the wish board, which
+  // Claude reads before anything else.
+  window.ydNoteClaude = async function () {
+    if (!isOwner() || !boards[WISHES]) { showToast('The wish board is still loading — try again in a moment'); return; }
+    const panel = document.querySelector('.tab-panel.active');
+    const tab = panel ? panel.id.replace('panel-', '') : '';
+    const job = (tab === 'job' || tab === 'tracking') && typeof currentJobId !== 'undefined' && currentJobId
+      ? ((el('customerName') || {}).value || '').trim() : '';
+    const board = tab === 'boards' && boards[current] ? boards[current].name : '';
+    const where = [tab ? 'the ' + tab + ' screen' : '', job ? 'job: ' + job : '', board ? 'board: ' + board : ''].filter(Boolean).join(', ');
+    const got = await ydForm('What should Claude fix, know or look at? It reads these with the wish cards.',
+      [{ id: 'note', label: 'Your note', value: '', multiline: true, rows: 4 }], { title: 'Note to Claude', ok: 'Send it' });
+    const text = String((got && got.note) || '').trim();
+    if (!text) return;
+    newCardOn(WISHES, text + (where ? '\n\nFrom ' + where + '.' : ''));
+    showToast('Sent — it’s on the wish board');
+  };
+  document.addEventListener('yd-auth', () => {
+    const b = el('menuNoteClaude');
+    if (b) b.hidden = !isOwner();
+  });
+
   // A note for Claude on a bid being chased (Jonah, 4 Nov 2026: "time to chase
   // bids should have a spot for me to add a note for claude to view"): what he
   // knows that the job doesn't say, "she's away till the 20th", read before
