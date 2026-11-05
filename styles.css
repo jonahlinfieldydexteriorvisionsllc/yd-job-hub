@@ -6147,7 +6147,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   /* One job, one screen (jobview.js): what the job is, a button for each part
      of it, one part showing. The buttons wrap on a phone, three to a row:
      never a row that scrolls sideways. The strip scrolls away with the page;
-     the Editing bar above it holds the name and stage. */
+     the Editing bar above it holds the name and stage. The long screens use
+     the same buttons (screenparts.js). */
   .job-strip { margin:12px 0 0; }
   .js-top { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
   .js-what { min-width:0; font-size:14px; font-weight:600; color:var(--text); }
@@ -6164,10 +6165,13 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .jv-btn.on small { color:rgba(255,255,255,.88); }
   @media (max-width:980px) {
     .jv-views { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    .jv-views.jv-n2 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .jv-views.jv-n4 { grid-template-columns:repeat(4, minmax(0, 1fr)); }
   }
   @media (max-width:520px) {
     .jv-long, .js-long { display:none; }
     .jv-views { gap:6px; margin:10px 0 14px; }
+    .jv-views.jv-n4 { grid-template-columns:repeat(2, minmax(0, 1fr)); }
     .jv-btn { min-height:54px; padding:7px 8px; }
     .jv-btn b { font-size:13.5px; }
     .jv-btn small { font-size:12px; margin-top:2px; }
@@ -6176,8 +6180,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     .js-links .js-place { flex:1 1 auto; }
   }
   @media (max-width:350px) { .jv-icon { display:none; } }
-  /* The whole job on paper, as ever: every part, not just the one showing. */
+  /* Everything on paper, as ever: every part, not just the one showing. */
   @media print {
-    #panel-job [data-job-view][hidden] { display:block !important; }
+    #panel-job [data-job-view][hidden], [data-part][hidden] { display:block !important; }
     .jv-views, .js-links { display:none !important; }
   }

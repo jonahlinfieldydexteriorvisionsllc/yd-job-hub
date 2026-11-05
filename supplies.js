@@ -946,6 +946,7 @@
   };
   // Open one supplier ('-' the items with none), or '' back to the list.
   window.supFilter = function (id) {
+    if (window.YDParts) YDParts.show('supplies', 'list');
     view = 'vendors';
     shown = id || '';
     showAll = false;
@@ -2221,6 +2222,7 @@
     // Home's "N prices to check": the list open and in view. It only draws
     // with nothing searched and no supplier open.
     showChecks: () => {
+      if (window.YDParts) YDParts.show('supplies', 'list');
       search = ''; shown = ''; checksOpen = true;
       const box = el('supSearch');
       if (box) box.value = '';

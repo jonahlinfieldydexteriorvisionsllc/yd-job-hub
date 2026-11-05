@@ -721,13 +721,11 @@ function isCrewLead() {
   return !!(a && a.user && a.mode === 'cloud' && !a.isOwner && a.role === 'admin' && ydCan('jobs', 'see'));
 }
 
-// Your Crew lives on the Clock tab, below the clock and the approvals --
-// easy to miss. This goes straight to it: renaming, letting people in,
-// making an admin.
+// Your Crew is a part of the Clock tab. This goes straight to it: renaming,
+// letting people in, making an admin.
 function openPeople() {
   switchTab('clock');
-  const sec = document.getElementById('clockCrewSection');
-  if (sec && !sec.hidden) setTimeout(() => sec.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  YDParts.show('clock', 'crew');
 }
 
 // What the signed-in person may do in one area of the business: 'see' or
@@ -1020,7 +1018,7 @@ function crewView() { return document.documentElement.hasAttribute('data-crew');
 
 function switchTab(name) {
   // An old notification link, or a habit, may still ask for Materials: it
-  // lives at the foot of Supplies now.
+  // is the Bought part of Supplies now.
   const toMaterials = name === 'matdash';
   if (toMaterials) name = 'supplies';
   closeMore();
@@ -1059,15 +1057,14 @@ function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.getElementById('panel-' + name).classList.add('active');
   if (changed) window.scrollTo(0, 0);
+  // Which part of a long screen shows (screenparts.js).
+  if (window.YDParts) YDParts.arrived(name, changed);
   if (name === 'dashboard') renderDashboard();
   // Whichever part of the job is showing catches up on arrival (jobview.js).
   if (name === 'job' && window.YDJobView) YDJobView.arrived();
   if (name === 'supplies' && !matSectionHidden()) renderMatDash();
   if (name === 'supplies') renderOrdersOverview();
-  if (toMaterials) {
-    const m = document.getElementById('matSeasonSection');
-    if (m && !m.hidden) m.scrollIntoView({ block: 'start' });
-  }
+  if (toMaterials && window.YDParts) YDParts.show('supplies', 'bought');
   if (name === 'snow' && window.YDSnow) YDSnow.render();
   if (name === 'contacts' && window.YDProspects) YDProspects.render();
   if (name === 'clock' && window.YDClock) YDClock.render();

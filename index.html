@@ -670,6 +670,9 @@
     <!-- The storm first: it is hidden until one is open, so the weather
          leads on any other night (storm.js). -->
     <div id="stormWrap" hidden></div>
+    <!-- One part at a time (screenparts.js). -->
+    <div class="jv-views" id="snowParts" role="group" aria-label="Parts of Snow" hidden></div>
+    <div data-part="route">
     <div id="weatherWrap" class="wx-strip"></div>
     <div id="lastStormWrap" hidden></div>
     <div class="start-point" id="snowStartRow"><span id="snowStartPoint">Route starts from Madison (yard not set)</span><button class="btn btn-sm" onclick="setStartPoint()">Change</button></div>
@@ -689,7 +692,9 @@
         <div id="snowAccountsWrap"></div>
       </div>
     </div>
+    </div>
 
+    <div data-part="storms">
     <div class="section" hidden>
       <div class="section-head">
         <span class="section-title">Storms</span>
@@ -697,13 +702,16 @@
       </div>
       <div class="section-body"><div id="stormHistoryWrap"></div></div>
     </div>
+    </div>
 
+    <div data-part="season">
     <div class="section" hidden>
       <div class="section-head">
         <span class="section-title">This Season, by Account</span>
         <span class="section-badge" id="seasonBadge"></span>
       </div>
       <div class="section-body"><div id="seasonWrap"></div></div>
+    </div>
     </div>
 
   </div>
@@ -724,6 +732,9 @@
        labour line. -->
   <div class="tab-panel" id="panel-clock">
 
+    <!-- One part at a time, for the owner (screenparts.js). -->
+    <div class="jv-views" id="clockParts" role="group" aria-label="Parts of the Clock" hidden></div>
+    <div data-part="clock" id="clockMain">
     <div class="section">
       <div class="section-head">
         <span class="section-title">Time Clock</span>
@@ -748,6 +759,10 @@
       <div class="section-body" id="approveWrap"></div>
     </div>
 
+    <p class="hint mn-moved" data-view="payroll" hidden>Hours, wages and the pay sheet are on <button type="button" class="link-btn" onclick="YDMoney.show('payroll')">💵 Money</button>.</p>
+    </div>
+
+    <div data-part="crew">
     <div class="section" id="clockCrewSection" hidden>
       <div class="section-head">
         <span class="section-title">Your Crew</span>
@@ -755,21 +770,24 @@
       </div>
       <div class="section-body" id="crewWrap"></div>
     </div>
+    </div>
 
-
-    <p class="hint mn-moved" data-view="payroll" hidden>Hours, wages and the pay sheet are on <button type="button" class="link-btn" onclick="YDMoney.show('payroll')">💵 Money</button>.</p>
-
+    <div data-part="log">
     <div class="section" id="worklogSection" hidden>
       <div class="section-head">
         <span class="section-title">Work Log</span>
       </div>
       <div class="section-body" id="worklogWrap"></div>
     </div>
+    </div>
   </div>
 
   <!-- ============ TAB 3: ALL JOBS ============ -->
   <div class="tab-panel" id="panel-dashboard">
     <p class="hint mn-moved" data-view="owed" hidden>Invoices and subcontractors are on <button type="button" class="link-btn" onclick="YDMoney.show('owed')">💵 Money</button>.</p>
+    <!-- One part at a time (screenparts.js). -->
+    <div class="jv-views" id="dashboardParts" role="group" aria-label="Parts of All Jobs" hidden></div>
+    <div data-part="jobs">
     <div class="section">
       <div class="section-head">
         <span class="section-title">All Jobs Overview</span>
@@ -791,6 +809,8 @@
         <div class="table-wrap" id="dashTableWrap"></div>
       </div>
     </div>
+    </div>
+    <div data-part="eva">
     <!-- A line typed by hand and the receipt for the same order, both on a job
          (doubles.js). Shown only while there are any. -->
     <div class="section" id="dblSection" hidden>
@@ -809,12 +829,25 @@
       </div>
       <div class="section-body" id="evaListWrap"></div>
     </div>
+    </div>
+    <div data-part="time">
     <!-- How long each kind of work takes, from what the crew log (production.js). -->
     <div class="section" id="prodSection" hidden>
       <div class="section-head">
         <span class="section-title">⏱ How long things take</span>
       </div>
       <div class="section-body" id="prodWrap"></div>
+    </div>
+    </div>
+    <div data-part="issues">
+    <!-- What the crew noted, across jobs (jobissues.js). -->
+    <div class="section" id="crewIssuesSection" hidden>
+      <div class="section-head">
+        <span class="section-title">⚠️ Issues from the crew — across jobs</span>
+        <span class="section-badge" id="crewIssuesBadge"></span>
+      </div>
+      <div class="section-body" id="crewIssuesBody"></div>
+    </div>
     </div>
   </div>
 
@@ -840,6 +873,9 @@
 
   <!-- ============ TAB: SUPPLIES ============ -->
   <div class="tab-panel" id="panel-supplies">
+    <!-- One part at a time (screenparts.js). -->
+    <div class="jv-views" id="suppliesParts" role="group" aria-label="Parts of Supplies" hidden></div>
+    <div data-part="orders">
     <!-- Everything still to order across the booked and running jobs: one
          card per job with its lines under each supplier, or ("By supplier")
          one card per supplier with each job's lines kept apart (app.js
@@ -851,7 +887,9 @@
       </div>
       <div class="section-body" id="ordersWrap"></div>
     </div>
+    </div>
 
+    <div data-part="list">
     <div class="section">
       <div class="section-head">
         <span class="section-title">Supplies — where to get it</span>
@@ -859,7 +897,9 @@
       </div>
       <div class="section-body" id="suppliesWrap"></div>
     </div>
+    </div>
 
+    <div data-part="bought">
     <!-- What has been bought across every job: the old Materials tab, now
          with the supplies it is bought from. Owner only -- it reads the jobs,
          which crew cannot. -->
@@ -883,6 +923,7 @@
         <div class="dash-totals" id="matDashTotals"></div>
         <div id="matDashCategoriesWrap"></div>
       </div>
+    </div>
     </div>
   </div>
 
@@ -1460,6 +1501,7 @@
 <script src="./paysheet.js"></script>
 <script src="./money.js"></script>
 <script src="./jobview.js"></script>
+<script src="./screenparts.js"></script>
 <script src="./notify.js"></script>
 <script src="./crewnotes.js"></script>
 <script src="./crewjobs.js"></script>

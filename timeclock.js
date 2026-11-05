@@ -1706,7 +1706,7 @@
   // section goes back to its place after On the Clock Now. Moved, not
   // redrawn, so nothing inside it is lost.
   function placeApprovals(sec, first) {
-    const panel = el('panel-clock');
+    const panel = el('clockMain');
     if (!sec || !panel || sec.parentNode !== panel) return;
     if (first) {
       if (panel.firstElementChild !== sec) panel.insertBefore(sec, panel.firstElementChild);

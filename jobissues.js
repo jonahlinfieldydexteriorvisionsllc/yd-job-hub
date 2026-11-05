@@ -550,20 +550,9 @@
   let listShowAll = false;
   window.jiListAll = function () { listShowAll = !listShowAll; drawList(); };
   function drawList() {
-    let sec = el('crewIssuesSection');
+    const sec = el('crewIssuesSection');
+    if (!sec) return;
     const on = signedIn() && isOwner();
-    if (!sec) {
-      if (!on) return;
-      const after = el('evaListSection') || el('dashTableWrap');
-      const at = after && (after.id === 'evaListSection' ? after : after.closest('.section'));
-      if (!at) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'crewIssuesSection';
-      sec.innerHTML = '<div class="section-head"><span class="section-title">⚠️ Issues from the crew — across jobs</span>' +
-        '<span class="section-badge" id="crewIssuesBadge"></span></div><div class="section-body" id="crewIssuesBody"></div>';
-      at.insertAdjacentElement('afterend', sec);
-    }
     sec.hidden = !on;
     if (!on) return;
     const body = el('crewIssuesBody'), badge = el('crewIssuesBadge');

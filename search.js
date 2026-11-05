@@ -189,6 +189,7 @@
   // its place in that order, checked against its name.
   function openSnow(id) {
     switchTab('snow');
+    if (window.YDParts) YDParts.show('snow', 'route');
     const all = (window.YDSnow && YDSnow.accounts && YDSnow.accounts()) || {};
     const a = all[id];
     if (!a) return;
@@ -737,7 +738,7 @@
       hint: 'What the crew lead noted on jobs — too much or too little material, equipment you didn’t have — and what keeps coming up',
       words: 'job issues problems over under short leftover too much rock soil dump trailer waste crew lead',
       show: () => signedIn() && owner(),
-      go: () => { switchTab('dashboard'); later(() => reveal(el('crewIssuesSection')), 120); } },
+      go: () => { switchTab('dashboard'); YDParts.show('dashboard', 'issues'); later(() => reveal(el('crewIssuesSection')), 120); } },
     { group: 'Jobs & lists', icon: '🏷️', name: 'Services list',
       hint: 'The services picked on jobs, bids and contacts — add your own or take them off',
       words: 'service types tags list',
