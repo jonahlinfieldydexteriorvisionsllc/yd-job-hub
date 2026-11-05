@@ -53,7 +53,7 @@
       parts: [
         { id: 'jobs', icon: '📋', name: 'Jobs', words: () => said('dashCount') || 'Every job' },
         { id: 'eva', icon: '⚖️', name: 'Estimate vs actual',
-          words: () => (said('dblBadge') ? said('dblBadge') + ' counted twice' : said('evaListBadge') || 'Job by job') },
+          words: () => (said('dblBadge') ? said('dblBadge') + ' costs to check' : said('evaListBadge') || 'Job by job') },
         { id: 'time', icon: '⏱', name: 'How long', words: () => 'From the crew' },
         { id: 'issues', icon: '⚠️', name: 'Issues', words: () => said('crewIssuesBadge') || 'None open' },
       ],
