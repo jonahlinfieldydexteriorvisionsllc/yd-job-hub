@@ -9,16 +9,23 @@
 //            cents, day (of the month), every 'month'|'year', month (1-12,
 //            a yearly one), area 'business'|'home', how, note, off, order } }
 //   paid:  { 'YYYY-MM': { id: { at, by, cents, receiptId, how 'hand'|'receipt' } } }
-// Paid by hand with a tap, or by itself when a receipt from that store comes
-// in that month for about the bill's amount (Receipts, receipts.js) -- most
-// loans and the mortgage pay from the bank and send no receipt, so the tap is
-// the usual way. Nothing here moves money or touches QuickBooks.
+// Jonah, 4 Nov 2026: "i dont wanna mark my bills paid manually ... just pull
+// the receipts from my email to match them." So a bill ticks itself when a
+// receipt from that store comes in around its due day (fromReceipts). A bill
+// that takes its own money, on a card or by autopay, and sends no email at all
+// has nothing to match and nothing for him to do: it counts as gone through on
+// its day and never asks (pays itself). What he pays himself still reminds him.
+// A tap stays for the odd one. Nothing here moves money or touches QuickBooks.
 (function () {
   'use strict';
 
   const DOC = 'monthlyBills';
   const DUE_SOON_DAYS = 3;
   const NEAR = 0.15;                // a receipt within 15% of the bill's amount is its payment
+  const WINDOW_DAYS = 12;           // how far from its due day a payment can land: the 31st for a bill due the 2nd
+  const LOW_SHARE = 0.5;            // the only bill from a store can vary (electric), but not down to a different charge
+  const TRAIL_DAYS = 120;           // a store with a receipt this recent sends them: silence from it means something
+  const LATE_GRACE_DAYS = 5;        // its receipt can take this long to land before Home says so
   const el = id => document.getElementById(id);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const safe = v => String(v == null ? '' : v).replace(/[^A-Za-z0-9_-]/g, '');
@@ -70,8 +77,30 @@
   const todayYmd = () => { const d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
   const daysTo = day => Math.round((new Date(day + 'T12:00:00') - new Date(todayYmd() + 'T12:00:00')) / 864e5);
 
-  // Receipts that pay a bill this month: the store's name has the bill's
-  // words, its date is in the month, its amount near the bill's.
+  const storeWords = b => words(b.match || b.name);
+  const fromStore = (r, want) => want.length > 0 && want.every(w => words(r.vendor).indexOf(w) !== -1);
+  const gap = (a, b) => Math.abs(Math.round((new Date(a + 'T12:00:00') - new Date(b + 'T12:00:00')) / 864e5));
+  const allBills = () => { const keep = area; area = ''; const out = Object.values((data && data.bills) || {}).filter(b => !b.off); area = keep; return out; };
+  // Takes its own money: nothing for him to do but know it went.
+  const paysItself = b => /auto|card/i.test(String(b.how || ''));
+  // Whether the store has sent a receipt lately. Most of his cards and bank
+  // payments send none to this mailbox at all.
+  function hasTrail(b) {
+    if (!window.YDReceipts || !YDReceipts.all) return false;
+    const want = storeWords(b), day = todayYmd();
+    return Object.values(YDReceipts.all() || {}).some(r => r && /^\d{4}-\d{2}-\d{2}/.test(r.date || '') &&
+      gap(String(r.date).slice(0, 10), day) <= TRAIL_DAYS && fromStore(r, want));
+  }
+  // Gone through on its day with nothing to say so: past due, takes its own
+  // money, and the store sends no receipts to wait for.
+  const wentThrough = (b, ym) => !paidOf(ym, b.id) && paysItself(b) && daysTo(b.due) < 0 && !hasTrail(b);
+
+  // Receipts that pay a bill: the store's name has the bill's words, the
+  // date is near its due day (the 31st pays a bill due the 2nd, in the month
+  // before), and the amount is near the bill's, the nearest first. The only
+  // bill from a store may run high or low, as an electric bill does, but not
+  // to half: two bills from one store are told apart by the amount. Each
+  // receipt pays one bill.
   function fromReceipts(ym) {
     if (!window.YDReceipts || !YDReceipts.all || !(YDReceipts.loaded && YDReceipts.loaded())) return {};
     const out = {};
@@ -80,34 +109,52 @@
     area = '';                      // every bill, whatever the screen shows
     const list = billsIn(ym);
     area = keep;
+    const used = {};
+    Object.values((data && data.paid && data.paid[ym]) || {}).forEach(p => { if (p && p.receiptId) used[p.receiptId] = true; });
+    const others = allBills();
     list.forEach(b => {
-      const want = words(b.match || b.name);
+      const want = storeWords(b);
       const mark = markOf(ym, b.id);
       if (!want.length || (mark && !mark.off)) return;
-      const hit = all.find(([id, r]) => r && String(r.date || '').slice(0, 7) === ym && NOT_PAID.indexOf(stageOf(r)) === -1 &&
-        !(mark && mark.off && mark.receiptId === id) &&
-        want.every(w => words(r.vendor).indexOf(w) !== -1) &&
-        (!b.cents || Math.abs(Math.abs(Number(r.totalCents) || 0) - b.cents) <= b.cents * NEAR));
-      if (hit) out[b.id] = { at: new Date().toISOString(), by: 'Job Hub', cents: Math.abs(Number(hit[1].totalCents) || 0),
-                              receiptId: hit[0], how: 'receipt' };
+      const alone = others.filter(x => storeWords(x).join(' ') === want.join(' ')).length === 1;
+      const size = r => Math.abs(Number(r.totalCents) || 0);
+      const fits = c => !b.cents || Math.abs(c - b.cents) <= b.cents * NEAR || (alone && c >= b.cents * LOW_SHARE);
+      const hit = all.filter(([id, r]) => r && /^\d{4}-\d{2}-\d{2}/.test(r.date || '') && !used[id] &&
+          gap(String(r.date).slice(0, 10), b.due) <= WINDOW_DAYS && NOT_PAID.indexOf(stageOf(r)) === -1 &&
+          !(mark && mark.off && mark.receiptId === id) && fromStore(r, want) && fits(size(r)))
+        .sort((x, y) => Math.abs(size(x[1]) - (b.cents || 0)) - Math.abs(size(y[1]) - (b.cents || 0)))[0];
+      if (hit) {
+        used[hit[0]] = true;
+        out[b.id] = { at: new Date().toISOString(), by: 'Job Hub', cents: size(hit[1]), receiptId: hit[0], how: 'receipt' };
+      }
     });
     return out;
   }
+  // This month, and last month's: what is paid on the 28th can be filed days
+  // after the 1st.
   function tickFromReceipts() {
     if (!owner() || !data) return;
-    const ym = ymOf(new Date());
-    const found = fromReceipts(ym);
-    if (!Object.keys(found).length) return;
-    data.paid = Object.assign({}, data.paid, { [ym]: Object.assign({}, (data.paid || {})[ym], found) });
-    save({ paid: { [ym]: found } }, 'ticking bills paid');
+    const now = new Date();
+    let any = false;
+    [ymOf(now), ymOf(new Date(now.getFullYear(), now.getMonth() - 1, 1))].forEach(ym => {
+      const found = fromReceipts(ym);
+      if (!Object.keys(found).length) return;
+      any = true;
+      data.paid = Object.assign({}, data.paid, { [ym]: Object.assign({}, (data.paid || {})[ym], found) });
+      save({ paid: { [ym]: found } }, 'ticking bills paid');
+    });
+    if (any) document.dispatchEvent(new CustomEvent('yd-bills'));
   }
 
-  // For Home: the bills due within DUE_SOON_DAYS or late, this month, not paid.
+  // For Home: what wants him. A bill he pays himself from DUE_SOON_DAYS before
+  // its day. One that takes its own money only if its store sends receipts and
+  // none has come a few days past the day: something may be wrong.
   function due() {
     if (!owner() || !data) return [];
     const ym = ymOf(new Date()), keep = area;
     area = '';
-    const list = billsIn(ym).filter(b => !paidOf(ym, b.id) && daysTo(b.due) <= DUE_SOON_DAYS);
+    const list = billsIn(ym).filter(b => !paidOf(ym, b.id) &&
+      (paysItself(b) ? daysTo(b.due) < -LATE_GRACE_DAYS && hasTrail(b) : daysTo(b.due) <= DUE_SOON_DAYS));
     area = keep;
     return list;
   }
@@ -142,16 +189,23 @@
     if (!body || !data) return;
     const list = billsIn(month), now = ymOf(new Date());
     const total = list.reduce((t, b) => t + (b.cents || 0), 0);
-    const paid = list.filter(b => paidOf(month, b.id));
+    const paid = list.filter(b => paidOf(month, b.id) || wentThrough(b, month));
     const paidCents = paid.reduce((t, b) => t + ((paidOf(month, b.id) || {}).cents || b.cents || 0), 0);
     const chip = (v, label) => '<button type="button" class="btn btn-sm' + (area === v ? ' btn-filled' : '') + '" onclick="billsArea(\'' + v + '\')">' + label + '</button>';
     const rows = list.map(b => {
       const p = paidOf(month, b.id), id = safe(b.id), d = daysTo(b.due);
+      const self = paysItself(b);
+      // A bill that pays itself is never a job for him: the tap stays for the
+      // odd one, as a link.
+      const tap = self ? '<button type="button" class="link-btn" onclick="billsPaid(\'' + id + '\', true)">Mark it paid</button>'
+        : '<button type="button" class="btn btn-sm btn-filled" onclick="billsPaid(\'' + id + '\', true)">✓ Paid</button>';
       const state = p
         ? '<span class="inv-chip">✓ Paid ' + esc(paidDay(p.at)) + (p.how === 'receipt' ? ' · its receipt' : '') + '</span> ' +
           '<button type="button" class="link-btn" onclick="billsPaid(\'' + id + '\', false)">Undo</button>'
+        : wentThrough(b, month) ? '<span class="inv-chip">✓ Went through ' + esc(dayWords(b.due)) + ' · pays itself</span> ' + tap
+        : self ? '<span class="inv-chip">' + (d < 0 ? 'No receipt yet — was due ' : 'Pays itself ') + esc(dayWords(b.due)) + '</span> ' + tap
         : '<span class="inv-chip' + (month === now && d < 0 ? ' due' : '') + '">' + (month === now && d < 0 ? 'Late — was due ' : 'Due ') +
-          esc(dayWords(b.due)) + '</span> <button type="button" class="btn btn-sm btn-filled" onclick="billsPaid(\'' + id + '\', true)">✓ Paid</button>';
+          esc(dayWords(b.due)) + '</span> ' + tap;
       return '<div class="ji-row' + (p ? ' handled' : '') + '"><div class="ji-top"><b>' + esc(b.name) + '</b>' +
         '<span class="muted">' + (b.cents ? money(b.cents) : 'amount?') + (b.every === 'year' ? ' · yearly' : '') +
           (b.how ? ' · ' + esc(b.how) : '') + ' · ' + (b.area === 'home' ? '🏠 Home' : '🛠 Business') + '</span></div>' +
@@ -163,12 +217,12 @@
       '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="billsMonth(-1)">◀</button> <b>' + esc(monthWords(month)) + '</b> ' +
         '<button type="button" class="btn btn-sm" onclick="billsMonth(1)">▶</button></div>' +
       '<div class="field-actions">' + chip('', 'All') + chip('business', '🛠 Business') + chip('home', '🏠 Home') + '</div>' +
-      '<p><b>' + money(paidCents) + '</b> of ' + money(total) + ' paid · ' + (list.length - paid.length) + ' of ' + list.length + ' still to pay</p>' +
+      '<p><b>' + money(paidCents) + '</b> of ' + money(total) + ' gone · ' + (list.length - paid.length) + ' of ' + list.length + ' still to come</p>' +
       (rows || '<p class="empty-msg">No bills here yet.</p>') +
       (editing === 'new' ? formHtml(Object.assign({ id: 'new' }, draft))
         : '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="billsEdit(\'new\')">+ Add a bill</button></div>') +
-      '<p class="muted">A bill ticks itself paid when a receipt from that store comes in that month for about its amount (Receipts). ' +
-        'Loans and the mortgage that pay from the bank send none — tap ✓ Paid.</p>';
+      '<p class="muted">A bill ticks itself when a receipt from that store comes in around its due day. One on a card or autopay ' +
+        'that sends no email counts as gone through on its day and never asks. How it is paid says which.</p>';
   }
   function formHtml(b) {
     const f = (id, label, v, type, ph) => '<label class="field"><span class="label">' + label + '</span><input id="bf_' + id + '" type="' + (type || 'text') +
@@ -264,5 +318,5 @@
   });
   document.addEventListener('yd-receipts', () => { if (data) tickFromReceipts(); });
 
-  window.YDMonthlyBills = { due: due, open: () => window.openMonthlyBills() };
+  window.YDMonthlyBills = { due: due, open: () => window.openMonthlyBills(), fromReceipts: fromReceipts };
 })();

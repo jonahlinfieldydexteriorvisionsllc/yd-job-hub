@@ -1368,9 +1368,50 @@ def _save_all(db, m, got, jobs, extra=None):
         rid, what = _save(db, m, g, jobs, extra=extra, to_pay=_to_pay(db, g, m))
         personal = what not in (TO_PAY, NOT_RECEIPT) and _file_personal(db, rid, g, m)
         if what not in (TO_PAY, NOT_RECEIPT) and not personal:
-            _file_place(db, rid)
+            if not _file_place(db, rid) and what == "new" and not (extra or {}).get("pulled"):
+                _file_by_address(db, rid, jobs)
         out.append((rid, what, bool(personal)))
     return out
+
+
+# Jonah (4 Nov 2026): "delivery receipts with job address can be auto linked to
+# that job and dont need my click." A delivery to a job's own address says which
+# job it is for: it goes on the job the way a photo sent in from the job does
+# (auto 'ready': the owner's device adds it, Job Hub's only way on to a job, and
+# ⋯ -> Undo takes it back). Only a job being worked: a finished one at that
+# address means new work not in Job Hub yet, so it stays a suggestion. Only
+# materials and plants read clean: lines that make the total, and no twin.
+BY_ADDRESS = "the delivery address matches"
+ADDRESS_KINDS = ("materials", "plants")
+
+
+def _file_by_address(db, rid, jobs):
+    """A new receipt delivered to a job in hand, sent to that job (above).
+    Returns True when it was. Never raises: a suggestion stands either way."""
+    try:
+        ref = db.collection("receipts").document(rid)
+        r = ref.get().to_dict() or {}
+        sug = r.get("suggest") or {}
+        job = jobs.get(sug.get("jobId"))
+        if sug.get("why") != BY_ADDRESS or not job or job.get("removeWhy") or r.get("sentFor") or r.get("splits") \
+                or r.get("whose") == "personal" or r.get("kind") not in ADDRESS_KINDS \
+                or stages.receipt_status(r) != "tosort" or str(job.get("jobStatus") or "") not in ("booked", "inprogress"):
+            return False
+        lines = r.get("lines") or []
+        tax, total = int(r.get("taxCents") or 0), int(r.get("totalCents") or 0)
+        if total <= 0 or not (r.get("vendor") or "").strip() or any(ln.get("name") == GAP_LINE for ln in lines) \
+                or _maybe_twin(db, rid, r.get("vendor"), total, str(r.get("date") or "")):
+            return False
+        now = dg._now().isoformat()
+        name = (job.get("customerName") or "").strip()[:120] or "Untitled job"
+        ref.set({"sentFor": {"to": "job", "jobId": sug["jobId"], "jobName": name, "equipmentId": "", "name": "",
+                             "how": "address", "from": "address", "by": "", "byName": ""},
+                 "auto": {"state": "ready", "why": "", "at": now}}, merge=True)
+        print("receipts: %s goes on job %s by its delivery address" % (rid, sug["jobId"]))
+        return True
+    except Exception as err:    # noqa: BLE001
+        print("receipts: %s not sent to its job by address: %s" % (rid, err))
+        return False
 
 
 def _note_saved(db, m, saves, report=None, receipt=None, **extra):

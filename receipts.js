@@ -628,7 +628,7 @@
     const where = f.to === 'job' ? (f.jobName ? '<b>' + esc(f.jobName) + '</b>' : 'a job')
       : '<b>' + esc(f.name || DEST_NAME[f.to] || '') + '</b>';
     // Your note said where (functions/receiptnotes.py), not a photo.
-    const who = f.from === 'note' ? 'Your note says it goes on ' : f.byName ? esc(f.byName) + ' sent it in for ' : 'Sent in for ';
+    const who = f.from === 'note' ? 'Your note says it goes on ' : f.from === 'address' ? 'Delivered to ' : f.byName ? esc(f.byName) + ' sent it in for ' : 'Sent in for ';
     // Claimed by a device that then went quiet (closed mid-way): a person's.
     const stuck = a.state === 'adding' && Date.now() - new Date(a.at || 0).getTime() > STUCK_MS;
     if (a.state === 'ready' || (a.state === 'adding' && !stuck)) {
