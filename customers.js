@@ -3215,8 +3215,10 @@
   // A customer's name as a job's boxes hold it. Picking whose a bid is says
   // who it is for, so the name follows (Jonah, 4 Nov 2026: "whose bid is this
   // shows up and lets me click a client but then doesnt auto fill their
-  // name"); what else was typed stays, as fillFrom keeps it.
-  function namesOf(c) {
+  // name"); what else was typed stays, as fillFrom keeps it. Not namesOf: that
+  // is the list of name keys the duplicates work from, and a second function of
+  // that name replaced it for the whole file.
+  function boxNames(c) {
     const out = s(c.firstName) || s(c.lastName) || s(c.business)
       ? { first: s(c.firstName), last: s(c.lastName), business: s(c.business) }
       : typeof splitName === 'function' ? splitName(s(c.name)) : { first: '', last: '', business: s(c.name) };
@@ -3224,7 +3226,7 @@
     return out;
   }
   const nameFields = c => {
-    const n = namesOf(c);
+    const n = boxNames(c);
     return { customerName: n.name, firstName: n.first, lastName: n.last, business: n.business };
   };
   // The name a job takes from whoever it is tied to, however it was tied. A
@@ -3372,7 +3374,7 @@
   const CARD_BOX = { address: 'jeStreet', city: 'jeCity', state: 'jeState', zip: 'jeZip', phone: 'jePhone', email: 'jeEmail' };
   function tieCard(jobId, cid, by) {
     const c = customers[cid];
-    const n = c ? namesOf(c) : {};
+    const n = c ? boxNames(c) : {};
     if (!c || !window.YDSync || !YDSync.patchJob(jobId, { customerId: cid, customerBy: by, customerName: n.name,
       firstName: n.first, lastName: n.last, business: n.business })) return;
     if (jobId === openJobId()) tieForm(cid, by);
