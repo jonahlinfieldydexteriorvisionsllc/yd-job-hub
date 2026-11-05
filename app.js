@@ -1059,6 +1059,8 @@ function switchTab(name) {
   if (changed) window.scrollTo(0, 0);
   // Which part of a long screen shows (screenparts.js).
   if (window.YDParts) YDParts.arrived(name, changed);
+  // Each visit to Orders to place starts folded.
+  if (name === 'supplies' && changed) ordersOpen = {};
   if (name === 'dashboard') renderDashboard();
   // Whichever part of the job is showing catches up on arrival (jobview.js).
   if (name === 'job' && window.YDJobView) YDJobView.arrived();
@@ -3357,6 +3359,27 @@ function ordersSupplierSort(cat) {
   const vname = v => v ? ((cat.vendors[v] || {}).name || 'Supplier') : '';
   return (a, b) => (a ? 0 : 1) - (b ? 0 : 1) || vname(a).localeCompare(vname(b));
 }
+// What has nothing left to do folds to one line, a tap away (Jonah, 5 Nov 2026:
+// "Yes, fold them": finished lines were 61 of the 98 rows, 21 phone screens). His
+// rule still stands (28 Oct: "after they get checked off i dont want them to
+// dissappear"): a job's lines leave only when it is finished and every one is
+// checked; these are still there, under a line saying how many. So a line just
+// ticked never folds away under the finger: ordersKeepOpen holds its supplier
+// and job open until Supplies is next opened. Folded means nothing to do, so a
+// delivery still to price keeps its supplier open.
+// Keys: 's|job|supplier' one job's lines from a supplier, 'j|job' a whole job,
+// 'v|supplier' a whole supplier.
+let ordersOpen = {};
+function ordersFolded(d) { ordersOpen[d.dataset.k] = d.open; }
+function ordersKeepOpen(jobKey, line) {
+  const cat = window.YDSupplies && window.YDSupplies.catalog ? window.YDSupplies.catalog() : { items: {}, prices: {}, vendors: {} };
+  const v = ordId(orderVendor(line, cat));
+  ['s|' + jobKey + '|' + v, 'j|' + jobKey, 'v|' + v].forEach(k => { ordersOpen[k] = true; });
+}
+function ordersFold(k, cls, head, inner) {
+  return '<details class="ord-fold" data-k="' + esc(k) + '" ontoggle="ordersFolded(this)"' + (ordersOpen[k] ? ' open' : '') + '>' +
+    '<summary class="' + cls + '">' + head + '</summary>' + inner + '</details>';
+}
 function renderOrdersOverview() {
   const wrap = document.getElementById('ordersWrap');
   const sec = document.getElementById('ordersSection');
@@ -3487,31 +3510,37 @@ function renderOrdersOverview() {
   // BY SUPPLIER: one card per supplier, each job's lines under its name.
   const supplierCards = () => Object.keys(groups).sort(bySupplier).map(v => {
     const blocks = groups[v];
-    let sum = 0, unpriced = 0, lines = 0, checked = 0;
-    const body = blocks.map(b => {
+    let sum = 0, unpriced = 0, lines = 0, checked = 0, held = false;
+    const parts = blocks.map(b => {
       const j = b.job;
+      let left = 0;
       const rows = b.lines.map(it => {
-        if (it._settled) checked++; else lines++;
+        if (it._settled) checked++; else { lines++; left++; }
         const r = rowOf(it, j, v);
         if (r.c) { if (r.c.cents !== null) sum += r.c.cents; else unpriced++; }
         return r.html;
       }).join('');
       const dv = (dels[j.id] || {})[v];
-      if (dv) { sum += dv.cents; if (dv.problems.length) grandDelUnpriced++; }
-      return jobHead(j) + storeList(j, v) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
-    }).join('');
+      if (dv) { sum += dv.cents; if (dv.problems.length) { grandDelUnpriced++; held = true; } }
+      return { j: j, left: left, hold: !!(dv && dv.problems.length), inner: storeList(j, v) + rows + orderDeliveryRow(dv, v, vname(v), j.id) };
+    });
     grand += sum; grandUnpriced += unpriced;
     const lead = v ? (cat.vendors[v] || {}).leadTime : '';
     const vEsc = ordId(v);
-    return '<div class="ord-supplier">' +
-      '<div class="order-vendor"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
-        '<span class="muted">' + n(lines, 'line') + ' to order' + (checked ? ' · ' + checked + ' checked' : '') + ' · ' + n(blocks.length, 'job') +
+    const whole = !lines && !held;
+    const body = parts.map(p => {
+      if (whole || p.left || p.hold) return jobHead(p.j) + p.inner;
+      return ordersFold('s|' + ordId(p.j.id) + '|' + vEsc, 'ord-fold-job', jobHead(p.j, '', ' <span class="muted ord-count">· ✓ all checked</span>'), p.inner);
+    }).join('');
+    const head = '<b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
+        '<span class="muted">' + (whole ? '✓ ' + n(checked, 'line') + ' checked' : n(lines, 'line') + ' to order' + (checked ? ' · ' + checked + ' checked' : '')) + ' · ' + n(blocks.length, 'job') +
           (lead ? ' · takes ' + esc(lead) : '') + (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
         (v && lines ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy this supplier’s order</button>' +
           ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\')">✉️ Email the order</button>' : '') +
           (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
-          : v || !lines ? '' : '<span class="muted">pick each one’s Supplies item on its job</span>') +
-      '</div>' + body + '</div>';
+          : v || !lines ? '' : '<span class="muted">pick each one’s Supplies item on its job</span>');
+    return '<div class="ord-supplier">' + (whole ? ordersFold('v|' + vEsc, 'order-vendor', head, body)
+      : '<div class="order-vendor">' + head + '</div>' + body) + '</div>';
   }).join('');
 
   // BY JOB: one card per job, its lines under each supplier -- with that
@@ -3523,6 +3552,8 @@ function renderOrdersOverview() {
     j.items.forEach(it => { const v = orderVendor(it, cat); (mine[v] = mine[v] || []).push(it); });
     const vs = Object.keys(mine).sort(bySupplier);
     let jobSum = 0, jobUnpriced = 0, jobDel = 0, jobDelUnpriced = 0;
+    const hold = v => { const dv = (dels[j.id] || {})[v]; return !!(dv && dv.problems.length); };
+    const wholeJob = !j.left.length && !vs.some(hold);
     const body = vs.map(v => {
       let sum = 0;
       const rows = mine[v].map(it => {
@@ -3537,15 +3568,17 @@ function renderOrdersOverview() {
       const vEsc = ordId(v), jEsc = ordId(j.id);
       const onJobsHere = (groups[v] || []).filter(b => leftOf(b.lines)).length;
       const toOrder = leftOf(mine[v]), checked = mine[v].length - toOrder;
-      return '<div class="order-vendor ord-sub"><b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
-          '<span class="muted">' + (toOrder ? n(toOrder, 'line') + ' to order' : 'all checked') + (toOrder && checked ? ' · ' + checked + ' checked' : '') +
+      const folds = !toOrder && !wholeJob && !hold(v);
+      const head = '<b>' + esc(v ? vname(v) : 'No supplier yet') + '</b>' +
+          '<span class="muted">' + (toOrder ? n(toOrder, 'line') + ' to order' : folds ? '✓ ' + n(checked, 'line') + ' checked' : 'all checked') + (toOrder && checked ? ' · ' + checked + ' checked' : '') +
             (lead && toOrder ? ' · takes ' + esc(lead) : '') + (prices && sum ? ' · about ' + fmtMoney(sum / 100) : '') + '</span>' +
           (!toOrder ? '' : v ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">📋 Copy</button>' +
             ((cat.vendors[v] || {}).email ? '<button class="link-btn" onclick="emailOrdersFor(\'' + vEsc + '\', \'' + jEsc + '\')">✉️ Email</button>' : '') +
             (onJobsHere > 1 ? '<button class="link-btn" onclick="copyOrdersFor(\'' + vEsc + '\')">📋 Copy all ' + onJobsHere + ' jobs’ order</button>' : '') +
             (siteOf(v) ? '<a class="link-btn" href="' + esc(siteOf(v)) + '" target="_blank" rel="noopener">🌐 Their website</a>' : '')
-            : '<span class="muted">pick each one’s Supplies item on the job</span>') +
-        '</div>' + storeList(j, v) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
+            : '<span class="muted">pick each one’s Supplies item on the job</span>');
+      const inner = storeList(j, v) + rows + orderDeliveryRow(dv, v, vname(v), j.id);
+      return folds ? ordersFold('s|' + jEsc + '|' + vEsc, 'order-vendor ord-sub', head, inner) : '<div class="order-vendor ord-sub">' + head + '</div>' + inner;
     }).join('');
     grand += jobSum; grandUnpriced += jobUnpriced;
     const named = vs.filter(Boolean).length;
@@ -3558,7 +3591,8 @@ function renderOrdersOverview() {
       (jobUnpriced ? ' · ' + n(jobUnpriced, 'line') + ' without a price' : '') +
       (jobDelUnpriced ? ' · <span class="warn-text">' + jobDelUnpriced + (jobDelUnpriced === 1 ? ' delivery' : ' deliveries') + ' not priced yet</span>' : '') + '</div>' : '';
     grandDelUnpriced += jobDelUnpriced;
-    return '<div class="ord-supplier ord-jobcard">' + jobHead(j, 'ord-job-head', counts) + body + total + '</div>';
+    const top = jobHead(j, 'ord-job-head', counts);
+    return '<div class="ord-supplier ord-jobcard">' + (wholeJob ? ordersFold('j|' + ordId(j.id), 'ord-fold-job', top, body + total) : top + body + total) + '</div>';
   }).join('');
 
   // The cards side by side, as many as the screen holds (styles.css
@@ -3580,9 +3614,11 @@ function ordersTick(jobId, itemId, on) {
   on = on !== false;
   if (currentJobId && ordId(currentJobId) === jobId) {
     const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+    if (it) ordersKeepOpen(jobId, it);
     if (it && !!it.ordered !== on) toggleOrderItem(it.id);
   } else {
     ordersPatchLine(jobId, itemId, o => {
+      ordersKeepOpen(jobId, o);
       const n = Object.assign({}, o, { ordered: on });
       if (on) delete n.notBought;
       return n;
@@ -3676,9 +3712,11 @@ function ordersNotBought(jobId, itemId, on) {
   on = on !== false;
   if (currentJobId && ordId(currentJobId) === jobId) {
     const it = orderItems.find((m, i) => ordLineKey(m, i) === itemId);
+    if (it) ordersKeepOpen(jobId, it);
     if (it) orderNotBought(it.id, on);
   } else {
     ordersPatchLine(jobId, itemId, o => {
+      ordersKeepOpen(jobId, o);
       const n = Object.assign({}, o);
       if (on) { n.notBought = notBoughtMark(); n.ordered = false; } else delete n.notBought;
       return n;

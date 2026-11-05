@@ -2843,6 +2843,16 @@
   }
   .ord-grid .ord-job.ord-job-head { padding:0 10px 6px; border-bottom:1px solid var(--border); font-size:14px; }
   .ord-count { font-size:12px; }
+  /* Orders to place: what has nothing left to do, folded to one line. */
+  .ord-fold > summary { cursor:pointer; list-style:none; min-height:44px; align-items:center; }
+  .ord-fold > summary::-webkit-details-marker { display:none; }
+  .ord-fold > summary::after { content:'▸'; flex:none; margin-left:auto; padding-left:10px; font-size:16px; color:var(--muted); }
+  .ord-fold[open] > summary::after { content:'▾'; }
+  .ord-fold > summary.ord-fold-job { display:flex; padding-right:10px; }
+  .ord-fold > summary.ord-fold-job .ord-job { flex:1; min-width:0; }
+  .ord-grid .ord-fold > summary.ord-fold-job .ord-job-head { padding-bottom:0; border-bottom:0; }
+  .ord-fold:not([open]) > summary.order-vendor { border-bottom:0; padding-bottom:0; }
+  .ord-grid .ord-fold:not([open]) > summary.ord-sub { padding-bottom:5px; }
   .ord-grid .order-vendor.ord-sub { margin:8px 0 2px; padding:5px 10px; background:var(--surface-2); font-size:13px; }
   .ord-job-total { margin:6px 10px 4px; padding-top:6px; border-top:1px dashed var(--border); font-size:12.5px; color:var(--muted); }
   .ord-job-total b { color:var(--text); }
