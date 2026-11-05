@@ -4375,8 +4375,6 @@
         Object.values(cards[bid]).forEach(k => {
           const type = cardType(b, k);
           if (k.due || !YDRemind.isPickup(type)) return;
-          // A store's card with nobody on it waits on its board (remind.js).
-          if (YDRemind.unclaimedPickup(k, b)) return;
           const done = colOf(b, k) === last;
           if (done && !finishedToday(k)) return;
           const made = k.createdAt ? new Date(k.createdAt).getTime() : NaN;

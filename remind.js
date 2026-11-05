@@ -621,11 +621,12 @@
   }
   // A store's "ready for pickup" email makes a card on Pickups with nobody on
   // it (functions/receipts.py pickup_card). Jonah (5 Nov 2026): "Don't have
-  // Menards pickups in my to do's unless I click myself on them". So that
-  // card is nobody's until someone is on it: it waits on the Pickups board,
-  // off every day list, count and reminder (functions/reminders.py
-  // _unclaimed_pickup -- keep the same). A card he makes there himself is his
-  // as ever, and a store's card tagged for the crew is the crew's.
+  // Menards pickups in my to do's unless I click myself on them", and of the
+  // crew: "It should stay on to dos for the crew". So until someone is on it
+  // that card is every crew member's, on their day, count and reminders, and
+  // the owner sees it among the crew's, not his own (functions/reminders.py
+  // _unclaimed_pickup -- keep the same). Someone on it: theirs alone. A card
+  // he makes there himself is his as ever.
   const STORE_CARD_MAKER = 'Job Hub (email)';
   function unclaimedPickup(card, board) {
     if (!card || !board || board.id !== 'pickups' || card.createdBy !== STORE_CARD_MAKER) return false;
@@ -635,7 +636,7 @@
   // A card keeps the NAME of whoever made it; makerOf turns that into them.
   function cardIsMine(card, board, who) {
     if (!card || !who) return false;
-    if (unclaimedPickup(card, board)) return false;
+    if (unclaimedPickup(card, board)) return !!who.crew;
     const on = (card.assignees || []).map(a => a && a.uid).filter(Boolean);
     const maker = who.makerOf ? who.makerOf(card.createdBy) : '';
     return isMine(on, typeOf(card, { board: board }), maker, who);

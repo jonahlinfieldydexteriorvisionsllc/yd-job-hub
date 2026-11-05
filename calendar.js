@@ -419,7 +419,8 @@
           time: time, task: YDRemind.isTask(type, !!time, { card: true }),
           auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
           title: ic + ' ' + (x.card.title || 'Card'), note: x.board.name,
-          crew: x.card.assignees || [], place: YDRemind.placeOf(x.card, type) });
+          crew: x.card.assignees || [], place: YDRemind.placeOf(x.card, type),
+          crewPickup: YDRemind.unclaimedPickup(x.card, x.board) });
       });
       // A pickup with no date is ready now: today's, every day until it is
       // picked up (boards.js pickupsWaiting).
@@ -431,7 +432,8 @@
             color: YDRemind.color(x.type), ink: YDRemind.ink(x.type), type: x.type, time: '', task: true, undated: true,
             auto: 'card', id: x.card.id, boardId: x.board.id, done: x.done, doneAt: x.card.doneAt || '',
             title: YDRemind.icon(x.type) + ' ' + (x.card.title || 'Card'), note: x.board.name + ' · ready to pick up',
-            crew: x.card.assignees || [], place: YDRemind.placeOf(x.card, x.type) });
+            crew: x.card.assignees || [], place: YDRemind.placeOf(x.card, x.type),
+            crewPickup: YDRemind.unclaimedPickup(x.card, x.board) });
         });
       }
     }
@@ -713,7 +715,8 @@
   // there with nobody on it was nobody's on the owner's Home: not his, and
   // not among the crew's either.
   // A day on the Job schedule is the crew's as well: where they are working.
-  const isCrewOcc = o => (o.auto ? !!(YDRemind.typeById(o.type) || {}).crew : !!o.crewTag) ||
+  // So is a store's pickup with nobody on it (remind.js unclaimedPickup).
+  const isCrewOcc = o => (o.auto ? !!(YDRemind.typeById(o.type) || {}).crew || !!o.crewPickup : !!o.crewTag) ||
     (!o.auto && !!cals[o.calId] && (cals[o.calId].kind === 'crew' || cals[o.calId].kind === 'jobs'));
   // Who may tick a thing off. Jonah (15 Oct 2026): "Anyone a calendar is
   // shared with can tick anyone's task. Make this their own and 'anyone can

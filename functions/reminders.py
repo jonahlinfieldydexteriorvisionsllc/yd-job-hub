@@ -955,10 +955,11 @@ def _is_mine(on, kind, maker, u):
     return u.get("role") == "owner"
 
 
-# A store's "ready for pickup" card with nobody on it is nobody's until someone
-# is (Jonah, 5 Nov 2026: "Don't have Menards pickups in my to do's unless I
-# click myself on them"): no list, no reminder. remind.js unclaimedPickup --
-# keep the same.
+# A store's "ready for pickup" card with nobody on it is the crew's until someone
+# is on it (Jonah, 5 Nov 2026: "Don't have Menards pickups in my to do's unless
+# I click myself on them", and "It should stay on to dos for the crew"): every
+# crew member's lists and reminders, not the owner's. remind.js unclaimedPickup
+# -- keep the same.
 STORE_CARD_MAKER = "Job Hub (email)"
 
 
@@ -1146,7 +1147,7 @@ def open_tasks(db, people, first, last, now):
                 t = str(k.get("dueTime") or "")
                 timed = len(t) == 5 and t[2] == ":"
                 kind = _type_of(k, board_id=b.id, board=board)
-                if _unclaimed_pickup(k, b.id, kind) or not _is_task(kind, timed, card=True) or to_come(day, timed and t):
+                if not _is_task(kind, timed, card=True) or to_come(day, timed and t):
                     continue
                 sees = [u for u in people.values() if _sees_board(u, board, k)
                         # A machine's own card: the owner has the machine below.
@@ -1156,7 +1157,8 @@ def open_tasks(db, people, first, last, now):
                             "where": board.get("name") or "a board", "time": t if timed else "", "on": names(on),
                             "recurring": bool(k.get("recurring")), "undated": bool(k.get("_undated")), "machine": False,
                             "place": _place_of(k, kind)},
-                     {a.get("uid") for a in on if isinstance(a, dict)}, kind,
+                     {a.get("uid") for a in on if isinstance(a, dict)},
+                     "crew" if _unclaimed_pickup(k, b.id, kind) else kind,
                      by_name.get(str(k.get("createdBy") or "").strip().lower(), ""))
     except Exception as err:          # noqa: BLE001
         print("tasks: cards not read:", err)
@@ -1309,11 +1311,9 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 except ValueError:
                     continue
                 kind = _type_of(k, board_id=board_id, board=board)
-                if _unclaimed_pickup(k, board_id, kind):
-                    continue
                 on = {a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)}
                 maker = by_name.get(str(k.get("createdBy") or "").strip().lower(), "")
-                who = [u for u in sees if _is_mine(on, kind, maker, u)]
+                who = [u for u in sees if _is_mine(on, "crew" if _unclaimed_pickup(k, board_id, kind) else kind, maker, u)]
                 title = str(k.get("title") or "A card")
                 t = str(k.get("dueTime") or "")
                 if len(t) == 5 and t[2] == ":":
