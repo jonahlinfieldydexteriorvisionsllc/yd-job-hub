@@ -5938,8 +5938,10 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .ord-line > .remove-btn { grid-column:3; align-self:start; }
 /* Side by side where they fit; where they don't, how much drops under, on the right. */
 .ord-line-row { grid-column:1 / -1; display:flex; flex-wrap:wrap; align-items:center; gap:3px 6px; min-width:0; }
-.ord-line-row .ord-way-row { margin-top:0; }
-.ord-line-row > :last-child { margin-left:auto; }
+.ord-line-row .ord-way-row { display:contents; }
+.ord-line-row .ord-way { order:1; }
+.ord-line-row > :last-child { order:2; margin-left:auto; }
+.ord-line-row .ord-way-said { order:3; flex:1 1 100%; font-size:12px; }
 .ord-line-row > .cr-qty { white-space:normal; text-align:right; }
 .ord-line-more { grid-column:2 / -1; min-width:0; font-size:12px; }
 .ord-line-more > div + div { margin-top:2px; }

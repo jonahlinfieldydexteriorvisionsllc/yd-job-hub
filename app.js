@@ -2647,11 +2647,13 @@ function orderWayHtml(w, hand, call, ro) {
   const cur = w.way === 'rides' ? 'delivered' : w.way;
   const b = (k, label) => '<button type="button" class="ord-way-btn' + (cur === k ? ' on' : '') + '" aria-pressed="' + (cur === k) + '"' +
     (ro ? ' disabled' : ' onclick="' + call.replace('%', k) + '"') + '>' + label + '</button>';
-  const byHand = hand ? 'set by hand' : w.wayBy === 'hand' ? 'set by hand on the estimate' : '';
-  return '<span class="ord-way-row"><span class="ord-way" role="group" aria-label="Delivered or picked up"' + (w.wayWhy ? ' title="' + esc(w.wayWhy) + '"' : '') + '>' +
+  // Why it is this way is on the hover: the buttons already say which it is. Set
+  // by hand on this line stays in sight, for the way back.
+  const why = w.wayBy === 'hand' ? 'set by hand on the estimate' : w.wayWhy || '';
+  return '<span class="ord-way-row"><span class="ord-way" role="group" aria-label="Delivered or picked up"' + (why ? ' title="' + esc(why) + '"' : '') + '>' +
       b('delivered', '🚚 Delivered') + b('pickup', '🏪 Pickup') + '</span>' +
-    (byHand ? ' <span class="muted ord-way-why">' + esc(byHand) + '</span>' : '') +
-    (hand && !ro ? ' <button type="button" class="link-btn" onclick="' + call.replace('%', '') + '">↺ back to the rules</button>' : '') + '</span>';
+    (hand ? ' <span class="ord-way-said"><span class="muted ord-way-why">set by hand</span>' +
+      (ro ? '' : ' <button type="button" class="link-btn" onclick="' + call.replace('%', '') + '">↺ back to the rules</button>') + '</span>' : '') + '</span>';
 }
 // One line set by hand on the open job's list (or back to the rules).
 function setOrderWay(it, v) {
