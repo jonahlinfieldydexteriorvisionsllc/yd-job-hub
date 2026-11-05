@@ -1228,6 +1228,34 @@ def _ig_look(ig, token, caption):
     return None
 
 
+def ig_story(url):
+    """One photo up as an Instagram Story, from Job Hub's own Storage. Highlights
+    are made only out of Stories, and Instagram's website can't post one (Jonah,
+    5 Nov 2026: highlights for each service). Asked for one at a time and never
+    tried again by itself, so a dropped answer can't put a Story up twice."""
+    import receipts
+    url = str(url or "")
+    if not url.startswith("https://firebasestorage.googleapis.com/v0/b/%s/o/" % receipts.STORAGE_BUCKET):
+        return {"error": "That photo isn't in Job Hub's storage"}
+    db = _db()
+    fb = _fb_doc(db)
+    ig, token = fb.get("igId"), fb.get("pageToken")
+    if not (ig and token):
+        return {"error": "Instagram isn't hooked up yet"}
+    try:
+        box = _ig_box(ig, token, {"image_url": url, "media_type": "STORIES"})
+        _ig_wait(box, token)
+        r = requests.post("%s/%s/media_publish" % (GRAPH, ig), data={"creation_id": box, "access_token": token},
+                          timeout=120)
+        if r.status_code >= 300:
+            raise _fb_error(r, "Instagram")
+    except requests.RequestException as e:
+        return {"error": MAYBE_UP % "Instagram" + " (%s)" % e}
+    except (Retry, NotConnected, RuntimeError) as e:
+        return {"error": str(e)}
+    return {"ok": True, "id": (r.json() or {}).get("id") or ""}
+
+
 def ig_find(db=None):
     """Find the business Instagram account linked to the Page and keep it
     (integrations/facebook.igId; settings/social.instagram for the app).

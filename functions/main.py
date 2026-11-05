@@ -1275,6 +1275,8 @@ def _social(request, path, headers):
             snap = _db.collection("socialPosts").document(pid).get()
             d = (snap.to_dict() or {}) if snap.exists else {}
             result = {"status": d.get("status"), "link": d.get("link"), "error": d.get("error")}
+        elif path == "/social/instagram/story":
+            result = social.ig_story(body.get("url"))
         elif path == "/social/plan-now":
             result = social.plan(_claude())
         elif path == "/social/rewrite":
