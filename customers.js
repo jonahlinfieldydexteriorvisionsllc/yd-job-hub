@@ -3212,6 +3212,24 @@
     out.name = out.business || [out.first, out.last].filter(Boolean).join(' ') || s(c.name);
     return out;
   }
+  const nameFields = c => {
+    const n = namesOf(c);
+    return { customerName: n.name, firstName: n.first, lastName: n.last, business: n.business };
+  };
+  // The name a job takes from whoever it is tied to, however it was tied. A
+  // bid gets named as it is made, often just a first name (Jonah, 5 Nov 2026:
+  // "her name isnt even input"), so no name, or one word that is part of
+  // theirs, becomes their whole name. By hand, any one word does: he has said
+  // who it is. Two or more words are the job's own, a business or a job named
+  // after its site, and stay.
+  function nameFill(c, j, byHand) {
+    const had = s(j.customerName).split(/\s+/).filter(Boolean);
+    if (had.length > 1) return {};
+    const put = nameFields(c);
+    if (!put.customerName || low(put.customerName) === low(had[0] || '')) return {};
+    if (had.length && !byHand && nameTokens(put.customerName).indexOf(nameTokens(had[0])[0]) === -1) return {};
+    return put;
+  }
   // app.js's typing-not-saved. Not `dirty` by name: this file has a `dirty`
   // of its own (a redraw waiting), so that read this file's and the guard
   // below never saw the form's typing.
@@ -3227,13 +3245,9 @@
     const add = fillFrom(c, now), put = {};
     Object.keys(add).forEach(f => { const n = el(f); if (n && !s(n.value)) { n.value = add[f]; put[f] = add[f]; } });
     boardFields.customerFill = by === 'auto' ? fillMark(cid, how, put) : null;
-    if (by === 'hand') {
-      const n = namesOf(c);
-      [['firstName', n.first], ['lastName', n.last], ['business', n.business], ['customerName', n.name]].forEach(p => {
-        if (el(p[0])) el(p[0]).value = p[1];
-      });
-      if (typeof updateCtxBar === 'function') updateCtxBar();
-    }
+    const named = by === 'hand' ? nameFields(c) : nameFill(c, { customerName: el('customerName') ? el('customerName').value : '' });
+    Object.keys(named).forEach(f => { if (el(f)) el(f).value = named[f]; });
+    if (Object.keys(named).length && typeof updateCtxBar === 'function') updateCtxBar();
     if (typeof markDirty === 'function') markDirty();
     drawTie();
     return true;
@@ -3245,7 +3259,7 @@
     j = j || allJobs().find(x => x._id === jobId) || {};
     const add = fillFrom(c, j);
     return !!YDSync.patchJob(jobId, Object.assign({ customerId: cid, customerBy: by,
-      customerFill: by === 'auto' ? fillMark(cid, how, add) : null }, add));
+      customerFill: by === 'auto' ? fillMark(cid, how, add) : null }, add, nameFill(c, j, by === 'hand')));
   }
   let tieTimer = null;
   function tieSoon() { clearTimeout(tieTimer); tieTimer = setTimeout(tieSure, 1500); }
@@ -3649,7 +3663,8 @@
         if (!pick || !window.YDSync) return;
         if (pick === 'lead') pick = newLeadFromJob(j);
         const g = guess(by, whoOfJob(j));
-        YDSync.patchJob(j._id, { customerId: pick, customerBy: pick === g.sure ? 'auto' : 'hand' });
+        // The one way every tie goes: their name and the empty boxes follow.
+        tieJob(j._id, pick, pick === g.sure ? 'auto' : 'hand', j, g.how);
         delete sortPick[key];
         n++;
       });
@@ -3717,7 +3732,7 @@
       const g = guess(index(), { name: j.customerName, email: j.email, phone: j.phone });
       id = g.sure ? mainOf(g.sure) : null;
       if (!id) { id = newLeadFromJob(Object.assign({ _id: jobId }, j)); added = true; }
-      if (window.YDSync) YDSync.patchJob(jobId, { customerId: id, customerBy: 'auto' });
+      if (window.YDSync) YDSync.patchJob(jobId, Object.assign({ customerId: id, customerBy: 'auto' }, customers[id] ? nameFill(customers[id], j) : {}));
     }
     const c = customers[id];
     if (!c) return null;

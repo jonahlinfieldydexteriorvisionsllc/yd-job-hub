@@ -1839,12 +1839,14 @@ function onCustomerNamePart() {
   if (window.YDCustomers && YDCustomers.drawTieSoon) YDCustomers.drawTieSoon();
 }
 // Jobs saved before the boxes existed, imports and contacts turned into jobs
-// carry one name: it is split into the boxes. Two or three words read as a
-// person's name; anything else is a business name.
+// carry one name: it is split into the boxes. One to three words read as a
+// person's name, and one word is their first name (a bid named by first name
+// alone was landing in Business with First and Last empty, 5 Nov 2026);
+// anything else is a business name.
 function splitName(full) {
   full = String(full || '').trim();
   const words = full.split(/\s+/).filter(Boolean);
-  if (words.length >= 2 && words.length <= 3 && !/[&\d,]|\b(llc|inc|co|company|corp|apartments?|church|school|resort|hoa|association|services?|landscaping|properties|management)\b/i.test(full)) {
+  if (words.length >= 1 && words.length <= 3 && !/[&\d,]|\b(llc|inc|co|company|corp|apartments?|church|school|resort|hoa|association|services?|landscaping|properties|management)\b/i.test(full)) {
     return { first: words[0], last: words.slice(1).join(' '), business: '' };
   }
   return { first: '', last: '', business: full };
