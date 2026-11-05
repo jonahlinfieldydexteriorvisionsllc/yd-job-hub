@@ -2881,6 +2881,8 @@
   .est-snap { display:flex; align-items:center; flex-wrap:wrap; gap:6px 12px; margin-top:8px; }
   .est-snap-btn { min-height:44px; display:inline-flex; align-items:center; font-size:14px; padding:8px 16px; cursor:pointer; }
   .est-snap-n { font-size:12.5px; color:var(--muted); flex:1 1 200px; }
+  /* Two buttons that can't share a row on a phone: the same width, one over the other. */
+  @media (max-width:720px) { .est-snap-btn { flex:1 1 auto; justify-content:center; } }
   /* Contacts: meeting notes (prospects.js) */
   .pp-meet { margin:8px 0; padding:10px; border-radius:8px; background:var(--surface-2); }
   .pp-meet textarea { width:100%; font-size:16px; }

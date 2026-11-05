@@ -3621,27 +3621,54 @@
   // (functions/estimates.py _photos) -- through the job's own photo queue
   // (jobphotos.js jpPicked: shrunk, kept on the phone, sent when there is
   // signal). The line beside it says how many the job has.
+  //
+  // Upload photos (his ask, 5 Nov 2026: "not just a take a photo button ...
+  // i should be able to upload multiple at a time") is the same road from
+  // the phone's photos or the computer's files: same queue, same Before
+  // stage, several at once. Claude only ever gets the newest few with a
+  // message (functions/estimates.py PHOTO_MAX), which matters now that a
+  // dozen can go on in one go, so the line says so.
+  const SNAP_SEEN = 8;        // keep = estimates.py PHOTO_MAX
   function snapWords(n) {
-    return n ? '📷 ' + n + ' site photo' + (n === 1 ? '' : 's') + ' on this job — Claude looks at them when it builds the bid.'
-      : 'It goes on the job as a Before photo — Claude looks at those when it builds the bid.';
+    if (!n) return 'They go on the job as Before photos — Claude looks at those when it builds the bid.';
+    return '📷 ' + n + ' site photo' + (n === 1 ? '' : 's') + ' on this job — ' +
+      (n > SNAP_SEEN ? 'Claude looks at the newest ' + SNAP_SEEN + ' when it builds the bid.'
+        : 'Claude looks at them when it builds the bid.');
   }
   function snapHtml(ro) {
     if (ro || !currentJobId || typeof window.jpPicked !== 'function') return '';
     const n = window.YDJobPhotos && YDJobPhotos.count ? YDJobPhotos.count(currentJobId, 'before') : null;
-    return '<div class="est-snap"><label class="btn btn-sm est-snap-btn">📷 Take a photo' +
-        '<input type="file" accept="image/*" capture="environment" hidden data-job="' + esc(currentJobId) + '"' +
-        ' onchange="estSnap(this)"></label>' +
+    return '<div class="est-snap">' +
+        '<button type="button" class="btn btn-sm est-snap-btn" onclick="estSnapOpen(false)">📷 Take a photo</button>' +
+        '<button type="button" class="btn btn-sm est-snap-btn" onclick="estSnapOpen(true)">🖼️ Upload photos</button>' +
       '<span class="est-snap-n" data-est-snap>' + esc(snapWords(n)) + '</span></div>';
   }
+  // The file boxes live on the page, not in the estimate: the estimate redraws
+  // when anything about the job changes, and going through a phone's photos
+  // takes long enough for that to happen with the picker open. A box drawn
+  // away then could lose everything picked. Made once, as the receipt
+  // button's is (receipts.js openCamera), and told the job as it opens.
+  window.estSnapOpen = function (many) {
+    const id = many ? 'estUploadBox' : 'estCameraBox';
+    let box = document.getElementById(id);
+    if (!box) {
+      box = document.createElement('input');
+      box.type = 'file'; box.accept = 'image/*'; box.id = id; box.hidden = true;
+      if (many) box.multiple = true; else box.setAttribute('capture', 'environment');
+      box.onchange = () => window.estSnap(box);
+      document.body.appendChild(box);
+    }
+    if (!currentJobId) return;
+    box.setAttribute('data-job', currentJobId);
+    box.value = '';
+    box.click();
+  };
   window.estSnap = function (input) {
-    const n = (input.files || []).length;
-    if (!n || typeof window.jpPicked !== 'function') return;
+    if (!(input.files || []).length || typeof window.jpPicked !== 'function') return;
     // Said only for photos it took in: jpPicked says itself why one was not
     // (signed out, a file it could not read).
-    const waiting = () => (window.YDJobPhotos && YDJobPhotos.waiting ? YDJobPhotos.waiting() : 0);
-    const before = waiting();
-    Promise.resolve(window.jpPicked(input, 'before')).then(() => {
-      if (waiting() > before) showToast(n === 1 ? 'Photo added to the job (Before)' : n + ' photos added to the job (Before)');
+    Promise.resolve(window.jpPicked(input, 'before')).then(took => {
+      if (took) showToast(took === 1 ? 'Photo added to the job (Before)' : took + ' photos added to the job (Before)');
     });
   };
   // The count follows the photos as they are taken, sent and come in.

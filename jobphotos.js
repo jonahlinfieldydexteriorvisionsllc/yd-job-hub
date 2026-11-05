@@ -123,16 +123,16 @@
   // ------------------------------------------------------------ sending
 
   // Picked from a Before / During / After button: shrink each, keep it on
-  // the phone, show it at once, then send.
+  // the phone, show it at once, then send. Answers how many it took in.
   window.jpPicked = async function (input, stage) {
     pickingSince = 0;
     const files = Array.from(input.files || []).filter(f => /^image\//.test(f.type) || !f.type);
     input.value = '';
     const forJob = input.getAttribute('data-job') || jobId;
-    if (!files.length || !forJob || !STAGE_NAME[stage]) return;
-    if (!signedIn()) { showToast('Sign in to add photos'); return; }
+    if (!files.length || !forJob || !STAGE_NAME[stage]) return 0;
+    if (!signedIn()) { showToast('Sign in to add photos'); return 0; }
     if (files.length > MAX_PICK) showToast('Adding the first ' + MAX_PICK + ' — pick the rest after');
-    let failed = 0;
+    let failed = 0, took = 0;
     for (const f of files.slice(0, MAX_PICK)) {
       try {
         const img = await decode(f);
@@ -150,6 +150,7 @@
         queue[item.id] = item;
         status[item.id] = { progress: 0, preview: URL.createObjectURL(item.thumb) };
         await qSave(item);
+        took++;
         drawAll();
         send(item);
       } catch (e) {
@@ -158,6 +159,7 @@
       }
     }
     if (failed) showToast(failed === 1 ? 'One photo could not be read — try it as a JPG' : failed + ' photos could not be read');
+    return took;
   };
 
   // A file that may already be up from an earlier try: storage.rules lets a
@@ -723,13 +725,6 @@
   window.addEventListener('focus', () => { if (pickingSince) setTimeout(() => { pickingSince = 0; }, 3000); });
 
   window.YDJobPhotos = { mount: mount, jobShown: jobShown, readyToFinish: readyToFinish,
-                         // How many a job has, for the button that opens them
-                         // (jobview.js); null while it isn't known.
-                         count: id => {
-                           if (!id || id !== jobId) return null;
-                           const n = Object.values(photos).filter(p => !p.deleteAsked).length;
-                           return n || heard ? n : null;
-                         },
                          picking: () => !!pickingSince && Date.now() - pickingSince < 60000,
                          waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
                          // This person's photos still on this phone, for the end
@@ -739,13 +734,17 @@
                          // Told whenever a photo is added here or finishes sending.
                          onChange: fn => { queueWatchers.add(fn); return () => queueWatchers.delete(fn); },
                          // How many photos the job on screen has (of one stage),
-                         // this phone's waiting ones too; null for any other job
-                         // (only the job shown is watched). The bid's "Take a
-                         // photo" button says it (estimate.js snapHtml).
+                         // this phone's waiting ones too. null for any other job
+                         // (only the job shown is watched), and while it isn't
+                         // known: until the server has answered, none means
+                         // nothing, not "no photos". The Photos button
+                         // (jobview.js) and the bid's photo line
+                         // (estimate.js snapHtml) say it.
                          count: (id, stage) => {
                            if (!id || id !== jobId) return null;
                            const of = p => !stage || p.stage === stage;
-                           return Object.values(photos).filter(of).length + Object.values(queue)
+                           const n = Object.values(photos).filter(p => !p.deleteAsked && of(p)).length + Object.values(queue)
                              .filter(q => q.jobId === id && q.by === myUid() && !photos[q.id] && of(q)).length;
+                           return n || heard ? n : null;
                          } };
 })();
