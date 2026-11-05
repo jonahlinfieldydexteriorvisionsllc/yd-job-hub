@@ -618,11 +618,11 @@
       '<div class="sp-text' + (clip ? ' sp-home-clip' : '') + '">' + esc(text) + '</div>' +
       (long ? '<button class="sp-home-more" onclick="spHomeWords(\'' + id + '\')">' + (clip ? 'Show all the words' : 'Show less') + '</button>' : '') +
       (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
-          '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '" loading="lazy"></a></span>').join('') + '</div>' +
+          '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '"></a></span>').join('') + '</div>' +
         '<p class="hint">Tap a photo to open it, save it, then add it in Nextdoor.</p>' : '') +
       '<div class="sp-acts sp-home-acts">' +
         (been ? tick(true) + openIt('Open Nextdoor again') : openIt('🏘️ Open Nextdoor with the words in', true) + tick()) +
-        '<button class="btn" onclick="spCopy(\'' + id + '\')">📋 Copy the words</button>' +
+        '<button class="btn" onclick="spCopy(\'' + id + '\')">📋 Copy words</button>' +
         '<button class="btn" onclick="spHomeSkip(\'' + id + '\')">Skip it</button>' +
       '</div></div>';
   }

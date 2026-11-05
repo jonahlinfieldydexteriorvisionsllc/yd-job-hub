@@ -5987,11 +5987,12 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .sp-home { display:flex; flex-direction:column; gap:8px; }
 .sp-home + .sp-home { border-top:1px solid var(--border); margin-top:12px; padding-top:12px; }
 .sp-home-what small { display:block; color:var(--muted); font-size:13px; }
-.sp-home-clip { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:4; overflow:hidden; }
+/* The bottom padding would show a slice of the next line; a border in the box's own colour doesn't. */
+.sp-home-clip { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:4; overflow:hidden; padding-bottom:0; border-bottom:10px solid var(--surface-2); }
 .sp-home-more { background:none; border:0; padding:0; min-height:44px; text-align:left; color:var(--brand-ink); font:inherit; font-size:14px; cursor:pointer; }
 .sp-home .sp-photo img { width:72px; height:72px; }
 .sp-home .hint { margin:0; }
-.sp-home-acts .btn { flex:1 1 40%; justify-content:center; text-align:center; }
+.sp-home-acts .btn { flex:1 1 130px; justify-content:center; text-align:center; }
 .sp-home-acts > :first-child { flex-basis:100%; }
 .sp-own { border:1px dashed var(--border); border-radius:10px; padding:10px 12px; margin:10px 0; display:flex; flex-direction:column; gap:8px; }
 .sp-gone { margin-top:14px; }
