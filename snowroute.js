@@ -24,6 +24,7 @@
   const OSRM = 'https://router.project-osrm.org';
   const KEEP_KEY = 'ydjobhub_snowRoute';
   const KEEP_HOURS = 24;
+  const KEEP_V = 2;                     // 2: a faster order is measured the way the route is
   const BETTER_BY_SECONDS = 120;        // a "faster order" has to save two minutes
   // A leg this long is nearly always an address the map found in the wrong
   // place (a mistyped town puts a stop 200 miles off): said on the stop.
@@ -65,11 +66,11 @@
   function kept(sig) {
     try {
       const k = JSON.parse(localStorage.getItem(KEEP_KEY) || 'null');
-      return k && k.sig === sig && Date.now() - k.at < KEEP_HOURS * 3600e3 ? k : null;
+      return k && k.v === KEEP_V && k.sig === sig && Date.now() - k.at < KEEP_HOURS * 3600e3 ? k : null;
     } catch (e) { return null; }
   }
   function keep(sig) {
-    try { localStorage.setItem(KEEP_KEY, JSON.stringify({ sig: sig, at: Date.now(), road: road, better: better })); } catch (e) {}
+    try { localStorage.setItem(KEEP_KEY, JSON.stringify({ v: KEEP_V, sig: sig, at: Date.now(), road: road, better: better })); } catch (e) {}
   }
 
   async function measure() {
@@ -100,10 +101,20 @@
           '?source=first&roundtrip=false&destination=any&overview=false', 15000);
         if (mine !== runs) return;
         const trip = t && t.trips && t.trips[0];
-        if (trip && trip.duration < road.s - BETTER_BY_SECONDS) {
-          const order = mapped.map((s, i) => ({ id: s.id, at: t.waypoints[i + 1].waypoint_index }))
-            .sort((a, b) => a.at - b.at).map(x => x.id);
-          better = { order: order.concat(p.stops.filter(s => !onMap(s.a)).map(s => s.id)), m: trip.distance, s: trip.duration };
+        const order = trip ? mapped.map((s, i) => ({ s: s, at: t.waypoints[i + 1].waypoint_index }))
+          .sort((a, b) => a.at - b.at).map(x => x.s) : [];
+        if (order.some((s, i) => s !== mapped[i])) {
+          // The router's trip answer and its route answer put the same order
+          // minutes apart, so its trip time can't be held against the route
+          // above: that offered "saves 6 min" on the order already in use.
+          // Asking for this order the same way also means the time offered is
+          // the time the bar shows once it's taken.
+          const alt = await fetchJson(OSRM + '/route/v1/driving/' + coords([p.start].concat(order.map(s => s.a))) + '?overview=false', 15000);
+          if (mine !== runs) return;
+          const b = alt && alt.routes && alt.routes[0];
+          if (b && b.duration < road.s - BETTER_BY_SECONDS) {
+            better = { order: order.concat(p.stops.filter(s => !onMap(s.a))).map(s => s.id), m: b.distance, s: b.duration };
+          }
         }
       } catch (e) { /* the route itself is what matters */ }
       keep(sig);
