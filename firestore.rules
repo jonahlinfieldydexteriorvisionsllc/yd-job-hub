@@ -559,7 +559,13 @@ service cloud.firestore {
           && d.breakOverAt <= request.time.toMillis() + 2 * 60 * 1000;
       }
 
-      allow update: if (decidesFor(resource.data.uid)
+      // The owner may also put a shift on the right person, as when an import
+      // and a login turn out to be one worker (Jonah, 5 Nov 2026: "Yes, unlock
+      // it"). The owner can already add and delete anyone's shifts, so this
+      // gives no new power, and it keeps the shift's id and history. Nobody
+      // else can move a shift between people.
+      allow update: if isOwner()
+        || (decidesFor(resource.data.uid)
             && request.resource.data.uid == resource.data.uid)
         || (isWorker()
             && resource.data.uid == request.auth.uid
