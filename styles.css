@@ -6025,6 +6025,14 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   /* The route's stops, folded on a phone. */
   .rt-fold > summary { min-height:44px; display:flex; align-items:center; font-size:13px; font-weight:700; color:var(--brand-ink); cursor:pointer; }
   html[data-night] .rt-fold > summary { color:var(--brand-2); }
+  /* The route gets used outdoors on a tablet too, and a 30px button is a
+     button you miss. Touch as well as width: an iPad on its side is as wide
+     as a laptop. Before the phone block, which keeps its arrows 40 wide to
+     fit beside the stop's name. */
+  @media (pointer: coarse), (max-width:1024px) {
+    .rt-better .btn { min-height:44px; padding:9px 16px; font-size:13px; }
+    .rt-move button { min-height:44px; min-width:44px; font-size:14px; }
+  }
   @media (max-width:720px) {
     /* The tab already says Clock: the header is one row, words cut short,
        so Clock out stays on the screen of a small phone. */
