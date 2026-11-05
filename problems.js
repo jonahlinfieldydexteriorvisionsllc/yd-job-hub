@@ -164,6 +164,8 @@
   // run without it ("ydCan is not defined") isn't a second report of the same
   // thing. A file that really won't load is still reported.
   const LOAD_WAIT_MS = 4000;
+  // Chrome's words, then an iPhone's.
+  const NOT_LOADED = /is not defined|Can't find variable/;
   let leaving = false, loadFailed = false;
   window.addEventListener('pagehide', () => { leaving = true; });
   function loadFail(src) {
@@ -181,7 +183,7 @@
       loadFail(e.target.src || e.target.href || 'a file');
       return;
     }
-    if (loadFailed && /is not defined/.test(String(e.message || ''))) return;
+    if (loadFailed && NOT_LOADED.test(String(e.message || ''))) return;
     record('error', e.message,
       (e.filename || '') + ':' + (e.lineno || '') + '\n' +
       ((e.error && e.error.stack) || ''));
