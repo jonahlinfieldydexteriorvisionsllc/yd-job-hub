@@ -65,9 +65,9 @@ expire. Google: domain-wide delegation as the owner's Workspace account
 key -- once Google has approved the project for the Business Profile API.
 Instagram: the business account linked to the Facebook Page, reached with the
 Page's token (the same hookup: Instagram API with Facebook Login). Nextdoor:
-posting by itself needs Nextdoor's OK for its Publish API; until then a
-Nextdoor post is "ready" at its time and his phone is told, and Job Hub opens
-Nextdoor with the words already in (socialposts.js).
+its Publish API is not for a business promoting itself, so a Nextdoor post is
+"ready" at its time, his phone is told, and a card on Home opens Nextdoor with
+the words already in (socialposts.js).
 
 Post records: socialPosts/{place}_{YYYYMMDD}_{HHMM} (one per slot time) or
 socialPosts/sph... (one he wrote himself):
@@ -231,12 +231,12 @@ def _owners(people):
     return [uid for uid, u in (people or {}).items() if u.get("role") == "owner"]
 
 
-def _push(db, people, title, body, tag):
+def _push(db, people, title, body, tag, opens="posts"):
     out = []
     for uid in _owners(people if people is not None else dg._people()):
         try:
             out.append({"uid": uid, "phones": dg.send_push(uid, {"push": {"title": title, "body": body}},
-                                                            tag=tag, ttl=20 * 3600, opens="posts")})
+                                                            tag=tag, ttl=20 * 3600, opens=opens)})
         except Exception as e:          # noqa: BLE001
             print("social: push failed:", uid, e)
     return out
@@ -953,14 +953,14 @@ def publish(db, pid, people=None, now=None, by_hand=False):
         elif place == "google":
             done = google_post(db, d, now)
         elif place == "nextdoor":
-            # Nextdoor's Publish API needs Nextdoor's OK: until then the post
-            # is ready for him, words and photos, one tap from Nextdoor.
+            # Nextdoor keeps its Publish API from a business promoting itself:
+            # the post is ready for him on Home, one tap from Nextdoor.
             ref.set({"status": "ready", "readyAt": now.isoformat(), "updatedAt": _stamp()}, merge=True)
             if by_hand:
                 return []
             return _push(db, people, "\U0001F4E3 Nextdoor post ready",
-                         "Tap to open Nextdoor with the words already in, then add the photos and post it.",
-                         "yd-social-nextdoor")
+                         "It's on Home: one tap opens Nextdoor with the words already in.",
+                         "yd-social-nextdoor", opens="nextdoor")
         else:
             raise RuntimeError("no such place")
     except NotConnected as e:

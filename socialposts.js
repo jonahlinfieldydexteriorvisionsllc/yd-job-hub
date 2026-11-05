@@ -6,15 +6,16 @@
 // The server does the work (functions/social.py): after the morning and
 // evening summaries it fills the next 8 days of slots -- a finished job with
 // After photos, else one of the month's seasonal posts -- and every five
-// minutes a post whose time has come goes up. Nextdoor only lets approved
-// partners post by themselves, so a Nextdoor post is "ready" at its time and
-// one tap here opens Nextdoor with the words already in.
+// minutes a post whose time has come goes up. Nextdoor keeps its Publish API
+// from a business promoting itself, so a Nextdoor post is "ready" at its time
+// and one tap on Home opens Nextdoor with the words already in.
 //
 // Here (the owner's alone): what is coming up and what went up, each post's
 // words, photos and time to change, hold, let go, skip or post now; the
 // schedule itself (settings/social.slots -- social.py DEFAULT_SLOTS until he
 // changes it); the line under every post (signOff); and hooking up Facebook
-// and Google. Home's Waiting on you shows posts that need him (YDPosts.needs).
+// and Google. Home's Waiting on you shows posts that need him (YDPosts.needs);
+// one ready for Nextdoor has its own card there (YDPosts.readyHtml).
 (function () {
   'use strict';
 
@@ -274,12 +275,15 @@
     return false;
   }
 
+  const whatOf = p => p.kind === 'job' ? (p.jobName || 'A finished job') + (p.town ? ' · ' + p.town : '')
+    : p.kind === 'idea' ? (/^yt-/.test(p.ideaId || '') ? '📝 ' : '🍂 ') + (p.topic || 'Seasonal post') : '✍️ Your post';
+  const photosOf = p => (p.photos || []).filter(x => /^https:\/\//.test((x || {}).url || ''));
+
   function rowHtml(p) {
     const st = STATUS[p.status] || [p.status, ''];
     const isOpen = open === p.id;
-    const what = p.kind === 'job' ? (p.jobName || 'A finished job') + (p.town ? ' · ' + p.town : '')
-      : p.kind === 'idea' ? (/^yt-/.test(p.ideaId || '') ? '📝 ' : '🍂 ') + (p.topic || 'Seasonal post') : '✍️ Your post';
-    const photos = (p.photos || []).filter(x => /^https:\/\//.test((x || {}).url || ''));
+    const what = whatOf(p);
+    const photos = photosOf(p);
     return '<div class="sp-row' + (isOpen ? ' open' : '') + '" id="spRow_' + safeId(p.id) + '">' +
       '<button class="sp-row-head" onclick="spOpen(\'' + safeId(p.id) + '\')" aria-expanded="' + isOpen + '">' +
         '<span class="sp-place">' + ICONS[p.place] + '</span>' +
@@ -500,11 +504,9 @@
             '(Business Profile → ⋮ → Business Profile settings → People and access).</li>' +
           '<li><button class="btn btn-sm btn-filled" onclick="spGoogle()">Check Google</button></li>' +
         '</ol>';
-    const ndHtml = '<p>Nextdoor only lets approved partners post by themselves. Until then, at each Nextdoor time your phone is ' +
-        'told, and one tap here opens Nextdoor with the words already in — add the photos and post.</p>' +
-      '<p class="hint">To have Job Hub post there by itself too, Nextdoor has to say yes: ' +
-        '<a href="https://developer.nextdoor.com/reference/applying-for-access" target="_blank" rel="noopener">apply for their ' +
-        'Publish API</a>. No promise they will for one business.</p>';
+    const ndHtml = '<p>Nextdoor keeps posting by itself for public agencies, local news, local events and marketplace listings, ' +
+        'not for a business promoting itself. So at each Nextdoor time your phone is told and the post waits on Home, where one ' +
+        'tap opens Nextdoor with the words already in — add the photos and post.</p>';
     return '<div class="sp-place-box"><b>📘 Facebook</b>' + fbHtml + '</div>' +
       '<div class="sp-place-box"><b>📷 Instagram</b>' + igHtml + '</div>' +
       '<div class="sp-place-box"><b>📍 Google Business Profile</b>' + gHtml + '</div>' +
@@ -586,6 +588,44 @@
     } else showToast('Skipped');
   };
   window.spDone = id => patchPost(id, { status: 'posted', postedAt: new Date().toISOString(), heldWhy: null }, 'ticking it off');
+
+  // ---- A Nextdoor post ready, on Home. Jonah (4 Nov 2026): "keep the tap but
+  // make it doable from my homepage." Everything that tap needs is on the
+  // card: the words, the photos, the button that opens Nextdoor and the tick.
+  // Opening Nextdoor doesn't mean it went up, so nothing is saved until he
+  // says so; the tick just takes the lead once he has been there.
+  const HOME_WORDS = 240;       // past this the words fold to a few lines
+  const homeOpened = {};        // opened from here this visit
+  const homeWhole = {};         // showing all the words
+  window.spHomeOpened = id => { homeOpened[id] = true; changed(); };
+  window.spHomeWords = id => { homeWhole[id] = !homeWhole[id]; changed(); };
+  // Nothing can put a ready post back (the rules refuse it), so it asks.
+  window.spHomeSkip = async id => {
+    if (await ydConfirm('Skip this Nextdoor post? It won’t come back. The next one comes up on its own day.', { ok: 'Skip it' })) window.spSkip(id);
+  };
+  function readyCardHtml(p) {
+    const id = safeId(p.id);
+    const text = String(p.text || '');
+    const long = text.length > HOME_WORDS;
+    const clip = long && !homeWhole[id];
+    const been = !!homeOpened[id];
+    const photos = photosOf(p);
+    const openIt = (words, lead) => '<a class="btn' + (lead ? ' btn-filled' : '') + '" href="' + esc(shareUrl(p)) + '" target="_blank" rel="noopener" ' +
+      'onclick="spHomeOpened(\'' + id + '\')">' + words + '</a>';
+    const tick = lead => '<button class="btn' + (lead ? ' btn-filled' : '') + '" onclick="spDone(\'' + id + '\')">✓ I posted it</button>';
+    return '<div class="sp-home">' +
+      '<div class="sp-home-what"><b>' + esc(whatOf(p)) + '</b><small>Ready since ' + esc(when(p.readyAt || p.at)) + '</small></div>' +
+      '<div class="sp-text' + (clip ? ' sp-home-clip' : '') + '">' + esc(text) + '</div>' +
+      (long ? '<button class="sp-home-more" onclick="spHomeWords(\'' + id + '\')">' + (clip ? 'Show all the words' : 'Show less') + '</button>' : '') +
+      (photos.length ? '<div class="sp-photos">' + photos.map((x, i) => '<span class="sp-photo">' +
+          '<a href="' + esc(x.url) + '" target="_blank" rel="noopener"><img src="' + esc(x.thumb || x.url) + '" alt="Photo ' + (i + 1) + '" loading="lazy"></a></span>').join('') + '</div>' +
+        '<p class="hint">Tap a photo to open it, save it, then add it in Nextdoor.</p>' : '') +
+      '<div class="sp-acts sp-home-acts">' +
+        (been ? tick(true) + openIt('Open Nextdoor again') : openIt('🏘️ Open Nextdoor with the words in', true) + tick()) +
+        '<button class="btn" onclick="spCopy(\'' + id + '\')">📋 Copy the words</button>' +
+        '<button class="btn" onclick="spHomeSkip(\'' + id + '\')">Skip it</button>' +
+      '</div></div>';
+  }
   window.spNow = async id => {
     const p = posts[id];
     if (!p) return;
@@ -764,6 +804,9 @@
     needs: () => isOwner() && cfg && cfg.on
       ? Object.values(posts).filter(p => NEEDS.indexOf(p.status) !== -1).sort((a, b) => String(a.at).localeCompare(String(b.at)))
       : [],
+    // Home's Nextdoor card: posts waiting for his tap, and the card for them.
+    readyToPost: () => window.YDPosts.needs().filter(p => p.status === 'ready'),
+    readyHtml: list => list.map(readyCardHtml).join(''),
     on: () => !!(cfg && cfg.on),
     names: NAMES,
     icons: ICONS,
