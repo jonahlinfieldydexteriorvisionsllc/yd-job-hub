@@ -11,7 +11,7 @@
 // straight away when there is signal (/notes/ping), and otherwise within five
 // minutes by the reminders run (functions/reminders.py _crew_notes), which
 // stamps notifiedAt so nothing is told twice. The owner reads them under
-// 📝 Notes from the crew (⋯ menu, More, and a notification opens it) and
+// 📝 Notes from the crew (⋯ menu, and a notification opens it) and
 // marks them read; a crew member sees the ones they sent.
 //
 // A JOB ISSUE (jobissues.js) is a note of its own kind -- kind 'issue' and
@@ -196,7 +196,7 @@
     const badge = el('menuCrewNotes');
     if (badge) {
       const n = isOwner() ? unread().length : 0;
-      badge.textContent = '📝 Notes from the crew' + (n ? ' (' + n + ')' : '');
+      badge.textContent = isOwner() ? '📝 Notes from the crew' + (n ? ' (' + n + ')' : '') : '📝 Your notes';
     }
     if (!m || !m.classList.contains('active')) return;
     const body = m.querySelector('.modal-body');
@@ -270,7 +270,7 @@
     const on = a.mode === 'cloud' && !!a.user;
     const k = on ? a.user.uid + ':' + a.role : null;
     const item = el('menuCrewNotes');
-    if (item) item.hidden = !(on && a.isOwner);
+    if (item) { item.hidden = !on; item.textContent = a.isOwner ? '📝 Notes from the crew' : '📝 Your notes'; }
     const send = el('menuNoteJonah');
     if (send) send.hidden = !(on && !a.isOwner);
     const onClock = el('clockNoteBtn');

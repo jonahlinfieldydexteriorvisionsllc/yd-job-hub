@@ -369,8 +369,6 @@
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
     const on = a.mode === 'cloud' && !!a.user;
-    const item = el('menuNotify');
-    if (item) item.hidden = !on;
     const sum = el('menuSummaries');
     if (sum) sum.hidden = !on;
     prefs = null;

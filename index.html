@@ -107,13 +107,13 @@
             <button id="menuSearch" hidden onclick="closeHeaderMenu(); if (typeof openSearch === 'function') openSearch()">🔍 Search</button>
             <button id="menuSettings" hidden onclick="closeHeaderMenu(); if (typeof openSettings === 'function') openSettings()">⚙ All settings</button>
           </div>
-          <div class="menu-group">
-            <div class="menu-head">Business</div>
-            <button id="menuPricing" hidden onclick="closeHeaderMenu(); openPricingRules()">💲 Pricing rules</button>
-            <button id="menuQuickBooks" hidden onclick="closeHeaderMenu(); openQuickBooks()">📗 QuickBooks</button>
+          <!-- Screens that aren't tabs. On a phone they are in More, with the
+               tabs that don't fit the bar; a tablet and a laptop have no More. -->
+          <div class="menu-group menu-wide">
+            <div class="menu-head">Screens</div>
+            <button id="menuPosts" hidden onclick="closeHeaderMenu(); openPosts()">📣 Posts</button>
             <!-- services.js: the owner's services list; everyone else reads it as "What we do". -->
             <button id="menuServices" hidden onclick="closeHeaderMenu(); openServices()">🧰 Services</button>
-            <button id="menuPeople" hidden onclick="closeHeaderMenu(); openPeople()">👥 People &amp; names</button>
             <button id="menuChangeLog" hidden onclick="closeHeaderMenu(); openChangeLog()">🕘 Change history</button>
           </div>
           <div class="menu-group">
@@ -124,20 +124,6 @@
             <!-- eod.js: the owner's reports; the list itself for whoever gets it. -->
             <button id="menuEod" hidden onclick="closeHeaderMenu(); openEndOfDay()">📋 End of day</button>
             <button id="menuSummaries" hidden onclick="closeHeaderMenu(); openSummaries()">📰 Past summaries</button>
-          </div>
-          <div class="menu-group">
-            <div class="menu-head">App</div>
-            <button id="menuNotify" hidden onclick="closeHeaderMenu(); openNotifications()">🔔 Notification settings</button>
-            <button id="menuTheme" onclick="closeHeaderMenu(); openAppearance()">🌓 Appearance</button>
-            <!-- Laptop only (app.js tidyHeaderMenu): the tab bar instead of
-                 the sidebar on this computer, or the sidebar back. -->
-            <button id="menuSidebar" hidden onclick="closeHeaderMenu(); toggleSidebar()">▤ Tab bar instead (this computer)</button>
-          </div>
-          <div class="menu-group">
-            <div class="menu-head">Data</div>
-            <button id="menuBackup" onclick="closeHeaderMenu(); exportAllJobs()">💾 Backup</button>
-            <button id="menuRestore" onclick="closeHeaderMenu(); document.getElementById('restoreInput').click()">📂 Restore</button>
-            <button id="menuPrint" onclick="closeHeaderMenu(); window.print()">🖨 Print</button>
           </div>
           <div class="menu-group">
             <div class="menu-head">Help</div>

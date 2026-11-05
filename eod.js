@@ -36,7 +36,7 @@
 //
 // It comes up by itself when they clock out for the day (timeclock.js sends
 // yd-clocked-out), and sits on their Home from `at` on a day they worked (or
-// once they are off the clock) until it is sent. The ⋯ menu and More open it
+// once they are off the clock) until it is sent. The ⋯ menu opens it
 // any time. The owner reads them on Home (Waiting on you), in the 📋 End of
 // day window and on each job's Job tab.
 //

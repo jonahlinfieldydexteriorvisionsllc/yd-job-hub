@@ -2232,7 +2232,7 @@
     const type = val('evType') || typeOfEv({ title: val('evTitle') }, cal);
     hint.innerHTML = choice === 'none' ? 'Nobody gets a reminder for this one.'
       : choice === '' ? YDRemind.usualHint(type, timed, cal)
-      : 'To you and anyone on it. Phones need notifications switched on: ⋯ → Notification settings.';
+      : 'To you and anyone on it. Phones need notifications switched on: ⋯ → All settings → Notification settings.';
   };
   window.calJobChanged = function () {
     const id = val('evJob');

@@ -462,8 +462,6 @@
 
   document.addEventListener('yd-auth', e => {
     const a = e.detail || {};
-    const entry = el('menuQuickBooks');
-    if (entry) entry.hidden = !(a.isOwner === true);
     // Coming back from Intuit: the page reloads, so look at the connection.
     if (a.mode === 'cloud' && a.user && ydCan('billing', 'change')) {
       checkStatus();

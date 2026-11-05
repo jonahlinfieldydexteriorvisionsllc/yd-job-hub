@@ -663,16 +663,6 @@ document.addEventListener('yd-auth', e => {
   }
   if (out) out.hidden = !on;
   if (sep) sep.hidden = !on;
-  const people = document.getElementById('menuPeople');
-  if (people) people.hidden = !(on && a.isOwner);
-  const pricing = document.getElementById('menuPricing');
-  if (pricing) pricing.hidden = !(on && a.isOwner);
-  // Backup, Restore and Print work on the jobs saved on this device, which
-  // a crew phone never has: for the crew they only did nothing.
-  ['menuBackup', 'menuRestore', 'menuPrint'].forEach(id => {
-    const it = document.getElementById(id);
-    if (it) it.hidden = on && a.role === 'crew';
-  });
 
   // The job screens -- Job, All Jobs, and the materials half of
   // Supplies -- are for whoever may see jobs: the owner, and an admin given
@@ -771,8 +761,8 @@ document.addEventListener('beforeinput', e => { if (lockedJobControl(e.target)) 
 //
 // Built each time it opens rather than written into the markup, so it lists
 // exactly the screens this person is allowed to see. Crew get More too: their
-// screens all fit on the bar, but it is where Notifications and Appearance
-// live.
+// tabs may all fit on the bar, but it holds What we do and the way to the
+// settings.
 function openMore() {
   const wrap = document.getElementById('moreItems');
   const sheet = document.getElementById('moreSheet');
@@ -782,49 +772,31 @@ function openMore() {
       const b = document.getElementById(tabButtonId(n));
       return b && !b.hidden;
     });
-  // Settings that are not screens of their own live here too, so they are
-  // found where everything else is rather than up in the header.
+  // Screens only: the tabs that don't fit the bar and the screens that aren't
+  // tabs (Posts, Services, Change history, which a tablet or laptop finds under
+  // ⋯), then the one door to the settings. Notes, the end of the day, Search
+  // and Help are all under ⋯ on every size, so they aren't here too (review of
+  // 4 Nov 2026: the two menus repeated most of each other).
   const signedIn = !!(window.YDAuth && window.YDAuth.user && window.YDAuth.mode === 'cloud');
-  const notesN = window.YDCrewNotes ? YDCrewNotes.unread() : 0;
+  const owner = !!(window.YDAuth && window.YDAuth.isOwner);
   const crew = crewView();
   const hints = crew ? TAB_HINT_CREW : TAB_HINT;
-  const extras = ((window.YDAuth && window.YDAuth.isOwner)
-    ? [{ label: '👥 People & names', hint: 'Rename people, let them in, make an admin',
-         call: 'closeMore(); openPeople()' },
-       { label: '📝 Notes from the crew' + (notesN ? ' (' + notesN + ')' : ''), hint: 'What the crew wrote you',
-         call: 'closeMore(); openCrewNotes()' }]
-    : signedIn
-    ? [{ label: '📝 Leave a note for Jonah', hint: 'He gets it as a notification',
-         call: 'closeMore(); openNoteForJonah()' },
-       { label: '📝 Your notes', hint: 'The notes you have sent', call: 'closeMore(); openCrewNotes()' }]
-    : []).concat(signedIn && window.YDEndOfDay && YDEndOfDay.menu()
-    ? [YDEndOfDay.menu()].map(x => ({ label: x.label, hint: x.hint, call: 'closeMore(); ' + x.call }))
+  const log = document.getElementById('menuChangeLog');
+  const extras = [].concat(owner && typeof window.openPosts === 'function'
+    ? [{ label: '📣 Posts', hint: 'What goes up on Facebook, Google and Nextdoor, and when', call: 'closeMore(); openPosts()' }]
     : []).concat(signedIn && typeof window.openServices === 'function'
-    ? [(window.YDAuth.isOwner
+    ? [(owner
         ? { label: '🧰 Services', hint: 'The services list, by kind of work, and what to tell a homeowner' }
         : { label: '🧰 What we do', hint: 'Each service in a line, and what it includes — for talking to a homeowner' })]
         .map(x => Object.assign(x, { call: 'closeMore(); openServices()' }))
-    : []).concat((window.YDAuth && window.YDAuth.user)
-    ? [{ label: '📰 Past summaries', hint: crew ? 'Your morning and evening updates from the last two weeks'
-           : 'This morning’s and last night’s summary, and the two weeks before',
-         call: 'closeMore(); openSummaries()' },
-       { label: '🔔 Notification settings', hint: crew ? 'Reminders and updates on this phone'
-           : 'Daily updates by email and on your phone',
-         call: 'closeMore(); openNotifications()' }]
+    : []).concat(log && !log.hidden
+    ? [{ label: '🕘 Change history', hint: 'Who changed which price, stage or rule, and when', call: 'closeMore(); openChangeLog()' }]
     : []).concat(signedIn && typeof window.openSettings === 'function'
-    ? [{ label: '⚙ All settings', hint: 'Every setting in one place',
+    ? [{ label: '⚙ All settings', hint: 'Notifications, appearance and every other setting',
          call: 'closeMore(); if (typeof openSettings === \'function\') openSettings()' }]
-    : []).concat([{ label: '🌓 Appearance', hint: 'Light, dark, or match this phone',
-         call: 'closeMore(); openAppearance()' }]);
-  // Search (search.js) first: on a phone the header has no room for its own
-  // button on the job screens, so this is the way to it there.
-  const search = signedIn && typeof window.openSearch === 'function'
-    ? '<button class="sheet-item" onclick="closeMore(); if (typeof openSearch === \'function\') openSearch()">' +
-        '<span class="sheet-item-name">🔍 Search</span>' +
-        '<span class="sheet-item-hint">Find anything in Job Hub</span></button>'
-    : '';
+    : [{ label: '🌓 Appearance', hint: 'Light, dark, or match this phone', call: 'closeMore(); openAppearance()' }]);
   wrap.innerHTML = (hidden.length || extras.length)
-    ? search + hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
+    ? hidden.map(n => '<button class="sheet-item" onclick="switchTab(\'' + n + '\')">' +
         '<span class="sheet-item-name">' + TAB_LABEL[n] + '</span>' +
         (hints[n] ? '<span class="sheet-item-hint">' + hints[n] + '</span>' : '') +
       '</button>').join('') +
@@ -851,12 +823,12 @@ function matSectionHidden() {
 }
 
 // ---- Header overflow menu (⋯) ----
-// Search and All settings first, then groups -- Business, Inbox, App, Data,
-// Help -- under small headings. Which items show is decided by each item's
-// own file on sign-in (and by the stylesheet: on a phone Notification
-// settings and Appearance live in More instead), so a heading is only known
-// to be empty once the menu is about to show: one with nothing under it is
-// hidden then.
+// Search and All settings, then Inbox and Help under small headings (and the
+// screens that aren't tabs, on a tablet or laptop: a phone has those in More).
+// What used to be here too -- pricing, QuickBooks, notifications, appearance,
+// backup -- is in All settings, once. Which items show is decided by each item's
+// own file on sign-in, so a heading is only known to be empty once the menu is
+// about to show: one with nothing under it is hidden then.
 function toggleHeaderMenu() {
   const m = document.getElementById('headerMenu');
   if (!m) return;
@@ -885,13 +857,8 @@ function tidyHeaderMenu(m) {
   if (search) search.hidden = !(signedIn && typeof window.openSearch === 'function');
   const all = document.getElementById('menuSettings');
   if (all) all.hidden = !(signedIn && typeof window.openSettings === 'function');
-  // Sidebar or tab bar on this computer: only where the sidebar can show (a
-  // laptop-wide window).
-  const side = document.getElementById('menuSidebar');
-  if (side) {
-    side.hidden = !sidebarFits();
-    side.textContent = sidebarStored(SIDEBAR_OFF_KEY) ? '🧭 Use the sidebar' : '▤ Tab bar instead (this computer)';
-  }
+  const posts = document.getElementById('menuPosts');
+  if (posts) posts.hidden = !(signedIn && window.YDAuth.isOwner && typeof window.openPosts === 'function');
   // A button's own computed display says whether it shows, whatever its
   // group or the closed menu around it are doing.
   m.querySelectorAll('.menu-group').forEach(g => {
@@ -2095,11 +2062,11 @@ function renderJobTools() {
         'Add the job’s services above — the tools each one takes show here.') + '</p>') +
     // Those services list their suggested tools (dashed) until he picks.
     (none.length ? '<div class="hint jt-none">No tools picked yet for: ' + none.map(pick).join(', ') +
-        ' — the dashed ones are suggested until ' + (owner ? 'you pick your own' : 'Jonah picks (⋯ → Services)') + '</div>' : '') +
+        ' — the dashed ones are suggested until ' + (owner ? 'you pick your own' : 'Jonah picks (Services)') + '</div>' : '') +
     (r.dropped.length ? '<div class="hint jt-dropped">Not needed on this job: ' + r.dropped.map(t => '<button type="button" class="link-btn" data-k="' +
         esc(t.key) + '" onclick="jobToolBack(this.dataset.k)">' + esc(t.name) + ' ↺</button>').join(', ') + '</div>' : '') +
     '<div class="field-actions"><button type="button" class="btn btn-sm" onclick="jobToolAdd()">+ Add a tool</button>' +
-      (r.services.some(v => v.has) && owner ? '<span class="hint">Each service’s tools: ⋯ → Services → 🧰 Tools</span>' : '') + '</div>';
+      (r.services.some(v => v.has) && owner ? '<span class="hint">Each service’s tools: Services → 🧰 Tools</span>' : '') + '</div>';
   if (wrap.innerHTML !== html) wrap.innerHTML = html;
   if (badge) badge.textContent = r.tools.length ? r.tools.length + ' tool' + (r.tools.length === 1 ? '' : 's') : '';
 }
@@ -6977,7 +6944,7 @@ function makeSearchable(sel) {
 // ... make this and let me view it prior to implementing." It was a preview
 // switched on per computer until 26 Oct: "Make the sidebar everyone's laptop
 // layout (wide screens); phones and narrow windows keep the bottom tabs."
-// So every window wide enough has it; the ⋯ menu still lets one computer
+// So every window wide enough has it; All settings still lets one computer
 // keep the tab bar instead (SIDEBAR_OFF_KEY).
 //
 // It is a second way to look at the SAME tab bar, not a second set of tabs:
@@ -7029,13 +6996,13 @@ function sidebarFits() {
 }
 const sidebarWanted = () => sidebarFits() && !sidebarStored(SIDEBAR_OFF_KEY);
 
-// The ⋯ menu: the tab bar instead on this computer, or the sidebar back.
+// All settings: the tab bar instead on this computer, or the sidebar back.
 function toggleSidebar(on) {
   if (typeof on !== 'boolean') on = sidebarStored(SIDEBAR_OFF_KEY);
   sidebarStore(SIDEBAR_OFF_KEY, !on);
   applySidebar();
   if (typeof showToast === 'function') {
-    showToast(on ? 'Sidebar on.' : 'The tab bar on this computer. ⋯ → "Use the sidebar" brings it back.');
+    showToast(on ? 'Sidebar on.' : 'The tab bar on this computer. All settings → Sidebar or tab bar brings it back.');
   }
 }
 function toggleSidebarSmall() {

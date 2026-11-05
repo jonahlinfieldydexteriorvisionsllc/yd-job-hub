@@ -532,7 +532,7 @@
     if (!w || !isOwner() || !edit) return;
     const t = totals();
     w.innerHTML = moneyHtml(t) +
-      (t.rate === null && t.taxableCents ? '<p class="hint bad">The sales tax % for customers isn’t set (⋯ → Pricing rules).</p>' : '') +
+      (t.rate === null && t.taxableCents ? '<p class="hint bad">The sales tax % for customers isn’t set (All settings → Pricing rules).</p>' : '') +
       (t.unpriced ? '<p class="hint">' + t.unpriced + ' material' + (t.unpriced === 1 ? '' : 's') + ' still to price.</p>' : '') +
       (t.taxableCents && t.rate !== null ? '<p class="hint">Tax is ' + t.rate + '% on ' + money(t.taxableCents) + ' of materials. Labor is never taxed.</p>' : '');
   }

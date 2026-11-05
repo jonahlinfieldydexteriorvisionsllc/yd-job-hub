@@ -573,7 +573,7 @@
     // waits for one -- a kind he added and has not given a markup yet. A job
     // accepted in QuickBooks never needs it (price() leaves the problem out).
     const noMarkup = markupPct === null;
-    if (noMarkup) { out.noMarkup = true; out.problems.push('no markup set for ' + kindName(cat) + ' (⋯ → Pricing rules)'); }
+    if (noMarkup) { out.noMarkup = true; out.problems.push('no markup set for ' + kindName(cat) + ' (All settings → Pricing rules)'); }
     const up = noMarkup ? 0 : 1 + markupPct / 100;
     // A category can be set as not taxed when bought (a rental, say). A cost
     // typed onto the line from a quote that already has the tax in it
@@ -1006,7 +1006,7 @@
     } else {
       const target = profitOf(w, r);
       if (!(days > 0)) out.problems.push('how many crew-days?');
-      else if (dayCost === null || target === null) out.problems.push('crew-day rate or profit per day not set (⋯ → Pricing rules)');
+      else if (dayCost === null || target === null) out.problems.push('crew-day rate or profit per day not set (All settings → Pricing rules)');
       else out.cents = Math.round(days * (dayCost + target));
     }
     if (w.sub) {
@@ -1330,7 +1330,7 @@
     out.workCents = out.underTen ? 0 : taxedWork;
     out.materialsCents = taxedMat;
     if (taxable > 0) {
-      if (out.ratePct === null) out.problems.push('the sales tax % for customers isn’t set (⋯ → Pricing rules)');
+      if (out.ratePct === null) out.problems.push('the sales tax % for customers isn’t set (All settings → Pricing rules)');
       else {
         out.cents = Math.round(taxable * out.ratePct / 100);
         out.materialsTaxCents = Math.round(taxedMat * out.ratePct / 100);

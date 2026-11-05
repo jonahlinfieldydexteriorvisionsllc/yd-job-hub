@@ -31,7 +31,7 @@
 // it. firestore.rules: read by the owner, or an admin who can see that area;
 // written by whoever may change that area, as themselves; never edited.
 //
-// The screen: ⋯ menu → 🕘 Change history. Newest or oldest first, buttons for
+// The screen: 🕘 Change history, under ⋯ (in More on a phone). Newest or oldest first, buttons for
 // Prices / Stages / Pricing rules and for each kind, a search box, three
 // months at a time with "Show older". A Supplies item's price box opens the
 // same screen narrowed to that item.

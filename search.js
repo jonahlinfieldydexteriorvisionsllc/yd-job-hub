@@ -701,11 +701,13 @@
       hint: 'Services sold by the unit or the crew-day, their minimums and what adjusts them',
       words: 'price book turf sod flat rate minimum',
       show: () => signedIn() && owner(), go: () => call('openPriceBook') },
-    { group: 'Prices & money', icon: '📅', name: 'Tax & filing dates',
+    // screen: a working screen, not a setting. Search finds it; All settings
+    // doesn't list it (each has its place on Money, All Jobs or under ⋯).
+    { group: 'Prices & money', icon: '📅', name: 'Tax & filing dates', screen: true,
       hint: 'Sales tax returns, estimated tax, 1099s, the LLC report and dates of your own — reminded 14 and 3 days ahead',
       words: 'tax deadline deadlines sales tax return 1099 estimated quarterly annual report llc dfi insurance renewal filing irs',
       show: () => signedIn() && owner(), go: () => call('openDeadlines') },
-    { group: 'Prices & money', icon: '📅', name: 'Monthly bills',
+    { group: 'Prices & money', icon: '📅', name: 'Monthly bills', screen: true,
       hint: 'Every recurring bill, business and home — ticked off each month once paid',
       words: 'bills expenses monthly recurring loan mortgage insurance subscription subscriptions paid due rent utilities',
       show: () => signedIn() && owner(), go: () => call('openMonthlyBills') },
@@ -717,24 +719,24 @@
       hint: 'The connection to QuickBooks, and matching customers and items',
       words: 'intuit qbo invoice connect accounting',
       show: () => signedIn() && (owner() || can('billing', 'change')), go: () => call('openQuickBooks') },
-    { group: 'Prices & money', icon: '🤝', name: 'Subcontractors',
+    { group: 'Prices & money', icon: '🤝', name: 'Subcontractors', screen: true,
       hint: 'Who you sub work out to, their properties, what they charge and what they are owed',
       words: 'subs subbed mowing lawn care bills',
       show: () => signedIn() && owner(),
       go: () => { window.YDMoney.show('subs'); later(() => reveal(el('subsSection')), 120); } },
-    { group: 'Emails & posts', icon: '📣', name: 'Posts — Facebook, Google, Nextdoor',
+    { group: 'Emails & posts', icon: '📣', name: 'Posts — Facebook, Google, Nextdoor', screen: true,
       hint: 'The posting schedule: what goes up when, each post to change or hold, and hooking each place up',
       words: 'social media facebook google business profile gbp nextdoor post posts posting schedule marketing',
       show: () => signedIn() && owner(), go: () => call('openPosts') },
-    { group: 'Emails & posts', icon: '🙏', name: 'Follow-ups & thank-yous',
+    { group: 'Emails', icon: '🙏', name: 'Follow-ups & thank-yous',
       hint: 'Your Google review link, and whether the thank-you after a job is paid off sends itself or goes to your Gmail Drafts',
       words: 'thank you thanks review google link follow up email paid off customer drafts',
       show: () => signedIn() && owner(), go: () => call('openThanksSettings') },
-    { group: 'Emails & posts', icon: '✍️', name: 'How you write',
+    { group: 'Emails', icon: '✍️', name: 'How you write',
       hint: 'Your voice, from the emails you typed yourself — Claude writes every email as you with it',
       words: 'voice tone writing style email emails sound like me words greeting sign off',
       show: () => signedIn() && owner(), go: () => call('openVoiceSettings') },
-    { group: 'Jobs & lists', icon: '⚠️', name: 'Issues from the crew',
+    { group: 'Jobs & lists', icon: '⚠️', name: 'Issues from the crew', screen: true,
       hint: 'What the crew lead noted on jobs — too much or too little material, equipment you didn’t have — and what keeps coming up',
       words: 'job issues problems over under short leftover too much rock soil dump trailer waste crew lead',
       show: () => signedIn() && owner(),
@@ -781,6 +783,10 @@
       hint: 'Light, dark, or the same as this device',
       words: 'dark mode light theme night',
       show: () => true, go: () => call('openAppearance') },
+    { group: 'On this device', icon: '🧭', name: 'Sidebar or tab bar',
+      hint: 'Which one this computer uses to get around',
+      words: 'navigation menu layout tabs sidebar computer laptop',
+      show: () => fn('sidebarFits') && sidebarFits(), go: () => call('toggleSidebar') },
     { group: 'Your data', icon: '💾', name: 'Backup',
       hint: 'Download every job on this device as a file',
       words: 'export download save file',
@@ -790,12 +796,16 @@
       words: 'import upload file',
       show: () => can('jobs', 'change'),
       go: () => { const f = el('restoreInput'); if (f) f.click(); } },
+    { group: 'Your data', icon: '🖨', name: 'Print',
+      hint: 'Print the screen you were on',
+      words: 'paper pdf',
+      show: () => can('jobs', 'see'), go: () => window.print() },
   ];
   const visibleSettings = () => SETTINGS.filter(s => { try { return s.show(); } catch (e) { return false; } });
 
   function buildSettings() {
     return visibleSettings().map((s, i) => entry('settings', {
-      title: s.name, tag: 'Setting', sub: s.hint, more: [s.group, s.hint, s.words], order: i,
+      title: s.name, tag: s.screen ? 'Screen' : 'Setting', sub: s.hint, more: [s.group, s.hint, s.words], order: i,
       open: () => s.go(),
     }));
   }
@@ -1189,7 +1199,7 @@
     if (!body) return;
     // Each group once, its rows together, whatever order they were added to
     // SETTINGS in (a row added out of place repeated its heading further down).
-    const shown = visibleSettings();
+    const shown = visibleSettings().filter(s => !s.screen);
     const list = Array.from(new Set(shown.map(s => s.group)))
       .reduce((all, g) => all.concat(shown.filter(s => s.group === g)), []);
     setBoards = runBoards();

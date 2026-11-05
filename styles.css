@@ -2047,9 +2047,8 @@
   .sum-chip.on { background:var(--brand); border-color:var(--brand); color:#fff; }
   .sum-frame { height:70vh; }
 
-  /* On a phone, Notifications & summaries lives in the More sheet; the header
-     menu keeps it only on a laptop, which has no More button. */
-  @media (max-width:720px) { #menuNotify { display:none !important; } }
+  /* The screens that aren't tabs: in More on a phone, under ⋯ where there is no More. */
+  @media (max-width:720px) { .menu-wide { display:none !important; } }
 
   /* job statuses: booked (won, on the schedule) and in progress replace active */
   .pill.booked { background:#dbe9fb; color:#2556a3; }
@@ -2066,7 +2065,6 @@
   .theme-opt small { color:var(--muted); font-size:12px; }
   .theme-opt.on { border-color:var(--accent); background:var(--surface-2); }
   .theme-icon { font-size:24px; }
-  @media (max-width:720px) { #menuTheme { display:none !important; } }
 
   /* On a laptop every column fits side by side instead of the last ones being
      cut off at the edge; narrower screens still scroll sideways. */
