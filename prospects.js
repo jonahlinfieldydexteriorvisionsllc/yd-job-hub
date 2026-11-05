@@ -23,6 +23,10 @@
 (function () {
   'use strict';
 
+  // When to call as the Customers lists word it (customers.js); the typed words
+  // until that has loaded.
+  const whenSaid = p => (window.YDCustomers && YDCustomers.whenWords ? YDCustomers.whenWords(p) : p.contactWhen);
+
   const STATUSES = {
     'to-contact': 'To contact',
     'contacted': 'Contacted',
@@ -207,7 +211,7 @@
     return '<div class="pp-out-row' + (done ? ' done' : '') + '">' +
       '<div class="pp-out-main">' +
         '<button class="pp-out-name" onclick="findProspect(\'' + id + '\')">' + esc(p.name || '(no name)') + '</button>' +
-        (p.contactWhen ? ' <span class="pp-when">' + esc(p.contactWhen) + '</span>' : '') +
+        (p.contactWhen ? ' <span class="pp-when">' + esc(whenSaid(p)) + '</span>' : '') +
         declinedBadge(p) +
         ((p.services || []).length ? '<div class="pp-svc">' + p.services.map(s => '<span class="svc-tag">' + esc(s) + '</span>').join('') + '</div>' : '') +
         (p.note ? '<div class="pp-out-note">' + esc(String(p.note).split('\n')[0].slice(0, 160)) + '</div>' : '') +
@@ -416,7 +420,7 @@
     return '<div class="pp' + (isClosed(p) ? ' pp-closed' : '') + '" id="ppCard_' + safeIdOf(p.id) + '">' +
       '<div class="pp-top">' +
         '<span class="pp-name">' + esc(p.name || '(no name)') + '</span>' +
-        (p.contactWhen ? '<span class="pp-when">' + esc(p.contactWhen) + '</span>' : '') +
+        (p.contactWhen ? '<span class="pp-when">' + esc(whenSaid(p)) + '</span>' : '') +
         '<span class="pp-stat s-' + status + '">' + STATUSES[status] + '</span>' +
         declinedBadge(p) +
       '</div>' +

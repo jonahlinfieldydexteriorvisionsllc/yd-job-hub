@@ -316,12 +316,13 @@
   function whenText(w) {
     if (!w) return '';
     if (w.how === 'soon') return 'From ' + niceDay(w.from);
-    // "Early spring" typed beside "Spring 2027" from the buttons: said the same
-    // way, with its year. The words stay as typed; this is how they read.
-    if (w.label && !/\b(19|20)\d\d\b/.test(w.label) && validDay(w.from) && (SEASON_RE.test(low(w.label)) || MONTH_RE.test(low(w.label)))) {
-      return w.label + ' ' + w.from.slice(0, 4);
-    }
-    return w.label || windowWords(w);
+    // "early spring" typed beside "Spring 2027" from the buttons: said the same
+    // way, with its year and a capital. The words stay as typed; this is how
+    // they read.
+    if (!w.label) return windowWords(w);
+    const needsYear = !/\b(19|20)\d\d\b/.test(w.label) && validDay(w.from) && (SEASON_RE.test(low(w.label)) || MONTH_RE.test(low(w.label)));
+    const said = needsYear ? w.label + ' ' + w.from.slice(0, 4) : w.label;
+    return said.charAt(0).toUpperCase() + said.slice(1);
   }
   let whenLater = false;          // "A year later" picked on the open page
   let whenPicking = false;        // the buttons open on a customer who has a time already
@@ -3883,6 +3884,8 @@
 
   window.YDCustomers = {
     on: isOn, all: () => customers, kindOf: kindOf, windowOf: windowOf, windowFromText: windowFromText, snowFacts: snowFacts,
+    // A time to call as the lists say it (the old Contacts list too).
+    whenWords: c => { const w = windowOf(c); return w ? whenText(w) : s(c.contactWhen); },
     fromLostBid: fromLostBid, qbIdFor: qbIdFor, open: id => window.openCustomer(id), render: render,
     // The one a record is shown as (a lead merged in, a second QuickBooks
     // profile), and whether it has a row of its own in the lists.
