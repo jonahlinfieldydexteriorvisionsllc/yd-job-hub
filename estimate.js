@@ -388,6 +388,9 @@
                      costEachCents: num(l.costCents), specialOrder: !!l.specialOrder, plant: l.category === 'plant',
                      // A bag charged by the part used: how much of it the job uses.
                      usedLb: l.partUse && l.usedLb ? l.usedLb : null };
+      // The colour the estimate says, which Supplies' one item for a paver
+      // does not (supplymatch.js).
+      if (window.YDMatch && YDMatch.takesColor(it)) line.color = YDMatch.colorSaid(it.name, l.name);
       const k = line.supplyId ? 's:' + line.supplyId : 'n:' + line.name.toLowerCase().trim();
       if (byKey[k]) {
         // Two lines of the same bag: bought together, so the bags are worked

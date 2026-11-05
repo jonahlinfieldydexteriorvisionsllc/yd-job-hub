@@ -592,7 +592,29 @@
       (!tags.length || usesOf(it).some(t => tags.indexOf(t) !== -1)) && sameSort(from, it));
   }
 
+  // ---- The colour a line is for (Jonah, 4 Nov 2026: "pavers, blocks, etc
+  // should all have the exact colorname product name ... like [a customer's]
+  // tahoe pavers dont say the color ... crew needs to always have the color
+  // name of the paver in case they need to order more"). Most pavers and
+  // blocks are one item in Supplies, "Tahoe 6cm paver", stocked in every
+  // colour, so the colour is the job's and not the item's. It comes from the
+  // estimate's own words for the line: what they say beyond the item's name.
+  const COLOUR_KINDS = ['pavers', 'wall'];
+  const NOT_COLOUR = /^(in|the|with|of|and|color|colour|colored|coloured|paver|pavers|block|blocks|cap|caps)$/i;
+  const stem = w => w.toLowerCase().replace(/[^a-z0-9]/g, '').replace(/s$/, '');
+  // Whether an item's lines need a colour saying: one that names none itself.
+  // An item that has one after a dash or a comma ("Holland 6cm paver — Onyx")
+  // is that colour.
+  const takesColor = sup => !!sup && COLOUR_KINDS.indexOf(sup.category) !== -1 && !/\s[—–-]\s|,/.test(String(sup.name || ''));
+  function colorSaid(itemName, said) {
+    const have = {};
+    String(itemName || '').split(/\s+/).forEach(w => { if (stem(w)) have[stem(w)] = true; });
+    return String(said || '').split(/[\s,()—–]+/).filter(w => stem(w) && !have[stem(w)] && !NOT_COLOUR.test(w)
+      && !/^\d/.test(w)).join(' ').trim().slice(0, 60);
+  }
+
   window.YDMatch = { match: match, remember: remember, keyOf: keyOf, fitQty: fitQty, unitKey: unitKey, near: near,
+                     takesColor: takesColor, colorSaid: colorSaid,
                      similar: similar, whatItIs: whatItIs,
                      oneEach: u => ONE_EACH.indexOf(unitKey(u)) !== -1,
                      pack: pack, packFromName: packFromName, partByKind: partByKind, readsAsWork: readsAsWork,

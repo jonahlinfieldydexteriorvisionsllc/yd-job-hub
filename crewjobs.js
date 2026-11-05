@@ -280,11 +280,19 @@
   }
   const wayWords = w => !w ? '' : w.way === 'pickup' ? 'pick up' : w.way === 'rides'
     ? 'comes on ' + (w.vendorName ? noMoney(w.vendorName).slice(0, 60) + '’s' : 'the supplier’s') + ' truck' : 'delivered';
+  // The colour on a line (app.js orderColorHtml), after the name, so whoever
+  // needs more knows exactly which: not twice where the name has it already.
+  function withColor(name, o) {
+    const c = String((o && o.color) || '').trim();
+    return c && String(name || '').toLowerCase().indexOf(c.toLowerCase()) === -1 ? name + ' — ' + c : name;
+  }
+  // The order line a material of the estimate came to.
+  const lineFor = (d, m) => (d.orderItems || []).find(o => o && (m.supplyId ? o.supplyId === m.supplyId : o.name === m.name)) || null;
   function pickupsEntry(d, items) {
     const est = d.estimate || {}, out = [];
     const order = (d.orderItems || []).filter(o => o && o.name && !o.notBought && !isRental(o, items)).slice(0, 120);
     const src = order.length
-      ? order.map(o => ({ supplyId: o.supplyId || null, name: o.name, qty: numOr(o.qty) || 1, hand: o.way || null,
+      ? order.map(o => ({ supplyId: o.supplyId || null, name: o.name, color: o.color || '', note: o.note || '', qty: numOr(o.qty) || 1, hand: o.way || null,
                           vendorId: o.vendorId || (o.supplyId && items[o.supplyId] ? items[o.supplyId].vendorId : null),
                           amount: noMoney(o.quantity || '').slice(0, 30), ordered: !!o.ordered }))
       : (est.materials || []).filter(m => m && m.name && !isRental(m, items)).slice(0, 120).map(m => ({
@@ -297,8 +305,8 @@
       if (!ways[i] || ways[i].way !== 'pickup') return;
       const k = l.vendorId || '';
       if (!shops[k]) { shops[k] = { shop: shopOf(l.vendorId), items: [] }; out.push(shops[k]); }
-      shops[k].items.push({ name: noMoney((l.supplyId && items[l.supplyId] && items[l.supplyId].name) || l.name).slice(0, 200),
-                            amount: l.amount, ordered: l.ordered });
+      shops[k].items.push({ name: noMoney(withColor((l.supplyId && items[l.supplyId] && items[l.supplyId].name) || l.name, l)).slice(0, 200),
+                            note: noMoney(l.note || '').slice(0, 300), amount: l.amount, ordered: l.ordered });
     });
     return out;
   }
@@ -373,7 +381,8 @@
       // Its Supplies item and kind of material go too (no price in either:
       // Supplies' items are the crew's to read), so an issue the crew lead
       // notes about it (jobissues.js) says which item and kind it was.
-      materials: mats.map((m, i) => ({ name: noMoney(m.name).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
+      materials: mats.map((m, i) => ({ name: noMoney(withColor(m.name, lineFor(d, m))).slice(0, 200), qty: numOr(m.qty), unit: noMoney(unitOf(m)).slice(0, 30),
+                     note: noMoney((lineFor(d, m) || {}).note || '').slice(0, 300),
                      supplyId: m.supplyId ? safe(m.supplyId) : null,
                      kind: m.plant ? 'plant' : String((m.supplyId && items[m.supplyId] && items[m.supplyId].category) || m.category || '').slice(0, 40),
                      plant: !!m.plant, tree: m.plant && (m.tree === 'single' || m.tree === 'multi') ? m.tree : '',
@@ -421,8 +430,9 @@
       brush: parts.brush,
       // A line not bought (app.js orderNotBought) is nothing for them to look for.
       order: (d.orderItems || []).filter(o => o && o.name && !o.notBought && !isRental(o, items)).slice(0, 120)
-        .map(o => ({ name: noMoney(o.name).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
-                     per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered })),
+        .map(o => ({ name: noMoney(withColor(o.name, o)).slice(0, 200), qty: noMoney(o.quantity || o.qty || '').slice(0, 30),
+                     per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered,
+                     note: noMoney(o.note || '').slice(0, 300) })),
       rentals: rentalsEntry(d, items),
       // What we pick up ourselves, by the supplier to get it from.
       pickups: pickupsEntry(d, items),
@@ -652,6 +662,7 @@
       '<tr><td>' + (m.plant ? '🌱 ' : '') + esc(m.name) +
         (m.tree ? ' <span class="muted">(' + (m.tree === 'single' ? 'single-trunk tree' : 'multi-trunk or evergreen tree') + ')</span>' : '') +
         (m.how ? ' <span class="muted">(' + esc(m.how) + ')</span>' : '') +
+        (m.note ? '<br><span class="cj-mat-note">📝 ' + esc(m.note) + '</span>' : '') +
         (extra ? extra(m) : '') +
       '</td><td class="cj-q">' + esc(fmtQty(m.qty, m.unit)) + '</td></tr>').join('') + '</tbody></table>';
   }
@@ -986,6 +997,7 @@
       workHtml(j, sec, { key: id, ticks: { job: id, preview: preview } }) +
       sec('🛒 Ordered', (j.order || []).length ? '<table class="cj-table"><tbody>' + j.order.map(o =>
           '<tr><td>' + (o.ordered ? '✓ ' : '') + esc(o.name) + (o.supplier ? ' <span class="muted">· ' + esc(o.supplier) + '</span>' : '') +
+          (o.note ? '<br><span class="cj-mat-note">📝 ' + esc(o.note) + '</span>' : '') +
           '</td><td class="cj-q">' + esc([o.qty, o.per].filter(Boolean).join(' ')) + '</td></tr>').join('') + '</tbody></table>' : '', 'order') +
       // Too much rock, no dump trailer, took a day longer -- noted for Jonah
       // and the next bid (jobissues.js), with what they noted here before.

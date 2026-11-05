@@ -6097,3 +6097,8 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .rc-month-box > summary > span:first-child::before { content:'▸ '; }
   .rc-month-box[open] > summary > span:first-child::before { content:'▾ '; }
   .sup-checks { scroll-margin-top:70px; }
+
+  /* The colour and the note on a material's line (app.js), and on the crew's page. */
+  .cr-color { font-weight:700; }
+  .cr-note, .cj-mat-note { font-size:12px; color:var(--text); }
+  .cr-note-add { font-size:12px; }

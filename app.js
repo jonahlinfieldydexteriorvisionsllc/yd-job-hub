@@ -2223,10 +2223,12 @@ function offerPutBack(msg, row, at, list, redraw) {
 // Lines that came from the estimate (fromEstimate) follow it while they are
 // not yet ordered; anything added by hand is never touched.
 function orderFields(l) {
-  return { name: l.name, quantity: window.YDPricing.qtyText(l.orderQty, l.per), qty: l.orderQty, per: l.per || '',
+  return Object.assign({ name: l.name, quantity: window.YDPricing.qtyText(l.orderQty, l.per), qty: l.orderQty, per: l.per || '',
            supplyId: l.supplyId || null, vendorId: l.vendorId || null, specialOrder: !!l.specialOrder,
            // A whole bag bought, part of it used (grass seed): "1 bag (uses 3 lb)".
-           usesLb: typeof l.usedLb === 'number' && l.usedLb > 0 ? l.usedLb : null };
+           usesLb: typeof l.usedLb === 'number' && l.usedLb > 0 ? l.usedLb : null },
+    // Only when the estimate says one: a colour typed on the line stays.
+    l.color ? { color: l.color } : {});
 }
 function orderFromEstimate(list, lines) {
   const keyOf = x => x.supplyId ? 's:' + x.supplyId : 'n:' + String(x.name || '').toLowerCase().trim();
@@ -2244,7 +2246,8 @@ function orderFromEstimate(list, lines) {
     if (it.swappedFrom) { out.push(it); return; }           // swapped by hand: his product and amount
     // An amount changed by hand (what was really ordered) stays his -- in the
     // unit he typed it in.
-    out.push(Object.assign({}, it, orderFields(want[k]), it.qtyByHand ? { quantity: it.quantity, qty: it.qty, per: it.per || '' } : {}));
+    out.push(Object.assign({}, it, orderFields(want[k]), it.qtyByHand ? { quantity: it.quantity, qty: it.qty, per: it.per || '' } : {},
+      it.colorByHand ? { color: it.color } : {}));
   });
   lines.forEach(l => {
     if (!seen[keyOf(l)]) out.push(Object.assign({ id: uid(), proposalId: null, ordered: false, fromEstimate: true }, orderFields(l)));
@@ -2892,8 +2895,9 @@ function orderSwapFields(o, sid, cat) {
   const n = Object.assign({}, o, { supplyId: sid, vendorId: s.vendorId || null, name: s.name, per: per, specialOrder: !!s.specialOrder,
     qty: q, quantity: q === null ? '' : window.YDPricing && YDPricing.qtyText ? YDPricing.qtyText(q, per) : (q + ' ' + per).trim(),
     qtyByHand: true, swappedFrom: was, swappedAt: new Date().toISOString(), swappedBy: notBoughtMark().by });
-  // The old supplier's way and grass-seed bag do not carry over.
-  delete n.way; delete n.usesLb;
+  // The old supplier's way and grass-seed bag do not carry over, nor the
+  // colour of the product it was.
+  delete n.way; delete n.usesLb; delete n.color;
   return n;
 }
 function orderSwapRestore(o) {
@@ -3066,9 +3070,11 @@ function renderOrderList() {
       orderSwapHtml('', ordLineKey(it, wi), it, cat);
     return '<div class="check-row' + (settled ? ' done' : '') + (nb ? ' not-bought' : '') + '">' +
       '<input type="checkbox"' + (it.ordered ? ' checked' : '') + ' onchange="toggleOrderItem(\'' + ordId(it.id) + '\')">' +
-      '<span class="cr-name">' + esc(it.name) +
+      '<span class="cr-name">' + orderNameHtml(it) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
         (settled ? '' : orderSkuHtml(it, cat)) +
+        orderColorHtml(it, cat, '', ordLineKey(it, orderItems.indexOf(it)), settled || ro) +
+        orderNoteHtml(it, '', ordLineKey(it, orderItems.indexOf(it)), ro) +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') +
         // Ticked by a receipt sorted onto this job: which order it was.
         (it.ordered && it.orderNo ? ' <span class="muted">· ' + esc(it.orderedFrom || '') + ' #' + esc(it.orderNo) + '</span>' : '') +
@@ -3206,8 +3212,76 @@ function orderJobTitle(j) {
 function orderLineText(it, cat, w) {
   const amt = orderAmountText(it, cat);
   const sku = orderSkuOf(it, cat);
-  return (amt ? amt + ' — ' : '') + it.name + (sku ? ' (item #' + sku + ')' : '') +
-    (it.specialOrder ? ' (special order)' : '') + (w && w.way === 'pickup' ? ' (we’ll pick it up)' : '');
+  return (amt ? amt + ' — ' : '') + it.name + (it.color ? ' — ' + it.color : '') + (sku ? ' (item #' + sku + ')' : '') +
+    (it.specialOrder ? ' (special order)' : '') + (w && w.way === 'pickup' ? ' (we’ll pick it up)' : '') +
+    (it.note ? ' [' + it.note + ']' : '');
+}
+// A line's name with the colour it is for (supplymatch.js).
+function orderNameHtml(it) {
+  return esc(it.name) + (it.color ? ' <b class="cr-color">— ' + esc(it.color) + '</b>' : '');
+}
+// No colour yet on a paver or a block: said on the line until it is typed.
+// Ordering one with no colour is how the wrong pallet comes.
+function orderColorHtml(it, cat, jobKey, key, ro) {
+  if (it.notBought) return '';
+  // Read from the estimate, so it can be wrong: a tap to put it right.
+  if (it.color) return ro ? '' : ' <button type="button" class="link-btn cr-note-add" onclick="orderColorEdit(\'' + jobKey + '\', \'' + key + '\')">Change colour</button>';
+  const sid = orderSupply(it, cat), sup = sid && cat.items[sid];
+  if (!sup || !window.YDMatch || !YDMatch.takesColor(sup)) return '';
+  if (ro) return '<br><span class="warn-text">No colour yet</span>';
+  return '<br><span class="ord-sku-add"><span class="warn-text">No colour yet</span> ' +
+    '<label>Colour <input class="cr-qty-in" placeholder="e.g. Cascade" aria-label="Colour of ' + esc(it.name) + '"' +
+      ' onchange="orderLineSet(\'' + jobKey + '\', \'' + key + '\', { color: this.value.trim(), colorByHand: true })"></label></span>';
+}
+async function orderColorEdit(jobKey, key) {
+  const was = orderLineOf(jobKey, key);
+  if (!was) { orderListsRedraw(); return; }
+  const v = await ydPrompt('The exact colour, as the supplier names it.', was.color || '', { title: was.name || 'Colour', placeholder: 'e.g. Cascade', ok: 'Save' });
+  if (v === null || v === undefined) return;
+  orderLineSet(jobKey, key, { color: String(v).trim().slice(0, 60) || null, colorByHand: true });
+}
+// A note on one material on one job (Jonah, 4 Nov 2026: "make it so i can add a
+// note on a material item like the turf for [a customer] i want it to list the
+// dimensions"). It stays with the line: on both order lists, in what is copied
+// or emailed to the supplier, and on the crew's page.
+function orderNoteHtml(it, jobKey, key, ro) {
+  const call = 'orderNoteEdit(\'' + jobKey + '\', \'' + key + '\')';
+  if (it.note) {
+    return '<br><span class="cr-note">📝 ' + esc(it.note) + (ro ? '' : ' <button type="button" class="link-btn" onclick="' + call + '">Change</button>') + '</span>';
+  }
+  return ro ? '' : ' <button type="button" class="link-btn cr-note-add" onclick="' + call + '">📝 Note</button>';
+}
+async function orderNoteEdit(jobKey, key) {
+  const was = orderLineOf(jobKey, key);
+  if (!was) { orderListsRedraw(); return; }
+  const v = await ydPrompt('Dimensions, a colour, anything about this one on this job. It goes on the order and the crew see it.', was.note || '',
+    { title: was.name || 'Note', placeholder: 'e.g. 15 ft x 70 ft roll', ok: 'Save note' });
+  if (v === null || v === undefined) return;
+  orderLineSet(jobKey, key, { note: String(v).trim().slice(0, 300) || null });
+}
+// The line as it stands: on the open job's list (jobKey '', or that job), else
+// on its saved copy.
+function orderLineOf(jobKey, key) {
+  if (!jobKey || (currentJobId && ordId(currentJobId) === jobKey)) return orderItems.find((m, i) => ordLineKey(m, i) === key) || null;
+  const id = (getJobIndex().find(x => ordId(x.id) === jobKey) || {}).id;
+  let d = null;
+  try { d = JSON.parse(readJobBlob(id) || 'null'); } catch (e) {}
+  return ((d && d.orderItems) || []).find((o, i) => o && ordLineKey(o, i) === key) || null;
+}
+function orderLineSet(jobKey, key, fields) {
+  if (jobsReadOnly()) { showToast('You can look at jobs but not change them'); return; }
+  if (!jobKey || (currentJobId && ordId(currentJobId) === jobKey)) {
+    const it = orderItems.find((m, i) => ordLineKey(m, i) === key);
+    if (!it) return;
+    Object.assign(it, fields);
+    markDirty();
+  } else if (!ordersPatchLine(jobKey, key, o => Object.assign({}, o, fields))) {
+    showToast('That line has changed on the job — look again');
+    orderListsRedraw();
+    return;
+  }
+  orderListsRedraw();
+  showToast('Saved on the job');
 }
 // The supplier's own item number for a line, from Supplies -- Jonah, 27 Oct
 // 2026: "items to order online from menards should include product number so
@@ -3376,9 +3450,11 @@ function renderOrdersOverview() {
     return { c: c, html: '<div class="check-row">' +
       '<input type="checkbox" aria-label="Ordered"' + (canTick ? '' : ' disabled') +
         ' onchange="ordersTick(\'' + ordId(j.id) + '\', \'' + it._key + '\', this.checked)">' +
-      '<span class="cr-name">' + esc(it.name) +
+      '<span class="cr-name">' + orderNameHtml(it) +
         (it.specialOrder ? ' <span class="cr-special">special order</span>' : '') +
         orderSkuHtml(it, cat) +
+        orderColorHtml(it, cat, ordId(j.id), it._key, !canTick) +
+        orderNoteHtml(it, ordId(j.id), it._key, !canTick) +
         (page ? ' <a class="link-btn" href="' + esc(page) + '" target="_blank" rel="noopener">🔗 order page</a>' : '') + also +
         (cost ? '<br>' + cost : '') + (way ? '<br>' + way : '') + '</span>' +
       qtyBox(it, j) + '</div>' };
