@@ -2153,7 +2153,7 @@
     if (!(taxedCents > 0)) return [{ head: one, list: P().materialsList(src), cents: total, taxed: false }];
     if (taxedCents >= total) return [{ head: one, list: P().materialsList(src), cents: total, taxed: true }];
     return [{ head: 'Materials', list: P().materialsList(src, false), cents: total - taxedCents, taxed: false },
-            { head: 'Planting & lawn materials', list: P().materialsList(src, true), cents: taxedCents, taxed: true }];
+            { head: 'Landscaping materials', list: P().materialsList(src, true), cents: taxedCents, taxed: true }];
   }
 
   // The estimate as the customer reads it -- here and in QuickBooks, from
