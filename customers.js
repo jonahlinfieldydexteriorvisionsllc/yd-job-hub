@@ -3201,6 +3201,12 @@
     return Object.assign({ customerId: t.id, customerBy: 'auto', customerFill: fillMark(t.id, t.how, add) }, add);
   }
   const openJobId = () => (typeof currentJobId !== 'undefined' && currentJobId) || '';
+  // Buttons drawn for the job on the form are still for it. A new bid has no
+  // id until its first save, a moment after the typing stops, and that is the
+  // same bid: a button drawn before then carries no id and must still work
+  // (Jonah, 5 Nov 2026: "she pops up but i cant click her"). Another job
+  // opening redraws them (loadJob, clearJobForm).
+  const sameForm = jk => !jk || sid(openJobId()) === jk;
   // A customer's name as a job's boxes hold it. Picking whose a bid is says
   // who it is for, so the name follows (Jonah, 4 Nov 2026: "whose bid is this
   // shows up and lets me click a client but then doesnt auto fill their
@@ -3328,8 +3334,11 @@
   function drawTie() {
     const box = el('jobCustTie');
     if (!box) return;
-    // Not while he is typing in it (a search for someone else).
-    if (box.contains(document.activeElement)) return;
+    // Not while he is typing in it (a search for someone else). Only the
+    // box: a button just clicked keeps the focus on a computer, and that held
+    // the answer back, so the question stayed up as if the click did nothing.
+    const at = document.activeElement;
+    if (at && at.tagName === 'INPUT' && box.contains(at)) return;
     const bf = typeof boardFields !== 'undefined' && boardFields ? boardFields : {};
     const html = isOn() && loaded && can('jobs', 'see')
       ? tieHtml('job', openJobId(), s(bf.customerId), formWho(), bidWord(typeof jobStatus !== 'undefined' ? jobStatus : ''),
@@ -3377,7 +3386,7 @@
     if (!customers[cid]) return;
     if (ctx === 'card') { tieCard(realJob(jk), cid, 'hand'); return; }
     // Another job opened since the buttons were drawn: nothing.
-    if (sid(openJobId()) !== jk) return;
+    if (!sameForm(jk)) return;
     tieForm(cid, 'hand');
   };
   window.custTieOff = function (ctx, jk) {
@@ -3400,7 +3409,7 @@
       redrawCardTie(jobId, '');
       return;
     }
-    if (sid(openJobId()) !== jk || typeof boardFields === 'undefined') return;
+    if (!sameForm(jk) || typeof boardFields === 'undefined') return;
     const was = filled(boardFields.customerFill);
     Object.keys(was).forEach(f => { const n = el(f); if (n && s(n.value) && s(n.value) === s(was[f])) n.value = ''; });
     boardFields.customerId = null;
