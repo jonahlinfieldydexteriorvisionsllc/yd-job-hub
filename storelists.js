@@ -6,6 +6,16 @@
 // per job not into cart", and "I want this to run the moment a job is
 // accepted".
 //
+// SiteOne too (Jonah, 4 Nov 2026: "auto make lists for jobs through site-one
+// as long as items are all being orderd from one of the locations in madison
+// or middleton wi"). Each of those two branches is its own supplier in
+// Supplies and its own store here, so a list is always one branch's: a job
+// with both gets two lists, and any other SiteOne branch gets none. His rules
+// (5 Nov): "always aim to get the majority from one branch", and an item a
+// branch doesn't stock stays on the list with a prompt to call, after
+// checking the other branch. The routine does both: it reads each branch's
+// stock on siteone.com, which this side can't see.
+//
 // Neither store has a way in for apps and both turn robots away, so the
 // server cannot do it. A routine on his computer does (Claude desktop app →
 // Scheduled → "Store lists", 7 am every other day -- Jonah, 2 Nov 2026; it
@@ -16,14 +26,16 @@
 // is booked, and the answer shown on the job.
 //
 // storeLists/{jobId}__{store}, one per job and store:
-//   jobId, store ('menards' | 'homedepot'), vendorId, name ("Jane Doe - Est #1234"),
+//   jobId, store ('menards' | 'homedepot' | 'siteoneMadison' | 'siteoneMiddleton'), vendorId, name ("Jane Doe - Est #1234"),
 //   status: 'asked' → 'working' → 'done' | 'failed'; 'cancelled' when taken back,
 //   lines: [{ key, name, sku, link, qty, amount, check }] -- what was still
 //     to order when it was asked: qty is the whole number to put on the list,
 //     amount the order's own words, check = that number needs a look,
 //   askedAt, askedBy, auto (asked by itself as the job was booked), updatedAt;
 //   the routine's: startedAt, doneAt, by, result {added, failed: [{name, why}],
-//     note, url}.
+//     note, url}; moved = how many of a SiteOne request's lines went on the
+//     other branch's list instead, because his rule is to get the most from
+//     one branch.
 // A record of its own rather than fields on the job: the routine writes its
 // answer whenever it finishes, and a phone with the job open would put the
 // job's old copy back over it.
@@ -38,6 +50,10 @@
   const STORES = {
     menards: { label: 'Menards', site: 'menards.com' },
     homedepot: { label: 'Home Depot', site: 'homedepot.com' },
+    // branch: what the routine picks under Change Branch on siteone.com
+    // before adding anything, so what is in stock is that branch's.
+    siteoneMadison: { label: 'SiteOne Madison', site: 'siteone.com', branch: 'Madison' },
+    siteoneMiddleton: { label: 'SiteOne Middleton', site: 'siteone.com', branch: 'Middleton' },
   };
   let lists = {};           // docId -> record
   let unsub = null, key = null, heard = false;
@@ -55,6 +71,13 @@
     const s = String(v.name || '') + ' ' + String(v.website || '');
     if (/menards/i.test(s)) return 'menards';
     if (/home\s*depot|homedepot\.com/i.test(s)) return 'homedepot';
+    // The town is in the name or the address. A supplier naming both is
+    // not sure enough to say which branch, so it gets no list.
+    if (/site\s*one/i.test(s)) {
+      const at = String(v.name || '') + ' ' + String(v.address || '') + ' ' + String(v.city || '');
+      const madison = /madison/i.test(at), middleton = /middleton/i.test(at);
+      if (madison !== middleton) return madison ? 'siteoneMadison' : 'siteoneMiddleton';
+    }
     return null;
   }
 
@@ -98,10 +121,13 @@
   }
   // "Jane Doe - Est #1234": his ask, the client and the estimate number.
   // A plain hyphen -- a store's list title may not take every character.
-  function listName(d) {
+  // A SiteOne list says its branch: a job can have one at each, and two
+  // lists of one name on one account couldn't be told apart.
+  function listName(d, branch) {
     const who = String(d.customerName || '').trim() || 'Job';
     const est = String(d.estimateNumber || '').trim();
-    return (who + (est ? ' - Est #' + est : '')).slice(0, 60);
+    const tail = branch ? ' - ' + branch : '';
+    return (who + (est ? ' - Est #' + est : '')).slice(0, 60 - tail.length) + tail;
   }
   // The same lines, the same amounts: whether the list made still matches.
   const sig = lines => (lines || []).map(l => l.key + ':' + l.qty).sort().join('|');
@@ -116,7 +142,7 @@
     const j = jobOf(jobId);
     const now = new Date().toISOString();
     const was = lists[idOf(jobId, store)];
-    const rec = { jobId: jobId, store: store, vendorId: vid, name: listName(j.d), status: 'asked', lines: lines,
+    const rec = { jobId: jobId, store: store, vendorId: vid, branch: STORES[store].branch || null, name: listName(j.d, STORES[store].branch), status: 'asked', lines: lines,
                   askedAt: now, askedBy: typeof notBoughtMark === 'function' ? notBoughtMark().by : '', auto: !!auto,
                   again: !!(was && was.status === 'done'), updatedAt: now,
                   startedAt: null, doneAt: null, by: null, result: was && was.result ? was.result : null };
@@ -213,9 +239,21 @@
       const total = (r.lines || []).length;
       const added = typeof res.added === 'number' ? res.added : total - failed.length;
       const url = window.YDSupplies && YDSupplies.websiteUrl ? YDSupplies.websiteUrl({ website: res.url || '' }) : '';
-      said = '<span class="sl-said sl-done">✓ ' + label + ' list “' + esc2(r.name) + '” made ' + esc2(whenWords(r.doneAt)) +
-        ' — ' + added + ' of ' + total + ' item' + (total === 1 ? '' : 's') + '</span>' +
+      const moved = typeof res.moved === 'number' ? res.moved : 0;
+      const otherList = res.movedTo ? esc2(res.movedTo) + ' list' : 'other branch’s list';
+      const otherUrl = moved && window.YDSupplies && YDSupplies.websiteUrl ? YDSupplies.websiteUrl({ website: res.movedUrl || '' }) : '';
+      const short = Array.isArray(res.short) ? res.short : [];
+      said = '<span class="sl-said sl-done">' + (added || !moved
+        ? '✓ ' + label + ' list “' + esc2(r.name) + '” made ' + esc2(whenWords(r.doneAt)) + ' — ' +
+          // "7 of 8" reads like one was lost when it only went on the other list.
+          (moved ? added + ' here, ' + moved + ' on the ' + otherList : added + ' of ' + total + ' item' + (total === 1 ? '' : 's'))
+        // Nothing left for this branch: there is no list of its own to name.
+        : '✓ ' + moved + ' ' + label + ' item' + (moved === 1 ? '' : 's') + ' went on the ' + otherList + ' ' + esc2(whenWords(r.doneAt))) + '</span>' +
         (url ? ' <a class="link-btn" href="' + esc2(url) + '" target="_blank" rel="noopener">Open the list</a>' : '') +
+        // The second list needs its own tap: a link inside the note can't be pressed.
+        (otherUrl && otherUrl !== url ? ' <a class="link-btn" href="' + esc2(otherUrl) + '" target="_blank" rel="noopener">Open the ' + otherList + '</a>' : '') +
+        // On the list, but it isn't to be had: a tick alone would hide that.
+        (short.length ? '<br><span class="warn-text">Neither branch has enough of ' + short.map(esc2).join(', ') + ': call about ordering it in. It’s on your to-dos.</span>' : '') +
         (failed.length ? '<br><span class="warn-text">Not added: ' + failed.map(f => esc2(f.name || 'an item') + (f.why ? ' (' + esc2(f.why) + ')' : '')).join('; ') + '</span>' : '') +
         (res.note ? '<br><span class="muted">' + esc2(res.note) + '</span>' : '') +
         // Lines changed since (swapped, an amount changed, one added).
