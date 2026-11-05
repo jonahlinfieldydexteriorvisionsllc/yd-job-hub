@@ -34,6 +34,7 @@
 
   let jobId = null;        // the job whose photos are being watched
   let photos = {};         // id -> record, for jobId
+  let heard = false;       // the server has answered for jobId (a refused watch has not)
   let loaded = false;      // the server has answered for jobId
   let unsub = null;
   const mounts = new Set();  // containers showing jobId's photos
@@ -264,11 +265,11 @@
 
   function watch(id) {
     if (unsub) { try { unsub(); } catch (e) { /* already gone */ } }
-    unsub = null; photos = {}; loaded = false; jobId = id;
+    unsub = null; photos = {}; loaded = false; heard = false; jobId = id;
     if (!id || !signedIn() || !window.YDDb) { drawAll(); return; }
     unsub = window.YDDb.watchWhere('jobPhotos', 'jobId', id, (changes, meta) => {
       changes.forEach(c => { if (c.type === 'removed') delete photos[c.id]; else photos[c.id] = c.data || {}; });
-      if (meta && !meta.fromCache) loaded = true;
+      if (meta && !meta.fromCache) loaded = heard = true;
       drawAll();
       if (window.YDJobView) YDJobView.draw();
       if (viewing && !photos[viewing] && !queue[viewing]) jpClose();
@@ -727,7 +728,7 @@
                          count: id => {
                            if (!id || id !== jobId) return null;
                            const n = Object.values(photos).filter(p => !p.deleteAsked).length;
-                           return n || loaded ? n : null;
+                           return n || heard ? n : null;
                          },
                          picking: () => !!pickingSince && Date.now() - pickingSince < 60000,
                          waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
