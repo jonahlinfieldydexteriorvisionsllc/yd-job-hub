@@ -270,6 +270,7 @@
       changes.forEach(c => { if (c.type === 'removed') delete photos[c.id]; else photos[c.id] = c.data || {}; });
       if (meta && !meta.fromCache) loaded = true;
       drawAll();
+      if (window.YDJobView) YDJobView.draw();
       if (viewing && !photos[viewing] && !queue[viewing]) jpClose();
       else if (viewing) drawViewer();
     }, () => { loaded = true; drawAll(); });
@@ -682,17 +683,6 @@
   // first saved). The crew have no Job tab; they see photos on their job page.
   function jobShown(id) {
     if (typeof ydCan !== 'function' || !ydCan('jobs', 'see')) return;
-    let sec = el('jobPhotosSection');
-    if (!sec) {
-      const after = el('estimateSection');
-      if (!after) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'jobPhotosSection';
-      sec.innerHTML = '<div class="section-head"><span class="section-title">Photos</span></div>' +
-        '<div class="section-body" id="jobPhotosBody"></div>';
-      after.insertAdjacentElement('afterend', sec);
-    }
     mount(el('jobPhotosBody'), id || '');
   }
 
@@ -732,6 +722,9 @@
   window.addEventListener('focus', () => { if (pickingSince) setTimeout(() => { pickingSince = 0; }, 3000); });
 
   window.YDJobPhotos = { mount: mount, jobShown: jobShown, readyToFinish: readyToFinish,
+                         // How many a job has, for the button that opens them
+                         // (jobview.js); null until they have come.
+                         count: id => (id && id === jobId && loaded ? Object.values(photos).filter(p => !p.deleteAsked).length : null),
                          picking: () => !!pickingSince && Date.now() - pickingSince < 60000,
                          waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
                          // This person's photos still on this phone, for the end

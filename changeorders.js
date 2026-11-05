@@ -726,20 +726,9 @@
     container.setAttribute('data-job', safe(id || ''));
     draw(container);
   }
-  // The Job tab: a section after the signatures (app.js jobOnScreen).
+  // The Job tab: after the signatures (app.js jobOnScreen).
   function jobShown(id) {
     if (!ydCan('jobs', 'see')) return;
-    let sec = el('jobCoSection');
-    if (!sec) {
-      const after = el('jobSigsSection') || el('jobPhotosSection') || el('estimateSection');
-      if (!after) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'jobCoSection';
-      sec.innerHTML = '<div class="section-head"><span class="section-title">Change orders</span></div>' +
-        '<div class="section-body" id="jobCoBody"></div>';
-      after.insertAdjacentElement('afterend', sec);
-    }
     mount(el('jobCoBody'), id || '', null);
   }
 

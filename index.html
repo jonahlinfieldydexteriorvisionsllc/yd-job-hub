@@ -174,7 +174,6 @@
     <button class="tab-btn active" id="tabHome" onclick="switchTab('home')"><span class="tab-icon">🏡</span>Home</button>
     <button class="tab-btn" id="tabCrewJobs" hidden onclick="switchTab('crewjobs')"><span class="tab-icon">🧰</span>Jobs</button>
     <button class="tab-btn" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📐</span>Job</button>
-    <button class="tab-btn" id="tabTracking" onclick="switchTab('tracking')"><span class="tab-icon">📈</span>Tracking</button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
     <button class="tab-btn" id="tabReceipts" hidden onclick="switchTab('receipts')"><span class="tab-icon">🧾</span>Receipts<span class="tab-count" id="rcTabCount"></span></button>
     <button class="tab-btn" id="tabMoney" hidden onclick="switchTab('money')"><span class="tab-icon">💵</span>Money</button>
@@ -229,6 +228,17 @@
          drafted, sent by hand or not needed (plantcare.js). -->
     <div class="care-banner" id="careBanner" hidden></div>
 
+    <!-- One job, one screen (jobview.js): what the job is and a tap to get
+         there or ring them, then a button for each part of it. One part
+         shows at a time, each drawn by its own file. -->
+    <div class="job-strip" id="jobStrip" hidden></div>
+    <!-- Whose bid or job it is: the customer it is tied to, or buttons to
+         say (customers.js drawTie). Over the buttons: the question has to be
+         seen on whichever part the job opens on. -->
+    <div id="jobCustTie" hidden></div>
+    <div class="jv-views" id="jobViews" role="group" aria-label="Parts of the job"></div>
+
+    <div data-job-view="details">
     <div class="section">
       <div class="section-head">
         <span class="section-title">Client &amp; Job Info</span>
@@ -244,9 +254,6 @@
           <div class="field"><span class="label">Business name (if any)</span><input id="business" autocomplete="off" oninput="onCustomerNamePart()"></div>
         </div>
         <input type="hidden" id="customerName">
-        <!-- Whose bid or job it is: the customer it is tied to, or buttons to
-             say (customers.js drawTie). -->
-        <div id="jobCustTie" hidden></div>
         <!-- What the job is in a few words: the crew see it beside the name
              (app.js jobWhat). Blank = from the estimate, else the services. -->
         <div class="field mt"><span class="label">What the job is, in a few words — the crew see it beside the name</span>
@@ -386,6 +393,19 @@
       </div>
     </div>
 
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Proposal Import</span>
+        <span class="section-badge" id="proposalStatus"></span>
+      </div>
+      <div class="section-body">
+        <input type="file" id="proposalFileInput" accept=".json" style="display:none" onchange="loadProposalFile(event)">
+        <div id="proposalContent"></div>
+      </div>
+    </div>
+    </div>
+
+    <div data-job-view="estimate" hidden>
     <!-- The estimate: built here from the site-visit notes (Claude does the
          takeoff, pricing.js the money) and sent to the customer through
          QuickBooks. estimate.js -->
@@ -395,24 +415,15 @@
       </div>
       <div class="section-body" id="estimateWrap"></div>
     </div>
+    </div>
 
+    <div data-job-view="materials" hidden>
     <div class="cols2">
-      <div class="section">
-        <div class="section-head">
-          <span class="section-title">Proposal Import</span>
-          <span class="section-badge" id="proposalStatus"></span>
-        </div>
-        <div class="section-body">
-          <input type="file" id="proposalFileInput" accept=".json" style="display:none" onchange="loadProposalFile(event)">
-          <div id="proposalContent"></div>
-        </div>
-      </div>
-
       <div class="section">
         <div class="section-head">
           <span class="section-title">Materials to Order</span>
           <button type="button" class="btn btn-sm" onclick="YDCalc.openHere()">🧮 Calculator</button>
-          <span style="display:flex;align-items:center;gap:8px"><span class="section-badge" id="orderBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhotoThisJob()" title="Photograph a paper receipt for this job: its lines go on Tracking by themselves" hidden>📷 Add a receipt</button></span>
+          <span style="display:flex;align-items:center;gap:8px"><span class="section-badge" id="orderBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhotoThisJob()" title="Photograph a paper receipt for this job: its lines go on its Costs by themselves" hidden>📷 Add a receipt</button></span>
         </div>
         <div class="section-body">
           <div class="field-actions" style="margin-top:0"><button class="btn btn-sm" id="orderFromEstimate" hidden onclick="fillOrderFromEstimate()">⬇ Fill from the estimate</button></div>
@@ -441,116 +452,28 @@
         <div class="section-body" id="jobToolsWrap"></div>
       </div>
     </div>
-  </div>
+    </div>
 
-
-  <!-- ============ TAB: SNOW ============ -->
-  <div class="tab-panel" id="panel-snow">
-    <!-- The storm first: it is hidden until one is open, so the weather
-         leads on any other night (storm.js). -->
-    <div id="stormWrap" hidden></div>
-    <div id="weatherWrap" class="wx-strip"></div>
-    <div id="lastStormWrap" hidden></div>
-    <div class="start-point" id="snowStartRow"><span id="snowStartPoint">Route starts from Madison (yard not set)</span><button class="btn btn-sm" onclick="setStartPoint()">Change</button></div>
-    <div id="snowRouteWrap"></div>
+    <div data-job-view="costs" hidden>
     <div class="section">
       <div class="section-head">
-        <span class="section-title">Snow Accounts</span>
-        <span style="display:flex;align-items:center;gap:10px">
-          <span class="section-badge" id="snowCountBadge"></span>
-          <button class="btn btn-sm" id="nightBtn" onclick="toggleNight()" title="Night mode">◑ Night</button>
-          <!-- Start storm is the main button here: it is what a storm night needs. -->
-          <button class="btn btn-sm" id="snowAddBtn" onclick="openSnowForm()">+ Add account</button>
-          <button class="btn btn-accent btn-sm" id="stormStartBtn" onclick="startStorm()">❄ Start storm</button>
-        </span>
+        <span class="section-title">Job Financials</span>
+        <span class="section-badge accent" id="laborRateBadge">@ $25/hr</span>
       </div>
       <div class="section-body">
-        <div id="snowAccountsWrap"></div>
+        <!-- Shown while Estimate vs actual is on this screen (it has the
+             fuller picture -- estimate against what it took, line by line);
+             app.js follows that section's hidden flag. -->
+        <p class="fin-pointer" id="finEvaPointer" hidden>The full estimate-vs-actual is below. <button type="button" class="link-btn" onclick="goToEva()">↓ Estimate vs actual</button></p>
+        <div class="summary-grid" id="summaryGrid"></div>
+        <div class="fin-grid" id="financialsGrid" style="margin-top:14px"></div>
+        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">
+          <span class="label" style="width:100%;margin-bottom:2px">Export</span>
+          <button class="btn btn-sm ro-ok" onclick="copyCostSummary()">📋 Copy Cost Summary</button>
+          <button class="btn btn-sm ro-ok" onclick="exportPurchasesCsv()">⬇ Export Purchases (CSV)</button>
+        </div>
       </div>
     </div>
-
-    <div class="section" hidden>
-      <div class="section-head">
-        <span class="section-title">Storms</span>
-        <span class="section-badge">closed &amp; billable</span>
-      </div>
-      <div class="section-body"><div id="stormHistoryWrap"></div></div>
-    </div>
-
-    <div class="section" hidden>
-      <div class="section-head">
-        <span class="section-title">This Season, by Account</span>
-        <span class="section-badge" id="seasonBadge"></span>
-      </div>
-      <div class="section-body"><div id="seasonWrap"></div></div>
-    </div>
-
-  </div>
-
-  <!-- ============ TAB: JOBS (crew) ============ -->
-  <!-- The crew's own job pages (crewjobs.js): client, address, the work and
-       the materials -- never a price. The owner has the Job tab instead. -->
-  <div class="tab-panel" id="panel-crewjobs">
-    <div class="section">
-      <div class="section-head"><span class="section-title">Jobs</span></div>
-      <div class="section-body" id="crewJobsWrap"><p class="empty-msg">Loading…</p></div>
-    </div>
-  </div>
-
-  <!-- ============ TAB: CLOCK ============ -->
-  <!-- Crew see this and the snow route; nothing else on the tab bar is theirs.
-       Paused time is still paid -- it only stops counting toward a customer's
-       labour line. -->
-  <div class="tab-panel" id="panel-clock">
-
-    <div class="section">
-      <div class="section-head">
-        <span class="section-title">Time Clock</span>
-        <span class="clock-head-acts" style="display:flex;align-items:center;gap:8px"><span class="section-badge accent" id="clockBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" aria-label="Add a receipt" hidden>📷 <span class="clock-head-long">Add a </span>receipt</button><button class="btn btn-sm" id="clockNoteBtn" onclick="openNoteForJonah()" aria-label="Note for Jonah" hidden>📝 Note<span class="clock-head-long"> for Jonah</span></button></span>
-      </div>
-      <div class="section-body" id="clockWrap"></div>
-    </div>
-
-    <div class="section" id="clockOnNowSection" hidden>
-      <div class="section-head">
-        <span class="section-title">On the Clock Now</span>
-        <span class="section-badge" id="onNowBadge"></span>
-      </div>
-      <div class="section-body" id="onNowWrap"></div>
-    </div>
-
-    <div class="section" id="clockApproveSection" hidden>
-      <div class="section-head">
-        <span class="section-title">Waiting for You</span>
-        <span class="section-badge accent" id="approveBadge"></span>
-      </div>
-      <div class="section-body" id="approveWrap"></div>
-    </div>
-
-    <div class="section" id="clockCrewSection" hidden>
-      <div class="section-head">
-        <span class="section-title">Your Crew</span>
-        <span class="section-badge accent" id="crewBadge"></span>
-      </div>
-      <div class="section-body" id="crewWrap"></div>
-    </div>
-
-
-    <p class="hint mn-moved" data-view="payroll" hidden>Hours, wages and the pay sheet are on <button type="button" class="link-btn" onclick="YDMoney.show('payroll')">💵 Money</button>.</p>
-
-    <div class="section" id="worklogSection" hidden>
-      <div class="section-head">
-        <span class="section-title">Work Log</span>
-      </div>
-      <div class="section-body" id="worklogWrap"></div>
-    </div>
-  </div>
-
-  <!-- ============ TAB 2: TRACKING ============ -->
-  <div class="tab-panel" id="panel-tracking">
-
-    <!-- Look-only, as on the Job tab. -->
-    <p class="ro-banner" role="note">👀 You can look at jobs; changes are for Jonah — ask him if one needs changing.</p>
 
     <!-- Each list's form to add to it is folded behind its "+ Add ..." button
          (app.js openAddForm / closeAddForm): four forms always open made this
@@ -690,26 +613,6 @@
       </div>
     </div>
 
-    <div class="section">
-      <div class="section-head">
-        <span class="section-title">Job Financials</span>
-        <span class="section-badge accent" id="laborRateBadge">@ $25/hr</span>
-      </div>
-      <div class="section-body">
-        <!-- Shown while Estimate vs actual is on this screen (it has the
-             fuller picture -- estimate against what it took, line by line);
-             app.js follows that section's hidden flag. -->
-        <p class="fin-pointer" id="finEvaPointer" hidden>The full estimate-vs-actual is below. <button type="button" class="link-btn" onclick="goToEva()">↓ Estimate vs actual</button></p>
-        <div class="summary-grid" id="summaryGrid"></div>
-        <div class="fin-grid" id="financialsGrid" style="margin-top:14px"></div>
-        <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:16px">
-          <span class="label" style="width:100%;margin-bottom:2px">Export</span>
-          <button class="btn btn-sm ro-ok" onclick="copyCostSummary()">📋 Copy Cost Summary</button>
-          <button class="btn btn-sm ro-ok" onclick="exportPurchasesCsv()">⬇ Export Purchases (CSV)</button>
-        </div>
-      </div>
-    </div>
-
     <!-- Estimate vs actual (jobcosts.js): what the job was bid at against what
          it took -- crew-days, labour, materials, delivery, fuel, dumpsters --
          and where it made or lost money. The owner, and an admin given both
@@ -720,6 +623,144 @@
         <span class="section-badge" id="evaBadge"></span>
       </div>
       <div class="section-body" id="evaWrap"></div>
+    </div>
+    </div>
+
+    <!-- Photos, signatures and change orders (jobphotos.js, signatures.js, changeorders.js). -->
+    <div data-job-view="papers" hidden>
+      <div class="section" id="jobPhotosSection">
+        <div class="section-head"><span class="section-title">Photos</span></div>
+        <div class="section-body" id="jobPhotosBody"></div>
+      </div>
+      <div class="section" id="jobSigsSection">
+        <div class="section-head"><span class="section-title">Signatures</span></div>
+        <div class="section-body" id="jobSigsBody"></div>
+      </div>
+      <div class="section" id="jobCoSection">
+        <div class="section-head"><span class="section-title">Change orders</span></div>
+        <div class="section-body" id="jobCoBody"></div>
+      </div>
+    </div>
+
+    <!-- What happened on the job (joblog.js, jobissues.js, eod.js). Each shows
+         only once it has something in it, and the Log button only then. -->
+    <div data-job-view="log" hidden>
+      <div class="section" id="jobLogSection" hidden>
+        <div class="section-head"><span class="section-title">📒 Daily log</span><span class="section-badge" id="jobLogBadge"></span></div>
+        <div class="section-body" id="jobLogBody"></div>
+      </div>
+      <div class="section" id="jobIssuesSection" hidden>
+        <div class="section-head"><span class="section-title">⚠️ Issues &amp; lessons</span><span class="section-badge" id="jobIssuesBadge"></span></div>
+        <div class="section-body" id="jobIssuesBody"></div>
+      </div>
+      <div class="section" id="jobEodSection" hidden>
+        <div class="section-head"><span class="section-title">End-of-day notes</span></div>
+        <div class="section-body" id="jobEodBody"></div>
+      </div>
+      <p class="empty-msg" id="jobLogNone" hidden>Nothing logged on this job.</p>
+    </div>
+  </div>
+
+
+  <!-- ============ TAB: SNOW ============ -->
+  <div class="tab-panel" id="panel-snow">
+    <!-- The storm first: it is hidden until one is open, so the weather
+         leads on any other night (storm.js). -->
+    <div id="stormWrap" hidden></div>
+    <div id="weatherWrap" class="wx-strip"></div>
+    <div id="lastStormWrap" hidden></div>
+    <div class="start-point" id="snowStartRow"><span id="snowStartPoint">Route starts from Madison (yard not set)</span><button class="btn btn-sm" onclick="setStartPoint()">Change</button></div>
+    <div id="snowRouteWrap"></div>
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Snow Accounts</span>
+        <span style="display:flex;align-items:center;gap:10px">
+          <span class="section-badge" id="snowCountBadge"></span>
+          <button class="btn btn-sm" id="nightBtn" onclick="toggleNight()" title="Night mode">◑ Night</button>
+          <!-- Start storm is the main button here: it is what a storm night needs. -->
+          <button class="btn btn-sm" id="snowAddBtn" onclick="openSnowForm()">+ Add account</button>
+          <button class="btn btn-accent btn-sm" id="stormStartBtn" onclick="startStorm()">❄ Start storm</button>
+        </span>
+      </div>
+      <div class="section-body">
+        <div id="snowAccountsWrap"></div>
+      </div>
+    </div>
+
+    <div class="section" hidden>
+      <div class="section-head">
+        <span class="section-title">Storms</span>
+        <span class="section-badge">closed &amp; billable</span>
+      </div>
+      <div class="section-body"><div id="stormHistoryWrap"></div></div>
+    </div>
+
+    <div class="section" hidden>
+      <div class="section-head">
+        <span class="section-title">This Season, by Account</span>
+        <span class="section-badge" id="seasonBadge"></span>
+      </div>
+      <div class="section-body"><div id="seasonWrap"></div></div>
+    </div>
+
+  </div>
+
+  <!-- ============ TAB: JOBS (crew) ============ -->
+  <!-- The crew's own job pages (crewjobs.js): client, address, the work and
+       the materials -- never a price. The owner has the Job tab instead. -->
+  <div class="tab-panel" id="panel-crewjobs">
+    <div class="section">
+      <div class="section-head"><span class="section-title">Jobs</span></div>
+      <div class="section-body" id="crewJobsWrap"><p class="empty-msg">Loading…</p></div>
+    </div>
+  </div>
+
+  <!-- ============ TAB: CLOCK ============ -->
+  <!-- Crew see this and the snow route; nothing else on the tab bar is theirs.
+       Paused time is still paid -- it only stops counting toward a customer's
+       labour line. -->
+  <div class="tab-panel" id="panel-clock">
+
+    <div class="section">
+      <div class="section-head">
+        <span class="section-title">Time Clock</span>
+        <span class="clock-head-acts" style="display:flex;align-items:center;gap:8px"><span class="section-badge accent" id="clockBadge"></span><button class="btn btn-sm rc-photo-btn" onclick="rcPhoto()" aria-label="Add a receipt" hidden>📷 <span class="clock-head-long">Add a </span>receipt</button><button class="btn btn-sm" id="clockNoteBtn" onclick="openNoteForJonah()" aria-label="Note for Jonah" hidden>📝 Note<span class="clock-head-long"> for Jonah</span></button></span>
+      </div>
+      <div class="section-body" id="clockWrap"></div>
+    </div>
+
+    <div class="section" id="clockOnNowSection" hidden>
+      <div class="section-head">
+        <span class="section-title">On the Clock Now</span>
+        <span class="section-badge" id="onNowBadge"></span>
+      </div>
+      <div class="section-body" id="onNowWrap"></div>
+    </div>
+
+    <div class="section" id="clockApproveSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Waiting for You</span>
+        <span class="section-badge accent" id="approveBadge"></span>
+      </div>
+      <div class="section-body" id="approveWrap"></div>
+    </div>
+
+    <div class="section" id="clockCrewSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Your Crew</span>
+        <span class="section-badge accent" id="crewBadge"></span>
+      </div>
+      <div class="section-body" id="crewWrap"></div>
+    </div>
+
+
+    <p class="hint mn-moved" data-view="payroll" hidden>Hours, wages and the pay sheet are on <button type="button" class="link-btn" onclick="YDMoney.show('payroll')">💵 Money</button>.</p>
+
+    <div class="section" id="worklogSection" hidden>
+      <div class="section-head">
+        <span class="section-title">Work Log</span>
+      </div>
+      <div class="section-body" id="worklogWrap"></div>
     </div>
   </div>
 
@@ -1227,7 +1268,7 @@
 </div>
 
 <!-- A job's labour day by day: who was there each day, when, how long
-     (app.js openLabourDays, from Tracking → Labor Hours). -->
+     (app.js openLabourDays, from Costs → Labor Hours). -->
 <div class="modal-overlay" id="labDaysModal">
   <div class="modal" style="max-width:720px">
     <div class="modal-head">
@@ -1415,6 +1456,7 @@
 <script src="./paychecks.js"></script>
 <script src="./paysheet.js"></script>
 <script src="./money.js"></script>
+<script src="./jobview.js"></script>
 <script src="./notify.js"></script>
 <script src="./crewnotes.js"></script>
 <script src="./crewjobs.js"></script>

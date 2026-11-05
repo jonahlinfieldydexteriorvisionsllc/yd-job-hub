@@ -381,6 +381,7 @@
   window.jiOpenJob = function (jobId) {
     if (typeof openNoteJob !== 'function') return;
     Promise.resolve(openNoteJob(jobId)).then(() => {
+      if (window.YDJobView) YDJobView.show('log');
       setTimeout(() => { const s = el('jobIssuesSection'); if (s && !s.hidden && s.scrollIntoView) s.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, 300);
     });
   };
@@ -464,18 +465,6 @@
   function jobShown(id) {
     jobId = id || null;
     if (!signedIn() || !can('jobs', 'see')) return;
-    let sec = el('jobIssuesSection');
-    if (!sec) {
-      const after = el('jobEodSection') || el('jobSigsSection') || el('jobPhotosSection') || el('estimateSection');
-      if (!after) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'jobIssuesSection';
-      sec.hidden = true;
-      sec.innerHTML = '<div class="section-head"><span class="section-title">⚠️ Issues &amp; lessons</span>' +
-        '<span class="section-badge" id="jobIssuesBadge"></span></div><div class="section-body" id="jobIssuesBody"></div>';
-      after.insertAdjacentElement('afterend', sec);
-    }
     drawJob();
     readLike(jobId, () => { if (id === jobId) drawJob(); });
   }

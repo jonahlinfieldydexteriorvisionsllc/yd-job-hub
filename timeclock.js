@@ -2529,7 +2529,7 @@
   // below said they never would), the QuickBooks connection, and the
   // Problems screen.
   const AREAS = [
-    { id: 'jobs', label: 'Jobs & bids', hint: 'Job, Tracking and All Jobs; the Bids and Jobs boards; materials bought' },
+    { id: 'jobs', label: 'Jobs & bids', hint: 'Job and All Jobs; the Bids and Jobs boards; materials bought' },
     { id: 'snow', label: 'Snow', hint: 'Snow accounts and their prices; starting and running storms' },
     { id: 'billing', label: 'Billing', hint: 'Storm bills, invoices, season reports; sending to QuickBooks. Closing a storm also needs Crew hours & pay: See' },
     { id: 'hours', label: 'Crew hours & pay', hint: 'Everyone’s shifts and pay rates; approving shifts (never their own)' },

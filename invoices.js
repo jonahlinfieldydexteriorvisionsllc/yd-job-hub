@@ -372,9 +372,12 @@
   window.invView = function (v) { view = ['todo', 'owed', 'paid'].indexOf(v) !== -1 ? v : 'todo'; render(); };
   // As search.js opens one: the job already in the form is just shown.
   window.invOpenJob = async function (jobId) {
-    if (typeof currentJobId !== 'undefined' && currentJobId === jobId) { switchTab('job'); return; }
-    if (!(await ydLeaveUnsavedJob())) return;
-    if (typeof loadJob === 'function') loadJob(jobId);
+    if (typeof currentJobId === 'undefined' || currentJobId !== jobId) {
+      if (!(await ydLeaveUnsavedJob())) return;
+      if (typeof loadJob === 'function') loadJob(jobId);
+    }
+    switchTab('job');
+    if (window.YDJobView) YDJobView.show('costs');
   };
   window.invRemind = async function (id) {
     const inv = invoices[id];

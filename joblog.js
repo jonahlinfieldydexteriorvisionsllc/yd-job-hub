@@ -154,18 +154,6 @@
     if (id !== jobId) showAll = false;
     jobId = id || null;
     if (!signedIn() || !can('jobs', 'see')) return;
-    let sec = el('jobLogSection');
-    if (!sec) {
-      const after = el('jobIssuesSection') || el('jobEodSection') || el('jobSigsSection') || el('jobPhotosSection') || el('estimateSection');
-      if (!after) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'jobLogSection';
-      sec.hidden = true;
-      sec.innerHTML = '<div class="section-head"><span class="section-title">📒 Daily log</span>' +
-        '<span class="section-badge" id="jobLogBadge"></span></div><div class="section-body" id="jobLogBody"></div>';
-      after.insertAdjacentElement('afterend', sec);
-    }
     watchJob(jobId);
     drawJob();
   }

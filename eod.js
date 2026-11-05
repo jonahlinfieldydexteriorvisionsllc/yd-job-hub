@@ -1072,18 +1072,6 @@
     if (!signedIn() || typeof ydCan !== 'function' || !ydCan('jobs', 'see')) return;
     if (id !== jobId) jobShowAll = false;
     jobId = id || null;
-    let sec = el('jobEodSection');
-    if (!sec) {
-      const after = el('jobSigsSection') || el('jobPhotosSection') || el('estimateSection');
-      if (!after) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'jobEodSection';
-      sec.hidden = true;
-      sec.innerHTML = '<div class="section-head"><span class="section-title">End-of-day notes</span></div>' +
-        '<div class="section-body" id="jobEodBody"></div>';
-      after.insertAdjacentElement('afterend', sec);
-    }
     // The owner's from before the live ones, once per job.
     if (jobId && isOwner() && !jobAsked[jobId] && window.YDDb && YDDb.listWhere) {
       const asked = jobAsked[jobId] = jobId;

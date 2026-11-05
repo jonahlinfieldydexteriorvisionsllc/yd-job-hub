@@ -13,7 +13,7 @@
 // Invoices to pay until it is, and anything can be marked 🚫 Not a receipt,
 // which teaches the email reader to pass mail like it over (rcNotReceipt).
 //
-// "Add to job" puts the ticked lines into that job's materials (Tracking),
+// "Add to job" puts the ticked lines into that job's materials (its Costs),
 // one materials line per receipt line, plus that job's share of the sales
 // tax, so the job carries what was actually paid. The lines go in through
 // YDSync.patchJob -- the same road a board move takes -- so this device's
@@ -563,7 +563,7 @@
   // the lines and tax making the total, nothing like it already in -- comes
   // with auto.state 'ready' (functions/receipts.py). The first device that
   // sorts receipts and sees it puts it on the job through addToJob above,
-  // the same as pressing Add to job: Tracking gets every line and the tax,
+  // the same as pressing Add to job: its Costs get every line and the tax,
   // and ⋯ → Undo takes it back off. Anything the server was unsure of is
   // 'needs', with why, and waits in To sort for a person.
   //
@@ -2405,7 +2405,7 @@
   // when someone is clocked into a job auto go to that job. If theyre
   // clocked out or into anything that isnt a clients job they have to input
   // which specific job its for"):
-  //   - from a job's own page (the Job or Tracking tab, the crew job page):
+  //   - from a job's own page (the Job tab, the crew job page):
   //     that job, nothing to ask;
   //   - clocked into a client's job: that job, said on the bar for a few
   //     seconds with Change before it goes;
@@ -2469,7 +2469,7 @@
     nextFor = { forTo: 'job', jobId, how: 'page', forName: name || (b && b.name) || 'this job' };
     openCamera();
   };
-  // The Job / Tracking tab's button: the job open in the form.
+  // The Job tab's button: the job open in the form.
   window.rcPhotoThisJob = function () {
     const id = typeof currentJobId !== 'undefined' ? currentJobId : '';
     const box = el('customerName');

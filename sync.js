@@ -762,12 +762,12 @@
     return false;
   }
 
-  // Someone is in one of the open job's boxes (the Job or Tracking tab, the
+  // Someone is in one of the open job's boxes (the Job tab, the
   // estimate and its chat with Claude included). The form is not rebuilt
   // under them: the cursor jumped, and what was half typed went.
   function formBusy() {
     const a = document.activeElement;
-    if (!a || a === document.body || !a.closest || !a.closest('#panel-job, #panel-tracking')) return false;
+    if (!a || a === document.body || !a.closest || !a.closest('#panel-job')) return false;
     return /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || !!a.isContentEditable;
   }
   // The open job brought up to date from its stored copy, keeping a message
@@ -1019,7 +1019,7 @@
           // someone looking at the job is told why it went blank.
           clearJobForm();
           const onScreen = document.querySelector('.tab-panel.active');
-          if (onScreen && (onScreen.id === 'panel-job' || onScreen.id === 'panel-tracking')) {
+          if (onScreen && onScreen.id === 'panel-job') {
             showToast('This job was deleted on another device');
           }
         }

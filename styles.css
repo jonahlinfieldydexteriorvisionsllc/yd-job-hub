@@ -938,11 +938,11 @@
   /* five tabs need to fit a 375px phone */
   @media (max-width:720px) {
     .tab-btn { font-size:9px; letter-spacing:.4px; padding:9px 2px 8px; }
-    /* Tracking, Contacts, Equipment and All Jobs move into the More sheet
+    /* Contacts, Equipment and All Jobs move into the More sheet
        (All Jobs since Home took its place, 14 Oct 2026). They stay in the
        DOM -- switchTab finds a tab's button by its id, and More lists them
        from there -- they are just not on the bar. */
-    #tabTracking, #tabContacts, #tabEquipment, #tabDashboard, #tabMoney { display:none; }
+    #tabContacts, #tabEquipment, #tabDashboard, #tabMoney { display:none; }
     /* Snow too, but for while a storm is going (storm.js data-storm-on;
        Jonah, 26 Oct 2026: "snow tab doesnt need to be on main nav on mobile"):
        then it is a tap away on every phone. Otherwise it is in More. */
@@ -1948,15 +1948,15 @@
   /* ---- job controls only where there is a job ----
      Save, New, My Jobs and the "Editing ..." bar all act on the open job.
      On Snow, the calendar or the boards they were just in the way. The three
-     job screens keep New and My Jobs -- Job, Tracking and All Jobs -- since
+     job screens keep New and My Jobs -- Job and All Jobs -- since
      picking another job from All Jobs is exactly what Jobs is for (Jonah
      missed them there). Save and the "Editing ..." bar only where a job is
-     actually being edited: Job and Tracking. All Jobs edits nothing.
+     actually being edited: Job. All Jobs edits nothing.
      The logo and the menu (with Sign out) stay on every screen. */
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnNew,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]):not([data-tab="dashboard"]) #btnMyJobs,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #btnSave,
-  html[data-tab]:not([data-tab="job"]):not([data-tab="tracking"]) #ctxBar { display:none !important; }
+  html[data-tab]:not([data-tab="job"]):not([data-tab="dashboard"]) #btnNew,
+  html[data-tab]:not([data-tab="job"]):not([data-tab="dashboard"]) #btnMyJobs,
+  html[data-tab]:not([data-tab="job"]) #btnSave,
+  html[data-tab]:not([data-tab="job"]) #ctxBar { display:none !important; }
 
   /* ---- board settings: one row per column and per label ---- */
   .bd-edit-list { display:flex; flex-direction:column; gap:8px; margin-bottom:8px; }
@@ -2377,18 +2377,16 @@
   .clock-idle > .btn-sm { margin:4px 3px 0; min-height:44px; }
 
   /* ---- an admin who may look at jobs but not change them ----
-     Every control on the Job and Tracking screens is inert (rows drawn later
+     Every control on the Job screen is inert (rows drawn later
      included); app.js refuses to save as the backstop. */
-  html[data-jobs-readonly] #panel-job :is(input, select, textarea, button),
-  html[data-jobs-readonly] #panel-tracking :is(input, select, textarea, button) {
+  html[data-jobs-readonly] #panel-job :is(input, select, textarea, button) {
     pointer-events:none; }
-  html[data-jobs-readonly] #panel-job :is(input, select, textarea),
-  html[data-jobs-readonly] #panel-tracking :is(input, select, textarea) { background:var(--surface-2); }
-  html[data-jobs-readonly] #panel-job button, html[data-jobs-readonly] #panel-tracking button { opacity:.45; }
+  html[data-jobs-readonly] #panel-job :is(input, select, textarea) { background:var(--surface-2); }
+  html[data-jobs-readonly] #panel-job button { opacity:.45; }
   /* What only shows or copies something still works there (.ro-ok -- What
      the customer sees, Show my numbers, Copy cost summary, the estimate's
      section links, a photo); app.js lets them keep the focus. */
-  html[data-jobs-readonly] #panel-job .ro-ok, html[data-jobs-readonly] #panel-tracking .ro-ok { pointer-events:auto; opacity:1; }
+  html[data-jobs-readonly] #panel-job .ro-ok { pointer-events:auto; opacity:1; }
   /* And the screen says why the rest is grey (index.html). */
   .ro-banner { display:none; }
   html[data-jobs-readonly] .ro-banner { display:block; margin:0 0 12px; padding:10px 14px; border-radius:10px; font-size:14px;
@@ -2943,7 +2941,6 @@
   .rc-task .rc-days { width:56px; }
   .rc-task .rc-next { grid-column:1 / -1; font-size:12px; }
   @media (max-width:720px) { .rc-task { grid-template-columns:1fr 1fr; } }
-  .cols2.single { grid-template-columns:1fr; }
   /* Card urgency and the board filter (boards.js) */
   .bd-card.urg-urgent { box-shadow:inset 4px 0 0 var(--st-due); }
   .bd-card.urg-high { box-shadow:inset 4px 0 0 var(--st-soon-fill); }
@@ -3274,7 +3271,7 @@
   html[data-night] .hm-job-m small.hm-when.late { color:var(--neg); }
   html[data-night] .hm-job-m small.hm-when.you { color:#7aa7ef; }
   html[data-night] .hm-alert { background:#13272e; background:color-mix(in srgb, #3fb6d8 16%, var(--surface)); }
-  /* ---- Estimate vs actual (jobcosts.js): the job on Tracking, every job on All Jobs ---- */
+  /* ---- Estimate vs actual (jobcosts.js): the job under its Costs, every job on All Jobs ---- */
   .eva-basis { font-size:13px; line-height:1.5; margin-bottom:10px; }
   .eva-basis .hint { margin-top:2px; }
   .eva-setup { margin-bottom:10px; padding:9px 12px; border-radius:8px; border:1px solid var(--accent); background:var(--surface-2); font-size:12.5px; line-height:1.5; }
@@ -3312,7 +3309,7 @@
   .eva-of { font-size:13px; color:var(--muted); font-family:'DM Sans',sans-serif; font-weight:600; }
   /* Choosing which estimate to compare with only looks; it stays usable for
      an admin who may see jobs but not change them. */
-  html[data-jobs-readonly] #panel-tracking .eva-view-btn { pointer-events:auto; opacity:1; }
+  html[data-jobs-readonly] #panel-job .eva-view-btn { pointer-events:auto; opacity:1; }
   /* On a phone each line's name goes across the top and its three figures
      sit under Estimated / Actual / Difference -- four columns left the
      figures a few letters wide. */
@@ -3591,7 +3588,7 @@
     /* On the job screens a phone's header already holds Save, New and My
        Jobs, and one more button pushed it off the side of the screen. The
        glass is on every other screen; My Jobs has its own search here. */
-    html[data-tab="job"] .srch-open, html[data-tab="tracking"] .srch-open, html[data-tab="dashboard"] .srch-open { display:none; }
+    html[data-tab="job"] .srch-open, html[data-tab="dashboard"] .srch-open { display:none; }
   }
 
   .srch-panel { position:fixed; z-index:960; top:70px; right:16px; width:min(640px, calc(100vw - 32px));
@@ -4131,7 +4128,7 @@
   .price-qb[hidden] { display:none; }
   .addcost-words { font-size:12px; font-weight:400; white-space:pre-line; margin-top:2px; max-width:420px; }
 
-  /* Tracking: each add form folded behind its "+ Add ..." button (app.js
+  /* Costs: each add form folded behind its "+ Add ..." button (app.js
      openAddForm). */
   .add-open-row { margin-top:14px; }
   .add-open-row[hidden], .fin-pointer[hidden] { display:none; }
@@ -4159,13 +4156,13 @@
   /* On one column the paired sections were 44px apart (the grid's gap and
      each section's own margin); the last of a pair keeps its margin. */
   @media (max-width:860px) {
-    #panel-job .cols2 > .section:not(:last-child), #panel-tracking .cols2 > .section:not(:last-child) { margin-bottom:0; }
+    #panel-job .cols2 > .section:not(:last-child) { margin-bottom:0; }
   }
 
   @media (max-width:720px) {
     /* The tab bar has gone to the foot of the screen, which left the first
        section's rounded top hard up under the "Editing" bar. */
-    #panel-job, #panel-tracking { padding-top:12px; }
+    #panel-job { padding-top:12px; }
     .add-open { width:100%; }
     .add-close { min-height:40px; }
     /* The three photo buttons in even thirds, words wrapping inside each
@@ -4202,9 +4199,9 @@
      and ⋯ -- a few pixels too many, so the ⋯ touched the screen edge. There
      the weather shows as its icon only (the temperature is one tap away). */
   @media (max-width:420px) {
-    html[data-tab="job"] .wx-chip .wxc-temp, html[data-tab="tracking"] .wx-chip .wxc-temp,
+    html[data-tab="job"] .wx-chip .wxc-temp,
     html[data-tab="dashboard"] .wx-chip .wxc-temp { display:none; }
-    html[data-tab="job"] .wx-chip, html[data-tab="tracking"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 8px; }
+    html[data-tab="job"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 8px; }
   }
   /* ---- ux-w1 office polish (15 Oct 2026) ---- */
 
@@ -4435,7 +4432,7 @@
      New, so the "No signal" pill goes bottom-left there, as it does on
      narrower computers. */
   @media (min-width:1180px) {
-    html[data-tab="job"] .net-pill, html[data-tab="tracking"] .net-pill, html[data-tab="dashboard"] .net-pill {
+    html[data-tab="job"] .net-pill, html[data-tab="dashboard"] .net-pill {
       top:auto; left:16px; transform:none; bottom:calc(16px + env(safe-area-inset-bottom, 0px)); text-align:left; }
   }
   /* Amber "Soon" chips: dark words, readable in sunlight (white was 2.2:1).
@@ -4951,8 +4948,8 @@
   @media (max-width:420px) {
     .header > div:first-child { min-width:0; flex:0 1 auto; overflow:hidden; }
     .header-actions { flex:0 0 auto; gap:3px; }
-    html[data-tab="job"] .logo, html[data-tab="tracking"] .logo, html[data-tab="dashboard"] .logo { font-size:16px; }
-    html[data-tab="job"] .wx-chip, html[data-tab="tracking"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 5px; }
+    html[data-tab="job"] .logo, html[data-tab="dashboard"] .logo { font-size:16px; }
+    html[data-tab="job"] .wx-chip, html[data-tab="dashboard"] .wx-chip { padding:4px 5px; }
   }
   /* The phone's board buttons, three to a row: on a 375px phone
      "Maintenance" did not fit and broke as "Maintenanc / e". A touch smaller
@@ -5513,10 +5510,6 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .svt-add input { flex:1; min-width:0; }
   .svt-line { color:var(--text); }
   .jt-none, .jt-dropped { margin-top:6px; }
-  /* Materials and tools side by side; the old Proposal Import (a job with
-     no estimate) goes after them rather than pushing the tools down a row. */
-  #panel-job .cols2 > #jobToolsSection { order:1; }
-  #panel-job .cols2 > .section:has(#proposalContent) { order:2; }
   .jt-none .link-btn, .jt-dropped .link-btn { font-size:inherit; }
   #jobToolsWrap .field-actions { align-items:center; gap:10px; flex-wrap:wrap; }
   .cj-tools-n { text-transform:none; letter-spacing:0; font-weight:600; color:var(--pos); margin-left:6px; }
@@ -6150,3 +6143,41 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     .mn-view-btn:last-child:nth-child(odd) { grid-column:1 / -1; }
   }
   .mn-moved { margin:0 0 14px; }
+
+  /* One job, one screen (jobview.js): what the job is, a button for each part
+     of it, one part showing. The buttons wrap on a phone, three to a row:
+     never a row that scrolls sideways. The strip scrolls away with the page;
+     the Editing bar above it holds the name and stage. */
+  .job-strip { margin:12px 0 0; }
+  .js-top { display:flex; align-items:baseline; justify-content:space-between; gap:12px; }
+  .js-what { min-width:0; font-size:14px; font-weight:600; color:var(--text); }
+  .js-price { flex:none; font-size:15px; font-weight:700; color:var(--text); }
+  .js-links { display:flex; flex-wrap:wrap; gap:6px; margin-top:6px; }
+  .js-links .btn { display:inline-flex; align-items:center; gap:6px; min-width:0; text-decoration:none; text-transform:none; letter-spacing:0; font-weight:600; }
+  .js-addr, .js-mail .js-long { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .jv-views { display:flex; gap:8px; margin:12px 0 18px; }
+  .jv-btn { flex:1 1 0; min-width:0; min-height:60px; padding:9px 10px; text-align:left; font-family:inherit; color:var(--text); cursor:pointer;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 2px 8px rgba(43,36,51,.07); }
+  .jv-btn b { display:block; font-size:13.5px; font-weight:700; }
+  .jv-btn small { display:block; margin-top:3px; font-size:12.5px; color:var(--muted); overflow-wrap:anywhere; }
+  .jv-btn.on { background:var(--brand); border-color:var(--brand); color:#fff; }
+  .jv-btn.on small { color:rgba(255,255,255,.88); }
+  @media (max-width:980px) {
+    .jv-views { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); }
+  }
+  @media (max-width:520px) {
+    .jv-long, .js-long { display:none; }
+    .jv-views { gap:6px; margin:10px 0 14px; }
+    .jv-btn { min-height:54px; padding:7px 8px; }
+    .jv-btn b { font-size:13.5px; }
+    .jv-btn small { font-size:12px; margin-top:2px; }
+    .js-links { flex-wrap:nowrap; }
+    .js-links .btn { min-height:44px; flex:none; padding:0 13px; }
+    .js-links .js-place { flex:1 1 auto; }
+  }
+  @media (max-width:350px) { .jv-icon { display:none; } }
+  /* The whole job on paper, as ever: every part, not just the one showing. */
+  @media print {
+    #panel-job [data-job-view][hidden] { display:block !important; }
+    .jv-views, .js-links { display:none !important; }
+  }

@@ -768,7 +768,7 @@
     if (!isOwner() || !boards[WISHES]) { showToast('The wish board is still loading — try again in a moment'); return; }
     const panel = document.querySelector('.tab-panel.active');
     const tab = panel ? panel.id.replace('panel-', '') : '';
-    const job = (tab === 'job' || tab === 'tracking') && typeof currentJobId !== 'undefined' && currentJobId
+    const job = tab === 'job' && typeof currentJobId !== 'undefined' && currentJobId
       ? ((el('customerName') || {}).value || '').trim() : '';
     const board = tab === 'boards' && boards[current] ? boards[current].name : '';
     const where = [tab ? 'the ' + tab + ' screen' : '', job ? 'job: ' + job : '', board ? 'board: ' + board : ''].filter(Boolean).join(', ');

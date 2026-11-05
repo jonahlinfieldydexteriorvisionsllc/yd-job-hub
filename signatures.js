@@ -742,20 +742,9 @@
     } catch (e) { showToast((e && e.message) || 'Not added — try again'); }
   };
 
-  // The Job tab: a section after the photos (app.js jobOnScreen).
+  // The Job tab: after the photos (app.js jobOnScreen).
   function jobShown(id) {
     if (!can('jobs', 'see')) return;
-    let sec = el('jobSigsSection');
-    if (!sec) {
-      const after = el('jobPhotosSection') || el('estimateSection');
-      if (!after) return;
-      sec = document.createElement('div');
-      sec.className = 'section';
-      sec.id = 'jobSigsSection';
-      sec.innerHTML = '<div class="section-head"><span class="section-title">Signatures</span></div>' +
-        '<div class="section-body" id="jobSigsBody"></div>';
-      after.insertAdjacentElement('afterend', sec);
-    }
     mount(el('jobSigsBody'), id || '', null);
   }
 

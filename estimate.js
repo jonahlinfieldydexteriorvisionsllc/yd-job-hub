@@ -5791,7 +5791,7 @@
   // nobody is typing in it, otherwise just the numbers -- and not at all
   // while the Job tab is hidden (a Pricing rules change is two redraws, a
   // Supplies import dozens): it is drawn once when the tab is next opened.
-  // The job's price follows either way; the Tracking tab shows it.
+  // The job's price follows either way; Costs shows it.
   const jobShown = () => { const p = el('panel-job'); return !!(p && p.classList.contains('active')); };
   function repaint() {
     if (jobShown()) {
@@ -5819,6 +5819,11 @@
   // The Job tab opened (app.js switchTab sets its class): drawn now if
   // anything changed while it was hidden -- and on a phone, the boxes drawn
   // while it was hidden are sized to what is in them now they can be measured.
+  // The same when the Estimate part of the job comes on screen (jobview.js).
+  document.addEventListener('yd-job-view', e => {
+    if (e.detail.view !== 'estimate') return;
+    if (stale) render(); else drawn(el('estimateWrap'));
+  });
   (function watchJobTab() {
     const p = el('panel-job');
     if (!p || typeof MutationObserver !== 'function') return;

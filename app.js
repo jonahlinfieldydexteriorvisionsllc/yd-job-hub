@@ -264,7 +264,7 @@ function bidsFromQbNow() {
 }
 
 // What the customer is billed, and the tax on it -- for Balance Due on
-// Tracking and the cost summary. The job's own "Taxable — WI 5.5%" box is
+// the job's Costs and the cost summary. The job's own "Taxable — WI 5.5%" box is
 // retired (it added 5.5% to the whole job and disagreed with the estimate's
 // own tax). The tax is the one QuickBooks or the estimate works out:
 // - a QuickBooks invoice: its total, tax and all (what the customer owes);
@@ -311,7 +311,7 @@ function jobBill(d) {
 // acceptedSeenAt: when the estimate was first seen accepted (sync.js
 // bookIfAccepted measures a later move of the bid from it). costByHand (the
 // figures typed in by hand on Estimate vs actual, jobcosts.js) is written
-// through patchJob too, from Tracking or from All Jobs.
+// through patchJob too, from Costs or from All Jobs.
 // The plant-care email (plantcare.js): completedAt (when the job was last
 // marked Complete, from wherever), careDone (he sent it himself, or it isn't
 // needed -- set from the board too) and hasPlants (the answer saved last
@@ -674,7 +674,7 @@ document.addEventListener('yd-auth', e => {
     if (it) it.hidden = on && a.role === 'crew';
   });
 
-  // The job screens -- Job, Tracking, All Jobs, and the materials half of
+  // The job screens -- Job, All Jobs, and the materials half of
   // Supplies -- are for whoever may see jobs: the owner, and an admin given
   // Jobs. Crew get the screens built for them instead (the clock, the snow
   // route, the calendar, boards and supplies). The job screens read prices
@@ -682,7 +682,7 @@ document.addEventListener('yd-auth', e => {
   // hand over screens that load empty and look broken. This is presentation
   // only; the rules are the enforcement.
   const noJobs = on && !ydCan('jobs', 'see');
-  ['tabJob', 'tabTracking', 'tabDashboard', 'matSeasonSection', 'ordersSection'].forEach(id => {
+  ['tabJob', 'tabDashboard', 'matSeasonSection', 'ordersSection'].forEach(id => {
     const b = document.getElementById(id);
     if (b) b.hidden = noJobs;
   });
@@ -707,7 +707,7 @@ document.addEventListener('yd-auth', e => {
   // Left on a job screen they may no longer see: Home, which everybody has.
   if (noJobs) {
     const openTab = document.querySelector('.tab-panel.active');
-    if (!openTab || ['panel-job', 'panel-tracking', 'panel-dashboard']
+    if (!openTab || ['panel-job', 'panel-dashboard']
         .indexOf(openTab.id) !== -1) switchTab('home');
   }
 });
@@ -738,15 +738,15 @@ function ydCan(area, level) {
   return !!(a && typeof a.can === 'function' && a.can(area, level || 'see'));
 }
 
-// Someone who may see jobs but not change them: every field on the Job and
-// Tracking screens is locked, and nothing is saved. Without this they could
+// Someone who may see jobs but not change them: every field on the Job
+// screen is locked, and nothing is saved. Without this they could
 // type into a job, have it "save" on their phone, and never learn that the
 // server refused it.
 function jobsReadOnly() {
   const a = window.YDAuth;
   return !!(a && a.mode === 'cloud' && a.user && ydCan('jobs', 'see') && !ydCan('jobs', 'change'));
 }
-// The stylesheet makes the two screens untouchable (rows added later
+// The stylesheet makes the screen untouchable (rows added later
 // included); persistJob refuses to save as the backstop.
 function applyJobsReadOnly() {
   document.documentElement.toggleAttribute('data-jobs-readonly', jobsReadOnly());
@@ -761,7 +761,7 @@ function applyJobsReadOnly() {
 // A button marked so must write nothing: it is all a look-only admin has.
 function lockedJobControl(t) {
   return !!(document.documentElement.hasAttribute('data-jobs-readonly') && t && t.closest && t.matches &&
-    t.closest('#panel-job, #panel-tracking') && t.matches('input, select, textarea, button') && !t.matches('.eva-view-btn, .ro-ok'));
+    t.closest('#panel-job') && t.matches('input, select, textarea, button') && !t.matches('.eva-view-btn, .ro-ok'));
 }
 document.addEventListener('focusin', e => { if (lockedJobControl(e.target)) e.target.blur(); }, true);
 // And should one still have the focus (a browser that was in the
@@ -841,7 +841,7 @@ function closeMore() {
   if (s) s.classList.remove('active');
 }
 function tabButtonId(name) {
-  return { home: 'tabHome', crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock', tracking: 'tabTracking',
+  return { home: 'tabHome', crewjobs: 'tabCrewJobs', job: 'tabJob', snow: 'tabSnow', clock: 'tabClock',
     dashboard: 'tabDashboard', contacts: 'tabContacts',
     equipment: 'tabEquipment', calendar: 'tabCalendar', boards: 'tabBoards',
     supplies: 'tabSupplies', matdash: 'tabSupplies', receipts: 'tabReceipts', money: 'tabMoney' }[name] || '';
@@ -977,13 +977,13 @@ function closeOnTapOutside(id) {
 // The bar on a phone holds only what gets used in the field. The rest is one
 // tap away behind More, which is what stops every new screen making the bar
 // more crowded than the last.
-// In the order they sit on the bar, as Jonah laid it out: Job, then Tracking
-// and Supplies beside it, All Jobs on the far right. Materials used to be a
+// In the order they sit on the bar, as Jonah laid it out: Job, then
+// Supplies beside it, All Jobs on the far right. Materials used to be a
 // tab of its own; it is now the second half of Supplies, beside the suppliers
 // it is bought from.
 // Home comes first and is where the app opens (Jonah, 14 Oct 2026: "make
 // home page for the job hub with overviews of things") -- home.js.
-const TABS = ['home', 'crewjobs', 'job', 'tracking', 'supplies', 'receipts', 'money', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
+const TABS = ['home', 'crewjobs', 'job', 'supplies', 'receipts', 'money', 'snow', 'clock', 'calendar', 'boards', 'equipment', 'contacts', 'dashboard'];
 // crewjobs: the crew's Jobs tab (crewjobs.js) -- for whoever cannot see the Job tab, and crew leads.
 // Five on a phone's bar for anybody: Home took All Jobs' place on the
 // owner's (Home has the jobs on the go and the ones to invoice; the full
@@ -996,7 +996,7 @@ const phoneBar = () => PHONE_TABS.filter(n => (n !== 'snow' || document.document
   (n !== 'job' || !document.documentElement.hasAttribute('data-lead')));
 const TAB_LABEL = { home: '🏡 Home', crewjobs: '🧰 Jobs', job: '📐 Job', snow: '❄️ Snow', clock: '🕒 Clock',
   calendar: '📅 Calendar', boards: '📌 Boards', supplies: '🛒 Supplies', receipts: '🧾 Receipts', money: '💵 Money',
-  equipment: '🚜 Equipment', tracking: '📈 Tracking',
+  equipment: '🚜 Equipment',
   dashboard: '📊 All Jobs', contacts: '📇 Contacts' };
 const TAB_HINT = { job: 'The office side of a job: the estimate, materials and costs',
   boards: 'Bids, jobs, to-dos and crew task lists',
@@ -1004,7 +1004,6 @@ const TAB_HINT = { job: 'The office side of a job: the estimate, materials and c
   receipts: 'Purchases from your email — put each on its job',
   money: 'What you’re owed, what’s to pay, payroll and tax dates',
   equipment: 'What each machine and truck is due for',
-  tracking: 'Hours and materials on the job you have open',
   dashboard: 'Every job with its price and what it made',
   contacts: 'People to ring later' };
 // The same screens as the crew see them: without prices, bids or what the
@@ -1034,7 +1033,7 @@ function switchTab(name) {
   // The stylesheet uses this to show the job controls only on job screens.
   document.documentElement.dataset.tab = name;
   // First time on a job screen: the job this person last had open goes in the form.
-  if (launchJobId && ['job', 'tracking', 'dashboard'].indexOf(name) !== -1) {
+  if (launchJobId && ['job', 'dashboard'].indexOf(name) !== -1) {
     const id = launchJobId;
     launchJobId = null;
     if (!currentJobId) loadJob(id, true);
@@ -1061,8 +1060,8 @@ function switchTab(name) {
   document.getElementById('panel-' + name).classList.add('active');
   if (changed) window.scrollTo(0, 0);
   if (name === 'dashboard') renderDashboard();
-  // Labour is not redrawn while Tracking is hidden, so catch up on arrival.
-  if (name === 'tracking' && typeof renderLabor === 'function') renderLabor();
+  // Whichever part of the job is showing catches up on arrival (jobview.js).
+  if (name === 'job' && window.YDJobView) YDJobView.arrived();
   if (name === 'supplies' && !matSectionHidden()) renderMatDash();
   if (name === 'supplies') renderOrdersOverview();
   if (toMaterials) {
@@ -1081,7 +1080,7 @@ function switchTab(name) {
   if (name === 'money' && window.YDMoney) YDMoney.render();
   if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
   if (name === 'home' && window.YDHome) YDHome.render();
-  if (pickJobFirst && (name === 'job' || name === 'tracking')) {
+  if (pickJobFirst && name === 'job') {
     pickJobFirst = false;
     if (!currentJobId) openManager();
   }
@@ -1145,6 +1144,7 @@ function updateCtxBar() {
   // An invoice QuickBooks has just made arrives through here too (estimate.js
   // afterInvoice), so its line on the Job tab follows.
   showJobQbFields(false);
+  if (window.YDJobView) YDJobView.draw();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1464,7 +1464,7 @@ async function pickStage(id, photosChecked) {
   const inv = formQbInvoice();
   if ((id === 'invoiced' || id === 'paid' || id === 'finished') && cur.qb) {
     showToast('QuickBooks decides this one — invoice' + (cur.qb.docNumber ? ' #' + cur.qb.docNumber : '') +
-      '. Log the payment (Tracking → Payments) and it moves to Paid.', 6000);
+      '. Log the payment under Costs on this job and it moves to Paid.', 6000);
     return;
   }
   if ((id === 'invoiced' || id === 'paid') && inv) {
@@ -2015,12 +2015,9 @@ function renderProposal() {
   const content = document.getElementById('proposalContent');
   const status = document.getElementById('proposalStatus');
   // A job estimated in Job Hub has no use for the old proposal import: the
-  // box goes, and Materials to Order takes the whole width.
-  const sec = content.closest('.section'), pair = sec && sec.parentElement;
-  const unused = !proposals.length && hasEstimate();
-  if (sec) sec.hidden = unused;
-  // The job's tools sit beside the materials when the proposal box goes.
-  if (pair) pair.classList.toggle('single', unused && !document.getElementById('jobToolsSection'));
+  // box goes.
+  const sec = content.closest('.section');
+  if (sec) sec.hidden = !proposals.length && hasEstimate();
   if (!proposals.length) {
     content.innerHTML = '<div class="upload-zone" onclick="document.getElementById(\'proposalFileInput\').click()">' +
       '<div class="uz-icon">📄</div><div class="uz-text">Import Proposal JSON</div>' +
@@ -2212,7 +2209,7 @@ function rmOrderItem(id) {
   orderItems = orderItems.filter(m => m.id !== id); renderOrderList(); markDirty();
   offerPutBack('“' + ((row && row.name) || 'Item') + '” taken off the order', row, at, () => orderItems, renderOrderList);
 }
-// A row taken off one of the job's lists (Tracking, Materials to Order), with
+// A row taken off one of the job's lists (Costs, Materials to Order), with
 // Undo on the toast: it goes back where it was, as it was. Only onto the same
 // job -- another job opened since has rows of its own. `list` reads the list
 // as it is at the time (each list is replaced, not changed, when a row goes or
@@ -3699,12 +3696,12 @@ function orderJobWays(j, cat) {
 async function ordersOpenJob(key) {
   const jobId = (getJobIndex().find(x => ordId(x.id) === key) || {}).id;
   if (!jobId) return;
-  if (currentJobId === jobId) { switchTab('job'); return; }
-  if (!(await ydLeaveUnsavedJob())) return;
-  loadJob(jobId);
+  if (currentJobId !== jobId) {
+    if (!(await ydLeaveUnsavedJob())) return;
+    loadJob(jobId);
+  }
   switchTab('job');
-  const o = document.getElementById('orderListWrap');
-  if (o) setTimeout(() => o.scrollIntoView({ block: 'center' }), 50);
+  YDJobView.show('materials');
 }
 // One supplier's order across the jobs shown, job by job: each job's lines
 // under its name and address, so whoever takes it knows where each goes.
@@ -3791,7 +3788,7 @@ document.addEventListener('focusout', () => {
 // ═══════════════════════════════════════════════════════════
 // LABOR  (worker · hours · minutes — total per worker, no date)
 // ═══════════════════════════════════════════════════════════
-// The Tracking forms (labour, purchases, extra costs, payments) are folded
+// The forms under Costs (labour, purchases, extra costs, payments) are folded
 // behind their "+ Add ..." buttons: all four always open made the screen
 // nearly 6,000px tall on a phone, the figures lost between them. Opened, a
 // form takes the button's place and the cursor goes into its first box; it
@@ -4514,12 +4511,9 @@ function totalLaborCost() {
 // being reloaded.
 function refreshJobLabour() {
   _clockedCache = null;
-  // Only worth redrawing while the job's labour is on screen; switching to
-  // Tracking redraws it anyway. (This used to look for the Job tab, but the
-  // labour table and the financials live on Tracking, so an approval never
-  // showed until something else happened to redraw them.)
-  const p = document.getElementById('panel-tracking');
-  if (p && p.classList.contains('active') && document.getElementById('laborTableWrap')) renderLabor();
+  // Only worth redrawing while the job's labour is on screen; going to
+  // Costs redraws it anyway (jobview.js).
+  if (window.YDJobView && YDJobView.showing('costs')) renderLabor();
 }
 
 function updateBadges() {
@@ -4533,7 +4527,7 @@ function updateBadges() {
 function trackingFigures() {
   return window.YDJobCosts && YDJobCosts.open ? YDJobCosts.open() : null;
 }
-// What the open job cost, as Tracking's tiles and the cost summary say it. m:
+// What the open job cost, as the Costs tiles and the cost summary say it. m:
 // Estimate vs actual's figures, or null for someone who doesn't see those,
 // who get wages and purchases as they stand.
 function trackingCosts(m, wages, purchases, hours) {
@@ -4574,8 +4568,7 @@ function updateSummary() {
   // The same figures as Estimate vs actual under these tiles (jobcosts.js),
   // for anyone who sees it: Net Profit here used to leave out what isn't
   // recorded yet and read differently from the profit just below it.
-  const panel = document.getElementById('panel-tracking');
-  const sum = trackingCosts(panel && panel.classList.contains('active') ? trackingFigures() : null, wages, totalMat, totalHrs);
+  const sum = trackingCosts(window.YDJobView && YDJobView.showing('costs') ? trackingFigures() : null, wages, totalMat, totalHrs);
   const laborCost = sum.labor, overhead = sum.total;
   const net = round2(jobPrice - overhead);
   const perHr = totalHrs > 0 ? net / totalHrs : 0;
@@ -4595,8 +4588,9 @@ function updateSummary() {
 
   renderPayments();
   // Estimate vs actual reads the same figures (jobcosts.js); it redraws
-  // once the changes pause, and only while Tracking is on screen.
+  // once the changes pause, and only while Costs is on screen.
   if (window.YDJobCosts) window.YDJobCosts.jobChanged();
+  if (window.YDJobView) YDJobView.draw();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -4875,7 +4869,7 @@ function jobNameHtml(name, est) {
 function persistJob(announce) {
   if (jobsReadOnly()) { if (announce) showToast('You can look at jobs but not change them'); return false; }
   const data = getJobData();
-  if (!currentJobId) { currentJobId = uid(); rememberJob(currentJobId); jobOnScreen(); }
+  if (!currentJobId) { currentJobId = uid(); rememberJob(currentJobId); jobOnScreen(true); }
   const before = localStorage.getItem(STORAGE_PREFIX + currentJobId);
   // What the form says, kept before what came in meanwhile is joined in:
   // the next save compares against this.
@@ -4984,14 +4978,17 @@ function showStorageError() {
 // moved on the Bids board, used to yank whoever was looking at Boards or All
 // Jobs back to the Job tab.
 // What lives beside the form rather than in it (the job's photos) follows
-// whichever job is on the Job tab.
-function jobOnScreen() {
+// whichever job is on the Job tab. stay: the job just typed in has been given
+// its id by its first save: the same job, so nobody is moved off what they
+// are typing in.
+function jobOnScreen(stay) {
   if (window.YDJobPhotos) window.YDJobPhotos.jobShown(currentJobId);
   if (window.YDSignatures) window.YDSignatures.jobShown(currentJobId);
   if (window.YDChangeOrders) window.YDChangeOrders.jobShown(currentJobId);
   if (window.YDEndOfDay) window.YDEndOfDay.jobShown(currentJobId);
   if (window.YDJobIssues) window.YDJobIssues.jobShown(currentJobId);
   if (window.YDJobLog) window.YDJobLog.jobShown(currentJobId);
+  if (window.YDJobView) window.YDJobView.jobShown(currentJobId, stay);
 }
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);
@@ -5624,7 +5621,7 @@ function renderDashboard() {
   const costCtx = { lean: true, byJob: null };
   rows.forEach(r => {
     const d = r.d;
-    // Clocked shifts included, exactly as the job's own Tracking figures do.
+    // Clocked shifts included, exactly as the job's own Costs figures do.
     r.hrs = jobLabour(d._id, d.labor).hours;
     const made = dashMakes(d, costCtx);
     r.net = made.cents === null ? null : made.cents / 100;
@@ -6361,7 +6358,7 @@ window.addEventListener('DOMContentLoaded', () => {
   if (lastJob && getJobIndex().some(j => j.id === lastJob)) {
     launchJobId = lastJob;
     const onScreen = document.querySelector('.tab-panel.active');
-    if (onScreen && ['panel-job', 'panel-tracking', 'panel-dashboard'].indexOf(onScreen.id) !== -1) { launchJobId = null; loadJob(lastJob, true); }
+    if (onScreen && ['panel-job', 'panel-dashboard'].indexOf(onScreen.id) !== -1) { launchJobId = null; loadJob(lastJob, true); }
   } else pickJobFirst = true;
 
   // Ask the browser to keep our data (reduces iOS/Safari eviction)
@@ -6952,7 +6949,7 @@ try { localStorage.removeItem('ydjobhub_sidebarPreview'); } catch (e) { /* priva
 // too) is coming and belongs beside it, not among the jobs.
 const SIDEBAR_GROUPS = [
   { name: 'Today', tabs: ['home', 'calendar'] },
-  { name: 'Sales + jobs', tabs: ['job', 'tracking', 'dashboard', 'bids', 'boards'] },
+  { name: 'Sales + jobs', tabs: ['job', 'dashboard', 'bids', 'boards'] },
   { name: 'Snow', tabs: ['snow'] },
   { name: 'Crew', tabs: ['clock', 'crewjobs'] },
   { name: 'Money', tabs: ['money', 'receipts'] },

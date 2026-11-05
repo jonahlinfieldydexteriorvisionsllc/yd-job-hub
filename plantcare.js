@@ -8,7 +8,7 @@
 // Claude call (his "code over Claude"):
 //   - its estimate: a "+ Plant" line, or a material of the Plants or
 //     Planting package kind (Supplies says which kind an item is);
-//   - what was bought for it (Tracking's materials, many from receipts) and
+//   - what was bought for it (the materials under Costs, many from receipts) and
 //     Materials to Order: a Plants item in Supplies, or a line that reads like
 //     a plant ("Limelight hydrangea #3 pot", "Autumn Blaze maple 2" cal");
 //   - the Planting service.

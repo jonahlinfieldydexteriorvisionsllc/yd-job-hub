@@ -1,7 +1,7 @@
 // Estimate vs actual -- where each job made or lost money against what it
 // was bid at (Jonah, 14 Oct 2026: "estimate vs actual page").
 //
-// Two places: on Tracking, the open job side by side -- crew-days and what
+// Two places: under the job's Costs, the open job side by side -- crew-days and what
 // they cost, materials, delivery, dumpsters and rentals, fuel, subcontractors,
 // the total cost, the price, the profit, the margin and the profit per
 // crew-day, each with its difference coloured over or under; and on All
@@ -18,7 +18,7 @@
 // whatever he types in for the rest.
 //
 // THE ACTUAL SIDE is what the app already holds about the job:
-//   labour     approved clock shifts on it and hours typed in on Tracking
+//   labour     approved clock shifts on it and hours typed in under Costs
 //              (YDClock.forJob -- the same figures as Labor Hours), turned
 //              into crew-days by the job's crew size x hours each when its
 //              estimate has one, else pricing/rules.crewDayHours (people in a
@@ -183,7 +183,7 @@
 
   // A job's estimate priced, kept for All Jobs (ctx.lean), which asks for every
   // job at every redraw from two tables. Its price rests on the job, the
-  // rules, Supplies and the days clocked (fuel). The open job on Tracking is
+  // rules, Supplies and the days clocked (fuel). The open job under Costs is
   // never kept: its form can be ahead of what was last saved.
   const pricedKept = new Map();
   function pricedOf(est, job, id, ctx) {
@@ -204,7 +204,7 @@
   // job's estimate for that figure made each redraw cost a pricing run a job.
   // id, not job._id: the open job comes from the form, which carries no id.
   // Without it the estimate was priced with no days on the job, so no fuel, and
-  // Tracking read higher than All Jobs for the same job (4 Nov 2026).
+  // the job's own figures read higher than All Jobs for the same job (4 Nov 2026).
   function estimateSide(job, id, wantNow, ctx) {
     const rules = P() ? P().rules() : {};
     const est = job.estimate && typeof job.estimate === 'object' ? job.estimate : null;
@@ -298,7 +298,7 @@
     const rate = est.rateCents;
     const hand = handOf(job).act;
 
-    // Labour: the same sums as Labor Hours on Tracking -- approved clock
+    // Labour: the same sums as Labor Hours under Costs -- approved clock
     // time at the rate each shift was approved at, hours typed in at the
     // standing rate. Pending shifts are not counted (they are listed).
     const c = id && window.YDClock && YDClock.forJob ? YDClock.forJob(id) : null;
@@ -640,7 +640,7 @@
       esc(fmtMoney(Number(inv.total) || 0)) + ' with tax' +
       (inv.balance != null ? ' · ' + (Number(inv.balance) > 0 ? esc(fmtMoney(Number(inv.balance))) + ' still owed' : 'paid in full') : '') + '</li>');
     const paid = (Array.isArray(m.job.payments) ? m.job.payments : []).reduce((s, p) => s + (toCents(p && p.amount) || 0), 0);
-    if (paid) parts.push('<li><b>Payments logged</b> on Tracking: ' + esc(money(paid)) + '</li>');
+    if (paid) parts.push('<li><b>Payments logged</b> on the job: ' + esc(money(paid)) + '</li>');
     if (!parts.length && !hands.length && !older) return '';
     // Kept open across redraws (a shift approved, a receipt sorted) once opened.
     return '<details class="eva-more"' + (detailsOpen ? ' open' : '') + ' ontoggle="evaDetails(this.open)">' +
@@ -659,7 +659,7 @@
                       : { text: '−' + money(-m.diff) + ' vs estimate', cls: 'eva-badge-bad' };
   }
 
-  // The open job, on Tracking.
+  // The open job, under Costs.
   function renderJob() {
     jobTimer = null;
     const sec = el('evaSection'), wrap = el('evaWrap'), badge = el('evaBadge');
@@ -803,7 +803,7 @@
       '</div>' +
       (noWhole ? '<p class="hint">' + plural(noWhole, 'finished job isn’t', 'finished jobs aren’t') + ' compared: the estimate has no crew-days or has unpriced lines, ' +
         'so there is nothing fair to set against what the job really cost. Their real profit still shows below. ' +
-        'Tap a job and set its crew-days with ✎ on Tracking to bring it in.</p>' : '');
+        'Tap a job and set its crew-days with ✎ under its Costs to bring it in.</p>' : '');
     h += '<div class="table-wrap"><table class="eva-list"><thead><tr>' +
       th('name', 'Job') + th('status', 'Status') + th('days', 'Crew-days') +
       th('estCost', 'Est. cost') + th('actCost', 'Actual cost') + th('estProfit', 'Est. profit') +
@@ -847,7 +847,7 @@
     // phone or iPad.
     const anyShaky = list.some(m => m.incomplete && m.estProfit !== null);
     h += '</table></div>' +
-      '<p class="hint">Tap a job for its side by side on Tracking. * a cost not recorded yet (no receipts, no hours), counted at the estimate’s figure so it never reads as profit. ' +
+      '<p class="hint">Tap a job for its side by side under its Costs. * a cost not recorded yet (no receipts, no hours), counted at the estimate’s figure so it never reads as profit. ' +
       (anyShaky ? '? after an estimated cost: that job’s estimate isn’t complete — some lines aren’t priced or it has no crew-days — so it can’t be compared yet. ' : '') +
       'In-progress jobs are so far. A job’s year is when the crew first clocked in, else its date.</p>';
     wrap.innerHTML = h + servicesHtml(list);
@@ -997,7 +997,8 @@
     // What is being typed into another job is saved before it is swapped out.
     if (typeof dirty !== 'undefined' && dirty && typeof autosave === 'function') autosave();
     if (id !== currentJobId && typeof loadJob === 'function') loadJob(id, true);
-    switchTab('tracking');
+    switchTab('job');
+    YDJobView.show('costs');
     renderJob();
     const s = el('evaSection');
     if (s && !s.hidden) setTimeout(() => s.scrollIntoView({ block: 'start', behavior: 'smooth' }), 30);
@@ -1032,13 +1033,13 @@
   // Drawn only while on screen, once a burst of changes settles: the job's
   // figures change at every keystroke in its price, and All Jobs prices
   // every job's estimate.
-  // Nothing is kept for a hidden screen: opening Tracking redraws its labour
-  // and summary (app.js switchTab), and All Jobs its table, and both of those
+  // Nothing is kept for a hidden screen: opening Costs redraws its labour
+  // and summary (jobview.js), and All Jobs its table, and both of those
   // ask for this again.
   const shown = id => { const p = el(id); return !!(p && p.classList.contains('active')); };
   let jobTimer = null, listTimer = null;
   function jobChanged() {
-    if (!shown('panel-tracking')) return;
+    if (!window.YDJobView || !YDJobView.showing('costs')) return;
     clearTimeout(jobTimer);
     jobTimer = setTimeout(renderJob, 150);
   }
@@ -1068,7 +1069,7 @@
     compare: (job, id) => compare(job || {}, id || null, false),
     // All Jobs: what a job makes. ctx: one { lean: true, byJob: null } a redraw.
     makes: makes,
-    // The open job, for Tracking's figures above Estimate vs actual, so the
+    // The open job, for the Costs figures above Estimate vs actual, so the
     // two never disagree. Null for someone who doesn't see costs.
     open: () => (sees() && typeof currentJobId !== 'undefined' && currentJobId && typeof getJobData === 'function'
       ? compare(getJobData(), currentJobId, !!basisNow[currentJobId]) : null),
