@@ -159,7 +159,7 @@
   <div class="tab-bar">
     <button class="tab-btn active" id="tabHome" onclick="switchTab('home')"><span class="tab-icon">🏡</span>Home</button>
     <button class="tab-btn" id="tabCrewJobs" hidden onclick="switchTab('crewjobs')"><span class="tab-icon">🧰</span>Jobs</button>
-    <button class="tab-btn" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📐</span>Job</button>
+    <button class="tab-btn" id="tabJob" onclick="switchTab('job')"><span class="tab-icon">📐</span>Job<span class="tab-plural">s</span></button>
     <button class="tab-btn" id="tabSupplies" hidden onclick="switchTab('supplies')"><span class="tab-icon">🛒</span>Supplies</button>
     <button class="tab-btn" id="tabReceipts" hidden onclick="switchTab('receipts')"><span class="tab-icon">🧾</span>Receipts<span class="tab-count" id="rcTabCount"></span></button>
     <button class="tab-btn" id="tabMoney" hidden onclick="switchTab('money')"><span class="tab-icon">💵</span>Money</button>
@@ -199,6 +199,14 @@
          jobsReadOnly): the screen is locked, and says so -- a grey screen
          with nothing to say why looked broken (office testing, 16 Oct 2026). -->
     <p class="ro-banner" role="note">👀 You can look at jobs; changes are for Jonah — ask him if one needs changing.</p>
+
+    <!-- With no job open the tab lists what there is to open (jobpicker.js).
+         The search box stays put and only the list below it is redrawn. -->
+    <div class="job-picker" id="jobPicker" hidden>
+      <h2 class="jp-title">Which job?</h2>
+      <input id="jpSearch" class="ro-ok" type="search" enterkeyhint="search" autocomplete="off" aria-label="Search every job and bid" placeholder="Search every job and bid…">
+      <div id="jpBody"></div>
+    </div>
 
     <!-- A bid is not a job until it is booked (app.js isBidStatus). -->
     <div class="bid-banner" id="bidBanner" hidden>
@@ -1487,6 +1495,7 @@
 <script src="./paysheet.js"></script>
 <script src="./money.js"></script>
 <script src="./jobview.js"></script>
+<script src="./jobpicker.js"></script>
 <script src="./screenparts.js"></script>
 <script src="./notify.js"></script>
 <script src="./crewnotes.js"></script>

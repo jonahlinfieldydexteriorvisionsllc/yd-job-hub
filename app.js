@@ -39,10 +39,12 @@ let launchJobId = null;
 // Which job is yours to come back to is kept on this device. It went by the
 // newest change on any job before, and QuickBooks' sweeps, another device or
 // the crew change jobs all day, so the Job tab opened on whatever was touched
-// last (4 Nov 2026: a lost bid). With none kept the tab asks, with My Jobs
-// (pickJobFirst), rather than picking one for them.
+// last (4 Nov 2026: a lost bid). With none kept the tab lists the jobs to
+// open (jobpicker.js) rather than picking one for them.
 const LAST_JOB_KEY = 'ydjobhub_lastJob';
-let pickJobFirst = false;
+// The form is empty because + New asked for an empty form, not because nothing
+// is open: only that shows the empty form on the Job tab.
+let blankJobAsked = false;
 function rememberJob(id) { try { localStorage.setItem(LAST_JOB_KEY, id); } catch (e) { /* private window: just this visit */ } }
 function rememberedJob() { try { return localStorage.getItem(LAST_JOB_KEY) || ''; } catch (e) { return ''; } }
 let labor = [];
@@ -1002,8 +1004,6 @@ function switchTab(name) {
     const id = launchJobId;
     launchJobId = null;
     if (!currentJobId) loadJob(id, true);
-    // It has been deleted since.
-    if (!currentJobId) pickJobFirst = true;
   }
   // Matched by id, not by position: the buttons are not in the same order as
   // TABS, and matching by position lit up the wrong button on a laptop.
@@ -1046,10 +1046,7 @@ function switchTab(name) {
   if (name === 'money' && window.YDMoney) YDMoney.render();
   if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
   if (name === 'home' && window.YDHome) YDHome.render();
-  if (pickJobFirst && name === 'job') {
-    pickJobFirst = false;
-    if (!currentJobId) openManager();
-  }
+  if (name === 'job' && window.YDJobPicker) YDJobPicker.sync();
 }
 
 // A notification tapped while Job Hub is already open. The service worker
@@ -5008,6 +5005,7 @@ function jobOnScreen(stay) {
   if (window.YDJobIssues) window.YDJobIssues.jobShown(currentJobId);
   if (window.YDJobLog) window.YDJobLog.jobShown(currentJobId);
   if (window.YDJobView) window.YDJobView.jobShown(currentJobId, stay);
+  if (window.YDJobPicker) window.YDJobPicker.sync();
 }
 function loadJob(id, quiet) {
   const raw = readJobBlob(id);
@@ -5173,19 +5171,20 @@ function createJobRecord(fields) {
 async function newJob() {
   if (dirty && !(await ydConfirm('Unsaved changes on the job open now will be lost.',
       { title: 'Start a new job?', ok: 'Start a new one', cancel: 'Keep this one', danger: true }))) return false;
-  clearJobForm();
+  clearJobForm(true);
   switchTab('job'); showToast('New job started');
   return true;
 }
 // Empties the form without asking anything or moving anyone. newJob() puts
 // the unsaved-changes question in front of it; a delete does not need that
 // question (the person has just confirmed the delete), and sync uses it when
-// the job on screen was deleted on another device.
-function clearJobForm() {
+// the job on screen was deleted on another device. Those two leave the tab
+// with nothing open, so it lists the jobs; asked is newJob's.
+function clearJobForm(asked) {
   currentJobId = null;
   formBase = null;
   launchJobId = null;     // a new job was asked for: not the last one
-  pickJobFirst = false;
+  blankJobAsked = !!asked;
   jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
   jobToolsOwn = { added: [], dropped: [] };
@@ -6378,7 +6377,7 @@ window.addEventListener('DOMContentLoaded', () => {
     launchJobId = lastJob;
     const onScreen = document.querySelector('.tab-panel.active');
     if (onScreen && ['panel-job', 'panel-dashboard'].indexOf(onScreen.id) !== -1) { launchJobId = null; loadJob(lastJob, true); }
-  } else pickJobFirst = true;
+  }
 
   // Ask the browser to keep our data (reduces iOS/Safari eviction)
   if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }

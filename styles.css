@@ -6231,3 +6231,26 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
     #panel-job [data-job-view][hidden], [data-part][hidden] { display:block !important; }
     .jv-views, .js-links { display:none !important; }
   }
+
+  /* The Job tab with no job open (jobpicker.js): the list stands in for the
+     whole job screen, and the bar that says what is being edited goes with it.
+     A phone's bar says Jobs: All Jobs isn't on it. Wider screens have both. */
+  html[data-job-pick] #panel-job > :not(#jobPicker):not(.ro-banner),
+  html[data-job-pick] #ctxBar, html[data-job-pick] #btnSave { display:none !important; }
+  .tab-plural { display:none; }
+  .job-picker { max-width:760px; margin:0 auto; }
+  .jp-title { margin:6px 0 12px; font-size:22px; color:var(--brand-ink); }
+  #jpSearch { width:100%; min-height:44px; margin-bottom:6px; }
+  .jp-head { display:flex; align-items:center; gap:8px; margin:20px 0 8px; font-size:13px; font-weight:700; color:var(--brand-ink); }
+  .jp-n { font-weight:600; color:var(--muted); }
+  .jp-row { display:block; width:100%; min-height:44px; margin-bottom:8px; padding:11px 14px; text-align:left; font:inherit; color:var(--text);
+    background:var(--surface); border:1px solid var(--border); border-radius:8px; cursor:pointer; }
+  .jp-row:hover { border-color:var(--brand-2); box-shadow:0 2px 8px rgba(43,36,51,.10); }
+  .jp-row:focus-visible { outline:2px solid var(--brand-2); outline-offset:1px; }
+  .jp-name, .jp-sub { display:block; overflow-wrap:anywhere; }
+  .jp-name { font-weight:600; font-size:15px; }
+  .jp-sub { margin-top:2px; font-size:13px; color:var(--muted); }
+  .jp-more { margin:2px 0 0; }
+  @media (max-width:720px) {
+    .tab-plural { display:inline; }
+  }
