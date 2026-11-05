@@ -965,7 +965,7 @@
       openModal(id ? 'Edit supplier' : 'Add a supplier',
         field('Name', 'svName', v.name, 'e.g. Example Stone Yard') +
         // MDS's receipts say its whole name, which nothing could tie to "MDS".
-        field('Also called', 'svAlso', v.also, 'The name on its receipts, if that is different. Commas between several.') +
+        field('Also called', 'svAlso', v.also, 'The name on its receipts, if different') +
         // In its parts (addr.js); the one line is kept for directions.
         (window.YDAddr ? YDAddr.fieldsHtml('svA', v, { streetHint: 'e.g. 123 Industrial Dr — used for directions' })
           : field('Address', 'svAddr', v.address, 'Street, town — used for directions')) +
