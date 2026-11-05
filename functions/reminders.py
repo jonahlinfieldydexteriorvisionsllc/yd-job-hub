@@ -955,6 +955,19 @@ def _is_mine(on, kind, maker, u):
     return u.get("role") == "owner"
 
 
+# A store's "ready for pickup" card with nobody on it is nobody's until someone
+# is (Jonah, 5 Nov 2026: "Don't have Menards pickups in my to do's unless I
+# click myself on them"): no list, no reminder. remind.js unclaimedPickup --
+# keep the same.
+STORE_CARD_MAKER = "Job Hub (email)"
+
+
+def _unclaimed_pickup(k, board_id, kind):
+    if board_id != "pickups" or k.get("createdBy") != STORE_CARD_MAKER or kind in CREW_TYPES:
+        return False
+    return not any(isinstance(a, dict) and a.get("uid") for a in k.get("assignees") or [])
+
+
 # ------------------------------------------------- tasks not ticked off
 #
 # Jonah (14 Oct 2026): "make tasks on the calendar have to be marked done or
@@ -1133,7 +1146,7 @@ def open_tasks(db, people, first, last, now):
                 t = str(k.get("dueTime") or "")
                 timed = len(t) == 5 and t[2] == ":"
                 kind = _type_of(k, board_id=b.id, board=board)
-                if not _is_task(kind, timed, card=True) or to_come(day, timed and t):
+                if _unclaimed_pickup(k, b.id, kind) or not _is_task(kind, timed, card=True) or to_come(day, timed and t):
                     continue
                 sees = [u for u in people.values() if _sees_board(u, board, k)
                         # A machine's own card: the owner has the machine below.
@@ -1289,6 +1302,8 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 except ValueError:
                     continue
                 kind = _type_of(k, board_id=board_id, board=board)
+                if _unclaimed_pickup(k, board_id, kind):
+                    continue
                 on = {a.get("uid") for a in (k.get("assignees") or []) if isinstance(a, dict)}
                 maker = by_name.get(str(k.get("createdBy") or "").strip().lower(), "")
                 who = [u for u in sees if _is_mine(on, kind, maker, u)]
