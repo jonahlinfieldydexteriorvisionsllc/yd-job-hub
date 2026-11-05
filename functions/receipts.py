@@ -124,7 +124,7 @@ PICKUP_NOTICE = re.compile(r"\b(ready (for|to) (in[- ]store |curbside )?pick[- ]
 # What the purchase record calls itself. An email named so is the receipt
 # even when it also says the order is ready, or the read took it for a
 # pickup notice: an order confirmation is never lost to the rule above.
-THE_RECEIPT = re.compile(r"\b(order confirmation|confirmation of (your )?order|receipt|invoice|"
+THE_RECEIPT = re.compile(r"\b(order confirmation|confirmation of (your )?order|receipt|e?invoice|"
                          r"thank you for (your|the) (order|purchase))", re.I)
 
 
@@ -167,9 +167,9 @@ def pickup_notice(subject, got=None):
 # made of it ("not paid", "unpaid" are not).
 # "Due upon receipt" is a bill's terms, not a receipt: a sub's invoices say
 # it, and it filed them as receipts to sort (3 Nov 2026).
-PAID_SIGN = re.compile(r"(?<!not )(?<!not yet )\b(paid|payment (received|confirmation|confirmed|processed|successful|complete)|"
+PAID_SIGN = re.compile(r"(?<!not )(?<!not yet )\b(paid|payment (received|confirmation|confirmed|processed|success|successful|complete)|"
                        r"thank you for (your|the) payment|(?<!on )receipt|(was|been|we've|we have) charged|"
-                       r"autopay(ment)? (was )?processed)\b", re.I)
+                       r"approved autopay|autopay(ment)? (was )?processed)\b", re.I)
 # Words that say a bill is owed, for an email the read called neither an
 # invoice nor anything else.
 OWED_SIGN = re.compile(r"\b(amount due|balance due|payment due|due date|due on|due by|pay by|past due|overdue|"
@@ -1642,6 +1642,13 @@ def _file_place(db, rid):
     return True
 
 
+def _lists_amounts(r):
+    """Whether a receipt's lines say how much of something was bought. An
+    email that only says a payment went through has one line, its summary
+    (lines_from), with no amount."""
+    return any((ln or {}).get("qty") for ln in r.get("lines") or [])
+
+
 def _same_bill(db, f):
     """The receipt this one is the same cost as, or None.
 
@@ -1653,7 +1660,9 @@ def _same_bill(db, f):
       - one is a bill not yet paid and the other the payment (an invoice
         then its receipt), whichever came first;
       - both are bills not yet paid and say the same due date (the bill,
-        then its "3 days overdue" reminder).
+        then its "3 days overdue" reminder);
+      - both are records of paying, on the same day, and one lists nothing
+        bought (one payment told twice).
     A monthly bill a month later is not the same bill, nor is next week's
     bill of the same amount (a different due date).
 
@@ -1695,7 +1704,13 @@ def _same_bill(db, f):
         # Two unsorted ones with nothing to tell them apart (the rule before):
         # the same cost read twice.
         both_new = r.get("status") == "new" and not r.get("splits") and paid == was_paid and             r.get("docType") == f.get("docType") and not paid
-        if not (bill_then_payment or same_due or both_new):
+        # One payment told twice: the office's receipt and the card system's
+        # "Payment Success", three minutes apart (the waste company, 4 Nov 2026). At
+        # least one lists no amounts of anything: two fuel receipts for $50 on
+        # one day both list gallons, and are two costs.
+        same_payment = paid and was_paid and f.get("date") == r.get("date") and \
+            not (_lists_amounts(f) and _lists_amounts(r))
+        if not (bill_then_payment or same_due or both_new or same_payment):
             continue
         if best is None or str(r.get("date") or "") < str((best.to_dict() or {}).get("date") or ""):
             best = s
@@ -2045,6 +2060,12 @@ def forwarded_cards(db, since_epoch):
 # purchases goes straight to being read; new and mixed senders (a store that
 # sends receipts and adverts) are still sorted by Claude. YD's own estimates
 # and invoices to its customers are skipped by a plain rule.
+#
+# A sender's record never skips an email that says money moved (says_money).
+# Two quotes from the waste company's salesman in June, before there was
+# anything to buy, wrote the whole company off, and every bill and payment
+# after them was passed over unread (Jonah, 4 Nov 2026: its "Payment Success"
+# never came in). What a sender sent before says nothing about this email.
 
 FREE_MAIL = {"gmail.com", "yahoo.com", "outlook.com", "hotmail.com", "icloud.com", "aol.com",
              "me.com", "live.com", "msn.com", "comcast.net", "att.net", "charter.net"}
@@ -2067,13 +2088,22 @@ def sender_key(from_header):
     return ".".join(domain.split(".")[-2:]).replace("/", "_")
 
 
+def says_money(m):
+    """Whether an email says by itself that money moved or a bill came: its
+    subject calls it paid, a receipt or an invoice, it carries a PDF, or its
+    first words name an amount."""
+    subject = m.get("subject") or ""
+    return bool(PAID_SIGN.search(subject) or THE_RECEIPT.search(subject) or pdf_files(m)
+                or _money_in({"subject": subject, "snippet": m.get("snippet")}))
+
+
 def by_code(m, record):
     """'skip', 'read', or '' (Claude sorts it)."""
     if OWN_SALES.search(m.get("subject") or ""):
         return "skip"
     r = record or {}
     yes, no = r.get("purchase", 0), r.get("notPurchase", 0)
-    if no >= SKIP_AFTER and not yes:
+    if no >= SKIP_AFTER and not yes and not says_money(m):
         return "skip"
     if yes >= TRUST_AFTER and not no:
         return "read"
@@ -3121,6 +3151,25 @@ def _pull_step(client, db, p, since_epoch, bank, jobs_of, each_from=()):
 # marked `pulled` and never sent on to QuickBooks.
 AGAIN_MAX = 50              # emails taken off the list in one run; the rest wait
 GMAIL_ID = re.compile(r"^[0-9a-f]{8,24}$")
+SKIPPED_MAX = 2000          # emails by_code skipped that one look goes through
+
+
+def _skipped_back(db, st):
+    """Once ever: what by_code skipped before it asked says_money, onto the
+    read-again list -- every sender's, since a written-off sender shows
+    nowhere. YD's own sales stay skipped. settings/receipts.skippedBackAt says
+    it is done. Returns how many; `st` gets them, for this run's _queue_again."""
+    if st.get("skippedBackAt"):
+        return 0
+    docs = db.collection("receiptMail").where("outcome", "==", "not_purchase") \
+        .where("byCode", "==", True).limit(SKIPPED_MAX).stream()
+    ids = [s.id for s in docs if not OWN_SALES.search((s.to_dict() or {}).get("subject") or "")]
+    back = [m["id"] for m in _open_all(ids) if says_money(m)]
+    st["readAgain"] = list(st.get("readAgain") or []) + back
+    db.collection("settings").document("receipts").set(
+        dict({"skippedBackAt": dg._now().isoformat(), "skippedBack": len(back)},
+             **({"readAgain": firestore.ArrayUnion(back)} if back else {})), merge=True)
+    return len(back)
 
 
 def _queue_again(db, st, since_epoch):
@@ -3197,6 +3246,12 @@ def run(client, manual=False):
         except Exception as e:      # noqa: BLE001 -- receipts still run
             print("receipts: forwarded cards failed:", e)
         # Emails Jonah asked to have read again (read again, above).
+        try:
+            report["skippedBack"] = _skipped_back(db, st_data)
+        except NeedsPermission:
+            raise
+        except Exception as e:      # noqa: BLE001 -- the read is never lost to it
+            print("receipts: looking through what was skipped failed:", e)
         report["again"] = _queue_again(db, st_data, since_epoch)
         # The week's read, or between reads: only orders waiting for pickup.
         reading = bool(manual) or _reading_due(st_data)
