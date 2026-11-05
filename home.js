@@ -132,12 +132,22 @@
     return '<div class="hm-cl"><button class="link-btn" onclick="homeForClaude(\'' + k + '\')">🤖 For Claude</button></div>';
   }
 
+  // An appointment already over today: dimmed. Nothing ticks one off, so it
+  // would sit there looking like the next thing. A task stays as it is: not
+  // ticked is not done, whatever the clock says.
+  function isOver(x) {
+    const o = x.o || {}, end = o.endTime || o.time || '';
+    if (x.task || !/^\d{2}:\d{2}$/.test(end)) return false;
+    const n = new Date();
+    return end < String(n.getHours()).padStart(2, '0') + ':' + String(n.getMinutes()).padStart(2, '0');
+  }
+
   // Something at a set time, drawn as My day draws it: a task (not an
   // appointment) has its tick box here too.
   function timedRow(x) {
     const k = keep(x);
     const line = [x.sub, x.who].filter(Boolean).join(' · ');
-    return '<div class="md-row hm-row' + (x.done ? ' done' : '') + '" style="--c:' + colour(x.color) + '">' +
+    return '<div class="md-row hm-row' + (x.done ? ' done' : '') + (isOver(x) ? ' hm-over' : '') + '" style="--c:' + colour(x.color) + '">' +
       (x.task && x.canTick ? '<input type="checkbox"' + (x.done ? ' checked' : '') +
         ' onchange="homeTick(\'' + k + '\', this.checked)" aria-label="Done">' : '') +
       '<button class="md-open" onclick="homeOpen(\'' + k + '\')">' +
@@ -570,7 +580,7 @@
     // the same note My day shows).
     const nudge = window.YDCalendar && YDCalendar.nudge ? YDCalendar.nudge() : '';
     if (isOwner() && window.YDRemind && YDRemind.place) {
-      return card('day', title, countWords(c), link, nudge + placesHtml(d, ownLate, ownAny, crewLate, crewAny), left > 0);
+      return card('day', title, countWords(c), link, nudge + placesHtml(ownLate, ownAny, crewLate, crewAny), left > 0);
     }
     const body = nudge +
       sub('🕑 Schedule') +
@@ -586,6 +596,22 @@
           capped('mineC', crewLate.map(x => todoRow(x, true)).concat(crewAny.map(x => todoRow(x, false))))
         : '');
     return card('day', title, countWords(c), link, body, left > 0);
+  }
+
+  // What is at a set time today, in a card of its own at the top of Home.
+  // Jonah (5 Nov 2026): "Separate my any time tasks from my ones scheduled
+  // for a time I missed my tsa appointment today because it was at the bottom
+  // of". It was the first thing in My day, but on a phone My day comes after
+  // the figures, Waiting on you, the notes and the clock, screens down. A time
+  // can be missed; a to-do can wait, so the two are not one list. Real times
+  // first, then a day on a job (forHome's "All day"). No card on a day with
+  // nothing at a set time. The owner's: the crew's day is under their clock.
+  function scheduleHtml(d) {
+    if (!signedIn() || !d || d === 'loading') return '';
+    const left = d.mineTimed.filter(x => !x.done);
+    if (!left.length) return '';
+    const rows = left.filter(x => x.o && x.o.time).concat(left.filter(x => !(x.o && x.o.time)));
+    return card('sched', '🕑 At set times today', '', ['Calendar', "switchTab('calendar')"], capped('mineT', rows.map(timedRow), 8));
   }
 
   // Notes to sort later (Jonah, 22 Oct 2026: "notes list on dashboard that
@@ -813,14 +839,13 @@
   // ones first, as the one list had; a tick does what it did (todoRow), and
   // the one count in the head is unchanged. Only his: the crew's day is the
   // crew's tasks, done out (Your day, unchanged for everyone else).
-  function placesHtml(d, ownLate, ownAny, crewLate, crewAny) {
+  // The set times are not here: they have the top of Home (scheduleHtml).
+  function placesHtml(ownLate, ownAny, crewLate, crewAny) {
     const rows = ownLate.map(x => [x, true]).concat(ownAny.map(x => [x, false]));
     const of = id => rows.filter(r => (r[0].place || '') === id).map(r => todoRow(r[0], r[1]));
     const office = of('office'), out = of('out'), either = of('');
     const head = id => { const p = YDRemind.place(id); return (p.icon ? p.icon + ' ' : '') + p.list; };
     return '<div class="hm-places"><div class="hm-day-grid">' +
-      '<div class="hm-day-sched">' + sub('🕑 Schedule') +
-        (d.mineTimed.length ? capped('mineT', d.mineTimed.map(timedRow), 8) : empty('Nothing at a set time today.')) + '</div>' +
       '<div class="hm-day-office">' + sub(head('office')) +
         (office.length ? capped('mineO', office) : empty('Nothing for the office today.')) + '</div>' +
       '<div class="hm-day-out">' + sub(head('out')) +
@@ -1314,7 +1339,8 @@
     if (!crewish && isOwner()) {
       const side = [nextdoorHtml(), waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
       const day = myDayHtml(d);
-      return top + '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
+      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + scheduleHtml(d) + statsHtml(all) +
+        '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
         '<div class="hm-grid">' + [crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()]
           .filter(Boolean).join('') + '</div>';
     }

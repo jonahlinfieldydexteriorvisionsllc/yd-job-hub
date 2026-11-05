@@ -593,6 +593,10 @@ def _calendar_items(start, end):
     return items
 
 
+def _at_a_time(ev):
+    return bool(ev.get("time")) and not ev.get("allDay")
+
+
 def _storms():
     open_ = []
     for s in _db().collection("storms").where("status", "==", "open").stream():
@@ -1233,9 +1237,17 @@ def build(slot, user, people, wx, cache):
         t = day_items(today)
         tj, tr = [it for it in t if _job_day(it)], [it for it in t if not _job_day(it)]
         job_section(where_title + " today", tj)
-        if tr or owner:
+        # What is at a set time apart from what is for any time, and first
+        # (Jonah, 5 Nov 2026: he missed an appointment listed at the bottom;
+        # the sort puts all-day things before timed ones).
+        at_time = [it for it in tr if _at_a_time(it["ev"])]
+        any_time = [it for it in tr if not _at_a_time(it["ev"])]
+        if at_time:
+            sections.append(("At set times today — " + _long_day(today), [_event_line(it, people) for it in at_time]))
+        if any_time:
+            sections.append(("Any time today", [_event_line(it, people) for it in any_time]))
+        elif owner and not at_time:
             sections.append(("Today — " + _long_day(today),
-                             [_event_line(it, people) for it in tr] or
                              [{"text": "Nothing else on the calendar." if tj else "Nothing on the calendar."}]))
         if t:
             push_bits.append("%d on today" % len(t))
@@ -1259,6 +1271,7 @@ def build(slot, user, people, wx, cache):
                 return True
             return end >= hhmm
         rest = [it for it in day_items(today) if still_on(it["ev"])]
+        rest.sort(key=lambda it: not _at_a_time(it["ev"]))   # set times first; the sort keeps the rest in order
         if rest:
             sections.append(("Rest of today", [_event_line(it, people) for it in rest]))
             push_bits.append("%d still on today" % len(rest))

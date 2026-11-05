@@ -3186,23 +3186,20 @@
     text-align:left; cursor:pointer; overflow-wrap:anywhere; }
   .hm-note-b:hover { border-color:var(--c); }
   /* The owner's day (home.js placesHtml): his to-dos in the office and out
-     side by side once the card is wide enough, the schedule beside them on
-     a wide screen; one under the other on a phone, the office's first. The
-     card's own width decides (a container query), not the window's. */
+     side by side once the card is wide enough; one under the other on a
+     phone, the office's first. The card's own width decides (a container
+     query), not the window's. Set times have a card of their own (scheduleHtml). */
   .hm-places { container-type:inline-size; }
   .hm-day-grid { display:grid; grid-template-columns:minmax(0, 1fr); column-gap:20px;
-    grid-template-areas:"sched" "office" "out" "either"; align-items:start; }
-  .hm-day-sched { grid-area:sched; }
+    grid-template-areas:"office" "out" "either"; align-items:start; }
   .hm-day-office { grid-area:office; }
   .hm-day-out { grid-area:out; }
   .hm-day-either { grid-area:either; }
   .hm-day-either .hm-sub { font-size:10.5px; }
   @container (min-width:540px) {
-    .hm-day-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); grid-template-areas:"sched sched" "office out" "either either"; }
+    .hm-day-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); grid-template-areas:"office out" "either either"; }
   }
-  @container (min-width:960px) {
-    .hm-day-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); grid-template-areas:"sched office out" "sched either either"; }
-  }
+  .hm-row.hm-over { opacity:.55; }
 
   /* A line that goes somewhere (who is on the clock, what is waiting) */
   .hm-line { display:flex; align-items:center; gap:10px; width:100%; text-align:left; cursor:pointer; min-height:44px;

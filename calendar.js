@@ -979,10 +979,13 @@
     return '<div class="md cal-pan">' + nudgeHtml() +
       (count ? '<div class="md-count">' + esc(count) + '</div>' : '') +
       (mineJobs.length ? '<div class="md-head md-jobs">🔨 Where you’re working</div>' + jobDaysHtml(mineJobs, '') : '') +
+      // What is at a set time above what was left from before: it can be
+      // missed, and "From earlier" can run to a dozen rows (Jonah, 5 Nov 2026:
+      // he missed an appointment listed at the bottom).
+      (mineT.length ? '<div class="md-head">🕑 At set times</div>' + mineT.map(timedRow).join('') : '') +
       (lateMine.length ? '<div class="md-head md-late">⏰ From earlier — not done</div>' +
         lateMine.map(o => todoRow(o, [shortDay(o.day), whoOn(o)].filter(Boolean).join(' · '), !o.done)).join('') : '') +
       (!mine.length ? (mineJobs.length ? '' : '<p class="empty-msg">Nothing ' + (lateMine.length ? 'else ' : '') + 'of yours ' + which + '.</p>') :
-        (mineT.length ? '<div class="md-head">🕑 At set times</div>' + mineT.map(timedRow).join('') : '') +
         (mineU.length ? '<div class="md-head">✅ Any time ' + which + '</div>' +
           mineU.map(o => todoRow(o, whoOn(o))).join('') : '')) +
       (crew.length || lateCrew.length || crewJobs.length ? '<div class="md-head md-crew">👷 The crew’s day</div>' +
@@ -1172,10 +1175,11 @@
     return '<div class="cal-daylist">' +
       '<div class="cal-daylist-head">' + esc(longDay(day)) + countHtml(dayCount(day)) + '</div>' +
       jobDaysHtml(jobs) +
-      lateHtml(late, null, true) +
-      // Under the job days, the rest needs a heading of its own.
-      (timed.length && (jobs.length || late.length) ? '<div class="cal-todo-group">At set times</div>' : '') +
+      // Set times first, under their own heading, then what was left from
+      // before and what is for any time (My day's order).
+      (timed.length ? '<div class="cal-todo-group">At set times</div>' : '') +
       timed.map(o => todoRow(o, '', false, fmtTime(o.time))).join('') +
+      lateHtml(late, null, true) +
       (anyTime.length ? '<div class="cal-todo-group">Any time</div>' + anyTime.map(o => todoRow(o)).join('') : '') +
       (!items.length ? '<div class="cal-today-none">' + (late.length ? 'Nothing else on this day.' : 'Nothing on this day.') + '</div>' : '') +
       (adds() ? '<button class="link-btn cal-daylist-add" onclick="calAdd(\'' + day + '\')">+ Add to ' +

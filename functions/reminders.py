@@ -1207,6 +1207,10 @@ def _usual(db, people, since, now, cals, boards, prefs):
     first = since.date() - datetime.timedelta(days=1)
     last = (now + datetime.timedelta(minutes=longest)).date() + datetime.timedelta(days=1)
     day_list = {uid: [] for uid in auto}
+    # What is at a set time today, for the head of the 7 am list: (time,
+    # "icon title"). Jonah (5 Nov 2026) missed an appointment; that list only
+    # ever held the any-time things, so the morning said nothing of it.
+    day_times = {uid: [] for uid in auto}
 
     def buzz(uid, key, title, body, tag):
         claim = db.collection("reminderLog").document(key)
@@ -1268,6 +1272,9 @@ def _usual(db, people, since, now, cals, boards, prefs):
                             if day.isoformat() != str(one.get("date")):
                                 continue            # a timed entry over days reminds on its first
                             mine = (set(ev.get("remindUids") or []) | on) if ev.get("hasReminder") else set()
+                            if morning and day == today and kind != "jobday":
+                                for uid in who:
+                                    day_times[uid].append((str(one.get("time")), (tag.get("icon") or "") + " " + title))
                             # The time in the key: moved later the same day, it
                             # reminds again at the new time.
                             timed([u for u in who if u not in mine], kind, title, _start_of(one, day),
@@ -1311,6 +1318,9 @@ def _usual(db, people, since, now, cals, boards, prefs):
                 t = str(k.get("dueTime") or "")
                 if len(t) == 5 and t[2] == ":":
                     mine = (set(k.get("remindUids") or []) | on) if k.get("hasReminder") else set()
+                    if morning and day == today:
+                        for u in who:
+                            day_times[u["uid"]].append((t, (TYPES.get(kind) or "") + " " + title))
                     start = _start_of({"time": t}, day)
                     on_day = ("today" if day == today else "tomorrow" if day == today + datetime.timedelta(days=1)
                               else start.strftime("%a %b ") + str(day.day))
@@ -1376,7 +1386,8 @@ def _usual(db, people, since, now, cals, boards, prefs):
 
     for uid, items in day_list.items():
         old = late.get(uid) or []
-        if not items and not old:
+        times = sorted(day_times.get(uid) or [])
+        if not items and not old and not times:
             continue
         jobs = sorted((x for x in items if x[0] == "jobday"), key=lambda x: x[1].lower())
         items = [x for x in items if x[0] != "jobday"]
@@ -1398,6 +1409,7 @@ def _usual(db, people, since, now, cals, boards, prefs):
             said.add(place)
             return place_say[place] + text
         names = [named(TYPES["jobday"], x[1]) for x in jobs] + \
+            ["🕑 %s%s" % (dg._fmt_time(t), (" " + what.strip()) if what.strip() else "") for t, what in times] + \
             ["⏰ " + named(icon, title) + (" ×%d" % n if n > 1 else "") for (icon, title), n in seen.items()] + \
             [placed(x) for x in items]
         more = len(names) - DAY_LIST_MAX
@@ -1410,6 +1422,9 @@ def _usual(db, people, since, now, cals, boards, prefs):
             head = "⏰ %d thing%s not done from before" % (len(old), "" if len(old) == 1 else "s")
         else:
             head = ""
+        if times:
+            at = "🕑 %d at a set time" % len(times)
+            head = at + (" · " + head if head else " today")
         if jobs:
             where = "%s %s" % (TYPES["jobday"], jobs[0][1] if len(jobs) == 1 else "%d job sites" % len(jobs))
             head = where + (" · " + head if head else " today")
