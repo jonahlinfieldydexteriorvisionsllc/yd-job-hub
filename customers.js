@@ -3322,6 +3322,11 @@
         bf.customerBy === 'auto' ? bf.customerFill : null) : '';
     box.innerHTML = html;
     box.hidden = !html;
+    // A question goes over the job's buttons, seen on whichever part it opens
+    // on; once answered, the line sits with the client's boxes (index.html).
+    const asks = html.indexOf('cu-tie-ask') !== -1 || (bf.customerBy === 'auto' && !!bf.customerFill && bf.customerFill.how === 'name');
+    const spot = el(asks ? 'jobTieAsk' : 'jobTieHome');
+    if (spot && box.parentElement !== spot) spot.appendChild(box);
   }
   let tieDrawTimer = null;
   function drawTieSoon() { clearTimeout(tieDrawTimer); tieDrawTimer = setTimeout(drawTie, 400); }

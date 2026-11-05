@@ -723,8 +723,12 @@
 
   window.YDJobPhotos = { mount: mount, jobShown: jobShown, readyToFinish: readyToFinish,
                          // How many a job has, for the button that opens them
-                         // (jobview.js); null until they have come.
-                         count: id => (id && id === jobId && loaded ? Object.values(photos).filter(p => !p.deleteAsked).length : null),
+                         // (jobview.js); null while it isn't known.
+                         count: id => {
+                           if (!id || id !== jobId) return null;
+                           const n = Object.values(photos).filter(p => !p.deleteAsked).length;
+                           return n || loaded ? n : null;
+                         },
                          picking: () => !!pickingSince && Date.now() - pickingSince < 60000,
                          waiting: () => Object.values(queue).filter(q => q.by === myUid()).length,
                          // This person's photos still on this phone, for the end

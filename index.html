@@ -232,10 +232,10 @@
          there or ring them, then a button for each part of it. One part
          shows at a time, each drawn by its own file. -->
     <div class="job-strip" id="jobStrip" hidden></div>
-    <!-- Whose bid or job it is: the customer it is tied to, or buttons to
-         say (customers.js drawTie). Over the buttons: the question has to be
-         seen on whichever part the job opens on. -->
-    <div id="jobCustTie" hidden></div>
+    <!-- Whose bid or job it is, when that is still to say: moved here from
+         Details by customers.js drawTie, so the question is seen on whichever
+         part the job opens on. -->
+    <div id="jobTieAsk"></div>
     <div class="jv-views" id="jobViews" role="group" aria-label="Parts of the job"></div>
 
     <div data-job-view="details">
@@ -254,6 +254,9 @@
           <div class="field"><span class="label">Business name (if any)</span><input id="business" autocomplete="off" oninput="onCustomerNamePart()"></div>
         </div>
         <input type="hidden" id="customerName">
+        <!-- Whose bid or job it is: the customer it is tied to (customers.js
+             drawTie). -->
+        <div id="jobTieHome"><div id="jobCustTie" hidden></div></div>
         <!-- What the job is in a few words: the crew see it beside the name
              (app.js jobWhat). Blank = from the estimate, else the services. -->
         <div class="field mt"><span class="label">What the job is, in a few words — the crew see it beside the name</span>
