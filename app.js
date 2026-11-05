@@ -6963,17 +6963,16 @@ const SIDEBAR_SMALL_KEY = 'ydjobhub_sidebarSmall';
 const SIDEBAR_MIN_WIDTH = 1024;
 // The preview's switch, left on computers that tried it: nothing reads it now.
 try { localStorage.removeItem('ydjobhub_sidebarPreview'); } catch (e) { /* private window */ }
-// The groups, in the order they sit. Contacts has a group of its own --
-// People -- because the customer list (every QuickBooks customer, past ones
-// too) is coming and belongs beside it, not among the jobs.
+// The groups, in the order they sit. Each says what is in it and holds more
+// than one screen: a heading over a single line only adds a line (review of 4
+// Nov 2026; Jonah: "Yes, clear them up"). Customers sit with the jobs they're
+// for, and Snow with the crew who run it.
 const SIDEBAR_GROUPS = [
   { name: 'Today', tabs: ['home', 'calendar'] },
-  { name: 'Sales + jobs', tabs: ['job', 'dashboard', 'bids', 'boards'] },
-  { name: 'Snow', tabs: ['snow'] },
-  { name: 'Crew', tabs: ['clock', 'crewjobs'] },
+  { name: 'Jobs', tabs: ['crewjobs', 'job', 'dashboard', 'bids', 'boards', 'contacts'] },
+  { name: 'Crew & snow', tabs: ['clock', 'snow'] },
   { name: 'Money', tabs: ['money', 'receipts'] },
-  { name: 'Stuff', tabs: ['supplies', 'equipment'] },
-  { name: 'People', tabs: ['contacts'] }
+  { name: 'Yard', tabs: ['supplies', 'equipment'] }
 ];
 
 // A line of the sidebar that is a place on a tab, not a tab: Bids, straight to
