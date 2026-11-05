@@ -4010,6 +4010,11 @@
   @media (min-width:1000px) {
     .hm-lead { grid-template-columns:minmax(0, 1fr) minmax(0, 2fr); }
   }
+  /* One column: his day comes before the notes to sort. */
+  @media (max-width:999px) {
+    .hm-lead-side { display:contents; }
+    .hm-lead #hm-notes { order:1; }
+  }
   @media (max-width:720px) {
     .hm-lead, .hm-lead-side { gap:16px; }
     .hm-lead { margin-bottom:16px; }

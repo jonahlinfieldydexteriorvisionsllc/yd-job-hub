@@ -1335,7 +1335,10 @@
     // The owner's day is wide (placesHtml: his office and out lists side by
     // side), so on a wide screen it takes two thirds of the width beside
     // Waiting on you, and the rest flow in columns under them. A phone has
-    // them one under the other, in the same order as before.
+    // them one under the other, his day straight after Waiting on you and the
+    // notes after that (styles.css .hm-lead): four notes are a whole screen,
+    // and they are for sorting later, when he's home. Nobody's day comes after
+    // them (review of 4 Nov 2026; Jonah: "Yes, move it").
     if (!crewish && isOwner()) {
       const side = [nextdoorHtml(), waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
       const day = myDayHtml(d);
@@ -1346,7 +1349,7 @@
     }
     const cards = crewish
       ? [clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), crewJobsHtml(d), waitingHtml(), equipmentHtml()]
-      : [waitingHtml(), notesHtml(), clockHtml(), eodHtml(), myDayHtml(d), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
+      : [waitingHtml(), clockHtml(), eodHtml(), myDayHtml(d), notesHtml(), crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()];
     // A crew lead clocks in every day: the clock above the office's figures,
     // not under them. Their jobs are the crew's list (the office's until
     // that has come in).
@@ -1354,7 +1357,7 @@
       const crewJobs = window.YDCrewJobs && YDCrewJobs.list().length ? crewJobsHtml(d) : jobsHtml(all);
       return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() +
         '<div class="hm-grid hm-lead-clock">' + [clockHtml(), eodHtml()].filter(Boolean).join('') + '</div>' + statsHtml(all) +
-        '<div class="hm-grid">' + [waitingHtml(), notesHtml(), myDayHtml(d), crewDayHtml(d), crewJobs, invoiceHtml(all), bidsHtml(all), equipmentHtml()]
+        '<div class="hm-grid">' + [waitingHtml(), myDayHtml(d), notesHtml(), crewDayHtml(d), crewJobs, invoiceHtml(all), bidsHtml(all), equipmentHtml()]
           .filter(Boolean).join('') + '</div>';
     }
     return top + '<div class="hm-grid">' + cards.filter(Boolean).join('') + '</div>';
