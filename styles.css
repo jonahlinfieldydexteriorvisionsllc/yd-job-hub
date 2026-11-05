@@ -5858,6 +5858,16 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
   .ji-kind { flex-direction:row; align-items:center; justify-content:flex-start; gap:8px; }
   .ji-ico { font-size:20px; line-height:1; flex:0 0 auto; }
   .ji-text { width:100%; }
+  .ji-text + .ji-text { margin-top:6px; }
+  /* Any number can be on: a tick says which, kept clear of the words. */
+  .ji-multi .ji-btn { position:relative; padding-right:24px; }
+  .ji-multi .ji-btn.on::after { content:'✓'; position:absolute; top:6px; right:8px; font-weight:800; line-height:1; }
+  .ji-more, #issueModal .field-actions .btn { min-height:44px; }
+  .ji-more { margin-top:6px; }
+  .ji-amt { display:block; }
+  .ji-amt + .ji-amt { margin-top:8px; }
+  .ji-amt:last-child { margin-bottom:10px; }
+  .ji-amt > span { display:block; font-size:13px; font-weight:600; margin-bottom:3px; overflow-wrap:anywhere; }
   .ji-big { width:100%; margin:2px 0 8px; }
   .ji-big .cj-go-sub { text-transform:none; letter-spacing:0; }
   .ji-list { display:flex; flex-direction:column; gap:8px; }

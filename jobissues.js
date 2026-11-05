@@ -25,9 +25,23 @@
 //              takeoff's quantity on the crew copy -- the size of the job,
 //              before waste), equipment, workId, work (a piece of work, for
 //              "took longer"), amount (their words: "about 3 yd over"),
-//              note } }
+//              note, materials, equipmentList, works } }
 // -- every field there, null when it does not apply, so a later "estimates
 // that learn from finished jobs" can read them as they are.
+//
+// SEVERAL AT ONCE (Jonah, 5 Nov 2026: "i went to note a issue of too much
+// material and it wont let me select multiple"; the first ask above was
+// already rock AND soil). One note, one buzz, one ✓ Mark handled. About
+// several materials, `materials` is the list [{material, supplyId,
+// materialKind, unit, planned, amount}], each with its own "how much", and the
+// top-level fields are the words for all of them: material "Road gravel,
+// Topsoil", amount "Road gravel (12 tons planned): about 3 tons; Topsoil: 1
+// yd", supplyId, materialKind, unit and planned null, because no one of them
+// speaks for the rest. So anything reading the words needs no change, and
+// anything matching a material goes through matsOf here or lessons.mats_of.
+// About one material the note is as it always was and `materials` is null,
+// and every note from before this reads the same way. equipmentList [names]
+// and works [{id, title}] are the same idea, for two or more.
 //
 // WHERE JONAH SEES THEM. On the job (Job tab, "⚠️ Issues from the crew", with
 // ✓ Mark handled), under the matching material on the job's estimate, in
@@ -76,6 +90,8 @@
   // What a job most often turns out to need -- a tap each; anything else typed.
   const EQUIPMENT = ['Dump trailer', 'Mini-ex', 'Skid steer', 'Dumpster', 'Another truck'];
   const MAX = { material: 200, equipment: 80, work: 200, amount: 120, note: 1000, next: 400 };
+  const TEXT_ABOUT = 430;   // its part of the note's words: with the rest at their longest, the note's 2,000 still holds
+  const MAX_MATS = 120;     // as many as a crew copy carries
   const PATTERN_DAYS = 365;
   const SHOW_OPEN = 10;
 
@@ -104,13 +120,36 @@
   }
   const kindName = k => (k && window.YDPricing && YDPricing.kindName ? YDPricing.kindName(k) : k) || '';
 
+  // What a note is about, an entry each: its list when it has one, else the
+  // one thing on top (about one thing, or from before there were lists).
+  function matsOf(i) {
+    if (!i) return [];
+    if (Array.isArray(i.materials) && i.materials.length) return i.materials;
+    return i.material ? [{ material: i.material, supplyId: i.supplyId || null, materialKind: i.materialKind || null,
+      unit: i.unit || null, planned: i.planned === undefined ? null : i.planned, amount: i.amount || null }] : [];
+  }
+  function equipOf(i) {
+    if (!i) return [];
+    if (Array.isArray(i.equipmentList) && i.equipmentList.length) return i.equipmentList;
+    return i.equipment ? [i.equipment] : [];
+  }
+  function worksOf(i) {
+    if (!i) return [];
+    if (Array.isArray(i.works) && i.works.length) return i.works;
+    return i.work ? [{ id: i.workId || null, title: i.work }] : [];
+  }
+  const plannedWords = x => (x.planned !== null && x.planned !== undefined && isFinite(x.planned)
+    ? fmtNum(x.planned) + (x.unit ? ' ' + x.unit : '') + ' planned' : '');
+
   // ---------------------------------------------------------- the form
   //
   // draft: { jobId, jobName, mats [{name, supplyId, kind, unit, qty, plant}],
-  //          work [{id, title}], type, mat (index | -1 typed | null),
-  //          matText, equip (name | '' typed | null), equipText, workId,
-  //          amount, note, next, editId (✏️ Change: the note's id),
-  //          orig (its issue as it was) }
+  //          work [{id, title}], type, picks [indexes into mats, as tapped],
+  //          typed [what's typed, a box each; empty = Something else is off],
+  //          typedWas (those words while it is off), amts {pick's index or
+  //          't'+typed index: how much}, equips [names; '' = typed],
+  //          equipText, workIds [ids], amount (for took longer), note, next,
+  //          editId (✏️ Change: the note's id), orig (its issue as it was) }
   let draft = null;
 
   function modal(title) {
@@ -133,49 +172,94 @@
   // The job's materials and its pieces of work, from its crew copy (or the
   // same parts worked out from the job on the Job tab): each material once.
   function partsOf(parts) {
-    const seen = {};
-    const mats = ((parts && parts.materials) || []).filter(m => {
+    const seen = {}, mats = [];
+    ((parts && parts.materials) || []).forEach(m => {
       const k = (m && m.supplyId) || keyOf(m && m.name);
-      if (!m || !m.name || !k || seen[k]) return false;
-      seen[k] = true;
-      return true;
-    }).slice(0, 60).map(m => ({ name: clip(m.name, MAX.material), supplyId: m.supplyId ? safe(m.supplyId) : null,
-      kind: m.plant ? 'plant' : clip(m.kind, 40) || null, unit: clip(m.unit, 30) || null, qty: numOr(m.qty), plant: !!m.plant }));
+      if (!m || !m.name || !k) return;
+      const qty = numOr(m.qty), unit = clip(m.unit, 30) || null, had = seen[k];
+      // On two lines (topsoil for the beds and the lawn) it is one button
+      // with both amounts, or how far over it was reads wrong later.
+      if (had) {
+        if (had.unit !== unit) had.qty = null;
+        else if (had.qty !== null && qty !== null) had.qty = Math.round((had.qty + qty) * 100) / 100;
+        return;
+      }
+      seen[k] = { name: clip(m.name, MAX.material), supplyId: m.supplyId ? safe(m.supplyId) : null,
+        kind: m.plant ? 'plant' : clip(m.kind, 40) || null, unit: unit, qty: qty, plant: !!m.plant };
+      mats.push(seen[k]);
+    });
     const work = ((parts && parts.work) || []).filter(w => w && w.title).slice(0, 30)
       .map((w, i) => ({ id: safe(w.id) || 'w' + i, title: clip(w.title, MAX.work) }));
-    return { mats: mats, work: work };
+    return { mats: mats.slice(0, MAX_MATS), work: work };
+  }
+  // The job's own list, when this device holds the job: the one open on the
+  // Job tab, or Jonah's copy of any other. Else nothing, and the note's own
+  // materials are what the form has.
+  function partsOfJob(id) {
+    if (!id || !window.YDCrewJobs || !YDCrewJobs.workParts) return {};
+    if (id === jobId && typeof getJobData === 'function') return YDCrewJobs.workParts(getJobData());
+    try {
+      const raw = typeof readJobBlob === 'function' ? readJobBlob(id) : null;
+      return raw ? YDCrewJobs.workParts(JSON.parse(raw)) : {};
+    } catch (e) { return {}; }
   }
 
   function open(jobId, jobName, parts) {
     if (!signedIn() || !jobId) return;
     const p = partsOf(parts);
-    draft = { jobId: jobId, jobName: clip(jobName, 120), mats: p.mats, work: p.work, type: null, mat: null, matText: '',
-              equip: null, equipText: '', workId: null, amount: '', note: '', next: '', editId: null, orig: null };
+    draft = blank(jobId, jobName, p);
     draw();
   }
-  // ✏️ Change (Jonah): the same form, filled in from the note -- with its
-  // job's own materials and work when that job is the one open on the Job
-  // tab; else what the note says is kept as it is unless he changes it.
+  // No materials to tap on the job: the box to type one is all there is.
+  function blank(id, name, p) {
+    return { jobId: id, jobName: clip(name, 120), mats: p.mats, work: p.work, type: null, picks: [], typed: p.mats.length ? [] : [''],
+             typedWas: [], amts: {}, equips: [], equipText: '', workIds: [], amount: '', note: '', next: '', editId: null, orig: null };
+  }
+  // ✏️ Change (Jonah): the same form, filled in from the note, with its
+  // job's own materials and work to tap when this device holds the job.
   window.jiEdit = function (id) {
     if (!isOwner() || !signedIn()) return;
     const n = all().find(x => x.id === id);
     if (!n) return;
     const i = n.issue || {};
-    const here = n.jobId && n.jobId === jobId && typeof getJobData === 'function' && window.YDCrewJobs && YDCrewJobs.workParts;
-    const p = partsOf(here ? YDCrewJobs.workParts(getJobData()) : {});
+    const p = partsOf(partsOfJob(n.jobId));
     const type = TYPE[i.type] ? i.type : 'other';
-    let mat = null, matText = '';
-    if (TYPE[type].mat && i.material) {
-      const at = p.mats.findIndex(m => (i.supplyId && m.supplyId === i.supplyId) || keyOf(m.name) === keyOf(i.material));
-      if (at >= 0) mat = at; else { mat = -1; matText = i.material; }
-    }
-    let equip = null, equipText = '';
-    if (TYPE[type].equip && i.equipment) {
-      if (EQUIPMENT.indexOf(i.equipment) !== -1) equip = i.equipment; else { equip = ''; equipText = i.equipment; }
-    }
-    draft = { jobId: n.jobId, jobName: clip(n.jobName, 120), mats: p.mats, work: p.work, type: type, mat: mat, matText: matText,
-              equip: equip, equipText: equipText, workId: p.work.some(w => w.id === i.workId) ? i.workId : null,
-              amount: i.amount || '', note: i.note || '', next: i.nextTime || '', editId: n.id, orig: i };
+    // Whatever the note names stays on the form even when the job isn't open
+    // here or has changed since: a button for each, already on, so it keeps
+    // its Supplies item and planned amount and can still be tapped off.
+    const picks = [], amts = {};
+    if (TYPE[type].mat) matsOf(i).forEach(x => {
+      let at = p.mats.findIndex(m => (x.supplyId && m.supplyId === x.supplyId) || keyOf(m.name) === keyOf(x.material));
+      if (at < 0) {
+        at = p.mats.length;
+        p.mats.push({ name: clip(x.material, MAX.material), supplyId: x.supplyId ? safe(x.supplyId) : null, kind: x.materialKind || null,
+                      unit: x.unit || null, qty: numOr(x.planned), plant: x.materialKind === 'plant' });
+      } else {
+        // What the note knows and the job's copy doesn't stays with it.
+        const m = p.mats[at];
+        m.supplyId = m.supplyId || (x.supplyId ? safe(x.supplyId) : null);
+        m.kind = m.kind || x.materialKind || null;
+        m.unit = m.unit || x.unit || null;
+        if (m.qty === null) m.qty = numOr(x.planned);
+      }
+      if (picks.indexOf(at) === -1) picks.push(at);
+      if (x.amount) amts[at] = x.amount;
+    });
+    const equips = [];
+    let equipText = '';
+    if (TYPE[type].equip) equipOf(i).forEach(q => {
+      if (EQUIPMENT.indexOf(q) !== -1) { equips.push(q); return; }
+      if (equips.indexOf('') === -1) equips.push('');
+      equipText = equipText ? equipText + ', ' + q : q;
+    });
+    const workIds = [];
+    if (TYPE[type].work) worksOf(i).forEach((w, k) => {
+      let at = p.work.find(x => x.id === w.id || keyOf(x.title) === keyOf(w.title));
+      if (!at) { at = { id: safe(w.id) || 'was' + k, title: clip(w.title, MAX.work) }; p.work.push(at); }
+      if (workIds.indexOf(at.id) === -1) workIds.push(at.id);
+    });
+    draft = Object.assign(blank(n.jobId, n.jobName, p), { type: type, picks: picks, amts: amts, equips: equips, equipText: equipText, workIds: workIds,
+              amount: TYPE[type].work ? i.amount || '' : '', note: i.note || '', next: i.nextTime || '', editId: n.id, orig: i });
     draw();
   };
   // What is typed is read back before the form is drawn again (a tap on a
@@ -183,10 +267,18 @@
   function keep() {
     if (!draft) return;
     const v = id => { const b = el(id); return b ? b.value : null; };
-    [['jiMatText', 'matText'], ['jiEquipText', 'equipText'], ['jiAmount', 'amount'], ['jiNote', 'note'], ['jiNext', 'next']].forEach(([id, k]) => {
+    [['jiEquipText', 'equipText'], ['jiAmount', 'amount'], ['jiNote', 'note'], ['jiNext', 'next']].forEach(([id, k]) => {
       const got = v(id);
       if (got !== null) draft[k] = got;
     });
+    document.querySelectorAll('#issueModal [data-typed]').forEach(b => { draft.typed[+b.dataset.typed] = b.value; });
+    document.querySelectorAll('#issueModal [data-amt]').forEach(b => { draft.amts[b.dataset.amt] = b.value; });
+  }
+  // What's picked so far, in the order tapped, then what's been typed: a
+  // "how much" box each.
+  function entries() {
+    return draft.picks.map(i => ({ key: String(i), name: draft.mats[i].name, m: draft.mats[i] }))
+      .concat(draft.typed.map((s, i) => ({ key: 't' + i, name: clip(s, MAX.material), m: null })));
   }
   const pressed = on => ' aria-pressed="' + (on ? 'true' : 'false') + '"';
 
@@ -197,29 +289,44 @@
     const btn = (on, call, inner, cls) => '<button type="button" class="ji-btn' + (cls ? ' ' + cls : '') + (on ? ' on' : '') + '"' +
       pressed(on) + ' onclick="' + call + '">' + inner + '</button>';
     let more = '';
+    const has = (list, v) => list.indexOf(v) !== -1;
     if (t && t.mat) {
-      more += '<div class="field"><span class="label">Which material?</span><div class="ji-grid">' +
-        draft.mats.map((m, i) => btn(draft.mat === i, 'jiMat(' + i + ')', (m.plant ? '🌱 ' : '') + esc(m.name) +
-          (m.qty !== null ? '<small>' + esc(fmtNum(m.qty) + (m.unit ? ' ' + m.unit : '')) + ' planned</small>' : ''))).join('') +
-        btn(draft.mat === -1, 'jiMat(-1)', '✏️ Something else') + '</div>' +
-        (draft.mat === -1 || (!draft.mats.length && draft.mat === null)
-          ? '<input id="jiMatText" class="ji-text" maxlength="' + MAX.material + '" placeholder="What material — e.g. river rock" value="' + esc(draft.matText) + '">' : '') +
+      const many = draft.mats.length > 0;
+      more += '<div class="field"><span class="label">' + (many ? 'Which materials? <span class="muted">(tap each one)' +
+        (draft.picks.length ? ' · ' + draft.picks.length + ' picked' : '') + '</span>' : 'What material?') + '</span>' +
+        (many ? '<div class="ji-grid ji-multi">' +
+          draft.mats.map((m, i) => btn(has(draft.picks, i), 'jiMat(' + i + ')', (m.plant ? '🌱 ' : '') + esc(m.name) +
+            (m.qty !== null ? '<small>' + esc(fmtNum(m.qty) + (m.unit ? ' ' + m.unit : '')) + ' planned</small>' : ''))).join('') +
+          btn(draft.typed.length > 0, 'jiMat(-1)', '✏️ Something else') + '</div>' : '') +
+        draft.typed.map((s, i) => '<input class="ji-text" data-typed="' + i + '" maxlength="' + MAX.material +
+          '" placeholder="What material — e.g. river rock" oninput="jiTypedName(' + i + ', this.value)" value="' + esc(s) + '">').join('') +
+        (draft.typed.length ? '<button type="button" class="btn btn-sm ji-more" onclick="jiMatMore()">+ Another one</button>' : '') +
         '</div>';
+      const ents = entries();
+      if (ents.length) {
+        more += '<div class="field"><span class="label">About how much? <span class="muted">(if you know)</span></span>' +
+          ents.map(x => {
+            const box = '<input class="ji-text" data-amt="' + x.key + '" maxlength="' + MAX.amount + '" placeholder="' + esc(t.amountPh || '') +
+              '" value="' + esc(draft.amts[x.key] || '') + '">';
+            return ents.length > 1 ? '<label class="ji-amt"><span data-name="' + x.key + '">' + esc(x.name || 'Something else') + '</span>' + box + '</label>' : box;
+          }).join('') + '</div>';
+      }
     }
     if (t && t.equip) {
-      more += '<div class="field"><span class="label">What did you need?</span><div class="ji-grid">' +
-        EQUIPMENT.map((q, i) => btn(draft.equip === q, 'jiEquip(' + i + ')', esc(q))).join('') +
-        btn(draft.equip === '', 'jiEquip(-1)', '✏️ Something else') + '</div>' +
-        (draft.equip === '' ? '<input id="jiEquipText" class="ji-text" maxlength="' + MAX.equipment + '" placeholder="What — e.g. a plate compactor" value="' + esc(draft.equipText) + '">' : '') +
+      more += '<div class="field"><span class="label">What did you need? <span class="muted">(tap each one)</span></span><div class="ji-grid ji-multi">' +
+        EQUIPMENT.map((q, i) => btn(has(draft.equips, q), 'jiEquip(' + i + ')', esc(q))).join('') +
+        btn(has(draft.equips, ''), 'jiEquip(-1)', '✏️ Something else') + '</div>' +
+        (has(draft.equips, '') ? '<input id="jiEquipText" class="ji-text" maxlength="' + MAX.equipment + '" placeholder="What — e.g. a plate compactor" value="' + esc(draft.equipText) + '">' : '') +
         '</div>';
     }
     if (t && t.work && draft.work.length) {
-      more += '<div class="field"><span class="label">Which part of the work? <span class="muted">(if it was one)</span></span><div class="ji-grid">' +
-        draft.work.map((w, i) => btn(draft.workId === w.id, 'jiWork(' + i + ')', esc(w.title))).join('') + '</div></div>';
+      more += '<div class="field"><span class="label">Which work? <span class="muted">(tap each part, if you can say)</span></span><div class="ji-grid ji-multi">' +
+        draft.work.map((w, i) => btn(has(draft.workIds, w.id), 'jiWork(' + i + ')', esc(w.title))).join('') + '</div></div>';
     }
-    if (t && (t.mat || t.work)) {
+    if (t && t.work) {
       more += '<div class="field"><span class="label">About how much? <span class="muted">(if you know)</span></span>' +
-        '<input id="jiAmount" class="ji-text" maxlength="' + MAX.amount + '" placeholder="' + esc(t.amountPh || '') + '" value="' + esc(draft.amount) + '"></div>';
+        '<input id="jiAmount" class="ji-text" maxlength="' + MAX.amount + '" placeholder="' +
+          esc(draft.workIds.length > 1 ? 'e.g. a day on one, half a day on the other' : t.amountPh || '') + '" value="' + esc(draft.amount) + '"></div>';
     }
     if (t) {
       more += '<div class="field"><span class="label">' + (t.lesson ? 'What to remember' : 'Note' + (t.needNote ? '' : ' <span class="muted">(if there’s more to say)</span>')) + '</span>' +
@@ -234,83 +341,126 @@
           : isOwner() ? 'It is kept on the job, with the ones the crew send — and comes back on the next job like it, for Claude’s bid and the crew.'
           : 'Jonah’s phone gets it, and the next job like it shows it. It saves even with no signal and goes when you have it.') + '</div>' +
         '<div class="field-actions"><button class="btn btn-filled" onclick="jiSend()">' + (draft.editId ? 'Save the change' : isOwner() ? 'Save it' : 'Send to Jonah') + '</button>' +
+          // More than one thing went wrong on a job: each is a note of its own.
+          (draft.editId ? '' : '<button class="btn btn-sm" onclick="jiSend(true)">' + (isOwner() ? 'Save, add another' : 'Send, add another') + '</button>') +
           '<button class="btn btn-sm" onclick="jiClose()">Cancel</button></div>';
     }
     body.innerHTML = '<div class="ji-job">📐 ' + esc(draft.jobName || 'This job') + '</div>' +
       '<div class="field"><span class="label">What happened?</span><div class="ji-grid ji-kinds">' +
         TYPES.map(x => btn(draft.type === x.id, 'jiType(\'' + x.id + '\')', '<span class="ji-ico">' + x.icon + '</span>' + esc(x.name), 'ji-kind')).join('') +
       '</div></div>' + more;
+    // A tap counts as much as a word typed: a stray tap outside the window
+    // doesn't lose it (app.js guardWindows; a fresh window starts untouched).
+    if (t) el('issueModal').dataset.typed = '1';
   }
   window.jiType = function (id) {
     if (!draft || !TYPE[id]) return;
     keep();
-    if (draft.type !== id) { draft.mat = null; draft.equip = null; draft.workId = null; }
+    // What's tapped under another kind stays, in case this tap was the slip;
+    // only what the chosen kind asks for is saved.
     draft.type = id;
     draw();
-    const focus = TYPE[id].needNote ? el('jiNote') : null;
+    const focus = TYPE[id].needNote ? el('jiNote') : TYPE[id].mat && !draft.mats.length ? typedBox(0) : null;
     if (focus) focus.focus();
   };
+  // A tap puts it on or takes it off; the others stay as they are.
+  const toggled = (list, v) => (list.indexOf(v) === -1 ? list.concat([v]) : list.filter(x => x !== v));
+  const typedBox = i => document.querySelector('#issueModal [data-typed="' + i + '"]');
   window.jiMat = function (i) {
     if (!draft) return;
     keep();
-    draft.mat = draft.mat === i ? null : i;
+    if (i === -1) {
+      if (draft.typed.length) { draft.typedWas = draft.typed; draft.typed = []; }
+      else draft.typed = draft.typedWas.length ? draft.typedWas : [''];
+    } else draft.picks = toggled(draft.picks, i);
     draw();
-    if (i === -1 && el('jiMatText')) el('jiMatText').focus();
+    if (i === -1 && draft.typed.length && typedBox(draft.typed.length - 1)) typedBox(draft.typed.length - 1).focus();
+  };
+  // The how-much box for what's being typed says so as it is typed.
+  window.jiTypedName = function (i, words) {
+    const span = document.querySelector('#issueModal [data-name="t' + i + '"]');
+    if (span) span.textContent = clip(words, MAX.material) || 'Something else';
+  };
+  window.jiMatMore = function () {
+    if (!draft) return;
+    keep();
+    draft.typed.push('');
+    draw();
+    if (typedBox(draft.typed.length - 1)) typedBox(draft.typed.length - 1).focus();
   };
   window.jiEquip = function (i) {
     if (!draft) return;
     keep();
-    const q = i === -1 ? '' : EQUIPMENT[i];
-    draft.equip = draft.equip === q ? null : q;
+    draft.equips = toggled(draft.equips, i === -1 ? '' : EQUIPMENT[i]);
     draw();
     if (i === -1 && el('jiEquipText')) el('jiEquipText').focus();
   };
   window.jiWork = function (i) {
     if (!draft || !draft.work[i]) return;
     keep();
-    draft.workId = draft.workId === draft.work[i].id ? null : draft.work[i].id;
+    draft.workIds = toggled(draft.workIds, draft.work[i].id);
     draw();
   };
   window.jiClose = function () { const m = el('issueModal'); if (m) m.classList.remove('active'); draft = null; };
 
-  window.jiSend = function () {
+  window.jiSend = function (again) {
     if (!draft) return;
     keep();
     const t = TYPE[draft.type];
     if (!t) { showToast('Tap what happened first'); return; }
-    const m = t.mat && draft.mat !== null && draft.mat >= 0 ? draft.mats[draft.mat] : null;
-    const material = t.mat ? (m ? m.name : clip(draft.matText, MAX.material)) : '';
-    if (t.mat && !material) { showToast('Tap the material — or type it'); return; }
-    const equipment = t.equip ? (draft.equip ? draft.equip : clip(draft.equipText, MAX.equipment)) : '';
-    if (t.equip && !equipment) { showToast('Tap what you needed — or type it'); return; }
-    const w = t.work ? draft.work.find(x => x.id === draft.workId) : null;
-    const amount = t.mat || t.work ? clip(draft.amount, MAX.amount) : '';
+    // Something else tapped with nothing typed beside other picks is a thing
+    // they meant to add: asked, not quietly left off.
+    const emptyBox = t.mat && draft.mats.length && draft.typed.length && !draft.typed.some(x => clip(x, MAX.material));
+    const mats = t.mat && !emptyBox ? entries().filter(x => x.name).map(x => {
+      const m = x.m || {};
+      return { material: x.name, supplyId: m.supplyId || null, materialKind: m.kind || null, unit: m.unit || null,
+               planned: m.qty === null || m.qty === undefined ? null : m.qty, amount: clip(draft.amts[x.key], MAX.amount) || null };
+    }) : [];
+    if (t.mat && !mats.length) {
+      showToast(emptyBox ? 'Type the other material — or tap ✏️ Something else off' : 'Tap the material — or type it');
+      if (typedBox(0)) typedBox(0).focus();
+      return;
+    }
+    const typedOn = t.equip && draft.equips.indexOf('') !== -1;
+    const typedEquip = typedOn ? clip(draft.equipText, MAX.equipment).split(/\s*,\s*/).filter(Boolean) : [];
+    const equips = t.equip ? draft.equips.filter(q => q).concat(typedEquip) : [];
+    if (t.equip && (!equips.length || (typedOn && !typedEquip.length))) {
+      showToast(equips.length ? 'Type what else you needed — or tap ✏️ Something else off' : 'Tap what you needed — or type it');
+      if (el('jiEquipText')) el('jiEquipText').focus();
+      return;
+    }
+    const works = t.work ? draft.workIds.map(id => draft.work.find(x => x.id === id)).filter(Boolean) : [];
     const note = String(draft.note || '').trim().slice(0, MAX.note);
     if (t.needNote && !note) { showToast(t.lesson ? 'Write what to remember' : 'Write what happened'); if (el('jiNote')) el('jiNote').focus(); return; }
     const next = t.noNext ? '' : String(draft.next || '').trim().slice(0, MAX.next);
-    // Changing one whose job is not open here: the Supplies item, planned
-    // amount and piece of work it was noted with stay, unless changed.
-    const o = draft.editId && draft.orig && draft.orig.type === t.id ? draft.orig : null;
-    const was = o && !m && material && keyOf(material) === keyOf(o.material) ? o : null;
-    const wasWork = o && !w && t.work && !draft.work.length && o.work ? o : null;
+    const one = mats.length === 1 ? mats[0] : null;
+    const manyWords = mats.filter(x => x.amount || plannedWords(x)).map(x => {
+      const p = plannedWords(x);
+      return x.material + (p ? ' (' + p + ')' : '') + (x.amount ? ': ' + x.amount : '');
+    }).join('; ');
     const issue = {
       type: t.id,
-      material: material || null,
-      supplyId: m && m.supplyId ? m.supplyId : was ? was.supplyId || null : null,
-      materialKind: m && m.kind ? m.kind : was ? was.materialKind || null : null,
-      unit: m && m.unit ? m.unit : was ? was.unit || null : null,
-      planned: m && m.qty !== null ? m.qty : was && was.planned !== undefined ? was.planned : null,
-      equipment: equipment || null,
-      workId: w ? w.id : wasWork ? wasWork.workId || null : null,
-      work: w ? w.title : wasWork ? wasWork.work : null,
-      amount: amount || null,
+      material: mats.map(x => x.material).join(', ') || null,
+      supplyId: one ? one.supplyId : null,
+      materialKind: one ? one.materialKind : null,
+      unit: one ? one.unit : null,
+      planned: one ? one.planned : null,
+      equipment: equips.join(', ') || null,
+      workId: works.length === 1 ? works[0].id : null,
+      work: works.map(x => x.title).join(', ') || null,
+      amount: (t.mat ? (one ? one.amount : manyWords) : t.work ? clip(draft.amount, MAX.amount) : '') || null,
       note: note || null,
       nextTime: next || null,
+      materials: mats.length > 1 ? mats : null,
+      equipmentList: equips.length > 1 ? equips : null,
+      works: works.length > 1 ? works.map(x => ({ id: x.id, title: x.title })) : null,
     };
     // In words, for the buzz on his phone and the notes list (each puts
-    // its own ⚠️ beside it, from `kind`).
-    const about = material || equipment || (issue.work || '');
-    const text = t.name + (about ? ': ' + about : '') + (amount ? ' — ' + amount : '') + (note ? '\n' + note : '') +
+    // its own ⚠️ beside it, from `kind`). A long list is cut so the note and
+    // next time still fit; the record keeps every one of them.
+    const about = clip(t.mat ? mats.map(x => x.material + (x.amount ? ' — ' + x.amount : '')).join(', ')
+      : issue.equipment || issue.work || '', TEXT_ABOUT);
+    const text = t.name + (about ? ': ' + about : '') + (!t.mat && issue.amount ? ' — ' + issue.amount : '') + (note ? '\n' + note : '') +
       (next ? '\nNext time: ' + next : '');
     if (draft.editId) {
       if (!window.YDCrewNotes || !YDCrewNotes.editIssue || !YDCrewNotes.editIssue(draft.editId, issue, text)) {
@@ -328,18 +478,28 @@
     }
     // A lesson Jonah notes himself is nothing for him to handle.
     if (t.lesson && isOwner() && typeof id === 'string') YDCrewNotes.handled(id, true);
+    const had = draft;
     window.jiClose();
+    if (again) {
+      draft = blank(had.jobId, had.jobName, { mats: had.mats, work: had.work });
+      draw();
+      el('issueModal').scrollTop = 0;
+    }
   };
 
   // ------------------------------------------------------- one issue, shown
 
   function aboutHtml(n) {
     const i = n.issue || {};
-    const what = i.material || i.equipment || i.work || '';
-    const planned = i.planned !== null && i.planned !== undefined && isFinite(i.planned)
-      ? ' <span class="muted">(' + esc(fmtNum(i.planned) + (i.unit ? ' ' + i.unit : '')) + ' planned)</span>' : '';
-    return (what ? '<b>' + esc(what) + '</b>' + planned : '') +
-      (i.amount ? (what ? ' — ' : '') + esc(i.amount) : '');
+    const line = x => {
+      const p = plannedWords(x);
+      return '<b>' + esc(x.material) + '</b>' + (p ? ' <span class="muted">(' + esc(p) + ')</span>' : '') + (x.amount ? ' — ' + esc(x.amount) : '');
+    };
+    const mats = matsOf(i);
+    if (mats.length > 1) return mats.map(x => '<div>' + line(x) + '</div>').join('');
+    if (mats.length) return line(mats[0]);
+    const what = i.equipment || i.work || '';
+    return (what ? '<b>' + esc(what) + '</b>' : '') + (i.amount ? (what ? ' — ' : '') + esc(i.amount) : '');
   }
   // opts: { job: show its job's name and Open the job }
   function rowHtml(n, opts) {
@@ -507,15 +667,18 @@
   function matHtml(id, m) {
     if (!id || !m) return '';
     const k = keyOf(m.name);
-    const hits = forJob(id).filter(n => {
+    const same = x => (m.supplyId && x.supplyId && x.supplyId === m.supplyId) || (!!k && keyOf(x.material) === k);
+    const hits = [];
+    forJob(id).forEach(n => {
       const i = n.issue || {};
-      if (i.type !== 'over' && i.type !== 'short') return false;
-      return (m.supplyId && i.supplyId && i.supplyId === m.supplyId) || (!!k && keyOf(i.material) === k);
+      if (i.type !== 'over' && i.type !== 'short') return;
+      const x = matsOf(i).find(same);
+      if (x) hits.push({ n: n, x: x });
     });
-    return hits.length ? '<div class="ji-under">' + hits.map(n => {
-      const t = TYPE[n.issue.type];
-      return '<div>⚠️ ' + esc(t.name) + (n.issue.amount ? ' — ' + esc(n.issue.amount) : '') +
-        ' <span class="muted">· ' + esc(n.by || '') + ', ' + esc(when(n.at).split(',')[0]) + (n.readAt ? ' · handled' : '') + '</span></div>';
+    return hits.length ? '<div class="ji-under">' + hits.map(h => {
+      const t = TYPE[h.n.issue.type];
+      return '<div>⚠️ ' + esc(t.name) + (h.x.amount ? ' — ' + esc(h.x.amount) : '') +
+        ' <span class="muted">· ' + esc(h.n.by || '') + ', ' + esc(when(h.n.at).split(',')[0]) + (h.n.readAt ? ' · handled' : '') + '</span></div>';
     }).join('') + '</div>' : '';
   }
 
@@ -534,15 +697,22 @@
       const t = TYPE[i.type] || TYPE.other;
       // Something to remember is no count of anything going wrong.
       if (t.lesson) return;
-      let k = t.id, label = '';
-      if (t.mat && i.materialKind) { k += '|k:' + keyOf(i.materialKind); label = kindName(i.materialKind); }
-      else if (t.mat && i.material) { k += '|n:' + keyOf(i.material); label = i.material; }
-      else if (t.equip && i.equipment) { k += '|e:' + keyOf(i.equipment); label = i.equipment; }
-      const g = groups[k] || (groups[k] = { t: t, label: label, jobs: {}, names: {}, n: 0, last: '' });
-      g.n++;
-      if (n.jobId) g.jobs[n.jobId] = n.jobName || 'A job';
-      if (t.mat && i.materialKind && i.material) g.names[keyOf(i.material)] = i.material;
-      if (String(n.at) > g.last) g.last = String(n.at);
+      // Each thing the note is about counts as its own, as if noted apart;
+      // two of one kind in a note count once.
+      const abouts = [];
+      if (t.mat) matsOf(i).forEach(x => abouts.push(x.materialKind
+        ? { k: t.id + '|k:' + keyOf(x.materialKind), label: kindName(x.materialKind), name: x.material }
+        : { k: t.id + '|n:' + keyOf(x.material), label: x.material }));
+      else if (t.equip) equipOf(i).forEach(q => abouts.push({ k: t.id + '|e:' + keyOf(q), label: q }));
+      if (!abouts.length) abouts.push({ k: t.id, label: '' });
+      const counted = {};
+      abouts.forEach(a => {
+        const g = groups[a.k] || (groups[a.k] = { t: t, label: a.label, jobs: {}, names: {}, n: 0, last: '' });
+        if (!counted[a.k]) { counted[a.k] = true; g.n++; }
+        if (n.jobId) g.jobs[n.jobId] = n.jobName || 'A job';
+        if (a.name) g.names[keyOf(a.name)] = a.name;
+        if (String(n.at) > g.last) g.last = String(n.at);
+      });
     });
     return Object.values(groups).map(g => Object.assign(g, { jobCount: Object.keys(g.jobs).length }))
       .sort((a, b) => b.jobCount - a.jobCount || b.n - a.n || b.last.localeCompare(a.last));

@@ -56,6 +56,7 @@ CREW_EVERY = datetime.timedelta(hours=1)
 STATE = ("settings", "jobLessons")
 PAGES = "jobLessons"
 CLAUDE_UID = "claude"       # the uid on Claude's own lessons (crewNotes)
+AMOUNT_ROOM = 400           # "how much" of a note: several materials, each with its own
 
 # The job fields a lesson's job is read with: what it is (to match it) and
 # who it is for (to take that out).
@@ -199,21 +200,36 @@ def _alike(a, b, df, n):
     return 3.0 * svc + 1.5 * grp + min(words, 6.0)
 
 
+def mats_of(i):
+    """What a lesson is about, an entry each: its `materials` when it names
+    several (jobissues.js), else the one on top. The top of a note about
+    several holds only the words for all of them, so matching a Supplies item
+    or a kind of material has to go through here."""
+    got = i.get("materials")
+    if isinstance(got, list):
+        got = [m for m in got if isinstance(m, dict)]
+        if got:
+            return got
+    return [i]
+
+
 def fit(note, source, target, df, n):
     """How well a lesson fits the target job, or None when it does not."""
     i = note.get("issue") or {}
     t = i.get("type")
     alike = _alike(source, target, df, n) if source else 0.0
     if t in ("over", "short"):
-        sid, kind = str(i.get("supplyId") or ""), pj._key(i.get("materialKind"))
-        named = pj._words(i.get("material"))
-        if sid and sid in target["supplyIds"]:
-            m = 4.0
-        elif kind and kind in target["kinds"]:
-            m = 3.0
-        elif named and named & (target["matWords"] | target["words"]):
-            m = 2.0
-        else:
+        m = 0.0
+        for x in mats_of(i):                        # the best fit of what it names
+            sid, kind = str(x.get("supplyId") or ""), pj._key(x.get("materialKind"))
+            named = pj._words(x.get("material"))
+            if sid and sid in target["supplyIds"]:
+                m = max(m, 4.0)
+            elif kind and kind in target["kinds"]:
+                m = max(m, 3.0)
+            elif named and named & (target["matWords"] | target["words"]):
+                m = max(m, 2.0)
+        if not m:
             return None                             # a material this job does not have
         return m + 0.5 * min(alike, 6.0)
     score = alike
@@ -260,7 +276,7 @@ def lesson_line(i, scrub=lambda s: s):
     planned = _planned(i)
     bits = [head + (" (%s)" % planned if planned else "")]
     if i.get("amount"):
-        bits.append(" -- " + _text(scrub(i["amount"]), 100))
+        bits.append(" -- " + _text(scrub(i["amount"]), AMOUNT_ROOM))
     if i.get("note"):
         bits.append(": " + _text(scrub(i["note"]), 260))
     line = "".join(bits).rstrip(".") + "."
@@ -374,8 +390,8 @@ def crew_item(nid, note, j, others, people):
     who = who_of(note, people)
     by = "Claude" if who == "claude" else (str(note.get("by") or "").split() or ["Someone"])[0]
     return {"id": nid, "type": t, "icon": ICONS[t],
-            "head": _text(clean(head_of(i)), 160), "planned": _planned(i),
-            "amount": _text(clean(i.get("amount")), 120), "note": _text(clean(i.get("note")), 400),
+            "head": _text(clean(head_of(i)), 240), "planned": _planned(i),
+            "amount": _text(clean(i.get("amount")), AMOUNT_ROOM), "note": _text(clean(i.get("note")), 400),
             "nextTime": _text(clean(i.get("nextTime")), 240),
             "job": _text(" + ".join(clean(s) for s in svc), 80), "town": town,
             "when": _month_of(note, j), "by": _text(by, 30)}
