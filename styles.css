@@ -4964,16 +4964,30 @@
     .bd-picker .bd-chip { font-size:11.5px; padding-right:5px; gap:3px; }
     .bd-picker .bd-chip:not(.bd-add) { padding-left:5px; }
   }
-  /* An iPad held upright (768px) fitted only nine of the twelve tabs and
-     hid Equipment, Contacts and All Jobs off the side of a sideways-scrolling
-     bar. Between phone and laptop the tabs now take two rows instead, every
-     one in sight and one tap away. */
-  @media (min-width:721px) and (max-width:1000px) {
-    .tab-bar { flex-wrap:wrap; overflow-x:visible; }
-    /* --tabs-per-row: half the tabs showing (app.js), so the two rows are
-       even -- seven to a row left a crew iPad's eighth tab alone on a row
-       of its own, as wide as the screen. */
-    .tab-btn { flex:1 0 calc(100% / var(--tabs-per-row, 7) - 1px); min-width:0; }
+  /* Between a phone and the laptop's sidebar (an iPad held upright, a phone on
+     its side) the tabs are a bar along the foot of the screen, as on a phone:
+     Jonah, 26 Oct 2026, "phones and narrow windows keep the bottom tabs". They
+     were two rows at the top of the page and scrolled away with it, so
+     changing screens meant scrolling back up first, and a phone on its side
+     lost two thirds of its height to them. All of them in one row, each a tap
+     away, and nothing to scroll: it has room for every tab anyone has. */
+  @media (min-width:721px) and (max-width:1023px) {
+    .page { padding-bottom:104px; }
+    .tab-bar { position:fixed; left:0; right:0; bottom:0; margin:0; border-radius:0; z-index:100; overflow:hidden;
+               box-shadow:0 -3px 16px rgba(43,36,51,.24); padding-bottom:env(safe-area-inset-bottom, 0px); }
+    .tab-btn { flex:1 1 0; min-width:0; min-height:58px; padding:9px 1px 8px; font-size:9.5px; letter-spacing:0;
+               border-bottom:none; border-top:4px solid transparent; }
+    .tab-btn.active { border-top-color:var(--accent); border-bottom-color:transparent; }
+    .tab-btn .tab-icon { font-size:16px; margin-bottom:3px; }
+    /* A count beside the word ran into the next tab: it sits by the icon. */
+    .tab-btn { position:relative; }
+    .tab-count { position:absolute; top:3px; left:calc(50% + 9px); margin-left:0; }
+    /* What floats over the foot of the screen sits above the bar. */
+    #toast { bottom:calc(70px + var(--lift-pill, 0px) + var(--lift-undo, 0px) + env(safe-area-inset-bottom, 0px)) !important; }
+    .net-pill { bottom:calc(64px + env(safe-area-inset-bottom, 0px)); }
+    .undo-bar { bottom:calc(70px + var(--lift-pill, 0px) + env(safe-area-inset-bottom, 0px)); }
+    .rc-sendbar { bottom:calc(70px + env(safe-area-inset-bottom, 0px)); }
+    .local-banner { bottom:76px; padding-bottom:9px; }
   }
   /* The narrow-screen header rule shrinks every header button's text to
      10px, which left the ⋯ menu a 31px sliver with a dot-sized glyph on an

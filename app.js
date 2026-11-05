@@ -36,6 +36,15 @@ let currentJobId = null;
 // shown (switchTab) rather than at launch: the app opens on Home, and
 // building the whole job form and its estimate there was work nobody saw.
 let launchJobId = null;
+// Which job is yours to come back to is kept on this device. It went by the
+// newest change on any job before, and QuickBooks' sweeps, another device or
+// the crew change jobs all day, so the Job tab opened on whatever was touched
+// last (4 Nov 2026: a lost bid). With none kept the tab asks, with My Jobs
+// (pickJobFirst), rather than picking one for them.
+const LAST_JOB_KEY = 'ydjobhub_lastJob';
+let pickJobFirst = false;
+function rememberJob(id) { try { localStorage.setItem(LAST_JOB_KEY, id); } catch (e) { /* private window: just this visit */ } }
+function rememberedJob() { try { return localStorage.getItem(LAST_JOB_KEY) || ''; } catch (e) { return ''; } }
 let labor = [];
 let materials = [];
 let orderItems = [];
@@ -1023,11 +1032,13 @@ function switchTab(name) {
   const changed = !was || was.id !== 'panel-' + name;
   // The stylesheet uses this to show the job controls only on job screens.
   document.documentElement.dataset.tab = name;
-  // First time on a job screen: the last job worked on goes in the form.
+  // First time on a job screen: the job this person last had open goes in the form.
   if (launchJobId && ['job', 'tracking', 'dashboard'].indexOf(name) !== -1) {
     const id = launchJobId;
     launchJobId = null;
     if (!currentJobId) loadJob(id, true);
+    // It has been deleted since.
+    if (!currentJobId) pickJobFirst = true;
   }
   // Matched by id, not by position: the buttons are not in the same order as
   // TABS, and matching by position lit up the wrong button on a laptop.
@@ -1069,6 +1080,10 @@ function switchTab(name) {
   if (name === 'dashboard' && window.YDSubs) YDSubs.render();
   if (name === 'crewjobs' && window.YDCrewJobs) YDCrewJobs.render();
   if (name === 'home' && window.YDHome) YDHome.render();
+  if (pickJobFirst && (name === 'job' || name === 'tracking')) {
+    pickJobFirst = false;
+    if (!currentJobId) openManager();
+  }
 }
 
 // A notification tapped while Job Hub is already open. The service worker
@@ -3886,6 +3901,7 @@ function typedPerson(typed, onClock) {
 // of those hours came from a clocked shift approved at a different rate.
 function laborCostSub(totalHrs) {
   const c = clockedLabor();
+  if (!totalHrs) return 'No hours yet';
   if (!c.paidHours) return totalHrs.toFixed(1) + ' hrs × $' + LABOR_RATE;
   if (!manualLaborHours()) return totalHrs.toFixed(1) + ' hrs from the clock';
   return totalHrs.toFixed(1) + ' hrs · ' + c.paidHours.toFixed(1) + ' from the clock';
@@ -4513,6 +4529,26 @@ function updateBadges() {
   document.getElementById('matBadge').textContent = tm > 0 ? fmtMoney(tm) + ' total' : '';
   document.getElementById('addCostBadge').textContent = tac > 0 ? fmtMoney(tac) + ' total' : '';
 }
+function trackingFigures() {
+  return window.YDJobCosts && YDJobCosts.open ? YDJobCosts.open() : null;
+}
+// What the open job cost, as Tracking's tiles and the cost summary say it. m:
+// Estimate vs actual's figures, or null for someone who doesn't see those,
+// who get wages and purchases as they stand.
+function trackingCosts(m, wages, purchases, hours) {
+  const out = { labor: wages, total: round2(wages + purchases), known: round2(wages + purchases) > 0,
+                laborSub: laborCostSub(hours), totalSub: 'Labor + Materials', netLabel: 'Net Profit' };
+  if (!m) return out;
+  const l = m.act.labour;
+  if (l.source !== 'none' && l.cents !== null) out.labor = l.cents / 100;
+  else if (m.filled.indexOf('labour') !== -1 && m.est.labourCents !== null) out.labor = m.est.labourCents / 100;
+  if (l.source === 'app' && l.basis === 'rate') out.laborSub = 'At the crew-day rate · wages paid ' + fmtMoney(l.wagesCents / 100);
+  out.known = m.recorded && m.actCost !== null;
+  out.total = out.known ? m.actCost / 100 : 0;
+  out.totalSub = 'Labor, purchases and the rest' + (m.filled.length ? ' · some counted as estimated' : '');
+  if (m.status !== 'complete') out.netLabel = 'Net Profit So Far';
+  return out;
+}
 function updateSummary() {
   showJobPrice();
   const totalHrs = totalLaborHours();
@@ -4530,21 +4566,29 @@ function updateSummary() {
     { label: 'Job Price', value: jobPrice > 0 ? fmtMoney(jobPrice) : '—', sub: est ? 'Est #' + est : 'No estimate #', cls: 'accent-top' },
   ].map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.label + '</div><div class="summary-value">' + c.value + '</div><div class="summary-sub">' + c.sub + '</div></div>').join('');
 
-  const laborCost = totalLaborCost();
-  const overhead = round2(laborCost + totalMat);
+  // What the crew were really paid an hour, for the heading. It used to say
+  // the $25 for hours typed in, whatever the clock had paid.
+  const wages = totalLaborCost();
+  document.getElementById('laborRateBadge').textContent = totalHrs > 0 ? fmtMoney(wages / totalHrs) + '/hr paid' : '';
+  // The same figures as Estimate vs actual under these tiles (jobcosts.js),
+  // for anyone who sees it: Net Profit here used to leave out what isn't
+  // recorded yet and read differently from the profit just below it.
+  const panel = document.getElementById('panel-tracking');
+  const sum = trackingCosts(panel && panel.classList.contains('active') ? trackingFigures() : null, wages, totalMat, totalHrs);
+  const laborCost = sum.labor, overhead = sum.total;
   const net = round2(jobPrice - overhead);
   const perHr = totalHrs > 0 ? net / totalHrs : 0;
   const hasPrice = jobPrice > 0, hasHrs = totalHrs > 0;
   // Nothing spent on it yet (no labor, no purchases): its profit is not the
   // whole price at a 100% margin, it is not known yet.
-  const hasCosts = overhead > 0;
+  const hasCosts = sum.known;
 
   document.getElementById('financialsGrid').innerHTML = [
-    { label: 'Labor Cost', value: fmtMoney(laborCost), cls: '', top: '', sub: laborCostSub(totalHrs) },
-    { label: 'Total Cost', value: fmtMoney(overhead), cls: '', top: '', sub: 'Labor + Materials' },
+    { label: 'Labor Cost', value: fmtMoney(laborCost), cls: '', top: '', sub: sum.laborSub },
+    { label: 'Total Cost', value: fmtMoney(overhead), cls: '', top: '', sub: sum.totalSub },
     hasCosts
-      ? { label: 'Net Profit', value: (net < 0 ? '-' : '') + fmtMoney(Math.abs(net)), cls: hasPrice ? (net >= 0 ? 'positive' : 'negative') : '', top: hasPrice ? (net >= 0 ? 'pos-top' : 'neg-top') : '', sub: hasPrice ? (net / jobPrice * 100).toFixed(1) + '% margin' : 'Set job price' }
-      : { label: 'Net Profit', value: '—', cls: '', top: '', sub: 'No costs logged yet' },
+      ? { label: sum.netLabel, value: (net < 0 ? '-' : '') + fmtMoney(Math.abs(net)), cls: hasPrice ? (net >= 0 ? 'positive' : 'negative') : '', top: hasPrice ? (net >= 0 ? 'pos-top' : 'neg-top') : '', sub: hasPrice ? (net / jobPrice * 100).toFixed(1) + '% margin' : 'Set job price' }
+      : { label: sum.netLabel, value: '—', cls: '', top: '', sub: 'No costs logged yet' },
     { label: 'Profit / Hr', value: hasHrs ? ((perHr < 0 ? '-' : '') + fmtMoney(Math.abs(perHr))) : '—', cls: hasHrs ? (perHr >= 0 ? 'positive' : 'negative') : '', top: '', sub: hasHrs ? 'Per labor hour' : 'Add labor' },
   ].map(c => '<div class="fin-card ' + c.top + '"><div class="fin-label">' + c.label + '</div><div class="fin-value ' + c.cls + '">' + c.value + '</div><div style="font-size:11px;color:var(--muted);margin-top:3px">' + c.sub + '</div></div>').join('');
 
@@ -4830,7 +4874,7 @@ function jobNameHtml(name, est) {
 function persistJob(announce) {
   if (jobsReadOnly()) { if (announce) showToast('You can look at jobs but not change them'); return false; }
   const data = getJobData();
-  if (!currentJobId) { currentJobId = uid(); jobOnScreen(); }
+  if (!currentJobId) { currentJobId = uid(); rememberJob(currentJobId); jobOnScreen(); }
   const before = localStorage.getItem(STORAGE_PREFIX + currentJobId);
   // What the form says, kept before what came in meanwhile is joined in:
   // the next save compares against this.
@@ -4966,6 +5010,7 @@ function loadJob(id, quiet) {
   clearTimeout(autosaveTimer);
   if (dirty && currentJobId && currentJobId !== id) autosave();
   currentJobId = id;
+  rememberJob(id);
   loadingJob = true;
   formBase = null;
   try {
@@ -5123,6 +5168,7 @@ function clearJobForm() {
   currentJobId = null;
   formBase = null;
   launchJobId = null;     // a new job was asked for: not the last one
+  pickJobFirst = false;
   jobOnScreen();
   labor = []; materials = []; orderItems = []; proposals = []; payments = []; additionalCosts = [];
   jobToolsOwn = { added: [], dropped: [] };
@@ -5496,11 +5542,6 @@ function dashStage(d, status) {
   return st || null;
 }
 const DASH_SAME_AS_STATUS = { scheduled: 1, inProgress: 1, won: 1, toInvoice: 1, invoiced: 1, paid: 1 };
-// What the job makes. Real costs (materials bought, labour clocked or
-// entered) once there are any; until then what the estimate planned -- the
-// price less what its materials, delivery, fuel and crew-days cost
-// (pricing.js profit) -- marked as planned. With neither: unknown, never the
-// whole price shown as profit.
 // A job's estimate, priced: what its labor and its materials come to (Jonah,
 // 4 Nov 2026: "the all jobs overview should have a column that shows the total
 // price of the estimate and separate pricing for labor and materials"), and
@@ -5511,9 +5552,8 @@ function dashPriced(d) {
   try {
     const r = YDEstimate.priceSaved(e, d.city || '', d._id, d.deliveryQuotes, d.qbEstimate);
     if (!r) return null;
-    if (!(r.totalCents > 0)) return { labor: null, materials: null, total: null, cost: null };
-    return { labor: (r.laborCents || 0) / 100, materials: (r.materialsCents || 0) / 100, total: r.totalCents / 100,
-             cost: r.profit && r.profit.complete ? r.profit.costCents / 100 : null };
+    if (!(r.totalCents > 0)) return { labor: null, materials: null, total: null };
+    return { labor: (r.laborCents || 0) / 100, materials: (r.materialsCents || 0) / 100, total: r.totalCents / 100 };
   } catch (err) { return null; }
 }
 // The same, kept per job until the job, its price or town changes -- or the
@@ -5528,9 +5568,15 @@ function dashPricedKept(d) {
   dashNetKept.set(d._id, { key: key, v: v });
   return v;
 }
-function dashPlannedNetKept(d, price) {
-  const p = dashPricedKept(d);
-  return price && p && p.cost !== null ? round2(price - p.cost) : null;
+// What the job makes, by the one rule every screen uses (jobcosts.js makes):
+// what it really made once finished; what the estimate plans before that; the
+// costs so far, marked and left out of the total, when there is no whole
+// estimate to plan from. With none of those: unknown, never the whole price
+// shown as profit. It was the price less whatever had been spent so far, so a
+// booked job with one receipt read as nearly all profit.
+function dashMakes(d, ctx) {
+  try { return window.YDJobCosts ? YDJobCosts.makes(d, ctx) : { cents: null, how: null }; }
+  catch (err) { return { cents: null, how: null }; }
 }
 ['yd-pricing', 'yd-supplies'].forEach(ev => document.addEventListener(ev, () => dashNetKept.clear()));
 // Money still owed on the job's QuickBooks invoice; null with no invoice.
@@ -5574,15 +5620,14 @@ function renderDashboard() {
     : fStatus === 'owed' ? r.owed > 0
     : fStatus ? r.status === fStatus : r.status !== 'quoting');
   if (fSearch) rows = rows.filter(r => (r.name + ' ' + r.city + ' ' + r.services + ' ' + r.est).toLowerCase().includes(fSearch));
+  const costCtx = { lean: true, byJob: null };
   rows.forEach(r => {
     const d = r.d;
     // Clocked shifts included, exactly as the job's own Tracking figures do.
-    const lab = jobLabour(d._id, d.labor);
-    r.hrs = lab.hours;
-    r.matCost = (d.materials || []).reduce((s, e) => s + (parseFloat(e.price) || 0), 0);
-    const real = lab.cost + r.matCost > 0;
-    r.net = real ? round2(r.price - (lab.cost + r.matCost)) : dashPlannedNetKept(d, r.price);
-    r.planned = !real && r.net != null;
+    r.hrs = jobLabour(d._id, d.labor).hours;
+    const made = dashMakes(d, costCtx);
+    r.net = made.cents === null ? null : made.cents / 100;
+    r.netHow = made.how;
     r.push = r.price ? '' : perPushText(d);
     const parts = dashPricedKept(d);
     r.labor = parts ? parts.labor : null;
@@ -5604,7 +5649,8 @@ function renderDashboard() {
   });
 
   document.getElementById('dashCount').textContent = rows.length + ' job' + (rows.length !== 1 ? 's' : '');
-  const known = rows.filter(r => r.net != null);
+  // Costs so far are no forecast: shown on the job, not added up.
+  const known = rows.filter(r => r.net != null && r.netHow !== 'sofar');
   const totPrice = rows.reduce((s, r) => s + r.price, 0), totNet = known.reduce((s, r) => s + r.net, 0), totHrs = rows.reduce((s, r) => s + r.hrs, 0);
   // What is owed: the same figure as Home's tile -- every unpaid QuickBooks
   // invoice on the Invoices list (ones tied to a job by hand, or not yet
@@ -5618,11 +5664,12 @@ function renderDashboard() {
     ? Object.values(YDInvoices.all() || {}).filter(i => i.open && Number(i.balance) > 0) : [];
   const totOwed = invOpen.length ? Math.round(invOpen.reduce((s, i) => s + Number(i.balance), 0) * 100) / 100 : rowOwed;
   const owedSub = filtered && invOpen.length && Math.abs(rowOwed - totOwed) >= 0.01 ? fmtMoney(rowOwed) + ' on the jobs shown' : '';
-  const plannedN = known.filter(r => r.planned).length, unknownN = rows.length - known.length;
+  const plannedN = known.filter(r => r.netHow === 'plan').length, soFarN = rows.filter(r => r.netHow === 'sofar').length;
+  const unknownN = rows.length - known.length - soFarN;
   document.getElementById('dashTotals').innerHTML = [
     { l: 'Jobs', v: rows.length, cls: '' }, { l: 'Total Booked', v: fmtMoney(totPrice), cls: 'accent-top' },
     { l: 'Est. Net Profit', v: fmtMoney(totNet), cls: 'pos-top',
-      sub: [plannedN ? plannedN + ' planned, not yet costed' : '', unknownN ? unknownN + ' not known' : ''].filter(Boolean).join(' · ') },
+      sub: [plannedN ? plannedN + ' planned' : '', soFarN ? soFarN + ' still going, not counted' : '', unknownN ? unknownN + ' not known' : ''].filter(Boolean).join(' · ') },
     { l: 'Total Labor', v: fmtHrsMin(totHrs), cls: '' },
   ].concat(totOwed > 0 ? [{ l: 'Owed to you', v: fmtMoney(totOwed), cls: 'neg-top', sub: owedSub }] : [])
     .map(c => '<div class="summary-card ' + c.cls + '"><div class="summary-label">' + c.l + '</div><div class="summary-value">' + c.v + '</div>' +
@@ -5645,9 +5692,11 @@ function renderDashboard() {
     // Invoiced or Paid; before that (a deposit invoice) by the chip.
     (r.invoiced && !r.qbStage ? '<span class="qb-chip" title="QuickBooks has an invoice for it">QB</span>' : '') + r.plantBits;
   const netHtml = r => r.net == null ? '<span class="muted" title="No costs recorded and no costed estimate yet">—</span>'
+    : r.netHow === 'sofar' ? '<span class="muted" title="Price less the costs so far. The estimate has no crew-days or has unpriced lines, so there is no plan to go by. Not in the total.">' +
+      (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + '<small> so far</small></span>'
     : '<span style="color:' + (r.net >= 0 ? 'var(--pos)' : 'var(--neg)') + '"' +
-      (r.planned ? ' class="dash-planned" title="Planned, from the estimate — no real costs recorded yet"' : '') + '>' +
-      (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + (r.planned ? '<small> plan</small>' : '') + '</span>';
+      (r.netHow === 'plan' ? ' class="dash-planned" title="Planned, from the estimate"' : '') + '>' +
+      (r.net < 0 ? '-' : '') + fmtMoney(Math.abs(r.net)) + (r.netHow === 'plan' ? '<small> plan</small>' : '') + '</span>';
   const moneyCell = v => v == null ? '<span class="muted">—</span>' : fmtMoney(v);
   const owedHtml = r => r.owed == null ? '<span class="muted">—</span>'
     : r.owed > 0 ? '<span class="dash-owed">' + fmtMoney(r.owed) + '</span>' : '<span class="muted">Paid</span>';
@@ -5660,7 +5709,7 @@ function renderDashboard() {
     '<th style="cursor:pointer" onclick="sortDash(\'estTotal\')" title="Labor and materials together: the estimate before tax">Estimate' + arrow('estTotal') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'price\')" title="What the job comes to now, change orders in">Price' + arrow('price') + '</th>' +
     '<th style="cursor:pointer" onclick="sortDash(\'owed\')" title="Still owed on the QuickBooks invoice">Owed' + arrow('owed') + '</th>' +
-    '<th style="cursor:pointer" onclick="sortDash(\'net\')" title="Real costs once there are any; until then what the estimate planned">Est. Net' + arrow('net') + '</th></tr></thead><tbody>';
+    '<th style="cursor:pointer" onclick="sortDash(\'net\')" title="Finished jobs: what they made. Jobs still to do: what the estimate plans. So far: costs to date, not in the total">Est. Net' + arrow('net') + '</th></tr></thead><tbody>';
   // The same jobs as cards, for a phone (styles.css shows one or the other
   // at 720px): the seven-column table was wider than the screen.
   let cardsHtml = '<div class="dash-cards">';
@@ -5867,14 +5916,15 @@ function copyCostSummary() {
   const est = document.getElementById('estimateNumber').value.trim();
   const qb = document.getElementById('qbInvoice').value.trim();
   const totalHrs = totalLaborHours();
-  const laborCost = totalLaborCost();
   const totalMat = round2(materials.reduce((s, e) => s + (parseFloat(e.price) || 0), 0));
+  const sum = trackingCosts(trackingFigures(), totalLaborCost(), totalMat, totalHrs);
+  const laborCost = sum.labor;
   const addCost = round2(getAdditionalCostsTotal());
   // The tax as QuickBooks or the estimate has it (jobBill) -- not the
   // retired 5.5% box, unless an old job still has it ticked.
   const bill = formBill();
   const jobPrice = bill.subtotal;
-  const net = round2(jobPrice - (laborCost + totalMat));
+  const net = round2(jobPrice - sum.total);
   const lines = [
     'YD Exterior Visions — Job Cost Summary',
     'Customer: ' + name,
@@ -5888,7 +5938,8 @@ function copyCostSummary() {
     'Materials purchased: ' + fmtMoney(totalMat),
     'Labor cost: ' + fmtMoney(laborCost) + ' (' + totalHrs.toFixed(1) + ' hrs)',
     'Additional costs: ' + fmtMoney(addCost),
-    'Est. net profit: ' + fmtMoney(net),
+    'Total cost: ' + fmtMoney(sum.total),
+    (sum.netLabel === 'Net Profit' ? 'Net profit: ' : 'Net profit so far: ') + fmtMoney(net),
   ].filter(l => l !== null).join('\n');
   const done = () => showToast('Cost summary copied — paste into QuickBooks');
   if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(lines).then(done).catch(() => fallbackCopy(lines, done));
@@ -6295,24 +6346,22 @@ window.ydLeaveUnsavedJob = ydLeaveUnsavedJob;
 window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('quoteDate').value = todayMD();
   resetDateInputs();
-  document.getElementById('laborRateBadge').textContent = '@ $' + LABOR_RATE + '/hr';
   renderServiceTypes(); renderLabor(); renderMaterials(); renderAdditionalCosts(); renderPayments();
   syncStatusSelect(); renderProposal(); renderOrderList(); updateSummary(); updateCtxBar();
   TAP_OUTSIDE_CLOSES.forEach(closeOnTapOutside);
 
   migrateJobIndex();   // repair index entries from older versions (prices, fields, key scheme)
 
-  // The last job worked on is put in the form, ready on the Job tab -- but
+  // The job this person last had open is put in the form, ready on the Job tab -- but
   // only when a job screen is first shown (switchTab, launchJobId): the app
   // opens on Home, and building the form there at every launch slowed the
   // start on the iPad (and asked QuickBooks about that job each time).
-  const idx = getJobIndex();
-  if (idx.length) {
-    idx.sort((a, b) => (b.lastModified || '').localeCompare(a.lastModified || ''));
-    launchJobId = idx[0].id;
+  const lastJob = rememberedJob();
+  if (lastJob && getJobIndex().some(j => j.id === lastJob)) {
+    launchJobId = lastJob;
     const onScreen = document.querySelector('.tab-panel.active');
-    if (onScreen && ['panel-job', 'panel-tracking', 'panel-dashboard'].indexOf(onScreen.id) !== -1) { launchJobId = null; loadJob(idx[0].id, true); }
-  }
+    if (onScreen && ['panel-job', 'panel-tracking', 'panel-dashboard'].indexOf(onScreen.id) !== -1) { launchJobId = null; loadJob(lastJob, true); }
+  } else pickJobFirst = true;
 
   // Ask the browser to keep our data (reduces iOS/Safari eviction)
   if (navigator.storage && navigator.storage.persist) { navigator.storage.persist().catch(() => {}); }
@@ -7087,37 +7136,6 @@ function toggleSidebarSmall() {
     window.addEventListener('resize', () => {
       if (sidebarWanted() !== document.documentElement.hasAttribute('data-sidebar')) applySidebar();
     });
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
-  else start();
-})();
-
-// An iPad held upright lays the tabs out in two rows (styles.css). Seven to a
-// row left a crew phone's eighth tab, Equipment, alone across the whole
-// second row. Half each instead: the bar is told how many tabs are showing,
-// and the stylesheet sizes them to fill two even rows (only between phone
-// and laptop widths).
-(function () {
-  let queued = false;
-  function count() {
-    queued = false;
-    const bar = document.querySelector('.tab-bar');
-    if (!bar) return;
-    const n = Array.from(bar.querySelectorAll('.tab-btn'))
-      .filter(b => !b.hidden && getComputedStyle(b).display !== 'none').length;
-    const perRow = n > 7 ? Math.ceil(n / 2) : Math.max(n, 1);
-    if (bar.style.getPropertyValue('--tabs-per-row') !== String(perRow)) bar.style.setProperty('--tabs-per-row', perRow);
-  }
-  function later() { if (!queued) { queued = true; setTimeout(count, 0); } }
-  function start() {
-    const bar = document.querySelector('.tab-bar');
-    if (!bar) return;
-    // Any module showing or hiding a tab, and sign-in deciding crew or owner
-    // (the stylesheet hides some tabs by that).
-    new MutationObserver(later).observe(bar, { subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
-    new MutationObserver(later).observe(document.documentElement, { attributes: true, attributeFilter: ['data-crew'] });
-    window.addEventListener('resize', later);
-    count();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();

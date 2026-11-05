@@ -704,10 +704,10 @@
       hint: 'Sales tax returns, estimated tax, 1099s, the LLC report and dates of your own — reminded 14 and 3 days ahead',
       words: 'tax deadline deadlines sales tax return 1099 estimated quarterly annual report llc dfi insurance renewal filing irs',
       show: () => signedIn() && owner(), go: () => call('openDeadlines') },
-    { group: 'Prices & money', icon: '📣', name: 'Posts — Facebook, Google, Nextdoor',
-      hint: 'The posting schedule: what goes up when, each post to change or hold, and hooking each place up',
-      words: 'social media facebook google business profile gbp nextdoor post posts posting schedule marketing',
-      show: () => signedIn() && owner(), go: () => call('openPosts') },
+    { group: 'Prices & money', icon: '📅', name: 'Monthly bills',
+      hint: 'Every recurring bill, business and home — ticked off each month once paid',
+      words: 'bills expenses monthly recurring loan mortgage insurance subscription subscriptions paid due rent utilities',
+      show: () => signedIn() && owner(), go: () => call('openMonthlyBills') },
     { group: 'Prices & money', icon: '✨', name: 'Claude — switches & spend',
       hint: 'What Claude does by itself, the daily and monthly spending limits, what it has cost',
       words: 'ai anthropic budget cap spend cost auto draft cards plant care',
@@ -721,23 +721,23 @@
       words: 'subs subbed mowing lawn care bills',
       show: () => signedIn() && owner(),
       go: () => { switchTab('dashboard'); later(() => reveal(el('subsSection')), 120); } },
+    { group: 'Emails & posts', icon: '📣', name: 'Posts — Facebook, Google, Nextdoor',
+      hint: 'The posting schedule: what goes up when, each post to change or hold, and hooking each place up',
+      words: 'social media facebook google business profile gbp nextdoor post posts posting schedule marketing',
+      show: () => signedIn() && owner(), go: () => call('openPosts') },
+    { group: 'Emails & posts', icon: '🙏', name: 'Follow-ups & thank-yous',
+      hint: 'Your Google review link, and whether the thank-you after a job is paid off sends itself or goes to your Gmail Drafts',
+      words: 'thank you thanks review google link follow up email paid off customer drafts',
+      show: () => signedIn() && owner(), go: () => call('openThanksSettings') },
+    { group: 'Emails & posts', icon: '✍️', name: 'How you write',
+      hint: 'Your voice, from the emails you typed yourself — Claude writes every email as you with it',
+      words: 'voice tone writing style email emails sound like me words greeting sign off',
+      show: () => signedIn() && owner(), go: () => call('openVoiceSettings') },
     { group: 'Jobs & lists', icon: '⚠️', name: 'Issues from the crew',
       hint: 'What the crew lead noted on jobs — too much or too little material, equipment you didn’t have — and what keeps coming up',
       words: 'job issues problems over under short leftover too much rock soil dump trailer waste crew lead',
       show: () => signedIn() && owner(),
       go: () => { switchTab('dashboard'); later(() => reveal(el('crewIssuesSection')), 120); } },
-    { group: 'Jobs & lists', icon: '🙏', name: 'Follow-ups & thank-yous',
-      hint: 'Your Google review link, and whether the thank-you after a job is paid off sends itself or goes to your Gmail Drafts',
-      words: 'thank you thanks review google link follow up email paid off customer drafts',
-      show: () => signedIn() && owner(), go: () => call('openThanksSettings') },
-    { group: 'Prices & money', icon: '📅', name: 'Monthly bills',
-      hint: 'Every recurring bill, business and home — ticked off each month once paid',
-      words: 'bills expenses monthly recurring loan mortgage insurance subscription subscriptions paid due rent utilities',
-      show: () => signedIn() && owner(), go: () => call('openMonthlyBills') },
-    { group: 'Jobs & lists', icon: '✍️', name: 'How you write',
-      hint: 'Your voice, from the emails you typed yourself — Claude writes every email as you with it',
-      words: 'voice tone writing style email emails sound like me words greeting sign off',
-      show: () => signedIn() && owner(), go: () => call('openVoiceSettings') },
     { group: 'Jobs & lists', icon: '🏷️', name: 'Services list',
       hint: 'The services picked on jobs, bids and contacts — add your own or take them off',
       words: 'service types tags list',
@@ -1186,7 +1186,11 @@
   function drawSettings() {
     const body = el('setHubBody');
     if (!body) return;
-    const list = visibleSettings();
+    // Each group once, its rows together, whatever order they were added to
+    // SETTINGS in (a row added out of place repeated its heading further down).
+    const shown = visibleSettings();
+    const list = Array.from(new Set(shown.map(s => s.group)))
+      .reduce((all, g) => all.concat(shown.filter(s => s.group === g)), []);
     setBoards = runBoards();
     let group = '';
     body.innerHTML = '<p class="hint set-hub-intro">Every setting in Job Hub that you can change, in one place. ' +

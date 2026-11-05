@@ -181,11 +181,31 @@
       .reduce((s, e) => s + (toCents(e && e.materialCost) || 0) + (toCents(e && e.laborCost) || 0), 0) + qb;
   }
 
+  // A job's estimate priced, kept for All Jobs (ctx.lean), which asks for every
+  // job at every redraw from two tables. Its price rests on the job, the
+  // rules, Supplies and the days clocked (fuel). The open job on Tracking is
+  // never kept: its form can be ahead of what was last saved.
+  const pricedKept = new Map();
+  function pricedOf(est, job, id, ctx) {
+    const go = () => YDEstimate.priceSaved(est, job.city || '', id, job.deliveryQuotes, job.qbEstimate);
+    if (!id || !(ctx && ctx.lean)) return go();
+    const key = (job.lastModified || '') + '|' + (job.city || '');
+    const k = pricedKept.get(id);
+    if (k && k.key === key) return k.r;
+    const r = go();
+    pricedKept.set(id, { key: key, r: r });
+    return r;
+  }
+  ['yd-pricing', 'yd-supplies', 'yd-clock-changed'].forEach(ev => document.addEventListener(ev, () => pricedKept.clear()));
+
   // wantNow: the estimate as it is now even when a version was sent.
   // ctx.lean: the All Jobs table, which never shows what a sent estimate
   // prices at today (only the job's own page does, in a hint) -- pricing every
   // job's estimate for that figure made each redraw cost a pricing run a job.
-  function estimateSide(job, wantNow, ctx) {
+  // id, not job._id: the open job comes from the form, which carries no id.
+  // Without it the estimate was priced with no days on the job, so no fuel, and
+  // Tracking read higher than All Jobs for the same job (4 Nov 2026).
+  function estimateSide(job, id, wantNow, ctx) {
     const rules = P() ? P().rules() : {};
     const est = job.estimate && typeof job.estimate === 'object' ? job.estimate : null;
     // The crew-day the job was bid with: a later change to the rates is not
@@ -195,7 +215,7 @@
                   costs: {}, complete: true, problems: 0, sentAt: null, docNumber: null, nowCents: null, hand: {} };
     const sent = lastSent(est);
     const needNow = !(ctx && ctx.lean && sent && !wantNow);
-    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? YDEstimate.priceSaved(est, job.city || '', job._id, job.deliveryQuotes, job.qbEstimate) : null;
+    const r = needNow && hasLines(est) && window.YDEstimate && YDEstimate.priceSaved ? pricedOf(est, job, id, ctx) : null;
     if (sent && !wantNow) {
       const c = sent.cost, byKind = c.byKind || {};
       const dumps = (num(byKind.dumpster) || 0) + (num(byKind.rental) || 0);
@@ -220,12 +240,18 @@
       out.costs = { materials: mats, dumpsters: dumps, delivery: r.profit.deliveryCostCents || 0, fuel: r.profit.fuelCostCents || 0 };
       if (r.profit.subCostCents > 0) out.costs.subs = r.profit.subCostCents;
       out.complete = !!r.profit.complete;
-      out.problems = r.problems.length;
+      // Lines of a QuickBooks estimate with no known cost are noCost: the
+      // price stands, but what they cost is not in this side's figures.
+      out.problems = r.problems.length + (r.noCost || []).length;
     } else {
       out.priceCents = baseCents(job);
     }
     const hand = handOf(job).est;
-    if (hand.crewDays) { out.crewDays = hand.crewDays.v; out.hand.crewDays = hand.crewDays; }
+    if (hand.crewDays) {
+      out.crewDays = hand.crewDays.v; out.hand.crewDays = hand.crewDays;
+      // The crew-days were what it lacked: typed in, it can be compared.
+      if (!out.problems) out.complete = true;
+    }
     COSTS.forEach(([k]) => { if (hand[k]) { out.costs[k] = hand[k].v; out.hand[k] = hand[k]; } });
     // Something to compare against: an estimate, or figures typed in.
     out.has = out.from !== 'none' || Object.keys(out.hand).length > 0;
@@ -324,7 +350,7 @@
   // --------------------------------------------------------- side by side
 
   function compare(job, id, wantNow, ctx) {
-    const e = estimateSide(job, wantNow, ctx);
+    const e = estimateSide(job, id, wantNow, ctx);
     const a = actualSide(job, id, e, ctx);
     const filled = [];          // costs counted at the estimate's figure
     let recorded = a.labour.source !== 'none';
@@ -350,16 +376,42 @@
     const actProfit = actPrice !== null && actCost !== null ? actPrice - actCost : null;
     const marg = (p, pr) => p !== null && pr > 0 ? p / pr * 100 : null;
     const perDay = (p, d) => p !== null && d > 0 ? Math.round(p / d) : null;
+    // An estimate with no crew-days leaves labor out of its profit, and one
+    // with unpriced lines leaves those out. Set against what the job really
+    // cost, labor in, every such job read as far under its estimate: 19 of 20
+    // on 4 Nov 2026, nearly all of them imported from QuickBooks with no
+    // crew-days. So there is no difference to show for one until it is whole.
+    const incomplete = !e.complete || (e.has && estLab === null);
     return {
       job: job, id: id, est: e, act: a, filled: filled, recorded: recorded,
       status: typeof normStatus === 'function' ? normStatus(job.jobStatus, job) : job.jobStatus,
       estCost: estCost, actCost: actCost, estPrice: estPrice, actPrice: actPrice,
       estProfit: estProfit, actProfit: actProfit,
-      estMargin: marg(estProfit, estPrice), actMargin: marg(actProfit, actPrice),
+      estMargin: incomplete ? null : marg(estProfit, estPrice), actMargin: marg(actProfit, actPrice),
       estPerDay: perDay(estProfit, e.crewDays), actPerDay: perDay(actProfit, a.labour.days),
-      diff: estProfit !== null && actProfit !== null ? actProfit - estProfit : null,
-      incomplete: !e.complete || (e.has && estLab === null),
+      diff: !incomplete && estProfit !== null && actProfit !== null ? actProfit - estProfit : null,
+      incomplete: incomplete,
     };
+  }
+
+  // What a job makes, the one answer for All Jobs, so a job never reads two
+  // ways (4 Nov 2026). `how` says what kind of figure it is:
+  //   actual  finished: the Actual profit in Estimate vs actual.
+  //   plan    not finished: what the estimate plans at the job's price, or
+  //           less if the costs so far have already taken it below that.
+  //   sofar   not finished and no whole estimate to plan from: the price less
+  //           the costs so far. It is no forecast (a job barely started reads
+  //           as nearly all profit), so it is shown as that and left out of
+  //           totals.
+  function makes(job, ctx) {
+    const m = compare(job, job._id, !!basisNow[job._id], ctx);
+    const price = m.actPrice !== null ? m.actPrice : m.estPrice;
+    const plan = !m.incomplete && price !== null && m.estCost !== null ? price - m.estCost : null;
+    const real = m.recorded ? m.actProfit : null;
+    if (m.status === 'complete' && real !== null) return { cents: real, how: 'actual' };
+    if (plan !== null) return { cents: real !== null ? Math.min(plan, real) : plan, how: 'plan' };
+    if (real !== null && m.status !== 'quoting') return { cents: real, how: 'sofar' };
+    return { cents: null, how: null };
   }
 
   // ------------------------------------------------------------ drawing
@@ -453,6 +505,9 @@
       (sub ? note(sub) : '') + '</td><td>' + estH + '</td><td>' + actH + '</td><td>' + diffH + '</td></tr>';
   }
 
+  // What an estimate that isn't whole leaves out of its profit.
+  const leftOut = m => m.est.crewDays === null ? 'labor isn’t in this' : 'not every line is in this';
+
   function tableHtml(m) {
     let h = labourRows(m);
     COSTS.forEach(([k, name, sub]) => {
@@ -461,7 +516,9 @@
       const d = a.source !== 'none' && ev != null ? a.cents - ev : null;
       h += row(name, sub, estCell(m, k), actCell(m, k), diffHtml(d, false, money));
     });
-    const costDiff = m.estCost !== null && m.actCost !== null ? m.actCost - m.estCost : null;
+    // A total without labor against one with it is no difference; the lines
+    // above, each like for like, still are.
+    const costDiff = !m.incomplete && m.estCost !== null && m.actCost !== null ? m.actCost - m.estCost : null;
     h += row('Total cost', '', m.estCost !== null ? money(m.estCost) : dash,
       m.actCost !== null ? money(m.actCost) + (m.filled.length ? note('* some counted as estimated') : '') : '<span class="eva-none">nothing recorded yet</span>',
       diffHtml(costDiff, false, money), 'eva-total');
@@ -471,7 +528,7 @@
     h += row('Price', 'before sales tax', m.estPrice !== null ? money(m.estPrice) + estPriceNote : dash,
       a.priceCents !== null ? money(a.priceCents) + priceNote : '<span class="eva-none">no price</span>',
       diffHtml(m.estPrice !== null && a.priceCents !== null ? a.priceCents - m.estPrice : null, true, money));
-    h += row('Profit', '', signed(m.estProfit), m.actProfit !== null ? money(m.actProfit) + (m.filled.length ? ' *' : '') : dash,
+    h += row('Profit', '', signed(m.estProfit) + (m.incomplete && m.estProfit !== null ? note(leftOut(m)) : ''), m.actProfit !== null ? money(m.actProfit) + (m.filled.length ? ' *' : '') : dash,
       diffHtml(m.diff, true, money), 'eva-total eva-profit');
     h += row('Margin', '', pct(m.estMargin), pct(m.actMargin),
       diffHtml(m.estMargin !== null && m.actMargin !== null ? m.actMargin - m.estMargin : null, true, pts));
@@ -690,7 +747,8 @@
     // Unknowns always last, whichever way.
     return list.slice().sort((a, b) => {
       const va = f(a), vb = f(b);
-      if (va === null && vb === null) return 0;
+      // Neither has the figure: the one that made least first.
+      if (va === null && vb === null) return a.actProfit === null ? (b.actProfit === null ? 0 : 1) : b.actProfit === null ? -1 : a.actProfit - b.actProfit;
       if (va === null) return 1;
       if (vb === null) return -1;
       return (va < vb ? -1 : va > vb ? 1 : 0) * dir;
@@ -705,9 +763,14 @@
     if (!sees()) { wrap.innerHTML = ''; return; }
     const list = sorted(listModels());
     const now = new Date().getFullYear();
-    const both = list.filter(m => m.diff !== null);
+    // The headline is finished jobs with a whole estimate: anything else has
+    // no fair difference yet. In-progress ones count only when picked.
+    const both = list.filter(m => m.diff !== null && (m.status === 'complete' || listStatus));
     const over = both.filter(m => m.diff <= -100);
     const sumEst = both.reduce((s, m) => s + m.estProfit, 0), sumAct = both.reduce((s, m) => s + m.actProfit, 0);
+    const finished = list.filter(m => m.status === 'complete' && m.recorded && m.actProfit !== null);
+    const sumDone = finished.reduce((s, m) => s + m.actProfit, 0);
+    const noWhole = list.filter(m => m.status === 'complete' && m.recorded && m.est.has && m.incomplete).length;
     if (badge) badge.textContent = over.length ? plural(over.length, 'job', 'jobs') + ' under the estimate' : '';
     const sel = (v, cur) => v === cur ? ' selected' : '';
     const arrow = c => listSort.col === c ? (listSort.asc ? ' ▲' : ' ▼') : '';
@@ -736,7 +799,11 @@
         card('Estimated profit', both.length ? money(sumEst) : '—') +
         card('Actual profit', both.length ? '<span class="' + (sumAct < sumEst ? 'eva-bad' : 'eva-good') + '">' + money(sumAct) + '</span>' : '—', 'accent-top') +
         card('Under the estimate', over.length ? '<span class="eva-bad">' + over.length + '</span>' : '0') +
-      '</div>';
+        (finished.length ? card('Finished jobs made', money(sumDone) + ' <span class="eva-of">on ' + finished.length + '</span>') : '') +
+      '</div>' +
+      (noWhole ? '<p class="hint">' + plural(noWhole, 'finished job isn’t', 'finished jobs aren’t') + ' compared: the estimate has no crew-days or has unpriced lines, ' +
+        'so there is nothing fair to set against what the job really cost. Their real profit still shows below. ' +
+        'Tap a job and set its crew-days with ✎ on Tracking to bring it in.</p>' : '');
     h += '<div class="table-wrap"><table class="eva-list"><thead><tr>' +
       th('name', 'Job') + th('status', 'Status') + th('days', 'Crew-days') +
       th('estCost', 'Est. cost') + th('actCost', 'Actual cost') + th('estProfit', 'Est. profit') +
@@ -755,9 +822,10 @@
         '<td class="bold eva-job">' + jobNameHtml(m.job.customerName, String(m.job.estimateNumber || '').trim()) + '</td>' +
         '<td class="eva-st">' + statusPill(m.status) + '</td>' +
         '<td data-l="Crew-days"' + daysCls + '>' + esc(daysTxt) + '</td>' +
-        '<td data-l="Est. cost">' + (m.estCost !== null ? money(m.estCost) : noEst) + '</td>' +
+        '<td data-l="Est. cost">' + (m.estCost !== null ? money(m.estCost) + shaky : noEst) + '</td>' +
         '<td data-l="Actual cost">' + (m.actCost !== null ? money(m.actCost) + star : nothing) + '</td>' +
-        '<td data-l="Est. profit">' + (m.estProfit !== null ? money(m.estProfit) + shaky : e.has ? '—' : noEst) + '</td>' +
+        '<td data-l="Est. profit">' + (m.estProfit === null ? (e.has ? '—' : noEst)
+          : m.incomplete ? '<span class="muted">' + esc(m.est.crewDays === null ? 'no labor in it' : 'not all priced') + '</span>' : money(m.estProfit)) + '</td>' +
         '<td data-l="Actual profit">' + (m.actProfit !== null ? money(m.actProfit) + star : m.recorded ? '—' : nothing) + '</td>' +
         '<td data-l="Difference">' + diffHtml(m.diff, true, money) + '</td>' +
         '<td data-l="Margin">' + pct(m.actMargin) + '</td></tr>';
@@ -766,8 +834,8 @@
     // nothing recorded against it -- fold into one line at the foot (15 Oct
     // 2026: a wall of "no estimate / nothing yet" rows under "0 of 14
     // compared"). Opened, they keep the order picked.
-    const none = list.filter(m => m.diff === null);
-    h += both.map(rowOf).join('') + '</tbody>';
+    const none = list.filter(m => m.diff === null && m.actProfit === null);
+    h += list.filter(m => none.indexOf(m) === -1).map(rowOf).join('') + '</tbody>';
     if (none.length) {
       h += '<tbody class="eva-none-fold"><tr class="eva-fold-row"><td colspan="9">' +
           '<button type="button" class="link-btn" onclick="evaNoneFold()" aria-expanded="' + (noneOpen ? 'true' : 'false') + '">' +
@@ -780,7 +848,7 @@
     const anyShaky = list.some(m => m.incomplete && m.estProfit !== null);
     h += '</table></div>' +
       '<p class="hint">Tap a job for its side by side on Tracking. * a cost not recorded yet (no receipts, no hours), counted at the estimate’s figure so it never reads as profit. ' +
-      (anyShaky ? '? after an estimated profit: that job’s estimate isn’t complete — some lines aren’t priced or it has no crew-days — so that profit isn’t the whole story. ' : '') +
+      (anyShaky ? '? after an estimated cost: that job’s estimate isn’t complete — some lines aren’t priced or it has no crew-days — so it can’t be compared yet. ' : '') +
       'In-progress jobs are so far. A job’s year is when the crew first clocked in, else its date.</p>';
     wrap.innerHTML = h + servicesHtml(list);
   }
@@ -998,6 +1066,12 @@
     renderList: renderList,
     // For a test or another screen: one job, side by side.
     compare: (job, id) => compare(job || {}, id || null, false),
+    // All Jobs: what a job makes. ctx: one { lean: true, byJob: null } a redraw.
+    makes: makes,
+    // The open job, for Tracking's figures above Estimate vs actual, so the
+    // two never disagree. Null for someone who doesn't see costs.
+    open: () => (sees() && typeof currentJobId !== 'undefined' && currentJobId && typeof getJobData === 'function'
+      ? compare(getJobData(), currentJobId, !!basisNow[currentJobId]) : null),
     bucketOfLine: bucketOfLine,
   };
 })();
