@@ -1550,20 +1550,30 @@ def _site(request, path):
     if not 0 < (request.content_length or 0) <= wl.BODY_MAX:
         return (json.dumps({"error": "wrong size"}), 413, json_headers)
     body = request.get_json(silent=True)
-    if wl.is_bot(body):
-        return (ok, 200, json_headers)
     form = wl.clean_nomination(body) if nominating else wl.clean(body)
+    if wl.is_bot(body):
+        if form:
+            wl.just_email(_db, form, wl.MAYBE_SPAM, " (may be spam)")
+        return (ok, 200, json_headers)
     if not form:
         return (json.dumps({"error": "a name and a way to reach you are needed"}), 400, json_headers)
+    # Every way a form can't go in below still tries his inbox first, and the
+    # visitor only sees the failure, with the phone number, if that fails too.
+    done, failed = None, None
     try:
         room, news = wl.room(_db, wl.sender(request))
-        if not room:
+        if room:
+            done = wl.take_nomination(_db, form) if nominating else wl.take(_db, form)
+        else:
+            failed = (wl.PAST_LIMIT, "too many", 429)
             _tell_owner(news)
-            return (json.dumps({"error": "too many"}), 429, json_headers)
-        done = wl.take_nomination(_db, form) if nominating else wl.take(_db, form)
     except Exception as e:                          # noqa: BLE001
         print("website form not saved:", e)
-        return (json.dumps({"error": "not saved"}), 500, json_headers)
+        failed = failed or (wl.NOT_SAVED, "not saved", 500)
+    if failed:
+        if wl.just_email(_db, form, failed[0]):
+            return (ok, 200, json_headers)
+        return (json.dumps({"error": failed[1]}), failed[2], json_headers)
     if not done:
         return (ok, 200, json_headers)
     try:

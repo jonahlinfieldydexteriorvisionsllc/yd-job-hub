@@ -13,13 +13,19 @@ scheduler's proof, so everything in it is a stranger's data:
   - An answer a browser can read goes only to the real domain and the
     Cloudflare Pages test addresses (origin_ok). A script can lie about where
     it is from, so the limits below are what really hold.
-  - The hidden `website` box filled in: a bot. Told "ok"; nothing is kept.
+  - The hidden `website` box filled in: most likely a bot, told "ok". No lead,
+    no card, no buzz, and a whole form still goes to his inbox marked as maybe
+    spam (just_email), because a phone's autofill can fill that box too.
   - Every box is cut to its length (BOXES) and stripped of < and >, and the
     whole post is limited (BODY_MAX). The words are only ever stored, and
     shown to Claude as data (leads._read, the same rules as a stranger's email).
   - SENDER_PER_DAY posts from one address and FORMS_PER_DAY from everyone
     (leadLimits/{day}, which keeps a scrambled address, never the real one).
-    The limit reached: refused, and the form gives the phone number.
+    Past a limit, or when the lead can't be saved, the form goes to his inbox
+    and the visitor is told it went (just_email, QUIET_PER_DAY of them). Only
+    if that fails too is it refused, and the form gives the phone number.
+    Jonah, 5 Nov 2026: a form from his house was refused and thrown away after
+    the day's tests used up the address, "I'm gonna miss out on clients".
   - The same form twice in a day (a double tap): one lead, one buzz.
 TODO (when Jonah's Cloudflare account exists): Cloudflare's spam check,
 Turnstile. Its site key goes in the form, its secret in this service's
@@ -52,9 +58,17 @@ SUBJECT = "Your request to YD Exterior Visions"
 REPLY_TIMEOUT = 60          # seconds Claude has for the reply; the lead is made either way
 
 BODY_MAX = 32 * 1024        # a full form in any alphabet is well under this
-SENDER_PER_DAY = 6
+# One address is often many people: a house on one Wi-Fi, an office, a phone
+# carrier. It was 6, and one afternoon's tests used it up for a whole house.
+SENDER_PER_DAY = 20
 FORMS_PER_DAY = 60
 # (Each form that gets through costs one Claude reply, so this also caps the bill.)
+QUIET_PER_DAY = 25          # forms a day that go to his inbox only, so a robot can't fill it
+ONLY_HERE = "This one is only in this email, so Job Hub has no lead or card for it. "
+PAST_LIMIT = ONLY_HERE + "Too many forms came from that internet address today, or the server was busy."
+NOT_SAVED = ONLY_HERE + "Job Hub couldn't save it just now."
+MAYBE_SPAM = ONLY_HERE + "A box people can't see was filled in, which usually means a spam robot, " \
+    "though a phone's autofill can do it too."
 
 # Real domain, plus <project>.pages.dev and <id>.<project>.pages.dev for each
 # preview. Cloudflare adds a suffix to the project's name when it is taken.
@@ -247,6 +261,57 @@ def tell_by_email(done):
             print("website form: email not sent for", done["leadId"], "--", sent["error"])
     except Exception as err:        # noqa: BLE001 -- it may have gone, and the lead is safe either way
         print("website form: email may not have gone for", done["leadId"], "--", err)
+
+
+def _quiet_room(db):
+    """Room for one more form to go to his inbox only? Counted apart from the
+    day's forms, so a robot past its limit can't use up room for real people.
+    False when it can't be counted: the visitor is then told to call."""
+    ref = db.collection("leadLimits").document(dg._now().date().isoformat())
+
+    @firestore.transactional
+    def take_one(tx):
+        d = ref.get(transaction=tx).to_dict() or {}
+        if int(d.get("quiet") or 0) >= QUIET_PER_DAY:
+            return False
+        tx.set(ref, {"quiet": firestore.Increment(1)}, merge=True)
+        return True
+
+    try:
+        return take_one(db.transaction())
+    except Exception as e:      # noqa: BLE001
+        print("website form: inbox-only limit not checked:", e)
+        return False
+
+
+def just_email(db, f, why, flag=""):
+    """A form that can't go in the usual way, sent to his inbox and nothing
+    else. True only when Gmail took it: that is what lets the visitor be told
+    it went, so anything less than a clear yes is False and they get the phone
+    number. Done before the browser hears anything, and it never raises."""
+    import cards
+    if "fname" in f:
+        name = " ".join(x for x in (f.get("fname"), f.get("lname")) if x)
+        subject = "Website form%s: %s - %s" % (flag, name, _what(f))
+        head, lines, to = "New request from the website.", form_text(f), f.get("email") or None
+        how = "Reply to this email and it goes to them." if to else "No email given: call or text them."
+    else:
+        subject = "YD Gives Back nomination%s: %s" % (flag, f.get("name"))
+        head, lines, to = "A YD Gives Back nomination from the website.", \
+            "Name: %s\nPhone: %s" % (f.get("name"), f.get("phone")), None
+        how = "Call or text them."
+    if not _quiet_room(db):
+        print("website form: the day's inbox-only limit is reached")
+        return False
+    try:
+        sent = cards.send_mail(dg.OWNER_EMAIL, subject, "%s\n\n%s\n\n%s %s" % (head, lines, why, how), reply_to=to)
+    except Exception as err:    # noqa: BLE001 -- it may have gone, but only a clear yes tells the visitor it did
+        print("website form: inbox-only email may not have gone --", err)
+        return False
+    if sent.get("error"):
+        print("website form: inbox-only email not sent --", sent["error"])
+        return False
+    return True
 
 
 def reply(claude, done, spent=None):
