@@ -583,6 +583,22 @@ def _digest(request, path, headers):
         return (json.dumps({"slot": slot, "report": report, "tidied": tidied, "notes": noted,
                             "logs": logged, "social": planned}), 200, json_headers)
 
+    if path == "/digest/site-check":
+        # The daily website check, now (searchwatch.py). The owner only.
+        if origin_blocked(request):
+            return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
+        try:
+            _caller(request)
+        except PermissionError as e:
+            return (json.dumps({"error": str(e)}), 401, json_headers)
+        try:
+            import searchwatch
+            r = searchwatch.check(_db)
+            return (json.dumps({k: r[k] for k in ("at", "site", "google", "counts", "issues", "fresh")}), 200, json_headers)
+        except Exception as e:                          # noqa: BLE001
+            print("site check failed:", e)
+            return (json.dumps({"error": str(e)[:300]}), 500, json_headers)
+
     if path == "/digest/preview":
         if origin_blocked(request):
             return (json.dumps({"error": "origin not allowed"}), 403, json_headers)

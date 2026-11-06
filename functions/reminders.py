@@ -208,6 +208,9 @@ def run():
         # time has come goes up (social.py; planned after the summaries).
         # Last: a slow Facebook photo upload holds nothing else up.
         ("social posts", (), lambda: _social_posts(db, people, now)),
+        # The website read page by page and asked about on Google, once a day
+        # after 7 am (searchwatch.py). Last again: it takes a minute or two.
+        ("site check", (), lambda: _site_check(db, people, now)),
     ]
     sent = []
     for what, needs, step in steps:
@@ -226,6 +229,11 @@ def run():
 def _storm_watch(db, people, prefs, now):
     import stormwatch
     return stormwatch.run(db, people, prefs, now)
+
+
+def _site_check(db, people, now):
+    import searchwatch
+    return searchwatch.run(db, people, now)
 
 
 def _pay_sheet(db, people, now):
