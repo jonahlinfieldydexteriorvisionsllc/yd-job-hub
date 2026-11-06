@@ -1538,8 +1538,9 @@ def _site(request, path):
     headers = wl.cors(origin)
     json_headers = dict(headers, **{"Content-Type": "application/json"})
     ok = json.dumps({"ok": True})
-    if path != "/site/lead":
+    if path not in ("/site/lead", "/site/nominate"):
         return (json.dumps({"error": "unknown endpoint"}), 404, json_headers)
+    nominating = path == "/site/nominate"
     if not wl.origin_ok(origin):
         return (json.dumps({"error": "origin not allowed"}), 403, json_headers)
     if request.method == "OPTIONS":
@@ -1551,7 +1552,7 @@ def _site(request, path):
     body = request.get_json(silent=True)
     if wl.is_bot(body):
         return (ok, 200, json_headers)
-    form = wl.clean(body)
+    form = wl.clean_nomination(body) if nominating else wl.clean(body)
     if not form:
         return (json.dumps({"error": "a name and a way to reach you are needed"}), 400, json_headers)
     try:
@@ -1559,14 +1560,14 @@ def _site(request, path):
         if not room:
             _tell_owner(news)
             return (json.dumps({"error": "too many"}), 429, json_headers)
-        done = wl.take(_db, form)
+        done = wl.take_nomination(_db, form) if nominating else wl.take(_db, form)
     except Exception as e:                          # noqa: BLE001
         print("website form not saved:", e)
         return (json.dumps({"error": "not saved"}), 500, json_headers)
     if not done:
         return (ok, 200, json_headers)
     try:
-        _tell_owner(done["news"])
+        _tell_owner(done if nominating else done["news"])
     except Exception as e:                          # noqa: BLE001 -- the lead is saved, and on My to-dos
         print("website form: buzz failed:", e)
 
@@ -1574,6 +1575,9 @@ def _site(request, path):
         try:
             yield ok
         finally:                                    # also when the visitor has left
+            if nominating:
+                wl.tell_nomination(form)
+                return
             wl.tell_by_email(done)
             if done["drafting"]:
                 import leads

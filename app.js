@@ -734,8 +734,55 @@ function ydCan(area, level) {
 // server refused it.
 function jobsReadOnly() {
   const a = window.YDAuth;
-  return !!(a && a.mode === 'cloud' && a.user && ydCan('jobs', 'see') && !ydCan('jobs', 'change'));
+  return !!(a && a.mode === 'cloud' && a.user && ydCan('jobs', 'see') && (!ydCan('jobs', 'change') || !!a.lookingAs));
 }
+
+// ---- Job Hub as someone on the crew sees it (firebase-init.js lookAs) --------
+// Home's 👁 button. One person's view in this tab until Back to my view, and
+// nothing tapped saves. They aren't told.
+const LOOK_KEY = 'ydjobhub_lookAs';
+async function ydLookAs() {
+  const a = window.YDAuth;
+  if (!a || !a.isOwner || !window.YDDb) return;
+  let users = null;
+  try { users = await window.YDDb.list('users'); } catch (e) { /* said below */ }
+  const people = Object.keys(users || {}).filter(id => users[id] && users[id].active === true &&
+      (users[id].role === 'crew' || users[id].role === 'admin'))
+    .map(id => ({ id: id, label: String(users[id].name || users[id].email || 'Someone'),
+                  hint: users[id].role === 'admin' ? 'Admin' : 'Crew' }))
+    .sort((x, y) => x.label.localeCompare(y.label));
+  if (!people.length) { showToast(users ? 'Nobody to look as yet' : 'Could not read the crew. Try again with signal.'); return; }
+  const got = await ydChoose('You see what they see: their screens, their buttons, their jobs. Nothing you tap saves, and they aren’t told.',
+    people, { title: 'See Job Hub as…' });
+  if (!got || !(await ydLeaveUnsavedJob())) return;
+  try { sessionStorage.setItem(LOOK_KEY, got.id); } catch (e) { showToast('This browser won’t allow it'); return; }
+  location.reload();
+}
+function ydLookBack() {
+  try { sessionStorage.removeItem(LOOK_KEY); } catch (e) { /* this tab only anyway */ }
+  location.reload();
+}
+// A tap that would have saved: said once in a while, and not for what the app
+// does by itself in the background.
+let lookSaidAt = 0;
+function ydLookOnly() {
+  const a = window.YDAuth, used = navigator.userActivation;
+  if (!a || !a.lookingAs || (used && !used.isActive) || Date.now() - lookSaidAt < 6000) return;
+  lookSaidAt = Date.now();
+  if (typeof showToast === 'function') showToast('Just looking as ' + a.lookingAs.name + ': nothing saved');
+}
+document.addEventListener('yd-auth', e => {
+  const a = e.detail || {};
+  let bar = document.getElementById('lookBar');
+  if (!a.lookingAs) { if (bar) bar.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('div');
+    bar.id = 'lookBar';
+    document.body.appendChild(bar);
+  }
+  bar.innerHTML = '<span>👁 As <b>' + esc(a.lookingAs.name) + '</b></span>' +
+    '<button type="button" onclick="ydLookBack()">Back to my view</button>';
+});
 // The stylesheet makes the screen untouchable (rows added later
 // included); persistJob refuses to save as the backstop.
 function applyJobsReadOnly() {

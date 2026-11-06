@@ -316,6 +316,7 @@
     if (signedIn() && typeof rcPhoto === 'function') {
       out.push('<button class="btn btn-sm" onclick="rcPhoto()">📷 <span class="hide-phone">Add a </span>receipt</button>');
     }
+    if (signedIn() && isOwner()) out.push('<button class="btn btn-sm" onclick="ydLookAs()">👁 See it as…</button>');
     return out.length ? '<div class="hm-actions">' + out.join('') + '</div>' : '';
   }
 

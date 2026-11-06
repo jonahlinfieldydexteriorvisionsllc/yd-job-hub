@@ -2501,6 +2501,7 @@
   // The button everywhere but a job's own page.
   window.rcPhoto = function () {
     if (!me()) { showToast('Sign in to send a receipt'); return; }
+    if (window.YDAuth && YDAuth.lookingAs) { if (window.ydLookOnly) ydLookOnly(); return; }
     const c = clockedJob();
     if (c) { nextFor = Object.assign({ hold: true }, c); openCamera(); return; }
     openFor(null);
@@ -2509,6 +2510,7 @@
   // the server would not find it.
   window.rcPhotoForJob = function (jobId, name) {
     if (!me()) { showToast('Sign in to send a receipt'); return; }
+    if (window.YDAuth && YDAuth.lookingAs) { if (window.ydLookOnly) ydLookOnly(); return; }
     jobId = String(jobId || '');
     if (!jobId) { showToast('Open a job first'); return; }
     const b = boardJobs().find(j => j.id === jobId);

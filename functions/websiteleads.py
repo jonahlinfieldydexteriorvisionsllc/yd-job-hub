@@ -299,3 +299,52 @@ def reply(claude, done, spent=None):
             ref.update(patch)
     except Exception as err:        # noqa: BLE001 -- "Draft a reply" on the lead does the same
         print("website form: reply failed for", lead_id, "--", err)
+
+
+# A YD Gives Back nomination (Jonah, 5 Nov 2026: "the nominate someone page needs
+# to go to a different contact form then the one for work to be done all we need
+# is a name and a phone number for that one"). Nobody here is asking for work, so
+# no lead and no reply written by Claude: a card on My to-dos, a buzz and the
+# email. POST /site/nominate, from the same box of limits as the form above.
+def clean_nomination(body):
+    """{name, phone}, or None without a name and a whole phone number."""
+    if not isinstance(body, dict):
+        return None
+    name, phone = _box(body.get("name"), 120), _box(body.get("phone"), 30)
+    return {"name": name, "phone": phone} if name and len(re.sub(r"\D", "", phone)) >= 10 else None
+
+
+def take_nomination(db, f):
+    """Its card, and the news for his phone; None for the same form twice in a
+    day. Raises when the card can't be saved: the visitor is told to call."""
+    day = dg._now().date().isoformat()
+    cid = "nm" + hashlib.sha1("|".join((day, f["name"].lower(), re.sub(r"\D", "", f["phone"]))).encode()).hexdigest()[:14]
+    board = db.collection("boards").document("todo").get()
+    cols = [c for c in ((board.to_dict() or {}).get("columns") or []) if c.get("id")]
+    col = next((c["id"] for c in cols if str(c.get("name") or "").strip().lower() == "today"), cols[0]["id"])
+    now = leads._stamp()
+    try:
+        db.collection("boards").document("todo").collection("cards").document(cid).create({
+            "title": ("🌱 YD Gives Back nomination — " + f["name"])[:200],
+            "notes": "From the website. Name: %s\nPhone: %s" % (f["name"], f["phone"]),
+            "checklist": [], "column": col, "order": int(dg._now().timestamp() * 1000), "due": day, "dueTime": None,
+            "remindMins": None, "hasReminder": False, "remindUids": [], "noReminder": False, "type": "phone",
+            "urgency": "normal", "labels": [], "color": None, "assignees": [], "jobId": None, "jobName": None,
+            "jobNum": None, "noClaude": True, "doneAt": None, "createdAt": now, "createdBy": "Job Hub",
+            "updatedAt": now, "updatedBy": "Job Hub"})
+    except AlreadyExists:
+        return None
+    return [{"title": "🌱 YD Gives Back nomination — " + f["name"], "body": f["phone"] + " — it's on My to-dos.",
+             "kind": "followup", "jobId": "nomination-" + cid}]
+
+
+def tell_nomination(f):
+    """The same in his inbox. After the browser has its answer, so it never raises."""
+    import cards
+    body = "A YD Gives Back nomination from the website.\n\nName: %s\nPhone: %s\n\nIt's on My to-dos." % (f["name"], f["phone"])
+    try:
+        sent = cards.send_mail(dg.OWNER_EMAIL, "YD Gives Back nomination: " + f["name"], body)
+        if sent.get("error"):
+            print("nomination: email not sent --", sent["error"])
+    except Exception as err:        # noqa: BLE001 -- the card is safe either way
+        print("nomination: email may not have gone --", err)

@@ -126,6 +126,8 @@
   // the phone, show it at once, then send. Answers how many it took in.
   window.jpPicked = async function (input, stage) {
     pickingSince = 0;
+    // Looking as someone else: it would wait on this device under their name.
+    if (window.YDAuth && YDAuth.lookingAs) { input.value = ''; if (window.ydLookOnly) ydLookOnly(); return; }
     const files = Array.from(input.files || []).filter(f => /^image\//.test(f.type) || !f.type);
     input.value = '';
     const forJob = input.getAttribute('data-job') || jobId;

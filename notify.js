@@ -97,6 +97,8 @@
   }
 
   window.ntfTurnOn = async function () {
+    // Looking as someone else: this is his own phone's sign-up, not theirs.
+    if (window.YDAuth && YDAuth.lookingAs) { if (window.ydLookOnly) ydLookOnly(); return; }
     const btn = el('ntfDeviceBtn');
     if (btn) { btn.disabled = true; btn.textContent = 'Turning on…'; }
     try {
@@ -125,6 +127,8 @@
   };
 
   window.ntfTurnOff = async function () {
+    // Looking as someone else: this is his own phone's sign-up, not theirs.
+    if (window.YDAuth && YDAuth.lookingAs) { if (window.ydLookOnly) ydLookOnly(); return; }
     try {
       const reg = await navigator.serviceWorker.getRegistration();
       const sub = reg && await reg.pushManager.getSubscription();

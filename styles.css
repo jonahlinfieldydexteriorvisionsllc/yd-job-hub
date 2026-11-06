@@ -6297,3 +6297,15 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
 /* A once-a-year recurring task's checklist. */
 .rc-list { display: block; flex: 1 1 100%; width: 100%; font-size: 13px; margin-top: 6px; }
 .rc-list textarea { width: 100%; box-sizing: border-box; margin-top: 4px; }
+
+/* A material's own delivery, beside how it gets there. */
+.est-del-note { font-size: 12px; white-space: nowrap; }
+@media (max-width: 720px) { .est-del-note { white-space: normal; display: block; margin-top: 4px; } }
+
+/* Looking at Job Hub as someone else: a small pill, so the screen stays as they see it. */
+#lookBar { position: fixed; z-index: 100000; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 10px; padding: 5px 6px 5px 14px; border-radius: 24px; background: #2E2840; color: #fff;
+  box-shadow: 0 4px 14px rgba(0,0,0,.35); font-size: 13px; white-space: nowrap; max-width: calc(100vw - 24px); }
+#lookBar button { min-height: 36px; padding: 0 12px; border: 0; border-radius: 18px; background: #6EDDB0; color: #2E2840; font: 700 13px 'DM Sans', sans-serif; cursor: pointer; }
+@media (max-width: 1023px) { #lookBar { bottom: calc(74px + env(safe-area-inset-bottom, 0px)); } }
+@media print { #lookBar { display: none; } }

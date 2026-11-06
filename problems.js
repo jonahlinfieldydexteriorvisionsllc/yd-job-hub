@@ -132,7 +132,8 @@
   // is stamped at sending time; `who` still says who it happened to.
   function flush() {
     const u = me();
-    if (!window.YDDb || !u) return;
+    // Looking as someone else: left for his own view, under his own name.
+    if (!window.YDDb || !u || (window.YDAuth && YDAuth.lookingAs)) return;
     const q = readQueue();
     if (!q.length) return;
     writeQueue([]);
@@ -191,6 +192,7 @@
 
   window.addEventListener('unhandledrejection', e => {
     const r = e.reason;
+    if (r && r.code === 'looking') return;       // a save stopped on purpose (firebase-init.js lookAs)
     record('promise', (r && (r.code || r.message)) || String(r), (r && r.stack) || '');
   });
 

@@ -310,8 +310,11 @@
   function forgetUnsent(id) {
     if (unsent.delete(id)) saveUnsent();
   }
+  // Looking at Job Hub as someone else (firebase-init.js lookAs): nothing goes
+  // up, and his own unsent saves and deletes wait for his own view, untouched.
+  const justLooking = () => !!(window.YDAuth && window.YDAuth.lookingAs);
   function queuePush(id) {
-    if (!id || applyingRemote) return;
+    if (!id || applyingRemote || justLooking()) return;
     // Saved again after being deleted -- restored from a backup, say. The
     // save is the newer wish, so a delete still waiting to go out is dropped.
     if (pendingDeletes.delete(id)) savePendingDeletes();
@@ -464,6 +467,7 @@
     if (watching) sendDelete(id);
   }
   function sendDelete(id) {
+    if (justLooking()) return;
     // Not awaited: with no signal the promise only settles when the signal
     // returns, and Firestore holds the delete in its own queue until then.
     window.YDDb.removeJob(id)
@@ -551,6 +555,7 @@
 
   // Settles true once the server has the job, false if it could not be sent.
   async function pushNow(id) {
+    if (justLooking()) return false;
     // Someone allowed only to look at jobs never sends one up.
     if (!ydCan('jobs', 'change')) { forgetUnsent(id); return false; }
     const raw = readJobBlob(id);

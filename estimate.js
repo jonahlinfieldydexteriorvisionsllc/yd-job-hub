@@ -1432,6 +1432,29 @@
           esc(String(rulesWay(m, l).way === 'pickup' ? 'picked up' : 'delivered')) + ')</button>')
         : ' <span class="muted">' + esc(l.wayWhy) + '</span>') + '</span>';
   }
+  // Delivery on the product it belongs to (Jonah, 5 Nov 2026: "i want delivery
+  // charges when putting together a bid matched to their product"), not only
+  // in the one Delivery row at the foot. By line id: its share of the charge,
+  // by quantity when a delivery brings several lines, as customerLines splits
+  // it. Accepted in QuickBooks it is his cost, as that row says.
+  function deliveryShares(r) {
+    const out = {};
+    ((r.delivery && r.delivery.lines) || []).forEach(d => {
+      const parts = d.parts || [], all = parts.reduce((s, p) => s + p.qty, 0);
+      const whole = r.asAccepted ? d.costCents || 0 : d.clientCents || 0;
+      parts.forEach(p => {
+        const was = out[p.id] || { cents: 0, whole: 0, shared: false, free: true };
+        out[p.id] = { cents: was.cents + Math.round(all > 0 ? whole * p.qty / all : whole / parts.length), whole: was.whole + whole,
+                      shared: was.shared || parts.length > 1, free: was.free && !!d.free };
+      });
+    });
+    return out;
+  }
+  function deliveryNoteHtml(x) {
+    if (!x) return '';
+    return ' <span class="est-del-note">🚚 ' + (x.free ? 'Delivery free or in their prices'
+      : cents(x.cents) + ' delivery' + (x.shared ? ' <span class="muted">(its share of ' + cents(x.whole) + ')</span>' : '')) + '</span>';
+  }
   // What his rules alone would say for a line set by hand (the ↺ button).
   function rulesWay(m, l) {
     const c = catalog(), it = m.supplyId ? c.items[m.supplyId] : null;
@@ -1872,6 +1895,7 @@
         : ' <span class="est-low">— ' + perDay(usual - w.profitPerDayCents) + ' under your usual</span>';
       f.innerHTML = 'Makes <b>' + perDay(w.profitPerDayCents) + '</b> after the crew' + vs;
     });
+    const shares = deliveryShares(r);
     r.takeoff.forEach(l => {
       // Accepted in QuickBooks, a material's own line shows what it costs
       // him -- the customer's figure is the one for all of them.
@@ -1881,7 +1905,7 @@
       const tx = el('estMT_' + safeId(l.id));
       if (tx) tx.textContent = taxNote(l, r, typeof (find(est.materials, safeId(l.id)) || {}).taxable === 'boolean');
       const wy = el('estWY_' + safeId(l.id));
-      if (wy) wy.innerHTML = wayPickHtml(l, find(est.materials, safeId(l.id)), !changes());
+      if (wy) wy.innerHTML = wayPickHtml(l, find(est.materials, safeId(l.id)), !changes()) + deliveryNoteHtml(shares[l.id]);
       const o = el('estMO_' + safeId(l.id));
       if (o) {
         o.className = 'est-order' + (l.problems.length ? ' bad' : '');

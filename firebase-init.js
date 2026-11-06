@@ -24,6 +24,9 @@ import {
   terminate, clearIndexedDbPersistence, waitForPendingWrites, runTransaction,
 } from 'https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js';
 
+// The owner looking at Job Hub as someone else (app.js ydLookAs): whose, for
+// this tab only.
+const LOOK_KEY = 'ydjobhub_lookAs';
 const ROLE_CACHE = 'ydjobhub_cachedRole';
 const ACCESS_CACHE = 'ydjobhub_cachedAccess';
 // Whose role and access those two are. Without it, a role remembered for one
@@ -795,9 +798,71 @@ async function start() {
     // too, as one, until they have gone.
     track(waitForPendingWrites(db));
 
+    const lookAt = role === 'owner' ? lookingAt() : '';
+    if (lookAt) { lookAs(user, role, fromDevice, lookAt); return; }
     publish(user, role);
     console.info('[auth] signed in as', user.email, 'role', role, fromDevice ? '(from this device; checking)' : '');
     watchMyRecord(user, fromDevice);
+  }
+
+  // Job Hub as someone else sees it (Jonah, 5 Nov 2026: "an easy way to view
+  // what my crew member[s] view of the job hub looks like ... if they
+  // call me with an issue i can see what it looks like on their end"). The app
+  // is told it is them: their name, their role, their access, so every screen
+  // draws as it does on their phone. Reads still go as the owner, who may read
+  // all of it. Every write is cut off here, before anything is drawn: an allow
+  // list of the read calls, so a new write call can't slip past, and a server
+  // call has no token to go with. A stopped write is refused, not answered as
+  // done: what is queued on this device (a job saved with no signal, a photo)
+  // stays queued for his own view. Anyone but the owner never gets here, and
+  // firestore.rules decide what any account can do whatever this file says.
+  function lookingAt() {
+    try { return sessionStorage.getItem(LOOK_KEY) || ''; } catch (e) { return ''; }
+  }
+  async function lookAs(user, role, fromDevice, uid) {
+    const realDb = Object.assign({}, window.YDDb), realStore = Object.assign({}, window.YDStore);
+    const READS = /^(watch|list|get|count|pending)/;
+    const stopped = () => {
+      if (typeof window.ydLookOnly === 'function') window.ydLookOnly();
+      return Promise.reject(Object.assign(new Error('Just looking'), { code: 'looking' }));
+    };
+    Object.keys(window.YDDb).forEach(k => { if (!READS.test(k)) window.YDDb[k] = stopped; });
+    window.YDStore.upload = stopped;
+    window.YDStore.remove = stopped;
+    let rec = null;
+    try {
+      const snap = await getDoc(doc(db, 'users', uid));
+      rec = snap.exists() ? snap.data() : null;
+    } catch (e) { console.warn('[auth] could not read who to look as', e); }
+    const mine = myAccess;
+    const who = rec ? roleOf(rec) : '';
+    const access = Object.assign({}, myAccess);
+    myAccess = mine;
+    if (who !== 'admin' && who !== 'crew') {
+      // Gone, or switched off: back to his own view, with the writes back on.
+      Object.assign(window.YDDb, realDb);
+      Object.assign(window.YDStore, realStore);
+      try { sessionStorage.removeItem(LOOK_KEY); } catch (e) { /* this tab only anyway */ }
+      publish(user, role);
+      watchMyRecord(user, fromDevice);
+      return;
+    }
+    const name = String(rec.name || rec.email || 'them');
+    window.YDAuth = {
+      ready: true, mode: 'cloud', role: who, db, auth,
+      user: { uid: uid, email: String(rec.email || ''), displayName: name,
+              getIdToken: () => Promise.reject(new Error('Just looking')) },
+      signIn: doSignIn,
+      signOut: () => signOut(auth),
+      isOwner: false,
+      isAdmin: who === 'admin',
+      access: access,
+      can: canFor(who, access),
+      key: uid + ':' + who + ':' + JSON.stringify(access),
+      lookingAs: { uid: uid, name: name },
+    };
+    document.dispatchEvent(new CustomEvent('yd-auth', { detail: window.YDAuth }));
+    document.dispatchEvent(new CustomEvent('yd-my-record', { detail: rec }));
   }
 
   // Tell the rest of the app who is signed in and what they may do.
@@ -878,6 +943,7 @@ async function start() {
   //    shared phone after they signed out.
   const pause = ms => new Promise(r => setTimeout(() => r(false), ms));
   async function signOutFully() {
+    try { sessionStorage.removeItem(LOOK_KEY); } catch (e) { /* this tab only anyway */ }
     // 0. Anything held back for a moment (a clock-out waiting out its Undo,
     //    timeclock.js) is written first, so the wait below covers it too.
     for (const flush of (window.YDSignOutFlush || [])) {
