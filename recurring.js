@@ -15,7 +15,9 @@
 // is shared with reads it -- the calendar draws every date from it, weeks
 // ahead, for the crew too -- and only whoever may change boards edits it.
 //   every: 'week' (due Friday) | 'twice' (due the 15th and the month's last
-//   day) | 'month' (due the last day) | 'days' (every N days from `from`).
+//   day) | 'month' (due the last day) | 'days' (every N days from `from`) |
+//   'year' (due `on`, 'MM-DD', its card up YEAR_LEAD_DAYS before; Jonah's two
+//   season change-over lists, 5 Nov 2026, and `list`, its checklist's lines).
 //   season: 'all' | 'season' (1 Apr - 31 Oct only).
 // Until 7 Oct it lived in settings/recurring (the owner's alone) with its cards
 // on the Maintenance board; the owner's device moves it over once.
@@ -39,7 +41,9 @@
   const MAINT = 'maintenance';           // where the cards used to go
   const LABEL = { id: 'recurring', name: 'Recurring', color: '#2a9d8f' };
   const EVERY = [['week', 'Every week (due Friday)'], ['twice', 'Twice a month (15th and month end)'],
-                 ['month', 'Every month (month end)'], ['days', 'Every so many days']];
+                 ['month', 'Every month (month end)'], ['days', 'Every so many days'],
+                 ['year', 'Once a year']];
+  const YEAR_LEAD_DAYS = 21;
   // What Jonah asked for, one press away on the list screen.
   const ASKED_FOR = [
     { what: 'Truck through the car wash', every: 'twice', season: 'all' },
@@ -91,6 +95,15 @@
       const due = new Date(start); due.setDate(start.getDate() + 6);                      // Friday
       return { start: ymd(start), due: ymd(due) };
     }
+    if (t.every === 'year') {
+      const md = /^\d{2}-\d{2}$/.test(t.on || '') ? t.on : '01-01';
+      const y = d.getFullYear();
+      const due = y + '-' + md >= day ? y + '-' + md : (y + 1) + '-' + md;
+      const start = new Date(due + 'T00:00:00');
+      start.setDate(start.getDate() - YEAR_LEAD_DAYS);
+      // Not yet: a card a year ahead is no use to anyone.
+      return day < ymd(start) ? null : { start: ymd(start), due: due };
+    }
     const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
     if (t.every === 'twice') {
       return d.getDate() <= 15
@@ -109,8 +122,10 @@
     }
     return null;
   }
+  const monthDay = md => new Date('2024-' + (md || '01-01') + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   function everyText(t) {
     if (t.every === 'days') return 'every ' + (parseInt(t.days, 10) || 7) + ' days';
+    if (t.every === 'year') return 'every year, due ' + monthDay(t.on);
     return ({ week: 'every week, due Friday', twice: 'twice a month', month: 'every month' })[t.every] || '';
   }
 
@@ -212,6 +227,7 @@
       const card = {
         title: t.what, due: p.due, column: first, order: (order += 1000), notes: notes(t, machine),
         labels: [LABEL.id], recurring: id, machineId: t.machineId || null, confirmedAt: null,
+        checklist: (Array.isArray(t.list) ? t.list : []).map((text, i) => ({ id: 'rl' + i, text: text, done: false })),
         noClaude: true,               // the crew's to do, not Claude's (cards.py skips it too)
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), updatedBy: 'Recurring',
       };
@@ -346,13 +362,17 @@
           '<select onchange="rcSet(\'' + sid + '\', \'every\', this.value)">' + EVERY.map(([k, n]) =>
             '<option value="' + k + '"' + (t.every === k ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>' +
           (t.every === 'days' ? '<label>days <input class="rc-days" inputmode="numeric" value="' + esc(t.days || 7) + '" onchange="rcSet(\'' + sid + '\', \'days\', this.value)"></label>' : '') +
+          (t.every === 'year' ? '<label>due <input type="date" value="' + new Date().getFullYear() + '-' + esc(t.on || '01-01') + '" onchange="rcSet(\'' + sid + '\', \'on\', this.value.slice(5))"></label>' : '') +
           '<select onchange="rcSet(\'' + sid + '\', \'season\', this.value)">' +
             '<option value="all"' + (t.season !== 'season' ? ' selected' : '') + '>All year</option>' +
             '<option value="season"' + (t.season === 'season' ? ' selected' : '') + '>Apr–Oct only</option></select>' +
           '<select title="Machine (optional)" onchange="rcSet(\'' + sid + '\', \'machineId\', this.value)">' + machineOptions(t.machineId) + '</select>' +
           '<label class="chk"><input type="checkbox"' + (t.off ? '' : ' checked') + ' onchange="rcSet(\'' + sid + '\', \'off\', !this.checked)"> On</label>' +
           '<button class="remove-btn" onclick="rcRemove(\'' + sid + '\')" title="Remove">&times;</button>' +
-          '<div class="muted rc-next">' + (t.off ? 'Off' : p ? 'This one due ' + new Date(p.due + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : 'Not in season now') + '</div>' +
+          '<div class="muted rc-next">' + (t.off ? 'Off' : p ? 'This one due ' + new Date(p.due + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+            : t.every === 'year' ? 'Its card goes up ' + YEAR_LEAD_DAYS + ' days before ' + monthDay(t.on) : 'Not in season now') + '</div>' +
+          (t.every === 'year' ? '<label class="rc-list">Its checklist, a line each<textarea rows="5" onchange="rcSet(\'' + sid + '\', \'list\', this.value)">' +
+            esc((Array.isArray(t.list) ? t.list : []).join('\n')) + '</textarea></label>' : '') +
         '</div>';
       }).join('') : '<p class="empty-msg">No recurring tasks yet.</p>') +
       '<div class="field-actions">' +
@@ -373,10 +393,12 @@
   window.rcSet = function (id, field, v) {
     const tasks = tasksNow();
     if (!owner() || !tasks[id]) return;
-    const val = field === 'off' ? !!v : field === 'days' ? Math.max(1, parseInt(v, 10) || 7) : field === 'machineId' ? (v || null) : String(v || '').trim();
+    const val = field === 'off' ? !!v : field === 'days' ? Math.max(1, parseInt(v, 10) || 7) : field === 'machineId' ? (v || null)
+      : field === 'list' ? String(v || '').split('\n').map(s => s.trim()).filter(Boolean) : String(v || '').trim();
     if (field === 'what' && !val) { showToast('Say what the task is'); renderList(); return; }
     const t = Object.assign({}, tasks[id], { [field]: val });
     if (field === 'every' && val === 'days' && !t.from) t.from = ymd(new Date());
+    if (field === 'every' && val === 'year' && !t.on) t.on = ymd(new Date()).slice(5);
     save({ [id]: t });
     renderList(); sync(); redrawCalendar();
   };

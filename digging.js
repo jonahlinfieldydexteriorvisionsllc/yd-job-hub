@@ -79,11 +79,22 @@
   function jobOf(id) {
     try { return JSON.parse(readJobBlob(id) || 'null'); } catch (e) { return null; }
   }
+  // Turf laid on a slab digs nothing (Jonah, 5 Nov 2026: "were installing turf
+  // on concrete so it shouldnt be asking me to get a dig ticket"), and turf on
+  // gravel digs out for its base. The title says "turf" both ways, so when it
+  // is the only digging word the scope tells them apart. Keep the same in
+  // functions/followup.py.
+  const ON_SLAB = /\b(?:on|over|onto|atop)\s+(?:(?:the|an?|your|their|existing|old)\s+)*(?:\S+\s+)?(?:concrete|slab)\b|\bconcrete\s+(?:play\s+area|slab|pad)\b|\bslab\b/i;
+  const DUG = /\b(?:excavat\w*|dig\w*|compacted\s+gravel|gravel\s+base)\b/i;
   function digs(d) {
     if (!d) return false;
-    const words = [].concat(d.serviceTypes || [], (((d.estimate || {}).work) || []).map(w => (w && w.title) || ''), d.crewWhat || '')
+    const work = ((d.estimate || {}).work) || [];
+    const words = [].concat(d.serviceTypes || [], work.map(w => (w && w.title) || ''), d.crewWhat || '')
       .join(' · ');
-    return DIGS.test(words);
+    if (!DIGS.test(words)) return false;
+    if (DIGS.test(words.replace(/\bturf\b/ig, ' '))) return true;
+    const said = work.map(w => (w && w.scope) || '').concat(d.crewWhat || '').join(' ');
+    return !ON_SLAB.test(said) || DUG.test(said);
   }
   // Its tickets, newest start first.
   function forJob(jobId) {
@@ -228,6 +239,13 @@
         const t = current(j.id);
         // The ticket came in: its to-do is done.
         if (t && !t.lapsed && k && k.cardId) {
+          const c = cardNow(j.id);
+          if (c && !cardDone(c) && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true, true);
+          continue;
+        }
+        // A job that turns out to dig nothing: its to-do goes, as "No ticket
+        // needed" does, or it sits open with nothing to tick it off.
+        if (k && k.cardId && !k.none && !t && !digs(d)) {
           const c = cardNow(j.id);
           if (c && !cardDone(c) && YDBoards.setDone) YDBoards.setDone(TODO, k.cardId, true, true);
           continue;

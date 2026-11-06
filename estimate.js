@@ -3130,7 +3130,7 @@
     const said = auto ? (on ? (qb() && qb().snowBid ? 'sent as one' : 'from the services') : '')
       : 'set by hand' + (ro ? '' : ' · <button type="button" class="link-btn" onclick="estSnowBid(null)">let the services decide</button>');
     return '<div class="snb-toggle"><label class="est-switch"><input type="checkbox"' + (on ? ' checked' : '') + (ro ? ' disabled' : '') +
-      ' onchange="estSnowBid(this.checked)"> ❄️ Snow bid — priced per push</label>' +
+      ' onchange="estSnowBid(this.checked)"> ❄️ Snow bid</label>' +
       (said ? '<span class="muted">' + said + '</span>' : '') + '</div>';
   }
 
@@ -3205,7 +3205,7 @@
           ' oninput="estSnowSet(\'other\', \'\', this.value)">' +
         (!ro && String(est.notes || '').trim() ? '<button type="button" class="link-btn" onclick="estDraftFromNotes()">Pick them from my notes</button>' : '') + '</div>' +
 
-      '<h4 class="est-h">Price per push <span class="muted">— per visit, each snowfall</span></h4>' +
+      '<h4 class="est-h">How it’s priced <span class="muted">— each visit, each snowfall</span></h4>' +
       '<div class="stage-steps snb-modes">' +
         snowChip(s.mode === 'tiers', "estSnowTap('mode', 'tiers')", 'By depth — 1–3", 3–6"…', ro) +
         snowChip(s.mode === 'perInch', "estSnowTap('mode', 'perInch')", '1–3" + each inch over 3"', ro) + '</div>' +
@@ -3316,7 +3316,7 @@
     if (on === null) delete est.snowBid;
     else {
       if (on && hasLines() && !(await ydConfirm('Its labor and materials lines are kept — left off while it’s a snow bid, and back if you switch it off.',
-        { title: 'Make this a snow bid, priced per push?', ok: 'Make it a snow bid' }))) { render(); return; }
+        { title: 'Make this a snow bid?', ok: 'Make it a snow bid' }))) { render(); return; }
       if (est !== was) return;
       est.snowBid = !!on;
     }

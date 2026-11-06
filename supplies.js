@@ -553,6 +553,9 @@
           (x.c.unsure ? ' <span class="warn-text">(it doesn’t say per what — check)</span>' : '') +
           ' · price list: ' + cash(mine) + (x.pr.per ? '/' + esc(x.pr.per) : '') +
           (x.pr.asOf ? ' <span class="muted">(set ' + esc(x.pr.asOf) + ')</span>' : '') + '</div>' +
+        // A page with sizes on it (Jonah, 5 Nov 2026: "verify which measurements
+        // option so i can verify price"): which one this price is for.
+        (x.c.option ? '<div>On the page, pick: <b>' + esc(x.c.option) + '</b></div>' : '') +
         '<div class="muted">' + esc([x.c.vendor, x.c.orderNo ? '#' + x.c.orderNo : '', day, x.c.where].filter(Boolean).join(' · ')) +
           (x.c.link ? ' · <a class="link-btn" href="' + esc(x.c.link) + '" target="_blank" rel="noopener">' +
             (fromSite(x.c) ? 'the product page' : 'the email') + '</a>' : '') + '</div>' +

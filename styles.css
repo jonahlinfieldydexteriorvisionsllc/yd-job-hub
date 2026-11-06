@@ -6278,3 +6278,22 @@ html[data-night] .eq-cat-btn.on { background:var(--brand-2); border-color:var(--
 .bills-stopped { margin: 12px 0; }
 .bills-stopped > summary { padding: 12px 0; min-height: 44px; box-sizing: border-box; cursor: pointer; font-weight: 600; }
 .bills-places .btn { min-height: 44px; }
+
+/* Bids on a screen of their own: the board's own heading is the screen's. */
+html[data-bids-page] #panel-boards .section-head { display: none; }
+
+/* The bids being worked up, top of Home: two or three across on a wide screen. */
+.hm-bidsnow { margin-bottom: 14px; }
+.hm-bidsnow .hm-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); column-gap: 18px; }
+.hm-bidsnow .hm-more { grid-column: 1 / -1; }
+
+/* For Claude, on a to-do card. */
+.bd-for-claude { margin-top: 2px; }
+
+/* A card to another board. */
+.bd-to-board { margin-top: 10px; }
+.bd-to-board > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-weight: 600; font-size: 13px; }
+
+/* A once-a-year recurring task's checklist. */
+.rc-list { display: block; flex: 1 1 100%; width: 100%; font-size: 13px; margin-top: 6px; }
+.rc-list textarea { width: 100%; box-sizing: border-box; margin-top: 4px; }

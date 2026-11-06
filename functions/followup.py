@@ -1588,6 +1588,9 @@ WELCOME_FOOT = "I look forward to working with you!"
 DIGS = re.compile(r"\b(walls?|retaining|pavers?|patios?|drain\w*|trench\w*|light\w*|trees?|plant\w*|shrubs?|excavat\w*|"
                   r"footings?|posts?|fenc\w*|grad(?:e|ing)|fire ?pits?|walkways?|paths?|steps|edging|boulders?|sod|"
                   r"irrigat\w*|french|dig\w*|stump|turf|grading|garden|beds?|window ?wells?)\b", re.I)
+ON_SLAB = re.compile(r"\b(?:on|over|onto|atop)\s+(?:(?:the|an?|your|their|existing|old)\s+)*(?:\S+\s+)?(?:concrete|slab)\b"
+                     r"|\bconcrete\s+(?:play\s+area|slab|pad)\b|\bslab\b", re.I)
+DUG = re.compile(r"\b(?:excavat\w*|dig\w*|compacted\s+gravel|gravel\s+base)\b", re.I)
 
 
 def _welcome_body(materials, digs):
@@ -1603,9 +1606,17 @@ WELCOME_BODY = _welcome_body(True, True)
 def _digs(j):
     """digging.js digs(): its services, its work lines' titles, what the crew are told."""
     est = j.get("estimate") or {}
-    words = list(j.get("serviceTypes") or []) + [str((w or {}).get("title") or "") for w in (est.get("work") or [])]
+    work = est.get("work") or []
+    words = list(j.get("serviceTypes") or []) + [str((w or {}).get("title") or "") for w in work]
     words.append(str(j.get("crewWhat") or ""))
-    return bool(DIGS.search(" · ".join(str(w) for w in words)))
+    text = " · ".join(str(w) for w in words)
+    if not DIGS.search(text):
+        return False
+    if DIGS.search(re.sub(r"\bturf\b", " ", text, flags=re.I)):
+        return True
+    # Turf is the only digging word: on a slab it digs nothing (digging.js).
+    said = " ".join([str((w or {}).get("scope") or "") for w in work] + [str(j.get("crewWhat") or "")])
+    return not ON_SLAB.search(said) or bool(DUG.search(said))
 
 
 def _has_materials(j):

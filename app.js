@@ -784,7 +784,9 @@ function openMore() {
   const crew = crewView();
   const hints = crew ? TAB_HINT_CREW : TAB_HINT;
   const log = document.getElementById('menuChangeLog');
-  const extras = [].concat(owner && typeof window.openPosts === 'function'
+  const extras = [].concat(typeof ydCan === 'function' && ydCan('jobs', 'see')
+    ? [{ label: '📝 Bids', hint: SIDEBAR_PLACES.bids.hint, call: "closeMore(); homeBoard('bids')" }]
+    : []).concat(owner && typeof window.openPosts === 'function'
     ? [{ label: '📣 Posts', hint: 'What goes up on Facebook, Google and Nextdoor, and when', call: 'closeMore(); openPosts()' }]
     : []).concat(signedIn && typeof window.openServices === 'function'
     ? [(owner
@@ -991,6 +993,9 @@ function switchTab(name) {
   const toMaterials = name === 'matdash';
   if (toMaterials) name = 'supplies';
   closeMore();
+  // The Boards tab always means the boards; the Bids line opens its own
+  // screen after this (home.js homeBoard).
+  if (name === 'boards' && window.YDBoards && YDBoards.leaveBids) YDBoards.leaveBids();
   // Which screen was showing: a new one opens at its top. Without this a tab
   // opened wherever the last one had been scrolled to -- halfway down an
   // empty page, or past the part that matters. The same tab tapped again
@@ -6569,6 +6574,45 @@ document.addEventListener('click', e => {
   try { box.showPicker(); } catch (err) { /* already open, or not allowed here: the box still works */ }
 });
 
+// Enter saves (Jonah, 5 Nov 2026: "i want to be able to use enter to save not
+// always have to scroll down even for the boardsettings and anywhere else enter
+// could be utilized"). In a box of one line, the nearest plain Save for it is
+// pressed, in the window it is in or the section it is in. Not on a touch screen,
+// where Return only closes the keyboard and half a form would save itself; not
+// where a box has its own Enter (a list open under it, the card's title, the
+// boxes that say so in their onkeydown), which would save twice; not in a search
+// box; not on the Job tab, which saves itself as he types. Only the exact words
+// below and a question's own OK: "Save these changes" on a price list, or
+// anything that sends, stays a press of the button.
+(function enterSaves() {
+  const SAVES = /^[^a-z0-9]*(save( (note|the note|the lead|account|them|this date|the times))?|done|add it|add to the list|ok)$/i;
+  const LINE = ['text', 'number', 'email', 'tel', 'url', 'date', 'time', 'month', 'datetime-local', 'password', ''];
+  const showing = b => !b.disabled && !b.hidden && b.offsetParent !== null;
+  function saveFor(box) {
+    const ask = box.closest('.ask-overlay');
+    if (ask) return ask.querySelector('.ask-actions .btn-filled');
+    const top = box.closest('.modal-overlay, .section, .tab-panel');
+    for (let n = box.parentElement; n; n = n.parentElement) {
+      const hit = Array.from(n.querySelectorAll('button.btn-filled')).filter(b => showing(b) && SAVES.test(b.textContent.trim())).pop();
+      if (hit) return hit;
+      if (n === top) return null;
+    }
+    return null;
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target;
+    if (!t || t.tagName !== 'INPUT' || LINE.indexOf((t.getAttribute('type') || '').toLowerCase()) === -1) return;
+    if (window.matchMedia && matchMedia('(pointer: coarse)').matches) return;
+    if (t.closest('#panel-job, [data-no-enter]') || t.hasAttribute('onkeydown') || t.onkeydown) return;
+    if (t.type === 'search' || /search|find/i.test(t.id + ' ' + (t.placeholder || ''))) return;
+    const b = saveFor(t);
+    if (!b) return;
+    e.preventDefault();
+    b.click();
+  });
+})();
+
 (function guardWindows() {
   let pressedOn = null;
   document.addEventListener('pointerdown', e => { pressedOn = e.target; }, true);
@@ -6999,7 +7043,7 @@ const SIDEBAR_GROUPS = [
 const SIDEBAR_PLACES = {
   bids: { tab: 'boards', icon: '📝', label: 'Bids', hint: 'Every bid, by where it stands', go: "homeBoard('bids')",
     shows: () => typeof ydCan === 'function' && ydCan('jobs', 'see'),
-    on: () => !!(window.YDBoards && YDBoards.currentId && YDBoards.currentId() === 'bids') },
+    on: () => !!(window.YDBoards && YDBoards.onBidsPage && YDBoards.onBidsPage()) },
 };
 function sidebarStored(key) {
   try { return localStorage.getItem(key) === '1'; } catch (e) { return false; }

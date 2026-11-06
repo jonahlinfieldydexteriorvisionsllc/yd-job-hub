@@ -1052,16 +1052,34 @@
     return { open, yes, no, drafted, chase, waiting, toSend, toDo };
   }
 
-  function bidsHtml(all) {
+  const bidRow = (j, words, late) => '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
+    '<span class="hm-job-m">' + jobNameHtml(nameOf(j), numOf(j)) +
+      (words ? '<small class="hm-when' + (late ? ' late' : '') + '">' + esc(words) + '</small>' : '') + '</span>' +
+    '<span class="hm-job-r">' + (priceOf(j) ? '<span class="hm-money">' + fmtMoney(priceOf(j)) + '</span>' : '') + '</span></button>';
+
+  // The bids still being worked up, at the very top of his Home (Jonah, 5 Nov
+  // 2026: "bids im working on need to be visible at the top of my home page"):
+  // what hasn't gone to the customer yet, the one closest to going first. They
+  // leave the Bids card further down, so a bid is listed once.
+  function bidsNowHtml(all) {
     const g = seesJobs() ? bidGroups(all) : null;
     if (!g) return '';
-    const { open, yes, drafted, chase, waiting, toDo } = g;
-    const toSend = g.toSend || [];
+    const rows = g.drafted.map(j => bidRow(j, 'Estimate ready — check it & send'))
+      .concat((g.toSend || []).map(j => bidRow(j, servicesOf(j) || 'Bid to send')))
+      .concat(g.toDo.map(j => bidRow(j, servicesOf(j) || 'Site visit')));
+    return rows.length ? '<div class="hm-bidsnow">' + card('bidsnow', '✏️ Bids you’re working on', rows.length,
+      ['Bids', "homeBoard('bids')"], capped('bidNow', rows, 6), true) + '</div>' : '';
+  }
+
+  // shownAbove: bidsNowHtml has the ones not sent yet.
+  function bidsHtml(all, shownAbove) {
+    const g = seesJobs() ? bidGroups(all) : null;
+    if (!g) return '';
+    const { open, yes, chase, waiting } = g;
+    const drafted = shownAbove ? [] : g.drafted, toDo = shownAbove ? [] : g.toDo;
+    const toSend = shownAbove ? [] : g.toSend || [];
     const bc = j => B().bidColumn(j);
-    const row = (j, words, late) => '<button class="hm-job" onclick="homeOpenJob(\'' + safe(j._id) + '\')">' +
-      '<span class="hm-job-m">' + jobNameHtml(nameOf(j), numOf(j)) +
-        (words ? '<small class="hm-when' + (late ? ' late' : '') + '">' + esc(words) + '</small>' : '') + '</span>' +
-      '<span class="hm-job-r">' + (priceOf(j) ? '<span class="hm-money">' + fmtMoney(priceOf(j)) + '</span>' : '') + '</span></button>';
+    const row = bidRow;
     const sentWords = j => { const d = daysSince(j.bidStageAt || j.lastModified); return d == null ? '' : 'Sent ' + ago(d); };
     // Bids the customer turned down in QuickBooks, when the Bids board
     // sorts them out (boards.js: `no`, not in any group below) -- listed so
@@ -1079,7 +1097,7 @@
       (no.length ? sub('✖ Turned down in QuickBooks', no.length) +
         capped('bidN', no.map(j => row(j, 'Open it to mark it lost, or follow up'))) : '');
     const needs = yes.length + drafted.length + toSend.length + chase.length;
-    return card('bids', '📋 Bids', needs ? needs + ' need you' : open.length || '', ['Bids board', "homeBoard('bids')"], body, needs > 0);
+    return card('bids', '📋 Bids', needs ? needs + ' need you' : open.length || '', ['Bids', "homeBoard('bids')"], body, needs > 0);
   }
 
   // What is waiting on this person: notes from the crew, hours to look at,
@@ -1342,9 +1360,9 @@
     if (!crewish && isOwner()) {
       const side = [nextdoorHtml(), waitingHtml(), notesHtml(), clockHtml(), eodHtml()].filter(Boolean).join('');
       const day = myDayHtml(d);
-      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + scheduleHtml(d) + statsHtml(all) +
+      return greetingHtml() + actionsHtml() + stormHtml() + stormWatchHtml() + bidsNowHtml(all) + scheduleHtml(d) + statsHtml(all) +
         '<div class="hm-lead"><div class="hm-lead-side">' + side + '</div>' + day + '</div>' +
-        '<div class="hm-grid">' + [crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all), equipmentHtml()]
+        '<div class="hm-grid">' + [crewDayHtml(d), jobsHtml(all), invoiceHtml(all), bidsHtml(all, true), equipmentHtml()]
           .filter(Boolean).join('') + '</div>';
     }
     const cards = crewish
@@ -1475,7 +1493,8 @@
   };
   window.homeBoard = function (id) {
     switchTab('boards');
-    if (window.showBoard) showBoard(id);
+    if (id === 'bids' && window.YDBoards && YDBoards.openBids) YDBoards.openBids();
+    else if (window.showBoard) showBoard(id);
   };
   // A job, on the Job tab -- the same way the calendar and the boards open
   // one: the job already in the form is just shown (loading it again would

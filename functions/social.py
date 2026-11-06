@@ -610,10 +610,14 @@ def yard_talk(cfg, used_ideas, now):
         link = str(item.findtext("link") or "").strip()
         m = YARD_TALK_LINK.match(link)
         try:
-            when = email.utils.parsedate_to_datetime(str(item.findtext("pubDate") or "")).astimezone(dg.TZ)
+            stamped = email.utils.parsedate_to_datetime(str(item.findtext("pubDate") or ""))
         except (TypeError, ValueError):
             continue
-        if not (title and m) or when > now or when.date().isoformat() < cut:
+        when = stamped.astimezone(dg.TZ)
+        # The cut goes by the date on the post, which is the feed's own: a post
+        # dated the 4th reads as the evening of the 3rd in Madison's time, and
+        # all four of the first batch were passed over that way.
+        if not (title and m) or when > now or stamped.date().isoformat() < cut:
             continue
         iid = "yt-" + m.group(1)[:100]
         if all(iid in used_ideas[p] for p in places):

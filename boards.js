@@ -95,6 +95,7 @@
   let cards = {};           // boardId -> { cardId -> card }
   let people = {};          // owner only: uid -> user record
   let current = null;       // the board on screen
+  let bidsPage = false;     // the Bids line's own screen (openBids)
   let openCard = null;      // { boardId, cardId } of the card being viewed
   let editingBoard = null;  // board id being edited, '' for a new one
   let unsubBoards = null, unsubPeople = null;
@@ -116,6 +117,7 @@
   const MAINTENANCE = 'maintenance';
   const CREW_BOARD = 'crew';         // Crew tasks: where the recurring crew tasks go (recurring.js)
   const PICKUPS_BOARD = 'pickups';   // made by the server from "ready for pickup" emails (receipts.py)
+  const TODO_BOARD = 'todo';         // My to-dos
   const CHANGE_ORDERS = 'changeorders';   // its cards and window are changeorders.js's
 
   const el = id => document.getElementById(id);
@@ -510,6 +512,10 @@
     }
     if (!current || !boardById(current)) current = rememberedBoard(list);
     const board = boardById(current);
+    // Arrived by the Bids line: bids and nothing else, no Boards heading and
+    // no row of boards over them.
+    const onBids = bidsPage && board.id === 'bids';
+    document.documentElement.toggleAttribute('data-bids-page', onBids);
     refreshComputer();
     // The Bids board looked at: QuickBooks asked now whether any bid has
     // been emailed or answered (app.js bidsFromQbNow -- a few minutes apart).
@@ -517,8 +523,7 @@
     if (board.id === 'bids' && shown && shown.classList.contains('active') && typeof bidsFromQbNow === 'function') bidsFromQbNow();
 
     wrap.innerHTML =
-      computerLine() +
-      pickerHtml(list, board) +
+      (onBids ? '' : computerLine() + pickerHtml(list, board)) +
       '<div class="bd-head" style="--c:' + safeColor(board.color) + '">' +
         '<div class="bd-title">' + esc(board.name) + '</div>' +
         '<div class="bd-sub">' + boardSubtitle(board) + '</div>' +
@@ -1109,9 +1114,10 @@
   // as cleared on the board, so a "still waiting" reminder for an order
   // already picked up does not put its card back (receipts.py; tidy.py does
   // the same). Kept a couple of months -- reminders come within days.
-  function deleteCards(board, ids) {
-    // Their attached files go too (bdFilesPicked).
-    dropCardFiles([].concat.apply([], ids.map(id => cardFiles((cards[board.id] || {})[id]))));
+  function deleteCards(board, ids, keepFiles) {
+    // Their attached files go too (bdFilesPicked), unless the card is only
+    // moving to another board and they go with it.
+    if (!keepFiles) dropCardFiles([].concat.apply([], ids.map(id => cardFiles((cards[board.id] || {})[id]))));
     ids.forEach(id => { if (cards[board.id]) delete cards[board.id][id]; });
     Promise.resolve(window.YDDb.removeMany(ids.map(id => ['boards/' + board.id + '/cards', id])))
       .catch(e => showToast(e && e.code === 'permission-denied' ? 'Not allowed to delete that' : 'Not deleted yet — will retry'));
@@ -1126,6 +1132,56 @@
     cardsChanged();
     render();
   }
+
+  // A card to another board (Jonah, 5 Nov 2026: "make it easy to move a card
+  // from one board to another"), whole: its notes, checklist, people, files and
+  // Claude's talk go with it. Into the column of the same name if the board has
+  // one, else the first. A label belongs to its board, so it stays behind, but
+  // for 👷 Crew, which is how the crew see a card. Only cards people made (ids
+  // from newId): Job Hub finds its own by id on their board (the Diggers to-do,
+  // a machine's card, a recurring task's, a bill's) and would make them again.
+  function moveTargets(board, k) {
+    if (!editsBoard(board) || board.id === CHANGE_ORDERS || k.recurring || !/^cd/.test(String(k.id || ''))) return [];
+    return visibleBoards().filter(b => b.id !== board.id && !b.virtual && editsBoard(b) && b.id !== CHANGE_ORDERS && !/^inbox/.test(b.id));
+  }
+  function moveBoardHtml(board, k) {
+    const list = moveTargets(board, k);
+    return list.length ? '<details class="bd-to-board"><summary>⇄ Move to another board</summary><div class="bd-move">' +
+      list.map(b => '<button class="bd-move-btn" style="--c:' + safeColor(b.color) + '" onclick="cardToBoard(\'' + safeId(b.id) + '\')">' +
+        esc(b.name) + '</button>').join('') + '</div></details>' : '';
+  }
+  // There first, then off the old board once the server has it: a move that
+  // was refused must not lose the card. Shown in its new place straight away;
+  // with no signal both happen when it's back.
+  function cardAcross(from, to, id, rec, back) {
+    cards[to.id] = cards[to.id] || {};
+    cards[to.id][id] = Object.assign({ id: id }, rec);
+    if (cards[from.id]) delete cards[from.id][id];
+    render(); cardsChanged();
+    Promise.resolve(window.YDDb.put('boards/' + to.id + '/cards', id, rec))
+      .then(() => deleteCards(from, [id], true))
+      .catch(e => {
+        delete cards[to.id][id];
+        cards[from.id] = cards[from.id] || {};
+        cards[from.id][id] = Object.assign({ id: id }, back);
+        render(); cardsChanged();
+        showToast(e && e.code === 'permission-denied' ? 'Not moved — not allowed on that board' : 'Not moved — try again');
+      });
+  }
+  window.cardToBoard = function (toId) {
+    const board = openCard && boards[openCard.boardId], k = board && (cards[board.id] || {})[openCard.cardId], to = boards[toId];
+    if (!k || !to || moveTargets(board, k).indexOf(to) === -1) return;
+    const was = Object.assign({}, k), id = was.id;
+    delete was.id;
+    const name = (board.columns.find(c => c.id === k.column) || {}).name;
+    const col = (to.columns.find(c => c.name === name) || to.columns[0]).id;
+    const rec = Object.assign({}, was, { column: col, order: startOrder(to.id, col),
+      labels: (was.labels || []).filter(l => l === CREW_LABEL.id || (to.labels || []).some(x => x.id === l)),
+      doneAt: col === doneColOf(to) ? was.doneAt || nowIso() : null, updatedAt: nowIso(), updatedBy: myName() });
+    window.closeBoardModal();
+    cardAcross(board, to, id, rec, was);
+    showUndo('Moved to ' + to.name, () => cardAcross(to, board, id, was, rec), 9000);
+  };
 
   // A card's own 🗑, right on the board (Jonah, 13 Oct: "all cards should
   // have a delete button visible without actually clicking edit"). Not on a
@@ -1786,6 +1842,7 @@
         esc(k.title || 'Untitled') + '</div></div>' +
       (k.jobName ? '<div class="bd-card-line">📋 ' + esc(k.jobName) +
         (jobNumOf(k) ? ' <span class="job-num">#' + esc(jobNumOf(k)) + '</span>' : '') + '</div>' : '') +
+      (board.id === TODO_BOARD && !inLastColumn ? forClaudeLine(board, k) : '') +
       // Finished: said with a tick, not by striking the title through -- a
       // struck grey title in Done (or Built) was hard to read at all.
       (inLastColumn ? '<div class="bd-card-line bd-done-by"><span class="bd-done-tick">✓</span> ' +
@@ -1872,15 +1929,37 @@
   function rememberedBoard(list) {
     let id = null;
     try { id = localStorage.getItem('ydjobhub_board'); } catch (e) {}
-    return (id && list.some(b => b.id === id)) ? id : list[0].id;
+    // Bids have their own screen now, so Boards doesn't open on them.
+    if (id && id !== 'bids' && list.some(b => b.id === id)) return id;
+    return (list.find(b => b.id !== 'bids') || list[0]).id;
   }
   window.showBoard = function (id) {
+    bidsPage = false;
     current = id;
     groupOpen = '';
     try { localStorage.setItem('ydjobhub_board', id); } catch (e) {}
     render();
     document.dispatchEvent(new CustomEvent('yd-board-shown'));
   };
+
+  // Bids as a screen of their own (Jonah, 5 Nov 2026: "bids tab takes me to the
+  // board page for some reason"). The same board, so everything on it works the
+  // same, with the Boards screen around it taken away. Not remembered as the
+  // last board: Boards opens where it was left.
+  function openBids() {
+    bidsPage = true;
+    current = 'bids';
+    groupOpen = '';
+    render();
+    document.dispatchEvent(new CustomEvent('yd-board-shown'));
+  }
+  // The Boards tab asked for: back to the boards, on the one last looked at.
+  function leaveBids() {
+    if (!bidsPage) return;
+    bidsPage = false;
+    current = null;
+    document.dispatchEvent(new CustomEvent('yd-board-shown'));
+  }
 
   // ---------------------------------------------------------- drag and drop
   //
@@ -2441,6 +2520,7 @@
         '<button class="bd-move-btn' + (c.id === here ? ' on' : '') + '" style="--c:' + safeColor(board.color) + '" ' +
         (c.id === here ? 'disabled' : 'onclick="moveCardFromSheet(\'' + safeId(c.id) + '\')"') +
         '>' + esc(c.name) + '</button>').join('') + '</div>' +
+      moveBoardHtml(board, k) +
       (inDone && doneLine(k) ? '<div class="hint">' + esc(doneLine(k)) + '</div>'
         : k.updatedBy ? '<div class="hint">Last moved by ' + esc(k.updatedBy) + '</div>' : '') +
       (k.recurring && typeof recurringDetail === 'function'
@@ -2736,6 +2816,15 @@
   const claudeCan = (board, k) => !!board && !!k && claudeOwns(board, k) && NOT_SERVERS.indexOf(board.id) < 0 &&
     !k.recurring && !String(k.id || '').startsWith('rc-');
   const tonightOn = k => !!k.claudeTonight && askedAgain(k);
+  // On the card itself, on My to-dos (Jonah, 5 Nov 2026: "add button to my to
+  // do cards that says for claude"): it was only at the foot of the card's
+  // window. His, as Claude's credit is.
+  function forClaudeLine(board, k) {
+    if (!isOwner() || !claudeCan(board, k)) return '';
+    return tonightOn(k) ? '<div class="bd-card-line bd-for-claude">🌙 Claude does this tonight</div>'
+      : '<div class="bd-card-line bd-for-claude"><button type="button" class="bd-card-act" draggable="false" ' +
+        'onclick="event.stopPropagation(); bdForClaude(\'' + safeId(board.id) + '\', \'' + safeId(k.id) + '\')">🤖 For Claude</button></div>';
+  }
   function forClaude(boardId, cardId, text) {
     const board = boards[boardId], k = (cards[boardId] || {})[cardId];
     if (!claudeCan(board, k) || !window.YDDb) return false;
@@ -2806,12 +2895,13 @@
     const at = claudeCardOf(o);
     return !!at && takeBackFromClaude(at.boardId, at.cardId);
   }
-  window.claudeTonight = async function () {
-    const ids = openCard && { boardId: openCard.boardId, cardId: openCard.cardId };
-    if (!ids) return;
+  window.claudeTonight = function () {
+    return openCard ? window.bdForClaude(openCard.boardId, openCard.cardId) : undefined;
+  };
+  window.bdForClaude = async function (boardId, cardId) {
     const got = await ydForm(TONIGHT_ASK, [{ id: 'note', label: 'Your note to Claude', value: '', multiline: true, rows: 4 }],
       { title: 'For Claude tonight', ok: 'Set for Claude' });
-    if (got && forClaude(ids.boardId, ids.cardId, got.note)) showToast('Set — Claude does it tonight');
+    if (got && forClaude(boardId, cardId, got.note)) showToast('Set — Claude does it tonight');
   };
   const TONIGHT_ASK = 'Say what you want done. Claude does it overnight and leaves its answer on the to-do. Any email it writes ' +
     'waits in your Gmail Drafts: nothing is sent.';
@@ -2956,7 +3046,8 @@
     // deletes it a week after it was done -- so it goes back on the list.
     const done = doneColOf(board);
     if (done && colOf(board, k) === done) {
-      const back = (board.columns || []).find(col => col.id !== done);
+      const home = (board.columns || []).find(col => col.id === k.wishHome);
+      const back = home || (board.columns || []).find(col => col.id !== done);
       if (back) Object.assign(patch, { column: back.id, order: Date.now() });
       Object.assign(patch, { doneAt: null }, doneByPatch(board, k, true, false, null));
     }
@@ -4160,8 +4251,34 @@
     if (cardsNews) return;
     cardsNews = setTimeout(() => {
       cardsNews = 0;
+      sortWishes();
       document.dispatchEvent(new CustomEvent('yd-cards-changed'));
     }, 50);
+  }
+  // Wishes waiting on his answer sit apart from the ones to build, Job Hub and
+  // website each their own (Jonah, 5 Nov 2026: "wishes waiting to be answered
+  // should get sorted into a different column and then once answered sorted
+  // back into another column of wishes. separated by website and by job hub").
+  // The board says which column waits for which (waitFor: { wish column:
+  // waiting column }). A card Claude asked about goes across; pressing Send on
+  // it brings it back to the column it came from. Only those columns: one he
+  // has put in "do at a later time" stays there. updatedAt is left alone, as the
+  // night run reads it for an answer in the card's notes.
+  function sortWishes() {
+    const board = boards[NIGHT_BOARD], map = board && board.waitFor;
+    if (!map || !isOwner() || !cardsLoaded[NIGHT_BOARD]) return;
+    const backTo = {};
+    Object.keys(map).forEach(from => { backTo[map[from]] = from; });
+    const has = id => (board.columns || []).some(c => c.id === id);
+    Object.values(cards[NIGHT_BOARD] || {}).forEach(k => {
+      const waits = !!k.claude && k.claude.status === 'needs_info' && !askedAgain(k);
+      const to = waits ? map[k.column] : backTo[k.column] && (has(k.wishHome) ? k.wishHome : backTo[k.column]);
+      if (!to || !has(to)) return;
+      const rec = { column: to, order: startOrder(NIGHT_BOARD, to) };
+      if (waits) rec.wishHome = k.column;
+      Object.assign(k, rec);
+      write('boards/' + NIGHT_BOARD + '/cards', k.id, rec, 'sorting a wish');
+    });
   }
 
   function stop() {
@@ -4225,6 +4342,9 @@
   }
 
   window.YDBoards = {
+    openBids: openBids,
+    leaveBids: leaveBids,
+    onBidsPage: () => bidsPage && current === 'bids',
     doneCol: doneColOf,
     render: render,
     // The notes to sort (22 Oct 2026; home.js notesHtml): the ones on the
