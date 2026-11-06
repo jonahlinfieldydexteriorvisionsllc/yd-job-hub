@@ -59,9 +59,12 @@ SHRINK = 0.8                    # a sitemap under this share of yesterday's page
 HISTORY_DAYS = 60
 MAIL_KEPT = 100
 MAIL_QUERY = "from:sc-noreply@google.com newer_than:3d"
-ALERT = re.compile(r"issue|problem|detected|error|manual action|security|hack|malware|not indexed|failed|fix", re.I)
+ALERT = re.compile(r"issue|problem|detected|error|manual action|security|hack|malware|not indexed|prevent|failed|fix", re.I)
 URGENT = re.compile(r"manual action|security|hack|malware", re.I)
-NOT_ALERT = re.compile(r"passed|successful|started|search performance|congratulations|reached|good news", re.I)
+# "We're validating your ... issue fixes" only says Google began a check it was
+# asked for, and "issues fixed" is its good news. "Some fixes failed" stays an alert.
+NOT_ALERT = re.compile(r"passed|successful|started|validating your|issues? fixed|search performance|"
+                       r"congratulations|reached|good news", re.I)
 OK_FETCH = ("", "SUCCESSFUL", "PAGE_FETCH_STATE_UNSPECIFIED")
 BLOCKED = ("BLOCKED_BY_META_TAG", "BLOCKED_BY_HTTP_HEADER", "BLOCKED_BY_ROBOTS_TXT")
 
