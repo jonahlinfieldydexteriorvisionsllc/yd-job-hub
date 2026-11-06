@@ -86,7 +86,7 @@
       if (s.kind === 'area' && p.length >= 3) {
         const k = known(AREA, s.style), c = AREA[k];
         used['a' + k] = [c[0], c[1], 'area'];
-        areas.push('<polygon points="' + line(p) + '" fill="' + c[0] + '" stroke="#2E2840" stroke-width="1.2"/>');
+        areas.push('<polygon points="' + line(p) + '" fill="' + c[0] + '"' + (k === 'other' ? ' fill-opacity=".35"' : '') + ' stroke="#2E2840" stroke-width="1.2"/>');
         const m = middle(p);
         const big = areaOf(p);
         words.push(text(X(m.x), Y(m.y), label + (s.dim ? ' · ' + Math.round(big).toLocaleString('en-US') + ' sq ft' : ''), 14));
