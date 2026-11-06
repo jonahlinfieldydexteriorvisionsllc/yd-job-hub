@@ -63,8 +63,10 @@ BODY_MAX = 32 * 1024        # a full form in any alphabet is well under this
 SENDER_PER_DAY = 20
 FORMS_PER_DAY = 60
 # (Each form that gets through costs one Claude reply, so this also caps the bill.)
-QUIET_PER_DAY = 25          # forms a day that go to his inbox only, so a robot can't fill it
-ONLY_HERE = "This one is only in this email, so Job Hub has no lead or card for it. "
+QUIET_PER_DAY = 25          # real forms a day that go to his inbox only
+SPAM_PER_DAY = 10           # the same for forms the hidden box caught, counted apart so robots can't use up the room above
+UNCOUNTED_MAX = 10          # what one server sends to his inbox while those two can't be counted
+ONLY_HERE = "This one is only in this email, so Job Hub has no lead or card for it. Add them on Customers if they're real. "
 PAST_LIMIT = ONLY_HERE + "Too many forms came from that internet address today, or the server was busy."
 NOT_SAVED = ONLY_HERE + "Job Hub couldn't save it just now."
 MAYBE_SPAM = ONLY_HERE + "A box people can't see was filled in, which usually means a spam robot, " \
@@ -263,28 +265,45 @@ def tell_by_email(done):
         print("website form: email may not have gone for", done["leadId"], "--", err)
 
 
-def _quiet_room(db):
-    """Room for one more form to go to his inbox only? Counted apart from the
-    day's forms, so a robot past its limit can't use up room for real people.
-    False when it can't be counted: the visitor is then told to call."""
+_uncounted = [0]
+
+
+def _quiet_room(db, robot=False):
+    """Room for one more form to go to his inbox only? Real forms and the ones
+    the hidden box caught are counted apart from the day's forms and from each
+    other, so robots can't use up the room real people need. If it can't be
+    counted (Firestore down) a real form goes anyway: his inbox matters more
+    than the count, and UNCOUNTED_MAX keeps a flood from getting through."""
+    field, most = ("spam", SPAM_PER_DAY) if robot else ("quiet", QUIET_PER_DAY)
     ref = db.collection("leadLimits").document(dg._now().date().isoformat())
 
     @firestore.transactional
     def take_one(tx):
         d = ref.get(transaction=tx).to_dict() or {}
-        if int(d.get("quiet") or 0) >= QUIET_PER_DAY:
+        if int(d.get(field) or 0) >= most:
             return False
-        tx.set(ref, {"quiet": firestore.Increment(1)}, merge=True)
+        tx.set(ref, {field: firestore.Increment(1)}, merge=True)
         return True
 
     try:
         return take_one(db.transaction())
     except Exception as e:      # noqa: BLE001
         print("website form: inbox-only limit not checked:", e)
-        return False
+        if robot:
+            return False
+        _uncounted[0] += 1
+        return _uncounted[0] <= UNCOUNTED_MAX
 
 
-def just_email(db, f, why, flag=""):
+def inbox_news(f):
+    """The buzz for a form that reached only his inbox: nothing in Job Hub
+    shows it, and mail he sends himself doesn't always ring his phone."""
+    name = f.get("name") or " ".join(x for x in (f.get("fname"), f.get("lname")) if x)
+    return [{"kind": "followup", "jobId": "site-inbox", "title": "📬 Website form — " + name,
+             "body": "It's in your email only, not in Job Hub. Have a look."}]
+
+
+def just_email(db, f, why, flag="", robot=False):
     """A form that can't go in the usual way, sent to his inbox and nothing
     else. True only when Gmail took it: that is what lets the visitor be told
     it went, so anything less than a clear yes is False and they get the phone
@@ -300,7 +319,7 @@ def just_email(db, f, why, flag=""):
         head, lines, to = "A YD Gives Back nomination from the website.", \
             "Name: %s\nPhone: %s" % (f.get("name"), f.get("phone")), None
         how = "Call or text them."
-    if not _quiet_room(db):
+    if not _quiet_room(db, robot):
         print("website form: the day's inbox-only limit is reached")
         return False
     try:
