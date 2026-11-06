@@ -135,6 +135,20 @@ SYSTEM = (
     "method -- only what is particular to this job. A line whose crew notes are marked as Jonah's "
     "own: give them back word for word unless his latest message asks to change what the crew are "
     "told.\n"
+    "SITE PLAN (`plan` in your answer): a to-scale bird's-eye drawing the customer and the crew both see. Set "
+    "plan.draw true and fill it when Jonah asks for a plan, drawing, layout or design, and on the first build "
+    "of a turf flush system. Otherwise plan.draw is false, with empty words, 0 sizes and no shapes: a plan already "
+    "on the bid then stays as it is. To change a plan, send the whole plan again; the current one is in the "
+    "message. Coordinates are feet from the sheet's top left corner, x to the right and y down; widthFt and "
+    "heightFt are the sheet, with a little room round the work. Use sizes from his notes, photos and measurements "
+    "only. A place he gave no size for is drawn roughly, with (approx.) in its label, and asked about in "
+    "questions. Each shape has a kind and a style: kind area, corners in order, style turf, lawn, pavers, gravel, "
+    "concrete, bed, mulch, house, deck or other; kind line, style pipe, drain, flush, edge, wall, fence, wire or "
+    "other; kind point, one point, style valve, emitter, drain, light, tree, shrub, post or other. dim true on an "
+    "area prints its square feet and on a line prints its length: the app works those out from your points, so "
+    "the points must be right. Labels are what the crew would call the thing, under 30 characters, with no "
+    "prices and no customer's name. notes: up to 6 short lines printed under the plan, such as which way the "
+    "water runs. Say in reply what you drew and what is approximate.\n"
     "- Never invent measurements or work Jonah did not mention. When something needed is "
     "missing or doubtful (a dimension, a colour, access for the loader), put "
     "it in questions -- short, only what blocks a right estimate. Put anything Jonah should "
@@ -239,10 +253,66 @@ SCHEMA = {
         "questions": {"type": "array", "items": {"type": "string"}},
         "flags": {"type": "array", "items": {"type": "string"}},
         "removed": {"type": "array", "items": {"type": "string"}},
+        "plan": {
+            "type": "object",
+            "properties": {
+                "draw": {"type": "boolean"},
+                "title": {"type": "string"},
+                "widthFt": {"type": "number"},
+                "heightFt": {"type": "number"},
+                "notes": {"type": "array", "items": {"type": "string"}},
+                "shapes": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["area", "line", "point"]},
+                        "style": {"type": "string"},
+                        "label": {"type": "string"},
+                        "dim": {"type": "boolean"},
+                        "points": {"type": "array", "items": {
+                            "type": "object",
+                            "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+                            "required": ["x", "y"],
+                            "additionalProperties": False,
+                        }},
+                    },
+                    "required": ["kind", "style", "label", "dim", "points"],
+                    "additionalProperties": False,
+                }},
+            },
+            "required": ["draw", "title", "widthFt", "heightFt", "notes", "shapes"],
+            "additionalProperties": False,
+        },
     },
-    "required": ["reply", "updated", "work", "materials", "spoilCuYd", "brushCuYd", "questions", "flags", "removed"],
+    "required": ["reply", "updated", "work", "materials", "spoilCuYd", "brushCuYd", "questions", "flags", "removed", "plan"],
     "additionalProperties": False,
 }
+
+# A to-scale site plan (siteplan.js draws it, so the scale is true). What came
+# back, kept to what can be drawn: None when none was drawn this time.
+PLAN_SHAPES = 80
+PLAN_POINTS = 60
+
+
+def _site_plan(raw):
+    if not isinstance(raw, dict) or raw.get("draw") is not True:
+        return None
+    shapes = []
+    for s in (raw.get("shapes") or [])[:PLAN_SHAPES]:
+        if not isinstance(s, dict) or s.get("kind") not in ("area", "line", "point"):
+            continue
+        pts = [{"x": round(min(2000.0, max(0.0, _num(p.get("x")) or 0)), 2), "y": round(min(2000.0, max(0.0, _num(p.get("y")) or 0)), 2)}
+               for p in (s.get("points") or [])[:PLAN_POINTS] if isinstance(p, dict)]
+        if len(pts) < {"area": 3, "line": 2, "point": 1}[s["kind"]]:
+            continue
+        shapes.append({"kind": s["kind"], "style": str(s.get("style") or "other").strip().lower()[:20],
+                       "label": str(s.get("label") or "").strip()[:60], "dim": bool(s.get("dim")), "points": pts})
+    if not shapes:
+        return None
+    return {"title": str(raw.get("title") or "Site plan").strip()[:80],
+            "widthFt": round(min(2000.0, max(1.0, _num(raw.get("widthFt")) or 1)), 1),
+            "heightFt": round(min(2000.0, max(1.0, _num(raw.get("heightFt")) or 1)), 1),
+            "notes": [str(n).strip()[:160] for n in (raw.get("notes") or []) if str(n).strip()][:6],
+            "shapes": shapes}
 
 # Names of the kinds of material (pricing.js CATEGORIES), for the catalogue.
 CATEGORY_NAMES = {
@@ -612,6 +682,7 @@ def _prompt(d, past=""):
     ] + ([past, ""] if past else []) + [
         "THE ESTIMATE AS IT STANDS:",
         _current_text(d.get("current")),
+        ("Current site plan (JSON): " + json.dumps(d.get("sitePlan"))) if d.get("sitePlan") else "",
         "",
         "THE CONVERSATION SO FAR:",
         _chat_text(chat[:-1]) or "(this is the first message)",
@@ -1056,6 +1127,7 @@ def draft(client, d):
             "brushCuYd": max(0.0, round(_num(got.get("brushCuYd")) or 0, 1)),
             "questions": [str(q) for q in got.get("questions") or [] if str(q).strip()],
             "flags": [str(q) for q in got.get("flags") or [] if str(q).strip()],
+            "plan": _site_plan(got.get("plan")),
             "photos": len(photos), "photosTotal": photos_total, "photoNums": [p[0] for p in photos],
             # Which finished jobs it was shown, and the averages (the app's
             # "📚 Based on N of your finished jobs").

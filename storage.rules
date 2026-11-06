@@ -83,13 +83,14 @@ service firebase.storage {
     }
 
     // Signed papers (signatures.js): jobDocs/{jobId}/{uid}/{docId}.pdf, made
-    // on the phone that collected the signature and written once. Whoever may
+    // on the phone that collected the signature and written once. Beside them,
+    // sp: a bid's site plan as a PDF for QuickBooks (estimate.js). Whoever may
     // see jobs opens any; a crew member the ones they collected.
     match /jobDocs/{jobId}/{uid}/{file} {
       allow read: if staff() && (request.auth.uid == uid || me().role == 'owner'
         || (me().role == 'admin' && me().get(['access', 'jobs'], 'none') in ['see', 'change']));
       allow create: if staff() && request.auth.uid == uid
-        && file.matches('sg[a-z0-9]+[.]pdf')
+        && file.matches('(sg|sp)[a-z0-9]+[.]pdf')
         && request.resource.size < 10 * 1024 * 1024
         && request.resource.contentType == 'application/pdf';
     }

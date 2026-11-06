@@ -453,6 +453,8 @@
                      per: noMoney(o.per || '').slice(0, 30), supplier: vendorName(o.vendorId), ordered: !!o.ordered,
                      note: noMoney(o.note || '').slice(0, 300) })),
       rentals: rentalsEntry(d, items),
+      // The bird's-eye plan (siteplan.js), when the bid has one.
+      sitePlan: crewPlan(d.estimate && d.estimate.sitePlan),
       // What we pick up ourselves, by the supplier to get it from.
       pickups: pickupsEntry(d, items),
     };
@@ -778,6 +780,20 @@
   // job's first day ahead. A shop with no address in Supplies says so, so
   // nobody drives off guessing which branch.
   const dirTo = a => 'https://www.google.com/maps/dir/?api=1&destination=' + encodeURIComponent(a);
+  // No money in what the crew read, as everywhere else on this copy.
+  function crewPlan(plan) {
+    if (!plan || !Array.isArray(plan.shapes)) return null;
+    return Object.assign({}, plan, {
+      title: noMoney(plan.title || ''),
+      notes: (Array.isArray(plan.notes) ? plan.notes : []).map(n => noMoney(n)),
+      shapes: plan.shapes.map(s => Object.assign({}, s, { label: noMoney(s.label || '') })),
+    });
+  }
+  function sitePlanHtml(j) {
+    const drawn = j.sitePlan && window.YDPlan ? YDPlan.svg(j.sitePlan) : '';
+    return drawn ? '<div class="cj-sec"><div class="cj-h">📐 Site plan</div><div class="yd-plan" onclick="this.classList.toggle(\'big\')" title="Tap to zoom">' +
+      drawn + '</div><div class="muted">Tap it to zoom. To scale, in feet.</div></div>' : '';
+  }
   function rentalsHtml(j, days, preview) {
     const list = Array.isArray(j.rentals) ? j.rentals : [];
     if (!list.length) return '';
@@ -1010,6 +1026,7 @@
           esc(new Date(x.day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })) + '</b>' +
           (timeOf(x) ? ' · ' + esc(timeOf(x)) : '') +
           (x.crew.length ? ' — ' + esc(x.crew.join(', ')) : x.nobody ? ' — <span class="muted">Anyone</span>' : '') + '</div>').join('') : '') +
+      sitePlanHtml(j) +
       rentalsHtml(j, days, preview) +
       pickupsHtml(id, j, preview) +
       toolsHtml(id, j, preview) +

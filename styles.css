@@ -6309,3 +6309,9 @@ html[data-bids-page] #panel-boards .section-head { display: none; }
 #lookBar button { min-height: 36px; padding: 0 12px; border: 0; border-radius: 18px; background: #6EDDB0; color: #2E2840; font: 700 13px 'DM Sans', sans-serif; cursor: pointer; }
 @media (max-width: 1023px) { #lookBar { bottom: calc(74px + env(safe-area-inset-bottom, 0px)); } }
 @media print { #lookBar { display: none; } }
+
+/* A bird's-eye site plan: fits the screen, a tap zooms it and it scrolls in its box. */
+.yd-plan { border: 1px solid var(--border, #d9d3e2); border-radius: 8px; overflow: auto; background: #fff; cursor: zoom-in; margin: 8px 0; }
+.yd-plan.big { cursor: zoom-out; }
+.yd-plan.big svg { width: 220% !important; max-width: none; }
+@media print { .yd-plan.big svg { width: 100% !important; } }

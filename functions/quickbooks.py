@@ -1087,6 +1087,33 @@ def _attach_lien_notice(job_id, est_id):
         return _upload("Estimate", est_id, LIEN_NOTICE_NAME, f.read())
 
 
+def _attach_plan(job_id, est_id, path):
+    """The bid's site plan as a PDF on the estimate, emailed with it. The app
+    puts the file in Storage (estimate.js planForQb). Attached once per version
+    of the plan, by its file; the next version takes the last one's place, so
+    a customer never gets two. {planFor, planPath, planId}, or None with no plan."""
+    path = str(path or "")
+    if not path:
+        return None
+    if not re.fullmatch(r"jobDocs/%s/[^/]+/sp[a-z0-9]+\.pdf" % re.escape(str(job_id)), path):
+        raise RuntimeError("That site plan isn't this job's")
+    snap = _db().collection("jobs").document(job_id).get()
+    q = ((snap.to_dict() or {}) if snap.exists else {}).get("qbEstimate") or {}
+    if str(q.get("planFor") or "") == str(est_id) and q.get("planPath") == path:
+        return {"planFor": q.get("planFor"), "planPath": path, "planId": q.get("planId")}
+    from firebase_admin import storage
+    data = storage.bucket("yd-job-hub.firebasestorage.app").blob(path).download_as_bytes()
+    made = _upload("Estimate", est_id, "Site plan.pdf", data)
+    was = q.get("planId") if str(q.get("planFor") or "") == str(est_id) else None
+    if was:
+        try:
+            old = _call("GET", "attachable/%s" % was).get("Attachable") or {}
+            _call("POST", "attachable", params={"operation": "delete"}, body={"Id": str(was), "SyncToken": old.get("SyncToken", "0")})
+        except Exception as err:            # noqa: BLE001 -- the new one is on; an old one left is only a second page
+            print("quickbooks: old site plan not taken off estimate %s: %s" % (est_id, err))
+    return {"planFor": str(est_id), "planPath": path, "planId": made}
+
+
 def _ours(e, job_id):
     """Whether a QuickBooks estimate is the one made for this job."""
     return str((e or {}).get("PrivateNote") or "").strip() == _job_note(job_id)
@@ -1232,6 +1259,25 @@ def save_estimate(body):
                 raise RuntimeError("Saved in QuickBooks, but not emailed: the lien-waiver notice couldn't be "
                                    "attached (%s). Try again." % err)
 
+    # The site plan goes on before it can be emailed too.
+    plan, plan_failed = None, False
+    if body.get("planPdf") and not snow:
+        try:
+            plan = _attach_plan(job_id, e["Id"], body.get("planPdf"))
+            if plan:
+                # On the job now, as the notice is: an email failing next
+                # must not leave it to be attached a second time.
+                _db().collection("jobs").document(job_id).set({"qbEstimate": dict(_estimate_record(e, customer_id), **plan),
+                                                               "lastModified": _stamp()}, merge=True)
+        except ReconnectNeeded:
+            raise
+        except Exception as err:            # noqa: BLE001 -- said plainly
+            print("quickbooks: site plan not attached to estimate %s: %s" % (e.get("Id"), err))
+            plan_failed = True
+            if body.get("email"):
+                raise RuntimeError("Saved in QuickBooks, but not emailed: the site plan couldn't be attached (%s). "
+                                   "Try again." % err)
+
     sent_to = ""
     if body.get("email"):
         if not email:
@@ -1252,6 +1298,10 @@ def save_estimate(body):
         print("quickbooks: job %s not tied to customer %s: %s" % (job_id, customer_id, err))
 
     out = _estimate_record(e, customer_id)
+    if plan:
+        out.update(plan)
+    if plan_failed:
+        out["planError"] = True
     # Said either way, every time: a bid sent as a snow bid and later as an
     # ordinary one (or back) must not keep the old answer -- it decides
     # whether a yes books a job or goes on the Snow route (snow_bids).

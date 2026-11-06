@@ -433,6 +433,8 @@
     });
     o.questions = Array.isArray(e.questions) ? e.questions.map(String) : [];
     o.flags = Array.isArray(e.flags) ? e.flags.map(String) : [];
+    if (e.sitePlan && typeof e.sitePlan === 'object') o.sitePlan = e.sitePlan;
+    if (e.planPdf && typeof e.planPdf === 'object') o.planPdf = e.planPdf;
     o.memo = String(e.memo || '');
     o.sent = Array.isArray(e.sent) ? e.sent.slice(-SENT_KEEP) : [];
     // Delivered or picked up by his rules (Jonah, 22 Oct 2026) -- except a
@@ -617,6 +619,8 @@
           'oninput="estSet(\'brushCuYd\', this.value)"> cu yd</label>' +
       '</div>') +
       '<div id="estToSup">' + toSupHtml() + '</div>' +
+
+      sitePlanHtml(ro) +
 
       '<h4 class="est-h">Added by your rules</h4>' +
       '<div class="est-auto" id="estAuto"></div>' +
@@ -1432,6 +1436,66 @@
           esc(String(rulesWay(m, l).way === 'pickup' ? 'picked up' : 'delivered')) + ')</button>')
         : ' <span class="muted">' + esc(l.wayWhy) + '</span>') + '</span>';
   }
+  // The bird's-eye plan (siteplan.js): the drawing and what can be done with it.
+  // Claude draws it from the chat; to change it, say so there.
+  function sitePlanHtml(ro) {
+    const plan = est.sitePlan;
+    const drawn = plan && window.YDPlan ? YDPlan.svg(plan) : '';
+    if (!drawn) {
+      return ro || !hasLines() ? '' : '<div class="field-actions"><button class="btn btn-sm" onclick="estDrawPlan()">📐 Draw a site plan</button></div>';
+    }
+    return '<h4 class="est-h">📐 Site plan <span class="muted">— to scale; tell Claude what to change. It goes with the estimate as a PDF, and on the crew’s job page.</span></h4>' +
+      '<div class="yd-plan" onclick="this.classList.toggle(\'big\')" title="Tap to zoom">' + drawn + '</div>' +
+      '<div class="field-actions"><button class="btn btn-sm ro-ok" onclick="estPlanPdf()">⬇ PDF</button>' +
+        (ro ? '' : '<button class="btn btn-sm" onclick="estPlanOff()">Take it off</button>') + '</div>';
+  }
+  window.estDrawPlan = function () {
+    if (!changes() || !window.YDEstimate) return;
+    YDEstimate.ask('Draw a to-scale site plan of this job from my notes, photos and measurements.');
+  };
+  window.estPlanOff = function () {
+    if (!changes() || !est.sitePlan) return;
+    const was = est.sitePlan, e = est;
+    delete est.sitePlan;
+    changed(true);
+    showUndo('Site plan taken off', () => { if (est === e) { est.sitePlan = was; changed(true); } }, 9000);
+  };
+  window.estPlanPdf = async function () {
+    if (!est.sitePlan || !window.YDPlan) return;
+    try {
+      const url = URL.createObjectURL(await YDPlan.pdf(est.sitePlan));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Site plan.pdf';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    } catch (e) { showToast('The plan could not be made into a PDF'); }
+  };
+  // The plan's PDF in Storage for QuickBooks to take (quickbooks.py attach_plan):
+  // made once per version of the plan. No plan, or it can't be made: '' and
+  // the estimate goes without it, said in a toast. Never holds the estimate up.
+  async function planForQb(jobId) {
+    const plan = est.sitePlan;
+    if (!plan || !window.YDPlan || !window.YDStore || !(window.YDAuth && YDAuth.user)) return '';
+    const k = YDPlan.key(plan);
+    if (est.planPdf && est.planPdf.key === k && est.planPdf.path) return est.planPdf.path;
+    try {
+      // A new name each time: a stored file can't be written over, and a plan
+      // can go back to what it was.
+      const path = 'jobDocs/' + jobId + '/' + YDAuth.user.uid + '/sp' + k + Date.now().toString(36) + '.pdf';
+      await YDStore.upload(path, await YDPlan.pdf(plan), 'application/pdf');
+      est.planPdf = { key: k, path: path };
+      if (typeof markDirty === 'function') markDirty();
+      return path;
+    } catch (e) {
+      console.warn('[estimate] plan PDF not sent:', (e && e.code) || e);
+      setTimeout(() => showToast('The site plan didn’t go with it: download the PDF and attach it in QuickBooks'), 2500);
+      return '';
+    }
+  }
+
   // Delivery on the product it belongs to (Jonah, 5 Nov 2026: "i want delivery
   // charges when putting together a bid matched to their product"), not only
   // in the one Delivery row at the foot. By line id: its share of the charge,
@@ -4677,6 +4741,7 @@
         // A snow bid is talked about as one (estimates.py draft_snow): its
         // price sheet, and no takeoff to price.
         current: snowy ? { work: [], materials: [] } : currentForClaude(e0, job.city, job.data ? job.data.qbEstimate : qb()),
+        sitePlan: snowy ? null : e0.sitePlan || null,
         snow: snowy ? snowForClaude(e0, job.data) : undefined,
         // This copy of the app can take just the lines that change (less for
         // Claude to write, so cheaper and quicker).
@@ -4719,7 +4784,7 @@
     const patch = r.mode === 'patch';
     const spoil = num(r.spoilCuYd) !== null ? (num(r.spoilCuYd) || null) : e.spoilCuYd;
     const brush = num(r.brushCuYd) !== null ? (num(r.brushCuYd) || null) : e.brushCuYd;
-    const did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length ||
+    let did = !!(r.updated !== false && ((r.work || []).length || (r.materials || []).length ||
       (patch && ((r.removed || []).length || spoil !== e.spoilCuYd || brush !== e.brushCuYd))));
     const said = [];
     if (did) {
@@ -4740,6 +4805,9 @@
     }
     e.questions = (r.questions || []).map(String);
     e.flags = (r.flags || []).map(String).concat(said);
+    // A plan drawn or redrawn counts as a change of its own: it can come with
+    // no line touched.
+    if (r.plan && typeof r.plan === 'object') { e.sitePlan = r.plan; did = true; }
     let text = String(r.reply || (did ? 'Updated the estimate.' : 'No change.'));
     // An all-in line's split, worked out by the app, under the answer: what
     // Jonah asked for is a sum, and the sum is the app's to do.
@@ -4765,7 +4833,8 @@
   function land(jobId, r) {
     if (jobId === currentJobId) {
       const before = { jobId: jobId, work: clone(est.work), materials: clone(est.materials), spoilCuYd: est.spoilCuYd, brushCuYd: est.brushCuYd,
-                       questions: est.questions.slice(), flags: est.flags.slice(), snow: est.snow ? clone(est.snow) : null };
+                       questions: est.questions.slice(), flags: est.flags.slice(), snow: est.snow ? clone(est.snow) : null,
+                       sitePlan: est.sitePlan || null };
       // Undo only ever undoes the change it is shown beside.
       undo = apply(est, r) ? before : null;
       changed(true);
@@ -4827,6 +4896,7 @@
     est.work = undo.work; est.materials = undo.materials; est.spoilCuYd = undo.spoilCuYd; est.brushCuYd = undo.brushCuYd;
     est.questions = undo.questions || []; est.flags = undo.flags || [];
     if (undo.snow !== undefined) est.snow = undo.snow;
+    if (undo.sitePlan) est.sitePlan = undo.sitePlan; else delete est.sitePlan;
     const lastMsg = est.chat[est.chat.length - 1];
     if (lastMsg && lastMsg.role === 'assistant') lastMsg.changed = false;
     est.chat.push({ role: 'user', text: '(Undid that change.)', at: new Date().toISOString(), changed: false });
@@ -5365,8 +5435,10 @@
         // A home gets Wisconsin's lien-waiver notice attached (a separate
         // page it must have before signing); the server attaches it once.
         lienNotice: whoFor() === 'home',
+        planPdf: await planForQb(jobId),
         totalCents: r.grandCents,
       });
+      if (out.planError) setTimeout(() => showToast('The site plan didn’t go on it: download the PDF and attach it in QuickBooks'), 2500);
       // QuickBooks' tax comes from the address; a county rate other than the
       // one in Pricing rules makes its total differ from Job Hub's.
       const qbTotal = Math.round(Number(out.total) * 100);
